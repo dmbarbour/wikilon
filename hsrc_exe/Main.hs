@@ -1,7 +1,6 @@
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# OPTIONS_GHC -fno-warn-missing-signatures #-}
 
 module Main (main) where
-
-import qualified System.IO as Sys
-
-main :: IO ()
-main = Sys.putStrLn "go go wikilon!"
+import qualified Wikilon as W
+main = W.defaultMain

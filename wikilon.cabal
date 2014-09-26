@@ -32,9 +32,7 @@ Source-repository head
 Executable wikilon
   hs-source-dirs: hsrc_exe
   default-language: Haskell2010
-  build-depends: base (>= 4.6 && < 5)
-    , wikilon
-
+  build-depends: wikilon
   main-is: Main.hs
   ghc-options: -auto-all -Wall -rtsopts -threaded
 
@@ -42,8 +40,16 @@ Library
   hs-Source-Dirs: hsrc_lib
   default-language: Haskell2010
   Build-Depends: base (>= 4.6 && < 5)
+    , acid-state (>= 0.12)
+    , safecopy (>= 0.8)
+    , websockets (>= 0.9)
+    , warp (>= 3.0)
+    , wai (>= 3.0)
+    -- , wai-websockets
 
   Exposed-Modules:
+
+    Wikilon
 
   Other-Modules:
   
