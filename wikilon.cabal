@@ -45,11 +45,15 @@ Library
     , websockets (>= 0.9)
     , warp (>= 3.0)
     , wai (>= 3.0)
+    , containers (>= 0.5 && < 0.7)
     -- , wai-websockets
 
   Exposed-Modules:
 
     Wikilon
+    Wikilon.AO
+    Wikilon.ABC
+    Wikilon.Dict
 
   Other-Modules:
   
