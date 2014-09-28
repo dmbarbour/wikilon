@@ -70,13 +70,13 @@ Still in early planning phases.
 * persistence and logarithmic history for all states
 * implement initial console app by hand (with user or session?)
   * idea: sessions akin to iPython notebook or xiki (persistent, live, AO code)
-* build in a user-model to start (a root user)
+* build in a user-model to start (a root user?)
 * build in import/export services
 * run all ABC code transactionally (for now)
 
 Until it's ready for multiple users, I'll bind by default to localhost (127.0.0.1).
 
-I may need some external support to edit and view definitions via command line, e.g. for recovery purposes. In that case, I can either leverage Data.Acid.Remote for multi-process communication (that seems dubious and counter-productive to my long term goals), or I can try HTTP communication with an active instance and have a special localhost connection... or, alternatively, print a privileged capability-URI on the command line.
+I may need some external support to edit and view definitions via command line, e.g. for recovery purposes. In that case, I can either leverage Data.Acid.Remote for multi-process communication (that seems dubious and counter-productive to my long term goals), or I can try HTTP communication with an active instance and have a special localhost connection... or, alternatively, print a privileged capability-URI on the command line for administration.
 
 I like the idea of supporting multiple 'code bubbles' on a browser. I suppose I could do this via OWS or iframes or similar. But an important part will be getting started with reactivity from early on. So it might be a good idea to focus on websockets support for reactive updates in the browser. In addition to xiki, CodeBubbles might be a good inspiration.
 
