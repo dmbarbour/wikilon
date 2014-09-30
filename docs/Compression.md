@@ -8,25 +8,24 @@ Okay, so that's a start. To this, we can add compression by ABCD (which uses a *
 
 What else can we do?
 
-Well, one idea is to apply a dictionary compression prior to the ABC streaming pass, using something like:
+Well, one idea is to apply a *private* dictionary compression prior to the ABC streaming pass, using something like:
 
         0xFD a b c
 
-A header byte (which is invalid UTF-8) plus three dictionary index bytes in base192. This could allow me to build a large (up to seven million elements) internal yet Wikilon instance specific dictionary for efficient storage purposes across all input histories, texts, and so on. In addition, this dictionary could be useful to mine for ABCD candidates.
+Here the header byte is invalid UTF-8, allowing us to escape the UTF-8 stream to access a dictionary. The three dictionary index bytes in base192 will follow. This allows me to build a large dictionary, up to seven million elements. Words should have minimum ABC size 12 to 16 to ensure effective compression of 70% or higher; in practice, I expect many will be much larger.
 
 Unlike the mutable AO dictionary, I cannot edit a word in this dictionary after I use it. I might be able to GC a word that goes unused for a long enough time, but that will be rare due to keeping histories. So I should be conservative. My idea for this is to pursue just a few candidate words at a time, i.e. to build the 7M dictionary very gradually based on observed frequencies on a relatively large scale. And I should require a minimum size before compression, of perhaps 16 bytes in the original UTF-8 encoding.
 
-Such a dictionary might also be very useful for stream compression, e.g. using `0xFC a b c DynLen Value` when first defining a word then `0xFD a b c` to reuse it. (The undefined elements of UTF-8 are proving excellent for this sort of feature!)
+Such a dictionary might also be very useful for stream compression, e.g. using `0xFC a b c DynLen Value` to define a new word idempotently, then `0xFD a b c` to reuse it. (The undefined elements of UTF-8 are proving excellent for this sort of feature!) In this streaming case, we can assume base 256 on read even if we write in base 192. 
 
-(Note: We MUST NOT share the full internal dictionary, since that could be a big security hole that would be difficult to patch. Similarly, we cannot allow external entities to query for individual words. But sharing a word when we first use it within a given stream/session is fine because we're already sharing the content of that word.)
+(Note: We MUST NOT directly share a Wikilon internal dictionary, because said dictionary may encode some private information. But it's always okay to share a word for which we're about to send a definition anyway, since that does not change how much security sensitive information the client receives. They only learn a little extra about the frequency with which a given substream shows up.)
 
 If accepted, this gives us five layers of compression:
 
 * ABC base16 (`bdfghjkmnpqstxyz`) to `0xF8 (0..253) (3..256 octets)` 
 * LZSS compression plus literals aggregation (to limit expansion)
-* Wikilon local dictionary (`0xFD a b c`; base 192 - 7M elements)
+* Wikilon private dictionary (`0xFD a b c`; base 192 - 7M elements)
 * ABCD (global standardized dictionary; extended UTF-8 range)
 * ABC resources `{#secureHashCiphertextSecureHashBytecode}` if reused
 
 If applied correctly, these five layers of compression should be mostly orthogonal to one another, operating at different scales in space/time. They should stack and augment one another effectively, though not perfectly. And worst-case expansion is effectively limited.
-

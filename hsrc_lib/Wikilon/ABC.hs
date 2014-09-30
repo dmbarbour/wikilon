@@ -71,18 +71,18 @@ data PrimOp -- 43 primitive operations
     | ABC_merge   -- M :: ((a+a')*e) → (a*e)
                   --   types may actually be different, but must be compatible
                   --   compatibility to be determined by future code 
-    | ABC_assert  -- K :: (0+a)*e → (a*e)   (see below)
+    | ABC_assert  -- K :: (0+a)*e → (a*e)   assertion
                   --   where `C` removes a zero from construction, `K` removes
-                  --   zero from assertion. K is for describing preconditions
-                  --   or postconditions, contracts and dependent types.
+                  --   zero by assertion on some observable condition. K is for
+                  --   describing contracts, assumptions, pre/post conditions.
 
     -- pseudo-literal numbers: eleven ops
     | ABC_newZero -- # :: e → N(0)*e        used for pseudo-literal numbers
     | ABC_d0 | ABC_d1 | ABC_d2 | ABC_d3 | ABC_d4 -- (N(x)*e) → (N(10x+d)*e)
     | ABC_d5 | ABC_d6 | ABC_d7 | ABC_d8 | ABC_d9 --  e.g. `#42` evaluates to 42
 
-    -- whitespace identities: two ops
-    | ABC_SP | ABC_LF  -- a → a  
+    -- whitespace identities: two ops 
+    | ABC_SP | ABC_LF  -- a → a  used for formatting
     deriving (Eq, Ord, A.Ix, Enum, Bounded)
 
 data ABC_Op ext -- 43 primitives + 3 special cases + extensions

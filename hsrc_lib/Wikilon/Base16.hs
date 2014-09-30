@@ -44,9 +44,9 @@ module Wikilon.Base16
     ) where
 
 import Control.Exception (assert)
-import Control.Applicative
 import Data.Word
 import qualified Data.List as L
+import qualified Data.Array.Unboxed as A
 
 -- | The alphabet for embedding Base16 in ABC is not conventional.
 -- Instead of 0-9 A-F, we use the lower case alphabet minus vowels
@@ -59,17 +59,30 @@ alphabet = "bdfghjkmnpqstxyz"
 alph8 :: [Word8]
 alph8 = fmap (fromIntegral . fromEnum) alphabet
 
+
+-- array from numeric value (0..15) to ASCII character
+n16tob16 :: A.UArray Word8 Word8
+n16tob16 = A.listArray (0,15) alph8 -- alphabet is values
+
+-- array from ASCII character to numeric value (or 255 sentinel)
+b16ton16 :: A.UArray Word8 Word8
+b16ton16 = A.accumArray upd 255 (minBound,maxBound) lst where
+    lst = L.zip alph8 [0..] -- alphabet is index this time
+    upd _ = id -- simply assign the given value.
+
 -- given a character that should be in the alphabet, 
 -- translate it to a number in range 0..15.
 h2n :: Word8 -> Maybe Word8
-h2n c = fromIntegral <$> L.elemIndex c alph8
+h2n c | (n < 16)  = Just n
+      | otherwise = Nothing
+    where n = b16ton16 A.! c
 
 -- | Given raw binary, translate into alphabet.
 encode :: [Word8] -> [Word8]
 encode (b:bs) = h1 : h2 : encode bs where
     (n1,n2) = b `divMod` 16
-    h1 = alph8 !! fromIntegral n1
-    h2 = alph8 !! fromIntegral n2
+    h1 = n16tob16 A.! n1
+    h2 = n16tob16 A.! n2
 encode [] = []
 
 -- | Given a binary consisting of ABC base16 alphabet

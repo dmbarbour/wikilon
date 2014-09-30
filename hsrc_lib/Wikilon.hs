@@ -23,15 +23,18 @@ port = 3000
 defaultMain :: IO ()
 defaultMain = 
     Sys.putStrLn ("wikilon listening on port: " ++ show port) >>
-    -- TODO: emit administrative capability URL for recovery.
+    -- TODO: emit administrative capability URL or console session ID
     Warp.run port app
 
 app :: Wai.Application
-app _request reply = hurrah >> reply response where
+app request reply = action where
+    action = hurrah >> reply response 
     hurrah = Sys.putStrLn ("yay! someone's talking to me!")
     response = Wai.responseLBS status plainText "Hello, Wikilon!"
     status = HTTP.status200
     plainText = [(HTTP.hContentType,"text/plain")]
+
+
 
 -- next step: add some silly persistent state! figure out how to configure AcidState.
 --   I may eventually need to handle a few arguments, such as port and home.
