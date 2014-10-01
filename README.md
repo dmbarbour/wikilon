@@ -91,6 +91,8 @@ For now, I shall pretend that acid-state does use paging, that it 'pages out' co
 
 ## Design Thoughts
 
+I might want to use some heuristic mechanism for deciding when to run checkpoints on the database, e.g. when loading takes more than so much time. Or I could simply keep track of how many updates since last checkpoint. 
+
 I'd like to consider including the full ABC for inline ABC in the AO code, perhaps excepting ad-hoc tokens. At least sealers, unsealers, and annotations will be allowed as tokens. Maybe those can be treated as special cases, with respect to a structured editing syntax?
 
 I really want to support embedded literal objects. I imagine those will require some special considerations if I want highly efficient interactions with them. It might not be that big a deal to encode the full literal object and its interactions within JavaScript. Still, it might be more useful for Wikilon to have some special support for working with embedded literal objects, for the cases where they get really big (e.g. multiple megabytes).

@@ -15,24 +15,24 @@ module Wikilon
 import qualified Network.Wai as Wai
 import qualified System.IO as Sys
 import qualified Network.HTTP.Types as HTTP
-import qualified Data.Acid as DB
-import qualified Data.SafeCopy as DB
+import qualified Data.Text.Lazy as T
+import qualified Data.Text.Lazy.Encoding as T
 
-
+-- | Prepare a new instance of Wikilon, with a given directory for
+-- persistence and identity. It is possible to run more than one
+-- wikilon instance, so long as each has a different directory.
+--
+-- The application is not actually started at this point, but any
+-- initialization will have been performed.
+--  
 loadInstance :: Sys.FilePath -> IO Wai.Application
 loadInstance _fp = return helloApp
 
 helloApp :: Wai.Application
-helloApp _request reply = action where
-    action = hurrah >> reply response 
-    hurrah = Sys.putStrLn ("yay! someone's talking to me!")
-    response = Wai.responseLBS status plainText "Hello, Wikilon!"
+helloApp req reply = reply response where
+    response = Wai.responseLBS status plainText body
+    body = txt2bin $ show (Wai.requestHeaders req)
     status = HTTP.status200
     plainText = [(HTTP.hContentType,"text/plain")]
-
-
--- next step: add some silly persistent state! figure out how to configure AcidState.
---   I may eventually need to handle a few arguments, such as port and home.
-
-
+    txt2bin = T.encodeUtf8 . T.pack
 
