@@ -2,6 +2,7 @@
 
 module Main (main) where
 
+import Control.Monad (when)
 import qualified System.IO as Sys
 import qualified System.Exit as Sys
 import qualified System.Environment as Env
@@ -80,16 +81,16 @@ getWIKILON_HOME = Env.getEnvironment >>= return . h where
     h _ = "./wikilon"
 
 getWikilonPort :: IO Int
-getWikilonPort = withPortDB $ \ db -> DB.query db GetPort
+getWikilonPort = withPortDB False $ \ db -> DB.query db GetPort
 
 setWikilonPort :: Int -> IO ()
-setWikilonPort n = withPortDB $ \ db -> DB.update db (SetPort n)
+setWikilonPort n = withPortDB True $ \ db -> DB.update db (SetPort n)
 
-withPortDB :: (DB.AcidState Port -> IO a) -> IO a
-withPortDB action = do
+withPortDB :: Bool -> (DB.AcidState Port -> IO a) -> IO a
+withPortDB cp action = do
     home <- getWIKILON_HOME
     db <- DB.openLocalStateFrom (home </> "port") (Port 3000)
     result <- action db
-    DB.createCheckpoint db
+    when cp (DB.createCheckpoint db)
     DB.closeAcidState db
     return result
