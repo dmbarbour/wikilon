@@ -1,39 +1,22 @@
 {-# LANGUAGE ViewPatterns, PatternGuards #-}
--- | Awelon Bytecode is pursuing a rather non-conventional approach
--- to efficient embedding of binary data for storage and transport.
+-- | Awelon project uses a non-conventional approach for encoding
+-- binary data: simply embed binaries in text or tokens using a 
+-- base16 alphabet, then apply a specialized compression pass on
+-- large sequences of this alphabet. For large binaries, overhead 
+-- is less than 1% compared to a raw binary encoding.
 --
--- The idea is that we do not need efficient representation at the
--- ABC layer. Indeed, we can naively encode binary data in base16.
--- In practice, we'll compress ABC resources and most ABC streams on
--- the network. It is not difficult to recognize a long sequence of
--- base16 and compress it to binary, i.e. a specialized compression
--- pass (applied prior to byte-level compression).
+-- The alphabet is `bdfghjkmnpqstxyz`. And the compression form adds
+-- a two byte header 0xF8+L. L encodes length 3..256 (0..253 +3). So
+-- we can encode 256 bytes in 258 bytes for 0.8% overhead. The 0xF8
+-- character does not normally appear in UTF-8, but will be escaped
+-- by following with 0xFE as needed.
 --
--- This module provides the alphabet, encoding and decoding binaries, 
--- and a compressor and decompressor. The alphabet in this case is
--- not conventional - `bdfghjkmnpqstxyz` - to mitigate interference with
--- compressing the rest of ABC, and to avoid spelling offensive words.
+-- The alphabet (a-z minus vowels and `vrwlc` data plumbing) resists
+-- interference with human meaningful text and numbers.
 --
--- This enables efficient storage and transport of binary information
--- despite embedding in a UTF-8 textual medium. It far more efficent
--- than Base64, having less than 1% overhead for large binaries. The
--- break-even with Base64 is encoding 6 bytes. Further, base16, even
--- with the unusual alphabet, is relatively simple for conversions.
---
--- In the compressed form, we have:
---
---   * header byte 0xF8
---   * length byte L encoding 3..256 (as 0..253 + 3)
---   * followed by L raw bytes 
---
--- Decompressed form is a sequence of 6..512 base16 characters (always
--- an even number). 
---
--- In case we encounter 0xF8 in the raw stream, we'll escape it by 
--- following with 0xFE. However, this is just to ensure compression is
--- well defined for all byte streams. In practice, we're compressing a
--- UTF-8 stream, and UTF-8 does not use 0xC0, 0xC1, or 0xF5..0xFF. Thus
--- we should never encounter the 0xF8 in the original stream. 
+-- This is much better than base64. The encoding breaks even at six
+-- bytes. And this base16 approach does not interfere much with more 
+-- byte-level compression.
 -- 
 module Wikilon.Base16 
     ( alphabet

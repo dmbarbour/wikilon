@@ -81,7 +81,7 @@ I may need some external support to edit and view definitions via command line, 
 
 ### Concerns about Scalability
 
-I'm a little bit worried that acid-state might not be scalable enough. Intellectually, I understand this shouldn't be a problem in most use-cases... and at least won't be a problem for a very long time. But that doesn't change my emotional state. 
+I'm a little bit worried that acid-state might not be scalable enough, especially given that I'll be keeping a lot of history information. I wonder if I could implement a paged version of acid-state, or perhaps leverage additional databases for some of the data that doesn't need to be in-memory all the time. 
 
 So I've resolved this: if acid-state keeping all objects in memory becomes a problem, I can feasibly develop an alternative backend for acid-state that supports explicit paging to hide elements that haven't been necessary. I can possibly even make the switch transparent, since I don't need to worry about disruption of a network like Data.Acid.Remote. 
 

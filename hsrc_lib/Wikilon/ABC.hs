@@ -237,7 +237,6 @@ showEscaped (c:ss) = showChar c . showEscaped ss
 showEscaped [] = id
 
 -- Note: there will be no `ABC_Ext` elements immediately after Read.
--- So all reads are equivalent to NoExt.
 instance Read (ABC_Op ext) where
     readPrec = RP.lift readOp
     readListPrec = RP.lift (R.manyTill readOp R.eof)

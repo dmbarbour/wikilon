@@ -9,31 +9,26 @@
 -- provided through the AO dictionary.
 -- 
 module Wikilon
-    ( defaultMain
+    ( loadInstance
     ) where
 
-import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai as Wai
 import qualified System.IO as Sys
 import qualified Network.HTTP.Types as HTTP
+import qualified Data.Acid as DB
+import qualified Data.SafeCopy as DB
 
-port :: Warp.Port
-port = 3000
 
-defaultMain :: IO ()
-defaultMain = 
-    Sys.putStrLn ("wikilon listening on port: " ++ show port) >>
-    -- TODO: emit administrative capability URL or console session ID
-    Warp.run port app
+loadInstance :: Sys.FilePath -> IO Wai.Application
+loadInstance _fp = return helloApp
 
-app :: Wai.Application
-app request reply = action where
+helloApp :: Wai.Application
+helloApp _request reply = action where
     action = hurrah >> reply response 
     hurrah = Sys.putStrLn ("yay! someone's talking to me!")
     response = Wai.responseLBS status plainText "Hello, Wikilon!"
     status = HTTP.status200
     plainText = [(HTTP.hContentType,"text/plain")]
-
 
 
 -- next step: add some silly persistent state! figure out how to configure AcidState.
