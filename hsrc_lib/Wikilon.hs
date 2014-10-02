@@ -24,6 +24,9 @@ import qualified Data.Text.Lazy.Encoding as T
 --
 -- The application is not actually started at this point, but any
 -- initialization will have been performed.
+--
+-- Note: In addition to the WAI app, I should probably return some
+-- variety of 'master' capability URL for the initial transaction.
 --  
 loadInstance :: Sys.FilePath -> IO Wai.Application
 loadInstance _fp = return helloApp

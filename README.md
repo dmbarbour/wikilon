@@ -23,11 +23,17 @@ Some of the following will depend heavily on a maturing dictionary. Others may r
 
 * view definitions for AO dictionary words
 * edit definitions for AO dictionary words
-* console-like web service to replace AOI
 * access histories for AO dictionary words
 * transactional editing (edit many words at once)
 
-* refactoring tools, e.g. rename a word, find uses of word
+* console-like web service to replace AOI
+* iPython notebook inspired apps - i.e. living consoles
+
+* refactoring tools
+ * rename a word (or a common suffix/prefix); renaming may need special transaction
+ * 
+ 
+ 
 * shorthand views: render with color or icons or small suffix, etc. to compact text
 * shorthand writing: fuzzy find, tab completion, type-sensitive search
 
@@ -67,7 +73,7 @@ Still in early planning phases.
 * **acid-state** for persistence
 * **Warp** or **WAI** for HTTP services
 * **websockets** for web reactivity & live programming
-  * won't bother with fallbacks; just require Chrome or Firefox :)
+
 * persistence and logarithmic history for all states
 * implement initial console app by hand (with user or session?)
   * idea: sessions akin to iPython notebook or xiki (persistent, live, AO code)
@@ -75,33 +81,7 @@ Still in early planning phases.
 * build in import/export services
 * run all ABC code transactionally (for now)
 
-I like the idea of supporting multiple 'code bubbles' within a single browser tab/window. This would make it easier to edit definitions and see the results in multiple other views. I should probably look into similar systems, which I understand to leverage iframes and similar. Both the CodeBubbles IDE and Xiki might be 
+I like the idea of supporting multiple 'code bubbles' within a single browser tab/window, and keeping them up-to-date via websockets. This would make it easier to edit definitions and see the results in multiple other views. I should probably look into similar systems, which I understand to leverage iframes and similar. Both the CodeBubbles IDE and Xiki might be 
 
 I may need some external support to edit and view definitions via command line, e.g. for recovery purposes. In that case, I can either leverage Data.Acid.Remote for multi-process communication (that seems dubious and counter-productive to my long term goals), or I can try HTTP communication with an active instance and have a special localhost connection... or, alternatively, print a privileged capability-URI on the command line for administration.
-
-### Concerns about Scalability
-
-I'm a little bit worried that acid-state might not be scalable enough, especially given that I'll be keeping a lot of history information. I wonder if I could implement a paged version of acid-state, or perhaps leverage additional databases for some of the data that doesn't need to be in-memory all the time. 
-
-So I've resolved this: if acid-state keeping all objects in memory becomes a problem, I can feasibly develop an alternative backend for acid-state that supports explicit paging to hide elements that haven't been necessary. I can possibly even make the switch transparent, since I don't need to worry about disruption of a network like Data.Acid.Remote. 
-
-And if not, I'm certain I can upgrade to a different back-end, later. But I really don't want to touch the filesystems API! Working with files is painful.
-
-For now, I shall pretend that acid-state does use paging, that it 'pages out' contents that don't need to be in memory, e.g. no worries about backing larger objects up to a separate file. Thusly, I could leave the scalability concern for much later.
-
-## Design Thoughts
-
-I might want to use some heuristic mechanism for deciding when to run checkpoints on the database, e.g. when loading takes more than so much time. Or I could simply keep track of how many updates since last checkpoint. 
-
-I'd like to consider including the full ABC for inline ABC in the AO code, perhaps excepting ad-hoc tokens. At least sealers, unsealers, and annotations will be allowed as tokens. Maybe those can be treated as special cases, with respect to a structured editing syntax?
-
-I really want to support embedded literal objects. I imagine those will require some special considerations if I want highly efficient interactions with them. It might not be that big a deal to encode the full literal object and its interactions within JavaScript. Still, it might be more useful for Wikilon to have some special support for working with embedded literal objects, for the cases where they get really big (e.g. multiple megabytes).
-
-It might be useful to begin providing the 'ABC stream' control concept early on, as a generic interface to manipulate the Wikilon server. This could be performed via websockets or even via HTTP POST or PUT (with some sequencing model, e.g. single assignment on an incremental identifier). POST could be used to ask for a new session identifier with a set of authorities based on a capability URI.
-
-ABC and AO streams would make an excellent basis for debugging, recovery, administration, configuration, console apps, etc.. 
-
-## Re: Keeping Lots of History
-
-I'd like to keep a reasonably interesting history for every word, while gradually eliminating the fine-grained changes. My main idea here is to use a logarithmic history. An interesting question is to use logarithmic history per word vs. for the whole dictionary. Per word might result in better compression, and would result in a more stable history per word, so I lean in that direction.
 
