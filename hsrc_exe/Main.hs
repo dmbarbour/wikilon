@@ -35,8 +35,8 @@ helpMessage =
  \instructions. (You can change the root page later.)\n\
  \"
 
--- MAIN PROGRAM BEHAVIOR
-
+defaultPort :: Int
+defaultPort = 3000
 
 main :: IO ()
 main = Env.getArgs >>= processArgs >> runWikilonInstance
@@ -89,7 +89,7 @@ setWikilonPort n = withPortDB True $ \ db -> DB.update db (SetPort n)
 withPortDB :: Bool -> (DB.AcidState Port -> IO a) -> IO a
 withPortDB cp action = do
     home <- getWIKILON_HOME
-    db <- DB.openLocalStateFrom (home </> "port") (Port 3000)
+    db <- DB.openLocalStateFrom (home </> "port") (Port defaultPort)
     result <- action db
     when cp (DB.createCheckpoint db)
     DB.closeAcidState db

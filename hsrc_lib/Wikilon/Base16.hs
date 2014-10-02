@@ -88,22 +88,22 @@ decode' dbs bs = (L.reverse dbs, bs)
 -- (But this won't happen for compressing UTF-8 encoded text.)
 compress :: [Word8] -> [Word8]
 compress (0xF8 : bs) = (0xF8 : 0xFE : compress bs)
-compress (tkhx -> (n,hbs,bs)) | (n >= 3) = 
+compress (tkb16 -> (n,hbs,bs)) | (n >= 3) = 
     assert (n <= 256) $ (0xF8 : fromIntegral (n - 3) : hbs) ++ compress bs
 compress (b:bs) = (b : compress bs)
 compress [] = []
 
--- try to take up to 256 hexadecimal-encoded bytes from the stream
-tkhx :: [Word8] -> (Int, [Word8], [Word8])
-tkhx = tkhx' 0 []
+-- try to take up to 256 base16 characters from the stream
+tkb16 :: [Word8] -> (Int, [Word8], [Word8])
+tkb16 = tkb16' 0 []
 
-tkhx' :: Int -> [Word8] -> [Word8] -> (Int, [Word8], [Word8])
-tkhx' n hbs bs | (n >= 256) = (n, L.reverse hbs, bs) -- maximum extraction
-tkhx' n hbs ((h2n -> Just h1) : (h2n -> Just h2) : bs') = tkhx' n' hbs' bs' where
+tkb16' :: Int -> [Word8] -> [Word8] -> (Int, [Word8], [Word8])
+tkb16' n hbs bs | (n >= 256) = (n, L.reverse hbs, bs) -- maximum extraction
+tkb16' n hbs ((h2n -> Just h1) : (h2n -> Just h2) : bs') = tkb16' n' hbs' bs' where
     hbs' = hb:hbs
     hb = h1*16 + h2
     n' = n + 1
-tkhx' n hbs bs = (n, L.reverse hbs, bs) -- could not extract a byte
+tkb16' n hbs bs = (n, L.reverse hbs, bs) -- could not extract a byte
 
 -- | Decompress a byte stream, expanding embedded base16. 
 --

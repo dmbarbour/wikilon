@@ -20,4 +20,6 @@ I wonder if some sort of 'transaction temporary' variables might be appropriate,
 
 Usefully, a lot of 'small' edits *within* a transaction may be completely eliminated when that transaction commits. This can potentially reduce memory burdens a great deal.
 
+Also usefully, transactions may offer some extra security. We don't need to worry about run-by use of PUT to update the dictionary with spam; we can associate every PUT with an authorized transaction.
+
 Yeah... I think this is a very, very good direction to go.
