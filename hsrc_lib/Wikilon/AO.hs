@@ -8,7 +8,8 @@
 -- Wikilon will use a simplified parser for AO. I'm not going to worry
 -- about good parse errors, since (a) AO definitions are too small for
 -- detailed location informaiton to matter, and (b) I'll likely have a
--- structured editor before long. 
+-- structured editor before long. Wikilon will be a bit more accepting,
+-- allowing all inline ABC primitive operators except for SP and LF.
 --
 -- I shall still forbid words to start with `@` for escapes, control
 -- control, export; or `%` for inline ABC. I'll reserve the unicode 
@@ -28,18 +29,16 @@
 -- must be provided via powerblock (or whatever).
 -- 
 module Wikilon.AO
-    ( Word, AO_Code, AO_Action(..), AOp(..)
+    ( Word, AO_Code, AO_Action(..), PrimOp(..)
+    , aoWords
     ) where
 
-import Control.Exception (assert)
-import Control.Applicative
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.List as L
-import qualified Data.Array.Unboxed as A
 import qualified Data.Decimal as Dec
 import Data.Ratio (numerator,denominator)
-import Data.Word (Word16)
+import Wikilon.ABC
 
 type Word = Text
 
@@ -52,59 +51,9 @@ data AO_Action
     | AO_Block [AO_Action]
     | AO_Num   Rational -- simple numbers
     | AO_Text  String   -- literal text (inline or multi-line)
-    | AO_ABC   [AOp]    -- inline ABC (e.g. %vrwlc; `%` prefix for ABC)
+    | AO_ABC   [PrimOp] -- inline ABC as a pseudo-word (grouping preserved)
     | AO_Tok   String   -- {token}
     deriving (Eq, Ord)
-
--- | AOp encodes just the subset of ABC that AO may inline.
-data AOp
-    = AOp_l | AOp_r | AOp_w | AOp_z | AOp_v | AOp_c -- basic data plumbing
-    | AOp_L | AOp_R | AOp_W | AOp_Z | AOp_V | AOp_C -- sum-type data plumbing
-    | AOp_copy | AOp_drop -- '^' and '%'
-    | AOp_add | AOp_neg | AOp_mul | AOp_inv | AOp_divMod -- basic math
-    | AOp_ap | AOp_cond | AOp_quote | AOp_comp -- higher order programming
-    | AOp_rel | AOp_aff -- substructural types
-    | AOp_distrib | AOp_factor | AOp_merge | AOp_assert -- working with sums
-    | AOp_gt -- value observations
-    deriving (Eq, Ord, Enum, A.Ix, Bounded)
-
--- | table of associations between inline ABC and characters.
-aopCharList :: [(AOp, Char)]
-aopCharList =
-    [(AOp_l,'l'),(AOp_r,'r'),(AOp_w,'w'),(AOp_z,'z'),(AOp_v,'v'),(AOp_c,'c')
-    ,(AOp_L,'L'),(AOp_R,'R'),(AOp_W,'W'),(AOp_Z,'Z'),(AOp_V,'V'),(AOp_C,'C')
-    ,(AOp_copy,'^'),(AOp_drop,'%')
-    ,(AOp_add,'+'),(AOp_neg,'-'),(AOp_mul,'*'),(AOp_inv,'/'),(AOp_divMod,'Q')
-    ,(AOp_ap,'$'),(AOp_cond,'?'),(AOp_quote,'\''),(AOp_comp,'o')
-    ,(AOp_rel,'k'),(AOp_aff,'f')
-    ,(AOp_distrib,'D'),(AOp_factor,'F'),(AOp_merge,'M'),(AOp_assert,'K')
-    ,(AOp_gt,'>')
-    ]
-
-aoOpCharArray :: A.UArray AOp Char
-aoOpCharArray = A.accumArray skip maxBound (minBound,maxBound) aopCharList where
-
-skip :: a -> b -> b
-skip = flip const
-
-aoCharAOpArray :: A.UArray Char Word16
-aoCharAOpArray = A.accumArray skip maxBound (lb,ub) lst where
-    lst = fmap swix aopCharList
-    swix (op,c) = (c, fromIntegral (fromEnum op))
-    lb = L.minimum $ fmap snd aopCharList
-    ub = L.maximum $ fmap snd aopCharList
-
-aoOpToChar :: AOp -> Char
-aoOpToChar op = assert (maxBound /= c) c where
-    c = aoOpCharArray A.! op
-
-aoCharToAOp :: Char -> Maybe AOp
-aoCharToAOp c | okay = Just $! toEnum (fromIntegral w)
-              | otherwise = Nothing
-    where okay = inBounds && (maxBound /= w)
-          inBounds = ((lb <= c) && (c <= ub))
-          (lb,ub) = A.bounds aoCharAOpArray
-          w = aoCharAOpArray A.! c
 
 -------------------------------------
 -- Showing or Serializing AO code  --
@@ -117,11 +66,6 @@ instance Show AO_Action where
     showsPrec _ op = showList [op]
     showList ops@(AO_Text _ : _) = showChar ' ' . sa ops
     showList ops = sa ops 
-
-instance Show AOp where
-    showsPrec _ = showChar . aoOpToChar 
-    showList (op:ops) = shows op . showList ops
-    showList [] = id
 
 -- sa assumes that the previous character is a space or other valid
 -- separator, but not necessarily a newline. We're careful with spaces
@@ -136,7 +80,7 @@ sa (AO_Text s : more) =
     showChar '\n' . showChar '"' . showEscaped s . 
     showChar '\n' . showChar '~' . sWithSP more
 sa (AO_Num r : more) = showNumber r . sWithSP more
-sa (AO_ABC aoOps : ops) = showChar '%' . showList aoOps . sWithSP ops
+sa (AO_ABC abcOps : ops) = showChar '%' . shows abcOps . sWithSP ops
 sa (AO_Tok s : more) = showChar '{' . showString s . showChar '}' . sWithSP more
 
 -- add a space before showing the next action
