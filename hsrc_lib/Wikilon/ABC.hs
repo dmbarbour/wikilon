@@ -11,22 +11,23 @@
 -- evaluations, compression, and so on.
 --
 module Wikilon.ABC
-    ( ABC_Op(..), PrimOp(..), Op
+    ( ABC_Op(..), CharOp(..), Op
     , Quotable(..), quote, quoteList
     , abcOpToChar, abcCharToOp
     , abcDivMod, abcSimplify
     ) where
 
 import Control.Applicative ((<$>))
+import Control.Exception (assert)
 import Text.Read (Read(..))
 import qualified Text.ParserCombinators.ReadP as R
 import qualified Text.ParserCombinators.ReadPrec as RP
 import qualified Data.List as L
 import qualified Data.Array.Unboxed as A
 import Data.Ratio
-import Data.Word (Word8)
+import Data.Word (Word16)
 
-data PrimOp -- 43 primitive operations
+data CharOp -- 43 primitive operations
     -- basic data shuffling: twelve ops
     = ABC_l -- l :: (a*(b*c)) → ((a*b)*c)
     | ABC_r -- r :: ((a*b)*c) → (a*(b*c))
@@ -86,7 +87,7 @@ data PrimOp -- 43 primitive operations
     deriving (Eq, Ord, A.Ix, Enum, Bounded)
 
 data ABC_Op ext -- 43 primitives + 3 special cases + extensions
-    = ABC_Prim !PrimOp
+    = ABC_Prim !CharOp
     | ABC_Block [ABC_Op ext] -- [ops]
     | ABC_Text String -- "text\n~ embedded text 
     | ABC_Tok String -- {token} effects, resource linking, etc.
@@ -127,7 +128,7 @@ quoteList (v:vs) = quotes v . quoteList vs
 quoteList [] = id
 
 instance Quotable NoExt where quotes = const id
-instance Quotable PrimOp where quotes = (:) . ABC_Prim 
+instance Quotable CharOp where quotes = (:) . ABC_Prim 
 instance (Quotable ext) => Quotable (ABC_Op ext) where
     quotes (ABC_Prim op) = quotes op
     quotes (ABC_Block ops) = (:) (ABC_Block (quoteList ops [])) 
@@ -153,7 +154,7 @@ qi' n | (n > 0) = let (q,r) = n `divMod` 10 in qi q . quotes (opd r)
       | otherwise = qi (negate n) . quotes ABC_negate
 
 -- quote an integer into ABC, building from right to left
-opd :: Integer -> PrimOp
+opd :: Integer -> CharOp
 opd 0 = ABC_d0
 opd 1 = ABC_d1
 opd 2 = ABC_d2
@@ -166,7 +167,7 @@ opd 8 = ABC_d8
 opd 9 = ABC_d9
 opd _ = error "invalid digit!"
 
-abcOpCharList :: [(PrimOp,Char)]
+abcOpCharList :: [(CharOp,Char)]
 abcOpCharList =
     [(ABC_l,'l'), (ABC_r,'r'), (ABC_w,'w'), (ABC_z,'z'), (ABC_v,'v'), (ABC_c,'c')
     ,(ABC_L,'L'), (ABC_R,'R'), (ABC_W,'W'), (ABC_Z,'Z'), (ABC_V,'V'), (ABC_C,'C')
@@ -190,30 +191,32 @@ abcOpCharList =
     ,(ABC_SP,' '), (ABC_LF,'\n')
     ]
 
-abcOpCharArray :: A.UArray PrimOp Word8
-abcOpCharArray = A.accumArray cw8 0 (minBound, maxBound) lst where
-    cw8 _ = fromIntegral . fromEnum
-    lst = abcOpCharList
+abcOpCharArray :: A.UArray CharOp Char
+abcOpCharArray = A.accumArray skip maxBound (minBound, maxBound) abcOpCharList
 
-abcCharOpArray :: A.UArray Word8 Word8
-abcCharOpArray = A.accumArray pw8 maxBound (0,127) lst where
-    lst = fmap swix abcOpCharList
-    swix (op,c) = (cix c, op)
-    cix = fromIntegral . fromEnum
-    pw8 _ = fromIntegral . fromEnum
+skip :: a -> b -> b
+skip = flip const
 
-abcOpToChar :: PrimOp -> Char
-abcOpToChar = toEnum . fromIntegral . (A.!) abcOpCharArray 
+abcCharOpArray :: A.UArray Char Word16
+abcCharOpArray = A.accumArray skip maxBound (lb,ub) lst where
+    lst = fmap sw abcOpCharList
+    lb = L.minimum (fmap snd abcOpCharList)
+    ub = L.maximum (fmap snd abcOpCharList)
+    sw (op,c) = (c, fromIntegral (fromEnum op))
 
-abcCharToOp :: Char -> Maybe PrimOp
-abcCharToOp c | okay = Just $! toEnum (fromIntegral w8)
+abcOpToChar :: CharOp -> Char
+abcOpToChar op = assert (maxBound /= c) c where
+    c = abcOpCharArray A.! op
+
+abcCharToOp :: Char -> Maybe CharOp
+abcCharToOp c | okay = Just $! toEnum (fromIntegral w)
               | otherwise = Nothing 
-    where okay = inBounds && (maxBound /= w8)
-          inBounds = ((0 <= n) && (n <= 127))
-          n = fromEnum c
-          w8 = abcCharOpArray A.! fromIntegral n
+    where okay = inBounds && (maxBound /= w)
+          inBounds = ((lb <= c) && (c <= ub))
+          (lb,ub) = A.bounds abcCharOpArray
+          w = abcCharOpArray A.! c
 
-instance Show PrimOp where
+instance Show CharOp where
     showsPrec _ = showChar . abcOpToChar
     showList = showListConcat
 
@@ -241,7 +244,7 @@ instance Read (ABC_Op ext) where
     readPrec = RP.lift readOp
     readListPrec = RP.lift (R.manyTill readOp R.eof)
 
-readOpC :: R.ReadP PrimOp
+readOpC :: R.ReadP CharOp
 readOpC =
     R.get >>= \ c ->
     case abcCharToOp c of
@@ -298,7 +301,7 @@ zSimp (ABC_Prim ABC_W : ABC_Prim ABC_Z : rvOps) (ABC_Prim ABC_Z : ops) =
 zSimp rvOps (b:bs) = zSimp (b:rvOps) bs
 zSimp rvOps [] = L.reverse rvOps
 
-opsCancel :: PrimOp -> PrimOp -> Bool
+opsCancel :: CharOp -> CharOp -> Bool
 opsCancel ABC_l ABC_r = True
 opsCancel ABC_r ABC_l = True
 opsCancel ABC_w ABC_w = True

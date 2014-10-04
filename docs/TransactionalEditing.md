@@ -5,8 +5,8 @@ DVCS detects write-write conflicts only. We need read-write conflicts could help
 I understand Git well enough at this point. I should probably read about [Darcs](http://en.wikibooks.org/wiki/Understanding_Darcs) to get more ideas. But some ideas:
 
 * within any given transaction, a word must have *exactly* one definition
-* we want the main history for a wiki (or any branch!) to be 99% linear
-* transactions double as DVCS-like branches
+* hierarchical transactions serve as DVCS branches, but want mostly linear
+* users operate fully within a branch; web-app behavior is branch specific
 * transactions must interact with exponential decay of history
  * branches should prevent decay of their origin
 * want to observe tests, typechecks, web-apps, etc. behavior on many branches

@@ -25,12 +25,20 @@ Security will be a concern, but can mostly be addressed later. I might need to c
 
 # Specific APIs
 
+* ask for public branch capabilities? 
+ * publishing of capabilities in general? 
+ * fits my older designs for ambient authority in capability systems
+* start a new transactional session on a named branch
+* create a new root branch in which you're the master
+* extend wiki with a remote root
+
 * PUT/GET a single word
 * PUT/GET a batch of words
   * GET batch of words matching pattern
   * GET batch of words plus all dependencies
 * variations on PUT with constraint on prior version (for atomic updates)
   * might be good as the default limitation to limit accidents
+
 
 
 # Streaming ABC or AO via HTTP and Websockets

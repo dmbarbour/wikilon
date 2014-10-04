@@ -10,9 +10,10 @@ Description:
   tests, documentation, server configuration, and so on.
   
   This wiki uses acid-state for persistence, websockets for reactive
-  updates, warp for HTTP. But the goal is a minimal kernel, pushing
-  most of the logic into the AO dictionary. 
-
+  updates, warp for HTTP. It supports multiple users with DVCS based
+  views and transactions (including for apps). The goal is a minimal
+  kernel, pushing most of the logic into the AO dictionary. 
+  
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com
 Homepage: http://github.com/dmbarbour/wikilon
@@ -59,24 +60,34 @@ Library
     , containers (>= 0.5 && < 0.7)
     , cryptohash (>= 0.11)
     , bytestring, byteable
-    -- , transformers
+    , Decimal (>= 0.4)
 
     , entropy
+    , time (>= 1.4)
+    , old-locale
+
 
     -- , parsec 
     -- , system-fileio (>= 0.3.11 && < 0.4)
     -- , system-filepath (>= 0.4.10)
-    -- , Decimal (>= 0.4)
 
   Exposed-Modules:
 
     Wikilon
     Wikilon.AO
     Wikilon.ABC
+    Wikilon.Base16
+
+    Wikilon.Time
+
+    Wikilon.Value
+    Wikilon.Accel
+    Wikilon.RunABC
+
     Wikilon.Dict
 
-    Wikilon.Base16
     Wikilon.SecureHash
+    Wikilon.Secret
 
     -- Wikilon.Routes
     -- Wikilon.WebApps

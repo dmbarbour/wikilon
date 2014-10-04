@@ -1,6 +1,6 @@
 If I plan to keep a lot of history in Wikilon (for version control purposes), it would be useful to reduce the size of this as much as possible. 
 
-Anyhow, it might be useful to apply compression for the serialized forms with acid-state (or external file). 
+Anyhow, it might be useful to apply compression for the serialized forms with acid-state (or external file). An interesting possibility is serializing most information into ABC (or ABCD, after it is developed).
 
 I think applying the simple ABC stream compression would be a good start. It includes an LZSS compression, albeit with a small 2k window, plus a binary compression pass. This would be enough to compress most words, excepting only those that use embedded literal objects or large texts.
 
