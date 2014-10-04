@@ -29,8 +29,9 @@
 -- must be provided via powerblock (or whatever).
 -- 
 module Wikilon.AO
-    ( Word, AO_Code, AO_Action(..), PrimOp(..)
+    ( Word, AO_Action(..), PrimOp(..)
     , aoWords
+    , readAO
     ) where
 
 import Data.Text (Text)
@@ -42,10 +43,9 @@ import Wikilon.ABC
 
 type Word = Text
 
--- | AO code is simply a (usually very short) list of actions
-type AO_Code = [AO_Action]
-
--- | basic AO actions
+-- | AO code is simply a (usually very short) list of actions.
+-- Use of words refer to the larger dictionary. Tokens offer
+-- access to annotations or side-effects. 
 data AO_Action
     = AO_Word  Word
     | AO_Block [AO_Action]
@@ -54,6 +54,12 @@ data AO_Action
     | AO_ABC   [PrimOp] -- inline ABC as a pseudo-word (grouping preserved)
     | AO_Tok   String   -- {token}
     deriving (Eq, Ord)
+
+-- Thoughts: might be worthwhile to include some specialized
+-- wikilon directives, e.g. for display and debugging. OTOH,
+-- what we might want to do is parse an AO 'container' language,
+-- that mixes AO with these directives, mostly to keep directives
+-- outside of blocks (i.e. directives are toplevel only!).
 
 -------------------------------------
 -- Showing or Serializing AO code  --
@@ -121,27 +127,51 @@ aoWords = flip lw [] where
 ---------------------------
 -- Reading or Parsing AO --
 ---------------------------
---
--- Thoughts:
---  Need a little extra state to 
---  Mostly, this is related to the use of multi-line text.
---
--- Potentially, I could read multi-line text in a more accepting manner, 
--- i.e. 
 
--- Thoughts on parsing AO:
+
+-- | Parse a string as AO.
+--
+--      readAO bNewLine inputString -> (code,unparsedInput)
+--
+-- The `bNewLine` value should be True if we're starting in a context
+-- at the start of a new line, i.e. such that text at that point would
+-- begin a multi-line text.
+--
+-- Other than multi-line text, AO is mostly easy to parse. The other 
+-- big challenge is parsing numbers, but this simplified parser will
+-- simply require decimals or rationals (no hexadecimal etc.)
 -- 
---  This doesn't really fit the ReadPrec parser combinators model.
---   
---
--- An ad-hoc, linear parser should work well and be very fast.
--- (Though speed shouldn't be an issue in 99% of use cases).
---
--- Most attention must be paid to:
---
--- * whether I'm starting a new line (for multi-line text)
--- * 
---  
+readAO :: Bool -> [Char] -> ([AO_Action],[Char])
+readAO = rdAO []
+
+--       reversed      LF      input       forward   unparsed
+rdAO :: [AO_Action] -> Bool -> [Char] -> ([AO_Action],[Char]) 
+rdAO ops _ (' ' :s) = rdAO ops False s
+rdAO ops _ ('\n':s) = rdAO ops True s
+rdAO ops _     (rdNUM -> Just (num,s)) = rdAO (AO_Num   num : ops) False s
+rdAO ops _     (rdWRD -> Just (wrd,s)) = rdAO (AO_Word  wrd : ops) False s 
+rdAO ops _     (rdBLK -> Just (blk,s)) = rdAO (AO_Block blk : ops) False s
+rdAO ops _     (rdABC -> Just (abc,s)) = rdAO (AO_ABC   abc : ops) False s
+rdAO ops _     (rdTOK -> Just (tok,s)) = rdAO (AO_Tok   tok : ops) False s
+rdAO ops True  (rdMLT -> Just (txt,s)) = rdAO (AO_Text  txt : ops) False s
+rdAO ops False (rdILT -> Just (txt,s)) = rdAO (AO_Text  txt : ops) False s
+rdAO ops _ unparsed = (L.reverse ops, unparsed)
+
+rdNUM :: String -> Maybe (Rational, String)
+rdWRD :: String -> Maybe (Word, String)
+rdBLK :: String -> Maybe ([AO_Action], String)
+rdABC :: String -> Maybe ([PrimOp], String)
+rdTOK :: String -> Maybe (String, String)
+rdMLT :: String -> Maybe (String, String)
+rdILT :: String -> Maybe (String, String)
+
+rdNUM = error "TODO"
+rdWRD = error "TODO"
+rdABC = error "TODO"
+rdBLK = error "TODO"
+rdTOK = error "TODO"
+rdMLT = error "TODO"
+rdILT = error "TODO"
 
 
 {-
