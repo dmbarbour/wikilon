@@ -17,7 +17,7 @@ Some considerations:
 
 I suspect I should predefine all the toplevel routes, then possibly provide some mechanism of adding new toplevel web apps via dictionary naming conventions... e.g. a word like `wikilon/foo` may describe a handler/lens for words via the `/foo` URL path, receiving HTTP requests: the remaining path + query params. I'll want to support a lot of staging, caching, and partial evaluation.
 
-Cookies? I'm tempted to prevent use of cookies from reaching web apps. I might use them separately to track the user for purpose of display preferences and so on.
+I'll probably want some 'built-in' capabilities that cannot be intercepted, e.g. for switching sessions or logging out. For these, I might use a special URL prefix, such as `!foo`, which might not be overridable.
 
 It might be useful to limit which words can be processed. But that could be handled by `wikilon/foo` if we also provide it some information about the input (e.g. the rest of the URL, including the query), along with reflection on the dictionary... so it can compute a web-app for a given route. (We could track which values it accesses in the dictionary to know when the web-app must be updated.)
 
