@@ -107,34 +107,21 @@ The main workflow I'm envisioning is transactional. One is operating on a mostly
 * leverage renaming and refactoring tools as needed
 * add the (modified) remote vocabulary to your own
 
-An interesting possibility is to automatically rewrite the content you want in terms of your own vocabulary. We can start with the assumption that there is much shared vocabulary, or at least equivalent words, especially for lower level concepts. Rewriting the imported concept in your own words might help you grasp it.
+An interesting possibility is to automatically rewrite the content you want in terms of your own vocabulary. We can start with the assumption that there is much shared vocabulary, or at least equivalent words, especially for lower level concepts. Rewriting the imported concept in your own words might help you grasp it. Further, we can have the concept of a user and (personal) wiki instance maturing together, i.e. when you're near to grasping a concept, it won't take many words to describe it.
 
- when they match exactly or making suggestions when they don't match. If your wiki is "ready" to accept a new concept, then you'll already have most of the underlying vocabulary.
+But I'd still like good support for continuing updates. 
 
+I suppose the github-style explicit pull, push, and pull-request relationships could work well enough, assuming we track where each word came from initially. We could also automate a subscription, e.g. a long-running check to see if any relevant updates have been applied. This will require exposing an API that allows us to review a history of transactions for words of interest.
 
-But I'm having some difficulty with the continued merge problem, e.g. to easily bring in *updates* on content already merged. I suppose if a transaction that merges content has enough metadata, it should be easy to form a new merge session that has some knowledge of relationships.
+Anyhow, I certainly want this property: cherry-picking of *content*, not of *changes/patches*. Take the content you want, not the entire context around it. AO, at least, should make it a lot easier to extract content due to the acyclic structure and composability of dependencies.
 
-But the ideal case would be to treat such merges as the normal use case... i.e. a session is creating a temporary branch, then merging it - repeatedly, in both directions. Can we generalize this to merging of permanent branches? Sessions would need to be multi-homed or something like it, to merge in multiple directions between wikis.
-
-
-
-
-A github-style approach - push and pull requests - might not be a bad fit between wikis. We could push content and updates, and also pull changes, and be alerted to them.
-
-Anyhow, I certainly want this property: cherry-picking of *content*, not of *changes* (except insofar as changes maintain content). 
-
-
-
-# A More Commutative Model? 
-
-A Darcs repository is based on a *set of patches* that are applied in an order based on a topological sort of their dependencies. This concept has advantages; many patches are commutative. Of course, transactions have the same benefits, without any of the conflict markers making it into the actual repo (i.e. it's very important that Wikilon stay in an executable state at all times). I think the 'patches' approach is the wrong way to go, here. Again, the focus must be on the usable content, not on the update.
 
 Misc
 ====
 
 # THOUGHTS
 
-One question is whether I should even bother with cookies. Why not just use session-specific URLs at all times? Well, I suppose I don't want users to *share* that URL by accident, and thus share direct access to their own session. But I will need to provide users some sort of administrative web-apps for obtaining session URLs, creating child-sessions (with a subdirectory for state; pet names; and various ad-hoc authorities), revoking sessions, and so on.
+One question is whether I should even bother with cookies. Why not just use session-specific URLs at all times? Well, I suppose I don't want users to share that URL by accident, and thus share direct access to their own session. But I will need to provide users easy access to administrative web-apps for obtaining session URLs, creating child-sessions (with a subdirectory for state; pet names; and various ad-hoc authorities), revoking sessions, and so on.
 
 # SESSION SECRET?
 
@@ -155,9 +142,4 @@ With multiple users, I should be concerned with:
 .. and perhaps more.
 
 A curious issue is how users and their state should interact with transactions, multi-user transactions. 
-
-
-
-
-
 
