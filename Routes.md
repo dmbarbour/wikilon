@@ -15,7 +15,9 @@ Some considerations:
 * support for 'console' applications; multiple consoles
 * privileged console for toplevel config and admin (capability URL?)
 
-I suspect I should predefine all the toplevel routes, then possibly provide some mechanism of adding new toplevel web apps via dictionary naming conventions... e.g. a word like `wikilon/foo` may describe a handler/lens for words via the `/foo` URL path, receiving HTTP requests: the remaining path + query params. I'll want to support a lot of staging, caching, and partial evaluation.
+I suspect I should predefine all the toplevel routes, then possibly provide some mechanism of adding new toplevel web apps via dictionary naming conventions... e.g. a word like `wikilon/foo` may describe a handler/lens for words via the `/foo` URL path, receiving HTTP requests: the remaining path + query params. I'll want to support a lot of staging, caching, and partial evaluation. 
+
+(A valuable property that I want is that *internal* semantics of words should not depend on the words themselves. External features like automatic testing are allowed to depend on words, but internal should not. So the `/foo` routing header must NOT be presented as an observable argument to the web application! It may be a sealed argument, though. This is feasible if HTTP links and such are modeled in a semantic manner.)
 
 I'll probably want some 'built-in' capabilities that cannot be intercepted, e.g. for switching sessions or logging out. For these, I might use a special URL prefix, such as `!foo`, which might not be overridable.
 

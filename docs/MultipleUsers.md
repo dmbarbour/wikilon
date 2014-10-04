@@ -17,9 +17,11 @@ A **session** exists as a layer between users and the dictionary.
 
 So, we have these sessions. The issue two special edge cases are the *master session* and the *guest session*. The master session is a root, a source of all authority for a given Wikilon instance. Every session is a child, directly or indirectly, of its master. A *guest* session, OTOH, is a session that can be created for a prospective new user who lacks a session. 
 
-The master session starts on the master branch. However, it may be feasible to create new 'root' sessions with empty dictionaries, which are essentially the same as the master session (perhaps minus a few capabilities). Multiplicity at the transaction layer is certainly a possibility.
+The master session starts on the master branch. It may be feasible to create new 'root' transactions, as a special authority. Essentially the same as the master session (perhaps minus a few capabilities). Multiplicity at the transaction layer is certainly a possibility.
 
-# Welcome your Guests!
+Masters will have a lot of authorities that are dangerous and not available to guests by default. For example, support to compile and install plugins would be disabled.
+
+# Welcome your Guests! (high priority)
 
 Especially for a budding language like AO, it's important to keep the barrier for entry very low. Guests need a warm welcome, an easy start, rich interactions and visualizations. 
 
@@ -39,9 +41,11 @@ Relevant points:
 
 A permanent session might have a password associated with it, too. 
 
-So every guest gets a new session, which lasts for the lifetime of a cookie (which might be extended). The cookie should possibly be cryptographic in nature.
+So every guest gets a new session, which lasts for the lifetime of a cookie, but is able to easily create a new session or join an old one, or even explicitly delete their current session.
 
-# Stabilizing the Important Words
+The question is how guest sessions should be created in the first place. One option is to have the master control them directly. Another option is to have the master create a prototype guest, whose permissions can be edited to affect all guest sessions in real time. There may be special permissions associated with accomplishments, including registry.
+
+# Stabilizing the Important Words (medium priority)
 
 Assumptions:
 
@@ -70,13 +74,71 @@ If a commit breaks things, we might not permit it (especially not for the main p
 
 Normally, a session is just a number, not bound to any particular user. 
 
-However, we may support a feature of binding a user proof-of-identity to a given session, such that said identity must be utilized whenever accessing the session (with some time-space constraints, e.g. a particular computer for so many hours). Proof-of-identity could be many things: password, separate identity (e-mail, SMS, phone); biometric challenge (voice, face); etc.
+However, we may support a feature of binding a user proof-of-identity to a given session, such that said identity must be utilized whenever accessing the session (with some time-space constraints, e.g. a particular computer for so many hours). Proof-of-identity could be many things: password, separate identity (e-mail, SMS, phone); biometric challenge (voice, face); etc.. 
+
+We might also associate registered sessions with donations/accounts/bitcoin, and perhaps namecoins. 
 
 Optional password support wouldn't be a bad idea to get started. A password would be provided together with the capability URL, mostly to resist accidental leaks. However, I'd favor a password-less system by default.
 
 # Session State and Workspaces
 
-The dictionary *does not* keep information about users, user preferences, workspaces, and so on. All that information is associated instead with sessions. Wikilon web applications may also interact with session states.
+The dictionary generally does not keep *volatile* information, e.g. about users, user preferences, workspaces, and so on. All that information is associated instead with sessions. Wikilon web applications may also interact with session states. We're still a big step removed from my vision of a personal programming environment, i.e. we aren't yet directly modeling user actions as a command stream.
+
+
+Large Scale Multi-User (Across Wikis)
+=====================================
+
+# Hyperlinking Content: No.
+
+While the main workflow for a wiki is definitely transactional and 'linear' within a wiki, an interesting possibility is to leverage cross-wiki links to make it easy to share up-to-date content between wikis.
+
+I'm not entirely sure about this, though. If we have `foo` and `foo@elsewhere`, we'll certainly be tempted to start editing `foo@elsewhere` just as easily as we edit all the other words. But while such editing might seem acceptable from our limited POV, it would be relatively difficult for us to know whom else is using `foo@elsewhere`, and to account for their tests and such. (And, conversely, nobody else would readily when they break our stuff.)
+
+No... half the reason for a wiki is to gather all the code you'll need, to have a whole dictionary at your fingertips, reusable pieces cobbled together for thousands of projects. And, importantly, Wikilon instances will often run offline (e.g. instance per user).
+
+We need instead to share code between wikis by means that preserve this property: don't *link* someone else's vocabulary. Reproduce or merge it into your own private language. But we do need to address the issue of tracking when the remote vocabulary is updated.
+
+# Cherry Picking and Merging Remote Content: Maybe.
+
+The main workflow I'm envisioning is transactional. One is operating on a mostly-linear branch of the wiki, occasionally creating new branches when necessary for some purpose. However, we'll occasionally want content on our branch that is only found on another branch (which might even be hosted on an entirely different Wikilon instance). My initial proposed approach to this: 
+
+* create a merge session for two branches
+* pick the content you want 
+* leverage renaming and refactoring tools as needed
+* add the (modified) remote vocabulary to your own
+
+An interesting possibility is to automatically rewrite the content you want in terms of your own vocabulary. We can start with the assumption that there is much shared vocabulary, or at least equivalent words, especially for lower level concepts. Rewriting the imported concept in your own words might help you grasp it.
+
+ when they match exactly or making suggestions when they don't match. If your wiki is "ready" to accept a new concept, then you'll already have most of the underlying vocabulary.
+
+
+But I'm having some difficulty with the continued merge problem, e.g. to easily bring in *updates* on content already merged. I suppose if a transaction that merges content has enough metadata, it should be easy to form a new merge session that has some knowledge of relationships.
+
+But the ideal case would be to treat such merges as the normal use case... i.e. a session is creating a temporary branch, then merging it - repeatedly, in both directions. Can we generalize this to merging of permanent branches? Sessions would need to be multi-homed or something like it, to merge in multiple directions between wikis.
+
+
+
+
+A github-style approach - push and pull requests - might not be a bad fit between wikis. We could push content and updates, and also pull changes, and be alerted to them.
+
+Anyhow, I certainly want this property: cherry-picking of *content*, not of *changes* (except insofar as changes maintain content). 
+
+
+
+# A More Commutative Model? 
+
+A Darcs repository is based on a *set of patches* that are applied in an order based on a topological sort of their dependencies. This concept has advantages; many patches are commutative. Of course, transactions have the same benefits, without any of the conflict markers making it into the actual repo (i.e. it's very important that Wikilon stay in an executable state at all times). I think the 'patches' approach is the wrong way to go, here. Again, the focus must be on the usable content, not on the update.
+
+Misc
+====
+
+# THOUGHTS
+
+One question is whether I should even bother with cookies. Why not just use session-specific URLs at all times? Well, I suppose I don't want users to *share* that URL by accident, and thus share direct access to their own session. But I will need to provide users some sort of administrative web-apps for obtaining session URLs, creating child-sessions (with a subdirectory for state; pet names; and various ad-hoc authorities), revoking sessions, and so on.
+
+# SESSION SECRET?
+
+Originally, I was envisioning a single 'secret' for a full wikilon instance. But another viable option is a per-session secret. If I plan to generate secrets deterministically for each session, I'll probably want secrets the same size as my secure hash function (i.e. 384 bits). But if I want all randomness to stem from one source, then there is less need to persist random information; I can compute every session ID from the inital secret and a simple counter (perhaps including the parent ID).
 
 older content
 ==================
@@ -94,20 +156,6 @@ With multiple users, I should be concerned with:
 
 A curious issue is how users and their state should interact with transactions, multi-user transactions. 
 
-One possible interaction:
-
-* a user signs up with an e-mail address
-* by e-mail, the user receives a capability URL
-* the user is brought to a page which sets a session cookie for that user
-* user can review active transactions, start a new transaction, or continue an existing one
-* user can also delegate authority to another user, review delegated authorities, and revoke authorities
-
-Regarding new sessions or transactions:
-
-* each new session needs a new workspace, i.e. to avoid 'viewing' anything
-* a new session gets a capability identifier
-* users can bring other people in specifically for a transaction
-* the commit/abort authority must be specifically delegated
 
 
 
