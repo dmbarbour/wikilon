@@ -47,13 +47,20 @@ Library
   hs-Source-Dirs: hsrc_lib
   default-language: Haskell2010
   Build-Depends: base (>= 4.6 && < 5)
+
     , acid-state (>= 0.12)
     , safecopy (>= 0.8)
+    -- , system-fileio (>= 0.3.11 && < 0.4)
+    -- , system-filepath (>= 0.4.10)
+
     , websockets (>= 0.9)
     , wai (>= 3.0)
     , http-types 
     , yesod-routes (>= 1.2)
     -- , wai-websockets
+
+    , cereal (>= 0.4)  
+    , utf8-string (>= 0.3.8)
 
     , array (>= 0.4)
     , text (>= 0.11)
@@ -68,8 +75,6 @@ Library
 
 
     -- , parsec 
-    -- , system-fileio (>= 0.3.11 && < 0.4)
-    -- , system-filepath (>= 0.4.10)
 
   Exposed-Modules:
 
@@ -77,8 +82,6 @@ Library
     Wikilon.AO
     Wikilon.ABC
     Wikilon.Base16
-
-    Wikilon.Time
 
     Wikilon.Value
     Wikilon.Accel
@@ -89,9 +92,13 @@ Library
     Wikilon.SecureHash
     Wikilon.Secret
 
+    Wikilon.Time
+    Wikilon.Char
+    Wikilon.Word
+    -- Wikilon.UTF8
+
     -- Wikilon.Routes
     -- Wikilon.WebApps
-
 
   Other-Modules:
   

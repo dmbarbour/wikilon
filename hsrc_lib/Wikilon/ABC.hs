@@ -11,21 +11,23 @@
 -- evaluations, compression, and so on.
 --
 module Wikilon.ABC
-    ( ABC_Op(..), PrimOp(..), Op
+    ( ABC_Op(..), PrimOp(..), Op, ABC_Ops(..)
     , Quotable(..), quote, quoteList
     , abcOpToChar, abcCharToOp
     , abcDivMod, abcSimplify
     ) where
 
 import Control.Applicative ((<$>))
+-- import Control.Monad
 import Control.Exception (assert)
-import Text.Read (Read(..))
-import qualified Text.ParserCombinators.ReadP as R
-import qualified Text.ParserCombinators.ReadPrec as RP
+import qualified Data.Serialize as C
+import qualified Codec.Binary.UTF8.Generic as UTF8
 import qualified Data.List as L
 import qualified Data.Array.Unboxed as A
 import Data.Ratio
 import Data.Word (Word16)
+import Data.String
+import Wikilon.Char
 
 data PrimOp -- 43 primitive operations
     -- basic data shuffling: twelve ops
@@ -85,6 +87,8 @@ data PrimOp -- 43 primitive operations
     -- whitespace identities: two ops 
     | ABC_SP | ABC_LF  -- a → a  used for formatting
     deriving (Eq, Ord, A.Ix, Enum, Bounded)
+
+newtype ABC_Ops ext = ABC_Ops { abc_ops :: [ABC_Op ext] } deriving (Eq, Ord)
 
 data ABC_Op ext -- 43 primitives + 3 special cases + extensions
     = ABC_Prim !PrimOp
@@ -216,6 +220,65 @@ abcCharToOp c | okay = Just $! toEnum (fromIntegral w)
           (lb,ub) = A.bounds abcPrimOpArray
           w = abcPrimOpArray A.! c
 
+instance (Quotable ext) => C.Serialize (ABC_Ops ext) where
+    put = putABC . abc_ops
+    get = ABC_Ops <$> getABC
+
+instance (Quotable ext) => Show (ABC_Op ext) where
+    showsPrec _ = showList . (:[])
+    showList = shows . ABC_Ops
+
+instance (Quotable ext) => Show (ABC_Ops ext) where
+    show = UTF8.toString . C.encodeLazy
+
+instance Show PrimOp where
+    showsPrec _ = showList . (:[])
+    showList = shows . fmap primOp
+
+-- help type inference a little
+primOp :: PrimOp -> Op
+primOp = ABC_Prim
+
+instance Read (ABC_Ops ext) where
+    readsPrec _ s =
+        let bytes = UTF8.fromString s in
+        case C.runGetLazyState getABC bytes of
+            Left _error -> []
+            Right (code, brem) -> [(ABC_Ops code, UTF8.toString brem)]
+instance IsString (ABC_Ops ext) where fromString = read
+
+putABC :: (Quotable ext) => [ABC_Op ext] -> C.PutM ()
+putABC = mapM_ putOp
+
+putOp :: (Quotable ext) => ABC_Op ext -> C.PutM ()
+putOp (ABC_Prim op) = C.put (abcOpToChar op)
+putOp (ABC_Block abc) = C.put '[' >> putABC abc >> C.put ']'
+putOp (ABC_Text txt) = C.put '"' >> putMLT txt >> C.put '\n' >> C.put '~'
+putOp (ABC_Tok tok) = assert (validTok tok) $ C.put '{' >> mapM_ C.put tok >> C.put '}'
+putOp (ABC_Ext ops) = putABC (quote ops)
+
+putMLT :: String -> C.PutM ()
+putMLT ('\n':cs) = C.put '\n' >> C.put ' ' >> putMLT cs
+putMLT (c:cs) = C.put c >> putMLT cs
+putMLT [] = return ()
+
+validTok :: String -> Bool
+validTok = L.all isTokenChar
+
+-- get will not return any ABC_Ext elements, so the type of ext is
+-- not relevant at this point. getABC requires a little extra state
+-- regarding whether we've just read a newline
+getABC :: C.Get [ABC_Op ext]
+getABC = error "undefined"
+
+
+
+
+
+
+{-
+
+
 instance Show PrimOp where
     showsPrec _ = showChar . abcOpToChar
     showList = showListConcat
@@ -239,6 +302,9 @@ showEscaped ('\n':ss) = showChar '\n' . showChar ' ' . showEscaped ss
 showEscaped (c:ss) = showChar c . showEscaped ss
 showEscaped [] = id
 
+-}
+
+{-
 -- Note: there will be no `ABC_Ext` elements immediately after Read.
 instance Read (ABC_Op ext) where
     readPrec = RP.lift readOp
@@ -277,7 +343,7 @@ readTok = R.char '{' >> R.manyTill (R.satisfy isTokChr) (R.char '}')
 isTokChr :: Char -> Bool
 isTokChr c = not $ ('{' == c || '\n' == c || '}' == c)
 
-
+-}
 
 -- | abcSimplify performs a simple optimization on ABC code based on
 -- recognizing short sequences of ABC that can be removed. E.g.
