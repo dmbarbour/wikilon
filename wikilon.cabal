@@ -95,6 +95,7 @@ Library
     Wikilon.Time
     Wikilon.Char
     Wikilon.Word
+    Wikilon.ParseUtils
     -- Wikilon.UTF8
 
     -- Wikilon.Routes

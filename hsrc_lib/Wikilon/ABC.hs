@@ -17,8 +17,8 @@ module Wikilon.ABC
     , abcDivMod, abcSimplify
     ) where
 
-import Control.Applicative ((<$>))
--- import Control.Monad
+import Control.Applicative ((<$>), pure)
+import Control.Monad (join)
 import Control.Exception (assert)
 import qualified Data.Serialize as C
 import qualified Codec.Binary.UTF8.Generic as UTF8
@@ -28,6 +28,7 @@ import Data.Ratio
 import Data.Word (Word16)
 import Data.String
 import Wikilon.Char
+import qualified Wikilon.ParseUtils as P
 
 data PrimOp -- 43 primitive operations
     -- basic data shuffling: twelve ops
@@ -269,81 +270,37 @@ validTok = L.all isTokenChar
 -- not relevant at this point. getABC requires a little extra state
 -- regarding whether we've just read a newline
 getABC :: C.Get [ABC_Op ext]
-getABC = error "undefined"
+getABC = P.manyC tryOp
 
+tryOp :: C.Get (C.Get (ABC_Op ext))
+tryOp = 
+    C.get >>= \ c ->
+    case c of
+        (abcCharToOp -> Just op) -> return $ pure (ABC_Prim op)
+        '[' -> return $ ABC_Block <$> readBlock 
+        '{' -> return $ ABC_Tok   <$> readToken
+        '"' -> return $ ABC_Text  <$> readText
+        _ -> fail "input not recognized as ABC"
 
+getOp :: C.Get (ABC_Op ext)
+getOp = join tryOp
 
+-- we've already read '['; read until ']'
+readBlock :: C.Get [ABC_Op ext]
+readBlock = P.manyTil getOp (P.char ']')
 
+readToken :: C.Get String
+readToken = P.manyTil (P.satisfy isTokenChar) (P.char '}')
 
+readText :: C.Get String 
+readText = 
+    lineOfText >>= \ t0 ->
+    P.manyTil (P.char ' ' >> lineOfText) (P.char '~') >>= \ ts ->
+    return $ L.concat $ t0 : fmap ('\n':) ts
 
-{-
-
-
-instance Show PrimOp where
-    showsPrec _ = showChar . abcOpToChar
-    showList = showListConcat
-
-instance (Quotable ext) => Show (ABC_Op ext) where 
-    showsPrec _ (ABC_Prim op) = shows op
-    showsPrec _ (ABC_Block ops) = showChar '[' . showList ops . showChar ']'
-    showsPrec _ (ABC_Text txt) = showChar '"' . showEscaped txt . showChar '\n' . showChar '~'
-    showsPrec _ (ABC_Tok tok) = showChar '{' . showString tok . showChar '}'
-    showsPrec _ (ABC_Ext ext) = showList (quote ext)
-    showList = showListConcat
-
--- show a list without any brackets or commas (just direct concatenation)
-showListConcat :: (Show a) => [a] -> ShowS
-showListConcat (x:xs) = shows x . showListConcat xs 
-showListConcat [] = id
-
--- Escape embedded for ABC. Only LF needs be escaped.
-showEscaped :: String -> ShowS
-showEscaped ('\n':ss) = showChar '\n' . showChar ' ' . showEscaped ss
-showEscaped (c:ss) = showChar c . showEscaped ss
-showEscaped [] = id
-
--}
-
-{-
--- Note: there will be no `ABC_Ext` elements immediately after Read.
-instance Read (ABC_Op ext) where
-    readPrec = RP.lift readOp
-    readListPrec = RP.lift (R.manyTill readOp R.eof)
-
-readOpC :: R.ReadP PrimOp
-readOpC =
-    R.get >>= \ c ->
-    case abcCharToOp c of
-        Nothing -> R.pfail
-        Just opc -> return opc
-
-readOp :: R.ReadP (ABC_Op ext)
-readOp = 
-    (ABC_Block <$> readBlock) R.<++
-    (ABC_Text <$> readText) R.<++
-    (ABC_Tok <$> readTok) R.<++
-    (ABC_Prim <$> readOpC) 
-
-readBlock :: R.ReadP [ABC_Op ext]
-readBlock = R.char '[' >> R.manyTill readOp (R.char ']')
-
--- readText will remove the escapes (only LF is escaped)
-readText :: R.ReadP String
-readText = start where
-    start = 
-        R.char '"' >>
-        textLine >>= \ t0 ->
-        R.manyTill (R.char ' ' >> textLine) (R.char '~') >>= \ ts ->
-        return $ L.concat (t0 : map ('\n':) ts)
-    textLine = R.manyTill R.get (R.char '\n')
-
-readTok :: R.ReadP String
-readTok = R.char '{' >> R.manyTill (R.satisfy isTokChr) (R.char '}') 
-
-isTokChr :: Char -> Bool
-isTokChr c = not $ ('{' == c || '\n' == c || '}' == c)
-
--}
+-- text to end of line...
+lineOfText :: C.Get String
+lineOfText = P.manyTil C.get (P.char '\n')
 
 -- | abcSimplify performs a simple optimization on ABC code based on
 -- recognizing short sequences of ABC that can be removed. E.g.
