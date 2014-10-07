@@ -59,6 +59,7 @@ Library
     , yesod-routes (>= 1.2)
     -- , wai-websockets
 
+    -- relying on a bug-fix in cereal 0.4.1
     , cereal (>= 0.4.1.0)  
     , utf8-string (>= 0.3.8)
 
@@ -86,6 +87,9 @@ Library
     Wikilon.Value
     Wikilon.Accel
     Wikilon.RunABC
+
+    Wikilon.Session
+    Wikilon.Project
 
     Wikilon.Dict
 
