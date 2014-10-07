@@ -36,23 +36,24 @@
 module Wikilon.AO
     ( Word, AO_Code(..), AO_Action(..), PrimOp(..)
     , aoWords, wordToText, textToWord
-    , getAO, putAO
+    , getAO, getAO', putAO
     ) where
 
 import Control.Applicative
---import Control.Monad
+import Control.Monad (join)
 import Control.Exception (assert)
 import qualified Data.List as L
 import qualified Data.Decimal as Dec
 import qualified Data.Serialize as C
 import qualified Codec.Binary.UTF8.Generic as UTF8
-import Data.Ratio (numerator,denominator)
+import Data.Ratio
 import Data.String
 --import Data.Char (ord)
 
+import qualified Wikilon.ParseUtils as P
 import Wikilon.ABC
 import Wikilon.Word
-import Wikilon.Char 
+import Wikilon.Char
 
 -- | AO_Code mostly exists for read, show, serialization instances.
 newtype AO_Code = AO_Code { ao_code :: [AO_Action] } deriving (Eq, Ord)
@@ -68,6 +69,17 @@ data AO_Action
     | AO_ABC   [PrimOp] -- inline ABC as a pseudo-word (grouping preserved)
     | AO_Tok   String   -- {token}
     deriving (Eq, Ord)
+
+-- | Extract the words used by AO code. For example:
+--     foo "hello" [42 bar baz] %vrwlc bar → [foo,bar,baz,bar]
+-- Duplicates are still part of the list at this point.
+aoWords :: [AO_Action] -> [Word]
+aoWords = flip lw [] where
+    lw (x:xs) = ew x . lw xs
+    lw [] = id
+    ew (AO_Word w) = (w:)
+    ew (AO_Block ops) = lw ops
+    ew _ = id
 
 instance C.Serialize AO_Code where
     put = putAO . ao_code
@@ -90,21 +102,31 @@ instance Read AO_Code where
         case C.runGetLazyState C.get bytes of
             Left _error -> []
             Right (code, brem) -> [(code, UTF8.toString brem)]
-instance IsString AO_Code where fromString = read
+
+instance IsString AO_Code where 
+    fromString s = 
+        let bytes = UTF8.fromString s in
+        case C.runGetLazyState C.get bytes of
+            Left emsg -> error emsg
+            Right (code, brem) ->
+                let srem = UTF8.toString brem in
+                if (L.null srem) then code else
+                error $ "Parsed OK: " ++ show code ++
+                        "\nLeftOvers: " ++ srem
 
 -- | Serialize AO into binary. 
 putAO :: [AO_Action] -> C.PutM ()
-putAO (op:ops) = putAction op >> putSPAO ops
+putAO (op:ops) = putAction op >> putSP ops
 putAO [] = return ()
 
 -- put a space then put the next action (if any).
 --
 -- Text always adds SP for inline text or LF for multiline text. To
 -- avoid doubling number of spaces, text is treated as special case. 
-putSPAO :: [AO_Action] -> C.PutM ()
-putSPAO [] = return ()
-putSPAO (AO_Text txt : ops) = putSPText txt >> putSPAO ops 
-putSPAO ops = C.put ' ' >> putAO ops
+putSP :: [AO_Action] -> C.PutM ()
+putSP [] = return ()
+putSP (AO_Text txt : ops) = putSPText txt >> putSP ops 
+putSP ops = C.put ' ' >> putAO ops
 
 putAction :: AO_Action -> C.Put
 putAction (AO_Word w) = C.putByteString (wordToUTF8 w)
@@ -150,153 +172,174 @@ putTok tok = assert (validTok tok) $ C.put '{' >> mapM_ C.put tok >> C.put '}'
 validTok :: String -> Bool
 validTok = L.all isTokenChar
 
+-- | Get AO actions adjusted for whether we start at a new line.
 getAO :: Bool -> C.Get [AO_Action]
-getAO = error "undefined"
+getAO b = snd <$> getAO' b
 
+-- | Get as many actions as we can, skipping any final white space.
+-- we're right at the edge of what's available! The additional
+-- boolean indicates whether we ended just after a newline.
+getAO' :: Bool -> C.Get (Bool, [AO_Action])
+getAO' = C.label "toplevel AO parser" . loop [] where
+    loop ra bLF = 
+        skipWS bLF >>= \ bLF' ->
+        P.tryCommit (tryPeekAction bLF') >>= \ mbAction ->
+        case mbAction of
+            Nothing -> return (bLF', L.reverse ra)
+            Just a  -> loop (a:ra) False
 
+-- separators include SP, LF, [], (|). Though the latter three are
+-- not valid AO, they still qualify as separators due to the def of
+-- ambiguous AO.
+fbyWS :: C.Get a -> C.Get a
+fbyWS getElem =
+    getElem >>= \ a ->
+    let pw8 = C.lookAhead C.getWord8 in
+    let pc8 = (toEnum . fromEnum) <$> pw8 in
+    (pc8 <|> return ' ') >>= \ sep ->
+    if isWordSep sep then return a else
+    fail "expecting word separator or EOF"
 
+-- skip whitespace, and return whether we're at the start of a new line.
+skipWS :: Bool -> C.Get Bool
+skipWS bPrevLF =
+    (C.lookAhead C.getWord8 <|> pure 4) >>= \ w8 ->
+    let bLF = (10 == w8) in
+    let bSP = (32 == w8) in
+    let bWS = bLF || bSP in
+    if not bWS then return bPrevLF else
+    C.skip 1 >> skipWS bLF
 
-{-
-ops@(AO_Text _ : _) = showChar ' ' . sa ops
-    showList ops = sa ops 
+-- AO is LL1, so we'll commit after one character.
+-- For text, we need to know whether we're starting at a new line.
+-- Blocks are the only type of value that don't need to be followed
+-- by a word separator, since the ']' is already a word separator.
+tryPeekAction :: Bool -> C.Get (C.Get AO_Action)
+tryPeekAction bLF = C.get >>= \ c -> pka c where
+    pka '%'               = pure $ fbyWS $ AO_ABC <$> inlineABC
+    pka '['               = pure $ AO_Block <$> blockLiteral 
+    pka '{'               = pure $ fbyWS $ AO_Tok <$> tokenAction
+    pka '"' | bLF         = pure $ fbyWS $ AO_Text <$> multiLineText
+            | otherwise   = pure $ fbyWS $ AO_Text <$> inlineText
+    pka c | isDigit c     = pure $ fbyWS $ AO_Num <$> numLiteral c
+    pka c | isPMD c       = pure $ fbyWS $ pmdAction c
+    pka c | isWordStart c = pure $ fbyWS $ AO_Word <$> normalWord [c]
+    pka _ = fail "no AO action"
 
--- sa assumes that the previous character is a space or other valid
--- separator, but not necessarily a newline. We're careful with spaces
--- mostly for aesthetic reasons.
-sa :: [AO_Action] -> ShowS
-sa [] = id -- all done
-sa (AO_Word w : more) = shows w . sWithSP more
-sa (AO_Block ops : more) = showChar '[' . sa ops . showChar ']' . sWithSP more
-sa (AO_Text s : more) | inlineableTxt s = 
-    showChar '"' . showString s . showChar '"' . sWithSP more
-sa (AO_Text s : more) = 
-    showChar '\n' . showChar '"' . showEscaped s . 
-    showChar '\n' . showChar '~' . sWithSP more
-sa (AO_Num r : more) = showNumber r . sWithSP more
-sa (AO_ABC abcOps : ops) = showChar '%' . shows abcOps . sWithSP ops
-sa (AO_Tok s : more) = showChar '{' . showString s . showChar '}' . sWithSP more
+parseAction :: Bool -> C.Get AO_Action
+parseAction = join . tryPeekAction
 
--- add a space before showing the next action
-sWithSP :: [AO_Action] -> ShowS
-sWithSP [] = id -- no need to add space (end of block or code)
-sWithSP ops = showChar ' ' . sa ops
+-- we've already parsed the '%' at the start.
+-- we need at least one operation; but many 
+-- are allowed e.g. %vrwlc
+inlineABC :: C.Get [PrimOp]
+inlineABC = C.label "inline ABC" $ P.many1 primOp where
+    errSP  = "spaces are not valid inline ABC"
+    errC c = '\'' : c : "' not recognized as inline ABC" 
+    primOp = 
+        C.get >>= \ c ->
+        if isSpace c then fail errSP else
+        case abcCharToOp c of
+            Just op -> return op
+            Nothing -> fail (errC c)
 
--- escape a string for AO's multi-line text. Unlike most PLs,
--- only newlines need be escaped in AO's texts. 
-showEscaped :: String -> ShowS
-showEscaped ('\n':s) = showChar '\n' . showChar ' ' . showEscaped s
-showEscaped (c:s) = showChar c . showEscaped s
-showEscaped [] = id
+-- We've just entered a block via '['. Now parse to following ']'. 
+-- The clear terminal makes this case easier than getAO. We also
+-- know we do not start with an LF, so whitespace is easier.
+blockLiteral :: C.Get [AO_Action]
+blockLiteral = C.label "AO block parser" $ loop [] where
+    loop ra = skipWS False >>= \ bLF -> body ra bLF
+    body ra bLF = (endBlock ra) <|> (action ra bLF)
+    endBlock ra = P.char ']' >> return (L.reverse ra)
+    action ra bLF = parseAction bLF >>= loop . (:ra)
 
+-- we've parsed the first '"'; now parse to end!
+multiLineText :: C.Get String
+multiLineText = C.label "AO multi-line text" $ 
+    lineOfText >>= \ t0 ->
+    P.manyTil (P.char ' ' >> lineOfText) (P.char '~') >>= \ ts ->
+    return $ L.concat $ t0 : fmap ('\n':) ts
 
--- show number as decimal if possible, otherwise as fraction
--- todo: consider supporting scientific notations
-showNumber :: Rational -> ShowS
-showNumber (toDecimal -> (Just dec)) = shows dec
-showNumber r = shows (numerator r) . showChar '/' . shows (denominator r)
+-- text to end of line...
+lineOfText :: C.Get String
+lineOfText = P.manyTil C.get (P.char '\n')
 
-toDecimal :: Rational -> Maybe Dec.Decimal
-toDecimal = either (const Nothing) Just . Dec.eitherFromRational
--}
+-- already parsed leading '"'; parse to following '"' for inline text
+-- inline text excludes \n and ". (AO uses no escapes for text.)
+inlineText :: C.Get String
+inlineText = C.label "AO inline text" $ P.manyTil txchr (P.char '"') where
+    txchr = P.satisfy isInlineTextChar
 
--- | Extract the words used by AO code. For example:
---     foo "hello" [42 bar baz] %vrwlc bar → [foo,bar,baz,bar]
--- Duplicates are still part of the list at this point.
-aoWords :: [AO_Action] -> [Word]
-aoWords = flip lw [] where
-    lw (x:xs) = ew x . lw xs
-    lw [] = id
-    ew (AO_Word w) = (w:)
-    ew (AO_Block ops) = lw ops
-    ew _ = id
+-- from '{' to following '}', token string.
+-- token text forbids {, }, and \n.
+tokenAction :: C.Get String
+tokenAction = C.label "AO token" $ P.manyTil tokchr (P.char '}') where
+    tokchr = P.satisfyMsg "token text" isTokenChar
 
+-- parse a number. The simplified form of AO for Wikilon supports
+-- only decimals (e.g. 3.14, 42) and fractionals (e.g. 3/4). This
+-- is for simplicity purposes, and to de-emphasize bit banging,
+-- though developers may certainly translate.
+numLiteral :: Char -> C.Get Rational
+numLiteral '0' = optFracPart 0
+numLiteral d | isDigit d = posInt d >>= optFracPart
+numLiteral c = fail $ c : " is not a digit!"
 
-{-
----------------------------
--- Reading or Parsing AO --
----------------------------
+posInt :: Char -> C.Get Integer
+posInt d = 
+    P.many (P.satisfy isDigit) >>= \ ds ->
+    return $ L.foldl addDigit 0 (d:ds)
 
+addDigit :: Integer -> Char -> Integer
+addDigit n d = (10*n) + dToN d
 
--- | Parse a string as AO.
---
---      readAO bNewLine inputString -> (code,unparsedInput)
---
--- The `bNewLine` value should be True if we're starting in a context
--- at the start of a new line, i.e. such that text at that point would
--- begin a multi-line text.
---
--- Other than multi-line text, AO is mostly easy to parse. The other 
--- big challenge is parsing numbers, but this simplified parser will
--- simply require decimals or rationals (no hexadecimal etc.)
--- 
-readAO :: Bool -> [Char] -> ([AO_Action],[Char])
-readAO = rdAO []
+dToN :: Char -> Integer
+dToN d = fromIntegral $ (fromEnum d) - 48
 
---       reversed      LF      input       forward   unparsed
-rdAO :: [AO_Action] -> Bool -> [Char] -> ([AO_Action],[Char]) 
-rdAO ops _ (' ' :s) = rdAO ops False s
-rdAO ops _ ('\n':s) = rdAO ops True s
-rdAO ops _     (rdNUM -> Just (num,s)) = rdAO (AO_Num   num : ops) False s
-rdAO ops _     (rdWRD -> Just (wrd,s)) = rdAO (AO_Word  wrd : ops) False s 
-rdAO ops _     (rdBLK -> Just (blk,s)) = rdAO (AO_Block blk : ops) False s
-rdAO ops _     (rdABC -> Just (abc,s)) = rdAO (AO_ABC   abc : ops) False s
-rdAO ops _     (rdTOK -> Just (tok,s)) = rdAO (AO_Tok   tok : ops) False s
-rdAO ops True  (rdMLT -> Just (txt,s)) = rdAO (AO_Text  txt : ops) False s
-rdAO ops False (rdILT -> Just (txt,s)) = rdAO (AO_Text  txt : ops) False s
-rdAO ops _ unparsed = (L.reverse ops, unparsed)
+optFracPart :: Integer -> C.Get Rational
+optFracPart n = maybe (fromInteger n) ($ n) <$> P.tryCommit (C.get >>= fp) where
+    fp '.' = return decimalPart
+    fp '/' = return fractionalPart
+    fp _   = fail "no fractional part; undo! undo!"
 
-rdNUM :: String -> Maybe (Rational, String)
-rdWRD :: String -> Maybe (Word, String)
-rdBLK :: String -> Maybe ([AO_Action], String)
-rdABC :: String -> Maybe ([PrimOp], String)
-rdTOK :: String -> Maybe (String, String)
-rdMLT :: String -> Maybe (String, String)
-rdILT :: String -> Maybe (String, String)
+decimalPart :: C.Get (Integer -> Rational)
+decimalPart = C.label "decimal" $ 
+    P.many1 (P.satisfy isDigit) >>= \ ds ->
+    let num = L.foldl addDigit 0 ds in
+    let den = 10 ^ (L.length ds) in
+    let r = (num % den) in
+    assert ((0 <= r) && (r < 1)) $
+    return ((+ r) . fromInteger)
 
--- For reading words, we have just a few special cases:
---   a word starting with +,.,- may NOT follow that with a digit
---   
-rdWRD (confusingWord -> True) = Nothing
-rdWRD (c:cs) | isWordStart c = 
-    let (cw,cs') = L.span isWordCont cs in
-    let wrd = T.pack (c:cw) in
-    let bValid = hasWordSep cs' in
-    if bValid then Just (wrd, cs') else Nothing
-rdWRD _ = Nothing
+fractionalPart :: C.Get (Integer -> Rational)
+fractionalPart = C.label "fractional" $
+    P.satisfy isNZDigit >>= \ d -> 
+    posInt d >>= \ den ->
+    return (% den)
+    
+-- Parsing a number or a word, and rejecting some visually confusing
+-- cases (e.g. `.3` or `+4`) from being parsed at all. Negative numbers
+-- are routed through this parser.
+pmdAction :: Char -> C.Get AO_Action
+pmdAction c0 =
+    P.optionMaybe (P.satisfy isWordCont) >>= \ mbc ->
+    case mbc of
+        Nothing -> return (AO_Word (textToWord [c0]))
+        Just c1 ->
+            if not (isDigit c1) then AO_Word <$> normalWord [c0,c1] else
+            let pmdMsg = "To limit confusion with numbers, words starting with \
+                         \+, -, /, or . may not use 0-9 as second character."
+            in
+            if not ('-' == c0) then fail pmdMsg else
+            numLiteral c1 >>= \ r ->
+            if (0 == r) then fail "refusing to parse a negative zero" else
+            return (AO_Num (negate r))
 
--- read `%vrwlc` and the like.
-rdABC ('%':cs) =
-    let (ops,cs') = gatherABC [] cs in
-    let bValid = not (L.null ops) && hasWordSep cs' in
-    if bValid then Just (ops, cs') else Nothing
-rdABC _ = Nothing
+-- I'm assuming the first one or two characters are already captured
+-- in the argument, so we're now just parsing to the end of the word.
+normalWord :: String -> C.Get Word
+normalWord w0 =
+    assert (not (L.null w0)) $
+    P.many (P.satisfy isWordCont) >>= \ ws ->
+    return (textToWord (w0 ++ ws))
 
-gatherABC :: [PrimOp] -> [Char] -> ([PrimOp],[Char])
-gatherABC ops s@(c:_) | isSpace c = (L.reverse ops, s)
-gatherABC ops ((abcCharToOp -> Just op) : s) = gatherABC (op:ops) s
-gatherABC ops s = (L.reverse ops, s)
-
--- read e.g. [foo %vrwlc bar 11.4 baz]
-rdBLK ('[':s) = 
-    let (blk, sBlockEnd) = readAO False s in
-    case sBlockEnd of
-        (']':s') -> Just (blk,s')
-        _ -> Nothing
-rdBLK _ = Nothing
-
-
-rdNUM = error "TODO"
-rdTOK = error "TODO"
-rdMLT = error "TODO"
-rdILT = error "TODO"
-
-hasWordSep :: [Char] -> Bool
-hasWordSep (c:_) = isWordSep c
-hasWordSep [] = True
-
-
----------------------------------
- -- Character Classifications --
----------------------------------
-
--}

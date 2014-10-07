@@ -27,6 +27,8 @@ Some of the following will depend heavily on a maturing dictionary. Others may r
 * transactional editing (edit many words at once)
 
 * console-like web service to replace AOI
+* implement command-line console interface to the web services
+ * system-integration; access to defs, ABC, cross-compiled code, etc.
 * iPython notebook inspired apps - i.e. living consoles
 
 * refactoring tools
@@ -64,6 +66,7 @@ All state associated with Wikilon will be persistent. Also, I'm likely to keep l
 ## Setup and Configuration
 
 When Wikilon is in a usable state, I'll provide instructions for setting it up and getting started. 
+
 
 ## Implementation
 

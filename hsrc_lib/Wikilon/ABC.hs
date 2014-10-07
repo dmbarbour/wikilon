@@ -246,7 +246,15 @@ instance Read (ABC_Ops ext) where
         case C.runGetLazyState getABC bytes of
             Left _error -> []
             Right (code, brem) -> [(ABC_Ops code, UTF8.toString brem)]
-instance IsString (ABC_Ops ext) where fromString = read
+instance IsString (ABC_Ops ext) where 
+    fromString s = 
+        let bytes = UTF8.fromString s in
+        case C.runGetLazyState getABC bytes of
+            Left emsg -> error emsg
+            Right (code, brem) ->
+                let srem = UTF8.toString brem in
+                if (L.null srem) then ABC_Ops code else
+                error $ "parse failed at: " ++ srem
 
 putABC :: (Quotable ext) => [ABC_Op ext] -> C.PutM ()
 putABC = mapM_ putOp

@@ -44,10 +44,10 @@ satisfyMsg errMsg test =
     if test a then return a 
               else fail errMsg
 
+-- | match a particular character
 char :: Char -> C.Get Char
-char c = satisfyMsg emsg eqc where
-    emsg = '\'' : c : "' expected"
-    eqc = (==) c
+char c = satisfyMsg eMsg (== c) where
+    eMsg = '\'' : c : "' expected"
 
 optionMaybe :: C.Get a -> C.Get (Maybe a)
 optionMaybe op = tryCommit (return <$> op)
@@ -75,10 +75,9 @@ manyC gg = loop [] where
 
 -- | parse EOF, i.e. fail if not at end of input
 eof :: C.Get ()
-eof = 
-    C.isEmpty >>= \ bEOF ->
-    if bEOF then return ()
-            else fail "end of input expected"
+eof = (peek >> fail emsg) <|> return () where
+    peek = C.lookAhead C.getWord8
+    emsg = "end of input expected"
 
 -- | parseManyTil: try to parse many inputs til we reach a terminal
 manyTil :: C.Get a -> C.Get end -> C.Get [a]
