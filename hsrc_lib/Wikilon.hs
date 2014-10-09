@@ -1,15 +1,27 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Wikilon is a persistent web server implemented above Warp and
--- Acid-State, aiming to provide a live programming environment for
--- Awelon Object code.
+-- Acid-State, providing a wiki-based development environment and
+-- live software platform for Awelon Object (AO) code. As a live 
+-- platform, developers can implement arbitrary web-applications as
+-- words in the AO dictionary and observe immediate results.
 --
--- A Wikilon server will provide a few built-in applications and
--- features, but much of the interesting web service logic will be
--- provided through the AO dictionary.
+-- A Wikilon web-server will typically *host* multiple wikis.
+--
+-- When first initialized, a Wikilon instance will create an admin
+-- wiki and print a web-key URL to stdout. The Wikilon instance is
+-- then configured through a browser, generally by installing more 
+-- wikis (perhaps leveraging an external dictionary). The admin has
+-- special influence on the toplevel namespace, permissions, quotas,
+-- and so on.
+-- 
+-- Each Wiki provides a few default functions and web-applications.
+-- But, in the tradition of emacs and Smalltalk, the vast majority
+-- of a Wiki's behavior can be overridden.
 -- 
 module Wikilon
     ( loadInstance
+    , WikilonApp(..)
     ) where
 
 import qualified Network.Wai as Wai
@@ -17,6 +29,12 @@ import qualified System.IO as Sys
 import qualified Network.HTTP.Types as HTTP
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as T
+
+data WikilonApp = WikilonApp 
+    { waiApp :: Wai.Application
+    , webKey :: String
+    }
+
 
 -- | Prepare a new instance of Wikilon, with a given directory for
 -- persistence and identity. It is possible to run more than one
@@ -28,8 +46,8 @@ import qualified Data.Text.Lazy.Encoding as T
 -- Note: In addition to the WAI app, I should probably return some
 -- variety of 'master' capability URL for the initial transaction.
 --  
-loadInstance :: Sys.FilePath -> IO Wai.Application
-loadInstance _fp = return helloApp
+loadInstance :: Sys.FilePath -> IO WikilonApp
+loadInstance _fp = return (WikilonApp helloApp "much to do...")
 
 helloApp :: Wai.Application
 helloApp req reply = reply response where

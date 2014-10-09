@@ -1,6 +1,12 @@
 
 This is a high level overview of the design. 
 
+* Wikilon *typically* hosts multiple wikis.
+ * Initialize with one or two new wikis (e.g. /admin, /sandbox).
+ * Admin has special control over the toplevel namespace.
+ * Admin will typically fork or replicate external wiki
+ * Access admin capabilities by URL printed to stdout
+
 * Awelon Object (AO) is the primary language for Wikilon.
  * Wiki pages correspond to definitions of AO words.
  
@@ -44,4 +50,11 @@ This is a high level overview of the design.
  * track interactions, suggest new automatic tests
  * state for web-applications and volatile services
  * unlike wikis, sessions can become 'inactive'
+
+
+Design constraints:
+
+To replicate or fork a wiki should generally be possible if you have a session ID. Consequently, the permissions of your replica would be based on the permissions of your session.
+
+
 

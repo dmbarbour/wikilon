@@ -1,8 +1,9 @@
-{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE ViewPatterns, PatternGuards #-}
 
 module Main (main) where
 
 import Control.Monad (when)
+import Control.Applicative
 import qualified System.IO as Sys
 import qualified System.Exit as Sys
 import qualified System.Environment as Env
@@ -17,9 +18,11 @@ helpMessage :: String
 helpMessage =
  "The `wikilon` executable will initiate a Wikilon web service.\n\
  \\n\
- \    wikilon [-pPortNumber]\n\
+ \    wikilon [-pPortNumber] [-s] [-init] \n\
  \      port number: listen on this port and save as default \n\
  \          initial default port is 3000 \n\
+ \      -s: silent mode; no visible output. \n\
+ \      -init: initialize & greet, but do not start. \n\
  \\n\
  \    Environment Variables:\n\
  \      WIKILON_HOME: directory for persistent data\n\
@@ -35,29 +38,72 @@ helpMessage =
  \instructions. (You can change the root page later.)\n\
  \"
 
+data Args = Args 
+    { _setPort  :: Maybe Int
+    , _silent   :: Bool
+    , _justInit :: Bool
+    , _help     :: Bool
+    , _badArgs  :: [String] -- reverse order
+    }
+defaultArgs :: Args
+defaultArgs = Args 
+    { _setPort = Nothing
+    , _silent = False
+    , _justInit = False
+    , _help = False
+    , _badArgs = []
+    }
+
 defaultPort :: Int
 defaultPort = 3000
 
 main :: IO ()
-main = Env.getArgs >>= processArgs >> runWikilonInstance
+main = (procArgs <$> Env.getArgs) >>= runWikilonInstance
 
-runWikilonInstance :: IO ()
-runWikilonInstance =
-    getWIKILON_HOME >>= \ home ->
-    getWikilonPort >>= \ p ->
-    Wikilon.loadInstance home >>= \ app ->
-    Sys.putStrLn ("Wikilon") >>
-    Sys.putStrLn ("  Data: " ++ home) >>
-    Sys.putStrLn ("  Port: " ++ show p) >>
-    Warp.run (fromIntegral p) app
+procArgs :: [String] -> Args
+procArgs = rba . foldl pa defaultArgs where
+    pa a (portArg -> Just n) = a { _setPort = Just n }
+    pa a (helpArg -> True) = a { _help = True }
+    pa a "-s" = a { _silent = True }
+    pa a "-init" = a { _justInit = True }
+    pa a v = 
+        let badArgs' = v : _badArgs a in
+        a { _badArgs = badArgs' }
+    rba a = a { _badArgs = L.reverse (_badArgs a) }
 
-processArgs :: [String] -> IO ()
-processArgs = mapM_ pa where
-  pa (portArg -> Just n) = setWikilonPort n
-  pa (helpArg -> True) = Sys.putStrLn helpMessage >> Sys.exitSuccess
-  pa arg = badArg arg >> err helpMessage >> Sys.exitFailure
-  badArg arg = err $ "unrecognized argument: " ++ arg
-  err = Sys.hPutStrLn Sys.stderr
+
+runWikilonInstance :: Args -> IO ()
+runWikilonInstance a = tryRun where
+    tryRun = 
+        if hasBadArgs then failWithBadArgs else
+        if askedForHelp then helpAndExit else
+        getWIKILON_HOME >>= \ home ->
+        getPort home >>= \ port ->
+        Wikilon.loadInstance home >>= \ app ->
+        greet home port app >>
+        run port app
+    badArgs = _badArgs a
+    hasBadArgs = not $ L.null badArgs
+    failWithBadArgs = err badArgMsg >> err helpMessage >> Sys.exitFailure
+    badArgMsg = "unrecognized arguments: " ++ show badArgs 
+    askedForHelp = _help a
+    helpAndExit = Sys.putStrLn helpMessage >> Sys.exitSuccess
+    getPort home =
+        getWikilonPort home >>= \ p ->
+        case (_setPort a) of
+            Just p' | (p /= p') -> setWikilonPort home p' >> return p'
+            _ -> return p
+    greet _ _ _ | _silent a = return ()
+    greet home port app =
+        Sys.putStrLn ("Wikilon:") >>
+        Sys.putStrLn ("  Home:  " ++ home) >>
+        Sys.putStrLn ("  Port:  " ++ show port) >>
+        Sys.putStrLn ("  Admin: " ++ Wikilon.webKey app)
+    run _ _ | _justInit a = return ()
+    run port app = Warp.run (fromIntegral port) (Wikilon.waiApp app)
+
+err :: String -> IO ()
+err = Sys.hPutStrLn Sys.stderr
 
 portArg :: String -> Maybe Int
 portArg ('-':'p': s) = tryRead s
@@ -68,9 +114,9 @@ tryRead (reads -> [(a,[])]) = Just a
 tryRead _ = Nothing
 
 helpArg :: String -> Bool
-helpArg ('-':s) = helpArg s
 helpArg "?" = True
 helpArg "help" = True
+helpArg ('-':s) = helpArg s
 helpArg _ = False
 
 -- assuming *nix environment for now
@@ -80,15 +126,16 @@ getWIKILON_HOME = Env.getEnvironment >>= return . h where
     h (L.lookup "HOME" -> Just home) = home </> ".local/share/wikilon"
     h _ = "./wikilon"
 
-getWikilonPort :: IO Int
-getWikilonPort = withPortDB False $ \ db -> DB.query db GetPort
+getWikilonPort :: Sys.FilePath -> IO Int
+getWikilonPort h = wp $ \ db -> DB.query db GetPort where
+    wp = withPortDB h False
 
-setWikilonPort :: Int -> IO ()
-setWikilonPort n = withPortDB True $ \ db -> DB.update db (SetPort n)
+setWikilonPort :: Sys.FilePath -> Int -> IO ()
+setWikilonPort h p = wp $ \ db -> DB.update db (SetPort p) where
+    wp = withPortDB h True 
 
-withPortDB :: Bool -> (DB.AcidState Port -> IO a) -> IO a
-withPortDB cp action = do
-    home <- getWIKILON_HOME
+withPortDB :: Sys.FilePath -> Bool -> (DB.AcidState Port -> IO a) -> IO a
+withPortDB home cp action = do
     db <- DB.openLocalStateFrom (home </> "port") (Port defaultPort)
     result <- action db
     when cp (DB.createCheckpoint db)

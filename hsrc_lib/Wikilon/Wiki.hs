@@ -1,25 +1,24 @@
 
--- | The 'Wiki' is the main social unit of Wikilon. A Wikilon instance
--- may host multiple Wikis. Each Wiki has a single dictionary, which
--- may have been forked from another Wiki. However, forking should not
--- be encouraged. The vision for Awelon project is that a single Wiki
--- should host thousands of projects and users, developing a dictionary
--- of a million words to cover nearly every use case imaginable.
+-- | The 'Wiki' is the main social unit of Wikilon.
 --
--- Forking is necessary for some use cases, of course. For example, a
--- private software development group might wish to fork a public Wiki
--- as a basis for their own projects. Wikis should eventually support
--- good APIs for this behavior, and for 'giving back' to the community
--- via pull requests and such.
+-- The Wikilon web server may host multiple Wikis. Each Wiki should
+-- be understood as a *distributed* object, not tied to any particular
+-- process or machine. A wiki may be replicated or forked, and those
+-- are distinct concepts.
 --
--- Long term, a large Wiki should become a distributed object, with
--- hundreds of compatible processes contributing to it, remaining
--- synchronized through web sockets and web APIs.
--- 
--- The main stateful element of a Wiki is the dictionary. However,
--- Wikis do contain other state for such purposes as pull requests,
--- issue trackers, long-running services, and so on. User sessions
--- will similarly have access to state. 
+-- The primary state of a Wiki is the dictionary. Each Wiki has a 
+-- dictionary, represented by a bounded sequence of transactions.
+-- In addition to the dictionary, a Wiki may have a great deal of
+-- auxillary state, e.g. for bug reports, feature requests, pending
+-- transactions, long-running services.
+--
+-- Some resources (cache, dictionary transactions, scheduler) shall 
+-- be shared across multiple Wiki instances on the same machine.
+--
+-- A significant responsibility of the Wiki is tracking when a word
+-- is updated - not just directly, but transitively. Performing this
+-- task efficiently, and with minimal latency, is the basis for live
+-- programming.
 -- 
 module Wikilon.Wiki
     (
