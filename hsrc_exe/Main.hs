@@ -33,10 +33,9 @@ helpMessage =
  \environment for the Awelon project. Pages contain Awelon Object (AO)\n\
  \code, and may define new web applications or services.\n\
  \\n\
- \Most configuration of Wikilon should be performed through browser.\n\
- \After starting up the instance, navigate to the root page for more\n\
- \instructions. (You can change the root page later.)\n\
- \"
+ \Most configuration of Wikilon should be performed through a browser.\n\
+ \After starting up the instance, open a browser to localhost:Port\n\
+ \for further advice."
 
 data Args = Args 
     { _setPort  :: Maybe Int
