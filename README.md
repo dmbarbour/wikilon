@@ -29,11 +29,14 @@ Some of the following will depend heavily on a maturing dictionary. Others may r
 * console-like web service to replace AOI
 * implement command-line console interface to the web services
  * system-integration; access to defs, ABC, cross-compiled code, etc.
+ * may also serve as watch-dog app, i.e. restart automatically on crash
 * iPython notebook inspired apps - i.e. living consoles
 
 * refactoring tools
  * rename a word (or a common suffix/prefix); renaming may need special transaction
- * 
+ * find all uses of a word
+ * automatic test generation, property testing
+ * automatic word-variant generation (e.g. for operating lower on stack)
  
  
 * shorthand views: render with color or icons or small suffix, etc. to compact text

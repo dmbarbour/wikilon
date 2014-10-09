@@ -1,4 +1,5 @@
 
+RELATED: [Transaction Naming](TransactionNaming.md) also covers ideas for logarithmic decay while addressing concerns for naming, replication, and so on.
 
 A simple approach to keeping a LONG history without keeping a LOT of history is to gradually collapse information about intermediate states. This can offer benefits similar to a ring buffer, except keeping more information about older states by probabilistically favoring loss of intermediate near-term states.
 

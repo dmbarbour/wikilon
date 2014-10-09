@@ -89,7 +89,7 @@ Library
     Wikilon.RunABC
 
     Wikilon.Session
-    Wikilon.Project
+    Wikilon.Wiki
 
     Wikilon.Dict
 
