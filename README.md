@@ -62,22 +62,43 @@ Some of the following will depend heavily on a maturing dictionary. Others may r
 * publish or use services in open distributed systems
 * distributed behaviors, user agents, and mobile code
 
+* SSL/TLS support! (Though, this can be added later.)
+ * potentially add an optional redirect (e.g. from 80 to 443)
+* Compression support!
+
+
 Code that runs on the server will generally be given limited resources and some means for job control. I would prefer that resource failures be deterministic.
 
 All state associated with Wikilon will be persistent. Also, I'm likely to keep logarithmic histories for everything, including service states, to allow for robust recovery and debugging.
 
 ## Setup and Configuration
 
-When Wikilon is in a usable state, I'll provide instructions for setting it up and getting started. 
+As Wikilon approaches a usable state, I'll provide instructions for setting it up and getting started. 
 
+* cabal install
+* if ~/.cabal/bin directory is not in PATH, consider adding it
+* set WIKILON_HOME environment variable to a directory name
 
-## Implementation
+After install and PATH is set, you should be able to run `wikilon -pPort`.
 
-Still in early planning phases. 
+### HTTPS (TLS/SSL) Setup
+
+I recommend you enable TLS. **warp-tls** supports RSA keys. Quick start:
+
+        cd $WIKILON_HOME
+        openssl genrsa -out wiki.key 2048
+        openssl req -new -key wiki.key -out wiki.csr
+        openssl x509 -req -days 365 -in wiki.csr -signkey wiki.key -out wiki.crt
+
+This creates a self-signed certificate, which should result in blaring warnings on your first visit from a security conscious browser. But at least the connection will be encrypted! To get a properly signed and validated certificate, send the `wiki.csr` file and some money to a certificate authority. If you'd rather use plain old HTTP, simply remove the `wiki.key` and `wiki.crt` files.
+
+If TLS is enabled, Wikilon will reject insecure connections. If you plan to use port 443 (the default HTTPS port) for Wikilon, you might wish to run a trival separate process on port 80 that will redirect users to the https URL - e.g. HTTP code 307 or 308.
+
+## Under The Hood
 
 * **Haskell** for implementation
 * **acid-state** for persistence
-* **Warp** or **WAI** for HTTP services
+* **warp** for HTTP connectivity
 * **websockets** for web reactivity & live programming
 
 * persistence and logarithmic history for all states

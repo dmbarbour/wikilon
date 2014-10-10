@@ -1,33 +1,37 @@
-{-# LANGUAGE ViewPatterns, PatternGuards #-}
+{-# LANGUAGE ViewPatterns, PatternGuards, OverloadedStrings #-}
 
 module Main (main) where
 
-import Control.Monad (when)
+import Control.Monad
 import Control.Applicative
 import qualified System.IO as Sys
 import qualified System.Exit as Sys
 import qualified System.Environment as Env
 import qualified Network.Wai.Handler.Warp as Warp
+import qualified Network.Wai.Handler.WarpTLS as WarpTLS
 import qualified Data.List as L
-import qualified Data.Acid as DB
-import System.FilePath ((</>))
+import qualified Filesystem as FS
+import qualified Filesystem.Path.CurrentOS as FS
+import qualified Data.Text as T
+import qualified Data.ByteString.UTF8 as UTF8
 import qualified Wikilon
-import PortDB
 
 helpMessage :: String
 helpMessage =
  "The `wikilon` executable will initiate a Wikilon web service.\n\
  \\n\
- \    wikilon [-pPortNumber] [-s] [-init] \n\
- \      port number: listen on this port and save as default \n\
- \          initial default port is 3000 \n\
- \      -s: silent mode; no visible output. \n\
+ \    wikilon [-pPort] [-cCert] [-s] [-init] \n\
+ \      -pPort: listen on this port & save as default (def 3000) \n\
+ \      -s: silent mode, does not display greeting or admin URL. \n\
  \      -init: initialize & greet, but do not start. \n\
  \\n\
  \    Environment Variables:\n\
  \      WIKILON_HOME: directory for persistent data\n\
- \          defaults to $HOME/.local/share/wikilon/\n\
- \          use different homes for different instances\n\
+ \        default is OS based application data directory\n\
+ \\n\
+ \    For TLS and HTTPS:\n\
+ \      add 'wiki.key' and 'wiki.cert' files to WIKILON_HOME\n\
+ \      if TLS is enabled, insecure connections are denied\n\
  \\n\
  \Wikilon is a wiki, a software platform, an integrated development\n\
  \environment for the Awelon project. Pages contain Awelon Object (AO)\n\
@@ -35,10 +39,10 @@ helpMessage =
  \\n\
  \Most configuration of Wikilon should be performed through a browser.\n\
  \After starting up the instance, open a browser to localhost:Port\n\
- \for further advice."
+ \for further advice. Use the Admin URL for administration."
 
 data Args = Args 
-    { _setPort  :: Maybe Int
+    { _port  :: Maybe Int
     , _silent   :: Bool
     , _justInit :: Bool
     , _help     :: Bool
@@ -46,7 +50,7 @@ data Args = Args
     }
 defaultArgs :: Args
 defaultArgs = Args 
-    { _setPort = Nothing
+    { _port = Nothing
     , _silent = False
     , _justInit = False
     , _help = False
@@ -56,50 +60,87 @@ defaultArgs = Args
 defaultPort :: Int
 defaultPort = 3000
 
+wiki_crt,wiki_key :: FS.FilePath
+wiki_crt = "wiki.crt"
+wiki_key = "wiki.key"
+
 main :: IO ()
 main = (procArgs <$> Env.getArgs) >>= runWikilonInstance
 
 procArgs :: [String] -> Args
-procArgs = rba . foldl pa defaultArgs where
-    pa a (portArg -> Just n) = a { _setPort = Just n }
+procArgs = L.foldr (flip pa) defaultArgs where
     pa a (helpArg -> True) = a { _help = True }
+    pa a (portArg -> Just n) = a { _port = Just n }
     pa a "-s" = a { _silent = True }
     pa a "-init" = a { _justInit = True }
     pa a v = 
         let badArgs' = v : _badArgs a in
         a { _badArgs = badArgs' }
-    rba a = a { _badArgs = L.reverse (_badArgs a) }
 
+wikilonWarpSettings :: Int -> Warp.Settings
+wikilonWarpSettings port =
+    Warp.setPort (fromIntegral port) $
+    -- Warp.setHost "*" $
+    -- Warp.setTimeout 300 $
+    Warp.defaultSettings
+
+wikilonWarpTLSSettings :: FS.FilePath -> WarpTLS.TLSSettings
+wikilonWarpTLSSettings h = WarpTLS.tlsSettings (tof wiki_crt) (tof wiki_key) where
+    tof = FS.encodeString . (h FS.</>)
+
+shouldUseTLS :: FS.FilePath -> IO Bool
+shouldUseTLS h = (||) <$> haveKF <*> haveCF where
+    haveKF = FS.isFile $ h FS.</> wiki_key
+    haveCF = FS.isFile $ h FS.</> wiki_crt
 
 runWikilonInstance :: Args -> IO ()
-runWikilonInstance a = tryRun where
-    tryRun = 
+runWikilonInstance a = mainBody where
+    mainBody = 
         if hasBadArgs then failWithBadArgs else
         if askedForHelp then helpAndExit else
-        getWIKILON_HOME >>= \ home ->
-        getPort home >>= \ port ->
-        Wikilon.loadInstance home >>= \ app ->
-        greet home port app >>
-        run port app
+        createWIKILON_HOME >>= \ home ->
+        Wikilon.loadInstance (FS.encodeString home) >>= \ app ->
+        loadPort home (_port a) >>= \ port ->
+        shouldUseTLS home >>= \ bUseTLS ->
+        unless (_silent a) (greet home port app bUseTLS) >>
+        if _justInit a then return () else
+        let tlsSettings = wikilonWarpTLSSettings home in
+        let warpSettings = wikilonWarpSettings port in
+        let waiApp = Wikilon.waiApp app in
+        if bUseTLS then WarpTLS.runTLS tlsSettings warpSettings waiApp
+                   else Warp.runSettings warpSettings waiApp
+        -- does not return
     badArgs = _badArgs a
     hasBadArgs = not $ L.null badArgs
     failWithBadArgs = err badArgMsg >> err helpMessage >> Sys.exitFailure
     badArgMsg = "unrecognized arguments: " ++ show badArgs 
     askedForHelp = _help a
     helpAndExit = Sys.putStrLn helpMessage >> Sys.exitSuccess
-    getPort home =
-        getWikilonPort home >>= \ p ->
-        case (_setPort a) of
-            Just p' | (p /= p') -> setWikilonPort home p' >> return p'
-            _ -> return p
-    greet _ _ _ | _silent a = return ()
-    greet home port app =
+    greet home port app bUseTLS =
         Sys.putStrLn ("Wikilon:") >>
-        Sys.putStrLn ("  Home:  " ++ home) >>
+        Sys.putStrLn ("  Home:  " ++ showFP home) >>
         Sys.putStrLn ("  Port:  " ++ show port) >>
+        Sys.putStrLn ("  HTTPS: " ++ show bUseTLS) >>
         Sys.putStrLn ("  Admin: " ++ Wikilon.webKey app)
-    run _ _ | _justInit a = return ()
-    run port app = Warp.run (fromIntegral port) (Wikilon.waiApp app)
+
+showFP :: FS.FilePath -> String
+showFP = T.unpack . either id id . FS.toText
+
+-- select and save wikilon port information
+loadPort :: FS.FilePath -> Maybe Int -> IO Int
+loadPort h (Just p) =
+    let fp = h FS.</> "port" in
+    let bytes = (UTF8.fromString (show p)) in
+    FS.writeFile fp bytes >>
+    return p
+loadPort h Nothing =
+    let fp = h FS.</> "port" in
+    FS.isFile fp >>= \ bFile ->
+    if not bFile then loadPort h (Just defaultPort) else
+    (UTF8.toString <$> FS.readFile fp) >>= \ sPort ->
+    case tryRead sPort of
+        Just p -> return p
+        Nothing -> fail "could not read WIKILON_HOME/port file"
 
 err :: String -> IO ()
 err = Sys.hPutStrLn Sys.stderr
@@ -118,25 +159,18 @@ helpArg "help" = True
 helpArg ('-':s) = helpArg s
 helpArg _ = False
 
--- assuming *nix environment for now
-getWIKILON_HOME :: IO Sys.FilePath
-getWIKILON_HOME = Env.getEnvironment >>= return . h where
-    h (L.lookup "WIKILON_HOME" -> Just home) = home
-    h (L.lookup "HOME" -> Just home) = home </> ".local/share/wikilon"
-    h _ = "./wikilon"
+-- use WIKILON_HOME or OS based app directory.
+getWIKILON_HOME :: IO FS.FilePath
+getWIKILON_HOME =
+    Env.getEnvironment >>= \ env ->
+    case L.lookup "WIKILON_HOME" env of
+        Just h -> return (FS.decodeString h)
+        Nothing -> FS.getAppDataDirectory "wikilon"
 
-getWikilonPort :: Sys.FilePath -> IO Int
-getWikilonPort h = wp $ \ db -> DB.query db GetPort where
-    wp = withPortDB h False
+-- getWIKILON_HOME then create directory if needed
+createWIKILON_HOME :: IO FS.FilePath
+createWIKILON_HOME =
+    getWIKILON_HOME >>= \ h0 ->
+    FS.createTree h0 >>
+    FS.canonicalizePath h0
 
-setWikilonPort :: Sys.FilePath -> Int -> IO ()
-setWikilonPort h p = wp $ \ db -> DB.update db (SetPort p) where
-    wp = withPortDB h True 
-
-withPortDB :: Sys.FilePath -> Bool -> (DB.AcidState Port -> IO a) -> IO a
-withPortDB home cp action = do
-    db <- DB.openLocalStateFrom (home </> "port") (Port defaultPort)
-    result <- action db
-    when cp (DB.createCheckpoint db)
-    DB.closeAcidState db
-    return result

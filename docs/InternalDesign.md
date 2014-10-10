@@ -30,6 +30,10 @@ This is a high level overview of the design.
   * use acid-state for transaction reference counts?
  * See also [TransactionNaming](TransactionNaming.md)
 
+* Compression?
+ * Consider using the `zlib` package for compression of transactions.
+ * Don't need specialized LZSS except for ABC resources; implement later.
+
 * A 'Wiki' is a central locus for much stuff
  * interaction with distributed replicas of wiki
  * work distribution across replicas
