@@ -7,8 +7,10 @@ import Control.Applicative
 import qualified System.IO as Sys
 import qualified System.Exit as Sys
 import qualified System.Environment as Env
+import qualified Network.Wai as Wai
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Handler.WarpTLS as WarpTLS
+import qualified Network.Wai.Middleware.Gzip as Wai
 import qualified Data.List as L
 import qualified Filesystem as FS
 import qualified Filesystem.Path.CurrentOS as FS
@@ -20,9 +22,9 @@ helpMessage :: String
 helpMessage =
  "The `wikilon` executable will initiate a Wikilon web service.\n\
  \\n\
- \    wikilon [-pPort] [-cCert] [-s] [-init] \n\
- \      -pPort: listen on this port & save as default (def 3000) \n\
- \      -s: silent mode, does not display greeting or admin URL. \n\
+ \    wikilon [-pPort] [-cCert] [-s] [-init] [-SCGI] \n\
+ \      -pPort: listen on port & save as new default (def 3000) \n\
+ \      -s: silent mode; do not display greeting or admin URL. \n\
  \      -init: initialize & greet, but do not start. \n\
  \\n\
  \    Environment Variables:\n\
@@ -40,6 +42,7 @@ helpMessage =
  \Most configuration of Wikilon should be performed through a browser.\n\
  \After starting up the instance, open a browser to localhost:Port\n\
  \for further advice. Use the Admin URL for administration."
+
 
 data Args = Args 
     { _port  :: Maybe Int
@@ -88,6 +91,11 @@ wikilonWarpTLSSettings :: FS.FilePath -> WarpTLS.TLSSettings
 wikilonWarpTLSSettings h = WarpTLS.tlsSettings (tof wiki_crt) (tof wiki_key) where
     tof = FS.encodeString . (h FS.</>)
 
+wikilonMiddleware :: Wai.Application -> Wai.Application
+wikilonMiddleware = gz where
+    gz = Wai.gzip Wai.def
+
+
 shouldUseTLS :: FS.FilePath -> IO Bool
 shouldUseTLS h = (||) <$> haveKF <*> haveCF where
     haveKF = FS.isFile $ h FS.</> wiki_key
@@ -104,9 +112,9 @@ runWikilonInstance a = mainBody where
         shouldUseTLS home >>= \ bUseTLS ->
         unless (_silent a) (greet home port app bUseTLS) >>
         if _justInit a then return () else
+        let waiApp = wikilonMiddleware (Wikilon.waiApp app) in
         let tlsSettings = wikilonWarpTLSSettings home in
         let warpSettings = wikilonWarpSettings port in
-        let waiApp = Wikilon.waiApp app in
         if bUseTLS then WarpTLS.runTLS tlsSettings warpSettings waiApp
                    else Warp.runSettings warpSettings waiApp
         -- does not return

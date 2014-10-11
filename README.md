@@ -62,10 +62,10 @@ Some of the following will depend heavily on a maturing dictionary. Others may r
 * publish or use services in open distributed systems
 * distributed behaviors, user agents, and mobile code
 
-* SSL/TLS support! (Though, this can be added later.)
- * potentially add an optional redirect (e.g. from 80 to 443)
-* Compression support!
-
+* SSL/TLS support. (DONE)
+* compression support. **wai-extra** seems to support this. (DONE)
+* potential fast-cgi support? (separate executable? e.g. `wikilon-fcgi`)
+ * note: it seems SCGI isn't compatible with use of acid-state for persistence
 
 Code that runs on the server will generally be given limited resources and some means for job control. I would prefer that resource failures be deterministic.
 
@@ -90,7 +90,7 @@ I recommend you enable TLS. **warp-tls** supports RSA keys. Quick start:
         openssl req -new -key wiki.key -out wiki.csr
         openssl x509 -req -days 365 -in wiki.csr -signkey wiki.key -out wiki.crt
 
-This creates a self-signed certificate, which should result in blaring warnings on your first visit from a security conscious browser. But at least the connection will be encrypted! To get a properly signed and validated certificate, send the `wiki.csr` file and some money to a certificate authority. If you'd rather use plain old HTTP, simply remove the `wiki.key` and `wiki.crt` files.
+This creates a self-signed certificate, which should result in blaring warnings on your initial visit in a security conscious browser. But the connection will be encrypted. To get a properly signed and validated certificate (and guard against man-in-the-middle attacks), send the `wiki.csr` file and some money to a certificate authority. If you'd rather use plain old HTTP, simply remove the `wiki.key` and `wiki.crt` files.
 
 If TLS is enabled, Wikilon will reject insecure connections. If you plan to use port 443 (the default HTTPS port) for Wikilon, you might wish to run a trival separate process on port 80 that will redirect users to the https URL - e.g. HTTP code 307 or 308.
 
