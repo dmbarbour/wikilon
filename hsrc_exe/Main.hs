@@ -40,9 +40,8 @@ helpMessage =
  \code, and may define new web applications or services.\n\
  \\n\
  \Most configuration of Wikilon should be performed through a browser.\n\
- \After starting up the instance, open a browser to localhost:Port\n\
- \for further advice. Use the Admin URL for administration."
-
+ \After starting Wikilon, open a browser to http(s)://localhost:Port\n\
+ \to get started. An admin session key will be printed to console."
 
 data Args = Args 
     { _port  :: Maybe Int
@@ -90,6 +89,7 @@ wikilonWarpSettings port =
 wikilonWarpTLSSettings :: FS.FilePath -> WarpTLS.TLSSettings
 wikilonWarpTLSSettings h = WarpTLS.tlsSettings (tof wiki_crt) (tof wiki_key) where
     tof = FS.encodeString . (h FS.</>)
+
 
 wikilonMiddleware :: Wai.Application -> Wai.Application
 wikilonMiddleware = gz where
