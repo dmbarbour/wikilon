@@ -48,7 +48,7 @@ data Args = Args
     , _silent   :: Bool
     , _justInit :: Bool
     , _help     :: Bool
-    , _badArgs  :: [String] -- reverse order
+    , _badArgs  :: [String]
     }
 defaultArgs :: Args
 defaultArgs = Args 

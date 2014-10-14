@@ -20,7 +20,9 @@ module Wikilon.ABC
 import Control.Applicative ((<$>), pure)
 import Control.Monad (join)
 import Control.Exception (assert)
-import qualified Data.Serialize as C
+import qualified Data.Binary as B
+import qualified Data.Binary.Get as B
+import qualified Data.Binary.Put as B
 import qualified Codec.Binary.UTF8.Generic as UTF8
 import qualified Data.List as L
 import qualified Data.Array.Unboxed as A
@@ -221,7 +223,7 @@ abcCharToOp c | okay = Just $! toEnum (fromIntegral w)
           (lb,ub) = A.bounds abcPrimOpArray
           w = abcPrimOpArray A.! c
 
-instance (Quotable ext) => C.Serialize (ABC_Ops ext) where
+instance (Quotable ext) => B.Binary (ABC_Ops ext) where
     put = putABC . abc_ops
     get = ABC_Ops <$> getABC
 
@@ -230,7 +232,7 @@ instance (Quotable ext) => Show (ABC_Op ext) where
     showList = shows . ABC_Ops
 
 instance (Quotable ext) => Show (ABC_Ops ext) where
-    show = UTF8.toString . C.encodeLazy
+    show = UTF8.toString . B.encode
 
 instance Show PrimOp where
     showsPrec _ = showList . (:[])
@@ -243,32 +245,36 @@ primOp = ABC_Prim
 instance Read (ABC_Ops ext) where
     readsPrec _ s =
         let bytes = UTF8.fromString s in
-        case C.runGetLazyState getABC bytes of
-            Left _error -> []
-            Right (code, brem) -> [(ABC_Ops code, UTF8.toString brem)]
+        case B.runGetOrFail getABC bytes of
+            Left (_bs,_ct,_emsg) -> []
+            Right (brem,_ct, code) -> [(ABC_Ops code, UTF8.toString brem)]
 instance IsString (ABC_Ops ext) where 
-    fromString s = 
+    fromString s = -- better error reporting than `readsPrec`
         let bytes = UTF8.fromString s in
-        case C.runGetLazyState getABC bytes of
-            Left emsg -> error emsg
-            Right (code, brem) ->
-                let srem = UTF8.toString brem in
-                if (L.null srem) then ABC_Ops code else
-                error $ "parse failed at: " ++ srem
+        case B.runGetOrFail getABC bytes of
+            Left (_brem,_ct,_emsg) ->
+                let sRem = UTF8.toString _brem in
+                error $ "\nABC parse error: " ++ _emsg 
+                     ++ "\nbytes remaining: " ++ sRem
+            Right (brem,_ct, abc) -> 
+                let sRem = UTF8.toString brem in
+                let code = ABC_Ops abc in 
+                if (L.null sRem) then code else
+                error $ "\nhalted at: " ++ sRem
 
-putABC :: (Quotable ext) => [ABC_Op ext] -> C.PutM ()
+putABC :: (Quotable ext) => [ABC_Op ext] -> B.PutM ()
 putABC = mapM_ putOp
 
-putOp :: (Quotable ext) => ABC_Op ext -> C.PutM ()
-putOp (ABC_Prim op) = C.put (abcOpToChar op)
-putOp (ABC_Block abc) = C.put '[' >> putABC abc >> C.put ']'
-putOp (ABC_Text txt) = C.put '"' >> putMLT txt >> C.put '\n' >> C.put '~'
-putOp (ABC_Tok tok) = assert (validTok tok) $ C.put '{' >> mapM_ C.put tok >> C.put '}'
+putOp :: (Quotable ext) => ABC_Op ext -> B.PutM ()
+putOp (ABC_Prim op) = B.put (abcOpToChar op)
+putOp (ABC_Block abc) = B.put '[' >> putABC abc >> B.put ']'
+putOp (ABC_Text txt) = B.put '"' >> putMLT txt >> B.put '\n' >> B.put '~'
+putOp (ABC_Tok tok) = assert (validTok tok) $ B.put '{' >> mapM_ B.put tok >> B.put '}'
 putOp (ABC_Ext ops) = putABC (quote ops)
 
-putMLT :: String -> C.PutM ()
-putMLT ('\n':cs) = C.put '\n' >> C.put ' ' >> putMLT cs
-putMLT (c:cs) = C.put c >> putMLT cs
+putMLT :: String -> B.PutM ()
+putMLT ('\n':cs) = B.put '\n' >> B.put ' ' >> putMLT cs
+putMLT (c:cs) = B.put c >> putMLT cs
 putMLT [] = return ()
 
 validTok :: String -> Bool
@@ -277,12 +283,12 @@ validTok = L.all isTokenChar
 -- get will not return any ABC_Ext elements, so the type of ext is
 -- not relevant at this point. getABC requires a little extra state
 -- regarding whether we've just read a newline
-getABC :: C.Get [ABC_Op ext]
+getABC :: B.Get [ABC_Op ext]
 getABC = P.manyC tryOp
 
-tryOp :: C.Get (C.Get (ABC_Op ext))
+tryOp :: B.Get (B.Get (ABC_Op ext))
 tryOp = 
-    C.get >>= \ c ->
+    B.get >>= \ c ->
     case c of
         (abcCharToOp -> Just op) -> return $ pure (ABC_Prim op)
         '[' -> return $ ABC_Block <$> readBlock 
@@ -290,25 +296,25 @@ tryOp =
         '"' -> return $ ABC_Text  <$> readText
         _ -> fail "input not recognized as ABC"
 
-getOp :: C.Get (ABC_Op ext)
+getOp :: B.Get (ABC_Op ext)
 getOp = join tryOp
 
 -- we've already read '['; read until ']'
-readBlock :: C.Get [ABC_Op ext]
+readBlock :: B.Get [ABC_Op ext]
 readBlock = P.manyTil getOp (P.char ']')
 
-readToken :: C.Get String
+readToken :: B.Get String
 readToken = P.manyTil (P.satisfy isTokenChar) (P.char '}')
 
-readText :: C.Get String 
+readText :: B.Get String 
 readText = 
     lineOfText >>= \ t0 ->
     P.manyTil (P.char ' ' >> lineOfText) (P.char '~') >>= \ ts ->
     return $ L.concat $ t0 : fmap ('\n':) ts
 
 -- text to end of line...
-lineOfText :: C.Get String
-lineOfText = P.manyTil C.get (P.char '\n')
+lineOfText :: B.Get String
+lineOfText = P.manyTil B.get (P.char '\n')
 
 -- | abcSimplify performs a simple optimization on ABC code based on
 -- recognizing short sequences of ABC that can be removed. E.g.

@@ -4,25 +4,34 @@
 -- choice of secure hash is SHA3-384, selected for its simplicity and
 -- its useful divisibility into thirds.
 module Wikilon.SecureHash 
-    ( secureHash
+    ( SecureHash, secureHash, secureHashLazy
     , hmac
     ) where
 
-import Data.ByteString (ByteString)
-import qualified Data.Byteable as B
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.Byteable
 import qualified Crypto.Hash as CH
 
+-- | a Wikilon SecureHash is a bytestring of length 48.
+type SecureHash = B.ByteString
+
 -- for type inference
-using_sha3_384 :: CH.Digest CH.SHA3_384 -> CH.Digest CH.SHA3_384
-using_sha3_384 = id
+toSecureHash :: CH.Digest CH.SHA3_384 -> SecureHash
+toSecureHash = Data.Byteable.toBytes
 
 -- | generate a secure hash from any bytestring.
-secureHash :: ByteString -> ByteString
-secureHash = B.toBytes . using_sha3_384 . CH.hash
+secureHash :: B.ByteString -> SecureHash
+secureHash = toSecureHash . CH.hash
+
+-- | generate secure hash from lazy bytestring
+-- (avoids an intermediate allocation)
+secureHashLazy :: BL.ByteString -> SecureHash
+secureHashLazy = toSecureHash . CH.hashlazy
 
 -- | hmac secret message
 --
 -- generate hash based message authentication code
 -- may truncate if using less security is okay
-hmac :: ByteString -> ByteString -> ByteString
-hmac secret = B.toBytes . using_sha3_384 . CH.hmacGetDigest . CH.hmac secret
+hmac :: B.ByteString -> B.ByteString -> SecureHash
+hmac secret = toSecureHash . CH.hmacGetDigest . CH.hmac secret

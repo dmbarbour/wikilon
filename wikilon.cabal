@@ -40,6 +40,7 @@ Executable wikilon
     , system-filepath (>= 0.4.10)
     , utf8-string, bytestring, text
     , wai, wai-extra, warp, warp-tls (>= 3.0)
+    , tls 
   main-is: Main.hs
   ghc-options: -auto-all -Wall -rtsopts -threaded
 
@@ -47,6 +48,9 @@ Library
   hs-Source-Dirs: hsrc_lib
   default-language: Haskell2010
   Build-Depends: base (>= 4.6 && < 5)
+    , parallel (>= 3.0)
+
+    , binary (>= 0.7.2)
 
     , acid-state (>= 0.12.3)
     , safecopy (>= 0.8)
@@ -88,9 +92,9 @@ Library
     Wikilon.Accel
     Wikilon.RunABC
 
+    Wikilon.Database
     Wikilon.Session
     Wikilon.Wiki
-
     Wikilon.Dict
 
     Wikilon.SecureHash

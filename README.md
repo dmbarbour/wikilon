@@ -21,13 +21,11 @@ See also:
 
 Some of the following will depend heavily on a maturing dictionary. Others may require code at the Wikilon core. Others may shift from core to dictionary over time. It will certainly take time to accomplish much of the following:
 
-* view definitions for AO dictionary words
-* edit definitions for AO dictionary words
-* access histories for AO dictionary words
-* transactional editing (edit many words at once)
+* dictionary manipulations
+* transactional or DVCS-like editing of wiki
 
 * console-like web service to replace AOI
-* implement command-line console interface to the web services
+* convenient command-line console interface to web services?
  * system-integration; access to defs, ABC, cross-compiled code, etc.
  * may also serve as watch-dog app, i.e. restart automatically on crash
 * iPython notebook inspired apps - i.e. living consoles
@@ -61,6 +59,7 @@ Some of the following will depend heavily on a maturing dictionary. Others may r
 * development of RDP reactive behaviors and resources
 * publish or use services in open distributed systems
 * distributed behaviors, user agents, and mobile code
+ * i.e. operate as software platform, distributed OS
 
 * SSL/TLS support. (DONE)
 * compression support. **wai-extra** seems to support this. (DONE)
@@ -90,9 +89,9 @@ I recommend you enable TLS. **warp-tls** supports RSA keys. Quick start:
         openssl req -new -key wiki.key -out wiki.csr
         openssl x509 -req -days 365 -in wiki.csr -signkey wiki.key -out wiki.crt
 
-This creates a self-signed certificate, which should result in blaring warnings on your initial visit in a security conscious browser. But the connection will be encrypted. To get a properly signed and validated certificate (and guard against man-in-the-middle attacks), send the `wiki.csr` file and some money to a certificate authority. If you'd rather use plain old HTTP, simply remove the `wiki.key` and `wiki.crt` files.
+This creates a key and a self-signed certificate. This should result in blaring warnings on your initial visit from a security conscious browser. But the connection will be encrypted. To obtain a properly signed and verified certificate (and to guard against man-in-the-middle attacks), send the `wiki.csr` file and some money to a certificate authority. If you'd rather use plain old HTTP, remove the `wiki.key` and `wiki.crt` files.
 
-If TLS is enabled, Wikilon will reject insecure connections. If you plan to use port 443 (the default HTTPS port) for Wikilon, you might wish to run a trival separate process on port 80 that will redirect users to the https URL - e.g. HTTP code 307 or 308.
+If TLS is enabled, Wikilon will reject insecure connections. If you plan to use port 443 (the default HTTPS port) for Wikilon, you might wish to run a trival separate process on port 80 that will redirect users to the https URL.
 
 ## Under The Hood
 
