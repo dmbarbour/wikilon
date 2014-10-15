@@ -12,7 +12,7 @@
 -- 
 module Wikilon.Database
     ( DB, Decay(..), DBDiff(..)
-    , validDecay, defaultDecay
+    , validDecay
     , dbRead, dbLen, dbDecay
     , dbKeep, dbFreq, dbMergeFn, dbMaxLen
     , dbSaturated
@@ -23,7 +23,6 @@ module Wikilon.Database
 import Control.Parallel.Strategies (parMap, rseq)
 import Data.Monoid
 import qualified Data.List as L
-
 
 -- | A Database is a bounded-length sequence of transactions with
 -- a uniform, batch-processed, exponential decay model. 
@@ -52,32 +51,28 @@ dbDecay = db_decay
 -- | We tune a database with a set of exponential decay parameters.
 --
 --    db_maxlen: how large may this database grow, e.g. 1000.
---       A larger database has a longer half-life. 
+--       A larger database has a longer half-life. Optimally a
+--       multiple of frequency.
 --
 --    db_merge: returns a merged transaction and a heuristic for
 --      'quality' of the merge. The order of arguments to merge 
 --      is `merge old new`. We favor merges of greater quality.
+--      Merges should be associative and result in the same final
+--      observable database state (for significant observations).
 --
 --    db_freq: determines granularity and frequency of collections.
---       Minimum 2. Reasonable default: 10.
+--       minimum: 2. reasonable default: 8. Affects performance and
+--       how much information is preserved across a decay phase.
 --
 --    db_keep: mixed mode with windowed history; keep last K elements
---       Should be an even multiple of frequency, and smaller than
---       maxlen.
+--       Optimally a multiple of frequency, and smaller than maxlen.
 --
--- Merges should be associative and should result in the same final
--- database state (such that we don't need to recompute any cached
--- final state). 
 data Decay tx = Decay
     { db_maxlen :: {-# UNPACK #-} !Int
     , db_merge  :: tx -> tx -> (tx, Int)
     , db_freq   :: {-# UNPACK #-} !Int
     , db_keep   :: {-# UNPACK #-} !Int
     }
-
-defaultDecay :: (Monoid tx) => Decay tx
-defaultDecay = Decay 400 mergeFn 10 0 where
-    mergeFn a b = (mappend a b, 0)
 
 validDecay :: Decay tx -> Bool
 validDecay db = okayMaxLen && okayFreq && okayKeep where
@@ -180,9 +175,9 @@ groupsOf n xs = group : groupsOf n xs' where
 -- an optimal candidate according to a heuristic merge function. 
 decayGroup :: (tx -> tx -> (tx,Int)) -> [tx] -> ([tx],DBDiff tx)
 decayGroup mergeFn (t1:t2:txs') = 
-    let (t1m2,bestScore) = mergeFn t1 t2 in
-    let candidateAnswer = ((t1m2:txs'),DBDiff [t1m2] [t1,t2]) in
-    decayGroupC candidateAnswer bestScore mergeFn [t1] (t2:txs')
+    let (t1m2,caScore) = mergeFn t1 t2 in
+    let ca = ((t1m2:txs'),DBDiff [t1m2] [t2,t1]) in
+    decayGroupC ca caScore mergeFn [t1] (t2:txs')
 decayGroup _ txs = (txs,mempty) -- not enough in group to decay
 
 -- decayGroup with a candidate! We'll stick to the candidate unless
@@ -190,12 +185,12 @@ decayGroup _ txs = (txs,mempty) -- not enough in group to decay
 -- therefore favor decay closer to root in case of a tie.
 decayGroupC :: ([tx],DBDiff tx) -> Int -> (tx -> tx -> (tx,Int)) -> [tx] -> [tx] -> ([tx],DBDiff tx)
 decayGroupC ca best mrg rt1s (t2:t3:txs) =
+    let skip = decayGroupC ca best mrg (t2:rt1s) (t3:txs) in
     let (t2m3,score) = mrg t2 t3 in
-    if (score < best)
-        then decayGroupC ca best mrg (t2:rt1s) (t3:txs)   -- continue with old candidate
-        else let g'    = L.reverse rt1s ++ (t2m3:txs) in
-             let diff' = DBDiff [t2m3] [t2,t3] in
-             let ca'   = (g',diff') in
-             decayGroupC ca' score mrg (t2:rt1s) (t3:txs) -- t2m3 merge is new candidate
+    if (score < best) then skip else
+    let g'    = L.reverse rt1s ++ (t2m3:txs) in
+    let diff' = DBDiff [t2m3] [t3,t2] in
+    let ca'   = (g',diff') in
+    decayGroupC ca' score mrg (t2:rt1s) (t3:txs) -- t2m3 merge is new candidate
 decayGroupC ca _best _mrg _rt1s _txs = ca -- all merges tested.
 
