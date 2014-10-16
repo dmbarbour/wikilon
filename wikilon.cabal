@@ -49,7 +49,6 @@ Library
   default-language: Haskell2010
   Build-Depends: base (>= 4.6 && < 5)
     , parallel (>= 3.0)
-
     , binary (>= 0.7.2)
 
     , acid-state (>= 0.12.3)
@@ -84,18 +83,21 @@ Library
   Exposed-Modules:
 
     Wikilon
+
+    Wikilon.Database
+    Wikilon.Dictionary
+    Wikilon.Session
+    Wikilon.Wiki
+
     Wikilon.AO
     Wikilon.ABC
+    -- AO to ABC compilers
+    -- 
     Wikilon.Base16
 
     Wikilon.Value
     Wikilon.Accel
     Wikilon.RunABC
-
-    Wikilon.Database
-    Wikilon.Session
-    Wikilon.Wiki
-    Wikilon.Dict
 
     Wikilon.SecureHash
     Wikilon.Secret

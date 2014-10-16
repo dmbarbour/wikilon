@@ -7,7 +7,7 @@ module Wikilon.Time
     ( T
     , tmDay,tmPicos
     , mkTime,timeFromDays
-    , getTime      
+    , getTime, parseTime
     , DT
     , dtToPicos,picosToDt
     , addTime,subtractTime,diffTime
@@ -155,9 +155,16 @@ instance Fractional DT where
 instance Show T where
     -- basically iso8601, but with picosecond precision
     -- YYYY-MM-DDTHH:MM:SS.999999999999Z
-    showsPrec _ = showString . Time.formatTime locale format . toUTC where
-        format = "%Y-%m-%dT%H:%M:%S%QZ"
-        locale = Time.defaultTimeLocale
+    showsPrec _ = showString . Time.formatTime t_locale t_format . toUTC where
+
+t_format :: String
+t_format = "%Y-%m-%dT%H:%M:%S%QZ"
+
+t_locale :: Time.TimeLocale
+t_locale = Time.defaultTimeLocale
+
+parseTime :: String -> Maybe T
+parseTime = fmap fromUTC . Time.parseTime t_locale t_format
 
 -- show difference in time for humans
 instance Show DT where
