@@ -44,9 +44,10 @@ type DictDB = DB DictTX
 -- | A dictionary has a list of transactions and a valid state.
 --
 -- 'Valid' here means that words parse, are acyclic, and that no
--- dependencies are undefined. However, there may be other errors
--- in the dictionary, such as words that will not pass a
--- typecheck, or tests that should fail.
+-- dependencies are undefined. However, there may be other errors in
+-- the dictionary, such as words that will not pass a typecheck, or 
+-- tests that fail. Higher layers may guard the dictionary against
+-- transactions that leave the dictionary unhealthy.
 --
 data Dict = Dict
     { dict_db :: !DictDB
