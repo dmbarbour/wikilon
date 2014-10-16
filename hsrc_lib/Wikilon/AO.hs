@@ -34,9 +34,10 @@
 -- must be provided via powerblock (or whatever).
 -- 
 module Wikilon.AO
-    ( Word, AO_Code(..), AO_Action(..), PrimOp(..)
-    , aoWords, wordToText, textToWord
+    ( AO_Code(..), AO_Action(..), PrimOp(..)
+    , aoWords, aoMapWords
     , getAO, getAO', putAO
+    , module Wikilon.Word
     ) where
 
 import Control.Applicative
@@ -77,13 +78,21 @@ data AO_Action
 -- | Extract the words used by AO code. For example:
 --     foo "hello" [42 bar baz] %vrwlc bar → [foo,bar,baz,bar]
 -- Duplicates are still part of the list at this point.
-aoWords :: [AO_Action] -> [Word]
-aoWords = flip lw [] where
+aoWords :: AO_Code -> [Word]
+aoWords = flip lw [] . ao_code where
     lw (x:xs) = ew x . lw xs
     lw [] = id
     ew (AO_Word w) = (w:)
     ew (AO_Block ops) = lw ops
     ew _ = id
+
+-- | Apply a name transform to every word in some AO code. It's up
+-- to the user to ensure this is a sensible transform. :)
+aoMapWords :: (Word -> Word) -> AO_Code -> AO_Code
+aoMapWords f = AO_Code . fmap mw . ao_code where
+    mw (AO_Word w) = AO_Word (f w)
+    mw (AO_Block ops) = AO_Block (fmap mw ops)
+    mw action = action
 
 instance B.Binary AO_Code where
     put = putAO . ao_code
@@ -218,7 +227,7 @@ skipWS bPrevLF =
     if not bWS then return bPrevLF else
     B.skip 1 >> skipWS bLF
 
--- AO is LL1, so we'll commit after one character.
+-- AO is LL1, so we'll commit after reading one character.
 -- For text, we need to know whether we're starting at a new line.
 -- Blocks are the only type of value that don't need to be followed
 -- by a word separator, since the ']' is already a word separator.

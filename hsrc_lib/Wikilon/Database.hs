@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeFamilies #-}
 -- | A Wikilon database consists of a bounded length sequence of
 -- transactions. A simple exponential decay model is applied [1], such
--- that a flood of updates don't erase much interesting information 
+-- that a flood of updates doesn't erase much interesting information 
 -- about historical conditions. Databases may be efficiently forked
 -- and synchronized (including their histories).
 --

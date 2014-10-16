@@ -4,6 +4,7 @@ module Wikilon.Word
     , wordToUTF8
     ) where
 
+import Data.String (IsString(..))
 import qualified Data.ByteString as B
 import qualified Codec.Binary.UTF8.Generic as UTF8
 
@@ -22,3 +23,6 @@ wordToUTF8 = unWord
 -- Show a Word
 instance Show Word where 
     showsPrec _ = showString . wordToText
+
+instance IsString Word where
+    fromString = textToWord
