@@ -6,25 +6,17 @@
 -- content of each word is just some AO code. Documentation is modeled
 -- as a word that computes a document.
 --
--- This module describes the dictionary database and transactions,
--- and supplies a type to enforce a few useful properties:
+-- This module describes the dictionary database and transactions.
+-- The database enforces a few useful properties:
 --
 --   * every word parses
 --   * words are fully defined
 --   * defined words are acyclic
 --   * distinguish define vs. update
--- 
--- Additionally, the dictionary supports *reactive* observation. A
--- developer can track which words are updated based on any change
--- in the dictionary. This will make it easier to automatically run
--- tests whose behavior may have changed, or alert users when the 
--- dictionary is shifting beneath them.
 --
--- Wikilon may enforce higher level policies to keep the dictionary
--- hygienic, e.g. validating that words typecheck or tests pass.
---
--- The dictionary model also tracks some metadata, e.g. when the 
--- transactions are applied.
+-- In addition to a set of words, a dictionary tracks some useful
+-- metadata about when changes were made, potentially who made them
+-- and for which projects, etc.
 -- 
 module Wikilon.Dictionary
     ( DictTX(..), DictUpd(..), DTXMeta(..)
@@ -33,7 +25,6 @@ module Wikilon.Dictionary
 
     , dictDecayParams
 
-    -- 
     , renameDTX, mergeDTX
     , heuristicDTX, mergeHeuristicDTX
     , mergeRenameMaps
@@ -49,21 +40,25 @@ import Wikilon.Time
 import Wikilon.Database
 import Wikilon.AO
 
+type DictDB = [DictTX]
 
-type DictDB = DB DictTX
+-- cf. wikilon/docs/DictionaryStructure.md
 
--- | A dictionary has a list of transactions and a valid state.
+
+-- | A dictionary has a list of transactions and a final state.
 --
--- 'Valid' here means that words parse, are acyclic, and that no
--- dependencies are undefined. However, there may be other errors in
--- the dictionary, such as words that will not pass a typecheck, or 
--- tests that fail. Higher layers may guard the dictionary against
--- transactions that leave the dictionary unhealthy.
+-- This dictionary limits itself to a 'valid' state. In particular,
+-- words in this dictionary will be fully defined and acyclic. There
+-- is no promise at this layer that words are type-safe or will pass
+-- their tests.
 --
 data Dict = Dict
-    { dict_db :: !DictDB             -- ^ 
-    , dict_st :: !DictST             -- ^ current state of database
+    { dict_db :: !DictDB  -- ^ historical state of database
+    , dict_st :: !DictST  -- ^ current state of database
     }
+
+-- cf wikilon/doc/DictionaryValidation.md
+
 
 readDictDB :: Dict -> DictDB
 readDictDB = dict_db
@@ -73,7 +68,7 @@ readDictST = dict_st
 
 -- | A dictionary state supports up-to-date views of the dictionary,
 -- compilation of words to Awelon bytecode, and similar features.
-newtype DictST = DictST { dict_wordMap :: M.Map Word DictEnt }
+type DictST = M.Map Word DictEnt
 
 -- | Each word has a definition and a reverse-lookup model.
 data DictEnt = DictEnt !AO_Code !RLU
@@ -270,9 +265,8 @@ heuristicDTX' old new = score where
         let tm_ini = dtx_tm_ini (dtx_meta old) in
         let tm_fin = dtx_tm_fin (dtx_meta new) in
         let dt = tm_fin `diffTime` tm_ini in
-        let p = dtToPicos dt in
-        let h12 = 12 * picosInHour in
-        negate $ fromIntegral $ p `div` h12
+        let hours12 = 12 * picosInHour in
+        negate $ fromIntegral $ dtToPicos dt `div` hours12
 
 picosInHour :: Integer
 picosInHour = picosPerSec * secsPerHour where
@@ -291,10 +285,9 @@ mergeHeuristicDTX old new = (m, h) where
 -- | Default parameters for Wikilon.Database.
 dictDecayParams :: Decay DictTX
 dictDecayParams = Decay
-    { db_maxlen = 1000
-    , db_merge  = mergeHeuristicDTX
-    , db_freq   = 8
-    , db_keep   = 8
+    { decay_merge  = mergeHeuristicDTX
+    , decay_freq   = 8
+    , decay_keep   = 8
     }
 
 -- same as mergeDTX, but assumes that the new transaction does not
