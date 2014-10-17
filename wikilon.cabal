@@ -50,6 +50,7 @@ Library
   Build-Depends: base (>= 4.6 && < 5)
     , parallel (>= 3.0)
     , binary (>= 0.7.2)
+    , intern (>= 0.9.1), hashable
 
     , acid-state (>= 0.12.3)
     , safecopy (>= 0.8)
