@@ -19,15 +19,16 @@
 -- and for which projects, etc.
 -- 
 module Wikilon.Dictionary
-    ( DictTX(..), DictUpd(..), DTXMeta(..)
+    ( DictTX(..), DTXMeta(..), DictUpd(..)
     , UpdateMap, RenameMap, AnnoWords
-    , mapDictUpd
-
-    , dictDecayParams
-
-    , renameDTX, mergeDTX
+    , renameDTX, deepRenameDTX
+    , mergeDTX
     , heuristicDTX, mergeHeuristicDTX
     , mergeRenameMaps
+    , mapDictUpd
+    
+
+    , dictDecayParams
     
     ) where
 
@@ -40,59 +41,6 @@ import Wikilon.Time
 import Wikilon.Database
 import Wikilon.AO
 
-type DictDB = [DictTX]
-
--- cf. wikilon/docs/DictionaryStructure.md
-
-
--- | A dictionary has a list of transactions and a final state.
---
--- This dictionary limits itself to a 'valid' state. In particular,
--- words in this dictionary will be fully defined and acyclic. There
--- is no promise at this layer that words are type-safe or will pass
--- their tests.
---
-data Dict = Dict
-    { dict_db :: !DictDB  -- ^ historical state of database
-    , dict_st :: !DictST  -- ^ current state of database
-    }
-
--- cf wikilon/doc/DictionaryValidation.md
-
-
-readDictDB :: Dict -> DictDB
-readDictDB = dict_db
-
-readDictST :: Dict -> DictST
-readDictST = dict_st
-
--- | A dictionary state supports up-to-date views of the dictionary,
--- compilation of words to Awelon bytecode, and similar features.
-type DictST = M.Map Word DictEnt
-
--- | Each word has a definition and a reverse-lookup model.
-data DictEnt = DictEnt !AO_Code !RLU
-
--- | Our reverse lookup is a set of words that should be re-evaluated
--- (transitively) after an update to a given word. 
---
--- RLU should not directly include transitive dependencies. For example:
---
---    @define bar ...
---    @define baz x bar
---    @define foo bar baz
---
--- In this case, both baz and foo depend on bar. However, since foo 
--- also depends on baz, we don't want to include foo in the reverse 
--- lookup of bar. This helps keep our dependency sets smaller, with
--- less redundant information in memory, and simplifies topological
--- sort of reactive updates, avoiding redundant computations.
--- 
-type RLU = S.Set Word
-
-type RenameMap = M.Map Word Word
-type UpdateMap = M.Map Word DictUpd
-
 -- | A transaction on a dictionary has some metadata and a few words
 -- to update. Each word can have at most one update. Note that rename
 -- applies strictly to words defined *before* this transaction.
@@ -101,37 +49,8 @@ data DictTX = DictTX
     , dtx_rename  :: !RenameMap
     , dtx_update  :: !UpdateMap
     }
-
--- | Dictionaries have a simple set of update operations:
---
---    define a new word
---    update an existing word
---    append an existing word
---    delete an existing word
---
--- A design constraint is that transactions merges be associative
--- without losing information about the final database state, and
--- without peeking at the database state (i.e. blind merge).
---
--- Append is experimental. It's unclear whether there is a strong
--- use-case for append. I hope it might prove useful for modeling
--- long-lived objects embedded within the dictionary.
---
-data DictUpd 
-    = Define AO_Code    -- @define word code
-    | Update AO_Code    -- @update word code
-    | Append AO_Code    -- @append word code
-    | Delete            -- @delete word
-
-mapDictUpd :: (AO_Code -> AO_Code) -> DictUpd -> DictUpd
-mapDictUpd f (Define ao) = Define (f ao)
-mapDictUpd f (Update ao) = Update (f ao)
-mapDictUpd f (Append ao) = Append (f ao)
-mapDictUpd _ Delete = Delete
-
-isDef :: DictUpd -> Bool
-isDef (Define _) = True
-isDef _ = False
+type RenameMap = M.Map Word Word
+type UpdateMap = M.Map Word DictUpd
 
 -- | Transaction metadata includes a little information about who,
 -- when, where, why, and how many transactions have been performed.
@@ -146,10 +65,43 @@ isDef _ = False
 data DTXMeta = DTXMeta
     { dtx_tm_ini :: {-# UNPACK #-} !T -- when (start)
     , dtx_tm_fin :: {-# UNPACK #-} !T -- when (last merged)
-    , dtx_count  :: {-# UNPACK #-} !Int -- count (1 for initial transaction)
+    , dtx_count  :: {-# UNPACK #-} !Int -- number of merged transactions
     , dtx_anno   :: !AnnoWords -- words for who, where, why, etc.
     }
 type AnnoWords = S.Set Word
+
+-- | Dictionaries have a simple set of update operations:
+-- 
+--    define a new word
+--    update an existing word
+--    delete an existing word
+--
+-- The distinction between 'define' and 'update' exists so we can
+-- halt propagation of 'rename' and 'delete' operations. To define a
+-- word that already exists is an error. With only define, update, 
+-- and delete, transactions have a nice property: idempotence. 
+-- 
+data DictUpd 
+    = Define AO_Code    -- @define word code
+    | Update AO_Code    -- @update word code
+    | Delete            -- @delete word
+--  | Append AO_Code    -- @append word code (a thought experiment)
+
+--
+-- An 'append' operator has been contemplated for embedding objects
+-- in the dictionary. But I'd lose idempotence, and I'm beginning to
+-- envision effective ways to embed objects as loose coalitions of
+-- independent words structured in an editor by naming conventions 
+-- (e.g. cells in a spreadsheet, lines in a notebook). 
+
+mapDictUpd :: (AO_Code -> AO_Code) -> DictUpd -> DictUpd
+mapDictUpd f (Define ao) = Define (f ao)
+mapDictUpd f (Update ao) = Update (f ao)
+mapDictUpd _ Delete = Delete
+
+isDef :: DictUpd -> Bool
+isDef (Define _) = True
+isDef _ = False
 
 -- | Applying rename operations is one of the more challenging 
 -- features for dictionary transactions. We must:
@@ -217,6 +169,24 @@ mrn1 (foo,bar) newMap =
             if (foo == baz) then m' else
             M.insert foo baz m'
 
+-- | deepRenameDTX will take a full database and apply all renames, 
+-- and then return any leftover rename operations. If this is a
+-- valid and complete dictionary, the leftover map will be empty.
+--
+-- It is unclear whether this offers any performance advantages over
+-- the more incremental processes. deepRenameDTX doesn't leverage
+-- any sort of reverse lookup index.
+--
+deepRenameDTX :: [DictTX] -> ([DictTX], RenameMap)
+deepRenameDTX = dr [] M.empty where
+    dr z rn (t:ts) =
+        let tRn = renameDTX rn t in 
+        let rn' = dtx_rename tRn in
+        let t' = tRn { dtx_rename = M.empty } in
+        t' `seq` dr (t':z) rn' ts
+    dr z rn [] = (L.reverse z, rn)
+
+
 -- | mergeDTX old new; compose two transactions into a third.
 --
 -- To merge two transactions, we'll first apply any name updates,
@@ -228,22 +198,19 @@ mergeDTX old new = fst $ mergeHeuristicDTX old new
 
 -- | For Wikilon, I'm aiming for the following characteristics:
 --
---   1) It's preferable that we see many values for each word.
+--   1) prefer many values for every word
 --      Therefore: subtract 1 for each overlapping word in update.
 --
---   2) It's preferable that we combine updates from the same user.
+--   2) prefer to merge updates from a single user or project
 --      Therefore: subtract 1 for each difference in annotations
 --                 add 1 for each overlap in annotations
 --
---   3) It's preferable that history be evenly sampled over real time.
+--   3) prefer long term history be evenly sampled over real time
 --      Therefore: subtract 1 for every 12 hours in scope of merge
 --
--- A typical score will be negative. We'll favor the highest score, 
--- i.e. the merge that's least obviously problematic. Due to the 
--- nature of the exponential decay model, even a weak tendency to
--- select decent merges should result in favorable long-term behavior.
+-- The merge heuristic weakly adjusts which merges we favor in each
+-- decay group. Hopefully, this results in an interesting history.
 --
--- We'll compute the heuristic AFTER applying renames.
 heuristicDTX :: DictTX -> DictTX -> Int
 heuristicDTX old new = snd $ mergeHeuristicDTX old new
 
@@ -345,5 +312,61 @@ dictMergeFn old new = (merged,score) where
 
 
 -}
+
+{-
+
+
+type DictDB = [DictTX]
+
+-- cf. wikilon/docs/DictionaryStructure.md
+
+
+-- | A dictionary has a list of transactions and a final state.
+--
+-- This dictionary limits itself to a 'valid' state. In particular,
+-- words in this dictionary will be fully defined and acyclic. There
+-- is no promise at this layer that words are type-safe or will pass
+-- their tests.
+--
+data Dict = Dict
+    { dict_db :: !DictDB  -- ^ historical state of database
+    , dict_st :: !DictST  -- ^ current state of database
+    }
+
+-- cf wikilon/doc/DictionaryValidation.md
+
+
+readDictDB :: Dict -> DictDB
+readDictDB = dict_db
+
+readDictST :: Dict -> DictST
+readDictST = dict_st
+
+-- | A dictionary state supports up-to-date views of the dictionary,
+-- compilation of words to Awelon bytecode, and similar features.
+type DictST = M.Map Word DictEnt
+
+-- | Each word has a definition and a reverse-lookup model.
+data DictEnt = DictEnt !AO_Code !RLU
+
+-- | Our reverse lookup is a set of words that should be re-evaluated
+-- (transitively) after an update to a given word. 
+--
+-- RLU should not directly include transitive dependencies. For example:
+--
+--    @define bar ...
+--    @define baz x bar
+--    @define foo bar baz
+--
+-- In this case, both baz and foo depend on bar. However, since foo 
+-- also depends on baz, we don't want to include foo in the reverse 
+-- lookup of bar. This helps keep our dependency sets smaller, with
+-- less redundant information in memory, and simplifies topological
+-- sort of reactive updates, avoiding redundant computations.
+-- 
+type RLU = S.Set Word
+
+-}
+
 
 

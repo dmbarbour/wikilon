@@ -3,16 +3,16 @@
 -- This has the following advantages:
 --
 --  * tighter memory requirements
---  * fast comparison and hashing after intern
---  * perfect `hash` function 
+--  * fast comparison and hashing
 --
 -- There are also a few disadvantages:
 --
---  * cannot ever GC old words, even for a failed parse
+--  * cannot GC old words, e.g. from a failed parse
 --  * non-deterministic ordering for sets or maps keyed by words
 -- 
 -- I can adapt for the latter issue, e.g. by explicitly translating
 -- word maps or sets to bytestrings when serializing transactions.
+-- GC is perhaps a non-issue anyway, since I'm keeping histories.
 -- 
 module Wikilon.Word
     ( Word, textToWord, wordToText, wordToUTF8
