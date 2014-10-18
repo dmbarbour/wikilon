@@ -1,12 +1,17 @@
 
 
-Design Consideration: 
+# Design Criteria
 
 * Keep a clean Wikilon dictionary, limit error creep. 
 * I'll eventually need responsive recompiles
 * Renaming should be efficient, if feasible.
-* I want to compact memory requirements wherever I can.
+* I want to minimize memory requirements.
 
+From a little analysis (below), I'll certainly want both a primary index (word → code) and a reverse lookup index (word → words). The first is trivial. The second is also trivial... but what are the space requirements? Well, conceptually, a word may be used by every other word in the dictionary, but we're already paying for those entries once at each use. So the worst case is O(N) with the dictionary size. Not bad.
+
+So, a straightforward implementation of the indices may be sufficient in this case.
+
+I'll also, eventually need to support fuzzy word search. However, since I went ahead with interning words, I'll certainly want to push fuzzy search into a different data structure so I don't end up interning a bunch of meaningless words. An interesting possibility is to concatenate all words into one large bytestring, then perform a suffix sort on it.
 
 ## Validation
 
@@ -18,61 +23,7 @@ For the moment, I'm seeking a weak validation criteria:
 
 This is the bare minimum to ensure every AO word compiles into something (even if it's just nonsense). Later, I will validate features like: tests still pass, words still typecheck, etc.
 
-Validating parse is trivial. Validating acyclic is easy: a simplified compilation recompile against the dictionary will do the job. To validate that I don't delete a word that someone else is using, I'll need either a reverse lookup or a reference count.
-
-Validating against missing words is more difficult: I need either a reverse lookup or a reference count. 
-
-Reactively running relevant tests will also benefit from a reverse lookup. And typechecking 
-
-Typechecking the words will essentially require a full recompile.
-
-requires partially compiling a word. Later, 
-
-
-
-
-1. to 
-2. Testing whether a word is part of a cycle is not difficult: seek dependencies of the word.
-
-
-: you can compile the word, for example, to test if it has any dependencies. 
-
-Testing for cycles is not especially difficult. If a word is part of a cycle, this can always be discovered by compiling that word.
-
-
-that there are no undefined words, seems much more difficult
-
-
-
-If we're going to simply validate words as we add them, this should be easy.
-
-
-
-
-
-One option is to simply compile every word after it is u
-
-
-Whenever we update a word, we have possibilities of:
-
-* using undefined word
-* introducing a cycle
-
-When we delete a word, we have possibility of:
-
-* rendering other words undefined
-* 
-
-
-
-
-
--- Design Thoughts:
---
---
---   To ensure validity, I need to make sure that each update does
---   not create a cycle, and that deletions do not break code that
---   otherwise works fine.
+Validating parse is trivial. Validating acyclic is easy: a simplified compilation recompile against the dictionary will do the job. To validate that I don't delete a word that someone else is using, I'll need either a reverse lookup or a reference count. Later, to determine which tests must be rerun and which programs must be re-typechecked, I'll certainly need a reverse lookup.
 
 ## Fast Renaming
 
@@ -94,7 +45,7 @@ There are many possible ways to compact memory requirements. Quick list:
 * favor gzipped, binary representations of transactions in memory...
 * use secure-hash key-value store for transactions
 
-Interning can save memory by combining references to common words. I'm not sure how much this will save, but I suspect it's pretty large across a long history and multiple forks. I went ahead and did this via Edward Kmett's `intern` package.
+Interning can save memory by combining references to common words. I'm not sure how much this will save, but I suspect it's pretty large after accounting for a long history, multiple forks, and inverted indices. I went ahead and did this via Edward Kmett's `intern` package.
 
 Compressing transactions in-memory could work pretty well. We don't often access the transactions except to build the initial dictionary upon loading, or a historical dictionary, or when performing a compaction. So we could possibly save a lot of memory and reduce burden on GC if we serialize and compress transactions that aren't necessary at any given moment.
 

@@ -4,6 +4,7 @@
 --
 --  * tighter memory requirements
 --  * fast comparison and hashing
+--  * unique hash value (see WordMap, WordSet)
 --
 -- There are also a few disadvantages:
 --

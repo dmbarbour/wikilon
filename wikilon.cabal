@@ -51,6 +51,7 @@ Library
     , parallel (>= 3.0)
     , binary (>= 0.7.2)
     , intern (>= 0.9.1), hashable
+    , containers (>= 0.5 && < 0.7)
 
     , acid-state (>= 0.12.3)
     , safecopy (>= 0.8)
@@ -69,7 +70,6 @@ Library
 
     , array (>= 0.4)
     , text (>= 0.11)
-    , containers (>= 0.5 && < 0.7)
     , cryptohash (>= 0.11)
     , bytestring, byteable
     , Decimal (>= 0.4)
@@ -84,6 +84,11 @@ Library
   Exposed-Modules:
 
     Wikilon
+
+    Wikilon.Word
+    Wikilon.WordMap
+    Wikilon.WordSet
+    -- todo: fast word search support
 
     Wikilon.Database
     Wikilon.Dictionary
@@ -105,7 +110,6 @@ Library
 
     Wikilon.Time
     Wikilon.Char
-    Wikilon.Word
     Wikilon.ParseUtils
     -- Wikilon.UTF8
 

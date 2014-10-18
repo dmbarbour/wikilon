@@ -34,8 +34,8 @@ module Wikilon.Dictionary
 
 import Control.Arrow ((***))
 import qualified Data.List as L
-import qualified Data.Map.Strict as M
-import qualified Data.Set as S
+import qualified Wikilon.WordMap as WM
+import qualified Wikilon.WordSet as WS
 
 import Wikilon.Time
 import Wikilon.Database
@@ -49,8 +49,8 @@ data DictTX = DictTX
     , dtx_rename  :: !RenameMap
     , dtx_update  :: !UpdateMap
     }
-type RenameMap = M.Map Word Word
-type UpdateMap = M.Map Word DictUpd
+type RenameMap = WM.WordMap Word
+type UpdateMap = WM.WordMap DictUpd
 
 -- | Transaction metadata includes a little information about who,
 -- when, where, why, and how many transactions have been performed.
@@ -68,7 +68,7 @@ data DTXMeta = DTXMeta
     , dtx_count  :: {-# UNPACK #-} !Int -- number of merged transactions
     , dtx_anno   :: !AnnoWords -- words for who, where, why, etc.
     }
-type AnnoWords = S.Set Word
+type AnnoWords = WS.WordSet
 
 -- | Dictionaries have a simple set of update operations:
 -- 
@@ -85,14 +85,15 @@ data DictUpd
     = Define AO_Code    -- @define word code
     | Update AO_Code    -- @update word code
     | Delete            -- @delete word
---  | Append AO_Code    -- @append word code (a thought experiment)
 
+-- ASIDE:
 --
 -- An 'append' operator has been contemplated for embedding objects
 -- in the dictionary. But I'd lose idempotence, and I'm beginning to
 -- envision effective ways to embed objects as loose coalitions of
 -- independent words structured in an editor by naming conventions 
--- (e.g. cells in a spreadsheet, lines in a notebook). 
+-- (L2$foo might be a cell in a spreadsheet or line in a notebook).
+-- 
 
 mapDictUpd :: (AO_Code -> AO_Code) -> DictUpd -> DictUpd
 mapDictUpd f (Define ao) = Define (f ao)
@@ -113,18 +114,18 @@ isDef _ = False
 -- 
 renameDTX :: RenameMap -> DictTX -> DictTX
 renameDTX renameMap dtx =
-    if M.null renameMap then dtx else
-    let rn w = maybe w id $ M.lookup w renameMap in
+    if WM.null renameMap then dtx else
+    let rn w = maybe w id $ WM.lookup w renameMap in
     -- rename the annotations
     let meta = dtx_meta dtx in
-    let anno' = S.map rn (dtx_anno meta) in
+    let anno' = WS.map rn (dtx_anno meta) in
     let meta' = meta { dtx_anno = anno' } in
     -- rename words within the updates!
     let rnu  = rn *** mapDictUpd (aoMapWords rn) in
-    let update' = M.fromList $ fmap rnu $ M.toList (dtx_update dtx) in
+    let update' = WM.fromList $ fmap rnu $ WM.toList $ dtx_update dtx in
     -- filter newly defined words from renameMap
-    let newWords = M.keys $ M.filter isDef update' in
-    let renameMap' = L.foldr M.delete renameMap newWords in
+    let newWords = WM.keys $ WM.filter isDef update' in
+    let renameMap' = L.foldl' (flip WM.delete) renameMap newWords in
     -- compose a new rename function.
     let rename' = mergeRenameMaps (dtx_rename dtx) renameMap' in
     -- generate the new transaction
@@ -157,17 +158,17 @@ renameDTX renameMap dtx =
 --
 mergeRenameMaps :: RenameMap -> RenameMap -> RenameMap
 mergeRenameMaps old new =
-    if M.null new then old else
-    L.foldr mrn1 new (M.toList old)
+    if WM.null new then old else
+    L.foldl' mrn1 new (WM.toList old)
 
-mrn1 :: (Word,Word) -> RenameMap -> RenameMap
-mrn1 (foo,bar) newMap =
-    case M.lookup bar newMap of
-        Nothing ->  M.insert foo bar newMap
+mrn1 :: RenameMap -> (Word,Word) -> RenameMap
+mrn1 newMap (foo,bar) =
+    case WM.lookup bar newMap of
+        Nothing ->  WM.insert foo bar newMap
         Just baz ->
-            let m' = M.delete bar newMap in
+            let m' = WM.delete bar newMap in
             if (foo == baz) then m' else
-            M.insert foo baz m'
+            WM.insert foo baz m'
 
 -- | deepRenameDTX will take a full database and apply all renames, 
 -- and then return any leftover rename operations. If this is a
@@ -178,11 +179,11 @@ mrn1 (foo,bar) newMap =
 -- any sort of reverse lookup index.
 --
 deepRenameDTX :: [DictTX] -> ([DictTX], RenameMap)
-deepRenameDTX = dr [] M.empty where
+deepRenameDTX = dr [] WM.empty where
     dr z rn (t:ts) =
         let tRn = renameDTX rn t in 
         let rn' = dtx_rename tRn in
-        let t' = tRn { dtx_rename = M.empty } in
+        let t' = tRn { dtx_rename = WM.empty } in
         t' `seq` dr (t':z) rn' ts
     dr z rn [] = (L.reverse z, rn)
 
@@ -221,13 +222,13 @@ heuristicDTX' old new = score where
     wordScore = 
         let m1 = dtx_update old in
         let m2 = dtx_update new in
-        negate $ M.size $ M.intersection m1 m2
+        negate $ WM.size $ WM.intersection m1 m2
     annoScore =
         let s1 = dtx_anno (dtx_meta old) in
         let s2 = dtx_anno (dtx_meta new) in
-        let sn = S.intersection s1 s2 in
+        let sn = WS.intersection s1 s2 in
         -- subtract overlap twice, but add thrice 
-        (3 * S.size sn) - (S.size s1 + S.size s2)
+        (3 * WS.size sn) - (WS.size s1 + WS.size s2)
     timeScore =
         let tm_ini = dtx_tm_ini (dtx_meta old) in
         let tm_fin = dtx_tm_fin (dtx_meta new) in
@@ -245,7 +246,7 @@ picosInHour = picosPerSec * secsPerHour where
 mergeHeuristicDTX :: DictTX -> DictTX -> (DictTX, Int)
 mergeHeuristicDTX old new = (m, h) where
     old' = renameDTX (dtx_rename new) old
-    new' = new { dtx_rename = M.empty }
+    new' = new { dtx_rename = WM.empty }
     m = mergeDTX'     old' new'
     h = heuristicDTX' old' new'
 
@@ -260,7 +261,7 @@ dictDecayParams = Decay
 -- same as mergeDTX, but assumes that the new transaction does not
 -- rename anything, and thus that names are consistent.
 mergeDTX' :: DictTX -> DictTX -> DictTX
-mergeDTX' = error "TODO!"
+mergeDTX' _old _new = error "TODO!"
 
 
 {-
