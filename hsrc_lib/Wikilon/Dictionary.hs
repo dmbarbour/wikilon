@@ -111,7 +111,7 @@ isDef _ = False
 --   * rename mentions of a word in our dictionary
 --   * subtract newly defined words from our rename map
 --   * carefully compose rename maps
--- 
+--
 renameDTX :: RenameMap -> DictTX -> DictTX
 renameDTX renameMap dtx =
     if WM.null renameMap then dtx else
@@ -146,11 +146,11 @@ renameDTX renameMap dtx =
 --
 -- Of course, maps are only indexed on the first element. The only
 -- way to use the index here is to search the new map for 'bar'.
--- 
--- The converse, where we rename 'foo' in the new map, should be 
--- impossible, since 'foo' does not exist after we've renamed it
--- to 'bar'. We won't check for that here, however; it's up to
--- a higher level policy to test that transactions are valid.
+--
+-- It's possible a map contains (foo,bar) and (bar,baz), indicating
+-- two words change at the same time. This results from (bar,baz)
+-- performed before (foo,bar). It should work without changes, since
+-- renameDTX applies only a single step.
 --
 -- Also, it's possible that yesterday we renamed foo to bar, and
 -- today we renamed bar back to foo (changed our mind!). In that

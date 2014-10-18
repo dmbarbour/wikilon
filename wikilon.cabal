@@ -88,7 +88,7 @@ Library
     Wikilon.Word
     Wikilon.WordMap
     Wikilon.WordSet
-    -- todo: fast word search support
+    -- todo: fuzzy word search support
 
     Wikilon.Database
     Wikilon.Dictionary
