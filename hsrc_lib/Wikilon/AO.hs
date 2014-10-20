@@ -41,7 +41,7 @@ module Wikilon.AO
     ) where
 
 import Control.Applicative
-import Control.Monad (join)
+import Control.Monad (join, unless)
 import Control.Exception (assert)
 import qualified Data.List as L
 import qualified Data.Decimal as Dec
@@ -147,10 +147,13 @@ putSP ops = B.put ' ' >> putAO ops
 putAction :: AO_Action -> B.Put
 putAction (AO_Word w) = B.putByteString (wordToUTF8 w)
 putAction (AO_Block ao) = B.put '[' >> putAO ao >> B.put ']'
-putAction (AO_ABC abc) = B.put '%' >> mapM_ (B.put . abcOpToChar) abc
+putAction (AO_ABC abc) = B.put '%' >> mapM_ putOp abc
 putAction (AO_Num n) = putNum n
 putAction (AO_Text txt) = putSPText txt
 putAction (AO_Tok tok) = putTok tok
+
+putOp :: PrimOp -> B.Put
+putOp (abcOpToChar -> c) = unless (isSpace c) (B.put c)
 
 putNum :: Rational -> B.PutM ()
 putNum (toDecimal -> Just dec) = putShow dec
@@ -317,7 +320,7 @@ optFracPart :: Integer -> B.Get Rational
 optFracPart n = maybe (fromInteger n) ($ n) <$> P.tryCommit (B.get >>= fp) where
     fp '.' = return decimalPart
     fp '/' = return fractionalPart
-    fp _   = fail "no fractional part; undo! undo!"
+    fp _   = fail "no fractional part"
 
 decimalPart :: B.Get (Integer -> Rational)
 decimalPart = B.label "decimal" $ 

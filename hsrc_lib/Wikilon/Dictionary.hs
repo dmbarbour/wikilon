@@ -87,14 +87,10 @@ data DictUpd
     | Update AO_Code    -- @update word code
     | Delete            -- @delete word
 
--- ASIDE:
---
--- An 'append' operator has been contemplated for embedding objects
--- in the dictionary. But I'd lose idempotence, and I'm beginning to
--- envision effective ways to embed objects as loose coalitions of
--- independent words structured in an editor by naming conventions 
--- (L2$foo might be a cell in a spreadsheet or line in a notebook).
--- 
+-- Note: @append was considered and rejected.
+-- * Pros: extend a definition for bulky word without repeating it
+-- * Cons: lose idempotence, inflexible update, no strong use case
+
 
 mapDictUpd :: (AO_Code -> AO_Code) -> DictUpd -> DictUpd
 mapDictUpd f (Define ao) = Define (f ao)
