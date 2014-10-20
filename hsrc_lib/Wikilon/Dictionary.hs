@@ -21,16 +21,17 @@
 module Wikilon.Dictionary
     ( DictTX(..), DTXMeta(..), DictUpd(..)
     , UpdateMap, RenameMap, AnnoWords
-    , renameDTX, deepRenameDTX
-    , mergeDTX
-    , heuristicDTX, mergeHeuristicDTX
-    , mergeRenameMaps
-    , mapDictUpd
-    
 
+    , renameDTX, deepRenameDTX, mergeRenameMaps
+    , mergeDTX, mergeHeuristicDTX, heuristicDTX
+    , mapDictUpd
     , dictDecayParams
-    
     ) where
+
+-- todo: 
+--  reverse lookup
+--  finish mergeDTX
+--  serialization of transactions
 
 import Control.Arrow ((***))
 import qualified Data.List as L

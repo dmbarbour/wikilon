@@ -52,6 +52,9 @@ Library
     , binary (>= 0.7.2)
     , intern (>= 0.9.1), hashable
     , containers (>= 0.5 && < 0.7)
+    -- , vector (>= 0.10)
+    , array (>= 0.4)
+
 
     , acid-state (>= 0.12.3)
     , safecopy (>= 0.8)
@@ -68,7 +71,6 @@ Library
     , cereal (>= 0.4.1.0)  
     , utf8-string (>= 0.3.8)
 
-    , array (>= 0.4)
     , text (>= 0.11)
     , cryptohash (>= 0.11)
     , bytestring, byteable
@@ -88,17 +90,18 @@ Library
     Wikilon.Word
     Wikilon.WordMap
     Wikilon.WordSet
-    -- todo: fuzzy word search support
+    Wikilon.WordSearch
 
     Wikilon.Database
     Wikilon.Dictionary
+
     Wikilon.Session
     Wikilon.Wiki
 
     Wikilon.AO
     Wikilon.ABC
     -- AO to ABC compilers
-    -- 
+
     Wikilon.Base16
 
     Wikilon.Value
