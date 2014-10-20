@@ -21,6 +21,7 @@
 module Wikilon.Dictionary
     ( DictTX(..), DTXMeta(..), DictUpd(..)
     , UpdateMap, RenameMap, AnnoWords
+    , isUpdate, isDefine, isDelete, addUpdate
 
     , renameDTX, deepRenameDTX, mergeRenameMaps
     , mergeDTX, mergeHeuristicDTX, heuristicDTX
@@ -97,9 +98,34 @@ mapDictUpd f (Define ao) = Define (f ao)
 mapDictUpd f (Update ao) = Update (f ao)
 mapDictUpd _ Delete = Delete
 
-isDef :: DictUpd -> Bool
-isDef (Define _) = True
-isDef _ = False
+isDefine :: DictUpd -> Bool
+isDefine (Define _) = True
+isDefine _ = False
+
+isUpdate :: DictUpd -> Bool
+isUpdate (Update _) = True
+isUpdate _ = False
+
+isDelete :: DictUpd -> Bool
+isDelete Delete = True
+isDelete _ = False
+
+-- | Add an update to an atomic collection of updates.
+-- Will merge: Define+Delete → remove from update
+--             Define+Update → Define (updated)
+addUpdate :: Word -> DictUpd -> UpdateMap -> UpdateMap
+addUpdate w Delete m = 
+    -- remove 'Define' from map, otherwise overwrite
+    case WM.lookup w m of
+        Just (Define _) -> WM.delete w m
+        _ -> WM.insert w Delete m
+addUpdate w upd@(Update ao) m =
+    -- merge update with 'Define', otherwise overwrite.
+    case WM.lookup w m of
+        Just (Define _) -> WM.insert w (Define ao) m
+        _ -> WM.insert w upd m
+addUpdate w upd m = WM.insert w upd m -- just plain overwrite
+
 
 -- | Applying rename operations is one of the more challenging 
 -- features for dictionary transactions. We must:
@@ -121,7 +147,7 @@ renameDTX renameMap dtx =
     let rnu  = rn *** mapDictUpd (aoMapWords rn) in
     let update' = WM.fromList $ fmap rnu $ WM.toList $ dtx_update dtx in
     -- filter newly defined words from renameMap
-    let newWords = WM.keys $ WM.filter isDef update' in
+    let newWords = WM.keys $ WM.filter isDefine update' in
     let renameMap' = L.foldl' (flip WM.delete) renameMap newWords in
     -- compose a new rename function.
     let rename' = mergeRenameMaps (dtx_rename dtx) renameMap' in
@@ -258,58 +284,32 @@ dictDecayParams = Decay
 -- same as mergeDTX, but assumes that the new transaction does not
 -- rename anything, and thus that names are consistent.
 mergeDTX' :: DictTX -> DictTX -> DictTX
-mergeDTX' _old _new = error "TODO!"
-
-
-{-
-
- old new = merged where
+mergeDTX' old new = dtx' where
+    dtx' = DictTX 
+                { dtx_meta   = meta'
+                , dtx_rename = rename'
+                , dtx_update = update' 
+                }
+    meta' = DTXMeta
+                { dtx_tm_ini = tm_ini'
+                , dtx_tm_fin = tm_fin'
+                , dtx_anno   = anno'
+                , dtx_count  = count'
+                }
+    tm_ini' = dtx_tm_ini oldMeta
+    tm_fin' = dtx_tm_fin newMeta
+    count'  = dtx_count oldMeta + dtx_count newMeta
+    anno'    = WS.filter (not . lostWord) baseAnno
+    baseAnno = dtx_anno oldMeta `WS.union` dtx_anno newMeta
+    lostWord w = maybe False isDefine (WM.lookup w oldUpd) -- was defined
+              && maybe False isDelete (WM.lookup w newUpd) -- now deleted
     rename' = dtx_rename old
-    oldmeta = dtx_meta old
-    newmeta = dtx_meta new
-    tm_ini' = dtx_tm_ini oldmeta
-    tm_fin' = dtx_tm_fin newmeta
-    count'  = dtx_count old + dtx_count new
-    
-    
-    anno' = (oldAnno `Set.union` newAnno) `Set.difference` lostWords
-    allAnno = Set.union (dtx_anno oldMeta) (dtx_anno newMeta)
-    lostWords = newWords oldAct `Set.difference` newWords actions'
-    
-    
-    
-    
-    
-
-    oldRN = renameDTX old (dtx_rename new) -- old + renaming
-    rename' = dtx_rename oldRN -- rename maps already merged
-    oldMeta = dtx_meta oldRN   -- old metadata
-    oldAnno = dtx_anno oldMeta -- old annotations (after rename)
-    oldAct  = dtx_update oldRN -- old actions
-    newMeta = dtx_meta new
-    newAnno = dtx_anno newMeta
-    newAct  = dtx_update new
-    
-    upd' = mergeUpdates (dtx_updates oldRN) (dtx_updates new)
-    
-
-
-dictMergeFn :: DictTX -> DictTX -> (DictTX, Int)
-dictMergeFn old new = (merged,score) where
-    merged = DictTX meta' actions'
+    update' = L.foldl' addUpd oldUpd (WM.toList newUpd)
+    addUpd m (w,u) = addUpdate w u m
     oldMeta = dtx_meta old
-    oldAct = dtx_actions old
-    oldAnno = fmap (renameWith newAct) (dtx_anno oldMeta)
     newMeta = dtx_meta new
-    newAct = dtx_actions new
-    newAnno = dtx_anno newMeta
-    
-    count = dtx_count old + dtx_count new
-
-
-
-
--}
+    oldUpd  = dtx_update old
+    newUpd  = dtx_update new
 
 {-
 
