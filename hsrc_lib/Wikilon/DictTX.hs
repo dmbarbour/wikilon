@@ -20,19 +20,16 @@ module Wikilon.DictTX
 
 --  serialization of transactions (Binary instance)
 
-import Control.Monad (foldM)
+import Control.Monad (foldM,(>=>))
 import Control.Arrow ((***))
+import Control.Applicative ((<|>))
 import qualified Data.List as L
-import Data.Function (on)
 import Data.Ratio
 
 import qualified Data.Binary as B
-import qualified Data.Binary.Get as B
 import qualified Data.Binary.Put as B
 import qualified Codec.Binary.UTF8.Generic as UTF8
-
 import qualified Wikilon.ParseUtils as P
-import Wikilon.Char
 
 import Wikilon.WordMap (WordMap)
 import Wikilon.WordSet (WordSet)
@@ -351,7 +348,7 @@ putDictTX dtx = mapM_ putAction allActions >> eotx where
     eotx = B.put '@' >> B.put '@'
     putAction (command,code) = 
         B.put '@' >> 
-        putAO' (command : ao_code code) >> 
+        putAO' ((AO_Word command) : ao_code code) >> 
         B.put '\n'
 
 type TXAction = (Word,AO_Code) -- command word & content
@@ -403,7 +400,7 @@ aoNum = AO_Code . (:[]) . AO_Num . fromIntegral
 --
 getDictTX :: B.Get DictTX
 getDictTX =
-    getTXActions >>= \ txa ->
+    getTXActions >>= \ txs ->
     case buildTransaction txs of
         Left emsg -> fail emsg
         Right dtx -> return dtx
@@ -416,13 +413,13 @@ getTXActions = loop [] where
     eotx ra = P.char '@' >> return (L.reverse ra)
     next ra = getAO' False >>= proc ra
     proc ra (True, (AO_Word w : ao)) = loop ((w, AO_Code ao):ra)
-    proc ra (bLF, ao) = fail "invalid dictionary transaction"
+    proc _ra (_bLF, _ao) = fail "invalid dictionary transaction"
 
 
 -- build a transaction from a set of actions, or report an error.
 -- this is very ugly code, just brute forced it...
 buildTransaction :: TXActions -> Either String DictTX
-buildTransaction = foldM (flip bt) dtx0 >>= validate where
+buildTransaction = foldM (flip bt) dtx0 >=> validate where
     meta0 = DTXMeta { dtx_tm_ini = minBound, dtx_tm_fin = maxBound
                     , dtx_count = minBound, dtx_anno = WS.empty }
     dtx0 = DictTX { dtx_meta = meta0, dtx_rename = WM.empty
@@ -440,6 +437,7 @@ buildTransaction = foldM (flip bt) dtx0 >>= validate where
         if badDT then err "invalid timing; t0 > tf" else
         if badCT then err "ct undefined or invalid" else
         return dtx
+    bt :: TXAction -> DictTX -> Either String DictTX
     bt ("t0",rdTime -> Just t0) = um $ \ m -> 
         let dupT0 = (minBound /= dtx_tm_ini m) in
         if dupT0 then err "t0 defined twice" else
@@ -448,7 +446,7 @@ buildTransaction = foldM (flip bt) dtx0 >>= validate where
         let dupTF = (maxBound /= dtx_tm_fin m) in
         if dupTF then err "tf defined twice" else
         return $ m { dtx_tm_fin = tf }
-    bt ("ct",rdNat  -> Just ct) = um $ \ m -> 
+    bt ("ct",rdCount -> Just ct) = um $ \ m -> 
         let dupCT = (minBound /= dtx_count m) in
         if dupCT then err "ct defined twice" else
         return $ m { dtx_count = ct }
@@ -465,15 +463,17 @@ buildTransaction = foldM (flip bt) dtx0 >>= validate where
     bt ("define", rdUpdate -> Just (w,ao)) = upd w (Define ao)
     bt ("update", rdUpdate -> Just (w,ao)) = upd w (Update ao)
     bt ("delete", rdWord -> Just w) = upd w Delete
-    bt (w, AO_Code ao) = const $ err ("unrecognized action: @" ++ show (w:ao))
+    bt (w, AO_Code ao) = const $ 
+        let actionAO = AO_Code $ AO_Word w : ao in
+        err $ "unrecognized action: @" ++ show actionAO
     -- helper functions
     um fn dtx = 
         fn (dtx_meta dtx) >>= \ m' -> 
         return $ dtx { dtx_meta = m' }
-    upd w upd dtx =
+    upd w v dtx =
         let dupUPD = WM.member w (dtx_update dtx) in
         if dupUPD then err (show w ++ " updated twice") else
-        let upd' = WM.insert w upd (dtx_update dtx) in
+        let upd' = WM.insert w v (dtx_update dtx) in
         return $ dtx { dtx_update = upd' }
 
 -- simple AO structure readers
@@ -493,13 +493,14 @@ rdUpdate :: AO_Code -> Maybe (Word,AO_Code)
 rdUpdate (AO_Code (AO_Word w : ao')) = Just (w, AO_Code ao')
 rdUpdate _ = Nothing
 
-rdNat :: AO_Code -> Maybe Int
-rdNat (AO_Code [AO_Num r]) = 
-    let n = numerator r in
-    let okN = (n >= 0) && (n < maxInt) in
-    let ok = (1 == denominator r) && okN in 
-    if ok then Just (fromInteger n) else Nothing
-rdNat _ = Nothing
+rdCount :: AO_Code -> Maybe Int
+rdCount (AO_Code [AO_Num r]) | ok = Just (fromInteger n) where
+    n = numerator r
+    ok = okMin && okMax && okDen
+    okMin = n >= 0
+    okMax = n <= toInteger maxInt
+    okDen = 1 == denominator r
+rdCount _ = Nothing
 
 maxInt :: Int
 maxInt = maxBound
