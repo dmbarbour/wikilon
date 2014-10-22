@@ -172,13 +172,13 @@ parseTime = fmap fromUTC . Time.parseTime t_locale t_format
 
 -- show difference in time for humans
 instance Show DT where
-    showsPrec _ dt | signum dt < 0 = showChar '-' . shows (negate dt)
     showsPrec _ dt = shows val . showString unit where
         val = Dec.normalizeDecimal $ Dec.Decimal places ps
         ps = dtToPicos dt
+        pp = abs ps
         (places,unit) = 
-            if (ps < 1000) then (0,"ps") else
-            if (ps < 1000*1000) then (3,"ns") else
-            if (ps < 1000*1000*1000) then (6,"µs") else
-            if (ps < 1000*1000*1000*1000) then (9,"ms") else
+            if (pp < 1000) then (0,"ps") else
+            if (pp < 1000*1000) then (3,"ns") else
+            if (pp < 1000*1000*1000) then (6,"µs") else
+            if (pp < 1000*1000*1000*1000) then (9,"ms") else
             (12,"s")

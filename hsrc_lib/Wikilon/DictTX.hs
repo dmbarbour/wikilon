@@ -417,10 +417,11 @@ getTXActions = loop [] where
 
 
 -- build a transaction from a set of actions, or report an error.
--- this is very ugly code, just brute forced it...
+-- this is very ugly code. It uses a bunch of sentinel values, and
+-- brute forces the parse.
 buildTransaction :: TXActions -> Either String DictTX
 buildTransaction = foldM (flip bt) dtx0 >=> validate where
-    meta0 = DTXMeta { dtx_tm_ini = minBound, dtx_tm_fin = maxBound
+    meta0 = DTXMeta { dtx_tm_ini = minBound, dtx_tm_fin = minBound
                     , dtx_count = minBound, dtx_anno = WS.empty }
     dtx0 = DictTX { dtx_meta = meta0, dtx_rename = WM.empty
                   , dtx_update = WM.empty }
@@ -429,7 +430,7 @@ buildTransaction = foldM (flip bt) dtx0 >=> validate where
         -- currently only va metadata
         let meta = dtx_meta dtx in
         let badT0 = (minBound == dtx_tm_ini meta) in
-        let badTF = (maxBound == dtx_tm_fin meta) in
+        let badTF = (minBound == dtx_tm_fin meta) in
         let badDT = (dtx_tm_ini meta > dtx_tm_fin meta) in
         let badCT = (dtx_count meta < 1) in
         if badT0 then err "t0 undefined or invalid" else
@@ -443,7 +444,7 @@ buildTransaction = foldM (flip bt) dtx0 >=> validate where
         if dupT0 then err "t0 defined twice" else
         return $ m { dtx_tm_ini = t0 }
     bt ("tf",rdTime -> Just tf) = um $ \ m -> 
-        let dupTF = (maxBound /= dtx_tm_fin m) in
+        let dupTF = (minBound /= dtx_tm_fin m) in
         if dupTF then err "tf defined twice" else
         return $ m { dtx_tm_fin = tf }
     bt ("ct",rdCount -> Just ct) = um $ \ m -> 
