@@ -7,7 +7,7 @@
 -- 
 module Wikilon.WordSearch
     ( WordSearchIndex
-    , empty, insert
+    , empty, insert, delete
     , member
     , wordsWithPrefix
     , wordsWithSuffix
@@ -32,15 +32,18 @@ data WordSearchIndex = WSI
 empty :: WordSearchIndex
 empty = WSI M.empty
 
--- | Insert a collection of words. Add words a whole collection
--- at a time to support efficient construction of the index.
+-- | Insert a collection of words to the search.
 insert :: [Word] -> WordSearchIndex -> WordSearchIndex
-insert ws wsi = WSI (L.foldl' ins mbw ws) where
+insert ws wsi = WSI (L.foldl' ins (_content wsi) ws) where
     ins m w = M.insert (wordToUTF8 w) w m 
-    mbw = _content wsi
 
--- | Seek an exact match for an existing word. 
--- Do not intern as a new word. 
+-- | Remove a collection of words from the search.
+delete :: [Word] -> WordSearchIndex -> WordSearchIndex
+delete ws wsi = WSI (L.foldl' del (_content wsi) ws) where
+    del m w = M.delete (wordToUTF8 w) m
+
+-- | Seek an exact match for an existing word. It the word isn't
+-- found, do not intern.  
 member :: String -> WordSearchIndex -> Maybe Word
 member s wsi = M.lookup (UTF8.fromString s) (_content wsi)
 
@@ -51,8 +54,9 @@ wordsWithPrefix s wsi =
     let prefix = UTF8.fromString s in
     let hasPrefix = B.isPrefixOf prefix . wordToUTF8 in
     let (_,exact,greater) = M.splitLookup prefix (_content wsi) in
-    let gp = L.takeWhile hasPrefix $ M.elems greater in
-    maybe gp (:gp) exact
+    let consExactMatch = maybe id (:) exact in
+    let wwpList = L.takeWhile hasPrefix $ M.elems greater in
+    consExactMatch wwpList
 
 -- | Find all words with a specific suffix.
 wordsWithSuffix :: String -> WordSearchIndex -> [Word]

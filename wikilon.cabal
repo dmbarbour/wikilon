@@ -92,9 +92,11 @@ Library
     Wikilon.WordSet
     Wikilon.WordSearch
 
-    Wikilon.Database
-    Wikilon.Dictionary
+    Wikilon.DictST
+    Wikilon.DictTX
 
+
+    Wikilon.Database
     Wikilon.Session
     Wikilon.Wiki
 

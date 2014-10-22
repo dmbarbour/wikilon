@@ -1,47 +1,48 @@
-{-# LANGUAGE PatternGuards, ViewPatterns #-}
+{-# LANGUAGE OverloadedStrings, ViewPatterns #-}
 
--- | The Awelon Object (AO) dictionary is a primary data structure
--- of Wikilon. AO words form functions, modules, tests, documentation,
--- directives, web-applications, and wiki pages. But, essentially, the
--- content of each word is just some AO code. Documentation is modeled
--- as a word that computes a document.
+-- | A dictionary transaction represents a single, atomic update on
+-- a dictionary. In Wikilon, we preserve history of a dictionary by
+-- preserving a subset of transactions, occasionally merging them to
+-- keep the space costs down (which eliminates intermediate values
+-- for some definitions). 
 --
--- This module describes the dictionary database and transactions.
--- The database enforces a few useful properties:
---
---   * every word parses
---   * words are fully defined
---   * defined words are acyclic
---   * distinguish define vs. update
---
--- In addition to a set of words, a dictionary tracks some useful
--- metadata about when changes were made, potentially who made them
--- and for which projects, etc.
 -- 
-module Wikilon.Dictionary
+module Wikilon.DictTX 
     ( DictTX(..), DTXMeta(..), DictUpd(..)
     , UpdateMap, RenameMap, AnnoWords
     , isUpdate, isDefine, isDelete, addUpdate
-
     , renameDTX, deepRenameDTX, mergeRenameMaps
     , mergeDTX, mergeHeuristicDTX, heuristicDTX
     , mapDictUpd
     , dictDecayParams
+    , putDictTX, getDictTX
     ) where
 
--- todo: 
---  reverse lookup
---  finish mergeDTX
---  serialization of transactions
+--  serialization of transactions (Binary instance)
 
+import Control.Monad (foldM)
 import Control.Arrow ((***))
 import qualified Data.List as L
+import Data.Function (on)
+import Data.Ratio
+
+import qualified Data.Binary as B
+import qualified Data.Binary.Get as B
+import qualified Data.Binary.Put as B
+import qualified Codec.Binary.UTF8.Generic as UTF8
+
+import qualified Wikilon.ParseUtils as P
+import Wikilon.Char
+
+import Wikilon.WordMap (WordMap)
+import Wikilon.WordSet (WordSet)
 import qualified Wikilon.WordMap as WM
 import qualified Wikilon.WordSet as WS
 
 import Wikilon.Time
 import Wikilon.Database
 import Wikilon.AO
+
 
 -- | A transaction on a dictionary has some metadata and a few words
 -- to update. Each word can have at most one update. Note that rename
@@ -51,8 +52,8 @@ data DictTX = DictTX
     , dtx_rename  :: !RenameMap
     , dtx_update  :: !UpdateMap
     }
-type RenameMap = WM.WordMap Word
-type UpdateMap = WM.WordMap DictUpd
+type RenameMap = WordMap Word
+type UpdateMap = WordMap DictUpd
 
 -- | Transaction metadata includes a little information about who,
 -- when, where, why, and how many transactions have been performed.
@@ -62,15 +63,16 @@ type UpdateMap = WM.WordMap DictUpd
 -- ad-hoc content, e.g. `user:dave` might be a describing a user
 -- who performed the edit. And `project:awelon` might describe the
 -- project associated with the edit. These words may be renamed or
--- deleted.
--- 
+-- deleted, and must exist in the dictionary (either before or after
+-- the given transaction).
+--
 data DTXMeta = DTXMeta
     { dtx_tm_ini :: {-# UNPACK #-} !T -- when (start)
     , dtx_tm_fin :: {-# UNPACK #-} !T -- when (last merged)
     , dtx_count  :: {-# UNPACK #-} !Int -- number of merged transactions
     , dtx_anno   :: !AnnoWords -- words for who, where, why, etc.
     }
-type AnnoWords = WS.WordSet
+type AnnoWords = WordSet
 
 -- | Dictionaries have a simple set of update operations:
 -- 
@@ -92,7 +94,6 @@ data DictUpd
 -- * Pros: extend a definition for bulky word without repeating it
 -- * Cons: lose idempotence, inflexible update, no strong use case
 
-
 mapDictUpd :: (AO_Code -> AO_Code) -> DictUpd -> DictUpd
 mapDictUpd f (Define ao) = Define (f ao)
 mapDictUpd f (Update ao) = Update (f ao)
@@ -111,21 +112,15 @@ isDelete Delete = True
 isDelete _ = False
 
 -- | Add an update to an atomic collection of updates.
--- Will merge: Define+Delete → remove from update
+-- Will merge: Define+Delete → forget word, remove from update
 --             Define+Update → Define (updated)
 addUpdate :: Word -> DictUpd -> UpdateMap -> UpdateMap
-addUpdate w Delete m = 
-    -- remove 'Define' from map, otherwise overwrite
-    case WM.lookup w m of
-        Just (Define _) -> WM.delete w m
-        _ -> WM.insert w Delete m
-addUpdate w upd@(Update ao) m =
-    -- merge update with 'Define', otherwise overwrite.
-    case WM.lookup w m of
-        Just (Define _) -> WM.insert w (Define ao) m
-        _ -> WM.insert w upd m
-addUpdate w upd m = WM.insert w upd m -- just plain overwrite
+addUpdate w Delete m | newDef w m = WM.delete w m  
+addUpdate w (Update ao) m | newDef w m = WM.insert w (Define ao) m
+addUpdate w upd m = WM.insert w upd m
 
+newDef :: Word -> UpdateMap -> Bool
+newDef w m = maybe False isDefine $ WM.lookup w m
 
 -- | Applying rename operations is one of the more challenging 
 -- features for dictionary transactions. We must:
@@ -134,6 +129,12 @@ addUpdate w upd m = WM.insert w upd m -- just plain overwrite
 --   * rename mentions of a word in our dictionary
 --   * subtract newly defined words from our rename map
 --   * carefully compose rename maps
+--
+-- It is possible that we rename foo→bar and bar→baz in one step. We
+-- could perform a topological sort (bar→baz before foo→bar), or we
+-- can run this as a single atomic step. Either way, it's important
+-- that we don't arbitrarily order renaming of words, or we might
+-- accidentally merge foo and bar.
 --
 renameDTX :: RenameMap -> DictTX -> DictTX
 renameDTX renameMap dtx =
@@ -311,60 +312,194 @@ mergeDTX' old new = dtx' where
     oldUpd  = dtx_update old
     newUpd  = dtx_update new
 
-{-
+-- serialization of DictTX
+instance B.Binary DictTX where
+    put = putDictTX
+    get = getDictTX
 
+instance Show DictTX where 
+    show = UTF8.toString . B.encode
 
-type DictDB = [DictTX]
-
--- cf. wikilon/docs/DictionaryStructure.md
-
-
--- | A dictionary has a list of transactions and a final state.
+-- | Output the dictionary transaction into a bytestring. 
 --
--- This dictionary limits itself to a 'valid' state. In particular,
--- words in this dictionary will be fully defined and acyclic. There
--- is no promise at this layer that words are type-safe or will pass
--- their tests.
+-- A transaction consists of a list of actions indicated by '@' at a
+-- new line, finally terminated by `@@`. For example:
 --
-data Dict = Dict
-    { dict_db :: !DictDB  -- ^ historical state of database
-    , dict_st :: !DictST  -- ^ current state of database
-    }
-
--- cf wikilon/doc/DictionaryValidation.md
-
-
-readDictDB :: Dict -> DictDB
-readDictDB = dict_db
-
-readDictST :: Dict -> DictST
-readDictST = dict_st
-
--- | A dictionary state supports up-to-date views of the dictionary,
--- compilation of words to Awelon bytecode, and similar features.
-type DictST = M.Map Word DictEnt
-
--- | Each word has a definition and a reverse-lookup model.
-data DictEnt = DictEnt !AO_Code !RLU
-
--- | Our reverse lookup is a set of words that should be re-evaluated
--- (transitively) after an update to a given word. 
+--    @t0 "2014-10-21T18:34:31Z"
+--    @tf "2014-10-21T18:34:31Z"
+--    @ct 1
+--    @an project:awelon 
+--    @an user:david 
+--    @rename wierd weird
+--    @define bar 1 2 foo
+--    @define foo +
+--    @@
 --
--- RLU should not directly include transitive dependencies. For example:
+-- Every action parses as AO code, but has structural requirements.
+-- E.g. @rename is followed by exactly two words. 
 --
---    @define bar ...
---    @define baz x bar
---    @define foo bar baz
+-- Transactions are serialized as UTF-8 text to make them easy for 
+-- users to grok or eyeball for correctness. In practice, they'll 
+-- be transmitted or stored in a compressed format.
 --
--- In this case, both baz and foo depend on bar. However, since foo 
--- also depends on baz, we don't want to include foo in the reverse 
--- lookup of bar. This helps keep our dependency sets smaller, with
--- less redundant information in memory, and simplifies topological
--- sort of reactive updates, avoiding redundant computations.
--- 
-type RLU = S.Set Word
+putDictTX :: DictTX -> B.PutM ()
+putDictTX dtx = mapM_ putAction allActions >> eotx where
+    allActions = meta ++ renames ++ updates
+    meta    = metaActions (dtx_meta dtx)
+    renames = renameActions (dtx_rename dtx)
+    updates = updateActions (dtx_update dtx) 
+    eotx = B.put '@' >> B.put '@'
+    putAction (command,code) = 
+        B.put '@' >> 
+        putAO' (command : ao_code code) >> 
+        B.put '\n'
 
--}
+type TXAction = (Word,AO_Code) -- command word & content
+type TXActions = [TXAction]
+
+metaActions :: DTXMeta -> TXActions
+metaActions meta = actions where
+    actions = ("t0", tmIni)
+            : ("tf", tmFin)
+            : ("ct", count)
+            : annotations 
+    tmIni = aoTime (dtx_tm_ini meta)
+    tmFin = aoTime (dtx_tm_fin meta)
+    count = aoNum (dtx_count meta)
+    annotations = fmap toAN $ WS.toSortedList (dtx_anno meta) 
+    toAN w = ("an", AO_Code [AO_Word w])
+
+renameActions :: RenameMap -> TXActions
+renameActions = fmap (uncurry toRNA) . WM.toSortedList where
+    toRNA wa wb = ("rename", AO_Code [AO_Word wa, AO_Word wb])
+
+updateActions :: UpdateMap -> TXActions
+updateActions = fmap (uncurry toUPD) . WM.toSortedList where
+    toUPD w (Define ao) = ("define", c w ao)
+    toUPD w (Update ao) = ("update", c w ao)
+    toUPD w Delete      = ("delete", AO_Code [AO_Word w])
+    c w (AO_Code ao) = AO_Code (AO_Word w : ao)
+
+aoStr :: String -> AO_Code
+aoStr = AO_Code . (:[]) . AO_Text
+
+aoTime :: T -> AO_Code
+aoTime = aoStr . show
+
+aoNum :: Int -> AO_Code
+aoNum = AO_Code . (:[]) . AO_Num . fromIntegral
+
+-- | Read a transaction from binary.
+--
+-- A transaction will be rejected if there is more than one update
+-- on a single word, if any metadata is specified twice, or if any
+-- word is renamed twice. Within these constraints, actions commute
+-- within each transaction, though we should maintain deterministic
+-- order for replication or naming purposes.
+--
+-- A transaction is rejected if an action is not recognized. While
+-- transactions are feasibly extensible, it's important to know 
+-- what every action means.
+--
+getDictTX :: B.Get DictTX
+getDictTX =
+    getTXActions >>= \ txa ->
+    case buildTransaction txs of
+        Left emsg -> fail emsg
+        Right dtx -> return dtx
+
+-- | Read the current set of actions. Each action must start with
+-- '@' then read as AO. There isn't a particular requir
+getTXActions :: B.Get TXActions
+getTXActions = loop [] where
+    loop ra = P.char '@' >> (eotx ra <|> next ra) 
+    eotx ra = P.char '@' >> return (L.reverse ra)
+    next ra = getAO' False >>= proc ra
+    proc ra (True, (AO_Word w : ao)) = loop ((w, AO_Code ao):ra)
+    proc ra (bLF, ao) = fail "invalid dictionary transaction"
 
 
+-- build a transaction from a set of actions, or report an error.
+-- this is very ugly code, just brute forced it...
+buildTransaction :: TXActions -> Either String DictTX
+buildTransaction = foldM (flip bt) dtx0 >>= validate where
+    meta0 = DTXMeta { dtx_tm_ini = minBound, dtx_tm_fin = maxBound
+                    , dtx_count = minBound, dtx_anno = WS.empty }
+    dtx0 = DictTX { dtx_meta = meta0, dtx_rename = WM.empty
+                  , dtx_update = WM.empty }
+    err = Left
+    validate dtx =
+        -- currently only va metadata
+        let meta = dtx_meta dtx in
+        let badT0 = (minBound == dtx_tm_ini meta) in
+        let badTF = (maxBound == dtx_tm_fin meta) in
+        let badDT = (dtx_tm_ini meta > dtx_tm_fin meta) in
+        let badCT = (dtx_count meta < 1) in
+        if badT0 then err "t0 undefined or invalid" else
+        if badTF then err "tf undefined or invalid" else
+        if badDT then err "invalid timing; t0 > tf" else
+        if badCT then err "ct undefined or invalid" else
+        return dtx
+    bt ("t0",rdTime -> Just t0) = um $ \ m -> 
+        let dupT0 = (minBound /= dtx_tm_ini m) in
+        if dupT0 then err "t0 defined twice" else
+        return $ m { dtx_tm_ini = t0 }
+    bt ("tf",rdTime -> Just tf) = um $ \ m -> 
+        let dupTF = (maxBound /= dtx_tm_fin m) in
+        if dupTF then err "tf defined twice" else
+        return $ m { dtx_tm_fin = tf }
+    bt ("ct",rdNat  -> Just ct) = um $ \ m -> 
+        let dupCT = (minBound /= dtx_count m) in
+        if dupCT then err "ct defined twice" else
+        return $ m { dtx_count = ct }
+    bt ("an",rdWord -> Just an) = um $ \ m ->
+        let dupAN = WS.member an (dtx_anno m) in
+        if dupAN then err (show an ++ " annotated twice") else
+        let anno' = WS.insert an (dtx_anno m) in
+        return $ m { dtx_anno = anno' }
+    bt ("rename", rdWord2 -> Just (foo,bar)) = \ dtx ->
+        let dupRN = WM.member foo (dtx_rename dtx) in
+        if dupRN then err (show foo ++ " renamed twice") else
+        let rn' = WM.insert foo bar (dtx_rename dtx) in
+        return $ dtx { dtx_rename = rn' }
+    bt ("define", rdUpdate -> Just (w,ao)) = upd w (Define ao)
+    bt ("update", rdUpdate -> Just (w,ao)) = upd w (Update ao)
+    bt ("delete", rdWord -> Just w) = upd w Delete
+    bt (w, AO_Code ao) = const $ err ("unrecognized action: @" ++ show (w:ao))
+    -- helper functions
+    um fn dtx = 
+        fn (dtx_meta dtx) >>= \ m' -> 
+        return $ dtx { dtx_meta = m' }
+    upd w upd dtx =
+        let dupUPD = WM.member w (dtx_update dtx) in
+        if dupUPD then err (show w ++ " updated twice") else
+        let upd' = WM.insert w upd (dtx_update dtx) in
+        return $ dtx { dtx_update = upd' }
 
+-- simple AO structure readers
+rdTime :: AO_Code -> Maybe T
+rdTime (AO_Code [AO_Text t]) = parseTime t
+rdTime _ = Nothing
+
+rdWord :: AO_Code -> Maybe Word
+rdWord (AO_Code [AO_Word w]) = Just w
+rdWord _ = Nothing
+
+rdWord2 :: AO_Code -> Maybe (Word,Word)
+rdWord2 (AO_Code [AO_Word a, AO_Word b]) = Just (a,b)
+rdWord2 _ = Nothing
+
+rdUpdate :: AO_Code -> Maybe (Word,AO_Code)
+rdUpdate (AO_Code (AO_Word w : ao')) = Just (w, AO_Code ao')
+rdUpdate _ = Nothing
+
+rdNat :: AO_Code -> Maybe Int
+rdNat (AO_Code [AO_Num r]) = 
+    let n = numerator r in
+    let okN = (n >= 0) && (n < maxInt) in
+    let ok = (1 == denominator r) && okN in 
+    if ok then Just (fromInteger n) else Nothing
+rdNat _ = Nothing
+
+maxInt :: Int
+maxInt = maxBound

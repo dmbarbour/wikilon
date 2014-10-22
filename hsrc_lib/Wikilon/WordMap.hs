@@ -2,12 +2,14 @@
 -- interned and have a unique hash identity.
 module Wikilon.WordMap
     ( WordMap, empty, null, size
-    , lookup, insert, delete, filter
+    , lookup, member, insert, delete, filter
     , union, difference, intersection
     , toList, fromList, keys, elems
+    , toSortedList, sortedKeys
     ) where
 
 import Prelude hiding (null, lookup, filter)
+import Data.Function (on)
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.List as L
@@ -26,6 +28,9 @@ null = IntMap.null . _imap
 
 size :: WordMap a -> Int
 size = IntMap.size . _imap
+
+member :: Word -> WordMap a -> Bool
+member w = IntMap.member (hash w) . _imap
 
 lookup :: Word -> WordMap a -> Maybe a
 lookup w m = fmap _val $ IntMap.lookup (hash w) (_imap m)
@@ -52,12 +57,19 @@ toList :: WordMap a -> [(Word,a)]
 toList = fmap wp . IntMap.elems . _imap where
     wp (W w v) = (w,v)
 
+-- | obtain a deterministically, lexicographically ordered list
+toSortedList :: WordMap a -> [(Word,a)]
+toSortedList = L.sortBy (compare `on` (wordToUTF8 . fst)) . toList
+
 fromList :: [(Word,a)] -> WordMap a
 fromList = L.foldl' ins empty where
     ins m (w,v) = insert w v m
 
 keys :: WordMap a -> [Word]
 keys = fmap _word . IntMap.elems . _imap
+
+sortedKeys :: WordMap a -> [Word]
+sortedKeys = L.sortBy (compare `on` wordToUTF8) . keys
 
 elems :: WordMap a -> [a]
 elems = fmap _val . IntMap.elems . _imap

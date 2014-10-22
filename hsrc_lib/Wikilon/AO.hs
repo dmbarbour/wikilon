@@ -26,8 +26,8 @@
 --
 -- I still plan to eventually support Ambiguous AO, where we can
 -- define a whole search-space of programs very quickly by use of
--- phrases like: `(0|1|2)(foo|bar)(baz|qux)`. Likely, this will be
--- a special IDE-supported search rather than a runtime search.
+-- phrases like: `(0|1|2)(foo|bar)(baz|qux)`. However, for the near
+-- future, I'd like to focus on unambiguous code.
 --
 -- Wikilon will still limit which capabilities may be embedded in
 -- source code to just sealers and annotations. Anything else
@@ -36,7 +36,7 @@
 module Wikilon.AO
     ( AO_Code(..), AO_Action(..), PrimOp(..)
     , aoWords, aoMapWords
-    , getAO, getAO', putAO
+    , getAO, getAO', putAO, putAO'
     , module Wikilon.Word
     ) where
 
@@ -130,26 +130,28 @@ instance IsString AO_Code where
                 error $ "\nparsed OK: " ++ show code
                      ++ "\nhalted at: " ++ sRem
 
--- | Serialize AO into binary. 
+-- | Serialize AO into binary. Doesn't add a space before the first
+-- element unless for multi-line text.
 putAO :: [AO_Action] -> B.PutM ()
-putAO (op:ops) = putAction op >> putSP ops
+putAO (op:ops) = putAction op >> putAO' ops
 putAO [] = return ()
 
--- put a space then put the next action (if any).
---
--- Text always adds SP for inline text or LF for multiline text. To
--- avoid doubling number of spaces, text is treated as special case. 
-putSP :: [AO_Action] -> B.PutM ()
-putSP [] = return ()
-putSP (AO_Text txt : ops) = putSPText txt >> putSP ops 
-putSP ops = B.put ' ' >> putAO ops
+-- | If there is any content, put a space followed by that content.
+-- For multi-line text, the space will be changed for a newline. This
+-- function helps avoid adding unnecessary spaces. 
+putAO' :: [AO_Action] -> B.PutM ()
+putAO' [] = return ()
+putAO' (AO_Text txt : ops) = putSPText txt >> putAO' ops 
+putAO' ops = B.put ' ' >> putAO ops
 
+-- put action ASSUMING we have a prior word separator
 putAction :: AO_Action -> B.Put
 putAction (AO_Word w) = B.putByteString (wordToUTF8 w)
 putAction (AO_Block ao) = B.put '[' >> putAO ao >> B.put ']'
 putAction (AO_ABC abc) = B.put '%' >> mapM_ putOp abc
 putAction (AO_Num n) = putNum n
-putAction (AO_Text txt) = putSPText txt
+putAction (AO_Text txt) | isInlineText txt = putInlineText txt
+                        | otherwise = B.put '\n' >> putMultilineText txt
 putAction (AO_Tok tok) = putTok tok
 
 putOp :: PrimOp -> B.Put
@@ -166,24 +168,29 @@ toDecimal = either (const Nothing) Just . Dec.eitherFromRational
 putShow :: (Show a) => a -> B.PutM ()
 putShow = mapM_ B.put . show
 
--- conservatively add spaces or newlines before text literals
--- (this ensures a safe parse in a broader range of contexts).
-putSPText :: String -> B.PutM ()
-putSPText t | isInlineText t = B.put ' ' >> B.put '"' >> mapM_ B.put t >> B.put '"'
-            | otherwise      = B.put '\n' >> B.put '"' >> putMLT t >> B.put '\n' >> B.put '~'
-
 -- inline text if it's relatively short and contains only characters
 -- that may be part of inline text (i.e. no LF or double quote).
 isInlineText :: String -> Bool
 isInlineText t = 
-    let maxInlineTextLen = 64 in
+    let maxInlineTextLen = 100 in
     let (hd,tl) = L.splitAt maxInlineTextLen t in
     (null tl) && (L.all isInlineTextChar hd) 
+
+-- assume we've a proper separator for the text
+putInlineText, putMultilineText :: String -> B.PutM ()
+putInlineText t = B.put '"' >> mapM_ B.put t >> B.put '"'
+putMultilineText t = B.put '"' >> putMLT t >> B.put '\n' >> B.put '~' 
 
 putMLT :: String -> B.PutM ()
 putMLT ('\n':cs) = B.put '\n' >> B.put ' ' >> putMLT cs -- escape LF
 putMLT (c:cs) = B.put c >> putMLT cs
 putMLT [] = return ()
+
+-- conservatively add spaces or newlines before text literals
+-- (this ensures a safe parse in a broader range of contexts).
+putSPText :: String -> B.PutM ()
+putSPText t | isInlineText t = B.put ' ' >> putInlineText t
+            | otherwise      = B.put '\n' >> putMultilineText t
 
 putTok :: String -> B.PutM ()
 putTok tok = assert (validTok tok) $ B.put '{' >> mapM_ B.put tok >> B.put '}'
@@ -196,8 +203,8 @@ getAO :: Bool -> B.Get [AO_Action]
 getAO b = snd <$> getAO' b
 
 -- | Get as many actions as we can, skipping any final white space.
--- we're right at the edge of what's available! The additional
--- boolean indicates whether we ended just after a newline.
+-- The additional boolean indicates whether we ended just after a
+-- newline.
 getAO' :: Bool -> B.Get (Bool, [AO_Action])
 getAO' = B.label "toplevel AO parser" . loop [] where
     loop ra bLF = 

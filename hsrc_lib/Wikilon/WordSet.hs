@@ -6,10 +6,12 @@ module Wikilon.WordSet
     , member, insert, delete, filter
     , union, difference, intersection
     , toList, fromList
+    , toSortedList
     , map
     ) where
 
 import Prelude hiding (null, lookup, map, filter)
+import Data.Function (on)
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.List as L
@@ -44,6 +46,12 @@ toList = IntMap.elems . _imap
 
 fromList :: [Word] -> WordSet
 fromList = L.foldl' (flip insert) empty
+
+-- | Obtain a *lexicographically* sorted list of words.
+-- The output from toList has a non-deterministic order 
+-- based on interning. toSortedList will be deterministic.
+toSortedList :: WordSet -> [Word]
+toSortedList = L.sortBy (compare `on` wordToUTF8) . toList
 
 union :: WordSet -> WordSet -> WordSet
 union a b = WordSet (IntMap.union (_imap a) (_imap b))

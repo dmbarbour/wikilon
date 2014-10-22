@@ -52,6 +52,10 @@ tmDay = toInteger . _tmDay
 tmPicos :: T -> Integer
 tmPicos = toInteger . _tmPicos
 
+instance Bounded T where
+    minBound = T minBound 0
+    maxBound = T maxBound (fromInteger (picosInDay - 1))
+
 -- | `mkTime days picos`
 -- smart constructor for time 
 mkTime :: Integer -> Integer -> T
