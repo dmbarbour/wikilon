@@ -33,14 +33,12 @@ empty :: WordSearchIndex
 empty = WSI M.empty
 
 -- | Insert a collection of words to the search.
-insert :: [Word] -> WordSearchIndex -> WordSearchIndex
-insert ws wsi = WSI (L.foldl' ins (_content wsi) ws) where
-    ins m w = M.insert (wordToUTF8 w) w m 
+insert :: Word -> WordSearchIndex -> WordSearchIndex
+insert w wsi = WSI $ M.insert (wordToUTF8 w) w (_content wsi)
 
 -- | Remove a collection of words from the search.
-delete :: [Word] -> WordSearchIndex -> WordSearchIndex
-delete ws wsi = WSI (L.foldl' del (_content wsi) ws) where
-    del m w = M.delete (wordToUTF8 w) m
+delete :: Word -> WordSearchIndex -> WordSearchIndex
+delete w wsi = WSI $ M.delete (wordToUTF8 w) (_content wsi)
 
 -- | Seek an exact match for an existing word. It the word isn't
 -- found, do not intern.  

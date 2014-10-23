@@ -127,11 +127,8 @@ newDef w m = maybe False isDefine $ WM.lookup w m
 --   * subtract newly defined words from our rename map
 --   * carefully compose rename maps
 --
--- It is possible that we rename foo→bar and bar→baz in one step. We
--- could perform a topological sort (bar→baz before foo→bar), or we
--- can run this as a single atomic step. Either way, it's important
--- that we don't arbitrarily order renaming of words, or we might
--- accidentally merge foo and bar.
+-- It is possible to rename foo→bar, bar→baz, baz→foo in one step.
+-- So, the only option is to rename all the words atomically.
 --
 renameDTX :: RenameMap -> DictTX -> DictTX
 renameDTX renameMap dtx =
@@ -171,7 +168,12 @@ renameDTX renameMap dtx =
 -- It's possible a map contains (foo,bar) and (bar,baz), indicating
 -- two words change at the same time. This results from (bar,baz)
 -- performed before (foo,bar). It should work without changes, since
--- renameDTX applies only a single step.
+-- renameDTX applies only a single step. Even cycles are possible:
+--
+--    fromList [(baz,bazOld),(bar,baz),(foo,bar)]
+--    fromList [(bazOld,foo)]
+--    --------------
+--    fromList [(baz,foo),(foo,bar),(bar,baz)]
 --
 -- Also, it's possible that yesterday we renamed foo to bar, and
 -- today we renamed bar back to foo (changed our mind!). In that
@@ -413,8 +415,14 @@ getTXActions = loop [] where
     eotx ra = P.char '@' >> return (L.reverse ra)
     next ra = getAO' False >>= proc ra
     proc ra (True, (AO_Word w : ao)) = loop ((w, AO_Code ao):ra)
-    proc _ra (_bLF, _ao) = fail "invalid dictionary transaction"
+    proc _ra (False, ao) = fail $ "lacks terminal LF `@" ++ sc ao
+    proc _ra (True, ao) = fail $ "invalid action word `@" ++ sc ao   
+    sc = showCut 32
 
+showCut :: (Show a) => Int -> a -> String
+showCut n a =
+    let (hd,tl) = L.splitAt n (show a) in
+    if (L.null tl) then hd else hd ++ "…"
 
 -- build a transaction from a set of actions, or report an error.
 -- this is very ugly code. It uses a bunch of sentinel values, and
@@ -497,7 +505,7 @@ rdUpdate _ = Nothing
 rdCount :: AO_Code -> Maybe Int
 rdCount (AO_Code [AO_Num r]) | ok = Just (fromInteger n) where
     n = numerator r
-    ok = okMin && okMax && okDen
+    ok = okDen && okMin && okMax
     okMin = n >= 0
     okMax = n <= toInteger maxInt
     okDen = 1 == denominator r
