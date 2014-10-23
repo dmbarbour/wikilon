@@ -23,7 +23,7 @@ module Wikilon.DictST
 --  dictionary state - update and access
 --  serialization of dictionary
 
-import Control.Monad ((>=>))
+import Control.Monad ((>=>), foldM)
 import Control.Exception (assert)
 import qualified Data.List as L
 
@@ -73,9 +73,10 @@ emptyDict = DictST { _defs = WM.empty, _rlu = WM.empty }
 -- will be rejected with a human meaningful error if it would lead
 -- to an invalid dictionary state or database.
 updateDict :: DictTX -> DictST -> Either String DictST
-updateDict dtx = rn >=> upd where
+updateDict dtx = rn >=> upd >=> vd where
     rn = applyRN (dtx_rename dtx)
     upd = applyUPD (dtx_update dtx)
+    vd = validUPD (dtx_update dtx)
     -- metadata is NOT used to update dictionary state
 
 -- | Renaming Notes:
@@ -196,12 +197,115 @@ rewriteIdx rnm m0 = m' where
             Just a -> WM.insert bar a m
             Nothing -> assertImpossible $ WM.delete bar m
 
+-- | Apply a set of updates to the dictionary.
+--
+-- At this point, renaming has already been done, and the updates
+-- can be applied one at a time (a lot easier to implement!). The
+-- possible errors we can recognize at this point are:
+--
+--   (a) we define a word that already exists
+--   (b) we update or delete a word that does not exist
+--   
+applyUPD :: UpdateMap -> DictST -> Either String DictST
+applyUPD upm st0 = foldM (flip $ uncurry tryUpd) st0 (WM.toList upm)
+
+tryUpd :: Word -> DictUpd -> DictST -> Either String DictST
+tryUpd foo (Define ao) (DictST defs rlu) =
+    case WM.lookup foo defs of
+        Just _code -> Left ("cannot define " ++ show foo ++ " (already has def)")
+        Nothing ->
+            let defs' = WM.insert foo ao defs in
+            let ws = WS.fromList $ aoWords ao in
+            let rlu' = insertRLU foo ws rlu in
+            Right $ DictST defs' rlu'
+tryUpd foo (Update newAO) (DictST defs rlu) =
+    case WM.lookup foo defs of
+        Nothing -> Left ("cannot update " ++ show foo ++ " (not already defined)")
+        Just oldAO ->
+            let defs' = WM.insert foo newAO defs in
+            let wsOld = WS.fromList $ aoWords oldAO in
+            let wsNew = WS.fromList $ aoWords newAO in
+            let rluD = deleteRLU foo (wsOld `WS.difference` wsNew) rlu in
+            let rlu' = insertRLU foo (wsNew `WS.difference` wsOld) rluD in
+            Right $ DictST defs' rlu' 
+tryUpd foo Delete (DictST defs rlu) =
+    case WM.lookup foo defs of
+        Nothing -> Left ("cannot delete " ++ show foo ++ " (not defined)")
+        Just code ->
+            let defs' = WM.delete foo defs in
+            let ws = WS.fromList $ aoWords code in
+            let rlu' = deleteRLU foo ws rlu in
+            Right $ DictST defs' rlu'
+
+-- insertRLU foo [words]; indicate that foo uses word.
+-- This should be the first 
+insertRLU :: Word -> WordSet -> ReverseLookup -> ReverseLookup
+insertRLU foo = flip (L.foldl' addFooTo) . WS.toList where
+    addFooTo rlu w =
+        let s0 = maybe WS.empty id $ WM.lookup w rlu in
+        assert (not $ WS.member foo s0) $
+        let s' = WS.insert foo s0 in
+        WM.insert w s' rlu
+
+-- deleteRLU foo [words]; indicate foo no longer uses words.
+deleteRLU :: Word -> WordSet -> ReverseLookup -> ReverseLookup
+deleteRLU foo = flip (L.foldl' remFooFrom) . WS.toList where
+    remFooFrom rlu w = 
+        let s0 = maybe WS.empty id $ WM.lookup w rlu in
+        assert (WS.member foo s0) $
+        let s' = WS.delete foo s0 in
+        if WS.null s' then WM.delete w rlu else
+        WM.insert w s' rlu
+
+-- | Validate the dictionary!
+--
+-- We've already modified the dictionary according to these updates.
+-- But it might be that, after all is said and done, some of these
+-- words are left in a bad state. At this time, we'll recognize two
+-- kinds of errors:
+--
+--  (a) deleted word still has clients
+--  (b) we've introduced a cyclic definition
+--
+-- Basically, this is as far as we'll go with validating in this
+-- module. However, downstream modules may further insist that 
+-- words have no obvious type errors, tests pass, etc..
+--   
+validUPD :: UpdateMap -> DictST -> Either String DictST
+validUPD upm st@(DictST defs rlu) =
+    -- deleted words in active use
+    let lDel = L.filter (flip WM.member rlu) $ WM.keys $ WM.filter isDelete upm in
+    let emsgDel = "cannot delete words in use: " ++ show lDel in
+    if not (L.null lDel) then Left emsgDel else 
+    -- cycle search via partial compile
+    let updWords = WM.keys $ WM.filter (not . isDelete) upm in
+    let lCyc = findCycle defs updWords in
+    let emsgCyc = "update would introduce cycle: " ++ show lCyc in
+    if not (L.null lCyc) then Left emsgCyc else
+    -- as far as we can tell, dictionary is in good shape
+    Right st
+
+-- | Find a cycle, if possible, halting at the first cycle found. 
+-- If no cycle is found, will return the empty list. This checks
+-- each input word only once, so maximum cost is O(N) with the
+-- dictionary size, and roughly proportional to compiling words
+-- (albeit, minus the space costs).
+findCycle :: DefinitionMap -> [Word] -> [Word]
+findCycle dict = L.reverse . snd . cc WS.empty [] where
+    cc okw _stack [] = (okw,[])
+    cc okw stack (w:ws) =
+        if (L.elem w stack) then (okw,stack) else
+        if (WS.member w okw) then cc okw stack ws else
+        let ans@(okw',cyc) = cc okw (w:stack) (childWords w) in
+        if (L.null cyc) then cc (WS.insert w okw') stack ws
+                        else ans
+    dlu = flip WM.lookup dict
+    childWords (dlu -> Just ao) = L.nub $ aoWords ao
+    childWords _w = assertImpossible []
+
 -- for cases that shouldn't happen (but are well defined anyway)...
 assertImpossible :: a -> a
 assertImpossible = assert impossible where
     impossible = False
-
-applyUPD :: UpdateMap -> DictST -> Either String DictST
-applyUPD = error "TODO!"
 
 
