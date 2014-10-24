@@ -6,7 +6,8 @@
 -- content of each word is just some AO code, which ideally compiles,
 -- is well typed, and passes all tests. 
 --
--- This module describes the dictionary state.
+-- This module describes the dictionary state, and enforces a few
+-- useful structural properties on the code.
 --
 -- In addition to a set of words, a dictionary tracks some useful
 -- metadata about when changes were made, potentially who made them
