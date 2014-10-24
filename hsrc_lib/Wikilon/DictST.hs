@@ -73,11 +73,11 @@ emptyDict = DictST { _defs = WM.empty, _rlu = WM.empty }
 -- will be rejected with a human meaningful error if it would lead
 -- to an invalid dictionary state or database.
 updateDict :: DictTX -> DictST -> Either String DictST
-updateDict dtx = rn >=> upd >=> vd where
-    rn = applyRN (dtx_rename dtx)
+updateDict dtx = rn >=> vda >=> upd >=> vdt where
+    rn  = applyRN (dtx_rename dtx)
+    vda = validAnno dtx
     upd = applyUPD (dtx_update dtx)
-    vd = validUPD (dtx_update dtx)
-    -- metadata is NOT used to update dictionary state
+    vdt = validUPD (dtx_update dtx)
 
 -- | Renaming Notes:
 --
@@ -297,11 +297,32 @@ findCycle dict = L.reverse . snd . cc WS.empty [] where
         if (L.elem w stack) then (okw,stack) else
         if (WS.member w okw) then cc okw stack ws else
         let ans@(okw',cyc) = cc okw (w:stack) (childWords w) in
-        if (L.null cyc) then cc (WS.insert w okw') stack ws
-                        else ans
+        if not (L.null cyc) then ans else
+        cc (WS.insert w okw') stack ws
     dlu = flip WM.lookup dict
     childWords (dlu -> Just ao) = L.nub $ aoWords ao
     childWords _w = assertImpossible []
+
+
+-- | Validate the Annotations.
+--
+-- Annotation words must be defined in the dictionary, either before
+-- or after the transaction. We'll test for annotation words by their
+-- membership either in the dictionary or in the update set. The test
+-- is applied after renaming, which is important because rename has 
+-- already been applied to annotation words.
+--
+-- If a transaction deletes an annotation word, that's also the last
+-- opportunity for that annotation word to appear.
+validAnno :: DictTX -> DictST -> Either String DictST
+validAnno dtx st =
+    let okAnno w = WM.member w (_defs st) || WM.member w (dtx_update dtx) in
+    let annoWords = WS.toList $ dtx_anno $ dtx_meta $ dtx in
+    let badWords = L.filter (not . okAnno) annoWords in
+    let emsgBadAnno = "undefined annotation words: " ++ show badWords in
+    if not (L.null badWords) then Left emsgBadAnno else
+    Right st 
+
 
 -- for cases that shouldn't happen (but are well defined anyway)...
 assertImpossible :: a -> a
