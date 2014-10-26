@@ -10,7 +10,8 @@
 module Wikilon.DictTX 
     ( DictTX(..), DTXMeta(..), DictUpd(..)
     , UpdateMap, RenameMap, AnnoWords
-    , isUpdate, isDefine, isDelete, addUpdate
+    , isUpdate, isDefine, isDelete
+    , mergeUpdate, addUpdate
     , renameDTX, deepRenameDTX, mergeRenameMaps
     , mergeDTX, mergeHeuristicDTX, heuristicDTX
     , mapDictUpd
@@ -108,16 +109,25 @@ isDelete :: DictUpd -> Bool
 isDelete Delete = True
 isDelete _ = False
 
--- | Add an update to an atomic collection of updates.
--- Will merge: Define+Delete → forget word, remove from update
---             Define+Update → Define (updated)
-addUpdate :: Word -> DictUpd -> UpdateMap -> UpdateMap
-addUpdate w Delete m | newDef w m = WM.delete w m  
-addUpdate w (Update ao) m | newDef w m = WM.insert w (Define ao) m
-addUpdate w upd m = WM.insert w upd m
+-- | mergeUpd older newer - compose or cancel two updates.
+--     Define Delete → cancel
+--     Define Update → Define (updated)
+--     Delete Define → Update
+mergeUpdate :: DictUpd -> DictUpd -> Maybe DictUpd
+mergeUpdate (Define _) Delete = Nothing
+mergeUpdate (Define _) (Update ao) = Just (Define ao)
+mergeUpdate (Delete) (Define ao) = Just (Update ao)
+mergeUpdate _ upd = Just upd
 
-newDef :: Word -> UpdateMap -> Bool
-newDef w m = maybe False isDefine $ WM.lookup w m
+-- | Add an update to an atomic collection of updates.
+-- Will merge with any existing update on same word.
+addUpdate :: Word -> DictUpd -> UpdateMap -> UpdateMap
+addUpdate w u m = 
+    case WM.lookup w m of
+        Nothing -> WM.insert w u m 
+        Just u0 -> case mergeUpdate u0 u of
+                      Nothing -> WM.delete w m
+                      Just u' -> WM.insert w u' m
 
 -- | Applying rename operations is one of the more challenging 
 -- features for dictionary transactions. We must:
