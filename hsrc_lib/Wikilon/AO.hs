@@ -4,19 +4,18 @@
 -- into bytecode. AO makes ABC accessible to humans, without being
 -- opaque - i.e. one can gain a good feel for the bytecode via use
 -- of AO.
---
--- Wikilon uses parsers based on the `cereal` class. This is convenient
--- for efficient integration with serializers and acid-state. Wikilon's
--- parser for AO is slightly simplified from that used in the original
+-- 
+-- Wikilon's parser for AO is simplified from that used in the original
 -- 'awelon' project, mostly favoring a less sophisticated number type.
--- useful for both 
--- Wikilon will use a simplified parser for AO. I'm not going to worry
--- about good parse errors, since (a) AO definitions are too small for
--- detailed location informaiton to matter, and (b) I'll likely have a
--- structured editor before long. Wikilon will be a bit more accepting,
--- allowing all inline ABC primitive operators except for SP and LF.
+-- This is partly because we'll be using structured editors, and output
+-- of number types will not preserve input structure. It's also partly
+-- because Awelon project has its own base16 model.
 --
--- I shall still forbid words to start with `@` for escapes, control
+-- Token policies are not enforced by the parser. Wikilon will generally
+-- reject all tokens except for annotations, sealers, and unsealers. But
+-- this is enforced at a separate layer.
+--
+-- I shall still forbid words to start with `@` for streaming, escapes,
 -- control, export; or `%` for inline ABC. I'll reserve the unicode 
 -- white brackets, braces, parens. 
 --
@@ -171,10 +170,10 @@ putShow = mapM_ B.put . show
 -- inline text if it's relatively short and contains only characters
 -- that may be part of inline text (i.e. no LF or double quote).
 isInlineText :: String -> Bool
-isInlineText t = 
+isInlineText txt = 
     let maxInlineTextLen = 100 in
-    let (hd,tl) = L.splitAt maxInlineTextLen t in
-    (null tl) && (L.all isInlineTextChar hd) 
+    let tl = L.drop maxInlineTextLen txt in
+    (L.null tl) && (L.all isInlineTextChar txt)
 
 -- assume we've a proper separator for the text
 putInlineText, putMultilineText :: String -> B.PutM ()
