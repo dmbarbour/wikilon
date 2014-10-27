@@ -169,7 +169,7 @@ applyRN' rnm st0 = st' where
 
 -- | Update an RLU word set via rename map.
 --
--- E.g. if `foo` is defined as `bar` and `baz`, and we rename `foo`
+-- E.g. if `foo` is defined as `bar baz`, and we rename `foo`
 -- to `foo2`, then we must poke into the reverse lookup for `bar`
 -- and `baz` and replace `foo` with `foo2`. 
 --

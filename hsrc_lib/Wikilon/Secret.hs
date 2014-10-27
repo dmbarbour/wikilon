@@ -5,7 +5,7 @@
 -- unique identifiers, keys, and securely pseudo-random numbers.
 -- These other values shall generally be *deterministic*, i.e.
 -- such that the same values are recomputed after a restart, yet
--- secure and specific to the Wikilon instance.
+-- secure and specific to each Wikilon instance.
 --
 -- At no point is the secret to be directly shared; rather, this
 -- secret shall be applied primarily through use of HMAC. 
@@ -19,8 +19,8 @@ module Wikilon.Secret
 
 import Data.ByteString (ByteString)
 import System.Entropy (getEntropy)
+import Wikilon.SecureHash (hmacBlockSize)
 
--- | generate a new secret value
+-- | generate a new secret value of optimal size for use with hmac.
 newSecret :: IO ByteString
-newSecret = getEntropy 256
-
+newSecret = getEntropy hmacBlockSize

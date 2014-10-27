@@ -36,12 +36,12 @@ helpMessage =
  \      if TLS is enabled, insecure connections are denied\n\
  \\n\
  \Wikilon is a wiki, a software platform, an integrated development\n\
- \environment for the Awelon project. Pages contain Awelon Object (AO)\n\
+ \environment for the Awelon project. Pages consist of Awelon Object\n\
  \code, and may define new web applications or services.\n\
  \\n\
  \Most configuration of Wikilon should be performed through a browser.\n\
  \After starting Wikilon, open a browser to http(s)://localhost:Port\n\
- \to get started. An admin session key will be printed to console."
+ \to get started. An administrative code is printed to console."
 
 data Args = Args 
     { _port  :: Maybe Int
@@ -129,7 +129,7 @@ runWikilonInstance a = mainBody where
         Sys.putStrLn ("  Home:  " ++ showFP home) >>
         Sys.putStrLn ("  Port:  " ++ show port) >>
         Sys.putStrLn ("  HTTPS: " ++ show bUseTLS) >>
-        Sys.putStrLn ("  Admin: " ++ Wikilon.webKey app)
+        Sys.putStrLn ("  Admin: " ++ Wikilon.adminCode app)
 
 showFP :: FS.FilePath -> String
 showFP = T.unpack . either id id . FS.toText

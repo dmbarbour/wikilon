@@ -1,11 +1,16 @@
 
--- | A 'Session' represents a long-running interaction with a Wiki.
+-- | A Wiki will have a set of users. The assumption is that users
+-- will have 'bursty' interactions with the Wiki. 
 --
--- Typically, a session is for a single user. Though, Wikilon does not
--- prevent multi-user shared sessions. A single user may have many 
--- sessions, e.g. for different tasks. The relationship between users
--- and sessions is pretty loose... Wikilon doesn't actually have a 
--- concept of 'User' except as a potential authentication measure.
+--  
+-- interaction with a wiki - active for a few hours, gone for a few
+-- days, back again. While active, a user may have a large number
+-- of active views of the Wiki.
+--
+-- The Wikilon User is identified by a randomly generated string.
+-- In addition, a user will have some local state. 
+-- Some basic information about the user's interactions will be 
+-- recorded over time. 
 --
 -- Sessions will usually be obtained by starting as a guest in a guest
 -- friendly wiki, or by invite or delegation from an existing session.
@@ -25,7 +30,7 @@
 -- sessions and users. So long as there are no conflicts, the merges
 -- can happen automatically. 
 -- 
-module Wikilon.Session
+module Wikilon.User
     (
     ) where
 

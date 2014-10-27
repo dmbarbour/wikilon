@@ -92,13 +92,12 @@ Library
     Wikilon.WordSet
     Wikilon.WordSearch
 
+    Wikilon.Database
     Wikilon.DictST
     Wikilon.DictTX
 
-
-    Wikilon.Database
-    Wikilon.Session
     Wikilon.Wiki
+    Wikilon.User
 
     Wikilon.AO
     Wikilon.ABC

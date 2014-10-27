@@ -17,6 +17,7 @@ module Wikilon.DictTX
     , mapDictUpd
     , dictDecayParams
     , putDictTX, getDictTX
+    , encodeDict, decodeDict
     ) where
 
 --  serialization of transactions (Binary instance)
@@ -27,8 +28,10 @@ import Control.Applicative ((<|>))
 import qualified Data.List as L
 import Data.Ratio
 
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Binary as B
 import qualified Data.Binary.Put as B
+import qualified Data.Binary.Get as B
 import qualified Codec.Binary.UTF8.Generic as UTF8
 import qualified Wikilon.ParseUtils as P
 
@@ -328,6 +331,7 @@ instance B.Binary DictTX where
 
 instance Show DictTX where 
     show = UTF8.toString . B.encode
+    showList = showString . UTF8.toString . encodeDict
 
 -- | Output the dictionary transaction into a bytestring. 
 --
@@ -523,3 +527,27 @@ rdCount _ = Nothing
 
 maxInt :: Int
 maxInt = maxBound
+
+-- | encode a list of transactions into a lazy ByteString.
+-- Each transaction is separated by a newline.
+encodeDict :: [DictTX] -> LBS.ByteString
+encodeDict = B.runPut . en where
+    en (x:xs) = putDictTX x >> more xs
+    en [] = return ()
+    more xs | L.null xs = return ()
+            | otherwise = B.put '\n' >> en xs
+
+-- | decode a list of transactions from a lazy ByteString.
+-- Note that this will always parse to the end of input.
+decodeDict :: LBS.ByteString -> Either String [DictTX]
+decodeDict = tryDecode where
+    tryDecode bs = case B.runGetOrFail dc bs of
+        Left (_,_,emsg) -> Left emsg
+        Right (_,_,txs) -> Right txs
+    dc = done [] <|> next []
+    next r = 
+        getDictTX >>= \ tx ->
+        let r' = (tx:r) in
+        (done r' <|> (P.char '\n' >> next r'))
+    done r = P.eof >> return (L.reverse r)
+

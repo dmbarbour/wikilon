@@ -5,7 +5,7 @@
 -- its useful divisibility into thirds.
 module Wikilon.SecureHash 
     ( SecureHash, secureHash, secureHashLazy
-    , hmac
+    , hmac, hmacBlockSize
     ) where
 
 import qualified Data.ByteString as B
@@ -19,6 +19,9 @@ type SecureHash = B.ByteString
 -- for type inference
 toSecureHash :: CH.Digest CH.SHA3_384 -> SecureHash
 toSecureHash = Data.Byteable.toBytes
+
+hashContext :: CH.Context CH.SHA3_384
+hashContext = CH.hashInit
 
 -- | generate a secure hash from any bytestring.
 secureHash :: B.ByteString -> SecureHash
@@ -35,3 +38,8 @@ secureHashLazy = toSecureHash . CH.hashlazy
 -- may truncate if using less security is okay
 hmac :: B.ByteString -> B.ByteString -> SecureHash
 hmac secret = toSecureHash . CH.hmacGetDigest . CH.hmac secret
+
+-- | maximum effective secret size (in bytes) for HMAC
+hmacBlockSize :: Int
+hmacBlockSize = CH.hashBlockSize hashContext
+
