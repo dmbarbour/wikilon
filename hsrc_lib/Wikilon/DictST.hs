@@ -3,11 +3,13 @@
 -- | The Awelon Object (AO) dictionary is a primary data structure
 -- of Wikilon. AO words form functions, modules, tests, documentation,
 -- directives, web-applications, and wiki pages. But, essentially, the
--- content of each word is just some AO code, which ideally compiles,
--- is well typed, and passes all tests. 
+-- content of each word is just some AO code.
 --
--- This module describes the dictionary state, and enforces a few
--- useful structural properties on the code.
+-- This module describes the dictionary state, and enforces useful 
+-- structural properties on the code: that words are fully defined, 
+-- acyclic. Higher level properties, such as requiring type safety,
+-- tests pass, protecting frozen words, must be achieved at a higher
+-- layer.
 --
 -- In addition to a set of words, a dictionary tracks some useful
 -- metadata about when changes were made, potentially who made them

@@ -306,8 +306,8 @@ mergeDTX' old new = dtx' where
                 , dtx_anno   = anno'
                 , dtx_count  = count'
                 }
-    tm_ini' = dtx_tm_ini oldMeta
-    tm_fin' = dtx_tm_fin newMeta
+    tm_ini' = min (dtx_tm_ini oldMeta) (dtx_tm_ini newMeta)
+    tm_fin' = max (dtx_tm_fin oldMeta) (dtx_tm_fin newMeta)
     count'  = dtx_count oldMeta + dtx_count newMeta
     anno'    = WS.filter (not . lostWord) baseAnno
     baseAnno = dtx_anno oldMeta `WS.union` dtx_anno newMeta
