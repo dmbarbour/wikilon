@@ -47,9 +47,9 @@ alph8 = fmap (fromIntegral . fromEnum) alphabet
 n16tob16 :: A.UArray Word8 Word8
 n16tob16 = A.listArray (0,15) alph8 -- alphabet is values
 
--- array from ASCII character to numeric value (or 255 sentinel)
+-- array from ASCII character to numeric value (or sentinel)
 b16ton16 :: A.UArray Word8 Word8
-b16ton16 = A.accumArray upd 255 (minBound,maxBound) lst where
+b16ton16 = A.accumArray upd maxBound (minBound,maxBound) lst where
     lst = L.zip alph8 [0..] -- alphabet is index this time
     upd _ = id -- simply assign the given value.
 

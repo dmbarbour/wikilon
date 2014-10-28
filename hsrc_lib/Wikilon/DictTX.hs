@@ -15,7 +15,6 @@ module Wikilon.DictTX
     , renameDTX, deepRenameDTX, mergeRenameMaps
     , mergeDTX, mergeHeuristicDTX, heuristicDTX
     , mapDictUpd
-    , dictDecayParams
     , putDictTX, getDictTX
     , encodeDict, decodeDict
     ) where
@@ -41,7 +40,6 @@ import qualified Wikilon.WordMap as WM
 import qualified Wikilon.WordSet as WS
 
 import Wikilon.Time
-import Wikilon.Database
 import Wikilon.AO
 
 
@@ -235,18 +233,23 @@ mergeDTX old new = fst $ mergeHeuristicDTX old new
 
 -- | For Wikilon, I'm aiming for the following characteristics:
 --
---   1) prefer many values for every word
+--   1) prefer to preserve many values for every word
 --      Therefore: subtract 1 for each overlapping word in update.
 --
 --   2) prefer to merge updates from a single user or project
+--      Assumption: user or project uses common annotations
 --      Therefore: subtract 1 for each difference in annotations
 --                 add 1 for each overlap in annotations
 --
---   3) prefer long term history be evenly sampled over real time
---      Therefore: subtract 1 for every 12 hours in scope of merge
+--   3) weakly prefer history be sampled evenly over real time
+--      Therefore: subtract 1 for every 12 hours in scope
+--
+--   4) weakly prefer history be clustered evenly by event count
+--      Therefore: subtract 1 for every 10 transactions in scope
 --
 -- The merge heuristic weakly adjusts which merges we favor in each
--- decay group. Hopefully, this results in an interesting history.
+-- decay group, theoretically resulting in a smooth and interesting
+-- history.
 --
 heuristicDTX :: DictTX -> DictTX -> Int
 heuristicDTX old new = snd $ mergeHeuristicDTX old new
@@ -254,7 +257,7 @@ heuristicDTX old new = snd $ mergeHeuristicDTX old new
 -- heuristic, assuming that no rename is needed.
 heuristicDTX' :: DictTX -> DictTX -> Int
 heuristicDTX' old new = score where
-    score = wordScore + annoScore + timeScore
+    score = wordScore + annoScore + timeScore + countScore
     wordScore = 
         let m1 = dtx_update old in
         let m2 = dtx_update new in
@@ -265,12 +268,18 @@ heuristicDTX' old new = score where
         let sn = WS.intersection s1 s2 in
         -- subtract overlap twice, but add thrice 
         (3 * WS.size sn) - (WS.size s1 + WS.size s2)
-    timeScore =
+    countScore = 
+        let ct1 = dtx_count (dtx_meta old) in
+        let ct2 = dtx_count (dtx_meta new) in
+        let ctn = ct1 + ct2 in
+        negate $ max 0 (ctn `div` 10)
+    timeScore = 
         let tm_ini = dtx_tm_ini (dtx_meta old) in
         let tm_fin = dtx_tm_fin (dtx_meta new) in
-        let dt = tm_fin `diffTime` tm_ini in
-        let hours12 = 12 * picosInHour in
-        negate $ fromIntegral $ dtToPicos dt `div` hours12
+        let dt = (tm_fin `diffTime` tm_ini) in
+        let hours = dtToPicos dt `div` picosInHour in
+        fromInteger $ negate $ max 0 (hours `div` 12)
+    
 
 picosInHour :: Integer
 picosInHour = picosPerSec * secsPerHour where
@@ -285,14 +294,6 @@ mergeHeuristicDTX old new = (m, h) where
     new' = new { dtx_rename = WM.empty }
     m = mergeDTX'     old' new'
     h = heuristicDTX' old' new'
-
--- | Default parameters for Wikilon.Database.
-dictDecayParams :: Decay DictTX
-dictDecayParams = Decay
-    { decay_merge  = mergeHeuristicDTX
-    , decay_freq   = 8
-    , decay_keep   = 8
-    }
 
 -- same as mergeDTX, but assumes that the new transaction does not
 -- rename anything, and thus that names are consistent.
@@ -311,7 +312,9 @@ mergeDTX' old new = dtx' where
                 }
     tm_ini' = min (dtx_tm_ini oldMeta) (dtx_tm_ini newMeta)
     tm_fin' = max (dtx_tm_fin oldMeta) (dtx_tm_fin newMeta)
-    count'  = dtx_count oldMeta + dtx_count newMeta
+    overflow = (maxBound - dtx_count oldMeta) <= dtx_count newMeta
+    count'  | overflow = maxBound
+            | otherwise = dtx_count oldMeta + dtx_count newMeta
     anno'    = WS.filter (not . lostWord) baseAnno
     baseAnno = dtx_anno oldMeta `WS.union` dtx_anno newMeta
     lostWord w = maybe False isDefine (WM.lookup w oldUpd) -- was defined
@@ -454,7 +457,7 @@ buildTransaction = foldM (flip bt) dtx0 >=> validate where
         let badT0 = (minBound == dtx_tm_ini meta) in
         let badTF = (minBound == dtx_tm_fin meta) in
         let badDT = (dtx_tm_ini meta > dtx_tm_fin meta) in
-        let badCT = (dtx_count meta < 1) in
+        let badCT = (dtx_count meta < 0) in
         if badT0 then err "t0 undefined or invalid" else
         if badTF then err "tf undefined or invalid" else
         if badDT then err "invalid timing; t0 > tf" else
@@ -517,16 +520,13 @@ rdUpdate (AO_Code (AO_Word w : ao')) = Just (w, AO_Code ao')
 rdUpdate _ = Nothing
 
 rdCount :: AO_Code -> Maybe Int
-rdCount (AO_Code [AO_Num r]) | ok = Just (fromInteger n) where
+rdCount (AO_Code [AO_Num r]) | ok = Just n' where
+    ok = (1 == denominator r) && (n > 0)
     n = numerator r
-    ok = okDen && okMin && okMax
-    okMin = n >= 0
-    okMax = n <= toInteger maxInt
-    okDen = 1 == denominator r
+    overflow = n > toInteger (maxBound :: Int)
+    n' | overflow = maxBound
+       | otherwise = fromInteger n
 rdCount _ = Nothing
-
-maxInt :: Int
-maxInt = maxBound
 
 -- | encode a list of transactions into a lazy ByteString.
 -- Each transaction is separated by a newline.

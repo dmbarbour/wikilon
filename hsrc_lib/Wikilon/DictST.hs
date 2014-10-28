@@ -18,7 +18,7 @@
 module Wikilon.DictST
     ( DictST
     , DefinitionMap, ReverseLookup
-    , emptyDict, updateDict
+    , emptyDictST, updateDict
     , dictDefs, dictRLU
     ) where
 
@@ -69,8 +69,8 @@ dictRLU :: DictST -> ReverseLookup
 dictRLU = _rlu
 
 -- | Create a new, empty dictionary.
-emptyDict :: DictST
-emptyDict = DictST { _defs = WM.empty, _rlu = WM.empty }
+emptyDictST :: DictST
+emptyDictST = DictST { _defs = WM.empty, _rlu = WM.empty }
 
 -- | Attempt to update a dictionary with a transaction. The update
 -- will be rejected with a human meaningful error if it would lead
@@ -331,5 +331,4 @@ validAnno dtx st =
 assertImpossible :: a -> a
 assertImpossible = assert impossible where
     impossible = False
-
 

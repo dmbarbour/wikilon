@@ -26,9 +26,9 @@ data WikilonApp = WikilonApp
     , adminCode :: String
     }
 
--- | Prepare a new instance of Wikilon
--- 
--- With a given directory for persistence and identity. 
+-- | Load an existing Wikilon instance, or initialize a new one, 
+-- whose identity and persistence is associated with the given 
+-- directory. 
 loadInstance :: Sys.FilePath -> IO WikilonApp
 loadInstance fp =
     -- create and initialize a Wiki with the given fp.
