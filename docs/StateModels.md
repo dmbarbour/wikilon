@@ -1,7 +1,7 @@
 
 # Organization of State
 
-Each user will be given a personal space for state, e.g. for workspaces and mailbox and whatever else. In addition, wikis may have a public space, e.g. for advertising or sharing data, that any user or application may access. Further, each user might have a few conventional spaces.
+Each user will be given a personal space for state, e.g. for workspaces and mailbox and whatever else. In addition, we'll eventually want some shared spaces for multi-user apps and such. Further, each user might have a few conventional spaces.
 
 A tree-like directory for state could be useful for many reasons.
 
@@ -16,9 +16,9 @@ Though, a tree structure does have some weaknesses, e.g. for representing relati
 Some questions:
 
 * nature of state - bytes, values, objects?
-* how to model relations, associated states?
-* can we limit entanglement of the state space?
 * how to integrate both transactions and RDP?
+* can we limit entanglement of the state space?
+* how to model relations, associated states?
 * how to describe, secure, and share capabilities?
 
 ## Bytes, Values, or Objects? Objects.
@@ -37,31 +37,48 @@ Transactions can deal with any of the aforementioned types. For RDP, it is obvio
 
 With objects, we might allow that not all objects support RDP influence, but those that do could provide a simple update method that receives a *set* of demand values (e.g. represented as a sorted list), thus entering a new state until the set of demands change. If queries are cleanly separated from updates, then observation could be separated almost entirely from influence. 
 
-Potentially, RDP update and transactional update might also be cleanly separated, such that transactions cannot use the RDP update facet, and vice versa.
+Is it feasible toto combine the transactional and RDP update model? Doing so would involve modeling transactions as short-lived demands. However, this idea seems to introduce a lot of complications with:
 
-An interesting possibility is *animated* objects, whose behavior is time-varying with demand in a more continuous fashion, e.g. leveraging an energy model or timeout model or similar. However, I'll leave this idea alone until I have a clean, simple, generic approach to it.
+* stability of signals, potential for retroactive corrections
+* other behaviors may interact instantaneously to demands
+* observing results of adding a demand (`read,write,read,write`)
+* potential interaction with animated reactive state models
+* choosing a duration for demands (e.g. 1µs). 
 
-## Limiting Entanglement
+A simpler and therefore preferable option is to partition our state resources into two entirely distinct classes of objects: one subset of objects for transactional/imperative behaviors, another subset for RDP behaviors. We might distinguish these two subsets by how we construct (discover) them. 
 
-In many object-oriented software systems, objects become deeply connected by references. And while this does allow some very rich expressions of behavior, it also leads to frustration, spaghetti code, and the ever popular 'big ball of mud' architecture.
+Fortunately, we can still have some useful interactions between the RDP and imperative transactional models. Transactions can query RDP resources to some degree. RDP behaviors can query transactional state very easily. It may be feasible to transactionally alter an RDP resource, or to trigger an imperative actions via some RDP state transitions.
 
-I wish to limit entanglement. Ideally:
+I'm somewhat interested in animated reactive state models, e.g. which might change over time. I'm not sure how to address these at the moment. I'll probably need to track many different object models in our resource space, in the end.
+
+## Limiting Entanglement: Pure Objects
+
+In object-oriented software systems, objects become deeply connected by references. While this does allow some very rich expressions of behavior, it also leads to frustration, spaghetti code, and the ever popular 'big ball of mud' architecture. I wish to limit entanglement. Ideally:
 
 * prevent cyclic relationships, which hinder identification of subsystems
 * limit cross authority relationships, which limit practical extraction
 
-However, within these constraints, I would like to preserve some rich interactions between objects. We could do a lot with completely disconnected objects or tree structures. But direct routing of information is a significant performance and expressiveness advantage of conventional object-oriented programming.
+The simplest option is to fully isolate every resource. 
 
-A viable path forward involves:
+* simplifies objects and storage model, similar to dumb files
+* easy to reason about isolated behavior of each resource
+* zero entanglement; easy to extract and reuse objects
+* easy to parallelize computations on multiple resources
+* easy relationship with embedded literals objects
+* glue logic in AO dictionary, RDP behaviors, web apps
+* clear responsibilities for our state resource model
 
-* allow parent objects in tree structure to access children
-* shared spaces, acyclic, that multiple objects may access
+While there are many positive points for isolation, the loss of expressiveness is too extreme. Even for dumb files, it is not uncommon that we entangle them with their environments through hypertext. I can easily imagine developers translating text into capabilities after extracting it from objects, working around this restriction in a kludgy and inefficient manner. 
 
-The idea here is that, for example, sibling objects could not directly call one another (as that would allow a call cycle), but each might create a mailbox object and somehow make it visible to the other. Then, indirect communication (with direct routing) would be possible via shared state. One object could add to the mailbox and the other could pull from it.
+So, I will relax isolation:
 
-The question is first how to avoid cycles, and second how to make these objects visible to one another in a simple way that won't entangle their state.
+* objects may contain capabilities, but may not invoke them 
+* a query may return a capability that may then be used by the caller
+* computation of objects during a query or update is purely functional
 
-(TODO!)
+Resource objects are still isolated from each other, and computations are isolated within each resource object, and many benefits of isolation remain available. Purity of objects will be enforced. Dynamically, for the most part, but some static enforcement is also feasible. We might benefit from a `{&pure}` annotation to make assertions about purity of blocks.
+
+However, resources will now become entangled with their environment in the same sense that hypertext documents become entangled. Is this the best we can do while keeping it simple? I suppose we might resist entanglement through more dynamic means, e.g. metrics, cluster diagrams, best practices.
 
 ## Relationships and Associated States: Region Sets
 
@@ -80,7 +97,12 @@ Usefully, we might not need to explicitly create region tags. Regions would inst
 
 The main difference from conventional regions is that we can use an ad-hoc set of region tags, and thus our objects are effectively part of multiple regions at once. This should make associations a lot easier to build.
 
+## Describing and Sharing Capabilities
 
+
+
+Older Content
+===============
 
 ## Distinguishing Leaf and Node? Best of both?
 
@@ -146,7 +168,7 @@ The 'tree' in minorfs is really offering an extensible set of resources, orthogo
 
 
 
-# General Thoughts
+# General Thoughts (older content)
 
 I currently envision two state repositories besides dictionary:
 
