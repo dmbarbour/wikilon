@@ -34,6 +34,8 @@ import qualified Data.List as L
 --    decay_keep: mixed mode with windowed history; keep K recent
 --       elements. Optimally a multiple of frequency
 --
+-- Note: half-life is a linear function of database size.
+--
 data Decay tx = Decay
     { decay_merge  :: tx -> tx -> (tx, Int)
     , decay_freq   :: {-# UNPACK #-} !Int

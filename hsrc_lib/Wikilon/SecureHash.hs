@@ -12,7 +12,7 @@
 --
 module Wikilon.SecureHash 
     ( SecureHash, secureHash, secureHashLazy
-    , hmac, hmacValidate, hmacBlockSize
+    , Signature, hmac, hmacValidate, hmacBlockSize
     ) where
 
 import Data.ByteString (ByteString)
@@ -40,11 +40,14 @@ secureHash = toSecureHash . CH.hash
 secureHashLazy :: BL.ByteString -> SecureHash
 secureHashLazy = toSecureHash . CH.hashlazy
 
+type Secret = ByteString
+type Signature = SecureHash
+
 -- | hmac secret message
 --
 -- generate hash based message authentication code
 -- may truncate if using less security is okay
-hmac :: ByteString -> ByteString -> SecureHash
+hmac :: Secret -> ByteString -> Signature
 hmac secret = toSecureHash . CH.hmacGetDigest . CH.hmac secret
 
 -- | validation of hmac (timing attack resistant)
@@ -66,7 +69,6 @@ hmacValidate secret message suspiciousSignature = matched where
     matched = (h validSignature) == (h suspiciousSignature)
     validSignature = hmac secret message
     h = secureHash
-
 
 -- | maximum effective secret size (in bytes) for HMAC
 hmacBlockSize :: Int

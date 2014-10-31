@@ -100,6 +100,7 @@ data ABC_Op ext -- 43 primitives + 3 special cases + extensions
     | ABC_Tok String -- {token} effects, resource linking, etc.
     | ABC_Ext ext -- ABCD, accelerators, quotations, laziness, etc.
     deriving (Eq, Ord) -- arbitrary ordering
+-- TODO: Switch from String to packed UTF8 (lazy) bytestrings,
 
 data NoExt = VoidExt deriving (Ord,Eq)
 type Op = ABC_Op NoExt

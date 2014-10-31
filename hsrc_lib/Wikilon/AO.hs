@@ -73,6 +73,7 @@ data AO_Action
     | AO_ABC   [PrimOp] -- inline ABC as a pseudo-word (grouping preserved)
     | AO_Tok   String   -- {token}
     deriving (Eq, Ord)
+-- TODO: Switch from String to packed UTF8 (lazy) bytestrings,
 
 -- | Extract the words used by AO code. For example:
 --     foo "hello" [42 bar baz] %vrwlc bar → [foo,bar,baz,bar]

@@ -22,23 +22,25 @@
 -- 
 module Wikilon.Wiki
     ( Wiki
+    , zeroWiki, isZeroWiki, initWiki
+    , newSymbol
+    , applySignature
+    , checkSignature
     ) where
 
-import Control.Arrow (second)
 import Control.Applicative 
 import Control.Monad.State.Strict
-
 import qualified Data.Serialize as C
-import qualified Data.Serialize.Get as C
 import qualified Data.SafeCopy as SC
 import qualified Codec.Compression.GZip as GZip
 
 import qualified Data.List as L
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString as BS
 
 import qualified Wikilon.Base16 as B16
-import Wikilon.Time
 import Wikilon.Secret
+import Wikilon.SecureHash
 import Wikilon.DictST
 import Wikilon.DictTX
 import Wikilon.Database
@@ -56,17 +58,69 @@ data Dictionary = Dict
 
 data Wiki0 = Wiki0
     { _secret   :: !Secret
-    , _genSym   :: !Integer
-    , _time     :: !T
+    , _gensym   :: !Integer
     , _fullDict :: !Dictionary
 
     -- TODO:
     --   users
-    --   auxillary state for multi-user services (e.g. IRC)
+    --   auxiliary state for multi-user services (e.g. IRC)
+    --   ABC resources (potentially part of auxiliary state)
     --   logs and reports? likely embedded in auxillary state
     --   overrides for web-apps? try to embed in auxillary state
     --   cached computations? maybe separated from main Wiki? non-acidic
     }
+
+
+-- | zeroWiki is an initial wiki value for AcidState. Be certain to
+-- initialize the wiki before returning it to the application.
+zeroWiki :: Wiki
+zeroWiki = Wiki0
+    { _secret = BS.empty
+    , _gensym = 1000
+    , _fullDict = Dict
+        { _dictHist = []
+        , _dictSize = 0
+        , _dictState = emptyDictST
+        }
+    }
+
+-- | return True if we haven't properly initalized this wiki yet.
+isZeroWiki :: Wiki -> Bool
+isZeroWiki = not . hasSecret
+
+-- | one time initialization on a new wiki to assign unique secret.
+--
+-- This secret should have high cryptographic entropy. Consider use
+-- of Wikilon.Secret:newSecret.
+initWiki :: Secret -> Wiki -> Wiki
+initWiki s w | isZeroWiki w = w { _secret = s }
+             | otherwise = w
+
+hasSecret :: Wiki -> Bool
+hasSecret = not . BS.null . _secret
+
+-- | Generate a fresh symbol, an integer. This might subsequently be
+-- signed to create a new globally unique identifier.
+--
+-- This is occasionally useful, though it should be avoided in
+newSymbol :: Wiki -> (Integer,Wiki)
+newSymbol w = (s,w') where
+    s = _gensym w
+    w' = w { _gensym = (1 + s) } 
+
+-- | apply signature to a message
+applySignature :: BS.ByteString -> Wiki -> Signature
+applySignature message w | hasSecret w = hmac (_secret w) message
+                         | otherwise = error "MUST INITIALIZE WIKI"
+
+-- | validate signature for a message
+--
+--   checkSignature msg sig
+checkSignature :: BS.ByteString -> SecureHash -> Wiki -> Bool
+checkSignature msg sig w | hasSecret w = hmacValidate (_secret w) msg sig
+                         | otherwise = error "MUST INITALIZE WIKI"
+
+
 
 -- The Wikilon decay rate is 10% per generation, but protecting the
 -- first two tenths and cutting 1/8th of the last 8 tenths. This gives
@@ -77,16 +131,17 @@ data Wiki0 = Wiki0
 -- selected here. My intuition is that a history of 1000-2000 samples 
 -- is suitable for most use cases. 
 --
--- For now, I'll err on the side of excess.
+-- For now, I'll err on the side of excess. It won't be difficult to
+-- make this more tunable later.
 -- 
-defaultDecay :: Decay DictTX
-defaultDecay = Decay
+_defaultDecay :: Decay DictTX
+_defaultDecay = Decay
     { decay_merge = mergeHeuristicDTX
     , decay_freq = 8 
     , decay_keep = 400
     }
-defaultDictHist :: Int
-defaultDictHist = 2000
+_defaultDictHist :: Int
+_defaultDictHist = 5 * (decay_keep _defaultDecay)
 
 instance SC.SafeCopy Wiki0 where
     errorTypeName _ = "Wikilon.Wiki:Wiki0"
@@ -99,9 +154,8 @@ instance SC.SafeCopy Wiki0 where
 putWiki0 :: Wiki0 -> C.PutM ()
 putWiki0 w = do
     C.put 'W'
-    putTime (_time w)
     putSecret (_secret w)
-    putGenSym (_genSym w)
+    putGenSym (_gensym w)
     putDictZ (_dictHist (_fullDict w))
     putFakeStateZ -- hole for auxillary state
     putFakeUsersZ -- hole for user data
@@ -111,9 +165,6 @@ putSecret s = C.put '$' >> C.put s
 
 putGenSym :: Integer -> C.PutM ()
 putGenSym n = C.put '#' >> C.put n
-
-putTime :: T -> C.PutM ()
-putTime = C.put . show
 
 -- save a dictionary history in a compressed format. 
 putDictZ :: [DictTX] -> C.PutM ()
@@ -131,14 +182,6 @@ getSecret = C.label "Secret" $ C.expect '$' >> C.get
 getGenSym :: C.Get Integer
 getGenSym = C.label "GenSym" $ C.expect '#' >> C.get
 
--- avoid conflict with original 'getTime'
-loadTime :: C.Get T
-loadTime = C.label "Time" $ 
-    C.get >>= \ s ->
-    case parseTime s of
-        Nothing -> fail ("could not parse " ++ s ++ " as time.")
-        Just t -> return t
-
 getDictZ :: C.Get [DictTX]
 getDictZ = C.label "Dict" $
     C.expect 'D' >>
@@ -155,8 +198,7 @@ getFakeUsersZ = C.label "Users" $ C.expect 'U' >> getZBytes >> return ()
 -- 
 getWiki0 :: C.Get Wiki0
 getWiki0 = C.label "Wiki" $ do
-    C.expect 'W'
-    time <- loadTime
+    _W <- C.expect 'W'
     secret <- getSecret
     gensym <- getGenSym
     txs <- getDictZ
@@ -165,15 +207,13 @@ getWiki0 = C.label "Wiki" $ do
     _users <- getFakeUsersZ
     return $ Wiki0 
         { _secret   = secret
-        , _time     = time
-        , _genSym   = gensym
+        , _gensym   = gensym
         , _fullDict = Dict 
                 { _dictHist = txs
                 , _dictSize = L.length txs
                 , _dictState = dictST
                 }
         }
-
 
 -- Build a complete dictionary history, returning a list of states 
 -- corresponding to the list of transactions, and a final state.
@@ -192,7 +232,6 @@ loadDict = (flip runStateT) emptyDictST . mapM addTx where
 runE :: (Monad m) => Either String a -> m a
 runE (Left _emsg) = fail _emsg
 runE (Right a) = return a
-
 
 -- | compress and put bytes, using both Base16 and GZip compression.
 putZBytes :: LBS.ByteString -> C.PutM ()
