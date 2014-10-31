@@ -57,6 +57,7 @@ data Dictionary = Dict
 data Wiki0 = Wiki0
     { _secret   :: !Secret
     , _genSym   :: !Integer
+    , _time     :: !T
     , _fullDict :: !Dictionary
 
     -- TODO:
@@ -98,6 +99,7 @@ instance SC.SafeCopy Wiki0 where
 putWiki0 :: Wiki0 -> C.PutM ()
 putWiki0 w = do
     C.put 'W'
+    putTime (_time w)
     putSecret (_secret w)
     putGenSym (_genSym w)
     putDictZ (_dictHist (_fullDict w))
@@ -110,6 +112,9 @@ putSecret s = C.put '$' >> C.put s
 putGenSym :: Integer -> C.PutM ()
 putGenSym n = C.put '#' >> C.put n
 
+putTime :: T -> C.PutM ()
+putTime = C.put . show
+
 -- save a dictionary history in a compressed format. 
 putDictZ :: [DictTX] -> C.PutM ()
 putDictZ txs = C.put 'D' >> putZBytes (encodeDict txs)
@@ -120,12 +125,19 @@ putFakeStateZ, putFakeUsersZ :: C.PutM ()
 putFakeStateZ = C.put 'S' >> putZBytes (LBS.empty)
 putFakeUsersZ = C.put 'U' >> putZBytes (LBS.empty)
 
-
 getSecret :: C.Get Secret
 getSecret = C.label "Secret" $ C.expect '$' >> C.get
 
 getGenSym :: C.Get Integer
 getGenSym = C.label "GenSym" $ C.expect '#' >> C.get
+
+-- avoid conflict with original 'getTime'
+loadTime :: C.Get T
+loadTime = C.label "Time" $ 
+    C.get >>= \ s ->
+    case parseTime s of
+        Nothing -> fail ("could not parse " ++ s ++ " as time.")
+        Just t -> return t
 
 getDictZ :: C.Get [DictTX]
 getDictZ = C.label "Dict" $
@@ -144,6 +156,7 @@ getFakeUsersZ = C.label "Users" $ C.expect 'U' >> getZBytes >> return ()
 getWiki0 :: C.Get Wiki0
 getWiki0 = C.label "Wiki" $ do
     C.expect 'W'
+    time <- loadTime
     secret <- getSecret
     gensym <- getGenSym
     txs <- getDictZ
@@ -152,6 +165,7 @@ getWiki0 = C.label "Wiki" $ do
     _users <- getFakeUsersZ
     return $ Wiki0 
         { _secret   = secret
+        , _time     = time
         , _genSym   = gensym
         , _fullDict = Dict 
                 { _dictHist = txs

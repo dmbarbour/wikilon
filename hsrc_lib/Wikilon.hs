@@ -9,6 +9,12 @@
 -- For now, each Wikilon instance will host just one Wiki. But long
 -- term, I like the idea of Wikis themselves as distributed objects,
 -- with a many-to-many relationship between web servers and wikis.
+--
+-- Thoughts:
+--
+-- To help resist timing attacks, it might be useful to add a random
+-- sleep if there are any security exceptions (or any exceptions in
+-- general) when trying to process a request.
 -- 
 module Wikilon
     ( loadInstance
