@@ -93,28 +93,26 @@ wikilonWarpTLSSettings :: FS.FilePath -> WarpTLS.TLSSettings
 wikilonWarpTLSSettings h = WarpTLS.tlsSettings (tof wiki_crt) (tof wiki_key) where
     tof = FS.encodeString . (h FS.</>)
 
-
 wikilonMiddleware :: Wai.Middleware
-wikilonMiddleware = secSleep . gz where
+wikilonMiddleware = ss . gz where
     gz = Wai.gzip Wai.def
+    ss = secSleep 30 370
 
 -- | Add a little extra resistance to timing attacks.
 --
 -- Timing attacks involve statistical analysis of times involved
 -- with various operations on secret values. The best way to guard
 -- against these is to favor constant time cryptographic behavior.
+-- But it can be difficult to find all the vulnerabilities.
 --
--- This little delay to add some variance to metrics won't help much.
--- But it also won't hurt, and it does make me feel better.
-secSleep :: Wai.Middleware
-secSleep app request respond = app request respond' where
+-- Times here are given in milliseconds. 
+secSleep :: Int -> Int -> Wai.Middleware
+secSleep lo hi app request respond = app request respond' where
     respond' r = when (secReject r) (doSleep) >> respond r
-    secReject = isSecRejectCode . HTTP.statusCode . Wai.responseStatus 
-    isSecRejectCode n = (403 == n) || (401 == n)    
+    secReject = HTTP.statusIsClientError . Wai.responseStatus 
     doSleep = threadDelay =<< rndTime 
-    rndTime = Sys.getStdRandom (Sys.randomR (loT,hiT))
-    loT = 30000    -- 30 ms
-    hiT = 30 * loT -- 900 ms
+    rndTime = Sys.getStdRandom (Sys.randomR (millisec lo, millisec hi))
+    millisec = (*) 1000
 
 shouldUseTLS :: FS.FilePath -> IO Bool
 shouldUseTLS h = (||) <$> haveKF <*> haveCF where
