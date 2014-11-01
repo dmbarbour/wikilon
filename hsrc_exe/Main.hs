@@ -4,13 +4,16 @@ module Main (main) where
 
 import Control.Monad
 import Control.Applicative
+import Control.Concurrent (threadDelay)
 import qualified System.IO as Sys
 import qualified System.Exit as Sys
 import qualified System.Environment as Env
+import qualified System.Random as Sys
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Handler.WarpTLS as WarpTLS
 import qualified Network.Wai.Middleware.Gzip as Wai
+import qualified Network.HTTP.Types.Status as HTTP
 import qualified Data.List as L
 import qualified Filesystem as FS
 import qualified Filesystem.Path.CurrentOS as FS
@@ -91,10 +94,27 @@ wikilonWarpTLSSettings h = WarpTLS.tlsSettings (tof wiki_crt) (tof wiki_key) whe
     tof = FS.encodeString . (h FS.</>)
 
 
-wikilonMiddleware :: Wai.Application -> Wai.Application
-wikilonMiddleware = gz where
+wikilonMiddleware :: Wai.Middleware
+wikilonMiddleware = secSleep . gz where
     gz = Wai.gzip Wai.def
 
+-- | Add a little extra resistance to timing attacks.
+--
+-- Timing attacks involve statistical analysis of times involved
+-- with various operations on secret values. The best way to guard
+-- against these is to favor constant time cryptographic behavior.
+--
+-- This little delay to add some variance to metrics won't help much.
+-- But it also won't hurt, and it does make me feel better.
+secSleep :: Wai.Middleware
+secSleep app request respond = app request respond' where
+    respond' r = when (secReject r) (doSleep) >> respond r
+    secReject = isSecRejectCode . HTTP.statusCode . Wai.responseStatus 
+    isSecRejectCode n = (403 == n) || (401 == n)    
+    doSleep = threadDelay =<< rndTime 
+    rndTime = Sys.getStdRandom (Sys.randomR (loT,hiT))
+    loT = 30000    -- 30 ms
+    hiT = 30 * loT -- 900 ms
 
 shouldUseTLS :: FS.FilePath -> IO Bool
 shouldUseTLS h = (||) <$> haveKF <*> haveCF where

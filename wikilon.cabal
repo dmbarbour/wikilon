@@ -39,8 +39,10 @@ Executable wikilon
     , system-fileio (>= 0.3.11 && < 0.4)
     , system-filepath (>= 0.4.10)
     , utf8-string, bytestring, text
+    , http-types
     , wai, wai-extra, warp, warp-tls (>= 3.0)
     , tls 
+    , random
   main-is: Main.hs
   ghc-options: -auto-all -Wall -rtsopts -threaded
 
