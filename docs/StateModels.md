@@ -41,50 +41,24 @@ Besides directories, our tree structure will have many 'leaf objects', represent
 
 * read-only attenuation of directories and objects
 * transparent redirects for mounts or revocations
-* functional attenuation; wrap updates or queries
-* treating sealers/unsealers as objects
-* treating RDP demand monitors as objects
-* monadic objects adding flexible logics
-* expiration; reuse stable name with updated caps
+* script-like resources; ad-hoc attenuation and adapters
+* name sealers unsealer pairs, demand monitor pairs, etc.
 
-It isn't clear to me what the limits are, how much flexibility is actually useful, or which features (if any) should be built into our model rather than constructed above it. It may be that a few, simple, specialized leaf objects could do the job. 
+It isn't clear to me what the limits are, how much flexibility is actually useful, or which features (if any) should be built into our model rather than constructed above it. It may be that a few, simple, specialized leaf objects could do the job. A few thoughts:
 
-* Read-only attenuation is one feature that might need be built into the model to make it efficient. Essentially, read-only access to a directory should give us both the ability to browse a directory and query the objects within it, including read-only access to its subdirectories and their objects. I'd rather avoid doubling the number of objects just to support read-only views. Rob Meijer's work on Rumpelstiltskin hash trees seems like it should be applicable.
+* Read-only access to a directory should give us both the ability to browse a directory and query the objects within it, including read-only access to its subdirectories and their objects. This suggests every object would have a read-only variant on the capability. Rob Meijer's work on Rumpelstiltskin hash trees seems like it should be applicable. 
 
-* Transparent redirects would provide an interesting ability to 'mount' objects in other directories, essentially making them sharable. In addition, transparent redirects could be used to support revocability, i.e. a place to later cut access to an object. I think this could prove very useful, e.g. we could mount a shared public directory, and perhaps other shared environment information, into each user's home.
+* Transparent redirects offer an interesting ability to 'mount' objects in other directories, essentially making them sharable. They might also support revocation, which might have security implications: no create/destroy authority over source of mounted objects. Might also mount AO dictionary, read-only. :)
 
-I think this could be a very useful feature, and it seems also to support some dynamic optimizations. A relevant question is whether we should support read-only mounts? It seems a reasonable idea, especially if we allow other forms of attenuation as part of a redirect.
+* Scripts could allow transparent scatter-gather of data, lenses and data model transforms, ad-hoc attenuation, etc.. Usefully, we can have a clean separation of responsibilities: scripts are generally not stateful, but instead are encoded as simple transactions or RDP behaviors.
 
-* 
+* Treating various other resources (sealers/unsealers, demand monitors, etc.) as objects seems like a very easy way to give them stable, shared identity. I think it's worth exploring, but might be limited to objects that need identity for some reason.
 
- an ability to later cut access to an object.
+All these ideas are worth exploring. But I think scripts, most of all, would be extremely beneficial for expressiveness and adaptiveness of the resource model, allowing very ad-hoc extension and reprogrammability and direct embedding of useful applications. 
 
+Responsibility for creating objects, enumerating, destroying them, etc. will require write authority on the directory containing them. Also, reading the *source code* (internal structure) of contained objects should require a write authority, otherwise you're limited to enumeration and queries on objects.
 
 
-
-
-I expect many could be implemented with a few specialized leaf objects, similar in nature to symlinks. 
-
-Read-only attenuation of directories is certainly an interesting possibility. It could operate as a bit of a membrane, resulting in read-only views also of subdirectories. But it would be weaker than a true membrane because query responses from objects might grant authority to update other objects or directories. Basically, this would offer a useful degree of control over which objects are shared, which could be elevated back into read-write access for specific objects or subdirectories. There is no need for 'discovery-only' attenuation if we have read-only attenuation.
-
-This seems similar to Rob Meijer's work on the Rumpelstiltskin tree hash for MinorFS. A weaker variation, 'discovery only' authority, might be useful to allow update access to objects without creation/deletion authority.
-
-
-In this context, 'create' authority over a resource might involve
-
-
-
-
-
-For example, we could have specialized facets for directory objects, specialized me
-
- and a little extra logic to manipulate them.
-
-Would a read-only membrane even be useful, assuming that objects tend to contain references to one another, or the possibility for value sealing?
-
-Let's put that aside for now. It shouldn't be too difficult to add most of these features down the line.
-
-An interesting possibility for attenuation of directories is to model each directory as actually having a small set of 'facet' objects - e.g. one for enumerating the objects within it, another for adding new objects, yet another for replacing existing objects. These perhaps needn't even be built into our resource model, rather the facets could be treated as special leaf objects, which transparently hold a reference back to their parent. They might also act as specialized membranes.
 
 ## Unifying Objects and Directories?
 
