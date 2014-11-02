@@ -1,49 +1,205 @@
 
 # General Overview
 
-In addition to the dictionary, Wikilon needs an auxiliary state model to support user workspaces, issue trackers, feature requests, new web applications, multi-user services, and so on. 
+In addition to the dictionary, Wikilon needs an auxiliary state model to support user workspaces, issue trackers, feature requests, new web applications, multi-user services, and so on. This will likely form the foundation for all resource models in Wikilon, much as filesystems do for conventional operating systems.
 
-Unlike the dictionary, users will not typically have a 'frozen' view of the auxiliary state model. That said, it might be useful on occasion to experiment on a temporary fork or historical view of state resources, e.g. when initially developing and debugging. I will be keeping a fair amount of historical state for various reasons - browsing, debugging, recovery from vandalism, archaeological digs, etc.. 
+Unlike the dictionary, users will not typically have a 'frozen' view of the auxiliary state model. That said, it might be useful on occasion to experiment on a temporary fork or historical view of state resources, e.g. when initially developing and debugging. (Or even to run the same code on *all* the historical samples, as a quick form of regression testing.) I will be keeping a fair amount of historical state for various reasons - browsing, debugging, recovery from vandalism, archaeological digs, etc.. 
 
 Given historical views, I would like some ability to track which objects were updated by a recent transaction or tick event. This could prove very useful. It might require keeping a timestamp or event stamp on every resource.
 
-## Major design points
+# Major Design Points
 
 These are important conclusions that took me some time to reach...
 
-First, it seems **simple object models** are a better option than dumb byte strings or plain old data. Objects can protect their internal structure, provide their own logic and model, support extension, and perhaps even be self-explaining (if the support the right queries). This simplifies collaboration between agents sharing the resource.
+1. **purely functional objects** are excellent for collaboration between mutually distrustful agents because they protect their own state, guard information, and leverage value sealing, yet don't have the entanglement issues of OO systems. A trivial example of a purely functional object model is `µObject.[Message → (Object * Answer)]`. However, I'll likely want to separate queries from updates (i.e. so I can optimize HTTP GET to use read-only queries), and simplify consistent views. Conveniently, [embedded literal objects](EmbeddedLiteralObjects.md) seem to be a pretty good fit for the role of state resources, ensuring consistent views for both readers and writers. Of course, to fit RDP, the update argument might be a a sorted list of structurally distinct demands (a set of demands) instead of a message.
 
-Which model of objects to use is still an open question. For example, `µP.[a→(P*b)]` is too simplistic; it fails to distinguish updates from reads, which would be a nice property for attenuation and for optimization. It would be useful if HTTP GET only requires read-only access to the acid-state resources. [Embedded literal objects](EmbeddedLiteralObjects.md) would be an example of a simple object model, which might be suitable for imperative resources. RDP resources must be updated by a set (sorted list) of demands, but we might be able to treat that as a specialization.
+2. **serialize imperative through a powerblock** AO/ABC can operate in imperative modes only by ensuring operations on any specific resource are linearized (otherwise we lose causal commutativity and spatial idempotence). However, precisely tracking which resources are 'in use' is difficult, especially if we want redirection, adapters, or attenuation features. As a programmer, I don't want to be burdened with 'already in use' errors. So, my plan is to logically serialize everything through "the powerblock". That said, we should be able to get a lot of asynchronous computation, e.g. returning the powerblock immediately while the query result is processed in another thread. 
 
-Second, **state resources must be weakly isolated**, by which I mean they do not keep `{tokens}` other than annotations, sealers, unsealers, or links to isolated ABC resources. This level of isolation is necessary for imperative resources to protect causal commutativity and spatial idempotence, because we must prevent the case where we alias a resource (i.e. opportunity for an 'already in use' error). Isolation is also useful for RDP resources due to logically continuous expiration of token capabilities. I suspect purity of resources might also be a good idea.
+3. **transactionalize imperative operations** If we model logical time as advancing between operations on a powerblock, we can observe writes by other imperative behaviors. This is a problem because it makes for difficult reasoning about code correctness, about partial failure and cleanup, and about consistency of stateful resources. It's also a problem because it would allow for productive polling loops, which is something I wish to strongly discourage. RDP should be the only option for long-running behavior in Wikilon. Console apps should at least transactionalize the commands; each command must terminate successfully to be productive.
 
-This level of isolation isn't a bad thing. It makes for a simple model with low entanglement and easy reasoning. That said, there is a valuable a workaround. See **Capability URLs** below.
+4. **transactional & RDP updates don't mix** The concurrency control models are completely incompatible. RDP is long running, leverages anticipation, retroactive correction, generally allows multiple agents to collaboratively influence future state, prohibits observation of 'instantaneous' events. Transactions assume an authoritative view, a single writer, are logically instantaneous, and transactions are simply serialized with the different writers taking turns. The main consequence of this incompatibility is simply that we must distinguish 'resources updated via RDP' from 'resources updated via imperative'. Fortunately, cross-model *queries* don't seem to cause any problems.
 
-Third, **imperative and RDP resources should be separate**. A resource should be declared for one interface or the other. The problem is that the concurrency control models are very different (serializable transactions vs. concurrent demands with anticipation and retroactive correction), and trying to mix the two creates a hairy mess that I'd much rather avoid. That said, imperative and RDP computations can interact in useful ways. For example, so long as we avoid cross-model updates, the cross-model queries are okay.
+5. **stateful resources are weakly isolated** Specifically, no `{tokens}` allowed, with a few machine-independent exceptions like annotations, sealers, unsealers. This is necessary to protect linearization of resources for imperative code, and to ensure compatible cross-model data queries between RDP and imperative, and potentially for logically continuous expiration of volatile capabilities via RDP behaviors. These 'live' tokens shall be treated as volatile capabilities within Wikilon. If we also assume purely functional objects, then we can reject tokens even in query or update messages. (Aside: in type system terms, location of code corresponds to a modality; isolation corresponds to a universal or unconstrained location.)
 
-# Design Ideas
+6. **capability-string based hyperlinking** We can't store live tokens, but we'll still want to model hypertext, directories, registries, relationships, etc.. So we'll need some form (to be determined) of capability strings, which may be passed to a powerblock to access resources without accidentally aliasing them. We'll want to use *the exact same strings* for external programmability of Wikilon, via web APIs (PUT, POST, GET, etc.). These must be true capability strings, providing authority independent of user identity, no need for permissions (thus one less failure mode).
 
-I've attempted a couple designs from whole cloth, but they've fallen apart on me leading to various 'major design points'. For now, I'm going to float a bunch of different ideas and see which sink, which rise, and which can be composed into something whole and valuable.
+# Brainstorm Mode!
+
+Supposing I have a space for stateful resources in Wikilon, what's next? 
+
+The step that's obvious to me is to divide this ball into different resources for both public services (issue trackers, etc.) and individual users. I expect that, later, individual users will want to divide their own little spaces in a similar manner - public spaces, spaces for each significant application they use, etc.. Applications might again do the same.
+
+In context of RDP, this division process must be stable, idempotent, and commutative. These are also nice default attributes for imperative code, e.g. offering stability across rewind and replay of a transaction, though we certainly could model a counter, a flat directory, and `new`-like behavior using imperative code.
+
+A natural fit for this spatial organization is the simple tree data structure. We would delegate subdirectories to each agent or application. A critical constraint, then, is that authority to a child directory offers no inherent authority to the parent, i.e. no `..` path unless it is granted explicitly. 
+
+Though, one property I dislike about trees is how frequently applications depend on the layout of objects within a tree, or compare locations of objects. We might mitigate this by offering an illusion of each agent or application having its own root authority. Usefully, we can potentially implement stable but opaque names by use of secure hash or HMAC. 
+
+For now, let's take as a given: tree structure semantics, hidden by GUID IDs.
+
+Besides directories, our tree structure will have many 'leaf objects', representing the user-defined resources. As mentioned earlier, I currently favor pure functional objects in this role, with a clean separation of read-only queries and write-only updates. But we may find some use for other objects, such as:
+
+* read-only attenuation of directories and objects
+* transparent redirects for mounts or revocations
+* functional attenuation; wrap updates or queries
+* treating sealers/unsealers as objects
+* treating RDP demand monitors as objects
+* monadic objects adding flexible logics
+* expiration; reuse stable name with updated caps
+
+It isn't clear to me what the limits are, how much flexibility is actually useful, or which features (if any) should be built into our model rather than constructed above it. It may be that a few, simple, specialized leaf objects could do the job. 
+
+* Read-only attenuation is one feature that might need be built into the model to make it efficient. Essentially, read-only access to a directory should give us both the ability to browse a directory and query the objects within it, including read-only access to its subdirectories and their objects. I'd rather avoid doubling the number of objects just to support read-only views. Rob Meijer's work on Rumpelstiltskin hash trees seems like it should be applicable.
+
+* Transparent redirects would provide an interesting ability to 'mount' objects in other directories, essentially making them sharable. In addition, transparent redirects could be used to support revocability, i.e. a place to later cut access to an object. I think this could prove very useful, e.g. we could mount a shared public directory, and perhaps other shared environment information, into each user's home.
+
+I think this could be a very useful feature, and it seems also to support some dynamic optimizations. A relevant question is whether we should support read-only mounts? It seems a reasonable idea, especially if we allow other forms of attenuation as part of a redirect.
+
+* 
+
+ an ability to later cut access to an object.
+
+
+
+
+
+I expect many could be implemented with a few specialized leaf objects, similar in nature to symlinks. 
+
+Read-only attenuation of directories is certainly an interesting possibility. It could operate as a bit of a membrane, resulting in read-only views also of subdirectories. But it would be weaker than a true membrane because query responses from objects might grant authority to update other objects or directories. Basically, this would offer a useful degree of control over which objects are shared, which could be elevated back into read-write access for specific objects or subdirectories. There is no need for 'discovery-only' attenuation if we have read-only attenuation.
+
+This seems similar to Rob Meijer's work on the Rumpelstiltskin tree hash for MinorFS. A weaker variation, 'discovery only' authority, might be useful to allow update access to objects without creation/deletion authority.
+
+
+In this context, 'create' authority over a resource might involve
+
+
+
+
+
+For example, we could have specialized facets for directory objects, specialized me
+
+ and a little extra logic to manipulate them.
+
+Would a read-only membrane even be useful, assuming that objects tend to contain references to one another, or the possibility for value sealing?
+
+Let's put that aside for now. It shouldn't be too difficult to add most of these features down the line.
+
+An interesting possibility for attenuation of directories is to model each directory as actually having a small set of 'facet' objects - e.g. one for enumerating the objects within it, another for adding new objects, yet another for replacing existing objects. These perhaps needn't even be built into our resource model, rather the facets could be treated as special leaf objects, which transparently hold a reference back to their parent. They might also act as specialized membranes.
+
+## Unifying Objects and Directories?
+
+Uniformity is a nice property. It might be nice to unify objects and directories, i.e. presenting a similar interface such that directories don't require any special consideration in application logic, or that objects may simulate directories to some degree. But it certainly isn't clear to me how, without monadic objects or similar, we could create new names. The separation might be more useful to keep explicit.
+
+## Monadic Objects?
+
+If our objects were *monadic*, they could actually return a little more code to run in response to an update or query. This might offer a flexible way to model attenuation.
+
+Even if we strongly separate reads from updates, we could query an object for 'pending' operations 
+
+It is possible to model transparent redirects as primitive objects, and perhaps even a few other structures. 
+
+
+
+
+
+I previously mentioned that I'm favoring embedded literal objects as the basis for state resources, i.e. pure functional objects with read-only queries and write-only updates. That said, I could modify these objects to be monadic in nature (and still purely functional), such that an object can act as a redirect based on its own internal logic. Alternatively, I could treat redirects as a special 
+
+An interesting possibility is t 
+
+
+
+
+
+
+
+
+An interesting question, then, is what other features we might offer above our directory structure. 
+
+
+
+A valuable feature for a system is uniformity. At the moment, we essentially have a system with at least two types of elements - a directory tree structure, and leaf objects. At the moment, I'm assuming leaf objects will be purely functional objects that cleanly distinguish read-only queries from write-only update messages. It would be nice if directories presented a similar interface and thus may be treated, transparently, the same as any other object. I think this is feasible, so long as we're a little careful about it.
+
+
+
+
+
+
+
+
+
+
+
+
+Rather than flat files, the objects at the leaves of this tree will be purely functional objects, i.e. persisting the bytecode. Likely, they'll have the same basic self-modifying form as [embedded literal objects](EmbeddedLiteralObjects.md), distinguishing read-only queries from write-only updates. : directories would, ideally, present a similar interface as these other objects. Directories w
+
+
+A strong desiderata, then, is that 
+
+
+At this point, we essentially have:
+
+        data ResourceTree a =
+
+
+
+
+
+
+
+
+Stable names also seems like a useful feature for imperative code, especially since imperative code is transactional and thus requires stable names to find the same resources every time. 
+
+Usefully, we could avoid the concept of 'new' objects
+
+A tree-based directory structure would be a good fit.
+
+
+
+
+Essentially, this division process 
+
+
+## Source Stable Unique Names
+
+RDP requires a spatial idempotence property. This forbids use of `new Object()` because - to be idempotent - that expression
+
+http://awelonblue.wordpress.com/2013/08/26/source-stable-uniqueness/
+
+
+
+
+
+So, we must somehow express this act of division. But we can potentially 
+
+
+
+The concept, then, is of a root space that can be divided into more spaces. 
+
+
+
+As an additional constraint on this model, we want to avoid routing everything through the root space.
+The typical filesystem directory structure seems a decent example of such behavior.
+
+
+
+
+
+
+
+
+
+
+
+
+## Visibility and Revocability
+
+
+
+
 
 ## Capability URLs
 
-As a major design point, we don't keep `{tokens}` in state resources. However, nothing prevents us from creating an intermediate value, such as capability URLs, to access resources. This would allow much richer resources, similar to hypertext. And since I expect to actually support access to resources via URL, this would also ensure internal programmability remains at least as expressive as external programmability.
-
-The idea, then, is that we take our capability URL, and we "open" it.
-
-Open might fail for dynamic reasons. For example, open might fail if the resource has been destroyed and is no longer available. For transactions, open might also fail because the resource is already in use, i.e. such that opening it would risk a violation of linearity properties. Though, even for transactional imperative code, it might be acceptable to open resources multiple times so long as all are read-only.
-
-Usefully, we'll never have a permissions failure. 
-
-The authority to a resource is determined by the capability URL itself. It is possible that we attempt to use a URL in a manner not authorized by it - e.g. open a read-only capability for read-write - and that will result in failure. But this is closer in nature to attempting to divide by zero; it's failing due to a property of the URL, not a property of the user. Identity and permission simply never get involved. 
-
-Opening our URL will typically return a `[{token}]`. The interface to this token will depend on the mode with which we opened the URL. But the important aspect is that: 
-
-* Token is volatile, restricted to a transaction or an RDP behavior.
-* Token is neither forgeable nor reusable. Perhaps via HMAC or GUID.
-* Token is opaque. Original URL cannot be recovered from token text.
-
-In a sense, our new token serves a similar role to a file handle. In some modes, the token may permit explicit release, returning a sealed value that may be explicitly 'closed' to recover the resource. However, this is likely to be a rare requirement. RDP doesn't need it, nor will most transactions. So it might involve an extra mode flag or something like that.
+Note: original idea of 'opening' a capability URL might still be applicable. But an alternative might be to use something like a `{&rsc}` annotation to validate the resource ID and capture it within a container.
 
 ## Organization of State
 
@@ -156,14 +312,7 @@ That is, we shouldn't need to use much external authority to turn the string int
 An advantage of this 
 
 
-
-
-
 The feature gap might be covered by a careful application of sealed values modeling secure paths that can (via powerblock) be translated back to linear capabilities on something like a first-come first-serve basis. The resulting indirection might serve us in other ways, e.g. supporting revocation.
-
-## Token Scrubbing (this idea is poison)
-
-I had this idea, so I thought I'd write it down. Rather than *fail* when tokens are injected into persistent state, we could simply scrub the tokens, e.g. by replacing them with `{☠}` (skull and crossbones, U+2620) or `{☢}` (radioactive, U+2622). The effect is that we could accept more flexible interactions with our resources. The disadvantage? We've poisoned the well. In retrospect, it seems much wiser to me to fail fast, fail early, rather than inject material that will hurt users later.
 
 ## Attenuation of Objects
 
@@ -303,9 +452,6 @@ copy/clone, swap, destroy, etc.
 
 
 
-Older Content
-===============
-
 ## Distinguishing Leaf and Node? Best of both?
 
 In a typical filesystem, a name exclusively either is a file, is a directory, or does not exist. But there is a related possibility, that every name is both a file and a directory, e.g. such that `/foo/bar` may both have some content and some children. 
@@ -322,6 +468,13 @@ Rob Meijer wrote a couple articles describing Rumpelstiltskin Trees for minorfs 
 
 It seems attenuation in Rumpelstiltskin design is linear. Rob Meijer uses only one attenuation: read-write to read. I might use two levels: ownership to message to query-only. Here, ownership allows direct read-write access to the bytecode, and ability to create new objects or destroy existing ones. Message limits to passing messages (query or update), and thus allows the object to secure itself. 
 
+
+
+
+
+## Should State Resources be Pure? Yes.
+
+I reject `{tokens}` from being part of state. But this doesn't forbid tokens from becoming arguments to queries or updates. Indeed, it might be convenient to have side-effects driven by internal state of objects. But the difficulty with this is, again, that readers won't be able to make the same observations on state as writers (who might observe by passing some tokens into the object), and also we end up exposing internal state of objects by accident.
 
 
 

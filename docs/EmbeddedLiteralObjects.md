@@ -1,9 +1,34 @@
 
 As an alternative to DSLs in Awelon project, I've developed a concept for 'embedded literal objects'. This concept gets some discussion on my blog [1](http://awelonblue.wordpress.com/2014/07/22/embedded-literal-objects/) and within the older Awelon project [2](https://github.com/dmbarbour/awelon/blob/master/doc/ExtensibleLiteralTypes.md). 
 
-Essentially, the idea is to embed interactive but *isolated* applets within the source code, such that developers may interactively manipulate rich data structures, but the isolation allows these objects to easily be copied, shared, recorded within the AO dictionary and history, disentangled from one another.
+Essentially, the idea is to embed interactive but *isolated* applets within the source code, such that developers may interactively manipulate rich data structures, but the isolation allows these objects to easily be copied, shared, recorded within the AO dictionary and history, disentangled from one another. 
 
-I love the idea. But I'm having some difficulty with the original formulation.
+# Structure of ELO
+
+I'm not entirely sure how to notate the type for an ELO. Something like:
+
+        µELO.[Update→ELO|Query→Response]
+            where Update is in right    (0+U)
+                  Query is in left      (Q+0)
+        
+          or in Haskell
+        
+        data ELO u q r = ELO { query :: q → r, update :: u -> ELO u q r }
+        
+          or in a conventional OOP language
+
+        interface ELO {
+            Val query(Val) const
+            ELO update(Val) const
+        }
+
+But the basic idea is that we have a purely functional object, with dynamic or dependent immutable values, that we can query in some rather ad-hoc ways, e.g. asking it "how do you render yourself in SVG?" or "gimme a menu of options" or "what is your favorite color?". Further, we can also update the object in ad-hoc ways, each update returning a modified ELO. The modified ELo has no real constraints on internal structure; no specific 'class', for example. 
+
+A critical feature is that 'update' returns only the new ELO, and nothing else. This ensures that, in a single-writer multiple-observer scenario, the writer observes no special information that the readers cannot also observe. And, consequently, the writer's view of the object is consistent with all other views.
+
+# Utilization of ELO within Wikilon
+
+I love this idea. But I'm having some difficulty with the original formulation.
 
 The original design calls for embedding applets at the ABC level, then sharing code between objects as ABC resources. I might use `〚ABC〛` (U+301A-B) for the embedding. However:
 
@@ -50,3 +75,10 @@ Another option is to aggregate updates ASAP, and factor more often...
 But this approach does complicate copy+paste. I think the earlier approach will be simpler and richer in the long run, i.e. shrinking the dictionary after the fact in a more ad-hoc and flexible fashion.
 
 Anyhow, the important bit is that the resulting object can be evaluated statically, and is self-describing for rendering and further update options.
+
+
+
+
+
+
+
