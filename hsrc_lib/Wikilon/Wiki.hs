@@ -25,7 +25,6 @@ module Wikilon.Wiki
     , zeroWiki, isZeroWiki, initWiki
     , newSymbol
     , applySignature
-    , checkSignature
     ) where
 
 import Control.Applicative 
@@ -54,7 +53,8 @@ data Dictionary = Dict
     , _dictSize    :: {-# UNPACK #-} !Int   -- cached: length of history list
     , _dictState   :: !DictST               -- cached: current state of dictionary
     }
-
+    -- idea: generate a matching of "reverse" transactions
+    -- to efficiently step back in time from the current state
 
 data Wiki0 = Wiki0
     { _secret   :: !Secret
@@ -69,6 +69,9 @@ data Wiki0 = Wiki0
     --   overrides for web-apps? try to embed in auxillary state
     --   cached computations? maybe separated from main Wiki? non-acidic
     }
+-- thoughts: HTTP stats, update and view counts, access logs, timings, etc.
+--   should be kept in a separate database from wiki.
+
 
 
 -- | zeroWiki is an initial wiki value for AcidState. Be certain to
@@ -112,15 +115,6 @@ newSymbol w = (s,w') where
 applySignature :: BS.ByteString -> Wiki -> Signature
 applySignature message w | hasSecret w = hmac (_secret w) message
                          | otherwise = error "MUST INITIALIZE WIKI"
-
--- | validate signature for a message
---
---   checkSignature msg sig
-checkSignature :: BS.ByteString -> SecureHash -> Wiki -> Bool
-checkSignature msg sig w | hasSecret w = hmacValidate (_secret w) msg sig
-                         | otherwise = error "MUST INITALIZE WIKI"
-
-
 
 -- The Wikilon decay rate is 10% per generation, but protecting the
 -- first two tenths and cutting 1/8th of the last 8 tenths. This gives

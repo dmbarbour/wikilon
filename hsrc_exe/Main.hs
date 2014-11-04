@@ -103,7 +103,9 @@ wikilonMiddleware = ss . gz where
 -- Timing attacks involve statistical analysis of times involved
 -- with various operations on secret values. The best way to guard
 -- against these is to favor constant time cryptographic behavior.
--- But it can be difficult to find all the vulnerabilities.
+-- But it can be difficult to find all the vulnerabilities. Adding
+-- some variance to responses caused by malformed inputs should
+-- help reduce rate of information leaks.
 --
 -- Times here are given in milliseconds. 
 secSleep :: Int -> Int -> Wai.Middleware

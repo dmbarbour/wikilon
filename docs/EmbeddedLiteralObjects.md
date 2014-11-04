@@ -3,30 +3,29 @@ As an alternative to DSLs in Awelon project, I've developed a concept for 'embed
 
 Essentially, the idea is to embed interactive but *isolated* applets within the source code, such that developers may interactively manipulate rich data structures, but the isolation allows these objects to easily be copied, shared, recorded within the AO dictionary and history, disentangled from one another. 
 
-# Structure of ELO
+# Structure of ELO?
 
-I'm not entirely sure how to notate the type for an ELO. Something like:
+Roughly the following:
 
-        µELO.[Update→ELO|Query→Response]
+        µELO.[Query→Response | Update→ELO]
             where Update is in right    (0+U)
                   Query is in left      (Q+0)
         
-          or in Haskell
-        
-        data ELO u q r = ELO { query :: q → r, update :: u -> ELO u q r }
-        
-          or in a conventional OOP language
+        data ELO u q r = ELO 
+            { query :: q → r
+            , update :: u -> ELO u q r 
+            }
 
         interface ELO {
             Val query(Val) const
             ELO update(Val) const
         }
 
-But the basic idea is that we have a purely functional object, with dynamic or dependent immutable values, that we can query in some rather ad-hoc ways, e.g. asking it "how do you render yourself in SVG?" or "gimme a menu of options" or "what is your favorite color?". Further, we can also update the object in ad-hoc ways, each update returning a modified ELO. The modified ELo has no real constraints on internal structure; no specific 'class', for example. 
+If I had a precise notation for dependent types, this would be a fair bit easier. But the idea is that we're emulating an object with a set of query methods (which each return a result whose type may depend on the query) and a set of update methods (which return an updated ELO and nothing else) in a purely functional manner.
 
-A critical feature is that 'update' returns only the new ELO, and nothing else. This ensures that, in a single-writer multiple-observer scenario, the writer observes no special information that the readers cannot also observe. And, consequently, the writer's view of the object is consistent with all other views.
+Queries might ask for menus of options, rendering in SVG or HTML, and other useful features for interacting with humans, in addition to domain specific queries or extractors. Meanwhile, the clean separation of updates from queries simplifies reasoning about consistent views between writers and readers. 
 
-# Utilization of ELO within Wikilon
+# Utilization of ELO within Wikilon Dictionary
 
 I love this idea. But I'm having some difficulty with the original formulation.
 
@@ -76,9 +75,8 @@ But this approach does complicate copy+paste. I think the earlier approach will 
 
 Anyhow, the important bit is that the resulting object can be evaluated statically, and is self-describing for rendering and further update options.
 
+# Utilization of ELO in Wikilon Filesystem
 
-
-
-
+It seems ELOs may be a pretty good fit as the basis for all stateful resources in Wikilon's [auxiliary state model](StateModels.md). In this case, the embedding is trivial! The objects are simply kept as plain old bytecode.
 
 

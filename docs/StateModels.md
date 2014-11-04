@@ -21,7 +21,7 @@ These are important conclusions that took me some time to reach...
 
 5. **stateful resources are weakly isolated** Specifically, no `{tokens}` allowed, with a few machine-independent exceptions like annotations, sealers, unsealers. This is necessary to protect linearization of resources for imperative code, and to ensure compatible cross-model data queries between RDP and imperative, and potentially for logically continuous expiration of volatile capabilities via RDP behaviors. These 'live' tokens shall be treated as volatile capabilities within Wikilon. If we also assume purely functional objects, then we can reject tokens even in query or update messages. (Aside: in type system terms, location of code corresponds to a modality; isolation corresponds to a universal or unconstrained location.)
 
-6. **capability-string based hyperlinking** We can't store live tokens, but we'll still want to model hypertext, directories, registries, relationships, etc.. So we'll need some form (to be determined) of capability strings, which may be passed to a powerblock to access resources without accidentally aliasing them. We'll want to use *the exact same strings* for external programmability of Wikilon, via web APIs (PUT, POST, GET, etc.). These must be true capability strings, providing authority independent of user identity, no need for permissions (thus one less failure mode).
+6. **capability-string based hyperlinking** We can't store live tokens, but we'll still want to model hypertext, directories, registries, relationships, etc.. So we'll need some form of capability values which may be passed to a powerblock to access resources without accidentally aliasing them. Also, we'll want to use *the exact same strings* for external programmability of Wikilon, e.g. via web APIs (PUT, POST, GET, etc.). These must be true capability strings, providing authority independent of user identity, no need for permissions (thus one less failure mode).
 
 # Brainstorm Mode!
 
@@ -33,42 +33,104 @@ In context of RDP, this division process must be stable, idempotent, and commuta
 
 A natural fit for this spatial organization is the simple tree data structure. We would delegate subdirectories to each agent or application. A critical constraint, then, is that authority to a child directory offers no inherent authority to the parent, i.e. no `..` path unless it is granted explicitly. 
 
-Though, one property I dislike about trees is how frequently applications depend on the layout of objects within a tree, or compare locations of objects. We might mitigate this by offering an illusion of each agent or application having its own root authority. Usefully, we can potentially implement stable but opaque names by use of secure hash or HMAC. 
+Though, one property I dislike about trees is how easily applications become dependent upon the relatively arbitrary structures. We might mitigate this by offering an illusion of each agent or application having its own root authority. Usefully, we can potentially implement stable but opaque names by use of secure hash or HMAC. 
 
-For now, let's take as a given: tree structure semantics, hidden by GUID IDs.
+For now, let's take as a given: **tree structure semantics, but opaque IDs**
 
-Besides directories, our tree structure will have many 'leaf objects', representing the user-defined resources. As mentioned earlier, I currently favor pure functional objects in this role, with a clean separation of read-only queries and write-only updates. But we may find some use for other objects, such as:
+Besides directories, our tree structure will have many 'leaf objects', representing the user-defined resources. As mentioned earlier, I currently favor pure functional objects in this role, with a clean separation of read-only queries and write-only updates, e.g. based on embedded literal objects. But we may find some use for other objects, such as:
 
-* read-only attenuation of directories and objects
-* transparent redirects for mounts or revocations
-* script-like resources; ad-hoc attenuation and adapters
-* name sealers unsealer pairs, demand monitor pairs, etc.
+* **read-only access** to a directory should give us both the ability to browse a directory and query the objects within it, including read-only access to its subdirectories and their objects. This suggests every object would have a read-only variant on the capability. 
 
-It isn't clear to me what the limits are, how much flexibility is actually useful, or which features (if any) should be built into our model rather than constructed above it. It may be that a few, simple, specialized leaf objects could do the job. A few thoughts:
+* **transparent redirects** would offer an interesting ability to 'mount' objects or directories within other directories. Interestingly, this could give an inverted view compared to conventional databases: my home is root, but I have access to public or shared resources in subdirectories. Redirects and mounts may also serve as a useful foundation for visible, *transitively revocable* attenuation.
 
-* Read-only access to a directory should give us both the ability to browse a directory and query the objects within it, including read-only access to its subdirectories and their objects. This suggests every object would have a read-only variant on the capability. Rob Meijer's work on Rumpelstiltskin hash trees seems like it should be applicable. 
+* **scripts** allow transparent scatter-gather of data, lenses and data model transforms, ad-hoc attenuation, etc.. Usefully, we can have a clean separation of responsibilities: scripts are stateless, but instead are encoded as simple transactions or RDP behaviors. Scripts would be extremely beneficial for expressiveness and extensibility of the resource model.
 
-* Transparent redirects offer an interesting ability to 'mount' objects in other directories, essentially making them sharable. They might also support revocation, which might have security implications: no create/destroy authority over source of mounted objects. Might also mount AO dictionary, read-only. :)
+* **identities** are also necessary for demand monitors, constraint models, and other stateless resources. They might also be useful for secure random number generators and other, related concepts.
 
-* Scripts could allow transparent scatter-gather of data, lenses and data model transforms, ad-hoc attenuation, etc.. Usefully, we can have a clean separation of responsibilities: scripts are generally not stateful, but instead are encoded as simple transactions or RDP behaviors.
+I've already filtered this list down to what I think are great ideas, worth implementing. 
 
-* Treating various other resources (sealers/unsealers, demand monitors, etc.) as objects seems like a very easy way to give them stable, shared identity. I think it's worth exploring, but might be limited to objects that need identity for some reason.
+So, what shall our capabilities look like?
 
-All these ideas are worth exploring. But I think scripts, most of all, would be extremely beneficial for expressiveness and adaptiveness of the resource model, allowing very ad-hoc extension and reprogrammability and direct embedding of useful applications. 
+* **authority descriptor** e.g. query only
+* **stable identifier** specific to the object
+* **redirect tracker** to support revocation
+* **hmac of the above** to secure the capability
+* **compacted into a string** suitable for use in a URL
 
-Responsibility for creating objects, enumerating, destroying them, etc. will require write authority on the directory containing them. Also, reading the *source code* (internal structure) of contained objects should require a write authority, otherwise you're limited to enumeration and queries on objects.
+Based on the idea that we'll mostly be working with objects and scripts (with their own built-in logic), we need two primary layers of authority: one to update or query through the message interface, and another to read or write source code for administrative and maintenance purposes. So I propose the following:
 
+        CODE    CLASS           AUTHORITIES         MNEMONIC
+         M      message         query+update        Message
+         N      name            name                Name
+         P      update          update              Post or uPdate
+         Q      query           query               Query
+         R      read            read                Read
+         S      inspect         read+update         inSpect
+         T      toplevel        read+write          Top
+
+            read implies query
+            read+write implies update
+            query or update imply name
+
+Write authority on a directory is needed to create or delete objects, and query to enumerate children. Name authority allows confirming an object's existence. Write-only is not supported because it is unwise to blindly write without giving the model some opportunity to defend itself. Update-only can be useful for a lot of problems. All of these authorities are transitive when enumerating directories. Scripts might also have some opportunity to act as membranes. 
+
+Stable identifiers 
+
+
+
+I'm thinking our capability strings should look a lot like this:
+
+        Mdpxgznkbmxftkjdphhgqsmbszdzmtnkypxqhzxqmzstsqmszqybtqskdpbxfhkbkzhngghqmgnftkbxshmpxhpszxpzqndjt
+
+Unlike conventional filenames or URLs, this resource identifier is almost devoid of human-meaningful semantic content and provides all the authority necessary to use it. So, while it's somewhat large, it's also combining all the roles of user (via tracker) and password (via HMAC), and may be used in ways that normal URLs cannot. The first character is a code for the authority we have, the rest include 192 bit GUID, 64 bit Tracker, 128 bit HMAC. No type descriptors. Embedding in bytecode would generally take the form:
+
+        "Mdpxgznkbmxftkjdphhgqsmbszdzmtnkypxqhzxqmzstsqmszqybtqskdpbxfhkbkzhngghqmgnftkbxshmpxhpszxpzqndjt
+        ~{&rsc}[{:rsc}]vr$c
+
+The annotation `{&rsc}` would assert that this is a valid identifier. This little step would mitigate many issues that arise from embedding strings and links in code! For example, we could easily scan for broken links. It may also enhance performance if we plan to use the resource many times. The `{:rsc}` discretionary sealer then prevents us from directly touching the string (at least by accident). 
+
+
+GUIDs and HMACs don't need any explanation.
+
+Trackers are intended to support *revocable* access to a directory or object. The main issue is directories: if you give Alice authority to a subdirectory, then later take that authority away, ideally we want the revocation to disable Alice's access to the directory *as if you had deleted it*. Essentially, revocability should also be transitive. 
+
+Unlike GUIDs, which must be stable, we want our 
+
+there is little need for stable trackers. Just the opposite, we *don't* want stable trackers, because reusing a tracker ID for the same resource is a problem. 
+
+
+
+
+
+
+ authorities to the children of that directory are also revoked. 
+
+Scripts might have some authority to attenuate names relative to some other name.
+
+The trigger for this revocation is essentially the destruction of an object. 
+
+The idea here is that tracker identifiers are determined entirely by the sequence of *explicitly redirection objects*.
+
+ sequence of transparent redirects. 
+
+
+Whenever a transparent redirect is added to the model, we'll select a random, unused tracker ID.
+
+
+
+
+
+Support for *transparent redirects*
+
+
+
+
+The *redirection trackers* are a rather important idea here. We're  important idea
 
 
 ## Unifying Objects and Directories?
 
 Uniformity is a nice property. It might be nice to unify objects and directories, i.e. presenting a similar interface such that directories don't require any special consideration in application logic, or that objects may simulate directories to some degree. But it certainly isn't clear to me how, without monadic objects or similar, we could create new names. The separation might be more useful to keep explicit.
-
-## Monadic Objects?
-
-If our objects were *monadic*, they could actually return a little more code to run in response to an update or query. This might offer a flexible way to model attenuation.
-
-Even if we strongly separate reads from updates, we could query an object for 'pending' operations 
 
 It is possible to model transparent redirects as primitive objects, and perhaps even a few other structures. 
 

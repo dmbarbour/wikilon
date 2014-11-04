@@ -17,55 +17,6 @@ See also:
 * [Awelon Bytecode (ABC)](https://github.com/dmbarbour/awelon/blob/master/AboutABC.md)
 * [Awelon Project vision](https://github.com/dmbarbour/awelon/blob/master/AwelonProject.md)
 
-## Intended Features
-
-Some of the following will depend heavily on a maturing dictionary. Others may require code at the Wikilon core. Others may shift from core to dictionary over time. It will certainly take time to accomplish much of the following:
-
-* dictionary manipulations
-* transactional or DVCS-like editing of wiki
-
-* console-like web service to replace AOI
-* convenient command-line console interface to web services?
- * system-integration; access to defs, ABC, cross-compiled code, etc.
- * may also serve as watch-dog app, i.e. restart automatically on crash
-* iPython notebook inspired apps - i.e. living consoles
-
-* refactoring tools
- * rename a word (or a common suffix/prefix); renaming may need special transaction
- * find all uses of a word
- * automatic test generation, property testing
- * automatic word-variant generation (e.g. for operating lower on stack)
- 
- 
-* shorthand views: render with color or icons or small suffix, etc. to compact text
-* shorthand writing: fuzzy find, tab completion, type-sensitive search
-
-* compile AO code to ABC (head or history)
-* import and export for AO dictionary formats
-* automatic testing as word definition changes
-* view live use-cases for words while editing
-* debugging, visualization, animation of AO code
-* record errors; automatic regression test generation
-* serve as repository for ABC resources
-* integrate distributed access to ABC resources
-* development of [embedded literal objects](../doc/ExtensibleLiteralTypes.md)
-* define words that add new web applications
-* define words that add new web services
-* plugins or processes for service performance
-* JavaScript compilation of ABC for browser
-* cross-compile apps for Android, desktop, etc.
-* DVCS-like forking and push/pull of AO dictionary
-* support for multiple users, logins, security
-* development of RDP reactive behaviors and resources
-* publish or use services in open distributed systems
-* distributed behaviors, user agents, and mobile code
- * i.e. operate as software platform, distributed OS
-
-* SSL/TLS support. (DONE)
-* compression support. **wai-extra** seems to support this. (DONE)
-* potential fast-cgi support? (separate executable? e.g. `wikilon-fcgi`)
- * note: it seems SCGI isn't compatible with use of acid-state for persistence
-
 Code that runs on the server will generally be given limited resources and some means for job control. I would prefer that resource failures be deterministic.
 
 All state associated with Wikilon will be persistent. Also, I'm likely to keep logarithmic histories for everything, including service states, to allow for robust recovery and debugging.
@@ -96,18 +47,8 @@ If TLS is enabled, Wikilon will reject insecure connections. If you plan to use 
 ## Under The Hood
 
 * **Haskell** for implementation
-* **acid-state** for persistence
-* **warp** for HTTP connectivity
-* **websockets** for web reactivity & live programming
-
-* persistence and logarithmic history for all states
-* implement initial console app by hand (with user or session?)
-  * idea: sessions akin to iPython notebook or xiki (persistent, live, AO code)
-* build in a user-model to start (a root user?)
-* build in import/export services
-* run all ABC code transactionally (for now)
-
-I like the idea of supporting multiple 'code bubbles' within a single browser tab/window, and keeping them up-to-date via websockets. This would make it easier to edit definitions and see the results in multiple other views. I should probably look into similar systems, which I understand to leverage iframes and similar. Both the CodeBubbles IDE and Xiki might be 
-
-I may need some external support to edit and view definitions via command line, e.g. for recovery purposes. In that case, I can either leverage Data.Acid.Remote for multi-process communication (that seems dubious and counter-productive to my long term goals), or I can try HTTP communication with an active instance and have a special localhost connection... or, alternatively, print a privileged capability-URI on the command line for administration.
-
+* **warp and wai** for HTTP connectivity
+* **websockets** for liveness and reactivity
+* **acid-state** for persistence and atomicity
+* **object capability model** for security and collaboration
+* **logarithmic history** for version control and regression testing

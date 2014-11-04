@@ -21,10 +21,13 @@ import Data.ByteString (ByteString)
 import System.Entropy (getEntropy)
 import Wikilon.SecureHash (hmacBlockSize)
 
--- | A secret is a high-entropy bytestring. With SHA3, this is
--- usually 104 bytes (832 bits).
+-- | A secret is a high-entropy bytestring. 
 type Secret = ByteString
 
--- | generate a new secret value of optimal size for use with hmac.
+-- | generate a new secret
 newSecret :: IO Secret
 newSecret = getEntropy hmacBlockSize
+    -- choice of hmacBlockSize is a pretty good option for most
+    -- secure hashes. For SHA3, it doesn't matter as much, but
+    -- might later allow optimization by preprocessing the secret
+    -- into the hash context.
