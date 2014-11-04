@@ -43,7 +43,7 @@ Besides directories, our tree structure will have many 'leaf objects', represent
 
 * **transparent redirects** would offer an interesting ability to 'mount' objects or directories within other directories. Interestingly, this could give an inverted view compared to conventional databases: my home is root, but I have access to public or shared resources in subdirectories. Redirects and mounts may also serve as a useful foundation for visible, *transitively revocable* attenuation.
 
-* **scripts** allow transparent scatter-gather of data, lenses and data model transforms, ad-hoc attenuation, etc.. Usefully, we can have a clean separation of responsibilities: scripts are stateless, but instead are encoded as simple transactions or RDP behaviors. Scripts would be extremely beneficial for expressiveness and extensibility of the resource model.
+* **scripts** allow transparent scatter-gather of data, lenses and data model transforms, ad-hoc attenuation, etc.. Usefully, we can have a clean separation of responsibilities: scripts are stateless, but instead are encoded as simple transactions or RDP behaviors. Scripts would be extremely beneficial for expressiveness and extensibility of the resource model. May have opportunity to attenuate authorities based on caller.
 
 * **identities** are also necessary for demand monitors, constraint models, and other stateless resources. They might also be useful for secure random number generators and other, related concepts.
 
@@ -53,30 +53,85 @@ So, what shall our capabilities look like?
 
 * **authority descriptor** e.g. query only
 * **stable identifier** specific to the object
-* **redirect tracker** to support revocation
+* **path tracker** for transitive revocation
 * **hmac of the above** to secure the capability
 * **compacted into a string** suitable for use in a URL
 
-Based on the idea that we'll mostly be working with objects and scripts (with their own built-in logic), we need two primary layers of authority: one to update or query through the message interface, and another to read or write source code for administrative and maintenance purposes. So I propose the following:
+Based on the idea that we'll mostly be working with objects and scripts (with their own built-in logic), I feel we need two primary layers of authority: one to update or query through the message interface (which allows objects to protect themselves), and another to read or write source code for administrative and maintenance purposes. So I propose the following:
 
         CODE    CLASS           AUTHORITIES         MNEMONIC
-         M      message         query+update        Message
          N      name            name                Name
-         P      update          update              Post or uPdate
+         P      update          update              Post, Push, uPdate
          Q      query           query               Query
+         M      message         query+update        Message
+         K      destroy         kill                Kill
          R      read            read                Read
          S      inspect         read+update         inSpect
-         T      toplevel        read+write          Top
+         W      ownership       read+write          Write, oWn
 
             read implies query
             read+write implies update
             query or update imply name
+            write implies kill
 
-Write authority on a directory is needed to create or delete objects, and query to enumerate children. Name authority allows confirming an object's existence. Write-only is not supported because it is unwise to blindly write without giving the model some opportunity to defend itself. Update-only can be useful for a lot of problems. All of these authorities are transitive when enumerating directories. Scripts might also have some opportunity to act as membranes. 
+Write authority on a directory is needed to create objects, query to enumerate children. Name authority allows confirming an object's existence. Write-only is not supported because I consider it unwise to blindly write without giving a model some opportunity to defend itself. Update-only is probably sufficient for a job where write-only might be considered, or you could use a script. Kill is an attenuation of write, and allows deleting an object (resetting it back to initial state). More codes can be added as needed to cover new use cases, so long as there's a nice lattice involved. E.g. it might be neat to disable an object, but it isn't really clear how this fits the current lattice, except maybe by cutting a redirect.
 
-Stable identifiers 
+These authorities also attenuate objects discovered through enumeration of directories or by naming children. I'd like to support similar 'discovery attenuation' for capabilities held within scripts, at least as an optional transform.
+
+Regarding stable identifiers, I'm inclined to leverage HMAC with the parent's unique identifier and the child's pet name (e.g. "foo"). This would provide stability regardless of whether an object is destroyed and created many times. Since HMAC is mixed with a secret, it's also infeasible to reverse, e.g. in case someone with a reference wonders where the object sits in the tree or forest.
+
+The path tracker seems a challenging element to model. 
+
+Any given capability is discovered through a finite sequence of steps, e.g. from parent to child, and via transparent redirects. If any of these steps are broken, the capability should be disabled. This supports *transitive revocation*, which is a useful property when delegating various authorities. 
 
 
+There should exists an 'authoritative path' through our resource model, e.g. from parent to child or via transparent redirects. This path leads us to our current capability. 
+
+ via redirects, that allowed us to discover a particular capability. This path is distinct from conventional parent to child relationships. We must validate that such a path still exists in order to continue use of our capability, thereby allowing transitive revocation. But it isn't very clear how to track this path without our capability strings growing arbitrarily large.
+
+A more explicit variation is to add a 'liveness dependency' to an existing capability - albeit, in a functional way, i.e. `withDependency(X,Y)` may create a new capability that is just the same as `X` except that it is disabled if `Y` is destroyed or disabled. Usefully, such an expression would be idempotent. Unfortunately, I still don't know how to represent this relationship without capabilities growing very large.
+
+
+
+While this idea is interesting, a simpler approach might be to explicitly attenuate a capability relative to some other objects, returning a new capability that will be revoked
+
+What is the shape of this path? Well, normal paths are modeled as a list of vertices. But in this case, we might need to deal with named edges, e.g. representing specific redirects. 
+
+Something like: object redirect object redirect object redirect?
+
+
+. Obviously, we can't start at root, since that could access everything. Nor can we start at , especially in context of possible cycles.
+
+
+
+
+
+Mostly, this path would consist of 
+
+besides the obvious parent to child relationship, that allows discovery of a resource. For the most part, this path will involve transparent redirection. 
+
+If any step in that path is disabled, then so should be the capability in question. 
+
+might work on a very simple principle: if any object identified by the tracker is disabled, then so is our capability. 
+
+This simple technique protects principles of both revocability and visibility. To effectively leverage a tracker will take some more sophisticated logic at the endpoints, but the idea is that most trackers will be associated  
+
+The HMAC shouldn't 
+
+The 
+
+
+
+
+ Tracker IDs are also stable, so it's feasible to temporarily disable a subset of capabilities and enable them again later; developers are simply encouraged to not reuse trackers. 
+
+
+
+
+Trackers are intended to support *revocable* access to a directory or object. The main issue is directories: if you give Alice authority to a subdirectory, then later take that authority away, ideally we want the revocation to disable Alice's access to the directory *as if you had deleted it*. Essentially, revocability should also be transitive. 
+
+
+The final HMAC to protect the capability needs no explanation.
 
 I'm thinking our capability strings should look a lot like this:
 
@@ -92,7 +147,6 @@ The annotation `{&rsc}` would assert that this is a valid identifier. This littl
 
 GUIDs and HMACs don't need any explanation.
 
-Trackers are intended to support *revocable* access to a directory or object. The main issue is directories: if you give Alice authority to a subdirectory, then later take that authority away, ideally we want the revocation to disable Alice's access to the directory *as if you had deleted it*. Essentially, revocability should also be transitive. 
 
 Unlike GUIDs, which must be stable, we want our 
 
