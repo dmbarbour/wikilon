@@ -17,6 +17,9 @@
 -- This is much better than base64. The encoding breaks even at six
 -- bytes. And this base16 approach does not interfere much with more 
 -- byte-level compression.
+--
+-- TODO: switch encoder/decoder/compression to operate on lazy byte
+-- strings or byte string builders, for extra performance.
 -- 
 module Wikilon.Base16 
     ( alphabet
@@ -30,6 +33,7 @@ import Control.Exception (assert)
 import Data.Word
 import qualified Data.List as L
 import qualified Data.Array.Unboxed as A
+
 
 -- | The alphabet for embedding Base16 in ABC is not conventional.
 -- Instead of 0-9 A-F, we use the lower case alphabet minus vowels

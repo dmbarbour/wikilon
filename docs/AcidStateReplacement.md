@@ -10,9 +10,7 @@ Acid-state also has a bottleneck. All writes are serialized. But I feel this is 
 
 While not strictly necessary, I would like to support asynchronous computations via annotation. This suggests support for hierarchical transactions and MonadFork may be necessary.
 
-So, the main issue is getting 'cold' data onto the disk.
-
-And doing so without abandoning ACID properties of acid-state. ACID is awesome.
+So, the main issue is pushing 'cold' data onto the disk. And doing so without abandoning ACID properties of acid-state. ACID is awesome.
 
 What is available to me on this end? To be investigated:
 
@@ -24,11 +22,17 @@ What is available to me on this end? To be investigated:
  * Naive allocation strategy; limit 100MB. Fixable?
 * **TCache** (very promising)
  * STM transactions with external, abstract storage.
+ * DBRefs can reference other DBRefs (nice!)
  * Includes adapter to AWS. User programmable backends.
+ * Seems to integrate with local STM, too.
 * **TX** (needs work)
  * Lacks checkpointing. 
  * Doesn't do anything to keep cold data on disk.
  * Nice interface. Might be adaptable.
 * existing databases and key-value stores
 * write my own if necessary
+
+
+Of these, **TCache** is by far the closest to what I need. 
+
 
