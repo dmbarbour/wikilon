@@ -83,7 +83,7 @@ To model the path tracker, my best idea is to simply include the entire path (fr
             DDDDDDDD    /
                 HHHH    hmac (four bytes to right of last path element)
 
-Then we'll simply XOR everything together. To relocate our object, we'll start at our root, find candidates that start with `A`, XOR candidates out of the string, which exposes `B`, then search for children whose names start with `B`, etc.. Collisions are gradually filtered out across multiple steps in the path, and the last step we expose four bytes to further reduce candidates. This search is essentially a tradeoff for a shorter capability string. 
+Then we'll simply XOR everything together. To relocate our object, we'll start at our root, find candidates that start with `A`, XOR candidates out of the string, which exposes `B`, then search for children whose names start with `B`, etc.. Collisions are gradually filtered out across multiple steps in the path, and the last step we expose four bytes to further reduce candidates. This search is essentially a tradeoff for a shorter capability string. (Idea: Make filter-factor tunable, e.g. when naming the directory, so we can anticipate some large flat directories. Or track which branching factors have been used?)
 
 The final element is an HMAC to protect the capability string from forgery, protecting the auth code. It's also a final disambiguating element. We can probably write a paper about the failure of a hash function if this effort failure of a hash function if this effort fails to disambiguate two items.
 
