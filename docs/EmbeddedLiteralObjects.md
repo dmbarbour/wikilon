@@ -58,7 +58,7 @@ So we might end up with something like this (distributed across transactions):
         @define o#3 o#2 update2
         ...
 
-Each word results in a new ELO word. The transport and storage costs, thusly, are limited to the expression of updates. We can still have the old 'copy+paste' benefits of literals, since we can trivially copy `o#3` into a new word, essentially forking the model. In the mid term, preservation of updates directly within the dictionary could be a significant advantage because it supports mining of this update history to find and refactor useful new words. 
+Each word results in a new ELO word. The transport and storage costs, thusly, are limited to the expression of updates. We can still have the old 'copy+paste' benefits of literals, since we can trivially copy `o#3` into a new word, essentially forking the model. In the mid term, preservation of updates directly within the dictionary could be a significant advantage because it supports mining of this update history to find and refactor useful new words. (Might be useful to separate actions from initial state, too.)
 
 The main weakness of this approach is the preservation of updates, which creates an unbounded storage cost if we make many changes to objects. But, as I mentioned earlier, this might be addressed by some combination of checkpointing and refactoring, guided by human agents or an expert system that can make good decisions about how much history to keep around. (An exponential decay model is also an interesting basis.)
 
@@ -71,7 +71,7 @@ Another option is to aggregate updates ASAP, and factor more often...
         @update o#1 blankCanvas update1 update2
         @update o#1 blankCanvas update1 update2 update3
 
-But this approach does complicate copy+paste. I think the earlier approach will be simpler and richer in the long run, i.e. shrinking the dictionary after the fact in a more ad-hoc and flexible fashion.
+But this approach does complicate copy+paste. I think the earlier approach will be simpler and richer in the long run, i.e. shrinking the dictionary after the fact in a more ad-hoc and flexible fashion. Also, we might combine multiple updates associated with any given dictionary transaction relative to the earlier mode, so we can still have flatter histories.
 
 Anyhow, the important bit is that the resulting object can be evaluated statically, and is self-describing for rendering and further update options.
 

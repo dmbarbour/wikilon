@@ -1,6 +1,6 @@
-Acid-state won't scale to my needs.
+The **acid-state** package won't scale to my needs.
 
-Usually, I'm not very confident about such performance assertions. I don't doubt acid-state will scale pretty well up to a few hundred megabytes, though GC costs start to scale non-linearly, which is a problem. We can do a lot with a few hundred megabytes. But...
+Usually, I'm not very confident about such performance assertions. I don't doubt acid-state will scale pretty well up to a few hundred megabytes, though GC costs would begin to scale non-linearly (which is a problem). We can do a lot with a few hundred megabytes. But...
 
 AO isn't like most other languages. It's intended for use in a fashion similar to Wolfram language, i.e. having tons of data readily available, and building interesting data-things into the dictionary for reuse elsewhere. Further, we'll have a great many versions of our code and data, multiplying storage costs by a few orders of magnitude (modulo excellent, multi-layered compression tactics). I can easily afford big storage costs, so long as they're outside my process memory and outside purview of the normal garbage collector. One hundred gigabytes? No problem, just get an SSD or buy a little space in the cloud. 
 
@@ -38,21 +38,70 @@ What is available to me on this end? To be investigated:
 
 Of the native Haskell solutions, **TCache** seems okay. Its 'IResource' model seems pretty bad, since it doesn't offer a clean separation of resource type from storage strategy. It isn't very clear to me that it will be fast or scalable, and I have doubts about its quality. OTOH, it does offer a backend for Amazon S3 storage. It does offer a backend for Amazon S3 storage, which seems a sweet feature useful for my long term goals of running on a cloud.
 
-The **berkeley db** option is undoubtedly robust, fast, and scalable. It would require a persistent host (VPS?) instead of a cloud instance. This might eventually be mitigated by developing a separate application that (via the replication interface) will back up BDB, or at least the log files. 
+The **berkeley db** option is undoubtedly robust, fast, and scalable. Has scaled to hundreds of terabytes. Has a `DB_TXN_WRITE_NOSYNC` option that might be useful for statistics or perma-cache. It would require a persistent host (VPS? rackspace, atlantic, lots of offers for $20/month or so) instead of a cloud instance. Has two different bindings in Haskell.
 
-I could combine these two, using **TCache** backed by **berkeley db**. Not sure it would do me any good, though, with each having its own transaction manager.
+At the moment, I'm leaning in favor of BDB. 
+
+(Thought: Might be useful to combine BDB+STM.)
 
 # History and Cold Storage
 
-Assuming I have transparently memcached, transactional, persistent variables.
+Assuming I have transparently memcached, transactional, persistent variables...
 
 How should I represent history? 
 
 The idea with history is that we have some timeline of updates to our resources, such that we may later examine historical states for our data. Potentially, we may support branching time, i.e. the ability to begin operating on a past state (or, generally, to model branches). That's a useful idea, e.g. for debugging at historical times. In any case, we should certainly be able to study the past states. I also want to use logarithmic history, which is mostly a strategy for forgetting. This might be implemented a number of ways: ring buffers, probabilistic merge, or periodic decimation.
 
-My goal, of course, is to avoid loading multiple versions for large objects into memory (i.e. temporal index) and to avoid loading lots of unnecessary values into memory (i.e. spatial index). It might also be nice to automatically intern frequently used structures.
+My goal, of course, is to avoid loading multiple versions for large objects into memory (i.e. temporal index) and to avoid loading lots of unnecessary values into memory (i.e. spatial index). It might also be nice to automatically intern frequently used structures (i.e. content addressing), but that would require I track shared usage or occasionally perform a GC.
+
 
 TODO: Design it.
+
+I'll start with the dictionary. 
+
+* I shouldn't need to load the entire dictionary into memory. 
+* I shouldn't need to load entire history for a word into memory.
+* I should support multiple 'views' of dictionary on temporal axis.
+* I should support metadata (types, compiled forms, etc.) from past.
+* I would like to preserve transactional view of dictionary updates.
+* I would like to preserve clean 'slices' in time for whole dictionary.
+* It is okay to load compact metadata associated with a word's history.
+* It is okay to load compact metadata associated with a dictionary's history.
+
+Ideas:
+
+* give transactions small IDs, e.g. 2 bytes each.
+
+
+Store transactio metadata
+
+
+A dictionary will eventually contain lots of binary data, ELOs, and so on, and will grow very large, both in number of words and content for a small subset of words. Similarly, I shouldn't need to load the entire history for each word. I also want to make it easy for different users to have different 'views' of the dictionary on the temporal axis.
+
+I do want to preserve the notion of a dictionary as a simple list of transactions.
+
+
+
+
+
+
+
+One concern is that developers will frequently have historical views of the dictionary. In addition, I might want to preserve certain amounts of metadata associated with these historical views, e.g. compiled and optimized code, type information, and so on. 
+
+
+
+
+
+I shouldn't need to load the entire history of the dictionary into memory. I should still support transactions-list as a way to share histories.
+
+To avoid loading the entire dictionary, words must be loaded either individually or in small groups.
+
+
+
+
+
+
+
 
 
 

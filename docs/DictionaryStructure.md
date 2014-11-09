@@ -45,7 +45,7 @@ There are many possible ways to compact memory requirements. Quick list:
 * favor gzipped, binary representations of transactions in memory...
 * use secure-hash key-value store for transactions
 
-Interning can save memory by combining references to common words. I'm not sure how much this will save, but I suspect it's pretty large after accounting for a long history, multiple forks, and inverted indices. I went ahead and did this via Edward Kmett's `intern` package.
+Interning can save memory by combining references to common words. I'm not sure how much this will save, but I suspect it's pretty large after accounting for a long history, multiple forks, and inverted indices. I went ahead and did this via Edward Kmett's `intern` package. But it might be better to intern explicitly.
 
 Compressing transactions in-memory could work pretty well. We don't often access the transactions except to build the initial dictionary upon loading, or a historical dictionary, or when performing a compaction. So we could possibly save a lot of memory and reduce burden on GC if we serialize and compress transactions that aren't necessary at any given moment.
 
@@ -54,5 +54,9 @@ We can go a step further, and store transactions externally, and only load them 
 Alternatively, it might be useful to compress a full list of transactions. And the extension of this would be to name lists of transactions via secure hash, though that would still result in GC issues.
 
 
+# Attributes and Directives
 
+At the moment, I'm using naming conventions to support attributes and directives. For example, `doc.foo` is documentation for word `foo`, and `compile!foo` might indicate that we should compile word `foo`. I like this organization because it treats attributes as first-class values, subject to the normal refactoring and abstraction. But one weakness seems to be that renaming `foo` won't automatically rename all associated words.
+
+One solution might be to treat multi-part words as just that, with parts renameable individually. OTOH, this would greatly complicate the code for renaming, and what kind of index is necessary. So, maybe it would be better to stick with the current ad-hoc approach, of simply searching for all potentially related words and giving the user opportunity to rename them, too.
 
