@@ -25,6 +25,9 @@ All state associated with Wikilon will be persistent. Also, I'm likely to keep l
 
 As Wikilon approaches a usable state, I'll provide instructions for setting it up and getting started. 
 
+* install BerkeleyDB
+ * (Ubuntu) sudo apt-get install libdb-dev
+* cabal install --only-dependencies
 * cabal install
 * if ~/.cabal/bin directory is not in PATH, consider adding it
 * set WIKILON_HOME environment variable to a directory name
@@ -49,7 +52,7 @@ If TLS is enabled, Wikilon will reject insecure connections. If you plan to use 
 * **Haskell** for implementation
 * **warp and wai** for HTTP connectivity
 * **websockets** for liveness and reactivity
-* **[???](docs/AcidStateReplacement.md)** for persistence and atomicity
+* **Berkeley DB** for persistence and atomicity
 * **object capability model** for security and collaboration
 * **logarithmic history** for version control and regression testing
 

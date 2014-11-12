@@ -29,8 +29,6 @@ module Wikilon.Wiki
 
 import Control.Applicative 
 import Control.Monad.State.Strict
-import qualified Data.Serialize as C
-import qualified Data.SafeCopy as SC
 import qualified Codec.Compression.GZip as GZip
 
 import qualified Data.List as L
@@ -137,6 +135,7 @@ _defaultDecay = Decay
 _defaultDictHist :: Int
 _defaultDictHist = 5 * (decay_keep _defaultDecay)
 
+{-
 instance SC.SafeCopy Wiki0 where
     errorTypeName _ = "Wikilon.Wiki:Wiki0"
     version = 0
@@ -238,3 +237,4 @@ getZBytes :: C.Get LBS.ByteString
 getZBytes = (b16x . gzx) <$> C.get where
     gzx = GZip.decompress
     b16x = LBS.pack . B16.decompress . LBS.unpack
+-}

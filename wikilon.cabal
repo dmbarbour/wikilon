@@ -57,11 +57,6 @@ Library
     , array (>= 0.4)
     , mtl
 
-
-    , acid-state (>= 0.12.3)
-    , safecopy (>= 0.8)
-    , cereal (>= 0.4.1.0)  
-
     , websockets (>= 0.9)
     , wai (>= 3.0)
     , http-types 
@@ -93,8 +88,8 @@ Library
     Wikilon.DictST
     Wikilon.DictTX
 
-    Wikilon.Wiki
-    Wikilon.User
+    -- Wikilon.Wiki
+    -- Wikilon.User
 
     Wikilon.AO
     Wikilon.ABC

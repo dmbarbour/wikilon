@@ -39,13 +39,11 @@ Besides directories, our tree structure will have many 'leaf objects', represent
 
 * **transparent redirects** transparently pass on all messages received by them (including read and write). You can distinguish a transparent redirect, or modify it, only by reading and writing at the level of the directory it is part of. Allows us to mount a shared "/public" directory within each user's space. Redirect also forms a basis for *transitive revocation*. 
 
-* **scripts** allow transparent scatter-gather of data, lenses and data model transforms, ad-hoc attenuation, etc.. Scripts would be capability secure, i.e. receiving absolutely no authority from their organization within in the tree. Separation of scripts and state simplifies extensibility.
-
-Usefully, we can have a clean separation of responsibilities: scripts are stateless, but instead are encoded as simple transactions or RDP behaviors. Scripts would be extremely beneficial for expressiveness and extensibility of the resource model. May have opportunity to attenuate authorities based on caller.
+* **scripts** allow transparent scatter-gather of data, lenses and data model transforms, ad-hoc attenuation, etc.. Usefully, we can have a clean separation of responsibilities: scripts are stateless, but instead are encoded as simple transactions or RDP behaviors. Scripts would be extremely beneficial for expressiveness and extensibility of the resource model. May have opportunity to attenuate authorities based on caller. Scripts should be capability secure, receiving no authority from location in the tree. 
 
 * **identities** are also necessary for demand monitors, constraint models, and other stateless resources. They might also be useful for secure random number generators and other, related concepts.
 
-I've already filtered this list down to what I think are great ideas, worth implementing. 
+I've already filtered the above list down to what I think are great ideas, worth implementing. 
 
 So, what shall our capabilities look like?
 
@@ -102,3 +100,4 @@ Alternatively, the auth code could also be encrypted. That might even be better,
 This embedding offers several advantages. First, it's a semantically faithful representation. Capability strings fundamentally are cryptographically sealed values. Second, it hinders embedding of capability strings within AO code, since cryptographic seals are generally not valid AO code, and at least would be easy to locate. Third, it has potential to track which wiki each resource is associated with, along with any version indicators. 
 
 Also, while I might permit forging text into capability strings in a few special cases, it will be easier to restrict and track these cases within the scope of the resource model and applications.
+
