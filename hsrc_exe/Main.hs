@@ -25,10 +25,11 @@ helpMessage :: String
 helpMessage =
  "The `wikilon` executable will initiate a Wikilon web service.\n\
  \\n\
- \    wikilon [-pPort] [-cCert] [-s] [-init] [-SCGI] \n\
- \      -pPort: listen on port & save as new default (def 3000) \n\
- \      -s: silent mode; do not display greeting or admin URL. \n\
+ \    wikilon [-pPort] [-mMB] [-s] [-init] \n\
+ \      -pPort: listen on given port (def 3000; saved) \n\
+ \      -mMB: Berkeley DB cache size in megabytes (def 5; saved) \n\
  \      -init: initialize & greet, but do not start. \n\
+ \      -s: silent mode; do not display greeting or admin URL. \n\
  \\n\
  \    Environment Variables:\n\
  \      WIKILON_HOME: directory for persistent data\n\
@@ -64,6 +65,9 @@ defaultArgs = Args
 
 defaultPort :: Int
 defaultPort = 3000
+
+defaultCache :: Int
+defaultCache = 5
 
 wiki_crt,wiki_key :: FS.FilePath
 wiki_crt = "wiki.crt"
@@ -154,21 +158,29 @@ runWikilonInstance a = mainBody where
 showFP :: FS.FilePath -> String
 showFP = T.unpack . either id id . FS.toText
 
+-- load a file assuming read/show as a viable serialization format.
+-- This will work for numbers, but not for everything.
+loadRS :: (Read a, Show a) => FS.FilePath -> a -> Maybe a -> IO a
+loadRS fp _ (Just a) = 
+    let bytes = UTF8.fromString (show a) in
+    FS.writeFile fp bytes >>
+    return a
+loadRS fp def Nothing = 
+    FS.isFile fp >>= \ bFile ->
+    if not bFile then loadRS fp def (Just def) else
+    (UTF8.toString <$> FS.readFile fp) >>= \ fileContents ->
+    case tryRead fileContents of
+        Just a -> return a
+        Nothing -> 
+            let fpTxt = T.unpack (either id id $ FS.toText fp) in
+            fail $ "could not read " ++ fpTxt 
+
 -- select and save wikilon port information
 loadPort :: FS.FilePath -> Maybe Int -> IO Int
-loadPort h (Just p) =
-    let fp = h FS.</> "port" in
-    let bytes = (UTF8.fromString (show p)) in
-    FS.writeFile fp bytes >>
-    return p
-loadPort h Nothing =
-    let fp = h FS.</> "port" in
-    FS.isFile fp >>= \ bFile ->
-    if not bFile then loadPort h (Just defaultPort) else
-    (UTF8.toString <$> FS.readFile fp) >>= \ sPort ->
-    case tryRead sPort of
-        Just p -> return p
-        Nothing -> fail "could not read WIKILON_HOME/port file"
+loadPort h = loadRS (h FS.</> "port") defaultPort
+
+loadCache :: FS.FilePath -> Maybe Int -> IO Int
+loadCache h = loadRS (h FS.</> "cacheSize") defaultCache
 
 err :: String -> IO ()
 err = Sys.hPutStrLn Sys.stderr

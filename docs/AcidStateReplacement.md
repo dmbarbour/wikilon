@@ -13,13 +13,24 @@ After studying a few options:
 * **TX** - persistent STM ref, no checkpoint... unsuitable
 * **berkeley db** - key-value store, ACID, memcache
 
-Both **TCache** and **berkeley db** seem to be viable options. Of these, I think **berkeley db** may be the better choice, having a highly proven scalability. My intuition is that TCache code isn't very robust, and the IResource model should offer a better separation between data type and storage. 
+Both **TCache** and **berkeley db** seem to be viable options. Of these, I think **berkeley db** may be the better choice, having a highly proven robustness, performance, and scalability. My impression (from the multitude of spelling errors) is that TCache code isn't very robust, and the IResource model should offer a better separation between data type and storage. 
 
 Potentially, I could use TCache backed above BDB. OTOH, it isn't clear to me that this would offer any significant advantages. It might be worth emulating the cache from TCache, however, so I can reuse parsings? I'll need to think about it.
 
-The **berkeley db** option is undoubtedly robust, fast, and scalable. 
+Nested transactions are also a useful feature. They can allow me to `{try}` a behavior without fully committing to it, i.e. failure as undo, which could greatly simplify reasoning about partial failure and system consistency. Both BDB and STM can support this. 
 
-Nested transactions, supported by both BDB and STM (via `orElse`), should be useful for `{try}`-like behaviors in imperative code. 
+## BDB
+
+For BDB, I'll want to use the following flags:
+
+        DB_CREATE, DB_REGISTER, DB_RECOVER  (get started and recover if needed)
+        DB_THREAD, DB_INIT_LOCK, DB_INIT_LOG, DB_INIT_MPOOL, DB_INIT_TXN (subsystems)
+        (no logging flags)
+
+        DB_MULTIVERSION (copy-on-write, reduces risk of deadlock)
+        DB_TXN_SNAPSHOT (but only for read-only transactions)
+
+Also, I might want to relax durability, using explicit `sync` a few seconds after a transaction. 
 
 # Streaming Databases
 
@@ -31,192 +42,51 @@ The approach I was pursuing before, for the dictionary:
 * each transaction also includes a set of annotations
 * metadata tracking temporal information, updates collapsed, etc.
 
-My prior design was missing a few features, notably easy lookup of past states, *easy integration with RDP*, and parallelization of non-overlapping transactions.
+Unfortunately, it is too difficult to look up past states without building a lot of intermediate checkpoints. And it seems too difficult to parallelize computations that write to the dictionary, which isn't a problem for the dictionary itself but, sadly, doesn't generalize nicely to the filesystem model.
 
-To lookup past states, I propose the following feature: in addition to recording the new value of each object updated in a transaction, I record an identifier for the LAST transaction that updated the same object. Then, even if my transaction history has 20k samples, I can easily skip backwards to each prior version of a given value. The transaction identifier could be an incremental 64-bit ID, or it could be a timestamp. 
+To look up past states:
 
-I lean towards a simple, monotonic or non-decreasing, 64-bit transaction ID that lacks much semantic information. The idea, then, is that when transactions merge, we'll still be able to keep the information about a prior value for each variable. In case of non-decreasing IDs, when there are multiple transactions with the same ID, we might need to search all of them, but there is also no contention to create a transaction ID. Gradually, each transaction may come to represent a range of IDs due to merges and exponential decay. (Use of a timestamp as ID could also work, but we'd need to be careful because two transactions at *almost* the same time might serialize in a different order than their timestamps. This seems like an awkward observation.)
+* each transaction has a non-decreasing identifier, e.g. 64 bits
+* when variable is updated, we keep ID for the prior version
+* can then directly seek prior versions for each object in database
 
-For easy integration with RDP, an interesting idea is to model each state as an RDP signal, or having a similar composition model. The difficulty, here, is that I really don't want objects to grow arbitrarily large, and it's unclear what decay properties should be applied within each value, and it may be difficult to expose the particular 'model' associated with each value in the database. For now, let's stick with: "states have a value, and a history", and shift the whole problem of RDP-level signals into another layer.
+This technique will be compatible with exponential decay. When we merge two transactions, we keep the newest of the new versions and a reference to the older of the old transaction IDs. (Alternatively, we could use timestamps for transaction IDs. But I think it might be awkward if transactions serialize outside of the transaction timestamp ordering.) Merged transactions will then actually cover a volume of transaction IDs, and a volume in time.
 
-Finally, for parallelization, I should use a different variable/key for every attribute. What would this key contain? Possibly the current value, and the transaction ID that updated it. Or, maybe, just the transaction ID that updated it, thereby asking for us to look up the appropriate transaction to get the actual value. Storing the value directly is probably a better idea for scalable performance. Either way, the idea is that by reading and writing to this key/var, the underlying transaction model can manage the read-write conflicts (either optimistically or pessimistically).
+An interesting idea is that values within the database should be monoidal, such that we can compose values when merging transactions, e.g. like adding numbers or collapsing RDP signals. However, I think this might complicate the database overly much, and tie it too much to a particular runtime environment.
 
+In addition to access to prior versions of a word, we need easy access to the current version of each word. This suggests that we should keep a normal database mapping at least from word to a transaction ID. It wouldn't hurt to further map from a word to a transaction ID together with the current value, ensuring lookup of HEAD values  is relatively. This would also simplifiy parallelization, since reads and writes to HEAD values could leverage whatever concurrency scheme is supported by the underlying database.
 
+An interesting possibility is to allow destruction of the 'cached' version of each word independently of the transaction history. When an object is first created, then, we'll need to scan through the history to find any versions of it. Or, alternatively, we can build a cache from the history...
 
-
-
-The problem with this approach is that it further multiplies entities. 
-
-it might be a good idea to model each state as an RDP signal, such that we can merge signals as we gradually decay. 
-
-
-This identifier should be an incremental transaction ID.
-
-let's say we have the following feature: each t
-
-To support parallelization for non-overlapping transactions, I'll probably need to use the database directly so it can leverage its own transaction and locking model. With BDB, it seems feasible to use nested transactions to limit conflicts on finally updating the list of transactions.
-
-
-
-
- so long as I'm careful about it. To look up past states requires an index into the transaction list - e.g. a transaction ID or timestamp. 
-
-If I use transaction IDs, 
-
-
-
-
-I think this approach can be generalized, but it does have some costs:
-
-* as we merge transactions, each transaction gradually covers more of the database
-* 
-
-
-I think we can generalize this technique to a large-scale database, so long as we accept a consistent update model for all objects. 
-
-But my acid-state dictionary does have some weaknesses. First, I cannot easily look up prior versions of a value. Second, 
-
-
-
+Note that cached content may need to track whether a value has been 'deleted', since it might still have a prior value that we'll need to reference to track histories.
 
 # Value References
 
-I suspect the first thing I should do is model immutable value-refs, for values that are persistent but potentially shared within the database. I want to take advantage of memcache for long-lived values. I'll also need explicit destruction for these variables (or reference counts), to release them from persistence layer.
+I need the ability to work with very large values without loading them into memory all at once. This includes merged transactions for large databases and so on. I think a good way to model this is to model structured, persistent, memcached values that don't need to be fully loaded into memory.
 
-Immutable value-refs might use content addressing by default, and might automatically 'intern' smaller values into the identifier. The main problem with content addressing would be that I also need to track reference counts.
+Instead of saving a large structure into a massive binary, we can split a binary and save references for each piece. Later, we lazily load only the pieces we need. The main difficulty with this approach is garbage collection. Old values we don't need any more must be deleted from the database. Even if we use reference counts, we'll need to somehow *recursively* decref. This suggests that our database should know something about the internal structure of our objects.
 
+Proposal: develop a simple variation on JSON, YAML, CBOR, MsgPack, etc. as the 'structured value' model within the database. Include a simple feature for 'further lookup'. Simply encode all values in this format.
 
-
-
-
+If done correctly, we'll be able to model very large, structured values but load them into memory incrementally. Further, this might help 'intern' common structures, or (with content addressing) enable cheap 'diffs' between large values.
 
 # Logarithmic History
 
-Keeping a history can be challenging. We need to gradually delete old information to make room for new information. This would be easy to do on a per-variable basis, but doing so typically results in different variables decaying at different rates. I want a 'clean' history, in the sense that every available snapshot of history has a pristine view of the database at that time, and we only lose whole snapshots.
+If I model the database as a sequence of transactions, then I should be able to apply basically the same logarithmic history model that I applied before, repeatedly decimating the list to keep it hovering around a target size, gradually eliminating intermediate values to make room for new values.
 
-The basic alternatives I can think of:
+I like the idea of adding 'protection' to snapshots in the history, along with version names. Rather than making protection absolute, I could make it tiered: a level N snapshot won't be lost while there exist level N-1 neighbors in its vicinity. This should allow for something like major and minor and sub-minor versions, along with nameless transactions.
 
-1. database as one big value, Merkle tree
-2. database as lots of small values, but reify transaction log
+# Transaction Structure
 
-I'm not particularly keen on either of these techniques. Both serialize writes. The Merkle tree approach has, potentially, a very high overhead.
+A potential model for transaction structure is something like a patricia trie of named elements, or an otherwise flattened, hierarchical map from keys to values. Each transaction would essentially become miniature database. This might work pretty well, especially using value references. 
 
+Treating transactions as immutable values, rather than embedding them within the database, will likely have nicer properties for merging transactions. Albeit, at the cost of more expensive lookups. Which is better? 
 
+# Faster History Lookups
 
+Rather than just having one back-reference to the previous value in history, an interesting possibility is to keep multiple references into the past using a skip-list like structure, e.g. a list of three to five "other past values". This would allow deep references into the past when looking for a particular snapshot. I'll want to check if this would be too sophisticated. It might actually be easier than normal since I'd be adding to the skiplist only at the head. 
 
+# Dictionary
 
-
-Reifying the transaction log has some advantages: it's easy to model stream processing, to 'turn the database inside out' such that I can easily add new views over the stream. 
-
- and add new processing to it. OTOH, it doesn't seem a very good fit for BDB or other databases. 
-
- But I wonder if there might be a good intermediate approach to relax serialization, e.g. append-only on tree values, such that each Merkle tree represents a range of values that are lazily or latently resolved into a sequence of snapshots, but minimizing serialization on any particular element.
-
-An interesting technique might be to place variables themselves into a lazy Merkle tree, but logically 'opening' and 'closing' subtrees to model laziness and lift tree-split events gradually back to the top node.
-
-I think the ideal use-case here is to offer a snapshot-like view for any given timestamp.
-
-## Dictionary
-
-A dictionary consists of a set of (word,definition) pairs where definitions are acyclic and do not use any unrecognized words. 
-
-My earlier design for a dictionary involved explicitly reifying a list of transactions, and modeling the dictionary in terms of this list, mostly to simplify the computation of historical states. 
-
-A dictionary is constructed from a list of transactions. We'll parse and validate each transaction before accepting it. Old transactions must be occasionally combined as we add new ones, providing a basis for loss of information. We might keep a little extra metadata, such as the timestamp for each transaction. 
-
-The problem of collecting history could reasonably be separated from the transactions that update it. For simplicitly, let's do that. 
-
-Loading an entire dictionary of words into memory should not be a problem, even for a million word dictionary. 
-
-, but I'd rather avoid it if possible. This suggests that, for each word, I should also index which transactions modify it. And I might usefully  Consequently, loading a list of transaction IDs should be pretty cheap, e.g. 2 bytes each would be ideal (i.e. maxing out at less than 64k samples, but I'm expecting about 2k so I'm way under the limit.)
-
-A new transaction, then, would involve touching the following:
-
-* 
-
-It should be feasible to load information 
-
-
-
-
-I'll systematically combine old transactions while adding new ones, modeling a logarithmic history. The challenge is shifted from representing the basic dictionary to maintaining 'checkpoints' of it in a useful way. Alternatively, I should keep 
-
-In addition, for every word I may need a list of update times, i.e. transactions. 
-
- Each transaction will have a corresponding 
-
-
-* I shouldn't need to load the entire dictionary into memory. 
-* I shouldn't need to load entire history for a word into memory.
-* I should support multiple 'views' of dictionary on temporal axis.
-* I should support metadata (types, compiled forms, etc.) from past.
-* I would like to preserve transactional view of dictionary updates.
-* I would like to preserve clean 'slices' in time for whole dictionary.
-* It is okay to load compact metadata associated with a word's history.
-* It is okay to load compact metadata associated with a dictionary's history.
-
-Ok
-
-Okay, let's assume we want to keep transactions on the dictionary as basically the same. Each transaction is given a unique name, either via content addressing or 'newID', as a read
-
-I think the same basic design can apply: the 'whole dictionary' consists of a simple sequence of transactions. Each transaction is given a unique name. (Should I use content addressing for this? or just use a 'newID' mechanism?) We'll record each transaction as an object in the dictionary.
-
-Each transaction should have multiple attributes:
-* whole transaction value
-* relevant metadata
-* 
-* relevant metadata
-
-* list of words 
-
-The difficulty, then, will be providing dictionaries.
-
-We'll be able to look load timing information for each transaction, and other metadata.
-
-
-
-
-
-* The "whole dictionary" consists of a list of transactions
-
-
-* each transaction is given a unique identifier, e.g. an integer.
-* history is recorded as a list of transactions on the dictionary.
-* 
-* 
-* a history is a list of transaction IDs. 
-
-
-Store transactio metadata
-
-
-A dictionary will eventually contain lots of binary data, ELOs, and so on, and will grow very large, both in number of words and content for a small subset of words. Similarly, I shouldn't need to load the entire history for each word. I also want to make it easy for different users to have different 'views' of the dictionary on the temporal axis.
-
-I do want to preserve the notion of a dictionary as a simple list of transactions.
-
-
-
-
-
-
-
-One concern is that developers will frequently have historical views of the dictionary. In addition, I might want to preserve certain amounts of metadata associated with these historical views, e.g. compiled and optimized code, type information, and so on. 
-
-
-
-
-
-I shouldn't need to load the entire history of the dictionary into memory. I should still support transactions-list as a way to share histories.
-
-To avoid loading the entire dictionary, words must be loaded either individually or in small groups.
-
-
-
-
-
-
-
-
-
-
+In this design, our dictionary is possibly a separate database from the filesystem, but uses the same basic structure (albeit, with much more memorable keys). 
 
