@@ -11,6 +11,7 @@ module Wikilon.Time
     , getTime, parseTime
     , addTime, subtractTime, diffTime
     , fromUTC, toUTC
+    , dtToPicos
     ) where
 
 import Control.Applicative
@@ -20,7 +21,6 @@ import qualified Data.Time.Clock as Time
 import qualified Data.Time.Calendar as Time
 import qualified Data.Time.Format as Time
 import qualified System.Locale as Time 
-import Data.Function (on)
 -- import Control.Exception (assert)
 import qualified Data.Decimal as Dec
 
@@ -43,6 +43,9 @@ toPicos :: Int64 -> Integer
 toPicos dt = fromIntegral $ dt * 100000
     -- 100ns per time unit * 1000ps per ns
 
+dtToPicos :: DT -> Integer
+dtToPicos (DT dt) = toPicos dt
+
 -- | Estimate of current time from operating system.
 getTime :: IO T
 getTime = fromUTC <$> Time.getCurrentTime
@@ -55,10 +58,10 @@ fromUTC utc = T (timeDays + timeOfDay) where
     timeOfDay = round $ (secs * fromIntegral secLen)
 
 toUTC :: T -> Time.UTCTime
-toUTC (T t) = Time.UTCTime  where
+toUTC (T t) = Time.UTCTime days timeInDay where
     (d,q) = t `divMod` dayLen
     days = Time.ModifiedJulianDay (fromIntegral $ d + dayZero)
-    dt = Time.picosecondsToDiffTime (toPicos ps)
+    timeInDay = Time.picosecondsToDiffTime (toPicos q)
 
 -- | DT - a representation of a difference in two times
 -- Conversion functions treat as seconds. Precision is
@@ -88,26 +91,30 @@ instance Num DT where
         ab = fromIntegral $ dt + c 
     negate (DT a) = DT (negate a)
     abs (DT a) = DT (abs a)
-    signum (DT a) = signum a
+    signum (DT a) | (a > 0) = 1
+                  | (0 == a) = 0
+                  | otherwise = -1
     fromInteger = DT . (*) secLen . fromInteger
 
 -- 'Fractional' is primarily for the 'fromRational' 
 -- numeric conversions in seconds.
 instance Fractional DT where
-    (/) a b = picosToDt (q + c) 
-        where pa = dtToPicos a
-              pb = dtToPicos b
-              (q,r) = (pa * picosInSec) `divMod` pb  -- 
-              c = if (2 * r > pb) then 1 else 0  -- carry
+    (/) (DT a) (DT b) = DT (fromInteger q + c) where
+        ua = toInteger a
+        ub = toInteger b
+        lsec = toInteger secLen
+        (q,r) = (lsec * ua) `divMod` ub
+        c = if ((2 * r) > ub) then 1 else 0
     recip = (1 /) 
-    fromRational rat = picosToDt (q + c)
-        where (q,r) = (numerator rat * picosInSec) `divMod` denominator rat
-              c = if (2 * r > denominator rat) then 1 else 0
+    fromRational rat = DT (fromInteger q + c) where
+        lsec = toInteger secLen
+        (q,r) = (numerator rat * lsec) `divMod` denominator rat
+        c = if ((2 * r) > denominator rat) then 1 else 0
 
 -- show time for humans
 instance Show T where
-    -- basically iso8601, but with picosecond precision
-    -- YYYY-MM-DDTHH:MM:SS.999999999999Z
+    -- basically iso8601, but with subsecond precision
+    -- YYYY-MM-DDTHH:MM:SS.9999999Z
     showsPrec _ = showString . Time.formatTime t_locale t_format . toUTC where
 
 t_format :: String
@@ -121,9 +128,9 @@ parseTime = fmap fromUTC . Time.parseTime t_locale t_format
 
 -- show difference in time for humans
 instance Show DT where
-    showsPrec _ dt = shows val . showString unit where
+    showsPrec _ (DT dt) = shows val . showString unit where
         val = Dec.normalizeDecimal $ Dec.Decimal places ps
-        ps = dtToPicos dt
+        ps = toPicos dt
         pp = abs ps
         (places,unit) = 
             if (pp < 1000) then (0,"ps") else
