@@ -81,7 +81,7 @@ To model the path tracker, my best idea is to simply include the entire path (fr
             DDDDDDDD    /
                 HHHH    hmac (four bytes to right of last path element)
 
-Then we'll simply XOR everything together. To relocate our object, we'll start at our root, find candidates that start with `A`, XOR candidates out of the string, which exposes `B`, then search for children whose names start with `B`, etc.. Collisions are gradually filtered out across multiple steps in the path, and the last step we expose four bytes to further reduce candidates. This search is essentially a tradeoff for a shorter capability string. (Idea: Make filter-factor tunable, e.g. when naming the directory, so we can anticipate some large flat directories. Or track which branching factors have been used?)
+Then we'll simply XOR everything together. To relocate our object, we'll start at our root, find candidates that start with `A`, XOR candidates out of the string, which exposes `B`, then search for children whose names start with `B`, etc.. Collisions are gradually filtered out across multiple steps in the path, and the last step we expose four bytes to further reduce candidates. This search is essentially a tradeoff for a shorter capability string. 
 
 The final element is an HMAC to protect the capability string from forgery, protecting the auth code. It's also a final disambiguating element. We can probably write a paper about the failure of a hash function if this effort failure of a hash function if this effort fails to disambiguate two items.
 
@@ -93,11 +93,39 @@ This should be sufficient. I'm tempted to bump up to 256/224. But we can change 
 
         Mdpxgznkbmxftkjdphhgqsmbszdzmtnkypxqhzxqmzstsqmszqybtqskd
 
-Alternatively, the auth code could also be encrypted. That might even be better, because auth codes aren't necessarily preserved in a meaningful way across scripts or redirects. The encoding of resource strings within bytecode should take the form of *cryptographically sealed values*. Something like:
+Alternatively, the auth code may also be encrypted. That might even be better, because auth codes aren't necessarily preserved in a meaningful way across scripts or redirects. The encoding of resource strings within bytecode should take the form of *cryptographically sealed values*. Something like:
 
         "Mdpxgznkbmxftkjdphhgqsmbszdzmtnkypxqhzxqmzstsqmszqybtqskd"{$:wiki}
 
 This embedding offers several advantages. First, it's a semantically faithful representation. Capability strings fundamentally are cryptographically sealed values. Second, it hinders embedding of capability strings within AO code, since cryptographic seals are generally not valid AO code, and at least would be easy to locate. Third, it has potential to track which wiki each resource is associated with, along with any version indicators. 
 
 Also, while I might permit forging text into capability strings in a few special cases, it will be easier to restrict and track these cases within the scope of the resource model and applications.
+
+# Stable or Unstable Capability Strings?
+
+At the moment, I'm designing with an assumption of stable capability strings. I could easily destabilize names by using a counter, or a timestamp when an object is created, as contributing to its capability string. This would ensure that deleting and re-creating an object will also revoke all existing capabilities to it, as the default case. 
+
+Do unstable names cause any big concerns with RDP?
+
+For RDP to work effectively, I'll need a directory authority to create objects, and I'll have a 'continuous' model that conflates creation with acquisition. Use of a counter would be a problem, a violation of causal commutativity. But use of a timestamp to destabilize names should not be an issue. 
+
+Potentially, we could model unstable names as stable names by controlling the 'timestamp', e.g. by fixing it to sentinel value, zero. Maybe this is a good way to do things. Developers can explicitly request a stable name when they want one, otherwise the names are always unstable.
+
+# Large Directories
+
+For large directories, e.g. with 4k objects, a filter factor of 256 is much too small.
+
+A viable option is to dynamically expand a directory: at first we filter with one byte, but if there are more than some threshold for objects in the directory, we switch to two bytes, and so on. Each resource thus tracks how many bytes it uses for disambiguation, and we never need to search a given path more than once.
+
+For unstable names, this value could be chosen when the object is constructed. For stable names, we'll need to use a stable overlap model, e.g. 2 bytes overlap for stable directory or redirect names. 
+
+Good thresholds? Well, the goal is to limit the amount of searching we do, so perhaps something like 1/4 the maximum number of items in each class? So, with more than 64 items in a directory, we'll bump up to two-byte names. Meanwhile, stable names are possible.
+
+# CRDTs
+
+[Commutative Replicated Data Types](http://hal.upmc.fr/file/index/docid/555588/filename/techreport.pdf) seem a very simple and very promising approach to support coordination in a distributed system. Further, they may also offer some nicer integration properties between RDP and imperative programming, at least where I can add idempotence.
+
+It seems to me that I should be able to model CRDTs as a special object type in the auxiliary state model as it is currently defined. But the question would be how CRDTs are to be shared. I suppose a read authority would be necessary for replication.
+
+
 

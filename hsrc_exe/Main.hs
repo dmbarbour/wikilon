@@ -27,9 +27,9 @@ helpMessage =
  \\n\
  \    wikilon [-pPort] [-mMB] [-s] [-init] \n\
  \      -pPort: listen on given port (def 3000; saved) \n\
- \      -mMB: Berkeley DB cache size in megabytes (def 5; saved) \n\
+ \      -mMB: database memcache size in megabytes (def 5; saved) \n\
  \      -init: initialize & greet, but do not start. \n\
- \      -s: silent mode; do not display greeting or admin URL. \n\
+ \      -s: silent mode; do not display greeting or admin code. \n\
  \\n\
  \    Environment Variables:\n\
  \      WIKILON_HOME: directory for persistent data\n\
@@ -49,6 +49,7 @@ helpMessage =
 
 data Args = Args 
     { _port  :: Maybe Int
+    , _cacheSize :: Maybe Int
     , _silent   :: Bool
     , _justInit :: Bool
     , _help     :: Bool
@@ -57,6 +58,7 @@ data Args = Args
 defaultArgs :: Args
 defaultArgs = Args 
     { _port = Nothing
+    , _cacheSize = Nothing
     , _silent = False
     , _justInit = False
     , _help = False
@@ -80,6 +82,7 @@ procArgs :: [String] -> Args
 procArgs = L.foldr (flip pa) defaultArgs where
     pa a (helpArg -> True) = a { _help = True }
     pa a (portArg -> Just n) = a { _port = Just n }
+    pa a (cacheArg -> Just n) = a { _cacheSize = Just n }
     pa a "-s" = a { _silent = True }
     pa a "-init" = a { _justInit = True }
     pa a v = 
@@ -131,10 +134,15 @@ runWikilonInstance a = mainBody where
         if hasBadArgs then failWithBadArgs else
         if askedForHelp then helpAndExit else
         createWIKILON_HOME >>= \ home ->
-        Wikilon.loadInstance (FS.encodeString home) >>= \ app ->
+        loadCache home (_cacheSize a) >>= \ cache ->
+        let appArgs = Wikilon.Args { Wikilon.homeDir = FS.encodeString home
+                                   , Wikilon.cacheSize = cache
+                                   }
+        in
+        Wikilon.loadInstance appArgs >>= \ app ->
         loadPort home (_port a) >>= \ port ->
         shouldUseTLS home >>= \ bUseTLS ->
-        unless (_silent a) (greet home port app bUseTLS) >>
+        unless (_silent a) (greet home port cache app bUseTLS) >>
         if _justInit a then return () else
         let waiApp = wikilonMiddleware (Wikilon.waiApp app) in
         let tlsSettings = wikilonWarpTLSSettings home in
@@ -148,10 +156,11 @@ runWikilonInstance a = mainBody where
     badArgMsg = "unrecognized arguments: " ++ show badArgs 
     askedForHelp = _help a
     helpAndExit = Sys.putStrLn helpMessage >> Sys.exitSuccess
-    greet home port app bUseTLS =
+    greet home port cache app bUseTLS =
         Sys.putStrLn ("Wikilon:") >>
         Sys.putStrLn ("  Home:  " ++ showFP home) >>
         Sys.putStrLn ("  Port:  " ++ show port) >>
+        Sys.putStrLn ("  Cache: " ++ show cache ++ " MB") >>
         Sys.putStrLn ("  HTTPS: " ++ show bUseTLS) >>
         Sys.putStrLn ("  Admin: " ++ Wikilon.adminCode app)
 
@@ -188,6 +197,10 @@ err = Sys.hPutStrLn Sys.stderr
 portArg :: String -> Maybe Int
 portArg ('-':'p': s) = tryRead s
 portArg _ = Nothing
+
+cacheArg :: String -> Maybe Int
+cacheArg ('-':'m':s) = tryRead s
+cacheArg _ = Nothing
 
 tryRead :: (Read a) => String -> Maybe a
 tryRead (reads -> [(a,[])]) = Just a

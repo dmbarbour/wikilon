@@ -12,7 +12,8 @@
 -- 
 module Wikilon
     ( loadInstance
-    , WikilonApp(..)
+    , Args(..)
+    , App(..)
     ) where
 
 import qualified Network.Wai as Wai
@@ -21,7 +22,12 @@ import qualified Network.HTTP.Types as HTTP
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as T
 
-data WikilonApp = WikilonApp 
+data Args = Args
+    { homeDir :: Sys.FilePath
+    , cacheSize :: Int
+    }
+
+data App = App 
     { waiApp    :: Wai.Application
     , adminCode :: String
     }
@@ -29,10 +35,10 @@ data WikilonApp = WikilonApp
 -- | Load an existing Wikilon instance, or initialize a new one, 
 -- whose identity and persistence is associated with the given 
 -- directory. 
-loadInstance :: Sys.FilePath -> IO WikilonApp
-loadInstance fp =
+loadInstance :: Args -> IO App
+loadInstance _args =
     -- create and initialize a Wiki with the given fp.
-    return (WikilonApp helloApp "useless password")
+    return (App helloApp "useless password")
 
 
 helloApp :: Wai.Application

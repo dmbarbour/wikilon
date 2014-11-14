@@ -1,20 +1,20 @@
 
--- | A strict, unpacked, fixpoint representation of time, with 
--- picosecond precision; packs to 96 bits. Basically, a more 
--- efficient representation of UTCTime from Data.Time.Clock
--- (without any support for leap seconds...)
+-- | Wikilon timestamp
+--
+-- Representation: Int64
+-- Precision: 100ns 
+-- Zero: Unix epoch
+-- Range: ~29k years
+-- 
 module Wikilon.Time
-    ( T
-    , tmDay,tmPicos
-    , mkTime,timeFromDays
+    ( T(..), DT(..)
     , getTime, parseTime
-    , DT
-    , dtToPicos,picosToDt
-    , addTime,subtractTime,diffTime
+    , addTime, subtractTime, diffTime
     , fromUTC, toUTC
     ) where
 
-import Data.Int (Int32,Int64)
+import Control.Applicative
+import Data.Int (Int64)
 import Data.Ratio (numerator,denominator)
 import qualified Data.Time.Clock as Time
 import qualified Data.Time.Calendar as Time
@@ -24,123 +24,72 @@ import Data.Function (on)
 -- import Control.Exception (assert)
 import qualified Data.Decimal as Dec
 
--- | T - a fixpoint representation of time UTC with picosecond
--- precision, as a pair of integers. Time in Sirea is modeled as  
--- continuous, but the actual implementation is limited precision.
---    tmDay   - Modified Julian Day (days since Nov 17, 1858)
---    tmPicos - Picoseconds in the day. [0,86400*10^12)
--- Simplified. Strict. No leap seconds. Limited range, just over
--- plus or minus five million years. 
---
--- The choice of picoseconds is that it's the same as UTCTime. It is
--- also a lot more precision than we're ever likely to need; light 
--- in a vacuum travels only about 0.3mm in a picosecond.
--- 
--- Construct via mkTime, fromUTC, or getTime. 
-data T = T {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int64
-    deriving (Eq, Ord)
-
-_tmDay :: T -> Int32
-_tmDay (T d _) = d
-
-_tmPicos :: T -> Int64
-_tmPicos (T _ p) = p
-
-tmDay :: T -> Integer
-tmDay = toInteger . _tmDay
-
-tmPicos :: T -> Integer
-tmPicos = toInteger . _tmPicos
+-- | Timestamp in Wikilon
+newtype T = T Int64 deriving (Eq, Ord)
 
 instance Bounded T where
-    minBound = T minBound 0
-    maxBound = T maxBound (fromInteger (picosInDay - 1))
+    minBound = T minBound 
+    maxBound = T maxBound 
 
--- | `mkTime days picos`
--- smart constructor for time 
-mkTime :: Integer -> Integer -> T
-mkTime days picos =
-    let (q,p) = picos `divMod` picosInDay in
-    let d = days + q in
-    T (fromInteger d) (fromInteger p)
+dayLen, secLen :: Int64
+dayLen = 86400 * secLen
+secLen = 1000 * 1000 * 10  -- unit is 10^-7s, 0.1µs, 100ns
 
--- | timeFromDays will convert a Modified Julian Day, stored as a
--- rational, to a T value. 
-timeFromDays :: Rational -> T
-timeFromDays r = mkTime days (picos + carry)
-    where (days,dayFrac) = numerator r `divMod` denominator r
-          (picos,picoFrac) = (dayFrac * picosInDay) `divMod` denominator r
-          carry = if (picoFrac * 2 > denominator r) then 1 else 0
+-- difference between Modified Julian Day and Unix Epoch
+dayZero :: Int64
+dayZero = 40587
 
--- | Obtain estimate of current time from operating system.
+toPicos :: Int64 -> Integer
+toPicos dt = fromIntegral $ dt * 100000
+    -- 100ns per time unit * 1000ps per ns
+
+-- | Estimate of current time from operating system.
 getTime :: IO T
-getTime = Time.getCurrentTime >>= return . fromUTC
+getTime = fromUTC <$> Time.getCurrentTime
 
 fromUTC :: Time.UTCTime -> T
-fromUTC utc =
-    let d = Time.toModifiedJulianDay (Time.utctDay utc)
-        r = toRational (Time.utctDayTime utc)
-        n = (numerator r * picosInSec) `div` denominator r
-    in mkTime d n
+fromUTC utc = T (timeDays + timeOfDay) where
+    days = Time.toModifiedJulianDay (Time.utctDay utc)
+    secs = toRational (Time.utctDayTime utc)
+    timeDays = dayLen * (fromIntegral days - dayZero)
+    timeOfDay = round $ (secs * fromIntegral secLen)
 
 toUTC :: T -> Time.UTCTime
-toUTC (T d ps) = Time.UTCTime days dt where
-    days = Time.ModifiedJulianDay (fromIntegral d)
-    dt = Time.picosecondsToDiffTime (fromIntegral ps)
+toUTC (T t) = Time.UTCTime  where
+    (d,q) = t `divMod` dayLen
+    days = Time.ModifiedJulianDay (fromIntegral $ d + dayZero)
+    dt = Time.picosecondsToDiffTime (toPicos ps)
 
--- | DT - a representation of a difference in two times, accessible
---   as a distance in picoseconds. 
-newtype DT = DT { unDT :: T } deriving (Eq, Ord)
-
-dtToPicos :: DT -> Integer
-dtToPicos (DT tm) = (picosInDay * tmDay tm) + tmPicos tm
-
-picosToDt :: Integer -> DT
-picosToDt = DT . mkTime 0 
+-- | DT - a representation of a difference in two times
+-- Conversion functions treat as seconds. Precision is
+-- fixpoint 0.1µs.
+newtype DT = DT Int64 deriving (Eq, Ord)
 
 -- | Add a difference in time to an absolute time.
 addTime :: T -> DT -> T
-addTime (T tD tP) (DT (T dtD dtP)) =
-    let p = tP + dtP in
-    if (p < ppid) then T (tD + dtD) p
-                  else T (tD + dtD + 1) (p - ppid)
+addTime (T tm) (DT dt) = T (tm + dt)
 
 -- | Subtract a difference in time from an absolute time
 subtractTime :: T -> DT -> T
-subtractTime tm (DT dt) = unDT (diffTime tm dt)
+subtractTime (T tm) (DT dt) = T (tm - dt)
 
 -- | Find the difference in time, diffTime a b = a - b
 diffTime :: T -> T -> DT
-diffTime (T da pa) (T db pb) =
-    if (pa < pb) then DT (T ((da - db) - 1) ((pa - pb) + ppid))
-                 else DT (T (da - db) (pa - pb))
-
-ppid :: Int64
-ppid = fromInteger picosInDay
-
-picosInDay, secondsInDay, picosInSec :: Integer
-picosInDay = secondsInDay * picosInSec
-secondsInDay = 24 * 60 * 60
-picosInSec = 1000 * 1000 * 1000 * 1000
+diffTime (T tf) (T t0) = DT (tf - t0)
 
 instance Num DT where
-    (+) (DT a) b = DT (addTime a b)
-    (-) = diffTime `on` unDT
-    (*) a b = picosToDt (q + c)
-        where pa = dtToPicos a
-              pb = dtToPicos b
-              (q,r) = (pa * pb) `divMod` picosInSec
-              c = if (r > (picosInSec `div` 2)) then 1 else 0
-    negate (DT a) = 
-        if (_tmPicos a == 0) 
-            then DT (T (negate (_tmDay a)) 0) 
-            else DT (T (negate (_tmDay a) - 1) (ppid - _tmPicos a))
-    abs (DT a) = if (_tmDay a < 0) then negate (DT a) else (DT a)
-    signum (DT a) = 
-        if (_tmDay a < 0) 
-            then -1 
-            else  1
-    fromInteger = picosToDt . (*) picosInSec
+    (+) (DT a) (DT b) = DT (a + b)
+    (-) (DT a) (DT b) = DT (a - b)
+    (*) (DT a) (DT b) = DT ab where
+        prod = (toInteger a * toInteger b) 
+        lsec = toInteger secLen
+        (dt,q) = prod `divMod` lsec
+        c = if q > (lsec `div` 2) then 1 else 0
+        ab = fromIntegral $ dt + c 
+    negate (DT a) = DT (negate a)
+    abs (DT a) = DT (abs a)
+    signum (DT a) = signum a
+    fromInteger = DT . (*) secLen . fromInteger
 
 -- 'Fractional' is primarily for the 'fromRational' 
 -- numeric conversions in seconds.

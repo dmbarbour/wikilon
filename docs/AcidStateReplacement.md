@@ -6,6 +6,22 @@ I also want to push Wikilon onto external servers, either VPS or cloud. Fortunat
 
 If I can, I'd also like to avoid the serialization bottleneck of **acid-state**. But I do want to keep the 
 
+# Design
+
+I would like to consider two basic designs.
+
+1. model a time-series of full databases (snapshots)
+2. model a time-series of database deltas (transactions)
+
+The first option has many advantages. It greatly simplifies seek and view for any historical snapshot of the database. Merges can be avoided entirely, i.e. we just delete whole snapshots. Branching would be easy, which could be advantageous for debugging.
+
+The second option also has a few advantages. The transactions near the head are relatively small. And the load costs might be a bit smaller, too, since we can directly use database facilities near the head as opposed to indirectly modeling a database-as-a-value above another database or system.
+
+With respect to performance, the snapshot approach might fall behind for operations on the head. But it will likely have much better performance for operations like viewing histories.
+
+
+# Utilities
+
 After studying a few options:
 
 * **Perdure** - persistent IORefs, no transactions, unsuitable.
@@ -19,22 +35,9 @@ Potentially, I could use TCache backed above BDB. OTOH, it isn't clear to me tha
 
 Nested transactions are also a useful feature. They can allow me to `{try}` a behavior without fully committing to it, i.e. failure as undo, which could greatly simplify reasoning about partial failure and system consistency. Both BDB and STM can support this. 
 
-## BDB
-
-For BDB, I'll want to use the following flags:
-
-        DB_CREATE, DB_REGISTER, DB_RECOVER  (get started and recover if needed)
-        DB_THREAD, DB_INIT_LOCK, DB_INIT_LOG, DB_INIT_MPOOL, DB_INIT_TXN (subsystems)
-        (no logging flags)
-
-        DB_MULTIVERSION (copy-on-write, reduces risk of deadlock)
-        DB_TXN_SNAPSHOT (but only for read-only transactions)
-
-Also, I might want to relax durability, using explicit `sync` a few seconds after a transaction. 
-
 # Streaming Databases
 
-I like the idea of [turning the database inside out](https://www.youtube.com/watch?v=fU9hR3kiOK0), of modeling a database not as a collection of static states, but rather as a stream of updates. If I approach this correctly, the stream of updates should support both a *history* and support more reactive *views* (whereby one process leads to another). I think this should be considered essential to my design. It was already part of the **acid-state** dictionary design. I believe it can be adapted to my filesystem model, and also to auxiliary data and cached views, and perhaps even to RDP computations. 
+I like the idea of [turning the database inside out](https://www.youtube.com/watch?v=fU9hR3kiOK0), of modeling a database not as a collection of static states, but rather as a stream of updates. If I approach this correctly, the stream of updates should support both a *history* and support reactive *views* (whereby one process leads to another). I think this should be considered essential to my design. It was already part of the **acid-state** dictionary design. I believe it can be adapted to my filesystem model, and also to auxiliary data and cached views, and perhaps even to RDP computations. 
 
 The approach I was pursuing before, for the dictionary:
 
@@ -84,9 +87,53 @@ Treating transactions as immutable values, rather than embedding them within the
 
 # Faster History Lookups
 
-Rather than just having one back-reference to the previous value in history, an interesting possibility is to keep multiple references into the past using a skip-list like structure, e.g. a list of three to five "other past values". This would allow deep references into the past when looking for a particular snapshot. I'll want to check if this would be too sophisticated. It might actually be easier than normal since I'd be adding to the skiplist only at the head. 
+Rather than just having one back-reference to the previous value in history, an interesting possibility is to keep multiple references into the past using a skip-list-like structure, e.g. a list of a few "other past values" that allow leap-frogging into the past. 
+
+In this case, our skip list would only be adding to the head, and would be reverse-ordered. As normal, we might select a random height for each node in the history, perhaps deterministically (via hash function), or perhaps by estimated distance, or perhaps keeping a simple counter.
+
+The difficulty will be how to merge nodes in a skip-list, locally. If we simply 'grow' the tower of historical references, the height will do us less good as multiple merges gradually eliminate them. OTOH, if we shrink this list, then we'll lose some skip-list invariants from upstream objects.
+
+Let's try a variation. Goals: greedy search is optimal, easy local merge, efficient searches.
+
+We can't just reference arbitrary locations into the past, or greedy search will fail. In a scenario such as:
+
+          ___   ___
+         /   \ /   \
+        a--b--c--d--e--f--g
+            \_________/
+
+The best path for 'af' is 'abf', but a greedy search would find 'acef'. To avoid this scenario, we need to avoid crossings between regions.
+
+                   _______________
+                  /               \
+        a--b--c--d--e--f--g--h--i--j--k
+         \  \___/    \______/ \___/  /
+          \_________________________/
+
+We might say that 'a' has territory 'a..k', and 'd' has territory 'd..j', and nothing can jump into d's territory without going through d. This is a simple approach, and it should work very well. 
+
+To simplify merge, we'll just keep two references: the immediately previous ID, and the most distant reference. The challenge, then, is ensuring logarithmic search. Before merge, we could easily ensure logarithmic search: territory could be constructed using a simple mechanism that ensures exponential sizes. Assuming we keep only two back-references (one for the previous item, one for the closed territory), this will cause us to gradually lose the smaller territories in favor of the large ones. OTOH, we might be able to heuristically favor merges with smaller territories.
+
+The alternative is to support snapshots direct
+
+            
 
 # Dictionary
 
 In this design, our dictionary is possibly a separate database from the filesystem, but uses the same basic structure (albeit, with much more memorable keys). 
+
+
+
+# BDB
+
+For BDB, I'll want to use the following flags:
+
+        DB_CREATE, DB_REGISTER, DB_RECOVER  (get started and recover if needed)
+        DB_THREAD, DB_INIT_LOCK, DB_INIT_LOG, DB_INIT_MPOOL, DB_INIT_TXN (subsystems)
+        (no logging flags)
+
+        DB_MULTIVERSION (copy-on-write, reduces risk of deadlock)
+        DB_TXN_SNAPSHOT (but only for read-only transactions)
+
+Also, I might want to relax durability, using explicit `sync` a few seconds after a transaction. 
 
