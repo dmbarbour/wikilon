@@ -13,12 +13,15 @@ I would like to consider two basic designs.
 1. model a time-series of full databases (snapshots)
 2. model a time-series of database deltas (transactions)
 
-The first option has many advantages. It greatly simplifies seek and view for any historical snapshot of the database. Merges can be avoided entirely, i.e. we just delete whole snapshots. Branching would be easy, which could be advantageous for debugging.
+In both cases, we'll need to index and partition the snapshots or transactions, i.e. make it easy to load spatial and temporal subsets into memory without loading the full database. Most likely, transactions and snapshots will both look and act like miniature databases. The difference is that transactions only contain the elements that have changed, but snapshots would contain everything. 
 
-The second option also has a few advantages. The transactions near the head are relatively small. And the load costs might be a bit smaller, too, since we can directly use database facilities near the head as opposed to indirectly modeling a database-as-a-value above another database or system.
+For snapshots to be efficient, *structure sharing is essential*. This is somewhat concerning because structure sharing also requires garbage collection, either via reference counts or something else. Attempting to solve this in general seems like too big a challenge, but it might be acceptable if specialized for the database.
 
-With respect to performance, the snapshot approach might fall behind for operations on the head. But it will likely have much better performance for operations like viewing histories.
+For a transactional model to be efficient, I need a 'head' database, i.e. that tells me where to look for the most recent values. I might also need to use skiplist-like features to seek historical values efficiently. This seems awkward to me, in general.
 
+Snapshots simplify the lookup and GC logics a great deal; branching, too. Transactions might have better performance for operating near the head.
+
+It seems to me that either approach should work well enough. I should pick one and run with it. For now, the snapshot approach seems simpler, so I'll try that.
 
 # Utilities
 
@@ -28,6 +31,7 @@ After studying a few options:
 * **TCache** - persistent STM refs, backed by file or AWS
 * **TX** - persistent STM ref, no checkpoint... unsuitable
 * **berkeley db** - key-value store, ACID, memcache
+* **datomic** - similar model for time; somewhat expensive
 
 Both **TCache** and **berkeley db** seem to be viable options. Of these, I think **berkeley db** may be the better choice, having a highly proven robustness, performance, and scalability. My impression (from the multitude of spelling errors) is that TCache code isn't very robust, and the IResource model should offer a better separation between data type and storage. 
 
@@ -35,7 +39,13 @@ Potentially, I could use TCache backed above BDB. OTOH, it isn't clear to me tha
 
 Nested transactions are also a useful feature. They can allow me to `{try}` a behavior without fully committing to it, i.e. failure as undo, which could greatly simplify reasoning about partial failure and system consistency. Both BDB and STM can support this. 
 
-# Streaming Databases
+
+
+Older Content
+=============
+
+
+# Streaming Databases (~ second design, earlier notes)
 
 I like the idea of [turning the database inside out](https://www.youtube.com/watch?v=fU9hR3kiOK0), of modeling a database not as a collection of static states, but rather as a stream of updates. If I approach this correctly, the stream of updates should support both a *history* and support reactive *views* (whereby one process leads to another). I think this should be considered essential to my design. It was already part of the **acid-state** dictionary design. I believe it can be adapted to my filesystem model, and also to auxiliary data and cached views, and perhaps even to RDP computations. 
 
@@ -81,11 +91,13 @@ I like the idea of adding 'protection' to snapshots in the history, along with v
 
 # Transaction Structure
 
-A potential model for transaction structure is something like a patricia trie of named elements, or an otherwise flattened, hierarchical map from keys to values. Each transaction would essentially become miniature database. This might work pretty well, especially using value references. 
+A potential model for transaction structure is something like a patricia trie of named elements, or an otherwise flattened, hierarchical map from keys to values. Each transaction would essentially become miniature database. This might work pretty well, especially using value references.
 
 Treating transactions as immutable values, rather than embedding them within the database, will likely have nicer properties for merging transactions. Albeit, at the cost of more expensive lookups. Which is better? 
 
-# Faster History Lookups
+# Fast History Lookups?
+
+I developed this idea
 
 Rather than just having one back-reference to the previous value in history, an interesting possibility is to keep multiple references into the past using a skip-list-like structure, e.g. a list of a few "other past values" that allow leap-frogging into the past. 
 

@@ -23,7 +23,16 @@ Roughly the following:
 
 If I had a precise notation for dependent types, this would be a fair bit easier. But the idea is that we're emulating an object with a set of query methods (which each return a result whose type may depend on the query) and a set of update methods (which return an updated ELO and nothing else) in a purely functional manner.
 
-Queries might ask for menus of options, rendering in SVG or HTML, and other useful features for interacting with humans, in addition to domain specific queries or extractors. Meanwhile, the clean separation of updates from queries simplifies reasoning about consistent views between writers and readers. 
+Queries might ask for menus of options, rendering in SVG or HTML, and other useful features for interacting with humans, in addition to domain specific queries or extractors. Meanwhile, the clean separation of updates from queries simplifies reasoning about consistent views between writers and readers.
+
+
+## Regarding Response to Update
+
+I occasionally find myself reconsidering whether to support a response from update messages. Doing so would likely be convenient for composing updates or that treat ELOs as extended processes. OTOH, it would give writers some special privileges to observe the ELO resource, hindering consistent views. It also might prove less flexible, since objects would be further specialized on the response's value type. (This might be mitigated if the response itself was an ELO or supported ELO-like queries.)
+
+Response from update also makes it easier to hide intermediate states in a protocol, i.e. by immediately returning. OTOH, it also requires stronger coupling of the protocol. Intermediate states are useful for asynchronous operations, blackboard metaphors, multi-agent systems, and the possibility of separating responses into a different object than the update messages.
+
+At the moment, I feel the argument is stronger to keep updates and queries cleanly separated.
 
 # Utilization of ELO within Wikilon Dictionary
 
