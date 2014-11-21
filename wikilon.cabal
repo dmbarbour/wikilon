@@ -1,7 +1,7 @@
 Name: wikilon
 Version: 0.1
 Synopsis: Wiki-based IDE and platform for Awelon project 
-Category: Awelon
+Category: Awelon, Application, Application Server
 Description:
   Wikilon is a user-programmable wiki building on Awelon Object (AO)
   language and the underlying Awelon Bytecode (ABC). The content of
@@ -9,10 +9,10 @@ Description:
   conventions allow words to specify new web applications, services, 
   tests, documentation, server configuration, and so on.
   
-  This wiki uses acid-state for persistence, websockets for reactive
+  This wiki uses berkeley db for persistence, websockets for reactive
   updates, warp for HTTP. It supports multiple users with DVCS based
   views and transactions (including for apps). The goal is a minimal
-  kernel, pushing most of the logic into the AO dictionary. 
+  kernel, pushing most logic into the AO dictionary. 
   
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com
@@ -50,6 +50,8 @@ Library
   hs-Source-Dirs: hsrc_lib
   default-language: Haskell2010
   Build-Depends: base (>= 4.6 && < 5)
+    , wikilon-db
+
     , parallel (>= 3.0)
     , binary (>= 0.7.2)
     , intern (>= 0.9.1), hashable
@@ -69,11 +71,9 @@ Library
     , text (>= 0.11)
     , cryptohash (>= 0.11)
     , bytestring, byteable
-    , Decimal (>= 0.4)
-
     , entropy
-    , time (>= 1.4)
-    , old-locale
+
+    , Decimal (>= 0.4)
 
   Exposed-Modules:
 
@@ -104,7 +104,6 @@ Library
     Wikilon.SecureHash
     Wikilon.Secret
 
-    Wikilon.Time
     Wikilon.Char
     Wikilon.ParseUtils
     -- Wikilon.UTF8

@@ -4,7 +4,7 @@ Keeping everything in memory is too much. It scales poorly for GC. And I plan to
 
 I also want to push Wikilon onto external servers, either VPS or cloud. Fortunately, it looks like I can get a good deal on servers. And I'll probably want a dedicated server (note: ovh.com & contabo.com look very promising), but I could get started with VPS at 1/10th the cost.
 
-If I can, I'd also like to avoid the serialization bottleneck of **acid-state**. But I do want to keep the 
+If I can, I'd also like to avoid the serialization bottlenecks of **acid-state**. But I do want to keep the ACID properties.
 
 # Design
 
@@ -17,11 +17,11 @@ In both cases, we'll need to index and partition the snapshots or transactions, 
 
 For snapshots to be efficient, *structure sharing is essential*. This is somewhat concerning because structure sharing also requires garbage collection, either via reference counts or something else. Attempting to solve this in general seems like too big a challenge, but it might be acceptable if specialized for the database.
 
-For a transactional model to be efficient, I need a 'head' database, i.e. that tells me where to look for the most recent values. I might also need to use skiplist-like features to seek historical values efficiently. This seems awkward to me, in general.
+For a transactional model to be efficient, I need a 'head' database, i.e. that tells me where to look for the most recent values. I might also need to use skiplist-like features to seek historical values efficiently. This seems awkward to me, in general. Lots of ad-hoc transactions will be loaded into memory, based on the head of each value or seeks into the past. Temporary branches would be feasible, but long-term branches very difficult.
 
 Snapshots simplify the lookup and GC logics a great deal; branching, too. Transactions might have better performance for operating near the head.
 
-It seems to me that either approach should work well enough. I should pick one and run with it. For now, the snapshot approach seems simpler, so I'll try that.
+It seems to me that either approach should work well enough. I should pick one and run with it. For now, the snapshot approach - with a naive model for GC and structure sharing - seems simpler. I'll maybe try that.
 
 # Utilities
 
@@ -45,9 +45,9 @@ Older Content
 =============
 
 
-# Streaming Databases (~ second design, earlier notes)
+# Streaming Databases 
 
-I like the idea of [turning the database inside out](https://www.youtube.com/watch?v=fU9hR3kiOK0), of modeling a database not as a collection of static states, but rather as a stream of updates. If I approach this correctly, the stream of updates should support both a *history* and support reactive *views* (whereby one process leads to another). I think this should be considered essential to my design. It was already part of the **acid-state** dictionary design. I believe it can be adapted to my filesystem model, and also to auxiliary data and cached views, and perhaps even to RDP computations. 
+I like the idea of [turning the database inside out](https://www.youtube.com/watch?v=fU9hR3kiOK0), of modeling a database not as a collection of static states, but rather as a stream of updates. If I approach this correctly, a stream of updates should support both a *history* and reactive *views* (whereby one process leads to another). I think this should be considered essential to my design. It was already part of the **acid-state** dictionary design. I believe it can be adapted to my filesystem model, and also to auxiliary data and cached views, and perhaps even to RDP computations. 
 
 The approach I was pursuing before, for the dictionary:
 
