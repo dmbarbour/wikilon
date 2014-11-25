@@ -39,9 +39,10 @@ Library
   default-language: Haskell2010
   Build-Depends: base (>= 4.6 && < 5)
     , BerkeleyDB (>= 0.8.7)
+    , direct-murmur-hash
+    , bytestring
+    -- , binary (>= 0.7.2)
 
-    , cryptohash (>= 0.11)
-    , bytestring, byteable
 
     , time (>= 1.4)
     , old-locale
@@ -51,6 +52,8 @@ Library
   Exposed-Modules:
 
     Wikilon.Time
+    Wikilon.DB.Hash
+    Wikilon.DB
 
   Other-Modules:
   
