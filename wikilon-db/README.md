@@ -38,7 +38,7 @@ Rather than eager GC, I might also aim to have something like a GC queue or stac
 
 I think we might do pretty well to configure the history with just two numbers: a count of frames to preserve exactly (a windowed history), and a count of frames to preserve with exponential decay (logarithmic history).
 
-# Further Compaction
+# Structure Sharing
 
 I should be able to achieve a high degree of structure sharing within the database by proposing keys based on a reasonably 'good' hash of the stored value, then using linear collision. Unlike a hash table, I'll be using the full space of 64 bits encoded in the BDB B-tree, i.e. a hashmap, so there is no need to rebuild the hash table. Linear collision could minimize paging in BDB. Note that this technique doesn't guarantee that equal values have equal names unless we do a lot of complex stuff to handle deletion. It just has a high tendency towards sharing.
 
@@ -50,6 +50,33 @@ I think it might complicate tracking reference counts, and it might not help muc
 
 I feel this idea is at least worth pursuing.
 
+# Paging and Compaction
+
+A compacting GC is a useful idea, but a somewhat difficult one. 
+
+The idea is that if value A references value B, we might wish to place value A near to value B in memory. We might also associate values that are related *temporally*, i.e. by placing values that are created near the same time into the same BDB pages, under the expectation that temporal relationships are weakly associated with spatial relationships.
+
+To support this seems viable. Minimally, we could have a sequential allocator for new values, and perhaps a simple way to track 'freed' space for GC purposes. To integrate with structure sharing is still useful, but might be split into a separate table of hash→locations list (a bucket hash). So we'd now need:
+
+* a table from locations to value, storing hash value
+* a table from locations to reference counts
+* a table from hash values to a list of locations
+
+This adds a little overhead for allocation, and it may create some conflicts for allocating values. Write transactions would need to select different locations or 'pages' to avoid conflict. On the plus side, there is no extra overhead for reads, and structure sharing could be very precise because we can now find all possible addresses for a stowed value, i.e. no issues with hash collision followed by deletion.
+
+The remaining idea, then, is to create a little open space near values, such that we can try to stow values near one of the other values they reference. Even if it's just a limited attempt, it might be sufficient to get some benefits.
+
+I'm not really sure where a 'compacting GC' might become involved. The idea would be to reorganize objects such that if A references B, A is more likely to be near B (and perhaps precede B) in physical storage, thus reducing the probability of loading big pages into memory just to access just one small value on it. Compaction seems possible, but I'm not sure it could readily be achieved concurrently. 
+
+Maybe we could just move a few objects at a time, based on observed access patterns? I.e. if we load objects A,B,C in sequence, we might see if C can be moved. Unfortunately, moving C might require locating all references to it. Even if references are exposed, this might be too much without ad-hoc reverse lookup indices. 
+
+Is all this extra complication worthwhile? Maybe. I'd need to profile to know. 
+
+For now, I think I'll drop this idea, and simply store values based on secure hash with linear collision. If I really want, I can still achieve precise structure sharing by marking a cell as deleted rather than actually removing it. OTOH, precise structure sharing really isn't worth much if I'm not trying to compare values by their 'pointers'.
+
+Conclusion: optimize later. A rather difficult endeavor for persistent data. It is feasible, but it requires a good export/import system.
+
+
 # Gradual GC
 
 Instead of "most objects die young", the preservation of history ensures there will often be a very large latency between an object's creation and collection. I think a lot of existing GC models won't be very effective with this context. Reference counting won't be especially hindered by it, but will still have the issue where GC almost always involves paging.
@@ -57,6 +84,7 @@ Instead of "most objects die young", the preservation of history ensures there w
 To reduce the performance burden of cascading destruction, I feel a simple queue of 'values to be deleted' is quite appropriate. Due to structure sharing, it is quite possible for a value to be revived before the GC gets to it, so it would follow a process of grabbing one value from the queue, checking whether its reference count is still zero, and if so: delete it, then decref all the objects to which it contains a reference, adding them to the queue if necessary.
 
 Reference counting will undoubtedly add a fair amount of overhead, but I think it will be essential.
+
 
 # Other Features
 

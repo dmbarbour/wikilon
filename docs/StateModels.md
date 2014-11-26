@@ -19,9 +19,11 @@ These are important conclusions that took me some time to reach...
 
 4. **transactional & RDP updates don't mix** The concurrency control models are completely incompatible. RDP is long running, leverages anticipation, retroactive correction, generally allows multiple agents to collaboratively influence future state, prohibits observation of 'instantaneous' events. Transactions assume an authoritative view, a single writer, are logically instantaneous, and transactions are simply serialized with the different writers taking turns. The main consequence of this incompatibility is simply that we must distinguish 'resources updated via RDP' from 'resources updated via imperative'. Fortunately, cross-model *queries* don't seem to cause any problems.
 
-5. **stateful resources are weakly isolated** Specifically, generic `{tokens}` are not allowed, with a few machine-independent exceptions like annotations, sealers, unsealers. This is necessary to protect linearization of resources for imperative code, and to ensure compatible cross-model data queries between RDP and imperative, and potentially for logically continuous expiration of volatile capabilities via RDP behaviors. These 'live' tokens shall be treated as volatile capabilities within Wikilon. If we also assume purely functional objects, then we can reject tokens even in query or update messages. (Aside: in type system terms, location of code corresponds to a modality; isolation corresponds to a universal or unconstrained location.)
+5. **stateful resources are weakly isolated** Specifically, generic `{tokens}` are not allowed, with a few machine-independent exceptions like annotations, sealers, unsealers, and external resources. This is necessary to protect linearization of resources for imperative code, and to ensure compatible cross-model data queries between RDP and imperative, and potentially for logically continuous expiration of volatile capabilities via RDP behaviors. These 'live' tokens shall be treated as volatile capabilities within Wikilon. If we also assume purely functional objects, then we can reject tokens even in query or update messages. (Aside: in type system terms, location of code corresponds to a modality; isolation corresponds to a universal or unconstrained location.)
 
 6. **capability-string based hyperlinking** We can't store live tokens, but we'll still want to model hypertext, directories, registries, relationships, etc.. So we'll need some form of capability values which may be passed to a powerblock to access resources without accidentally aliasing them. Also, we'll want to use *the exact same strings* for external programmability of Wikilon, e.g. via web APIs (PUT, POST, GET, etc.). These must be true capability strings, providing authority independent of user identity, no need for permissions (thus one less failure mode).
+
+7. **memory cache at value granularity** If an object directly contains a map, it takes O(N) to load the map into memory or serialize it back to storage, so a O(lg(N)) update becomes mostly irrelevant. Serialization costs can quickly undermine benefits of structure. Performance pressures can drive developers to do nasty things, like divide structure into many smaller objects and use side-effects to entangle them. But, if we can treat partially-evaluated structures as external, memory-cached resources that are loaded as needed, we can obtain many advantages: relaxed alignment concerns, ad-hoc indexing, fine-grained structure sharing, relaxed memory-limit concerns, and so on. 
 
 # Design Concepts
 
@@ -100,6 +102,48 @@ Alternatively, the auth code may also be encrypted. That might even be better, b
 This embedding offers several advantages. First, it's a semantically faithful representation. Capability strings fundamentally are cryptographically sealed values. Second, it hinders embedding of capability strings within AO code, since cryptographic seals are generally not valid AO code, and at least would be easy to locate. Third, it has potential to track which wiki each resource is associated with, along with any version indicators. 
 
 Also, while I might permit forging text into capability strings in a few special cases, it will be easier to restrict and track these cases within the scope of the resource model and applications.
+
+# Persistence of Structure
+
+Assume an object contains a large, balanced tree structure, with 10k-100k nodes. 
+
+We don't want to rebuild this tree every time to process it, since that would be O(N) to load the tree, and O(N) to serialize it back out again when saving the object. Manipulations on that tree would be O(lg(N)), but that would be minor compared to all the serialization costs.
+
+Good caching could help, but only if we don't serialize out the whole object for every update. Something closer to **acid-state** where we serialize out only the intended action would be necessary. Then we'd serialize the whole object only when we're about to remove the object from memory cache. If active objects spend most of their time in memory cache, the serialization overheads could be mitigated.
+
+Alternatively, developers could model the tree structure in terms of multiple smaller filesystem objects, glued together by a script. This would be able to directly leverage memory cache, i.e. loading only a necessary subset of objects. Unfortunately, it's a toxic idea. It prevents developers from expressing large objects and processes in a natural way, asking them to use side-effects. It entangles the object, making it more difficult to copy and reuse. Further, it exposes object substructure that would otherwise be encapsulated and protected by an object. 
+
+Neither of these options is satisfactory. Both are complicated.
+
+When I designed ABC, one assumption I made is that structured values can be precomputed. As a trivial example, while the number 123/457 might be encoded as ten operators `#123#457/*`, a runtime might benefit from processing this into a number during a partial evaluation phase, or even during the parse. For a number in a block that might be processed more than once, this prevents us from recomputing the number every time we replicate the block. When we serialize the bytecode, of course, we'll need to transform it back to the ten operators or something equivalent. 
+
+Can we extend this assumption to a memory-cached computation? I believe we can. 
+
+Doing so could be hugely advantageous. Very large objects become feasible since it would allow us to load objects and values at a granularity much finer than objects. Many ad-hoc indexing techniques become viable, unconstrained by concerns like page alignment or fixed-width serialization. Fine-grained structure sharing is viable, where lots of objects all reference the same values. Large computations become much simpler, beyond the limits of 
+
+Failure to do so could be disastrous. Performance pressure will drive developers towards the toxic alternatives, tainting the AO dictionaries and the Awelon project's reputation with ugly design patterns. I think it reasonable to consider persistence of structure to be essential, values must be memory cached.
+
+The existing approach to ABC resources is already a near fit for what I need. Indeed, ABC resources may directly be used. A value might be represented as follows:
+
+        vvrwlc[{#resourceId for quoted value}c]{&lazy}$
+
+Here, I'm representing a value resource with a lazy block of type `1→value`. This approach would have a significant advantage of working even in a distributed computation. However, this seems heavy weight, and its external nature will hinder precise garbage collection (we don't know whether the value is exposed to external services). 
+
+A lighter weight variation seems a worthy investment.
+
+The database I'm developing (wikilon-db) has potential to make this easy. Instead of serializing ABC to a simple stream, let's serialize it to a pair: a list or stack of 'value objects', and the bytecode extended with a simple 'escape' to pop a value object from the stack. When we load the bytecode into memory, we'll also pop all the values from the stack (and ensure the resulting stack is empty without underflowing). The 'escape' in this context might be relatively simple, such as an ASCII control code (e.g. FS, SUB, or DC1), or a UTF-8 invalid character (e.g. 0xFD). 
+
+Usefully, we could accomplish this without revealing the 'address' of the referenced value even within the main Wikilon code. Thus, it would be much easier to reason about reference counting or garbage collection.
+
+The remaining difficulty is how to tell Wikilon that a particular value should be given this treatment, make it easy to use - e.g. for balanced trees or sequences. Fortunately, this seems a pretty good candidate for an annotation. Proposed:
+
+        {&stow} :: (a*e) → (a'*e)    tuck value into cold store
+
+I suspect I'll actually want a few variants or attributes, e.g. to indicate whether I expect to need that value again this computation, or expected size, or to optionally use/refuse structure sharing. (All this might be a simple sequence of flags.) In addition, heuristics may apply - e.g. we might reject stowage if the argument is smaller than a few hundred bytes. Developers might tweak these heuristics with a flag (e.g. a single digit representing exponential sizes). 
+
+When a stowed value is observed or accessed, it must automatically be loaded. After all, annotations don't affect observable semantics. To reduce loading latencies, we might wish to explicitly annotate this, e.g. with `{&load}`, so we begin asynchronously loading a value before we'll need it. To reduce risk of accidentally loading a stowed value, developers might be encouraged to wrap stowed values with discretionary sealers.
+
+Usefully, stowed values would be strictly internal, and largely orthogonal to ABC resource model. ABC resources could still benefit from stowed values with regards to persistent, separate compilation. Stowage might also be disabled for read-only computations, such that they're also load-only.
 
 # Stable or Unstable Capability Strings?
 

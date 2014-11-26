@@ -281,6 +281,16 @@ putMLT [] = return ()
 validTok :: String -> Bool
 validTok = L.all isTokenChar
 
+-- TODO: If possible, it would be ideal to support a streaming parse
+-- even of contained blocks, such that we can immediately begin the
+-- partial evaluation pass when parsing the block without waiting until
+-- the full block is parsed. Potentially, this might be achieved by 
+-- parsing into an intermediate stream of operations with 'in-block'
+-- and 'out-block' tokens, rather than treating blocks as first-class
+-- objects at this layer.
+--
+
+
 -- get will not return any ABC_Ext elements, so the type of ext is
 -- not relevant at this point. getABC requires a little extra state
 -- regarding whether we've just read a newline
