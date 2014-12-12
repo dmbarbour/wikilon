@@ -1,5 +1,7 @@
 A history-preserving key-value database for Wikilon.
 
+(Moved to a `vcache` project, since the actual database design is generic.)
+
 # Wikilon Database Requirements
 
 ## Expected Content
@@ -65,6 +67,14 @@ Essentially, I'm simulating an extended, persistent memory for loading and stori
 In this case the addresses will simply increment by one for each value added, since the address doesn't need to account for space. I'm going to make a simplifying assumption, that we never run out of values. This will hold true for at least a few centuries, and we can address the compacting/reuse problem later with a goal of optimizing cache performance by moving related values nearer to each other.
 
 The `refct0` table supports concurrent background GC. It's acting as a queue for addresses that have reached zero reference counts. The `roots` table is a place to record persistent values that we can load into memory.
+
+(Other thoughts: It might be useful to preserve *values* for active reads, e.g. on a per-process basis. Maybe I need an additional 'volatile refect' table?)
+
+## Possibility: Use 'volatile' (in-memory) refs to delay GC?
+
+An interesting possibility is to use in-memory value references to belay garbage collection. However, this may be a bit of work if more than one process is using the storage. OTOH, why would I need more than one process? Or I could use a separate database for this role.
+
+Maybe it would be better to see what I can do without this, first? Or maybe use an explicit action to create a volatile root?
 
 ## Database is just a Value
 
