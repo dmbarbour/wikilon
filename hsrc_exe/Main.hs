@@ -27,7 +27,6 @@ helpMessage =
  \\n\
  \    wikilon [-pPort] [-mMB] [-s] [-init] \n\
  \      -pPort: listen on given port (def 3000; saved) \n\
- \      -mMB: database memcache size in megabytes (def 5; saved) \n\
  \      -init: initialize & greet, but do not start. \n\
  \      -s: silent mode; do not display greeting or admin code. \n\
  \\n\
@@ -69,7 +68,7 @@ defaultPort :: Int
 defaultPort = 3000
 
 defaultCache :: Int
-defaultCache = 5
+defaultCache = 64
 
 wiki_crt,wiki_key :: FS.FilePath
 wiki_crt = "wiki.crt"

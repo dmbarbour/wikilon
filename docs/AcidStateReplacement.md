@@ -23,24 +23,6 @@ Snapshots simplify the lookup and GC logics a great deal; branching, too. Transa
 
 It seems to me that either approach should work well enough. I should pick one and run with it. For now, the snapshot approach - with a naive model for GC and structure sharing - seems simpler. I'll maybe try that.
 
-# Utilities
-
-After studying a few options:
-
-* **Perdure** - persistent IORefs, no transactions, unsuitable.
-* **TCache** - persistent STM refs, backed by file or AWS
-* **TX** - persistent STM ref, no checkpoint... unsuitable
-* **berkeley db** - key-value store, ACID, memcache
-* **datomic** - similar model for time; somewhat expensive
-
-Both **TCache** and **berkeley db** seem to be viable options. Of these, I think **berkeley db** may be the better choice, having a highly proven robustness, performance, and scalability. My impression (from the multitude of spelling errors) is that TCache code isn't very robust, and the IResource model should offer a better separation between data type and storage. 
-
-Potentially, I could use TCache backed above BDB. OTOH, it isn't clear to me that this would offer any significant advantages. It might be worth emulating the cache from TCache, however, so I can reuse parsings? I'll need to think about it.
-
-Nested transactions are also a useful feature. They can allow me to `{try}` a behavior without fully committing to it, i.e. failure as undo, which could greatly simplify reasoning about partial failure and system consistency. Both BDB and STM can support this. 
-
-
-
 Older Content
 =============
 

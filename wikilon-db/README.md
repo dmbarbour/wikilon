@@ -1,93 +1,81 @@
 A history-preserving key-value database for Wikilon.
 
-# Why a new Database?
+# Wikilon Database Requirements
 
-Wikilon, if successful, will host multitudes of program artifacts - i.e. not just reusable functions, but also the documents, spreadsheets, ray traced models, music, game worlds, and so on. My goal is to support procedural generation, refactoring, abstraction, and macro construction of these artifacts. I do this by embedding them in a computational context based around the Awelon project languages.
+## Expected Content
 
-In addition, I aim to support a deep history based on an exponential decay process - a half-life for information - that preserves a few thousand snapshots over time. The exponential decay process can ensure a more or less constant space overhead (not quite constant due to structure sharing), but it does multiply the costs for artifacts based on the number of accessible versions.
+Wikilon, if successful, will host multitudes of program artifacts: functions, documents, spreadsheets, ray traced models, music, game worlds, and so on. Wikilon has two major centers of data:
 
-Some temporal databases exist, but very few make logarithmic history readily feasible. 
+1. the dictionary, consisting of AO words (which become wiki pages)
+2. the filesystem, where every element is a purely functional object
 
-Wikilon needs at least two databases: 
+While the dictionary consists only of AO functions, the idea is to leverage naming conventions such that the dictionary (together with a sufficient degree of caching) becomes almost an operating system of its own. For example:
 
-1. a dictionary database, with AO words, definitions, and reverse lookups
-2. a file system, except with ABC embedded objects, redirects, and scripts
+* automatic tests, with zero-button automatic testing, are simply words starting with the prefix `test.`
+* a spreadsheet `foo` might be modeled using a collection of words of form `a1$foo` and `b3$foo`. 
+* web applications might use a name like `wikilon/picturesOfCats`, and be accessible by URL.
 
-The file system supports IDE-layer state, cooperative work between users, and use of Wikilon as a software platform. The dictionary supports the main wiki pages and content. AO code might actually grow quite large, e.g. due to modeling a spreadsheet as a word per cell, and modeling various embedded objects by a long series of words. 
+But the dictionary is insufficient for certain purposes, such as tracking user input, session information, IDE-layer caching, and use of Wikilon as a tailorable software platform, e.g. for robot control or an MMORPG. Thus Wikilon needs a state layer suitable for these purposes. To this end, I'm designing Wikilon's own variation on the filesystem. Rather than dumb files as byte streams, Wikilon's filesystem consists of purely functional objects made from Awelon bytecode. These objects shall take the same basic forms as embedded literal objects, modeling something like:
 
-The primary queries on both databases tend to just be key-value lookups. I'll also want historical value lookups, and the ability to 'run' code against a historical snapshot of the filesystem for testing purposes.
+        type Object = { query :: Input → Response, update :: Input → Object }
 
-# Proposed Structure
+The benefit of having a system of objects is that these objects can easily protect their own invariants and guard information. Thusly, we can support an intermediate layer of permissions: in addition to read-write at the source layer, we can have query-update permissions at the object layer. Usefully, this object model is also readily adapted to RDP, e.g. if we replace the 'update' argument with a set of inputs. (In addition to pure objects, the Wikilon filesystem might transparently support stateless scripts that can operate on multiple objects.)
 
-My current plan is to model each snapshot of the database as an associative array with a high level of structure sharing. To support structure sharing, I'll need a secondary key-value database to represent stored values. Further, I'll need support for garbage collection, e.g. based on reference counting.
+A secondary benefit is that interesting forms of semantic compression and separate compilation become available when files are known to consist of bytecode.
 
-So, the proposed organization is:
+## Historical Snapshots
 
-* a 'value' store for large shared values 
-* a reference count database for the values
-* a data model for the associative array (B-tree?)
-* support for toplevel key-value pairs
+Besides supporting values as they are, I wish to track values as they were - e.g. a few thousand snapshots from history, plus named snapshots. This history will be very useful for debugging, retroactive testing, computing differences, understanding a system through its evolution, resilience against vandalism, and so on. To this end, I'm planning on a composition of windowed history (keep the last K snapshots) with a [logarithmic history](https://awelonblue.wordpress.com/2014/10/08/logarithmic-history-v3/) (which keeps N snapshots that reach exponentially into the past).
 
-My current plan is to essentially model value references using 64-bit keys. I also plan to build the value store above **Berkeley DB**. This results in something of an abstraction inversion: I'm modeling a key-value store above a key-value store. But this is necessary to support history. 
+(This is orthogonal to whatever history the objects might track internally.)
 
-Garbage collection will be based on a separate database that keeps a reference count for each value. Further, rather than storing raw binaries, I'll have a simple intermediate data type so the GC will know how to recursively destroy collected objects. But this will all be hidden from the clients of each database. 
+## Fine Grained Persistence
 
-Rather than eager GC, I might also aim to have something like a GC queue or stack that is primarily handled by a separate thread.
+Say we have an object in the filesystem that contains a very large data structure, e.g. a balanced tree map with a million elements. A simple query or update on this object should take logarithmic time. However, a naive serialization of objects would undermine this, e.g. requiring we load all million elements into memory prior to the query, or store all million after the update. This would lead to ugly workarounds, as developers pursue performance over aesthetics.
 
-# Keeping History
+To make a filesystem of objects viable, it's important that we can load and manipulate just the portion of the objects that we're using. Normal filesystems achieve this through fseek or mmap, which introduces all sorts of accidental complexity in the form of alignment and sizing concerns. Ideally, we could work with plain old values even in the persistence layer.
 
-I think we might do pretty well to configure the history with just two numbers: a count of frames to preserve exactly (a windowed history), and a count of frames to preserve with exponential decay (logarithmic history).
+So, I think we need persistence below the granularity of 'Object', such that we can load only the parts of an object that we're using. The resulting system would be simple and efficient, with no need for ad-hoc workarounds. From the ABC layer, this persistence may be guided by developer annotations, and perhaps a few heuristics.
 
-# Structure Sharing
+## Structure Sharing and GC
 
-I should be able to achieve a high degree of structure sharing within the database by proposing keys based on a reasonably 'good' hash of the stored value, then using linear collision. Unlike a hash table, I'll be using the full space of 64 bits encoded in the BDB B-tree, i.e. a hashmap, so there is no need to rebuild the hash table. Linear collision could minimize paging in BDB. Note that this technique doesn't guarantee that equal values have equal names unless we do a lot of complex stuff to handle deletion. It just has a high tendency towards sharing.
+Structure sharing is essential for efficient representation of historical snapshots, and is augmented when taken together with fine-grained persistence. And it's also useful as a general default: when developers know that structure sharing is the default, it simplifies a great deal of reasoning about performance, caching, and communication. 
 
-Structure sharing at the AO layer is possible - it's just refactoring. And structure sharing in ABC can be achieved with ABC resources, and systematic passes to compress the database by use of ABC resources.
+Of course, structure sharing comes with a requirement for GC. Given the massive scale of a database, any GC that scans the whole database would be a disaster. And in context of historical snapshots, the common GC assumption that "objects tend to die young" is invalid. But I think reference counting could work well, and could be made concurrent (e.g. via queueing).
 
-Question: should I expose the value structure to clients of the Wikilon DB?
+# Proposed Database Design
 
-I think it might complicate tracking reference counts, and it might not help much with normal use cases of AO or ABC code. OTOH, it might prove very useful for building simple concepts above the key-value databases and preserving a high level of value-layer sharing. It also might offer a more uniform model. The main trick would be forbidding value references to be propagated outside any given Wikilon DB transaction, and perhaps prevent direct view of the reference numbers. Maybe an approach similar to the STRef model could work?
+Wikilon's database will build upon a small set of key-value databases. This underlying database will take care of all the more primitive issues, such as: efficiency, scalability, persistence, concurrency. After much research, spinning in circles, and analysis paralysis, I've selected **LMDB** for its simplicity, performance characteristics, and friendly license. (I'm at a stage where I needed to pick one, run with it, trust my analysis, and stop second guessing myself.)
 
-I feel this idea is at least worth pursuing.
+## Values Database
 
-# Paging and Compaction
+Above LMDB, I'll implement the following **values database**:
 
-A compacting GC is a useful idea, but a somewhat difficult one. 
+        type Value = ... structured ...
+        type Address = Int64  
+        type ValHash = Int64  -- e.g. via murmur hash 
+        table values: Address → Value
+        table refcts: Address → Int64
+        table refct0: Address → ()
+        table caddrs: ValHash → [Address]
+        table roots:  String → Value (or → Address)
 
-The idea is that if value A references value B, we might wish to place value A near to value B in memory. We might also associate values that are related *temporally*, i.e. by placing values that are created near the same time into the same BDB pages, under the expectation that temporal relationships are weakly associated with spatial relationships.
+Essentially, I'm simulating an extended, persistent memory for loading and storing values. The values in this case are immutable; after construction, they are only garbage collected. The content address table `caddrs` makes it easy to perform structure sharing within larger values. Use of consecutive addresses ensures that newly constructed values tend to be near one another in the address space, which (according to [work by Robert Harper and Guy Blelloch](https://existentialtype.wordpress.com/2014/09/28/structure-and-efficiency-of-computer-programs/)) should be sufficient to guarantee near-optimal cache performance (assuming appropriate design of data structures and algorithms).
 
-To support this seems viable. Minimally, we could have a sequential allocator for new values, and perhaps a simple way to track 'freed' space for GC purposes. To integrate with structure sharing is still useful, but might be split into a separate table of hash→locations list (a bucket hash). So we'd now need:
+In this case the addresses will simply increment by one for each value added, since the address doesn't need to account for space. I'm going to make a simplifying assumption, that we never run out of values. This will hold true for at least a few centuries, and we can address the compacting/reuse problem later with a goal of optimizing cache performance by moving related values nearer to each other.
 
-* a table from locations to value, storing hash value
-* a table from locations to reference counts
-* a table from hash values to a list of locations
+The `refct0` table supports concurrent background GC. It's acting as a queue for addresses that have reached zero reference counts. The `roots` table is a place to record persistent values that we can load into memory.
 
-This adds a little overhead for allocation, and it may create some conflicts for allocating values. Write transactions would need to select different locations or 'pages' to avoid conflict. On the plus side, there is no extra overhead for reads, and structure sharing could be very precise because we can now find all possible addresses for a stowed value, i.e. no issues with hash collision followed by deletion.
+## Database is just a Value
 
-The remaining idea, then, is to create a little open space near values, such that we can try to stow values near one of the other values they reference. Even if it's just a limited attempt, it might be sufficient to get some benefits.
+After building the value model above LMDB, we'll be much closer to Haskell's general approach of modeling everything with values. At this point, I'll just go the rest of the way: a database, including all historical values, is simply modeled using a value. It's then up to the data structure to make this efficient. 
 
-I'm not really sure where a 'compacting GC' might become involved. The idea would be to reorganize objects such that if A references B, A is more likely to be near B (and perhaps precede B) in physical storage, thus reducing the probability of loading big pages into memory just to access just one small value on it. Compaction seems possible, but I'm not sure it could readily be achieved concurrently. 
+Not every persistent value will need to track a history. But databases with history will model that history explicitly, i.e. as part of their value. 
 
-Maybe we could just move a few objects at a time, based on observed access patterns? I.e. if we load objects A,B,C in sequence, we might see if C can be moved. Unfortunately, moving C might require locating all references to it. Even if references are exposed, this might be too much without ad-hoc reverse lookup indices. 
+# Everything else...
 
-Is all this extra complication worthwhile? Maybe. I'd need to profile to know. 
+Modeling the history and such will be shifted to the Wikilon package. So this wikilon-db will actually be closer to a value-db. Maybe I should rename it? I would like to provide a nicer interface for this value database, e.g. compared to LMDB's `MDB_val` structures. An interesting possibility is also to combine multiple writer transactions in the higher layer.
 
-For now, I think I'll drop this idea, and simply store values based on secure hash with linear collision. If I really want, I can still achieve precise structure sharing by marking a cell as deleted rather than actually removing it. OTOH, precise structure sharing really isn't worth much if I'm not trying to compare values by their 'pointers'.
+I already have ideas on how to use this for Awelon values... and perhaps to internalize ABC resources.
 
-Conclusion: optimize later. A rather difficult endeavor for persistent data. It is feasible, but it requires a good export/import system.
-
-
-# Gradual GC
-
-Instead of "most objects die young", the preservation of history ensures there will often be a very large latency between an object's creation and collection. I think a lot of existing GC models won't be very effective with this context. Reference counting won't be especially hindered by it, but will still have the issue where GC almost always involves paging.
-
-To reduce the performance burden of cascading destruction, I feel a simple queue of 'values to be deleted' is quite appropriate. Due to structure sharing, it is quite possible for a value to be revived before the GC gets to it, so it would follow a process of grabbing one value from the queue, checking whether its reference count is still zero, and if so: delete it, then decref all the objects to which it contains a reference, adding them to the queue if necessary.
-
-Reference counting will undoubtedly add a fair amount of overhead, but I think it will be essential.
-
-
-# Other Features
-
-An interesting possibility is having read-only transactions that 'read their own writes', but where all writes are dropped in the end. Would this be worthwhile? Or should it be modeled more explicitly as operating on a branch?
-
-I can potentially support concurrent writer transactions on a database, automatically detecting conflicts on commit. A bloom filter (or a simple set) might track all keys read by a transaction.
+An interesting possibility is to support multi-writer transactions, e.g. by explicitly modeling STM above database values.
