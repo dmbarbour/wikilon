@@ -8,43 +8,44 @@ import Control.Concurrent (threadDelay)
 import qualified System.IO as Sys
 import qualified System.Exit as Sys
 import qualified System.Environment as Env
-import qualified System.Random as Sys
+import qualified System.EasyFile as FS
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Handler.WarpTLS as WarpTLS
-import qualified Network.Wai.Middleware.Gzip as Wai
 import qualified Network.HTTP.Types.Status as HTTP
 import qualified Data.List as L
-import qualified Filesystem as FS
-import qualified Filesystem.Path.CurrentOS as FS
 import qualified Data.Text as T
 import qualified Data.ByteString.UTF8 as UTF8
+import Database.VCache 
+import Database.VCache.Cache
 import qualified Wikilon
 
 helpMessage :: String
 helpMessage =
  "The `wikilon` executable will initiate a Wikilon web service.\n\
  \\n\
- \    wikilon [-pPort] [-mMB] [-s] [-init] \n\
+ \    wikilon [-pPort] [-cMB] [-s] [-init] \n\
  \      -pPort: listen on given port (def 3000; saved) \n\
- \      -init: initialize & greet, but do not start. \n\
- \      -s: silent mode; do not display greeting or admin code. \n\
+ \      -cMB: configure parse-cache size in megabytes; (def 10; saved) \n\
+ \      -init: initialize & greet only; do not start. \n\
+ \      -s: silent mode; do not greet or display admin code. \n\
  \\n\
  \    Environment Variables:\n\
  \      WIKILON_HOME: directory for persistent data\n\
- \        default is OS based application data directory\n\
+ \        defaults to OS dependent user app directory\n\
  \\n\
  \    For TLS and HTTPS:\n\
- \      add 'wiki.key' and 'wiki.cert' files to WIKILON_HOME\n\
- \      if TLS is enabled, insecure connections are denied\n\
+ \      add 'wiki.key' and 'wiki.crt' files to WIKILON_HOME\n\
+ \      when TLS is enabled, insecure connections are denied\n\
  \\n\
- \Wikilon is a wiki, a software platform, an integrated development\n\
- \environment for the Awelon project. Pages consist of Awelon Object\n\
- \code, and may define new web applications or services.\n\
+ \Wikilon is a wiki-inspired software platform and development environment\n\
+ \for the Awelon project. Pages are portable, reusable functions. Name and\n\
+ \type conventions enable pages to model data, docs, apps, and services.\n\
  \\n\
- \Most configuration of Wikilon should be performed through a browser.\n\
- \After starting Wikilon, open a browser to http(s)://localhost:Port\n\
- \to get started. An administrative code is printed to console."
+ \Most configuration of Wikilon is performed through a browser, mostly in\n\
+ \terms of editing wiki pages. For security, some pages require an admin\n\
+ \code to edit. This code is printed to console with the greeting.\n\
+ \"
 
 data Args = Args 
     { _port  :: Maybe Int
@@ -67,8 +68,8 @@ defaultArgs = Args
 defaultPort :: Int
 defaultPort = 3000
 
-defaultCache :: Int
-defaultCache = 64
+defaultCacheSize :: Int
+defaultCacheSize = 10 {- megabytes -}
 
 wiki_crt,wiki_key :: FS.FilePath
 wiki_crt = "wiki.crt"
@@ -96,36 +97,14 @@ wikilonWarpSettings port =
     Warp.defaultSettings
 
 wikilonWarpTLSSettings :: FS.FilePath -> WarpTLS.TLSSettings
-wikilonWarpTLSSettings h = WarpTLS.tlsSettings (tof wiki_crt) (tof wiki_key) where
-    tof = FS.encodeString . (h FS.</>)
-
-wikilonMiddleware :: Wai.Middleware
-wikilonMiddleware = ss . gz where
-    gz = Wai.gzip Wai.def
-    ss = secSleep 30 370
-
--- | Add a little extra resistance to timing attacks.
---
--- Timing attacks involve statistical analysis of times involved
--- with various operations on secret values. The best way to guard
--- against these is to favor constant time cryptographic behavior.
--- But it can be difficult to find all the vulnerabilities. Adding
--- some variance to responses caused by malformed inputs should
--- help reduce rate of information leaks.
---
--- Times here are given in milliseconds. 
-secSleep :: Int -> Int -> Wai.Middleware
-secSleep lo hi app request respond = app request respond' where
-    respond' r = when (secReject r) (doSleep) >> respond r
-    secReject = HTTP.statusIsClientError . Wai.responseStatus 
-    doSleep = threadDelay =<< rndTime 
-    rndTime = Sys.getStdRandom (Sys.randomR (millisec lo, millisec hi))
-    millisec = (*) 1000
+wikilonWarpTLSSettings h = WarpTLS.tlsSettings crt key where
+    crt = h FS.</> wiki_crt
+    key = h FS.</> wiki_key
 
 shouldUseTLS :: FS.FilePath -> IO Bool
 shouldUseTLS h = (||) <$> haveKF <*> haveCF where
-    haveKF = FS.isFile $ h FS.</> wiki_key
-    haveCF = FS.isFile $ h FS.</> wiki_crt
+    haveKF = FS.doesFileExist $ h FS.</> wiki_key
+    haveCF = FS.doesFileExist $ h FS.</> wiki_crt
 
 runWikilonInstance :: Args -> IO ()
 runWikilonInstance a = mainBody where
@@ -133,22 +112,22 @@ runWikilonInstance a = mainBody where
         if hasBadArgs then failWithBadArgs else
         if askedForHelp then helpAndExit else
         createWIKILON_HOME >>= \ home ->
-        loadCache home (_cacheSize a) >>= \ cache ->
-        let appArgs = Wikilon.Args { Wikilon.homeDir = FS.encodeString home
-                                   , Wikilon.cacheSize = cache
-                                   }
-        in
+        openVCache szMax (home FS.</> "db") >>= \ vc ->
+        loadCache vc (_cacheSize a) >>= \ cacheSize ->
+        loadPort vc (_port a) >>= \ port ->
+        setVRefsCacheSize (vcache_space vc) (cacheSize * 1000 * 1000) >>
+        let appArgs = Wikilon.Args { Wikilon.store = vcacheSubdir "wiki/" vc } in
         Wikilon.loadInstance appArgs >>= \ app ->
-        loadPort home (_port a) >>= \ port ->
         shouldUseTLS home >>= \ bUseTLS ->
-        unless (_silent a) (greet home port cache app bUseTLS) >>
-        if _justInit a then return () else
-        let waiApp = wikilonMiddleware (Wikilon.waiApp app) in
+        unless (_silent a) (greet home port cacheSize app bUseTLS) >>
+        if _justInit a then sync vc >> return () else
         let tlsSettings = wikilonWarpTLSSettings home in
-        let warpSettings = wikilonWarpSettings port in
-        if bUseTLS then WarpTLS.runTLS tlsSettings warpSettings waiApp
-                   else Warp.runSettings warpSettings waiApp
-        -- does not return
+        let run = if bUseTLS then WarpTLS.runTLS tlsSettings warpSettings
+                             else Warp.runSettings warpSettings 
+        in
+        run (Wikilon.waiApp app) >> 
+        Sys.putStrLn "Halting." >>
+        sync vc
     badArgs = _badArgs a
     hasBadArgs = not $ L.null badArgs
     failWithBadArgs = err badArgMsg >> err helpMessage >> Sys.exitFailure
@@ -166,29 +145,20 @@ runWikilonInstance a = mainBody where
 showFP :: FS.FilePath -> String
 showFP = T.unpack . either id id . FS.toText
 
--- load a file assuming read/show as a viable serialization format.
--- This will work for numbers, but not for everything.
-loadRS :: (Read a, Show a) => FS.FilePath -> a -> Maybe a -> IO a
-loadRS fp _ (Just a) = 
-    let bytes = UTF8.fromString (show a) in
-    FS.writeFile fp bytes >>
-    return a
-loadRS fp def Nothing = 
-    FS.isFile fp >>= \ bFile ->
-    if not bFile then loadRS fp def (Just def) else
-    (UTF8.toString <$> FS.readFile fp) >>= \ fileContents ->
-    case tryRead fileContents of
-        Just a -> return a
-        Nothing -> 
-            let fpTxt = T.unpack (either id id $ FS.toText fp) in
-            fail $ "could not read " ++ fpTxt 
+loadCache :: VCache -> Maybe Int -> IO Int
+loadCache = ldpvar "cacheSize" defaultCacheSize
 
--- select and save wikilon port information
-loadPort :: FS.FilePath -> Maybe Int -> IO Int
-loadPort h = loadRS (h FS.</> "port") defaultPort
+loadPort :: VCache -> Maybe Int -> IO Int
+loadPort = ldpvar "port" defaultPort
 
-loadCache :: FS.FilePath -> Maybe Int -> IO Int
-loadCache h = loadRS (h FS.</> "cacheSize") defaultCache
+loadPVar :: (VCacheable a) => String -> a -> VCache -> Maybe a -> IO a
+loadPVar var vc def mbArg =
+    loadRootPVarIO vc (UTF8.fromString var) def >>= \ r ->
+    case mbArg of
+        Nothing -> readPVarIO r
+        Just a -> runVTx (pvar_space r) $
+            writePVar r a >>
+            return a
 
 err :: String -> IO ()
 err = Sys.hPutStrLn Sys.stderr
@@ -216,13 +186,13 @@ getWIKILON_HOME :: IO FS.FilePath
 getWIKILON_HOME =
     Env.getEnvironment >>= \ env ->
     case L.lookup "WIKILON_HOME" env of
-        Just h -> return (FS.decodeString h)
-        Nothing -> FS.getAppDataDirectory "wikilon"
+        Just h -> return h
+        Nothing -> FS.getAppUserDataDirectory "wikilon"
 
 -- getWIKILON_HOME then create directory if needed
 createWIKILON_HOME :: IO FS.FilePath
 createWIKILON_HOME =
     getWIKILON_HOME >>= \ h0 ->
-    FS.createTree h0 >>
+    FS.createDirectoryIfMissing True h0 >>
     FS.canonicalizePath h0
 

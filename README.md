@@ -1,38 +1,28 @@
 Wikilon
 =======
 
-A wiki and web-services based development environment for Awelon project
+A wiki-inspired development environment and software platform for Awelon project.
 
-## Overview
-
-Wikilon is a development environment for Awelon project, aiming for a wiki-like live-programming experience. 
-
-Wikilon will serve as an alternative to the existing Text Editor + REPL development environment. Escaping the text editor and **.ao** files allows Wikilon to react more responsively to changes in the AO dictionary, and will more readily support incremental and persistent computation (e.g. of tests, typechecking, staged programming, partial evaluation). Shifting from a console REPL to browser services offers a much richer canvas for graphics and user interactions. Finally, the web server offers an interesting platform for long-running persistent services.
-
-Wikilon should provide a *minimal kernel* of capabilities - e.g. persistent state, bootstrap interpreters, the user model, recovery services. Most logic should be shifted into the dictionary (leveraging reflection as needed). We may need to start with a much larger Wikilon kernel until such a time as the dictionary is suitably mature.
-
-See also: 
+Related: 
 
 * [Awelon Object (AO) language](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md)
 * [Awelon Bytecode (ABC)](https://github.com/dmbarbour/awelon/blob/master/AboutABC.md)
 * [Awelon Project vision](https://github.com/dmbarbour/awelon/blob/master/AwelonProject.md)
 
-Code that runs on the server will generally be given limited resources and some means for job control. I would prefer that resource failures be deterministic.
-
-All state associated with Wikilon will be persistent. Also, I'm likely to keep logarithmic histories for everything, including service states, to allow for robust recovery and debugging.
-
 ## Setup and Configuration
 
-As Wikilon approaches a usable state, I'll provide instructions for setting it up and getting started. 
+NOTE: Wikilon is NOT usable at this time. It's still in early development. 
 
-* install BerkeleyDB
- * (Ubuntu) sudo apt-get install libdb-dev
+To get started with Wikilon:
+
+* install LMDB library and headers
+ * (Ubuntu) `sudo apt-get install liblmdb-dev`
 * cabal install --only-dependencies
 * cabal install
-* if ~/.cabal/bin directory is not in PATH, consider adding it
-* set WIKILON_HOME environment variable to a directory name
+* if ~/.cabal/bin directory not in PATH, consider adding it
+* configure WIKILON_PATH environment variable (or use default)
 
-After install and PATH is set, you should be able to run `wikilon -pPort`.
+After installation and PATH is set, you should be able to run `wikilon -pPort` and browse `http://127.0.0.1:Port`.
 
 ### HTTPS (TLS/SSL) Setup
 
@@ -43,7 +33,7 @@ I recommend you enable TLS. **warp-tls** supports RSA keys. Quick start:
         openssl req -new -key wiki.key -out wiki.csr
         openssl x509 -req -days 365 -in wiki.csr -signkey wiki.key -out wiki.crt
 
-This creates a key and a self-signed certificate. This should result in blaring warnings on your initial visit from a security conscious browser. But the connection will be encrypted. To obtain a properly signed and verified certificate (and to guard against man-in-the-middle attacks), send the `wiki.csr` file and some money to a certificate authority. If you'd rather use plain old HTTP, remove the `wiki.key` and `wiki.crt` files.
+This creates a key and a self-signed certificate. This should result in blaring warnings on your initial visit from any security conscious browser. But the connection will at least be encrypted. To obtain a properly signed and verified certificate (and to guard against man-in-the-middle attacks), send the `wiki.csr` file and some money to your least untrustworthy certificate authority. If you'd rather use plain old HTTP, remove or rename both the `wiki.key` and `wiki.crt` files.
 
 If TLS is enabled, Wikilon will reject insecure connections. If you plan to use port 443 (the default HTTPS port) for Wikilon, you might wish to run a trival separate process on port 80 that will redirect users to the https URL.
 
@@ -52,10 +42,8 @@ If TLS is enabled, Wikilon will reject insecure connections. If you plan to use 
 * **Haskell** for implementation
 * **warp and wai** for HTTP connectivity
 * **websockets** for liveness and reactivity
-* **Berkeley DB** for persistence and atomicity
+* **VCache and LMDB** for persistence
+* **logarithmic history** for version control, debugging, regression testing
 * **object capability model** for security and collaboration
-* **logarithmic history** for version control and regression testing
 
-
-
-
+The main Wikilon application is implemented as a WAI app in a library. Hence, developers can implement an alternative executable that combines Wikilon with some other features in one process.

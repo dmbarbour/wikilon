@@ -21,10 +21,10 @@ import qualified System.IO as Sys
 import qualified Network.HTTP.Types as HTTP
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as T
+import Database.VCache
 
 data Args = Args
-    { homeDir :: Sys.FilePath
-    , cacheSize :: Int
+    { store :: !VCache
     }
 
 data App = App 

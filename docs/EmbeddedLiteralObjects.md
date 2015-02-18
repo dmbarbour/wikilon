@@ -1,4 +1,7 @@
 
+NOTE: This particular approach to Embedded Literal Objects is a flop, because I cannot make it fit nicely into Wikilon. But I've developed an alternative that is nearly as effective, albeit limited to the Wiki layer. See [extensible syntax](ExtensibleSyntax.md). 
+
+
 As an alternative to DSLs in Awelon project, I've developed a concept for 'embedded literal objects'. This concept gets some discussion on my blog [1](http://awelonblue.wordpress.com/2014/07/22/embedded-literal-objects/) and within the older Awelon project [2](https://github.com/dmbarbour/awelon/blob/master/doc/ExtensibleLiteralTypes.md). 
 
 Essentially, the idea is to embed interactive but *isolated* applets within the source code, such that developers may interactively manipulate rich data structures, but the isolation allows these objects to easily be copied, shared, recorded within the AO dictionary and history, disentangled from one another. 
