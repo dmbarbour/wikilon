@@ -35,12 +35,11 @@ Executable wikilon
   default-language: Haskell2010
   build-depends: base (>= 4.6 && < 5)
     , wikilon
-    , easyfile (>= 0.2)
     , vcache
+    , easy-file (>= 0.2)
     , mtl
-    , utf8-string, bytestring, text
-    , http-types
-    , wai, warp, warp-tls (>= 3.0)
+    , utf8-string
+    , warp, warp-tls (>= 3.0)
     , tls 
   main-is: Main.hs
   ghc-options: -auto-all -Wall -rtsopts -threaded
@@ -50,6 +49,7 @@ Library
   default-language: Haskell2010
   Build-Depends: base (>= 4.6 && < 5)
     , vcache
+    , time (>= 1.5)
 
     , parallel (>= 3.0)
     , binary (>= 0.7.2)

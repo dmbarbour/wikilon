@@ -3,6 +3,12 @@ Wikilon
 
 A wiki-inspired development environment and software platform for Awelon project.
 
+Every 'page' in the wiki defines a concrete function, with acyclic dependencies on other functions. Functions subsume roles of data, documentation, tests, compilers, applications, and more. Initially, pages shall be written primarily using the Awelon Object (AO), a Forth-like language that Wikilon understands natively. However, Wikilon will support [user-defined syntax](docs/ExtensibleSyntax.md), requiring only that the syntax is well defined by another page.
+
+Wikilon can cross-compile functions, using compilers defined in the wiki. Access to compiled content is simple, just an HTTP GET on a link whose URL indicates the compiler and the function to be compiled, no sophisticated build step required. Given appropriate compilers, one might 'compile' documentation to PDF, or compile specialized monadic functions to a JavaScript web-application, or compile a byte stream transformer into a console application. Compiler developers are free to experiment with application models, effects models (monadic, capability-based), staging, targets (mobile, browser, desktop, unikernel), and so on. 
+
+As a software platform, Wikilon will host web applications and services. The details here aren't fully hammered out, but the vision is that Wikilon should be tailorable for use as a web server, game server, robotics controller, etc.. or at least support deployment of virtual machines when, for security or performance reasons, it would be better to avoid directly hosting the service.
+
 Related: 
 
 * [Awelon Object (AO) language](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md)
@@ -42,7 +48,7 @@ If TLS is enabled, Wikilon will reject insecure connections. If you plan to use 
 * **Haskell** for implementation
 * **warp and wai** for HTTP connectivity
 * **websockets** for liveness and reactivity
-* **VCache and LMDB** for persistence
+* **VCache and LMDB** for ACID persistence
 * **logarithmic history** for version control, debugging, regression testing
 * **object capability model** for security and collaboration
 

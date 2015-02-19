@@ -20,7 +20,6 @@ import Data.Ratio (numerator,denominator)
 import qualified Data.Time.Clock as Time
 import qualified Data.Time.Calendar as Time
 import qualified Data.Time.Format as Time
-import qualified System.Locale as Time 
 -- import Control.Exception (assert)
 import qualified Data.Decimal as Dec
 
@@ -124,7 +123,7 @@ t_locale :: Time.TimeLocale
 t_locale = Time.defaultTimeLocale
 
 parseTime :: String -> Maybe T
-parseTime = fmap fromUTC . Time.parseTime t_locale t_format
+parseTime = fmap fromUTC . Time.parseTimeM True t_locale t_format
 
 -- show difference in time for humans
 instance Show DT where
