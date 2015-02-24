@@ -4,12 +4,9 @@
 -- choice of secure hash is SHA3-384, selected for its simplicity and
 -- its useful divisibility into thirds.
 --
--- Note: I'll need to be aware of timing attacks on HMAC comparisons.
---
 module Wikilon.SecureHash 
     ( SecureHash, secureHash, secureHashLazy
-    , Signature, hmac, hmacLazy, hmacBlockSize
-    , constTimeEqSigs
+    , Signature(..), hmac, hmacLazy
     ) where
 
 import Data.ByteString (ByteString)
@@ -32,42 +29,42 @@ hashContext = CH.hashInit
 
 -- | generate a secure hash from any bytestring.
 secureHash :: ByteString -> SecureHash
-secureHash = toSecureHash . CH.hash
+secureHash = secureHashL . (:[])
 
 -- | generate secure hash from lazy bytestring
 -- (avoids an intermediate allocation)
 secureHashLazy :: BL.ByteString -> SecureHash
-secureHashLazy = toSecureHash . CH.hashlazy
+secureHashLazy = secureHashL . BL.toChunks
+
+secureHashL :: [ByteString] -> SecureHash
+secureHashL = toSecureHash . CH.hashFinalize . CH.hashUpdates hashContext
 
 type Secret = ByteString
-type Signature = SecureHash
+
+-- | Signature supports constant time comparison.
+newtype Signature = Signature { sigBytes :: SecureHash }
+instance Eq Signature where (==) = constTimeEqSigs
 
 -- | hmac secret message; generate hash-based signature for message
---
--- COMPARE SIGNATURES WITH `constTimeEqSigs` TO RESIST TIMING ATTACKS.
 hmac :: Secret -> ByteString -> Signature
-hmac secret = hmacLazy secret . BL.fromStrict
+hmac secret message = Signature $ secureHashL [secret, message]
+
+-- Note: According to the developers of SHA3, the SHA3 algorithm is
+-- not vulnerable to the attacks that require the more sophisticated
+-- HMAC algorithm. I can simply prepend the key. But this is specific
+-- to SHA3. Most hash algorithms need the double-hashing treatment.
 
 -- | hmac secret message, with lazy message string
---
--- COMPARE SIGNATURES WITH `constTimeEqSigs` TO RESIST TIMING ATTACKS.
 hmacLazy :: Secret -> BL.ByteString -> Signature
-hmacLazy secret = secureHashLazy . BL.append (BL.fromStrict secret)
-    -- Note: According to the developers of SHA3, the algorithm is
-    -- not vulnerable to the attacks that require a more sophisticated
-    -- HMAC algorithm.
-
--- | effective secret size (in bytes) for HMAC
-hmacBlockSize :: Int
-hmacBlockSize = CH.hashBlockSize hashContext
+hmacLazy secret = Signature . secureHashL . (secret :) . BL.toChunks
 
 -- | compare signatures in a manner resistant to timing attacks.  
 constTimeEqSigs :: Signature -> Signature -> Bool
-constTimeEqSigs sigA sigB = 
+constTimeEqSigs (Signature sigA) (Signature sigB) = 
     if (B.length sigA /= B.length sigB) then False else
     let iMatch a b = if (a == b) then 1 else 0 in
     let matchList = B.zipWith iMatch sigA sigB in
     let matchCount = L.foldl' (+) 0 matchList in
     (B.length sigA == matchCount)
-    -- a more robust option: (==) `on` secureHash
-    -- but that is also relatively expensive.
+    -- a robust alternative: (==) `on` secureHash
+    -- but that is also much more expensive.

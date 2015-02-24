@@ -8,29 +8,23 @@
 --    N       -- numbers  ~Haskell Rational
 --    [a→b]   -- blocks   ~Haskell functions or arrows
 --
--- Blocks may additionally be marked affine or relevant (or both),
--- thereby supporting substructural type based reasoning, though 
--- those attributes will frequently be dynamically enforced.
+-- Plus there is affine and relevant substructural types, discretionary
+-- sealed values, cryptographically sealed values (eventually), etc. And
+-- I'd like to experiment with new substructure, such as where or when a
+-- value is logically located, or when a block logically expires.
 --
--- Awelon project is designed to be statically typechecked, but can
--- enforce types dynamically. In the normal case, you cannot ask if
--- a value is a pair or a sum. You have to know in advance. In some
--- cases, introspection may be available as a capability.
+-- It seems feasible to optimize interpretation by recognizing common
+-- data structures - e.g. text, bytestrings, vectors and matrices - 
+-- then optimizing their representation. 
 --
--- Via capabilities, developers can access a few more value concepts.
+-- For very large values, such as maps with a million elements, I'm 
+-- interested in the possibility of using data pointers to avoid
+-- loading them all at once into memory. VCache's VRefs seem viable.
 --
--- Sealed values, cryptographic or discretionary, resist observation
--- until the unsealer is applied. This supports rights amplification,
--- serves a replacement for `newtype` declarations, and also as a tag
--- to guide optimizers to use specialized constructors. 
+-- Anyhow, regardless of the value type, the value in question should
+-- be serializable into ABC that, when executed, regenerates the value.
 --
--- Additionally, we can apply new substructural concepts, such as 
--- abstract location information or expiration of values. Long term,
--- this will be very important for RDP.
---
--- Reactive models such as RDP typically will use a different 
--- representation of values to support incremental updates.
---
+-- I may need a different representation for values in an RDP context.
 -- 
 module Wikilon.Value
     (

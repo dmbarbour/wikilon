@@ -17,16 +17,24 @@ module Wikilon
     ) where
 
 import qualified Network.Wai as Wai
-import qualified System.IO as Sys
 import qualified Network.HTTP.Types as HTTP
+import qualified Data.List as L
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as T
+import qualified Data.ByteString as B
+import Data.Char
 import Database.VCache
+import Wikilon.Secret
+import Wikilon.SecureHash
+import qualified Wikilon.Base16 as B16
 
+-- | Currently, Wikilon doesn't take many arguments. 
+-- Just a place to persist its data.
 data Args = Args
     { store :: !VCache
     }
 
+-- | A web app and a volatile administrative code. 
 data App = App 
     { waiApp    :: Wai.Application
     , adminCode :: String
@@ -36,10 +44,15 @@ data App = App
 -- whose identity and persistence is associated with the given 
 -- directory. 
 loadInstance :: Args -> IO App
-loadInstance _args =
-    -- create and initialize a Wiki with the given fp.
-    return (App helloApp "useless password")
+loadInstance args = do
+    let vc = store args
+    sv <- newSecret -- volatile secret
+    sp <- readPVarIO =<< loadRootPVarIO vc "secret" =<< newSecret -- persistent secret
+    let adc = L.take 32 $ sigString $ hmac sv "adminCode" -- volatile admin code
+    return (App helloApp adc)
 
+sigString :: Signature -> String
+sigString = fmap (chr . fromIntegral) . B16.encode . B.unpack . sigBytes
 
 helloApp :: Wai.Application
 helloApp req reply = reply response where

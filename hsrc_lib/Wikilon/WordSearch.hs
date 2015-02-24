@@ -1,9 +1,12 @@
 {-# LANGUAGE ViewPatterns #-}
 
--- | This module focuses on word search for tab completion, spelling
--- guidance, locating words with a given prefix or suffix, and so on. 
--- That is, search based on the internal structure of words, rather
--- than external structure of how words are used.
+-- | I really need a much more sophisticated search model...
+--
+-- match suffix, prefix, word distance
+-- match words based on type, shape, role
+-- find words based on reverse lookups 
+--
+-- I'll probably want a much more sophisticated index than I'm using here.
 -- 
 module Wikilon.WordSearch
     ( WordSearchIndex
@@ -19,7 +22,7 @@ module Wikilon.WordSearch
 
 import Data.Maybe (maybeToList)
 import qualified Data.List as L
-import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import qualified Data.ByteString as B
 import qualified Codec.Binary.UTF8.Generic as UTF8
 import Wikilon.Word

@@ -50,10 +50,9 @@ Library
   Build-Depends: base (>= 4.6 && < 5)
     , vcache
     , time (>= 1.5)
+    , binary (>= 0.7.2)
 
     , parallel (>= 3.0)
-    , binary (>= 0.7.2)
-    , intern (>= 0.9.1), hashable
     , containers (>= 0.5 && < 0.7)
     , array (>= 0.4)
     , mtl
@@ -61,7 +60,7 @@ Library
     , websockets (>= 0.9)
     , wai (>= 3.0)
     , http-types 
-    , yesod-routes (>= 1.2)
+    -- , yesod-routes (>= 1.2)
     -- , wai-websockets
 
     , utf8-string (>= 0.3.8)
@@ -79,36 +78,27 @@ Library
     Wikilon
 
     Wikilon.Word
-    Wikilon.WordMap
-    Wikilon.WordSet
-    Wikilon.WordSearch
 
     Wikilon.Database
-    Wikilon.DictST
-    Wikilon.DictTX
+    -- Wikilon.DictST
+    -- Wikilon.DictTX
 
-    -- Wikilon.Wiki
-    -- Wikilon.User
 
     Wikilon.AO
     Wikilon.ABC
     -- AO to ABC compilers
 
-    Wikilon.Base16
-
     Wikilon.Value
     Wikilon.Accel
     Wikilon.RunABC
 
+    Wikilon.Base16
+    Wikilon.Time
     Wikilon.SecureHash
     Wikilon.Secret
 
     Wikilon.Char
     Wikilon.ParseUtils
-    -- Wikilon.UTF8
-
-    -- Wikilon.Routes
-    -- Wikilon.WebApps
 
   Other-Modules:
   

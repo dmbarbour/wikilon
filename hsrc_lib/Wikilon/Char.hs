@@ -29,10 +29,8 @@ isWordCont c = not (bl || ctl) where
     ctl = isControl c
 isWordStart c = isWordCont c && not (isDigit c || '%' == c || '@' == c)
 
--- plus, minus, dot need special handling for word start.
--- mostly, I forbid a digit after '+' or '.', and negative
--- numbers need a little special care. Also need '/' since
--- for example the symbol `/4` isn't very clear.
+-- to avoid ambiguity between words and numbers, I need to be 
+-- careful about words that start with some characters. 
 isPMD :: Char -> Bool
 isPMD c = ('+' == c) || ('-' == c) || ('.' == c) || ('/' == c)
 

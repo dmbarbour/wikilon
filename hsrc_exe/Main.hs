@@ -40,9 +40,9 @@ helpMessage =
  \for the Awelon project. Pages are portable, reusable functions. Name and\n\
  \type conventions enable pages to model data, docs, apps, and services.\n\
  \\n\
- \Most configuration of Wikilon is performed through a browser, mostly in\n\
- \terms of editing wiki pages. For security, some content requires an admin\n\
- \code to edit. This code is printed to console with the greeting.\n\
+ \Most configuration of Wikilon is performed through a browser. For security\n\
+ \some content requires an administrator to edit. A volatile admin code is\n\
+ \printed with the greeting to manage administrative accounts.\n\
  \"
 
 data Args = Args 

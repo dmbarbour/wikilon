@@ -1,6 +1,3 @@
-A history-preserving key-value database for Wikilon.
-
-(Moved to a `vcache` project, since the actual database design is generic.)
 
 # Wikilon Database Requirements
 
@@ -45,47 +42,47 @@ Structure sharing is essential for efficient representation of historical snapsh
 
 Of course, structure sharing comes with a requirement for GC. Given the massive scale of a database, any GC that scans the whole database would be a disaster. And in context of historical snapshots, the common GC assumption that "objects tend to die young" is invalid. But I think reference counting could work well, and could be made concurrent (e.g. via queueing).
 
-# Proposed Database Design
+# Implementation
 
-Wikilon's database will build upon a small set of key-value databases. This underlying database will take care of all the more primitive issues, such as: efficiency, scalability, persistence, concurrency. After much research, spinning in circles, and analysis paralysis, I've selected **LMDB** for its simplicity, performance characteristics, and friendly license. (I'm at a stage where I needed to pick one, run with it, trust my analysis, and stop second guessing myself.)
+**VCache** was developed primarily for Wikilon. VCache is essentially an **acid-state** replacement, designed for scalability and working with very large values.
 
-## Values Database
+## Database is a Value
 
-Above LMDB, I'll implement the following **values database**:
+I've contemplated two basic designs for the database: modeling the database as a stream, or as a series of snapshots. I favor the series of snapshots as much simpler, i.e. because it's easier to find the value associated with a particular instant in time, and it's easier to delete intermediate historical versions. With structure sharing between versions, it shouldn't be too much worse than the streaming model for space efficiency, i.e. because we're mostly storing the deltas. Since VCache also supports comparisons on VRefs, I should be able to quickly diff versions of the database.
 
-        type Value = ... structured ...
-        type Address = Int64  
-        type ValHash = Int64  -- e.g. via murmur hash 
-        table values: Address → Value
-        table refcts: Address → Int64
-        table refct0: Address → ()
-        table caddrs: ValHash → [Address]
-        table roots:  String → Value (or → Address)
+Anyhow, each snapshot is a value, and so is the historical database.
 
-Essentially, I'm simulating an extended, persistent memory for loading and storing values. The values in this case are immutable; after construction, they are only garbage collected. The content address table `caddrs` makes it easy to perform structure sharing within larger values. Use of consecutive addresses ensures that newly constructed values tend to be near one another in the address space, which (according to [work by Robert Harper and Guy Blelloch](https://existentialtype.wordpress.com/2014/09/28/structure-and-efficiency-of-computer-programs/)) should be sufficient to guarantee near-optimal cache performance (assuming appropriate design of data structures and algorithms).
+This still leaves a lot of work! E.g. managing indices and cached computations, and validating updates before accepting them, and merging work by multiple users.
 
-In this case the addresses will simply increment by one for each value added, since the address doesn't need to account for space. I'm going to make a simplifying assumption, that we never run out of values. This will hold true for at least a few centuries, and we can address the compacting/reuse problem later with a goal of optimizing cache performance by moving related values nearer to each other.
+## Decay Heuristics
 
-The `refct0` table supports concurrent background GC. It's acting as a queue for addresses that have reached zero reference counts. The `roots` table is a place to record persistent values that we can load into memory.
+The logarithmic history can be implemented a number of ways. I've been leaning towards the 'decimate the population whenever it gets too high' approach, e.g. if I want 2000 samples then I can reduce from 2000 to 1800 whenever I hit 2000, taking each group of ten and reduce it to nine. This approach offers a lot of heuristic flexibility in deciding which item of each group is destroyed.
 
-(Other thoughts: It might be useful to preserve *values* for active reads, e.g. on a per-process basis. Maybe I need an additional 'volatile refect' table?)
+I would like to favor conditions like having a more stable gap between samples, and of favoring samples with higher popularity - e.g. possibly by independently also tracking usage information. (10x higher precision? 20k samples or so? example words in each sample, too?).
 
-## Possibility: Use 'volatile' (in-memory) refs to delay GC?
+Besides the logarithmic history, I think it would be useful to support 'tags' such that developers may preserve exact versions of a dictionary under a given tag. It might be necessary to model the master version of the dictionary as just another sequence of tagged versions, and allow multiple independent dictionaries to coexist.
 
-An interesting possibility is to use in-memory value references to belay garbage collection. However, this may be a bit of work if more than one process is using the storage. OTOH, why would I need more than one process? Or I could use a separate database for this role.
+## Model of Words
 
-Maybe it would be better to see what I can do without this, first? Or maybe use an explicit action to create a volatile root?
+I have a couple options for modeling words. One is to model them as integers, which might simplify renaming the words or tuning how words are rendered for each user, etc.. or making relationships between words more explicit. But it isn't clear that this would really save me very much. 
 
-## Database is just a Value
+The big motivation for modeling words as integers is to simplify renaming of words or allowing users to render words differently. But these purposes would be hindered by: keeping a historical database, enabling user-defined syntax, or the community-level goal of supporting shared language tools reusable from project to project. 
 
-After building the value model above LMDB, we'll be much closer to Haskell's general approach of modeling everything with values. At this point, I'll just go the rest of the way: a database, including all historical values, is simply modeled using a value. It's then up to the data structure to make this efficient. 
+So, for now, I'll just stick with text for words.
 
-Not every persistent value will need to track a history. But databases with history will model that history explicitly, i.e. as part of their value. 
+## Word Search
 
-# Everything else...
+If I want to find the right word, it is likely in one of these scenarios:
 
-Modeling the history and such will be shifted to the Wikilon package. So this wikilon-db will actually be closer to a value-db. Maybe I should rename it? I would like to provide a nicer interface for this value database, e.g. compared to LMDB's `MDB_val` structures. An interesting possibility is also to combine multiple writer transactions in the higher layer.
+* lazyness, just enter a few characters and get the rest of the word
+* type search, fill a hole in some context; I need to find suitable words.
+* relationship search
+ * find all words matching a given prefix or suffix
+ * find all words that use a given word directly (or K levels of indirection)
 
-I already have ideas on how to use this for Awelon values... and perhaps to internalize ABC resources.
+A good question is whether I should keep these indices persistently, or compute them as needed. And whether they should be computed for a specific version of the dictionary, or for all versions. For now, I'll err on the side of not putting more into the persistence layer; it's always easy to add it later.
 
-An interesting possibility is to support multi-writer transactions, e.g. by explicitly modeling STM above database values.
+
+
+
+

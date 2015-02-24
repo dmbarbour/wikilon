@@ -19,15 +19,20 @@ module Wikilon.Secret
 
 import Data.ByteString (ByteString)
 import System.Entropy (getEntropy)
-import Wikilon.SecureHash (hmacBlockSize)
 
 -- | A secret is a high-entropy bytestring. 
 type Secret = ByteString
 
+-- How big should our secrets be? Large enough that they are essentially
+-- unforgeable. In this case, I'm using 512 bytes, or 4096 bits, which is
+-- large enough that I don't expect any trouble.
+secretSize :: Int
+secretSize = 512 {- bytes -}
+
 -- | generate a new secret
 newSecret :: IO Secret
-newSecret = getEntropy hmacBlockSize
+newSecret = getEntropy secretSize
     -- choice of hmacBlockSize is a pretty good option for most
     -- secure hashes. For SHA3, it doesn't matter as much, but
     -- might later allow optimization by preprocessing the secret
-    -- into the hash context.
+    -- into the hash context, i.e. forming an initial hash state.
