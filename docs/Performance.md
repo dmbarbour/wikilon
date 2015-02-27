@@ -1,5 +1,7 @@
 
-A strong desire is that Wikilon should have competitive performance. I don't really expect to match C anytime soon, e.g. not without a lot of very good optimizers, and the ability to leverage register-sized number types (via annotation or inference). But I would like to at least be competitive with other scripting languages.
+A strong desire is that Wikilon should have competitive performance. 
+
+I don't expect to match C anytime soon. That will take excellent optimizers and compilers and data models, and maybe some accelerators for collections-oriented programming. However, it should be feasible to compete with other scripting languages.
 
 I believe the ABC or AO interpreter will be the main bottleneck.
 

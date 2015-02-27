@@ -1,64 +1,42 @@
 
-This is a high level overview of the design. 
 
-* Wikilon *typically* hosts multiple wikis.
- * Initialize with one or two new wikis (e.g. /admin, /sandbox).
- * Admin has special control over the toplevel namespace.
- * Admin will typically fork or replicate external wiki
- * Access admin capabilities by URL printed to stdout
-
-* Awelon Object (AO) is the primary language for Wikilon.
- * Wiki pages correspond to definitions of AO words.
- 
-* Dictionary is implemented as a bounded series of transactions.
- * Exponential decay gradually collapses transactions.
- * Each transaction has a bunch of useful monoidal metadata 
-  * time ranges: session, proposed, accepted
-  * loss heuristics: count of transactions, overlapping items
-  * contributors: set of names?
-  * etc.
- * Each transaction primarily defines, deletes, and renames words.
-  * Potential for logical forks?
-   * fork a list of words, and all their dependencies, with new suffix.
-   * might be too difficult to merge transactions, though; global reasoning
- Need to consider merge properties.
-  * may add other primitives later.
- * Each transaction is named by secure hash (content-addressed).
-  * no need to ever 'update' a transaction
-  * may garbage-collect unused transactions
-  * consider keeping transactions outside of acid-state
-  * use acid-state for transaction reference counts?
- * See also [TransactionNaming](TransactionNaming.md)
-
+* Multiple [branching dictionaries](BranchingDictionary.md)
+ * one branch per virtual machine (or set thereof)
+ * one branch per user and purpose
+ * lots of push/pull content migration between branches
+ * easy import and export of dictionary or full history
+ * logarithmic history, exponential decay for all branches
+* [Extensible syntax and structured editors](ExtensibleSyntax.md)
+ * Word defined by pair: structured value and compiler function
+ * Both elements of pair are encoded in Awelon Bytecode (ABC)
+ * tokens of form `{%foo}` access words from the dictionary
+ * AO language corresponds to editing ABC blocks
+ * Leverage other languages via `{:fooType}` sealers 
 * Compression?
- * Consider using the `zlib` package for compression of transactions.
- * Don't need specialized LZSS except for ABC resources; implement later.
+ * leverage structure sharing between versions
+ * potential for structure sharing of large values
+ * potential for automatic refactoring within dictionaries
+ * favor specialized LZSS-style encryption for ABC?
+ * probably not immediately critical 
 
-* A 'Wiki' is a central locus for much stuff
- * interaction with distributed replicas of wiki
- * work distribution across replicas
- * issue trackers
- * many user 'sessions' to edit the wiki
- * potential buffer of proposed transactions
- * support communication between sessions
- * caching, memoization, reactive updates
- * support for toplevel, long-running services
- * policies for new guests
- * scheduling, vats
- * chord/tapestry/etc. based routing
+* Issue trackers
+ * somehow relating multiple branches? 
+ * maybe take inspiration from github here
 
-* A 'Session' is a user's interactive view of Wiki
- * user preferences: rendering options, shortcuts, etc.
- * words defined but not committed to transaction
- * alerts of pending conflicts with edits by other users
- * track interactions, suggest new automatic tests
- * state for web-applications and volatile services
- * unlike wikis, sessions can become 'inactive'
+* Abstract Virtual Machines
+ * abstract network and persistent data
+ * host for any stateful applications
+ * bound to dictionary branch for live programming
+ * user sessions also modeled by AVMs
+ * consider modeling chord/tapestry/etc. routing
+ * replicate AVMs for development and testing
 
+* Accounts and Administration?
+ * guest policies? accounts?
+ * create new administrative accounts?
 
-Design constraints:
-
-To replicate or fork a wiki should generally be possible if you have a session ID. Consequently, the permissions of your replica would be based on the permissions of your session.
-
+* Replication and Sharding?
+ * Wikilon as cloud host or control software?
+ * Unikernels?
 
 

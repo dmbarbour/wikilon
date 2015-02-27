@@ -42,7 +42,7 @@ The prior section for Extensible Syntax is still missing a lot of desirable feat
 
 Instead of an extensible syntax at the character level, we represent every word as a pair: a *structured value* and a *compiler function*. The compiler function is simply a pure function that takes the structured value and returns a block. Trivially, the simplest compiler function is *identity*, if the structure itself is a block. The structured value is represented in ABC, but with access to the dictionary via `{%foo}` tokens. The result, for simple code, is very similar to the (now deprecated!) Awelon Object (AO) code:
 
-        #{&AO}
+        @using {&AO}
         :swap [rwrwzwlwl]
         :dup [r^zlwl]
         :swapd [rw {%swap} wl]
@@ -50,7 +50,11 @@ Instead of an extensible syntax at the character level, we represent every word 
         :dupd [rw {%dup} wl]
         :over [{%dupd} {%swap}]
 
-These tokens are noisy and ugly. Numbers and short text literals will be even uglier! Fortunately, in a structured editor, it should be entirely feasible to present this ABC code in a pretty format for reading and editing, including basic texts and numbers. Usefully, we have conflated words and blocks from the perspective of our compilers and structured editors. Words don't need special attention.
+If edited and displayed to humans in this format, there would be a lot of syntactic noise for words, small texts, and numbers. 
+
+The syntactic noise for words - and especially for numbers or text - would be a bit worrisome. However, a structured editor could probably present such blocks to users as AO code (or a simple variation), and similarly simplify editing.
+
+Fortunately, in a structured editor, it should be entirely feasible to present this ABC code in a pretty format for reading and editing, including basic texts and numbers. Usefully, we have conflated words and blocks from the perspective of our compilers and structured editors. Words don't need special attention.
 
 Now we have a lot of freedom for other languages. Arbitrary values may be built from numbers, products, sums, text, etc.. Structured editors may then render this structure and edit it. Functions to manipulate structure are just plain functions - i.e. macros are easily modeled within the dictionary. It is feasible to model *streams of user input* operating on an ad-hoc structure that defines a word, thus bringing me closer to my Awelon project goals.
 

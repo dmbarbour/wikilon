@@ -1,5 +1,7 @@
 
-I plan to leverage WebSockets for the more reactive applications. But I think it might be worthwhile to model *logical* sockets distinctly from the actual implementation layer. Properties for logical sockets:
+I plan to leverage WebSockets for the more reactive applications. I'll need to think about how these should interact with abstract virtual machines (whose primary form of communication is batched messages). I might want AVMs to transparently support websockets together with other communication models (such as HTTP). 
+
+It might be worthwhile to model *logical* sockets distinctly from the actual implementation layer. Properties for logical sockets:
 
 * *transactional* - instead of 'bytes' as the atomic unit, we have 'paragraphs'. A paragraph may consist of multiple sentences, i.e. multiple logical operations. A paragraph is executed transactionally. Multiple paragraphs can be composed and executed transactionally.
 

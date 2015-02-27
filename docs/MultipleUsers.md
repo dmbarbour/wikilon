@@ -1,5 +1,12 @@
 
-Okay, so I now have a few ideas on how to address multiple users.
+Some of the ideas below are now probably deprecated, e.g. I'm not sure a 'session' shouldn't just be an [AVM](ApplicationModel.md). 
+
+TODO: review and adjust design and priorities.
+
+
+
+Older Content
+=============
 
 # Sessions (highest priority)
 
