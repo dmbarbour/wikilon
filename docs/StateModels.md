@@ -1,27 +1,50 @@
 
 # General Overview
 
-In addition to the dictionary, Wikilon needs an auxiliary state model to support user workspaces, issue trackers, feature requests, new web applications, multi-user services, and so on. This will likely form the foundation for all resource models in Wikilon, much as filesystems do for conventional operating systems.
+A recent decision is to actually separate this auxiliary state from Wikilon proper. Instead, we model *abstract virtual machines*, each supporting a set of [hosted applications](ApplicationModel.md). But these AVMs must still support some explicit state models. 
 
-Unlike the dictionary, users will not typically have a 'frozen' view of the auxiliary state model. That said, it might be useful on occasion to experiment on a temporary fork or historical view of state resources, e.g. when initially developing and debugging. (Or even to run the same code on *all* the historical samples, as a quick form of regression testing.) I will be keeping a fair amount of historical state for various reasons - browsing, debugging, recovery from vandalism, archaeological digs, etc.. 
+## Transactional State
 
-Given historical views, I would like some ability to track which objects were updated by a recent transaction or tick event. This could prove very useful. It might require keeping a timestamp or event stamp on every resource.
+Communications with an AVM will be based on message-batching, i.e. such that an AVM collects all outgoing messages generated during a transaction into a batch for each target machine, and later receives batched incoming messages where batches correspond to remote transactions. RDP messages might eventually receive special treatment at the communications layer, but that isn't critical at this time.
+
+So, this suggests we need transactional, imperative state as at least an initial basis for state. Conventional read/write might work well enough.
+
+## Secure Source Stable Identity
+
+I could follow Haskell's convention, use `newPVar` from VCache to create first-class, persistent, transactional references, and some ad-hoc token or sealed value to access the PVar. But this would interfere with taking snapshots of the whole abstract virtual machine. Alternatively, I could still model first-class variables but preserve content in terms of a map at the VCache layer. But that would hinder garbage collection. In both cases, communications have a risk of pollution.
+
+I would rather avoid these scenarios. The option to model dynamic variables using something like a `Map Integer Data` will always exist, of course (a simple, purely functional implementation of `newPVar` is quite possible, at least in a dynamically/dependently typed language like ABC). But I can at least keep this off the path of least resistance. Developers must explicitly model their own GC, for example, and figure out on their own how GC interacts with networking.
+
+So, for now, I'm going to focus on organizing state for source-stable identity (similar to filesystems), i.e. such that we model application state as existing entirely in a few global variables but with secure partitions.
+
+Securing source-stable identity is quite feasible. I can use a simple value sealing model on the path, or a variation (e.g. HMAC chaining with validation bits). Including a value-sealing token at this layer might be useful to prevent these path names from ever polluting source code. In any case, how the state is named does matter for security reasons, especially in cases where these source-stable names might be shared between virtual machines. 
+
+## Monadic Effects
+
+Since I'm largely eschewing `{tokens}` for state, beyond potentially indicating sealed filepath names that may be obtained from a common root, I've effectively eliminated use of capability tokens for state. Almost all [effects](EffectsModel.md) will be monadic and purely functional. I'll try very hard to ensure the monad model exhibits useful properties - flexibility, composability, extensibility, specialization via staging or partial-evaluation, etc.. Delimited continuations and free monads will be worth exploring.
+
+## CRDTs
+
+I'd like to eventually model CRDTs with disruption-tolerant and delay-tolerant synchronization involving shared-state resources across abstract virtual machines. However, my intuition is that it would be better to model CRDTs at the Awelon dictionary, above simpler read/write state primitives. It shouldn't be difficult to model higher level abstract virtual machines above the lower level abstract virtual machines.
+
+## RDP and Imperative Interaction
+
+Accessing an RDP resource transactionally isn't a good fit for the continuous rollback-and-replay mechanism of RDP. In converse, if RDP accesses transactional read/write state, we probably need to implement some observer patterns so we can communicate updates due to transactional writes. 
+
+Compiling for RDP might become an ABC to ABC compiler, with a whole-source transform. Or it might involve more dedicated compilers to a final format. Depending on which approach I pursue, how I model RDP state resources, and abstract virtual machines in general, might vary a great deal. I'll need to think about this. Because RDP alleviates concerns about GC and concurrency, RDP is much more amenable to capability-based effects than imperative code, and we might be able to take good advantage of that.
+
+## Structure Sharing
+
+Structure sharing is possible across both multiple versions of a machine and between machines, and possibly at much larger scales if we account for ABC's linking model (especially if we assume a specialized variant for embedded values). 
+
 
 # Major Design Points
 
 These are important conclusions that took me some time to reach...
 
-1. **purely functional objects** are excellent for collaboration between mutually distrustful agents because they protect their own state, guard information, and leverage value sealing, yet don't have the entanglement issues of OO systems. A trivial example of a purely functional object model is `µObject.[Message → (Object * Answer)]`. However, I'll likely want to separate queries from updates (i.e. so I can optimize HTTP GET to use read-only queries), and simplify consistent views. Conveniently, [embedded literal objects](EmbeddedLiteralObjects.md) seem to be a pretty good fit for the role of state resources, ensuring consistent views for both readers and writers. Of course, to fit RDP, the update argument might be a a sorted list of structurally distinct demands (a set of demands) instead of a message.
-
-2. **serialize imperative through a powerblock** AO/ABC can operate in imperative modes only by ensuring operations on any specific resource are linearized (otherwise we lose causal commutativity and spatial idempotence). However, precisely tracking which resources are 'in use' is difficult, especially if we want redirection, adapters, or attenuation features. As a programmer, I don't want to be burdened with 'already in use' errors. So, my plan is to logically serialize everything through "the powerblock". That said, we should be able to get a lot of asynchronous computation, e.g. returning the powerblock immediately while the query result is processed in another thread. 
-
-3. **transactionalize imperative operations** If we model logical time as advancing between operations on a powerblock, we can observe writes by other imperative behaviors. This is a problem because it makes for difficult reasoning about code correctness, about partial failure and cleanup, and about consistency of stateful resources. It's also a problem because it would allow for productive polling loops, which is something I wish to strongly discourage. RDP should be the only option for long-running behavior in Wikilon. Console apps should at least transactionalize the commands; each command must terminate successfully to be productive.
-
 4. **transactional & RDP updates don't mix** The concurrency control models are completely incompatible. RDP is long running, leverages anticipation, retroactive correction, generally allows multiple agents to collaboratively influence future state, prohibits observation of 'instantaneous' events. Transactions assume an authoritative view, a single writer, are logically instantaneous, and transactions are simply serialized with the different writers taking turns. The main consequence of this incompatibility is simply that we must distinguish 'resources updated via RDP' from 'resources updated via imperative'. Fortunately, cross-model *queries* don't seem to cause any problems.
 
 5. **stateful resources are weakly isolated** Specifically, generic `{tokens}` are not allowed, with a few machine-independent exceptions like annotations, sealers, unsealers, and external resources. This is necessary to protect linearization of resources for imperative code, and to ensure compatible cross-model data queries between RDP and imperative, and potentially for logically continuous expiration of volatile capabilities via RDP behaviors. These 'live' tokens shall be treated as volatile capabilities within Wikilon. If we also assume purely functional objects, then we can reject tokens even in query or update messages. (Aside: in type system terms, location of code corresponds to a modality; isolation corresponds to a universal or unconstrained location.)
-
-6. **capability-string based hyperlinking** We can't store live tokens, but we'll still want to model hypertext, directories, registries, relationships, etc.. So we'll need some form of capability values which may be passed to a powerblock to access resources without accidentally aliasing them. Also, we'll want to use *the exact same strings* for external programmability of Wikilon, e.g. via web APIs (PUT, POST, GET, etc.). These must be true capability strings, providing authority independent of user identity, no need for permissions (thus one less failure mode).
 
 7. **memory cache at value granularity** If an object directly contains a map, it takes O(N) to load the map into memory or serialize it back to storage, so a O(lg(N)) update becomes mostly irrelevant. Serialization costs can quickly undermine benefits of structure. Performance pressures can drive developers to do nasty things, like divide structure into many smaller objects and use side-effects to entangle them. But, if we can treat partially-evaluated structures as external, memory-cached resources that are loaded as needed, we can obtain many advantages: relaxed alignment concerns, ad-hoc indexing, fine-grained structure sharing, relaxed memory-limit concerns, and so on. 
 

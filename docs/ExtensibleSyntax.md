@@ -1,7 +1,11 @@
 
+# Background
+
 I love what [embedded literal objects](EmbeddedLiteralObjects.md) aim to accomplish. 
 
 But embedded literals lack *stable identity*, i.e. I'm forced to refer to them in awkward terms such as "the third literal number in function foo". I might get away with this for local edits by a single user. But, in Wikilon, where we need to serialize updates between between client and server and potentially to multiple cooperating users, the lack of convenient identity is a bigger problem than I want to suffer. 
+
+## Extensible Syntax
 
 So, let's consider an alternative.
 
@@ -23,21 +27,40 @@ The coupling of syntax to the module boundary is a good fit for the *stable iden
         :swapd .rw swap .wl
         :rot swapd swap
 
-This particular format might support multi-line content by escaping each LF with a following SP, and could be extended with new operations via the first character of any line. Anyhow, presumably a system would start with comprehension of at least one bootstrap language (perhaps just AO, perhaps just ABC) then allow new parser functions to be defined. 
+This particular format might support multi-line content by escaping each LF with a following SP, and could be extended with new operations via the first character of any line. Anyhow, presumably a system would start with comprehension of at least one bootstrap language (perhaps just AO) then allow new parser functions to be defined by compiling to that form. But this isn't the final form!
 
-The role of a parser function would be to take text input and generate a function. We don't need an AST. We can just skip straight to composing a first-class function. We do need some ability to take a word like "swap" and get back the ABC block `[rwrwzwlwl]`. Acquiring a definition given a word might be modeled as a monadic effect. This has many nice properties:
+## Structured Definitions 
 
-* easily track dependencies between words (unlike dictionary passing)
-* use words so obtained at parse time (unlike generating AST or AO code)
-* purely functional parse and result (unlike capability-based effects)
-* extensible with other effects, e.g. region annotations for error reports
-* easy composition of other language parsers, i.e. create language with macros
+The prior section for Extensible Syntax is still missing a lot of desirable features. For example:
 
-Okay, so extensible syntax can potentially be nice, but it's still text-oriented. Getting back to my original point, I still want the interactive graphical models associated with embedded literal objects. I believe this can be accomplished as a simple extension of the 'extensible syntax' concept. In addition to impelementing a parser, the language could implement other utilities such as rendering to an interactive UI.
+* no generic means to recognize, rename, or refactor words
+* it is non-trivial to develop generic editors and rendering
+* cannot generically refactor and compress large definitions
+* not a close fit to Awelon project's code-as-material metaphor
 
-Thus, a language function must perhaps be extensible with multiple 'methods', or alternatively generate a structure that has multiple functions (a parser and other stuff). I haven't hammered out the fine details yet, such as a suitable type for the language words. But the broad idea seems solid: a language doesn't define just a syntax and parser, it defines a larger user experience. In this case, that user experience is confined to the boundary of one module, since Awelon project specifies the larger architecture.
+*We can do better!*
 
-Using language functions, we might be able to edit graphical data and objects, but also peek under the hood at any time to the serialized representations. And, besides stable identity from coupling to the words layer, this has some other advantages over embedded literal objects: in particular, the language may be upgraded independently of the modules that use it.
+Instead of an extensible syntax at the character level, we represent every word as a pair: a *structured value* and a *compiler function*. The compiler function is simply a pure function that takes the structured value and returns a block. Trivially, the simplest compiler function is *identity*, if the structure itself is a block. The structured value is represented in ABC, but with access to the dictionary via `{%foo}` tokens. The result, for simple code, is very similar to the (now deprecated!) Awelon Object (AO) code:
 
-I think this is a very promising direction for Wikilon.
+        #{&AO}
+        :swap [rwrwzwlwl]
+        :dup [r^zlwl]
+        :swapd [rw {%swap} wl]
+        :rot [{%swapd} {%swap}]
+        :dupd [rw {%dup} wl]
+        :over [{%dupd} {%swap}]
+
+These tokens are noisy and ugly. Numbers and short text literals will be even uglier! Fortunately, in a structured editor, it should be entirely feasible to present this ABC code in a pretty format for reading and editing, including basic texts and numbers. Usefully, we have conflated words and blocks from the perspective of our compilers and structured editors. Words don't need special attention.
+
+Now we have a lot of freedom for other languages. Arbitrary values may be built from numbers, products, sums, text, etc.. Structured editors may then render this structure and edit it. Functions to manipulate structure are just plain functions - i.e. macros are easily modeled within the dictionary. It is feasible to model *streams of user input* operating on an ad-hoc structure that defines a word, thus bringing me closer to my Awelon project goals.
+
+Very large dictionary words then benefit from ABC refectoring, compression, and structure sharing techniques, allowing those same tools to be applied to both the dictionary and any virtual machines.
+
+## Interactive Editors
+
+Okay, we have extensible structured-syntax, and potential for very-large lazily loaded values (if we pursue them). The question, then, is how to create nice interactive applets above the dictionary, e.g. for level editors and image canvases and spreadsheets and math notations and so on. The structure editor design does not permit associating UX with languages, but does allow associating it with *structure*, which should be even better. We can easily leverage `{:fooType}` discretionary sealers in a conventional manner (together with a little reflection) to support interactive structured editing!
+
+## Uniform Support for Ambiguity
+
+Usefully, this ABC content is easily and uniformly extensible with the `(|)` characters for ambiguous choice. Ambiguity is feasible both in both the definition structure and within any opaque blocks. I think we can go really far with this without requiring any special attentions. 
 

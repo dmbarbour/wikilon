@@ -1,11 +1,18 @@
 
+With the [branching model](BranchingDictionary.md), I can use something like a branch for each user's workspace in addition to a more global branch. Thus, it might be worthwhile to require tiered levels of 'curation' as we commit content upstream, while allowing a more dirty dictionary at the user layer. It might be nice if developers can essentially write code for the curation of a dictionary... within the same dictionary, perhaps combining results for prior and new versions in case the curation code itself is updated.
 
-# Design Criteria
+My older design was streaming-update based, which made it easy to find differences between one dictionary and another. The new model, I'll need to compute these differences more explicitly, but a 'diff' on a dictionary shouldn't be terribly difficult.
 
-* Keep a clean Wikilon dictionary, limit error creep. 
-* I'll eventually need responsive recompiles
-* Renaming should be efficient, if feasible.
-* I want to minimize memory requirements.
+
+# Design Desiderata
+
+* Maintain a 'clean' Wikilon dictionary. Limit error creep.
+* Detect errors quickly and efficiently.
+* Guarantee responsive compilation. Maybe volatile? Compile what is used.
+* Renaming should be efficient, if feasible. But I'm not sure if possible.
+ * At least can find all words that use some other word.
+ * Potentially can use text search, too. 
+* Minimize memory requirements.
 
 From a little analysis (below), I'll certainly want both a primary index (word → code) and a reverse lookup index (word → words). The first is trivial. The second is also trivial... but what are the space requirements? Well, conceptually, a word may be used by every other word in the dictionary, but we're already paying for those entries once at each use. So the worst case is O(N) with the dictionary size. Not bad.
 
