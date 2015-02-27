@@ -78,19 +78,13 @@ Library
     Wikilon
 
     Wikilon.Word
-
-    Wikilon.Database
-    -- Wikilon.DictST
-    -- Wikilon.DictTX
-
-
-    Wikilon.AO
-    Wikilon.ABC
-    -- AO to ABC compilers
+    Wikilon.Dict
+    Wikilon.Branch
 
     Wikilon.Value
-    Wikilon.Accel
+    Wikilon.ABC
     Wikilon.RunABC
+
 
     Wikilon.Base16
     Wikilon.Time
@@ -99,6 +93,8 @@ Library
 
     Wikilon.Char
     Wikilon.ParseUtils
+
+    Data.VCache.Trie
 
   Other-Modules:
   

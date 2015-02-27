@@ -10,6 +10,12 @@
 -- aim to support efficient interpretation, accelerators, partial 
 -- evaluations, compression, and so on.
 --
+-- TODO: 
+--
+--  * Consider ABC in context of VCache and structure sharing.
+--  * Support ABC input and output to external resources.
+-- 
+--
 module Wikilon.ABC
     ( ABC_Op(..), PrimOp(..), Op, ABC_Ops(..)
     , Quotable(..), quote, quoteList
