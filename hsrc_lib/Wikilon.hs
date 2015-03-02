@@ -19,9 +19,9 @@ module Wikilon
 import qualified Network.Wai as Wai
 import qualified Network.HTTP.Types as HTTP
 import qualified Data.List as L
-import qualified Data.Text.Lazy as T
-import qualified Data.Text.Lazy.Encoding as T
 import qualified Data.ByteString as B
+import qualified Data.ByteString.UTF8 as UTF8
+import qualified Data.ByteString.Lazy.UTF8 as UTF8L
 import Data.Char
 import Database.VCache
 import Wikilon.Secret
@@ -46,10 +46,18 @@ data App = App
 loadInstance :: Args -> IO App
 loadInstance args = do
     let vc = store args
-    sv <- newSecret -- volatile secret
-    sp <- readPVarIO =<< loadRootPVarIO vc "secret" =<< newSecret -- persistent secret
-    let adc = L.take 32 $ sigString $ hmac sv "adminCode" -- volatile admin code
+    nCt <- incPVar =<< loadRootPVarIO vc "loadCount" 0 -- 
+    sv <- readPVarIO =<< loadRootPVarIO vc "secret" =<< newSecret -- persistent secret
+    let adcText = UTF8.fromString $ "adminCode " ++ show nCt 
+    let adc = L.take 32 $ sigString $ hmac sv adcText -- volatile admin code
     return (App helloApp adc)
+
+incPVar :: PVar Int -> IO Int
+incPVar v = runVTx (pvar_space v) $ do
+    n <- readPVar v
+    writePVar v (n+1)
+    return n
+
 
 sigString :: Signature -> String
 sigString = fmap (chr . fromIntegral) . B16.encode . B.unpack . sigBytes
@@ -60,5 +68,5 @@ helloApp req reply = reply response where
     body = txt2bin $ show (Wai.requestHeaders req)
     status = HTTP.status200
     plainText = [(HTTP.hContentType,"text/plain")]
-    txt2bin = T.encodeUtf8 . T.pack
+    txt2bin = UTF8L.fromString
 

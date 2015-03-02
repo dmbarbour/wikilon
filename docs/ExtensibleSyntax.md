@@ -60,9 +60,30 @@ Now we have a lot of freedom for other languages. Arbitrary values may be built 
 
 Very large dictionary words then benefit from ABC refectoring, compression, and structure sharing techniques, allowing those same tools to be applied to both the dictionary and any virtual machines.
 
+### Putting the Pieces Together
+
+While I could separate the compiler function from the word's structure as seen above (the separate `@using` descriptor), I think this might not be a good idea. It doesn't permit easy first-class manipulation of the compiler function, and requires a lot of context to be managed explicitly. A simple alternative is that each definition also outputs the compiler function:
+
+        type Def a b = ∃v. ∀e. e → [v → [a→b]] * (v * e)
+
+        :swap [rwrwzwlwl] []
+        :dup [r^zlwl] []
+        :swapd [rw {%swap} wl] []
+        :rot [{%swapd} {%swap}] []
+        :dupd [rw {%dup} wl] []
+        :over [{%dupd} {%swap}] []
+
+Our universal compiler function then becomes just the `$` bytecode to apply our user-defined compiler function to our user-defined structured value. Under this design, the language itself becomes accessible; developers manipulate not only the structure, but how it is interpreted - the semantics - on a per-word basis.
+
+The disadvantage here is that developers may have more difficulty learning and grokking multitudes of structures. However, this can be addressed by convention and abstraction, especially by use of value sealing.
+
 ## Interactive Editors
 
-Okay, we have extensible structured-syntax, and potential for very-large lazily loaded values (if we pursue them). The question, then, is how to create nice interactive applets above the dictionary, e.g. for level editors and image canvases and spreadsheets and math notations and so on. The structure editor design does not permit associating UX with languages, but does allow associating it with *structure*, which should be even better. We can easily leverage `{:fooType}` discretionary sealers in a conventional manner (together with a little reflection) to support interactive structured editing!
+Okay, we have extensible structured-syntax and equally extensible semantics, and potential for very-large lazily loaded values (if we pursue them). The question, then, is how to create nice interactive applets above the dictionary, e.g. for level editors and image canvases and spreadsheets and math notations and so on. 
+
+The structure editor design does not permit associating UX with languages, but might allow associating it with *structure*, which should be even better. We can easily leverage `{:fooType}` discretionary sealers in a conventional manner (together with a little reflection) to support interactive structured editing!
+
+Alternatively, we could also consider using more structured metadata to specify preferred editors. But it isn't clear to me that this is a better option than using structure directly. More likely, a simple combination of naming conventions and structures might work well to help developers edit code in a convenient manner.
 
 ## Uniform Support for Ambiguity
 

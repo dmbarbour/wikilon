@@ -3,23 +3,26 @@ Version: 0.1
 Synopsis: Wiki-based IDE and platform for Awelon project 
 Category: Awelon, Application, Application Server
 Description:
-  Wikilon is a user-programmable wiki building on Awelon Object (AO)
-  language and the underlying Awelon Bytecode (ABC). The content of
-  the wiki consists simply of words from the AO dictionary. Naming
-  conventions allow words to specify new web applications, services, 
-  tests, documentation, server configuration, and so on.
-  
-  This wiki uses berkeley db for persistence, websockets for reactive
-  updates, warp for HTTP. It supports multiple users with DVCS based
-  views and transactions (including for apps). The goal is a minimal
-  kernel, pushing most logic into the AO dictionary. 
+  Wikilon is a user-programmable wiki for Awelon project. Unlike 
+  conventional wikis, pages in Wikilon define functions that may be
+  applied to ad-hoc arguments, cross-compiled into applications, or
+  hosted as web services. Pages may refer to functions defined by 
+  other pages, albeit restricted to acylic definition. Internally,
+  pages support ad-hoc, user-defined structure as a rich alternative
+  to DSLs.
+  .
+  Wikilon can support a branching dictionary, taking inspiration from
+  github. Hosted applications support live programming, binding to a
+  particular branch of the dictionary. Hosted applications are modeled
+  as belonging to abstract virtual machines so they are easily migrated
+  to or from dedicated servers (i.e. as an approach to scalability).
   
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com
 Homepage: http://github.com/dmbarbour/wikilon
 
 Package-Url: 
-Copyright: (c) 2014 by David Barbour
+Copyright: (c) 2014-2015 by David Barbour
 License: BSD3
 license-file: LICENSE.txt
 Stability: experimental
@@ -63,10 +66,9 @@ Library
     -- , yesod-routes (>= 1.2)
     -- , wai-websockets
 
-    , utf8-string (>= 0.3.8)
+    , utf8-string (>= 1)
     , zlib
 
-    , text (>= 0.11)
     , cryptohash (>= 0.11)
     , bytestring, byteable
     , entropy
@@ -93,8 +95,6 @@ Library
 
     Wikilon.Char
     Wikilon.ParseUtils
-
-    Data.VCache.Trie
 
   Other-Modules:
   

@@ -10,8 +10,8 @@
 --    foo:a   -- sealed   ~Haskell newtype
 --
 -- There are others - substructural types, cryptographic sealed values,
--- etc.. And it may be worth supporting inexact arithmetic with doubles
--- via the {&float} annotation.
+-- etc.. Also, it may be worth supporting inexact arithmetic with double
+-- precision floating point numbers, e.g. via a {&float} annotation.
 -- 
 -- In Wikilon, I'm interested in the possibility of lazily loading large
 -- values from disk as-needed, using VCache VRefs. I'm also interested
