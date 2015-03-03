@@ -50,19 +50,15 @@ Instead of an extensible syntax at the character level, we represent every word 
         :dupd [rw {%dup} wl]
         :over [{%dupd} {%swap}]
 
-If edited and displayed to humans in this format, there would be a lot of syntactic noise for words, small texts, and numbers. 
+If edited and displayed to humans in this format, there would be a lot of syntactic noise for words, small texts, and numbers. However, my hypothesis is that a good structure editor could supply an AO-like interface for presenting and manipulating raw blocks. In this sense, AO code becomes a true macro assembly.
 
-The syntactic noise for words - and especially for numbers or text - would be a bit worrisome. However, a structured editor could probably present such blocks to users as AO code (or a simple variation), and similarly simplify editing.
+At this point, we have a clear separation of structure and semantics. A good *structure editor* should be able to render and manipulate the structure in a manner independent of semantics - manipulating lists, dictionaries, pairs, sealed values, numbers. Interestingly, we can model user input as a stream of code to manipulate these structures, and model 'user macros' as functions available in the wiki. This is a good fit for my Awelon project HCI goals.
 
-Fortunately, in a structured editor, it should be entirely feasible to present this ABC code in a pretty format for reading and editing, including basic texts and numbers. Usefully, we have conflated words and blocks from the perspective of our compilers and structured editors. Words don't need special attention.
-
-Now we have a lot of freedom for other languages. Arbitrary values may be built from numbers, products, sums, text, etc.. Structured editors may then render this structure and edit it. Functions to manipulate structure are just plain functions - i.e. macros are easily modeled within the dictionary. It is feasible to model *streams of user input* operating on an ad-hoc structure that defines a word, thus bringing me closer to my Awelon project goals.
-
-Very large dictionary words then benefit from ABC refectoring, compression, and structure sharing techniques, allowing those same tools to be applied to both the dictionary and any virtual machines.
+Usefully, a lot of generic abstraction and compression becomes available because our words are entirely modeled using ABC. It is feasible to automate full dictionary compression techniques while preserving both structure and behavior, especially if there is a simple convention for naming logically immutable words.
 
 ### Putting the Pieces Together
 
-While I could separate the compiler function from the word's structure as seen above (the separate `@using` descriptor), I think this might not be a good idea. It doesn't permit easy first-class manipulation of the compiler function, and requires a lot of context to be managed explicitly. A simple alternative is that each definition also outputs the compiler function:
+While I could separate the compiler function from the word's structure as seen above (the separate `@using` directive), a simpler and better alternative is that each definition also outputs the compiler function:
 
         type Def a b = ∃v. ∀e. e → [v → [a→b]] * (v * e)
 
@@ -73,9 +69,13 @@ While I could separate the compiler function from the word's structure as seen a
         :dupd [rw {%dup} wl] []
         :over [{%dupd} {%swap}] []
 
-Our universal compiler function then becomes just the `$` bytecode to apply our user-defined compiler function to our user-defined structured value. Under this design, the language itself becomes accessible; developers manipulate not only the structure, but how it is interpreted - the semantics - on a per-word basis.
+        :fooExample #123 #45 {%mkFoo} [{%fooLang}]
 
-The disadvantage here is that developers may have more difficulty learning and grokking multitudes of structures. However, this can be addressed by convention and abstraction, especially by use of value sealing.
+Every word is then fully self-describing modulo acyclic dependencies on other words. The separation between the structure and its semantics still permits developers to focus on editing the structure, but now they also may easily manipulate the semantics. Our compiler function is now universally and trivially the `$` bytecode.
+
+### Data Pages
+
+If developers want to export the raw structure for a word, this is trivial: the 'language' function becomes `[v'c]`. It might be useful to occasionally refactor words into their structure/AST and a separate interpretation, especially if we plan to gradually abstract the structure or apply multiple interpretations to it.
 
 ## Interactive Editors
 
