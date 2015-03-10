@@ -12,8 +12,8 @@ import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 type Text = LazyUTF8.ByteString
 
 -- | A lossless 'lines' function. The original structure may be
--- recovered by simply adding a '\n' before each segment then
--- concatenating.
+-- recovered by simply adding a '\n' before each segment in the
+-- list result, then concatenating.
 textLines :: Text -> (Text, [Text])
 textLines txt =
     case LBS.elemIndex 10 txt of

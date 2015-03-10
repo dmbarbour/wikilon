@@ -72,12 +72,12 @@ defaultCacheSize :: Int
 defaultCacheSize = 10 {- megabytes -}
 
 --
--- 100TB was selected here because it fits easily into a 48-bit
--- address space common for many 64-bit CPUs. But this can be
--- configured if more space is needed, or if virtual memory limits
--- exist on user accounts, etc.
+-- 60TB was selected here because it fits into about a quarter of
+-- a common 48-bit CPU address space. Assuming half the address 
+-- space is reserved for the OS, this would allow enough space
+-- to copy and compact the database if we need to.
 defaultMaxDBSize :: Int
-defaultMaxDBSize = 100 * 1000 * 1000 {- megabytes -}
+defaultMaxDBSize = 62 * 1000 * 1000 {- megabytes -}
 
 wiki_crt,wiki_key :: FS.FilePath
 wiki_crt = "wiki.crt"
@@ -127,7 +127,10 @@ runWikilonInstance a = mainBody where
         setVRefsCacheLimit (vcache_space vc) (cacheSize * 1000 * 1000) >>
         loadPort vc (_port a) >>= \ port ->
         (`finally` vcacheSync (vcache_space vc)) $ -- sync on normal exit
-            let appArgs = Wikilon.Args { Wikilon.store = vcacheSubdir "wiki/" vc } in
+            let appArgs = Wikilon.Args { Wikilon.store = vcacheSubdir "wiki/" vc
+                                       , Wikilon.home = home FS.</> "wiki"
+                                       } 
+            in
             Wikilon.loadInstance appArgs >>= \ app ->
             unless (_silent a) (greet home port cacheSize app bUseTLS) >>
             if _justInit a then return () else

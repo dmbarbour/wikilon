@@ -63,7 +63,7 @@ Library
     , array
 
     , parallel (>= 3.0)
-    , containers (>= 0.5 && < 0.7)
+    , containers (>= 0.5)
     , mtl
 
     , websockets (>= 0.9)
@@ -89,8 +89,8 @@ Library
     Wikilon.Dict
     Wikilon.Branch
 
-    Wikilon.ABC
     Wikilon.ABC.Pure
+    Wikilon.ABC
     Wikilon.Value
     Wikilon.RunABC
 

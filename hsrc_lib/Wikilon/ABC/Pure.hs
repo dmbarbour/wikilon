@@ -1,25 +1,25 @@
 {-# LANGUAGE ViewPatterns #-}
 
--- | A 'pure' implementation of Awelon Bytecode, for serialization
--- to or from the outside world. This variation does not include any
--- extensions for performance.
---
--- Todo: read, show, and fromString instances
+-- | A pure model of Awelon Bytecode: no accelerators or extensions.
 module Wikilon.ABC.Pure
     ( ABC(..)
     , Token
-    , ABC_Op(..)
+    , Op(..)
     , PrimOp(..)
     , abcDivMod
-    , abcCharToOp, abcOpToChar
-    , encode, decode
+    , abcCharToOp, abcOpToChar, abcOpCharList
+    , encode, encode'
+    , decode
+
+    , Quotable(..)
+    , quote, quoteList, quotesList
     ) where
 
-import Data.Char
 import Data.Monoid
 import Data.Ratio
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy.Char8 as LBS
+import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.Builder as BB
 import qualified Data.Array.IArray as A
 import qualified Data.List as L
@@ -27,17 +27,21 @@ import Data.String (IsString(..))
 
 import Wikilon.Text
 
-newtype ABC = ABC { abcOps :: [ABC_Op] }
+newtype ABC = ABC { abcOps :: [Op] }
     deriving (Eq, Ord)
 
 type Token = UTF8.ByteString
 
-data ABC_Op -- 43 primitives + 3 special cases + extensions
-    = ABC_Prim !PrimOp
-    | ABC_Block ABC
-    | ABC_Text !Text -- embedded text
+data Op -- 43 primitives + 3 special cases
+    = ABC_Prim !PrimOp -- 43 primitives
+    | ABC_Block ABC    -- block type
+    | ABC_Text !Text   -- text literal (minus escapes)
     | ABC_Tok  {-# UNPACK #-} !Token -- {token} text
     deriving (Eq, Ord) -- arbitrary ordering
+
+-- text is shorthand for a list of codepoints
+--  where a `List foo` has type ((foo * List foo) + 1). 
+--  and a codepoint is in range 0..1114111
 
 data PrimOp -- 43 primitive operations
     -- basic data shuffling: twelve ops
@@ -148,14 +152,14 @@ abcCharToOp c | inBounds = abcCharOpArray A.! c
 
 -- | Encode pure ABC into a Lazy UTF8 ByteString
 encode :: ABC -> Text
-encode = BB.toLazyByteString . _encodeABC
+encode = BB.toLazyByteString . encode'
 
-_encodeABC :: ABC -> BB.Builder
-_encodeABC = mconcat . fmap _encodeOp . abcOps
+encode' :: ABC -> BB.Builder
+encode' = mconcat . fmap _encodeOp . abcOps
 
-_encodeOp :: ABC_Op -> BB.Builder
+_encodeOp :: Op -> BB.Builder
 _encodeOp (ABC_Prim op) = BB.char8 (abcOpToChar op)
-_encodeOp (ABC_Block ops) = BB.char8 '[' <> _encodeABC ops <> BB.char8 ']'
+_encodeOp (ABC_Block ops) = BB.char8 '[' <> encode' ops <> BB.char8 ']'
 _encodeOp (ABC_Text txt) = BB.char8 '"' <> _encodeLiteral txt <> BB.char8 '~'
 _encodeOp (ABC_Tok tok) =
     BB.char8 '{'   <>
@@ -180,15 +184,15 @@ _encodeLine l = BB.char8 '\n' <> BB.char8 ' ' <> BB.lazyByteString l
 decode :: Text -> (ABC, Text)
 decode = decodeABC []
 
-decodeABC :: [ABC_Op] -> Text -> (ABC, Text) 
+decodeABC :: [Op] -> Text -> (ABC, Text) 
 decodeABC r txt = case decodeOp txt of
     Nothing -> (ABC (L.reverse r), txt)
     Just (op, txt') -> decodeABC (op:r) txt'
 
-decodeOp :: Text -> Maybe (ABC_Op, Text)
+decodeOp :: Text -> Maybe (Op, Text)
 decodeOp = maybe Nothing (uncurry decodeOp') . LBS.uncons
 
-decodeOp' :: Char -> Text -> Maybe (ABC_Op, Text)
+decodeOp' :: Char -> Text -> Maybe (Op, Text)
 decodeOp' (abcCharToOp -> Just op) txt = Just (ABC_Prim op, txt)
 decodeOp' '[' txt =
     let (blockOps, blockEnd) = decode txt in
@@ -214,12 +218,11 @@ decodeOp' _ _ = Nothing
 
 -- decode a literal until the final LF, allowing LFs to be escaped
 -- by following with an SP. The final LF is dropped. If there is no
--- final LF, the remainder of the text is included. This function
--- tries to avoid bytestring allocations, capturing slices from
--- the original bytestring.
+-- final LF, the remainder of the text is included. 
 --
--- The first argument is a reversed list, accumulator for lines in
--- the literal text.
+-- Thoughts: At the moment, this function avoids allocating bytestrings.
+-- But I wonder if it might be better to copy the string to avoid binding
+-- much larger underlying text. 
 _decodeLiteral :: [Text] -> Text -> Maybe (Text, Text)
 _decodeLiteral r txt = case LBS.elemIndex '\n' txt of
     Nothing -> Nothing -- could not find terminal
@@ -232,8 +235,7 @@ _decodeLiteral r txt = case LBS.elemIndex '\n' txt of
             _ -> 
                 let lnf = LBS.take idx txt in -- final line (excludes '\n')
                 let lit = LBS.concat (L.reverse (lnf:r)) in
-                Just (lit, txt')
-
+                lit `seq` Just (lit, txt')
 
 -- | abcDivMod computes the function associated with operator 'Q'
 --    abcDivMod dividend divisor → (quotient, remainder)
@@ -246,6 +248,78 @@ abcDivMod x y =
     let (q,r) = n `divMod` d in
     (fromInteger q, r % dr)
 
+-- | The 'Quotable' class serves a role similar to 'Show', except
+-- that it represents a value or behavior in Awelon Bytecode. 
+class Quotable v where 
+    quotes :: v -> [Op] -> [Op]
 
+quote :: Quotable v => v -> [Op]
+quote = flip quotes []
+{-# INLINE quote #-}
 
+-- | Concatenate a list of quotables.
+quotesList :: Quotable v => [v] -> [Op] -> [Op]
+quotesList (v:vs) = quotes v . quotesList vs
+quotesList [] = id
 
+quoteList :: Quotable v => [v] -> [Op]
+quoteList = flip quotesList []
+{-# INLINE quoteList #-}
+
+instance Quotable ABC where 
+    quotes abc [] = abcOps abc
+    quotes abc ops = abcOps abc ++ ops
+    {-# INLINABLE quotes #-}
+instance Quotable PrimOp where 
+    quotes = quotes . ABC_Prim
+    {-# INLINE quotes #-}
+instance Quotable Op where
+    quotes = (:)
+    {-# INLINE quotes #-} 
+
+instance Quotable Integer where 
+    quotes n | (n < 0) = quotes (negate n) . quotes ABC_negate
+             | otherwise = qN n
+instance (Integral i) => Quotable (Ratio i) where
+    quotes r | (r < 0) = quotes (negate r) . quotes ABC_negate
+             | (1 == den) = qN num
+             | (1 == num) = qN den . quotes ABC_reciprocal
+             | otherwise  = qN num . qN den . quotes ABC_reciprocal . quotes ABC_multiply
+        where den = denominator r
+              num = numerator r
+
+-- quote a non-negative integral
+qN :: (Integral i) => i -> [Op] -> [Op]
+qN 0 = quotes ABC_newZero
+qN n = let (q,r) = n `divMod` 10 in qN q . quotes (opd r)
+
+-- quote an integer into ABC, building from right to left
+opd :: (Integral i) => i -> PrimOp
+opd 0 = ABC_d0
+opd 1 = ABC_d1
+opd 2 = ABC_d2
+opd 3 = ABC_d3
+opd 4 = ABC_d4
+opd 5 = ABC_d5
+opd 6 = ABC_d6
+opd 7 = ABC_d7
+opd 8 = ABC_d8
+opd 9 = ABC_d9
+opd _ = impossible "invalid digit!"
+
+instance Show ABC where 
+    showsPrec _ = showString . LazyUTF8.toString . encode 
+instance Show Op where
+    showsPrec _ = showList . (:[])
+    showList = shows . ABC 
+instance Show PrimOp where
+    showsPrec _ = showChar . abcOpToChar
+    showList = showString . fmap abcOpToChar
+
+instance IsString ABC where
+    fromString s =
+        let bytes = LazyUTF8.fromString s in
+        let (abc, brem) = decode bytes in
+        if LBS.null brem then abc else
+        let s' = LazyUTF8.toString brem in 
+        error $ "Wikilon.ABC.Pure could not parse " ++ s'

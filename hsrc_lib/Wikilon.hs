@@ -27,11 +27,13 @@ import Database.VCache
 import Wikilon.Secret
 import Wikilon.SecureHash
 import qualified Wikilon.Base16 as B16
+--import System.IO (FilePath)
 
 -- | Currently, Wikilon doesn't take many arguments. 
 -- Just a place to persist its data.
 data Args = Args
-    { store :: !VCache
+    { store :: !VCache   -- vast majority of persistent state
+    , home  :: !FilePath -- may be needed if I try Haskell plugins
     }
 
 -- | A web app and a volatile administrative code. 

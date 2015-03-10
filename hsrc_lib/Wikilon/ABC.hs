@@ -1,22 +1,97 @@
-{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE ViewPatterns, OverloadedStrings, DeriveDataTypeable #-}
 
 -- | Wikilon uses Awelon Bytecode (ABC) to model user-defined behavior.
--- However, while ABC has many nice properties, fast interpretation is
--- not one of them. ABC is meant to be compiled. OTOH, interpretation 
--- has the advantage of simplicity.
+-- ABC has many nice properties for security, distribution, streaming,
+-- simplicity, parallelism, and dynamic linking. However, ABC is based
+-- on a purely functional style that is pretty far removed from modern
+-- CPUs. Direct interpretation of ABC is not performance competitive.
 --
--- As a compromise, Wikilon uses a 'doped' variation of ABC based on
--- precomputing values and replacing common subprograms by built-in
--- accelerators. This doped code can be converted back to pure ABC or
--- eventually ABCD for export purposes.
+-- Further, while ABC's dynamic linking model (use tokens to encrypt 
+-- and name provider-independent resources by secure hash) has great
+-- potential for distributed computing, its overhead is a little high 
+-- for internal use - requiring naming, caching, GC, etc..
 --
--- Wikilon's ABC also supports anonymous subprograms and values like
--- ABC achieves using {#resourceId}, except leveraging VCache instead.
--- Anonymity simplifies many garbage collection concerns.
+-- To address these issues, Wikilon internally uses a variant of ABC
+-- with operators to accelerate common subprograms and integration
+-- with VCache for interning, structure sharing, and linking. ABC is
+-- compiled to the internal variant, and may be decompiled back to
+-- pure ABC.
 --
 module Wikilon.ABC
-    ( 
+    ( ABC(..)
+    , Op(..)
+    , PrimOp(..)
+    , ExtOp(..), extOpTable
+    , Token
     ) where
+
+import Data.Typeable
+import qualified Data.Array.IArray as A
+
+import Wikilon.ABC.Pure (Token, PrimOp(..))
+import qualified Wikilon.ABC.Pure as Pure
+import Wikilon.Value
+import Database.VCache
+
+newtype ABC = ABC { abcOps :: [Op] }
+    deriving (Eq, Typeable)
+
+data Op 
+    = ABC_Prim !PrimOp      -- ABC primitives
+    | ABC_Ext  !ExtOp       -- extended set of single-character operators
+    | ABC_Val  !(Value ABC) -- texts, blocks, values (∀e.e→(Val * e)).
+    | ABC_Link !(VRef ABC)  -- lazily load the referenced subprogram
+    | ABC_Tok {-# UNPACK #-} !Token -- {token} text
+    deriving (Eq, Typeable)
+
+
+-- | Extended Operations are essentially a dictionary recognized by
+-- Wikilon for specialized implementations, e.g. to accelerate an
+-- interpreter or support tail-call optimizations. This is similar
+-- to ABCD, though developed independently from ABCD.
+data ExtOp
+    -- common inline behaviors
+    = Op_Inline -- vr$c (full inline)
+    | Op_Apc    -- $c (a useful tail-call)
+
+    -- favorite fixpoint function
+    | Op_FixHalf --  ^'ow^'zowvr$c 
+    | Op_FixFull -- [^'ow^'zowvr$c]^'ow^'zowvr$c
+
+    -- mirrored v,c operations
+    | Op_Intro1L  -- vvrwlc
+    | Op_Elim1L   -- vrwlcc
+    | Op_Intro0L  -- VVRWLC
+    | Op_Elim0L   -- VRWLCC
+
+    | Op_prim_swap    -- vrwlc
+    | Op_prim_mirror  -- VRWLC
+    -- stack swaps?
+    -- hand manipulations?
+    -- more as needed!
+    deriving (Ord, Eq, Bounded, Enum, A.Ix)
+
+-- | Table of ExtOps and relevant semantics.
+--
+-- I've decided to follow ABCD's mandate to leave the ASCII range to
+-- future ABC expansions (though such are extremely unlikely at this
+-- point in time). So, ExtOps can be considered a prototype for ABCD.
+extOpTable :: [(ExtOp, Char, Pure.ABC)]
+extOpTable =
+    [(Op_Inline,  '£', "vr$c")
+    ,(Op_Apc,     '¢', "$c")
+    ,(Op_FixHalf, 'ȳ', "^'ow^'zowvr$c")
+    ,(Op_FixFull, 'Ȳ', "[^'ow^'zowvr$c]^'ow^'zowvr$c")
+
+    ,(Op_Intro1L, 'û', "vvrwlc")
+    ,(Op_Elim1L,  'ç', "vrwlcc")
+    ,(Op_Intro0L, 'Û', "VVRWLC")
+    ,(Op_Elim0L,  'Ç', "VRWLCC")
+
+    ,(Op_prim_swap,   'ƨ', "vrwlc")
+    ,(Op_prim_mirror, 'Ƨ', "VRWLC")
+    ]
+
 
 {-
 
@@ -42,89 +117,13 @@ import qualified Wikilon.ParseUtils as P
 -- overhead (for large binaries) compared to a raw encoding. Some binaries can
 -- be further compressed by the normal LZSS compression pass.
 
-
--- | Quotable: serves a role similar to `show` except it targets ABC
--- programs instead of raw text. Any ABC_Ext fields will expand to
--- some raw underlying ABC.
-class Quotable v where 
-    quotes :: v -> [Op] -> [Op]
-
-quote :: Quotable v => v -> [Op]
-quote = flip quotes []
-
-quoteList :: Quotable v => [v] -> [Op] -> [Op]
-quoteList (v:vs) = quotes v . quoteList vs
-quoteList [] = id
-
-instance Quotable NoExt where quotes = const id
-instance Quotable PrimOp where quotes = (:) . ABC_Prim 
-instance (Quotable ext) => Quotable (ABC_Op ext) where
-    quotes (ABC_Prim op) = quotes op
-    quotes (ABC_Block ops) = (:) (ABC_Block (quoteList ops [])) 
-    quotes (ABC_Text txt) = (:) (ABC_Text txt)  
-    quotes (ABC_Tok tok) = (:) (ABC_Tok tok)
-    quotes (ABC_Ext ext) = quotes ext
-
-instance Quotable Integer where quotes = qi'
-instance (Integral i) => Quotable (Ratio i) where
-    quotes r | (r < 0) = quotes (negate r) . quotes ABC_negate
-             | (1 == den) = qi num
-             | (1 == num) = qi den . quotes ABC_reciprocal
-             | otherwise = qi num . qi den . quotes ABC_reciprocal . quotes ABC_multiply
-        where den = denominator r
-              num = numerator r
-
-qi :: (Integral i) => i -> [Op] -> [Op]
-qi = qi' . fromIntegral
-
-qi' :: Integer -> [Op] -> [Op]
-qi' n | (n > 0) = let (q,r) = n `divMod` 10 in qi q . quotes (opd r)
-      | (0 == n) = quotes ABC_newZero
-      | otherwise = qi (negate n) . quotes ABC_negate
-
--- quote an integer into ABC, building from right to left
-opd :: Integer -> PrimOp
-opd 0 = ABC_d0
-opd 1 = ABC_d1
-opd 2 = ABC_d2
-opd 3 = ABC_d3
-opd 4 = ABC_d4
-opd 5 = ABC_d5
-opd 6 = ABC_d6
-opd 7 = ABC_d7
-opd 8 = ABC_d8
-opd 9 = ABC_d9
-opd _ = error "invalid digit!"
-
 skip :: a -> b -> b
 skip = flip const
-
-
-instance (Quotable ext) => B.Binary (ABC_Ops ext) where
-    put = putABC . abc_ops
-    get = ABC_Ops <$> getABC
-
-instance (Quotable ext) => Show (ABC_Op ext) where
-    showsPrec _ = showList . (:[])
-    showList = shows . ABC_Ops
-
-instance (Quotable ext) => Show (ABC_Ops ext) where
-    show = UTF8.toString . B.encode
-
-instance Show PrimOp where
-    showsPrec _ = showList . (:[])
-    showList = shows . fmap primOp
 
 -- help type inference a little
 primOp :: PrimOp -> Op
 primOp = ABC_Prim
 
-instance Read (ABC_Ops ext) where
-    readsPrec _ s =
-        let bytes = UTF8.fromString s in
-        case B.runGetOrFail getABC bytes of
-            Left (_bs,_ct,_emsg) -> []
-            Right (brem,_ct, code) -> [(ABC_Ops code, UTF8.toString brem)]
 
 putABC :: (Quotable ext) => [ABC_Op ext] -> B.PutM ()
 putABC = mapM_ putOp
@@ -141,54 +140,7 @@ putMLT ('\n':cs) = B.put '\n' >> B.put ' ' >> putMLT cs
 putMLT (c:cs) = B.put c >> putMLT cs
 putMLT [] = return ()
 
-validTok :: String -> Bool
-validTok = L.all isTokenChar
 
--- TODO: If possible, it would be ideal to support a streaming parse
--- even of contained blocks, such that we can immediately begin the
--- partial evaluation pass when parsing the block without waiting until
--- the full block is parsed. Potentially, this might be achieved by 
--- parsing into an intermediate stream of operations with 'in-block'
--- and 'out-block' tokens, rather than treating blocks as first-class
--- objects at this layer.
---
-
-
--- get will not return any ABC_Ext elements, so the type of ext is
--- not relevant at this point. getABC requires a little extra state
--- regarding whether we've just read a newline
-getABC :: B.Get [ABC_Op ext]
-getABC = P.manyC tryOp
-
-tryOp :: B.Get (B.Get (ABC_Op ext))
-tryOp = 
-    B.get >>= \ c ->
-    case c of
-        (abcCharToOp -> Just op) -> return $ pure (ABC_Prim op)
-        '[' -> return $ ABC_Block <$> readBlock 
-        '{' -> return $ ABC_Tok   <$> readToken
-        '"' -> return $ ABC_Text  <$> readText
-        _ -> fail "input not recognized as ABC"
-
-getOp :: B.Get (ABC_Op ext)
-getOp = join tryOp
-
--- we've already read '['; read until ']'
-readBlock :: B.Get [ABC_Op ext]
-readBlock = P.manyTil getOp (P.char ']')
-
-readToken :: B.Get String
-readToken = P.manyTil (P.satisfy isTokenChar) (P.char '}')
-
-readText :: B.Get String 
-readText = 
-    lineOfText >>= \ t0 ->
-    P.manyTil (P.char ' ' >> lineOfText) (P.char '~') >>= \ ts ->
-    return $ L.concat $ t0 : fmap ('\n':) ts
-
--- text to end of line...
-lineOfText :: B.Get String
-lineOfText = P.manyTil B.get (P.char '\n')
 
 -- | abcSimplify performs a simple optimization on ABC code based on
 -- recognizing short sequences of ABC that can be removed. E.g.
