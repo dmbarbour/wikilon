@@ -1,27 +1,24 @@
 {-# LANGUAGE ViewPatterns #-}
 
--- | Support for Awelon Bytecode (ABC) and simple extensions. ABC is
--- a concatenative, securable, and streamable language designed for 
--- use in open distributed systems.
+-- | Wikilon uses Awelon Bytecode (ABC) to model user-defined behavior.
+-- However, while ABC has many nice properties, fast interpretation is
+-- not one of them. ABC is meant to be compiled. OTOH, interpretation 
+-- has the advantage of simplicity.
 --
--- ABC isn't really designed for high-performance interpretation; it
--- is meant to be compiled on-the-fly or in advance via ABC's dynamic
--- linking and resource model. The extensions to ABC presented here
--- aim to support efficient interpretation, accelerators, partial 
--- evaluations, compression, and so on.
+-- As a compromise, Wikilon uses a 'doped' variation of ABC based on
+-- precomputing values and replacing common subprograms by built-in
+-- accelerators. This doped code can be converted back to pure ABC or
+-- eventually ABCD for export purposes.
 --
--- TODO: 
---
---  * Consider ABC in context of VCache and structure sharing.
---  * Support ABC input and output to external resources.
--- 
+-- Wikilon's ABC also supports anonymous subprograms and values like
+-- ABC achieves using {#resourceId}, except leveraging VCache instead.
+-- Anonymity simplifies many garbage collection concerns.
 --
 module Wikilon.ABC
-    ( ABC_Op(..), PrimOp(..), Op, ABC_Ops(..)
-    , Quotable(..), quote, quoteList
-    , abcOpToChar, abcCharToOp
-    , abcDivMod, abcSimplify
+    ( 
     ) where
+
+{-
 
 import Control.Applicative ((<$>), pure)
 import Control.Monad (join)
@@ -38,78 +35,6 @@ import Data.String
 import Wikilon.Char
 import qualified Wikilon.ParseUtils as P
 
-data PrimOp -- 43 primitive operations
-    -- basic data shuffling: twelve ops
-    = ABC_l -- l :: (a*(b*c)) → ((a*b)*c)
-    | ABC_r -- r :: ((a*b)*c) → (a*(b*c))
-    | ABC_w -- w :: (a*(b*c)) → (b*(a*c))
-    | ABC_z -- z :: (a*(b*(c*d))) → (a*(c*(b*d)))
-    | ABC_v -- v :: a → (a * 1)
-    | ABC_c -- c :: (a * 1) → a
-
-    | ABC_L -- L :: (a+(b+c))*e → ((a+b)+c)*e
-    | ABC_R -- R :: ((a+b)+c)*e → (a+(b+c))*e
-    | ABC_W -- W :: (a+(b+c))*e → (b+(a+c))*e
-    | ABC_Z -- Z :: (a+(b+(c+d)))*e → (a+(c+(b+d)))*e
-    | ABC_V -- V :: a*e → (a+0)*e
-    | ABC_C -- C :: (a+0)*e → a*e
-
-    -- non-linear operations: two ops
-    | ABC_copy  -- ^ :: (a*e) → (a*(a*e))    for copyable a (not affine)
-    | ABC_drop  -- % :: (a*e) → e            for droppable a (not relevant)
-
-    -- working with numbers: six ops
-    | ABC_add        -- + :: (N(x)*(N(y)*e)) → (N(x+y)*e)
-    | ABC_negate     -- - :: (N(x)*e) → (N(-x)*e)
-    | ABC_multiply   -- * :: (N(x)*(N(y)*e)) → (N(x*y)*e) 
-    | ABC_reciprocal -- / :: (N(x)*e) → (N(1/x)*e)      for non-zero x
-    | ABC_divMod     -- Q :: (N(b)*(N(a)*e)) → (N(r)*(N(q)*e))
-                     --      non-zero b; qb+r = a; r in range [0,b) or (b,0]
-    | ABC_compare    -- > :: (N(x)*(N(y)*e)) → (((N(y)*N(x)) + (N(x)*N(y))) * e)
-                     --   test if y > x, returning in right if true 
-                     --   e.g. #4 #2 > results in (N(2)*N(4)) in right
-    
-    -- working with blocks: six ops
-    | ABC_apply     -- $ :: ([x→y]*(x*e)) → (y*e)
-    | ABC_condApply -- ? :: ((b@[x→x'])*((x+y)*e)) → ((x'+y)*e)  for droppable b
-    | ABC_quote     -- ' :: (a*e) → ([s→(a*s)]*e)                        
-    | ABC_compose   -- o :: ([x→y]*([y→z]*e)) → ([x→z]*e) 
-    | ABC_relevant  -- k :: ([x→y]*e) → ([x→y]*e) mark block relevant (no drop)
-    | ABC_affine    -- f :: ([x→y]*e) → ([x→y]*e) mark block affine (no copy)
-
-    -- working with sums: four ops
-    | ABC_distrib -- D :: (a*((b+c)*e)) → (((a*b) + (a*c))*e)
-    | ABC_factor  -- F :: (((a*b)+(c*d))*e) → ((a+c)*((b+d)*e))
-    | ABC_merge   -- M :: ((a+a')*e) → (a*e)
-                  --   types may actually be different, but must be compatible
-                  --   compatibility to be determined by future code 
-    | ABC_assert  -- K :: (0+a)*e → (a*e)   assertion
-                  --   where `C` removes a zero from construction, `K` removes
-                  --   zero by assertion on some observable condition. K is for
-                  --   describing contracts, assumptions, pre/post conditions.
-
-    -- pseudo-literal numbers: eleven ops
-    | ABC_newZero -- # :: e → N(0)*e        used for pseudo-literal numbers
-    | ABC_d0 | ABC_d1 | ABC_d2 | ABC_d3 | ABC_d4 -- (N(x)*e) → (N(10x+d)*e)
-    | ABC_d5 | ABC_d6 | ABC_d7 | ABC_d8 | ABC_d9 --  e.g. `#42` evaluates to 42
-
-    -- whitespace identities: two ops 
-    | ABC_SP | ABC_LF  -- a → a  used for formatting
-    deriving (Eq, Ord, A.Ix, Enum, Bounded)
-
-newtype ABC_Ops ext = ABC_Ops { abc_ops :: [ABC_Op ext] } deriving (Eq, Ord)
-
-data ABC_Op ext -- 43 primitives + 3 special cases + extensions
-    = ABC_Prim !PrimOp
-    | ABC_Block [ABC_Op ext] -- [ops]
-    | ABC_Text String -- "text\n~ embedded text 
-    | ABC_Tok String -- {token} effects, resource linking, etc.
-    | ABC_Ext ext -- ABCD, accelerators, quotations, laziness, etc.
-    deriving (Eq, Ord) -- arbitrary ordering
--- TODO: Switch from String to packed UTF8 (lazy) bytestrings,
-
-data NoExt = VoidExt deriving (Ord,Eq)
-type Op = ABC_Op NoExt
 
 -- NOTE: Binaries can be embedded in ABC text or tokens by use of a specialized 
 -- base16 alphabet: bdfghjkmnpqstxyz. This is a-z minus the vowels and `vrwlc` 
@@ -117,16 +42,6 @@ type Op = ABC_Op NoExt
 -- overhead (for large binaries) compared to a raw encoding. Some binaries can
 -- be further compressed by the normal LZSS compression pass.
 
--- | abcDivMod computes the function associated with operator 'Q'
---    abcDivMod dividend divisor → (quotient, remainder)
--- Assumption: divisor is non-zero.
-abcDivMod :: Rational -> Rational -> (Rational,Rational)
-abcDivMod x y =
-    let n = numerator x * denominator y in
-    let d = denominator x * numerator y in
-    let dr = denominator x * denominator y in
-    let (q,r) = n `divMod` d in
-    (fromInteger q, r % dr)
 
 -- | Quotable: serves a role similar to `show` except it targets ABC
 -- programs instead of raw text. Any ABC_Ext fields will expand to
@@ -181,54 +96,9 @@ opd 8 = ABC_d8
 opd 9 = ABC_d9
 opd _ = error "invalid digit!"
 
-abcOpCharList :: [(PrimOp,Char)]
-abcOpCharList =
-    [(ABC_l,'l'), (ABC_r,'r'), (ABC_w,'w'), (ABC_z,'z'), (ABC_v,'v'), (ABC_c,'c')
-    ,(ABC_L,'L'), (ABC_R,'R'), (ABC_W,'W'), (ABC_Z,'Z'), (ABC_V,'V'), (ABC_C,'C')
-
-    ,(ABC_copy,'^'), (ABC_drop,'%')
-
-    ,(ABC_add,'+'), (ABC_negate,'-')
-    ,(ABC_multiply,'*'), (ABC_reciprocal,'/')
-    ,(ABC_divMod,'Q'), (ABC_compare,'>')
-
-    ,(ABC_apply,'$'), (ABC_condApply,'?')
-    ,(ABC_quote,'\''), (ABC_compose,'o')
-    ,(ABC_relevant,'k'), (ABC_affine,'f')
-
-    ,(ABC_distrib,'D'), (ABC_factor,'F'), (ABC_merge,'M'), (ABC_assert,'K')
-
-    ,(ABC_newZero,'#')
-    ,(ABC_d0,'0'), (ABC_d1,'1'), (ABC_d2,'2'), (ABC_d3,'3'), (ABC_d4,'4')
-    ,(ABC_d5,'5'), (ABC_d6,'6'), (ABC_d7,'7'), (ABC_d8,'8'), (ABC_d9,'9')
-    
-    ,(ABC_SP,' '), (ABC_LF,'\n')
-    ]
-
-abcOpCharArray :: A.UArray PrimOp Char
-abcOpCharArray = A.accumArray skip maxBound (minBound, maxBound) abcOpCharList
-
 skip :: a -> b -> b
 skip = flip const
 
-abcPrimOpArray :: A.UArray Char Word16
-abcPrimOpArray = A.accumArray skip maxBound (lb,ub) lst where
-    lst = fmap sw abcOpCharList
-    lb = L.minimum (fmap snd abcOpCharList)
-    ub = L.maximum (fmap snd abcOpCharList)
-    sw (op,c) = (c, fromIntegral (fromEnum op))
-
-abcOpToChar :: PrimOp -> Char
-abcOpToChar op = assert (maxBound /= c) c where
-    c = abcOpCharArray A.! op
-
-abcCharToOp :: Char -> Maybe PrimOp
-abcCharToOp c | okay = Just $! toEnum (fromIntegral w)
-              | otherwise = Nothing 
-    where okay = inBounds && (maxBound /= w)
-          inBounds = ((lb <= c) && (c <= ub))
-          (lb,ub) = A.bounds abcPrimOpArray
-          w = abcPrimOpArray A.! c
 
 instance (Quotable ext) => B.Binary (ABC_Ops ext) where
     put = putABC . abc_ops
@@ -255,19 +125,6 @@ instance Read (ABC_Ops ext) where
         case B.runGetOrFail getABC bytes of
             Left (_bs,_ct,_emsg) -> []
             Right (brem,_ct, code) -> [(ABC_Ops code, UTF8.toString brem)]
-instance IsString (ABC_Ops ext) where 
-    fromString s = -- better error reporting than `readsPrec`
-        let bytes = UTF8.fromString s in
-        case B.runGetOrFail getABC bytes of
-            Left (_brem,_ct,_emsg) ->
-                let sRem = UTF8.toString _brem in
-                error $ "\nABC parse error: " ++ _emsg 
-                     ++ "\nbytes remaining: " ++ sRem
-            Right (brem,_ct, abc) -> 
-                let sRem = UTF8.toString brem in
-                let code = ABC_Ops abc in 
-                if (L.null sRem) then code else
-                error $ "\nhalted at: " ++ sRem
 
 putABC :: (Quotable ext) => [ABC_Op ext] -> B.PutM ()
 putABC = mapM_ putOp
@@ -369,3 +226,5 @@ opsCancel ABC_Z ABC_Z = True
 opsCancel ABC_V ABC_C = True
 opsCancel ABC_C ABC_V = True
 opsCancel _ _ = False
+
+-}
