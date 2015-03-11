@@ -6,11 +6,10 @@ module Wikilon.ABC.Pure
     , Token
     , Op(..)
     , PrimOp(..)
-    , abcDivMod
     , abcCharToOp, abcOpToChar, abcOpCharList
     , encode, encode'
     , decode
-
+    , abcDivMod
     , Quotable(..)
     , quote, quoteList, quotesList
     ) where
@@ -237,6 +236,7 @@ _decodeLiteral r txt = case LBS.elemIndex '\n' txt of
                 let lit = LBS.concat (L.reverse (lnf:r)) in
                 lit `seq` Just (lit, txt')
 
+
 -- | abcDivMod computes the function associated with operator 'Q'
 --    abcDivMod dividend divisor → (quotient, remainder)
 -- Assumption: divisor is non-zero.
@@ -247,6 +247,7 @@ abcDivMod x y =
     let dr = denominator x * denominator y in
     let (q,r) = n `divMod` d in
     (fromInteger q, r % dr)
+
 
 -- | The 'Quotable' class serves a role similar to 'Show', except
 -- that it represents a value or behavior in Awelon Bytecode. 

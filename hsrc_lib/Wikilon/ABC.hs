@@ -20,35 +20,61 @@
 module Wikilon.ABC
     ( ABC(..)
     , Op(..)
-    , PrimOp(..)
-    , ExtOp(..), extOpTable
+    , Rsc
+    , Value(..), KF
+    , PrimOp(..), abcCharToOp, abcOpToChar, abcOpCharList
+    , ExtOp(..), extOpTable, extOpToChar, extOpToDef, extCharToOp 
     , Token
+    , abcDivMod
     ) where
 
 import Data.Typeable
 import qualified Data.Array.IArray as A
+import qualified Data.List as L
+import Data.Word
 
-import Wikilon.ABC.Pure (Token, PrimOp(..))
+import Wikilon.ABC.Pure (Token, PrimOp(..)
+                        , abcCharToOp, abcOpToChar, abcOpCharList
+                        , abcDivMod )
 import qualified Wikilon.ABC.Pure as Pure
-import Wikilon.Value
 import Database.VCache
 
+-- | Simple wrapper around [Op] for typeclass purposes.
 newtype ABC = ABC { abcOps :: [Op] }
     deriving (Eq, Typeable)
 
+-- | Wikilon's internal variant of ABC for efficient computation.
 data Op 
-    = ABC_Prim !PrimOp      -- ABC primitives
-    | ABC_Ext  !ExtOp       -- extended set of single-character operators
-    | ABC_Val  !(Value ABC) -- texts, blocks, values (∀e.e→(Val * e)).
-    | ABC_Link !(VRef ABC)  -- lazily load the referenced subprogram
-    | ABC_Tok {-# UNPACK #-} !Token -- {token} text
+    = ABC_Prim !PrimOp   -- ABC primitives
+    | ABC_Ext  !ExtOp    -- extended set of single-character operators
+    | ABC_Val  !Value    -- texts, blocks, values (∀e.e→(Val * e)).
+    | ABC_Lnk  {-# UNPACK #-} !Rsc -- internal {#resourceId} 
+    | ABC_Tok  {-# UNPACK #-} !Token -- {token} text
     deriving (Eq, Typeable)
+
+-- | Awelon Bytecode (ABC) supports dynamic loading of bytecode resources
+-- via {#resourceId} tokens in the source code. The resourceId uses a 
+-- secure hash of the bytecode for provider independence, and may also
+-- include a decryption key.
+-- 
+-- To support value resources in particular, ABC supports suffixes. For
+-- example, {#resourceId'} and {#resourceId'kf} to access a plain value
+-- or a linear value respectively. The type information here is coarse, 
+-- just enough for whole-value data plumbing. The value may be lazily
+-- loaded when we peek within.
+--
+-- But to avoid the heavy-weight resource IDs, Wikilon uses a VRef for
+-- internal resources (serializing with a control code).
+type Rsc = VRef ABC
 
 
 -- | Extended Operations are essentially a dictionary recognized by
 -- Wikilon for specialized implementations, e.g. to accelerate an
 -- interpreter or support tail-call optimizations. This is similar
 -- to ABCD, though developed independently from ABCD.
+--
+-- A dictionary of extended ops shall be available for HTTP access
+-- via something like a \/builtins request. 
 data ExtOp
     -- common inline behaviors
     = Op_Inline -- vr$c (full inline)
@@ -74,11 +100,10 @@ data ExtOp
 -- | Table of ExtOps and relevant semantics.
 --
 -- I've decided to follow ABCD's mandate to leave the ASCII range to
--- future ABC expansions (though such are extremely unlikely at this
--- point in time). So, ExtOps can be considered a prototype for ABCD.
+-- future ABC expansions. ExtOps is effectively a prototype for ABCD.
 extOpTable :: [(ExtOp, Char, Pure.ABC)]
 extOpTable =
-    [(Op_Inline,  '£', "vr$c")
+    [(Op_Inline,  '¥', "vr$c")
     ,(Op_Apc,     '¢', "$c")
     ,(Op_FixHalf, 'ȳ', "^'ow^'zowvr$c")
     ,(Op_FixFull, 'Ȳ', "[^'ow^'zowvr$c]^'ow^'zowvr$c")
@@ -92,8 +117,88 @@ extOpTable =
     ,(Op_prim_mirror, 'Ƨ', "VRWLC")
     ]
 
+impossible :: String -> a
+impossible eMsg = error ("Wikilon.ABC: " ++ eMsg)
+
+extOpCharArray :: A.Array ExtOp Char 
+extOpCharArray = A.accumArray ins eUndef (minBound, maxBound) lst where
+    lst = fmap (\(op,c,_)->(op,c)) extOpTable
+    eUndef = impossible "missing character encoding for ABC ExtOp"
+    ins = flip const
+
+extOpDefArray :: A.Array ExtOp Pure.ABC
+extOpDefArray = A.accumArray ins eUndef (minBound, maxBound) lst where
+    lst = fmap (\(op,_,d)->(op,d)) extOpTable
+    eUndef = impossible "missing definition for ABC ExtOp"
+    ins = flip const
+
+extCharOpArray :: A.Array Char (Maybe ExtOp) 
+extCharOpArray = A.accumArray ins Nothing (lb, ub) lst where
+    lst = fmap (\(op,c,_)->(c,op)) extOpTable
+    lb = L.minimum (fmap fst lst)
+    ub = L.maximum (fmap fst lst)
+    ins _ op = Just op
+
+extOpToChar :: ExtOp -> Char
+extOpToChar op = extOpCharArray A.! op
+
+extOpToDef  :: ExtOp -> Pure.ABC
+extOpToDef op = extOpDefArray A.! op
+
+extCharToOp :: Char -> Maybe ExtOp
+extCharToOp c | inBounds = extCharOpArray A.! c
+              | otherwise = Nothing
+    where inBounds = (lb <= c) && (c <= ub)
+          (lb,ub) = A.bounds extCharOpArray
+
+
+
+-- | Values in Awelon project (and ABC) have a few basic forms:
+--
+--    (a * b) -- pairs    ~Haskell (a,b)
+--    (a + b) -- sums     ~Haskell (Either a b)
+--    1       -- unit     ~Haskell ()
+--    0       -- void     ~Haskell EmptyDataDecls
+--    N       -- numbers  ~Haskell Rational
+--    [a→b]   -- blocks   ~Haskell functions or arrows
+--    a:foo   -- sealed   ~Haskell newtype (`:foo` label)
+--
+-- Further, blocks may be affine or relevant, ABC defines a format
+-- for cryptographically sealed values, and high performance compact
+-- data structures (e.g. vectors and matrices) could be used under
+-- the hood with some clever annotations and extended operations. 
+--
+-- At the moment, Wikilon will focus on the basics plus:
+--
+--  * dedicated support for text
+--  * lazily loaded value resources
+--
+-- I would like to eventually have efficient vectors, matrices, and
+-- cryptographic content. But a lot of these ideas can easily wait.
+--
+data Value
+    = Number {-# UNPACK #-} !Rational
+    | Pair !Value Value
+    | SumL Value
+    | SumR Value
+    | Unit
+    | Block !ABC {-# UNPACK #-} !KF
+    | Sealed {-# UNPACK #-} !Token !Value
+    | Load {-# UNPACK #-} !Rsc {-# UNPACK #-} !KF
+    deriving (Eq, Typeable)
+
+-- | flags for substructural type
+--   bit 0: true if relevant
+--   bit 1: true if affine
+type KF = Word8
+
+
+
+
+
 
 {-
+
 
 import Control.Applicative ((<$>), pure)
 import Control.Monad (join)

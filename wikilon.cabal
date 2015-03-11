@@ -89,9 +89,8 @@ Library
     Wikilon.Dict
     Wikilon.Branch
 
-    Wikilon.ABC.Pure
     Wikilon.ABC
-    Wikilon.Value
+    Wikilon.ABC.Pure
     Wikilon.RunABC
 
     Wikilon.Base16
