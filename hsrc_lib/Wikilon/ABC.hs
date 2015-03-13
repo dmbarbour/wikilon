@@ -2,27 +2,51 @@
 
 -- | Wikilon uses Awelon Bytecode (ABC) to model user-defined behavior.
 -- ABC has many nice properties for security, distribution, streaming,
--- simplicity, parallelism, and dynamic linking. However, ABC is based
--- on a purely functional style that is pretty far removed from modern
--- CPUs. Direct interpretation of ABC is not performance competitive.
+-- simplicity, parallelism, and dynamic linking. See Wikilon.ABC.Pure
+-- or <https://github.com/dmbarbour/awelon/blob/master/AboutABC.md>.
 --
--- Further, while ABC's dynamic linking model (use tokens to encrypt 
--- and name provider-independent resources by secure hash) has great
--- potential for distributed computing, its overhead is a little high 
--- for internal use - requiring naming, caching, GC, etc..
+-- Unfortunately, ABC is based on a purely functional model that is far 
+-- removed from modern CPUs and memory architectures. Direct interpretation
+-- of ABC is not performance competitive. The intention, long term, is
+-- that ABC should be compiled, using {#resourceId} tokens for separate
+-- compilation and dynamic linking.
 --
--- To address these issues, Wikilon internally uses a variant of ABC
--- with operators to accelerate common subprograms and integration
--- with VCache for interning, structure sharing, and linking. ABC is
--- compiled to the internal variant, and may be decompiled back to
--- pure ABC.
+-- But, in the short term, we can mitigate interpreter performance by
+-- pre-processing the bytecode:
+--
+--  * develop dictionary of built-in operators to accelerate performance
+--    * each operator has simple expansion to ABC
+--    * recognize or parse operator from raw ABC
+--    * how to best encode? Not sure. \Char? ESC+Char? ESC+VarNat?
+--  * support precomputed values (and capture of values with quotation)
+--  * support linked ABC resources (including value resources) with VCache
+--  * rewrite texts, blocks, and tokens to support fast slicing
+--    * "(length)(content)~
+--    * [(links)(length)(content)]
+--    * {(length)(content)}
+--    * length and links have VarNat representation
+--    * escapes are removed from the text content
+--  * precompress ABC's Base16 for texts and tokens (tune text type)
+--  * GZip compression of larger ABC at VCache layer (option?)
+--
+-- The slices and compression shouldn't be too difficult. The real
+-- challenges here are managing links and developing a good dictionary
+-- for built-in operators. 
+--
+-- Accelerating a dictionary of built-in operators isn't as versatile as
+-- compilation. But it should support competitive performance after the
+-- dictionary matures to include common loops and collections processing.
+--
+-- This internal model for ABC is designed to work with VCache, and is
+-- not intended for import or export. Fortunately, we can translate 
+-- Wikilon's ABC back to pure ABC very easily!
 --
 module Wikilon.ABC
     ( ABC(..)
     , Op(..)
     , Rsc
-    , Value(..), KF
-    , PrimOp(..), abcCharToOp, abcOpToChar, abcOpCharList
+    , Value(..), TyF
+    , PrimOp(..), abcCharToOp, abcOpToChar, abcOpTable
     , ExtOp(..), extOpTable, extOpToChar, extOpToDef, extCharToOp 
     , Token
     , abcDivMod
@@ -33,24 +57,37 @@ import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.Word
 
-import Wikilon.ABC.Pure (Token, PrimOp(..)
-                        , abcCharToOp, abcOpToChar, abcOpCharList
-                        , abcDivMod )
+import Wikilon.ABC.Pure (Token, PrimOp(..), abcCharToOp
+                        ,abcOpToChar, abcOpTable, abcDivMod)
 import qualified Wikilon.ABC.Pure as Pure
 import Database.VCache
 
--- | Simple wrapper around [Op] for typeclass purposes.
+-- | Awelon Bytecode is simply a sequence of operations.
 newtype ABC = ABC { abcOps :: [Op] }
     deriving (Eq, Typeable)
+-- Thoughts: a list isn't ideal for modeling composition as concatenation.
+-- However, we can alternatively represent composition using a block with
+-- the inline function (vr$c).
+--
+-- Also, I'm not sure it wouldn't be better to simply process bytestrings
+-- directly... excepting that I need to model values, and it would be useful
+-- to know exactly how large to slice
 
 -- | Wikilon's internal variant of ABC for efficient computation.
 data Op 
     = ABC_Prim !PrimOp   -- ABC primitives
     | ABC_Ext  !ExtOp    -- extended set of single-character operators
     | ABC_Val  !Value    -- texts, blocks, values (∀e.e→(Val * e)).
-    | ABC_Lnk  {-# UNPACK #-} !Rsc -- internal {#resourceId} 
+    | ABC_Lnk  {-# UNPACK #-} !Rsc {-# UNPACK #-} !TyF -- internal {#resourceId} 
     | ABC_Tok  {-# UNPACK #-} !Token -- {token} text
     deriving (Eq, Typeable)
+-- Thoughts:
+--   for performance, it might be better to use `ABC_Prims [PrimOp]`, or
+--   even a vector of primitives, or perhaps even a bytestring (since each
+--   prim may be encoded using one byte). This could improve locality when
+--   processing code
+--
+--   also, is this the best way to model internal resources? I'm not sure.
 
 -- | Awelon Bytecode (ABC) supports dynamic loading of bytecode resources
 -- via {#resourceId} tokens in the source code. The resourceId uses a 
@@ -70,8 +107,8 @@ type Rsc = VRef ABC
 
 -- | Extended Operations are essentially a dictionary recognized by
 -- Wikilon for specialized implementations, e.g. to accelerate an
--- interpreter or support tail-call optimizations. This is similar
--- to ABCD, though developed independently from ABCD.
+-- interpreter or support tail-call optimizations. ExtOp is similar
+-- to ABCD, but doesn't require careful standardization.
 --
 -- A dictionary of extended ops shall be available for HTTP access
 -- via something like a \/builtins request. 
@@ -105,12 +142,12 @@ extOpTable :: [(ExtOp, Char, Pure.ABC)]
 extOpTable =
     [(Op_Inline,  '¥', "vr$c")
     ,(Op_Apc,     '¢', "$c")
-    ,(Op_FixHalf, 'ȳ', "^'ow^'zowvr$c")
+    ,(Op_FixHalf, 'ȳ',  "^'ow^'zowvr$c")
     ,(Op_FixFull, 'Ȳ', "[^'ow^'zowvr$c]^'ow^'zowvr$c")
 
-    ,(Op_Intro1L, 'û', "vvrwlc")
+    ,(Op_Intro1L, 'ǔ', "vvrwlc")
     ,(Op_Elim1L,  'ç', "vrwlcc")
-    ,(Op_Intro0L, 'Û', "VVRWLC")
+    ,(Op_Intro0L, 'Ǔ', "VVRWLC")
     ,(Op_Elim0L,  'Ç', "VRWLCC")
 
     ,(Op_prim_swap,   'ƨ', "vrwlc")
@@ -182,15 +219,23 @@ data Value
     | SumL Value
     | SumR Value
     | Unit
-    | Block !ABC {-# UNPACK #-} !KF
+    | Block !ABC {-# UNPACK #-} !TyF
     | Sealed {-# UNPACK #-} !Token !Value
-    | Load {-# UNPACK #-} !Rsc {-# UNPACK #-} !KF
+    | Load {-# UNPACK #-} !Rsc {-# UNPACK #-} !TyF
     deriving (Eq, Typeable)
 
--- | flags for substructural type
---   bit 0: true if relevant
---   bit 1: true if affine
-type KF = Word8
+-- | Flags for substructural type
+--   bit 0: true for values, false for ABC_Lnk
+--   bit 1: true if relevant
+--   bit 2: true if affine
+--   bit 3..6: reserved, contemplating:
+--     bit 3: true if contains impure tokens
+--     bit 4: true if local    (no serialization to network)
+--     bit 5: true if volatile (no persistent storage)
+--     bit 6: true if needs simplification ?
+--   bit 7: zero
+type TyF = Word8
+
 
 
 
@@ -246,42 +291,5 @@ putMLT (c:cs) = B.put c >> putMLT cs
 putMLT [] = return ()
 
 
-
--- | abcSimplify performs a simple optimization on ABC code based on
--- recognizing short sequences of ABC that can be removed. E.g.
---
---   LF, SP, ww, zz, vc, cv, rl, lr, WW, ZZ, VC, CV, RL, LR
--- 
--- In addition, we translate 'zwz' to 'wzw' (same for sums).
---
-abcSimplify :: [ABC_Op ext] -> [ABC_Op ext]
-abcSimplify = zSimp []
-
-zSimp :: [ABC_Op ext] -> [ABC_Op ext] -> [ABC_Op ext]
-zSimp (ABC_Prim a:as) (ABC_Prim b:bs) | opsCancel a b = zSimp as bs
-zSimp rvOps (ABC_Block block : ops) = zSimp (ABC_Block (abcSimplify block) : rvOps) ops
-zSimp rvOps (ABC_Prim ABC_SP : ops) = zSimp rvOps ops
-zSimp rvOps (ABC_Prim ABC_LF : ops) = zSimp rvOps ops
-zSimp (ABC_Prim ABC_w : ABC_Prim ABC_z : rvOps) (ABC_Prim ABC_z : ops) =
-    zSimp rvOps (ABC_Prim ABC_w : ABC_Prim ABC_z : ABC_Prim ABC_w : ops)
-zSimp (ABC_Prim ABC_W : ABC_Prim ABC_Z : rvOps) (ABC_Prim ABC_Z : ops) =
-    zSimp rvOps (ABC_Prim ABC_W : ABC_Prim ABC_Z : ABC_Prim ABC_W : ops)
-zSimp rvOps (b:bs) = zSimp (b:rvOps) bs
-zSimp rvOps [] = L.reverse rvOps
-
-opsCancel :: PrimOp -> PrimOp -> Bool
-opsCancel ABC_l ABC_r = True
-opsCancel ABC_r ABC_l = True
-opsCancel ABC_w ABC_w = True
-opsCancel ABC_z ABC_z = True
-opsCancel ABC_v ABC_c = True
-opsCancel ABC_c ABC_v = True
-opsCancel ABC_L ABC_R = True
-opsCancel ABC_R ABC_L = True
-opsCancel ABC_W ABC_W = True
-opsCancel ABC_Z ABC_Z = True
-opsCancel ABC_V ABC_C = True
-opsCancel ABC_C ABC_V = True
-opsCancel _ _ = False
 
 -}

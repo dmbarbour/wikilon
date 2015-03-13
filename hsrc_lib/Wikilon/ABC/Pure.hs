@@ -6,12 +6,14 @@ module Wikilon.ABC.Pure
     , Token
     , Op(..)
     , PrimOp(..)
-    , abcCharToOp, abcOpToChar, abcOpCharList
+    , abcCharToOp, abcOpToChar, abcOpTable
     , encode, encode'
     , decode
     , abcDivMod
     , Quotable(..)
     , quote, quoteList, quotesList
+
+    , opsCancel
     ) where
 
 import Data.Monoid
@@ -101,8 +103,8 @@ data PrimOp -- 43 primitive operations
     | ABC_SP | ABC_LF  -- a → a  used for formatting
     deriving (Eq, Ord, A.Ix, Enum, Bounded)
 
-abcOpCharList :: [(PrimOp,Char)]
-abcOpCharList =
+abcOpTable :: [(PrimOp,Char)]
+abcOpTable =
     [(ABC_l,'l'), (ABC_r,'r'), (ABC_w,'w'), (ABC_z,'z'), (ABC_v,'v'), (ABC_c,'c')
     ,(ABC_L,'L'), (ABC_R,'R'), (ABC_W,'W'), (ABC_Z,'Z'), (ABC_V,'V'), (ABC_C,'C')
 
@@ -129,16 +131,16 @@ impossible :: String -> a
 impossible eMsg = error ("Wikilon.ABC.Pure: " ++ eMsg)
 
 abcOpCharArray :: A.Array PrimOp Char
-abcOpCharArray = A.accumArray ins eUndef (minBound,maxBound) abcOpCharList where
+abcOpCharArray = A.accumArray ins eUndef (minBound,maxBound) abcOpTable where
     eUndef = impossible "missing encoding for ABC PrimOp"
     ins _ c = c
 
 abcCharOpArray :: A.Array Char (Maybe PrimOp)
 abcCharOpArray = A.accumArray ins Nothing (lb, ub) lst where
     ins _ op = Just op
-    lb = L.minimum (fmap snd abcOpCharList)
-    ub = L.maximum (fmap snd abcOpCharList)
-    lst = fmap (\(op,c) -> (c, op)) abcOpCharList
+    lb = L.minimum (fmap snd abcOpTable)
+    ub = L.maximum (fmap snd abcOpTable)
+    lst = fmap (\(op,c) -> (c, op)) abcOpTable
 
 abcOpToChar :: PrimOp -> Char
 abcOpToChar op = abcOpCharArray A.! op
@@ -324,3 +326,63 @@ instance IsString ABC where
         if LBS.null brem then abc else
         let s' = LazyUTF8.toString brem in 
         error $ "Wikilon.ABC.Pure could not parse " ++ s'
+
+{-
+-- | abcSimplify performs a simple optimization on ABC code based on
+-- recognizing short sequences of ABC that can be removed. E.g.
+--
+--   LF, SP, 
+--   ww, zz, vc, cv, rl, lr, 
+--   WW, ZZ, VC, CV, RL, LR
+-- 
+-- In addition, we translate 'zwz' to 'wzw' (and for sums)
+--
+-- And we'll inline [block]vr$c or v[block]$c
+--
+-- redesign thoughts: it might be better to move leftwards rather than rightwards
+--  i.e. such that there is no reverse at the end, and it's easier to simplify
+--  as part of a concatenation effort
+--
+abcSimplify :: [ABC_Op] -> [ABC_Op]
+abcSimplify = zSimp []
+
+zSimp :: [ABC_Op ext] -> [ABC_Op ext] -> [ABC_Op ext]
+zSimp (ABC_Prim a:as) (ABC_Prim b:bs) | opsCancel a b = zSimp as bs
+zSimp rvOps (ABC_Block block : ops) = zSimp (ABC_Block (abcSimplify block) : rvOps) ops
+zSimp rvOps (ABC_Prim ABC_SP : ops) = zSimp rvOps ops
+zSimp rvOps (ABC_Prim ABC_LF : ops) = zSimp rvOps ops
+zSimp (ABC_Prim ABC_w : ABC_Prim ABC_z : rvOps) (ABC_Prim ABC_z : ops) =
+    zSimp rvOps (ABC_Prim ABC_w : ABC_Prim ABC_z : ABC_Prim ABC_w : ops)
+zSimp (ABC_Prim ABC_W : ABC_Prim ABC_Z : rvOps) (ABC_Prim ABC_Z : ops) =
+    zSimp rvOps (ABC_Prim ABC_W : ABC_Prim ABC_Z : ABC_Prim ABC_W : ops)
+zSimp (ABC_Block block : rvOps) 
+      (ABC_Prim ABC_v : ABC_Prim ABC_r : ABC_Prim ABC_apply : ABC_Prim ABC_c : ops) =
+    zSimp rvOps (block ++ ops)
+zSimp (ABC_Block block : ABC_Prim ABC_v : rvOps)
+      (ABC_Prim ABC_apply : ABC_Prim ABC_c : ops) =
+    zSimp rvOps (block ++ ops)
+
+zSimp rvOps (b:bs) = zSimp (b:rvOps) bs
+zSimp rvOps [] = L.reverse rvOps
+
+-}
+
+-- | compute whether two operations cancel
+opsCancel :: PrimOp -> PrimOp -> Bool
+opsCancel ABC_l ABC_r = True
+opsCancel ABC_r ABC_l = True
+opsCancel ABC_w ABC_w = True
+opsCancel ABC_z ABC_z = True
+opsCancel ABC_v ABC_c = True
+opsCancel ABC_c ABC_v = True
+opsCancel ABC_L ABC_R = True
+opsCancel ABC_R ABC_L = True
+opsCancel ABC_W ABC_W = True
+opsCancel ABC_Z ABC_Z = True
+opsCancel ABC_V ABC_C = True
+opsCancel ABC_C ABC_V = True
+opsCancel _ _ = False
+
+
+
+

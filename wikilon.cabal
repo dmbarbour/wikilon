@@ -58,9 +58,11 @@ Library
     , bytestring
     , bytestring-builder
 
+    , array
+    , vector
+
     , time (>= 1.5)
     , binary (>= 0.7.2)
-    , array
 
     , parallel (>= 3.0)
     , containers (>= 0.5)
@@ -88,6 +90,7 @@ Library
     Wikilon.Word
     Wikilon.Dict
     Wikilon.Branch
+
 
     Wikilon.ABC
     Wikilon.ABC.Pure
