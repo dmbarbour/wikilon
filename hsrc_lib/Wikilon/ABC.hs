@@ -34,12 +34,16 @@
 -- for built-in operators. 
 --
 -- Accelerating a dictionary of built-in operators isn't as versatile as
--- compilation. But it should support competitive performance after the
--- dictionary matures to include common loops and collections processing.
+-- compilation. But it should become perfromance competitive after the
+-- dictionary matures to include common loops, collections processing,
+-- and so on.
 --
--- This internal model for ABC is designed to work with VCache, and is
--- not intended for import or export. Fortunately, we can translate 
--- Wikilon's ABC back to pure ABC very easily!
+-- Compilation, when it happens, will likely involve deploying abstract
+-- virtual machines either as unikernels or running in separate processes.
+-- Compared to Haskell plugins, these should be a lot simpler, have fewer
+-- security and safety issues, and have fewer barriers to performance and
+-- scalability. (In retrospect, my awelon project efforts using plugins
+-- were an awful idea.)
 --
 module Wikilon.ABC
     ( ABC(..)
