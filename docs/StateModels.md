@@ -1,41 +1,173 @@
 
 # General Overview
 
-A recent decision is to actually separate this auxiliary state from Wikilon proper. Instead, we model *abstract virtual machines*, each supporting a set of [hosted applications](ApplicationModel.md). But these AVMs must still support some explicit state models. 
+A recent decision is to actually separate this auxiliary state from Wikilon proper. Instead, we model *abstract virtual machines* (AVMs), each supporting a set of [hosted applications](ApplicationModel.md). But these AVMs must still support some explicit state models. This document describes state models and the resource model in general.
 
-## Transactional State
+## Transactions and Batches
 
-Communications with an AVM will be based on message-batching, i.e. such that an AVM collects all outgoing messages generated during a transaction into a batch for each target machine, and later receives batched incoming messages where batches correspond to remote transactions. RDP messages might eventually receive special treatment at the communications layer, but that isn't critical at this time.
+State is updated using ACId transactions. Durability won't be the default (since this is VCache), but may be requested (in which case all outgoing messages would wait for sync). Naturally, outgoing messages or effects from an AVM must be delayed until the transaction commits. Consequently, we will have 'batches' of generated messages moving towards multiple targets. 
 
-So, this suggests we need transactional, imperative state as at least an initial basis for state. Conventional read/write might work well enough.
+I will preserve this batching in the receiver. Thus, the primary unit of communication between abstract machines becomes *batches of messages*. Messages between AVMs will also preserve serialization order - i.e. an earlier batch will always run before a later batch. Messages are also ordered within each batch. This provides a useful 'snapshot consistency' when viewing other AVMs.
 
-## Secure Source Stable Identity
+Each AVM is, more or less, a 'vat' in the E parlance. But plus many nice atomicity and consistency properties. These properties will be preserved if we compile AVMs to a separate process or unikernel.
 
-I could follow Haskell's convention, use `newPVar` from VCache to create first-class, persistent, transactional references, and some ad-hoc token or sealed value to access the PVar. But this would interfere with taking snapshots of the whole abstract virtual machine. Alternatively, I could still model first-class variables but preserve content in terms of a map at the VCache layer. But that would hinder garbage collection. In both cases, communications have a risk of pollution.
+*Note:* I may need to model logical connections to handle disruption and latency effectively. Further, it might be useful to separate batches from stability such that we have a rollback window between AVMs (i.e. Time Warp).
 
-I would rather avoid these scenarios. The option to model dynamic variables using something like a `Map Integer Data` will always exist, of course (a simple, purely functional implementation of `newPVar` is quite possible, at least in a dynamically/dependently typed language like ABC). But I can at least keep this off the path of least resistance. Developers must explicitly model their own GC, for example, and figure out on their own how GC interacts with networking.
+## Resource Structure
 
-So, for now, I'm going to focus on organizing state for source-stable identity (similar to filesystems), i.e. such that we model application state as existing entirely in a few global variables but with secure partitions.
+Each AVM will have a file system inspired trie of resources. 
 
-Securing source-stable identity is quite feasible. I can use a simple value sealing model on the path, or a variation (e.g. HMAC chaining with validation bits). Including a value-sealing token at this layer might be useful to prevent these path names from ever polluting source code. In any case, how the state is named does matter for security reasons, especially in cases where these source-stable names might be shared between virtual machines. 
+The resource trie structure provides many useful properties:
+
+* stable identifiers for live programming or extension
+* securely partition tree structure between subprograms
+* trivial to delete, copy, or move full subtrees
+* structure sharing properties for logarithmic history
+* suitable for purely functional AVM implementations
+
+Resource identifiers will more or less correspond to URLs or filepaths. Some characters (LF, SP, C0, C1, DEL) will be forbidden, but otherwise arbitrary UTF-8 is accepted. The character `/` has special meaning, indicating a directory. Objects and directories may share the same name modulo `/`, i.e. `/foo/bar/` and `/foo/bar` may be distinct objects. Note also that `/foo//` is a valid directory distinct from `/foo/`. 
+
+Resources and directories are accessed by *capabilities*. 
+
+A capability is a first-class, unforgeable token that identifies a resource and provides some authority to manipulate it. Taking this literally, here's what our resource capability will look like (at the bytecode layer):
+
+         "RW /foo/bar yqpbfhydyqhpznjm..."{$/}
+          ↑  ↑        ↑                    ↑ 
+          ↑  ↑        unforgeable HMAC     hides structure from ABC 
+          ↑  to the resource named here    (& keeps out of dictionary)
+          provides read-write authority
+
+The `/foo/bar` path string and permissions remain visible for convenient debugging. The HMAC here is the primary protection. The `{$/}` seal doesn't provide much security, though it does resist covert channels. Mostly, `{$/}` prevents dependencies on the capability representation, and resists capabilities from being hard-coded into the Wikilon dictionary, and simplifies recognition of capabilities if we want to rewrite them during a deep copy.
+
+Basic mechanisms for resource security include:
+
+1. secure partitioning
+2. revocable capabilities
+3. value sealing resources
+4. permissions attenuation
+5. transparent scripting
+
+These impact expressiveness in addition to security.
+
+### Secure Partitions
+
+The idea with secure partitioning is that different subprograms can be isolated to different subdirectories in the trie. By dividing subprograms between subdirectories, developers can comprehend and control the shared state interaction and entanglement of subprograms. Using shared state carefully can be useful for *extension*, e.g. adding new features to an application without deeply modifying application code. But secure partitioning can guard against accidental sharing. 
+
+The current plan is to use capabilities to model partitions. E.g. if you have directory `/foo/`, you can partition this into `/foo/bar/` and `/foo/baz/` for the different subprograms. You certainly won't be *forced* to partition the resources, but we can try to make this a convenient convention to follow. 
+
+Partitioning state then allows us to model 'objects' that can talk to each other by more fine-grained capabilities. For example, a subprogram with full read-write access to `/foo/` might have much more limited access to `/bar/inbox`, e.g. able only to send messages or query whether the inbox overfloweth (to support discretionary pushback). Usefully, even anonymous objects can be modeled by partitioning, e.g. using `anon1/` then `anon2/` then `anon3/`. Though, with anonymous objects you'll need manual collection (modeling regions with subdirectories might help). 
+
+### Revocable Capabilities and Redirects
+
+Revoking a granted authority should be as easy as granting it, or maybe easier. 
+
+Awelon's AVMs will support revocation by cleverly leveraging links within the filesystem. Links allow a many-to-one relationship between paths and resources. The idea, then, is that we can express revocation by destroying a particular path, removing a specific link. All capabilities including that link will be broken.
+
+To use links effectively, conventions and best practices are necessary. For example, if we create a link for each user of a resource, then we can cut out individual users. However, links also simplify the fallback approach: just move the original object then provide individual links to all the authorized users. We might also transparently link the object for a transition phase if security isn't a major concern.
+
+To avoid the entanglement and cycle problems created by links in common file systems, I'm going to add a *confinement* constraint. A directory `/foo/` may only contain links to elements under `/foo/`. A directory `/foo/bar/` may only contain redirects to other elements under of `/foo/bar/`. Confinement makes it easy to copy a directory without breaking any links. I might also reject transactions that would commit a link cycle.
+
+A related concern is *stability of revocation*. For example:
+
+* Bob Foo works with our system and for a while uses path `/xyzzy/bob`.
+* Bob Foo retires. The redirect at `/xyzzy/bob` is deleted, revoking Bob's caps.
+* Years later, Bob Bar joins the team. The new Admin Alice creates `/xyzzy/bob`.
+* Bob Foo tries his old `/xyzzy/bob` capability, and is surprised it works!
+
+This happens because we lose visibility of old links after breaking them. The fix is probably to add a salt, a little extra entropy, such that the HMAC will be different after we include the salt. 
+
+### Resources for Value Sealing
+
+Long term, I'd like some first-class cryptographic value sealers and unsealers. The plan in ABC is to use `{:fmt$key}` tokens for cryptographic value sealing, with the result being represented more or less like `["cryptoText"]kf{$fmt}`. Here `{$fmt}` indicates a sealed value, and the block is to capture substructural attributes. However, choosing an appropriate format and implementing it is a lot of hassle, and only wortwhile after we have real distribution. In the short term, I'm thinking to utilize *second-class* value sealing, by modeling the sealer and unsealer as a pair of resources (maybe together with a manager, altogether acting a lot like a subdirectory). 
+
+Second-class value sealing has a lot of potential advantages:
+
+* *expiration*, model values that can only be unsealed for so many cycles
+* *large linear values*, fast storage-based sealing for linear objects!
+* *optimize local*, no encryption between AVMs; discretionary up to network
+
+Non-linear objects could use storage-based sealing IF they also expire (to avoid GC issues). Cryptographic value sealing only becomes necessary to avoid GC pitfalls when working with remote machines. Thus, this technique can be very efficient in a lot of common cases, while still offering a level of security that cannot be matched within a dictionary.
+
+Meanwhile, first-class capabilities for second-class sealers give us roughly the same expressiveness. What we lose is performance in the case where a sealer and unsealer would ideally be on different machines. We can come back to first-class sealers and unsealers later, when need arises.
+
+### Permissions Attenuation
+
+A capability has a few associated permissions that are uniformly understood, similar to the read-write-execute permissions in Unix. An important difference is that these permissions are bound to the capability, part of the capability string. 
+
+The set of meaningful permissions depends on resource types. In Unix, we have "dumb" files that cannot hide information or protect their own invariants. For Awelon's AVMs I favor purely functional objects, which may hide information and protect invariants if manipulated through query and update messages. Here are a few scenarios or levels I'd like to support:
+
+* directly modify bytecode for resources in a directory; full ownership
+* read bytecode of resources in a directory; deep-copy a directory
+* browse a directory, query some resources; allows information hiding
+* send update messages to resources; objects guard their invariants
+* create and destroy objects through a developer controlled script
+
+A potential set of permissions is:
+
+* *write*  - create, destroy, and replace objects
+* *read*   - read resource structure, read bytecode as block
+* *update* - send update messages to object
+* *query*  - send query messages to object, hear result
+
+These permissions are *transitive* across directories and redirects. If you have read-write permissions to a particular directory, then you have read-write permissions to every subdirectory. Attenuation is achieved by simply taking a capability and requesting one with permissions. To support the 'create and destroy objects through a script', we'll additionally need a means for a script to receive an override authority from the creator.
+
+Directories may be enumerated with a simple query.
+
+### Transparent Scripts
+
+Without scripting, data can be very rigid. For example, when modeling a book you must make a choice: do you use one file per chapter, or one file for all chapters. You could try to keep both up-to-date, but statefully managing data in two places is very error prone. With scripts, we could make one 'canonical' choice then provide an ad-hoc *view* for the other choice. We can transparently model capabilities to individual chapters from the larger book object.
+
+Scripts can also support ad-hoc attenuations, e.g. by wrapping messages or unsealing values. And scripts may have an 'override' feature that gives them read-write authority regardless of the caller's authority. Override is formally justified because you could always have embedded it: it takes read-write authority to create the script. But actually embedding the capability would unnecessarily entangle the script with its location.
+
+A query operation on a script will be limited to querying other objects. An update operation on a script may query and update arbitrary objects. Scripts usually don't update themselves (if they must, one might explicitly use a write capability).
+
+## Resource Types
+
+Most resources are *state objects*. 
+
+State objects are specified either for RDP or Transactional. The queries are the same in both cases. The main internal difference is the update message: RDP receives a *set* of messages and computes to a fixpoint (within limits). Transactional resources receive individual update messages one at a time in batch order. Communication between these modes is limited to queries.
+
+Beyond that, we might have:
+
+* directories
+* scripts and redirects
+* value sealer resources
+* demand monitors for RDP
+ * on-demand behaviors (single instance)
+* clock resources
+* network resources
+
+* random numbers?
+* uniqueness sources?
+
+Modeling *network resources* as essentially the same as state resources is feasible based on the idea that we're really modeling output *queues*, and an implicit step is later draining these queues and shipping them off to other machines. Network resources may be restricted to a particular subdirectories near root, but capabilities to them could end up just about anywhere.
+
+## Performance Notes
+
+I don't anticipate any major performance pitfalls right now.
+
+Well... other than the limits of ABC itself.
+
+VCache already addresses sub-value sharing and lazy loading concerns, i.e. so there is no need to break a large object into a lot of different resources. (Instead, we annotate to intern parts of it.)
 
 ## Monadic Effects
 
-Since I'm largely eschewing `{tokens}` for state, beyond potentially indicating sealed filepath names that may be obtained from a common root, I've effectively eliminated use of capability tokens for state. Almost all [effects](EffectsModel.md) will be monadic and purely functional. I'll try very hard to ensure the monad model exhibits useful properties - flexibility, composability, extensibility, specialization via staging or partial-evaluation, etc.. Delimited continuations and free monads will be worth exploring.
+This resource model does use capabilities, but it doesn't use `{tokens}` for side-effects directly. Instead, the capabilities are used as arguments to a monadic update mathod. Ideally, all [effects](EffectsModel.md) will be monadic and purely functional. I'll try very hard to ensure the monad model exhibits useful properties - flexibility, composability, extensibility, specialization via staging or partial-evaluation, etc.. 
 
-## CRDTs
+Delimited continuations and free monads will be worth exploring. 
 
-I'd like to eventually model CRDTs with disruption-tolerant and delay-tolerant synchronization involving shared-state resources across abstract virtual machines. However, my intuition is that it would be better to model CRDTs at the Awelon dictionary, above simpler read/write state primitives. It shouldn't be difficult to model higher level abstract virtual machines above the lower level abstract virtual machines.
 
-## RDP and Imperative Interaction
 
-Accessing an RDP resource transactionally isn't a good fit for the continuous rollback-and-replay mechanism of RDP. In converse, if RDP accesses transactional read/write state, we probably need to implement some observer patterns so we can communicate updates due to transactional writes. 
 
-Compiling for RDP might become an ABC to ABC compiler, with a whole-source transform. Or it might involve more dedicated compilers to a final format. Depending on which approach I pursue, how I model RDP state resources, and abstract virtual machines in general, might vary a great deal. I'll need to think about this. Because RDP alleviates concerns about GC and concurrency, RDP is much more amenable to capability-based effects than imperative code, and we might be able to take good advantage of that.
 
-## Structure Sharing
 
-Structure sharing is possible across both multiple versions of a machine and between machines, and possibly at much larger scales if we account for ABC's linking model (especially if we assume a specialized variant for embedded values). 
+
+
+
+
+
+OLD STUFF
+=========
 
 
 # Major Design Points
@@ -44,149 +176,15 @@ These are important conclusions that took me some time to reach...
 
 4. **transactional & RDP updates don't mix** The concurrency control models are completely incompatible. RDP is long running, leverages anticipation, retroactive correction, generally allows multiple agents to collaboratively influence future state, prohibits observation of 'instantaneous' events. Transactions assume an authoritative view, a single writer, are logically instantaneous, and transactions are simply serialized with the different writers taking turns. The main consequence of this incompatibility is simply that we must distinguish 'resources updated via RDP' from 'resources updated via imperative'. Fortunately, cross-model *queries* don't seem to cause any problems.
 
-5. **stateful resources are weakly isolated** Specifically, generic `{tokens}` are not allowed, with a few machine-independent exceptions like annotations, sealers, unsealers, and external resources. This is necessary to protect linearization of resources for imperative code, and to ensure compatible cross-model data queries between RDP and imperative, and potentially for logically continuous expiration of volatile capabilities via RDP behaviors. These 'live' tokens shall be treated as volatile capabilities within Wikilon. If we also assume purely functional objects, then we can reject tokens even in query or update messages. (Aside: in type system terms, location of code corresponds to a modality; isolation corresponds to a universal or unconstrained location.)
-
-7. **memory cache at value granularity** If an object directly contains a map, it takes O(N) to load the map into memory or serialize it back to storage, so a O(lg(N)) update becomes mostly irrelevant. Serialization costs can quickly undermine benefits of structure. Performance pressures can drive developers to do nasty things, like divide structure into many smaller objects and use side-effects to entangle them. But, if we can treat partially-evaluated structures as external, memory-cached resources that are loaded as needed, we can obtain many advantages: relaxed alignment concerns, ad-hoc indexing, fine-grained structure sharing, relaxed memory-limit concerns, and so on. 
-
-# Design Concepts
-
-The space for stateful resources in Wikilon must be divided among public services (issue trackers, etc.), and users. Later, users will wish to divide their spaces in a similar manner - public spaces, spaces for each significant application they use, etc.. Applications might again do the same. In context of RDP, this division process must be stable, idempotent, and commutative. Stable names are also nice default attributes for imperative code, e.g. offering stability across rewind and replay of a transaction, though we certainly could model a counter and `new Object()` like behavior using imperative code.
-
-A natural fit for this spatial organization is the simple tree data structure. We would delegate subdirectories to each agent or application. A critical constraint, then, is that authority to a child directory offers no inherent authority to the parent, i.e. no `..` path unless it is granted explicitly. 
-
-Though, one property I dislike about trees is how easily applications become dependent upon the relatively arbitrary structures. We might mitigate this by offering an illusion of each agent or application having its own root authority. Usefully, we can potentially implement stable but opaque names by use of secure hash or HMAC. 
-
-For now, let's take as a given: **tree structure semantics, but opaque IDs**
-
-Besides directories, our tree structure will have many 'leaf objects', representing the user-defined resources. As mentioned earlier, I currently favor pure functional objects in this role, with a clean separation of read-only queries and write-only updates, e.g. based on embedded literal objects. But we may find some use for other objects, such as:
-
-* **read-only access** to a directory should give us both the ability to browse a directory and query the objects within it, including read-only access to its subdirectories and their objects. This suggests every object would have a read-only variant on the capability. 
-
-* **transparent redirects** transparently pass on all messages received by them (including read and write). You can distinguish a transparent redirect, or modify it, only by reading and writing at the level of the directory it is part of. Allows us to mount a shared "/public" directory within each user's space. Redirect also forms a basis for *transitive revocation*. 
-
-* **scripts** allow transparent scatter-gather of data, lenses and data model transforms, ad-hoc attenuation, etc.. Usefully, we can have a clean separation of responsibilities: scripts are stateless, but instead are encoded as simple transactions or RDP behaviors. Scripts would be extremely beneficial for expressiveness and extensibility of the resource model. May have opportunity to attenuate authorities based on caller. Scripts should be capability secure, receiving no authority from location in the tree. 
-
-* **identities** are also necessary for demand monitors, constraint models, and other stateless resources. They might also be useful for secure random number generators and other, related concepts.
-
-I've already filtered the above list down to what I think are great ideas, worth implementing. 
-
-So, what shall our capabilities look like?
-
-* **authority descriptor** e.g. query only
-* **stable identifier** specific to the object
-* **path tracker** for transitive revocation
-* **hmac of the above** to secure the capability
-* **compacted into a string** suitable for use in a URL
-
-Based on the idea that we'll mostly be working with objects and scripts (with their own built-in logic), I feel we need two primary layers of authority: one to update or query through the message interface (which allows objects to protect themselves), and another to read or write source code for administrative and maintenance purposes. So I propose the following:
-
-        CODE    CLASS           AUTHORITIES         MNEMONIC
-         M      message         query+update        Message
-         P      update          update              Post, Push, uPdate
-         Q      query           query               Query
-         R      read            read                Read
-         S      inspect         read+update         inSpect
-         W      ownership       read+write          Write, oWn
-
-            read implies query
-            read+write implies update
-
-Write authority on a directory is needed to create or delete objects, query to enumerate children. Write-only is not supported because I consider it unwise to blindly write without giving a model some opportunity to defend itself. Update-only is probably sufficient for a job where write-only might be considered, or you could use a script. More authorities are possible, e.g. to look at timestamp for a specific object, to verify the existence of an object, or to delete an object.
-
-These authorities also attenuate objects discovered through enumeration of directories or by naming children. I'd like to support similar 'discovery attenuation' for capabilities held within scripts, at least as an optional transform.
-
-To supply *opaque names*, I'll use the simple concept that every object has a simple text pet name relative to its parent directory (such as "foo" or "user2625"), and also an external opaque name. The external name of a child will then be `secureHash(parentExternalName '/' utf8(petName))`, the root should probably use a secret to provide global disambiguation. Names confer no authority, so the ability to guess them isn't an issue. (The `/` before the petName allows extensibility, naming attributes other than children.)
-
-To model the path tracker, my best idea is to simply include the entire path (from root, through redirects, to the target) in the capability string. Of course, laying these out end-to-end would result in a very bulky string. So we'll overlap them instead:
-
-        M               auth code
-         AAAAAAAA       \
-          BBBBBBBB       path, e.g.
-           CCCCCCCC          /AAAAAAAA/BBBBBBBB/CCCCCCCC/DDDDDDDD
-            DDDDDDDD    /
-                HHHH    hmac (four bytes to right of last path element)
-
-Then we'll simply XOR everything together. To relocate our object, we'll start at our root, find candidates that start with `A`, XOR candidates out of the string, which exposes `B`, then search for children whose names start with `B`, etc.. Collisions are gradually filtered out across multiple steps in the path, and the last step we expose four bytes to further reduce candidates. This search is essentially a tradeoff for a shorter capability string. 
-
-The final element is an HMAC to protect the capability string from forgery, protecting the auth code. It's also a final disambiguating element. We can probably write a paper about the failure of a hash function if this effort failure of a hash function if this effort fails to disambiguate two items.
-
-Unfortunately, our path now exposes structure to the user, reducing the semantic opacity. People might even (gasp!) try to write functions that discriminate on prefixes. So, to avoid this, I'll add one more step: a simple scrambler function, just to obfuscate hierarchy against casual observation. Ideally, the scrambler won't change the size of the output. I might be able to use AES-CFB to do this, running it from right to left, then just truncating the last cipher-block to match the size of the input text.
-
-Concrete sizes: For 192-bit path element, 160-bit HMAC, cap size is N+24 bytes.
-
-This should be sufficient. I'm tempted to bump up to 256/224. But we can change this whenever we create new Wikilon instances, or even support mixed-mode (i.e. by parsing both options). Ultimately, our capability strings should look a lot like this (this one for path of size 5):
-
-        Mdpxgznkbmxftkjdphhgqsmbszdzmtnkypxqhzxqmzstsqmszqybtqskd
-
-Alternatively, the auth code may also be encrypted. That might even be better, because auth codes aren't necessarily preserved in a meaningful way across scripts or redirects. The encoding of resource strings within bytecode should take the form of *cryptographically sealed values*. Something like:
-
-        "Mdpxgznkbmxftkjdphhgqsmbszdzmtnkypxqhzxqmzstsqmszqybtqskd"{$:wiki}
-
-This embedding offers several advantages. First, it's a semantically faithful representation. Capability strings fundamentally are cryptographically sealed values. Second, it hinders embedding of capability strings within AO code, since cryptographic seals are generally not valid AO code, and at least would be easy to locate. Third, it has potential to track which wiki each resource is associated with, along with any version indicators. 
-
-Also, while I might permit forging text into capability strings in a few special cases, it will be easier to restrict and track these cases within the scope of the resource model and applications.
 
 # Persistence of Structure
 
-Assume an object contains a large, balanced tree structure, with 10k-100k nodes. 
-
-We don't want to rebuild this tree every time to process it, since that would be O(N) to load the tree, and O(N) to serialize it back out again when saving the object. Manipulations on that tree would be O(lg(N)), but that would be minor compared to all the serialization costs.
-
-Good caching could help, but only if we don't serialize out the whole object for every update. Something closer to **acid-state** where we serialize out only the intended action would be necessary. Then we'd serialize the whole object only when we're about to remove the object from memory cache. If active objects spend most of their time in memory cache, the serialization overheads could be mitigated.
-
-Alternatively, developers could model the tree structure in terms of multiple smaller filesystem objects, glued together by a script. This would be able to directly leverage memory cache, i.e. loading only a necessary subset of objects. Unfortunately, it's a toxic idea. It prevents developers from expressing large objects and processes in a natural way, asking them to use side-effects. It entangles the object, making it more difficult to copy and reuse. Further, it exposes object substructure that would otherwise be encapsulated and protected by an object. 
-
-Neither of these options is satisfactory. Both are complicated.
-
-When I designed ABC, one assumption I made is that structured values can be precomputed. As a trivial example, while the number 123/457 might be encoded as ten operators `#123#457/*`, a runtime might benefit from processing this into a number during a partial evaluation phase, or even during the parse. For a number in a block that might be processed more than once, this prevents us from recomputing the number every time we replicate the block. When we serialize the bytecode, of course, we'll need to transform it back to the ten operators or something equivalent. 
-
-Can we extend this assumption to a memory-cached computation? I believe we can. 
-
-Doing so could be hugely advantageous. Very large objects become feasible since it would allow us to load objects and values at a granularity much finer than objects. Many ad-hoc indexing techniques become viable, unconstrained by concerns like page alignment or fixed-width serialization. Fine-grained structure sharing is viable, where lots of objects all reference the same values. Large computations become much simpler, beyond the limits of 
-
-Failure to do so could be disastrous. Performance pressure will drive developers towards the toxic alternatives, tainting the AO dictionaries and the Awelon project's reputation with ugly design patterns. I think it reasonable to consider persistence of structure to be essential, values must be memory cached.
-
-The existing approach to ABC resources is already a near fit for what I need. Indeed, ABC resources may directly be used. A value might be represented as follows:
-
-        vvrwlc[{#resourceId for quoted value}c]{&lazy}$
-
-Here, I'm representing a value resource with a lazy block of type `1→value`. This approach would have a significant advantage of working even in a distributed computation. However, this seems heavy weight, and its external nature will hinder precise garbage collection (we don't know whether the value is exposed to external services). 
-
-A lighter weight variation seems a worthy investment.
-
-The database I'm developing (wikilon-db) has potential to make this easy. Instead of serializing ABC to a simple stream, let's serialize it to a pair: a list or stack of 'value objects', and the bytecode extended with a simple 'escape' to pop a value object from the stack. When we load the bytecode into memory, we'll also pop all the values from the stack (and ensure the resulting stack is empty without underflowing). The 'escape' in this context might be relatively simple, such as an ASCII control code (e.g. FS, SUB, or DC1), or a UTF-8 invalid character (e.g. 0xFD). 
-
-Usefully, we could accomplish this without revealing the 'address' of the referenced value even within the main Wikilon code. Thus, it would be much easier to reason about reference counting or garbage collection.
-
-The remaining difficulty is how to tell Wikilon that a particular value should be given this treatment, make it easy to use - e.g. for balanced trees or sequences. Fortunately, this seems a pretty good candidate for an annotation. Proposed:
-
         {&stow} :: (a*e) → (a'*e)    tuck value into cold store
-
-I suspect I'll actually want a few variants or attributes, e.g. to indicate whether I expect to need that value again this computation, or expected size, or to optionally use/refuse structure sharing. (All this might be a simple sequence of flags.) In addition, heuristics may apply - e.g. we might reject stowage if the argument is smaller than a few hundred bytes. Developers might tweak these heuristics with a flag (e.g. a single digit representing exponential sizes). 
 
 When a stowed value is observed or accessed, it must automatically be loaded. After all, annotations don't affect observable semantics. To reduce loading latencies, we might wish to explicitly annotate this, e.g. with `{&load}`, so we begin asynchronously loading a value before we'll need it. To reduce risk of accidentally loading a stowed value, developers might be encouraged to wrap stowed values with discretionary sealers.
 
 Usefully, stowed values would be strictly internal, and largely orthogonal to ABC resource model. ABC resources could still benefit from stowed values with regards to persistent, separate compilation. Stowage might also be disabled for read-only computations, such that they're also load-only.
 
-# Stable or Unstable Capability Strings?
-
-At the moment, I'm designing with an assumption of stable capability strings. I could easily destabilize names by using a counter, or a timestamp when an object is created, as contributing to its capability string. This would ensure that deleting and re-creating an object will also revoke all existing capabilities to it, as the default case. 
-
-Do unstable names cause any big concerns with RDP?
-
-For RDP to work effectively, I'll need a directory authority to create objects, and I'll have a 'continuous' model that conflates creation with acquisition. Use of a counter would be a problem, a violation of causal commutativity. But use of a timestamp to destabilize names should not be an issue. 
-
-Potentially, we could model unstable names as stable names by controlling the 'timestamp', e.g. by fixing it to sentinel value, zero. Maybe this is a good way to do things. Developers can explicitly request a stable name when they want one, otherwise the names are always unstable.
-
-# Large Directories
-
-For large directories, e.g. with 4k objects, a filter factor of 256 is much too small.
-
-A viable option is to dynamically expand a directory: at first we filter with one byte, but if there are more than some threshold for objects in the directory, we switch to two bytes, and so on. Each resource thus tracks how many bytes it uses for disambiguation, and we never need to search a given path more than once.
-
-For unstable names, this value could be chosen when the object is constructed. For stable names, we'll need to use a stable overlap model, e.g. 2 bytes overlap for stable directory or redirect names. 
-
-Good thresholds? Well, the goal is to limit the amount of searching we do, so perhaps something like 1/4 the maximum number of items in each class? So, with more than 64 items in a directory, we'll bump up to two-byte names. Meanwhile, stable names are possible.
 
 # CRDTs
 
@@ -195,4 +193,28 @@ Good thresholds? Well, the goal is to limit the amount of searching we do, so pe
 It seems to me that I should be able to model CRDTs as a special object type in the auxiliary state model as it is currently defined. But the question would be how CRDTs are to be shared. I suppose a read authority would be necessary for replication.
 
 
+
+# Rejected Ideas
+
+It sounded good at the time.
+
+## Ad-Hoc Attributes Attenuation (Rejected!)
+
+The idea of *ad-hoc attributes attenuation* is users might want to define their own permissions-like attributes that may be attenuated. The implementation of this idea is pretty straightforward: we add some more text to our capabilities, such as:
+
+        "RW /xyzzy/foo/ +x +y -z"
+
+Here, I have three attributes "+x" "+y" and "-z", separated by whitespace. I'm going to keep it simple by forbidding whitespace in my path and attributes. These attributes are meaningless at the resource layer, but they might be meaningful to user code. So we'll simply pass them together with our *query* and *update* messages. 
+
+I listed 'positive' vs. 'negative' attributes. The difference would impact attenuation via simple monotonicity rule: *we may remove positive attributes or add negative attributes*. With read-write permissions, however, we could modify any attributes. They only become monotonic for query or post.
+
+However, there are many weaknesses for this design:
+
+* hurts caching because we don't know which attributes affect query results
+* implicit transitivity isn't visible for reasoning about covert channels
+* attributes difficult to abstract, painful to parse, easy to forget
+* more complicated type signatures for our file objects
+* requires extending APIs for manipulating attributes
+
+A good alternative to attributes attenuation is to leverage value sealing together with the scripting support. The script could unseal the attributes then pass them on. Anyone with access to the sealer could create a new set of attributes.
 

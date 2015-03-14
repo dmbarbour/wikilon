@@ -14,36 +14,28 @@
 -- But, in the short term, we can mitigate interpreter performance by
 -- pre-processing the bytecode:
 --
---  * develop dictionary of built-in operators to accelerate performance
---    * each operator has simple expansion to ABC
---    * recognize or parse operator from raw ABC
---    * how to best encode? Not sure. \Char? ESC+Char? ESC+VarNat?
---  * support precomputed values (and capture of values with quotation)
---  * support linked ABC resources (including value resources) with VCache
---  * rewrite texts, blocks, and tokens to support fast slicing
---    * "(length)(content)~
---    * [(links)(length)(content)]
---    * {(length)(content)}
---    * length and links have VarNat representation
---    * escapes are removed from the text content
---  * precompress ABC's Base16 for texts and tokens (tune text type)
---  * GZip compression of larger ABC at VCache layer (option?)
+--  * dictionary of built-in operators to accelerate performance
+--  * support precomputed values and cheap large-value quotations 
+--  * linked ABC resources (including value resources) with VCache
+--  * fast slicing for texts, blocks, and tokens
+--  * preserve base-16 compression in texts and tokens
+--  * GZip compression for larger ABC texts.
+--
+-- Having tighter processing over the bytecode is probably useful for
+-- performance. But the real win will be precomputing values, linking
+-- resources, and a dictionary that covers common collections and loops.
+-- Accelerating specific built-ins can become performance competitive
+-- even with compiled code, though it's (unfortunately) rather awkward.
 --
 -- The slices and compression shouldn't be too difficult. The real
--- challenges here are managing links and developing a good dictionary
+-- challenge here is managing links and developing a good dictionary
 -- for built-in operators. 
 --
--- Accelerating a dictionary of built-in operators isn't as versatile as
--- compilation. But it should become perfromance competitive after the
--- dictionary matures to include common loops, collections processing,
--- and so on.
---
--- Compilation, when it happens, will likely involve deploying abstract
--- virtual machines either as unikernels or running in separate processes.
--- Compared to Haskell plugins, these should be a lot simpler, have fewer
--- security and safety issues, and have fewer barriers to performance and
--- scalability. (In retrospect, my awelon project efforts using plugins
--- were an awful idea.)
+-- Wikilon will probably never graduate to compiled code internally,
+-- e.g. no plugins or dynamic linking. Instead, Wikilon will shift to
+-- role where it deploys processes or unikernels running abstract VMs.
+-- This approach is better for security and scalability, and avoids
+-- Haskell as a performance barrier.
 --
 module Wikilon.ABC
     ( ABC(..)
@@ -65,6 +57,30 @@ import Wikilon.ABC.Pure (Token, PrimOp(..), abcCharToOp
                         ,abcOpToChar, abcOpTable, abcDivMod)
 import qualified Wikilon.ABC.Pure as Pure
 import Database.VCache
+
+--  * develop dictionary of built-in operators to accelerate performance
+--    * each operator has simple expansion to ABC
+--    * recognize or parse operator from raw ABC
+--    * how to best encode? Not sure. Maybe 0xFD+VarNat?
+--  * precomputed values and cheap quotations 
+--    * stack of values per node 
+--    * similar to how VCache uses stack of VRefs?
+--  * support linked ABC resources with VCache
+--    * resources involve VRefs to more ABC nodes
+--    * preferably leverage same stack of values
+--    * lazy loading of value resources
+--  * rewrite texts, blocks, and tokens to support fast slicing
+--    * "(length)(content)~
+--    * [(links)(length)(content)]
+--    * {(length)(content)}
+--    * length and links have VarNat representation
+--    * escapes are removed from the text content
+--  * precompress ABC's Base16 for texts and tokens (tune text type)
+--  * GZip compression of larger ABC at VCache layer (option?)
+--    * combine texts for precomputed values and ABC for best compression
+--
+
+
 
 -- | Awelon Bytecode is simply a sequence of operations.
 newtype ABC = ABC { abcOps :: [Op] }
