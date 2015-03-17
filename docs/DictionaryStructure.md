@@ -1,4 +1,11 @@
 
+See the [Extensible Syntax](ExtensibleSyntax.md) and [branching dictionary](BranchingDictionary.md) documentation.
+
+
+
+Deprecated
+==========
+
 With the [branching model](BranchingDictionary.md), I can use something like a branch for each user's workspace in addition to a more global branch. Thus, it might be worthwhile to require tiered levels of 'curation' as we commit content upstream, while allowing a more dirty dictionary at the user layer. It might be nice if developers can essentially write code for the curation of a dictionary... within the same dictionary, perhaps combining results for prior and new versions in case the curation code itself is updated.
 
 My older design was streaming-update based, which made it easy to find differences between one dictionary and another. The new model, I'll need to compute these differences more explicitly, but a 'diff' on a dictionary shouldn't be terribly difficult.

@@ -1,7 +1,7 @@
 
 # Wikilon Application Models
 
-Wikilon will support several kinds of applications, leveraging the dictionaries and potentially a little extra state. At this time, I've identified a few very broad classes of application that Wikilon could or should support, allowing developers to mostly make up the differences here.
+Wikilon can support several kinds of applications, leveraging the dictionaries and potentially a little extra state. At this time, I've identified a few very broad classes of application that Wikilon could or should support, allowing developers to mostly make up the differences here.
 
 ## Cross-Compiled Applications
 
@@ -50,6 +50,13 @@ As an IDE and software platform, Wikilon should be able to directly execute at l
 Extensibility can be achieved by sharing stateful resources, e.g. a common database or queue or tuple-space or demand monitors. Unfortunately, this sharing entangles components. To control entanglement, we can partition resources, such that each partition may be internally entangled but is cleanly separated from other partitions. Communications between partitions are then subject to delays and disruptions. Modeling potential disruption allows a partition to be migrated to another physical machine. Each independent application uses an independent partition. 
 
 Each partition is essentially an abstract virtual machine. Eventually, we might even compile these abstract virtual machines (or subsets thereof) into unikernels. But for now it's sufficient that our abstract machines operate within one Wikilon instance or can migrate between Wikilon servers.
+
+More thoughts:
+
+* [state model for AVM](StateModels.md)
+* [network model for AVM](NetworkModel.md)
+
+I've been refining my thoughts and designs over a few weeks, so don't expect full consistency.
 
 ### Machine Layer Resources with Stable Identity for Live Programming
 
