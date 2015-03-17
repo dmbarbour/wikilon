@@ -12,7 +12,7 @@ I do like the idea of modeling a filesystem with a trie. But does every AVM need
 
 Fortunately, within Wikilon, we can leverage VCache with ABC to model very large values and functions. Even a filesystem scale trie containing purely functional objects may be implemented as a plain old ABC value. Similar patterns should not be too difficult to reimplement in other contexts, such as a unikernel with a block device or Amazon S3 external storage. ABC can even support this in an open distributed system, using `{#resourceId}` to name ABC resources, adding a few suffixes like `'k` to indicate the resource constructs a relevant value. (Though, use of names does make GC more difficult.) Ultimately, at the very least, we can leave state structure to the user. 
 
-Let's go with that: **AVM state is a plain old ABC value**.
+Let's go with that: **AVM state is just an ABC value**. 
 
 An important constraint for Awelon project, however, is that the machine state should be cleanly separated from the machine's update function. The separation might be modeled by treating state as both parameter and return value. This separation serves a dual purpose:
 
@@ -24,10 +24,13 @@ Usefully, we should be able to leverage the same [structure editors being develo
 Remaining Questions:
 
 * how to model cryptographic capabilities?
+* should the AVM support substructural types?
 * how to model communication between machines?
 
-For crypto-caps, it won't be a significant problem to simply inject e.g. `[{:hmac$key}]` or `[{:aes$key}]` capabilities into our AVM's initial state, or perhaps a secure-random source that can fork new keys. And maybe a few secure random models if we want them. Injecting cryptographic caps that are purely functional by nature shouldn't be a problem, we only need to be clear regarding which protocols a given AVM platform supports. Usefully, including crypto caps internally supports a clean separation of concerns of internal vs. external identity, i.e. where internal identity is modeled by sealers and unsealers, and external by the network relationships.
+For crypto-caps, it shouldn't be a significant problem to simply inject e.g. `[{:hmac$key}]` or `[{:aes$key}]` capabilities into our AVM's initial state, or perhaps a secure-random source that may fork new keys. And maybe a few secure random models if we want them. Injecting cryptographic caps that are purely functional by nature shouldn't be a problem, we only need to be clear regarding which protocols a given AVM platform supports. Usefully, including crypto caps internally supports a clean separation of concerns of internal vs. external identity, i.e. where internal identity is modeled by sealers and unsealers, and external by the network relationships.
 
-A communication model requires detailed attention. The idea of modeling inputs as 'inboxes' within state is infeasible, so this will be separate from state. I'll address networking in a [separate document](NetworkModel.md). 
+Regarding substructural types within AVM state: I plan to allow them. Developers must provide their own typeful control regarding which fragments of state must be copyable, droppable, and so on. If they want fast parallel queries, they can model this directly in terms of copying state then applying a query function in parallel with returning the original state. Because AVMs are substructural, this gives them a stronger notion of identity - i.e. they generally not be copied, destroyed, forked (though debuggers could easily violate these conditions).
+
+A communication model requires detailed attention. Since I cannot have 'standard' structure for state, state can no longer be used to directly communicate effects (no inboxes, for example). A lot of old ideas - capabilities, effects, revocation, etc. might need to be shifted into the [network layer](NetworkModel.md).
 
 Note: A lot of older content has been deleted, but should be available via github (2015-03-16).
