@@ -9,50 +9,38 @@ Modeling effects ultimately falls to this network layer. Some machines will prov
 
 Wikilon will provide an AVM-facing API in addition to a web-facing API.
 
-## Design Desiderata
+## Design Concerns and Desiderata
 
 Summary List:
 
-1. Simple, purely functional step function. No monad. No power block.
-2. Network easy to understand, predict, and implement. Short-lived state.
-3. Support distributed, local concurrent, and purely functional networks.
-4. Avoid non-essential latency. Handshakes must subject to pipelining.
-5. Suitable for resource adapters. No global coordination or rollbacks.
-6. Simplify reasoning about concurrency, consistency, latency, disruption.
-7. Simplify reasoning about authority, visibility, attenuation, revocation.
-8. Simplify reasoning about distributed code. Opt-in. Clear responsibility.
-9. Easy scalability through replication, decomposition, sharding, CRDTs.
-10. Potential to compile AVM-sets to unikernels, docker objects, OS apps.
-11. Decentralize AVM namespaces via Chord, Tapestry, DHT, NameCoin, etc.
-12. Easy foundation for Reactive Demand Programming signals and vats.
-
-Derived properties:
-
-* AVM cannot obtain synchronous feedback from network (1).
-* Network cannot directly host services, discovery, or resources (2, 7).
-
-Potentially relevant considerations:
-
-* Network disruption, process killed, cap revoked: all very similar.
-* Feedback on network disruption is generally unreliable.
-* May benefit from mobility and locality model, a hosting concept.
-* Encourage conventions: idempotent, causally commutative messaging.
+1. simple, pure, non-monadic AVM behavior definition
+1. schedulers that avoid worst-case non-determinism
+1. scheduling with attention to latency and priority
+1. effective means to deal with disruption and failure
+1. usable security via capabilities and cryptographic sealers
+1. natural visibility, revocability, process control, interrupts
+1. decentralize naming, distributed hash tables, flexible routing
+1. purely functional networks for mockups, mobility, etc.
+1. simple to implement, comprehend, predict, and utilize
+1. effective foundation for integrating imperative resources
+1. effective foundation for reactive demand programming
 
 ## Design Elements
 
 ### Message Based Communications
 
-While messaging has a [great many weaknesses](https://awelonblue.wordpress.com/2012/07/01/why-not-events/), it has the advantages of being easy to implement, understand, and integrate with existing resources. Messaging doesn't inherently require handshakes. And RDP can later be constructed above a message-passing network model. 
+While messaging has [inherent flaws](https://awelonblue.wordpress.com/2012/07/01/why-not-events/), it has the advantages of being easy to implement and integrate with existing resources and physical networks. Messaging doesn't inherently require handshakes. And RDP may readily be constructed above a message-passing network model. 
 
 In the basic form, we might try something like:
 
-        AVM step: (InMessage * state) → (OutMessages * state)
+        AVM step: (Message * State) → (Messages * State)
 
 Other design elements must address the following problems:
 
 * how do we address our messages for sending?
 * how do we secure our communications?
 * how do we route messages within an AVM?
+* what happens when a message causes an error?
 * what happens when message cannot be delivered?
 
 ### Transactional Batching of Messages
@@ -63,25 +51,42 @@ Transactional batching offers a simple sweet spot:
 
 * a batch of messages is the atomic unit of communication
 * messages in a batch are processed sequentially, in order
-* messages from two batches are not interleaved
 * output messages are partitioned into one batch per machine
 * batches are implicitly ordered between two machines
+* messages from any two batches are not interleaved
 
-These batches are *transparent* to our purely functional AVMs. An AVM processes each message separately. Batching becomes relevant only in context of non-deterministic concurrency. *Transactional batching is effectively a constraint on scheduling, to ensure a friendly default experience.*
+These batches are *transparent* to our purely functional AVMs. An AVM processes each message separately. Batching becomes relevant only in context of non-deterministic concurrency. *Transactional batching is a constraint on scheduling to ensure a friendly default behavior.* 
 
-Developers may still need to model queues, buffers, and so on to more precisely control communications. But, relative to systems with an adverserial scheduler, the need for explicit control should be much less frequent, and perhaps oriented more towards reducing synchronization rather than increasing it.
+Besides friendly batching, I may seek other nice default properties from the scheduler: fairness, heuristic timestamps for global ordering, etc.. 
 
-Where feasible, batches are also the atomic unit of *failure.* For example, if any message to an AVM results in a divide-by-zero, we will simply return to the initial state and reject the whole batch. However, not every resource adapters will support local transactions. 
+Developers may still need to model queues, buffers, and so on to more precisely control communications. But, relative to systems with an adversarial scheduler, the need for explicit control should be less frequent, and oriented more towards reducing synchronization rather than increasing it.
+
+## Handling Failure
+
+Messaging is not reliable in a physical system. Best effort delivery can improve reliability, but is still not perfect. Maybe we want to control latencies anyway. Additional failures may occur due to inconsistencies, e.g. divide-by-zero error. 
+
+What happens next?
+
+The simple, easy to implement and understand option is to silently drop undelivered messages. 
+
+One option is to silently drop our messages into the ether. This option is simple, easy to implement, and is perhaps the most realistic model of the network we can implement: we call our network unreliable, and our developers work around this limitation. RDP should handle an unreliable network well enough, e.g. due to its idempotent messages.
+
+it might be invalid - e.g. causing a type error or divide-by-zero or similar. In this case, it isn't always clear whom to blame. Messaging doesn't maintain a good model for responsibility.
+
+
+
+Thought: We might even want to leverage this, e.g. introduce some latency requirements when we're sending a message. 
+
+
 
 ### Substructural Types
 
-I am not going to restrict use of substructural types. State, messages, etc. may be affine, relevant, linear. This is useful to resist accidental violation of protocols or contracts. 
+I want unrestricted use of substructural types, both in messages and AVM state. This is useful to resist accidental violation of protocols or contracts. Duplication or destruction of linear values would only be achieveable through the effects model. Some annotations may support assertions that incoming messages are copyable or droppable.
 
-Of course, developers will be free to explicitly violate substructural types. For example, send a message to an AVM equivalent of /dev/null to drop any value, and another resource to duplicate valeus. (See *Common Capabilities* below.)
 
 ### Capabilities and Addressing
 
-My plan is to leverage [capability-based security](http://en.wikipedia.org/wiki/Capability-based_security) between AVMs. Capabilities have advantages of being very explicit and visible for security reasoning, though other nice security features (such as revocability) generally require special attention.
+I will leverage [capability-based security](http://en.wikipedia.org/wiki/Capability-based_security) between AVMs. Capabilities have advantages of being very explicit and visible for security reasoning, though other nice security features (such as revocability) generally require special attention.
 
 The internal structure of a capability will be opaque to the user.
 
@@ -90,19 +95,18 @@ Each capability will have two parts:
 * a *global* part, uniquely naming an AVM in the global network
 * a *local* part, for secure routing and context within the AVM
 
-An outgoing message will have at least two parts:
+The *context* is the unforgeable element of our capabilities. 
 
-* a *capability* to specify where the value is going
-* the *content* of the message: a plain old ABC value
+An outgoing message will then have at least a capability to indicate its destination, and content to carry information. In addition, we may need some information to properly handle failure conditions and message pipelining.
 
-#### Secure Global Addressing
+#### Global Addressing
 
 The global part of a capability shall simply be the secure hash of an ABC value resource that provides:
 
 * a public cryptographic key in a widely acceptable format
 * an association list having text keys and ad-hoc metadata
 
-I expect RSA and some specific ECC curves would be widely acceptable. I favor ECC and perhaps just choosing one curve, such as Ed448 or M-383 (cf. [safe curves](http://safecurves.cr.yp.to/)).
+I expect RSA and some specific ECC curves would be widely acceptable. I favor ECC and perhaps choosing just one initial curve, such as Ed448 or M-383 (cf. [safe curves](http://safecurves.cr.yp.to/)).
 
 Anyhow, the public key enables the sender to autenticate the receiver, guarding against man-in-the-middle attacks. A little extra protocol can help guard against replay attacks (and provide idempotence).
 
@@ -110,9 +114,9 @@ The ABC resource is then made available through a distributed hashtable, such as
 
 AVMs that want a "common name" might additionally leverage a service such as NameCoin. However, by default, an AVM is effectively anonymous, and there is no dependency on DNS.
 
-*NOTE:* I may forbid the `$` and `?` operators from the toplevel of value resources, to guarantee a first-order computation. 
+*NOTE:* I may forbid the `$` and `?` operators from toplevel of value resources, to guarantee a first-order computation. 
 
-#### Secure Local Routing and Context
+#### Local Routing and Context
 
 A message received by an AVM will have two parts: context and content.
 
@@ -188,7 +192,7 @@ This implicit, heuristic mechanism can address a lot of concerns, such as ensuri
 
 Explicit priorities and interrupts might be more reliable. But it isn't very clear how to address these within the model. 
 
-The best I can think of right now: add a simple priority argument to `Self`. Developers may bind a zero argument if they want priority-free messaging. If we constrain priorities into some fixed range (e.g. -1 to 1), it might be easier to control relative priorities for hierarchical models. 
+The best I can think of right now: add a simple priority argument to `Self`. Developers may bind a zero argument if they want priority-free messaging. If we constrain priorities into some fixed range (e.g. -1 to 1) or give them a physical correspondence (e.g. in terms of latency), it might be easier to control relative priorities for hierarchical models. 
 
 If every capability has a simple priority together with context, we can compute the priority for the whole batch very easily. Interrupts could then be high priority messages with some special effects, such as: we model a suspend operation with a message that seals the AVM state under `{:suspend}` and thus causes all incoming messages to fail.
 
@@ -321,3 +325,57 @@ This after-the-fact decision for read only messaging is convenient from a UI sta
 I like the idea of 'ambient oriented programming' such that a machine might easily find (for example) a local printer. However, I believe that this should be modeled explicitly, using capabilities to provide the AVM a directory or registry of local services. The explicit approach is more flexible, e.g. because we can have different registries based on different attributes (trust, cost, region, etc.) and we can potentially model compositions of registries. The result is that machines only talk to machines. 
 
 So, I'm NOT going to make a special exception from capability security for service discovery.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Reconsidering the Model
+=======================
+
+Despite [inherent flaws](https://awelonblue.wordpress.com/2012/07/01/why-not-events/), message passing between AVMs is a promising option in most respects.
+
+An AVM step function would, more or less, have the form: `(Message * State) → (Messages * State)`. We might divide messages into `(Context * Content)` where context is locally meaningful and capability-secure, i.e. as a basis for internal routing and callbacks. The awful unbounded non-determinism of actors model can be bounded, e.g. with *transactional batching*, ordered batches, and timestamps. Messages are readily applied to cause imperative effects.
+
+Where I get stuck is *failure and disruption* concerns - i.e. what happens when a message is lost, or when it causes a divide-by-zero error at the recipient? I'm also a bit concerned about preserving visibility - i.e. the network seems semantically opaque, and access to it seems a hack.
+
+Of course, if we choose something other than messaging, we will need adapters to external message passing systems and effects. 
+
+## Transfer-Based Communications Model?
+
+Focusing on visibility and accessibility properties:
+
+* data is visible, accessible, meaningful at all times
+* data is never destroyed or duplicated by accident
+
+The first point is rejecting the idea of an opaque, invisible network layer that holds onto data. Instead, data must be hosted within AVM state. Further, it should be accessible and meaningful, using local conventions for type. There is no opaque 'outbox' or 'inbox' unless developers choose explicitly to model one.
+
+Since data is neither destroyed nor duplicated, the default concept is *movement* of data. We transfer data from one AVM's state to another AVM's state. Of course, we might copy the data before moving it. But movement works nicely with substructural types, too. Unfortunately:
+
+* atomic transfer is unreliable in a distributed system
+* atomic transfer does not acknowledge physical latency
+
+If I attempt to transfer data in a non-atomic manner, I'll have all the same problems as messaging, with data being lost in transit. Plus this is more complicated to implement and explain. 
+
+
+
+
