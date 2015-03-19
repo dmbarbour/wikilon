@@ -13,8 +13,8 @@ Wikilon will provide an AVM-facing API in addition to a web-facing API.
 
 Summary List:
 
-1. First order, purely functional step functions. No monad or power block.
-2. Keep it simple. Easy to understand, predict, and implement network.
+1. Simple, purely functional step function. No monad. No power block.
+2. Network easy to understand, predict, and implement. Short-lived state.
 3. Support distributed, local concurrent, and purely functional networks.
 4. Avoid non-essential latency. Handshakes must subject to pipelining.
 5. Suitable for resource adapters. No global coordination or rollbacks.
@@ -54,6 +54,24 @@ Other design elements must address the following problems:
 * how do we secure our communications?
 * how do we route messages within an AVM?
 * what happens when message cannot be delivered?
+
+### Transactional Batching of Messages
+
+When the message is the unit for atomic queries and updates, developers are pressured to awkwardly grow a large vocabulary of messages to represent atomic composite behaviors. Transactions mitigate this problem by allowing clients to compose operations. Unfortunately, transactions in distributed systems have their own problems, such as high latency coordination and complicated implementation.
+
+Transactional batching offers a simple sweet spot: 
+
+* a batch of messages is the atomic unit of communication
+* messages in a batch are processed sequentially, in order
+* messages from two batches are not interleaved
+* output messages are partitioned into one batch per machine
+* batches are implicitly ordered between two machines
+
+These batches are *transparent* to our purely functional AVMs. An AVM processes each message separately. Batching becomes relevant only in context of non-deterministic concurrency. *Transactional batching is effectively a constraint on scheduling, to ensure a friendly default experience.*
+
+Developers may still need to model queues, buffers, and so on to more precisely control communications. But, relative to systems with an adverserial scheduler, the need for explicit control should be much less frequent, and perhaps oriented more towards reducing synchronization rather than increasing it.
+
+Where feasible, batches are also the atomic unit of *failure.* For example, if any message to an AVM results in a divide-by-zero, we will simply return to the initial state and reject the whole batch. However, not every resource adapters will support local transactions. 
 
 ### Substructural Types
 
@@ -110,9 +128,7 @@ Naturally, we need a function to perform this sealing:
 
 Access to Self supports modeling of callback capabilities, which are essential for common communication patterns such as query-response. 
 
-A relevant question is: how does the AVM gain access to Self? 
-
-I'll come back to this question later.
+A relevant question is: how does the AVM gain access to Self? I'll address this question under *AVM Life Cycle*.
 
 #### Concrete Capability Representation
 
@@ -124,16 +140,16 @@ Of course, for effective security in a distributed system, we must use cryptogra
 
         ["encryptedLinearContext"]kf{$fmtLocal}"globalPart"l{$@}
 
-This could work pretty well, and would permit sealing of the inner context to be somewhat more discretionary. But we might be able to improve performance and security with a specialized token:
+That could work pretty well, and would permit sealing of the inner context to be somewhat more discretionary. But we might be able to improve performance and security with a specialized token:
 
         {@globalPart/encryptedLinearContext'kf}
 
 An ABC implementation would then understand this token as creating a sealed value with the relevant structural and substructural properties. Of course, to construct a value with this representation, we'll need support from the Self function. Our cryptographic sealer/unsealer might look like:
 
-        {:@globalPart/aes$key}      sealer
-        {.@globalPart/aes$key}      unsealer
+        {:@globalPart/aes$key}      sealer   (via Self function)
+        {.@globalPart/aes$key}      unsealer (not exposed)
 
-The convention is that cryptographic sealers use `{:format$key}`, so I'm essentially treating `@globalPart` as a special class of formats. In this case, symmetric key cryptography should be okay.
+The convention is that cryptographic sealers use `{:format$key}`, so I'm essentially treating `@globalPart` as a specialized class of formats. In this case, symmetric key cryptography should be okay.
 
 *ASIDE:* Contexts are sealed cryptographically. Networks will not provide any sort of stateful sealing, not even for linear contexts. Developers can always add a layer of indirection if they want to model very large or stateful contexts while keeping capabilities small.
 
@@ -152,7 +168,7 @@ We might represent and distinguish commons capabilities by using a `~` suffix in
 
         {@globalPart/null~}
 
-The network then has discretion regarding which implementation to use.
+The network then has discretion regarding which implementation to use, local or origin.
 
 Common capabilities might also be leveraged for high performance computation. For example, we might use it for high performance matrix multiplication or a secure hash function. However, this role does overlap with ABCD extensions and development of ABC compilers. It's just an idea for short-term performance.
 
@@ -164,117 +180,35 @@ An interesting intermediate between normal AVMs and common capabilities is the [
 
 The unum pattern will NOT be primitive in the AVM network model. Unums are far beyond my quota for implementation complexity. However, it might be useful to model una above normal AVMs. Especially for CRDTs (commutative replicated data types). 
 
-### Transactional Batching of Messages
+### Interrupts and Priority (Tentative)
 
-I want to easily reason about behavior in the presence of concurrency. However, I also want to avoid distributed transactions, time warp protocols, or other mechanisms that require high-latency coordination between machines. A nice middle ground is *local* transactions: 
+If an AVM is running one batch and several others are pending, a scheduler may heuristically decide to abort the running batch in order to apply the others. After the others have run, the scheduler may restart the original batch. If the batch has restarted a few times, we might instead fail the batch permanently.
 
-* the unit of communication becomes a *batch* of messages
-* messages in the batch are processed together, atomically
-* order of messages within each batch is preserved
-* if the batch does not complete, it is rolled back
-* output messages are delayed until the batch finishes
-* output messages are grouped into new batches per recipient
+This implicit, heuristic mechanism can address a lot of concerns, such as ensuring that new user input can be processed, and that slow batches cannot completely choke service.
 
+Explicit priorities and interrupts might be more reliable. But it isn't very clear how to address these within the model. 
 
+The best I can think of right now: add a simple priority argument to `Self`. Developers may bind a zero argument if they want priority-free messaging. If we constrain priorities into some fixed range (e.g. -1 to 1), it might be easier to control relative priorities for hierarchical models. 
 
-(deprecated): The batch of incoming messages is not exposed to the AVM. The AVM receives one message at a time. But the network layer transparently schedules messages such that they are batched, then delays outgoing messages until the batch completes. 
+If every capability has a simple priority together with context, we can compute the priority for the whole batch very easily. Interrupts could then be high priority messages with some special effects, such as: we model a suspend operation with a message that seals the AVM state under `{:suspend}` and thus causes all incoming messages to fail.
 
-Transactional batching supports *snapshot* consistency. Multiple queries on an AVM can be guaranteed to be consistent up to a snapshot. Further, the ordering within the batch greatly simplifies reasoning about composition of behaviors.
+For now, let's see how far the implicit, heuristic mechanisms and a little developer discipline can take us. I think most responsiveness concerns can be addressed by simply favoring iterative methods or dividing large efforts into separate machines (similar to conventional divisions of threads).
 
-#### Interrupts and Priorities
-
-Batches are transactional, atomic. Thus, we can safely model interrupts by aborting a batch, e.g. to prioritize some other batch. We may later retry the interrupted batch. If the interruption happened to be read-only, we might also continue where we left off, which would ensure user-input can be prioritized over background computations.
-
-I imagine that priorities would be modeled as part of each capability, and thus be capability-secure. I'm not sure priorities should be a global feature for all networks, though. I'll need to return to this issue after I better understand how to represent capabilities. Even without priorities, a scheduler in a non-deterministic model may heuristically decide to abort a long-running batch (especially one that isn't making steady progress through the batch) to handle pending input, resist denial-of-service attacks, etc..
-
+### Network Disruption
 
 
 ### Query Response Messaging
-
-The query-response pattern is very common, both to gather information and to obtain results. 
-
-### Network Disruption
 
 
 ### AVM Life Cycle
 
 
+
+### Replication and Scalability
+
+
+
 ### Expirations?
-
-
-================
-
-
-This context becomes the local part of a communications capability. 
-
-
-
-A good question, then, is how an AVM should go about creating capabilities for itself. 
-
-
-
-
-Developers, of course, will need the ability to create new capabilities for the AVM.
-
-Because capabilities are opaque, we'll generally need a constructor for them.
-
-
-
-
-
-
-
-
-
-
-
-
-
-The internal structure of an AVM's state is user-defined. Consequently, it is important that 
-
- is user-defined,m 
-
-Importantly, an AVM must be able to define new 'internal' routes and contexts
-
-
-
-
-
-The local part shall also preserve *substructural type* information associated with the context/routing information. This prevents accidental discard, though developers are free to destroy even 'relevant' objects by sending them off to a "/dev/null" resource.
-
-
-
-
-
-
-
-
-
- will also be cryptographic, using a symmetric encryption that is entirely local to the AVM. 
-
-
-
-
-
-
-My current plan is that the global part shall simply be the secure hash of an ABC value resource, where said resource contains some public key information 
-
- secure hash of an ABC value resource, where the value contains a public cryptographic key and maybe an association list with metadata (such as: date created, ).
-
-
-
- containing a public cryptographic key and some ad-hoc metadata. This text will be available through a distributed hashtable. (Likely, the text itself will be modeled as an ABC resource.)
-
-Basically, the secure hash of a simple text that includes a public key and other data.
-
-  used for communicating with the AVM. Or maybe just the key, directly, if ev
-
-
-) and a *local* part (for secure routing and context). 
-
-) and a *local* part (secure routing and context). 
-
-(naming a toplevel AVM) and a *local* part (secure routing and context, 
 
 
 
@@ -282,15 +216,6 @@ Basically, the secure hash of a simple text that includes a public key and other
 
 
 =============
-
-
-
-
-
-
-
-
-
 
 
 Relevant questions and concerns:
@@ -380,11 +305,6 @@ But, while connections sound neat... how can I implement them in a purely functi
 
 A related concern: if I have monadic operations that are *stateful* at the network layer (e.g. creating connections), but *read-only* at the AVM layer, I'll probably want to ensure that I can compose these operations in parallel. The trick, I guess, will be forking a source of identities for each parallel computation.
 
-### Interrupts and Priorities
-
-Batches are transactional, atomic. Thus, we can safely model interrupts by aborting a batch, e.g. to prioritize some other batch. We may later retry the interrupted batch. If the interruption happened to be read-only, we might also continue where we left off, which would ensure user-input can be prioritized over background computations.
-
-I imagine that priorities would be modeled as part of each capability, and thus be capability-secure. I'm not sure priorities should be a global feature for all networks, though. I'll need to return to this issue after I better understand how to represent capabilities. Even without priorities, a scheduler in a non-deterministic model may heuristically decide to abort a long-running batch (especially one that isn't making steady progress through the batch) to handle pending input, resist denial-of-service attacks, etc..
 
 ### Read-Only Queries and Mirroring
 
