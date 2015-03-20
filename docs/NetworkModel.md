@@ -3,9 +3,11 @@
 
 Wikilon will host a set of abstract virtual machines, which I'm calling AVMs.
 
-Each AVM has a user-defined [state](StateModels.md) and a step function typically bound to a [dictionary](BranchingDictionary.md) for live programming. AVMs and their state are *purely functional*. While AVMs lack internal concurrency, they should support reasonable levels for internal parallelism. Hierarchical AVMs should be entirely feasible, i.e. modeling a larger AVM in terms of simulating smaller ones with a purely functional network. However, the main idea with AVMs is that they should support scalable, concurrent, distributed implementations, and maybe even compile down to Docker apps or Unikernels!
+Each AVM has a user-defined [state](StateModels.md) and a step function typically bound to a [dictionary](BranchingDictionary.md) for live programming. AVMs and their state are *purely functional*. While AVMs lack internal concurrency, they should support reasonable levels for internal parallelism. Hierarchical AVMs should be entirely feasible, i.e. modeling a larger AVM in terms of simulating smaller ones with a purely functional network. However, the main idea with AVMs is that they should support scalable, concurrent, distributed implementations.
 
-Modeling effects ultimately falls to this network layer. Some machines will provide adapters to outside resources (Redis, S3, AMQP, web services, printers, clocks, etc.), and AVMs can access those through the communications layer. In this sense, AVMs are perhaps similar to actors model. But AVMs are more constrained than actors. Significantly, AVMs generally cannot directly create new AVMs (there is no ether), and communications between AVMs will have enough structure to simplify reasoning about whole-system behavior.
+For a while, AVMs will primarily be hosted by Wikilon instances. But, long term, I would like to develop a feature to compile a set of AVMs into a unikernel, system process, Docker app, etc.. 
+
+Modeling effects ultimately falls to the network layer. Some machines will provide adapters to outside resources (Redis, S3, AMQP, web services, printers, clocks, etc.), and AVMs can access those through the communications layer. In this sense, AVMs are perhaps similar to actors model. But AVMs are more constrained than actors. Significantly, AVMs generally cannot directly create new AVMs (there is no ether), and communications between AVMs will have enough structure to simplify reasoning about whole-system behavior.
 
 Wikilon will provide an AVM-facing API in addition to a web-facing API.
 
@@ -21,9 +23,54 @@ Summary List:
 1. natural visibility, revocability, process control, interrupts
 1. decentralize naming, distributed hash tables, flexible routing
 1. purely functional networks for mockups, mobility, etc.
-1. simple to implement, comprehend, predict, and utilize
+1. simple network to implement, predict, and use effectively
 1. effective foundation for integrating imperative resources
 1. effective foundation for reactive demand programming
+
+## Design Overview
+
+The design elements and motivations are described under *Design Elements*. Here's the rough overview:
+
+        type AVM = (State * (Step * Signal)){:AVM}
+        type Step = (InMessage * State) → (OutMessages * State)
+        type Signal = Context (with Content = SignalContent)
+        ∃ type Context (depends on AVM)
+        ∃ type State (depends on AVM)
+
+        type SignalContent = (Text * Args) 
+            where type of Args depends on Text
+
+        type InMessage = (Context * Content) 
+            where type of Content depends on Context & AVM
+
+        type List of α = µL.((α*L)+1)
+        type OutMessages = List of OutMessage (reverse order)
+            (head of list is last message sent)
+
+        type OutMessage = ((Capability * Content) * MsgSignal)
+            where Content depends on source of Capability
+
+        type MsgSignal = Context (with Content = MsgSignalContent)
+
+        type MsgSignalContent = (Error + OK) where
+            OK = unit (type 1)
+            Error = (ReturnToSender + FateUnknown)
+            ReturnToSender = (Cause * (Capability * Content))
+            FateUnknown = ??? some investigative caps
+            Cause = StatusCode (small integer)
+
+        type Capability = (GlobalAddress * (LocalCap + CommonsCap)){$@}
+        type GlobalAddress = Text (secure hash of Identity, in ABC Base16)
+        type Identity = ABC resource containing public key and ad-hoc params
+        type CommonsCap = (Text * Args) where type of Args depends on Text
+        type LocalCap contains a Context. Exact type depends on host.
+
+        type Self = Context → Capability
+        type SelfSignal = ("self" * Self)
+        type InitSignal = ("init" * 1)
+        ... lots of ad-hoc signals
+
+Not every AVM exists at the 'toplevel' with a global address. A whole network of AVMs could ultimately be modeled as a pure function, and we can also have concurrent containers and distributed models.
 
 ## Design Elements
 
@@ -55,7 +102,7 @@ Transactional batching offers a simple sweet spot:
 * batches are implicitly ordered between two machines
 * messages from any two batches are not interleaved
 
-These batches are *transparent* to our purely functional AVMs. An AVM processes each message separately. Batching becomes relevant only in context of non-deterministic concurrency. *Transactional batching is a constraint on scheduling to ensure a friendly default behavior.* 
+These batches may be *transparent* to our purely functional AVMs. An AVM processes each message separately. Batching becomes relevant only in context of non-deterministic concurrency. *Transactional batching is a constraint on scheduling to ensure a friendly default behavior.* 
 
 Besides friendly batching, I may seek other nice default properties from the scheduler: fairness, heuristic timestamps for global ordering, etc.. 
 
@@ -63,26 +110,22 @@ Developers may still need to model queues, buffers, and so on to more precisely 
 
 ## Handling Failure
 
-Messaging is not reliable in a physical system. Best effort delivery can improve reliability, but is still not perfect. Maybe we want to control latencies anyway. Additional failures may occur due to inconsistencies, e.g. divide-by-zero error. 
+A physical network is unreliable. If we send a message then, even with acknowledgements, we cannot be absolutely certain it has arrived and that the other party knows that we know it has arrived. After a message arrives, it might be rejected for other reasons, such as causing divide-by-zero error.
 
-What happens next?
+What should happen next?
 
-The simple, easy to implement and understand option is to silently drop undelivered messages. 
+* expand the failure
+* provide feedback
 
-One option is to silently drop our messages into the ether. This option is simple, easy to implement, and is perhaps the most realistic model of the network we can implement: we call our network unreliable, and our developers work around this limitation. RDP should handle an unreliable network well enough, e.g. due to its idempotent messages.
+Partial failure is difficult to handle. We can avoid this by similar means as transactional batching. Expand the failure by modeling a complete disconnection. Both current and pending batch is fully aborted.
 
-it might be invalid - e.g. causing a type error or divide-by-zero or similar. In this case, it isn't always clear whom to blame. Messaging doesn't maintain a good model for responsibility.
+Providing a little feedback allows the sender to be responsive to changes in network conditions. This requires a field per outgoing message, such that we may call back using that field to provide context. Also, to guard any substructural properties, we will return the message to sender when we know it was not delivered.
 
-
-
-Thought: We might even want to leverage this, e.g. introduce some latency requirements when we're sending a message. 
-
-
+In some cases, we might never learn the true fate of a message. But, even in these cases, we can at least report a fate-unknown status. This way, we know what we don't know. We may also offer some investigative capabilities, i.e. so we may obtain feedback in case the fate is later discovered.
 
 ### Substructural Types
 
-I want unrestricted use of substructural types, both in messages and AVM state. This is useful to resist accidental violation of protocols or contracts. Duplication or destruction of linear values would only be achieveable through the effects model. Some annotations may support assertions that incoming messages are copyable or droppable.
-
+I want unrestricted use of substructural types, both in messages and AVM state. This is useful to resist accidental violation of protocols or contracts. Duplication or destruction of linear values would still be achievable through an effects model. Some annotations may support assertions that incoming messages are copyable or droppable.
 
 ### Capabilities and Addressing
 
@@ -95,9 +138,7 @@ Each capability will have two parts:
 * a *global* part, uniquely naming an AVM in the global network
 * a *local* part, for secure routing and context within the AVM
 
-The *context* is the unforgeable element of our capabilities. 
-
-An outgoing message will then have at least a capability to indicate its destination, and content to carry information. In addition, we may need some information to properly handle failure conditions and message pipelining.
+The local part becomes the only unforgeable element of our capabilities. The global part doesn't need to be secure against observation or tampering, and indeed *must* be accessible to any network implementation. However, our global name should provide another form of security, guarding against man-in-the-middle attacks.
 
 #### Global Addressing
 
@@ -114,7 +155,7 @@ The ABC resource is then made available through a distributed hashtable, such as
 
 AVMs that want a "common name" might additionally leverage a service such as NameCoin. However, by default, an AVM is effectively anonymous, and there is no dependency on DNS.
 
-*NOTE:* I may forbid the `$` and `?` operators from toplevel of value resources, to guarantee a first-order computation. 
+*Aside:* Should I forbid the `$` and `?` operators for the toplevel of any 'values' stream? Limiting to first-order computations isn't a problem.
 
 #### Local Routing and Context
 
@@ -130,252 +171,92 @@ Naturally, we need a function to perform this sealing:
 
         type Self = Context → Capability
 
-Access to Self supports modeling of callback capabilities, which are essential for common communication patterns such as query-response. 
+An AVM must acquire access to a `Self` function at some point, otherwise it cannot model query-response patterns and callbacks and cannot secure its own state. A `Self` function is provided as part of the *AVM Life Cycle*.
 
-A relevant question is: how does the AVM gain access to Self? I'll address this question under *AVM Life Cycle*.
+*Aside:* If we model a hierarchical network, a local context may additionally include heuristic network-layer attributes: priority, idempotence, safety in the HTTP sense, etc.. No new features are needed.
 
-#### Concrete Capability Representation
+#### Commons Capabilities 
 
-A capability is modeled as a sealed value. A purely functional model of capabilities with discretionary sealers might look like:
+Normal capabilities are opaque and specialized to a machine AVM. This default is good when we have objects with unique identifiers. However, consider: 
 
-        (GlobalPart * LocalPart){:net}
-
-Of course, for effective security in a distributed system, we must use cryptographic sealers. If we desired, we could explicitly represent both stages. Example linear capability:
-
-        ["encryptedLinearContext"]kf{$fmtLocal}"globalPart"l{$@}
-
-That could work pretty well, and would permit sealing of the inner context to be somewhat more discretionary. But we might be able to improve performance and security with a specialized token:
-
-        {@globalPart/encryptedLinearContext'kf}
-
-An ABC implementation would then understand this token as creating a sealed value with the relevant structural and substructural properties. Of course, to construct a value with this representation, we'll need support from the Self function. Our cryptographic sealer/unsealer might look like:
-
-        {:@globalPart/aes$key}      sealer   (via Self function)
-        {.@globalPart/aes$key}      unsealer (not exposed)
-
-The convention is that cryptographic sealers use `{:format$key}`, so I'm essentially treating `@globalPart` as a specialized class of formats. In this case, symmetric key cryptography should be okay.
-
-*ASIDE:* Contexts are sealed cryptographically. Networks will not provide any sort of stateful sealing, not even for linear contexts. Developers can always add a layer of indirection if they want to model very large or stateful contexts while keeping capabilities small.
-
-### Common Capabilities (Tentative)
-
-By default, capabilities are highly specialized to one machine AVM. This works pretty well when our objects have unique identities. However, consider: 
-
-* secure random numbers
+* access random numbers
 * access estimated UTC Time
-* /dev/null effect to drop linear values
-* reflection on a value's structure
+* /dev/null to trash data
 
-If you're just asking for the time or some random numbers, you shouldn't need to send a message all the way across the network. The idea here is that some capabilities are 'common' and it wouldn't be a problem to substitute the local implementation. Of course, we should still support calling back to origin in case a local implementation isn't available. 
+If I'm just asking for random numbers, I might not care whom I'm asking. It might not even matter whether the answer is truly random. Similar with asking for time, or sending messages to a bit bucket. In these cases, and many others, sending a message across the network seems wasteful. A local implementation should work just as well.
 
-We might represent and distinguish commons capabilities by using a `~` suffix instead of the substructural suffix:
+That said, this is a performance feature. Commons caps will be discretionary.
 
-        {@globalPart/null~}
+Commons caps may be especially useful for high performance computing. E.g. we could embed OpenCL code in a commons cap, secured by HMAC or similar, for use in a specific domain. When developers need performance *right now*, hacking in a commons cap will certainly be easier than waiting on improvements in Awelon Bytecode compilers or ABCD extensions.
 
-The network then has discretion regarding which implementation to use, local or origin.
+These commons capabilities can also provide a foundation for message pipelining, alternatives and multi-homing, mobile code, the [unum pattern](http://wiki.erights.org/wiki/Unum) and CRDTs, etc.. They are discretionary, flexible, securable. 
 
-Common capabilities might also be leveraged for high performance computation. For example, we might use it for high performance matrix multiplication or a secure hash function. However, this role does overlap with ABCD extensions and development of ABC compilers. It's just an idea for short-term performance.
+Commons capabilities can make Awelon systems network extensible and efficient without hindering unsophisticated mplementations.
 
-Of course, we will need some global agreement regarding which common capabilities should be supported. As a general rule, common capabilities should not require any state (besides an optional cache)... and should be easy to implement securely, safely, and consistently. 
+#### Capability Representation
 
-#### Regarding the Unum Pattern
+Basically, this:
 
-An interesting intermediate between normal AVMs and common capabilities is the [Unum pattern](http://wiki.erights.org/wiki/Unum), where a stateful machine has a distributed implementation.
+        (GlobalAddress * (LocalContext + CommonsCap)){$@}
 
-The unum pattern will NOT be primitive in the AVM network model. Unums are far beyond my quota for implementation complexity. However, it might be useful to model una above normal AVMs. Especially for CRDTs (commutative replicated data types). 
+        type GlobalAddress = Text (secure hash of DHT resource)
+        type LocalContext = ADT, often cryptographically sealed
+        type CommonsCap = (Text * Args); Args depends on Text
 
-### Interrupts and Priority (Tentative)
+        ["encryptedLinearContext"]kf{$aes}V"globalAddress"l{$@}
+        "/dev/null"#lVVRWLC"globalAddress"l{$@}
 
-If an AVM is running one batch and several others are pending, a scheduler may heuristically decide to abort the running batch in order to apply the others. After the others have run, the scheduler may restart the original batch. If the batch has restarted a few times, we might instead fail the batch permanently.
+For effective security in a distributed system, we must cryptographically secure the local context. But any convention is acceptable. For commons capabilities, the text provides a quick discriminator for the local machine or network.
 
-This implicit, heuristic mechanism can address a lot of concerns, such as ensuring that new user input can be processed, and that slow batches cannot completely choke service.
+In this case, the `{$@}` value sealing format is simply to prevent normal dictionary code from trying to branch on address or forge commons capabilities. 
 
-Explicit priorities and interrupts might be more reliable. But it isn't very clear how to address these within the model. 
+As per usual, secure hashes, cryptographic text, and other binary content will be represented using ABC's Base16 encoding (alphabet `bdfghjkmnpqstxyz`).
 
-The best I can think of right now: add a simple priority argument to `Self`. Developers may bind a zero argument if they want priority-free messaging. If we constrain priorities into some fixed range (e.g. -1 to 1) or give them a physical correspondence (e.g. in terms of latency), it might be easier to control relative priorities for hierarchical models. 
+### Parallelization, Replication, and Scalability
 
-If every capability has a simple priority together with context, we can compute the priority for the whole batch very easily. Interrupts could then be high priority messages with some special effects, such as: we model a suspend operation with a message that seals the AVM state under `{:suspend}` and thus causes all incoming messages to fail.
+When an AVM is mostly used for read-only operations, we can parallelize by forking the state for each message (or batch thereof). If the final state is the same as the initial state, our operation was read-only and we can continue. 
 
-For now, let's see how far the implicit, heuristic mechanisms and a little developer discipline can take us. I think most responsiveness concerns can be addressed by simply favoring iterative methods or dividing large efforts into separate machines (similar to conventional divisions of threads).
+If the batch modifies state, we *might* be forced to do a little rework. But there is a race condition: if our operation is the first to modify state, we may commit our modified state. When read-write operations are infrequent or externally serialized (e.g. if write updates only come from one place), we'll almost never need to do any rework for local parallelism.
 
-### Network Disruption
+Conveniently, parallelization of AVMs can be used effectively with only a few statistics and heuristics, and may adapt to changing loads. Additionally, we can have a lot of paralleization *within* AVMs.
 
+We may also replicate AVMs with read-mostly workloads. A replica will need to push occasional read-write batches back to master, and hold off further messages from the same origin until synchronization. However, it can be more or less transparent.
 
-### Query Response Messaging
+Using these techniques, AVMs are highly scalable at least for read-mostly work. To scale write-heavy work, sharding may be necessary (e.g. modeling DHTs).
 
+### Interrupts, Deadlines, and Priorities
 
-### AVM Life Cycle
+If an AVM is taking too long to process a message, and other messages are pending, we are free to try running the others first. If the others cause a change in state, we might need to restart the first batch with the new initial state.
 
+This is a heuristic basis for interrupts. 
 
+We could be more precise if we track information about priorities or deadlines. This sort of information could be added to the local context for a capability, e.g. for a hierarchical network layer with its own local context.
 
-### Replication and Scalability
+Naturally, if a batch takes much too long to complete even after a few tries, we might reject that as a timeout failure. Ultimately, developers might need to address timeout failures by altering algorithms to use iterative methods over multiple time steps. Timeouts might also be modeled precisely in an extended context for a hierarchical network.
 
+### AVM Signals and Life Cycle
 
+An AVM needs:
 
-### Expirations?
+* a state
+* a step function
+* a world to manipulate
+* a self to perceive
+* a signal to get started
 
+In context of Wikilon, the step function will usually be bound to a dictionary. The state must be provided when first creating the AVM, though it might be viewed and manipulated explicitly through a structure editor. The question is where should the other three elements come from?
 
+My current plan is to model an AVM's basic structure as a triple:
 
+        (State * (Step * Signal)){:AVM}
 
+Here, Signal is simply a Context value, same value AVMs use for all incoming messages. Signal message contents will have form `(Text * Args)` where Args depends on Text and Text is an ad-hoc extensible set of signal names. 
 
+As a convention: unrecognized signals, or signals the AVM cannot obey, should generally assert in error. However, a simple prefix like `~` might be used to indicate 'weak' signals that should be ignored if unrecognized.
 
-=============
+Signals are then used to provide self, to provide a world or environment, and to get started. Later, signals might also be used to support graceful sleep, shutdown, mobility, indicate low-power mode, and so on. All signals are related to our hosting environment.
 
+Interestingly, it is possible to stage some signals to an AVM, up until it really starts interacting in with the environment in an open loop. Also, because signals are ultimately simple messages, developers are able to transparently support remote signals. 
 
-Relevant questions and concerns:
-
-* How do we reason about concurrency?
- * Transactional batches of messages?
- * Priority and interrupts?
- * Ordering and serialization properties?
-* How do we reason about disruption?
- * Reify connections or relationships? 
-* How do we reason about latency?
- * Asynchronous communication by default?
- * No immediate 'response' to a message?
- * Explicitly model latency of connections?
-* How do we achieve high scalability?
- * Replication and parallelism for queries?
- * Conventions for long-lived subscriptions?
- * Shift computation into connection state?
- * What about congestion and latency?
-* How shall we identify machines on the network?
- * Can we transparently model hierarchy?
- * Can these identities be capability-secure?
-* How do we support functional implementation?
- * Monadic effects? Or return list of events?
-* How do we address security concerns?
- * Fine-grained grant of authority?
- * Debuggable visibility of authority?
- * Attenuation of authority?
- * Revocability of authority?
- * Malformed or malign messages?
- * Process control?
- * Denial of service attacks?
-
-I'm [not fond] of message passing models. However, they are easy to implement and integrate with existing systems. Long term, I'd like to move towards RDP-based communication and computation. I'd like to arrange for network communications and conventions to be 80% of the way there.
-
-The types currently look like:
-
-        State of AVM: any ABC value, user defined per AVM
-        Step Function: (InputMessage * State) → (List of Message * State)  (unlikely)
-        InputMessage: either just an ABC value, or (Capability * Content) ??
-        Message: (Capability * Content) (or something with connections)
-        Content: any ABC value, user defined, specific to context
-        Capability: ??? (opaque, unforgeable, breakable, substructural)
-        Network: ??? (implicit, substructural, stateful)
-
-These types are in flux and aren't the full picture. Points:
-
-* avoids `{token}` driven effects as unfit for purely functional simulation
-* avoids monadic effects as awkward to express in straight line AO or ABC
- * but, sadly, might not adjust well to working with connections
- * might instead operate in a Network monad (AVM's version of IO)
- * in this case, message list is also replaced by output effect
-* easily grok that no new input arrives during processing of existing message
-* capability secure communication; easy to reason about and control
-* step function can be modified by live programming independently of state
-* state may be browsed and directly manipulated via debugger
-
-More questions:
-
-* Should messages have response option built into the structure? 
-* How do we recognize disruption or failed communications?
-* Should capabilities be 'flat' or 'hierarchical'?
-* How do we manipulate hierarchical capabilities in messages?
-* How do we revoke or break a capability?
-* How do we usefully associate a query with a callback?
-
-## Design Concepts
-
-### Transactional Batches of Messages
-
-### Connections (rejected)
-
-A notion of 'connections' at the network layer could be very convenient:
-
-* ordering between batches
-* precise control over batching
-* model network disruption
-* model revocation of authority
-* model stateful relationships
-* network-layer computation
-
-Connections would provide ordering for a stream of multiple batches. Communications on different connections might be result in independent batches. We might supply support variant of 'commit' or 'flush' operation per connection to further break up batches. Connections could be stateful, i.e. such that a connection is irrevocably 'broken' when we're done with it (either due to authority or a bad network).
-
-Connections with rich logic (such as transforming values or containing some internal state) could be an effective basis for parallelizing computations 'in between' the AVMs. On average, the number of links will be larger than the number of nodes, so this is an opportunity for scalability.
-
-But, while connections sound neat... how can I implement them in a purely functional manner? One option, perhaps, is to switch to *monadic* operations for effects on our network. I'm not especially keen on this because it's a bad fit for straightline AO. But, sadly, if this is the only thing I can imagine, then it's certainly what I'll need to do.
-
-A related concern: if I have monadic operations that are *stateful* at the network layer (e.g. creating connections), but *read-only* at the AVM layer, I'll probably want to ensure that I can compose these operations in parallel. The trick, I guess, will be forking a source of identities for each parallel computation.
-
-
-### Read-Only Queries and Mirroring
-
-Batches of read-only messages can be processed in parallel with one read-write batch. 
-
-A batch is read-only when the AVM finishes in the same state as it started. It would not be difficult to use a few heuristics or statistics to estimate probability that a batch is read-only (e.g. based on history, origin, message count), and later decide whether it is worth attempting to process a batch in parallel. If it turns out the batch was not read-only, we can fall back to sequential mechanisms.
-
-This technique can also be used in a replication scenario. A replica of an AVM may directly process read-only batches. A writer batch, however, must be delivered to the 'master' to provide global serialization. The master may then synchronize replicas by sending some update messages.
-
-This after-the-fact decision for read only messaging is convenient from a UI standpoint, though it probably hurts performance. Fortunately, developers could mitigate the performance hit by arranging such that some AVMs are read-only (or nearly so) while writes are indirectly offloaded to other AVMs, e.g. by having one AVM for the blog content, and another to count the reads per page.
-
-### Explicit Models for Locality, Mobility, Ambient Authority
-
-I like the idea of 'ambient oriented programming' such that a machine might easily find (for example) a local printer. However, I believe that this should be modeled explicitly, using capabilities to provide the AVM a directory or registry of local services. The explicit approach is more flexible, e.g. because we can have different registries based on different attributes (trust, cost, region, etc.) and we can potentially model compositions of registries. The result is that machines only talk to machines. 
-
-So, I'm NOT going to make a special exception from capability security for service discovery.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Reconsidering the Model
-=======================
-
-Despite [inherent flaws](https://awelonblue.wordpress.com/2012/07/01/why-not-events/), message passing between AVMs is a promising option in most respects.
-
-An AVM step function would, more or less, have the form: `(Message * State) → (Messages * State)`. We might divide messages into `(Context * Content)` where context is locally meaningful and capability-secure, i.e. as a basis for internal routing and callbacks. The awful unbounded non-determinism of actors model can be bounded, e.g. with *transactional batching*, ordered batches, and timestamps. Messages are readily applied to cause imperative effects.
-
-Where I get stuck is *failure and disruption* concerns - i.e. what happens when a message is lost, or when it causes a divide-by-zero error at the recipient? I'm also a bit concerned about preserving visibility - i.e. the network seems semantically opaque, and access to it seems a hack.
-
-Of course, if we choose something other than messaging, we will need adapters to external message passing systems and effects. 
-
-## Transfer-Based Communications Model?
-
-Focusing on visibility and accessibility properties:
-
-* data is visible, accessible, meaningful at all times
-* data is never destroyed or duplicated by accident
-
-The first point is rejecting the idea of an opaque, invisible network layer that holds onto data. Instead, data must be hosted within AVM state. Further, it should be accessible and meaningful, using local conventions for type. There is no opaque 'outbox' or 'inbox' unless developers choose explicitly to model one.
-
-Since data is neither destroyed nor duplicated, the default concept is *movement* of data. We transfer data from one AVM's state to another AVM's state. Of course, we might copy the data before moving it. But movement works nicely with substructural types, too. Unfortunately:
-
-* atomic transfer is unreliable in a distributed system
-* atomic transfer does not acknowledge physical latency
-
-If I attempt to transfer data in a non-atomic manner, I'll have all the same problems as messaging, with data being lost in transit. Plus this is more complicated to implement and explain. 
-
-
-
+There is no primitive to 'spawn' a new AVM. Some environments may provide a spawn capability through the environment. However, even without spawn, it is easy to model one AVM within another.
 
