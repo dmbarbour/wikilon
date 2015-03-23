@@ -85,6 +85,15 @@ Library
 
   Exposed-Modules:
 
+    ABC.Basic
+    ABC.Base16
+    ABC.Text
+
+    Wikilon.Text
+    Wikilon.ABC
+    Wikilon.RunABC
+
+
     Wikilon
 
     Wikilon.Word
@@ -92,17 +101,11 @@ Library
     Wikilon.Branch
 
 
-    Wikilon.ABC
-    Wikilon.ABC.Pure
-    Wikilon.RunABC
-
-    Wikilon.Base16
     Wikilon.Time
     Wikilon.SecureHash
     Wikilon.Secret
 
     Wikilon.Char
-    Wikilon.Text
     Wikilon.ParseUtils
 
   Other-Modules:

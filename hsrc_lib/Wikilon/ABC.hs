@@ -53,9 +53,9 @@ import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.Word
 
-import Wikilon.ABC.Pure (Token, PrimOp(..), abcCharToOp
-                        ,abcOpToChar, abcOpTable, abcDivMod)
-import qualified Wikilon.ABC.Pure as Pure
+import ABC.Basic (Token, PrimOp(..), abcCharToOp
+                 ,abcOpToChar, abcOpTable, abcDivMod)
+import qualified ABC.Basic as Pure
 import Database.VCache
 
 --  * develop dictionary of built-in operators to accelerate performance

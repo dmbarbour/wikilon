@@ -26,7 +26,7 @@ import Data.Char
 import Database.VCache
 import Wikilon.Secret
 import Wikilon.SecureHash
-import qualified Wikilon.Base16 as B16
+import qualified ABC.Base16 as B16
 --import System.IO (FilePath)
 
 -- | Currently, Wikilon doesn't take many arguments. 

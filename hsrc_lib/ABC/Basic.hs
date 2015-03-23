@@ -1,7 +1,7 @@
 {-# LANGUAGE ViewPatterns #-}
 
 -- | A pure model of Awelon Bytecode: no accelerators or extensions.
-module Wikilon.ABC.Pure
+module ABC.Basic
     ( ABC(..)
     , Token
     , Op(..)
@@ -26,7 +26,7 @@ import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.String (IsString(..))
 
-import Wikilon.Text
+import ABC.Text
 
 newtype ABC = ABC { abcOps :: [Op] }
     deriving (Eq, Ord)
@@ -176,6 +176,7 @@ _encodeLiteral txt =
 
 _encodeLine :: Text -> BB.Builder
 _encodeLine l = BB.char8 '\n' <> BB.char8 ' ' <> BB.lazyByteString l
+
 
 -- | Decode ABC from Text. 
 --
