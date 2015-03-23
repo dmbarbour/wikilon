@@ -260,3 +260,49 @@ Interestingly, it is possible to stage some signals to an AVM, up until it reall
 
 There is no primitive to 'spawn' a new AVM. Some environments may provide a spawn capability through the environment. However, even without spawn, it is easy to model one AVM within another.
 
+## Communication with Self
+
+An AVM can send messages to itself. But it might be wise to limit this, e.g. by treating all self messages as part of the same batch and thus refusing to progress while self messages are processed.
+
+## AVM Hosts or Containers
+
+In addition to the purely functional AVMs, I think it would be wise to explicitly model AVM hosts and containers:
+
+* **AVM host** anonymous, supports multiple AVM containers. Potentially supports migrations of containers, and histories of them. Provides relationships to the distributed hashtables, and perhaps state for distributed hashtables. Might provide commons capabilities, adapter effects for basic network layer, and generic multi-protocol network layer integrations. AVM hosts might also model latency between containers, and full-container process control. 
+
+* **AVM container** supports a single address containing zero or more AVMs, where contained AVMs are implemented concurrently. The container provides the environment model, support for priorities and deadlines, etc.. Provides extra state, such as the secure hash keys. 
+
+So, minimal implementation is a host with a container with an AVM. However, we can have a host with many containers each with many AVMs, providing a high degree of concurrency and efficient hierarchy.
+
+For communication within a host, even between containers, we should be able to avoid encryption almost entirely. This gives us efficient IPC.
+
+Security thoughts: separate keys for context vs. container ID should provide some very strong protection even if a technology breaks public keys. Access to the man-in-the-middle attack can be resisted further at the DHT layer, by rejecting all instances when two locations for the same secure hash are valid.
+
+## Second Class Sealers
+
+So far I provide access to sealer resources just for the self function. Can other value sealing models be implemented in terms of this, without state?
+
+To seal a value, send it to an AVM 'sealer' context, and the response is a capability whose context contains the sealed value. To unseal it, then, you must then send the capability to the unsealer context.
+
+        AVM receives (sealer, ("xyzzy", reply))
+        let SV = self (sealed "xyzzy")
+        AVM sends (reply, SV)
+        AVM receives (unsealer, (SV, reply))
+        AVM sends (SV, ("hidden password", reply))
+        AVM receives (sealed "xyzzy", ("hidden password", reply))
+        AVM sends (reply, "xyzzy")
+
+It seems I'll need a hidden value with high entropy in the unsealer, otherwise anyone could send a value directly to the sealed value in order to have the network layer open the context. I would also need to compare this hidden password to the origin in constant time. 
+
+I could maybe use a high-entropy discretionary sealer, such as `{:hidden password}`. But then I'd need to ensure constant time comparisons even for discretionary unsealers. ... Maybe this would be a good idea anyway.)
+
+This isn't very efficient, but it is doable.
+
+## Batch Message Model
+
+Messages are batched for communication between containers. They're further serialized for communication between hosts. What information should a batch possess? Maybe:
+
+* a list of messages
+* a time stamp (plus logical latency)
+* connections layer acks, naks, origin, etc..
+
