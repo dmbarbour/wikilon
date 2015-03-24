@@ -1,15 +1,20 @@
-{-# LANGUAGE ViewPatterns, OverloadedStrings, DeriveDataTypeable #-}
+{-# LANGUAGE BangPatterns, ViewPatterns, OverloadedStrings, DeriveDataTypeable #-}
 
 -- | Wikilon uses Awelon Bytecode (ABC) to model user-defined behavior.
 -- ABC has many nice properties for security, distribution, streaming,
--- simplicity, parallelism, and dynamic linking. See Wikilon.ABC.Pure
--- or <https://github.com/dmbarbour/awelon/blob/master/AboutABC.md>.
+-- simplicity, parallelism, and dynamic linking. 
 --
--- Unfortunately, ABC is based on a purely functional model that is far 
--- removed from modern CPUs and memory architectures. Direct interpretation
--- of ABC is not performance competitive. The intention, long term, is
--- that ABC should be compiled, using {#resourceId} tokens for separate
--- compilation and dynamic linking.
+-- See <https://github.com/dmbarbour/awelon/blob/master/AboutABC.md>.
+--
+-- For performance, ABC supports {#resourceId} tokens for separate
+-- compilation and dynamic linking, and ABC is extensible to ABCD 
+-- (ABC Deflated) which includes a dictionary of common functions as
+-- operators. ABC is intended for mix of just in time and ahead of 
+-- time compilation.
+--
+-- Wikilon doesn't provide any just-in-time compilation, mostly because
+-- GHC Haskell doesn't make JIT easy. Plugins might eventually be used
+-- for this role. 
 --
 -- But, in the short term, we can mitigate interpreter performance by
 -- pre-processing the bytecode:
@@ -21,42 +26,111 @@
 --  * preserve base-16 compression in texts and tokens
 --  * GZip compression for larger ABC texts.
 --
--- Having tighter processing over the bytecode is probably useful for
--- performance. But the real win will be precomputing values, linking
--- resources, and a dictionary that covers common collections and loops.
--- Accelerating specific built-ins can become performance competitive
--- even with compiled code, though it's (unfortunately) rather awkward.
---
--- The slices and compression shouldn't be too difficult. The real
--- challenge here is managing links and developing a good dictionary
--- for built-in operators. 
---
--- Wikilon will probably never graduate to compiled code internally,
--- e.g. no plugins or dynamic linking. Instead, Wikilon will shift to
--- role where it deploys processes or unikernels running abstract VMs.
--- This approach is better for security and scalability, and avoids
--- Haskell as a performance barrier.
+-- Unlike ABCD, the internal Wikilon dictionary doesn't wait on any
+-- standards committee. Unlike {#resourceId} tokens, VCache refs are
+-- cheap and support reference counting garbage collection.
 --
 module Wikilon.ABC
     ( ABC(..)
-    , Op(..)
-    , Rsc
-    , Value(..), TyF
-    , PrimOp(..), abcCharToOp, abcOpToChar, abcOpTable
-    , ExtOp(..), extOpTable, extOpToChar, extOpToDef, extCharToOp 
-    , Token
-    , abcDivMod
+    , Value(..)
+    , Rsc, Token
     ) where
 
 import Data.Typeable
 import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.Word
-
-import ABC.Basic (Token, PrimOp(..), abcCharToOp
-                 ,abcOpToChar, abcOpTable, abcDivMod)
-import qualified ABC.Basic as Pure
+import Data.Bits
+import qualified Data.ByteString.Lazy as LBS
 import Database.VCache
+import Wikilon.Text
+
+
+-- | Wikilon's internal ABC has two parts: the main bytecode, and
+-- any large embedded values. The bytecode is not pure ABC. Rather,
+-- the representations are tuned so texts and blocks can be quickly
+-- sliced, and a stack of precomputed values may be loaded.
+--
+-- Equality for bytecode is inherently structural.
+data ABC = ABC
+    { abc_code :: !LBS.ByteString
+    , abc_data :: ![Value]
+    } deriving (Eq, Typeable)
+    -- any relationship to VCache must be modeled using a Value.
+
+-- | Values have a few basic forms:
+--
+--    (a * b) -- pairs    ~Haskell (a,b)
+--    (a + b) -- sums     ~Haskell (Either a b)
+--    1       -- unit     ~Haskell ()
+--    0       -- void     ~Haskell EmptyDataDecls
+--    N       -- numbers  ~Haskell Rational
+--    [a→b]   -- blocks   ~Haskell functions or arrows
+--    a{:foo} -- sealed   ~Haskell newtype
+--
+-- Blocks may be affine or relevant, and other substructural types
+-- are possible. Sealed values are not always discretionary like the
+-- {:foo}. If cryptographically protected, they use `{$format}`. 
+--
+-- At the moment, Wikilon will focus on the basics forms plus:
+--
+--  * dedicated support for text
+--  * lazily loaded value resources
+--
+-- I would like to eventually have efficient vectors and matrices,
+-- but those are relatively low priority.
+--
+-- Equality on values is structural.
+data Value
+    = Number {-# UNPACK #-} !Rational
+    | Pair Value Value
+    | SumL Value
+    | SumR Value
+    | Unit
+    | Block !ABC {-# UNPACK #-} !Flags
+    | Sealed {-# UNPACK #-} !Token Value
+    | Link {-# UNPACK #-} !Rsc {-# UNPACK #-} !Flags
+    deriving (Eq, Typeable)
+
+type Token = Text
+
+-- | Awelon Bytecode (ABC) supports dynamic loading of bytecode resources
+-- via {#resourceId} tokens in the source code. The resourceId uses a 
+-- secure hash of the bytecode for provider independence, and may also
+-- include a decryption key.
+-- 
+-- To support value resources in particular, ABC supports suffixes. For
+-- example, {#resourceId'} and {#resourceId'kf} to access a plain value
+-- or a linear value respectively. The type information here is coarse, 
+-- just enough for whole-value data plumbing. The value may be lazily
+-- loaded, rather than processed immediately. 
+--
+-- But to avoid the heavy-weight resource IDs, Wikilon uses a VRef for
+-- internal resources (serializing with a control code).
+type Rsc = VRef ABC
+
+-- | Flags for substructural types
+--   bit 0: true if relevant (no drop with %)
+--   bit 1: true if affine   (no copy with ^)
+--   bit 2..7: Reserved. Tentatively: 
+--     bit 2: true if local     (no send as AVM content)
+--     bit 3: true if ephemeral (no store in AVM state) 
+--
+-- Besides the basic substructural types, it might be worth using
+-- annotations to enforce a few new ones.
+type Flags = Word8
+
+readVarNat :: LBS.ByteString -> (Int, LBS.ByteString)
+readVarNat = r 0 where
+    r !n !t = case LBS.uncons t of
+        Nothing -> impossible "bad VarInt in Wikilon.ABC code"
+        Just (byte, t') ->
+            let n' = n `shiftL` 7 .|. (fromIntegral (byte .&. 0x7f)) in
+            let bDone = (0 == (byte .&. 0x80)) in
+            if bDone then (n', t') else r n' t'
+
+impossible :: String -> a
+impossible eMsg = error $ "Wikilon.ABC: " ++ eMsg
 
 --  * develop dictionary of built-in operators to accelerate performance
 --    * each operator has simple expansion to ABC
@@ -80,7 +154,7 @@ import Database.VCache
 --    * combine texts for precomputed values and ABC for best compression
 --
 
-
+{-
 
 -- | Awelon Bytecode is simply a sequence of operations.
 newtype ABC = ABC { abcOps :: [Op] }
@@ -109,20 +183,6 @@ data Op
 --
 --   also, is this the best way to model internal resources? I'm not sure.
 
--- | Awelon Bytecode (ABC) supports dynamic loading of bytecode resources
--- via {#resourceId} tokens in the source code. The resourceId uses a 
--- secure hash of the bytecode for provider independence, and may also
--- include a decryption key.
--- 
--- To support value resources in particular, ABC supports suffixes. For
--- example, {#resourceId'} and {#resourceId'kf} to access a plain value
--- or a linear value respectively. The type information here is coarse, 
--- just enough for whole-value data plumbing. The value may be lazily
--- loaded when we peek within.
---
--- But to avoid the heavy-weight resource IDs, Wikilon uses a VRef for
--- internal resources (serializing with a control code).
-type Rsc = VRef ABC
 
 
 -- | Extended Operations are essentially a dictionary recognized by
@@ -244,20 +304,9 @@ data Value
     | Load {-# UNPACK #-} !Rsc {-# UNPACK #-} !TyF
     deriving (Eq, Typeable)
 
--- | Flags for substructural type
---   bit 0: true for values, false for ABC_Lnk
---   bit 1: true if relevant
---   bit 2: true if affine
---   bit 3..6: reserved, contemplating:
---     bit 3: true if contains impure tokens
---     bit 4: true if local    (no serialization to network)
---     bit 5: true if volatile (no persistent storage)
---     bit 6: true if needs simplification ?
---   bit 7: zero
-type TyF = Word8
 
 
-
+-}
 
 
 

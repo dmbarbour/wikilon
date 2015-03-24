@@ -46,7 +46,6 @@ The design elements and motivations are described under *Design Elements*. Here'
         type List of α = µL.((α*L)+1)
         type OutMessages = List of OutMessage (reverse order)
             (head of list is last message sent)
-
         type OutMessage = ((Capability * Content) * MsgSignal)
             where Content depends on source of Capability
 
@@ -199,7 +198,7 @@ Basically, this:
 
         (GlobalAddress * (LocalContext + CommonsCap)){$@}
 
-        type GlobalAddress = Text (secure hash of DHT resource)
+        type GlobalAddress = Text (secure hash of public key)
         type LocalContext = ADT, often cryptographically sealed
         type CommonsCap = (Text * Args); Args depends on Text
 

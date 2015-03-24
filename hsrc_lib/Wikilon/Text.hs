@@ -30,6 +30,7 @@ import qualified ABC.Base16 as B16
 
 -- | UTF8 text with mixed ABC Base16 binary. 
 newtype Text = Text LBS.ByteString
+    deriving (Eq)
 
 -- | O(1) uncons operation.
 uncons :: Text -> Maybe (Char, Text)

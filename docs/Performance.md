@@ -1,24 +1,16 @@
 
-A strong desire is that Wikilon should have competitive performance. 
+Wikilon Performance
+===================
 
-I don't expect to match C anytime soon. That will take excellent optimizers and compilers and data models, and maybe some accelerators for collections-oriented programming. However, it should be feasible to compete with other scripting languages.
+I don't expect Wikilon to be blazing fast. However, I would like to achieve at least reasonable performance. Here are some viable mechanisms:
 
-I believe the ABC or AO interpreter will be the main bottleneck.
+1. Partial evaluation for embedded values for fast load and quotation.
+1. Structure sharing and lazy loading for large values through VCache.
+1. Optimize internal representation of blocks and text for efficient slicing. 
+1. Optimize a dictionary of specific, common functions similar to ABCD. 
+1. Optimize data representation for collections types with dictionary ops.
+1. Compile some resources into plugins or separate VMs or processes.
 
-I can probably speed up ABC interpreter a lot, e.g. by recognizing common functions - swaps, fixpoints, etc. - and replacing long sequences of bytecodes with dedicated Haskell functions. Even better if I use something like ABCD to make this happen, such that I don't need to spend repeated efforts on recognizers. 
+I plan to focus compilation efforts towards deployment of VM images. This is especially suitable for compiling abstract virtual machines from our [network model](NetworkModel.md), or sets thereof. Security is a motivation here: with VMs, the attack surface is smaller even than the OS kernel. Further, this eliminates external dependencies, other than deployment. 
 
-A related possibility is to recognize common data structures or data types - e.g. matrices or vectors, lists, streams - and common functions on them. The possibility exists to translate these structures into a more compact form, and to optimize functions on them even further.
-
-A third possibility is to support compilation.
-
-Compilation has the advantage of being potentially more generically applicable compared to recognizing common functions (though we can still benefit from that). It allows optimization of code independent of the domain. And possibly some specializations on data type. However, generating code in the target language is an issue, and so is loading the code. 
-
-Unfortunately, Haskell doesn't make it easy to compile and load code into the current process.
-
-There is the 'plugins' library, but that seems buggy and slow when I tried it before, and probably requires very concrete knowledge of the data and monad types to be effective. I might try to use the GHC API directly, or push development of a new plugins package. Another possibility is to target LLVM, and leverage Haskell's libraries to load LLVM code into the runtime (Stephen Diehl has a tutorial on this subject). 
-
-Cross-compilation is an interesting possibility, especially for cases involving GPGPU, FPGA, JavaScript on browsers, etc.. I think it's a worthy area to explore, but is somewhat independent of the Wikilon performance concern. A separate process can't directly interact with the Wikilon memcache or filesystem.
-
-So, long term, I'll probably be trying the plugins approach again. 
-
-Short term, I should perhaps focus on recognizing common subprograms and optimizing them by hand, and perhaps focusing on just a few common data types for efficient collections-oriented programming.
+My earlier efforts at Haskell plugins for performance haven't been successful. In part, my plugin types were too abstract. Concrete types might give GHC more to work with. In part, Haskell's plugins system needs an overhaul. This might be worth pursuing for fast interpreters, but I'd prefer to try simpler methods first.
