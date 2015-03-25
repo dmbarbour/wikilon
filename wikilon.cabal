@@ -75,7 +75,6 @@ Library
     -- , wai-websockets
 
     , utf8-string (>= 1)
-    , zlib
 
     , cryptohash (>= 0.11)
     , byteable
@@ -89,10 +88,8 @@ Library
     ABC.Base16
     ABC.Text
 
-    Wikilon.Text
     Wikilon.ABC
     Wikilon.RunABC
-
 
     Wikilon
 
