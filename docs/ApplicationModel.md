@@ -15,25 +15,17 @@ The encoding of functions in a URL can be pretty straightforward, perhaps using 
 
 ## Dictionary Applications
 
-It seems feasible to leverage a dictionary in a manner similar to iPython Notebook or a spreadsheets. In this case, the user experience becomes an edit-eval-render cycle, using information primarily from the dictionary. However, an application that takes no arguments is not easy to compose, abstract, or reuse. In the interest of composition and reuse, we should also provide some means of introducing inputs and output in a composable manner, and also compose the renders. This suggests a model something like:
+It seems feasible to leverage a dictionary in a manner similar to iPython Notebook or a spreadsheets. In this case, the user experience becomes an edit-eval-render cycle, using information primarily from the dictionary. 
 
-        input   
-          ↓      
-        dictApp 1 → view 1 ↘
-          ↓                 rendered view
-        dictApp 2 → view 2 ↗ 
-          ↓
-        output
+I recently developed a [new approach to syntax](ExtensibleSyntax.md) that is more or less the dual of the Lisp/Scheme homoiconic code. I use bytecode to build a data structure that sits very near the edge of compilation. This structure then supports structured editing, or at least has much potential to do so, and I can even support lense-based views and updates of the structure. 
 
-Rather than providing a default input value such as `unit`, I suggest the non-value `void`. Void is effectively a typed hole where the type must be inferred. We might render an ad-hoc mix of statically computable values and typed holes, offering a convenient sliding scale between abstract interpretation and concrete evaluation. Further, any detected type errors could also be rendered in-context if treated as first-class values (e.g. via sealer). In context of Wikilon, it might be useful to support tuning the input transform function separately from the rendering operation, i.e. such that we can easily view a dictApp in several different input contexts.
+I could have a spreadsheet where every 'cell' is simultaneously a structure-editor and a 'lens' on the original structure, thus enabling multiple ad-hoc views of any module. If the dictionary evolves to include a lot of world data and content, the dictionary itself might provide interesting inputs to view through such lenses. In context of CSCW, I could even support multiple concurrent views and edits of this structure, assuming I'm careful about it. 
 
-A *rendering model* must tell us how to decompose an application into multiple renderable components, then recompose the views. Earlier (now deprecated) efforts on the rendering model focused on using some simple structure for a few built-in rendering models - e.g. one for spreadsheets, another for notebook-style apps. But this approach is rigid, fragile, non-extensible. Alternatively, we might leverage annotations, e.g. embedding `[renderModel]{&render}%` where the render model tells us how to take a value and render it (e.g. a monad for generating diagrams, hyperlinks and progressive disclosure, etc.). This might be coupled with some scoping annotations operating on blocks, or other specialized rendering annotations, and perhaps some access to abstract resources for view state, navigation state, and user preferences. 
+The simplicity and purely functional nature of ABC should make this entire approach a lot easier than iPython notebooks.
 
-Unfortunately, annotations have at least two major difficulties. First, they're noisy, even after refactoring, distracting from the main thrust of the code. Second, they don't clearly indicate where to render, especially a relationship to the original syntax or a structured editor. To address these concerns may require shifting annotations into a [language-specific function](ExtensibleSyntax.md), or even a loosely connected, independent web application that happens to provide UX for specialized user-defined syntax. 
+To render functions, operating on `void` might simulate abstract interpretation, and we might also leverage approaches similar to tangible functional programming. We might also use annotations to indicate intermediate rendering points, perhaps under different named 'views' that can be toggled by the viewer.
 
-Until I'm confident of a more generic approach, I'll favor the relatively ad-hoc approach of treating structured editors and mixed evaluation as a web application, and developing APIs or annotations useful for this. Unfortunately, this may weaken the relationship to evaluation. But there may be some means to address this, too, perhaps mixing some annotations and labels via the parser function to help us gain a precise view of what's happening.
-
-Regardless of how dictionary apps are achieved, I believe they will greatly augment the development experience. 
+But there are many hurdles to clear for this approach, such as making it perform well.
 
 ## Hosted Web Service Applications
 

@@ -102,7 +102,7 @@ Library
     Wikilon.SecureHash
     Wikilon.Secret
 
-    Wikilon.Char
+    -- Wikilon.Char
     Wikilon.ParseUtils
 
   Other-Modules:

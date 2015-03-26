@@ -305,3 +305,7 @@ Messages are batched for communication between containers. They're further seria
 * a time stamp (plus logical latency)
 * connections layer acks, naks, origin, etc..
 
+## Behavioral Programming
+
+Work on [Live Sequence Charts](http://www.wisdom.weizmann.ac.il/mathusers/amarron/bp-sigerl2010.pdf) might offer an interesting basis for coordinating apps. This is easily built upon AVMs and the current network structure.
+
