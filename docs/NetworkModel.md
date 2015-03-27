@@ -297,6 +297,10 @@ I could maybe use a high-entropy discretionary sealer, such as `{:hidden passwor
 
 This isn't very efficient, but it is doable.
 
+## Request Response Patterns
+
+Request-response isn't built into the AVM messaging model. If a reply is desired, a reply capability should be provided with the message. This allows the reply to be asynchronous or forwarded. However, even without a reply, the caller does receive a simple feedback signal after a message is processed.
+
 ## Batch Message Model
 
 Messages are batched for communication between containers. They're further serialized for communication between hosts. What information should a batch possess? Maybe:

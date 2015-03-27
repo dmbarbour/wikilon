@@ -41,7 +41,7 @@ isValidWordChar c =
 
 isValidWord :: Word -> Bool
 isValidWord (Word w) = not (B.null w) && noForbiddenChars where
-    noForbiddenChars = L.null $ L.dropWhile isValidWordChar $ UTF8.toString w
+    noForbiddenChars = L.all isValidWordChar $ UTF8.toString w
 
 -- Show a Word
 instance Show Word where 

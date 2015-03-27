@@ -14,6 +14,7 @@ module ABC.Basic
     , quote, quoteList, quotesList
 
     , opsCancel
+    , tokens
     ) where
 
 import Data.Monoid
@@ -384,6 +385,21 @@ opsCancel ABC_V ABC_C = True
 opsCancel ABC_C ABC_V = True
 opsCancel _ _ = False
 
+
+-- | Obtain a list of tokens from ABC code. Tokens are presented in
+-- the same order and quantity as they exist in the original code.
+tokens :: ABC -> [Token]
+tokens abc = _tokens (abcOps abc) []
+
+-- difference list implementation
+_tokens :: [Op] -> [Token] -> [Token]
+_tokens (op:ops) = _opTok op . _tokens ops 
+_tokens [] = id
+
+_opTok :: Op -> [Token] -> [Token]
+_opTok (ABC_Tok t) = (t:)
+_opTok (ABC_Block abc) = _tokens (abcOps abc)
+_opTok _ = id
 
 
 

@@ -2,69 +2,68 @@
 
 -- | A dictionary contains words and definitions.
 --
--- In Wikilon, a definition is a function of type:
+-- In Wikilon, a definition is a function that returns a value and a
+-- function to compile this value. The result of compilation is also
+-- a function, the meaning of the definition.
 --
---     type Def a b = ∃ v . ∀ e . e → [v→[a→b]] * (v * e)
+--      type Def a b = ∃v.∀e. e→([v→[a→b]]*(v*e))
 -- 
--- This definition is encoded in Awelon Bytecode (ABC), leveraging
--- {%word} tokens to utilize other words in the dictionary. We can
--- understand a definition as having two parts - a structured value
--- and an interpreter function that takes this structure and returns
--- a block. A single bytecode, `$`, will then compile the structure
--- into a block, which may be inlined `vr$c` as the meaning of the
--- word.
+-- Each word has a definition. A definition may access other words by
+-- use of special {%word} tokens, e.g. {%dupd}{%swap}. Each token may
+-- be substituted by the associated definition followed by `$vr$c` to
+-- compile and apply the block. But this process is optimized easily
+-- by pre-compiling each definition then inlining its meaning.
 --
--- Preserving the structured value is useful for structured editing,
--- staged evaluation, and embedded DSLs. The definition structure is
--- not exposed to clients of the word, i.e. implementation hiding. 
--- But a module may voluntarily quote its structure.
+-- The intermediate structured value `v` corresponds to DSL or syntax.
+-- This enables developers to manipulate definitions through structure
+-- editors, potentially at a higher level than words and bytecode. 
 --
--- This dictionary type only enforces two properties: dependencies
--- are acyclic, words are fully defined using valid Awelon Bytecode.
--- Valid bytecode, in this case, also restricts which tokens are 
--- used to just annotations, discretionary sealers, and words. 
+-- This dictionary module enforces two useful invariants:
 --
--- Ideally, the system should further enforce that words evaluate to
--- blocks, that these blocks are type safe, that computations either
--- converge or explicitly fail for any input, and that all tests pass.
--- 
--- Awelon Bytecode is preserved as presented. Zero simplification.
+--   1. dependencies are acyclic
+--   2. every word has a definition
 --
--- This dictionary does provide a reverse lookup index. Given a word,
--- you can easily find all words that depend on it.
+-- Additionally, tokens are limited to word dependencies, annotations, 
+-- and discretionary sealers or unsealers to keep it pure and portable.
+--
+-- Ideally, the system should further enforce that definitions compile,
+-- that words evaluate to blocks, and that words are type-safe and have
+-- no obvious errors (automatic linters, testing, etc.).
 -- 
 module Wikilon.Dict
     ( Dict, dict_space
     , empty, null, size
     , lookup, toList
     , lookupBytes, toListBytes
-    , usedBy
+    , usedBy, uses, words
+    , isValidToken
 
-{-
     , insert
     , delete
-    , rename
-    , renameSuffix
--}
-
-    , module Wikilon.Word
-
+    -- , rename, renameSuffix
+    , Error(..)
     ) where
 
-import Prelude hiding (null, lookup)
+import Prelude hiding (null, lookup, words)
 import Control.Applicative ((<$>),(<*>))
+import Control.Arrow (second)
 import Control.Exception (assert)
+import qualified Control.Monad.State as State
 import Data.Char (ord)
 import Data.Typeable (Typeable)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as Char8
+import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.List as L
+import Data.Set (Set)
+import qualified Data.Set as Set
 
 import Data.VCache.Trie (Trie)
 import qualified Data.VCache.Trie as Trie
 import Database.VCache
 
-import ABC.Basic (ABC)
+import ABC.Basic (ABC, Op(..), Token)
 import qualified ABC.Basic as ABC
 import Wikilon.Word
 
@@ -98,6 +97,31 @@ _fromSz = either (derefc _cm) id
 _wordToKey :: Word -> BS.ByteString
 _wordToKey = BS.reverse . wordToUTF8
 
+-- | Wikilon dictionaries accept three token types: words, discretionary
+-- sealers and unsealers, and annotations. For now, these tokens have
+-- several constraints on them:
+--
+--   Words may not contain C0, C1, SP, DEL, {}(|)[]", U+FFFD
+--   Annotations and sealers should be valid as words
+--
+-- In sealers, $ indicates what follows is a cryptographic key, so
+-- those are also rejected as being non-discretionary.
+--
+isValidToken :: Token -> Bool
+isValidToken t = case Char8.uncons t of
+    Just ('%', w) -> isValidWord (Word w)
+    Just ('&', a) -> isValidAnno a
+    Just (':', s) -> isValidSeal s
+    Just ('.', u) -> isValidSeal u
+    _ -> False
+
+isValidSeal :: Token -> Bool
+isValidSeal = L.all okc . UTF8.toString where
+    okc c = isValidWordChar c && ('$' /= c)
+
+isValidAnno :: Token -> Bool
+isValidAnno = isValidWord . Word
+
 -- | O(1). Create a new, empty dictionary
 empty :: VSpace -> Dict
 empty vs = Dict (Trie.empty vs) (Trie.empty vs)
@@ -112,15 +136,21 @@ size = Trie.size . dict_data
 
 -- | O(WordSize). Lookup the definition for a word.
 lookup :: Dict -> Word -> Maybe ABC
-lookup d w = fst . ABC.decode <$> lookupBytes d w
+lookup d w = _decode <$> lookupBytes d w
+
+-- we'll do our little sanity check every time.
+_decode :: LBS.ByteString -> ABC
+_decode b = 
+    let (abc, b') = ABC.decode b in
+    if LBS.null b' then abc else
+    _impossible "invalid ABC"
 
 _impossible :: String -> a
 _impossible eMsg = error $ "Wikilon.Dict: " ++ eMsg
 
 -- | Obtain a list of all (Word, ABC) pairs. Words are sorted by suffix.
 toList :: Dict -> [(Word, ABC)]
-toList = fmap f . toListBytes where
-    f (w, bytes) = (w, fst (ABC.decode bytes))
+toList = fmap (second _decode) . toListBytes where
 
 -- | Lookup raw bytestring for a word. 
 lookupBytes :: Dict -> Word -> Maybe LBS.ByteString
@@ -133,8 +163,107 @@ toListBytes = Trie.toListBy f . dict_data where
 
 -- | Find direct clients of a word.
 usedBy :: Dict -> Word -> [Word]
-usedBy d w = fmap Word $ maybe [] _fromSz $ 
+usedBy d w = maybe [] (fmap Word . _fromSz) $ 
     Trie.lookupc _cm (_wordToKey w) (dict_deps d)
+
+-- find all transitive clients of a word
+_ubt :: Dict -> Set Word -> Set Word -> [Word] -> [Word]
+_ubt _ _  s [] = Set.toList s
+_ubt d sw su (w:ws) = 
+    if Set.member w sw then _ubt d sw su ws else
+    let sw' = Set.insert w sw in
+    let lU = usedBy d w in
+    let su' = L.foldl' (flip Set.insert) su lU in
+    _ubt d sw' su' (lU ++ ws)
+
+-- | Find all words used by a given word. I.e. filters ABC for just
+-- the {%word} tokens, and returns each word. Will return the empty
+-- list if the requested word is undefined.
+uses :: Dict -> Word -> [Word]
+uses d w = maybe [] words $ lookup d w
+
+-- | Filter ABC from the dictionary to just list the words it uses.
+-- Each word is expressed as a {%word} token in the original ABC.
+words :: ABC -> [Word]
+words = fmap toWord . L.filter isWordTok . ABC.tokens where
+    isWordTok = ('%' ==) . Char8.head
+    toWord = Word . Char8.tail
+
+-- Search a list of words for cyclic dependencies. Returns first cycle
+-- found if one exists, or returns Nothing. Does not search any word
+-- more than once.
+findCycle :: Dict -> [Word] -> Maybe [Word]
+findCycle d = flip State.evalState Set.empty . _fc d []
+
+-- _fc dict    stack     frontier         acyclic
+_fc :: Dict -> [Word] -> [Word] -> State.State (Set Word) (Maybe [Word])
+_fc _ _ [] = return Nothing
+_fc d stack (w:ws) = 
+    State.gets (Set.member w) >>= \ bKnownAcyclic ->
+    if bKnownAcyclic then _fc d stack ws else
+    if L.elem w stack then return (Just (_cyc w stack)) else
+    _fc d (w:stack) (uses d w) >>= \ rStack ->
+    case rStack of
+        Nothing -> State.modify (Set.insert w) >> _fc d stack ws
+        cycleFound -> return cycleFound
+
+-- return just the cycle found (implicitly closed)
+_cyc :: (Eq a) => a -> [a] -> [a]
+_cyc a stack = L.dropWhile (/= a) $ L.reverse stack
+
+-- | The Wikilon.Dict module guards against three kinds of errors:
+--
+-- * cyclic dependencies
+-- * missing definitions
+-- * bad tokens or words
+--
+-- Other errors, such as badly typed code, divergent computations,
+-- or incorrect documentation must be addressed by clients.
+data Error
+    = Cycle [Word] -- ^ cyclic dependency with given path
+    | Undef [Word] -- ^ listed words require definitions 
+    | Inval [Word] -- ^ proposed definition or word is bad 
+
+-- | Insert or Update a list of words. Any existing definition for 
+-- an inserted word will be replaced. Errors are possible if a word
+-- introduces a cycle or uses an undefined word, or simply has some
+-- malformed content.
+insert :: Dict -> [(Word, ABC)] -> Either Error Dict
+insert d l = 
+    -- sanitize input
+    let lBad = L.filter (uncurry _isInvalid) l in
+    if not (L.null lBad) then Left (Inval (fmap fst lBad)) else
+    _todo "insert"
+
+
+
+_isInvalid :: Word -> ABC -> Bool
+_isInvalid w abc = not valid where
+    valid = isValidWord w 
+         && L.all isValidToken (ABC.tokens abc)
+
+
+
+-- | Delete a list of words. This may fail if deletion would leave any
+-- word in the dictionary undefined. If this fails, it returns a list
+-- with a transitive list of words that would become undefined if you
+-- delete the requested words. Otherwise, the updated dictionary is
+-- returned.
+delete :: Dict -> [Word] -> Either [Word] Dict
+delete d lDel = 
+    let lU = L.filter (`L.notElem` lDel) $ _ubt d Set.empty Set.empty lDel in
+    if not (L.null lU) then Left lU else
+    _todo "delete"
+    
+    
+
+
+_todo :: String -> a
+_todo s = _impossible $ "TODO: " ++ s
+
+
+
+
 
 instance VCacheable Dict where
     put (Dict _data _deps) = putWord8 0 >> put _data >> put _deps
