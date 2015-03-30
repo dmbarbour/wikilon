@@ -33,15 +33,17 @@
 module Wikilon.Dict
     ( Dict, dict_space
     , empty, null, size
-    , lookup, toList
+    , lookup, toList, keys
     , lookupBytes, toListBytes
-    , usedBy, uses, words
-    , isValidToken
+
+    , usedBy, uses
 
     , insert
     , delete
     -- , rename, renameSuffix
     , Error(..)
+
+    , module Wikilon.Dict.Word
     ) where
 
 import Prelude hiding (null, lookup, words)
@@ -59,26 +61,17 @@ import qualified Data.List as L
 import Data.Set (Set)
 import qualified Data.Set as Set
 
-import Data.VCache.Trie (Trie)
 import qualified Data.VCache.Trie as Trie
 import Database.VCache
 
-import ABC.Basic (ABC, Op(..), Token)
+import ABC.Basic (ABC)
 import qualified ABC.Basic as ABC
-import Wikilon.Word
 
--- | A dictionary contains a set of definitions
-data Dict = Dict
-    { dict_data :: Trie Def
-    , dict_deps :: Trie Deps
-    } deriving (Eq, Typeable)
-type Def  = Sz LBS.ByteString
-type Deps = Sz [BS.ByteString]
-type Sz a = Either (VRef a) a
--- Currently, definitions and dependencies are inlined into our Trie
--- nodes up to a heurstic threshold in size, maybe ~600 bytes. Beyond
--- this size, I'll use a separate VRef to encode content.
+import Wikilon.Dict.Type
+import Wikilon.Dict.Word
+import Wikilon.Dict.Token
 
+-- | a dictionary is hosted in a vcache address space
 dict_space :: Dict -> VSpace
 dict_space = Trie.trie_space . dict_data
 
@@ -96,31 +89,6 @@ _fromSz = either (derefc _cm) id
 -- makes it feasible to efficiently rename an entire suffix.
 _wordToKey :: Word -> BS.ByteString
 _wordToKey = BS.reverse . wordToUTF8
-
--- | Wikilon dictionaries accept three token types: words, discretionary
--- sealers and unsealers, and annotations. For now, these tokens have
--- several constraints on them:
---
---   Words may not contain C0, C1, SP, DEL, {}(|)[]", U+FFFD
---   Annotations and sealers should be valid as words
---
--- In sealers, $ indicates what follows is a cryptographic key, so
--- those are also rejected as being non-discretionary.
---
-isValidToken :: Token -> Bool
-isValidToken t = case Char8.uncons t of
-    Just ('%', w) -> isValidWord (Word w)
-    Just ('&', a) -> isValidAnno a
-    Just (':', s) -> isValidSeal s
-    Just ('.', u) -> isValidSeal u
-    _ -> False
-
-isValidSeal :: Token -> Bool
-isValidSeal = L.all okc . UTF8.toString where
-    okc c = isValidWordChar c && ('$' /= c)
-
-isValidAnno :: Token -> Bool
-isValidAnno = isValidWord . Word
 
 -- | O(1). Create a new, empty dictionary
 empty :: VSpace -> Dict
@@ -147,6 +115,10 @@ _decode b =
 
 _impossible :: String -> a
 _impossible eMsg = error $ "Wikilon.Dict: " ++ eMsg
+
+-- | List all the words in the dictionary.
+keys :: Dict -> [Word]
+keys = fmap (Word . BS.reverse) . Trie.keys . dict_data
 
 -- | Obtain a list of all (Word, ABC) pairs. Words are sorted by suffix.
 toList :: Dict -> [(Word, ABC)]
@@ -180,12 +152,11 @@ _ubt d sw su (w:ws) =
 -- the {%word} tokens, and returns each word. Will return the empty
 -- list if the requested word is undefined.
 uses :: Dict -> Word -> [Word]
-uses d w = maybe [] words $ lookup d w
+uses d w = maybe [] _words $ lookup d w
 
--- | Filter ABC from the dictionary to just list the words it uses.
 -- Each word is expressed as a {%word} token in the original ABC.
-words :: ABC -> [Word]
-words = fmap toWord . L.filter isWordTok . ABC.tokens where
+_words :: ABC -> [Word]
+_words = fmap toWord . L.filter isWordTok . ABC.tokens where
     isWordTok = ('%' ==) . Char8.head
     toWord = Word . Char8.tail
 
@@ -195,7 +166,7 @@ words = fmap toWord . L.filter isWordTok . ABC.tokens where
 findCycle :: Dict -> [Word] -> Maybe [Word]
 findCycle d = flip State.evalState Set.empty . _fc d []
 
--- _fc dict    stack     frontier         acyclic
+-- _fc dict    stack     frontier           known acyclic
 _fc :: Dict -> [Word] -> [Word] -> State.State (Set Word) (Maybe [Word])
 _fc _ _ [] = return Nothing
 _fc d stack (w:ws) = 
@@ -211,18 +182,7 @@ _fc d stack (w:ws) =
 _cyc :: (Eq a) => a -> [a] -> [a]
 _cyc a stack = L.dropWhile (/= a) $ L.reverse stack
 
--- | The Wikilon.Dict module guards against three kinds of errors:
---
--- * cyclic dependencies
--- * missing definitions
--- * bad tokens or words
---
--- Other errors, such as badly typed code, divergent computations,
--- or incorrect documentation must be addressed by clients.
-data Error
-    = Cycle [Word] -- ^ cyclic dependency with given path
-    | Undef [Word] -- ^ listed words require definitions 
-    | Inval [Word] -- ^ proposed definition or word is bad 
+
 
 -- | Insert or Update a list of words. Any existing definition for 
 -- an inserted word will be replaced. Errors are possible if a word
@@ -231,18 +191,14 @@ data Error
 insert :: Dict -> [(Word, ABC)] -> Either Error Dict
 insert d l = 
     -- sanitize input
-    let lBad = L.filter (uncurry _isInvalid) l in
+    let lBad = L.filter (uncurry _isBadDef) l in
     if not (L.null lBad) then Left (Inval (fmap fst lBad)) else
     _todo "insert"
 
-
-
-_isInvalid :: Word -> ABC -> Bool
-_isInvalid w abc = not valid where
-    valid = isValidWord w 
-         && L.all isValidToken (ABC.tokens abc)
-
-
+_isBadDef :: Word -> ABC -> Bool
+_isBadDef w abc = badWord || badTok where
+    badWord = not $ isValidWord w
+    badTok = not $ L.all isValidToken $ ABC.tokens abc
 
 -- | Delete a list of words. This may fail if deletion would leave any
 -- word in the dictionary undefined. If this fails, it returns a list
@@ -260,19 +216,6 @@ delete d lDel =
 
 _todo :: String -> a
 _todo s = _impossible $ "TODO: " ++ s
-
-
-
-
-
-instance VCacheable Dict where
-    put (Dict _data _deps) = putWord8 0 >> put _data >> put _deps
-    get = getWord8 >>= \ v -> case v of
-        0 -> Dict <$> get <*> get
-        _ -> fail $ err $ "unknown Dict version " ++ show v
-
-err :: String -> String
-err = ("Wikilon.Dict: " ++)
 
 
 

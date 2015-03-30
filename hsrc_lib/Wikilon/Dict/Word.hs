@@ -1,15 +1,19 @@
 -- | Words are represented as a simple UTF-8 bytestring.
 --
--- Because I'm no longer using Awelon Object directly, I don't have any
--- special concerns about the starting characters for a word. However, 
--- words must use characters valid in tokens (no LF, {}). And I'll apply
--- a few extra constraints to support display, import, export, metadata,
--- editing, listing, etc..
+-- While I'm no longer using Awelon Object directly, I might still want
+-- something like AO for purpose of rendering end editing code. So, I
+-- continue to constrain word structure for a few nice properties:
 --
--- Forbidden characters: C0, SP, DEL, C1, U+FFFD, {}(|)[]"
--- Other forbidden words: the empty string
+-- Forbidden characters: C0, SP, DEL, C1, U+FFFD, {}(|)[]"`
+-- Other forbidden words: 
+--   the empty string
+--   words starting with a digit 0-9
+--   words starting with +-. followed by a digit
+--
+-- The latter two constraints avoid most words that would be visually
+-- confusable with numerals. 
 -- 
-module Wikilon.Word
+module Wikilon.Dict.Word
     ( Word(..), textToWord, wordToText, wordToUTF8
     , isValidWord, isValidWordChar
     ) where
@@ -40,8 +44,19 @@ isValidWordChar c =
     L.notElem c "{}(|)[]\"\xfffd"
 
 isValidWord :: Word -> Bool
-isValidWord (Word w) = not (B.null w) && noForbiddenChars where
+isValidWord (Word w) = validStart && noForbiddenChars where
     noForbiddenChars = L.all isValidWordChar $ UTF8.toString w
+    validStart = case UTF8.uncons w of
+        Nothing -> False
+        Just (c, w') | _isDigit c -> False
+                     | not (_isPMD c) -> True
+                     | otherwise -> maybe True (not . _isDigit . fst) (UTF8.uncons w')
+
+_isPMD :: Char -> Bool
+_isPMD = flip L.elem "+-."
+
+_isDigit :: Char -> Bool
+_isDigit c = ('0' <= c) && (c <= '9')
 
 -- Show a Word
 instance Show Word where 

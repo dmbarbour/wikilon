@@ -88,13 +88,19 @@ Library
     ABC.Base16
     ABC.Text
 
+    Wikilon.Dict
+    Wikilon.Dict.Word
+    Wikilon.Dict.Export
+    Wikilon.Dict.Token
+    Wikilon.Dict.Type
+
+
     Wikilon.ABC
     Wikilon.RunABC
 
     Wikilon
 
-    Wikilon.Word
-    Wikilon.Dict
+
     Wikilon.Branch
 
 
