@@ -37,11 +37,18 @@ module Wikilon.Dict.Export
     -- , decodeList
     ) where
 
-import Control.Category
+import Control.Monad
+import Control.Monad.State (State)
+import Data.Monoid
+import qualified Control.Monad.State as State
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Builder as BB
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Wikilon.Dict
 
+type BB = BB.Builder
 
 -- | Encode the entire dictionary for export into a bytestring.
 encode :: Dict -> LBS.ByteString
@@ -49,9 +56,59 @@ encode d = encodeWords d (keys d)
 
 -- | Encode a subset of the dictionary, specified by a list of root
 -- words. All transitive dependencies of these words are included in
--- the export.
+-- the export. If a word is not defined, it will be silently skipped.
 encodeWords :: Dict -> [Word] -> LBS.ByteString
-encodeWords = error "TODO: Wikilon.Dict.Export.encodeWords"
+encodeWords d ws = 
+    let action = mapM_ (_enw d) ws in
+    let s0 = EnSt mempty mempty in
+    let s' = State.execState action s0 in
+    BB.toLazyByteString (en_out s')
+
+data EnSt = EnSt
+    { en_out :: BB.Builder  -- the output stream
+    , en_rec :: Set Word    -- the words recorded
+    } 
+type ENC a = State EnSt a
+
+enc_print :: BB.Builder -> ENC () 
+enc_print bb = State.modify $ \ s ->
+    let o' = en_out s <> bb in
+    s { en_out = o' }
+
+enc_record :: Word -> ENC Bool
+enc_record w = 
+    State.gets en_rec >>= \ s0 ->
+    let b = Set.notMember w s0 in
+    let s' = Set.insert w s0 in
+    State.modify (\ s -> s { en_rec = s' }) >>
+    return b
+
+_enw :: Dict -> Word -> ENC ()
+_enw d w = 
+    -- skip words already recorded
+    enc_record w >>= \ bNewWord ->
+    when bNewWord $
+        -- record all dependencies first
+        mapM_ (_enw d) (deps d w) >> 
+        case lookupBytes d w of
+            Nothing -> return ()
+            Just bytes -> enc_print $
+                BB.char8 '%' <> BB.byteString (wordToUTF8 w) <> BB.char8 ' ' 
+                <> _esc bytes <> BB.char8 '\n'
+
+_esc :: LBS.ByteString -> BB.Builder
+_esc = mconcat . fmap _esc' . LBS.toChunks
+
+-- every LF is printed as LF SP.
+_esc' :: BS.ByteString -> BB.Builder
+_esc' bs = case BS.elemIndex 10 bs of
+    Nothing -> BB.byteString bs
+    Just ix -> 
+        let ct = ix + 1 in
+        BB.byteString (BS.take ct bs) <>
+        BB.char8 ' ' <> 
+        _esc' (BS.drop ct bs)
+
 
 -- | Attempt to decode a complete dictionary from a bytestring. This
 -- may fail if the provided dictionary has some bad properties.

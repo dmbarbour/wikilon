@@ -3,8 +3,8 @@
 -- | Internal structure for Wikilon dictionary.
 module Wikilon.Dict.Type
     ( Dict(..), Def, Deps, Sz
-    , Error(..)
-    , err
+    , Error
+    , dictErr
     ) where
 
 import Control.Applicative
@@ -14,8 +14,6 @@ import qualified Data.ByteString.Lazy as LBS
 
 import Data.VCache.Trie (Trie)
 import Database.VCache
-
-import Wikilon.Dict.Word
 
 -- | A dictionary contains a set of definitions
 data Dict = Dict
@@ -40,11 +38,7 @@ type Sz a = Either (VRef a) a
 --
 -- Other errors, such as badly typed code, divergent computations,
 -- or incorrect documentation must be addressed by clients.
-data Error
-    = Cycle [Word] -- ^ cyclic dependency with given path
-    | Undef [Word] -- ^ listed words require definitions 
-    | Inval [Word] -- ^ another problem with word or def
-    deriving (Show)
+type Error = String 
 
 -- include a version number in case I need to update the dictionary
 -- type in the future.
@@ -52,8 +46,8 @@ instance VCacheable Dict where
     put (Dict _data _deps) = putWord8 0 >> put _data >> put _deps
     get = getWord8 >>= \ v -> case v of
         0 -> Dict <$> get <*> get
-        _ -> fail $ err $ "unrecognized version " ++ show v
+        _ -> fail $ dictErr $ "unrecognized version " ++ show v
 
-err :: String -> String
-err = ("Wikilon.Dict: " ++)
+dictErr :: String -> String
+dictErr = ("Wikilon.Dict: " ++)
 

@@ -36,12 +36,11 @@ module Wikilon.Dict
     , lookup, toList, keys
     , lookupBytes, toListBytes
 
-    , usedBy, uses
+    , usedBy, deps
 
     , insert
     , delete
     -- , rename, renameSuffix
-    , Error(..)
 
     , module Wikilon.Dict.Word
     ) where
@@ -114,7 +113,7 @@ _decode b =
     _impossible "invalid ABC"
 
 _impossible :: String -> a
-_impossible eMsg = error $ "Wikilon.Dict: " ++ eMsg
+_impossible = error . dictErr
 
 -- | List all the words in the dictionary.
 keys :: Dict -> [Word]
@@ -148,11 +147,11 @@ _ubt d sw su (w:ws) =
     let su' = L.foldl' (flip Set.insert) su lU in
     _ubt d sw' su' (lU ++ ws)
 
--- | Find all words used by a given word. I.e. filters ABC for just
--- the {%word} tokens, and returns each word. Will return the empty
--- list if the requested word is undefined.
-uses :: Dict -> Word -> [Word]
-uses d w = maybe [] _words $ lookup d w
+-- | Find all words depended upon by a given word. Filters ABC for just
+-- the {%word} tokens, and returns each word. Returns the empty list if
+-- the requested word is undefined.
+deps :: Dict -> Word -> [Word]
+deps d w = maybe [] _words $ lookup d w
 
 -- Each word is expressed as a {%word} token in the original ABC.
 _words :: ABC -> [Word]
@@ -173,7 +172,7 @@ _fc d stack (w:ws) =
     State.gets (Set.member w) >>= \ bKnownAcyclic ->
     if bKnownAcyclic then _fc d stack ws else
     if L.elem w stack then return (Just (_cyc w stack)) else
-    _fc d (w:stack) (uses d w) >>= \ rStack ->
+    _fc d (w:stack) (deps d w) >>= \ rStack ->
     case rStack of
         Nothing -> State.modify (Set.insert w) >> _fc d stack ws
         cycleFound -> return cycleFound
@@ -192,7 +191,8 @@ insert :: Dict -> [(Word, ABC)] -> Either Error Dict
 insert d l = 
     -- sanitize input
     let lBad = L.filter (uncurry _isBadDef) l in
-    if not (L.null lBad) then Left (Inval (fmap fst lBad)) else
+    let eMsg = "invalid content ~ " ++ show (fmap fst lBad) in
+    if not (L.null lBad) then Left eMsg else
     _todo "insert"
 
 _isBadDef :: Word -> ABC -> Bool
