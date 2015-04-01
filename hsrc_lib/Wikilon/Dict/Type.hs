@@ -5,6 +5,8 @@ module Wikilon.Dict.Type
     ( Dict(..), Def, Deps, Sz
     , Error
     , dictErr
+    , depSizeThresh
+    , defSizeThresh
     ) where
 
 import Control.Applicative
@@ -29,6 +31,10 @@ type Sz a = Either (VRef a) a
 -- costs.
 --
 -- At this time, no compression is performed.
+
+depSizeThresh, defSizeThresh :: Int
+depSizeThresh = 700
+defSizeThresh = 700
 
 -- | The Wikilon.Dict module guards against a few kinds of errors:
 --

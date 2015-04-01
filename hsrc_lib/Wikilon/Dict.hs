@@ -59,8 +59,11 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.List as L
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.Map (Map)
+import qualified Data.Map as Map
 
 import qualified Data.VCache.Trie as Trie
+import Data.VCache.Trie (Trie)
 import Database.VCache
 
 import ABC.Basic (ABC)
@@ -159,6 +162,81 @@ _words = fmap toWord . L.filter isWordTok . ABC.tokens where
     isWordTok = ('%' ==) . Char8.head
     toWord = Word . Char8.tail
 
+
+type DepsMap = Map Word (Set Word)
+type DiffDepsMap = Map Word (Set Word -> Set Word)
+
+_depsList :: Dict -> [Word] -> DepsMap
+_depsList d ws = Map.fromList $ L.zip ws (fmap (Set.fromList . deps d) ws)
+
+-- compute a *partial* reverse dependencies. In this case, if word
+-- foo uses bar, baz, qux then we'll have entries for bar, baz, qux
+-- each containing the word foo. This isn't necessarily all dependencies
+-- for bar, baz, and qux of course.
+_revDeps :: DepsMap -> DepsMap
+_revDeps = L.foldl' insw Map.empty . Map.toList where
+    insw m (w,ds) = L.foldl' (insd w) m (Set.toList ds) -- insert w as client for each d
+    insd w m d = Map.alter (inss w) d m  -- insert w as client for one d
+    inss w = Just . maybe (Set.singleton w) (Set.insert w) -- set containing w
+
+-- compute a difference in the dependencies maps for a subset of words.
+-- In this case, both the old and new dependencies maps must be complete
+-- for a subset of words. E.g. if `foo` appears under `bar` on one side
+-- but not the other, we'll accordingly prepare it to add or subtract.
+--
+-- This operation includes some sanity checks. It will error out if the
+-- index was not already in a good condition according to the changes to
+-- be made.
+--
+-- _diffDeps oldDeps newDeps
+_diffDeps :: DepsMap -> DepsMap -> DiffDepsMap
+_diffDeps = Map.mergeWithKey joinDeps oldDeps newDeps where
+    joinDeps _ sOld sNew = 
+        let sAdd = sNew `Set.difference` sOld in -- new dependencies not in old
+        let sSub = sOld `Set.difference` sNew in -- old dependencies not in new
+        let bNoChange = Set.null sAdd && Set.null sSub in
+        if bNoChange then Nothing else 
+        Just $ addDeps sAdd . subDeps sSub
+    newDeps = fmap addDeps
+    oldDeps = fmap subDeps
+    addDeps sAdd sW =
+        let sOver = Set.intersection sAdd sW in
+        let bSane = Set.null sOver in
+        let eMsg = "overlap adding deps: " ++ show sOver in
+        if not bSane then _impossible eMsg else
+        Set.union sW sAdd
+    subDeps sSub sW =
+        let sMiss = Set.difference sSub sW in
+        let bSane = Set.null sMiss in
+        let eMsg = "missing expected deps: " ++ show sMiss in
+        if not bSane then _impossible eMsg else
+        Set.difference sW sSub
+
+-- tune the reverse lookup map by the given delta map
+_updateDeps :: DiffDepsMap -> Trie Deps -> Trie Deps
+_updateDeps dd t = L.foldl' _updOneDep t (Map.toList dd) 
+
+-- adjusting dependencies one at a time...
+_updOneDep :: Trie Deps -> (Word, Set Word -> Set Word) -> Trie Deps
+_updOneDep t (w,fn) = Trie.adjust adj (_wordToKey w) t where
+    _toSet = Set.fromList . fmap Word . _fromSz
+    _fromSet = _toSz . fmap unWord . Set.toList
+    adj orig = 
+        let s0 = maybe Set.empty _toSet orig in
+        let sf = fn s0 in
+        if Set.null sf then Nothing 
+                       else Just (_fromSet sf)
+    _toSz lDeps =
+        if (_bigDeps lDeps) 
+            then Left (vref' (Trie.trie_space t) lDeps)
+            else Right lDeps
+
+_bigDeps :: [BS.ByteString] -> Bool
+_bigDeps lDeps =
+    let sz = L.foldl' (+) 0 $ fmap BS.length lDeps in
+    sz >= depSizeThresh
+
+
 -- Search a list of words for cyclic dependencies. Returns first cycle
 -- found if one exists, or returns Nothing. Does not search any word
 -- more than once.
@@ -189,11 +267,14 @@ _cyc a stack = L.dropWhile (/= a) $ L.reverse stack
 -- malformed content.
 insert :: Dict -> [(Word, ABC)] -> Either Error Dict
 insert d l = 
-    -- sanitize input
+    -- sanitize input for internal errors
     let lBad = L.filter (uncurry _isBadDef) l in
-    let eMsg = "invalid content ~ " ++ show (fmap fst lBad) in
+    let eMsg = "invalid content for " ++ show (fmap fst lBad) in
     if not (L.null lBad) then Left eMsg else
-    _todo "insert"
+    -- obtain the old uses-map for 
+    _impossible "TODO: insert"
+
+
 
 _isBadDef :: Word -> ABC -> Bool
 _isBadDef w abc = badWord || badTok where

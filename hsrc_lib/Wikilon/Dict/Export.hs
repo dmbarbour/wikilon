@@ -25,7 +25,7 @@
 --
 -- This export model is intended for easy extension into streamable
 -- models, i.e. by providing different prefixes for extended sets of
--- commands.
+-- commands. 
 --
 -- In the basic case, however, we'll simply export words such that
 -- all hyperstatic dependencies are addressed first, for easy stream
