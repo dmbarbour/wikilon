@@ -49,11 +49,11 @@ The design elements and motivations are described under *Design Elements*. Here'
         type OutMessage = (Capability * Content)
             where type of Content depends on Capability
 
-        type Capability = (GlobalAddress * (LocalCap + CommonsCap)){$@}
+        type Capability = (GlobalAddress * (CommonsCap + LocalCap))){$@}
         type GlobalAddress = Text (secure hash of Identity, in ABC Base16)
         type Identity = ABC resource containing public key and ad-hoc params
         type CommonsCap = (Text * Args) where type of Args depends on Text
-        type LocalCap contains a Context. Exact type depends on host.
+        type LocalCap = usually a sealed context; may have network extensions.
 
         type Self = Context → Capability
         type SelfSignal = ("self" * Self)
@@ -94,17 +94,17 @@ Transactional batching offers a simple sweet spot:
 * batches are implicitly ordered between two machines
 * messages from any two batches are not interleaved
 
-These batches may be *transparent* to our purely functional AVMs. An AVM processes each message separately. Batching becomes relevant only in context of non-deterministic concurrency. *Transactional batching is a constraint on scheduling to ensure a friendly default behavior.*
-
-Besides friendly batching, I may seek other nice default properties from the scheduler: fairness, heuristic timestamps for global ordering, etc.. 
+These batches may be *transparent* to our purely functional AVMs. An AVM processes each message separately. Batching becomes relevant only in context of non-deterministic concurrency. *Transactional batching is a constraint on scheduling to ensure a friendly default behavior.* Besides friendly batching, I may seek other nice default properties from the scheduler: fairness, timestamps for a weakly consistent global ordering, etc.. 
 
 Developers may still need to model queues, buffers, and so on to more precisely control communications. But, relative to systems with an adversarial scheduler, the need for explicit control should be less frequent, and oriented more towards reducing synchronization rather than increasing it.
+
+*Note:* I shouldn't make any distinctions about whether a message is sent to self. Special features could seriously hinder future decomposition into multiple machines on the host. 
 
 ### Handling Failure
 
 A physical network is unreliable. If we send a message then, even with acknowledgements, we cannot be absolutely certain it has arrived and that the other party knows that we know it has arrived. After a message arrives, it may be rejected for other reasons, such as causing divide-by-zero error. 
 
-One viable option is to silently drop messages upon failure. This is certainly the easiest option to implement. But it means we cannot respond easily to changing network conditions. Another viable option is to provide a Context for every outgoing message, such that we receive feedback. However, this feels very rigid to me - e.g. we cannot easily experiment with or abstract our feedback behaviors. 
+One viable option is to silently drop messages upon failure. This is certainly the easiest option to implement. But it means we cannot respond easily to changing network conditions. Another viable option is to provide a Context for every outgoing message, such that we receive feedback. However, this feels very rigid to me - e.g. we cannot easily experiment with or abstract our feedback behaviors. I want a Goldilocks solution.
 
 The option I currently favor is this:
 
@@ -112,17 +112,14 @@ The option I currently favor is this:
 * provide commons capabilities that implement feedback policies
 * in general, reify new failure handling policies into caps
 
-This gives us full power to abstract our feedback models. And a simple feedback cap might be something like:
+This gives us full power to abstract our feedback models. 
 
+The resulting outgoing message might have form:
 
-        outMsg = SendWithFeedback * ((Cap * Content) * FeedbackContextCap)
-                  failure policy       the message      to send feedback
+        outMsg = SendWithFeedback * ((Cap * Content) * DeliveryStatusCap)
+                  failure policy       the message       send feedback
 
-This where we'd normally just use `(Cap * Content)`. 
-
-In this case our costs might be a little bit higher. However, we have not added rigidity to the model or complexity to the basic types. Our SendWithFeedback capability is reified, easily abstracted, extended, or replaced by new policies. The only real difficulty here is that this might impact our batching and ordering for our output messages. This could be addressed at the network layer, but that does seem a little awkward.
-
-One option is to weaken some of those batch ordering properties. But really, what I want to say is that our networks should be concurrency friendly as much as they can be, without making any strong guarantees. So, in this case, we might recognize basic failure handling policies when building batches. Or maybe we'll need to reify batches.
+The `SendWithFeedback` value is a normal capability, though it might have special recognition from the network layer for performance and to preserve batch order (i.e. use sum type for the local capability field). Special recognition is something to avoid because it doesn't generalize well... but I think I'm willing to accept it for a few specialized network operations. Meanwhile, we have not added rigidity to the model nor complexity to our basic types. `SendWithFeedback` is subject to all the normal mediation of capabilities.
 
 ### Substructural Types
 
@@ -190,26 +187,26 @@ That said, this is a performance feature. Commons caps will be discretionary.
 
 Commons caps may be especially useful for high performance computing. E.g. we could embed OpenCL code in a commons cap, secured by HMAC or similar, for use in a specific domain. When developers need performance *right now*, hacking in a commons cap will certainly be easier than waiting on improvements in Awelon Bytecode compilers or ABCD extensions.
 
-These commons capabilities can also provide a foundation for message pipelining, alternatives and multi-homing, mobile code, the [unum pattern](http://wiki.erights.org/wiki/Unum) and CRDTs, etc.. They are discretionary, flexible, securable. 
-
-Commons capabilities can make Awelon systems network extensible and efficient without hindering unsophisticated mplementations.
+These commons capabilities can also provide a foundation for message pipelining, alternatives and multi-homing, mobile code, the [unum pattern](http://wiki.erights.org/wiki/Unum) and CRDTs, etc.. They are discretionary, flexible, securable, highly extensible, and supports heterogeneous deployment of features. Basically, we can make our networks smarter and more powerful over time with very little coordination or collaboration.
 
 #### Capability Representation
 
 Basically, this:
 
-        (GlobalAddress * (LocalContext + CommonsCap)){$@}
+        (GlobalAddress * (CommonsCap + LocalCap)){$@}
 
         type GlobalAddress = Text (secure hash of public key)
-        type LocalContext = ADT, often cryptographically sealed
+        type LocalCap = ADT, cryptographically sealed context
         type CommonsCap = (Text * Args); Args depends on Text
 
-        ["encryptedLinearContext"]kf{$aes}V"globalAddress"l{$@}
-        "/dev/null"#lVVRWLC"globalAddress"l{$@}
+        ["encryptedLinearContext"]kf{$aes}VW"globalAddress"l{$@}
+        "/dev/null"#lV"globalAddress"l{$@}
 
-For effective security in a distributed system, we must cryptographically secure the local context. But any convention is acceptable. For commons capabilities, the text provides a quick discriminator for the local machine or network.
+The LocalCap isn't *just* the sealed context. It may include a sum type for special network extensions, or additional information for priorities or deadlines. Some or all of this may be secured by our sealer. But we'll at least support sealed contexts for normal messages.
 
-In this case, the `{$@}` value sealing format is simply to prevent normal dictionary code from trying to branch on address or forge commons capabilities. 
+For effective security in a distributed system, we must cryptographically secure the local context, or at least those that represent relevant resources. But any convention is acceptable. The context might additionally contain priorities and other information. For commons capabilities, text provides a quick discriminator for the local machine or network. Commons capabilities may also be secured, e.g. such that subnets might discriminate whether work is authorized. 
+
+The `{$@}` value sealing format is simply to prevent normal dictionary code from trying to branch on address or forge commons capabilities. It wouldn't be a problem if networks permit introspection via capabilities. 
 
 As per usual, secure hashes, cryptographic text, and other binary content will be represented using ABC's Base16 encoding (alphabet `bdfghjkmnpqstxyz`).
 
