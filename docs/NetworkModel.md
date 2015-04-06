@@ -62,8 +62,6 @@ The design elements and motivations are described under *Design Elements*. Here'
 
 Not every AVM exists at the 'toplevel' with a global address. A whole network of AVMs could ultimately be modeled as a pure function, and we can also have concurrent containers and distributed models.
 
-I'm still contemplating variations, e.g. connections-based or conversations-based communications.
-
 ## Design Elements
 
 ### Message Based Communications
@@ -314,27 +312,3 @@ Messages are batched for communication between containers. They're further seria
 
 Work on [Live Sequence Charts](http://www.wisdom.weizmann.ac.il/mathusers/amarron/bp-sigerl2010.pdf) might offer an interesting basis for coordinating apps. This is easily built upon AVMs and the current network structure.
 
-## Conversations based Communications? (probably not)
-
-Simple message passing communication is weak for failure handling, and too fine grained. A possibly better approach is to reify connections or conversations, such that we can have coarse-grained failures. This suggests a general feature for AVM hosts, to support many long-running connections or conversations.
-
-Some basic ideas should remain more or less the same:
-
-* upon receiving correspondence, an AVM may:
- * maintain its own state
- * update conversations with other machines
-* information is received with secure context
-* the step function is separate from state
-* state is specific and internal to each AVM
-
-The different idea here is that we're updating a 'conversation'. I'm not entirely sure what that means, but it isn't the same as sending a message, and it does imply that conversations are both stateful and shared. Conversations might then be modeled using a tuple spaces, publish-subscribe, behavioral programming, or perhaps CRDTs tuned for multiple participants.
-
-Without a concrete model for a conversation, this idea cannot succeed. Realistically, I think most conversational models are simply too complicated, putting too much logic or state into the network layer or hindering purely functional implementations. An arbitrary CRDT isn't an option... it would need to be something specific. Tuple spaces aren't good if they require arbitrary pattern matching. Behavioral programming doesn't decentralize nicely. Publish-subscribe has too much implicit routing and subscriptions management.
-
-A minimal *connections-based* communication might be viable.
-
-But, with connections, it isn't clear how they should interact with substructural types, nor how one should go about 'receiving' a connection. Also, the protocols around forming connections, naming them, closing them, receiving them, etc. would clutter the simple type signatures I'm hoping to preserve.
-
-We can always model connections explicitly above the messaging layer. We can even benefit from buffering and grouping and similar. So maybe that is the right way to do it. Stick with simple messaging at the network layer, with just enough feedback to react to network conditions. 
-
-Fortunately, AVMs are purely functional. It won't be difficult to explore new models within or below AVMs.

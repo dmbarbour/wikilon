@@ -48,11 +48,9 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Wikilon.Dict
 
-type BB = BB.Builder
-
 -- | Encode the entire dictionary for export into a bytestring.
 encode :: Dict -> LBS.ByteString
-encode d = encodeWords d (keys d)
+encode d = encodeWords d (wordsInDict d)
 
 -- | Encode a subset of the dictionary, specified by a list of root
 -- words. All transitive dependencies of these words are included in

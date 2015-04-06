@@ -47,6 +47,7 @@ isValidToken t = case UTF8.uncons t of
     Just ('.', u) -> isValidSeal u
     _ -> False
 
+-- note: empty seal, just {:} and {.}, is okay
 isValidSeal :: Token -> Bool
 isValidSeal = L.all okc . UTF8.toString where
     okc c = isValidWordChar c && ('$' /= c)

@@ -12,13 +12,17 @@
 --
 -- The latter two constraints avoid most words that would be visually
 -- confusable with numerals. 
+--
+-- In original AO, I reversed context such that role, type, or purpose
+-- appears first in a word and context appears last. However, for Wikilon,
+-- I think I'll stick with the conventional order that users are familiar
+-- with from filesystems and URLs: context first, type last. 
 -- 
 module Wikilon.Dict.Word
     ( Word(..), textToWord, wordToText, wordToUTF8
     , isValidWord, isValidWordChar
     ) where
 
-import Data.Maybe (isNothing)
 import Data.Char (ord)
 import Data.String (IsString(..))
 import qualified Data.List as L

@@ -3,7 +3,6 @@
 -- | Internal structure for Wikilon dictionary.
 module Wikilon.Dict.Type
     ( Dict(..), Def, Deps, Sz
-    , Error
     , dictErr
     , depSizeThresh
     , defSizeThresh
@@ -17,10 +16,24 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.VCache.Trie (Trie)
 import Database.VCache
 
--- | A dictionary contains a set of definitions
+-- | A dictionary contains two indices:
+--
+-- * a trie from words to definitions
+-- * another trie from words to clients
+--
+-- Here a word 'foo' is a client of 'bar' if bar uses foo. Having the
+-- client index is essential for efficient deletion or rename while 
+-- guarding dictionary invariants. It's also very convenient for other
+-- roles, such as incremental compilation or live coding.
+--
+-- At this time, the dictionary performs no compression within the
+-- definitions. Compression is achieved by refactoring code to control
+-- the lookup costs (i.e. so we don't have trouble if a very large
+-- value has a key in the middle of the trie).
+-- 
 data Dict = Dict
-    { dict_data :: Trie Def
-    , dict_deps :: Trie Deps
+    { dict_data :: !(Trie Def)
+    , dict_deps :: !(Trie Deps)
     } deriving (Eq, Typeable)
 type Def  = Sz LBS.ByteString
 type Deps = Sz [BS.ByteString]
@@ -30,24 +43,14 @@ type Sz a = Either (VRef a) a
 -- large elements thus use their own nodes to help control deep lookup
 -- costs.
 --
--- At this time, no compression is performed.
-
+-- At the moment, I'm not compressing the dictionary entries. I'll 
+-- review this option later, if I start seeing very large entries.
 depSizeThresh, defSizeThresh :: Int
 depSizeThresh = 700
 defSizeThresh = 700
 
--- | The Wikilon.Dict module guards against a few kinds of errors:
---
--- * cyclic dependencies
--- * missing definitions
--- * unrecognized tokens
---
--- Other errors, such as badly typed code, divergent computations,
--- or incorrect documentation must be addressed by clients.
-type Error = String 
-
--- include a version number in case I need to update the dictionary
--- type in the future.
+-- includes version number to support updates to representation
+-- (e.g. in case I add compression later).
 instance VCacheable Dict where
     put (Dict _data _deps) = putWord8 0 >> put _data >> put _deps
     get = getWord8 >>= \ v -> case v of
