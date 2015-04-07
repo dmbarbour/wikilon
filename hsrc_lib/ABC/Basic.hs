@@ -15,6 +15,7 @@ module ABC.Basic
 
     , opsCancel
     , tokens
+    , rewriteTokens, rewriteTokens'
     ) where
 
 import Data.Monoid
@@ -401,5 +402,16 @@ _opTok (ABC_Tok t) = (t:)
 _opTok (ABC_Block abc) = _tokens (abcOps abc)
 _opTok _ = id
 
+-- | Rewrite or expand tokens into arbitrary bytecode
+rewriteTokens :: (Token -> ABC) -> ABC -> ABC
+rewriteTokens fn = rewriteTokens' fn' where
+    fn' tok = (++) (abcOps (fn tok))
 
+-- | As rewriteTokens, but difference list for performance.
+rewriteTokens' :: (Token -> [Op] -> [Op]) -> ABC -> ABC
+rewriteTokens' fn = ABC . _rw . abcOps where
+    _rw (ABC_Tok t : ops) = fn t ops
+    _rw (ABC_Block abc : ops) = ABC_Block (rewriteTokens' fn abc) : _rw ops
+    _rw (op : ops) = op : _rw ops
+    _rw [] = []
 

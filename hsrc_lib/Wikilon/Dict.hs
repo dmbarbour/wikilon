@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveDataTypeable, PatternGuards #-}
 
 -- | A dictionary contains words and definitions.
 --
@@ -33,9 +33,8 @@
 -- errors (automatic linters, partial evaluation, testing, etc.).
 --
 -- TODO: support many more operations:
---   rename a word
---   rename all words with a given suffix
---   clone a subset of words (preserving internal dependencies)
+--   batch rename
+--   efficient diffs
 -- 
 module Wikilon.Dict
     ( Dict, dict_space
@@ -46,21 +45,24 @@ module Wikilon.Dict
     , wordsInDict
     , wordsWithPrefix
 
-    , usedBy, deps, member
+    , usedBy, usedByTransitive
+    , deps, member
 
-    , insert
-    , UpdateErrors
-
+    , insert, InsertionError(..), InsertionErrors
     , delete
-    -- , rename, renameSuffix
+
+
+    , rename1
 
     , module Wikilon.Dict.Word
+    , unsafeInsert, unsafeDelete
     ) where
 
 import Prelude hiding (null, lookup, words)
 import Control.Applicative ((<$>))
 import Control.Arrow (second, (***))
 import qualified Control.Monad.State as State
+import Control.Monad
 import Data.Monoid
 import Data.Maybe 
 import qualified Data.ByteString as BS
@@ -174,9 +176,8 @@ _words = fmap toWord . L.filter isWordTok . ABC.tokens where
 type DepsMap = Map Word (Set Word)
 type DiffDepsMap = Map Word (Set Word -> Set Word)
 
--- given list of words, words → dependencies list
-_depsList :: Dict -> [Word] -> DepsMap
-_depsList d ws = Map.fromList $ L.zip ws (fmap (Set.fromList . deps d) ws)
+_depsMap :: Dict -> [Word] -> DepsMap
+_depsMap d ws = Map.fromList $ L.zip ws (fmap (Set.fromList . deps d) ws)
 
 -- compute a *partial* reverse dependencies. In this case, if word
 -- foo uses bar, baz, qux then we'll have entries for bar, baz, qux
@@ -252,41 +253,57 @@ _bigDeps lDeps =
 --
 -- * cyclic dependencies
 -- * missing definitions
+-- * malformed words
 -- * unrecognized tokens
 --
 -- Other errors, such as badly typed code, divergent computations,
 -- or incorrect documentation must be addressed by clients.
 --
-type UpdateErrors = [String] -- for now, just making it human readable
+type InsertionErrors = [InsertionError]
+data InsertionError 
+    = Undef    Word Word   -- undefined {%word} used by word
+    | BadWord  Word        -- word is not valid according to heuristics
+    | BadToken Token Word  -- invalid {token} used by word
+    | Cycle    [Word]
+
+instance Show InsertionError where
+    show (Undef uw w)   = "undefined {%" ++ show uw ++ "} in " ++ show w
+    show (BadWord w)    = "malformed word: " ++ show w
+    show (BadToken t w) = "rejecting token {" ++ show t ++ "} in " ++ show w
+    show (Cycle ws)     = "cyclic dependencies: " ++ show ws
 
 -- | Insert or Update a list of words. Any existing definition for 
 -- an inserted word will be replaced. Errors are possible if a word
 -- introduces a cycle or uses an undefined word, or simply has some
 -- malformed content.
-insert :: Dict -> [(Word, ABC)] -> Either UpdateErrors Dict
+insert :: Dict -> [(Word, ABC)] -> Either InsertionErrors Dict
 insert d l = 
     -- sanitize input for internal per-word errors
     let lBad = L.foldr (uncurry _testBadDef) [] l in
     if not (L.null lBad) then Left lBad else
-    let oldDepsMap = _revDeps $ _depsList d (fmap fst l) in
-    let newDepsMap = _revDeps $ _insertDepsMap l in
-    let depsMapDiff = _diffDeps oldDepsMap newDepsMap in
-    let d_deps' = _updateDeps depsMapDiff (dict_deps d) in
-    let vc = dict_space d in
-    let lIns = fmap (_wordToKey *** _encodeDef vc) l in
-    let d_data' = Trie.insertList lIns (dict_data d) in
-    let d' = Dict { dict_data = d_data', dict_deps = d_deps' } in
+    -- compute the insertion
+    let d' = unsafeInsert d l in
+    -- filter for cycles or undefined words
     let lInsErr = _insertionErrors d' (fmap fst l) in
     if not (L.null lInsErr) then Left lInsErr else
     Right $! d'
 
-_testBadDef :: Word -> ABC -> UpdateErrors -> UpdateErrors
+-- | Insert without trying to detect any errors. 
+unsafeInsert :: Dict -> [(Word, ABC)] -> Dict
+unsafeInsert d l = Dict { dict_data = d_data', dict_deps = d_deps' } where
+    oldDepsMap = _revDeps $ _depsMap d (fmap fst l)
+    newDepsMap = _revDeps $ _insertDepsMap l
+    depsMapDiff = _diffDeps oldDepsMap newDepsMap
+    d_deps' = _updateDeps depsMapDiff (dict_deps d)
+    vc = dict_space d
+    lIns = fmap (_wordToKey *** _encodeDef vc) l
+    d_data' = Trie.insertList lIns (dict_data d)
+
+_testBadDef :: Word -> ABC -> InsertionErrors -> InsertionErrors
 _testBadDef w abc = badWord . badToks where
-    badWord = if isValidWord w then id else (eBadWord :)
-    eBadWord = show w ++ " is not an acceptable word"
-    badToks = ((eBadTok <$> lBadToks) ++)
+    badWord = if isValidWord w then id else (:) (BadWord w) 
+    badToks = (++) (fmap (`BadToken` w) lBadToks)
     lBadToks = L.nub $ L.filter (not . isValidToken) $ ABC.tokens abc
-    eBadTok t = "in " ++ show w ++ ", {" ++ show t ++ "} is not an acceptable token"
 
 -- dependencies for each inserted word
 _insertDepsMap :: [(Word, ABC)] -> DepsMap
@@ -295,17 +312,16 @@ _insertDepsMap = Map.fromList . fmap (second (Set.fromList . _words))
 -- find two kinds of errors: undefined dependencies, cycles
 -- Note: this will load content out of the VCache representation
 --  which will help further validate that content parses.
-_insertionErrors :: Dict -> [Word] -> UpdateErrors
+_insertionErrors :: Dict -> [Word] -> InsertionErrors
 _insertionErrors d ws = cycleErrors ++ undefErrors where
     undefErrors = L.concatMap (_testUndef d) ws
-    cycleErrors = maybe [] ((:[]) . cycleErrorMsg) (findCycle d ws) 
-    cycleErrorMsg cyc = "cyclic dependency: " ++ show cyc
+    cycleErrors = case findCycle d ws of
+        Nothing -> []
+        Just cyc -> [Cycle cyc]
 
-_testUndef :: Dict -> Word -> UpdateErrors
-_testUndef d w =
-    let lUndefDeps = L.filter (not . member d) (L.nub $ deps d w) in
-    let mkErrMsg _uw = "in " ++ show w ++ ", " ++ show _uw ++ " is undefined" in
-    fmap mkErrMsg lUndefDeps
+_testUndef :: Dict -> Word -> InsertionErrors
+_testUndef d w = fmap (`Undef` w) lUndef where
+    lUndef = L.filter (not . member d) (L.nub $ deps d w)
 
 -- encode bytecode; heuristically choose separate node vs internal
 _encodeDef :: VSpace -> ABC -> Def
@@ -342,23 +358,30 @@ _cyc a stack = L.dropWhile (/= a) $ L.reverse stack
 -- with a transitive list of words that would become undefined if you
 -- delete the requested words. Otherwise, the updated dictionary is
 -- returned.
---
 delete :: Dict -> [Word] -> Either [Word] Dict
 delete d lDel = 
-    let lClients = _usedByTransitive d Set.empty Set.empty lDel in
+    let lClients = usedByTransitive d lDel in
     let lUndef = L.filter (`L.notElem` lDel) lClients in
     if not (L.null lUndef) then Left lUndef else
-    let d_data' = Trie.deleteList (fmap _wordToKey lDel) (dict_data d) in
-    let oldDepsMap = _revDeps $ _depsList d lDel in
-    let newDepsMap = Map.empty in
-    let depsMapDiff = _diffDeps oldDepsMap newDepsMap in
-    let d_deps' = _updateDeps depsMapDiff (dict_deps d) in
-    let d' = Dict { dict_data = d_data', dict_deps = d_deps' } in
-    Right $! d'
+    Right $! unsafeDelete d lDel
 
+-- | delete a list of words without validating.
+-- May leave some words undefined.
+unsafeDelete :: Dict -> [Word] -> Dict
+unsafeDelete d lDel = Dict { dict_data = d_data', dict_deps = d_deps' } where
+    d_data' = Trie.deleteList (fmap _wordToKey lDel) (dict_data d)
+    oldDepsMap = _revDeps $ _depsMap d lDel
+    newDepsMap = Map.empty
+    depsMapDiff = _diffDeps oldDepsMap newDepsMap
+    d_deps' = _updateDeps depsMapDiff (dict_deps d)
+
+-- | Find all clients, recursively, for a list of words. This is 
+-- useful for computing invalidation after inserting a list of updates.
+usedByTransitive :: Dict -> [Word] -> [Word]
+usedByTransitive d ws = _usedByTransitive d Set.empty Set.empty ws
 
 -- find all transitive clients of a list of word
--- _ubt dict    searched    found      toSearch
+-- _usedByTransitive dict    searched    found      toSearch
 _usedByTransitive :: Dict -> Set Word -> Set Word -> [Word] -> [Word]
 _usedByTransitive _ _  s [] = Set.toList s
 _usedByTransitive d sw su (w:ws) = 
@@ -368,4 +391,32 @@ _usedByTransitive d sw su (w:ws) =
     let su' = L.foldl' (flip Set.insert) su lU in
     _usedByTransitive d sw' su' (lU ++ ws)
 
+-- | Rename a single word in the dictionary.
+--
+-- > rename1 dict orignalWord newWord
+--
+-- Renaming fails if the new word already has a definition unless
+-- said definition is identical, in which case rename will merge
+-- and collapse the two names. Renaming also fails if the original 
+-- is undefined or if the new word is malformed.
+--
+-- Rename is intended to support refactoring.
+--
+rename1 :: Dict -> Word -> Word -> Maybe Dict
+rename1 d wo wt = do
+    unless (isValidWord wt) mzero
+    abc0 <- lookup d wo
+    let bMergeOK = maybe True (== abc0) (lookup d wt)
+    unless bMergeOK mzero
+    let fnUpd wc = lookup d wc >>= \ abc -> return (wc, _renameInABC wo wt abc)
+    let lUpdC = catMaybes $ fmap fnUpd $ usedBy d wo
+    let lUpd = (wt, abc0) : lUpdC
+    return $! unsafeDelete (unsafeInsert d lUpd) [wo] 
+
+_renameInABC :: Word -> Word -> ABC -> ABC
+_renameInABC wo wt = ABC.rewriteTokens rwTok where
+    t0 = BS.cons 37 $ wordToUTF8 wo
+    tf = BS.cons 37 $ wordToUTF8 wt
+    rnTok t = if (t == t0) then tf else t
+    rwTok t = ABC.ABC [ABC.ABC_Tok (rnTok t)]
 
