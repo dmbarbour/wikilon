@@ -66,6 +66,7 @@ import Control.Monad
 import Data.Monoid
 import Data.Maybe 
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Char8 as Char8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.List as L
@@ -269,7 +270,7 @@ data InsertionError
 instance Show InsertionError where
     show (Undef uw w)   = "undefined {%" ++ show uw ++ "} in " ++ show w
     show (BadWord w)    = "malformed word: " ++ show w
-    show (BadToken t w) = "rejecting token {" ++ show t ++ "} in " ++ show w
+    show (BadToken t w) = "rejecting token {" ++ UTF8.toString t ++ "} in " ++ show w
     show (Cycle ws)     = "cyclic dependencies: " ++ show ws
 
 -- | Insert or Update a list of words. Any existing definition for 
@@ -396,9 +397,10 @@ _usedByTransitive d sw su (w:ws) =
 -- > rename1 dict orignalWord newWord
 --
 -- Renaming fails if the new word already has a definition unless
--- said definition is identical, in which case rename will merge
--- and collapse the two names. Renaming also fails if the original 
--- is undefined or if the new word is malformed.
+-- said definition is identical, in which case we merge and collapse
+-- the two names. Renaming may also fail if the original word is not
+-- defined or the new word is malformed. In case of failure, Nothing
+-- is returned.
 --
 -- Rename is intended to support refactoring.
 --
