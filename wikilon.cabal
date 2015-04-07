@@ -94,6 +94,8 @@ Library
     Wikilon.Dict.Token
     Wikilon.Dict.Type
 
+    Wikilon.Branch
+
 
     Wikilon.ABC
     Wikilon.RunABC
@@ -101,7 +103,6 @@ Library
     Wikilon
 
 
-    Wikilon.Branch
 
 
     Wikilon.Time

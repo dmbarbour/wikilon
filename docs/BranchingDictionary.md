@@ -1,9 +1,15 @@
 
 # Branching Dictionary
 
-Git, Mercurial, and other DVCS systems model *branching and merging* of content. This is useful: each developer can operate in his or her own little bubble while still interacting meaningfully with the community, by pushing and pulling content, requests, and issues. Branches can also provide stability, e.g. by allowing some branches to be more carefully curated than others, or using branches to tag release versions. I don't need to worry about 'frozen' words and so on, because it's easy to obtain a frozen snapshot of a whole dictionary.
+Wikilon is based on a 'dictionaries' concept instead of packages. A dictionary is always complete (i.e. no external dependencies), but developers can easily fork, merge, curate, and maintain dictionaries. Content is usually easy to cherry-pick between dictionaries, which would serve a role similar to packages.
 
-## Branching while Forgetting
+A branching dictionary is useful because it enables multiple versions to exist with different levels of stability and curation. Branches also serve as version tags, e.g. if developers wish to 'freeze' a version of a dictionary they can do so by forking then keeping one branch stable. 
+
+## Branching with History
+
+Having historical information for a dictionary is useful. It can ensure greater resilience to mistakes or vandalism. It can help us find when a bug was introduced, and thus help trace it to a particular source. However, to avoid space concerns of keeping large histories, I'll be using an exponential decay model, i.e. keeping a logarithmic-scale history.
+
+### Branching while Forgetting
 
 One challenge is to support both branches and logarithmic history. Options?
 

@@ -39,15 +39,15 @@ type Def  = Sz LBS.ByteString
 type Deps = Sz [BS.ByteString]
 type Sz a = Either (VRef a) a
 -- Currently, definitions and dependencies are inlined into our Trie
--- nodes up to a heurstic threshold in size, maybe ~700 bytes. Very 
+-- nodes up to a heurstic threshold in size, a few hundred bytes. Very 
 -- large elements thus use their own nodes to help control deep lookup
 -- costs.
 --
 -- At the moment, I'm not compressing the dictionary entries. I'll 
 -- review this option later, if I start seeing very large entries.
 depSizeThresh, defSizeThresh :: Int
-depSizeThresh = 700
-defSizeThresh = 700
+depSizeThresh = 400
+defSizeThresh = 400
 
 -- includes version number to support updates to representation
 -- (e.g. in case I add compression later).
