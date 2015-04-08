@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 
 -- | Wikilon timestamp
 --
@@ -22,9 +23,11 @@ import qualified Data.Time.Calendar as Time
 import qualified Data.Time.Format as Time
 -- import Control.Exception (assert)
 import qualified Data.Decimal as Dec
+import Data.Typeable (Typeable)
+import Database.VCache
 
 -- | Timestamp in Wikilon
-newtype T = T Int64 deriving (Eq, Ord)
+newtype T = T Int64 deriving (Eq, Ord, Typeable)
 
 instance Bounded T where
     minBound = T minBound 
@@ -65,7 +68,7 @@ toUTC (T t) = Time.UTCTime days timeInDay where
 -- | DT - a representation of a difference in two times
 -- Conversion functions treat as seconds. Precision is
 -- fixpoint 0.1µs.
-newtype DT = DT Int64 deriving (Eq, Ord)
+newtype DT = DT Int64 deriving (Eq, Ord, Typeable)
 
 -- | Add a difference in time to an absolute time.
 addTime :: T -> DT -> T
@@ -137,3 +140,14 @@ instance Show DT where
             if (pp < 1000*1000*1000) then (6,"µs") else
             if (pp < 1000*1000*1000*1000) then (9,"ms") else
             (12,"s")
+
+-- convenient persistence for time values
+instance VCacheable T where
+    get = T . fromInteger <$> get
+    put (T tm) = put (toInteger tm)
+instance VCacheable DT where
+    get = DT . fromInteger <$> get
+    put (DT dt) = put (toInteger dt)
+
+
+

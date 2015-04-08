@@ -16,7 +16,8 @@
 --
 -- The intermediate structured value `v` corresponds to DSL or syntax.
 -- This enables developers to manipulate definitions through structure
--- editors, potentially at a higher level than words and bytecode. 
+-- editors, potentially at a higher level than words and bytecode, and
+-- also readily supports staged programming.
 --
 -- This dictionary module enforces three invariants:
 --

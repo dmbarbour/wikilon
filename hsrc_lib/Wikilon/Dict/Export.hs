@@ -3,33 +3,28 @@
 -- dictionaries, emitting an entire dictionary as a large file. This
 -- dictionary uses the following format:
 --
---   %over [{%dupd} {%swap}][]
---   %dupd [rw{%dup}wl][]
---   %swap [rwrwzwlwl][]
---   %dup [r^zlwl][]
---   %doc.dup "(Copyable x) ⇒ x -- x x
+--   @over [{%dupd} {%swap}][]
+--   @dupd [rw{%dup}wl][]
+--   @swap [rwrwzwlwl][]
+--   @dup [r^zlwl][]
+--   @doc.dup "(Copyable x) ⇒ x -- x x
 --    ~[{%docString}]
 --
 -- Or more generally:
 --
---   %word bytecode
---   %anotherWord more bytecode
---   %multiLineWord bytecode continues
+--   @word bytecode
+--   @anotherWord more bytecode
+--   @multiLineWord bytecode continues
 --    on another line, each LF escaped
 --    by following SP
 --
--- The bytecode in this case has models a (v→fn,v) pair such that a
--- single operator `$` will compile the value into a function. The
--- split logic between compiler and value helps model an abstract
--- syntax, structured views and editors.
+-- The type of each definition is: ∀s.s→∃v.((v→fn)*(v*s)). See the
+-- Wikilon.Dict module for more information.
 --
--- This export model is intended for easy extension into streamable
--- models, i.e. by providing different prefixes for extended sets of
--- commands. 
---
--- In the basic case, however, we'll simply export words such that
--- all hyperstatic dependencies are addressed first, for easy stream
--- processing.
+-- This export format is intended for easy extension into streamable
+-- update models, leveraging new prefixes for alternative commands
+-- such as indicating time or origin, renaming words, or deleting
+-- words. 
 module Wikilon.Dict.Export
     ( encode
     , encodeWords
@@ -91,7 +86,7 @@ _enw d w =
         case lookupBytes d w of
             Nothing -> return ()
             Just bytes -> enc_print $
-                BB.char8 '%' <> BB.byteString (wordToUTF8 w) <> BB.char8 ' ' 
+                BB.char8 '@' <> BB.byteString (wordToUTF8 w) <> BB.char8 ' ' 
                 <> _esc bytes <> BB.char8 '\n'
 
 _esc :: LBS.ByteString -> BB.Builder

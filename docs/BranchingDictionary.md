@@ -5,33 +5,23 @@ Wikilon is based on a 'dictionaries' concept instead of packages. A dictionary i
 
 A branching dictionary is useful because it enables multiple versions to exist with different levels of stability and curation. Branches also serve as version tags, e.g. if developers wish to 'freeze' a version of a dictionary they can do so by forking then keeping one branch stable. 
 
-## Branching with History
+Each branch will have an *incomplete* history of versions. I plan to leverage exponential decay (logarithmic history) models, i.e. such that we lose intermediate versions the further we look into the past. Branches may decay independently, or I may choose to decay all branches at once. An abandoned branch will decay more rapidly than others.
 
-Having historical information for a dictionary is useful. It can ensure greater resilience to mistakes or vandalism. It can help us find when a bug was introduced, and thus help trace it to a particular source. However, to avoid space concerns of keeping large histories, I'll be using an exponential decay model, i.e. keeping a logarithmic-scale history.
+A challenge with incomplete histories is that I cannot readily align commentary (e.g. change logs, merge history, issue trackers) with commits. I'm tempted to support this instead as part of the dictionary itself. Doing so would make this information more accessible, extensible, flexible. 
 
-### Branching while Forgetting
+I wonder if we can align 'merge' behaviors with sealed values. E.g. for rendering, we'll probably leverage discretionary sealers like `{:foo}` to help drive rendering, looking up an associated render function. Potentially, we can do the same for merge behavior, looking up a merge function in the dictionaries. This would make it easy for us to combine changelogs and issue sets when merging.
 
-One challenge is to support both branches and logarithmic history. Options?
+## Curation of Branches
 
-* History for all Branches: `History (Map Branch Image)`
-* History modeled per Branch: `Map Branch (History Image)`
- * Collect each history independently.
- * Collect all histories concurrently.
+Typical workflows with branching involve having some development branches, some feature branches, some branches that are more experimental than others, some that are tightly curated. I'm not entirely sure how to do the access control for all of this yet, but I don't believe it will be an issue.
 
-A history for the set of all branches would be a simple approach. It provides a snapshot view for multiple dictionaries, though I'm not aware of any scenarios where that property would be desirable. The disadvantage is that there is no way for developers to precisely administrate a branch, e.g. to delete specific versions of content for infosec, intellectual property, or privacy reasons, or to mark a particular branch as dead so it can be cleared more aggressively.
+Relatedly, we might want to receive notifications when a 'related' branch is updated. A branch is related on our future:
 
-Collecting branch histories independently has its own problems: old, unused branches will continue to take a fixed amount of space, even though nobody needs the older values. It seems wise that old, stable branches of the dictionary should gradually decay to make space for new, growing branches. 
+1. if we're going to merge branch F into Master, we want to hear about changes in Master, so we can merge them into F.
+1. if someone else is going to merge branch F' into Master, we want to hear about changes in F', so we can avoid conflicts and coordinate efforts.
+1. if omeone else wants to merge G into F', which will be merged into master, we want to hear about it, again to avoid conflicts.
 
-The third option seems best at the moment. We track the total number of images for all branches. When above some threshold, we collect all the histories. The total number of collectable images across all branches may thus be constrained at a whole-wiki level, while preserving effective comparisons within each dictionary. Usefully, we can also introduce features such as removing specific snapshots, or tuning decay rates for 'dead' branches.
-
-So it seems this is an approach I shall pursue for now.
-
-## Continuous and Pending Merges
-
-It seems useful that we might have a 'branch' of the wiki for every developer, i.e. as a simple basis for transactional editing with undo. And a useful feature, in context of editing with the intent to push content back upstream, is to know:
-
-* when have conflicting edits been made to our origin?
-* when and where is conflict between user edits likely?
+Of course we cannot see the future, so we probably need to announce our intentions. We might announce and coordinate via the Master dictionary itself, using a specific word, but that seems awkward and difficult to control. It may be best to coordinate via the AVM layers and network model, with an understanding that a dictionary is (more or less) hosted by an AVM.
 
 For computer supported cooperative work (CSCW), it's important that these questions be answered almost in real-time. This suggests that users operating on the same curated 'origin' should know about each other, what each individual is working on, and have some ability to perform pull requests even at this layer. 
 
@@ -43,15 +33,7 @@ Merging usually involves computing a change-set then applying it.
 
 The change-set is computed relative to some common historical image. So, it's important that we also track when merges have occurred between branches so we know what are the common origins are. Computing a change-set relative to a historical image allows users to isolate content that a specific human was manipulating from the content manipulated by other humans.
 
-We can potentially reverse this, if we force humans to continuously merge content from the head of their origin branch. But an interesting point is that every branch probably needs a proper copy of its origin at the time of branching. 
-
-When merging, a useful feature is potentially to *cherry pick* content. 
-
-I wonder if it might be useful to create specialized dictionaries, i.e. a dictionary whose content is filtered down to just a few toplevel words and all their deep dependencies, as a potential basis for cherry picking. 
-
-When merging, one mechanism to eliminate conflicts is to rename content. But it isn't clear that we have a generic way to rename content once we start considering [extensible syntax](ExtensibleSyntax.md). I'll need to think about this.
-
-
+When merging, a useful feature is potentially to *cherry pick* content, i.e. to merge a specific set of words (and their dependencies). Also, the ability to rename on merge might be useful. I'm not entirely sure how to address these, except maybe to specify a set of toplevel words that we wish to merge.
 
 Now, it would be pretty trivial to just grab the current value of a word. But I think we can do better if we grab the whole history of the remote wiki, perhaps filtered for whatever words you've cherry-picked and the dependencies for those words.
 

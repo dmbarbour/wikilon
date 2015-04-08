@@ -52,7 +52,7 @@ Library
   default-language: Haskell2010
   Build-Depends: base (>= 4.6 && < 5)
 
-    , vcache
+    , vcache (>= 0.2.5)
     , vcache-trie (>= 0.1.1)
 
     , bytestring
@@ -94,6 +94,8 @@ Library
     Wikilon.Dict.Token
     Wikilon.Dict.Type
 
+    Wikilon.Hist
+    Wikilon.StateHist
     Wikilon.Branch
 
 
