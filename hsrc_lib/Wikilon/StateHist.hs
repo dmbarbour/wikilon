@@ -15,7 +15,7 @@ import Wikilon.Hist
 data StateHist a = StateHist
     { _curr :: !a          -- current value
     , _prev :: !(Hist a)   -- older entries
-    } deriving (Typeable)
+    } deriving (Typeable, Eq)
 
 instance (VCacheable a) => VCacheable (StateHist a) where
     put (StateHist curr prev) = put curr >> put prev

@@ -32,10 +32,15 @@ import Wikilon.StateHist
 -- that they are suitable as words in our dictionaries.
 type BranchName = UTF8.ByteString
 
--- | A BranchSet is a collection of named branches. Since we possibly
--- have a very large branchset (e.g. thousands of branches for as many
--- users or projects), a trie is appropriate here.
-type BranchSet = Trie Branch
+-- | A BranchSet is a collection of named branches. 
+type BranchSet = BranchSet0
+
+-- versioned branchset model
+data BranchSet0 = BranchSet0
+    { b_root :: !(Trie Branch)
+    , b_bct  :: {-# UNPACK #-} !Int -- total number of branches
+    , b_dct  :: {-# UNPACK #-} !Int -- total number of dictionaries
+    } deriving (Typeable, Eq)
 
 -- | Every Branch includes a dictionary history and a merge history.
 --
@@ -46,13 +51,11 @@ type Branch = Branch0
 
 -- versioned branching model
 data Branch0 = Branch0
-    { b_dict    :: !DictHist  -- ^ snapshots and head 
-    , b_merge   :: !MergeHist -- ^ merge history
-    , b_count   :: {-# UNPACK #-} !Int -- total number of branches
-    , b_size    :: {-# UNPACK #-} !Int -- total number of dictionaries
-    , b_create  :: !T         -- ^ when was branch created?
-    , b_delete  :: !(Maybe T) -- ^ has branch been deleted? if so, when?
-    } deriving (Typeable)
+    { b_dict    :: !DictHist  -- snapshots and head 
+    , b_merge   :: !MergeHist -- merge history
+    , b_create  :: !T         -- when was branch created?
+    , b_delete  :: !(Maybe T) -- has branch been deleted? if so, when?
+    } deriving (Typeable, Eq)
 
 -- | The dictionary history consists of snapshots of the dictionary
 -- over time. This history is subject to exponential decay, resulting
@@ -69,35 +72,44 @@ type DictHist = StateHist Dict
 -- count as a merge.
 type MergeHist = Hist BranchName
 
-
 instance VCacheable Branch0 where
     put b = do 
         putWord8 0 -- version
-        put (b_count b)
-        put (b_size b)
         put (b_create b)
         put (b_delete b)
         put (b_merge b)
         put (b_dict b)
     get = getWord8 >>= \ v -> case v of
         0 -> do
-            ct <- get
-            sz <- get
             t0 <- get
             tf <- get
             hm <- get
             hd <- get
             return $! Branch0
-                { b_count = ct
-                , b_size = sz
-                , b_create = t0
+                { b_create = t0
                 , b_delete = tf
                 , b_merge = hm
                 , b_dict = hd
                 }
-        _ -> fail $ branchErr $ "unrecognized version " ++ show v
+        _ -> fail $ branchErr $ "unrecognized Branch version " ++ show v
 
-
+instance VCacheable BranchSet0 where
+    put b = do
+        putWord8 0 -- version
+        put (b_bct b)
+        put (b_dct b)
+        put (b_root b)
+    get = getWord8 >>= \ v -> case v of
+        0 -> do
+            bct <- get
+            dct <- get
+            root <- get
+            return $! BranchSet0 
+                { b_bct = bct
+                , b_dct = dct
+                , b_root = root
+                }
+        _ -> fail $ branchErr $ "unrecognized BranchSet version " ++ show v
 
 
 branchErr :: String -> String

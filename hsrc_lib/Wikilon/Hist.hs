@@ -1,32 +1,34 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 
 -- | A very simple, time-ordered VCache-layer list with recent values
--- near the head. The values here may represent events or states, so
--- there isn't much semantic content. The main purpose for Hist is to
--- help control VCache chunking for systems that prefer to access the
--- recent values rather than the older ones.
+-- near the head and old values stored near the rear.
+--
+-- Thoughts: it might be better to generalize this, e.g. into a
+-- Data.Sequence.
 module Wikilon.Hist
     ( Hist
-{-
     , empty
-    , insert
-
+--    , insert
     , null
     , length
-    
+
+{-    
     , trim
     , decay
-
+-}
     , toList
     , fromList
--}
+    , fromOrdList
+
+
     , hist_space
     , module Wikilon.Time
     ) where
 
 import Prelude hiding (length, null)
 import Control.Exception (assert)
-import Control.Applicative
+import Control.Applicative hiding (empty)
+import Data.Function (on)
 import Data.Typeable (Typeable)
 import qualified Data.List as L
 import Database.VCache
@@ -60,14 +62,34 @@ null = (0 ==) . length
 empty :: VSpace -> Hist a
 empty vc = Hist0 vc 0 0 [] Nothing
 
--- | Insert into a history. Usually, you should be adding the most
--- recent entry, in which case this is O(1). However, if the time
--- given is for an older entry, we will scan back as far as necessary
--- to insert that entry, and replace or merge it.
---
--- Heuristically, nodes near the head of our history will use smaller
--- chunk sizes than nodes near the rear of our histories.
--- insert :: (VCacheable a) => 
+-- | O(N), lazily generate a list of time,val pairs from our history.
+toList :: Hist a -> [(T,a)]
+toList h = 
+    let rh = h_recent h in
+    case h_ancient h of
+        Nothing -> rh
+        Just v -> rh ++ toList (deref' v)
+
+-- | O(N * lg(N)), generate a history from a list of time,val pairs. This
+-- will sort the list prior. 
+fromList :: VSpace -> [(T,a)] -> Hist a
+fromList vc = fromOrdList vc . L.sortBy tmDesc where
+    tmDesc = flip compare `on` fst
+
+-- | O(N), generate a history from a list of time,val pairs descending in
+-- time (i.e. such that the most recent time is near the head). This will
+-- generate an invalid history if the list is not ordered.
+fromOrdList :: VSpace -> [(T,a)] -> Hist a
+fromOrdList vc = error "TODO"
+
+
+
+-- | insert a value into the history. This will fail if the insert
+-- insert :: (T,a) -> Hist a -> Maybe Hist a
+
+
+instance Eq a => Eq (Hist0 a) where
+    (==) = (==) `on` toList
 
 instance VCacheable a => VCacheable (Hist0 a) where
     put (Hist0 vc ctR ctA hR hA) = do
