@@ -84,6 +84,9 @@ Library
 
   Exposed-Modules:
 
+    Data.VCache.LoB
+
+
     ABC.Basic
     ABC.Base16
     ABC.Text
@@ -94,8 +97,6 @@ Library
     Wikilon.Dict.Token
     Wikilon.Dict.Type
 
-    Wikilon.Hist
-    Wikilon.StateHist
     Wikilon.Branch
 
 

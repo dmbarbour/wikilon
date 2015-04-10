@@ -177,9 +177,9 @@ data ExtOp
 -- effectively a prototype for ABCD.
 extOpTable :: [(ExtOp, Char, Pure.ABC)]
 extOpTable =
-    [(Op_Inline,  '¥', "vr$c")
+    [(Op_Inline,  '£', "vr$c")
     ,(Op_Apc,     '¢', "$c")
-    ,(Op_Fixpoint, 'Ȳ', "[^'ow^'zowvr$c]^'ow^'zowvr$c")
+    ,(Op_Fixpoint, '¥', "[^'ow^'zowvr$c]^'ow^'zowvr$c")
 
     ,(Op_Intro1L, 'ń', "vvrwlc")
     ,(Op_Elim1L,  'ć', "vrwlcc")

@@ -16,20 +16,19 @@ module Wikilon.Branch
     , MergeHist
     ) where
 
-import Data.Monoid
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString as BS
 import Data.Typeable (Typeable)
 import Database.VCache
 import Data.VCache.Trie (Trie)
 import qualified Data.VCache.Trie as Trie
-
+import Data.VCache.LoB (LoB)
+import qualified Data.VCache.LoB as LoB
 import Wikilon.Dict
-import Wikilon.Hist
-import Wikilon.StateHist
+import Wikilon.Time
 
 -- | Branch names are simple Utf8 strings. We might enforce also
--- that they are suitable as words in our dictionaries.
+-- that they use the same naming heuristics as dictionary words.
 type BranchName = UTF8.ByteString
 
 -- | A BranchSet is a collection of named branches. 
@@ -51,45 +50,53 @@ type Branch = Branch0
 
 -- versioned branching model
 data Branch0 = Branch0
-    { b_dict    :: !DictHist  -- snapshots and head 
-    , b_merge   :: !MergeHist -- merge history
-    , b_create  :: !T         -- when was branch created?
-    , b_delete  :: !(Maybe T) -- has branch been deleted? if so, when?
-    } deriving (Typeable, Eq)
+    { b_head    :: !Dict       -- head dictionary
+    , b_hist    :: !DictHist   -- history of dictionary
+    , b_merge   :: !MergeHist  -- merge history
+    , b_create  :: !T          -- when was branch created?
+    , b_delete  :: !(Maybe T)  -- has branch been deleted? if so, when?
+    } deriving (Typeable)
 
 -- | The dictionary history consists of snapshots of the dictionary
 -- over time. This history is subject to exponential decay, resulting
 -- in log-scale views into the past, losing intermediate states.
-type DictHist = StateHist Dict
+type DictHist = Hist Dict
 
--- | A merge history tracks when a branch receives information from other
--- branches. The goal here is to have just enough information to render a
--- pretty picture of the larger branch and merge graph. But this data may
--- prove useful for other operations.
---
--- A branch will not name itself in its own merge history. Most updates
--- are not considered to be merges. Initially forking a dictionary does
--- count as a merge.
+-- | A merge history tracks enough information to render a geneology
+-- of the branch set. Each entry indicates that some information was
+-- received from another branch as a result of merge or fork. Normal
+-- updates to a dictionary are not considered to be merges.
 type MergeHist = Hist BranchName
+
+-- A history is just a list of (time,value) pairs, usually ordered.
+-- In this case we'll limit the number of history elements directly
+-- held by our branches via LoB. 
+--
+-- The history is held indirectly because it isn't something we'll
+-- usually access.
+type Hist a = VRef (LoB (T, a))
 
 instance VCacheable Branch0 where
     put b = do 
         putWord8 0 -- version
         put (b_create b)
         put (b_delete b)
+        put (b_head b)
+        put (b_hist b)
         put (b_merge b)
-        put (b_dict b)
     get = getWord8 >>= \ v -> case v of
         0 -> do
-            t0 <- get
-            tf <- get
-            hm <- get
-            hd <- get
+            _create <- get
+            _delete <- get
+            _head <- get
+            _hist <- get
+            _merge <- get
             return $! Branch0
-                { b_create = t0
-                , b_delete = tf
-                , b_merge = hm
-                , b_dict = hd
+                { b_create = _create
+                , b_delete = _delete
+                , b_head = _head
+                , b_hist = _hist
+                , b_merge = _merge
                 }
         _ -> fail $ branchErr $ "unrecognized Branch version " ++ show v
 
@@ -101,13 +108,13 @@ instance VCacheable BranchSet0 where
         put (b_root b)
     get = getWord8 >>= \ v -> case v of
         0 -> do
-            bct <- get
-            dct <- get
-            root <- get
+            _bct <- get
+            _dct <- get
+            _root <- get
             return $! BranchSet0 
-                { b_bct = bct
-                , b_dct = dct
-                , b_root = root
+                { b_bct = _bct
+                , b_dct = _dct
+                , b_root = _root
                 }
         _ -> fail $ branchErr $ "unrecognized BranchSet version " ++ show v
 
