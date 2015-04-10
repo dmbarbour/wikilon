@@ -98,7 +98,7 @@ Library
     Wikilon.Dict.Type
 
     Wikilon.Branch
-
+    Wikilon.BranchSet
 
     Wikilon.ABC
     Wikilon.RunABC

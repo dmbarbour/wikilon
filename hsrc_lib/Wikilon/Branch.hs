@@ -10,36 +10,23 @@
 -- This module does not touch access control, curation, workflows, etc..
 module Wikilon.Branch
     ( Branch
-    , BranchSet
     , BranchName
-    , DictHist
     , MergeHist
+    , DictHist
     ) where
 
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString as BS
 import Data.Typeable (Typeable)
 import Database.VCache
-import Data.VCache.Trie (Trie)
-import qualified Data.VCache.Trie as Trie
 import Data.VCache.LoB (LoB)
 import qualified Data.VCache.LoB as LoB
 import Wikilon.Dict
 import Wikilon.Time
 
--- | Branch names are simple Utf8 strings. We might enforce also
--- that they use the same naming heuristics as dictionary words.
+-- | Branches are named in their BranchSet. These names are simple
+-- strings. The names are also used in the branch histories.
 type BranchName = UTF8.ByteString
-
--- | A BranchSet is a collection of named branches. 
-type BranchSet = BranchSet0
-
--- versioned branchset model
-data BranchSet0 = BranchSet0
-    { b_root :: !(Trie Branch)
-    , b_bct  :: {-# UNPACK #-} !Int -- total number of branches
-    , b_dct  :: {-# UNPACK #-} !Int -- total number of dictionaries
-    } deriving (Typeable, Eq)
 
 -- | Every Branch includes a dictionary history and a merge history.
 --
@@ -98,25 +85,7 @@ instance VCacheable Branch0 where
                 , b_hist = _hist
                 , b_merge = _merge
                 }
-        _ -> fail $ branchErr $ "unrecognized Branch version " ++ show v
-
-instance VCacheable BranchSet0 where
-    put b = do
-        putWord8 0 -- version
-        put (b_bct b)
-        put (b_dct b)
-        put (b_root b)
-    get = getWord8 >>= \ v -> case v of
-        0 -> do
-            _bct <- get
-            _dct <- get
-            _root <- get
-            return $! BranchSet0 
-                { b_bct = _bct
-                , b_dct = _dct
-                , b_root = _root
-                }
-        _ -> fail $ branchErr $ "unrecognized BranchSet version " ++ show v
+        _ -> fail $ branchErr $ "unrecognized version " ++ show v
 
 
 branchErr :: String -> String
