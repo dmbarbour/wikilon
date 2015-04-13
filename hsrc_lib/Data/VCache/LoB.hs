@@ -1,18 +1,20 @@
-{-# LANGUAGE DeriveDataTypeable, PatternGuards #-}
+{-# LANGUAGE DeriveDataTypeable, BangPatterns, PatternGuards #-}
 
 -- | a list of blocks of values for VCache
 module Data.VCache.LoB 
     ( LoB
     , lob_space
+    , blockSize
     , empty
     , cons
     , uncons
     , null
     , length
     , toList
+    , reverse
     ) where
 
-import Prelude hiding (length, null, foldl, foldr)
+import Prelude hiding (length, null, reverse, foldl)
 import Control.Exception (assert)
 import Control.Applicative hiding (empty)
 import Data.Maybe
@@ -26,8 +28,7 @@ import Database.VCache
 -- and so on recursively. The total amount in main memory is O(lg(N)).
 --
 -- The client must choose a block size, the number of leaf elements to
--- store together in one block. This may be as little as 1, but for
--- small elements developers might prefer to store many.
+-- store together in one block (at least 1).
 type LoB a = LoB0 a
 
 lob_space :: LoB a -> VSpace
@@ -40,7 +41,7 @@ data LoB0 a = LoB0
     , l_buffSize    :: {-# UNPACK #-} !Int
     , l_buffer      :: ![a]
     , l_bpages      :: !(Maybe (Block a, LoB (Block a)))
-    } deriving (Typeable)
+    } deriving (Typeable, Eq)
 type Block a = VRef [a]
 
 -- | Create an empty LoB. You must provide the block size and the
@@ -56,6 +57,9 @@ empty vc bsz = LoB0
     , l_buffer = []
     , l_bpages = Nothing
     }
+
+blockSize :: LoB a -> Int
+blockSize = l_blockSize
 
 -- | Add an element to the LoB. 
 --
@@ -124,9 +128,11 @@ uncons l = case l_buffer l of
 _pageSize :: Int
 _pageSize = 16
 
--- How much slack should we allow? Currently set to 25%.
+-- Each LoB can store up to one full page in its buffer. When we're
+-- about to add one more element, we'll store the current buffer into
+-- a page as a single element for the block page (repeat recursively).
 _tooBig :: LoB a -> Bool
-_tooBig l = (4 * l_buffSize l) > (5 * l_blockSize l)
+_tooBig l = l_buffSize l >= l_blockSize l
 
 -- | lazily load LoB as a list. O(N) total, but streamable.
 toList :: LoB a -> [a]
@@ -136,14 +142,10 @@ toList l = buff ++ L.concatMap deref' pages where
         Just (b, lb) -> b : toList lb
         Nothing -> []
 
-
-{- should I try for structural equality? No. Due to slack, this wouldn't work.
-instance Eq a => Eq (LoB0 a) where
-    (==) a b | (l_blockSize a == l_blockSize b) =
-                    (l_bpages a == l_bpages b) &&
-                    (l_buffer a == l_buffer b)
-             | otherwise = (toList a == toList b)
--}          
+-- | Reverse an LoB list.
+reverse :: (VCacheable a) => LoB a -> LoB a
+reverse l = L.foldl' (flip cons) rl0 (toList l) where
+    rl0 = empty (lob_space l) (l_blockSize l)
 
 instance VCacheable a => VCacheable (LoB0 a) where
     put l = do
