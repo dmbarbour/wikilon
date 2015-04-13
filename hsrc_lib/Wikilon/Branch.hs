@@ -87,11 +87,15 @@ lookup :: BranchName -> BranchSet -> Maybe Branch
 lookup n = Trie.lookupc CacheMode0 n . s_data
 
 b_empty :: VSpace -> Branch
-b_empty vc = Branch0 (Dict.empty vc) (LoB.empty 16 vc)
+b_empty vc = Branch0 (Dict.empty vc) (LoB.empty vc 16)
 
 -- | Insert a branch into the branch set.
 insert :: BranchName -> Branch -> BranchSet -> BranchSet
 insert n = adjust n . const . Just
+
+-- | Delete a branch from the branchs et.
+delete :: BranchName -> BranchSet -> BranchSet
+delete n = adjust n (const Nothing)
 
 -- | Adjust a branch in the branch set.
 adjust :: BranchName -> (Maybe Branch -> Maybe Branch) -> BranchSet -> BranchSet
@@ -99,7 +103,7 @@ adjust n fn s0 = sf where
     sf = BSet0 { s_width = wf, s_volume = vf, s_data = df }
     wf = s_width s0 + wbf - wb0
     vf = s_volume s0 + vbf - vb0
-    df = Trie.adjust (const mbf) (s_data s0)
+    df = Trie.adjust (const mbf) n (s_data s0)
     mb0 = lookup n s0
     wb0 = maybe 0 (const 1) mb0
     vb0 = maybe 0 b_volume mb0
@@ -108,7 +112,7 @@ adjust n fn s0 = sf where
     vbf = maybe 0 b_volume mbf
 
 b_volume :: Branch -> Int
-b_volume = (1 +) . LoB.length . deref' . b_hist
+b_volume = (1 +) . LoB.length . b_hist
 
 -- | read the head version of a branch
 head :: Branch -> Dict
@@ -119,18 +123,17 @@ head = b_head
 -- history can be read as each (Time,Dict) pair saying that the dictionary
 -- was used up until the given time.
 hist :: Branch -> [(T, Dict)]
-hist = LoB.toList . deref' . b_hist
+hist = LoB.toList . b_hist
 
 -- | update the dictionary for a branch. This returns the original 
 -- dictionary unless there is an actual change.
-b_update :: (T,Dict) -> Branch -> Branch 
-b_update (t,d) b = 
+update :: (T,Dict) -> Branch -> Branch 
+update (t,d) b = 
     let d0 = b_head b in
     if (d0 == d) then b else
-    let h = deref' (b_hist b) in
+    let h = b_hist b in
     let h' = LoB.cons (t,d0) h in
-    let hist' = vrefc CacheMode0 (b_space d0) h' in
-    Branch0 d hist'
+    Branch0 d h'
 
 b_space :: Branch -> VSpace
 b_space = Dict.dict_space . b_head
@@ -145,10 +148,9 @@ empty vc = BSet0 0 0 (Trie.empty vc)
 -- least one item is removed from the history.
 decayBranch :: Branch -> Branch
 decayBranch b = b' where
-    b' = b { b_hist = vref' (b_space b) h' }
-    h = deref' (b_hist b) 
-    h' = _decayHist (b_head b) tgt0
-    len = LoB.length h
+    b' = b { b_hist = h' }
+    h' = _decayHist (b_head b) tgt0 (b_hist b)
+    len = LoB.length (b_hist b)
     tgt0 = if len < 10 then (len - 1) else (9 + (len `mod` 10))
 
 _decayHist :: Dict -> Int -> LoB (T, Dict) -> LoB (T, Dict)
@@ -161,7 +163,7 @@ _decayHist d n l = case LoB.uncons l of
 
 -- | apply an exponential decay function to all the branches of the
 -- branch set. A branch is fully removed from the branch set if it
--- has an empty dictionary and no history. 
+-- has an empty dictionary and history. 
 decay :: BranchSet -> BranchSet
 decay s0 = sf where
     branchList = Trie.keys (s_data s0) 

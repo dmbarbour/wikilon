@@ -12,8 +12,8 @@ module Wikilon.Geneology
     ( Geneology
     , empty
     , addChild
-    , forks
-    , merges
+    , parentsOf
+    , childrenOf
     , vspace
     ) where
 
@@ -62,11 +62,11 @@ vspace = Trie.trie_space . g_fork
 --
 addChild :: Name -> Name -> T -> Geneology -> Geneology
 addChild parent child time g0 = gf where
-    vc = g_space g0
-    add label = Just . _insHist (time,label) . maybe (_newHist vc) id
-    fork' = Trie.adjust (add parent) (g_fork g0)
-    merge' = Trie.adjust (add child) (g_merge g0)
-    gf = G0 { g_space = vc, g_fork = fork', g_merge = merge' } 
+    vc = vspace g0
+    add lbl = Just . _insHist (time,lbl) . maybe (_newHist vc) id
+    fork' = Trie.adjust (add child) parent (g_fork g0)
+    merge' = Trie.adjust (add parent) child (g_merge g0)
+    gf = G0 { g_fork = fork', g_merge = merge' } 
 
 _newHist :: VSpace -> LoB (T, Name)
 _newHist vc = LoB.empty vc 16
@@ -81,11 +81,11 @@ _insHist e l = case LoB.uncons l of
         LoB.cons e0 (_insHist e l')
 
 -- | Find all direct child relationships from named branch.
-childrenOf :: BranchName -> Geneology -> [(T, Name)]
+childrenOf :: Name -> Geneology -> [(T, Name)]
 childrenOf n = maybe [] LoB.toList . Trie.lookup n . g_fork
 
 -- | Find all direct parent relationships from named branch.
-parentsOf :: BranchName, -> Geneology -> [(T, Name)] 
-parentsOf n g = maybe [] LoB.toList . Trie.lookup n . g_merge
+parentsOf :: Name -> Geneology -> [(T, Name)] 
+parentsOf n = maybe [] LoB.toList . Trie.lookup n . g_merge
 
 
