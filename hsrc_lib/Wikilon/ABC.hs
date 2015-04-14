@@ -6,28 +6,29 @@
 --
 -- See <https://github.com/dmbarbour/awelon/blob/master/AboutABC.md>.
 --
--- For performance, ABC supports {#resourceId} tokens for separate
--- compilation and dynamic linking, and ABC is extensible to ABCD 
--- (ABC Deflated) which includes a dictionary of common functions as
--- operators. ABC is intended for mix of just in time and ahead of 
--- time compilation.
+-- ABC has a major weakness: naive interpretation is inefficient. ABC
+-- must be compiled for effective use. JIT compilation is viable, as
+-- is separate compilation via {#resourceId} tokens. Wikilon lacks JIT
+-- compilation, though approaches using Haskell plugins or Lambdachine
+-- may be viable. 
 --
--- Wikilon doesn't provide any just-in-time compilation, mostly because
--- GHC Haskell doesn't make JIT easy. Plugins might eventually be used
--- for this role. 
+-- An intermediate concept for compilation to recognize a dictionary 
+-- of common subprograms and accelerate them with built-in functions 
+-- in the interpreter. A planned ABCD (ABC Deflated) is expected to
+-- use this idea for compression and fast interpretation of streaming
+-- code. But ABCD must be standardized carefully.
 --
--- But, in the short term, we can mitigate interpreter performance by
--- pre-processing the bytecode:
+-- Wikilon aims to mitigate performance by the following:
 --
---  * dictionary of accelerated operators
+--  * dictionary of ABCD-like accelerated operators
 --  * separate values for efficient quotation
 --  * lazy loading of large values through VCache 
 --  * fast slicing for texts, blocks, and tokens
---  * GZip compression for storing ABC in VCache
+--  * fast compression for storage of large ABC
 --
 -- Unlike ABCD, the internal Wikilon dictionary doesn't wait on any
 -- standards committee. Unlike {#resourceId} tokens, VCache refs are
--- cheap and support reference counting garbage collection.
+-- cheap and support implicit reference counting garbage collection.
 --
 module Wikilon.ABC
     ( ABC(..)
@@ -54,10 +55,8 @@ import qualified Data.ByteString.UTF8 as UTF8
 import Database.VCache
 import qualified ABC.Basic as Pure
 
-
 type Token = UTF8.ByteString
 type Text = LazyUTF8.ByteString
-
 
 -- | Wikilon's internal representation of Awelon Bytecode (ABC). This
 -- encoding has several features:
@@ -69,8 +68,8 @@ type Text = LazyUTF8.ByteString
 --
 -- Equality for bytecode is inherently structural.
 data ABC = ABC
-    { abc_code :: !LBS.ByteString -- Wikilon's internal bytecode
-    , abc_data :: !Value          -- a stack of value resources
+    { abc_code :: !LBS.ByteString -- Wikilon internal ABC variant 
+    , abc_data :: Value           -- a (lazily) precomputed value
     } deriving (Eq, Typeable)
     -- any relationship to VCache must be modeled using a Value.
 
@@ -307,3 +306,13 @@ extCharToOp c | inBounds = extCharOpArray A.! c
 {-
 Todo: Quotation of Wikilon's ABC back into pure ABC
 -}
+
+-- stub to prevent type errors for now
+instance VCacheable ABC where
+    put abc = error "TODO: VCacheable ABC"
+    get = error "TODO: VCacheable ABC"
+
+instance VCacheable Value where
+    put v = error "TODO: VCacheable Value"
+    get = error "TODO: VCacheable Value"
+

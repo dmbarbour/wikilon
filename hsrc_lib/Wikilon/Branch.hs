@@ -2,12 +2,6 @@
 -- | Wikilon keeps a branching history for dictionaries. Branches are
 -- named by simple unicode strings. Individually, each branch has a
 -- dictionary and a history.
---
--- Note: Branches may need a fair amount of associated metadata, for
--- access control and geneology and related purposes. I'm not sure
--- where this data should go. But I don't believe it should go here.
---
--- Todo: delete specific versions from a branch's history
 module Wikilon.Branch
     ( BranchSet
     , BranchName
@@ -18,6 +12,7 @@ module Wikilon.Branch
     , width
     , volume
     , lookup
+    , lookup'
     , insert
     , delete
     , adjust
@@ -27,13 +22,16 @@ module Wikilon.Branch
     , update
 
     , decay
+
     , decayBranch
+    , emptyBranch
+    , branchSize
     
     ) where
 
 import Prelude hiding (lookup, head)
+import Control.Monad
 import qualified Data.ByteString.UTF8 as UTF8
-import qualified Data.ByteString as BS
 import Data.Typeable (Typeable)
 import qualified Data.List as L
 import Database.VCache
@@ -47,7 +45,7 @@ import qualified Wikilon.Dict as Dict
 import Wikilon.Time
 
 -- | Branches are named in their BranchSet. These names are simple
--- strings. These names are also used in branch histories.
+-- unicode strings. These names are also used in branch histories.
 type BranchName = UTF8.ByteString
 
 -- | a BranchSet is a collection of named branches, plus information
@@ -86,8 +84,14 @@ volume = s_volume
 lookup :: BranchName -> BranchSet -> Maybe Branch
 lookup n = Trie.lookupc CacheMode0 n . s_data
 
-b_empty :: VSpace -> Branch
-b_empty vc = Branch0 (Dict.empty vc) (LoB.empty vc 16)
+-- | Lookup a branch by name, or return an empty branch
+lookup' :: BranchName -> BranchSet -> Branch
+lookup' n s = case lookup n s of
+    Nothing -> emptyBranch (vspace s)
+    Just b -> b
+
+emptyBranch :: VSpace -> Branch
+emptyBranch vc = Branch0 (Dict.empty vc) (LoB.empty vc 8)
 
 -- | Insert a branch into the branch set.
 insert :: BranchName -> Branch -> BranchSet -> BranchSet
@@ -135,17 +139,29 @@ update (t,d) b =
     let h' = LoB.cons (t,d0) h in
     Branch0 d h'
 
-b_space :: Branch -> VSpace
-b_space = Dict.dict_space . b_head
+b_null :: Branch -> Bool
+b_null b = Dict.null (b_head b) && LoB.null (b_hist b)
 
 -- | construct an empty branch set
 empty :: VSpace -> BranchSet
 empty vc = BSet0 0 0 (Trie.empty vc)
 
+-- | heuristic size for a branch 
+branchSize :: Branch -> Int
+branchSize b = szHd + szTl where
+    szHd = if Dict.null (b_head b) then 0 else 1
+    szTl = LoB.length (b_hist b)
+
+
 -- | Apply exponential decay to a branch. This will roughly decimate
 -- a branch's history (i.e. drop every tenth item), though will skip
 -- the first ten entries if feasible (if there are more than ten). At
 -- least one item is removed from the history.
+--
+-- regarding performance: for Wikilon I'm assuming that no particular
+-- branch has enormous histories. This can be enforced on a per-branch
+-- basis, e.g. by using branchSize and decaying individual branches when
+-- they reach some threshold, in addition to limiting total wiki sizes.
 decayBranch :: Branch -> Branch
 decayBranch b = b' where
     b' = b { b_hist = h' }
@@ -164,10 +180,19 @@ _decayHist d n l = case LoB.uncons l of
 -- | apply an exponential decay function to all the branches of the
 -- branch set. A branch is fully removed from the branch set if it
 -- has an empty dictionary and history. 
+--
+-- Thoughts: it might be necessary to shift this loop into a more
+-- iterative method over time, if the number of branches is very
+-- large.
 decay :: BranchSet -> BranchSet
 decay s0 = sf where
-    branchList = Trie.keys (s_data s0) 
-    sf = error "TODO"
+    sf = L.foldl' updSet s0 lBranches
+    lBranches = Trie.keys (s_data s0)
+    updSet s n = adjust n (>>= updBr) s
+    updBr b =
+        let b' = decayBranch b in
+        if b_null b' then mzero else 
+        return b'
 
 instance VCacheable Branch0 where
     put b = do 

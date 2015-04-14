@@ -4,10 +4,8 @@
 -- this time, it isn't clear how or whether to perform exponential
 -- decay on the geneology.
 --
--- TODO: support rename, delete
---
--- Thoughts: would it be better to just support a generic log and
--- to process it, compared to specializing for the geneology?
+-- At the moment, our geneology is a very basic append-only data
+-- structure. Ideas such as renaming or deleting a 
 module Wikilon.Geneology 
     ( Geneology
     , empty
@@ -15,6 +13,9 @@ module Wikilon.Geneology
     , parentsOf
     , childrenOf
     , vspace
+
+    , addSourceLabel
+    , addSinkLabel
     ) where
 
 import qualified Data.ByteString.UTF8 as UTF8
@@ -28,6 +29,7 @@ import qualified Data.VCache.Trie as Trie
 import Wikilon.Time
 
 type Name = UTF8.ByteString
+type Label = Name
 
 -- | A geneology tracks simple merge or fork relationships between
 -- branches. 
@@ -53,20 +55,30 @@ vspace = Trie.trie_space . g_fork
 -- | addChild parent child time
 --
 -- Add information to the geneology that the named parent branch has
--- contributed to the named child branch. This corresponds to the 
--- parent being merged into the child, or forked to create a new
--- child, or bookmarked using the child name as a bookmark name.
---
--- Note: Entries are time-sorted. This is only efficient if adding
--- recent history.
---
+-- contributed to the named child branch. This corresponds to both 
+-- a source label and a sink label.
 addChild :: Name -> Name -> T -> Geneology -> Geneology
-addChild parent child time g0 = gf where
-    vc = vspace g0
-    add lbl = Just . _insHist (time,lbl) . maybe (_newHist vc) id
-    fork' = Trie.adjust (add child) parent (g_fork g0)
-    merge' = Trie.adjust (add parent) child (g_merge g0)
-    gf = G0 { g_fork = fork', g_merge = merge' } 
+addChild parent child time =
+    addSourceLabel child parent time .
+    addSinkLabel parent child time
+
+-- | Add an origin tag to a named branch. In addition to child names,
+-- this could be something like "#RENAME" or "#CREATE", or another tag.
+-- A source label is visible via 'parentsOf'.
+addSourceLabel :: Name -> Label -> T -> Geneology -> Geneology
+addSourceLabel n lbl time g0 = gf where
+    addLbl = Just . _insHist (time,lbl) . maybe (_newHist (vspace g0)) id
+    merge' = Trie.adjust addLbl n (g_merge g0)
+    gf = g0 { g_merge = merge' }
+
+-- | Add a destination tag to a named branch. In addition to child 
+-- names, this could be something like "#DELETE" or "#EXPORT:URL", etc.
+-- A sink label is visible via 'childrenOf'.
+addSinkLabel :: Name -> Label -> T -> Geneology -> Geneology
+addSinkLabel n lbl time g0 = gf where
+    addLbl = Just . _insHist (time,lbl) . maybe (_newHist (vspace g0)) id
+    fork' = Trie.adjust addLbl n (g_fork g0)
+    gf = g0 { g_fork = fork' }
 
 _newHist :: VSpace -> LoB (T, Name)
 _newHist vc = LoB.empty vc 16
@@ -87,5 +99,4 @@ childrenOf n = maybe [] LoB.toList . Trie.lookup n . g_fork
 -- | Find all direct parent relationships from named branch.
 parentsOf :: Name -> Geneology -> [(T, Name)] 
 parentsOf n = maybe [] LoB.toList . Trie.lookup n . g_merge
-
 

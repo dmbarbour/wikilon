@@ -86,7 +86,6 @@ Library
 
     Data.VCache.LoB
 
-
     ABC.Basic
     ABC.Base16
     ABC.Text
@@ -100,6 +99,9 @@ Library
     Wikilon.Branch
     Wikilon.Geneology
 
+    -- Wikilon.Machine
+    -- Wikilon.Network
+    -- Wikilon.Services
 
     Wikilon.ABC
     Wikilon.RunABC
