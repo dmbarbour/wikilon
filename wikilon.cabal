@@ -99,7 +99,7 @@ Library
     Wikilon.Branch
     Wikilon.Geneology
 
-    -- Wikilon.Machine
+    Wikilon.Machine
     -- Wikilon.Network
     -- Wikilon.Services
 

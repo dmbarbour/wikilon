@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable, BangPatterns, PatternGuards #-}
 
--- | a list of blocks of values for VCache
+-- | a model for very large lists in VCache
 module Data.VCache.LoB 
     ( LoB
     , lob_space

@@ -37,17 +37,28 @@ module Wikilon.ABC
     , Text
     , Token
 
+    , copyable
+    , droppable
+    , toText, toTextB
+    
     , ExtOp(..), extOpTable
 
-
+    , Flags
+    , flag_affine
+    , flag_relevant
 
     ) where
 
-import Data.Typeable
+import Control.Applicative
+import Control.Monad
+import Data.Monoid
+import Data.Typeable (Typeable)
 import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.Word
 import Data.Bits
+import Data.Ratio
+import Data.Char
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
@@ -69,7 +80,7 @@ type Text = LazyUTF8.ByteString
 -- Equality for bytecode is inherently structural.
 data ABC = ABC
     { abc_code :: !LBS.ByteString -- Wikilon internal ABC variant 
-    , abc_data :: Value           -- a (lazily) precomputed value
+    , abc_data :: [Value]         -- stack of precomputed values
     } deriving (Eq, Typeable)
     -- any relationship to VCache must be modeled using a Value.
 
@@ -129,6 +140,65 @@ type Rsc = VRef ABC
 -- Besides the basic substructural types, it might be worth using
 -- annotations to enforce a few new ones.
 type Flags = Word8
+
+flag_affine, flag_relevant :: Flags
+flag_affine   = 0x02
+flag_relevant = 0x01
+
+flags_include :: Flags -> Flags -> Bool
+flags_include f fs = f == (f .&. fs)
+{-# INLINE flags_include #-}
+
+f_copyable :: Flags -> Bool
+f_copyable = not . flags_include flag_affine
+{-# INLINE f_copyable #-}
+
+f_droppable :: Flags -> Bool
+f_droppable = not . flags_include flag_relevant
+{-# INLINE f_droppable #-}
+
+-- | Is this value copyable (not affine)
+copyable :: Value -> Bool
+copyable (Number _) = True
+copyable (Pair a b) = copyable a && copyable b
+copyable (SumL a) = copyable a
+copyable (SumR b) = copyable b
+copyable Unit = True
+copyable (Block _ f) = f_copyable f
+copyable (Sealed _ v) = copyable v
+copyable (Linked _ f) = f_copyable f
+
+-- | Is this value droppable (not relevant)
+droppable :: Value -> Bool
+droppable (Number _) = True
+droppable (Pair a b) = droppable a && droppable b
+droppable (SumL a) = droppable a
+droppable (SumR b) = droppable b
+droppable Unit = True
+droppable (Block _ f) = f_droppable f
+droppable (Sealed _ v) = droppable v
+droppable (Linked _ f) = f_droppable f
+
+-- | Try to convert a value into text.
+toText :: Value -> Maybe Text
+toText v = BB.toLazyByteString <$> toTextB v
+
+-- | Try to convert a value into a text builder.
+toTextB :: Value -> Maybe BB.Builder
+toTextB (Pair (Number r) b) = do
+    c <- numToChar r
+    cs <- toTextB b
+    return (BB.charUtf8 c <> cs)
+toTextB Unit = return mempty
+toTextB _ = mzero
+
+numToChar :: Rational -> Maybe Char
+numToChar r =
+    let n = numerator r in
+    let d = denominator r in
+    let ok = (1 == d) && (0 <= n) && (n <= 0x10ffff) in
+    if not ok then Nothing else
+    Just (chr (fromInteger n)) 
 
 readVarNat :: LBS.ByteString -> (Int, LBS.ByteString)
 readVarNat = r 0 where
@@ -202,8 +272,8 @@ extOpTable =
 -- avoid recursive encodings in the 'precompute the value' sections.
 --
 --      [       pop value for encoded block
---      DLE     pop  value resource
---      DC1     push value resource
+--      DLE     pop value resource from stack
+--      DC1     push value resource to stack
 --      ESC     inline a bytecode resource
 --
 -- All link resources must be pushed to the toplevel. So let's say

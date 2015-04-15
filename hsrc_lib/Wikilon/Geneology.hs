@@ -14,8 +14,8 @@ module Wikilon.Geneology
     , childrenOf
     , vspace
 
-    , addSourceLabel
-    , addSinkLabel
+    , addSource
+    , addSink
     ) where
 
 import qualified Data.ByteString.UTF8 as UTF8
@@ -58,25 +58,25 @@ vspace = Trie.trie_space . g_fork
 -- contributed to the named child branch. This corresponds to both 
 -- a source label and a sink label.
 addChild :: Name -> Name -> T -> Geneology -> Geneology
-addChild parent child time =
-    addSourceLabel child parent time .
-    addSinkLabel parent child time
+addChild parent child t = 
+    addSource child (t,parent) . 
+    addSink parent (t,child)
 
 -- | Add an origin tag to a named branch. In addition to child names,
 -- this could be something like "#RENAME" or "#CREATE", or another tag.
 -- A source label is visible via 'parentsOf'.
-addSourceLabel :: Name -> Label -> T -> Geneology -> Geneology
-addSourceLabel n lbl time g0 = gf where
-    addLbl = Just . _insHist (time,lbl) . maybe (_newHist (vspace g0)) id
+addSource :: Name -> (T, Label) -> Geneology -> Geneology
+addSource n v g0 = gf where
+    addLbl = Just . _insHist v . maybe (_newHist (vspace g0)) id
     merge' = Trie.adjust addLbl n (g_merge g0)
     gf = g0 { g_merge = merge' }
 
 -- | Add a destination tag to a named branch. In addition to child 
 -- names, this could be something like "#DELETE" or "#EXPORT:URL", etc.
 -- A sink label is visible via 'childrenOf'.
-addSinkLabel :: Name -> Label -> T -> Geneology -> Geneology
-addSinkLabel n lbl time g0 = gf where
-    addLbl = Just . _insHist (time,lbl) . maybe (_newHist (vspace g0)) id
+addSink :: Name -> (T, Label) -> Geneology -> Geneology
+addSink n v g0 = gf where
+    addLbl = Just . _insHist v . maybe (_newHist (vspace g0)) id
     fork' = Trie.adjust addLbl n (g_fork g0)
     gf = g0 { g_fork = fork' }
 
