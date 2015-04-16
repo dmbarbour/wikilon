@@ -37,12 +37,11 @@ type Geneology = G0
 
 -- versioned representation for VCache
 data G0 = G0
-    { g_outgoing :: !(Trie ForkHist)  -- ~ list of children
-    , g_incoming :: !(Trie MergeHist) -- ~ list of parents
+    { g_outgoing :: !(Trie Hist)  -- ~ list of children
+    , g_incoming :: !(Trie Hist) -- ~ list of parents
     }
 
-type MergeHist = LoB (T, Name)
-type ForkHist = LoB (T, Name)
+type Hist = LoB (T, Name)
 
 -- | Create an empty geneology
 empty :: VSpace -> Geneology
