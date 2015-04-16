@@ -79,11 +79,11 @@ addSink n v g0 = gf where
     fork' = Trie.adjust addLbl n (g_outgoing g0)
     gf = g0 { g_outgoing = fork' }
 
-_newHist :: VSpace -> LoB (T, Name)
+_newHist :: VSpace -> Hist
 _newHist vc = LoB.empty vc 16
 
 -- a time-sorted insert with recent history near head
-_insHist :: (T, Name) -> LoB (T, Name) -> LoB (T, Name)
+_insHist :: (T, Name) -> Hist -> Hist
 _insHist e l = case LoB.uncons l of
     Nothing -> LoB.cons e l 
     Just (e0, l') -> 
