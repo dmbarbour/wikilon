@@ -14,15 +14,15 @@
 --
 -- An intermediate concept for compilation to recognize a dictionary 
 -- of common subprograms and accelerate them with built-in functions 
--- in the interpreter. A planned ABCD (ABC Deflated) is expected to
--- use this idea for compression and fast interpretation of streaming
--- code. But ABCD must be standardized carefully.
+-- in the interpreter. ABCD (ABC Deflated) is will leverage this idea
+-- for compression and fast interpretation of streaming code. But ABCD
+-- must be standardized carefully.
 --
 -- Wikilon aims to mitigate performance by the following:
 --
 --  * dictionary of ABCD-like accelerated operators
---  * separate values for efficient quotation
---  * lazy loading of large values through VCache 
+--  * separate values for efficient quotation and access
+--  * lazy loading of very large values through VCache 
 --  * fast slicing for texts, blocks, and tokens
 --  * fast compression for storage of large ABC
 --
@@ -36,21 +36,59 @@ module Wikilon.ABC
     , Rsc
     , Text
     , Token
-
     , copyable
     , droppable
     , toText, toTextB
-    
     , ExtOp(..), extOpTable
 
     , Flags
-    , flag_affine
-    , flag_relevant
+    , flag_affine, f_copyable
+    , flag_relevant, f_droppable
+    , flag_parallel, f_parallel
+
+{-
+    -- * primitive ABC evaluation operators.
+    , op_l, op_r, op_w, op_z, op_v, op_c
+    , op_L, op_R, op_W, op_Z, op_V, op_C
+    , op_copy, op_drop
+    , op_add, op_negate, op_multiply, op_reciprocal, op_divMod, op_compare
+    , op_apply, op_condApply, op_quote, op_compose, op_relevant, op_affine
+    , op_distrib, op_factor, op_merge, op_assert
+    , op_newZero, op_d0, op_d1, op_d2, op_d3, op_d4, op_d5, op_d6, op_d7, op_d8, op_d9
+    , op_SP, op_LF
+
+    -- * multi-byte operators
+    , op_Block, op_Text, op_Tok
+
+    -- * Wikilon's extended operators
+
+-}
+    -- * 
+    , EvalSt(..)
+    , EvalErr(..)
+    , evaluate    
+
+
+
+{-
+    , encodeVal, decodeVal
+    , encodeVals, decodeVals
+    , encodeABC, decodeABC
+-}  
+
 
     ) where
 
 import Control.Applicative
 import Control.Monad
+import Control.Monad.State (State)
+import qualified Control.Monad.State as State
+import Control.Monad.Error (ErrorT)
+import qualified Control.Monad.Error as Error
+
+-- fork/join parallelism on eval
+import Control.Concurrent.MVar
+
 import Data.Monoid
 import Data.Typeable (Typeable)
 import qualified Data.Array.IArray as A
@@ -64,6 +102,7 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.UTF8 as UTF8
 import Database.VCache
+
 import qualified ABC.Basic as Pure
 
 type Token = UTF8.ByteString
@@ -81,7 +120,7 @@ type Text = LazyUTF8.ByteString
 data ABC = ABC
     { abc_code :: !LBS.ByteString -- Wikilon internal ABC variant 
     , abc_data :: [Value]         -- stack of precomputed values
-    } deriving (Eq, Typeable)
+    } deriving (Show, Eq, Typeable)
     -- any relationship to VCache must be modeled using a Value.
 
 -- | Values have a few basic forms:
@@ -112,38 +151,43 @@ data Value
     | Block !ABC {-# UNPACK #-} !Flags
     | Sealed !Token Value
     | Linked !Rsc {-# UNPACK #-} !Flags
-    deriving (Eq, Typeable)
+    deriving (Show, Eq, Typeable)
 
 -- | Awelon Bytecode (ABC) defines conventions for dynamic linking and
--- separate compilation of resources. A {#resourceId} token identifies
--- the resource using a secure hash and inlines the bytecode. Variants
--- exist to support lazy loading when the resource has a value type, 
--- i.e. type ∀e.(e→(Value*e)).
+-- separate compilation of resources, and lazy loading. A {#resourceId} 
+-- token identifies a resource using secure hash and logically inlines
+-- the bytecode. Variants like {#resourceId'kf} exist to support lazy
+-- loading of value resources, indicating value (') and substructural
+-- type (i.e. k for relevant, f for affine, kf for linear).
 --
--- But full {#resourceId} tokens are heavy-weight, and they complicate
--- garbage collection. 
+-- But full {#resourceId} tokens are heavy-weight, and they complicate 
+-- garbage collection. These tokens are designed for a network setting,
+-- not for internal use. Heuristic GC is probably necessary since we
+-- cannot determine when there are no references to a named resource.
 --
--- So Wikilon instead uses VCache, which provides implicit links, cache,
--- and reference counting garbage collection. Sadly, this does sacrifice
--- operation in a networked setting. But it is still very convenient and
--- enables Wikilon to scale to very large values, e.g. whole filesystems
--- can be modeled using a trie.
+-- Internally, Wikilon instead uses VCache, which provides local links, 
+-- cache, structure sharing, lazy loading, reference counting garbage
+-- collection, and effectively fulfills the same roles as the tokens
+-- but is restricted to local use.
 type Rsc = VRef ABC
 
--- | Flags for substructural types
+-- | Flags for blocks
 --   bit 0: true if relevant (no drop with %)
 --   bit 1: true if affine   (no copy with ^)
---   bit 2..7: Reserved. Tentatively: 
---     bit 2: true if local     (no send as message content)
---     bit 3: true if ephemeral (no store in machine state)
+--   bit 2: true for parallelism {&par}
+--   bit 3..7: Reserved. Tentatively: 
+--     memoization for blocks
+--     local values (cannot send in message, except in context)
+--     ephemeral values (cannot store in state)
 --
 -- Besides the basic substructural types, it might be worth using
 -- annotations to enforce a few new ones.
 type Flags = Word8
 
-flag_affine, flag_relevant :: Flags
-flag_affine   = 0x02
+flag_affine, flag_relevant, flag_parallel :: Flags
 flag_relevant = 0x01
+flag_affine   = 0x02
+flag_parallel = 0x04
 
 flags_include :: Flags -> Flags -> Bool
 flags_include f fs = f == (f .&. fs)
@@ -157,60 +201,10 @@ f_droppable :: Flags -> Bool
 f_droppable = not . flags_include flag_relevant
 {-# INLINE f_droppable #-}
 
--- | Is this value copyable (not affine)
-copyable :: Value -> Bool
-copyable (Number _) = True
-copyable (Pair a b) = copyable a && copyable b
-copyable (SumL a) = copyable a
-copyable (SumR b) = copyable b
-copyable Unit = True
-copyable (Block _ f) = f_copyable f
-copyable (Sealed _ v) = copyable v
-copyable (Linked _ f) = f_copyable f
+f_parallel :: Flags -> Bool
+f_parallel = flags_include flag_parallel
+{-# INLINE f_parallel #-}
 
--- | Is this value droppable (not relevant)
-droppable :: Value -> Bool
-droppable (Number _) = True
-droppable (Pair a b) = droppable a && droppable b
-droppable (SumL a) = droppable a
-droppable (SumR b) = droppable b
-droppable Unit = True
-droppable (Block _ f) = f_droppable f
-droppable (Sealed _ v) = droppable v
-droppable (Linked _ f) = f_droppable f
-
--- | Try to convert a value into text.
-toText :: Value -> Maybe Text
-toText v = BB.toLazyByteString <$> toTextB v
-
--- | Try to convert a value into a text builder.
-toTextB :: Value -> Maybe BB.Builder
-toTextB (Pair (Number r) b) = do
-    c <- numToChar r
-    cs <- toTextB b
-    return (BB.charUtf8 c <> cs)
-toTextB Unit = return mempty
-toTextB _ = mzero
-
-numToChar :: Rational -> Maybe Char
-numToChar r =
-    let n = numerator r in
-    let d = denominator r in
-    let ok = (1 == d) && (0 <= n) && (n <= 0x10ffff) in
-    if not ok then Nothing else
-    Just (chr (fromInteger n)) 
-
-readVarNat :: LBS.ByteString -> (Int, LBS.ByteString)
-readVarNat = r 0 where
-    r !n !t = case LBS.uncons t of
-        Nothing -> impossible "bad VarInt in Wikilon.ABC code"
-        Just (byte, t') ->
-            let n' = n `shiftL` 7 .|. (fromIntegral (byte .&. 0x7f)) in
-            let bDone = (0 == (byte .&. 0x80)) in
-            if bDone then (n', t') else r n' t'
-
-impossible :: String -> a
-impossible eMsg = error $ "Wikilon.ABC: " ++ eMsg
 
 -- | Extended Operations are essentially a dictionary recognized by
 -- Wikilon for specialized implementations, e.g. to accelerate an
@@ -222,7 +216,6 @@ data ExtOp
     | Op_Apc    -- $c (tail call)
 
     -- favorite fixpoint function
-    -- 
     | Op_Fixpoint -- [^'ow^'zowvr$c]^'ow^'zowvr$c
 
     -- mirrored v,c operations
@@ -233,6 +226,11 @@ data ExtOp
 
     | Op_prim_swap    -- vrwlc
     | Op_prim_mirror  -- VRWLC
+
+    -- annotations? {&par}, {&trace}, {&≡}, etc.
+    --  not sure it's worthwhile though, these aren't frequent and
+    --  recognition overhead is marginal. 
+
     -- stack swaps?
     -- hand manipulations?
     -- more as needed!
@@ -257,7 +255,220 @@ extOpTable =
 
     ,(Op_prim_swap,   'ś', "vrwlc")
     ,(Op_prim_mirror, 'Ś', "VRWLC")
+
+    -- ,(Op_assertEq, 'Æ', "{&≡}")
+    -- ,(Op_parallel, '¦', "{&par}")
     ]
+
+-- | Is this value copyable (not affine)
+copyable :: Value -> Bool
+copyable (Number _) = True
+copyable (Pair a b) = copyable a && copyable b
+copyable (SumL a) = copyable a
+copyable (SumR b) = copyable b
+copyable Unit = True
+copyable (Block _ f) = f_copyable f
+copyable (Sealed _ v) = copyable v
+copyable (Linked _ f) = f_copyable f
+
+-- | Is this value droppable (not relevant)
+droppable :: Value -> Bool
+droppable (Number _) = True
+droppable (Pair a b) = droppable a && droppable b
+droppable (SumL a) = droppable a
+droppable (SumR b) = droppable b
+droppable Unit = True
+droppable (Block _ f) = f_droppable f
+droppable (Sealed _ v) = droppable v
+droppable (Linked _ f) = f_droppable f
+
+
+-- | Evaluator state.
+--
+-- When we evaluate content, we have some stack of precomputed values
+-- for fast quotation (which must be used precisely!) and a sequence 
+-- of bytes indicating continuation behavior. In some cases, for tail
+-- calls, we might extend these stacks and continuations at the near
+-- end.
+--
+-- Additionally, we have very minimal interaction with IO. While ABC
+-- does permit effects via {tokens}, Wikilon doesn't use this feature.
+-- Effects are instead modeled using machine and network models. But
+-- Wikilon does use a little IO outside the model for:
+--
+--  * debug traces
+--  * timeout, interruption
+--  * fork-join parallelism
+--
+-- At the Haskell layer, this will be modeled using unsafePerformIO.
+--
+data EvalSt = EvalSt
+    { eval_stack :: ![Value] -- ^ precomputed values
+    , eval_cont  :: !LBS.ByteString -- ^ continuation behavior
+    , eval_cost  :: !Int -- ^ decide when to tick
+    , eval_meta  :: !EvalMeta -- ^ relatively stable elements
+    } deriving (Show)
+data EvalMeta = EvalMeta
+    { eval_join  :: ![JoinHandle] -- ^ fork-join parallelism
+    , eval_fork  :: !(Value -> EvalSt -> IO JoinHandle)
+    , eval_trace :: !(Value -> IO ()) -- ^ debug output
+    , eval_tick  :: !(IO Bool) -- ^ detect timeout or interrupt
+    }
+
+instance Show (EvalMeta) where
+    show em = "... " ++ joinMsg where
+        nJoin = L.length (eval_join em)
+        joinMsg = if (nJoin > 0) then show nJoin ++ " threads" else ""
+
+data EvalErr = EvalErr 
+    { err_dump   :: !EvalSt
+    , err_arg    :: !Value
+    , err_msg    :: !Text
+    } deriving (Show)
+type JoinHandle = MVar [EvalErr]
+
+
+
+type Eval a = ErrorT [EvalErr] (State EvalSt) a
+
+-- | Evaluation of Wikilon's ABC. In addition to the main value being
+-- processed, evaluation takes a stack of related values. 
+--
+
+evaluate :: Value -> Eval (Either [EvalErr] Value)
+evaluate = error "TODO"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- | Try to convert a value into text.
+toText :: Value -> Maybe Text
+toText v = BB.toLazyByteString <$> toTextB v
+
+-- | Try to convert a value into a text builder.
+toTextB :: Value -> Maybe BB.Builder
+toTextB (Pair (Number r) b) = do
+    c <- numToChar r
+    cs <- toTextB b
+    return (BB.charUtf8 c <> cs)
+toTextB Unit = return mempty
+toTextB _ = mzero
+
+numToChar :: Rational -> Maybe Char
+numToChar r =
+    let n = numerator r in
+    let d = denominator r in
+    let ok = (1 == d) && (0 <= n) && (n <= 0x10ffff) in
+    if not ok then Nothing else
+    Just (chr (fromInteger n)) 
+
+
+
+
+
+
+
+
+
+
+
+
+
+readVarNat :: LBS.ByteString -> (Int, LBS.ByteString)
+readVarNat = r 0 where
+    r !n !t = case LBS.uncons t of
+        Nothing -> impossible "bad VarInt in Wikilon.ABC code"
+        Just (byte, t') ->
+            let n' = n `shiftL` 7 .|. (fromIntegral (byte .&. 0x7f)) in
+            let bDone = (0 == (byte .&. 0x80)) in
+            if bDone then (n', t') else r n' t'
+
+
+
+
+-- Encoding and Decoding:
+-- 
+-- A challenging aspect of Wikilon's ABC content is that I plan to
+-- combine some evaluation with the decoder.
+{-
+
+
+data EncValSt = EncValSt
+    { ev_bytes :: BB.Builder
+    , ev_links :: [Rsc]
+    }
+type EncVal = State EncValSt
+
+encodeVal :: Value -> (LBS.ByteString, [Rsc])
+encodeVal v = 
+    let st0 = EncValSt mempty mempty in
+    let st' = execState (encValM v) st0 in
+    let bytes = BB.toLazyByteString (ev_bytes st') in
+    let links = L.reverse $ ev_links st' in
+    (bytes, links)
+
+encByte :: Word8 -> EncVal ()
+encUtf8 :: Char -> EncVal ()
+enc
+
+encValM :: Value -> EncVal ()
+encValM
+
+
+encodeVals :: [Value] -> (LBS.ByteString, [Rsc])
+encodeVals = encodeVal . mkStack where
+    mkStack [] = Unit
+    mkStack (x:xs) = P x (mkStack xs)
+
+decodeVal :: (LBS.ByteString, [Rsc]) -> Either  Value
+decodeVal 
+
+decodeVals :: (LBS.ByteString, [Rsc]) -> Maybe [Value]
+decodeVals c = decodeVal c >>=  where 
+    toStack 
+
+
+    , encodeValue, decodeValue
+    , encodeABC, decodeABC
+-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 -- QUESTION: How are resources represented in VCache?
 --
@@ -385,4 +596,9 @@ instance VCacheable ABC where
 instance VCacheable Value where
     put v = error "TODO: VCacheable Value"
     get = error "TODO: VCacheable Value"
+
+
+impossible :: String -> a
+impossible eMsg = error $ "Wikilon.ABC: " ++ eMsg
+
 
