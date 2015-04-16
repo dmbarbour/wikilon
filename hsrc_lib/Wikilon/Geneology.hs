@@ -37,8 +37,8 @@ type Geneology = G0
 
 -- versioned representation for VCache
 data G0 = G0
-    { g_fork  :: !(Trie ForkHist)  -- ~ list of children
-    , g_merge :: !(Trie MergeHist) -- ~ list of parents
+    { g_outgoing :: !(Trie ForkHist)  -- ~ list of children
+    , g_incoming :: !(Trie MergeHist) -- ~ list of parents
     }
 
 type MergeHist = LoB (T, Name)
@@ -50,7 +50,7 @@ empty vc = G0 (Trie.empty vc) (Trie.empty vc)
 
 -- | Access associated VCache space
 vspace :: Geneology -> VSpace
-vspace = Trie.trie_space . g_fork
+vspace = Trie.trie_space . g_outgoing
 
 -- | addChild parent child time
 --
@@ -62,14 +62,14 @@ addChild parent child t =
     addSource child (t,parent) . 
     addSink parent (t,child)
 
--- | Add an origin tag to a named branch. In addition to child names,
+-- | Add an origin tag to a named branch. In addition to parent names,
 -- this could be something like "#RENAME" or "#CREATE", or another tag.
 -- A source label is visible via 'parentsOf'.
 addSource :: Name -> (T, Label) -> Geneology -> Geneology
 addSource n v g0 = gf where
     addLbl = Just . _insHist v . maybe (_newHist (vspace g0)) id
-    merge' = Trie.adjust addLbl n (g_merge g0)
-    gf = g0 { g_merge = merge' }
+    merge' = Trie.adjust addLbl n (g_incoming g0)
+    gf = g0 { g_incoming = merge' }
 
 -- | Add a destination tag to a named branch. In addition to child 
 -- names, this could be something like "#DELETE" or "#EXPORT:URL", etc.
@@ -77,8 +77,8 @@ addSource n v g0 = gf where
 addSink :: Name -> (T, Label) -> Geneology -> Geneology
 addSink n v g0 = gf where
     addLbl = Just . _insHist v . maybe (_newHist (vspace g0)) id
-    fork' = Trie.adjust addLbl n (g_fork g0)
-    gf = g0 { g_fork = fork' }
+    fork' = Trie.adjust addLbl n (g_outgoing g0)
+    gf = g0 { g_outgoing = fork' }
 
 _newHist :: VSpace -> LoB (T, Name)
 _newHist vc = LoB.empty vc 16
@@ -94,9 +94,9 @@ _insHist e l = case LoB.uncons l of
 
 -- | Find all direct child relationships from named branch.
 childrenOf :: Name -> Geneology -> [(T, Name)]
-childrenOf n = maybe [] LoB.toList . Trie.lookup n . g_fork
+childrenOf n = maybe [] LoB.toList . Trie.lookup n . g_outgoing
 
 -- | Find all direct parent relationships from named branch.
 parentsOf :: Name -> Geneology -> [(T, Name)] 
-parentsOf n = maybe [] LoB.toList . Trie.lookup n . g_merge
+parentsOf n = maybe [] LoB.toList . Trie.lookup n . g_incoming
 
