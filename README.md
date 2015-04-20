@@ -23,6 +23,7 @@ To get started with Wikilon:
 
 * install LMDB library and headers
  * (Ubuntu) `sudo apt-get install liblmdb-dev`
+* cd wikilon-abc; cabal install
 * cabal install --only-dependencies
 * cabal install
 * if ~/.cabal/bin directory not in PATH, consider adding it

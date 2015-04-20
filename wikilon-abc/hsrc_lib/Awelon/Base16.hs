@@ -21,7 +21,7 @@
 -- TODO: switch encoder/decoder/compression to operate on lazy byte
 -- strings or byte string builders, for extra performance.
 -- 
-module ABC.Base16 
+module Awelon.Base16 
     ( alphabet
     , encode
     , decode

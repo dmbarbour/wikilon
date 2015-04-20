@@ -80,8 +80,8 @@ import qualified Data.VCache.Trie as Trie
 import Data.VCache.Trie (Trie)
 import Database.VCache
 
-import ABC.Basic (ABC)
-import qualified ABC.Basic as ABC
+import Awelon.ABC (ABC)
+import qualified Awelon.ABC as ABC
 
 import Wikilon.Dict.Type
 import Wikilon.Dict.Word

@@ -1,6 +1,6 @@
 
--- | ABC Text is just UTF8. We also need a few utilities.
-module ABC.Text 
+-- | Text is just UTF8. We also need a few utilities.
+module Awelon.Text 
     ( Text
     , textLines
     ) where

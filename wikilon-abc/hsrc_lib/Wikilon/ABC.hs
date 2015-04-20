@@ -7,37 +7,41 @@
 -- See <https://github.com/dmbarbour/awelon/blob/master/AboutABC.md>.
 --
 -- ABC has a major weakness: naive interpretation is inefficient. ABC
--- must be compiled for effective use. JIT compilation is viable, as
--- is separate compilation via {#resourceId} tokens. Wikilon lacks JIT
--- compilation, though approaches using Haskell plugins or Lambdachine
--- may be viable. 
+-- must be compiled for effective use. 
 --
--- An intermediate concept for compilation to recognize a dictionary 
--- of common subprograms and accelerate them with built-in functions 
--- in the interpreter. ABCD (ABC Deflated) is will leverage this idea
--- for compression and fast interpretation of streaming code. But ABCD
--- must be standardized carefully.
+-- Separate compilation is viable via secure hash {#resourceId} tokens
+-- to name reusable fragments. JIT is possible, though difficult in
+-- Haskell (plugins or Lambdachine might be useful here). Accelerated
+-- operations is possible by recognizing common subprograms and using
+-- an optimized implementation.
+-- 
+-- Wikilon enhances performance by the following techniques.
 --
--- Wikilon aims to improve performance by the following:
+--  * data stack for quotation without serialization
+--  * ABCD-like dictionary of accelerated operations
+--  * compact representation using lazy bytestrings
+--  * interaction with VCache to load very large values
+--  * efficient slicing for texts, blocks, tokens
 --
---  * dictionary of ABCD-like accelerated operators
---  * separate values for efficient quotation and access
---  * compact representation of the bytecode, lazy bytestrings
---  * lazy loading of very large values through VCache 
---  * fast slicing for texts, blocks, and tokens
---  * fast compression for storage of large ABC
---
--- Unlike ABCD, the internal Wikilon dictionary doesn't wait on any
--- standards committee. Unlike {#resourceId} tokens, VCache refs are
--- cheap and support implicit reference counting garbage collection.
+-- Unlike ABCD, Wikilon's extended operations set doesn't wait on any
+-- standards committee. Wikilon's use of VCache is comparable to the
+-- {#resourceId'kf} value resources from ABC, but is strictly local
+-- which allows easy reference-counting GC.
 --
 module Wikilon.ABC
     ( ABC(..)
     , Op(..)
+    , Value(..)
+
     , PrimOp(..)
     , ExtOp(..)
-    , Value(..)
+
     , Rsc, Text, Token, Bytes, Flags
+
+    , null
+    , decodeOp, decodeOps
+    , encodeOps
+    , loadVal
 
     , asUnit, asPair, asSum, asNumber, asBlock, asText
     , asListOf, fromList
@@ -70,10 +74,13 @@ module Wikilon.ABC
 
     -- * Wikilon's extended operators
 
--}
+
     -- * 
+
     , EvalSt(..)
     , EvalErr(..)
+
+-}
 
 
 {-
@@ -85,21 +92,16 @@ module Wikilon.ABC
 
     ) where
 
+import Prelude hiding (null)
 import Control.Applicative
 import Control.Monad
-import Control.Monad.State (State)
-import qualified Control.Monad.State as State
-import Control.Monad.Error (ErrorT)
-import qualified Control.Monad.Error as Error
-
--- fork/join parallelism on eval
-import Control.Concurrent.MVar
 
 import Data.Monoid
 import Data.Typeable (Typeable)
 import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.Word
+import Data.Int
 import Data.Bits
 import Data.Ratio
 import Data.Char
@@ -109,8 +111,8 @@ import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.UTF8 as UTF8
 import Database.VCache
 
-import ABC.Basic (PrimOp(..), Quotable(..))
-import qualified ABC.Basic as Pure
+import Awelon.ABC (PrimOp(..), Quotable(..))
+import qualified Awelon.ABC as Pure
 
 type Token = UTF8.ByteString
 type Text = LazyUTF8.ByteString
@@ -121,32 +123,26 @@ type Bytes = LBS.ByteString
 --
 --  * blocks and texts are tuned for fast slicing
 --  * extended op set to accelerate common functions
---  * support to lazily load large values in VCache
 --  * stack of values for quotation & parallel eval
+--  * support to lazily load large values in VCache
 --  * compact representation compared to list of ops
 --
 -- Equality for bytecode is inherently structural.
 data ABC = ABC 
-    { abc_code :: !Bytes   -- Wikilon internal ABC variant 
-    , abc_data :: [Value]  -- stack of precomputed values
+    { abc_code :: !Bytes   -- ^ Wikilon internal ABC variant 
+    , abc_data :: ![Value] -- ^ stack of precomputed values
     } deriving (Eq, Typeable)
 
--- | Individual operations from Wikilon. Wikilon uses a slightly
--- different encoding compared to ABC, and the additional context
--- (a stack of precomputed values) is used by some ExtOps and some
--- blocks. 
+-- | Individual operations from Wikilon encoded via ABC.
 data Op
     -- Normal ABC
-    = ABC_Prim  !PrimOp
-    | ABC_Tok   !Token
-    | ABC_Text  !Text
-    | ABC_Block !Bytes 
-    -- Extended Dictionary
-    | ABC_Ext   !ExtOp 
-    -- Special Manipulations
-    | ABC_DataPop   -- ^ » receive data from precomp stack
-    -- | ABC_DataPush  -- ^ « push data to precomp stack
-    | ABC_DataBind  -- ^ ¡ inline linked resource from precomp stack
+    = ABC_Prim  !PrimOp -- ^ common ABC operations
+    | ABC_Block !ABC    -- ^ first class functions
+    | ABC_Text  !Text   -- ^ embedded text literal
+    | ABC_Tok   !Token  -- ^ embedded {token} for seal, unseal, etc.
+    -- Extended Operations
+    | ABC_Ext   !ExtOp  -- ^ accelerated operations
+    | ABC_Data  !Value  -- ^ value resource from precomp stack
     deriving (Eq, Typeable)
 
 -- | Extended Operations are essentially a dictionary recognized by
@@ -157,20 +153,20 @@ data Op
 -- Additionally, these extended operations data stack manipulations.
 data ExtOp
     -- tail-call operators
-    = Op_Inline -- vr$c (full inline)
-    | Op_Apc    -- $c (tail call)
+    = ExtOp_Inline -- vr$c (full inline)
+    | ExtOp_Apc    -- $c (tail call)
 
     -- favorite fixpoint function
-    | Op_Fixpoint -- [^'ow^'zowvr$c]^'ow^'zowvr$c
+    | ExtOp_Fixpoint -- [^'ow^'zowvr$c]^'ow^'zowvr$c
 
     -- mirrored v,c operations
-    | Op_Intro1L  -- vvrwlc
-    | Op_Elim1L   -- vrwlcc
-    | Op_Intro0L  -- VVRWLC
-    | Op_Elim0L   -- VRWLCC
+    | ExtOp_Intro1L  -- vvrwlc
+    | ExtOp_Elim1L   -- vrwlcc
+    | ExtOp_Intro0L  -- VVRWLC
+    | ExtOp_Elim0L   -- VRWLCC
 
-    | Op_prim_swap    -- vrwlc
-    | Op_prim_mirror  -- VRWLC
+    | ExtOp_prim_swap    -- vrwlc
+    | ExtOp_prim_mirror  -- VRWLC
 
     -- annotations? {&par}, {&trace}, {&≡}, etc.
     --  not sure it's worthwhile though, these aren't frequent and
@@ -181,6 +177,141 @@ data ExtOp
     -- more as needed!
     deriving (Ord, Eq, Bounded, Enum, A.Ix)
 
+-- | Read an operation from the ABC bytes. Returns Nothing if the
+-- input is empty or contains invalid bytecode.
+decodeOp :: ABC -> Maybe (Op, ABC)
+decodeOp abc = 
+    LazyUTF8.uncons (abc_code abc) >>= \ (c, bs) ->
+    case c of
+        (Pure.abcCharToOp -> Just primOp) ->
+            let op = ABC_Prim primOp in
+            let abc' = abc { abc_code = bs } in
+            return (op, abc')
+        '[' ->
+            sizedSliceFby ']' bs >>= \ (bcode, _code') ->
+            _uncons (abc_data abc) >>= \ (v, _data') ->
+            let bdata = asStack v in
+            let blockABC = ABC { abc_code = bcode, abc_data = bdata } in
+            let op = ABC_Block blockABC in
+            let abc' = ABC { abc_code = _code', abc_data = _data' } in
+            return (op, abc')
+        '"' ->
+            sizedSliceFby '~' bs >>= \ (txt, _code') ->
+            let op = ABC_Text txt in
+            let abc' = abc { abc_code = _code' } in
+            return (op, abc')
+        '{' ->
+            sizedSliceFby '}' bs >>= \ (lzTok, _code') ->
+            let op = ABC_Tok (LBS.toStrict lzTok) in
+            let abc' = abc { abc_code = _code' } in
+            return (op, abc')
+        '»' ->
+            _uncons (abc_data abc) >>= \ (v,vs) ->
+            let op = ABC_Data v in
+            let abc' = ABC { abc_code = bs, abc_data = vs } in
+            return (op, abc')
+        (extCharToOp -> Just extOp) ->
+            let op = ABC_Ext extOp in
+            let abc' = abc { abc_code = bs } in
+            return (op, abc')
+        _ -> mzero
+
+sizedSliceFby :: Char -> Bytes -> Maybe (Bytes, Bytes)
+sizedSliceFby cExpect bs = 
+    readSizedSlice bs >>= \ (slice, cont) ->
+    LazyUTF8.uncons cont >>= \ (c, bs') ->
+    let bOK = cExpect == c in
+    if not bOK then mzero else
+    return (slice, bs')
+{-# INLINE sizedSliceFby #-}
+
+readSizedSlice ::  Bytes -> Maybe (Bytes, Bytes)
+readSizedSlice b = 
+    readVarNat b >>= \ (n, b') ->
+    let (lhs,rhs) = LBS.splitAt n b' in
+    let bOK = (n == LBS.length lhs) in
+    if not bOK then mzero else
+    return (lhs,rhs)
+{-# INLINE readSizedSlice #-}
+
+readVarNat :: Bytes -> Maybe (Int64, Bytes)
+readVarNat = r 0 where
+    r !n !t =
+        LBS.uncons t >>= \ (byte, t') -> 
+        let n' = n `shiftL` 7 .|. (fromIntegral (byte .&. 0x7f)) in
+        let bDone = (0 == (byte .&. 0x80)) in
+        if bDone then return (n', t') else r n' t'
+{-# INLINE readVarNat #-}
+
+_uncons :: [a] -> Maybe (a,[a])
+_uncons (x:xs) = Just (x,xs)
+_uncons [] = Nothing
+{-# INLINE _uncons #-}
+
+-- | Decode ABC into a list of operations. This will error at runtime
+-- if the ABC is not properly encoded.
+decodeOps :: ABC -> [Op]
+decodeOps abc = case decodeOp abc of
+    Just (op, abc') -> op : decodeOps abc'
+    Nothing | null abc -> []
+    _ -> impossible $ "invalid bytecode! " ++
+            show (abc_code abc) ++ " " ++
+            show (abc_data abc)
+
+-- | Test whether ABC is empty. Empty ABC has identity behavior.
+null :: ABC -> Bool
+null abc = L.null (abc_data abc) && LBS.null (abc_code abc)
+
+-- | Encode a list of Wikilon's ABC operators into a collective ABC
+-- structure. This involves a compact encoding for bytecode. This
+-- encoding will preserve the input structure. A separate simplify
+-- pass is appropriate, e.g. to translate some ABC_Data into texts
+-- or blocks.
+encodeOps :: [Op] -> ABC
+encodeOps = extract . writeOps where
+    extract (bb,rv) = 
+        let _code = BB.toLazyByteString bb in
+        let _data = L.reverse rv in
+        ABC { abc_code = _code, abc_data = _data }
+
+    writeOps = L.foldl' writeOp (mempty,mempty)
+    writeOp st (ABC_Prim op) = writePrim st op
+    writeOp st (ABC_Block abc) = writeBlock st abc
+    writeOp st (ABC_Text txt) = writeText st txt
+    writeOp st (ABC_Tok tok) = writeTok st tok
+    writeOp st (ABC_Ext op) = writeExtOp st op
+    writeOp st (ABC_Data v) = writeData st v
+
+    writePrim (bb,rv) op = (bb <> opc, rv) where
+        opc = BB.charUtf8 (Pure.abcOpToChar op)
+    writeBlock (bb,rv) abc = (bb <> s, bv:rv) where
+        s = BB.char8 '[' <> encSizedSlice (abc_code abc) <> BB.char8 ']'
+        bv = fromStack (abc_data abc)
+    writeText (bb,rv) txt = (bb <> s, rv) where
+        s = BB.char8 '"' <> encSizedSlice txt <> BB.char8 '~'
+    writeTok (bb,rv) tok = (bb <> s, rv) where
+        lzTok = LBS.fromStrict tok 
+        s = BB.char8 '{' <> encSizedSlice lzTok <> BB.char8 '}'
+    writeExtOp (bb,rv) op = (bb <> opc, rv) where
+        opc = BB.charUtf8 (extOpToChar op)
+    writeData (bb,rv) v = (bb <> BB.charUtf8 '»', v:rv)
+
+encSizedSlice :: LBS.ByteString -> BB.Builder
+encSizedSlice s = encVarNat (LBS.length s) <> BB.lazyByteString s
+
+-- argument must be positive; low byte is 0..127, 
+encVarNat :: Int64 -> BB.Builder
+encVarNat n | (n < 0) = impossible $ "varNat with " ++ show n
+         | otherwise = _encVarNat q <> BB.word8 lo
+  where q = n `shiftR` 7
+        lo = 0x7f .&. fromIntegral n
+
+-- all bytes except the low byte tagged by 0x80
+_encVarNat :: Int64 -> BB.Builder
+_encVarNat 0 = mempty
+_encVarNat n = _encVarNat q <> BB.word8 b where
+    q = n `shiftR` 7
+    b = 0x80 .|. (0x7f .&. fromIntegral n)
 
 -- | Values have a few basic forms:
 --
@@ -210,14 +341,71 @@ data Value
     | Block !ABC {-# UNPACK #-} !Flags
     | Sealed !Token Value
     -- performance variants
-    | Linked Rsc {-# UNPACK #-} !Flags
+    | Stowed Rsc {-# UNPACK #-} !Flags
     | Text !Text
     deriving (Eq, Typeable)
 
--- | Wikilon uses VCache to model local bytecode resources. Use of
--- VCache simplifies GC issues compared to use of {#resourceId} for
--- inlined ABC or {#resourceId'kf} for large value resources.
-type Rsc = VRef ABC
+-- | Wikilon uses VCache to model value resources, similar to the
+-- {#resourceId'kf} tokens in ABC. Values are pushed to VCache via
+-- the {&stow} annotation. Use of VCache simplifies GC issues.
+--
+-- Wikilon does not have any equivalent to the inline ABC resources
+-- {#resourceId}, mostly because it isn't clear how to construct such
+-- resources or reliably regenerate them through annotations. 
+type Rsc = VRef Value
+
+-- | Load a value from VCache using the default cache mode.
+loadVal :: Rsc -> Value
+loadVal = derefc CacheMode0
+
+--
+-- encoding and decoding values for VCache
+-- I will encode a value to an ABC-like structure:
+--  * a stack of Stowage references [(Rsc,Flags)] pairs
+--  * code to recompute the value
+-- This separation should support compression of the
+-- primary data portion.
+--
+-- Possibility:
+--
+--  Encode a value to a 'flat' ABC model where all ABC_Data fields
+--  are just `Stowed lnk` objects. The difficulty here is certainly
+--  handling embedded blocks... maybe I'd benefit from a multi-pass
+--  app
+--
+-- This seems to be more difficult than one might anticipate.
+
+{-
+-- | Encode is related to quotation, but there is a significant 
+-- difference, that we shall preserve the Stowage structure.
+encodeValue :: Value -> (Bytes, [Rsc])
+encodeValue = extract . enc (mempty,mempty) where
+    extract (bb,rs) = (BB.toLazyByteString bb, L.reverse rs)
+    enc _ _ = impossible $ "todo: encodeValue"
+
+decodeValue :: (Bytes, [Rsc]) -> Value
+decodeValue (bytes,rscs) =
+    let abc = ABC { abc_code = bytes, abc_data = fmap (ABC_Data rscs) } in
+    let linear = Block mempty (flag_relevant .|. flag_affine) in
+    let decodeEnv = Sealed "decodeValue" linear in
+    let v0 = pureEval abc decodeEnv in
+    simpleEval v0 abc
+-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 -- | Table of ExtOps and relevant semantics. 
 --
@@ -226,11 +414,11 @@ type Rsc = VRef ABC
 -- effectively a prototype for ABCD.
 extOpTable :: [(ExtOp, Char, Pure.ABC)]
 extOpTable =
-    [(Op_Inline,'£',"vr$c"),(Op_Apc,'¢',"$c")
-    ,(Op_Fixpoint,'¥',"[^'ow^'zowvr$c]^'ow^'zowvr$c")
-    ,(Op_Intro1L,'ń',"vvrwlc"),(Op_Elim1L,'ć',"vrwlcc")
-    ,(Op_Intro0L,'Ń',"VVRWLC"),(Op_Elim0L,'Ć',"VRWLCC")
-    ,(Op_prim_swap,'ś',"vrwlc"),(Op_prim_mirror,'Ś',"VRWLC")
+    [(ExtOp_Inline,'£',"vr$c"),(ExtOp_Apc,'¢',"$c")
+    ,(ExtOp_Fixpoint,'¥',"[^'ow^'zowvr$c]^'ow^'zowvr$c")
+    ,(ExtOp_Intro1L,'ń',"vvrwlc"),(ExtOp_Elim1L,'ć',"vrwlcc")
+    ,(ExtOp_Intro0L,'Ń',"VVRWLC"),(ExtOp_Elim0L,'Ć',"VRWLCC")
+    ,(ExtOp_prim_swap,'ś',"vrwlc"),(ExtOp_prim_mirror,'Ś',"VRWLC")
     ]
 
 extCharOpArray :: A.Array Char (Maybe ExtOp)
@@ -257,6 +445,13 @@ extCharToOp c | inBounds = extCharOpArray A.! c
               | otherwise = Nothing
     where inBounds = (lb <= c) && (c <= ub)
           (lb,ub) = A.bounds extCharOpArray
+
+
+
+
+
+
+
 
 -- | Flags for blocks
 --   bit 0: true if relevant (no drop with %)
@@ -301,7 +496,7 @@ copyable (SumR b) = copyable b
 copyable Unit = True
 copyable (Block _ f) = f_copyable f
 copyable (Sealed _ v) = copyable v
-copyable (Linked _ f) = f_copyable f
+copyable (Stowed _ f) = f_copyable f
 copyable (Text _) = True
 
 -- | Is this value droppable (not relevant)
@@ -313,26 +508,26 @@ droppable (SumR b) = droppable b
 droppable Unit = True
 droppable (Block _ f) = f_droppable f
 droppable (Sealed _ v) = droppable v
-droppable (Linked _ f) = f_droppable f
+droppable (Stowed _ f) = f_droppable f
 droppable (Text _) = True
 
-{-# INLINE asUnit #-}
 asUnit :: (Monad m) => Value -> m ()
+{-# INLINE asUnit #-}
 asUnit Unit = return ()
-asUnit (Linked l _) = loadValM l >>= asUnit
+asUnit (Stowed l _) = asUnit (loadVal l)
 asUnit v = fail $ abcErr $ "expecting unit, received " ++ show v
 
-{-# INLINE asPair #-}
 asPair :: (Monad m) => Value -> m (Value,Value)
+{-# INLINE asPair #-}
 asPair (Pair a b) = return (a,b)
-asPair (Linked l _) = loadValM l >>= asPair
+asPair (Stowed l _) = asPair (loadVal l)
 asPair v = fail $ abcErr $ "expecting pair, received " ++ show v
 
-{-# INLINE asSum #-}
 asSum :: (Monad m) => Value -> m (Either Value Value)
+{-# INLINE asSum #-}
 asSum (SumL a) = return (Left a)
 asSum (SumR b) = return (Right b)
-asSum (Linked l _) = loadValM l >>= asSum
+asSum (Stowed l _) = asSum (loadVal l)
 asSum (Text t) = case LazyUTF8.uncons t of
     Nothing -> return $ Right Unit
     Just (c,t') -> 
@@ -340,14 +535,14 @@ asSum (Text t) = case LazyUTF8.uncons t of
         return $ Left (Pair n (Text t'))
 asSum v = fail $ abcErr $ "expecting sum, received " ++ show v
 
-{-# INLINE asNumber #-}
 asNumber :: (Monad m) => Value -> m Rational
+{-# INLINE asNumber #-}
 asNumber (Number r) = return r
-asNumber (Linked l _) = loadValM l >>= asNumber
+asNumber (Stowed l _) = asNumber (loadVal l)
 asNumber v = fail $ abcErr $ "expecting number, received " ++ show v
 
-{-# INLINE asCharNum #-}
 asCharNum :: (Monad m) => Value -> m Char
+{-# INLINE asCharNum #-}
 asCharNum num = 
     asNumber num >>= \ r ->
     let n = numerator r in
@@ -356,20 +551,20 @@ asCharNum num =
     if ok then return (chr (fromInteger n)) else
     fail $ abcErr $ "expecting utf8 codepoint, received " ++ show num
 
-{-# INLINE asBlock #-}
 asBlock :: (Monad m) => Value -> m (ABC, Flags)
+{-# INLINE asBlock #-}
 asBlock (Block abc f) = return (abc,f)
-asBlock (Linked l _) = loadValM l >>= asBlock
+asBlock (Stowed l _) = asBlock (loadVal l)
 asBlock v = fail $ abcErr $ "expecting block, received " ++ show v
 
-{-# INLINE asText #-}
 asText :: (Monad m) => Value -> m Text
+{-# INLINE asText #-}
 asText (Text t) = return t
-asText (Linked l _) = loadValM l >>= asText
+asText (Stowed l _) = asText (loadVal l)
 asText v = asText' mempty v 
 
-{-# INLINE asText' #-}
 asText' :: (Monad m) => BB.Builder -> Value -> m Text 
+{-# INLINE asText' #-}
 asText' !bb (Text t) = return $! (BB.toLazyByteString bb) <> t
 asText' !bb s = asSum s >>= \ lr -> case lr of
     Right u -> asUnit u >> return $! BB.toLazyByteString bb
@@ -406,14 +601,14 @@ asStackOf fn (Pair a b) =
     asStackOf fn b >>= \ xs ->
     return (x:xs)
 asStackOf _ Unit = return []
-asStackOf fn (Linked l _) = loadValM l >>= asStackOf fn
+asStackOf fn (Stowed l _) = asStackOf fn (loadVal l)
 asStackOf _ v = fail $ abcErr $ "expecting stack, received " ++ show v
 
 -- | Convert to a stack of values with error-based failure.
 asStack :: Value -> [Value]
 asStack (Pair a b) = a : asStack b
 asStack Unit = []
-asStack (Linked l _) = asStack (loadVal l)
+asStack (Stowed l _) = asStack (loadVal l)
 asStack v = impossible $ "expecting stack, received " ++ show v
 
 -- | Convert a list of values to a stack of values. Trivial.
@@ -422,85 +617,6 @@ fromStack (x:xs) = (Pair x (fromStack xs))
 fromStack [] = Unit
 
 
--- | Evaluator state. (Not sure exactly how much I want here.)
---
--- When we evaluate content, we have some stack of precomputed values
--- for fast quotation (which must be used precisely) and a sequence 
--- of bytes indicating continuation behavior. In some cases, for tail
--- calls, we might extend these stacks and continuations at the near
--- end.
---
--- Additionally, we have very minimal interaction with IO. While ABC
--- does have potential effects via {tokens}, Wikilon doesn't leverage
--- this feature. Instead, effects are modeled via machines, network,
--- and messaging `(InMsg*State)→(OutMsgList*State)`. However, I need
--- effects for:
---
---  * fork-join parallelism
---  * primitive debug traces
---  * timeout, interruption
---
--- At the Haskell layer, this will be modeled using unsafePerformIO.
---
-data EvalSt = EvalSt
-    { eval_env   :: !Value -- ^ primary input for evaluation
-    , eval_stack :: !Value -- ^ precomputed values for fast load
-    , eval_cont  :: !LBS.ByteString -- ^ continuation behavior
-    , eval_cost  :: !Int -- ^ decide when to tick
-    , eval_meta  :: !EvalMeta -- ^ relatively stable elements
-    } deriving (Show)
-data EvalMeta = EvalMeta
-    { eval_tid   :: !Integer -- ^ thread ID; 2* 1+ for left, 2* 2+ for right
-    , eval_join  :: ![JoinHandle] -- ^ threads to join
-    , eval_fork  :: !(EvalSt -> IO JoinHandle)
-    , eval_trace :: !(Value -> IO ()) -- ^ debug output
-    , eval_tick  :: !(EvalSt -> IO Bool) -- ^ debug and interrupt support
-    , eval_space :: !VSpace
-    }
-
-instance Show (EvalMeta) where
-    show em = "... " ++ joinMsg where
-        nJoin = L.length (eval_join em)
-        joinMsg = if (nJoin > 0) then show nJoin ++ " threads" else ""
-
-data EvalErr = EvalErr 
-    { err_dump   :: !EvalSt
-    , err_arg    :: !Value
-    , err_msg    :: !Text
-    } deriving (Show)
-type EvalErrors = [EvalErr]
-type JoinHandle = MVar EvalErrors
-
-type Eval a = ErrorT EvalErrors (State EvalSt) a
-
-runEvalMaybe :: Eval a -> Maybe a
-runEvalMaybe = error "TODO"
-
-
-
-
-
-readVarNat :: LBS.ByteString -> (Int, LBS.ByteString)
-readVarNat = r 0 where
-    r !n !t = case LBS.uncons t of
-        Nothing -> impossible "bad VarInt in Wikilon.ABC code"
-        Just (byte, t') ->
-            let n' = n `shiftL` 7 .|. (fromIntegral (byte .&. 0x7f)) in
-            let bDone = (0 == (byte .&. 0x80)) in
-            if bDone then (n', t') else r n' t'
-
-
-
-
-
-
-loadValM :: (Monad m) => Rsc -> m Value
-{-# INLINE loadValM #-}
-loadValM _ = fail $ abcErr $ "todo: loadValM"
-
-loadVal :: Rsc -> Value
-{-# INLINE loadVal #-}
-loadVal _ = impossible "todo: loadVal"
 
 
 
@@ -627,13 +743,17 @@ instance Quotable Value where
         let p = if bPar then quotes (Pure.ABC_Tok "{&par}") else id in
         block . k . f . p
     quotes (Sealed tok a) = quotes a . quotes (Pure.ABC_Tok tok)
-    quotes (Linked l _) = quotes (deref' l) . quotes (Pure.ABC_Tok "{&stow}")
+    quotes (Stowed l _) = quotes (deref' l) . quotes (Pure.ABC_Tok "{&stow}")
 
-instance Quotable ExtOp where
-    quotes = quotes . extOpToABC
-
-instance Quotable ABC where
-    quotes = error $ abcErr "TODO: Quotable for Wikilon.ABC"
+instance Quotable ExtOp where quotes = quotes . extOpToABC
+instance Quotable ABC where quotes = Pure.quotesList . decodeOps
+instance Quotable Op where
+    quotes (ABC_Prim op) = quotes op
+    quotes (ABC_Block abc) = quotes (Pure.ABC_Block $ Pure.ABC $ Pure.quote abc)
+    quotes (ABC_Text txt) = quotes (Pure.ABC_Text txt)
+    quotes (ABC_Tok tok) = quotes (Pure.ABC_Tok tok)
+    quotes (ABC_Ext op) = quotes op
+    quotes (ABC_Data val) = quotes val
 
 -- stub to prevent type errors for now
 instance VCacheable ABC where

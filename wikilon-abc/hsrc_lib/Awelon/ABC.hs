@@ -1,8 +1,9 @@
 {-# LANGUAGE ViewPatterns #-}
 
--- | A pure model of Awelon Bytecode: no accelerators or extensions.
-module ABC.Basic
+-- | A pure model of Awelon Bytecode, no accelerators or extensions.
+module Awelon.ABC
     ( ABC(..)
+    , Text
     , Token
     , Op(..)
     , PrimOp(..)
@@ -28,7 +29,7 @@ import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.String (IsString(..))
 
-import ABC.Text
+import Awelon.Text
 
 newtype ABC = ABC { abcOps :: [Op] }
     deriving (Eq, Ord)
@@ -129,9 +130,6 @@ abcOpTable =
     ,(ABC_SP,' '), (ABC_LF,'\n')
     ]
 
-impossible :: String -> a
-impossible eMsg = error ("Wikilon.ABC.Pure: " ++ eMsg)
-
 abcOpCharArray :: A.Array PrimOp Char
 abcOpCharArray = A.accumArray ins eUndef (minBound,maxBound) abcOpTable where
     eUndef = impossible "missing encoding for ABC PrimOp"
@@ -179,7 +177,6 @@ _encodeLiteral txt =
 _encodeLine :: Text -> BB.Builder
 _encodeLine l = BB.char8 '\n' <> BB.char8 ' ' <> BB.lazyByteString l
 
-
 -- | Decode ABC from Text. 
 --
 -- Parsed ABC is represented losslessly. Any text that is not parsed
@@ -208,6 +205,8 @@ decodeOp' '{' txt =
         Nothing -> Nothing
         Just idx -> 
             let (tokLazy, tokEnd) = LBS.splitAt idx txt in
+            -- for safety, reject if token contains '{'
+            if (LBS.elem '{' tokLazy) then Nothing else
             let tok = LBS.toStrict tokLazy in
             let txt' = LBS.drop 1 tokEnd in
             tok `seq` Just (ABC_Tok tok, txt')
@@ -328,7 +327,7 @@ instance IsString ABC where
         let (abc, brem) = decode bytes in
         if LBS.null brem then abc else
         let s' = LazyUTF8.toString brem in 
-        error $ "Wikilon.ABC.Pure could not parse " ++ s'
+        error $ abcErr $ "could not parse " ++ s'
 
 {-
 -- | abcSimplify performs a simple optimization on ABC code based on
@@ -414,4 +413,12 @@ rewriteTokens' fn = ABC . _rw . abcOps where
     _rw (ABC_Block abc : ops) = ABC_Block (rewriteTokens' fn abc) : _rw ops
     _rw (op : ops) = op : _rw ops
     _rw [] = []
+
+
+abcErr :: String -> String
+abcErr = (++) "Awelon.ABC: " 
+
+impossible :: String -> a
+impossible = error . abcErr
+
 

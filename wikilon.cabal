@@ -51,18 +51,16 @@ Library
   hs-Source-Dirs: hsrc_lib
   default-language: Haskell2010
   Build-Depends: base (>= 4.6 && < 5)
-
     , vcache (>= 0.2.5)
     , vcache-trie (>= 0.1.1)
+    , wikilon-abc
 
     , bytestring
     , bytestring-builder
-
     , array
-    , vector
 
     , time (>= 1.5)
-    , binary (>= 0.7.2)
+    -- , binary (>= 0.7.2)
 
     , parallel (>= 3.0)
     , containers (>= 0.5)
@@ -86,10 +84,6 @@ Library
 
     Data.VCache.LoB
 
-    ABC.Basic
-    ABC.Base16
-    ABC.Text
-
     Wikilon.Dict
     Wikilon.Dict.Word
     Wikilon.Dict.Export
@@ -98,10 +92,6 @@ Library
 
     Wikilon.Branch
     Wikilon.Geneology
-
-    Wikilon.ABC
-
-
 
     Wikilon.Machine
     -- Wikilon.Network
@@ -116,9 +106,6 @@ Library
     Wikilon.Time
     Wikilon.SecureHash
     Wikilon.Secret
-
-    -- Wikilon.Char
-    Wikilon.ParseUtils
 
   Other-Modules:
   
