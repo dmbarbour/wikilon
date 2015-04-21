@@ -9,7 +9,7 @@ import Control.Monad
 import Control.Concurrent.MVar
 
 import Wikilon.ABC
-
+{-
 -- | Evaluator state. (Not sure exactly how much I want here.)
 --
 -- When we evaluate content, we have some stack of precomputed values
@@ -30,13 +30,13 @@ import Wikilon.ABC
 --
 -- At the Haskell layer, this will be modeled using unsafePerformIO.
 --
-data EvalCtx = EvalCtx
+data EvalSt = EvalSt
     { eval_env   :: !Value -- ^ primary input for evaluation
     , eval_cont  :: !Bytes
     , eval_data  :: ![Value] -- ^ stack of values for 
     , eval_cost  :: !Int -- ^ decide when to tick
     , eval_meta  :: !EvalMeta -- ^ relatively stable elements
-    } deriving (Show)
+    } 
 data EvalMeta = EvalMeta
     { eval_tid   :: !Integer -- ^ thread ID; 2* 1+ for left, 2* 2+ for right
     , eval_join  :: ![JoinHandle] -- ^ threads to join
@@ -46,10 +46,6 @@ data EvalMeta = EvalMeta
     , eval_space :: !VSpace
     }
 
-instance Show (EvalMeta) where
-    show em = "... " ++ joinMsg where
-        nJoin = L.length (eval_join em)
-        joinMsg = if (nJoin > 0) then show nJoin ++ " threads" else ""
 
 data EvalErr = EvalErr 
     { err_dump   :: !EvalSt
@@ -64,5 +60,5 @@ newtype Eval a = Eval { runEval :: EvalCtx -> Either EvalErrors (a, EvalCtx) }
 runEvalMaybe :: Eval a -> Maybe a
 runEvalMaybe = error "TODO"
 
-
+-}
 

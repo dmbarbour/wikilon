@@ -32,20 +32,20 @@ module Wikilon.ABC
     ( ABC(..)
     , Op(..)
     , Value(..)
-
     , PrimOp(..)
     , ExtOp(..)
-
-    , Rsc, Text, Token, Bytes, Flags
+    , Rsc(..)
+    , Text
+    , Token
+    , Bytes
+    , Flags
 
     , null
-    , decodeOp, decodeOps
-    , encodeOps
-    , loadVal
+    , decodeOp, decodeOps, encodeOps
+    , loadVal, encodeVal, decodeVal
 
     , asUnit, asPair, asSum, asNumber, asBlock, asText
-    , asListOf, fromList
-    , asStackOf, asStack, fromStack
+    , asListOf, fromList, asStackOf, asStack, fromStack
     , copyable, droppable
 
     , extOpTable, extCharToOp, extOpToChar, extOpToABC
@@ -93,8 +93,8 @@ module Wikilon.ABC
     ) where
 
 import Prelude hiding (null)
-import Control.Applicative
 import Control.Monad
+import Control.Applicative
 
 import Data.Monoid
 import Data.Typeable (Typeable)
@@ -142,7 +142,7 @@ data Op
     | ABC_Tok   !Token  -- ^ embedded {token} for seal, unseal, etc.
     -- Extended Operations
     | ABC_Ext   !ExtOp  -- ^ accelerated operations
-    | ABC_Data  !Value  -- ^ value resource from precomp stack
+    | ABC_Pop   !Value  -- ^ value resource from precomp stack
     deriving (Eq, Typeable)
 
 -- | Extended Operations are essentially a dictionary recognized by
@@ -207,7 +207,7 @@ decodeOp abc =
             return (op, abc')
         '»' ->
             _uncons (abc_data abc) >>= \ (v,vs) ->
-            let op = ABC_Data v in
+            let op = ABC_Pop v in
             let abc' = ABC { abc_code = bs, abc_data = vs } in
             return (op, abc')
         (extCharToOp -> Just extOp) ->
@@ -265,7 +265,7 @@ null abc = L.null (abc_data abc) && LBS.null (abc_code abc)
 -- | Encode a list of Wikilon's ABC operators into a collective ABC
 -- structure. This involves a compact encoding for bytecode. This
 -- encoding will preserve the input structure. A separate simplify
--- pass is appropriate, e.g. to translate some ABC_Data into texts
+-- pass is appropriate, e.g. to translate some ABC_Pop into texts
 -- or blocks.
 encodeOps :: [Op] -> ABC
 encodeOps = extract . writeOps where
@@ -280,7 +280,7 @@ encodeOps = extract . writeOps where
     writeOp st (ABC_Text txt) = writeText st txt
     writeOp st (ABC_Tok tok) = writeTok st tok
     writeOp st (ABC_Ext op) = writeExtOp st op
-    writeOp st (ABC_Data v) = writeData st v
+    writeOp st (ABC_Pop v) = writeData st v
 
     writePrim (bb,rv) op = (bb <> opc, rv) where
         opc = BB.charUtf8 (Pure.abcOpToChar op)
@@ -341,7 +341,7 @@ data Value
     | Block !ABC {-# UNPACK #-} !Flags
     | Sealed !Token Value
     -- performance variants
-    | Stowed Rsc {-# UNPACK #-} !Flags
+    | Stowed {-# UNPACK #-} !Rsc
     | Text !Text
     deriving (Eq, Typeable)
 
@@ -352,60 +352,168 @@ data Value
 -- Wikilon does not have any equivalent to the inline ABC resources
 -- {#resourceId}, mostly because it isn't clear how to construct such
 -- resources or reliably regenerate them through annotations. 
-type Rsc = VRef Value
+data Rsc = Rsc !(VRef Value) {-# UNPACK #-} !Flags
+    deriving (Show, Eq, Typeable)
 
 -- | Load a value from VCache using the default cache mode.
 loadVal :: Rsc -> Value
-loadVal = derefc CacheMode0
+loadVal (Rsc r _) = derefc CacheMode0 r
 
---
--- encoding and decoding values for VCache
--- I will encode a value to an ABC-like structure:
---  * a stack of Stowage references [(Rsc,Flags)] pairs
---  * code to recompute the value
--- This separation should support compression of the
--- primary data portion.
---
--- Possibility:
---
---  Encode a value to a 'flat' ABC model where all ABC_Data fields
---  are just `Stowed lnk` objects. The difficulty here is certainly
---  handling embedded blocks... maybe I'd benefit from a multi-pass
---  app
---
--- This seems to be more difficult than one might anticipate.
+-- | Encode values for VCache. Uses a simplified bytecode optimized 
+-- for fast reconstruction of values. This bytecode is only used 
+-- internally to Wikilon.
+encodeVal :: Value -> (Bytes, [Rsc])
+encodeVal = extract . enc where
+    extract (bb,rsc) = (BB.toLazyByteString bb, rsc)
+    enc (Number r) = encNum r
+    enc (Pair a b) = enc a <> enc b <> encPair
+    enc (SumR b) = enc b <> encSumR
+    enc (asText -> Just t) = encText t
+    enc (SumL a) = enc a <> encSumL
+    enc Unit = encUnit 
+    enc (Block abc f) = encABC abc <> encFlags f
+    enc (Sealed tok val) = enc val <> encSeal tok
+    enc (Stowed rsc) = encRSC rsc
+    enc (Text t) = encText t
+    encNum r = (Pure.encode' abc, mempty) where
+        abc = Pure.ABC $ Pure.quote r 
+    encPair = (BB.char8 'P', mempty)
+    encSumR = (BB.char8 'R', mempty)
+    encSumL = (BB.char8 'L', mempty)
+    encUnit = (BB.char8 'v', mempty)
+    encABC abc = enc (fromStack (abc_data abc)) <> (bytes, mempty) where
+        bytes = BB.char8 '[' <> encSizedSlice (abc_code abc) <> BB.char8 ']'
+    encFlags flags = (rel <> aff <> par, mempty) where
+        has prop c = if flags_include prop flags then BB.char8 c else mempty
+        rel = has flag_relevant 'k'
+        aff = has flag_affine 'f'
+        par = has flag_parallel 'j'
+    encSeal tok = (bytes, mempty) where
+        lzTok = LBS.fromStrict tok
+        bytes = BB.char8 '{' <> encSizedSlice lzTok <> BB.char8 '}'
+    encText t = (bytes, mempty) where
+        bytes = BB.char8 '"' <> encSizedSlice t <> BB.char8 '~'
+    encRSC rsc = (BB.char8 '!', [rsc])
 
-{-
--- | Encode is related to quotation, but there is a significant 
--- difference, that we shall preserve the Stowage structure.
-encodeValue :: Value -> (Bytes, [Rsc])
-encodeValue = extract . enc (mempty,mempty) where
-    extract (bb,rs) = (BB.toLazyByteString bb, L.reverse rs)
-    enc _ _ = impossible $ "todo: encodeValue"
+type DecoderState = (Bytes, [Rsc])
+type DecoderStep = Value -> DecoderState -> Maybe (Value, DecoderState)
+decOpTable :: [(Char, DecoderStep)]    
+decOpTable = 
+    -- encoding of numbers (same as ABC)
+    [('#',decOp_intro0)
+    ,('0',decOp_d 0),('1',decOp_d 1),('2',decOp_d 2),('3',decOp_d 3),('4',decOp_d 4)
+    ,('5',decOp_d 5),('6',decOp_d 6),('7',decOp_d 7),('8',decOp_d 8),('9',decOp_d 9)
+    ,('-',decOp_negate),('/',decOp_recip),('*',decOp_mul)
+    -- encoding for pairs, sums, unit (bare minimum for plumbing)
+    ,('p',decOp_pair),('R',decOp_inR),('L',decOp_inL),('v',decOp_unit)
+    -- encoding blocks and attributes
+    ,('[',decOp_block)
+    ,('k',decOp_bf flag_relevant)
+    ,('f',decOp_bf flag_affine)
+    ,('j',decOp_bf flag_parallel)
+    -- text, sealers, stowage 
+    ,('"',decOp_text),('{',decOp_seal),('!',decOp_stow)
+    ]
 
-decodeValue :: (Bytes, [Rsc]) -> Value
-decodeValue (bytes,rscs) =
-    let abc = ABC { abc_code = bytes, abc_data = fmap (ABC_Data rscs) } in
-    let linear = Block mempty (flag_relevant .|. flag_affine) in
-    let decodeEnv = Sealed "decodeValue" linear in
-    let v0 = pureEval abc decodeEnv in
-    simpleEval v0 abc
--}
+decCharOpArray :: A.Array Char DecoderStep
+decCharOpArray = A.accumArray ins decOp_fail (lb,ub) lst where
+    ins _ op = op
+    lb = L.minimum (fmap fst lst)
+    ub = L.maximum (fmap fst lst)
+    lst = decOpTable
 
+decCharToOp :: Char -> DecoderStep
+decCharToOp c | inBounds = decCharOpArray A.! c
+              | otherwise = decOp_fail
+  where inBounds = (lb <= c) && (c <= ub)
+        (lb,ub) = A.bounds decCharOpArray
 
+-- | Decode a value from its VCache encoding. The bytecode used here
+decodeVal :: (Bytes, [Rsc]) -> Value
+decodeVal = extract . dec v0 where
+    v0 = Sealed "decodeVal" (Block mempty kf)
+    kf = flag_relevant .|. flag_affine
+    extract (Pair a b) | (b == v0) = a
+    extract v = impossible $ "expecting decoded value, received " ++ show v
+    dec v st@(bs,rs) = case LazyUTF8.uncons bs of
+        Just (decCharToOp -> decOp, bs') -> case decOp v (bs',rs) of
+            Just (v',st') -> dec v' st'
+            Nothing -> impossible $ "decodeVal: decode failure @ " ++ show (st, v)
+        Nothing | L.null rs -> v -- all done!
+        _ -> impossible $ "decodeVal: invalid state " ++ show st
 
+decOp_intro0 :: DecoderStep
+decOp_d :: Int -> DecoderStep
+decOp_negate, decOp_recip, decOp_mul :: DecoderStep
+decOp_pair, decOp_inR, decOp_inL, decOp_unit :: DecoderStep
+decOp_block, decOp_text, decOp_seal, decOp_stow :: DecoderStep
+decOp_bf :: Flags -> DecoderStep
 
+decOp_fail :: DecoderStep
+decOp_fail _ _ = Nothing
 
+decOpV :: DecoderStep
+{-# INLINE decOpV #-}
+decOpV v st = Just (v,st)
 
+decOp_intro0 = decOpV . Pair (Number 0) 
 
+decOp_d digit (Pair (Number n) s) = 
+    let n' = 10 * n + fromIntegral digit in
+    decOpV $! n' `seq` (Pair (Number n') s)
+decOp_d _ _ = const Nothing
 
+decOp_negate (Pair (Number n) s) = 
+    let n' = negate n in
+    decOpV $! n' `seq` (Pair (Number n') s)
+decOp_negate _ = const Nothing
 
+decOp_recip (Pair (Number n) s) | (n /= 0) =
+    let n' = recip n in
+    decOpV $! n' `seq` (Pair (Number n') s)
+decOp_recip _ = const Nothing
 
+decOp_mul (Pair (Number b) (Pair (Number a) s)) =
+    let n' = (a * b) in
+    decOpV $! n' `seq` (Pair (Number n') s)
+decOp_mul _ = const Nothing
 
+decOp_pair (Pair b (Pair a s)) = decOpV (Pair (Pair a b) s)
+decOp_pair _ = const Nothing
 
+decOp_inR (Pair b s) = decOpV (Pair (SumR b) s)
+decOp_inR _ = const Nothing
 
+decOp_inL (Pair a s) = decOpV (Pair (SumL a) s)
+decOp_inL _ = const Nothing
 
+decOp_unit = decOpV . Pair Unit
 
+decOp_bf f (Pair (Block abc bf) s) =
+    let block' = Block abc (f .|. bf) in
+    decOpV $! block' `seq` (Pair block' s)
+decOp_bf _ _ = const Nothing 
+
+decOp_block (Pair bStack s) (bs,rs) =
+    sizedSliceFby ']' bs >>= \ (_code, bs') ->
+    let _data = asStack bStack in
+    let abc = ABC { abc_data = _data, abc_code = _code } in
+    let block = Block abc 0 in
+    return (Pair block s, (bs',rs))
+decOp_block _ _ = Nothing
+
+decOp_text s (bs,rs) =
+    sizedSliceFby '~' bs >>= \ (txt, bs') ->
+    return ((Pair (Text txt) s), (bs',rs))
+
+decOp_seal (Pair v s) (bs,rs) =
+    sizedSliceFby '}' bs >>= \ (lzTok, bs') ->
+    let tok = LBS.toStrict lzTok in
+    return ((Pair (Sealed tok v) s), (bs',rs))
+decOp_seal _ _ = Nothing
+
+decOp_stow s (bs, (r:rs)) = return ((Pair (Stowed r) s), (bs,rs))
+decOp_stow _ _ = Nothing    
 
 -- | Table of ExtOps and relevant semantics. 
 --
@@ -426,7 +534,7 @@ extCharOpArray = A.accumArray ins Nothing (lb,ub) lst where
     ins _ op = Just op
     lb = L.minimum (fmap fst lst)
     ub = L.maximum (fmap fst lst)
-    lst = fmap (\(op,c,d) -> (c,op)) extOpTable
+    lst = fmap (\(op,c,_d) -> (c,op)) extOpTable
 
 extOpDataArray :: A.Array ExtOp (Char, Pure.ABC)
 extOpDataArray = A.accumArray ins eUndef (minBound,maxBound) lst where
@@ -496,7 +604,7 @@ copyable (SumR b) = copyable b
 copyable Unit = True
 copyable (Block _ f) = f_copyable f
 copyable (Sealed _ v) = copyable v
-copyable (Stowed _ f) = f_copyable f
+copyable (Stowed (Rsc _ f)) = f_copyable f
 copyable (Text _) = True
 
 -- | Is this value droppable (not relevant)
@@ -508,26 +616,26 @@ droppable (SumR b) = droppable b
 droppable Unit = True
 droppable (Block _ f) = f_droppable f
 droppable (Sealed _ v) = droppable v
-droppable (Stowed _ f) = f_droppable f
+droppable (Stowed (Rsc _ f)) = f_droppable f
 droppable (Text _) = True
 
 asUnit :: (Monad m) => Value -> m ()
 {-# INLINE asUnit #-}
 asUnit Unit = return ()
-asUnit (Stowed l _) = asUnit (loadVal l)
+asUnit (Stowed rsc) = asUnit (loadVal rsc)
 asUnit v = fail $ abcErr $ "expecting unit, received " ++ show v
 
 asPair :: (Monad m) => Value -> m (Value,Value)
 {-# INLINE asPair #-}
 asPair (Pair a b) = return (a,b)
-asPair (Stowed l _) = asPair (loadVal l)
+asPair (Stowed rsc) = asPair (loadVal rsc)
 asPair v = fail $ abcErr $ "expecting pair, received " ++ show v
 
 asSum :: (Monad m) => Value -> m (Either Value Value)
 {-# INLINE asSum #-}
 asSum (SumL a) = return (Left a)
 asSum (SumR b) = return (Right b)
-asSum (Stowed l _) = asSum (loadVal l)
+asSum (Stowed rsc) = asSum (loadVal rsc)
 asSum (Text t) = case LazyUTF8.uncons t of
     Nothing -> return $ Right Unit
     Just (c,t') -> 
@@ -538,7 +646,7 @@ asSum v = fail $ abcErr $ "expecting sum, received " ++ show v
 asNumber :: (Monad m) => Value -> m Rational
 {-# INLINE asNumber #-}
 asNumber (Number r) = return r
-asNumber (Stowed l _) = asNumber (loadVal l)
+asNumber (Stowed rsc) = asNumber (loadVal rsc)
 asNumber v = fail $ abcErr $ "expecting number, received " ++ show v
 
 asCharNum :: (Monad m) => Value -> m Char
@@ -554,19 +662,21 @@ asCharNum num =
 asBlock :: (Monad m) => Value -> m (ABC, Flags)
 {-# INLINE asBlock #-}
 asBlock (Block abc f) = return (abc,f)
-asBlock (Stowed l _) = asBlock (loadVal l)
+asBlock (Stowed rsc) = asBlock (loadVal rsc)
 asBlock v = fail $ abcErr $ "expecting block, received " ++ show v
 
+-- | asText will short-circuit if the value is obviously a text.
+-- Otherwise it will prepare a bytestring builder.
 asText :: (Monad m) => Value -> m Text
 {-# INLINE asText #-}
 asText (Text t) = return t
-asText (Stowed l _) = asText (loadVal l)
+asText (Stowed rsc) = asText (loadVal rsc)
 asText v = asText' mempty v 
 
 asText' :: (Monad m) => BB.Builder -> Value -> m Text 
 {-# INLINE asText' #-}
-asText' !bb (Text t) = return $! (BB.toLazyByteString bb) <> t
-asText' !bb s = asSum s >>= \ lr -> case lr of
+asText' bb (Text t) = return $! (BB.toLazyByteString bb) <> t
+asText' bb s = asSum s >>= \ lr -> case lr of
     Right u -> asUnit u >> return $! BB.toLazyByteString bb
     Left p -> 
         asPair p >>= \ (n , t') -> 
@@ -601,14 +711,14 @@ asStackOf fn (Pair a b) =
     asStackOf fn b >>= \ xs ->
     return (x:xs)
 asStackOf _ Unit = return []
-asStackOf fn (Stowed l _) = asStackOf fn (loadVal l)
+asStackOf fn (Stowed rsc) = asStackOf fn (loadVal rsc)
 asStackOf _ v = fail $ abcErr $ "expecting stack, received " ++ show v
 
 -- | Convert to a stack of values with error-based failure.
 asStack :: Value -> [Value]
 asStack (Pair a b) = a : asStack b
 asStack Unit = []
-asStack (Stowed l _) = asStack (loadVal l)
+asStack (Stowed rsc) = asStack (loadVal rsc)
 asStack v = impossible $ "expecting stack, received " ++ show v
 
 -- | Convert a list of values to a stack of values. Trivial.
@@ -629,88 +739,6 @@ fromStack [] = Unit
 
 
 
-
-
-
-
-
-
--- QUESTION: How are resources represented in VCache?
---
--- Wikilon's internal ABC uses 'escapes' to access precomputed data.
--- Thus, to properly encode our bytecode resources, we must reliably
--- regenerate any precomputed content.
---
--- Following ABC's example, I'll make these implicit escapes very
--- explicit and functionally meaningful. Each block will also pop a
--- value because it recursively contains some precomputed data. The
--- ability to push a value allows me to directly encode blocks and
--- avoid recursive encodings in the 'precompute the value' sections.
---
---      [       pop value for encoded block
---      »       pop value resource from stack
---      ¡       inline a bytecode resource
---
--- All link resources must be pushed to the toplevel. So let's say
--- we start with a stack of link resources, use this to compute our
--- main values stack, then use our main values stack for our ABC.
--- This avoids arbitrary recursion.
---
--- Additionally, we'll capture sizes for every block, token, and text:
---
---      [(Size)bytecode]
---      {(Size)token}
---      "(Size)textWithoutEscapes~
---
--- The size allows fast slicing. The final character provides a sanity
--- check and visual delimiter when debugging. Tokens and text may use
--- ABC base16 compression internally.
---
--- The whole stream will finally be subjected to a fast compression.
--- Candidate algorithms: LZ4, Snappy. These algorithms aren't great
--- for compaction, but ABC should be a relatively easy target. And
--- even a 50% compaction could make a useful performance difference
--- on read. (Besides, decompression simply becomes part of copying
--- the input.)
---
--- I might also add some sort of explicit interrupt or breakpoint
--- opcode.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
---  * develop dictionary of built-in operators to accelerate performance
---    * each operator has simple expansion to ABC
---    * recognize or parse operator from raw ABC
---    * how to best encode? Not sure. Maybe 0xFD+VarNat?
---  * precomputed values and cheap quotations 
---    * stack of values per node 
---    * similar to how VCache uses stack of VRefs?
---  * support linked ABC resources with VCache
---    * resources involve VRefs to more ABC nodes
---    * preferably leverage same stack of values
---    * lazy loading of value resources
---  * rewrite texts, blocks, and tokens to support fast slicing
---    * "(length)(content)~
---    * [(links)(length)(content)]
---    * {(length)(content)}
---    * length and links have VarNat representation
---    * escapes are removed from the text content
---  * Compression of larger ABC at VCache layer (option?)
---    * combine texts for precomputed values and ABC for best compression
---    * Base16 compression for tokens and texts
---
 
 
 -- composition is still trivial
@@ -743,7 +771,7 @@ instance Quotable Value where
         let p = if bPar then quotes (Pure.ABC_Tok "{&par}") else id in
         block . k . f . p
     quotes (Sealed tok a) = quotes a . quotes (Pure.ABC_Tok tok)
-    quotes (Stowed l _) = quotes (deref' l) . quotes (Pure.ABC_Tok "{&stow}")
+    quotes (Stowed rsc) = quotes (loadVal rsc) . quotes (Pure.ABC_Tok "{&stow}")
 
 instance Quotable ExtOp where quotes = quotes . extOpToABC
 instance Quotable ABC where quotes = Pure.quotesList . decodeOps
@@ -753,17 +781,29 @@ instance Quotable Op where
     quotes (ABC_Text txt) = quotes (Pure.ABC_Text txt)
     quotes (ABC_Tok tok) = quotes (Pure.ABC_Tok tok)
     quotes (ABC_Ext op) = quotes op
-    quotes (ABC_Data val) = quotes val
+    quotes (ABC_Pop val) = quotes val
 
--- stub to prevent type errors for now
+
+
+-- encode ABC as a plain old Block value
 instance VCacheable ABC where
-    put abc = error $ abcErr "TODO: VCacheable ABC"
-    get = error $ abcErr "TODO: VCacheable ABC"
+    put abc = put (Block abc 0)
+    get = get >>= \ v -> case v of
+        (Block abc 0) -> return abc
+        _ -> fail $ abcErr $ "expecting block, received " ++ show v
+
+-- versioned encoder for values 
+-- e.g. in case I want to change compression algs
+newtype V0 = V0 { unV0 :: (Bytes, [Rsc]) }
+    deriving (Typeable)
 
 instance VCacheable Value where
-    put v = error $ abcErr "TODO: VCacheable Value"
-    get = error $ abcErr "TODO: VCacheable Value"
+    put = put . V0 . encodeVal
+    get = (decodeVal . unV0) <$> get
 
+instance VCacheable V0 where
+    put = error $ abcErr $ "todo"
+    get = error $ abcErr $ "todo"
 
 abcErr :: String -> String
 abcErr = (++) "Wikilon.ABC: "
