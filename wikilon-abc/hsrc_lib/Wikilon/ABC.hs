@@ -105,11 +105,14 @@ import Data.Int
 import Data.Bits
 import Data.Ratio
 import Data.Char
+import qualified Data.ByteString.Internal as BS
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.UTF8 as UTF8
+import Foreign (newForeignPtr_)
 import Database.VCache
+import qualified Codec.Compression.Snappy.Lazy as Snappy
 
 import Awelon.ABC (PrimOp(..), Quotable(..))
 import qualified Awelon.ABC as Pure
@@ -783,27 +786,47 @@ instance Quotable Op where
     quotes (ABC_Ext op) = quotes op
     quotes (ABC_Pop val) = quotes val
 
-
-
--- encode ABC as a plain old Block value
+-- encode ABC same as Block value
 instance VCacheable ABC where
     put abc = put (Block abc 0)
-    get = get >>= \ v -> case v of
-        (Block abc 0) -> return abc
-        _ -> fail $ abcErr $ "expecting block, received " ++ show v
+    get = get >>= \ val -> case val of
+        (Block abc _) -> return abc
+        _ -> fail $ abcErr $ "expecting block, received " ++ show val
+
+instance VCacheable Rsc where
+    {-# INLINE put #-}
+    {-# INLINE get #-}
+    put (Rsc r f) = put r >> putWord8 f
+    get = Rsc <$> get <*> getWord8
 
 -- versioned encoder for values 
 -- e.g. in case I want to change compression algs
-newtype V0 = V0 { unV0 :: (Bytes, [Rsc]) }
-    deriving (Typeable)
+--
+-- V0 does a direct encoding for resources, and uses the Snappy 
+-- algorithm to compress the bytestring. ABC Base16 compression
+-- is not applied in this version. This is probably good enough
+-- for most use-cases.
+newtype V0 = V0 { unV0 :: (Bytes, [Rsc]) } deriving (Typeable)
 
 instance VCacheable Value where
     put = put . V0 . encodeVal
     get = (decodeVal . unV0) <$> get
 
 instance VCacheable V0 where
-    put = error $ abcErr $ "todo"
-    get = error $ abcErr $ "todo"
+    put (V0 (bs,rs)) = do
+        putWord8 0
+        put rs
+        put (Snappy.compress bs)
+    get = getWord8 >>= \ vn -> case vn of
+        0 -> do rs <- get
+                nLen <- fromInteger <$> getVarNat 
+                bs <- withBytes nLen $ \ p -> do
+                    -- zero-copy before decompression
+                    fp <- newForeignPtr_ p 
+                    let cbytes = LBS.fromStrict $ BS.fromForeignPtr fp 0 nLen
+                    return $! Snappy.decompress cbytes
+                return $! V0 (bs,rs)
+        _ -> fail $ abcErr $ "unrecognized version number for value decode: " ++ show vn
 
 abcErr :: String -> String
 abcErr = (++) "Wikilon.ABC: "
