@@ -55,41 +55,6 @@ module Wikilon.ABC
     , flag_relevant, f_droppable
     , flag_parallel, f_parallel
 
-    -- * 
-
-
-{-
-    -- * primitive ABC evaluation operators.
-    , op_l, op_r, op_w, op_z, op_v, op_c
-    , op_L, op_R, op_W, op_Z, op_V, op_C
-    , op_copy, op_drop
-    , op_add, op_negate, op_multiply, op_reciprocal, op_divMod, op_compare
-    , op_apply, op_condApply, op_quote, op_compose, op_relevant, op_affine
-    , op_distrib, op_factor, op_merge, op_assert
-    , op_newZero, op_d0, op_d1, op_d2, op_d3, op_d4, op_d5, op_d6, op_d7, op_d8, op_d9
-    , op_SP, op_LF
-
-    -- * multi-byte operators
-    , op_Block, op_Text, op_Tok
-
-    -- * Wikilon's extended operators
-
-
-    -- * 
-
-    , EvalSt(..)
-    , EvalErr(..)
-
--}
-
-
-{-
-    , encodeVal, decodeVal
-    , encodeVals, decodeVals
-    , encodeABC, decodeABC
--}  
-
-
     ) where
 
 import Prelude hiding (null)
@@ -105,6 +70,7 @@ import Data.Int
 import Data.Bits
 import Data.Ratio
 import Data.Char
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BS
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as LBS
@@ -112,7 +78,9 @@ import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.UTF8 as UTF8
 import Foreign (newForeignPtr_)
 import Database.VCache
-import qualified Codec.Compression.Snappy.Lazy as Snappy
+
+import qualified Codec.Compression.LZ4 as LZ4
+
 
 import Awelon.ABC (PrimOp(..), Quotable(..))
 import qualified Awelon.ABC as Pure
@@ -753,16 +721,19 @@ instance Monoid ABC where
 
 instance Show ABC where showsPrec _ = shows . Pure.quote
 instance Show Value where showsPrec _ = shows . Pure.quote
+instance Show Op where
+    showsPrec _ = shows . Pure.quote
+    showList = shows . Pure.quoteList
 
 -- Value will quote as ABC that regenerates it. This includes
 -- regenerating any linked or stowed value resources.
 instance Quotable Value where
     quotes (Number r) = quotes r
-    quotes (Text t) = quotes (Pure.ABC_Text t)
-    quotes (asText -> Just t) = quotes (Pure.ABC_Text t)
     quotes (Pair a b) = quotes a . quotes b . quotes ("wl" :: Pure.ABC)
-    quotes (SumL a) = quotes a . quotes ("V" :: Pure.ABC)
+    quotes (Text t) = quotes (Pure.ABC_Text t)
     quotes (SumR b) = quotes b . quotes ("VVRWLC" :: Pure.ABC)
+    quotes (asText -> Just t) = quotes (Pure.ABC_Text t)
+    quotes (SumL a) = quotes a . quotes ("V" :: Pure.ABC)
     quotes Unit = quotes ("vvrwlc" :: Pure.ABC)
     quotes (Block abc flags) = 
         let block = quotes (Pure.ABC_Block $ Pure.ABC $ Pure.quote abc) in
@@ -793,20 +764,20 @@ instance VCacheable ABC where
         (Block abc _) -> return abc
         _ -> fail $ abcErr $ "expecting block, received " ++ show val
 
+-- resource is simple pair
 instance VCacheable Rsc where
     {-# INLINE put #-}
     {-# INLINE get #-}
     put (Rsc r f) = put r >> putWord8 f
     get = Rsc <$> get <*> getWord8
 
--- versioned encoder for values 
--- e.g. in case I want to change compression algs
+-- versioned encoding for values 
 --
--- V0 does a direct encoding for resources, and uses the Snappy 
--- algorithm to compress the bytestring. ABC Base16 compression
--- is not applied in this version. This is probably good enough
--- for most use-cases.
-newtype V0 = V0 { unV0 :: (Bytes, [Rsc]) } deriving (Typeable)
+-- V0 does a direct encoding for resources, and optionally includes
+-- a compression pass for the bytes. Compression is currently just
+-- LZ4, accepting when the ratio is heuristically good enough.
+data V0 = V0 { unV0 :: (Bytes, [Rsc]) } deriving Typeable
+newtype ZBytes = ZBytes Bytes deriving Typeable
 
 instance VCacheable Value where
     put = put . V0 . encodeVal
@@ -814,19 +785,33 @@ instance VCacheable Value where
 
 instance VCacheable V0 where
     put (V0 (bs,rs)) = do
-        putWord8 0
-        put rs
-        put (Snappy.compress bs)
+        putWord8 0  -- encode version number 
+        put rs      -- value resource list
+        put (ZBytes bs)
     get = getWord8 >>= \ vn -> case vn of
-        0 -> do rs <- get
-                nLen <- fromInteger <$> getVarNat 
-                bs <- withBytes nLen $ \ p -> do
-                    -- zero-copy before decompression
-                    fp <- newForeignPtr_ p 
-                    let cbytes = LBS.fromStrict $ BS.fromForeignPtr fp 0 nLen
-                    return $! Snappy.decompress cbytes
-                return $! V0 (bs,rs)
-        _ -> fail $ abcErr $ "unrecognized version number for value decode: " ++ show vn
+          0 -> do rs <- get
+                  ZBytes bs <- get
+                  return $! V0 (bs,rs)
+          _ -> fail $ abcErr $ "unrecognized value encoding " ++ show vn
+
+instance VCacheable ZBytes where
+    put (ZBytes bs) = 
+        let bytes = LBS.toStrict bs in
+        -- require reasonable compression ratio or don't bother
+        let accept cbytes = (5 * BS.length cbytes) < (4 * BS.length bytes) in
+        case LZ4.compress bytes of
+            Just cbs | accept cbs -> putWord8 1 >> put cbs
+            _ -> putWord8 0 >> put bytes
+    get = getWord8 >>= \ cm -> case cm of
+        0 -> ZBytes <$> get
+        1 -> fmap fromInteger getVarNat >>= \ nLen -> -- compressed len
+             withBytes nLen $ \ p -> -- zero copy access to compressed content
+                newForeignPtr_ p >>= \ fp ->
+                let cbytes = BS.fromForeignPtr fp 0 nLen in
+                case LZ4.decompress cbytes of
+                    Just !bytes -> return $! ZBytes (LBS.fromStrict bytes)
+                    Nothing -> fail $ abcErr $ "LZ4 decompression failure!"
+        _ -> fail $ abcErr $ "unrecognized compression mode " ++ show cm
 
 abcErr :: String -> String
 abcErr = (++) "Wikilon.ABC: "

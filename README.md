@@ -23,8 +23,6 @@ To get started with Wikilon:
 
 * install LMDB library and headers
  * (Ubuntu) `sudo apt-get install liblmdb-dev`
-* install Snappy compression libraries
- * (Ubuntu) `sudo apt-get install libsnappy-dev`
 * cd wikilon-abc; cabal install
 * cabal install --only-dependencies
 * cabal install
@@ -52,7 +50,6 @@ If TLS is enabled, Wikilon will reject insecure connections. If you plan to use 
 * **warp and wai** for HTTP connectivity
 * **websockets** for liveness and reactivity
 * **VCache and LMDB** for ACID persistence
-* **Snappy** for compression of persistent data
 * **logarithmic history** for version control, debugging, regression testing
 * **object capability model** for security and collaboration
 

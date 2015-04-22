@@ -24,7 +24,7 @@ module Wikilon.Dict.Token
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.List as L
 
-import ABC.Basic (Token)
+import Awelon.ABC (Token)
 import Wikilon.Dict.Word
 
 -- | Wikilon dictionaries accept three token types: words, discretionary

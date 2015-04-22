@@ -2,6 +2,33 @@
 
 module Wikilon.Eval
     (
+
+
+{-
+    -- * primitive ABC evaluation operators.
+    , op_l, op_r, op_w, op_z, op_v, op_c
+    , op_L, op_R, op_W, op_Z, op_V, op_C
+    , op_copy, op_drop
+    , op_add, op_negate, op_multiply, op_reciprocal, op_divMod, op_compare
+    , op_apply, op_condApply, op_quote, op_compose, op_relevant, op_affine
+    , op_distrib, op_factor, op_merge, op_assert
+    , op_newZero, op_d0, op_d1, op_d2, op_d3, op_d4, op_d5, op_d6, op_d7, op_d8, op_d9
+    , op_SP, op_LF
+
+    -- * multi-byte operators
+    , op_Block, op_Text, op_Tok
+
+    -- * Wikilon's extended operators
+
+
+    -- * 
+
+    , EvalSt(..)
+    , EvalErr(..)
+
+-}
+
+
     ) where
 
 import Control.Monad

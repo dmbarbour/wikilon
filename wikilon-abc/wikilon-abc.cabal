@@ -40,7 +40,7 @@ Library
     , bytestring (>= 0.10)
     , bytestring-builder
     , array
-    , snappy (>= 0.2)
+    , lz4 (>= 0.2.3)
 
   Exposed-Modules:
 
