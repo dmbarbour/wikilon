@@ -2,6 +2,9 @@
 -- | Wikilon keeps a branching history for dictionaries. Branches are
 -- named by simple unicode strings. Individually, each branch has a
 -- dictionary and a history.
+--
+-- Branch names must be valid Word names, i.e. to have the same URL
+-- friendly and text friendly constraints.
 module Wikilon.Branch
     ( BranchSet
     , BranchName
@@ -16,6 +19,8 @@ module Wikilon.Branch
     , insert
     , delete
     , adjust
+
+    , isValidBranchName
 
     , head
     , hist
@@ -41,6 +46,7 @@ import Data.VCache.Trie (Trie)
 import qualified Data.VCache.Trie as Trie
 
 import Wikilon.Dict (Dict)
+import Wikilon.Dict.Word (isValidWord, Word(..))
 import qualified Wikilon.Dict as Dict
 import Wikilon.Time
 
@@ -97,7 +103,11 @@ emptyBranch vc = Branch0 (Dict.empty vc) (LoB.empty vc 8)
 insert :: BranchName -> Branch -> BranchSet -> BranchSet
 insert n = adjust n . const . Just
 
--- | Delete a branch from the branchs et.
+-- | Test whether a BranchName is suitable for Wikilon.
+isValidBranchName :: BranchName -> Bool
+isValidBranchName = isValidWord . Word
+
+-- | Delete a named branch from the branch set.
 delete :: BranchName -> BranchSet -> BranchSet
 delete n = adjust n (const Nothing)
 

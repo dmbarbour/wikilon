@@ -139,7 +139,7 @@ data ExtOp
     | ExtOp_prim_swap    -- vrwlc
     | ExtOp_prim_mirror  -- VRWLC
 
-    -- annotations? {&par}, {&trace}, {&≡}, etc.
+    -- annotations? {&fork}, {&trace}, {&≡}, etc.
     --  not sure it's worthwhile though, these aren't frequent and
     --  recognition overhead is marginal compared to the processing.
 
@@ -535,7 +535,7 @@ extCharToOp c | inBounds = extCharOpArray A.! c
 -- | Flags for blocks
 --   bit 0: true if relevant (no drop with %)
 --   bit 1: true if affine   (no copy with ^)
---   bit 2: true for parallelism {&par}
+--   bit 2: true for parallelism {&fork}
 --   bit 3..7: Reserved. Tentatively: 
 --     memoization for blocks
 --     local values (cannot send in message, except in context)
@@ -729,11 +729,11 @@ instance Show Op where
 -- regenerating any linked or stowed value resources.
 instance Quotable Value where
     quotes (Number r) = quotes r
-    quotes (Pair a b) = quotes a . quotes b . quotes ("wl" :: Pure.ABC)
+    quotes (Pair a b) = quotes b . quotes a . quotes ABC_l 
     quotes (Text t) = quotes (Pure.ABC_Text t)
     quotes (SumR b) = quotes b . quotes ("VVRWLC" :: Pure.ABC)
     quotes (asText -> Just t) = quotes (Pure.ABC_Text t)
-    quotes (SumL a) = quotes a . quotes ("V" :: Pure.ABC)
+    quotes (SumL a) = quotes a . quotes ABC_V
     quotes Unit = quotes ("vvrwlc" :: Pure.ABC)
     quotes (Block abc flags) = 
         let block = quotes (Pure.ABC_Block $ Pure.ABC $ Pure.quote abc) in
@@ -742,7 +742,7 @@ instance Quotable Value where
         let bPar = flags_include flag_parallel flags in
         let k = if bRel then quotes ABC_relevant else id in
         let f = if bAff then quotes ABC_affine else id in
-        let p = if bPar then quotes (Pure.ABC_Tok "{&par}") else id in
+        let p = if bPar then quotes (Pure.ABC_Tok "{&fork}") else id in
         block . k . f . p
     quotes (Sealed tok a) = quotes a . quotes (Pure.ABC_Tok tok)
     quotes (Stowed rsc) = quotes (loadVal rsc) . quotes (Pure.ABC_Tok "{&stow}")

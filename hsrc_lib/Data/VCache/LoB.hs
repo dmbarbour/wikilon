@@ -94,12 +94,8 @@ null l = L.null (l_buffer l) && isNothing (l_bpages l)
 
 -- | Compute the length of our LoB. O(lg(N)).
 length :: LoB a -> Int
-length l = buffSize + (blockSize * blockCount) where
-    buffSize = l_buffSize l
-    blockSize = l_blockSize l
-    blockCount = case l_bpages l of
-        Just (_b0, lb) -> 1 + length lb
-        Nothing -> 0
+length l = l_buffSize l + (l_blockSize l * blockCount) where
+    blockCount = maybe 0 ((1 +) . length . snd) (l_bpages l)
 
 -- | try to remove an element from the LoB. 
 --  O(1) amortized, O(lg(N)) worst case.

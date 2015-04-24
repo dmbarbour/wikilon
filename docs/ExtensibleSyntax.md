@@ -40,7 +40,7 @@ The prior section for Extensible Syntax is still missing a lot of desirable feat
 
 *We can do better!*
 
-Instead of an extensible syntax at the character level, we represent every word as a pair: a *structured value* and a *compiler function*. The compiler function is simply a pure function that takes the structured value and returns a block. Trivially, the simplest compiler function is *identity*, if the structure itself is a block. The structured value is represented in ABC, but with access to the dictionary via `{%foo}` tokens. The result, for simple code, is very similar to the (now deprecated!) Awelon Object (AO) code:
+Instead of an extensible syntax at the character level, we represent every word as a pair: a *structured value* and a *compiler function*. The compiler function is simply a pure function that takes the structured value and returns a block. Trivially, the simplest compiler function is *identity*, if the structure itself is a block. The structured value is represented in ABC, but with access to the dictionary via `{%foo}` tokens. The result, for simple code, is very similar to the older version of Awelon Object (AO) code:
 
         @using {&AO}
         :swap [rwrwzwlwl]

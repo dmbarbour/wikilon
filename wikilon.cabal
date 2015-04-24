@@ -97,7 +97,8 @@ Library
     -- Wikilon.Network
     -- Wikilon.Services
 
-
+    Wikilon.Root
+    Wikilon.WAI
     Wikilon
 
 

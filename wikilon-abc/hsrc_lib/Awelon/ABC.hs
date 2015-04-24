@@ -31,6 +31,7 @@ import Data.String (IsString(..))
 
 import Awelon.Text
 
+-- | Bytecode is a sequence or stream of operations
 newtype ABC = ABC { abcOps :: [Op] }
     deriving (Eq, Ord)
 

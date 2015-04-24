@@ -152,7 +152,7 @@ runWikilonInstance a = mainBody where
         Sys.putStrLn ("  Port:  " ++ show port) >>
         Sys.putStrLn ("  Cache: " ++ show cache ++ " MB") >>
         Sys.putStrLn ("  HTTPS: " ++ show bUseTLS) >>
-        Sys.putStrLn ("  Admin: " ++ Wikilon.adminCode app)
+        Sys.putStrLn ("  Admin: " ++ UTF8.toString (Wikilon.adminCode app))
 
 
 showFP :: FS.FilePath -> String
