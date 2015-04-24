@@ -50,6 +50,7 @@ Library
     Awelon.ABC
     Awelon.Base16
     Awelon.Text
+    Awelon.Eval
 
   Other-Modules:
   

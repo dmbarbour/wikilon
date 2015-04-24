@@ -52,6 +52,17 @@ Here's a rough sketch for what I'm thinking at this time:
 
 At this point, I'm still not entirely certain what all services I'll be providing. I'd like to support something like CodeBubble desktops, CSCW, mobility between devices. That might require new sharable resources. I will likely need to model pull requests and *expected* future relationships (e.g. this branch over here might be pulled) to help users track potential future conflicts and better cooperate. Issues seem like something to model carefully or even model *within* each dictionary (such that issues lists are easily exported and shared). 
 
-I'd like to eventually deprecate user identity as a basis for security. However, I'm willing to provide enough conventional support that users can easily get started. Maybe look into Waterken to see how and if they've addressed user models and made them reasonably comfortable (given modern browsers).
+## Security
 
-I'd like to consider `NameCoin` integration as a basis for naming machines. Twitter integration might be neat if it means I can receive and answer requests.
+I'd like to favor capability-based security even in the web interfaces. However, it isn't clear to me how to achieve this without mangling most of the URIs. I think capabilities are probably not a very good fit for how most users will use capabilities. 
+
+Maybe I should stick with user logins to start, but add the ability to create capabilities to specific resources under a given authority. In particular, something like IDE sessions might make decent capabilities, as might web-sockets or bindings to machines.
+
+## Naming AVMs
+
+I'd like to consider `NameCoin` or similar cooperative decentralized models integration as a basis for giving AVMs a common name. I'd prefer this to use of 'pet names'.
+
+## Service Ideas
+
+Twitter integration might be neat if it means I can receive and answer requests.
+

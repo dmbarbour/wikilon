@@ -17,15 +17,20 @@ module Awelon.Eval
     , Stuck(..)
     , Evaluator
     , evaluate
---    , eval
+    , ccTok
+    , evalTok, onStdTok,   evalTokM
+    , runEval, runEvalStd, runEvalM
     , abcOpEvalTable
     ) where
 
+import Control.Monad
 import Data.Monoid
 import Data.Word
 import Data.Char
 import Data.Bits
+import Data.Ratio
 import qualified Data.ByteString.Builder as BB
+import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.Array.IArray as A
 import Awelon.ABC
@@ -82,11 +87,11 @@ instance Quotable Value where
     quotes Unit = quotes ("vvrwlc" :: ABC)
     quotes (Block abc flags) = quotes (ABC_Block abc) . k . f where
         has prop op = if flags_include prop flags then quotes op else id
-        k = has flag_relevant ABC_relevant
-        f = has flag_affine ABC_affine
+        k = has prop_relevant ABC_relevant
+        f = has prop_affine ABC_affine
     quotes (Sealed tok val) = quotes val . quotes (ABC_Tok tok)
 instance Show Value where 
-    shows = shows . quote
+    showsPrec _ = shows . quote
 
 
 toText :: Value -> Maybe Text
@@ -98,10 +103,10 @@ toText = tt mempty where
 
 numToChar :: Rational -> Maybe Char
 numToChar r =
-    let n = numerator n in
-    let d = denominator n in
+    let n = fromInteger $ numerator r in
+    let d = denominator r in
     let bOK = (1 == d) && (0 <= n) && (n <= 0x10ffff) in
-    if bOK then Just $! chr (fromIntegral n) else Nothing
+    if bOK then Just $! chr n else Nothing
 
 fromText :: Text -> Value
 fromText t = case LazyUTF8.uncons t of
@@ -136,6 +141,11 @@ data Cont = Cont
     , cc_stack :: !Stack
     }
 
+-- Thoughts: I'd like to model fork-join parallelism using effects.
+-- The difficulty is that, if I just use 'par', it becomes difficult
+-- to capture the 'stuck' points. I'll need some way to interfere
+-- with running behaviors.
+
 -- | It is possible that our evaluator will get stuck. In this case,
 -- we just return where it becomes stuck. A separate evaluator might
 -- resolve the issue (especially if we're stuck on a token).
@@ -158,10 +168,10 @@ abcOpEvalTable =
     ,(ABC_distrib,ev_distrib),(ABC_factor,ev_factor) 
     ,(ABC_merge,ev_merge),(ABC_assert,ev_assert) -- 10
 
-    ,(ABC_newZero,ev_newZero),(ABC_d0,ev_d 0)
-    ,(ABC_d1,ev_d 1),(ABC_d2,ev_d 2),(ABC_d3,ev_d 3)
-    ,(ABC_d4,ev_d 4),(ABC_d5,ev_d 5),(ABC_d6,ev_d 6)
-    ,(ABC_d7,ev_d 7),(ABC_d8,ev_d 8),(ABC_d9,ev_d 9) -- 11
+    ,(ABC_newZero,ev_newZero),(ABC_d0,ev_d0)
+    ,(ABC_d1,ev_d1),(ABC_d2,ev_d2),(ABC_d3,ev_d3)
+    ,(ABC_d4,ev_d4),(ABC_d5,ev_d5),(ABC_d6,ev_d6)
+    ,(ABC_d7,ev_d7),(ABC_d8,ev_d8),(ABC_d9,ev_d9) -- 11
 
     ,(ABC_SP,ev_SP),(ABC_LF,ev_LF) -- 2
     ]
@@ -170,7 +180,8 @@ abcOpEvalArray :: A.Array PrimOp Evaluator
 abcOpEvalArray = A.array (minBound,maxBound) abcOpEvalTable
 
 -- | Basic evaluator, without any effects model. All tokens shall
--- cause this evaluator to become 'stuck'.
+-- cause this evaluator to become 'stuck'. Effects handlers can be
+-- installed by wrapping this evaluator.
 evaluate :: Evaluator
 evaluate v cc = case cc_cont cc of
     (op:ops) -> let cc' = cc { cc_cont = ops } in case op of
@@ -180,27 +191,98 @@ evaluate v cc = case cc_cont cc of
         _ -> Left (Stuck (v,cc))
     [] -> case cc_stack cc of
         (Apply v2 cc') -> evaluate (Pair v v2) cc'
-        (Cond v2 ccStack) -> evaluate (Pair (SumL v) v2) cc'
+        (Cond v2 cc') -> evaluate (Pair (SumL v) v2) cc'
         Return -> Right v -- all done!
 
--- | Evaluator that carries a little state.
+-- | match when a continuation is stopped on a token. Returns the
+-- token and the continuation after the token.
+ccTok :: Cont -> Maybe (Token, Cont)
+ccTok cc = case cc_cont cc of
+    (ABC_Tok t : ops) -> let cc' = cc { cc_cont = ops } in Just (t, cc')
+    _ -> Nothing
 
--- | A common evaluator, sufficient for testing, which recognizes and
--- handles a few simple tokens. In particular: 
+-- | Evaluator that allows pure processing of some tokens. When the
+-- onToken processor returns a value, we'll continue using the same
+-- token processor. Otherwise, we'll 
+evalTok :: (Token -> Value -> Maybe Value) -> Evaluator
+evalTok fn = handle .: evaluate where
+    cont cc v = evalTok fn v cc 
+    handle r@(Left(Stuck(v,ccTok->Just(t,cc)))) = 
+        maybe (r) (cont cc) (fn t v)
+    handle r = r
+
+(.:) :: (c -> d) -> (a -> b -> c) -> (a -> b -> d)
+{-# INLINE (.:) #-}
+(.:) f g a = f . g a
+
+-- | Process enough tokens for basic testing. This includes:
 --
---    {&≡} - assert two values are equal
---    {&fork} - fork the top of the stack
---    {
+-- * discretionary sealers and unsealers
+-- * {&≡} equivalence assertion
+-- * ignore all other annotations
+--
+onStdTok :: Token -> Value -> Maybe Value
+onStdTok t = case UTF8.uncons t of
+    Just (':',_) -> seal t
+    Just ('.',_) -> unseal t
+    Just ('&',anno) -> case anno of
+        "≡" -> assertEqV
+        _ -> return 
+    _ -> const mzero
+
+seal, unseal :: Token -> Value -> Maybe Value
+seal t = return . Sealed t
+unseal u (Sealed s v) = do
+    (u0,u') <- UTF8.uncons u
+    (s0,s') <- UTF8.uncons s
+    let bMatch = (u0 == '.') && (s0 == ':') && (u' == s') 
+    if bMatch then return v else mzero
+unseal _ _ = Nothing
+
+assertEqV :: Value -> Maybe Value
+assertEqV v@(Pair a (Pair b _)) | (a == b) = return v
+assertEqV _ = mzero
+
+-- | evaluator wrapped to model side-effects in a monad
+type EvaluatorM m = Value -> Cont -> m (Either Stuck Value)
+
+-- | An evaluator extended with simple tokens processing in a monad.
+-- In this case, all tokens must be processed.
+evalTokM :: (Monad m) => (Token -> Value -> m (Maybe Value)) -> EvaluatorM m
+evalTokM fn = handle .: evaluate where
+    cont cc v = evalTokM fn v cc 
+    handle r@(Left(Stuck(v,ccTok->Just(t,cc)))) = 
+        maybe (return r) (cont cc) =<< (fn t v)
+    handle r = return r
+
+initCont :: ABC -> Cont
+initCont abc = Cont (abcOps abc) Return
+
+-- | Run an evaluator on ABC. 
+runEval :: Evaluator -> Value -> ABC -> Either Stuck Value
+runEval eval v0 = eval v0 . initCont
+
+-- | Run an evaluator on ABC in a Monad
+runEvalM :: EvaluatorM m -> Value -> ABC -> m (Either Stuck Value)
+runEvalM evalM v0 = evalM v0 . initCont
+
+-- | a usable testing evaluator; recognizes some pure tokens
+runEvalStd :: Value -> ABC -> Either Stuck Value
+runEvalStd = runEval (evalTok onStdTok)
+
+
+
+
 
 
 
 -- push operator back in case of failure!
-primOpFail :: Value -> PrimOp -> Cont -> Stuck
-primOpFail v op cc = Stuck (v,cc') where
+primOpFail :: Value -> PrimOp -> Cont -> Either Stuck void
+primOpFail v op cc = Left (Stuck (v,cc')) where
     cc' = cc { cc_cont = (ABC_Prim op : cc_cont cc) }
 
 ev_l,ev_r,ev_w,ev_z,ev_v,ev_c :: Evaluator
-ev_L,ev_R,ev_W,wv_Z,ev_V,ev_C :: Evaluator
+ev_L,ev_R,ev_W,ev_Z,ev_V,ev_C :: Evaluator
 ev_copy,ev_drop :: Evaluator
 ev_add,ev_negate :: Evaluator
 ev_multiply,ev_reciprocal :: Evaluator
@@ -209,7 +291,8 @@ ev_apply,ev_condApply,ev_quote,ev_compose :: Evaluator
 ev_relevant,ev_affine :: Evaluator
 ev_distrib,ev_factor,ev_merge,ev_assert :: Evaluator
 ev_newZero :: Evaluator
-ev_d :: Int -> Evaluator
+ev_d0,ev_d1,ev_d2,ev_d3,ev_d4 :: Evaluator
+ev_d5,ev_d6,ev_d7,ev_d8,ev_d9 :: Evaluator
 ev_SP,ev_LF :: Evaluator
 
 ev_l (Pair a (Pair b c)) = evaluate (Pair (Pair a b) c)
@@ -237,7 +320,7 @@ ev_L v = primOpFail v ABC_L
 
 ev_R (Pair (SumL a@(SumL _)) e) = evaluate (Pair a e)
 ev_R (Pair (SumL (SumR b)) e) = evaluate (Pair (SumR (SumL b)) e)
-ev_R (Pair c@(SumR _) e) = (Pair (SumR c) e)
+ev_R (Pair c@(SumR _) e) = evaluate (Pair (SumR c) e)
 ev_R v = primOpFail v ABC_R
 
 ev_W (Pair a@(SumL _) e) = evaluate (Pair (SumR a) e)
@@ -247,8 +330,8 @@ ev_W v = primOpFail v ABC_W
 
 ev_Z v@(Pair (SumL _) _) = evaluate v 
 ev_Z (Pair b@(SumR (SumL _)) e) = evaluate (Pair (SumR b) e)
-ev_Z (Pair (SumR c@(SumR (SumL _)) e) = evaluate (Pair c e)
-ev_Z v@(Pair (SumR (SumR (SumR _)) _) = evaluate v
+ev_Z (Pair (SumR c@(SumR (SumL _))) e) = evaluate (Pair c e)
+ev_Z v@(Pair (SumR (SumR (SumR _))) _) = evaluate v
 ev_Z v = primOpFail v ABC_Z
 
 ev_V (Pair a e) = evaluate (Pair (SumL a) e)
@@ -298,7 +381,7 @@ ev_compare v = primOpFail v ABC_compare
 -- ev_apply has a special condition to test for tail call
 ev_apply (Pair (Block fn _) (Pair arg env)) cc =
     case (cc_cont cc, env) of
-        ([ABC_PrimOp ABC_c], Unit) -> 
+        ([ABC_Prim ABC_c], Unit) -> 
             let cc' = cc { cc_cont = abcOps fn } in
             evaluate arg cc' -- tail call; cc_stack does not grow
         _ -> evaluate arg $ Cont { cc_cont = abcOps fn, cc_stack = Apply env cc }
@@ -318,7 +401,7 @@ ev_quote (Pair a e) = evaluate (Pair (Block fn flags) e) where
     aff = if copyable a then 0 else prop_affine 
 ev_quote v = primOpFail v ABC_quote
 
-ev_compose (Pair (Block xy fxy) (Pair (Block yz fyz) e) =
+ev_compose (Pair (Block xy fxy) (Pair (Block yz fyz) e)) =
     let xz = ABC (abcOps xy ++ abcOps yz) in
     let fxz = fxy .|. fyz in
     evaluate (Pair (Block xz fxz) e)
@@ -333,7 +416,7 @@ ev_affine (Pair (Block fn flags) e) = evaluate (Pair (Block fn flags') e) where
 ev_affine v = primOpFail v ABC_affine
 
 ev_distrib (Pair a (Pair (SumL b) e)) = evaluate (Pair (SumL (Pair a b)) e)
-ev_distrib (Pair a (Pair (SumR c) e)) = evaluate (Pair (SumR (Pair a b)) e)
+ev_distrib (Pair a (Pair (SumR c) e)) = evaluate (Pair (SumR (Pair a c)) e)
 ev_distrib v = primOpFail v ABC_distrib
 
 ev_factor (Pair (SumL (Pair a b)) e) = evaluate (Pair (SumL a) (Pair (SumL b) e))
@@ -348,15 +431,24 @@ ev_assert (Pair (SumR a) e) = evaluate (Pair a e)
 ev_assert v = primOpFail v ABC_assert
 
 ev_newZero = evaluate . Pair (Number 0)
-ev_d d (Pair (Number n) e) =
+ev_d0 = ev_d 0 ABC_d0
+ev_d1 = ev_d 1 ABC_d1
+ev_d2 = ev_d 2 ABC_d2
+ev_d3 = ev_d 3 ABC_d3
+ev_d4 = ev_d 4 ABC_d4
+ev_d5 = ev_d 5 ABC_d5
+ev_d6 = ev_d 6 ABC_d6
+ev_d7 = ev_d 7 ABC_d7
+ev_d8 = ev_d 8 ABC_d8
+ev_d9 = ev_d 9 ABC_d9
+
+ev_d :: Int -> PrimOp -> Evaluator
+{-# INLINE ev_d #-}
+ev_d d _ (Pair (Number n) e) =
     let n' = Number ((10 * n) + fromIntegral d) in
     n' `seq` evaluate (Pair n' e)
+ev_d _ op v = primOpFail v op
 
 ev_SP = evaluate
 ev_LF = evaluate
-
-
-
-
-
 
