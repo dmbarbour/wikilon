@@ -2,7 +2,6 @@
 
 -- | Wikilon's value model has performance extensions and a slot for
 -- value resources. 
---
 module Wikilon.ABC.Value
     ( Value(..)
     , Flags

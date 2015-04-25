@@ -4,18 +4,19 @@
 module Wikilon.Code
     ( ABC(..)
     , Value(..)
-    , Rsc
+    , Rsc(..)
     ) where
 
 import Data.Typeable
 import Database.VCache
 import qualified Wikilon.ABC as Inner
+import Awelon.ABC (Quotable(..))
 
 newtype Value = Value InnerVal deriving (Typeable, Eq)
 newtype ABC = ABC InnerCode deriving (Typeable, Eq)
+newtype Rsc = Rsc (VRef Value) deriving (Eq)
 type InnerVal = Inner.Value Rsc
 type InnerCode = Inner.ABC InnerVal
-type Rsc = VRef Value
 
 todo :: a
 todo = error "Wikilon.Code: TODO!"
@@ -26,6 +27,11 @@ instance VCacheable Value where
 instance VCacheable ABC where
     put = todo
     get = todo
+
+instance Quotable Value where
+    quotes = todo
+instance Quotable Rsc where
+    quotes = todo 
 
 -- more todo: 
 -- 
