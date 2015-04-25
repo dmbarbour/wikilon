@@ -54,7 +54,7 @@ import qualified Data.ByteString.UTF8 as UTF8
 
 -- import Database.VCache
 
-import Wikilon.ABC
+import Wikilon.Code
 import Wikilon.Time
 import Wikilon.Branch
 import Wikilon.Dict.Word

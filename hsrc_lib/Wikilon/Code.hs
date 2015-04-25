@@ -1,11 +1,35 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 
--- | Specializations of Wikilon.ABC to use VCache resources.
---
--- I want to keep wikilon-abc package relatively lightweight, so it
--- does not depend on VCache directly. 
+-- | Specializations of Wikilon.ABC to easily use VCache resources.
 module Wikilon.Code
-    (
+    ( ABC(..)
+    , Value(..)
+    , Rsc
     ) where
+
+import Data.Typeable
+import Database.VCache
+import qualified Wikilon.ABC as Inner
+
+newtype Value = Value InnerVal deriving (Typeable, Eq)
+newtype ABC = ABC InnerCode deriving (Typeable, Eq)
+type InnerVal = Inner.Value Rsc
+type InnerCode = Inner.ABC InnerVal
+type Rsc = VRef Value
+
+todo :: a
+todo = error "Wikilon.Code: TODO!"
+
+instance VCacheable Value where
+    put = todo
+    get = todo
+instance VCacheable ABC where
+    put = todo
+    get = todo
+
+-- more todo: 
+-- 
+-- Simplification code to access the 
 
 {-
 

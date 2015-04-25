@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, BangPatterns, Rank2Types #-}
+{-# LANGUAGE OverloadedStrings, BangPatterns, RankNTypes #-}
 -- | Utility for compact encoding of a value in VCache. 
 --
 -- The design of Awelon Bytecode (ABC) includes a concept for value
@@ -26,29 +26,19 @@
 module Wikilon.ABC.EncVal
     ( encodeVal
     , decodeVal
-
-    , fromBindings
-    , toBindings
-
-    , decodeValMaybe
+    , decodeValM
     ) where
 
 import Control.Monad
-import Control.Applicative
 import Data.Monoid
-import Data.Typeable (Typeable)
 import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.Word
-import Data.Int
 import Data.Bits
-import Data.Ratio
-import Data.Char
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LazyChar8
 
-import Awelon.ABC (Quotable(..), quote, quotes)
 import qualified Awelon.ABC as Pure
 import Wikilon.ABC.Util
 import Wikilon.ABC.Code
@@ -97,7 +87,7 @@ enc (Copyable v) = enc v <> encCopyable
 
 encNum :: Rational -> EncSt r
 encNum r = (Pure.encode' abc, mempty) where
-    abc = Pure.ABC $ quote r
+    abc = Pure.ABC $ Pure.quote r
 
 encPair, encSumR, encSumL, encUnit, encCopyable :: EncSt r
 encPair = (BB.char8 'P', mempty)
@@ -131,8 +121,9 @@ encResource :: r -> Flags -> EncSt r
 encResource r f = (BB.char8 '!', [(r,f)])
 
 type DecSt r = (Bytes, [(r,Flags)])
-type DecoderStep = forall r. Value r -> DecSt r -> Maybe (Value r, DecSt r)
-decOpTable :: [(Char, DecoderStep)]
+type DecoderStep r = Value r -> DecSt r -> Maybe (Value r, DecSt r)
+
+decOpTable :: [(Char, DecoderStep r)]
 decOpTable = 
     -- encoding of numbers (same as ABC)
     [('#',decOp_intro0),('0',decOp_d 0)
@@ -157,35 +148,36 @@ decOpTable =
     ,('^',decOp_copyable)
     ]
 
-decCharOpArray :: A.Array Char DecoderStep
+decCharOpArray :: A.Array Char (DecoderStep r)
 decCharOpArray = A.accumArray ins decOp_fail (lb,ub) lst where
     ins _ op = op
     lb = L.minimum (fmap fst lst)
     ub = L.maximum (fmap fst lst)
     lst = decOpTable
 
-decCharToOp :: Char -> DecoderStep
+decCharToOp :: Char -> DecoderStep r
 decCharToOp c | inBounds = decCharOpArray A.! c
               | otherwise = decOp_fail
   where inBounds = (lb <= c) && (c <= ub)
         (lb,ub) = A.bounds decCharOpArray
 
-decOp_fail :: DecoderStep
+decOp_fail :: DecoderStep r
 decOp_fail _ _ = Nothing
 
 -- | Attempt to decode a value from the content generated when we 
 -- encoded the value. If given the same 
 decodeVal :: (Bytes, [r]) -> Value r
-decodeVal = maybe badVal id . decodeValMaybe where
+decodeVal = maybe badVal id . decodeValM where
     badVal = impossible "failed to decode value"
 
 -- | Attempt to decode a value. Returns Nothing on failure.
-decodeValMaybe :: (Bytes, [r]) -> Maybe (Value r)
-decodeValMaybe (bs,rs) =
+decodeValM :: (Bytes, [r]) -> Maybe (Value r)
+decodeValM (bs,rs) =
     readSizedSlice bs >>= \ (fs,bs') ->
-    let bOkLen = LBS.length fs == L.length rs in
+    let bOkLen = LBS.length fs == fromIntegral (L.length rs) in
     if not bOkLen then mzero else
-    let st0 = (bs', L.zip rs fs) in
+    let rcs = L.zip rs (LBS.unpack fs) in
+    let st0 = (bs', rcs) in
     decode Unit st0 >>= \ val ->
     case val of
         (Pair a Unit) -> return a
@@ -199,15 +191,15 @@ decode v (bs,rsc) = case LazyChar8.uncons bs of
     Nothing | L.null rsc -> Just v -- done
     _ -> Nothing -- underflow rsc
     
-decOp_intro0 :: DecoderStep
-decOp_d :: Int -> DecoderStep
-decOp_negate, decOp_recip, decOp_mul :: DecoderStep
-decOp_pair, decOp_inR, decOp_inL, decOp_unit, decOp_copyable :: DecoderStep
-decOp_block, decOp_text, decOp_seal, decOp_resource :: DecoderStep
-decOp_bf :: Flags -> DecoderStep
+decOp_intro0 :: DecoderStep r
+decOp_d :: Int -> DecoderStep r
+decOp_negate, decOp_recip, decOp_mul :: DecoderStep r
+decOp_pair, decOp_inR, decOp_inL, decOp_unit, decOp_copyable :: DecoderStep r
+decOp_block, decOp_text, decOp_seal, decOp_resource :: DecoderStep r
+decOp_bf :: Flags -> DecoderStep r
 
 
-decOpV :: DecoderStep
+decOpV :: DecoderStep r
 {-# INLINE decOpV #-}
 decOpV v st = Just (v,st)
 
@@ -275,30 +267,25 @@ decOp_resource v (bs, ((r,!f):rcs)) = return (v',st') where
     st' = (bs,rcs) 
 decOp_resource _ _ = Nothing    
 
-
+-- | translate bindings to values when encoding.
 fromBindings :: [Bound (Value r)] -> Value r
-fromBindings = error "TODO"
+fromBindings = L.foldr Pair Unit . fmap fromBound where
 
+fromBound :: Bound (Value r) -> Value r
+fromBound (BBlock s) = SumL (fromBindings s)
+fromBound (BQuote v) = SumR v
+
+toBound :: Value r -> Bound (Value r)
+toBound (SumL s) = BBlock (toBindings s)
+toBound (SumR v) = BQuote v
+toBound _ = impossible $ "invalid bound structure"
+
+-- | translate values to bindings when decoding. This
+-- will error if the value is not in the expected format.
 toBindings :: Value r -> [Bound (Value r)]
-toBindings = error "TODO"
-
-{-
-fromBindings (BQuote v) = SumL v
-fromBindings (BBlock s) = SumR vs where
-    vs = L.foldr Pair Unit (L.map fromBindings s))
-
--- lazily, this could raise an error if the given value is bad!
-toBindings :: Value r -> Bound (Value r)
-toBindings 
-
-
-
- -}
-
-
-
-
-
+toBindings (Pair v vs) = (toBound v : toBindings vs) where
+toBindings Unit = []
+toBindings _ = impossible $ "invalid bindings structure"
 
 
 encErr :: String -> String

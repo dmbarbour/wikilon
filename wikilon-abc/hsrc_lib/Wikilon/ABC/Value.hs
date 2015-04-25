@@ -26,11 +26,11 @@ data Value r
     | SumL (Value r)
     | SumR (Value r)
     | Unit
-    | Block !(ABC (Value r)) Flags
+    | Block !(ABC (Value r)) {-# UNPACK #-} !Flags
     | Sealed !Token (Value r)
     -- performance extensions
     | Text !Text
-    | Resource r Flags
+    | Resource r {-# UNPACK #-} !Flags
     | Copyable (Value r)
     deriving (Eq)
 
