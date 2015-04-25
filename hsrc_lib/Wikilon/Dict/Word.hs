@@ -11,11 +11,11 @@
 --  URL friendly: alpha | num | -._~ | !$&'()*+,;= | :@ | pct-encoded
 --    (pchars <http://tools.ietf.org/html/rfc3986#section-3.3>)
 --  Eyeball friendly: 
---    forbid C0 SP DEL C1 
+--    forbid C0 SP DEL C1 U+FFFD 
+--    forbid empty string
 --    forbid pct-encoded (e.g. %3C%20%25%2A)
 --  Text and Delimiter friendly: 
---    forbid U+FFFD ,;{}(|)[]"`
---    forbid empty string
+--    forbid ,;{}(|)[]"`
 --    don't end with a .
 --  Not confusable with numbers:
 --    forbid words starting with digit

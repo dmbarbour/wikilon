@@ -93,6 +93,8 @@ Library
     Wikilon.Branch
     Wikilon.Geneology
 
+    Wikilon.Code
+
     Wikilon.Machine
     -- Wikilon.Network
     -- Wikilon.Services

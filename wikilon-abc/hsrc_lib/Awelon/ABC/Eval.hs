@@ -1,12 +1,12 @@
 {-# LANGUAGE OverloadedStrings, ViewPatterns #-}
--- | A simplistic evaluator for purely functional ABC in the style
--- of free monads. This can be wrapped with ad-hoc effects handlers.
+-- | A simplistic evaluator for purely functional ABC in a similar
+-- style as free monads. May be wrapped with ad-hoc effects handlers.
 --
 -- This evaluator does perform a tail-call optimization. However, 
 -- quotation is very expensive (serializes values out to relevant
--- code), as is copy and drop. I wouldn't expect good performance.
+-- code), as are copy and drop. I don't expect great performance.
 -- 
-module Awelon.Eval 
+module Awelon.ABC.Eval 
     ( Value(..)
     , copyable
     , droppable
@@ -21,6 +21,7 @@ module Awelon.Eval
     , evalTok, onStdTok,   evalTokM
     , runEval, runEvalStd, runEvalM
     , abcOpEvalTable
+    , module Awelon.ABC
     ) where
 
 import Control.Monad
@@ -131,6 +132,7 @@ data Stack
     = Apply Value !Cont -- ^ after $, cv first in pair
     | Cond  Value !Cont -- ^ after ?, cv inL first in pair
     | Return -- all done
+    deriving (Show)
 
 -- | Our Continuation is simply a sequence of operations to perform
 -- on the current value (which is held by the evaluator). When we
@@ -139,7 +141,7 @@ data Stack
 data Cont = Cont
     { cc_cont  :: ![Op]
     , cc_stack :: !Stack
-    }
+    } deriving (Show)
 
 -- Thoughts: I'd like to model fork-join parallelism using effects.
 -- The difficulty is that, if I just use 'par', it becomes difficult
@@ -149,7 +151,7 @@ data Cont = Cont
 -- | It is possible that our evaluator will get stuck. In this case,
 -- we just return where it becomes stuck. A separate evaluator might
 -- resolve the issue (especially if we're stuck on a token).
-newtype Stuck = Stuck { unStuck :: (Value, Cont) }
+newtype Stuck = Stuck { unStuck :: (Value, Cont) } deriving (Show)
 
 -- low level evaluators!
 abcOpEvalTable :: [(PrimOp, Evaluator)]
@@ -219,29 +221,43 @@ evalTok fn = handle .: evaluate where
 --
 -- * discretionary sealers and unsealers
 -- * {&≡} equivalence assertion
+-- * {&^} assert copyable
+-- * {&%} assert dropable
 -- * ignore all other annotations
 --
 onStdTok :: Token -> Value -> Maybe Value
 onStdTok t = case UTF8.uncons t of
     Just (':',_) -> seal t
     Just ('.',_) -> unseal t
-    Just ('&',anno) -> case anno of
-        "≡" -> assertEqV
-        _ -> return 
+    Just ('&',anno) -> 
+        let str = UTF8.fromString in
+        -- note: cannot use OverloadedStrings with UTF8 characters
+        if (anno == str "≡") then assertEqV else
+        if (anno == str "^") then assertCopyable else
+        if (anno == str "%") then assertDroppable else
+        return
     _ -> const mzero
 
 seal, unseal :: Token -> Value -> Maybe Value
-seal t = return . Sealed t
-unseal u (Sealed s v) = do
+seal t (Pair v e) = return (Pair (Sealed t v) e)
+seal _ _ = Nothing
+unseal u (Pair (Sealed s v) e) = do
     (u0,u') <- UTF8.uncons u
     (s0,s') <- UTF8.uncons s
     let bMatch = (u0 == '.') && (s0 == ':') && (u' == s') 
-    if bMatch then return v else mzero
+    if bMatch then return (Pair v e) else mzero
 unseal _ _ = Nothing
 
-assertEqV :: Value -> Maybe Value
+assertEqV, assertCopyable, assertDroppable :: Value -> Maybe Value
 assertEqV v@(Pair a (Pair b _)) | (a == b) = return v
 assertEqV _ = mzero
+
+assertCopyable v@(Pair a _) | copyable a = return v
+assertCopyable _ = mzero
+
+assertDroppable v@(Pair a _) | droppable a = return v
+assertDroppable _ = mzero
+
 
 -- | evaluator wrapped to model side-effects in a monad
 type EvaluatorM m = Value -> Cont -> m (Either Stuck Value)
