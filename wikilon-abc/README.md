@@ -1,6 +1,4 @@
 
-# Wikilon-ABC
+# Wikilon ABC
 
-Awelon Bytecode (ABC) and values models used internally by Wikilon. This separated into a distinct module to reduce dependencies for a plugins-based JIT compiler (i.e. compiling bytecode directly into Haskell). 
-
-
+This package describes Awelon Bytecode (ABC) and values models and evaluators, both a reference model and a performance variant used by Wikilon. 

@@ -7,12 +7,12 @@ module Wikilon.ABC.Value
     , Flags
     , copyable
     , droppable
-    , f_rel, f_aff, f_par
+    , f_rel, f_aff
+    , f_droppable, f_copyable
     ) where
 
 import Data.Word
 import Data.Bits
-
 import Awelon.ABC (Quotable(..))
 import qualified Awelon.ABC as Pure
 import Wikilon.ABC.Code
@@ -25,35 +25,43 @@ data Value r
     | SumL (Value r)
     | SumR (Value r)
     | Unit
-    | Block !(ABC (Value r)) {-# UNPACK #-} !Flags
+    | Block !(ABC (Value r)) Flags
     | Sealed !Token (Value r)
     -- performance extensions
     | Text !Text
     | Resource r {-# UNPACK #-} !Flags
-    | Copyable (Value r)
     deriving (Eq)
 
+-- Aside: an idea I've considered is to use Copyable and Droppable
+-- wrappers for values.
+--
+--  | Copyable (Value r)     -- quotes as value{&^}
+--  | Droppable (Value r)    -- quotes as value{&%}
+--
+-- This would allow fast-copy or fast-drop for very large values. OTOH,
+-- the benefit might be marginal if we make good use of resources.
+--
+-- Resolution: optimize later. Come back to this when we can profile
+-- in realistic scenarios.
 
--- | Flags for blocks and resources.
+-- | Substructural properties for blocks and resources.
 --
 --   bit 0: relevant (no drop with %)
 --   bit 1: affine   (no copy with ^)
---   bit 2: parallelism {&fork}
---   bit 3..7: Reserved. Tentative ideas:
---     memoization features for blocks
---     local values (cannot send as message content)
---     ephemeral values (cannot store in state)
---     mark impure blocks (AVMs don't use impure blocks)
---     termination guarantees for blocks
---
--- Besides the basic substructural types, it might be worth using
--- annotations to enforce a few new ones.
+--   bit 2..7: Reserved. Tentative:
+--     local values (resists send as msg content)
+--     ephemeral values (resists storage in state)
+-- 
+-- Aside: I had some other properties here such as parallelism and
+-- memoization for blocks. However, they aren't a good fit for the
+-- continuation passing interpreter I'm currently using. I'll need
+-- to model fork-join parallelism another way, perhaps use {&fork}
+-- to parallelize the top element on the call stack.
 type Flags = Word8
 
-f_rel, f_aff, f_par :: Flags
+f_rel, f_aff :: Flags
 f_rel = 0x01
 f_aff = 0x02
-f_par = 0x04
 
 hasF :: Flags -> Flags -> Bool
 hasF f bf = (f == (f .&. bf))
@@ -74,7 +82,6 @@ copyable (Block _ f) = f_copyable f
 copyable (Sealed _ v) = copyable v
 copyable (Text _) = True
 copyable (Resource _ f) = f_copyable f
-copyable (Copyable _) = True
 
 -- | Is this value droppable (not relevant)
 droppable :: Value r -> Bool
@@ -87,7 +94,6 @@ droppable (Block _ f) = f_droppable f
 droppable (Sealed _ v) = droppable v
 droppable (Text _) = True
 droppable (Resource _ f) = f_droppable f
-droppable (Copyable v) = droppable v
 
 -- Value will quote as ABC that regenerates it. This includes
 -- regenerating any linked or stowed value resources. Note that
@@ -103,15 +109,13 @@ instance (Quotable r) => Quotable (Value r) where
         let block = quotes (Pure.ABC_Block $ Pure.ABC $ Pure.quote abc) in
         let bAff = hasF f_aff flags in
         let bRel = hasF f_rel flags in
-        let bPar = hasF f_par flags in
         let k = if bRel then quotes ABC_relevant else id in
         let f = if bAff then quotes ABC_affine else id in
-        let j = if bPar then quotes (Pure.ABC_Tok "{&fork}") else id in
-        block . k . f . j
+        block . k . f
     quotes (Sealed tok a) = quotes a . quotes (Pure.ABC_Tok tok)
     quotes (Text t) = quotes (Pure.ABC_Text t)
     quotes (Resource r _) = quotes r . quotes (Pure.ABC_Tok "{&stow}")
-    quotes (Copyable v) = quotes v . quotes (Pure.ABC_Tok "{&^}")
+   
 
 {-
 abcErr :: String -> String

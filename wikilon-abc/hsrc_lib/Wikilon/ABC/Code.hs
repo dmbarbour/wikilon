@@ -25,6 +25,7 @@
 -- is described in a separate module Wikilon.ABC.Value.
 module Wikilon.ABC.Code
     ( ABC(..)
+    , null
     , Bound(..)
     , Op(..)
     , PrimOp(..)
@@ -92,11 +93,10 @@ data Op v
 -- need careful standardization.
 data ExtOp
     -- tail-call operators
-    = ExtOp_Inline -- vr$c (full inline)
-    | ExtOp_Apc    -- $c (tail call)
-
+    = ExtOp_Apc    -- $c (tail call)
+    | ExtOp_Inline -- vr$c (full inline)
     -- favorite fixpoint function
-    | ExtOp_Fixpoint -- [^'ow^'zowvr$c]^'ow^'zowvr$c
+    -- | ExtOp_Fixpoint -- [^'ow^'zowvr$c]^'ow^'zowvr$c
 
     -- mirrored v,c operations
     | ExtOp_Intro1L  -- vvrwlc
@@ -232,9 +232,9 @@ encQuote v (bb,rv) = (bb <> unQuote, bv:rv) where
 -- effectively a prototype for ABCD.
 extOpTable :: [(ExtOp, Char, Pure.ABC)]
 extOpTable =
-    [(ExtOp_Inline,'£',"vr$c")
-    ,(ExtOp_Apc,'¢',"$c")
-    ,(ExtOp_Fixpoint,'¥',"[^'ow^'zowvr$c]^'ow^'zowvr$c")
+    [(ExtOp_Apc,'¢',"$c")
+    ,(ExtOp_Inline,'£',"vr$c")
+    --,(ExtOp_Fixpoint,'¥',"[^'ow^'zowvr$c]^'ow^'zowvr$c")
     ,(ExtOp_Intro1L,'ń',"vvrwlc")
     ,(ExtOp_Elim1L,'ć',"vrwlcc")
     ,(ExtOp_Intro0L,'Ń',"VVRWLC")
@@ -270,9 +270,10 @@ extCharToOp c | inBounds = extCharOpArray A.! c
 
 instance Monoid (ABC v) where
     mempty = ABC { abc_code = LBS.empty, abc_data = [] }
-    mappend a b = ABC { abc_code = _code, abc_data = _data } where
-        _code = abc_code a <> abc_code b
-        _data = abc_data a <> abc_data b
+    mappend a b | null b = a
+                | otherwise = ABC { abc_code = _code, abc_data = _data } 
+      where _code = abc_code a <> abc_code b
+            _data = abc_data a <> abc_data b
 
 instance (Quotable v) => Show (ABC v) where 
     showsPrec _ = shows . quote

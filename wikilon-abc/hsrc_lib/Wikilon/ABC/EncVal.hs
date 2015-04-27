@@ -71,7 +71,6 @@ enc (Block abc f) = encBlockCode abc <> encBlockFlags f
 enc (Sealed tok val) = enc val <> encSeal tok
 enc (Text t) = encText t
 enc (Resource r f) = encResource r f
-enc (Copyable v) = enc v <> encCopyable
 
 {-# INLINE encNum #-}
 {-# INLINE encPair #-}
@@ -83,18 +82,16 @@ enc (Copyable v) = enc v <> encCopyable
 {-# INLINE encSeal #-}
 {-# INLINE encText #-}
 {-# INLINE encResource #-}
-{-# INLINE encCopyable #-}
 
 encNum :: Rational -> EncSt r
 encNum r = (Pure.encode' abc, mempty) where
     abc = Pure.ABC $ Pure.quote r
 
-encPair, encSumR, encSumL, encUnit, encCopyable :: EncSt r
+encPair, encSumR, encSumL, encUnit :: EncSt r
 encPair = (BB.char8 'P', mempty)
 encSumR = (BB.char8 'R', mempty)
 encSumL = (BB.char8 'L', mempty)
 encUnit = (BB.char8 'v', mempty)
-encCopyable = (BB.char8 '^', mempty)
 
 encBlockCode :: ABC (Value r) -> EncSt r
 encBlockCode abc = enc vBind <> (bytes, mempty) where
@@ -102,11 +99,10 @@ encBlockCode abc = enc vBind <> (bytes, mempty) where
     vBind = fromBindings (abc_data abc)
 
 encBlockFlags :: Flags -> EncSt r
-encBlockFlags bf = (rel <> aff <> par, mempty) where
+encBlockFlags bf = (rel <> aff, mempty) where
     has p c = if (p == (p .&. bf)) then BB.char8 c else mempty
     rel = has f_rel 'k'
     aff = has f_aff 'f'
-    par = has f_par 'j'
     
 encSeal :: Token -> EncSt r
 encSeal tok = (bytes, mempty) where
@@ -140,12 +136,10 @@ decOpTable =
     ,('[',decOp_block)
     ,('k',decOp_bf f_rel)
     ,('f',decOp_bf f_aff)
-    ,('j',decOp_bf f_par)
     -- misc.
     ,('"',decOp_text)
     ,('{',decOp_seal)
     ,('!',decOp_resource)
-    ,('^',decOp_copyable)
     ]
 
 decCharOpArray :: A.Array Char (DecoderStep r)
@@ -194,7 +188,7 @@ decode v (bs,rsc) = case LazyChar8.uncons bs of
 decOp_intro0 :: DecoderStep r
 decOp_d :: Int -> DecoderStep r
 decOp_negate, decOp_recip, decOp_mul :: DecoderStep r
-decOp_pair, decOp_inR, decOp_inL, decOp_unit, decOp_copyable :: DecoderStep r
+decOp_pair, decOp_inR, decOp_inL, decOp_unit :: DecoderStep r
 decOp_block, decOp_text, decOp_seal, decOp_resource :: DecoderStep r
 decOp_bf :: Flags -> DecoderStep r
 
@@ -235,9 +229,6 @@ decOp_inL (Pair a s) = decOpV (Pair (SumL a) s)
 decOp_inL _ = const Nothing
 
 decOp_unit = decOpV . Pair Unit
-
-decOp_copyable (Pair a s) = decOpV (Pair (Copyable a) s)
-decOp_copyable _ = const Nothing
 
 decOp_bf f (Pair (Block abc bf) s) =
     let block' = Block abc (f .|. bf) in

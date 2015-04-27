@@ -122,7 +122,7 @@ fromText t = case LazyUTF8.uncons t of
 --
 -- In particular, our basic evaluation function will always get stuck
 -- on tokens, even annotations, providing opportunity for intercession
--- in a manner similar to free monads.
+-- in a manner similar to free monads. 
 type Evaluator = Value -> Cont -> Either Stuck Value
 
 -- | When we call `$` or `?` we introduce a stage in a call stack.
@@ -150,7 +150,8 @@ data Cont = Cont
 
 -- | It is possible that our evaluator will get stuck. In this case,
 -- we just return where it becomes stuck. A separate evaluator might
--- resolve the issue (especially if we're stuck on a token).
+-- resolve the issue, especially if we're stuck on a token or due to
+-- unrecognized flags on a block.
 newtype Stuck = Stuck { unStuck :: (Value, Cont) } deriving (Show)
 
 -- low level evaluators!
