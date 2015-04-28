@@ -55,19 +55,19 @@ Library
     , vcache-trie (>= 0.1.1)
     , wikilon-abc
 
-    , bytestring
+    , bytestring (>= 0.10)
     , bytestring-builder
     , array
 
     , time (>= 1.5)
-    -- , binary (>= 0.7.2)
 
-    , parallel (>= 3.0)
     , containers (>= 0.5)
     , mtl
 
     , websockets (>= 0.9)
     , wai (>= 3.0)
+    , wai-route
+
     , http-types 
     -- , yesod-routes (>= 1.2)
     -- , wai-websockets
@@ -100,9 +100,10 @@ Library
     -- Wikilon.Services
 
     Wikilon.Root
-    Wikilon.WAI
     Wikilon
 
+    Wikilon.WAI
+    Wikilon.URL
 
 
 

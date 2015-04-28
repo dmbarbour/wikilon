@@ -1,10 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Words in Wikilon should be URL-friendly, and also friendly in
--- other contexts. Sadly, this is quite limiting. Why don't URLs 
--- allow UTF8 yet? I might relax these constraints later, if I'm
--- later convinced that using more UTF8 is safe. (My Google-fu
--- returns mixed answers.)
+-- other contexts. It seems most modern browsers can support UTF-8
+-- in the address bar via pct-encoding.
 --
 -- Constraints:
 --
@@ -13,7 +11,6 @@
 --  Eyeball friendly: 
 --    forbid C0 SP DEL C1 U+FFFD 
 --    forbid empty string
---    forbid pct-encoded (e.g. %3C%20%25%2A)
 --  Text and Delimiter friendly: 
 --    forbid ,;{}(|)[]"`
 --    don't end with a .
@@ -63,26 +60,25 @@ wordToUTF8 = unWord
 
 -- valid bytes in a word string
 wcArray :: UA.UArray Word8 Bool
-wcArray = UA.accumArray (flip const) False (minBound,maxBound) lst where
+wcArray = UA.accumArray (flip const) False (0,127) lst where
     toE c = (fromIntegral (ord c), True)
     lst = fmap toE okChars
     okChars = alpha ++ num ++ "-._~!$&'*+=:@"
     alpha = ['a'..'z']++['A'..'Z']
     num = ['0'..'9']
-
-isValidWordByte :: Word8 -> Bool
-isValidWordByte = (wcArray UA.!)
-{-# INLINE isValidWordByte #-}
+{-# NOINLINE wcArray #-}
 
 isValidWordChar :: Char -> Bool
-isValidWordChar c = (n <= 255) && isValidWordByte (fromIntegral n)
-    where n = ord c
+isValidWordChar c = okASCII || okUnicode where
+    n = ord c
+    okASCII = ((n >= 0) && (n <= 127)) && (wcArray UA.! fromIntegral n)
+    okUnicode = (n >= 160) && (n /= 0xfffd)
 {-# INLINE isValidWordChar #-}
 
 isValidWord :: Word -> Bool
 isValidWord (Word w) = okStart && okMiddle && okEnd where
     okEnd = not $ "." `BS.isSuffixOf` w
-    okMiddle = BS.all isValidWordByte w
+    okMiddle = L.all isValidWordChar (UTF8.toString w)
     okStart = case UTF8.uncons w of
         Nothing -> False
         Just (c, w') | _isDigit c -> False

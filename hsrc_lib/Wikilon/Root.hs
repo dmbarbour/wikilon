@@ -53,8 +53,8 @@ incPVar v = runVTx (pvar_space v) $ do
 -- this works until Wikilon is reset.
 adminCode :: Wikilon -> UTF8.ByteString
 adminCode w =
-    BS.pack $ B16.encode $ BS.unpack $ sigBytes $
-    hmac (wikilon_secret w) $ UTF8.fromString $ 
+    BS.take 32 $ BS.pack $ B16.encode $ BS.unpack $ 
+    sigBytes $ hmac (wikilon_secret w) $ UTF8.fromString $ 
     "adminCode " ++ show (wikilon_loadCount w)
 
 -- | test whether a provided administrative code is valid
@@ -62,11 +62,13 @@ isAdminCode :: Wikilon -> UTF8.ByteString -> Bool
 isAdminCode w s = (Signature (adminCode w)) == (Signature s)
     -- Signature wrapper for constant time comparison
 
-
 -- TODO:
 --
+-- evaluation and typechecking
+-- cached content (not persistent)
 -- users and user model data
 -- machines and networks models
+--  should users own machines? (or some of them?)
 -- logs
 --
 -- branch security models 
