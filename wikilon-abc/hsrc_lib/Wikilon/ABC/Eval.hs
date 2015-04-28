@@ -403,34 +403,42 @@ ev_Intro1L, ev_Elim1L :: Evaluator r
 ev_Intro0L, ev_Elim0L :: Evaluator r
 ev_prim_swap, ev_prim_mirror :: Evaluator r
 
--- supports tail-call optimization
+-- $c
 ev_Apc (Pair (Block fn _) (Pair arg Unit)) = _inline fn arg
 ev_Apc v = extOpFail ExtOp_Apc v
 
--- supports tail-call optimization
+-- vr$c
 ev_Inline (Pair (Block fn _) arg) = _inline fn arg
 ev_Inline v = extOpFail ExtOp_Inline v
 
+-- inject given ABC into current stack frame. This becomes a tail
+-- call in cases where the current frame is empty.
 _inline :: ABC (Value r) -> Value r -> Cont r -> Quota -> Either (Stuck r) (Value r)
 _inline abc v cc qu = ev v cc' qu' where
     ev = if (qu' < 0) then stuckOnQuota else evaluate
     cc' = cc { cc_code = (abc <> cc_code cc) }
     qu' = qu - frameQuotaCost abc
     
+-- vvrwlc
 ev_Intro1L a = evaluate (Pair Unit a)
 
+-- vrwlcc
 ev_Elim1L (Pair Unit a) = evaluate a
 ev_Elim1L v = extOpFail ExtOp_Elim1L v
 
+-- VVRWLC
 ev_Intro0L (Pair a b) = evaluate (Pair (SumR a) b)
 ev_Intro0L v = extOpFail ExtOp_Intro0L v
 
+-- VRWLCC
 ev_Elim0L (Pair (SumR a) b) = evaluate (Pair a b)
 ev_Elim0L v = extOpFail ExtOp_Elim0L v
 
+-- vrwlc
 ev_prim_swap (Pair a b) = evaluate (Pair b a)
 ev_prim_swap v = extOpFail ExtOp_prim_swap v
 
+-- VRWLC
 ev_prim_mirror (Pair (SumL a) e) = evaluate (Pair (SumR a) e)
 ev_prim_mirror (Pair (SumR b) e) = evaluate (Pair (SumL b) e)
 ev_prim_mirror v = extOpFail ExtOp_prim_mirror v

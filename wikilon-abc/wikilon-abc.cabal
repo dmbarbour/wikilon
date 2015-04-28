@@ -42,6 +42,10 @@ Library
     Wikilon.ABC.EncVal
     Wikilon.ABC.Eval
 
+    -- TODO
+    -- Wikilon.ABC.Simplify
+    -- Wikilon.ABC.Convert
+
     Awelon.ABC
     Awelon.ABC.Eval
     Awelon.Base16
