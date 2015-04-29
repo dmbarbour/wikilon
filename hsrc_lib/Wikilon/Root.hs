@@ -26,10 +26,11 @@ data Wikilon = Wikilon
     , wikilon_uniqueSrc :: !(PVar Integer)   -- ^ predictable source of unique values
     , wikilon_loadCount :: !Integer     -- ^ how many times has Wikilon been loaded?
     , wikilon_secret    :: !Secret      -- ^ a secret value for administration
+    , wikilon_httpRoot  :: !BS.ByteString -- ^ raw URI root for web services
     } 
 
-loadWikilon :: FilePath -> VCache -> IO Wikilon
-loadWikilon _home _vcache = do
+loadWikilon :: FilePath -> VCache -> BS.ByteString -> IO Wikilon
+loadWikilon _home _vcache _httpRoot = do
     _loadCount <- incPVar =<< loadRootPVarIO _vcache "loadCount" 0
     _secret <- readPVarIO =<< loadRootPVarIO _vcache "secret" =<< newSecret
     _uniqueSrc <- loadRootPVarIO _vcache "uniqueSrc" 10000000
@@ -41,6 +42,7 @@ loadWikilon _home _vcache = do
         , wikilon_uniqueSrc = _uniqueSrc
         , wikilon_loadCount = _loadCount
         , wikilon_secret = _secret
+        , wikilon_httpRoot = _httpRoot
         }
 
 incPVar :: PVar Integer -> IO Integer

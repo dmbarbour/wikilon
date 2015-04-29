@@ -100,11 +100,11 @@ Library
     -- Wikilon.Services
 
     Wikilon.Root
+    Wikilon.WAI
     Wikilon
 
-    Wikilon.WAI
-    Wikilon.URL
 
+    -- Wikilon.HTTP.URL
 
 
     Wikilon.Time

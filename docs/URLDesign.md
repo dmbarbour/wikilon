@@ -58,6 +58,12 @@ I'd like to favor capability-based security even in the web interfaces. However,
 
 Maybe I should stick with user logins to start, but add the ability to create capabilities to specific resources under a given authority. In particular, something like IDE sessions might make decent capabilities, as might web-sockets or bindings to machines.
 
+For now, I should probably at least use 'digest' based authentication for users. (I'd really hate to use basic auth.)
+
+## Subdomains?
+
+An interesting possibility is to leverage subdomains for routing, e.g. such that we can use `machineId.example.com` to route to a particular abstract virtual machine. However, setting this up seems to be painful, and I'm not sure the effort is worthwhile. If the need arises, I'll look into this in the future. Meanwhile, routing to machines via the URI is more immediately useful.
+
 ## Naming AVMs
 
 I'd like to consider `NameCoin` or similar cooperative decentralized models integration as a basis for giving AVMs a common name. I'd prefer this to use of 'pet names'.

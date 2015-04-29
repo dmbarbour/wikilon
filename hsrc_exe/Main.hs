@@ -129,6 +129,7 @@ runWikilonInstance a = mainBody where
         (`finally` vcacheSync (vcache_space vc)) $ -- sync on normal exit
             let appArgs = Wikilon.Args { Wikilon.store = vcacheSubdir "wiki/" vc
                                        , Wikilon.home = home FS.</> "wiki"
+                                       , Wikilon.httpRoot = ""
                                        } 
             in
             Wikilon.loadInstance appArgs >>= \ app ->

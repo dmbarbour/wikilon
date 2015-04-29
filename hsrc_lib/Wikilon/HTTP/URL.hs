@@ -4,7 +4,7 @@
 --
 -- The functions in Network.HTTP.Base aren't doing exactly what I 
 -- need wrgt. Utf8 encode and decode.
-module Wikilon.URL
+module Wikilon.HTTP.URL
     ( isOKPathByte
     , encodePathBytes
     , decodePathBytes
