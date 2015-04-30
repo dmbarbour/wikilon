@@ -8,16 +8,16 @@
 --
 --  URL friendly: alpha | num | -._~ | !$&'()*+,;= | :@ | pct-encoded
 --    (pchars <http://tools.ietf.org/html/rfc3986#section-3.3>)
+--    also exclude '.' and '..' which have special URL rules
 --  Eyeball friendly: 
 --    forbid C0 SP DEL C1 U+FFFD 
 --    forbid empty string
---  Text and Delimiter friendly: 
---    forbid ,;{}(|)[]"`
+--  Text, HTML, and Delimiter friendly: 
+--    forbid ,;{}(|)[]<>"`
 --    don't end with a .
 --  Not confusable with numbers:
 --    forbid words starting with digit
 --    forbid words starting with +-. followed by digit
---  Rel-path friendly: forbid . and ..
 --
 -- Some of these constraints are redundant.
 --

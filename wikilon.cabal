@@ -54,31 +54,24 @@ Library
     , vcache (>= 0.2.5)
     , vcache-trie (>= 0.1.1)
     , wikilon-abc
-
+    , mtl
+    , time (>= 1.5)
+    , Decimal (>= 0.4)
     , bytestring (>= 0.10)
+    , utf8-string (>= 1)
     , bytestring-builder
     , array
-
-    , time (>= 1.5)
-
     , containers (>= 0.5)
-    , mtl
-
-    , websockets (>= 0.9)
     , wai (>= 3.0)
     , wai-route
-
-    , http-types 
-    -- , yesod-routes (>= 1.2)
+    , http-types (>= 0.8.6)
+    , http-media (>= 0.6)
+    , blaze-html (>= 0.8)
+    -- , websockets (>= 0.9)
     -- , wai-websockets
-
-    , utf8-string (>= 1)
-
     , cryptohash (>= 0.11)
     , byteable
     , entropy
-
-    , Decimal (>= 0.4)
 
   Exposed-Modules:
 
@@ -100,11 +93,13 @@ Library
     -- Wikilon.Services
 
     Wikilon.Root
-    Wikilon.WAI
     Wikilon
 
-
-    -- Wikilon.HTTP.URL
+    Wikilon.WAI
+    Wikilon.WAI.Types
+    Wikilon.WAI.Utils
+    Wikilon.WAI.Routes
+    -- Wikilon.WAI.URL
 
 
     Wikilon.Time

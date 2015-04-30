@@ -72,3 +72,36 @@ I'd like to consider `NameCoin` or similar cooperative decentralized models inte
 
 Twitter integration might be neat if it means I can receive and answer requests.
 
+# Priorities
+
+Dealing with all the different HTTP methods and Accept modes and so on seems to be very painful, but is something that can accumulate over time. For now, I should probably aim to have just enough to get some useful work done, then grow the feature set as needed. What has the highest priority?
+
+* add words to or edit a dictionary
+* export a dictionary
+* evaluation of expressions
+* automatic zero-button testing, typechecks 
+* track recent changes (and change efforts? patches?) for a dictionary
+* track type failures, test failures, etc..
+* simple compilation of words to JavaScript?
+
+The user model can wait for a little while, I guess. 
+
+* Users should have logs for items updated 
+ * logs contain enough information to track abuse
+ * simple exponential decay model of some sort
+* Dictionary should have log for recent updates
+ * ability to query which words are updated and when
+ * ability to 'slice' time on these updates
+ * ability to subscribe to log as a web socket
+ * includes whodunnit information
+* 
+
+
+
+
+
+
+
+
+
+
