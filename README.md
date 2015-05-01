@@ -11,9 +11,9 @@ As a software platform, Wikilon will host web applications and services. The det
 
 Related: 
 
-* [Awelon Object (AO) language](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md)
-* [Awelon Bytecode (ABC)](https://github.com/dmbarbour/awelon/blob/master/AboutABC.md)
-* [Awelon Project vision](https://github.com/dmbarbour/awelon/blob/master/AwelonProject.md)
+* [Awelon Object (AO) language](docs/NewAO.md)
+* [Awelon Bytecode (ABC)](docs/AboutABC.md)
+* [Awelon Project vision](docs/AwelonProject.md)
 
 ## Setup and Configuration
 

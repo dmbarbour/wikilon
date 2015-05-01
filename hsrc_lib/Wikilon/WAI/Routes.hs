@@ -29,8 +29,8 @@ wikilonRoutes = fmap (first UTF8.fromString) $
     --  could scripts could be cached views of dictionary code? browser AVMs?
 
     -- Maybe a /robots.txt
-    --  though this only works for Wikilon configured at root directory
-    --  maybe leave this to controller of WAI application
+    --  nah... Wikilon is not necessarily at root.
+    --  I can use <meta name="robots" content="noindex, nofollow"/> as needed.
     ]
 
 frontPage, getFrontPage :: WikilonApp

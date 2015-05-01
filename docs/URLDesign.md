@@ -83,8 +83,11 @@ Dealing with all the different HTTP methods and Accept modes and so on seems to 
 * track recent changes (and change efforts? patches?) for a dictionary
 * track type failures, test failures, etc..
 * simple compilation of words to JavaScript?
-
-The user model can wait for a little while, I guess. 
+* development of 'dictionary apps': 
+ * apps having no dependencies outside of a dictionary
+ * notebooks, spreadsheets, wikis, calculators, small games
+ * may be able to update dictionary (dict as state, dataflow)
+ * may have some client-side state in browser (browser AVMs? React?)
 
 * Users should have logs for items updated 
  * logs contain enough information to track abuse

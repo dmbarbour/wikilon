@@ -118,8 +118,8 @@ mustAcceptCharsetUtf8 = id
 -- is mostly for GET requests. Branching on input content type for
 -- PUT or POST will require a separate function.
 branchOnMedia :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp
-branchOnMedia lms = branchOnMedia' lms def where
-    def _ _ _ k = k $ eNotAcceptable (fst <$> lms)
+branchOnMedia lms = branchOnMedia' lms $ \ _w _cap _rq k ->
+    k $ eNotAcceptable (fst <$> lms)
 
 -- somewhat ad-hoc for now...
 eNotAcceptable :: [HTTP.MediaType] -> Wai.Response
