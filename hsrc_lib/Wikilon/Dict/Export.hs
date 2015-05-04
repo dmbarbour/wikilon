@@ -1,93 +1,94 @@
 
 -- | This module provides a simple import and export format for Awelon
 -- dictionaries, emitting an entire dictionary as a large file. This
--- dictionary uses the following format:
+-- uses the following format:
 --
---   @over [{%dupd} {%swap}][]
+--   @dup [r^zlwl][]
 --   @dupd [rw{%dup}wl][]
 --   @swap [rwrwzwlwl][]
---   @dup [r^zlwl][]
---   @doc.dup "(Copyable x) ⇒ x -- x x
---    ~[{%docString}]
+--   @over [{%dupd} {%swap}][]
+--   @dup.doc "(Copyable x) ⇒ x -- x x
+--    ~[v'c]
 --
--- Or more generally:
---
---   @word bytecode
---   @anotherWord more bytecode
---   @multiLineWord bytecode continues
---    on another line, each LF escaped
---    by following SP
---
--- The type of each definition is: ∀s.s→∃v.((v→fn)*(v*s)). See the
--- Wikilon.Dict module for more information.
---
--- This export format is intended for easy extension into streamable
--- update models, leveraging new prefixes for alternative commands
--- such as indicating time or origin, renaming words, or deleting
--- words. 
+-- Besides defining each word starting at a newline and escape rules
+-- for LF (escape by following SP), this format is expected to ensure
+-- that all dependencies for any given word are defined before that
+-- word, and that every word is defined exactly once. This guards two
+-- invariants for dictionaries: acyclic and fully defined.
 module Wikilon.Dict.Export
-    ( encode
+    ( mimeType
+    , dictWords
+    , dictWords'
+    , encode
     , encodeWords
+
+    , logicalLines
+
     -- , decode
     -- , decodeList
     ) where
 
-import Control.Monad
-import Control.Monad.State (State)
+import Data.Int
 import Data.Monoid
-import qualified Control.Monad.State as State
+import qualified Data.List as L
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Builder as BB
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Wikilon.Dict
 
+-- | appropriate HTTP Content-Type or Accept type 
+--
+-- application\/vnd.org.awelon.aodict
+mimeType :: BS.ByteString
+mimeType = UTF8.fromString "application/vnd.org.awelon.aodict"
+
+-- | Obtain a list of words from our dictionary ordered such that
+-- all dependencies of a word are defined before that word, and 
+-- all words are listed exactly once.
+dictWords :: Dict -> [Word]
+dictWords d = dictWords' d (wordsInDict d)
+
+-- | List requested words in a dictionary together with transitive
+-- dependencies. The resulting list will not contain any duplicates,
+-- and words will be ordered such that transitive dependencies 
+-- appear before a word.
+dictWords' :: Dict -> [Word] -> [Word]
+dictWords' d = _dictWords d mempty
+
+-- list words using set to prevent redundant entry
+_dictWords :: Dict -> Set Word -> [Word] -> [Word]
+_dictWords d lws ws@(w:ws') = 
+    if Set.member w lws then _dictWords d lws ws else
+    let lDeps = L.filter (`Set.notMember` lws) $ deps d w in
+    if not (L.null lDeps) then _dictWords d lws (lDeps ++ ws) else
+    let lws' = Set.insert w lws in
+    w : _dictWords d lws' ws'
+_dictWords _ _ [] = []
+
 -- | Encode the entire dictionary for export into a bytestring.
 encode :: Dict -> LBS.ByteString
-encode d = encodeWords d (wordsInDict d)
+encode d = _encode d (dictWords d)
 
 -- | Encode a subset of the dictionary, specified by a list of root
 -- words. All transitive dependencies of these words are included in
 -- the export. If a word is not defined, it will be silently skipped.
 encodeWords :: Dict -> [Word] -> LBS.ByteString
-encodeWords d ws = 
-    let action = mapM_ (_enw d) ws in
-    let s0 = EnSt mempty mempty in
-    let s' = State.execState action s0 in
-    BB.toLazyByteString (en_out s')
+encodeWords d = _encode d . dictWords' d
 
-data EnSt = EnSt
-    { en_out :: BB.Builder  -- the output stream
-    , en_rec :: Set Word    -- the words recorded
-    } 
-type ENC a = State EnSt a
+-- at this point, words are ordered how we need them. Undefined words
+-- are skipped, and hence left undefined in the output.
+_encode :: Dict -> [Word] -> LBS.ByteString
+_encode d = BB.toLazyByteString . mconcat . fmap (_enw d)
 
-enc_print :: BB.Builder -> ENC () 
-enc_print bb = State.modify $ \ s ->
-    let o' = en_out s <> bb in
-    s { en_out = o' }
-
-enc_record :: Word -> ENC Bool
-enc_record w = 
-    State.gets en_rec >>= \ s0 ->
-    let b = Set.notMember w s0 in
-    let s' = Set.insert w s0 in
-    State.modify (\ s -> s { en_rec = s' }) >>
-    return b
-
-_enw :: Dict -> Word -> ENC ()
-_enw d w = 
-    -- skip words already recorded
-    enc_record w >>= \ bNewWord ->
-    when bNewWord $
-        -- record all dependencies first
-        mapM_ (_enw d) (deps d w) >> 
-        case lookupBytes d w of
-            Nothing -> return ()
-            Just bytes -> enc_print $
-                BB.char8 '@' <> BB.byteString (wordToUTF8 w) <> BB.char8 ' ' 
-                <> _esc bytes <> BB.char8 '\n'
+_enw :: Dict -> Word -> BB.Builder
+_enw d w = case lookupBytes d w of
+    Nothing -> mempty
+    Just bytes -> 
+        BB.char8 '@' <> BB.byteString (wordToUTF8 w) <> BB.char8 ' ' 
+        <> _esc bytes <> BB.char8 '\n'
 
 _esc :: LBS.ByteString -> BB.Builder
 _esc = mconcat . fmap _esc' . LBS.toChunks
@@ -102,16 +103,22 @@ _esc' bs = case BS.elemIndex 10 bs of
         BB.char8 ' ' <> 
         _esc' (BS.drop ct bs)
 
+type Bytes = LBS.ByteString
 
--- | Attempt to decode a complete dictionary from a bytestring. This
--- may fail if the provided dictionary has some bad properties.
--- decode :: LBS.ByteString -> Either String Dict
--- decode = decodeList >>> error "TODO: Wikilon.Dict.Export.decode"
+-- | split a bytestring into logical lines. No characters are
+-- removed. A logical line may contain LF if followed by SP.
+logicalLines :: Bytes -> (Bytes, [Bytes])
+logicalLines bs = case llIndex bs of
+    Nothing -> (bs, [])
+    Just idx -> 
+        let (ln,bs') = LBS.splitAt (idx+1) bs in
+        let ll = uncurry (:) $ logicalLines bs' in
+        (ln, ll)
 
--- | Attempt to decode a list of (Word,ABC) pairs from a string that
--- allegedly has the export format. This will IGNORE all lines that
--- do not start with `%`. But see decodeM for more options.
--- decodeList :: 
+llIndex :: Bytes -> Maybe Int64
+llIndex bs = error "TODO"
+
+
 
 
 
