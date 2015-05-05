@@ -76,14 +76,16 @@ defaultRouteOnMethod lms w cap rq k = body where
     m = Wai.requestMethod rq
     body = 
         if (m == HTTP.methodOptions) then options else
-        if (m == HTTP.methodHead) then tryHead else
+        -- if (m == HTTP.methodHead) then tryHead else
         notAllowed
+{- -- For some reason, the following freezes on HEAD requests.
     tryHead = case L.lookup HTTP.methodGet lms of
         Nothing -> notAllowed
-        Just app -> app w cap rq $ \ response ->
+        Just get -> get w cap rq $ \ response ->
             let status = Wai.responseStatus response in
             let headers = Wai.responseHeaders response in
-            k $ Wai.responseLBS status headers LBS.empty
+            k $ Wai.responseLBS status headers (LBS.empty)
+-}
     notAllowed = k $ eNotAllowed (fst <$> lms)
     options = k $ msgOptions (fst <$> lms)
 
@@ -114,7 +116,7 @@ allow methods = ("Allow", BS.intercalate ", " methods)
 bodyMethodsAllowed :: [HTTP.Method] -> HTML
 bodyMethodsAllowed methods = do
     HTML.p "Methods specifically implemented for this resource: "
-    HTML.ul $ mapM_ (HTML.li . HTML.string . show) methods
+    HTML.ul $ mapM_ (HTML.li . HTML.unsafeByteString) methods
     HTML.p "HEAD and OPTIONS may have default implementations."
 
 -- | Select an application based on a preferred media output. This
