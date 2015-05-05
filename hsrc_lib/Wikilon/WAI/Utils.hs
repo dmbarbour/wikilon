@@ -5,12 +5,17 @@ module Wikilon.WAI.Utils
     -- MIDDLEWARE 
     ( routeOnMethod
     , routeOnMethod'
-    , branchOnMedia
-    , branchOnMedia'
-    , mustAcceptCharsetUtf8
+    , justGET
+    --, branchOnInputType
+    --, branchOnInputType'
+    , branchOnOutputType
+    , branchOnOutputType'
 
     -- APPS
     , defaultRouteOnMethod
+
+    -- RESPONSES
+    , htmlResponse
 
 
     -- HEADERS
@@ -45,7 +50,6 @@ import qualified Network.HTTP.Media as HTTP
 import qualified Network.Wai as Wai
 import Wikilon.WAI.Types
 
-
 -- | Route based on method. Also provides reasonable default
 -- implementations for OPTIONS and HEAD.
 routeOnMethod :: [(HTTP.Method, WikilonApp)] -> WikilonApp
@@ -58,6 +62,12 @@ routeOnMethod' lms def w cap rq k =
         Just app -> app w cap rq k
         Nothing -> def w cap rq k
 {-# INLINE routeOnMethod' #-}
+
+-- | Application route that only supports 'GET'
+justGET :: WikilonApp -> WikilonApp
+justGET app = routeOnMethod [(HTTP.methodGet, app)]
+
+
 
 -- | Fallback behavior after every entry in the method table has failed.
 -- This provides default implementations for OPTIONS and HEAD.
@@ -107,18 +117,11 @@ bodyMethodsAllowed methods = do
     HTML.ul $ mapM_ (HTML.li . HTML.string . show) methods
     HTML.p "HEAD and OPTIONS may have default implementations."
 
--- I might later wish to validate acceptability of the utf-8 charset
--- by the client. For now, however, I'm going to simply assume it.
--- For most user agents (and certainly for the few I care about)
--- this assumption is valid.
-mustAcceptCharsetUtf8 :: WikilonApp -> WikilonApp
-mustAcceptCharsetUtf8 = id
-
 -- | Select an application based on a preferred media output. This
 -- is mostly for GET requests. Branching on input content type for
 -- PUT or POST will require a separate function.
-branchOnMedia :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp
-branchOnMedia lms = branchOnMedia' lms $ \ _w _cap _rq k ->
+branchOnOutputType :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp
+branchOnOutputType lms = branchOnOutputType' lms $ \ _w _cap _rq k ->
     k $ eNotAcceptable (fst <$> lms)
 
 -- somewhat ad-hoc for now...
@@ -130,21 +133,27 @@ eNotAcceptable mediaTypes =
     HTML.head $ do
         htmlMetaCharsetUtf8
         htmlMetaNoIndex
-        HTML.title (HTML.string "406 Not Acceptable")
+        HTML.title "406 Not Acceptable"
     HTML.body $ do
-        HTML.p $ HTML.string "Available media types for this resource: "
+        HTML.p $ "Available media types for this resource: "
         HTML.ul $ mapM_ (HTML.li . HTML.string . show) mediaTypes  
 
 -- | Select a media type based on preferred media output, with a
 -- fallback behavior on 406 Not Acceptable. 
-branchOnMedia' :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp -> WikilonApp
-branchOnMedia' lms e406 w cap rq k =
+branchOnOutputType' :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp -> WikilonApp
+branchOnOutputType' lms e406 w cap rq k =
     let app0 = maybe e406 snd $ listToMaybe lms in -- first in list
     case L.lookup HTTP.hAccept (Wai.requestHeaders rq) of
         Nothing -> app0 w cap rq k -- no client preference
         Just hdrAccept -> case HTTP.mapAcceptMedia lms hdrAccept of
             Nothing -> e406 w cap rq k
             Just app -> app w cap rq k
+
+-- (note: error for bad input type is 415)
+
+-- | basic HTML response
+htmlResponse :: HTTP.Status -> HTML -> Wai.Response
+htmlResponse status = Wai.responseLBS status [textHtml] . renderHTML
 
 -- | Content-Type: text\/html; charset=utf-8
 textHtml :: HTTP.Header

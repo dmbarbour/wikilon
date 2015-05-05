@@ -98,8 +98,8 @@ Library
     Wikilon.WAI
     Wikilon.WAI.Types
     Wikilon.WAI.Utils
+    Wikilon.WAI.URL
     Wikilon.WAI.Routes
-    -- Wikilon.WAI.URL
 
 
     Wikilon.Time

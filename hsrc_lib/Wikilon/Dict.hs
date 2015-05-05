@@ -57,6 +57,8 @@ module Wikilon.Dict
 
     , module Wikilon.Dict.Word
     , unsafeInsert, unsafeDelete
+
+    , unsafeDictAddr
     ) where
 
 import Prelude hiding (null, lookup, words)
@@ -77,6 +79,7 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 
 import qualified Data.VCache.Trie as Trie
+import Data.Word (Word64)
 import Data.VCache.Trie (Trie)
 import Database.VCache
 
@@ -90,6 +93,11 @@ import Wikilon.Dict.Token
 -- | a dictionary is hosted in a vcache address space
 dict_space :: Dict -> VSpace
 dict_space = Trie.trie_space . dict_data
+
+-- | provide simple information about current value
+unsafeDictAddr :: Dict -> Word64
+unsafeDictAddr = Trie.unsafeTrieAddr . dict_data
+
 
 -- Preferred cache mode for dictionary lookups. In this case, I don't
 -- mind quickly dropping nodes from the cache, since the parse is fast

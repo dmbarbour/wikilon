@@ -51,9 +51,9 @@ import Wikilon.Dict
 
 -- | appropriate HTTP Content-Type or Accept type 
 --
--- application\/vnd.org.awelon.AODict
+-- application\/vnd.org.awelon.aodict
 mimeType :: BS.ByteString
-mimeType = UTF8.fromString "application/vnd.org.awelon.AODict"
+mimeType = UTF8.fromString "application/vnd.org.awelon.aodict"
 
 -- | Obtain a list of words from our dictionary ordered such that
 -- all dependencies of a word are defined before that word, and 

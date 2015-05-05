@@ -50,7 +50,8 @@ depSizeThresh = 400
 defSizeThresh = 400
 
 -- includes version number to support updates to representation
--- (e.g. in case I add compression later).
+-- (e.g. in case I add compression later, or switch to a sized
+-- trie for incremental views).
 instance VCacheable Dict where
     put (Dict _data _deps) = putWord8 0 >> put _data >> put _deps
     get = getWord8 >>= \ v -> case v of

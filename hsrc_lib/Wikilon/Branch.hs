@@ -16,6 +16,8 @@ module Wikilon.Branch
     , volume
     , lookup
     , lookup'
+    , keys
+    , toList
     , insert
     , delete
     , adjust
@@ -95,6 +97,12 @@ lookup' :: BranchName -> BranchSet -> Branch
 lookup' n s = case lookup n s of
     Nothing -> emptyBranch (vspace s)
     Just b -> b
+
+keys :: BranchSet -> [BranchName]
+keys = Trie.keys . s_data
+
+toList :: BranchSet -> [(BranchName, Branch)]
+toList = Trie.toList . s_data
 
 emptyBranch :: VSpace -> Branch
 emptyBranch vc = Branch0 (Dict.empty vc) (LoB.empty vc 8)
