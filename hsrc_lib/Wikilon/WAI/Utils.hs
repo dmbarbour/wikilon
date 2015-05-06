@@ -6,10 +6,10 @@ module Wikilon.WAI.Utils
     ( routeOnMethod
     , routeOnMethod'
     , justGET
-    --, branchOnInputType
-    --, branchOnInputType'
-    , branchOnOutputType
-    , branchOnOutputType'
+    --, branchOnInputMedia
+    --, branchOnInputMedia'
+    , branchOnOutputMedia
+    , branchOnOutputMedia'
 
     -- APPS
     , defaultRouteOnMethod
@@ -22,22 +22,25 @@ module Wikilon.WAI.Utils
     , textHtml
     , plainText
     , noCache
+    , eTagN, eTagNW
 
     -- HTML
     , HTML
     , renderHTML
     , htmlMetaNoIndex
     , htmlMetaCharsetUtf8
+    , genericServerFailure
 
     , module Wikilon.WAI.Types
     ) where
 
 --import Control.Monad
 import Control.Applicative
+import Data.Monoid
 import Data.Maybe (listToMaybe)
 import qualified Data.List as L
 import qualified Data.ByteString as BS
---import qualified Data.ByteString.UTF8 as UTF8
+import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import Text.Blaze.Html5 ((!))
@@ -67,8 +70,6 @@ routeOnMethod' lms def w cap rq k =
 justGET :: WikilonApp -> WikilonApp
 justGET app = routeOnMethod [(HTTP.methodGet, app)]
 
-
-
 -- | Fallback behavior after every entry in the method table has failed.
 -- This provides default implementations for OPTIONS and HEAD.
 defaultRouteOnMethod :: [(HTTP.Method, WikilonApp)] -> WikilonApp
@@ -76,16 +77,14 @@ defaultRouteOnMethod lms w cap rq k = body where
     m = Wai.requestMethod rq
     body = 
         if (m == HTTP.methodOptions) then options else
-        -- if (m == HTTP.methodHead) then tryHead else
+        if (m == HTTP.methodHead) then tryHead else
         notAllowed
-{- -- For some reason, the following freezes on HEAD requests.
     tryHead = case L.lookup HTTP.methodGet lms of
-        Nothing -> notAllowed
+        Nothing -> notAllowed -- no GET option
         Just get -> get w cap rq $ \ response ->
             let status = Wai.responseStatus response in
             let headers = Wai.responseHeaders response in
             k $ Wai.responseLBS status headers (LBS.empty)
--}
     notAllowed = k $ eNotAllowed (fst <$> lms)
     options = k $ msgOptions (fst <$> lms)
 
@@ -122,8 +121,8 @@ bodyMethodsAllowed methods = do
 -- | Select an application based on a preferred media output. This
 -- is mostly for GET requests. Branching on input content type for
 -- PUT or POST will require a separate function.
-branchOnOutputType :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp
-branchOnOutputType lms = branchOnOutputType' lms $ \ _w _cap _rq k ->
+branchOnOutputMedia :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp
+branchOnOutputMedia lms = branchOnOutputMedia' lms $ \ _w _cap _rq k ->
     k $ eNotAcceptable (fst <$> lms)
 
 -- somewhat ad-hoc for now...
@@ -137,13 +136,31 @@ eNotAcceptable mediaTypes =
         htmlMetaNoIndex
         HTML.title "406 Not Acceptable"
     HTML.body $ do
-        HTML.p $ "Available media types for this resource: "
+        HTML.p "Available media types for this resource: "
         HTML.ul $ mapM_ (HTML.li . HTML.string . show) mediaTypes  
+        HTML.p "Also, the library parsing Accept headers is picky.\n\
+               \Use q=1 before other params (cf RFC2616 sec14)."
+
+-- | generic server failure should not contain any sensitive 
+-- information (for security reasons). Use with static strings.
+genericServerFailure :: String -> Wai.Response
+genericServerFailure msg =
+    let status = HTTP.status500 in
+    let headers = [noCache, textHtml] in
+    Wai.responseLBS status headers $ renderHTML $ do
+    HTML.head $ do
+        htmlMetaCharsetUtf8
+        htmlMetaNoIndex
+        HTML.title "500 Internal Server Error"
+    HTML.body $ do
+        HTML.p "Request could not be completed."
+        HTML.p "Generic Message: " <> HTML.toMarkup msg
+
 
 -- | Select a media type based on preferred media output, with a
 -- fallback behavior on 406 Not Acceptable. 
-branchOnOutputType' :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp -> WikilonApp
-branchOnOutputType' lms e406 w cap rq k =
+branchOnOutputMedia' :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp -> WikilonApp
+branchOnOutputMedia' lms e406 w cap rq k =
     let app0 = maybe e406 snd $ listToMaybe lms in -- first in list
     case L.lookup HTTP.hAccept (Wai.requestHeaders rq) of
         Nothing -> app0 w cap rq k -- no client preference
@@ -168,6 +185,12 @@ plainText = (HTTP.hContentType,"text/plain; charset=utf-8")
 -- | Cache-Control: no-cache
 noCache :: HTTP.Header
 noCache = (HTTP.hCacheControl, "no-cache")
+
+-- | ETag: number  (weak or strong)
+eTagN, eTagNW :: (Integral n) => n -> HTTP.Header
+eTagN n = ("ETag", UTF8.fromString $ show (show (toInteger n)))
+eTagNW n = ("ETag", UTF8.fromString $ "W/" ++ show (show (toInteger n)))
+
 
 -- | since I'm not fond of blaze-html's mixed-case abbreviations...
 type HTML = HTML.Html

@@ -72,6 +72,7 @@ isAdminCode w s = (Signature (adminCode w)) == (Signature s)
 -- machines and networks models
 --  should users own machines? (or some of them?)
 -- logs
+-- decay for dictionaries (low priority)
 --
 -- branch security models 
 --   e.g. per-branch guest policies

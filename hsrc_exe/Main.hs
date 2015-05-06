@@ -13,6 +13,7 @@ import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Handler.WarpTLS as WarpTLS
 import qualified Data.List as L
 import qualified Data.ByteString.UTF8 as UTF8
+import GHC.Conc (getNumProcessors, setNumCapabilities)
 import Database.VCache 
 import Database.VCache.Cache
 import qualified Wikilon
@@ -75,16 +76,20 @@ defaultCacheSize = 10 {- megabytes -}
 -- 60TB was selected here because it fits into about a quarter of
 -- a common 48-bit CPU address space. Assuming half the address 
 -- space is reserved for the OS, this would allow enough space
--- to copy and compact the database if we need to.
+-- to copy and compact the database if we need to. Also, this
+-- will usually push the limit to the disk or filesystem.
 defaultMaxDBSize :: Int
-defaultMaxDBSize = 62 * 1000 * 1000 {- megabytes -}
+defaultMaxDBSize = 60 * 1000 * 1000 {- megabytes -}
 
 wiki_crt,wiki_key :: FS.FilePath
 wiki_crt = "wiki.crt"
 wiki_key = "wiki.key"
 
 main :: IO ()
-main = (procArgs <$> Env.getArgs) >>= runWikilonInstance
+main = do
+    getNumProcessors >>= setNumCapabilities -- use multiple processors
+    args <- procArgs <$> Env.getArgs -- command line arguments
+    runWikilonInstance args -- doesn't return unless interrupted
 
 procArgs :: [String] -> Args
 procArgs = L.foldr (flip pa) defaultArgs where

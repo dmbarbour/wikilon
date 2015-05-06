@@ -67,7 +67,9 @@ For example, it would be an error if `swapd` above was defined before `swap`, or
 
 For HTTP, we should include an appropriate `Content-Type` header. Since I own `awelon.org`, I'll using the following:
 
-        Content-Type: application/vnd.org.awelon.aodict
+        Content-Type: text/vnd.org.awelon.aodict
+
+I'm using the text class because the `aodict` format is still a "source code" and is at least marginally human readable.
 
 Every Awelon project system should support this simple format, though may apply constraints on received dictionaries (type safety, structure of words, alignment of function types with word suffixes, etc.). Other ad-hoc formats, such as YAML or JSON or even direct encoding in ABC, may additionally be supported.
 

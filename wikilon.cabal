@@ -79,7 +79,7 @@ Library
 
     Wikilon.Dict
     Wikilon.Dict.Word
-    Wikilon.Dict.Export
+    Wikilon.Dict.AODict
     Wikilon.Dict.Token
     Wikilon.Dict.Type
 

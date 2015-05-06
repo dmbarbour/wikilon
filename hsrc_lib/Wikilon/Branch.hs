@@ -33,6 +33,8 @@ module Wikilon.Branch
     , decayBranch
     , emptyBranch
     , branchSize
+
+    , unsafeBranchSetAddr
     
     ) where
 
@@ -40,6 +42,7 @@ import Prelude hiding (lookup, head)
 import Control.Monad
 import qualified Data.ByteString.UTF8 as UTF8
 import Data.Typeable (Typeable)
+import Data.Word (Word64)
 import qualified Data.List as L
 import Database.VCache
 import Data.VCache.LoB (LoB)
@@ -250,4 +253,9 @@ branchErr = (++) "Wikilon.Branch (Branch): "
 
 branchSetErr :: String -> String
 branchSetErr = (++) "Wikilon.Branch (BranchSet): "
+
+-- | using for easy e-tags
+unsafeBranchSetAddr :: BranchSet -> Word64
+unsafeBranchSetAddr = Trie.unsafeTrieAddr . s_data
+
 

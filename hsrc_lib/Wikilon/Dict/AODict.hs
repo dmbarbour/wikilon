@@ -10,6 +10,10 @@
 --   @dup.doc "(Copyable x) ⇒ x -- x x
 --    ~[v'c]
 --
+-- This format is called 'AODict' and has the Internet media type:
+--
+--    text\/vnd.org.awelon.aodict
+--
 -- Besides defining each word starting at a newline and escape rules
 -- for LF (escape by following SP), this format is expected to ensure
 -- that all dependencies for any given word are defined before that
@@ -18,7 +22,7 @@
 --
 -- Note: I'll create a separate but similar format for patching a
 -- dictionary. This particular model is just for full dictionaries.
-module Wikilon.Dict.Export
+module Wikilon.Dict.AODict
     ( mimeType
     , dictWords
     , dictWords'
@@ -50,10 +54,9 @@ import Wikilon.Dict
 
 
 -- | appropriate HTTP Content-Type or Accept type 
---
--- application\/vnd.org.awelon.aodict
+-- text\/vnd.org.awelon.aodict
 mimeType :: BS.ByteString
-mimeType = UTF8.fromString "application/vnd.org.awelon.aodict"
+mimeType = UTF8.fromString "text/vnd.org.awelon.aodict"
 
 -- | Obtain a list of words from our dictionary ordered such that
 -- all dependencies of a word are defined before that word, and 

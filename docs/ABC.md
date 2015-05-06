@@ -118,4 +118,5 @@ August 2014
 
 ## ABCD
 
-None yet! ABCD will begin after U+00C0, and will develop according to empirical analysis of common subprogram patterns that offer effective compression and optimization benefits. Naturally, ABCD won't make any progress at all until we have a much larger and more mature ABC systems.
+None yet! ABCD will begin somewhere after the C1 charset and will develop according to empirical analysis of common subprogram patterns that offer effective compression and optimization benefits. Also, formal correctness proofs will be essential for every ABCD operation. Naturally, ABCD won't make progress until we have larger and more mature ABC systems.
+

@@ -1,18 +1,16 @@
 # URL Designs for Wikilon
 
-Apparently, URL design is supposed to be one of the FIRST things I do. Oops! (Live and learn, I guess.)
-
-Last night I trawled through several 'URL design' websites to get some advice. The primary advice seems to be:
+Apparently, URL design is supposed to be one of the FIRST things I do. Oops! (Live and learn, I guess.) Or maybe not - HATEOS and RESTful design fellows argue URLs themselves aren't very relevant. But, if URLs aren't relevant from the REST perspective, it shouldn't hurt to apply advice from the UX perspective. Last night I trawled several 'URL design' websites to get some advice. The primary advice seems to be:
 
 * find the domain-model nouns
 * /collection/element organization
-* avoid verbs where feasible
-* keep it simple (obviously)
+* keep it simple
+* avoid verbs where feasible, use HTTP verbs instead
 * avoid 'private' URLs like `example.com/settings` dependent on user
 * use blacklist if toplevel is user-defined
 * URLs are for humans, avoid hashcode names
-* avoid one-off URLs 
-* APIs should have verion numbers
+* APIs should have verion numbers (?) but see [Content-Type](ContentType.md).
+* URLs should be stable, good for bookmarking
 
 I'm not fond of the 'blacklist' idea, so I'll instead leave the toplevel to administration. As far as URL hashcodes go: I can probably avoid them for the normal user experience, but I might still favor opaque URLs for machines, session models, etc.. Of course, in these cases, the URL should be none of the user's business and unhackable. Anyhow, I spent some time working through the advice from people vastly more experienced in this subject than myself.
 

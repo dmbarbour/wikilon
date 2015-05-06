@@ -12,9 +12,10 @@ module Data.VCache.LoB
     , length
     , toList
     , reverse
+    , drop
     ) where
 
-import Prelude hiding (length, null, reverse, foldl)
+import Prelude hiding (length, null, drop, reverse, foldl)
 import Control.Exception (assert)
 import Control.Applicative hiding (empty)
 import Data.Maybe
@@ -118,6 +119,15 @@ uncons l = case l_buffer l of
                 , l_buffer = buffer'            -- updated buffer
                 , l_bpages = bpages'            -- updated block pages
                 }
+
+-- | Drop a number of elements. 
+--
+-- At the moment, a naive O(N) implementation is used.
+-- However, this can later be optimized to O(lg(N)).
+drop :: Int -> LoB a -> LoB a
+drop n l =
+    if (n < 1) then l else
+    drop (n-1) $ maybe l snd (uncons l)
 
 -- How large should our block pages be? A larger value means flatter
 -- representation, larger buffers, more data held by the LoB directly.
