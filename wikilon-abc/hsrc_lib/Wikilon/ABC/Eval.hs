@@ -37,21 +37,20 @@ import Wikilon.ABC.Value
 -- some point and returns control to the caller. Becoming stuck is 
 -- not necessarily an error, especially in cases of token or quota.
 --
--- Wikilon's evaluator includes a simple quota model such that long
--- running code can easily be interrupted or rescheduled without loss
--- of partial computations.
 type Evaluator r = Value r -> Cont r -> Quota -> Either (Stuck r) (Value r)
 
--- | At the moment our quota is just an integer, which we'll reduce
--- based on the size of ABC bytecodes to which we commit. We'll also
--- correct our quotas for block and text operations, which consume a
--- large number of bytes but have a low evaluator cost. 
+-- | Quota is a simple integer that is decreased heuristically during
+-- evaluation. When quota underflows, we'll stop on a {&quota} token.
+-- This creates a convenient opportunity to reschedule the computation,
+-- time it, inspect it, render its progress, etc..
+--
+-- Quota is sampled after $ or ? operations.
 type Quota = Int64
 
 -- | heuristic quota cost for operating on a given ABC frame, e.g.
 -- via '$' or '?' or the tail-call variants.
 frameQuotaCost :: ABC (Value r) -> Quota
-frameQuotaCost abc = 16 + LBS.length (abc_code abc)
+frameQuotaCost = (+) 16 . LBS.length . abc_code
 
 -- | When we call `$` or `?` we introduce a stage in a call stack.
 -- Tail-calls are a special exception to this; tail calls in a tail
@@ -82,25 +81,27 @@ data Stuck r = Stuck
 abcOpEvalTable :: [(PrimOp, Evaluator r)]
 abcOpEvalTable =
     [(ABC_l,ev_l),(ABC_r,ev_r),(ABC_w,ev_w),(ABC_z,ev_z),(ABC_v,ev_v),(ABC_c,ev_c)
-    ,(ABC_L,ev_L),(ABC_R,ev_R),(ABC_W,ev_W),(ABC_Z,ev_Z),(ABC_V,ev_V),(ABC_C,ev_C) -- 12
+    ,(ABC_L,ev_L),(ABC_R,ev_R),(ABC_W,ev_W),(ABC_Z,ev_Z),(ABC_V,ev_V),(ABC_C,ev_C) 
 
     ,(ABC_copy,ev_copy),(ABC_drop,ev_drop)
+
     ,(ABC_add,ev_add),(ABC_negate,ev_negate)
     ,(ABC_multiply,ev_multiply),(ABC_reciprocal,ev_reciprocal)
-    ,(ABC_divMod,ev_divMod),(ABC_compare,ev_compare) -- 8
+    ,(ABC_divMod,ev_divMod),(ABC_compare,ev_compare)
 
     ,(ABC_apply,ev_apply),(ABC_condApply,ev_condApply) 
     ,(ABC_quote,ev_quote),(ABC_compose,ev_compose) 
     ,(ABC_relevant,ev_relevant),(ABC_affine,ev_affine)
+
     ,(ABC_distrib,ev_distrib),(ABC_factor,ev_factor) 
-    ,(ABC_merge,ev_merge),(ABC_assert,ev_assert) -- 10
+    ,(ABC_merge,ev_merge),(ABC_assert,ev_assert)
 
     ,(ABC_newZero,ev_newZero),(ABC_d0,ev_d0)
     ,(ABC_d1,ev_d1),(ABC_d2,ev_d2),(ABC_d3,ev_d3)
     ,(ABC_d4,ev_d4),(ABC_d5,ev_d5),(ABC_d6,ev_d6)
-    ,(ABC_d7,ev_d7),(ABC_d8,ev_d8),(ABC_d9,ev_d9) -- 11
+    ,(ABC_d7,ev_d7),(ABC_d8,ev_d8),(ABC_d9,ev_d9)
 
-    ,(ABC_SP,ev_SP),(ABC_LF,ev_LF) -- 2
+    ,(ABC_SP,ev_SP),(ABC_LF,ev_LF)
     ]
 
 abcOpEvalArray :: A.Array PrimOp (Evaluator r)
@@ -131,22 +132,30 @@ stuck op v cc qu = Left $! Stuck
     , stuck_quota = qu
     }
 
+-- | quota is an annotation. If an interpreter ignores it, the 
+-- impact on observable behavior is negligible, though performance
+-- may take a hit since we'll get stuck on every $ and ? operation.
+--
+-- The best response to getting stuck on quota is to add 
 stuckOnQuota :: Evaluator r
-stuckOnQuota = stuck (ABC_Tok "quota")
+stuckOnQuota = stuck (ABC_Tok "&quota")
 
 
 -- | Basic evaluator, without any effects model. All tokens cause
 -- this evaluator to become stuck, as will attempting to expand a
 -- Resource. In special cases, we'll inject tokens into the code so
 -- we can indicate why we halted:
---
---   {quota} - quota underflow
+-- 
+--   {&quota} - quota underflow
 --   {error decode} - failure to decodeOp cc_code
 --
--- In most cases, whatever reason we get stuck must be inferred.
---
--- Quotas use a simple estimate based on the size of abc_code, then
--- add a positive correction upon parsing a block or text. 
+-- Evaluation runs with a decreasing quota. When quota underflows at
+-- specific boundaries (immediately after $ or ?) we'll get stuck on
+-- an injected {&quota} token. As with all annotations, an interpreter
+-- can progress if it ignores quota tokens.
+-- 
+-- In most cases the reason we get stuck must be inferred, or simple
+-- tactics can be applied blindly to get unstuck.
 --   
 evaluate :: Evaluator r
 evaluate !v !cc !qu = case ABC.decodeOp (cc_code cc) of
