@@ -8,3 +8,6 @@ cabal-dev/
 .shelly
 __pycache__/
 *.pyc
+.cabal-sandbox/
+cabal.config
+cabal.sandbox.config

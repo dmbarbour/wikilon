@@ -27,7 +27,12 @@ License: BSD3
 license-file: LICENSE.txt
 Stability: experimental
 build-type: Simple
-cabal-version: >= 1.16.0.3
+cabal-version: >= 1.20
+
+Extra-source-files:
+    README.md 
+    changelog.md
+
 
 Source-repository head
   type: git
@@ -55,7 +60,7 @@ Library
     , vcache-trie (>= 0.1.1)
     , wikilon-abc
     , mtl
-    , time (>= 1.5)
+    , time (>= 1.4)
     , Decimal (>= 0.4)
     , bytestring (>= 0.10)
     , utf8-string (>= 1)

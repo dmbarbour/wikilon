@@ -1,23 +1,31 @@
 Wikilon
 =======
 
-A wiki-inspired development environment and software platform for Awelon project.
+**NOTE:** Wikilon is NOT usable at this time. It's making steady progress, but it's still immature. The content below is based on what I want to be true when I'm closer to finished with Wikilon.
 
-Every 'page' in the wiki defines a concrete function, with acyclic dependencies on other functions. Functions subsume roles of data, documentation, tests, compilers, applications, and more. Initially, pages shall be written primarily using the Awelon Object (AO), a Forth-like language that Wikilon understands natively. However, Wikilon will support [user-defined syntax](docs/ExtensibleSyntax.md), requiring only that the syntax is well defined by another page.
+A wiki-inspired software platform and development environment for Awelon project.
 
-Wikilon can cross-compile functions, using compilers defined in the wiki. Access to compiled content is simple, just an HTTP GET on a link whose URL indicates the compiler and the function to be compiled, no sophisticated build step required. Given appropriate compilers, one might 'compile' documentation to PDF, or compile specialized monadic functions to a JavaScript web-application, or compile a byte stream transformer into a console application. Compiler developers are free to experiment with application models, effects models (monadic, capability-based), staging, targets (mobile, browser, desktop, unikernel), and so on. 
+An [Awelon Object (AO)](docs/AboutAO.md) dictionary contains a set of words with acyclic definitions. Each word defines a concrete function, leveraging [Awelon Bytecode (ABC)](docs/AboutABC.md). DVCS-based conventions are leveraged for sharing, versioning, and distributing code. The expectation is that communities will curate open-source dictionaries, while projects or developers will tend to fork a dictionary for local use and eventually feed back content or utilities. Supporting hundreds of projects in a community dictionary provides opportunities for cross-project maintenance and refactoring.
 
-As a software platform, Wikilon will host web applications and services. The details here aren't fully hammered out, but the vision is that Wikilon should be tailorable for use as a web server, game server, robotics controller, etc.. or at least support deployment of virtual machines when, for security or performance reasons, it would be better to avoid directly hosting the service.
+AO dictionaries correspond nicely to [wikis](http://en.wikipedia.org/wiki/Wiki): 
+
+* each wiki is a dictionary
+* each page is a word
+* dependencies between words become links 
+
+Wikilon can host multiple dictionaries, e.g. to support forking and unstable vs. stable branches. Each dictionary is given a name and URI, under `/d/dictName`. Dictionaries can be exported to a file or imported, providing a simple basis for backup. Internally, Wikilon keeps an extensive history for each dictionary to resist corruption or attack and support future study of how software develops. Wikilon is configured to favor one dictionary as the 'master'. Mostly, this provides control over the front page, favicons, CSS, and other special content based on definitions of specific words such as `wikilon:FrontPage`. Any dictionary may be viewed as master via `/d/dictName/wiki` URIs.
+
+As a software platform, Wikilon supports several [application models](docs/ApplicationModel.md). **Dictionary applications** provide ad-hoc 'views' of a dictionary and might serve as spreadsheets, interactive documentation, cross-compiled programs, blogs, images, music. Also, Wikilon can host or deploy **Abstract Virtual Machines** (AVMs), which effectively extends server-side state and communication patterns. This may be useful when modeling certain kinds of applications (e.g. a chat server or multi-user dungeon).
+
+Ultimately, Wikilon should be tailorable for use as a web server, game server, robotics controller, etc... while providing a very different (and hopefully better!) programmer experience compared to conventional systems. However, at the moment Awelon Bytecode (ABC) lacks performance-competitive compilers and interpreters. Until this changes, I would not recommend Wikilon for serious use.
 
 Related: 
 
-* [Awelon Object (AO) language](docs/NewAO.md)
+* [Awelon Object (AO) language](docs/AboutAO.md)
 * [Awelon Bytecode (ABC)](docs/AboutABC.md)
 * [Awelon Project vision](docs/AwelonProject.md)
 
 ## Setup and Configuration
-
-NOTE: Wikilon is NOT usable at this time. It's still in early development. 
 
 To get started with Wikilon:
 
@@ -29,7 +37,7 @@ To get started with Wikilon:
 * if ~/.cabal/bin directory not in PATH, consider adding it
 * configure WIKILON_PATH environment variable (or use default)
 
-After installation and PATH is set, you should be able to run `wikilon -pPort` and browse `http://127.0.0.1:Port`.
+After installation and PATH is set, you should be able to run `wikilon` and browse `http://127.0.0.1:3000`. The port and other parameters may be configured; see `wikilon --help`. 
 
 ### HTTPS (TLS/SSL) Setup
 
