@@ -3,7 +3,7 @@ Wikilon
 
 **NOTE:** Wikilon is NOT usable at this time. It's making steady progress, but it's still immature. The content below is based on what I want to be true when I'm closer to finished with Wikilon.
 
-A wiki-inspired software platform and development environment for Awelon project.
+Wikilon is a wiki-inspired software platform and development environment for Awelon project.
 
 An [Awelon Object (AO)](docs/AboutAO.md) dictionary contains a set of words with acyclic definitions. Each word defines a concrete function, leveraging [Awelon Bytecode (ABC)](docs/AboutABC.md). DVCS-based conventions are leveraged for sharing, versioning, and distributing code. The expectation is that communities will curate open-source dictionaries, while projects or developers will tend to fork a dictionary for local use and eventually feed back content or utilities. Supporting hundreds of projects in a community dictionary provides opportunities for cross-project maintenance and refactoring.
 
@@ -13,17 +13,34 @@ AO dictionaries correspond nicely to [wikis](http://en.wikipedia.org/wiki/Wiki):
 * each page is a word
 * dependencies between words become links 
 
-Wikilon can host multiple dictionaries, e.g. to support forking and unstable vs. stable branches. Each dictionary is given a name and URI, under `/d/dictName`. Dictionaries can be exported to a file or imported, providing a simple basis for backup. Internally, Wikilon keeps an extensive history for each dictionary to resist corruption or attack and support future study of how software develops. Wikilon is configured to favor one dictionary as the 'master'. Mostly, this provides control over the front page, favicons, CSS, and other special content based on definitions of specific words such as `wikilon:FrontPage`. Any dictionary may be viewed as master via `/d/dictName/wiki` URIs.
+Wikilon can host multiple dictionaries, e.g. to support forking and unstable vs. stable branches. Each dictionary is given a name and URI, under `/d/dictName`. 
 
-As a software platform, Wikilon supports several [application models](docs/ApplicationModel.md). **Dictionary applications** provide ad-hoc 'views' of a dictionary and might serve as spreadsheets, interactive documentation, cross-compiled programs, blogs, images, music. Also, Wikilon can host or deploy **Abstract Virtual Machines** (AVMs), which effectively extends server-side state and communication patterns. This may be useful when modeling certain kinds of applications (e.g. a chat server or multi-user dungeon).
+As a software platform, Wikilon supports a few [application models](docs/ApplicationModel.md). 
 
-Ultimately, Wikilon should be tailorable for use as a web server, game server, robotics controller, etc... while providing a very different (and hopefully better!) programmer experience compared to conventional systems. However, at the moment Awelon Bytecode (ABC) lacks performance-competitive compilers and interpreters. Until this changes, I would not recommend Wikilon for serious use.
+First, with sufficient tooling, dictionaries can be used as [spreadsheets](http://en.wikipedia.org/wiki/Spreadsheet) or [notebook-style apps](http://en.wikipedia.org/wiki/IPython). Words correspond to functions. Much like cells in a spreadsheet, pure functions can be rendered for human consumption through typeful views:
+
+* a function of type `ℝ²→Color` could be rendered as an image
+* a function of type `∀e.e→(Text*e)` renders as static text
+* a function of type `ℝ→ℝ` can be rendered as a graph or table
+* a function of type `QueryString→SVG` renders as an HTTP form
+
+Typeful views may be supported with some naming conventions for words. A lot of static content (blogs, images, etc.) can be modeled this way, and a lot of useful features can be oriented towards editing the dictionaries.
+
+Second, interactive content is viable with appropriate types, e.g. a simple interactive fiction (or any command-line app) could be modeled using a function of type `µState.(Text→(Text*State))` with the text input corresponding to the user command string. A different types might be more suitable for ad-hoc web applications. Wikilon should ultimately be able to cross-compile a lot of interactive content: simple games, calculators, [unhosted web apps](https://unhosted.org/), etc..
+
+Third, Wikilon will also serve as a host for *abstract virtual machines* (AVMs). AVMs use a simple value for state, and communicate (or perform effects) via message passing through a simple [network model](docs/NetworkModel.md). AVMs are necessary whenever developers want to extend Wikilon with ad-hoc server-side state, e.g. for a chat server or a multi-user dungeon. Using many small AVMs can limit entanglement compared to image-based programming environments. A long term goal will be to compile AVMs into hypervisor-layer [unikernels](https://queue.acm.org/detail.cfm?id=2566628).
+
+Between these approaches, Wikilon should be tailorable into arbitrary new applications or services. 
 
 Related: 
 
 * [Awelon Object (AO) language](docs/AboutAO.md)
 * [Awelon Bytecode (ABC)](docs/AboutABC.md)
 * [Awelon Project vision](docs/AwelonProject.md)
+
+## Caveats
+
+Awelon Bytecode (ABC) lacks sufficient work on optimizers or compilers, and is simply not performance competitive at this time. At this time, I won't recommend Wikilon for serious use where performance is a major concern. Eventually, this condition should change. One goal with Wikilon is to bootstrap the compilers and optimizers and other tools, and perhaps bootstrap Wikilon itself.
 
 ## Setup and Configuration
 

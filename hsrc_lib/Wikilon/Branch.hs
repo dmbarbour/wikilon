@@ -25,6 +25,7 @@ module Wikilon.Branch
     , isValidBranchName
 
     , head
+    , modified
     , hist
     , update
 
@@ -43,6 +44,7 @@ import Control.Monad
 import qualified Data.ByteString.UTF8 as UTF8
 import Data.Typeable (Typeable)
 import Data.Word (Word64)
+import Data.Maybe (listToMaybe)
 import qualified Data.List as L
 import Database.VCache
 import Data.VCache.LoB (LoB)
@@ -142,6 +144,10 @@ b_volume = (1 +) . LoB.length . b_hist
 -- | read the head version of a branch
 head :: Branch -> Dict
 head = b_head
+
+-- | time of last modification for a branch
+modified :: Branch -> Maybe T
+modified = fmap fst . listToMaybe . hist
 
 -- | read the history for a branch. This history is generally incomplete,
 -- subject to exponential decay models. This also excludes the head. The

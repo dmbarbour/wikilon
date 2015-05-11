@@ -6,8 +6,9 @@ module Wikilon.WAI.Utils
     ( routeOnMethod
     , routeOnMethod'
     , justGET
-    --, branchOnInputMedia
-    --, branchOnInputMedia'
+
+    , branchOnInputMedia
+    , branchOnInputMedia'
     , branchOnOutputMedia
     , branchOnOutputMedia'
 
@@ -16,7 +17,15 @@ module Wikilon.WAI.Utils
 
     -- RESPONSES
     , htmlResponse
+    , okNoContent
 
+    , eNotAllowed
+    , msgOptions
+    , eNotAcceptable
+    , eUnsupportedMediaType
+    , eNotFound
+    , badDictName
+    , eServerError
 
     -- HEADERS
     , textHtml
@@ -26,10 +35,19 @@ module Wikilon.WAI.Utils
 
     -- HTML
     , HTML
+    , statusToTitle
     , renderHTML
     , htmlMetaNoIndex
     , htmlMetaCharsetUtf8
-    , genericServerFailure
+
+
+    -- MEDIA
+    , mediaTypeAODict
+    , mediaTypeTextPlain
+    , mediaTypeTextHTML
+    , mediaTypeTextCSV
+    , mediaTypeFormURLEncoded
+    , mediaTypeMultiPartFormData
 
     , module Wikilon.WAI.Types
     ) where
@@ -44,8 +62,8 @@ import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import Text.Blaze.Html5 ((!))
-import qualified Text.Blaze.Html5 as HTML
-import qualified Text.Blaze.Html5.Attributes as Attrib
+import qualified Text.Blaze.Html5 as H
+import qualified Text.Blaze.Html5.Attributes as A
 import qualified Text.Blaze.Html.Renderer.Utf8
 import qualified Network.HTTP.Types as HTTP
 import qualified Network.HTTP.Media as HTTP
@@ -93,69 +111,67 @@ eNotAllowed, msgOptions :: [HTTP.Method] -> Wai.Response
 eNotAllowed methods = 
     let status = HTTP.methodNotAllowed405 in
     let headers = [allow methods, textHtml, noCache] in
+    let title = statusToTitle status in
     Wai.responseLBS status headers $ renderHTML $ do 
-    HTML.head $ do
+    H.head $ do
         htmlMetaCharsetUtf8
         htmlMetaNoIndex
-        HTML.title "405 Method Not Allowed"
-    HTML.body $ bodyMethodsAllowed methods
+        H.title title
+    H.body $ do
+        H.h1 title
+        bodyMethodsAllowed methods
 
 msgOptions methods =
     let status = HTTP.ok200 in
     let headers = [allow methods, textHtml] in
+    let title = statusToTitle status in
     Wai.responseLBS status headers $ renderHTML $ do
-    HTML.head $ do
+    H.head $ do
         htmlMetaCharsetUtf8
-        HTML.title "OPTIONS"
-    HTML.body $ bodyMethodsAllowed methods
+        H.title title
+    H.body $ do
+        H.h1 title
+        bodyMethodsAllowed methods
 
 allow :: [HTTP.Method] -> HTTP.Header
 allow methods = ("Allow", BS.intercalate ", " methods)
 
 bodyMethodsAllowed :: [HTTP.Method] -> HTML
 bodyMethodsAllowed methods = do
-    HTML.p "Methods specifically implemented for this resource: "
-    HTML.ul $ mapM_ (HTML.li . HTML.unsafeByteString) methods
-    HTML.p "HEAD and OPTIONS may have default implementations."
+    H.p "Methods specifically implemented for this resource: "
+    H.ul $ mapM_ (H.li . H.unsafeByteString) methods
+    H.p "HEAD and OPTIONS may have default implementations."
 
 -- | Select an application based on a preferred media output. This
 -- is mostly for GET requests. Branching on input content type for
 -- PUT or POST will require a separate function.
 branchOnOutputMedia :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp
-branchOnOutputMedia lms = branchOnOutputMedia' lms $ \ _w _cap _rq k ->
-    k $ eNotAcceptable (fst <$> lms)
+branchOnOutputMedia lms = branchOnOutputMedia' lms $ \ _w _cap rq k ->
+    k $ eNotAcceptable rq (fst <$> lms)
 
 -- somewhat ad-hoc for now...
-eNotAcceptable :: [HTTP.MediaType] -> Wai.Response
-eNotAcceptable mediaTypes = 
+-- should I have different error media types? not sure.
+eNotAcceptable :: Wai.Request -> [HTTP.MediaType] -> Wai.Response
+eNotAcceptable rq mediaTypes = 
     let status = HTTP.notAcceptable406 in
     let headers = [noCache, textHtml] in
+    let title = statusToTitle status in
     Wai.responseLBS status headers $ renderHTML $ do
-    HTML.head $ do
+    H.head $ do
         htmlMetaCharsetUtf8
         htmlMetaNoIndex
-        HTML.title "406 Not Acceptable"
-    HTML.body $ do
-        HTML.p "Available media types for this resource: "
-        HTML.ul $ mapM_ (HTML.li . HTML.string . show) mediaTypes  
-        HTML.p "Also, the library parsing Accept headers is picky.\n\
-               \Use q=1 before other params (cf RFC2616 sec14)."
-
--- | generic server failure should not contain any sensitive 
--- information (for security reasons). Use with static strings.
-genericServerFailure :: String -> Wai.Response
-genericServerFailure msg =
-    let status = HTTP.status500 in
-    let headers = [noCache, textHtml] in
-    Wai.responseLBS status headers $ renderHTML $ do
-    HTML.head $ do
-        htmlMetaCharsetUtf8
-        htmlMetaNoIndex
-        HTML.title "500 Internal Server Error"
-    HTML.body $ do
-        HTML.p "Request could not be completed."
-        HTML.p "Generic Message: " <> HTML.toMarkup msg
-
+        H.title title
+    H.body $ do
+        H.h1 title
+        H.p $ do 
+            H.string "Requested Media Types: " 
+            case L.lookup HTTP.hAccept (Wai.requestHeaders rq) of
+                Nothing -> "*/*" 
+                Just bs -> H.string $ UTF8.toString bs
+        H.p "Available media types for this resource: "
+        H.ul $ mapM_ (H.li . H.string . show) mediaTypes  
+        H.p "Also, the library parsing Accept headers is picky.\n\
+               \Include quality before other params (cf RFC2616 sec14)."
 
 -- | Select a media type based on preferred media output, with a
 -- fallback behavior on 406 Not Acceptable. 
@@ -168,11 +184,97 @@ branchOnOutputMedia' lms e406 w cap rq k =
             Nothing -> e406 w cap rq k
             Just app -> app w cap rq k
 
--- (note: error for bad input type is 415)
+-- | Select an application based on input types, fallback to error 415.
+branchOnInputMedia :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp
+branchOnInputMedia lms = branchOnInputMedia' lms $ \ _w _cap rq k ->
+    k $ eUnsupportedMediaType rq (fst <$> lms)
+
+eUnsupportedMediaType :: Wai.Request -> [HTTP.MediaType] -> Wai.Response
+eUnsupportedMediaType rq mediaTypes = 
+    let status = HTTP.unsupportedMediaType415 in
+    let headers = [noCache, textHtml] in
+    let title = statusToTitle status in
+    Wai.responseLBS status headers $ renderHTML $ do
+    H.head $ do
+        htmlMetaCharsetUtf8
+        htmlMetaNoIndex
+        H.title title
+    H.body $ do
+        H.h1 title
+        H.p $ do
+            H.string "Provided Content-Type: "
+            case L.lookup HTTP.hContentType (Wai.requestHeaders rq) of
+                Nothing -> H.string "(undefined)"
+                Just bs -> H.string $ UTF8.toString bs
+        H.p "Acceptable media types for this resource: "
+        H.ul $ mapM_ (H.li . H.string . show) mediaTypes
+
+-- | select based on the Content-Type field of  media, with a fallback in case no media matches
+branchOnInputMedia' :: [(HTTP.MediaType, WikilonApp)] -> WikilonApp -> WikilonApp
+branchOnInputMedia' lms e415 w cap rq k =
+    case L.lookup HTTP.hContentType (Wai.requestHeaders rq) of
+        Nothing -> e415 w cap rq k -- no media type specified
+        Just ctype -> 
+            let app = maybe e415 id $ HTTP.mapContentMedia lms ctype in
+            app w cap rq k
+
+-- | Our basic 404 Not Found page. 
+eNotFound :: Wai.Request -> Wai.Response
+eNotFound rq = 
+    let status = HTTP.notFound404 in
+    let headers = [noCache, textHtml] in
+    let title = statusToTitle status in
+    Wai.responseLBS status headers $ renderHTML $ do
+    H.head $ do
+        htmlMetaCharsetUtf8
+        htmlMetaNoIndex
+        H.title title
+    H.body $ do
+        H.h1 title
+        H.p $ do
+            H.string "Requested URI: "
+            H.string $ UTF8.toString $ HTTP.urlDecode False $ Wai.rawPathInfo rq
+        H.p "Requested URI is unknown to the Wikilon server."
+
+-- | 404 bad dictionary name.
+badDictName :: Wai.Response
+badDictName = 
+    let status = HTTP.notFound404 in
+    let headers = [textHtml, noCache] in
+    Wai.responseLBS status headers $ renderHTML $ do
+        let title = "404 Illegal Dictionary Name"
+        H.head $ do
+            htmlMetaCharsetUtf8
+            htmlMetaNoIndex
+            H.title title
+        H.body $ do
+            H.h1 title
+            H.p "Dictionary name in URI invalid by Wikilon's heuristic constraints."
+
+-- | generic server failure should not contain any sensitive 
+-- information (for security reasons). Use with static strings.
+--
+-- TODO: log the requests somewhere for the admin
+eServerError :: String -> Wai.Response
+eServerError msg =
+    let status = HTTP.status500 in
+    let headers = [noCache, textHtml] in
+    let title = statusToTitle status in
+    Wai.responseLBS status headers $ renderHTML $ do
+    H.head $ do
+        htmlMetaCharsetUtf8
+        htmlMetaNoIndex
+        H.title title
+    H.body $ do
+        H.h1 title
+        H.p $ H.string msg
 
 -- | basic HTML response
 htmlResponse :: HTTP.Status -> HTML -> Wai.Response
 htmlResponse status = Wai.responseLBS status [textHtml] . renderHTML
+
+okNoContent :: Wai.Response
+okNoContent = Wai.responseLBS HTTP.noContent204 [] LBS.empty
 
 -- | Content-Type: text\/html; charset=utf-8
 textHtml :: HTTP.Header
@@ -191,23 +293,47 @@ eTagN, eTagNW :: (Integral n) => n -> HTTP.Header
 eTagN n = ("ETag", UTF8.fromString $ show (show (toInteger n)))
 eTagNW n = ("ETag", UTF8.fromString $ "W/" ++ show (show (toInteger n)))
 
-
 -- | since I'm not fond of blaze-html's mixed-case abbreviations...
-type HTML = HTML.Html
+type HTML = H.Html
 
 -- | Render HTML5 to a lazy bytestring. This also adds the outer
 -- \<html\> tags and the doctype. Always renders to UTF-8. 
 renderHTML :: HTML -> LazyUTF8.ByteString
-renderHTML = Text.Blaze.Html.Renderer.Utf8.renderHtml . HTML.docTypeHtml
+renderHTML = Text.Blaze.Html.Renderer.Utf8.renderHtml . H.docTypeHtml
 {-# INLINE renderHTML #-}
 
 -- | A meta element (under \<head\>) to indicate a page's content
 -- should not be indexed or followed. This is, of course, entirely
 -- discretionary for the robots.
 htmlMetaNoIndex :: HTML
-htmlMetaNoIndex = HTML.meta ! Attrib.name "robots" ! Attrib.content "noindex, nofollow"
+htmlMetaNoIndex = H.meta ! A.name "robots" ! A.content "noindex, nofollow"
 
 -- | Indicate charset utf-8 redundantly in html content    
 htmlMetaCharsetUtf8 :: HTML
-htmlMetaCharsetUtf8 = HTML.meta ! Attrib.charset "UTF-8"
+htmlMetaCharsetUtf8 = H.meta ! A.charset "UTF-8"
+
+-- | e.g. HTTP.status405 becomes "405 Method Not Allowed" suitable for
+-- a header or title.
+statusToTitle :: HTTP.Status -> HTML
+statusToTitle status =
+    H.toMarkup (HTTP.statusCode status) <> " " <> 
+    H.unsafeByteString (HTTP.statusMessage status)
+
+mediaTypeAODict :: HTTP.MediaType 
+mediaTypeAODict = "text/vnd.org.awelon.aodict"
+
+mediaTypeTextPlain :: HTTP.MediaType
+mediaTypeTextPlain = "text/plain"
+
+mediaTypeTextHTML :: HTTP.MediaType
+mediaTypeTextHTML = "text/html"
+
+mediaTypeTextCSV :: HTTP.MediaType
+mediaTypeTextCSV = "text/csv"
+
+mediaTypeFormURLEncoded :: HTTP.MediaType
+mediaTypeFormURLEncoded = "application/x-www-form-urlencoded"
+
+mediaTypeMultiPartFormData :: HTTP.MediaType
+mediaTypeMultiPartFormData = "multipart/form-data"
 

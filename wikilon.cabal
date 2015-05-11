@@ -65,7 +65,7 @@ Library
     , time, old-locale
 
     , Decimal (>= 0.4)
-    , bytestring (>= 0.10)
+    , bytestring (>= 0.10.4)
     , utf8-string (>= 1)
     , bytestring-builder
     , array
@@ -103,11 +103,13 @@ Library
     Wikilon.Root
     Wikilon
 
-    Wikilon.WAI
     Wikilon.WAI.Types
     Wikilon.WAI.Utils
     Wikilon.WAI.URL
     Wikilon.WAI.Routes
+    Wikilon.WAI.Pages
+    Wikilon.WAI.Pages.AODict
+    Wikilon.WAI
 
 
     Wikilon.Time

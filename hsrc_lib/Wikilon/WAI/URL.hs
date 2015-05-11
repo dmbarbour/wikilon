@@ -8,6 +8,8 @@ module Wikilon.WAI.URL
     ( isOKPathByte
     , encodePathBytes
     , decodePathBytes
+    , encodePath
+    , decodePath
     ) where
 
 import Control.Exception (assert)
@@ -15,6 +17,8 @@ import Data.Word
 import Data.Bits
 import Data.Char
 import qualified Data.Array.Unboxed as UA
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Internal as BSI
 
 -- all characters that don't need to be pct-encoded
 okPathBytes :: UA.UArray Word8 Bool
@@ -32,6 +36,21 @@ okPathBytes = UA.accumArray (flip const) False (minBound,maxBound) lst where
 isOKPathByte :: Word8 -> Bool
 isOKPathByte = (UA.!) okPathBytes
 {-# INLINE isOKPathByte #-}
+
+countBytesToEncode :: BS.ByteString -> Int
+countBytesToEncode = BS.foldl' accum 0 where
+    accum n c = if isOKPathByte c then n else (n+1)
+
+encodePath :: BS.ByteString -> BS.ByteString
+encodePath bs = 
+    let nEnc = countBytesToEncode bs in
+    if (0 == nEnc) then bs else
+    -- each encoded character becomes %CC, or adds two
+    let nLen' = BS.length bs + (2 * nEnc) in
+    BSI.unsafePackLenBytes nLen' $ encodePathBytes (BS.unpack bs)
+
+decodePath :: BS.ByteString -> BS.ByteString
+decodePath = BS.pack . decodePathBytes . BS.unpack
 
 -- | Encode a list of bytes with pct-encodings. This will favor
 -- capital letters in the pct-encoding, e.g. %CC. Always succeeds.

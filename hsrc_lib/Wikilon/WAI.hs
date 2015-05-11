@@ -4,25 +4,62 @@
 --
 -- Using Network.Wai.Route to easily cover common cases.
 module Wikilon.WAI 
-    ( waiApp
+    ( wikilonWaiApp
+    , wikilonRoutes
     ) where
 
+import Control.Arrow (first)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Network.HTTP.Types as HTTP
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Route.Tree as Tree
+import Wikilon.WAI.Types
 import Wikilon.WAI.Routes
-import Wikilon.WAI.Utils (plainText, noCache)
+import Wikilon.WAI.Pages
+import Wikilon.WAI.Utils (plainText, noCache, eServerError, eNotFound)
+import Wikilon.Branch (BranchName)
 import Wikilon.Root
 
-waiApp :: Wikilon -> Wai.Application
-waiApp w rq k = 
+-- | List of routes for the Wikilon web service.
+wikilonRoutes :: [(Route, WikilonApp)]
+wikilonRoutes = fmap (first UTF8.fromString) $ 
+    [("/", wikilonRoot)
+    ,("/d", allDictionaries)
+    ,("/d/:d", dictResource)
+    ,("/d/:d/w", dictWords)
+    ,("/action/dictCreate", dictPostCreate)
+    --,("/d(delete)", dictPostDelete)
+    --,("/d/:d/w(create)", dictWordPostCreate)
+    --,("/d/:d/w(delete)", dictWordPostDelete)
+    --,("/dlist", listOfDicts)
+    --,("/dhist", histOfDicts)
+
+    --,("/d/:d/w/:w", dictWord)
+    --,("/d/:d/w/:w/name", 
+    --,("/d/:d/w/:w/deps", dictWordDeps)
+    --,("/d/:d/w/:w/clients", dictWordClients)
+    --,("/d/:d/wlist", dictWordList)
+    --,("/d/:d/wdeps", dictWordListDeps)
+    --,("/d/:d/wclients", dictWordListClients)
+    -- todo: historical versions
+    
+--    ,("/u",listOfUsers)
+--    ,("/u/:u",singleUser)
+
+    -- special endpoints to force media types or dispositions
+    ,("/d/:d/aodict", dictAsAODict)
+--    ,("/favicon", resourceFavicon)
+    ]
+
+wikilonWaiApp :: Wikilon -> Wai.Application
+wikilonWaiApp w rq k =
     -- require: request is received under Wikilon's httpRoot
     let nRootLen = BS.length (wikilon_httpRoot w) in
     let (uriRoot,uriPath) = BS.splitAt nRootLen (Wai.rawPathInfo rq) in
-    if uriRoot /= wikilon_httpRoot w then k notFound else
+    let badPath = k $ eServerError "inconsistent path" in
+    if uriRoot /= wikilon_httpRoot w then badPath else
     -- otherwise handle the request normally
     let t = Tree.fromList wikilonRoutes in
     let s = Tree.segments uriPath in
@@ -34,11 +71,26 @@ waiApp w rq k =
         -- ad-hoc special cases
         Nothing -> case s of
             ("dev":"echo":_) -> echo rq k
-            _ -> k notFound
+            ("d":dictPath:"wiki":_) -> remaster dictPath w rq k
+            _ -> k $ eNotFound rq 
 
--- resource not found
-notFound :: Wai.Response
-notFound = Wai.responseLBS HTTP.notFound404 [] LBS.empty
+-- | allow 'views' of Wikilon using a different master dictionary.
+--
+-- \/d\/foo\/wiki\/  -  view wikilon via the 'foo' dictionary
+--
+-- While a single dictionary is the default master for Wikilon, it
+-- is always possible to treat other dictionaries as the new master.
+-- This does add some access costs, but those should be marginal.
+--
+remaster :: BranchName -> Wikilon -> Wai.Application
+remaster dictPath w rq k =
+    -- "/d/fooPath/wiki" adds 8 + length "fooPath" to old prefix. 
+    -- We must urlDecode "fooPath" to recover the dictionary name.
+    let prefixLen = 8 + BS.length dictPath + BS.length (wikilon_httpRoot w) in
+    let _httpRoot = BS.take prefixLen (Wai.rawPathInfo rq) in
+    let _master = HTTP.urlDecode False dictPath in
+    let w' = w { wikilon_master = _master, wikilon_httpRoot = _httpRoot } in
+    wikilonWaiApp w' rq k
 
 -- | Echo request (for development purposes)
 echo :: Wai.Application

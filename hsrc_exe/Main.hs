@@ -22,10 +22,11 @@ helpMessage :: String
 helpMessage =
  "The `wikilon` executable will initiate a Wikilon web service.\n\
  \\n\
- \    wikilon [-pPort] [-cMB] [-dbMB] [-s] [-init] \n\
+ \    wikilon [-pPort] [-cMB] [-Ddict] [-dbMB] [-s] [-init] \n\
  \      -pPort: listen on given port (def 3000; saved) \n\
  \      -cMB: configure parse-cache size; (default 10MB; saved) \n\
  \      -init: initialize & greet only; do not start. \n\
+ \      -Ddict: set primary dictionary (default 'master'; saved) \n\
  \      -s: silent mode; do not greet or display admin code. \n\
  \      -dbMB: configure maximum database size; (default 100TB; not saved) \n\
  \\n\
@@ -49,6 +50,7 @@ helpMessage =
 data Args = Args 
     { _port  :: Maybe Int
     , _cacheSize :: Maybe Int
+    , _master :: Maybe UTF8.ByteString
     , _dbMax    :: Int
     , _silent   :: Bool
     , _justInit :: Bool
@@ -59,6 +61,7 @@ defaultArgs :: Args
 defaultArgs = Args 
     { _port = Nothing
     , _cacheSize = Nothing
+    , _master = Nothing
     , _dbMax = defaultMaxDBSize
     , _silent = False
     , _justInit = False
@@ -71,6 +74,9 @@ defaultPort = 3000
 
 defaultCacheSize :: Int
 defaultCacheSize = 10 {- megabytes -}
+
+defaultMaster :: UTF8.ByteString
+defaultMaster = "master"
 
 --
 -- 60TB was selected here because it fits into about a quarter of
@@ -95,6 +101,7 @@ procArgs :: [String] -> Args
 procArgs = L.foldr (flip pa) defaultArgs where
     pa a (helpArg -> True) = a { _help = True }
     pa a (portArg -> Just n) = a { _port = Just n }
+    pa a (masterArg -> Just name) = a { _master = Just name }
     pa a (cacheArg -> Just n) = a { _cacheSize = Just n }
     pa a (dbMaxArg -> Just n) = a { _dbMax = n }
     pa a "-s" = a { _silent = True }
@@ -131,34 +138,36 @@ runWikilonInstance a = mainBody where
         loadCache vc (_cacheSize a) >>= \ cacheSize ->
         setVRefsCacheLimit (vcache_space vc) (cacheSize * 1000 * 1000) >>
         loadPort vc (_port a) >>= \ port ->
+        loadMaster vc (_master a) >>= \ master ->
         (`finally` vcacheSync (vcache_space vc)) $ -- sync on normal exit
-            let appArgs = Wikilon.Args { Wikilon.store = vcacheSubdir "wiki/" vc
-                                       , Wikilon.home = home FS.</> "wiki"
-                                       , Wikilon.httpRoot = ""
-                                       } 
+            let appArgs = Wikilon.Args { Wikilon.args_store = vcacheSubdir "wiki/" vc
+                                       , Wikilon.args_home = home FS.</> "wiki"
+                                       , Wikilon.args_httpRoot = ""
+                                       , Wikilon.args_master = master
+                                       }
             in
-            Wikilon.loadInstance appArgs >>= \ app ->
-            unless (_silent a) (greet home port cacheSize app bUseTLS) >>
+            Wikilon.loadWikilon appArgs >>= \ wiki ->
+            unless (_silent a) (greet home port cacheSize wiki bUseTLS) >>
             if _justInit a then return () else
             let tlsSettings = wikilonWarpTLSSettings home in
             let warpSettings = wikilonWarpSettings port in
             let run = if bUseTLS then WarpTLS.runTLS tlsSettings warpSettings
                                  else Warp.runSettings warpSettings 
             in
-            run (Wikilon.waiApp app) -- loop until interrupted
+            run (Wikilon.wikilonWaiApp wiki) -- loop until interrupted
     badArgs = _badArgs a
     hasBadArgs = not $ L.null badArgs
     failWithBadArgs = err badArgMsg >> err helpMessage >> Sys.exitFailure
     badArgMsg = "unrecognized arguments: " ++ show badArgs 
     askedForHelp = _help a
     helpAndExit = Sys.putStrLn helpMessage >> Sys.exitSuccess
-    greet home port cache app bUseTLS =
+    greet home port cache wiki bUseTLS =
         Sys.putStrLn ("Wikilon:") >>
         Sys.putStrLn ("  Home:  " ++ showFP home) >>
         Sys.putStrLn ("  Port:  " ++ show port) >>
         Sys.putStrLn ("  Cache: " ++ show cache ++ " MB") >>
         Sys.putStrLn ("  HTTPS: " ++ show bUseTLS) >>
-        Sys.putStrLn ("  Admin: " ++ UTF8.toString (Wikilon.adminCode app))
+        Sys.putStrLn ("  Admin: " ++ UTF8.toString (Wikilon.adminCode wiki))
 
 
 showFP :: FS.FilePath -> String
@@ -169,6 +178,9 @@ loadCache = ldPVar "csize" defaultCacheSize
 
 loadPort :: VCache -> Maybe Int -> IO Int
 loadPort = ldPVar "port" defaultPort
+
+loadMaster :: VCache -> Maybe UTF8.ByteString -> IO UTF8.ByteString
+loadMaster = ldPVar "master" defaultMaster
 
 --
 ldPVar :: (VCacheable a) => String -> a -> VCache -> Maybe a -> IO a
@@ -190,6 +202,10 @@ portArg _ = Nothing
 cacheArg :: String -> Maybe Int
 cacheArg ('-':'c':s) = tryRead s
 cacheArg _ = Nothing
+
+masterArg :: String -> Maybe UTF8.ByteString
+masterArg ('-':'D':s) = Just $ UTF8.fromString s
+masterArg _ = Nothing
 
 dbMaxArg :: String -> Maybe Int
 dbMaxArg ('-':'d':'b':s) = tryRead s

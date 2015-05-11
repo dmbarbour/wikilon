@@ -3,47 +3,77 @@
 -- PVars in VCache. Wikilon can be extended with new features by adding
 -- new roots. 
 module Wikilon.Root
-    ( Wikilon(..)
+    ( Args(..), defaultArgs
+    , Wikilon(..)
     , loadWikilon
     , adminCode
     , isAdminCode
     ) where
 
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import Database.VCache
 import Wikilon.Secret
 import Wikilon.SecureHash
-import Wikilon.Branch (BranchSet)
+import Wikilon.Branch (BranchSet, BranchName)
 import qualified Wikilon.Branch as Br
 import qualified Awelon.Base16 as B16
 
+-- | Arguments for loading a Wikilon instance.
+data Args = Args 
+    { args_store :: !VCache
+    , args_home  :: !FilePath
+    , args_httpRoot :: !ByteString
+    , args_master :: !BranchName
+    } 
+
+-- | minimally, you must provide a VCache.
+defaultArgs :: VCache -> Args
+defaultArgs vc = Args
+    { args_store = vc
+    , args_home = ""
+    , args_httpRoot = ""
+    , args_master = "master"
+    }
+
 -- | holistic Wikilon state.
 data Wikilon = Wikilon
-    { wikilon_home      :: !FilePath    -- ^ in case I later want plugins?
-    , wikilon_vcache    :: !VCache      -- ^ persistence layer features
-    , wikilon_dicts     :: !(PVar BranchSet) -- ^ all the dictionaries
+    { wikilon_store     :: !VCache      -- ^ persistence layer features
+    , wikilon_home      :: !FilePath    -- ^ in case I later want plugins?
+    , wikilon_httpRoot  :: !ByteString  -- ^ raw URI root for web services
+    , wikilon_master    :: !BranchName  -- ^ master branch controls toplevel pages
+    , wikilon_dicts     :: !(PVar BranchSet) -- ^ dictionary contents (no security, etc.)
     , wikilon_uniqueSrc :: !(PVar Integer)   -- ^ predictable source of unique values
     , wikilon_loadCount :: !Integer     -- ^ how many times has Wikilon been loaded?
     , wikilon_secret    :: !Secret      -- ^ a secret value for administration
-    , wikilon_httpRoot  :: !BS.ByteString -- ^ raw URI root for web services
     } 
 
-loadWikilon :: FilePath -> VCache -> BS.ByteString -> IO Wikilon
-loadWikilon _home _vcache _httpRoot = do
-    _loadCount <- incPVar =<< loadRootPVarIO _vcache "loadCount" 0
-    _secret <- readPVarIO =<< loadRootPVarIO _vcache "secret" =<< newSecret
-    _uniqueSrc <- loadRootPVarIO _vcache "uniqueSrc" 10000000
-    _dicts <- loadRootPVarIO _vcache "dicts" (Br.empty (vcache_space _vcache))
+loadWikilon :: Args -> IO Wikilon
+loadWikilon args = do
+    let vc = args_store args
+    _loadCount <- incPVar =<< loadRootPVarIO vc "loadCount" 0
+    _secret <- readPVarIO =<< loadRootPVarIO vc "secret" =<< newSecret
+    _uniqueSrc <- loadRootPVarIO vc "uniqueSrc" 10000000
+    _dicts <- loadRootPVarIO vc "dicts" (Br.empty (vcache_space vc))
     return $! Wikilon
-        { wikilon_home = _home
-        , wikilon_vcache = _vcache
+        { wikilon_home = args_home args 
+        , wikilon_store = args_store args
+        , wikilon_httpRoot = moduloFinalSlash $ args_httpRoot args
+        , wikilon_master = args_master args
         , wikilon_dicts = _dicts
         , wikilon_uniqueSrc = _uniqueSrc
         , wikilon_loadCount = _loadCount
         , wikilon_secret = _secret
-        , wikilon_httpRoot = _httpRoot
         }
+
+-- | truncate any final '\/' character from given URI
+-- (because the routing model assumes no final slash)
+moduloFinalSlash :: ByteString -> ByteString
+moduloFinalSlash s = case BS.unsnoc s of
+    Just (s', 47) -> moduloFinalSlash s'
+    _ -> s
+
 
 incPVar :: PVar Integer -> IO Integer
 incPVar v = runVTx (pvar_space v) $ do
@@ -51,8 +81,8 @@ incPVar v = runVTx (pvar_space v) $ do
     writePVar v $! (n+1)
     return n
 
--- | a code that allows users to become primary administrators;
--- this works until Wikilon is reset.
+-- | a code that allows users to temporarily become administrators.
+-- This works until Wikilon is restarted.
 adminCode :: Wikilon -> UTF8.ByteString
 adminCode w =
     BS.take 32 $ BS.pack $ B16.encode $ BS.unpack $ 
