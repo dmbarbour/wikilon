@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveDataTypeable, CPP #-}
 
 -- | Wikilon timestamp
 --
@@ -18,9 +18,13 @@ module Wikilon.Time
 import Control.Applicative
 import Data.Int (Int64)
 import Data.Ratio (numerator,denominator)
+
 import qualified Data.Time.Clock as Time
 import qualified Data.Time.Calendar as Time
 import qualified Data.Time.Format as Time
+#if !(MIN_VERSION_time(1,5,0))
+import qualified System.Locale
+#endif
 -- import Control.Exception (assert)
 import qualified Data.Decimal as Dec
 import Data.Typeable (Typeable)
@@ -119,14 +123,27 @@ instance Show T where
     -- YYYY-MM-DDTHH:MM:SS.9999999Z
     showsPrec _ = showString . Time.formatTime t_locale t_format . toUTC where
 
+
 t_format :: String
 t_format = "%Y-%m-%dT%H:%M:%S%QZ"
 
+-- Need to deal with the ugly transition from time-1.4.2 to time-1.5
+-- (current `stackage lts-2.8` uses time-1.4.2)
+#if MIN_VERSION_time(1,5,0)
 t_locale :: Time.TimeLocale
 t_locale = Time.defaultTimeLocale
 
 parseTime :: String -> Maybe T
 parseTime = fmap fromUTC . Time.parseTimeM True t_locale t_format
+
+#else
+t_locale :: System.Locale.TimeLocale
+t_locale = System.Locale.defaultTimeLocale
+
+parseTime :: String -> Maybe T
+parseTime = fmap fromUTC . Time.parseTime t_locale t_format
+#endif
+
 
 -- show difference in time for humans
 instance Show DT where

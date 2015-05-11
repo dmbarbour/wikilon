@@ -29,13 +29,18 @@ Related:
 
 To get started with Wikilon:
 
-* install LMDB library and headers
+* Install Haskell. I recommend instructions at [stackage](http://www.stackage.org/install).
+* Install LMDB library and headers (for lmdb Haskell package)
  * (Ubuntu) `sudo apt-get install liblmdb-dev`
-* cd wikilon-abc; cabal install
-* cabal install --only-dependencies
-* cabal install
-* if ~/.cabal/bin directory not in PATH, consider adding it
-* configure WIKILON_PATH environment variable (or use default)
+ * (Source) try from [github.com/LMDB/lmdb](https://github.com/LMDB/lmdb)
+* Recommend sandbox installation of Wikilon
+ * obtain sources for Wikilon, enter directory
+ * cabal sandbox init
+ * cabal sandbox add-source wikilon-abc
+ * cabal install --only-dependencies
+ * cabal install
+
+This has been developed using Stackage lts-2.8, but I'd like to hear if Wikilon doesn't compile with the recent stackage. To use stackage, see [the page](https://www.stackage.org/) and obtain the current cabal.config.
 
 After installation and PATH is set, you should be able to run `wikilon` and browse `http://127.0.0.1:3000`. The port and other parameters may be configured; see `wikilon --help`. 
 

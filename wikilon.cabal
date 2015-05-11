@@ -55,12 +55,15 @@ Executable wikilon
 Library
   hs-Source-Dirs: hsrc_lib
   default-language: Haskell2010
-  Build-Depends: base (>= 4.6 && < 5)
+  Build-Depends: base (>= 4.7 && < 5)
     , vcache (>= 0.2.5)
     , vcache-trie (>= 0.1.1)
     , wikilon-abc
     , mtl
-    , time (>= 1.4)
+
+    -- TODO: eventually update time requirement to 1.5
+    , time, old-locale
+
     , Decimal (>= 0.4)
     , bytestring (>= 0.10)
     , utf8-string (>= 1)
