@@ -84,7 +84,7 @@ wikilonWaiApp w rq k =
 --
 remaster :: BranchName -> Wikilon -> Wai.Application
 remaster dictPath w rq k =
-    -- "/d/fooPath/wiki" adds 8 + length "fooPath" to old prefix. 
+    -- "d/fooPath/wiki/" adds 8 + length "fooPath" to old prefix. 
     -- We must urlDecode "fooPath" to recover the dictionary name.
     let prefixLen = 8 + BS.length dictPath + BS.length (wikilon_httpRoot w) in
     let _httpRoot = BS.take prefixLen (Wai.rawPathInfo rq) in

@@ -157,13 +157,18 @@ hist :: Branch -> [(T, Dict)]
 hist = LoB.toList . b_hist
 
 -- | update the dictionary for a branch. This returns the original 
--- dictionary unless there is an actual change.
+-- dictionary unless there is an actual change. Also, a dictionary
+-- will logically change at most once per millisecond (to simplify
+-- resolution of race conditions on blind updates). 
 update :: (T,Dict) -> Branch -> Branch 
 update (t,d) b = 
     let d0 = b_head b in
-    if (d0 == d) then b else
-    let h = b_hist b in
-    let h' = LoB.cons (t,d0) h in
+    if (d0 == d) then b else -- no change
+    let t' = case modified b of
+            Nothing -> t
+            Just t0 -> max t (addTime t0 0.001)
+    in
+    let h' = LoB.cons (t',d0) (b_hist b) in
     Branch0 d h'
 
 b_null :: Branch -> Bool

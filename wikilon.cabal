@@ -71,6 +71,7 @@ Library
     , array
     , containers (>= 0.5)
     , wai (>= 3.0)
+    , wai-extra
     , wai-route
     , http-types (>= 0.8.6)
     , http-media (>= 0.6)

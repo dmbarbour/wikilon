@@ -68,8 +68,9 @@ loadWikilon args = do
         , wikilon_secret = _secret
         }
 
--- | Ensure httpRoot includes initial and final slashes.
--- (This way it can directly be used as 'base' in HTML)
+-- initial root will always start and end with '/'. The
+-- empty string is modified to just "/". This simplifies
+-- construction of 'base' and alternative masters.
 wrapSlash :: ByteString -> ByteString
 wrapSlash = finiSlash . initSlash
 

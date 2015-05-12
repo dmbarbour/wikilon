@@ -365,8 +365,13 @@ htmlUseDefaultFavicon =
 -- # anchors must use the same relative paths. 
 htmlWikilonBase :: Wikilon -> HTML
 htmlWikilonBase w =
-    let baseVal = H.unsafeByteStringValue (wikilon_httpRoot w) in
+    let baseVal = H.unsafeByteStringValue $ finiSlash $ wikilon_httpRoot w in
     H.base ! A.href baseVal
+
+finiSlash :: BS.ByteString -> BS.ByteString
+finiSlash s = case BS.unsnoc s of
+    Just (_, 47) -> s
+    _ -> s <> "/"
 
 -- | utf8, base, css, favicon
 htmlHeaderCommon :: Wikilon -> HTML

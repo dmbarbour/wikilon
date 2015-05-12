@@ -80,11 +80,12 @@ explainWikilon _w = do
     H.p $ "Wikilon contains multiple " <> lnDicts <> ". Each dictionary defines multiple words.\n\
         \Dictionaries correspond roughly to wikis, and words to wiki pages.\n\
         \Unlike conventional wikis, every page in Wikilon defines a concrete mathematical\n\
-        \function using the " <> lnAO <> " and  " <> lnABC <> " languages. Functions may be\n\
-        \processed to generate static or dynamic content, e.g. (ℝ²→Color) can be sampled to\n\
-        \construct raster PNG images, while (µState. Text → (Text*State)) could be compiled\n\
-        \into a console app or interactive fiction. Wikilon will enable developers to create\n\
-        \ad-hoc new application types and alternative views for existing function types.\n\
+        \function using the " <> lnAO <> " and  " <> lnABC <> " languages.\n\
+        \Functions may be processed to generate static or dynamic content, e.g. (ℝ²→Color) \n\
+        \can be sampled to construct raster images, while (µState. Text → (Text*State)) can\n\
+        \be compiled into a simple console app or in-browser web app. Rather than normalizing\n\
+        \all applications to a common type, Wikilon will enable developers to create ad-hoc new\n\
+        \application types and alternative views for existing types.\n\
         \"
     H.p $ "Use of multiple dictionaries enables DVCS-based forking, sharing, stabilization.\n\
         \Open source communities can develop and curate massive dictionaries with millions of\n\
@@ -96,8 +97,9 @@ explainWikilon _w = do
     H.p "As a software platform, Wikilon shall host abstract virtual machines (AVMs) with a simple\n\
         \network model. This enables developers to model stateful services, such as chat servers or\n\
         \multi-user dungeons. Some simple Internet integration is also feasible, via XMLHttpRequest,\n\
-        \sockets, or websockets. Further, Wikilon allows override of critical pages, like this one,\n\
-        \by defining words in a configured 'master' dictionary.\n\
+        \sockets, or websockets. Further, Wikilon allows override of critical pages, such as this one,\n\
+        \by defining words in a configured 'master' dictionary. (Note: any dictionary may be viewed as\n\
+        \master via URI /d/dictName/wiki/.) Wikilon can thus be configured into ad-hoc web apps.\n\
         \"
     let lnWikilonGithub = hrefWikilonGithub "github readme and docs"
     H.p $ "See " <> lnWikilonGithub <> " for more details."
