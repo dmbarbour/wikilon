@@ -10,6 +10,7 @@ module Wikilon.Root
     , isAdminCode
     ) where
 
+import Data.Monoid
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
@@ -59,7 +60,7 @@ loadWikilon args = do
     return $! Wikilon
         { wikilon_home = args_home args 
         , wikilon_store = args_store args
-        , wikilon_httpRoot = moduloFinalSlash $ args_httpRoot args
+        , wikilon_httpRoot = wrapSlash $ args_httpRoot args
         , wikilon_master = args_master args
         , wikilon_dicts = _dicts
         , wikilon_uniqueSrc = _uniqueSrc
@@ -67,13 +68,20 @@ loadWikilon args = do
         , wikilon_secret = _secret
         }
 
--- | truncate any final '\/' character from given URI
--- (because the routing model assumes no final slash)
-moduloFinalSlash :: ByteString -> ByteString
-moduloFinalSlash s = case BS.unsnoc s of
-    Just (s', 47) -> moduloFinalSlash s'
-    _ -> s
+-- | Ensure httpRoot includes initial and final slashes.
+-- (This way it can directly be used as 'base' in HTML)
+wrapSlash :: ByteString -> ByteString
+wrapSlash = finiSlash . initSlash
 
+finiSlash :: ByteString -> ByteString
+finiSlash s = case BS.unsnoc s of
+    Just (_, 47) -> s
+    _ -> s <> "/"
+
+initSlash :: ByteString -> ByteString
+initSlash s = case BS.uncons s of
+    Just (47, _) -> s
+    _ -> "/" <> s
 
 incPVar :: PVar Integer -> IO Integer
 incPVar v = runVTx (pvar_space v) $ do

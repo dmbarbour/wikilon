@@ -29,7 +29,7 @@ wikilonRoutes = fmap (first UTF8.fromString) $
     ,("/d", allDictionaries)
     ,("/d/:d", dictResource)
     ,("/d/:d/w", dictWords)
-    ,("/action/dictCreate", dictPostCreate)
+    ,("/d.create", dictPostCreate)
     --,("/d(delete)", dictPostDelete)
     --,("/d/:d/w(create)", dictWordPostCreate)
     --,("/d/:d/w(delete)", dictWordPostDelete)

@@ -13,7 +13,7 @@
 --    forbid C0 SP DEL C1 U+FFFD 
 --    forbid empty string
 --  Text, HTML, and Delimiter friendly: 
---    forbid ,;{}(|)[]<>"`
+--    forbid ,;{}(|)[]<>"`&
 --    don't end with a .
 --  Not confusable with numbers:
 --    forbid words starting with digit
@@ -36,6 +36,7 @@
 module Wikilon.Dict.Word
     ( Word(..), textToWord, wordToText, wordToUTF8
     , isValidWord, isValidWordChar
+    , listWordConstraintsForHumans
     ) where
 
 import Data.Char (ord)
@@ -63,7 +64,7 @@ wcArray :: UA.UArray Word8 Bool
 wcArray = UA.accumArray (flip const) False (0,127) lst where
     toE c = (fromIntegral (ord c), True)
     lst = fmap toE okChars
-    okChars = alpha ++ num ++ "-._~!$&'*+=:@"
+    okChars = alpha ++ num ++ "-._~!$'*+=:@"
     alpha = ['a'..'z']++['A'..'Z']
     num = ['0'..'9']
 {-# NOINLINE wcArray #-}
@@ -90,6 +91,17 @@ _isPMD = flip L.elem "+-."
 
 _isDigit :: Char -> Bool
 _isDigit c = ('0' <= c) && (c <= '9')
+
+-- | heuristic constraints on words, for humans
+listWordConstraintsForHumans :: [String]
+listWordConstraintsForHumans =
+    ["ASCII if alphabetical, numeral, or in -._~!$'*+=:@"
+    ,"allows most UTF8 codes above C1, except for U+FFFD"
+    ,"must not start with digit or +-. followed by digit"
+    ,"must not terminate with a . (dot or period)"
+    ]
+    
+
 
 -- Show a Word
 instance Show Word where 

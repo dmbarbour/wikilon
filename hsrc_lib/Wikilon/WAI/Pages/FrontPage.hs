@@ -1,0 +1,119 @@
+{-# LANGUAGE OverloadedStrings #-}
+-- | Front page and root URI contents for Wikilon.
+module Wikilon.WAI.Pages.FrontPage
+    ( wikilonRoot
+    , wikilonFrontPage
+    , defaultFrontPage
+    , frontPageWord
+
+    , hrefAO, hrefABC
+    , hrefWikilonGithub
+    ) where
+
+import Data.Monoid
+import qualified Network.HTTP.Types as HTTP
+import Text.Blaze.Html5 ((!))
+import qualified Text.Blaze.Html5 as H
+import qualified Text.Blaze.Html5.Attributes as A
+import qualified Network.Wai as Wai
+
+import Wikilon.WAI.Utils
+import Wikilon.WAI.Routes
+import Wikilon.Dict (Word(..))
+import Wikilon.Root
+
+wikilonRoot :: WikilonApp
+wikilonRoot = app where
+    app = justGET onGet where
+        -- maybe add OPTIONS eventually?
+    onGet = branchOnOutputMedia $
+        [(mediaTypeTextHTML, wikilonFrontPage)
+        -- maybe add SOAP APIs and others, eventually
+        ]
+
+-- | Word to configure the Wikilon front page.
+frontPageWord :: Word
+frontPageWord = "wikilon:FrontPage"
+         
+-- | Our front page or primary index for Wikilon. I would like this
+-- to be driven by a dictionary, but I haven't quite worked out the
+-- detailed designs for this yet.
+--
+-- Note: I'd prefer to keep most static content out of this Wikilon executable.
+-- I probably want to push most content into the dictionary, then develop some
+-- initial dictionaries to help developers get started.
+--
+-- Explanations, tutorials, etc. will be shifted into these extra dictionaries.
+--  
+wikilonFrontPage :: WikilonApp
+wikilonFrontPage w _cap _rq k = k $ 
+    Wai.responseLBS HTTP.ok200 [textHtml] $ 
+    renderHTML $ defaultFrontPage w
+
+defaultFrontPage :: Wikilon -> HTML
+defaultFrontPage w = do
+    let title = "Wikilon"
+    H.head $ do
+        htmlHeaderCommon w
+        H.title title
+    H.body $ do
+        H.h1 title
+        explainWikilon w
+        H.h2 "Resources"
+        wikilonResources w
+    -- CONSIDER: providing a one-button click to import a common AO dict
+
+
+hrefAO, hrefABC, hrefWikilonGithub :: HTML -> HTML
+hrefAO = H.a ! A.href "https://github.com/dmbarbour/wikilon/blob/master/docs/AboutAO.md"
+hrefABC = H.a ! A.href "https://github.com/dmbarbour/wikilon/blob/master/docs/AboutABC.md"
+hrefWikilonGithub = H.a ! A.href "https://github.com/dmbarbour/wikilon"
+
+explainWikilon :: Wikilon -> HTML
+explainWikilon _w = do
+    H.p $ "Wikilon is a wiki-inspired software platform and integrated development \n\
+        \environment for Awelon project.\n\
+        \"
+    let lnDicts = H.a ! A.href "d" $ "dictionaries"
+    let lnAO = hrefAO "Awelon Object (AO)"
+    let lnABC = hrefABC "Awelon Bytecode (ABC)"
+    H.p $ "Wikilon contains multiple " <> lnDicts <> ". Each dictionary defines multiple words.\n\
+        \Dictionaries correspond roughly to wikis, and words to wiki pages.\n\
+        \Unlike conventional wikis, every page in Wikilon defines a concrete mathematical\n\
+        \function using the " <> lnAO <> " and  " <> lnABC <> " languages. Functions may be\n\
+        \processed to generate static or dynamic content, e.g. (ℝ²→Color) can be sampled to\n\
+        \construct raster PNG images, while (µState. Text → (Text*State)) could be compiled\n\
+        \into a console app or interactive fiction. Wikilon will enable developers to create\n\
+        \ad-hoc new application types and alternative views for existing function types.\n\
+        \"
+    H.p $ "Use of multiple dictionaries enables DVCS-based forking, sharing, stabilization.\n\
+        \Open source communities can develop and curate massive dictionaries with millions of\n\
+        \words covering everything from high level frameworks to low level details such as\n\
+        \SVG fonts and icon packs. AO has no separate notion of libraries or packages, and\n\
+        \content that would be static file resources in other languages should be modeled\n\
+        \using AO words (accessible for procedural generation and partial evaluation).\n\
+        \"
+    H.p "As a software platform, Wikilon shall host abstract virtual machines (AVMs) with a simple\n\
+        \network model. This enables developers to model stateful services, such as chat servers or\n\
+        \multi-user dungeons. Some simple Internet integration is also feasible, via XMLHttpRequest,\n\
+        \sockets, or websockets. Further, Wikilon allows override of critical pages, like this one,\n\
+        \by defining words in a configured 'master' dictionary.\n\
+        \"
+    let lnWikilonGithub = hrefWikilonGithub "github readme and docs"
+    H.p $ "See " <> lnWikilonGithub <> " for more details."
+
+wikilonResources :: Wikilon -> HTML
+wikilonResources w = listResources where
+    listResources = H.ul $ mapM_ H.li $ 
+            [rscFrontPage
+            ,rscListOfDicts
+            ,rscMasterDict
+            ,rscMasterFrontPage
+            ]
+    rscFrontPage = (H.a ! A.href "" ! A.rel "self" $ "/") <> " front page"
+    rscListOfDicts = (H.a ! A.href "d" $ "/d") <> " list of dictionaries"
+    masterDict = wikilon_master w
+    rscMasterDict = dictLink masterDict <> " - master dictionary"
+    rscMasterFrontPage = wordLink masterDict frontPageWord <> " - to configure this page"
+
+

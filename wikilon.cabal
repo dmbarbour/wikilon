@@ -107,8 +107,11 @@ Library
     Wikilon.WAI.Utils
     Wikilon.WAI.URL
     Wikilon.WAI.Routes
-    Wikilon.WAI.Pages
     Wikilon.WAI.Pages.AODict
+    Wikilon.WAI.Pages.DictList
+    Wikilon.WAI.Pages.FrontPage
+    Wikilon.WAI.Pages.Dict
+    Wikilon.WAI.Pages
     Wikilon.WAI
 
 

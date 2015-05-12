@@ -16,13 +16,12 @@ import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
-import qualified Text.Blaze.Html5 as HTML
-import qualified Text.Blaze.Html5.Attributes as Attrib
+import qualified Text.Blaze.Html5 as H
+import qualified Text.Blaze.Html5.Attributes as A
 
 import Wikilon.WAI.Utils
 import Wikilon.Branch (BranchName)
 import Wikilon.Dict (Word(..), isValidWord)
-import Wikilon.Root
 
 type Route = BS.ByteString
 
@@ -33,21 +32,21 @@ toRoute :: BB.Builder -> Route
 toRoute = LBS.toStrict . BB.toLazyByteString
 
 -- | URI associated with a holistic dictionary
-dictURI :: Wikilon -> BranchName -> Route
-dictURI wiki dictName = toRoute $ dictURIBuilder wiki dictName
+dictURI :: BranchName -> Route
+dictURI d = toRoute $ dictURIBuilder d
 
-dictURIBuilder :: Wikilon -> BranchName -> BB.Builder
-dictURIBuilder wiki dictName = 
-    BB.byteString (wikilon_httpRoot wiki) <>
-    BB.byteString "/d/" <>
-    HTTP.urlEncodeBuilder False dictName
+-- Note: I'm going to use a base tag for wikilon_httpRoot
+--  so all paths used within Wikilon can be relative to a common root.
+dictURIBuilder :: BranchName -> BB.Builder
+dictURIBuilder d = BB.byteString "d/" <> HTTP.urlEncodeBuilder False d
 
--- | anchor to branch name
-dictLink :: Wikilon -> BranchName -> HTML
-dictLink wiki b = 
-    let path = HTML.unsafeByteStringValue $ dictURI wiki b in
-    let humanText = HTML.unsafeByteString b in
-    HTML.a ! Attrib.href path $ humanText
+-- | anchor to branch name. Since branch name is constrained
+-- to be URI and text friendly, no escapes are necessary. 
+dictLink :: BranchName -> HTML
+dictLink d = 
+    let path = H.unsafeByteStringValue $ dictURI d in
+    let humanText = H.unsafeByteString d in
+    H.a ! A.href path $ humanText
 
 -- | obtain dictionary identifier from `:d` capture URL. This will
 -- also validate the dictionary identifier (dict names use same 
@@ -63,22 +62,20 @@ dictCap caps =
 --
 -- TODO: I could probably improve performance of this operation
 -- by a large amount. HTTP.urlEncodeBuilder is not very efficient.
-wordURI :: Wikilon -> BranchName -> Word -> Route
-wordURI wiki dictName w = toRoute $ wordURIBuilder wiki dictName w
+wordURI :: BranchName -> Word -> Route
+wordURI d w = toRoute $ wordURIBuilder d w
 
-wordURIBuilder :: Wikilon -> BranchName -> Word -> BB.Builder
-wordURIBuilder wiki dictName (Word wordBytes) = 
-    BB.byteString (wikilon_httpRoot wiki) <>
-    BB.byteString "/d/" <>
-    HTTP.urlEncodeBuilder False dictName <>
+wordURIBuilder :: BranchName -> Word -> BB.Builder
+wordURIBuilder d (Word wordBytes) = 
+    dictURIBuilder d <>
     BB.byteString "/w/" <>
     HTTP.urlEncodeBuilder False wordBytes
 
-wordLink :: Wikilon -> BranchName -> Word -> HTML
-wordLink wiki b w@(Word wbs) = 
-    let path = HTML.unsafeByteStringValue $ wordURI wiki b w in
-    let humanText = HTML.unsafeByteString wbs in
-    HTML.a ! Attrib.href path $ humanText
+wordLink :: BranchName -> Word -> HTML
+wordLink d w@(Word wbs) = 
+    let path = H.unsafeByteStringValue $ wordURI d w in
+    let humanText = H.unsafeByteString wbs in
+    H.a ! A.href path $ humanText
 
 -- | Obtain dictionary and word via :d and :w captures. 
 wordCap :: Captures -> Maybe (BranchName, Word)

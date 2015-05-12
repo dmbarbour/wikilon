@@ -1,6 +1,7 @@
 {-# LANGUAGE ViewPatterns, OverloadedStrings #-}
 -- | Pages for AODict import & export
-
+--
+-- todo: also support POST for AODict files
 module Wikilon.WAI.Pages.AODict
     ( dictAsAODict
     , exportAODict
@@ -28,7 +29,7 @@ import Wikilon.Time
 -- | endpoint that restricts media-type to just mediaTypeAODict
 dictAsAODict :: WikilonApp
 dictAsAODict = app where
-    app = routeOnMethod [(HTTP.methodGet, onGet), (HTTP.methodPut, onPut)]
+    app = routeOnMethod [(HTTP.methodGet, onGet),(HTTP.methodPut, onPut)]
     onGet = branchOnOutputMedia [(mediaTypeAODict, exportAODict)]
     onPut = branchOnInputMedia [(mediaTypeAODict, importAODict)]
 
@@ -45,7 +46,7 @@ exportAODict w (dictCap -> Just dictName) _rq k = do
     let status = HTTP.ok200
     let headers = [aodict,etag]
     k $ Wai.responseLBS status headers $ AODict.encode d
-exportAODict _ _ _ k = k badDictName
+exportAODict _ caps _ k = k $ eBadName caps
 
 -- | load a dictionary into Wikilon from a single file. 
 --
@@ -56,11 +57,11 @@ importAODict w (dictCap -> Just dictName) rq k =
     Wai.lazyRequestBody rq >>= \ body ->
     let (err, wordMap) = AODict.decodeAODict body in
     let bHasError = not (L.null err) in
-    let onError = k $ aodImportErrors $ fmap (H.string . show) err in
+    let onError = k $ aodImportErrors $ fmap show err in
     if bHasError then onError else
     let vc = vcache_space (wikilon_store w) in
     case Dict.insert (Dict.empty vc) (Map.toList wordMap) of
-        Left insertErrors -> k $ aodImportErrors $ fmap (H.string . show) insertErrors
+        Left insertErrors -> k $ aodImportErrors $ fmap show insertErrors
         Right dictVal -> do
             tNow <- getTime 
             runVTx vc $ 
@@ -69,9 +70,9 @@ importAODict w (dictCap -> Just dictName) rq k =
                     let b' = Branch.update (tNow, dictVal) b0 in
                     Branch.insert dictName b' bset
             k okNoContent
-importAODict _ _ _ k = k badDictName
+importAODict _ caps _ k = k $ eBadName caps
 
-aodImportErrors :: [HTML] -> Wai.Response
+aodImportErrors :: [String] -> Wai.Response
 aodImportErrors errors = 
     Wai.responseLBS HTTP.badRequest400 [textHtml, noCache] $ 
     renderHTML $ do
@@ -82,6 +83,6 @@ aodImportErrors errors =
         H.title title
     H.body $ do
         H.h1 title
-        H.p "Content was rejected. Do not resubmit without changes."
-        H.p "Messages:"
-        H.ul $ mapM_ H.li errors
+        H.p "Content rejected. Do not resubmit without changes."
+        H.p "Error Messages:"
+        H.ul $ mapM_ (H.li . H.string) errors

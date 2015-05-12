@@ -14,6 +14,7 @@ module Wikilon.WAI.Utils
 
     -- APPS
     , defaultRouteOnMethod
+    , toBeImplementedLater
 
     -- RESPONSES
     , htmlResponse
@@ -24,8 +25,11 @@ module Wikilon.WAI.Utils
     , eNotAcceptable
     , eUnsupportedMediaType
     , eNotFound
-    , badDictName
+    , eBadName
     , eServerError
+
+
+
 
     -- HEADERS
     , textHtml
@@ -37,9 +41,13 @@ module Wikilon.WAI.Utils
     , HTML
     , statusToTitle
     , renderHTML
+
     , htmlMetaNoIndex
     , htmlMetaCharsetUtf8
-
+    , htmlUseDefaultCSS
+    , htmlUseDefaultFavicon
+    , htmlWikilonBase
+    , htmlHeaderCommon
 
     -- MEDIA
     , mediaTypeAODict
@@ -69,7 +77,9 @@ import qualified Network.HTTP.Types as HTTP
 import qualified Network.HTTP.Media as HTTP
 -- import qualified Network.HTTP.Types.Header as HTTP
 import qualified Network.Wai as Wai
+import Wikilon.Dict.Word (listWordConstraintsForHumans)
 import Wikilon.WAI.Types
+import Wikilon.Root
 
 -- | Route based on method. Also provides reasonable default
 -- implementations for OPTIONS and HEAD.
@@ -236,20 +246,32 @@ eNotFound rq =
             H.string $ UTF8.toString $ HTTP.urlDecode False $ Wai.rawPathInfo rq
         H.p "Requested URI is unknown to the Wikilon server."
 
--- | 404 bad dictionary name.
-badDictName :: Wai.Response
-badDictName = 
+-- | 404 illegal URI (could not capture dictionary, word, or user name)
+eBadName :: Captures -> Wai.Response
+eBadName caps = 
     let status = HTTP.notFound404 in
     let headers = [textHtml, noCache] in
     Wai.responseLBS status headers $ renderHTML $ do
-        let title = "404 Illegal Dictionary Name"
+        let title = "404 Illegal URI"
         H.head $ do
             htmlMetaCharsetUtf8
             htmlMetaNoIndex
             H.title title
         H.body $ do
             H.h1 title
-            H.p "Dictionary name in URI invalid by Wikilon's heuristic constraints."
+            H.p "Name used in a client-constructed URI is invalid by Wikilon's\n\
+                \heuristic constraints. Dictionary, word, and user names use\n\
+                \the following rules:\n\
+                \"
+            H.ul $ mapM_ (H.li . H.string) listWordConstraintsForHumans
+            H.p "These constraints are intended to make words more friendly in\n\
+                \contexts of URIs, HTML, CSV, and documentation text. Any UTF-8\n\
+                \in a URI must additionally be %-encoded, but good browsers will\n\
+                \display it nicely.\n\
+                \"
+            H.h2 "Captures"
+            H.p "Captured name(s) for this URI:"
+            H.p $ H.string $ show caps
 
 -- | generic server failure should not contain any sensitive 
 -- information (for security reasons). Use with static strings.
@@ -267,6 +289,19 @@ eServerError msg =
         H.title title
     H.body $ do
         H.h1 title
+        H.p $ H.string msg
+
+
+-- | placeholder for applications I want to implement later...
+toBeImplementedLater :: String -> WikilonApp
+toBeImplementedLater msg _ _ _ k = k $ Wai.responseLBS HTTP.status202 [textHtml,noCache] $ 
+    renderHTML $ do 
+    H.head $ do 
+        htmlMetaCharsetUtf8
+        htmlMetaNoIndex
+        H.title $ H.string $ "TODO: " ++ msg
+    H.body $ do
+        H.h1 "TODO"
         H.p $ H.string msg
 
 -- | basic HTML response
@@ -311,6 +346,35 @@ htmlMetaNoIndex = H.meta ! A.name "robots" ! A.content "noindex, nofollow"
 -- | Indicate charset utf-8 redundantly in html content    
 htmlMetaCharsetUtf8 :: HTML
 htmlMetaCharsetUtf8 = H.meta ! A.charset "UTF-8"
+
+-- | The default CSS file will be available as css and css\/default
+-- actual css content will be left to the master dictionary
+htmlUseDefaultCSS :: HTML
+htmlUseDefaultCSS = 
+    H.link ! A.rel "stylesheet" ! A.type_ "text/css" ! A.href "css" 
+
+-- | I don't actually have any favicons at the moment, and I'll
+-- likely leave this to the master dictionary.
+htmlUseDefaultFavicon :: HTML
+htmlUseDefaultFavicon =
+    H.link ! A.rel "icons" ! A.type_ "image/png" ! A.href "favicon"
+
+-- | Rather than use wikilon_httpRoot as an absolute route in every URI, 
+-- I plan to use the \<base\> tag once in the header and use relative 
+-- routes to the wikilon_httpRoot. The disadvantage here is that all
+-- # anchors must use the same relative paths. 
+htmlWikilonBase :: Wikilon -> HTML
+htmlWikilonBase w =
+    let baseVal = H.unsafeByteStringValue (wikilon_httpRoot w) in
+    H.base ! A.href baseVal
+
+-- | utf8, base, css, favicon
+htmlHeaderCommon :: Wikilon -> HTML
+htmlHeaderCommon w = do
+    htmlMetaCharsetUtf8
+    htmlWikilonBase w
+    htmlUseDefaultCSS
+    htmlUseDefaultFavicon 
 
 -- | e.g. HTTP.status405 becomes "405 Method Not Allowed" suitable for
 -- a header or title.
