@@ -26,6 +26,7 @@ module Wikilon.WAI.Utils
     , eUnsupportedMediaType
     , eNotFound
     , eBadName
+    , eBadRequest
     , eServerError
 
 
@@ -272,6 +273,21 @@ eBadName caps =
             H.h2 "Captures"
             H.p "Captured name(s) for this URI:"
             H.p $ H.string $ show caps
+
+-- | generic response for bad requests. 
+eBadRequest :: String -> Wai.Response
+eBadRequest msg =
+    let status = HTTP.badRequest400 in
+    let headers = [noCache, textHtml] in
+    let title = statusToTitle status in
+    Wai.responseLBS status headers $ renderHTML $ do
+    H.head $ do
+        htmlMetaCharsetUtf8
+        htmlMetaNoIndex
+        H.title title
+    H.body $ do
+        H.h1 title
+        H.p $ H.string msg
 
 -- | generic server failure should not contain any sensitive 
 -- information (for security reasons). Use with static strings.

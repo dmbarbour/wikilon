@@ -1,13 +1,12 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, ViewPatterns #-}
 
 -- | Pages for the toplevel list-of-dictionaries
 module Wikilon.WAI.Pages.DictList
     ( allDictionaries
     , dictPostCreate
+    , formSimpleCreateDict
+    , ppDictName
     ) where
-
-
-
 
 import Control.Arrow (first)
 import Control.Applicative
@@ -29,15 +28,18 @@ import qualified Network.Wai as Wai
 import Database.VCache
 
 import Wikilon.WAI.Utils
+import Wikilon.WAI.RecvFormPost
 import Wikilon.WAI.URL
 import Wikilon.WAI.Routes
 import Wikilon.Branch (BranchName)
 import qualified Wikilon.Branch as Branch
-import Wikilon.Dict (Word(..))
+import Wikilon.Dict (Word(..), isValidWord)
 import qualified Wikilon.Dict as Dict
 import qualified Wikilon.Dict.AODict as AODict
 import Wikilon.Root
 import Wikilon.Time
+
+import qualified Awelon.ABC as ABC
 
 -- | Okay, so our first resource is a collection of dictionaries.
 -- There aren't any whole-collection updates at this layer, but
@@ -75,7 +77,7 @@ listOfDictsPage :: WikilonApp
 listOfDictsPage w _cap _rq k =
     readPVarIO (wikilon_dicts w) >>= \ bset ->
     let etag = eTagNW (Branch.unsafeBranchSetAddr bset) in
-    let title = "Wikilon Dictionaries" in
+    let title = H.string "Wikilon Dictionaries" in
     k $ Wai.responseLBS HTTP.ok200 [textHtml, etag] $ renderHTML $ do
     H.head $ do
         htmlHeaderCommon w
@@ -94,7 +96,7 @@ listDictsHTML :: Wikilon -> Branch.BranchSet -> HTML
 listDictsHTML w bset = do
     H.table $ do
         H.tr $ mapM_ H.th ["Dictionary", "Versions", "Modified", "Head-ETag"]
-        forM_ (Branch.toList bset) $ \ (bname,b) -> do
+        forM_ (Branch.toList bset) $ \ (bname,b) -> H.tr $ do 
             let d0 = Branch.head b
             H.td $ dictLink bname
             H.td $ H.toMarkup $ Branch.branchSize b
@@ -103,6 +105,7 @@ listDictsHTML w bset = do
     H.p $ H.b $ "Count of Dictionaries: " <> H.toMarkup (Branch.width bset) 
     H.p $ H.b $ "Count of Versions: " <> H.toMarkup (Branch.volume bset)
 
+-- | todo: consider authorization requirements for creating a dictionary
 dictPostCreate :: WikilonApp
 dictPostCreate = app where 
     app = routeOnMethod
@@ -115,19 +118,67 @@ dictPostCreate = app where
         H.body $ do
             H.h1 title
             formSimpleCreateDict
-    onPost = toBeImplementedLater "handle POST dict create!"
+    onPost = recvFormPost onFormPost
+    onFormPost :: PostParams -> WikilonApp
+    onFormPost (ppDictName -> Just d) w _cap _rq k = do
+        -- authorize (TODO) then create
+        createDict w d
+        -- then goto the named dictionary (be it new or old)
+        k $ gotoDict w d
+    onFormPost _pp _w _cap _rq k = k $ eBadRequest "invalid dictName"
+
+gotoDict :: Wikilon -> BranchName -> Wai.Response
+gotoDict w d = 
+    let status = HTTP.seeOther303 in
+    let location = (HTTP.hLocation, wikilon_httpRoot w <> dictURI d) in
+    let headers = [location, noCache, textHtml] in
+    let title = H.string $ "Redirect to Dictionary " ++ UTF8.toString d in
+    Wai.responseLBS status headers $ renderHTML $ do
+    H.head $ do
+        htmlHeaderCommon w
+        H.title title
+    H.body $ do
+        H.h1 title
+        H.p $ "If you aren't automatically redirected, goto " <> dictLink d
+
+
+-- Create a valid AO definition that simply exports text
+--  e.g. "text\n~[v'c]
+aoTextDef :: ABC.Text -> ABC.ABC
+aoTextDef txt = ABC.ABC [ABC.ABC_Text txt, ABC.ABC_Block "v'c"]
+
+-- | Create a dictionary with an initial entry, or return
+-- without changing anything.
+createDict :: Wikilon -> BranchName -> IO Bool
+createDict w d =
+    let vc = vcache_space (wikilon_store w) in
+    getTime >>= \ tNow ->
+    runVTx vc $ 
+        readPVar (wikilon_dicts w) >>= \ bset ->
+        let b0 = Branch.lookup' d bset in
+        let bNew = Dict.null (Branch.head b0) in
+        if not bNew then return False else
+        let tNowText = LazyUTF8.fromString $ show tNow in
+        let initWords = [("dictMeta:timeCreated", aoTextDef tNowText)] in
+        case Dict.insert (Branch.head b0) initWords of
+            Left _ -> return False -- shouldn't happen...
+            Right d' -> do
+                let b' = Branch.update (tNow,d') b0 
+                let bset' = Branch.insert d b' bset 
+                writePVar (wikilon_dicts w) bset'
+                return True
+
+ppDictName :: PostParams -> Maybe BranchName
+ppDictName ps = 
+    L.lookup "dictName" ps >>= \ p ->
+    let d = LBS.toStrict (postParamContent p) in
+    if not (isValidWord (Word d)) then mzero else
+    return d
 
 -- | a simple form for creation of a dictionary
 formSimpleCreateDict :: HTML
 formSimpleCreateDict = H.form ! A.action "d.create" ! A.method "POST" $ do
     H.input ! A.type_ "text" ! A.required "true" ! A.name "dictName"
     H.input ! A.type_ "submit" ! A.value "Create"
-
--- not sure I'll ever use deletion via form
-formSimpleDeleteDict :: HTML
-formSimpleDeleteDict = H.form ! A.action "d.delete" ! A.method "POST" $ do
-    H.input ! A.type_ "text" ! A.required "true" ! A.name "dictName"
-    H.input ! A.type_ "submit" ! A.value "Delete"
-
 
 

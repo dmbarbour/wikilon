@@ -5,7 +5,8 @@
 -- currently just a thin wrapper around Network.Wai.Parse.parseRequestBody
 module Wikilon.WAI.RecvFormPost
     ( recvFormPost
-    , PostParam(..)
+    , PostParams
+    , PostParam
     , FileInfo(..)
     , postParamContent
     ) where
@@ -16,6 +17,7 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Network.Wai.Parse as Wai
 import Wikilon.WAI.Utils
 
+type PostParams = [(BS.ByteString, PostParam)]
 type PostParam = Either FileInfo LBS.ByteString 
 data FileInfo = FileInfo
     { fileName :: BS.ByteString
@@ -26,7 +28,7 @@ data FileInfo = FileInfo
 postParamContent :: PostParam -> LBS.ByteString
 postParamContent = either fileContent id 
 
-recvFormPost :: ([(BS.ByteString, PostParam)] -> WikilonApp) -> WikilonApp
+recvFormPost :: (PostParams -> WikilonApp) -> WikilonApp
 recvFormPost appWithParams = app where
     app = branchOnInputMedia -- validate the two common post types.
         [(mediaTypeFormURLEncoded, appParsed)
