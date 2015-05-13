@@ -9,11 +9,13 @@ module Wikilon.WAI.RecvFormPost
     , PostParam
     , FileInfo(..)
     , postParamContent
+    , parseRequestPostParams
     ) where
 
 import Control.Arrow (second)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import qualified Network.Wai as Wai
 import qualified Network.Wai.Parse as Wai
 import Wikilon.WAI.Utils
 
@@ -35,10 +37,15 @@ recvFormPost appWithParams = app where
         ,(mediaTypeMultiPartFormData, appParsed)
         ]
     appParsed w cap rq k =
-        Wai.parseRequestBody Wai.lbsBackEnd rq >>= \ (ps,fs) ->
-        let ps' = fmap (second (Right . LBS.fromStrict)) ps in
-        let fs' = fmap (second (Left . fromWaiFileInfo)) fs in
-        appWithParams (ps' ++ fs') w cap rq k
+        parseRequestPostParams rq >>= \ pps ->
+        appWithParams pps w cap rq k
+
+parseRequestPostParams :: Wai.Request -> IO PostParams
+parseRequestPostParams rq =
+    Wai.parseRequestBody Wai.lbsBackEnd rq >>= \ (ps,fs) ->
+    let ps' = fmap (second (Right . LBS.fromStrict)) ps in
+    let fs' = fmap (second (Left . fromWaiFileInfo)) fs in
+    return (ps' ++ fs')
 
 -- trivial conversion
 fromWaiFileInfo :: Wai.FileInfo LBS.ByteString -> FileInfo

@@ -85,7 +85,8 @@ listOfDictsPage w _cap _rq k =
     H.body $ do
         H.h1 title
         listDictsHTML w bset
-        formSimpleCreateDict
+        H.p $ (H.b "Master Dictionary: ") <> dictLink (wikilon_master w)
+        H.p $ formSimpleCreateDict
         --H.div ! A.class_ "boxed" $ formSimpleCreateDict
 {-
         H.h2 "Delete a Dictionary"
