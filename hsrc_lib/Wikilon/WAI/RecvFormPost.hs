@@ -1,4 +1,4 @@
-
+{-# LANGUAGE OverloadedStrings #-}
 -- | specific utility for receiving Form Post messages
 -- i.e. using multipart\/form-data or application\/x-www-url-encoded
 -- 
@@ -9,6 +9,7 @@ module Wikilon.WAI.RecvFormPost
     , PostParam
     , FileInfo(..)
     , postParamContent
+    , postParamContentUnzip
     , parseRequestPostParams
     ) where
 
@@ -17,6 +18,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Parse as Wai
+import qualified Codec.Compression.GZip as GZip
 import Wikilon.WAI.Utils
 
 type PostParams = [(BS.ByteString, PostParam)]
@@ -27,8 +29,22 @@ data FileInfo = FileInfo
     , fileContent :: LBS.ByteString
     }
 
+-- | basic extract bytestring from a post param
 postParamContent :: PostParam -> LBS.ByteString
 postParamContent = either fileContent id 
+
+-- | extendeded variation of postParamContentUnzip that can 
+-- heuristically handle gzipped files:
+--   .gz extension 
+--   application\/gzip
+--   application\/x-gzip
+postParamContentUnzip :: PostParam -> LBS.ByteString
+postParamContentUnzip = either fromFile id where
+    fromFile f = 
+        let ungz = if gzipped f then GZip.decompress else id in
+        ungz $ fileContent f
+    gzipped f = ("gzip" `BS.isSuffixOf` fileContentType f)
+        || (".gz" `BS.isSuffixOf` fileName f)
 
 recvFormPost :: (PostParams -> WikilonApp) -> WikilonApp
 recvFormPost appWithParams = app where

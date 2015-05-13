@@ -123,7 +123,7 @@ dictPostCreate = app where
     onFormPost :: PostParams -> WikilonApp
     onFormPost (ppDictName -> Just d) w _cap _rq k = do
         -- authorize (TODO) then create
-        createDict w d
+        _ <- createDict w d
         -- then goto the named dictionary (be it new or old)
         k $ gotoDict w d
     onFormPost _pp _w _cap _rq k = k $ eBadRequest "invalid dictName"

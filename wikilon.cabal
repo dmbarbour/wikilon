@@ -4,18 +4,12 @@ Synopsis: Wiki-based IDE and platform for Awelon project
 Category: Awelon, Application, Application Server
 Description:
   Wikilon is a user-programmable wiki for Awelon project. Unlike 
-  conventional wikis, pages in Wikilon define functions that may be
-  applied to ad-hoc arguments, cross-compiled into applications, or
-  hosted as web services. Pages may refer to functions defined by 
-  other pages, albeit restricted to acylic definition. Internally,
-  pages support ad-hoc, user-defined structure as a rich alternative
-  to DSLs.
+  conventional wikis, pages in Wikilon define concrete mathematical
+  functions. Static content may be extracted from these functions,
+  or interactive content by cross-compilation.
   .
-  Wikilon can support a branching dictionary, taking inspiration from
-  github. Hosted applications support live programming, binding to a
-  particular branch of the dictionary. Hosted applications are modeled
-  as belonging to abstract virtual machines so they are easily migrated
-  to or from dedicated servers (i.e. as an approach to scalability).
+  While developed using Haskell, Wikilon is primarily oriented around
+  the Awelon Bytecode (ABC) and Awelon Object (AO) languages. 
   
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com
@@ -81,6 +75,7 @@ Library
     , cryptohash (>= 0.11)
     , byteable
     , entropy
+    , zlib
 
   Exposed-Modules:
 

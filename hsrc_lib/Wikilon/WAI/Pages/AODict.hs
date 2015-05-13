@@ -4,16 +4,19 @@
 -- todo: also support POST for AODict files
 module Wikilon.WAI.Pages.AODict
     ( dictAsAODict
-    , dictAsAODictFile
+    --, dictAsAODictGzip
     , exportAODict
-    , exportAODictFile
+    --, exportAODictGzip
+    , exportAODictRaw
     , importAODict
     , recvAODictFormPost
     ) where
 
+import Control.Applicative
 import Data.Monoid
 import qualified Data.List as L
 import qualified Data.Map as Map
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Network.HTTP.Types as HTTP
 import qualified Network.HTTP.Media as HTTP
@@ -36,48 +39,49 @@ import Wikilon.Time
 dictAsAODict :: WikilonApp
 dictAsAODict = app where
     app = routeOnMethod [(HTTP.methodGet, onGet),(HTTP.methodPut, onPut),(HTTP.methodPost, onPost)]
-    onGet = branchOnOutputMedia [(mediaTypeAODict, exportAODict)]
-    onPut = branchOnInputMedia [(mediaTypeAODict, importAODict)]
+    onGet = branchOnOutputMedia [(mediaTypeAODict, exportAODict) {-, (mediaTypeGzip, exportAODictGzip) -}]
+    onPut = branchOnInputMedia [(mediaTypeAODict, importAODict)  {-, (mediaTypeGzip, importAODictGzip) -}]
     onPost = recvFormPost recvAODictFormPost
-
--- | force GET as file.
-dictAsAODictFile :: WikilonApp
-dictAsAODictFile = app where
-    app = routeOnMethod [(HTTP.methodGet, onGet),(HTTP.methodPut, onPut),(HTTP.methodPost,onPost)]
-    onGet = branchOnOutputMedia [(mediaTypeAODict, exportAODictFile)]
-    onPut = branchOnInputMedia [(mediaTypeAODict, importAODict)]
-    onPost = recvFormPost recvAODictFormPost
-
--- | export with file attachment disposition
-exportAODictFile :: WikilonApp
-exportAODictFile w (dictCap -> Just dictName) _rq k = do
-    branchSet <- readPVarIO (wikilon_dicts w)
-    let d = Branch.head $ Branch.lookup' dictName branchSet
-    let etag = eTagN $ Dict.unsafeDictAddr d
-    let aodict = (HTTP.hContentType, HTTP.renderHeader mediaTypeAODict)
-    let status = HTTP.ok200
-    let fname = dictName <> ".ao" 
-    let asFile = ("Content-Disposition", "attachment; filename=" <> fname) 
-    let headers = [aodict, etag, asFile]
-    k $ Wai.responseLBS status headers $ AODict.encode d
-exportAODictFile _ caps _ k = k $ eBadName caps
 
 -- | our primary export model for dictionaries. 
 --
+-- OPTIONS:
+--  ?asFile   -- export as file
+--  ?words=a,b,c -- select given root words
+--
 -- TODO: I may need authorization for some dictionaries.
--- TODO: support GZIP encoding.
 exportAODict :: WikilonApp
-exportAODict w (dictCap -> Just dictName) _rq k = do
-    branchSet <- readPVarIO (wikilon_dicts w)
-    let d = Branch.head $ Branch.lookup' dictName branchSet
-    let etag = eTagN $ Dict.unsafeDictAddr d
-    let aodict = (HTTP.hContentType, HTTP.renderHeader mediaTypeAODict)
-    let status = HTTP.ok200
-    let headers = [aodict,etag]
-    k $ Wai.responseLBS status headers $ AODict.encode d
-exportAODict _ caps _ k = k $ eBadName caps
+exportAODict = enableGzipEncoding exportAODictRaw
 
--- receive a dictionary via Post, primarily for importing .ao files
+exportAODictRaw :: WikilonApp
+exportAODictRaw w (dictCap -> Just dictName) rq k = do
+    bset <- readPVarIO (wikilon_dicts w)
+    let d = Branch.head $ Branch.lookup' dictName bset
+    let etag = return $ eTagN $ Dict.unsafeDictAddr d
+    let aodict = return (HTTP.hContentType, HTTP.renderHeader mediaTypeAODict)
+    -- allow 'asFile' option in query string for file disposition
+    let bAsFile = L.elem "asFile" $ fmap fst $ Wai.queryString rq
+    let asFile = if not bAsFile then [] else return $
+            ("Content-Disposition" 
+            ,mconcat ["attachment; filename=", dictName, ".ao"])
+    let status = HTTP.ok200
+    let headers = aodict <> etag <> asFile
+    let lWords = case L.lookup "words" (Wai.queryString rq) of
+            Just (Just bs) -> Dict.Word . trim <$> BS.split 44 bs
+            _ -> []
+    let body = if L.null lWords then AODict.encode d else 
+               AODict.encodeWords d lWords
+    k $ Wai.responseLBS status headers body
+exportAODictRaw _ caps _ k = k $ eBadName caps
+
+-- trim whitespace from bytestring
+trim :: BS.ByteString -> BS.ByteString
+trim = trimL . trimR where
+    trimL = snd . BS.span isSP
+    trimR = fst . BS.spanEnd isSP
+    isSP w = ((10 == w) || (13 == w) || (32 == w))
+
+-- receive a dictionary via Post, primarily for importing .ao or .ao.gz files
 recvAODictFormPost :: PostParams -> WikilonApp
 recvAODictFormPost (ppAODict -> Just body) w (dictCap -> Just dictName) rq k =
     importAODict' dictName body w rq k
@@ -87,10 +91,11 @@ recvAODictFormPost pp _w captures _rq k =
         Just _ -> k $ eBadName captures
 
 ppAODict :: PostParams -> Maybe LBS.ByteString
-ppAODict = fmap postParamContent . L.lookup "aodict"
+ppAODict = fmap postParamContentUnzip . L.lookup "aodict"
 
--- | load a dictionary into Wikilon from a single file. 
---
+-- | load a dictionary into Wikilon from a single file.
+-- This may delete words in the original dictionary.
+-- 
 -- TODO: I may need authorization for some dictionaries.
 -- TODO: support GZIP encoding.
 importAODict :: WikilonApp 
@@ -99,6 +104,7 @@ importAODict w (dictCap -> Just dictName) rq k =
     importAODict' dictName body w rq k
 importAODict _ caps _ k = k $ eBadName caps
 
+-- | 
 importAODict' :: Branch.BranchName -> LBS.ByteString -> Wikilon -> Wai.Application
 importAODict' dictName body w _rq k =
     let (err, wordMap) = AODict.decodeAODict body in

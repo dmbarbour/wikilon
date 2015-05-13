@@ -5,19 +5,25 @@
 module Wikilon.Root
     ( Args(..), defaultArgs
     , Wikilon(..)
+    , wikilon_errlog
+    , logSomeException, logException, logErrorMessage
     , loadWikilon
     , adminCode
     , isAdminCode
     ) where
 
+import Control.Exception (SomeException, Exception)
 import Data.Monoid
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import Database.VCache
+import Data.VCache.LoB (LoB)
+import qualified Data.VCache.LoB as LoB
 import Wikilon.Secret
 import Wikilon.SecureHash
 import Wikilon.Branch (BranchSet, BranchName)
+import Wikilon.Time (T, getTime)
 import qualified Wikilon.Branch as Br
 import qualified Awelon.Base16 as B16
 
@@ -67,6 +73,25 @@ loadWikilon args = do
         , wikilon_loadCount = _loadCount
         , wikilon_secret = _secret
         }
+
+-- | Access the error log. I'm not going to bother keeping this one
+-- in active memory at the moment. 
+wikilon_errlog :: Wikilon -> PVar (LoB (T,UTF8.ByteString))
+wikilon_errlog w = loadRootPVar (wikilon_store w) "errlog" (LoB.empty vc 16) where
+    vc = vcache_space $ wikilon_store w
+
+logSomeException :: Wikilon -> SomeException -> IO ()
+logSomeException = logException
+
+logException :: (Exception e) => Wikilon -> e -> IO ()
+logException w = logErrorMessage w . UTF8.fromString . show
+
+logErrorMessage :: Wikilon -> UTF8.ByteString -> IO ()
+logErrorMessage w msg =
+    let var = wikilon_errlog w in
+    let vc = pvar_space var in
+    getTime >>= \ tNow ->
+    runVTx vc $ modifyPVar var $ LoB.cons (tNow, msg)
 
 -- initial root will always start and end with '/'. The
 -- empty string is modified to just "/". This simplifies

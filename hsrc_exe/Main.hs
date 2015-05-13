@@ -154,7 +154,8 @@ runWikilonInstance a = mainBody where
             let run = if bUseTLS then WarpTLS.runTLS tlsSettings warpSettings
                                  else Warp.runSettings warpSettings 
             in
-            run (Wikilon.wikilonWaiApp wiki) -- loop until interrupted
+            let app = Wikilon.wikilonWaiApp wiki in
+            run app
     badArgs = _badArgs a
     hasBadArgs = not $ L.null badArgs
     failWithBadArgs = err badArgMsg >> err helpMessage >> Sys.exitFailure
@@ -168,7 +169,6 @@ runWikilonInstance a = mainBody where
         Sys.putStrLn ("  Cache: " ++ show cache ++ " MB") >>
         Sys.putStrLn ("  HTTPS: " ++ show bUseTLS) >>
         Sys.putStrLn ("  Admin: " ++ UTF8.toString (Wikilon.adminCode wiki))
-
 
 showFP :: FS.FilePath -> String
 showFP = id

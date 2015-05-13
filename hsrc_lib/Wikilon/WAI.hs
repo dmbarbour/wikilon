@@ -9,6 +9,7 @@ module Wikilon.WAI
     ) where
 
 import Control.Arrow (first)
+import Control.Exception (catch)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
@@ -48,14 +49,21 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 --    ,("/u",listOfUsers)
 --    ,("/u/:u",singleUser)
 
-    -- special endpoints to force media types or dispositions
+    -- special endpoints to force media types
     ,("/d/:d/aodict", dictAsAODict)
-    ,("/d/:d/aodict.file", dictAsAODictFile)
+--  ,("/d/:d/aodict.gz", dictAsAODictGzip)
 --    ,("/favicon", resourceFavicon)
     ]
 
+-- | The primary wikilon web service. Any exceptions will be logged
+-- for administrators and return a 500 response.
 wikilonWaiApp :: Wikilon -> Wai.Application
-wikilonWaiApp w rq k =
+wikilonWaiApp w rq k = catch (baseWikilonApp w rq k) $ \ e -> do 
+    logSomeException w e
+    k $ eServerError "unhandled exception (logged for admin)"
+
+baseWikilonApp :: Wikilon -> Wai.Application
+baseWikilonApp w rq k =
     -- require: request is received under Wikilon's httpRoot
     let nRootLen = BS.length (wikilon_httpRoot w) in
     let (uriRoot,uriPath) = BS.splitAt nRootLen (Wai.rawPathInfo rq) in
@@ -91,7 +99,7 @@ remaster dictPath w rq k =
     let _httpRoot = BS.take prefixLen (Wai.rawPathInfo rq) in
     let _master = HTTP.urlDecode False dictPath in
     let w' = w { wikilon_master = _master, wikilon_httpRoot = _httpRoot } in
-    wikilonWaiApp w' rq k
+    baseWikilonApp w' rq k
 
 -- | Echo request (for development purposes)
 echo :: Wai.Application

@@ -6,11 +6,12 @@ module Wikilon.WAI.Utils
     ( routeOnMethod
     , routeOnMethod'
     , justGET
-
     , branchOnInputMedia
     , branchOnInputMedia'
     , branchOnOutputMedia
     , branchOnOutputMedia'
+    , waiMiddleware
+    , enableGzipEncoding
 
     -- APPS
     , defaultRouteOnMethod
@@ -57,6 +58,7 @@ module Wikilon.WAI.Utils
     , mediaTypeTextCSV
     , mediaTypeFormURLEncoded
     , mediaTypeMultiPartFormData
+    , mediaTypeGzip
 
     , module Wikilon.WAI.Types
     ) where
@@ -78,6 +80,7 @@ import qualified Network.HTTP.Types as HTTP
 import qualified Network.HTTP.Media as HTTP
 -- import qualified Network.HTTP.Types.Header as HTTP
 import qualified Network.Wai as Wai
+import qualified Network.Wai.Middleware.Gzip as Wai
 import Wikilon.Dict.Word (listWordConstraintsForHumans)
 import Wikilon.WAI.Types
 import Wikilon.Root
@@ -94,6 +97,13 @@ routeOnMethod' lms def w cap rq k =
         Just app -> app w cap rq k
         Nothing -> def w cap rq k
 {-# INLINE routeOnMethod' #-}
+
+waiMiddleware :: Wai.Middleware -> Middleware
+waiMiddleware mw app w cap = mw (app w cap)
+{-# INLINE waiMiddleware #-}
+
+enableGzipEncoding :: Middleware
+enableGzipEncoding = waiMiddleware (Wai.gzip Wai.def)
 
 -- | Application route that only supports 'GET'
 justGET :: WikilonApp -> WikilonApp
@@ -339,6 +349,7 @@ plainText = (HTTP.hContentType,"text/plain; charset=utf-8")
 noCache :: HTTP.Header
 noCache = (HTTP.hCacheControl, "no-cache")
 
+
 -- | ETag: number  (weak or strong)
 eTagN, eTagNW :: (Integral n) => n -> HTTP.Header
 eTagN n = ("ETag", UTF8.fromString $ show (show (toInteger n)))
@@ -421,4 +432,7 @@ mediaTypeFormURLEncoded = "application/x-www-form-urlencoded"
 
 mediaTypeMultiPartFormData :: HTTP.MediaType
 mediaTypeMultiPartFormData = "multipart/form-data"
+
+mediaTypeGzip :: HTTP.MediaType
+mediaTypeGzip = "application/gzip"
 
