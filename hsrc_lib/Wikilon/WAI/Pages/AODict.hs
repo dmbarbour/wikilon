@@ -43,8 +43,10 @@ dictAsAODict = app where
 -- | force GET as file.
 dictAsAODictFile :: WikilonApp
 dictAsAODictFile = app where
-    app = routeOnMethod [(HTTP.methodGet, onGet)]
+    app = routeOnMethod [(HTTP.methodGet, onGet),(HTTP.methodPut, onPut),(HTTP.methodPost,onPost)]
     onGet = branchOnOutputMedia [(mediaTypeAODict, exportAODictFile)]
+    onPut = branchOnInputMedia [(mediaTypeAODict, importAODict)]
+    onPost = recvFormPost recvAODictFormPost
 
 -- | export with file attachment disposition
 exportAODictFile :: WikilonApp
