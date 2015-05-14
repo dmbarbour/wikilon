@@ -57,7 +57,7 @@ exportAODictRaw :: WikilonApp
 exportAODictRaw w (dictCap -> Just dictName) rq k = do
     bset <- readPVarIO (wikilon_dicts w)
     let d = Branch.head $ Branch.lookup' dictName bset
-    let etag = return $ eTagN $ Dict.unsafeDictAddr d
+    let etag = return $ eTagNW $ Dict.unsafeDictAddr d
     let aodict = return (HTTP.hContentType, HTTP.renderHeader mediaTypeAODict)
     -- allow 'asFile' option in query string for file disposition
     let bAsFile = L.elem "asFile" $ fmap fst $ Wai.queryString rq

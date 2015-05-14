@@ -271,11 +271,11 @@ eBadName caps =
         H.body $ do
             H.h1 title
             H.p "Name used in a client-constructed URI is invalid by Wikilon's\n\
-                \heuristic constraints. Dictionary, word, and user names use\n\
-                \the following rules:\n\
+                \heuristic constraints. Dictionary, word, tokens, and user names\n\
+                \must obey the following rules:\n\
                 \"
             H.ul $ mapM_ (H.li . H.string) listWordConstraintsForHumans
-            H.p "These constraints are intended to make words more friendly in\n\
+            H.p "These constraints are intended to make names more friendly in\n\
                 \contexts of URIs, HTML, CSV, and documentation text. Any UTF-8\n\
                 \in a URI must additionally be %-encoded, but good browsers will\n\
                 \display it nicely.\n\

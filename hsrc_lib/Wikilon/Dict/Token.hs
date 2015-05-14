@@ -21,8 +21,9 @@ module Wikilon.Dict.Token
     , isValidToken
     ) where
 
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
-import qualified Data.List as L
+-- import qualified Data.List as L
 
 import Awelon.ABC (Token)
 import Wikilon.Dict.Word
@@ -37,7 +38,8 @@ import Wikilon.Dict.Word
 --
 -- The 'valid as words' constraint makes it easier to attach documentation
 -- and rendering functions and such for the sealers or annotations through
--- naming conventions. 
+-- naming conventions. Also, for URIs. Wikilon will simply reject dictionaries
+-- that use invalid tokens.
 --
 isValidToken :: Token -> Bool
 isValidToken t = case UTF8.uncons t of
@@ -47,10 +49,8 @@ isValidToken t = case UTF8.uncons t of
     Just ('.', u) -> isValidSeal u
     _ -> False
 
--- note: empty seal, just {:} and {.}, is okay
 isValidSeal :: Token -> Bool
-isValidSeal = L.all okc . UTF8.toString where
-    okc c = isValidWordChar c && ('$' /= c)
+isValidSeal s = isValidWord (Word s) && BS.notElem 36 s
 
 isValidAnno :: Token -> Bool
 isValidAnno = isValidWord . Word
