@@ -1,10 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Primary routes and web-apps for Wikilon.
+-- | Primary routes and web-apps for Wikilon. 
+--
+-- Note that this is coupled to wikilonRoutes from the Wikilon.WAI module.
 module Wikilon.WAI.Routes
     ( stringToRoute
+    , Route
     , dictURI, dictURIBuilder, dictLink, dictCap
     , wordURI, wordURIBuilder, wordLink, wordCap
-    , Route
+
+    , uriAODict, uriAODictGz
     ) where
 
 import Control.Monad
@@ -56,6 +60,11 @@ dictCap caps =
     L.lookup "d" caps >>= \ d -> 
     if not (isValidWord (Word d)) then mzero else
     return d
+
+
+uriAODict, uriAODictGz :: BranchName -> Route
+uriAODict d = toRoute $ dictURIBuilder d <> "/aodict"
+uriAODictGz d = toRoute $ dictURIBuilder d <> "/aodict.gz"
     
 -- | URI associated for a specific word in a named dictionary
 -- This includes pct-encoded escapes as necessary.
