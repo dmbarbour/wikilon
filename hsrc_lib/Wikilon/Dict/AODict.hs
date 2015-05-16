@@ -8,20 +8,17 @@
 --   @swap [rwrwzwlwl][]
 --   @over [{%dupd} {%swap}][]
 --   @dup.doc "(Copyable x) ⇒ x -- x x
---    ~[v'c]
+--   ~[v'c]
 --
--- This format is called 'AODict' and has the Internet media type:
+-- The character @ does not appear in ABC and is not ambiguous here.
+-- No escapes are needed. There are two primary structural constraints,
+-- that a word is defined only after all of its defined dependencies,
+-- and that a word is defined at most once.
+--
+-- This format is called 'AODict' and uses internet media type:
 --
 --    text\/vnd.org.awelon.aodict
 --
--- Besides defining each word starting at a newline and escape rules
--- for LF (escape by following SP), this format is expected to ensure
--- that all dependencies for any given word are defined before that
--- word, and that every word is defined exactly once. This guards two
--- invariants for dictionaries: acyclic and fully defined.
---
--- Note: I'll create a separate but similar format for patching a
--- dictionary. This particular model is just for full dictionaries.
 module Wikilon.Dict.AODict
     ( mimeType
     , dictWords
@@ -37,7 +34,6 @@ module Wikilon.Dict.AODict
 
 import Control.Arrow (first)
 import Data.Monoid
-import Data.Maybe (mapMaybe)
 import qualified Data.List as L
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -59,27 +55,30 @@ mimeType :: BS.ByteString
 mimeType = UTF8.fromString "text/vnd.org.awelon.aodict"
 
 -- | Obtain a list of words from our dictionary ordered such that
--- all dependencies of a word are defined before that word, and 
--- all words are listed exactly once.
+-- all defined dependencies of a word are listed before that word
+-- and all defined words are listed exactly once.
 dictWords :: Dict -> [Word]
 dictWords d = dictWords' d (wordsInDict d)
 
 -- | List requested words in a dictionary together with transitive
 -- dependencies. The resulting list will not contain any duplicates,
 -- and words will be ordered such that transitive dependencies 
--- appear before a word.
+-- appear before a word (modulo cycles in an unhealthy dictionary).
 dictWords' :: Dict -> [Word] -> [Word]
-dictWords' d = _dictWords d mempty
+dictWords' d = _dictWords d mempty mempty
 
--- list words using set to prevent redundant entry
-_dictWords :: Dict -> Set Word -> [Word] -> [Word]
-_dictWords d lws ws@(w:ws') = 
-    if Set.member w lws then _dictWords d lws ws else
-    let lDeps = L.filter (`Set.notMember` lws) $ deps d w in
-    if not (L.null lDeps) then _dictWords d lws (lDeps ++ ws) else
-    let lws' = Set.insert w lws in
-    w : _dictWords d lws' ws'
-_dictWords _ _ [] = []
+-- list words lazily
+_dictWords :: Dict -> Set Word -> Set Word -> [Word] -> [Word]
+_dictWords d pw rw ws@(w:ws') = 
+    -- pw is printed words, prevents listing a more than once
+    -- rw is ready words, prevents searching in a cycle
+    if Set.member w pw then _dictWords d pw rw ws else
+    let lDeps = L.filter (`Set.notMember` pw) $ deps d w in
+    let bReady = L.null lDeps || Set.member w rw in
+    if bReady
+        then w : _dictWords d (Set.insert w pw) rw ws'
+        else _dictWords d pw (Set.insert w rw) (lDeps ++ ws)
+_dictWords _ _ _ [] = []
 
 -- | Encode the entire dictionary for export into a bytestring.
 encode :: Dict -> LBS.ByteString
@@ -101,45 +100,25 @@ _enw d w = case lookupBytes d w of
     Nothing -> mempty
     Just bytes -> 
         BB.char8 '@' <> BB.byteString (wordToUTF8 w) <> BB.char8 ' ' 
-        <> _esc bytes <> BB.char8 '\n'
-
-_esc :: LBS.ByteString -> BB.Builder
-_esc = mconcat . fmap _esc' . LBS.toChunks
-
--- every LF is printed as LF SP.
-_esc' :: BS.ByteString -> BB.Builder
-_esc' bs = case BS.elemIndex 10 bs of
-    Nothing -> BB.byteString bs
-    Just ix -> 
-        let ct = ix + 1 in
-        BB.byteString (BS.take ct bs) <>
-        BB.char8 ' ' <> 
-        _esc' (BS.drop ct bs)
+        <> BB.lazyByteString bytes <> BB.char8 '\n'
 
 type Bytes = LBS.ByteString
 
--- | split a bytestring into logical lines. LF within each logical
--- line may be escaped by a following SP. So, this function will 
--- unescape each LF within a logical line, and split on LF between
--- logical lines. No information is lost: the original string can
--- be recovered by escaping each line then intercalating with "\n".
+-- break for each @word def..., excluding the `\n` after each line.
 logicalLines :: Bytes -> [Bytes]
-logicalLines = ll [] where
-    mkLn = LBS.concat . L.reverse 
-    ll acc bs = case LBS.elemIndex 10 bs of
-        Nothing -> [mkLn (bs:acc)]
-        Just idx -> 
-            let bsNL = LBS.drop (idx+1) bs in
-            case LBS.uncons bsNL of
-                Just (32, bs') -> -- keep LF, drop SP
-                    let ln = LBS.take (idx+1) bs in
-                    ll (ln:acc) bs'
-                _ -> -- drop LF, start next logical line
-                    let eol = LBS.take idx bs in
-                    mkLn (eol:acc) : ll [] bsNL 
+logicalLines = ll where
+    ll bs = lln bs 0 bs 
+    lln bs !n ss = case LBS.elemIndex 10 ss of
+        Just ix -> 
+            let ss' = LBS.drop (ix+1) ss in
+            case LBS.uncons ss' of
+                Nothing -> LBS.take (n+ix) bs : []
+                Just (64, _) -> LBS.take (n+ix) bs : logicalLines ss'
+                _ -> lln bs (n+ix+1) ss'
+        Nothing -> [bs] -- file terminates without \n
 
 -- | try to decode an `@word abc` line of code. Does not validate
--- anything other than the basic structure (e.g. might accept some
+-- anything other than the ABC structure (e.g. might accept some
 -- invalid words like `foo}`.)
 decodeLine :: Bytes -> Maybe (Word, ABC)
 decodeLine bs =
@@ -148,7 +127,8 @@ decodeLine bs =
     let isWordSep c = (32 == c) || (10 == c) in
     let (wbs, defbs) = LBS.break isWordSep wordAndDef in
     let (abc,leftOver) = ABC.decode (LBS.drop 1 defbs) in
-    if (not (LBS.null leftOver)) then Nothing else -- bad ABC parse
+    let bParsed = LBS.null leftOver in
+    if (not bParsed) then Nothing else -- bad ABC parse
     return (Word (LBS.toStrict wbs), abc)
 
 -- | I want to precisely capture structural errors at the AODict
@@ -163,13 +143,6 @@ instance Show AODictError where
     show (AODict_WordRedef w) = "cannot redefine word: " ++ show w
     show (AODict_WordUndef w uw) = "word " ++ show w ++ " uses undefined: " ++ show uw 
 
--- Each word is expressed as a {%word} token in the original ABC.
-_words :: ABC -> [Word]
-_words = mapMaybe toWordTok . ABC.tokens where
-    toWordTok bs = case UTF8.uncons bs of
-        Just ('%', wbs) -> Just (Word wbs)
-        _ -> Nothing
-
 -- | Decode an AODict format bytestring and report any AODict-layer
 -- errors. The resulting map will include all words that parse even
 -- if some errors were raised (e.g. if a word was redefined or is 
@@ -178,7 +151,7 @@ decodeAODict :: Bytes -> ([AODictError], Map Word ABC)
 decodeAODict = first L.reverse . L.foldl' accum ([],Map.empty) . logicalLines where
     accum (err,!d) (decodeLine -> Just (w,abc)) = 
         let eRedefs = if (Map.member w d) then [AODict_WordRedef w] else [] in
-        let lUndefs = L.nub $ L.filter (`Map.notMember` d) $ _words abc in
+        let lUndefs = L.nub $ L.filter (`Map.notMember` d) $ abcWords abc in
         let eUndefs = fmap (AODict_WordUndef w) lUndefs in
         let err' = eUndefs <> eRedefs <> err in
         let d' = Map.insert w abc d in

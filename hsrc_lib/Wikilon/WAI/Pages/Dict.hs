@@ -64,6 +64,10 @@ dictFrontPage' dictName w _rq k =
         -- maybe add some banner or CSS from dictionary itself
         -- maybe a simple console-like or query application?
         -- after defining apps, probably want to revist them easily
+        -- HEALTH information
+            -- undefined words & cycles
+            -- words that don't compile, compile errors
+            -- words that are badly typed
         -- H.h2 "Recent Changes"
         -- H.h2 "Resources"
             -- H.li $ lnkDictWords dictName <> " - dictionary words"

@@ -32,20 +32,22 @@ The weakness of AO is that these definitions are not very readable in raw form. 
 
 ## AO Dictionaries
 
-An AO dictionary is an associative array of words to definitions with two primary structural constraints:
+An AO dictionary is an associative array of words to definitions. 
 
-* dependencies between words are acyclic
-* no word in the dictionary is undefined
+A *healthy* dictionary has the following characteristics:
 
-These structural constraints ensure it is possible to compile a word by transitively inlining its dependencies. Additional constraints, such as ensuring definitions are well typed, are sensible and should be enforced for some curated dictionaries. 
+* all words are defined
+* dependencies are acyclic
+* all definitions compile
+* definitions pass checks
 
-Dictionaries are always *complete*. There are no external dependencies. 
+Checks may include linters, static typechecks, automatic testing, termination analysis, abstract interpretation, and validation of properties asserted by annotions (such as structural or behavioral equivalences, commutativity, associativity, type declarations). I'm not sure on the details here yet, but a lot of automatic analysis, testing, and fuzzing should be the *default* for dictionaries, and to keep developers continuously aware of general health levels.
 
-Open source communities can create and curate massive, general purpose dictionaries containing millions of words. These words would include both generic functions, useful data structures, documentation, discussion, tests, examples. They would also include very special purpose utilities and specific objects - clipart, fonts, widgets, game music, interactive fictions, entire open source projects. Private groups can fork an appropriately licensed open source dictionary. DVCS-like mechanisms - forking, merging, patching, cherry-picking, pull-requests - allow sharing between active dictionaries. 
+A healthy dictionary is *complete*, having no external dependencies. 
 
-Hosting thousands of forks and historical versions can be efficient via structure sharing. Storage is relatively cheap anyway! There is no need for separate packages or libraries. The DVCS sharing mechanisms replace package managers. When distributing a project, we might filter a much larger dictionary down to the essential subset of words.
+Instead of packaging mechanisms, AO favors DVCS-based distribution models - forking, pulls, pushes, pull requests. Structure sharing allows very lightweight forks. Open source communities will create and curate massive, general purpose dictionaries containing millions of words for every purpose broad (like list processing) and specific (like clipart). Private groups can fork an appropriately licensed dictionary. 
 
-However, not all dictionaries need to be large. For sharing or distributing a project, it is trivial to filter a dictionary to just the necessary subset of words.
+However, not all dictionaries need to be large. For sharing or distributing or pulling a specific project, it is trivial to filter a dictionary to just an essential subset of words. This isn't quite the same as packaging, but can serve a similar role (e.g. just merge the project dictionary using a rename on conflict strategy). 
 
 ## AO Dictionary Import/Export
 
@@ -54,24 +56,24 @@ AO doesn't specify how a system should represent dictionaries internally. Howeve
         @swap [rwrwzwlwl][]
         @swapd [rw {%swap} wl][]
         @swapd.doc "x y z -- y x z
-          swap just under the top stack element
-          assuming typical (stack*ext) environment
-         ~[v'c]
+         swap just under the top stack element
+         assuming typical (stack*ext) environment
+        ~[v'c]
 
-This is a flat format suitable for simple text files and streams. Each word definition starts at `@` on a new line, the word runs to the next SP or LF, followed by the definition for that word using ABC. LF characters within the definition are escaped by SP, exactly as we do within ABC text. Two additional constraints:
+This is a flat format suitable for simple text files and streams. Each word definition starts at `@` on after a new line, followed by the word (up to an SP or LF, which is dropped) then followed by the definition in ABC. This is unambiguous due to the design of ABC.
 
-* words are defined after their dependencies
-* words are defined exactly once, no updates
+There are two structural constraints: 
 
-For example, it would be an error if `swapd` above was defined before `swap`, or if `swap` was later redefined. These two constraints simplify validation of the primary structural constraints on dictionaries, and enable fast processing of a dictionary.
+* defined words are defined before use
+* each word is defined at most once
 
-For HTTP, we should include an appropriate `Content-Type` header. Since I own `awelon.org`, I'll using the following:
+Cycles are an exception to the 'defined before use' constraint. These constraints greatly simplify efficient processing of a dictionary and filtering of well defined words. Invalid words, including those in cycles, can trivially be filtered out while valid words could be compiled without delay.
+
+For HTTP, I'm using the following header and Internet media type:
 
         Content-Type: text/vnd.org.awelon.aodict
 
-I'm using the text class because the `aodict` format is still a "source code" and is at least marginally human readable.
-
-Every Awelon project system should support this simple format, though may apply constraints on received dictionaries (type safety, structure of words, alignment of function types with word suffixes, etc.). Other ad-hoc formats, such as YAML or JSON or even direct encoding in ABC, may additionally be supported.
+I think every Awelon project system will probably want to support this simple aodict format together with ABC. This will be the primary import/export format for dictionaries, and also offers a simple representation to compress large ABC programs.
 
 ## AO Dictionary Applications
 
