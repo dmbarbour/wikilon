@@ -8,7 +8,7 @@ module Wikilon.WAI.Routes
     , dictURI, dictURIBuilder, dictLink, dictCap
     , wordURI, wordURIBuilder, wordLink, wordCap
 
-    , uriAODict, uriAODictGz
+    , uriAODict
     ) where
 
 import Control.Monad
@@ -62,9 +62,8 @@ dictCap caps =
     return d
 
 
-uriAODict, uriAODictGz :: BranchName -> Route
+uriAODict :: BranchName -> Route
 uriAODict d = toRoute $ dictURIBuilder d <> "/aodict"
-uriAODictGz d = toRoute $ dictURIBuilder d <> "/aodict.gz"
     
 -- | URI associated for a specific word in a named dictionary
 -- This includes pct-encoded escapes as necessary.

@@ -51,7 +51,6 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 
     -- special endpoints to force media types
     ,("/d/:d/aodict", dictAsAODict)
-    ,("/d/:d/aodict.gz", dictAsAODictGzip)
 
     -- generic endpoints
 --    ,("/favicon", resourceFavicon)
