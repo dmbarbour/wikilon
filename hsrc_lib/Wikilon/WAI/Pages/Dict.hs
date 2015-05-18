@@ -39,7 +39,11 @@ import Wikilon.WAI.Pages.AODict
 -- there is a lot here, I'll need to use subdirectory URIs
 -- for current words and so on.
 dictResource :: WikilonApp
-dictResource = justGET dictFrontPage
+dictResource = app where
+    app = justGET onGet 
+    onGet = branchOnOutputMedia
+        [(mediaTypeTextHTML, dictFrontPage)
+        ]
 
 dictFrontPage :: WikilonApp
 dictFrontPage w (dictCap -> Just dictName) rq k = dictFrontPage' dictName w rq k
@@ -60,6 +64,14 @@ dictFrontPage' dictName w _rq k =
         H.title title 
     H.body $ do
         H.h1 title
+        H.p "This is an AO dictionary front page. I'm still figuring out what should go here."
+        H.h2 "Recent Events"
+        H.p "A list of recent events on the dictionary."
+        H.h2 "Dictionary Health"
+        
+        H.h2 "Resources"
+        H.ul $ do
+            H.li $ lnkAODict dictName <> " see dictionary (very primitive)"
         -- maybe some content from the dictionary itself
         -- maybe add some banner or CSS from dictionary itself
         -- maybe a simple console-like or query application?

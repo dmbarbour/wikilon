@@ -74,6 +74,20 @@ Twitter integration might be neat if it means I can receive and answer requests.
 
 Dealing with all the different HTTP methods and Accept modes and so on seems to be very painful, but is something that can accumulate over time. For now, I should probably aim to have just enough to get some useful work done, then grow the feature set as needed. What has the highest priority?
 
+* import and export of a dictionary as a file 
+ * this makes it easier to export content then reset Wikilon
+ * can begin editing via external dictionary files
+
+* interfaces to edit and view words within a dictionary
+ * view the raw definiton ABC code
+ * view the structural of the definition
+ * view the compiled ABC code
+  * view annotated compiled ABC code
+ * edit the raw definition ABC code
+ * edit the structure of the definition
+
+
+
 * add words to or edit a dictionary
 * export a dictionary
 * evaluation of expressions
@@ -98,7 +112,7 @@ Dealing with all the different HTTP methods and Accept modes and so on seems to 
 * 
 
 
-
+## 
 
 
 

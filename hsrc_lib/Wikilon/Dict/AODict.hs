@@ -73,7 +73,7 @@ dictWords' d = _dictWords d mempty
 _dictWords :: Dict -> Set Word -> [Word] -> [Word]
 _dictWords d pw ws@(w:ws') = 
     -- pw is printed words, prevents listing a more than once
-    if Set.member w pw then _dictWords d pw ws else
+    if Set.member w pw then _dictWords d pw ws' else -- skip
     let lDeps = L.filter (`Set.notMember` pw) $ deps d w in
     let bReady = L.null lDeps in
     if bReady

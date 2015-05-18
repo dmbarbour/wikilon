@@ -3,6 +3,7 @@
 -- | Pages for the toplevel list-of-dictionaries
 module Wikilon.WAI.Pages.DictList
     ( allDictionaries
+    , dictList
     , dictPostCreate
     , formSimpleCreateDict
     , ppDictName
@@ -52,6 +53,11 @@ allDictionaries = app where
         ,(mediaTypeTextPlain, listOfDictsText)
 --      ,(mediaTypeTextCSV, listOfDictsCSV)
         ]
+
+-- | restricted page for a textual list of dictionaries
+dictList :: WikilonApp
+dictList = justGET $ branchOnOutputMedia 
+    [(mediaTypeTextPlain, listOfDictsText)]
 
 -- | simply list dictionaries by name, one per line.
 listOfDictsText :: WikilonApp
