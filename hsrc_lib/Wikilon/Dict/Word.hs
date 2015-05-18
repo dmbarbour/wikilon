@@ -77,7 +77,7 @@ isValidWordChar c = okASCII || okUnicode where
 {-# INLINE isValidWordChar #-}
 
 isValidWord :: Word -> Bool
-isValidWord (Word w) = okStart && okMiddle && okEnd where
+isValidWord (Word w) = okStart && okMiddle && okEnd && okSize where
     okEnd = not $ "." `BS.isSuffixOf` w
     okMiddle = L.all isValidWordChar (UTF8.toString w)
     okStart = case UTF8.uncons w of
@@ -85,6 +85,7 @@ isValidWord (Word w) = okStart && okMiddle && okEnd where
         Just (c, w') | _isDigit c -> False
                      | not (_isPMD c) -> True
                      | otherwise -> maybe True (not . _isDigit . fst) (UTF8.uncons w')
+    okSize = (BS.length w) <= 64
 
 _isPMD :: Char -> Bool
 _isPMD = flip L.elem "+-."
@@ -92,16 +93,15 @@ _isPMD = flip L.elem "+-."
 _isDigit :: Char -> Bool
 _isDigit c = ('0' <= c) && (c <= '9')
 
--- | heuristic constraints on words, for humans
+-- | heuristic constraints on words, written for humans
 listWordConstraintsForHumans :: [String]
 listWordConstraintsForHumans =
     ["ASCII if alphabetical, numeral, or in -._~!$'*+=:@"
     ,"allows most UTF8 codes above C1, except for U+FFFD"
     ,"must not start with digit or +-. followed by digit"
     ,"must not terminate with a . (dot or period)"
+    ,"encoding of word must use between 1 and 64 bytes"
     ]
-    
-
 
 -- Show a Word
 instance Show Word where 

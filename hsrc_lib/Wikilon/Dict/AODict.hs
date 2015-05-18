@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns, ViewPatterns #-}
+{-# LANGUAGE BangPatterns, PatternGuards, ViewPatterns #-}
 -- | This module provides a simple import and export format for Awelon
 -- dictionaries, emitting an entire dictionary as a large file. This
 -- uses the following format:
@@ -26,10 +26,11 @@ module Wikilon.Dict.AODict
     , encode
     , encodeWords
 
-    , logicalLines
     , decodeLine
-    , decodeAODict
+    , logicalLines
+
     , AODictError(..)
+    , decodeAODict
     ) where
 
 import Control.Arrow (first)
@@ -40,6 +41,7 @@ import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.Builder as BB
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -65,20 +67,19 @@ dictWords d = dictWords' d (wordsInDict d)
 -- and words will be ordered such that transitive dependencies 
 -- appear before a word (modulo cycles in an unhealthy dictionary).
 dictWords' :: Dict -> [Word] -> [Word]
-dictWords' d = _dictWords d mempty mempty
+dictWords' d = _dictWords d mempty 
 
 -- list words lazily
-_dictWords :: Dict -> Set Word -> Set Word -> [Word] -> [Word]
-_dictWords d pw rw ws@(w:ws') = 
+_dictWords :: Dict -> Set Word -> [Word] -> [Word]
+_dictWords d pw ws@(w:ws') = 
     -- pw is printed words, prevents listing a more than once
-    -- rw is ready words, prevents searching in a cycle
-    if Set.member w pw then _dictWords d pw rw ws else
+    if Set.member w pw then _dictWords d pw ws else
     let lDeps = L.filter (`Set.notMember` pw) $ deps d w in
-    let bReady = L.null lDeps || Set.member w rw in
+    let bReady = L.null lDeps in
     if bReady
-        then w : _dictWords d (Set.insert w pw) rw ws'
-        else _dictWords d pw (Set.insert w rw) (lDeps ++ ws)
-_dictWords _ _ _ [] = []
+        then w : _dictWords d (Set.insert w pw) ws'
+        else _dictWords d pw (lDeps ++ ws)
+_dictWords _ _ [] = []
 
 -- | Encode the entire dictionary for export into a bytestring.
 encode :: Dict -> LBS.ByteString
@@ -104,22 +105,29 @@ _enw d w = case lookupBytes d w of
 
 type Bytes = LBS.ByteString
 
--- break for each @word def..., excluding the `\n` after each line.
-logicalLines :: Bytes -> [Bytes]
-logicalLines = ll where
-    ll bs = lln bs 0 bs 
-    lln bs !n ss = case LBS.elemIndex 10 ss of
+-- take a logical line splitting at next `\n@` pair.
+takeLogicalLine :: Bytes -> (Bytes, Bytes)
+takeLogicalLine bs = ll 0 bs where
+    ll !n ss = case LBS.elemIndex 10 ss of
+        Nothing -> (bs, LBS.empty) -- lacks final '\n'
         Just ix -> 
+            let ln = LBS.take (n+ix) bs in
             let ss' = LBS.drop (ix+1) ss in
             case LBS.uncons ss' of
-                Nothing -> LBS.take (n+ix) bs : []
-                Just (64, _) -> LBS.take (n+ix) bs : logicalLines ss'
-                _ -> lln bs (n+ix+1) ss'
-        Nothing -> [bs] -- file terminates without \n
+                Nothing -> (ln, LBS.empty)
+                Just (64, _) -> (ln, ss')
+                _ -> ll (n+ix+1) ss'
+
+-- select all logical lines
+logicalLines :: Bytes -> [Bytes]
+logicalLines bs =
+    if LBS.null bs then [] else
+    let (ln,bs') = takeLogicalLine bs in
+    ln : logicalLines bs'
 
 -- | try to decode an `@word abc` line of code. Does not validate
--- anything other than the ABC structure (e.g. might accept some
--- invalid words like `foo}`.)
+-- anything other than the ABC structure, e.g. might accept some
+-- invalid words or badly typed definitions.
 decodeLine :: Bytes -> Maybe (Word, ABC)
 decodeLine bs =
     LBS.uncons bs >>= \ (atPrefix, wordAndDef) ->
@@ -131,15 +139,25 @@ decodeLine bs =
     if (not bParsed) then Nothing else -- bad ABC parse
     return (Word (LBS.toStrict wbs), abc)
 
+{- TODO: when I start working with very large dictionaries, I will
+   probably need to operate on chunks of reasonable size rather than
+   the entire dictionary all at once. This might be achieved by 
+   processing a limited number of logical lines in each step. I will
+   probably need a more flexible state model for this.
+   
+   OTOH, I don't expect this will be an issue until AO is very
+   successful. It will be a nice problem to have.
+-}
+
 -- | I want to precisely capture structural errors at the AODict
 -- encoding layer, separately from Wikilon acceptance errors.
 data AODictError
-    = AODict_LineParse Bytes
-    | AODict_WordRedef Word
-    | AODict_WordUndef Word Word
+    = AODict_LineParse !Bytes
+    | AODict_WordRedef !Word
+    | AODict_WordUndef !Word !Word
 
 instance Show AODictError where
-    show (AODict_LineParse bs) = "could not parse logical line: " ++ show bs
+    show (AODict_LineParse bs) = "could not parse: " ++ LazyUTF8.toString bs
     show (AODict_WordRedef w) = "cannot redefine word: " ++ show w
     show (AODict_WordUndef w uw) = "word " ++ show w ++ " uses undefined: " ++ show uw 
 

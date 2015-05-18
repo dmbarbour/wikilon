@@ -32,22 +32,22 @@ The weakness of AO is that these definitions are not very readable in raw form. 
 
 ## AO Dictionaries
 
-An AO dictionary is an associative array of words to definitions. 
+An AO dictionary is an associative array of words to definitions.
 
-A *healthy* dictionary has the following characteristics:
+A healthy dictionary has the following characteristics:
 
 * all words are defined
 * dependencies are acyclic
 * all definitions compile
 * definitions pass checks
 
-Checks may include linters, static typechecks, automatic testing, termination analysis, abstract interpretation, and validation of properties asserted by annotions (such as structural or behavioral equivalences, commutativity, associativity, type declarations). I'm not sure on the details here yet, but a lot of automatic analysis, testing, and fuzzing should be the *default* for dictionaries, and to keep developers continuously aware of general health levels.
+Checks may include linters, static typechecks, automatic testing, termination analysis, abstract interpretation, and validation of properties asserted by annotions (such as structural or behavioral equivalences, commutativity, associativity, type declarations). When developing AO dictionaries, a suite of such operations should be the default to keep developers aware of general health levels.
 
-A healthy dictionary is *complete*, having no external dependencies. 
+A dictionary is *complete*, having no external dependencies. 
 
-Instead of packaging mechanisms, AO favors DVCS-based distribution models - forking, pulls, pushes, pull requests. Structure sharing allows very lightweight forks. Open source communities will create and curate massive, general purpose dictionaries containing millions of words for every purpose broad (like list processing) and specific (like clipart). Private groups can fork an appropriately licensed dictionary. 
+Instead of external packaging mechanisms, AO will leverage DVCS-based distribution concepts - forking, pulls, pushes, pull requests. Open source communities will create and curate massive, general purpose dictionaries containing millions of words representing functions, applications, documentation, and content, each represented as a word. 
 
-However, not all dictionaries need to be large. For sharing or distributing or pulling a specific project, it is trivial to filter a dictionary to just an essential subset of words. This isn't quite the same as packaging, but can serve a similar role (e.g. just merge the project dictionary using a rename on conflict strategy). 
+It is possible, though discouraged, to model packaging internally. For example, a package word might be expressed as a function that outputs an association list of text names to functions. Modulo overuse of package words, it is trivial to filter a project down to a few root words with a minimal subset of dependencies. Filtered, purpose-specific dictionaries can serve a useful role for distribution of applications or cherry picked sharing of content between communities.
 
 ## AO Dictionary Import/Export
 
@@ -60,14 +60,14 @@ AO doesn't specify how a system should represent dictionaries internally. Howeve
          assuming typical (stack*ext) environment
         ~[v'c]
 
-This is a flat format suitable for simple text files and streams. Each word definition starts at `@` on after a new line, followed by the word (up to an SP or LF, which is dropped) then followed by the definition in ABC. This is unambiguous due to the design of ABC.
+This is a flat format suitable for simple text files and streams. Each word definition starts at `@` at the beginning of a line, followed by the word (up to an SP or LF, which is dropped) then followed by the definition in ABC. This is unambiguous due to the design of ABC. 
 
-There are two structural constraints: 
+There are two additional structural constraints:
 
-* defined words are defined before use
+* words are defined before use
 * each word is defined at most once
 
-Cycles are an exception to the 'defined before use' constraint. These constraints greatly simplify efficient processing of a dictionary and filtering of well defined words. Invalid words, including those in cycles, can trivially be filtered out while valid words could be compiled without delay.
+These constraints guard against undefined words or cycles and simplify efficient processing of the dictionary.
 
 For HTTP, I'm using the following header and Internet media type:
 
@@ -81,7 +81,7 @@ A **dictionary application** is an application that has no dependencies outside 
 
 A dictionary application might be understood as a (potentially mutable) view of the dictionary. While dictionary applications must ultimately be bootstrapped by services outside a dictionary, it is possible and preferable that the majority of dictionary app code be expressed within the same dictionary.
 
-Updates to the dictionary must use dataflows similar to spreadsheets. Spreadsheets, iPython notebooks, and web applications are viable bases for developing dictionary applications.
+Updates to the dictionary must use dataflows similar to spreadsheets. Spreadsheets, iPython notebooks, and web applications are viable inspirations for developing dictionary applications.
 
 ## AO Design Motivations
 
@@ -104,23 +104,15 @@ Disassembly is possible by analyzing an ABC stream against a popular dictionary.
 
 ## Weaknesses of AO
 
-AO is purely functional, acyclic, tacit concatenative, and has very simple base types. Fixpoint combinators are necessary to express loopy computations. Recursive types are necessary to express collections. A lot of data plumbing code becomes a form of syntactic noise. Effects are usually be expressed asynchronously, through a [network and messaging model](NetworkModel.md) instead of straight-line threaded code. 
+AO isn't very suitable for reading or development with plain text editors. The purely functional nature of AO requires explicit modeling for effects - e.g. free monads, delimited continuations, or a [network and messaging model](NetworkModel.md) for communication between abstract virtual machines. Without a good compiler, AO will not perform competitively due to its simple types. Fixpoint combinators to express loops are rather painful if working at a low level.
 
-The underlying ABC representation is low level from a human standpoint but high-level from a machine standpoint. Thus, AO requires a development environment for effective use, and a compiler for effective performance.
-
-AO programming can feel like puzzle solving - stimulating but exhausting. 
-
-Fortunately, as data types, DSLs, and structure editors are implemented, casual development should become much easier. There is no reason a function couldn't be expressed using conventional mathematical notations. Even if a procedure uses asynchronous operations under the hood, a little syntactic sugar could abstract the asynchronous bits into a monad.
-
+As data types, DSLs, and structure editors are implemented, casual development should become much easier. However, it will take a while to get there.
+ 
 ## AO Naming Conventions
 
-The naming of words in an AO dictionary has zero impact on the *intrinsic, purely functional* meaning of a word. However, names certainly have connotations and conventions within a community. Conventions will be established, such as: `foo.doc` provides human-meaningful documentation for the word `foo`. Widely accepted conventions become ad-hoc standards.
+The naming of words in an AO dictionary has no impact on the intrinsic, purely functional meaning of a word. However, names certainly have connotations and conventions within a community. Conventions will be established, such as: `foo.doc` provides human-meaningful documentation for the word `foo`. And these conventions will solidify as we integrate them into development environments, e.g. if we automatically link related words and documentation.
 
-I believe there is much power and utility in convention. However, conventions should be carefully developed to avoid becoming rigid or restrictive. So far, I have the following suggestions:
-
-* *plurality:* e.g. if a dictionary has one `main`, it should have many. This suggests conventions should be oriented around prefixes or suffixes rather than specific words.
-* *synonyms:* synonyms are easy to express, e.g. using `[{%word}][]`, so there is no need for naming conventions to be sophisticated. If one definition fulfills multiple roles, we can easily define multiple synonyms.
-* *shallow:* deep hierarchies become [walled gardens](http://en.wikipedia.org/wiki/Closed_platform) that are difficult to explore or access for reuse, and are overkill for disambiguation. So, keep it shallow where feasible.
+I'd prefer to keep names of things relatively shallow. However, we can make use of redirects, e.g. the definition `[{%foo}][]` essentially redirects to the definition of foo. Also, plurality should be the default, e.g. rather than naming the root word for an application `main` (thereby limiting a dictionary to one app), we name it after the project.
 
 AO doesn't support namespaces directly. Every word must be fully written in those bytecode tokens. However, structure editors may hide common prefixes or suffixes to prevent large names from becoming noise. Use of color is also viable, to help developers visually distinguish the origins of words.
 

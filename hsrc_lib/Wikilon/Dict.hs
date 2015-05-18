@@ -19,19 +19,19 @@
 -- editors, potentially at a higher level than words and bytecode, and
 -- also readily supports staged programming.
 --
--- This dictionary module enforces three invariants:
+-- This dictionary module enforces a few invariants:
 --
 --   1. dependencies are acyclic
 --   2. every word has a definition
---   3. constraints on token types
+--   3. constraints on tokens 
 --
--- Tokens are word dependencies, annotations, and discretionary sealers
--- or unsealers. This keeps the dictionary pure and portable, avoiding
--- entanglement with specific machines.
+-- Allowed tokens are word dependencies, annotations, and discretionary
+-- sealers or unsealers. These limitations ensure the AO dictionary is
+-- pure, portable. There is no entanglement with specific machines.
 --
--- Ideally, Wikilon shall further enforce that definitions compile, that
--- words evaluate to blocks, that words are type-safe and have no obvious
--- errors (automatic linters, partial evaluation, testing, etc.).
+-- Ideally, Wikilon shall further enforce that definitions compile and
+-- check that there are no obvious errors via automatic type checking,
+-- testing, linting, analysis, etc..
 --
 -- TODO: support many more operations:
 --   batch rename
@@ -267,10 +267,10 @@ _updOneDep t (tok,(wsDel,wsAdd)) = Trie.adjust adj tok t where
 --
 type InsertionErrors = [InsertionError]
 data InsertionError 
-    = Undef    Word Word   -- undefined {%word} used by word
-    | BadWord  Word        -- word is not valid according to heuristics
-    | BadToken Token Word  -- invalid {token} used by word
-    | Cycle    [Word]
+    = Undef    !Word !Word   -- undefined {%word} used by word
+    | BadWord  !Word        -- word is not valid according to heuristics
+    | BadToken !Token !Word  -- invalid {token} used by word
+    | Cycle    ![Word]
 
 instance Show InsertionError where
     show (Undef uw w)   = "undefined {%" ++ show uw ++ "} in " ++ show w
