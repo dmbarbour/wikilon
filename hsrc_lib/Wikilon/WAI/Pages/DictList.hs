@@ -9,19 +9,15 @@ module Wikilon.WAI.Pages.DictList
     , ppDictName
     ) where
 
-import Control.Arrow (first)
 import Control.Applicative
 import Control.Monad
 import Data.Monoid
 import qualified Data.List as L
-import qualified Data.Map as Map
 import qualified Data.ByteString.Builder as BB
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Network.HTTP.Types as HTTP
-import qualified Network.HTTP.Media as HTTP
 import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
@@ -30,15 +26,15 @@ import Database.VCache
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.RecvFormPost
-import Wikilon.WAI.URL
 import Wikilon.WAI.Routes
 import Wikilon.Branch (BranchName)
 import qualified Wikilon.Branch as Branch
 import Wikilon.Dict (Word(..), isValidWord)
 import qualified Wikilon.Dict as Dict
-import qualified Wikilon.Dict.AODict as AODict
 import Wikilon.Root
 import Wikilon.Time
+import qualified Wikilon.WAI.RegexPatterns as Regex
+
 
 import qualified Awelon.ABC as ABC
 
@@ -92,7 +88,15 @@ listOfDictsPage w _cap _rq k =
         H.h1 title
         listDictsHTML w bset
         H.p $ (H.b "Master Dictionary: ") <> dictLink (wikilon_master w)
-        H.p $ formSimpleCreateDict
+        H.hr
+        H.div ! A.id "dictListFoot" ! A.class_ "footer" $ do
+            H.b "New Dictionary:" <> " " <> (formSimpleCreateDict ! A.style "display:inline")
+{-
+            H.b "Export:" <> " " <> lnkAODictList
+            H.b "
+            H.b "Import:" <> " " <> formImportAODict dictName <> H.br
+            H.b "Modified:" <> " " <> tmModified <> H.br
+-}
         --H.div ! A.class_ "boxed" $ formSimpleCreateDict
 {-
         H.h2 "Delete a Dictionary"
@@ -100,17 +104,17 @@ listOfDictsPage w _cap _rq k =
 -}
 
 listDictsHTML :: Wikilon -> Branch.BranchSet -> HTML
-listDictsHTML w bset = do
+listDictsHTML _w bset = H.div ! A.id "dictTable" $ do
     H.table $ do
         H.tr $ mapM_ H.th ["Dictionary", "Versions", "Modified", "Head-ETag"]
         forM_ (Branch.toList bset) $ \ (bname,b) -> H.tr $ do 
             let d0 = Branch.head b
             H.td $ dictLink bname
             H.td $ H.toMarkup $ Branch.branchSize b
-            H.td $ H.string $ maybe ("--") show $ Branch.modified b
+            H.td $ maybe ("--") htmlSimpTime $ Branch.modified b
             H.td $ H.toMarkup $ toInteger $ Dict.unsafeDictAddr d0
-    H.p $ H.b $ "Count of Dictionaries: " <> H.toMarkup (Branch.width bset) 
-    H.p $ H.b $ "Count of Versions: " <> H.toMarkup (Branch.volume bset)
+    H.b "Count of Dictionaries:" <> " " <> H.toMarkup (Branch.width bset) <> H.br
+    H.b "Count of Versions:" <> " " <> H.toMarkup (Branch.volume bset) <> H.br
 
 -- | todo: consider authorization requirements for creating a dictionary
 dictPostCreate :: WikilonApp
@@ -138,7 +142,7 @@ gotoDict :: Wikilon -> BranchName -> Wai.Response
 gotoDict w d = 
     let status = HTTP.seeOther303 in
     let location = (HTTP.hLocation, wikilon_httpRoot w <> dictURI d) in
-    let headers = [location, noCache, textHtml] in
+    let headers = [location, textHtml] in
     let title = H.string $ "Redirect to Dictionary " ++ UTF8.toString d in
     Wai.responseLBS status headers $ renderHTML $ do
     H.head $ do
@@ -185,7 +189,8 @@ ppDictName ps =
 -- | a simple form for creation of a dictionary
 formSimpleCreateDict :: HTML
 formSimpleCreateDict = H.form ! A.action "d.create" ! A.method "POST" $ do
-    H.input ! A.type_ "text" ! A.required "true" ! A.name "dictName"
+    let aoWord = A.pattern $ H.stringValue Regex.aoWord 
+    H.input ! A.type_ "text" ! A.required "true" ! A.name "dictName" ! aoWord
     H.input ! A.type_ "submit" ! A.value "Create"
 
 

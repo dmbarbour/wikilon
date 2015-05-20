@@ -111,9 +111,11 @@ wikilonResources w = listResources where
             ,rscListOfDicts
             ,rscMasterDict
             ,rscMasterFrontPage
+            ,rscDbHealth
             ]
     rscFrontPage = (H.a ! A.href "" ! A.rel "self" $ "/") <> " front page"
     rscListOfDicts = (H.a ! A.href "d" $ "/d") <> " list of dictionaries"
+    rscDbHealth = (H.a ! A.href "admin/dbHealth" $ "dbHealth") <> " general database stats"
     masterDict = wikilon_master w
     rscMasterDict = dictLink masterDict <> " - master dictionary"
     rscMasterFrontPage = wordLink masterDict frontPageWord <> " - to configure this page"

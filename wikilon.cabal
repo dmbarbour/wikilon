@@ -86,6 +86,7 @@ Library
     Wikilon.Dict.AODict
     Wikilon.Dict.Token
     Wikilon.Dict.Type
+    Wikilon.Dict.Text
 
     Wikilon.Branch
     Wikilon.Geneology
@@ -104,10 +105,12 @@ Library
     Wikilon.WAI.URL
     Wikilon.WAI.Routes
     Wikilon.WAI.RecvFormPost
+    Wikilon.WAI.RegexPatterns
     Wikilon.WAI.Pages.AODict
     Wikilon.WAI.Pages.DictList
     Wikilon.WAI.Pages.FrontPage
     Wikilon.WAI.Pages.Dict
+    Wikilon.WAI.Pages.Admin
     Wikilon.WAI.Pages
     Wikilon.WAI
 

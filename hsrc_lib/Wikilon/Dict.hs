@@ -73,6 +73,7 @@ import Data.Maybe
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.List as L
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -90,6 +91,7 @@ import qualified Awelon.ABC as ABC
 import Wikilon.Dict.Type
 import Wikilon.Dict.Word
 import Wikilon.Dict.Token
+import Wikilon.Dict.Text
 
 -- | a dictionary is hosted in a vcache address space
 dict_space :: Dict -> VSpace
@@ -270,6 +272,7 @@ data InsertionError
     = Undef    !Word !Word   -- undefined {%word} used by word
     | BadWord  !Word        -- word is not valid according to heuristics
     | BadToken !Token !Word  -- invalid {token} used by word
+    | BadText  !Text !Word  -- rejecting text based on heuristic constraints
     | Cycle    ![Word]
 
 instance Show InsertionError where
@@ -277,6 +280,15 @@ instance Show InsertionError where
     show (BadWord w)    = "malformed word: " ++ show w
     show (BadToken t w) = "rejecting token {" ++ UTF8.toString t ++ "} in " ++ show w
     show (Cycle ws)     = "cyclic dependencies: " ++ show ws
+    show (BadText t w)  = 
+        let sText = truncateText 24 $ LazyUTF8.toString t in
+        "rejecting text " ++ sText ++ " in " ++ show w
+
+truncateText :: Int -> [Char] -> [Char]
+truncateText _ [] = []
+truncateText 3 _ = "..."
+truncateText n (c:cs) = c : truncateText (n - 1) cs
+
 
 -- | Insert or Update a list of words. Any existing definition for 
 -- an inserted word will be replaced. Errors are possible if a word

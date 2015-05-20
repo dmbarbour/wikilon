@@ -10,6 +10,7 @@
 module Wikilon.Time
     ( T(..), DT(..)
     , getTime, parseTime
+    , formatTime, parseTimeFormat, defaultTimeFormat
     , addTime, subtractTime, diffTime
     , fromUTC, toUTC
     , dtToPicos
@@ -121,11 +122,16 @@ instance Fractional DT where
 instance Show T where
     -- basically iso8601, but with subsecond precision
     -- YYYY-MM-DDTHH:MM:SS.9999999Z
-    showsPrec _ = showString . Time.formatTime t_locale t_format . toUTC where
+    showsPrec _ = showString . formatTime defaultTimeFormat
 
+defaultTimeFormat :: String
+defaultTimeFormat = "%Y-%m-%dT%H:%M:%S%QZ"
 
-t_format :: String
-t_format = "%Y-%m-%dT%H:%M:%S%QZ"
+parseTime :: String -> Maybe T
+parseTime = parseTimeFormat defaultTimeFormat
+
+formatTime :: String -> T -> String
+formatTime sFormat = Time.formatTime t_locale sFormat . toUTC
 
 -- Need to deal with the ugly transition from time-1.4.2 to time-1.5
 -- (current `stackage lts-2.8` uses time-1.4.2)
@@ -133,15 +139,14 @@ t_format = "%Y-%m-%dT%H:%M:%S%QZ"
 t_locale :: Time.TimeLocale
 t_locale = Time.defaultTimeLocale
 
-parseTime :: String -> Maybe T
-parseTime = fmap fromUTC . Time.parseTimeM True t_locale t_format
-
+parseTimeFormat :: String -> String -> Maybe T
+parseTimeFormat sFormat = fmap fromUTC . Time.parseTimeM True t_locale sFormat
 #else
 t_locale :: System.Locale.TimeLocale
 t_locale = System.Locale.defaultTimeLocale
 
-parseTime :: String -> Maybe T
-parseTime = fmap fromUTC . Time.parseTime t_locale t_format
+parseTimeFormat :: String -> String -> Maybe T
+parseTimeFormat sFormat = fmap fromUTC . Time.parseTime t_locale sFormat
 #endif
 
 

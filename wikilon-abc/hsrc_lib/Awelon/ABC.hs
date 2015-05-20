@@ -16,6 +16,7 @@ module Awelon.ABC
 
     , opsCancel
     , tokens
+    , abcTexts
     , rewriteTokens, rewriteTokens'
     ) where
 
@@ -386,21 +387,26 @@ opsCancel ABC_V ABC_C = True
 opsCancel ABC_C ABC_V = True
 opsCancel _ _ = False
 
-
 -- | Obtain a list of tokens from ABC code. Tokens are presented in
 -- the same order and quantity as they exist in the original code.
 tokens :: ABC -> [Token]
-tokens abc = _tokens (abcOps abc) []
+tokens = flip _run [] where
+    _run = runABC _op 
+    _op (ABC_Tok t) = (t:)
+    _op (ABC_Block abc) = _run abc
+    _op _ = id
 
--- difference list implementation
-_tokens :: [Op] -> [Token] -> [Token]
-_tokens (op:ops) = _opTok op . _tokens ops 
-_tokens [] = id
+-- | Obtain a list of texts from ABC code. Texts are presented in
+-- the same order as they exist in the original code.
+abcTexts :: ABC -> [Text]
+abcTexts = flip _run [] where
+    _run = runABC _op
+    _op (ABC_Text t) = (t:)
+    _op (ABC_Block abc) = _run abc
+    _op _ = id
 
-_opTok :: Op -> [Token] -> [Token]
-_opTok (ABC_Tok t) = (t:)
-_opTok (ABC_Block abc) = _tokens (abcOps abc)
-_opTok _ = id
+runABC :: (Op -> a -> a) -> ABC -> a -> a
+runABC fn = flip (L.foldr fn) . abcOps
 
 -- | Rewrite or expand tokens into arbitrary bytecode
 rewriteTokens :: (Token -> ABC) -> ABC -> ABC

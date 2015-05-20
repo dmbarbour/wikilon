@@ -42,6 +42,7 @@ module Wikilon.WAI.Utils
     -- HTML
     , HTML
     , statusToTitle
+    , htmlTime, htmlSimpTime, htmlWeekTime
     , renderHTML
 
     , htmlMetaNoIndex
@@ -84,6 +85,7 @@ import qualified Network.Wai.Middleware.Gzip as Wai
 import Wikilon.Dict.Word (listWordConstraintsForHumans)
 import Wikilon.WAI.Types
 import Wikilon.Root
+import qualified Wikilon.Time as Time
 
 -- | Route based on method. Also provides reasonable default
 -- implementations for OPTIONS and HEAD.
@@ -363,6 +365,19 @@ type HTML = H.Html
 renderHTML :: HTML -> LazyUTF8.ByteString
 renderHTML = Text.Blaze.Html.Renderer.Utf8.renderHtml . H.docTypeHtml
 {-# INLINE renderHTML #-}
+
+-- | Render time for both humans and machines.
+htmlTime :: String -> Time.T -> HTML
+htmlTime sFormat tm = 
+    let dt = H.stringValue $ show tm in
+    let htm = H.string $ Time.formatTime sFormat tm in
+    H.time ! A.datetime dt $ htm
+
+htmlWeekTime :: Time.T -> HTML
+htmlWeekTime = htmlTime "%a %R"
+
+htmlSimpTime :: Time.T -> HTML
+htmlSimpTime = htmlTime "%Y %b %e %R"
 
 -- | A meta element (under \<head\>) to indicate a page's content
 -- should not be indexed or followed. This is, of course, entirely

@@ -12,8 +12,8 @@
 --
 -- The character @ does not appear in ABC and is not ambiguous here.
 -- No escapes are needed. There are two primary structural constraints,
--- that a word is defined only after all of its defined dependencies,
--- and that a word is defined at most once.
+-- that a word is defined only after all of its dependencies, and that
+-- a word is defined exactly once.
 --
 -- This format is called 'AODict' and uses internet media type:
 --
@@ -87,7 +87,8 @@ encode d = _encode d (dictWords d)
 
 -- | Encode a subset of the dictionary, specified by a list of root
 -- words. All transitive dependencies of these words are included in
--- the export. If a word is not defined, it will be silently skipped.
+-- the export. If a requested word is not defined, it will be silently
+-- skipped.
 encodeWords :: Dict -> [Word] -> LBS.ByteString
 encodeWords d = _encode d . dictWords' d
 

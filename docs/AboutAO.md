@@ -22,9 +22,9 @@ Some possible definitions:
         #12345[v'c]
         #1#2l[{%fooLang}]
 
-*Syntactically, AO definitions use raw ABC.* 
+*Syntactically, AO definitions use a subset of ABC.* 
 
-An unmodified, basic ABC parser can read AO definitions. Words are linked using `{%word}` tokens. Dependencies between words must be acyclic. In addition to word tokens, AO permits annotations and discretionary sealers/unsealers. 
+An unmodified, basic ABC parser can read AO definitions. But not all of ABC is valid for AO. The set of tokens is constrained to word dependencies, annotations, and discretionary sealers/unsealers. 
 
 Any word in an AO dictionary may be 'compiled' to independent ABC by transitively inlining the definition for each `{%word}` token and following it by `$vr$c` to compile then inline its functional meaning at runtime. However, we'll want to apply a lot of optimizations, such as precompiling and optimizing each word incrementally.
 
@@ -41,7 +41,7 @@ A healthy dictionary has the following characteristics:
 * all definitions compile
 * definitions pass checks
 
-Checks may include linters, static typechecks, automatic testing, termination analysis, abstract interpretation, and validation of properties asserted by annotions (such as structural or behavioral equivalences, commutativity, associativity, type declarations). When developing AO dictionaries, a suite of such operations should be the default to keep developers aware of general health levels.
+Checks may include linters, static typechecks, automatic testing, termination analysis, abstract interpretation, and validation of properties asserted by annotions (such as structural or behavioral equivalences, commutativity, associativity, type declarations). Some constraints may be context specific, e.g. limiting which tokens, word structures, or texts are permitted (e.g. to simplify interaction with web services and browsers), or requiring certain words have a specific type. When developing AO dictionaries, a suite of automatic checks should be the default so that content remains clean or developers are at least aware of any health issues.
 
 A dictionary is *complete*, having no external dependencies. 
 
@@ -65,7 +65,7 @@ This is a flat format suitable for simple text files and streams. Each word defi
 There are two additional structural constraints:
 
 * words are defined before use
-* each word is defined at most once
+* words are not redefined
 
 These constraints guard against undefined words or cycles and simplify efficient processing of the dictionary.
 

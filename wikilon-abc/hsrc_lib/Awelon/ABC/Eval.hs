@@ -47,6 +47,10 @@ data Value
     | Sealed !Token Value
     deriving (Eq, Ord)
 
+-- to consider: I might want to more precisely model a sealer's information,
+-- i.e. as Discretionary Token | Cryptographic Format Key | etc.
+
+
 type Flags = Word8
 
 flags_include :: Flags -> Flags -> Bool

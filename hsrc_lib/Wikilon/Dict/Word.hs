@@ -73,7 +73,10 @@ isValidWordChar :: Char -> Bool
 isValidWordChar c = okASCII || okUnicode where
     n = ord c
     okASCII = ((n >= 0) && (n <= 127)) && (wcArray UA.! fromIntegral n)
-    okUnicode = (n >= 160) && (n /= 0xfffd)
+    okUnicode = (n >= 160) && not badUnicode
+    badUnicode = isReplacementChar || isSurrogate
+    isReplacementChar = (n == 0xfffd)
+    isSurrogate = (0xd800 <= n) && (n <= 0xdfff)
 {-# INLINE isValidWordChar #-}
 
 isValidWord :: Word -> Bool
@@ -97,7 +100,7 @@ _isDigit c = ('0' <= c) && (c <= '9')
 listWordConstraintsForHumans :: [String]
 listWordConstraintsForHumans =
     ["ASCII if alphabetical, numeral, or in -._~!$'*+=:@"
-    ,"allows most UTF8 codes above C1, except for U+FFFD"
+    ,"UTF8 except C1, surrogates, and replacement char"
     ,"must not start with digit or +-. followed by digit"
     ,"must not terminate with a . (dot or period)"
     ,"encoding of word must use between 1 and 64 bytes"

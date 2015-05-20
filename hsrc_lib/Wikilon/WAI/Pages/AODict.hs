@@ -1,5 +1,9 @@
-{-# LANGUAGE ViewPatterns, OverloadedStrings #-}
+{-# LANGUAGE ViewPatterns, PatternGuards, OverloadedStrings #-}
 -- | Pages, links, and forms for AODict import & export
+--
+-- TODO: variation supporting import/export with full history.
+-- (This might require a different format for performance...
+-- maybe a sequence of patches as a tar file?)
 module Wikilon.WAI.Pages.AODict
     ( dictAsAODict
     , importAODict
@@ -9,6 +13,7 @@ module Wikilon.WAI.Pages.AODict
     , lnkAODictFile
     , lnkAODictGz
     , formImportAODict
+    , htmlAODictFormat
     ) where
 
 import Data.Monoid
@@ -32,6 +37,7 @@ import Wikilon.WAI.RecvFormPost
 import Wikilon.Branch (BranchName)
 import qualified Wikilon.Branch as Branch
 import Wikilon.Dict.Word
+import Wikilon.Dict.Text (listTextConstraintsForHumans)
 import qualified Wikilon.Dict as Dict
 import qualified Wikilon.Dict.AODict as AODict
 import Wikilon.Root
@@ -111,8 +117,9 @@ exportAODictGzip _w caps _rq k = k $ eBadName caps
 
 -- receive a dictionary via Post, primarily for importing .ao or .ao.gz files
 recvAODictFormPost :: PostParams -> WikilonApp
-recvAODictFormPost (ppAODict -> Just body) w (dictCap -> Just dictName) rq k = do
-    let location = (HTTP.hLocation, wikilon_httpRoot w <> dictURI dictName) 
+recvAODictFormPost pp@(ppAODict -> Just body) w (dictCap -> Just dictName) rq k = do
+    let dest = maybe (wikilon_httpRoot w <> dictURI dictName) id (ppOrigin pp)
+    let location = (HTTP.hLocation, dest)
     let okSeeDict = Wai.responseLBS HTTP.seeOther303 [location, textHtml, noCache] $ renderHTML $ do
             let title = H.string "Import Succeeded"
             H.head $ do
@@ -129,7 +136,10 @@ recvAODictFormPost pp _w captures _rq k =
         Just _ -> k $ eBadName captures
 
 ppAODict :: PostParams -> Maybe LBS.ByteString
-ppAODict = fmap postParamContentUnzip . L.lookup "aodict"
+ppAODict = getPostParamUnzip "aodict"
+
+ppOrigin :: PostParams -> Maybe BS.ByteString
+ppOrigin = fmap LBS.toStrict . getPostParam "origin"
 
 -- | load a dictionary into Wikilon from a single file.
 -- This may delete words in the original dictionary.
@@ -181,10 +191,50 @@ aodImportErrors errors =
         H.p "Content rejected. Do not resubmit without changes."
         H.p "Error Messages:"
         H.ul $ mapM_ (H.li . H.string) errors
+        H.hr
+        htmlAODictFormat
+
+htmlAODictFormat :: HTML
+htmlAODictFormat = H.div ! A.id "aodictFormat" ! A.class_ "advice" $ do
+    H.h2 "General Format"
+    H.p "Content must use the aodict format. i.e. (@word abcdef\\n)* where\n\
+        \each abcdef is a definition written in Awelon Bytecode (ABC)."
+    H.h3 "ABC"
+    H.p "ABC consists of 43 primitive operators, blocks, tokens, and texts."
+    H.ul $ do
+        H.li "operators: SP LF lrwzvc%^$o'kf#0123456789+*/-QLRWZVC?DFMK>"
+        H.li "blocks contain ABC between square brackets, e.g. [vrwlc]"
+        H.li "text literals have regex form: [\"].*(\\n[ ].*)*\\n~" 
+        H.li "tokens use text between curly braces, e.g. {foo}"
+    H.p "However, only a subset of ABC is permitted within AO dictionaries."
+    H.h4 "Words Constraints"
+    H.ul $ mapM_ (H.li . H.string) listWordConstraintsForHumans
+    H.h4 "Token Constraints"
+    H.ul $ do
+        H.li "{%word} - dependency on another word in dictionary"
+        H.li "{&anno} - annotation, e.g. for performance or safety"
+        H.li "{:foo} - discretionary sealer, excludes '$'"
+        H.li "{.foo} - discretionary unsealer, excludes '$'"
+    H.p "Tokens must be from these classes. Additionally, tokens must\n\
+        \be valid according to the Word Constraints."
+    H.h4 "Text Constraints"
+    H.p "Text literal constraints were initially motivated to simplify CRLF\n\
+        \conversions. But avoiding control characters seems wise in general."
+    H.ul $ mapM_ (H.li . H.string) listTextConstraintsForHumans
+    H.h3 "Structural Constraints"
+    H.p "The aodict format has structural constraints to guard against\n\
+        \cycles and undefined words, and simplify efficient processing."
+    H.ul $ do
+        H.li "words are defined before use"
+        H.li "words are not redefined"
+    H.h3 "ABC Definition"
+    H.p "An ABC definition should have type: ∀e.(e → ∃v.([v→[a→b]]*(v*e))). The\n\
+        \intermediate value 'v' serves as an abstract syntax or DSL structure.\n\
+        \The resulting [a→b] is the compiled functional meaning of the word." 
 
 
 lnkAODict, lnkAODictFile, lnkAODictGz :: BranchName -> HTML
-formImportAODict :: BranchName -> HTML
+formImportAODict :: Route -> BranchName -> HTML
 
 lnkAODict d = 
     let uri = uriAODict d in
@@ -199,12 +249,15 @@ lnkAODictGz d =
     H.a ! A.href (H.unsafeByteStringValue uri) $ 
         H.unsafeByteString $ d <> ".ao.gz"
 
-formImportAODict d =
+formImportAODict r d =
     let uri = uriAODict d in
     let uriAction = H.unsafeByteStringValue uri in
     let style = "display:inline" in
-    H.form ! A.method "POST" ! A.enctype "multipart/form-data" ! A.action uriAction ! A.style style $ do
+    H.form ! A.method "POST" ! A.enctype "multipart/form-data" ! A.action uriAction
+           ! A.id "aodictFileImport" ! A.style style $ do
         let lAccept = ".ao,.ao.gz,text/vnd.org.awelon.aodict"
-        let 
         H.input ! A.type_ "file" ! A.name "aodict" ! A.accept lAccept ! A.required "true"
+        let origin = H.unsafeByteStringValue r
+        H.input ! A.type_ "hidden" ! A.name "origin" ! A.value origin
         H.input ! A.type_ "submit" ! A.value "Import File"
+

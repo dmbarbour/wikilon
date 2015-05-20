@@ -32,6 +32,9 @@ data Value r
     | Resource r {-# UNPACK #-} !Flags
     deriving (Eq)
 
+-- to consider: I might want to more precisely model a sealer's information,
+-- i.e. as Discretionary Token | Cryptographic Format Key | etc.
+
 -- Aside: an idea I've considered is to use Copyable and Droppable
 -- wrappers for values.
 --

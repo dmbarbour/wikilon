@@ -183,7 +183,7 @@ The ABC stream can contain arbitrary blocks of unicode text:
          or terminates text with tilde (126)
         ~
 
-If anything other than space or `~` follows LF, the ABC stream is in error. There are no escape characters in ABC, except for SP to escape a preceding LF. By convention, text starts at a new line to keep it more readable. Text is less aesthetically pleasing, but still legible, when used for a single line or word:
+If anything other than space or `~` follows LF, the ABC stream is in error. There are no escape characters in ABC, except for SP to escape a preceding LF. While text may contain any codepoint, I would discourage use of any control character other than LF, along with excluding the surrogate codepoints and the U+FFFD replacement character. By convention, text starts at a new line to keep it more readable. Text is less aesthetically pleasing, but still legible, when used for a single line or word:
 
         "Text
         ~

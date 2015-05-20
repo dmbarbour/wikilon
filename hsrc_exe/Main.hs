@@ -162,13 +162,14 @@ runWikilonInstance a = mainBody where
     badArgMsg = "unrecognized arguments: " ++ show badArgs 
     askedForHelp = _help a
     helpAndExit = Sys.putStrLn helpMessage >> Sys.exitSuccess
-    greet home port cache wiki bUseTLS =
-        Sys.putStrLn ("Wikilon:") >>
-        Sys.putStrLn ("  Home:  " ++ showFP home) >>
-        Sys.putStrLn ("  Port:  " ++ show port) >>
-        Sys.putStrLn ("  Cache: " ++ show cache ++ " MB") >>
-        Sys.putStrLn ("  HTTPS: " ++ show bUseTLS) >>
-        Sys.putStrLn ("  Admin: " ++ UTF8.toString (Wikilon.adminCode wiki))
+    greet home port cache wiki bUseTLS = do
+        Sys.putStrLn ("Wikilon:")
+        Sys.putStrLn ("  Home:   " ++ showFP home)
+        Sys.putStrLn ("  Port:   " ++ show port) 
+        Sys.putStrLn ("  Cache:  " ++ show cache ++ " MB")
+        Sys.putStrLn ("  HTTPS:  " ++ show bUseTLS)
+        Sys.putStrLn ("  Admin:  " ++ UTF8.toString (Wikilon.adminCode wiki))
+        Sys.putStrLn ("  Master: " ++ UTF8.toString (Wikilon.wikilon_master wiki)) 
 
 showFP :: FS.FilePath -> String
 showFP = id
