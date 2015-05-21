@@ -8,6 +8,7 @@
 module Wikilon.WAI.RegexPatterns 
     ( abc
     , aoWord
+    , aoWordList
     , aoDict
     ) where
 
@@ -37,6 +38,10 @@ abc = "(?:" ++ abcSegment ++ ")*"
 
 aoWord :: String
 aoWord = "[a-zA-Z0-9\\x2D._~!$'*+=:@\\u00A0-\\uFFFC]+"
+
+-- a list of zero or more words
+aoWordList :: String
+aoWordList = "(?:[, ]*" ++ aoWord ++ ")*"
 
 aoDictEnt :: String
 aoDictEnt = "\\x40" ++ aoWord ++ sp ++ abc

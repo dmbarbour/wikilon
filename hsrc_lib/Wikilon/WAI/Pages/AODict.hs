@@ -13,7 +13,8 @@ module Wikilon.WAI.Pages.AODict
     , lnkAODictFile
     , lnkAODictGz
     , formImportAODict
-    , htmlAODictFormat
+    , aodictDocHTML
+    , aodictDocs
     ) where
 
 import Data.Monoid
@@ -162,12 +163,12 @@ importAODict' :: Wai.Response -> Branch.BranchName -> LBS.ByteString -> Wikilon 
 importAODict' onOK dictName body w _rq k =
     let (err, wordMap) = AODict.decodeAODict body in
     let bHasError = not (L.null err) in
-    let onError = k $ aodImportErrors $ fmap show err in
+    let onError = k $ aodImportErrors w $ fmap show err in
     if bHasError then onError else
     let vc = vcache_space (wikilon_store w) in
     case Dict.insert (Dict.empty vc) (Map.toList wordMap) of
         Left insertErrors -> 
-            k $ aodImportErrors $ fmap show insertErrors
+            k $ aodImportErrors w $ fmap show insertErrors
         Right dictVal -> do
             tNow <- getTime 
             runVTx vc $ 
@@ -177,13 +178,14 @@ importAODict' onOK dictName body w _rq k =
                     Branch.insert dictName b' bset
             k onOK
 
-aodImportErrors :: [String] -> Wai.Response
-aodImportErrors errors = 
-    Wai.responseLBS HTTP.badRequest400 [textHtml, noCache] $ 
-    renderHTML $ do
+aodImportErrors :: Wikilon -> [String] -> Wai.Response
+aodImportErrors w errors = 
+    let status = HTTP.badRequest400 in
+    let headers = [textHtml, noCache] in
+    Wai.responseLBS status headers $ renderHTML $ do
     let title = "Import Error"
     H.head $ do
-        htmlMetaCharsetUtf8
+        htmlHeaderCommon w
         htmlMetaNoIndex
         H.title title
     H.body $ do
@@ -191,21 +193,55 @@ aodImportErrors errors =
         H.p "Content rejected. Do not resubmit without changes."
         H.p "Error Messages:"
         H.ul $ mapM_ (H.li . H.string) errors
-        H.hr
-        htmlAODictFormat
+        let lnDocs = H.a ! A.href (H.unsafeByteStringValue uriAODictDocs) $ "aodict documentation"
+        H.p $ "See " <> lnDocs <> " for general information on formatting." 
 
-htmlAODictFormat :: HTML
-htmlAODictFormat = H.div ! A.id "aodictFormat" ! A.class_ "advice" $ do
+aodictDocs :: WikilonApp
+aodictDocs = app where
+    app = justGET $ branchOnOutputMedia [(mediaTypeTextHTML, getPage)]
+    getPage w _cap _rq k = 
+        k $ Wai.responseLBS HTTP.ok200 [textHtml] $ renderHTML $ do
+        H.head $ do
+            htmlHeaderCommon w
+            H.title "text/vnd.org.awelon.aodict"
+        H.body $ aodictDocHTML
+
+aodictDocHTML :: HTML
+aodictDocHTML = do
+    H.h1 "The AODict Format"
+    H.p $ H.b "Internet Media Type:" <> " text/vnd.org.awelon.aodict"
+    H.p $ H.b "Filename Extensions:" <> " .ao,.ao.gz (gzipped)"
+    H.p "AODict is an import/export format for Awelon Object (AO) dictionaries."
     H.h2 "General Format"
-    H.p "Content must use the aodict format. i.e. (@word abcdef\\n)* where\n\
-        \each abcdef is a definition written in Awelon Bytecode (ABC)."
-    H.h3 "ABC"
+    H.p "The AODict file contains a simple list of `@word definition LF` entries.\n\
+        \Each word is defined exactly once, and each word is defined before use.\n\
+        \Definitions use a subset of Awelon Bytecode (ABC). Simple example:"
+    H.pre . H.code $
+        "@swap [rwrwzwlwl][]\n\
+        \@swapd [rw {%swap} wl][]\n\
+        \@dup [r^zlwl][]\n\
+        \@fixpoint ['[^'ow^'zowvr$c]^'owo][]\n\
+        \@helloMultiLine\n\
+        \\"Hello,\n\
+        \ this is a multi-line definition!\n\
+        \~[v'c]\n\
+        \"
+    H.p "The structure of ABC ensures there is never any ambiguity that the '@'\n\
+        \begins a new entry. There is no need for escapes, and we don't need to\n\
+        \parse ABC to split entries. The word and definition may be divided by a\n\
+        \a space (SP, 32) or linefeed (LF, 10)."
+    H.p "While a general ABC parser can process any AO definition, AO doesn't\n\
+        \permit arbitrary ABC. In particular, there are constraints on tokens\n\
+        \and text literals. Words are also constrained. See below."
+    H.h3 "Awelon Bytecode (ABC)"
     H.p "ABC consists of 43 primitive operators, blocks, tokens, and texts."
     H.ul $ do
         H.li "operators: SP LF lrwzvc%^$o'kf#0123456789+*/-QLRWZVC?DFMK>"
         H.li "blocks contain ABC between square brackets, e.g. [vrwlc]"
         H.li "text literals have regex form: [\"].*(\\n[ ].*)*\\n~" 
         H.li "tokens use text between curly braces, e.g. {foo}"
+    let abcDocs = H.a ! A.href (H.unsafeByteStringValue uriABCDocs) $ "ABC documentation"
+    H.p $ "See " <> abcDocs <> " for detailed information." 
     H.p "However, only a subset of ABC is permitted within AO dictionaries."
     H.h4 "Words Constraints"
     H.ul $ mapM_ (H.li . H.string) listWordConstraintsForHumans
@@ -213,8 +249,8 @@ htmlAODictFormat = H.div ! A.id "aodictFormat" ! A.class_ "advice" $ do
     H.ul $ do
         H.li "{%word} - dependency on another word in dictionary"
         H.li "{&anno} - annotation, e.g. for performance or safety"
-        H.li "{:foo} - discretionary sealer, excludes '$'"
-        H.li "{.foo} - discretionary unsealer, excludes '$'"
+        H.li "{:foo} - discretionary sealer, excludes character '$'"
+        H.li "{.foo} - discretionary unsealer, excludes character '$'"
     H.p "Tokens must be from these classes. Additionally, tokens must\n\
         \be valid according to the Word Constraints."
     H.h4 "Text Constraints"
@@ -227,10 +263,28 @@ htmlAODictFormat = H.div ! A.id "aodictFormat" ! A.class_ "advice" $ do
     H.ul $ do
         H.li "words are defined before use"
         H.li "words are not redefined"
-    H.h3 "ABC Definition"
-    H.p "An ABC definition should have type: ∀e.(e → ∃v.([v→[a→b]]*(v*e))). The\n\
-        \intermediate value 'v' serves as an abstract syntax or DSL structure.\n\
-        \The resulting [a→b] is the compiled functional meaning of the word." 
+    H.h3 "Type Constraints"
+    H.p "Each definition should have the general form:"
+    H.pre . H.code $
+        "type Def a b = ∀e.(e → ∃v.([v→[a→b]] * (v * e)))"
+    H.p "The meaning of the word is the pure function of type [a→b]. However,\n\
+        \the intermediate value 'v' serves an important role for structured\n\
+        \editing, staged programming, and user-defined languages. The function\n\
+        \[v→[a→b]] serves as a compiler. We compile the value into its meaning."
+    H.p "Frequently, the compiler is just [] (identity, value is a function)\n\
+        \or [v'c] (quotation, export value directly). User-defined languages\n\
+        \should generally be reduced to a single word like [{%fooLang}]."
+    H.p "Anyhow, as basic health checks, every definition should compile and\n\
+        \the resulting functions should have usable types."
+    H.h2 "Editing of AO Dictionaries"
+    H.p "The AODict format is not suitable for direct human reading and editing."
+    H.p "At small scales, it is feasible to edit AODict directly, assuming you\n\
+        \well know ABC and your dictionary. But in practice a dictionary grows\n\
+        \large, dense, noisy, intractable in the AODict format. An editor may\n\
+        \help developers by supporting edits for small lists of words."
+    H.p "AO is designed for structure editors and environments that can present\n\
+        \editable views for words based around the intermediate structures of\n\
+        \definitions"
 
 
 lnkAODict, lnkAODictFile, lnkAODictGz :: BranchName -> HTML
@@ -239,7 +293,7 @@ formImportAODict :: Route -> BranchName -> HTML
 lnkAODict d = 
     let uri = uriAODict d in
     H.a ! A.href (H.unsafeByteStringValue uri) $ 
-        H.unsafeByteString $ "aodict"
+        H.unsafeByteString $ "AODict"
 lnkAODictFile d =
     let uri = uriAODict d <> "?asFile" in
     H.a ! A.href (H.unsafeByteStringValue uri) $
@@ -260,4 +314,5 @@ formImportAODict r d =
         let origin = H.unsafeByteStringValue r
         H.input ! A.type_ "hidden" ! A.name "origin" ! A.value origin
         H.input ! A.type_ "submit" ! A.value "Import File"
+
 

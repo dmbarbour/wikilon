@@ -8,8 +8,8 @@ module Wikilon.WAI.Routes
     , dictURI, dictURIBuilder, dictLink, dictCap
     , wordURI, wordURIBuilder, wordLink, wordCap
 
-    , uriAODict
-    , uriDictEdit
+    , uriAODict, uriAODictEdit
+    , uriAODictDocs, uriAODocs, uriWikilonDocs, uriABCDocs
     ) where
 
 import Control.Monad
@@ -66,8 +66,17 @@ dictCap caps =
 uriAODict :: BranchName -> Route
 uriAODict d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/aodict"
     
-uriDictEdit :: BranchName -> Route
-uriDictEdit d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/edit"
+uriAODictEdit :: BranchName -> Route
+uriAODictEdit d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/aodict.edit"
+
+uriAODictDocs, uriAODocs, uriABCDocs, uriWikilonDocs :: Route
+uriAODocs       = -- "about/ao"
+    "https://github.com/dmbarbour/wikilon/blob/master/docs/AboutAO.md"
+uriABCDocs      = -- "about/abc"
+    "https://github.com/dmbarbour/wikilon/blob/master/docs/AboutABC.md"
+uriAODictDocs   = "about/aodict"
+uriWikilonDocs  = -- "about/wikilon"
+    "https://github.com/dmbarbour/wikilon"
 
 -- | URI associated for a specific word in a named dictionary
 -- This includes pct-encoded escapes as necessary.

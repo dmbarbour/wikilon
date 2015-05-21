@@ -107,6 +107,7 @@ Library
     Wikilon.WAI.RecvFormPost
     Wikilon.WAI.RegexPatterns
     Wikilon.WAI.Pages.AODict
+    Wikilon.WAI.Pages.AODictEdit
     Wikilon.WAI.Pages.DictList
     Wikilon.WAI.Pages.FrontPage
     Wikilon.WAI.Pages.Dict

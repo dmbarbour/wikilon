@@ -7,15 +7,12 @@
 -- a tar file, expanding into one file per word?
 module Wikilon.WAI.Pages.Dict
     ( dictResource
-    , dictWords
-    , dictEdit
-    , formDictEdit
+    -- , dictWords
     , module Wikilon.WAI.Pages.AODict
+    , module Wikilon.WAI.Pages.AODictEdit
     ) where
 
 import Data.Monoid
-import qualified Data.ByteString.UTF8 as UTF8
-import qualified Data.ByteString.Lazy as LBS
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
@@ -25,12 +22,12 @@ import Database.VCache
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
-import Wikilon.WAI.RecvFormPost
 import Wikilon.Branch (BranchName)
 import qualified Wikilon.Branch as Branch
 import Wikilon.Root
 
 import Wikilon.WAI.Pages.AODict
+import Wikilon.WAI.Pages.AODictEdit
         
 -- The full 'dictionary resource' will include access to
 -- words, histories, issues, subscriptions, etc.. Since
@@ -58,6 +55,7 @@ dictFrontPage' dictName w rq k =
     let title = H.unsafeByteString dictName 
     let tmModified = maybe "--" htmlSimpTime $ Branch.modified b
     let origin = Wai.rawPathInfo rq
+    let srcEditor = H.unsafeByteStringValue (uriAODictEdit dictName)
     H.head $ do
         htmlHeaderCommon w
         H.title title 
@@ -66,9 +64,16 @@ dictFrontPage' dictName w rq k =
         H.p "This is an AO dictionary front page. I'm still figuring out what should go here."
         H.h2 "Recent Events"
         H.h2 "Dictionary Health"
+
+        H.h2 "Quick Edit"
+        H.p "Listing a few words here will load them for editing."
+        formAODictLoadEditor [] dictName
+
         H.h2 "Resources"
         H.ul $ do
-            H.li $ lnkAODict dictName <> " see dictionary (very primitive)"
+            let editor = H.a ! A.href srcEditor $ "AODict editor"
+            H.li $ editor <> " view and edit raw fragments of the dictionary"
+            H.li $ lnkAODict dictName <> " view full dictionary (low level)"
         -- maybe some content from the dictionary itself
         -- maybe add some banner or CSS from dictionary itself
         -- maybe a simple console-like or query application?
@@ -87,64 +92,14 @@ dictFrontPage' dictName w rq k =
             -- 
             -- H.li $ lnkAODict dictName <> " - aodict format "
             -- 
-        H.h2 "Quick Edit"
-        formDictEdit origin dictName
+
         H.hr
         H.div ! A.id "dictFoot" ! A.class_ "footer" $ do
             H.b "Export:" <> " " <> lnkAODictFile dictName <> " " <> lnkAODictGz dictName <> H.br
             H.b "Import:" <> " " <> formImportAODict origin dictName <> H.br
             H.b "Modified:" <> " " <> tmModified <> H.br
 
--- | dictEdit is a very simplistic editor for AO.
-dictEdit :: WikilonApp
-dictEdit = app where
-    app = routeOnMethod
-        [(HTTP.methodGet, onGet)
-        ,(HTTP.methodPost, onPost)]
-    onGet = branchOnOutputMedia [(mediaTypeTextHTML, onGetHTML)]
-    onGetHTML w (dictCap -> Just dictName) rq k =
-        k $ Wai.responseLBS HTTP.ok200 [textHtml] $ renderHTML $ do
-        let title = H.string $ "Edit " ++ UTF8.toString dictName
-        H.head $ do
-            htmlHeaderCommon w
-            H.title title
-        H.body $ do
-            H.h1 title
-            formDictEdit (Wai.rawPathInfo rq) dictName
-            H.hr
-            H.string "view " <> lnkAODict dictName <> H.br
-            H.string "return to " <> dictLink dictName <> H.br
-    onGetHTML _w captures _rq k = k $ eBadName captures
-    onPost = recvFormPost recvDictEdit
-
-recvDictEdit :: PostParams -> WikilonApp
-recvDictEdit (ppUpdate -> Just body) w (dictCap -> Just dictName) rq k =
-    k $ Wai.responseLBS HTTP.accepted202 [plainText] $ "todo: run edit"
-recvDictEdit pp _w captures _rq k =
-    case ppUpdate pp of
-        Nothing -> k $ eBadRequest "missing 'update' parameter"
-        Just _ -> k $ eBadName captures
-
-ppUpdate :: PostParams -> Maybe LBS.ByteString
-ppUpdate = getPostParamUnzip "update"
-
-
-formDictEdit :: Route -> BranchName -> HTML
-formDictEdit r d =
-    let uri = uriDictEdit d in
-    let uriAction = H.unsafeByteStringValue uri in
-    H.form ! A.id "dictEdit" ! A.method "POST" ! A.action uriAction $ do
-        H.input ! A.type_ "textarea" ! A.name "update"  ! A.required "true" 
-                ! A.rows "24" ! A.cols "70" 
-                ! A.placeholder "@helloWorld \"Hello, World!\n\
-                                \~[v'c]\n\
-                                \@swap [rwrwzwlwl][]"
-        let origin = H.unsafeByteStringValue r
-        H.input ! A.type_ "hidden" ! A.name "origin" ! A.value origin
-        H.input ! A.type_ "submit" ! A.value "Update"
-
-
-
+{-
 -- our 
 dictWords :: WikilonApp
 dictWords = app where
@@ -164,6 +119,5 @@ dictWords = app where
 dictWordsPage :: WikilonApp
 dictWordsPage = toBeImplementedLater "Dict words!"
 
-
-
+-}
 

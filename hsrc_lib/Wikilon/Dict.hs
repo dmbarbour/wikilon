@@ -270,25 +270,17 @@ _updOneDep t (tok,(wsDel,wsAdd)) = Trie.adjust adj tok t where
 type InsertionErrors = [InsertionError]
 data InsertionError 
     = Undef    !Word !Word   -- undefined {%word} used by word
-    | BadWord  !Word        -- word is not valid according to heuristics
+    | BadWord  !Word         -- word is not valid according to heuristics
     | BadToken !Token !Word  -- invalid {token} used by word
-    | BadText  !Text !Word  -- rejecting text based on heuristic constraints
-    | Cycle    ![Word]
+    | BadText  !Text !Word   -- rejecting text on heuristic constraints
+    | Cycle    ![Word]      
 
 instance Show InsertionError where
-    show (Undef uw w)   = "undefined {%" ++ show uw ++ "} in " ++ show w
+    show (Undef uw w)   = "word " ++ show w ++ " uses undefined {%" ++ show uw ++ "}"
     show (BadWord w)    = "malformed word: " ++ show w
-    show (BadToken t w) = "rejecting token {" ++ UTF8.toString t ++ "} in " ++ show w
+    show (BadToken t w) = "rejecting token " ++ show (ABC.ABC_Tok t) ++ " in " ++ show w
     show (Cycle ws)     = "cyclic dependencies: " ++ show ws
-    show (BadText t w)  = 
-        let sText = truncateText 24 $ LazyUTF8.toString t in
-        "rejecting text " ++ sText ++ " in " ++ show w
-
-truncateText :: Int -> [Char] -> [Char]
-truncateText _ [] = []
-truncateText 3 _ = "..."
-truncateText n (c:cs) = c : truncateText (n - 1) cs
-
+    show (BadText t w)  = "in word" ++ show w ++ " malformed text: " ++ show (ABC.ABC_Text t)
 
 -- | Insert or Update a list of words. Any existing definition for 
 -- an inserted word will be replaced. Errors are possible if a word
@@ -319,10 +311,12 @@ unsafeInsert d l = Dict1 { dict_defs = d_defs', dict_deps = d_deps' } where
     _wkey (Word w) = w
 
 _testBadDef :: Word -> ABC -> InsertionErrors -> InsertionErrors
-_testBadDef w abc = badWord . badToks where
+_testBadDef w abc = badWord . badToks . badTexts where
     badWord = if isValidWord w then id else (:) (BadWord w) 
     badToks = (++) (fmap (`BadToken` w) lBadToks)
     lBadToks = L.nub $ L.filter (not . isValidToken) $ ABC.tokens abc
+    badTexts = (++) (fmap (`BadText` w) lBadTexts)
+    lBadTexts = L.filter (not . isValidText) $ ABC.abcTexts abc
 
 -- find two kinds of errors: undefined dependencies, cycles
 -- Note: this will load content out of the VCache representation

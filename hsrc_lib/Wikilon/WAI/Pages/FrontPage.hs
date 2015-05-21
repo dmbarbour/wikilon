@@ -65,8 +65,8 @@ defaultFrontPage w = do
 
 
 hrefAO, hrefABC, hrefWikilonGithub :: HTML -> HTML
-hrefAO = H.a ! A.href "https://github.com/dmbarbour/wikilon/blob/master/docs/AboutAO.md"
-hrefABC = H.a ! A.href "https://github.com/dmbarbour/wikilon/blob/master/docs/AboutABC.md"
+hrefAO = H.a ! A.href (H.unsafeByteStringValue uriAODocs)
+hrefABC = H.a ! A.href (H.unsafeByteStringValue uriABCDocs)
 hrefWikilonGithub = H.a ! A.href "https://github.com/dmbarbour/wikilon"
 
 explainWikilon :: Wikilon -> HTML

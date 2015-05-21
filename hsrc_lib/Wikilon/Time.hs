@@ -14,6 +14,11 @@ module Wikilon.Time
     , addTime, subtractTime, diffTime
     , fromUTC, toUTC
     , dtToPicos
+
+    , ceilingDT, floorDT, roundDT
+    , ceilingSeconds, ceilingMinutes
+    , floorSeconds, floorMinutes
+    , roundSeconds, roundMinutes
     ) where
 
 import Control.Applicative
@@ -86,6 +91,40 @@ subtractTime (T tm) (DT dt) = T (tm - dt)
 -- | Find the difference in time, diffTime a b = a - b
 diffTime :: T -> T -> DT
 diffTime (T tf) (T t0) = DT (tf - t0)
+
+-- | Round T up to an incremental step based on a DT value.
+-- (assumes a positive DT)
+ceilingDT :: DT -> T -> T
+ceilingDT (DT dt) (T tm) = (T tm') where
+    (steps, extras) = tm `divMod` dt
+    steps' = if (extras > 0) then steps + 1 else steps 
+    tm' = steps' * dt
+
+-- | Round T down to an incremental step based on a DT value.
+-- (assumes a positive DT)
+floorDT :: DT -> T -> T
+floorDT (DT dt) (T tm) = (T tm') where
+    tm' = (tm `div` dt) * dt
+
+-- | Round T to a nearest incremental step based on a DT value.
+-- (assumes a positive DT)
+roundDT :: DT -> T -> T
+roundDT (DT dt) (T tm) = (T tm') where
+    (steps, extras) = tm `divMod` dt
+    steps' = if ((extras * 2) >= dt) then steps + 1 else steps
+    tm' = steps' * dt
+
+-- | common truncation operations for time
+ceilingSeconds, ceilingMinutes :: T -> T
+floorSeconds, floorMinutes :: T -> T
+roundSeconds, roundMinutes :: T -> T
+
+ceilingSeconds = ceilingDT 1
+ceilingMinutes = ceilingDT 60
+floorSeconds = floorDT 1
+floorMinutes = floorDT 60
+roundSeconds = roundDT 1
+roundMinutes = roundDT 60
 
 instance Num DT where
     (+) (DT a) (DT b) = DT (a + b)

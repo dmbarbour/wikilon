@@ -14,7 +14,6 @@ import Control.Applicative
 import Data.Typeable
 import qualified Data.ByteString.Lazy as LBS
 import Data.VCache.Trie (Trie)
-import qualified Data.VCache.Trie as Trie
 import Database.VCache
 
 -- | A dictionary contains two indices:

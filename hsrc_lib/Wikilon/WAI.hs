@@ -29,7 +29,8 @@ wikilonRoutes = fmap (first UTF8.fromString) $
     [("/", wikilonRoot)
     ,("/d", allDictionaries)
     ,("/d/:d", dictResource)
-    ,("/d/:d/edit", dictEdit)
+    ,("/d/:d/aodict", dictAsAODict)
+    ,("/d/:d/aodict.edit", appAODictEdit)
     --,("/d/:d/w", dictWords)
     --,("/d/:d/w/:w", dictWord)
     ,("/d.create", dictPostCreate)
@@ -55,9 +56,13 @@ wikilonRoutes = fmap (first UTF8.fromString) $
     -- administrative
     ,("/admin/dbHealth", dbHealth)
 
+    -- built-in documentation
+    ,("/about/aodict", aodictDocs)
+
     -- special endpoints to force media types
-    ,("/d/:d/aodict", dictAsAODict)
     ,("/d.list", dictList)
+
+    --
 
 
     -- generic endpoints
