@@ -76,7 +76,8 @@ Library
     , byteable
     , entropy
     , zlib
-    , diff3
+    , diff3 (>= 0.2)
+    , Diff (>= 0.3)
 
   Exposed-Modules:
 

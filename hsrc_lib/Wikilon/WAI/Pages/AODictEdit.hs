@@ -41,6 +41,7 @@ import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
+import qualified Data.Algorithm.Diff as Diff
 import qualified Data.Algorithm.Diff3 as Diff3
 import Database.VCache
 
@@ -141,15 +142,16 @@ editorPage w (dictCap -> Just dictName) rq k = do
             H.p $ "Edit an ad-hoc fragment of dictionary in " <> hrefAODict <> "."
             formAODictEdit sContent dictName tMod 
             H.h2 "Reload Editor"
-            H.p $ "Load words into the editor to view or edit.\n"
-                <> H.b "Warning:" <> " you will lose editor contents.\n"
-                <> H.b "Advice:" <> " simplify conflict management by loading all words you need.\n"
-            formAODictLoadEditor lWords dictName
+            H.p $ "Load words into the editor to view or edit." <>
+                  H.b "Warning:" <> " editor content will be lost."
+            formAODictLoadEditor lWords dictName <> H.br
             H.hr
             unless (L.null lWords) $ do
-                H.strong "Words:"
-                H.nav $ forM_ lWords $ \ aow -> " " <> wordLink dictName aow
+                H.nav $ do
+                    H.strong "Words:" 
+                    forM_ lWords $ \ aow -> " " <> wordLink dictName aow
                 H.br
+            H.strong "Dictionary:" <> " " <> dictLink dictName
 editorPage _ caps _ k = k $ eBadName caps
 
 type Line = Either LBS.ByteString (Word, ABC) 
@@ -183,34 +185,60 @@ reportConflict :: BranchName -> Dict -> Dict -> (Word, ABC) -> Maybe HTML
 reportConflict dictName dOrig dHead (w, abc) = 
     let bsOrig = loadBytes dOrig w in
     let bsHead = loadBytes dHead w in
-    if bsOrig == bsHead then Nothing else Just $ do 
+    if bsOrig == bsHead then Nothing else Just $ do -- no change
     -- return an HTML description of the conflict
-
-    let sOrig = LazyUTF8.toString bsOrig
-    let sHead = LazyUTF8.toString bsHead
-    let sEdit = show abc 
-    let lDiffChunks = Diff3.diff3 sHead sOrig sEdit 
+    -- let sOrig = LazyUTF8.toString bsOrig
     H.strong $ "@" <> wordLink dictName w
-    H.pre $ H.code ! A.lang "abc" ! A.class_ "threeWayMerge"  $ do
-        forM_ lDiffChunks $ \ chunk -> case chunk of
-            Diff3.LeftChange c -> styleHead $ H.string c
-            Diff3.RightChange c -> styleEdit $ H.string c
-            Diff3.Unchanged c -> styleOrig $ H.string c
-            Diff3.Conflict cHead cOrig cEdit -> styleConflict $ do
-                barrierConflict "(" 
-                styleHead $ H.string cHead 
-                barrierConflict "|"
-                styleOrig $ H.string cOrig
-                barrierConflict "|"
-                styleEdit $ H.string cEdit
-                barrierConflict ")"
+    H.b "Head Version:"
+    headBox $ H.string (LazyUTF8.toString bsHead)
+    H.b "2-Way String Merge (Head and Edit):"
+    merge2Box $ twoWayMerge (LazyUTF8.toString bsHead) (show abc)
+    H.b "3-Way String Merge:"
+    merge3Box $ threeWayMerge (LazyUTF8.toString bsHead) (LazyUTF8.toString bsOrig) (show abc)
 
-styleHead, styleEdit, styleOrig, styleConflict, barrierConflict :: HTML -> HTML
-styleHead = H.span ! A.class_ "diff3Head" ! A.style "color:green"
-styleEdit = H.span ! A.class_ "diff3Edit" ! A.style "color:blue"
+twoWayMerge :: String -> String -> HTML
+twoWayMerge sHead sEdit = 
+    let lChunks = Diff.getGroupedDiff sHead sEdit in
+    forM_ lChunks $ \ chunk -> case chunk of
+        Diff.First s -> styleHead $ H.string s
+        Diff.Second s -> styleEdit $ H.string s
+        Diff.Both s _ -> styleOrig $ H.string s
+
+threeWayMerge :: String -> String -> String -> HTML
+threeWayMerge sHead sOrig sEdit =
+    let lChunks = Diff3.diff3 sHead sOrig sEdit in
+    forM_ lChunks $ \ chunk -> case chunk of
+        Diff3.LeftChange s -> styleHead $ H.string s
+        Diff3.RightChange s -> styleEdit $ H.string s
+        Diff3.Unchanged s -> styleOrig $ H.string s 
+        Diff3.Conflict h o e -> styleConflict $ do
+            barrierConflict "("
+            styleHead $ H.string h
+            barrierConflict "|"
+            styleOrig $ H.string o
+            barrierConflict "|"
+            styleEdit $ H.string e
+            barrierConflict ")"
+
+headBox, merge2Box, merge3Box :: HTML -> HTML
+headBox = codeBox "diffHeadBox" "border-color:Navy;border-style:dashed;border-width:thin" 
+merge2Box = codeBox "diffMerge2Box" "border-color:Indigo;border-style:dashed;border-width:thin"
+merge3Box = codeBox "diffMerge3Box" "border-color:SeaGreen;border-style:dashed;border-width:thin"
+
+codeBox :: String -> String -> HTML -> HTML
+codeBox _class _style h =
+    H.pre ! A.style (H.stringValue _style) $ 
+    H.code ! A.class_ (H.stringValue _class) ! A.lang "abc" $ h
+
+styleHead, styleEdit, styleOrig :: HTML -> HTML
+styleHead = H.span ! A.class_ "diffHead" ! A.style "background-color:DarkSeaGreen"
+styleEdit = H.span ! A.class_ "diffEdit" ! A.style "background-color:Thistle"
 styleOrig = id
-styleConflict = H.span ! A.class_ "diff3Conflict" ! A.style "border-style:dashed;border-color:DarkOrange"
-barrierConflict = H.span ! A.class_ "diff3ConflictSep" ! A.style "color:DarkOrange;font-weight:900"
+
+styleConflict, barrierConflict :: HTML -> HTML
+styleConflict = H.span ! A.class_ "diffConflict" ! A.style "border-color:DarkOrange;border-style:solid;border-width:medium"
+barrierConflict = H.span ! A.class_ "diffConflictSep" ! A.style "color:DarkOrange;font-weight:bolder"
+
             
 histDict :: Branch -> Maybe T -> Dict
 histDict b Nothing = Dict.empty vc where
@@ -269,6 +297,7 @@ recvAODictEdit pp w cap _rq k
                         H.h1 title
                         H.p "A concurrent edit has modified words you're manipulating."
                         H.h2 "Change Report"
+                        H.p "Currently just some string diffs. Todo: structural and semantic diffs."
                         forM_ lConflict $ \ report -> report <> H.br
                         H.h2 "Edit and Resubmit"
                         H.p "At your discretion, you may resubmit without changes."

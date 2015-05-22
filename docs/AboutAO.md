@@ -116,8 +116,17 @@ I'd prefer to keep names of things relatively shallow. However, we can make use 
 
 AO doesn't support namespaces directly. Every word must be fully written in those bytecode tokens. However, structure editors may hide common prefixes or suffixes to prevent large names from becoming noise. Use of color is also viable, to help developers visually distinguish the origins of words.
 
-Old Content
+
+## Historical Note
+
+The name 'Awelon Object' was initially applied to a Forth-like language suitable for direct keyboard input by humans. Even then AO was a very thin linker and macro layer above Awelon Bytecode with the same dictionary concept (albeit, without support for structured definitions). However, the current form of AO is a better fit for the historical connotations of 'object code'.
+
+There is still a valuable role for an efficient Forth-like language, e.g. for input into a console or command line. I'm still dreaming up a good name for this, but do see the [command line](CommandLine.md) documentation.
+
+Old Content 
 ============
+
+(for the old Forth-like AO variant)
 
 ## IDE
 

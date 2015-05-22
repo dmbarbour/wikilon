@@ -76,7 +76,9 @@ Dealing with all the different HTTP methods and Accept modes and so on seems to 
 
 * add words or edit a dictionary
 * evaluation of code expressions
+ * REPL and command line environment!
 * rename and merge words
+* fork a dictionary
 
 
 * import and export of a dictionary as a file 
