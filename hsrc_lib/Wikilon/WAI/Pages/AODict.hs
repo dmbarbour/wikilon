@@ -216,7 +216,7 @@ aodictDocHTML = do
     H.p "The AODict file contains a simple list of `@word definition LF` entries.\n\
         \Each word is defined exactly once, and each word is defined before use.\n\
         \Definitions use a subset of Awelon Bytecode (ABC). Simple example:"
-    H.pre . H.code $
+    H.pre . (H.code ! A.lang "aodict") $
         "@swap [rwrwzwlwl][]\n\
         \@swapd [rw {%swap} wl][]\n\
         \@dup [r^zlwl][]\n\
@@ -281,7 +281,7 @@ aodictDocHTML = do
     H.p "At small scales, it is feasible to edit AODict directly, assuming you\n\
         \well know ABC and your dictionary. But in practice a dictionary grows\n\
         \large, dense, noisy, intractable in the AODict format. An editor may\n\
-        \help developers by supporting edits for small lists of words."
+        \help developers by supporting edits for ad-hoc fragments of a dictionary."
     H.p "AO is designed for structure editors and environments that can present\n\
         \editable views for words based around the intermediate structures of\n\
         \definitions"

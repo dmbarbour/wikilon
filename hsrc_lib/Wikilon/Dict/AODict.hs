@@ -26,6 +26,7 @@ module Wikilon.Dict.AODict
     , encode
     , encodeWords
 
+    , splitLine
     , decodeLine
     , logicalLines
 
@@ -119,26 +120,32 @@ takeLogicalLine bs = ll 0 bs where
                 Just (64, _) -> (ln, ss')
                 _ -> ll (n+ix+1) ss'
 
--- select all logical lines
+-- | select all logical lines
 logicalLines :: Bytes -> [Bytes]
 logicalLines bs =
     if LBS.null bs then [] else
     let (ln,bs') = takeLogicalLine bs in
     ln : logicalLines bs'
 
+-- | split an `@word data` logical line into a (word,data) pair
+splitLine :: Bytes -> Maybe (Word, Bytes)
+splitLine bs =
+    LBS.uncons bs >>= \ (atPrefix, wordAndDef) ->
+    if (64 /= atPrefix) then Nothing else -- @ prefix
+    let isWordSep c = (32 == c) || (10 == c) in
+    let (wbs, bs') = LBS.break isWordSep wordAndDef in
+    return (Word (LBS.toStrict wbs), LBS.drop 1 bs')
+
 -- | try to decode an `@word abc` line of code. Does not validate
 -- anything other than the ABC structure, e.g. might accept some
 -- invalid words or badly typed definitions.
 decodeLine :: Bytes -> Maybe (Word, ABC)
 decodeLine bs =
-    LBS.uncons bs >>= \ (atPrefix, wordAndDef) ->
-    if (64 /= atPrefix) then Nothing else -- @ prefix
-    let isWordSep c = (32 == c) || (10 == c) in
-    let (wbs, defbs) = LBS.break isWordSep wordAndDef in
-    let (abc,leftOver) = ABC.decode (LBS.drop 1 defbs) in
+    splitLine bs >>= \ (w, defbs) ->
+    let (abc,leftOver) = ABC.decode defbs in
     let bParsed = LBS.null leftOver in
     if (not bParsed) then Nothing else -- bad ABC parse
-    return (Word (LBS.toStrict wbs), abc)
+    return (w, abc)
 
 {- TODO: when I start working with very large dictionaries, I will
    probably need to operate on chunks of reasonable size rather than

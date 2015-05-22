@@ -73,7 +73,6 @@ import Data.Maybe
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.List as L
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -267,13 +266,17 @@ _updOneDep t (tok,(wsDel,wsAdd)) = Trie.adjust adj tok t where
 -- Other errors, such as badly typed code, divergent computations,
 -- or incorrect documentation must be addressed by clients.
 --
+-- I will report invalid input requests, too. Mostly, an input set
+-- must have a single entry for each word added.
+--
 type InsertionErrors = [InsertionError]
 data InsertionError 
     = Undef    !Word !Word   -- undefined {%word} used by word
     | BadWord  !Word         -- word is not valid according to heuristics
     | BadToken !Token !Word  -- invalid {token} used by word
     | BadText  !Text !Word   -- rejecting text on heuristic constraints
-    | Cycle    ![Word]      
+    | Cycle    ![Word]
+    | DupWord  !Word         -- word appears multiple times in set
 
 instance Show InsertionError where
     show (Undef uw w)   = "word " ++ show w ++ " uses undefined {%" ++ show uw ++ "}"
@@ -281,6 +284,7 @@ instance Show InsertionError where
     show (BadToken t w) = "rejecting token " ++ show (ABC.ABC_Tok t) ++ " in " ++ show w
     show (Cycle ws)     = "cyclic dependencies: " ++ show ws
     show (BadText t w)  = "in word" ++ show w ++ " malformed text: " ++ show (ABC.ABC_Text t)
+    show (DupWord w)    = "word " ++ show w ++ " assigned twice"
 
 -- | Insert or Update a list of words. Any existing definition for 
 -- an inserted word will be replaced. Errors are possible if a word
@@ -289,7 +293,9 @@ instance Show InsertionError where
 insert :: Dict -> [(Word, ABC)] -> Either InsertionErrors Dict
 insert d l = 
     -- sanitize input for internal per-word errors
-    let lBad = L.foldr (uncurry _testBadDef) [] l in
+    let lDupWords = DupWord <$> findDups (fst <$> l) in 
+    let lMalformed = L.foldr (uncurry _testBadDef) [] l in
+    let lBad = lDupWords ++ lMalformed in
     if not (L.null lBad) then Left lBad else
     -- compute the insertion
     let d' = unsafeInsert d l in
@@ -297,6 +303,13 @@ insert d l =
     let lInsErr = _insertionErrors d' (fmap fst l) in
     if not (L.null lInsErr) then Left lInsErr else
     Right $! d'
+
+findDups :: Eq a => [a] -> [a]
+findDups = f [] where
+    f ds (x:xs) = 
+        let bNewDup = L.elem x xs && L.notElem x ds in
+        if bNewDup then f (x:ds) xs else f ds xs
+    f ds [] = L.reverse ds
 
 -- | Insert without trying to detect any errors. 
 unsafeInsert :: Dict -> [(Word, ABC)] -> Dict

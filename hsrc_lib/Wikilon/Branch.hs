@@ -27,6 +27,7 @@ module Wikilon.Branch
     , head
     , modified
     , hist
+    , histDict
     , update
 
     , decay
@@ -156,18 +157,23 @@ modified = fmap fst . listToMaybe . hist
 hist :: Branch -> [(T, Dict)]
 hist = LoB.toList . b_hist
 
+-- | obtain the dictionary for a given historical moment in time
+-- (modulo decay, of course).
+histDict :: Branch -> T -> Dict
+histDict b tm = _hd (b_head b) (hist b) where
+    _hd _ ((t',d):h') | (t' > tm) = _hd d h'
+    _hd d _ = d
+
 -- | update the dictionary for a branch. This returns the original 
 -- dictionary unless there is an actual change. Also, a dictionary
--- will logically change at most once per millisecond (to simplify
--- resolution of race conditions on blind updates). 
+-- will logically change at most 10x per second. If we have near
+-- near that many updates, Wikilon won't be holding up anyway.
 update :: (T,Dict) -> Branch -> Branch 
 update (t,d) b = 
     let d0 = b_head b in
     if (d0 == d) then b else -- no change
-    let t' = case modified b of
-            Nothing -> t
-            Just t0 -> max t (addTime t0 0.001)
-    in
+    let tMonotonic = maybe t (max t . (`addTime` 0.1)) (modified b) in
+    let t' = ceilingDT 0.1 tMonotonic in
     let h' = LoB.cons (t',d0) (b_hist b) in
     Branch0 d h'
 

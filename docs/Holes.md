@@ -1,11 +1,4 @@
 Holes
 =====
 
-An interesting possibility is to have Wikilon help with development by creating 'holes' that Wikilon can try to fill automatically. These might be modeled using tokens like `{_holeName}`, with a constraint that all instances of the named hole within a dictionary will use the same definition.
-
-Potentially, I could build holes upon annotations. I'm not sure whether that would be better or worse, though. Annotations are supposed to have identity semantics. A hole has unknown semantics, so might be better separated.
-
-For now, I'll not implement holes. I can't leverage them without a good type system and code search models. But it might be a worthy idea to return to at a later date.
-
-
-
+Wikilon might help with development if developers create 'holes' or gaps that can be filled automatically. Usefully, holes can easily be modeled as words, or at a finer granularity of definition structure and DSL-specific content - e.g. treat words with incomplete (but not yet inconsistent) definitions as holes. An incomplete definition might be understood as operating on void, thus creating 'gaps' in structure or value that could be filled.

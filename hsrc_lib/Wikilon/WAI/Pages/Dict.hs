@@ -62,20 +62,22 @@ dictFrontPage' dictName w rq k =
     H.body $ do
         H.h1 title
         H.p "This is an AO dictionary front page. I'm still figuring out what should go here."
+        -- maybe some content from the dictionary itself
+        -- maybe add some banner or CSS from dictionary itself
+        -- maybe SVG or icons from dictionary?
         H.h2 "Recent Events"
         H.h2 "Dictionary Health"
 
-        H.h2 "Quick Edit"
-        H.p "Listing a few words here will load them for editing."
-        formAODictLoadEditor [] dictName
+        H.h2 "Edit"
 
         H.h2 "Resources"
         H.ul $ do
             let editor = H.a ! A.href srcEditor $ "AODict editor"
             H.li $ editor <> " view and edit raw fragments of the dictionary"
             H.li $ lnkAODict dictName <> " view full dictionary (low level)"
-        -- maybe some content from the dictionary itself
-        -- maybe add some banner or CSS from dictionary itself
+        -- lists of words
+            -- plain text lists
+            -- lists sorted on prefix
         -- maybe a simple console-like or query application?
         -- after defining apps, probably want to revist them easily
         -- HEALTH information
@@ -95,6 +97,7 @@ dictFrontPage' dictName w rq k =
 
         H.hr
         H.div ! A.id "dictFoot" ! A.class_ "footer" $ do
+            H.b "Edit:" <> " " <> (formAODictLoadEditor [] dictName ! A.style "display:inline") <> H.br
             H.b "Export:" <> " " <> lnkAODictFile dictName <> " " <> lnkAODictGz dictName <> H.br
             H.b "Import:" <> " " <> formImportAODict origin dictName <> H.br
             H.b "Modified:" <> " " <> tmModified <> H.br

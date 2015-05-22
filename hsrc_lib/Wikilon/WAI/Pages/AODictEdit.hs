@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, ViewPatterns #-}
+{-# LANGUAGE OverloadedStrings, ViewPatterns, PatternGuards #-}
 -- | Editing AO directly is not a great interface for programming.
 -- But it isn't intolerable, either, at least for getting started.
 --
@@ -11,17 +11,28 @@
 -- assume a single user editing a dictionary. (I can try to shift
 -- conflict management into the DVCS layer for now.)
 --
+-- TODO: push logic into separate modules oriented around 
+-- analysis of code and construction of great error reports.
+--
+-- IDEA: It seems feasible to create a richer editor with 
+-- extra features, e.g. to rename a word or delete one by
+-- writing something like `@word delete` or `@word rename foo`.
+-- However, mixing responsibilities does complicate and mix
+-- responses. I'll avoid this for now.
+--
 module Wikilon.WAI.Pages.AODictEdit
     ( appAODictEdit
     , formAODictLoadEditor
     , formAODictEdit
     ) where
 
+import Control.Monad
 import Control.Applicative
 import Data.Monoid
+import Data.Maybe (mapMaybe)
+import Data.Either (lefts, rights)
 import qualified Data.List as L
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
@@ -30,13 +41,18 @@ import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
+import qualified Data.Algorithm.Diff3 as Diff3
 import Database.VCache
+
+
+import Awelon.ABC (ABC)
+import qualified Awelon.ABC as ABC
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
 import Wikilon.WAI.RecvFormPost
-import Wikilon.WAI.RegexPatterns
-import Wikilon.Branch (BranchName)
+import qualified Wikilon.WAI.RegexPatterns as Regex
+import Wikilon.Branch (BranchName, Branch)
 import qualified Wikilon.Branch as Branch
 import Wikilon.Dict.Word
 import Wikilon.Dict (Dict)
@@ -53,10 +69,10 @@ formAODictLoadEditor ws dictName =
     let uriAction = H.unsafeByteStringValue uri in
     H.form ! A.method "GET" ! A.action uriAction ! A.id "formAODictLoadEditor" $ do
         let content = 
-                if L.null ws then A.placeholder "foo,bar,baz" else
-                let wsText = L.intercalate "," $ fmap wordToText ws in
+                if L.null ws then A.placeholder "foo bar baz" else
+                let wsText = L.intercalate " " $ fmap wordToText ws in
                 A.value $ H.stringValue $ wsText 
-        let pattern = A.pattern $ H.stringValue aoWordList
+        let pattern = A.pattern $ H.stringValue Regex.aoWordList
         H.input ! A.type_ "text" ! A.name "words" ! content ! pattern
         H.input ! A.type_ "submit" ! A.value "Load Editor"
 
@@ -66,20 +82,20 @@ mkAOText = BB.toLazyByteString . mconcat . fmap encPair where
         BB.charUtf8 '@' <> BB.byteString w <> BB.charUtf8 ' ' <> 
         BB.lazyByteString s <> BB.charUtf8 '\n'
 
--- | Create an editor form given some initial content. 
-formAODictEdit :: [(Word, LazyUTF8.ByteString)] -> BranchName -> Maybe T -> HTML
-formAODictEdit ws dictName mbT = 
+-- | Create an editor form given some initial content.
+formAODictEdit :: LBS.ByteString -> BranchName -> Maybe T -> HTML
+formAODictEdit preload dictName mbT = 
     let uri = uriAODictEdit dictName in
     let uriAction = H.unsafeByteStringValue uri in
     -- giving blaze-html opportunity to escape the contents
-    let content = LazyUTF8.toString $ mkAOText ws in -- pre-escaped contents
     H.form ! A.method "POST" ! A.action uriAction ! A.id "formAODictEdit" $ do
         H.textarea ! A.name "update" ! A.rows "20" ! A.cols "70" ! A.required "required" $
-            H.string $ content
+            H.string $ LazyUTF8.toString preload
         --let vOrigin = H.unsafeByteStringValue origin
         --H.input ! A.type_ "hidden" ! A.name "origin" ! A.value vOrigin
         let tmVal = H.stringValue $ maybe "--" show mbT
         H.input ! A.type_ "hidden" ! A.name "modified" ! A.value tmVal
+        H.br
         H.input ! A.type_ "submit" ! A.value "Submit"
 
 appAODictEdit :: WikilonApp
@@ -100,6 +116,7 @@ extractWordList = L.filter isValidWord . fmap Word . BS.splitWith spc where
 loadBytes :: Dict -> Word -> LBS.ByteString
 loadBytes d = maybe LBS.empty id . Dict.lookupBytes d
 
+
 -- | obtain page to edit the AO code
 editorPage :: WikilonApp
 editorPage w (dictCap -> Just dictName) rq k = do
@@ -108,27 +125,199 @@ editorPage w (dictCap -> Just dictName) rq k = do
     let d = Branch.head b
     let tMod = Branch.modified b
     let lWords = queriedWordList (Wai.queryString rq)
-    let lContent = L.zip lWords (loadBytes d <$> lWords) 
+    let lContent = L.zip lWords (loadBytes d <$> lWords)
+    let sContent = mkAOText lContent
     let status = HTTP.ok200
-    let headers = [textHtml]
-    let title = H.string $ "Edit " ++ UTF8.toString dictName ++ " Dictionary"
+    let etag = eTagN (Dict.unsafeDictAddr d)
+    let headers = [textHtml, etag]
+    let title = "Edit Dictionary"
     k $ Wai.responseLBS status headers $ renderHTML $ do
         H.head $ do
             htmlHeaderCommon w
             H.title title 
         H.body $ do
             H.h1 title
-            let hrefAODict = H.a ! A.href (H.unsafeByteStringValue uriAODictDocs)
-            H.p $ "Edit an ad-hoc fragment of " <> hrefAODict "AODict" <> " content."
-            formAODictEdit lContent dictName tMod 
+            let hrefAODict = href uriAODictDocs "AODict format"
+            H.p $ "Edit an ad-hoc fragment of dictionary in " <> hrefAODict <> "."
+            formAODictEdit sContent dictName tMod 
             H.h2 "Reload Editor"
-            H.p $ "Load one or more words into the editor for viewing or editing."
-                <> H.b "Warning:" <> " you will lose current editor contents."
+            H.p $ "Load words into the editor to view or edit.\n"
+                <> H.b "Warning:" <> " you will lose editor contents.\n"
+                <> H.b "Advice:" <> " simplify conflict management by loading all words you need.\n"
             formAODictLoadEditor lWords dictName
+            H.hr
+            unless (L.null lWords) $ do
+                H.strong "Words:"
+                H.nav $ forM_ lWords $ \ aow -> " " <> wordLink dictName aow
+                H.br
 editorPage _ caps _ k = k $ eBadName caps
 
+type Line = Either LBS.ByteString (Word, ABC) 
+
+parseLines :: LBS.ByteString -> [Line]
+parseLines = fmap _parse . AODict.logicalLines where
+    _parse ln = maybe (Left ln) Right $ AODict.decodeLine ln
+
+-- my error analysis isn't very good, but I can at least try to
+-- highlight an error. 
+reportParseError :: LBS.ByteString -> HTML
+reportParseError s = H.pre $ H.code ! A.lang "aodict" $ do
+    let cursor = H.strong ! A.class_ "parseErrorCursor" ! A.style "color:red;font-weight:900" $ "(@)"
+    case AODict.splitLine s of
+        Nothing -> cursor <> H.string (LazyUTF8.toString s)
+        Just (w, defbs) -> do
+            let (abc, leftOver) = ABC.decode defbs
+            "@" <> H.string (show w) <> " " <> H.string (show abc) 
+            cursor
+            H.string $ LazyUTF8.toString leftOver
+
+
+
+-- | I should probably develop a more semantic merge for ABC definitions.
+-- But for the moment, at least a structural merge will help developers
+-- highlight the differences!
+--
+-- NOTE: the current 'diff' algorithm sucks at reporting deletions.
+-- ALSO: font color is insufficient. I need background or border colors.
+reportConflict :: BranchName -> Dict -> Dict -> (Word, ABC) -> Maybe HTML
+reportConflict dictName dOrig dHead (w, abc) = 
+    let bsOrig = loadBytes dOrig w in
+    let bsHead = loadBytes dHead w in
+    if bsOrig == bsHead then Nothing else Just $ do 
+    -- return an HTML description of the conflict
+
+    let sOrig = LazyUTF8.toString bsOrig
+    let sHead = LazyUTF8.toString bsHead
+    let sEdit = show abc 
+    let lDiffChunks = Diff3.diff3 sHead sOrig sEdit 
+    H.strong $ "@" <> wordLink dictName w
+    H.pre $ H.code ! A.lang "abc" ! A.class_ "threeWayMerge"  $ do
+        forM_ lDiffChunks $ \ chunk -> case chunk of
+            Diff3.LeftChange c -> styleHead $ H.string c
+            Diff3.RightChange c -> styleEdit $ H.string c
+            Diff3.Unchanged c -> styleOrig $ H.string c
+            Diff3.Conflict cHead cOrig cEdit -> styleConflict $ do
+                barrierConflict "(" 
+                styleHead $ H.string cHead 
+                barrierConflict "|"
+                styleOrig $ H.string cOrig
+                barrierConflict "|"
+                styleEdit $ H.string cEdit
+                barrierConflict ")"
+
+styleHead, styleEdit, styleOrig, styleConflict, barrierConflict :: HTML -> HTML
+styleHead = H.span ! A.class_ "diff3Head" ! A.style "color:green"
+styleEdit = H.span ! A.class_ "diff3Edit" ! A.style "color:blue"
+styleOrig = id
+styleConflict = H.span ! A.class_ "diff3Conflict" ! A.style "border-style:dashed;border-color:DarkOrange"
+barrierConflict = H.span ! A.class_ "diff3ConflictSep" ! A.style "color:DarkOrange;font-weight:900"
+            
+histDict :: Branch -> Maybe T -> Dict
+histDict b Nothing = Dict.empty vc where
+    vc = Dict.dict_space $ Branch.head b
+histDict b (Just t) = Branch.histDict b t
+
+-- TODO: refactor. heavily. 100 lines is too much.
 recvAODictEdit :: PostParams -> WikilonApp
-recvAODictEdit _ = toBeImplementedLater "receive aodict.edit"
+recvAODictEdit pp w cap _rq k 
+  | (Just updates) <- getPostParam "update" pp
+  , (Just tMod) <- (parseTime . LazyUTF8.toString) <$> getPostParam "modified" pp
+  , (Just dictName) <- dictCap cap
+  = let parsed = parseLines updates in
+    let lErr = lefts parsed in
+    let lUpdates = rights parsed in
+    let onParseError = 
+            let status = HTTP.badRequest400 in
+            let headers = [textHtml, noCache] in
+            let title = "Parse Error" in
+            k $ Wai.responseLBS status headers $ renderHTML $ do
+                H.head $ do
+                    htmlMetaNoIndex
+                    htmlHeaderCommon w
+                    H.title title
+                H.body $ do
+                    H.h1 title
+                    H.p "Some update content did not parse.\n\
+                        \Do not resubmit without changes."
+                    H.h2 "Description of Errors"
+                    forM_ lErr $ \ e -> reportParseError e <> H.br
+                    H.h2 "Edit and Resubmit"
+                    formAODictEdit updates dictName tMod
+    in
+    if not (L.null lErr) then onParseError else
+    -- if we don't exit on parse errors, we can move on.
+    getTime >>= \ tNow ->
+    let vc = vcache_space $ wikilon_store w in
+    join $ runVTx vc $ 
+        readPVar (wikilon_dicts w) >>= \ bset ->
+        let b = Branch.lookup' dictName bset in
+        let dHead = Branch.head b in
+        let dOrig = histDict b tMod in
+        let lConflict = if (dOrig == dHead) then [] else      
+                mapMaybe (reportConflict dictName dOrig dHead) lUpdates
+        in
+        let onConflict =
+                let status = HTTP.conflict409 in
+                let headers = [textHtml, noCache] in
+                let title = "Edit Conflicts" in
+                return $ k $ Wai.responseLBS status headers $ renderHTML $ do
+                    H.head $ do
+                        htmlMetaNoIndex
+                        htmlHeaderCommon w
+                        H.title title
+                    H.body $ do
+                        H.h1 title
+                        H.p "A concurrent edit has modified words you're manipulating."
+                        H.h2 "Change Report"
+                        forM_ lConflict $ \ report -> report <> H.br
+                        H.h2 "Edit and Resubmit"
+                        H.p "At your discretion, you may resubmit without changes."
+                        formAODictEdit updates dictName (Branch.modified b)
+        in
+        if not (L.null lConflict) then onConflict else
+        -- if we don't exit on edit conflicts, we can attempt to update the dictionary!
+        case Dict.insert dHead lUpdates of
+            Left insErrors -> -- INSERT ERRORS
+                let status = HTTP.conflict409 in
+                let headers = [textHtml, noCache] in
+                let title = "Content Conflicts" in
+                return $ k $ Wai.responseLBS status headers $ renderHTML $ do
+                    H.head $ do
+                        htmlMetaNoIndex
+                        htmlHeaderCommon w
+                        H.title title
+                    H.body $ do
+                        H.h1 title
+                        H.p "The proposed update is structurally problematic."
+                        H.h2 "Problems"
+                        H.ul $ forM_ insErrors $ \ e ->
+                            H.li $ H.string $ show e
+                        H.h2 "Edit and Resubmit"
+                        H.p "At least if you can easily do so from here."
+                        formAODictEdit updates dictName tMod
+            Right dUpd -> do -- EDIT SUCCESS!
+                let b' = Branch.update (tNow, dUpd) b 
+                let bset' = Branch.insert dictName b' bset 
+                writePVar (wikilon_dicts w) bset' -- commit the update
+                markDurable -- hand-written updates should be durable
+                -- prepare our response:
+                let status = HTTP.seeOther303 
+                let editor = uriAODictEdit dictName 
+                let dest = (HTTP.hLocation, wikilon_httpRoot w <> editor) 
+                let headers = [textHtml, noCache, dest] 
+                let title = "Edit Success" 
+                return $ k $ Wai.responseLBS status headers $ renderHTML $ do
+                    H.head $ do
+                        htmlMetaNoIndex
+                        htmlHeaderCommon w
+                        H.title title
+                    H.body $ do
+                        H.h1 title
+                        H.p $ "Return to " <> href editor "the editor" <> "."
+recvAODictEdit _pp _w cap _rq k =
+    case dictCap cap of
+        Nothing -> k $ eBadName cap
+        Just _ -> k $ eBadRequest "POST: missing update or modified parameters"
 
 {-
 form

@@ -10,6 +10,8 @@ module Wikilon.WAI.Routes
 
     , uriAODict, uriAODictEdit
     , uriAODictDocs, uriAODocs, uriWikilonDocs, uriABCDocs
+
+    , href
     ) where
 
 import Control.Monad
@@ -48,10 +50,7 @@ dictURIBuilder d = BB.byteString "d/" <> HTTP.urlEncodeBuilder False d
 -- | anchor to branch name. Since branch name is constrained
 -- to be URI and text friendly, no escapes are necessary. 
 dictLink :: BranchName -> HTML
-dictLink d = 
-    let path = H.unsafeByteStringValue $ dictURI d in
-    let humanText = H.unsafeByteString d in
-    H.a ! A.href path $ humanText
+dictLink d = href (dictURI d) $ H.unsafeByteString d
 
 -- | obtain dictionary identifier from `:d` capture URL. This will
 -- also validate the dictionary identifier (dict names use same 
@@ -93,10 +92,7 @@ wordURIBuilder d (Word wordBytes) =
     HTTP.urlEncodeBuilder False wordBytes
 
 wordLink :: BranchName -> Word -> HTML
-wordLink d w@(Word wbs) = 
-    let path = H.unsafeByteStringValue $ wordURI d w in
-    let humanText = H.unsafeByteString wbs in
-    H.a ! A.href path $ humanText
+wordLink d w@(Word wbs) = href (wordURI d w) (H.unsafeByteString wbs)
 
 -- | Obtain dictionary and word via :d and :w captures. 
 wordCap :: Captures -> Maybe (BranchName, Word)
@@ -105,4 +101,10 @@ wordCap cap =
     L.lookup "w" cap >>= \ w ->
     if not (isValidWord (Word w)) then mzero else
     return (d, Word w)
+
+-- | Create an HRef when we know a route is already escaped
+href :: Route -> HTML -> HTML
+href r = H.a ! A.href (H.unsafeByteStringValue r)
+
+
 

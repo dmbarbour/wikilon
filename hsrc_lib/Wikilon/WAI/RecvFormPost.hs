@@ -32,7 +32,7 @@ data FileInfo = FileInfo
     { fileName :: BS.ByteString
     , fileContentType :: BS.ByteString
     , fileContent :: LBS.ByteString
-    }
+    } deriving Show
 
 -- | basic extract bytestring from a post param
 postParamContent :: PostParam -> LBS.ByteString

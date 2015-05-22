@@ -1,6 +1,11 @@
 {-# LANGUAGE OverloadedStrings, ViewPatterns #-}
 
 -- | Pages for the toplevel list-of-dictionaries
+--
+-- TODO: 
+--   rename dictionaries
+--   fork dictionaries
+--   merge dictionaries    
 module Wikilon.WAI.Pages.DictList
     ( allDictionaries
     , dictList
