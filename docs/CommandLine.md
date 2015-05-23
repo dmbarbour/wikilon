@@ -1,16 +1,16 @@
 
 # Command Language for Awelon 
 
-Awelon project and Wikilon would benefit from effective command line interfaces, e.g. to issue rapid queries and commands. In context of Wikilon, providing console-like services through HTML forms or JavaScript is not difficult. The underlying [Awelon Object (AO)](AboutAO.md) code is unsuitable for this application in its raw form.
+Awelon project and Wikilon would benefit from effective command line interfaces, e.g. to issue rapid queries and commands. In context of Wikilon, providing console-like services through HTML forms or JavaScript should not be difficult. The underlying [Awelon Object (AO)](AboutAO.md) code is unsuitable for this application in its raw form.
 
 But I think a relatively thin layer above AO could be suitable:
 
-* writing words should be easier than writing bytecode
+* write words easily: just use the word, swap inc mul
 * inline the text and number literals: 1.234 2/3 "foo"
 * easy and unambiguous access to bytecode, e.g. \vrwlc 
 * stable environment against literals, e.g. `(stack*env)` pair
 
-If you know about the evolution of Awelon project, the above should be familiar: it's a minor tweak of the [original definition of Awelon Object](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md). The original AO was weak for staged programming, visual DSLs, and structured programming, but it was well suited for command line interfaces - a very Forth-like language. I'm changing the bytecode escape to keep it unambiguous (no risk of confusing `\` with an ABC operator). 
+If you know about the evolution of Awelon project, the above should be familiar: it's a minor tweak of the [original definition of Awelon Object](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md). The original AO was weak for staged programming, visual DSLs, and structured programming, but it was well suited for command line interfaces. The result is a very Forth-like language. I'm changing the bytecode escape to keep it unambiguous (no risk of confusing `\` with an ABC operator). 
 
 ## Naming: claw?
 
@@ -20,20 +20,20 @@ What should I call this proposed language? The name Awelon Object is taken. And 
 
 A significant issue is **side effects**, and how to integrate them with our command lines. I want a *useful* command line system, which means access to real-world databases and HTTP and side-effects and so on, and the ability to manage tasks or orchestrate distributed behaviors. 
 
-It is wise to leverage the [AVM and network model](NetworkModel.md). Idea so far: 
+It seems wise to leverage the [AVM and network model](NetworkModel.md). Idea so far: 
 
         type Shell = (stack * (AVM * ext))
         type AVM = (State * (Behavior * Signal))
         type Behavior = (InMsg * State) → (OutMsgList * State)
         ... (see network model) ...
 
-Every shell contains an AVM at a stable location. The AVM is responsible for side-effects and all interactions with the outside world. Incoming messages are received normally by the behavior function. Outgoing messages from the user require some special attention: our user must somehow inject messages into the AVM's State such that they'll be added a future OutMsgList. We will signal the AVM after every user interaction.
+Every shell contains an AVM at a stable location. The AVM is responsible for side-effects and all interactions with the outside world. Incoming messages are received normally by the behavior function. Outgoing messages from the user require some special attention: our user must somehow inject messages into the AVM's State such that they'll be added a future OutMsgList. We will signal the AVM after each user interaction. 
 
-The stack serves a useful role as a staging area for user operations. Most user actions will occur on the stack. Literals and values will generally be added to the stack, i.e. by implicitly injecting a `\l` operation after each number, text, or block. Because a stack is very limited, the user environment may be extended to contain workspaces, clipboards, and rich user models. The stack and extended environment are both invisible to the AVM, which gives us nice properties for stability, non-interference, and portability of the AVM.
+The stack serves a useful role as a staging area for user operations. Most user actions will occur on the stack. Literals and values will generally be added to the stack, i.e. by implicitly injecting a `\l` operation after each number, text, or block in the command language. Because a stack is very limited, the user environment may be extended (in the `ext` area) to contain workspaces, clipboards, and rich user models. The stack and extended environment are both invisible to the AVM, which gives us nice properties for stability, non-interference, and portability of the AVM.
 
 With these different aspects, I think we have everything we need for a radically tailorable shell that can gradually become any machine users need. I think I've kept it very simple. It may be the case that most or all AVMs in Wikilon are grown in shells.
 
-A remaining challenge is developing a good 'default' behavior and state for the AVM. A minimal model might use an inbox and outbox, and recognizes a signal to deliver the outbox. An even more minimal default model might do nothing at all. For the latter case, it might be useful to provide a reload or reset capability every time we perform a user interaction, which might allow the machine to quickly load information about itself and the environment.
+A remaining challenge is developing a good 'default' behavior and state for the AVM. The difficulty is increased a bit because we need easy access to the shell state, e.g. to find information about self or environment. A minimal model might use an inbox and outbox, and recognizes the signal to deliver pending messages from the outbox. An even more minimal default model might do nothing at all. For the latter case, it might be useful to provide users an easy ability to signal their shell (e.g. to reset or whatever). Default stack and ext are both unit.
 
 ## Binding to Dictionary
 
