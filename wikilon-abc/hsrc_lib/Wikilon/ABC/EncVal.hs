@@ -85,7 +85,7 @@ enc (Resource r f) = encResource r f
 
 encNum :: Rational -> EncSt r
 encNum r = (Pure.encode' abc, mempty) where
-    abc = Pure.ABC $ Pure.quote r
+    abc = Pure.ABC (Pure.quote r) minBound
 
 encPair, encSumR, encSumL, encUnit :: EncSt r
 encPair = (BB.char8 'P', mempty)

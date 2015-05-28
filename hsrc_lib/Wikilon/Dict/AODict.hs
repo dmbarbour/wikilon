@@ -19,6 +19,9 @@
 --
 --    text\/vnd.org.awelon.aodict
 --
+--
+-- TODO: push most of the generic logic into wikilon-abc
+--   (will need to abstract the dictionary)
 module Wikilon.Dict.AODict
     ( mimeType
     , dictWords
@@ -142,10 +145,9 @@ splitLine bs =
 decodeLine :: Bytes -> Maybe (Word, ABC)
 decodeLine bs =
     splitLine bs >>= \ (w, defbs) ->
-    let (abc,leftOver) = ABC.decode defbs in
-    let bParsed = LBS.null leftOver in
-    if (not bParsed) then Nothing else -- bad ABC parse
-    return (w, abc)
+    case ABC.decode defbs of
+        Left _dcs -> Nothing
+        Right abc -> return (w,abc)
 
 {- TODO: when I start working with very large dictionaries, I will
    probably need to operate on chunks of reasonable size rather than

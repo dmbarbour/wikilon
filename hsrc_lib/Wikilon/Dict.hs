@@ -127,10 +127,9 @@ lookup :: Dict -> Word -> Maybe ABC
 lookup d w = _decode <$> lookupBytes d w
 
 _decode :: LBS.ByteString -> ABC
-_decode b = 
-    let (abc, b') = ABC.decode b in
-    if LBS.null b' then abc else
-    _impossible "invalid ABC in dictionary"
+_decode b = case ABC.decode b of
+    Left _dcs -> _impossible "invalid ABC in dictionary"
+    Right abc -> abc
 
 _impossible :: String -> a
 _impossible = error . dictErr
@@ -438,5 +437,5 @@ _renameInABC wo wt = ABC.rewriteTokens rwTok where
     t0 = BS.cons 37 $ wordToUTF8 wo
     tf = BS.cons 37 $ wordToUTF8 wt
     rnTok t = if (t == t0) then tf else t
-    rwTok t = ABC.ABC [ABC.ABC_Tok (rnTok t)]
+    rwTok t = ABC.ABC [ABC.ABC_Tok (rnTok t)] 1
 

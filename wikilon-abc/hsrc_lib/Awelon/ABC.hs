@@ -9,7 +9,10 @@ module Awelon.ABC
     , PrimOp(..)
     , abcCharToOp, abcOpToChar, abcOpTable
     , encode, encode'
-    , decode
+    , encodeText', encodeToken'
+    , decode, decode'
+    , DecoderCont(..), DecoderStuck(..)
+    , decodeLiteral
     , abcDivMod
     , Quotable(..)
     , quote, quoteList, quotesList
@@ -33,14 +36,34 @@ import Data.String (IsString(..))
 import Awelon.Text
 
 -- | Bytecode is a sequence or stream of operations
-newtype ABC = ABC { abcOps :: [Op] }
-    deriving (Eq, Ord)
+--
+-- I additionally keep an ops count for eval quotas. 
+data ABC = ABC 
+    { abcOps  :: ![Op]
+    , abcCost :: {-# UNPACK #-} !Int -- heuristic cost for quota
+    } deriving (Eq, Ord)
 
+-- | A token has the form {token} in ABC, and call to an external
+-- procedure in the interpreter. Potentially, this enables side
+-- effects, though Wikilon only uses annotations, value sealing,
+-- and resource linking. Token type is usually indicated by one
+-- prefix character. For example:
+--
+--   & - annotations, must have identity semantics but may be
+--       useful for performance or type safety analysis
+--   : - value sealing, discretionary unless contains $ in which
+--       case the sealer is cryptographic (e.g. {:aes$key}).
+--   . - unseal value from corresponding sealer
+--   $ - indicates a sealed value, e.g. {$aes:fingerPrint}
+--       will typically use hash of key as fingerprint
+--   # - link content-addressed resources by secure hash
+--   % - link named resources associated with local dictionary
+--
 type Token = UTF8.ByteString
 
 data Op -- 43 primitives + 3 special cases
     = ABC_Prim !PrimOp -- 43 primitives
-    | ABC_Block ABC    -- block type
+    | ABC_Block !ABC    -- block type
     | ABC_Text !Text   -- text literal (minus escapes)
     | ABC_Tok  {-# UNPACK #-} !Token -- {token} text
     deriving (Eq, Ord) -- arbitrary ordering
@@ -163,71 +186,102 @@ encode' = mconcat . fmap _encodeOp . abcOps
 _encodeOp :: Op -> BB.Builder
 _encodeOp (ABC_Prim op) = BB.char8 (abcOpToChar op)
 _encodeOp (ABC_Block ops) = BB.char8 '[' <> encode' ops <> BB.char8 ']'
-_encodeOp (ABC_Text txt) = BB.char8 '"' <> _encodeLiteral txt <> BB.char8 '~'
-_encodeOp (ABC_Tok tok) =
-    BB.char8 '{'   <>
-    BB.byteString tok <>
-    BB.char8 '}'
+_encodeOp (ABC_Text txt) = encodeText' txt
+_encodeOp (ABC_Tok tok) = encodeToken' tok
 
-_encodeLiteral :: Text -> BB.Builder
-_encodeLiteral txt = 
+-- | wrap a token in curly braces
+encodeToken' :: Token -> BB.Builder
+encodeToken' tok = BB.char8 '{' <> BB.byteString tok <> BB.char8 '}'
+
+-- | Encode multi-line text with escapes.
+encodeText' :: Text -> BB.Builder
+encodeText' txt =
     let (ln0,lns) = textLines txt in
-    BB.lazyByteString ln0          <>
+    BB.char8 '"' <> BB.lazyByteString ln0 <>
     mconcat (fmap _encodeLine lns) <>
-    BB.char8 '\n'               
+    BB.char8 '\n' <> BB.char8 '~'
 
 _encodeLine :: Text -> BB.Builder
 _encodeLine l = BB.char8 '\n' <> BB.char8 ' ' <> BB.lazyByteString l
 
+-- | our decoder tracks a stack of blocks at [] boundaries
+data DecoderCont 
+    = DecoderDone
+    | DecodeBlock [Op] DecoderCont
+    deriving (Show)
+-- I could also more precisely indicate errors when decoding a large
+-- text, but I don't think that's as important; just getting to the
+-- text is good enough.
+
+-- | When we get stuck, we will only backtrack to the last fully 
+-- parsed operator rather than backtrack across block boundaries. 
+-- This should provide reasonably precise error information.
+data DecoderStuck = DecoderStuck
+    { dcs_text :: Text -- where did we get stuck
+    , dcs_data :: [Op] -- reverse ordered ops
+    , dcs_cont :: DecoderCont
+    } deriving (Show)
+
 -- | Decode ABC from Text. 
 --
--- Parsed ABC is represented losslessly. Any text that is not parsed
--- is returned. This implementation aims more to be fast than to offer
--- good error information.
-decode :: Text -> (ABC, Text)
-decode = decodeABC []
+-- Parsed ABC is represented losslessly. If we get stuck at any point,
+-- a DecoderStuck instance is returned which will include the text on
+-- which it became stuck. Spaces (SP and LF) are preserved.
+decode :: Text -> Either DecoderStuck ABC
+decode txt = decode' $ DecoderStuck 
+    { dcs_text = txt
+    , dcs_data = []
+    , dcs_cont = DecoderDone 
+    }
 
-decodeABC :: [Op] -> Text -> (ABC, Text) 
-decodeABC r txt = case decodeOp txt of
-    Nothing -> (ABC (L.reverse r), txt)
-    Just (op, txt') -> decodeABC (op:r) txt'
+-- | Decode starting from a DecoderStuck state, i.e. assuming it has
+-- been tweaked so we should no longer be stuck. This allows logic
+-- surrounding a decoder to try a fix and continue approach.
+decode' :: DecoderStuck -> Either DecoderStuck ABC
+decode' s = decoder (dcs_cont s) (dcs_data s) (dcs_text s)
 
-decodeOp :: Text -> Maybe (Op, Text)
-decodeOp = maybe Nothing (uncurry decodeOp') . LBS.uncons
+decoder :: DecoderCont -> [Op] -> Text -> Either DecoderStuck ABC 
+decoder cc r txt0 = 
+    let decoderIsStuck = Left (DecoderStuck txt0 r cc) in
+    case LBS.uncons txt0 of
+        Nothing -> case cc of
+            DecoderDone -> Right (ABC abc ct) where
+                abc = L.reverse r
+                ct = L.length abc
+            _ -> decoderIsStuck
+        Just (c, txt) -> case c of
+            (abcCharToOp -> Just op) -> decoder cc (ABC_Prim op : r) txt
+            '[' -> decoder (DecodeBlock r cc) [] txt
+            ']' -> case cc of
+                DecodeBlock ops cc' -> decoder cc' (block : ops) txt where
+                    block = ABC_Block (ABC abc ct)
+                    abc = L.reverse r
+                    ct = L.length abc
+                _ -> decoderIsStuck
+            '{' -> case LBS.elemIndex '}' txt of
+                Nothing -> decoderIsStuck
+                Just idx ->
+                    let (lzt, tokEnd) = LBS.splitAt idx txt in
+                    let bOK = not $ LBS.elem '{' lzt || LBS.elem '\n' lzt in
+                    if not bOK then decoderIsStuck else
+                    let tok = LBS.toStrict lzt in
+                    let txt' = LBS.drop 1 tokEnd in
+                    tok `seq` decoder cc (ABC_Tok tok : r) txt'
+            '"' -> case decodeLiteral txt of
+                Nothing -> decoderIsStuck
+                Just (lit, litEnd) -> case LBS.uncons litEnd of
+                    Just ('~', txt') -> decoder cc (ABC_Text lit : r) txt'
+                    _ -> decoderIsStuck
+            _ -> decoderIsStuck
 
-decodeOp' :: Char -> Text -> Maybe (Op, Text)
-decodeOp' (abcCharToOp -> Just op) txt = Just (ABC_Prim op, txt)
-decodeOp' '[' txt =
-    let (blockOps, blockEnd) = decode txt in
-    case LBS.uncons blockEnd of
-        Just (']', txt') -> Just (ABC_Block blockOps, txt')
-        _ -> Nothing
-decodeOp' '{' txt =  
-    case LBS.elemIndex '}' txt of
-        Nothing -> Nothing
-        Just idx -> 
-            let (tokLazy, tokEnd) = LBS.splitAt idx txt in
-            -- for safety, reject if token contains '{'
-            if (LBS.elem '{' tokLazy) then Nothing else
-            let tok = LBS.toStrict tokLazy in
-            let txt' = LBS.drop 1 tokEnd in
-            tok `seq` Just (ABC_Tok tok, txt')
-decodeOp' '"' txt =
-    case _decodeLiteral [] txt of
-        Nothing -> Nothing
-        Just (lit, litEnd) -> case LBS.uncons litEnd of
-            Just ('~', txt') -> Just (ABC_Text lit, txt')
-            _ -> Nothing
-decodeOp' _ _ = Nothing
 
+-- | Decode ABC literal assuming the first '"' has already been taken,
+-- halting after the first LF not escaped by a following SP. In ABC,
+-- the character just after decoding a literal should be '~'. This 
+-- will fail if there is no final LF character.
+decodeLiteral :: Text -> Maybe (Text, Text)
+decodeLiteral = _decodeLiteral []
 
--- decode a literal until the final LF, allowing LFs to be escaped
--- by following with an SP. The final LF is dropped. If there is no
--- final LF, the remainder of the text is included. 
---
--- Thoughts: At the moment, this function avoids allocating bytestrings.
--- But I wonder if it might be better to copy the string to avoid binding
--- much larger underlying text. 
 _decodeLiteral :: [Text] -> Text -> Maybe (Text, Text)
 _decodeLiteral r txt = case LBS.elemIndex '\n' txt of
     Nothing -> Nothing -- could not find terminal
@@ -318,7 +372,7 @@ instance Show ABC where
     showsPrec _ = showString . LazyUTF8.toString . encode 
 instance Show Op where
     showsPrec _ = showList . (:[])
-    showList = shows . ABC 
+    showList ops = shows (ABC ops minBound) 
 instance Show PrimOp where
     showsPrec _ = showChar . abcOpToChar
     showList = showString . fmap abcOpToChar
@@ -326,10 +380,11 @@ instance Show PrimOp where
 instance IsString ABC where
     fromString s =
         let bytes = LazyUTF8.fromString s in
-        let (abc, brem) = decode bytes in
-        if LBS.null brem then abc else
-        let s' = LazyUTF8.toString brem in 
-        error $ abcErr $ "could not parse " ++ s'
+        case decode bytes of
+            Right abc -> abc
+            Left stuck -> 
+                let s' = LazyUTF8.toString (dcs_text stuck) in
+                error $ abcErr $ "could not parse " ++ s'
 
 {-
 -- | abcSimplify performs a simple optimization on ABC code based on
@@ -414,10 +469,12 @@ rewriteTokens fn = rewriteTokens' fn' where
     fn' tok = (++) (abcOps (fn tok))
 
 -- | As rewriteTokens, but difference list for performance.
+-- note: this will not change the quota cost heuristics
 rewriteTokens' :: (Token -> [Op] -> [Op]) -> ABC -> ABC
-rewriteTokens' fn = ABC . _rw . abcOps where
+rewriteTokens' fn = _rwABC where
+    _rwABC (ABC ops ct) = ABC (_rw ops) ct
     _rw (ABC_Tok t : ops) = fn t ops
-    _rw (ABC_Block abc : ops) = ABC_Block (rewriteTokens' fn abc) : _rw ops
+    _rw (ABC_Block abc : ops) = ABC_Block (_rwABC abc) : _rw ops
     _rw (op : ops) = op : _rw ops
     _rw [] = []
 

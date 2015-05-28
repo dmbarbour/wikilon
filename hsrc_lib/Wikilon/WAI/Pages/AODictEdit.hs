@@ -160,18 +160,24 @@ parseLines :: LBS.ByteString -> [Line]
 parseLines = fmap _parse . AODict.logicalLines where
     _parse ln = maybe (Left ln) Right $ AODict.decodeLine ln
 
--- my error analysis isn't very good, but I can at least try to
--- highlight an error. 
+-- my error analysis isn't entirely precise, but I can at least dig
+-- to operations within blocks.
 reportParseError :: LBS.ByteString -> HTML
-reportParseError s = H.pre $ H.code ! A.lang "aodict" $ do
-    let cursor = H.strong ! A.class_ "parseErrorCursor" ! A.style "color:red;font-weight:900" $ "(@)"
+reportParseError s = H.pre ! A.class_ "parseErrorReport" $ H.code ! A.lang "aodict" $ do
     case AODict.splitLine s of
-        Nothing -> cursor <> H.string (LazyUTF8.toString s)
+        Nothing -> styleParseError $ H.string (LazyUTF8.toString s)
         Just (w, defbs) -> do
-            let (abc, leftOver) = ABC.decode defbs
-            "@" <> H.string (show w) <> " " <> H.string (show abc) 
-            cursor
-            H.string $ LazyUTF8.toString leftOver
+            let remText = either ABC.dcs_text (const LBS.empty) (ABC.decode defbs) 
+            let lenOK = LBS.length defbs - LBS.length remText 
+            let okText = LBS.take lenOK defbs 
+            "@" <> H.string (show w) <> " " <> H.unsafeLazyByteString okText
+            styleParseError $ H.string $ LazyUTF8.toString remText
+
+styleParseError :: HTML -> HTML
+styleParseError h = H.span 
+    ! A.class_ "parseError" 
+    ! A.style "background-color:LightCoral" 
+    $ h
 
 
 

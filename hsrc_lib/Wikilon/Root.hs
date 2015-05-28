@@ -55,6 +55,8 @@ data Wikilon = Wikilon
     , wikilon_loadCount :: !Integer     -- ^ how many times has Wikilon been loaded?
     , wikilon_secret    :: !Secret      -- ^ a secret value for administration
     } 
+-- TODO:
+--  event logs for dictionaries and wikilon
 
 loadWikilon :: Args -> IO Wikilon
 loadWikilon args = do
@@ -73,6 +75,7 @@ loadWikilon args = do
         , wikilon_loadCount = _loadCount
         , wikilon_secret = _secret
         }
+
 
 -- | Access the error log. I'm not going to bother keeping this one
 -- in active memory at the moment. 

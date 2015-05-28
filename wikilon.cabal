@@ -90,8 +90,12 @@ Library
     Wikilon.Dict.Type
     Wikilon.Dict.Text
 
+    Wikilon.Cache
+    Wikilon.Log
+
     Wikilon.Branch
     Wikilon.Geneology
+
 
     Wikilon.Code
 

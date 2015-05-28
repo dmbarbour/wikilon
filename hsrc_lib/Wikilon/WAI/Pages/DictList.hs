@@ -9,7 +9,7 @@
 module Wikilon.WAI.Pages.DictList
     ( allDictionaries
     , dictList
-    , dictPostCreate
+    , dictCreate
     , formSimpleCreateDict
     , ppDictName
     ) where
@@ -96,6 +96,9 @@ listOfDictsPage w _cap _rq k =
         H.hr
         H.div ! A.id "dictListFoot" ! A.class_ "footer" $ do
             H.b "New Dictionary:" <> " " <> (formSimpleCreateDict ! A.style "display:inline")
+            -- RENAME
+            -- FORK
+            -- MERGE
 {-
             H.b "Export:" <> " " <> lnkAODictList
             H.b "
@@ -122,8 +125,8 @@ listDictsHTML _w bset = H.div ! A.id "dictTable" $ do
     H.b "Count of Versions:" <> " " <> H.toMarkup (Branch.volume bset) <> H.br
 
 -- | todo: consider authorization requirements for creating a dictionary
-dictPostCreate :: WikilonApp
-dictPostCreate = app where 
+dictCreate :: WikilonApp
+dictCreate = app where 
     app = routeOnMethod
         [(HTTP.methodPost, onPost),(HTTP.methodGet, onGet)]
     onGet w _cap _rq k = k $ htmlResponse HTTP.ok200 $ do
@@ -161,7 +164,7 @@ gotoDict w d =
 -- Create a valid AO definition that simply exports text
 --  e.g. "text\n~[v'c]
 aoTextDef :: ABC.Text -> ABC.ABC
-aoTextDef txt = ABC.ABC [ABC.ABC_Text txt, ABC.ABC_Block "v'c"]
+aoTextDef txt = ABC.ABC [ABC.ABC_Text txt, ABC.ABC_Block "v'c"] 2
 
 -- | Create a dictionary with an initial entry, or return
 -- without changing anything.

@@ -5,16 +5,39 @@ Awelon project and Wikilon would benefit from effective command line interfaces,
 
 But I think a relatively thin layer above AO could be suitable:
 
-* write words easily: just use the word, swap inc mul
-* inline the text and number literals: 1.234 2/3 "foo"
-* easy and unambiguous access to bytecode, e.g. \vrwlc 
+* write words easily: just use the word, `swap inc mul`
+* inline the text and number literals: `1.234 2/3 "foo"`
+* easy and unambiguous access to bytecode, e.g. `\vrwlc` 
 * stable environment against literals, e.g. `(stack*env)` pair
 
-If you know about the evolution of Awelon project, the above should be familiar: it's a minor tweak of the [original definition of Awelon Object](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md). The original AO was weak for staged programming, visual DSLs, and structured programming, but it was well suited for command line interfaces. The result is a very Forth-like language. I'm changing the bytecode escape to keep it unambiguous (no risk of confusing `\` with an ABC operator). 
+If you know about the evolution of Awelon project, the above should be familiar: it's a minor tweak of the [original definition of Awelon Object](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md). The original AO was weak for staged programming, visual DSLs, and structured programming, but it was well suited for command line interfaces. The result was a very Forth-like language. I'm adapting this, but changing the bytecode escape to keep it unambiguous (no risk of confusing `\` with an ABC operator). 
+
+The command language should be suitable for round-tripping to the AO dictionary and back.
 
 ## Naming: claw?
 
-What should I call this proposed language? The name Awelon Object is taken. And a command line language isn't really [object code](http://en.wikipedia.org/wiki/Object_code) anyway (the current AO is much closer to that term). So far, my best idea is **claw**: Command Language for Awelon (or Command Line for Awelon, depending on context). The name also puns nicely. I'll run with it unless someone finds a better idea. 
+What should I call this proposed language? The name Awelon Object is taken, and AO today is a better fit for the connotations surrounding '[object code](http://en.wikipedia.org/wiki/Object_code)'. So far, my best idea is **claw**: Command Language for Awelon (or Command Line for Awelon, depending on context). The name also puns nicely. I'll run with it unless someone suggests a better idea. 
+
+## Value Types
+
+The original AO supported only texts and numbers. But good support for other value structures such as lists, maps, maybe vectors of some sort, would have been convenient. How much can I do, while keeping the command language thin and simple and suitable for one-liners?
+
+I have access to many ASCII brackets: `{}[]()<>`. I also can grab some useful separators, such as `,` and `|`, though I think I'd prefer to avoid them (commas are noisy). I'll probably favor `[]` for blocks, as I did originally. But rather than optimize representation of tokens, I'll probably use `\{token}`, representing tokens as part of inline ABC. This will keep `{}` free for lists.
+
+To keep the command language very thin, I probably don't want sophisticated value models built in. In particular, something like maps or tries are probably a bad idea for literal types. But what could I handle?
+
+* lists  λa.μL.((a*L)+1)
+* association lists; list of (key*value) pairs
+* stacks (a * (b * (c * (... * 1))))
+* pairs (a*b) in general
+* unit, booleans, sums
+
+One option is, instead of using different brackets, use different prefixes or suffixes to indicate how a collection is structured. E.g. `(1 2 3 4)L` might be a list while `(1 2 3 4)S` might be a stack and `(1 2 3 4)V` might be a vector.
+
+I'm not really sure where I want to go with this at the moment. For now, I think I'll stick to texts and numbers as I did before, and simply reserve `{}(),;|` for later extensions. Potentially, I could support a very YAML-like experience for working with large structured values in text.
+
+
+
 
 ## Side Effects
 
@@ -27,21 +50,21 @@ It seems wise to leverage the [AVM and network model](NetworkModel.md). Idea so 
         type Behavior = (InMsg * State) → (OutMsgList * State)
         ... (see network model) ...
 
-Every shell contains an AVM at a stable location. The AVM is responsible for side-effects and all interactions with the outside world. Incoming messages are received normally by the behavior function. Outgoing messages from the user require some special attention: our user must somehow inject messages into the AVM's State such that they'll be added a future OutMsgList. We will signal the AVM after each user interaction. 
+Every shell contains an abstract Awelon virtual machine (AVM) at a stable location. The AVM is responsible for side-effects and all interactions with the outside world. A Shell may be hosted within a larger AVM, which knows from context to route some messages to the shell's internal AVM and to apply command stream messages to the entire shell. Excepting the user's command stream, incoming messages are received by the internal AVM's behavior function.
 
-The stack serves a useful role as a staging area for user operations. Most user actions will occur on the stack. Literals and values will generally be added to the stack, i.e. by implicitly injecting a `\l` operation after each number, text, or block in the command language. Because a stack is very limited, the user environment may be extended (in the `ext` area) to contain workspaces, clipboards, and rich user models. The stack and extended environment are both invisible to the AVM, which gives us nice properties for stability, non-interference, and portability of the AVM.
+Outgoing messages from user commands are achieved by arranging for the AVM to deliver messages in response to a future signal. This might be achieved by modeling an outbox within the AVM. After each user interaction, the contained AVM will be signaled.
 
-With these different aspects, I think we have everything we need for a radically tailorable shell that can gradually become any machine users need. I think I've kept it very simple. It may be the case that most or all AVMs in Wikilon are grown in shells.
+While users are free to directly view and manipulate the contained machine, they also have a stack and an extended user environment (stack and ext, above). These provide a stable workspace and staging area for actions on the machine and REPL-like behavior. To make effective use of the stack, our command language will implicitly inject `\l` after every numeral, literal, and block value. I.e. `7` will be the same as `\#7l`, such that `7` is added to the stack while keeping the AVM and extended user environment at relatively stable locations. The extended user environment is available for use cases where a stack is insufficient, e.g. if developers wish to model workspaces, clipboards, or graphical UIs.
 
-A remaining challenge is developing a good 'default' behavior and state for the AVM. The difficulty is increased a bit because we need easy access to the shell state, e.g. to find information about self or environment. A minimal model might use an inbox and outbox, and recognizes the signal to deliver pending messages from the outbox. An even more minimal default model might do nothing at all. For the latter case, it might be useful to provide users an easy ability to signal their shell (e.g. to reset or whatever). Default stack and ext are both unit.
+We'll also need a good 'default' AVM. But this could feasibly be left to the dictionary.
 
-## Binding to Dictionary
+## Dictionaries
 
-When using a claw shell, we have some options on how we bind words to meaning. One option is to preserve words within code and allow the meaning of words to change over time. This provides an additional opportunity for live programming, allowing meaning of words to change between processing commands or messages.
+A potential issue is that our command lines will need easy access to words specific to the structure of the command line. If we want to experiment with many command line structures (i.e. with different AVM structures and extended user environments), we'll end up with many collections of similar words in a dictionary. This isn't necessarily a bad thing, but it might make selecting one version more difficult.
 
-Conversely, it might be convenient to update and manage a dictionary via operations within a command shell. I'll need to give this a try.
+One option might be to use namespaces. I'd rather avoid namespaces at the language layer, but I think we could introduce them at the presentation and interaction layers, e.g. for tab completion and rendering words and so on. 
 
-## History
+## Late Binding?
 
-The  was more suitable as a command line interface language, and is very similar to what I've described above. However, it was unsuitable for many other roles I felt were important: effective support for visual DSLs, structured editing, staged programming. Also, while the original AO was a thin macro and linking layer above ABC, I feel modern AO is a closer fit for the connotations surrounding ''. Nonetheless, the old AO could feasibly be tweaked and fitted.
+When using a claw shell (or AVM in general) I have many options for binding to dictionaries. An interesting question is whether we should bind to dictionaries at the time the code was written or later, at the time it is interpreted. The latter would provide an interesting sort of live coding, though may require special attention if we gain any capabilities to send messages outside contexts bound to the same dictionary.
 
