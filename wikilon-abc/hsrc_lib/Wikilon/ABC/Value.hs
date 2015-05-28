@@ -13,7 +13,6 @@ module Wikilon.ABC.Value
 
 import Data.Word
 import Data.Bits
-import qualified Data.ByteString.Lazy as LBS
 import Awelon.ABC (Quotable(..))
 import qualified Awelon.ABC as Pure
 import Wikilon.ABC.Code
@@ -110,9 +109,7 @@ instance (Quotable r) => Quotable (Value r) where
     quotes (SumL a) = quotes a . quotes ABC_V
     quotes Unit = quotes ("vvrwlc" :: Pure.ABC)
     quotes (Block abc flags) = 
-        let ops = Pure.quote abc in
-        let ct = fromIntegral $ LBS.length (abc_code abc) in
-        let block = quotes (Pure.ABC_Block $ Pure.ABC ops ct) in
+        let block = quotes (Pure.ABC_Block $ Pure.mkABC $ Pure.quote abc) in
         let bAff = hasF f_aff flags in
         let bRel = hasF f_rel flags in
         let k = if bRel then quotes ABC_relevant else id in

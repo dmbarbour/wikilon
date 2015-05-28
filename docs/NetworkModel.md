@@ -31,7 +31,7 @@ Summary List:
 
 The design elements and motivations are described under *Design Elements*. Here's the rough overview:
 
-        type AVM = (State * (Step * Signal)){:AVM}
+        type AVM = (State * (Step * Signal))
         type Step = (InMessage * State) → (OutMessages * State)
         type Signal = Context (with Content = SignalContent)
         ∃ type Context (depends on AVM)

@@ -27,7 +27,6 @@ import Data.Word
 import Data.Char
 import Data.Bits
 import Data.Ratio
-import qualified Data.List as L
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.Array.IArray as A
@@ -58,7 +57,7 @@ type Quota = Int
 -- | When introducing a frame, apply a minimal cost because frames
 -- themselves aren't free.
 frameQuotaCost :: ABC -> Quota
-frameQuotaCost = max 32 . abcCost
+frameQuotaCost = max 32 . abcOpsCount
 
 type Flags = Word8
 
@@ -365,18 +364,14 @@ ev_condApply v cc qu = primOpFail ABC_condApply v cc qu
 
 -- quotation is very expensive in this simplistic model of ABC!
 ev_quote (Pair a e) = evaluate (Pair (Block fn flags) e) where
-    fn = ABC abc ct
-    abc = quote a
-    ct = L.length abc
+    fn = mkABC (quote a)
     flags = rel .|. aff
     rel = if droppable a then 0 else prop_relevant
     aff = if copyable a then 0 else prop_affine 
 ev_quote v = primOpFail ABC_quote v
 
 ev_compose (Pair (Block xy fxy) (Pair (Block yz fyz) e)) =
-    let abc = abcOps xy ++ abcOps yz in
-    let ct = abcCost xy + abcCost yz in
-    let xz = ABC abc ct in
+    let xz = xy <> yz in
     let fxz = fxy .|. fyz in
     evaluate (Pair (Block xz fxz) e)
 ev_compose v = primOpFail ABC_compose v

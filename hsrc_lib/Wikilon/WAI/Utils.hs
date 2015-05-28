@@ -16,6 +16,7 @@ module Wikilon.WAI.Utils
     -- APPS
     , defaultRouteOnMethod
     , toBeImplementedLater
+    , basicWebPage
 
     -- RESPONSES
     , htmlResponse
@@ -331,6 +332,13 @@ toBeImplementedLater msg _ _ _ k = k $ Wai.responseLBS HTTP.status202 [textHtml,
     H.body $ do
         H.h1 "TODO"
         H.p $ H.string msg
+
+-- | a web application that just serves one HTML page
+basicWebPage :: (Wikilon -> Captures -> Wai.Request -> HTML) -> WikilonApp
+basicWebPage htmlDoc = app where
+    app = justGET $ branchOnOutputMedia [(mediaTypeTextHTML, getPage)]
+    getPage w cap rq k = k $ Wai.responseLBS HTTP.ok200 [textHtml] $ 
+        renderHTML $ htmlDoc w cap rq
 
 -- | basic HTML response
 htmlResponse :: HTTP.Status -> HTML -> Wai.Response

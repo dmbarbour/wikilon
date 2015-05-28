@@ -197,14 +197,12 @@ aodImportErrors w errors =
         H.p $ "See " <> lnDocs <> " for general information on formatting." 
 
 aodictDocs :: WikilonApp
-aodictDocs = app where
-    app = justGET $ branchOnOutputMedia [(mediaTypeTextHTML, getPage)]
-    getPage w _cap _rq k = 
-        k $ Wai.responseLBS HTTP.ok200 [textHtml] $ renderHTML $ do
-        H.head $ do
-            htmlHeaderCommon w
-            H.title "text/vnd.org.awelon.aodict"
-        H.body $ aodictDocHTML
+aodictDocs = basicWebPage $ \ w _ _ -> do
+    H.head $ do
+        htmlHeaderCommon w
+        H.title "text/vnd.org.awelon.aodict"
+    H.body ! A.class_ "docs" ! A.style "margin: 0 auto; width: 960px" $ 
+        aodictDocHTML
 
 aodictDocHTML :: HTML
 aodictDocHTML = do
@@ -229,10 +227,12 @@ aodictDocHTML = do
     H.p "The structure of ABC ensures there is never any ambiguity that the '@'\n\
         \begins a new entry. There is no need for escapes, and we don't need to\n\
         \parse ABC to split entries. The word and definition may be divided by a\n\
-        \a space (SP, 32) or linefeed (LF, 10)."
+        \a space or linefeed (ASCII 32 or 10)."
     H.p "While a general ABC parser can process any AO definition, AO doesn't\n\
         \permit arbitrary ABC. In particular, there are constraints on tokens\n\
         \and text literals. Words are also constrained. See below."
+    H.h3 "Words Constraints"
+    H.ul $ mapM_ (H.li . H.string) listWordConstraintsForHumans
     H.h3 "Awelon Bytecode (ABC)"
     H.p "ABC consists of 43 primitive operators, blocks, tokens, and texts."
     H.ul $ do
@@ -243,8 +243,6 @@ aodictDocHTML = do
     let abcDocs = H.a ! A.href (H.unsafeByteStringValue uriABCDocs) $ "ABC documentation"
     H.p $ "See " <> abcDocs <> " for detailed information." 
     H.p "However, only a subset of ABC is permitted within AO dictionaries."
-    H.h4 "Words Constraints"
-    H.ul $ mapM_ (H.li . H.string) listWordConstraintsForHumans
     H.h4 "Token Constraints"
     H.ul $ do
         H.li "{%word} - dependency on another word in dictionary"
@@ -255,14 +253,20 @@ aodictDocHTML = do
         \be valid according to the Word Constraints."
     H.h4 "Text Constraints"
     H.p "Text literal constraints were initially motivated to simplify CRLF\n\
-        \conversions. But avoiding control characters seems wise in general."
+        \conversions, e.g. when editing a dictionary through HTML forms. But\n\
+        \avoiding control characters seems wise in general."
     H.ul $ mapM_ (H.li . H.string) listTextConstraintsForHumans
+    H.p "If you must represent binary data, favor base 16 with variant alphabet\n\
+        \'bdfghjkmnpqstxyz' (as elements 0..15). A compression pass can easily\n\
+        \reduce this to binary when streaming or storing ABC."
     H.h3 "Structural Constraints"
     H.p "The aodict format has structural constraints to guard against\n\
         \cycles and undefined words, and simplify efficient processing."
     H.ul $ do
         H.li "words are defined before use"
         H.li "words are not redefined"
+    H.p "When editing fragments of an AO dictionary, these two constraints\n\
+        \are relaxed."
     H.h3 "Type Constraints"
     H.p "Each definition should have the general form:"
     H.pre . H.code $
@@ -270,12 +274,13 @@ aodictDocHTML = do
     H.p "The meaning of the word is the pure function of type [a→b]. However,\n\
         \the intermediate value 'v' serves an important role for structured\n\
         \editing, staged programming, and user-defined languages. The function\n\
-        \[v→[a→b]] serves as a compiler. We compile the value into its meaning."
-    H.p "Frequently, the compiler is just [] (identity, value is a function)\n\
-        \or [v'c] (quotation, export value directly). User-defined languages\n\
-        \should generally be reduced to a single word like [{%fooLang}]."
-    H.p "Anyhow, as basic health checks, every definition should compile and\n\
-        \the resulting functions should have usable types."
+        \[v→[a→b]] serves as a compiler. We compile the value into its meaning.\n\
+        \Frequently, the compiler is the identity function `[]`, which is valid\n\
+        \when the value `v` is directly a function. Another trivial compiler is\n\
+        \`[v'c]`, which simply quotes value 'v' and exports a structure. Complex\n\
+        \compilers will usually be factored into words, e.g. `[{%fooLang}]`."
+    H.p "As a basic health check, every definition should compile. Conveniently,\n\
+        \this can be lifted into arbitrary unit tests and staged computations." 
     H.h2 "Editing of AO Dictionaries"
     H.p "The AODict format is not suitable for direct human reading and editing."
     H.p "At small scales, it is feasible to edit AODict directly, assuming you\n\

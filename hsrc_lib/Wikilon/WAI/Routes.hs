@@ -10,6 +10,8 @@ module Wikilon.WAI.Routes
 
     , uriAODict, uriAODictEdit
     , uriAODictDocs, uriAODocs, uriWikilonDocs, uriABCDocs
+    , uriClawDocs
+    , uriAVMDocs
 
     , href
     ) where
@@ -76,6 +78,12 @@ uriABCDocs      = -- "about/abc"
 uriAODictDocs   = "about/aodict"
 uriWikilonDocs  = -- "about/wikilon"
     "https://github.com/dmbarbour/wikilon"
+
+uriClawDocs :: Route
+uriClawDocs = "about/claw"
+
+uriAVMDocs :: Route
+uriAVMDocs = "https://github.com/dmbarbour/wikilon/blob/master/docs/NetworkModel.md"
 
 -- | URI associated for a specific word in a named dictionary
 -- This includes pct-encoded escapes as necessary.

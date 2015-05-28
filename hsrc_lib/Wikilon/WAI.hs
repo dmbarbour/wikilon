@@ -60,6 +60,7 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 
     -- built-in documentation
     ,("/about/aodict", aodictDocs)
+    ,("/about/claw", clawDocs)
 
     -- special endpoints to force media types
     ,("/d.list", dictList)

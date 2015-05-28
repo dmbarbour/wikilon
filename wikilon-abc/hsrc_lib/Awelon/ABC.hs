@@ -2,14 +2,17 @@
 
 -- | A pure model of Awelon Bytecode, no accelerators or extensions.
 module Awelon.ABC
-    ( ABC(..)
+    ( ABC, abcOps, abcOpsCount, mkABC
     , Text
     , Token
     , Op(..)
     , PrimOp(..)
     , abcCharToOp, abcOpToChar, abcOpTable
-    , encode, encode'
-    , encodeText', encodeToken'
+    , encode
+    , encodeBB
+    , encodeOpBB
+    , encodeTextBB
+    , encodeTokenBB
     , decode, decode'
     , DecoderCont(..), DecoderStuck(..)
     , decodeLiteral
@@ -39,9 +42,21 @@ import Awelon.Text
 --
 -- I additionally keep an ops count for eval quotas. 
 data ABC = ABC 
-    { abcOps  :: ![Op]
-    , abcCost :: {-# UNPACK #-} !Int -- heuristic cost for quota
+    { _abcOps      :: ![Op]
+    , _abcOpsCount :: {-# UNPACK #-} !Int -- heuristic cost for quota
     } deriving (Eq, Ord)
+
+abcOps :: ABC -> [Op]
+abcOps = _abcOps
+
+abcOpsCount :: ABC -> Int
+abcOpsCount = _abcOpsCount
+
+-- | construct ABC from just the operations. Uses length of ops
+-- as estimate of cost.
+mkABC :: [Op] -> ABC
+mkABC ops = ABC ops (L.length ops)
+
 
 -- | A token has the form {token} in ABC, and call to an external
 -- procedure in the interpreter. Potentially, this enables side
@@ -178,24 +193,24 @@ abcCharToOp c | inBounds = abcCharOpArray A.! c
 
 -- | Encode pure ABC into a Lazy UTF8 ByteString
 encode :: ABC -> Text
-encode = BB.toLazyByteString . encode'
+encode = BB.toLazyByteString . encodeBB
 
-encode' :: ABC -> BB.Builder
-encode' = mconcat . fmap _encodeOp . abcOps
+encodeBB :: ABC -> BB.Builder
+encodeBB = mconcat . fmap encodeOpBB . abcOps
 
-_encodeOp :: Op -> BB.Builder
-_encodeOp (ABC_Prim op) = BB.char8 (abcOpToChar op)
-_encodeOp (ABC_Block ops) = BB.char8 '[' <> encode' ops <> BB.char8 ']'
-_encodeOp (ABC_Text txt) = encodeText' txt
-_encodeOp (ABC_Tok tok) = encodeToken' tok
+encodeOpBB :: Op -> BB.Builder
+encodeOpBB (ABC_Prim op) = BB.char8 (abcOpToChar op)
+encodeOpBB (ABC_Block ops) = BB.char8 '[' <> encodeBB ops <> BB.char8 ']'
+encodeOpBB (ABC_Text txt) = encodeTextBB txt
+encodeOpBB (ABC_Tok tok) = encodeTokenBB tok
 
--- | wrap a token in curly braces
-encodeToken' :: Token -> BB.Builder
-encodeToken' tok = BB.char8 '{' <> BB.byteString tok <> BB.char8 '}'
+-- | encode a token wrapped in curly braces
+encodeTokenBB :: Token -> BB.Builder
+encodeTokenBB tok = BB.char8 '{' <> BB.byteString tok <> BB.char8 '}'
 
--- | Encode multi-line text with escapes.
-encodeText' :: Text -> BB.Builder
-encodeText' txt =
+-- | Encode multi-line text including initial " and final ~.
+encodeTextBB :: Text -> BB.Builder
+encodeTextBB txt =
     let (ln0,lns) = textLines txt in
     BB.char8 '"' <> BB.lazyByteString ln0 <>
     mconcat (fmap _encodeLine lns) <>
@@ -245,18 +260,14 @@ decoder cc r txt0 =
     let decoderIsStuck = Left (DecoderStuck txt0 r cc) in
     case LBS.uncons txt0 of
         Nothing -> case cc of
-            DecoderDone -> Right (ABC abc ct) where
-                abc = L.reverse r
-                ct = L.length abc
+            DecoderDone -> Right (mkABC (L.reverse r))
             _ -> decoderIsStuck
         Just (c, txt) -> case c of
             (abcCharToOp -> Just op) -> decoder cc (ABC_Prim op : r) txt
             '[' -> decoder (DecodeBlock r cc) [] txt
             ']' -> case cc of
                 DecodeBlock ops cc' -> decoder cc' (block : ops) txt where
-                    block = ABC_Block (ABC abc ct)
-                    abc = L.reverse r
-                    ct = L.length abc
+                    block = ABC_Block (mkABC (L.reverse r))
                 _ -> decoderIsStuck
             '{' -> case LBS.elemIndex '}' txt of
                 Nothing -> decoderIsStuck
@@ -368,6 +379,16 @@ opd 8 = ABC_d8
 opd 9 = ABC_d9
 opd _ = impossible "invalid digit!"
 
+-- Monoid for ABC is concatenation, which represents composition.
+instance Monoid ABC where
+    mempty = ABC [] 0
+    mappend a b = ABC ops ct where
+        ops = abcOps a <> abcOps b
+        ct = abcOpsCount a + abcOpsCount b
+    mconcat lst = ABC ops ct where
+        ops = L.concatMap abcOps lst
+        ct = L.sum $ fmap abcOpsCount lst
+
 instance Show ABC where 
     showsPrec _ = showString . LazyUTF8.toString . encode 
 instance Show Op where
@@ -469,12 +490,11 @@ rewriteTokens fn = rewriteTokens' fn' where
     fn' tok = (++) (abcOps (fn tok))
 
 -- | As rewriteTokens, but difference list for performance.
--- note: this will not change the quota cost heuristics
 rewriteTokens' :: (Token -> [Op] -> [Op]) -> ABC -> ABC
-rewriteTokens' fn = _rwABC where
-    _rwABC (ABC ops ct) = ABC (_rw ops) ct
+rewriteTokens' fn = mkABC . _rw . abcOps where
     _rw (ABC_Tok t : ops) = fn t ops
-    _rw (ABC_Block abc : ops) = ABC_Block (_rwABC abc) : _rw ops
+    _rw (ABC_Block abc : ops) = block : _rw ops where
+        block = ABC_Block (rewriteTokens' fn abc)
     _rw (op : ops) = op : _rw ops
     _rw [] = []
 

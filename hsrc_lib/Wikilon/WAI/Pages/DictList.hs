@@ -164,7 +164,7 @@ gotoDict w d =
 -- Create a valid AO definition that simply exports text
 --  e.g. "text\n~[v'c]
 aoTextDef :: ABC.Text -> ABC.ABC
-aoTextDef txt = ABC.ABC [ABC.ABC_Text txt, ABC.ABC_Block "v'c"] 2
+aoTextDef txt = ABC.mkABC [ABC.ABC_Text txt, ABC.ABC_Block "v'c"]
 
 -- | Create a dictionary with an initial entry, or return
 -- without changing anything.

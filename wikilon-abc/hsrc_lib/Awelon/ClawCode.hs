@@ -114,8 +114,8 @@ _encodeOp (Num r) = encodeNum r
 _encodeOp (Text t) = BB.char8 '"' <> BB.lazyByteString t <> BB.char8 '"'
 _encodeOp (Block b) = BB.char8 '[' <> encode' b <> BB.char8 ']'
 _encodeOp (EscPrim abc) = BB.char8 '\\' <> _encodeABC abc
-_encodeOp (EscTok tok)  = BB.char8 '\\' <> ABC.encodeToken' tok
-_encodeOp (EscText txt) = BB.char8 '\\' <> ABC.encodeText' txt
+_encodeOp (EscTok tok)  = BB.char8 '\\' <> ABC.encodeTokenBB tok
+_encodeOp (EscText txt) = BB.char8 '\\' <> ABC.encodeTextBB txt
 
 _encodeABC :: [ABC.PrimOp] -> BB.Builder
 _encodeABC = mconcat . fmap (BB.char8 . ABC.abcOpToChar)

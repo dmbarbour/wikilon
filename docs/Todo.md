@@ -13,11 +13,13 @@ DONE:
 
 TODO:
 
+* I can easily rename a word for a full dictionary
 * I can easily browse words in the dictionary
 * I can easily link to clients of a word, to depth N
 * I can easily link to dependencies of a word, to depth N
-* I can easily link to related words by name structure
- * e.g. prefixes on `foo.*` and `foo:*`
+* I can easily link to related words based on name structure
+ * minimally, words with common prefixes
+ * maybe words with common suffixes or infixes (requires new index)
 * I can access the definition for each word via browsing
 
 * I can evaluate useful functions from words
@@ -25,6 +27,11 @@ TODO:
 * I can render word structure (pre-compiled) in HTML or SVG
 * I can do simple turtle graphics on an HTML canvas
 * I can compile ABC into JavaScript
+
+* I can render words with colors or icons based on prefix or suffix
+ * support a simple legend
+ * may need to record style information in dictionary?
+
 
 * ACTIONS
  * I can access the precompiled structure for each word

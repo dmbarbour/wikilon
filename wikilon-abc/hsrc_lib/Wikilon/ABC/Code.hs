@@ -297,9 +297,7 @@ instance (Quotable v) => Quotable (ABC v) where
 -- implementation. :)
 instance (Quotable v) => Quotable (Op v) where
     quotes (ABC_Prim op) = quotes op
-    quotes (ABC_Block abc) = quotes (Pure.ABC_Block $ Pure.ABC ops ct) where
-        ops = Pure.quote abc
-        ct = fromIntegral $ LBS.length (abc_code abc) 
+    quotes (ABC_Block abc) = quotes (Pure.ABC_Block $ Pure.mkABC $ Pure.quote abc)
     quotes (ABC_Text txt) = quotes (Pure.ABC_Text txt)
     quotes (ABC_Tok tok) = quotes (Pure.ABC_Tok tok)
     quotes (ABC_Ext op) = quotes op

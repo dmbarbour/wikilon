@@ -118,6 +118,7 @@ Library
     Wikilon.WAI.Pages.FrontPage
     Wikilon.WAI.Pages.Dict
     Wikilon.WAI.Pages.Admin
+    Wikilon.WAI.Pages.ClawCode
     Wikilon.WAI.Pages
     Wikilon.WAI
 

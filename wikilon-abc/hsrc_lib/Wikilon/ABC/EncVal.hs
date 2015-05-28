@@ -83,9 +83,10 @@ enc (Resource r f) = encResource r f
 {-# INLINE encText #-}
 {-# INLINE encResource #-}
 
+-- encNum will use opcodes #0123456789/*-
 encNum :: Rational -> EncSt r
-encNum r = (Pure.encode' abc, mempty) where
-    abc = Pure.ABC (Pure.quote r) minBound
+encNum r = (bb, mempty) where
+    bb = mconcat $ fmap Pure.encodeOpBB $ Pure.quote r
 
 encPair, encSumR, encSumL, encUnit :: EncSt r
 encPair = (BB.char8 'P', mempty)
