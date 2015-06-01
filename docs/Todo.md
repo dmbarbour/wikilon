@@ -10,8 +10,49 @@ DONE:
 * I can export a dictionary to a file
 * I can import a dictionary from a file
 * I can edit fragments of a dictionary
+* I can browse words by name (very simplistic)
+* I can obtain a list of word names 
 
 TODO:
+
+* simplistic REPLs, both Claw code and ABC
+* simple ABC to JavaScript compiler
+ 
+* I can easily rename a word for a full dictionary
+* I can easily browse words by type in the dictionary
+* I can easily browse words by intermediate structure in dictionary
+* I can easily find recently changed words for fast review
+* I can easily diff words (and information about them)
+* I can easily link to clients of a word, to depth N
+* I can easily link to dependencies of a word, to depth N
+* I can easily link to related words based on name structure
+ * minimally, words with common prefixes
+ * maybe words with common suffixes or infixes (requires new index)
+* I can access the definition for each word via browsing
+* Structured Editing of Words based on first stage computations
+* Edit words using Claw Code
+
+* I can evaluate useful functions from words
+* I can access precompiled s
+
+
+* ACTIONS
+ * I can access the precompiled structure for each word
+ * I can access a word as inlined ABC
+ * I can access a word as compiled ABC
+ 
+
+* I can render ABC structured values in HTML or SVG
+* I can render word structure (pre-compiled) in HTML or SVG
+* I can do simple turtle graphics on an HTML canvas
+* I can compile ABC into JavaScript
+
+* I can render words with colors or icons based on prefix or suffix
+ * support a simple legend
+ * may need to record style information in dictionary?
+
+## REFACTORING
+
 
 * Switch to events system for actions. 
  * A POST or PUT action may create one or more events.
@@ -23,35 +64,11 @@ TODO:
  * integrate with security.
  * composable views
  * mutable views?
-
- 
-* I can easily rename a word for a full dictionary
-* I can easily browse words in the dictionary
-* I can easily link to clients of a word, to depth N
-* I can easily link to dependencies of a word, to depth N
-* I can easily link to related words based on name structure
- * minimally, words with common prefixes
- * maybe words with common suffixes or infixes (requires new index)
-* I can access the definition for each word via browsing
-* Structured Editing of Words based on first stage computations
-* Edit words using Claw Code
-
-* I can evaluate useful functions from words
-* I can render ABC structured values in HTML or SVG
-* I can render word structure (pre-compiled) in HTML or SVG
-* I can do simple turtle graphics on an HTML canvas
-* I can compile ABC into JavaScript
-
-* I can render words with colors or icons based on prefix or suffix
- * support a simple legend
- * may need to record style information in dictionary?
+* Adjust model for dictionary
+ * Trie: move prefixes into parent, 
 
 
-* ACTIONS
- * I can access the precompiled structure for each word
- * I can access a word as inlined ABC
- * I can access a word as compiled ABC
- 
+
 * HISTORY
  * view and navigate old versions of dictionary
  * maybe require branch old version for anything but view?

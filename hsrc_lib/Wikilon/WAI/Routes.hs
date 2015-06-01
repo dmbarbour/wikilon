@@ -23,6 +23,9 @@ module Wikilon.WAI.Routes
     , uriDict
     , uriDictWord
     , uriDictWords
+    , uriDictWordsQPrefix
+    , uriDictWordsList
+    , uriDictWordsListQPrefix
     , uriDictWordRename
     
 
@@ -70,6 +73,19 @@ hrefDict d = href (uriDict d) ! A.class_ "refDict" $ H.unsafeByteString d
 -- | Link to a browseable word listing for a dictionary.
 uriDictWords :: BranchName -> Route
 uriDictWords d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/w"
+
+uriDictWordsList :: BranchName -> Route
+uriDictWordsList d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/w.list"
+
+uriDictWordsQPrefix :: BranchName -> BS.ByteString -> Route
+uriDictWordsQPrefix d prefix = 
+    toRoute $ dictURIBuilder d <> BB.stringUtf8 "/w?prefix=" <>
+        HTTP.urlEncodeBuilder True prefix
+
+uriDictWordsListQPrefix :: BranchName -> BS.ByteString -> Route
+uriDictWordsListQPrefix d prefix =
+    toRoute $ dictURIBuilder d <> BB.stringUtf8 "/w.list?prefix=" <>
+        HTTP.urlEncodeBuilder True prefix
 
 -- | obtain dictionary identifier from `:d` capture URL. This will
 -- also validate the dictionary identifier (dict names use same 
