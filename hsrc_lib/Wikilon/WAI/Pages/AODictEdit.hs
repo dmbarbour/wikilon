@@ -120,7 +120,7 @@ loadBytes d = maybe LBS.empty id . Dict.lookupBytes d
 
 -- | obtain page to edit the AO code
 editorPage :: WikilonApp
-editorPage w (dictCap -> Just dictName) rq k = do
+editorPage = dictApp $ \ w dictName rq k -> do
     bset <- readPVarIO (wikilon_dicts w)
     let b = Branch.lookup' dictName bset
     let d = Branch.head b
@@ -149,10 +149,9 @@ editorPage w (dictCap -> Just dictName) rq k = do
             unless (L.null lWords) $ do
                 H.nav $ do
                     H.strong "Words:" 
-                    forM_ lWords $ \ aow -> " " <> wordLink dictName aow
+                    forM_ lWords $ \ aow -> " " <> hrefDictWord dictName aow
                 H.br
-            H.strong "Dictionary:" <> " " <> dictLink dictName
-editorPage _ caps _ k = k $ eBadName caps
+            H.strong "Dictionary:" <> " " <> hrefDict dictName
 
 type Line = Either LBS.ByteString (Word, ABC) 
 
@@ -194,7 +193,7 @@ reportConflict dictName dOrig dHead (w, abc) =
     if bsOrig == bsHead then Nothing else Just $ do -- no change
     -- return an HTML description of the conflict
     -- let sOrig = LazyUTF8.toString bsOrig
-    H.strong $ "@" <> wordLink dictName w
+    H.strong $ "@" <> hrefDictWord dictName w
     H.b "Head Version:"
     headBox $ H.string (LazyUTF8.toString bsHead)
     H.b "2-Way String Merge (Head and Edit):"
@@ -253,11 +252,11 @@ histDict b (Just t) = Branch.histDict b t
 
 -- TODO: refactor. heavily. 100 lines is too much.
 recvAODictEdit :: PostParams -> WikilonApp
-recvAODictEdit pp w cap _rq k 
+recvAODictEdit pp 
   | (Just updates) <- getPostParam "update" pp
   , (Just tMod) <- (parseTime . LazyUTF8.toString) <$> getPostParam "modified" pp
-  , (Just dictName) <- dictCap cap
-  = let parsed = parseLines updates in
+  = dictApp $ \ w dictName _rq k ->
+    let parsed = parseLines updates in
     let lErr = lefts parsed in
     let lUpdates = rights parsed in
     let onParseError = 
@@ -349,148 +348,6 @@ recvAODictEdit pp w cap _rq k
                     H.body $ do
                         H.h1 title
                         H.p $ "Return to " <> href editor "the editor" <> "."
-recvAODictEdit _pp _w cap _rq k =
-    case dictCap cap of
-        Nothing -> k $ eBadName cap
-        Just _ -> k $ eBadRequest "POST: missing update or modified parameters"
-
-{-
-form
-
-formImportAODict r d =
-    let uri = uriAODict d in
-    let uriAction = H.unsafeByteStringValue uri in
-    let style = "display:inline" in
-    H.form ! A.method "POST" ! A.enctype "multipart/form-data" ! A.action uriAction
-           ! A.id "aodictFileImport" ! A.style style $ do
-        let lAccept = ".ao,.ao.gz,text/vnd.org.awelon.aodict"
-        H.input ! A.type_ "file" ! A.name "aodict" ! A.accept lAccept ! A.required "true"
-        let origin = H.unsafeByteStringValue r
-        H.input ! A.type_ "hidden" ! A.name "origin" ! A.value origin
-        H.input ! A.type_ "submit" ! A.value "Import File"
-
-
-
-
-
--- IDEAS:
--- for AODict editing
--- supply ability to ask for a list of words (e.g. in a GET field)
--- fill the edit box with the current definitions of these words
--- automatically add associated word links for dependencies 
--- include an 'overwrite' list for words in the editor.
-
-
-
-
-
--- | dictEditAO is a very simplistic editor that requires input via
--- the 'aodict' format. This isn't a convenient format for direct human
--- use
-dictEditAO :: WikilonApp
-dictEditAO = app where
-    app = routeOnMethod
-        [(HTTP.methodGet, onGet)
-        ,(HTTP.methodPost, onPost)]
-    onGet = branchOnOutputMedia [(mediaTypeTextHTML, onGetHTML)]
-    onGetHTML w (dictCap -> Just dictName) rq k =
-        k $ Wai.responseLBS HTTP.ok200 [textHtml] $ renderHTML $ do
-        let title = H.string $ "Edit " ++ UTF8.toString dictName
-        H.head $ do
-            htmlHeaderCommon w
-            H.title title
-        H.body $ do
-            H.h1 title
-            formDictEdit (Wai.rawPathInfo rq) dictName
-            H.hr
-            H.string "view " <> lnkAODict dictName <> H.br
-            H.string "return to " <> dictLink dictName <> H.br
-    onGetHTML _w captures _rq k = k $ eBadName captures
-    onPost = recvFormPost recvDictEditAO
-
-
--- 
-
-recvDictEdit :: PostParams -> WikilonApp
-recvDictEdit pp@(ppUpdate -> Just body) w (dictCap -> Just dictName) rq k = do
-    let defaultDest = wikilon_httpRoot w <> dictURI dictName
-    let dest = (HTTP.hLocation, maybe defaultDest id (ppOrigin pp))
-    
-    let vc = wikilon_store w 
-    let vsp = vcache_space vc
-    join $ runVTx vsp $ do
-        bset <- readPVar (wikilon_dicts w) 
-        let b = Branch.lookup' dictName bset
-        
-
--- | error 400 for edit
-badEditRequest :: [String] -> Route -> Wikilon -> Wai.Response
-badEditRequest errs dest w = 
-    Wai.responseLBS HTTP.badRequest400 [textHtml] $ renderHTML $ do
-    let title = "
-    H.head $ do
-        htmlHeaderCommon w
-        H
-    
-
-    
-    
-    runVtx 
-
-    update <- parseDictEdit w dictName body
-    result <- processDictEdit w dictName body 
-    case result of 
-        Left errors -> 
-            k $ Wai.responseLBS HTTP.badRequst400 [textHtml] $ renderHTML $ do
-            let title = H.string $ "Edit Rejected"
-            H.head $ do
-                htmlHeaderCommon w
-                H.title title
-            H.body $ do
-                H.h1 title
-                H.p "The edit request was rejected due either to the structure\n\
-                    \of the request or the
-                
-                 
-            let status = HTTP.badRequest400 in
-            let headers = [textHtml] in
-            k $ Wai.
-            
-
-    let vc = wikilon_store w in
-    join $ runVtx 
-    k $ Wai.responseLBS HTTP.accepted202 [plainText] $ "todo: run edit"
-recvDictEdit pp _w captures _rq k =
-    case ppUpdate pp of
-        Nothing -> k $ eBadRequest "missing 'update' parameter"
-        Just _ -> k $ eBadName captures
-
-ppUpdate :: PostParams -> Maybe LBS.ByteString
-ppUpdate = getPostParamUnzip "update"
-
-ppOrigin :: PostParams -> Maybe BS.ByteString
-ppOrigin = fmap LBS.toStrict . getPostParam "origin"
-
-
-formDictEditAO :: Route -> BranchName -> HTML
-formDictEditAO r d =
-    let uri = uriDictEdit d in
-    let uriAction = H.unsafeByteStringValue uri in
-    H.form ! A.id "aodictEdit" ! A.method "POST" ! A.action uriAction $ do
-        H.input ! A.type_ "textarea" ! A.name "update"  ! A.required "true" 
-                ! A.rows "24" ! A.cols "70" 
-                ! A.placeholder "@helloWorld \"Hello, World!\n\
-                                \~[v'c]\n\
-                                \@swap [rwrwzwlwl][]"
-        let origin = H.unsafeByteStringValue r
-        H.input ! A.type_ "hidden" ! A.name "origin" ! A.value origin
-        H.input ! A.type_ "submit" ! A.value "Update"
-
--}
-
-
-
-
-
-
+recvAODictEdit _pp = \ _w _cap _rq k -> k $ eBadRequest $ 
+    "POST: missing 'update' or 'modified' parameters"
 

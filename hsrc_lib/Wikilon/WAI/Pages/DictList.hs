@@ -92,7 +92,7 @@ listOfDictsPage w _cap _rq k =
     H.body $ do
         H.h1 title
         listDictsHTML w bset
-        H.p $ (H.b "Master Dictionary: ") <> dictLink (wikilon_master w)
+        H.p $ (H.b "Master Dictionary: ") <> hrefDict (wikilon_master w)
         H.hr
         H.div ! A.id "dictListFoot" ! A.class_ "footer" $ do
             H.b "New Dictionary:" <> " " <> (formSimpleCreateDict ! A.style "display:inline")
@@ -117,7 +117,7 @@ listDictsHTML _w bset = H.div ! A.id "dictTable" $ do
         H.tr $ mapM_ H.th ["Dictionary", "Versions", "Modified", "Head-ETag"]
         forM_ (Branch.toList bset) $ \ (bname,b) -> H.tr $ do 
             let d0 = Branch.head b
-            H.td $ dictLink bname
+            H.td $ hrefDict bname
             H.td $ H.toMarkup $ Branch.branchSize b
             H.td $ maybe ("--") htmlSimpTime $ Branch.modified b
             H.td $ H.toMarkup $ toInteger $ Dict.unsafeDictAddr d0
@@ -149,7 +149,7 @@ dictCreate = app where
 gotoDict :: Wikilon -> BranchName -> Wai.Response
 gotoDict w d = 
     let status = HTTP.seeOther303 in
-    let location = (HTTP.hLocation, wikilon_httpRoot w <> dictURI d) in
+    let location = (HTTP.hLocation, wikilon_httpRoot w <> uriDict d) in
     let headers = [location, textHtml] in
     let title = H.string $ "Redirect to Dictionary " ++ UTF8.toString d in
     Wai.responseLBS status headers $ renderHTML $ do
@@ -158,7 +158,7 @@ gotoDict w d =
         H.title title
     H.body $ do
         H.h1 title
-        H.p $ "If you aren't automatically redirected, goto " <> dictLink d
+        H.p $ "If you aren't automatically redirected, goto " <> hrefDict d
 
 
 -- Create a valid AO definition that simply exports text

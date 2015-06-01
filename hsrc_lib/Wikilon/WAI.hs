@@ -31,10 +31,12 @@ wikilonRoutes = fmap (first UTF8.fromString) $
     ,("/d/:d", dictResource)
     ,("/d/:d/aodict", dictAsAODict)
     ,("/d/:d/aodict.edit", appAODictEdit)
-    --,("/d/:d/w", dictWords)
-    --,("/d/:d/w/:w", dictWord)
+
+    ,("/d/:d/w", dictWords)
+    ,("/d/:d/w/:w", dictWord)
+    ,("/d/:d/w/:w/rename", dictWordRename)
+
     ,("/d.create", dictCreate)
-    --,("/d.rename", dictRename)
     --,("/d.merge", dictMerge)
 
     --,("/d/:d/hist", dictHist)
@@ -64,9 +66,7 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 
     -- special endpoints to force media types
     ,("/d.list", dictList)
-
-    --
-
+    ,("/d/:d/w.list", dictWordsList)
 
     -- generic endpoints
 --    ,("/favicon", resourceFavicon)

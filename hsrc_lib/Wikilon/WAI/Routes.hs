@@ -1,17 +1,30 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, ViewPatterns #-}
 -- | Primary routes and web-apps for Wikilon. 
 --
 -- Note that this is coupled to wikilonRoutes from the Wikilon.WAI module.
 module Wikilon.WAI.Routes
     ( stringToRoute
     , Route
-    , dictURI, dictURIBuilder, dictLink, dictCap
-    , wordURI, wordURIBuilder, wordLink, wordCap
+    , dictURIBuilder, hrefDict
+    , wordURIBuilder, hrefDictWord
 
-    , uriAODict, uriAODictEdit
-    , uriAODictDocs, uriAODocs, uriWikilonDocs, uriABCDocs
+    , WikilonDictApp, dictApp
+    , WikilonDictWordApp, dictWordApp
+
+    , uriAODict
+    , uriAODictEdit
+    , uriAODictDocs
+    , uriAODocs
+    , uriWikilonDocs
+    , uriABCDocs
     , uriClawDocs
     , uriAVMDocs
+
+    , uriDict
+    , uriDictWord
+    , uriDictWords
+    , uriDictWordRename
+    
 
     , href
     ) where
@@ -27,6 +40,7 @@ import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
+import qualified Network.Wai as Wai
 
 import Wikilon.WAI.Utils
 import Wikilon.Branch (BranchName)
@@ -41,18 +55,21 @@ toRoute :: BB.Builder -> Route
 toRoute = LBS.toStrict . BB.toLazyByteString
 
 -- | URI associated with a holistic dictionary
-dictURI :: BranchName -> Route
-dictURI d = toRoute $ dictURIBuilder d
+uriDict :: BranchName -> Route
+uriDict d = toRoute $ dictURIBuilder d
 
 -- Note: I'm going to use a base tag for wikilon_httpRoot
 --  so all paths used within Wikilon can be relative to a common root.
 dictURIBuilder :: BranchName -> BB.Builder
 dictURIBuilder d = BB.byteString "d/" <> HTTP.urlEncodeBuilder False d
 
--- | anchor to branch name. Since branch name is constrained
--- to be URI and text friendly, no escapes are necessary. 
-dictLink :: BranchName -> HTML
-dictLink d = href (dictURI d) $ H.unsafeByteString d
+-- | link to a dictionary branch by name, using name as the link
+hrefDict :: BranchName -> HTML
+hrefDict d = href (uriDict d) ! A.class_ "refDict" $ H.unsafeByteString d
+
+-- | Link to a browseable word listing for a dictionary.
+uriDictWords :: BranchName -> Route
+uriDictWords d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/w"
 
 -- | obtain dictionary identifier from `:d` capture URL. This will
 -- also validate the dictionary identifier (dict names use same 
@@ -63,6 +80,10 @@ dictCap caps =
     if not (isValidWord (Word d)) then mzero else
     return d
 
+type WikilonDictApp = Wikilon -> BranchName -> Wai.Application
+dictApp :: WikilonDictApp -> WikilonApp
+dictApp app w (dictCap -> Just d) rq k = app w d rq k
+dictApp _app _w cap _rq k = k $ eBadName cap
 
 uriAODict :: BranchName -> Route
 uriAODict d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/aodict"
@@ -90,8 +111,11 @@ uriAVMDocs = "https://github.com/dmbarbour/wikilon/blob/master/docs/NetworkModel
 --
 -- TODO: I could probably improve performance of this operation
 -- by a large amount. HTTP.urlEncodeBuilder is not very efficient.
-wordURI :: BranchName -> Word -> Route
-wordURI d w = toRoute $ wordURIBuilder d w
+uriDictWord :: BranchName -> Word -> Route
+uriDictWord d w = toRoute $ wordURIBuilder d w
+
+uriDictWordRename :: BranchName -> Word -> Route
+uriDictWordRename d w = toRoute $ wordURIBuilder d w <> BB.stringUtf8 "/rename"
 
 wordURIBuilder :: BranchName -> Word -> BB.Builder
 wordURIBuilder d (Word wordBytes) = 
@@ -99,20 +123,25 @@ wordURIBuilder d (Word wordBytes) =
     BB.byteString "/w/" <>
     HTTP.urlEncodeBuilder False wordBytes
 
-wordLink :: BranchName -> Word -> HTML
-wordLink d w@(Word wbs) = href (wordURI d w) (H.unsafeByteString wbs)
+hrefDictWord :: BranchName -> Word -> HTML
+hrefDictWord d w@(Word wbs) = href (uriDictWord d w) ! A.class_ "refDictWord" $ 
+    H.unsafeByteString wbs
 
 -- | Obtain dictionary and word via :d and :w captures. 
-wordCap :: Captures -> Maybe (BranchName, Word)
-wordCap cap = 
+dictWordCap :: Captures -> Maybe (BranchName, Word)
+dictWordCap cap = 
     dictCap cap >>= \ d ->
     L.lookup "w" cap >>= \ w ->
     if not (isValidWord (Word w)) then mzero else
     return (d, Word w)
 
+
+type WikilonDictWordApp = Wikilon -> BranchName -> Word -> Wai.Application
+dictWordApp :: WikilonDictWordApp -> WikilonApp
+dictWordApp app w (dictWordCap -> Just (d,dw)) rq k = app w d dw rq k
+dictWordApp _app _w cap _rq k = k $ eBadName cap
+
 -- | Create an HRef when we know a route is already escaped
 href :: Route -> HTML -> HTML
 href r = H.a ! A.href (H.unsafeByteStringValue r)
-
-
 

@@ -7,12 +7,15 @@
 -- a tar file, expanding into one file per word?
 module Wikilon.WAI.Pages.Dict
     ( dictResource
-    -- , dictWords
+    , dictWords
+    , dictWordsList
     , module Wikilon.WAI.Pages.AODict
     , module Wikilon.WAI.Pages.AODictEdit
+    , module Wikilon.WAI.Pages.DictWord
     ) where
 
 import Data.Monoid
+import qualified Data.ByteString.Builder as BB
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
@@ -22,12 +25,14 @@ import Database.VCache
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
-import Wikilon.Branch (BranchName)
+import Wikilon.Dict.Word
+import qualified Wikilon.Dict as Dict
 import qualified Wikilon.Branch as Branch
 import Wikilon.Root
 
 import Wikilon.WAI.Pages.AODict
 import Wikilon.WAI.Pages.AODictEdit
+import Wikilon.WAI.Pages.DictWord
         
 -- The full 'dictionary resource' will include access to
 -- words, histories, issues, subscriptions, etc.. Since
@@ -41,11 +46,7 @@ dictResource = app where
         ]
 
 dictFrontPage :: WikilonApp
-dictFrontPage w (dictCap -> Just dictName) rq k = dictFrontPage' dictName w rq k
-dictFrontPage _w caps _rq k = k $ eBadName caps
-
-dictFrontPage' :: BranchName -> Wikilon -> Wai.Application
-dictFrontPage' dictName w rq k = 
+dictFrontPage = dictApp $ \ w dictName rq k -> 
     readPVarIO (wikilon_dicts w) >>= \ bset ->
     let b = Branch.lookup' dictName bset in
     --let d = Branch.head b in
@@ -101,6 +102,39 @@ dictFrontPage' dictName w rq k =
             H.b "Export:" <> " " <> lnkAODictFile dictName <> " " <> lnkAODictGz dictName <> H.br
             H.b "Import:" <> " " <> formImportAODict origin dictName <> H.br
             H.b "Modified:" <> " " <> tmModified <> H.br
+
+-- | Browse Words in the dictionary. Search for words.
+-- Note that I'll probably want multiple output types again.
+dictWords :: WikilonApp
+dictWords = justGET $ branchOnOutputMedia
+    [(mediaTypeTextHTML, dictWordsPage)
+    ,(mediaTypeTextPlain, dictWordsListText)
+    ]
+
+-- | force output media to text\/plain and list words in dictionary
+-- one per line. This list of words is suitable for use by a machine
+-- rather than use by a human.
+dictWordsList :: WikilonApp
+dictWordsList = justGET $ branchOnOutputMedia $
+    [(mediaTypeTextPlain, dictWordsListText)]
+
+dictWordsListText :: WikilonApp
+dictWordsListText = dictApp $ \w dictName _rq k ->
+    readPVarIO (wikilon_dicts w) >>= \ bset ->
+    let dict = Branch.head $ Branch.lookup' dictName bset in
+    let lWords = Dict.wordsInDict dict in
+    let encWord (Word wbs) = BB.byteString wbs <> BB.char8 '\n' in
+    let content = BB.toLazyByteString $ mconcat $ fmap encWord lWords in
+    let status = HTTP.ok200 in
+    let etag = eTagN (Dict.unsafeDictAddr dict) in
+    let headers = [etag, plainText] in
+    k $ Wai.responseLBS status headers content 
+    
+-- note: I probably need to decide a depth for words...
+dictWordsPage :: WikilonApp
+dictWordsPage = dictApp $ \_w _dictName _rq _k ->
+    error "todo"
+    
 
 {-
 -- our 

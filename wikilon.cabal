@@ -106,6 +106,9 @@ Library
     Wikilon.Root
     Wikilon
 
+    -- Wikilon.Events
+    -- Wikilon.Views
+
     Wikilon.WAI.Types
     Wikilon.WAI.Utils
     Wikilon.WAI.URL
@@ -115,8 +118,9 @@ Library
     Wikilon.WAI.Pages.AODict
     Wikilon.WAI.Pages.AODictEdit
     Wikilon.WAI.Pages.DictList
-    Wikilon.WAI.Pages.FrontPage
     Wikilon.WAI.Pages.Dict
+    Wikilon.WAI.Pages.DictWord
+    Wikilon.WAI.Pages.FrontPage
     Wikilon.WAI.Pages.Admin
     Wikilon.WAI.Pages.ClawCode
     Wikilon.WAI.Pages

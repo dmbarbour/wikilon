@@ -13,6 +13,18 @@ DONE:
 
 TODO:
 
+* Switch to events system for actions. 
+ * A POST or PUT action may create one or more events.
+ * State of Wikilon is only modified via events.
+ * e.g. a 'RenameWord' event when renaming a word
+ * Security aspects also captured in each event.
+* Switch to a views system for GET.
+ * can integrate with cache.
+ * integrate with security.
+ * composable views
+ * mutable views?
+
+ 
 * I can easily rename a word for a full dictionary
 * I can easily browse words in the dictionary
 * I can easily link to clients of a word, to depth N
@@ -21,6 +33,8 @@ TODO:
  * minimally, words with common prefixes
  * maybe words with common suffixes or infixes (requires new index)
 * I can access the definition for each word via browsing
+* Structured Editing of Words based on first stage computations
+* Edit words using Claw Code
 
 * I can evaluate useful functions from words
 * I can render ABC structured values in HTML or SVG

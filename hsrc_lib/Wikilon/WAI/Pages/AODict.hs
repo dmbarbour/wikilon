@@ -70,7 +70,7 @@ exportAODict w cap rq k =
 --
 -- TODO: I may need authorization for some dictionaries.
 exportAODict' :: WikilonApp
-exportAODict' w (dictCap -> Just dictName) rq k = do
+exportAODict' = dictApp $ \w dictName rq k -> do
     bset <- readPVarIO (wikilon_dicts w)
     let d = Branch.head $ Branch.lookup' dictName bset
     let etag = return $ eTagN $ Dict.unsafeDictAddr d
@@ -86,8 +86,6 @@ exportAODict' w (dictCap -> Just dictName) rq k = do
     let body = if L.null lWords then AODict.encode d else 
                AODict.encodeWords d lWords
     k $ Wai.responseLBS status headers body
-exportAODict' _ caps _ k = k $ eBadName caps
-
 
 selectWords :: Wai.Request -> [Word]
 selectWords rq = case L.lookup "words" (Wai.queryString rq) of
@@ -100,7 +98,7 @@ spc c = (10 == c) || (13 == c) || (32 == c) || (44 == c)
 
 -- | export as a `.ao.gz` file.
 exportAODictGzip :: WikilonApp
-exportAODictGzip w (dictCap -> Just dictName) rq k = do
+exportAODictGzip = dictApp $ \w dictName rq k -> do 
     bset <- readPVarIO (wikilon_dicts w)
     let d = Branch.head $ Branch.lookup' dictName bset
     let etag = return $ eTagN $ Dict.unsafeDictAddr d
@@ -114,12 +112,11 @@ exportAODictGzip w (dictCap -> Just dictName) rq k = do
     let body = if L.null lWords then AODict.encode d else 
                AODict.encodeWords d lWords
     k $ Wai.responseLBS status headers $ GZip.compress body
-exportAODictGzip _w caps _rq k = k $ eBadName caps
 
 -- receive a dictionary via Post, primarily for importing .ao or .ao.gz files
 recvAODictFormPost :: PostParams -> WikilonApp
-recvAODictFormPost pp@(ppAODict -> Just body) w (dictCap -> Just dictName) rq k = do
-    let dest = maybe (wikilon_httpRoot w <> dictURI dictName) id (ppOrigin pp)
+recvAODictFormPost pp@(ppAODict -> Just body) = dictApp $ \ w dictName rq k -> do
+    let dest = maybe (wikilon_httpRoot w <> uriDict dictName) id (ppOrigin pp)
     let location = (HTTP.hLocation, dest)
     let okSeeDict = Wai.responseLBS HTTP.seeOther303 [location, textHtml, noCache] $ renderHTML $ do
             let title = H.string "Import Succeeded"
@@ -128,13 +125,10 @@ recvAODictFormPost pp@(ppAODict -> Just body) w (dictCap -> Just dictName) rq k 
                 H.title title
             H.body $ do
                 H.h1 title
-                H.p $ "The import of " <> dictLink dictName <> "succeeded."
+                H.p $ "The import of " <> hrefDict dictName <> "succeeded."
                 H.p $ "You should be automatically redirected to the dictionary page."
     importAODict' okSeeDict dictName body w rq k
-recvAODictFormPost pp _w captures _rq k =
-    case ppAODict pp of  -- a little error diagnosis 
-        Nothing -> k $ eBadRequest "missing 'aodict' parameter"
-        Just _ -> k $ eBadName captures
+recvAODictFormPost _ = \ _w _cap _rq k -> k $ eBadRequest "missing 'aodict' parameter" 
 
 ppAODict :: PostParams -> Maybe LBS.ByteString
 ppAODict = getPostParamUnzip "aodict"
@@ -147,17 +141,15 @@ ppOrigin = fmap LBS.toStrict . getPostParam "origin"
 -- 
 -- TODO: I may need authorization for some dictionaries.
 importAODict :: WikilonApp 
-importAODict w (dictCap -> Just dictName) rq k = 
+importAODict = dictApp $ \w dictName rq k -> 
     Wai.lazyRequestBody rq >>= \ body ->
     importAODict' okNoContent dictName body w rq k
-importAODict _ caps _ k = k $ eBadName caps
 
 importAODictGzip :: WikilonApp
-importAODictGzip w (dictCap -> Just dictName) rq k =
+importAODictGzip = dictApp $ \w dictName rq k ->
     Wai.lazyRequestBody rq >>= \ gzBody ->
     let body = GZip.decompress gzBody in
     importAODict' okNoContent dictName body w rq k
-importAODictGzip _w caps _rq k = k $ eBadName caps
 
 importAODict' :: Wai.Response -> Branch.BranchName -> LBS.ByteString -> Wikilon -> Wai.Application
 importAODict' onOK dictName body w _rq k =

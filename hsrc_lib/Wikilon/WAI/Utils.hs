@@ -273,9 +273,8 @@ eBadName caps =
             H.title title
         H.body $ do
             H.h1 title
-            H.p "Name used in a client-constructed URI is invalid by Wikilon's\n\
-                \heuristic constraints. Dictionary, word, tokens, and user names\n\
-                \must obey the following rules:\n\
+            H.p "Name used in the URI is invalid by Wikilon's heuristic constraints.\n\
+                \Dictionary, word, tokens, and user names must obey the following rules:\n\
                 \"
             H.ul $ mapM_ (H.li . H.string) listWordConstraintsForHumans
             H.p "These constraints are intended to make names more friendly in\n\
@@ -319,7 +318,6 @@ eServerError msg =
     H.body $ do
         H.h1 title
         H.p $ H.string msg
-
 
 -- | placeholder for applications I want to implement later...
 toBeImplementedLater :: String -> WikilonApp
