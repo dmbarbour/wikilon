@@ -20,6 +20,7 @@ import Data.Monoid
 import Data.Maybe
 import qualified Data.List as L
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Builder as BB
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
@@ -78,9 +79,14 @@ dictFrontPage = dictApp $ \ w dictName rq k ->
         -- maybe add some banner or CSS from dictionary itself
         -- maybe SVG or icons from dictionary?
         H.h2 "Recent Events"
+        H.p $ "What might go here: recent updates, active background tasks,\n\
+              \active bound AVMs, recent users or REPLs."
         H.h2 "Dictionary Health"
         -- Quick Edit?
         -- Quick REPL?
+        H.p $ "What might go here: compilation failures, typecheck failures,\n\
+              \linter failures, unproven assertions (from annotations),  TODO\n\
+              \annotations (perhaps with expiration dates), etc.."
         H.h2 "Resources"
         H.ul $ do
             let browseWords = href (uriDictWords dictName) $ "browse words" 
@@ -109,10 +115,10 @@ dictFrontPage = dictApp $ \ w dictName rq k ->
             -- H.li $ lnkAODict dictName <> " - aodict format "
             -- 
 
-        H.h2 "Browse Dictionary"
-        H.p "Small words and common prefixes."
-        let lBrowseWords = wordsForBrowsing (Branch.head b) (BS.empty)
+        H.h2 "Browse Words by Name"
+        let lBrowseWords = wordsForBrowsing 20 60 (Branch.head b) (BS.empty)
         H.ul $ forM_ lBrowseWords $ (H.li . lnkEnt dictName)
+        H.p $ "Long term, I'd like to support browsing by type, domain, role, definition structure, etc."
 
         H.hr
         H.div ! A.id "dictFoot" ! A.class_ "footer" $ do
@@ -159,7 +165,7 @@ dictWordsPage = dictApp $ \w dictName rq k ->
     readPVarIO (wikilon_dicts w) >>= \ bset ->
     let dict = Branch.head $ Branch.lookup' dictName bset in
     let prefix = requestedPrefix rq in
-    let lBrowse = wordsForBrowsing dict prefix in
+    let lBrowse = wordsForBrowsing 20 60 dict prefix in
     let etag = eTagN (Dict.unsafeDictAddr dict) in
     let status = HTTP.ok200 in
     let headers = [textHtml, etag] in
@@ -181,51 +187,72 @@ dictWordsPage = dictApp $ \w dictName rq k ->
 
 -- | For now, we browse words based on common prefix. I.e. users may
 -- select a prefix to expand it.
-requestedPrefix :: Wai.Request -> WordPrefix
+requestedPrefix :: Wai.Request -> Prefix
 requestedPrefix = getPrefix . L.lookup "prefix" . Wai.queryString where
-    getPrefix (Just (Just p)) = p
+    getPrefix (Just (Just s)) = s
     getPrefix _ = BS.empty
 
-type WordPrefix = BS.ByteString
+-- developing a simple utility for browsing a trie
+type Prefix = UTF8.ByteString -- includes trie_prefix from node!
+type Key = UTF8.ByteString
+type Entry a = Either (Prefix, Trie.Node a) Key
 
--- | Expand a prefix if there aren't too many words. Otherwise, keep
--- the prefix but extend it into the full prefix. Or, if a prefix has
--- no associated keys, returns an empty list.
-expandFini :: Int -> Dict -> WordPrefix -> [Either WordPrefix Word]
-expandFini nWidth dict prefix = 
-    let tRoot = Trie.lookupPrefix prefix (Dict.dict_defs dict) in
-    let lKeys = Trie.keys tRoot in
-    let bSmall = (not . lengthAtLeast nWidth) lKeys in
-    if bSmall then (Right . Word . (prefix <>)) <$> lKeys else 
-    case Trie.trie_root tRoot of
-        Nothing -> [] -- no children under this prefix
-        Just v -> 
-            let tn = deref' v in
-            let fullPrefix = prefix <> Trie.trie_prefix tn in
-            [Left fullPrefix]
+-- expand a list of entries at least one UTF8 character. We'll assume
+-- a good UTF8 string if its last octet is less than 0x80.
+expandEntUTF8 :: Entry a -> [Entry a]
+expandEntUTF8 x@(Right _) = [x]
+expandEntUTF8 (Left (p,tn)) = expandEntUTF8' p tn
 
--- | We'll expand the Trie 
-wordsForBrowsing :: Dict -> WordPrefix -> [Either WordPrefix Word]
-wordsForBrowsing dict prefix = 
+expandEntUTF8' :: Prefix -> Trie.Node a -> [Entry a]
+expandEntUTF8' prefix tnParent =
+    let bAccept = isJust (Trie.trie_accept tnParent) in
+    let lAccept = if bAccept then [Right prefix] else [] in
+    let toChildEnts (byte,getChildRef) = 
+            maybeToList getChildRef >>= \ v ->
+            let tnChild = derefc CacheMode0 v in
+            let childPrefix = mconcat [prefix, BS.singleton byte, Trie.trie_prefix tnChild] in
+            let bOkUTF8 = BS.last childPrefix < 0x80 in
+            if bOkUTF8 then [Left (childPrefix, tnChild)] else 
+            -- prefix in middle of UTF8 char!
+            expandEntUTF8' childPrefix tnChild 
+    in
+    let lChildren = L.concatMap toChildEnts $ A.assocs $ Trie.trie_branch tnParent in
+    lAccept ++ lChildren
+
+-- | We'll expand the Trie until it surpasses a target width, unless doing
+-- so causes it to surpass the maximum width. Expansions are uniformly
+-- breadth-first.
+wordsForBrowsing :: Int -> Int -> Dict -> Prefix -> [Either Prefix Word]
+wordsForBrowsing nTargetWidth nMaxWidth dict prefix = 
     let t0 = Trie.lookupPrefix prefix (Dict.dict_defs dict) in
     case Trie.trie_root t0 of
-        Nothing -> [] -- all done
+        Nothing -> [] -- prefix has no content
         Just v ->
             let tn = derefc CacheMode0 v in 
             let fullPrefix = prefix <> Trie.trie_prefix tn in
-            let bAccept = isJust (Trie.trie_accept tn) in
-            let lAccept = if bAccept then [Right (Word fullPrefix)] else [] in
-            let lBytes = fmap fst $ L.filter (isJust . snd) $ A.assocs $ Trie.trie_branch tn in
-            let expandChild = expandFini 7 dict . (fullPrefix `BS.snoc`) in
-            let lChildren = L.concatMap expandChild lBytes in
-            lAccept ++ lChildren
+            let loopToFillMenu n l =
+                    if (n >= nTargetWidth) then l else
+                    let l' = L.concatMap expandEntUTF8 l in
+                    let n' = L.length l' in
+                    if (n' == n) then l' else  -- could not expand
+                    if (n' > nMaxWidth) then l else -- expands too far
+                    loopToFillMenu n' l'
+            in
+            let l0 = expandEntUTF8' fullPrefix tn in
+            let n0 = L.length l0 in
+            finishEnt <$> loopToFillMenu n0 l0
 
-lengthAtLeast :: Int -> [a] -> Bool
-lengthAtLeast 0 _ = True
-lengthAtLeast n (_:xs) = lengthAtLeast (n-1) xs
-lengthAtLeast _ [] = False
 
-lnkEnt :: BranchName -> Either WordPrefix Word -> HTML
+isLeafNode :: Trie.Node a -> Bool
+isLeafNode = L.null . L.filter isJust . A.elems . Trie.trie_branch
+
+-- if a final child has no children, we'll translate it to a key
+finishEnt :: Entry a -> Either Prefix Word
+finishEnt (Right x) = Right (Word x)
+finishEnt (Left (p,tn)) | isLeafNode tn = Right (Word p)
+                        | otherwise = Left p
+
+lnkEnt :: BranchName -> Either Prefix Word -> HTML
 lnkEnt dictName = either lnkPrefix (hrefDictWord dictName) where
     lnkPrefix p = 
         let uri = uriDictWordsQPrefix dictName p in

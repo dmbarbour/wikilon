@@ -5,22 +5,37 @@ At this time I'm trying to develop lots of little 'spike' solutions. The UX isn'
 
 DONE:
 
-* I can see a list of dictionaries
-* I can create a new dictionary
-* I can export a dictionary to a file
-* I can import a dictionary from a file
-* I can edit fragments of a dictionary
-* I can browse words by name (very simplistic)
-* I can obtain a list of word names 
+* list of dictionaries
+* create a new dictionary
+* export a dictionary to a file
+* import a dictionary from a file
+* edit fragments of a dictionary
+* browse words by name (not very useful)
+* obtain a list of word names 
 
 TODO:
 
+* view a word
+* delete a word
+* rename a word
+* interactive editing
+* list 'TODO' annotations in code, maybe with timestamps and red/green/etc.
+* browse words by suffix
+* full text search
+
 * simplistic REPLs, both Claw code and ABC
+* basic typechecking 
 * simple ABC to JavaScript compiler
  
-* I can easily rename a word for a full dictionary
 * I can easily browse words by type in the dictionary
 * I can easily browse words by intermediate structure in dictionary
+* I can easily browse a reverse lookup for words in the dictionary
+* I can browse words based on dictionary driven categorical metadata
+* list 'root' words - words that aren't directly used within the dictionary
+ * perhaps minus documentation, etc.
+* I can search for words based on name (with optional, default fuzzy find)
+* I can search for words based on type (with optional, default fuzzy find)
+* 
 * I can easily find recently changed words for fast review
 * I can easily diff words (and information about them)
 * I can easily link to clients of a word, to depth N

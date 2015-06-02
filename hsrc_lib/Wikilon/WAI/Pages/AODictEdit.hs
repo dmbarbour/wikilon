@@ -32,7 +32,6 @@ import Data.Monoid
 import Data.Maybe (mapMaybe)
 import Data.Either (lefts, rights)
 import qualified Data.List as L
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
@@ -109,10 +108,6 @@ queriedWordList :: HTTP.Query -> [Word]
 queriedWordList = L.nub . L.concatMap getWords where
     getWords ("words", Just bs) = extractWordList bs
     getWords _ = []
-
-extractWordList :: BS.ByteString -> [Word]
-extractWordList = L.filter isValidWord . fmap Word . BS.splitWith spc where
-    spc c = (32 == c) || (44 == c) -- spaces and commas
 
 loadBytes :: Dict -> Word -> LBS.ByteString
 loadBytes d = maybe LBS.empty id . Dict.lookupBytes d

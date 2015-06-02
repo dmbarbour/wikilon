@@ -62,6 +62,9 @@ module Wikilon.WAI.Utils
     , mediaTypeMultiPartFormData
     , mediaTypeGzip
 
+    -- MISC
+    , extractWordList
+
     , module Wikilon.WAI.Types
     ) where
 
@@ -83,7 +86,7 @@ import qualified Network.HTTP.Media as HTTP
 -- import qualified Network.HTTP.Types.Header as HTTP
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Middleware.Gzip as Wai
-import Wikilon.Dict.Word (listWordConstraintsForHumans)
+import Wikilon.Dict.Word
 import Wikilon.WAI.Types
 import Wikilon.Root
 import qualified Wikilon.Time as Time
@@ -357,7 +360,6 @@ plainText = (HTTP.hContentType,"text/plain; charset=utf-8")
 noCache :: HTTP.Header
 noCache = (HTTP.hCacheControl, "no-cache")
 
-
 -- | ETag: number  (weak or strong)
 eTagN, eTagNW :: (Integral n) => n -> HTTP.Header
 eTagN n = ("ETag", UTF8.fromString $ show (show (toInteger n)))
@@ -456,4 +458,11 @@ mediaTypeMultiPartFormData = "multipart/form-data"
 
 mediaTypeGzip :: HTTP.MediaType
 mediaTypeGzip = "application/gzip"
+
+
+extractWordList :: BS.ByteString -> [Word]
+extractWordList = L.filter isValidWord . fmap Word . BS.splitWith spc where
+    spc c = (32 == c) || (44 == c) -- spaces and commas
+
+
 
