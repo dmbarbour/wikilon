@@ -16,7 +16,8 @@ import qualified Data.ByteString.UTF8 as UTF8
 import GHC.Conc (getNumProcessors, setNumCapabilities)
 import Database.VCache 
 import Database.VCache.Cache
-import qualified Wikilon
+import qualified Wikilon.Root as Wikilon
+import qualified Wikilon.WAI as Wikilon
 
 helpMessage :: String
 helpMessage =

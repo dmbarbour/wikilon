@@ -55,7 +55,6 @@ To get started with Wikilon:
  * cabal sandbox init
  * cabal sandbox add-source wikilon-abc
  * cabal sandbox add-source wikilon-model
- * cabal sandbox add-source wikilon-store
  * cabal sandbox add-source wikilon-wai
  * cabal install --only-dependencies
  * cabal install

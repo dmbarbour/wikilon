@@ -34,7 +34,6 @@ import qualified System.Locale
 -- import Control.Exception (assert)
 import qualified Data.Decimal as Dec
 import Data.Typeable (Typeable)
-import Database.VCache
 
 -- | Timestamp in Wikilon
 newtype T = T Int64 deriving (Eq, Ord, Typeable)
@@ -188,7 +187,6 @@ parseTimeFormat :: String -> String -> Maybe T
 parseTimeFormat sFormat = fmap fromUTC . Time.parseTime t_locale sFormat
 #endif
 
-
 -- show difference in time for humans
 instance Show DT where
     showsPrec _ (DT dt) = shows val . showString unit where
@@ -201,14 +199,3 @@ instance Show DT where
             if (pp < 1000*1000*1000) then (6,"µs") else
             if (pp < 1000*1000*1000*1000) then (9,"ms") else
             (12,"s")
-
--- convenient persistence for time values
-instance VCacheable T where
-    get = T . fromInteger <$> get
-    put (T tm) = put (toInteger tm)
-instance VCacheable DT where
-    get = DT . fromInteger <$> get
-    put (DT dt) = put (toInteger dt)
-
-
-

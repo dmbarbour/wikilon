@@ -1,0 +1,90 @@
+Name: wikilon-store
+Version: 0.1
+Synopsis: wikilon backend; initial implementation of model
+Category: Awelon
+Description:
+  Wikilon is divided into several packages to help enforce some
+  modularity goals. This package is a backend implementation of
+  the Wikilon model, and is the only/primary backend for now.
+  
+Author: David Barbour
+Maintainer: dmbarbour@gmail.com
+Homepage: http://github.com/dmbarbour/wikilon
+
+Package-Url: 
+Copyright: (c) 2014-2015 by David Barbour
+License: BSD3
+license-file: LICENSE.txt
+Stability: experimental
+build-type: Simple
+cabal-version: >= 1.20
+
+Extra-source-files:
+    README.md 
+    changelog.md
+
+Source-repository head
+  type: git
+  location: http://github.com/dmbarbour/wikilon.git
+
+Library
+  hs-Source-Dirs: hsrc_lib
+  default-language: Haskell2010
+  Build-Depends: base (>= 4.7 && < 5)
+    , wikilon-abc
+    , wikilon-model
+    , vcache (>= 0.2.5)
+    , vcache-trie (>= 0.1.1)
+    , mtl
+
+    -- TODO: eventually update time requirement to 1.5
+    , time, old-locale
+
+    , Decimal (>= 0.4)
+    , bytestring (>= 0.10.4)
+    , utf8-string (>= 1)
+    , bytestring-builder
+    , array
+    , containers (>= 0.5)
+    , cryptohash (>= 0.11)
+    , byteable
+    , entropy
+    , zlib
+
+  Exposed-Modules:
+
+    Data.VCache.LoB
+
+    Wikilon.Store.Time
+
+    Wikilon.Dict
+    Wikilon.Dict.Word
+    Wikilon.Dict.AODict
+    Wikilon.Dict.Token
+    Wikilon.Dict.Type
+    Wikilon.Dict.Text
+
+    Wikilon.Cache
+    Wikilon.Log
+
+    Wikilon.Branch
+    Wikilon.Geneology
+
+    Wikilon.Code
+
+    Wikilon.Machine
+    -- Wikilon.Network
+    -- Wikilon.Services
+
+    Wikilon.Root
+
+    -- Wikilon.Events
+    -- Wikilon.Views
+
+    Wikilon.SecureHash
+    Wikilon.Secret
+
+  Other-Modules:
+  
+  ghc-options: -Wall -auto-all
+

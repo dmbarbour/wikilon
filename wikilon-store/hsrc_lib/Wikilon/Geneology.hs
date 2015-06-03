@@ -26,7 +26,7 @@ import qualified Data.VCache.LoB as LoB
 import Data.VCache.Trie (Trie)
 import qualified Data.VCache.Trie as Trie
 
-import Wikilon.Time
+import Wikilon.Store.Time
 
 type Name = UTF8.ByteString
 type Label = Name

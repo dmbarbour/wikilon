@@ -56,7 +56,7 @@ import qualified Data.VCache.Trie as Trie
 import Wikilon.Dict (Dict)
 import Wikilon.Dict.Word (isValidWord, Word(..))
 import qualified Wikilon.Dict as Dict
-import Wikilon.Time
+import Wikilon.Store.Time
 
 -- | Branches are named in their BranchSet. These names are simple
 -- unicode strings. These names are also used in branch histories.
