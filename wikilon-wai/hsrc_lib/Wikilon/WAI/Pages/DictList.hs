@@ -29,16 +29,18 @@ import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
 import Database.VCache
 
+import Wikilon.Dict.Word (Word(..), isValidWord)
+import Wikilon.Time
+
 import Wikilon.WAI.Utils
 import Wikilon.WAI.RecvFormPost
 import Wikilon.WAI.Routes
-import Wikilon.Branch (BranchName)
-import qualified Wikilon.Branch as Branch
-import Wikilon.Dict (Word(..), isValidWord)
-import qualified Wikilon.Dict as Dict
-import Wikilon.Root
-import Wikilon.Time
 import qualified Wikilon.WAI.RegexPatterns as Regex
+
+import Wikilon.Store.Branch (BranchName)
+import qualified Wikilon.Store.Branch as Branch
+import qualified Wikilon.Store.Dict as Dict
+import Wikilon.Store.Root
 
 
 import qualified Awelon.ABC as ABC

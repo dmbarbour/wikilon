@@ -46,8 +46,8 @@ import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
 
 import Wikilon.WAI.Utils
-import Wikilon.Branch (BranchName)
-import Wikilon.Dict (Word(..), isValidWord)
+import Wikilon.Store.Branch (BranchName)
+import Wikilon.Dict.Word (Word(..), isValidWord)
 
 type Route = BS.ByteString
 

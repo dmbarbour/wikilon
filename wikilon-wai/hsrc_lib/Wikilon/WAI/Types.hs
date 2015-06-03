@@ -8,7 +8,7 @@ module Wikilon.WAI.Types
 
 import Data.ByteString (ByteString)
 import qualified Network.Wai as Wai
-import Wikilon.Root
+import Wikilon.Store.Root
 
 type Captures = [(ByteString, ByteString)]
 type WikilonApp = Wikilon -> Captures -> Wai.Application

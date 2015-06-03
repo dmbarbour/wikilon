@@ -6,7 +6,7 @@
 -- leave it to humans. Though, it might be interesting to train
 -- a neural network from log data when discarding old info.
 --
-module Wikilon.Log
+module Wikilon.Store.Log
     (
     ) where
 

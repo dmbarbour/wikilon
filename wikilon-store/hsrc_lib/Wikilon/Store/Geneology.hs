@@ -6,7 +6,7 @@
 --
 -- At the moment, our geneology is a very basic append-only data
 -- structure. Ideas such as renaming or deleting a 
-module Wikilon.Geneology 
+module Wikilon.Store.Geneology 
     ( Geneology
     , empty
     , addChild

@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 
 -- | Internal structure for Wikilon dictionary.
-module Wikilon.Dict.Type
+module Wikilon.Store.Dict.Type
     ( Dict1(..)
     , Def1(..)
     , Deps1(..)
@@ -85,5 +85,5 @@ instance VCacheable U where
         _ -> fail $ dictErr $ "unrecognized Unit value " ++ show v
 
 dictErr :: String -> String
-dictErr = ("Wikilon.Dict: " ++)
+dictErr = ("Wikilon.Store.Dict: " ++)
 

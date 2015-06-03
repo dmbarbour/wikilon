@@ -51,9 +51,18 @@ Library
     , zlib
 
   Exposed-Modules:
+
     Wikilon.Time
     Wikilon.Events
     Wikilon.Model
+
+    Wikilon.Dict.Word
+    Wikilon.Dict.Token
+    Wikilon.Dict.Text
+
+    Wikilon.SecureHash
+
+
   Other-Modules:
  
   ghc-options: -Wall -auto-all

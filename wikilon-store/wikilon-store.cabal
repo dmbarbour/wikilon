@@ -46,7 +46,6 @@ Library
     , bytestring-builder
     , array
     , containers (>= 0.5)
-    , cryptohash (>= 0.11)
     , byteable
     , entropy
     , zlib
@@ -56,33 +55,17 @@ Library
     Data.VCache.LoB
 
     Wikilon.Store.Time
-
-    Wikilon.Dict
-    Wikilon.Dict.Word
-    Wikilon.Dict.AODict
-    Wikilon.Dict.Token
-    Wikilon.Dict.Type
-    Wikilon.Dict.Text
-
-    Wikilon.Cache
-    Wikilon.Log
-
-    Wikilon.Branch
-    Wikilon.Geneology
-
-    Wikilon.Code
-
-    Wikilon.Machine
-    -- Wikilon.Network
-    -- Wikilon.Services
-
-    Wikilon.Root
-
-    -- Wikilon.Events
-    -- Wikilon.Views
-
-    Wikilon.SecureHash
-    Wikilon.Secret
+    Wikilon.Store.Dict
+    Wikilon.Store.Dict.AODict
+    Wikilon.Store.Dict.Type
+    Wikilon.Store.Cache
+    Wikilon.Store.Log
+    Wikilon.Store.Branch
+    Wikilon.Store.Geneology
+    Wikilon.Store.Code
+    Wikilon.Store.Machine
+    Wikilon.Store.Root
+    Wikilon.Store.Secret
 
   Other-Modules:
   

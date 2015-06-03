@@ -52,13 +52,13 @@ import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
 import Wikilon.WAI.RecvFormPost
 import qualified Wikilon.WAI.RegexPatterns as Regex
-import Wikilon.Branch (BranchName, Branch)
-import qualified Wikilon.Branch as Branch
+import Wikilon.Store.Branch (BranchName, Branch)
+import qualified Wikilon.Store.Branch as Branch
 import Wikilon.Dict.Word
-import Wikilon.Dict (Dict)
-import qualified Wikilon.Dict as Dict
-import qualified Wikilon.Dict.AODict as AODict
-import Wikilon.Root
+import Wikilon.Store.Dict (Dict)
+import qualified Wikilon.Store.Dict as Dict
+import qualified Wikilon.Store.Dict.AODict as AODict
+import Wikilon.Store.Root
 import Wikilon.Time
 
 -- | Provide a form that will pre-load the editor. If given a non-empty

@@ -25,13 +25,13 @@ import Database.VCache
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
 import Wikilon.Dict.Word
-import Wikilon.Dict (Dict)
-import qualified Wikilon.Dict as Dict
-import Wikilon.Branch (BranchName)
-import qualified Wikilon.Branch as Branch
-import Wikilon.Root
+import Wikilon.Store.Dict (Dict)
+import qualified Wikilon.Store.Dict as Dict
+import Wikilon.Store.Branch (BranchName)
+import qualified Wikilon.Store.Branch as Branch
+import Wikilon.Store.Root
 
-import qualified Wikilon.Dict.Type as Dict
+import qualified Wikilon.Store.Dict.Type as Dict
 import qualified Data.VCache.Trie as Trie
 import qualified Data.VCache.Trie.Type as Trie
 import qualified Data.Array.IArray as A

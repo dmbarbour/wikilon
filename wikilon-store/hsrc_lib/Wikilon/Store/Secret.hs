@@ -13,7 +13,7 @@
 -- Related: 
 --   http://awelonblue.wordpress.com/2013/08/26/source-stable-uniqueness/
 --
-module Wikilon.Secret 
+module Wikilon.Store.Secret 
     ( Secret, newSecret
     ) where
 

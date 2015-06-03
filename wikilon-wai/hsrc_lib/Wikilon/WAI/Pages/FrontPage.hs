@@ -19,8 +19,9 @@ import qualified Network.Wai as Wai
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
-import Wikilon.Dict (Word(..))
-import Wikilon.Root
+import Wikilon.Dict.Word (Word(..))
+
+import Wikilon.Store.Root
 
 wikilonRoot :: WikilonApp
 wikilonRoot = app where

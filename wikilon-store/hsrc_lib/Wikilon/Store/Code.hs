@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 
 -- | Specializations of Wikilon.ABC to easily use VCache resources.
-module Wikilon.Code
+module Wikilon.Store.Code
     ( ABC(..)
     , Value(..)
     , Rsc(..)

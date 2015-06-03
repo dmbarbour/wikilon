@@ -22,7 +22,7 @@
 --
 -- TODO: push most of the generic logic into wikilon-abc
 --   (will need to abstract the dictionary)
-module Wikilon.Dict.AODict
+module Wikilon.Store.Dict.AODict
     ( mimeType
     , dictWords
     , dictWords'
@@ -52,7 +52,7 @@ import qualified Data.Set as Set
 
 import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
-import Wikilon.Dict 
+import Wikilon.Store.Dict 
 
 
 -- | appropriate HTTP Content-Type or Accept type 

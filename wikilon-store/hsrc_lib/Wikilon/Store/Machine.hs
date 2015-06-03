@@ -40,7 +40,7 @@
 -- own machine interface for subscriptions and a simple wrapper around
 -- user-defined state and behavior. 
 --
-module Wikilon.Machine
+module Wikilon.Store.Machine
     ( AVM(..)
     , LiveAVM(..)
     , Bind(..)
@@ -54,10 +54,10 @@ import qualified Data.ByteString.UTF8 as UTF8
 
 -- import Database.VCache
 
-import Wikilon.Code
-import Wikilon.Time
-import Wikilon.Branch
 import Wikilon.Dict.Word
+import Wikilon.Store.Code
+import Wikilon.Store.Time
+import Wikilon.Store.Branch
 
 
 -- | Our basic, opaque machine model.

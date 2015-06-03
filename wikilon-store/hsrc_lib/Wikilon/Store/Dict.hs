@@ -37,7 +37,7 @@
 --   batch rename
 --   efficient diffs
 -- 
-module Wikilon.Dict
+module Wikilon.Store.Dict
     ( Dict, dict_space
     , empty, null, size
     , lookup, toList
@@ -87,7 +87,7 @@ import Database.VCache
 import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
 
-import Wikilon.Dict.Type
+import Wikilon.Store.Dict.Type
 import Wikilon.Dict.Word
 import Wikilon.Dict.Token
 import Wikilon.Dict.Text

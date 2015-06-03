@@ -20,8 +20,9 @@ import Wikilon.WAI.Types
 import Wikilon.WAI.Routes
 import Wikilon.WAI.Pages
 import Wikilon.WAI.Utils (plainText, noCache, eServerError, eNotFound)
-import Wikilon.Branch (BranchName)
-import Wikilon.Root
+
+import Wikilon.Store.Branch (BranchName)
+import Wikilon.Store.Root
 
 -- | List of routes for the Wikilon web service.
 wikilonRoutes :: [(Route, WikilonApp)]

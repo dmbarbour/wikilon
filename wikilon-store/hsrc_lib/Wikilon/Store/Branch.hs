@@ -5,7 +5,7 @@
 --
 -- Branch names must be valid Word names, i.e. to have the same URL
 -- friendly and text friendly constraints.
-module Wikilon.Branch
+module Wikilon.Store.Branch
     ( BranchSet
     , BranchName
     , Branch
@@ -53,9 +53,10 @@ import qualified Data.VCache.LoB as LoB
 import Data.VCache.Trie (Trie)
 import qualified Data.VCache.Trie as Trie
 
-import Wikilon.Dict (Dict)
 import Wikilon.Dict.Word (isValidWord, Word(..))
-import qualified Wikilon.Dict as Dict
+
+import Wikilon.Store.Dict (Dict)
+import qualified Wikilon.Store.Dict as Dict
 import Wikilon.Store.Time
 
 -- | Branches are named in their BranchSet. These names are simple

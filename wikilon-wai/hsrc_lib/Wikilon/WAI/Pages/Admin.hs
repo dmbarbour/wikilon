@@ -9,7 +9,7 @@ import qualified Network.Wai as Wai
 import Database.VCache
 
 import Wikilon.WAI.Utils
-import Wikilon.Root
+import Wikilon.Store.Root
 
 
 dbHealth :: WikilonApp

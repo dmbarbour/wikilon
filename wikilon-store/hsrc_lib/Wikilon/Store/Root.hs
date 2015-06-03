@@ -2,7 +2,7 @@
 -- | The root data type for the Wikilon state, based on a set of root
 -- PVars in VCache. Wikilon can be extended with new features by adding
 -- new roots. 
-module Wikilon.Root
+module Wikilon.Store.Root
     ( Args(..), defaultArgs
     , Wikilon(..)
     , wikilon_errlog
@@ -20,11 +20,11 @@ import qualified Data.ByteString.UTF8 as UTF8
 import Database.VCache
 import Data.VCache.LoB (LoB)
 import qualified Data.VCache.LoB as LoB
-import Wikilon.Secret
+import Wikilon.Store.Secret
 import Wikilon.SecureHash
-import Wikilon.Branch (BranchSet, BranchName)
-import Wikilon.Time (T, getTime)
-import qualified Wikilon.Branch as Br
+import Wikilon.Store.Branch (BranchSet, BranchName)
+import Wikilon.Store.Time (T, getTime)
+import qualified Wikilon.Store.Branch as Br
 import qualified Awelon.Base16 as B16
 
 -- | Arguments for loading a Wikilon instance.

@@ -15,6 +15,6 @@
 -- The other major feature is that our cache must gradually invalidate
 -- content that is old and unused. I'm not sure how to combine these
 -- two forces at the moment.
-module Wikilon.Cache
+module Wikilon.Store.Cache
     (
     ) where
