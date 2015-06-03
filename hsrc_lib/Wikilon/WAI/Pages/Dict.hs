@@ -74,7 +74,10 @@ dictFrontPage = dictApp $ \ w dictName rq k ->
         H.title title 
     H.body $ do
         H.h1 title
-        H.p "This is an AO dictionary front page. I'm still figuring out what should go here."
+        let lnAwelonObject = href uriAODocs $ "Awelon Object (AO)" 
+        H.p $ "This is an " <> lnAwelonObject <> " dictionary."
+        H.p $ "To add here: dictionary edit and curation policy, security info,\n\
+              \external bindings or users (subscriptions, etc.)"
         -- maybe some content from the dictionary itself
         -- maybe add some banner or CSS from dictionary itself
         -- maybe SVG or icons from dictionary?
@@ -95,9 +98,6 @@ dictFrontPage = dictApp $ \ w dictName rq k ->
             H.li $ editor <> " view and edit raw fragments of the dictionary"
             H.li $ lnkAODict dictName <> " view full dictionary (low level)"
             
-        -- lists of words
-            -- plain text lists
-            -- lists sorted on prefix
         -- maybe a simple console-like or query application?
         -- after defining apps, probably want to revist them easily
         -- HEALTH information
@@ -116,7 +116,7 @@ dictFrontPage = dictApp $ \ w dictName rq k ->
             -- 
 
         H.h2 "Browse Words by Name"
-        let lBrowseWords = wordsForBrowsing 20 60 (Branch.head b) (BS.empty)
+        let lBrowseWords = wordsForBrowsing 24 40 (Branch.head b) (BS.empty)
         H.ul $ forM_ lBrowseWords $ (H.li . lnkEnt dictName)
         H.p $ "Long term, I'd like to support browsing by type, domain, role, definition structure, etc."
 
@@ -165,7 +165,7 @@ dictWordsPage = dictApp $ \w dictName rq k ->
     readPVarIO (wikilon_dicts w) >>= \ bset ->
     let dict = Branch.head $ Branch.lookup' dictName bset in
     let prefix = requestedPrefix rq in
-    let lBrowse = wordsForBrowsing 20 60 dict prefix in
+    let lBrowse = wordsForBrowsing 24 40 dict prefix in
     let etag = eTagN (Dict.unsafeDictAddr dict) in
     let status = HTTP.ok200 in
     let headers = [textHtml, etag] in
@@ -198,7 +198,9 @@ type Key = UTF8.ByteString
 type Entry a = Either (Prefix, Trie.Node a) Key
 
 -- expand a list of entries at least one UTF8 character. We'll assume
--- a good UTF8 string if its last octet is less than 0x80.
+-- a good UTF8 string if its last octet is less than 0x80. The goal
+-- here is that I shouldn't need to worry about whether a prefix is a
+-- valid UTF8 string.
 expandEntUTF8 :: Entry a -> [Entry a]
 expandEntUTF8 x@(Right _) = [x]
 expandEntUTF8 (Left (p,tn)) = expandEntUTF8' p tn
@@ -221,7 +223,7 @@ expandEntUTF8' prefix tnParent =
 
 -- | We'll expand the Trie until it surpasses a target width, unless doing
 -- so causes it to surpass the maximum width. Expansions are uniformly
--- breadth-first.
+-- breadth-first. At least one expansion is performed regardless.
 wordsForBrowsing :: Int -> Int -> Dict -> Prefix -> [Either Prefix Word]
 wordsForBrowsing nTargetWidth nMaxWidth dict prefix = 
     let t0 = Trie.lookupPrefix prefix (Dict.dict_defs dict) in

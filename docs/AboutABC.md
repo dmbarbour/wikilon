@@ -515,3 +515,7 @@ An ABCD interpreter can provide a few under-the-hood data types for compact repr
 Even serialization may be specialized, e.g. represent a vector of integers as a compact binary string followed by a few operators to interpret it back into a vector.
 
 ABCD offers a viable path to performant collections oriented programming.
+
+## Meta
+
+Where appropriate, the generic internet media type for ABC should be `application/vnd.org.awelon.abc`. File extension might be `.abc`, though I'd like to avoid maintaining files full of ABC code. Specific, constrained variants of ABC (e.g. restricting tokens) might use a more specific media type.

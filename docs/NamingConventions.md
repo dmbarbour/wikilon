@@ -16,11 +16,4 @@ So, let's consider a particular case: documentation for a word 'foo'.
 
 Should this be `foo.doc` or `doc.foo`? Or maybe `doc:foo` or `foo-doc`?
 
-Or maybe I should try to use link relations?
-
-        [{%doc.foo}]{&rel:doc}%
-
-Probably not. If I want interactive documentation, I can't be adding a dependency on `doc.foo`. 
-
-For now, I'm favoring `foo.doc` as the convention for documentation on `foo`. Though, use of a hyphenated word foo-doc or some other structure is also tempting. This shifts type or role information into the suffix, while the prefix is namespace or similar.
-
+After experimenting with this a bit, I'm starting to think the `doc:foo` approach might be preferable. It places all the documentation in a browseable directory by prefix, and all the docs should have a similar type. I'd also like something like `blurb:foo` or `shortdoc:foo`, something that fits into just one line.

@@ -18,14 +18,16 @@ TODO:
 * view a word
 * delete a word
 * rename a word
-* interactive editing
-* list 'TODO' annotations in code, maybe with timestamps and red/green/etc.
-* browse words by suffix
-* full text search
 
 * simplistic REPLs, both Claw code and ABC
 * basic typechecking 
 * simple ABC to JavaScript compiler
+* I can easily find recently changed words for fast review
+
+* interactive editing
+* list 'TODO' annotations in code, maybe with timestamps and red/green/etc.
+* browse words by suffix
+* full text search
  
 * I can easily browse words by type in the dictionary
 * I can easily browse words by intermediate structure in dictionary
@@ -35,8 +37,6 @@ TODO:
  * perhaps minus documentation, etc.
 * I can search for words based on name (with optional, default fuzzy find)
 * I can search for words based on type (with optional, default fuzzy find)
-* 
-* I can easily find recently changed words for fast review
 * I can easily diff words (and information about them)
 * I can easily link to clients of a word, to depth N
 * I can easily link to dependencies of a word, to depth N
@@ -49,6 +49,9 @@ TODO:
 
 * I can evaluate useful functions from words
 * I can access precompiled s
+
+* linter: validate hash names
+* linter: validate types against naming conventions
 
 
 * ACTIONS
