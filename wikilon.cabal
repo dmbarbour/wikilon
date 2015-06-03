@@ -115,6 +115,7 @@ Library
     Wikilon.WAI.Routes
     Wikilon.WAI.RecvFormPost
     Wikilon.WAI.RegexPatterns
+    Wikilon.WAI.MediaType
     Wikilon.WAI.Pages.AODict
     Wikilon.WAI.Pages.AODictEdit
     Wikilon.WAI.Pages.DictList

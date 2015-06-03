@@ -53,19 +53,12 @@ module Wikilon.WAI.Utils
     , htmlWikilonBase
     , htmlHeaderCommon
 
-    -- MEDIA
-    , mediaTypeAODict
-    , mediaTypeTextPlain
-    , mediaTypeTextHTML
-    , mediaTypeTextCSV
-    , mediaTypeFormURLEncoded
-    , mediaTypeMultiPartFormData
-    , mediaTypeGzip
 
     -- MISC
     , extractWordList
 
     , module Wikilon.WAI.Types
+    , module Wikilon.WAI.MediaType
     ) where
 
 --import Control.Monad
@@ -88,6 +81,7 @@ import qualified Network.Wai as Wai
 import qualified Network.Wai.Middleware.Gzip as Wai
 import Wikilon.Dict.Word
 import Wikilon.WAI.Types
+import Wikilon.WAI.MediaType
 import Wikilon.Root
 import qualified Wikilon.Time as Time
 
@@ -437,27 +431,6 @@ statusToTitle :: HTTP.Status -> HTML
 statusToTitle status =
     H.toMarkup (HTTP.statusCode status) <> " " <> 
     H.unsafeByteString (HTTP.statusMessage status)
-
-mediaTypeAODict :: HTTP.MediaType 
-mediaTypeAODict = "text/vnd.org.awelon.aodict"
-
-mediaTypeTextPlain :: HTTP.MediaType
-mediaTypeTextPlain = "text/plain"
-
-mediaTypeTextHTML :: HTTP.MediaType
-mediaTypeTextHTML = "text/html"
-
-mediaTypeTextCSV :: HTTP.MediaType
-mediaTypeTextCSV = "text/csv"
-
-mediaTypeFormURLEncoded :: HTTP.MediaType
-mediaTypeFormURLEncoded = "application/x-www-form-urlencoded"
-
-mediaTypeMultiPartFormData :: HTTP.MediaType
-mediaTypeMultiPartFormData = "multipart/form-data"
-
-mediaTypeGzip :: HTTP.MediaType
-mediaTypeGzip = "application/gzip"
 
 
 extractWordList :: BS.ByteString -> [Word]

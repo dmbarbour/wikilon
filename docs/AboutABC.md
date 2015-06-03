@@ -510,9 +510,9 @@ During design and development of Awelon Bytecode, it has been very tempting to p
 
 Simply put, a significant subset of ABCD will be collections oriented.
 
-An ABCD interpreter can provide a few under-the-hood data types for compact representations of arrays, matrices, and so on. Where necessary, or where guided by annotation, the interpreter can convert between these compact representations and the more conventional composite of products and sums. But, with a sufficient set of collections-oriented operators, conversion would mostly occur near the edges of the program. Processing of these collections could be greatly accelerated, parallelized, and optimized based on high-level knowledge of the data structures.
+An ABCD interpreter can provide a few under-the-hood data types for compact representations of arrays, matrices, and so on. Where necessary, or where guided by annotation, the interpreter can convert between these compact representations and the more conventional composite of products and sums. A compiler can do similar, of course.
 
-Even serialization may be specialized, e.g. represent a vector of integers as a compact binary string followed by a few operators to interpret it back into a vector.
+When we know collection values are affine, we can easily implement update functions (e.g. update the 4th element of the array, returning the modified array) using mutation, thus enabling performance properties similar to imperative code. Further, processing of collections can be accelerated, parallelized, and optimized based on high-level knowledge of data structures and the functions involved. Potentially, even serialization might be specialized, e.g. represent a vector of integers as a compact binary string followed by a few ABCD operators to interpret it back into a vector.
 
 ABCD offers a viable path to performant collections oriented programming.
 
