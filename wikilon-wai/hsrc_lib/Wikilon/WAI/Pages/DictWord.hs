@@ -95,17 +95,21 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
                 ! A.rows "20" ! A.cols "70" $ maybe mempty (H.string . show) mbDef
             let lDeps = L.nub $ maybe [] Dict.abcWords mbDef 
             let lClients = Dict.usedBy d dw 
-            navWords "Dependencies" dn lDeps
-            navWords "Dependents" dn lClients
             -- navDocWords dictName dictWord
             H.hr
-            H.p "TODO: access to compiled word and type information (or errors),\n\
+            navWords "Dependencies" dn lDeps
+            navWords "Dependents" dn lClients
+            H.nav $ H.strong "Dictionary" <> " " <> hrefDict dn
+            H.br
+            H.br
+            H.h2 "TODO"
+            H.p "access to compiled word and type information (or errors),\n\
                 \expanded definition suitable for rendering and structured editing,\n\
                 \samples where word is used with known values in other definitions,\n\
                 \animations of word's construction and word in use, compile words of\n\
                 \appropriate types to javascript or SVG or raster images or simple\n\
                 \web applications, etc."
-            H.p "TODO: delete word, rename word"
+            H.p "delete word, rename word"
 
 navWords :: String -> BranchName -> [Word] -> HTML
 navWords _ _ [] = mempty
