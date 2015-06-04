@@ -88,12 +88,10 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
             H.title title
         H.body $ do
             H.h1 title
-            case mbDef of
-                Nothing -> H.p "The requested word is not defined."
-                Just abc -> do
-                    H.p "Definition: "
-                    (H.pre ! A.class_ "aodef") $ (H.code ! A.lang "abc") $ 
-                        H.string (show abc)
+            H.p "Raw AO Definition: "
+            H.textarea ! A.class_ "aodef" ! A.readonly "readonly" 
+                ! A.lang "abc" ! A.placeholder "(undefined)"
+                ! A.rows "20" ! A.cols "70" $ maybe mempty (H.string . show) mbDef
             let lDeps = maybe [] Dict.abcWords mbDef 
             let lClients = Dict.usedBy d dw 
             navWords "Dependencies" dn lDeps
