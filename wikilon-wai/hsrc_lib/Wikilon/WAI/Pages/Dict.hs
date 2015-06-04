@@ -62,7 +62,7 @@ dictResource = app where
 
 dictFrontPage :: WikilonApp
 dictFrontPage = dictApp $ \ w dictName rq k -> 
-    readPVarIO (wikilon_dicts w) >>= \ bset ->
+    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let b = Branch.lookup' dictName bset in
     --let d = Branch.head b in
     let status = HTTP.status200 in
@@ -144,7 +144,7 @@ dictWordsList = justGET $ branchOnOutputMedia $
 
 dictWordsListText :: WikilonApp
 dictWordsListText = dictApp $ \w dictName rq k ->
-    readPVarIO (wikilon_dicts w) >>= \ bset ->
+    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let dict = Branch.head $ Branch.lookup' dictName bset in
     let lWords = Dict.wordsWithPrefix dict (requestedPrefix rq) in
     let encWord (Word wbs) = BB.byteString wbs <> BB.char8 '\n' in
@@ -164,7 +164,7 @@ dictWordsListText = dictApp $ \w dictName rq k ->
 -- sophisticated index to support metadata within the dictionary.
 dictWordsPage :: WikilonApp
 dictWordsPage = dictApp $ \w dictName rq k ->
-    readPVarIO (wikilon_dicts w) >>= \ bset ->
+    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let dict = Branch.head $ Branch.lookup' dictName bset in
     let prefix = requestedPrefix rq in
     let lBrowse = wordsForBrowsing 24 40 dict prefix in

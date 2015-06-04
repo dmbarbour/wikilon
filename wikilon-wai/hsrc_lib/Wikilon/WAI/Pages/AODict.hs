@@ -71,7 +71,7 @@ exportAODict w cap rq k =
 -- TODO: I may need authorization for some dictionaries.
 exportAODict' :: WikilonApp
 exportAODict' = dictApp $ \w dictName rq k -> do
-    bset <- readPVarIO (wikilon_dicts w)
+    bset <- readPVarIO (wikilon_dicts $ wikilon_model w)
     let d = Branch.head $ Branch.lookup' dictName bset
     let etag = return $ eTagN $ Dict.unsafeDictAddr d
     let aodict = return (HTTP.hContentType, HTTP.renderHeader mediaTypeAODict)
@@ -99,7 +99,7 @@ spc c = (10 == c) || (13 == c) || (32 == c) || (44 == c)
 -- | export as a `.ao.gz` file.
 exportAODictGzip :: WikilonApp
 exportAODictGzip = dictApp $ \w dictName rq k -> do 
-    bset <- readPVarIO (wikilon_dicts w)
+    bset <- readPVarIO (wikilon_dicts $ wikilon_model w)
     let d = Branch.head $ Branch.lookup' dictName bset
     let etag = return $ eTagN $ Dict.unsafeDictAddr d
     let aodict = return (HTTP.hContentType, HTTP.renderHeader mediaTypeGzip)
@@ -157,14 +157,14 @@ importAODict' onOK dictName body w _rq k =
     let bHasError = not (L.null err) in
     let onError = k $ aodImportErrors w $ fmap show err in
     if bHasError then onError else
-    let vc = vcache_space (wikilon_store w) in
+    let vc = vcache_space (wikilon_store $ wikilon_model w) in
     case Dict.insert (Dict.empty vc) (Map.toList wordMap) of
         Left insertErrors -> 
             k $ aodImportErrors w $ fmap show insertErrors
         Right dictVal -> do
             tNow <- getTime 
             runVTx vc $ 
-                modifyPVar (wikilon_dicts w) $ \ bset ->
+                modifyPVar (wikilon_dicts $ wikilon_model w) $ \ bset ->
                     let b0 = Branch.lookup' dictName bset in
                     let b' = Branch.update (tNow, dictVal) b0 in
                     Branch.insert dictName b' bset

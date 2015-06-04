@@ -65,7 +65,7 @@ dictList = justGET $ branchOnOutputMedia
 -- | simply list dictionaries by name, one per line.
 listOfDictsText :: WikilonApp
 listOfDictsText w _cap _rq k = 
-    readPVarIO (wikilon_dicts w) >>= \ bset ->
+    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let lNames = Branch.keys bset in
     let etag = eTagN (Branch.unsafeBranchSetAddr bset) in
     k $ Wai.responseLBS HTTP.ok200 [plainText,etag] $ BB.toLazyByteString $ 
@@ -84,7 +84,7 @@ listOfDictsText w _cap _rq k =
 --
 listOfDictsPage :: WikilonApp
 listOfDictsPage w _cap _rq k =
-    readPVarIO (wikilon_dicts w) >>= \ bset ->
+    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let etag = eTagNW (Branch.unsafeBranchSetAddr bset) in
     let title = H.string "Wikilon Dictionaries" in
     k $ Wai.responseLBS HTTP.ok200 [textHtml, etag] $ renderHTML $ do
@@ -172,10 +172,10 @@ aoTextDef txt = ABC.mkABC [ABC.ABC_Text txt, ABC.ABC_Block "v'c"]
 -- without changing anything.
 createDict :: Wikilon -> BranchName -> IO Bool
 createDict w d =
-    let vc = vcache_space (wikilon_store w) in
+    let vc = vcache_space (wikilon_store $ wikilon_model w) in
     getTime >>= \ tNow ->
     runVTx vc $ 
-        readPVar (wikilon_dicts w) >>= \ bset ->
+        readPVar (wikilon_dicts $ wikilon_model w) >>= \ bset ->
         let b0 = Branch.lookup' d bset in
         let bNew = Dict.null (Branch.head b0) in
         if not bNew then return False else
@@ -186,7 +186,7 @@ createDict w d =
             Right d' -> do
                 let b' = Branch.update (tNow,d') b0 
                 let bset' = Branch.insert d b' bset 
-                writePVar (wikilon_dicts w) bset'
+                writePVar (wikilon_dicts $ wikilon_model w) bset'
                 return True
 
 ppDictName :: PostParams -> Maybe BranchName

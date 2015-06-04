@@ -4,12 +4,15 @@
 --
 -- Using Network.Wai.Route to easily cover common cases.
 module Wikilon.WAI 
-    ( wikilonWaiApp
+    ( wikilonWaiConf
+    , wikilonWaiApp
     , wikilonRoutes
     ) where
 
 import Control.Arrow (first)
 import Control.Exception (catch)
+import Data.Monoid
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
@@ -73,11 +76,18 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 --    ,("/favicon", resourceFavicon)
     ]
 
+wikilonWaiConf :: ByteString -> BranchName -> WikilonStore -> Wikilon
+wikilonWaiConf _httpRoot _master _model = Wikilon
+    { wikilon_httpRoot = wrapSlash _httpRoot
+    , wikilon_master = _master
+    , wikilon_model = _model
+    }
+
 -- | The primary wikilon web service. Any exceptions will be logged
 -- for administrators and return a 500 response.
 wikilonWaiApp :: Wikilon -> Wai.Application
 wikilonWaiApp w rq k = catch (baseWikilonApp w rq k) $ \ e -> do 
-    logSomeException w e
+    logSomeException (wikilon_model w) e
     k $ eServerError "unhandled exception (logged for admin)"
 
 baseWikilonApp :: Wikilon -> Wai.Application
@@ -124,4 +134,26 @@ echo :: Wai.Application
 echo rq k = k response where
     response = Wai.responseLBS HTTP.ok200 [plainText,noCache] body
     body = LazyUTF8.fromString $ show rq
+
+
+
+
+
+-- initial root will always start and end with '/'. The
+-- empty string is modified to just "/". This simplifies
+-- construction of 'base' and alternative masters.
+wrapSlash :: ByteString -> ByteString
+wrapSlash = finiSlash . initSlash
+
+finiSlash :: ByteString -> ByteString
+finiSlash s = case BS.unsnoc s of
+    Just (_, 47) -> s
+    _ -> s <> "/"
+
+initSlash :: ByteString -> ByteString
+initSlash s = case BS.uncons s of
+    Just (47, _) -> s
+    _ -> "/" <> s
+
+
 

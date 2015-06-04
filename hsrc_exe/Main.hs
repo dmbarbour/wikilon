@@ -29,7 +29,7 @@ helpMessage =
  \      -init: initialize & greet only; do not start. \n\
  \      -Ddict: set primary dictionary (default 'master'; saved) \n\
  \      -s: silent mode; do not greet or display admin code. \n\
- \      -dbMB: configure maximum database size; (default 100TB; not saved) \n\
+ \      -dbMB: configure maximum database size; (default 60TB; not saved) \n\
  \\n\
  \    Environment Variables:\n\
  \      WIKILON_HOME: directory for persistent data\n\
@@ -140,37 +140,34 @@ runWikilonInstance a = mainBody where
         setVRefsCacheLimit (vcache_space vc) (cacheSize * 1000 * 1000) >>
         loadPort vc (_port a) >>= \ port ->
         loadMaster vc (_master a) >>= \ master ->
-        (`finally` vcacheSync (vcache_space vc)) $ -- sync on normal exit
-            let appArgs = Wikilon.Args { Wikilon.args_store = vcacheSubdir "wiki/" vc
-                                       , Wikilon.args_home = home FS.</> "wiki"
-                                       , Wikilon.args_httpRoot = ""
-                                       , Wikilon.args_master = master
-                                       }
+        (`finally` vcacheSync (vcache_space vc)) $  -- sync on normal exit
+            let wvc = vcacheSubdir "wiki/" vc in
+            let whome = home FS.</> "wiki" in
+            Wikilon.loadWikilonStore wvc whome >>= \ wikiStore ->
+            let wiki = Wikilon.wikilonWaiConf "" master wikiStore in
+            let printGreetingAndAdminCode = do
+                    Sys.putStrLn ("Wikilon:")
+                    Sys.putStrLn ("  Home:   " ++ showFP home)
+                    Sys.putStrLn ("  Port:   " ++ show port) 
+                    Sys.putStrLn ("  Cache:  " ++ show cacheSize ++ " MB")
+                    Sys.putStrLn ("  HTTPS:  " ++ show bUseTLS)
+                    Sys.putStrLn ("  Admin:  " ++ UTF8.toString (Wikilon.adminCode wikiStore))
+                    Sys.putStrLn ("  Master: " ++ UTF8.toString master) 
             in
-            Wikilon.loadWikilon appArgs >>= \ wiki ->
-            unless (_silent a) (greet home port cacheSize wiki bUseTLS) >>
-            if _justInit a then return () else
+            unless (_silent a) printGreetingAndAdminCode >>
+            if _justInit a then return () else 
             let tlsSettings = wikilonWarpTLSSettings home in
             let warpSettings = wikilonWarpSettings port in
             let run = if bUseTLS then WarpTLS.runTLS tlsSettings warpSettings
                                  else Warp.runSettings warpSettings 
             in
-            let app = Wikilon.wikilonWaiApp wiki in
-            run app
+            run $ Wikilon.wikilonWaiApp wiki
     badArgs = _badArgs a
     hasBadArgs = not $ L.null badArgs
     failWithBadArgs = err badArgMsg >> err helpMessage >> Sys.exitFailure
     badArgMsg = "unrecognized arguments: " ++ show badArgs 
     askedForHelp = _help a
     helpAndExit = Sys.putStrLn helpMessage >> Sys.exitSuccess
-    greet home port cache wiki bUseTLS = do
-        Sys.putStrLn ("Wikilon:")
-        Sys.putStrLn ("  Home:   " ++ showFP home)
-        Sys.putStrLn ("  Port:   " ++ show port) 
-        Sys.putStrLn ("  Cache:  " ++ show cache ++ " MB")
-        Sys.putStrLn ("  HTTPS:  " ++ show bUseTLS)
-        Sys.putStrLn ("  Admin:  " ++ UTF8.toString (Wikilon.adminCode wiki))
-        Sys.putStrLn ("  Master: " ++ UTF8.toString (Wikilon.wikilon_master wiki)) 
 
 showFP :: FS.FilePath -> String
 showFP = id

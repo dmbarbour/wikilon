@@ -116,7 +116,7 @@ loadBytes d = maybe LBS.empty id . Dict.lookupBytes d
 -- | obtain page to edit the AO code
 editorPage :: WikilonApp
 editorPage = dictApp $ \ w dictName rq k -> do
-    bset <- readPVarIO (wikilon_dicts w)
+    bset <- readPVarIO (wikilon_dicts $ wikilon_model w)
     let b = Branch.lookup' dictName bset
     let d = Branch.head b
     let tMod = Branch.modified b
@@ -275,9 +275,9 @@ recvAODictEdit pp
     if not (L.null lErr) then onParseError else
     -- if we don't exit on parse errors, we can move on.
     getTime >>= \ tNow ->
-    let vc = vcache_space $ wikilon_store w in
+    let vc = vcache_space $ wikilon_store $ wikilon_model w in
     join $ runVTx vc $ 
-        readPVar (wikilon_dicts w) >>= \ bset ->
+        readPVar (wikilon_dicts $ wikilon_model w) >>= \ bset ->
         let b = Branch.lookup' dictName bset in
         let dHead = Branch.head b in
         let dOrig = histDict b tMod in
@@ -327,7 +327,7 @@ recvAODictEdit pp
             Right dUpd -> do -- EDIT SUCCESS!
                 let b' = Branch.update (tNow, dUpd) b 
                 let bset' = Branch.insert dictName b' bset 
-                writePVar (wikilon_dicts w) bset' -- commit the update
+                writePVar (wikilon_dicts $ wikilon_model w) bset' -- commit the update
                 markDurable -- hand-written updates should be durable
                 -- prepare our response:
                 let status = HTTP.seeOther303 

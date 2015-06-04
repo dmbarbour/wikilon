@@ -18,7 +18,7 @@ dbHealth = justGET $ branchOnOutputMedia $
 
 dbHealthText :: WikilonApp
 dbHealthText w _cap _rq k =
-    let vc = wikilon_store w in 
+    let vc = wikilon_store $ wikilon_model w in 
     vcacheStats (vcache_space vc) >>= \ vcstat -> 
     k $ Wai.responseLBS HTTP.ok200 [plainText] $ 
         LazyUTF8.fromString $ show vcstat

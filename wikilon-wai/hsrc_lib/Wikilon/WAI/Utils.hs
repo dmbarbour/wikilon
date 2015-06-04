@@ -82,7 +82,6 @@ import qualified Network.Wai.Middleware.Gzip as Wai
 import Wikilon.Dict.Word
 import Wikilon.WAI.Types
 import Wikilon.WAI.MediaType
-import Wikilon.Store.Root
 import qualified Wikilon.Time as Time
 
 -- | Route based on method. Also provides reasonable default
