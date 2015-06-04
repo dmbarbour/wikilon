@@ -263,3 +263,9 @@ lnkEnt dictName = either lnkPrefix (hrefDictWord dictName) where
         let msg = H.unsafeByteString p <> "(*)" in
         href uri ! A.class_ "refDictWordPrefix" $ msg
 
+-- TODO: delete a list of words
+
+
+
+
+
