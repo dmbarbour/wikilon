@@ -11,6 +11,7 @@ module Wikilon.WAI.Pages.DictWord
 import Control.Monad
 import Data.Monoid
 import Data.Maybe
+import qualified Data.List as L
 import qualified Data.ByteString.Lazy as LBS
 import qualified Network.HTTP.Types as HTTP
 import qualified Network.HTTP.Media as HTTP
@@ -92,7 +93,7 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
             H.textarea ! A.class_ "aodef" ! A.readonly "readonly" 
                 ! A.lang "abc" ! A.placeholder "(undefined)"
                 ! A.rows "20" ! A.cols "70" $ maybe mempty (H.string . show) mbDef
-            let lDeps = maybe [] Dict.abcWords mbDef 
+            let lDeps = L.nub $ maybe [] Dict.abcWords mbDef 
             let lClients = Dict.usedBy d dw 
             navWords "Dependencies" dn lDeps
             navWords "Dependents" dn lClients
