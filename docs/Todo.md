@@ -12,12 +12,18 @@ DONE:
 * edit fragments of a dictionary
 * browse words by name (not very useful)
 * obtain a list of word names 
+* view a word
+
+
+
 
 TODO:
 
-* view a word
+* directly edit a word
 * delete a word
 * rename a word
+
+
 
 * simplistic REPLs, both Claw code and ABC
 * basic typechecking 
@@ -68,6 +74,20 @@ TODO:
 * I can render words with colors or icons based on prefix or suffix
  * support a simple legend
  * may need to record style information in dictionary?
+
+## BUGHUNT
+
+I'm receiving some strange errors, when importing a dictionary twice into Wikilon:
+
+*** Error in `wikilon': double free or corruption (out): 0x00007f59cc002b10 ***
+Aborted (core dumped)
+
+OR
+
+*** Error in `wikilon': corrupted double-linked list: 0x00007f8878018c90 ***
+Aborted (core dumped)
+
+This behavior happens the second time I load a value. It seems GHC error to me, or perhaps an issue with how GC interacts with VCache.
 
 ## REFACTORING
 

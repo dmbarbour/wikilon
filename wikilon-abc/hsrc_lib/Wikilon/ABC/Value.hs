@@ -20,7 +20,7 @@ import Wikilon.ABC.Code
 -- | Wikilon's basic values and performance extensions.
 data Value r
     -- normal ABC values
-    = Number {-# UNPACK #-} !Rational
+    = Number !Integer
     | Pair (Value r) (Value r)
     | SumL (Value r)
     | SumR (Value r)

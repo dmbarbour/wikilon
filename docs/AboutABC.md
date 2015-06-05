@@ -153,23 +153,32 @@ Natural numbers can be expressed using pseudo-literal constructors in ABC:
         ...
         9 :: N(x) * e → N(10x+9) * e
 
-After construction, numbers can be manipulated by a few elementary operations: add, multiply, their inverses, and divmod (to simplify inference of precision and modulus):
+After construction, numbers can be manipulated by a few elementary operations: add, multiply, negate, and divmod (to simplify inference of precision and modulus):
 
         + :: (N(a) * (N(b) * e)) → (N(a+b) * e)
         * :: (N(a) * (N(b) * e)) → (N(a*b) * e)
         - :: (N(a) * e) → (N(0-a) * e)
-        / :: (N(non-zero a) * e) → (N(1/a) * e)
         Q :: (N(non-zero b) * (N(a) * e)) → (N(r) * (N(q) * e))
             such that q integral, r in (b,0] or [0,b), and qb+r = a
 
-Rational numbers must be computed through such manipulation. For example:
+ABC is not rich in math, nor especially efficient at it without a good compiler. High performance graphical or scientific computing will require a good compiler or good support for standard floating point number models and operations via ABCD.
 
-        #2#3/*-  (-2/3)
-        #123/00/ (1.23)
+#### Regarding Rational and Floating Point Numbers
 
-ABC is not rich in math, nor especially efficient at it. High performance graphical or scientific computing should often be handled indirectly, modeled symbolically and compiled for OpenCL or GPU. I imagine that, eventually, widely used math operations will be well supported by ABCD.
+Originally Awelon Bytecode included the multiplicative inverse:
 
-*NOTE:* Awelon project systems should eventually track dimensionality properties for most numbers (e.g. 5 kilograms vs. 5 meters). Doing so offers pretty good semantic context and safety, and nicely fit structural types. There are no primitives for this; just convention. See AboutAO for more.
+        / :: (N(non-zero a) * e) → (N(1/a) * e)         (DEPRECATED!)
+
+Exact rational or decimal numbers could then be directly represented in ABC.
+
+        -2/3            #2#3/*-
+        3.14            #314/00/
+
+This is convenient for common scientific or engineering domains. But support for rationals does complicate interpreters. Also, there is no efficient way to extract the exact denominator. Also, it isn't clear how we'll integrate floating point representations from here.
+
+It was decided to perform an experiment: limit ABC's number support to just arbitrary precision integers, leave rational numbers, floating point, etc. to be modeled in libraries. E.g. a rational number might be modeled using a pair of integers and some normalization loops. Floating point numbers might be explicitly modeled via sign, exponent, mantissa. Hopefully, we shall settle on a few numeric models at the library layer that can easily be compiled to use hardware registers or high performance implementations. 
+
+Eventually, use of ABCD might eventually capture the common number models. And if the results of this experiment are disfavored, it is always possible to restore the `/` operation.
 
 ### Text
 

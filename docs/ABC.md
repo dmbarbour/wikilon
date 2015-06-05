@@ -38,7 +38,6 @@ See AboutABC for full explanations and design. This file just records each code,
 
         + :: N(a) * (N(b) * e) → N(a+b) * e
         * :: N(a) * (N(b) * e) → N(a*b) * e
-        / :: N(non-zero a) * e → N(1/a) * e
         - :: N(a) * e → N(0-a) * e
         Q :: N(non-zero b) * (N(a) * e) → N(r) * (N(q) * e)
             where qb+r = a, q integral, r between 0 and b (excluding b)
@@ -115,6 +114,12 @@ April 2014:
 
 August 2014
 * swap order of arguments to operator `o`, to better match common use
+
+June 2015:
+* eliminate `/` operator, leave ABC number type as integers, library-layer rationals
+ * original definition: `/ :: N(non-zero a) * e → N(1/a) * e`
+ * note: not fully committed to this change, may restore `/` later if necessary
+
 
 ## ABCD
 

@@ -26,7 +26,6 @@ import qualified Data.Array.IArray as A
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 
-import Awelon.ABC (abcDivMod)
 import Wikilon.ABC.Code hiding (null)
 import qualified Wikilon.ABC.Code as ABC 
 import Wikilon.ABC.Value 
@@ -86,7 +85,7 @@ abcOpEvalTable =
     ,(ABC_copy,ev_copy),(ABC_drop,ev_drop)
 
     ,(ABC_add,ev_add),(ABC_negate,ev_negate)
-    ,(ABC_multiply,ev_multiply),(ABC_reciprocal,ev_reciprocal)
+    ,(ABC_multiply,ev_multiply)
     ,(ABC_divMod,ev_divMod),(ABC_compare,ev_compare)
 
     ,(ABC_apply,ev_apply),(ABC_condApply,ev_condApply) 
@@ -225,8 +224,8 @@ ev_l,ev_r,ev_w,ev_z,ev_v,ev_c :: Evaluator r
 ev_L,ev_R,ev_W,ev_Z,ev_V,ev_C :: Evaluator r
 ev_copy,ev_drop :: Evaluator r
 ev_add,ev_negate :: Evaluator r
-ev_multiply,ev_reciprocal :: Evaluator r
-ev_divMod,ev_compare :: Evaluator r
+ev_multiply,ev_divMod :: Evaluator r
+ev_compare :: Evaluator r
 ev_apply,ev_condApply,ev_quote,ev_compose :: Evaluator r
 ev_relevant,ev_affine :: Evaluator r
 ev_distrib,ev_factor,ev_merge,ev_assert :: Evaluator r
@@ -301,13 +300,8 @@ ev_multiply (Pair (Number a) (Pair (Number b) e)) =
     n' `seq` evaluate (Pair n' e)
 ev_multiply v = primOpFail ABC_multiply v
 
-ev_reciprocal (Pair (Number n) e) | (n /= 0) =
-    let n' = Number (recip n) in
-    n' `seq` evaluate (Pair n' e)
-ev_reciprocal v = primOpFail ABC_reciprocal v
-
 ev_divMod (Pair (Number b) (Pair (Number a) e)) | (b /= 0) =
-    let (q,r) = abcDivMod a b in
+    let (q,r) = divMod a b in
     let nq = Number q in
     let nr = Number r in
     nr `seq` nq `seq` evaluate (Pair nr (Pair nq e))

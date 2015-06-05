@@ -36,7 +36,7 @@ An AO dictionary is an associative array of words to definitions.
 
 A healthy dictionary has the following characteristics:
 
-* all words are defined
+* all words are defined 
 * dependencies are acyclic
 * all definitions compile
 * definitions pass checks
@@ -45,9 +45,17 @@ Checks may include linters, static typechecks, automatic testing, termination an
 
 A dictionary is *complete*, having no external dependencies. 
 
-Instead of external packaging mechanisms, AO will leverage DVCS-based distribution concepts - forking, pulls, pushes, pull requests. Open source communities will create and curate massive, general purpose dictionaries containing millions of words representing functions, applications, documentation, and content, each represented as a word. 
+Well, an incomplete dictionary can still be useful in a development context. An *undefined* or *incompletely defined* word might be understood as a *hole* in the dictionary. An interactive development environment could help fill these holes based on inference of types, analysis of tests and usage contexts, and asking the developer to select an output for a sample input (or vice versa). This can be a very simple and effective development technique. 
 
-It is possible, though discouraged, to model packaging internally. For example, a package word might be expressed as a function that outputs an association list of text names to functions. Modulo overuse of package words, it is trivial to filter a project down to a few root words with a minimal subset of dependencies. Filtered, purpose-specific dictionaries can serve a useful role for distribution of applications or cherry picked sharing of content between communities.
+However, a missing definition will not be defined by an external package. 
+
+To include work developed by another group involves copying that work into your own dictionary, perhaps with a few simple renames to avoid conflict. This gives developers control, freedom to refactor the code, further develop it, or discard the aspects they don't need. This is very robust for stable snapshots and version management. AO favors DVCS-based mechanisms, e.g. like you see in [github](https://github.com/), for sharing and distributing code - fork, push, pull, pull requests, shared issue tracking. 
+
+AO dictionaries also directly include the textures, game maps, SVG clipart and so on - i.e. there are no external file dependencies. Including data this way is very convenient for distribution and sharing, partial evaluation, forking and versioning, procedural generation, testing, refactoring and abstraction. Further, in context of AO, it is feasible to model the tools for structured editing of this content directly within the dictionaries.
+
+Ultimately, communities may curate dictionaries at scales of many gigabytes of algorithms, information, articles, presentations, games. Gigabytes are cheap, and will only get cheaper. Much of this will be open source and free software (which should be the default), but where necessary we can easily track licensing and copyright information. One goal of Awelon project is to explore development at large scales. Large dictionaries can be a powerful resource to explore and exploit. Cross-project refactorings and integration tests are very simple when they're all together. Words learned can easily be brought into any new project. There are interesting opportunities for variation testing and genetic programming at the whole dictionary level. 
+
+Of course, it's trivial to extract a minimal subset of words and their dependencies.
 
 ## AO Dictionary Import/Export
 
@@ -64,10 +72,10 @@ This is a flat format suitable for simple text files and streams. Each word defi
 
 There are two additional structural constraints:
 
-* words are defined before use
+* words are listed before use
 * words are not redefined
 
-These constraints guard against undefined words or cycles and simplify efficient processing of the dictionary.
+These constraints guard against cycles and simplify efficient processing of the dictionary. We can process and compile each word in this file as we encounter it. Undefined words must still be listed before use, but may trivially be represented by use of an empty or incomplete definition.
 
 For HTTP, I'm using the following header and Internet media type:
 
@@ -104,9 +112,15 @@ Disassembly is possible by analyzing an ABC stream against a popular dictionary.
 
 ## Weaknesses of AO
 
-AO isn't very suitable for reading or development with plain text editors. The purely functional nature of AO requires explicit modeling for effects - e.g. free monads, delimited continuations, or a [network and messaging model](NetworkModel.md) for communication between abstract virtual machines. Without a good compiler, AO will not perform competitively due to its simple types. Fixpoint combinators to express loops are rather painful if working at a low level.
+Developing AO code in a plain text editor is possible but will never be comfortable. AO requires a structure editor to shine. Every definition has the intermediate structure `v` and a compiler `[v→[a→b]]`. But it is difficult to see or manipulate the structure of `v` when it is represented in plain text bytecode, unless it's a very simple structure.
 
-As data types, DSLs, and structure editors are implemented, casual development should become much easier. However, it will take a while to get there.
+AO does not support namespaces directly. However, as dictionaries scale, keeping rendered names short will be appreciated by developers (long names are noisy). The current idea is to push this logic into the interactive editor, e.g. rendering a short word but using a different style (e.g. a color or a prefix/suffix icon) based on the hidden parts of the name. A simple legend could be rendered in the corner of the screen, or when focused on the word.
+
+The purely functional nature of AO requires explicit modeling for effects. At the moment, the favored model is [abstract machines on an abstract network](NetworkModel.md), i.e. where in each step a machine's function receives a message and the current state then generates a list of output messages and an updated state. This machine model and network is easily implemented using pure functions, thus enabling whole networks to be modeled for integration tests. However, effects might instead be modeled monadically for some subprograms.
+
+Words in AO are acyclic. Name-based recursion is not possible. This greatly simplifies compilation, since we can always inline every word. But it does complicate loops, which require fixpoint combinators to express. Most developers find fixpoint combinators mind-boggling, even after using them for a while. Though, as many higher level loop combinators are developed, this becomes much less an issue.
+
+As data types, DSLs, and structure editors are implemented, casual development should become much easier. However, it will take a while to get there. 
  
 ## AO Naming Conventions
 

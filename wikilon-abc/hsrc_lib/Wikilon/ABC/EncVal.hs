@@ -62,7 +62,7 @@ encSt (bb,rsc) = (bytes,rs) where
 
 type EncSt r = (BB.Builder, [(r, Word8)])
 enc :: Value r -> EncSt r
-enc (Number r) = encNum r
+enc (Number n) = (encNum n, mempty)
 enc (Pair a b) = enc a <> enc b <> encPair
 enc (SumR b) = enc b <> encSumR
 enc (SumL a) = enc a <> encSumL
@@ -83,10 +83,9 @@ enc (Resource r f) = encResource r f
 {-# INLINE encText #-}
 {-# INLINE encResource #-}
 
--- encNum will use opcodes #0123456789/*-
-encNum :: Rational -> EncSt r
-encNum r = (bb, mempty) where
-    bb = mconcat $ fmap Pure.encodeOpBB $ Pure.quote r
+-- encNum will use opcodes #0123456789-
+encNum :: Integer -> BB.Builder
+encNum = mconcat . fmap Pure.encodeOpBB . Pure.quote
 
 encPair, encSumR, encSumL, encUnit :: EncSt r
 encPair = (BB.char8 'P', mempty)
@@ -127,7 +126,7 @@ decOpTable =
     ,('1',decOp_d 1),('2',decOp_d 2),('3',decOp_d 3)
     ,('4',decOp_d 4),('5',decOp_d 5),('6',decOp_d 6)
     ,('7',decOp_d 7),('8',decOp_d 8),('9',decOp_d 9)
-    ,('-',decOp_negate),('/',decOp_recip),('*',decOp_mul)
+    ,('-',decOp_negate)
     -- encoding for pairs, sums, unit (bare minimum for plumbing)
     ,('p',decOp_pair)
     ,('R',decOp_inR)
@@ -188,7 +187,7 @@ decode v (bs,rsc) = case LazyChar8.uncons bs of
     
 decOp_intro0 :: DecoderStep r
 decOp_d :: Int -> DecoderStep r
-decOp_negate, decOp_recip, decOp_mul :: DecoderStep r
+decOp_negate :: DecoderStep r
 decOp_pair, decOp_inR, decOp_inL, decOp_unit :: DecoderStep r
 decOp_block, decOp_text, decOp_seal, decOp_resource :: DecoderStep r
 decOp_bf :: Flags -> DecoderStep r
@@ -209,16 +208,6 @@ decOp_negate (Pair (Number n) s) =
     let n' = Number (negate n) in
     n' `seq` decOpV (Pair n' s)
 decOp_negate _ = const Nothing
-
-decOp_recip (Pair (Number n) s) | (n /= 0) =
-    let n' = Number (recip n) in
-    n' `seq` decOpV (Pair n' s)
-decOp_recip _ = const Nothing
-
-decOp_mul (Pair (Number b) (Pair (Number a) s)) =
-    let n' = Number (a * b) in
-    n' `seq` decOpV (Pair n' s)
-decOp_mul _ = const Nothing
 
 decOp_pair (Pair b (Pair a s)) = decOpV (Pair (Pair a b) s)
 decOp_pair _ = const Nothing

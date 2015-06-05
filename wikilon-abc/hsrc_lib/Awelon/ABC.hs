@@ -16,7 +16,6 @@ module Awelon.ABC
     , decode, decode'
     , DecoderCont(..), DecoderStuck(..)
     , decodeLiteral
-    , abcDivMod
     , Quotable(..)
     , quote, quoteList, quotesList
 
@@ -27,7 +26,6 @@ module Awelon.ABC
     ) where
 
 import Data.Monoid
-import Data.Ratio
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
@@ -111,9 +109,8 @@ data PrimOp -- 43 primitive operations
     | ABC_add        -- + :: (N(x)*(N(y)*e)) → (N(x+y)*e)
     | ABC_negate     -- - :: (N(x)*e) → (N(-x)*e)
     | ABC_multiply   -- * :: (N(x)*(N(y)*e)) → (N(x*y)*e) 
-    | ABC_reciprocal -- / :: (N(x)*e) → (N(1/x)*e)      for non-zero x
     | ABC_divMod     -- Q :: (N(b)*(N(a)*e)) → (N(r)*(N(q)*e))
-                     --      non-zero b; qb+r = a; r in range [0,b) or (b,0]
+                     --   assert non-zero b; qb+r = a; r in range [0,b) or (b,0]
     | ABC_compare    -- > :: (N(x)*(N(y)*e)) → (((N(y)*N(x)) + (N(x)*N(y))) * e)
                      --   test if y > x, returning in right if true 
                      --   e.g. #4 #2 > results in (N(2)*N(4)) in right
@@ -154,8 +151,8 @@ abcOpTable =
     ,(ABC_copy,'^'), (ABC_drop,'%')
 
     ,(ABC_add,'+'), (ABC_negate,'-')
-    ,(ABC_multiply,'*'), (ABC_reciprocal,'/')
-    ,(ABC_divMod,'Q'), (ABC_compare,'>')
+    ,(ABC_multiply,'*'), (ABC_divMod,'Q')
+    ,(ABC_compare,'>')
 
     ,(ABC_apply,'$'), (ABC_condApply,'?')
     ,(ABC_quote,'\''), (ABC_compose,'o')
@@ -307,7 +304,7 @@ _decodeLiteral r txt = case LBS.elemIndex '\n' txt of
                 let lit = LBS.concat (L.reverse (lnf:r)) in
                 lit `seq` Just (lit, txt')
 
-
+{-
 -- | abcDivMod computes the function associated with operator 'Q'
 --    abcDivMod dividend divisor → (quotient, remainder)
 -- Assumption: divisor is non-zero.
@@ -318,7 +315,7 @@ abcDivMod x y =
     let dr = denominator x * denominator y in
     let (q,r) = n `divMod` d in
     (fromInteger q, r % dr)
-
+-}
 
 -- | The 'Quotable' class serves a role similar to 'Show', except
 -- that it represents a value or behavior in Awelon Bytecode. 
@@ -350,34 +347,21 @@ instance Quotable Op where
     {-# INLINE quotes #-} 
 
 instance Quotable Integer where 
-    quotes n | (n < 0) = quotes (negate n) . quotes ABC_negate
+    quotes n | (n < 0) = qN (negate n) . quotes ABC_negate
              | otherwise = qN n
-instance (Integral i) => Quotable (Ratio i) where
-    quotes r | (r < 0) = quotes (negate r) . quotes ABC_negate
-             | (1 == den) = qN num
-             | (1 == num) = qN den . quotes ABC_reciprocal
-             | otherwise  = qN num . qN den . quotes ABC_reciprocal . quotes ABC_multiply
-        where den = denominator r
-              num = numerator r
 
 -- quote a non-negative integral
-qN :: (Integral i) => i -> [Op] -> [Op]
+qN :: Integer -> [Op] -> [Op]
 qN 0 = quotes ABC_newZero
 qN n = let (q,r) = n `divMod` 10 in qN q . quotes (opd r)
 
--- quote an integer into ABC, building from right to left
-opd :: (Integral i) => i -> PrimOp
-opd 0 = ABC_d0
-opd 1 = ABC_d1
-opd 2 = ABC_d2
-opd 3 = ABC_d3
-opd 4 = ABC_d4
-opd 5 = ABC_d5
-opd 6 = ABC_d6
-opd 7 = ABC_d7
-opd 8 = ABC_d8
-opd 9 = ABC_d9
-opd _ = impossible "invalid digit!"
+opdArray :: A.Array Int PrimOp 
+opdArray = A.listArray (0,9) $
+    [ABC_d0,ABC_d1,ABC_d2,ABC_d3,ABC_d4
+    ,ABC_d5,ABC_d6,ABC_d7,ABC_d8,ABC_d9]
+
+opd :: Integer -> PrimOp
+opd = (A.!) opdArray . fromInteger
 
 -- Monoid for ABC is concatenation, which represents composition.
 instance Monoid ABC where

@@ -26,7 +26,6 @@ import Data.Monoid
 import Data.Word
 import Data.Char
 import Data.Bits
-import Data.Ratio
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.Array.IArray as A
@@ -34,7 +33,7 @@ import Awelon.ABC
 
 -- | simplistic value representation
 data Value 
-    = Number !Rational
+    = Number !Integer
     | Pair Value Value
     | Unit
     | SumL Value
@@ -114,12 +113,11 @@ toText = tt mempty where
         tt (bb <> BB.charUtf8 c) more
     tt _ _ = Nothing
 
-numToChar :: Rational -> Maybe Char
-numToChar r =
-    let n = fromInteger $ numerator r in
-    let d = denominator r in
-    let bOK = (1 == d) && (0 <= n) && (n <= 0x10ffff) in
-    if bOK then Just $! chr n else Nothing
+numToChar :: Integer -> Maybe Char
+numToChar n =
+    let bOKChar = (0 <= n) && (n <= 0x10ffff) in
+    if not bOKChar then Nothing else
+    return $! chr (fromIntegral n)
 
 fromText :: Text -> Value
 fromText t = case LazyUTF8.uncons t of
@@ -204,7 +202,7 @@ abcOpEvalTable =
 
     ,(ABC_copy,ev_copy),(ABC_drop,ev_drop)
     ,(ABC_add,ev_add),(ABC_negate,ev_negate)
-    ,(ABC_multiply,ev_multiply),(ABC_reciprocal,ev_reciprocal)
+    ,(ABC_multiply,ev_multiply)
     ,(ABC_divMod,ev_divMod),(ABC_compare,ev_compare) -- 8
 
     ,(ABC_apply,ev_apply),(ABC_condApply,ev_condApply) 
@@ -247,8 +245,8 @@ ev_l,ev_r,ev_w,ev_z,ev_v,ev_c :: Evaluator
 ev_L,ev_R,ev_W,ev_Z,ev_V,ev_C :: Evaluator
 ev_copy,ev_drop :: Evaluator
 ev_add,ev_negate :: Evaluator
-ev_multiply,ev_reciprocal :: Evaluator
-ev_divMod,ev_compare :: Evaluator
+ev_multiply,ev_divMod :: Evaluator
+ev_compare :: Evaluator
 ev_apply,ev_condApply,ev_quote,ev_compose :: Evaluator
 ev_relevant,ev_affine :: Evaluator
 ev_distrib,ev_factor,ev_merge,ev_assert :: Evaluator
@@ -323,13 +321,8 @@ ev_multiply (Pair (Number a) (Pair (Number b) e)) =
     n' `seq` evaluate (Pair n' e)
 ev_multiply v = primOpFail ABC_multiply v
 
-ev_reciprocal (Pair (Number n) e) | (n /= 0) =
-    let n' = Number (recip n) in
-    n' `seq` evaluate (Pair n' e)
-ev_reciprocal v = primOpFail ABC_reciprocal v
-
 ev_divMod (Pair (Number b) (Pair (Number a) e)) | (b /= 0) =
-    let (q,r) = abcDivMod a b in
+    let (q,r) = divMod a b in
     let nq = Number q in
     let nr = Number r in
     nr `seq` nq `seq` evaluate (Pair nr (Pair nq e))

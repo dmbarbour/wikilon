@@ -6,7 +6,7 @@ Awelon project and Wikilon would benefit from effective command line interfaces,
 But I think a relatively thin layer above AO could be suitable:
 
 * write words easily: just use the word, `swap inc mul`
-* inline the text and number literals: `1.234 2/3 "foo"`
+* inline text and number literals: `42 "foo"`
 * easy and unambiguous access to bytecode, e.g. `\vrwlc` 
 * stable environment against literals, e.g. `(stack*env)` pair
 
@@ -20,7 +20,9 @@ What should I call this proposed language? The name Awelon Object is taken, and 
 
 ## Value Types
 
-The original AO supported only texts and numbers. But good support for other value structures such as lists, maps, maybe vectors of some sort, would have been convenient. How much can I do, while keeping the command language thin and simple and suitable for one-liners?
+The original AO supported only texts and numbers. Originally, I did support fractional and decimal numbers, e.g. `3.141` and `2/3`, but 
+
+  But good support for other value structures such as lists, maps, maybe vectors of some sort, would have been convenient. How much can I do, while keeping the command language thin and simple and suitable for one-liners?
 
 I have access to many ASCII brackets: `{}[]()<>`. I also can grab some useful separators, such as `,` and `|`, though I think I'd prefer to avoid them (commas are noisy). I'll probably favor `[]` for blocks, as I did originally. But rather than optimize representation of tokens, I'll probably use `\{token}`, representing tokens as part of inline ABC. This will keep `{}` free for lists.
 
