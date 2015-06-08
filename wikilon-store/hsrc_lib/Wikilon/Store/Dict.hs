@@ -1,42 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable, PatternGuards #-}
 
--- | A dictionary contains words and definitions.
---
--- In Wikilon, a definition is a function that returns a value and a
--- function to compile this value. The result of compilation is also
--- a function, the meaning of the definition.
---
---      type Def a b = ∃v.∀e. e→([v→[a→b]]*(v*e))
--- 
--- Each word has a definition. A definition may access other words by
--- use of special {%word} tokens, e.g. {%dupd}{%swap}. Each token may
--- be substituted by the associated definition followed by `$vr$c` to
--- compile and apply the block. But this process is optimized easily
--- by pre-compiling each definition then inlining its meaning.
---
--- The intermediate structured value `v` corresponds to DSL or syntax.
--- This enables developers to manipulate definitions through structure
--- editors, potentially at a higher level than words and bytecode, and
--- also readily supports staged programming.
---
--- This dictionary module enforces a few invariants:
---
---   1. dependencies are acyclic
---   2. every word has a definition
---   3. constraints on tokens 
---
--- Allowed tokens are word dependencies, annotations, and discretionary
--- sealers or unsealers. These limitations ensure the AO dictionary is
--- pure, portable. There is no entanglement with specific machines.
---
--- Ideally, Wikilon shall further enforce that definitions compile and
--- check that there are no obvious errors via automatic type checking,
--- testing, linting, analysis, etc..
---
--- TODO: support many more operations:
---   batch rename
---   efficient diffs
--- 
+-- | a concrete implementation of Wikilon.Dict. This is a
+-- dictionary represented in VCache.
 module Wikilon.Store.Dict
     ( Dict, dict_space
     , empty, null, size
@@ -100,13 +65,6 @@ dict_space = Trie.trie_space . dict_defs
 unsafeDictAddr :: Dict -> Word64
 unsafeDictAddr = Trie.unsafeTrieAddr . dict_defs
 
-
--- Preferred cache mode for dictionary lookups. In this case, I don't
--- mind quickly dropping nodes from the cache, since the parse is fast
--- and operations on a dictionary are bursty anyway.
-_cm :: CacheMode
-_cm = CacheMode0
-
 -- | O(1). Create a new, empty dictionary
 empty :: VSpace -> Dict
 empty vs = Dict1
@@ -151,7 +109,7 @@ toList = fmap (second _decode) . toListBytes
 
 -- | Lookup raw bytestring for a word. 
 lookupBytes :: Dict -> Word -> Maybe LBS.ByteString
-lookupBytes d (Word w) = _bytes <$> Trie.lookupc _cm w (dict_defs d)
+lookupBytes d (Word w) = _bytes <$> Trie.lookup' w (dict_defs d)
 
 _bytes :: Def -> LBS.ByteString
 _bytes (Def1 v) = deref' v
@@ -163,13 +121,13 @@ toListBytes = Trie.toListBy f . dict_defs where
 
 -- | Test whether a given word is defined in this dictionary.
 member :: Dict -> Word -> Bool
-member d (Word w) = isJust $ Trie.lookup' w (dict_defs d) 
+member d w = isJust $ lookupBytes d w
 
 -- | Find all words that use a given token. All tokens in the
 -- dictionary are recorded in the dependency, so this lookup
 -- is always precise.
 tokenUsedBy :: Dict -> Token -> [Word]
-tokenUsedBy d tok = maybe [] _depWords $ Trie.lookupc _cm tok (dict_deps d)
+tokenUsedBy d tok = maybe [] _depWords $ Trie.lookup' tok (dict_deps d)
 
 _depWords :: Deps -> [Word]
 _depWords (Deps1 t) = fmap Word $ Trie.keys t

@@ -73,15 +73,15 @@ exportAODict' :: WikilonApp
 exportAODict' = dictApp $ \w dictName rq k -> do
     bset <- readPVarIO (wikilon_dicts $ wikilon_model w)
     let d = Branch.head $ Branch.lookup' dictName bset
-    let etag = return $ eTagN $ Dict.unsafeDictAddr d
-    let aodict = return (HTTP.hContentType, HTTP.renderHeader mediaTypeAODict)
+    let etag = eTagN $ Dict.unsafeDictAddr d
+    let aodict = (HTTP.hContentType, HTTP.renderHeader mediaTypeAODict)
     -- allow 'asFile' option in query string for file disposition
     let bAsFile = L.elem "asFile" $ fmap fst $ Wai.queryString rq
-    let asFile = if not bAsFile then [] else return $
-            ("Content-Disposition" 
-            ,mconcat ["attachment; filename=", dictName, ".ao"])
+    let fattach = if bAsFile then "attachment; " else ""
+    let fname = mconcat [fattach, "filename=", dictName, ".ao"]
+    let disp = ("Content-Disposition", fname) 
     let status = HTTP.ok200
-    let headers = aodict <> etag <> asFile
+    let headers = [etag,aodict,disp]
     let lWords = selectWords rq
     let body = if L.null lWords then AODict.encode d else 
                AODict.encodeWords d lWords
@@ -101,13 +101,12 @@ exportAODictGzip :: WikilonApp
 exportAODictGzip = dictApp $ \w dictName rq k -> do 
     bset <- readPVarIO (wikilon_dicts $ wikilon_model w)
     let d = Branch.head $ Branch.lookup' dictName bset
-    let etag = return $ eTagN $ Dict.unsafeDictAddr d
-    let aodict = return (HTTP.hContentType, HTTP.renderHeader mediaTypeGzip)
-    let asFile = return $
-            ("Content-Disposition" 
+    let etag = eTagN $ Dict.unsafeDictAddr d
+    let aodict = (HTTP.hContentType, HTTP.renderHeader mediaTypeGzip)
+    let disp = ("Content-Disposition"
             ,mconcat ["attachment; filename=", dictName, ".ao.gz"])
     let status = HTTP.ok200
-    let headers = aodict <> etag <> asFile
+    let headers = [etag,aodict,disp]
     let lWords = selectWords rq
     let body = if L.null lWords then AODict.encode d else 
                AODict.encodeWords d lWords

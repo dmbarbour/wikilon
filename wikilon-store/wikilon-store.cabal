@@ -33,7 +33,7 @@ Library
   Build-Depends: base (>= 4.7 && < 5)
     , wikilon-abc
     , wikilon-model
-    , vcache (>= 0.2.5)
+    , vcache (>= 0.2.6)
     , vcache-trie (>= 0.1.1)
     , mtl
 

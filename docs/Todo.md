@@ -15,13 +15,13 @@ DONE:
 * view a word
 
 
-
-
 TODO:
 
 * directly edit a word
 * delete a word
 * rename a word
+* heuristics for listing words for browsing, favor breaking on ':' or '.'
+ * maybe use `(a)` or instead of `a(*)` for the prefix links.
 
 
 
@@ -77,17 +77,6 @@ TODO:
 
 ## BUGHUNT
 
-I'm receiving some strange errors, when importing a dictionary twice into Wikilon:
-
-*** Error in `wikilon': double free or corruption (out): 0x00007f59cc002b10 ***
-Aborted (core dumped)
-
-OR
-
-*** Error in `wikilon': corrupted double-linked list: 0x00007f8878018c90 ***
-Aborted (core dumped)
-
-This behavior happens the second time I load a value. It seems GHC error to me, or perhaps an issue with how GC interacts with VCache.
 
 ## REFACTORING
 

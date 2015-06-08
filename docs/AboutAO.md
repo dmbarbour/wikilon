@@ -24,7 +24,7 @@ Some possible definitions:
 
 *Syntactically, AO definitions use a subset of ABC.* 
 
-An unmodified, basic ABC parser can read AO definitions. But not all of ABC is valid for AO. The set of tokens is constrained to word dependencies, annotations, and discretionary sealers/unsealers. 
+An unmodified, basic ABC parser can read AO definitions. But not all of ABC is valid for AO. The set of tokens is constrained to word dependencies, annotations, and discretionary sealers/unsealers. Words and tokens and embedded texts are further constained. See below.
 
 Any word in an AO dictionary may be 'compiled' to independent ABC by transitively inlining the definition for each `{%word}` token and following it by `$vr$c` to compile then inline its functional meaning at runtime. However, we'll want to apply a lot of optimizations, such as precompiling and optimizing each word incrementally.
 
@@ -43,11 +43,7 @@ A healthy dictionary has the following characteristics:
 
 Checks may include linters, static typechecks, automatic testing, termination analysis, abstract interpretation, and validation of properties asserted by annotions (such as structural or behavioral equivalences, commutativity, associativity, type declarations). Some constraints may be context specific, e.g. limiting which tokens, word structures, or texts are permitted (e.g. to simplify interaction with web services and browsers), or requiring certain words have a specific type. When developing AO dictionaries, a suite of automatic checks should be the default so that content remains clean or developers are at least aware of any health issues.
 
-A dictionary is *complete*, having no external dependencies. 
-
-Well, an incomplete dictionary can still be useful in a development context. An *undefined* or *incompletely defined* word might be understood as a *hole* in the dictionary. An interactive development environment could help fill these holes based on inference of types, analysis of tests and usage contexts, and asking the developer to select an output for a sample input (or vice versa). This can be a very simple and effective development technique. 
-
-However, a missing definition will not be defined by an external package. 
+A dictionary has no external dependencies. 
 
 To include work developed by another group involves copying that work into your own dictionary, perhaps with a few simple renames to avoid conflict. This gives developers control, freedom to refactor the code, further develop it, or discard the aspects they don't need. This is very robust for stable snapshots and version management. AO favors DVCS-based mechanisms, e.g. like you see in [github](https://github.com/), for sharing and distributing code - fork, push, pull, pull requests, shared issue tracking. 
 
@@ -56,6 +52,12 @@ AO dictionaries also directly include the textures, game maps, SVG clipart and s
 Ultimately, communities may curate dictionaries at scales of many gigabytes of algorithms, information, articles, presentations, games. Gigabytes are cheap, and will only get cheaper. Much of this will be open source and free software (which should be the default), but where necessary we can easily track licensing and copyright information. One goal of Awelon project is to explore development at large scales. Large dictionaries can be a powerful resource to explore and exploit. Cross-project refactorings and integration tests are very simple when they're all together. Words learned can easily be brought into any new project. There are interesting opportunities for variation testing and genetic programming at the whole dictionary level. 
 
 Of course, it's trivial to extract a minimal subset of words and their dependencies.
+
+### Transitory Undefined Words
+
+A dictionary in a transitory state of development have a few undefined or incompletely defined words. These can serve a useful role in the development context: a development environment can recognize these holes, infer their types and behaviors from usage contexts and unit tests, and help developers find an implementation. Or, at the very least, this simplifies top-down development styles where some words are left undefined.
+
+The quantity of undefined words should be commensurate with ongoing development. A dictionary with too many undefined words, or very old undefined words, is still unhealthy.
 
 ## AO Dictionary Import/Export
 
@@ -82,6 +84,22 @@ For HTTP, I'm using the following header and Internet media type:
         Content-Type: text/vnd.org.awelon.aodict
 
 I think every Awelon project system will probably want to support this simple aodict format together with ABC. This will be the primary import/export format for dictionaries, and also offers a simple representation to compress large ABC programs.
+
+## Subset of ABC
+
+For reasons that should be obvious, a word cannot contain curly braces, spaces, and line feeds. But AO further restricts words to nicely fit URLs, HTML, command line interfaces, English documentation. Currently the heuristics for valid words are:
+
+* ASCII if alphabetical, numeral, or in -._~!$'*+=:@
+* UTF8 except for C1, surrogates, replacement char
+* must not start with a digit or +-. followed by a digit
+* must not end with a . (dot or period)
+* no empty words or enormous words. 1..64 bytes UTF-8.
+
+The other permitted tokens - annotations, and discretionary sealers or unsealers - must also be valid words after the prefix. This simplifies abstraction of them and similar interaction with texts and other contexts. If developers want spaces in words as an alternative to hyphens, they are permitted to use the non-breaking space (U+00A0).
+
+Embedded texts are also constrained. Valid AO texts cannot contain control characters (C0, DEL, or C1) except for LF. AO texts cannot use surrogate codepoints, and cannot use the replacement character. To contain LF, it is followed by SP as normal for ABC. Constraining texts simplifies interaction with HTML forms (e.g. no need to worry about whether CRLF in text is intentional) and helps ensure meaning is more visible. 
+
+Binary data should use ABC base16, i.e. base16 using alphabet `bdfghjkmnpqstxyz` to remain visible (this is easily compressed). While binary isn't encouraged for use in dictionaries (it's very opaque), it might occasionally be useful for converting static image or sound data (since AO doesn't allow external file resources).
 
 ## AO Dictionary Applications
 
