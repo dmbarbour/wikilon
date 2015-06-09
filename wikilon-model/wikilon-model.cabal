@@ -56,7 +56,7 @@ Library
     Wikilon.Events
     Wikilon.Model
 
-    -- Wikilon.Dict
+    Wikilon.Dict
     Wikilon.Dict.Word
     Wikilon.Dict.Token
     Wikilon.Dict.Text

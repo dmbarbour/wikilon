@@ -14,7 +14,6 @@ DONE:
 * obtain a list of word names 
 * view a word
 
-
 TODO:
 
 * directly edit a word
@@ -74,9 +73,6 @@ TODO:
 * I can render words with colors or icons based on prefix or suffix
  * support a simple legend
  * may need to record style information in dictionary?
-
-## BUGHUNT
-
 
 ## REFACTORING
 

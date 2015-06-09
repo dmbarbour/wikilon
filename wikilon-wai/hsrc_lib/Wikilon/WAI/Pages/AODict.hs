@@ -77,7 +77,7 @@ exportAODict' = dictApp $ \w dictName rq k -> do
     let aodict = (HTTP.hContentType, HTTP.renderHeader mediaTypeAODict)
     -- allow 'asFile' option in query string for file disposition
     let bAsFile = L.elem "asFile" $ fmap fst $ Wai.queryString rq
-    let fattach = if bAsFile then "attachment; " else ""
+    let fattach = if bAsFile then "attachment; " else "inline; "
     let fname = mconcat [fattach, "filename=", dictName, ".ao"]
     let disp = ("Content-Disposition", fname) 
     let status = HTTP.ok200
