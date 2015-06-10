@@ -1,29 +1,31 @@
 
-# Command Language for Awelon 
+# Command Language for Awelon (claw)
 
-Awelon project and Wikilon would benefit from effective command line interfaces, e.g. to issue rapid queries and commands. In context of Wikilon, providing console-like services through HTML forms or JavaScript should not be difficult. The underlying [Awelon Object (AO)](AboutAO.md) code is unsuitable for this application in its raw form.
+Awelon project and Wikilon would benefit from effective command line interfaces, e.g. as a REPL and shell. In context of Wikilon, providing console-like services through HTML forms or JavaScript should not be difficult. The underlying [Awelon Object (AO)](AboutAO.md) code is unsuitable for this application in its raw form. 
 
-But I think a relatively thin layer above AO could be suitable:
+But we can certainly create a language better suited, which we can rapidly compile into bytecode, with easy access to dependencies on words in a dictionary. Useful features might include:
 
 * write words easily: just use the word, `swap inc mul`
 * inline text and number literals: `42 "foo"`
 * easy and unambiguous access to bytecode, e.g. `\vrwlc` 
-* stable environment against literals, e.g. `(stack*env)` pair
+* stable target environment for the code
 
-If you know about the evolution of Awelon project, the above should be familiar: it's a minor tweak of the [original definition of Awelon Object](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md). The original AO was weak for staged programming, visual DSLs, and structured programming, but it was well suited for command line interfaces. The result was a very Forth-like language. I'm adapting this, but changing the bytecode escape to keep it unambiguous (no risk of confusing `\` with an ABC operator). 
+One option is a straightforward expansion into bytecode, e.g. similar to the [original definition of Awelon Object](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md). The original AO was weak for staged programming, visual DSLs, or structured programming, and wasn't strongly an '[object code](http://en.wikipedia.org/wiki/Object_code)', but it was well suited for command line interfaces. The result was a very Forth-like language. Though, in retrospect, I think I'd favor `\` as an escape for bytecode rather than `%`.
 
-## Naming: claw?
+I propose to call the language *claw*. Command Language (or Line) for Awelon.
 
-What should I call this proposed language? The name Awelon Object is taken, and AO today is a better fit for the connotations surrounding '[object code](http://en.wikipedia.org/wiki/Object_code)'. So far, my best idea is **claw**: Command Language for Awelon (or Command Line for Awelon, depending on context). The name also puns nicely. I'll run with this unless someone suggests a better idea. 
+I will assume the following context and constraints:
 
-## Round Tripping?
+* we have an implicit binding to an AO dictionary
+* transparency, a very thin translation to AO code
+* trivial to extract claw sessions into a dictionary
+* preserve concatenative, streamable, purely functional
+* effects via access to an abstract [network model](NetworkModel.md)
 
-A major design decision is whether to support round-tripping. If claw code is one way, i.e. converting into an ABC subprogram, that greatly simplifies some things such as introducing support for ad-hoc literal types. (Support for flexible literal types seems especially relevant
+A property I'm considering but haven't committed to yet is effective support for round-tripping, i.e. to view ABC code (especially code generated from claw) as claw code. Round tripping will at least impact how readily I can extend Claw with effective support for decimal or rational numbers.
 
 
-## Commanding What?
 
-Claw code will somehow bind to a dictionary, for easy processing. One option is that we treat Claw code as a primitive 
 
 ## Literals
 
