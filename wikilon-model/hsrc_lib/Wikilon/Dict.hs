@@ -51,7 +51,7 @@
 module Wikilon.Dict
     ( DictView(..)
     , wordDeps, abcWords
-    , toMap, wordsInDict
+    , wordsInDict
     , WordPrefix
     , DictSplitPrefix(..)
     , DictRLU(..)
@@ -60,6 +60,7 @@ module Wikilon.Dict
     , renameDictWord
     , deleteDictWord
     , deleteDictWords
+    , safeUpdateWord
     , safeUpdateWords
     , safeRenameWord
     , safeMergeWords
@@ -70,7 +71,7 @@ module Wikilon.Dict
     ) where
 
 import Prelude hiding (lookup)
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, maybeToList)
 import Data.Monoid
 import qualified Data.List as L
 import qualified Data.ByteString.UTF8 as UTF8
@@ -107,10 +108,13 @@ class DictView dict where
     toList :: dict -> [(Word, ABC)]
 
     -- | Find a list of words that are distinct between two dictionaries.
-    -- The default implementation is an exhaustive search. Ideally, we can
-    -- perform a much more efficient implementation for the dict rep.
+    --
+    -- The default implementation is exhaustive and unsuitable for large
+    -- dictionaries. Ideally, this function is replaced by something much
+    -- more efficient because fast diffs will be a very important feature.
     dictDiff :: dict -> dict -> [Word]
-    dictDiff a b = Map.keys $ mapDiff (==) (toMap a) (toMap b)
+    dictDiff a b = Map.keys $ mapDiff (==) (m a) (m b) where
+        m = Map.fromList . toList
 
 -- generic 2-way diff element
 data MapDiff a b = LeftOnly a | RightOnly b | FoundDiff a b
@@ -121,10 +125,6 @@ mapDiff eq = Map.mergeWithKey jf lf rf where
     rf = fmap RightOnly
     jf _ a b | eq a b = Nothing
              | otherwise = Just (FoundDiff a b)
-
--- | Obtain a map of words and definitions.
-toMap :: (DictView dict) => dict -> Map Word ABC
-toMap = Map.fromList . toList
 
 -- | Obtain a list of words defined within from a dictionary.
 wordsInDict :: (DictView dict) => dict -> [Word]
@@ -149,10 +149,12 @@ type WordPrefix = BS.ByteString
 
 -- | for browsing a dictionary in a breadth-first manner
 class (DictView dict) => DictSplitPrefix dict where
-    -- | Given a prefix, provide a list of strictly larger prefixes
-    -- that have words with non-empty definitions. Further, will
-    -- return whether the given prefix accepts a word.
-    splitOnPrefix :: WordPrefix -> dict -> (Bool,[WordPrefix])
+    -- | Given a prefix, provide a list of associated words and larger
+    -- prefixes that begin with the requested prefix. Deep split on
+    -- prefix should eventually find all words with a given prefix. 
+    -- But any given step may be relatively shallow, based on whatever
+    -- is efficient for the representation.
+    splitOnPrefix :: WordPrefix -> dict -> [Either WordPrefix Word]
 
     -- | Obtain a complete list of words with a given prefix.
     wordsWithPrefix :: WordPrefix -> dict -> [Word]
@@ -224,7 +226,7 @@ _renameInABC wo wt = ABC.rewriteTokens rwTok where
 
 
 -- | Rename a word only if the target word is undefined and has no
--- clients. Otherwise returns Nothing.
+-- clients (i.e. cannot rename into a hole). Otherwise returns Nothing.
 safeRenameWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> Maybe dict
 safeRenameWord wo wt d =
     let bUndefinedTarget = L.null $ ABC.abcOps $ lookup d wt in
@@ -246,14 +248,14 @@ data InsertionError
     = BadWord  !Word         -- word is not valid according to heuristics
     | BadToken !Token !Word  -- invalid {token} used within word's definition
     | BadText  !Text !Word   -- rejecting text on heuristic constraints
-    | Cycle    ![Word]       -- a cycle was discovered
+    | Cycle    !(Cycle Word) -- a cycle was discovered
     | DupWord  !Word         -- word appears multiple times in request
     deriving (Eq, Ord)
 
 instance Show InsertionError where
     show (BadWord w)    = "malformed word: " ++ show w
     show (BadToken t w) = "rejecting token " ++ show (ABC.ABC_Tok t) ++ " in " ++ show w
-    show (Cycle ws)     = "cyclic dependencies: " ++ show ws
+    show (Cycle c)     = "cyclic dependencies: " ++ show (cycleToList c)
     show (BadText t w)  = "in word" ++ show w ++ " malformed text: " ++ show (ABC.ABC_Text t)
     show (DupWord w)    = "word " ++ show w ++ " is assigned more than once"
 
@@ -272,12 +274,12 @@ safeUpdateWords l d =
     let lDupErrors = fmap DupWord $ findDups $ lWords in
     let lMalformed = L.concatMap (uncurry testForMalformedDef) l in
     let d' = updateDictWords (Map.fromList l) d in
-    let lCycleErrors = case testForCycle lWords d' of
-            Nothing -> []
-            Just (w,ws) -> [Cycle (w:ws)]
-    in
+    let lCycleErrors = maybeToList $ fmap Cycle $ testForCycle lWords d' in
     let lErrors = lDupErrors ++ lMalformed ++ lCycleErrors in
     if L.null lErrors then Right d' else Left lErrors
+
+safeUpdateWord :: (DictUpdate dict) => Word -> ABC -> dict -> Either [InsertionError] dict
+safeUpdateWord w abc = safeUpdateWords [(w,abc)]
 
 findDups :: (Eq a) => [a] -> [a]
 findDups = f [] where
@@ -297,8 +299,11 @@ testForMalformedDef w = (malformedWord ++) . abcErrors where
     opError _ = []
 
 -- | A cycle is expressed as a chain of dependencies that is implicitly
--- closed on the first word. 
+-- closed (i.e. no words are repeated). Cycles must be non-empty. 
 type Cycle a = (a,[a])
+
+cycleToList :: Cycle a -> [a]
+cycleToList = uncurry (:)
 
 -- | Search under a given list of words for cycles. If such a cycle
 -- exists, this function certainly finds it. However, I won't attempt 

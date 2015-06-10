@@ -21,7 +21,6 @@ import qualified Data.List as L
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
@@ -41,9 +40,6 @@ import Wikilon.Store.Branch (BranchName)
 import qualified Wikilon.Store.Branch as Branch
 import qualified Wikilon.Store.Dict as Dict
 import Wikilon.Store.Root
-
-
-import qualified Awelon.ABC as ABC
 
 -- | Okay, so our first resource is a collection of dictionaries.
 -- There aren't any whole-collection updates at this layer, but
@@ -162,26 +158,19 @@ gotoDict w d =
         H.h1 title
         H.p $ "If you aren't automatically redirected, goto " <> hrefDict d
 
-
--- Create a valid AO definition that simply exports text
---  e.g. "text\n~[v'c]
-aoTextDef :: ABC.Text -> ABC.ABC
-aoTextDef txt = ABC.mkABC [ABC.ABC_Text txt, ABC.ABC_Block "v'c"]
-
--- | Create a dictionary with an initial entry, or return
--- without changing anything.
+-- | Create a dictionary with a single entry (id) to prevent destruction.
+-- Or don't change anything if the dictionary already has some content.
 createDict :: Wikilon -> BranchName -> IO Bool
 createDict w d =
-    let vc = vcache_space (wikilon_store $ wikilon_model w) in
     getTime >>= \ tNow ->
+    let vc = vcache_space (wikilon_store $ wikilon_model w) in
     runVTx vc $ 
         readPVar (wikilon_dicts $ wikilon_model w) >>= \ bset ->
         let b0 = Branch.lookup' d bset in
         let bNew = Dict.null (Branch.head b0) in
         if not bNew then return False else
-        let tNowText = LazyUTF8.fromString $ show tNow in
-        let initWords = [("dictMeta:timeCreated", aoTextDef tNowText)] in
-        case Dict.insert (Branch.head b0) initWords of
+        let initWords = [("id","[][]")] in
+        case Dict.safeUpdateWords initWords (Branch.head b0) of
             Left _ -> return False -- shouldn't happen...
             Right d' -> do
                 let b' = Branch.update (tNow,d') b0 

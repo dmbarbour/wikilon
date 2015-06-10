@@ -56,7 +56,6 @@ Library
 
     Wikilon.Store.Time
     Wikilon.Store.Dict
-    Wikilon.Store.Dict.AODict
     Wikilon.Store.Dict.Type
     Wikilon.Store.Cache
     Wikilon.Store.Log

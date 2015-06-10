@@ -13,7 +13,8 @@
 -- The character @ does not appear in ABC and is not ambiguous here.
 -- No escapes are needed. There are two primary structural constraints,
 -- that a word is defined only after all of its dependencies, and that
--- a word is defined exactly once.
+-- a word is defined exactly once. All holes (undefined words) are 
+-- included in the listing, just with an empty definition.
 --
 -- This format is called 'AODict' and uses internet media type:
 --
@@ -22,7 +23,7 @@
 --
 -- TODO: push most of the generic logic into wikilon-abc
 --   (will need to abstract the dictionary)
-module Wikilon.Store.Dict.AODict
+module Wikilon.Dict.AODict
     ( mimeType
     , dictWords
     , dictWords'
@@ -37,11 +38,8 @@ module Wikilon.Store.Dict.AODict
     , decodeAODict
     ) where
 
-import Control.Arrow (first)
 import Data.Monoid
 import qualified Data.List as L
-import Data.Map (Map)
-import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
@@ -52,7 +50,7 @@ import qualified Data.Set as Set
 
 import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
-import Wikilon.Store.Dict 
+import Wikilon.Dict 
 
 
 -- | appropriate HTTP Content-Type or Accept type 
@@ -63,22 +61,22 @@ mimeType = UTF8.fromString "text/vnd.org.awelon.aodict"
 -- | Obtain a list of words from our dictionary ordered such that
 -- all defined dependencies of a word are listed before that word
 -- and all defined words are listed exactly once.
-dictWords :: Dict -> [Word]
+dictWords :: (DictView dict) => dict -> [Word]
 dictWords d = dictWords' d (wordsInDict d)
 
 -- | List requested words in a dictionary together with transitive
 -- dependencies. The resulting list will not contain any duplicates,
 -- and words will be ordered such that transitive dependencies 
 -- appear before a word (modulo cycles in an unhealthy dictionary).
-dictWords' :: Dict -> [Word] -> [Word]
+dictWords' :: (DictView dict) => dict -> [Word] -> [Word]
 dictWords' d = _dictWords d mempty 
 
 -- list words lazily
-_dictWords :: Dict -> Set Word -> [Word] -> [Word]
+_dictWords :: (DictView dict) => dict -> Set Word -> [Word] -> [Word]
 _dictWords d pw ws@(w:ws') = 
     -- pw is printed words, prevents listing a more than once
     if Set.member w pw then _dictWords d pw ws' else -- skip
-    let lDeps = L.filter (`Set.notMember` pw) $ deps d w in
+    let lDeps = L.filter (`Set.notMember` pw) $ wordDeps d w in
     let bReady = L.null lDeps in
     if bReady
         then w : _dictWords d (Set.insert w pw) ws'
@@ -86,27 +84,24 @@ _dictWords d pw ws@(w:ws') =
 _dictWords _ _ [] = []
 
 -- | Encode the entire dictionary for export into a bytestring.
-encode :: Dict -> LBS.ByteString
+encode :: (DictView dict) => dict -> LBS.ByteString
 encode d = _encode d (dictWords d)
 
 -- | Encode a subset of the dictionary, specified by a list of root
 -- words. All transitive dependencies of these words are included in
 -- the export. If a requested word is not defined, it will be silently
 -- skipped.
-encodeWords :: Dict -> [Word] -> LBS.ByteString
+encodeWords :: (DictView dict) => dict -> [Word] -> LBS.ByteString
 encodeWords d = _encode d . dictWords' d
 
 -- at this point, words are ordered how we need them. Undefined words
 -- are skipped, and hence left undefined in the output.
-_encode :: Dict -> [Word] -> LBS.ByteString
+_encode :: (DictView dict) => dict -> [Word] -> LBS.ByteString
 _encode d = BB.toLazyByteString . mconcat . fmap (_enw d)
 
-_enw :: Dict -> Word -> BB.Builder
-_enw d w = case lookupBytes d w of
-    Nothing -> mempty
-    Just bytes -> 
-        BB.char8 '@' <> BB.byteString (wordToUTF8 w) <> BB.char8 ' ' 
-        <> BB.lazyByteString bytes <> BB.char8 '\n'
+_enw :: (DictView dict) => dict -> Word -> BB.Builder
+_enw d w = BB.char8 '@' <> BB.byteString (wordToUTF8 w) <> BB.char8 ' '
+    <> BB.lazyByteString (lookupBytes d w) <> BB.char8 '\n'
 
 type Bytes = LBS.ByteString
 
@@ -149,6 +144,7 @@ decodeLine bs =
         Left _dcs -> Nothing
         Right abc -> return (w,abc)
 
+
 {- TODO: when I start working with very large dictionaries, I will
    probably need to operate on chunks of reasonable size rather than
    the entire dictionary all at once. This might be achieved by 
@@ -159,35 +155,42 @@ decodeLine bs =
    successful. It will be a nice problem to have.
 -}
 
--- | I want to precisely capture structural errors at the AODict
--- encoding layer, separately from Wikilon acceptance errors.
+-- | Capture errors associated with decoding an AODict
 data AODictError
     = AODict_LineParse !Bytes
     | AODict_WordRedef !Word
     | AODict_WordUndef !Word !Word
+    | AODict_InsertError !InsertionError
 
 instance Show AODictError where
-    show (AODict_LineParse bs) = "could not parse: " ++ LazyUTF8.toString bs
-    show (AODict_WordRedef w) = "cannot redefine word: " ++ show w
-    show (AODict_WordUndef w uw) = "word " ++ show w ++ " uses undefined: " ++ show uw 
+    show (AODict_LineParse bs) = "could not parse line: " ++ LazyUTF8.toString bs
+    show (AODict_WordRedef w) = "illegal redefinition of word `" ++ show w ++ "`"
+    show (AODict_WordUndef w uw) = "word `" ++ show w ++ "` uses undefined word `" ++ show uw ++ "`" 
+    show (AODict_InsertError e) = show e
 
--- | Decode an AODict format bytestring and report any AODict-layer
--- errors. The resulting map will include all words that parse even
--- if some errors were raised (e.g. if a word was redefined or is 
--- defined out of order). 
-decodeAODict :: Bytes -> ([AODictError], Map Word ABC)
-decodeAODict = first L.reverse . L.foldl' accum ([],Map.empty) . logicalLines where
-    accum (err,!d) (decodeLine -> Just (w,abc)) = 
-        let eRedefs = if (Map.member w d) then [AODict_WordRedef w] else [] in
-        let lUndefs = L.nub $ L.filter (`Map.notMember` d) $ abcWords abc in
-        let eUndefs = fmap (AODict_WordUndef w) lUndefs in
-        let err' = eUndefs <> eRedefs <> err in
-        let d' = Map.insert w abc d in
-        (err', d')
-    accum r bs | LBS.null bs = r -- ignore empty lines, no error
-    accum (err,d) bs = 
-        let err' = AODict_LineParse bs : err in
-        (err', d)
+-- | Decode an AODict format bytestring into a dictionary. Streaming updates.
+-- Dictionary contains everything that passes safeUpdateWords even if any
+-- AODict errors occur, but this is done one step at a time.
+--
+-- I'm going to assume that, even if the full dictionary doesn't fit into
+-- memory all at once, we can at least keep a list of seen words. I might
+-- change this for a bloom filter if we later need truly large dictionaries.
+decodeAODict :: (DictUpdate dict) => dict -> Bytes -> ([AODictError], dict)
+decodeAODict d0 bytes = results $ L.foldl' accum (mempty, mempty, d0) $ logicalLines bytes where
+    results (err, _seen, !d) = (L.reverse err, d)
+    accum (err, seen, !d) (decodeLine -> Just (w,abc)) =
+        let eRedef = if (Set.member w seen) then [AODict_WordRedef w] else [] in
+        let eUndefs = fmap (AODict_WordUndef w) $ L.nub $ 
+                L.filter (`Set.notMember` seen) $ abcWords abc 
+        in
+        let seen' = Set.insert w seen in
+        let err' = eUndefs <> eRedef <> err in
+        case safeUpdateWord w abc d of
+            Right d' -> (err', seen', d')
+            Left e -> 
+                let eInsert = fmap AODict_InsertError e in
+                (eInsert <> err', seen', d) -- leaving word undefined in dictionary
+    accum (err, seen, d) s = (err', seen, d) where
+        err' = AODict_LineParse s : err
 
--- todo: full decode of dictionary...
-
+-- TODO: chunked processing for performance. 

@@ -20,7 +20,6 @@ module Wikilon.WAI.Pages.AODict
 import Data.Monoid
 import Data.Word (Word8)
 import qualified Data.List as L
-import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Network.HTTP.Types as HTTP
@@ -40,7 +39,7 @@ import qualified Wikilon.Store.Branch as Branch
 import Wikilon.Dict.Word
 import Wikilon.Dict.Text (listTextConstraintsForHumans)
 import qualified Wikilon.Store.Dict as Dict
-import qualified Wikilon.Store.Dict.AODict as AODict
+import qualified Wikilon.Dict.AODict as AODict
 import Wikilon.Store.Root
 import Wikilon.Time
 
@@ -152,22 +151,17 @@ importAODictGzip = dictApp $ \w dictName rq k ->
 
 importAODict' :: Wai.Response -> Branch.BranchName -> LBS.ByteString -> Wikilon -> Wai.Application
 importAODict' onOK dictName body w _rq k =
-    let (err, wordMap) = AODict.decodeAODict body in
-    let bHasError = not (L.null err) in
-    let onError = k $ aodImportErrors w $ fmap show err in
-    if bHasError then onError else
     let vc = vcache_space (wikilon_store $ wikilon_model w) in
-    case Dict.insert (Dict.empty vc) (Map.toList wordMap) of
-        Left insertErrors -> 
-            k $ aodImportErrors w $ fmap show insertErrors
-        Right dictVal -> do
-            tNow <- getTime 
-            runVTx vc $ 
-                modifyPVar (wikilon_dicts $ wikilon_model w) $ \ bset ->
-                    let b0 = Branch.lookup' dictName bset in
-                    let b' = Branch.update (tNow, dictVal) b0 in
-                    Branch.insert dictName b' bset
-            k onOK
+    let (err, dictVal) = AODict.decodeAODict (Dict.empty vc) body in
+    let bHasError = not (L.null err) in
+    if bHasError then k $ aodImportErrors w $ fmap show err else do
+    tNow <- getTime
+    runVTx vc $ 
+        modifyPVar (wikilon_dicts $ wikilon_model w) $ \ bset ->
+            let b0 = Branch.lookup' dictName bset in
+            let b' = Branch.update (tNow, dictVal) b0 in
+            Branch.insert dictName b' bset
+    k onOK
 
 aodImportErrors :: Wikilon -> [String] -> Wai.Response
 aodImportErrors w errors = 

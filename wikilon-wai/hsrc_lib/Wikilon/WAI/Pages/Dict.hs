@@ -146,7 +146,7 @@ dictWordsListText :: WikilonApp
 dictWordsListText = dictApp $ \w dictName rq k ->
     readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let dict = Branch.head $ Branch.lookup' dictName bset in
-    let lWords = Dict.wordsWithPrefix dict (requestedPrefix rq) in
+    let lWords = Dict.wordsWithPrefix (requestedPrefix rq) dict in
     let encWord (Word wbs) = BB.byteString wbs <> BB.char8 '\n' in
     let content = BB.toLazyByteString $ mconcat $ fmap encWord lWords in
     let status = HTTP.ok200 in

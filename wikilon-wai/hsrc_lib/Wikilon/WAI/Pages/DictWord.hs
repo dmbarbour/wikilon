@@ -10,9 +10,7 @@ module Wikilon.WAI.Pages.DictWord
 
 import Control.Monad
 import Data.Monoid
-import Data.Maybe
 import qualified Data.List as L
-import qualified Data.ByteString.Lazy as LBS
 import qualified Network.HTTP.Types as HTTP
 import qualified Network.HTTP.Media as HTTP
 import Text.Blaze.Html5 ((!))
@@ -62,25 +60,25 @@ putDictWordAODef = toBeImplementedLater "HTTP Put of Word definition"
 delDictWord :: WikilonApp
 delDictWord = toBeImplementedLater "HTTP Deletion of individual Word"
 
--- | return just the definition
+-- | Return just the AO definition. This will always succeed, though
+-- it may return an empty string for an undefined word.
 getDictWordAODef :: WikilonApp
 getDictWordAODef = dictWordApp $ \ w dn dw _rq k ->
     readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let hMedia = (HTTP.hContentType, HTTP.renderHeader mediaTypeAODef) in
+    let status = HTTP.ok200 in
+    let headers = [hMedia] in
     let b = Branch.lookup' dn bset in
     let d = Branch.head b in 
-    let mbDef = Dict.lookupBytes d dw in
-    case mbDef of
-        Nothing -> k $ Wai.responseLBS HTTP.notFound404 [hMedia] LBS.empty
-        Just abc -> k $ Wai.responseLBS HTTP.ok200 [hMedia] abc
+    k $ Wai.responseLBS status headers $ Dict.lookupBytes d dw 
 
 getDictWordPage :: WikilonApp
 getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
     readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let b = Branch.lookup' dn bset in
     let d = Branch.head b in 
-    let mbDef = Dict.lookup d dw in
-    let status = if isNothing mbDef then HTTP.notFound404 else HTTP.ok200 in
+    let abc = Dict.lookup d dw in
+    let status = HTTP.ok200 in
     let headers = [textHtml] in
     let title = H.unsafeByteString (wordToUTF8 dw) in
     k $ Wai.responseLBS status headers $ renderHTML $ do
@@ -89,12 +87,12 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
             H.title title
         H.body $ do
             H.h1 title
-            H.p "Raw AO Definition: "
+            -- TODO: switch to an editable text area here? at least for now!
             H.textarea ! A.class_ "aodef" ! A.readonly "readonly" 
                 ! A.lang "abc" ! A.placeholder "(undefined)"
-                ! A.rows "20" ! A.cols "70" $ maybe mempty (H.string . show) mbDef
-            let lDeps = L.nub $ maybe [] Dict.abcWords mbDef 
-            let lClients = Dict.usedBy d dw 
+                ! A.rows "20" ! A.cols "70" $ H.string (show abc)
+            let lDeps = L.nub $ Dict.abcWords abc 
+            let lClients = Dict.wordClients d dw 
             -- navDocWords dictName dictWord
             H.hr
             navWords "Dependencies" dn lDeps

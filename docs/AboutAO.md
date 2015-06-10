@@ -75,9 +75,9 @@ This is a flat format suitable for simple text files and streams. Each word defi
 There are two additional structural constraints:
 
 * words are listed before use
-* words are not redefined
+* words are listed only once
 
-These constraints guard against cycles and simplify efficient processing of the dictionary. We can process and compile each word in this file as we encounter it. Undefined words must still be listed before use, but may trivially be represented by use of an empty or incomplete definition.
+These constraints guard against cycles and simplify efficient processing of the dictionary. We can process and compile each word in this file as we encounter it. Undefined words must still be listed before use, but may trivially be represented by use of an empty definition. (Thus, we can import or export dictionaries that are in the middle of development.)
 
 For HTTP, I'm using the following header and Internet media type:
 

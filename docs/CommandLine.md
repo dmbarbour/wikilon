@@ -12,15 +12,39 @@ But I think a relatively thin layer above AO could be suitable:
 
 If you know about the evolution of Awelon project, the above should be familiar: it's a minor tweak of the [original definition of Awelon Object](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md). The original AO was weak for staged programming, visual DSLs, and structured programming, but it was well suited for command line interfaces. The result was a very Forth-like language. I'm adapting this, but changing the bytecode escape to keep it unambiguous (no risk of confusing `\` with an ABC operator). 
 
-The command language should be suitable for round-tripping to the AO dictionary and back.
-
 ## Naming: claw?
 
-What should I call this proposed language? The name Awelon Object is taken, and AO today is a better fit for the connotations surrounding '[object code](http://en.wikipedia.org/wiki/Object_code)'. So far, my best idea is **claw**: Command Language for Awelon (or Command Line for Awelon, depending on context). The name also puns nicely. I'll run with it unless someone suggests a better idea. 
+What should I call this proposed language? The name Awelon Object is taken, and AO today is a better fit for the connotations surrounding '[object code](http://en.wikipedia.org/wiki/Object_code)'. So far, my best idea is **claw**: Command Language for Awelon (or Command Line for Awelon, depending on context). The name also puns nicely. I'll run with this unless someone suggests a better idea. 
+
+## Round Tripping?
+
+A major design decision is whether to support round-tripping. If claw code is one way, i.e. converting into an ABC subprogram, that greatly simplifies some things such as introducing support for ad-hoc literal types. (Support for flexible literal types seems especially relevant
+
+
+## Commanding What?
+
+Claw code will somehow bind to a dictionary, for easy processing. One option is that we treat Claw code as a primitive 
+
+## Literals
+
+A reasonable question is whether I want to support the inverse, rendering ABC code into a command line format for display purposes. If so, I will need to be cautious about how literals are handled, e.g. using the implicit `\l` after each number or text literal to place it on a common stack (as I did with the original AO). Otherwise, I can try something like having `42` followed implicitly by `{%integer}` and I can potentially extend the number types and other literal types.
+
+In 2015 June, Awelon Bytecode was updated to exclude rational numbers. At this time, ABC only supports integers. The intention is to model rational and floating point numbers in libraries, and then to eventually leverage this via compiler recognition or ABCD to get native performance (or nearly so).
+
+But I expect rational and decimal numbers will have much value on the command line. So this creates some extra pressure towards the former approach, where literals are processed by words from the dictionary rather than in an implicit manner. This does have some advantages: the set of literals is potentially more extensible if processed by dictionary words.
+
+With words, we could still force words onto a stack. But I'm not sure this would gain us very much.
+
 
 ## Value Types
 
-The original AO supported only texts and numbers. Originally, I did support fractional and decimal numbers, e.g. `3.141` and `2/3`, but 
+The original AO supported only texts and numbers.
+
+I'm not entirely sure what I want for Claw code. 
+
+
+
+Originally, I did support fractional and decimal numbers, e.g. `3.141` and `2/3`, but  
 
   But good support for other value structures such as lists, maps, maybe vectors of some sort, would have been convenient. How much can I do, while keeping the command language thin and simple and suitable for one-liners?
 

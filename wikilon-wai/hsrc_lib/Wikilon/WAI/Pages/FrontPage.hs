@@ -21,8 +21,6 @@ import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
 import Wikilon.Dict.Word (Word(..))
 
-import Wikilon.Store.Root
-
 wikilonRoot :: WikilonApp
 wikilonRoot = app where
     app = justGET onGet where

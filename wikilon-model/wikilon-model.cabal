@@ -60,6 +60,7 @@ Library
     Wikilon.Dict.Word
     Wikilon.Dict.Token
     Wikilon.Dict.Text
+    Wikilon.Dict.AODict
 
     Wikilon.SecureHash
 

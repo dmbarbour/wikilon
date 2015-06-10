@@ -57,7 +57,7 @@ import qualified Wikilon.Store.Branch as Branch
 import Wikilon.Dict.Word
 import Wikilon.Store.Dict (Dict)
 import qualified Wikilon.Store.Dict as Dict
-import qualified Wikilon.Store.Dict.AODict as AODict
+import qualified Wikilon.Dict.AODict as AODict
 import Wikilon.Store.Root
 import Wikilon.Time
 
@@ -109,10 +109,6 @@ queriedWordList = L.nub . L.concatMap getWords where
     getWords ("words", Just bs) = extractWordList bs
     getWords _ = []
 
-loadBytes :: Dict -> Word -> LBS.ByteString
-loadBytes d = maybe LBS.empty id . Dict.lookupBytes d
-
-
 -- | obtain page to edit the AO code
 editorPage :: WikilonApp
 editorPage = dictApp $ \ w dictName rq k -> do
@@ -121,7 +117,7 @@ editorPage = dictApp $ \ w dictName rq k -> do
     let d = Branch.head b
     let tMod = Branch.modified b
     let lWords = queriedWordList (Wai.queryString rq)
-    let lContent = L.zip lWords (loadBytes d <$> lWords)
+    let lContent = L.zip lWords (Dict.lookupBytes d <$> lWords)
     let sContent = mkAOText lContent
     let status = HTTP.ok200
     let etag = eTagN (Dict.unsafeDictAddr d)
@@ -183,8 +179,8 @@ styleParseError h = H.span
 -- ALSO: font color is insufficient. I need background or border colors.
 reportConflict :: BranchName -> Dict -> Dict -> (Word, ABC) -> Maybe HTML
 reportConflict dictName dOrig dHead (w, abc) = 
-    let bsOrig = loadBytes dOrig w in
-    let bsHead = loadBytes dHead w in
+    let bsOrig = Dict.lookupBytes dOrig w in
+    let bsHead = Dict.lookupBytes dHead w in
     if bsOrig == bsHead then Nothing else Just $ do -- no change
     -- return an HTML description of the conflict
     -- let sOrig = LazyUTF8.toString bsOrig
@@ -305,7 +301,7 @@ recvAODictEdit pp
         in
         if not (L.null lConflict) then onConflict else
         -- if we don't exit on edit conflicts, we can attempt to update the dictionary!
-        case Dict.insert dHead lUpdates of
+        case Dict.safeUpdateWords lUpdates dHead of
             Left insErrors -> -- INSERT ERRORS
                 let status = HTTP.conflict409 in
                 let headers = [textHtml, noCache] in

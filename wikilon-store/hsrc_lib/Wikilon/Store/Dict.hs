@@ -1,4 +1,5 @@
-{-# LANGUAGE DeriveDataTypeable, PatternGuards #-}
+{-# LANGUAGE DeriveDataTypeable, PatternGuards, TypeSynonymInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | a concrete implementation of Wikilon.Dict.
 --
@@ -16,13 +17,10 @@ module Wikilon.Store.Dict
     ) where
 
 import Prelude hiding (null, lookup, words)
-import Control.Applicative ((<$>))
 import Control.Arrow (second, (***))
-import Control.Monad
 import Data.Monoid
 import Data.Maybe 
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.List as L
 import Data.Set (Set)
@@ -35,6 +33,7 @@ import qualified Data.VCache.Trie.Type as Trie
 import Data.Word (Word64)
 import Data.VCache.Trie (Trie)
 import Database.VCache
+import qualified Data.Array.IArray as A
 
 import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
@@ -42,7 +41,6 @@ import qualified Awelon.ABC as ABC
 import Wikilon.Dict
 import Wikilon.Dict.Word
 import Wikilon.Dict.Token
-import Wikilon.Dict.Text
 
 import Wikilon.Store.Dict.Type
 
@@ -82,12 +80,15 @@ _impossible = error . dictErr
 
 
 instance DictView Dict where
-    lookup d = _decode . lookupBytes
+    lookup d = _decode . lookupBytes d
     lookupBytes d (Word w) = 
         case Trie.lookupc _cm w (dict_defs d) of
             Just (Def1 v) -> deref' v
             Nothing -> mempty
     toList = fmap (second _decode) . toListBytes
+
+    -- dictDiff :: dict -> dict -> [Word]
+    -- TODO: support efficient Trie diff-list and merge functions
 
 _bytes :: Def -> LBS.ByteString
 _bytes (Def1 v) = deref' v
@@ -106,18 +107,19 @@ instance DictSplitPrefix Dict where
         -- In particular, I shouldn't need to allocate new VCache nodes.
         let t = Trie.lookupPrefix p (dict_defs d) in
         case Trie.trie_root t of
-            Nothing -> (False, []) -- no content under prefix
+            Nothing -> [] -- no content under prefix
             Just v -> 
                 let tn = derefc _cm v in
                 let bExactNode = BS.null (Trie.trie_prefix tn) in
                 let bNodeAccepts = isJust (Trie.trie_accept tn) in
                 let bAccept = bExactNode && bNodeAccepts in
-                let fullPrefix = p <> Trie.trie_prefix tnParent in
+                let fullPrefix = p <> Trie.trie_prefix tn in
+                let lAccept = if bAccept then [Right (Word fullPrefix)] else [] in
                 let lChildBytes = fmap fst $ L.filter (isJust . snd) $
                         A.assocs $ Trie.trie_branch tn
                 in
-                let lPrefixes = fmap (fullPrefix `BS.snoc`) lChildBytes in
-                (bAccept, lPrefixes)
+                let lChildren = fmap (Left . (fullPrefix `BS.snoc`)) lChildBytes in
+                lAccept ++ lChildren
 
 -- | Test whether a given word is defined in this dictionary.
 member :: Dict -> Word -> Bool
@@ -138,7 +140,7 @@ type ReverseDepsDiff = (Set Word, Set Word) -- (del,add)
 _dictDepsMap :: Dict -> [Word] -> DepsMap
 _dictDepsMap d = DepsMap . Map.fromList . fmap _withDeps where
     _withDeps w = (w, _tokens w)
-    _tokens = maybe Set.empty (Set.fromList . ABC.tokens) . lookup d
+    _tokens = Set.fromList . ABC.tokens . lookup d
 
 -- dependencies for inserted words. These are accessible directly.
 _insertDepsMap :: [(Word, ABC)] -> DepsMap
@@ -193,8 +195,9 @@ _updOneDep t (tok,(wsDel,wsAdd)) = Trie.adjust adj tok t where
 -- update is one of the more sophisticated operations
 -- mostly to maintain the reverse lookup index
 instance DictUpdate Dict where
-    updateDictWord w abc = updateDictWords [(w,abc)]
-    updateDictWords (Map.toList -> l) d = d' where
+    updateDictWord w abc = updateDictWords (Map.singleton w abc)
+    updateDictWords m d = d' where
+        l = Map.toList m
         d' = Dict1 { dict_defs = defs', dict_deps = deps' } 
         isDeleted = L.null . ABC.abcOps . snd
         filterDeleted = fmap (unWord . fst) . L.filter isDeleted
