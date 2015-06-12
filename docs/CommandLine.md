@@ -15,7 +15,7 @@ One option is a straightforward expansion into bytecode, e.g. similar to the [or
 
 I propose to call the language **claw**. Command Language (or Line) for AWelon.
 
-## Designing Claw Code
+## Claw Code
 
 General points to help guide the design:
 
@@ -26,7 +26,6 @@ General points to help guide the design:
 * round tripping, ability to recover claw code from AO
 * implicitly bound to AO dictionary for definitions and data
 * concatenative, streamable, composable, purely functional
-* asynchronous effects bound to abstract [network model](NetworkModel.md)
 
 ### Rationals, Decimals, Extensible Literals
 
@@ -53,7 +52,7 @@ Modeling namespaces as syntactic sugar at the editor layer doesn't tolerate ambi
 
 Namespaces greatly augment exploration and extension of our environment models. A very simple environment might be `(stack*(hand*1))` such that we store literal values on the stack and the hand is an auxilliary stack to simplify data plumbing (with `take` and `put` words). A more sophisticated environment might model multiple stacks and workspaces, or even a complete filesystem. Without namespaces, it would become very difficult to experiment with REPLs and command lines for multiple environments.
 
-### Claw as Syntactic Sugar
+### Claw Code as Syntactic Sugar for AO
 
 From the prior two points on namespaces and literals, it is evident that I'm leaning towards a definition of claw code as a very simple syntactic sugar above AO code. The main weakness here is that I'll be depending on words like `integral` and `rational`, thus content not actually generated via claw interfaces is unlikely to translate into useful claw code. That said, the pseudo-literals of ABC at least aren't too difficult to read.
 
@@ -63,17 +62,33 @@ There is great potential to extend the set of literals with extended views of cl
 
 So, I'm feeling good about this design so far.
 
-### Claw Side Effects
+## Claw Shell and Effects Model
 
-I want a *useful* command language. This requires ability to interact with the outside world - e.g. command a robot, access the internet or update a database, impact what is rendered on a screen, etc.. However, claw is limited to the purely functional structure of AO code. Effects cannot be performed directly, but might be requested in the output of a function (e.g. in a monadic sense).
+AO and Claw code are purely functional. However, claw is intended for command-line contexts. Each 'command' might be a `state → state` function that is applied to update the state of a shell. This state value may contain stacks and workspaces. Feedback to the user is achieved by rendering the state, or a partial view of it, for the user. A Forth-like REPL, for example, might render the top few values on the stack.
 
-A promising approach to integrating side effects is to treat at least part of the command line environment as a shared data structure. Each user command may atomically manipulate the shared structure. Between user commands, another agent has opportunity to observe this structure, and further manipulate it to record feedback. Communications and effects are necessarily asynchronous, based on manipulation of the shared state. Also, because updates are purely functional, they're effectively atomic and it is easy to cancel an update or ensure user commands have priority. Parallel computation is feasible if we're willing to risk greater amounts of rework.
+A command language, to be useful, must enable users to orchestrate external resources beyond the local state of the command shell. A user might update a database, query a web server, display an image to screen, control a robot. To achieve these effects, we will assume a background agent is able to observe and influence our shell state between user commands. As a simplistic case, our background agent may integrate a mail service, and our state may include an inbox and outbox. By adding messages to our outbox, we could send messages to influence external systems. By receiving messages with our inbox, we could observe external resources to help make new command decisions.
 
-That said, we don't necessarily want to model the entire environment as shared. 
+To orchestrate multi-step behaviors (e.g. query a database then, depending on the result, take one action or another), we must automate our handling of received messages. We need a behavior function of a type similar to `(message*state)→state`. This function could process messages immediately, modify state, optionally update an outbox. This function might record a subset of messages into an inbox or log for human perusal. By rendering state after updates by asynchronous messages, rich curses-style and graphical command shells are viable.
 
-Users and agents benefit from managing their own private workspaces and precisely controlling when their actions might communicate information. So we may want to divide our environment in two spaces, e.g. `(privateState * sharedState)`. Alternatively, we could favor a shared state model that hides the agent's view behind a simple function or interface. An [abstract virtual machine](NetworkModel.md) (AVM) could contain private spaces directly but still have discretion to share this structure through messages. That said, I feel there is benefit in ability to structurally guarantee that at part of our environment is private without inspecting a behavior function. Thus, I favor a strong separation between private and shared state.
+Usefully, the purely functional nature of updates ensures they are atomic. We can reject messages that cause runtime type errors or assertion failures and return to our original state. We may cancel processing of a message to prioritize a user command, then retry later. On the other hand, performance may become an issue, with shell state becoming a bottleneck. Users may need to offload the most expensive computations via the effects model, such that the shell remains relatively more responsive.
 
-While shared state could be anything, a promising option is that shared state is simply an AVM (a state, behavior, signal triple). This would allow direct interaction between the REPL and other machines on an abstract network. Feedback would always be asynchronous.
+### Abstract Virtual Machine (AVM) and Network Model
+
+Messaging requires addressing. To receive a message, a shell needs an address. In general, we might want for this address to include some context information, i.e. such that we can route a received message to the correct subprogram. To send a message, a destination address is required. A fresh shell must be informed of which resources are available (or at least where to find them, e.g. via registry). 
+
+These problems are addressed, more or less, by the [AVM](NetworkModel.md) and associated network model. The AVM behavior function has the form `(InMsg*State)→(OutMsgList*State)`. This is very similar to the `(message*state)→state` mentioned above. One motivation for using an output message list as opposed to an outbox within state is that we can easily recognize read-only queries on the state and extract additional parallelism or even replication of the machine. 
+
+AVM input and output messages each have two parts. An input message has the form `(context*content)` where context is a value securely controlled by our AVM, and content is a value provided by the the sender. Output messages have the form `(capability*content)` where capability includes a network address and a cryptographically opaque context. To create capabilities, an AVM receives a *self* function, of type `context→capability`. This way, outgoing messages may contain capabilities to receive responses. 
+
+Every AVM is formed of a triple: (state, behavior, signal). The signal value is a context used by the AVM host for generic life cycle purposes: init, halt, suspend, wakeup, etc.. A fresh AVM is initialized by signal with information about itself and its environment. Signals may serve other ad-hoc purposes, e.g. to indicate that an AVM should favor a power saving or low bandwidth modes.
+
+### Command and View Capabilities
+
+A claw command has type `state→state`. This has nice properties for concatenation, composition, streaming. The claw namespace for the command will generally depend on the state type. We won't want too many state models, so we'll probably standardize just a few common structures for most purposes.
+
+To deliver a claw command, we reify it into a block, i.e. `[state→state]`, then deliver it together with a `(capability * [state→state])` pair. This capability routes state update command to an appropriate AVM. Based on context, the AVM will gather the appropriate states together, apply the function, then scatter the states back to their original locations. Usually, the context will indicate both some shared state and a workspace for the user. Effects beyond state updates are left to discretion of the AVM. We could certainly model an outbox, or even a hierarchically embedded AVM.
+
+In addition to command capabilities, we will need view capabilities. View capabilities should probably support both subscriptions and queries, and be compositional in useful ways. If you hold a command capability, you should probably have an associated view capability (because blind commands are usually bad commands)... but the converse is not necessarily true.
 
 ## Secondary Design Thoughts
 
@@ -87,9 +102,4 @@ Expansion of words for inline editing could be guided by simple naming conventio
 
 ### Late vs. Early Binding of Words
 
-Our claw comands are bound to a dictionary. But do we expand the definitions of words at compile time? Or should we wait until they're actually processed? The difference here impacts behavior when we update our dictionary. Assuming interaction with an outside world, I think early binding may be more appropriate. Late binding makes much less sense in a network context. OTOH, there are benefits to late or continuous binding, such as it's easy to render or update the AVM behaviors.
-
-## Initial Claw Definition
-
-The basics of claw code are words, numbers (minimally integers, rationals, decimals), inline texts, blocks, and escaped content. Tokens and multi-line texts are escaped individually, and we may also escape sequences of ABC primitives. Many useful ASCII characters remain available for extensions to the claw code, e.g. `{}()<>`, and many more UTF-8 brackets are available if needed. I'd like to eventually use some of these for lists, JSON, XML or other basic structured values.
-
+Our claw comands are bound to a dictionary. But do we expand the definitions of words at compile time? Should we wait until they're actually processed? The difference here impacts behavior when we update our dictionary. Assuming interaction with an outside world, I think early binding may be more appropriate. Late binding makes much less sense in a network context. 
