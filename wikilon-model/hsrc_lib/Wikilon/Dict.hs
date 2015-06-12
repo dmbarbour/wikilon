@@ -255,7 +255,7 @@ data InsertionError
 instance Show InsertionError where
     show (BadWord w)    = "malformed word: " ++ show w
     show (BadToken t w) = "rejecting token " ++ show (ABC.ABC_Tok t) ++ " in " ++ show w
-    show (Cycle c)     = "cyclic dependencies: " ++ show (cycleToList c)
+    show (Cycle c)     = "cyclic dependencies: " ++ show c
     show (BadText t w)  = "in word" ++ show w ++ " malformed text: " ++ show (ABC.ABC_Text t)
     show (DupWord w)    = "word " ++ show w ++ " is assigned more than once"
 
@@ -300,10 +300,7 @@ testForMalformedDef w = (malformedWord ++) . abcErrors where
 
 -- | A cycle is expressed as a chain of dependencies that is implicitly
 -- closed (i.e. no words are repeated). Cycles must be non-empty. 
-type Cycle a = (a,[a])
-
-cycleToList :: Cycle a -> [a]
-cycleToList = uncurry (:)
+type Cycle a = [a]
 
 -- | Search under a given list of words for cycles. If such a cycle
 -- exists, this function certainly finds it. However, I won't attempt 
@@ -325,6 +322,6 @@ fc adj stack (x:xs) =
         cycleFound -> return cycleFound 
     
 -- return just the cycle found (implicitly closed)
-_cyc :: (Eq a) => a -> [a] -> (a,[a])
-_cyc a stack = (,) a $ L.dropWhile (/= a) $ L.reverse stack
+_cyc :: (Eq a) => a -> [a] -> Cycle a
+_cyc a stack = L.dropWhile (/= a) $ L.reverse stack
 
