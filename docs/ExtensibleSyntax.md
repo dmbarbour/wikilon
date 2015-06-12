@@ -19,13 +19,13 @@ The first point reduces boiler-plate and abstraction issues that arise if syntax
 The coupling of syntax to the module boundary is a good fit for the *stable identity* requirement. In case of Wikilon, a module is a word/page. The resulting syntax can be straightforward to use. In concrete terms, we might export a set or stream of definitions using something like:
         
         #ABC
-        :swap rwrwzwlwl
-        :.rw rw
-        :.wl wl
-        :dup r^zlwl
+        @swap rwrwzwlwl
+        @.rw rw
+        @.wl wl
+        @dup r^zlwl
         #AO
-        :swapd .rw swap .wl
-        :rot swapd swap
+        @swapd .rw swap .wl
+        @rot swapd swap
 
 This particular format might support multi-line content by escaping each LF with a following SP, and could be extended with new operations via the first character of any line. Anyhow, presumably a system would start with comprehension of at least one bootstrap language (perhaps just AO) then allow new parser functions to be defined by compiling to that form. But this isn't the final form!
 
@@ -42,13 +42,13 @@ The prior section for Extensible Syntax is still missing a lot of desirable feat
 
 Instead of an extensible syntax at the character level, we represent every word as a pair: a *structured value* and a *compiler function*. The compiler function is simply a pure function that takes the structured value and returns a block. Trivially, the simplest compiler function is *identity*, if the structure itself is a block. The structured value is represented in ABC, but with access to the dictionary via `{%foo}` tokens. The result, for simple code, is very similar to the older version of Awelon Object (AO) code:
 
-        @using {&AO}
-        :swap [rwrwzwlwl]
-        :dup [r^zlwl]
-        :swapd [rw {%swap} wl]
-        :rot [{%swapd} {%swap}]
-        :dupd [rw {%dup} wl]
-        :over [{%dupd} {%swap}]
+        #using {&AO}
+        @swap [rwrwzwlwl]
+        @dup [r^zlwl]
+        @swapd [rw {%swap} wl]
+        @rot [{%swapd} {%swap}]
+        @dupd [rw {%dup} wl]
+        @over [{%dupd} {%swap}]
 
 If edited and displayed to humans in this format, there would be a lot of syntactic noise for words, small texts, and numbers. However, my hypothesis is that a good structure editor could supply an AO-like interface for presenting and manipulating raw blocks. In this sense, AO code becomes a true macro assembly.
 
@@ -58,18 +58,18 @@ Usefully, a lot of generic abstraction and compression becomes available because
 
 ### Putting the Pieces Together
 
-While I could separate the compiler function from the word's structure as seen above (the separate `@using` directive), a simpler and better alternative is that each definition also outputs the compiler function:
+While I could separate the compiler function from the word's structure as seen above (the separate `@using` directive), a simpler and better alternative is that every single definition also records its compiler function:
 
         type Def a b = ∃v. ∀e. e → [v → [a→b]] * (v * e)
 
-        :swap [rwrwzwlwl] []
-        :dup [r^zlwl] []
-        :swapd [rw {%swap} wl] []
-        :rot [{%swapd} {%swap}] []
-        :dupd [rw {%dup} wl] []
-        :over [{%dupd} {%swap}] []
+        @swap [rwrwzwlwl] []
+        @dup [r^zlwl] []
+        @swapd [rw {%swap} wl] []
+        @rot [{%swapd} {%swap}] []
+        @dupd [rw {%dup} wl] []
+        @over [{%dupd} {%swap}] []
 
-        :fooExample #123 #45 {%mkFoo} [{%fooLang}]
+        @fooExample #123 #45 {%mkFoo} [{%fooLang}]
 
 Every word is then fully self-describing modulo acyclic dependencies on other words. The separation between the structure and its semantics still permits developers to focus on editing the structure, but now they also may easily manipulate the semantics. Our compiler function is now universally and trivially the `$` bytecode.
 
