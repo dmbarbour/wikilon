@@ -1,14 +1,15 @@
 
--- | An abstract interface for Wikilon.
---
--- The goal here is to present Wikilon in a manner compatible with an
--- abstract virtual machine on a network that accepts domain layer
--- messages or events. All responses from this machine are asynchronous.
--- Long-running subscriptions are also viable.
---
--- Note: user model and authentication may require an additional machine.
+-- | The Wikilon 'Model' provides an abstract interface for Wikilon.
+-- Wikilon will receive and process event messages, and respond to
+-- messages asynchronously (if at all). Batches of events may be
+-- processed atomically, i.e. present Wikilon as an abstract virtual
+-- machine.  
 --
 module Wikilon.Model
-    (
+    ( module Wikilon.Events
     ) where
+
+
+import Wikilon.Events
+
 
