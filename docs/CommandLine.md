@@ -64,13 +64,21 @@ So, I'm feeling good about this design so far.
 
 ## Claw Shell and Effects Model
 
-AO and Claw code are purely functional. However, claw is intended for command-line contexts. Each 'command' might be a `state → state` function that is applied to update the state of a shell. This state value may contain stacks and workspaces. Feedback to the user is achieved by rendering the state, or a partial view of it, for the user. A Forth-like REPL, for example, might render the top few values on the stack.
+AO and Claw code are purely functional. However, claw is intended for command-line contexts. Each 'command' will be a `state → state` function that is applied to update the state of a shell. This state value may contain stacks and workspaces. Feedback to the user is achieved by rendering the state, or a partial view of it, for the user. A Forth-like REPL, for example, might render the top few values on the stack.
 
-A command language, to be useful, must enable users to orchestrate external resources beyond the local state of the command shell. A user might update a database, query a web server, display an image to screen, control a robot. To achieve these effects, we will assume a background agent is able to observe and influence our shell state between user commands. As a simplistic case, our background agent may integrate a mail service, and our state may include an inbox and outbox. By adding messages to our outbox, we could send messages to influence external systems. By receiving messages with our inbox, we could observe external resources to help make new command decisions.
+A command language, to be useful, must enable users to orchestrate external resources beyond the local state of the command shell. A user might update a database, query a web server, display an image to screen, control a robot. To achieve these effects, we will assume a background agent is able to observe and influence our shell state value between user commands. As a simplistic case, our background agent may integrate a mail service, and our state may include an inbox and outbox. By adding messages to our outbox, we could send messages to influence external systems. By receiving messages with our inbox, we could observe external resources to help make new command decisions.
 
-To orchestrate multi-step behaviors (e.g. query a database then, depending on the result, take one action or another), we must automate our handling of received messages. We need a behavior function of a type similar to `(message*state)→state`. This function could process messages immediately, modify state, optionally update an outbox. This function might record a subset of messages into an inbox or log for human perusal. By rendering state after updates by asynchronous messages, rich curses-style and graphical command shells are viable.
+To orchestrate multi-step behaviors on an inbox (e.g. query a database then, depending on the result, take one action or another), we would need to automate our handling of received messages. This suggests a function of a type similar to `(message*state)→state`. This function could process messages immediately, modify state, optionally update an outbox that is part of state. A function might record a subset of messages into an inbox or log for human perusal. By rendering state after updates by these asynchronous messages, rich curses-style and graphical command shells should be viable.
 
-Usefully, the purely functional nature of updates ensures they are atomic. We can reject messages that cause runtime type errors or assertion failures and return to our original state. We may cancel processing of a message to prioritize a user command, then retry later. On the other hand, performance may become an issue, with shell state becoming a bottleneck. Users may need to offload the most expensive computations via the effects model, such that the shell remains relatively more responsive.
+Effects modeled using functional updates on shared state have nice properties: 
+
+* Updates are atomic; we can abort for any reason and restore original state.
+* Priority may be modeled by aborting long-running, low priority computations.
+* Non-termination is an error; termination analysis may be applied uniformly.
+* Asynchronous tasks are represented in state; this can simplify debug views. 
+* Effects are asynchronous; generalize easily to open or distributed systems.
+
+On the other hand, performance may be an issue, with shell state becoming a bottleneck. Users may need to offload the more expensive computations to other machines via the effects model, such that the shell remains relatively more responsive.
 
 ### Abstract Virtual Machine (AVM) and Network Model
 
@@ -78,27 +86,39 @@ Messaging requires addressing. To receive a message, a shell needs an address. I
 
 These problems are addressed, more or less, by the [AVM](NetworkModel.md) and associated network model. The AVM behavior function has the form `(InMsg*State)→(OutMsgList*State)`. This is very similar to the `(message*state)→state` mentioned above. One motivation for using an output message list as opposed to an outbox within state is that we can easily recognize read-only queries on the state and extract additional parallelism or even replication of the machine. 
 
-AVM input and output messages each have two parts. An input message has the form `(context*content)` where context is a value securely controlled by our AVM, and content is a value provided by the the sender. Output messages have the form `(capability*content)` where capability includes a network address and a cryptographically opaque context. To create capabilities, an AVM receives a *self* function, of type `context→capability`. This way, outgoing messages may contain capabilities to receive responses. 
+AVM input and output messages each have two parts. An input message has the form `(context*content)` where context is a value securely controlled by our AVM, and content is a value provided by the the sender. Output messages have the form `(capability*content)` where capability includes a network address and a cryptographically opaque context. To create capabilities, an AVM receives a *self* function, of type `context→capability`. This way, outgoing messages may contain capabilities to receive responses. In a type-safe environment, we might think of contexts and capabilities as indicating the type of associated message (dependent types).
 
 Every AVM is formed of a triple: (state, behavior, signal). The signal value is a context used by the AVM host for generic life cycle purposes: init, halt, suspend, wakeup, etc.. A fresh AVM is initialized by signal with information about itself and its environment. Signals may serve other ad-hoc purposes, e.g. to indicate that an AVM should favor a power saving or low bandwidth modes.
 
-### Command and View Capabilities
+### Command Capabilities
 
-A claw command has type `state→state`. This has nice properties for concatenation, composition, streaming. The claw namespace for the command will generally depend on the state type. We won't want too many state models, so we'll probably standardize just a few common structures for most purposes.
+A claw command line will be a function of type `state→state`. This preserves nice properties for concatenation, composition, streaming. Though, the state type and effects models must also be chosen carefully to ensure that effects are also composable. To deliver a claw command, we reify it into a block, i.e. `[state→state]`, then deliver it to an AVM as a `(capability * [state→state])` message. This capability is also part of the editor's state, and routes the block to the appropriate machine. The AVM applies the function to the state and has immediate opportunity to observe and react to updated state.
 
-To deliver a claw command, we reify it into a block, i.e. `[state→state]`, then deliver it together with a `(capability * [state→state])` pair. This capability routes state update command to an appropriate AVM. Based on context, the AVM will gather the appropriate states together, apply the function, then scatter the states back to their original locations. Usually, the context will indicate both some shared state and a workspace for the user. Effects beyond state updates are left to discretion of the AVM. We could certainly model an outbox, or even a hierarchically embedded AVM.
+Effects beyond state update are left to the discretion of the AVM and the specific model and use case. An interesting possibility is that our state value itself hosts an AVM triple for direct manipulation by the user, then the outer AVM queries the inner AVM for available messages. The nature of AVMs makes it trivial for one machine to host more machines. Together with namespaces, it is feasible to experiment with many command contexts with different state types.
 
-In addition to command capabilities, we will need view capabilities. View capabilities should probably support both subscriptions and queries, and be compositional in useful ways. If you hold a command capability, you should probably have an associated view capability (because blind commands are usually bad commands)... but the converse is not necessarily true.
+### View Capabilities
+
+Blind commands are probably bad commands. If we have the authority to update some state, we should probably have authority to view the same. But the converse isn't true: it may be useful to provide view capabilities for a lot of state that we cannot directly manipulate. In the simplistic case, a view or query message might have a form similar to `(viewCap * (queryInfo * responseCap))`, where `responseCap` receives a message containing a copy of `state`. However, this is a bit too simple, and requires repeatedly polling the state even if it hasn't changed. Some properties that also would be valuable include:
+
+* easily filter or compose views into new views
+* subscribe to state and manage the subscription
+* machines adapt based on active subscriptions
+
+While I haven't hammered out the details, I think it would be wise to take a lot of inspiration from publish-subscribe models, and perhaps even integrate with some of those. 
+
+### Editor Capabilities and Asynchronous Effects and Views
+
+In overview, I'm leaning towards a capability-secure model for commands and views, placing each REPL or Shell into an implicit AVM. The ability for commands to cause further effects is left to the discretion of the receiving AVM. View capabilities will be a bit trickier to get right, I think, though it's doable and a brute force simplistic approach should be sufficient to get started.
+
+Usefully, these views and techniques should generalize nicely for RDP, which effectively pushes all of 'messaging' into machine adaptation to active subscriptions (with parameters).
 
 ## Secondary Design Thoughts
 
 ### Multi-Media Claw 
 
-Mixed text and media can be very interesting in some programming contexts - e.g. xiki, iPython notebooks, spreadsheets, tangible functional programming, live programming. Claw code is textual and probably shouldn't directly support structured multi-media content. However, an interesting possibility exists: a structure editor can simply *expand* in place the definitions of some words, allowing us to view and edit the word inline (perhaps subscribing to external updates on the same). Thus, this would effectively allow embedded media and shared resources within claw code without hindering access to the plain text fragments.
+Mixed text and media can be very interesting in some programming contexts - e.g. xiki, iPython notebooks, spreadsheets, tangible functional programming, live programming. Claw code is textual and probably shouldn't directly support structured multi-media content. However, an interesting possibility exists: a structure editor can simply *expand* in place the structured definitions of some words, allowing us to view and edit the word inline (perhaps subscribing to external updates on the same). Thus, this would effectively allow embedded media and shared resources within claw code without hindering access to the plain text fragments. Selection of words for inline editing could be guided by simple naming conventions.
 
 Conversely, a structure editor for AO might render otherwise opaque blocks as fragments of claw code.
-
-Expansion of words for inline editing could be guided by simple naming conventions.
 
 ### Late vs. Early Binding of Words
 

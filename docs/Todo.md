@@ -13,15 +13,16 @@ DONE:
 * browse words by name (not very useful)
 * obtain a list of word names 
 * view a word
+* delete a word (clear its definition)
 
 TODO:
 
 * directly edit a word
-* delete a word
 * rename a word
 * heuristics for listing words for browsing, favor breaking on ':' or '.'
  * maybe use `(a)` or instead of `a(*)` for the prefix links.
 
+* switch to stylesheets and a dark-by-default style
 
 
 * simplistic REPLs, both Claw code and ABC
