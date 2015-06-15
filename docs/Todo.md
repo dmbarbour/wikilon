@@ -17,9 +17,11 @@ DONE:
 
 TODO:
 
+* view and edit words as Claw code (is this more comfortable)?
 * directly edit a word
 * rename a word
-* heuristics for listing words for browsing, favor breaking on ':' or '.'
+ 
+* improve heuristics for listing words for browsing, favor breaking on ':' or '.'
  * maybe use `(a)` or instead of `a(*)` for the prefix links.
 
 * switch to stylesheets and a dark-by-default style

@@ -264,8 +264,12 @@ aodictDocHTML = do
         \when the value `v` is directly a function. Another trivial compiler is\n\
         \`[v'c]`, which simply quotes value 'v' and exports a structure. Complex\n\
         \compilers will usually be factored into words, e.g. `[{%fooLang}]`."
-    H.p "As a basic health check, every definition should compile. Conveniently,\n\
-        \this can be lifted into arbitrary unit tests and staged computations." 
+    H.p "In a development dictionary, it is not uncommon for some words to be\n\
+        \undefined or incompletely defined. If a definition does not compile\n\
+        \because it is incomplete, this is considered a 'hole' in the dictionary.\n\
+        \A good development environment helps developers recognize and fill holes."
+    H.p "In a healthy dictionary, every word should compile, and additionally the\n\
+        \meaning functions should typecheck and pass other analyses."
     H.h2 "Editing of AO Dictionaries"
     H.p "The AODict format is not suitable for direct human reading and editing."
     H.p "At small scales, it is feasible to edit AODict directly, assuming you\n\

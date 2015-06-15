@@ -27,19 +27,25 @@ clawDocs = basicWebPage $ \ w _ _ -> do
 
 clawDocsHTML :: HTML
 clawDocsHTML = do
-    H.h1 "Command Line for Awelon"
+    H.h1 "Command Language (or Line) for Awelon"
     H.p $ H.b "Internet Media Type:" <> " text/vnd.org.awelon.claw"
-    H.p $ H.b "Filename Extensions:" <> " .claw"
+    H.p $ H.b "Filename Extensions:" <> " (not applicable) "
     let lnAO = href uriAODocs $ "Awelon Object (AO)"
-    H.p $ "Command Line for Awelon, or Claw, is a very thin wrapper for " <> lnAO <> ".\n\
-          \Claw is intended for use with REPLs and command line shells, i.e. keyboard\n\
-          \input at sizes around one line. Claw is not optimized for readability, but\n\
-          \will generally be more readable in plain text than AO code."
-
+    H.p $ "Command Language for Awelon, or Claw, is a syntactic sugar for " <> lnAO <> ".\n\
+          \Claw is intended for use with REPLs and command line shells, where efficient\n\
+          \keyboard input is needed in small doses of one line or so. Under the hood, AO\n\
+          \code should be used to represent Claw code, so Claw only appears in editors.\n\
+          \"
+    H.p $ "Claw code is not optimized for readability. But it is much more readable than\n\
+          \the AO code that it desugars into.\n\
+          \"
     H.h2 "Claw Syntax"
-    H.p $ "The assumption made for Claw is that the vast majority of user inputs will\n\
-          \consist of words, numbers, short texts, and blocks. For other ABC content,\n\
-          \escapes are necessary. Elements of Claw:"
+    H.p $ "Claw is very Forth-like. Claw code consists of words, numbers, inline texts,\n\
+          \blocks, and escapes into Awelon Bytecode (ABC). Claw words refer to an AO\n\
+          \dictionary. Most logic and data should be in the dictionary so users only\n\
+          \need a few words and arguments on a command line.\n\
+          \"
+    H.p $ "Claw Elements:"
     H.ul $ do
         H.li $ (H.b "words") <> " are represented directly: inc mul"
         H.li $ (H.b "numbers") <> " are represented conventionally: 3.141 2/3 -7"
@@ -48,62 +54,50 @@ clawDocsHTML = do
         H.li $ (H.b "bytecode") <> " escaped form \\vrwlc"
         H.li $ (H.b "tokens") <> " escaped form \\{token content}"
         H.li $ (H.b "full texts") <> " escaped form \\\"ABC text goes here...\\n~"
-    H.p $ "The three escape forms cannot be mixed. I.e. the bytecode is for primitive\n\
-          \bytecodes only (no tokens, blocks, or texts). ABC blocks cannot be escaped.\n\
-          \Full texts are necessary for double quotes or linefeeds. Elements must be\n\
-          \separated by spaces or linefeeds (excepting inner edge of a block)."
-    H.p $ "Claw reserves characters (|){}<> for future extensions."
-
+    H.p $ "The three escape forms cannot be mixed, i.e. such that we can easily\n\
+          \know from reading a single character whether we're dealing with text,\n\
+          \a token, or bytecode.\n\
+          \"
+    H.p $ "Claw code is generally associated with a namespace, which determines\n\
+          \the implicit prefix for all words. Words outside this namespace may\n\
+          \be represented explicitly using the escaped expansion `\\{%word}`. Some\n\
+          \editors may support switching namespaces for regions of code, but the\n\
+          \normal case is to just use one namespace, add or redirect to words\n\
+          \as needed, and let the dictionary swallow any redundancy.\n\
+          \"
     H.h2 "Claw Semantics"
-    H.p $ "Claw is a very thin layer above AO. To compile Claw to AO, we translate\n\
-          \every word to {%word}, convert values almost directly, and inject the\n\
-          \three escaped forms. However, the value conversion requires attention:\n\
-          \rather than converting directly, e.g. from `[2/3]` to `[#2#3/*]`, Claw\n\
-          \injects an implicit \\l, i.e. from `[2/3]` to `[#2#3/*l]l`."
-    H.p $ "The idea is that Claw will generally operate on a (stack*env) pair, where\n\
-          \we want the environment to hold a stable location so we can access it no\n\
-          \matter how much we manipulate the stack. The extra \\l shifts the 7 so it\n\
-          \adds to the stack. A good Claw dictionary should contain useful words that\n\
-          \operate on the stack."
-    H.p $ "Claw will perform a basic simplification: use of \\r after any value will\n\
-          \cancel with the implicit \\l. Guaranteeing this simplification ensures Claw\n\
-          \precisely encodes anything AO encodes."
-
+    H.p $ "Claw expands in a simple fashion into AO code. This AO code can be\n\
+          \reliably parsed back into same Claw code that produces it. Thus, the\n\
+          \expansion is the semantics.\n\
+          \"
+    H.p $ "Expansions Of:"
+    H.ul $ do
+        H.li $ (H.b "words") <> " `foo` expands into {%NSfoo} for namespace NS"
+        H.li $ (H.b "integral numbers") <> ": `-7` expands to `\\#7- integral`"
+        H.li $ (H.b "rational numbers") <> ": `2/3` expands into `\\#2#3 rational`"
+        H.li $ (H.b "decimal numbers") <> ": `3.141` expands into `\\#3141#3- decimal`" 
+        H.li $ (H.b "short texts") <> " expand into long texts"
+        H.li $ (H.b "block") <> " structure is preserved, Claw blocks to AO blocks"
+        H.li $ (H.b "escaped bytecode, tokens, texts") <> " expand into AO code directly"
+    H.p $ "Note that the words 'integral' and so on further expand with the associated\n\
+          \namespace. Decimals are expanded as written, e.g. 1.00 is `\\#100#2- decimal`\n\
+          \so we know that we recorded two zeroes after the decimal point.\n\
+          \"
+    H.p $ "Claw code might be later extended with new syntax and expansion semantics,\n\
+          \e.g. to support scientific numbers, units, vectors and matrices, and so on.\n\
+          \"
     H.h2 "Claw Practice"
     let lnForth = href "http://en.wikipedia.org/wiki/Forth_(programming_language)" "Forth"
     H.p $ "Claw offers a very " <> lnForth <> "-like programming experience. Like Forth,\n\
-          \Claw becomes unreadable somewhere between ten and twenty elements. Careful\n\
-          \factoring is essential as much for comprehension and accessibility as for\n\
-          \reuse. Words are a primary basis for documentation."
-    H.p $ "Unlike Forth, Awelon project is intended for use with very large dictionaries.\n\
-          \This means we'll be using larger words to disambiguate in context. Claw does\n\
-          \not provide namespaces to mitigate this, but an interactive REPL or shell may\n\
-          \be able to simulate namespaces by hiding common suffixes or prefixes from view.\n\
-          \Use of color or icons to indicate hidden components is an interesting possibility."
-    H.p $ "I would like to also use Claw for iPython-notebook inspired programming."
+          \Claw becomes unreadable somewhere between ten and twenty tokens. Continuous\n\
+          \factoring, pushing logic into the dictionary, is essential for comprehension,\n\
+          \accessibility, and reuse. Naming of words is a major basis for documentation."
 
     H.h2 "Effectful Claw Environments"
-    H.p $ "A useful Command Line Shell or REPL must be able to interact with the\n\
-          \outside world, e.g. load a web page, query a database, write a file."
-    H.p $ "While AO code and hence Claw code is purely functional, it is always\n\
-          \possible to model effects in terms of manipulating values. As a simple\n\
-          \example, if our environment contained an outbox and inbox, we could\n\
-          \model sending messages by writing a function that adds values to the\n\
-          \outbox, and between commands we could receive messages via the inbox."
-    H.p $ "While an inbox is illustrative, it is insufficient for multi-step tasks\n\
-          \that should proceed without human intervention."
-    let lnAVM = href uriAVMDocs "AVM"
-    H.p $ "Claw REPLs or Shells shall instead contain an abstract virtual machine,\n\
-          \an " <> lnAVM <> ". The (stack*env) environment from earlier expands to\n\
-          \(stack*(AVM*ext)). The AVM receives messages, and after each user action\n\
-          \it is signaled such that any user-manipulated outbox may be sent. An AVM\n\
-          \consists of a (state*(behavior*signal)) triple. The AVM's state is the\n\
-          \only shared state; the stack and extended environment belong to the user."
-    H.p $ "The main constraint is that all effects are asynchronous. This can make\n\
-          \it difficult to, for example, grab a file and directly use the result.\n\
-          \DSLs or monadic code could model synchronous behaviors above asynchronous\n\
-          \effects. If necessary, and assuming we can still keep Claw very thin, Claw\n\
-          \may later be extended with syntactic sugar to simplify writing this code."
-    H.p $ "Development of a good 'default' AVM is left to our dictionaries. I.e.\n\
-          \we should be able to construct fresh Claw shells from a single word."
+    H.p $ "In context of a command line shell or REPL, Claw code will usually be provided\n\
+          \one line or small text area at a time expressing a state→state function. Effects\n\
+          \are possible based on a multi-agent concept: outside agents observe and influence\n\
+          \the state between user commands. All effects are asynchronous. User commands must\n\
+          \return before any effects are observed by outside agents.\n\
+          \"
 
