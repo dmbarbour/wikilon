@@ -3,6 +3,8 @@
 
 At this time I'm trying to develop lots of little 'spike' solutions. The UX isn't particularly refined yet.
 
+I should probably work to make editing AO code more comfortable for the common case. In particular, I should be able to quickly build and test a definition using Claw code, perhaps entirely via REPL. And I also need to get the REPL going ASAP.
+
 DONE:
 
 * list of dictionaries

@@ -17,10 +17,8 @@ module Wikilon.WAI.Pages.Dict
 import Control.Applicative
 import Control.Monad
 import Data.Monoid
-import Data.Maybe
 import qualified Data.List as L
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Builder as BB
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
@@ -32,18 +30,13 @@ import Database.VCache
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
 import Wikilon.Dict.Word
-
-import qualified Data.VCache.Trie as Trie
-import qualified Data.VCache.Trie.Type as Trie
-import qualified Data.Array.IArray as A
+import qualified Wikilon.Dict as Dict
 
 import Wikilon.WAI.Pages.AODict
 import Wikilon.WAI.Pages.AODictEdit
 import Wikilon.WAI.Pages.DictWord
 
-import Wikilon.Store.Dict (Dict)
 import qualified Wikilon.Store.Dict as Dict
-import qualified Wikilon.Store.Dict.Type as Dict
 import Wikilon.Store.Branch (BranchName)
 import qualified Wikilon.Store.Branch as Branch
 import Wikilon.Store.Root
@@ -146,7 +139,7 @@ dictWordsListText :: WikilonApp
 dictWordsListText = dictApp $ \w dictName rq k ->
     readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let dict = Branch.head $ Branch.lookup' dictName bset in
-    let lWords = Dict.wordsWithPrefix (requestedPrefix rq) dict in
+    let lWords = Dict.wordsWithPrefix dict (requestedPrefix rq) in
     let encWord (Word wbs) = BB.byteString wbs <> BB.char8 '\n' in
     let content = BB.toLazyByteString $ mconcat $ fmap encWord lWords in
     let status = HTTP.ok200 in
@@ -189,83 +182,46 @@ dictWordsPage = dictApp $ \w dictName rq k ->
 
 -- | For now, we browse words based on common prefix. I.e. users may
 -- select a prefix to expand it.
-requestedPrefix :: Wai.Request -> Prefix
+requestedPrefix :: Wai.Request -> Dict.WordPrefix
 requestedPrefix = getPrefix . L.lookup "prefix" . Wai.queryString where
     getPrefix (Just (Just s)) = s
     getPrefix _ = BS.empty
 
--- developing a simple utility for browsing a trie
-type Prefix = UTF8.ByteString -- includes trie_prefix from node!
-type Key = UTF8.ByteString
-type Entry a = Either (Prefix, Trie.Node a) Key
 
--- expand a list of entries at least one UTF8 character. We'll assume
--- a good UTF8 string if its last octet is less than 0x80. The goal
--- here is that I shouldn't need to worry about whether a prefix is a
--- valid UTF8 string.
-expandEntUTF8 :: Entry a -> [Entry a]
-expandEntUTF8 x@(Right _) = [x]
-expandEntUTF8 (Left (p,tn)) = expandEntUTF8' p tn
+type Ent = Either Dict.WordPrefix Word
 
-expandEntUTF8' :: Prefix -> Trie.Node a -> [Entry a]
-expandEntUTF8' prefix tnParent =
-    let bAccept = isJust (Trie.trie_accept tnParent) in
-    let lAccept = if bAccept then [Right prefix] else [] in
-    let toChildEnts (byte,getChildRef) = 
-            maybeToList getChildRef >>= \ v ->
-            let tnChild = derefc CacheMode0 v in
-            let childPrefix = mconcat [prefix, BS.singleton byte, Trie.trie_prefix tnChild] in
-            let bOkUTF8 = BS.last childPrefix < 0x80 in
-            if bOkUTF8 then [Left (childPrefix, tnChild)] else 
-            -- prefix in middle of UTF8 char!
-            expandEntUTF8' childPrefix tnChild 
-    in
-    let lChildren = L.concatMap toChildEnts $ A.assocs $ Trie.trie_branch tnParent in
-    lAccept ++ lChildren
-
--- | We'll expand the Trie until it surpasses a target width, unless doing
--- so causes it to surpass the maximum width. Expansions are uniformly
--- breadth-first. At least one expansion is performed regardless.
-wordsForBrowsing :: Int -> Int -> Dict -> Prefix -> [Either Prefix Word]
+-- | Expose a menu of words for users to browse based on a common prefix.
+-- (I would eventually like to support browsing words on other properties.)
+wordsForBrowsing :: (Dict.DictSplitPrefix dict) 
+    => Int -> Int -> dict -> Dict.WordPrefix -> [Ent]
 wordsForBrowsing nTargetWidth nMaxWidth dict prefix = 
-    let t0 = Trie.lookupPrefix prefix (Dict.dict_defs dict) in
-    case Trie.trie_root t0 of
-        Nothing -> [] -- prefix has no content
-        Just v ->
-            let tn = derefc CacheMode0 v in 
-            let fullPrefix = prefix <> Trie.trie_prefix tn in
-            let loopToFillMenu n l =
-                    if (n >= nTargetWidth) then l else
-                    let l' = L.concatMap expandEntUTF8 l in
-                    let n' = L.length l' in
-                    if (n' == n) then l' else  -- could not expand
-                    if (n' > nMaxWidth) then l else -- expands too far
-                    loopToFillMenu n' l'
-            in
-            let l0 = expandEntUTF8' fullPrefix tn in
-            let n0 = L.length l0 in
-            finishEnt <$> loopToFillMenu n0 l0
+    let expandPrefix = Dict.splitOnPrefixWords dict in
+    let expandEnt = either expandPrefix (return . Right) in
+    -- fill a menu of prefix options.
+    let loopToFillMenu n l =
+            if (n >= nTargetWidth) then l else
+            let l' = L.concatMap expandEnt l in
+            let n' = L.length l' in
+            if (n' == n) then l' else  -- could not expand
+            if (n' > nMaxWidth) then l else -- expands too far
+            loopToFillMenu n' l'
+    in
+    -- expand prefixes that lead to exactly one word
+    let finishPrefix p = case Dict.wordsWithPrefix dict p of
+            [w] -> Right w -- just one word
+            _ -> Left p -- more than one word
+    in
+    let finishEnt = either finishPrefix Right in
+    let l0 = expandPrefix prefix in
+    finishEnt <$> loopToFillMenu (L.length l0) l0
 
-
-isLeafNode :: Trie.Node a -> Bool
-isLeafNode = L.null . L.filter isJust . A.elems . Trie.trie_branch
-
--- if a final child has no children, we'll translate it to a key
-finishEnt :: Entry a -> Either Prefix Word
-finishEnt (Right x) = Right (Word x)
-finishEnt (Left (p,tn)) | isLeafNode tn = Right (Word p)
-                        | otherwise = Left p
-
-lnkEnt :: BranchName -> Either Prefix Word -> HTML
+lnkEnt :: BranchName -> Ent -> HTML
 lnkEnt dictName = either lnkPrefix (hrefDictWord dictName) where
     lnkPrefix p = 
         let uri = uriDictWordsQPrefix dictName p in
-        let msg = H.unsafeByteString p <> "(*)" in
+        let msg = H.unsafeByteString p <> "/" in
         href uri ! A.class_ "refDictWordPrefix" $ msg
 
 -- TODO: delete a list of words
-
-
-
 
 

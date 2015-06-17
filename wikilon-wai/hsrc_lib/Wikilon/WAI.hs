@@ -38,16 +38,13 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 
     ,("/d/:d/w", dictWords)
     ,("/d/:d/w/:w", dictWord)
-    ,("/d/:d/w/:w/rename", dictWordRename)
     ,("/d/:d/w/:w/aodef", dictWordAODef)
-
+    ,("/d/:d/w/:w/rename", dictWordRename)
+    ,("/d/:d/w/:w/edit", dictWordEdit)
     ,("/d.create", dictCreate)
-    --,("/d.merge", dictMerge)
 
     --,("/d/:d/hist", dictHist)
 
-    --,("/d/:d/w(create)", dictWordPostCreate)
-    --,("/d/:d/w(delete)", dictWordPostDelete)
 
     --,("/d/:d/w/:w", dictWord)
     --,("/d/:d/w/:w/name", 

@@ -11,7 +11,7 @@ But we can certainly create a language better suited, which we can rapidly compi
 * first class blocks, higher order ops: `1 [2 *] 53 repeat`
 * stable target environment for the code
 
-One option is a straightforward expansion into bytecode, e.g. similar to the [original definition of Awelon Object](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md). The original AO was weak for staged programming, visual DSLs, or structured programming, and wasn't strongly an '[object code](http://en.wikipedia.org/wiki/Object_code)', but it was well suited for command line interfaces. The result was a very Forth-like language. Though, in retrospect, I favor `\` as an escape for bytecode rather than `%`. We might also use `\{token}` for escaped tokens, and `\"text...~` for escaped multi-line texts.
+One option is a straightforward expansion into bytecode, e.g. similar to the [original definition of Awelon Object](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md). The original AO was weak for staged programming, visual DSLs, or structured programming, and wasn't strongly an '[object code](http://en.wikipedia.org/wiki/Object_code)', but it was well suited for command line interfaces. The result was a very Forth-like language. Though, in retrospect, I favor `\` as an escape for bytecode rather than `%`. We might also use `\{token}` for escaped tokens, and `\"text...~` for escaped multi-line texts, since both of those are rare and it simplifies the recognizer.
 
 I propose to call the language **claw**. Command Language (or Line) for AWelon.
 
@@ -29,20 +29,21 @@ General points to help guide the design:
 
 ### Rationals, Decimals, Extensible Literals
 
-I want support for ratios and decimals (e.g. `2/3` and `3.141`) so I can at least use claw as a simple calculator. As of 2015 June, Awelon Bytecode no longer directly supports rational numbers, so I shall need to model these explicitly, e.g. using a pair of integers. A simple, promising option is to treat each as syntactic sugar:
+I want support for ratios and decimals (e.g. `2/3` and `3.141`) so I can at least use claw as a simple calculator. As of 2015 June, Awelon Bytecode no longer directly supports rational numbers, so I shall need to model these explicitly, e.g. using a pair of integers. A simple, promising option is to treat each as a sugar:
 
-        2/3     desugars to     2 3 rational    (or perhaps \#2#3 rational)
-        3.141   desugars to     3141 -3 decimal (or perhaps \#3141#3- decimal)
-        1.000   desugars to     1000 -3 decimal (preserving input format)
+        2/3     desugars to     \#2#3 rational   
+        3.141   desugars to     \#3141#3 decimal
+        -1.20   desugars to     \#120-#2 decimal
 
-We might generalize this further for basic literal and integral types:
+We generalize this idea back to primitive literal and integral types:
 
-        "foo"   desugars to     \"foo\n~ literal
         42      desugars to     \#42 integral
+        "foo"   desugars to     \"foo
+                                ~ literal
 
-Round tripping then works in reverse. Claw becomes a very simple lens to view and edit a raw AO stream. This lens is extensible. For example, one might introduce complex numbers such as `0.6+0.8i` expanding to `0.6 0.8 complex`. When viewed through another lens that doesn't know about complex numbers, we might simply halt re-sugaring at the `0.6 0.8 complex` form, which is still useful for programmers.
+Round tripping then operates in reverse, parsing structure from bytecode.
 
-I think this could be a simple, effective solution to the problem of handling ratios, decimals, and possible future literal types and extensions that can be expressed in text (vectors, matrices, date-time values, physical units, URLs, etc..).
+Claw becomes a very simple lens to view and edit a raw ABC stream. This lens is feasibly extensible, e.g. to add support for vectors, association lists, XML, date-time values, or even some simplistic structured media. This is orthogonal to the sort of structured definitions used in AO dictionaries, so it is feasible to provide multiple views or heuristically select between them.
 
 ### Claw Environments and Edit-Layer Namespaces
 

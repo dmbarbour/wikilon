@@ -14,7 +14,7 @@
 --  Eyeball friendly: 
 --    forbid C0 SP DEL C1 U+FFFD 
 --    forbid empty string
---  Text, HTML, and Delimiter friendly: 
+--  Text, HTML, Delimiter, and Extension friendly: 
 --    forbid ,;{}(|)[]<>"`&
 --    don't end with a .
 --  Not confusable with numbers:

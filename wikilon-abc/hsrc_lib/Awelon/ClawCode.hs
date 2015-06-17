@@ -1,53 +1,56 @@
-{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE ViewPatterns, EmptyDataDecls #-}
 -- | Command Language (or Command Line) for Awelon, 'claw'
 --
--- Claw is a very thin layer above Awelon Bytecode intended to make
--- ABC more suitable for command line or REPL activities by humans.
--- Claw assumes that most logic will already be specified externally
--- using a dictionary, such that the command line mostly glues a few
--- words and arguments together for a Forth-like experience.
+-- Claw is an editor-layer syntactic sugar for Awelon Bytecode (ABC),
+-- oriented towards the dictionary bindings of Awelon Object (AO).
+-- Claw is aimed towards a Forth-like programmer experience suitable
+-- for command line shells and REPLs, e.g. sentences of at most ten
+-- to twenty tokens
 --
--- Words translate to {%word} tokens, also used within Awelon Object
--- dictionaries. Values are just inline texts and numbers. The main
--- contribution of Claw is to make values and words more accessible.
--- The cost is that other tokens and multi-line texts need escapes.
+-- Claw optimizes access to words, numbers, blocks, and small texts:
 --
 -- * words: inc over mul
--- * numbers: -7 2\/3 1.2345
--- * inline texts: "foo"
--- * blocks: [2 mul] 
--- * escape ABC \\vrwlc
--- * escape a token \\{&par}
--- * escape a multi-line text \\"foo\n bar...\n~
+-- * numbers: 42 -2\/3 3.141
+-- * small inline texts: "foo"
+-- * blocks: [2 mul]
+-- * escaped ABC primitive(s): \\vrwlc
+-- * escaped ABC token: \\{&foo}
+-- * escaped ABC text: \\"foo\\n~
 --
--- Word separators are required before all elements except SP, LF,
--- and ']'. Word separators are just SP, LF, and '['. The asymmetry
--- on [] is intentional, allowing contained elements to sit adjacent
--- to the brackets but not surrounding elements. E.g. we may write
--- `[[2 mul] 3 repeat]` but not `foo[ bar ]baz`.
+-- Claw semantics is simply the expansion of Claw code into ABC. 
+-- Numerals and literals expand in a straightforward manner:
 --
--- Each value is implicitly followed by \\l, to push the value onto
--- the stack in a (stack * environment) pair. The stable environment
--- is valuable for both access by the user and integration with the
--- outside world. This can be canceled by an explicit \\r after the
--- value.
+--   42             \\#42 integral
+--   "foo"          \\"foo
+--                  ~ literal
+--   2\/3           \\#2#3 rational      
+--   3.141          \\#3141#3 decimal  
+--   -1.20          \\#120-#2 decimal
 --
--- The three escape forms are not mixed, i.e. if a token or text is
--- escaped this is easily determined by the first character after the
--- backslash, otherwise it's a list of ABC primitives ending upon any
--- word separator. Multi-line texts are included for completeness if
--- round-tripping ABC to and from Claw, and aren't very suitable 
--- for use on a command line.
+-- Note that numbers are not simplified. Numbers 2\/3 and 4\/6 have 
+-- distinct representations in ABC and this is preserved such that
+-- a programmer revisiting the code will see numbers as entered. 
 --
--- Aside: I am interested in support for lists and richly structured
--- information in text, e.g. in the style of YAML or JSON. I will save
--- use of brackets (){} for such extensions. This might not become part
--- of claw per se (big data doesn't fit on a command line anyway), but
--- rather a variant that extends claw.
+-- Words usually expand into tokens, e.g. `{%inc}{%over}{%mul}`, that
+-- bind to an implicit Awelon Object dictionary. This module assumes
+-- expansion into tokens.
+--
+-- In addition to trivial expansion, it is easy to parse the expanded
+-- bytecode back into Claw code. This allows us to store Claw code in
+-- raw bytecode form. Further, it simplifies introducing new features
+-- at the editor layer. One might transparently introduce support for
+-- vectors, matrices, math formulae, XML, etc..
+-- 
+-- Ultimately, Claw code is a very simplistic structuring of ABC. It
+-- is the simplest thing that could possibly work, and is orthogonal
+-- to semantics-layer structuring found in AO dictionary definitions.
 -- 
 module Awelon.ClawCode
     ( ClawCode(..)
-    , Op(..)
+    , ClawOp(..)
+    , Namespace
+    , clawToAO
+    , clawFromAO
     , isInlinableText
     , isUnambiguousWord
     , encode
@@ -57,11 +60,15 @@ module Awelon.ClawCode
     , DecoderStuck(..), DecoderCont(..)
     -- , fromABC
     -- , toABC
+    , module Awelon.Word
     ) where
 
+import Control.Monad
+import Control.Arrow (first)
 import Data.Monoid
 import Data.Ratio
 import Data.Char
+import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
@@ -69,31 +76,165 @@ import qualified Data.ByteString.Builder as BB
 import qualified Data.List as L
 import qualified Data.Decimal as Decimal
 import Data.String (IsString(..))
+import Awelon.ABC 
 import qualified Awelon.ABC as ABC
-import qualified Awelon.Word as W
-import Awelon.Text
+import Awelon.Word
 
 -- | Command Language for Awelon (claw)
 -- parses to a plain old sequence of operations
-newtype ClawCode = ClawCode { clawOps :: [Op] }
+newtype ClawCode = ClawCode { clawOps :: [ClawOp] }
     deriving (Eq, Ord)
 
-data Op 
-    = Word      !UTF8.ByteString    -- unambiguous words
-    | Num       !Rational           -- any number (decimal encoding favored)
-    | Text      !ABC.Text           -- inlinable texts only!
-    | Block     !ClawCode           -- first class function in Claw
-    | EscPrim   ![ABC.PrimOp]       -- escaped ABC, e.g. \vrwlc; no SP or LF
-    | EscTok    !ABC.Token
-    | EscText   !ABC.Text
+data ClawOp
+    = ClawWord  !Word                -- unambiguous words
+    | ClawInt   !Integer             -- e.g. -7         \#7- integral
+    | ClawRat   !Integer !Integer    -- e.g. 2/3        \#2#3 rational
+    | ClawDec   !Integer !Integer    -- e.g. 1.20       \#120#2 decimal
+    | ClawLit   !ABC.Text            -- inlinable texts only!
+    | ClawBlock !ClawCode            -- first class function in Claw
+    | ClawEscPrim   !ABC.PrimOp      -- escaped ABC primitive, e.g. \v
+    | ClawEscTok    !ABC.Token       -- a single escaped token
+    | ClawEscText   !ABC.Text        -- a single escaped text
     deriving (Eq, Ord)
 
--- | inline texts must avoid C0, DEL, C1, ".
+wIntegral, wRational, wDecimal, wLiteral :: Word
+wIntegral = "integral"
+wRational = "rational"
+wDecimal = "decimal"
+wLiteral = "literal"
+
+-- | convert claw code to ABC code assuming all words are valid and 
+-- words expand into simple tokens. This is the normal use case and
+-- is simple and efficient.
+clawToABC :: (Word -> ABC.Token) -> ClawCode -> ABC
+clawToABC wtok = ABC.mkABC . L.concatMap opToABC . clawOps where
+    wt = ABC_Tok . wtok
+    opToABC (ClawWord w) = [wt w]
+    opToABC (ClawInt n) = ABC.quotes n [wt wIntegral]
+    opToABC (ClawRat n d) = ABC.quotes n . ABC.quotes d $ [wt wRational]
+    opToABC (ClawDec c d) = ABC.quotes c . ABC.quotes d $ [wt wDecimal]
+    opToABC (ClawLit txt) = [ABC_Text txt, wt wLiteral]
+    opToABC (ClawBlock cc) = [ABC_Block (clawToABC wtok cc)]
+    opToABC (ClawEscPrim op) = [ABC_Prim op]
+    opToABC (ClawEscTok tok) = [ABC_Tok tok]
+    opToABC (ClawEscText txt) = [ABC_Text txt]
+
+-- | convert ABC to claw code assuming that all words expand into
+-- tokens. This potentially performs a little backtracking, but not
+-- much at the moment.
+clawFromABC :: (ABC.Token -> Maybe Word) -> ABC -> ClawCode
+clawFromABC t2w = ClawCode . reduceClawOps . fmap (escABC t2w) . abcOps where
+
+escABC :: (ABC.Token -> Maybe Word) -> ABC.Op -> ClawOp
+escABC _   (ABC_Prim op)   = ClawEscPrim op
+escABC t2w (ABC_Block abc) = ClawBlock (clawFromABC t2w abc)
+escABC _   (ABC_Text txt)  = ClawEscText txt
+escABC t2w (ABC_Tok tok)   = case t2w tok of
+    Just w | isValidWord w -> ClawWord w
+    _ -> ClawEscTok tok
+
+-- a simplistic Claw code parser
+newtype ClawParse a = ClawParse { runClawParse :: [ClawOp] -> Maybe (a, [ClawOp]) }
+
+instance Functor ClawParse where
+    fmap f = ClawParse . fmap (fmap (first f)) . runParse 
+instance Applicative ClawParse where 
+    pure = return
+    (<*>) = ap
+instance Monad ClawParse where
+    return x = ClawParse (\ ops -> return (x, ops))
+    (>>=) p1 fp2 = ClawParse $ \ ops ->
+        runParse p1 ops >>= \ (x, ops') ->
+        runParse (fp2 x) ops'
+    fail = const mzero
+instance Alternative ClawParse where
+    empty = ClawParse (const Nothing)
+    (<|>) p1 p2 = ClawParse $ \ ops -> 
+        runParse p1 ops <|> runParse p2 ops
+instance MonadPlus ClawParse where
+    mzero = empty
+    mplus = (<|>)
+
+pWord :: ClawParse Word
+pWord = ClawParse $ \ ops -> case ops of
+    (ClawWord w : ops') -> Just (w, ops')
+    _ -> Nothing
+
+pPrimOp :: ClawParse ABC.PrimOp
+pPrimOp = ClawParse $ \ ops -> case ops of
+    (ClawEscPrim op : ops') -> Just (op, ops')
+    _ -> Nothing
+
+pExactPrim :: ABC.PrimOp -> ClawParse ()
+pExactPrim op = pPrimOp >>= guard . (== op)
+
+-- parse a single ABC op
+pDigit :: ClawParse Integer
+pDigit = 
+    primOp >>= \ op ->
+    let c = ABC.abcOpToChar op in
+    let bOK = ('0' <= c) && (c <= '9') in
+    if not bOK then mzero else
+    fromIntegral (ord c - ord '0') 
+
+-- parse just the content of a `#42...` sequence
+pRawInt :: ClawParse Integer
+pRawInt = newIntOp >> (nonZero <|> return 0) where
+    newIntOp = pExactPrim ABC_newZero
+    nonZero = posInt >>= tryNegate
+    posInt =
+        pDigit >>= \ n1 ->
+        guard (n1 /= 0) >>
+        many pDigit >>= \ ns ->
+        let accum acc x = (10*acc)+x in
+        return $! L.foldl' accum n1 ns
+    getNegateFn = (negOp >> return negate) <|> return id
+    negOp = pExactPrim ABC_negate
+    tryNegate n = getNegateFn >>= \ f -> return $! f n
+        
+
+reduceClawCode :: ClawCode -> ClawCode
+reduceClawCode = ClawCode . reduceClawOps . clawOps
+
+-- Simplistic parser function that recognizes numbers and literals.
+-- This operation always succeeds.
+reduceClawOps :: [ClawOp] -> [ClawOp]
+reduceClawOps (ClawBlock cc : ops) = ClawBlock (reduceClawCode cc) : reduceClawOps ops
+reduceClawOps (rNum -> Just (num, ops)) = num : reduceClawOps ops
+reduceClawOps (rLit -> Just (txt, ops)) = ClawLit txt : reduceClawOps ops
+reduceClawOps (op : ops) = op : reduceClaw ops
+reduceClawOps [] = []
+
+-- | inline texts must at least exclude LF and double quote.
 isInlinableText :: Text -> Bool
-isInlinableText = L.all okc . LazyUTF8.toString where
-    okc c = not ((isCtl c) || ('"' == c))
-    isCtl c = (n <= 0x1F) || ((0x7F <= n) && (n <= 0x9f)) where
-        n = ord c
+isInlinableText s = BS.notElem '\n' s && BS.notElem '"' s
+
+-- extract ClawLit
+rLit :: [ClawOp] -> Maybe (ABC.Text, [ClawOp])
+rLit (ClawEscText txt : ClawWord w : ops) 
+    | (w == wLiteral) && isInlineableText txt
+    = Just (txt, ops)
+rLit _ = Nothing
+
+-- extract ClawInt, ClawRat, or ClawDec
+rNum :: [ClawOp] -> Maybe (ClawOp, [ClawOp])
+rNum = runClawParse pNum where
+    pNum = pRawInt >>= pNum1
+    pNum1 n1 = (pInt n1 <|> pRawInt >>= pNum2 n1)
+    pNum2 n1 n2 = (pRat n1 n2 <|> pDec n1 n2)
+    pInt n =
+        pWord >>= \ w ->
+        guard (w == wIntegral) >>
+        return (ClawInt n)
+    pRat num den = 
+        pWord >>= \ w ->
+        guard (w == wRational) >>
+        return (ClawRat num den)
+    pDec m p = 
+        pWord >>= \ w ->
+        guard (w == wDecimal) >>
+        return (ClawDec m p)
+
 
 -- | test whether a proposed word is unambiguous if represented 
 -- directly in Claw.

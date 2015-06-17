@@ -99,27 +99,23 @@ toListBytes = Trie.toListBy f . dict_defs where
     f w def = (Word w , _bytes def)
 
 instance DictSplitPrefix Dict where
-    wordsWithPrefix p d =
-        let tk = Trie.lookupPrefix p (dict_defs d) in
-        fmap (Word . (p <>)) (Trie.keys tk)
-    splitOnPrefix p d = 
-        -- TODO: I need more efficient access to browse a trie by prefix.
-        -- In particular, I shouldn't need to allocate new VCache nodes.
+    splitOnPrefix d p = 
         let t = Trie.lookupPrefix p (dict_defs d) in
         case Trie.trie_root t of
             Nothing -> [] -- no content under prefix
             Just v -> 
                 let tn = derefc _cm v in
-                let bExactNode = BS.null (Trie.trie_prefix tn) in
-                let bNodeAccepts = isJust (Trie.trie_accept tn) in
-                let bAccept = bExactNode && bNodeAccepts in
                 let fullPrefix = p <> Trie.trie_prefix tn in
+                let bAccept = isJust (Trie.trie_accept tn) in
                 let lAccept = if bAccept then [Right (Word fullPrefix)] else [] in
                 let lChildBytes = fmap fst $ L.filter (isJust . snd) $
                         A.assocs $ Trie.trie_branch tn
                 in
                 let lChildren = fmap (Left . (fullPrefix `BS.snoc`)) lChildBytes in
                 lAccept ++ lChildren
+    wordsWithPrefix d p =
+        let tk = Trie.lookupPrefix p (dict_defs d) in
+        fmap (Word . (p <>)) (Trie.keys tk)
 
 -- | Test whether a given word is defined in this dictionary.
 member :: Dict -> Word -> Bool

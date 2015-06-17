@@ -3,8 +3,10 @@
 module Wikilon.WAI.Pages.DictWord
     ( dictWord
     , dictWordAODef
+    , dictWordEdit
+    --, formDictWordEdit
     , dictWordRename
-    , formDictWordRename
+    --, formDictWordRename
     ) where
 
 
@@ -54,8 +56,21 @@ dictWordAODef = app where
     onGet = branchOnOutputMedia [(mediaTypeAODef, getDictWordAODef)]
     onPut = branchOnInputMedia [(mediaTypeAODef, putDictWordAODef)]
 
+
+dictWordEdit :: WikilonApp
+dictWordEdit = toBeImplementedLater "Support POST form editing of words"
+
+dictWordRename :: WikilonApp
+dictWordRename = toBeImplementedLater "form and rename of word by POST"
+
 putDictWordAODef :: WikilonApp
-putDictWordAODef = toBeImplementedLater "HTTP Put of Word definition"
+putDictWordAODef = toBeImplementedLater "PUT word via AODef definition"
+{-
+putDictWordAODef = dictWordApp $ \ w dn dw rq k ->
+    Wai.lazyRequestBody rq >>= \ body ->
+    readPVar
+-}
+    
 
 delDictWord :: WikilonApp
 delDictWord = toBeImplementedLater "HTTP Deletion of individual Word"
@@ -115,11 +130,4 @@ navWords sClass dn lWords =
     H.nav ! A.class_ (H.stringValue sClass) $ do
         H.strong (H.string sClass) 
         forM_ lWords $ \ w -> " " <> hrefDictWord dn w
-
-
-dictWordRename :: WikilonApp
-dictWordRename = toBeImplementedLater "rename word"
-
-formDictWordRename :: HTML
-formDictWordRename = error "todo"
 

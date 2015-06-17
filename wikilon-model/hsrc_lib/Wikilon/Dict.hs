@@ -54,6 +54,7 @@ module Wikilon.Dict
     , wordsInDict
     , WordPrefix
     , DictSplitPrefix(..)
+    , splitOnPrefixWords
     , DictRLU(..)
     , wordClients
     , DictUpdate(..)
@@ -150,14 +151,28 @@ type WordPrefix = BS.ByteString
 -- | for browsing a dictionary in a breadth-first manner
 class (DictView dict) => DictSplitPrefix dict where
     -- | Given a prefix, provide a list of associated words and larger
-    -- prefixes that begin with the requested prefix. Deep split on
-    -- prefix should eventually find all words with a given prefix. 
-    -- But any given step may be relatively shallow, based on whatever
-    -- is efficient for the representation.
-    splitOnPrefix :: WordPrefix -> dict -> [Either WordPrefix Word]
+    -- prefixes that begin with the requested prefix. Any given step
+    -- must be relatively shallow. 
+    splitOnPrefix ::  dict -> WordPrefix -> [Either WordPrefix Word]
 
-    -- | Obtain a complete list of words with a given prefix.
-    wordsWithPrefix :: WordPrefix -> dict -> [Word]
+    -- | Obtain a complete list of words with a given prefix. The default
+    -- implementation exhaustively repeats splitOnPrefix until only words
+    -- remain.
+    wordsWithPrefix :: dict -> WordPrefix -> [Word]
+    wordsWithPrefix dict = L.concatMap deeply . splitOnPrefix dict where
+        deeply = either (wordsWithPrefix dict) return
+
+-- | splitOnPrefixWords is a variation of Dict.splitOnPrefix that ensures
+-- every prefix in the output is also a valid Word. This is convenient 
+-- if we must somehow render our prefixes, e.g. for a user to browse.
+-- (However, it is a little less efficient than splitOnPrefix.)
+splitOnPrefixWords :: DictSplitPrefix dict => dict -> WordPrefix -> [Either WordPrefix Word]
+splitOnPrefixWords dict = L.concatMap repair . splitOnPrefix dict where
+    repair = either repairPrefix (return . Right)
+    okAsWord p = (BS.last p < 0x80) || (isValidWord (Word p))
+    repairPrefix p = 
+        if okAsWord p then return (Left p) else
+        splitOnPrefixWords dict p
 
 -- | It's very useful to know who uses what. We'll do this at the
 -- granularity of individual tokens, since it's also very useful
