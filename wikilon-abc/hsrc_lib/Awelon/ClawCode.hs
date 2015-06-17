@@ -21,11 +21,11 @@
 -- Numerals and literals expand in a straightforward manner:
 --
 --   42             \\#42 integral
---   "foo"          \\"foo
---                  ~ literal
 --   2\/3           \\#2#3 rational      
 --   3.141          \\#3141#3 decimal  
 --   -1.20          \\#120-#2 decimal
+--   "foo"          \\"foo
+--                  ~ literal
 --
 -- Note that numbers are not simplified. Numbers 2\/3 and 4\/6 have 
 -- distinct representations in ABC and this is preserved such that
@@ -86,16 +86,21 @@ newtype ClawCode = ClawCode { clawOps :: [ClawOp] }
     deriving (Eq, Ord)
 
 data ClawOp
-    = ClawWord  !Word                -- unambiguous words
-    | ClawInt   !Integer             -- e.g. -7         \#7- integral
-    | ClawRat   !Integer !Integer    -- e.g. 2/3        \#2#3 rational
-    | ClawDec   !Integer !Integer    -- e.g. 1.20       \#120#2 decimal
-    | ClawLit   !ABC.Text            -- inlinable texts only!
-    | ClawBlock !ClawCode            -- first class function in Claw
-    | ClawEscPrim   !ABC.PrimOp      -- escaped ABC primitive, e.g. \v
-    | ClawEscTok    !ABC.Token       -- a single escaped token
-    | ClawEscText   !ABC.Text        -- a single escaped text
+    = ClawWord      !Word               -- unambiguous words
+    | ClawIntegral  !Integer            -- e.g. -7         \#7- integral
+    | ClawRational  !Integer !Integer   -- e.g. 2/3        \#2#3 rational
+    | ClawDecimal   !Integer !Integer   -- e.g. 1.20       \#120#2 decimal
+    | ClawLiteral   !ABC.Text           -- inlinable texts only!
+    | ClawBlock     !ClawCode           -- first class function in Claw
+    | ClawEscPrim   !ABC.PrimOp         -- escaped ABC primitive, e.g. \v
+    | ClawEscTok    !ABC.Token          -- a single escaped token
+    | ClawEscText   !ABC.Text           -- a single escaped text
     deriving (Eq, Ord)
+
+-- | Claw code generally operates in a namespace. This namespace must
+-- be a valid Word, and becomes a prefix for other words within the 
+-- Claw code.
+type Namespace = Word
 
 wIntegral, wRational, wDecimal, wLiteral :: Word
 wIntegral = "integral"
@@ -110,10 +115,10 @@ clawToABC :: (Word -> ABC.Token) -> ClawCode -> ABC
 clawToABC wtok = ABC.mkABC . L.concatMap opToABC . clawOps where
     wt = ABC_Tok . wtok
     opToABC (ClawWord w) = [wt w]
-    opToABC (ClawInt n) = ABC.quotes n [wt wIntegral]
-    opToABC (ClawRat n d) = ABC.quotes n . ABC.quotes d $ [wt wRational]
-    opToABC (ClawDec c d) = ABC.quotes c . ABC.quotes d $ [wt wDecimal]
-    opToABC (ClawLit txt) = [ABC_Text txt, wt wLiteral]
+    opToABC (ClawIntegral n) = ABC.quotes n [wt wIntegral]
+    opToABC (ClawRational n d) = ABC.quotes n . ABC.quotes d $ [wt wRational]
+    opToABC (ClawDecimal c d) = ABC.quotes c . ABC.quotes d $ [wt wDecimal]
+    opToABC (ClawLiteral txt) = [ABC_Text txt, wt wLiteral]
     opToABC (ClawBlock cc) = [ABC_Block (clawToABC wtok cc)]
     opToABC (ClawEscPrim op) = [ABC_Prim op]
     opToABC (ClawEscTok tok) = [ABC_Tok tok]
@@ -159,6 +164,9 @@ pWord :: ClawParse Word
 pWord = ClawParse $ \ ops -> case ops of
     (ClawWord w : ops') -> Just (w, ops')
     _ -> Nothing
+
+pExactWord :: Word -> ClawParse ()
+pExactWord w = pWord >>= guard . (== w)
 
 pPrimOp :: ClawParse ABC.PrimOp
 pPrimOp = ClawParse $ \ ops -> case ops of
@@ -217,23 +225,19 @@ rLit (ClawEscText txt : ClawWord w : ops)
 rLit _ = Nothing
 
 -- extract ClawInt, ClawRat, or ClawDec
+-- maybe later add three-part numbers for scientific
+--   e.g. 1.20e3 becomes #120#2#3 decimalExp
 rNum :: [ClawOp] -> Maybe (ClawOp, [ClawOp])
 rNum = runClawParse pNum where
     pNum = pRawInt >>= pNum1
     pNum1 n1 = (pInt n1 <|> pRawInt >>= pNum2 n1)
     pNum2 n1 n2 = (pRat n1 n2 <|> pDec n1 n2)
-    pInt n =
-        pWord >>= \ w ->
-        guard (w == wIntegral) >>
-        return (ClawInt n)
-    pRat num den = 
-        pWord >>= \ w ->
-        guard (w == wRational) >>
-        return (ClawRat num den)
+    pInt n = pExactWord wIntegral >> return (ClawInt n)
+    pRat n d = pExactWord wRational >> return (ClawRat n d)
     pDec m p = 
-        pWord >>= \ w ->
-        guard (w == wDecimal) >>
-        return (ClawDec m p)
+        guard (p > 0) >>    -- at least one decimal place
+        pExactWord wDecimal >>  -- followed by word 'decimal'
+        return (ClawDecimal m p) 
 
 
 -- | test whether a proposed word is unambiguous if represented 
