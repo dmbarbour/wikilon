@@ -1,49 +1,52 @@
 {-# LANGUAGE ViewPatterns, EmptyDataDecls #-}
 -- | Command Language (or Command Line) for Awelon, 'claw'
 --
--- Claw is an editor-layer syntactic sugar for Awelon Bytecode (ABC),
--- oriented towards the dictionary bindings of Awelon Object (AO).
--- Claw is aimed towards a Forth-like programmer experience suitable
--- for command line shells and REPLs, e.g. sentences of at most ten
--- to twenty tokens
+-- Claw is an editable view of Awelon Bytecode (ABC), essentially a
+-- syntactic sugar with a reversible, context-free expansion process.
+-- Claw is very simple, and its main purpose is to amplify the user's
+-- abilility to write REPL or shell commands via keyboard. 
 --
--- Claw optimizes access to words, numbers, blocks, and small texts:
+-- Example codes and expansions:
 --
--- * words: inc over mul
--- * numbers: 42 -2\/3 3.141
--- * small inline texts: "foo"
--- * blocks: [2 mul]
--- * escaped ABC primitive(s): \\vrwlc
--- * escaped ABC token: \\{&foo}
--- * escaped ABC text: \\"foo\\n~
---
--- Claw semantics is simply the expansion of Claw code into ABC. 
--- Numerals and literals expand in a straightforward manner:
---
---   42             \\#42 integral
---   2\/3           \\#2#3 rational      
---   3.141          \\#3141#3 decimal  
---   -1.20          \\#120-#2 decimal
---   "foo"          \\"foo
+--      2\/3        2 3 ratio
+--      4\/10       4 10 ratio
+--      3.141       3141 3 decimal
+--      -1.20       -120 2 decimal
+--      6.02e23     6.02 23 exp10
+--      42          \\#42 integer
+--      -7          \\#7- integer
+--      "foo"       \\"foo
 --                  ~ literal
+--      [foo]       \\[foo] block
 --
--- Note that numbers are not simplified. Numbers 2\/3 and 4\/6 have 
--- distinct representations in ABC and this is preserved such that
--- a programmer revisiting the code will see numbers as entered. 
+-- Currently the focus is on numbers and inline texts, sufficient for
+-- a Forth-like experience. However, claw code is very extensible. An
+-- extension might enable vectors or association lists and so on. Or
+-- even graphs and diagrams for a structure editor.
 --
--- Words usually expand into tokens, e.g. `{%inc}{%over}{%mul}`, that
--- bind to an implicit Awelon Object dictionary. This module assumes
--- expansion into tokens.
+-- Words are the exception to Claw's context free encodings. A word is
+-- context sensitive to the current namespace
 --
--- In addition to trivial expansion, it is easy to parse the expanded
--- bytecode back into Claw code. This allows us to store Claw code in
--- raw bytecode form. Further, it simplifies introducing new features
--- at the editor layer. One might transparently introduce support for
--- vectors, matrices, math formulae, XML, etc..
--- 
--- Ultimately, Claw code is a very simplistic structuring of ABC. It
--- is the simplest thing that could possibly work, and is orthogonal
--- to semantics-layer structuring found in AO dictionary definitions.
+--      #NS         \{&ns:NS}      (set current namespace to NS)
+--      integer     \{%NSinteger}  (context dependent on namespace)
+--
+-- At the bottom level are just a few primary escape forms:
+--
+--      \\vrwlc
+--      \\{token}
+--      \\[mul]
+--      \\"escaped text 
+--       possibly having
+--       multiple lines
+--      ~
+--
+-- These expand directly into bytecode, though the escaped blocks
+-- must be expanded recursively for the inner content. 
+--
+-- The reverse path, from bytecode back into claw code, is equally
+-- important. Claw code is stored in the expanded form, which is 
+-- easy to process and preserves meaning regardless of which 
+-- extensions a given editor understands.
 -- 
 module Awelon.ClawCode
     ( ClawCode(..)
@@ -81,26 +84,35 @@ import qualified Awelon.ABC as ABC
 import Awelon.Word
 
 -- | Command Language for Awelon (claw)
--- parses to a plain old sequence of operations
-newtype ClawCode = ClawCode { clawOps :: [ClawOp] }
-    deriving (Eq, Ord)
+-- expands into a plain old sequence of operations
+data ClawCode ext = ClawCode 
+    { clawNS  :: !Namespace
+    , clawOps :: [ClawBase ext]
+    } deriving (Eq, Ord)
 
-data ClawOp
+data ClawBase ext
     = ClawWord      !Word               -- unambiguous words
-    | ClawIntegral  !Integer            -- e.g. -7         \#7- integral
-    | ClawRational  !Integer !Integer   -- e.g. 2/3        \#2#3 rational
+    | ClawEscPrim   !ABC.PrimOp
+    | ClawEscText   !ABC.
+    | ClawInteger   !Integer            -- e.g. -7         \#7- integral
+    | ClawRatio     !Integer !Integer   -- e.g. 2/3        \#2#3 rational
     | ClawDecimal   !Integer !Integer   -- e.g. 1.20       \#120#2 decimal
     | ClawLiteral   !ABC.Text           -- inlinable texts only!
-    | ClawBlock     !ClawCode           -- first class function in Claw
-    | ClawEscPrim   !ABC.PrimOp         -- escaped ABC primitive, e.g. \v
-    | ClawEscTok    !ABC.Token          -- a single escaped token
-    | ClawEscText   !ABC.Text           -- a single escaped text
+    | ClawBlock     ![ClawOp]           -- first class Claw function
+    | ClawEscPrim   !ABC.PrimOp         -- escaped ABC primitive
+    | ClawEscTok    !ABC.Token          -- escaped token
+    | ClawEscText   !ABC.Text           -- escaped text
+    | ClawEscBlock  ![ClawOp]           -- escaped block
     deriving (Eq, Ord)
 
--- | Claw code generally operates in a namespace. This namespace must
--- be a valid Word, and becomes a prefix for other words within the 
--- Claw code.
-type Namespace = Word
+-- | A region of claw code has exactly one namespace. A namespace is
+-- a prefix for all the words in the namespace, and should be a valid
+-- Utf8 string.
+type Namespace = UTF8.ByteString
+
+-- 
+
+
 
 wIntegral, wRational, wDecimal, wLiteral :: Word
 wIntegral = "integral"
