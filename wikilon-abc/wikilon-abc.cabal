@@ -53,7 +53,7 @@ Library
     Awelon.Base16
     Awelon.Text
     Awelon.Word
-    -- Awelon.ClawCode
+    Awelon.ClawCode
 
   Other-Modules:
 
