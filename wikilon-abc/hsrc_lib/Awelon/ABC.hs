@@ -18,6 +18,7 @@ module Awelon.ABC
     , decodeLiteral
     , Quotable(..)
     , quote, quoteList, quotesList
+    , primQuoteInteger
 
     , opsCancel
     , tokens
@@ -345,15 +346,18 @@ instance Quotable PrimOp where
 instance Quotable Op where
     quotes = (:)
     {-# INLINE quotes #-} 
-
 instance Quotable Integer where 
-    quotes n | (n < 0) = qN (negate n) . quotes ABC_negate
-             | otherwise = qN n
+    quotes n = (++) (fmap ABC_Prim qn) where
+        qn = primQuoteInteger n []
 
--- quote a non-negative integral
-qN :: Integer -> [Op] -> [Op]
-qN 0 = quotes ABC_newZero
-qN n = let (q,r) = n `divMod` 10 in qN q . quotes (opd r)
+-- | Quote an integer into a sequence of ABC primitives.
+primQuoteInteger :: Integer -> [PrimOp] -> [PrimOp]
+primQuoteInteger = qi where
+    p = (:)
+    qi n | (n < 0) = qn (negate n) . p ABC_negate
+         | otherwise = qn n
+    qn 0 = p ABC_newZero
+    qn n = let (q,r) = n `divMod` 10 in qn q . p (opd r)
 
 opdArray :: A.Array Int PrimOp 
 opdArray = A.listArray (0,9) $

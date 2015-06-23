@@ -3,8 +3,8 @@
 --
 -- Claw is an editable view of Awelon Bytecode (ABC), essentially a
 -- syntactic sugar with a reversible, context-free expansion process.
--- Claw is very simple, and its main purpose is to amplify the user's
--- abilility to write REPL or shell commands via keyboard. 
+-- Claw is very simple, and its main purpose is to amplify the human
+-- user's abilility to write REPL or shell commands via keyboard.
 --
 -- Example codes and expansions:
 --
@@ -25,6 +25,9 @@
 -- even graphs and diagrams for a structure editor. This code for Claw
 -- doesn't focus on support for extensibility, but I would like to try
 -- modeling claw within an AO dictionary.
+--
+-- Decimal numbers are currently limited to 255 decimal places or less
+-- (via Data.Decimal).
 --
 -- Words are the exception to Claw's context free encodings. A word is
 -- context sensitive to the current namespace
@@ -56,17 +59,17 @@ module Awelon.ClawCode
     , ClawOp(..)
     , Namespace
     , ClawInt
-    , ClawRatio
+    , ClawRatio(..)
+    , ClawExp10(..)
     , ClawDecimal
-    , ClawExp10
     , clawToABC
     , clawFromABC
     , isInlineableText
 
-{-
     , encode
     , encode'
-    , encodeNum
+
+{-
     , decode, decoder
     , DecoderStuck(..), DecoderCont(..)
 -}
@@ -75,8 +78,6 @@ module Awelon.ClawCode
     , module Awelon.Word
     ) where
 
-import Control.Monad
-import Control.Arrow (first)
 import Data.Monoid
 import Data.Char
 import qualified Data.ByteString.Char8 as BS
@@ -85,9 +86,9 @@ import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.Builder as BB
 import qualified Data.List as L
-import qualified Data.Decimal as Decimal
+import qualified Data.Decimal as D
 import Data.String (IsString(..))
-import Awelon.ABC 
+import Awelon.ABC (ABC,Op(..),PrimOp(..))
 import qualified Awelon.ABC as ABC
 import Awelon.Word
 
@@ -100,10 +101,10 @@ data ClawCode = ClawCode
 data ClawOp 
     = NS !Namespace     -- #bar:
     | CW !Word          -- mul inc
-    | P0 !ABC.PrimOp    -- escaped ABC ops
-    | T0 !ABC.Text      -- escaped texts
+    | T0 !ABC.Text      -- escaped text
     | K0 !ABC.Token     -- escaped token
-    | B0 ![ClawOp]      -- escaped blocks 
+    | P0 !ABC.PrimOp    -- escaped ABC ops
+    | B0 ![ClawOp]      -- escaped blocks
     | NI !ClawInt       -- integer
     | NR !ClawRatio     -- ratio
     | ND !ClawDecimal   -- decimal
@@ -113,8 +114,8 @@ data ClawOp
     deriving (Ord, Eq)
     
 type ClawInt = Integer
+type ClawDecimal = D.Decimal -- current limit 255 decimal places
 data ClawRatio = ClawRatio !ClawInt !ClawInt deriving (Eq, Ord)
-data ClawDecimal = ClawDecimal !ClawInt !ClawInt deriving (Eq, Ord)
 data ClawExp10 = ClawExp10 !ClawDecimal !ClawInt deriving (Eq, Ord)
 
 -- | A region of claw code has exactly one namespace. This serves as
@@ -135,39 +136,50 @@ wExp10 = "exp10"
 nsTokPrefix :: UTF8.ByteString
 nsTokPrefix = "&ns:"
 
--- | Translate claw code into ABC code
+-- | Convert claw code to ABC for interpretation or storage. This is
+-- essentially a 'compiler' for Claw code, though resulting bytecode 
+-- will usually need linking and processing for performance.
 clawToABC :: ClawCode -> ABC
-clawToABC cc = mkABC $ opsToABC (clawNS cc) (clawOps cc)
+clawToABC = mconcat . zns opToABC
 
--- | convert Claw operations into Awelon bytecode;
--- requires current namespace to convert words
-opsToABC :: Namespace -> [ClawOp] -> [ABC.Op]
-opsToABC _ [] = []
-opsToABC _ (NS ns : ops) = ABC_Tok nstok : opsToABC ns ops where 
-    nstok = nsTokPrefix <> ns
-opsToABC ns (CW (Word w) : ops) = ABC_Tok wtok : opsToABC ns ops where
-    wtok = mconcat ["%", ns, w]
-opsToABC ns (P0 prim : ops) = (ABC_Prim prim : opsToABC ns ops)
-opsToABC ns (T0 txt : ops) = (ABC_Text txt : opsToABC ns ops)
-opsToABC ns (K0 tok : ops) = (ABC_Tok tok : opsToABC ns ops)
-opsToABC ns (B0 cc : ops) = (ABC_Block abc : opsToABC ns ops) where
-    abc = mkABC $ opsToABC ns cc
-opsToABC ns (NI i : ops) = ABC.quote i ++ opsToABC ns (CW wInteger : ops)
-opsToABC ns (NR (ClawRatio num den) : ops) = 
-    opsToABC ns (NI num : NI den : CW wRatio : ops)
-opsToABC ns (ND (ClawDecimal body places) : ops) = 
-    opsToABC ns (NI body : NI places : CW wDecimal : ops)
-opsToABC ns (NE (ClawExp10 dec exp10) : ops) = 
-    opsToABC ns (ND dec : NI exp10 : CW wExp10 : ops)
-opsToABC ns (TL lit : ops) = opsToABC ns (T0 lit : CW wLiteral : ops)
-opsToABC ns (BC cc : ops) = opsToABC ns (B0 cc : CW wBlock : ops)
+zns :: (Namespace -> ClawOp -> a) -> ClawCode -> [a]
+zns f = \ cc -> jfn (clawNS cc) (clawOps cc) where
+    jfn _ (op@(NS ns) : ops) = f ns op : jfn ns ops
+    jfn ns (op : ops) = f ns op : jfn ns ops
+    jfn _ [] = []
 
--- | parse Claw code from bytecode, given the initial namespace.
+oneOp :: ABC.Op -> ABC
+oneOp = ABC.mkABC . return 
+
+expand :: Namespace -> [ClawOp] -> ABC
+expand ns = clawToABC . ClawCode ns
+
+opToABC :: Namespace -> ClawOp -> ABC
+-- low level
+opToABC _ (NS ns) = oneOp $ ABC_Tok $ nsTokPrefix <> ns
+opToABC ns (CW (Word w)) = oneOp $ ABC_Tok $ mconcat ["%", ns, w]
+opToABC _ (P0 op) = oneOp $ ABC_Prim op
+opToABC _ (T0 txt) = oneOp $ ABC_Text txt
+opToABC _ (K0 tok) = oneOp $ ABC_Tok tok
+opToABC ns (B0 cc) = oneOp $ ABC_Block $ expand ns cc
+-- expansions
+opToABC ns (NI i) = expand ns (escInt ++ [CW wInteger]) where
+    escInt = fmap P0 $ ABC.primQuoteInteger i []
+opToABC ns (NR (ClawRatio n d)) = expand ns [NI n, NI d, CW wRatio]
+opToABC ns (ND (D.Decimal dp m)) = 
+    expand ns [NI m, NI (fromIntegral dp), CW wDecimal]
+opToABC ns (NE (ClawExp10 d x)) = expand ns [ND d, NI x, CW wExp10]
+opToABC ns (TL lit) = expand ns [T0 lit, CW wLiteral]
+opToABC ns (BC cc) = expand ns [B0 cc, CW wBlock]
+
+-- | parse Claw code from bytecode. This requires the current
+-- namespace in order to provide some useful context.
 clawFromABC :: Namespace -> ABC -> ClawCode
-clawFromABC ns = ClawCode ns . reduceOps . escABC ns . ABC.abcOps
+clawFromABC ns = ClawCode ns . reduceClaw . escABC ns . ABC.abcOps
 
 -- | recognize claw words from bytecode 
--- {%foo:word} → word 
+--
+--   {%foo:word} → word 
 --
 -- if namespace is `foo:` 
 --   and `word` doesn't start with digits, etc.
@@ -181,78 +193,178 @@ escWord ns tok = case BS.uncons tok of
     _ -> Nothing
 
 -- | recognize claw namespace tokens {&ns:NS} → #NS
+-- namespace must also be valid word (or empty string)
 escNSTok :: ABC.Token -> Maybe Namespace
 escNSTok tok =
-    let bNS = nsTokPrefix `BS.isPrefixOf` tok in
+    let bMatchPrefix = nsTokPrefix `BS.isPrefixOf` tok in
     let ns = BS.drop 4 tok in
-    let bOK = bNS && isValidWord (Word ns) in
+    let bValidNS = BS.null ns || isValidWord (Word ns) in
+    let bOK = bMatchPrefix && bValidNS in
     if bOK then Just ns else Nothing
 
--- | recognize basic claw operations and handle the namespace contexts.
--- Also, removes any SP and LF identity operators, whose main role is
--- ABC-layer formatting. 
+-- | Identify SP and LF identity operators from ABC-layer formatting.
+abcWS :: ABC.PrimOp -> Bool
+abcWS ABC_SP = True
+abcWS ABC_LF = True
+abcWS _ = False
+
+-- | recognize basic claw operations and handle namespace context.
+-- This will also filter all ABC_SP and ABC_LF elements from the
+-- input (which simplifies further processing)
 escABC :: Namespace -> [ABC.Op] -> [ClawOp]
-escABC ns (ABC_Tok tok : ops) | Just w <- escWord ns tok = CW w : escABC ns ops
-escABC _ (ABC_Tok tok : ops) | Just ns <- escNSTok tok = NS ns : escABC ns ops
-escABC ns (ABC_Tok tok : ops) = K0 tok : escABC ns ops
-escABC ns (ABC_Prim op : ops) 
-    | bWhitespace = escABC ns ops -- skip SP and LF (identity prims)
-    | otherwise = P0 op : escABC ns ops -- keep all other primitives
-    where bWhitespace = (ABC_SP == op) || (ABC_LF == op)
+escABC ns (ABC_Tok tok : ops) 
+  | Just w <- escWord ns tok = CW w : escABC ns ops
+  | Just ns' <- escNSTok tok = NS ns' : escABC ns' ops
+  | otherwise = K0 tok : escABC ns ops
+escABC ns (ABC_Prim op : ops)  
+  | abcWS op = escABC ns ops
+  | otherwise = P0 op : escABC ns ops
 escABC ns (ABC_Text txt : ops) = T0 txt : escABC ns ops
 escABC ns (ABC_Block abc : ops) = B0 cc : escABC ns ops where
     cc = escABC ns (ABC.abcOps abc)
 escABC _ [] = []
 
--- | parse structured values from lower level claw code...
-reduceOps :: [ClawOp] -> [ClawOp]
-reduceOps = reduce [] where
-    reduce lhs [] = L.reverse lhs
-    reduce lhs rhs
-        | Just (n, rhs') <- parseInt rhs
-        = reduce (NI n : lhs) rhs'
-    reduce (NI d : NI n : lhs) (CW w : rhs) 
-        | (w == wRatio) && (d > 0)
-        = reduce (NR (ClawRatio n d) : lhs) rhs
-    reduce (NI dp : NI body : lhs) (CW w : rhs)
-        | (w == wDecimal) && (dp > 0)
-        = reduce (ND (ClawDecimal body dp) : lhs) rhs
-    reduce (NI exp10 : ND dec : lhs) (CW w : rhs)
-        | (w == wExp10)
-        = reduce (NE (ClawExp10 dec exp10) : lhs) rhs
-    reduce (T0 txt : lhs) (CW w : rhs) 
-        | (w == wLiteral) && isInlineableText txt
-        = reduce (TL txt : lhs) rhs
-    reduce (B0 cc : lhs) (CW w : rhs) | (w == wBlock) 
-        = reduce (BC cc : lhs) rhs
-    reduce lhs (op:rhs) = reduce (op:lhs) rhs
+-- | collapse structured values from lower level claw code.
+--
+-- Targets:
+--  full blocks
+--  texts
+--  integers
+--  ratios
+--  decimals
+--  e-notation
+--
+-- At the moment, this is not a streaming reducer but rather a
+-- zipper-based implementation. 
+--
+reduceClaw :: [ClawOp] -> [ClawOp]
+reduceClaw = rdz []
 
--- | parse integer e.g. from form `\\#42 integer`. 
-parseInt :: [ClawOp] -> Maybe (ClawInt, [ClawOp]) 
-parseInt = p0 where
-    p0 (P0 ABC_newZero : ops) = pn 0 ops
-    p0 _ = Nothing
-    pn !n (P0 (digitOp -> Just d) : ops) = pn ((10*n)+d) ops
-    pn !n (P0 ABC_negate : ops) = pn (negate n) ops 
-    pn !n (CW w : ops) | (w == wInteger) = Just (n, ops) -- done
-    pn _ _ = Nothing
+rdz :: [ClawOp] -> [ClawOp] -> [ClawOp]
+rdz lhs (CW w : rhs)
+    | (w == wInteger)
+    , Just (lhs', n) <- parseIntR lhs
+    = rdz (NI n : lhs') rhs
+rdz (NI d : NI n : lhs) (CW w : rhs)
+    | (w == wRatio) && (d > 0)
+    = rdz (NR r : lhs) rhs
+    where r = ClawRatio n d
+rdz (NI dp : NI m : lhs) (CW w : rhs) 
+    | (w == wDecimal) && (dp > 0) && (dp <= 255)
+    = rdz (ND dec : lhs) rhs
+    where dec = D.Decimal (fromIntegral dp) m
+rdz (NI e : ND d : lhs) (CW w : rhs)
+    | (w == wExp10)
+    = rdz (NE ne : lhs) rhs
+    where ne = ClawExp10 d e
+rdz (T0 txt : lhs) (CW w : rhs)
+    | (w == wLiteral) && (isInlineableText txt)
+    = rdz (TL txt : lhs) rhs
+rdz (B0 cc : lhs) (CW w : rhs)
+    | (w == wBlock)
+    = rdz (BC cc : lhs) rhs
+rdz lhs (op : rhs) = rdz (op : lhs) rhs -- step
+rdz lhs [] = L.reverse lhs -- all done
+
+-- | parse raw integer (e.g. #42) from lhs in the zipper-based
+-- reduction, i.e. we'll see #42 from the left hand side, parse
+-- back to the '#', and accumulate the operations on the way.
+--
+-- This uses a simple strategy. We obtain a list of numeric operations
+-- for building the integer up to '#', then we process it.
+parseIntR :: [ClawOp] -> Maybe ([ClawOp], ClawInt)
+parseIntR = run where
+  run ops = 
+    collectR [] ops >>= \(fs, ops') ->
+    return (ops', composeList fs 0)
+  collectR fs (P0 op : ops)
+    | Just f <- intOp op = collectR (f:fs) ops -- include value
+    | (op == ABC_newZero) = Just (fs, ops) -- done
+    | abcWS op = collectR fs ops
+    | otherwise = Nothing
+  collectR _ _ = Nothing -- 
+
+composeList :: [a -> a] -> a -> a
+composeList = L.foldr (flip (.)) id
+
+intOp :: ABC.PrimOp -> Maybe (ClawInt -> ClawInt)
+intOp (digitOp -> Just d) = Just step where
+    step !n = ((10*n)+d)
+intOp ABC_negate = Just negate
+intOp _ = Nothing
 
 digitOp :: ABC.PrimOp -> Maybe ClawInt
 digitOp op =
     let c = ABC.abcOpToChar op in
     let bOK = ('0' <= c) && (c <= '9') in
     if not bOK then Nothing else
-    Just (fromIntegral $ ord c - ord '0')
+    Just $! fromIntegral $ ord c - ord '0'
 
 -- | Test whether the text is valid for inline representation.
 -- This minimally requires the text does not use `"` or LF.
 isInlineableText :: ABC.Text -> Bool
 isInlineableText s = LBS.notElem '"' s && LBS.notElem '\n' s
 
+-- | Render claw code as a lazy utf-8 bytestring for human use and
+-- editing. Note that the current implementation isn't optimal for
+-- large 
+encode :: ClawCode -> LazyUTF8.ByteString
+encode = BB.toLazyByteString . encode'
+
+encode' :: ClawCode -> BB.Builder
+encode' = encodeOps . clawOps
+
+-- collect non-whitespace operators for display together
+joinP0 :: [ABC.PrimOp] -> [ClawOp] -> ([ABC.PrimOp],[ClawOp])
+joinP0 abc (P0 op : ops) | not (abcWS op) = joinP0 (op:abc) ops
+joinP0 abc ops = (L.reverse abc, ops)
+
+-- encode a list of operations, with special case to encode long
+-- strings of primitive operations into a single escape string.
+encodeOps :: [ClawOp] -> BB.Builder
+encodeOps (P0 op : ops) | not (abcWS op) = output where
+    output = BB.char8 '\\' <> encPrims abc <> moreOps ops'
+    encPrims = BB.string8 . fmap ABC.abcOpToChar
+    (abc,ops') = joinP0 [op] ops
+encodeOps (op:ops) = encodeOp op <> moreOps ops
+encodeOps [] = mempty
+
+-- encode operators after adding a space character
+moreOps :: [ClawOp] -> BB.Builder
+moreOps [] = mempty
+moreOps ops = BB.char8 ' ' <> encodeOps ops
+
+-- encode a singular operation.
+encodeOp :: ClawOp -> BB.Builder
+encodeOp (NS ns) = BB.char8 '#' <> BB.byteString ns
+encodeOp (CW (Word w)) = BB.byteString w
+encodeOp (NI i) = BB.string8 (show i)
+encodeOp (TL txt) = BB.char8 '"' <> BB.lazyByteString txt <> BB.char8 '"'
+encodeOp (BC cc) = encBlock cc
+encodeOp (NR (ClawRatio n d)) = 
+    BB.string8 (show n) <> BB.char8 '/' <> BB.string8 (show d)
+encodeOp (ND d) = BB.string8 (show d)
+encodeOp (NE (ClawExp10 d e)) = 
+    BB.string8 (show d) <> BB.char8 'e' <> BB.string8 (show e)
+encodeOp (P0 op) 
+    | abcWS op = mempty
+    | otherwise = BB.char8 '\\' <> c
+    where c = BB.char8 $ ABC.abcOpToChar op
+encodeOp (T0 txt) = BB.char8 '\n' <> BB.char8 '\\' <> ABC.encodeTextBB txt
+encodeOp (K0 tok) = BB.char8 '\\' <> ABC.encodeTokenBB tok
+encodeOp (B0 cc) = BB.char8 '\\' <> encBlock cc
+
+encBlock :: [ClawOp] -> BB.Builder
+encBlock cc = BB.char8 '[' <> encodeOps cc <> BB.char8 ']'
+
+instance Show ClawOp where
+    showsPrec _ = showList . (:[])
+    showList = (++) . LazyUTF8.toString . BB.toLazyByteString . encodeOps
+instance Show ClawCode where
+    showsPrec _ = showList . clawOps
+
 
 {-
-
-
 
 -- | Encode Claw into a Lazy UTF8 Bytestring. Assumes valid input.
 encode :: ClawCode -> LazyUTF8.ByteString
@@ -260,7 +372,6 @@ encode = BB.toLazyByteString . encode'
 
 encode' :: ClawCode -> BB.Builder
 encode' = mconcat . injectSpaces . fmap _encodeOp . clawOps where
-    injectSpaces = L.intersperse (BB.char8 ' ')
 
 _encodeOp :: Op -> BB.Builder
 _encodeOp (Word w) = BB.byteString w
@@ -404,6 +515,10 @@ instance Show ClawCode where
     showsPrec _ = showString . LazyUTF8.toString . encode
 
 
+impossible :: String -> a
+impossible = error . clawCodeErr
+
 clawCodeErr :: String -> String
 clawCodeErr = (++) "Awelon.ClawCode: " 
+
 -}

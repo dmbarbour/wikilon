@@ -149,6 +149,10 @@ For namespace `b:`, we could define a word `b:meta:ns` that provides some ad-hoc
 
 Some editors might be configured to skip the user query and define words automatically. Similarly, a linting tool might identify all the undefined words for a new namespace. Using this technique effectively pushes this sort of implementation inheritance into our tooling layers to avoid compromising the semantic layers.
 
+### Debugging
+
+It might be useful to also optimize some simple debugging models outside the effects model, e.g. via annotations. But do I need any syntax for this? I can probably do it entirely using normal words...
+
 ### Multi-Media Claw 
 
 Claw code can be extended with new literal types. While there are some rather severe limits on what extensions are viable for use in a typical command-line environment, these limitations might be relaxed in context of iPython-notebook style environments, live coding, or structure editors. A structure editor could feasibly support rich media such as graphs and diagrams as simple claw literals.

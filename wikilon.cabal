@@ -37,6 +37,11 @@ Executable wikilon
   build-depends: base (>= 4.6 && < 5)
     , wikilon-wai
     , wikilon-store
+
+    -- add model and abc for cabal repl (in sandbox)
+    , wikilon-model
+    , wikilon-abc
+
     , vcache
     , easy-file (>= 0.2)
     , mtl
