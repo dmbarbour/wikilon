@@ -266,6 +266,7 @@ rdz (T0 txt : lhs) (CW w : rhs)
 rdz (B0 cc : lhs) (CW w : rhs)
     | (w == wBlock)
     = rdz (BC cc : lhs) rhs
+rdz lhs (B0 cc : rhs) = rdz (B0 (reduceClaw cc) : lhs) rhs -- recursion
 rdz lhs (op : rhs) = rdz (op : lhs) rhs -- step
 rdz lhs [] = L.reverse lhs -- all done
 
@@ -413,7 +414,6 @@ decode' cc bWS r txt0 =
         Just (c, txt) -> case c of
             ' ' -> decode' cc True r txt
             '\n' -> decode' cc True r txt
-
             ']' -> case cc of
                 DecodeBlock bEsc ops cc' -> decode' cc' False (b:ops) txt where
                     b = bType $ L.reverse r
@@ -426,7 +426,7 @@ decode' cc bWS r txt0 =
                 Nothing -> decoderIsStuck
                 Just idx ->
                     let (lit, litEnd) = LBS.splitAt idx txt in
-                    let bOK = bWS && LBS.notElem '\n' lit in
+                    let bOK = LBS.notElem '\n' lit in
                     if not bOK then decoderIsStuck else
                     decode' cc False (TL lit : r) (LBS.drop 1 litEnd)
             '#' -> 
@@ -477,6 +477,7 @@ charToEscPrim c =
     guard (not (abcWS op)) >>
     return op
 
+decodeWordOrNumber :: ABC.Text -> Maybe (ClawOp, ABC.Text)
 decodeWordOrNumber = error "todo: decode word or number"
 
 -- I'll assume the empty namespace when using the 'fromString'
