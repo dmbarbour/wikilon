@@ -69,15 +69,16 @@ module Awelon.ClawCode
     , encode
     , encode'
 
-{-
-    , decode, decoder
-    , DecoderStuck(..), DecoderCont(..)
--}
-    -- , fromABC
-    -- , toABC
+    , decode
+    , runDecoder
+    , DecoderState(..)
+    , DecoderCont(..)
+
+    , PrimOp(..)
     , module Awelon.Word
     ) where
 
+import Control.Monad
 import Data.Monoid
 import Data.Char
 import qualified Data.ByteString.Char8 as BS
@@ -198,9 +199,11 @@ escNSTok :: ABC.Token -> Maybe Namespace
 escNSTok tok =
     let bMatchPrefix = nsTokPrefix `BS.isPrefixOf` tok in
     let ns = BS.drop 4 tok in
-    let bValidNS = BS.null ns || isValidWord (Word ns) in
-    let bOK = bMatchPrefix && bValidNS in
+    let bOK = bMatchPrefix && validNS ns in
     if bOK then Just ns else Nothing
+
+validNS :: Namespace -> Bool
+validNS ns = BS.null ns || isValidWord (Word ns)
 
 -- | Identify SP and LF identity operators from ABC-layer formatting.
 abcWS :: ABC.PrimOp -> Bool
@@ -364,99 +367,133 @@ instance Show ClawCode where
     showsPrec _ = showList . clawOps
 
 
-{-
-
--- | Encode Claw into a Lazy UTF8 Bytestring. Assumes valid input.
-encode :: ClawCode -> LazyUTF8.ByteString
-encode = BB.toLazyByteString . encode'
-
-encode' :: ClawCode -> BB.Builder
-encode' = mconcat . injectSpaces . fmap _encodeOp . clawOps where
-
-_encodeOp :: Op -> BB.Builder
-_encodeOp (Word w) = BB.byteString w
-_encodeOp (Num r) = encodeNum r
-_encodeOp (Text t) = BB.char8 '"' <> BB.lazyByteString t <> BB.char8 '"'
-_encodeOp (Block b) = BB.char8 '[' <> encode' b <> BB.char8 ']'
-_encodeOp (EscPrim abc) = BB.char8 '\\' <> _encodeABC abc
-_encodeOp (EscTok tok)  = BB.char8 '\\' <> ABC.encodeTokenBB tok
-_encodeOp (EscText txt) = BB.char8 '\\' <> ABC.encodeTextBB txt
-
-_encodeABC :: [ABC.PrimOp] -> BB.Builder
-_encodeABC = mconcat . fmap (BB.char8 . ABC.abcOpToChar)
-
--- | Encode as exact decimal if possible, otherwise as fractional
--- (currently Claw does not support Scientific notation)
-encodeNum :: Rational -> BB.Builder
-encodeNum (toDecimal -> Just d) = BB.string8 (show d)
-encodeNum r = num <> BB.char8 '/' <> den where
-    num = BB.string8 $ show $ numerator r
-    den = BB.string8 $ show $ denominator r
-
-toDecimal :: Rational -> Maybe Decimal.Decimal
-toDecimal (Decimal.eitherFromRational -> Right d) = Just d
-toDecimal _ = Nothing
-
-data DecoderCont
-    = DecoderDone
-    | DecodeBlock [Op] DecoderCont
-    deriving (Show, Eq)
-data DecoderStuck = DecoderStuck
-    { dcs_text :: Text
-    , dcs_cont :: DecoderCont
-    , dcs_ws   :: Bool -- preceded by SP, LF, or '[' (word separators)
-    , dcs_data :: [Op] -- reverse order
-    } deriving (Show, Eq)
-
--- | Decode Claw code from a Lazy UTF8 Bytestring. This will parse
--- as far as it can then return if stuck. The precision for errors
--- is a location within a block after some complete operations.
-decode :: Text -> Either DecoderStuck ClawCode
-decode txt = decode' $ DecoderStuck
-    { dcs_text = txt
-    , dcs_cont = DecoderDone
+-- | Decode Claw from text, e.g. from a command line. Text decodes
+-- into a sequence of claw operations, so you'll additionally need
+-- to know the namespace (or require one be provided with the text).
+--
+-- If the decoder is 'stuck' at any point, we'll return the final
+-- decoder state. This allows more precise error reports to the
+-- client.
+decode :: LazyUTF8.ByteString -> Either DecoderState [ClawOp]
+decode t = runDecoder $ DecoderState
+    { dcs_text = t
+    , dcs_cont = DecodeDone
     , dcs_ws = True
-    , dcs_data = []
+    , dcs_ops = []
     }
 
--- | Decode from an initial Stuck position, i.e. assuming it has
--- been tweaked so we should no longer be Stuck. This could allow
--- lenient decoding or other simple extensions to the decoder.
-decode' :: DecoderStuck -> Either DecoderStuck ClawCode
-decode' s = decoder (dcs_cont s) (dcs_ws s) (dcs_data s) (dcs_text s)
+runDecoder :: DecoderState -> Either DecoderState [ClawOp]
+runDecoder dcs = decode' cc bWS ops txt where
+    cc = dcs_cont dcs
+    bWS = dcs_ws dcs
+    ops = dcs_ops dcs
+    txt = dcs_text dcs 
 
--- skip whitespace then decode from the next character
-decoder :: DecoderCont -> Bool -> [Op] -> Text -> Either DecoderStuck ClawCode
-decoder cc bWordSep r txt0 = 
-    let decoderIsStuck = Left (DecoderStuck txt0 cc bWordSep r) in
+-- | our precision for parse errors is some location within 
+-- a possible hierarchical blocks. Blocks may be escaped.
+data DecoderCont 
+    = DecodeDone
+    | DecodeBlock IsEscBlock [ClawOp] DecoderCont  
+    deriving (Show)
+type IsEscBlock = Bool
+data DecoderState = DecoderState
+    { dcs_text :: LazyUTF8.ByteString   -- ^ text to parse
+    , dcs_cont :: DecoderCont           -- ^ location in hierarchical blocks
+    , dcs_ws   :: Bool                  -- ^ recently seen a word separator?
+    , dcs_ops  :: [ClawOp]              -- ^ operators parsed, reverse order
+    } deriving (Show)
+
+decode' :: DecoderCont -> Bool -> [ClawOp] -> LazyUTF8.ByteString -> Either DecoderState [ClawOp]
+decode' cc bWS r txt0 =
+    let decoderIsStuck = Left (DecoderState txt0 cc bWS r) in
     case LBS.uncons txt0 of
         Nothing -> case cc of
-            DecoderDone -> Right (ClawCode (L.reverse r))
+            DecodeDone -> Right (L.reverse r)
             _ -> decoderIsStuck
         Just (c, txt) -> case c of
-            ' '  -> decoder cc True r txt    -- skip whitespace
-            '\n' -> decoder cc True r txt    -- skip whitespace
-            '[' -> if not bWordSep then decoderIsStuck else
-                   decoder (DecodeBlock r cc) True [] txt
+            ' ' -> decode' cc True r txt
+            '\n' -> decode' cc True r txt
+
             ']' -> case cc of
-                DecodeBlock ops cc' -> decoder cc' False (block:ops) txt where
-                    block = Block (ClawCode (L.reverse r))
+                DecodeBlock bEsc ops cc' -> decode' cc' False (b:ops) txt where
+                    b = bType $ L.reverse r
+                    bType = if bEsc then B0 else BC
                 _ -> decoderIsStuck
+            -- everything else requires a word separator
+            _ | not bWS -> decoderIsStuck
+            '[' -> decode' (DecodeBlock False r cc) True [] txt
             '"' -> case LBS.elemIndex '"' txt of
                 Nothing -> decoderIsStuck
                 Just idx ->
                     let (lit, litEnd) = LBS.splitAt idx txt in
-                    let bOK = bWordSep && isInlinableText lit in
+                    let bOK = bWS && LBS.notElem '\n' lit in
                     if not bOK then decoderIsStuck else
-                    decoder cc False (Text lit : r) (LBS.drop 1 litEnd)
-            '\\' -> if not bWordSep then decoderIsStuck else
-                case decodeEscOp txt of
-                    Nothing -> decoderIsStuck
-                    Just (op, txt') -> decoder cc False (op:r) txt'
-            _ -> if not bWordSep then decoderIsStuck else
-                case decodeWordOrNumber txt0 of
-                    Nothing -> decoderIsStuck
-                    Just (op, txt') -> decoder cc False (op:r) txt'
+                    decode' cc False (TL lit : r) (LBS.drop 1 litEnd)
+            '#' -> 
+                let (lns, txt') = LazyUTF8.span isValidWordChar txt in
+                let ns = LBS.toStrict lns in
+                let bOK = validNS ns in
+                if not bOK then decoderIsStuck else
+                decode' cc False (NS ns : r) txt'
+            '\\' -> case LBS.uncons txt of -- escaped content
+                Nothing -> decoderIsStuck
+                Just (c', escTxt) -> case c' of
+                    '[' -> decode' (DecodeBlock True r cc) True [] escTxt
+                    '"' -> case ABC.decodeLiteral escTxt of
+                        Just (lit, litEnd) -> case LBS.uncons litEnd of
+                            Just ('~', txt') -> decode' cc False (T0 lit : r) txt'
+                            _ -> decoderIsStuck
+                        _ -> decoderIsStuck
+                    '{' -> case LBS.elemIndex '}' escTxt of
+                        Nothing -> decoderIsStuck
+                        Just idx -> 
+                            let (lzt, tokEnd) = LBS.splitAt idx escTxt in
+                            let tok = LBS.toStrict lzt in
+                            let bOK = BS.notElem '{' tok && BS.notElem '\n' tok in
+                            if not bOK then decoderIsStuck else
+                            tok `seq` decode' cc False (K0 tok : r) (LBS.drop 1 tokEnd)
+                    (charToEscPrim -> Just op0) ->
+                        let loop ops t = case takeEscPrim t of
+                                Just (op, t') -> loop (P0 op : ops) t'
+                                Nothing -> (ops, t)
+                        in
+                        let (r', txt') = loop (P0 op0 : r) escTxt in
+                        decode' cc False r' txt'
+                    _ -> decoderIsStuck -- not a recognized escape
+            _ -> case decodeWordOrNumber txt0 of
+                Just (op, txt') -> decode' cc False (op:r) txt'
+                _ -> decoderIsStuck
+
+takeEscPrim :: ABC.Text -> Maybe (ABC.PrimOp, ABC.Text)
+takeEscPrim txt =
+    LBS.uncons txt >>= \ (c, txt') ->
+    charToEscPrim c >>= \ op ->
+    return (op, txt')
+
+-- any primitive except ABC_SP and ABC_LF
+charToEscPrim :: Char -> Maybe ABC.PrimOp
+charToEscPrim c = 
+    ABC.abcCharToOp c >>= \ op ->
+    guard (not (abcWS op)) >>
+    return op
+
+decodeWordOrNumber = error "todo: decode word or number"
+
+-- I'll assume the empty namespace when using the 'fromString'
+-- claw code isntance. This seems like a pretty good default.
+instance IsString ClawCode where
+    fromString s =
+        case decode (LazyUTF8.fromString s) of
+            Right ops -> ClawCode "" ops
+            Left dcs ->
+                let sLoc = L.take 40 $ LazyUTF8.toString $ dcs_text dcs in
+                error $ clawCodeErr $ "parse failure @ " ++ sLoc
+
+
+clawCodeErr :: String -> String
+clawCodeErr = (++) "Awelon.ClawCode: " 
+
+{-
 
 decodeWordOrNumber :: Text -> Maybe (Op, Text)
 decodeWordOrNumber = error "TODO"
@@ -485,40 +522,8 @@ decodeEscOp txt0 =
             return (EscText lit, txt')
         _ -> fail "unrecognized escape sequence"
 
--- escPrim is any ABC PrimOp except SP and LF
-charToEscPrim :: Char -> Maybe ABC.PrimOp
-charToEscPrim c = if space then Nothing else ABC.abcCharToOp c where
-    space = ((' ' == c) || ('\n' == c))
-
-takePrims :: Text -> ([ABC.PrimOp], Text)
-takePrims = tkps [] where
-    tkps r txt = case tkop txt of
-        Nothing -> (L.reverse r, txt)
-        Just (op, txt') -> tkps (op:r) txt'
-    tkop txt =
-        LBS.uncons txt >>= \ (c, txt') ->
-        charToEscPrim c >>= \ op ->
-        return (op, txt')
-
-instance IsString ClawCode where
-    fromString s =
-        case decode (LazyUTF8.fromString s) of
-            Right clawCode -> clawCode
-            Left dcs ->
-                let sLoc = L.take 40 $ LazyUTF8.toString $ dcs_text dcs in
-                error $ clawCodeErr $ "parse failure @ " ++ sLoc
-
-instance Show Op where
-    showsPrec _ = showList . (:[])
-    showList = shows . ClawCode
-instance Show ClawCode where
-    showsPrec _ = showString . LazyUTF8.toString . encode
-
-
 impossible :: String -> a
 impossible = error . clawCodeErr
 
-clawCodeErr :: String -> String
-clawCodeErr = (++) "Awelon.ClawCode: " 
 
 -}
