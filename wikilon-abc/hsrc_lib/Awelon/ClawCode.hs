@@ -78,6 +78,7 @@ module Awelon.ClawCode
     , module Awelon.Word
     ) where
 
+import Control.Applicative
 import Control.Monad
 import Data.Monoid
 import Data.Char
@@ -478,7 +479,20 @@ charToEscPrim c =
     return op
 
 decodeWordOrNumber :: ABC.Text -> Maybe (ClawOp, ABC.Text)
-decodeWordOrNumber = error "todo: decode word or number"
+decodeWordOrNumber txt = dn <|> dw where
+    dw = decodeWord txt >>= \ (w, txt') -> return (CW w, txt')
+    dn = decodeNumber txt
+    
+decodeWord :: ABC.Text -> Maybe (Word, ABC.Text)
+decodeWord txt =
+    let (s, txt') = LazyUTF8.span isValidWordChar txt in
+    let w = Word (LBS.toStrict s) in
+    guard (isValidWord w) >>
+    return (w, txt')
+
+decodeNumber :: ABC.Text -> Maybe (ClawOp, ABC.Text)
+decodeNumber _ = Nothing
+    -- TODO: decode numbers
 
 -- I'll assume the empty namespace when using the 'fromString'
 -- claw code isntance. This seems like a pretty good default.
@@ -490,41 +504,5 @@ instance IsString ClawCode where
                 let sLoc = L.take 40 $ LazyUTF8.toString $ dcs_text dcs in
                 error $ clawCodeErr $ "parse failure @ " ++ sLoc
 
-
 clawCodeErr :: String -> String
 clawCodeErr = (++) "Awelon.ClawCode: " 
-
-{-
-
-decodeWordOrNumber :: Text -> Maybe (Op, Text)
-decodeWordOrNumber = error "TODO"
-
--- just after the \ escape
-decodeEscOp :: Text -> Maybe (Op, Text)
-decodeEscOp txt0 = 
-    LBS.uncons txt0 >>= \ (c, txt) -> case c of
-        (charToEscPrim -> Just primOp) -> 
-            let (moreOps, txt') = takePrims txt in
-            let ops = primOp : moreOps in
-            return (EscPrim ops, txt')
-        '{' -> -- escaped token, may contain SP (but not LF)
-            LBS.elemIndex '}' txt >>= \ idx ->
-            let (lzt, tokEnd) = LBS.splitAt idx txt in
-            let bOK = not $ LBS.elem '{' lzt || LBS.elem '\n' lzt in
-            if not bOK then fail "illegal token" else
-            let tok = LBS.toStrict lzt in
-            let txt' = LBS.drop 1 tokEnd in
-            tok `seq` return (EscTok tok, txt') 
-        '"' -> -- escaped ABC text, multi-line required
-            ABC.decodeLiteral txt >>= \ (lit, litEnd) ->
-            LBS.uncons litEnd >>= \ (litEndChar, txt') ->
-            let bOK = ('~' == litEndChar) in
-            if not bOK then fail "illegal literal" else
-            return (EscText lit, txt')
-        _ -> fail "unrecognized escape sequence"
-
-impossible :: String -> a
-impossible = error . clawCodeErr
-
-
--}
