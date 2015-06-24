@@ -12,24 +12,26 @@ DONE:
 * export a dictionary to a file
 * import a dictionary from a file
 * edit fragments of a dictionary
-* browse words by name (not very useful)
+* browse words by name, favoring prefixes on ':' etc..
+ * todo: tune further so lists don't grow too large
 * obtain a list of word names 
 * view a word
-* delete a word (clear its definition)
+* delete a word (is equivalent to clearing its definition)
+
+TO DEBUG, ACTIVE WORK:
+
+* rename a word
+ * implementation of rename action seems to miss some or most instances
+ * in particular those where origin word is not first in the list? 
 
 TODO:
 
+* directly edit a word from word's page
+* edit a subset of AO definitions via Claw
+ * e.g. require definition form `[{&ns:}content][]`
 * simplistic REPL based on Claw code
  * maybe some turtle graphics, too? or SVG?
-* edit a subset of AO definitions via Claw
- * e.g. require definition format `[{&ns:}content][]`
-* directly edit a word
-* rename a word
 * switch to stylesheets and a dark background by default
- 
-* improve heuristics for listing words for browsing, favor breaking on ':' or '.'
- * maybe use `(a)` or instead of `a(*)` for the prefix links.
-
 
 * continuous testing, dictionary health description
 * basic typechecking 
