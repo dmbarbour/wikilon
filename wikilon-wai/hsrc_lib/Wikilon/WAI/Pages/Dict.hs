@@ -195,7 +195,7 @@ type Ent = Either Dict.WordPrefix Word
 wordsForBrowsing :: (Dict.DictSplitPrefix dict) 
     => Int -> Int -> dict -> Dict.WordPrefix -> [Ent]
 wordsForBrowsing nTargetWidth nMaxWidth dict prefix = 
-    let expandPrefix = Dict.splitOnPrefixWords dict in
+    let expandPrefix = Dict.splitOnPrefixChars (`L.elem` ":.!$%") dict in
     let expandEnt = either expandPrefix (return . Right) in
     -- fill a menu of prefix options.
     let loopToFillMenu n l =
@@ -216,10 +216,11 @@ wordsForBrowsing nTargetWidth nMaxWidth dict prefix =
     finishEnt <$> loopToFillMenu (L.length l0) l0
 
 lnkEnt :: BranchName -> Ent -> HTML
-lnkEnt dictName = either lnkPrefix (hrefDictWord dictName) where
+lnkEnt dictName = either lnkPrefix lnkWord where
+    lnkWord = hrefDictWord dictName
     lnkPrefix p = 
         let uri = uriDictWordsQPrefix dictName p in
-        let msg = H.unsafeByteString p <> "/" in
+        let msg = H.unsafeByteString p in
         href uri ! A.class_ "refDictWordPrefix" $ msg
 
 -- TODO: delete a list of words

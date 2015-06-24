@@ -19,17 +19,19 @@ DONE:
 
 TODO:
 
-* view and edit words as Claw code (is this more comfortable)?
+* simplistic REPL based on Claw code
+ * maybe some turtle graphics, too? or SVG?
+* edit a subset of AO definitions via Claw
+ * e.g. require definition format `[{&ns:}content][]`
 * directly edit a word
 * rename a word
+* switch to stylesheets and a dark background by default
  
 * improve heuristics for listing words for browsing, favor breaking on ':' or '.'
  * maybe use `(a)` or instead of `a(*)` for the prefix links.
 
-* switch to stylesheets and a dark-by-default style
 
-
-* simplistic REPLs, both Claw code and ABC
+* continuous testing, dictionary health description
 * basic typechecking 
 * simple ABC to JavaScript compiler
 * I can easily find recently changed words for fast review

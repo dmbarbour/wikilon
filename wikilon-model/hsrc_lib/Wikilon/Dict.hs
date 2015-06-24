@@ -55,6 +55,7 @@ module Wikilon.Dict
     , WordPrefix
     , DictSplitPrefix(..)
     , splitOnPrefixWords
+    , splitOnPrefixChars
     , DictRLU(..)
     , wordClients
     , DictUpdate(..)
@@ -83,6 +84,8 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Control.Monad.State as State
+import Data.Char (chr)
+import Data.Word (Word8)
 
 import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
@@ -152,7 +155,8 @@ type WordPrefix = BS.ByteString
 class (DictView dict) => DictSplitPrefix dict where
     -- | Given a prefix, provide a list of associated words and larger
     -- prefixes that begin with the requested prefix. Any given step
-    -- must be relatively shallow. 
+    -- must be relatively shallow. For aesthetic reasons, a word should
+    -- not be contained redundantly with a similar prefix.
     splitOnPrefix ::  dict -> WordPrefix -> [Either WordPrefix Word]
 
     -- | Obtain a complete list of words with a given prefix. The default
@@ -173,6 +177,30 @@ splitOnPrefixWords dict = L.concatMap repair . splitOnPrefix dict where
     repairPrefix p = 
         if okAsWord p then return (Left p) else
         splitOnPrefixWords dict p
+
+-- | splitOnPrefixChars will break a word into prefixes based on a
+-- given set of ASCII-range characters, e.g. :.!$. This is useful
+-- for aesthetic purposes. Note: we only split on characters in the
+-- ASCII range at this time. These prefix characters should probably
+-- be followed by more than one element, normally.
+--
+-- This might trade performance for aesthetics, e.g. because the 
+-- prefixes returned aren't fully aligned with the underlying tree
+-- structure of the dictionary.
+splitOnPrefixChars :: DictSplitPrefix dict => (Char -> Bool) -> dict -> WordPrefix -> [Either WordPrefix Word]
+splitOnPrefixChars = splitOnPrefixW8 . fw8 where
+    fw8 f w8 = (w8 < 0x80) && (f $ chr $ fromIntegral w8) 
+
+splitOnPrefixW8 :: DictSplitPrefix dict => (Word8 -> Bool) -> dict -> WordPrefix -> [Either WordPrefix Word]
+splitOnPrefixW8 fb dict p0 = L.nub $ L.concatMap repair $ splitOnPrefix dict p0 where
+    repair = either repairPrefix (return . Right) -- keep words, adjust prefixes
+    repairPrefix fullPrefix =
+        -- fullPrefix might be too large, e.g. 'foo:ba' as prefix for
+        -- 'foo:bar' and 'foo:baz' when we could stop at 'foo:'.
+        let p = fst $ BS.breakEnd fb fullPrefix in
+        let bValidP = (BS.length p > BS.length p0) in
+        if bValidP then return (Left p) else
+        splitOnPrefixW8 fb dict fullPrefix
 
 -- | It's very useful to know who uses what. We'll do this at the
 -- granularity of individual tokens, since it's also very useful
