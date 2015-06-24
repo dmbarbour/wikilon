@@ -120,6 +120,11 @@ type ClawDecimal = D.Decimal -- current limit 255 decimal places
 data ClawRatio = ClawRatio !ClawInt !ClawInt deriving (Eq, Ord)
 data ClawExp10 = ClawExp10 !ClawDecimal !ClawInt deriving (Eq, Ord)
 
+instance Show ClawRatio where 
+    showsPrec _ (ClawRatio n d) = shows n . showChar '/' . shows d
+instance Show ClawExp10 where 
+    showsPrec _ (ClawExp10 c e) = shows c . showChar 'e' . shows e    
+
 -- | A region of claw code has exactly one namespace. This serves as
 -- a prefix for all words within that region of code. Claw namespace
 -- is the only source of context sensitivity in claw code.
@@ -299,11 +304,13 @@ intOp ABC_negate = Just negate
 intOp _ = Nothing
 
 digitOp :: ABC.PrimOp -> Maybe ClawInt
-digitOp op =
-    let c = ABC.abcOpToChar op in
+digitOp = digitFromChar . ABC.abcOpToChar
+
+digitFromChar :: Char -> Maybe ClawInt
+digitFromChar !c =
     let bOK = ('0' <= c) && (c <= '9') in
-    if not bOK then Nothing else
-    Just $! fromIntegral $ ord c - ord '0'
+    if not bOK then mzero else
+    return $! fromIntegral $ ord c - ord '0'
 
 -- | Test whether the text is valid for inline representation.
 -- This minimally requires the text does not use `"` or LF.
@@ -343,15 +350,13 @@ moreOps ops = BB.char8 ' ' <> encodeOps ops
 encodeOp :: ClawOp -> BB.Builder
 encodeOp (NS ns) = BB.char8 '#' <> BB.byteString ns
 encodeOp (CW (Word w)) = BB.byteString w
-encodeOp (NI i) = BB.string8 (show i)
 encodeOp (TL txt) = BB.char8 '"' <> BB.lazyByteString txt <> BB.char8 '"'
 encodeOp (BC cc) = encBlock cc
-encodeOp (NR (ClawRatio n d)) = 
-    BB.string8 (show n) <> BB.char8 '/' <> BB.string8 (show d)
+encodeOp (NI i) = BB.string8 (show i)
 encodeOp (ND d) = BB.string8 (show d)
-encodeOp (NE (ClawExp10 d e)) = 
-    BB.string8 (show d) <> BB.char8 'e' <> BB.string8 (show e)
-encodeOp (P0 op) 
+encodeOp (NR r) = BB.string8 (show r) 
+encodeOp (NE e) = BB.string8 (show e)
+encodeOp (P0 op) -- should not happen normally
     | abcWS op = mempty
     | otherwise = BB.char8 '\\' <> c
     where c = BB.char8 $ ABC.abcOpToChar op
@@ -490,9 +495,60 @@ decodeWord txt =
     guard (isValidWord w) >>
     return (w, txt')
 
+-- | decode NI, ND, NR, or NE. (Or Nothing.)
 decodeNumber :: ABC.Text -> Maybe (ClawOp, ABC.Text)
-decodeNumber _ = Nothing
-    -- TODO: decode numbers
+decodeNumber txt =
+    decodeInteger txt >>= \ (n, txtAfterInt) ->
+    case LBS.uncons txtAfterInt of
+        Just ('.', txtDecimal) -> 
+            let (m, dp, txtAfterDecimal) = accumDecimal n 0 txtDecimal in
+            guard ((dp > 0) && (dp <= 255)) >> -- upper limit from Data.Decimal
+            let c = D.Decimal (fromIntegral dp) m in
+            case LBS.uncons txtAfterDecimal of
+                Just ('e', txtExp10) ->
+                    decodeInteger txtExp10 >>= \ (e, txtAfterExp10) ->
+                    let exp10 = ClawExp10 c e in
+                    return (NE exp10, txtAfterExp10)
+                _ -> return (ND c, txtAfterDecimal)
+        Just ('/', txtDenom) -> 
+            decodePosInt txtDenom >>= \ (d, txtAfterDenom) ->
+            let r = ClawRatio n d in
+            return (NR r, txtAfterDenom)
+        _ -> return (NI n, txtAfterInt)
+
+-- decode content after the decimal point (a sequence of 0-9 digits)
+-- while counting number of digits and accumulating the mantissa.
+accumDecimal :: ClawInt -> Int -> ABC.Text -> (ClawInt, Int, ABC.Text)
+accumDecimal !m !dp (takeDigit -> Just (d, txt)) = 
+    accumDecimal ((10*m)+d) (1+dp) txt
+accumDecimal !m !dp !txt = (m,dp,txt)
+
+takeDigit :: ABC.Text -> Maybe (ClawInt, ABC.Text)
+takeDigit (LBS.uncons -> Just (c, txt)) = 
+    digitFromChar c >>= \ d -> return (d, txt)
+takeDigit _ = Nothing
+
+decodeInteger :: ABC.Text -> Maybe (ClawInt, ABC.Text)
+decodeInteger txt = case LBS.uncons txt of
+    Nothing -> Nothing
+    Just ('0', txtAfterZero) -> 
+        return (0, txtAfterZero)
+    Just ('-', txtAfterNeg) ->
+        decodePosInt txtAfterNeg >>= \ (n, txtAfterNum) ->
+        return (negate n, txtAfterNum)
+    Just (c, txtAfterD0) ->
+        digitFromChar c >>= \ d0 ->
+        return (accumPosInt d0 txtAfterD0)
+
+decodePosInt :: ABC.Text -> Maybe (ClawInt, ABC.Text)
+decodePosInt txt =
+    takeDigit txt >>= \ (d0, txtAfterD0) ->
+    guard (d0 > 0) >> -- start with 1..9
+    return (accumPosInt d0 txtAfterD0)
+
+accumPosInt :: ClawInt -> ABC.Text -> (ClawInt, ABC.Text)
+accumPosInt !n (takeDigit -> Just (d, txt)) = accumPosInt ((10*n)+d) txt
+accumPosInt !n !txt = (n,txt)
 
 -- I'll assume the empty namespace when using the 'fromString'
 -- claw code isntance. This seems like a pretty good default.
