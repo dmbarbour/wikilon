@@ -485,8 +485,8 @@ charToEscPrim c =
 
 decodeWordOrNumber :: ABC.Text -> Maybe (ClawOp, ABC.Text)
 decodeWordOrNumber txt = dn <|> dw where
-    dw = decodeWord txt >>= \ (w, txt') -> return (CW w, txt')
     dn = decodeNumber txt
+    dw = decodeWord txt >>= \ (w, txt') -> return (CW w, txt')
     
 decodeWord :: ABC.Text -> Maybe (Word, ABC.Text)
 decodeWord txt =
@@ -495,31 +495,44 @@ decodeWord txt =
     guard (isValidWord w) >>
     return (w, txt')
 
--- | decode NI, ND, NR, or NE. (Or Nothing.)
+-- | decode NI, NR, ND, or NE. (Or Nothing.)
 decodeNumber :: ABC.Text -> Maybe (ClawOp, ABC.Text)
-decodeNumber txt =
-    decodeInteger txt >>= \ (n, txtAfterInt) ->
-    case LBS.uncons txtAfterInt of
-        Just ('.', txtDecimal) -> 
-            let (m, dp, txtAfterDecimal) = accumDecimal n 0 txtDecimal in
-            guard ((dp > 0) && (dp <= 255)) >> -- upper limit from Data.Decimal
-            let c = D.Decimal (fromIntegral dp) m in
-            case LBS.uncons txtAfterDecimal of
-                Just ('e', txtExp10) ->
-                    decodeInteger txtExp10 >>= \ (e, txtAfterExp10) ->
-                    let exp10 = ClawExp10 c e in
-                    return (NE exp10, txtAfterExp10)
-                _ -> return (ND c, txtAfterDecimal)
-        Just ('/', txtDenom) -> 
-            decodePosInt txtDenom >>= \ (d, txtAfterDenom) ->
-            let r = ClawRatio n d in
-            return (NR r, txtAfterDenom)
-        _ -> return (NI n, txtAfterInt)
+decodeNumber txt = de <|> ir where 
+    ir = decodeInteger txt >>= \ (n, txtAfterNum) ->
+         case LBS.uncons txtAfterNum of
+            Just ('/', txtDenom) -> 
+                decodePosInt txtDenom >>= \ (d, txtAfterDenom) ->
+                return (NR (ClawRatio n d), txtAfterDenom)
+            _ -> return (NI n, txtAfterNum)
+    de = 
+        decodeDecimal txt >>= \ (c, txtAfterDecimal) ->
+        case LBS.uncons txtAfterDecimal of
+            Just ('e', txtExp10) ->
+                decodeInteger txtExp10 >>= \ (e, txtAfterExp10) ->
+                return (NE (ClawExp10 c e), txtAfterExp10)
+            _ -> return (ND c, txtAfterDecimal)
+
+decodeDecimal :: ABC.Text -> Maybe (ClawDecimal, ABC.Text)
+decodeDecimal (LBS.uncons -> Just ('-', txt)) = 
+    -- simplified handling for negative values
+    -- also need to permit '-0.01' and similar
+    decodeDecimal txt >>= \ (dAbs, txt') ->
+    guard (dAbs > 0) >> -- forbid negative zero
+    return (negate dAbs, txt')
+decodeDecimal txt =
+    decodeInteger txt >>= \ (m0, txtAfterIntPart) ->
+    LBS.uncons txtAfterIntPart >>= \ (decimalPoint, txtDecimal) ->
+    guard ('.' == decimalPoint) >>
+    let (m, dp, txtAfterDecimal) = accumDecimal m0 0 txtDecimal in
+    -- at least one decimal place for visual distinction (e.g. 1.0)
+    -- at most 255 decimal places due to Data.Decimal limitations
+    guard ((0 < dp) && (dp <= 255)) >>
+    return (D.Decimal (fromIntegral dp) m, txtAfterDecimal)
 
 -- decode content after the decimal point (a sequence of 0-9 digits)
 -- while counting number of digits and accumulating the mantissa.
 accumDecimal :: ClawInt -> Int -> ABC.Text -> (ClawInt, Int, ABC.Text)
-accumDecimal !m !dp (takeDigit -> Just (d, txt)) = 
+accumDecimal !m !dp (takeDigit -> Just (d, txt)) =
     accumDecimal ((10*m)+d) (1+dp) txt
 accumDecimal !m !dp !txt = (m,dp,txt)
 
