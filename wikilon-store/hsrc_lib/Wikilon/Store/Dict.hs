@@ -44,9 +44,6 @@ import Wikilon.Dict.Token
 
 import Wikilon.Store.Dict.Type
 
-_cm :: CacheMode
-_cm = CacheMode0
-
 -- | a dictionary is hosted in a vcache address space
 dict_space :: Dict -> VSpace
 dict_space = Trie.trie_space . dict_defs
@@ -82,7 +79,7 @@ _impossible = error . dictErr
 instance DictView Dict where
     lookup d = _decode . lookupBytes d
     lookupBytes d (Word w) = 
-        case Trie.lookupc _cm w (dict_defs d) of
+        case Trie.lookup w (dict_defs d) of
             Just (Def1 v) -> deref' v
             Nothing -> mempty
     toList = fmap (second _decode) . toListBytes
@@ -100,19 +97,17 @@ toListBytes = Trie.toListBy f . dict_defs where
 
 instance DictSplitPrefix Dict where
     splitOnPrefix d p = 
-        let t = Trie.lookupPrefix p (dict_defs d) in
-        case Trie.trie_root t of
+        case Trie.lookupPrefixNode p (dict_defs d) of
             Nothing -> [] -- no content under prefix
-            Just v -> 
-                let tn = derefc _cm v in
-                let fullPrefix = p <> Trie.trie_prefix tn in
+            Just tn | BS.null (Trie.trie_prefix tn) ->
                 let bAccept = isJust (Trie.trie_accept tn) in
-                let lAccept = if bAccept then [Right (Word fullPrefix)] else [] in
+                let lAccept = if bAccept then [Right (Word p)] else [] in
                 let lChildBytes = fmap fst $ L.filter (isJust . snd) $
                         A.assocs $ Trie.trie_branch tn
                 in
-                let lChildren = fmap (Left . (fullPrefix `BS.snoc`)) lChildBytes in
+                let lChildren = fmap (Left . (p `BS.snoc`)) lChildBytes in
                 lAccept ++ lChildren
+            Just tn -> [Left (p <> Trie.trie_prefix tn)]
     wordsWithPrefix d p =
         let tk = Trie.lookupPrefix p (dict_defs d) in
         fmap (Word . (p <>)) (Trie.keys tk)
@@ -122,7 +117,7 @@ member :: Dict -> Word -> Bool
 member d w = (not . LBS.null) $ lookupBytes d w
 
 instance DictRLU Dict where
-    tokenClients d tok = maybe [] _rlu $ Trie.lookupc _cm tok (dict_deps d) where
+    tokenClients d tok = maybe [] _rlu $ Trie.lookup tok (dict_deps d) where
         _rlu (Deps1 t) = fmap Word $ Trie.keys t
 
 newtype DepsMap = DepsMap { _inDepsMap :: Map Word (Set Token) }

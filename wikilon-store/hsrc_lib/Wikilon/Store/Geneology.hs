@@ -93,9 +93,9 @@ _insHist e l = case LoB.uncons l of
 
 -- | Find all direct child relationships from named branch.
 childrenOf :: Name -> Geneology -> [(T, Name)]
-childrenOf n = maybe [] LoB.toList . Trie.lookup' n . g_outgoing
+childrenOf n = maybe [] LoB.toList . Trie.lookup n . g_outgoing
 
 -- | Find all direct parent relationships from named branch.
 parentsOf :: Name -> Geneology -> [(T, Name)] 
-parentsOf n = maybe [] LoB.toList . Trie.lookup' n . g_incoming
+parentsOf n = maybe [] LoB.toList . Trie.lookup n . g_incoming
 

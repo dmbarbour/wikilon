@@ -34,7 +34,7 @@ Library
     , wikilon-abc
     , wikilon-model
     , vcache (>= 0.2.6)
-    , vcache-trie (>= 0.1.1)
+    , vcache-trie (>= 0.2.0)
     , mtl
 
     -- TODO: eventually update time requirement to 1.5

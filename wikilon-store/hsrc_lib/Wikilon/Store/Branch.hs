@@ -97,7 +97,7 @@ volume = s_volume
 
 -- | Lookup a branch by name in a branch set. 
 lookup :: BranchName -> BranchSet -> Maybe Branch
-lookup n = Trie.lookup' n . s_data
+lookup n = Trie.lookup n . s_data
 
 -- | Lookup a branch by name, or return an empty branch
 lookup' :: BranchName -> BranchSet -> Branch

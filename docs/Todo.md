@@ -13,7 +13,6 @@ DONE:
 * import a dictionary from a file
 * edit fragments of a dictionary
 * browse words by name, favoring prefixes on ':' etc..
- * todo: tune further so lists don't grow too large
 * obtain a list of word names 
 * view a word
 * delete a word (is equivalent to clearing its definition)
@@ -23,6 +22,10 @@ TO DEBUG, ACTIVE WORK:
 * rename a word
  * implementation of rename action seems to miss some or most instances
  * in particular those where origin word is not first in the list? 
+
+* further tune browsing of words
+ * list of words seems too large when breaking on specific prefixes
+ * may need to heuristically tune to allow mixed mode expansions
 
 TODO:
 
@@ -123,17 +126,6 @@ TODO:
 
 ## Old Stuff
 
-* add words or edit a dictionary
- * mostly done, though could be improved
-
-* evaluation of code expressions
- * REPL and [command line](CommandLine.md) environments
- * get a simple REPL working
-
-* views of words
- * 
-
-
 * rename and merge words
 * fork a dictionary
 
@@ -178,7 +170,9 @@ TODO:
 * 
 
 
-## 
+## Alternative Workflows
+
+I'm interested in Paul Chiusano's work with Unison and the edit model presented there, e.g. based around manipulating sets of hashes. It might be worth trying to model this workflow in Wikilon.
 
 
 
