@@ -30,6 +30,7 @@ TODO:
 * improve AODict editor:
  * indicate edit success
  * keep words after edits
+ * support claw-style namespaces when loading words into editor?
 
 * further tune browsing of words
  * list of words seems too large when breaking on specific prefixes
@@ -42,9 +43,11 @@ TODO:
 
 * interactive editing
 * list 'TODO' annotations in code, maybe with timestamps and red/green/etc.
+* perhaps inject annotations and dates for 'holes' - undefined words
 * browse words by suffix
 * full text search
  
+* rename all words with a given prefix
 * I can easily browse words by type in the dictionary
 * I can easily browse words by intermediate structure in dictionary
 * I can easily browse a reverse lookup for words in the dictionary

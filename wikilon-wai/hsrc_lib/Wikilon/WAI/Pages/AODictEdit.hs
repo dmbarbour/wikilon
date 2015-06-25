@@ -33,7 +33,7 @@ import Data.Maybe (mapMaybe)
 import Data.Either (lefts, rights)
 import qualified Data.List as L
 import qualified Data.ByteString.Builder as BB
-import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
@@ -83,6 +83,9 @@ mkAOText = BB.toLazyByteString . mconcat . fmap encPair where
         BB.lazyByteString s <> BB.charUtf8 '\n'
 
 -- | Create an editor form given some initial content.
+--
+-- At the moment I don't provide much feedback for success,
+-- but I'll see if exposing the modified-time value helps.
 formAODictEdit :: LBS.ByteString -> BranchName -> Maybe T -> HTML
 formAODictEdit preload dictName mbT = 
     let uri = uriAODictEdit dictName in
@@ -93,9 +96,11 @@ formAODictEdit preload dictName mbT =
             H.string $ LazyUTF8.toString preload
         --let vOrigin = H.unsafeByteStringValue origin
         --H.input ! A.type_ "hidden" ! A.name "origin" ! A.value vOrigin
-        let tmVal = H.stringValue $ maybe "--" show mbT
-        H.input ! A.type_ "hidden" ! A.name "modified" ! A.value tmVal
         H.br
+        let tmVal = H.stringValue $ maybe "--" show mbT
+        H.strong "Last Modified:" 
+        H.input ! A.type_ "text" ! A.name "modified" ! A.readonly "readonly" ! A.value tmVal
+        H.string " "
         H.input ! A.type_ "submit" ! A.value "Submit"
 
 appAODictEdit :: WikilonApp
@@ -129,20 +134,16 @@ editorPage = dictApp $ \ w dictName rq k -> do
             H.title title 
         H.body $ do
             H.h1 title
-            let hrefAODict = href uriAODictDocs "AODict format"
-            H.p $ "Edit an ad-hoc fragment of dictionary in " <> hrefAODict <> "."
             formAODictEdit sContent dictName tMod 
-            H.h2 "Reload Editor"
-            H.p $ "Load words into the editor to view or edit." <>
-                  H.b "Warning:" <> " editor content will be lost."
-            formAODictLoadEditor lWords dictName <> H.br
             H.hr
+            H.strong "Dictionary:" <> " " <> hrefDict dictName
             unless (L.null lWords) $ do
                 H.nav $ do
                     H.strong "Words:" 
                     forM_ lWords $ \ aow -> " " <> hrefDictWord dictName aow
                 H.br
-            H.strong "Dictionary:" <> " " <> hrefDict dictName
+            formAODictLoadEditor lWords dictName
+
 
 type Line = Either LBS.ByteString (Word, ABC) 
 
@@ -325,9 +326,12 @@ recvAODictEdit pp
                 let bset' = Branch.insert dictName b' bset 
                 writePVar (wikilon_dicts $ wikilon_model w) bset' -- commit the update
                 markDurable -- hand-written updates should be durable
-                -- prepare our response:
-                let status = HTTP.seeOther303 
-                let editor = uriAODictEdit dictName 
+
+                -- prepare our response, including edit success information.
+                let status = HTTP.seeOther303
+                let lWords = fmap (wordToUTF8 . fst) lUpdates
+                let editor = mconcat $ [uriAODictEdit dictName, "?words="]
+                             ++ (L.intersperse "+" lWords)
                 let dest = (HTTP.hLocation, wikilon_httpRoot w <> editor) 
                 let headers = [textHtml, noCache, dest] 
                 let title = "Edit Success" 

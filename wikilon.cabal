@@ -38,15 +38,17 @@ Executable wikilon
     , wikilon-wai
     , wikilon-store
 
-    -- add model and abc for cabal repl (in sandbox)
-    , wikilon-model
-    , wikilon-abc
-
     , vcache
     , easy-file (>= 0.2)
     , mtl
     , utf8-string
     , warp, warp-tls (>= 3.0)
     , tls 
+
+    -- extras for `cabal repl` via sandbox
+    , wikilon-model
+    , wikilon-abc
+    , bytestring
+
   main-is: Main.hs
   ghc-options: -auto-all -Wall -rtsopts -threaded

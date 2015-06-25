@@ -40,8 +40,9 @@ aoWord :: String
 aoWord = "[a-zA-Z0-9\\x2D._~!$'*+=:@\\u00A0-\\uFFFC]+"
 
 -- a list of zero or more words
+-- plus optional claw-style namespaces (#foo: or #bar:) 
 aoWordList :: String
-aoWordList = "(?:[, ]*" ++ aoWord ++ ")*"
+aoWordList = "(?:[ ]*[#]?" ++ aoWord ++ ")*[ ]*"
 
 aoDictEnt :: String
 aoDictEnt = "\\x40" ++ aoWord ++ sp ++ abc

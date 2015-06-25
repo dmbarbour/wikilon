@@ -431,10 +431,18 @@ statusToTitle status =
     H.toMarkup (HTTP.statusCode status) <> " " <> 
     H.unsafeByteString (HTTP.statusMessage status)
 
-
+-- | Extract a word list. Allow for Claw-style namespaces.
+-- SP, LF, and commas are considered spaces for this operation.
+-- (This is a bit simplistic but that's okay.)
 extractWordList :: BS.ByteString -> [Word]
-extractWordList = L.filter isValidWord . fmap Word . BS.splitWith spc where
-    spc c = (32 == c) || (44 == c) -- spaces and commas
+extractWordList = getWords . procNS "" . splitTokens where
+    getWords = L.filter isValidWord . fmap Word
+    splitTokens = L.filter (not . BS.null) . BS.splitWith spc
+    spc c = (32 == c) || (10 == c)
+    procNS ns (s:ss) = case BS.uncons s of
+        Just (35, ns') -> procNS ns' ss
+        _ -> (ns<>s : procNS ns ss)
+    procNS _ [] = []
 
 
 
