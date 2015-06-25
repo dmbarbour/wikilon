@@ -23,7 +23,7 @@ module Awelon.ABC
     , opsCancel
     , tokens
     , abcTexts
-    , rewriteTokens, rewriteTokens'
+    , rewriteTokens
     ) where
 
 import Data.Monoid
@@ -473,19 +473,13 @@ runABC :: (Op -> a -> a) -> ABC -> a -> a
 runABC fn = flip (L.foldr fn) . abcOps
 
 -- | Rewrite or expand tokens into arbitrary bytecode
-rewriteTokens :: (Token -> ABC) -> ABC -> ABC
-rewriteTokens fn = rewriteTokens' fn' where
-    fn' tok = (++) (abcOps (fn tok))
-
--- | As rewriteTokens, but difference list for performance.
-rewriteTokens' :: (Token -> [Op] -> [Op]) -> ABC -> ABC
-rewriteTokens' fn = mkABC . _rw . abcOps where
-    _rw (ABC_Tok t : ops) = fn t ops
-    _rw (ABC_Block abc : ops) = block : _rw ops where
-        block = ABC_Block (rewriteTokens' fn abc)
-    _rw (op : ops) = op : _rw ops
-    _rw [] = []
-
+rewriteTokens :: (Token -> [Op]) -> ABC -> ABC
+rewriteTokens fn = mkABC . rw . abcOps where
+    rw (ABC_Tok t : ops) = fn t ++ rw ops
+    rw (ABC_Block abc : ops) = block : rw ops where
+        block = ABC_Block (rewriteTokens fn abc)
+    rw (op : ops) = op : rw ops
+    rw [] = []
 
 abcErr :: String -> String
 abcErr = (++) "Awelon.ABC: " 

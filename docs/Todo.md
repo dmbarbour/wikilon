@@ -15,17 +15,8 @@ DONE:
 * browse words by name, favoring prefixes on ':' etc..
 * obtain a list of word names 
 * view a word
-* delete a word (is equivalent to clearing its definition)
-
-TO DEBUG, ACTIVE WORK:
-
+* delete a word (by clearing its definition)
 * rename a word
- * implementation of rename action seems to miss some or most instances
- * in particular those where origin word is not first in the list? 
-
-* further tune browsing of words
- * list of words seems too large when breaking on specific prefixes
- * may need to heuristically tune to allow mixed mode expansions
 
 TODO:
 
@@ -35,6 +26,14 @@ TODO:
 * simplistic REPL based on Claw code
  * maybe some turtle graphics, too? or SVG?
 * switch to stylesheets and a dark background by default
+
+* improve AODict editor:
+ * indicate edit success
+ * keep words after edits
+
+* further tune browsing of words
+ * list of words seems too large when breaking on specific prefixes
+ * may need to heuristically tune to allow mixed mode expansions
 
 * continuous testing, dictionary health description
 * basic typechecking 

@@ -265,7 +265,7 @@ _renameInABC wo wt = ABC.rewriteTokens rwTok where
     t0 = BS.cons 37 $ wordToUTF8 wo
     tf = BS.cons 37 $ wordToUTF8 wt
     rnTok t = if (t == t0) then tf else t
-    rwTok t = ABC.mkABC [ABC.ABC_Tok (rnTok t)]
+    rwTok t = [ABC.ABC_Tok (rnTok t)]
 
 
 -- | Rename a word only if the target word is undefined and has no
