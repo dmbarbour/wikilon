@@ -195,7 +195,7 @@ type Ent = Either Dict.WordPrefix Word
 wordsForBrowsing :: (Dict.DictSplitPrefix dict) 
     => Int -> Int -> dict -> Dict.WordPrefix -> [Ent]
 wordsForBrowsing nTargetWidth nMaxWidth dict prefix = 
-    let expandPrefix = Dict.splitOnPrefixChars (`L.elem` ":.!$%") dict in
+    let expandPrefix = Dict.splitOnPrefixWords dict in
     let expandEnt = either expandPrefix (return . Right) in
     -- fill a menu of prefix options.
     let loopToFillMenu n l =

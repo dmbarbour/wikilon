@@ -67,12 +67,10 @@ formDictWordRename d w =
     let uri = H.unsafeByteStringValue $ uriDictWordRename d w in
     let ws = wordToUTF8 w in
     H.form ! A.method "POST" ! A.action uri ! A.id "formDictWordRename" $ do
-        H.fieldset ! A.id "formDictWordRenameFieldset" ! A.style "display: inline" $ do
-            H.legend ("Rename " <> H.unsafeByteString ws) 
-            let wv = H.unsafeByteStringValue ws 
-            let rx = H.stringValue Regex.aoWord 
-            H.input ! A.type_ "text" ! A.name "target" ! A.value wv ! A.pattern rx
-            H.input ! A.type_ "submit" ! A.value "Rename"
+        let wv = H.unsafeByteStringValue ws 
+        let rx = H.stringValue Regex.aoWord 
+        H.input ! A.type_ "text" ! A.name "target" ! A.value wv ! A.pattern rx
+        H.input ! A.type_ "submit" ! A.value "Rename"
 
 dictWordRename :: WikilonApp
 dictWordRename = app where

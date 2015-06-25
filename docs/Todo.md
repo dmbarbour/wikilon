@@ -12,7 +12,7 @@ DONE:
 * export a dictionary to a file
 * import a dictionary from a file
 * edit fragments of a dictionary
-* browse words by name, favoring prefixes on ':' etc..
+* browse words by name
 * obtain a list of word names 
 * view a word
 * delete a word (by clearing its definition)
@@ -22,18 +22,25 @@ TODO:
 
 * directly edit a word from word's page
 * edit a subset of AO definitions via Claw
- * e.g. require definition form `[{&ns:foo}def][]`
- * require explicit namespace.
+ * e.g. require definition form `[def][]`
+ * maybe require an explicit namespace? 
+
 * simplistic REPL based on Claw code
+ * need to provide compiled forms of words?
+ * skip cache for now? run and compile words?
  * maybe some turtle graphics, too? or SVG?
+
 * switch to stylesheets and a dark background by default
+
+* review all of 'aoi' and 'ao' tool operations and model them
 
 * improve AODict editor:
  * support claw-style namespaces when loading words into editor?
 
 * further tune browsing of words
- * list of words seems too large when breaking on specific prefixes
- * may need to heuristically tune to allow mixed mode expansions
+ * try to split on ':' where feasible
+ * but don't bother if it widens directory too much
+ * need to find a good heuristic balance here
 
 * continuous testing, dictionary health description
 * basic typechecking 
@@ -45,6 +52,12 @@ TODO:
 * perhaps inject annotations and dates for 'holes' - undefined words
 * browse words by suffix
 * full text search
+
+* dictionary history
+ * diff dictionaries from different times
+ * diff dictionaries across branches and versions
+ * obtain events for individual dictionaries
+ * observe geneologies involving many dictionaries
  
 * rename all words with a given prefix
 * I can easily browse words by type in the dictionary
