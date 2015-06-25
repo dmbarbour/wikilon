@@ -69,7 +69,7 @@ formAODictLoadEditor ws dictName =
     let uriAction = H.unsafeByteStringValue uri in
     H.form ! A.method "GET" ! A.action uriAction ! A.id "formAODictLoadEditor" $ do
         let content = 
-                if L.null ws then A.placeholder "foo bar baz" else
+                if L.null ws then A.placeholder "#foo: bar baz" else
                 let wsText = L.intercalate " " $ fmap wordToText ws in
                 A.value $ H.stringValue $ wsText 
         let pattern = A.pattern $ H.stringValue Regex.aoWordList

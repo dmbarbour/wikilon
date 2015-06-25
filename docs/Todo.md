@@ -22,14 +22,13 @@ TODO:
 
 * directly edit a word from word's page
 * edit a subset of AO definitions via Claw
- * e.g. require definition form `[{&ns:}content][]`
+ * e.g. require definition form `[{&ns:foo}def][]`
+ * require explicit namespace.
 * simplistic REPL based on Claw code
  * maybe some turtle graphics, too? or SVG?
 * switch to stylesheets and a dark background by default
 
 * improve AODict editor:
- * indicate edit success
- * keep words after edits
  * support claw-style namespaces when loading words into editor?
 
 * further tune browsing of words
