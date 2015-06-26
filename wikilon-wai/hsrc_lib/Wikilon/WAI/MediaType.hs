@@ -3,6 +3,7 @@
 module Wikilon.WAI.MediaType
     ( mediaTypeAODict
     , mediaTypeAODef
+    , mediaTypeClaw
     , mediaTypeABC
     , mediaTypeTextPlain
     , mediaTypeTextHTML
@@ -19,6 +20,9 @@ mediaTypeAODict = "text/vnd.org.awelon.aodict"
 
 mediaTypeAODef :: HTTP.MediaType
 mediaTypeAODef = "text/vnd.org.awelon.aodef"
+
+mediaTypeClaw :: HTTP.MediaType
+mediaTypeClaw = "text/vnd.org.awelon.claw"
 
 mediaTypeABC :: HTTP.MediaType
 mediaTypeABC = "application/vnd.org.awelon.abc"

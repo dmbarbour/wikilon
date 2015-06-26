@@ -78,6 +78,9 @@ Library
     Wikilon.WAI.Pages.DictList
     Wikilon.WAI.Pages.Dict
     Wikilon.WAI.Pages.DictWord
+    Wikilon.WAI.Pages.DictWord.Rename
+    Wikilon.WAI.Pages.DictWord.AODef
+    Wikilon.WAI.Pages.DictWord.ClawDef
     Wikilon.WAI.Pages.FrontPage
     Wikilon.WAI.Pages.Admin
     Wikilon.WAI.Pages.ClawCode

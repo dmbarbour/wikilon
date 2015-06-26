@@ -67,7 +67,7 @@ formAODictLoadEditor :: [Word] -> BranchName -> HTML
 formAODictLoadEditor ws dictName =
     let uri = uriAODictEdit dictName in
     let uriAction = H.unsafeByteStringValue uri in
-    H.form ! A.method "GET" ! A.action uriAction ! A.id "formAODictLoadEditor" $ do
+    H.form ! A.method "GET" ! A.action uriAction ! A.id "formLoadAODictEdit" $ do
         let content = 
                 if L.null ws then A.placeholder "#foo: bar baz" else
                 let wsText = L.intercalate " " $ fmap wordToText ws in
@@ -86,6 +86,10 @@ mkAOText = BB.toLazyByteString . mconcat . fmap encPair where
 --
 -- At the moment I don't provide much feedback for success,
 -- but I'll see if exposing the modified-time value helps.
+--
+-- I'll permit editing of the modified time, e.g. so users
+-- can learn how conflicts would appear without much work
+-- to create them.
 formAODictEdit :: LBS.ByteString -> BranchName -> Maybe T -> HTML
 formAODictEdit preload dictName mbT = 
     let uri = uriAODictEdit dictName in
@@ -98,8 +102,8 @@ formAODictEdit preload dictName mbT =
         --H.input ! A.type_ "hidden" ! A.name "origin" ! A.value vOrigin
         H.br
         let tmVal = H.stringValue $ maybe "--" show mbT
-        H.strong "Last Modified:" 
-        H.input ! A.type_ "text" ! A.name "modified" ! A.readonly "readonly" ! A.value tmVal
+        H.strong "Edit Origin: "
+        H.input ! A.type_ "text" ! A.name "modified" ! A.value tmVal
         H.string " "
         H.input ! A.type_ "submit" ! A.value "Submit"
 
@@ -137,13 +141,8 @@ editorPage = dictApp $ \ w dictName rq k -> do
             formAODictEdit sContent dictName tMod 
             H.hr
             H.strong "Dictionary:" <> " " <> hrefDict dictName
-            unless (L.null lWords) $ do
-                H.nav $ do
-                    H.strong "Words:" 
-                    forM_ lWords $ \ aow -> " " <> hrefDictWord dictName aow
-                H.br
+            navWords "Words" dictName lWords
             formAODictLoadEditor lWords dictName
-
 
 type Line = Either LBS.ByteString (Word, ABC) 
 
@@ -190,7 +189,7 @@ reportConflict dictName dOrig dHead (w, abc) =
     headBox $ H.string (LazyUTF8.toString bsHead)
     H.b "2-Way String Merge (Head and Edit):"
     merge2Box $ twoWayMerge (LazyUTF8.toString bsHead) (show abc)
-    H.b "3-Way String Merge:"
+    H.b "3-Way String Merge (Head, Origin, and Edit):"
     merge3Box $ threeWayMerge (LazyUTF8.toString bsHead) (LazyUTF8.toString bsOrig) (show abc)
 
 twoWayMerge :: String -> String -> HTML
@@ -293,8 +292,12 @@ recvAODictEdit pp
                     H.body $ do
                         H.h1 title
                         H.p "A concurrent edit has modified words you're manipulating."
+                        let sEditOrigin = maybe "--" show tMod
+                        let sLastUpdate = maybe "--" show (Branch.modified b)
+                        H.p $ H.strong "Edit Origin: " <> H.string sEditOrigin
+                        H.p $ H.strong "Head Version: " <> H.string sLastUpdate
                         H.h2 "Change Report"
-                        H.p "Currently just some string diffs. Todo: structural and semantic diffs."
+                        H.p "Currently just some string diffs. (Todo: structural or semantic diffs.)"
                         forM_ lConflict $ \ report -> report <> H.br
                         H.h2 "Edit and Resubmit"
                         H.p "At your discretion, you may resubmit without changes."
@@ -319,7 +322,7 @@ recvAODictEdit pp
                         H.ul $ forM_ insErrors $ \ e ->
                             H.li $ H.string $ show e
                         H.h2 "Edit and Resubmit"
-                        H.p "At least if you can easily do so from here."
+                        H.p "If you can easily do so from here."
                         formAODictEdit updates dictName tMod
             Right dUpd -> do -- EDIT SUCCESS!
                 let b' = Branch.update (tNow, dUpd) b 

@@ -7,6 +7,7 @@ module Wikilon.WAI.Routes
     , Route
     , dictURIBuilder, hrefDict
     , wordURIBuilder, hrefDictWord
+    , navWords
 
     , WikilonDictApp, dictApp
     , WikilonDictWordApp, dictWordApp
@@ -27,7 +28,6 @@ module Wikilon.WAI.Routes
     , uriDictWordsList
     , uriDictWordsListQPrefix
     , uriDictWordRename
-    
 
     , href
     ) where
@@ -142,6 +142,15 @@ wordURIBuilder d (Word wordBytes) =
 hrefDictWord :: BranchName -> Word -> HTML
 hrefDictWord d w@(Word wbs) = href (uriDictWord d w) ! A.class_ "refDictWord" $ 
     H.unsafeByteString wbs
+
+-- | Print a list of words under a nav tag, with a
+-- simple header. Print nothing if the list is empty.
+navWords :: String -> BranchName -> [Word] -> HTML
+navWords _ _ [] = mempty
+navWords sClass dn lWords =
+    H.nav ! A.class_ (H.stringValue sClass) $ do
+        H.strong (H.string sClass <> ":") <> " "
+        mconcat $ L.intersperse " " $ fmap (hrefDictWord dn) lWords
 
 -- | Obtain dictionary and word via :d and :w captures. 
 dictWordCap :: Captures -> Maybe (BranchName, Word)

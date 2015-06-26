@@ -6,10 +6,17 @@
 -- machine.  
 --
 module Wikilon.Model
-    ( module Wikilon.Events
+    ( 
     ) where
 
+-- TODO:
+--
+--  define a set of update and query messages
+--  decide how to return query responses to Haskell
+--  decide how to integrate subscriptions and RDP
+--
 
-import Wikilon.Events
+
+
 
 

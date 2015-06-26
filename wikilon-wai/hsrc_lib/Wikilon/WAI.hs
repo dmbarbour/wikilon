@@ -38,22 +38,18 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 
     ,("/d/:d/w", dictWords)
     ,("/d/:d/w/:w", dictWord)
-    ,("/d/:d/w/:w/aodef", dictWordAODef)
     ,("/d/:d/w/:w/rename", dictWordRename)
-    ,("/d/:d/w/:w/edit", dictWordEdit)
-    ,("/d.create", dictCreate)
+    ,("/d/:d/w/:w/aodef", dictWordAODef)
+    ,("/d/:d/w/:w/aodef.edit", dictWordAODefEdit)
+    ,("/d/:d/w/:w/clawdef", dictWordClawDef)
+    ,("/d/:d/w/:w/clawdef.edit", dictWordClawDefEdit)
 
+    ,("/d.create", dictCreate)
     --,("/d/:d/hist", dictHist)
 
-
-    --,("/d/:d/w/:w", dictWord)
-    --,("/d/:d/w/:w/name", 
-    --,("/d/:d/w/:w/deps", dictWordDeps)
-    --,("/d/:d/w/:w/clients", dictWordClients)
-    --,("/d/:d/wlist", dictWordList)
-    --,("/d/:d/wdeps", dictWordListDeps)
-    --,("/d/:d/wclients", dictWordListClients)
-    -- todo: historical versions
+    -- thoughts:
+    --  I could use /d/:d/name and /d/:d/w/:w/name 
+    --  as handles for renaming
     
 --    ,("/u",listOfUsers)
 --    ,("/u/:u",singleUser)
@@ -105,8 +101,8 @@ baseWikilonApp w rq k =
             cap = Tree.captured $ Tree.captures route
         -- ad-hoc special cases
         Nothing -> case s of
-            ("dev":"echo":_) -> echo rq k
             ("d":dictPath:"wiki":_) -> remaster dictPath w rq k
+            ("dev":"echo":_) -> echo rq k
             _ -> k $ eNotFound rq 
 
 -- | allow 'views' of Wikilon using a different master dictionary.
@@ -132,10 +128,6 @@ echo :: Wai.Application
 echo rq k = k response where
     response = Wai.responseLBS HTTP.ok200 [plainText,noCache] body
     body = LazyUTF8.fromString $ show rq
-
-
-
-
 
 -- initial root will always start and end with '/'. The
 -- empty string is modified to just "/". This simplifies

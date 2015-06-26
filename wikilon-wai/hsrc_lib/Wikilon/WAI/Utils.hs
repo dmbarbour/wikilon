@@ -443,6 +443,3 @@ extractWordList = getWords . procNS "" . splitTokens where
         Just (35, ns') -> procNS ns' ss
         _ -> (ns<>s : procNS ns ss)
     procNS _ [] = []
-
-
-
