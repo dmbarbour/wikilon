@@ -62,8 +62,8 @@ module Awelon.ClawCode
     , ClawRatio(..)
     , ClawExp10(..)
     , ClawDecimal
-    , clawToABC
-    , clawFromABC
+    , clawToABC, clawToABC'
+    , clawFromABC, clawFromABC'
     , isInlineableText
 
     , encode
@@ -95,10 +95,11 @@ import qualified Awelon.ABC as ABC
 import Awelon.Word
 
 -- | Command Language for Awelon (claw)
-data ClawCode = ClawCode 
-    { clawNS :: !Namespace
-    , clawOps :: [ClawOp]
-    } deriving (Eq, Ord)
+--
+-- Claw code will usually assume the root namespace, but a good
+-- convention is to explicitly include namespace as the first 
+-- element in a claw command.
+newtype ClawCode = ClawCode { clawOps :: [ClawOp] } deriving (Eq, Ord)
 
 data ClawOp 
     = NS !Namespace     -- #bar:
@@ -147,19 +148,21 @@ nsTokPrefix = "&ns:"
 -- essentially a 'compiler' for Claw code, though resulting bytecode 
 -- will usually need linking and processing for performance.
 clawToABC :: ClawCode -> ABC
-clawToABC = mconcat . zns opToABC
+clawToABC = clawToABC' BS.empty
 
-zns :: (Namespace -> ClawOp -> a) -> ClawCode -> [a]
-zns f = \ cc -> jfn (clawNS cc) (clawOps cc) where
-    jfn _ (op@(NS ns) : ops) = f ns op : jfn ns ops
-    jfn ns (op : ops) = f ns op : jfn ns ops
-    jfn _ [] = []
+clawToABC' :: Namespace -> ClawCode -> ABC
+clawToABC' ns = mconcat . zns opToABC ns . clawOps
+
+zns :: (Namespace -> ClawOp -> a) -> Namespace -> [ClawOp] -> [a]
+zns f _ (op@(NS ns) : ops) = f ns op : zns f ns ops
+zns f ns (op : ops) = f ns op : zns f ns ops
+zns _ _ [] = []
 
 oneOp :: ABC.Op -> ABC
 oneOp = ABC.mkABC . return 
 
 expand :: Namespace -> [ClawOp] -> ABC
-expand ns = clawToABC . ClawCode ns
+expand ns = clawToABC' ns . ClawCode 
 
 opToABC :: Namespace -> ClawOp -> ABC
 -- low level
@@ -179,10 +182,14 @@ opToABC ns (NE (ClawExp10 d x)) = expand ns [ND d, NI x, CW wExp10]
 opToABC ns (TL lit) = expand ns [T0 lit, CW wLiteral]
 opToABC ns (BC cc) = expand ns [B0 cc, CW wBlock]
 
+-- | Parse Claw structure from bytecode.
+clawFromABC :: ABC -> ClawCode
+clawFromABC = clawFromABC' BS.empty
+
 -- | parse Claw code from bytecode. This requires the current
 -- namespace in order to provide some useful context.
-clawFromABC :: Namespace -> ABC -> ClawCode
-clawFromABC ns = ClawCode ns . reduceClaw . escABC ns . ABC.abcOps
+clawFromABC' :: Namespace -> ABC -> ClawCode
+clawFromABC' ns = ClawCode . reduceClaw . escABC ns . ABC.abcOps
 
 -- | recognize claw words from bytecode 
 --
@@ -563,12 +570,10 @@ accumPosInt :: ClawInt -> ABC.Text -> (ClawInt, ABC.Text)
 accumPosInt !n (takeDigit -> Just (d, txt)) = accumPosInt ((10*n)+d) txt
 accumPosInt !n !txt = (n,txt)
 
--- I'll assume the empty namespace when using the 'fromString'
--- claw code isntance. This seems like a pretty good default.
 instance IsString ClawCode where
     fromString s =
         case decode (LazyUTF8.fromString s) of
-            Right ops -> ClawCode "" ops
+            Right ops -> ClawCode ops
             Left dcs ->
                 let sLoc = L.take 40 $ LazyUTF8.toString $ dcs_text dcs in
                 error $ clawCodeErr $ "parse failure @ " ++ sLoc
