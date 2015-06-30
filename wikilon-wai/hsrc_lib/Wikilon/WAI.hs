@@ -68,6 +68,7 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 
     -- generic endpoints
 --    ,("/favicon", resourceFavicon)
+--    ,("/css", resourceCSS)
     ]
 
 wikilonWaiConf :: ByteString -> BranchName -> WikilonStore -> Wikilon

@@ -8,10 +8,8 @@ module Wikilon.WAI.Pages.DictWord.Rename
 import Control.Applicative
 import Control.Monad
 import Data.Monoid
-import qualified Data.List as L
 import qualified Data.ByteString.Lazy as LBS
 import qualified Network.HTTP.Types as HTTP
-import qualified Network.HTTP.Media as HTTP
 import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A

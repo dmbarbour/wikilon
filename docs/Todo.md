@@ -25,12 +25,20 @@ TODO:
  * e.g. require definition form `[def][]`
  * maybe require an explicit namespace? 
 
+* abstract POST-based editor concept
+ * add 'goto' continuation
+ * multi-stage: parse, auth, conflict, accept (and return)
+
+* create a more generic app for diffing resources, e.g. to resolve edit conflicts?
+* create a more general model for loading resources
+
 * simplistic REPL based on Claw code
  * need to provide compiled forms of words?
  * skip cache for now? run and compile words?
  * maybe some turtle graphics, too? or SVG?
 
 * switch to stylesheets and a dark background by default
+* develop a claw variant of the 'AODict' fragment editor?
 
 * review all of 'aoi' and 'ao' tool operations and model them
 

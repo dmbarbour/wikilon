@@ -192,13 +192,19 @@ aodictDocs = basicWebPage $ \ w _ _ -> do
 aodictDocHTML :: HTML
 aodictDocHTML = do
     H.h1 "The AODict Format"
+
     H.p $ H.b "Internet Media Type:" <> " text/vnd.org.awelon.aodict"
     H.p $ H.b "Filename Extensions:" <> " .ao,.ao.gz (gzipped)"
+
     H.p "AODict is an import/export format for Awelon Object (AO) dictionaries."
-    H.h2 "General Format"
+
+    H.h2 "General Structure"
+
+    let awelonBytecode = href uriABCDocs "Awelon Bytecode (ABC)" 
     H.p "The AODict file contains a simple list of `@word definition LF` entries.\n\
         \Each word is defined exactly once, and each word is defined before use.\n\
-        \Definitions use a subset of Awelon Bytecode (ABC). Simple example:"
+        \Definitions use a subset of " <> awelonBytecode <> ". Simple example:"
+
     H.pre . (H.code ! A.lang "aodict") $
         "@swap [rwrwzwlwl][]\n\
         \@swapd [rw {%swap} wl][]\n\
@@ -209,77 +215,130 @@ aodictDocHTML = do
         \ this is a multi-line definition!\n\
         \~[v'c]\n\
         \"
+
     H.p "The structure of ABC ensures there is never any ambiguity that the '@'\n\
         \begins a new entry. There is no need for escapes, and we don't need to\n\
         \parse ABC to split entries. The word and definition may be divided by a\n\
         \a space or linefeed (ASCII 32 or 10)."
-    H.p "While a general ABC parser can process any AO definition, AO doesn't\n\
-        \permit arbitrary ABC. In particular, there are constraints on tokens\n\
-        \and text literals. Words are also constrained. See below."
-    H.h3 "Words Constraints"
-    H.ul $ mapM_ (H.li . H.string) listWordConstraintsForHumans
-    H.h3 "Awelon Bytecode (ABC)"
-    H.p "ABC consists of 43 primitive operators, blocks, tokens, and texts."
+
+    H.h2 "Type of Definition"
+    H.p "A definition is a string of bytecode with the general type:"
+    H.pre . H.code $
+        "type Def a b = ∀e.(e → ∃v.([v→[a→b]] * (v * e)))"
+    H.p "The definition effectively has two parts:"
     H.ul $ do
-        H.li "operators: SP LF lrwzvc%^$o'kf#0123456789+*/-QLRWZVC?DFMK>"
-        H.li "blocks contain ABC between square brackets, e.g. [vrwlc]"
-        H.li "text literals have regex form: [\"].*(\\n[ ].*)*\\n~" 
-        H.li "tokens use text between curly braces, e.g. {foo}"
-    let abcDocs = H.a ! A.href (H.unsafeByteStringValue uriABCDocs) $ "ABC documentation"
-    H.p $ "See " <> abcDocs <> " for detailed information." 
-    H.p "However, only a subset of ABC is permitted within AO dictionaries."
-    H.h4 "Token Constraints"
+        H.li "An ad-hoc structured value of type `v`."
+        H.li "A compiler function of type `v→[a→b]`"
+
+    H.p $ "Separating the structured value `v` from the compiler function offers\n\
+          \a simple basis for structured editing, staged programming, and problem\n\
+          \specific languages. A structure editor is necessary to leverage this.\n\
+          \The editor would recognize values by shape or discretionary seals and\n\
+          \render the shape for the users. Commands to render or update the shape\n\
+          \would be words in the dictionary, perhaps aided by naming conventions." 
+
+    let commandLanguage = href uriClawDocs "command language"
+    H.p $ "In the trivial case, our compiler may be the identity function and\n\
+          \the value a block of type [a→b], resulting in a definition of form\n\
+          \`[command abc][]`. This particular case is amenable to an editable\n" <> 
+          commandLanguage <> " view, which offers a Forth-like user experience.\n\
+          \The command language view is extensible and offers an alternative\n\
+          \basis for structured editing."
+
+    H.h3 "The AODef Format"
+
+    H.p $ H.b "Internet Media Type:" <> " text/vnd.org.awelon.aodef"
+    H.p $ H.b "Filename Extensions:" <> " .aodef (rarely applicable)"
+
+    H.p $ "When a definition is taken by itself, apart from the context of the\n\
+          \dictionary, I call that the `aodef` format. Because aodef is strictly\n\
+          \a subset of ABC, we could use generic bytecode types. But explicitly\n\
+          \indicating the `aodef` format is convenient for tooling."
+
+    H.h3 "Incomplete Definitions"
+
+    H.p "An incomplete definition is represented by depending on the tacit argument\n\
+        \labeled `e` in the definition type descriptor. Effectively, we express that\n\
+        \a definition depends on some unspecified, to-be-provided value. Thus, we can\n\
+        \model definitions with 'holes' in them. An undefined word is just the extreme\n\
+        \case where the definition is one big hole."
+
+    H.p "These tacit holes have utility in software development contexts:"
+    H.ul $ do
+        H.li "suitable for top-down, exploratory, test-driven development"
+        H.li "infer types and constraints based on usage and tests"
+        H.li "automatic search for values that meet constraints"
+        H.li "interactive programming, programming-by-example"
+        H.li "fill-in-the-gap skeletons, templates, form-based modules"
+
+    H.p "Without incomplete definitions, we're effectively restricted to bottom-up\n\
+        \development models. Bottom-up is concrete but not always convenient."
+    
+    H.p "Outside of development contexts, incomplete definitions may be forbidden.\n\
+        \For example, a curated dictionary will generally only contain complete and\n\
+        \well-typed definitions, perhaps even with nice properties like termination\n\
+        \or correctness proofs."
+
+    H.h2 "Token and Text Constraints"
+
+    H.p $ "AO definitions use a " <> (H.em "strict subset") <> " of ABC. The limits\n\
+          \primarily constrain tokens and texts. The constraints on tokens ensure\n\
+          \purity and portability, while the other constraints simplify interaction\n\
+          \with structured editors and documentation."
+
+    H.h3 "Token Constraints"
+    H.p "Tokens are restricted to four cases, indicated by prefix:"
     H.ul $ do
         H.li "{%word} - dependency on another word in dictionary"
         H.li "{&anno} - annotation, e.g. for performance or safety"
-        H.li "{:foo} - discretionary sealer, excludes character '$'"
-        H.li "{.foo} - discretionary unsealer, excludes character '$'"
-    H.p "Tokens must be from these classes. Additionally, tokens must\n\
-        \be valid according to the Word Constraints."
-    H.h4 "Text Constraints"
-    H.p "Text literal constraints were initially motivated to simplify CRLF\n\
-        \conversions, e.g. when editing a dictionary through HTML forms. But\n\
-        \avoiding control characters seems wise in general."
+        H.li "{:foo} - discretionary sealer, exclude character '$'"
+        H.li "{.foo} - discretionary unsealer, exclude character '$'"
+    H.p "After removing the prefix, all tokens must be valid as words:"
+    H.ul $ mapM_ (H.li . H.string) listWordConstraintsForHumans
+
+    H.h3 "Text Constraints"
+    H.p "Text is constrained to simplify interaction with editors and HTML."
     H.ul $ mapM_ (H.li . H.string) listTextConstraintsForHumans
-    H.p "If you must represent binary data, favor base 16 with variant alphabet\n\
-        \'bdfghjkmnpqstxyz' (as elements 0..15). A compression pass can easily\n\
-        \reduce this to binary when streaming or storing ABC."
-    H.h3 "Structural Constraints"
+
+    H.p "If developers wish to include control characters, they'll probably\n\
+        \need to model their own escapes and post-process the text with a\n\
+        \word."
+
+    H.h3 "Representing Binary Data"
+    H.p "Shoving binary data into a dictionary should be pretty rare, though it\n\
+        \may be convenient for data-intensive resources (textures, images, sound).\n\
+        \The recommended representation for binary is base16 text. It is easy to\n\
+        \compress base16 for storage or transmission, especially if we recognize\n\
+        \a specific base16 alphabet. The favored alphabet for Awelon project is\n\
+        \`bdfghjkmnpqstxyz`, excluding `aeiou` to avoid spelling inane words and\n\
+        \`vrwlc` to prevent interference with data plumbing."
+
+    H.h2 "Structural Constraints"
     H.p "The aodict format has structural constraints to guard against\n\
         \cycles and undefined words, and simplify efficient processing."
     H.ul $ do
         H.li "words are defined before use"
         H.li "words are not redefined"
-    H.p "When editing fragments of an AO dictionary, these two constraints\n\
-        \are relaxed."
-    H.h3 "Type Constraints"
-    H.p "Each definition should have the general form:"
-    H.pre . H.code $
-        "type Def a b = ∀e.(e → ∃v.([v→[a→b]] * (v * e)))"
-    H.p "The meaning of the word is the pure function of type [a→b]. However,\n\
-        \the intermediate value 'v' serves an important role for structured\n\
-        \editing, staged programming, and user-defined languages. The function\n\
-        \[v→[a→b]] serves as a compiler. We compile the value into its meaning.\n\
-        \Frequently, the compiler is the identity function `[]`, which is valid\n\
-        \when the value `v` is directly a function. Another trivial compiler is\n\
-        \`[v'c]`, which simply quotes value 'v' and exports a structure. Complex\n\
-        \compilers will usually be factored into words, e.g. `[{%fooLang}]`."
-    H.p "In a development dictionary, it is not uncommon for some words to be\n\
-        \undefined or incompletely defined. If a definition does not compile\n\
-        \because it is incomplete, this is considered a 'hole' in the dictionary.\n\
-        \A good development environment helps developers recognize and fill holes."
-    H.p "In a healthy dictionary, every word should compile, and additionally the\n\
-        \meaning functions should typecheck and pass other analyses."
-    H.h2 "Editing of AO Dictionaries"
-    H.p "The AODict format is not suitable for direct human reading and editing."
-    H.p "At small scales, it is feasible to edit AODict directly, assuming you\n\
-        \well know ABC and your dictionary. But in practice a dictionary grows\n\
-        \large, dense, noisy, intractable in the AODict format. An editor may\n\
-        \help developers by supporting edits for ad-hoc fragments of a dictionary."
-    H.p "AO is designed for structure editors and environments that can present\n\
-        \editable views for words based around the intermediate structures of\n\
-        \definitions"
+    H.p "These constraints apply to a file or stream describing an entire\n\
+        \dictionary. They may be relaxed for editing a fragment of the\n\
+        \dictionary, e.g. a few words at a time."
 
+    H.h2 "Editing of AO Dictionaries"
+
+    H.p "The AODict format is not suitable for direct human reading and editing.\n\
+        \It is terribly inconvenient to tap out {%foo} on a keyboard, much less\n\
+        \larger words. Reading bytecode is feasible but only at small scales.\n\
+        \And even a trivial `[][]` structure (the identity function) is noisy.\n\
+        \An AODict file with a few dozen words becomes too painful to navigate."
+    
+    H.p "AO dictionaries must primarily be modified through editable views or\n\
+        \structure editors. As a special case, a " <> commandLanguage <> " view\n\
+        \for definitions of form `[command][]` may allow something closer to a\n\
+        \normal textual PL experience. Navigation should leverage hypertext."
+
+    H.p "However, at very small scales, it can be useful to view and edit the\n\
+        \bytecode for a word or a small subset of words. This may be useful\n\
+        \for didactic purposes or debugging."
 
 lnkAODict, lnkAODictFile, lnkAODictGz :: BranchName -> HTML
 formImportAODict :: Route -> BranchName -> HTML

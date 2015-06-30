@@ -40,8 +40,6 @@ import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
-import qualified Data.Algorithm.Diff as Diff
-import qualified Data.Algorithm.Diff3 as Diff3
 import Database.VCache
 
 
@@ -50,6 +48,7 @@ import qualified Awelon.ABC as ABC
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
+import Wikilon.WAI.Conflicts
 import Wikilon.WAI.RecvFormPost
 import qualified Wikilon.WAI.RegexPatterns as Regex
 import Wikilon.Store.Branch (BranchName, Branch)
@@ -60,6 +59,7 @@ import qualified Wikilon.Store.Dict as Dict
 import qualified Wikilon.Dict.AODict as AODict
 import Wikilon.Store.Root
 import Wikilon.Time
+
 
 -- | Provide a form that will pre-load the editor. If given a non-empty
 -- list of words, its default value will contain just that word.
@@ -98,12 +98,10 @@ formAODictEdit preload dictName mbT =
     H.form ! A.method "POST" ! A.action uriAction ! A.id "formAODictEdit" $ do
         H.textarea ! A.name "update" ! A.rows "20" ! A.cols "70" ! A.required "required" $
             H.string $ LazyUTF8.toString preload
-        --let vOrigin = H.unsafeByteStringValue origin
-        --H.input ! A.type_ "hidden" ! A.name "origin" ! A.value vOrigin
         H.br
         let tmVal = H.stringValue $ maybe "--" show mbT
         H.strong "Edit Origin: "
-        H.input ! A.type_ "text" ! A.name "modified" ! A.value tmVal
+        H.input ! A.type_ "text" ! A.name "editOrigin" ! A.value tmVal
         H.string " "
         H.input ! A.type_ "submit" ! A.value "Submit"
 
@@ -166,10 +164,8 @@ reportParseError s = H.pre ! A.class_ "parseErrorReport" $ H.code ! A.lang "aodi
 styleParseError :: HTML -> HTML
 styleParseError h = H.span 
     ! A.class_ "parseError" 
-    ! A.style "background-color:LightCoral" 
+    ! A.style "background-color: LightCoral;" 
     $ h
-
-
 
 -- | I should probably develop a more semantic merge for ABC definitions.
 -- But for the moment, at least a structural merge will help developers
@@ -177,65 +173,16 @@ styleParseError h = H.span
 --
 -- NOTE: the current 'diff' algorithm sucks at reporting deletions.
 -- ALSO: font color is insufficient. I need background or border colors.
-reportConflict :: BranchName -> Dict -> Dict -> (Word, ABC) -> Maybe HTML
-reportConflict dictName dOrig dHead (w, abc) = 
+reportConflictABC :: BranchName -> Dict -> Dict -> Word -> ABC -> Maybe HTML
+reportConflictABC dictName dOrig dHead w abc = 
     let bsOrig = Dict.lookupBytes dOrig w in
     let bsHead = Dict.lookupBytes dHead w in
     if bsOrig == bsHead then Nothing else Just $ do -- no change
     -- return an HTML description of the conflict
     -- let sOrig = LazyUTF8.toString bsOrig
     H.strong $ "@" <> hrefDictWord dictName w
-    H.b "Head Version:"
-    headBox $ H.string (LazyUTF8.toString bsHead)
-    H.b "2-Way String Merge (Head and Edit):"
-    merge2Box $ twoWayMerge (LazyUTF8.toString bsHead) (show abc)
-    H.b "3-Way String Merge (Head, Origin, and Edit):"
-    merge3Box $ threeWayMerge (LazyUTF8.toString bsHead) (LazyUTF8.toString bsOrig) (show abc)
+    reportConflicts (LazyUTF8.toString bsOrig) (LazyUTF8.toString bsHead) (show abc)
 
-twoWayMerge :: String -> String -> HTML
-twoWayMerge sHead sEdit = 
-    let lChunks = Diff.getGroupedDiff sHead sEdit in
-    forM_ lChunks $ \ chunk -> case chunk of
-        Diff.First s -> styleHead $ H.string s
-        Diff.Second s -> styleEdit $ H.string s
-        Diff.Both s _ -> styleOrig $ H.string s
-
-threeWayMerge :: String -> String -> String -> HTML
-threeWayMerge sHead sOrig sEdit =
-    let lChunks = Diff3.diff3 sHead sOrig sEdit in
-    forM_ lChunks $ \ chunk -> case chunk of
-        Diff3.LeftChange s -> styleHead $ H.string s
-        Diff3.RightChange s -> styleEdit $ H.string s
-        Diff3.Unchanged s -> styleOrig $ H.string s 
-        Diff3.Conflict h o e -> styleConflict $ do
-            barrierConflict "("
-            styleHead $ H.string h
-            barrierConflict "|"
-            styleOrig $ H.string o
-            barrierConflict "|"
-            styleEdit $ H.string e
-            barrierConflict ")"
-
-headBox, merge2Box, merge3Box :: HTML -> HTML
-headBox = codeBox "diffHeadBox" "border-color:Navy;border-style:dashed;border-width:thin" 
-merge2Box = codeBox "diffMerge2Box" "border-color:Indigo;border-style:dashed;border-width:thin"
-merge3Box = codeBox "diffMerge3Box" "border-color:SeaGreen;border-style:dashed;border-width:thin"
-
-codeBox :: String -> String -> HTML -> HTML
-codeBox _class _style h =
-    H.pre ! A.style (H.stringValue _style) $ 
-    H.code ! A.class_ (H.stringValue _class) ! A.lang "abc" $ h
-
-styleHead, styleEdit, styleOrig :: HTML -> HTML
-styleHead = H.span ! A.class_ "diffHead" ! A.style "background-color:DarkSeaGreen"
-styleEdit = H.span ! A.class_ "diffEdit" ! A.style "background-color:Thistle"
-styleOrig = id
-
-styleConflict, barrierConflict :: HTML -> HTML
-styleConflict = H.span ! A.class_ "diffConflict" ! A.style "border-color:DarkOrange;border-style:solid;border-width:medium"
-barrierConflict = H.span ! A.class_ "diffConflictSep" ! A.style "color:DarkOrange;font-weight:bolder"
-
-            
 histDict :: Branch -> Maybe T -> Dict
 histDict b Nothing = Dict.empty vc where
     vc = Dict.dict_space $ Branch.head b
@@ -245,7 +192,7 @@ histDict b (Just t) = Branch.histDict b t
 recvAODictEdit :: PostParams -> WikilonApp
 recvAODictEdit pp 
   | (Just updates) <- getPostParam "update" pp
-  , (Just tMod) <- (parseTime . LazyUTF8.toString) <$> getPostParam "modified" pp
+  , (Just tMod) <- (parseTime . LazyUTF8.toString) <$> getPostParam "editOrigin" pp
   = dictApp $ \ w dictName _rq k ->
     let parsed = parseLines updates in
     let lErr = lefts parsed in
@@ -261,7 +208,7 @@ recvAODictEdit pp
                     H.title title
                 H.body $ do
                     H.h1 title
-                    H.p "Some update content did not parse.\n\
+                    H.p "Some content did not parse.\n\
                         \Do not resubmit without changes."
                     H.h2 "Description of Errors"
                     forM_ lErr $ \ e -> reportParseError e <> H.br
@@ -277,9 +224,8 @@ recvAODictEdit pp
         let b = Branch.lookup' dictName bset in
         let dHead = Branch.head b in
         let dOrig = histDict b tMod in
-        let lConflict = if (dOrig == dHead) then [] else      
-                mapMaybe (reportConflict dictName dOrig dHead) lUpdates
-        in
+        let report = uncurry $ reportConflictABC dictName dOrig dHead in
+        let lConflict = if (dOrig == dHead) then [] else mapMaybe report lUpdates in
         let onConflict =
                 let status = HTTP.conflict409 in
                 let headers = [textHtml, noCache] in
@@ -298,7 +244,7 @@ recvAODictEdit pp
                         H.p $ H.strong "Head Version: " <> H.string sLastUpdate
                         H.h2 "Change Report"
                         H.p "Currently just some string diffs. (Todo: structural or semantic diffs.)"
-                        forM_ lConflict $ \ report -> report <> H.br
+                        mconcat $ fmap (<> H.br) lConflict
                         H.h2 "Edit and Resubmit"
                         H.p "At your discretion, you may resubmit without changes."
                         formAODictEdit updates dictName (Branch.modified b)
@@ -347,5 +293,5 @@ recvAODictEdit pp
                         H.h1 title
                         H.p $ "Return to " <> href editor "the editor" <> "."
 recvAODictEdit _pp = \ _w _cap _rq k -> k $ eBadRequest $ 
-    "POST: missing 'update' or 'modified' parameters"
+    "POST: missing 'update' or 'editOrigin' parameters"
 

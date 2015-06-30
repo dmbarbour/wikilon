@@ -21,6 +21,8 @@ import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
 import Database.VCache
 
+import Awelon.ABC
+
 import Wikilon.Time
 import Wikilon.Dict.Word
 
@@ -65,7 +67,7 @@ putDictWordAODef = toBeImplementedLater "PUT word via AODef definition"
 dictWordAODefEdit :: WikilonApp
 dictWordAODefEdit = toBeImplementedLater "AODef edit page"
 
-formDictWordAODefEdit :: HTML
-formDictWordAODefEdit = "TODO"
+formDictWordAODefEdit :: BranchName -> Word -> Maybe T -> ABC -> HTML
+formDictWordAODefEdit d w t abc = "TODO"
 
 

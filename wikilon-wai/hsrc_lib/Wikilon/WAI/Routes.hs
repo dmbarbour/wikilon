@@ -29,6 +29,9 @@ module Wikilon.WAI.Routes
     , uriDictWordsListQPrefix
     , uriDictWordRename
 
+    , uriClawDef, uriClawDefEdit
+    , uriAODef, uriAODefEdit
+
     , href
     ) where
 
@@ -142,6 +145,20 @@ wordURIBuilder d (Word wordBytes) =
 hrefDictWord :: BranchName -> Word -> HTML
 hrefDictWord d w@(Word wbs) = href (uriDictWord d w) ! A.class_ "refDictWord" $ 
     H.unsafeByteString wbs
+
+
+uriClawDef, uriClawDefEdit :: BranchName -> Word -> Route
+uriClawDef d w = toRoute $ wordURIBuilder d w <> BB.stringUtf8 "/clawdef"
+uriClawDefEdit d w = toRoute $ wordURIBuilder d w <> BB.stringUtf8 "/clawdef.edit"
+
+uriAODef, uriAODefEdit :: BranchName -> Word -> Route
+uriAODef d w = toRoute $ wordURIBuilder d w <> BB.stringUtf8 "/aodef"
+uriAODefEdit d w = toRoute $ wordURIBuilder d w <> BB.stringUtf8 "/aodef.edit"
+
+
+
+
+
 
 -- | Print a list of words under a nav tag, with a
 -- simple header. Print nothing if the list is empty.

@@ -7,28 +7,19 @@ module Wikilon.WAI.Pages.DictWord
     , module Wikilon.WAI.Pages.DictWord.AODef
     ) where
 
-import Control.Applicative
-import Control.Monad
 import Data.Monoid
 import qualified Data.List as L
-import qualified Data.ByteString.Lazy as LBS
 import qualified Network.HTTP.Types as HTTP
-import qualified Network.HTTP.Media as HTTP
-import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
-import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
 import Database.VCache
 
-import Wikilon.Time
-import Wikilon.Dict.Word
+import Awelon.ClawCode
+
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
-import Wikilon.WAI.RecvFormPost
-import qualified Wikilon.WAI.RegexPatterns as Regex
 import qualified Wikilon.Store.Dict as Dict
-import Wikilon.Store.Branch (BranchName)
 import qualified Wikilon.Store.Branch as Branch
 import Wikilon.Store.Root
 
@@ -54,11 +45,24 @@ dictWord = app where
         ,(mediaTypeClaw, putDictWordClawDef)
         ]
 
+-- | This is our basic non-interactive web page for words.
+--
+-- For the moment, I'm going to assume that most words will be
+-- implemented using claw code. However, I'll also provide the
+-- ABC variant.
+-- I'm not sure what should go on this page, so I'm just
+-- adding content for now. Later, I'll try to streamline it.
+--
+-- * view and edit code for individual words
+--  * view and edit as Claw code, when feasible
+-- *  
+--  
 getDictWordPage :: WikilonApp
 getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
     readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let b = Branch.lookup' dn bset in
     let d = Branch.head b in 
+    let tm = Branch.modified b in
     let abc = Dict.lookup d dw in
     let status = HTTP.ok200 in
     let headers = [textHtml] in
@@ -69,19 +73,15 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
             H.title title
         H.body $ do
             H.h1 title
-            -- user experience here?
-            --  either provide BOTH editors, cleanly separated
-            --  or primarily edit as claw code.
-            H.textarea ! A.class_ "aodef" ! A.readonly "readonly" 
-                ! A.lang "abc" ! A.placeholder "(undefined)"
-                ! A.rows "10" ! A.cols "70" $ H.string (show abc)
-            let lDeps = L.nub $ Dict.abcWords abc 
-            let lClients = Dict.wordClients d dw 
-            -- navDocWords dictName dictWord
+            formDictWordClawDefEdit dn dw tm abc
+            H.br
+            formDictWordAODefEdit dn dw tm abc
             H.br
             H.br
             H.hr
             H.strong "Dictionary:" <> " " <> hrefDict dn
+            let lDeps = L.nub $ Dict.abcWords abc 
+            let lClients = Dict.wordClients d dw 
             navWords "Depends" dn lDeps
             navWords "Clients" dn lClients
             formDictWordRename dn dw
