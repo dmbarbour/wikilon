@@ -17,10 +17,18 @@ DONE:
 * view a word
 * delete a word (by clearing its definition)
 * rename a word
+* edit `[command][]` definitions as claw code
 
 TODO:
 
+* simplistic REPL based on Claw code!
+ * need to provide compiled forms of words?
+ * skip cache for now? run and compile words?
+ * maybe some turtle graphics, too? or SVG?
+
 * directly edit a word from word's page
+* need convenience links near bottom of word pages
+
 * edit a subset of AO definitions via Claw
  * e.g. require definition form `[def][]`
  * maybe require an explicit namespace? 
@@ -32,10 +40,6 @@ TODO:
 * create a more generic app for diffing resources, e.g. to resolve edit conflicts?
 * create a more general model for loading resources
 
-* simplistic REPL based on Claw code
- * need to provide compiled forms of words?
- * skip cache for now? run and compile words?
- * maybe some turtle graphics, too? or SVG?
 
 * switch to stylesheets and a dark background by default
 * develop a claw variant of the 'AODict' fragment editor?

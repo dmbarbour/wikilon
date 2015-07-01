@@ -10,7 +10,10 @@ module Wikilon.WAI.Pages.DictWord
 import Data.Monoid
 import qualified Data.List as L
 import qualified Network.HTTP.Types as HTTP
+import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
+import qualified Text.Blaze.Html5.Attributes as A
+
 import qualified Network.Wai as Wai
 import Database.VCache
 
@@ -73,20 +76,21 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
             H.title title
         H.body $ do
             H.h1 title
-            formDictWordClawDefEdit dn dw tm abc
-            H.br
-            formDictWordAODefEdit dn dw tm abc
-            H.br
-            H.br
-            H.hr
             H.strong "Dictionary:" <> " " <> hrefDict dn
             let lDeps = L.nub $ Dict.abcWords abc 
             let lClients = Dict.wordClients d dw 
             navWords "Depends" dn lDeps
             navWords "Clients" dn lClients
-            formDictWordRename dn dw
+            formDictWordClawDefEdit dn dw tm abc
+            H.h3 "AO Definition"
+            H.pre $ H.code ! A.class_ "viewAODef" ! A.lang "aodef" $ H.string $ show abc
+            let editor = mconcat $ [uriAODictEdit dn, "?words=", wordToUTF8 dw] 
             H.br
-            H.small $ H.strong "TODO:" <> " compilation, type, health information,\n\
+            H.small $ href editor "Edit AO Definition"
+
+            H.hr
+            formDictWordRename dn dw
+            H.small $ "TODO: compilation, type, health information,\n\
                 \access to structured AO definition and structure editing,\n\
                 \use cases, tests, visualizations, animations of code,\n\
                 \render words (of known types) as application or images...\n\

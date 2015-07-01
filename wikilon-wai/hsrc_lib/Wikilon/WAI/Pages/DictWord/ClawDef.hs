@@ -114,7 +114,7 @@ getDictEditPage = dictWordApp $ \ w dn dw _rq k ->
 recvClawDefEdit :: PostParams -> WikilonApp
 recvClawDefEdit pp
   | (Just cmd) <- getPostParam "command" pp
-  , (Just tMod) <- (parseTime . LazyUTF8.toString) <$> getPostParam "editOrigin" pp
+  , (Just sEditOrigin) <- LazyUTF8.toString <$> getPostParam "editOrigin" pp
   = dictWordApp $ \ w dn dw _rq k ->
     case Claw.decode cmd of
         Left dcs -> 
@@ -131,7 +131,7 @@ recvClawDefEdit pp
                     reportParseError cmd dcs
                     H.h2 "Edit and Resubmit"
                     H.p $ "Do not resubmit without changes."
-                    formClawDefEdit' dn dw tMod cmd
+                    formClawDefEdit' dn dw sEditOrigin cmd
                     H.p $ (H.strong "Word: ") <> hrefDictWord dn dw
         Right clawOps -> 
             let command = Claw.clawToABC $ Claw.ClawCode clawOps in
@@ -145,6 +145,7 @@ recvClawDefEdit pp
                 let b = Branch.lookup' dn bset in
         
                 -- Detect Edit Conflict...
+                let tMod = parseTime sEditOrigin in
                 let dHead = Branch.head b in
                 let dOrig = maybe (Dict.empty vc) (Branch.histDict b) tMod in
                 let bsHead = Dict.lookupBytes dHead dw in
@@ -163,10 +164,11 @@ recvClawDefEdit pp
                                 H.title title
                             H.body $ do
                                 H.h1 title
-                                H.p "A concurrent edit has modified " <> hrefDictWord dn dw <> "."
-                                let sEditOrigin = maybe "--" show tMod
-                                let sHeadVersion = maybe "--" show (Branch.modified b)
+                                H.p "Your initial view was not valid, e.g. due to concurrent edit or\n\
+                                    \because the initial definition did not support a command view."
+                                H.p $ (H.strong "Word: ") <> hrefDictWord dn dw
                                 H.p $ (H.strong "Edit Origin: ") <> H.string sEditOrigin
+                                let sHeadVersion = maybe "--" show (Branch.modified b)
                                 H.p $ (H.strong "Head Version: ") <> H.string sHeadVersion
 
                                 H.h2 "Change Report"
@@ -175,7 +177,7 @@ recvClawDefEdit pp
                                 
                                 H.h2 "Edit and Resubmit"
                                 H.p "At your discretion, you may resubmit without changes."
-                                formClawDefEdit' dn dw (Branch.modified b) cmd
+                                formClawDefEdit' dn dw sHeadVersion cmd
                 in
 
                 if bConflict then onConflict else
@@ -198,7 +200,7 @@ recvClawDefEdit pp
                                     H.li $ H.string $ show e
                                 H.h2 "Edit and Resubmit"
                                 H.p "If you can effectively do so from here."
-                                formClawDefEdit' dn dw tMod cmd
+                                formClawDefEdit' dn dw sEditOrigin cmd
                     Right dUpd -> do -- Edit Success!
                         let b' = Branch.update (tNow, dUpd) b 
                         let bset' = Branch.insert dn b' bset 
@@ -238,22 +240,22 @@ styleParseError h = H.span
 
 formDictWordClawDefEdit :: BranchName -> Word -> Maybe T -> ABC -> HTML
 formDictWordClawDefEdit d w t (parseClawDef -> Just cc) = do
-    formClawDefEdit' d w t (Claw.encode cc)
+    formClawDefEdit' d w (maybe "--" show t) (Claw.encode cc)
 formDictWordClawDefEdit d w _ _ = do
-    H.p $ H.small $ (href uriClawDocs "command view") <> " unavailable"
-    formClawDefEdit' d w Nothing LBS.empty 
+    formClawDefEdit' d w "(invalid command view)" LBS.empty
 
-formClawDefEdit' :: BranchName -> Word -> Maybe T -> LazyUTF8.ByteString -> HTML
-formClawDefEdit' d w mbT sInit = 
+formClawDefEdit' :: BranchName -> Word -> String -> LazyUTF8.ByteString -> HTML
+formClawDefEdit' d w sOrigin sInit = 
     let uriAction = H.unsafeByteStringValue $ uriClawDefEdit d w in
     H.form ! A.method "POST" ! A.action uriAction ! A.id "formClawDefEdit" $ do
-        H.textarea ! A.name "command" ! A.rows "1" ! A.cols "60" $
+        H.textarea ! A.name "command" ! A.rows "2" ! A.cols "60" $
             H.string $ LazyUTF8.toString sInit -- escapes string for HTML
         H.br
-        let tmVal = H.stringValue $ maybe "--" show mbT
-        H.strong "Edit Origin: "
-        H.input ! A.type_ "text" ! A.name "editOrigin" ! A.value tmVal
+        H.string "Edit Origin: "
+        H.input ! A.type_ "text" ! A.name "editOrigin" ! A.value (H.stringValue sOrigin)
         H.string " "
         H.input ! A.type_ "submit" ! A.value "Edit as Command"
+        let commandLang = href uriClawDocs "claw"
+        H.small $ " (cf. " <> commandLang <> ")"
 
 

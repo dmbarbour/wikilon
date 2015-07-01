@@ -100,7 +100,7 @@ formAODictEdit preload dictName mbT =
             H.string $ LazyUTF8.toString preload
         H.br
         let tmVal = H.stringValue $ maybe "--" show mbT
-        H.strong "Edit Origin: "
+        H.string "Edit Origin: "
         H.input ! A.type_ "text" ! A.name "editOrigin" ! A.value tmVal
         H.string " "
         H.input ! A.type_ "submit" ! A.value "Submit"
@@ -181,6 +181,7 @@ reportConflictABC dictName dOrig dHead w abc =
     -- return an HTML description of the conflict
     -- let sOrig = LazyUTF8.toString bsOrig
     H.strong $ "@" <> hrefDictWord dictName w
+    H.br
     reportConflicts (LazyUTF8.toString bsOrig) (LazyUTF8.toString bsHead) (show abc)
 
 histDict :: Branch -> Maybe T -> Dict

@@ -36,8 +36,7 @@ threeWayMerge sHead sOrig sEdit =
             styleEdit $ H.string e
             barrierConflict ")"
 
-headBox, merge2Box, merge3Box :: HTML -> HTML
-headBox = codeBox "diffHeadBox" "border-color:Navy;border-style:dashed;border-width:thin" 
+merge2Box, merge3Box :: HTML -> HTML
 merge2Box = codeBox "diffMerge2Box" "border-color:Indigo;border-style:dashed;border-width:thin"
 merge3Box = codeBox "diffMerge3Box" "border-color:SeaGreen;border-style:dashed;border-width:thin"
 
@@ -47,8 +46,8 @@ codeBox _class _style h =
     H.code ! A.class_ (H.stringValue _class) ! A.lang "abc" $ h
 
 styleHead, styleEdit, styleOrig :: HTML -> HTML
-styleHead = H.span ! A.class_ "diffHead" ! A.style "background-color:DarkSeaGreen"
-styleEdit = H.span ! A.class_ "diffEdit" ! A.style "background-color:Thistle"
+styleHead = H.span ! A.class_ "diffHead" ! A.style "background-color:Thistle"
+styleEdit = H.span ! A.class_ "diffEdit" ! A.style "background-color:DarkSeaGreen"
 styleOrig = id
 
 styleConflict, barrierConflict :: HTML -> HTML
@@ -58,11 +57,11 @@ barrierConflict = H.span ! A.class_ "diffConflictSep" ! A.style "color:DarkOrang
 -- | Report string-level conflicts for origin, head, and edit.
 reportConflicts :: String -> String -> String -> HTML
 reportConflicts sOrig sHead sEdit = do
-    H.b "Head Version:"
-    headBox $ H.string sHead
-    H.b "2-Way String Merge (Head and Edit):"
+    H.p $ "2-Way Merge (Origin → Head):"
+    merge2Box $ twoWayMerge sOrig sHead
+    H.p $ "2-Way Merge (Head → Edit):"
     merge2Box $ twoWayMerge sHead sEdit
-    H.b "3-Way String Merge (Head, Origin, and Edit):"
+    H.p $ "3-Way String Merge (Head, Origin, and Edit):"
     merge3Box $ threeWayMerge sHead sOrig sEdit
 
 
