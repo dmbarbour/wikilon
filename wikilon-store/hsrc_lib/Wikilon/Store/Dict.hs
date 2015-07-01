@@ -107,7 +107,11 @@ instance DictSplitPrefix Dict where
                 in
                 let lChildren = fmap (Left . (p `BS.snoc`)) lChildBytes in
                 lAccept ++ lChildren
-            Just tn -> [Left (p <> Trie.trie_prefix tn)]
+            Just tn ->
+                let fullPrefix = (p <> Trie.trie_prefix tn) in
+                let lChildren = L.filter isJust $ A.elems $ Trie.trie_branch tn in
+                if L.null lChildren then return (Right (Word fullPrefix)) else
+                return (Left fullPrefix)
     wordsWithPrefix d p =
         let tk = Trie.lookupPrefix p (dict_defs d) in
         fmap (Word . (p <>)) (Trie.keys tk)
