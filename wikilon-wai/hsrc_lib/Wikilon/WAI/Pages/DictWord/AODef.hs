@@ -13,6 +13,7 @@ import Control.Monad
 import Data.Monoid
 import qualified Data.List as L
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Network.HTTP.Types as HTTP
 import qualified Network.HTTP.Media as HTTP
 import Text.Blaze.Html5 ((!))
@@ -68,6 +69,19 @@ dictWordAODefEdit :: WikilonApp
 dictWordAODefEdit = toBeImplementedLater "AODef edit page"
 
 formDictWordAODefEdit :: BranchName -> Word -> Maybe T -> ABC -> HTML
-formDictWordAODefEdit d w t abc = "TODO"
+formDictWordAODefEdit d w t abc = formAODefEdit' d w t (encode abc)
+
+formAODefEdit' :: BranchName -> Word -> Maybe T -> LazyUTF8.ByteString -> HTML
+formAODefEdit' d w t sInit =
+    let uriAction = H.unsafeByteStringValue $ uriAODefEdit d w in
+    H.form ! A.method "POST" ! A.action uriAction ! A.id "formAODefEdit" $ do
+        H.textarea ! A.name "command" ! A.rows "4" ! A.cols "60" $
+            H.string $ LazyUTF8.toString sInit -- escapes string for HTML
+        H.br
+        let tmVal = H.stringValue $ maybe "--" show t
+        H.strong "Edit Origin: "
+        H.input ! A.type_ "text" ! A.name "editOrigin" ! A.value tmVal
+        H.string " "
+        H.input ! A.type_ "submit" ! A.value "Edit AO Definition"
 
 

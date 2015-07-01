@@ -17,6 +17,7 @@ module Wikilon.WAI.Pages.Dict
 import Control.Applicative
 import Control.Monad
 import Data.Monoid
+import Data.Either (isLeft)
 import qualified Data.List as L
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BB
@@ -199,16 +200,18 @@ wordsForBrowsing nTargetWidth nMaxWidth dict prefix =
     let expandEnt = either expandPrefix (return . Right) in
     -- fill a menu of prefix options.
     let loopToFillMenu n l =
-            if (n >= nTargetWidth) then l else
+            let bBigEnough = (n >= nTargetWidth) in
+            let bCannotExpand = L.null (L.filter isLeft l) in
+            let bDone = bBigEnough || bCannotExpand in
+            if bDone then l else
             let l' = L.concatMap expandEnt l in
             let n' = L.length l' in
-            if (n' == n) then l' else  -- could not expand
             if (n' > nMaxWidth) then l else -- expands too far
             loopToFillMenu n' l'
     in
-    -- expand prefixes that lead to exactly one word
-    let finishPrefix p = case Dict.wordsWithPrefix dict p of
-            [w] -> Right w -- just one word
+    -- expand prefixes that lead to exactly one element
+    let finishPrefix p = case expandPrefix p of
+            [x] -> x -- just one word or prefix
             _ -> Left p -- more than one word
     in
     let finishEnt = either finishPrefix Right in

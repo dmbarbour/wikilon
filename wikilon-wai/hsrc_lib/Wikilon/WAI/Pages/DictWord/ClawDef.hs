@@ -50,17 +50,17 @@ import Wikilon.Store.Root
 -- Commands should always include their own namespace (if it is
 -- other than the default).
 parseClawDef :: ABC -> Maybe Claw.ClawCode
-parseClawDef abc = case clearSpaces $ abcOps abc of
+parseClawDef abc =
+    let topLevel = L.filter (not . abcSP) $ abcOps abc in
+    case topLevel of
     [ABC_Block command, ABC_Block compiler] | ok -> return cc where
         ok = L.null $ abcOps compiler
         cc = Claw.clawFromABC command
     _ -> Nothing
 
-clearSpaces :: [Op] -> [Op]
-clearSpaces = L.filter (not . isSpace) where
-    isSpace (ABC_Prim ABC_SP) = True
-    isSpace (ABC_Prim ABC_LF) = True
-    isSpace _ = False
+abcSP :: Op -> Bool
+abcSP (ABC_Prim op) = (ABC_SP == op) || (ABC_LF == op)
+abcSP _ = False
 
 -- | Endpoint that restructs users to Claw format for put and get.
 dictWordClawDef :: WikilonApp
@@ -165,12 +165,12 @@ recvClawDefEdit pp
                                 H.h1 title
                                 H.p "A concurrent edit has modified " <> hrefDictWord dn dw <> "."
                                 let sEditOrigin = maybe "--" show tMod
-                                let sLastUpdate = maybe "--" show (Branch.modified b)
+                                let sHeadVersion = maybe "--" show (Branch.modified b)
                                 H.p $ (H.strong "Edit Origin: ") <> H.string sEditOrigin
-                                H.p $ (H.strong "Head Version: ") <> H.string sLastUpdate
+                                H.p $ (H.strong "Head Version: ") <> H.string sHeadVersion
 
                                 H.h2 "Change Report"
-                                H.p $ "TODO: command language view of conflicts!"
+                                H.p $ H.small $ "TODO: command language view of conflicts!"
                                 reportConflicts (LazyUTF8.toString bsOrig) (LazyUTF8.toString bsHead) (show abc)
                                 
                                 H.h2 "Edit and Resubmit"
@@ -240,12 +240,20 @@ formDictWordClawDefEdit :: BranchName -> Word -> Maybe T -> ABC -> HTML
 formDictWordClawDefEdit d w t (parseClawDef -> Just cc) = do
     formClawDefEdit' d w t (Claw.encode cc)
 formDictWordClawDefEdit d w _ _ = do
-    H.small $ "Command language view unavailable."
+    H.p $ H.small $ (href uriClawDocs "command view") <> " unavailable"
     formClawDefEdit' d w Nothing LBS.empty 
-    
 
 formClawDefEdit' :: BranchName -> Word -> Maybe T -> LazyUTF8.ByteString -> HTML
-formClawDefEdit' d w mbT init = H.div $ "TODO! form to edit claw code!"
-
+formClawDefEdit' d w mbT sInit = 
+    let uriAction = H.unsafeByteStringValue $ uriClawDefEdit d w in
+    H.form ! A.method "POST" ! A.action uriAction ! A.id "formClawDefEdit" $ do
+        H.textarea ! A.name "command" ! A.rows "1" ! A.cols "60" $
+            H.string $ LazyUTF8.toString sInit -- escapes string for HTML
+        H.br
+        let tmVal = H.stringValue $ maybe "--" show mbT
+        H.strong "Edit Origin: "
+        H.input ! A.type_ "text" ! A.name "editOrigin" ! A.value tmVal
+        H.string " "
+        H.input ! A.type_ "submit" ! A.value "Edit as Command"
 
 

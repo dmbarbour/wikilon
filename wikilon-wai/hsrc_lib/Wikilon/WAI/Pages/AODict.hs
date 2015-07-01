@@ -186,7 +186,7 @@ aodictDocs = basicWebPage $ \ w _ _ -> do
     H.head $ do
         htmlHeaderCommon w
         H.title "text/vnd.org.awelon.aodict"
-    H.body ! A.class_ "docs" ! A.style "margin: 0 auto; width: 960px" $ 
+    H.body ! A.class_ "docs" ! A.style "margin: 0 auto; width: 640px" $ 
         aodictDocHTML
 
 aodictDocHTML :: HTML
@@ -201,9 +201,9 @@ aodictDocHTML = do
     H.h2 "General Structure"
 
     let awelonBytecode = href uriABCDocs "Awelon Bytecode (ABC)" 
-    H.p "The AODict file contains a simple list of `@word definition LF` entries.\n\
-        \Each word is defined exactly once, and each word is defined before use.\n\
-        \Definitions use a subset of " <> awelonBytecode <> ". Simple example:"
+    H.p $ "The AODict file contains a simple list of `@word definition LF` entries.\n\
+          \Each word is defined exactly once, and each word is defined before use.\n\
+          \Definitions use a subset of " <> awelonBytecode <> ". Simple example:"
 
     H.pre . (H.code ! A.lang "aodict") $
         "@swap [rwrwzwlwl][]\n\
@@ -218,32 +218,27 @@ aodictDocHTML = do
 
     H.p "The structure of ABC ensures there is never any ambiguity that the '@'\n\
         \begins a new entry. There is no need for escapes, and we don't need to\n\
-        \parse ABC to split entries. The word and definition may be divided by a\n\
-        \a space or linefeed (ASCII 32 or 10)."
+        \parse ABC to split entries. The word is separated from the definition\n\
+        \by a space or linefeed (ASCII 32 or 10)."
 
     H.h2 "Type of Definition"
     H.p "A definition is a string of bytecode with the general type:"
     H.pre . H.code $
-        "type Def a b = ∀e.(e → ∃v.([v→[a→b]] * (v * e)))"
+        "type Def a b = ∃v.∀e.(e → ([v→[a→b]] * (v * e)))"
     H.p "The definition effectively has two parts:"
     H.ul $ do
         H.li "An ad-hoc structured value of type `v`."
         H.li "A compiler function of type `v→[a→b]`"
-
-    H.p $ "Separating the structured value `v` from the compiler function offers\n\
-          \a simple basis for structured editing, staged programming, and problem\n\
-          \specific languages. A structure editor is necessary to leverage this.\n\
-          \The editor would recognize values by shape or discretionary seals and\n\
-          \render the shape for the users. Commands to render or update the shape\n\
-          \would be words in the dictionary, perhaps aided by naming conventions." 
-
-    let commandLanguage = href uriClawDocs "command language"
-    H.p $ "In the trivial case, our compiler may be the identity function and\n\
-          \the value a block of type [a→b], resulting in a definition of form\n\
-          \`[command abc][]`. This particular case is amenable to an editable\n" <> 
-          commandLanguage <> " view, which offers a Forth-like user experience.\n\
-          \The command language view is extensible and offers an alternative\n\
-          \basis for structured editing."
+    
+    H.p $ "The separation of the value `v` and the compiler function provides\n\
+          \a simple foundation for staged programming that doesn't rely on\n\
+          \partial evaluation. It may also be leveraged for domain specific\n\
+          \languages and structured editing (see editing, below). This value\n\
+          \is compiled into a pure function [a→b], the meaning of the word."
+    
+    H.p $ "The common, trivial case: our compiler function is identity [], and\n\
+          \the value is already a function of type [a→b]. A minimal definition\n\
+          \is `[][]`, which specifies an identity function."
 
     H.h3 "The AODef Format"
 
@@ -315,30 +310,46 @@ aodictDocHTML = do
 
     H.h2 "Structural Constraints"
     H.p "The aodict format has structural constraints to guard against\n\
-        \cycles and undefined words, and simplify efficient processing."
+        \cycles and simplify efficient processing."
     H.ul $ do
         H.li "words are defined before use"
         H.li "words are not redefined"
     H.p "These constraints apply to a file or stream describing an entire\n\
         \dictionary. They may be relaxed for editing a fragment of the\n\
-        \dictionary, e.g. a few words at a time."
+        \dictionary, e.g. a few words at a time. Also, 'defined' here might\n\
+        \involve an incomplete definition for contexts that accept one."
 
     H.h2 "Editing of AO Dictionaries"
 
-    H.p "The AODict format is not suitable for direct human reading and editing.\n\
-        \It is terribly inconvenient to tap out {%foo} on a keyboard, much less\n\
-        \larger words. Reading bytecode is feasible but only at small scales.\n\
-        \And even a trivial `[][]` structure (the identity function) is noisy.\n\
-        \An AODict file with a few dozen words becomes too painful to navigate."
+    H.p "The AODict and AODef formats are not suitable for direct human reading\n\
+        \and editing. Use of curly braces and prefixes, e.g. {%foo}, is painful\n\
+        \to type (too much shift key). Even the simplest definition `[][]` is a\n\
+        \little painful to read. Definitions and dictionaries should be edited\n\
+        \through human-friendly, structured views."
     
-    H.p "AO dictionaries must primarily be modified through editable views or\n\
-        \structure editors. As a special case, a " <> commandLanguage <> " view\n\
-        \for definitions of form `[command][]` may allow something closer to a\n\
-        \normal textual PL experience. Navigation should leverage hypertext."
+    H.p "There are at least two viable options for editable structure in AO:"
+    H.ol $ do
+        H.li "We can 'parse' bytecode into higher level texts or structures."
+        H.li "We can 'evaluate' intermediate structure `v` from definitions."
+    
+    let commandLanguageForAwelon = href uriClawDocs "command language for awelon (claw)"
+    H.p $ "The " <> commandLanguageForAwelon <> " leverages the first\n\
+          \idea. For definitions of form `[command][]`, we parse the command\n\
+          \into a Forth-like sequence of words and numbers. Claw is usually\n\
+          \rendered and manipulated as text. However, claw's parse and render\n\
+          \functions can feasibly be extended for structure editors, e.g. to\n\
+          \support graphs, diagrams, sliders, color pickers."
+    
+    H.p $ "The second option involves rendering and directly manipulating the\n\
+          \existential value `v` computed when compiling a definition. Updates\n\
+          \can be modeled as appending the definition, resulting in an updated\n\
+          \value or compiler function. The value is rendered for the user. It\n\
+          \is feasible to model rich objects for `v` that have their own update\n\
+          \and rendering logics, and protect their own invariants."
 
-    H.p "However, at very small scales, it can be useful to view and edit the\n\
-        \bytecode for a word or a small subset of words. This may be useful\n\
-        \for didactic purposes or debugging."
+    H.p $ "These options overlap in utility, but have different strengths. My\n\
+          \hope is that they fill different niches. Eventually. The immediate\n\
+          \focus is on command language views and extensions."
 
 lnkAODict, lnkAODictFile, lnkAODictGz :: BranchName -> HTML
 formImportAODict :: Route -> BranchName -> HTML

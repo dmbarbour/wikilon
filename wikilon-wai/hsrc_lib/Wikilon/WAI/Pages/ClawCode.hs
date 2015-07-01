@@ -165,3 +165,17 @@ clawDocsHTML = do
           \words will bind. The main disadvantage is that common words, even those\n\
           \with exactly the same implementation, must be repeated (or redirected)\n\
           \for each namespace in the dictionary. Automation might mitigate this."
+
+    H.h2 "Claw in the AO Dictionary"
+
+    let aoDictionary = href uriAODictDocs "AO dictionary"
+    H.p $ "As a matter of convention, definitions of form `[command][]` should\n\
+          \support an editable claw view of the command. This allows developers\n\
+          \to treat a large subset of an " <> aoDictionary <> " as containing\n\
+          \claw code, and simplifies refactoring of command sessions into fresh\n\
+          \dictionary words." 
+
+    H.p $ "More generally, structure editors in context of an AO dictionary\n\
+          \could present otherwise opaque blocks as containing claw code."
+
+ 
