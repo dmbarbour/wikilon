@@ -1,6 +1,7 @@
 body {
-  color: #ecf0eb;
-  background: linear-gradient(#2e3436, #171A1B);
+ background: linear-gradient(#2e3436, #171A1B);
+ background-attachment: fixed;
+ color: #ecf0eb;
 }
 h1,h2,h3,h4,h5,h6 {
   color: #d3d7cf;
@@ -18,13 +19,39 @@ strong, b {
  font-weight: bold;
 }
 a.refDictWord, .dictWord {
- color: #fce0ff;
-}
-a.refDictWordPrefix, .dictWordPrefix {
  color: #efd0a7;
 }
-textarea, input[type="text"], pre code {
+a.refDictWordPrefix, .dictWordPrefix {
+ color: #c17d11;
+}
+nav[class="Clients"] {
+ font-size: x-small;
+}
+textarea {
  color: #ecf0eb;
  background-color: #2e3436;
+ padding: 3px;
+ overflow: auto;
+ resize: both;
+}
+input[type="text"] {
+ color: #ecf0eb;
+ background-color: #2e3436;
+ padding: 3px;
+}
+input[type="submit"] {
+ box-shadow: 3px 3px 3px black;
+ background-color: #888a85;
+ color: white;
+ font-weight: bold;
+ text-shadow: 0px 0px 2px black;
+ padding: 2px;
+}
+pre {
+ color: #ecf0eb;
+ background-color: #2e3436;
+ padding: 3px;
  border: 1px solid #888a85;
+ max-width: 640px;
+ white-space: pre-wrap;
 }

@@ -25,4 +25,6 @@ resourceDefaultCSS = app where
 
 -- Note: I might later push the CSS into the VCache or model to avoid
 -- direct dependency on the filesystem and simplify editing of CSS. 
+-- Further, CSS should probably be provided by dictionaries (i.e.
+-- as a simple text output, with cached computation.). 
 
