@@ -53,7 +53,9 @@ Library
   Exposed-Modules:
 
     Wikilon.Time
-    Wikilon.Events
+
+    -- Wikilon.Events
+    -- Wikilon.Queries
     Wikilon.Model
 
     Wikilon.Dict

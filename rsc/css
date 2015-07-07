@@ -1,0 +1,26 @@
+body {
+  color: #ecf0eb;
+  background: linear-gradient(#2e3436, #171A1B);
+}
+h1,h2,h3,h4,h5,h6 {
+  color: #d3d7cf;
+  text-shadow: 2px 2px black;
+}
+a {
+ color: #ecf0eb;
+ text-decoration: none;
+}
+a:hover, a:focus {
+ text-decoration: underline;
+}
+strong, b {
+ text-shadow: 1px 1px black;
+ font-weight: bold;
+}
+a.refDictWord {
+ color: #fce0ff;
+}
+a.refDictWordPrefix {
+ color: #efd0a7;
+ text-shadow: none;
+}

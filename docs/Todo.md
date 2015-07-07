@@ -1,7 +1,7 @@
 
 # TODO
 
-At this time I'm trying to develop lots of little 'spike' solutions. The UX isn't particularly refined yet.
+At this time I'm trying to develop lots of little 'spike' solutions. The UX isn't particularly refined yet. I might need to use reflex-dom or similar to develop the rich UX that I want. Actually, the UX needs an enormous revamp to make it nicer to use.
 
 I should probably work to make editing AO code more comfortable for the common case. In particular, I should be able to quickly build and test a definition using Claw code, perhaps entirely via REPL. And I also need to get the REPL going ASAP.
 
@@ -17,46 +17,69 @@ DONE:
 * view a word
 * delete a word (by clearing its definition)
 * rename a word
-* edit `[command][]` definitions as claw code
+* view and edit `[command][]` definitions as claw code
 
 TODO:
 
-* simplistic REPL based on Claw code!
+* simplistic REPL based on Claw code
  * need to provide compiled forms of words?
  * skip cache for now? run and compile words?
  * maybe some turtle graphics, too? or SVG?
-
-* directly edit a word from word's page
-* need convenience links near bottom of word pages
-
-* edit a subset of AO definitions via Claw
- * e.g. require definition form `[def][]`
- * maybe require an explicit namespace? 
-
-* abstract POST-based editor concept
- * add 'goto' continuation
- * multi-stage: parse, auth, conflict, accept (and return)
-
-* create a more generic app for diffing resources, e.g. to resolve edit conflicts?
-* create a more general model for loading resources
-
+* continuous compilation, testing, type checking
+* simple ABC to JavaScript compiler
 
 * switch to stylesheets and a dark background by default
-* develop a claw variant of the 'AODict' fragment editor?
+
+* consider upgrade to MFlow or Yesod or similar for pages
+ * develop a more generic widget concept
+ * use widgets instead of HTML directly
+ * assume browser/page abstract virtual machine?
+
+* push towards intermediate data model
+* exponential decay for dictionaries
+
+* convenient editing of multiple words
+ * view and edit multiple words together
+  * workspace model? word sets?
+  * edit words used in REPL session?
+  * directly edit words via REPL?
+  * remember workspaces...
+ * automatic word sets or workspaces 
+  * based on prefix, dependencies, etc. 
+ * edit multiple words quickly together
+ * claw variant of AODict fragment editor?
+
+* begin development of interactive editing
+ * use more javascript and websockets
+ * interactive should be default
+ * pure HTML fallbacks are okay
+ * editable pre-code blocks?
+ * continuous feedback and testing
+
+* clean up word lists
+ * automatic compression based on common prefixes
+ * if too many words (e.g. under `integer`), use fallback page
+
+* need convenience links near bottom of word pages
+
+* abstract POST-based editor concept
+ * perhaps add 'return to' continuations
+ * alternatively, create a resource model for intermediate states
+ * multi-stage: parse, auth, conflict, accept (and return)
+
+* switch to model-based manipulation of Wikilon resource state
+ * easier to update backends
+ 
+
+* create generic app for diffing resources, e.g. to resolve edit conflicts?
+* create a more general model for loading resources
+
 
 * review all of 'aoi' and 'ao' tool operations and model them
 
 * improve AODict editor:
  * support claw-style namespaces when loading words into editor?
 
-* further tune browsing of words
- * try to split on ':' where feasible
- * but don't bother if it widens directory too much
- * need to find a good heuristic balance here
-
-* continuous testing, dictionary health description
-* basic typechecking 
-* simple ABC to JavaScript compiler
 * I can easily find recently changed words for fast review
 
 * interactive editing
@@ -71,7 +94,7 @@ TODO:
  * obtain events for individual dictionaries
  * observe geneologies involving many dictionaries
  
-* rename all words with a given prefix
+* rename all words with a given prefix, or whole lists of words
 * I can easily browse words by type in the dictionary
 * I can easily browse words by intermediate structure in dictionary
 * I can easily browse a reverse lookup for words in the dictionary

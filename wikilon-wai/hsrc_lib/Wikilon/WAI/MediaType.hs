@@ -11,6 +11,7 @@ module Wikilon.WAI.MediaType
     , mediaTypeFormURLEncoded
     , mediaTypeMultiPartFormData
     , mediaTypeGzip
+    , mediaTypeCSS
     ) where
 
 import qualified Network.HTTP.Media as HTTP
@@ -35,6 +36,9 @@ mediaTypeTextHTML = "text/html"
 
 mediaTypeTextCSV :: HTTP.MediaType
 mediaTypeTextCSV = "text/csv"
+
+mediaTypeCSS :: HTTP.MediaType
+mediaTypeCSS = "text/css"
 
 mediaTypeFormURLEncoded :: HTTP.MediaType
 mediaTypeFormURLEncoded = "application/x-www-form-urlencoded"

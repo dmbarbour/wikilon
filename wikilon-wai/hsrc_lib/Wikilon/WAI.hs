@@ -22,6 +22,7 @@ import qualified Network.Wai.Route.Tree as Tree
 import Wikilon.WAI.Types
 import Wikilon.WAI.Routes
 import Wikilon.WAI.Pages
+import Wikilon.WAI.DefaultCSS
 import Wikilon.WAI.Utils (plainText, noCache, eServerError, eNotFound)
 
 import Wikilon.Store.Branch (BranchName)
@@ -68,7 +69,7 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 
     -- generic endpoints
 --    ,("/favicon", resourceFavicon)
---    ,("/css", resourceCSS)
+    ,("/css", resourceDefaultCSS)
     ]
 
 wikilonWaiConf :: ByteString -> BranchName -> WikilonStore -> Wikilon

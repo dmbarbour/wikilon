@@ -36,6 +36,7 @@ module Wikilon.WAI.Utils
 
     -- HEADERS
     , textHtml
+    , textCSS
     , plainText
     , noCache
     , eTagN, eTagNW
@@ -344,6 +345,9 @@ okNoContent = Wai.responseLBS HTTP.noContent204 [] LBS.empty
 -- | Content-Type: text\/html; charset=utf-8
 textHtml :: HTTP.Header
 textHtml = (HTTP.hContentType, "text/html; charset=utf-8")
+
+textCSS :: HTTP.Header
+textCSS = (HTTP.hContentType, "text/css; charset=utf-8")
 
 -- | Content-Type: text\/plain; charset=utf-8
 plainText :: HTTP.Header

@@ -136,6 +136,8 @@ editorPage = dictApp $ \ w dictName rq k -> do
             H.title title 
         H.body $ do
             H.h1 title
+            let aodict = href uriAODictDocs "AODict"
+            H.small $ "Expecting fragment of code in " <> aodict <> " format."
             formAODictEdit sContent dictName tMod 
             H.hr
             H.strong "Dictionary:" <> " " <> hrefDict dictName

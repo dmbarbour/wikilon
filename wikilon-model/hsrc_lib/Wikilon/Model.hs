@@ -17,6 +17,30 @@ module Wikilon.Model
 --
 
 
+-- A web service will communicate with our model by presenting a
+-- sequence of messages, some of which will cause responses. In
+-- some cases, I'll want subscriptions as well. Messages will be
+-- processed by an abstract machine, the data model, but may be
+-- batched as a simplistic basis for atomic updates and queries.
+--
+-- For feedback, I should present each client as a separate abstract
+-- machine, though which may be short-lived or volatile. Capabilities
+-- for such a machine could be given a volatile address, e.g. using
+-- the load count for the wikilon store.
+--
+-- Eventually, I'll need subscriptions. But for now I can probably
+-- focus on simple query-response behaviors, which suggest futures.
+
+-- model requires:
+--  capabilities concepts
+--  serializable capabilities
+--  toplevel capabilities (e.g. basic query/response)
+--  ability to create temporary capabilities
+--    
+
+
+
+
 
 
 

@@ -112,16 +112,16 @@ dictFrontPage = dictApp $ \ w dictName rq k ->
             -- 
 
         H.h2 "Browse Words by Name"
-        let lBrowseWords = wordsForBrowsing 24 40 (Branch.head b) (BS.empty)
+        let lBrowseWords = wordsForBrowsing 24 48 (Branch.head b) (BS.empty)
         H.ul $ forM_ lBrowseWords $ (H.li . lnkEnt dictName)
         H.p $ "Long term, I'd like to support browsing by type, domain, role, definition structure, etc."
 
         H.hr
         H.div ! A.id "dictFoot" ! A.class_ "footer" $ do
-            H.b "Edit:" <> " " <> (formAODictLoadEditor [] dictName ! A.style "display:inline") <> H.br
             H.b "Export:" <> " " <> lnkAODictFile dictName <> " " <> lnkAODictGz dictName <> H.br
             H.b "Import:" <> " " <> formImportAODict origin dictName <> H.br
             H.b "Modified:" <> " " <> tmModified <> H.br
+            H.b "Edit AODict:" <> " " <> (formAODictLoadEditor [] dictName ! A.style "display:inline") <> H.br
 
 dictWords :: WikilonApp
 dictWords = justGET $ branchOnOutputMedia
@@ -161,7 +161,7 @@ dictWordsPage = dictApp $ \w dictName rq k ->
     readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let dict = Branch.head $ Branch.lookup' dictName bset in
     let prefix = requestedPrefix rq in
-    let lBrowse = wordsForBrowsing 24 40 dict prefix in
+    let lBrowse = wordsForBrowsing 24 48 dict prefix in
     let etag = eTagN (Dict.unsafeDictAddr dict) in
     let status = HTTP.ok200 in
     let headers = [textHtml, etag] in
@@ -223,7 +223,7 @@ lnkEnt dictName = either lnkPrefix lnkWord where
     lnkWord = hrefDictWord dictName
     lnkPrefix p = 
         let uri = uriDictWordsQPrefix dictName p in
-        let msg = H.unsafeByteString p in
+        let msg = H.unsafeByteString p <> "..." in
         href uri ! A.class_ "refDictWordPrefix" $ msg
 
 -- TODO: delete a list of words

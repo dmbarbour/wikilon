@@ -74,8 +74,11 @@ Library
     Wikilon.WAI.RegexPatterns
     Wikilon.WAI.MediaType
     Wikilon.WAI.Conflicts
+    Wikilon.WAI.DefaultCSS
     Wikilon.WAI.Pages.AODict
     Wikilon.WAI.Pages.AODictEdit
+    Wikilon.WAI.Pages.ClawCode
+    Wikilon.WAI.Pages.ClawEdit
     Wikilon.WAI.Pages.DictList
     Wikilon.WAI.Pages.Dict
     Wikilon.WAI.Pages.DictWord
@@ -84,7 +87,6 @@ Library
     Wikilon.WAI.Pages.DictWord.ClawDef
     Wikilon.WAI.Pages.FrontPage
     Wikilon.WAI.Pages.Admin
-    Wikilon.WAI.Pages.ClawCode
     Wikilon.WAI.Pages
     Wikilon.WAI
 

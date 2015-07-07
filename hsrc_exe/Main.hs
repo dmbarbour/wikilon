@@ -142,7 +142,7 @@ runWikilonInstance a = mainBody where
         loadMaster vc (_master a) >>= \ master ->
         (`finally` vcacheSync (vcache_space vc)) $  -- sync on normal exit
             let wvc = vcacheSubdir "wiki/" vc in
-            let whome = home FS.</> "wiki" in
+            let whome = home FS.</> "wiki/" in
             Wikilon.loadWikilonStore wvc whome >>= \ wikiStore ->
             let wiki = Wikilon.wikilonWaiConf "" master wikiStore in
             let printGreetingAndAdminCode = do
