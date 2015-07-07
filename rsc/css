@@ -17,10 +17,14 @@ strong, b {
  text-shadow: 1px 1px black;
  font-weight: bold;
 }
-a.refDictWord {
+a.refDictWord, .dictWord {
  color: #fce0ff;
 }
-a.refDictWordPrefix {
+a.refDictWordPrefix, .dictWordPrefix {
  color: #efd0a7;
- text-shadow: none;
+}
+textarea, input[type="text"], pre code {
+ color: #ecf0eb;
+ background-color: #2e3436;
+ border: 1px solid #888a85;
 }
