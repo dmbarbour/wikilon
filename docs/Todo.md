@@ -18,32 +18,49 @@ DONE:
 * delete a word (by clearing its definition)
 * rename a word
 * view and edit `[command][]` definitions as claw code
+* stylesheets with dark background by default
 
 TODO:
 
 * simplistic REPL based on Claw code
- * need to provide compiled forms of words?
- * skip cache for now? run and compile words?
- * maybe some turtle graphics, too? or SVG?
+ * skip compilation and cache for now?
+
+* maybe add support for 
+
+* move all css to use 'classes'; multiple classes
+* css styles for diffs, etc.
+* clean up backrefs and clients lists; 
+    e.g. list only ten items
+
+* type checker and cache for ABC and Claw code
+* compilation and cache for ABC and Claw code
+ * maybe use secure hashes in cache?
+* support for graphical REPL, e.g. turtle graphics or SVG
+* support for developing web applications
+
 * continuous compilation, testing, type checking
 * simple ABC to JavaScript compiler
 
-* switch to stylesheets and a dark background by default
-
 * consider upgrade to MFlow or Yesod or similar for pages
+ * interactive widgets 
+ * model browser/page AVM? 
+  * Could be very effective and generic
+  * probably slow to start
  * develop a more generic widget concept
  * use widgets instead of HTML directly
- * assume browser/page abstract virtual machine?
 
 * push towards intermediate data model
 * exponential decay for dictionaries
+
 
 * convenient editing of multiple words
  * view and edit multiple words together
   * workspace model? word sets?
   * edit words used in REPL session?
   * directly edit words via REPL?
-  * remember workspaces...
+  * remember workspaces... 
+   * recent 'edit sets'?
+   
  * automatic word sets or workspaces 
   * based on prefix, dependencies, etc. 
  * edit multiple words quickly together
@@ -94,6 +111,9 @@ TODO:
  * obtain events for individual dictionaries
  * observe geneologies involving many dictionaries
  
+* support user-defined stylesheets via dictionary
+
+
 * rename all words with a given prefix, or whole lists of words
 * I can easily browse words by type in the dictionary
 * I can easily browse words by intermediate structure in dictionary
@@ -111,7 +131,6 @@ TODO:
  * maybe words with common suffixes or infixes (requires new index)
 * I can access the definition for each word via browsing
 * Structured Editing of Words based on first stage computations
-* Edit words using Claw Code
 
 * I can evaluate useful functions from words
 * I can access precompiled s

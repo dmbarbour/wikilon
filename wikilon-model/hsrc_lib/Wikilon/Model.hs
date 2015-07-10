@@ -3,7 +3,11 @@
 -- Wikilon will receive and process event messages, and respond to
 -- messages asynchronously (if at all). Batches of events may be
 -- processed atomically, i.e. present Wikilon as an abstract virtual
--- machine.  
+-- machine.
+--
+-- Batch messages correspond, more or less, to Haskell 'Applicative'.
+-- That is, we support a set of queries and actions, but the actions
+-- are not directly or conditionally threaded.
 --
 module Wikilon.Model
     ( 
@@ -37,6 +41,7 @@ module Wikilon.Model
 --  toplevel capabilities (e.g. basic query/response)
 --  ability to create temporary capabilities
 --    
+
 
 
 

@@ -3,12 +3,12 @@ body {
  background-attachment: fixed;
  color: #ecf0eb;
 }
-h1,h2,h3,h4,h5,h6 {
+h1,h2,h3,h4,h5,h6,th {
   color: #d3d7cf;
-  text-shadow: 2px 2px black;
+  text-shadow: 2px 1px 3px black;
 }
 a {
- color: #ecf0eb;
+ color: #97c4f0;
  text-decoration: none;
 }
 a:hover, a:focus {
@@ -16,6 +16,7 @@ a:hover, a:focus {
 }
 strong, b {
  text-shadow: 1px 1px black;
+ color: #d3d7cf;
  font-weight: bold;
 }
 a.refDictWord, .dictWord {
@@ -33,19 +34,24 @@ textarea {
  padding: 3px;
  overflow: auto;
  resize: both;
+ border: 1px solid #888a85;
 }
 input[type="text"] {
  color: #ecf0eb;
  background-color: #2e3436;
  padding: 3px;
+ border: 1px solid #888a85;
+}
+input[name="editOrigin"] {
+ color: #babdb6;
 }
 input[type="submit"] {
- box-shadow: 3px 3px 3px black;
+ box-shadow: 2px 1px 3px black;
  background-color: #888a85;
- color: white;
+ color: #ecf0eb;
  font-weight: bold;
  text-shadow: 0px 0px 2px black;
- padding: 2px;
+ padding: 1px;
 }
 pre {
  color: #ecf0eb;
@@ -55,3 +61,10 @@ pre {
  max-width: 640px;
  white-space: pre-wrap;
 }
+.parseError {
+ background-color: #820000;
+}
+
+
+
+

@@ -58,6 +58,8 @@ Library
     -- Wikilon.Queries
     Wikilon.Model
 
+    Wikilon.Compile
+
     Wikilon.Dict
     Wikilon.Dict.Word
     Wikilon.Dict.Token
