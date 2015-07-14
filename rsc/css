@@ -43,7 +43,7 @@ input[type="text"] {
  border: 1px solid #888a85;
 }
 input[name="editOrigin"] {
- color: #babdb6;
+ color: #ce5c00;
 }
 input[type="submit"] {
  box-shadow: 2px 1px 3px black;
@@ -61,9 +61,29 @@ pre {
  max-width: 640px;
  white-space: pre-wrap;
 }
-.parseError {
+body.docs {
+ margin: 0 auto;
+ width: 640px;
+}
+span.parseError {
  background-color: #820000;
 }
+span.diffHead {
+ background-color: #2a5703;
+}
+span.diffEdit {
+ background-color: #371740;
+}
+span.diffOrig {
+}
+span.diffConflict {
+ background-color: #8c3700;
+}
+span.diffConflictSep {
+ color: #f57900;
+ font-weight: bolder;
+}
+
 
 
 

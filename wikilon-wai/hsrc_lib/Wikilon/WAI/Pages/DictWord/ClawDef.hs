@@ -233,10 +233,7 @@ reportParseError s dcs = H.pre ! A.class_ "parseErrorReport" $ H.code ! A.lang "
     styleParseError $ H.unsafeLazyByteString badText
 
 styleParseError :: HTML -> HTML
-styleParseError h = H.span 
-    ! A.class_ "parseError" 
-    ! A.style "background-color:LightCoral" 
-    $ h
+styleParseError h = H.span ! A.class_ "parseError" $ h
 
 formDictWordClawDefEdit :: BranchName -> Word -> Maybe T -> ABC -> HTML
 formDictWordClawDefEdit d w t (parseClawDef -> Just cc) = do

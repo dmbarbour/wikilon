@@ -37,22 +37,20 @@ threeWayMerge sHead sOrig sEdit =
             barrierConflict ")"
 
 merge2Box, merge3Box :: HTML -> HTML
-merge2Box = codeBox "diffMerge2Box" "border-color:Indigo;border-style:dashed;border-width:thin"
-merge3Box = codeBox "diffMerge3Box" "border-color:SeaGreen;border-style:dashed;border-width:thin"
+merge2Box = codeBox "diffMerge2Box" 
+merge3Box = codeBox "diffMerge3Box" 
 
-codeBox :: String -> String -> HTML -> HTML
-codeBox _class _style h =
-    H.pre ! A.style (H.stringValue _style) $ 
-    H.code ! A.class_ (H.stringValue _class) ! A.lang "abc" $ h
+codeBox :: String -> HTML -> HTML
+codeBox _class h = H.pre ! A.class_ (H.stringValue _class) $ H.code $ h
 
 styleHead, styleEdit, styleOrig :: HTML -> HTML
-styleHead = H.span ! A.class_ "diffHead" ! A.style "background-color:Thistle"
-styleEdit = H.span ! A.class_ "diffEdit" ! A.style "background-color:DarkSeaGreen"
-styleOrig = id
+styleHead = H.span ! A.class_ "diffHead"
+styleEdit = H.span ! A.class_ "diffEdit"
+styleOrig = H.span ! A.class_ "diffOrig"
 
 styleConflict, barrierConflict :: HTML -> HTML
-styleConflict = H.span ! A.class_ "diffConflict" ! A.style "border-color:DarkOrange;border-style:solid;border-width:medium"
-barrierConflict = H.span ! A.class_ "diffConflictSep" ! A.style "color:DarkOrange;font-weight:bolder"
+styleConflict = H.span ! A.class_ "diffConflict" 
+barrierConflict = H.span ! A.class_ "diffConflictSep"
 
 -- | Report string-level conflicts for origin, head, and edit.
 reportConflicts :: String -> String -> String -> HTML

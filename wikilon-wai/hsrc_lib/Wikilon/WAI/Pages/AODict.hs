@@ -186,7 +186,7 @@ aodictDocs = basicWebPage $ \ w _ _ -> do
     H.head $ do
         htmlHeaderCommon w
         H.title "text/vnd.org.awelon.aodict"
-    H.body ! A.class_ "docs" ! A.style "margin: 0 auto; width: 640px" $ 
+    H.body ! A.class_ "docs" $ 
         aodictDocHTML
 
 aodictDocHTML :: HTML

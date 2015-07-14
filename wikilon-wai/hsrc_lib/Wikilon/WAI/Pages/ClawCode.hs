@@ -23,7 +23,7 @@ clawDocs = basicWebPage $ \ w _ _ -> do
     H.head $ do
         htmlHeaderCommon w
         H.title "Command Line for Awelon"
-    H.body ! A.class_ "docs" ! A.style "margin: 0 auto; width: 640px" $
+    H.body ! A.class_ "docs" $
         clawDocsHTML
 
 clawDocsHTML :: HTML

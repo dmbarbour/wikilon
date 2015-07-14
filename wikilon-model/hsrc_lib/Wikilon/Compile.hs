@@ -7,10 +7,11 @@ module Wikilon.Compile
     ( 
     ) where
 
--- Thoughts:
 --
--- Compiler could be implemented above an abstract monad, where this
--- monad provides the cache and dictionary. I could then 
+-- I want generic compiler functions. Support for a cache would
+-- also be useful. 
+--
+
 
 
 

@@ -164,10 +164,7 @@ reportParseError s = H.pre ! A.class_ "parseErrorReport" $ H.code ! A.lang "aodi
             styleParseError $ H.string $ LazyUTF8.toString remText
 
 styleParseError :: HTML -> HTML
-styleParseError h = H.span 
-    ! A.class_ "parseError" 
-    ! A.style "background-color: LightCoral;" 
-    $ h
+styleParseError h = H.span ! A.class_ "parseError" $ h
 
 -- | I should probably develop a more semantic merge for ABC definitions.
 -- But for the moment, at least a structural merge will help developers
