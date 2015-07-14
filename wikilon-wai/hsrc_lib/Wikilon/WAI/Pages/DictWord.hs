@@ -2,13 +2,16 @@
 
 module Wikilon.WAI.Pages.DictWord
     ( dictWord
+    , dictWordClients
     , module Wikilon.WAI.Pages.DictWord.Rename
     , module Wikilon.WAI.Pages.DictWord.ClawDef
     , module Wikilon.WAI.Pages.DictWord.AODef
     ) where
 
+import Control.Monad
 import Data.Monoid
 import qualified Data.List as L
+import qualified Data.ByteString.Builder as BB
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
@@ -79,13 +82,16 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
             H.strong "Dictionary:" <> " " <> hrefDict dn
             let lDeps = L.nub $ Dict.abcWords abc 
             let lClients = Dict.wordClients d dw 
+            let displayClients = case L.drop 10 lClients of
+                    [] -> navWords "Clients" dn lClients
+                    _ -> navWords "Clients" dn (L.take 10 lClients) <>
+                         href (uriDictWordClients dn dw) "(full client list)" <> H.br
             navWords "Depends" dn lDeps
-            navWords "Clients" dn lClients
+            displayClients
             formDictWordClawDefEdit dn dw tm abc
             H.h3 "AO Definition"
             H.pre $ H.code ! A.class_ "viewAODef" ! A.lang "aodef" $ H.string $ show abc
             let editor = mconcat $ [uriAODictEdit dn, "?words=", wordToUTF8 dw] 
-            H.br
             H.small $ href editor "Edit AO Definition"
 
             H.hr
@@ -101,4 +107,38 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
 delDictWord :: WikilonApp
 delDictWord = toBeImplementedLater "HTTP Deletion of individual Word"
 
+
+-- | Reverse Lookup for a particular word, i.e. find all
+-- words that reference this one.
+dictWordClients :: WikilonApp
+dictWordClients = app where
+    app = routeOnMethod [(HTTP.methodGet, onGet)]
+    onGet = branchOnOutputMedia $
+        [(mediaTypeTextHTML, getPage)
+        ,(mediaTypeTextPlain, getTextList)
+        ]
+    getClients w dn dw =
+        readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
+        let d = Branch.head $ Branch.lookup' dn bset in
+        let lClients = Dict.wordClients d dw in
+        return lClients
+    getPage = dictWordApp $ \ w dn dw _rq k ->
+        getClients w dn dw >>= \ lClients ->
+        let status = HTTP.ok200 in
+        let headers = [textHtml] in
+        k $ Wai.responseLBS status headers $ renderHTML $ do
+            H.head $ do
+                htmlHeaderCommon w
+                H.title $ H.unsafeByteString $ wordToUTF8 dw <> " clients" 
+            H.body $ do
+                H.h1 $ "Clients of " <> hrefDictWord dn dw 
+                H.ol $ forM_ lClients $ \ wc ->
+                    H.li $ hrefDictWord dn wc
+    getTextList = dictWordApp $ \ w dn dw _rq k ->
+        getClients w dn dw >>= \ lClients ->
+        let status = HTTP.ok200 in
+        let headers = [plainText] in
+        let wbb = (<> BB.char8 '\n') . BB.byteString . wordToUTF8 in
+        let txt = BB.toLazyByteString $ mconcat $ fmap wbb $ lClients in
+        k $ Wai.responseLBS status headers txt
 

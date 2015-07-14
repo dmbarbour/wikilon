@@ -30,6 +30,7 @@ module Wikilon.WAI.Routes
     , uriDictWordsList
     , uriDictWordsListQPrefix
     , uriDictWordRename
+    , uriDictWordClients
 
     , uriClawDef, uriClawDefEdit
     , uriAODef, uriAODefEdit
@@ -137,6 +138,9 @@ uriDictWord d w = toRoute $ wordURIBuilder d w
 
 uriDictWordRename :: BranchName -> Word -> Route
 uriDictWordRename d w = toRoute $ wordURIBuilder d w <> BB.stringUtf8 "/rename"
+
+uriDictWordClients :: BranchName -> Word -> Route
+uriDictWordClients d w = toRoute $ wordURIBuilder d w <> BB.stringUtf8 "/clients"
 
 wordURIBuilder :: BranchName -> Word -> BB.Builder
 wordURIBuilder d (Word wordBytes) = 

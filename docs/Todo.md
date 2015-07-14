@@ -19,15 +19,15 @@ DONE:
 * rename a word
 * view and edit `[command][]` definitions as claw code
 * stylesheets with dark background by default
+* most CSS pushed into stylesheets
 
 TODO:
 
 * simplistic REPL based on Claw code
  * skip compilation and cache for now?
 
-* maybe add support for 
+* libraries to support rational or decimal numbers
 
-* move all css to use 'classes'; multiple classes
 * css styles for diffs, etc.
 * clean up backrefs and clients lists; 
     e.g. list only ten items

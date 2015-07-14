@@ -37,9 +37,12 @@ wikilonRoutes = fmap (first UTF8.fromString) $
     ,("/d/:d/aodict", dictAsAODict)
     ,("/d/:d/aodict.edit", appAODictEdit)
 
+    ,("/d/:d/repl", dictClawRepl)
+
     ,("/d/:d/w", dictWords)
     ,("/d/:d/w/:w", dictWord)
     ,("/d/:d/w/:w/rename", dictWordRename)
+    ,("/d/:d/w/:w/clients", dictWordClients)
 --    ,("/d/:d/w/:w/abc", dictWordCompile)
     ,("/d/:d/w/:w/aodef", dictWordAODef)
     ,("/d/:d/w/:w/aodef.edit", dictWordAODefEdit)
