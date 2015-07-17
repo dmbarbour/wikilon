@@ -62,6 +62,9 @@ body.docs {
  margin: 0 auto;
  width: 640px;
 }
+div.docs {
+ width: 640px;
+}
 span.parseError {
  background-color: #820000;
 }
@@ -80,8 +83,7 @@ span.diffConflictSep {
  color: #f57900;
  font-weight: bolder;
 }
-
-
-
-
+.todo {
+ color: #555753;
+}
 
