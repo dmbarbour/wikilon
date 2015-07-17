@@ -37,7 +37,7 @@
 --
 module Wikilon.WAI.Pages.ClawRepl
     ( dictClawRepl
-    , formDictClawRepl
+    --, formDictClawRepl
     ) where
 
 
@@ -67,9 +67,19 @@ import Wikilon.WAI.Pages.DictWord.ClawDef
 
 dictClawRepl :: WikilonApp
 dictClawRepl = app where
-    app = routeOnMethod [(HTTP.methodGet, onGet)]
+    app = routeOnMethod [(HTTP.methodGet, onGet),(HTTP.methodPost, onPost)]
     onGet = branchOnOutputMedia [(mediaTypeTextHTML, clawReplPage)]
+    onPost = branchOnOutputMedia [(mediaTypeTextHTML, clawReplPost)]
 
 clawReplPage :: WikilonApp
-clawReplPage = dictApp $ \ w dn 
+clawReplPage = toBeImplementedLater "clawRepl: return evaluation results"
 
+clawReplPost :: WikilonApp
+clawReplPost = toBeImplementedLater "clawRepl: persistent sessions via dictionary"
+
+-- THOUGHTS: I might also want:
+--  a resource to extract the entire session
+--  a resource to extract the result as ABC (quoted)
+--
+-- But I think these might need different URIs.
+--

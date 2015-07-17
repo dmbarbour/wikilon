@@ -53,7 +53,7 @@ pageWordRename :: WikilonApp
 pageWordRename = dictWordApp $ \ w dn dw _rq k ->
     let status = HTTP.ok200 in
     let headers = [textHtml] in
-    let title = "Rename Word" in
+    let title = H.unsafeByteString $ "Rename " <> wordToUTF8 dw in
     k $ Wai.responseLBS status headers $ renderHTML $ do
         H.head $ do
             htmlHeaderCommon w
@@ -64,15 +64,15 @@ pageWordRename = dictWordApp $ \ w dn dw _rq k ->
             renameMeta
 
 renameMeta :: HTML
-renameMeta = do
+renameMeta = H.div ! A.class_ "docs" $ do
     H.p $ H.strong "Effects:" <> " after renaming, references to the original word\n\
           \are rewritten to the new target word, the original word is undefined,\n\
           \and the target word has the original's definition.\n\
           \"
     H.p $ H.strong "Limitations:" <> " to rename a word, the target word must\n\
           \either be undefined and unused, or have a byte-for-byte identical\n\
-          \definition. In the latter case, the two words are merged. These\n\
-          \limits ensure that rename is a safe refactoring.\n\
+          \definition as the origin word. In the latter case, the two words\n\
+          \are silently merged. Rename will not modify behavior.\n\
           \"
 
 recvWordRename :: PostParams -> WikilonApp

@@ -285,9 +285,8 @@ recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k ->
 
                 -- prepare our response, including edit success information.
                 let status = HTTP.seeOther303
-                let lWords = fmap (wordToUTF8 . fst) lUpdates
-                let editor = mconcat $ [uriAODictEdit dictName, "?words="]
-                             ++ (L.intersperse "+" lWords)
+                let lWords = fmap fst lUpdates
+                let editor = uriAODictEditWords dictName lWords
                 let dest = (HTTP.hLocation, wikilon_httpRoot w <> editor) 
                 let headers = [textHtml, noCache, dest] 
                 let title = "Edit Success" 

@@ -14,6 +14,7 @@ module Wikilon.WAI.Routes
 
     , uriAODict
     , uriAODictEdit
+    , uriAODictEditWords
     
 
     , uriAODictDocs
@@ -53,7 +54,7 @@ import qualified Network.Wai as Wai
 
 import Wikilon.WAI.Utils
 import Wikilon.Store.Branch (BranchName)
-import Wikilon.Dict.Word (Word(..), isValidWord)
+import Wikilon.Dict.Word
 
 type Route = BS.ByteString
 
@@ -112,6 +113,14 @@ uriAODict d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/aodict"
     
 uriAODictEdit :: BranchName -> Route
 uriAODictEdit d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/aodict.edit"
+
+uriAODictEditWords :: BranchName -> [Word] -> Route
+uriAODictEditWords d [] = uriAODictEdit d
+uriAODictEditWords d lWords = toRoute $ base <> ws where
+    base = dictURIBuilder d <> BB.stringUtf8 "/aodict.edit?words="
+    ws = mconcat $ L.intersperse (BB.char8 '+') $ fmap wordQuery lWords
+    wordQuery = HTTP.urlEncodeBuilder True . wordToUTF8
+
 
 uriAODictDocs, uriAODocs, uriABCDocs, uriWikilonDocs :: Route
 uriAODocs       = -- "about/ao"

@@ -11,6 +11,7 @@ module Wikilon.WAI.Pages.DictWord
 import Control.Monad
 import Data.Monoid
 import qualified Data.List as L
+import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.Builder as BB
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
@@ -20,7 +21,8 @@ import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
 import Database.VCache
 
-import Awelon.ClawCode
+import qualified Awelon.ClawCode as Claw
+import Awelon.ABC (ABC)
 
 
 import Wikilon.WAI.Utils
@@ -51,6 +53,31 @@ dictWord = app where
         ,(mediaTypeClaw, putDictWordClawDef)
         ]
 
+
+-- Ideally, a lot should go into presenting a word to a user.
+--
+-- (a) present a command language view if appropriate.
+-- (b) include health issues and errors in presentation.
+-- (c) last resort is just the raw AO-layer definition.
+-- (d) captions, temporal metadata, etc. if available.
+--
+-- For the moment, I'm making due with much less. However, in the
+-- long run, I'll probably want a consistent default view for words
+-- in many contexts (including REPL-based forums), even if I have
+-- multiple views in specialized contexts.
+viewClawOrAODef :: ABC -> HTML
+viewClawOrAODef abc = case parseClawDef abc of
+    Nothing -> do
+        href uriAODictDocs "raw aodef" <> H.br
+        H.pre ! A.lang "aodef" $ H.code $ H.string $ show abc
+        
+    Just cc -> do
+        href uriClawDocs "claw view" <> H.br
+        let sClaw = LazyUTF8.toString $ Claw.encode cc
+        H.pre ! A.lang "claw" $ H.code $ H.string sClaw
+
+
+
 -- | This is our basic non-interactive web page for words.
 --
 -- For the moment, I'm going to assume that most words will be
@@ -68,35 +95,41 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
     readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
     let b = Branch.lookup' dn bset in
     let d = Branch.head b in 
-    let tm = Branch.modified b in
     let abc = Dict.lookup d dw in
     let status = HTTP.ok200 in
     let headers = [textHtml] in
-    let title = H.unsafeByteString (wordToUTF8 dw) in
+    let title = H.unsafeByteString (Dict.wordToUTF8 dw) in
     k $ Wai.responseLBS status headers $ renderHTML $ do
         H.head $ do
             htmlHeaderCommon w
             H.title title
         H.body $ do
             H.h1 title
+            viewClawOrAODef abc
+
+            H.hr
             H.strong "Dictionary:" <> " " <> hrefDict dn
             let lDeps = L.nub $ Dict.abcWords abc 
-            let lClients = Dict.wordClients d dw 
-            let displayClients = case L.drop 10 lClients of
+            let lClients = Dict.wordClients d dw
+            let maxClientsHere = 12 
+            let displayClients = case L.drop maxClientsHere lClients of
                     [] -> navWords "Clients" dn lClients
-                    _ -> navWords "Clients" dn (L.take 10 lClients) <>
+                    _ -> navWords "Clients" dn (L.take maxClientsHere lClients) <>
                          href (uriDictWordClients dn dw) "(full client list)" <> H.br
             navWords "Depends" dn lDeps
             displayClients
-            formDictWordClawDefEdit dn dw tm abc
-            H.h3 "AO Definition"
-            H.pre $ H.code ! A.class_ "viewAODef" ! A.lang "aodef" $ H.string $ show abc
-            let editor = mconcat $ [uriAODictEdit dn, "?words=", wordToUTF8 dw] 
-            H.small $ href editor "Edit AO Definition"
 
-            H.hr
-            formDictWordRename dn dw
-            H.small $ "TODO: compilation, type, health information,\n\
+            -- links to editors (no longer editing inline)
+            H.nav $ do
+                H.strong "Edit:"
+                let editName = ("name", uriDictWordRename dn dw)
+                let editAO = ("aodef", uriAODictEditWords dn [dw])
+                let editClaw = ("claw", uriClawDefEdit dn dw)
+                let lEditors = [editName, editAO, editClaw] 
+                forM_ lEditors $ \ (s,uri) -> " " <> href uri s
+
+            H.hr ! A.class_ "todo"
+            H.div ! A.class_ "todo" $ "TODO: compilation, type, health information,\n\
                 \access to structured AO definition and structure editing,\n\
                 \use cases, tests, visualizations, animations of code,\n\
                 \render words (of known types) as application or images...\n\
@@ -129,7 +162,7 @@ dictWordClients = app where
         k $ Wai.responseLBS status headers $ renderHTML $ do
             H.head $ do
                 htmlHeaderCommon w
-                H.title $ H.unsafeByteString $ wordToUTF8 dw <> " clients" 
+                H.title $ H.unsafeByteString $ Dict.wordToUTF8 dw <> " clients" 
             H.body $ do
                 H.h1 $ "Clients of " <> hrefDictWord dn dw 
                 H.ol $ forM_ lClients $ \ wc ->
@@ -138,7 +171,7 @@ dictWordClients = app where
         getClients w dn dw >>= \ lClients ->
         let status = HTTP.ok200 in
         let headers = [plainText] in
-        let wbb = (<> BB.char8 '\n') . BB.byteString . wordToUTF8 in
+        let wbb = (<> BB.char8 '\n') . BB.byteString . Dict.wordToUTF8 in
         let txt = BB.toLazyByteString $ mconcat $ fmap wbb $ lClients in
         k $ Wai.responseLBS status headers txt
 
