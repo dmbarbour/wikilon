@@ -1,19 +1,40 @@
 
 -- | A Claw-based Read Eval Print Loop.
 --
--- I'm not sure how I should model this... 
+-- How to model this?
 --
--- One option is to GET a REPL resource, with commands provided via
--- the query string. Really, an entire session could be provided
--- this way. This has many advantages: stateless, simple, bookmarks.
+-- One option is to GET a stateless REPL resource, with commands 
+-- provided via query strings. Really, an entire session could be
+-- provided this way. This has advantages: stateless, simple, 
+-- bookmarks. A disadvantage is that renaming won't impact words
+-- used in the stateless GET; bookmarks may fail over time due to
+-- name changes.
 --
--- An alternative, interesting option is to treat REPL as a threaded
--- tree, recording actions like user posts to a bulletin board. Each
--- thread would carry a computational context, with different threads
--- branching in different directions. 
+-- An interesting alternative is to model persistent REPL sessions as
+-- a dictionary application. Usefully, I could try branching sessions.
+-- Each post becomes a word or small set of words in the dictionary,
+-- and reverse-lookup (plus a few naming conventions) become a simple
+-- basis for discovering threads. This would involve POSTing updates
+-- to a session such that we may add words to our dictionary.
 --
--- For this particular page, I'm going to focus on the GET-based
--- REPL. 
+-- These two techniques should combine nicely. Persistent, branching
+-- REPL sessions essentially become a functional forum that users can
+-- browse and share, and whose presence provides continuous testing
+-- and typechecking and documentation. The stateless sessions offer
+-- easy external sharing of ad-hoc content.
+--
+-- I'm interested in having a REPL session essentially become an iPython
+-- notebook, but I'm thinking I'll want to figure out how to model each
+-- notebook as a dictionary app first (so I can easily preserve rendering
+-- of a post as a notebook). So for now, our stateless REPL will only
+-- accept one command string and an optional parent thread. Ideally, posts
+-- could be given any render-able structure (including a dictionary app)
+-- and automatically be rendered appropriately.
+--
+-- I will use both techniques for now, such that I have both stateful
+-- REPL sessions recorded in the dictionary and stateless extensions
+-- to ad-hoc sessions.
+--
 module Wikilon.WAI.Pages.ClawRepl
     ( dictClawRepl
     , formDictClawRepl

@@ -20,13 +20,9 @@ The root threads might use `{&threadRoot}` instead of a parent thread word, i.e.
         @post:postId.created "2015-07-16T23:14Z"
         @thread:childId thread:parentId post:postId
 
-An explicit `post:postId` becomes a reusable word independent of context. However, this might not offer any significant advantages because posts don't make a lot of sense as words and refactoring isn't difficult when we want it. OTOH, a perhaps greater advantage of the second option is that it provides a more rigid structure for threads (a simple pair of words), and might permit more flexible representation of thread content (e.g. presenting [embedded objects](ExtensibleSyntax.md) at each post). Since I gain a little flexibility without significant loss, I should favor the explicit post words.
+An explicit `post:postId` becomes a reusable word independent of context. However, this might not offer any significant advantages because posts don't make a lot of sense as words and refactoring isn't difficult when we want it. OTOH, a perhaps greater advantage of explicit post words is that it provides a more rigid structure for threads (a simple pair of words), and might permit more flexible representation of thread content. For example, I could present [embedded objects](ExtensibleSyntax.md) at each post, or having a post-word be another dictionary app like an iPython notebook or spreadsheet, or a thread embedding. Since I gain flexibility without significant loss, I should probably favor the explicit post words.
 
 The forum idea might not be called a REPL. It might be better understood as a branching persistent session, or as a computational/functional forum. (Having a branching persistent session seems pretty neat for a lot of use cases, tests, etc.). Each post could have a bunch of surrounding metadata (e.g. the author and subject) to be rendered. The major advantage of a forum would be our ability to *browse* it, and to *typecheck* it as a sort of continuous test, and (as a dictionary app) to easily *share* it. Meanwhile, we gain all the benefits of REPLs, and a possibility for automatic branching and refactoring and so on.
 
 A stateless REPL and a functional forum might interact in some interesting ways. In particular, we could apply our REPL to extend an arbitrary named thread (a single word for the parent thread), and we could be presented with an option of saving REPL content into our forum. But it might be useful to treat these as (more or less) two separate features.
-
-
-
-
 
