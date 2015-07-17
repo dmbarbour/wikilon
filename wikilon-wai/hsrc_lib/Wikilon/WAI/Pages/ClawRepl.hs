@@ -1,6 +1,22 @@
 
+-- | A Claw-based Read Eval Print Loop.
+--
+-- I'm not sure how I should model this... 
+--
+-- One option is to GET a REPL resource, with commands provided via
+-- the query string. Really, an entire session could be provided
+-- this way. This has many advantages: stateless, simple, bookmarks.
+--
+-- An alternative, interesting option is to treat REPL as a threaded
+-- tree, recording actions like user posts to a bulletin board. Each
+-- thread would carry a computational context, with different threads
+-- branching in different directions. 
+--
+-- For this particular page, I'm going to focus on the GET-based
+-- REPL. 
 module Wikilon.WAI.Pages.ClawRepl
     ( dictClawRepl
+    , formDictClawRepl
     ) where
 
 
@@ -29,5 +45,10 @@ import Wikilon.WAI.Pages.DictWord.AODef
 import Wikilon.WAI.Pages.DictWord.ClawDef
 
 dictClawRepl :: WikilonApp
-dictClawRepl = toBeImplementedLater "Claw REPL"
+dictClawRepl = app where
+    app = routeOnMethod [(HTTP.methodGet, onGet)]
+    onGet = branchOnOutputMedia [(mediaTypeTextHTML, clawReplPage)]
+
+clawReplPage :: WikilonApp
+clawReplPage = dictApp $ \ w dn 
 

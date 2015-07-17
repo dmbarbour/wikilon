@@ -109,7 +109,8 @@ appAODictEdit :: WikilonApp
 appAODictEdit = app where
     app = routeOnMethod [(HTTP.methodGet, onGet),(HTTP.methodPost, onPost)]
     onGet = branchOnOutputMedia [(mediaTypeTextHTML, editorPage)]
-    onPost = branchOnOutputMedia [(mediaTypeTextHTML, recvFormPost recvAODictEdit)]
+    onPost = branchOnOutputMedia [(mediaTypeTextHTML, 
+        recvFormPostP ppAODictEdit recvAODictEdit)]
 
 queriedWordList :: HTTP.Query -> [Word]
 queriedWordList = L.nub . L.concatMap getWords where
@@ -188,12 +189,18 @@ histDict b Nothing = Dict.empty vc where
     vc = Dict.dict_space $ Branch.head b
 histDict b (Just t) = Branch.histDict b t
 
+type AODictEditPostParams = (LazyUTF8.ByteString, Maybe T)
+
+ppAODictEdit :: PostParams -> Maybe AODictEditPostParams
+ppAODictEdit pp =
+    getPostParam "update" pp >>= \ u ->
+    getPostParam "editOrigin" pp >>= \ eos ->
+    let eot = (parseTime . LazyUTF8.toString) eos in
+    return (u, eot)
+
 -- TODO: refactor. heavily. 100 lines is too much.
-recvAODictEdit :: PostParams -> WikilonApp
-recvAODictEdit pp 
-  | (Just updates) <- getPostParam "update" pp
-  , (Just tMod) <- (parseTime . LazyUTF8.toString) <$> getPostParam "editOrigin" pp
-  = dictApp $ \ w dictName _rq k ->
+recvAODictEdit :: AODictEditPostParams -> WikilonApp
+recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k ->
     let parsed = parseLines updates in
     let lErr = lefts parsed in
     let lUpdates = rights parsed in
@@ -292,6 +299,4 @@ recvAODictEdit pp
                     H.body $ do
                         H.h1 title
                         H.p $ "Return to " <> href editor "the editor" <> "."
-recvAODictEdit _pp = \ _w _cap _rq k -> k $ eBadRequest $ 
-    "POST: missing 'update' or 'editOrigin' parameters"
 

@@ -11,7 +11,6 @@ module Wikilon.WAI.Pages.DictWord.ClawDef
 
 
 
-import Control.Applicative
 import Control.Monad
 import Data.Monoid
 import qualified Data.List as L
@@ -90,7 +89,8 @@ dictWordClawDefEdit :: WikilonApp
 dictWordClawDefEdit = app where
     app = routeOnMethod [(HTTP.methodGet, onGet), (HTTP.methodPost, onPost)]
     onGet = branchOnOutputMedia [(mediaTypeTextHTML, getDictEditPage)]
-    onPost = branchOnOutputMedia [(mediaTypeTextHTML, recvFormPost recvClawDefEdit)]
+    onPost = branchOnOutputMedia [(mediaTypeTextHTML, 
+        recvFormPostP ppClawDefEdit recvClawDefEdit)]
 
 getDictEditPage :: WikilonApp
 getDictEditPage = dictWordApp $ \ w dn dw _rq k ->
@@ -110,12 +110,17 @@ getDictEditPage = dictWordApp $ \ w dn dw _rq k ->
             H.p $ (H.strong "Word:") <> " " <> hrefDictWord dn dw
             formDictWordClawDefEdit dn dw (Branch.modified b) abc
 
+type ClawDefEditPostParams = (LazyUTF8.ByteString, String)
+
+ppClawDefEdit :: PostParams -> Maybe ClawDefEditPostParams
+ppClawDefEdit pp =
+    getPostParam "command" pp >>= \ cmd ->
+    getPostParam "editOrigin" pp >>= \ eos ->
+    return (cmd, LazyUTF8.toString eos)
+
 -- need to refactor this !
-recvClawDefEdit :: PostParams -> WikilonApp
-recvClawDefEdit pp
-  | (Just cmd) <- getPostParam "command" pp
-  , (Just sEditOrigin) <- LazyUTF8.toString <$> getPostParam "editOrigin" pp
-  = dictWordApp $ \ w dn dw _rq k ->
+recvClawDefEdit :: ClawDefEditPostParams -> WikilonApp
+recvClawDefEdit (cmd, sEditOrigin) = dictWordApp $ \ w dn dw _rq k ->
     case Claw.decode cmd of
         Left dcs -> 
             let status = HTTP.badRequest400 in
@@ -218,9 +223,6 @@ recvClawDefEdit pp
                             H.body $ do
                                 H.h1 title
                                 H.p $ "Return to " <> hrefDictWord dn dw <> "."
-recvClawDefEdit _ = \ _w _cap _rq k -> k $ eBadRequest $
-    "POST: missing 'command' or 'editOrigin' parameters"
-
 
 -- my error analysis isn't entirely precise, but I can at least dig
 -- to operations within blocks.

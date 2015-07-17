@@ -25,9 +25,6 @@ a.refDictWord, .dictWord {
 a.refDictWordPrefix, .dictWordPrefix {
  color: #c17d11;
 }
-nav[class="Clients"] {
- font-size: x-small;
-}
 textarea {
  color: #ecf0eb;
  background-color: #2e3436;

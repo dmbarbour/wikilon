@@ -5,6 +5,7 @@
 -- currently just a thin wrapper around Network.Wai.Parse.parseRequestBody
 module Wikilon.WAI.RecvFormPost
     ( recvFormPost
+    , recvFormPostP
     , PostParams
     , PostParam
     , FileInfo(..)
@@ -24,6 +25,8 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Parse as Wai
 import qualified Codec.Compression.GZip as GZip
+import qualified Network.HTTP.Types as HTTP
+import qualified Text.Blaze.Html5 as H
 import Wikilon.WAI.Utils
 
 type PostParams = [(BS.ByteString, PostParam)]
@@ -66,6 +69,23 @@ recvFormPost appWithParams = app where
     appParsed w cap rq k =
         parseRequestPostParams rq >>= \ pps ->
         appWithParams pps w cap rq k
+
+recvFormPostP :: (PostParams -> Maybe a) -> (a -> WikilonApp) -> WikilonApp
+recvFormPostP pp app = recvFormPost $ maybe badPostRequest app . pp
+
+badPostRequest :: WikilonApp
+badPostRequest w _ _ k = 
+    let title = "Bad Post Request" in
+    let status = HTTP.badRequest400 in
+    let headers = [textHtml, noCache] in
+    k $ Wai.responseLBS status headers $ renderHTML $ do
+        H.head $ do
+            htmlHeaderCommon w
+            H.title title 
+        H.body $ do
+            H.h1 title
+            H.p "Inputs are missing or malformed."
+            H.p "Do not resubmit without changes."
 
 parseRequestPostParams :: Wai.Request -> IO PostParams
 parseRequestPostParams rq =
