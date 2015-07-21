@@ -47,11 +47,12 @@
 -- ensure easy interaction with HTML forms, URLs, etc.. Typechecking
 -- and other higher validation is left to background processes.
 --
-
 module Wikilon.Dict
     ( DictView(..)
     , wordDeps, abcWords
     , wordsInDict
+    , SecureHash
+
     , WordPrefix
     , DictSplitPrefix(..)
     , splitOnPrefixWords
@@ -59,13 +60,13 @@ module Wikilon.Dict
     , DictRLU(..)
     , wordClients
     , DictUpdate(..)
-    , renameDictWord
+    , unsafeRenameDictWord
     , deleteDictWord
     , deleteDictWords
-    , safeUpdateWord
-    , safeUpdateWords
-    , safeRenameWord
-    , safeMergeWords
+    , updateWord
+    , updateWords
+    , renameWord
+    , mergeWords
     , InsertionError(..)
     , Cycle, testForCycle
     , testForMalformedDef
@@ -73,6 +74,7 @@ module Wikilon.Dict
     ) where
 
 import Prelude hiding (lookup)
+import Control.Monad
 import Data.Maybe (mapMaybe, maybeToList)
 import Data.Monoid
 import qualified Data.List as L
@@ -89,7 +91,9 @@ import Data.Word (Word8)
 
 import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
+import qualified Awelon.Base16 as B16
 
+import Wikilon.SecureHash
 import Wikilon.Dict.Word 
 import Wikilon.Dict.Text
 import Wikilon.Dict.Token
@@ -119,6 +123,42 @@ class DictView dict where
     dictDiff :: dict -> dict -> [Word]
     dictDiff a b = Map.keys $ mapDiff (==) (m a) (m b) where
         m = Map.fromList . toList
+
+    -- | Compute a version hash, i.e. a secure hash for the specific
+    -- version of a word's definition with transitive dependencies.
+    -- The hash value may be used for caching computations that may
+    -- be stable across versions of a dictionary, such as typechecks
+    -- and compiled implementations. We'll assume the hash is free
+    -- from collisions in practice.
+    --
+    -- The default implementation will recompute the hash each time,
+    -- and depends on structure but not on word names.
+    lookupVersionHash :: dict -> Word -> SecureHash
+    lookupVersionHash d w = fromCache c where
+        fromCache = maybe mempty id . Map.lookup w
+        c = _addToCache d mempty w
+
+-- accumulate hashes in a temporary cache
+type HashCache = Map Word SecureHash
+_addToCache :: (DictView dict) => dict -> HashCache -> Word -> HashCache
+_addToCache d c w = case Map.lookup w c of
+    Just _ -> c
+    Nothing -> 
+        let abc = lookup d w in
+        let c' = L.foldl' (_addToCache d) c (abcWords abc) in
+        let h = secureHashLazy $ ABC.encode $ _rwHashWords c' abc in
+        Map.insert w h c'
+
+_rwHashWords :: HashCache -> ABC -> ABC
+_rwHashWords cache = abcRewriteWords rw where
+    rw w = maybe mempty h2tok $ Map.lookup w cache
+    h2tok = BS.pack . (35 :) . B16.encode . BS.unpack
+
+abcRewriteWords :: (Word -> Token) -> ABC -> ABC
+abcRewriteWords rw = ABC.rewriteTokens rwTok where
+    rwTok t = case BS.uncons t of
+        Just (37, w) -> [ABC.ABC_Tok (rw (Word w))]
+        _ -> [ABC.ABC_Tok t]
 
 -- generic 2-way diff element
 data MapDiff a b = LeftOnly a | RightOnly b | FoundDiff a b
@@ -221,19 +261,19 @@ wordClients d = tokenClients d . BS.cons 37 . unWord
 -- Deleting a dictionary word is equivalent to updating a definition
 -- to the empty ABC program.
 class (DictView dict) => DictUpdate dict where
-    updateDictWord :: Word -> ABC -> dict -> dict
+    unsafeUpdateDictWord :: Word -> ABC -> dict -> dict
 
-    updateDictWords :: Map Word ABC -> dict -> dict
-    updateDictWords = flip (L.foldl' upd) . Map.toList where
-        upd d (w,abc) = updateDictWord w abc d 
+    unsafeUpdateDictWords :: Map Word ABC -> dict -> dict
+    unsafeUpdateDictWords = flip (L.foldl' upd) . Map.toList where
+        upd d (w,abc) = unsafeUpdateDictWord w abc d 
 
 -- | update a word's definition to the empty ABC program
 deleteDictWord :: (DictUpdate dict) => Word -> dict -> dict
-deleteDictWord = flip updateDictWord mempty
+deleteDictWord = deleteDictWords . (:[])
 
 -- | delete a list of words.
 deleteDictWords :: (DictUpdate dict) => [Word] -> dict -> dict
-deleteDictWords = updateDictWords . Map.fromList . withEmpties where
+deleteDictWords = unsafeUpdateDictWords . Map.fromList . withEmpties where
     withEmpties = flip L.zip $ L.repeat mempty
 
 -- | Rename a word in a dictionary, affecting not just that word
@@ -241,20 +281,20 @@ deleteDictWords = updateDictWords . Map.fromList . withEmpties where
 -- is performed, and this will overwrite the second word. In general,
 -- it is safest to rename under one of two conditions:
 --
---   1. the target word is undefined and unused (cf. safeRenameWord)
---   2. target and origin share same definition (cf. safeMergeWords)
+--   1. the target word is undefined and unused (cf. renameWord)
+--   2. target and origin share same definition (cf. mergeWords)
 --
 -- In these conditions, you can be sure that clients of a word are not
 -- impacted, do not need to be retested or recompiled, no cycles are
 -- introduced, etc.. Otherwise, you must treat the rename as an update
 -- to both the origin and target words.
 -- 
-renameDictWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> dict
-renameDictWord wo wt d =
+unsafeRenameDictWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> dict
+unsafeRenameDictWord wo wt d =
     if (wo == wt) then d else -- trivially, no change
     let lC = wordClients d wo in -- client of wo, for rewrite wo→wt
     let fnUpdClient = _renameInABC wo wt . lookup d in -- rename wo to wt
-    flip updateDictWords d $ 
+    flip unsafeUpdateDictWords d $ 
         Map.insert wt (lookup d wo) $                 -- overwrite wt
         Map.insert wo mempty $                        -- delete wo
         Map.fromList $ L.zip lC (fmap fnUpdClient lC) -- update clients of wo
@@ -270,8 +310,8 @@ _renameInABC wo wt = ABC.rewriteTokens rwTok where
 
 -- | Rename a word only if the target word is undefined and has no
 -- clients (i.e. cannot rename into a hole). Otherwise returns Nothing.
-safeRenameWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> Maybe dict
-safeRenameWord wo wt d =
+renameWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> Maybe dict
+renameWord wo wt d =
     let bUndefinedTarget = L.null $ ABC.abcOps $ lookup d wt in
     let bTargetHasNoClients = L.null $ wordClients d wt in
     let bOkRename = bUndefinedTarget && bTargetHasNoClients in
@@ -280,8 +320,8 @@ safeRenameWord wo wt d =
 
 -- | Merge a word only if origin and target words have the same
 -- definitions. Otherwise return Nothing.
-safeMergeWords :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> Maybe dict
-safeMergeWords wo wt d =
+mergeWords :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> Maybe dict
+mergeWords wo wt d =
     let bOkMerge = (lookup d wo) == (lookup d wt) in
     if not bOkMerge then Nothing else
     Just $ renameDictWord wo wt d
@@ -316,7 +356,7 @@ safeUpdateWords l d =
     let lWords = fmap fst l in
     let lDupErrors = fmap DupWord $ findDups $ lWords in
     let lMalformed = L.concatMap (uncurry testForMalformedDef) l in
-    let d' = updateDictWords (Map.fromList l) d in
+    let d' = unsafeUpdateDictWords (Map.fromList l) d in
     let lCycleErrors = maybeToList $ fmap Cycle $ testForCycle lWords d' in
     let lErrors = lDupErrors ++ lMalformed ++ lCycleErrors in
     if L.null lErrors then Right d' else Left lErrors

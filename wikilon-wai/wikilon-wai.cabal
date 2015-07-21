@@ -79,13 +79,13 @@ Library
     Wikilon.WAI.Pages.AODictEdit
     Wikilon.WAI.Pages.ClawCode
     Wikilon.WAI.Pages.ClawEdit
-    Wikilon.WAI.Pages.ClawRepl
     Wikilon.WAI.Pages.DictList
     Wikilon.WAI.Pages.Dict
     Wikilon.WAI.Pages.DictWord
     Wikilon.WAI.Pages.DictWord.Rename
     Wikilon.WAI.Pages.DictWord.AODef
     Wikilon.WAI.Pages.DictWord.ClawDef
+    Wikilon.WAI.Pages.REPL
     Wikilon.WAI.Pages.FrontPage
     Wikilon.WAI.Pages.Admin
     Wikilon.WAI.Pages

@@ -422,50 +422,35 @@ Value sealing is an important companion to object capability security. It provid
 
 ### ABC Resources for Separate Compilation and Dynamic Linking
 
-The most direct way to reuse code in ABC is simply to repeat it. But reuse by repetition can be very inefficient for bandwidth and storage, and can hinder caching and compilation. 
+A good model for separate compilation and dynamic linking is essential for performance at large scales. For ABC, we'll use a form similar to:
 
-A well understood alternative to repeating a large code structure is to simply name it once then repeat the name. When the name is smaller than the resource, this results in space and bandwidth savings. Further, even if the name is a bit larger than the resource, reuse of the name might amortize auxiliary processing costs. Names are thus excellent opportunities for caching, compilation, and so on.
+        {#secureHashOfBytecode}
 
-Unfortunately, conventional approaches to naming introduce their own problems: name collisions, cycles, update and cache invalidation, location dependence, and version consistency issues. These misfeatures can be troublesome for security, safety, streaming, and distributed programming. Fortunately, we can address these problems by adopting a more rigorous, automatic naming system. Instead of human-provided names, we compute a cryptographically unique name by applying a secure hash to the bytecode. 
+This secure hash guards against name collisions. Given the identifier, we can fetch the resource, validate it against the hash, then compile and load it. We could leverage a [distributed hashtable](https://en.wikipedia.org/wiki/Distributed_hash_table) or other content distribution model. We can cache the results of compiling a resource in case we see the identifier again. With a good cache, this can work for streaming code. We don't need to worry about versioning or cache invalidation at this layer. And the secure hash also guards against cyclic dependencies.
 
-We then use ABC's effects model to invoke the named resource as needed:
+#### Staged Compilation of Resources
 
-        {#secureHashOfBytecode}         (preliminary! not used!)
+Each ABC resource will follow the structure of [AO definitions](AboutAO.md). That is, rather than *inlining* the resource bytecode, our resources will have two parts: a value and a compiler for it. The type of a resource will be the same as the type of an AO definition: `∃v.∀e.(e→([v→[a→b]]*(v*e))`. 
 
-This invocation tells the runtime to obtain the named resource and logically inline the associated Awelon bytecode. Obtaining a resource might involve downloading it. Logically inlining a resource might involve compilation to machine code and a dynamic linking. Either of these steps might fail, in which case the program fails (early and gracefully, if efficiently feasible).
+We'll compile a resource by applying the compiler function `[v→[a→b]]` to the value `v` to produce the `[a→b]` function, which is the meaning of the resource. The explicit compilation step offers opportunity to apply annotations at compile time - e.g. to intern certain structures, or use optimized representations, or accelerate some functions with a GPGPU. This staging is more reliable than partial evaluation. Once the meaning of a resource is established, of course, it might further be compiled into machine code or a dynamic module for the runtime.
 
-This preliminary naming model has a weakness: the bytecode is exposed to the storage service. Thus, developers must be especially careful about the distribution of 'sensitive' bytecode (for security or privacy or intellectual property reasons). This is inconvient. Ideally, we should be able to use content distribution networks, peer-to-peer distribution, cloud storage, and similar without confusing security concerns!
+Reuse of AO's staged definition structure has many secondary benefits. It can help unify debugging and development tools, i.e. such that users may directly observe ABC resources and manipulate them into new ones. We can potentially express *incomplete* resources, i.e. where the value or compiler has some holes depending on `e`, which may be useful in specialized contexts (e.g. constraint systems). A compiler function might have a lot of reusable macro logic, which could improve compression.
 
-Fortunately, this weakness is easily addressed. We simply encrypt the bytecode and add a decryption key to the name. To keep the naming system simple and deterministic, we use a secure hash of the bytecode for the decryption key, and a secure hash of the ciphertext for the lookup key. We can authenticate by the same hashes. In addition, since we cannot compress after encryption, we might want to compress to save bandwidth and storage. Some relevant pseudocode:
+Ultimately, the `[a→b]` meaning function may need to be further compiled into machine code or module by a runtime.
 
-        encryptionKey = secureHashBC(bytecode)
-        cipherText = encrypt(compress(bytecode),encryptionKey)
-        lookupKey = secureHashCT(cipherText)
-        store(lookupKey,cipherText)
+#### Sensitive Resources over Untrusted Content Distribution Networks
 
-        invoking {#lookupKeyEncryptionKey}
-            i.e. {#hashOfCiphertextHashOfBytecode}
+Use of a secure hash guards the client against certain abuses. It doesn't matter from where a client downloads a resource because its secure hash is validated. However, if the *provider* of the resource wishes to use an untrusted content distribution network, it's a problem if the data be presented in plain text or bytecode.
 
-I would expect most resources range about three orders of magnitude, i.e. from hundreds of bytes to hundreds of kilobytes. They might go bigger for large data objects, e.g. 3D models, texture and material models, sound models. The repetitive data plumbing patterns of ABC should compress very effectively. 
+So we'll leverage cryptographic sealing.
 
-Algorithmic details are not fully settled. Thoughts:
+The bulk of a sensitive resource is encrypted and provided over the untrusted network. Trusted servers hold onto much smaller resources that contain the unsealers. Servers can thus provide bulky data over untrusted distribution networks while restricting who can see the content to just the clients.
 
-* want a simple, unambiguous, deterministic specificiation
-* secure hash BC: last 256 bits of SHA3-384 
-* secure hash CT: first 128 bits of SHA3-384
-* specialized base16 encoding of resource id (see below)
-* encryption: AES in CTR mode, simply using a zero nonce/IV
-* authenticate and filter ciphertexts using both secure hashes
-* compression should support embedding large binary data (see below)
-
-For ABC resources, we require *deterministic* compression - i.e. the same input always results in the same compressed output, without heuristic 'compression levels' or similar. An appropriate [compression algorithm](doc/Compression.md) is still under consideration.
-
-*ASIDE:* A remaining vulnerability is confirmation attacks [1](https://tahoe-lafs.org/hacktahoelafs/drew_perttula.html)[2](http://en.wikipedia.org/wiki/Convergent_encryption). An attacker can gain low-entropy information - e.g. a bank account number - by exhaustively compressing and hashing candidates and confirming whether the name exists in the system. To resist this, a compiler should add entropy to potentially sensitive resources via annotation or embedded text. Distinguishing sensitive resources is left to higher level languages and conventions, e.g. in AO we define word `secret!foo` for every sensitive word `foo`.
+*Aside:* Originally, I was building a secure distribution concept directly into the basic resource identifier. However, separating the two concerns is much simpler, and the cost (downloading an additional resource) is tolerable.
 
 #### Specialization: Value Linking
 
-A useful case for specialization is to link ABC code who behavior has type `e → value * e` for some arbitrary value, i.e. the same type as a text literal or a quoted value. Once we recognize this special case, we are free to load the value lazily or in parallel. Structure sharing and memcaching becomes trivial. If we know content is a value, we might also try to copy or delete that value, so knowing whether the value is affine or relevant is very useful. So I propose some simple metadata, as a suffix for the secure identifier:
-
+It might be useful to optimize for cases where the generated `[a→b]` meaning function has the type `[∀a.a→(value*a)]`, i.e. simply exporting a large value. Specializing this case would usefully permit lazy or parallel loading of values and interning of large values. We might additionally include a little information about substructural attributes (affine, relevant, linear) that would constrain generic data plumbing:
 
         {#secureResourceIdentifier'kf}
 
@@ -476,9 +461,9 @@ The valid suffixes:
         'f              affine value
         'kf             linear value
 
-Usefully, this technique is compositional. I.e. if we build a value from smaller named values, we can compute whether the composite is affine, relevant, or linear without loading any of the values. Other type information could be left to separate annotations, since it is less essential for reasoning about data plumbing behavior. 
+Usefully, this technique is compositional. I.e. if we build a value from smaller named values, we can compute whether the composite is affine, relevant, or linear without loading any of the values. Other type information could be left to separate annotations, since it is less essential for reasoning about data plumbing behavior.
 
-Lazy linking and loading of large, content-addressed data is essential for working with very large structures and values, i.e. much larger than machine memory.
+Lazy linking and loading of large, content-addressed data is convenient for working with very large structures and values, i.e. much larger than machine memory.
 
 ### ABC Paragraphs
 
