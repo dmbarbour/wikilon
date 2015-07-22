@@ -430,15 +430,15 @@ This secure hash guards against name collisions. Given the identifier, we can fe
 
 #### Staged Compilation of Resources
 
-Each ABC resource will follow the structure of [AO definitions](AboutAO.md). That is, rather than *inlining* the resource bytecode, our resources will have two parts: a value and a compiler for it. The type of a resource will be the same as the type of an AO definition: `∃v.∀e.(e→([v→[a→b]]*(v*e))`. 
+Each ABC resource will follow the structure of [AO definitions](AboutAO.md). That is, rather than *directly inlining* resource bytecode, our resources will have two parts: a value and a compiler for it. The type of a complete resource will be the same as the type of an AO definition: `∃v.∀e.(e→([v→[a→b]]*(v*e))`. We'll compile a resource by applying the compiler function `[v→[a→b]]` to the value `v` to produce the `[a→b]` function, which is the meaning of the resource. This `[a→b]` function may be further compiled into machine code or module by a runtime.
 
-We'll compile a resource by applying the compiler function `[v→[a→b]]` to the value `v` to produce the `[a→b]` function, which is the meaning of the resource. The explicit compilation step offers opportunity to apply annotations at compile time - e.g. to intern certain structures, or use optimized representations, or accelerate some functions with a GPGPU. This staging is more reliable than partial evaluation. Once the meaning of a resource is established, of course, it might further be compiled into machine code or a dynamic module for the runtime.
+Matching AO's definition structure has many benefits. Most importantly, this enables annotations to be applied at compile-time, e.g. to indicate that large values should use an optimized representation (e.g. matrix or vector) or be hibernated to cold store, that certain functions should be parallelized or compiled for GPGPU. Explicit staging is a lot more reliable and predictable than depending on implicit partial evaluation, and can provide macro-like compression. The shared structure can help unify development and debugging tools, e.g. developers can view and manipulate [embedded objects](ExtensibleSyntax.md) or (with sufficient metadata) even a [command language view](CommandLine.md). In development contexts, we might benefit from expressing *incomplete* resources by depending on that `e` value (to represent holes or gaps).
 
-Reuse of AO's staged definition structure has many secondary benefits. It can help unify debugging and development tools, i.e. such that users may directly observe ABC resources and manipulate them into new ones. We can potentially express *incomplete* resources, i.e. where the value or compiler has some holes depending on `e`, which may be useful in specialized contexts (e.g. constraint systems). A compiler function might have a lot of reusable macro logic, which could improve compression.
+The primary differences between the ABC resource model and AO definitions: ABC resources are identified by `{#secureHash}` in a global space, whereas AO uses human-meaningful `{%word}` tokens bound locally to an implicit dictionary. Also, AO definitions are typically restricted to a friendly, portable, purely functional subset of ABC (by limiting tokens and texts); ABC resources are not restricted.
 
-Ultimately, the `[a→b]` meaning function may need to be further compiled into machine code or module by a runtime.
+*Aside:* Paul Chiusano is doing related work with Unison involving [editing resources named by hashes](http://unisonweb.org/2015-06-12/editing.html#post-start). While I've not elected to go this route with AO dictionaries, the techniques he develops seem readily applicable to ABC resources.
 
-#### Sensitive Resources over Untrusted Content Distribution Networks
+#### Sensitive Resources over Untrusted Distribution Networks
 
 Use of a secure hash guards the client against certain abuses. It doesn't matter from where a client downloads a resource because its secure hash is validated. However, if the *provider* of the resource wishes to use an untrusted content distribution network, it's a problem if the data be presented in plain text or bytecode.
 

@@ -158,8 +158,8 @@ gotoDict w d =
         H.h1 title
         H.p $ "If you aren't automatically redirected, goto " <> hrefDict d
 
--- | Create a dictionary with a single entry (id) to prevent destruction.
--- Or don't change anything if the dictionary already has some content.
+-- | Create a dictionary with a single entry `id` to prevent destruction.
+-- Won't change anything if the dictionary is non-empty.
 createDict :: Wikilon -> BranchName -> IO Bool
 createDict w d =
     getTime >>= \ tNow ->
@@ -170,7 +170,7 @@ createDict w d =
         let bNew = Dict.null (Branch.head b0) in
         if not bNew then return False else
         let initWords = [("id","[][]")] in
-        case Dict.safeUpdateWords initWords (Branch.head b0) of
+        case Dict.updateWords initWords (Branch.head b0) of
             Left _ -> return False -- shouldn't happen...
             Right d' -> do
                 let b' = Branch.update (tNow,d') b0 

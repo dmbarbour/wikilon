@@ -190,8 +190,8 @@ _updOneDep t (tok,(wsDel,wsAdd)) = Trie.adjust adj tok t where
 -- update is one of the more sophisticated operations
 -- mostly to maintain the reverse lookup index
 instance DictUpdate Dict where
-    updateDictWord w abc = updateDictWords (Map.singleton w abc)
-    updateDictWords m d = d' where
+    unsafeUpdateWord w abc = unsafeUpdateWords (Map.singleton w abc)
+    unsafeUpdateWords m d = d' where
         l = Map.toList m
         d' = Dict1 { dict_defs = defs', dict_deps = deps' } 
         isDeleted = L.null . ABC.abcOps . snd

@@ -185,7 +185,7 @@ decodeAODict d0 bytes = results $ L.foldl' accum (mempty, mempty, d0) $ logicalL
         in
         let seen' = Set.insert w seen in
         let err' = eUndefs <> eRedef <> err in
-        case safeUpdateWord w abc d of
+        case updateWord w abc d of
             Right d' -> (err', seen', d')
             Left e -> 
                 let eInsert = fmap AODict_InsertError e in

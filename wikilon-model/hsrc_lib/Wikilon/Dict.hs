@@ -60,9 +60,9 @@ module Wikilon.Dict
     , DictRLU(..)
     , wordClients
     , DictUpdate(..)
-    , unsafeRenameDictWord
-    , deleteDictWord
-    , deleteDictWords
+    , unsafeRenameWord
+    , deleteWord
+    , deleteWords
     , updateWord
     , updateWords
     , renameWord
@@ -74,7 +74,6 @@ module Wikilon.Dict
     ) where
 
 import Prelude hiding (lookup)
-import Control.Monad
 import Data.Maybe (mapMaybe, maybeToList)
 import Data.Monoid
 import qualified Data.List as L
@@ -261,19 +260,19 @@ wordClients d = tokenClients d . BS.cons 37 . unWord
 -- Deleting a dictionary word is equivalent to updating a definition
 -- to the empty ABC program.
 class (DictView dict) => DictUpdate dict where
-    unsafeUpdateDictWord :: Word -> ABC -> dict -> dict
+    unsafeUpdateWord :: Word -> ABC -> dict -> dict
 
-    unsafeUpdateDictWords :: Map Word ABC -> dict -> dict
-    unsafeUpdateDictWords = flip (L.foldl' upd) . Map.toList where
-        upd d (w,abc) = unsafeUpdateDictWord w abc d 
+    unsafeUpdateWords :: Map Word ABC -> dict -> dict
+    unsafeUpdateWords = flip (L.foldl' upd) . Map.toList where
+        upd d (w,abc) = unsafeUpdateWord w abc d 
 
 -- | update a word's definition to the empty ABC program
-deleteDictWord :: (DictUpdate dict) => Word -> dict -> dict
-deleteDictWord = deleteDictWords . (:[])
+deleteWord :: (DictUpdate dict) => Word -> dict -> dict
+deleteWord = deleteWords . (:[])
 
 -- | delete a list of words.
-deleteDictWords :: (DictUpdate dict) => [Word] -> dict -> dict
-deleteDictWords = unsafeUpdateDictWords . Map.fromList . withEmpties where
+deleteWords :: (DictUpdate dict) => [Word] -> dict -> dict
+deleteWords = unsafeUpdateWords . Map.fromList . withEmpties where
     withEmpties = flip L.zip $ L.repeat mempty
 
 -- | Rename a word in a dictionary, affecting not just that word
@@ -289,12 +288,12 @@ deleteDictWords = unsafeUpdateDictWords . Map.fromList . withEmpties where
 -- introduced, etc.. Otherwise, you must treat the rename as an update
 -- to both the origin and target words.
 -- 
-unsafeRenameDictWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> dict
-unsafeRenameDictWord wo wt d =
+unsafeRenameWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> dict
+unsafeRenameWord wo wt d =
     if (wo == wt) then d else -- trivially, no change
     let lC = wordClients d wo in -- client of wo, for rewrite wo→wt
     let fnUpdClient = _renameInABC wo wt . lookup d in -- rename wo to wt
-    flip unsafeUpdateDictWords d $ 
+    flip unsafeUpdateWords d $ 
         Map.insert wt (lookup d wo) $                 -- overwrite wt
         Map.insert wo mempty $                        -- delete wo
         Map.fromList $ L.zip lC (fmap fnUpdClient lC) -- update clients of wo
@@ -316,7 +315,7 @@ renameWord wo wt d =
     let bTargetHasNoClients = L.null $ wordClients d wt in
     let bOkRename = bUndefinedTarget && bTargetHasNoClients in
     if not bOkRename then Nothing else
-    Just $ renameDictWord wo wt d
+    Just $ unsafeRenameWord wo wt d
 
 -- | Merge a word only if origin and target words have the same
 -- definitions. Otherwise return Nothing.
@@ -324,7 +323,7 @@ mergeWords :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> Maybe d
 mergeWords wo wt d =
     let bOkMerge = (lookup d wo) == (lookup d wt) in
     if not bOkMerge then Nothing else
-    Just $ renameDictWord wo wt d
+    Just $ unsafeRenameWord wo wt d
 
 -- | Errors recognized by safeUpdateWords
 data InsertionError 
@@ -350,19 +349,19 @@ instance Show InsertionError where
 -- Note that leaving words undefined is not considered an error at this
 -- layer. (And we'd have difficulty distinguishing a valid definition
 -- anyway.) Undefined words shall be treated as holes in later stage.
-safeUpdateWords :: (DictUpdate dict) => [(Word, ABC)] -> dict -> Either [InsertionError] dict
-safeUpdateWords [] d = Right d
-safeUpdateWords l d =
+updateWords :: (DictUpdate dict) => [(Word, ABC)] -> dict -> Either [InsertionError] dict
+updateWords [] d = Right d
+updateWords l d =
     let lWords = fmap fst l in
     let lDupErrors = fmap DupWord $ findDups $ lWords in
     let lMalformed = L.concatMap (uncurry testForMalformedDef) l in
-    let d' = unsafeUpdateDictWords (Map.fromList l) d in
+    let d' = unsafeUpdateWords (Map.fromList l) d in
     let lCycleErrors = maybeToList $ fmap Cycle $ testForCycle lWords d' in
     let lErrors = lDupErrors ++ lMalformed ++ lCycleErrors in
     if L.null lErrors then Right d' else Left lErrors
 
-safeUpdateWord :: (DictUpdate dict) => Word -> ABC -> dict -> Either [InsertionError] dict
-safeUpdateWord w abc = safeUpdateWords [(w,abc)]
+updateWord :: (DictUpdate dict) => Word -> ABC -> dict -> Either [InsertionError] dict
+updateWord w abc = updateWords [(w,abc)]
 
 findDups :: (Eq a) => [a] -> [a]
 findDups = f [] where

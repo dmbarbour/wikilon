@@ -258,7 +258,7 @@ recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k ->
         in
         if not (L.null lConflict) then onConflict else
         -- if we don't exit on edit conflicts, we can attempt to update the dictionary!
-        case Dict.safeUpdateWords lUpdates dHead of
+        case Dict.updateWords lUpdates dHead of
             Left insErrors -> -- INSERT ERRORS
                 let status = HTTP.conflict409 in
                 let headers = [textHtml, noCache] in

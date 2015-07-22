@@ -187,7 +187,7 @@ recvClawDefEdit (cmd, sEditOrigin) = dictWordApp $ \ w dn dw _rq k ->
 
                 if bConflict then onConflict else
 
-                case Dict.safeUpdateWords lUpdates dHead of
+                case Dict.updateWords lUpdates dHead of
                     Left insErrors -> -- INSERT ERRORS
                         let status = HTTP.conflict409 in
                         let headers = [textHtml, noCache] in

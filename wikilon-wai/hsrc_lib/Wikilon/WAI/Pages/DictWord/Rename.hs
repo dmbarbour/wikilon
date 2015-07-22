@@ -87,7 +87,7 @@ recvWordRename pp
         readPVar dicts >>= \ bset ->
         let b = Branch.lookup' dn bset in
         let d = Branch.head b in
-        let tryRename = Dict.safeRenameWord wo wt d <|> Dict.safeMergeWords wo wt d in
+        let tryRename = Dict.renameWord wo wt d <|> Dict.mergeWords wo wt d in
         case tryRename of
             Nothing -> 
                 let status = HTTP.conflict409 in

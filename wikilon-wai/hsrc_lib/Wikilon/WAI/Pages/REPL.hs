@@ -57,8 +57,8 @@ import Wikilon.WAI.Pages.DictWord.ClawDef
 dictRepl :: WikilonApp
 dictRepl = app where
     app = routeOnMethod [(HTTP.methodGet, onGet),(HTTP.methodPost, onPost)]
-    onGet = branchOnOutputMedia [(mediaTypeTextHTML, clawReplPage)]
-    onPost = branchOnOutputMedia [(mediaTypeTextHTML, clawReplPost)]
+    onGet = branchOnOutputMedia [(mediaTypeTextHTML, replPage)]
+    onPost = branchOnOutputMedia [(mediaTypeTextHTML, replPost)]
 
 replPage :: WikilonApp
 replPage = toBeImplementedLater "clawRepl: return evaluation results"
