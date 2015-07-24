@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Awelon Object (AO) Dictionary Model
 --
 -- A dictionary is simply an association from words to definitions.
@@ -51,7 +53,7 @@ module Wikilon.Dict
     ( DictView(..)
     , wordDeps, abcWords
     , wordsInDict
-    , SecureHash
+    , SecureHash, defaultVersionHash
 
     , WordPrefix
     , DictSplitPrefix(..)
@@ -123,41 +125,47 @@ class DictView dict where
     dictDiff a b = Map.keys $ mapDiff (==) (m a) (m b) where
         m = Map.fromList . toList
 
-    -- | Compute a version hash, i.e. a secure hash for the specific
-    -- version of a word's definition with transitive dependencies.
-    -- The hash value may be used for caching computations that may
-    -- be stable across versions of a dictionary, such as typechecks
-    -- and compiled implementations. We'll assume the hash is free
-    -- from collisions in practice.
-    --
-    -- The default implementation will recompute the hash each time,
-    -- and depends on structure but not on word names.
+    -- | Return a secure hash associated with the specific version of a
+    -- word's structure and meaning. The default implementation recomputes
+    -- on each request (no caching) and returns a resource identifier
+    -- associated with naive conversion to ABC resources.
     lookupVersionHash :: dict -> Word -> SecureHash
-    lookupVersionHash d w = fromCache c where
-        fromCache = maybe mempty id . Map.lookup w
-        c = _addToCache d mempty w
+    lookupVersionHash d = defaultVersionHash (lookup d)
+
+-- Note: I imagine that cases where I would benefit from alpha-independent
+-- hashes are rare or marginal (e.g. renaming a word without invalidating
+-- cached results). Meanwhile, a hash that includes words would be more
+-- widely applicable. So I'll assume our hashes are not alpha-independent.
+
+-- | A default implementation for lookupVersionHash.
+defaultVersionHash :: (Word -> ABC) -> Word -> SecureHash
+defaultVersionHash lu w = fromCache c where
+    fromCache = maybe mempty id . Map.lookup w
+    c = _addToCache getABC mempty w 
+    getABC w = annoAtDef w <> lu w
+    annoAtDef w = mkABC [ABC.ABC_Tok ("&@" <> wordToUTF8 w)]
 
 -- accumulate hashes in a temporary cache
 type HashCache = Map Word SecureHash
-_addToCache :: (DictView dict) => dict -> HashCache -> Word -> HashCache
-_addToCache d c w = case Map.lookup w c of
+_addToCache :: (Word -> ABC) -> HashCache -> Word -> HashCache
+_addToCache fn c w = case Map.lookup w c of
     Just _ -> c
     Nothing -> 
-        let abc = lookup d w in
-        let c' = L.foldl' (_addToCache d) c (abcWords abc) in
+        let abc = fn w in
+        let c' = L.foldl' (_addToCache fn) c (abcWords abc) in
         let h = secureHashLazy $ ABC.encode $ _rwHashWords c' abc in
         Map.insert w h c'
 
 _rwHashWords :: HashCache -> ABC -> ABC
-_rwHashWords cache = abcRewriteWords rw where
-    rw w = maybe mempty h2tok $ Map.lookup w cache
-    h2tok = BS.pack . (35 :) . B16.encode . BS.unpack
+_rwHashWords cache = ABC.rewriteTokens rw where
+    rw t = [ABC.ABC_Tok (hashWordTok t)]
+    h2t = BS.pack . (35 :) . B16.encode . BS.unpack
+    hashWordTok t = maybe t h2t $ hashWord t
+    hashWord t = 
+        BS.uncons t >>= \ (c,w) ->
+        guard (37 == c) >>
+        Map.lookup (Word w) cache
 
-abcRewriteWords :: (Word -> Token) -> ABC -> ABC
-abcRewriteWords rw = ABC.rewriteTokens rwTok where
-    rwTok t = case BS.uncons t of
-        Just (37, w) -> [ABC.ABC_Tok (rw (Word w))]
-        _ -> [ABC.ABC_Tok t]
 
 -- generic 2-way diff element
 data MapDiff a b = LeftOnly a | RightOnly b | FoundDiff a b

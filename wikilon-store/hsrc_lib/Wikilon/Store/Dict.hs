@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable, PatternGuards, TypeSynonymInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- | a concrete implementation of Wikilon.Dict.
@@ -38,6 +39,7 @@ import qualified Data.Array.IArray as A
 import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
 
+import Wikilon.SecureHash
 import Wikilon.Dict
 import Wikilon.Dict.Word
 import Wikilon.Dict.Token
@@ -48,7 +50,9 @@ import Wikilon.Store.Dict.Type
 dict_space :: Dict -> VSpace
 dict_space = Trie.trie_space . dict_defs
 
--- | provide simple information about current value
+-- | address for a dictionary, wholistically. This might be
+-- used for caching at the whole-dictionary level, but caching
+-- at the word level is more viable via lookupVersionHash.
 unsafeDictAddr :: Dict -> Word64
 unsafeDictAddr = Trie.unsafeTrieAddr . dict_defs
 
@@ -57,6 +61,7 @@ empty :: VSpace -> Dict
 empty vs = Dict1
     { dict_defs = Trie.empty vs
     , dict_deps = Trie.empty vs
+    , dict_hash = Trie.empty vs
     }
 
 -- | O(1). Test whether a dictionary is empty.
@@ -86,6 +91,14 @@ instance DictView Dict where
 
     -- dictDiff :: dict -> dict -> [Word]
     -- TODO: support efficient Trie diff-list and merge functions
+
+    lookupVersionHash d (Word w) = h where
+        h = maybe u id $ Trie.lookup w (dict_hash d)
+        u = secureHashLazy $ ABC.encode (_annoWord w)
+
+-- prefix a definition with {&@word} before computing the hash.
+_annoWord :: Word -> ABC
+_annoWord w = mkABC [ABC.ABC_Tok ("&@" <> w)]
 
 _bytes :: Def -> LBS.ByteString
 _bytes (Def1 v) = deref' v
@@ -193,10 +206,10 @@ instance DictUpdate Dict where
     unsafeUpdateWord w abc = unsafeUpdateWords (Map.singleton w abc)
     unsafeUpdateWords m d = d' where
         l = Map.toList m
-        d' = Dict1 { dict_defs = defs', dict_deps = deps' } 
+        d' = Dict1 { dict_defs = defs', dict_deps = deps', dict_hash = hash' } 
         isDeleted = L.null . ABC.abcOps . snd
         filterDeleted = fmap (unWord . fst) . L.filter isDeleted
-        filterUpdated = fmap (unWord *** encDef) . L.filter (not . isDeleted) 
+        filterUpdated = fmap (unWord *** encDef) . L.filter (not . isDeleted)
         encDef = Def1 . vref' (dict_space d) . ABC.encode
         lDeleted = filterDeleted l
         lUpdated = filterUpdated l
@@ -206,4 +219,14 @@ instance DictUpdate Dict where
         newDepsMap = _revDeps $ _insertDepsMap l
         depsMapDiff = _revDepsDiff oldDepsMap newDepsMap
         deps' = _updateDeps depsMapDiff (dict_deps d)
+
+
+        sUHWords = _transitiveDeps d (Map.keys m)
+        mUpdateHash = 
+        lUpdateHash = Map.toList mUpdateHash
+        updateHashes = Trie.insertList lUpdateHash . Trie.deleteList lDeleted
+        hash' = updateHashes (dict_hash d)
+        
+        hash' = Trie.insertList lUpdateHash $ Trie.deleteList lDeleted $ (dict_hash d)
+        
 

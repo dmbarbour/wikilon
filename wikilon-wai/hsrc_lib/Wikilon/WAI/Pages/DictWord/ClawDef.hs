@@ -83,7 +83,7 @@ getDictWordClawDef = dictWordApp $ \ w dn dw _rq k ->
         _ -> k $ Wai.responseLBS HTTP.notFound404 [] $ LBS.empty
 
 putDictWordClawDef :: WikilonApp
-putDictWordClawDef = toBeImplementedLater "set word as having a claw definition"
+putDictWordClawDef = toBeImplementedLater "set word using claw def"
 
 dictWordClawDefEdit :: WikilonApp
 dictWordClawDefEdit = app where

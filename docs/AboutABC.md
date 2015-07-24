@@ -422,19 +422,23 @@ Value sealing is an important companion to object capability security. It provid
 
 ### ABC Resources for Separate Compilation and Dynamic Linking
 
-A good model for separate compilation and dynamic linking is essential for performance at large scales. For ABC, we'll use a form similar to:
+A good model for separate compilation and dynamic linking is essential for performance at large scales. For ABC, we'll use the form:
 
         {#secureHashOfBytecode}
 
-This secure hash guards against name collisions. Given the identifier, we can fetch the resource, validate it against the hash, then compile and load it. We could leverage a [distributed hashtable](https://en.wikipedia.org/wiki/Distributed_hash_table) or other content distribution model. We can cache the results of compiling a resource in case we see the identifier again. With a good cache, this can work for streaming code. We don't need to worry about versioning or cache invalidation at this layer. And the secure hash also guards against cyclic dependencies.
+This secure hash guards against name collisions. Given the identifier, we can fetch the resource, validate it against the hash, then compile and load it. We could leverage a [distributed hashtable](https://en.wikipedia.org/wiki/Distributed_hash_table) or other content distribution model. We can compile this resource, and we can cache the results in case we see the identifier again. A good cache will greatly improve effective compression of streaming code. We don't need to worry about versioning or cache invalidation at this layer. And the secure hash also guards against cyclic dependencies.
+
+For specifics, I'm favoring SHA3-256 encoded using Awelon's Base16 (alphabet `bdfghjkmnpqstxyz`). So this encodes as in sixty-four characters in after the `#` mark. When obtaining resources, we should also be able to query whomever provided the resource ID to either obtain it directly or learn where to obtain it.
 
 #### Staged Compilation of Resources
 
-Each ABC resource will follow the structure of [AO definitions](AboutAO.md). That is, rather than *directly inlining* resource bytecode, our resources will have two parts: a value and a compiler for it. The type of a complete resource will be the same as the type of an AO definition: `∃v.∀e.(e→([v→[a→b]]*(v*e))`. We'll compile a resource by applying the compiler function `[v→[a→b]]` to the value `v` to produce the `[a→b]` function, which is the meaning of the resource. This `[a→b]` function may be further compiled into machine code or module by a runtime.
+Each ABC resource will follow the structure of [AO definitions](AboutAO.md). That is, rather than *directly inlining* resource bytecode, our resources can be evaluated into two parts: a value and a compiler for it. The type of a complete resource will be the same as the type of an AO definition: `∃v.∀e.(e→([v→[a→b]]*(v*e))`. We'll compile a resource by applying the compiler function `[v→[a→b]]` to the value `v` to produce the `[a→b]` function, which is the meaning of the resource. This `[a→b]` function may be further compiled into machine code or module by a runtime.
 
-Matching AO's definition structure has many benefits. Most importantly, this enables annotations to be applied at compile-time, e.g. to indicate that large values should use an optimized representation (e.g. matrix or vector) or be hibernated to cold store, that certain functions should be parallelized or compiled for GPGPU. Explicit staging is a lot more reliable and predictable than depending on implicit partial evaluation, and can provide macro-like compression. The shared structure can help unify development and debugging tools, e.g. developers can view and manipulate [embedded objects](ExtensibleSyntax.md) or (with sufficient metadata) even a [command language view](CommandLine.md). In development contexts, we might benefit from expressing *incomplete* resources by depending on that `e` value (to represent holes or gaps).
+Matching AO's definition structure has many benefits. Most importantly, this enables annotations to be applied at compile-time, e.g. to indicate that large values should use an optimized representation (e.g. matrix or vector) or be hibernated to cold store, that certain functions should be parallelized or compiled for GPGPU. Explicit staging is a lot more reliable and predictable than depending on implicit partial evaluation, and can provide macro-like compression. The shared structure can help unify development and debugging tools, e.g. developers can view and manipulate [embedded objects](ExtensibleSyntax.md) or (with sufficient metadata) even a [command language view](CommandLine.md). 
 
 The primary differences between the ABC resource model and AO definitions: ABC resources are identified by `{#secureHash}` in a global space, whereas AO uses human-meaningful `{%word}` tokens bound locally to an implicit dictionary. Also, AO definitions are typically restricted to a friendly, portable, purely functional subset of ABC (by limiting tokens and texts); ABC resources are not restricted.
+
+*Note:* In AO development contexts, the potential for *incomplete* definitions is of some interest. We depend on `e` to provide some values. Incomplete definitions don't translate well to ABC resources because we don't have the implicit identity associated with words. But we could prefix incomplete definitions with an annotation such as `{&@word}` to distinguish different `e` holes.
 
 *Aside:* Paul Chiusano is doing related work with Unison involving [editing resources named by hashes](http://unisonweb.org/2015-06-12/editing.html#post-start). While I've not elected to go this route with AO dictionaries, the techniques he develops seem readily applicable to ABC resources.
 
@@ -450,7 +454,7 @@ The bulk of a sensitive resource is encrypted and provided over the untrusted ne
 
 #### Specialization: Value Linking
 
-It might be useful to optimize for cases where the generated `[a→b]` meaning function has the type `[∀a.a→(value*a)]`, i.e. simply exporting a large value. Specializing this case would usefully permit lazy or parallel loading of values and interning of large values. We might additionally include a little information about substructural attributes (affine, relevant, linear) that would constrain generic data plumbing:
+It might be useful to optimize for cases where the generated `[a→b]` meaning function itself the type `[∀a.a→(value*a)]`, i.e. simply exporting a large value. Specializing this case would usefully permit lazy or parallel loading of values and interning of large values. We might additionally include a little information about substructural attributes (affine, relevant, linear) that would constrain generic data plumbing:
 
         {#secureResourceIdentifier'kf}
 
@@ -464,6 +468,7 @@ The valid suffixes:
 Usefully, this technique is compositional. I.e. if we build a value from smaller named values, we can compute whether the composite is affine, relevant, or linear without loading any of the values. Other type information could be left to separate annotations, since it is less essential for reasoning about data plumbing behavior.
 
 Lazy linking and loading of large, content-addressed data is convenient for working with very large structures and values, i.e. much larger than machine memory.
+
 
 ### ABC Paragraphs
 

@@ -1,9 +1,7 @@
 {-# LANGUAGE ViewPatterns #-}
 
--- | Awelon project uses secure hashes for lots of purposes. The main
--- choice of secure hash is SHA3-384, selected for its simplicity and
--- its useful divisibility into thirds.
---
+-- | Awelon project uses secure hashes for lots of purposes. 
+-- The favored secure hash is SHA3-256.
 module Wikilon.SecureHash 
     ( SecureHash, secureHash, secureHashLazy
     , Signature(..), hmac, hmacLazy
@@ -17,14 +15,14 @@ import qualified Crypto.Hash as CH
 -- import Data.Function (on)
 import qualified Data.List as L
 
--- | a Wikilon SecureHash is a bytestring of length 48.
+-- | a Wikilon SecureHash is a bytestring of length 32.
 type SecureHash = ByteString
 
 -- for type inference
-toSecureHash :: CH.Digest CH.SHA3_384 -> SecureHash
+toSecureHash :: CH.Digest CH.SHA3_256 -> SecureHash
 toSecureHash = Data.Byteable.toBytes
 
-hashContext :: CH.Context CH.SHA3_384
+hashContext :: CH.Context CH.SHA3_256
 hashContext = CH.hashInit
 
 -- | generate a secure hash from any bytestring.

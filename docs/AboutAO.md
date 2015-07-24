@@ -148,6 +148,17 @@ I'd prefer to keep names of things relatively shallow. However, we can make use 
 
 AO doesn't support namespaces directly. Every word must be fully written in those bytecode tokens. However, structure editors may hide common prefixes or suffixes to prevent large names from becoming noise. Use of color is also viable, to help developers visually distinguish the origins of words.
 
+## Conversion to ABC Resources
+
+ABC resources already follow AO's definition structure; the difference is the use of version-specific secure hashes to identify resources instead of human-meaningful tokens. To naively convert an AO definition of word to an ABC resource:
+
+* convert dependencies; every `{%bar}` dependency becomes `{#barResourceId}`
+* prepend definition of word with an origin annotation, e.g. `{&@foo}`.
+* resourceId is SHA3-256 of bytecode, base16 alphabet `bdfghjkmnpqstxyz`
+
+The injected `{&@foo}` annotations are to simplify round-trip conversion, debugging, claw-code views, etc.. In case of incomplete definitions, they also serve a useful role in naming the holes indicated by `e`. However, this annotation could easily be dropped in a more sophisticated conversion, e.g. one involving optimization or partial evaluation.
+
+Conversion will diverge or fail for an unhealthy dictionary having cyclic definitions.
 
 ## Historical Note
 

@@ -1,13 +1,16 @@
 
--- | The Wikilon 'Model' provides an abstract interface for Wikilon.
--- Wikilon will receive and process event messages, and respond to
--- messages asynchronously (if at all). Batches of events may be
--- processed atomically, i.e. present Wikilon as an abstract virtual
--- machine.
+-- | The Wikilon 'Model' is an abstract interface for Wikilon. This
+-- interface supports confined atomic operations. That is, we may
+-- compose queries and updates on Wikilon so long as we don't also
+-- interact with external resources.
 --
--- Batch messages correspond, more or less, to Haskell 'Applicative'.
--- That is, we support a set of queries and actions, but the actions
--- are not directly or conditionally threaded.
+-- This will be represented by a monad. A transaction becomes a 
+-- monadic action. At least the basic actions for the monad will
+-- have a serializable representation.
+--
+-- There may be authorization concerns, eventually, which shall be
+-- separated into a different abstract layer (from the Wikilon
+-- model), e.g. simulating a simple authorization service.
 --
 module Wikilon.Model
     ( 

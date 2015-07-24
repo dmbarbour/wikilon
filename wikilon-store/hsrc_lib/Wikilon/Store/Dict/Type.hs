@@ -12,19 +12,26 @@ module Wikilon.Store.Dict.Type
 
 import Control.Applicative
 import Data.Typeable
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.VCache.Trie (Trie)
 import Database.VCache
 
--- | A dictionary contains two indices:
+-- | A dictionary contains three indices:
 --
--- * a defs trie from words to definitions
+-- * a defs trie from word to definition and version hash
 -- * a deps trie from tokens to client words
+-- * a hash trie from words to secure version hashes
 --
 -- All tokens are tracked in the dependencies. Thus, words are listed
 -- as `%foo` but we can also find any annotation used in the dictionary
 -- (and by whom it is used). Locating all words that use a given token
--- is potentially useful for debugging, typechecking, etc..
+-- is potentially useful for debugging, typechecking, etc.. 
+--
+-- Hashes are recorded to simplify effective caching for compilation,
+-- type checking, partial evaluation, and so on. Each word includes a
+-- hash corresponding to that word viewed as a resource. The hash will
+-- include all transitive dependencies.
 --
 -- This basic dictionary performs no compression. I think it probably
 -- isn't essential, since the dictionary itself can be used as a basis
@@ -33,11 +40,13 @@ import Database.VCache
 type Dict = Dict1
 type Def  = Def1
 type Deps = Deps1
+type Hash = BS.ByteString
 
 -- version 1 of the dictionary
 data Dict1 = Dict1
-    { dict_defs :: !(Trie Def1)
-    , dict_deps :: !(Trie Deps1)
+    { dict_defs   :: !(Trie Def1)
+    , dict_deps   :: !(Trie Deps1)
+    , dict_hash   :: !(Trie Hash)
     } deriving (Eq, Typeable)
 newtype Def1 = Def1 (VRef LBS.ByteString) deriving (Eq, Typeable)
 newtype Deps1 = Deps1 (Trie U) deriving (Eq, Typeable)
@@ -64,9 +73,10 @@ data U = U deriving (Eq, Typeable) -- a Unit that is upgradeable in VCache
 -- (e.g. in case I add compression later, or switch to a sized
 -- trie for incremental views).
 instance VCacheable Dict1 where
-    put (Dict1 _defs _deps) = putWord8 1 >> put _defs >> put _deps
+    put (Dict1 _defs _deps _hashes) = 
+        putWord8 1 >> put _defs >> put _deps >> put _hashes
     get = getWord8 >>= \ v -> case v of
-        1 -> Dict1 <$> get <*> get
+        1 -> Dict1 <$> get <*> get <*> get
         _ -> fail $ dictErr $ "unrecognized Dict version " ++ show v
 instance VCacheable Def1 where
     put (Def1 ref) = putWord8 1 >> put ref
