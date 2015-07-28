@@ -70,13 +70,12 @@ dictWord = app where
 viewClawOrAODef :: ABC -> HTML
 viewClawOrAODef abc = case parseClawDef abc of
     Nothing -> do
-        href uriAODictDocs "raw aodef" <> H.br
         H.pre ! A.lang "aodef" $ H.code $ H.string $ show abc
-        
+        H.small $ H.strong "viewing as: " <>  href uriAODictDocs "aodef" <> H.br
     Just cc -> do
-        href uriClawDocs "claw view" <> H.br
         let sClaw = LazyUTF8.toString $ Claw.encode cc
         H.pre ! A.lang "claw" $ H.code $ H.string sClaw
+        H.small $ H.strong "viewing as: " <> href uriClawDocs "claw" <> H.br
 
 
 

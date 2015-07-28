@@ -5,7 +5,6 @@ body {
 }
 h1,h2,h3,h4,h5,h6,th {
   color: #d3d7cf;
-  text-shadow: 2px 1px 3px black;
 }
 a {
  color: #97c4f0;
@@ -15,7 +14,6 @@ a:hover, a:focus {
  text-decoration: underline;
 }
 strong, b {
- text-shadow: 1px 1px black;
  color: #d3d7cf;
  font-weight: bold;
 }
@@ -56,6 +54,7 @@ pre {
  padding: 3px;
  border: 1px solid #888a85;
  max-width: 640px;
+ min-height: 16px;
  white-space: pre-wrap;
 }
 body.docs {

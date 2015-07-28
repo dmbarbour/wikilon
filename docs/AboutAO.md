@@ -142,23 +142,11 @@ As data types, DSLs, and structure editors are implemented, casual development s
  
 ## AO Naming Conventions
 
-The naming of words in an AO dictionary has no impact on the intrinsic, purely functional meaning of a word. However, names certainly have connotations and conventions within a community. Conventions will be established, such as: `foo.doc` provides human-meaningful documentation for the word `foo`. And these conventions will solidify as we integrate them into development environments, e.g. if we automatically link related words and documentation.
+The naming of words in an AO dictionary has no impact on the intrinsic, purely functional meaning of a word. However, names will have connotations and conventions within a community, and a development environment may be aware of certain conventions (e.g. such that a word `foo` is automatically linked to a `doc:foo` documentation word). 
 
-I'd prefer to keep names of things relatively shallow. However, we can make use of redirects, e.g. the definition `[{%foo}][]` essentially redirects to the definition of foo. Also, plurality should be the default, e.g. rather than naming the root word for an application `main` (thereby limiting a dictionary to one app), we name it after the project.
+Names do not assert any properties. Asserted properties should be expressed by compile-time annotations. However, we may generally associate assertions with naming conventions.
 
-AO doesn't support namespaces directly. Every word must be fully written in those bytecode tokens. However, structure editors may hide common prefixes or suffixes to prevent large names from becoming noise. Use of color is also viable, to help developers visually distinguish the origins of words.
-
-## Conversion to ABC Resources
-
-ABC resources already follow AO's definition structure; the difference is the use of version-specific secure hashes to identify resources instead of human-meaningful tokens. To naively convert an AO definition of word to an ABC resource:
-
-* convert dependencies; every `{%bar}` dependency becomes `{#barResourceId}`
-* prepend definition of word with an origin annotation, e.g. `{&@foo}`.
-* resourceId is SHA3-256 of bytecode, base16 alphabet `bdfghjkmnpqstxyz`
-
-The injected `{&@foo}` annotations are to simplify round-trip conversion, debugging, claw-code views, etc.. In case of incomplete definitions, they also serve a useful role in naming the holes indicated by `e`. However, this annotation could easily be dropped in a more sophisticated conversion, e.g. one involving optimization or partial evaluation.
-
-Conversion will diverge or fail for an unhealthy dictionary having cyclic definitions.
+In some cases, we may expect a certain structure or function type for words of a given prefix or suffix, e.g. to support a [command language](CommandLine.md) view or a branching [REPL session](REPL.md) or other [dictionary applications](ApplicationModel.md). A development environment might raise warnings and views may fail when expectations are violated.
 
 ## Historical Note
 
