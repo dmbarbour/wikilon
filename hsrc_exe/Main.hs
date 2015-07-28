@@ -115,7 +115,7 @@ wikilonWarpSettings :: Int -> Warp.Settings
 wikilonWarpSettings port =
     Warp.setPort (fromIntegral port) $
     -- Warp.setHost "*" $
-    -- Warp.setTimeout 300 $
+    Warp.setTimeout 600 $ -- don't really want to timeout
     Warp.defaultSettings
 
 wikilonWarpTLSSettings :: FS.FilePath -> WarpTLS.TLSSettings

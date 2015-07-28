@@ -12,10 +12,10 @@ module Wikilon.Store.Dict.Type
 
 import Control.Applicative
 import Data.Typeable
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.VCache.Trie (Trie)
 import Database.VCache
+import Wikilon.SecureHash
 
 -- | A dictionary contains three indices:
 --
@@ -40,13 +40,12 @@ import Database.VCache
 type Dict = Dict1
 type Def  = Def1
 type Deps = Deps1
-type Hash = BS.ByteString
 
 -- version 1 of the dictionary
 data Dict1 = Dict1
     { dict_defs   :: !(Trie Def1)
     , dict_deps   :: !(Trie Deps1)
-    , dict_hash   :: !(Trie Hash)
+    , dict_hash   :: !(Trie SecureHash)
     } deriving (Eq, Typeable)
 newtype Def1 = Def1 (VRef LBS.ByteString) deriving (Eq, Typeable)
 newtype Deps1 = Deps1 (Trie U) deriving (Eq, Typeable)

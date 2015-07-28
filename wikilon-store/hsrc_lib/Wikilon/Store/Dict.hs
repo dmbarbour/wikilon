@@ -19,6 +19,7 @@ module Wikilon.Store.Dict
 
 import Prelude hiding (null, lookup, words)
 import Control.Arrow (second, (***))
+import Control.Monad
 import Data.Monoid
 import Data.Maybe 
 import qualified Data.ByteString as BS
@@ -38,6 +39,7 @@ import qualified Data.Array.IArray as A
 
 import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
+import qualified Awelon.Base16 as B16
 
 import Wikilon.SecureHash
 import Wikilon.Dict
@@ -92,13 +94,13 @@ instance DictView Dict where
     -- dictDiff :: dict -> dict -> [Word]
     -- TODO: support efficient Trie diff-list and merge functions
 
-    lookupVersionHash d (Word w) = h where
-        h = maybe u id $ Trie.lookup w (dict_hash d)
-        u = secureHashLazy $ ABC.encode (_annoWord w)
+    lookupVersionHash d w = h where
+        h = maybe u id $ Trie.lookup (unWord w) (dict_hash d)
+        u = secureHashLazy $ ABC.encode (_annoWord w)   
 
--- prefix a definition with {&@word} before computing the hash.
+-- prefix each definition when computing version hashes
 _annoWord :: Word -> ABC
-_annoWord w = mkABC [ABC.ABC_Tok ("&@" <> w)]
+_annoWord (Word w) = ABC.mkABC [ABC.ABC_Tok ("&@" <> w)]
 
 _bytes :: Def -> LBS.ByteString
 _bytes (Def1 v) = deref' v
@@ -200,13 +202,51 @@ _updOneDep t (tok,(wsDel,wsAdd)) = Trie.adjust adj tok t where
     insw (Word w) = (w, U)
     delw (Word w) = w
 
+-- compute a transitive list of words whose version hashes should be 
+-- updated from an initial list of words whose definitions have been
+-- updated. This generated list is ordered such that each word in the 
+-- list will appear before any of its transitive clients. 
+_hashUpdList :: Dict -> [Word] -> [Word]
+_hashUpdList d = L.reverse . accum mempty where
+    accum _ [] = []
+    accum v ws@(w:ws') =
+        if Set.member w v then accum v ws' else
+        let lClients = L.filter (`Set.notMember` v) $ wordClients d w in
+        if L.null lClients
+            then (w : accum (Set.insert w v) ws')
+            else accum v (lClients ++ ws)
+
+-- recompute version hash for a specific word
+_rehashWord :: Dict -> Word -> Dict
+_rehashWord d w = 
+    let abc = lookup d w in
+    let bNull = L.null (ABC.abcOps abc) in
+    let dhDel = Trie.delete (unWord w) (dict_hash d) in
+    if bNull then d { dict_hash = dhDel } else
+    let abc' = _annoWord w <> _rwHashWords (lookupVersionHash d) abc in
+    let h' = secureHashLazy $ ABC.encode abc' in
+    let dhUpd = Trie.insert (unWord w) h' (dict_hash d) in
+    d { dict_hash = dhUpd } 
+
+-- write ABC definition word tokens into versioned resource tokens
+_rwHashWords :: (Word -> SecureHash) -> ABC -> ABC
+_rwHashWords hf = ABC.rewriteTokens rw where
+    rw t = [ABC.ABC_Tok (hashWordTok t)]
+    h2t = BS.pack . (35 :) . B16.encode . BS.unpack
+    hashWordTok t = maybe t h2t $ hashWord t
+    hashWord t = 
+        BS.uncons t >>= \ (c,w) ->
+        guard (37 == c) >>
+        return (hf (Word w))
+
 -- update is one of the more sophisticated operations
 -- mostly to maintain the reverse lookup index
 instance DictUpdate Dict where
     unsafeUpdateWord w abc = unsafeUpdateWords (Map.singleton w abc)
     unsafeUpdateWords m d = d' where
         l = Map.toList m
-        d' = Dict1 { dict_defs = defs', dict_deps = deps', dict_hash = hash' } 
+        d' = L.foldl' _rehashWord du $ _hashUpdList du (fmap fst l) 
+        du = d { dict_defs = defs', dict_deps = deps' } 
         isDeleted = L.null . ABC.abcOps . snd
         filterDeleted = fmap (unWord . fst) . L.filter isDeleted
         filterUpdated = fmap (unWord *** encDef) . L.filter (not . isDeleted)
@@ -219,14 +259,4 @@ instance DictUpdate Dict where
         newDepsMap = _revDeps $ _insertDepsMap l
         depsMapDiff = _revDepsDiff oldDepsMap newDepsMap
         deps' = _updateDeps depsMapDiff (dict_deps d)
-
-
-        sUHWords = _transitiveDeps d (Map.keys m)
-        mUpdateHash = 
-        lUpdateHash = Map.toList mUpdateHash
-        updateHashes = Trie.insertList lUpdateHash . Trie.deleteList lDeleted
-        hash' = updateHashes (dict_hash d)
-        
-        hash' = Trie.insertList lUpdateHash $ Trie.deleteList lDeleted $ (dict_hash d)
-        
 

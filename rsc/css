@@ -83,6 +83,11 @@ span.diffConflictSep {
  color: #f57900;
  font-weight: bolder;
 }
+span.versionHash {
+ color: #8f5902;
+ font-size: x-small;
+ font-family: "Lucida Console", Monaco, monospace;
+}
 .todo {
  color: #555753;
 }

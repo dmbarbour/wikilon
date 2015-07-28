@@ -53,7 +53,8 @@ module Wikilon.Dict
     ( DictView(..)
     , wordDeps, abcWords
     , wordsInDict
-    , SecureHash, defaultVersionHash
+    , SecureHash
+    , defaultVersionHash
 
     , WordPrefix
     , DictSplitPrefix(..)
@@ -76,6 +77,7 @@ module Wikilon.Dict
     ) where
 
 import Prelude hiding (lookup)
+import Control.Monad
 import Data.Maybe (mapMaybe, maybeToList)
 import Data.Monoid
 import qualified Data.List as L
@@ -125,25 +127,22 @@ class DictView dict where
     dictDiff a b = Map.keys $ mapDiff (==) (m a) (m b) where
         m = Map.fromList . toList
 
-    -- | Return a secure hash associated with the specific version of a
-    -- word's structure and meaning. The default implementation recomputes
-    -- on each request (no caching) and returns a resource identifier
-    -- associated with naive conversion to ABC resources.
+    -- | Return a secure hash associated with the current version of a
+    -- word's structure and meaning including transitive dependencies.
+    -- This is used as an index for cached computations on a definition.
+    -- The default implementation recomputes the hash each time.
     lookupVersionHash :: dict -> Word -> SecureHash
-    lookupVersionHash d = defaultVersionHash (lookup d)
+    lookupVersionHash = defaultVersionHash . lookup
 
--- Note: I imagine that cases where I would benefit from alpha-independent
--- hashes are rare or marginal (e.g. renaming a word without invalidating
--- cached results). Meanwhile, a hash that includes words would be more
--- widely applicable. So I'll assume our hashes are not alpha-independent.
 
--- | A default implementation for lookupVersionHash.
+-- | A default implementation for lookupVersionHash. Computes an ABC
+-- resource identifier based on a naive conversion.
 defaultVersionHash :: (Word -> ABC) -> Word -> SecureHash
-defaultVersionHash lu w = fromCache c where
-    fromCache = maybe mempty id . Map.lookup w
-    c = _addToCache getABC mempty w 
+defaultVersionHash lu wRoot = fromCache c where
+    fromCache = maybe mempty id . Map.lookup wRoot
+    c = _addToCache getABC mempty wRoot
     getABC w = annoAtDef w <> lu w
-    annoAtDef w = mkABC [ABC.ABC_Tok ("&@" <> wordToUTF8 w)]
+    annoAtDef w = ABC.mkABC [ABC.ABC_Tok ("&@" <> wordToUTF8 w)]
 
 -- accumulate hashes in a temporary cache
 type HashCache = Map Word SecureHash
@@ -165,7 +164,6 @@ _rwHashWords cache = ABC.rewriteTokens rw where
         BS.uncons t >>= \ (c,w) ->
         guard (37 == c) >>
         Map.lookup (Word w) cache
-
 
 -- generic 2-way diff element
 data MapDiff a b = LeftOnly a | RightOnly b | FoundDiff a b

@@ -11,6 +11,7 @@ module Wikilon.WAI.Pages.DictWord
 import Control.Monad
 import Data.Monoid
 import qualified Data.List as L
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.Builder as BB
 import qualified Network.HTTP.Types as HTTP
@@ -22,6 +23,7 @@ import qualified Network.Wai as Wai
 import Database.VCache
 
 import qualified Awelon.ClawCode as Claw
+import qualified Awelon.Base16 as B16
 import Awelon.ABC (ABC)
 
 
@@ -96,6 +98,8 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
     let b = Branch.lookup' dn bset in
     let d = Branch.head b in 
     let abc = Dict.lookup d dw in
+    let h = Dict.lookupVersionHash d dw in
+    let hs = (BS.pack . (35:) . B16.encode . BS.unpack) h in 
     let status = HTTP.ok200 in
     let headers = [textHtml] in
     let title = H.unsafeByteString (Dict.wordToUTF8 dw) in
@@ -108,6 +112,8 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
             viewClawOrAODef abc
 
             H.hr
+            let ver = H.span ! A.class_ "versionHash" $ H.unsafeByteString hs
+            H.strong "SecureHash:" <> " " <> ver <> H.br
             H.strong "Dictionary:" <> " " <> hrefDict dn
             let lDeps = L.nub $ Dict.abcWords abc 
             let lClients = Dict.wordClients d dw
