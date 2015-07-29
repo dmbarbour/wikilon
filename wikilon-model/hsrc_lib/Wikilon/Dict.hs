@@ -51,8 +51,9 @@
 --
 module Wikilon.Dict
     ( DictView(..)
-    , wordDeps, abcWords
     , wordsInDict
+    , wordDeps, abcWords
+    , transitiveDepsList
     , SecureHash
     , defaultVersionHash
 
@@ -62,6 +63,7 @@ module Wikilon.Dict
     , splitOnPrefixChars
     , DictRLU(..)
     , wordClients
+    , transitiveClientsList
     , DictUpdate(..)
     , unsafeRenameWord
     , deleteWord
@@ -192,8 +194,23 @@ abcWords = mapMaybe wordTok . ABC.tokens where
         Just ('%', w) -> Just (Word w)
         _ -> Nothing
 
+-- | Given a list of words, compute all the transitive dependencies 
+-- of those words, ordered such that a word appears in the list only
+-- after all of its dependencies, and no more than once. This is 
+-- useful for exporting just a minimal subset of a dictionary for 
+-- a given set of root words.
+transitiveDepsList :: (DictView dict) => dict -> [Word] -> [Word]
+transitiveDepsList d = accum mempty where
+    accum _ [] = []
+    accum v ws@(w:ws') = 
+        if Set.member w v then accum v ws' else
+        let lDeps = L.filter (`Set.notMember` v) $ wordDeps d w in
+        if L.null lDeps 
+            then (w : accum (Set.insert w v) ws')
+            else accum v (lDeps ++ ws)
+
 -- | A word prefix is a bytestring. It is *not* necessarily a full
--- UTF-8 string, i.e. because we might split on a UTF-8 character.
+-- UTF-8 string, i.e. because we might split within a UTF-8 character.
 type WordPrefix = BS.ByteString
 
 -- | for browsing a dictionary in a breadth-first manner
@@ -258,6 +275,21 @@ class (DictView dict) => DictRLU dict where
 -- | Find direct clients of a word.
 wordClients :: (DictRLU dict) => dict -> Word -> [Word]
 wordClients d = tokenClients d . BS.cons 37 . unWord
+
+-- | Given a list of words, compute the transitive clients for those
+-- words ordered such that a word appears before any of its clients.
+-- This clients list corresponds, for example, to the set of words
+-- whose behavior, type, version hash, compiled objects, etc. might
+-- have become invalid after an update to words in the input list.
+transitiveClientsList :: (DictRLU dict) => dict -> [Word] -> [Word]
+transitiveClientsList d = L.reverse . accum mempty where
+    accum _ [] = []
+    accum v ws@(w:ws') = 
+        if Set.member w v then accum v ws' else
+        let lClients = L.filter (`Set.notMember` v) $ wordClients d w in
+        if L.null lClients
+            then (w : accum (Set.insert w v) ws')
+            else accum v (lClients ++ ws)
 
 -- | Update definitions in a dictionary. Note that no validation
 -- logic is performed by these operations. Any validation must be

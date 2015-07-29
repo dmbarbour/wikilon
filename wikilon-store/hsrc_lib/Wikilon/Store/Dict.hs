@@ -202,20 +202,6 @@ _updOneDep t (tok,(wsDel,wsAdd)) = Trie.adjust adj tok t where
     insw (Word w) = (w, U)
     delw (Word w) = w
 
--- compute a transitive list of words whose version hashes should be 
--- updated from an initial list of words whose definitions have been
--- updated. This generated list is ordered such that each word in the 
--- list will appear before any of its transitive clients. 
-_hashUpdList :: Dict -> [Word] -> [Word]
-_hashUpdList d = L.reverse . accum mempty where
-    accum _ [] = []
-    accum v ws@(w:ws') =
-        if Set.member w v then accum v ws' else
-        let lClients = L.filter (`Set.notMember` v) $ wordClients d w in
-        if L.null lClients
-            then (w : accum (Set.insert w v) ws')
-            else accum v (lClients ++ ws)
-
 -- recompute version hash for a specific word
 _rehashWord :: Dict -> Word -> Dict
 _rehashWord d w = 
@@ -245,18 +231,20 @@ instance DictUpdate Dict where
     unsafeUpdateWord w abc = unsafeUpdateWords (Map.singleton w abc)
     unsafeUpdateWords m d = d' where
         l = Map.toList m
-        d' = L.foldl' _rehashWord du $ _hashUpdList du (fmap fst l) 
+        d' = L.foldl' _rehashWord du $ transitiveClientsList du (fmap fst l)
         du = d { dict_defs = defs', dict_deps = deps' } 
-        isDeleted = L.null . ABC.abcOps . snd
-        filterDeleted = fmap (unWord . fst) . L.filter isDeleted
-        filterUpdated = fmap (unWord *** encDef) . L.filter (not . isDeleted)
-        encDef = Def1 . vref' (dict_space d) . ABC.encode
+
+        defs' = updateDefs (dict_defs d)
+        updateDefs = Trie.insertList lUpdated . Trie.deleteList lDeleted
         lDeleted = filterDeleted l
         lUpdated = filterUpdated l
-        updateDefs = Trie.insertList lUpdated . Trie.deleteList lDeleted
-        defs' = updateDefs (dict_defs d)
+        filterDeleted = fmap (unWord . fst) . L.filter isDeleted
+        filterUpdated = fmap (unWord *** encDef) . L.filter (not . isDeleted)
+        isDeleted = L.null . ABC.abcOps . snd
+        encDef = Def1 . vref' (dict_space d) . ABC.encode
+
+        deps' = _updateDeps depsMapDiff (dict_deps d)
+        depsMapDiff = _revDepsDiff oldDepsMap newDepsMap
         oldDepsMap = _revDeps $ _dictDepsMap d (fmap fst l)
         newDepsMap = _revDeps $ _insertDepsMap l
-        depsMapDiff = _revDepsDiff oldDepsMap newDepsMap
-        deps' = _updateDeps depsMapDiff (dict_deps d)
 

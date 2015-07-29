@@ -55,7 +55,6 @@ dictWord = app where
         ,(mediaTypeClaw, putDictWordClawDef)
         ]
 
-
 -- Ideally, a lot should go into presenting a word to a user.
 --
 -- (a) present a command language view if appropriate.
@@ -76,8 +75,6 @@ viewClawOrAODef abc = case parseClawDef abc of
         let sClaw = LazyUTF8.toString $ Claw.encode cc
         H.pre ! A.lang "claw" $ H.code $ H.string sClaw
         H.small $ H.strong "viewing as: " <> href uriClawDocs "claw" <> H.br
-
-
 
 -- | This is our basic non-interactive web page for words.
 --

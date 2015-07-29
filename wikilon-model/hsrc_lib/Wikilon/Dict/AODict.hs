@@ -25,8 +25,6 @@
 --   (will need to abstract the dictionary)
 module Wikilon.Dict.AODict
     ( mimeType
-    , dictWords
-    , dictWords'
     , encode
     , encodeWords
 
@@ -45,7 +43,6 @@ import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.Builder as BB
-import Data.Set (Set)
 import qualified Data.Set as Set
 
 import Awelon.ABC (ABC)
@@ -58,44 +55,18 @@ import Wikilon.Dict
 mimeType :: BS.ByteString
 mimeType = UTF8.fromString "text/vnd.org.awelon.aodict"
 
--- | Obtain a list of words from our dictionary ordered such that
--- all defined dependencies of a word are listed before that word
--- and all defined words are listed exactly once.
-dictWords :: (DictView dict) => dict -> [Word]
-dictWords d = dictWords' d (wordsInDict d)
-
--- | List requested words in a dictionary together with transitive
--- dependencies. The resulting list will not contain any duplicates,
--- and words will be ordered such that transitive dependencies 
--- appear before a word (modulo cycles in an unhealthy dictionary).
-dictWords' :: (DictView dict) => dict -> [Word] -> [Word]
-dictWords' d = _dictWords d mempty 
-
--- list words lazily
-_dictWords :: (DictView dict) => dict -> Set Word -> [Word] -> [Word]
-_dictWords d pw ws@(w:ws') = 
-    -- pw is printed words, prevents listing a more than once
-    if Set.member w pw then _dictWords d pw ws' else -- skip
-    let lDeps = L.filter (`Set.notMember` pw) $ wordDeps d w in
-    let bReady = L.null lDeps in
-    if bReady
-        then w : _dictWords d (Set.insert w pw) ws'
-        else _dictWords d pw (lDeps ++ ws)
-_dictWords _ _ [] = []
-
 -- | Encode the entire dictionary for export into a bytestring.
 encode :: (DictView dict) => dict -> LBS.ByteString
-encode d = _encode d (dictWords d)
+encode d = encodeWords d (wordsInDict d)
 
 -- | Encode a subset of the dictionary, specified by a list of root
 -- words. All transitive dependencies of these words are included in
 -- the export. If a requested word is not defined, it will be silently
 -- skipped.
 encodeWords :: (DictView dict) => dict -> [Word] -> LBS.ByteString
-encodeWords d = _encode d . dictWords' d
+encodeWords d = _encode d . transitiveDepsList d
 
--- at this point, words are ordered how we need them. Undefined words
--- are skipped, and hence left undefined in the output.
+-- at this point, words are ordered how we need them
 _encode :: (DictView dict) => dict -> [Word] -> LBS.ByteString
 _encode d = BB.toLazyByteString . mconcat . fmap (_enw d)
 
