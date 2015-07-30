@@ -1,20 +1,36 @@
 
--- | Wikilon will cache a lot of computations over dictionaries.
+-- | This module supports per-word caching based on the 'version hash'
+-- of words within a dictionary. Cached values should be valid across
+-- multiple versions and forks of a dictionary.
 --
--- In a general sense, each cache entry has a set of dependencies
--- on variables or other cache entries. When those variables change,
--- we must delete the cache entry.
+-- While there is no need to invalidate this cache, we may need to 
+-- gradually cull the cache to keep it from growing too large. I'm
+-- not sure how I want to go about this at the current time, except
+-- maybe to use an exponential decay model.
 --
--- This idea can also apply recursively. Conceptually, a variable may
--- be a cached computation, thus invalidation of the variable may 
--- require cascading invalidation of dependent variables.
+-- Fortunately, I don't need to be especially careful with the cache.
+-- If the versions don't match, I can simply replace the cache with 
+-- an empty.
 --
--- A cache is thus very similar to the model of a dictionary with a
--- reverse lookup index. 
---
--- The other major feature is that our cache must gradually invalidate
--- content that is old and unused. I'm not sure how to combine these
--- two forces at the moment.
+-- Per-word caching isn't sufficient for some tasks, e.g. if I want
+-- to maintain a list of words with type-errors then I'll need something
+-- else. I'll need to think about this later. This particular module
+-- will focus on per-word caching.
 module Wikilon.Store.Cache
     (
     ) where
+
+-- What do I want to cache?
+--
+-- COMPILATION:
+--  intermediate (value,compiler) pair
+--  'compiled' function (from applying compiler to value)
+--  type information for generated function
+--  indicators for obvious compilation or type errors
+--  function as compiled to JavaScript?
+--
+-- RESOURCES:
+--  computed texts (e.g. css, HTML front page)
+--  computed images (e.g. icons)
+--  ad-hoc binaries
+--

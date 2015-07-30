@@ -13,7 +13,6 @@ module Wikilon.WAI.Pages.DictWord.ClawDef
 
 import Control.Monad
 import Data.Monoid
-import qualified Data.List as L
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Network.HTTP.Types as HTTP
@@ -30,6 +29,7 @@ import qualified Awelon.ClawCode as Claw
 import Wikilon.Time
 import Wikilon.Dict.Word
 
+import Wikilon.WAI.ClawUtils
 import Wikilon.WAI.Conflicts
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
@@ -39,27 +39,6 @@ import qualified Wikilon.Store.Dict as Dict
 import Wikilon.Store.Branch (BranchName)
 import qualified Wikilon.Store.Branch as Branch
 import Wikilon.Store.Root
-
--- | A 'Claw' definition must have form `[command][]`.
---
--- That is, our definition is a plain old block of code, and our
--- compiler is the identity function []. This will always be the
--- case for words defined via the claw definition interfaces.
---
--- Commands should always include their own namespace (if it is
--- other than the default).
-parseClawDef :: ABC -> Maybe Claw.ClawCode
-parseClawDef abc =
-    let topLevel = L.filter (not . abcSP) $ abcOps abc in
-    case topLevel of
-    [ABC_Block command, ABC_Block compiler] | ok -> return cc where
-        ok = L.null $ abcOps compiler
-        cc = Claw.clawFromABC command
-    _ -> Nothing
-
-abcSP :: Op -> Bool
-abcSP (ABC_Prim op) = (ABC_SP == op) || (ABC_LF == op)
-abcSP _ = False
 
 -- | Endpoint that restructs users to Claw format for put and get.
 dictWordClawDef :: WikilonApp
@@ -133,13 +112,13 @@ recvClawDefEdit (cmd, sEditOrigin) = dictWordApp $ \ w dn dw _rq k ->
                     H.title title
                 H.body $ do
                     H.h1 title
-                    reportParseError cmd dcs
+                    showClawParseError cmd dcs
                     H.h2 "Edit and Resubmit"
                     H.p $ "Do not resubmit without changes."
                     formClawDefEdit' dn dw sEditOrigin cmd
                     H.p $ (H.strong "Word: ") <> hrefDictWord dn dw
-        Right clawOps -> 
-            let command = Claw.clawToABC $ Claw.ClawCode clawOps in
+        Right cc -> 
+            let command = Claw.clawToABC cc in
             let abc = mkABC [ABC_Block command, ABC_Block mempty] in
             let lUpdates = [(dw, abc)] in
             getTime >>= \ tNow ->
@@ -224,19 +203,6 @@ recvClawDefEdit (cmd, sEditOrigin) = dictWordApp $ \ w dn dw _rq k ->
                                 H.h1 title
                                 H.p $ "Return to " <> hrefDictWord dn dw <> "."
 
--- my error analysis isn't entirely precise, but I can at least dig
--- to operations within blocks.
-reportParseError :: LBS.ByteString -> Claw.DecoderState -> HTML
-reportParseError s dcs = H.pre ! A.class_ "parseErrorReport" $ H.code ! A.lang "aodef" $ do
-    let badText = Claw.dcs_text dcs
-    let lenOK = LBS.length s - LBS.length badText 
-    let okText = LBS.take lenOK s 
-    H.unsafeLazyByteString okText
-    styleParseError $ H.unsafeLazyByteString badText
-
-styleParseError :: HTML -> HTML
-styleParseError h = H.span ! A.class_ "parseError" $ h
-
 formDictWordClawDefEdit :: BranchName -> Word -> Maybe T -> ABC -> HTML
 formDictWordClawDefEdit d w t (parseClawDef -> Just cc) = do
     formClawDefEdit' d w (maybe "--" show t) (Claw.encode cc)
@@ -247,14 +213,14 @@ formClawDefEdit' :: BranchName -> Word -> String -> LazyUTF8.ByteString -> HTML
 formClawDefEdit' d w sOrigin sInit = 
     let uriAction = H.unsafeByteStringValue $ uriClawDefEdit d w in
     H.form ! A.method "POST" ! A.action uriAction ! A.id "formClawDefEdit" $ do
-        H.textarea ! A.name "command" ! A.rows "2" ! A.cols "60" $
+        let nLines = H.stringValue $ show $ 1 + LBS.count 10 sInit
+        H.textarea ! A.name "command" ! A.lang "claw" ! A.rows nLines ! A.cols "60" $
             H.string $ LazyUTF8.toString sInit -- escapes string for HTML
         H.br
         H.string "Edit Origin: "
         H.input ! A.type_ "text" ! A.name "editOrigin" ! A.value (H.stringValue sOrigin)
         H.string " "
-        H.input ! A.type_ "submit" ! A.value "Edit as Command"
+        H.input ! A.type_ "submit" ! A.value "Update as Command"
         let commandLang = href uriClawDocs "claw"
         H.small $ " (cf. " <> commandLang <> ")"
-
 

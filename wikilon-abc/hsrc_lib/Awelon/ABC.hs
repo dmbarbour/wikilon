@@ -35,6 +35,7 @@ import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.String (IsString(..))
 
+import Awelon.Word
 import Awelon.Text
 
 -- | Bytecode is a sequence or stream of operations

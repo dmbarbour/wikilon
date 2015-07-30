@@ -36,6 +36,8 @@ module Wikilon.WAI.Routes
     , uriClawDef, uriClawDefEdit
     , uriAODef, uriAODefEdit
 
+    , uriRepl
+
     , href
     ) where
 
@@ -110,7 +112,7 @@ dictApp _app _w cap _rq k = k $ eBadName cap
 
 uriAODict :: BranchName -> Route
 uriAODict d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/aodict"
-    
+
 uriAODictEdit :: BranchName -> Route
 uriAODictEdit d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/aodict.edit"
 
@@ -121,6 +123,8 @@ uriAODictEditWords d lWords = toRoute $ base <> ws where
     ws = mconcat $ L.intersperse (BB.char8 '+') $ fmap wordQuery lWords
     wordQuery = HTTP.urlEncodeBuilder True . wordToUTF8
 
+uriRepl :: BranchName -> Route
+uriRepl d = toRoute $ dictURIBuilder d <> BB.stringUtf8 "/repl"
 
 uriAODictDocs, uriAODocs, uriABCDocs, uriWikilonDocs :: Route
 uriAODocs       = -- "about/ao"
@@ -181,8 +185,8 @@ navWords :: String -> BranchName -> [Word] -> HTML
 navWords _ _ [] = mempty
 navWords sClass dn lWords =
     H.nav ! A.class_ (H.stringValue sClass) $ do
-        H.strong (H.string sClass <> ":") <> " "
-        mconcat $ L.intersperse " " $ fmap (hrefDictWord dn) lWords
+        H.strong (H.string sClass <> ":") 
+        forM_ lWords $ \ w -> " " <> hrefDictWord dn w
 
 -- | Obtain dictionary and word via :d and :w captures. 
 dictWordCap :: Captures -> Maybe (BranchName, Word)

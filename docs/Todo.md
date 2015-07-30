@@ -20,38 +20,51 @@ DONE:
 * view and edit `[command][]` definitions as claw code
 * stylesheets with dark background by default
 * most CSS pushed into stylesheets
+* secure hash per word for deep source
 
 TODO:
 
-* simplistic REPL based on Claw code
- * skip compilation and cache for now?
+* simplistic stateless REPL based on Claw code
+* persistent REPL sessions (threads, forums)
+ * review [REPL.md](REPL.md) for this idea
+* graphical REPL views? e.g. turtle graphics or SVG
+ * maybe use words to define value to HTML conversions
 
-* libraries to support rational or decimal numbers
+* REFACTOR!
+ * further separate the model, web interface, storage
+ * switch to MFlow or Yesod-based widgets and routing
+  * automate parse validation, auto-refresh, editable textareas, etc.
+  * may need to implement my own variant, maybe RDP-based
 
-* css styles for diffs, etc.
-* clean up backrefs and clients lists; 
-    e.g. list only ten items
+* dictionary application resources:
+ * based on compiling and evaluating a word
+ * use secure hash of word to cache instance
+ * css
+ * static HTML
+ * icon files
+ * image files
+ * binaries, in general
+ * compiled applications (model for compilers?)
+
+* spreadsheet-based dictionary application
+* iPython notebook inspired dictionary application
 
 * type checker and cache for ABC and Claw code
+ * list undefined or ill-typed words in dict
 * compilation and cache for ABC and Claw code
  * maybe use secure hashes in cache?
-* support for graphical REPL, e.g. turtle graphics or SVG
 * support for developing web applications
 
 * continuous compilation, testing, type checking
 * simple ABC to JavaScript compiler
 
-* consider upgrade to MFlow or Yesod or similar for pages
- * interactive widgets 
- * model browser/page AVM? 
-  * Could be very effective and generic
-  * probably slow to start
- * develop a more generic widget concept
- * use widgets instead of HTML directly
+
+* fork a dictionary
+* view historical versions of a dictionary
+* fork historical versions of a dictionary
 
 * push towards intermediate data model
 * exponential decay for dictionaries
-
 
 * convenient editing of multiple words
  * view and edit multiple words together
@@ -76,6 +89,12 @@ TODO:
 * clean up word lists
  * automatic compression based on common prefixes
  * if too many words (e.g. under `integer`), use fallback page
+
+* create a more generic intermediate graphics model
+ * something an AVM or pure function could draw to easily
+ * integrate with AO code.
+ * concepts similar to HTML and SVG, but indirectly?
+
 
 * need convenience links near bottom of word pages
 
@@ -113,6 +132,7 @@ TODO:
  
 * support user-defined stylesheets via dictionary
 
+* support for server-side AVMs?
 
 * rename all words with a given prefix, or whole lists of words
 * I can easily browse words by type in the dictionary
@@ -236,12 +256,6 @@ TODO:
  * ability to subscribe to log as a web socket
  * includes whodunnit information
 * 
-
-
-## Alternative Workflows
-
-I'm interested in Paul Chiusano's work with Unison and the edit model presented there, e.g. based around manipulating sets of hashes. It might be worth trying to model this workflow in Wikilon.
-
 
 
 

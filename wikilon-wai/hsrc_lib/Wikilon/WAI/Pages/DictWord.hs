@@ -25,6 +25,7 @@ import Database.VCache
 import qualified Awelon.ClawCode as Claw
 import qualified Awelon.Base16 as B16
 import Awelon.ABC (ABC)
+import qualified Awelon.ABC as ABC
 
 
 import Wikilon.WAI.Utils
@@ -61,20 +62,24 @@ dictWord = app where
 -- (b) include health issues and errors in presentation.
 -- (c) last resort is just the raw AO-layer definition.
 -- (d) captions, temporal metadata, etc. if available.
+-- (e) integration with 
 --
 -- For the moment, I'm making due with much less. However, in the
 -- long run, I'll probably want a consistent default view for words
 -- in many contexts (including REPL-based forums), even if I have
 -- multiple views in specialized contexts.
 viewClawOrAODef :: ABC -> HTML
-viewClawOrAODef abc = case parseClawDef abc of
-    Nothing -> do
-        H.pre ! A.lang "aodef" $ H.code $ H.string $ show abc
-        H.small $ H.strong "viewing as: " <>  href uriAODictDocs "aodef" <> H.br
-    Just cc -> do
-        let sClaw = LazyUTF8.toString $ Claw.encode cc
-        H.pre ! A.lang "claw" $ H.code $ H.string sClaw
-        H.small $ H.strong "viewing as: " <> href uriClawDocs "claw" <> H.br
+viewClawOrAODef abc =
+    let bUndefined = L.null $ ABC.abcOps abc in
+    if bUndefined then H.p "This word is undefined." else
+    case parseClawDef abc of
+        Nothing -> do
+            H.pre ! A.lang "aodef" $ H.code $ H.string $ show abc
+            H.small $ H.strong "viewing as: " <>  href uriAODictDocs "aodef" <> H.br
+        Just cc -> do
+            let sClaw = LazyUTF8.toString $ Claw.encode cc
+            H.pre ! A.lang "claw" $ H.code $ H.string sClaw
+            H.small $ H.strong "viewing as: " <> href uriClawDocs "claw" <> H.br
 
 -- | This is our basic non-interactive web page for words.
 --
@@ -98,7 +103,7 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
     let hs = (BS.pack . (35:) . B16.encode . BS.unpack) h in 
     let status = HTTP.ok200 in
     let headers = [textHtml] in
-    let title = H.unsafeByteString (Dict.wordToUTF8 dw) in
+    let title = H.string "Word: " <> H.unsafeByteString (Dict.wordToUTF8 dw) in
     k $ Wai.responseLBS status headers $ renderHTML $ do
         H.head $ do
             htmlHeaderCommon w
@@ -109,7 +114,6 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
 
             H.hr
             let ver = H.span ! A.class_ "versionHash" $ H.unsafeByteString hs
-            H.strong "SecureHash:" <> " " <> ver <> H.br
             H.strong "Dictionary:" <> " " <> hrefDict dn
             let lDeps = L.nub $ Dict.abcWords abc 
             let lClients = Dict.wordClients d dw
@@ -127,14 +131,15 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
                 let editName = ("name", uriDictWordRename dn dw)
                 let editAO = ("aodef", uriAODictEditWords dn [dw])
                 let editClaw = ("claw", uriClawDefEdit dn dw)
-                let lEditors = [editName, editAO, editClaw] 
+                let lEditors = [editName, editClaw, editAO] 
                 forM_ lEditors $ \ (s,uri) -> " " <> href uri s
+
+            H.strong "SecureHash:" <> " " <> ver <> H.br
 
             H.hr ! A.class_ "todo"
             H.div ! A.class_ "todo" $ "TODO: compilation, type, health information,\n\
                 \access to structured AO definition and structure editing,\n\
-                \use cases, tests, visualizations, animations of code,\n\
-                \render words (of known types) as application or images...\n\
+                \dictonary app views based on type or naming conventions,\n\
                 \" 
 
 -- | Note: deletion of a word should be identical to putting an empty

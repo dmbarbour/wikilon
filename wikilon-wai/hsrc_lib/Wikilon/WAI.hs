@@ -49,6 +49,8 @@ wikilonRoutes = fmap (first UTF8.fromString) $
     ,("/d/:d/w/:w/clawdef", dictWordClawDef)
     ,("/d/:d/w/:w/clawdef.edit", dictWordClawDefEdit)
 
+    -- ("/d/:d/fork", dictFork)
+
     ,("/d.create", dictCreate)
     --,("/d/:d/hist", dictHist)
 

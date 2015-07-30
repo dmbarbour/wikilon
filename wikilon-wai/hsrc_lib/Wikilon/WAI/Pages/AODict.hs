@@ -237,8 +237,8 @@ aodictDocHTML = do
           \is compiled into a pure function [a→b], the meaning of the word."
     
     H.p $ "The common, trivial case: our compiler function is identity [], and\n\
-          \the value is already a function of type [a→b]. A minimal definition\n\
-          \is `[][]`, which specifies an identity function."
+          \the value is directly a function of type [a→b]. A minimal definition\n\
+          \is `[][]`, which specifies the generic identity function."
 
     H.h3 "The AODef Format"
 

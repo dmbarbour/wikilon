@@ -75,6 +75,7 @@ Library
     Wikilon.WAI.MediaType
     Wikilon.WAI.Conflicts
     Wikilon.WAI.DefaultCSS
+    Wikilon.WAI.ClawUtils
     Wikilon.WAI.Pages.AODict
     Wikilon.WAI.Pages.AODictEdit
     Wikilon.WAI.Pages.ClawCode

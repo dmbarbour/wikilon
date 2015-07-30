@@ -26,7 +26,7 @@ So I'm going to favor an alpha-dependent secure hash function.
 
 # Dictionary-Level Caching
 
-In addition to caching per-word, I might need to maintain some per-dictionary cached results, especially related to anything that maintains a *list* of words - e.g. if I wish to list type errors and so on without recomputing them every time the dictionary is loaded. 
+In addition to caching per-word, I might need to maintain some per-dictionary cached results, especially related to anything that involves a *list* of words - e.g. if I wish to list type errors and so on without recomputing them every time the dictionary is viewed. 
 
-I can probably leverage 
+I can probably leverage the VCache address as a value for distinguishing caches at the dictionary level. 
 

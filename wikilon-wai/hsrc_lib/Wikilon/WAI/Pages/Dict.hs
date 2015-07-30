@@ -36,6 +36,7 @@ import qualified Wikilon.Dict as Dict
 import Wikilon.WAI.Pages.AODict
 import Wikilon.WAI.Pages.AODictEdit
 import Wikilon.WAI.Pages.DictWord
+import Wikilon.WAI.Pages.REPL
 
 import qualified Wikilon.Store.Dict as Dict
 import Wikilon.Store.Branch (BranchName)
@@ -62,7 +63,7 @@ dictFrontPage = dictApp $ \ w dictName rq k ->
     let status = HTTP.status200 in
     let headers = [textHtml] in
     k $ Wai.responseLBS status headers $ renderHTML $ do
-    let title = H.unsafeByteString dictName 
+    let title = H.string "Dictionary: " <> H.unsafeByteString dictName 
     let tmModified = maybe "--" htmlSimpTime $ Branch.modified b
     let origin = Wai.rawPathInfo rq
     H.head $ do
@@ -70,6 +71,8 @@ dictFrontPage = dictApp $ \ w dictName rq k ->
         H.title title 
     H.body $ do
         H.h1 title
+        formDictClawRepl dictName mempty
+
         let lnAwelonObject = href uriAODocs $ "Awelon Object (AO)" 
         H.p $ "This is an " <> lnAwelonObject <> " dictionary."
         H.p $ "To add here: dictionary edit and curation policy, security info,\n\

@@ -32,8 +32,12 @@ data WikilonStore = WikilonStore
     , wikilon_uniqueSrc :: !(PVar Integer)   -- ^ predictable source of unique values
     , wikilon_loadCount :: !Integer     -- ^ how many times has Wikilon been loaded?
     , wikilon_secret    :: !Secret      -- ^ a secret value for administration
-    } 
--- TODO:
+    }
+
+-- NEEDED:
+--  caches for types, compiles, partial evals, etc.
+--  event logs per-dictionary (words updated, renames, etc.)
+--  event logs globally
 --  event logs for dictionaries and wikilon
 
 loadWikilonStore :: VCache -> FilePath -> IO WikilonStore
@@ -50,7 +54,6 @@ loadWikilonStore vc _home = do
         , wikilon_loadCount = _loadCount
         , wikilon_secret = _secret
         }
-
 
 -- | Access the error log. I'm not going to bother keeping this one
 -- in active memory at the moment. 

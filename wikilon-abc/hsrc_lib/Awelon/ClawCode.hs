@@ -388,7 +388,7 @@ instance Show ClawCode where
 -- If the decoder is 'stuck' at any point, we'll return the final
 -- decoder state. This allows more precise error reports to the
 -- client.
-decode :: LazyUTF8.ByteString -> Either DecoderState [ClawOp]
+decode :: LazyUTF8.ByteString -> Either DecoderState ClawCode
 decode t = runDecoder $ DecoderState
     { dcs_text = t
     , dcs_cont = DecodeDone
@@ -396,7 +396,7 @@ decode t = runDecoder $ DecoderState
     , dcs_ops = []
     }
 
-runDecoder :: DecoderState -> Either DecoderState [ClawOp]
+runDecoder :: DecoderState -> Either DecoderState ClawCode
 runDecoder dcs = decode' cc bWS ops txt where
     cc = dcs_cont dcs
     bWS = dcs_ws dcs
@@ -417,12 +417,12 @@ data DecoderState = DecoderState
     , dcs_ops  :: [ClawOp]              -- ^ operators parsed, reverse order
     } deriving (Show)
 
-decode' :: DecoderCont -> Bool -> [ClawOp] -> LazyUTF8.ByteString -> Either DecoderState [ClawOp]
+decode' :: DecoderCont -> Bool -> [ClawOp] -> LazyUTF8.ByteString -> Either DecoderState ClawCode
 decode' cc bWS r txt0 =
     let decoderIsStuck = Left (DecoderState txt0 cc bWS r) in
     case LBS.uncons txt0 of
         Nothing -> case cc of
-            DecodeDone -> Right (L.reverse r)
+            DecodeDone -> Right $ ClawCode $ L.reverse r
             _ -> decoderIsStuck
         Just (c, txt) -> case c of
             ' ' -> decode' cc True r txt
@@ -573,7 +573,7 @@ accumPosInt !n !txt = (n,txt)
 instance IsString ClawCode where
     fromString s =
         case decode (LazyUTF8.fromString s) of
-            Right ops -> ClawCode ops
+            Right cc -> cc
             Left dcs ->
                 let sLoc = L.take 40 $ LazyUTF8.toString $ dcs_text dcs in
                 error $ clawCodeErr $ "parse failure @ " ++ sLoc
