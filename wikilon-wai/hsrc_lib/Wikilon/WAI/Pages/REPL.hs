@@ -26,15 +26,21 @@
 -- caches, and may favor caching only after a given quota has been
 -- reached.
 --
+-- Not all of this is implemented yet. To get started fast, I've decided
+-- to provide the (stack*(hand*ext)) environment, (unit*(unit*unit)). And
+-- no caching is supported at the moment. 
+--
 module Wikilon.WAI.Pages.REPL
     ( dictRepl
     , formDictClawRepl
     ) where
 
+import Control.Monad
 import Data.Monoid
 import qualified Data.List as L
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
+import Text.Read (readMaybe)
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
@@ -43,10 +49,17 @@ import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
 import Database.VCache
 import qualified Awelon.ClawCode as CC
+import Awelon.ABC (ABC)
+import qualified Awelon.ABC as ABC
+import Awelon.ABC.Eval (Value(..))
+import qualified Awelon.ABC.Eval as Eval
+import Wikilon.Dict.Word
+import Wikilon.Compile (referenceCompile, basicEval)
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.ClawUtils
 import Wikilon.WAI.Routes
+import Wikilon.Store.Root
 import qualified Wikilon.Store.Dict as Dict
 import qualified Wikilon.Store.Branch as Branch
 
@@ -59,6 +72,9 @@ formDictClawRepl dn sCommand =
         H.textarea ! A.name "command" ! A.lang "claw" ! A.rows nLines ! A.cols "60" $
             H.string $ LazyUTF8.toString sCommand
         H.br
+        H.string "Quota: " 
+        H.input ! A.type_ "text" ! A.name "quota" ! A.value "1000000" 
+                ! A.pattern "[0-9]*" ! A.size "10"
         H.input ! A.type_ "submit" ! A.value "Evaluate"
 
 dictRepl :: WikilonApp
@@ -66,6 +82,7 @@ dictRepl = app where
     app = routeOnMethod [(HTTP.methodGet, onGet),(HTTP.methodPost, onPost)]
     onGet = branchOnOutputMedia [(mediaTypeTextHTML, replPage)]
     onPost = branchOnOutputMedia [(mediaTypeTextHTML, replPost)]
+    replPost = toBeImplementedLater "persistent REPL sessions"
 
 queriedReplCommand :: HTTP.Query -> LBS.ByteString
 queriedReplCommand q =
@@ -73,14 +90,26 @@ queriedReplCommand q =
         Just (Just s) -> LBS.fromStrict s
         _ -> mempty
 
+-- obtain an eval quota from the request query
+queriedEvalQuota :: HTTP.Query -> Maybe Eval.Quota 
+queriedEvalQuota q = 
+    join (L.lookup "quota" q) >>= \ lbs ->
+    let s = LazyUTF8.toString $ LBS.fromStrict lbs in
+    readMaybe s
+
+defaultQuota :: Eval.Quota
+defaultQuota = 200000
+
 replPage :: WikilonApp
 replPage = dictApp $ \ w dn rq k -> 
-    let cmdString = queriedReplCommand (Wai.queryString rq) in
+    let qs = Wai.queryString rq in
+    let cmdString = queriedReplCommand qs in
+    let quota = maybe defaultQuota id (queriedEvalQuota qs) in
     let footerDict = H.strong "Dictionary:" <> " " <> hrefDict dn in
     case CC.decode cmdString of
         Left dcs -> -- PARSE ERROR
             let status = HTTP.badRequest400 in
-            let headers = [textHtml, noCache] in
+            let headers = [textHtml] in
             let title = "REPL Parse Error" in
             k $ Wai.responseLBS status headers $ renderHTML $ do
                 H.head $ do
@@ -95,38 +124,39 @@ replPage = dictApp $ \ w dn rq k ->
                     H.hr
                     footerDict
         Right cc ->
+            readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
+            let d = Branch.head $ Branch.lookup' dn bset in
             let abc = CC.clawToABC cc in
             let footerWords = navWords "Words" dn $ L.nub $ Dict.abcWords abc in
-            evalCC w dn cc >>= \ result ->
+
+            -- for now we'll just do a "get it working soon" compile
+            -- (since it's taking forever to support caching, etc.)
+            let abc' = referenceCompile d quota abc in
+            let c0 = Eval.Cont (ABC.abcOps abc) Eval.Return in
+            let v0 = Pair Unit (Pair Unit Unit) in
+            let evalResult = basicEval v0 c0 quota in
+            
             let status = HTTP.ok200 in
             let headers = [textHtml] in
-            let title = "REPL" in
+            let title = case evalResult of
+                    Left _ -> "REPL Stuck" 
+                    Right _ -> "REPL"
+            in
             k $ Wai.responseLBS status headers $ renderHTML $ do
                 H.head $ do
                     htmlHeaderCommon w
                     H.title title
-                H.body $ do
+                H.body $ do 
                     H.h1 title
-                    showEvalResult dn result
+                    printEvalResult evalResult
                     formDictClawRepl dn cmdString
-                    -- next: option to submit as persistent...
-                        -- (or switch to a persistent-mode REPL)
                     H.hr
                     footerWords
                     footerDict
 
-type EvalResult = HTML -- for now
 
--- 
-evalCC :: Wikilon -> Branch.BranchName -> CC.ClawCode -> IO EvalResult
-evalCC _ _ _ = return $ H.string "TODO: EVAL RESULT"
-
-showEvalResult :: Branch.BranchName -> EvalResult -> HTML
-showEvalResult = const id
-
-
-replPost :: WikilonApp
-replPost = toBeImplementedLater "clawRepl: persistent sessions via dictionary"
+printEvalResult :: Either Eval.Stuck Eval.Value -> HTML
+printEvalResult = const "TODO: print Eval result!"
 
 -- THOUGHTS: I might also want:
 --  a resource to extract the entire session
