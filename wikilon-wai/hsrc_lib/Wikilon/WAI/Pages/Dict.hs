@@ -71,7 +71,7 @@ dictFrontPage = dictApp $ \ w dictName rq k ->
         H.title title 
     H.body $ do
         H.h1 title
-        formDictClawRepl dictName mempty
+        formDictClawReplS dictName mempty
 
         let lnAwelonObject = href uriAODocs $ "Awelon Object (AO)" 
         H.p $ "This is an " <> lnAwelonObject <> " dictionary."

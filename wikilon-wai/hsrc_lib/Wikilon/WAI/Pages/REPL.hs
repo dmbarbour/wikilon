@@ -33,6 +33,7 @@
 module Wikilon.WAI.Pages.REPL
     ( dictRepl
     , formDictClawRepl
+    , formDictClawReplS
     ) where
 
 import Control.Monad
@@ -59,23 +60,39 @@ import Wikilon.Compile (referenceCompile, basicEval)
 import Wikilon.WAI.Utils
 import Wikilon.WAI.ClawUtils
 import Wikilon.WAI.Routes
+import Wikilon.WAI.RecvFormPost 
 import Wikilon.Store.Root
 import qualified Wikilon.Store.Dict as Dict
 import qualified Wikilon.Store.Branch as Branch
 
 -- | stateless REPL form for claw code.
-formDictClawRepl :: Branch.BranchName -> LazyUTF8.ByteString -> HTML
-formDictClawRepl dn sCommand = 
+formDictClawRepl :: Eval.Quota -> Branch.BranchName -> LazyUTF8.ByteString -> HTML
+formDictClawRepl q dn sCommand = 
     let uriAction = H.unsafeByteStringValue (uriRepl dn) in
     H.form ! A.method "GET" ! A.action uriAction ! A.id "formClawRepl" $ do
-        let nLines = H.stringValue $ show $ 1 + LBS.count 10 sCommand
+        let nLines = H.stringValue $ show $ 2 + LBS.count 10 sCommand
         H.textarea ! A.name "command" ! A.lang "claw" ! A.rows nLines ! A.cols "60" $
             H.string $ LazyUTF8.toString sCommand
         H.br
-        H.string "Quota: " 
-        H.input ! A.type_ "text" ! A.name "quota" ! A.value "1000000" 
-                ! A.pattern "[0-9]*" ! A.size "10"
         H.input ! A.type_ "submit" ! A.value "Evaluate"
+
+        H.string " Quota: " 
+        let qv = H.stringValue (show (max 0 q))
+        H.input ! A.type_ "text" ! A.name "quota" ! A.value qv
+                ! A.pattern "[0-9]*" ! A.size "10"
+
+-- | a short form for REPL, accepting only a single line of input.
+formDictClawReplS :: Branch.BranchName -> LazyUTF8.ByteString -> HTML
+formDictClawReplS dn sCommand =
+    let uriAction = H.unsafeByteStringValue (uriRepl dn) in
+    H.form ! A.method "GET" ! A.action uriAction ! A.id "formClawRepl" $ do
+        let sCmdStr = LazyUTF8.toString sCommand
+        let nWidth = max 60 (4 + L.length sCmdStr)
+        H.input ! A.type_ "text" ! A.name "command" ! A.lang "claw" 
+                ! A.size (H.stringValue (show nWidth))
+                ! A.value (H.stringValue sCmdStr)
+        H.input ! A.type_ "submit" ! A.value "Evaluate"
+        H.input ! A.type_ "hidden" ! A.name "quota" ! A.value "1000000"
 
 dictRepl :: WikilonApp
 dictRepl = app where
@@ -87,7 +104,7 @@ dictRepl = app where
 queriedReplCommand :: HTTP.Query -> LBS.ByteString
 queriedReplCommand q =
     case L.lookup "command" q of
-        Just (Just s) -> LBS.fromStrict s
+        Just (Just s) -> normalizeNewlines $ LBS.fromStrict s
         _ -> mempty
 
 -- obtain an eval quota from the request query
@@ -106,6 +123,7 @@ replPage = dictApp $ \ w dn rq k ->
     let cmdString = queriedReplCommand qs in
     let quota = maybe defaultQuota id (queriedEvalQuota qs) in
     let footerDict = H.strong "Dictionary:" <> " " <> hrefDict dn in
+    let replForm = formDictClawRepl quota dn cmdString in
     case CC.decode cmdString of
         Left dcs -> -- PARSE ERROR
             let status = HTTP.badRequest400 in
@@ -120,7 +138,7 @@ replPage = dictApp $ \ w dn rq k ->
                     H.h1 title
                     showClawParseError cmdString dcs
                     H.h2 "Edit and Resubmit"
-                    formDictClawRepl dn cmdString
+                    replForm
                     H.hr
                     footerDict
         Right cc ->
@@ -132,7 +150,7 @@ replPage = dictApp $ \ w dn rq k ->
             -- for now we'll just do a "get it working soon" compile
             -- (since it's taking forever to support caching, etc.)
             let abc' = referenceCompile d quota abc in
-            let c0 = Eval.Cont (ABC.abcOps abc) Eval.Return in
+            let c0 = Eval.Cont (ABC.abcOps abc') Eval.Return in
             let v0 = Pair Unit (Pair Unit Unit) in
             let evalResult = basicEval v0 c0 quota in
             
@@ -149,14 +167,46 @@ replPage = dictApp $ \ w dn rq k ->
                 H.body $ do 
                     H.h1 title
                     printEvalResult evalResult
-                    formDictClawRepl dn cmdString
+                    replForm
                     H.hr
                     footerWords
                     footerDict
 
 
+printCont :: Eval.Cont -> HTML
+printCont cc =
+    let nContSize = 200 in
+    let sCC = show cc in
+    let sCCL = L.take nContSize sCC in
+    let bFull = L.null $ L.drop nContSize sCC in
+    H.pre ! A.class_ "continuation" ! A.lang "abc" $ H.code $ do
+        H.string sCCL
+        unless bFull (H.span ! A.class_ "ellipses" $ "...")
+
+printVal :: Eval.Value -> HTML
+printVal v =
+     H.pre ! A.class_ "value" ! A.lang "abc" $ H.code $ do
+        H.string (show v)
+
+-- full continuation including stuck_curr
+stuckFullCont :: Eval.Stuck -> Eval.Cont
+stuckFullCont s =
+    let cc = Eval.stuck_cont s in
+    let k = Eval.cc_cont cc in
+    let k' = (Eval.stuck_curr s : k) in
+    cc { Eval.cc_cont = k' }
+
+printStuck :: Eval.Stuck -> HTML
+printStuck s = do
+    H.strong "Quoted Value:"
+    printVal (Eval.stuck_arg s)
+    H.br
+    H.strong "Continuation:"
+    printCont (stuckFullCont s)
+
 printEvalResult :: Either Eval.Stuck Eval.Value -> HTML
-printEvalResult = const "TODO: print Eval result!"
+printEvalResult = either printStuck printVal where
+            
 
 -- THOUGHTS: I might also want:
 --  a resource to extract the entire session

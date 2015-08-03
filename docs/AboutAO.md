@@ -13,7 +13,7 @@ Every AO word has a purely functional meaning. However, rather than *directly* d
 
         type Def a b = ∃v.∀e. e → ([v→[a→b]]*(v*e))
 
-The intermediate structured value `v` provides a foundation for DSLs. A structure editor computes and renders this value, supports direct manipulations on it. The value serves as a syntax while the `[v→[a→b]]` function becomes a language descriptor. In the trivial cases, the language may be `[]` (identity, in which case `v` is a block) or `[v'c]` in which case we're quoting and exporting `v` directly as data. In the more general case, we can this model for modules hides some information from the users.
+The intermediate structured value `v` provides a foundation for DSLs. A structure editor computes and renders this value, supports direct manipulations on it. The value serves as a syntax while the `[v→[a→b]]` function serves as the language descriptor and compiler. Most frequently, the language will be `[]` (identity, in which case `v` is a block) or a single word. For language `[]`, we might presenting code to developers using the Forth-like [command language for awelon](CommandLine.md). 
 
 Some possible definitions:
 
@@ -153,6 +153,12 @@ In some cases, we may expect a certain structure or function type for words of a
 The name 'Awelon Object' was initially applied to a Forth-like language suitable for direct keyboard input by humans. Even then AO was a very thin linker and macro layer above Awelon Bytecode with the same dictionary concept (albeit, without support for structured definitions). However, the current form of AO is a better fit for the historical connotations of 'object code'.
 
 There is still a valuable role for an efficient Forth-like language, e.g. for input into a console or command line. I'm still dreaming up a good name for this, but do see the [command line](CommandLine.md) documentation.
+
+## Quotas and Termination
+
+We want compilation efforts to terminate. When we apply our `[v→[a→b]]` function to value `v`, we ideally want an `[a→b]` result. But it is possible that our compiler is non-terminating. To guarantee termination regardless, one option is to introduce a *quota* - e.g. a number of operators to compute (or blocks to apply, etc.). If quotas are introduced to a dictionary, our definitions could include annotations to indicate roughly how much work will be required to compile a definition.
+
+One difficulty with quotas is portability. It can be difficult to ensure all implementations behave the same way with respect to quotas. This is due to partial evaluation, simplification, how quotas are counted and recorded, etc.. However, portability is probably not a major issue, and quotas can always be tuned upwards to be conservative across implementations.
 
 Old Content 
 ============

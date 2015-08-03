@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, PatternGuards #-}
 
 -- | Compile bytecode for evaluation. Or link it. I'll probably
 -- need several sophisticated compilers in the long term with 
@@ -7,6 +7,7 @@
 module Wikilon.Compile
     ( referenceCompile
     , basicEval
+    , referenceCompileDef
     ) where
 
 import Prelude hiding (lookup)
@@ -33,7 +34,8 @@ import Wikilon.Dict
 referenceCompile :: (DictView dict) => dict -> Quota -> ABC -> ABC
 referenceCompile d q abc = 
     let lu = lookup d in
-    let c = L.foldl' (rccWord (lookup d) q) mempty $ abcWords abc in
+    let accum = rccWord lu q in
+    let c = L.foldl' accum mempty $ abcWords abc in
     rewriteFromCache c abc
 
 type RCC = Map Word ABC
@@ -56,14 +58,14 @@ rccWord lu q c w =
     let c' = L.foldl' (rccWord lu q) c lWords in
     let def' = rewriteFromCache c' def in
     let wtok = ABC.mkABC [ABC.ABC_Tok ("%" <> wordToUTF8 w)] in
-    let meaning = maybe wtok id $ tryCompileDef q def' in
+    let meaning = maybe wtok id $ referenceCompileDef q def' in
     Map.insert w meaning c'
 
 -- evaluate a definition
 --  of type Def a b = ∃v.∀e.(e→([v→[a→b]]*(v*e))
 -- this may fail due to quotas, bad types, etc..
-tryCompileDef :: Quota -> ABC -> Maybe ABC
-tryCompileDef q def = 
+referenceCompileDef :: Quota -> ABC -> Maybe ABC
+referenceCompileDef q def = 
     -- sealed environment that cannot be copied or dropped 
     let e = Sealed "" (Block mempty 0xff) in
     let c = Cont (ABC.abcOps def) $ -- build intermediate structure
@@ -75,14 +77,46 @@ tryCompileDef q def =
         _ -> Nothing
 
  
+stuckOnTok :: ABC.Token -> Evaluator
+stuckOnTok tok v cc q = Left $ Stuck
+    { stuck_arg = v
+    , stuck_curr = ABC.ABC_Tok tok
+    , stuck_cont = cc
+    , stuck_quota = q
+    }
+
 -- | Basic eval:
 --
 -- * applies discretionary sealers and unsealers
--- * ignores all annotations
+-- * ignores all annotations 
 --
--- That's it for now.
+-- That's it for now. (I'd like to have a few alternative
+-- evaluators to deal with lazy linking and compilation
+-- and so on.)
 basicEval :: Evaluator
-basicEval v cc q = error "todo"
-
-
-
+basicEval = ev where
+    ev v cc q = either unstick Right $ evaluate v cc q
+    unstick s =
+        let stillStuck = Left s in
+        let v = stuck_arg s in
+        let cc = stuck_cont s in
+        let q = stuck_quota s in
+        let bStuckOnQuota = (q < 1) in
+        if bStuckOnQuota then stillStuck else 
+        case stuck_curr s of
+            ABC.ABC_Tok tok -> evt tok v cc q
+            _ -> stillStuck
+    evt tok = case BS.uncons tok of
+        Just (':', _) -> evSeal tok
+        Just ('.', _) -> evUnseal tok
+        Just ('&', _) -> evAnno tok
+        _ -> stuckOnTok tok
+    evSeal tok (Pair v e) = ev (Pair (Sealed tok v) e)
+    evSeal tok val = stuckOnTok tok val
+    evUnseal u (Pair (Sealed s v) e) 
+        | Just (':',s') <- BS.uncons s
+        , Just ('.',u') <- BS.uncons u
+        , (s' == u')
+        = ev (Pair v e)
+    evUnseal tok val = stuckOnTok tok val
+    evAnno = const ev -- ignoring annotations

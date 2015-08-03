@@ -136,6 +136,11 @@ class DictView dict where
     lookupVersionHash :: dict -> Word -> SecureHash
     lookupVersionHash = defaultVersionHash . lookup
 
+-- Thoughts: Persistent cache of a version hash is expensive enough to be
+-- noticeable when updating a dictionary in a widely used word. Is there 
+-- a better way to do this? Also, I'll need some better ways to cache whole
+-- dictionary computations, such as maintaining lists of words that do not
+-- compile or typecheck.
 
 -- | A default implementation for lookupVersionHash. Computes an ABC
 -- resource identifier based on a naive conversion.

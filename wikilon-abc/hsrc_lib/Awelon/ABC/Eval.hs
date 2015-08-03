@@ -56,7 +56,7 @@ type Quota = Int
 -- | When introducing a frame, apply a minimal cost because frames
 -- themselves aren't free.
 frameQuotaCost :: ABC -> Quota
-frameQuotaCost = max 32 . abcOpsCount
+frameQuotaCost = abcOpsCount
 
 type Flags = Word8
 
