@@ -123,7 +123,7 @@ replPage = dictApp $ \ w dn rq k ->
     let cmdString = queriedReplCommand qs in
     let quota = maybe defaultQuota id (queriedEvalQuota qs) in
     let footerDict = H.strong "Dictionary:" <> " " <> hrefDict dn in
-    let replForm = formDictClawRepl quota dn cmdString in
+    let replForm = formDictClawReplS dn cmdString in
     case CC.decode cmdString of
         Left dcs -> -- PARSE ERROR
             let status = HTTP.badRequest400 in
