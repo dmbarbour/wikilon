@@ -21,14 +21,28 @@ DONE:
 * stylesheets with dark background by default
 * most CSS pushed into stylesheets
 * secure hash per word for deep source
+* simplistic stateless REPL based on Claw code
 
 TODO:
 
-* simplistic stateless REPL based on Claw code
+* clean up rendering of values, bytecode, etc.
+ * maybe add some color or syntax highlighting 
+ * numbers vs. texts vs. data plumbing vs. other?
+* lazy linking so REPL can return claw code blocks
+ * limited or partial 'flattening', for toplevel meaning of a word
 * persistent REPL sessions (threads, forums)
  * review [REPL.md](REPL.md) for this idea
 * graphical REPL views? e.g. turtle graphics or SVG
  * maybe use words to define value to HTML conversions
+
+* tab completion in REPL
+ * need AJAX, probably need a new widgets model
+
+* model CSS as dictionary application or resource
+ * need cache to be working more broadly and effectively
+
+* model 'associated words' via a metadata function or word
+ * e.g. user-defined computation for suffixes and prefixes
 
 * REFACTOR!
  * further separate the model, web interface, storage

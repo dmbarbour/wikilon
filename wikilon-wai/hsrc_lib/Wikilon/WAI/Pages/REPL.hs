@@ -92,7 +92,8 @@ formDictClawReplS dn sCommand =
                 ! A.size (H.stringValue (show nWidth))
                 ! A.value (H.stringValue sCmdStr)
         H.input ! A.type_ "submit" ! A.value "Evaluate"
-        H.input ! A.type_ "hidden" ! A.name "quota" ! A.value "1000000"
+        let sQuota = H.stringValue (show defaultQuota)
+        H.input ! A.type_ "hidden" ! A.name "quota" ! A.value sQuota
 
 dictRepl :: WikilonApp
 dictRepl = app where
@@ -115,7 +116,7 @@ queriedEvalQuota q =
     readMaybe s
 
 defaultQuota :: Eval.Quota
-defaultQuota = 200000
+defaultQuota = 10000000
 
 replPage :: WikilonApp
 replPage = dictApp $ \ w dn rq k -> 
@@ -149,10 +150,14 @@ replPage = dictApp $ \ w dn rq k ->
 
             -- for now we'll just do a "get it working soon" compile
             -- (since it's taking forever to support caching, etc.)
-            let abc' = referenceCompile d quota abc in
-            let c0 = Eval.Cont (ABC.abcOps abc') Eval.Return in
+            let abcCompiledSimplified = 
+                    ABC.abcSimplify $ ABC.abcOps $ 
+                    referenceCompile d quota abc 
+            in
+            let q0 = quota - ABC.abcOpsCount abc in
+            let c0 = Eval.Cont abcCompiledSimplified Eval.Return in
             let v0 = Pair Unit (Pair Unit Unit) in
-            let evalResult = basicEval v0 c0 quota in
+            let evalResult = basicEval v0 c0 q0 in
             
             let status = HTTP.ok200 in
             let headers = [textHtml] in
@@ -172,21 +177,39 @@ replPage = dictApp $ \ w dn rq k ->
                     footerWords
                     footerDict
 
+-- TODO: create a REPL variation that does not expand {%word} links
+-- within blocks and the continuation, i.e. such that these can still
+-- be expressed in terms of human-meaningful words.
+--
+-- I could use REPL query string to provide lots of different view
+-- and evaluation options.
+
+-- heuristically injects vertical space into printed bytecode
+printABC :: [ABC.Op] -> HTML
+printABC = wrap . p [] 0 where
+    wrap = (H.pre ! A.lang "abc") . H.code
+    w = 60 -- configured width
+    p s n ops | (n >= w) = "\n" <> p s 0 ops
+    p s n (ABC.ABC_Block abc : ops) =
+        "[" <> p (ops:s) (n+1) (ABC.abcOps abc)
+    p (cc:s) n [] = "]" <> p s (n+1) cc
+    p s n (op@(ABC.ABC_Text _) : ops) = do
+        when (n > 0) (H.string "\n")
+        H.string (show op)
+        p s 1 ops
+    p s n (op:ops) =
+        let str = show op in
+        let len = L.length str in
+        let bNL = (w < (len + n)) in
+        if bNL then "\n" <> H.string str <> p s len ops
+               else H.string str <> p s (len + n) ops
+    p [] _ [] = mempty
 
 printCont :: Eval.Cont -> HTML
-printCont cc =
-    let nContSize = 200 in
-    let sCC = show cc in
-    let sCCL = L.take nContSize sCC in
-    let bFull = L.null $ L.drop nContSize sCC in
-    H.pre ! A.class_ "continuation" ! A.lang "abc" $ H.code $ do
-        H.string sCCL
-        unless bFull (H.span ! A.class_ "ellipses" $ "...")
+printCont cc = printABC (ABC.quote cc) ! A.class_ "continuation"
 
 printVal :: Eval.Value -> HTML
-printVal v =
-     H.pre ! A.class_ "value" ! A.lang "abc" $ H.code $ do
-        H.string (show v)
+printVal v = printABC (ABC.quote v) ! A.class_ "value"
 
 -- full continuation including stuck_curr
 stuckFullCont :: Eval.Stuck -> Eval.Cont
@@ -205,7 +228,7 @@ printStuck s = do
     printCont (stuckFullCont s)
 
 printEvalResult :: Either Eval.Stuck Eval.Value -> HTML
-printEvalResult = either printStuck printVal where
+printEvalResult = either printStuck printVal
             
 
 -- THOUGHTS: I might also want:

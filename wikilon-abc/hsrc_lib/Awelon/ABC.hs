@@ -21,6 +21,7 @@ module Awelon.ABC
     , primQuoteInteger
 
     , opsCancel
+    , abcSimplify
     , tokens
     , abcTexts
     , rewriteTokens
@@ -35,7 +36,6 @@ import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.String (IsString(..))
 
-import Awelon.Word
 import Awelon.Text
 
 -- | Bytecode is a sequence or stream of operations
@@ -396,7 +396,7 @@ instance IsString ABC where
                 let s' = LazyUTF8.toString (dcs_text stuck) in
                 error $ abcErr $ "could not parse " ++ s'
 
-{-
+
 -- | abcSimplify performs a simple optimization on ABC code based on
 -- recognizing short sequences of ABC that can be removed. E.g.
 --
@@ -408,16 +408,18 @@ instance IsString ABC where
 --
 -- And we'll inline [block]vr$c or v[block]$c
 --
+abcSimplify :: [Op] -> [Op]
+abcSimplify = zSimp []
+
+
+--
 -- redesign thoughts: it might be better to move leftwards rather than rightwards
 --  i.e. such that there is no reverse at the end, and it's easier to simplify
 --  as part of a concatenation effort
---
-abcSimplify :: [ABC_Op] -> [ABC_Op]
-abcSimplify = zSimp []
-
-zSimp :: [ABC_Op ext] -> [ABC_Op ext] -> [ABC_Op ext]
+zSimp :: [Op] -> [Op] -> [Op]
 zSimp (ABC_Prim a:as) (ABC_Prim b:bs) | opsCancel a b = zSimp as bs
-zSimp rvOps (ABC_Block block : ops) = zSimp (ABC_Block (abcSimplify block) : rvOps) ops
+zSimp rvOps (ABC_Block block : ops) = zSimp (ABC_Block block' : rvOps) ops where
+    block' = (mkABC . abcSimplify . abcOps) block
 zSimp rvOps (ABC_Prim ABC_SP : ops) = zSimp rvOps ops
 zSimp rvOps (ABC_Prim ABC_LF : ops) = zSimp rvOps ops
 zSimp (ABC_Prim ABC_w : ABC_Prim ABC_z : rvOps) (ABC_Prim ABC_z : ops) =
@@ -426,15 +428,13 @@ zSimp (ABC_Prim ABC_W : ABC_Prim ABC_Z : rvOps) (ABC_Prim ABC_Z : ops) =
     zSimp rvOps (ABC_Prim ABC_W : ABC_Prim ABC_Z : ABC_Prim ABC_W : ops)
 zSimp (ABC_Block block : rvOps) 
       (ABC_Prim ABC_v : ABC_Prim ABC_r : ABC_Prim ABC_apply : ABC_Prim ABC_c : ops) =
-    zSimp rvOps (block ++ ops)
+    zSimp rvOps (abcOps block ++ ops)
 zSimp (ABC_Block block : ABC_Prim ABC_v : rvOps)
       (ABC_Prim ABC_apply : ABC_Prim ABC_c : ops) =
-    zSimp rvOps (block ++ ops)
+    zSimp rvOps (abcOps block ++ ops)
 
 zSimp rvOps (b:bs) = zSimp (b:rvOps) bs
 zSimp rvOps [] = L.reverse rvOps
-
--}
 
 -- | compute whether two operations cancel
 opsCancel :: PrimOp -> PrimOp -> Bool

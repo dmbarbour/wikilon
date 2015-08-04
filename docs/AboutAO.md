@@ -148,17 +148,17 @@ Names do not assert any properties. Asserted properties should be expressed by c
 
 In some cases, we may expect a certain structure or function type for words of a given prefix or suffix, e.g. to support a [command language](CommandLine.md) view or a branching [REPL session](REPL.md) or other [dictionary applications](ApplicationModel.md). A development environment might raise warnings and views may fail when expectations are violated.
 
+## Compilation Quotas
+
+When we apply our `[v→[a→b]]` function to value `v`, we ideally want to return the `[a→b]` result. But it is possible to express non-terminating computations. We cannot assume the compiler function will return at all, and we cannot easily prove a function will return without sophisticated and possibly expensive static analysis. To mitigate this, it is possible to evaluate software under a quota and force termination after some heuristic metric is reached (ABC operators, blocks applied, CPU time, etc.). 
+
+How to go about setting a quota is an open question. One option is to set it at the toplevel for a definition, e.g. using an `#1000000{&:quota}%` annotation or similar. Another option is to use a naming convention, e.g. `foo.quota` for compiling word `foo`. In either case, it is important that quota is set outside of any fixpoint loops.
+
+Unfortunately quotas are not very reliable or portable due to their heuristic and implementation-dependent  nature. Simplification, partial evaluation, inlining, performance of a given runtime, etc. might impact whether a program completes below a given quota. So, quotas should probably not be a primary or favored mechanism for resisting divergence. They're the fallback. By default, quotas should correspond to an effort of several seconds. [commmand language](CommandLine.md) definitions, e.g. of the form `[code][]`, should never require specifiying a quota.
+
 ## Historical Note
 
-The name 'Awelon Object' was initially applied to a Forth-like language suitable for direct keyboard input by humans. Even then AO was a very thin linker and macro layer above Awelon Bytecode with the same dictionary concept (albeit, without support for structured definitions). However, the current form of AO is a better fit for the historical connotations of 'object code'.
-
-There is still a valuable role for an efficient Forth-like language, e.g. for input into a console or command line. I'm still dreaming up a good name for this, but do see the [command line](CommandLine.md) documentation.
-
-## Quotas and Termination
-
-We want compilation efforts to terminate. When we apply our `[v→[a→b]]` function to value `v`, we ideally want an `[a→b]` result. But it is possible that our compiler is non-terminating. To guarantee termination regardless, one option is to introduce a *quota* - e.g. a number of operators to compute (or blocks to apply, etc.). If quotas are introduced to a dictionary, our definitions could include annotations to indicate roughly how much work will be required to compile a definition.
-
-One difficulty with quotas is portability. It can be difficult to ensure all implementations behave the same way with respect to quotas. This is due to partial evaluation, simplification, how quotas are counted and recorded, etc.. However, portability is probably not a major issue, and quotas can always be tuned upwards to be conservative across implementations.
+The name 'Awelon Object' was initially applied to a Forth-like language suitable for direct keyboard input by humans. Even then AO was a very thin linker and macro layer above Awelon Bytecode with the same dictionary concept (albeit, without support for structured definitions). The current form of AO is a better fit for the historical connotations of 'object code'. There is still a valuable role for an efficient Forth-like language, e.g. for input into a console or command line. For this role, [command language for awelon (claw)](CommandLine.md) was developed. AO definitions of form `[code][]` are easily viewed and manipulated as claw code.
 
 Old Content 
 ============

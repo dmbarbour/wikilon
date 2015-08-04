@@ -17,6 +17,7 @@ import Data.Map.Lazy (Map)
 import qualified Data.Map.Lazy as Map
 import qualified Data.List as L
 import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.UTF8 as UTF8
 
 import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
@@ -26,7 +27,7 @@ import Wikilon.Dict
 -- | referenceCompile takes a dictionary, some bytecode, and a quota 
 -- for per-word compilation. All {%word} tokens whose definitions can
 -- be computed within the given quota are replaced by their definition.
--- All other tokens are simply left as is.
+-- All other tokens are simply left as is. 
 --
 -- referenceCompile does assume the dictionary is acyclic at least for
 -- all the words used in the compiled code.
@@ -85,10 +86,29 @@ stuckOnTok tok v cc q = Left $ Stuck
     , stuck_quota = q
     }
 
+{-
+-- a function to recover computation from an op-level failure;
+-- is not sensitive to 
+type TryRecover m = Value -> Op -> Maybe (m Value)
+
+evalM :: (Monad m) => TryRecover m -> Value -> Cont -> Quota -> m (Either Stuck Value)
+evalM tryRecover = ev where
+    ev v cc q = rc $ evaluate v cc q
+    rc (Left s) 
+        | (stuck_quota > 0)
+        , (Just action <- recover (stuck_arg s) (stuck_curr s)
+        = action >>= \ v' -> ev v' (stuck_cont s) (stuck_quota s)
+    rc otherResult = return otherResult
+
+-}
+
 -- | Basic eval:
 --
 -- * applies discretionary sealers and unsealers
--- * ignores all annotations 
+-- * recognizes {&:quota} as modifying the quota
+--    (only at the toplevel)
+-- * recognizes {&≡} annotation as asserting equivalence.
+-- * ignores all other annotations 
 --
 -- That's it for now. (I'd like to have a few alternative
 -- evaluators to deal with lazy linking and compilation
@@ -119,4 +139,17 @@ basicEval = ev where
         , (s' == u')
         = ev (Pair v e)
     evUnseal tok val = stuckOnTok tok val
-    evAnno = const ev -- ignoring annotations
+    evAnno an | (an == annoSetQuota) = evAnnoSetQuota
+              | (an == annoAssertEq) = evAnnoAssertEq
+              | otherwise = ev
+    -- set quota at toplevel for definitions; otherwise fail
+    evAnnoSetQuota v@(Pair (Number q) _) cc@(Cont _ Return) _ = 
+        ev v cc (fromIntegral q) -- set the quota directly
+    evAnnoSetQuota v cc q = stuckOnTok annoSetQuota v cc q
+    -- assert structural equivalence of two values
+    evAnnoAssertEq v@(Pair a (Pair b _)) | (a == b) = ev v
+    evAnnoAssertEq v = stuckOnTok annoAssertEq v
+
+annoSetQuota, annoAssertEq :: ABC.Token
+annoSetQuota = UTF8.fromString "&:quota"
+annoAssertEq = UTF8.fromString "&≡"
