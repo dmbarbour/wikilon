@@ -23,17 +23,70 @@ DONE:
 * secure hash per word for deep source
 * simplistic stateless REPL based on Claw code
 
+PRIORITY TODO:
+
+* cache word-based HTTP resources
+ * model CSS within dictionary as resource
+ * model ad-hoc web-pages within dictionary
+ * model icons and images within dictionary
+* separate model and implementation
+
 TODO:
+
+* compile to performance variant for ABC
+ * heavy partial evaluation, interning, etc.
+ * potential caching or memoization annotations
+ * Wikilon-ABC or a typed-interpreter variant
+ * preserve `{%foo}` tokens for command language views
+ * may need to perform escape-analysis on blocks
+
+* timing information
+ * maybe add as default output for eval or REPL
+
+* separate data model from web service
+ * generalize caching for resources
+ * bind resources to secure hash identities
+ * support binary, text, value, type resources
+
+* AJAX/React interfaces in general
+ * favor editable texts/views instead of forms
+ * RDP basis? and/or AVMs?
+ * model generically, above AO/ABC 
+ * leverage ABC to JS compilers if feasible
+
+* more colorful and graphical
+ * push displays into mixed text and SVG
+ * develop a boxes and wires language over claw or other
+
+
+* gradual, long-running, background computations
+ * long running compilation, evaluation, typechecking
+
+* searches based on type or structure
+* tab-completion based on type matching
+
+* cache Wikilon-ABC representations, partial eval
+
+* numbers libraries...
+ * support rational and decimal numbers
+ * beginning support for vectors
+  * maybe vectors from lists?
+  * maybe sequences from lists?
 
 * clean up rendering of values, bytecode, etc.
  * maybe add some color or syntax highlighting 
  * numbers vs. texts vs. data plumbing vs. other?
+
 * lazy linking so REPL can return claw code blocks
- * limited or partial 'flattening', for toplevel meaning of a word
+ * partial 'flattening' for toplevel meaning of word
+ * probably a moderate performance hit, larger for Wikilon.ABC
+
 * persistent REPL sessions (threads, forums)
  * review [REPL.md](REPL.md) for this idea
+
 * graphical REPL views? e.g. turtle graphics or SVG
  * maybe use words to define value to HTML conversions
+ * might need better caching...
 
 * tab completion in REPL
  * need AJAX, probably need a new widgets model
@@ -70,7 +123,11 @@ TODO:
 * support for developing web applications
 
 * continuous compilation, testing, type checking
+
 * simple ABC to JavaScript compiler
+ * this might simplify issues regarding non-termination
+ * e.g. can push non-terminating computation to browser
+ * can also enable dynamic display of functions
 
 
 * fork a dictionary

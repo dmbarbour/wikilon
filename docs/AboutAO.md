@@ -150,7 +150,7 @@ In some cases, we may expect a certain structure or function type for words of a
 
 ## Compilation Quotas
 
-When we apply our `[v→[a→b]]` function to value `v`, we ideally want to return the `[a→b]` result. But it is possible to express non-terminating computations. We cannot assume the compiler function will return at all, and we cannot easily prove a function will return without sophisticated and possibly expensive static analysis. To mitigate this, it is possible to evaluate software under a quota and force termination after some heuristic metric is reached (ABC operators, blocks applied, CPU time, etc.). 
+When we apply our `[v→[a→b]]` function to value `v`, we ideally want to return the `[a→b]` result. But it is possible to express non-terminating computations. We cannot safely assume the compiler function will return, and we cannot easily prove a function will return without sophisticated and possibly expensive static analysis. To mitigate this, it is possible to evaluate software under a quota and force termination after some heuristic metric is reached (ABC operators, blocks applied, CPU time, etc.). 
 
 How to go about setting a quota is an open question. One option is to set it at the toplevel for a definition, e.g. using an `#1000000{&:quota}%` annotation or similar. Another option is to use a naming convention, e.g. `foo.quota` for compiling word `foo`. In either case, it is important that quota is set outside of any fixpoint loops.
 

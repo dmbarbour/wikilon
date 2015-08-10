@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, ViewPatterns #-}
 
 -- | Wikilon's REPL (Read Eval Print Loop).
 --
@@ -34,13 +34,16 @@ module Wikilon.WAI.Pages.REPL
     ( dictRepl
     , formDictClawRepl
     , formDictClawReplS
+    , defaultQuota
     ) where
 
 import Control.Monad
 import Data.Monoid
 import qualified Data.List as L
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
+import qualified Data.ByteString.UTF8 as UTF8
 import Text.Read (readMaybe)
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
@@ -82,8 +85,8 @@ formDictClawRepl q dn sCommand =
                 ! A.pattern "[0-9]*" ! A.size "10"
 
 -- | a short form for REPL, accepting only a single line of input.
-formDictClawReplS :: Branch.BranchName -> LazyUTF8.ByteString -> HTML
-formDictClawReplS dn sCommand =
+formDictClawReplS :: Eval.Quota -> Branch.BranchName -> LazyUTF8.ByteString -> HTML
+formDictClawReplS q dn sCommand =
     let uriAction = H.unsafeByteStringValue (uriRepl dn) in
     H.form ! A.method "GET" ! A.action uriAction ! A.id "formClawRepl" $ do
         let sCmdStr = LazyUTF8.toString sCommand
@@ -92,7 +95,7 @@ formDictClawReplS dn sCommand =
                 ! A.size (H.stringValue (show nWidth))
                 ! A.value (H.stringValue sCmdStr)
         H.input ! A.type_ "submit" ! A.value "Evaluate"
-        let sQuota = H.stringValue (show defaultQuota)
+        let sQuota = H.stringValue (show q)
         H.input ! A.type_ "hidden" ! A.name "quota" ! A.value sQuota
 
 dictRepl :: WikilonApp
@@ -116,7 +119,7 @@ queriedEvalQuota q =
     readMaybe s
 
 defaultQuota :: Eval.Quota
-defaultQuota = 10000000
+defaultQuota = 987654321
 
 replPage :: WikilonApp
 replPage = dictApp $ \ w dn rq k -> 
@@ -124,7 +127,7 @@ replPage = dictApp $ \ w dn rq k ->
     let cmdString = queriedReplCommand qs in
     let quota = maybe defaultQuota id (queriedEvalQuota qs) in
     let footerDict = H.strong "Dictionary:" <> " " <> hrefDict dn in
-    let replForm = formDictClawReplS dn cmdString in
+    let replForm = formDictClawReplS quota dn cmdString in
     case CC.decode cmdString of
         Left dcs -> -- PARSE ERROR
             let status = HTTP.badRequest400 in
@@ -172,6 +175,8 @@ replPage = dictApp $ \ w dn rq k ->
                 H.body $ do 
                     H.h1 title
                     printEvalResult evalResult
+                    H.br
+                    H.br
                     replForm
                     H.hr
                     footerWords
@@ -209,26 +214,68 @@ printCont :: Eval.Cont -> HTML
 printCont cc = printABC (ABC.quote cc) ! A.class_ "continuation"
 
 printVal :: Eval.Value -> HTML
-printVal v = printABC (ABC.quote v) ! A.class_ "value"
+printVal (Number n) = H.span ! A.class_ c $ H.string (show n) where
+    c | (n > 0) = "vNumber positive"
+      | (n == 0) = "vNumber zero"
+      | otherwise = "vNumber negative"
+printVal Unit = H.span ! A.class_ "vUnit" $ "unit"
+printVal (Pair a b) = "(" <> printVal a <> " * " <> printVal b <> ")"
+printVal (SumL Unit) = H.span ! A.class_ "vBool" $ "false"
+printVal (SumR Unit) = H.span ! A.class_ "vBool" $ "true"
+printVal (Eval.toText -> Just txt) = 
+    let nRows = 1 + LBS.count 10 txt in
+    let sVal = H.string $ LazyUTF8.toString txt in
+    if (1 == nRows) 
+        then H.span ! A.class_ "vText inline" $ sVal 
+        else H.textarea ! A.rows (H.stringValue (show nRows)) ! A.cols "60"
+                        ! A.class_ "vText block" ! A.style "display:inline;"
+                        ! A.readonly "readonly" 
+                        $ sVal  
+printVal (SumL v) = printVal v <> "L"
+printVal (SumR v) = printVal v <> "R"
+printVal b@(Block _ _) = printABC (ABC.quote b) ! A.class_ "vBlock"
+printVal (Sealed tok v) = printVal v <> "{" <> H.string (UTF8.toString tok) <> "}"
 
--- full continuation including stuck_curr
+toStack :: Eval.Value -> Maybe [Eval.Value]
+toStack (Pair a b) = fmap (a:) (toStack b)
+toStack Unit = Just []
+toStack _ = Nothing
+
+-- try to print a conventional (stack*(hand*ext)) environment.
+printStackHand :: Eval.Value -> HTML
+printStackHand (Pair (toStack -> Just s) (Pair (toStack -> Just h) ext)) = do
+    unless (L.null s) $ printStack "Stack" s
+    unless (L.null h) $ printStack "Hand" h
+    unless (Unit == ext) $ do
+        H.strong "Ext" <> H.br
+        printVal ext
+printStackHand v = H.strong "Env" <> H.br <> printVal v
+
+printStack :: String -> [Eval.Value] -> HTML
+printStack hd lst = H.table ! A.class_ "vStack" $ do
+    (H.thead . H.tr . H.th . H.string) hd
+    H.tbody $ forM_ (L.reverse lst) (H.tr . H.td . printVal)
+
 stuckFullCont :: Eval.Stuck -> Eval.Cont
 stuckFullCont s =
-    let cc = Eval.stuck_cont s in
-    let k = Eval.cc_cont cc in
-    let k' = (Eval.stuck_curr s : k) in
-    cc { Eval.cc_cont = k' }
+    let (Eval.Cont ops stack) = Eval.stuck_cont s in
+    let ops' = Eval.stuck_curr s : ops in
+    (Eval.Cont ops' stack)
 
 printStuck :: Eval.Stuck -> HTML
 printStuck s = do
-    H.strong "Quoted Value:"
-    printVal (Eval.stuck_arg s)
-    H.br
-    H.strong "Continuation:"
+    let explainWhyWeAreStuck = -- heuristic
+            if Eval.stuck_quota s < 1 then "Evaluation halted on quota limitations." else
+            case Eval.stuck_curr s of
+                ABC.ABC_Tok tok -> "Evaluation halted on unrecognized token."
+                _ -> "Evaluation halted due to a type error."
+    H.p $ explainWhyWeAreStuck
+    H.h2 "Continuation"
     printCont (stuckFullCont s)
+    printStackHand (Eval.stuck_arg s)
 
 printEvalResult :: Either Eval.Stuck Eval.Value -> HTML
-printEvalResult = either printStuck printVal
+printEvalResult = either printStuck printStackHand
             
 
 -- THOUGHTS: I might also want:
