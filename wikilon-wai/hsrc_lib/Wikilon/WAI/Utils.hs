@@ -45,6 +45,7 @@ module Wikilon.WAI.Utils
     , HTML
     , statusToTitle
     , htmlTime, htmlSimpTime, htmlWeekTime
+    , htmlDiffTime
     , renderHTML
 
     , htmlMetaNoIndex
@@ -71,6 +72,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
+import qualified Data.Decimal as Dec
 import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
@@ -383,6 +385,12 @@ htmlWeekTime = htmlTime "%a %R"
 
 htmlSimpTime :: Time.T -> HTML
 htmlSimpTime = htmlTime "%Y %b %e %R"
+
+htmlDiffTime :: Time.DT -> HTML
+htmlDiffTime dt =
+    let s = Dec.normalizeDecimal $ Dec.Decimal 12 (Time.dtToPicos dt) in
+    H.time ! A.datetime (H.stringValue ("PT" <> show s <> "S")) 
+           $ H.string (show dt)
 
 -- | A meta element (under \<head\>) to indicate a page's content
 -- should not be indexed or followed. This is, of course, entirely

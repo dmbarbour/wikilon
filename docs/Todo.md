@@ -22,16 +22,33 @@ DONE:
 * most CSS pushed into stylesheets
 * secure hash per word for deep source
 * simplistic stateless REPL based on Claw code
+ * including time elapsed during evaluation
 
 PRIORITY TODO:
 
+* develop generic, effective cache model 
+ * leverage exponential decay models
+ * support some sort of generic resource
+  * perhaps based on ABC values or types
+  * packed texts, binaries; maybe lists, stacks
+
 * cache word-based HTTP resources
- * model CSS within dictionary as resource
- * model ad-hoc web-pages within dictionary
+ * each resource tied to a word
+ * words of a given type, via common prefix
+ * model existing CSS within dictionary as resource
+ * model static web-pages within dictionary
  * model icons and images within dictionary
+ * model queried web-pages within dictionary
 * separate model and implementation
+* track recent updates and events
 
 TODO:
+
+* improve evaluation performance
+ * the old ao/aoi utils are still about 3x faster
+  * more than that accounting for overhead to load dict
+ * granted, the current evaluator is very simplistic
+
 
 * compile to performance variant for ABC
  * heavy partial evaluation, interning, etc.
@@ -39,9 +56,6 @@ TODO:
  * Wikilon-ABC or a typed-interpreter variant
  * preserve `{%foo}` tokens for command language views
  * may need to perform escape-analysis on blocks
-
-* timing information
- * maybe add as default output for eval or REPL
 
 * separate data model from web service
  * generalize caching for resources
@@ -332,4 +346,5 @@ TODO:
 
 
 
+* consider separating branches of dictionary into multiple PVars, i.e. such that each branch has one PVar rather than sharing an additional trie at the toplevel. The main advantage here would be that there is no risk of conflict when performing large dictionary-level operations, such as importing a dictionary. (Priority: Low. Minor performance issue.)
 

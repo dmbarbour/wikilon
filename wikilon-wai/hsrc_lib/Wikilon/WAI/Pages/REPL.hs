@@ -59,6 +59,7 @@ import Awelon.ABC.Eval (Value(..))
 import qualified Awelon.ABC.Eval as Eval
 import Wikilon.Dict.Word
 import Wikilon.Compile (referenceCompile, basicEval)
+import Wikilon.Time
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.ClawUtils
@@ -119,7 +120,7 @@ queriedEvalQuota q =
     readMaybe s
 
 defaultQuota :: Eval.Quota
-defaultQuota = 987654321
+defaultQuota = 25000000
 
 replPage :: WikilonApp
 replPage = dictApp $ \ w dn rq k -> 
@@ -161,7 +162,11 @@ replPage = dictApp $ \ w dn rq k ->
             let c0 = Eval.Cont abcCompiledSimplified Eval.Return in
             let v0 = Pair Unit (Pair Unit Unit) in
             let evalResult = basicEval v0 c0 q0 in
-            
+            getCPUTime >>= \ t0 ->
+            evalResult `seq`
+            getCPUTime >>= \ tf ->
+            let dtEval = tf - t0 in
+            let footerEvalTime = htmlDiffTime dtEval <> " CPU time elapsed." <> H.br in
             let status = HTTP.ok200 in
             let headers = [textHtml] in
             let title = case evalResult of
@@ -179,6 +184,7 @@ replPage = dictApp $ \ w dn rq k ->
                     H.br
                     replForm
                     H.hr
+                    footerEvalTime
                     footerWords
                     footerDict
 

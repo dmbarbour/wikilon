@@ -2,7 +2,8 @@
 -- | The Wikilon 'Model' is an abstract interface for Wikilon. This
 -- interface supports confined atomic operations. That is, we may
 -- compose queries and updates on Wikilon so long as we don't also
--- interact with external resources.
+-- interact with external resources. Further, the model will support
+-- some generic cache management.
 --
 -- This will be represented by a monad. A transaction becomes a 
 -- monadic action. At least the basic actions for the monad will

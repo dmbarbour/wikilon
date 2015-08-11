@@ -14,6 +14,7 @@ module Wikilon.Time
     , addTime, subtractTime, diffTime
     , fromUTC, toUTC
     , dtToPicos
+    , getCPUTime, cpuTimePrecision
 
     , ceilingDT, floorDT, roundDT
     , ceilingSeconds, ceilingMinutes
@@ -28,6 +29,7 @@ import Data.Ratio (numerator,denominator)
 import qualified Data.Time.Clock as Time
 import qualified Data.Time.Calendar as Time
 import qualified Data.Time.Format as Time
+import qualified System.CPUTime as CPUTime
 #if !(MIN_VERSION_time(1,5,0))
 import qualified System.Locale
 #endif
@@ -46,16 +48,21 @@ dayLen, secLen :: Int64
 dayLen = 86400 * secLen
 secLen = 1000 * 1000 * 10  -- unit is 10^-7s, 0.1µs, 100ns
 
+psPrec :: Integer
+psPrec = 100 * 1000 -- 100ns per time unit, 1000ps per ns
+
 -- difference between Modified Julian Day and Unix Epoch
 dayZero :: Int64
 dayZero = 40587
 
-toPicos :: Int64 -> Integer
-toPicos dt = fromIntegral $ dt * 100000
-    -- 100ns per time unit * 1000ps per ns
-
 dtToPicos :: DT -> Integer
 dtToPicos (DT dt) = toPicos dt
+
+toPicos :: Int64 -> Integer
+toPicos = (* psPrec) . fromIntegral
+
+dtFromPicos :: Integer -> DT
+dtFromPicos = DT . fromIntegral . (`div` psPrec)
 
 -- | Estimate of current time from operating system.
 getTime :: IO T
@@ -73,6 +80,15 @@ toUTC (T t) = Time.UTCTime days timeInDay where
     (d,q) = t `divMod` dayLen
     days = Time.ModifiedJulianDay (fromIntegral $ d + dayZero)
     timeInDay = Time.picosecondsToDiffTime (toPicos q)
+
+-- | Obtain CPU time used by current program (e.g. for profiling)
+-- via System.CPUTime, but using DT (at best 100ns precision).
+getCPUTime :: IO DT
+getCPUTime = dtFromPicos <$> CPUTime.getCPUTime 
+
+-- | Smallest measurable time difference for getCPUTime
+cpuTimePrecision :: DT
+cpuTimePrecision = dtFromPicos (max psPrec CPUTime.cpuTimePrecision)
 
 -- | DT - a representation of a difference in two times
 -- Conversion functions treat as seconds. Precision is
