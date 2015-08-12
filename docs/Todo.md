@@ -44,17 +44,20 @@ PRIORITY TODO:
 
 TODO:
 
-* improve evaluation performance
- * the old ao/aoi utils are still about 3x faster
-  * more than that accounting for overhead to load dict
- * granted, the current evaluator is very simplistic
-
-
-* compile to performance variant for ABC
+* improve evaluation performance!
+ * the old ao/aoi utils are perhaps 3x-10x faster
+ * current evaluator is too simplistic
+ * improve basic ABC evaluator performance
+  * quoted values?
+  * fast cons?
+  * fast 'copyable'?
+ * compile to performance variant for ABC
  * heavy partial evaluation, interning, etc.
  * potential caching or memoization annotations
- * Wikilon-ABC or a typed-interpreter variant
- * preserve `{%foo}` tokens for command language views
+
+* nicer rendering for output blocks
+ * somehow preserve `{%foo}` tokens and similar
+ * rendering of statically computed objects
  * may need to perform escape-analysis on blocks
 
 * separate data model from web service

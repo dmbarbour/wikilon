@@ -16,11 +16,13 @@ For a secure hash, I have at least two options:
 1. alpha-independent secure hash, i.e. names don't matter.
 2. alpha-dependent secure hash, i.e. names do matter
 
-An alpha-independent secure hash is possible by removing names, transitively replace each `{%foo}` token with the `{#secureHashOfFoo}`. An alpha-dependent secure hash can be achieved by almost the same but additionally prefixing each word foo's definition with `{&@foo}` before taking the secure hash.
+An alpha-independent secure hash is possible by removing names, transitively replace each `{%foo}` token with the `{#secureHashOfFoo}`. An alpha-dependent secure hash can be achieved by almost the same but additionally prefixing each word foo's definition with `{&@foo}` before taking the secure hash. 
 
 The motivation for alpha-independence is greater reuse of our cache, e.g. across rename operations. The cost of alpha-independence is that the hash cannot be used to cache any name-dependent results, e.g. error reports that might use human-layer words.
 
 I estimate the level of effective reuse for alpha-independence would be marginal. Also, the *worst* case for reuse of a cache based on secure hash (even for alpha-dependent names) seems to be superior to the *best* case for reuse with invalidation-based caching, due to effective reuse with older versions of the dictionary and between dictionaries. 
+
+Given alpha-dependent hashes, it should be possible to cache the related alpha-independent hashes. Alternatively, I could partially compile results, deforest heuristically, and use associate these alpha-dependent hashes with a compiled-result hash. Though, this might not be necessary (e.g. due to VCache). 
 
 So I'm going to favor an alpha-dependent secure hash function.
 
