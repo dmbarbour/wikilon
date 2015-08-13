@@ -71,8 +71,8 @@ renameMeta = H.div ! A.class_ "docs" $ do
           \"
     H.p $ H.strong "Limitations:" <> " to rename a word, the target word must\n\
           \either be undefined and unused, or have a byte-for-byte identical\n\
-          \definition as the origin word. In the latter case, the two words\n\
-          \are silently merged. Rename will not modify behavior.\n\
+          \definition as the origin word, or one word must be a simple redirect\n\
+          \to the other (i.e. `[{%foo}][]`). Rename does not modify behavior.\n\
           \"
 
 recvWordRename :: PostParams -> WikilonApp

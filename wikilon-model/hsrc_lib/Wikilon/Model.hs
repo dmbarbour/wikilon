@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, ViewPatterns #-}
+{-# LANGUAGE TypeFamilies, ViewPatterns, OverloadedStrings #-}
 
 -- | The Wikilon Model is an abstract interface for Wikilon. This
 -- API supports atomic groups of confined queries and updates with
@@ -24,71 +24,82 @@
 --
 module Wikilon.Model
     ( BranchName, Branch, Dict
-    , BranchingDictionary(..)
-    , BranchHistory(..)
+    , BranchingDictionary(..), branchSnapshot
     , ABC, Token, Word, Bytes
     , DictView(..)
     , dictWordDeps, dictWordDepsT, abcWords
     , SecureHash
-    , DictRLU(..)
-    , WordPrefix
-    , DictSplitPrefix(..)
+    , DictRLU(..), dictWordClients, dictWordClientsT
+    , WordPrefix, DictSplitPrefix(..), dictSplitPrefixW
+    , DictUpdate(..), dictDeleteWord, dictDeleteWords
+    , dictRenameWord
+
     
     , module Wikilon.Time
+    , matchWord, matchSimpleRedirect
     ) where
 
+import Control.Applicative
 import Control.Monad
 import Data.Monoid
+import Data.Maybe
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Set (Set)
+-- import Data.Set (Set)
 import qualified Data.Set as Set
+import qualified Data.List as L
 
 import Awelon.ABC (ABC, Token)
-import qualified Awelon.ABC as Awelon
-import Dict.Word
+import qualified Awelon.ABC as ABC
+import Awelon.Word
+import qualified Awelon.Base16 as B16
 import Wikilon.Time
 import Wikilon.SecureHash
 
 type BranchName = Word
 type Bytes = LazyUTF8.ByteString
 
--- | Wikilon has some existential or sealed value types that cannot 
--- readily be exported from the machine. One might consider them to
--- be a lot like file handles, except that there is no particular 
--- need to open or close them. We can read the `m` here as monad or
--- machine.
-data family Dict m
-data family Branch m
 
--- anything else? 
---  maybe handles for capabilities or RDP features? 
---  though, any capabilities should be explicitly serializable (e.g. to an ABC value) 
---  maybe access to a 'value' type? though I could build on ABC here.
---  thoug
+-- | Wikilon has some opaque object types, which might be understood
+-- similarly to file handles or ADTs. In context of Awelon Bytecode,
+-- these could be modeled as sealed values specific to the Wikilon
+-- instance. In general, they shouldn't actually be returned from
+-- a query or update on Wikilon.
+data family Dict (m :: * -> *)
+data family Branch (m :: * -> *)
+
 
 -- | Wikilon has a branching dictionary model. Branches are named under
 -- the same restrictions as dictionary words (to easily fit HTML). If a
 -- branch has not been defined, we can treat that as an empty dictionary.
-class BranchingDictionary m where
+class (DictView m) => BranchingDictionary m where
+    -- | Load a branch given its name. Authentication might be performed here.
     loadBranch :: BranchName -> m (Branch m)
+
+    -- | Return the most recent dictionary for a branch.
     branchHead :: Branch m -> m (Dict m)
+
+    -- | Update the dictionary associated with the branch.
     branchUpdate :: Branch m -> Dict m -> m ()
 
--- | Each branch will also support an incomplete history, e.g. leveraging
--- a simple exponential decay model.
-class BranchHistory m where
-    -- | Obtain all available snapshots between two time values. The
-    -- minBound and maxBound times can be used as effective infinities.
-    branchSnapshots :: Branch m -> T -> T -> m [(T,Dict m)]
+    -- | Obtain all available snapshots for a branch between two time values.
+    -- There is no strong requirement that a branch keeps more than the head
+    -- value, but if we do keep more we must be able to access them.
+    --
+    -- Our history is accessed in terms of:
+    --
+    --   (snapshot, [(tmUpdate, previousSnapshot)])
+    --
+    -- The tmUpdate values should fall between the requested times.
+    branchHistory :: Branch m -> T -> T -> m (Dict m, [(T,Dict m)])
 
-    -- | Obtain the snapshot of a dictionary at a specific time. If the
-    -- branch is not defined at the requested time, we'll 
-    branchSnapshot :: Branch m -> T -> m (Dict m) 
+-- | Obtain the snapshot of a dictionary at a specific time. 
+branchSnapshot :: (BranchingDictionary m) => Branch m -> T -> m (Dict m) 
+branchSnapshot b t = fst <$> branchHistory b t t
 
 -- | Given a snapshot of a dictionary, we can at least query it. While
 -- query operations should be pure, they may require manipulations on a
@@ -96,14 +107,14 @@ class BranchHistory m where
 -- will also be necessary. This is very similar to Wikilon.Dict, which
 -- will become a bit deprecated because it lacked good support for the
 -- cache.
-class (Monad m) => DictView m where
+class (Functor m, Applicative m, Monad m) => DictView m where
     -- | Obtain a finite list that includes all words with non-empty 
     -- definitions, including incomplete or bad definitions that don't
     -- compile. 
     dictWords :: Dict m -> m [Word]
 
     -- | Lookup raw definition for a specific word.
-    dictLookup :: Dict m -> Word -> m Awelon.ABC
+    dictLookup :: Dict m -> Word -> m ABC
 
     -- | Raw bytes for a specific word for optimization.
     dictLookupBytes :: Dict m -> Word -> m Bytes
@@ -118,9 +129,9 @@ class (Monad m) => DictView m where
     dictDiff a b = 
         let hasDiff w = (/=) <$> dictLookupBytes a w <*> dictLookupBytes b w in
         let onlyInB w = LBS.null <$> dictLookupBytes a w in
-        dictWords a >>= filterM hasDiff >>= \ lDiff ->
+        dictWords a >>= filterM hasDiff >>= \ lDiffAB ->
         dictWords b >>= filterM onlyInB >>= \ lUniqueToB ->
-        lDiff <> lUniqueToB
+        return (lDiffAB <> lUniqueToB)
 
     -- | Obtain a secure hash that includes the word, bytecode, and
     -- transitive dependencies. This allows us to cache computations
@@ -133,23 +144,25 @@ class (Monad m) => DictView m where
     dictLookupVersionHash d = vh mempty where
         vh c w = snd <$> vch c w
         vc c w = fst <$> vch c w
-        vch c w = case Map.lookup w cached of
-            Just hash -> return (cached,hash) -- do not recompute
+        vch c w = case Map.lookup w c of
+            Just h -> return (c,h) -- do not recompute
             Nothing ->
                 dictLookup d w >>= \ abc ->
                 foldM vc c (abcWords abc) >>= \ c' ->
                 let abc' = annoAtDef w <> rwHashWords c' abc in
                 let h = secureHashLazy $ ABC.encode abc' in
-                (Map.insert w h c', h)
+                return (Map.insert w h c', h)
+
+type HashCache = Map Word SecureHash
 
 annoAtDef :: Word -> ABC
 annoAtDef w = ABC.mkABC [ABC.ABC_Tok ("&@" <> wordToUTF8 w)]
 
 -- rewrite words if their hash is included
-rwHashWords :: Map Word SecureHash -> ABC -> ABC
+rwHashWords :: HashCache -> ABC -> ABC
 rwHashWords cache = ABC.rewriteTokens rw where
     rw t = [ABC.ABC_Tok (tryWordHash t)]
-    tryWordHash tok = maybe t h2t (cachedWord t)
+    tryWordHash t = maybe t h2t (fromCache t)
     h2t = BS.pack . (35 :) . B16.encode . BS.unpack
     fromCache t = 
         UTF8.uncons t >>= \ (c,w) ->
@@ -179,16 +192,16 @@ dictWordDepsT d = accum [] mempty where
     accum r _ [] = return (L.reverse r)
     accum r v ws@(w:ws') =
         if Set.member w v then accum r v ws' else
-        dictWordDeps w >>= \ lWords ->
+        dictWordDeps d w >>= \ lWords ->
         let lNewDeps = L.filter (`Set.notMember` v) lWords in
-        if L.null lDeps 
+        if L.null lNewDeps 
             then accum (w:r) (Set.insert w v) ws'
-            else accum r v (lDeps <> ws)
+            else accum r v (lNewDeps <> ws)
 
 -- | Wikilon needs a reverse-lookup index to easily locate all
 -- words that use a specific token. This might be computed per
 -- dictionary. 
-class (DictView dict) => DictRLU dict where
+class (DictView m) => DictRLU m where
     -- | Find all words that directly use a specific token.
     dictTokenClients :: Dict m -> Token -> m [Word]
 
@@ -240,7 +253,7 @@ class (DictView m) => DictSplitPrefix m where
 
 -- | dictSplitPrefixW is a variation of dictSplitPrefix that prevents
 -- splitting of a prefix on anything but a complete character.
-dictSplitPrefixW :: DictSplitPrefix dict => Dict m -> WordPrefix -> m [Either WordPrefix Word]
+dictSplitPrefixW :: DictSplitPrefix m => Dict m -> WordPrefix -> m [Either WordPrefix Word]
 dictSplitPrefixW d = dictSplitPrefix d >=> mapM repair >=> fin where
     repair = either repairP keepW
     keepW = return . return . Right
@@ -254,48 +267,83 @@ dictSplitPrefixW d = dictSplitPrefix d >=> mapM repair >=> fin where
 -- | Modify a dictionary. These modifications aren't automatically 
 -- committed to any branch. Wikilon should guard against introducing
 -- cycles
-class (DictView dict) => DictUpdate dict where
-    unsafeUpdateWord :: Word -> ABC -> Dict m -> m (Dict m)
+class (DictView m) => DictUpdate m where
+    dictUnsafeUpdateWord :: Word -> ABC -> Dict m -> m (Dict m)
 
-    unsafeUpdateWords :: Map Word ABC -> Dict m -> m (Dict m)
-    unsafeUpdateWords (Map.toList -> l) d = 
-        let lUpd = Map.toList
+    dictUnsafeUpdateWords :: Map Word ABC -> Dict m -> m (Dict m)
+    dictUnsafeUpdateWords = flip (foldM accum) . Map.toList where
+        accum d (w,abc) = dictUnsafeUpdateWord w abc d
 
-flip (L.foldl' upd) . Map.toList where
-        upd d (w,abc) = unsafeUpdateWord w abc d 
-
--- | update a word's definition to the empty ABC program
-deleteWord :: (DictUpdate dict) => Word -> dict -> dict
-deleteWord = deleteWords . (:[])
+-- | remove a word's definition (if any)
+dictDeleteWord :: (DictUpdate m) => Word -> Dict m -> m (Dict m)
+dictDeleteWord = dictDeleteWords . (:[])
 
 -- | delete a list of words.
-deleteWords :: (DictUpdate dict) => [Word] -> dict -> dict
-deleteWords = unsafeUpdateWords . Map.fromList . withEmpties where
-    withEmpties = flip L.zip $ L.repeat mempty
+dictDeleteWords :: (DictUpdate m) => [Word] -> Dict m -> m (Dict m)
+dictDeleteWords = dictUnsafeUpdateWords . Map.fromList . withEmpties where
+    withEmpties = flip L.zip (L.repeat mempty)
 
--- | Rename a word in a dictionary, affecting not just that word
--- but also all the words that reference it. Note: no validation
--- is performed, and this will overwrite the second word. In general,
--- it is safest to rename under one of two conditions:
+-- | Match bytecode of form `{%foo}`, return word foo
+matchWord :: ABC -> Maybe Word
+matchWord abc = case ABC.abcOps abc of
+    [ABC.ABC_Tok t] -> case BS.uncons t of
+        Just (37,w) -> return (Word w)
+        _ -> Nothing
+    _ -> Nothing
+
+-- | Match bytecode of the form `[{%foo}][]`; return word foo.
+-- This corresponds to a simple redirect to word foo, and has
+-- the same observable behavior as foo.
+matchSimpleRedirect :: ABC -> Maybe Word
+matchSimpleRedirect abc = case ABC.abcOps abc of
+    [ABC.ABC_Block cmd, ABC.ABC_Block cc] | (cc == mempty) -> matchWord cmd 
+    _ -> Nothing
+
+-- | Rename a word in a dictionary without modifying its behavior.
+-- This will succeed only under one of the following conditions:
+--   
+--   1. if the target word is undefined and unused (proper rename)
+--   2. if the target and origin words have the same definition (merge)
+--   3. if one of the words is a simple redirect to the other
 --
---   1. the target word is undefined and unused (cf. renameWord)
---   2. target and origin share same definition (cf. mergeWords)
+-- A simple redirect is a definition of the form `[{%foo}][]`. In case
+-- of redirects, we'll favor the redirect target's definition. If the
+-- rename isn't a 'proper' one by the above conditions, rename may be 
+-- lossy.
 --
--- In these conditions, you can be sure that clients of a word are not
--- impacted, do not need to be retested or recompiled, no cycles are
--- introduced, etc.. Otherwise, you must treat the rename as an update
--- to both the origin and target words.
+-- If a rename condition isn't met, Nothing is returned. On success,
+-- the origin word is undefined, the target word has the origin's 
+-- definition (unless the origin was a redirect to the target, in which
+-- case the target's definition is not modified), and the 
 -- 
-unsafeRenameWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> dict
-unsafeRenameWord wo wt d =
-    if (wo == wt) then d else -- trivially, no change
-    let lC = wordClients d wo in -- client of wo, for rewrite wo→wt
-    let fnUpdClient = _renameInABC wo wt . lookup d in -- rename wo to wt
-    flip unsafeUpdateWords d $ 
-        Map.insert wt (lookup d wo) $                 -- overwrite wt
-        Map.insert wo mempty $                        -- delete wo
-        Map.fromList $ L.zip lC (fmap fnUpdClient lC) -- update clients of wo
+dictRenameWord :: (DictRLU m, DictUpdate m) => Word -> Word -> Dict m -> m (Maybe (Dict m))
+dictRenameWord wOrigin wTarget d =
+    if (wOrigin == wTarget) then return (Just d) else -- trivial rename
+    -- stuff I might need to know
+    dictLookup d wOrigin >>= \ abcOrigin ->
+    dictLookup d wTarget >>= \ abcTarget ->
+    dictWordClients d wTarget >>= \ lClientsTarget ->
+    dictWordClients d wOrigin >>= \ lClientsOrigin ->
 
+    -- test safe rename conditions
+    let bNewTarget = (mempty == abcTarget) && (L.null lClientsTarget) in
+    let bMatchDefs = (abcOrigin == abcTarget) in
+    let bOriginRedirectsToTarget = maybe False (== wTarget) (matchSimpleRedirect abcOrigin) in
+    let bTargetRedirectsToOrigin = maybe False (== wOrigin) (matchSimpleRedirect abcTarget) in
+    let bSafeRename = bNewTarget || bMatchDefs || bOriginRedirectsToTarget || bTargetRedirectsToOrigin in
+    if not bSafeRename then return Nothing else
+
+    -- compute the update, including updates for all clients of the origin word
+    let updC w = dictLookup d w >>= return . (,) w . _renameInABC wOrigin wTarget in
+    mapM updC lClientsOrigin >>= \ lOriginClientUpdates ->
+    let updateOriginDef = Map.insert wOrigin mempty in
+    let updateTargetDef = if bOriginRedirectsToTarget then id else Map.insert wTarget abcOrigin in
+    let allUpdates = updateOriginDef $ updateTargetDef $ Map.fromList lOriginClientUpdates in
+
+    -- apply update and return
+    dictUnsafeUpdateWords allUpdates d >>= \ d' ->
+    return (Just d')
+    
 -- rename a word within context of ABC
 _renameInABC :: Word -> Word -> ABC -> ABC
 _renameInABC wo wt = ABC.rewriteTokens rwTok where
@@ -304,24 +352,7 @@ _renameInABC wo wt = ABC.rewriteTokens rwTok where
     rnTok t = if (t == t0) then tf else t
     rwTok t = [ABC.ABC_Tok (rnTok t)]
 
-
--- | Rename a word only if the target word is undefined and has no
--- clients (i.e. cannot rename into a hole). Otherwise returns Nothing.
-renameWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> Maybe dict
-renameWord wo wt d =
-    let bUndefinedTarget = L.null $ ABC.abcOps $ lookup d wt in
-    let bTargetHasNoClients = L.null $ wordClients d wt in
-    let bOkRename = bUndefinedTarget && bTargetHasNoClients in
-    if not bOkRename then Nothing else
-    Just $ unsafeRenameWord wo wt d
-
--- | Merge a word only if origin and target words have the same
--- definitions. Otherwise return Nothing.
-mergeWords :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> Maybe dict
-mergeWords wo wt d =
-    let bOkMerge = (lookup d wo) == (lookup d wt) in
-    if not bOkMerge then Nothing else
-    Just $ unsafeRenameWord wo wt d
+{-
 
 -- | Errors recognized by safeUpdateWords
 data InsertionError 
@@ -405,7 +436,7 @@ fc adj stack (x:xs) =
 _cyc :: (Eq a) => a -> [a] -> Cycle a
 _cyc a stack = L.dropWhile (/= a) $ L.reverse stack
 
-
+-}
     
     
 
