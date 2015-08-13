@@ -31,16 +31,21 @@ module Wikilon.Model
     , SecureHash
     , DictRLU(..), dictWordClients, dictWordClientsT
     , WordPrefix, DictSplitPrefix(..), dictSplitPrefixW
-    , DictUpdate(..), dictDeleteWord, dictDeleteWords
+    , DictUpdate(..)
+    , dictUpdateWord, dictUpdateWords
+    , dictDeleteWord, dictDeleteWords
     , dictRenameWord
 
     
     , module Wikilon.Time
     , matchWord, matchSimpleRedirect
+    , testForMalformedDef, testForCycle
     ) where
 
 import Control.Applicative
 import Control.Monad
+import qualified Control.Monad.State as State
+import Control.Monad.Trans (lift)
 import Data.Monoid
 import Data.Maybe
 import qualified Data.ByteString as BS
@@ -49,16 +54,19 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import Data.Map (Map)
 import qualified Data.Map as Map
--- import Data.Set (Set)
+import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.List as L
 
 import Awelon.ABC (ABC, Token)
 import qualified Awelon.ABC as ABC
 import Awelon.Word
+import Awelon.Text
 import qualified Awelon.Base16 as B16
 import Wikilon.Time
 import Wikilon.SecureHash
+import Wikilon.Dict.Text (isValidText)
+import Wikilon.Dict.Token (isValidToken)
 
 type BranchName = Word
 type Bytes = LazyUTF8.ByteString
@@ -278,7 +286,10 @@ class (DictView m) => DictUpdate m where
 dictDeleteWord :: (DictUpdate m) => Word -> Dict m -> m (Dict m)
 dictDeleteWord = dictDeleteWords . (:[])
 
--- | delete a list of words.
+-- | delete a list of words. Deleting words can break types and such,
+-- but doesn't break any of the basic properties that Wikilon requires.
+-- (E.g. deletion cannot introduce a cycle, add a bad word or text, etc..)
+-- So this is a lot faster than a safe word update.
 dictDeleteWords :: (DictUpdate m) => [Word] -> Dict m -> m (Dict m)
 dictDeleteWords = dictUnsafeUpdateWords . Map.fromList . withEmpties where
     withEmpties = flip L.zip (L.repeat mempty)
@@ -314,7 +325,8 @@ matchSimpleRedirect abc = case ABC.abcOps abc of
 -- If a rename condition isn't met, Nothing is returned. On success,
 -- the origin word is undefined, the target word has the origin's 
 -- definition (unless the origin was a redirect to the target, in which
--- case the target's definition is not modified), and the 
+-- case the target's definition is not modified), and all references
+-- to the origin word now directly reference the target.
 -- 
 dictRenameWord :: (DictRLU m, DictUpdate m) => Word -> Word -> Dict m -> m (Maybe (Dict m))
 dictRenameWord wOrigin wTarget d =
@@ -333,7 +345,7 @@ dictRenameWord wOrigin wTarget d =
     let bSafeRename = bNewTarget || bMatchDefs || bOriginRedirectsToTarget || bTargetRedirectsToOrigin in
     if not bSafeRename then return Nothing else
 
-    -- compute the update, including updates for all clients of the origin word
+    -- compute the update, including references to the origin word
     let updC w = dictLookup d w >>= return . (,) w . _renameInABC wOrigin wTarget in
     mapM updC lClientsOrigin >>= \ lOriginClientUpdates ->
     let updateOriginDef = Map.insert wOrigin mempty in
@@ -352,46 +364,46 @@ _renameInABC wo wt = ABC.rewriteTokens rwTok where
     rnTok t = if (t == t0) then tf else t
     rwTok t = [ABC.ABC_Tok (rnTok t)]
 
-{-
-
--- | Errors recognized by safeUpdateWords
-data InsertionError 
-    = BadWord  !Word         -- word is not valid according to heuristics
-    | BadToken !Token !Word  -- invalid {token} used within word's definition
-    | BadText  !Text !Word   -- rejecting text on heuristic constraints
-    | Cycle    !(Cycle Word) -- a cycle was discovered
-    | DupWord  !Word         -- word appears multiple times in request
+data InsertionError
+    = BadWord !Word         -- doesn't meet heuristic constraints
+    | BadToken !Token !Word -- Wikilon permits annotations, links, value sealers
+    | BadText !Text !Word   -- limited against control characters, U+FFFD
+    | Cycle !(Cycle Word)   -- no cycles allowed!
+    | DupWord !Word         -- you tried to define a word twice
     deriving (Eq, Ord)
 
 instance Show InsertionError where
     show (BadWord w)    = "malformed word: " ++ show w
     show (BadToken t w) = "rejecting token " ++ show (ABC.ABC_Tok t) ++ " in " ++ show w
-    show (Cycle c)     = "cyclic dependencies: " ++ show c
+    show (Cycle c)      = "cyclic dependencies: " ++ show c
     show (BadText t w)  = "in word" ++ show w ++ " malformed text: " ++ show (ABC.ABC_Text t)
     show (DupWord w)    = "word " ++ show w ++ " is assigned more than once"
 
--- | Update words after testing for the most obvious, cheaply discovered
--- errors. Normal updates to a dictionary should be performed via this
--- function to guard against cycles and so on. In case of errors, this
--- tries to return many errors at once.
+-- | Safely update a single word.
+dictUpdateWord :: DictUpdate m => Word -> ABC -> Dict m -> m (Either [InsertionError] (Dict m))
+dictUpdateWord w abc = dictUpdateWords [(w,abc)]
+
+-- | Safely update a collection of words. This is 'safe' in the sense that
+-- it prevents a certain subset of errors: cycles, malformed words, limits
+-- on texts and tokens. As many errors are reported as feasible. 
 --
--- Note that leaving words undefined is not considered an error at this
--- layer. (And we'd have difficulty distinguishing a valid definition
--- anyway.) Undefined words shall be treated as holes in later stage.
-updateWords :: (DictUpdate dict) => [(Word, ABC)] -> dict -> Either [InsertionError] dict
-updateWords [] d = Right d
-updateWords l d =
+-- Higher levels of automatic curation are feasible, but will probably require
+-- a long-running background computation (e.g. to automate compilation, tests,
+-- typechecking). So those will probably be handled by having two branches: 
+-- the curated branch only updated after the maintenance branch has validated.
+--
+dictUpdateWords :: (DictUpdate m) => [(Word, ABC)] -> Dict m -> m (Either [InsertionError] (Dict m))
+dictUpdateWords [] d = return (Right d) -- trivially no changes
+dictUpdateWords l d =
     let lWords = fmap fst l in
     let lDupErrors = fmap DupWord $ findDups $ lWords in
     let lMalformed = L.concatMap (uncurry testForMalformedDef) l in
-    let d' = unsafeUpdateWords (Map.fromList l) d in
-    let lCycleErrors = maybeToList $ fmap Cycle $ testForCycle lWords d' in
+    dictUnsafeUpdateWords (Map.fromList l) d >>= \ d' ->
+    testForCycle lWords d' >>= \ mbCycle ->
+    let lCycleErrors = maybeToList (fmap Cycle mbCycle) in
     let lErrors = lDupErrors ++ lMalformed ++ lCycleErrors in
-    if L.null lErrors then Right d' else Left lErrors
-
-updateWord :: (DictUpdate dict) => Word -> ABC -> dict -> Either [InsertionError] dict
-updateWord w abc = updateWords [(w,abc)]
-
+    return $ if L.null lErrors then Right d' else Left lErrors
+ 
 findDups :: (Eq a) => [a] -> [a]
 findDups = f [] where
     f r (x:xs) =
@@ -399,7 +411,7 @@ findDups = f [] where
         if bNewDup then f (x:r) xs else f r xs
     f r [] = L.reverse r
 
--- | Validate constraints on internal tokens and words.
+-- | Validate heuristic constraints on words and bytecode.
 testForMalformedDef :: Word -> ABC -> [InsertionError]
 testForMalformedDef w = (malformedWord ++) . abcErrors where
     malformedWord = if isValidWord w then [] else [BadWord w]
@@ -416,27 +428,23 @@ type Cycle a = [a]
 -- | Search under a given list of words for cycles. If such a cycle
 -- exists, this function certainly finds it. However, I won't attempt 
 -- to return an exhaustive set of cycles. 
-testForCycle :: (DictView dict) => [Word] -> dict -> Maybe (Cycle Word)
-testForCycle ws d = flip State.evalState mempty $ fc (wordDeps d) [] ws
+testForCycle :: (DictView m) => [Word] -> Dict m -> m (Maybe (Cycle Word))
+testForCycle ws d = flip State.evalStateT mempty $ fc (dictWordDeps d) [] ws
 
--- | generic cycle discovery given an adjacency list and an initial
--- frontier.
-fc :: (Ord a) => (a -> [a]) -> [a] -> [a] -> State.State (Set a) (Maybe (Cycle a))
+-- generic, monadic, directed cycle detection from a list of initial points
+fc :: (Ord a, Monad m) => (a -> m [a]) -> [a] -> [a] -> State.StateT (Set a) m (Maybe (Cycle a))
 fc _ _ [] = return Nothing
-fc adj stack (x:xs) =
-    State.gets (Set.member x) >>= \ bSafe ->
-    if bSafe then fc adj stack xs else
-    if L.elem x stack then return $ Just (_cyc x stack) else
-    fc adj (x:stack) (adj x) >>= \ cycleUnderX ->
+fc readAdj stack (x:xs) =
+    let continue = fc readAdj stack xs in
+    State.gets (Set.member x) >>= \ bAlreadyTested ->
+    if bAlreadyTested then continue else
+    if L.elem x stack then return (Just (_cyc x stack)) else
+    lift (readAdj x) >>= fc readAdj (x:stack) >>= \ cycleUnderX ->
     case cycleUnderX of
-        Nothing -> State.modify (Set.insert x) >> fc adj stack xs
-        cycleFound -> return cycleFound 
+        Nothing -> State.modify (Set.insert x) >> continue
+        _ -> return cycleUnderX
     
 -- return just the cycle found (implicitly closed)
 _cyc :: (Eq a) => a -> [a] -> Cycle a
 _cyc a stack = L.dropWhile (/= a) $ L.reverse stack
-
--}
-    
-    
 
