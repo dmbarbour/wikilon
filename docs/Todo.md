@@ -44,6 +44,8 @@ PRIORITY TODO:
 
 TODO:
 
+* improve Data.VCache.Trie.toKey (70% alloc, 16% time)
+
 * improve evaluation performance!
  * old ao/aoi evaluation is 3x-10x faster depending on test
  * may need to profile current interpreter

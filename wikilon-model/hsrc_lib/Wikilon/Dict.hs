@@ -72,9 +72,7 @@ module Wikilon.Dict
     , updateWords
     , renameWord
     , InsertionError(..)
-    , Cycle, testForCycle
-    , testForMalformedDef
-    , matchWordLink, matchSimpleRedirect
+    , Cycle
     , module Wikilon.Dict.Word
     ) where
 
@@ -305,11 +303,11 @@ transitiveClientsList d = L.reverse . accum mempty where
             else accum v (lClients ++ ws)
 
 -- | Update definitions in a dictionary. Note that no validation
--- logic is performed by these operations. Any validation must be
--- performed in a wrapper function.
+-- logic is performed by these operations, and the update may diverge
+-- or fail silently in case of cycles or other problem cases.
 --
--- Deleting a dictionary word is equivalent to updating a definition
--- to the empty ABC program.
+-- Clients should instead use `updateWord(s)`, which adds the basic
+-- safety checks, or specialized update functions like delete, rename.
 class (DictView dict) => DictUpdate dict where
     unsafeUpdateWord :: Word -> ABC -> dict -> dict
 
@@ -373,7 +371,7 @@ renameWord wOrigin wTarget d =
     let bSafeUpdate = bNewTarget || bMatchDefs || bTargetRedirectsToOrigin || bOriginRedirectsToTarget in
     if not bSafeUpdate then Nothing else
 
-    -- compute the update
+    -- compute the update (which we know by construction to be safe)
     let updateOrigin = Map.insert wOrigin mempty in
     let updateTarget = if bOriginRedirectsToTarget then id else Map.insert wTarget abcOrigin in
     let fnUpd wClient = (,) wClient $ _renameInABC wOrigin wTarget (lookup d wClient) in
@@ -408,23 +406,28 @@ instance Show InsertionError where
     show (DupWord w)    = "word " ++ show w ++ " is assigned more than once"
 
 -- | Update words after testing for the most obvious, cheaply discovered
--- errors. Normal updates to a dictionary should be performed via this
--- function to guard against cycles and so on. In case of errors, this
--- tries to return many errors at once.
+-- errors (cf InsertionError). Normal updates to a dictionary should be
+-- performed via this function to guard against cycles and so on. In case
+-- of errors, this tries to return many errors at once.
 --
 -- Note that leaving words undefined is not considered an error at this
--- layer. (And we'd have difficulty distinguishing a valid definition
--- anyway.) Undefined words shall be treated as holes in later stage.
+-- level. Undefined words are 'holes' in the dictionary, potentially useful
+-- for assisted, type-driven, or top-down development.
 updateWords :: (DictUpdate dict) => [(Word, ABC)] -> dict -> Either [InsertionError] dict
 updateWords [] d = Right d
 updateWords l d =
     let lWords = fmap fst l in
     let lDupErrors = fmap DupWord $ findDups $ lWords in
     let lMalformed = L.concatMap (uncurry testForMalformedDef) l in
-    let d' = unsafeUpdateWords (Map.fromList l) d in
-    let lCycleErrors = maybeToList $ fmap Cycle $ testForCycle lWords d' in
-    let lErrors = lDupErrors ++ lMalformed ++ lCycleErrors in
-    if L.null lErrors then Right d' else Left lErrors
+
+    let updMap = Map.fromList l in
+    let adj w = maybe (wordDeps d w) abcWords (Map.lookup w updMap) in
+    let mbCycle = State.evalState (fc adj [] lWords) mempty in
+    let lCycleErrors = maybeToList $ fmap Cycle $ mbCycle in
+    let lErrors = lDupErrors <> lMalformed <> lCycleErrors in
+    let bHasErrors = not $ L.null lErrors in
+    if bHasErrors then Left lErrors else
+    Right (unsafeUpdateWords updMap d)
 
 updateWord :: (DictUpdate dict) => Word -> ABC -> dict -> Either [InsertionError] dict
 updateWord w abc = updateWords [(w,abc)]
@@ -447,14 +450,8 @@ testForMalformedDef w = (malformedWord ++) . abcErrors where
     opError _ = []
 
 -- | A cycle is expressed as a chain of dependencies that is implicitly
--- closed (i.e. no words are repeated). Cycles must be non-empty. 
+-- closed (i.e. no words are repeated). Cycles are non-empty. 
 type Cycle a = [a]
-
--- | Search under a given list of words for cycles. If such a cycle
--- exists, this function certainly finds it. However, I won't attempt 
--- to return an exhaustive set of cycles. 
-testForCycle :: (DictView dict) => [Word] -> dict -> Maybe (Cycle Word)
-testForCycle ws d = flip State.evalState mempty $ fc (wordDeps d) [] ws
 
 -- | generic cycle discovery given an adjacency list and an initial
 -- frontier.
