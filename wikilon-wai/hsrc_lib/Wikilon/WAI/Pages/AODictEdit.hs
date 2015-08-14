@@ -51,13 +51,8 @@ import Wikilon.WAI.Routes
 import Wikilon.WAI.Conflicts
 import Wikilon.WAI.RecvFormPost
 import qualified Wikilon.WAI.RegexPatterns as Regex
-import Wikilon.Store.Branch (BranchName, Branch)
-import qualified Wikilon.Store.Branch as Branch
 import Wikilon.Dict.Word
-import Wikilon.Store.Dict (Dict)
-import qualified Wikilon.Store.Dict as Dict
 import qualified Wikilon.Dict.AODict as AODict
-import Wikilon.Store.Root
 import Wikilon.Time
 
 

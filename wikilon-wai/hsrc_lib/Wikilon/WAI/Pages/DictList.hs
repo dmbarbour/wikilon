@@ -36,11 +36,6 @@ import Wikilon.WAI.RecvFormPost
 import Wikilon.WAI.Routes
 import qualified Wikilon.WAI.RegexPatterns as Regex
 
-import Wikilon.Store.Branch (BranchName)
-import qualified Wikilon.Store.Branch as Branch
-import qualified Wikilon.Store.Dict as Dict
-import Wikilon.Store.Root
-
 -- | Okay, so our first resource is a collection of dictionaries.
 -- There aren't any whole-collection updates at this layer, but
 -- there is some ability to browse a collection.

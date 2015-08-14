@@ -37,12 +37,6 @@ import Wikilon.WAI.Pages.AODict
 import Wikilon.WAI.Pages.AODictEdit
 import Wikilon.WAI.Pages.DictWord
 import Wikilon.WAI.Pages.REPL
-
-import qualified Wikilon.Store.Dict as Dict
-import Wikilon.Store.Branch (BranchName)
-import qualified Wikilon.Store.Branch as Branch
-import Wikilon.Store.Root
-
         
 -- The full 'dictionary resource' will include access to
 -- words, histories, issues, subscriptions, etc.. Since

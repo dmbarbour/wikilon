@@ -54,6 +54,7 @@ Library
 
     Data.VCache.LoB
 
+    Wikilon.Store.Model
     Wikilon.Store.Time
     Wikilon.Store.Dict
     Wikilon.Store.Dict.Type

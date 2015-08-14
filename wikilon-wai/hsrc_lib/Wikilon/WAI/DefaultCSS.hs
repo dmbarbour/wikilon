@@ -10,7 +10,6 @@ import Data.Monoid
 import qualified Network.HTTP.Types as HTTP
 import qualified Network.Wai as Wai
 import Wikilon.WAI.Utils
-import Wikilon.Store.Root
 
 resourceDefaultCSS :: WikilonApp
 resourceDefaultCSS = app where
@@ -20,7 +19,7 @@ resourceDefaultCSS = app where
         let status = HTTP.ok200 in
         let headers = [textCSS] in
         -- for the moment using a file response for fast editing
-        let path = (wikilon_home . wikilon_model) w <> "css" in
+        let path = wikilon_home w <> "css" in
         k $ Wai.responseFile status headers path Nothing
 
 -- Note: I might later push the CSS into the VCache or model to avoid

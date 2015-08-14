@@ -4,9 +4,9 @@
 --
 -- Using Network.Wai.Route to easily cover common cases.
 module Wikilon.WAI 
-    ( wikilonWaiConf
-    , wikilonWaiApp
+    ( wikilonWaiApp
     , wikilonRoutes
+    , module Wikilon.WAI.Types
     ) where
 
 import Control.Arrow (first)
@@ -24,9 +24,6 @@ import Wikilon.WAI.Routes
 import Wikilon.WAI.Pages
 import Wikilon.WAI.DefaultCSS
 import Wikilon.WAI.Utils (plainText, noCache, eServerError, eNotFound)
-
-import Wikilon.Store.Branch (BranchName)
-import Wikilon.Store.Root
 
 -- | List of routes for the Wikilon web service.
 wikilonRoutes :: [(Route, WikilonApp)]
@@ -79,13 +76,6 @@ wikilonRoutes = fmap (first UTF8.fromString) $
     ,("/css", resourceDefaultCSS)
     ]
 
-wikilonWaiConf :: ByteString -> BranchName -> WikilonStore -> Wikilon
-wikilonWaiConf _httpRoot _master _model = Wikilon
-    { wikilon_httpRoot = wrapSlash _httpRoot
-    , wikilon_master = _master
-    , wikilon_model = _model
-    }
-
 -- | The primary wikilon web service. Any exceptions will be logged
 -- for administrators and return a 500 response.
 wikilonWaiApp :: Wikilon -> Wai.Application
@@ -123,7 +113,7 @@ baseWikilonApp w rq k =
 -- This does add some access costs, but those should be marginal.
 --
 remaster :: BranchName -> Wikilon -> Wai.Application
-remaster dictPath w rq k =
+remaster (Word dictPath) w rq k =
     -- "d/fooPath/wiki/" adds 8 + length "fooPath" to old prefix. 
     -- We must urlDecode "fooPath" to recover the dictionary name.
     let prefixLen = 8 + BS.length dictPath + BS.length (wikilon_httpRoot w) in

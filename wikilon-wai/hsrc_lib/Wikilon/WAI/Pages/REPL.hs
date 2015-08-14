@@ -65,9 +65,6 @@ import Wikilon.WAI.Utils
 import Wikilon.WAI.ClawUtils
 import Wikilon.WAI.Routes
 import Wikilon.WAI.RecvFormPost 
-import Wikilon.Store.Root
-import qualified Wikilon.Store.Dict as Dict
-import qualified Wikilon.Store.Branch as Branch
 
 -- | stateless REPL form for claw code.
 formDictClawRepl :: Eval.Quota -> Branch.BranchName -> LazyUTF8.ByteString -> HTML

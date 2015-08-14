@@ -36,10 +36,6 @@ Library
     , vcache-trie (>= 0.1.1)
     , wikilon-abc
     , wikilon-model
-    
-    -- NOTE: an important goal is to remove the dependency on wikilon-store
-    -- such that we instead depend only on the abstract AVM-based model.
-    , wikilon-store
 
     , mtl
 

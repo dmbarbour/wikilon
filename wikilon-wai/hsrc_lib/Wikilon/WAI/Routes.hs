@@ -53,10 +53,7 @@ import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
-
 import Wikilon.WAI.Utils
-import Wikilon.Store.Branch (BranchName)
-import Wikilon.Dict.Word
 
 type Route = BS.ByteString
 
@@ -68,16 +65,16 @@ toRoute = LBS.toStrict . BB.toLazyByteString
 
 -- | URI associated with a holistic dictionary
 uriDict :: BranchName -> Route
-uriDict d = toRoute $ dictURIBuilder d
+uriDict = toRoute . dictURIBuilder
 
 -- Note: I'm going to use a base tag for wikilon_httpRoot
 --  so all paths used within Wikilon can be relative to a common root.
 dictURIBuilder :: BranchName -> BB.Builder
-dictURIBuilder d = BB.byteString "d/" <> HTTP.urlEncodeBuilder False d
+dictURIBuilder d = BB.byteString "d/" <> HTTP.urlEncodeBuilder False (unWord d)
 
 -- | link to a dictionary branch by name, using name as the link
 hrefDict :: BranchName -> HTML
-hrefDict d = href (uriDict d) ! A.class_ "refDict" $ H.unsafeByteString d
+hrefDict d = href (uriDict d) ! A.class_ "refDict" $ H.unsafeByteString (unWord d)
 
 -- | Link to a browseable word listing for a dictionary.
 uriDictWords :: BranchName -> Route
@@ -103,7 +100,7 @@ dictCap :: Captures -> Maybe BranchName
 dictCap caps =
     L.lookup "d" caps >>= \ d -> 
     if not (isValidWord (Word d)) then mzero else
-    return d
+    return (Word d)
 
 type WikilonDictApp = Wikilon -> BranchName -> Wai.Application
 dictApp :: WikilonDictApp -> WikilonApp
@@ -174,11 +171,6 @@ uriAODef, uriAODefEdit :: BranchName -> Word -> Route
 uriAODef d w = toRoute $ wordURIBuilder d w <> BB.stringUtf8 "/aodef"
 uriAODefEdit d w = toRoute $ wordURIBuilder d w <> BB.stringUtf8 "/aodef.edit"
 
-
-
-
-
-
 -- | Print a list of words under a nav tag, with a
 -- simple header. Print nothing if the list is empty.
 navWords :: String -> BranchName -> [Word] -> HTML
@@ -195,7 +187,6 @@ dictWordCap cap =
     L.lookup "w" cap >>= \ w ->
     if not (isValidWord (Word w)) then mzero else
     return (d, Word w)
-
 
 type WikilonDictWordApp = Wikilon -> BranchName -> Word -> Wai.Application
 dictWordApp :: WikilonDictWordApp -> WikilonApp

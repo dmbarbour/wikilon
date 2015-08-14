@@ -44,26 +44,24 @@ PRIORITY TODO:
 
 TODO:
 
-* improve Data.VCache.Trie.toKey (70% alloc, 16% time)
+
+* given WikilonStore, provide a ModelRunner
+* model admin, logs, stats, geneology, issue trackers, etc. as dictionaries?
+ * this might simplify common presentation and extension models
+ * basically, uses dictionaries as additional filesystems
+ * via auxilliary dictionary?
+* improve Data.VCache.Trie.toKey performance
 
 * improve evaluation performance!
  * old ao/aoi evaluation is 3x-10x faster depending on test
- * may need to profile current interpreter
- * may need to load more into memory at once
- * may need to tune how quotas are handled
+ * profile current interpreter
+ * performance variant for ABC
+ * partial evaluation, interning, memoization, etc.
 
- * improve basic ABC evaluator performance
-  * quoted values?
-  * fast cons?
-  * fast 'copyable'?
- * compile to performance variant for ABC
- * heavy partial evaluation, interning, etc.
- * potential caching or memoization annotations
-
-* nicer rendering for output blocks
- * preserve `{%foo}` tokens for block values
- * rendering of statically computed objects
- * may need to perform escape-analysis on blocks
+* preserve `{%foo}` etc. links in block values, if feasible
+ * for presentation to user, instead of massive floods of bytecode
+ * may need to perform escape-analysis on blocks?
+ * may need to build as feature for performance variant of ABC.
 
 * separate data model from web service
  * generalize caching for resources

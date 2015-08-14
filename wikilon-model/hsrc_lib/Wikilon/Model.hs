@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, FlexibleContexts, ExistentialQuantification #-}
+{-# LANGUAGE TypeFamilies, FlexibleContexts, ExistentialQuantification, Rank2Types #-}
 
 -- | The Wikilon Model is an abstract interface for Wikilon. This
 -- API supports atomic groups of confined queries and updates with
@@ -24,34 +24,17 @@
 --
 module Wikilon.Model
     ( WikilonModel
-    , ModelAction(..)
-    , ModelAuth(..)
     , ModelRunner
     , BranchName, Branch, Dict
     , BranchingDictionary(..), branchSnapshot
+    , GlobalErrorLog(..), logSomeException, logException
     , module Wikilon.Dict
     , module Wikilon.Time
-
-    {-
-    , ABC, Token, Word, Bytes
-    , DictView(..)
-    , dictWordDeps, dictWordDepsT, abcWords
-    , SecureHash
-    , DictRLU(..), dictWordClients, dictWordClientsT
-    , WordPrefix, DictSplitPrefix(..), dictSplitPrefixW
-    , DictUpdate(..)
-    , dictUpdateWord, dictUpdateWords
-    , dictDeleteWord, dictDeleteWords
-    , dictRenameWord
-    , matchWord, matchSimpleRedirect
-    , testForMalformedDef, testForCycle
-    -}
-
-    
     ) where
 
 import Control.Monad
 import Control.Applicative
+import Control.Exception
 import Wikilon.Time
 import Wikilon.SecureHash
 import Wikilon.Dict 
@@ -63,22 +46,14 @@ class ( Functor m
       , Applicative m
       , Monad m
       , BranchingDictionary m
+      , GlobalErrorLog m
       ) => WikilonModel m
 
--- | A model action is generic to the machine and monad type, m. It
--- corresponds to a free monad with a limited set of available 
--- behaviors. In general, an action will be computed atomically,
--- though we may mark some tasks for background processing.
-data ModelAction a = forall m . WikilonModel m => ModelAction (m a)
-
--- | I'll eventually need a good model for authority. I'd prefer to
--- use object capability model, but that will probably coexist with
--- user-level authentication (e.g. such that users can create caps
--- to share authority).
-data ModelAuth = Guest
-
--- | We'll ultimately run our model actions via the IO monad.
-type ModelRunner a = ModelAuth -> ModelAction a -> IO a
+-- | Ultimately, we operate on an *abstract* model m, with an arbitrary
+-- query result of type `a`. In a distributed system, we'd further need
+-- to limit ourselves to serializable monads and results, e.g. modeling
+-- them using Awelon bytecode.
+type ModelRunner = WikilonModel m => (m a -> IO a)
 
 -- | Wikilon has some opaque value types, which might be understood
 -- similarly to file handles or ADTs. Very large dictionaries may be
@@ -115,4 +90,28 @@ class (Dictionary (Dict m)) => BranchingDictionary m where
 -- | Obtain the snapshot of a dictionary at a specific time. 
 branchSnapshot :: (BranchingDictionary m, Monad m) => Branch m -> T -> m (Dict m) 
 branchSnapshot b t = liftM fst $ branchHistory b t t 
+
+-- | A global error log is not the best way to report errors, but it
+-- is familiar and reasonably convenient. I really need something 
+-- closer to event logs, issue trackers, and per-branch variants.
+--
+-- It might be more convenient, long term, to model errors in an
+-- auxilliary dictionary rather than a log.
+class (Monad m) => GlobalErrorLog m where
+    logErrorMessage :: String -> m ()
+
+-- | catchall exceptions 
+logSomeException :: GlobalErrorLog m => SomeException -> m ()
+logSomeException = logException
+
+-- | log a generic error message
+logException :: (Exception e, GlobalErrorLog m) => e -> m ()
+logException = logErrorMessage . ("Exception: " ++) . show
+
+
+-- TODO
+--  abstract support for caching, memoization, interning
+--  abstract internal model of Awelon Bytecode (`WBC m`?)
+--  event logs, issue tracking, etc. (perhaps modeled as dictionaries?)
+--  hmac support (long term and per-session?)
 

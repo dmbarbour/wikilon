@@ -40,6 +40,10 @@ data WikilonStore = WikilonStore
 --  event logs globally
 --  event logs for dictionaries and wikilon
 
+-- TODO: 
+-- given WikilonStore, provide a ModelRunner.
+-- consider exporting logs, stats, issue trackers, etc. as a dictionary
+
 loadWikilonStore :: VCache -> FilePath -> IO WikilonStore
 loadWikilonStore vc _home = do
     _loadCount <- incPVar =<< loadRootPVarIO vc "loadCount" 0

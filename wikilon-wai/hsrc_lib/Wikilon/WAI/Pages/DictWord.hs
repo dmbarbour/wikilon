@@ -30,9 +30,6 @@ import qualified Awelon.ABC as ABC
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
-import qualified Wikilon.Store.Dict as Dict
-import qualified Wikilon.Store.Branch as Branch
-import Wikilon.Store.Root
 
 import Wikilon.WAI.Pages.DictWord.Rename
 import Wikilon.WAI.Pages.DictWord.AODef

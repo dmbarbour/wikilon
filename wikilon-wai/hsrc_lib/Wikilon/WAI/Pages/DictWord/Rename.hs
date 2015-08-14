@@ -23,13 +23,6 @@ import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
 import Wikilon.WAI.RecvFormPost
 import qualified Wikilon.WAI.RegexPatterns as Regex
-import qualified Wikilon.Store.Dict as Dict
-import Wikilon.Store.Branch (BranchName)
-import qualified Wikilon.Store.Branch as Branch
-import Wikilon.Store.Root
-
-
-
 
 -- a simple form to rename a word.
 formDictWordRename :: BranchName -> Word -> HTML

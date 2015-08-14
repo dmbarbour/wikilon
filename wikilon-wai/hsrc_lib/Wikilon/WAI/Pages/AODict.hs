@@ -34,13 +34,8 @@ import qualified Codec.Compression.GZip as GZip
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
 import Wikilon.WAI.RecvFormPost
-import Wikilon.Store.Branch (BranchName)
-import qualified Wikilon.Store.Branch as Branch
 import Wikilon.Dict.Word
 import Wikilon.Dict.Text (listTextConstraintsForHumans)
-import qualified Wikilon.Store.Dict as Dict
-import qualified Wikilon.Dict.AODict as AODict
-import Wikilon.Store.Root
 import Wikilon.Time
 
 -- | endpoint that restricts media-type to just mediaTypeAODict
