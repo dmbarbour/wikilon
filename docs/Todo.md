@@ -45,8 +45,11 @@ PRIORITY TODO:
 TODO:
 
 * improve evaluation performance!
- * the old ao/aoi utils are perhaps 3x-10x faster
- * current evaluator is too simplistic
+ * old ao/aoi evaluation is 3x-10x faster depending on test
+ * may need to profile current interpreter
+ * may need to load more into memory at once
+ * may need to tune how quotas are handled
+
  * improve basic ABC evaluator performance
   * quoted values?
   * fast cons?
@@ -56,7 +59,7 @@ TODO:
  * potential caching or memoization annotations
 
 * nicer rendering for output blocks
- * somehow preserve `{%foo}` tokens and similar
+ * preserve `{%foo}` tokens for block values
  * rendering of statically computed objects
  * may need to perform escape-analysis on blocks
 

@@ -50,7 +50,8 @@
 -- and other higher validation is left to background processes.
 --
 module Wikilon.Dict
-    ( DictView(..)
+    ( Dictionary
+    , DictView(..)
     , wordsInDict
     , wordDeps, abcWords
     , transitiveDepsList
@@ -65,16 +66,15 @@ module Wikilon.Dict
     , wordClients
     , transitiveClientsList
     , DictUpdate(..)
-    , unsafeRenameWord
     , deleteWord
     , deleteWords
     , updateWord
     , updateWords
     , renameWord
-    , mergeWords
     , InsertionError(..)
     , Cycle, testForCycle
     , testForMalformedDef
+    , matchWordLink, matchSimpleRedirect
     , module Wikilon.Dict.Word
     ) where
 
@@ -86,8 +86,8 @@ import qualified Data.List as L
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
-import Data.Map (Map)
-import qualified Data.Map as Map
+import Data.Map.Lazy (Map)
+import qualified Data.Map.Lazy as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Control.Monad.State as State
@@ -102,6 +102,14 @@ import Wikilon.SecureHash
 import Wikilon.Dict.Word 
 import Wikilon.Dict.Text
 import Wikilon.Dict.Token
+
+-- | All of Wikilon's dictionary requirements
+class ( DictView dict
+      , DictSplitPrefix dict
+      , DictRLU dict
+      , DictUpdate dict
+      ) => Dictionary dict
+
 
 -- | Basic view of a dictionary. Note that an undefined word will
 -- return the empty ABC string (mempty). 
@@ -318,28 +326,62 @@ deleteWords :: (DictUpdate dict) => [Word] -> dict -> dict
 deleteWords = unsafeUpdateWords . Map.fromList . withEmpties where
     withEmpties = flip L.zip $ L.repeat mempty
 
--- | Rename a word in a dictionary, affecting not just that word
--- but also all the words that reference it. Note: no validation
--- is performed, and this will overwrite the second word. In general,
--- it is safest to rename under one of two conditions:
+
+-- | Match bytecode of form `{%foo}`, return word foo
+matchWordLink :: ABC -> Maybe Word
+matchWordLink abc = case ABC.abcOps abc of
+    [ABC.ABC_Tok t] -> case BS.uncons t of
+        Just (37,w) -> return (Word w)
+        _ -> Nothing
+    _ -> Nothing
+
+-- | Match bytecode of the form `[{%foo}][]`; return word foo. This
+-- corresponds to a simple redirect to word foo, and has the same
+-- functional behavior as foo. (Some non-functional behaviors may 
+-- differ, e.g. secure hash, redirects at presentation layer.)
+matchSimpleRedirect :: ABC -> Maybe Word
+matchSimpleRedirect abc = case ABC.abcOps abc of
+    [ABC.ABC_Block cmd, ABC.ABC_Block cc] | (cc == mempty) -> matchWordLink cmd 
+    _ -> Nothing
+
+-- | Rename a word in a dictionary without modifying its behavior.
+-- This will succeed only under one of the following conditions:
+--   
+--   1. if the target word is fresh (undefined, unused)
+--   2. if target and origin have the same definition (merge)
+--   3. if one of the words is a simple redirect to the other
 --
---   1. the target word is undefined and unused (cf. renameWord)
---   2. target and origin share same definition (cf. mergeWords)
+-- A simple redirect is a definition of the form `[{%foo}][]`, which
+-- conveniently also corresponds to claw code containing a single word.
 --
--- In these conditions, you can be sure that clients of a word are not
--- impacted, do not need to be retested or recompiled, no cycles are
--- introduced, etc.. Otherwise, you must treat the rename as an update
--- to both the origin and target words.
+-- If a rename condition isn't met, Nothing is returned. On success,
+-- the origin word is undefined, the target word has the origin's 
+-- definition (unless the origin was a redirect to the target), and 
+-- all clients of origin are modified to use target instead.
 -- 
-unsafeRenameWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> dict
-unsafeRenameWord wo wt d =
-    if (wo == wt) then d else -- trivially, no change
-    let lC = wordClients d wo in -- client of wo, for rewrite wo→wt
-    let fnUpdClient = _renameInABC wo wt . lookup d in -- rename wo to wt
-    flip unsafeUpdateWords d $ 
-        Map.insert wt (lookup d wo) $                 -- overwrite wt
-        Map.insert wo mempty $                        -- delete wo
-        Map.fromList $ L.zip lC (fmap fnUpdClient lC) -- update clients of wo
+renameWord :: (DictRLU dict, DictUpdate dict) => Word -> Word -> dict -> Maybe dict
+renameWord wOrigin wTarget d =
+    if (wOrigin == wTarget) then return d else -- trivial rename
+
+    -- test safe rename conditions
+    let abcOrigin = lookup d wOrigin in
+    let abcTarget = lookup d wTarget in
+    let bNewTarget = (mempty == abcTarget) && (L.null (wordClients d wTarget)) in
+    let bMatchDefs = (abcOrigin == abcTarget) in
+    let bOriginRedirectsToTarget = maybe False (== wTarget) (matchSimpleRedirect abcOrigin) in
+    let bTargetRedirectsToOrigin = maybe False (== wOrigin) (matchSimpleRedirect abcTarget) in
+    let bSafeUpdate = bNewTarget || bMatchDefs || bTargetRedirectsToOrigin || bOriginRedirectsToTarget in
+    if not bSafeUpdate then Nothing else
+
+    -- compute the update
+    let updateOrigin = Map.insert wOrigin mempty in
+    let updateTarget = if bOriginRedirectsToTarget then id else Map.insert wTarget abcOrigin in
+    let fnUpd wClient = (,) wClient $ _renameInABC wOrigin wTarget (lookup d wClient) in
+    let updateClients = Map.fromList $ fmap fnUpd (wordClients d wOrigin) in
+    let allUpdates = updateOrigin $ updateTarget $ updateClients in
+
+    -- apply the update
+    return (unsafeUpdateWords allUpdates d)
 
 -- rename a word within context of ABC
 _renameInABC :: Word -> Word -> ABC -> ABC
@@ -348,25 +390,6 @@ _renameInABC wo wt = ABC.rewriteTokens rwTok where
     tf = BS.cons 37 $ wordToUTF8 wt
     rnTok t = if (t == t0) then tf else t
     rwTok t = [ABC.ABC_Tok (rnTok t)]
-
-
--- | Rename a word only if the target word is undefined and has no
--- clients (i.e. cannot rename into a hole). Otherwise returns Nothing.
-renameWord :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> Maybe dict
-renameWord wo wt d =
-    let bUndefinedTarget = L.null $ ABC.abcOps $ lookup d wt in
-    let bTargetHasNoClients = L.null $ wordClients d wt in
-    let bOkRename = bUndefinedTarget && bTargetHasNoClients in
-    if not bOkRename then Nothing else
-    Just $ unsafeRenameWord wo wt d
-
--- | Merge a word only if origin and target words have the same
--- definitions. Otherwise return Nothing.
-mergeWords :: (DictUpdate dict, DictRLU dict) => Word -> Word -> dict -> Maybe dict
-mergeWords wo wt d =
-    let bOkMerge = (lookup d wo) == (lookup d wt) in
-    if not bOkMerge then Nothing else
-    Just $ unsafeRenameWord wo wt d
 
 -- | Errors recognized by safeUpdateWords
 data InsertionError 

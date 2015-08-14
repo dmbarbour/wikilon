@@ -87,8 +87,7 @@ recvWordRename pp
         readPVar dicts >>= \ bset ->
         let b = Branch.lookup' dn bset in
         let d = Branch.head b in
-        let tryRename = Dict.renameWord wo wt d <|> Dict.mergeWords wo wt d in
-        case tryRename of
+        case Dict.renameWord wo wt d of
             Nothing -> 
                 let status = HTTP.conflict409 in
                 let headers = [textHtml, noCache] in
@@ -102,11 +101,9 @@ recvWordRename pp
                         H.h1 title
                         H.p $ H.strong "origin: " <> " " <> hrefDictWord dn wo
                         H.p $ H.strong "target: " <> " " <> hrefDictWord dn wt
-                        H.p "Rename failed due to distinct definition of target. For\n\
-                            \renaming to succeed, the target word must be undefined\n\
-                            \and unused, or byte-for-byte identical to the definition\n\
-                            \at origin.\n\
-                            \"
+                        H.p $ "Rename failed. To succeed, the target word must be new,\n\
+                              \identical to origin, or a simple redirect to/from origin.\n\
+                              \No changes were made to the dictionary."
             Just d' -> do
                 let b' = Branch.update (tNow, d') b 
                 let bset' = Branch.insert dn b' bset 
