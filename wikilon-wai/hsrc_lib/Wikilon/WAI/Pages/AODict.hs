@@ -35,9 +35,7 @@ import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
 import Wikilon.WAI.RecvFormPost
 import qualified Wikilon.Dict.AODict as AODict
-import Wikilon.Dict.Word
 import Wikilon.Dict.Text (listTextConstraintsForHumans)
-import Wikilon.Time
 
 -- | endpoint that restricts media-type to just mediaTypeAODict
 dictAsAODict :: WikilonApp
@@ -99,7 +97,7 @@ exportAODictGzip = dictApp $ \w dictName rq k -> join $ wikilon_action w $
     loadBranch dictName >>= \ b ->
     branchModified b >>= \ tMod ->
     branchHead b >>= \ d ->
-    let etag = eTagT tMod in
+    let etag = eTagTW tMod in
     let aodict = (HTTP.hContentType, HTTP.renderHeader mediaTypeGzip) in
     let disp = ("Content-Disposition"
             ,mconcat ["attachment; filename=", wordToUTF8 dictName, ".ao.gz"]) in

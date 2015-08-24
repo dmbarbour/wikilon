@@ -59,6 +59,7 @@ module Wikilon.WAI.Utils
 
     -- MISC
     , extractWordList
+    , showEditOrigin, readEditOrigin
 
     , module Wikilon.WAI.Types
     , module Wikilon.WAI.MediaType
@@ -465,3 +466,14 @@ extractWordList = getWords . procNS "" . splitTokens where
         Just (35, ns') -> procNS ns' ss
         _ -> (ns<>s : procNS ns ss)
     procNS _ [] = []
+
+
+-- | display a time value corresponding to a branch's modified time
+showEditOrigin :: T -> String
+showEditOrigin tm = if (tm == minBound) then "--" else show tm
+
+-- | parse a time value corresponding to a branch's modified time
+-- or return minBound if the string could not be parsed
+readEditOrigin :: String -> T
+readEditOrigin = maybe minBound id . Time.parseTime
+

@@ -49,9 +49,9 @@ import Wikilon.WAI.Routes
 import Wikilon.WAI.Conflicts
 import Wikilon.WAI.RecvFormPost
 import qualified Wikilon.WAI.RegexPatterns as Regex
-import Wikilon.Dict.Word
+import qualified Wikilon.Dict as Dict
 import qualified Wikilon.Dict.AODict as AODict
-import Wikilon.Time
+
 
 
 -- | Provide a form that will pre-load the editor. If given a non-empty
@@ -83,8 +83,8 @@ mkAOText = BB.toLazyByteString . mconcat . fmap encPair where
 -- I'll permit editing of the modified time, e.g. so users
 -- can learn how conflicts would appear without much work
 -- to create them.
-formAODictEdit :: LBS.ByteString -> BranchName -> Maybe T -> HTML
-formAODictEdit preload dictName mbT = 
+formAODictEdit :: LBS.ByteString -> BranchName -> T -> HTML
+formAODictEdit preload dictName t = 
     let uri = uriAODictEdit dictName in
     let uriAction = H.unsafeByteStringValue uri in
     -- giving blaze-html opportunity to escape the contents
@@ -92,7 +92,7 @@ formAODictEdit preload dictName mbT =
         H.textarea ! A.name "update" ! A.rows "20" ! A.cols "70" ! A.required "required" $
             H.string $ LazyUTF8.toString preload
         H.br
-        let tmVal = H.stringValue $ maybe "--" show mbT
+        let tmVal = H.stringValue $ showEditOrigin t 
         H.string "Edit Origin: "
         H.input ! A.type_ "text" ! A.name "editOrigin" ! A.value tmVal
         H.string " "
@@ -165,34 +165,28 @@ styleParseError h = H.span ! A.class_ "parseError" $ h
 --
 -- NOTE: the current 'diff' algorithm sucks at reporting deletions.
 -- ALSO: font color is insufficient. I need background or border colors.
-reportConflictABC :: BranchName -> Dict -> Dict -> Word -> ABC -> Maybe HTML
+reportConflictABC :: (DictView d) => BranchName -> d -> d -> Word -> ABC -> Maybe HTML
 reportConflictABC dictName dOrig dHead w abc = 
     let bsOrig = Dict.lookupBytes dOrig w in
     let bsHead = Dict.lookupBytes dHead w in
     if bsOrig == bsHead then Nothing else Just $ do -- no change
     -- return an HTML description of the conflict
     -- let sOrig = LazyUTF8.toString bsOrig
-    H.strong $ "@" <> hrefDictWord dictName w
-    H.br
+    hrefDictWord dictName w <> H.br 
     reportConflicts (LazyUTF8.toString bsOrig) (LazyUTF8.toString bsHead) (show abc)
 
-histDict :: Branch -> Maybe T -> Dict
-histDict b Nothing = Dict.empty vc where
-    vc = Dict.dict_space $ Branch.head b
-histDict b (Just t) = Branch.histDict b t
-
-type AODictEditPostParams = (LazyUTF8.ByteString, Maybe T)
+type AODictEditPostParams = (LazyUTF8.ByteString, T)
 
 ppAODictEdit :: PostParams -> Maybe AODictEditPostParams
 ppAODictEdit pp =
     getPostParam "update" pp >>= \ u ->
     getPostParam "editOrigin" pp >>= \ eos ->
-    let eot = (parseTime . LazyUTF8.toString) eos in
-    return (u, eot)
+    let t = readEditOrigin $ LazyUTF8.toString eos in
+    return (u,t)
 
 -- TODO: refactor. heavily. 100 lines is too much.
 recvAODictEdit :: AODictEditPostParams -> WikilonApp
-recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k -> 
+recvAODictEdit (updates, tEditOrigin) = dictApp $ \ w dictName _rq k -> 
     let parsed = parseLines updates in
     let lErr = lefts parsed in
     let lUpdates = rights parsed in
@@ -212,23 +206,21 @@ recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k ->
                     H.h2 "Description of Errors"
                     forM_ lErr $ \ e -> reportParseError e <> H.br
                     H.h2 "Edit and Resubmit"
-                    formAODictEdit updates dictName tMod
+                    formAODictEdit updates dictName tEditOrigin
     in
     if not (L.null lErr) then onParseError else
     -- if we don't exit on parse errors, we can move on.
-    join $ wikilon_action w $ do
-        b <- loadBranch dictName
-        dHead <- 
-
-
-    let vc = vcache_space $ wikilon_store $ wikilon_model w in
-    join $ runVTx vc $ 
-        readPVar (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-        let b = Branch.lookup' dictName bset in
-        let dHead = Branch.head b in
-        let dOrig = histDict b tMod in
-        let report = uncurry $ reportConflictABC dictName dOrig dHead in
-        let lConflict = if (dOrig == dHead) then [] else mapMaybe report lUpdates in
+    join $ wikilon_action w $
+        loadBranch dictName >>= \ b ->
+        branchHead b >>= \ dHead ->
+        branchModified b >>= \tHead -> 
+        let loadConflictReports = 
+                if (tHead == tEditOrigin) then return [] else
+                branchSnapshot b tEditOrigin >>= \ dOrig ->
+                let report = uncurry $ reportConflictABC dictName dOrig dHead in
+                return $ mapMaybe report lUpdates
+        in
+        loadConflictReports >>= \ lConflict ->
         let onConflict =
                 let status = HTTP.conflict409 in
                 let headers = [textHtml, noCache] in
@@ -241,8 +233,8 @@ recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k ->
                     H.body $ do
                         H.h1 title
                         H.p "A concurrent edit has modified words you're manipulating."
-                        let sEditOrigin = maybe "--" show tMod
-                        let sLastUpdate = maybe "--" show (Branch.modified b)
+                        let sEditOrigin = showEditOrigin tEditOrigin
+                        let sLastUpdate = showEditOrigin tHead
                         H.p $ H.strong "Edit Origin: " <> H.string sEditOrigin
                         H.p $ H.strong "Head Version: " <> H.string sLastUpdate
                         H.h2 "Change Report"
@@ -250,7 +242,7 @@ recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k ->
                         mconcat $ fmap (<> H.br) lConflict
                         H.h2 "Edit and Resubmit"
                         H.p "At your discretion, you may resubmit without changes."
-                        formAODictEdit updates dictName (Branch.modified b)
+                        formAODictEdit updates dictName tHead
         in
         if not (L.null lConflict) then onConflict else
         -- if we don't exit on edit conflicts, we can attempt to update the dictionary!
@@ -272,13 +264,9 @@ recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k ->
                             H.li $ H.string $ show e
                         H.h2 "Edit and Resubmit"
                         H.p "If you can easily do so from here."
-                        formAODictEdit updates dictName tMod
+                        formAODictEdit updates dictName tEditOrigin
             Right dUpd -> do -- EDIT SUCCESS!
-                let b' = Branch.update (tNow, dUpd) b 
-                let bset' = Branch.insert dictName b' bset 
-                writePVar (wikilon_dicts $ wikilon_model w) bset' -- commit the update
-                markDurable -- hand-written updates should be durable
-
+                branchUpdate b dUpd -- add modified dictionary to the branch
                 -- prepare our response, including edit success information.
                 let status = HTTP.seeOther303
                 let lWords = fmap fst lUpdates

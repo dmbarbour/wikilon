@@ -182,7 +182,10 @@ defaultTimeFormat :: String
 defaultTimeFormat = "%Y-%m-%dT%H:%M:%S%QZ"
 
 parseTime :: String -> Maybe T
-parseTime = parseTimeFormat defaultTimeFormat
+parseTime s = 
+    parseTimeFormat defaultTimeFormat s <|>
+    parseTimeFormat "%Y-%m-%dT%H:%M" s <|>
+    parseTimeFormat "%Y-%m-%d" s 
 
 formatTime :: String -> T -> String
 formatTime sFormat = Time.formatTime t_locale sFormat . toUTC

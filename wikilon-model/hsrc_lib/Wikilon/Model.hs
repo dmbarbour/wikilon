@@ -52,7 +52,8 @@ type BranchName = Word
 -- | Wikilon has some opaque value types, which might be understood
 -- similarly to file handles or ADTs. Very large dictionaries may be
 -- lazily loaded, but provide a pure value interface. Branches are
--- modeled as mutable constructs, albeit addend-only.
+-- modeled as mutable constructs, albeit addend-only with a hidden
+-- decay model.
 data family DictRep m
 data family Branch m
 
