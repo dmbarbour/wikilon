@@ -20,7 +20,6 @@ import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 
 import qualified Network.Wai as Wai
-import Database.VCache
 
 import qualified Awelon.ClawCode as Claw
 import qualified Awelon.Base16 as B16

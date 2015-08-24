@@ -26,7 +26,6 @@ import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
-import Database.VCache
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
@@ -50,75 +49,74 @@ dictResource = app where
         ]
 
 dictFrontPage :: WikilonApp
-dictFrontPage = dictApp $ \ w dictName rq k -> 
-    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-    let b = Branch.lookup' dictName bset in
-    --let d = Branch.head b in
-    let status = HTTP.status200 in
-    let headers = [textHtml] in
-    k $ Wai.responseLBS status headers $ renderHTML $ do
-    let title = H.string "Dictionary: " <> H.unsafeByteString dictName 
-    let tmModified = maybe "--" htmlSimpTime $ Branch.modified b
-    let origin = Wai.rawPathInfo rq
-    H.head $ do
-        htmlHeaderCommon w
-        H.title title 
-    H.body $ do
-        H.h1 title
-        formDictClawReplS defaultQuota dictName mempty
+dictFrontPage = dictApp $ \ w dictName rq k -> join $ wikilon_action w $ do
+    tMod <- branchModified =<< loadBranch dictName
+    let tmModified = if (tMod == minBound) then "--" else htmlSimpTime tMod
+    let status = HTTP.status200 
+    let headers = [textHtml, eTagTW tMod]
+    return $ k $ Wai.responseLBS status headers $ renderHTML $ do
+        let title = H.string "Dictionary: " <> H.unsafeByteString (wordToUTF8 dictName) 
+        let tmModified = maybe "--" htmlSimpTime $ Branch.modified b
+        let origin = Wai.rawPathInfo rq
+        H.head $ do
+            htmlHeaderCommon w
+            H.title title 
+        H.body $ do
+            H.h1 title
+            formDictClawReplS defaultQuota dictName mempty
 
-        let lnAwelonObject = href uriAODocs $ "Awelon Object (AO)" 
-        H.p $ "This is an " <> lnAwelonObject <> " dictionary."
-        H.p $ "To add here: dictionary edit and curation policy, security info,\n\
-              \external bindings or users (subscriptions, etc.)"
-        -- maybe some content from the dictionary itself
-        -- maybe add some banner or CSS from dictionary itself
-        -- maybe SVG or icons from dictionary?
-        H.h2 "Recent Events"
-        H.p $ "What might go here: recent updates, active background tasks,\n\
-              \active bound AVMs, recent users or REPLs."
-        H.h2 "Dictionary Health"
-        -- Quick Edit?
-        -- Quick REPL?
-        H.p $ "What might go here: compilation failures, typecheck failures,\n\
-              \linter failures, unproven assertions (from annotations),  TODO\n\
-              \annotations (perhaps with expiration dates), etc.."
-        H.h2 "Resources"
-        H.ul $ do
-            let browseWords = href (uriDictWords dictName) $ "browse words" 
-            let editor = href (uriAODictEdit dictName) $ "AODict editor"
-            H.li $ browseWords <> " by name or prefix"
-            H.li $ editor <> " view and edit raw fragments of the dictionary"
-            H.li $ lnkAODict dictName <> " view full dictionary (low level)"
-            
-        -- maybe a simple console-like or query application?
-        -- after defining apps, probably want to revist them easily
-        -- HEALTH information
-            -- undefined words & cycles
-            -- words that don't compile, compile errors
-            -- words that are badly typed
-        -- H.h2 "Recent Changes"
-        -- H.h2 "Resources"
-            -- H.li $ lnkDictWords dictName <> " - dictionary words"
-            -- H.li $ lnkMasterDict dictName <> " - view as master"
-            -- 
-            -- probably want a page to create filtered AODict views
-            -- probably want pages for histories and events
-            -- 
-            -- H.li $ lnkAODict dictName <> " - aodict format "
-            -- 
+            let lnAwelonObject = href uriAODocs $ "Awelon Object (AO)" 
+            H.p $ "This is an " <> lnAwelonObject <> " dictionary."
+            H.p $ "To add here: dictionary edit and curation policy, security info,\n\
+                  \external bindings or users (subscriptions, etc.)"
+            -- maybe some content from the dictionary itself
+            -- maybe add some banner or CSS from dictionary itself
+            -- maybe SVG or icons from dictionary?
+            H.h2 "Recent Events"
+            H.p $ "What might go here: recent updates, active background tasks,\n\
+                  \active bound AVMs, recent users or REPLs, ongoing compilation."
+            H.h2 "Dictionary Health"
+            -- Quick Edit?
+            -- Quick REPL?
+            H.p $ "What might go here: compilation failures, typecheck failures,\n\
+                  \linter failures, unproven assertions (from annotations),  TODO\n\
+                  \annotations (perhaps with expiration dates), etc.."
+            H.h2 "Resources"
+            H.ul $ do
+                let browseWords = href (uriDictWords dictName) $ "browse words" 
+                let editor = href (uriAODictEdit dictName) $ "AODict editor"
+                H.li $ browseWords <> " by name or prefix"
+                H.li $ editor <> " view and edit raw fragments of the dictionary"
+                H.li $ lnkAODict dictName <> " view full dictionary (low level)"
+                
+            -- maybe a simple console-like or query application?
+            -- after defining apps, probably want to revist them easily
+            -- HEALTH information
+                -- undefined words & cycles
+                -- words that don't compile, compile errors
+                -- words that are badly typed
+            -- H.h2 "Recent Changes"
+            -- H.h2 "Resources"
+                -- H.li $ lnkDictWords dictName <> " - dictionary words"
+                -- H.li $ lnkMasterDict dictName <> " - view as master"
+                -- 
+                -- probably want a page to create filtered AODict views
+                -- probably want pages for histories and events
+                -- 
+                -- H.li $ lnkAODict dictName <> " - aodict format "
+                -- 
 
-        H.h2 "Browse Words by Name"
-        let lBrowseWords = wordsForBrowsing 24 48 (Branch.head b) (BS.empty)
-        H.ul $ forM_ lBrowseWords $ (H.li . lnkEnt dictName)
-        H.p $ "Long term, I'd like to support browsing by type, domain, role, definition structure, etc."
+            H.h2 "Browse Words by Name"
+            let lBrowseWords = wordsForBrowsing 24 48 (Branch.head b) (BS.empty)
+            H.ul $ forM_ lBrowseWords $ (H.li . lnkEnt dictName)
+            H.p $ "Long term, I'd like to support browsing by type, domain, role, definition structure, etc."
 
-        H.hr
-        H.div ! A.id "dictFoot" ! A.class_ "footer" $ do
-            H.b "Export:" <> " " <> lnkAODictFile dictName <> " " <> lnkAODictGz dictName <> H.br
-            H.b "Import:" <> " " <> formImportAODict origin dictName <> H.br
-            H.b "Modified:" <> " " <> tmModified <> H.br
-            H.b "Edit AODict:" <> " " <> (formAODictLoadEditor [] dictName ! A.style "display:inline") <> H.br
+            H.hr
+            H.div ! A.id "dictFoot" ! A.class_ "footer" $ do
+                H.b "Export:" <> " " <> lnkAODictFile dictName <> " " <> lnkAODictGz dictName <> H.br
+                H.b "Import:" <> " " <> formImportAODict origin dictName <> H.br
+                H.b "Modified:" <> " " <> tmModified <> H.br
+                H.b "Edit AODict:" <> " " <> (formAODictLoadEditor [] dictName ! A.style "display:inline") <> H.br
 
 dictWords :: WikilonApp
 dictWords = justGET $ branchOnOutputMedia

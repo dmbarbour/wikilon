@@ -1,11 +1,11 @@
-{-# LANGUAGE TypeFamilies, FlexibleContexts, ExistentialQuantification, Rank2Types #-}
+{-# LANGUAGE GADTs, TypeFamilies, FlexibleContexts, Rank2Types #-}
 
--- | The Wikilon Model is an abstract interface for Wikilon. This
--- API supports atomic groups of confined queries and updates with
--- purely functional glue, i.e. a monadic interface with the idea
--- that the monad may be serialized and sent to the model directly.
--- Eventually, I may need to add support for streaming interfaces
--- and reactive continuous queries, e.g. as extensions.
+-- | Wikilon is accessed via an abstract API. This API supports 
+-- atomic groups of confined queries and updates with functional
+-- glue (e.g. monadic). Queries and updates are confined by this
+-- API, i.e. in the sense that they cannot access other machines
+-- or resources. A set of update actions and queries is atomic 
+-- whenever feasible. 
 --
 -- Conceptually, Wikilon is hosted by a separate abstract machine,
 -- which is why queries and udpates are confined to computations
@@ -23,11 +23,18 @@
 -- deprecate the pure interface on the dict type.
 --
 module Wikilon.Model
-    ( WikilonModel
+    ( BranchName, Branch, Dict, DictRep
     , ModelRunner
-    , BranchName, Branch, Dict
-    , BranchingDictionary(..), branchSnapshot
-    , GlobalErrorLog(..), logSomeException, logException
+    , W(..)
+    , loadBranch, listBranches
+    , branchHead, branchUpdate, branchModified, branchHistory
+    , loadDict, branchSnapshot
+    , newEmptyDictionary
+    , getTransactionTime
+    , logErrorMessage, logSomeException, logException
+    --, WikilonModel, ModelRunner
+    --, BranchingDictionary(..), CreateDictionary(..)
+    --, GlobalErrorLog(..), logSomeException, logException
     , module Wikilon.Dict
     , module Wikilon.Time
     ) where
@@ -35,77 +42,156 @@ module Wikilon.Model
 import Control.Monad
 import Control.Applicative
 import Control.Exception
-import Wikilon.Time
+import Wikilon.Time (T)
 import Wikilon.SecureHash
-import Wikilon.Dict 
+import Wikilon.Dict.Object
+import Wikilon.Dict
 
 type BranchName = Word
-
--- | Wikilon model is defined by a toplevel API.
-class ( Functor m
-      , Applicative m
-      , Monad m
-      , BranchingDictionary m
-      , GlobalErrorLog m
-      ) => WikilonModel m
-
--- | Ultimately, we operate on an *abstract* model m, with an arbitrary
--- query result of type `a`. In a distributed system, we'd further need
--- to limit ourselves to serializable monads and results, e.g. modeling
--- them using Awelon bytecode.
-type ModelRunner = WikilonModel m => (m a -> IO a)
 
 -- | Wikilon has some opaque value types, which might be understood
 -- similarly to file handles or ADTs. Very large dictionaries may be
 -- lazily loaded, but provide a pure value interface. Branches are
 -- modeled as mutable constructs, albeit addend-only.
+data family DictRep m
+data family Branch m
+
+-- | a Dict value has a machine-dependent representation.
+type Dict m = DictObj (DictRep m)
+
+type ModelRunner = forall a . forall m . W m a -> IO a
+
+-- I need a runner that hides the implementation-type of the model.
 --
-data family Dict (m :: * -> *)
-data family Branch (m :: * -> *)
+-- I can't say: 
+--
+--     Runner a = forall m . Model m => m a -> IO a
+--
+-- This would say that our Runner must accept any implementation of
+-- the model, which would be ridiculous. I need a specific instance
+-- of the model, but one not known to the caller.
+--
+-- The simplest approach might be the best: an intermediate language
+-- for the model, with some hidden types. Will data families work?
+-- I'm not sure. But something like this does seem appropriate:
+-- 
+--    Runner a = forall m . W m a -> IO a
+--    data family Dict m
+--    data family Branch m
+-- 
+-- However, we must expose computations on the dictionary of a hidden
+-- type. Again, typeclasses seem inadequate:
+--
+--    Runner a = forall m . Dictionary (Dict m) => Action m a -> IO a
+--
+-- Because we wouldn't be able to prove Dictionary for an unknown 
+-- instance. The alternative is to avoid typeclasses here, too, e.g.
+-- by making `Dict m` a more specific data type that encapsulates the
+-- interface and a hidden value type, or to provide access via the
+-- monadic actions. 
+--
+-- A point to consider is that whatever interface I use here should
+-- be easily reflected in a network of abstract virtual machines via
+-- Awelon Bytecode. Typeclasses do not exist in ABC because they are
+-- global in nature. So, it makes sense to avoid typeclasses at this
+-- layer.
 
--- | Wikilon has a branching dictionary model. Branches are named under
--- the same restrictions as dictionary words (to easily fit HTML). If a
--- branch has not been defined, we can treat that as an empty dictionary.
-class (Dictionary (Dict m)) => BranchingDictionary m where
-    -- | Load a branch given its name. Authentication might be performed here.
-    loadBranch :: BranchName -> m (Branch m)
+-- | The Wikilon model API, presented as a monad with a bunch of
+-- concrete commands. This could probably be expressed as a free
+-- monad, but the following will do for now.
+data W m a where 
+    Return :: a -> W m a
+    Bind :: W m a -> (a -> W m b) -> W m b
 
-    -- | Return the most recent dictionary for a branch.
-    branchHead :: Branch m -> m (Dict m)
+    -- basics
+    LoadBranch :: BranchName -> W m (Branch m)
+    ListBranches :: W m [BranchName]
+    BranchHead :: Branch m -> W m (Dict m)
+    BranchModified :: Branch m -> W m T
+    BranchHistory :: Branch m -> T -> T -> W m (Dict m, [(T, Dict m)])
+    BranchUpdate :: Branch m -> Dict m -> W m ()
+    NewEmptyDictionary :: W m (Dict m)
 
-    -- | Update the dictionary associated with the branch.
-    branchUpdate :: Branch m -> Dict m -> m ()
+    -- miscellaneous
+    GetTransactionTime :: W m T
+    LogErrorMessage :: String -> W m ()
 
-    -- | Obtain all available snapshots for a branch between two time values.
-    -- There is no strong requirement that a branch keeps more than the head
-    -- value, but if we do keep more we must be able to access them.
-    --
-    -- Our history is accessed in terms of:
-    --
-    --   (snapshot, [(tmUpdate, previousSnapshot)])
-    --
-    -- The tmUpdate values should fall between the requested times.
-    branchHistory :: Branch m -> T -> T -> m (Dict m, [(T,Dict m)])
+    
+instance Monad (W m) where
+    return = Return
+    (Return a) >>= f = f a
+    op >>= f = Bind op f
+instance Applicative (W m) where
+    pure = return
+    (<*>) = ap
+instance Functor (W m) where
+    fmap f op = op >>= return . f
+
+
+-- | Load a branch given its name. Authentication might be performed here.
+loadBranch :: BranchName -> W m (Branch m)
+loadBranch = LoadBranch
+
+-- | Obtain list of branch names with content or history. 
+listBranches :: W m [BranchName]
+listBranches = ListBranches
+
+-- | Return the most recent dictionary on a branch.
+branchHead :: Branch m -> W m (Dict m)
+branchHead = BranchHead
+
+-- | Update the dictionary associated with the branch.
+branchUpdate :: Branch m -> Dict m -> W m ()
+branchUpdate = BranchUpdate
+
+-- | Obtain all available snapshots for a branch between two time values.
+-- There is no strong requirement that a branch keeps more than the head
+-- value, but if we do keep more we must be able to access them.
+--
+-- Our history is accessed in terms of:
+--
+--   (snapshot, [(tmUpdate, previousSnapshot)])
+--
+-- The tmUpdate values should fall between the requested times.
+branchHistory :: Branch m -> T -> T -> W m (Dict m, [(T,Dict m)])
+branchHistory = BranchHistory
+
+-- | Obtain the time snapshot for the current branch head.
+-- Will return minBound if no updates have been applied.
+branchModified :: Branch m -> W m T
+branchModified = BranchModified
+
+-- | Load the current dictionary given the branch name.
+loadDict :: BranchName -> W m (Dict m) 
+loadDict dn = loadBranch dn >>= branchHead
 
 -- | Obtain the snapshot of a dictionary at a specific time. 
-branchSnapshot :: (BranchingDictionary m, Monad m) => Branch m -> T -> m (Dict m) 
+branchSnapshot :: Branch m -> T -> W m (Dict m) 
 branchSnapshot b t = liftM fst $ branchHistory b t t 
 
+-- | Obtain an empty dictionary value with an abstract 
+-- representation associated with machine `m`. This should
+-- be an effectively pure operation.
+newEmptyDictionary :: W m (Dict m)
+newEmptyDictionary = NewEmptyDictionary
+
+-- | Obtain a low-precision indicator of time, constant within a 
+-- transaction and potentially shared between transactions.
+getTransactionTime :: W m T
+getTransactionTime = GetTransactionTime
+
 -- | A global error log is not the best way to report errors, but it
--- is familiar and reasonably convenient. I really need something 
--- closer to event logs, issue trackers, and per-branch variants.
---
--- It might be more convenient, long term, to model errors in an
--- auxilliary dictionary rather than a log.
-class (Monad m) => GlobalErrorLog m where
-    logErrorMessage :: String -> m ()
+-- is familiar and reasonably convenient. This can be a fallback to
+-- more effective mechanisms.
+logErrorMessage :: String -> W m ()
+logErrorMessage = LogErrorMessage
 
 -- | catchall exceptions 
-logSomeException :: GlobalErrorLog m => SomeException -> m ()
+logSomeException :: SomeException -> W m ()
 logSomeException = logException
 
 -- | log a generic error message
-logException :: (Exception e, GlobalErrorLog m) => e -> m ()
+logException :: (Exception e) => e -> W m ()
 logException = logErrorMessage . ("Exception: " ++) . show
 
 
@@ -113,5 +199,8 @@ logException = logErrorMessage . ("Exception: " ++) . show
 --  abstract support for caching, memoization, interning
 --  abstract internal model of Awelon Bytecode (`WBC m`?)
 --  event logs, issue tracking, etc. (perhaps modeled as dictionaries?)
---  hmac support (long term and per-session?)
+--  hmac signature support? (long term and per-session?)
+--  encryption support?
+
+
 

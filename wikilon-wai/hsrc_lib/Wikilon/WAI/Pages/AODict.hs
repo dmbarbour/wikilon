@@ -17,6 +17,7 @@ module Wikilon.WAI.Pages.AODict
     , aodictDocs
     ) where
 
+import Control.Monad
 import Data.Monoid
 import Data.Word (Word8)
 import qualified Data.List as L
@@ -28,12 +29,12 @@ import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
-import Database.VCache
 import qualified Codec.Compression.GZip as GZip
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
 import Wikilon.WAI.RecvFormPost
+import qualified Wikilon.Dict.AODict as AODict
 import Wikilon.Dict.Word
 import Wikilon.Dict.Text (listTextConstraintsForHumans)
 import Wikilon.Time
@@ -64,26 +65,28 @@ exportAODict w cap rq k =
 --
 -- TODO: I may need authorization for some dictionaries.
 exportAODict' :: WikilonApp
-exportAODict' = dictApp $ \w dictName rq k -> do
-    bset <- readPVarIO (wikilon_dicts $ wikilon_model w)
-    let d = Branch.head $ Branch.lookup' dictName bset
-    let etag = eTagN $ Dict.unsafeDictAddr d
-    let aodict = (HTTP.hContentType, HTTP.renderHeader mediaTypeAODict)
+exportAODict' = dictApp $ \w dictName rq k -> join $ wikilon_action w $
+    loadBranch dictName >>= \ b ->
+    branchModified b >>= \ tMod ->
+    branchHead b >>= \ d ->
+    let etag = eTagT tMod in
+    let aodict = (HTTP.hContentType, HTTP.renderHeader mediaTypeAODict) in
     -- allow 'asFile' option in query string for file disposition
-    let bAsFile = L.elem "asFile" $ fmap fst $ Wai.queryString rq
-    let fattach = if bAsFile then "attachment; " else "inline; "
-    let fname = mconcat [fattach, "filename=", dictName, ".ao"]
-    let disp = ("Content-Disposition", fname) 
-    let status = HTTP.ok200
-    let headers = [etag,aodict,disp]
-    let lWords = selectWords rq
+    let bAsFile = L.elem "asFile" $ fmap fst $ Wai.queryString rq in
+    let fattach = if bAsFile then "attachment; " else "inline; " in
+    let fname = mconcat [fattach, "filename=", wordToUTF8 dictName, ".ao"] in
+    let disp = ("Content-Disposition", fname) in
+    let status = HTTP.ok200 in
+    let headers = [etag,aodict,disp] in
+    let lWords = selectWords rq in
     let body = if L.null lWords then AODict.encode d else 
                AODict.encodeWords d lWords
-    k $ Wai.responseLBS status headers body
+    in
+    return $ k $ Wai.responseLBS status headers body
 
 selectWords :: Wai.Request -> [Word]
 selectWords rq = case L.lookup "words" (Wai.queryString rq) of
-    Just (Just bs) -> fmap Dict.Word $ L.filter (not . BS.null) $ BS.splitWith spc bs
+    Just (Just bs) -> fmap Word $ L.filter (not . BS.null) $ BS.splitWith spc bs
     _ -> []
 
 -- split on LF CR SP Comma
@@ -92,19 +95,21 @@ spc c = (10 == c) || (13 == c) || (32 == c) || (44 == c)
 
 -- | export as a `.ao.gz` file.
 exportAODictGzip :: WikilonApp
-exportAODictGzip = dictApp $ \w dictName rq k -> do 
-    bset <- readPVarIO (wikilon_dicts $ wikilon_model w)
-    let d = Branch.head $ Branch.lookup' dictName bset
-    let etag = eTagN $ Dict.unsafeDictAddr d
-    let aodict = (HTTP.hContentType, HTTP.renderHeader mediaTypeGzip)
+exportAODictGzip = dictApp $ \w dictName rq k -> join $ wikilon_action w $
+    loadBranch dictName >>= \ b ->
+    branchModified b >>= \ tMod ->
+    branchHead b >>= \ d ->
+    let etag = eTagT tMod in
+    let aodict = (HTTP.hContentType, HTTP.renderHeader mediaTypeGzip) in
     let disp = ("Content-Disposition"
-            ,mconcat ["attachment; filename=", dictName, ".ao.gz"])
-    let status = HTTP.ok200
-    let headers = [etag,aodict,disp]
-    let lWords = selectWords rq
+            ,mconcat ["attachment; filename=", wordToUTF8 dictName, ".ao.gz"]) in
+    let status = HTTP.ok200 in
+    let headers = [etag,aodict,disp] in
+    let lWords = selectWords rq in
     let body = if L.null lWords then AODict.encode d else 
-               AODict.encodeWords d lWords
-    k $ Wai.responseLBS status headers $ GZip.compress body
+               AODict.encodeWords d lWords 
+    in
+    return $ k $ Wai.responseLBS status headers $ GZip.compress body
 
 -- receive a dictionary via Post, primarily for importing .ao or .ao.gz files
 recvAODictFormPost :: PostParams -> WikilonApp
@@ -144,19 +149,18 @@ importAODictGzip = dictApp $ \w dictName rq k ->
     let body = GZip.decompress gzBody in
     importAODict' okNoContent dictName body w rq k
 
-importAODict' :: Wai.Response -> Branch.BranchName -> LBS.ByteString -> Wikilon -> Wai.Application
-importAODict' onOK dictName body w _rq k =
-    let vc = vcache_space (wikilon_store $ wikilon_model w) in
-    let (err, dictVal) = AODict.decodeAODict (Dict.empty vc) body in
-    let bHasError = not (L.null err) in
-    if bHasError then k $ aodImportErrors w $ fmap show err else do
-    tNow <- getTime
-    runVTx vc $ 
-        modifyPVar (wikilon_dicts $ wikilon_model w) $ \ bset ->
-            let b0 = Branch.lookup' dictName bset in
-            let b' = Branch.update (tNow, dictVal) b0 in
-            Branch.insert dictName b' bset
-    k onOK
+importAODict' :: Wai.Response -> BranchName -> LBS.ByteString -> Wikilon -> Wai.Application
+importAODict' responseOnOK dictName body w _rq k =
+    -- thoughts: I should probably develop the 
+    join $ wikilon_action w $ 
+        newEmptyDictionary >>= \ dEmpty ->
+        let (err, dict) = AODict.decodeAODict dEmpty body in
+        let bHasError = not $ L.null err in
+        let responseOnErr = aodImportErrors w $ fmap show err in
+        if bHasError then return (k responseOnErr) else
+        loadBranch dictName >>= \ b ->
+        branchUpdate b dict >>
+        return (k responseOnOK)
 
 aodImportErrors :: Wikilon -> [String] -> Wai.Response
 aodImportErrors w errors = 
@@ -356,11 +360,11 @@ lnkAODict d =
 lnkAODictFile d =
     let uri = uriAODict d <> "?asFile" in
     H.a ! A.href (H.unsafeByteStringValue uri) $
-        H.unsafeByteString $ d <> ".ao"
+        H.unsafeByteString $ (wordToUTF8 d) <> ".ao"
 lnkAODictGz d = 
     let uri = uriAODict d <> "?asFileGz" in
     H.a ! A.href (H.unsafeByteStringValue uri) $ 
-        H.unsafeByteString $ d <> ".ao.gz"
+        H.unsafeByteString $ (wordToUTF8 d) <> ".ao.gz"
 
 formImportAODict r d =
     let uri = uriAODict d in

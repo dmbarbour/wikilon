@@ -40,6 +40,7 @@ module Wikilon.WAI.Utils
     , plainText
     , noCache
     , eTagN, eTagNW
+    , eTagT, eTagTW
 
     -- HTML
     , HTML
@@ -363,6 +364,15 @@ noCache = (HTTP.hCacheControl, "no-cache")
 eTagN, eTagNW :: (Integral n) => n -> HTTP.Header
 eTagN n = ("ETag", UTF8.fromString $ show (show (toInteger n)))
 eTagNW n = ("ETag", UTF8.fromString $ "W/" ++ show (show (toInteger n)))
+
+tmTag :: Time.T -> String
+tmTag t | (t == minBound) = "past"   -- common for empty results
+        | (t == maxBound) = "future" -- should be very rare
+        | otherwise = show t
+
+eTagT, eTagTW :: Time.T -> HTTP.Header
+eTagT t = ("ETag", UTF8.fromString $ show (tmTag t))
+eTagTW t = ("ETag", UTF8.fromString $ "W/" ++ show (tmTag t))
 
 -- | since I'm not fond of blaze-html's mixed-case abbreviations...
 type HTML = H.Html

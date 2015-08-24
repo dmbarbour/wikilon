@@ -26,7 +26,6 @@ import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
-import Database.VCache
 
 import Wikilon.Dict.Word (Word(..), isValidWord)
 import Wikilon.Time
@@ -75,7 +74,7 @@ listOfDictsText w _cap _rq k =
 --
 listOfDictsPage :: WikilonApp
 listOfDictsPage w _cap _rq k =
-    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
+    wikilon_action w listBranches >>= \ lBranchNames -> 
     let etag = eTagNW (Branch.unsafeBranchSetAddr bset) in
     let title = H.string "Wikilon Dictionaries" in
     k $ Wai.responseLBS HTTP.ok200 [textHtml, etag] $ renderHTML $ do
@@ -84,25 +83,11 @@ listOfDictsPage w _cap _rq k =
         H.title title
     H.body $ do
         H.h1 title
-        listDictsHTML w bset
-        H.p $ (H.b "Master Dictionary: ") <> hrefDict (wikilon_master w)
-        H.hr
-        H.div ! A.id "dictListFoot" ! A.class_ "footer" $ do
-            H.b "New Dictionary:" <> " " <> (formSimpleCreateDict ! A.style "display:inline")
-            -- RENAME
-            -- FORK
-            -- MERGE
-{-
-            H.b "Export:" <> " " <> lnkAODictList
-            H.b "
-            H.b "Import:" <> " " <> formImportAODict dictName <> H.br
-            H.b "Modified:" <> " " <> tmModified <> H.br
--}
-        --H.div ! A.class_ "boxed" $ formSimpleCreateDict
-{-
-        H.h2 "Delete a Dictionary"
-        formSimpleDeleteDict
--}
+        H.b "Master Dictionary: " <> hrefDict (wikilon_master w) <> H.br
+        H.b "List of Dictionaries: "
+        H.ul $ forM_ lBranchNames $ H.li . hrefDict 
+        H.hr 
+        formSimpleCreateDict
 
 listDictsHTML :: Wikilon -> Branch.BranchSet -> HTML
 listDictsHTML _w bset = H.div ! A.id "dictTable" $ do
@@ -176,9 +161,9 @@ createDict w d =
 ppDictName :: PostParams -> Maybe BranchName
 ppDictName ps = 
     L.lookup "dictName" ps >>= \ p ->
-    let d = LBS.toStrict (postParamContent p) in
-    if not (isValidWord (Word d)) then mzero else
-    return d
+    let dn = Word $ LBS.toStrict (postParamContent p) in
+    guard (isValidWord dn)
+    return dn
 
 -- | a simple form for creation of a dictionary
 formSimpleCreateDict :: HTML

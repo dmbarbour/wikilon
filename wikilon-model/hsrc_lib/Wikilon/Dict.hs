@@ -55,6 +55,7 @@ module Wikilon.Dict
     , wordsInDict
     , wordDeps, abcWords
     , transitiveDepsList
+    , ABC
     , SecureHash
     , defaultVersionHash
 
@@ -74,6 +75,7 @@ module Wikilon.Dict
     , InsertionError(..)
     , Cycle
     , module Wikilon.Dict.Word
+    , module Wikilon.Dict.Token
     ) where
 
 import Prelude hiding (lookup)

@@ -19,7 +19,7 @@ DONE:
 * rename a word
 * view and edit `[command][]` definitions as claw code
 * stylesheets with dark background by default
-* most CSS pushed into stylesheets
+* most CSS pushed into stylesheets (instead of inline css)
 * secure hash per word for deep source
 * simplistic stateless REPL based on Claw code
  * including time elapsed during evaluation
@@ -31,6 +31,12 @@ PRIORITY TODO:
  * support some sort of generic resource
   * perhaps based on ABC values or types
   * packed texts, binaries; maybe lists, stacks
+
+
+
+* improve ABC performance
+ * consider importing the awelon project ABC compiler 
+ * but may need to tweak for quotas, continuations?
 
 * cache word-based HTTP resources
  * each resource tied to a word
@@ -44,12 +50,20 @@ PRIORITY TODO:
 
 TODO:
 
+* simplify WAI widgets
+ * create a Wikilon-WAI monad model
+ * automatic generation of AJAX?
+ * automatic support for multi-page sessions?
+
+* continuous profiling
+ * consider: ThreadScope, EKG
 
 * given WikilonStore, provide a ModelRunner
 * model admin, logs, stats, geneology, issue trackers, etc. as dictionaries?
  * this might simplify common presentation and extension models
  * basically, uses dictionaries as additional filesystems
  * via auxilliary dictionary?
+
 * improve Data.VCache.Trie.toKey performance
 
 * improve evaluation performance!

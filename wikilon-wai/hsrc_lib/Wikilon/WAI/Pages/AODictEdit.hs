@@ -40,11 +40,9 @@ import Text.Blaze.Html5 ((!))
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
-import Database.VCache
 
-
-import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
+import Wikilon.Model
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
@@ -114,19 +112,18 @@ queriedWordList = L.nub . L.concatMap getWords where
 
 -- | obtain page to edit the AO code
 editorPage :: WikilonApp
-editorPage = dictApp $ \ w dictName rq k -> do
-    bset <- readPVarIO (wikilon_dicts $ wikilon_model w)
-    let b = Branch.lookup' dictName bset
-    let d = Branch.head b
-    let tMod = Branch.modified b
+editorPage = dictApp $ \ w dictName rq k -> join $ wikilon_action w $ do
+    b <- loadBranch dictName
+    d <- branchHead b
+    tMod <- branchModified b
     let lWords = queriedWordList (Wai.queryString rq)
     let lContent = L.zip lWords (Dict.lookupBytes d <$> lWords)
     let sContent = mkAOText lContent
     let status = HTTP.ok200
-    let etag = eTagN (Dict.unsafeDictAddr d)
+    let etag = eTagTW tMod
     let headers = [textHtml, etag]
     let title = "Edit Dictionary"
-    k $ Wai.responseLBS status headers $ renderHTML $ do
+    return $ k $ Wai.responseLBS status headers $ renderHTML $ do
         H.head $ do
             htmlHeaderCommon w
             H.title title 
@@ -195,7 +192,7 @@ ppAODictEdit pp =
 
 -- TODO: refactor. heavily. 100 lines is too much.
 recvAODictEdit :: AODictEditPostParams -> WikilonApp
-recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k ->
+recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k -> 
     let parsed = parseLines updates in
     let lErr = lefts parsed in
     let lUpdates = rights parsed in
@@ -219,7 +216,11 @@ recvAODictEdit (updates, tMod) = dictApp $ \ w dictName _rq k ->
     in
     if not (L.null lErr) then onParseError else
     -- if we don't exit on parse errors, we can move on.
-    getTime >>= \ tNow ->
+    join $ wikilon_action w $ do
+        b <- loadBranch dictName
+        dHead <- 
+
+
     let vc = vcache_space $ wikilon_store $ wikilon_model w in
     join $ runVTx vc $ 
         readPVar (wikilon_dicts $ wikilon_model w) >>= \ bset ->

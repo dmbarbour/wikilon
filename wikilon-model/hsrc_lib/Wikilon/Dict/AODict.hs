@@ -45,7 +45,6 @@ import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.Builder as BB
 import qualified Data.Set as Set
 
-import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
 import Wikilon.Dict 
 

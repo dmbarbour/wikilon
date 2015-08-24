@@ -80,7 +80,7 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 -- for administrators and return a 500 response.
 wikilonWaiApp :: Wikilon -> Wai.Application
 wikilonWaiApp w rq k = catch (baseWikilonApp w rq k) $ \ e -> do 
-    logSomeException (wikilon_model w) e
+    wikilon_action w (logSomeException e)
     k $ eServerError "unhandled exception (logged for admin)"
 
 baseWikilonApp :: Wikilon -> Wai.Application
