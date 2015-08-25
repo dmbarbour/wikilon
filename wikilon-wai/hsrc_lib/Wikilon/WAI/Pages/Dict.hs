@@ -29,7 +29,6 @@ import qualified Network.Wai as Wai
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
-import Wikilon.Dict.Word
 import qualified Wikilon.Dict as Dict
 
 import Wikilon.WAI.Pages.AODict
@@ -49,14 +48,12 @@ dictResource = app where
         ]
 
 dictFrontPage :: WikilonApp
-dictFrontPage = dictApp $ \ w dictName rq k -> join $ wikilon_action w $ do
-    tMod <- branchModified =<< loadBranch dictName
-    let tmModified = if (tMod == minBound) then "--" else htmlSimpTime tMod
-    let status = HTTP.status200 
-    let headers = [textHtml, eTagTW tMod]
-    return $ k $ Wai.responseLBS status headers $ renderHTML $ do
+dictFrontPage = dictApp $ \ w dictName rq k -> 
+    wikilon_action w (loadDictAndTime dictName) >>= \ (d,tMod) ->
+    let status = HTTP.status200 in
+    let headers = [textHtml, eTagTW tMod] in
+    k $ Wai.responseLBS status headers $ renderHTML $ do
         let title = H.string "Dictionary: " <> H.unsafeByteString (wordToUTF8 dictName) 
-        let tmModified = maybe "--" htmlSimpTime $ Branch.modified b
         let origin = Wai.rawPathInfo rq
         H.head $ do
             htmlHeaderCommon w
@@ -107,7 +104,7 @@ dictFrontPage = dictApp $ \ w dictName rq k -> join $ wikilon_action w $ do
                 -- 
 
             H.h2 "Browse Words by Name"
-            let lBrowseWords = wordsForBrowsing 24 48 (Branch.head b) (BS.empty)
+            let lBrowseWords = wordsForBrowsing 24 48 d BS.empty
             H.ul $ forM_ lBrowseWords $ (H.li . lnkEnt dictName)
             H.p $ "Long term, I'd like to support browsing by type, domain, role, definition structure, etc."
 
@@ -115,7 +112,7 @@ dictFrontPage = dictApp $ \ w dictName rq k -> join $ wikilon_action w $ do
             H.div ! A.id "dictFoot" ! A.class_ "footer" $ do
                 H.b "Export:" <> " " <> lnkAODictFile dictName <> " " <> lnkAODictGz dictName <> H.br
                 H.b "Import:" <> " " <> formImportAODict origin dictName <> H.br
-                H.b "Modified:" <> " " <> tmModified <> H.br
+                H.b "Modified:" <> " " <> htmlSimpTime tMod <> H.br
                 H.b "Edit AODict:" <> " " <> (formAODictLoadEditor [] dictName ! A.style "display:inline") <> H.br
 
 dictWords :: WikilonApp
@@ -133,13 +130,12 @@ dictWordsList = justGET $ branchOnOutputMedia $
 
 dictWordsListText :: WikilonApp
 dictWordsListText = dictApp $ \w dictName rq k ->
-    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-    let dict = Branch.head $ Branch.lookup' dictName bset in
+    wikilon_action w (loadDictAndTime dictName) >>= \ (dict,tMod) ->
     let lWords = Dict.wordsWithPrefix dict (requestedPrefix rq) in
     let encWord (Word wbs) = BB.byteString wbs <> BB.char8 '\n' in
     let content = BB.toLazyByteString $ mconcat $ fmap encWord lWords in
     let status = HTTP.ok200 in
-    let etag = eTagN (Dict.unsafeDictAddr dict) in
+    let etag = eTagTW tMod in
     let headers = [etag, plainText] in
     k $ Wai.responseLBS status headers content 
 
@@ -153,11 +149,10 @@ dictWordsListText = dictApp $ \w dictName rq k ->
 -- sophisticated index to support metadata within the dictionary.
 dictWordsPage :: WikilonApp
 dictWordsPage = dictApp $ \w dictName rq k ->
-    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-    let dict = Branch.head $ Branch.lookup' dictName bset in
+    wikilon_action w (loadDictAndTime dictName) >>= \ (dict,tMod) ->
     let prefix = requestedPrefix rq in
     let lBrowse = wordsForBrowsing 24 48 dict prefix in
-    let etag = eTagN (Dict.unsafeDictAddr dict) in
+    let etag = eTagTW tMod in
     let status = HTTP.ok200 in
     let headers = [textHtml, etag] in
     let title = H.string "Browse Dictionary Words" in

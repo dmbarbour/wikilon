@@ -1,10 +1,12 @@
-
+{-# LANGUAGE OverloadedStrings #-}
 -- | TODO: 
 module Wikilon.WAI.Pages.Admin
     ( dbHealth
     ) where
 
 import Data.Monoid
+
+import qualified Text.Blaze.Html5 as H
 import qualified Network.HTTP.Types as HTTP
 import qualified Network.Wai as Wai
 

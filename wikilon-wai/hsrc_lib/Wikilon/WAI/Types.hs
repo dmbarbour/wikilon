@@ -10,7 +10,6 @@ module Wikilon.WAI.Types
 import Data.ByteString (ByteString)
 import qualified Network.Wai as Wai
 import Wikilon.Model
-import System.IO (FilePath)
 
 
 -- This is kind of ugly at the moment. I really need something

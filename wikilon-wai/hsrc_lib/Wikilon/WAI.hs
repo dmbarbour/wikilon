@@ -11,19 +11,15 @@ module Wikilon.WAI
 
 import Control.Arrow (first)
 import Control.Exception (catch)
-import Data.Monoid
-import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
-import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
-import qualified Network.HTTP.Types as HTTP
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Route.Tree as Tree
 import Wikilon.WAI.Types
 import Wikilon.WAI.Routes
 import Wikilon.WAI.Pages
 import Wikilon.WAI.DefaultCSS
-import Wikilon.WAI.Utils (plainText, noCache, eServerError, eNotFound)
+import Wikilon.WAI.Utils
 
 -- | List of routes for the Wikilon web service.
 wikilonRoutes :: [(Route, WikilonApp)]
@@ -81,7 +77,7 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 wikilonWaiApp :: Wikilon -> Wai.Application
 wikilonWaiApp w rq k = catch (baseWikilonApp w rq k) $ \ e -> do 
     wikilon_action w (logSomeException e)
-    k $ eServerError "unhandled exception (logged for admin)"
+    k $ eServerError ("unhandled exception in server: " ++ show e)
 
 baseWikilonApp :: Wikilon -> Wai.Application
 baseWikilonApp w rq k =
@@ -99,50 +95,6 @@ baseWikilonApp w rq k =
             app = Tree.value route
             cap = Tree.captured $ Tree.captures route
         -- ad-hoc special cases
-        Nothing -> case s of
-            ("d":dictPath:"wiki":_) -> remaster dictPath w rq k
-            ("dev":"echo":_) -> echo rq k
-            _ -> k $ eNotFound rq 
-
--- | allow 'views' of Wikilon using a different master dictionary.
---
--- \/d\/foo\/wiki\/  -  view wikilon via the 'foo' dictionary
---
--- While a single dictionary is the default master for Wikilon, it
--- is always possible to treat other dictionaries as the new master.
--- This does add some access costs, but those should be marginal.
---
-remaster :: BranchName -> Wikilon -> Wai.Application
-remaster (Word dictPath) w rq k =
-    -- "d/fooPath/wiki/" adds 8 + length "fooPath" to old prefix. 
-    -- We must urlDecode "fooPath" to recover the dictionary name.
-    let prefixLen = 8 + BS.length dictPath + BS.length (wikilon_httpRoot w) in
-    let _httpRoot = BS.take prefixLen (Wai.rawPathInfo rq) in
-    let _master = HTTP.urlDecode False dictPath in
-    let w' = w { wikilon_master = _master, wikilon_httpRoot = _httpRoot } in
-    baseWikilonApp w' rq k
-
--- | Echo request (for development purposes)
-echo :: Wai.Application
-echo rq k = k response where
-    response = Wai.responseLBS HTTP.ok200 [plainText,noCache] body
-    body = LazyUTF8.fromString $ show rq
-
--- initial root will always start and end with '/'. The
--- empty string is modified to just "/". This simplifies
--- construction of 'base' and alternative masters.
-wrapSlash :: ByteString -> ByteString
-wrapSlash = finiSlash . initSlash
-
-finiSlash :: ByteString -> ByteString
-finiSlash s = case BS.unsnoc s of
-    Just (_, 47) -> s
-    _ -> s <> "/"
-
-initSlash :: ByteString -> ByteString
-initSlash s = case BS.uncons s of
-    Just (47, _) -> s
-    _ -> "/" <> s
-
+        Nothing -> k $ eNotFound rq
 
 

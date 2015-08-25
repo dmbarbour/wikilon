@@ -27,6 +27,7 @@ import qualified Awelon.ClawCode as Claw
 
 import Wikilon.Time
 import Wikilon.Dict.Word
+import qualified Wikilon.Dict as Dict
 
 import Wikilon.WAI.ClawUtils
 import Wikilon.WAI.Conflicts
@@ -48,9 +49,7 @@ textClaw = (HTTP.hContentType, HTTP.renderHeader mediaTypeClaw)
 -- | Obtain the Claw code for 
 getDictWordClawDef :: WikilonApp
 getDictWordClawDef = dictWordApp $ \ w dn dw _rq k ->
-    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-    let b = Branch.lookup' dn bset in
-    let d = Branch.head b in
+    wikilon_action w (loadDict dn) >>= \ d ->
     let abc = Dict.lookup d dw in
     case parseClawDef abc of
         Just cc -> k $ Wai.responseLBS HTTP.ok200 [textClaw] $ Claw.encode cc
@@ -68,9 +67,7 @@ dictWordClawDefEdit = app where
 
 getDictEditPage :: WikilonApp
 getDictEditPage = dictWordApp $ \ w dn dw _rq k ->
-    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-    let b = Branch.lookup' dn bset in
-    let d = Branch.head b in
+    wikilon_action w (loadDictAndTime dn) >>= \ (d,tEditOrigin) -> 
     let abc = Dict.lookup d dw in
     let title = "Command Language View and Editor" in
     let status = HTTP.ok200 in
@@ -82,7 +79,7 @@ getDictEditPage = dictWordApp $ \ w dn dw _rq k ->
         H.body $ do
             H.h1 title
             H.p $ (H.strong "Word:") <> " " <> hrefDictWord dn dw
-            formDictWordClawDefEdit dn dw (Branch.modified b) abc
+            formDictWordClawDefEdit dn dw tEditOrigin abc
 
 type ClawDefEditPostParams = (LazyUTF8.ByteString, String)
 
@@ -113,23 +110,18 @@ recvClawDefEdit (cmd, sEditOrigin) = dictWordApp $ \ w dn dw _rq k ->
                     formClawDefEdit' dn dw sEditOrigin cmd
                     H.p $ (H.strong "Word: ") <> hrefDictWord dn dw
         Right cc -> 
+            let tEditOrigin = readEditOrigin sEditOrigin in
             let command = Claw.clawToABC cc in
             let abc = mkABC [ABC_Block command, ABC_Block mempty] in
             let lUpdates = [(dw, abc)] in
-            getTime >>= \ tNow ->
-            let vc = vcache_space $ wikilon_store $ wikilon_model w in
-            let wd = wikilon_dicts $ wikilon_model w in
-            join $ runVTx vc $ 
-                readPVar wd >>= \ bset ->
-                let b = Branch.lookup' dn bset in
-        
-                -- Detect Edit Conflict...
-                let tMod = parseTime sEditOrigin in
-                let dHead = Branch.head b in
-                let dOrig = maybe (Dict.empty vc) (Branch.histDict b) tMod in
+            join $ wikilon_action w $ 
+                loadBranch dn >>= \ b ->
+                branchModified b >>= \ tMod ->
+                branchHead b >>= \ dHead ->
+                branchSnapshot b tEditOrigin >>= \ dOrig ->
                 let bsHead = Dict.lookupBytes dHead dw in
                 let bsOrig = Dict.lookupBytes dOrig dw in
-                let bConflict = (dHead /= dOrig) && (bsHead /= bsOrig) in
+                let bConflict = (tMod /= tEditOrigin) && (bsHead /= bsOrig) in
 
                 -- Report Edit Conflict
                 let onConflict = 
@@ -143,15 +135,12 @@ recvClawDefEdit (cmd, sEditOrigin) = dictWordApp $ \ w dn dw _rq k ->
                                 H.title title
                             H.body $ do
                                 H.h1 title
-                                H.p "Your initial view was not valid, e.g. due to concurrent edit or\n\
-                                    \because the initial definition did not support a command view."
                                 H.p $ (H.strong "Word: ") <> hrefDictWord dn dw
                                 H.p $ (H.strong "Edit Origin: ") <> H.string sEditOrigin
-                                let sHeadVersion = maybe "--" show (Branch.modified b)
+                                let sHeadVersion = showEditOrigin tMod 
                                 H.p $ (H.strong "Head Version: ") <> H.string sHeadVersion
 
                                 H.h2 "Change Report"
-                                H.p $ H.small $ "TODO: command language view of conflicts!"
                                 reportConflicts (LazyUTF8.toString bsOrig) (LazyUTF8.toString bsHead) (show abc)
                                 
                                 H.h2 "Edit and Resubmit"
@@ -180,11 +169,9 @@ recvClawDefEdit (cmd, sEditOrigin) = dictWordApp $ \ w dn dw _rq k ->
                                 H.h2 "Edit and Resubmit"
                                 H.p "If you can effectively do so from here."
                                 formClawDefEdit' dn dw sEditOrigin cmd
+                                
                     Right dUpd -> do -- Edit Success!
-                        let b' = Branch.update (tNow, dUpd) b 
-                        let bset' = Branch.insert dn b' bset 
-                        writePVar wd bset'
-                        markDurable -- don't lose edits
+                        branchUpdate b dUpd 
                         let status = HTTP.seeOther303
                         let dest = (HTTP.hLocation, wikilon_httpRoot w <> uriDictWord dn dw)
                         let headers = [textHtml, noCache, dest] 
@@ -196,13 +183,13 @@ recvClawDefEdit (cmd, sEditOrigin) = dictWordApp $ \ w dn dw _rq k ->
                                 H.title title
                             H.body $ do
                                 H.h1 title
-                                H.p $ "Return to " <> hrefDictWord dn dw <> "."
+                                H.p $ "If not automatically redirected, return to " <> hrefDictWord dn dw <> "."
 
-formDictWordClawDefEdit :: BranchName -> Word -> Maybe T -> ABC -> HTML
+formDictWordClawDefEdit :: BranchName -> Word -> T -> ABC -> HTML
 formDictWordClawDefEdit d w t (parseClawDef -> Just cc) = do
-    formClawDefEdit' d w (maybe "--" show t) (Claw.encode cc)
+    formClawDefEdit' d w (showEditOrigin t) (Claw.encode cc)
 formDictWordClawDefEdit d w _ _ = do
-    formClawDefEdit' d w "(invalid command view)" LBS.empty
+    formClawDefEdit' d w "(no claw view)" LBS.empty
 
 formClawDefEdit' :: BranchName -> Word -> String -> LazyUTF8.ByteString -> HTML
 formClawDefEdit' d w sOrigin sInit = 

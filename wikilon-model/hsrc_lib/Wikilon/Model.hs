@@ -28,7 +28,7 @@ module Wikilon.Model
     , W(..)
     , loadBranch, listBranches
     , branchHead, branchUpdate, branchModified, branchHistory
-    , loadDict, branchSnapshot
+    , loadDict, loadDictAndTime, branchSnapshot
     , newEmptyDictionary
     , getTransactionTime
     , logErrorMessage, logSomeException, logException
@@ -166,6 +166,14 @@ branchModified = BranchModified
 -- | Load the current dictionary given the branch name.
 loadDict :: BranchName -> W m (Dict m) 
 loadDict dn = loadBranch dn >>= branchHead
+
+-- | Load dictionary and its modified time together.
+loadDictAndTime :: BranchName -> W m (Dict m, T)
+loadDictAndTime dn =
+    loadBranch dn >>= \ b ->
+    branchHead b >>= \ d ->
+    branchModified b >>= \ t ->
+    return (d,t)
 
 -- | Obtain the snapshot of a dictionary at a specific time. 
 branchSnapshot :: Branch m -> T -> W m (Dict m) 

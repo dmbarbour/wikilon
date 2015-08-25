@@ -23,9 +23,8 @@ import qualified Network.Wai as Wai
 
 import qualified Awelon.ClawCode as Claw
 import qualified Awelon.Base16 as B16
-import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
-
+import qualified Wikilon.Dict as Dict
 
 import Wikilon.WAI.Utils
 import Wikilon.WAI.Routes
@@ -77,6 +76,16 @@ viewClawOrAODef abc =
             H.pre ! A.lang "claw" $ H.code $ H.string sClaw
             H.small $ H.strong "viewing as: " <> href uriClawDocs "claw" <> H.br
 
+-- display a <nav> for clients.
+displayClients :: Int -> BranchName -> Word -> [Word] -> HTML
+displayClients nMaxClients dn dw lClients = 
+    let lLocalClients = L.take nMaxClients lClients in
+    let bMoreClients = (not . L.null . L.drop nMaxClients) lClients in
+    unless (L.null lClients) $ H.nav ! A.class_ "Clients" $ do
+        H.strong "Clients:"
+        forM_ lLocalClients $ \ c -> " " <> hrefDictWord dn c 
+        when bMoreClients $ " " <> href (uriDictWordClients dn dw) "(more)"
+
 -- | This is our basic non-interactive web page for words.
 --
 -- For the moment, I'm going to assume that most words will be
@@ -91,14 +100,12 @@ viewClawOrAODef abc =
 --  
 getDictWordPage :: WikilonApp
 getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
-    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-    let b = Branch.lookup' dn bset in
-    let d = Branch.head b in 
+    wikilon_action w (loadDictAndTime dn) >>= \ (d,tMod) ->
     let abc = Dict.lookup d dw in
     let h = Dict.lookupVersionHash d dw in
     let hs = (BS.pack . (35:) . B16.encode . BS.unpack) h in 
     let status = HTTP.ok200 in
-    let headers = [textHtml] in
+    let headers = [textHtml, eTagTW tMod] in
     let title = H.string "Word: " <> H.unsafeByteString (Dict.wordToUTF8 dw) in
     k $ Wai.responseLBS status headers $ renderHTML $ do
         H.head $ do
@@ -112,14 +119,9 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
             let ver = H.span ! A.class_ "versionHash" $ H.unsafeByteString hs
             H.strong "Dictionary:" <> " " <> hrefDict dn
             let lDeps = L.nub $ Dict.abcWords abc 
-            let lClients = Dict.wordClients d dw
-            let maxClientsHere = 12 
-            let displayClients = case L.drop maxClientsHere lClients of
-                    [] -> navWords "Clients" dn lClients
-                    _ -> navWords "Clients" dn (L.take maxClientsHere lClients) <>
-                         href (uriDictWordClients dn dw) "(full client list)" <> H.br
             navWords "Depends" dn lDeps
-            displayClients
+            let lClients = Dict.wordClients d dw
+            displayClients 15 dn dw lClients
 
             -- links to editors (no longer editing inline)
             H.nav $ do
@@ -153,11 +155,9 @@ dictWordClients = app where
         [(mediaTypeTextHTML, getPage)
         ,(mediaTypeTextPlain, getTextList)
         ]
-    getClients w dn dw =
-        readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-        let d = Branch.head $ Branch.lookup' dn bset in
-        let lClients = Dict.wordClients d dw in
-        return lClients
+    getClients w dn dw = 
+        wikilon_action w (loadDict dn) >>= \ d ->
+        return (Dict.wordClients d dw)
     getPage = dictWordApp $ \ w dn dw _rq k ->
         getClients w dn dw >>= \ lClients ->
         let status = HTTP.ok200 in

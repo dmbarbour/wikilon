@@ -50,6 +50,12 @@ PRIORITY TODO:
 
 TODO:
 
+* widgets for editing words
+ * tabbed views, or multiple side-by-side views
+
+* develop edit-sessions 
+ * multiple words and views edited together
+
 * simplify WAI widgets
  * create a Wikilon-WAI monad model
  * automatic generation of AJAX?
