@@ -27,9 +27,7 @@ import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
 
-import Wikilon.Dict.Word (Word(..), isValidWord)
-import Wikilon.Time
-
+import qualified Wikilon.Dict as Dict
 import Wikilon.WAI.Utils
 import Wikilon.WAI.RecvFormPost
 import Wikilon.WAI.Routes
@@ -54,13 +52,11 @@ dictList = justGET $ branchOnOutputMedia
 
 -- | simply list dictionaries by name, one per line.
 listOfDictsText :: WikilonApp
-listOfDictsText w _cap _rq k = 
-    readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-    let lNames = Branch.keys bset in
-    let etag = eTagN (Branch.unsafeBranchSetAddr bset) in
-    k $ Wai.responseLBS HTTP.ok200 [plainText,etag] $ BB.toLazyByteString $ 
-        let encName n = BB.byteString n <> BB.charUtf8 '\n' in
-        mconcat (encName <$> lNames)
+listOfDictsText w _cap _rq k = join $ 
+    wikilon_action w listBranches >>= \ lBranchNames -> 
+    return $ k $ Wai.responseLBS HTTP.ok200 [plainText] $ BB.toLazyByteString $ 
+        let encName n = BB.byteString (wordToUTF8 n) <> BB.charUtf8 '\n' in
+        mconcat (encName <$> lBranchNames)
 
 -- | Our list of dictionaries is another page that should be configured
 -- by our clients. It will need a lot of features:
@@ -75,9 +71,8 @@ listOfDictsText w _cap _rq k =
 listOfDictsPage :: WikilonApp
 listOfDictsPage w _cap _rq k =
     wikilon_action w listBranches >>= \ lBranchNames -> 
-    let etag = eTagNW (Branch.unsafeBranchSetAddr bset) in
     let title = H.string "Wikilon Dictionaries" in
-    k $ Wai.responseLBS HTTP.ok200 [textHtml, etag] $ renderHTML $ do
+    k $ Wai.responseLBS HTTP.ok200 [textHtml] $ renderHTML $ do
     H.head $ do
         htmlHeaderCommon w
         H.title title
@@ -88,19 +83,6 @@ listOfDictsPage w _cap _rq k =
         H.ul $ forM_ lBranchNames $ H.li . hrefDict 
         H.hr 
         formSimpleCreateDict
-
-listDictsHTML :: Wikilon -> Branch.BranchSet -> HTML
-listDictsHTML _w bset = H.div ! A.id "dictTable" $ do
-    H.table $ do
-        H.tr $ mapM_ H.th ["Dictionary", "Versions", "Modified", "Head-ETag"]
-        forM_ (Branch.toList bset) $ \ (bname,b) -> H.tr $ do 
-            let d0 = Branch.head b
-            H.td $ hrefDict bname
-            H.td $ H.toMarkup $ Branch.branchSize b
-            H.td $ maybe ("--") htmlSimpTime $ Branch.modified b
-            H.td $ H.toMarkup $ toInteger $ Dict.unsafeDictAddr d0
-    H.b "Count of Dictionaries:" <> " " <> H.toMarkup (Branch.width bset) <> H.br
-    H.b "Count of Versions:" <> " " <> H.toMarkup (Branch.volume bset) <> H.br
 
 -- | todo: consider authorization requirements for creating a dictionary
 dictCreate :: WikilonApp
@@ -129,7 +111,7 @@ gotoDict w d =
     let status = HTTP.seeOther303 in
     let location = (HTTP.hLocation, wikilon_httpRoot w <> uriDict d) in
     let headers = [location, textHtml] in
-    let title = H.string $ "Redirect to Dictionary " ++ UTF8.toString d in
+    let title = H.string $ "Redirect to Dictionary " ++ UTF8.toString (wordToUTF8 d) in
     Wai.responseLBS status headers $ renderHTML $ do
     H.head $ do
         htmlHeaderCommon w
@@ -138,31 +120,23 @@ gotoDict w d =
         H.h1 title
         H.p $ "If you aren't automatically redirected, goto " <> hrefDict d
 
--- | Create a dictionary with a single entry `id` to prevent destruction.
--- Won't change anything if the dictionary is non-empty.
+-- | Create a dictionary will actually just define the word `id` to `[][]`
+-- (the empty identity function) if the dictionary is empty.
 createDict :: Wikilon -> BranchName -> IO Bool
-createDict w d =
-    getTime >>= \ tNow ->
-    let vc = vcache_space (wikilon_store $ wikilon_model w) in
-    runVTx vc $ 
-        readPVar (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-        let b0 = Branch.lookup' d bset in
-        let bNew = Dict.null (Branch.head b0) in
-        if not bNew then return False else
-        let initWords = [("id","[][]")] in
-        case Dict.updateWords initWords (Branch.head b0) of
-            Left _ -> return False -- shouldn't happen...
-            Right d' -> do
-                let b' = Branch.update (tNow,d') b0 
-                let bset' = Branch.insert d b' bset 
-                writePVar (wikilon_dicts $ wikilon_model w) bset'
-                return True
+createDict w dn = wikilon_action w $ 
+    loadBranch dn >>= \ b ->
+    branchHead b >>= \ d ->
+    let bNull = L.null (Dict.toList d) in
+    if not bNull then return False else
+    let d' = Dict.unsafeUpdateWord "id" "[][]" d in
+    branchUpdate b d' >>
+    return True
 
 ppDictName :: PostParams -> Maybe BranchName
 ppDictName ps = 
     L.lookup "dictName" ps >>= \ p ->
     let dn = Word $ LBS.toStrict (postParamContent p) in
-    guard (isValidWord dn)
+    guard (isValidWord dn) >>
     return dn
 
 -- | a simple form for creation of a dictionary

@@ -44,8 +44,8 @@ type Deps = Deps1
 -- version 1 of the dictionary
 data Dict1 = Dict1
     { dict_defs   :: !(Trie Def1)
-    , dict_deps   :: !(Trie Deps1)
-    , dict_hash   :: !(Trie SecureHash)
+    , dict_deps   :: (Trie Deps1)
+    , dict_hash   :: (Trie SecureHash)
     } deriving (Eq, Typeable)
 newtype Def1 = Def1 (VRef LBS.ByteString) deriving (Eq, Typeable)
 newtype Deps1 = Deps1 (Trie U) deriving (Eq, Typeable)

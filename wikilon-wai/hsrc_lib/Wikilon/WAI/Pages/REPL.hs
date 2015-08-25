@@ -40,7 +40,6 @@ module Wikilon.WAI.Pages.REPL
 import Control.Monad
 import Data.Monoid
 import qualified Data.List as L
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.UTF8 as UTF8
@@ -52,11 +51,10 @@ import qualified Text.Blaze.Html5.Attributes as A
 
 import qualified Network.Wai as Wai
 import qualified Awelon.ClawCode as CC
-import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
 import Awelon.ABC.Eval (Value(..))
 import qualified Awelon.ABC.Eval as Eval
-import Wikilon.Dict.Word
+import qualified Wikilon.Dict as Dict
 import Wikilon.Compile (referenceCompile, basicEval)
 import Wikilon.Time
 
@@ -66,7 +64,7 @@ import Wikilon.WAI.Routes
 import Wikilon.WAI.RecvFormPost 
 
 -- | stateless REPL form for claw code.
-formDictClawRepl :: Eval.Quota -> Branch.BranchName -> LazyUTF8.ByteString -> HTML
+formDictClawRepl :: Eval.Quota -> BranchName -> LazyUTF8.ByteString -> HTML
 formDictClawRepl q dn sCommand = 
     let uriAction = H.unsafeByteStringValue (uriRepl dn) in
     H.form ! A.method "GET" ! A.action uriAction ! A.id "formClawRepl" $ do
@@ -82,7 +80,7 @@ formDictClawRepl q dn sCommand =
                 ! A.pattern "[0-9]*" ! A.size "10"
 
 -- | a short form for REPL, accepting only a single line of input.
-formDictClawReplS :: Eval.Quota -> Branch.BranchName -> LazyUTF8.ByteString -> HTML
+formDictClawReplS :: Eval.Quota -> BranchName -> LazyUTF8.ByteString -> HTML
 formDictClawReplS q dn sCommand =
     let uriAction = H.unsafeByteStringValue (uriRepl dn) in
     H.form ! A.method "GET" ! A.action uriAction ! A.id "formClawRepl" $ do
@@ -142,9 +140,8 @@ replPage = dictApp $ \ w dn rq k ->
                     replForm
                     H.hr
                     footerDict
-        Right cc ->
-            readPVarIO (wikilon_dicts $ wikilon_model w) >>= \ bset ->
-            let d = Branch.head $ Branch.lookup' dn bset in
+        Right cc -> 
+            wikilon_action w (loadDict dn) >>= \ d ->
             let abc = CC.clawToABC cc in
             let footerWords = navWords "Words" dn $ L.nub $ Dict.abcWords abc in
 
@@ -269,7 +266,7 @@ printStuck s = do
     let explainWhyWeAreStuck = -- heuristic
             if Eval.stuck_quota s < 1 then "Evaluation halted on quota limitations." else
             case Eval.stuck_curr s of
-                ABC.ABC_Tok tok -> "Evaluation halted on unrecognized token."
+                ABC.ABC_Tok tok -> H.string $ "Evaluation halted on unrecognized token " ++ UTF8.toString tok
                 _ -> "Evaluation halted due to a type error."
     H.p $ explainWhyWeAreStuck
     H.h2 "Continuation"

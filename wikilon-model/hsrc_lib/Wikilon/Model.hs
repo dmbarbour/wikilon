@@ -98,8 +98,9 @@ type ModelRunner = forall a . forall m . W m a -> IO a
 -- layer.
 
 -- | The Wikilon model API, presented as a monad with a bunch of
--- concrete commands. This could probably be expressed as a free
--- monad, but the following will do for now.
+-- concrete commands. There might be better ways to express this
+-- (free monad, continuation monad, Data.Machine.Type, etc.) but
+-- this should be enough to get started quickly.
 data W m a where 
     Return :: a -> W m a
     Bind :: W m a -> (a -> W m b) -> W m b

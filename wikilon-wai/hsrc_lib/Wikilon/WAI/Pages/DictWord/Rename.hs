@@ -15,7 +15,6 @@ import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import qualified Network.Wai as Wai
 
-import Wikilon.Time
 import Wikilon.Dict.Word
 
 import Wikilon.WAI.Utils
@@ -71,15 +70,10 @@ recvWordRename :: PostParams -> WikilonApp
 recvWordRename pp
   | (Just wt) <- Word . LBS.toStrict <$> getPostParam "target" pp
   , isValidWord wt
-  = dictWordApp $ \ w dn wo _rq k ->
-    let vc = vcache_space $ wikilon_store $ wikilon_model w in
-    getTime >>= \ tNow ->
-    join $ runVTx vc $ 
-        let dicts = wikilon_dicts $ wikilon_model w in
-        readPVar dicts >>= \ bset ->
-        let b = Branch.lookup' dn bset in
-        let d = Branch.head b in
-        case Dict.renameWord wo wt d of
+  = dictWordApp $ \ w dn wo _rq k -> join $ wikilon_action w $ 
+        loadBranch dn >>= \ b ->
+        branchHead b >>= \ d ->
+        case renameWord wo wt d of
             Nothing -> 
                 let status = HTTP.conflict409 in
                 let headers = [textHtml, noCache] in
@@ -97,10 +91,7 @@ recvWordRename pp
                               \identical to origin, or a simple redirect to/from origin.\n\
                               \No changes were made to the dictionary."
             Just d' -> do
-                let b' = Branch.update (tNow, d') b 
-                let bset' = Branch.insert dn b' bset 
-                writePVar dicts bset' -- commit update
-                markDurable -- push to disk
+                branchUpdate b d'
                 -- prepare our response:
                 let status = HTTP.seeOther303 
                 let dest = (HTTP.hLocation, wikilon_httpRoot w <> uriDictWord dn wt) 
