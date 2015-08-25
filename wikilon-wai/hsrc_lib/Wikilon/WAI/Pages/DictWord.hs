@@ -100,14 +100,15 @@ displayClients nMaxClients dn dw lClients =
 --  
 getDictWordPage :: WikilonApp
 getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
-    wikilon_action w (loadDictAndTime dn) >>= \ (d,tMod) ->
+    join $ wikilon_action w $
+    loadDictAndTime dn >>= \ (d,tMod) ->
     let abc = Dict.lookup d dw in
     let h = Dict.lookupVersionHash d dw in
     let hs = (BS.pack . (35:) . B16.encode . BS.unpack) h in 
     let status = HTTP.ok200 in
     let headers = [textHtml, eTagTW tMod] in
     let title = H.string "Word: " <> H.unsafeByteString (Dict.wordToUTF8 dw) in
-    k $ Wai.responseLBS status headers $ renderHTML $ do
+    return $ k $ Wai.responseLBS status headers $ renderHTML $ do
         H.head $ do
             htmlHeaderCommon w
             H.title title
@@ -156,8 +157,9 @@ dictWordClients = app where
         ,(mediaTypeTextPlain, getTextList)
         ]
     getClients w dn dw = 
-        wikilon_action w (loadDict dn) >>= \ d ->
-        return (Dict.wordClients d dw)
+        wikilon_action w $
+            loadDict dn >>= \ d ->
+            return (Dict.wordClients d dw)
     getPage = dictWordApp $ \ w dn dw _rq k ->
         getClients w dn dw >>= \ lClients ->
         let status = HTTP.ok200 in

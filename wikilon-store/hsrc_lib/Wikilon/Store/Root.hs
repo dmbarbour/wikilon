@@ -1,14 +1,12 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, Rank2Types #-}
 -- | The root data type for the Wikilon state, based on a set of root
 -- PVars in VCache. Wikilon can be extended with new features by adding
 -- new roots. 
 module Wikilon.Store.Root
     ( WikilonStore(..)
-    , wikilon_errlog
-    , logSomeException, logException, logErrorMessage
     , loadWikilonStore
-    , adminCode
-    , isAdminCode
+    , adminCode, isAdminCode
+    , runModelTransaction
     ) where
 
 import Control.Exception (SomeException, Exception)
@@ -17,6 +15,7 @@ import qualified Data.ByteString.UTF8 as UTF8
 import Database.VCache
 import Data.VCache.LoB (LoB)
 import qualified Data.VCache.LoB as LoB
+import Wikilon.Model
 import Wikilon.Store.Secret
 import Wikilon.Store.Branch (BranchSet)
 import Wikilon.SecureHash
@@ -27,7 +26,7 @@ import qualified Awelon.Base16 as B16
 -- | holistic Wikilon state.
 data WikilonStore = WikilonStore
     { wikilon_store     :: !VCache      -- ^ persistence layer features
-    , wikilon_home      :: !FilePath    -- ^ in case I later want plugins?
+    , wikilon_home      :: !FilePath    -- ^ e.g. in case I later want GHC-layer plugins
     , wikilon_dicts     :: !(PVar BranchSet) -- ^ dictionary contents (no security, etc.)
     , wikilon_uniqueSrc :: !(PVar Integer)   -- ^ predictable source of unique values
     , wikilon_loadCount :: !Integer     -- ^ how many times has Wikilon been loaded?
@@ -59,24 +58,14 @@ loadWikilonStore vc _home = do
         , wikilon_secret = _secret
         }
 
+{-
 -- | Access the error log. I'm not going to bother keeping this one
 -- in active memory at the moment. 
-wikilon_errlog :: WikilonStore -> PVar (LoB (T,UTF8.ByteString))
-wikilon_errlog w = loadRootPVar (wikilon_store w) "errlog" (LoB.empty vc 16) where
+_wikilon_errlog :: WikilonStore -> PVar (LoB (T,UTF8.ByteString))
+_wikilon_errlog w = loadRootPVar (wikilon_store w) "errlog" (LoB.empty vc 16) where
     vc = vcache_space $ wikilon_store w
 
-logSomeException :: WikilonStore -> SomeException -> IO ()
-logSomeException = logException
-
-logException :: (Exception e) => WikilonStore -> e -> IO ()
-logException w = logErrorMessage w . UTF8.fromString . show
-
-logErrorMessage :: WikilonStore -> UTF8.ByteString -> IO ()
-logErrorMessage w msg =
-    let var = wikilon_errlog w in
-    let vc = pvar_space var in
-    getTime >>= \ tNow ->
-    runVTx vc $ modifyPVar var $ LoB.cons (tNow, msg)
+-}
 
 incPVar :: PVar Integer -> IO Integer
 incPVar v = runVTx (pvar_space v) $ do
@@ -96,6 +85,14 @@ adminCode w =
 isAdminCode :: WikilonStore -> UTF8.ByteString -> Bool
 isAdminCode w s = (Signature (adminCode w)) == (Signature s)
     -- Signature wrapper for constant time comparison
+
+runModelTransaction :: WikilonStore -> (forall m . W m a) -> IO a
+runModelTransaction ws actions = runVTx vc $ runTransaction ws actions where
+    vc = vcache_space $ wikilon_store ws
+
+runTransaction :: WikilonStore -> W WikilonStore a -> VTx a 
+runTransaction _ _ = fail "TODO! runActions"
+
 
 -- TODO:
 --

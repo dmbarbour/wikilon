@@ -60,7 +60,7 @@ data family Branch m
 -- | a Dict value has a machine-dependent representation.
 type Dict m = DictObj (DictRep m)
 
-type ModelRunner = forall a . forall m . W m a -> IO a
+type ModelRunner = forall a . (forall m . W m a) -> IO a
 
 -- I need a runner that hides the implementation-type of the model.
 --

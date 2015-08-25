@@ -48,8 +48,9 @@ textClaw = (HTTP.hContentType, HTTP.renderHeader mediaTypeClaw)
 
 -- | Obtain the Claw code for 
 getDictWordClawDef :: WikilonApp
-getDictWordClawDef = dictWordApp $ \ w dn dw _rq k ->
-    wikilon_action w (loadDict dn) >>= \ d ->
+getDictWordClawDef = dictWordApp $ \ w dn dw _rq k -> 
+    join $ wikilon_action w $ 
+    loadDict dn >>= \ d -> return $ 
     let abc = Dict.lookup d dw in
     case parseClawDef abc of
         Just cc -> k $ Wai.responseLBS HTTP.ok200 [textClaw] $ Claw.encode cc
@@ -67,12 +68,13 @@ dictWordClawDefEdit = app where
 
 getDictEditPage :: WikilonApp
 getDictEditPage = dictWordApp $ \ w dn dw _rq k ->
-    wikilon_action w (loadDictAndTime dn) >>= \ (d,tEditOrigin) -> 
+    join $ wikilon_action w $ 
+    loadDictAndTime dn >>= \ (d,tEditOrigin) -> 
     let abc = Dict.lookup d dw in
     let title = "Command Language View and Editor" in
     let status = HTTP.ok200 in
     let headers = [textHtml] in
-    k $ Wai.responseLBS status headers $ renderHTML $ do
+    return $ k $ Wai.responseLBS status headers $ renderHTML $ do
         H.head $ do
             htmlHeaderCommon w
             H.title title

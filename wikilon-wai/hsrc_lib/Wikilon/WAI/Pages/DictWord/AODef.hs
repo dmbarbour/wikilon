@@ -8,6 +8,7 @@ module Wikilon.WAI.Pages.DictWord.AODef
     , formDictWordAODefEdit
     ) where
 
+import Control.Monad
 import Data.Monoid
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Network.HTTP.Types as HTTP
@@ -41,12 +42,13 @@ dictWordAODef = app where
 -- | Return just the AO definition. This will always succeed, though
 -- it may return an empty string if an undefined word is requested.
 getDictWordAODef :: WikilonApp
-getDictWordAODef = dictWordApp $ \ w dn dw _rq k ->
-    wikilon_action w (loadDictAndTime dn) >>= \ (d,tMod) ->
+getDictWordAODef = dictWordApp $ \ w dn dw _rq k -> 
+    join $ wikilon_action w $ 
+    loadDictAndTime dn >>= \ (d,tMod) ->
     let status = HTTP.ok200 in
     let hMedia = (HTTP.hContentType, HTTP.renderHeader mediaTypeAODef) in
     let headers = [hMedia, eTagTW tMod] in
-    k $ Wai.responseLBS status headers $ Dict.lookupBytes d dw 
+    return $ k $ Wai.responseLBS status headers $ Dict.lookupBytes d dw 
 
 
 putDictWordAODef :: WikilonApp
@@ -61,13 +63,14 @@ dictWordAODefEdit = app where
     onPost = branchOnOutputMedia [(mediaTypeTextHTML, recvFormPost recvAODefEdit)]
 
 getAODefEditPage :: WikilonApp
-getAODefEditPage = dictWordApp $ \ w dn dw _rq k ->
-    wikilon_action w (loadDictAndTime dn) >>= \ (d,tMod) ->
+getAODefEditPage = dictWordApp $ \ w dn dw _rq k -> 
+    join $ wikilon_action w $
+    loadDictAndTime dn >>= \ (d,tMod) ->
     let abcBytes = Dict.lookupBytes d dw in
     let title = "AO Definition Editor" in
     let status = HTTP.ok200 in
     let headers = [textHtml, eTagTW tMod] in
-    k $ Wai.responseLBS status headers $ renderHTML $ do
+    return $ k $ Wai.responseLBS status headers $ renderHTML $ do
         H.head $ do
             htmlHeaderCommon w
             H.title title

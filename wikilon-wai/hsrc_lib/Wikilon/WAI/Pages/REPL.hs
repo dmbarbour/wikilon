@@ -140,8 +140,8 @@ replPage = dictApp $ \ w dn rq k ->
                     replForm
                     H.hr
                     footerDict
-        Right cc -> 
-            wikilon_action w (loadDict dn) >>= \ d ->
+        Right cc -> join $ wikilon_action w $
+            loadDictAndTime dn >>= \ (d,tMod) -> return $ 
             let abc = CC.clawToABC cc in
             let footerWords = navWords "Words" dn $ L.nub $ Dict.abcWords abc in
 
@@ -161,7 +161,7 @@ replPage = dictApp $ \ w dn rq k ->
             let dtEval = tf - t0 in
             let footerEvalTime = htmlDiffTime dtEval <> " CPU time elapsed." <> H.br in
             let status = HTTP.ok200 in
-            let headers = [textHtml] in
+            let headers = [textHtml, eTagTW tMod] in
             let title = case evalResult of
                     Left _ -> "REPL Stuck" 
                     Right _ -> "REPL"
@@ -180,6 +180,7 @@ replPage = dictApp $ \ w dn rq k ->
                     footerEvalTime
                     footerWords
                     footerDict
+                        
 
 -- TODO: create a REPL variation that does not expand {%word} links
 -- within blocks and the continuation, i.e. such that these can still

@@ -57,7 +57,7 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 
 
     -- administrative
-    ,("/admin/dbHealth", dbHealth)
+    --,("/admin/dbHealth", dbHealth)
 
     -- built-in documentation
     ,("/about/aodict", aodictDocs)
@@ -97,4 +97,6 @@ baseWikilonApp w rq k =
         -- ad-hoc special cases
         Nothing -> k $ eNotFound rq
 
-
+-- Thoughts:
+--  rather than remastering a dictionary via URL
+--  consider doing so via cookie or query parameter

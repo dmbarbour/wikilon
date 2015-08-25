@@ -49,7 +49,9 @@ dictResource = app where
 
 dictFrontPage :: WikilonApp
 dictFrontPage = dictApp $ \ w dictName rq k -> 
-    wikilon_action w (loadDictAndTime dictName) >>= \ (d,tMod) ->
+    join $ wikilon_action w $
+    loadDictAndTime dictName >>= \ (d,tMod) ->
+    return $
     let status = HTTP.status200 in
     let headers = [textHtml, eTagTW tMod] in
     k $ Wai.responseLBS status headers $ renderHTML $ do
@@ -130,7 +132,9 @@ dictWordsList = justGET $ branchOnOutputMedia $
 
 dictWordsListText :: WikilonApp
 dictWordsListText = dictApp $ \w dictName rq k ->
-    wikilon_action w (loadDictAndTime dictName) >>= \ (dict,tMod) ->
+    join $ wikilon_action w $ 
+    loadDictAndTime dictName >>= \ (dict,tMod) ->
+    return $ 
     let lWords = Dict.wordsWithPrefix dict (requestedPrefix rq) in
     let encWord (Word wbs) = BB.byteString wbs <> BB.char8 '\n' in
     let content = BB.toLazyByteString $ mconcat $ fmap encWord lWords in
@@ -149,7 +153,9 @@ dictWordsListText = dictApp $ \w dictName rq k ->
 -- sophisticated index to support metadata within the dictionary.
 dictWordsPage :: WikilonApp
 dictWordsPage = dictApp $ \w dictName rq k ->
-    wikilon_action w (loadDictAndTime dictName) >>= \ (dict,tMod) ->
+    join $ wikilon_action w $ 
+    loadDictAndTime dictName >>= \ (dict,tMod) ->
+    return $ 
     let prefix = requestedPrefix rq in
     let lBrowse = wordsForBrowsing 24 48 dict prefix in
     let etag = eTagTW tMod in
