@@ -1,6 +1,7 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
--- | Time with orphaned VCacheable instances
+-- | Time with orphaned VCacheable instances 
+-- plus simple access as an STM variable...
 module Wikilon.Store.Time
     ( module Wikilon.Time
     ) where
@@ -16,3 +17,6 @@ instance VCacheable T where
 instance VCacheable DT where
     get = DT . fromInteger <$> get
     put (DT dt) = put (toInteger dt)
+
+
+

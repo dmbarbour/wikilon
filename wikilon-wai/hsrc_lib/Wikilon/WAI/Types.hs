@@ -27,5 +27,7 @@ data Wikilon = Wikilon
     { wikilon_httpRoot  :: !ByteString   -- ^ URI root for web services
     , wikilon_master    :: !BranchName   -- ^ master dictionary for resources
     , wikilon_action    :: !ModelRunner  -- ^ abstract queries and updates
-    , wikilon_home      :: !FilePath     -- ^ until we push css into dictionary 
+    , wikilon_home      :: !FilePath     -- ^ until we push css into dictionary
+    , wikilon_error     :: !(String -> IO ()) -- ^ simplistic error reporting
     }
+

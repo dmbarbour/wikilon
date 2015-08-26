@@ -36,15 +36,12 @@ import Data.Word (Word64)
 import Data.VCache.Trie (Trie)
 import Database.VCache
 import qualified Data.Array.IArray as A
-
-import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
 import qualified Awelon.Base16 as B16
 
 import Wikilon.SecureHash
 import Wikilon.Dict
 import Wikilon.Dict.Word
-import Wikilon.Dict.Token
 
 import Wikilon.Store.Dict.Type
 
@@ -82,6 +79,7 @@ _decode b = case ABC.decode b of
 _impossible :: String -> a
 _impossible = error . dictErr
 
+instance Dictionary Dict
 
 instance DictView Dict where
     lookup d = _decode . lookupBytes d

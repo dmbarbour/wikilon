@@ -29,9 +29,8 @@ module Wikilon.Model
     , loadBranch, listBranches
     , branchHead, branchUpdate, branchModified, branchHistory
     , loadDict, loadDictAndTime, branchSnapshot
-    , newEmptyDictionary
     , getTransactionTime
-    , logErrorMessage, logSomeException, logException
+    , newEmptyDictionary
     --, WikilonModel, ModelRunner
     --, BranchingDictionary(..), CreateDictionary(..)
     --, GlobalErrorLog(..), logSomeException, logException
@@ -41,7 +40,6 @@ module Wikilon.Model
 
 import Control.Monad
 import Control.Applicative
-import Control.Exception
 import Wikilon.Time (T)
 import Wikilon.SecureHash
 import Wikilon.Dict.Object
@@ -54,8 +52,8 @@ type BranchName = Word
 -- lazily loaded, but provide a pure value interface. Branches are
 -- modeled as mutable constructs, albeit addend-only with a hidden
 -- decay model.
-data family DictRep m
-data family Branch m
+type family DictRep m
+type family Branch m
 
 -- | a Dict value has a machine-dependent representation.
 type Dict m = DictObj (DictRep m)
@@ -106,17 +104,17 @@ data W m a where
     Bind :: W m a -> (a -> W m b) -> W m b
 
     -- basics
-    LoadBranch :: BranchName -> W m (Branch m)
     ListBranches :: W m [BranchName]
+
+    LoadBranch :: BranchName -> W m (Branch m)
     BranchHead :: Branch m -> W m (Dict m)
     BranchModified :: Branch m -> W m T
     BranchHistory :: Branch m -> T -> T -> W m (Dict m, [(T, Dict m)])
     BranchUpdate :: Branch m -> Dict m -> W m ()
-    NewEmptyDictionary :: W m (Dict m)
 
-    -- miscellaneous
+    -- miscellaneous 
+    NewEmptyDictionary :: W m (Dict m)
     GetTransactionTime :: W m T
-    LogErrorMessage :: String -> W m ()
 
     
 instance Monad (W m) where
@@ -185,24 +183,10 @@ branchSnapshot b t = liftM fst $ branchHistory b t t
 newEmptyDictionary :: W m (Dict m)
 newEmptyDictionary = NewEmptyDictionary
 
--- | Obtain a low-precision indicator of time, constant within a 
--- transaction and potentially shared between transactions.
+-- | Obtain the transaction time that would be associated with
+-- branch updates and so on.
 getTransactionTime :: W m T
 getTransactionTime = GetTransactionTime
-
--- | A global error log is not the best way to report errors, but it
--- is familiar and reasonably convenient. This can be a fallback to
--- more effective mechanisms.
-logErrorMessage :: String -> W m ()
-logErrorMessage = LogErrorMessage
-
--- | catchall exceptions 
-logSomeException :: SomeException -> W m ()
-logSomeException = logException
-
--- | log a generic error message
-logException :: (Exception e) => e -> W m ()
-logException = logErrorMessage . ("Exception: " ++) . show
 
 
 -- TODO

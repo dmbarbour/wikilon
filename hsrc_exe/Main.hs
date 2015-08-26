@@ -16,8 +16,9 @@ import qualified Data.ByteString.UTF8 as UTF8
 import GHC.Conc (getNumProcessors, setNumCapabilities)
 import Database.VCache 
 import Database.VCache.Cache
-import qualified Wikilon.Store.Root as Wikilon
-import qualified Wikilon.WAI as Wikilon
+import Wikilon.Dict.Word
+import Wikilon.Store.Root (loadWikilonStore, runModelTransaction, adminCode)
+import Wikilon.WAI (Wikilon(..), wikilonWaiApp)
 
 helpMessage :: String
 helpMessage =
@@ -143,15 +144,22 @@ runWikilonInstance a = mainBody where
         (`finally` vcacheSync (vcache_space vc)) $  -- sync on normal exit
             let wvc = vcacheSubdir "wiki/" vc in
             let whome = home FS.</> "wiki/" in
-            Wikilon.loadWikilonStore wvc whome >>= \ wikiStore ->
-            let wiki = Wikilon.wikilonWaiConf "" master wikiStore in
+            loadWikilonStore wvc whome >>= \ wikiStore ->
+            let wiki = Wikilon 
+                    { wikilon_httpRoot = ""
+                    , wikilon_master = Word master
+                    , wikilon_action = runModelTransaction wikiStore
+                    , wikilon_home = whome -- hopefully be rid of this soon...
+                    , wikilon_error = putErrMsg
+                    }
+            in
             let printGreetingAndAdminCode = do
                     Sys.putStrLn ("Wikilon:")
                     Sys.putStrLn ("  Home:   " ++ showFP home)
                     Sys.putStrLn ("  Port:   " ++ show port) 
                     Sys.putStrLn ("  Cache:  " ++ show cacheSize ++ " MB")
                     Sys.putStrLn ("  HTTPS:  " ++ show bUseTLS)
-                    Sys.putStrLn ("  Admin:  " ++ UTF8.toString (Wikilon.adminCode wikiStore))
+                    Sys.putStrLn ("  Admin:  " ++ UTF8.toString (adminCode wikiStore))
                     Sys.putStrLn ("  Master: " ++ UTF8.toString master) 
             in
             unless (_silent a) printGreetingAndAdminCode >>
@@ -161,13 +169,14 @@ runWikilonInstance a = mainBody where
             let run = if bUseTLS then WarpTLS.runTLS tlsSettings warpSettings
                                  else Warp.runSettings warpSettings 
             in
-            run $ Wikilon.wikilonWaiApp wiki
+            run $ wikilonWaiApp wiki
     badArgs = _badArgs a
     hasBadArgs = not $ L.null badArgs
     failWithBadArgs = err badArgMsg >> err helpMessage >> Sys.exitFailure
     badArgMsg = "unrecognized arguments: " ++ show badArgs 
     askedForHelp = _help a
     helpAndExit = Sys.putStrLn helpMessage >> Sys.exitSuccess
+    putErrMsg = Sys.hPutStrLn Sys.stderr -- for now, just dump to stderr
 
 showFP :: FS.FilePath -> String
 showFP = id

@@ -22,8 +22,6 @@ module Wikilon.Store.Branch
     , delete
     , adjust
 
-    , isValidBranchName
-
     , head
     , modified
     , hist
@@ -41,8 +39,8 @@ module Wikilon.Store.Branch
     ) where
 
 import Prelude hiding (lookup, head)
+import Control.Arrow (first)
 import Control.Monad
-import qualified Data.ByteString.UTF8 as UTF8
 import Data.Typeable (Typeable)
 import Data.Word (Word64)
 import Data.Maybe (listToMaybe)
@@ -53,15 +51,12 @@ import qualified Data.VCache.LoB as LoB
 import Data.VCache.Trie (Trie)
 import qualified Data.VCache.Trie as Trie
 
-import Wikilon.Dict.Word (isValidWord, Word(..))
+import Wikilon.Dict.Word (Word(..))
+import Wikilon.Model (BranchName)
 
 import Wikilon.Store.Dict (Dict)
 import qualified Wikilon.Store.Dict as Dict
 import Wikilon.Store.Time
-
--- | Branches are named in their BranchSet. These names are simple
--- unicode strings. These names are also used in branch histories.
-type BranchName = UTF8.ByteString
 
 -- | a BranchSet is a collection of named branches, plus information
 -- to track total size of the branch set. 
@@ -97,7 +92,7 @@ volume = s_volume
 
 -- | Lookup a branch by name in a branch set. 
 lookup :: BranchName -> BranchSet -> Maybe Branch
-lookup n = Trie.lookup n . s_data
+lookup n = Trie.lookup (unWord n) . s_data
 
 -- | Lookup a branch by name, or return an empty branch
 lookup' :: BranchName -> BranchSet -> Branch
@@ -106,10 +101,10 @@ lookup' n s = case lookup n s of
     Just b -> b
 
 keys :: BranchSet -> [BranchName]
-keys = Trie.keys . s_data
+keys = fmap Word . Trie.keys . s_data
 
 toList :: BranchSet -> [(BranchName, Branch)]
-toList = Trie.toList . s_data
+toList = fmap (first Word) . Trie.toList . s_data
 
 emptyBranch :: VSpace -> Branch
 emptyBranch vc = Branch0 (Dict.empty vc) (LoB.empty vc 8)
@@ -117,10 +112,6 @@ emptyBranch vc = Branch0 (Dict.empty vc) (LoB.empty vc 8)
 -- | Insert a branch into the branch set.
 insert :: BranchName -> Branch -> BranchSet -> BranchSet
 insert n = adjust n . const . Just
-
--- | Test whether a BranchName is suitable for Wikilon.
-isValidBranchName :: BranchName -> Bool
-isValidBranchName = isValidWord . Word
 
 -- | Delete a named branch from the branch set.
 delete :: BranchName -> BranchSet -> BranchSet
@@ -132,7 +123,7 @@ adjust n fn s0 = sf where
     sf = BSet0 { s_width = wf, s_volume = vf, s_data = df }
     wf = s_width s0 + wbf - wb0
     vf = s_volume s0 + vbf - vb0
-    df = Trie.adjust (const mbf) n (s_data s0)
+    df = Trie.adjust (const mbf) (unWord n) (s_data s0)
     mb0 = lookup n s0
     wb0 = maybe 0 (const 1) mb0
     vb0 = maybe 0 b_volume mb0
@@ -225,8 +216,7 @@ _decayHist d n l = case LoB.uncons l of
 -- large.
 decay :: BranchSet -> BranchSet
 decay s0 = sf where
-    sf = L.foldl' updSet s0 lBranches
-    lBranches = Trie.keys (s_data s0)
+    sf = L.foldl' updSet s0 (keys s0)
     updSet s n = adjust n (>>= updBr) s
     updBr b =
         let b' = decayBranch b in

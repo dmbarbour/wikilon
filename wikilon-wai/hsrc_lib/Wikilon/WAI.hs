@@ -10,7 +10,7 @@ module Wikilon.WAI
     ) where
 
 import Control.Arrow (first)
-import Control.Exception (catch)
+import Control.Exception (catch, SomeException)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Network.Wai as Wai
@@ -76,8 +76,12 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 -- for administrators and return a 500 response.
 wikilonWaiApp :: Wikilon -> Wai.Application
 wikilonWaiApp w rq k = catch (baseWikilonApp w rq k) $ \ e -> do 
-    wikilon_action w (logSomeException e)
+    wikilon_error w (showRequestException rq e)
     k $ eServerError ("unhandled exception in server: " ++ show e)
+
+showRequestException :: Wai.Request -> SomeException -> String
+showRequestException rq e = 
+    "Exception: " ++ show e ++ "\n  WAI Request: " ++ show rq
 
 baseWikilonApp :: Wikilon -> Wai.Application
 baseWikilonApp w rq k =
