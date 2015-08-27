@@ -1,34 +1,49 @@
 
-# Word-Level Caching
+# Hashing for Caching
 
-When we update a word's definition, this implicitly updates the meaning for all clients of that word in the dictionary. For example, the type of those clients may change (and might become invalid). Staged computations, partial evaluations, optimizations, tests, etc. may need to be recomputed.
+We can use a secure hash as an index for pure computations. Compared to tracking updates on dependencies, use of secure hashes is a lot simpler: no cache invalidation, only need to expire old cached content, potential reuse of hashes across multiple versions and branches of a dictionary, etc.. 
 
-Options:
+Effectively the secure hash may be assumed unique and collision-free. Thus we don't need to provide a complete description of the computation, and may therefore hash rather arbitrary computations. 
 
-1. Keep track of downstream computations. Somehow mark them invalid when updating the upstream sources. This option adds a lot of complexity, and doesn't work nicely between dictionaries or with historical views of dictionaries or branching dictionaries.
+## Word Level Secure Hash
 
-2. Avoid invalidation of old cache entries; instead, shift new content to new cache entries. This could be done with a secure hash, e.g. at the level of definitions. The old content could remain cached, e.g. when browsing historical dictionaries or overlapping with a branching dictionary.
+At the moment I maintain a secure hash for each word in the dictionary, such that the secure hash is updated on any change to its definition, name, or its dependencies. Including the name allows the hash to be used broadly, e.g. allowing error reports. But a word-level hash is limited to that word, e.g. I cannot cache information about the larger dictionary.
 
-Between these, the second option seems simpler, more robust, more widely usable, and seems *obviously* better. So I'll run with it for now. 
+It seems useful that a lot of resources be associated directly with words, e.g. css could be loaded based on a word in the current dictionary (perhaps selected via cookie). 
 
-For a secure hash, I have at least two options:
+# Cache Expiration
 
-1. alpha-independent secure hash, i.e. names don't matter.
-2. alpha-dependent secure hash, i.e. names do matter
+If I have a cache, I need to expire old information from it. I'll probably want a basic exponential decay model. OTOH, I don't want to do a lot of mutation on a normal access. If a computation is not in the cache, only then should I take action. 
 
-An alpha-independent secure hash is possible by removing names, transitively replace each `{%foo}` token with the `{#secureHashOfFoo}`. An alpha-dependent secure hash can be achieved by almost the same but additionally prefixing each word foo's definition with `{&@foo}` before taking the secure hash. 
+One option might be to maintain two layers of cache: a primary layer that requires no mutation to access, and a secondary layer that can preserve information expired from the primary and may be updated on access. For example, the first layer might be a simple percentage kill (when over capacity), while the second layer selects some random subset for consideration then kills a fraction of that subset (e.g. pick 3, kill 1 with the worst heuristic score for reuse). 
 
-The motivation for alpha-independence is greater reuse of our cache, e.g. across rename operations. The cost of alpha-independence is that the hash cannot be used to cache any name-dependent results, e.g. error reports that might use human-layer words.
+With the two-layer option, access from the second layer results in the object being restored to the first layer, with some metadata maintenance. The first layer is then accessed without mutations. And the second layer can be expired separately from the first. Regularly used objects will bounce between layers.
 
-I estimate the level of effective reuse for alpha-independence would be marginal. Also, the *worst* case for reuse of a cache based on secure hash (even for alpha-dependent names) seems to be superior to the *best* case for reuse with invalidation-based caching, due to effective reuse with older versions of the dictionary and between dictionaries. 
+Both layers could be stored in the same trie, e.g. simply restricting the conditions in which we perform mutations. 
 
-Given alpha-dependent hashes, it should be possible to cache the related alpha-independent hashes. Alternatively, I could partially compile results, deforest heuristically, and use associate these alpha-dependent hashes with a compiled-result hash. Though, this might not be necessary (e.g. due to VCache). 
+Fair random selection seems difficult to express, but a simple rotation might work easily enough. I might need to add an interface to vcache-trie to ask for all keys before or after a given key. (Also, I could probably optimize the `keys` function.)
 
-So I'm going to favor an alpha-dependent secure hash function.
+# Cached Data Types
 
-# Dictionary-Level Caching
+While I could attempt to create a 'generic' cache storage model, I expect the API would be difficult to model. That is, I'd somehow need to deal with selecting a cache (a PVar or similar) based on type descriptors, and I'd need to deal with versioning. It seems simpler and more immediately useful to focus on a few specific data types in the cache, e.g. binaries and ABC values.
 
-In addition to caching per-word, I might need to maintain some per-dictionary cached results, especially related to anything that involves a *list* of words - e.g. if I wish to list type errors and so on without recomputing them every time the dictionary is viewed. 
+Binaries seem a useful specialization mostly because ABC doesn't directly support binaries, yet I need binary or text representations for a lot of interactions at the web layer (e.g. for images, icons). 
 
-I can probably leverage the VCache address as a value for distinguishing caches at the dictionary level. 
+For ABC values, I would like the ability to model large ad-hoc values, e.g. large game worlds and spreadsheets and similar, without loading them all into memory at once. I could leverage VCache for this purpose, though I still don't want to expose VCache to the WAI layer. For REPL and abstract interpretation and elsewhere, it might be more useful to model and cache *types*, e.g. abstract ABC values with associated constraints. Can I find a simple constraint model sufficient for ABC operation? Maybe, but it seems like research work. 
+
+It might be best to focus on binaries first, as a simple case and one immediately useful for a lot of purposes (e.g. including optimized bytecode). Then I could gradually introduce a few additional types as needed.
+
+# Caching API
+
+I want something simple that works well, at least to start. 
+
+* simple ByteString key, which may use secure hashes
+* simple ByteString result for the binary cache
+* ability to set-or-compute
+
+After the binary cache is implemented, others will probably follow the same format, though I'll probably need to figure out how to represent values and such in an abstract and machine-dependent way.
+
+# Dictionary-Level Resources
+
+If I want a list of words with type errors or similar, that doesn't seem a very good fit for the above cache model. I'll need to think about how to automatically maintain such lists, either on a per-branch basis (i.e. so the lists aren't held for all historical versions of a dictionary, though they could be recomputed after forking an old version). 
 

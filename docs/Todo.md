@@ -24,19 +24,48 @@ DONE:
 * simplistic stateless REPL based on Claw code
  * including time elapsed during evaluation
 
-PRIORITY TODO:
+* (meta) separated model from implementation
+
+TODO SOONER:
+
+* improve import performance
+ * faster hashing
+ * chunked imports
+ * fail on error after any given chunk
+ * locally track only undefined words
+
 
 * develop generic, effective cache model 
- * leverage exponential decay models
- * support some sort of generic resource
-  * perhaps based on ABC values or types
-  * packed texts, binaries; maybe lists, stacks
+ * try to use just a few different cache types
+ * e.g. binaries and Wikilon-ABC values only
+ * or maybe generic support for Wikilon-ABC types?
+  * types-as-values? for abstract interpretation?
+ * binaries might be valuable for caching web output
 
 
+* leverage cache to push CSS into dictionary
+ * also: favicon, documentation, web pages, etc.
 
-* improve ABC performance
- * consider importing the awelon project ABC compiler 
- * but may need to tweak for quotas, continuations?
+* develop generic indexing mechanism for finding words
+ * by input or output types
+ * by errors/warnings and cause
+ * by text values
+
+* link 'related' words?
+ * clients + dependencies of word
+ * filter for those that contain word or are contained by it
+ * run up to a few steps?
+
+* link to word documentation, discussion pages
+ * maybe inline word documentation
+* add a simple *delete* option for words 
+* move dictionary import, export into new pages
+
+* improve evaluator performance!
+ * need ~10x efficiency to match old awelon project
+ * (probably) mostly need to simplify quotation
+ * leverage cached pre-compiled values
+
 
 * cache word-based HTTP resources
  * each resource tied to a word

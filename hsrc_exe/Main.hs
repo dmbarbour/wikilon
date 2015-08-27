@@ -80,12 +80,19 @@ defaultCacheSize = 10 {- megabytes -}
 defaultMaster :: UTF8.ByteString
 defaultMaster = "master"
 
+-- How long (in seconds) to wait before killing a WAI request thread.
+-- I'd prefer to avoid timeouts, and instead manage time explicitly
+-- by quotas and background tasks and so on. So I'll set something 
+-- very large here.
+defaultTimeout :: Int
+defaultTimeout = 300
+
 --
--- 60TB was selected here because it fits into about a quarter of
--- a common 48-bit CPU address space. Assuming half the address 
--- space is reserved for the OS, this would allow enough space
--- to copy and compact the database if we need to. Also, this
--- will usually push the limit to the disk or filesystem.
+-- 60TB was selected here because it fits into about a quarter of a
+-- common 48-bit CPU address space. Assuming half the address space
+-- is reserved for the OS, this would allow enough space to copy and
+-- compact the database if we need to. Also, this is more than most
+-- hard disks anyway.
 defaultMaxDBSize :: Int
 defaultMaxDBSize = 60 * 1000 * 1000 {- megabytes -}
 
@@ -116,7 +123,7 @@ wikilonWarpSettings :: Int -> Warp.Settings
 wikilonWarpSettings port =
     Warp.setPort (fromIntegral port) $
     -- Warp.setHost "*" $
-    Warp.setTimeout 90 $ -- don't really want to timeout
+    Warp.setTimeout defaultTimeout $ -- don't really want to timeout
     Warp.defaultSettings
 
 wikilonWarpTLSSettings :: FS.FilePath -> WarpTLS.TLSSettings

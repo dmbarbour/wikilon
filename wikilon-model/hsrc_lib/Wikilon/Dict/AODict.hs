@@ -143,8 +143,7 @@ instance Show AODictError where
 -- AODict errors occur, but this is done one step at a time.
 --
 -- I'm going to assume that, even if the full dictionary doesn't fit into
--- memory all at once, we can at least keep a list of seen words. I might
--- change this for a bloom filter if we later need truly large dictionaries.
+-- memory all at once, we can at least keep a list of seen words. 
 decodeAODict :: (DictUpdate dict) => dict -> Bytes -> ([AODictError], dict)
 decodeAODict d0 bytes = results $ L.foldl' accum (mempty, mempty, d0) $ logicalLines bytes where
     results (err, _seen, !d) = (L.reverse err, d)
