@@ -39,9 +39,13 @@ I want something simple that works well, at least to start.
 
 * simple ByteString key, which may use secure hashes
 * simple ByteString result for the binary cache
-* ability to set-or-compute
+* ability to set-or-compute? or explicit get-Maybe and set?
+
+I may later want to support `202 ACCEPTED` responses for cases where a cached value has yet to be computed, but will be computed in the near future by a background thread. However, I don't have good ideas for a simple API for this case. Not yet, anyway. Maybe I should externalize it, e.g. via an explicit background thread.
 
 After the binary cache is implemented, others will probably follow the same format, though I'll probably need to figure out how to represent values and such in an abstract and machine-dependent way.
+
+I might need to indicate partially computed values, failure status, etc.. in addition to just the binary value. So, I might consider the cache value to simply be a more sophisticated type with several options, at least in the long term. And I can always clear the cache whenever the cached data type changes, so I can experiment a little here.
 
 # Dictionary-Level Resources
 

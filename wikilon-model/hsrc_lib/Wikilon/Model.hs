@@ -58,42 +58,9 @@ type family Branch m
 -- | a Dict value has a machine-dependent representation.
 type Dict m = DictObj (DictRep m)
 
+-- | When running a wikilon transaction (W) I don't know
+-- the implementation-specific details (m).
 type ModelRunner = forall a . (forall m . W m a) -> IO a
-
--- I need a runner that hides the implementation-type of the model.
---
--- I can't say: 
---
---     Runner a = forall m . Model m => m a -> IO a
---
--- This would say that our Runner must accept any implementation of
--- the model, which would be ridiculous. I need a specific instance
--- of the model, but one not known to the caller.
---
--- The simplest approach might be the best: an intermediate language
--- for the model, with some hidden types. Will data families work?
--- I'm not sure. But something like this does seem appropriate:
--- 
---    Runner a = forall m . W m a -> IO a
---    data family Dict m
---    data family Branch m
--- 
--- However, we must expose computations on the dictionary of a hidden
--- type. Again, typeclasses seem inadequate:
---
---    Runner a = forall m . Dictionary (Dict m) => Action m a -> IO a
---
--- Because we wouldn't be able to prove Dictionary for an unknown 
--- instance. The alternative is to avoid typeclasses here, too, e.g.
--- by making `Dict m` a more specific data type that encapsulates the
--- interface and a hidden value type, or to provide access via the
--- monadic actions. 
---
--- A point to consider is that whatever interface I use here should
--- be easily reflected in a network of abstract virtual machines via
--- Awelon Bytecode. Typeclasses do not exist in ABC because they are
--- global in nature. So, it makes sense to avoid typeclasses at this
--- layer.
 
 -- | The Wikilon model API, presented as a monad with a bunch of
 -- concrete commands. There might be better ways to express this

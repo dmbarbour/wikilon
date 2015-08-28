@@ -29,9 +29,9 @@ DONE:
 TODO SOONER:
 
 * improve import performance
- * faster hashing
  * chunked imports
  * fail on error after any given chunk
+ * faster hashing? probably not significant.
  * locally track only undefined words
 
 

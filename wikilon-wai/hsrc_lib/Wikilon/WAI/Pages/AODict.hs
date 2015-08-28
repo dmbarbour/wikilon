@@ -149,16 +149,16 @@ importAODictGzip = dictApp $ \w dictName rq k ->
 
 importAODict' :: Wai.Response -> BranchName -> LBS.ByteString -> Wikilon -> Wai.Application
 importAODict' responseOnOK dictName body w _rq k =
-    -- thoughts: I should probably develop the 
     join $ wikilon_action w $ 
         newEmptyDictionary >>= \ dEmpty ->
-        let (err, dict) = AODict.decodeAODict dEmpty body in
-        let bHasError = not $ L.null err in
-        let responseOnErr = aodImportErrors w $ fmap show err in
-        if bHasError then return (k responseOnErr) else
-        loadBranch dictName >>= \ b ->
-        branchUpdate b dict >>
-        return (k responseOnOK)
+        case AODict.decodeAODict dEmpty body of
+            Left err -> 
+                let reportErrors = aodImportErrors w $ fmap show err in
+                return (k reportErrors) 
+            Right dict ->
+                loadBranch dictName >>= \ b ->
+                branchUpdate b dict >>
+                return (k responseOnOK)
 
 aodImportErrors :: Wikilon -> [String] -> Wai.Response
 aodImportErrors w errors = 

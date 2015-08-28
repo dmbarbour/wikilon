@@ -114,36 +114,50 @@ decodeLine bs =
         Left _dcs -> Nothing
         Right abc -> return (w,abc)
 
-
-{- TODO: when I start working with very large dictionaries, I will
-   probably need to operate on chunks of reasonable size rather than
-   the entire dictionary all at once. This might be achieved by 
-   processing a limited number of logical lines in each step. I will
-   probably need a more flexible state model for this.
-   
-   OTOH, I don't expect this will be an issue until AO is very
-   successful. It will be a nice problem to have.
--}
-
 -- | Capture errors associated with decoding an AODict
 data AODictError
     = AODict_LineParse !Bytes
-    | AODict_WordRedef !Word
     | AODict_WordUndef !Word !Word
     | AODict_InsertError !InsertionError
 
 instance Show AODictError where
     show (AODict_LineParse bs) = "could not parse line: " ++ LazyUTF8.toString bs
-    show (AODict_WordRedef w) = "illegal redefinition of word `" ++ show w ++ "`"
     show (AODict_WordUndef w uw) = "word `" ++ show w ++ "` uses undefined word `" ++ show uw ++ "`" 
     show (AODict_InsertError e) = show e
 
--- | Decode an AODict format bytestring into a dictionary. Streaming updates.
--- Dictionary contains everything that passes safeUpdateWords even if any
--- AODict errors occur, but this is done one step at a time.
---
--- I'm going to assume that, even if the full dictionary doesn't fit into
--- memory all at once, we can at least keep a list of seen words. 
+-- | Decode an AODict format bytestring into a dictionary. This will operate
+-- in chunks of a few hundred words at a time. On failure, it will return
+-- multiple errors for the first erroneous chunk.
+decodeAODict :: DictUpdate dict => dict -> Bytes -> Either [AODictError] dict
+decodeAODict = decodeLogicalLines where
+    nChunkSize = 400 -- how many logical lines to process at once
+    decodeLogicalLines d0 bytes = decode mempty d0 (logicalLines bytes)
+    decode _ d [] = return d
+    decode vUndef d ls = 
+        if L.null ls then return d else
+        dchunk [] [] vUndef d (L.take nChunkSize ls) >>= \ (vUndef', d') ->
+        decode vUndef' d' (L.drop nChunkSize ls)
+    dchunk lErr lUpd vUndef' d [] = 
+        if not (L.null lErr) then Left (L.reverse lErr) else
+        case updateWords lUpd d of
+            Right d' -> return (vUndef', d')
+            Left lInsErr -> Left (fmap AODict_InsertError lInsErr)
+    dchunk lErr lUpd vUndef d (line:more) = case decodeLine line of
+        Nothing -> dchunk (AODict_LineParse line : lErr) lUpd vUndef d more
+        Just def@(dw,abc) ->
+            let newWord w = Set.notMember w vUndef 
+                         && L.notElem w (fmap fst lUpd) 
+                         && LBS.null (lookupBytes d w)
+            in 
+            let lDupErr = if newWord dw then [] else [AODict_InsertError (DupWord dw)] in
+            let lUndefErr = fmap (AODict_WordUndef dw) $ L.filter newWord (abcWords abc) in
+            let lErr' = lUndefErr ++ lDupErr ++ lErr in
+            let bUndef = L.null (ABC.abcOps abc) in
+            let vUndef' = if bUndef then Set.insert dw vUndef else vUndef in
+            dchunk lErr' (def:lUpd) vUndef' d more
+
+
+{- old decoder 
 decodeAODict :: (DictUpdate dict) => dict -> Bytes -> ([AODictError], dict)
 decodeAODict d0 bytes = results $ L.foldl' accum (mempty, mempty, d0) $ logicalLines bytes where
     results (err, _seen, !d) = (L.reverse err, d)
@@ -161,5 +175,6 @@ decodeAODict d0 bytes = results $ L.foldl' accum (mempty, mempty, d0) $ logicalL
                 (eInsert <> err', seen', d) -- leaving word undefined in dictionary
     accum (err, seen, d) s = (err', seen, d) where
         err' = AODict_LineParse s : err
+-}
 
 -- TODO: chunked processing for performance. 
