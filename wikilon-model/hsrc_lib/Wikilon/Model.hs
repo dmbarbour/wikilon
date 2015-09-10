@@ -31,6 +31,7 @@ module Wikilon.Model
     , loadDict, loadDictAndTime, branchSnapshot
     , getTransactionTime
     , newEmptyDictionary
+    , cacheBytes
     --, WikilonModel, ModelRunner
     --, BranchingDictionary(..), CreateDictionary(..)
     --, GlobalErrorLog(..), logSomeException, logException
@@ -44,7 +45,10 @@ import Wikilon.Time (T)
 import Wikilon.SecureHash
 import Wikilon.Dict.Object
 import Wikilon.Dict
+import Data.ByteString (ByteString)
 
+-- | Dictionary branches and forks use the same naming systems as
+-- the words, e.g. for easy integration with HTML and URLs.
 type BranchName = Word
 
 -- | Wikilon has some opaque value types, which might be understood
@@ -54,6 +58,11 @@ type BranchName = Word
 -- decay model.
 type family DictRep m
 type family Branch m
+
+-- | For now, cache keys will just be opaque bytestrings. This seems
+-- a good option: bytestrings are serializable, have canonical form,
+-- and are easy to use with tries and secure hashes and so on. 
+type Key = ByteString
 
 -- | a Dict value has a machine-dependent representation.
 type Dict m = DictObj (DictRep m)
@@ -78,6 +87,13 @@ data W m a where
     BranchModified :: Branch m -> W m T
     BranchHistory :: Branch m -> T -> T -> W m (Dict m, [(T, Dict m)])
     BranchUpdate :: Branch m -> Dict m -> W m ()
+
+    -- TODO:
+    -- values or types
+    -- evaluation or type checking
+    -- caching binaries and values/types
+    CacheBytes :: Key -> W m ByteString -> W m ByteString
+    -- value key...
 
     -- miscellaneous 
     NewEmptyDictionary :: W m (Dict m)
@@ -154,6 +170,9 @@ newEmptyDictionary = NewEmptyDictionary
 -- branch updates and so on.
 getTransactionTime :: W m T
 getTransactionTime = GetTransactionTime
+
+cacheBytes :: Key -> W m ByteString -> W m ByteString
+cacheBytes = CacheBytes
 
 
 -- TODO

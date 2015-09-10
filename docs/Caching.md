@@ -9,7 +9,7 @@ Effectively the secure hash may be assumed unique and collision-free. Thus we do
 
 At the moment I maintain a secure hash for each word in the dictionary, such that the secure hash is updated on any change to its definition, name, or its dependencies. Including the name allows the hash to be used broadly, e.g. allowing error reports. But a word-level hash is limited to that word, e.g. I cannot cache information about the larger dictionary.
 
-It seems useful that a lot of resources be associated directly with words, e.g. css could be loaded based on a word in the current dictionary (perhaps selected via cookie). 
+It seems useful that a lot of resources be associated directly (one-to-one) with words, e.g. css could be loaded based on a word in the current dictionary (perhaps selected via cookie). But it should also be feasible to model multi-word resources (e.g. compiling one word/resource in terms of another) to effectively increase the number of resources per dictionary without increasing the number of words.
 
 # Cache Expiration
 
@@ -37,15 +37,26 @@ It might be best to focus on binaries first, as a simple case and one immediatel
 
 I want something simple that works well, at least to start. 
 
-* simple ByteString key, which may use secure hashes
+* simple ByteString keys. 
+ * secure hash or other compact, unique representation of computation. 
+ * easy to use as keys in vcache-trie.
 * simple ByteString result for the binary cache
 * ability to set-or-compute? or explicit get-Maybe and set?
 
-I may later want to support `202 ACCEPTED` responses for cases where a cached value has yet to be computed, but will be computed in the near future by a background thread. However, I don't have good ideas for a simple API for this case. Not yet, anyway. Maybe I should externalize it, e.g. via an explicit background thread.
+I may later want to support `202 ACCEPTED` responses for cases where a cached value has yet to be computed, but will be computed in the near future by a background thread. Though, this might be feasible (more generically) in terms of a background action loading the cache and requiring a minimum expiration when the cache is created.
 
-After the binary cache is implemented, others will probably follow the same format, though I'll probably need to figure out how to represent values and such in an abstract and machine-dependent way.
+However, I don't have good ideas for a simple API for this case. Not yet, anyway. Maybe I should externalize it, e.g. via an explicit background thread or abstract virtual machine. Or perhaps by obtaining/providing an MVar that can later be accessed after we leave the current transaction. 
+
+Alternatively, I could model cache above a set of named, persistent variables (e.g. PVars, under the hood). This could allow me to model ad-hoc intermediate states. OTOH, this isn't really a direction I want to go. It's much more generic than I'd prefer, more difficult to automatically GC or regenerate.
+
+After the binary cache is implemented, others will probably follow the same format, though I'll probably need to figure out how to represent values and such in an abstract way if I want to hide use of VCache. (That, or I could potentially model an abstract value reference concept as part of a type-family.)
 
 I might need to indicate partially computed values, failure status, etc.. in addition to just the binary value. So, I might consider the cache value to simply be a more sophisticated type with several options, at least in the long term. And I can always clear the cache whenever the cached data type changes, so I can experiment a little here.
+
+## Cache Accessibility?
+
+Should the cache be accessible as part of the Wikilon model (so it can be intermixed with model commands)? Or should it be a separate concept? I would prefer separation here, I think. But the mixed mode might be simpler to implement and more convenient to use.
+
 
 # Dictionary-Level Resources
 

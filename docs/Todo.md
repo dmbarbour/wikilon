@@ -28,23 +28,48 @@ DONE:
 
 TODO SOONER:
 
-* improve import performance
- * chunked imports
- * fail on error after any given chunk
- * faster hashing? probably not significant.
- * locally track only undefined words
 
+* leverage cache to push CSS into dictionary
+ * also: favicon, documentation, web pages, etc.
+
+* generate CSS from dictionary
+* generate front page from dictionary
+* generate favicon from dictionary
 
 * develop generic, effective cache model 
  * try to use just a few different cache types
  * e.g. binaries and Wikilon-ABC values only
- * or maybe generic support for Wikilon-ABC types?
+ * or maybe generic support for Wikilon-ABC 'types'?
   * types-as-values? for abstract interpretation?
+  * model all values as types...? functions as relations...
  * binaries might be valuable for caching web output
 
 
-* leverage cache to push CSS into dictionary
- * also: favicon, documentation, web pages, etc.
+
+
+* PERFORMANCE OF INTERPRETER! !!!
+ * I need and want this to be a lot faster
+ * even impl. from older awelon project is 3-10x faster
+ * it may require cached compilation, partial eval, etc.
+ * support for very large values, world manipulations
+ * compilation to JavaScript also desirable
+
+* implement the persistent REPL session forums model
+* develop web-app model so I can create apps in dict
+ * compilation to javascript + DOM
+ * capabilities for reflection on dictionary
+
+* sessions model, editing multiple words together
+
+* link to word documentation, discussion pages
+ * maybe inline word documentation
+* add a simple *delete* option for words 
+* move dictionary import, export into new pages
+
+* add a link to the 
+
+
+
 
 * develop generic indexing mechanism for finding words
  * by input or output types
@@ -55,11 +80,6 @@ TODO SOONER:
  * clients + dependencies of word
  * filter for those that contain word or are contained by it
  * run up to a few steps?
-
-* link to word documentation, discussion pages
- * maybe inline word documentation
-* add a simple *delete* option for words 
-* move dictionary import, export into new pages
 
 * improve evaluator performance!
  * need ~10x efficiency to match old awelon project
@@ -79,11 +99,23 @@ TODO SOONER:
 
 TODO:
 
+* basic user login model
+* configure cookies at least for 'master' dictionary and CSS words
+ * or maybe later bind this to a login or user
+
+
+* generic model for developing basic web content?
+ * an API for (reactive?) web page construction
+ * ability to cache these ad-hoc web resources
+
+* user models
+ * within a dictionary? master dict?
+ * ideally model stream-manipulation of values for per-user environment!
+  * part of the Awelon project UI concept
+  * could be modeled within a dictionary or as an AVM
+
 * widgets for editing words
  * tabbed views, or multiple side-by-side views
-
-* develop edit-sessions 
- * multiple words and views edited together
 
 * simplify WAI widgets
  * create a Wikilon-WAI monad model
@@ -403,3 +435,8 @@ TODO:
 
 * consider separating branches of dictionary into multiple PVars, i.e. such that each branch has one PVar rather than sharing an additional trie at the toplevel. The main advantage here would be that there is no risk of conflict when performing large dictionary-level operations, such as importing a dictionary. (Priority: Low. Minor performance issue.)
 
+
+
+* further improve import performance
+ * probably need to profile.
+ * might need to validate ABC without full parse?

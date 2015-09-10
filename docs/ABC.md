@@ -60,7 +60,7 @@ See AboutABC for full explanations and design. This file just records each code,
 
 Legend for types: `*` is a product or pair, `+` is a sum or Either type, `[x→y]` is a block type that can map from type `x` to type `y`, `N(x)` indicates a number with value x (numbers should be tracked in types as much as possible). 
 
-Text is modeled is a list of small natural numbers (in range 0 to 1114111). Lists are modeled using a structure of form `µL.((elem*L)+1)`. 
+Text is modeled is a list of small natural numbers (in range 0 to 1114111). Lists are modeled using a structure of form `µL.((elem*L)+1)`. Text begins immediately after the `"` character. The `\n` (LF, 10) character must be followed by an SP to escape it, or followed by `~` (tilde, 126) to terminate the text. Thus, the minimal empty text is three characters `"\n~`. (Note: I'm considering having text encode a simple bytestring, with elements in the range 0..255 instead of 0..1114111. See Changes Under Consideration, below.)
 
 Aside: The design of ABC is avoiding vowels, to avoid spelling naughty words. It isn't a strong design constraint, and I have used `o` due to visual similarity with the traditional function composition operator. Also, use of `@` (64) and backquote (96) will be avoided to support hosting ABC in external streams or texts.
 
@@ -92,16 +92,7 @@ While annotations are not strongly standardized, it's nice to avoid conflicts an
         {&asynch}             - ([a→b]*e)→([a→b]*e); compute block in parallel
         {&compile}            - ([a→b]*e)→([a→b]*e); optimize performance for block
 
-        {&debug print raw}    - print ad-hoc input to error console (for human) 
-        {&debug print text}   - print textual input to error console (for human)
-
 In general, annotations may be ignored by an environment that doesn't recognize them, and are discretionary within environments that do recognize them. Annotations always have an identity type, and should have no observable impact on a correct program's behavior (modulo performance, debugger integration, etc.). 
-
-## Binaries in ABC
-
-Binaries are encoded in ABC using the base16 alphabet, `a-z` minus vowels `aeiou` and common data plumbing operators `vrwlc`. This encoding doubles the natural size of the binary, but then we will apply a specialized compression pass just for large sequences of base16, reducing them back to binary with just a little overhead (0.8% for large binaries). Compression is performed for ABC resources, cryptographically sealed values, and most ABC streams over a network.
-
-Binary compression is followed by a more conventional compression pass, but the worst case total overhead is guaranteed to be less than 2.5% for uncompressible large binaries. 
 
 ## ABC CHANGE LOG
 
@@ -111,6 +102,7 @@ March 2014:
 April 2014: 
 * made `>` monomorphic, so it operates only on a pair of numbers
 * modify list type from `µL.(1+(elem*L))` to `µL.((elem*L)+1)`
+ * this impacts meaning of embedded texts
 
 August 2014
 * swap order of arguments to operator `o`, to better match common use
@@ -120,8 +112,12 @@ June 2015:
  * original definition: `/ :: N(non-zero a) * e → N(1/a) * e`
  * note: not fully committed to this change, may restore `/` later if necessary
 
+### Changes Under Consideration
+
+September 2015:
+
+A simple change I'm considering is to exchange UTF-8 texts for raw binaries. The encoding would remain the same, and would remain biased towards text. But the meaning would become a list of numbers in the range 0..255. A potential benefit here would be simplified encoding of binaries and simplified processing, validation, and interpretation of embedded texts. A disadvantage would be an inability to view arbitrary, raw ABC as plain text. I'm not committed to this change.
 
 ## ABCD
 
-None yet! ABCD will begin somewhere after the C1 charset and will develop according to empirical analysis of common subprogram patterns that offer effective compression and optimization benefits. Also, formal correctness proofs will be essential for every ABCD operation. Naturally, ABCD won't make progress until we have larger and more mature ABC systems.
-
+None yet! ABCD will use UTF-8 characters starting after the C1 charset and will develop according to empirical analysis of common subprogram patterns that offer effective compression and optimization benefits. Also, formal correctness proofs will be essential for every ABCD operation. Naturally, ABCD won't make progress until we have large and mature ABC systems. But prototypes for ABCD can easily be used internally by interpreters.

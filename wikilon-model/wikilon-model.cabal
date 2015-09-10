@@ -69,6 +69,8 @@ Library
 
     Wikilon.SecureHash
 
+    -- Wikilon.Value
+
 
   Other-Modules:
  

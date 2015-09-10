@@ -1,8 +1,13 @@
 
-Some of the ideas below are now probably deprecated, e.g. I'm not sure a 'session' shouldn't just be an [AVM](ApplicationModel.md). 
+# User Models
 
-TODO: review and adjust design and priorities.
+I want user models for at least a few general aspects of Wikilon. 
 
+First, I would like for users to be able to configure their own user experience. For example, dark vs. light themes might be determined by stylesheet. And some documentation or web applications might be configured around a 'master' dictionary (or perhaps a multi-page web app defined as a single function within a dictionary, if I figure out how to model this). The ability to set some sort of dict/word pair as an origin for user experience could be effective.
+
+Second, I want some sort of model for edit sessions, with atomicity properties similar to DVCS, and potential multi-user editing. I'd really like to edit multiple words through a single web page, and to track relationships between sessions. I'm not sure how to best represent edit sessions... an interesting possibility is to have an explicit meta-model over a dictionary, such that the dictionary itself is presented as an ABC value to be manipulated, or at least as an [AVM](NetworkModel.md) capability.
+
+It might be interesting to model users within a dictionary directly. But I'm not sure that would be a useful direction to go. Dictionary applications, such as modeling persistent REPLs and forums within a dictionary, are already a pretty big step.
 
 
 Older Content

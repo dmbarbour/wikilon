@@ -132,6 +132,7 @@ run ws ListBranches = Br.keys <$> readPVar (wikilon_dicts ws)
 run ws NewEmptyDictionary = return (wrapDictObj d) where
     d = D.empty $ vcache_space $ wikilon_store ws
 run ws GetTransactionTime = readWikilonTime ws
+run ws (CacheBytes _key action) = run ws action -- todo: implement cache!
 
 
 -- TODO:
