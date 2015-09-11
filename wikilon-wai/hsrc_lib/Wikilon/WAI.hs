@@ -18,7 +18,7 @@ import qualified Network.Wai.Route.Tree as Tree
 import Wikilon.WAI.Types
 import Wikilon.WAI.Routes
 import Wikilon.WAI.Pages
-import Wikilon.WAI.DefaultCSS
+import Wikilon.WAI.Theme
 import Wikilon.WAI.Utils
 
 -- | List of routes for the Wikilon web service.
@@ -41,6 +41,7 @@ wikilonRoutes = fmap (first UTF8.fromString) $
     ,("/d/:d/w/:w/aodef.edit", dictWordAODefEdit)
     ,("/d/:d/w/:w/clawdef", dictWordClawDef)
     ,("/d/:d/w/:w/clawdef.edit", dictWordClawDefEdit)
+    --,("/d/:d/w/:w/delete", dictWordDelete)
     --,("/d/:d/w/:w/abc", dictWordABC)
 
     -- ("/d/:d/fork", dictFork)
@@ -69,7 +70,7 @@ wikilonRoutes = fmap (first UTF8.fromString) $
 
     -- generic endpoints
 --    ,("/favicon", resourceFavicon)
-    ,("/css", resourceDefaultCSS)
+    ,("/css", resourceCSS)
     ]
 
 -- | The primary wikilon web service. Any exceptions will be logged

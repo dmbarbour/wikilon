@@ -41,6 +41,7 @@ module Wikilon.WAI.Utils
     , noCache
     , eTagN, eTagNW
     , eTagT, eTagTW
+    , eTagHash, eTagHashW
 
     -- HTML
     , HTML
@@ -65,7 +66,6 @@ module Wikilon.WAI.Utils
     , module Wikilon.WAI.MediaType
     ) where
 
---import Control.Monad
 import Control.Applicative
 import Data.Monoid
 import Data.Maybe (listToMaybe)
@@ -88,6 +88,7 @@ import Wikilon.Dict.Word
 import Wikilon.WAI.Types
 import Wikilon.WAI.MediaType
 import qualified Wikilon.Time as Time
+import qualified Awelon.Base16 as B16
 
 -- | Route based on method. Also provides reasonable default
 -- implementations for OPTIONS and HEAD.
@@ -375,6 +376,15 @@ eTagT, eTagTW :: Time.T -> HTTP.Header
 eTagT t = ("ETag", UTF8.fromString $ show (tmTag t))
 eTagTW t = ("ETag", UTF8.fromString $ "W/" ++ show (tmTag t))
 
+-- | ETag from a secure hash, which may contain non-ASCII bytes.
+-- I'll re-encode the string in ABC's base16.
+eTagHash, eTagHashW :: SecureHash -> HTTP.Header
+eTagHash h = ("ETag", mconcat ["\"", toBase16 h, "\""])
+eTagHashW h = ("ETag", mconcat ["W/\"", toBase16 h, "\""])
+
+toBase16 :: SecureHash -> BS.ByteString
+toBase16 = BS.pack . B16.encode . BS.unpack
+
 -- | since I'm not fond of blaze-html's mixed-case abbreviations...
 type HTML = H.Html
 
@@ -476,4 +486,3 @@ showEditOrigin tm = if (tm == minBound) then "--" else show tm
 -- or return minBound if the string could not be parsed
 readEditOrigin :: String -> T
 readEditOrigin = maybe minBound id . Time.parseTime
-

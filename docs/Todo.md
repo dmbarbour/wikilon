@@ -28,13 +28,12 @@ DONE:
 
 TODO SOONER:
 
-
 * leverage cache to push CSS into dictionary
  * also: favicon, documentation, web pages, etc.
 
 * generate CSS from dictionary
-* generate front page from dictionary
 * generate favicon from dictionary
+* generate front page from dictionary
 
 * develop generic, effective cache model 
  * try to use just a few different cache types
@@ -43,9 +42,6 @@ TODO SOONER:
   * types-as-values? for abstract interpretation?
   * model all values as types...? functions as relations...
  * binaries might be valuable for caching web output
-
-
-
 
 * PERFORMANCE OF INTERPRETER! !!!
  * I need and want this to be a lot faster
@@ -100,6 +96,9 @@ TODO SOONER:
 TODO:
 
 * basic user login model
+ * maybe have a dictionary associated with each user? 
+ * at least for theme, style, etc.?
+ 
 * configure cookies at least for 'master' dictionary and CSS words
  * or maybe later bind this to a login or user
 

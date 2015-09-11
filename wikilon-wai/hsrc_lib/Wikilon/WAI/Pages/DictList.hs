@@ -78,7 +78,6 @@ listOfDictsPage w _cap _rq k =
         H.title title
     H.body $ do
         H.h1 title
-        H.b "Master Dictionary: " <> hrefDict (wikilon_master w) <> H.br
         H.b "List of Dictionaries: "
         H.ul $ forM_ lBranchNames $ H.li . hrefDict 
         H.hr 

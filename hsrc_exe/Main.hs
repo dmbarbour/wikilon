@@ -16,7 +16,6 @@ import qualified Data.ByteString.UTF8 as UTF8
 import GHC.Conc (getNumProcessors, setNumCapabilities)
 import Database.VCache 
 import Database.VCache.Cache
-import Wikilon.Dict.Word
 import Wikilon.Store.Root (loadWikilonStore, runModelTransaction, adminCode)
 import Wikilon.WAI (Wikilon(..), wikilonWaiApp)
 
@@ -24,11 +23,10 @@ helpMessage :: String
 helpMessage =
  "The `wikilon` executable will initiate a Wikilon web service.\n\
  \\n\
- \    wikilon [-pPort] [-cMB] [-Ddict] [-dbMB] [-s] [-init] \n\
+ \    wikilon [-pPort] [-cMB] [-dbMB] [-s] [-init] \n\
  \      -pPort: listen on given port (def 3000; saved) \n\
  \      -cMB: configure parse-cache size; (default 10MB; saved) \n\
  \      -init: initialize & greet only; do not start. \n\
- \      -Ddict: set primary dictionary (default 'master'; saved) \n\
  \      -s: silent mode; do not greet or display admin code. \n\
  \      -dbMB: configure maximum database size; (default 60TB; not saved) \n\
  \\n\
@@ -52,7 +50,6 @@ helpMessage =
 data Args = Args 
     { _port  :: Maybe Int
     , _cacheSize :: Maybe Int
-    , _master :: Maybe UTF8.ByteString
     , _dbMax    :: Int
     , _silent   :: Bool
     , _justInit :: Bool
@@ -63,7 +60,6 @@ defaultArgs :: Args
 defaultArgs = Args 
     { _port = Nothing
     , _cacheSize = Nothing
-    , _master = Nothing
     , _dbMax = defaultMaxDBSize
     , _silent = False
     , _justInit = False
@@ -76,9 +72,6 @@ defaultPort = 3000
 
 defaultCacheSize :: Int
 defaultCacheSize = 10 {- megabytes -}
-
-defaultMaster :: UTF8.ByteString
-defaultMaster = "master"
 
 -- How long (in seconds) to wait before killing a WAI request thread.
 -- I'd prefer to avoid timeouts, and instead manage time explicitly
@@ -110,7 +103,6 @@ procArgs :: [String] -> Args
 procArgs = L.foldr (flip pa) defaultArgs where
     pa a (helpArg -> True) = a { _help = True }
     pa a (portArg -> Just n) = a { _port = Just n }
-    pa a (masterArg -> Just name) = a { _master = Just name }
     pa a (cacheArg -> Just n) = a { _cacheSize = Just n }
     pa a (dbMaxArg -> Just n) = a { _dbMax = n }
     pa a "-s" = a { _silent = True }
@@ -147,16 +139,13 @@ runWikilonInstance a = mainBody where
         loadCache vc (_cacheSize a) >>= \ cacheSize ->
         setVRefsCacheLimit (vcache_space vc) (cacheSize * 1000 * 1000) >>
         loadPort vc (_port a) >>= \ port ->
-        loadMaster vc (_master a) >>= \ master ->
         (`finally` vcacheSync (vcache_space vc)) $  -- sync on normal exit
             let wvc = vcacheSubdir "wiki/" vc in
             let whome = home FS.</> "wiki/" in
             loadWikilonStore wvc whome >>= \ wikiStore ->
             let wiki = Wikilon 
                     { wikilon_httpRoot = "/"
-                    , wikilon_master = Word master
                     , wikilon_action = runModelTransaction wikiStore
-                    , wikilon_home = whome -- hopefully be rid of this soon...
                     , wikilon_error = putErrMsg
                     }
             in
@@ -167,7 +156,6 @@ runWikilonInstance a = mainBody where
                     Sys.putStrLn ("  Cache:  " ++ show cacheSize ++ " MB")
                     Sys.putStrLn ("  HTTPS:  " ++ show bUseTLS)
                     Sys.putStrLn ("  Admin:  " ++ UTF8.toString (adminCode wikiStore))
-                    Sys.putStrLn ("  Master: " ++ UTF8.toString master) 
             in
             unless (_silent a) printGreetingAndAdminCode >>
             if _justInit a then return () else 
@@ -194,9 +182,6 @@ loadCache = ldPVar "csize" defaultCacheSize
 loadPort :: VCache -> Maybe Int -> IO Int
 loadPort = ldPVar "port" defaultPort
 
-loadMaster :: VCache -> Maybe UTF8.ByteString -> IO UTF8.ByteString
-loadMaster = ldPVar "master" defaultMaster
-
 --
 ldPVar :: (VCacheable a) => String -> a -> VCache -> Maybe a -> IO a
 ldPVar var def vc mbArg =
@@ -217,10 +202,6 @@ portArg _ = Nothing
 cacheArg :: String -> Maybe Int
 cacheArg ('-':'c':s) = tryRead s
 cacheArg _ = Nothing
-
-masterArg :: String -> Maybe UTF8.ByteString
-masterArg ('-':'D':s) = Just $ UTF8.fromString s
-masterArg _ = Nothing
 
 dbMaxArg :: String -> Maybe Int
 dbMaxArg ('-':'d':'b':s) = tryRead s

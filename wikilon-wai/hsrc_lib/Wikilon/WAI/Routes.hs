@@ -39,6 +39,9 @@ module Wikilon.WAI.Routes
     , uriRepl
 
     , href
+
+    , parseWordPath
+    , parseDictPath
     ) where
 
 import Control.Monad
@@ -196,4 +199,23 @@ dictWordApp _app _w cap _rq k = k $ eBadName cap
 -- | Create an HRef when we know a route is already escaped
 href :: Route -> HTML -> HTML
 href r = H.a ! A.href (H.unsafeByteStringValue r)
+
+-- | parse d\/dictName\/w\/word into a (dict,word) pair.
+parseWordPath :: BS.ByteString -> Maybe (BranchName, Word)
+parseWordPath = p . pathSegment where
+    p ("d" : b : "w" : w : []) = 
+        guard (isValidWord (Word w)) >>
+        guard (isValidWord (Word b)) >>
+        return (Word b, Word w)
+    p _ = mzero
+
+parseDictPath :: BS.ByteString -> Maybe BranchName 
+parseDictPath = p . pathSegment where
+    p ("d" : b : []) = 
+        guard (isValidWord (Word b)) >>
+        return (Word b)
+    p _ = mzero
+
+pathSegment :: BS.ByteString -> [BS.ByteString]
+pathSegment = L.filter (not . BS.null) . BS.split 47 where
 

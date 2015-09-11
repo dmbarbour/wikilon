@@ -64,11 +64,12 @@ Library
     Wikilon.WAI.Utils
     Wikilon.WAI.URL
     Wikilon.WAI.Routes
+    Wikilon.WAI.Cookies
     Wikilon.WAI.RecvFormPost
     Wikilon.WAI.RegexPatterns
     Wikilon.WAI.MediaType
     Wikilon.WAI.Conflicts
-    Wikilon.WAI.DefaultCSS
+    Wikilon.WAI.Theme
     Wikilon.WAI.ClawUtils
     Wikilon.WAI.Pages.AODict
     Wikilon.WAI.Pages.AODictEdit
