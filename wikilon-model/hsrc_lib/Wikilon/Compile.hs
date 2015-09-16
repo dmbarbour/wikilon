@@ -19,7 +19,6 @@ import qualified Data.List as L
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.UTF8 as UTF8
 
-import Awelon.ABC (ABC)
 import qualified Awelon.ABC as ABC
 import Awelon.ABC.Eval
 import Wikilon.Dict
@@ -31,6 +30,9 @@ import Wikilon.Dict
 --
 -- referenceCompile does assume the dictionary is acyclic at least for
 -- all the words used in the compiled code.
+--
+-- TODO: variations on referenceCompile that leverage cache and incremental
+-- computation.
 --
 referenceCompile :: (DictView dict) => dict -> Quota -> ABC -> ABC
 referenceCompile d q abc = 

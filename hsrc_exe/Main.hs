@@ -85,7 +85,7 @@ defaultTimeout = 300
 -- common 48-bit CPU address space. Assuming half the address space
 -- is reserved for the OS, this would allow enough space to copy and
 -- compact the database if we need to. Also, this is more than most
--- hard disks anyway.
+-- hard disks anyway, and won't need tuning except in extreme cases.
 defaultMaxDBSize :: Int
 defaultMaxDBSize = 60 * 1000 * 1000 {- megabytes -}
 

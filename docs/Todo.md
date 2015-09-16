@@ -20,16 +20,29 @@ DONE:
 * view and edit `[command][]` definitions as claw code
 * stylesheets with dark background by default
 * most CSS pushed into stylesheets (instead of inline css)
+* CSS provided via dictionary (default /d/master/w/wikilon.css).
 * secure hash per word for deep source
 * simplistic stateless REPL based on Claw code
  * including time elapsed during evaluation
 
 * (meta) separated model from implementation
 
+
+NOTES:
+
+I'll need a proper 'incremental evaluation/compilation' model or similar, something that can effectively support progress bars, 202 responses, and so on. I can probably get by without this for now, but I think it would serve me well in the long term to model the incremental steps more precisely and provide better information about what goes wrong or how much progress is made.
+
+I also need to get to work quickly on developing a 'generic' model for web applications and images.
+
 TODO SOONER:
 
 * leverage cache to push CSS into dictionary
  * also: favicon, documentation, web pages, etc.
+
+
+* tune how requests and routing are handled in wikilon-wai
+ * take inspirations from mflow and RDP or FRP
+
 
 * generate CSS from dictionary
 * generate favicon from dictionary

@@ -31,7 +31,7 @@ module Wikilon.Model
     , loadDict, loadDictAndTime, branchSnapshot
     , getTransactionTime
     , newEmptyDictionary
-    , cacheBytes
+    , Bytes, cacheBytes
     --, WikilonModel, ModelRunner
     --, BranchingDictionary(..), CreateDictionary(..)
     --, GlobalErrorLog(..), logSomeException, logException
@@ -45,7 +45,8 @@ import Wikilon.Time (T)
 import Wikilon.SecureHash
 import Wikilon.Dict.Object
 import Wikilon.Dict
-import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 
 -- | Dictionary branches and forks use the same naming systems as
 -- the words, e.g. for easy integration with HTML and URLs.
@@ -62,7 +63,10 @@ type family Branch m
 -- | For now, cache keys will just be opaque bytestrings. This seems
 -- a good option: bytestrings are serializable, have canonical form,
 -- and are easy to use with tries and secure hashes and so on. 
-type Key = ByteString
+type Key = BS.ByteString
+
+-- | Cached bytestrings, allowing for lazy loading or computation.
+type Bytes = LBS.ByteString
 
 -- | a Dict value has a machine-dependent representation.
 type Dict m = DictObj (DictRep m)
@@ -92,7 +96,7 @@ data W m a where
     -- values or types
     -- evaluation or type checking
     -- caching binaries and values/types
-    CacheBytes :: Key -> W m ByteString -> W m ByteString
+    CacheBytes :: Key -> W m Bytes -> W m Bytes
     -- value key...
 
     -- miscellaneous 
@@ -171,11 +175,16 @@ newEmptyDictionary = NewEmptyDictionary
 getTransactionTime :: W m T
 getTransactionTime = GetTransactionTime
 
-cacheBytes :: Key -> W m ByteString -> W m ByteString
+-- | Obtain a cached bytestring, or compute the bytestring then
+-- store it. The bytestring should have a constant value for the
+-- given key. Typically, the key should involve a secure hash or
+-- version hash of the relevant source and inputs. A simple prefix
+-- or suffix can cover the computation and version numbers.
+cacheBytes :: Key -> W m Bytes -> W m Bytes
 cacheBytes = CacheBytes
 
-
 -- TODO
+--  efficient access to pre-cached word semantics
 --  abstract support for caching, memoization, interning
 --  abstract internal model of Awelon Bytecode (`WBC m`?)
 --  event logs, issue tracking, etc. (perhaps modeled as dictionaries?)
