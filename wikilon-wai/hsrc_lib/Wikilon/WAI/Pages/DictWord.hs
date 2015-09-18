@@ -3,6 +3,7 @@
 module Wikilon.WAI.Pages.DictWord
     ( dictWord
     , dictWordClients
+    , dictWordDelete
     , module Wikilon.WAI.Pages.DictWord.Rename
     , module Wikilon.WAI.Pages.DictWord.ClawDef
     , module Wikilon.WAI.Pages.DictWord.AODef
@@ -134,6 +135,7 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
                 forM_ lEditors $ \ (s,uri) -> " " <> href uri s
 
             H.strong "SecureHash:" <> " " <> ver <> H.br
+            href (uriDictWordDelete dn dw) "delete this word" <> H.br 
 
             H.hr ! A.class_ "todo"
             H.div ! A.class_ "todo" $ "TODO: compilation, type, health information,\n\
@@ -141,11 +143,11 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
                 \dictonary app views based on type or naming conventions,\n\
                 \" 
 
--- | Note: deletion of a word should be identical to putting an empty
--- definition.
+-- | Deletion of a word. 
 delDictWord :: WikilonApp
-delDictWord = toBeImplementedLater "HTTP Deletion of individual Word"
-
+delDictWord = dictWordApp $ \ w dn dw _rq k ->
+    wikilon_action w (deleteDictWord dn dw) >>= \ _ ->
+    k $ Wai.responseLBS HTTP.noContent204 [] mempty
 
 -- | Reverse Lookup for a particular word, i.e. find all
 -- words that reference this one.
@@ -180,3 +182,24 @@ dictWordClients = app where
         let txt = BB.toLazyByteString $ mconcat $ fmap wbb $ lClients in
         k $ Wai.responseLBS status headers txt
 
+
+-- | dictWordDelete is a page, a form to allow deletion via HTTP POST. 
+dictWordDelete :: WikilonApp 
+dictWordDelete = app where
+    app = routeOnMethod [(HTTP.methodGet, onGet), (HTTP.methodPost, delDictWord)]
+    onGet = dictWordApp $ \ w dn dw _rq k ->
+        let status = HTTP.ok200 in
+        let headers = [textHtml] in
+        let title = H.unsafeByteString $ "Delete " <> unWord dw in
+        let uri = H.unsafeByteStringValue $ uriDictWordDelete dn dw in
+        k $ Wai.responseLBS status headers $ renderHTML $ do
+            H.head $ do
+                htmlMetaNoIndex
+                htmlHeaderCommon w
+                H.title title
+            H.body $ do
+                H.h1 title
+                H.p "Deletion is equivalent to assigning an empty definition."
+                H.form ! A.method "POST" ! A.action uri ! A.id "formDictWordDelete" $ do
+                    H.input ! A.type_ "submit" ! A.value "Delete"
+       

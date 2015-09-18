@@ -15,18 +15,19 @@ DONE:
 * browse words by name
 * obtain a list of word names 
 * view a word
-* delete a word (by clearing its definition)
+* delete a word 
+ * by clearing its definition
+ * simplified deletion via dedicated link, button
 * rename a word
 * view and edit `[command][]` definitions as claw code
 * stylesheets with dark background by default
 * most CSS pushed into stylesheets (instead of inline css)
-* CSS provided via dictionary (default /d/master/w/wikilon.css).
+ * CSS provided via dictionary (default /d/master/w/wikilon.css).
 * secure hash per word for deep source
 * simplistic stateless REPL based on Claw code
  * including time elapsed during evaluation
 
 * (meta) separated model from implementation
-
 
 NOTES:
 
@@ -34,17 +35,43 @@ I'll need a proper 'incremental evaluation/compilation' model or similar, someth
 
 I also need to get to work quickly on developing a 'generic' model for web applications and images.
 
-TODO SOONER:
+TODO:
 
-* leverage cache to push CSS into dictionary
- * also: favicon, documentation, web pages, etc.
+* update the branch storage to PVar per dictionary... 
+ * or multiple PVars? e.g. so we don't load history to load head dict.
 
+* implement the cache in wikilon-store
+
+
+* consider a switch to Snap widgets or similar
+ * built-in routing features
+ * automatic AJAX support if feasible
+ * Scotty, Yesod, Salvia?, MFlow, Wheb
+
+* implement a simple user/group permissions model.
+ * perhaps based initially on unix filesystems, for familiarity
+ * check authority when loading a branch PVar
+* implement incremental compilation above cache
+* implement faster interpreters
+* easily delete a word
+* user authentication and capabilities needed
+
+* use ETags correctly (If-None-Match)
+ * create a monadic model to simplify this, 
+ * perhaps based on MFlow, multi-page forms?
+
+
+* favicons
+* image resources in general! SVG, GIF, PNG?
+* basic support for static web content
+ * static web pages
+ * or at least texts and forums
+
+* same monad for authority validation & 
 
 * tune how requests and routing are handled in wikilon-wai
  * take inspirations from mflow and RDP or FRP
 
-
-* generate CSS from dictionary
 * generate favicon from dictionary
 * generate front page from dictionary
 
@@ -105,8 +132,6 @@ TODO SOONER:
  * model queried web-pages within dictionary
 * separate model and implementation
 * track recent updates and events
-
-TODO:
 
 * basic user login model
  * maybe have a dictionary associated with each user? 

@@ -32,6 +32,9 @@ module Wikilon.Model
     , getTransactionTime
     , newEmptyDictionary
     , Bytes, cacheBytes
+
+    , deleteDictWord
+
     --, WikilonModel, ModelRunner
     --, BranchingDictionary(..), CreateDictionary(..)
     --, GlobalErrorLog(..), logSomeException, logException
@@ -41,6 +44,7 @@ module Wikilon.Model
 
 import Control.Monad
 import Control.Applicative
+import Data.Monoid
 import Wikilon.Time (T)
 import Wikilon.SecureHash
 import Wikilon.Dict.Object
@@ -182,6 +186,17 @@ getTransactionTime = GetTransactionTime
 -- or suffix can cover the computation and version numbers.
 cacheBytes :: Key -> W m Bytes -> W m Bytes
 cacheBytes = CacheBytes
+
+-- | Delete a word under a named branch.
+deleteDictWord :: BranchName -> Word -> W m ()
+deleteDictWord dn dw = 
+    loadBranch dn >>= \ br ->
+    branchHead br >>= \ d0 ->
+    let d' = unsafeUpdateWord dw mempty d0 in
+    branchUpdate br d'
+
+
+
 
 -- TODO
 --  efficient access to pre-cached word semantics
