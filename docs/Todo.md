@@ -35,13 +35,29 @@ I'll need a proper 'incremental evaluation/compilation' model or similar, someth
 
 I also need to get to work quickly on developing a 'generic' model for web applications and images.
 
+
 TODO:
 
-* update the branch storage to PVar per dictionary... 
+* Recent Changes (e.g. 1 hour, 1 day, 1 week, 1 month)
+ * For whole dictionary
+ * Also, per word
+ 
+
+* update the branch storage to PVar per branch... 
  * or multiple PVars? e.g. so we don't load history to load head dict.
+ * consider extra PVars for branch metadata
 
-* implement the cache in wikilon-store
+* implement a cache in wikilon-store?
+ * consider a metadata cache per dictionary
+ * cached hashes could be useful, then
+ * other cached content could be useful
+ * but... cache per dictionary might hinder management
+ * 
 
+* develop model for tracking 'words with a given property' 
+ * e.g. undefined words, badly typed words, words with a given type
+ * per branch? or per dictionary?
+ * extensible set of simple, named properties
 
 * consider a switch to Snap widgets or similar
  * built-in routing features

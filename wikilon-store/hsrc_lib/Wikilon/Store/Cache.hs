@@ -1,21 +1,12 @@
 
--- | This module supports per-word caching based on the 'version hash'
--- of words within a dictionary. Cached values should be valid across
--- multiple versions and forks of a dictionary.
+-- | This module provides a simple cache implementation. Mostly, just a
+-- trie under a PVar with (1) a simple exponential decay model, (2) a
+-- basic implementation to hide parallel background computations.
 --
--- While there is no need to invalidate this cache, we may need to 
--- gradually cull the cache to keep it from growing too large. I'm
--- not sure how I want to go about this at the current time, except
--- maybe to use an exponential decay model.
---
--- Fortunately, I don't need to be especially careful with the cache.
--- If the versions don't match, I can simply replace the cache with 
--- an empty.
---
--- Per-word caching isn't sufficient for some tasks, e.g. if I want
--- to maintain a list of words with type-errors then I'll need something
--- else. I'll need to think about this later. This particular module
--- will focus on per-word caching.
+-- Managing parallel background computations is perhaps the biggest
+-- issue. To any given computation using the cache, I want to present
+-- an image that the cached value has already been computed, even if
+-- it must wait. This might be achieved by MVars or similar.
 module Wikilon.Store.Cache
     (
     ) where
@@ -23,8 +14,10 @@ module Wikilon.Store.Cache
 -- What do I want to cache?
 --
 -- COMPILATION:
---  intermediate (value,compiler) pair
---  'compiled' function (from applying compiler to value)
+--  intermediate (value,compiler) pair, if non-trivial to recompute
+--  'compiled' function (from applying compiler to value), iff non-trivial to compute
+--  optimized functions (as values)?
+--  
 --  type information for generated function
 --  indicators for obvious compilation or type errors
 --  function as compiled to JavaScript?

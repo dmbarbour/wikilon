@@ -89,8 +89,7 @@ instance DictView Dict where
             Nothing -> mempty
     toList = fmap (second _decode) . toListBytes
 
-    -- dictDiff :: dict -> dict -> [Word]
-    -- TODO: support efficient Trie diff-list and merge functions
+    dictDiff a b = fmap (Word . fst) $ Trie.diff (dict_defs a) (dict_defs b)
 
     lookupVersionHash d w = h where
         h = maybe u id $ Trie.lookup (unWord w) (dict_hash d)

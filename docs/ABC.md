@@ -112,12 +112,6 @@ June 2015:
  * original definition: `/ :: N(non-zero a) * e → N(1/a) * e`
  * note: not fully committed to this change, may restore `/` later if necessary
 
-### Changes Under Consideration
-
-September 2015:
-
-A simple change I'm considering is to exchange UTF-8 texts for raw binaries. The encoding would remain the same, and would remain biased towards text. But the meaning would become a list of numbers in the range 0..255. A potential benefit here would be simplified encoding of binaries and simplified processing, validation, and interpretation of embedded texts. A disadvantage would be an inability to view arbitrary, raw ABC as plain text. I'm not committed to this change.
-
 ## ABCD
 
 None yet! ABCD will use UTF-8 characters starting after the C1 charset and will develop according to empirical analysis of common subprogram patterns that offer effective compression and optimization benefits. Also, formal correctness proofs will be essential for every ABCD operation. Naturally, ABCD won't make progress until we have large and mature ABC systems. But prototypes for ABCD can easily be used internally by interpreters.

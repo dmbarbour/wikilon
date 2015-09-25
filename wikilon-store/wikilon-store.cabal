@@ -34,7 +34,7 @@ Library
     , wikilon-abc
     , wikilon-model
     , vcache (>= 0.2.6)
-    , vcache-trie (>= 0.2.2)
+    , vcache-trie (>= 0.2.3)
     , stm
     , mtl
 

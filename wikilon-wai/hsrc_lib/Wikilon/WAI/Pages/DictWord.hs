@@ -14,6 +14,7 @@ import Data.Monoid
 import qualified Data.List as L
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
+--import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Builder as BB
 import qualified Network.HTTP.Types as HTTP
 import Text.Blaze.Html5 ((!))
@@ -128,14 +129,14 @@ getDictWordPage = dictWordApp $ \ w dn dw _rq k ->
             -- links to editors (no longer editing inline)
             H.nav $ do
                 H.strong "Edit:"
-                let editName = ("name", uriDictWordRename dn dw)
+                let editName = ("rename", uriDictWordRename dn dw)
                 let editAO = ("aodef", uriAODictEditWords dn [dw])
                 let editClaw = ("claw", uriClawDefEdit dn dw)
-                let lEditors = [editName, editClaw, editAO] 
+                let delete = ("(delete)", uriDictWordDelete dn dw)
+                let lEditors = [editName, editClaw, editAO, delete] 
                 forM_ lEditors $ \ (s,uri) -> " " <> href uri s
 
             H.strong "SecureHash:" <> " " <> ver <> H.br
-            href (uriDictWordDelete dn dw) "delete this word" <> H.br 
 
             H.hr ! A.class_ "todo"
             H.div ! A.class_ "todo" $ "TODO: compilation, type, health information,\n\
@@ -183,6 +184,8 @@ dictWordClients = app where
         k $ Wai.responseLBS status headers txt
 
 
+
+
 -- | dictWordDelete is a page, a form to allow deletion via HTTP POST. 
 dictWordDelete :: WikilonApp 
 dictWordDelete = app where
@@ -190,16 +193,31 @@ dictWordDelete = app where
     onGet = dictWordApp $ \ w dn dw _rq k ->
         let status = HTTP.ok200 in
         let headers = [textHtml] in
-        let title = H.unsafeByteString $ "Delete " <> unWord dw in
         let uri = H.unsafeByteStringValue $ uriDictWordDelete dn dw in
         k $ Wai.responseLBS status headers $ renderHTML $ do
             H.head $ do
                 htmlMetaNoIndex
                 htmlHeaderCommon w
-                H.title title
+                H.title $ "Delete Word: " <> H.unsafeByteString (unWord dw)
             H.body $ do
-                H.h1 title
-                H.p "Deletion is equivalent to assigning an empty definition."
                 H.form ! A.method "POST" ! A.action uri ! A.id "formDictWordDelete" $ do
                     H.input ! A.type_ "submit" ! A.value "Delete"
-       
+                H.br
+                deleteMeta
+                H.hr
+                H.string "return to word " <> hrefDictWord dn dw <> H.br
+                H.string "return to dictionary " <> hrefDict dn <> H.br
+
+
+deleteMeta :: HTML
+deleteMeta = H.div ! A.class_ "docs" $ do
+    H.p $ H.strong "Effects:" <> " after deletion, a word is undefined. This is\n\
+          \has the same effect as defining a word to an empty string. Note: the\n\
+          \staged structure of AO definitions `∀e.∃v. e → ([v→[a→b]]*(v*e))` ensures\n\
+          \undefined words are distinct from the minimal identity function `[][]`.\n"
+    H.p $ "Undefined words can serve a useful role in development, e.g. providing\n\
+          \named 'holes' to be filled with support of type inference and unit tests.\n\
+          \Ideally, a good programming environment will help automate development.\n\
+          \But it's preferable that all words used in a dictionary are defined.\n"
+
+

@@ -52,8 +52,11 @@ clawDocsHTML = do
         H.li $ (H.b "escaped blocks") <> " have form \\[claw code]"
     H.p $ "Multi-line texts or texts containing double quote must be escaped."
     H.p $ "Any use of escaped forms suggests that some words should be added\n\
-          \to the dictionary. Also, when a command doesn't fit a single line,\n\
-          \users should refactor it into smaller commands."
+          \to the dictionary. E.g. if you have a large escaped text, consider\n\
+          \adding a word to the dictionary that simply contains this text.\n\
+          \Also, Claw becomes difficult to read or work with beyond a single\n\
+          \line of code (~10 tokens), so that should be the refactoring point.\n"
+    H.p $ "Claw is readily extensible with new syntax. See below.\n"
     H.h2 "Claw Semantics"
     let lnAO = href uriAODocs $ "Awelon Object (AO)"
     H.p $ "Claw's entire semantics is a trivial expansion into " <> lnAO <> " bytecode."
@@ -112,11 +115,22 @@ clawDocsHTML = do
              \ AO format regardless of available extensions."
         H.li $ (H.strong "simplicity") <> ": back-end processing doesn't need\
              \ to know anything about claw syntax or extensions."
+    H.p $ "Available extensions depend on the development environment."
+    let ifThenElseEndifExample = 
+            H.b "if" <> " foo " <> 
+            H.b "then" <> " bar " <> 
+            H.b "else" <> " baz " <> 
+            H.b "endif"
     H.p $ "Vectors, matrices, and monadic do-notation are viable extensions\n\
           \to claw code that might be explored in the near future. Structured\n\
           \editors could feasibly extend claw code with rich media: tables,\n\
           \colors and color-pickers, graphs, diagrams, canvases, sliders and\n\
-          \checkboxes, etc.."
+          \checkboxes, etc..\n"
+    H.p $ "It also is feasible to extend claw to render like more conventional\n\
+          \programming languages, e.g. `[foo] [bar] [baz] if` might render as\n\
+          \`" <> ifThenElseEndifExample <> "` in an editor that can distinguish\n\
+          \keywords from dictionary words (e.g. via color, typeface, structure).\n\
+          \Whether this significantly improves readability is worth exploring.\n"
 
     H.h2 "Claw Environments and Effects"
     H.p $ "We can understand each command as a pure `env→env` function."
@@ -144,7 +158,7 @@ clawDocsHTML = do
 
     H.h2 "Claw Namespaces"
 
-    H.p $ "Claw introduces a simple namespace concept."
+    H.p $ "Claw currently introduces a simple namespace concept."
 
     H.ul $ do
         H.li "Every region of a claw stream has exactly one namespace."
