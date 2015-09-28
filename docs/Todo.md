@@ -35,13 +35,42 @@ I'll need a proper 'incremental evaluation/compilation' model or similar, someth
 
 I also need to get to work quickly on developing a 'generic' model for web applications and images.
 
+PERFORMANCE TODO:
+
+1. major rewrite of 'model'
+ * dictionary as a simple index of words to binaries
+  * with fast lookup by word, diff, and update word
+  * with ability to access list of (word,def) pairs
+  * no particular constraints against cycles, etc.
+ * include bytecode under 'model'
+ * 
+
+PRIMARY TODO:
+
+* simplify dictionaries!
+ * the 'model' of a dictionary fixed to:
+  * a finite collection of words → definitions (binaries)
+  * 
+ * minimal historical dictionaries, just  as tries
+ 
+
+
+
+* recent changes
+* background computations (per branch?)
+* incremental caching model
+* machine-optimized bytecode and data model
 
 TODO:
 
-* Recent Changes (e.g. 1 hour, 1 day, 1 week, 1 month)
- * For whole dictionary
- * Also, per word
- 
+* develop a model for indexing words with a given property
+ * e.g. all words that are undefined or badly defined or badly typed
+ * e.g. all words that have a given type on input or output
+
+
+* forum-functions...
+ * model forum within a dictionary
+ * 
 
 * update the branch storage to PVar per branch... 
  * or multiple PVars? e.g. so we don't load history to load head dict.

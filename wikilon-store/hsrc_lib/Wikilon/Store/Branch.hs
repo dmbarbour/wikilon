@@ -1,16 +1,8 @@
 {-# LANGUAGE DeriveDataTypeable #-}
--- | Wikilon keeps a branching history for dictionaries. Branches are
--- named by simple unicode strings. Individually, each branch has a
--- dictionary and a history.
---
--- Branch names must be valid Word names, i.e. to have the same URL
--- friendly and text friendly constraints.
+-- | Wikilon hosts multiple named dictionaries. Each dictionary has
+-- a history, a head value, and some cached computations.  
 module Wikilon.Store.Branch
-    ( BranchSet
-    , BranchName
-    , Branch
-
-    , empty
+    ( empty
     , vspace
     , width
     , volume
