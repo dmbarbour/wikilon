@@ -12,7 +12,7 @@
 --    forbid C0 SP DEL C1 U+FFFD 
 --    forbid empty string
 --  Text, HTML, Delimiter, and Extension friendly: 
---    forbid ,;{}(|)[]<>"`&
+--    forbid ,;{}(|)[]<>"`&=
 --    don't end with a .
 --  Not confusable with numbers:
 --    forbid words starting with digit
@@ -64,7 +64,7 @@ wcArray :: UA.UArray Word8 Bool
 wcArray = UA.accumArray (flip const) False (0,127) lst where
     toE c = (fromIntegral (ord c), True)
     lst = fmap toE okChars
-    okChars = alpha ++ num ++ "-._~!$'*+=:@"
+    okChars = alpha ++ num ++ "-._~!$'*+:@"
     alpha = ['a'..'z']++['A'..'Z']
     num = ['0'..'9']
 {-# NOINLINE wcArray #-}

@@ -5,9 +5,11 @@ Ideally, syntax is both meaningful to humans and convenient for the problem doma
 
 ## Bi-Directional Translation
 
-My work on [command language for awelon (claw)](CommandLine.md) offers a viable basis for extensible syntax, based on bi-directional translation between high level code (for humans) and lower level bytecode (for machines). I currently focus on numbers (integers, decimals, ratios) and inline literals appropriate for a command line, but this same idea could be extended to structured programming (e.g. recognizing `[cond] [body] while_do_` and the like). 
+My work on [command language for awelon (claw)](CommandLine.md) offers a viable basis for extensible syntax, based on bi-directional translation between high level code (for humans) and lower level bytecode (for machines). I currently focus on numbers (integers, decimals, ratios) and inline literals appropriate for a command line, but this same idea could be extended to structured programming (e.g. recognizing `[cond] [body] while_do_` as a while loop, and the like). 
 
-This approach has the advantage of simplicity. Simplicity shouldn't be underestimated. OTOH, this does limit our ability to represent and manipulate ad-hoc objects within the dictionary.
+This approach has an advantage of simplicity. Simplicity shouldn't be underestimated. OTOH, this does limit our ability to represent and manipulate ad-hoc objects within the dictionary, and it complicates staging a little.
+
+Staged computation is still viable via annotations, e.g. `{&static}` might indicate that we should try to compute a value statically.
 
 ## Staged Definitions
 
@@ -15,9 +17,9 @@ We could represent staged definitions via type:
 
         type Def a b = ∃v.∀e. e → ([v→[a→b]]*(v*e))
 
-Here, the `v` becomes an AST (more or less), while the `[v→[a→b]]` function becomes a compiler for this structure. The resulting `[a→b]` function is the *meaning* of the word. Trivially, a lot of definitions could have form `[meaning][]`. Other than the trivial case, the compiler function would typically be refactored into a single word such as `[{%fooLang}]`. 
+Here, the `v` serves a role similar to an AST, while the `[v→[a→b]]` function becomes a compiler for this structure. The resulting `[a→b]` function is the *meaning* of the word. Trivially, a lot of definitions could have form `[meaning][]`. Other than the trivial case, the compiler function would typically be refactored into a single word such as `[{%fooLang}]`. 
 
-This becomes 'syntax' if we render the value `v` for the users. 
+The value `v` becomes 'syntax' if we render the value `v` for the users, and manipulate it directly.
 
 This technique allows us to functionally manipulate definitions. It also provides a structural guarantee for staged programming. Representing unit tests within a dictionary becomes trivial. OTOH, this is also more complex, both for processing and for comprehension. Refactoring code, and the concatenative nature of Awelon, are less obvious.
 
@@ -27,4 +29,5 @@ I've experimented with the staged version, but I don't like the extra processing
 
 ## Decision
 
-I've decided to reverse my earlier decision and favor simplicity. 
+I've decided to favor simplicity. Definitions will *not* be staged. Words will refer directly to the definition.
+
