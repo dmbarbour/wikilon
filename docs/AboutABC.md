@@ -426,35 +426,30 @@ A good model for separate compilation and dynamic linking is essential for perfo
 
         {#secureHashOfBytecode}
 
-This secure hash guards against name collisions. Given the identifier, we can fetch the resource, validate it against the hash, then compile and load it. We could leverage a [distributed hashtable](https://en.wikipedia.org/wiki/Distributed_hash_table) or other content distribution model. We can compile this resource, and we can cache the results in case we see the identifier again. A good cache will greatly improve effective compression of streaming code. We don't need to worry about versioning or cache invalidation at this layer. And the secure hash also guards against cyclic dependencies.
+The secure hash serves many useful roles:
 
-For specifics, I'm favoring SHA3-256 encoded using Awelon's Base16 (alphabet `bdfghjkmnpqstxyz`). So this encodes as in sixty-four characters in after the `#` mark. When obtaining resources, we should also be able to query whomever provided the resource ID to either obtain it directly or learn where to obtain it.
+* guards against name collisions
+* guards against cyclic dependencies
+* simplifies versioning and caching
+* simplifies download and validation
 
-#### Staged Compilation of Resources
+Given the identifier, we can fetch the resource, validate against the hash, then load it in place of the token. The cache of resources can be cleared heuristically, but is never invalidated due to a new version. In general, we would download the resource from the same connection that mentioned it in the first place, but we could be told to redirect to a separate web service or content distribution network for efficient distribution of large resources.
 
-Each ABC resource will follow the structure of [AO definitions](AboutAO.md). That is, rather than *directly inlining* resource bytecode, our resources can be evaluated into two parts: a value and a compiler for it. The type of a complete resource will be the same as the type of an AO definition: `∃v.∀e.(e→([v→[a→b]]*(v*e))`. We'll compile a resource by applying the compiler function `[v→[a→b]]` to the value `v` to produce the `[a→b]` function, which is the meaning of the resource. This `[a→b]` function may be further compiled into machine code or module by a runtime.
+Semantically, ABC resources are simply inlined directly in place of the token. However, for performance we might compile resources into machine code or otherwise pre-process them. The compiled version of a resource can easily be cached together with the downloaded code.
 
-Matching AO's definition structure has many benefits. Most importantly, this enables annotations to be applied at compile-time, e.g. to indicate that large values should use an optimized representation (e.g. matrix or vector) or be hibernated to cold store, that certain functions should be parallelized or compiled for GPGPU. Explicit staging is a lot more reliable and predictable than depending on implicit partial evaluation, and can provide macro-like compression. The shared structure can help unify development and debugging tools, e.g. developers can view and manipulate [embedded objects](ExtensibleSyntax.md) or (with sufficient metadata) even a [command language view](CommandLine.md). 
-
-The primary differences between the ABC resource model and AO definitions: ABC resources are identified by `{#secureHash}` in a global space, whereas AO uses human-meaningful `{%word}` tokens bound locally to an implicit dictionary. Also, AO definitions are typically restricted to a friendly, portable, purely functional subset of ABC (by limiting tokens and texts); ABC resources are not restricted.
-
-*Note:* In AO development contexts, the potential for *incomplete* definitions is of some interest. We depend on `e` to provide some values. Incomplete definitions don't translate well to ABC resources because we don't have the implicit identity associated with words. But we could prefix incomplete definitions with an annotation such as `{&@word}` to distinguish different `e` holes.
+For specifics, I'm favoring SHA3-256 encoded using Awelon's Base16 (alphabet `bdfghjkmnpqstxyz`). So this encodes as in sixty-four characters in after the `#` mark. When obtaining resources, we should generally be able to query whomever provided the resource ID to either obtain it directly or learn where we can download the resource.
 
 *Aside:* Paul Chiusano is doing related work with Unison involving [editing resources named by hashes](http://unisonweb.org/2015-06-12/editing.html#post-start). While I've not elected to go this route with AO dictionaries, the techniques he develops seem readily applicable to ABC resources.
 
 #### Sensitive Resources over Untrusted Distribution Networks
 
-Use of a secure hash guards the client against certain abuses. It doesn't matter from where a client downloads a resource because its secure hash is validated. However, if the *provider* of the resource wishes to use an untrusted content distribution network, it's a problem if the data be presented in plain text or bytecode.
+Use of a secure hash guards the client against certain abuses. It doesn't matter from where a client downloads a resource because its secure hash is validated. However, if the *provider* of a sensitive resource wishes to use an *untrusted* content distribution network, it's a problem that the resource be presented in plain text or bytecode.
 
-So we'll leverage cryptographic sealing.
-
-The bulk of a sensitive resource is encrypted and provided over the untrusted network. Trusted servers hold onto much smaller resources that contain the unsealers. Servers can thus provide bulky data over untrusted distribution networks while restricting who can see the content to just the clients.
-
-*Aside:* Originally, I was building a secure distribution concept directly into the basic resource identifier. However, separating the two concerns is much simpler, and the cost (downloading an additional resource) is tolerable.
+Fortunately, we already have a solution for this: cryptographic value sealing. A resource can provide a sealed value, which is unsealed by another resource. The bulky sealed data is then distributed via the untrusted network. Trusted servers hold onto much smaller resources that include the unsealers. 
 
 #### Specialization: Value Linking
 
-It might be useful to optimize for cases where the generated `[a→b]` meaning function itself the type `[∀a.a→(value*a)]`, i.e. simply exporting a large value. Specializing this case would usefully permit lazy or parallel loading of values and interning of large values. We might additionally include a little information about substructural attributes (affine, relevant, linear) that would constrain generic data plumbing:
+It seems useful to optimize for cases where the resource is of type `[∀e.e→(value*e)]`, i.e. simply exporting a large value. Specializing this case simplifies lazy or parallel loading and processing of large values. We might additionally include a little information about substructural attributes (affine, relevant, linear) that constrain generic data plumbing:
 
         {#secureResourceIdentifier'kf}
 
@@ -469,12 +464,11 @@ Usefully, this technique is compositional. I.e. if we build a value from smaller
 
 Lazy linking and loading of large, content-addressed data is convenient for working with very large structures and values, i.e. much larger than machine memory.
 
-
 ### ABC Paragraphs
 
 ABC encourages an informal notion of "paragraphs" at least in a streaming context. A paragraph separates a batch of code, serving as a soft indicator of "this is a good point for incremental processing". A well-behaved ABC stream should provide relatively small paragraphs (up to a few kilobytes), and a well-behaved ABC stream processor should respect paragraphs up to some reasonable maximum size (e.g. 64kB) and heuristically prefer to process a whole number of paragraphs at a time. The batch would be typechecked, JIT compiled, then (ideally) applied atomically. 
 
-A paragraph is expressed by simply including a full, blank line within ABC code. I.e. LF LF in the toplevel stream outside of any block. This corresponds nicely to a paragraph in a text file. Formally, the space between paragraphs just means identity. Paragraphs are discretionary. The reason to respect them is that they're advantageous to everyone involved, i.e. for performance and reasoning.
+A paragraph is implicitly expressed by simply including a full, blank line within ABC code. I.e. LF LF in the toplevel stream outside of any block. This corresponds nicely to a paragraph in a text file. Formally, the space between paragraphs just means identity. Paragraphs might be more explicitly indicated by an annotation, e.g. `{&p}`. Paragraphs are discretionary. The reason to respect them is that they're advantageous to everyone involved, i.e. for performance and reasoning.
 
 ### Encoding Binaries in ABC
 

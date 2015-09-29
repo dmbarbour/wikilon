@@ -35,7 +35,9 @@ I'll need a proper 'incremental evaluation/compilation' model or similar, someth
 
 I also need to get to work quickly on developing a 'generic' model for web applications and images.
 
-PERFORMANCE TODO:
+COMPLETE REWRITE:
+
+1. simplify the 'dictionary' 
 
 1. major rewrite of 'model'
  * dictionary as a simple index of words to binaries

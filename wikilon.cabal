@@ -1,15 +1,13 @@
 Name: wikilon
 Version: 0.1
 Synopsis: Wiki-based IDE and platform for Awelon project 
-Category: Awelon, Application, Application Server
+Category: Awelon, Application Server
 Description:
-  Wikilon is a user-programmable wiki for Awelon project. Unlike 
-  conventional wikis, pages in Wikilon define concrete mathematical
-  functions. Static content may be extracted from these functions,
-  or interactive content by cross-compilation.
-  .
-  While developed using Haskell, Wikilon is primarily oriented around
-  the Awelon Bytecode (ABC) and Awelon Object (AO) languages. 
+  Wikilon is a user-programmable wiki and development environment for
+  Awelon project. Pages in Wikilon define concrete functions, which can
+  be interpreted or presented as a variety of web applications (forums,
+  spreadsheets, documents, interactive fictions and games, etc.) or 
+  extracted via cross-compilation.
   
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com
@@ -35,8 +33,7 @@ Executable wikilon
   hs-source-dirs: hsrc_exe
   default-language: Haskell2010
   build-depends: base (>= 4.6 && < 5)
-    , wikilon-wai
-    , wikilon-store
+    , wikilon-model
 
     , vcache
     , easy-file (>= 0.2)
@@ -46,8 +43,6 @@ Executable wikilon
     , tls 
 
     -- extras for `cabal repl` via sandbox
-    , wikilon-model
-    , wikilon-abc
     , bytestring
 
   main-is: Main.hs
