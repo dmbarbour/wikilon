@@ -132,28 +132,8 @@ In overview, I'm leaning towards a capability-secure model for commands and view
 
 Usefully, these views and techniques should generalize nicely for RDP, which effectively pushes all of 'messaging' into machine adaptation to active subscriptions (with parameters).
 
-## Secondary Design Thoughts
 
-### Namespace Inheritance
-
-When developing a new command context, a new REPL or shell, it would be very convenient to automatically inherit a lot of words from a similar context. Also, it would be nice if this inheritance behavior was maintained automatically over time, i.e. to include new words associated with the origin context. I don't wish to compromise the simplicity or unambiguity of claw code. 
-
-One viable approach leverages automatic refactoring tools and metadata. 
-
-For namespace `b:`, we could define a word `b:meta:ns` that provides some ad-hoc metadata (documentation, purpose, etc.). Among this metadata, we could describe a simple wrapper functions to apply when converting words from another namespace, such as `a:`. Then, when we use an undefined word `foo`, our editor could propose a definition for `foo`, e.g. something like:
-
-        Word 'foo' is not defined, but you may edit and install the
-        suggested default definition below:
-        
-            [{%a:foo}][{%b:a:wrap}]
-
-Some editors might be configured to skip the user query and define words automatically. Similarly, a linting tool might identify all the undefined words for a new namespace. Using this technique effectively pushes this sort of implementation inheritance into our tooling layers to avoid compromising the semantic layers.
-
-### Debugging
-
-It might be useful to also optimize some simple debugging models outside the effects model, e.g. via annotations. But do I need any syntax for this? I can probably do it entirely using normal words...
-
-### Multi-Media Claw 
+## Multi-Media Claw 
 
 Claw code can be extended with new literal types. While there are some rather severe limits on what extensions are viable for use in a typical command-line environment, these limitations might be relaxed in context of iPython-notebook style environments, live coding, or structure editors. A structure editor could feasibly support rich media such as graphs and diagrams as simple claw literals.
 
