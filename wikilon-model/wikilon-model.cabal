@@ -53,10 +53,9 @@ Library
     Wikilon
     Wikilon.Model
     Wikilon.Dict
+    Wikilon.AODef
     Wikilon.Word
     Wikilon.Token
-   -- Wikilon.RawABC
-    Wikilon.AODef
     Wikilon.Text
 
   Other-Modules:

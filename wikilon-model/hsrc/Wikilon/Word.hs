@@ -13,14 +13,14 @@
 --    forbid empty string
 --  Text, HTML, Delimiter, and Extension friendly: 
 --    forbid ,;{}(|)[]<>"`&=
---    don't end with a .
+--    don't end with a . (easily mistaken for end of sentence)
 --  Not confusable with numbers:
 --    forbid words starting with digit
 --    forbid words starting with +-. followed by digit
 --
 -- Some of these constraints are redundant.
 --
--- A few sub-delims remain available for use in URLs "(),;". It should
+-- A few sub-delims remain available for use in URLs "(),;=". It should
 -- be easy to pick words out of English text, though I might need to mark
 -- them in such a context.
 --
@@ -43,7 +43,7 @@ import Data.Char (ord)
 import Data.Word (Word8)
 import Data.String (IsString(..))
 import qualified Data.List as L
-import qualified Data.ByteString.Char as BS
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.Array.Unboxed as UA
 
@@ -81,15 +81,14 @@ isValidWordChar c = okASCII || okUnicode where
 
 isValidWord :: Word -> Bool
 isValidWord (Word w) = okSize && okStart && okEnd && okMiddle where
-    okSize = (1 <= len) && (len <= wordSizeMax)
-    okStart = case BS.uncons w of
+    okSize = (BS.length w <= wordSizeMax)
+    okStart = case UTF8.uncons w of
         Nothing -> False
         Just (c, w') | _isDigit c -> False
                      | not (_isPMD c) -> True
                      | otherwise -> maybe True (not . _isDigit . fst) (UTF8.uncons w')
-    okEnd = '.' /= (BS.last w)
+    okEnd = fromIntegral (ord '.') /= BS.last w
     okMiddle = L.all isValidWordChar (UTF8.toString w)
-    okSize = (BS.length w) <= wordSizeMax
 
 -- | maximum size for a word, in bytes
 wordSizeMax :: Int
@@ -104,11 +103,11 @@ _isDigit c = ('0' <= c) && (c <= '9')
 -- | heuristic constraints on words, written for humans
 listWordConstraintsForHumans :: [String]
 listWordConstraintsForHumans =
-    ["ASCII if alphabetical, numeral, or in -._~!$'*+=:@"
+    ["ASCII if alphabetical, numeral, or in -._~!$'*+:@"
     ,"UTF8 except C1, surrogates, and replacement char"
     ,"must not start with digit or +-. followed by digit"
     ,"must not terminate with a . (dot or period)"
-    ,"encoding of word must use between 1 and " ++ show wordSizeMax ++ " bytes"
+    ,"UTF8 encoding of word between 1 and " ++ show wordSizeMax ++ " bytes"
     ]
 
 -- Show a Word
