@@ -38,7 +38,7 @@ import Control.Arrow (first)
 import Data.Monoid
 import qualified Data.List as L
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.ByteString.Builder as BB
 import qualified Data.Set as Set
 
@@ -88,14 +88,14 @@ type Bytes = LBS.ByteString
 -- take a logical line splitting at next `\n@` pair.
 takeLogicalLine :: Bytes -> (Bytes, Bytes)
 takeLogicalLine bs = ll 0 bs where
-    ll !n ss = case LBS.elemIndex 10 ss of
+    ll !n ss = case LBS.elemIndex '\n' ss of
         Nothing -> (bs, LBS.empty) -- lacks final '\n'
         Just ix -> 
             let ln = LBS.take (n+ix) bs in
             let ss' = LBS.drop (ix+1) ss in
             case LBS.uncons ss' of
                 Nothing -> (ln, LBS.empty)
-                Just (64, _) -> (ln, ss')
+                Just ('@', _) -> (ln, ss')
                 _ -> ll (n+ix+1) ss'
 
 -- | select all logical lines
@@ -110,8 +110,8 @@ logicalLines bs =
 splitLine :: Bytes -> Maybe (Word, AODef)
 splitLine bs =
     LBS.uncons bs >>= \ (c0, wordAndDef) ->
-    guard (64 == c0) >>
-    let isWordSep c = (32 == c) || (10 == c) in
+    guard ('@' == c0) >>
+    let isWordSep c = (' ' == c) || ('\n' == c) in
     let (wbs, bs') = LBS.break isWordSep wordAndDef in
     let wrd = Word $ LBS.toStrict wbs in
     guard (isValidWord wrd) >>
