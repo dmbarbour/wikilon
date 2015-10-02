@@ -58,6 +58,11 @@ Library
     Wikilon.Token
     Wikilon.Text
 
+    Wikilon.AODict
+    -- Wikilon.Claw
+    -- Wikilon.
+
+
   Other-Modules:
     Data.VCache.LoB
      

@@ -46,7 +46,7 @@ listTextConstraintsForHumans =
     ["rejects C0 or C1 control codes except LF"
     ,"rejects DEL (U+007F) and Replacement Char (U+FFFD)"
     ,"rejects surrogate codepoints (U+D800 - U+DFFF)"
-    ,"weakly, text content should encode valid characters"
+    ,"text should encode valid characters (not tested)"
     ]
 
 -- | A lossless 'lines' function. The original structure may be

@@ -44,14 +44,19 @@ import Wikilon.AODef
 --
 -- But Wikilon does permit representation of dictionaries that are
 -- not healthy. It's left to higher layers to prevent or report 
--- any issues.
+-- any issues. Thus, users of the `Dict` type should not assume
+-- the dictionary is (for example) acyclic.
 -- 
 newtype Dict = Dict (Trie Def)
     deriving (Eq, Typeable)
 
--- | I want to separate large definitions from the Trie nodes to avoid
+-- NOTE: I want to separate large definitions from the Trie nodes to avoid
 -- copying them too often. But small definitions can be kept with the trie
--- nodes to reduce indirection.
+-- nodes to reduce indirection. Here, 'small' will be up to 254 bytes.
+--
+-- Most definitions will probably be 'small', i.e. because 254 bytes is a
+-- lot larger than a typical command line (even with view expansions). But
+-- some definitions, especially embedded texts, will be much larger. 
 data Def 
     = DefS AODef            -- for small definitions, < 255 bytes
     | DefL (VRef AODef)     -- for large definitions
