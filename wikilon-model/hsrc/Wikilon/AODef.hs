@@ -9,14 +9,13 @@ module Wikilon.AODef
     , isValidAODef
     ) where
 
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, isJust)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.Array.Unboxed as A
-import qualified Data.List as L
 import Wikilon.Token
 import Wikilon.Word
 import Wikilon.Text
+import Wikilon.ABC.Pure (abcCharToOp)
 
 -- | Definitions in an AO dictionary should be valid Awelon Bytecode
 -- (ABC), constrained to use a subset of tokens and texts to ensure
@@ -81,7 +80,7 @@ aodefWords = mapMaybe ff . aodefTokens where
         _ -> Nothing
 
 -- | Validate an AODef without constructing a parse result. This test
--- validates tokens, texts, bytecodes, and block structure.
+-- validates tokens, texts, bytecodes, and balanced block structure.
 isValidAODef :: AODef -> Bool
 isValidAODef = v (0 :: Int) where
     v !b !s = case BS.uncons s of
@@ -103,17 +102,4 @@ isValidAODef = v (0 :: Int) where
 
 -- test for valid ABC character... (todo: move to an ABC module)
 isValidABC :: Char -> Bool
-isValidABC = tst where
-    (lb,ub) = A.bounds abcCharArray
-    tst c = (lb <= c) && (c <= ub) && (abcCharArray A.! c)
-
-abcChars :: [Char]
-abcChars = "lrwzvcLRWZVC^%+-*Q>$?'okfDFMK#0123456789 \n"
-
-abcCharArray :: A.Array Char Bool
-abcCharArray = A.accumArray ins False (lb,ub) lst where
-    lb = L.minimum abcChars
-    ub = L.maximum abcChars
-    ins _ b = b
-    lst = fmap (flip (,) True) abcChars
-{-# NOINLINE abcCharArray #-}
+isValidABC = isJust . abcCharToOp
