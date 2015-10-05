@@ -1,4 +1,4 @@
-
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 -- | Awelon Bytecode (ABC) uses {tokens} as ad-hoc extensions to the
 -- bytecode, supporting annotations, type safety, security, linking,
 -- and potentially side-effects. Though, Wikilon doesn't use tokens
@@ -21,7 +21,9 @@ module Wikilon.Token
     , isValidDictToken
     ) where
 
+import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Char8 as BS
+import Data.String (IsString(..))
 import Wikilon.Word
 
 -- | A token has the form {token} in ABC, and represents an escape
@@ -42,23 +44,31 @@ import Wikilon.Word
 --   $ - wraps a cryptographically sealed value, e.g. {$aes:fingerprint}
 --   # - resource linking at a global scale, using secure hashes
 --   % - linking at a local scale within an implicit AO dictionary
-newtype Token = Token BS.ByteString
+newtype Token = Token UTF8.ByteString
+    deriving (Eq, Ord)
 
--- | Wikilon accepts only a subset of tokens: annotations, discretionary
--- sealers or unsealers, and local linking within the dictionary. Further,
--- annotations, sealers, and unsealers are all constrained to be valid as
--- words, i.e. to have the same HTTP-friendly properties.
+instance IsString Token where 
+    fromString = Token . UTF8.fromString
+instance Show Token where 
+    showsPrec _ (Token s) = 
+        showChar '{' . showString (UTF8.toString s) . showChar '}'
+
+-- | Wikilon accepts only a subset of tokens within a dictionary: 
+-- annotations, discretionary sealers or unsealers, and word links.
+-- Further, these must be valid as words (modulo prefix).
 isValidDictToken :: Token -> Bool
-isValidDictToken (Token t) = case BS.uncons t of
-    Just ('%', w) -> isValidWord (Word w)
-    Just ('&', a) -> isValidAnno a
-    Just (':', s) -> isValidSeal s
-    Just ('.', u) -> isValidSeal u
-    _ -> False
+isValidDictToken (Token tok) = case BS.uncons tok of
+    Just (c, s) -> case c of
+        '%' -> isValidWord (Word s)
+        '&' -> isValidAnno s
+        ':' -> isValidSeal s
+        '.' -> isValidSeal s
+        _ -> False
+    Nothing -> False
 
-isValidSeal :: BS.ByteString -> Bool
+isValidSeal :: UTF8.ByteString -> Bool
 isValidSeal s = isValidWord (Word s) && BS.notElem '$' s
 
-isValidAnno :: BS.ByteString -> Bool
+isValidAnno :: UTF8.ByteString -> Bool
 isValidAnno a = isValidWord (Word a)
 

@@ -52,13 +52,17 @@ Library
   Exposed-Modules:
     Wikilon
     Wikilon.Model
+
     Wikilon.Dict
+    Wikilon.AODict
     Wikilon.AODef
     Wikilon.Word
     Wikilon.Token
     Wikilon.Text
 
-    Wikilon.AODict
+    Wikilon.ABC
+    Wikilon.ABC.Pure
+
     -- Wikilon.Claw
     -- Wikilon.
 

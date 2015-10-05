@@ -107,8 +107,8 @@ logicalLines bs =
 
 -- | split an `@word def` bytestring into a (Word,AODef) pair
 -- This will also validate the Word and AODef.
-splitLine :: Bytes -> Maybe (Word, AODef)
-splitLine bs =
+parseLine :: Bytes -> Maybe (Word, AODef)
+parseLine bs =
     LBS.uncons bs >>= \ (c0, wordAndDef) ->
     guard ('@' == c0) >>
     let isWordSep c = (' ' == c) || ('\n' == c) in
@@ -120,13 +120,12 @@ splitLine bs =
     return (wrd,def)
 
 -- | Load words from a fragment of AODict format into a dictionary.
--- This doesn't enforce ordering properties. And if a word is listed
--- more than once then the last entry wins. However, it does perform
--- minimal validation (isValidWord, isValidAODef) before accepting
--- a line. Rejected lines are returned in a separate list.
+-- This doesn't enforce structural constraints. The only errors 
+-- detected are logical lines that fail to parse or validate (via
+-- isValidWord and isValidAODef).
 loadAODict :: Dict -> LBS.ByteString -> ([Bytes],Dict)
 loadAODict d0 = first L.reverse . L.foldl' accum ([],d0) . logicalLines where
-    accum (e,!d) s = case splitLine s of
+    accum (e,!d) s = case parseLine s of
         Nothing -> (s:e,d) -- add string to error list
         Just (wrd,def) -> (e, dictInsert d wrd def) -- add word to dictionary
 

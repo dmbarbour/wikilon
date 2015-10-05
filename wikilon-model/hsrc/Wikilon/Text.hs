@@ -1,8 +1,8 @@
 
 -- | Awelon Bytecode allows embedded UTF-8 texts. Wikilon allows a 
 -- subset of these texts, constraining use of control characters
--- and problematic codepoints to simplify interaction with HTML 
--- (e.g. automatic conversion of line endings to CRLF).
+-- and problematic codepoints to simplify interaction with HTTP 
+-- (e.g. CRLF conversions, UTF-16 conversions, etc.).
 --
 -- This module contains basic utilities for validating and processing
 -- texts.
@@ -26,7 +26,7 @@ import qualified Data.ByteString.Lazy as LBS
 
 type Text = LazyUTF8.ByteString
 
--- | test whether a text is valid by Wikilon's heuristics
+-- | Test whether a text is valid and safe by Wikilon's heuristics
 isValidText :: Text -> Bool
 isValidText = L.all isValidTextChar . LazyUTF8.toString
 
