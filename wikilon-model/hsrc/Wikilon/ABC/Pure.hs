@@ -1,4 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, OverloadedStrings, ViewPatterns #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, OverloadedStrings, ViewPatterns, BangPatterns #-}
 
 -- | Awelon Bytecode (ABC) consists of 42 primitives, texts, tokens, 
 -- and blocks. The 42 primitives cover integer maths, data plumbing,
@@ -21,6 +21,9 @@
 --
 -- See Wikilon.ABC for the practical variant.
 --
+-- TODO: a performance-optimized decoder (or leave this to the 
+-- Wikilon.ABC variant?)
+-- 
 module Wikilon.ABC.Pure
     ( ABC(..)
     , Text
@@ -29,11 +32,15 @@ module Wikilon.ABC.Pure
     , PrimOp(..)
     , abcOpToChar
     , abcCharToOp
+    , abcTokens
+    , isValidABC
     , encode
     , decode
-    , DecoderStuck(..), DecoderCont(..)
+    , DecoderStack, DecoderStuck
     ) where
 
+import Control.Arrow (first)
+import Data.Maybe (isJust)
 import Data.Monoid
 -- import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy.Char8 as LBS
@@ -164,9 +171,71 @@ abcCharToOp c | inBounds = abcCharOpArray A.! c
     where inBounds = (lb <= c) && (c <= ub)
           (lb,ub) = A.bounds abcCharOpArray
 
--- | Encode pure ABC into a UTF-8 text. This text isn't necessarily
--- very good for humans to read, but it is marginally legible.
-encode :: ABC -> Text
+-- | Extract possible tokens from serialized bytecode without a full
+-- parse. Essentially, find {token} substrings modulo embedded texts.
+abcTokens :: LazyUTF8.ByteString -> [Token]
+abcTokens s = case LBS.uncons s of 
+    Just (c, s') -> case c of
+        '{' -> case LBS.elemIndex '}' s' of
+            Just ix -> 
+                let tok = LBS.toStrict (LBS.take ix s') in
+                let afterTok = LBS.drop (ix + 1) s' in
+                (Token tok) : abcTokens afterTok
+            Nothing -> [] -- invalid ABC
+        '"' -> (abcTokens . dropText) s'
+        _   -> abcTokens s'
+    Nothing -> []
+
+-- Drop text after `"` up to just before the `~` after text.
+dropText :: LBS.ByteString -> LBS.ByteString
+dropText s = case LBS.elemIndex '\n' s of
+    Nothing -> mempty
+    Just ix -> 
+        let s' = LBS.drop (ix + 1) s in
+        case LBS.uncons s' of
+            Just (' ', sCont) -> dropText sCont
+            _ -> s' 
+
+-- | Validate serialized ABC without constructing a parse. Validates
+-- tokens and texts according to provided functions. Validates block
+-- structure and bytecode. 
+isValidABC :: (Token -> Bool) -> (Text -> Bool) -> LazyUTF8.ByteString -> Bool
+isValidABC isvTok isvTxt = v (0 :: Int) where
+    v !b !s = case LBS.uncons s of
+        Nothing -> (b == 0) -- validate blocks are balanced
+        Just (c, afterChar) -> case c of
+            '[' -> v (b + 1) afterChar
+            ']' -> (b > 0) && (v (b - 1) afterChar)
+            '{' -> case LBS.elemIndex '}' afterChar of
+                Nothing -> False
+                Just ix ->
+                    let tok = LBS.toStrict (LBS.take ix afterChar) in
+                    let afterTok = LBS.drop (ix + 1) afterChar in
+                    (isvTok (Token tok)) && (v b afterTok)
+            '"' -> let (txt, txtEnd) = takeText afterChar in
+                   case LBS.uncons txtEnd of
+                        Just ('~', afterText) -> (isvTxt txt) && (v b afterText)
+                        _ -> False
+            _ -> isJust (abcCharToOp c) && (v b afterChar)
+
+
+-- Obtain text after `"` up to just before the `~` after text.
+-- Text has escapes removed (i.e. LF SP is reduced to just LF).
+takeText :: LBS.ByteString -> (Text, LBS.ByteString)
+takeText = first (mconcat . L.reverse) . t [] where
+    t r s = case LBS.elemIndex '\n' s of
+        Nothing -> (s:r, mempty)
+        Just ix -> 
+            let s' = LBS.drop (ix + 1) s in
+            case LBS.uncons s' of
+                Just (' ', sCont) -> 
+                    let ln = LBS.take (ix + 1) s in -- line including '\n'
+                    t (ln:r) sCont
+                _ -> let ln = LBS.take ix s in (ln:r, s')
+
+-- | Serialize Awelon Bytecode into a UTF-8 text. This text isn't 
+-- great for human comprehension, but it is marginally legible.
+encode :: ABC -> LazyUTF8.ByteString
 encode = BB.toLazyByteString . encodeBB
 
 encodeBB :: ABC -> BB.Builder
@@ -193,89 +262,50 @@ encodeTextBB txt =
 _encodeLine :: Text -> BB.Builder
 _encodeLine l = BB.char8 '\n' <> BB.char8 ' ' <> BB.lazyByteString l
 
--- | our decoder tracks a stack of blocks, such that we can
--- report decode errors in the middle of a block of text. 
-data DecoderCont 
-    = DecoderDone
-    | DecodeBlock [Op] DecoderCont
-    deriving (Show)
-
--- | if we get stuck, we're probably in the middle of a block.
-data DecoderStuck = DecoderStuck
-    { dcs_text :: Text -- where did we get stuck
-    , dcs_data :: [Op] -- reverse ordered ops
-    , dcs_cont :: DecoderCont
-    } deriving (Show)
-
--- | Decode ABC from Text. 
+-- | Decode Awelon Bytecode from a stream. This decoder aims more for
+-- simplicity than for performance, so is strict in nature and has 
+-- a sensible error handling policy. If the decoder fails, the parse
+-- state is returned (as DecoderStuck). If it succeeds, the desired
+-- bytecode is returned.
 --
--- Parsed ABC is represented losslessly. If we get stuck at any point,
--- a DecoderStuck instance is returned which will include the text on
--- which it became stuck. Spaces (SP and LF) are preserved.
-decode :: Text -> Either DecoderStuck ABC
-decode txt = decode' $ DecoderStuck 
-    { dcs_text = txt
-    , dcs_data = []
-    , dcs_cont = DecoderDone 
-    }
+-- This decoder does not validate texts or tokens. For validation of
+-- bytecode, the `isValidABC` function should be favored.
+decode :: LazyUTF8.ByteString -> Either DecoderStuck ABC
+decode = _decode [] [] 
 
--- | Decode starting from a DecoderStuck state, i.e. assuming it has
--- been tweaked so we should no longer be stuck. This allows logic
--- surrounding a decoder to try a fix and continue approach.
-decode' :: DecoderStuck -> Either DecoderStuck ABC
-decode' s = decoder (dcs_cont s) (dcs_data s) (dcs_text s)
+-- | a stack of reverse-ordered ABC blocks.
+type DecoderStack = [[Op]] 
 
-decoder :: DecoderCont -> [Op] -> Text -> Either DecoderStuck ABC 
-decoder cc r txt0 = 
-    let decoderIsStuck = Left (DecoderStuck txt0 r cc) in
-    case LBS.uncons txt0 of
+-- | if the decoder fails, we'll return the parser state and 
+-- any remaining text.
+type DecoderStuck = (DecoderStack, LazyUTF8.ByteString)
+
+_decode :: DecoderStack -> [Op] -> LazyUTF8.ByteString -> Either DecoderStuck ABC
+_decode cc r s = 
+    let decoderStuck = Left (r:cc,s) in
+    case LBS.uncons s of
         Nothing -> case cc of
-            DecoderDone -> Right (ABC (L.reverse r))
-            _ -> decoderIsStuck
-        Just (c, txt) -> case c of
-            (abcCharToOp -> Just op) -> decoder cc (ABC_Prim op : r) txt
-            '[' -> decoder (DecodeBlock r cc) [] txt
+            [] -> Right (ABC (L.reverse r))
+            _ -> decoderStuck -- imbalanced blocks (positive balance)
+        Just (c, s') -> case c of
+            (abcCharToOp -> Just op) -> _decode cc (ABC_Prim op : r) s'
+            '[' -> _decode (r:cc) [] s'
             ']' -> case cc of
-                DecodeBlock ops cc' -> decoder cc' (block : ops) txt where
+                (ops:cc') -> _decode cc' (block : ops) s' where
                     block = ABC_Block (ABC (L.reverse r))
-                _ -> decoderIsStuck
-            '{' -> case LBS.elemIndex '}' txt of
-                Nothing -> decoderIsStuck
-                Just idx ->
-                    let (lzt, tokEnd) = LBS.splitAt idx txt in
-                    let bOK = not $ LBS.elem '{' lzt || LBS.elem '\n' lzt in
-                    if not bOK then decoderIsStuck else
-                    let tok = Token (LBS.toStrict lzt) in
-                    let txt' = LBS.drop 1 tokEnd in
-                    tok `seq` decoder cc (ABC_Tok tok : r) txt'
-            '"' -> case decodeLiteral txt of
-                Nothing -> decoderIsStuck
-                Just (lit, litEnd) -> case LBS.uncons litEnd of
-                    Just ('~', txt') -> decoder cc (ABC_Text lit : r) txt'
-                    _ -> decoderIsStuck
-            _ -> decoderIsStuck
-
-
--- | Decode ABC literal assuming the first '"' has already been taken,
--- halting after the first LF not escaped by a following SP. In ABC,
--- the character just after decoding a literal should be '~'. This 
--- will fail if there is no final LF character.
-decodeLiteral :: Text -> Maybe (Text, Text)
-decodeLiteral = _decodeLiteral []
-
-_decodeLiteral :: [Text] -> Text -> Maybe (Text, Text)
-_decodeLiteral r txt = case LBS.elemIndex '\n' txt of
-    Nothing -> Nothing -- could not find terminal
-    Just idx -> 
-        let txt' = LBS.drop (idx+1) txt in -- just past '\n'
-        case LBS.uncons txt' of
-            Just (' ', txtCont) -> -- escape prior '\n'
-                let ln = LBS.take (idx+1) txt in
-                _decodeLiteral (ln:r) txtCont
-            _ -> 
-                let lnf = LBS.take idx txt in -- final line (excludes '\n')
-                let lit = LBS.concat (L.reverse (lnf:r)) in
-                lit `seq` Just (lit, txt')
+                _ -> decoderStuck -- imbalanced blocks (negative balance)
+            '{' -> case LBS.elemIndex '}' s' of
+                Just ix -> 
+                    let tok = Token (LBS.toStrict (LBS.take ix s')) in
+                    let more = LBS.drop (ix + 1) s' in
+                    tok `seq` _decode cc (ABC_Tok tok : r) more
+                Nothing -> decoderStuck
+            '"' -> 
+                let (txt, eot) = takeText s' in
+                case LBS.uncons eot of
+                    Just ('~', more) -> _decode cc (ABC_Text txt : r) more 
+                    _ -> decoderStuck
+            _ -> decoderStuck
 
 {-
 -- | abcDivMod computes the function associated with operator 'Q'
@@ -352,11 +382,9 @@ instance Show PrimOp where
     showList = showString . fmap abcOpToChar
 
 instance IsString ABC where
-    fromString s =
-        let bytes = LazyUTF8.fromString s in
-        case decode bytes of
-            Right abc -> abc
-            Left _stuck -> error $ abcErr $ "could not parse " ++ s
+    fromString s = case decode (LazyUTF8.fromString s) of
+        Right abc -> abc
+        Left _ -> error $ abcErr $ "could not parse " ++ s
 
 abcErr :: String -> String
 abcErr = (++) "Wikilon.ABC.Pure: " 

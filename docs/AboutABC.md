@@ -182,7 +182,7 @@ Eventually, use of ABCD might eventually capture the common number models. And i
 
 ### Text
 
-The ABC stream can contain arbitrary blocks of unicode text:
+The ABC stream can contain blocks of unicode (UTF-8) text:
         
         "text has a block format 
          it starts with double quote
@@ -192,17 +192,13 @@ The ABC stream can contain arbitrary blocks of unicode text:
          or terminates text with tilde (126)
         ~
 
-If anything other than space or `~` follows LF, the ABC stream is in error. There are no escape characters in ABC, except for SP to escape a preceding LF. While text may contain any codepoint, I would discourage use of any control character other than LF, along with excluding the surrogate codepoints and the U+FFFD replacement character. By convention, text starts at a new line to keep it more readable. Text is less aesthetically pleasing, but still legible, when used for a single line or word:
+If anything other than space or `~` follows LF, the ABC stream is in error. There are no escape characters except for SP to escape a preceding LF. Semantically, text encodes a list `µL.((element*L)+1)` of small integers in the range 0..1114111 with some constraints to simplify processing of ABC in arbitrary contexts:
 
-        "Text
-        ~
+* no control characters (C0, C1, DEL) except LF
+* no surrogate codepoints (U+D800..U+DFFF)
+* no replacement character (U+FFFD)
 
-Text is not a distinct type for ABC. Rather, text is understood as a compact representation for introducing a static list of small integers (range 0..1114111, from UTF-8). The standard model for a list is: `µL.((element*L)+1)`.
-
-ABC does not have a 'binary' literal type, but developers may use a specialized base16 encoding that is recognized by the compression pass. See the section on Binaries, far below.
-
-*NOTE:* ABC's representation of text is simplistic. Real text manipulation demands precise knowledge of the characters (ligatures, combining marks, etc.), and benefits from a more sophisticated representation than a flat list of numbers. However, ABC's representation of text is sufficient for identifiers, embedded DSLs, and so on.
-
+*NOTE:* ABC's representation of text and binaries is simplistic. Real text manipulation demands precise knowledge of the characters (ligatures, combining marks, etc.), and benefits from a more sophisticated representation than a flat list of numbers. However, ABC's representation of text is sufficient for its intended role: identifiers, embedded DSLs, etc.
 
 ### Identity
 
@@ -472,16 +468,19 @@ A paragraph is implicitly expressed by simply including a full, blank line withi
 
 ### Encoding Binaries in ABC
 
-Programmers often work with binary encoded data, e.g. compressed visual or audio data, secure hashes, ciphertext. I would like to encode MP3 files, texture data, or short video clips as ABC resources. This would allow me to leverage ABC's secure content distribution, caching, partial evaluation, and nearly transparent link model. However, unless embedded binaries can be stored and transmitted efficiently, this simply won't happen.
+Programmers often work with binary encoded data, e.g. compressed visual or audio data, secure hashes, ciphertext. I would like the ability to encode MP3 files, texture data, or short video clips as ABC resources. This would allow me to leverage ABC's secure content distribution, caching, partial evaluation, and nearly transparent link model. However, unless embedded binaries can be stored and transmitted efficiently, this simply won't happen.
 
-ABC does not have an embedded literal type for binaries. However, ABC resources and network streams will be compressed, and perhaps we leverage that. The idea for encoding binaries in ABC is simple:
+The current intention is to encode binaries in text using the Base16 alphabet `bdfghjkmnpqstxyz` in simple, rigid, block-formatted structure of perhaps 64 characters per line. So 128 bytes might encode as:
 
-1. naively encode binary data in a base16 alphabet
-2. specialize a compression pass to recognize base16
+        "bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
+         bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
+         bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
+         bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
+        ~
 
-The compression algorithms under consideration[*](doc/Compression.md) would encode large binaries with about 0.8% overhead prior to the main compression, and with another 1:64 overhead if the binary itself cannot be compressed. This would be acceptable for almost any application. And even smaller binaries, like resource IDs (48 bytes), are encoded with a reasonable 4% overhead.
+A specialized compression pass can easily recognize such binaries and encode them as true binaries for storage or streaming. Further, we might later achieve effective performance via future ABCD extensions (see below) specialized for efficient binary processing. 
 
-I plan to use a non-conventional base16 alphabet: `bdfghjkmnpqstxyz`. This is the lower case English alphabet minus vowels `aeiou` and most ABC data plumbing operators `vrwlc`. This alphabet ensures this specialized compression primarily impacts intentionally binary encoded data. It also avoids risk of spelling offensive words by accident. 
+*Note:* The `bdfghjkmnpqstxyz` alphabet is `a-z` minus vowels `aeiou` and common ABC data plumbing `vrwlc`. This alphabet ensures binaries are visually distinct from bytecode and natural language texts.
 
 ## Awelon Bytecode Deflated (ABCD)
 

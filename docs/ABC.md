@@ -6,7 +6,7 @@ See AboutABC for full explanations and design. This file just records each code,
         [] :: (special - block literal)
         "~ :: (special - text literal)
         {} :: (special - token or capability; see below)
-        (|) :: (special - AMBC; extension to ABC)
+        (|) :: (reserved)
         SP,LF :: x → x (whitespace as identity)
 
         l :: (a * (b * c)) → ((a * b) * c)

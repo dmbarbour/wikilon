@@ -6,10 +6,6 @@
 --
 -- This module contains basic utilities for validating and processing
 -- texts.
---
--- NOTE: Wikilon shall generally preserve the `LF SP` escape sequences
--- when working with texts internally, mostly because it's easier than
--- repeatedly injecting and removing the escapes.
 module Wikilon.Text
     ( Text
     , isValidText
@@ -24,6 +20,17 @@ import qualified Data.List as L
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.Lazy as LBS
 
+-- | Embedded text in bytecode should be a valid UTF8 string. 
+--
+-- Wikilon additionally constrains embedded texts:
+--
+--  * no surrogate codepoints (U+D800..U+DFFF)
+--  * no replacement character (U+FFFD)
+--  * no control characters (C0, C1, DEL) except LF
+--
+-- These constraints simplify conversions (e.g. no CRLF issues), and
+-- they are a pretty good idea in general.  
+-- 
 type Text = LazyUTF8.ByteString
 
 -- | Test whether a text is valid and safe by Wikilon's heuristics

@@ -9,13 +9,13 @@ module Wikilon.AODef
     , isValidAODef
     ) where
 
-import Data.Maybe (mapMaybe, isJust)
+import Data.Maybe (mapMaybe)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
 import Wikilon.Token
 import Wikilon.Word
 import Wikilon.Text
-import Wikilon.ABC.Pure (abcCharToOp)
+import Wikilon.ABC.Pure (abcTokens, isValidABC)
 
 -- | Definitions in an AO dictionary should be valid Awelon Bytecode
 -- (ABC), constrained to use a subset of tokens and texts to ensure
@@ -30,49 +30,17 @@ import Wikilon.ABC.Pure (abcCharToOp)
 -- contexts, e.g. in HTML or URLs or documentation. 
 --
 -- Ideally, definitions should not be too large. While there are no
--- strict size limits, very big definitions (e.g. greater than one
--- megabyte) should probably raise warnings.
+-- strict size limits, it seems wise to raise warnings for anything
+-- larger than a few megabytes. Mostly, large definitions may raise 
+-- issues for incremental loading, computation, and GC.
 --
--- In a Wikilon dictionary, definitions are recorded as bytestrings.
 type AODef = BS.ByteString
 
--- | Assuming valid bytecode, return the list of tokens from an AO
--- definition without requiring a full parse. Effectively, this 
--- returns all {token} substrings that are not within an embedded
--- text.
+-- | Obtain list of tokens (assuming isValidAODef)
 aodefTokens :: AODef -> [Token]
-aodefTokens s = case BS.uncons s of 
-        Just (c, s') -> case c of
-            '{' -> case BS.elemIndex '}' s' of
-                Just ix -> 
-                    let tok = Token (BS.take ix s') in
-                    let afterTok = BS.drop (ix + 1) s' in
-                    tok : aodefTokens afterTok
-                Nothing -> [Token s'] -- invalid ABC
-            '"' -> aodefTokens $ dropText s'
-            _   -> aodefTokens s'
-        Nothing -> []
+aodefTokens = abcTokens . LBS.fromStrict
 
--- drop text, result should start with '~' in valid bytecode
-dropText :: AODef -> AODef
-dropText = snd . takeText
-
--- drop to end of line, repeat while end-of-line is escaped
---
--- Note: does not remove escapes from text, and in valid 
--- ABC the next character in AODef should be '~'.
-takeText :: AODef -> (Text,AODef)
-takeText def = t 0 def where
-    t n s = case BS.elemIndex '\n' s of
-        Just ix -> 
-            let s' = BS.drop (ix + 1) s in
-            case BS.uncons s' of
-                Just (' ', more) -> t (n + ix + 1) more
-                _ -> let txt = LBS.fromStrict (BS.take (n + ix) def) in
-                     (txt, s')
-        Nothing -> (LBS.fromStrict def, BS.empty) -- (invalid ABC)
-
--- | Filter aodefTokens for word dependencies.
+-- | Filter aodefTokens for {%word} dependencies.
 aodefWords :: AODef -> [Word]
 aodefWords = mapMaybe ff . aodefTokens where
     ff (Token s) = case BS.uncons s of
@@ -82,24 +50,7 @@ aodefWords = mapMaybe ff . aodefTokens where
 -- | Validate an AODef without constructing a parse result. This test
 -- validates tokens, texts, bytecodes, and balanced block structure.
 isValidAODef :: AODef -> Bool
-isValidAODef = v (0 :: Int) where
-    v !b !s = case BS.uncons s of
-        Nothing -> (b == 0) -- neutral block count
-        Just (c, afterChar) -> case c of
-            '[' -> v (b + 1) afterChar
-            ']' -> (b > 0) && (v (b - 1) afterChar)
-            '{' -> case BS.elemIndex '}' afterChar of
-                Nothing -> False
-                Just ix -> 
-                    let tok = Token (BS.take ix afterChar) in
-                    let afterTok = BS.drop (ix + 1) afterChar in
-                    (isValidDictToken tok) && (v b afterTok)
-            '"' -> let (txt, txtEnd) = takeText afterChar in
-                   case BS.uncons txtEnd of
-                        Just ('~', afterTxt) -> (isValidText txt) && (v b afterTxt) 
-                        _ -> False
-            _ -> (isValidABC c) && (v b afterChar)
+isValidAODef = isValidABC isvTok isvTxt . LBS.fromStrict where
+    isvTok = isValidDictToken 
+    isvTxt = isValidText
 
--- test for valid ABC character... (todo: move to an ABC module)
-isValidABC :: Char -> Bool
-isValidABC = isJust . abcCharToOp
