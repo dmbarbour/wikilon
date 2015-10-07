@@ -337,12 +337,16 @@ encodeOps (P0 op : ops) | not (abcWS op) = output where
     output = BB.char8 '\\' <> encPrims abc <> moreOps ops'
     encPrims = BB.string8 . fmap ABC.abcOpToChar
     (abc,ops') = joinP0 [op] ops
+encodeOps (CW w : ops) | (w == wLBrace) = BB.char8 '{' <> encodeOps ops 
 encodeOps (op:ops) = encodeOp op <> moreOps ops
 encodeOps [] = mempty
 
 -- encode operators after adding a space character
 moreOps :: [ClawOp] -> BB.Builder
 moreOps [] = mempty
+moreOps (CW w : ops) -- specialized punctuation words
+    | (w == wComma)  = BB.char8 ',' <> encodeOps ops
+    | (w == wRBrace) = BB.char8 '}' <> moreOps ops
 moreOps ops = BB.char8 ' ' <> encodeOps ops
 
 -- encode a singular operation.
