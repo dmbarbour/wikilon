@@ -34,8 +34,10 @@ module Wikilon.ABC.Pure
     , abcCharToOp
     , abcTokens
     , isValidABC
-    , encode
+    , encode, encodeBB
     , decode
+    , itoabc, itoabc'
+    , abcTakeText
     , DecoderStack, DecoderStuck
     ) where
 
@@ -212,17 +214,17 @@ isValidABC isvTok isvTxt = v (0 :: Int) where
                     let tok = LBS.toStrict (LBS.take ix afterChar) in
                     let afterTok = LBS.drop (ix + 1) afterChar in
                     (isvTok (Token tok)) && (v b afterTok)
-            '"' -> let (txt, txtEnd) = takeText afterChar in
+            '"' -> let (txt, txtEnd) = abcTakeText afterChar in
                    case LBS.uncons txtEnd of
                         Just ('~', afterText) -> (isvTxt txt) && (v b afterText)
                         _ -> False
             _ -> isJust (abcCharToOp c) && (v b afterChar)
 
 
--- Obtain text after `"` up to just before the `~` after text.
--- Text has escapes removed (i.e. LF SP is reduced to just LF).
-takeText :: LBS.ByteString -> (Text, LBS.ByteString)
-takeText = first (mconcat . L.reverse) . t [] where
+-- | Obtain text after `"` up to just before the `~` after text,
+-- with escapes removed (LF SP becomes LF, final LF removed).
+abcTakeText :: LBS.ByteString -> (Text, LBS.ByteString)
+abcTakeText = first (mconcat . L.reverse) . t [] where
     t r s = case LBS.elemIndex '\n' s of
         Nothing -> (s:r, mempty)
         Just ix -> 
@@ -232,6 +234,26 @@ takeText = first (mconcat . L.reverse) . t [] where
                     let ln = LBS.take (ix + 1) s in -- line including '\n'
                     t (ln:r) sCont
                 _ -> let ln = LBS.take ix s in (ln:r, s')
+
+-- | Translate an integer to ABC that will generate it.
+itoabc :: Integer -> ABC
+itoabc = ABC . fmap ABC_Prim . itoabc'
+
+itoabc' :: Integer -> [PrimOp]
+itoabc' = qi where
+    p = (:)
+    qi n | (n < 0) = qn (negate n) [ABC_negate]
+         | otherwise = qn n []
+    qn 0 = p ABC_newZero
+    qn n = let (q,r) = n `divMod` 10 in qn q . p (opd r)
+
+opdArray :: A.Array Int PrimOp 
+opdArray = A.listArray (0,9) $
+    [ABC_d0,ABC_d1,ABC_d2,ABC_d3,ABC_d4
+    ,ABC_d5,ABC_d6,ABC_d7,ABC_d8,ABC_d9]
+
+opd :: Integer -> PrimOp
+opd = (A.!) opdArray . fromInteger
 
 -- | Serialize Awelon Bytecode into a UTF-8 text. This text isn't 
 -- great for human comprehension, but it is marginally legible.
@@ -301,7 +323,7 @@ _decode cc r s =
                     tok `seq` _decode cc (ABC_Tok tok : r) more
                 Nothing -> decoderStuck
             '"' -> 
-                let (txt, eot) = takeText s' in
+                let (txt, eot) = abcTakeText s' in
                 case LBS.uncons eot of
                     Just ('~', more) -> _decode cc (ABC_Text txt : r) more 
                     _ -> decoderStuck
@@ -353,22 +375,8 @@ instance Quotable Integer where
     quotes n = (++) (fmap ABC_Prim qn) where
         qn = primQuoteInteger n []
 
--- | Quote an integer into a sequence of ABC primitives.
-primQuoteInteger :: Integer -> [PrimOp] -> [PrimOp]
-primQuoteInteger = qi where
-    p = (:)
-    qi n | (n < 0) = qn (negate n) . p ABC_negate
-         | otherwise = qn n
-    qn 0 = p ABC_newZero
-    qn n = let (q,r) = n `divMod` 10 in qn q . p (opd r)
 
-opdArray :: A.Array Int PrimOp 
-opdArray = A.listArray (0,9) $
-    [ABC_d0,ABC_d1,ABC_d2,ABC_d3,ABC_d4
-    ,ABC_d5,ABC_d6,ABC_d7,ABC_d8,ABC_d9]
 
-opd :: Integer -> PrimOp
-opd = (A.!) opdArray . fromInteger
 
 -}
 

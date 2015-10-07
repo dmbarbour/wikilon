@@ -24,22 +24,20 @@
 --      "foo"       \\"foo
 --                  ~ literal
 --      [foo]       \\[foo] block
---
+-- 
 -- Claw is easily extensible by adding new expansion rules. Wikilon
 -- will simply hard-code a particular set of extensions or features
 -- that will work well enough for most use cases. If a few specific
 -- variants are needed, I'll model them in separate modules.
 --
--- A simple namespace concept provides claw code just enough context
--- sensitivity get an inattentive programmer into trouble.
+-- A simple namespace feature allows claw code to prefix words to
+-- tweak the language for different use cases. Example expansion:
 --
 --      #X 2\/3     {&ns:X}#2{%Xinteger}#3{%Xinteger}{%Xratio}
 --
--- A namespace applies as a prefix for every word when expanding a
--- stream. Within a block of code, a namespace only extends to the
--- end of said block. Namespaces allow a dictionary to model many
--- programming environments or styles.
---
+-- The default namespace is the empty string. There is only one
+-- namespace for any volume of code. If a namespace is set within
+-- a block, it is scoped to that block.
 -- 
 module Wikilon.Claw
     ( ClawCode(..)
@@ -62,7 +60,9 @@ module Wikilon.Claw
     , DecoderCont(..)
 
     , PrimOp(..)
-    , module Awelon.Word
+    , module Wikilon.Word
+    , module Wikilon.Token
+    , module Wikilon.Text
     ) where
 
 import Control.Applicative
@@ -78,7 +78,9 @@ import qualified Data.List as L
 import qualified Data.Decimal as D
 import Data.String (IsString(..))
 import Wikilon.Word
-import Wikilon.ABC.Pure (ABC, Op(..), PrimOp(..), Text, Token)
+import Wikilon.Text
+import Wikilon.Token
+import Wikilon.ABC.Pure (ABC(..), Op(..), PrimOp(..))
 import qualified Wikilon.ABC.Pure as ABC
 
 -- | Command Language for Awelon (claw)
@@ -116,7 +118,6 @@ type Namespace = UTF8.ByteString
 
 wInteger, wLiteral, wBlock :: Word
 wRatio, wDecimal, wExp10 :: Word
-wLBrace, wRBrace, wComma, wSemicolon :: Word
 
 wInteger = "integer"
 wLiteral = "literal"
@@ -125,11 +126,13 @@ wRatio = "ratio"
 wDecimal = "decimal"
 wExp10 = "exp10"
 
--- TODO: punctuation for easy encoding of lists and sequences
+-- TODO: punctuation for easy encoding of lists, vectors, etc.
+-- I may need to track encoding of whitespace more explicitly?
+wLBrace, wRBrace, wComma :: Word
 wLBrace = "lbrace"
 wRBrace = "rbrace"
 wComma = "comma"
-wSemicolon = "semicolon"
+-- maybe add semicolon?
 
 nsTokPrefix :: UTF8.ByteString
 nsTokPrefix = "&ns:"
@@ -156,15 +159,15 @@ expand ns = clawToABC' ns . ClawCode
 
 opToABC :: Namespace -> ClawOp -> ABC
 -- low level
-opToABC _ (NS ns) = oneOp $ ABC_Tok $ nsTokPrefix <> ns
-opToABC ns (CW (Word w)) = oneOp $ ABC_Tok $ mconcat ["%", ns, w]
+opToABC _ (NS ns) = oneOp . ABC_Tok . Token $ nsTokPrefix <> ns
+opToABC ns (CW (Word w)) = oneOp . ABC_Tok . Token $ mconcat ["%", ns, w]
 opToABC _ (P0 op) = oneOp $ ABC_Prim op
 opToABC _ (T0 txt) = oneOp $ ABC_Text txt
 opToABC _ (K0 tok) = oneOp $ ABC_Tok tok
 opToABC ns (B0 cc) = oneOp $ ABC_Block $ expand ns cc
 -- expansions
 opToABC ns (NI i) = expand ns (escInt ++ [CW wInteger]) where
-    escInt = fmap P0 $ ABC.primQuoteInteger i []
+    escInt = fmap P0 $ ABC.itoabc' i 
 opToABC ns (NR (ClawRatio n d)) = expand ns [NI n, NI d, CW wRatio]
 opToABC ns (ND (D.Decimal dp m)) = 
     expand ns [NI m, NI (fromIntegral dp), CW wDecimal]
@@ -187,8 +190,8 @@ clawFromABC' ns = ClawCode . reduceClaw . escABC ns . ABC.abcOps
 --
 -- if namespace is `foo:` 
 --   and `word` doesn't start with digits, etc.
-escWord :: Namespace -> ABC.Token -> Maybe Word
-escWord ns tok = case BS.uncons tok of
+escWord :: Namespace -> Token -> Maybe Word
+escWord ns (Token tok) = case BS.uncons tok of
     Just ('%', fullWord) ->
         let bOkPrefix = ns `BS.isPrefixOf` fullWord in
         let w = Word $ BS.drop (BS.length ns) fullWord in
@@ -197,8 +200,8 @@ escWord ns tok = case BS.uncons tok of
 
 -- | recognize claw namespace tokens {&ns:NS} → #NS
 -- namespace must also be valid word (or empty string)
-escNSTok :: ABC.Token -> Maybe Namespace
-escNSTok tok =
+escNSTok :: Token -> Maybe Namespace
+escNSTok (Token tok) =
     let bMatchPrefix = nsTokPrefix `BS.isPrefixOf` tok in
     let ns = BS.drop 4 tok in  -- `&ns:` is four characters 
     guard (bMatchPrefix && validNS ns) >> return ns
@@ -356,8 +359,8 @@ encodeOp (P0 op) -- should not happen normally
     | abcWS op = mempty
     | otherwise = BB.char8 '\\' <> c
     where c = BB.char8 $ ABC.abcOpToChar op
-encodeOp (T0 txt) = BB.char8 '\n' <> BB.char8 '\\' <> ABC.encodeTextBB txt
-encodeOp (K0 tok) = BB.char8 '\\' <> ABC.encodeTokenBB tok
+encodeOp (T0 txt) = BB.char8 '\n' <> BB.char8 '\\' <> ABC.encodeBB (ABC [ABC_Text txt])
+encodeOp (K0 tok) = BB.char8 '\\' <> ABC.encodeBB (ABC [ABC_Tok tok])
 encodeOp (B0 cc) = BB.char8 '\\' <> encBlock cc
 
 encBlock :: [ClawOp] -> BB.Builder
@@ -421,9 +424,17 @@ decode' cc bWS r txt0 =
                     b = bType $ L.reverse r
                     bType = if bEsc then B0 else BC
                 _ -> decoderIsStuck
+
+            -- punctuation that doesn't need word separators
+            ',' -> decode' cc True (CW wComma : r) txt
+            '}' -> decode' cc False (CW wRBrace : r) txt
+
             -- everything else requires a word separator
             _ | not bWS -> decoderIsStuck
+
             '[' -> decode' (DecodeBlock False r cc) True [] txt
+            '{' -> decode' cc True (CW wLBrace : r) txt
+
             '"' -> case LBS.elemIndex '"' txt of
                 Nothing -> decoderIsStuck
                 Just idx ->
@@ -437,22 +448,22 @@ decode' cc bWS r txt0 =
                 let bOK = validNS ns in
                 if not bOK then decoderIsStuck else
                 decode' cc False (NS ns : r) txt'
+
+            -- escapes
             '\\' -> case LBS.uncons txt of -- escaped content
                 Nothing -> decoderIsStuck
                 Just (c', escTxt) -> case c' of
                     '[' -> decode' (DecodeBlock True r cc) True [] escTxt
-                    '"' -> case ABC.decodeLiteral escTxt of
-                        Just (lit, litEnd) -> case LBS.uncons litEnd of
+                    '"' -> 
+                        let (lit,litEnd) = ABC.abcTakeText escTxt in
+                        case LBS.uncons litEnd of
                             Just ('~', txt') -> decode' cc False (T0 lit : r) txt'
                             _ -> decoderIsStuck
-                        _ -> decoderIsStuck
                     '{' -> case LBS.elemIndex '}' escTxt of
                         Nothing -> decoderIsStuck
                         Just idx -> 
                             let (lzt, tokEnd) = LBS.splitAt idx escTxt in
-                            let tok = LBS.toStrict lzt in
-                            let bOK = BS.notElem '{' tok && BS.notElem '\n' tok in
-                            if not bOK then decoderIsStuck else
+                            let tok = Token (LBS.toStrict lzt) in
                             tok `seq` decode' cc False (K0 tok : r) (LBS.drop 1 tokEnd)
                     (charToEscPrim -> Just op0) ->
                         let loop ops t = case takeEscPrim t of
