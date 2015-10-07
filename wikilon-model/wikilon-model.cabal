@@ -44,6 +44,7 @@ Library
     , utf8-string
     , containers (>= 0.5)
     , array
+    , Decimal
 
     , stm
     , mtl
@@ -60,14 +61,13 @@ Library
     Wikilon.Token
     Wikilon.Text
 
-    Wikilon.ABC
     Wikilon.ABC.Pure
+    Wikilon.Claw
 
-    -- Wikilon.Claw
-    -- Wikilon.
+    Wikilon.ABC
 
 
   Other-Modules:
     Data.VCache.LoB
      
-  ghc-options: -auto-all -Wall -rtsopts -threaded
+  ghc-options: -auto-all -Wall 
