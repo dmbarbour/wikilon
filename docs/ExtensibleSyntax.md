@@ -3,13 +3,11 @@
 
 Ideally, syntax is both meaningful to humans and convenient for the problem domain. But since there are a lot of problem domains, I think the only way to ensure the latter property is to develop *extensible* syntax. I have at least two ideas on how to approach this.
 
-## Bi-Directional Translation
+## Syntax as Sugar
 
 My work on [command language for awelon (claw)](CommandLine.md) offers a viable basis for extensible syntax, based on bi-directional translation between high level code (for humans) and lower level bytecode (for machines). I currently focus on numbers (integers, decimals, ratios) and inline literals appropriate for a command line, but this same idea could be extended to structured programming (e.g. recognizing `[cond] [body] while_do_` as a while loop, and the like). 
 
-This approach has an advantage of simplicity. Simplicity shouldn't be underestimated. OTOH, this does limit our ability to represent and manipulate ad-hoc objects within the dictionary, and it complicates staging a little.
-
-Staged computation is still viable via annotations, e.g. `{&static}` might indicate that we should try to compute a value statically.
+This approach has an advantage of simplicity. Simplicity shouldn't be underestimated. OTOH, this does limit our ability to represent and manipulate ad-hoc objects within the dictionary, and it pushes all staged evaluations to the optimizer. Though we may use annotations to guide partial evaluations.
 
 ## Staged Definitions
 

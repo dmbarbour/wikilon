@@ -126,13 +126,15 @@ wRatio = "ratio"
 wDecimal = "decimal"
 wExp10 = "exp10"
 
--- TODO: punctuation for easy encoding of lists, vectors, etc.
--- I may need to track encoding of whitespace more explicitly?
+-- | Programmable punctuation words
 wLBrace, wRBrace, wComma :: Word
 wLBrace = "lbrace"
 wRBrace = "rbrace"
-wComma = "comma"
--- maybe add semicolon?
+wComma  = "comma"
+
+-- TODO: support for monad and arrow sugar
+--       semicolon, vertibar, lparens, rparens
+--       potential use of angle brackets
 
 nsTokPrefix :: UTF8.ByteString
 nsTokPrefix = "&ns:"
@@ -344,7 +346,8 @@ encodeOps [] = mempty
 -- encode operators after adding a space character
 moreOps :: [ClawOp] -> BB.Builder
 moreOps [] = mempty
-moreOps (CW w : ops) -- specialized punctuation words
+-- punctuation that doesn't need preceding whitespace
+moreOps (CW w : ops)
     | (w == wComma)  = BB.char8 ',' <> encodeOps ops
     | (w == wRBrace) = BB.char8 '}' <> moreOps ops
 moreOps ops = BB.char8 ' ' <> encodeOps ops

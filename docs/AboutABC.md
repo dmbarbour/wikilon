@@ -470,7 +470,7 @@ A paragraph is implicitly expressed by simply including a full, blank line withi
 
 Programmers often work with binary encoded data, e.g. compressed visual or audio data, secure hashes, ciphertext. I would like the ability to encode MP3 files, texture data, or short video clips as ABC resources. This would allow me to leverage ABC's secure content distribution, caching, partial evaluation, and nearly transparent link model. However, unless embedded binaries can be stored and transmitted efficiently, this simply won't happen.
 
-The current intention is to encode binaries in text using the Base16 alphabet `bdfghjkmnpqstxyz` in simple, rigid, block-formatted structure of perhaps 64 characters per line. So 128 bytes might encode as:
+The current intention is to encode binaries in text using the Base16 alphabet `bdfghjkmnpqstxyz` in simple, rigid, block-formatted structure of 64 characters per line. So 128 bytes might encode as:
 
         "bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
          bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
@@ -478,7 +478,7 @@ The current intention is to encode binaries in text using the Base16 alphabet `b
          bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
         ~
 
-A specialized compression pass can easily recognize such binaries and encode them as true binaries for storage or streaming. Further, we might later achieve effective performance via future ABCD extensions (see below) specialized for efficient binary processing. 
+A specialized compression algorithm for storage and streaming may then recognize this convention and encode as binary for network or storage purposes. Further, competitive performance is feasible with future ABCD extensions (see below) specialized for efficient binary processing.
 
 *Note:* The `bdfghjkmnpqstxyz` alphabet is `a-z` minus vowels `aeiou` and common ABC data plumbing `vrwlc`. This alphabet ensures binaries are visually distinct from bytecode and natural language texts.
 

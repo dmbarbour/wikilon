@@ -51,6 +51,14 @@ An important role of words integer and literal is to place each value at an appr
 
 The escaped form of a block still contains claw code but does not assume any placement word. Mostly, this is necessary so we can reliably represent blocks that were not placed at the default location.
 
+### Sequence Literals
+
+A compact encoding for short sequences and lists is convenient and is easily leveraged towards a more structured programming style. For now, I'm going to experiment with three words expanding into punctuation:
+
+        {1,2,3} desugars to     lbrace 1 comma 2 comma 3 rbrace
+
+This idea is readily extensible to other punctuation. But lists are sufficient for a lot of problems. Further extensions of this nature may occur on an as-needed basis.
+
 ### Claw Words and Namespaces
 
 Claw words will expand into tokens. However, a direct expansion as from `foo` to `\{%foo}` could be problematic if ever we wish to develop alternative command environments. A simple Forth-like REPL might only need a single stack, but we might also wish to model command environments having multiple stacks, a filesystems or tuple space or heap or turtle graphics canvas, inboxes and outboxes and background tasks, and so on. Claw must support terse commands in ad-hoc environments. I'm not willing to require a distinct dictionary for each use case.
