@@ -44,6 +44,7 @@ Library
     , utf8-string
     , containers (>= 0.5)
     , array
+    , time, old-locale
     , Decimal
 
     , stm
@@ -61,10 +62,13 @@ Library
     Wikilon.Token
     Wikilon.Text
 
+    Wikilon.DictSet
+
     Wikilon.ABC.Pure
     Wikilon.Claw
-
     Wikilon.ABC
+
+    Wikilon.Time
 
 
   Other-Modules:
