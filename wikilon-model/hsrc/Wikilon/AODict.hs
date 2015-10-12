@@ -40,7 +40,6 @@ import qualified Data.List as L
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.ByteString.Builder as BB
-import qualified Data.Set as Set
 
 import Wikilon.Dict 
 
@@ -58,28 +57,15 @@ encode d = encodeWords d ws where
 -- | Encode a subset of the dictionary, specified by a list of root
 -- words that we want to ensure are listed.
 encodeWords :: Dict -> [Word] -> LBS.ByteString
-encodeWords d = BB.toLazyByteString . mconcat . fmap enwrd . endeps (dictLookup d)
+encodeWords d = 
+    BB.toLazyByteString . 
+    mconcat . fmap enwrd . 
+    dictTransitiveDepsList d
 
--- Obtain an ordered list of words to encode for AODict. In case of
--- a cycle, a word will be listed only once. Note that this will keep
--- all words from a dictionary in-memory, so it might not scale for
--- multi-million word dictionaries. 
-endeps :: (Word -> Maybe AODef) -> [Word] -> [(Word, AODef)]
-endeps lu = accum mempty mempty where
-    -- accum (visited) (cycle prevention)
-    accum _ _ [] = []
-    accum v c ws@(w:ws') = 
-        if Set.member w v then accum v c ws' else -- already listed
-        case lu w of
-            Nothing -> accum (Set.insert w v) c ws' -- leave word undefined
-            Just def -> -- encode word
-                let lDeps = L.filter (`Set.notMember` v) (aodefWords def) in
-                let bAddWord = L.null lDeps || Set.member w c in
-                if bAddWord then (w,def) : accum (Set.insert w v) (Set.delete w c) ws' 
-                            else accum v (Set.insert w c) (lDeps <> ws)
-
-enwrd :: (Word, AODef) -> BB.Builder
-enwrd (Word w, def) = 
+-- encode defined words, skip undefined words
+enwrd :: (Word, Maybe AODef) -> BB.Builder
+enwrd (_, Nothing) = mempty
+enwrd (Word w, Just def) = 
     BB.char8 '@' <> BB.byteString w <> BB.char8 ' ' <> 
     BB.byteString def <> BB.char8 '\n'
 

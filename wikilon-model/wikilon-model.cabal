@@ -38,7 +38,7 @@ Library
   default-language: Haskell2010
   build-depends: base (>= 4.7 && < 5)
     , vcache (>= 0.2.6)
-    , vcache-trie (>= 0.2.3)
+    , vcache-trie (>= 0.2.4)
 
     , bytestring (>= 0.10.4)
     , utf8-string
@@ -46,6 +46,7 @@ Library
     , array
     , time, old-locale
     , Decimal
+    , cryptohash (>= 0.11), byteable
 
     , stm
     , mtl
@@ -61,8 +62,10 @@ Library
     Wikilon.Word
     Wikilon.Token
     Wikilon.Text
+    Wikilon.DictRLU
 
     Wikilon.DictSet
+    Wikilon.Hash
 
     Wikilon.ABC.Pure
     Wikilon.Claw

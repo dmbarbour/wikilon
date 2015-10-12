@@ -20,7 +20,8 @@ module Wikilon.Dict
     , dictList
     , dictInsert
     , dictDelete
-    , dictDiff
+    , dictDiff, DictDiff, Diff(..)
+    , dictTransitiveDepsList
     , module Wikilon.Word
     , module Wikilon.AODef
     ) where
@@ -29,8 +30,10 @@ import Control.Exception (assert)
 import Control.Applicative
 import Data.Typeable (Typeable)
 import Data.Monoid
+import qualified Data.List as L
+import qualified Data.Set as Set
 import qualified Data.ByteString as BS
-import Data.VCache.Trie (Trie)
+import Data.VCache.Trie (Trie, Diff(..))
 import qualified Data.VCache.Trie as Trie
 import Database.VCache
 import Wikilon.Word
@@ -70,7 +73,9 @@ aodef (DefS def) = def
 aodef (DefL ref) = deref' ref
 
 toDef :: VSpace -> AODef -> Def
-toDef vc def = if isSmall def then DefS def else DefL (vref' vc def)
+toDef vc def 
+    | isSmall def = DefS def
+    | otherwise   = DefL (vref' vc def)
 
 -- | Create a new, empty dictionary.
 dictCreate :: VSpace -> Dict
@@ -87,6 +92,24 @@ dictList :: Dict -> [(Word, AODef)]
 dictList (Dict t) = Trie.toListBy fn t where
     fn w d = (Word w, aodef d)
 
+-- | list transitive dependencies for a list of root words, ordered
+-- so dependencies for a well defined word appear before that word
+-- in the list. Undefined dependencies will be listed with Nothing
+-- as the definition.
+dictTransitiveDepsList :: Dict -> [Word] -> [(Word, Maybe AODef)]
+dictTransitiveDepsList dict = accum mempty mempty where
+    -- accum (visited) (cycle prevention) (roots) 
+    accum _ _ [] = []
+    accum v c ws@(w:ws') =
+        if Set.member w v then accum v c ws' else -- already listed w
+        case dictLookup dict w of
+            Nothing -> (w, Nothing) : accum (Set.insert w v) c ws'
+            Just def -> 
+                let lDeps = L.filter (`Set.notMember` v) (aodefWords def) in
+                let bAddWord = L.null lDeps || Set.member w c in
+                if bAddWord then (w, Just def) : accum (Set.insert w v) (Set.delete w c) ws'
+                            else accum v (Set.insert w c) (lDeps ++ ws)
+
 -- | insert a word into a dictionary. Note that this does not check
 -- that the definition is sensible or that the resulting dictionary
 -- is valid. 
@@ -99,12 +122,11 @@ dictDelete :: Dict -> Word -> Dict
 dictDelete (Dict t) (Word w) = Dict $ Trie.delete w t
 
 -- | Quickly compute differences between two dictionaries.
-dictDiff :: Dict -> Dict -> [(Word, (AODef, AODef))]
-dictDiff (Dict a) (Dict b) = fmap toDiff $ Trie.diff a b where 
-    toDiff (w, d) = (Word w, elemDiff d) 
-    elemDiff (Trie.InL l) = (aodef l, mempty)
-    elemDiff (Trie.InR r) = (mempty, aodef r)
-    elemDiff (Trie.Diff l r) = (aodef l, aodef r)  
+dictDiff :: Dict -> Dict -> DictDiff
+dictDiff (Dict a) (Dict b) = fmap toDictDiff $ Trie.diff a b where 
+    toDictDiff (w, d) = (Word w, fmap aodef d) 
+
+type DictDiff = [(Word, Diff AODef)]
 
 instance VCacheable Dict where
     put (Dict d) = putWord8 1 >> put d

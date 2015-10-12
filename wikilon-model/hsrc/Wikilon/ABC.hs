@@ -40,7 +40,9 @@ data ABC = ABC
     , abc_data :: ![V]
     } deriving (Eq, Typeable)
 
--- | A simple ABC operation. 
+-- | A simple ABC operation, with potential for accelerated
+-- operations corresponding to common sequences of ABC. 
+-- (I.e. ABCD-like, except without the standards committee.)
 --
 -- Blocks and embedded texts are modeled as quoted values. 
 data Op
