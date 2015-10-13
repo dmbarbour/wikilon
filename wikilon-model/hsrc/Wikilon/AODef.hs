@@ -23,7 +23,7 @@ import Wikilon.ABC.Pure (abcTokens, isValidABC)
 --
 -- * {%word} - inline dictionary definition for identified word 
 -- * {:seal} - discretionary seal for values; similar to newtype
--- * {.seal} - discretionary accessor (un-seal) for sealed values
+-- * {.seal} - discretionary accessor (unseal) for sealed values
 -- * {&anno} - annotations for performance, type safety, structure
 --
 -- Tokens and texts are further constrained to be friendly in other
@@ -48,9 +48,10 @@ aodefWords = mapMaybe ff . aodefTokens where
         _ -> Nothing
 
 -- | Validate an AODef without constructing a parse result. This test
--- validates tokens, texts, bytecodes, and balanced block structure.
+-- validates tokens, texts, bytecodes, and block structure. Types are
+-- not computed.
 isValidAODef :: AODef -> Bool
-isValidAODef = isValidABC isvTok isvTxt . LBS.fromStrict where
-    isvTok = isValidDictToken 
-    isvTxt = isValidText
+isValidAODef = isValidABC aoTok aoTxt . LBS.fromStrict where
+    aoTok = isValidDictToken 
+    aoTxt = isValidText
 

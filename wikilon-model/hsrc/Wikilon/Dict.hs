@@ -92,10 +92,9 @@ dictList :: Dict -> [(Word, AODef)]
 dictList (Dict t) = Trie.toListBy fn t where
     fn w d = (Word w, aodef d)
 
--- | list transitive dependencies for a list of root words, ordered
--- so dependencies for a well defined word appear before that word
--- in the list. Undefined dependencies will be listed with Nothing
--- as the definition.
+-- | List transitive dependencies for a list of root words. Each word
+-- in the input list appears in the output list after all of its
+-- dependencies. A word is listed in the output at most once.
 dictTransitiveDepsList :: Dict -> [Word] -> [(Word, Maybe AODef)]
 dictTransitiveDepsList dict = accum mempty mempty where
     -- accum (visited) (cycle prevention) (roots) 

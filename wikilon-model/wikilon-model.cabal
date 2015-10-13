@@ -64,6 +64,8 @@ Library
     Wikilon.Text
     Wikilon.DictRLU
 
+    Wikilon.Auth
+
     Wikilon.DictSet
     Wikilon.Hash
 

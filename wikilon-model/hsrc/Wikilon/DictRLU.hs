@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
--- | Support for a reverse lookup index associated with a dictionary.
--- This index allows rapid lookup for tokens associated with a given
--- dictionary. The index may be updated to match a new dictionary.
+-- | Support for a reverse token lookup index associated with a 
+-- dictionary. Find where any token or word is used from the whole
+-- dictionary. 
 module Wikilon.DictRLU
     ( DictRLU
     , rluCreate
@@ -11,6 +11,7 @@ module Wikilon.DictRLU
     , rluTransitiveWordClientsList
     ) where
 
+import Control.Applicative
 import Control.Arrow (first, second)
 import Data.Maybe (fromMaybe)
 import Data.Monoid
@@ -53,9 +54,10 @@ wtok = Token . BS.cons '%' . unWord
 
 -- | Find transitive clients of a list of words, ordered such that a
 -- well defined word appears before any of its clients. This is useful
--- for updating or invalidatng cache.
+-- for updating or invalidating cache.
 rluTransitiveWordClientsList :: DictRLU -> [Word] -> [Word]
 rluTransitiveWordClientsList rlu = L.reverse . accum mempty mempty where
+    -- accum (visited) (cycle prevention)
     accum _ _ [] = []
     accum v c ws@(w:ws') = 
         if Set.member w v then accum v c ws' else -- already listed w
@@ -86,8 +88,8 @@ type RLUDiff = Map Token ([Word],[Word])
 -- given a difference in definition, find the difference in
 -- which tokens are used on each side.
 tokDiff :: Diff AODef -> ([Token],[Token])
-tokDiff (InL a) = (L.nub (aodefTokens a), []) -- all tokens new
-tokDiff (InR b) = ([], L.nub (aodefTokens b)) -- all tokens deleted
+tokDiff (InL a) = (L.nub (aodefTokens a), []) -- tokens added
+tokDiff (InR b) = ([], L.nub (aodefTokens b)) -- tokens removed
 tokDiff (Diff a b) = (insTok, delTok) where
     lTok = L.nub (aodefTokens a)
     rTok = L.nub (aodefTokens b)
@@ -105,4 +107,10 @@ rluDiff = L.foldl' (flip accum) Map.empty where
     delTokClient = adjTokClient . second . (:)
     adjTokClient f m t = Map.alter adj t m where
         adj = Just . f . fromMaybe mempty 
+
+instance VCacheable DictRLU where
+    put (RLU t) = putWord8 1 >> put t
+    get = getWord8 >>= \ v -> case v of
+        1 -> RLU <$> get
+        _ -> fail "Wikilon.DictRLU - unknown DictRLU version"
 

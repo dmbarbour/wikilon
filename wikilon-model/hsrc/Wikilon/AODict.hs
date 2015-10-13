@@ -106,9 +106,8 @@ parseLine bs =
     return (wrd,def)
 
 -- | Load words from a fragment of AODict format into a dictionary.
--- This doesn't enforce structural constraints. The only errors 
--- detected are logical lines that fail to parse or validate (via
--- isValidWord and isValidAODef).
+-- This doesn't check or enforce structural constraints (e.g. that
+-- a word is defined before use).
 loadAODict :: Dict -> LBS.ByteString -> ([Bytes],Dict)
 loadAODict d0 = first L.reverse . L.foldl' accum ([],d0) . logicalLines where
     accum (e,!d) s = case parseLine s of
