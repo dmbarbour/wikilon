@@ -16,6 +16,7 @@ module Wikilon.DictSet
 
     , getDictRef
     , setDictRef
+    , delDictRef
     , newDictRef
 
     , loadDictHead
@@ -55,6 +56,9 @@ getDictRef (Word w) (DictSet t) = Trie.lookup w t
 
 setDictRef :: DictName -> DictRef -> DictSet -> DictSet
 setDictRef (Word w) r (DictSet t) = DictSet (Trie.insert w r t)
+
+delDictRef :: DictName -> DictSet -> DictSet
+delDictRef (Word w) (DictSet t) = DictSet (Trie.delete w t)
 
 -- | Each named dictionary has a head, a history, and additional 
 -- metadata, authority management, cached computations, etc.. 

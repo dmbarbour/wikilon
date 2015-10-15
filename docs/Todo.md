@@ -1,6 +1,30 @@
 
 # TODO
 
+I'm doing a pretty big rewrite for the following purposes:
+
+* simplify the AO definitions back to plain old 'inline the code'
+ * only 'holes' in dictionary are undefined words
+* background computation of types, errors, cycles, undefined words
+* stronger push towards use of optimized bytecode representation
+* simplify model for cache management and background computations 
+* develop a less ad-hoc web application view (e.g. MFlow or Snap).
+* heavier focus on Claw-like code views, support Claw sequences
+* heavier focus on dictionary applications (sessions, forums, etc.)
+* develop a FUSE filesystem adapter to the Wikilon web service
+
+I'll need to re-implement a lot of existing code in the new framework. 
+
+To Redo:
+
+* list, fork, rename, delete dictionaries
+* import and export dictionaries
+* list, view, update, delete, rename words
+* compute stylesheet from dictionary
+
+
+## OLD STUFF
+
 At this time I'm trying to develop lots of little 'spike' solutions. The UX isn't particularly refined yet. I might need to use reflex-dom or similar to develop the rich UX that I want. Actually, the UX needs an enormous revamp to make it nicer to use.
 
 I should probably work to make editing AO code more comfortable for the common case. In particular, I should be able to quickly build and test a definition using Claw code, perhaps entirely via REPL. And I also need to get the REPL going ASAP.
@@ -35,28 +59,8 @@ I'll need a proper 'incremental evaluation/compilation' model or similar, someth
 
 I also need to get to work quickly on developing a 'generic' model for web applications and images.
 
-COMPLETE REWRITE:
-
-1. simplify the 'dictionary' 
-
-1. major rewrite of 'model'
- * dictionary as a simple index of words to binaries
-  * with fast lookup by word, diff, and update word
-  * with ability to access list of (word,def) pairs
-  * no particular constraints against cycles, etc.
- * include bytecode under 'model'
- * 
 
 PRIMARY TODO:
-
-* simplify dictionaries!
- * the 'model' of a dictionary fixed to:
-  * a finite collection of words → definitions (binaries)
-  * 
- * minimal historical dictionaries, just  as tries
- 
-
-
 
 * recent changes
 * background computations (per branch?)

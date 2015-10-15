@@ -67,6 +67,7 @@ Library
     Wikilon.Auth
 
     Wikilon.DictSet
+    -- Wikilon.Cache
     Wikilon.Hash
 
     Wikilon.ABC.Pure

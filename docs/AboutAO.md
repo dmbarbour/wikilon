@@ -2,7 +2,7 @@
 
 Awelon Object (AO) language directly uses [Awelon Bytecode (ABC)](AboutABC.md) as a foundation for functional programming. 
 
-AO is very simple. The primary structure is the dictionary, which defines a finite set of words. Definitions are encoded in bytecode and may refer to other words in the dictionary with `{%word}` tokens. Dependencies between words must form a directed acyclic graph. The meaning of every `{%word}` token is, trivially, to substitute the word's definition. 
+AO is very simple. The primary structure is the dictionary, which defines a finite set of words. Definitions are encoded in bytecode and may refer to other words in the dictionary with `{%word}` tokens. The meaning of every `{%word}` token is, trivially, to substitute the word's definition. Dependencies between words form a directed acyclic graph. A complete expansion of AO code will result in a finite string of bytecode.
 
 Directly reading or writing bytecode would be intolerable. AO assumes developers use editable views (lenses) to manipulate dictionary code. See *Editable Views of Bytecode* and *Dictionary Applications*, below. Views can be implemented by a development environment or a virtual filesystem (e.g. via FUSE).
 
@@ -56,13 +56,13 @@ As an example convention for code structure: the [command pattern](https://en.wi
         @object:foo.v1 {%object:foo.v0}(command to update foo)
         @object:foo.v2 {%object:foo.v1}(another command to update foo)
         @object:foo.v3 {%object:foo.v2}(yet another command to update foo)
-        @object:foo {%object:foo.v3}
+        @object:foo {%object:foo.v3}{&category:object}
 
 The 'object' in question might model be a database, a document, a graph, a REPL session, or similar. Information held by the object is manipulated by commands. A service might compute, cache, and render a value or type for the object. We could render historical versions of the object. We can also fork the object and model multiple alternative evolutions. Commands remain available for abstraction and refactoring, and definitions are mostly reasonably sized. It is feasible to automatically refactor and eliminate intermediate object versions (e.g. by concatenating and optimizing commands), if later we must recover some space. But keeping definitions relatively small has its own advantages.
 
 Some applications are characterized primarily by appending content, or make heavy use of branching such that it's unclear whether we have any particular HEAD. Forums threads and mailing lists are good examples. In these cases, we might eschew mutable HEAD words and instead focus on monotonically adding new words. 
 
-        @forum:foo {&forum}(initalize forum)
+        @forum:foo {&category:forum}(initalize forum)
         @thread:1 {%forum:foo}(command adds thread OP to forum)
         @thread:2 {%thread:1}(command adds content to thread 1)
         @thread:3 {%thread:1}(command adds content to thread 1, second child)
@@ -79,7 +79,9 @@ Though ABC doesn't specify a type system, it is designed to support static analy
 
 ### Transitory Undefined Words
 
-A dictionary in a transitory state of development will frequently have a few undefined words. These can serve a useful role in the development context: a development environment can recognize these as 'holes'. The types of a hole can be inferred from usage contexts and unit tests. The environment could help developers find an implementation. Or, at the very least, the temporary presence of undefined words will simplify top-down development. 
+A dictionary in a transitory state of development will frequently have a few undefined words. These can serve a useful role in the development context: a development environment can recognize undefined words as 'holes'. The rough type or shape for a hole may be inferred from usage context. A good developoment environment could help developers find an implementation. Or, at the very least, the temporary presence of undefined words will simplify top-down development. 
+
+AO doesn't use a 'linker' that operates outside the scope of the dictionary. Undefined words are not externally defined. So, the number of undefined words should generally be limited based on the amount of active development. Undefined words may be listed in warnings or as errors.
 
 ### DVCS Based Distribution
 
