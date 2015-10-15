@@ -4,6 +4,11 @@
 -- modeling this as a maintained time variable. A separate thread
 -- updates it sometime after it is read by a transaction. Updates
 -- are limited in frequency, too.
+--
+-- At the moment, this should be okay. Assuming Wikilon doesn't
+-- read time too frequently. Use of `unsafePerformIO getTime` is
+-- an alternative option if transactional properties aren't very 
+-- relevant.
 module Wikilon.Clock
     ( TimeVar
     , newTimeVar
@@ -49,7 +54,8 @@ newTimeVar = do
                 writeTVar vTime tUpd -- prepare to update current time
                 writeTVar vRead False -- wait for another read
     updateTimeVar -- initialize the time variable
-    void $ forkIO $ forever (updateTimeVar >> threadDelay tickLimit) -- maintain in future
+    let maintainTimeVar = updateTimeVar >> threadDelay tickLimit
+    void $ forkIO $ forever maintainTimeVar
     return (TimeVar vTime vRead)
 
 -- tickLimit is a tuning variable, a wait period after updating

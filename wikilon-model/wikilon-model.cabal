@@ -73,7 +73,7 @@ Library
     Wikilon.Claw
     Wikilon.ABC
 
-    Wikilon.Clock
+    -- Wikilon.Clock
     Wikilon.Time
 
 

@@ -69,7 +69,10 @@ rluTransitiveWordClientsList rlu = L.reverse . accum mempty mempty where
 -- | update based on a map diff. Assumes `InL` is the new map
 -- and `InR` is the old one.
 rluUpdate :: DictDiff -> DictRLU -> DictRLU
-rluUpdate = flip adjRoot . rluDiff where
+rluUpdate = rluUpdate' . rluDiff
+
+rluUpdate' :: RLUDiff -> DictRLU -> DictRLU
+rluUpdate' = flip adjRoot where
     -- update all tokens
     adjRoot (RLU t0) = RLU . L.foldl' updTok t0 . Map.toList
     -- update for specified token
