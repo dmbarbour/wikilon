@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+ This file is for use with GtkSourceView, which is used by gedit etc.
+ 
+ To use, place it in:
+
+   /usr/share/gtksourceview-ver/language-specs
+     or
+   ~/.local/share/gtksourceview-ver/language-specs
+ 
+ It is meant for use with the Awelon Object dictionary '.ao' export format.
+ 
+ Viewing or editing an export file is NOT the best way manipulate or develop
+ an AO dictionary. But it can offer a convenient overall view of code for 
+ finding common patterns, global search and replace, or similar.
+ 
+ You may use this under your choice of GPLv2, GPLv3, BSD, or MIT licenses.
+
+-->
+<language id="ao" _name="Awelon Object" version="2.0" _section="Sources">
+  <metadata>
+    <property name="mimetypes">text/vnd.org.awelon.aodict</property>
+    <property name="globs">*.ao</property>
+  </metadata>
+
+  <styles>
+    <!-- The `@word` start -->
+    <style id="define"        _name="Word Defined"       map-to="def:type"/>
+
+    <!-- Tokens -->
+    <style id="word"          _name="Word Token"         map-to="def:identifier"/>
+    <style id="anno"          _name="Annotation Token"   map-to="def:preprocessor"/>
+    <style id="seal"          _name="Value Sealing"      map-to="def:preprocessor"/>
+
+    <!-- Embedded Data -->
+    <style id="numeral"       _name="Numeral"            map-to="def:constant"/>
+    <style id="literal"       _name="Literal"            />
+    <style id="binary"        _name="Binary"             map-to="def:special-constant"/>
+
+    <!-- Other Awelon Bytecode -->
+    <style id="plumbing"      _name="Data Plumbing"      map-to="def:comment"/>
+    <style id="function"      _name="Function Code"      />
+  </styles>
+
+  <default-regex-options case-sensitive="true"/>
+
+  <definitions>
+
+    <!-- Word Definition Headers; simplified regex for words -->
+    <define-regex id="wc">[^\x00-\x20\[\]{}(|)"]</define-regex>
+    <define-regex id="ws">[ \x0A]</define-regex>
+    <define-regex id="word">\%{wc}+</define-regex>
+
+    <!-- Tokens -->
+    <context id="tokWord" style-ref="word">
+        <match>\{[\x25]\%{word}\}</match>
+    </context>
+
+    <context id="tokAnno" style-ref="anno">
+        <match>\{[\x26]\%{word}\}</match>
+    </context>
+
+    <context id="tokSealOrUnseal" style-ref="seal">
+        <match>\{[\x2E\x3A]\%{word}\}</match>
+    </context>
+
+    <!-- Recognizing Embedded Binaries (ABC Base 16 variant) -->
+    <define-regex id="b16c">[bdfghjkmnpqstxyz]</define-regex>
+    <define-regex id="b16b">\%{b16c}\%{b16c}</define-regex>
+    <define-regex id="b16w">\%{b16b}\%{b16b}\%{b16b}\%{b16b}</define-regex>
+    <define-regex id="b16s">\%{b16w}+</define-regex>
+    <context id="embeddedBinary" class="no-spell-check" style-ref="binary">
+        <match>\%{b16s}</match>
+    </context>
+
+    <!-- Recognizing Embedded Texts -->
+    <context id="embeddedText" style-ref="literal" class="string" class-disabled="no-spell-check">
+        <start>"</start>
+        <end>^~</end>
+        <include>
+            <context id="badEscapeLF" style-ref="def:error">
+                <match>^[^ ~]</match>
+            </context>
+            <context ref="embeddedBinary"/>
+            <context ref="def:in-comment"/>
+            <context ref="markdown:markdown-syntax"/>
+        </include>
+    </context>
+
+    <!-- Recognizing Numerals -->
+    <context id="embeddedNumeral" style-ref="numeral">
+        <match>[#0123456789]+</match>
+    </context>
+
+    <!-- Other Bytecode -->
+    <context id="abcDataPlumbing" style-ref="plumbing">
+        <match>[lrwzvcLRWZVC]+</match>
+    </context>
+    <context id="abcFunctionCode" style-ref="function">
+        <match>[okfQDFMK%^$'+*?\x2D\x3E]+</match>
+    </context>
+
+    <context id="aoBody" class="no-spell-check">
+        <include>
+            <context ref="tokWord"/>
+            <context ref="tokAnno"/>
+            <context ref="tokSealOrUnseal"/>
+            <context ref="embeddedText"/>
+            <context ref="embeddedNumeral"/>
+            <context ref="abcDataPlumbing"/>
+            <context ref="abcFunctionCode"/>
+        </include>
+    </context>
+
+    <context id="defineWord" class="no-spell-check" style-ref="define">
+        <match>^@\%{word}\%{ws}</match>
+    </context>
+
+    <context id="ao" class="no-spell-check">
+      <include>
+        <context ref="defineWord" />
+        <context ref="aoBody" />
+      </include>
+    </context>
+
+  </definitions>
+</language>
