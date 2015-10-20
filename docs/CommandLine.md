@@ -51,7 +51,7 @@ An important role of words integer and literal is to place each value at an appr
 
 The escaped form of a block still contains claw code but does not assume any placement word. Mostly, this is necessary so we can reliably represent blocks that were not placed at the default location.
 
-### Sequence Literals
+### Sequence Sugar
 
 A compact encoding for short sequences and lists is convenient and is easily leveraged towards a more structured programming style. For now, I'm going to experiment with three words expanding into punctuation:
 

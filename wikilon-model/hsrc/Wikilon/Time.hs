@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, CPP #-}
+{-# LANGUAGE DeriveDataTypeable, GeneralizedNewtypeDeriving, CPP #-}
 
 -- | Wikilon timestamp
 --
@@ -39,11 +39,7 @@ import qualified Data.Decimal as Dec
 import Data.Typeable (Typeable)
 
 -- | Timestamp in Wikilon
-newtype T = T Int64 deriving (Eq, Ord, Typeable)
-
-instance Bounded T where
-    minBound = T minBound 
-    maxBound = T maxBound 
+newtype T = T Int64 deriving (Eq, Ord, Typeable, Bounded)
 
 dayLen, secLen :: Int64
 dayLen = 86400 * secLen
@@ -94,7 +90,7 @@ cpuTimePrecision = dtFromPicos (max psPrec CPUTime.cpuTimePrecision)
 -- | DT - a representation of a difference in two times
 -- Conversion functions treat as seconds. Precision is
 -- fixpoint 0.1µs.
-newtype DT = DT Int64 deriving (Eq, Ord, Typeable)
+newtype DT = DT Int64 deriving (Eq, Ord, Typeable, Bounded)
 
 -- | Add a difference in time to an absolute time.
 addTime :: T -> DT -> T

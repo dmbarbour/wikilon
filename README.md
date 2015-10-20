@@ -5,32 +5,9 @@ Wikilon
 
 Wikilon is a wiki-inspired software platform and development environment for Awelon project.
 
-An [Awelon Object (AO)](docs/AboutAO.md) dictionary contains a set of words with acyclic definitions. Each word defines a concrete function, leveraging [Awelon Bytecode (ABC)](docs/AboutABC.md). DVCS-based conventions are leveraged for sharing, versioning, and distributing code. The expectation is that communities will curate open-source dictionaries, while projects or developers will tend to fork a dictionary for local use and eventually feed back content or utilities. Supporting hundreds of projects in a community dictionary provides opportunities for cross-project maintenance and refactoring.
+An [Awelon Object (AO)](docs/AboutAO.md) dictionary contains a set of words with acyclic definitions. Each word defines a concrete function, represented in [Awelon Bytecode (ABC)](docs/AboutABC.md). The definitions are stored in their primary bytecode representation, but are typically viewed and edited through higher level interfaces (providing syntax or structured editing). Instead of libraries and packages, AO favors DVCS-like forking and merging as a basis for sharing, distributing, and maintaining code. 
 
-AO dictionaries correspond nicely to [wikis](http://en.wikipedia.org/wiki/Wiki): 
-
-* each wiki is a dictionary
-* each page is a word
-* dependencies between words become links 
-
-Wikilon can host multiple dictionaries, e.g. to support forking and unstable vs. stable branches. Each dictionary is given a name and URI, under `/d/dictName`. 
-
-As a software platform, Wikilon supports a few [application models](docs/ApplicationModel.md). 
-
-First, with sufficient tooling, dictionaries can be used as [spreadsheets](http://en.wikipedia.org/wiki/Spreadsheet) or [notebook-style apps](http://en.wikipedia.org/wiki/IPython). Words correspond to functions. Much like cells in a spreadsheet, pure functions can be rendered for human consumption through typeful views:
-
-* a function of type `ℝ²→Color` could be rendered as an image
-* a function of type `∀e.e→(Text*e)` renders as static text
-* a function of type `ℝ→ℝ` can be rendered as a graph or table
-* a function of type `QueryString→SVG` renders as an HTTP form
-
-Typeful views may be supported with some naming conventions for words. A lot of static content (blogs, images, etc.) can be modeled this way, and a lot of useful features can be oriented towards editing the dictionaries.
-
-Second, interactive content is viable with appropriate types, e.g. a simple interactive fiction (or any command-line app) could be modeled using a function of type `µState.(Text→(Text*State))` with the text input corresponding to the user command string. A different types might be more suitable for ad-hoc web applications. Wikilon should ultimately be able to cross-compile a lot of interactive content: simple games, calculators, [unhosted web apps](https://unhosted.org/), etc..
-
-Third, Wikilon will also serve as a host for *abstract virtual machines* (AVMs). AVMs use a simple value for state, and communicate (or perform effects) via message passing through a simple [network model](docs/NetworkModel.md). AVMs are necessary whenever developers want to extend Wikilon with ad-hoc server-side state, e.g. for a chat server or a multi-user dungeon. Using many small AVMs can limit entanglement compared to image-based programming environments. A long term goal will be to compile AVMs into hypervisor-layer [unikernels](https://queue.acm.org/detail.cfm?id=2566628).
-
-Between these approaches, Wikilon should be tailorable into arbitrary new applications or services. 
+By leveraging structural conventions within and between definitions, dictionaries may directly host ad-hoc application state: forums, wikis, graphs, spreadsheets, bulletin boards, interactive fictions, and so on. This is the primary [application model](docs/ApplicationModel.md) for Wikilon. I might later also explore abstract virtual machines and unikernels.
 
 Related: 
 
@@ -40,7 +17,7 @@ Related:
 
 ## Caveats
 
-Awelon Bytecode (ABC) lacks sufficient work on optimizers or compilers, and is simply not performance competitive at this time. At this time, I won't recommend Wikilon for serious use where performance is a major concern. Eventually, this condition should change. One goal with Wikilon is to bootstrap the compilers and optimizers and other tools, and perhaps bootstrap Wikilon itself.
+Awelon Bytecode (ABC) lacks sufficient work on optimizers or compilers, and is simply not yet performance competitive. At this time, I won't recommend Wikilon for serious use where performance is a concern. Eventually, this condition should change. One goal with Wikilon is to bootstrap the compilers and optimizers and other tools, and perhaps bootstrap Wikilon itself.
 
 ## Setup and Configuration
 
@@ -53,10 +30,7 @@ To get started with Wikilon:
 * Recommend [sandbox installation](http://coldwa.st/e/blog/2013-08-20-Cabal-sandbox.html) of Wikilon
  * obtain sources for Wikilon, enter directory
  * cabal sandbox init
- * cabal sandbox add-source wikilon-abc
  * cabal sandbox add-source wikilon-model
- * cabal sandbox add-source wikilon-store
- * cabal sandbox add-source wikilon-wai
  * cabal install --only-dependencies
  * cabal install
 

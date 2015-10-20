@@ -2,7 +2,7 @@
 -- | Support for a reverse token lookup index associated with a 
 -- dictionary. Find where any token or word is used from the whole
 -- dictionary. 
-module Wikilon.DictRLU
+module Wikilon.Dict.RLU
     ( DictRLU
     , rluCreate
     , rluUpdate
@@ -15,7 +15,6 @@ import Control.Applicative
 import Control.Arrow (first, second)
 import Data.Maybe (fromMaybe)
 import Data.Monoid
-import qualified Data.ByteString.Char8 as BS
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -46,11 +45,7 @@ rluTokenClients (RLU trie) (Token t) =
 
 -- | Find all direct clients of a word.
 rluWordClients :: DictRLU -> Word -> [Word]
-rluWordClients ix = rluTokenClients ix . wtok
-
--- token associated with a word
-wtok :: Word -> Token
-wtok = Token . BS.cons '%' . unWord
+rluWordClients ix = rluTokenClients ix . wordToToken
 
 -- | Find transitive clients of a list of words, ordered such that a
 -- well defined word appears before any of its clients. This is useful

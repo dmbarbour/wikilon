@@ -111,6 +111,8 @@ instance Show ClawRatio where
 instance Show ClawExp10 where 
     showsPrec _ (ClawExp10 c e) = shows c . showChar 'e' . shows e    
 
+-- TODO: maybe develop a fast Claw parse from a raw 'AODef' bytestring?
+
 -- | A region of claw code has exactly one namespace. This serves as
 -- a prefix for all words within that region of code. Claw namespace
 -- is the only source of context sensitivity in claw code.

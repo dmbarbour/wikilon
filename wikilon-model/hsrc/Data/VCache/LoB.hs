@@ -132,7 +132,7 @@ drop n l =
 -- How large should our block pages be? A larger value means flatter
 -- representation, larger buffers, more data held by the LoB directly.
 _pageSize :: Int
-_pageSize = 16
+_pageSize = 32
 
 -- Each LoB can store up to one full page in its buffer. When we're
 -- about to add one more element, we'll store the current buffer into

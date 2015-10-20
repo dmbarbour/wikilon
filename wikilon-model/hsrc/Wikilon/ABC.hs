@@ -82,6 +82,7 @@ data V
 data ExtOp
     = ExtOp_Inline -- i; vr$c, also for tail calls
     -- I'll probably want:
+    --  safe copy and drop (untested)
     --  high performance data plumbing
     --  optimized fixpoint function
     --  list processing (reverse, append, map, etc.)
@@ -106,9 +107,6 @@ charToExtOp _ = Nothing
 
 charToOp :: Char -> Maybe Op
 charToOp = error "todo: combine extOp and abcOp tables"
-
--- todo: a faster stream decoder for ABC
---  decode' code vals toks
 
 -- | Wikilon ABC is a compact representation for [Op].
 decodeOps :: ABC -> [Op]
@@ -158,13 +156,24 @@ encOpChar (ABC_Ext op)  = extOpToChar op
 encOpChar (ABC_Val _)   = '_' -- value in abc_data 
 encOpChar (ABC_Tok _)   = '!' -- token in abc_toks
 
--- Thoughts: 
--- I would like to preserve structure in Awelon bytecode for linking.
--- Though, I'm not sure about this. But it could be useful to model
--- ABC resource links as specialized tokens rather than as values.
+-- I also need to encode ABC and values for VCache-layer storage.
+-- Depending on whether I want to perform compression, I have some
+-- options here. What I'd like to do is generate both a bytestring
+-- and a list of [VRef V] to encode the whole ABC. This gives an
+-- option to compress the bytestring before encoding it.
 --
--- If I preserve link structure, I can probably simplify debugging.
--- OTOH, it may complicate optimization.
+-- Use of a compression algorithm prior to VCache might avoid an
+-- extra copy on read, if we decompress directly from VCache memory.
+--
+-- The ability to lazily process parts of the larger bytestring
+-- may also be convenient, e.g. so we can parse tokens into a
+-- list incrementally, and the same for the list of values.
+-- This suggests leveraging 'sized' slices that we can chomp.
+
+
+-- Thoughts: if I can preserve the {%word} tokens when linking, this
+-- might simplify debugging or error reports. OTOH, it may complicate
+-- optimization and other features.
 
 -- | We may 'purify' bytecode to recover the original ABC without any
 -- special Wikilon extensions. This purification is direct and naive.

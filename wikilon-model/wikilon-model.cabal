@@ -62,13 +62,17 @@ Library
     Wikilon.Word
     Wikilon.Token
     Wikilon.Text
-    Wikilon.DictRLU
 
-    Wikilon.Auth
+    Wikilon.Dict.Set
+    Wikilon.Dict.RLU
+    -- Wikilon.Dict.PLU
+    Wikilon.Dict.Head
+    Wikilon.Dict.Hist
+    Wikilon.Dict.RenameWord
 
-    Wikilon.DictSet
-    -- Wikilon.Cache
-    Wikilon.Hash
+    -- Wikilon.Hash
+    -- Wikilon.Auth
+
 
     Wikilon.ABC.Pure
     Wikilon.Claw

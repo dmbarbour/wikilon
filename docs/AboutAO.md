@@ -2,9 +2,9 @@
 
 Awelon Object (AO) language directly uses [Awelon Bytecode (ABC)](AboutABC.md) as a foundation for functional programming. 
 
-AO is very simple. The primary structure is the dictionary, which defines a finite set of words. Definitions are encoded in bytecode and may refer to other words in the dictionary with `{%word}` tokens. The meaning of every `{%word}` token is, trivially, to substitute the word's definition. Dependencies between words form a directed acyclic graph. A complete expansion of AO code will result in a finite string of bytecode.
+AO is very simple. The primary structure is the dictionary, which defines a finite set of words. Definitions are encoded in Awelon Bytecode and may refer to other words in the dictionary via `{%word}` tokens. The meaning of a word token is, trivially, to substitute the word's definition. Dependencies between words form a directed acyclic graph, thus a complete expansion of AO code results in a finite string of bytecode. 
 
-Directly reading or writing bytecode would be intolerable. AO assumes developers use editable views (lenses) to manipulate dictionary code. See *Editable Views of Bytecode* and *Dictionary Applications*, below. Views can be implemented by a development environment or a virtual filesystem (e.g. via FUSE).
+Instead of conventional syntax, AO assumes human developers will use editable views to manipulate dictionary code. Directly reading or writing bytecode would be intolerable, but views can be rich and problem specific. See *Editable Views of Bytecode* and *Dictionary Applications*, below. Views may be implemented by a development environment, a web service, or a FUSE adapter.
 
 ## Import/Export
 
@@ -71,11 +71,15 @@ A reverse lookup index would find replies to a given thread, etc.. We could comp
 
 Alternative patterns might be appropriate for other application types. Regardless, by encoding all relevant application state in the dictionary, we get a lot of benefits for easy sharing, refactoring, live coding, automatic testing. Dictionary applications allow AO dictionaries to serve as whole ecosystems. This is a motivating aspect for the design of Awelon Object language.
 
+It is possible for AO dictionaries to reach massive scales, hosting forums, wikis, databases, spreadsheets and other applications. At these scales, the 'dictionary' metaphor is insufficient. An ecosystem or filesystem might be a better metaphor. 
+
 ## Development 
 
 ### Static Analysis
 
-Though ABC doesn't specify a type system, it is designed to support static analysis. An AO dictionary under development should undergo continuous static analysis such that developers are always aware of potential issues - obvious type errors, non-termination, linter warnings, etc.. 
+Though ABC doesn't specify a type system, it is designed to support static analysis. An AO dictionary under development should undergo continuous static analysis such that developers are always aware of potential issues - obvious type errors, non-termination, linter warnings, etc..
+
+Static analysis can be greatly extended by use of *annotations*, which may potentially assert properties that would be difficult to express otherwise - e.g. that two blocks are equivalent, or that a function is commutative or associative or idempotent, or that one function is the reverse of another, or that a value should be computed statically.
 
 ### Transitory Undefined Words
 
