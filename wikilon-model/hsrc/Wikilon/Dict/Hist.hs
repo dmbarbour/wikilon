@@ -12,73 +12,98 @@ import Data.Monoid
 import Data.Typeable (Typeable)
 import qualified Data.List as L
 import Database.VCache
-import Data.VCache.LoB (LoB) 
-import qualified Data.VCache.LoB as LoB
 import Wikilon.Dict (Dict)
 import Wikilon.Time 
 
--- How many historical samples to keep? We'll perform one decay
--- pass whenever we notice we've surpassed this number. This is
--- a tuning parameter, currently hard-coded. This should be good
--- enough for most use cases of Wikilon.
+-- How many historical samples to keep? I'll perform one decay
+-- pass whenever we notice we've surpassed this number. 
+--
+-- Users can increase effective histories by:
+--
+--  * modeling multi-versioned words within the dictionary
+--  * modeling metadata tasks, todos, sessions, etc. in dictionary
+--  * favoring monotonic command patterns for dictionary apps
+--  * extra branches to tag versions and low-frequency updates
+--
+-- So I'm not too concerned about under-shooting a little, so 
+-- long as we have enough history for convenience in cases like
+-- recovering from vandalism. 
+--
 maxHistorySamples :: Int
-maxHistorySamples = 1000
-
-createHRep :: VSpace -> HRep
-createHRep = flip LoB.empty 32
+maxHistorySamples = 150
 
 -- | The 'DictHist' is a representation for [(T,Dict)] where each 
--- pair reads: "we had the dictionary before the given time".
+-- pair reads: "before time T we had dictionary Dict". 
+--
+-- The history is for archival and recovery purposes. Properties
+-- and indices are not preserved, though they may be regenerated
+-- by forking from a historical dictionary.
 newtype DictHist = DictHist HRep
     deriving (Typeable)
-type HRep = LoB (T, Dict)
+
+-- At the moment the max history samples is small enough that it's
+-- fine to simply record the entire list in one VCache node without
+-- a fancy data structure. Users may always explicitly manage more
+-- versions via hierarchical structures, tagging, etc.
+type HRep = [(T, Dict)]
 
 hrep :: DictHist -> HRep
 hrep (DictHist l) = l
 
 createDictHist :: VSpace -> DictHist
-createDictHist = DictHist . createHRep 
+createDictHist = const $ DictHist []
 
 readDictHist :: DictHist -> [(T,Dict)]
-readDictHist = LoB.toList . hrep
+readDictHist = hrep
 
 updateDictHist :: (T,Dict) -> DictHist -> DictHist
-updateDictHist p = DictHist . LoB.cons p . hrep . decayHistIfFull
+updateDictHist p = DictHist . (:) p . hrep . decayHistIfFull
 
 decayHistIfFull :: DictHist -> DictHist
 decayHistIfFull h | fullHist h = decayHist h
                   | otherwise  = h
 
 fullHist :: DictHist -> Bool
-fullHist = (>= maxHistorySamples) . LoB.length . hrep
+fullHist = (>= maxHistorySamples) . L.length . hrep
 
 decayHist :: DictHist -> DictHist
-decayHist (DictHist l) = DictHist (decay l) where
-    rebuild = L.foldl' (flip LoB.cons) (createHRep (LoB.lob_space l))
-    decay = rebuild . decimate . L.reverse . LoB.toList
-    decimate = mconcat . fmap decayGroup . groupsOf 10 
+decayHist = DictHist . decimate . hrep where
+
+-- decimate, in the literal sense of eliminating one tenth.
+-- This is the basis for exponential decay. 
+--
+-- The strategy here is to destroy one in every group of ten
+-- such that decimation is distributed fairly over the entire
+-- history. Each group uses heuristics to decide which to kill.
+decimate :: [(T,a)] -> [(T,a)]
+decimate = mconcat . fmap decayGroup . groupsOf 10
 
 -- take groups of at least one element
 groupsOf :: Int -> [a] -> [[a]]
-groupsOf n (x:xs) = (x : L.take (n-1) xs) : groupsOf n (L.drop (n-1) xs)
-groupsOf _ _ = []
+groupsOf = go . subtract 1 where
+    go k (x:xs) = (x : L.take k xs) : go k (L.drop k xs)
+    go _ _ = []
 
--- Eliminate at one element from a small group, favoring
--- elimination of the element that produces the smallest
--- time gap (i.e. to gradually move towards more uniformly
--- wide gaps between time samples).
---
--- This is applied to each group of ten samples.
+-- Eliminate one element from a small group. The element is selected
+-- heuristically: (1) select the pair of elements in the group that
+-- has the smallest age gap, (2) keep the younger of the pair.
+-- 
+-- This isn't optimal for generating a clean sampling distribution
+-- (i.e. eliminating outliers and clusters). But it is good enough
+-- when applied over multiple decay passes with implicit regrouping
+-- between passes.
 decayGroup :: [(T,a)] -> [(T,a)]
 decayGroup lst = lst' where
-    timeGap a b = abs $ fst a `diffTime` fst b
-    minTimeGap = (L.foldl' min maxBound . gaps timeGap) lst
+    ageGap a b = abs $ fst a `diffTime` fst b
+    minAgeGap = (L.foldl' min maxBound . gaps ageGap) lst
     lst' = elim lst 
-    elim (x1 : xs@(x2:_)) =
-        if (timeGap x1 x2) == minTimeGap 
-            then xs -- drop x1
-            else x1 : elim xs
-    elim _ = []
+    elim (x1 : xs@(x2 : xs')) =
+        let bTargetGap = ageGap x1 x2 == minAgeGap in
+        if not bTargetGap then x1 : elim xs else
+        let x1_younger = fst x1 > fst x2 in
+        let x_kept = if x1_younger then x1 else x2 in
+        x_kept : xs'
+    elim _ = [] 
 
 gaps :: (a -> a -> b) -> [a] -> [b]
 gaps fn lst = L.zipWith fn lst (L.drop 1 lst)

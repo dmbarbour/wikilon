@@ -11,7 +11,6 @@
 module Wikilon.Dict.Set
     ( DictName
     , DictSet
-    , DictHead
     , DictRef
 
     , getDictRef

@@ -81,8 +81,4 @@ Library
     -- Wikilon.Clock
     Wikilon.Time
 
-
-  Other-Modules:
-    Data.VCache.LoB
-     
   ghc-options: -auto-all -Wall 
