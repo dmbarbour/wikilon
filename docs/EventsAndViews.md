@@ -23,6 +23,14 @@ It might take a week or two to perform this refactoring, if I focus on just it.
 
 IDEAS:
 
+* need to model a web framework
+ * background computations
+ * views updated via WebSockets
+* maybe build a proper web-app model
+ * something I can model primarily in ABC
+ * semantic CSS and web content instead of HTML
+ * 
+
 * updateable views with WebSockets, ideally should be implicit? 
  * these are not yet critical, though. 
 * something like MFlow, modeling multi-page forms with validation?

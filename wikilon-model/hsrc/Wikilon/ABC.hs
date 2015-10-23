@@ -20,7 +20,6 @@ module Wikilon.ABC
     , copyable, droppable
 
 
-
     , purifyABC, valueToPureABC
     , extOpTable, charToExtOp, extOpToChar
     ) where
@@ -72,6 +71,8 @@ data V
     | T !Text           -- embedded text value
     | X (VRef V) Flags  -- external value resource
     deriving (Eq, Typeable)
+
+-- to consider: support for binaries, copyable and droppable wrappers
 
 -- | Accelerated operations corresponding to common substrings of
 -- Awelon Bytecode (and hence to common functions). These encode
@@ -156,6 +157,27 @@ encOpChar (ABC_Ext op)  = extOpToChar op
 encOpChar (ABC_Val _)   = '_' -- value in abc_data 
 encOpChar (ABC_Tok _)   = '!' -- token in abc_toks
 
+
+-- Next, I must encode ABC and Values for VCache-level storage.
+--
+-- This is different from the compact runtime encoding, though must
+-- be pretty close.
+--
+-- Goals:
+--   (a) share structure between `VRef ABC` and `VRef V` for block values
+--   (b) lazily parse bytestrings for [V] and [Token] lists in ABC
+--   (c) fast slicing for texts, tokens, and block binaries
+--   (d) join bytestrings for effective VCache-layer compression
+-- 
+
+toCacheABC :: ABC -> ([VRef V], LBS.ByteString)
+fromCacheABC :: ([VRef V], LBS.ByteString) -> ABC
+
+toCacheVals :: [V] -> ([VRef V], LBS.ByteString)
+fromCacheVals :: ([VRef V], LBS.ByteString) -> [V]
+
+
+
 -- I also need to encode ABC and values for VCache-layer storage.
 -- Depending on whether I want to perform compression, I have some
 -- options here. What I'd like to do is generate both a bytestring
@@ -177,6 +199,7 @@ encOpChar (ABC_Tok _)   = '!' -- token in abc_toks
 
 -- | We may 'purify' bytecode to recover the original ABC without any
 -- special Wikilon extensions. This purification is direct and naive.
+-- Annotations will be injected to preserve value representations.
 purifyABC :: ABC -> Pure.ABC
 purifyABC = Pure.ABC . flip purifyOps [] . decodeOps
 
@@ -189,8 +212,6 @@ purifyOp (ABC_Prim op) = (:) (Pure.ABC_Prim op)
 purifyOp (ABC_Tok tok) = (:) (Pure.ABC_Tok tok)
 purifyOp (ABC_Ext extOp) = purifyExtOp extOp
 purifyOp (ABC_Val v) = valueToPureABC' v
-
-
 
 -- todo: leverage extOp table via lookup array
 purifyExtOp :: ExtOp -> [Pure.Op] -> [Pure.Op]

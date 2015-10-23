@@ -3,8 +3,10 @@
 
 I'm doing a pretty big rewrite for the following purposes:
 
-* simplify the AO definitions back to plain old 'inline the code'
+* simplify the AO semantics
+ * return to plain old 'inline the definition' for word tokens
  * only 'holes' in dictionary are undefined words
+ * no staged computations required
 * background computation of types, errors, cycles, undefined words
 * stronger push towards use of optimized bytecode representation
 * simplify model for cache management and background computations 

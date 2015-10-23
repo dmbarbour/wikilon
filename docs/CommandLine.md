@@ -1,33 +1,34 @@
 
 # Command Language for Awelon (claw)
 
-Awelon project and Wikilon would benefit from effective command line interfaces, e.g. as a REPL and shell. In context of Wikilon, providing console-like services through HTML forms or JavaScript should not be difficult. The underlying [Awelon Object (AO)](AboutAO.md) code is unsuitable for this application in its raw form. 
+Awelon project and Wikilon would benefit from effective command line interfaces, e.g. as a REPL and shell. In context of Wikilon, providing console-like services through HTML forms or JavaScript should not be difficult. The underlying [Awelon Object (AO)](AboutAO.md) bytecode is unsuitable for this application in its raw form.
 
-But we can certainly create a language better suited, which we can rapidly compile into bytecode, with easy access to dependencies on words in a dictionary. Useful features might include:
+Desirable features for a command line interface:
 
-* write words easily: just use the word, `swap inc mul`
-* inline text and number literals: `42 "foo"`
-* easy and unambiguous access to bytecode, e.g. `\vrwlc` 
-* first class blocks, higher order ops: `1 [2 *] 53 repeat`
-* stable target environment for the code
+* numbers and inline texts `42 2/3 3.141 "foo"`
+* trivial access to words, e.g. `swap inc mul`
+* escaped access to underlying language `\vrwlc \{&anno}`
+* namespace model for multiple environments `#foo: 1 2 3`
+* blocks for higher order operations `1 [2 mul] 53 repeat`
+* encoding of tuples, lists, and sequences `{1,2,3}`
 
-One option is a straightforward expansion into bytecode, e.g. similar to the [original definition of Awelon Object](https://github.com/dmbarbour/awelon/blob/master/AboutAO.md). The original AO was weak for staged programming, visual DSLs, or structured programming, and wasn't strongly an '[object code](http://en.wikipedia.org/wiki/Object_code)', but it was well suited for command line interfaces. The result was a very Forth-like language. Though, in retrospect, I favor `\` as an escape for bytecode rather than `%`. We might also use `\{token}` for escaped tokens, and `\"text...~` for escaped multi-line texts, since both of those are rare and it simplifies the recognizer.
+Command Language for Awelon (claw) is a thin layer above AO bytecode. Claw semantics is a trivial expansion ultimately into bytecode. This expansion is reversible, such that we may later view and edit AO bytecode as claw code. Claw serves as an editable view or syntax for definitions in an AO dictionary.
 
-I propose to call the language **claw**. Command Language (or Line) for AWelon.
+Claw is simple, flexible, and extensible. Though intended primarily for command line interfaces, claw may be leveraged for conventional document interfaces and block-structured programming by recognizing sequences like `[cond] [body] while_do_`. Given a structure editor, claw might further be extended with interactive forms - sliders, color pickers, checkboxes, etc. - e.g. by recognizing sequences like `30 slider` or `255 0 0 rgbcolor`. 
 
 ## Claw Code
 
 General points to help guide the design:
 
 * need effective support for rational and decimal numbers
-* enable flexible extension of programming environments
 * transparent, simple, predictable, direct AO translation
 * easy to preserve claw sesssions into an AO dictionary 
 * round tripping, ability to recover claw code from AO
 * implicitly bound to AO dictionary for definitions and data
 * concatenative, streamable, composable, purely functional
+* support DSLs and alternative programming environments
 
-### Rationals, Decimals, and Extensible Literals
+### Rationals, Decimals, Integers, and Literals
 
 I want support for ratios and decimals (e.g. `2/3` and `3.141`) so I can at least use claw as a simple calculator. Scientific E notation would also be useful in some cases, e.g. working with physical equations. As of 2015 June, Awelon Bytecode no longer directly supports rational numbers, so I shall need to model numbers more explicitly. A simple, promising option is to treat each as a sugar:
 
@@ -51,13 +52,22 @@ An important role of words integer and literal is to place each value at an appr
 
 The escaped form of a block still contains claw code but does not assume any placement word. Mostly, this is necessary so we can reliably represent blocks that were not placed at the default location.
 
-### Sequence Sugar
+### Claw Sequences
 
-A compact encoding for short sequences and lists is convenient and is easily leveraged towards a more structured programming style. For now, I'm going to experiment with three words expanding into punctuation:
+A command language sequence is a sequence of commands. A viable representation is a *list of blocks*. A common use-case is to construct sequences of values. For example, `{1,2,3}` as a list containing *blocks* `[1]`, `[2]`, and `[3]` may be processed to construct a list containing *numbers* `1`, `2`, and `3`. However, lists of commands may be more generally utilized towards monadic DSLs and block-structured programming.
 
-        {1,2,3} desugars to     lbrace 1 comma 2 comma 3 rbrace
+For claw, sequences expand trivially.
 
-This idea is readily extensible to other punctuation. But lists are sufficient for a lot of problems. Further extensions of this nature may occur on an as-needed basis.
+        {1,2,3}     desugars to
+        \[\[1] comma \[2] comma \[3]] cmdseq
+
+With suitable definitions this will construct a list of blocks. To cover different use cases, claw allows three distinct separators: comma, semicolon, and vertibar `,;|`. These may be mixed freely within sequences.
+
+*Note:* The empty string is a valid command (an identity function). So `{}` is a sequence with one empty command and `{,;|;,}` is a sequence of six empty commands. Usually, empty commands aren't going to be a good fit (wrong type), so this is a degenerate case. To represent an empty sequence, one must use expanded form `\[] cmdseq`.
+
+*ASIDE:* a viable alternative expansion is `{1,2,3}` to `lbrace \[1] comma \[2] comma \[3] rbrace`. This would still support constructing a list of blocks. However, the favored expansion seems more flexible, modular, composable, and compatible with partial evaluation.
+
+*Note:* This is an experimental feature. It may be subject to future tweaks. 
 
 ### Claw Words and Namespaces
 

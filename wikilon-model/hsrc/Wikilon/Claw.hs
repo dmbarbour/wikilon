@@ -133,6 +133,8 @@ wLBrace, wRBrace, wComma :: Word
 wLBrace = "lbrace"
 wRBrace = "rbrace"
 wComma  = "comma"
+wSemicolon = "semicolon"
+
 
 -- TODO: support for monad and arrow sugar
 --       semicolon, vertibar, lparens, rparens
