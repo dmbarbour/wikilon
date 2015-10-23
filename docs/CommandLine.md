@@ -10,7 +10,7 @@ Desirable features for a command line interface:
 * escaped access to underlying language `\vrwlc \{&anno}`
 * namespace model for multiple environments `#foo: 1 2 3`
 * blocks for higher order operations `1 [2 mul] 53 repeat`
-* encoding of tuples, lists, and sequences `{1,2,3}`
+* terse encoding of tuples, lists, sequences `{1,2,3}`
 
 Command Language for Awelon (claw) is a thin layer above AO bytecode. Claw semantics is a trivial expansion ultimately into bytecode. This expansion is reversible, such that we may later view and edit AO bytecode as claw code. Claw serves as an editable view or syntax for definitions in an AO dictionary.
 
@@ -38,11 +38,29 @@ I want support for ratios and decimals (e.g. `2/3` and `3.141`) so I can at leas
 
 For round-tripping, the form shall be preserved, e.g. we don't lose the zeroes in `1.000`, and `4/6` would be distinct from `2/3` (before processing by `ratio`). Expansions may involve multiple steps. For example, the `6.02` for the scientific E notation expands as a decimal number. We may generalize this idea for integral and literal values:
 
-        42      desugars to     \#42 integer
+        42      desugars to     \#42 int
         "foo"   desugars to     \"foo
-                                ~ literal
+                                ~ lit
 
 This approach to literal values is easily extensible with new notations. I would like to explore vectors, matrices, association lists, and other formats. However, for the moment I'll focus on just the five forms indicated above: ratio, decimal, exp10, integer, literal. 
+
+#### Claw Multi-Line Literals
+
+Claw is optimized for command line interfaces, and multi-line literals aren't a nice fit. Claw makes inline literals easy enough, e.g. `"foo"` or `"Hello, World!"`. This is sufficient for simple labels and strings. If desirable, it isn't difficult to write a function that will explicitly rewrite `"\q"` and `"\n"` sequences into double quotes and newlines. If multi-line literals are necessary, the recommendation is to define them in their own word, such that we can access them as frequently as desired from one-liner programs. 
+
+Claw uses a slightly different encoding for its multi-line than ABC. In particular, where ABC uses `LF SP` sequences to escape the LF, Claw uses a `LF SP* \` sequence (with SP* meaning zero or more spaces). And where ABC uses `LF ~` to terminate the text, Claw uses `LF SP* ~`. 
+
+        \"This is an example
+         \multi-line literal
+         \with "double quotes".
+         ~
+
+This has two advantages over the ABC text encoding:
+
+1. flexible indentation and code formatting
+2. escaped blank lines are clearly visible 
+
+Like ABC text, Claw literals have no built-in escapes other than LF.
 
 ### Claw Blocks
 
@@ -54,20 +72,26 @@ The escaped form of a block still contains claw code but does not assume any pla
 
 ### Claw Sequences
 
-A command language sequence is a sequence of commands. A viable representation is a *list of blocks*. A common use-case is to construct sequences of values. For example, `{1,2,3}` as a list containing *blocks* `[1]`, `[2]`, and `[3]` may be processed to construct a list containing *numbers* `1`, `2`, and `3`. However, lists of commands may be more generally utilized towards monadic DSLs and block-structured programming.
+*Note:* Sequences are an experimental feature. I'm not fully confident in their current design. Whether I keep, tweak, or kill sequences will depend on how effective or painful they prove in practice. 
 
-For claw, sequences expand trivially.
+A command language sequence is a sequence of commands. A common use case is to construct a sequence of values, e.g. `{1,2,3}` might construct a list of numbers. Parsimonious representation for collections of values is convenient, applicable to representing matrices, graphs, tables. In the more general use case, sequences are a potential basis for monadic DSLs and block-structured programming.
+
+A *sequence of commands* requires representation for sequences and commands. A first class command, a subprogram, is naturally represented by a block. The sequence has more options (lists, streams, etc.). I've elected to represent the sequence as a structured block that operates uniformly on each command.
 
         {1,2,3}     desugars to
-        \[\[1] comma \[2] comma \[3]] cmdseq
+        \[\[1] cmd \[2] cmd \[3] cmd] cmdseq
 
-With suitable definitions this will construct a list of blocks. To cover different use cases, claw allows three distinct separators: comma, semicolon, and vertibar `,;|`. These may be mixed freely within sequences.
+Thus sequences are first-class structured blocks. Composition of blocks is a concatenation of sequences. The behavior of the sequence depends primarily on how we define the `cmd` word. We could push each command into a list (with `cmd = \lV`). We could apply each command to an input (with `cmd = \vr$c`). We could count commands (with `cmd = \%#1+`). Or we could generalize, separate our decision on what to do with each command into a tacit `(command * st) → st` argument.
 
-*Note:* The empty string is a valid command (an identity function). So `{}` is a sequence with one empty command and `{,;|;,}` is a sequence of six empty commands. Usually, empty commands aren't going to be a good fit (wrong type), so this is a degenerate case. To represent an empty sequence, one must use expanded form `\[] cmdseq`.
+        onCmd :: (command * st) → st
+        sequenceBlock :: (st * (onCmd * 1)) → (st * (onCmd * 1))
+        cmd = \lw^z$ :: (command * (st * (onCmd * 1))) → (st * (onCmd * 1))
 
-*ASIDE:* a viable alternative expansion is `{1,2,3}` to `lbrace \[1] comma \[2] comma \[3] rbrace`. This would still support constructing a list of blocks. However, the favored expansion seems more flexible, modular, composable, and compatible with partial evaluation.
+Generalized command processing allows us to directly apply sequences in many cases, and to process them indirectly where appropriate (e.g. converting to a list or stream). This is my recommendation. But the decision is ultimately left to developers, with potential variations between namespaces. 
 
-*Note:* This is an experimental feature. It may be subject to future tweaks. 
+*Note:* The empty string is a valid command (an identity function). So `{}` is a sequence with one empty command, while `[]` is valid as an empty command sequence.
+
+*ASIDE:* The simplest viable expansion of `{1,2,3}` is `lbrace 1 comma 2 comma 3 rbrace` - i.e. braces and commas as syntactic sugar. This could easily construct a list of numbers. However, this expansion is second class and difficult to utilize with commands of other types.
 
 ### Claw Words and Namespaces
 

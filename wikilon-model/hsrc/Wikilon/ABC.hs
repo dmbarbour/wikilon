@@ -171,10 +171,16 @@ encOpChar (ABC_Tok _)   = '!' -- token in abc_toks
 -- 
 
 toCacheABC :: ABC -> ([VRef V], LBS.ByteString)
+toCacheABC = error "TODO"
+
 fromCacheABC :: ([VRef V], LBS.ByteString) -> ABC
+fromCacheABC = error "TODO"
 
 toCacheVals :: [V] -> ([VRef V], LBS.ByteString)
+toCacheVals = error "TODO"
+
 fromCacheVals :: ([VRef V], LBS.ByteString) -> [V]
+fromCacheVals = error "TODO"
 
 
 

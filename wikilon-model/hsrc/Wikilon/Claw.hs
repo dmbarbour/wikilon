@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, ViewPatterns, PatternGuards, BangPatterns #-}
+{-# LANGUAGE OverloadedStrings, ViewPatterns, PatternGuards, BangPatterns, GeneralizedNewtypeDeriving #-}
 -- | 'Command Language for Awelon' (or Claw) 
 --
 -- Claw is a syntactic sugar or lense for Awelon Object (AO) code.
@@ -19,10 +19,10 @@
 --      6.02e23     6.02 23 exp10
 --      42          \\#42 integer
 --      -7          \\#7- integer
---      {1,2,3}     lbrace 1 comma 2 comma 3 rbrace
 --      ratio       \\{%ratio}
 --      "foo"       \\"foo
 --                  ~ literal
+--      {1,2,3}     [\\[1] cmd \\[2] cmd \\[3] cmd]
 --      [foo]       \\[foo] block
 -- 
 -- Claw is easily extensible by adding new expansion rules. Wikilon
@@ -65,6 +65,7 @@ module Wikilon.Claw
     , module Wikilon.Text
     ) where
 
+import Control.Arrow (first)
 import Control.Applicative
 import Control.Monad
 import Data.Monoid
@@ -84,7 +85,8 @@ import Wikilon.ABC.Pure (ABC(..), Op(..), PrimOp(..))
 import qualified Wikilon.ABC.Pure as ABC
 
 -- | Command Language for Awelon (claw)
-newtype ClawCode = ClawCode { clawOps :: [ClawOp] } deriving (Eq, Ord)
+newtype ClawCode = ClawCode { clawOps :: [ClawOp] } 
+    deriving (Eq, Ord, Monoid)
 
 data ClawOp 
     = NS !Namespace     -- #bar:
@@ -92,13 +94,14 @@ data ClawOp
     | T0 !Text          -- escaped text
     | K0 !Token         -- escaped token
     | P0 !PrimOp        -- escaped ABC ops
-    | B0 ![ClawOp]      -- escaped blocks
+    | B0 !ClawCode      -- escaped blocks
     | NI !ClawInt       -- integer
     | NR !ClawRatio     -- ratio
     | ND !ClawDecimal   -- decimal
     | NE !ClawExp10     -- exponential
     | TL !ABC.Text      -- text literal
-    | BC ![ClawOp]      -- block of code
+    | BC !ClawCode      -- block of code
+    | CS ![ClawCode]    -- command sequence, e.g. {1,2,3}
     deriving (Ord, Eq)
     
 type ClawInt = Integer
@@ -120,20 +123,16 @@ type Namespace = UTF8.ByteString
 
 wInteger, wLiteral, wBlock :: Word
 wRatio, wDecimal, wExp10 :: Word
+wCmd, wCmdSeq :: Word
 
-wInteger = "integer"
-wLiteral = "literal"
+wInteger = "int"
+wLiteral = "lit"
 wBlock = "block"
 wRatio = "ratio"
 wDecimal = "decimal"
 wExp10 = "exp10"
-
--- | Programmable punctuation words
-wLBrace, wRBrace, wComma :: Word
-wLBrace = "lbrace"
-wRBrace = "rbrace"
-wComma  = "comma"
-wSemicolon = "semicolon"
+wCmd = "cmd"
+wCmdSeq = "cmdseq"
 
 
 -- TODO: support for monad and arrow sugar
@@ -150,7 +149,10 @@ clawToABC :: ClawCode -> ABC
 clawToABC = clawToABC' BS.empty
 
 clawToABC' :: Namespace -> ClawCode -> ABC
-clawToABC' ns = mconcat . zns opToABC ns . clawOps
+clawToABC' ns = expand ns . clawOps
+
+expand :: Namespace -> [ClawOp] -> ABC
+expand ns = mconcat . zns opToABC ns 
 
 zns :: (Namespace -> ClawOp -> a) -> Namespace -> [ClawOp] -> [a]
 zns f _ (op@(NS ns) : ops) = f ns op : zns f ns ops
@@ -160,9 +162,6 @@ zns _ _ [] = []
 oneOp :: ABC.Op -> ABC
 oneOp = ABC . return
 
-expand :: Namespace -> [ClawOp] -> ABC
-expand ns = clawToABC' ns . ClawCode 
-
 opToABC :: Namespace -> ClawOp -> ABC
 -- low level
 opToABC _ (NS ns) = oneOp . ABC_Tok . Token $ nsTokPrefix <> ns
@@ -170,7 +169,7 @@ opToABC ns (CW (Word w)) = oneOp . ABC_Tok . Token $ mconcat ["%", ns, w]
 opToABC _ (P0 op) = oneOp $ ABC_Prim op
 opToABC _ (T0 txt) = oneOp $ ABC_Text txt
 opToABC _ (K0 tok) = oneOp $ ABC_Tok tok
-opToABC ns (B0 cc) = oneOp $ ABC_Block $ expand ns cc
+opToABC ns (B0 cc) = oneOp $ ABC_Block $ clawToABC' ns cc
 -- expansions
 opToABC ns (NI i) = expand ns (escInt ++ [CW wInteger]) where
     escInt = fmap P0 $ ABC.itoabc' i 
@@ -180,6 +179,9 @@ opToABC ns (ND (D.Decimal dp m)) =
 opToABC ns (NE (ClawExp10 d x)) = expand ns [ND d, NI x, CW wExp10]
 opToABC ns (TL lit) = expand ns [T0 lit, CW wLiteral]
 opToABC ns (BC cc) = expand ns [B0 cc, CW wBlock]
+opToABC ns (CS cmdSeq) = expand ns [B0 clawCode, CW wCmdSeq] where
+    clawCode = (ClawCode . mconcat . fmap cmdPair) cmdSeq
+    cmdPair cmd = [B0 cmd, CW wCmd] -- e.g. `\[1] cmd`
 
 -- | Parse Claw structure from bytecode.
 clawFromABC :: ABC -> ClawCode
@@ -235,7 +237,7 @@ escABC ns (ABC_Prim op : ops)
   | otherwise = P0 op : escABC ns ops
 escABC ns (ABC_Text txt : ops) = T0 txt : escABC ns ops
 escABC ns (ABC_Block abc : ops) = B0 cc : escABC ns ops where
-    cc = escABC ns (ABC.abcOps abc)
+    cc = ClawCode $ escABC ns (ABC.abcOps abc)
 escABC _ [] = []
 
 -- | collapse structured values from lower level claw code.
@@ -276,10 +278,28 @@ rdz (T0 txt : lhs) (CW w : rhs)
     = rdz (TL txt : lhs) rhs
 rdz (B0 cc : lhs) (CW w : rhs)
     | (w == wBlock)
-    = rdz (BC cc : lhs) rhs
-rdz lhs (B0 cc : rhs) = rdz (B0 (reduceClaw cc) : lhs) rhs -- recursion
-rdz lhs (op : rhs) = rdz (op : lhs) rhs -- step
+    = rdz (BC cc: lhs) rhs 
+rdz (B0 cc : lhs) (CW w : rhs)
+    | (w == wCmdSeq)
+    , Just cs <- parseCmdSeq cc
+    = rdz (CS cs : lhs) rhs
+rdz lhs (B0 cc : rhs) = rdz (B0 cc' : lhs) rhs  -- recursion
+    where cc' = (ClawCode . reduceClaw . clawOps) cc
+rdz lhs (op : rhs) = rdz (op : lhs) rhs -- progress
 rdz lhs [] = L.reverse lhs -- all done
+
+-- a claw commands sequence is represented by a structured block
+-- of commands:
+--
+--      {1,2,3} desugars to 
+--      [\[1] cmd \[2] cmd \[3] cmd] cmdseq
+--
+-- This function will return only a non-empty list.
+parseCmdSeq :: ClawCode -> Maybe [ClawCode] 
+parseCmdSeq = go [] . clawOps where
+    go cs (B0 c : CW w : more) | (w == wCmd) = go (c:cs) more
+    go cs [] | not (L.null cs) = return (L.reverse cs)
+    go _ _ = mzero
 
 -- | parse raw integer (e.g. #42) from lhs in the zipper-based
 -- reduction, i.e. we'll see #42 from the left hand side, parse
@@ -343,17 +363,12 @@ encodeOps (P0 op : ops) | not (abcWS op) = output where
     output = BB.char8 '\\' <> encPrims abc <> moreOps ops'
     encPrims = BB.string8 . fmap ABC.abcOpToChar
     (abc,ops') = joinP0 [op] ops
-encodeOps (CW w : ops) | (w == wLBrace) = BB.char8 '{' <> encodeOps ops 
 encodeOps (op:ops) = encodeOp op <> moreOps ops
 encodeOps [] = mempty
 
 -- encode operators after adding a space character
 moreOps :: [ClawOp] -> BB.Builder
 moreOps [] = mempty
--- punctuation that doesn't need preceding whitespace
-moreOps (CW w : ops)
-    | (w == wComma)  = BB.char8 ',' <> encodeOps ops
-    | (w == wRBrace) = BB.char8 '}' <> moreOps ops
 moreOps ops = BB.char8 ' ' <> encodeOps ops
 
 -- encode a singular operation.
@@ -366,16 +381,37 @@ encodeOp (NI i) = BB.string8 (show i)
 encodeOp (ND d) = BB.string8 (show d)
 encodeOp (NR r) = BB.string8 (show r) 
 encodeOp (NE e) = BB.string8 (show e)
+encodeOp (CS cmds) = encCmdSeq cmds 
 encodeOp (P0 op) -- should not happen normally
     | abcWS op = mempty
     | otherwise = BB.char8 '\\' <> c
     where c = BB.char8 $ ABC.abcOpToChar op
-encodeOp (T0 txt) = BB.char8 '\n' <> BB.char8 '\\' <> ABC.encodeBB (ABC [ABC_Text txt])
-encodeOp (K0 tok) = BB.char8 '\\' <> ABC.encodeBB (ABC [ABC_Tok tok])
+encodeOp (T0 txt) = BB.char8 '\n' <> encMultiLineText txt
+encodeOp (K0 tok) = BB.char8 '\\' <> encTok tok
 encodeOp (B0 cc) = BB.char8 '\\' <> encBlock cc
 
-encBlock :: [ClawOp] -> BB.Builder
-encBlock cc = BB.char8 '[' <> encodeOps cc <> BB.char8 ']'
+encBlock :: ClawCode -> BB.Builder
+encBlock cc = BB.char8 '[' <> encode' cc <> BB.char8 ']'
+
+encTok :: Token -> BB.Builder
+encTok (Token tok) = BB.char8 '{' <> BB.byteString tok <> BB.char8 '}'
+
+encCmdSeq :: [ClawCode] -> BB.Builder
+encCmdSeq [] = error $ clawCodeErr "cmdseq must be non-empty"
+encCmdSeq (c0:cs) = BB.char8 '{' <> hd <> tl <> BB.char8 '}' where
+    hd = encode' c0 
+    tl = mconcat $ fmap ((comma <>) . encode') cs
+    comma = BB.char8 ','
+
+-- Claw's encoding of multi-line texts
+encMultiLineText :: Text -> BB.Builder
+encMultiLineText txt =
+    let (ln0,lns) = textLines txt in
+    BB.char8 '\\' <> BB.char8 '"' <> BB.lazyByteString ln0 <>
+    let lnPre = BB.char8 '\n' <> BB.char8 ' ' <> BB.char8 '\\' in
+    let _encodeLine = (lnPre <>) . BB.lazyByteString in
+    mconcat (fmap _encodeLine lns) <>
+    BB.char8 '\n' <> BB.char8 ' ' <> BB.char8 '~'
 
 instance Show ClawOp where
     showsPrec _ = showList . (:[])
@@ -407,10 +443,11 @@ runDecoder dcs = decode' cc bWS ops txt where
     txt = dcs_text dcs 
 
 -- | our precision for parse errors is some location within 
--- a possible hierarchical blocks. Blocks may be escaped.
+-- a possible hierarchical blocks or command sequence. 
 data DecoderCont 
     = DecodeDone
     | DecodeBlock IsEscBlock [ClawOp] DecoderCont  
+    | DecodeCmdSeq [ClawCode] [ClawOp] DecoderCont
     deriving (Show)
 type IsEscBlock = Bool
 data DecoderState = DecoderState
@@ -428,23 +465,31 @@ decode' cc bWS r txt0 =
             DecodeDone -> Right $ ClawCode $ L.reverse r
             _ -> decoderIsStuck
         Just (c, txt) -> case c of
+            -- special case elements for word separators
             ' ' -> decode' cc True r txt
             '\n' -> decode' cc True r txt
             ']' -> case cc of
                 DecodeBlock bEsc ops cc' -> decode' cc' False (b:ops) txt where
-                    b = bType $ L.reverse r
                     bType = if bEsc then B0 else BC
+                    b = (bType . ClawCode . L.reverse) r
                 _ -> decoderIsStuck
-
-            -- punctuation that doesn't need word separators
-            ',' -> decode' cc True (CW wComma : r) txt
-            '}' -> decode' cc False (CW wRBrace : r) txt
+            ',' -> case cc of
+                DecodeCmdSeq cmds ops ccx -> decode' cc' True [] txt where
+                    cc' = DecodeCmdSeq cmds' ops ccx
+                    cmds' = currCmd : cmds
+                    currCmd = ClawCode (L.reverse r)
+                _ -> decoderIsStuck
+            '}' -> case cc of
+                DecodeCmdSeq cmds ops cc' -> decode' cc' False (cs:ops) txt where
+                    cs = CS $ L.reverse (lastCmd : cmds)
+                    lastCmd = ClawCode (L.reverse r)
+                _ -> decoderIsStuck
 
             -- everything else requires a word separator
             _ | not bWS -> decoderIsStuck
 
             '[' -> decode' (DecodeBlock False r cc) True [] txt
-            '{' -> decode' cc True (CW wLBrace : r) txt
+            '{' -> decode' (DecodeCmdSeq [] r cc) True [] txt
 
             '"' -> case LBS.elemIndex '"' txt of
                 Nothing -> decoderIsStuck
@@ -466,7 +511,7 @@ decode' cc bWS r txt0 =
                 Just (c', escTxt) -> case c' of
                     '[' -> decode' (DecodeBlock True r cc) True [] escTxt
                     '"' -> 
-                        let (lit,litEnd) = ABC.abcTakeText escTxt in
+                        let (lit,litEnd) = clawTakeText escTxt in
                         case LBS.uncons litEnd of
                             Just ('~', txt') -> decode' cc False (T0 lit : r) txt'
                             _ -> decoderIsStuck
@@ -500,6 +545,21 @@ charToEscPrim c =
     ABC.abcCharToOp c >>= \ op ->
     guard (not (abcWS op)) >>
     return op
+
+-- Obtain Claw text, assuming we've already already the \" prefix.
+-- This is similar to ABC text but we use `LF SP* \` to escape a line
+-- and `LF SP* ~` to terminate the text.
+clawTakeText :: LBS.ByteString -> (Text, LBS.ByteString)
+clawTakeText = first (mconcat . L.reverse) . t [] where
+    t r s = case LBS.elemIndex '\n' s of
+        Nothing -> (s:r, mempty)
+        Just ix -> 
+            let s' = LBS.dropWhile (== ' ') $ LBS.drop (ix + 1) s in
+            case LBS.uncons s' of
+                Just ('\\', sCont) -> 
+                    let ln = LBS.take (ix + 1) s in -- line including '\n'
+                    t (ln:r) sCont -- text continues after '\\' character
+                _ -> let ln = LBS.take ix s in (ln:r, s')
 
 decodeWordOrNumber :: ABC.Text -> Maybe (ClawOp, ABC.Text)
 decodeWordOrNumber txt = dn <|> dw where
@@ -590,5 +650,5 @@ instance IsString ClawCode where
                 error $ clawCodeErr $ "parse failure @ " ++ sLoc
 
 clawCodeErr :: String -> String
-clawCodeErr = (++) "Awelon.ClawCode: " 
+clawCodeErr = (++) "Wikilon.ClawCode: " 
 
