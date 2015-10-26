@@ -58,7 +58,7 @@ Claw uses a slightly different encoding for its multi-line than ABC. In particul
 This has two advantages over the ABC text encoding:
 
 1. flexible indentation and code formatting
-2. escaped blank lines are clearly visible 
+2. escaped 'blank lines' are clearly visible
 
 Like ABC text, Claw literals have no built-in escapes other than LF.
 
@@ -72,26 +72,26 @@ The escaped form of a block still contains claw code but does not assume any pla
 
 ### Claw Sequences
 
-*Note:* Sequences are an experimental feature. I'm not fully confident in their current design. Whether I keep, tweak, or kill sequences will depend on how effective or painful they prove in practice. 
+A command language sequence is a sequence of commands. Even `42` is a command in Claw. A simple use case is to construct a sequence of values. For example, `{1,2,3}` may construct a list of three numbers. Compact expression for a list of values is applicable for matrices, graphs, tables, and more. In the more general use case, sequences are a potential basis for monadic DSLs and block-structured programming. 
 
-A command language sequence is a sequence of commands. A common use case is to construct a sequence of values, e.g. `{1,2,3}` might construct a list of numbers. Parsimonious representation for collections of values is convenient, applicable to representing matrices, graphs, tables. In the more general use case, sequences are a potential basis for monadic DSLs and block-structured programming.
+A *sequence of commands* requires representation for sequences and commands. A first-class command, a subprogram, is naturally represented by a block. A first-class command, a subprogram, is naturally represented by a block. Sequences have more options - lists, streams, iteratees, etc.. I've elected to represent the sequence as a structured block that operates uniformly on each command.
 
-A *sequence of commands* requires representation for sequences and commands. A first class command, a subprogram, is naturally represented by a block. The sequence has more options (lists, streams, etc.). I've elected to represent the sequence as a structured block that operates uniformly on each command.
+        {foo,bar,baz}     desugars to
+        \[\[foo] cmd \[bar] cmd \[baz] cmd] cmdseq
 
-        {1,2,3}     desugars to
-        \[\[1] cmd \[2] cmd \[3] cmd] cmdseq
-
-Thus sequences are first-class structured blocks. Composition of blocks is a concatenation of sequences. The behavior of the sequence depends primarily on how we define the `cmd` word. We could push each command into a list (with `cmd = \lV`). We could apply each command to an input (with `cmd = \vr$c`). We could count commands (with `cmd = \%#1+`). Or we could generalize, separate our decision on what to do with each command into a tacit `(command * st) → st` argument.
+This first-class block structure has advantages of being simple, uniform, easy to recognize, and trivial to compose: a composition of blocks is a concatenation of sequences. A disadvantage is that we cannot casually refactor subsequence structure (e.g. in `{foo,bar,baz,foo,bar,qux}` we might wish to move `foo,bar` into the word `foobar`). If this becomes a problem, it is feasible to later introduce a syntax to inline a subprogram.
+ 
+The behavior of a sequence depends primarily on how we define the `cmd` word. We could push each command into a list (with `cmd = \lV`). We could apply each command to an input (with `cmd = \vr$c`). We could count commands (with `cmd = \%#1+`). Or we could generalize, separate our decision on what to do with each command into a tacit `(command * st) → st` argument.
 
         onCmd :: (command * st) → st
         sequenceBlock :: (st * (onCmd * 1)) → (st * (onCmd * 1))
         cmd = \lw^z$ :: (command * (st * (onCmd * 1))) → (st * (onCmd * 1))
 
-Generalized command processing allows us to directly apply sequences in many cases, and to process them indirectly where appropriate (e.g. converting to a list or stream). This is my recommendation. But the decision is ultimately left to developers, with potential variations between namespaces. 
+This is my recommendation. Generalized command processing allows us to directly apply sequences in many cases, and to process them indirectly where appropriate (e.g. converting to a list or stream). But developers are free to experiment with alternative representations (e.g. translating every sequence into a list) through definition of `cmd` and `cmdseq`.
 
-*Note:* The empty string is a valid command (an identity function). So `{}` is a sequence with one empty command, while `[]` is valid as an empty command sequence.
+*Note:* An empty string is a valid command. So `{}` is a sequence with one empty command. However, this is probably not what you want. Commands in a sequence should usually have a predictable type or effect, e.g. adding a number to the stack.
 
-*ASIDE:* The simplest viable expansion of `{1,2,3}` is `lbrace 1 comma 2 comma 3 rbrace` - i.e. braces and commas as syntactic sugar. This could easily construct a list of numbers. However, this expansion is second class and difficult to utilize with commands of other types.
+*Note:* Support for claw sequences is experimental. It is unclear whether these sequences will be sufficient for monadic DSLs and block structured programming. It is unknown whether inability to syntactically abstract across elements will prove painful or irrelevant in practice. If deemed necessary, we might extend sequences or explore alternatives. One interesting alternative is to take `,` as desugaring to `] comma [`, i.e. syntactically abstracting the notion of a command separator.
 
 ### Claw Words and Namespaces
 
@@ -118,9 +118,20 @@ Words outside the current namespace are also accessible via `\{%word}` tokens.
 
 A weakness of namespaces is that they can hurt refactoring. Developers must be careful to not move code into a different namespace, e.g. via copy and paste. We could solve this by performing copy-paste on the AO/ABC expansion instead of the claw code, and perhaps record the namespace associated with the selection. Operating at the AO or ABC layers doesn't have any issues with context.
 
+#### (Potential Extension) Claw Regions
+
+We could trivially encode a region of Claw code as an inlined block: `[region code] \vr$c`. This could be represented by `(region code)`, giving parentheses a simple identity semantics with a little grouping. Mostly, this would be useful for later adding structural annotations that tune how a region is rendered in a particular view. For example, namespaces (discussed later) could be specific to a region: `(#foo: region code in foo)`. 
+
+We generalize using a word like `pblock` (parenthetical block). 
+
+        (foo)   desugars to     \[foo] pblock
+
+This both simplifies recognition and permits programmers to decide the meaning of parentheses. 
+
+
 ### Claw Semantics and Round Tripping
 
-From the points above, claw code is essentially a simple syntactic sugar above AO. The entire semantics of claw code is its trivial expansion into AO. Further, this is reversible: a parser can recover structure and present it to the user for editing. The main weakness is that such a parser will be oriented around a common set of words (integer, literal, block, ratio, decimal, exp10). This effectively restricts us to round-tripping, i.e. we can recover useful structure only from bytecode generated by expanding claw code. But this is an acceptable limitation.
+Claw code is essentially a simple syntactic sugar above AO. The entire semantics of claw code is its trivial expansion into AO. Further, this is reversible: a parser can recover structure and present it to the user for editing. The main weakness is that such a parser will be oriented around a common set of words (integer, literal, block, ratio, decimal, exp10). This effectively restricts us to round-tripping, i.e. we can recover useful structure only from bytecode generated by expanding claw code. But this is an acceptable limitation.
 
 In general, spaces and newlines are not exactly preserved. Escaped operators may collapse (e.g. from `\r \w` to `\rw`). If developers are using large programs or escaped forms frequently enough to care, they should probably add more words to the dictionary. 
 

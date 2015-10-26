@@ -400,8 +400,8 @@ encCmdSeq :: [ClawCode] -> BB.Builder
 encCmdSeq [] = error $ clawCodeErr "cmdseq must be non-empty"
 encCmdSeq (c0:cs) = BB.char8 '{' <> hd <> tl <> BB.char8 '}' where
     hd = encode' c0 
-    tl = mconcat $ fmap ((comma <>) . encode') cs
-    comma = BB.char8 ','
+    tl = mconcat $ fmap ((sep <>) . encode') cs
+    sep = BB.char8 ',' <> BB.char8 ' ' 
 
 -- Claw's encoding of multi-line texts
 encMultiLineText :: Text -> BB.Builder
