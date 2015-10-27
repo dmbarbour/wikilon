@@ -32,7 +32,7 @@ import Data.Typeable (Typeable)
 import Data.Monoid
 import qualified Data.List as L
 import qualified Data.Set as Set
-import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import Data.VCache.Trie (Trie, Diff(..))
 import qualified Data.VCache.Trie as Trie
 import Database.VCache
@@ -45,34 +45,45 @@ import Wikilon.AODef
 --
 -- In a healthy dictionary, definitions should be acyclic, complete,
 -- and well typed. But these properties are not checked prior to 
--- construction of the dictionary. Reporting issues is left to a
--- higher layer.
+-- construction of the dictionary. Detecting and reporting issues is
+-- left to higher layers.
 newtype Dict = Dict (Trie Def)
     deriving (Eq, Typeable)
 
 -- NOTE: I want to separate large definitions from the Trie nodes to avoid
 -- copying them too often. But small definitions may be kept with the trie
 -- nodes to reduce indirection. Here, 'small' will be up to 254 bytes. 
--- 
--- Definitions aren't compressed. I've considered compression options to
--- save a little space or reduce binaries, but I think the savings would
--- usually be marginal unless I'm compressing across many definitions.
 data Def 
     = DefS AODef            -- for small definitions, up to 254 bytes
-    | DefL (VRef AODef)     -- for large definitions
+    | DefL (VRef BigAODef)  -- for large definitions, maybe compressed
     deriving (Eq, Typeable)
 
+-- I want to compress larger definitions, mostly when we're looking at space
+-- savings of multiple kilobytes. Definitions containing embedded texts or
+-- tables are potentially very large, so we could see savings of many kilobytes.
+-- However, it isn't a critical feature. BigAODef just reserves the possibility.
+data BigAODef
+    = UDef AODef
+    -- todo: zipped variant(s)
+    deriving (Eq, Typeable)
+
+fromBigAODef :: BigAODef -> AODef
+fromBigAODef (UDef d) = d
+
+toBigAODef :: AODef -> BigAODef
+toBigAODef = UDef -- todo: heuristic compression
+
 isSmall :: AODef -> Bool
-isSmall = (< 255) . BS.length
+isSmall = (< 255) . LBS.length
 
 aodef :: Def -> AODef
 aodef (DefS def) = def
-aodef (DefL ref) = deref' ref
+aodef (DefL ref) = fromBigAODef $ deref' ref
 
 toDef :: VSpace -> AODef -> Def
 toDef vc def 
     | isSmall def = DefS def
-    | otherwise   = DefL (vref' vc def)
+    | otherwise   = DefL (vref' vc (toBigAODef def))
 
 -- | Create a new, empty dictionary.
 dictCreate :: VSpace -> Dict
@@ -132,11 +143,18 @@ instance VCacheable Dict where
 instance VCacheable Def where
     put (DefL ref) = putWord8 maxBound >> put ref
     put (DefS def) = assert (isSmall def) $
-        let sz = fromIntegral (BS.length def) in
-        putWord8 sz >> putByteString def
+        let sz = fromIntegral (LBS.length def) in
+        putWord8 sz >> putByteStringLazy def
     get = getWord8 >>= \ sz -> 
         if (maxBound == sz) then DefL <$> getVRef else
-        DefS <$> getByteString (fromIntegral sz) 
+        DefS <$> getByteStringLazy (fromIntegral sz) 
+
+-- reserving a byte so we may later include compression flags
+instance VCacheable BigAODef where
+    put (UDef def) = putWord8 0 >> put def
+    get = getWord8 >>= \ ty -> case ty of
+        0 -> UDef <$> get
+        _ -> fail $ dictErr $ "unrecognized compression model for large def " ++ show ty
 
 dictErr :: String -> String
 dictErr = ("Wikilon.Dict " ++)

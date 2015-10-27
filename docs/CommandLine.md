@@ -12,7 +12,7 @@ Desirable features for a command line interface:
 * blocks for higher order operations `1 [2 mul] 53 repeat`
 * terse encoding of tuples, lists, sequences `{1,2,3}`
 
-Command Language for Awelon (claw) is a thin layer above AO bytecode. Claw semantics is a trivial expansion ultimately into bytecode. This expansion is reversible, such that we may later view and edit AO bytecode as claw code. Claw serves as an editable view or syntax for definitions in an AO dictionary.
+Command Language for Awelon (claw) is a syntactic sugar and editable view for AO. Claw semantics is a trivial expansion into AO bytecode, and this expansion is reversible, such that we may view and edit AO bytecode as claw code.
 
 Claw is simple, flexible, and extensible. Though intended primarily for command line interfaces, claw may be leveraged for conventional document interfaces and block-structured programming by recognizing sequences like `[cond] [body] while_do_`. Given a structure editor, claw might further be extended with interactive forms - sliders, color pickers, checkboxes, etc. - e.g. by recognizing sequences like `30 slider` or `255 0 0 rgbcolor`. 
 
@@ -72,26 +72,28 @@ The escaped form of a block still contains claw code but does not assume any pla
 
 ### Claw Sequences
 
-A command language sequence is a sequence of commands. Even `42` is a command in Claw. A simple use case is to construct a sequence of values. For example, `{1,2,3}` may construct a list of three numbers. Compact expression for a list of values is applicable for matrices, graphs, tables, and more. In the more general use case, sequences are a potential basis for monadic DSLs and block-structured programming. 
+A command language sequence is a sequence of commands (even `42` is a command). A simple use case is to construct a sequence of values. For example, `{1,2,3}` is might construct a list of three numbers. Parsimonious expression for a list of values is convenient for matrices, graphs, tables, and more. In the more general use case, sequences are a potential basis for monadic DSLs and block-structured programming.
 
-A *sequence of commands* requires representation for sequences and commands. A first-class command, a subprogram, is naturally represented by a block. A first-class command, a subprogram, is naturally represented by a block. Sequences have more options - lists, streams, iteratees, etc.. I've elected to represent the sequence as a structured block that operates uniformly on each command.
+The semantics for claw sequences is:
 
-        {foo,bar,baz}     desugars to
+        {foo,bar,baz}   desugars to
         \[\[foo] cmd \[bar] cmd \[baz] cmd] cmdseq
 
-This first-class block structure has advantages of being simple, uniform, easy to recognize, and trivial to compose: a composition of blocks is a concatenation of sequences. A disadvantage is that we cannot casually refactor subsequence structure (e.g. in `{foo,bar,baz,foo,bar,qux}` we might wish to move `foo,bar` into the word `foobar`). If this becomes a problem, it is feasible to later introduce a syntax to inline a subprogram.
- 
-The behavior of a sequence depends primarily on how we define the `cmd` word. We could push each command into a list (with `cmd = \lV`). We could apply each command to an input (with `cmd = \vr$c`). We could count commands (with `cmd = \%#1+`). Or we could generalize, separate our decision on what to do with each command into a tacit `(command * st) → st` argument.
+Commands are captured as first-class blocks. The sequence is represented by a block that operates uniformly on each command. The behavior of the sequence depends primarily on the definition of `cmd`. For example, with `cmd = \lV` we would push each command onto a list. With `cmd = \vr$c` we would inline each command (equivalent to `[foo bar baz]`). With `cmd = \%#1+` we could simply count commands. But the recommended definition is `cmd = \lw^z$`, which allows us to parameterize the command handler and some state. 
 
-        onCmd :: (command * st) → st
-        sequenceBlock :: (st * (onCmd * 1)) → (st * (onCmd * 1))
-        cmd = \lw^z$ :: (command * (st * (onCmd * 1))) → (st * (onCmd * 1))
+        sequence :: (st * (handler * 1)) → (st * (handler * 1))
+        handler  :: (command * st) → st
+        cmd      :: (command * (st * (handler * 1))) → (st * (handler * 1)))
+        cmd = \lw^z$
 
-This is my recommendation. Generalized command processing allows us to directly apply sequences in many cases, and to process them indirectly where appropriate (e.g. converting to a list or stream). But developers are free to experiment with alternative representations (e.g. translating every sequence into a list) through definition of `cmd` and `cmdseq`.
+Claw sequences additionally support an *sequence escape*, allowing injection of arbitrary code into the sequence. This is expressed by prefixing any command by `/`. For example:
 
-*Note:* An empty string is a valid command. So `{}` is a sequence with one empty command. However, this is probably not what you want. Commands in a sequence should usually have a predictable type or effect, e.g. adding a number to the stack.
+        {/foobar, baz}  desugars to
+        \[foobar \[baz] cmd] cmdseq
 
-*Note:* Support for claw sequences is experimental. It is unclear whether these sequences will be sufficient for monadic DSLs and block structured programming. It is unknown whether inability to syntactically abstract across elements will prove painful or irrelevant in practice. If deemed necessary, we might extend sequences or explore alternatives. One interesting alternative is to take `,` as desugaring to `] comma [`, i.e. syntactically abstracting the notion of a command separator.
+The motivation for sequence escapes is convenient syntactic abstraction, for example extracting subsequence `foo,bar` into a separate word `foobar`. Syntactic abstraction is a valuable property for Awelon project in general, and it would be a tragedy to lose it for subprograms expressed as subsequences. Of course, escapes are not aesthetically pleasing and should be used sparingly. Developers should be encouraged to favor composable semantics. If there is some type-dependent means of combining `foo,bar` into a single command, that would be preferable.
+
+*Note:* `{}` is a sequence with one empty command. The empty command sequence is `{/}`.
 
 ### Claw Words and Namespaces
 
@@ -117,17 +119,6 @@ There is never any ambiguity, no question which `foo` you're using. The expansio
 Words outside the current namespace are also accessible via `\{%word}` tokens.
 
 A weakness of namespaces is that they can hurt refactoring. Developers must be careful to not move code into a different namespace, e.g. via copy and paste. We could solve this by performing copy-paste on the AO/ABC expansion instead of the claw code, and perhaps record the namespace associated with the selection. Operating at the AO or ABC layers doesn't have any issues with context.
-
-#### (Potential Extension) Claw Regions
-
-We could trivially encode a region of Claw code as an inlined block: `[region code] \vr$c`. This could be represented by `(region code)`, giving parentheses a simple identity semantics with a little grouping. Mostly, this would be useful for later adding structural annotations that tune how a region is rendered in a particular view. For example, namespaces (discussed later) could be specific to a region: `(#foo: region code in foo)`. 
-
-We generalize using a word like `pblock` (parenthetical block). 
-
-        (foo)   desugars to     \[foo] pblock
-
-This both simplifies recognition and permits programmers to decide the meaning of parentheses. 
-
 
 ### Claw Semantics and Round Tripping
 

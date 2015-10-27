@@ -16,7 +16,6 @@ module Wikilon.AODef
 
 import Data.Maybe (mapMaybe)
 import qualified Data.ByteString.Char8 as BS
-import qualified Data.ByteString.Lazy as LBS
 import Wikilon.Token
 import Wikilon.Word
 import Wikilon.Text
@@ -39,14 +38,14 @@ import qualified Wikilon.Claw as Claw
 --
 -- Ideally, definitions should not be too large. While there are no
 -- strict size limits, it seems wise to raise warnings for anything
--- larger than a few megabytes. Mostly, large definitions may raise 
--- issues for incremental loading, computation, and GC.
+-- larger than a few megabytes. Very large definitions raise issues 
+-- for incremental loading, computation, and GC.
 --
-type AODef = BS.ByteString
+type AODef = Text
 
 -- | Obtain list of tokens (assuming isValidAODef)
 aodefTokens :: AODef -> [Token]
-aodefTokens = abcTokens . LBS.fromStrict
+aodefTokens = abcTokens 
 
 -- | Filter aodefTokens for {%word} dependencies.
 aodefWords :: AODef -> [Word]
@@ -60,7 +59,7 @@ renameInAODef :: Word -> Word -> AODef -> AODef
 renameInAODef origin target = rnAODef where
     tokOrigin = wordToToken origin
     tokTarget = wordToToken target
-    rnAODef = LBS.toStrict . ABC.encode . rnABC . aodefToABC
+    rnAODef = ABC.encode . rnABC . aodefToABC
     rnABC = ABC . fmap rnOp . abcOps
     rnOp (ABC_Tok tok) | (tok == tokOrigin) = ABC_Tok tokTarget
     rnOp (ABC_Block abc) = ABC_Block (rnABC abc)
@@ -70,13 +69,13 @@ renameInAODef origin target = rnAODef where
 -- validates tokens, texts, bytecodes, and block structure. Types are
 -- not computed.
 isValidAODef :: AODef -> Bool
-isValidAODef = isValidABC aoTok aoTxt . LBS.fromStrict where
+isValidAODef = isValidABC aoTok aoTxt where
     aoTok = isValidDictToken 
     aoTxt = isValidText
 
 -- | Assuming a valid AODef, convert it to bytecode.
 aodefToABC :: AODef -> ABC
-aodefToABC = fin . ABC.decode . LBS.fromStrict where
+aodefToABC = fin . ABC.decode where
     fin (Left _stuck) = error $ aodefErr $ "aodefToABC received invalid AODef"
     fin (Right abc) = abc
 

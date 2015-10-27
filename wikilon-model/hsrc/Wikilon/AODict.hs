@@ -67,7 +67,7 @@ enwrd :: (Word, Maybe AODef) -> BB.Builder
 enwrd (_, Nothing) = mempty
 enwrd (Word w, Just def) = 
     BB.char8 '@' <> BB.byteString w <> BB.char8 ' ' <> 
-    BB.byteString def <> BB.char8 '\n'
+    BB.lazyByteString def <> BB.char8 '\n'
 
 type Bytes = LBS.ByteString
 
@@ -101,7 +101,7 @@ parseLine bs =
     let (wbs, bs') = LBS.break isWordSep wordAndDef in
     let wrd = Word $ LBS.toStrict wbs in
     guard (isValidWord wrd) >>
-    let def = LBS.toStrict $ LBS.drop 1 bs' in
+    let def = LBS.drop 1 bs' in
     guard (isValidAODef def) >>
     return (wrd,def)
 

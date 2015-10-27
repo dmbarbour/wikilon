@@ -47,6 +47,7 @@ module Wikilon.Claw
     , ClawRatio(..)
     , ClawExp10(..)
     , ClawDecimal
+    , ClawCmdSeq, IsEscCmd
     , clawToABC, clawToABC'
     , clawFromABC, clawFromABC'
     , isInlineableText
@@ -101,9 +102,11 @@ data ClawOp
     | NE !ClawExp10     -- exponential
     | TL !ABC.Text      -- text literal
     | BC !ClawCode      -- block of code
-    | CS ![ClawCode]    -- command sequence, e.g. {1,2,3}
+    | CS !ClawCmdSeq    -- command sequence
     deriving (Ord, Eq)
-    
+
+type IsEscCmd = Bool
+type ClawCmdSeq = [(ClawCode,IsEscCmd)] 
 type ClawInt = Integer
 type ClawDecimal = D.Decimal -- current limit 255 decimal places
 data ClawRatio = ClawRatio !ClawInt !ClawInt deriving (Eq, Ord)
@@ -179,9 +182,11 @@ opToABC ns (ND (D.Decimal dp m)) =
 opToABC ns (NE (ClawExp10 d x)) = expand ns [ND d, NI x, CW wExp10]
 opToABC ns (TL lit) = expand ns [T0 lit, CW wLiteral]
 opToABC ns (BC cc) = expand ns [B0 cc, CW wBlock]
-opToABC ns (CS cmdSeq) = expand ns [B0 clawCode, CW wCmdSeq] where
-    clawCode = (ClawCode . mconcat . fmap cmdPair) cmdSeq
-    cmdPair cmd = [B0 cmd, CW wCmd] -- e.g. `\[1] cmd`
+opToABC ns (CS cmdseq) = expand ns [B0 cc, CW wCmdSeq] where
+    cc = (ClawCode . mconcat . fmap expandCommand) cmdseq
+    expandCommand (cmd,bEsc) = 
+        if bEsc then clawOps cmd 
+                else [B0 cmd, CW wCmd]
 
 -- | Parse Claw structure from bytecode.
 clawFromABC :: ABC -> ClawCode
@@ -281,25 +286,36 @@ rdz (B0 cc : lhs) (CW w : rhs)
     = rdz (BC cc: lhs) rhs 
 rdz (B0 cc : lhs) (CW w : rhs)
     | (w == wCmdSeq)
-    , Just cs <- parseCmdSeq cc
-    = rdz (CS cs : lhs) rhs
+    = rdz (CS (parseCmdSeq cc) : lhs) rhs
 rdz lhs (B0 cc : rhs) = rdz (B0 cc' : lhs) rhs  -- recursion
     where cc' = (ClawCode . reduceClaw . clawOps) cc
 rdz lhs (op : rhs) = rdz (op : lhs) rhs -- progress
 rdz lhs [] = L.reverse lhs -- all done
 
--- a claw commands sequence is represented by a structured block
--- of commands:
+-- A claw commands sequence is represented by a structured block
+-- of commands, generally of the following form:
 --
---      {1,2,3} desugars to 
---      [\[1] cmd \[2] cmd \[3] cmd] cmdseq
+--      {foo,bar,baz} desugars to 
+--      \[\[foo] cmd \[bar] cmd \[baz] cmd] cmdseq
 --
--- This function will return only a non-empty list.
-parseCmdSeq :: ClawCode -> Maybe [ClawCode] 
-parseCmdSeq = go [] . clawOps where
-    go cs (B0 c : CW w : more) | (w == wCmd) = go (c:cs) more
-    go cs [] | not (L.null cs) = return (L.reverse cs)
-    go _ _ = mzero
+-- However, escapes allow the command seq to be any block at all:
+--
+--      {/ foo bar, baz} desugars to
+--      \[foo bar \[baz] cmd] cmdseq
+--
+-- Sequence escapes are convenient for syntactic abstraction, but
+-- should be used sparingly in well written code.
+parseCmdSeq :: ClawCode -> [(ClawCode, Bool)] 
+parseCmdSeq = loop [] [] . clawOps where
+    esc es = (ClawCode (L.reverse es), True)
+    loop cs es (B0 cmd : CW w : more) | (w == wCmd) = loop cs' [] more where
+        cs' = if L.null es then (c:cs) else (c:e:cs)
+        c = (cmd, False) -- a normal command, not escaped
+        e = esc es       -- prior to command
+    loop cs es (e : more) = loop cs (e:es) more
+    loop cs es [] = fini cs es
+    fini cs [] = L.reverse cs            -- all done
+    fini cs es = L.reverse (esc es : cs) -- final escape
 
 -- | parse raw integer (e.g. #42) from lhs in the zipper-based
 -- reduction, i.e. we'll see #42 from the left hand side, parse
@@ -396,12 +412,15 @@ encBlock cc = BB.char8 '[' <> encode' cc <> BB.char8 ']'
 encTok :: Token -> BB.Builder
 encTok (Token tok) = BB.char8 '{' <> BB.byteString tok <> BB.char8 '}'
 
-encCmdSeq :: [ClawCode] -> BB.Builder
-encCmdSeq [] = error $ clawCodeErr "cmdseq must be non-empty"
+encCmdSeq :: [(ClawCode,Bool)] -> BB.Builder
+encCmdSeq [] = BB.string8 "{/}" -- i.e. escape empty command
 encCmdSeq (c0:cs) = BB.char8 '{' <> hd <> tl <> BB.char8 '}' where
-    hd = encode' c0 
-    tl = mconcat $ fmap ((sep <>) . encode') cs
+    hd = encCmd c0 
+    tl = mconcat $ fmap ((sep <>) . encCmd) cs
     sep = BB.char8 ',' <> BB.char8 ' ' 
+    encCmd (cmd, bEsc) = e <> c where
+        c = encode' cmd
+        e = if bEsc then BB.char8 '/' else mempty
 
 -- Claw's encoding of multi-line texts
 encMultiLineText :: Text -> BB.Builder
@@ -447,8 +466,9 @@ runDecoder dcs = decode' cc bWS ops txt where
 data DecoderCont 
     = DecodeDone
     | DecodeBlock IsEscBlock [ClawOp] DecoderCont  
-    | DecodeCmdSeq [ClawCode] [ClawOp] DecoderCont
+    | DecodeCmdSeq IsEscCmd RevCmdSeq [ClawOp] DecoderCont
     deriving (Show)
+type RevCmdSeq = ClawCmdSeq
 type IsEscBlock = Bool
 data DecoderState = DecoderState
     { dcs_text :: LazyUTF8.ByteString   -- ^ text to parse
@@ -473,23 +493,23 @@ decode' cc bWS r txt0 =
                     bType = if bEsc then B0 else BC
                     b = (bType . ClawCode . L.reverse) r
                 _ -> decoderIsStuck
-            ',' -> case cc of
-                DecodeCmdSeq cmds ops ccx -> decode' cc' True [] txt where
-                    cc' = DecodeCmdSeq cmds' ops ccx
+            ',' -> case cc of -- command sequence separator
+                DecodeCmdSeq bEsc cmds ops ccx -> decode' cc' True [] txt where
+                    cc' = DecodeCmdSeq False cmds' ops ccx
                     cmds' = currCmd : cmds
-                    currCmd = ClawCode (L.reverse r)
+                    currCmd = (ClawCode (L.reverse r), bEsc)
                 _ -> decoderIsStuck
             '}' -> case cc of
-                DecodeCmdSeq cmds ops cc' -> decode' cc' False (cs:ops) txt where
+                DecodeCmdSeq bEsc cmds ops cc' -> decode' cc' False (cs:ops) txt where
                     cs = CS $ L.reverse (lastCmd : cmds)
-                    lastCmd = ClawCode (L.reverse r)
+                    lastCmd = (ClawCode (L.reverse r), bEsc)
                 _ -> decoderIsStuck
 
             -- everything else requires a word separator
             _ | not bWS -> decoderIsStuck
 
             '[' -> decode' (DecodeBlock False r cc) True [] txt
-            '{' -> decode' (DecodeCmdSeq [] r cc) True [] txt
+            '{' -> decode' (DecodeCmdSeq False [] r cc) True [] txt
 
             '"' -> case LBS.elemIndex '"' txt of
                 Nothing -> decoderIsStuck
@@ -529,6 +549,14 @@ decode' cc bWS r txt0 =
                         let (r', txt') = loop (P0 op0 : r) escTxt in
                         decode' cc False r' txt'
                     _ -> decoderIsStuck -- not a recognized escape
+
+            '/' -> case cc of -- command sequence escape
+                DecodeCmdSeq False cmds ops ccx | L.null r -> 
+                    -- mark 'is escaped command' field
+                    let cc' = DecodeCmdSeq True cmds ops ccx in
+                    decode' cc' True [] txt
+                _ -> decoderIsStuck
+
             _ -> case decodeWordOrNumber txt0 of
                 Just (op, txt') -> decode' cc False (op:r) txt'
                 _ -> decoderIsStuck
@@ -650,5 +678,5 @@ instance IsString ClawCode where
                 error $ clawCodeErr $ "parse failure @ " ++ sLoc
 
 clawCodeErr :: String -> String
-clawCodeErr = (++) "Wikilon.ClawCode: " 
+clawCodeErr = (++) "Wikilon.Claw: " 
 

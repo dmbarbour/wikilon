@@ -7,9 +7,9 @@ module Wikilon.Dict.RenameWord
     ) where
 
 import Control.Exception (assert)
-import Data.Monoid
 import Data.Maybe (isNothing, isJust)
 import qualified Data.List as L
+import qualified Data.ByteString.Lazy as LBS
 import Wikilon.Dict.Head
 
 conditionsForSafeRename :: String
@@ -23,8 +23,8 @@ conditionsForSafeRename =
 
 -- a simple redirect is just `{%word}` as a complete definition
 isRedirectTo :: AODef -> Word -> Bool
-isRedirectTo def (Word w) = (def == wordTok) where
-    wordTok = mconcat ["{%", w, "}"]
+isRedirectTo def (Word w) = (def == wordTokDef) where
+    wordTokDef = LBS.fromChunks ["{%", w, "}"]
 
 -- | see conditionsForSafeRename; try to rename a word without damaging
 -- the current dictionary structure. This assumes that both the origin
