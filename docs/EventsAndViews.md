@@ -6,7 +6,6 @@ So far (June 2015) I've used a rather ad-hoc approach for Wikilon to provide vie
 
 One option is to push a lot more of the dictionary metadata into the dictionaries directly, allowing a useful sort of explicit reflection on the dictionary's history and state. However, I'm not sure this is a good idea.
 
-
 What I would like to do is divide the responsibilities more clearly:
 
 * one module that supports the stateful model and update events 

@@ -1,17 +1,35 @@
 
-# Communication between AVMs
+*Note:* *AVMs are no longer an essential concept for Wikilon.* AVMs were originally designed as a basis for modeling stateful web services in Wikilon. That is, Wikilon would host a set of AVMs separately from its dictionaries. However, I've since elected to favor *dictionary applications* even for stateful web services. AVMs remain a simple and powerful abstraction, potentially useful within dictionary apps, but they require no special attention.
 
-Wikilon will host a set of abstract virtual machines, which I'm calling AVMs.
+# Abstract Virtual Machines and Networks
 
-Each AVM has a user-defined [state](StateModels.md) and a step function typically bound to a [dictionary](BranchingDictionary.md) for live programming. AVMs and their state are *purely functional*. While AVMs lack internal concurrency, they should support reasonable levels for internal parallelism. Hierarchical AVMs should be entirely feasible, i.e. modeling a larger AVM in terms of simulating smaller ones with a purely functional network. However, the main idea with AVMs is that they should support scalable, concurrent, distributed implementations.
+An Abstract Virtual Machine (AVM) is a purely functional object consisting of a triple `(state,step,signal)`. In each step the AVM receives a incoming message, updates its state, and generates a list of outgoing messages according to the step function (i.e. `step :: (inmsg * state) → (outmsg list * state)`). Communication occurs on an abstract network in a convenient, implicitly structured manner with atomic batching, fair ordering, and real-time considerations. 
 
-For a while, AVMs will primarily be hosted by Wikilon instances. But, long term, I would like to develop a feature to compile a set of AVMs into a unikernel, system process, Docker app, etc.. 
+Messages consist of two parts, asymmetrically a `(context,content)` pair for incoming messages and a `(capability,content)` pair for outgoing messages. Contexts are local, transparent routing information and metadata. The `signal` is a context specifically for host-level signals (booting, restarts, error signals, environmental integration, etc.). Capabilities are global and opaque (frequently cryptographically sealed), and support the [object capability model](https://en.wikipedia.org/wiki/Object-capability_model) for security. When booted, an AVM is typically signaled with a `self` value, a capability constructor of type `context → capability`, plus a list of environmental capabilities.
 
-Modeling effects ultimately falls to the network layer. Some machines will provide adapters to outside resources (Redis, S3, AMQP, web services, printers, clocks, etc.), and AVMs can access those through the communications layer. In this sense, AVMs are perhaps similar to actors model. But AVMs are more constrained than actors. Significantly, AVMs generally cannot directly create new AVMs (there is no ether), and communications between AVMs will have enough structure to simplify reasoning about whole-system behavior.
+Real-world effects are expressed by communicating with a provided environment, e.g. with a video display or keyboard input device. There are at least two effective approaches to binding our environment to the real world: *message passing* or *state binding*. Message passing involves an external process receiving and sending messages on the abstract network. State binding involves externally monitoring AVM or network state and driving real-world behaviors based on that state. 
 
-Wikilon will provide an AVM-facing API in addition to a web-facing API.
+## Contrasting AVMs and Actors
 
-## Design Concerns and Desiderata
+There are similarities between AVMs and [actors model](https://en.wikipedia.org/wiki/Actor_model). 
+
+However, they also differ in important ways:
+
+1. AVMs cannot directly spawn. A spawn capability may be provided by the environment, but the primary role of spawning actors is instead fulfilled by `context`-based routing. New contexts are introduced via the `self :: context → capability` function. 
+
+2. AVMs don't implicitly know `self`. They are *usually* signaled with a `self` value, like a child being told his own name. This separation supports several strategies. For example, we can force all messages returning to `self` to be routed through intermediaries, and thus meter communications by an actor.
+
+3. The clean separation of `state` and `step` is convenient for live coding and debugging. We may monitor and manipulate the state directly, without being constrained to view state through a step function. We may update the step function, to tune behaviors without breaking any state.
+
+4. AVMs favor coarse-grained, hierarchical, acyclic state models. This is an emergent property, pressured by context-based routing and performance of purely functional updates. The resulting structure of AVM state is relatively easy to monitor, grok, and manipulate (for debugging and other purposes) compared to systems with fine-grained state and relationships. The disadvantage, OTOH, is that AVMs tend to require explicit memory management.
+
+5. AVMs assume a relatively benign network: messages between two machines are ordered, and messages are implicitly batched. We can effectively treat multiple messages in a batch as one larger message. The order in which batches are processed has stronger fairness constraints to support soft real-time requirements. By comparison, actors model assumes a hostile network where messages are processed in any order with unbounded delay.
+
+6. AVMs cannot rely on message-passing concurrency as the primary opportunity for parallel computation. This is a consequence both of coarse-grained state and atomic message batching. Certainly, if we have enough messages to keep multiple AVMs busy, we should take advantage of that. But AVMs will rely more heavily on deterministic parallel evaluation strategies.
+
+The differences between AVMs and actors add up to a very different programming experience, with different design patterns and styles. 
+
+## Design of AVMs: Concerns and Desiderata
 
 Summary List:
 
@@ -167,7 +185,7 @@ Naturally, we need a function to perform this sealing:
 
         type Self = Context → Capability
 
-An AVM must acquire access to a `Self` function at some point, otherwise it cannot model query-response patterns and callbacks and cannot secure its own state. A `Self` function is provided as part of the *AVM Life Cycle*.
+An AVM will generally acquire access to a `Self` function at some point. Otherwise it cannot model query-response patterns and callbacks, and cannot secure its own state. A `Self` function is provided as part of the *AVM Life Cycle*.
 
 *Aside:* If we model a hierarchical network, a local context may additionally include heuristic network-layer attributes: priority, idempotence, safety in the HTTP sense, etc.. No new features are needed.
 

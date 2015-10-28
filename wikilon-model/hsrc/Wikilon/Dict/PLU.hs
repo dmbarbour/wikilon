@@ -7,6 +7,9 @@
 -- * given a word, find a list of associated properties.
 -- * propagate invalidation and computation for properties.
 --
+-- Thoughts: maybe it would be better to model properties in a
+-- more generic module, separate from the dictionary? Something
+-- more like an incremental datalog?
 module Wikilon.Dict.PLU
     (
     ) where

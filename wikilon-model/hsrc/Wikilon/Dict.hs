@@ -149,11 +149,11 @@ instance VCacheable Def where
         if (maxBound == sz) then DefL <$> getVRef else
         DefS <$> getByteStringLazy (fromIntegral sz) 
 
--- reserving a byte so we may later include compression flags
+-- for now, just reserving a byte for compression options
 instance VCacheable BigAODef where
-    put (UDef def) = putWord8 0 >> put def
+    put (UDef def) = putWord8 1 >> put def
     get = getWord8 >>= \ ty -> case ty of
-        0 -> UDef <$> get
+        1 -> UDef <$> get
         _ -> fail $ dictErr $ "unrecognized compression model for large def " ++ show ty
 
 dictErr :: String -> String

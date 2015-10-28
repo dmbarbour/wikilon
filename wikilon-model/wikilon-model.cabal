@@ -55,6 +55,8 @@ Library
   Exposed-Modules:
     Wikilon
     Wikilon.Model
+    Wikilon.Model.Action
+    Wikilon.Model.Result
 
     Wikilon.Dict
     Wikilon.AODict
@@ -65,20 +67,27 @@ Library
 
     Wikilon.Dict.Set
     Wikilon.Dict.RLU
-    -- Wikilon.Dict.PLU
     Wikilon.Dict.Head
     Wikilon.Dict.Hist
     Wikilon.Dict.RenameWord
 
+    -- todo: figure out caching
+    -- Wikilon.Dict.PLU
     -- Wikilon.Hash
+
+    -- todo: figure out authority
     -- Wikilon.Auth
 
-
-    Wikilon.ABC.Pure
     Wikilon.Claw
-    Wikilon.ABC
 
     -- Wikilon.Clock
     Wikilon.Time
+
+  Other-Modules:
+
+    Wikilon.ABC.Pure
+    Wikilon.ABC.Fast
+
+    
 
   ghc-options: -auto-all -Wall 

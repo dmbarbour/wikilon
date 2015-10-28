@@ -57,6 +57,7 @@ newtype DictSet = DictSet (Trie DictRef)
 -- For cached computations, I want:
 --
 --  * reverse lookup index to find words by which tokens they use.
+--  * naive resource id for each word with transitive dependencies
 --  * fast access to precompiled words
 --  * index for fuzzy find for words by substring
 --  * quick list of undefined, cyclic, or badly typed words
@@ -67,6 +68,7 @@ newtype DictSet = DictSet (Trie DictRef)
 data DictRef = DictRef
     { d_head :: PVar DictHead
     , d_hist :: PVar DictHist   
+    -- , d_hash
     -- , d_auth :: PVar Auth
     } deriving (Typeable)
 
