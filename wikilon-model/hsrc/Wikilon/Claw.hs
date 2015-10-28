@@ -317,26 +317,20 @@ parseCmdSeq = loop [] [] . clawOps where
     fini cs [] = L.reverse cs            -- all done
     fini cs es = L.reverse (esc es : cs) -- final escape
 
--- | parse raw integer (e.g. #42) from lhs in the zipper-based
--- reduction, i.e. we'll see #42 from the left hand side, parse
--- back to the '#', and accumulate the operations on the way.
---
--- This uses a simple strategy. We obtain a list of numeric operations
--- for building the integer up to '#', then we process it.
+-- | Parse raw integer (e.g. #42) from a reverse-ordered list (24#).
+-- Return remaining operations and the integer so parsed, assuming
+-- one could be parsed. 
 parseIntR :: [ClawOp] -> Maybe ([ClawOp], ClawInt)
 parseIntR = run where
   run ops = 
-    collectR [] ops >>= \(fs, ops') ->
-    return (ops', composeList fs 0)
-  collectR fs (P0 op : ops)
-    | Just f <- intOp op = collectR (f:fs) ops -- include value
-    | (op == ABC_newZero) = Just (fs, ops) -- done
-    | abcWS op = collectR fs ops
+    collectR id ops >>= \(fn, ops') ->
+    return (ops', fn 0)
+  collectR fn (P0 op : ops)
+    | Just f <- intOp op = collectR (fn . f) ops -- include value
+    | ABC_newZero <- op = Just (fn, ops) -- done
+    | abcWS op = collectR fn ops
     | otherwise = Nothing
   collectR _ _ = Nothing -- 
-
-composeList :: [a -> a] -> a -> a
-composeList = L.foldr (flip (.)) id
 
 intOp :: ABC.PrimOp -> Maybe (ClawInt -> ClawInt)
 intOp (digitOp -> Just d) = Just step where
