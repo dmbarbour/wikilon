@@ -568,9 +568,11 @@ charToEscPrim c =
     guard (not (abcWS op)) >>
     return op
 
--- Obtain Claw text, assuming we've already already the \" prefix.
+-- Parse multi-line Claw text after having read the \" prefix.
+--
 -- This is similar to ABC text but we use `LF SP* \` to escape a line
--- and `LF SP* ~` to terminate the text.
+-- and `LF SP* ~` to terminate the text. In a successful parse, the
+-- next character after the text should be the terminating `~`.
 clawTakeText :: LBS.ByteString -> (Text, LBS.ByteString)
 clawTakeText = first (mconcat . L.reverse) . t [] where
     t r s = case LBS.elemIndex '\n' s of
