@@ -413,7 +413,6 @@ encTok :: Token -> BB.Builder
 encTok (Token tok) = BB.char8 '{' <> BB.byteString tok <> BB.char8 '}'
 
 encCmdSeq :: [(ClawCode,Bool)] -> BB.Builder
-encCmdSeq [] = BB.string8 "{/}" -- i.e. escape empty command
 encCmdSeq (c0:cs) = BB.char8 '{' <> hd <> tl <> BB.char8 '}' where
     hd = encCmd c0 
     tl = mconcat $ fmap ((sep <>) . encCmd) cs
@@ -421,6 +420,7 @@ encCmdSeq (c0:cs) = BB.char8 '{' <> hd <> tl <> BB.char8 '}' where
     encCmd (cmd, bEsc) = e <> c where
         c = encode' cmd
         e = if bEsc then BB.char8 '/' else mempty
+encCmdSeq [] = encCmdSeq [(mempty,True)]
 
 -- Claw's encoding of multi-line texts
 encMultiLineText :: Text -> BB.Builder

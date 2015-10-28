@@ -86,12 +86,12 @@ Commands are captured as first-class blocks. The sequence is represented by a bl
         cmd      :: (command * (st * (handler * 1))) → (st * (handler * 1)))
         cmd = \lw^z$
 
-Claw sequences additionally support an *sequence escape*, allowing injection of arbitrary code into the sequence. This is expressed by prefixing any command by `/`. For example:
+Claw additionally supports an explicit *sequence escape*, enabling injection of arbitrary code into the underlying sequence block. This is currently expressed by prefixing a command by `/`. For example:
 
         {/foobar, baz}  desugars to
         \[foobar \[baz] cmd] cmdseq
 
-The motivation for sequence escapes is convenient syntactic abstraction, for example extracting subsequence `foo,bar` into a separate word `foobar`. Syntactic abstraction is a valuable property for Awelon project in general, and it would be a tragedy to lose it for subprograms expressed as subsequences. Of course, escapes are not aesthetically pleasing and should be used sparingly. Developers should be encouraged to favor composable semantics. If there is some type-dependent means of combining `foo,bar` into a single command, that would be preferable.
+The motivation for sequence escapes is convenient syntactic abstraction, for example extracting subsequence `foo,bar` into a separate word `foobar`. Syntactic abstraction is an important property for Awelon project, though I encourage developers to favor composable semantic abstractions (such that `foo,bar` may be composed in a type-dependent way into a `foobar` command, no escapes required).
 
 *Note:* `{}` is a sequence with one empty command. The empty command sequence is `{/}`.
 
