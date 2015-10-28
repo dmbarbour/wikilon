@@ -61,7 +61,7 @@ safeRenameWord origin target dh =
     --   update the target word if necessary
     let delOriginWord = (`dictDelete` origin) in
     let updTargetWord = 
-            if (bOriginRedirectsToTarget || bIdenticalDefinitions) 
+            if (bIdenticalDefinitions || bOriginRedirectsToTarget) 
                 then id 
                 else case defOrigin of
                     Just def -> \ d -> dictInsert d target def 
