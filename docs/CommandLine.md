@@ -40,27 +40,24 @@ For round-tripping, the form shall be preserved, e.g. we don't lose the zeroes i
 
         42      desugars to     \#42 int
         "foo"   desugars to     \"foo
-                                ~ lit
+                                 ~ lit
 
 This approach to literal values is easily extensible with new notations. I would like to explore vectors, matrices, association lists, and other formats. However, for the moment I'll focus on just the five forms indicated above: ratio, decimal, exp10, integer, literal. 
 
-#### Claw Multi-Line Literals
+#### Claw Multi-Line Literals and Alternatives
 
-Claw is optimized for command line interfaces, and multi-line literals aren't a nice fit. Claw makes inline literals easy enough, e.g. `"foo"` or `"Hello, World!"`. This is sufficient for simple labels and strings. If desirable, it isn't difficult to write a function that will explicitly rewrite `"\q"` and `"\n"` sequences into double quotes and newlines. If multi-line literals are necessary, the recommendation is to define them in their own word, such that we can access them as frequently as desired from one-liner programs. 
-
-Claw uses a slightly different encoding for its multi-line than ABC. In particular, where ABC uses `LF SP` sequences to escape the LF, Claw uses a `LF SP* \` sequence (with SP* meaning zero or more spaces). And where ABC uses `LF ~` to terminate the text, Claw uses `LF SP* ~`. 
+As a universal view, Claw provides a syntax for multi-line literals. 
 
         \"This is an example
          \multi-line literal
          \with "double quotes".
-         ~
+        ~
 
-This has two advantages over the ABC text encoding:
+Claw uses `LF SP* \` to escape an LF and `LF SP* ~` to terminate (where ABC respectively uses `LF SP` and `LF ~`). This allows Claw to be more flexibly formatted and indented. It also ensures that blank lines of text are visible, and that an incomplete text literal is easily recognized. 
 
-1. flexible indentation and code formatting
-2. escaped 'blank lines' are clearly visible
+However, this is not very aesthetically pleasing (at least to my eyes), and it would be a pain to write in a console or REPL. Multi-line literals simply, fundamentally, aren't a nice fit for a command line interface. Where large literals are necessary, my recommendation is instead to define them using a separate word and access them by name. We can provide a specialized view for reading and editing text-mostly definitions. 
 
-Like ABC text, Claw literals have no built-in escapes other than LF.
+Inline literals are sufficient for most command line use cases, including labels like `"foo"`, test strings like `"Hello, World!"`, micro-DSLs like regular expressions. While Claw doesn't have built-in character escapes, it isn't difficult to define a function to rewrite substrings like `"\n"` and `"\q"` to model escapes.
 
 ### Claw Blocks
 
@@ -77,16 +74,16 @@ A command language sequence is a sequence of commands (even `42` is a command). 
 The semantics for claw sequences is:
 
         {foo,bar,baz}   desugars to
-        \[\[foo] cmd \[bar] cmd \[baz] cmd] cmdseq
+        [\[foo] cmd \[bar] cmd \[baz] cmd] cmdseq
 
-Commands are captured as first-class blocks. The sequence is represented by a block that operates uniformly on each command. The behavior of the sequence depends primarily on the definition of `cmd`. For example, with `cmd = \lV` we would push each command onto a list. With `cmd = \vr$c` we would inline each command (equivalent to `[foo bar baz]`). With `cmd = \%#1+` we could simply count commands. But the recommended definition is `cmd = \lw^z$`, which allows us to parameterize the command handler and some state. 
+This treats both commands and sequences as first-class values. The commands are individual blocks, while the sequence is represented by a block that operates sequentially and uniformly upon each command. This has a nice property: composition of sequence blocks is equivalent to concatenation of sequences. However, we could easily rewrite to alternative representations (e.g. with `cmd = \lV` we would push each command onto a list). The recommended definition is `cmd = \lw^z$`, which allows us to provide a command handler.
 
-        sequence :: (st * (handler * 1)) → (st * (handler * 1))
         handler  :: (command * st) → st
+        sequence :: (st * (handler * 1)) → (st * (handler * 1))
         cmd      :: (command * (st * (handler * 1))) → (st * (handler * 1)))
         cmd = \lw^z$
 
-Claw additionally supports an explicit *sequence escape*, enabling injection of arbitrary code into the underlying sequence block. This is currently expressed by prefixing a command by `/`. For example:
+Claw additionally supports an explicit *sequence escape* syntax, enabling injection of arbitrary code into a sequence block. This is currently expressed by prefixing a command by `/`. For example:
 
         {/foobar, baz}  desugars to
         \[foobar \[baz] cmd] cmdseq

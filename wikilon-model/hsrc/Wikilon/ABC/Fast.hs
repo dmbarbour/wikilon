@@ -8,6 +8,8 @@
 -- * eliminates interpreter searching of bytestring
 -- * larger-than-memory values and structure sharing
 -- * ABCD-like extended dictionary of accelerated ops
+--
+-- I'm still contemplating whether I should model lazy evaluations.
 -- 
 module Wikilon.ABC.Fast
     ( ABC(..)
@@ -72,7 +74,33 @@ data V
     | X (VRef V) Flags  -- external value resource
     deriving (Eq, Typeable)
 
--- to consider: support for binaries, copyable and droppable wrappers
+-- to consider: support for binaries, fast copyable/droppable, laziness
+--
+-- Representing evaluation errors is a possibility, though could easily
+-- be modeled under `S "error"`. This would be convenient for allowing
+-- computation with some errors, though might not be something we want
+-- on a normal basis.
+--
+-- 
+--
+-- Laziness, done right, would probably need me to model a hole:
+--
+--  type Hole = PVar (V, Maybe ABC)
+--
+-- This would allow me to compute a value once and reuse it. But the
+-- disadvantage would be the need to 
+--  
+--
+-- laziness would express a value in terms of the current value and the
+-- continuation (as ABC). The real question is whether or not to use a
+-- PVar, which could support background computations.
+--
+--
+--  Z V ABC
+--  Z (PVar (V, ABC))
+--
+-- ABC can directly represent a continuation. It is feasible to partially
+-- run a lazy evaluation and extract some content for further evaluation.
 
 -- | Accelerated operations corresponding to common substrings of
 -- Awelon Bytecode (and hence to common functions). These encode

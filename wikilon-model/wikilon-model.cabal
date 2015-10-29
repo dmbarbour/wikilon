@@ -71,6 +71,9 @@ Library
     Wikilon.Dict.Hist
     Wikilon.Dict.RenameWord
 
+    Wikilon.ABC
+    Wikilon.ABC.Pure
+    Wikilon.ABC.Fast
     -- todo: figure out caching
     -- Wikilon.Dict.PLU
     -- Wikilon.Hash
@@ -82,12 +85,5 @@ Library
 
     -- Wikilon.Clock
     Wikilon.Time
-
-  Other-Modules:
-
-    Wikilon.ABC.Pure
-    Wikilon.ABC.Fast
-
-    
 
   ghc-options: -auto-all -Wall 

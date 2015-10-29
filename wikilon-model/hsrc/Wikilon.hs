@@ -1,4 +1,3 @@
-{-# LANGUAGE RankNTypes #-}
 -- | Root (or prelude) for Wikilon library.
 module Wikilon
     ( loadWikilon
