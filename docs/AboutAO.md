@@ -90,7 +90,27 @@ AO favors a far more simple and robust technique: a dictionary contains all depe
 
 ### Regarding Large Definitions
 
-Definitions can potentially grow very large, especially with embedded texts or with dictionary applications. However, huge definitions are not recommended, as they hinder incremental computations, reuse, memory management. Developers may receive warnings for definitions larger than some heuristic threshold, e.g. one megabyte. Dissolving large definitions into several smaller ones isn't especially difficult, e.g. due to the concatenative structure of AO.
+Definitions can potentially grow very large, especially when containing embedded texts or with dictionary applications. However, huge definitions are not recommended, as they hinder incremental computations, reuse, memory management. At the moment, I'm not suggesting any hard caps for definition sizes, but raising some warnings or flags for large definitions is recommended.
+
+### Optimizing Dictionaries: Hidden, Opaque, and Frozen Words
+
+Words in an AO dictionary provide a basis for mutable meaningful structure, modularity, and structure sharing. The mutable meaningful structure allows AO dictionaries to serve as a platform for live coding and dictionary applications. 
+
+Unfortunately, the presence of mutable meaningful structure interferes with direct optimization at the dictionary layer. This isn't a major problem: a compiler could maintain a cache of optimized definitions separate from the dictionary. But there are some opportunity costs with respect to separating the optimizer, redistributing optimized code, and generalizing automatic  management of dictionary applications. 
+
+To recover the lost opportunities, we can enable developers and dictionary applications to *declaratively relax* the constraints on the optimizer for useful subsets of the dictionary. I propose the following:
+
+* A word may be declared **hidden** to relax the requirement for stable external reference. An optimizer is free to delete a hidden word if it has no clients. This enables garbage collection of dictionaries.
+* A word may be declared **opaque** to relax the requirement for stable structure of its definition. An optimizer is free to rearrange, refactor, or reorganize the definition of an opaque word in ways that preserve its behavior. 
+* A word may be declared **frozen** to relax the requirement for mutable behavior. An optimizer is free to inline definition of a *frozen* word into the definition of an *opaque* word. A frozen word is *deep-frozen* if all transitive dependencies are also frozen.
+
+To declare a list of attributes, I propose prefixing any definition as follows:
+
+        [{&hidden}{&opaque}{&frozen}]%
+
+This structure is easily preserved on export, easily recognized and handled by optimizers, and trivially eliminated when simplifying code. It's extensible with new attributes (categories, relations, etc.). A reverse token lookup index will efficiently find all words with a given attribute. The main disadvantage is that it's a bit noisy.
+
+Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment might require explicitly un-freezing the word to modify its behavior.
 
 ## Constraints on Words and Definitions
 

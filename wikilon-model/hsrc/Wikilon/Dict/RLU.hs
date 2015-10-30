@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 -- | Support for a reverse token lookup index associated with a 
 -- dictionary. Find where any token or word is used from the whole
--- dictionary. 
+-- dictionary.
 module Wikilon.Dict.RLU
     ( DictRLU
     , rluCreate

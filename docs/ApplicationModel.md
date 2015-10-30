@@ -15,21 +15,41 @@ A **dictionary application** represents all of its state within the AO dictionar
 * live coding and continuous testing become implicit
 * dictionary compression of state is uniformly available
 * everything is visible and indexable for debugging
-* fits very nicely with RESTful application models
 
-The disadvantage is that we cannot directly model applications that *push* information. There is nowhere for output events to go. An external agent must *pull* information from the dictionary, or occasionally update it. Fortunately, it is possible to express almost any application in terms of pulling if we assume some technology for polling (including Comet long-polling). 
+The disadvantage is that our applications cannot directly *push* information. This can be mitigated in many cases by using some simple strategy to pull information (polling, long-polling, Comet, subscription, etc.) and by relying on external agents to push updates occasionally. But it does force us to favor a more RESTful architectural style. 
 
-The *command pattern* or append-only log is widely useful for dictionary applications. 
-
-. Expressed within a dictionary, this might look something like:
+The *command pattern* or append-only log is widely useful for dictionary applications. Expressed within a dictionary, this might look something like:
 
         @foo.v0 (init foo)
         @foo.v1 {%foo.v0}(command to update foo)
         @foo.v2 {%foo.v1}(another update command)
         @foo.v3 {%foo.v2}(yet another command)
-        @foo {%foo.v3}
+        @foo {%foo.v3}{%fooType}
 
-With this pattern, we gain several additional features: unlimited undo, universal cloning or forking, cache-friendly computations for common update patterns, visible command history for refactoring and abstraction, access to historical states for debugging or forking. Working with very large objects is feasible
+With this pattern, we gain several features: unlimited undo, uniform cloning, back-in-time debugging, visible command histories for abstraction and refactoring, cache-friendly computations for common update patterns (i.e. assuming we mostly add commands and undo or tweak recent commands). Taken together with an annotation to stow large values into VRefs, it is feasible to construct truly massive objects (e.g. filesystems, databases, game worlds) within a single dictionary object without massive RAM overheads.
+
+Keeping a complete history is reasonable for many applications, especially those primarily driven by coarse-grained explicit human interactions (like a forum or mailing list). 
+
+But if histories grow too large for comfort, there are some strategies we can apply to shrink them. We could rebase objects, e.g. losing the first K updates and combining them into a new initial state (modeling a limited history window). We could perhaps combine every other update, simplify, and try to refactor common patterns (an exponential decay model). 
+
+compute a current version.
+
+If a history threatens to grow to ten thousand words, that might be a bit too much for comfort. We could perhaps mitigate this by occasionally rebasing the object (e.g. drop the first K versions, model a limited history window) or by combining every other update and simplifying or refactoring (e.g. exponential decay, losing intermediate states), or by trying something different (e.g. a log-structured merge tree instead of an append-only log). But 
+
+
+For busy objects, where histories grow to tens of thousands of steps, this may become far more than is reasonable and comfortable. This could be mitigated. For example, we could could rebase objects, take a snapshot of its state, lose the history that led to it. Or we could try exponential decay, e.g. periodically cut large histories in half, combine every other command, apply simplification and refactoring techniques (dictionary compression). It is also feasible to try some alternative designs that more naturally allow eliminating some history, e.g. perhaps take inspiration from a structured log merge trees instead of the append-only log.
+
+
+
+ might have some absurd storage overheads in the long run, even if we only preserve the more frequently used versions in the cache. This  by 
+
+This might be mitigated by 
+
+Interestingly, potential exists to model *very large* applications. In particular, 
+
+Further, for Wikilon I plan to support a `{&stow}` annotation, which allows us to push large values to disk (i.e. leveraging VCache VRefs). 
+
+
 
 
 We can view historical states, or perhaps even animate them. Working with *very large* values is feasible if we support something like a `{&stow}` annotation to push content out of main memory.
