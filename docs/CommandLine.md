@@ -107,15 +107,16 @@ For most use cases, commands apply only to one context. Hence, our primary names
 
 To cover these exceptional cases, I'll use a simple namespace annotation.
 
-A namespace annotation will be indicated by the prefix character `#`, which does not appear in words. For example, `#bar:` would indicate that the following content is in namespace `bar:`. The namespace applies until the end of the current block or command stream. A block such as `[#bar: 42 foo]` would indicate a block that internally uses namespace `bar:` regardless of the surrounding context. To simplify round-tripping, namespace annotations will be recorded as annotations in the expanded bytecode, perhaps as `{&ns:bar:}`.
+A namespace annotation will be indicated by the prefix character `#`, which does not appear in words. For example, `#bar:` would indicate that the following content is in namespace `bar:`. The namespace applies until the end of the current block or command stream. A block such as `[#bar: 42 foo]` would indicate a block that internally uses namespace `bar:` regardless of the surrounding context. To simplify round-tripping, namespace annotations will be recorded as attributes in the expanded bytecode, perhaps as `{&ns:bar:}`.
 
-Claw supports only one namespace for any volume of code. 
+Claw supports only one namespace per volume of code.
 
 There is never any ambiguity, no question which `foo` you're using. The expansion function is simple, does not depend on search or the state of the dictionary. The disadvantage is that, when deriving a new context from an old one, the new namespace won't automatically inherit words associated with the prior context. This creates a barrier that hinders development and experimentation. This concern could feasibly be mitigated with automatic refactoring tools, see *Namespace Inheritance* below. 
 
 Words outside the current namespace are also accessible via `\{%word}` tokens.
 
 A weakness of namespaces is that they can hurt refactoring. Developers must be careful to not move code into a different namespace, e.g. via copy and paste. We could solve this by performing copy-paste on the AO/ABC expansion instead of the claw code, and perhaps record the namespace associated with the selection. Operating at the AO or ABC layers doesn't have any issues with context.
+
 
 ### Claw Semantics and Round Tripping
 

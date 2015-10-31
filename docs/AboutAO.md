@@ -98,7 +98,7 @@ Words in an AO dictionary provide a basis for mutable meaningful structure, modu
 
 Unfortunately, the presence of mutable meaningful structure interferes with direct optimization at the dictionary layer. This isn't a major problem: a compiler could maintain a cache of optimized definitions separate from the dictionary. But there are some opportunity costs with respect to separating the optimizer, redistributing optimized code, and generalizing automatic  management of dictionary applications. 
 
-To recover the lost opportunities, we can enable developers and dictionary applications to *declaratively relax* the constraints on the optimizer for useful subsets of the dictionary. I propose the following:
+To recover the lost opportunities, we can enable developers and dictionary applications to *declaratively relax* the constraints on an assumed dictionary optimizer for useful subsets of the dictionary. I propose the following:
 
 * A word may be declared **hidden** to relax the requirement for stable external reference. An optimizer is free to delete a hidden word if it has no clients. This enables garbage collection of dictionaries.
 * A word may be declared **opaque** to relax the requirement for stable structure of its definition. An optimizer is free to rearrange, refactor, or reorganize the definition of an opaque word in ways that preserve its behavior. 
@@ -108,7 +108,7 @@ To declare a list of attributes, I propose prefixing any definition as follows:
 
         [{&hidden}{&opaque}{&frozen}]%
 
-This structure is easily preserved on export, easily recognized and handled by optimizers, and trivially eliminated when simplifying code. It's extensible with new attributes (categories, relations, etc.). A reverse token lookup index will efficiently find all words with a given attribute. The main disadvantage is that it's a bit noisy.
+This structure is preserved on export, easy for an optimizer to recognize and handle, and trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (categories, relations, etc.) with no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
 
 Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment might require explicitly un-freezing the word to modify its behavior.
 
