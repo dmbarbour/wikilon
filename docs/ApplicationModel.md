@@ -9,6 +9,8 @@ Primary concerns as a software platform include *state* and *security*.
 
 I have decided to focus Wikilon exclusively on *dictionary applications*. 
 
+Wikilon will support an ad-hoc variety of dictionary applications. I'd like to eventually 'generalize' the idea, i.e. by constructing one or more application models that can express the other applications. This is feasible, but the details will need to wait until dictionaries are more mature.
+
 ## Modeling State with Dictionary Applications
 
 A **dictionary application** represents all of its state within the AO dictionary. This representation of state must be conveniently structured, well typed, and meaningfully executable. Structure includes both bytecode and relationships between words. Dictionary applications offer many powerful benefits: 
@@ -45,25 +47,35 @@ As a security use case, I imagine modeling a game (perhaps a multi-user dungeon)
 
 Modeling the game world state is feasible with dictionary applications. The greater challenge, then, is controlling the players. A viable option would be to constrain access to the dictionary through an application interface, at least for some subset of users who are not administrators of that dictionary.
 
-## Cross-Compilation of Applications
+## Extraction of Dictionary Applications
 
-Two levels to consider:
+As a development environment, Wikilon must support compilation of applications to run on a desktop, android phone, an independent web service, and so on. Ideally, these are the same applications that we debug within Wikilon, but they are not entangled with the dictionary after extraction. Dictionary objects are a good fit here. An interesting possibility is to extract an object in media res. We must cross-compile this object into something we may run on another machine, and perhaps optimize for the target environment.
 
-* extracting applications from the dictionary
-* cross-compilation of dictionary applications
+Usefully, the idea of extracting an application fits nicely with other 'views' of the dictionary. It's just that we're 'viewing behavior' this time, e.g. extracting by cross-compiling to a language like JavaScript or C or x86. In terms of User Interface, a compiler might trivially be a URL that we HTTP GET from Wikilon (with the normal caching).
 
+The idea of extraction might also apply to non-interactive targets, such as PDF documents and JPEG images and MP3 music files.
 
+## (Rejected) Effects Models for Dictionary Applications
 
+Dictionary applications restrict developers in how they model effects. However, there are a lot of effects that fit within the constraints of dictionary applications. Some possibilities: 
 
+* try a computation and handle type errors
+* constrain a computation to so many steps
+* support distributed or parallel computation
+* cryptographic value sealing and unsealing
+* uniqueness resources and design patterns
+* reflect on a block and view its content
+* accelerate graphics, physics, collections
+* model constraint or unification variables
 
+In context of AO, our environment is naturally represented by a value provided to our application. Access to effects is provided together with this value, e.g. perhaps an association list that includes values like `[{try}]` and `[{reflBlock}]`. Or perhaps the environment is modeled by a powerblock or something else entirely. 
 
+I expect to experiment with many different environment models. To indicate which environment our application is expecting, we could apply an unsealer like `{.env:std.v1}`. This would indicate a name and version, imply an initial value. It is feasible to develop configurable environment models that further receive an executable specification. Thus, even if we want to shift specification into the dictionary, it seems sufficient to start with just a name to infer or inject an environment value.
 
+If we implement environments, Wikilon would recognize and implement at least a few environment models. 
 
-One basic mode for Wikilon as a development platform is to *compile* applications for use elsewhere. In this case, we specify the compiler and application - each of them functions - in a URL for HTTP GET. Typically, these links will be easily constructed. We may also need to specify a dictionary and version number. The 'build' process is implicit, highly cacheable, and performed by the Wikilon server.
+However, I'm concerned that a command-pattern of interactions with an environment won't compress very nicely. Naturally, if we depend on the environment value, then we must allow that our behavior will change when the environment changes. Hence, we're forced to record the entire history of commands, unless we have some way to combine and compress those sequences of commands.
 
-For these apps, nothing is directly run on Wikilon other than the compiler function, which is pure or close enough (maybe leveraging memoization or ABC's linker model). There are no stateful requirements other than maintenance of the dictionary. There is no entanglement between the dictionary and the application after compilation. The application is downloaded for use elsewhere.
+Without effects, we can still accelerate computations via ABCD-like accelerators and annotations. We can annotate constraints on computations, quotas and similar. We can functionally model constraint or unification variables. The main items we cannot handle without effects are error handling and reflection on blocks. But error handling isn't critical, since we can always push that up to the dictionary layer (report a type error) and effectively forbid erroneous interactions with dictionary apps. And reflection on blocks generally isn't critical because blocks are opaque massive structures anyway.
 
-The encoding of functions in a URL can be pretty straightforward, perhaps using base64 if we need more than a single word. Any user-defined syntax is feasible in a base64 encoding. By encoding ad-hoc functions in URLs, it becomes easier to share or bookmark content up to about the size of an AO module or command line, without always being asked to generate a new wiki page.
-
-"Application" here doesn't need to be executable. It might be documentation, music, video, etc.. It's just something that requires an additional compilation pass after we hit the ABC bedrock.
-
+So, my current resolution is to eschew modeling effects within dictionary apps. Maybe I'll revisit this issue later.
