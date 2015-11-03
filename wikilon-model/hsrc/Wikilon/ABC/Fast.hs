@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable, OverloadedStrings, ViewPatterns #-}
 -- | While Awelon Bytecode may be naively interpreted, doing so is
--- not efficient. Wikilon shall pre-process bytecode to support many
--- performance tweaks:
+-- not efficient. Wikilon must pre-process and simplify bytecode to
+-- support many performance tweaks:
 --
 -- * bytecode held in relatively compact bytestrings
 -- * embedded and quoted values are pre-processed
@@ -43,43 +43,38 @@ import Wikilon.Token
 -- | Wikilon's internal representation of Awelon Bytecode is an
 -- encoding of [Op]. The stack of quoted values allows rapid
 -- reuse of values and quotation.
-data ABC = ABC
+data ABC val = ABC
     { abc_code :: LBS.ByteString    -- ABC & Extensions
-    , abc_data :: [V]               -- matched by '_' in code
+    , abc_data :: [val]             -- matched by '_' in code
     , abc_toks :: [Token]           -- matched by '!' in code
     } deriving (Eq, Typeable)
 
 -- | A simple ABC operation, with potential for accelerated
 -- operations corresponding to common sequences of ABC, and
 -- for ad-hoc values (rather than just texts and blocks).
-data Op
+data Op val
     = ABC_Prim  !PrimOp     -- the basic 42 ABC operators
     | ABC_Ext   !ExtOp      -- ABCD-like performance extensions
-    | ABC_Val   V           -- a quoted value, block, or text
+    | ABC_Val   val         -- a quoted value, block, or text
     | ABC_Tok   !Token      -- e.g. value sealers, annotations
     deriving (Eq, Typeable)
 
--- | Values that can be represented in ABC, with a simple
--- extension for larger than memory values. Later, I might
--- add additional extensions for fast vector and matrix
--- processing and similar.
-data V 
-    = N !Integer        -- number (integer)
-    | P V V             -- product of values
-    | L V | R V         -- sum of values (left or right)
-    | U                 -- unit value
-    | B ABC Flags       -- block value
-    | S !Token V        -- sealed and special values
-    | T !Text           -- embedded text value
-    | X (VRef V) Flags  -- external value resource
-    deriving (Eq, Typeable)
-
--- to consider: support for binaries, fast copyable/droppable, laziness
+-- consider support for: binaries, vectors, fast copy/drop, laziness, stacks 
 --
--- Representing evaluation errors is a possibility, though could easily
--- be modeled under `S "error"`. This would be convenient for allowing
--- computation with some errors, though might not be something we want
--- on a normal basis.
+-- Some of these may require dedicated accelerators before I proceed. 
+--
+-- I think stacks and laziness might be treated instead as special optimization
+-- cases. 
+, fast copyable/droppable, laziness
+--
+-- for simplification, at least, it seems useful to consider intermediate
+-- values including 'lazy computations' and 'stacks-frames'. But I don't
+-- strictly need to extend the value types to support simplification. I 
+-- could wrap them instead, during simplification only. 
+--
+-- to represent runtime errors could be done with sealed values, easily
+-- enough. This would be convenient for allowing computation with some
+-- errors, though might not be something we want on a normal basis.
 --
 -- 
 --
@@ -109,7 +104,9 @@ data V
 -- In general, ExtOp will use UTF8 encoding. But it may include some
 -- ASCII characters for the more common extended operations.
 data ExtOp
-    = ExtOp_Inline -- i; vr$c, also for tail calls
+    = ExtOp_i -- i; vr$c, also for tail calls
+    | ExtOp_u -- u; vvrwlc; intro unit as first in pair
+    | ExtOp_U -- U; VVRWLC; intro void as left in sum
     -- I'll probably want:
     --  safe copy and drop (untested)
     --  high performance data plumbing
@@ -123,7 +120,9 @@ data ExtOp
 -- | Table of extended operations and semantics, extOpTable.
 extOpTable :: [(ExtOp, Char, Pure.ABC)]
 extOpTable =
-    [(ExtOp_Inline, 'i', "vr$c")
+    [(ExtOp_i, 'i', "vr$c")
+    ,(ExtOp_u, 'u', "vvrwlc")
+    ,(ExtOp_U, 'U', "VVRWLC")
     ]
 
 -- todo: build a proper lookup array

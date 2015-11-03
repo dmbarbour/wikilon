@@ -73,7 +73,11 @@ Library
 
     Wikilon.ABC
     Wikilon.ABC.Pure
-    Wikilon.ABC.Fast
+
+
+    -- Wikilon.ABC.Fast
+    -- Wikilon.Value
+
     -- todo: figure out caching
     -- Wikilon.Dict.PLU
     -- Wikilon.Hash
