@@ -42,29 +42,13 @@ Editable views needn't be extensions of claw, of course. Though, for user conven
 
 Alternatively, we can move beyond parsing and editing structure within a string of bytecode and focus instead on dictionary-level structures between words. This can allow us to render and manipulate *semantic* content - embedded databases and graphs and objects - rather than local syntactic structure. See *Dictionary Applications and Objects* below.
 
-### Dictionary Applications and Objects
+### Dictionary Applications
 
-A dictionary application is an application whose state is hosted within a healthy dictionary. This is similar to editable views of bytecode, except it may involve multi-word structures and more flexible computations. Dictionary application state is easily imported, exported, and refactored to discover and abstract common patterns. Dictionary applications have a close relationship to live coding.
+A dictionary application is an application whose state is hosted within a healthy dictionary. This includes editable views of bytecode, but may further leverage multi-word structures, cached computations, and automatic maintenance. Dictionary applications naturally support portability, persistence, versioning, unlimited undo, refactoring, incremental computation, caching, continuous testing, live coding, and RESTful designs (external agents pulling information or pushing updates).
 
-Dictionary applications will utilize: 
+Dictionary applications together with long-polling or subscription is capable of modeling almost any application. Documents, databases, REPL sessions, multi-user dungeons, etc. are all viable. A few relevant patterns are discussed under [Wikilon's application model](ApplicationModel.md). With cache-friendly update patterns, performance may be acceptable.
 
-* conventions for names, types, code structure 
-* compilers, caches, indexes for performance
-* external services to provide editable views
-
-Code structure includes editable views but extends to conventions that involve multiple words. As an example, a variant on the [command pattern](https://en.wikipedia.org/wiki/Command_pattern) is recommended for modeling 'mutable' objects in a dictionary. Encoded in a dictionary, this pattern looks something like:
-
-        @foo.v0 (construct initial foo)
-        @foo.v1 {%foo.v0}(command to update foo)
-        @foo.v2 {%foo.v1}(another command to update foo)
-        @foo.v3 {%foo.v2}(yet another command to update foo)
-        @foo    {%foo.v3}{%fooType}
-
-An 'object' in this case might be a document, a graph, a database, a REPL session, or anything else where updates can reasonably be modeled as a stream of commands. Old versions of the object remain available for history and forking. The commands are logged and available for abstraction. Automatic refactoring might rebase an object or gradually eliminate historical versions that aren't referenced elsewhere. With a good cache, updates to the object might be little more expensive than applying one more command.
-
-The command pattern is simple, flexible, and broadly generic. But one might imagine useful patterns based on append-only threaded forums and mailing lists, mergeable structures, or more conventional memory cell manipulations. In some cases, it might be simple and sufficient to rely on editable views and structured DSLs, with the application directly parsing and editing words. It's up to application architects to find effective ways to encode state in a healthy dictionary.
-
-With dictionary apps, we can expect some dictionaries to grow into rich ecosystems with millions of words modeling thousands of forum threads, edit sessions, wikis, databases, spreadsheets, and more. Quantity has a quality of its own.
+Many dictionary applications are amenable to *extraction*, e.g. cross-compiling application objects for an Android phone or JavaScript+DOM. An extraction service is effectively another dictionary application. Extraction of dictionary applications *in media res* supports an implicit debug mode, automatic testing of old application sessions, interactive construction of applications from prototypes, and fulfills the role of conventional applications compilers.
 
 ## Development 
 
@@ -91,26 +75,6 @@ AO favors a far more simple and robust technique: a dictionary contains all depe
 ### Regarding Large Definitions
 
 Definitions can potentially grow very large, especially when containing embedded texts or with dictionary applications. However, huge definitions are not recommended, as they hinder incremental computations, reuse, memory management. At the moment, I'm not suggesting any hard caps for definition sizes, but raising some warnings or flags for large definitions is recommended.
-
-### Optimizing Dictionaries: Hidden, Opaque, and Frozen Words
-
-Words in an AO dictionary provide a basis for mutable meaningful structure, modularity, and structure sharing. The mutable meaningful structure allows AO dictionaries to serve as a platform for live coding and dictionary applications. 
-
-Unfortunately, the presence of mutable meaningful structure interferes with direct optimization at the dictionary layer. This isn't a major problem: a compiler could maintain a cache of optimized definitions separate from the dictionary. But there are some opportunity costs with respect to separating the optimizer, redistributing optimized code, and generalizing automatic  management of dictionary applications. 
-
-To recover the lost opportunities, we can enable developers and dictionary applications to *declaratively relax* the constraints on an assumed dictionary optimizer for useful subsets of the dictionary. I propose the following:
-
-* A word may be declared **hidden** to relax the requirement for stable external reference. An optimizer is free to delete a hidden word if it has no clients. This enables garbage collection of dictionaries.
-* A word may be declared **opaque** to relax the requirement for stable structure of its definition. An optimizer is free to rearrange, refactor, or reorganize the definition of an opaque word in ways that preserve its behavior. 
-* A word may be declared **frozen** to relax the requirement for mutable behavior. An optimizer is free to inline definition of a *frozen* word into the definition of an *opaque* word. A frozen word is *deep-frozen* if all transitive dependencies are also frozen.
-
-To declare a list of attributes, I propose prefixing any definition as follows:
-
-        [{&hidden}{&opaque}{&frozen}]%
-
-This structure is preserved on export, easy for an optimizer to recognize and handle, and trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (categories, relations, etc.) with no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
-
-Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment might require explicitly un-freezing the word to modify its behavior.
 
 ## Constraints on Words and Definitions
 

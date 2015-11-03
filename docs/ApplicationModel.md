@@ -32,7 +32,7 @@ The *command pattern* or append-only log is widely useful for dictionary applica
 
 With this pattern, we gain several features: unlimited undo, uniform cloning, back-in-time debugging, ability to tweak old commands and replay, visible command histories for abstraction and refactoring, cache-friendly computations for common update patterns (i.e. assuming we mostly add commands and undo or tweak recent commands). Taken together with an annotation to stow large values into VRefs, it is feasible to construct truly massive objects (e.g. filesystems, databases, game worlds) within a single dictionary object without massive RAM overheads.
 
-For many applications, like mailing lists and web forums, it is entirely acceptable to keep a complete history or leave maintenance to humans. Space is cheap enough that we could easily keep complete histories for anything that involves discrete human inputs. But in other cases we may need to gradually stabilize and compact our history. It is feasible to automate processes that will systematically inline, simplify, refactor, and garbage collect words at the dictionary layer to recover space. However, to avoid upsetting users and breaking applications, we must describe which optimizations are permitted. One viable possibility is discussed in [About AO](AboutAO.md) under *Hidden, Opaque, and Frozen Words*. 
+For many applications, like mailing lists and web forums, it is entirely acceptable to keep a complete history or leave maintenance to humans. Space is cheap enough that we could easily keep complete histories for anything that involves discrete human inputs. But in other cases we may need to gradually stabilize and compact our history. It is feasible to automate processes that will systematically inline, simplify, refactor, and garbage collect words at the dictionary layer to recover space. However, to avoid upsetting users and breaking applications, we must describe which optimizations are permitted. See *Hidden, Opaque, and Frozen Words*, below.
 
 Applications may potentially manage very large amounts of state, e.g. modeling databases and filesystems that are much larger than RAM. This is feasible with a `{&stow}` annotation, allowing us to move large values out of RAM and into disk storage. However, this only impacts cached computations.
 
@@ -49,33 +49,51 @@ Modeling the game world state is feasible with dictionary applications. The grea
 
 ## Extraction of Dictionary Applications
 
-As a development environment, Wikilon must support compilation of applications to run on a desktop, android phone, an independent web service, and so on. Ideally, these are the same applications that we debug within Wikilon, but they are not entangled with the dictionary after extraction. Dictionary objects are a good fit here. An interesting possibility is to extract an object in media res. We must cross-compile this object into something we may run on another machine, and perhaps optimize for the target environment.
+As a development environment, Wikilon must support compilation of applications to run on a desktop, android phone, an independent web service, and so on. Ideally, these are the same applications that we debug within Wikilon, but we want to extract a minimal amount of logic and state from our dictionary to make it work. Dictionary objects are a good fit here, as are applications that operate only on a well-defined subset of the dictionary (e.g. some finite set of named objects). 
 
-Usefully, the idea of extracting an application fits nicely with other 'views' of the dictionary. It's just that we're 'viewing behavior' this time, e.g. extracting by cross-compiling to a language like JavaScript or C or x86. In terms of User Interface, a compiler might trivially be a URL that we HTTP GET from Wikilon (with the normal caching).
+Extraction of dictionary applications *in media res* supports an implicit debug mode, automatic records and testing of application debug sessions, and a possibility for interactive construction of applications from a fork of a prototypes. In some ways, this is much nicer than conventional application compilers.
 
-The idea of extraction might also apply to non-interactive targets, such as PDF documents and JPEG images and MP3 music files.
+## Automatic Optimization of Dictionaries: Hidden, Opaque, and Frozen Words
 
-## (Rejected) Effects Models for Dictionary Applications
+Words in an AO dictionary provide a basis for mutable meaningful structure, modularity, and structure sharing. The mutable meaningful structure allows AO dictionaries to serve as a platform for live coding and dictionary applications. 
 
-Dictionary applications restrict developers in how they model effects. However, there are a lot of effects that fit within the constraints of dictionary applications. Some possibilities: 
+Unfortunately, the presence of mutable meaningful structure interferes with direct optimization at the dictionary layer. This isn't a major problem: a compiler could maintain a cache of optimized definitions separate from the dictionary. But there are some opportunity costs with respect to separating the optimizer, redistributing optimized code, and generalizing automatic  management of dictionary applications. 
 
-* try a computation and handle type errors
-* constrain a computation to so many steps
-* support distributed or parallel computation
-* cryptographic value sealing and unsealing
-* uniqueness resources and design patterns
-* reflect on a block and view its content
-* accelerate graphics, physics, collections
-* model constraint or unification variables
+To recover the lost opportunities, we can enable developers and dictionary applications to *declaratively relax* the constraints on an assumed dictionary optimizer for useful subsets of the dictionary. I propose the following:
 
-In context of AO, our environment is naturally represented by a value provided to our application. Access to effects is provided together with this value, e.g. perhaps an association list that includes values like `[{try}]` and `[{reflBlock}]`. Or perhaps the environment is modeled by a powerblock or something else entirely. 
+* A word may be declared **hidden** to relax the requirement for stable external reference. An optimizer is free to delete a hidden word if it has no clients. This enables garbage collection of dictionaries.
+* A word may be declared **opaque** to relax the requirement for stable structure of its definition. An optimizer is free to rearrange, refactor, or reorganize the definition of an opaque word in ways that preserve its behavior. 
+* A word may be declared **frozen** to relax the requirement for mutable behavior. An optimizer is free to inline definition of a *frozen* word into the definition of an *opaque* word. A frozen word is *deep-frozen* if all transitive dependencies are also frozen.
 
-I expect to experiment with many different environment models. To indicate which environment our application is expecting, we could apply an unsealer like `{.env:std.v1}`. This would indicate a name and version, imply an initial value. It is feasible to develop configurable environment models that further receive an executable specification. Thus, even if we want to shift specification into the dictionary, it seems sufficient to start with just a name to infer or inject an environment value.
+To declare a list of attributes, I propose prefixing any definition as follows:
 
-If we implement environments, Wikilon would recognize and implement at least a few environment models. 
+        [{&hidden}{&opaque}{&frozen}]%
 
-However, I'm concerned that a command-pattern of interactions with an environment won't compress very nicely. Naturally, if we depend on the environment value, then we must allow that our behavior will change when the environment changes. Hence, we're forced to record the entire history of commands, unless we have some way to combine and compress those sequences of commands.
+This structure is preserved on export, easy for an optimizer to recognize and handle, and trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (categories, relations, etc.) with no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
 
-Without effects, we can still accelerate computations via ABCD-like accelerators and annotations. We can annotate constraints on computations, quotas and similar. We can functionally model constraint or unification variables. The main items we cannot handle without effects are error handling and reflection on blocks. But error handling isn't critical, since we can always push that up to the dictionary layer (report a type error) and effectively forbid erroneous interactions with dictionary apps. And reflection on blocks generally isn't critical because blocks are opaque massive structures anyway.
+Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment might require explicitly un-freezing the word to modify its behavior.
 
-So, my current resolution is to eschew modeling effects within dictionary apps. Maybe I'll revisit this issue later.
+## Robotic Reflection, Metaprogramming, and Maintenance
+
+Awelon Object (AO) lacks any *direct* mechanism for reflection on the dictionary.
+
+However, it is feasible to model reflection indirectly, e.g. by automatically maintaining dictionary words depending on other words in the dictionary. In the general case, we could maintain a word that contains a complete copy of our dictionary as an association list. However, fine-grained reflection is far more likely to be cache-friendly, allowing us to track which queries we depend upon.
+
+This *robotic reflection* is itself a dictionary application, and may be guided by the dictionary. Consider one potential representation of this guidance:
+
+        @foo.def [{&auto}]%(computed foo definition here)
+        @foo [[{%foo.make}]{&make}%]%{%foo.def}
+
+The *make* attribute receives an argument, a make rule. The definition must be a simple redirect to the make target. Our host applies the rule to construct the target. The target carries the *auto* attribute, to support trivial filtering from an AODict export and represents implicit permission to recompute. The separation of `foo` and `foo.def` conveniently leaves an obvious hole in the dictionary when the target is filtered (e.g. so we can infer the type of `foo.def` from usage, even if we haven't computed it). 
+
+The above is a reasonable representation by several heuristics. But I'm not committed to it. It seems worthwhile to explore alternatives that, for example, easily maintain multiple words from a single declaration.
+
+## Purity of Dictionary Applications
+
+I have contemplated introducing an effects models for dictionary applications. Presumably, effects could provide capabilities for fine-grained error-handling, explicit reflection, performance shortcuts, and even first-class shared resource models within the limits of causal commutativity and spatial idempotence (e.g. unification variables).
+
+However, explicit effects are *complicated*. Interacting with an implicit environment hinders the gradual compaction of history and compression of state for long-running dictionary applications. We must specify the environment. We must deal with competing environment models and versions.
+
+Further, explicit effects are *unnecessary*. For high level error handling, it is sufficient to reject a command that would lead to a bad application state or generate an error report. For reflection, we can model software agents that maintain and metaprogram our dictionary. For performance, we can push for ABCD-like accelerators and better annotations. Any model of shared resources can be modeled functionally and we can mitigate performance by accelerating common patterns. External communications is modeled in terms of RESTful interactions with external agents.
+
+The main costs of purity is that the rest of the world isn't designed for it. Retained mode rendering, for example, favors a stream of update events. We'll need to work with this when designing applications for extraction, e.g. explicitly computing update logs from subsequent representations of state (like Facebook's React).
