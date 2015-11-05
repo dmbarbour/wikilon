@@ -37,11 +37,11 @@ rdVarNat :: LBS.ByteString -> (Integer, LBS.ByteString)
 rdVarNat = go 0 where
     go n s = case LBS.uncons s of
         Nothing -> error "invalid varnat encoding"
-        Just (d,s') | done -> (n', s')
+        Just (d,s') | bDone -> (n', s')
                     | otherwise -> go n' s' 
-            where n' = (n `shiftL` 7) .|. digit
-                  digit = fromIntegral (d .&. 0x7f) 
-                  done = (0x80 == (d .&. 0x80))
+            where n' = (n `shiftL` 7) .|. fromIntegral dbits
+                  dbits = (d .&. 0x7f)
+                  bDone = (dbits == d)
 
 -- | record a bytestring prefixed by its size as a varnat
 bbSizedSlice :: LBS.ByteString -> BB.Builder

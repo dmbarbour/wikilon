@@ -268,7 +268,7 @@ encode = bbToBytes . encodeBB
 -- strategy assuming small, transient bytestrings
 bbToBytes :: BB.Builder -> LBS.ByteString
 bbToBytes = BB.toLazyByteStringWith strat mempty where
-    strat = BB.untrimmedStrategy 1000 BB.smallChunkSize
+    strat = BB.untrimmedStrategy 240 BB.smallChunkSize
 
 encodeBB :: ABC -> BB.Builder
 encodeBB = mconcat . fmap encodeOpBB . abcOps

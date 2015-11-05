@@ -22,6 +22,9 @@ module Wikilon.ABC.Fast
     , copyable, droppable
 
     , Flags, f_aff, f_rel
+
+    -- for debugging
+    , ceVal
     ) where
 
 import Control.Applicative
@@ -111,9 +114,9 @@ type Flags = Word8
 -- In general, ExtOp will use UTF8 encoding. But it may include some
 -- ASCII characters for the more common extended operations.
 data ExtOp
-    = ExtOp_i -- (inline) vr$c, also for tail calls
-    | ExtOp_u -- (unit)   vvrwlc; intro unit as first in pair
-    | ExtOp_U -- (inR)    VVRWLC; intro void as left in sum
+    = ExtOp_Inline  -- vr$c, also for tail calls
+    | ExtOp_Swap    -- vrwlc 
+    | ExtOp_Mirror  -- VRWLC
     -- I'll probably want:
     --  support for vectors and binaries (specialty lists + ops?)
     --  support for *affine* vectors (mutable vectors with explicit copy op)
@@ -132,9 +135,9 @@ data ExtOp
 -- | Table of extended operations and semantics, extOpTable.
 extOpTable :: [(ExtOp, Char, Pure.ABC)]
 extOpTable =
-    [(ExtOp_i, 'i', "vr$c")
-    ,(ExtOp_u, 'u', "vvrwlc")
-    ,(ExtOp_U, 'U', "VVRWLC")
+    [(ExtOp_Inline, 'i', "vr$c")
+    ,(ExtOp_Swap,   'x', "vrwlc")
+    ,(ExtOp_Mirror, 'X', "VRWLC")
     ]
 
 extOpCharArray :: A.Array ExtOp Char
@@ -181,20 +184,23 @@ instance Show ExtOp where
     showsPrec _ = showChar . extOpToChar 
     showList = showString . fmap extOpToChar
 
+-- we'll show a value in an extended bytecode form, with 
+-- resource tokens in place of stowed values.
 showsV :: V -> ShowS
 showsV (N n) = shows $ Pure.itoabc' n
 showsV (P a b) = showsV a . showsV b . shows ABC_w . shows ABC_l
 showsV (L a) = showsV a . shows ABC_V
-showsV (R b) = showsV b . shows ExtOp_U
-showsV (U) = shows ExtOp_u
-showsV (B abc kf) = showChar '[' . shows abc . showChar ']' . k . f where
-    k = if f_includes f_rel kf then showChar 'k' else id
-    f = if f_includes f_aff kf then showChar 'f' else id
+showsV (R b) = showsV b . shows ABC_V . shows ExtOp_Mirror
+showsV (U) = shows ABC_v . shows ExtOp_Swap
+showsV (B abc kf) = showChar '[' . shows abc . showChar ']' . showsKF kf
 showsV (S tok v) = showsV v . shows tok
 showsV (T txt) = shows (Pure.ABC_Text txt)
-showsV (X ref kf) = showString "{#" . rsc . q . k . f . showChar '}' where
-    rsc = showString "v:" . shows (unsafeVRefAddr ref)
-    q = showChar '\''
+showsV (X ref kf) = showString "{#" . rsc . qv . showsKF kf . showChar '}' where
+    rsc = showString "v:" . shows (unsafeVRefAddr ref) -- local resource id
+    qv = showChar '\'' -- resource represents a quoted value
+
+showsKF :: Flags -> ShowS
+showsKF kf = k . f where
     k = if f_includes f_rel kf then showChar 'k' else id
     f = if f_includes f_aff kf then showChar 'f' else id
 
@@ -271,6 +277,7 @@ compactOps ops = ABC _code _toks _data where
 -- a compressed encoding of larger binaries within VCache. I hope to
 -- work with binaries on the order of up to 32kB on a regular basis...
 data CacheEnc = CE ![VRef V] !LBS.ByteString
+    deriving (Show)
 
 -- | intermediate structure for constructing a CacheEnc
 type CacheBuilder = ([VRef V], BB.Builder)
@@ -429,12 +436,13 @@ rdValE ce =
     let (v, (CE r s)) = rdVal ce in
     let bDone = L.null r && LBS.null s in
     if bDone then v else
-    impossible "information leftover after reading value"
+    impossible $ "information leftover after reading value: " ++
+        show r ++ " " ++ show s
 
 -- strategy assuming small, transient bytestrings
 bbToBytes :: BB.Builder -> LBS.ByteString
 bbToBytes = BB.toLazyByteStringWith strat mempty where
-    strat = BB.untrimmedStrategy 1000 BB.smallChunkSize
+    strat = BB.untrimmedStrategy 240 BB.smallChunkSize
 
 -- | We may 'purify' bytecode to recover the original ABC without any
 -- special Wikilon extensions. This purification is direct and naive.

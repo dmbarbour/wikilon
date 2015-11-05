@@ -36,20 +36,20 @@ For many applications, like mailing lists and web forums, it is entirely accepta
 
 ## Representing Databases, Filesystems, and other Big Data
 
-Many PL runtimes keep everything in volatile memory by default. In my experience, this creates a discontinuity in the programming experience. Developers must use a very different design if they want larger-than-memory data structures or data persistence. Awelon project and Wikilon favor a different approach: 
+Many PL runtimes keep everything in volatile memory by default. In my experience, this creates a discontinuity in the programming experience. Developers must use a very different design if they want larger-than-memory data structures or durable data. Awelon project and Wikilon favor a different approach: 
 
 * the `{&stow}` annotation tells our runtime to serialize a value to disk
 * the runtime will load and cache stowed values from disk when necessary
-* track affine, relevant properties for for fast copy, drop without load
-* structure and storage sharing for stowed values is frequently implicit
+* runtime tracks relevant and affine properties for efficient copy, drop
+* structure and storage sharing for stowed values is typically implicit
 
-With this feature, we can model larger-than-memory filesystems or databases as normal data structures - e.g. tries, finger trees, log structured merge trees. Granted, we must still design our data structures for performance, i.e. so we stow chunks of acceptable size.
+With stowed values, it is not difficult to model larger-than-memory filesystems or databases as large persistent data structures. We can leverage trees (tries, finger-trees, log-structured merge trees, spatial partitioning trees, etc.) for most problems involving large amounts of data.
 
-Persistence of the root filesystem or database value is a separate concern. 
+Durability of data is a separate concern.
 
-In context of *dictionary applications*, persistence is addressed by a cache of compiled words. We can rebuild our databases from the dictionary definitions if we must. But we'll try to design dictionary applications to use cache-friendly update patterns so recomputing is rarely necessary.
+In context of *dictionary applications*, we have a dictionary where we represent all application state. Any durable data must be represented within the dictionary. However, for performance, we also maintain weakly durable caches of computed properties. Stowed values may be rooted in our cache, perhaps representing a filesystem within a compiled definition of a machine. Application architects will favor cache-friendly update patterns where feasible, such as using a command pattern to gradually update the machine.
 
-*Aside:* In a distributed system, stowed values correspond to ABC value resources, i.e. referenced by `{#resourceId'kf}` where the `'kf` suffix indicates the resource is a quoted value with relevant and affine substructural properties. The resourceId is just a secure hash of some bytecode. However, the `{&stow}` annotation is generally local to a runtime. Locality simplifies the issues of loading values and garbage collection.
+*Aside:* Stowed values are closely related to ABC value resources, i.e. where we use `{#resourceId'kf}` to name a bytecode resource. The `resourceId` is a secure hash of the bytecode, and the `'kf` suffix identifies our resource as a linear quoted value to permit lazy loading and forbid copy/drop. In contrast, value resources are suitable for distribution over an untrusted network, but stowed values permit compact representation and precise local garbage collection.
 
 ## Providing Security for Dictionary Applications
 
@@ -88,18 +88,13 @@ Note: These attributes only affect a dictionary optimizer. The *frozen* attribut
 
 ## Robotic Reflection, Metaprogramming, and Maintenance
 
-Awelon Object (AO) lacks any *direct* mechanism for reflection on the dictionary.
+Awelon Object (AO) lacks a direct mechanism for reflection on the dictionary. 
 
-However, it is feasible to model reflection indirectly, e.g. by automatically maintaining dictionary words depending on other words in the dictionary. In the general case, we could maintain a word that contains a complete copy of our dictionary as an association list. However, fine-grained reflection is far more likely to be cache-friendly, allowing us to track which queries we depend upon.
+Reflection has severe disadvantages. It tends to entangle behavior without obvious or current relationships between them. Rather than directly implementing reflection, I'd prefer to model first-class values, objects, and collections thereof over which we can explicitly model reflection. As an extreme case, it is feasible to model an AO dictionary as an object within an AO dictionary.
 
-This *robotic reflection* is itself a dictionary application, and may be guided by the dictionary. Consider one potential representation of this guidance:
+However, when reflection is convenient, we can model it as a dictionary application - either as part of an IDE, or as an autonomous software agent. The latter case is similar to the 'bots' people script to write wikis, except that we maybe can push most of the scripting into the dictionary itself. A trivial bot might periodically scan our dictionary and rebuild a `category:foo` word that lists all the words attributed with `[{&category:foo}]%`. More sophisticated bots might be guided by attributes or annotations to automatically apply user-defined functions to the dictionary.
 
-        @foo.def [{&auto}]%(computed foo definition here)
-        @foo [[{%foo.make}]{&make}%]%{%foo.def}
-
-The *make* attribute receives an argument, a make rule. The definition must be a simple redirect to the make target. Our host applies the rule to construct the target. The target carries the *auto* attribute, to support trivial filtering from an AODict export and represents implicit permission to recompute. The separation of `foo` and `foo.def` conveniently leaves an obvious hole in the dictionary when the target is filtered (e.g. so we can infer the type of `foo.def` from usage, even if we haven't computed it). 
-
-The above is a reasonable representation by several heuristics. But I'm not committed to it. It seems worthwhile to explore alternatives that, for example, easily maintain multiple words from a single declaration.
+Standardizing reflection could mitigate the code bloat. We would be able to delete automatically defined words upon export and regenerate them on import. However, before I'm willing to standardize, we'll need to discover a model for reflection that is very simple, extensible, deterministic, and incremental-update friendly.
 
 ## Purity of Dictionary Applications
 
