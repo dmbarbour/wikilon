@@ -4,9 +4,9 @@
 I'm doing a pretty big rewrite for the following purposes:
 
 * simplify the AO semantics
- * return to plain old 'inline the definition' for word tokens
- * only 'holes' in dictionary are undefined words
- * no staged computations required
+ * return to *inline the definition* semantics for words
+ * undefined words are still useful as *holes* in dictionary
+ * no explicit staging; limit is partial evaluation
 * background computation of types, errors, cycles, undefined words
 * stronger push towards use of optimized bytecode representation
 * simplify model for cache management and background computations 

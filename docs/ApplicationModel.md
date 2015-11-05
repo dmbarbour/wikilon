@@ -34,9 +34,22 @@ With this pattern, we gain several features: unlimited undo, uniform cloning, ba
 
 For many applications, like mailing lists and web forums, it is entirely acceptable to keep a complete history or leave maintenance to humans. Space is cheap enough that we could easily keep complete histories for anything that involves discrete human inputs. But in other cases we may need to gradually stabilize and compact our history. It is feasible to automate processes that will systematically inline, simplify, refactor, and garbage collect words at the dictionary layer to recover space. However, to avoid upsetting users and breaking applications, we must describe which optimizations are permitted. See *Hidden, Opaque, and Frozen Words*, below.
 
-Applications may potentially manage very large amounts of state, e.g. modeling databases and filesystems that are much larger than RAM. This is feasible with a `{&stow}` annotation, allowing us to move large values out of RAM and into disk storage. However, this only impacts cached computations.
+## Representing Databases, Filesystems, and other Big Data
 
-Between these various techniques, dictionaries can truly serve as general software platforms and ecosystems.
+Many PL runtimes keep everything in volatile memory by default. In my experience, this creates a discontinuity in the programming experience. Developers must use a very different design if they want larger-than-memory data structures or data persistence. Awelon project and Wikilon favor a different approach: 
+
+* the `{&stow}` annotation tells our runtime to serialize a value to disk
+* the runtime will load and cache stowed values from disk when necessary
+* track affine, relevant properties for for fast copy, drop without load
+* structure and storage sharing for stowed values is frequently implicit
+
+With this feature, we can model larger-than-memory filesystems or databases as normal data structures - e.g. tries, finger trees, log structured merge trees. Granted, we must still design our data structures for performance, i.e. so we stow chunks of acceptable size.
+
+Persistence of the root filesystem or database value is a separate concern. 
+
+In context of *dictionary applications*, persistence is addressed by a cache of compiled words. We can rebuild our databases from the dictionary definitions if we must. But we'll try to design dictionary applications to use cache-friendly update patterns so recomputing is rarely necessary.
+
+*Aside:* In a distributed system, stowed values correspond to ABC value resources, i.e. referenced by `{#resourceId'kf}` where the `'kf` suffix indicates the resource is a quoted value with relevant and affine substructural properties. The resourceId is just a secure hash of some bytecode. However, the `{&stow}` annotation is generally local to a runtime. Locality simplifies the issues of loading values and garbage collection.
 
 ## Providing Security for Dictionary Applications
 

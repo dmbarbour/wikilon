@@ -47,6 +47,7 @@ Library
     , time, old-locale
     , Decimal
     , cryptohash (>= 0.11), byteable
+    -- , zlib 
 
     , stm
     , mtl
@@ -73,10 +74,7 @@ Library
 
     Wikilon.ABC
     Wikilon.ABC.Pure
-
-
-    -- Wikilon.ABC.Fast
-    -- Wikilon.Value
+    Wikilon.ABC.Fast
 
     -- todo: figure out caching
     -- Wikilon.Dict.PLU
@@ -89,5 +87,9 @@ Library
 
     -- Wikilon.Clock
     Wikilon.Time
+
+  Other-Modules:
+
+    Binary.Utils
 
   ghc-options: -auto-all -Wall 

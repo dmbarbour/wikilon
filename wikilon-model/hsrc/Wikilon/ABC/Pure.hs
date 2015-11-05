@@ -30,6 +30,7 @@ module Wikilon.ABC.Pure
     , Token
     , Op(..)
     , PrimOp(..)
+    , abcOpTable
     , abcOpToChar
     , abcCharToOp
     , abcTokens
@@ -48,6 +49,7 @@ import Data.Monoid
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.Builder as BB
+import qualified Data.ByteString.Builder.Extra as BB
 import qualified Data.Array.IArray as A
 import qualified Data.List as L
 import Data.String (IsString(..))
@@ -261,7 +263,12 @@ opd = (A.!) opdArray . fromInteger
 -- | Serialize Awelon Bytecode into a UTF-8 text. This text isn't 
 -- great for human comprehension, but it is marginally legible.
 encode :: ABC -> LazyUTF8.ByteString
-encode = BB.toLazyByteString . encodeBB
+encode = bbToBytes . encodeBB
+
+-- strategy assuming small, transient bytestrings
+bbToBytes :: BB.Builder -> LBS.ByteString
+bbToBytes = BB.toLazyByteStringWith strat mempty where
+    strat = BB.untrimmedStrategy 1000 BB.smallChunkSize
 
 encodeBB :: ABC -> BB.Builder
 encodeBB = mconcat . fmap encodeOpBB . abcOps
@@ -336,7 +343,7 @@ instance Show ABC where
     showsPrec _ = showString . LazyUTF8.toString . encode 
 instance Show Op where
     showsPrec _ = showList . (:[])
-    showList ops = shows (ABC ops) 
+    showList = shows . ABC
 instance Show PrimOp where
     showsPrec _ = showChar . abcOpToChar
     showList = showString . fmap abcOpToChar
