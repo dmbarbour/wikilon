@@ -88,13 +88,13 @@ Note: These attributes only affect a dictionary optimizer. The *frozen* attribut
 
 ## Robotic Reflection, Metaprogramming, and Maintenance
 
-Awelon Object (AO) lacks a direct mechanism for reflection on the dictionary. 
+Reflection entangles. With reflection, a function's behavior and meaning will change based on relationships that are subtle or implicit. Often, changes won't happen until the future, while integrating what probably should be unrelated code. Unit testing, modularity, separate compilation, and portability of behaviors into a new codebase are resisted by reflection. 
 
-Reflection has severe disadvantages. It tends to entangle behavior without obvious or current relationships between them. Rather than directly implementing reflection, I'd prefer to model first-class values, objects, and collections thereof over which we can explicitly model reflection. As an extreme case, it is feasible to model an AO dictionary as an object within an AO dictionary.
+By design, Awelon Object (AO) lacks any direct mechanism for reflection.
 
-However, when reflection is convenient, we can model it as a dictionary application - either as part of an IDE, or as an autonomous software agent. The latter case is similar to the 'bots' people script to write wikis, except that we maybe can push most of the scripting into the dictionary itself. A trivial bot might periodically scan our dictionary and rebuild a `category:foo` word that lists all the words attributed with `[{&category:foo}]%`. More sophisticated bots might be guided by attributes or annotations to automatically apply user-defined functions to the dictionary.
+However, it is possible to *model* reflection. For example, we can model objects that carry some metadata about their purpose and type. We can model a database with pages of code. We can model an entire AO dictionary as an object within an AO dictionary, and reflect on that. By explicitly modeling collections of code and the compilers, we gain a useful ability to isolate, test, and port specific configurations.
 
-Standardizing reflection could mitigate the code bloat. We would be able to delete automatically defined words upon export and regenerate them on import. However, before I'm willing to standardize, we'll need to discover a model for reflection that is very simple, extensible, deterministic, and incremental-update friendly.
+It is also feasible to implement reflection as part of an IDE or robot. It is not unusual for people to develop independent autonomous software agents to maintain some aspect of natural language wikis. For a dictionary of structured code, developing a bot should be easier. Also, it is feasible to push more reflection logic into the dictionary itself. Though, ensuring nice properties (e.g. that the resulting codebase is stable and deterministic, that updates are incremental and cache-friendly) remains a challenge.
 
 ## Purity of Dictionary Applications
 
