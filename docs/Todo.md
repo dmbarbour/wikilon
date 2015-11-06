@@ -8,10 +8,17 @@ I'm doing a pretty big rewrite for the following purposes:
  * undefined words are still useful as *holes* in dictionary
  * no explicit staging; limit is partial evaluation
 * background computation of types, errors, cycles, undefined words
+ * need model for background computations
+ * need model for eventual vs. immediate consistency
+ * need model for caching and recomputation
 * stronger push towards use of optimized bytecode representation
-* simplify model for cache management and background computations 
-* develop a less ad-hoc web application view (e.g. MFlow or Snap).
+ * push towards much faster computations
+ * push towards partial eval as basis for dictionary apps
+* develop a less ad-hoc web application view (e.g. MFlow, Snap, Servant, Salvia).
+ * maybe build my own variant oriented around ABC and JavaScript?
 * heavier focus on Claw-like code views, support Claw sequences
+ * claw sequences potentially very useful
+ * let's also try for a Form-variant of Claw (Fawn?)
 * heavier focus on dictionary applications (sessions, forums, etc.)
 * develop a FUSE filesystem adapter to the Wikilon web service
 

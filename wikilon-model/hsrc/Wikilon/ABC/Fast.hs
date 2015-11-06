@@ -11,7 +11,7 @@
 -- * support compressed storage and large code blocks
 --
 module Wikilon.ABC.Fast
-    ( ABC(..), purifyABC
+    ( ABC(..)
     , Op(..), expandOps, compactOps
     , V(..), purifyV
     , ExtOp(..), extOpTable, extCharToOp, extOpToChar
@@ -19,12 +19,13 @@ module Wikilon.ABC.Fast
     , Token
     , Text
 
+    , purifyABC
+    , fromPureABC
+    , fromPureABC'
+
     , copyable, droppable
 
     , Flags, f_aff, f_rel
-
-    -- for debugging
-    , ceVal
     ) where
 
 import Control.Applicative
@@ -36,12 +37,16 @@ import Data.Monoid
 import Data.Maybe (mapMaybe)
 import qualified Data.List as L
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Internal as BSI
 import qualified Data.ByteString.Lazy.UTF8 as LazyUTF8
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.ByteString.Lazy as LW8
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Builder.Extra as BB
 import qualified Data.Array.IArray as A
+import Foreign.ForeignPtr (newForeignPtr_) 
+import System.IO.Unsafe (unsafeDupablePerformIO)
+import qualified Codec.Compression.Snappy.Lazy as Snappy
 import Database.VCache
 import Binary.Utils
 import Wikilon.ABC.Pure (PrimOp(..))
@@ -98,6 +103,7 @@ data V
 --   fast copy/drop (value flags or extop?)
 --   stacks of values (for simplification)
 --   lazily applied blocks (for simplification)
+--
 
 -- | Flags for substructural or special block attributes. Mostly, 
 -- I have affine and relevant types, but I might later add support
@@ -246,9 +252,11 @@ expandOps' toks vals s = case LazyUTF8.uncons s of
             [] -> impossible "token stack underflow"
         -- tokens, blocks, and texts are captured by _ and !.
         _ -> impossible (show c ++ " not recognized as ABC PrimOp or ExtOp")
-    Nothing | L.null vals -> impossible "value stack overflow"
-            | L.null toks -> impossible "token stack overflow"
+    Nothing | bValsRemain -> impossible "value stack overflow"
+            | bToksRemain -> impossible "token stack overflow"
             | otherwise -> [] -- done
+            where bValsRemain = not (L.null vals)
+                  bToksRemain = not (L.null toks)
 
 -- | Obtain the compact encoding for a list of ABC operations.
 --
@@ -275,9 +283,10 @@ compactOps ops = ABC _code _toks _data where
 -- | Before encoding in VCache, we'll use an intermediate structure
 -- that captures all the binary encodings. The goal here is to permit
 -- a compressed encoding of larger binaries within VCache. I hope to
--- work with binaries on the order of up to 32kB on a regular basis...
+-- work with binaries of relatively large sizes (16-64kB) on a regular
+-- basis.
 data CacheEnc = CE ![VRef V] !LBS.ByteString
-    deriving (Show)
+    deriving (Typeable, Show)
 
 -- | intermediate structure for constructing a CacheEnc
 type CacheBuilder = ([VRef V], BB.Builder)
@@ -399,6 +408,10 @@ cbVal (S (Token tok) v) = (mempty,bbtok) <> cbVal v where
 cbVal (T txt) = (mempty, BB.char8 '"' <> bbSizedSlice txt)
 cbVal (X ref kf) = cbChar8 'X' <> cbFlags kf <> cbRef ref
 
+cbToCE :: CacheBuilder -> CacheEnc
+cbToCE (refs,bb) = (CE refs bytes) where
+    bytes = bbToBytes bb
+
 rdVal :: CacheEnc -> (V, CacheEnc)
 rdVal (CE refs sInit) = case LBS.uncons sInit of
     Nothing -> impossible "underflow attempting to read value"
@@ -444,17 +457,44 @@ bbToBytes :: BB.Builder -> LBS.ByteString
 bbToBytes = BB.toLazyByteStringWith strat mempty where
     strat = BB.untrimmedStrategy 240 BB.smallChunkSize
 
+-------------------------------------------
+-- CONVERSIONS BETWEEN PURE AND FAST ABC --
+-------------------------------------------
+
+-- | minimal, trivial conversion to pure ABC. This translates our
+-- distinct ABC_Block and ABC_Text instances from pure ABC into 
+-- ABC_Val instances, but otherwise performs no simplification or
+-- acceleration.
+fromPureABC :: Pure.ABC -> ABC
+fromPureABC = fromPureABC' id
+
+-- | This is a variation on fromPureABC that provides a hook for a
+-- user-provided simplifier or optimizer. This optimizer is applied
+-- before compacting the bytecode.
+fromPureABC' :: ([Op] -> [Op]) -> Pure.ABC -> ABC
+fromPureABC' fsimp = convertABC where
+    convertABC = compactOps . fsimp . fmap convertOp . Pure.abcOps
+    convertOp (Pure.ABC_Prim op) = ABC_Prim op
+    convertOp (Pure.ABC_Block abc) = ABC_Val (B (convertABC abc) 0)
+    convertOp (Pure.ABC_Text txt) = ABC_Val (T txt)
+    convertOp (Pure.ABC_Tok tok) = ABC_Tok tok
+
 -- | We may 'purify' bytecode to recover the original ABC without any
 -- special Wikilon extensions. This purification is direct and naive.
 --
 -- A `{&stow}` annotation is injected for encoding values that Wikilon
 -- pushes to disk. So, we can preserve the on-disk encoding
 purifyABC :: ABC -> Pure.ABC
-purifyABC = Pure.ABC . flip purifyOps [] . expandOps
+purifyABC = Pure.ABC . purifyOps . expandOps
 
-purifyOps :: [Op] -> [Pure.Op] -> [Pure.Op]
-purifyOps (op:ops) = purifyOp op . purifyOps ops
-purifyOps [] = id
+-- | Convert fast ABC operations to pure ABC.
+purifyOps :: [Op] -> [Pure.Op]
+purifyOps = flip purifyOps' []
+
+-- using a diff list
+purifyOps' :: [Op] -> [Pure.Op] -> [Pure.Op]
+purifyOps' (op:ops) = purifyOp op . purifyOps' ops
+purifyOps' [] = id
 
 purifyOp :: Op -> [Pure.Op] -> [Pure.Op]
 purifyOp (ABC_Prim op) = (:) (Pure.ABC_Prim op)
@@ -496,41 +536,52 @@ purifyV' = vops where
     vops (T txt) = pureOp (Pure.ABC_Text txt)
     vops (X ref _) = vops (deref' ref) . pureOp (Pure.ABC_Tok "&stow")
 
--- Options for value encoding. Mostly this is leaving a hole for heuristic
--- compression. I expect that large values and blocks will tend to compress
--- very nicely, and the time savings can be significant when it means a 
--- little less paging from disk.
-data ValEnc 
-    = VE0 CacheEnc
-    -- add compression options here
-    deriving (Typeable)
+-- Note: I'm using a transparent compression here, albeit only for 
+-- sufficiently large objects having an acceptable compression ratio.
+-- This is likely to save space, since ABC compresses very nicely.
+-- For large value objects, it may help reduce paging and allocation,
+-- which may improve performance.
+instance VCacheable CacheEnc where
+    put (CE refs bytes) =
+        -- heuristic compression decision
+        let nBytes = LBS.length bytes in
+        let zBytes = Snappy.compress bytes in
+        let nzBytes = LBS.length zBytes in
 
-ceVal :: V -> CacheEnc
-ceVal v = (CE refs bytes) where
-    (refs,bb) = cbVal v
-    bytes = bbToBytes bb
+        let bSufficientlyLarge = (nBytes >= 1200) in
+        let bAcceptableRatio = ((nzBytes * 4) <= (nBytes * 3)) in
+        let bUseCompression = bSufficientlyLarge && bAcceptableRatio in
 
-valEncode :: V -> ValEnc
-valEncode = VE0 . ceVal
+        if not bUseCompression
+            then putWord8 0 >> put refs >> put bytes
+            else putWord8 1 >> put refs >> 
+                 putVarNat (fromIntegral nBytes) >>
+                 putVarNat (fromIntegral nzBytes) >> 
+                 putByteStringLazy zBytes
 
-valDecode :: ValEnc -> V
-valDecode (VE0 ce) = rdValE ce
-
-instance VCacheable ValEnc where
-    put (VE0 (CE refs bytes)) = putWord8 0 >> put refs >> put bytes
-    get = getWord8 >>= \ vn -> case vn of 
-        0 -> VE0 <$> (CE <$> get <*> get)
-        _ -> fail (abcErr $ "unrecognized version for value encoding")
+    get = getWord8 >>= \ vn -> case vn of
+        0 -> CE <$> get <*> get
+        1 -> get >>= \ refs ->
+             fmap fromIntegral getVarNat >>= \ nBytes ->
+             fmap fromIntegral getVarNat >>= \ nzBytes ->
+             withBytes nzBytes $ \ pzBytes ->
+                let fpzBytes = unsafeDupablePerformIO (newForeignPtr_ pzBytes) in
+                let zBytes = LBS.fromStrict $ BSI.PS fpzBytes 0 nzBytes in
+                let bytes = Snappy.decompress zBytes in
+                if (LBS.length bytes /= nBytes) -- also forces strict bytes
+                    then fail (abcErr $ "byte count mismatch on decompress")
+                    else return (CE refs bytes)
+        _ -> fail (abcErr $ "unrecognized cache encoding")
 
 -- leveraging ValEnc as intermediate language where we make some
 -- heuristic decisions about encoding...
 instance VCacheable V where
-    put = put . valEncode
-    get = valDecode <$> get
+    put = put . cbToCE . cbVal
+    get = rdValE <$> get
 
 -- I want to guarantee structure sharing between VRef ABC and VRef V
 -- for simple block values. So I simply wrap ABC in a block before
--- encoding it.
+-- encoding it. 
 instance VCacheable ABC where
     put abc = put (B abc 0)
     get = get >>= \ v -> case v of
