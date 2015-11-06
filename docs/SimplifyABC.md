@@ -40,7 +40,7 @@ Adding two numbers from our stack:
 
 Simplify stack and hand writers:
 
-        (c)l(a)zlw(d)l(b)zlw
+        (c)l(a)wrzl(d)l(b)wrzl
             should simplify to
         w(a)l(b)lw(c)l(d)l
 
@@ -50,9 +50,9 @@ Swapping the stack and hand:
             should simplify to
         w(c)l(d)lw(a)l(b)l
 
-Moving content between stack and hand:
+Moving content between stack and hand, e.g.:
 
-        (b)zlw(a)l wrzl
+        (b)wrzl(a)l rzlw
             should simplify to
         (a)l(b)l
 
@@ -60,6 +60,6 @@ Assuming I'm able to recognize and simplify these cases, I should be able to per
 
 A possible technique is to also capture 'value manipulators'. Instead of just `(a)`, maybe I can recognize subprograms of type `(a→b)` or operations of even higher arity. In some cases, I gain some obvious translations like: `(a→b)z ⇒ z(a→b)`. 
 
-Alternatively, perhaps our simplifier can explicitly recognize stack captures? and perhaps the swap pattern captures? This might work pretty well, assuming I find a sufficient set of rewrites to cover the common patterns.
+Alternatively, perhaps our simplifier can explicitly recognize stack captures? and perhaps the swap pattern captures? This might work pretty well, assuming I find a sufficient set of rewrites to cover the common patterns (and define common patterns for easy simplifications).
 
 
