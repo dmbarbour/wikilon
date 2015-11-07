@@ -3,7 +3,7 @@
 
 I want enough simplification rules to cover frequent use cases for partial evaluations, especially operating within a `(stack*(hand*ext))` environment or other multi-stack environments. This document is more brainstorming than specification, since I'm still figuring out how to simplify ABC.
 
-Some obvious simplifications for data plumbing:
+Some obvious simplifications:
 
         ww → 
         zz → 
@@ -13,6 +13,11 @@ Some obvious simplifications for data plumbing:
         cv → 
         zwz → wzw
         (similar for VRWLCZ)
+
+        w+ → + (commutative)
+        w* → * (commutative)
+        #0 → #
+        
 
 These actually help a lot for common data plumbing. I've seen considerable reductions. But I'll need something more to properly handle stack manipulations. Let's consider the following, with `(a)` representing a subprogram that constructs a value...
 
@@ -40,7 +45,7 @@ Adding two numbers from our stack:
 
 Simplify stack and hand writers:
 
-        (c)l(a)wrzl(d)l(b)wrzl
+        (c)l(a)zlw(d)l(b)zlw
             should simplify to
         w(a)l(b)lw(c)l(d)l
 
@@ -52,7 +57,7 @@ Swapping the stack and hand:
 
 Moving content between stack and hand, e.g.:
 
-        (b)wrzl(a)l rzlw
+        (b)zlw(a)l rzlw
             should simplify to
         (a)l(b)l
 
