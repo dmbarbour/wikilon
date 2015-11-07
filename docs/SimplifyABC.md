@@ -57,7 +57,7 @@ Swapping the stack and hand:
 
 Moving content between stack and hand, e.g.:
 
-        (b)zlw(a)l rzlw
+        (b)zlw (a)l wrzl
             should simplify to
         (a)l(b)l
 
