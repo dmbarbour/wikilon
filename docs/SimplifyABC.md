@@ -1,7 +1,9 @@
 
 # Simplifying Awelon Bytecode
 
-I want enough simplification rules to cover frequent use cases for partial evaluations, especially operating within a `(stack*(hand*ext))` environment or other multi-stack environments. This document is more brainstorming than specification, since I'm still figuring out how to simplify ABC.
+Simplifying ABC has two challenges: first to determine which simplifications are valid, and second to determine a *strategy* for applying simplifications that is both efficient and reasonably complete, where by 'complete' I mean that we can write normal code with an expectation that it is fully partially evaluated, but it's okay that we might also stymie our simplifier if we try.
+
+Minimally, the simplifier should handle basic data plumbing and maths for a `(stack*(hand*ext))` environment. Other ad-hoc environments would be nice, but are less essential at this time.
 
 Some obvious simplifications:
 
@@ -11,19 +13,27 @@ Some obvious simplifications:
         rl → 
         vc → 
         cv → 
-        zwz → wzw
+        zwz → wzw (or vice versa)
+
+        lzrw → wlzr (since `lzr` doesn't impact first two items)
+            (Haven't found a use case for this one.)
+            (Similar for llzrrw, llzrrz.)
+
         (similar for VRWLCZ)
 
-        w+ → + (commutative)
-        w* → * (commutative)
+        w+ → + (commutativity)
+        w* → * (commutativity)
         #0 → #
-        
 
-These actually help a lot for common data plumbing. I've seen considerable improvements. But I'll need something more to properly handle stack manipulations. Let's consider the following, with `(a)` representing a subprogram that constructs a value (e.g. number, text, block, pairs thereof).
+There are probably many more. It might be useful to construct an exhaustive list of length-up-to-K ABC data plumbing strings that are equivalent and are not reduced by smaller simplification rules. I could probably develop a logic program to do this.
 
-        (a)(b)w → (b)(a)
+I'll need something more to properly handle stack manipulations. Let's consider the following, with `(a)` representing a subprogram that constructs a value (e.g. number, text, block, pairs thereof).
+
         (a)z → w(a)
-        (a)(b)+ → (a+b)
+        (a)(b)+ → (add a b)
+        (a)(b)w → (b)(a)
+        (a)(b)l → (b,a)
+        (b,a)r → (a)(b)
 
 Well, the question then is how well we can take code for a multi-stack environment and optimize data interactions that are further apart. Some use cases:
 
@@ -83,61 +93,128 @@ Taking this to derive one useful rule:
                     =   (a)(b)wzlww
                     =   (a)l(b)w
 
-Nice. Though the second option is a lot more difficult to derive because it involves two `ww` injections. Okay, what about our stack manipulations?
+Nice. I could probably do a lot of data plumbing with just this rule, e.g. representing a two-stack system consisting of one stack of type `w` and one stack of type `l`.
+
+        (stack swap using latent data plumbing)
 
         (a)l(b)l rwrwzwlwl
             = (a)l(b) wrwzwlwl
             = (a)(b) wzlw wrwzwlwl
-            = (a)(b) wz wzwlwl
-            = (a)(b) w zwz wlwl
-            = (a)(b) w wzw wlwl
-            reducing ww            
-                = (a)(b) zlwl
-                = (a)w(b)lwl ???
-            reducing (a)(b)w
-                = (b)(a) wzlwl
-                = (b)l(a)l
+            = (b)(a) zlw wrwzwlwl
+            = (b)(a) z wzwlwl       (elim `lwwr`)
+            = (b)(a) wzwwlwl        (zwz → wzw)
+            = (b)(a) wzlwl
+            = (b)l(a)l
 
-So, this one's a bit tricky. There are several reduction options, not all of them useful. Moving content `(b)wzlw → l(b)` is certainly optional. More generally, I should probably recognize `(a)(b)zlw` as `(b)(a)wzlw` as `(b)l(a)`. Also, `(a)w(b)lw` might frequently benefit from pushing the inner `w` to the right.
+        (stack swap directly using floating (a)l(b)w=(b)w(a)l)
 
+        (a)l(b)l rwrwzwlwl
+            = (a)l(b) wrwzwlwl
+            = (a)l(b)w rwzwlwl
+            = (b)w(a)l rwzwlwl
+            = (b)w(a)w   zwlwl
+            = (b)(a)zw   zwlwl
+            = (b)(a)wz   wwlwl
+            = (b)(a)wz     lwl
+            = (b)(a)wzlw l
+            = (b)l(a)l
 
+Oh, well it didn't really save any work. But maybe it will help with larger samples?
 
+Efficient simplification is going to be very important, because it's largely going to be substituting for evaluation.
 
+Again, this is a bit tricky. If I naively reduce, I'd end up with `(a)(b)zlwl` or `(a)w(b)lwl`. I might need to recognize these scenarios explicitly when trying to optimize the data plumbing. OTOH, taking the `(a)w(b)l = (b)l(a)w` rule, I could still get `(b)l(a)wwl = (b)l(a)l`.
 
-
-
-
-        (a)l(b)w    
-            = (b)w(a)l    
-            = (b)(a)zl  
-            = (a)(b)wzl
-
-        (a)l(b)                         (s*e) → ((a*s)*e) → (b * ((a*s)*e)
-            = (a)(b)(???)
+Let's try a simple strategy of shifting all data plumbing to the right, performing `w` flips where feasible, then shifting it back left. The main disadvantage here is that we're rapidly increasing the amount of data plumbing. For a single stack swap:
         
-        l(b)                if I have an easy answer here, it might help a lot
-            = (b)(???)
+        (a)l(b)l rwrwzwlwl
+            = (a)(b)wzlwlrwrwzwlwl
+            = (b)(a)zlwlrwrwzwlwl
+            = (b)(a)zwzwlwl
+            = (b)(a)wzwwlwl
+            = (a)(b)zwwlwl
+            = (a)(b)zlwl   (special case for `ww` injection)
+            = (a)(b)wwzlwl
+            = (b)(a)wzlwl
+            = (b)l(a)l
 
-        l(b) = (b)
+For a full stack rotation:
 
+        (a)l(b)l(c)l rwrwrwzwlzwlwl
+            should simplify to (b)l(c)l(a)l
+            = (a)(b)wzlwl(c)l rwrwrwzwlzwlwl
+            = (b)(a)zl(c)zwzlwl rwrwrwzwlzwlwl
+            = (b)(a)zl(c)wz rwzwlzwlwl
+            = (b)(a)(c)lzrwzlz rwzwlzwlwl
+            = (b)(c,a)  zrwzlz rwzwlzwlwl
+            = (b)w(c,a)  rwzlz rwzwlzwlwl
+            = (b)w(a)(c)  wzlz rwzwlzwlwl
+            = (b)w(c)(a)   zlz rwzwlzwlwl
+            = (b)w(c)w(a)   lzr wzwlzwlwl
+            = (b)w(c)wz(a) wzw lzwlwl
+            = (b)w(c)wz(a) zwz lzwlwl
+            = (b)w(c)wzw(a) wz lzwlwl
+            = (b)w(c)wzw(a) wz lwzwzlwl
+            = (b)w(c)wzw(a) wzlw zwzlwl
+            = (b)w(c)wzwl(a)     zwzlwl
+            = (b)(c)zwzwl(a)     zwzlwl
+            = (b)(c)wzl(a)  zwzlwl
+            = (b)(c)wzlw(a)  wzlwl
+            = (b)l(c)(a) wzlw l
+            = (b)l(c)l(a)l
 
-Also, while we have `w` and `l` as special cases for rewriting stacks, what about `r`?
+Yikes. I'm not sure how I'd go about efficiently automating this reduction. Compare the 'floating `w` and `l` stacks?
 
-        (a,b)r
-            = (b)(a)lr
-            = (b)(a)
+        (a)l(b)l(c)l rwrwrwzwlzwlwl
+            should simplify to (b)l(c)l(a)l
+            = (a)l(b)l(c)w rwrwzwlzwlwl
+            = (c)w(a)l(b)l rwrwzwlzwlwl
+            = (c)w(a)l(b)w   rwzwlzwlwl
+            = (c)w(a)l(b)w   rwzwlzwlwl
+            = (c)w(b)w(a)     wzwlzwlwl
+            = (c)w(b)w(a)     zwzlzwlwl
+            = (c)w(b)w(a)     zwz lzwlwl
+            = (c)w(b)w(a)     zwz lzwlwl
+            = (c)w(b)ww(a)     wz lzwlwl
+            = (c)w(a)(b)        z lzwlwl
+            = (c)w(a)w(b)l         zwlwl 
+            = (b)l(c)w(a)w         zwlwl
+            = (b)l(c)w(a)z         wzlwl
+            = (b)l(c)ww(a)         wzlwl
+            = (b)l(c)(a)wzlwl
+            = (b)l(c)l(a)l
 
+This seems a bit simpler, but there are still some tricky steps to recognize. And, I'm not especially interested in depending on a simplification strategy that works only for a two-stack environment.
 
+Let's try another sample: math
 
-But is there an easy way to compute this property?
+        (a)l (b)l rwrzw+l
+            should simplify to (a+b)l
+            = (a)l (b)l rwrzw+l
+            = (a)l (b)   wrzw+l
+            = (a)(b)+l
+            = (a+b)l
 
-        (a)l(b)zlw  =   (a)lw(b)lw  = ???
+Stack and hand operations? 
 
+        put = wrzl
+        take = rzlw
 
-Assuming I'm able to recognize and simplify these cases, I should be able to perform a lot more partial evaluation without translating through an intermediate language, like lambda calculus. Granted, I have the *option* of translating through lambda calculus, but rewriting the ABC directly should be simpler to use and validate, and likely higher performance.
+        (b)zlw (a)l wrzl
+            should simplify to (a)l(b)l
+            = w(b)lw(a)lwrzl
+            ...
+            = w(b)l(a)zlwrzl
+            = w(b)l(a)wwzlwrzl
+            = w(a)w(b)lwzlwrzl
+            ...
 
-A possible technique is to also capture 'value manipulators'. Instead of just `(a)`, maybe I can recognize subprograms of type `(a→b)` or operations of even higher arity. In some cases, I gain some obvious translations like: `(a→b)z ⇒ z(a→b)`. 
+        (a)zlw(b)l(c)zlw(d)l w
+            should simplify to w(c)l(d)lw(a)l(b)l
 
-Alternatively, perhaps our simplifier can explicitly recognize stack captures? and perhaps the swap pattern captures? This might work pretty well, assuming I find a sufficient set of rewrites to cover the common patterns (and define common patterns for easy simplifications).
+With the simplifications I know so far, the stack-hand manipulations are out of reach. I need to find a few more, I think. Perhaps `(a)lw → w(a)l` would be valid? 
 
+        (a)lw :: (s*(h*e)) → ((a*s)*(h*e)) → (h*((a*s)*e))
+        w(a)l :: (s*(h*e)) → (h*(s*e)) → ((a*h)*(s*e))      NOPE!
 
+Well, maybe something like this then. Something based on the idea that we move the implicit stacks around as part of maintaining multiple stacks, so we can also work in the reverse direction.

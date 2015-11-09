@@ -11,7 +11,7 @@
 -- * support compressed storage and large code blocks
 --
 module Wikilon.ABC.Fast
-    ( ABC(..)
+    ( ABC
     , Op(..), expandOps, compactOps
     , V(..), purifyV
     , ExtOp(..), extOpTable, extCharToOp, extOpToChar
@@ -67,7 +67,7 @@ import Wikilon.Token
 -- i.e. (mappend a b) applies function `a` before function `b`.
 -- 
 data ABC = ABC
-    { abc_code :: LBS.ByteString        -- ABC & Extensions
+    { abc_code :: LazyUTF8.ByteString   -- ABC & Extensions
     , abc_toks :: [Token]               -- matched by '!' in code
     , abc_data :: [V]                   -- matched by '_' in code
     } deriving (Eq, Typeable)
@@ -142,8 +142,8 @@ data ExtOp
 extOpTable :: [(ExtOp, Char, Pure.ABC)]
 extOpTable =
     [(ExtOp_Inline, 'i', "vr$c")
-    ,(ExtOp_Swap,   'x', "vrwlc")
-    ,(ExtOp_Mirror, 'X', "VRWLC")
+    ,(ExtOp_Swap,   's', "vrwlc")
+    ,(ExtOp_Mirror, 'S', "VRWLC")
     ]
 
 extOpCharArray :: A.Array ExtOp Char
@@ -202,7 +202,7 @@ showsV (B abc kf) = showChar '[' . shows abc . showChar ']' . showsKF kf
 showsV (S tok v) = showsV v . shows tok
 showsV (T txt) = shows (Pure.ABC_Text txt)
 showsV (X ref kf) = showString "{#" . rsc . qv . showsKF kf . showChar '}' where
-    rsc = showString "v:" . shows (unsafeVRefAddr ref) -- local resource id
+    rsc = showString "V:" . shows (unsafeVRefAddr ref) -- local resource id
     qv = showChar '\'' -- resource represents a quoted value
 
 showsKF :: Flags -> ShowS
@@ -240,7 +240,7 @@ charToOp c | inBounds = charToOpArray A.! c
 expandOps :: ABC -> [Op]
 expandOps abc = expandOps' (abc_toks abc) (abc_data abc) (abc_code abc)
 
-expandOps' :: [Token] -> [V] -> LBS.ByteString -> [Op]
+expandOps' :: [Token] -> [V] -> LazyUTF8.ByteString -> [Op]
 expandOps' toks vals s = case LazyUTF8.uncons s of
     Just (c, s') -> case c of
         (charToOp -> Just op) -> op : expandOps' toks vals s'
@@ -262,7 +262,8 @@ expandOps' toks vals s = case LazyUTF8.uncons s of
 --
 -- Note: this is not an especially efficient computation. It applies
 -- three separate filters over the input. However, the assumption is
--- that we'll be reading bytecode far more frequently than writing it.
+-- that we'll be reading (expanding) bytecode far more frequently than
+-- writing (compacting) it outside of the compilation process.
 compactOps :: [Op] -> ABC
 compactOps ops = ABC _code _toks _data where
     _code = LazyUTF8.fromString $ fmap opc ops
@@ -538,6 +539,7 @@ purifyV' = vops where
 
 -- Note: I'm using a transparent compression here, albeit only for 
 -- sufficiently large objects having an acceptable compression ratio.
+--
 -- This is likely to save space, since ABC compresses very nicely.
 -- For large value objects, it may help reduce paging and allocation,
 -- which may improve performance.

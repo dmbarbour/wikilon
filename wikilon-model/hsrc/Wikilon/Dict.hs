@@ -150,6 +150,8 @@ instance VCacheable Def where
         DefS <$> getByteStringLazy (fromIntegral sz) 
 
 -- for now, just reserving a byte for compression options
+-- later, I might wish to compress large definitions, esp.
+-- those representing large binary text values.
 instance VCacheable BigAODef where
     put (UDef def) = putWord8 1 >> put def
     get = getWord8 >>= \ ty -> case ty of
