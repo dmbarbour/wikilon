@@ -22,51 +22,29 @@ A **dictionary application** represents all of its state within the AO dictionar
 
 The disadvantage is that our applications cannot directly *push* information. This can be mitigated in many cases by using some simple strategy to pull information (polling, long-polling, Comet, subscription, etc.) and by relying on external agents to push updates occasionally. But it does force us to favor a more RESTful architectural style. 
 
-The *command pattern* or append-only log is widely useful for dictionary applications. Expressed within a dictionary, this might look something like:
+Dictionary applications are free to present editable views of bytecode. Such views are potentially convenient for representing form or document based user inputs.
+
+However, dictionary applications are additionally free to *evaluate* code. This enables operation on structured values. An application might render a view of a value, or represent application state as a value. This allows us to push update logic from our views into our dictionaries, representing update commands as pure functions of type `AppState → AppState`.
+
+The *command pattern* is especially useful in context. It provides several useful features: cache-friendly updates, universal undo, back-in-time debugging, visible command histories, trivial cloning. Expressed within a dictionary, this pattern might look something like:
 
         @foo.v0 (init foo)
         @foo.v1 {%foo.v0}(command to update foo)
         @foo.v2 {%foo.v1}(another update command)
         @foo.v3 {%foo.v2}(yet another command)
-        @foo {%foo.v3}{%fooType}
+        @foo    {%foo.v3}
 
-With this pattern, we gain several features: unlimited undo, uniform cloning, back-in-time debugging, ability to tweak old commands and replay, visible command histories for abstraction and refactoring, cache-friendly computations for common update patterns (i.e. assuming we mostly add commands and undo or tweak recent commands). Taken together with an annotation to stow large values into VRefs, it is feasible to construct truly massive objects (e.g. filesystems, databases, game worlds) within a single dictionary object without massive RAM overheads.
+For many applications, like mailing lists and web forums, it is entirely acceptable to preserve the complete history or leave maintenance to humans. But in other cases we might prefer to gradually stabilize and compact our histories; for these, see *Managed Dictionaries*, below. 
 
-For many applications, like mailing lists and web forums, it is entirely acceptable to keep a complete history or leave maintenance to humans. Space is cheap enough that we could easily keep complete histories for anything that involves discrete human inputs. But in other cases we may need to gradually stabilize and compact our history. It is feasible to automate processes that will systematically inline, simplify, refactor, and garbage collect words at the dictionary layer to recover space. However, to avoid upsetting users and breaking applications, we must describe which optimizations are permitted. See *Hidden, Opaque, and Frozen Words*, below.
+Dictionary applications can potentially grow larger than memory. This is acceptable, so long as developers leverage [stowage](LargeValueStowage.md). With stowage, it is not difficult for a dictionary application to model a database or ftp server. 
 
-## Representing Databases, Filesystems, and other Big Data
-
-Many PL runtimes keep everything in volatile memory by default. In my experience, this creates a discontinuity in the programming experience. Developers must use a very different design if they want larger-than-memory data structures or durable data. Awelon project and Wikilon favor a different approach: 
-
-* the `{&stow}` annotation tells our runtime to serialize a value to disk
-* the runtime will load and cache stowed values from disk when necessary
-* runtime tracks relevant and affine properties for efficient copy, drop
-* structure and storage sharing for stowed values is typically implicit
-
-With stowed values, it is not difficult to model larger-than-memory filesystems or databases as large persistent data structures. We can leverage trees (tries, finger-trees, log-structured merge trees, spatial partitioning trees, etc.) for most problems involving large amounts of data.
-
-Durability of data is a separate concern.
-
-In context of *dictionary applications*, we have a dictionary where we represent all application state. Any durable data must be represented within the dictionary. However, for performance, we also maintain weakly durable caches of computed properties. Stowed values may be rooted in our cache, perhaps representing a filesystem within a compiled definition of a machine. Application architects will favor cache-friendly update patterns where feasible, such as using a command pattern to gradually update the machine.
-
-*Aside:* Stowed values are closely related to ABC value resources, i.e. where we use `{#resourceId'kf}` to name a bytecode resource. The `resourceId` is a secure hash of the bytecode, and the `'kf` suffix identifies our resource as a linear quoted value to permit lazy loading and forbid copy/drop. In contrast, value resources are suitable for distribution over an untrusted network, but stowed values permit compact representation and precise local garbage collection.
-
-## Providing Security for Dictionary Applications
-
-As a security use case, I imagine modeling a game (perhaps a multi-user dungeon) where each player should:
-
-1. control their own character, not world state or other characters
-2. observe the state of the game world only near their character
-
-Modeling the game world state is feasible with dictionary applications. The greater challenge, then, is controlling the players. A viable option would be to constrain access to the dictionary through an application interface, at least for some subset of users who are not administrators of that dictionary.
-
-## Extraction of Dictionary Applications
+## Extraction of Applications from the Dictionary
 
 As a development environment, Wikilon must support compilation of applications to run on a desktop, android phone, an independent web service, and so on. Ideally, these are the same applications that we debug within Wikilon, but we want to extract a minimal amount of logic and state from our dictionary to make it work. Dictionary objects are a good fit here, as are applications that operate only on a well-defined subset of the dictionary (e.g. some finite set of named objects). 
 
 Extraction of dictionary applications *in media res* supports an implicit debug mode, automatic records and testing of application debug sessions, and a possibility for interactive construction of applications from a fork of a prototypes. In some ways, this is much nicer than conventional application compilers.
 
-## Automatic Optimization of Dictionaries: Hidden, Opaque, and Frozen Words
+## Managed Dictionaries and Attributes
 
 Words in an AO dictionary provide a basis for mutable meaningful structure, modularity, and structure sharing. The mutable meaningful structure allows AO dictionaries to serve as a platform for live coding and dictionary applications. 
 
@@ -82,7 +60,7 @@ To declare a list of attributes, I propose prefixing any definition as follows:
 
         [{&hidden}{&opaque}{&frozen}]%
 
-This structure is preserved on export, easy for an optimizer to recognize and handle, and trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (categories, relations, etc.) with no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
+This structure is preserved on import/export but trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (categories, relations, deprecation, licensing, decay models, etc.) and has no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
 
 Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment might require explicitly un-freezing the word to modify its behavior.
 
@@ -105,3 +83,13 @@ However, explicit effects are *complicated*. Interacting with an implicit enviro
 Further, explicit effects are *unnecessary*. For high level error handling, it is sufficient to reject a command that would lead to a bad application state or generate an error report. For reflection, we can model software agents that maintain and metaprogram our dictionary. For performance, we can push for ABCD-like accelerators and better annotations. Any model of shared resources can be modeled functionally and we can mitigate performance by accelerating common patterns. External communications is modeled in terms of RESTful interactions with external agents.
 
 The main costs of purity is that the rest of the world isn't designed for it. Retained mode rendering, for example, favors a stream of update events. We'll need to work with this when designing applications for extraction, e.g. explicitly computing update logs from subsequent representations of state (like Facebook's React).
+
+## Security for Dictionary Applications
+
+Imagine our goal is to model a game where each player is limited to viewing and manipulating a shared game world through a separate avatar. The security requirement here involves limiting the players, as opposed to asking them to police themselves.
+
+To implement this requires we cripple player access to the dictionary. Even read-only access is sufficient for players to 'view' the game world through the eyes of every other player. The AO programming experience is designed for the holistic dictionary. We try and undo, we fork and simulate, we edit and observe. We fork whole dictionaries, use DVCS-style pulls and commits and cherry-picking. We search and refactor whole dictionaries. None of this is compatible with fine-grained security constraints.
+
+But if we're willing to accept that this remains a 'dictionary application' in only the eyes of our game administrators, we can proceed easily enough. We constrain player access to a whitelisted set of dictionary applications that we know to be compatible with our security policy.
+
+*Aside:* If the number of players is small, asking them to police themselves is reasonable. Shared storytelling, quests, roleplaying, and their like are frequently represented on conventional forums. Doing so within a programming medium like AO has potential to create a far more real-time interactive multi-media experience than natural language. It will also automate the administrative burdens. And if a storyteller or player wants to keep a surprise, they can just keep it to themselves, perhaps using a private fork of the dictionary if the surprise needs development and debugging.

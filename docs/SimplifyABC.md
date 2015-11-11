@@ -1,25 +1,40 @@
 
 # Simplifying Awelon Bytecode
 
-Simplifying ABC has two challenges: first to determine which simplifications are valid, and second to determine a *strategy* for applying simplifications that is both efficient and reasonably complete, where by 'complete' I mean that we can write normal code with an expectation that it is fully partially evaluated, but it's okay that we might also stymie our simplifier if we try.
+Simplifying ABC involves two ongoing challenges: 
+
+1. to discover useful, valid simplification rules
+2. to determine a good strategy for applying rules
+
+Simplification rules are behavior-preserving rewrites for our bytecode or a simple editable view thereof. A strategy is important to ensure simplification terminates and accomplishes something useful. Ideally, the simplifier itself should be simple and predictable enough for developers to internalize. 
+
+In context of Wikilon, our simplifier will also be largely responsible for evaluating 'dictionary objects' as part of our [application models](ApplicationModel.md). 
+
+
+
+ that is both efficient and reasonably complete, where by 'complete' I mean that we can write normal code with an expectation that it is fully partially evaluated, but it's okay that we might also stymie our simplifier if we try.
 
 Minimally, the simplifier should handle basic data plumbing and maths for a `(stack*(hand*ext))` environment. Other ad-hoc environments would be nice, but are less essential at this time.
 
 Some obvious simplifications:
 
-        ww → 
-        zz → 
-        lr → 
-        rl → 
-        vc → 
-        cv → 
-        zwz → wzw (or vice versa)
+        BASIC DATA PLUMBING SIMPLIFICATION RULES
 
-        lzrw → wlzr (since `lzr` doesn't impact first two items)
+        ww = 
+        zz = 
+        lr = 
+        rl = 
+        vc = 
+        cv = 
+        zwz = wzw (or vice versa)
+
+        lzrw = wlzr (since `lzr` doesn't impact first two items)
             (Haven't found a use case for this one.)
             (Similar for llzrrw, llzrrz.)
 
         (similar for VRWLCZ)
+
+        SOME MATH SIMPLIFICATION RULES
 
         w+ → + (commutativity)
         w* → * (commutativity)
@@ -71,7 +86,9 @@ Moving content between stack and hand, e.g.:
             should simplify to
         (a)l(b)l
 
-Let's consider delayed dataplumbing, i.e. where we shift plumbing until after a value is introduced.
+Let's consider delayed data plumbing, i.e. where we shift plumbing until after a value is introduced.
+
+        DELAYED DATA PLUMBING SIMPLIFICATION RULES
 
         l(a)    =   (a)wzlw
         r(a)    =   (a)wrzw
@@ -80,7 +97,7 @@ Let's consider delayed dataplumbing, i.e. where we shift plumbing until after a 
         v(a)    =   (a)vr
         c(a)    =   (a)lc
 
-Taking this to derive one useful rule:
+Taking this to derive another useful rule:
 
         (a)l(b)w    =   (a)(b)wzlww
                     =   (a)(b)wzl
@@ -119,11 +136,8 @@ Nice. I could probably do a lot of data plumbing with just this rule, e.g. repre
             = (b)(a)wzlw l
             = (b)l(a)l
 
-Oh, well it didn't really save any work. But maybe it will help with larger samples?
+Oh, well it didn't really save any work. But maybe it will help with larger samples? Efficient simplification is going to be very important, because it's largely going to be substituting for evaluation in Wikilon (i.e. simplifying code performs most evaluation for dictionary objects).
 
-Efficient simplification is going to be very important, because it's largely going to be substituting for evaluation.
-
-Again, this is a bit tricky. If I naively reduce, I'd end up with `(a)(b)zlwl` or `(a)w(b)lwl`. I might need to recognize these scenarios explicitly when trying to optimize the data plumbing. OTOH, taking the `(a)w(b)l = (b)l(a)w` rule, I could still get `(b)l(a)wwl = (b)l(a)l`.
 
 Let's try a simple strategy of shifting all data plumbing to the right, performing `w` flips where feasible, then shifting it back left. The main disadvantage here is that we're rapidly increasing the amount of data plumbing. For a single stack swap:
         
@@ -200,19 +214,26 @@ Stack and hand operations?
         put = wrzl
         take = rzlw
 
-        (b)zlw (a)l wrzl
-            should simplify to (a)l(b)l
-            = w(b)lw(a)lwrzl
+        (a)l(b)zlw
+            should simplify to (b)zlw(a)l as needed
+            = (a)(b)wzlwzlw
+            = (b)(a)zlwzlw
             ...
-            = w(b)l(a)zlwrzl
-            = w(b)l(a)wwzlwrzl
-            = w(a)w(b)lwzlwrzl
+            = (a)lw(b)lw
+            ...
+            = (a)l(b)w wzlw (ww injection)
+            = (b)w(a)l wzlw
+            = (b)(a)zlwzlw
             ...
 
-        (a)zlw(b)l(c)zlw(d)l w
-            should simplify to w(c)l(d)lw(a)l(b)l
+With the simplification rules I know so far, even the simplest stack-hand manipulations seem out of easy reach. I believe I need to discover more simplification rules. Something especially for `(a)l(b)zlw`. I know the `(a)l` and `(b)zlw` operations can float past each other freely, but this doesn't appear obvious to my simplifier.
 
-With the simplifications I know so far, the stack-hand manipulations are out of reach. I need to find a few more, I think. Perhaps `(a)lw → w(a)l` would be valid? 
+I don't want a bunch of specialized 'value crossing' rules in my simplifier, except as an obvious optimization of what could be achieved with other rules already in the simplier.
+
+
+        
+
+ Perhaps `(a)lw → w(a)l` would be valid? 
 
         (a)lw :: (s*(h*e)) → ((a*s)*(h*e)) → (h*((a*s)*e))
         w(a)l :: (s*(h*e)) → (h*(s*e)) → ((a*h)*(s*e))      NOPE!

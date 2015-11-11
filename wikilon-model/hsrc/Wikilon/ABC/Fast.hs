@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, OverloadedStrings, ViewPatterns #-}
+{-# LANGUAGE DeriveDataTypeable, OverloadedStrings, ViewPatterns, GeneralizedNewtypeDeriving #-}
 -- | While Awelon Bytecode may be naively interpreted, doing so is
 -- not efficient. Wikilon must pre-process and simplify bytecode and
 -- implement various performance tweaks:
@@ -108,10 +108,10 @@ data V
 -- | Flags for substructural or special block attributes. Mostly, 
 -- I have affine and relevant types, but I might later add support
 -- for parallelism, laziness, etc. of blocks. Maybe alternative
--- cache modes for large values.
-type Flags = Word8
-    -- If ever I need more than 7 bits, I can switch transparently by
-    -- using a varnat encoding. This seems unlikely, though.
+-- cache modes or some heuristics information for large values.
+--
+newtype Flags = Flags { unFlags :: Word8 }
+    deriving (Eq, Bits)
 
 -- | Accelerated operations corresponding to common substrings of
 -- Awelon Bytecode (and hence to common functions). These encode
@@ -377,11 +377,11 @@ cbChar8 :: Char -> CacheBuilder
 cbChar8 = (,) mempty . BB.char8
 
 cbFlags :: Flags -> CacheBuilder
-cbFlags = (,) mempty . BB.word8
+cbFlags = (,) mempty . BB.word8 . unFlags
 
 rdFlags :: CacheEnc -> (Flags, CacheEnc)
 rdFlags (CE refs s) = case LW8.uncons s of
-    Just (f,s') -> (f, CE refs s')
+    Just (f,s') -> (Flags f, CE refs s')
     Nothing -> impossible "underflow attempting to read flags byte"
 
 cbRef :: VRef V -> CacheBuilder
@@ -476,7 +476,7 @@ fromPureABC' :: ([Op] -> [Op]) -> Pure.ABC -> ABC
 fromPureABC' fsimp = convertABC where
     convertABC = compactOps . fsimp . fmap convertOp . Pure.abcOps
     convertOp (Pure.ABC_Prim op) = ABC_Prim op
-    convertOp (Pure.ABC_Block abc) = ABC_Val (B (convertABC abc) 0)
+    convertOp (Pure.ABC_Block abc) = ABC_Val (B (convertABC abc) zeroBits)
     convertOp (Pure.ABC_Text txt) = ABC_Val (T txt)
     convertOp (Pure.ABC_Tok tok) = ABC_Tok tok
 
@@ -585,7 +585,7 @@ instance VCacheable V where
 -- for simple block values. So I simply wrap ABC in a block before
 -- encoding it. 
 instance VCacheable ABC where
-    put abc = put (B abc 0)
+    put abc = put (B abc zeroBits)
     get = get >>= \ v -> case v of
         (B abc _kf) -> return abc
         _ -> fail (abcErr $ "invalid encoding for ABC content")
@@ -594,16 +594,19 @@ instance VCacheable ABC where
 -- INTERPRETING AND EVALUATING BYTECODE --
 ------------------------------------------
 
--- | A flag indicating that a block is relevant (forbids drop)
+-- | A flag indicating that a block is relevant (forbids drop), or
+-- that an X ref is not droppable due to transitively containing
+-- such a block.
 f_rel :: Flags
-f_rel = 0x01
+f_rel = Flags 0x01
 
--- | A flag indicating that a block is affine (forbids copy)
+-- | A flag indicating that a block is affine (forbids copy), or
+-- that an X ref is not copyable due to transitively containing
+-- such a block.
 f_aff :: Flags
-f_aff = 0x02
+f_aff = Flags 0x02
 
 
--- For Wikilon, 
 
 -- In most interpretation contexts, I want the ability to halt on
 -- a quota
