@@ -97,6 +97,10 @@ data V
     | X (VRef V) Flags  -- external value resource
     deriving (Eq, Typeable)
 
+    -- todo: add support for parallel evaluation
+    --       (maybe support laziness, too). 
+
+
 -- contemplating support for: 
 --   binaries (a specialized vector?)
 --   vectors (an interpretation of lists?)

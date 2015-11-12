@@ -60,7 +60,7 @@ To declare a list of attributes, I propose prefixing any definition as follows:
 
         [{&hidden}{&opaque}{&frozen}]%
 
-This structure is preserved on import/export but trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (categories, relations, deprecation, licensing, decay models, etc.) and has no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
+This structure is preserved on import/export but trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (quotas, categories, relations, deprecation, licensing, decay models, etc.) and has no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
 
 Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment might require explicitly un-freezing the word to modify its behavior.
 
@@ -80,16 +80,56 @@ I have contemplated introducing an effects models for dictionary applications. P
 
 However, explicit effects are *complicated*. Interacting with an implicit environment hinders the gradual compaction of history and compression of state for long-running dictionary applications. We must specify the environment. We must deal with competing environment models and versions.
 
-Further, explicit effects are *unnecessary*. For high level error handling, it is sufficient to reject a command that would lead to a bad application state or generate an error report. For reflection, we can model software agents that maintain and metaprogram our dictionary. For performance, we can push for ABCD-like accelerators and better annotations. Any model of shared resources can be modeled functionally and we can mitigate performance by accelerating common patterns. External communications is modeled in terms of RESTful interactions with external agents.
+Further, explicit effects have repeatedly proven *unnecessary*. For high level error handling, it is sufficient to reject a command that would lead to a bad application state or generate an error report. For reflection, we can model software agents that maintain and metaprogram our dictionary. For performance, we can push for ABCD-like accelerators and better annotations. Any model of shared resources can be modeled functionally and we can mitigate performance by accelerating common patterns. External communications is modeled in terms of RESTful interactions with external agents.
 
-The main costs of purity is that the rest of the world isn't designed for it. Retained mode rendering, for example, favors a stream of update events. We'll need to work with this when designing applications for extraction, e.g. explicitly computing update logs from subsequent representations of state (like Facebook's React).
+## Parallelism in Dictionary Applications
+
+I use 'parallelism' to describe multiple computations in the same *physical* time, e.g. keeping multiple CPUs busy. This is a completely separate issue from 'concurrency'. Though, concurrent systems frequently provide ample opportunity for even more parallelism.
+
+Awelon Bytecode has a lot of latent parallelism. So the problem becomes teasing it out at an appropriate granularity to keep the overheads low and the processors busy. We can utilize a simple variant of [parallel Haskell's](https://hackage.haskell.org/package/parallel-3.2.0.6/docs/Control-Parallel.html) `par` and `seq` techniques. 
+
+        {&par} :: (block * env) → (block with 'par' attribute * env)
+        USAGE: (prep args)[(expensive)]{&par}$(move pending result)
+
+        {&seq} :: (lazy or pending value * env) → (value * env)
+
+Our runtime would support opaque 'pending' results. Trying to operate on the pending result may have us waiting. But we're at least free to move it around, e.g. tuck it into a data structure and spark off a few more parallel computations. With just this much ABC and AO gain access to all of Haskell's well developed [strategies](https://hackage.haskell.org/package/parallel-3.2.0.6/docs/Control-Parallel-Strategies.html) for purely functional parallelism. It's also trivial to implement!
+
+It is also possible to support massively parallel GPU computations. Assume a subprogram constructed from a constrained set of recognizable functions and data structures that we know how to easily implement on the GPU. Annotate this for evaluation on the GPU. The runtime applies its internal compilers to CUDA or OpenCL or a shader language. When we later apply the function it will run on the GPU. Other forms of heterogeneous computing, e.g. FPGAs, will tend to follow a similar pattern. Haskell has used a similar approach with [accelerate](https://hackage.haskell.org/package/accelerate).
+
+In context of a dictionary application, every form of parallelism could kick in for every evaluation. This includes partial evaluations and cache maintenance. I imagine a mature, active, and popular AO dictionary full of apps could productively leverage as many CPUs, GPUs, and other computing devices as you're willing to throw at them.
+
+## Concurrency for Dictionary Applications
+
+> concurrency is a property of systems in which several computations 
+> are executing simultaneously, and potentially interacting
+> - Wikipedia
+
+Concurrent systems are useful abstractions to model. 
+
+AO can model multi-agent systems, concurrent constraint systems, [message passing machines](NetworkModel.md), actors systems, multi-threaded shared memory, and more. In most cases a formal concurrency model will need to be coupled to an 'environment' model to form the complete system. Non-deterministic choice or scheduling decisions, for example, would be modeled as belonging to the environment. When modeled properly, we should be able to capture a concurrent system as a value at any well-defined point in time and 'run' the model forward to a future time under the assumption of no external interference. The notion of 'time' here is logical and model dependent - e.g. between processing messages. 
+
+We then develop dictionary applications in terms of our concurrency abstractions, and compose the pieces together into our larger system, and use the command pattern to step forward (e.g. until a stable condition is reached, or just a few messages, etc.). We benefit greatly from doing so:
+
+* capture, model, render, and extract application in medias res
+* render active application states: [animate, scrub, or graph](http://worrydream.com/LadderOfAbstraction/)
+* freely extend applications by injecting additional computations
+* implicit conventional debug-mode, breakpoints and state included
+* concurrency introduces systemic opportunities for parallelism
+* concurrent systems are a relatively easy target for extraction
+
+Also, debugging concurrent applications is vastly less unpleasant on a dictionary than on physical hardware. We're free to step back in time due to the command pattern. We're free to tweak the environment and see how the application would progress. 
+
+On the other hand, we lose those convenient timeouts that rely on hardware race non-determinism. This may limit which applications we can effectively express with our concurrency abstractions. Real-time concurrent systems models (e.g. where our 'logical time' is 'logical seconds (and fractions thereof)') may need to step up for developing the apps that need precise timing behavior information.
 
 ## Security for Dictionary Applications
 
 Imagine our goal is to model a game where each player is limited to viewing and manipulating a shared game world through a separate avatar. The security requirement here involves limiting the players, as opposed to asking them to police themselves.
 
-To implement this requires we cripple player access to the dictionary. Even read-only access is sufficient for players to 'view' the game world through the eyes of every other player. The AO programming experience is designed for the holistic dictionary. We try and undo, we fork and simulate, we edit and observe. We fork whole dictionaries, use DVCS-style pulls and commits and cherry-picking. We search and refactor whole dictionaries. None of this is compatible with fine-grained security constraints.
+To implement this security policy requires we cripple player access to the dictionary. Even read-only access is sufficient for players to 'view' the game world through the eyes of every other player. We could provide a private space for each player to install scripts or macros (e.g. new character animations, musical scores for characters to play on instruments, etc.), but fragmented access to the dictionary would be stifling. The AO programming experience is designed for the holistic dictionary. 
 
-But if we're willing to accept that this remains a 'dictionary application' in only the eyes of our game administrators, we can proceed easily enough. We constrain player access to a whitelisted set of dictionary applications that we know to be compatible with our security policy.
+If we're content that this remains a 'dictionary application' only to our developers and game masters, we can proceed easily enough. Constrain player access to a set of whitelisted dictionary applications that we know to be compatible with our security policy. Player authentication could easily be separated to a host like Wikilon if we don't wish to poison our dictionaries with private player password information. But application state would remain within the dictionary.
+
+I imagine that most security policies will follow a similar pattern. The features that make AO dictionary applications debuggable also make them hackable. We can still enforce security, but the cost is the ability for some participants to view the application as part of an AO dictionary. Yet, embedding application state in the dictionary remains useful to our developers, and potentially to players after the play is done.
 
 *Aside:* If the number of players is small, asking them to police themselves is reasonable. Shared storytelling, quests, roleplaying, and their like are frequently represented on conventional forums. Doing so within a programming medium like AO has potential to create a far more real-time interactive multi-media experience than natural language. It will also automate the administrative burdens. And if a storyteller or player wants to keep a surprise, they can just keep it to themselves, perhaps using a private fork of the dictionary if the surprise needs development and debugging.
