@@ -52,7 +52,8 @@ dhMod = d_mod
 dhUpdate :: DictHead -> Dict -> T -> DictHead
 dhUpdate dh dNew tUpd = 
     let dOld = dhDict dh in
-    let rlu' = rluUpdate (dictDiff dNew dOld) (dhRLU dh) in
+    let dd = dictDiff dNew dOld in
+    let rlu' = rluUpdate (rluDiff dd) (dhRLU dh) in
     DictHead { d_dict = dNew, d_rlu = rlu', d_mod = tUpd }
 
 instance VCacheable DictHead where

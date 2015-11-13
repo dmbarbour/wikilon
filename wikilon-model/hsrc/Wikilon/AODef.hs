@@ -8,7 +8,9 @@ module Wikilon.AODef
     , aodefWords
     , renameInAODef
     , wordToToken
+
     , isValidAODef
+    , aodefRedirect
 
     , aodefToABC, ABC
     , aodefToClaw, ClawCode
@@ -19,7 +21,7 @@ import qualified Data.ByteString.Char8 as BS
 import Wikilon.Token
 import Wikilon.Word
 import Wikilon.Text
-import Wikilon.ABC.Pure (ABC(..), abcTokens, isValidABC, Op(..))
+import Wikilon.ABC.Pure (ABC(..), abcTokens, isValidABC, Op(..), PrimOp(..))
 import qualified Wikilon.ABC.Pure as ABC
 import Wikilon.Claw (ClawCode)
 import qualified Wikilon.Claw as Claw
@@ -82,6 +84,24 @@ aodefToABC = fin . ABC.decode where
 -- | token associated with a word
 wordToToken :: Word -> Token
 wordToToken = Token . BS.cons '%' . unWord
+
+-- | Modulo whitespace and attributes, a definition `{%foo}` is a
+-- redirect to word `foo`. This function filters whitespace and
+-- attributes to return a possible redirect target.
+aodefRedirect :: AODef -> Maybe Word
+aodefRedirect = cmp . cln . abc where
+    abc = ABC.abcOps . aodefToABC
+    abcWS ABC_SP = True
+    abcWS ABC_LF = True
+    abcWS _ = False
+    cln (ABC_Block _ : ABC_Prim ABC_drop : ops) = cln ops -- filter attributes
+    cln (ABC_Prim op : ops) | abcWS op = cln ops -- filter whitespace
+    cln (op : ops) = op : cln ops
+    cln [] = []
+    cmp [ABC_Tok (Token t)] = case BS.uncons t of
+        Just ('%', w) -> Just (Word w)
+        _ -> Nothing
+    cmp _ = Nothing
 
 -- | Assuming a valid AODef, convert it to a Claw view.
 aodefToClaw :: AODef -> ClawCode

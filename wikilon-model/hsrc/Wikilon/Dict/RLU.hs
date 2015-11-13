@@ -5,6 +5,7 @@
 module Wikilon.Dict.RLU
     ( DictRLU
     , rluCreate
+    , rluDiff
     , rluUpdate
     , rluTokenClients
     , rluWordClients
@@ -35,6 +36,10 @@ import Wikilon.AODef
 newtype DictRLU = RLU (Trie (Trie ()))
     deriving (Typeable)
 
+-- thoughts: I could probably improve performance by using a simpler
+-- word list type for small lists. Not sure it's worth the complication
+-- though.
+
 rluCreate :: VSpace -> DictRLU
 rluCreate = RLU . Trie.empty
 
@@ -61,13 +66,9 @@ rluTransitiveWordClientsList rlu = L.reverse . accum mempty mempty where
         if bAddWord then w : accum (Set.insert w v) (Set.delete w c) ws'
                     else accum v (Set.insert w c) (lClients ++ ws)
 
--- | update based on a map diff. Assumes `InL` is the new map
--- and `InR` is the old one.
-rluUpdate :: DictDiff -> DictRLU -> DictRLU
-rluUpdate = rluUpdate' . rluDiff
-
-rluUpdate' :: RLUDiff -> DictRLU -> DictRLU
-rluUpdate' = flip adjRoot where
+-- | update based on an RLU difference.
+rluUpdate :: RLUDiff -> DictRLU -> DictRLU
+rluUpdate = flip adjRoot where
     -- update all tokens
     adjRoot (RLU t0) = RLU . L.foldl' updTok t0 . Map.toList
     -- update for specified token
@@ -80,7 +81,7 @@ rluUpdate' = flip adjRoot where
     fin t | Trie.null t = Nothing   
           | otherwise   = Just t
         
--- Map of Tokens to (clients added, clients removed)
+-- | Map from Tokens to (clients added, clients removed).
 type RLUDiff = Map Token ([Word],[Word])
 
 -- given a difference in definition, find the difference in
@@ -94,7 +95,9 @@ tokDiff (Diff a b) = (insTok, delTok) where
     insTok = L.filter (`L.notElem` rTok) lTok
     delTok = L.filter (`L.notElem` lTok) rTok
    
--- given an update to the dictionary, compute an update to the RLU.
+-- | given an update to the dictionary, compute an update to the RLU.
+-- For appropriate ordering, the 'InL' dictionary must be the new one
+-- when generating the DictDiff.
 rluDiff :: DictDiff -> RLUDiff
 rluDiff = L.foldl' (flip accum) Map.empty where
     accum (w,d) = addClients w lIns . delClients w lDel where

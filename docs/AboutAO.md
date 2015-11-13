@@ -44,11 +44,17 @@ Alternatively, we can move beyond parsing and editing structure within a string 
 
 ### Dictionary Applications
 
-A dictionary application is an application whose state is hosted within a healthy dictionary. This includes editable views of bytecode, but may further leverage multi-word structures, cached computations, and automatic maintenance. Dictionary applications naturally support portability, persistence, versioning, unlimited undo, refactoring, incremental computation, caching, continuous testing, live coding, and RESTful designs (external agents pulling information or pushing updates).
+A dictionary application is an application whose state is hosted within a healthy dictionary. See [Wikilon's application model](ApplicationModel.md) for the detailed exploration of this idea. The short version: application state is modeled in the dictionary, applications help users view and edit the dictionary in certain ways (e.g. as a forum or spreadsheet), and external software agents can integrate real-world effects or reflection where we need them. 
+
+Dictionary applications naturally support portability, persistence, versioning, undo, refactoring, incremental computation, caching, continuous testing, live coding, and RESTful designs (external agents pulling information or pushing updates). Low-latency applications are feasible with long-polling or subscription models. 
 
 Dictionary applications together with long-polling or subscription is capable of modeling almost any application. Documents, databases, REPL sessions, multi-user dungeons, etc. are all viable. A few relevant patterns are discussed under [Wikilon's application model](ApplicationModel.md). With cache-friendly update patterns, performance may be acceptable.
 
 Many dictionary applications are amenable to *extraction*, e.g. cross-compiling application objects for an Android phone or JavaScript+DOM. An extraction service is effectively another dictionary application. Extraction of dictionary applications *in media res* supports an implicit debug mode, automatic testing of old application sessions, interactive construction of applications from prototypes, and fulfills the role of conventional applications compilers.
+
+### Word Attributes
+
+A convention has been adopted for adding 'attributes' to words, a set of named flags that don't affect semantics of the word itself but do impact how the word is handled by external software agents and dictionary applications. At the bytecode level, these are expressed with 
 
 ## Development 
 

@@ -10,21 +10,22 @@ import Control.Exception (assert)
 import Data.Maybe (isNothing, isJust)
 import qualified Data.List as L
 import qualified Data.ByteString.Lazy as LBS
+import qualified Wikilon.ABC.Pure as ABC
 import Wikilon.Dict.Head
+import Wikilon.AODef (aodefRedirect)
 
 conditionsForSafeRename :: String
 conditionsForSafeRename =
     "We rename an 'origin' word to 'target'. This is acceptable if the\n\
     \target word is not defined and not in use, or if the origin and\n\
     \target share identical definitions, or if either word is a redirect\n\
-    \to the other (origin is `{%target}` or vice versa). After rename,\n\
-    \all references to origin are updated to reference the target, the\n\
-    \origin word is undefined, and the target has the origin's function."
+    \to the other. After rename, references to the origin are updated\n\
+    \to refer to the target, the origin is undefined, and the target has\n\
+    \the definition of the origin (unless origin was the redirect)."
 
--- a simple redirect is just `{%word}` as a complete definition
+-- Test whether a given definition is a redirect to a given word...
 isRedirectTo :: AODef -> Word -> Bool
-isRedirectTo def (Word w) = (def == wordTokDef) where
-    wordTokDef = LBS.fromChunks ["{%", w, "}"]
+isRedirectTo = maybe (const False) (==) . aodefRedirect
 
 -- | see conditionsForSafeRename; try to rename a word without damaging
 -- the current dictionary structure. This assumes that both the origin

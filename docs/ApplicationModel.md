@@ -38,12 +38,6 @@ For many applications, like mailing lists and web forums, it is entirely accepta
 
 Dictionary applications can potentially grow larger than memory. This is acceptable, so long as developers leverage [stowage](LargeValueStowage.md). With stowage, it is not difficult for a dictionary application to model a database or ftp server. 
 
-## Extraction of Applications from the Dictionary
-
-As a development environment, Wikilon must support compilation of applications to run on a desktop, android phone, an independent web service, and so on. Ideally, these are the same applications that we debug within Wikilon, but we want to extract a minimal amount of logic and state from our dictionary to make it work. Dictionary objects are a good fit here, as are applications that operate only on a well-defined subset of the dictionary (e.g. some finite set of named objects). 
-
-Extraction of dictionary applications *in media res* supports an implicit debug mode, automatic records and testing of application debug sessions, and a possibility for interactive construction of applications from a fork of a prototypes. In some ways, this is much nicer than conventional application compilers.
-
 ## Managed Dictionaries and Attributes
 
 Words in an AO dictionary provide a basis for mutable meaningful structure, modularity, and structure sharing. The mutable meaningful structure allows AO dictionaries to serve as a platform for live coding and dictionary applications. 
@@ -63,24 +57,6 @@ To declare a list of attributes, I propose prefixing any definition as follows:
 This structure is preserved on import/export but trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (todos, deprecation, authorship, categories, relations, deprecation, licensing, decay models, etc.) and has no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
 
 Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment might require explicitly un-freezing the word to modify its behavior.
-
-## Robotic Reflection, Metaprogramming, and Maintenance
-
-Reflection entangles. With reflection, a function's behavior and meaning will change based on relationships that are subtle or implicit. Often, changes won't happen until the future, while integrating what probably should be unrelated code. Unit testing, modularity, separate compilation, and portability of behaviors into a new codebase are resisted by reflection. 
-
-By design, Awelon Object (AO) lacks any direct mechanism for reflection.
-
-However, it is possible to *model* reflection. For example, we can model objects that carry some metadata about their purpose and type. We can model a database with pages of code. We can model an entire AO dictionary as an object within an AO dictionary, and reflect on that. By explicitly modeling collections of code and the compilers, we gain a useful ability to isolate, test, and port specific configurations.
-
-It is also feasible to implement reflection as part of an IDE or robot. It is not unusual for people to develop independent autonomous software agents to maintain some aspect of natural language wikis. For a dictionary of structured code, developing a bot should be easier. Also, it is feasible to push more reflection logic into the dictionary itself. Though, ensuring nice properties (e.g. that the resulting codebase is stable and deterministic, that updates are incremental and cache-friendly) remains a challenge.
-
-## Purity of Dictionary Applications
-
-I have contemplated introducing an effects models for dictionary applications. Presumably, effects could provide capabilities for fine-grained error-handling, explicit reflection, performance shortcuts, and even first-class shared resource models within the limits of causal commutativity and spatial idempotence (e.g. unification variables).
-
-However, explicit effects are *complicated*. Interacting with an implicit environment hinders the gradual compaction of history and compression of state for long-running dictionary applications. We must specify the environment. We must deal with competing environment models and versions.
-
-Further, explicit effects have repeatedly proven *unnecessary*. For high level error handling, it is sufficient to reject a command that would lead to a bad application state or generate an error report. For reflection, we can model software agents that maintain and metaprogram our dictionary. For performance, we can push for ABCD-like accelerators and better annotations. Any model of shared resources can be modeled functionally and we can mitigate performance by accelerating common patterns. External communications is modeled in terms of RESTful interactions with external agents.
 
 ## Parallelism in Dictionary Applications
 
@@ -123,14 +99,32 @@ Debugging concurrent applications hosted in a dictionary is vastly less unpleasa
 
 On the other hand, we lose those convenient timeouts that rely on hardware race non-determinism. We cannot rely on timeouts as a basis for hand-wavy soft real-time behavior. This constrains which applications we can effectively express with the concurrency abstractions. Applications that are very time-dependent will need to be pushed to real-time systems models, i.e. systems whose 'logical timeline' is designed to align tightly with real-world time (or musical beat, etc.).
 
+## Real-World Effects and Reflection via Software Agents
+
+Effectful dictionary applications must be modeled as multi-agent systems: external software agents (bots) observe our dictionary for some easily observed conditions and contribute updates to the dictionary. For example, a command-pattern dictionary object may include an 'outbox' for messages in its state model. An external agent would query for this, capture and clear the outbox, and deliver the content. It could also provide a reply service and inject content into an inbox.
+
+This technique generalizes to many kinds of 'effects'. 
+
+We can model requests for web content, video feeds, news feeds, etc.. We can model control systems for smart houses, multi-media systems, and robots. We can integrate SMTP, Twitter, SMS, databases. We can model reflection and automated error recovery. Managed dictionary techniques allow injected information to eventually be deleted. Low-latency interactions are feasible via Comet-style long polling or a subscriptions model. Real-time effects are feasible if we use timestamps appropriately.
+
+The primary filter should be a set of opt-in attributes. We shouldn't have software agents jumping in and modifying our code uninvited, and it is convenient to easily disable effects while debugging or forking an application object. Attributes additionally enable our software agents to efficiently discover where their attentions are desired.
+
 ## Security for Dictionary Applications
 
-Imagine our goal is to model a game where each player is limited to viewing and manipulating a shared game world through a separate avatar. The security requirement here involves limiting the players, as opposed to asking them to police themselves.
+Imagine our goal is to model a game where each player is limited to viewing and manipulating a shared game world through a personal avatar. The security requirement here involves limiting the players, as opposed to asking them to police themselves.
 
-To implement this security policy requires we cripple player access to the dictionary. Even read-only access is sufficient for players to 'view' the game world through the eyes of every other player. We could provide a private space for each player to install scripts or macros (e.g. new character animations, musical scores for characters to play on instruments, etc.), but fragmented access to the dictionary would be stifling. The AO programming experience is designed for the holistic dictionary. 
+To implement this security policy requires we cripple player access to the dictionary. Even read-only access is sufficient for players to view the game world through they eyes of any avatar. We could provide a private space for each player to install scripts or macros (e.g. new character animations, musical scores for characters to play on instruments, etc.), but fragmented access to the dictionary would be stifling. The AO programming experience is designed for the holistic dictionary. 
 
-If we're content that this remains a 'dictionary application' only to our developers and game masters, we can proceed easily enough. Constrain player access to a set of whitelisted dictionary applications that we know to be compatible with our security policy. Player authentication could easily be separated to a host like Wikilon if we don't wish to poison our dictionaries with private player password information. But application state would remain within the dictionary.
+If we're content that this remains a 'dictionary application' only for our non-player participants (game masters, developers, bots), we can proceed easily enough. Constrain player access to a set of whitelisted dictionary applications that we know to be compatible with our security policy. Player authentication could optionally be separated from dictionary state. But application state would remain within the dictionary.
 
 I imagine that most security policies will follow a similar pattern. The features that make AO dictionary applications debuggable also make them hackable. We can still enforce security, but the cost is the ability for some participants to view the application as part of an AO dictionary. Yet, embedding application state in the dictionary remains useful to our developers, and potentially to players after the play is done.
 
 *Aside:* If the number of players is small, asking them to police themselves is reasonable. Shared storytelling, quests, roleplaying, and their like are frequently represented on conventional forums. Doing so on a shared programming medium like AO has potential to create a far more real-time interactive multi-media experience than natural language. It will also automate the administrative burdens. And if a storyteller or player wants to keep a surprise, they can just keep it to themselves, perhaps using a private fork of the dictionary if the surprise needs development and debugging.
+
+## Extraction of Applications from the Dictionary
+
+Extraction of applications allows Wikilon to double as a more conventional application development platform, e.g. compiling a separate binary for a desktop or android phone, or a JavaScript+DOM program for a web page. 
+
+The extractor itself is a RESTful dictionary application, and downloading a compiled version of some function may be expressed as a trivial HTTP GET on a link. Extractors will frequently be specific to a particular application model. And "application model" can be interpreted very loosely here. We could have extractors specifically for image data, for example, computing an image and converting to PNG or SVG. 
+
+For Wikilon, the short term goal is to support immediately useful extractors like compiling to JavaScript or presenting an SVG view, even if each such extractor must be specifically within Haskell code. The long term goal is to allow definition of new extractors from within the dictionary, e.g. functions that will receive on the stack a powerblock of reflective capabilities and a command target.
