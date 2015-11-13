@@ -92,31 +92,37 @@ The motivation for sequence escapes is convenient syntactic abstraction, for exa
 
 *Note:* `{}` is a sequence with one empty command. The empty command sequence is `{/}`.
 
-### Claw Words and Namespaces
+### Claw Attributes
 
-Claw words will expand into tokens. However, a direct expansion as from `foo` to `\{%foo}` could be problematic if ever we wish to develop alternative command environments. A simple Forth-like REPL might only need a single stack, but we might also wish to model command environments having multiple stacks, a filesystems or tuple space or heap or turtle graphics canvas, inboxes and outboxes and background tasks, and so on. Claw must support terse commands in ad-hoc environments. I'm not willing to require a distinct dictionary for each use case.
+An attribute is an annotation *about* nearby code. Essentially, it's a comment, though not necessarily for a human. Examples of this sort of thing: todos, deprecations, licensing, authoring, quotas, categories, keywords, enabling or disabling full-text search, suggested view, extra typechecker options, or guides for robotic maintenance. 
 
-So I propose a simple namespace concept. 
+Because they have no meaning within our code, we wrap attributes into a block then it away, e.g. `[{&deprecated}]%`. For expressing attributes in Claw code, I will to use parentheses:
 
-In namespace `bar:` the word `foo` shall expand to `\{%bar:foo}`. This will also apply to literals, e.g. number `42` should ultimately expand into bytecode `#42{%bar:integer}`. We will use a distinct namespace for each distinct command context, adding redirects or redundancy to our dictionary as needed. Pushing most of the work into the dictionary allows claw code to remain concise.
+        (license:BSD3 author:dmbarbour category:math)       desugars to
+        [{&license:BSD3}{&author:dmbarbour}{&category:math}]%
 
-For most use cases, commands apply only to one context. Hence, our primary namespace becomes an attribute property of our editor. However, in some cases we might want to tune the namespace:
+The annotations in this context are presented as words.
 
-* in context A, we write a block that will apply to another context B
-* given standard shell or REPL, command to reconfigure to preference
+*Aside:* We don't optimize presentation of annotations in normal code because they'll be abstracted behind words, e.g. to perform data-plumbing. So we just escape those normally. This is not the case for attributes, which are not abstracted.
 
-To cover these exceptional cases, I'll use a simple namespace annotation.
+### Claw Namespaces
 
-A namespace annotation will be indicated by the prefix character `#`, which does not appear in words. For example, `#bar:` would indicate that the following content is in namespace `bar:`. The namespace applies until the end of the current block or command stream. A block such as `[#bar: 42 foo]` would indicate a block that internally uses namespace `bar:` regardless of the surrounding context. To simplify round-tripping, namespace annotations will be recorded as attributes in the expanded bytecode, perhaps as `{&ns:bar:}`.
+It's useful to have *short* words when writing Claw code. However, all the short words will tend to be monopolized for a given purpose. If we develop a different environment that needs a new meaning for these words, we'll want namespaces so we can now use our words as the short ones.
 
-Claw supports only one namespace per volume of code.
+So claw code will support namespace attributes, indicated with the `#` prefix. 
 
-There is never any ambiguity, no question which `foo` you're using. The expansion function is simple, does not depend on search or the state of the dictionary. The disadvantage is that, when deriving a new context from an old one, the new namespace won't automatically inherit words associated with the prior context. This creates a barrier that hinders development and experimentation. This concern could feasibly be mitigated with automatic refactoring tools, see *Namespace Inheritance* below. 
+        #foo: 42 bar        desugars fully to
+        [{&ns:foo:}]%#42{%foo:integer}{%foo:bar}
 
-Words outside the current namespace are also accessible via `\{%word}` tokens.
+When Claw sees a singleton attribute, it will scan for an updated namespace and use this to guide the render (or, conversely, the desugar). A namespace attribute is small and simple enough to avoid becoming too much boiler-plate. 
+
+*Aside:* namespaces make our Claw code mildly context sensitive. Our programmers must be aware of namespaces to understand the code, or to copy/paste it into a new context. This critical need for awareness is why I don't permit Claw namespaces to be buried among a bunch of other attributes and assign a visible prefix.
+
+Due to the nature of Claw code as a trivial expansion, we can only have one attribute in any given region of code. The advantage is that we won't have namespaces appearing like a bunch of boiler-plate. The disadvantage is that we are forced to define every word in our new namespace. This could be made tolerable with some automatic tooling. Because it's often convenient to just have a particular namespace for a subprogram, *a namespace expressed within a block of code will extend only to the end of that block*.
 
 A weakness of namespaces is that they can hurt refactoring. Developers must be careful to not move code into a different namespace, e.g. via copy and paste. We could solve this by performing copy-paste on the AO/ABC expansion instead of the claw code, and perhaps record the namespace associated with the selection. Operating at the AO or ABC layers doesn't have any issues with context.
 
+*Note:* A namespace string must be empty, or a valid word if taken by itself.
 
 ### Claw Semantics and Round Tripping
 

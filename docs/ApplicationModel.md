@@ -60,7 +60,7 @@ To declare a list of attributes, I propose prefixing any definition as follows:
 
         [{&hidden}{&opaque}{&frozen}]%
 
-This structure is preserved on import/export but trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (quotas, categories, relations, deprecation, licensing, decay models, etc.) and has no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
+This structure is preserved on import/export but trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (todos, deprecation, authorship, categories, relations, deprecation, licensing, decay models, etc.) and has no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
 
 Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment might require explicitly un-freezing the word to modify its behavior.
 
@@ -107,20 +107,21 @@ In context of a dictionary application, every form of parallelism could kick in 
 
 Concurrent systems are useful abstractions to model. 
 
-AO can model multi-agent systems, concurrent constraint systems, [message passing machines](NetworkModel.md), actors systems, multi-threaded shared memory, and more. In most cases a formal concurrency model will need to be coupled to an 'environment' model to form the complete system. Non-deterministic choice or scheduling decisions, for example, would be modeled as belonging to the environment. When modeled properly, we should be able to capture a concurrent system as a value at any well-defined point in time and 'run' the model forward to a future time under the assumption of no external interference. The notion of 'time' here is logical and model dependent - e.g. between processing messages. 
+AO can model multi-agent systems, concurrent constraint systems, [message passing machines](NetworkModel.md), actors systems, multi-threaded shared memory, and more. In most cases a formal concurrency model will need to be coupled to an 'environment' model to form the complete system. Non-deterministic choice and scheduling decisions, for example, would usually be separated from a formal concurrency model as belonging to the environment. When modeled properly, we should be able to capture a concurrent system as a value at any well-defined point in time and 'run' the model forward to a future time under the assumption of no external interference. The notion of 'time' here is logical and model dependent - e.g. between processing messages. 
 
 We then develop dictionary applications in terms of our concurrency abstractions, and compose the pieces together into our larger system, and use the command pattern to step forward (e.g. until a stable condition is reached, or just a few messages, etc.). We benefit greatly from doing so:
 
+* freely extend applications by injecting additional computations
 * capture, model, render, and extract application in medias res
 * render active application states: [animate, scrub, or graph](http://worrydream.com/LadderOfAbstraction/)
-* freely extend applications by injecting additional computations
 * implicit conventional debug-mode, breakpoints and state included
 * concurrency introduces systemic opportunities for parallelism
-* concurrent systems are a relatively easy target for extraction
 
-Also, debugging concurrent applications is vastly less unpleasant on a dictionary than on physical hardware. We're free to step back in time due to the command pattern. We're free to tweak the environment and see how the application would progress. 
+*Aside:* The only feature here unique to concurrent systems is the *extensibility*. That is, concurrency is all about "several computations interacting", so we won't break our abstraction by injecting one more computation that interacts with those already present. All other features could be achieved by modeling an interpreter for a sequential language that exposes opportunities for parallelism, such as ABC.
 
-On the other hand, we lose those convenient timeouts that rely on hardware race non-determinism. This may limit which applications we can effectively express with our concurrency abstractions. Real-time concurrent systems models (e.g. where our 'logical time' is 'logical seconds (and fractions thereof)') may need to step up for developing the apps that need precise timing behavior information.
+Debugging concurrent applications hosted in a dictionary is vastly less unpleasant than debugging concurrent applications hosted on physical hardware. We're free to step back in time due to the command pattern. We're free to tweak the environment and see how the application would progress. There are no [heisenbugs](https://en.wikipedia.org/wiki/Heisenbug) because non-deterministic choice is no longer wired to races whose winners change under the scope of a debugger.
+
+On the other hand, we lose those convenient timeouts that rely on hardware race non-determinism. We cannot rely on timeouts as a basis for hand-wavy soft real-time behavior. This constrains which applications we can effectively express with the concurrency abstractions. Applications that are very time-dependent will need to be pushed to real-time systems models, i.e. systems whose 'logical timeline' is designed to align tightly with real-world time (or musical beat, etc.).
 
 ## Security for Dictionary Applications
 
@@ -132,4 +133,4 @@ If we're content that this remains a 'dictionary application' only to our develo
 
 I imagine that most security policies will follow a similar pattern. The features that make AO dictionary applications debuggable also make them hackable. We can still enforce security, but the cost is the ability for some participants to view the application as part of an AO dictionary. Yet, embedding application state in the dictionary remains useful to our developers, and potentially to players after the play is done.
 
-*Aside:* If the number of players is small, asking them to police themselves is reasonable. Shared storytelling, quests, roleplaying, and their like are frequently represented on conventional forums. Doing so within a programming medium like AO has potential to create a far more real-time interactive multi-media experience than natural language. It will also automate the administrative burdens. And if a storyteller or player wants to keep a surprise, they can just keep it to themselves, perhaps using a private fork of the dictionary if the surprise needs development and debugging.
+*Aside:* If the number of players is small, asking them to police themselves is reasonable. Shared storytelling, quests, roleplaying, and their like are frequently represented on conventional forums. Doing so on a shared programming medium like AO has potential to create a far more real-time interactive multi-media experience than natural language. It will also automate the administrative burdens. And if a storyteller or player wants to keep a surprise, they can just keep it to themselves, perhaps using a private fork of the dictionary if the surprise needs development and debugging.

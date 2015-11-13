@@ -99,6 +99,7 @@ data V
 
     -- todo: add support for parallel evaluation
     --       (maybe support laziness, too). 
+    --       (maybe persistent laziness? could be cool.)
 
 
 -- contemplating support for: 

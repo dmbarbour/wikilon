@@ -6,9 +6,7 @@ Simplifying ABC involves two ongoing challenges:
 1. to discover useful, valid simplification rules
 2. to determine a good strategy for applying rules
 
-Simplification rules are behavior-preserving rewrites for our bytecode or a simple editable view thereof. A strategy is important to ensure simplification terminates and accomplishes something useful. Ideally, the simplifier itself should be simple and predictable enough for developers to internalize. 
-
-In context of Wikilon, our simplifier will also be largely responsible for evaluating 'dictionary objects' as part of our [application models](ApplicationModel.md). 
+Simplification rules are behavior-preserving rewrites for our bytecode or a simple editable view thereof. A strategy is important to ensure simplification terminates and accomplishes something useful. Ideally, the simplifier itself should be simple and predictable enough for developers to internalize. The performance of the simplifiers will be relevant, too, because they'll run very frequently.
 
 
 

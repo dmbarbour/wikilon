@@ -103,6 +103,7 @@ data ClawOp
     | TL !ABC.Text      -- text literal
     | BC !ClawCode      -- block of code
     | CS !ClawCmdSeq    -- command sequence
+    | AT ![Attrib]      -- attributes list 
     deriving (Ord, Eq)
 
 type IsEscCmd = Bool
@@ -111,6 +112,7 @@ type ClawInt = Integer
 type ClawDecimal = D.Decimal -- current limit 255 decimal places
 data ClawRatio = ClawRatio !ClawInt !ClawInt deriving (Eq, Ord)
 data ClawExp10 = ClawExp10 !ClawDecimal !ClawInt deriving (Eq, Ord)
+type Attrib = Word
 
 instance Show ClawRatio where 
     showsPrec _ (ClawRatio n d) = shows n . showChar '/' . shows d
@@ -137,14 +139,6 @@ wExp10 = "exp10"
 wCmd = "cmd"
 wCmdSeq = "cmdseq"
 
-
--- TODO: support for monad and arrow sugar
---       semicolon, vertibar, lparens, rparens
---       potential use of angle brackets
-
-nsTokPrefix :: UTF8.ByteString
-nsTokPrefix = "&ns:"
-
 -- | Convert claw code to ABC for interpretation or storage. This is
 -- essentially a 'compiler' for Claw code, though resulting bytecode 
 -- will usually need linking and processing for performance.
@@ -167,7 +161,7 @@ oneOp = ABC . return
 
 opToABC :: Namespace -> ClawOp -> ABC
 -- low level
-opToABC _ (NS ns) = oneOp . ABC_Tok . Token $ nsTokPrefix <> ns
+opToABC _ (NS ns) = atToABC [Word ("ns:" <> ns)]
 opToABC ns (CW (Word w)) = oneOp . ABC_Tok . Token $ mconcat ["%", ns, w]
 opToABC _ (P0 op) = oneOp $ ABC_Prim op
 opToABC _ (T0 txt) = oneOp $ ABC_Text txt
@@ -187,6 +181,12 @@ opToABC ns (CS cmdseq) = expand ns [B0 cc, CW wCmdSeq] where
     expandCommand (cmd,bEsc) = 
         if bEsc then clawOps cmd 
                 else [B0 cmd, CW wCmd]
+opToABC _ (AT lst) = atToABC lst
+
+atToABC :: [Attrib] -> ABC
+atToABC lWords = ABC [attrBlock, ABC_Prim ABC_drop] where 
+    lToks = fmap (Token . mappend "&" . unWord) lWords
+    attrBlock = ABC_Block $ ABC $ fmap ABC_Tok lToks 
 
 -- | Parse Claw structure from bytecode.
 clawFromABC :: ABC -> ClawCode
@@ -211,13 +211,12 @@ escWord ns (Token tok) = case BS.uncons tok of
         guard (bOkPrefix && isValidWord w) >> return w
     _ -> Nothing
 
--- | recognize claw namespace tokens {&ns:NS} → #NS
--- namespace must also be valid word (or empty string)
-escNSTok :: Token -> Maybe Namespace
-escNSTok (Token tok) =
-    let bMatchPrefix = nsTokPrefix `BS.isPrefixOf` tok in
-    let ns = BS.drop 4 tok in  -- `&ns:` is four characters 
-    guard (bMatchPrefix && validNS ns) >> return ns
+-- | recognize claw namespace from attribute list.
+escNS :: Attrib -> Maybe Namespace
+escNS (Word s) =
+    let bMatchPre = "ns:" `BS.isPrefixOf` s in
+    let ns = BS.drop 3 s in
+    guard (bMatchPre && validNS ns) >> return ns
 
 -- | a namespace must be a valid word or the empty string.
 validNS :: Namespace -> Bool
@@ -235,15 +234,32 @@ abcWS _ = False
 escABC :: Namespace -> [ABC.Op] -> [ClawOp]
 escABC ns (ABC_Tok tok : ops) 
   | Just w <- escWord ns tok = CW w : escABC ns ops
-  | Just ns' <- escNSTok tok = NS ns' : escABC ns' ops
   | otherwise = K0 tok : escABC ns ops
 escABC ns (ABC_Prim op : ops)  
   | abcWS op = escABC ns ops -- ignore whitespace
   | otherwise = P0 op : escABC ns ops
 escABC ns (ABC_Text txt : ops) = T0 txt : escABC ns ops
+escABC ns (ABC_Block b : ABC_Prim ABC_drop : ops)
+    | Just lst <- escAttribs (abcOps b)
+    = case lst of
+        [escNS -> Just ns'] -> NS ns' : escABC ns' ops
+        _ -> AT lst : escABC ns ops
 escABC ns (ABC_Block abc : ops) = B0 cc : escABC ns ops where
     cc = ClawCode $ escABC ns (ABC.abcOps abc)
 escABC _ [] = []
+
+-- | check a block in a list of  seeing if block is maybe a list of annotations in
+-- a context where it might need to be a list of attributes.
+escAttribs :: [ABC.Op] -> Maybe [Attrib]
+escAttribs = go [] where
+    go r (ABC_Tok (aw -> Just w) : ops) = go (w:r) ops
+    go r (ABC_Prim op : ops) | abcWS op = go r ops
+    go r [] = return (L.reverse r)
+    go _ _ = mzero
+    aw (Token t) = case BS.uncons t of
+        Just ('&',w) -> return (Word w)
+        _ -> mzero
+
 
 -- | collapse structured values from lower level claw code.
 --
@@ -253,7 +269,7 @@ escABC _ [] = []
 --  integers
 --  ratios
 --  decimals
---  e-notation
+--  exponential notation (base 10, anyway)
 --
 -- At the moment, this is not a streaming reducer but rather a
 -- zipper-based implementation. 
@@ -399,6 +415,7 @@ encodeOp (P0 op) -- should not happen normally
 encodeOp (T0 txt) = BB.char8 '\n' <> encMultiLineText txt
 encodeOp (K0 tok) = BB.char8 '\\' <> encTok tok
 encodeOp (B0 cc) = BB.char8 '\\' <> encBlock cc
+encodeOp (AT lst) = BB.char8 '(' <> encodeOps (fmap CW lst) <> BB.char8 ')'
 
 encBlock :: ClawCode -> BB.Builder
 encBlock cc = BB.char8 '[' <> encode' cc <> BB.char8 ']'
@@ -504,7 +521,6 @@ decode' cc bWS r txt0 =
 
             '[' -> decode' (DecodeBlock False r cc) True [] txt
             '{' -> decode' (DecodeCmdSeq False [] r cc) True [] txt
-
             '"' -> case LBS.elemIndex '"' txt of
                 Nothing -> decoderIsStuck
                 Just idx ->
@@ -518,6 +534,11 @@ decode' cc bWS r txt0 =
                 let bOK = validNS ns in
                 if not bOK then decoderIsStuck else
                 decode' cc False (NS ns : r) txt'
+            '(' -> 
+                let (attrs, attrsEnd) = decodeAttribs txt in
+                case LBS.uncons attrsEnd of
+                    Just (')', txt') -> decode' cc False (AT attrs : r) txt'
+                    _ -> decoderIsStuck
 
             -- escapes
             '\\' -> case LBS.uncons txt of -- escaped content
@@ -554,6 +575,7 @@ decode' cc bWS r txt0 =
             _ -> case decodeWordOrNumber txt0 of
                 Just (op, txt') -> decode' cc False (op:r) txt'
                 _ -> decoderIsStuck
+
 
 takeEscPrim :: ABC.Text -> Maybe (ABC.PrimOp, ABC.Text)
 takeEscPrim txt =
@@ -596,6 +618,16 @@ decodeWord txt =
     let w = Word (LBS.toStrict s) in
     guard (isValidWord w) >>
     return (w, txt')
+
+-- decodes a sequence of whitespace separated attributes
+-- I'll be lenient here for decoding commas, too.
+decodeAttribs :: ABC.Text -> ([Attrib], ABC.Text)
+decodeAttribs = more [] where
+    more r = load r . LBS.dropWhile isWS
+    isWS c = (' ' == c) || ('\n' == c) || (',' == c) 
+    load r s = case decodeWord s of
+        Just (w, s') -> more (w:r) s'
+        Nothing -> (L.reverse r, s)
 
 -- | decode NI, NR, ND, or NE. (Or Nothing.)
 decodeNumber :: ABC.Text -> Maybe (ClawOp, ABC.Text)
