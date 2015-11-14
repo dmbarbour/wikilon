@@ -472,13 +472,13 @@ Programmers often work with binary encoded data, e.g. compressed visual or audio
 
 To handle this, we may encode large sequences of base16 in a specific alaphabet `bdfghjkmnpqstxyz` in large structures. This alphabet is `a-z` minus vowels `aeiou` and common ABC data plumbing `vrwlc`, and is intended to make our binaries opaque but visually and heuristically recognizable.
 
-        "bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
-         bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
-         bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
-         bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
+        "gbgdgfggghgkgjgmgngpfbhdhfhghhhjhkhmhnhphqhshthxhyhzjbjdjfjgjhfb
+         gbgdgfggghgkgjgmgngpfbhdhfhghhhjhkhmhnhphqhshthxhyhzjbjdjfjgjhfb
+         gbgdgfggghgkgjgmgngpfbhdhfhghhhjhkhmhnhphqhshthxhyhzjbjdjfjgjhfb
+         gbgdgfggghgkgjgmgngpfbhdhfhghhhjhkhmhnhphqhshthxhyhzjbjdjfjgjhfb
         ~
 
-A specialized compression pass will recognize runs of these characters and rewrite to use a short header and a bytecount. It might also be specialized to recognize block-encoded binaries of exactly 64 characters per line in embedded texts. Here is the encoding I'm using internally for larger definitions in Wikilon, which may become a de-facto standard:
+A specialized compression pass will recognize runs of these characters and rewrite to use a short header and a bytecount. It might also be specialized to recognize block-encoded binaries of exactly 64 characters (32 bytes) per line in embedded texts. Here is the encoding I'm using internally for larger definitions in Wikilon, which may become a de-facto standard:
 
         0xF8 (size) (bytes)
             (size in 0..127): 4..512 bytes (multiples of 4)
