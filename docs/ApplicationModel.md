@@ -9,10 +9,6 @@ Primary concerns as a software platform include *state* and *security*.
 
 I have decided to focus Wikilon exclusively on *dictionary applications*. 
 
-Wikilon will support an ad-hoc variety of dictionary applications. I'd like to eventually 'generalize' the idea, i.e. by constructing one or more application models that can express the other applications. This is feasible, but the details will need to wait until dictionaries are more mature.
-
-## Modeling State with Dictionary Applications
-
 A **dictionary application** represents all of its state within the AO dictionary. This representation of state must be conveniently structured, well typed, and meaningfully executable. Structure includes both bytecode and relationships between words. Dictionary applications offer many powerful benefits: 
 
 * application state is persistent, portable, versioned
@@ -20,7 +16,9 @@ A **dictionary application** represents all of its state within the AO dictionar
 * dictionary compression of state is uniformly available
 * everything is visible and indexable for debugging
 
-The disadvantage is that our applications cannot directly *push* information. This can be mitigated in many cases by using some simple strategy to pull information (polling, long-polling, Comet, subscription, etc.) and by relying on external agents to push updates occasionally. But it does force us to favor a more RESTful architectural style. 
+The disadvantage is that our applications cannot directly *push* information. However, we can utilize external software agents to pull requests/todos and push updates. This can even be low latency with Comet-like long polling or subscriptions. Dictionary applications are very RESTful in nature.
+
+## Modeling State with Dictionary Applications
 
 Dictionary applications are free to present editable views of bytecode. Such views are potentially convenient for representing form or document based user inputs.
 
@@ -34,9 +32,20 @@ The *command pattern* is especially useful in context. It provides several usefu
         @foo.v3 {%foo.v2}(yet another command)
         @foo    {%foo.v3}
 
-For many applications, like mailing lists and web forums, it is entirely acceptable to preserve the complete history or leave maintenance to humans. But in other cases we might prefer to gradually stabilize and compact our histories; for these, see *Managed Dictionaries*, below. 
+Here, object `foo` has a pointer to its head version that we update, and a word for each version. For many applications, like mailing lists and web forums, it is entirely acceptable to preserve the complete history or leave maintenance to humans. But in other cases we might prefer to gradually stabilize and compact our histories; for these, see *Managed Dictionaries*, below. 
 
-Dictionary applications can potentially grow larger than memory. This is acceptable, so long as developers leverage [stowage](LargeValueStowage.md). With stowage, it is not difficult for a dictionary application to model a database or ftp server. 
+With a long history or big-value commands, applications can potentially grow larger than memory. This is acceptable, so long as developers leverage [stowage](Performance.md) to indicate which parts of the value should be kept out of immediate memory. With stowage, we can model massive tree structures, modeling filesystems and databases and large queues, only loading the pieces we need for each command or view.
+
+## Real-World Effects and Reflection via Software Agents
+
+Effectful dictionary applications must be modeled as multi-agent systems: external software agents (bots) observe our dictionary for some easily observed condition where they can contribute updates to the dictionary. For example, a command-pattern dictionary object may include an 'outbox' for messages in its state model. An external agent would query for this, capture and clear the outbox, and deliver the content. It could also provide a reply service and inject content into an inbox.
+
+This technique generalizes to many kinds of 'effects'. 
+
+We can model requests for web content, video feeds, news feeds, etc.. We can model control systems for smart houses, multi-media systems, and robots. We can integrate SMTP, Twitter, SMS, databases. We can model reflection and automated error recovery. Managed dictionary techniques allow injected information to eventually be deleted. Low-latency interactions are feasible via Comet-style long polling or a subscriptions model. Real-time effects are feasible if we use timestamps appropriately.
+
+The primary filter should be a set of opt-in attributes. We shouldn't have software agents jumping in and interacting with our applications uninvited, and it is convenient to easily disable effects while debugging or forking an application object. Attributes additionally enable our software agents to efficiently discover where their attentions are desired.
+
 
 ## Managed Dictionaries and Attributes
 
@@ -56,24 +65,11 @@ To declare a list of attributes, I propose prefixing any definition as follows:
 
 This structure is preserved on import/export but trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (todos, deprecation, authorship, categories, relations, deprecation, licensing, decay models, etc.) and has no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
 
-Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment might require explicitly un-freezing the word to modify its behavior.
+Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment is free to warn the user about the potential issues.
 
 ## Parallelism in Dictionary Applications
 
-I use 'parallelism' to describe multiple computations in the same *physical* time, e.g. keeping multiple CPUs busy. This is a completely separate issue from 'concurrency'. Though, concurrent systems frequently provide ample opportunity for even more parallelism.
-
-Awelon Bytecode has a lot of latent parallelism. So the problem becomes teasing it out at an appropriate granularity to keep the overheads low and the processors busy. We can utilize a simple variant of [parallel Haskell's](https://hackage.haskell.org/package/parallel-3.2.0.6/docs/Control-Parallel.html) `par` and `seq` techniques. 
-
-        {&par} :: (block * env) → (block with 'par' attribute * env)
-        USAGE: (prep args)[(expensive)]{&par}$(move pending result)
-
-        {&seq} :: (lazy or pending value * env) → (value * env)
-
-Our runtime would support opaque 'pending' results. Trying to operate on the pending result may have us waiting. But we're at least free to move it around, e.g. tuck it into a data structure and spark off a few more parallel computations. With just this much ABC and AO gain access to all of Haskell's well developed [strategies](https://hackage.haskell.org/package/parallel-3.2.0.6/docs/Control-Parallel-Strategies.html) for purely functional parallelism. It's also trivial to implement!
-
-It is also possible to support massively parallel GPU computations. Assume a subprogram constructed from a constrained set of recognizable functions and data structures that we know how to easily implement on the GPU. Annotate this for evaluation on the GPU. The runtime applies its internal compilers to CUDA or OpenCL or a shader language. When we later apply the function it will run on the GPU. Other forms of heterogeneous computing, e.g. FPGAs, will tend to follow a similar pattern. Haskell has used a similar approach with [accelerate](https://hackage.haskell.org/package/accelerate).
-
-In context of a dictionary application, every form of parallelism could kick in for every evaluation. This includes partial evaluations and cache maintenance. I imagine a mature, active, and popular AO dictionary full of apps could productively leverage as many CPUs, GPUs, and other computing devices as you're willing to throw at them.
+I use 'parallelism' to describe multiple computations ongoing at the same *physical* time, keeping multiple CPUs busy. This is a performance concern separate from the application model (except. See the section on parallelism in the [performance doc](Performance.md)
 
 ## Concurrency for Dictionary Applications
 
@@ -98,16 +94,6 @@ We then develop dictionary applications in terms of our concurrency abstractions
 Debugging concurrent applications hosted in a dictionary is vastly less unpleasant than debugging concurrent applications hosted on physical hardware. We're free to step back in time due to the command pattern. We're free to tweak the environment and see how the application would progress. There are no [heisenbugs](https://en.wikipedia.org/wiki/Heisenbug) because non-deterministic choice is no longer wired to races whose winners change under the scope of a debugger.
 
 On the other hand, we lose those convenient timeouts that rely on hardware race non-determinism. We cannot rely on timeouts as a basis for hand-wavy soft real-time behavior. This constrains which applications we can effectively express with the concurrency abstractions. Applications that are very time-dependent will need to be pushed to real-time systems models, i.e. systems whose 'logical timeline' is designed to align tightly with real-world time (or musical beat, etc.).
-
-## Real-World Effects and Reflection via Software Agents
-
-Effectful dictionary applications must be modeled as multi-agent systems: external software agents (bots) observe our dictionary for some easily observed conditions and contribute updates to the dictionary. For example, a command-pattern dictionary object may include an 'outbox' for messages in its state model. An external agent would query for this, capture and clear the outbox, and deliver the content. It could also provide a reply service and inject content into an inbox.
-
-This technique generalizes to many kinds of 'effects'. 
-
-We can model requests for web content, video feeds, news feeds, etc.. We can model control systems for smart houses, multi-media systems, and robots. We can integrate SMTP, Twitter, SMS, databases. We can model reflection and automated error recovery. Managed dictionary techniques allow injected information to eventually be deleted. Low-latency interactions are feasible via Comet-style long polling or a subscriptions model. Real-time effects are feasible if we use timestamps appropriately.
-
-The primary filter should be a set of opt-in attributes. We shouldn't have software agents jumping in and modifying our code uninvited, and it is convenient to easily disable effects while debugging or forking an application object. Attributes additionally enable our software agents to efficiently discover where their attentions are desired.
 
 ## Security for Dictionary Applications
 

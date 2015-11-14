@@ -60,11 +60,9 @@ Though ABC doesn't specify a type system, it is designed to support static analy
 
 Static analysis can be greatly extended by use of *annotations*, which may potentially assert properties that would be difficult to express otherwise - e.g. that two blocks are equivalent, or that a function is commutative or associative or idempotent, or that one function is the reverse of another, or that a value should be computed statically.
 
-### Transitory Undefined Words
+### Holes: Transitory Undefined Words
 
-A dictionary in a transitory state of development will frequently have a few undefined words. These can serve a useful role in the development context: a development environment can recognize undefined words as 'holes'. The rough type or shape for a hole may be inferred from usage context. A good developoment environment could help developers find an implementation. Or, at the very least, the temporary presence of undefined words will simplify top-down development. 
-
-AO doesn't use a 'linker' that operates outside the scope of the dictionary. Undefined words are not externally defined. So, the number of undefined words should generally be limited based on the amount of active development. Undefined words may be listed in warnings or as errors.
+A dictionary in a transitory state of development will frequently have a few undefined words. These can serve a useful role in the development context: a development environment can recognize undefined words as 'holes'. The functional type for a hole may be inferred from usage context. A good developoment environment could help developers find an implementation. The number of undefined words should generally be limited based on the amount of active development, and only certain approaches to development will use them (e.g. top-down).
 
 ### DVCS Based Distribution
 
