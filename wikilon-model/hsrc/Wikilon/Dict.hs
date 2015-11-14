@@ -33,10 +33,12 @@ import Data.Monoid
 import qualified Data.List as L
 import qualified Data.Set as Set
 import qualified Data.ByteString.Lazy as LBS
+import qualified Codec.Compression.Snappy.Lazy as Snappy
 import Data.VCache.Trie (Trie, Diff(..))
 import qualified Data.VCache.Trie as Trie
 import Database.VCache
 import Wikilon.Word
+import qualified Wikilon.Base16 as B16
 import Wikilon.AODef
 
 -- | An AO dictionary is a finite collection of (word, definition) 
@@ -58,20 +60,30 @@ data Def
     | DefL (VRef BigAODef)  -- for large definitions, maybe compressed
     deriving (Eq, Typeable)
 
--- I want to compress larger definitions, mostly when we're looking at space
--- savings of multiple kilobytes. Definitions containing embedded texts or
--- tables are potentially very large, so we could see savings of many kilobytes.
--- However, it isn't a critical feature. BigAODef just reserves the possibility.
+-- I want to compress large, compressible definitions. I'm willing to
+-- use some ad-hoc heuristics here. Most definitions should be small
+-- enough that I don't feel any need to compress.
 data BigAODef
     = UDef AODef
-    -- todo: zipped variant(s)
+    | ZDef LBS.ByteString
     deriving (Eq, Typeable)
 
 fromBigAODef :: BigAODef -> AODef
 fromBigAODef (UDef d) = d
+fromBigAODef (ZDef z) = decompress z
 
+-- heuristic compression
 toBigAODef :: AODef -> BigAODef
-toBigAODef = UDef -- todo: heuristic compression
+toBigAODef bytes =
+    let nBytes = LBS.length bytes in
+    let zBytes = compress bytes in
+    let nzBytes = LBS.length zBytes in
+    let bSufficientlyLarge = (nBytes >= 1200) in
+    let bAcceptableRatio = ((nzBytes * 4) <= (nBytes * 3)) in
+    let bUseCompression = (bSufficientlyLarge && bAcceptableRatio) in
+    if bUseCompression 
+        then ZDef zBytes 
+        else UDef bytes
 
 isSmall :: AODef -> Bool
 isSmall = (< 255) . LBS.length
@@ -88,6 +100,12 @@ toDef vc def
 -- | Create a new, empty dictionary.
 dictCreate :: VSpace -> Dict
 dictCreate = Dict . Trie.empty
+
+compress :: LBS.ByteString -> LBS.ByteString
+compress = Snappy.compress . B16.compress 
+
+decompress :: LBS.ByteString -> LBS.ByteString
+decompress = B16.decompress . Snappy.decompress
 
 -- | lookup a word in the dictionary. If a word is undefined,
 -- this will return Nothing. Otherwise, it returns the bytecode
@@ -149,13 +167,12 @@ instance VCacheable Def where
         if (maxBound == sz) then DefL <$> getVRef else
         DefS <$> getByteStringLazy (fromIntegral sz) 
 
--- for now, just reserving a byte for compression options
--- later, I might wish to compress large definitions, esp.
--- those representing large binary text values.
 instance VCacheable BigAODef where
     put (UDef def) = putWord8 1 >> put def
+    put (ZDef zbytes) = putWord8 2 >> put zbytes
     get = getWord8 >>= \ ty -> case ty of
         1 -> UDef <$> get
+        2 -> ZDef <$> get
         _ -> fail $ dictErr $ "unrecognized compression model for large def " ++ show ty
 
 dictErr :: String -> String

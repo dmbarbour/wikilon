@@ -9,10 +9,7 @@ module Wikilon.Dict.RenameWord
 import Control.Exception (assert)
 import Data.Maybe (isNothing, isJust)
 import qualified Data.List as L
-import qualified Data.ByteString.Lazy as LBS
-import qualified Wikilon.ABC.Pure as ABC
 import Wikilon.Dict.Head
-import Wikilon.AODef (aodefRedirect)
 
 conditionsForSafeRename :: String
 conditionsForSafeRename =

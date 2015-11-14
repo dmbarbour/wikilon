@@ -66,6 +66,7 @@ Library
     Wikilon.Token
     Wikilon.Text
 
+
     Wikilon.Dict.Set
     Wikilon.Dict.RLU
     Wikilon.Dict.Head
@@ -75,6 +76,9 @@ Library
     Wikilon.ABC
     Wikilon.ABC.Pure
     Wikilon.ABC.Fast
+
+    Wikilon.Base16
+
 
     -- todo: figure out caching
     -- Wikilon.Dict.PLU

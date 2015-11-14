@@ -470,7 +470,7 @@ A paragraph is implicitly expressed by simply including a full, blank line withi
 
 Programmers often work with binary encoded data, e.g. compressed visual or audio data, secure hashes, ciphertext. I would like the ability to encode MP3 files, texture data, or short video clips as ABC resources. This would allow me to leverage ABC's secure content distribution, caching, partial evaluation, and nearly transparent link model. However, unless embedded binaries can be stored and transmitted efficiently, this simply won't happen.
 
-The current intention is to encode binaries in text using the Base16 alphabet `bdfghjkmnpqstxyz` in simple, rigid, block-formatted structure of 64 characters per line. So 128 bytes might encode as:
+To handle this, we may encode large sequences of base16 in a specific alaphabet `bdfghjkmnpqstxyz` in large structures. This alphabet is `a-z` minus vowels `aeiou` and common ABC data plumbing `vrwlc`, and is intended to make our binaries opaque but visually and heuristically recognizable.
 
         "bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
          bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
@@ -478,9 +478,16 @@ The current intention is to encode binaries in text using the Base16 alphabet `b
          bdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyzbdfghjkmnpqstxyz
         ~
 
-A specialized compression algorithm for storage and streaming may then recognize this convention and encode as binary for network or storage purposes. Further, competitive performance is feasible with future ABCD extensions (see below) specialized for efficient binary processing.
+A specialized compression pass will recognize runs of these characters and rewrite to use a short header and a bytecount. It might also be specialized to recognize block-encoded binaries of exactly 64 characters per line in embedded texts. Here is the encoding I'm using internally for larger definitions in Wikilon, which may become a de-facto standard:
 
-*Note:* The `bdfghjkmnpqstxyz` alphabet is `a-z` minus vowels `aeiou` and common ABC data plumbing `vrwlc`. This alphabet ensures binaries are visually distinct from bytecode and natural language texts.
+        0xF8 (size) (bytes)
+            (size in 0..127): 4..512 bytes (multiples of 4)
+            (size in 128..254): 2..128 lines of 32 bytes with LF SP separators
+            (size 255): escape prior 0xF8 
+
+The escape is irrelevant for valid bytecode, but it ensures the compressor applies to arbitrary binaries. I follow this specialized compression pass with a more conventional one, e.g. Snappy. Anyhow, this allows large binaries to be comfortably stored or shared over a network. 
+
+Efficienty *processing* of binaries further requires accelerators like ABCD.
 
 ## Awelon Bytecode Deflated (ABCD)
 
