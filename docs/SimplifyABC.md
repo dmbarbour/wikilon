@@ -22,8 +22,8 @@ An aggregation of potentially useful rules.
         rl = 
         vc = 
         cv = 
-        zwz = wzw (or vice versa)
-        lzrw = wlzr (since `lzr` doesn't impact first two items)
+        zwz = wzw 
+        lzrw = wlzr (lzr doesn't impact first two items)
             (Haven't found a use case for this one.)
             (Similar for llzrrw, llzrrz.)
 
@@ -54,8 +54,7 @@ An aggregation of potentially useful rules.
 
 ## Simplification Strategy
 
-So far I haven't found a reliable strategy for most problems. Equality saturation would probably work for most things, though is rather expensive with so many equivalent permutations, and would probably be too sophisticated to easily internalize.
-
+So far I haven't found any simple, reliable strategy. Most simplification efforts seem to be ad-hoc.
 
 ## Simplification Problems
 
@@ -71,8 +70,8 @@ Stack swap.
 
         (a)l(b)l rwrwzwlwl
             = (a)(b)wzlwl rwrwzwlwl
-            = (a)(b)wz wzwlwl
-            = (a)(b)ww zwwlwl
+            = (b)(a)zlwl  rwrwzwlwl
+            = (b)(a)zwzwlwl
             = (b)(a)wzlwl
             = (b)l(a)l
 
@@ -83,6 +82,110 @@ Adding a number on the stack to a number in the hand.
 
         (a)zlw (b)l wrzl rwrzw+l
 
-The simplest stack-hand manipulations seem out of easy reach with the rules I have. However, I *know* that `(a)zlw(b)l = (b)l(a)zlw`, and that would be enough to solve this problem. Can I find a simpler set of rules that produce his effect?
+Even simple stack-hand manipulations seem out of reach with the rules I know. However, I *know* that `(a)zlw(b)l = (b)l(a)zlw`. I just don't want to use this as a specific rule, it seems much too specific. Further, this would be enough to solve the problem. Where is my set of simple simplification rules?
 
+        (a)zlw(b)l
+            = (a)zl(b)zl
+            = (a)z(b)wzlwzl
+            = (a)(b)lzrwzlwzl
+            ...
+
+        Let's look at this: `lzrwzlwzl`.
+        Simplifications here appreciated. 
+        
+                (b*(a*(s*(h*e))))
+        l       ((b*a)*(s*(h*e)))
+        z       ((b*a)*(h*(s*e)))
+        r       (b*(a*(h*(s*e))))
+        w       (a*(b*(h*(s*e))))
+        z       (a*(h*(b*(s*e))))
+        l       ((a*h)*(b*(s*e)))
+        w       (b*((a*h)*(s*e)))
+        z       (b*(s*((a*h)*e)))
+        l       ((b*s)*((a*h)*e))
+
+        w       ((a*h)*((b*s)*e))
+        w       ((b*s)*((a*h)*e))
+
+        Equivalent, internally simple strings:
+            lzrwzlwzl
+            wlzrzlwzl       (lzrw = wlzr)
+            zlwzlw 
+            zwlwzlwrwl
+            wzlzrzlwzwl
+
+        Common Substrings?
+            1: l, z, w
+            2: wz, zl, lw
+            3: wzl, zlw, lwz
+            4(*): wzlw, zlwz, lwzl 
+            5(*): wzlwz
+            (*) with injections
+
+        Common subprograms for fragments?
+
+            wzlwz   :: (b*(a*(h*(s*e)))) → (b*(s*((a*h)*e)))
+                lzrz lwzlwr
+                lzrzwlwzlwrw
+                zlzrzlwzwlwr
+
+            wzlw :: (b*(a*(h*(s*e)))) → (b*((a*h)*(s*e)))
+            wzlw :: ((a*h)*(b*(s*e))) → ((a*h)*((b*s)*e))
+            wzlw :: (ah*(b*(s*e))) → (ah*((b*s)*e))
+                lzrzlwzlwrz
+                lzrwzlzrzlzw
+                zlzrwlzrzwlw
+                rwlwzlwrwl
+                zrwlwzwlwrwl
+                rzlzrwzlwzl
+                zrzlzrwzwlwzl
+                rwzlzrwzlwzwl
+                wzwlwrzwrwlwzl
+
+            zlwz :: (a*(b*(h*(s*e)))) → (b*(s*((a*h)*e)))
+                lzrwz lwzlwr
+                lzrwzwlwzlwrw
+
+            lwzl :: (a*(h*(b*(s*e)))) → ((b*s)*((a*h)*e))
+                wlwzlwrwlw
+                wlzrwlwzwl
+                zlzrwzlwzlw
+            
+            wzl :: (b*(a*(h*(s*e)))) → ((a*h)*(b*(s*e)))
+            wzl :: ((a*h)*(b*(s*e))) → ((b*s)*((a*h)*e))
+            wzl :: (ah*(b*(s*e))) → ((b*s)*(ah*e))
+                lzrwlzrzl
+                lzrwzlzrzlz
+                lzrzlwzlwrzw
+                zlzrwlzrzwl
+                rwlwzlwrwlw
+                rzlzrwzlwzlw
+
+            zlw :: (a*(b*(h*(s*e)))) → (b*((a*h)*(s*e)))
+            zlw :: (b*((a*h)*(s*e))) → ((a*h)*((b*s)*e))
+            zlw :: (b*(ah*(s*e))) → (ah*((b*s)*e))
+                lzrwzlwzlwrz
+                lzrzlzrzlzw
+                wrwlwzlwrwl
+                wrzlzrwzlwzl
+
+            lwz :: (a*(h*(b*(s*e)))) → (b*(s*((a*h)*e)))
+                wlwzlwrwlwr
+                zlzrwzlwzlwr
+
+I'm really not seeing any **simple** simplification rules: nothing that would be trivial for human programmers to internalize, nothing that would prove generic to alternative multi-stack environments. This suggests our stack-hand environment needs an alternative to string rewriting. An alternative might be to construct some ad-hoc collection of 'unary' and 'constant' operation on an initial environment, together with accumulating data plumbing for the future? Arrow optimizations, of some sort?
+
+        (first (a→b))z = z(first (a→b))
+        (second (a→b))z = z(third (a→b))
+        ((a→b) *** (c→d))l = l(first ((a→b) *** (c→d)))
+
+We could understand data-plumbing as routing for operations on an environment. The details seem rather challenging, but this path could be pretty powerful if pursued because all `(a)l` and such would qualify unary operations of some kind.
+
+## Useless Simplifications?
+
+        lzrz :: (a*(b*(c*(d*e)))) → (a*(d*(b*(c*e)))
+            zlzrzlzr
+            
+        zlzr :: (a*(d*(b*(c*e))) → (a*(b*(c*(d*e))))
+            lzrzlzrz
 

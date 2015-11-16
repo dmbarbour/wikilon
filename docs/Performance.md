@@ -46,20 +46,35 @@ Awelon Bytecode has a lot of latent parallelism. So the problem becomes teasing 
 
 Our runtime would support opaque 'pending' results. Trying to operate on the pending result may have us waiting. But we're at least free to move it around, e.g. tuck it into a data structure and spark off a few more parallel computations. With just this much ABC and AO gain access to all of Haskell's well developed [strategies](https://hackage.haskell.org/package/parallel-3.2.0.6/docs/Control-Parallel-Strategies.html) for purely functional parallelism. It's also trivial to implement!
 
-It is also possible to support massively parallel GPU computations. Assume a subprogram constructed from a constrained set of recognizable functions and data structures that we know how to easily implement on the GPU. Annotate this for evaluation on the GPU. The runtime applies its internal compilers to CUDA or OpenCL or a shader language. When we later apply the function it will run on the GPU. Other forms of heterogeneous computing, e.g. FPGAs, will tend to follow a similar pattern. Haskell has used a similar approach with [accelerate](https://hackage.haskell.org/package/accelerate).
+It is also feasible to support massively parallel GPU computations. Assume a subprogram is constructed from a constrained set of recognizable functions and data structures that we know how to easily represent on the GPU. Annotate a block containing this subprogram for evaluation on the GPU. The runtime compiles the block to CUDA or OpenCL or a shader language. When we later apply the function, it will compute on the GPU. Other forms of heterogeneous computing, e.g. FPGAs, will frequently follow a similar pattern. Haskell has similar precedent with the [accelerate](https://hackage.haskell.org/package/accelerate) package.
 
 In context of a dictionary application, every form of parallelism could kick in for every evaluation. This includes partial evaluations and cache maintenance. I imagine a mature, active, and popular AO dictionary full of apps could productively leverage as many CPUs, GPUs, and other computing devices as you're willing to throw at them.
 
-## Laziness with Persistence
+## Lazy Computation
 
-ABC can easily support laziness and parallelism. We could consider `{&lazy}` a variant of `{&par}` that doesn't immediately spark off a thread. 
+Laziness involves construction of a suspended computation, a pending result, that doesn't need to be completed immediately. In Haskell, laziness has some semantic aspects in that we can have lazy undefined or divergent computations. However, in ABC, laziness would be expressed by annotation `{&lazy}`. Annotations *must not* affect the observable behavior of the program. So laziness must be a performance-only consideration.
 
-Laziness doesn't seem to buy much in ABC unless we can statically predict our 'relevant' attributes. You're still forced to perform the computation to drop the result. OTOH, if you're going to hold onto it, we *can* serialize our lazy values without computing them. Just use `arg[function]{&lazy}$`, same as when constructed. Same goes for continuations after a partial evaluation, which we might try to see if the lazy value is easily reduced.
+Wikilon interprets bytecode. We are not pre-computing our substructural type attributes. Hence, we must not copy or drop our lazy values before fully computing them. A consequence is that we don't need stateful thunks at the level of independent computations. However, at the higher *dictionary application* layer with partial evaluation and cached computations, we may still reuse lazy thunks. Lazy, stateful thunks might give us some nice properties in this context, effectively giving developers access to construct computations in cache. 
 
-In context of dictionary applications, lazy values could be used in multiple futures (words are not linear, and definitions may freely be forked). It would be nice if a lazy value constructed during partial evaluation is computed once in the larger dictionary-application context, as opposed to once per evaluation on the dictionary. This is feasible with VCache if lazy 'holes' are reified into PVars to share computations. It may be interesting if I can also provide some structure sharing for these shared computations, i.e. such that we may recover the same PVar. This probably would help with preserving cached structure.
+Are there better approaches to cached computations? Memoization seems a promising technique, but has the difficulty of uniquely identifying a computation. Even more so if we begin to inject stateful thunks. 
 
-Usefully, this may also support long-running "background" computations at the Wikilon level. Large computations that are important have some shared efforts gradually computing them, adding a little quota here and there to partially evaluate, returning `202 ACCEPTED` responses. Indeed, this may be the default for parallel computations, tracking how much effort has been expended.
+I may need to experiment with laziness to see whether it is worth using in Wikilon.
 
-The difficulty with lazy and parallel 'holes' is naming them. Perhaps I should ensure these have shared structure, too, just like 
+## Linear Cached Computations
 
+A very cache-friendly pattern for dictionary applications is where each word begins with another word. Conveniently, this also fits the *command pattern* common to many dictionary applications.
 
+        @foo.v1 {%foo.v0}(a command)
+        @foo.v2 {%foo.v1}(another command)
+        @foo.v3 {%foo.v2}(yet another command)
+
+A very simple technique in context is to cache evaluation results relative to individual words in the dictionary.
+
+## Quotas and Caching
+
+As a development platform, Wikilon will host a lot of long-running and non-terminating code. Ideally, ABC programs should always terminate, but divergent code is possible because it's buggy or malign. And long-running code may exist because it's non-terminating or simply really expensive. I've been wondering how to best address this concern in context of:
+
+* reusable cached computations
+* controlling efforts expended
+
+Laziness could possibly help by allowing fine-grained reuse of a computation that isn't generated until after it is cached. However, laziness isn't ideal for further simplifications and optimizations.
