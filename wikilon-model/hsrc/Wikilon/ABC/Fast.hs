@@ -555,8 +555,8 @@ instance VCacheable CacheEnc where
         let zBytes = Snappy.compress bytes in
         let nzBytes = LBS.length zBytes in
 
-        let bSufficientlyLarge = (nBytes >= 1200) in
-        let bAcceptableRatio = ((nzBytes * 4) <= (nBytes * 3)) in
+        let bSufficientlyLarge = (nBytes >= 2000) in
+        let bAcceptableRatio = ((nzBytes * 3) <= (nBytes * 2)) in
         let bUseCompression = bSufficientlyLarge && bAcceptableRatio in
 
         if not bUseCompression

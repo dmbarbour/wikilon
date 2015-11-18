@@ -47,8 +47,8 @@ isB16c = (/= maxBound) . c2h
 --    * 255: escape prior 0xF8 for a safety on arbitrary bytestrings
 --
 -- Thus, the optimal way to encode base16 is in 4096-byte embedded
--- text chunks. But we can use ad-hoc strings, e.g. of 128 bytes,
--- and still encode with acceptable overheads.
+-- text chunks at 32 bytes (64 chars) per line. But we can use ad-hoc
+-- strings and at least have some savings over base64 encodings.
 -- 
 compress :: LBS.ByteString -> LBS.ByteString
 compress = skipping where

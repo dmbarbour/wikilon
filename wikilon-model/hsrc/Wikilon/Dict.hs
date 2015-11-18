@@ -32,8 +32,11 @@ import Data.Typeable (Typeable)
 import Data.Monoid
 import qualified Data.List as L
 import qualified Data.Set as Set
+import qualified Data.ByteString.Internal as BSI
 import qualified Data.ByteString.Lazy as LBS
 import qualified Codec.Compression.Snappy.Lazy as Snappy
+import System.IO.Unsafe (unsafeDupablePerformIO)
+import Foreign.ForeignPtr (newForeignPtr_) 
 import Data.VCache.Trie (Trie, Diff(..))
 import qualified Data.VCache.Trie as Trie
 import Database.VCache
@@ -60,52 +63,26 @@ data Def
     | DefL (VRef BigAODef)  -- for large definitions, maybe compressed
     deriving (Eq, Typeable)
 
--- I want to compress large, compressible definitions. I'm willing to
--- use some ad-hoc heuristics here. Most definitions should be small
--- enough that I don't feel any need to compress.
-data BigAODef
-    = UDef AODef
-    | ZDef LBS.ByteString
+-- I want to compress the larger, more compressible definitions. 
+-- BigAODef gives me an opportunity to do so (at VCacheable)
+newtype BigAODef = BigAODef { fromBigAODef :: AODef } 
     deriving (Eq, Typeable)
-
-fromBigAODef :: BigAODef -> AODef
-fromBigAODef (UDef d) = d
-fromBigAODef (ZDef z) = decompress z
-
--- heuristic compression
-toBigAODef :: AODef -> BigAODef
-toBigAODef bytes =
-    let nBytes = LBS.length bytes in
-    let zBytes = compress bytes in
-    let nzBytes = LBS.length zBytes in
-    let bSufficientlyLarge = (nBytes >= 1200) in
-    let bAcceptableRatio = ((nzBytes * 4) <= (nBytes * 3)) in
-    let bUseCompression = (bSufficientlyLarge && bAcceptableRatio) in
-    if bUseCompression 
-        then ZDef zBytes 
-        else UDef bytes
 
 isSmall :: AODef -> Bool
 isSmall = (< 255) . LBS.length
 
 aodef :: Def -> AODef
 aodef (DefS def) = def
-aodef (DefL ref) = fromBigAODef $ deref' ref
+aodef (DefL ref) = fromBigAODef (deref' ref)
 
 toDef :: VSpace -> AODef -> Def
 toDef vc def 
     | isSmall def = DefS def
-    | otherwise   = DefL (vref' vc (toBigAODef def))
+    | otherwise   = DefL (vref' vc (BigAODef def))
 
 -- | Create a new, empty dictionary.
 dictCreate :: VSpace -> Dict
 dictCreate = Dict . Trie.empty
-
-compress :: LBS.ByteString -> LBS.ByteString
-compress = Snappy.compress . B16.compress 
-
-decompress :: LBS.ByteString -> LBS.ByteString
-decompress = B16.decompress . Snappy.decompress
 
 -- | lookup a word in the dictionary. If a word is undefined,
 -- this will return Nothing. Otherwise, it returns the bytecode
@@ -167,13 +144,46 @@ instance VCacheable Def where
         if (maxBound == sz) then DefL <$> getVRef else
         DefS <$> getByteStringLazy (fromIntegral sz) 
 
+
+compress :: LBS.ByteString -> LBS.ByteString
+compress = Snappy.compress . B16.compress 
+
+decompress :: LBS.ByteString -> LBS.ByteString
+decompress = B16.decompress . Snappy.decompress
+
+-- we'll perform compression, heuristically, with zero-copy decompress.
+-- I require a pretty large definition before I bother with compression.
+-- It's mostly intended for larger texts, binaries, etc.. Also, we'll
+-- skip compression if we aren't getting at least a 33% reduction.
 instance VCacheable BigAODef where
-    put (UDef def) = putWord8 1 >> put def
-    put (ZDef zbytes) = putWord8 2 >> put zbytes
-    get = getWord8 >>= \ ty -> case ty of
-        1 -> UDef <$> get
-        2 -> ZDef <$> get
-        _ -> fail $ dictErr $ "unrecognized compression model for large def " ++ show ty
+    put (BigAODef bytes) =
+        let nBytes = LBS.length bytes in
+        let zBytes = compress bytes in
+        let nzBytes = LBS.length zBytes in
+        
+        let bSufficientlyLarge = (nBytes >= 2000) in
+        let bAcceptableRatio = ((nzBytes * 3) <= (nBytes * 2)) in
+        let bUseCompression = bSufficientlyLarge && bAcceptableRatio in
+
+        if not bUseCompression
+            then putWord8 0 >> put bytes
+            else putWord8 1 >> 
+                 putVarNat (fromIntegral nBytes) >>
+                 putVarNat (fromIntegral nzBytes) >> 
+                 putByteStringLazy zBytes
+
+    get = getWord8 >>= \ vn -> case vn of
+        0 -> BigAODef <$> get
+        1 -> fmap fromIntegral getVarNat >>= \ nBytes ->
+             fmap fromIntegral getVarNat >>= \ nzBytes ->
+             withBytes nzBytes $ \ pzBytes -> -- zero-copy decompression
+                let fpzBytes = unsafeDupablePerformIO (newForeignPtr_ pzBytes) in
+                let zBytes = LBS.fromStrict $ BSI.PS fpzBytes 0 nzBytes in
+                let bytes = decompress zBytes in
+                if (LBS.length bytes /= nBytes) -- also forces strict bytes
+                    then fail (dictErr $ "byte count mismatch on decompress")
+                    else return (BigAODef bytes)
+        _ -> fail (dictErr $ "unrecognized BigAODef encoding")
 
 dictErr :: String -> String
 dictErr = ("Wikilon.Dict " ++)

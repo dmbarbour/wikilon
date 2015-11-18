@@ -23,17 +23,19 @@ import Wikilon.Time
 --  * modeling multi-versioned words within the dictionary
 --  * modeling metadata tasks, todos, sessions, etc. in dictionary
 --  * favoring monotonic command patterns for dictionary apps
---  * extra branches to tag versions and low-frequency updates
+--  * separate branches to tag versions and low-frequency updates
 --
 -- So I'm not too concerned about under-shooting a little, so 
 -- long as we have enough history for convenience in cases like
--- recovering from vandalism. 
+-- recovering from vandalism and mining through history. If we
+-- overshoot, the cost is some extra storage.
 --
 maxHistorySamples :: Int
-maxHistorySamples = 150
+maxHistorySamples = 180
 
 -- | The 'DictHist' is a representation for [(T,Dict)] where each 
--- pair reads: "before time T we had dictionary Dict". 
+-- pair reads: "before time T we had dictionary Dict". Time will
+-- decrease monotonically in the list.
 --
 -- The history is for archival and recovery purposes. Properties
 -- and indices are not preserved, though they may be regenerated
