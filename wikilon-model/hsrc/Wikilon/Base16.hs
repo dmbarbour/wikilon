@@ -6,10 +6,13 @@ module Wikilon.Base16
     ( alphabet, compress, decompress
     ) where
 
+import Control.Exception (assert)
 import Data.Monoid
 import Data.Word
 import Data.Bits
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Lazy.Internal as LBSI
+import qualified Data.ByteString as BS
 import qualified Data.List as L
 import qualified Data.Array.Unboxed as UA
 import Data.Char (ord)
@@ -52,16 +55,25 @@ isB16c = (/= maxBound) . c2h
 -- 
 compress :: LBS.ByteString -> LBS.ByteString
 compress = skipping where
+    escF8 = LBS.pack [0xF8, 0xFF]
+    blockSize = 32 * 1024
+    minRun = 8
     -- skip a literal
     skipping bytes = go 0 0 bytes where
-        escF8 = LBS.pack [0xF8, 0xFF]
         go !ct !run s = case LBS.uncons s of
             Nothing -> bytes
             Just (c,s') 
                 | (0xF8 == c) -> LBS.take (run+ct) bytes <> escF8 <> compress s'
-                | (not (isB16c c)) -> go (1 + run + ct) 0 s'
-                | (run < 7) -> go ct (1 + run) s'
-                | otherwise -> LBS.take ct bytes <> scanning (LBS.drop ct bytes) run
+                | (not (isB16c c)) -> 
+                        let ct' = 1 + run + ct in
+                        if (ct' < blockSize) then go ct' 0 s' else
+                        let (literal, bytes') = LBS.splitAt ct' bytes in
+                        literal <> compress bytes' 
+                | otherwise -> 
+                        let run' = 1 + run in
+                        if (run' < minRun) then go ct run' s' else
+                        let (literal, bytes') = LBS.splitAt ct bytes in
+                        literal <> scanning bytes' run'
 
     -- scan for end of binary (already at least 8 chars)
     -- does not scan more than we can process at once
@@ -116,31 +128,37 @@ compress = skipping where
 
 decompress :: LBS.ByteString -> LBS.ByteString
 decompress = seeking where
-    seeking s = case LBS.elemIndex 0xF8 s of
-        Nothing -> s
-        Just ix -> case LBS.uncons (LBS.drop (ix + 1) s) of
-            Nothing -> s
-            Just (c, s') 
+    seeking s@(LBSI.Chunk chunk s') = case BS.elemIndex 0xF8 chunk of
+        Nothing -> LBSI.Chunk chunk (decompress s') -- for streaming decompress
+        Just ix -> foundF8 (fromIntegral ix) s -- element to decompress
+    seeking LBSI.Empty = LBSI.Empty
+
+    foundF8 ix s = case LBS.uncons (LBS.drop (ix + 1) s) of
+        Nothing -> s -- invalid input, treat as escape
+        Just (c, s') 
                 | (c == 0xFF) -> LBS.take (ix + 1) s <> decompress s'
                 | (c >= 0x80) -> LBS.take ix s <> loadLines (fromIntegral (c - 126)) s'
-                | otherwise -> LBS.take ix s <> loadChunk (fromIntegral c) s'
+                | otherwise   -> LBS.take ix s <> loadChunk (fromIntegral (c + 1)) s'
 
+    -- 4..512 bytes (1..128 words of 4 bytes)
     loadChunk nW s =
+        assert ((nW >= 1) && (nW <= 128)) $
         let nB = 4 * nW in
         let (sb,s') = LBS.splitAt nB s in
         let bdy = decodeBytes (LBS.unpack sb) in
         LBS.pack bdy <> decompress s'
 
+    -- 64..4096 bytes (2..128 lines of 32 bytes)
     loadLines ct s = 
+        assert ((ct >= 2) && (ct <= 128)) $
         let nB = 32 * ct in
         let (sb,s') = LBS.splitAt nB s in
-        LBS.pack (lineBytes sb []) <> decompress s' 
+        LBS.pack (lineBytes sb) <> decompress s' 
 
-    lineBytes s =
-        let (bytes,s') = LBS.splitAt 32 s in
-        let chars = mappend $ decodeBytes (LBS.unpack bytes) in
-        let sep = if (LBS.null s') then id else (++) [10,32] in
-        chars . sep . lineBytes s'
+    lineBytes = line where
+        moreLines s = if LBS.null s then mempty else [10,32] <> line s
+        line s = decodeBytes (LBS.unpack l) <> moreLines s' where
+            (l, s') = LBS.splitAt 32 s
 
     decodeBytes (b:bs) = (c1:c2:cs) where
         h1 = (b `shiftR` 4)
@@ -150,6 +168,6 @@ decompress = seeking where
         cs = decodeBytes bs
     decodeBytes [] = []
 
-
--- \n gbgdgfggghgkgjgmgngpfbhdhfhghhhjhkhmhnhphqhshthxhyhzjbjdjfjgjhfb
+-- abc base16 compression test text
+-- kdkfkgfbkfkdmgkjgdgkfbkgkzkxmbmfkjmgmgkpkzkyfbmhkjmgmhfbmhkjmnmh
 

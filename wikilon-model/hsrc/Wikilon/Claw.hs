@@ -71,6 +71,7 @@ import Control.Applicative
 import Control.Monad
 import Data.Monoid
 import Data.Char
+import Data.Maybe
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Lazy.Char8 as LBS
@@ -412,7 +413,7 @@ encodeOp (P0 op) -- should not happen normally
     | abcWS op = mempty
     | otherwise = BB.char8 '\\' <> c
     where c = BB.char8 $ ABC.abcOpToChar op
-encodeOp (T0 txt) = BB.char8 '\n' <> encMultiLineText txt
+encodeOp (T0 txt) = encMultiLineText txt
 encodeOp (K0 tok) = BB.char8 '\\' <> encTok tok
 encodeOp (B0 cc) = BB.char8 '\\' <> encBlock cc
 encodeOp (AT lst) = BB.char8 '(' <> encodeOps (fmap CW lst) <> BB.char8 ')'
@@ -433,15 +434,14 @@ encCmdSeq (c0:cs) = BB.char8 '{' <> hd <> tl <> BB.char8 '}' where
         e = if bEsc then BB.char8 '/' else mempty
 encCmdSeq [] = encCmdSeq [(mempty,True)]
 
--- Claw's encoding of multi-line texts
+-- Claw's encoding of multi-line texts.
 encMultiLineText :: Text -> BB.Builder
 encMultiLineText txt =
-    let (ln0,lns) = textLines txt in
-    BB.char8 '\\' <> BB.char8 '"' <> BB.lazyByteString ln0 <>
-    let lnPre = BB.char8 '\n' <> BB.char8 ' ' <> BB.char8 '\\' in
-    let _encodeLine = (lnPre <>) . BB.lazyByteString in
-    mconcat (fmap _encodeLine lns) <>
-    BB.char8 '\n' <> BB.char8 ' ' <> BB.char8 '~'
+    -- multi-line text with full padding
+    BB.char8 '\\' <> BB.char8 '"' <> BB.char8 '\n' <>
+    let encLn ln = BB.char8 '\n' <> BB.char8 ' ' <> BB.lazyByteString ln in
+    mconcat (fmap encLn (uncurry (:) (textLines txt))) <>
+    BB.char8 '\n' <> BB.char8 '\n' <> BB.char8 '~' 
 
 instance Show ClawOp where
     showsPrec _ = showList . (:[])
@@ -590,22 +590,44 @@ charToEscPrim c =
     guard (not (abcWS op)) >>
     return op
 
--- Parse multi-line Claw text after having read the \" prefix.
+-- Parse multi-line Claw text after having read the \" prefix. Parses
+-- up to the
 --
--- This is similar to ABC text but we use `LF SP* \` to escape a line
--- and `LF SP* ~` to terminate the text. In a successful parse, the
--- next character after the text should be the terminating `~`.
+-- Each line is `LF SP (line of text)`. `LF LF` is treated as `LF SP LF`.
+-- In a correctly encoded text, the following character is `~`.
+-- We'll eliminate one line of padding at the start and end of our
+-- text before returning it.
+--
+-- I'll ignore spaces following `\"`. 
+-- I'll accept `\"~` as empty text.
+--
 clawTakeText :: LBS.ByteString -> (Text, LBS.ByteString)
-clawTakeText = first (mconcat . L.reverse) . t [] where
-    t r s = case LBS.elemIndex '\n' s of
-        Nothing -> (s:r, mempty)
-        Just ix -> 
-            let s' = LBS.dropWhile (== ' ') $ LBS.drop (ix + 1) s in
-            case LBS.uncons s' of
-                Just ('\\', sCont) -> 
-                    let ln = LBS.take (ix + 1) s in -- line including '\n'
-                    t (ln:r) sCont -- text continues after '\\' character
-                _ -> let ln = LBS.take ix s in (ln:r, s')
+clawTakeText = run where
+    skipSP = LBS.dropWhile (== ' ')
+    run s = fromMaybe (mempty,s) $ 
+        LBS.uncons (skipSP s) >>= \ (c, s') ->
+        guard ('\n' == c) >>
+        return (first toText (tt [] s'))
+    -- at `tt` we're just past reading a final `\n`.
+    -- every line of text will include the terminal `\n`.
+    tt :: [Text] -> Text -> ([Text],Text)
+    tt r s = fromMaybe (r,s) $
+        LBS.uncons s >>= \ (c, s') ->
+        if ('\n' == c) then return (tt (el:r) s') else
+        guard (' ' == c) >>
+        LBS.elemIndex '\n' s' >>= \ ix ->
+        let (line,more) = LBS.splitAt (ix+1) s' in
+        return (tt (line:r) more)
+    el = LBS.singleton '\n'
+    toText = trimPadStart . mconcat . L.reverse . trimLFTerm . trimPadEnd
+    -- drop one pad line above multi-line text
+    trimPadStart s = case LBS.uncons s of { Just ('\n', s') -> s'; _ -> s }
+    -- drop one pad line below multi-line text
+    trimPadEnd (l:r) | (l == el) = r
+    trimPadEnd r = r
+    -- drop final LF from the `LF ~` text terminator.
+    trimLFTerm (l:r) = ((LBS.init l) : r) 
+    trimLFTerm [] = []
 
 decodeWordOrNumber :: ABC.Text -> Maybe (ClawOp, ABC.Text)
 decodeWordOrNumber txt = dn <|> dw where

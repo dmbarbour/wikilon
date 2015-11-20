@@ -55,6 +55,11 @@ import Wikilon.AODef
 newtype Dict = Dict (Trie Def)
     deriving (Eq, Typeable)
 
+instance Show Dict where
+    showsPrec _ (Dict t) = 
+        showString "Dict#" . 
+        shows (Trie.unsafeTrieAddr t)
+
 -- NOTE: I want to separate large definitions from the Trie nodes to avoid
 -- copying them too often. But small definitions may be kept with the trie
 -- nodes to reduce indirection. Here, 'small' will be up to 254 bytes. 

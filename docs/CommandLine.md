@@ -1,7 +1,7 @@
 
 # Command Language for Awelon (claw)
 
-Awelon project and Wikilon would benefit from effective command line interfaces, e.g. as a REPL and shell. In context of Wikilon, providing console-like services through HTML forms or JavaScript should not be difficult. The underlying [Awelon Object (AO)](AboutAO.md) bytecode is unsuitable for this application in its raw form.
+Awelon project and Wikilon will benefit from effective command line interfaces, e.g. for [modeling a REPL and shell](ApplicationModel.md). In context of Wikilon, providing console-like services through HTML forms or JavaScript should not be difficult. The underlying [Awelon Object (AO)](AboutAO.md) bytecode is unsuitable for this application in its raw form.
 
 Desirable features for a command line interface:
 
@@ -10,9 +10,9 @@ Desirable features for a command line interface:
 * escaped access to underlying language `\vrwlc \{&anno}`
 * namespace model for multiple environments `#foo: 1 2 3`
 * blocks for higher order operations `1 [2 mul] 53 repeat`
-* terse encoding of tuples, lists, sequences `{1,2,3}`
+* terse encoding of tuples, lists, tables
 
-Command Language for Awelon (claw) is a syntactic sugar and editable view for AO. Claw semantics is a trivial expansion into AO bytecode, and this expansion is reversible, such that we may view and edit AO bytecode as claw code.
+Command Language for Awelon (claw) is a syntactic sugar and editable view for AO. Claw semantics is a trivial expansion into AO bytecode, and this expansion is reversible, such that we may view and edit AO bytecode as claw code. While claw is optimized for one-liner programs, it is usable for page-structured programming.
 
 Claw is simple, flexible, and extensible. Though intended primarily for command line interfaces, claw may be leveraged for conventional document interfaces and block-structured programming by recognizing sequences like `[cond] [body] while_do_`. Given a structure editor, claw might further be extended with interactive forms - sliders, color pickers, checkboxes, etc. - e.g. by recognizing sequences like `30 slider` or `255 0 0 rgbcolor`. 
 
@@ -39,25 +39,42 @@ I want support for ratios and decimals (e.g. `2/3` and `3.141`) so I can at leas
 For round-tripping, the form shall be preserved, e.g. we don't lose the zeroes in `1.000`, and `4/6` would be distinct from `2/3` (before processing by `ratio`). Expansions may involve multiple steps. For example, the `6.02` for the scientific E notation expands as a decimal number. We may generalize this idea for integral and literal values:
 
         42      desugars to     \#42 int
-        "foo"   desugars to     \"foo
-                                 ~ lit
+        "foo"   desugars to     \"
+                                 foo
+                                ~ lit
 
 This approach to literal values is easily extensible with new notations. I would like to explore vectors, matrices, association lists, and other formats. However, for the moment I'll focus on just the five forms indicated above: ratio, decimal, exp10, integer, literal. 
 
-#### Claw Multi-Line Literals and Alternatives
+#### Multi-Line Literals
 
-As a universal view, Claw provides a syntax for multi-line literals. 
+Inline literals are sufficient for most command line use cases, e.g. labels like `"foo"`, test strings like `"Hello, World!"`, and micro-DSLs like regular expressions. Claw doesn't have built-in character escapes, and it isn't difficult to define your `literal` function to rewrite substrings like `"\n"`, `"\q"`, and `"\\"` to model escapes of newlines and double-quotes and escapes.
 
-        \"This is an example
-         \multi-line literal
-         \with "double quotes".
+Nonetheless, claw provides a usable syntax for multi-line embedded text:
+
+        some commands \"
+        
+         This is an example multi-line
+         literal with "double quotes".
+        
+        ~ more commands
+
+        (author:Cicero date:BCE45 lang:latin) \"
+        
+         Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
+         eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut 
+         enim ad minim veniam, quis nostrud exercitation ullamco laboris
+         nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor
+         in reprehenderit in voluptate velit esse cillum dolore eu fugiat 
+         nulla pariatur. Excepteur sint occaecat cupidatat non proident, 
+         sunt in culpa qui officia deserunt mollit anim id est laborum.
+        
         ~
 
-Claw uses `LF SP* \` to escape an LF and `LF SP* ~` to terminate (where ABC respectively uses `LF SP` and `LF ~`). This allows Claw to be more flexibly formatted and indented. It also ensures that blank lines of text are visible, and that an incomplete text literal is easily recognized. 
+Our text begins on the line after `\"`. Each line of claw text is preceded with `LF SP` and the text terminates with `LF ~`. For convenience, `LF LF` is treated as `LF SP LF` so developers don't need to indent empty lines. Other than SP, LF, or ~, any character following LF is an error. For aesthetics, our text is padded with one empty line before and after. One empty line of padding is trimmed from each side when parsing the claw text. The padding is optional unless you actually need the empty lines.
 
-However, this is not very aesthetically pleasing (at least to my eyes), and it would be a pain to write in a console or REPL. Multi-line literals simply, fundamentally, aren't a nice fit for a command line interface. Where large literals are necessary, my recommendation is instead to define them using a separate word and access them by name. We can provide a specialized view for reading and editing text-mostly definitions. 
+No default escapes are used within the text body. However, claw is generally limited to the same character set as AO dictionaries. Claw forbids control characters (except LF), DEL, surrogates, and the replacement character. If developers need more than this, they may encode it and functionally rewrite the text afterwards.
 
-Inline literals are sufficient for most command line use cases, including labels like `"foo"`, test strings like `"Hello, World!"`, micro-DSLs like regular expressions. While Claw doesn't have built-in character escapes, it isn't difficult to define a function to rewrite substrings like `"\n"` and `"\q"` to model escapes.
+I hope for claw to be tolerable as a syntax for text markup, typography, or literate programming. These multi-line literals are a good start: it is lightweight and doesn't require ugly escapes. The weakness is that multi-line text cannot be flexibly indented, which may be awkward in some cases. We might mitigate this functionally or via abstraction of text into separate definitions. But, if this doesn't work out, we might need a more structured view for those roles.
 
 ### Claw Blocks
 
@@ -67,30 +84,9 @@ An important role of words integer and literal is to place each value at an appr
 
 The escaped form of a block still contains claw code but does not assume any placement word. Mostly, this is necessary so we can reliably represent blocks that were not placed at the default location.
 
-### Claw Sequences
+### (experimental) Claw Sequences
 
-A command language sequence is a sequence of commands (even `42` is a command). A simple use case is to construct a sequence of values. For example, `{1,2,3}` is might construct a list of three numbers. Parsimonious expression for a list of values is convenient for matrices, graphs, tables, and more. In the more general use case, sequences are a potential basis for monadic DSLs and block-structured programming.
-
-The semantics for claw sequences is:
-
-        {foo,bar,baz}   desugars to
-        [\[foo] cmd \[bar] cmd \[baz] cmd] cmdseq
-
-This treats both commands and sequences as first-class values. The commands are individual blocks, while the sequence is represented by a block that operates sequentially and uniformly upon each command. This has a nice property: composition of sequence blocks is equivalent to concatenation of sequences. However, we could easily rewrite to alternative representations (e.g. with `cmd = \lV` we would push each command onto a list). The recommended definition is `cmd = \lw^z$`, which allows us to provide a command handler.
-
-        handler  :: (command * st) → st
-        sequence :: (st * (handler * 1)) → (st * (handler * 1))
-        cmd      :: (command * (st * (handler * 1))) → (st * (handler * 1)))
-        cmd = \lw^z$
-
-Claw additionally supports an explicit *sequence escape* syntax, enabling injection of arbitrary code into a sequence block. This is currently expressed by prefixing a command by `/`. For example:
-
-        {/foobar, baz}  desugars to
-        \[foobar \[baz] cmd] cmdseq
-
-The motivation for sequence escapes is convenient syntactic abstraction, for example extracting subsequence `foo,bar` into a separate word `foobar`. Syntactic abstraction is an important property for Awelon project, though I encourage developers to favor composable semantic abstractions (such that `foo,bar` may be composed in a type-dependent way into a `foobar` command, no escapes required).
-
-*Note:* `{}` is a sequence with one empty command. The empty command sequence is `{/}`.
+See [command sequences](CommandSequences.md).
 
 ### Claw Attributes
 

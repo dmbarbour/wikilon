@@ -470,36 +470,48 @@ A paragraph is implicitly expressed by simply including a full, blank line withi
 
 Programmers often work with binary encoded data, e.g. compressed visual or audio data, secure hashes, ciphertext. I would like the ability to encode MP3 files, texture data, or short video clips as ABC resources. This would allow me to leverage ABC's secure content distribution, caching, partial evaluation, and nearly transparent link model. However, unless embedded binaries can be stored and transmitted efficiently, this simply won't happen.
 
-To handle this, we may encode large sequences of base16 in a specific alaphabet `bdfghjkmnpqstxyz` in large structures. This alphabet is `a-z` minus vowels `aeiou` and common ABC data plumbing `vrwlc`, and is intended to make our binaries opaque but visually and heuristically recognizable.
+To handle this, we may encode large sequences of base16 in a specific alphabet `bdfghjkmnpqstxyz` in embedded text. This alphabet is `a-z` minus vowels `aeiou` and common ABC data plumbing `vrwlc`, and is intended to make our binaries opaque yet visually or heuristically recognizable. For example:
 
-        "gbgdgfggghgkgjgmgngpfbhdhfhghhhjhkhmhnhphqhshthxhyhzjbjdjfjgjhfb
-         gbgdgfggghgkgjgmgngpfbhdhfhghhhjhkhmhnhphqhshthxhyhzjbjdjfjgjhfb
-         gbgdgfggghgkgjgmgngpfbhdhfhghhhjhkhmhnhphqhshthxhyhzjbjdjfjgjhfb
-         gbgdgfggghgkgjgmgngpfbhdhfhghhhjhkhmhnhphqhshthxhyhzjbjdjfjgjhfb
+        "htkzmfkjkxfbkpmbmgmjkxfbkhkzktkzmffbmgkpmhfbkdkxkjmhftfbkgkzkymg
+         kjkgmhkjmhmjmffbkdkhkpmbkpmgkgkpkykmfbkjktkpmhftfbmgkjkhfbkhkzfb
+         kjkpmjmgkxkzkhfbmhkjkxmbkzmffbkpkykgkpkhkpkhmjkymhfbmjmhfbktkdkf
+         kzmfkjfbkjmhfbkhkzktkzmfkjfbkxkdkmkykdfbkdktkpmdmjkdfyfbjjmhfbkj
+         kykpkxfbkdkhfbkxkpkykpkxfbmkkjkykpkdkxftfbmdmjkpmgfbkykzmgmhmfmj
+         khfbkjmnkjmfkgkpmhkdmhkpkzkyfbmjktktkdkxkgkzfbktkdkfkzmfkpmgfbky
+         kpmgkpfbmjmhfbkdktkpmdmjkpmbfbkjmnfbkjkdfbkgkzkxkxkzkhkzfbkgkzky
+         mgkjmdmjkdmhfyfbhhmjkpmgfbkdmjmhkjfbkpmfmjmfkjfbkhkzktkzmffbkpky
+         fbmfkjmbmfkjknkjkykhkjmfkpmhfbkpkyfbmkkzktmjmbmhkdmhkjfbmkkjktkp
+         mhfbkjmgmgkjfbkgkpktktmjkxfbkhkzktkzmfkjfbkjmjfbkkmjkmkpkdmhfbky
+         mjktktkdfbmbkdmfkpkdmhmjmffyfbhjmnkgkjmbmhkjmjmffbmgkpkymhfbkzkg
+         kgkdkjkgkdmhfbkgmjmbkpkhkdmhkdmhfbkykzkyfbmbmfkzkpkhkjkymhftfbmg
+         mjkymhfbkpkyfbkgmjktmbkdfbmdmjkpfbkzkkkkkpkgkpkdfbkhkjmgkjmfmjky
+         mhfbkxkzktktkpmhfbkdkykpkxfbkpkhfbkjmgmhfbktkdkfkzmfmjkxfy
         ~
 
-A specialized compression pass will recognize runs of these characters and rewrite to use a short header and a bytecount. It might also be specialized to recognize block-encoded binaries of exactly 64 characters (32 bytes) per line in embedded texts. Here is the encoding I'm using internally for larger definitions in Wikilon, which may become a de-facto standard:
+A specialized compression pass recognizes runs of these characters and rewrites to a short header and a bytecount. The format I developed for use within Wikilon is especially optimized for texts encoding 32 bytes per line, encoding blocks of up to 4096 bytes (128 lines) with only 0.1% overhead. Here's the format I use internally:
 
-        0xF8 (size) (bytes)
-            (size in 0..127): 4..512 bytes (multiples of 4)
+        (248) (size) (bytes)
+            (size in 0..127): 4..512 contiguous bytes (multiples of 4)
             (size in 128..254): 2..128 lines of 32 bytes with LF SP separators
-            (size 255): escape prior 0xF8 
+            (size 255): escape prior (248) byte
 
-The escape is irrelevant for valid bytecode, but it ensures the compressor applies to arbitrary binaries. I follow this specialized compression pass with a more conventional one, e.g. Snappy. Anyhow, this allows large binaries to be comfortably stored or shared over a network. 
+Byte `(248)` does not naturally appear in UTF-8 text or ABC. The escape is included only to ensure compression is a total function, valid on all bytestrings. Usually, binary compression will be followed by a more conventional compression, e.g. Snappy or GZip.
 
-Efficienty *processing* of binaries further requires accelerators like ABCD.
+Efficient *processing* of binaries further requires accelerators like ABCD.
 
 ## Awelon Bytecode Deflated (ABCD)
 
-I plan to develop a bytecode above ABC: ABC Deflated, or ABCD.
+I plan to develop an extended bytecode above ABC: ABC Deflated, or ABCD.
 
-ABCD extends ABC with a universal standard dictionary that maps higher UTF-8 characters to common, widely useful ABC subprograms. An ABC runtime will be expected to have a database of these definitions, and perhaps even have specialized accelerators and optimizations for them. 
+Characters ABC doesn't use will be mapped to common, useful, optimizable ABC subprograms. This gives us a form of standard dictionary compression, allowing larger ABC programs to be represented with fewer characters. Further, ABCD subprograms shall generally be accelerated by interpreters, and the operations may allow us to easily infer optimized representations for data structures (e.g. binaries, vectors, matrices, floating point). Ultimately, programs constructed from well-defined subsets of ABC may be compiled to GPGPUs and other devices (cf. Haskell's [accelerate](https://hackage.haskell.org/package/accelerate) package).
 
-ABC streams may then be compressed against this dictionary, or alternatively generated using these operators directly. Further, ABCD interpreters can include specialized implementations for many of these functions. For many functions, a specialized implementation could be much more efficient than interpreting the implementation or even using a generic compiler. Further still, the selected functions could have well understood equational laws to simplify rewrite optimizations. For example, if a function reverses a list, then we know applying it twice results in the input. And if a function maps over a list, then mapping two functions is equivalent to composing the function and mapping once.
+ABCD allows ABC to iteratively grow into a high-performance language while preserving ABC's simple semantics. Every ABCD program expands trivially into an ABC program. 
 
-Development of ABCD shall be incremental and empirical, driven by actual data from real applications, with attention to popular data structures and usage patterns. Unicode is big (over a million elements) and realistically the standard dictionary will be much smaller so we can still have small runtime implementations. I would be surprised if we ever use 0.5% of the available space (~5000 functions). We should gain considerable benefits from much less than that.
+ABCD will greatly improve the performance of ABC interpreters. We gain efficiency by doing more useful work per opcode. If we have opcodes for multiplying matrices, and our program does a lot of that, we'll be spending a greater portion of our time in our pre-compiled matrix multiplication code rather than parsing opcodes and shuffling data. ABCD has great potential for *Collections Oriented Programming* (see below). Because interpreters are much simpler to implement or integrate than compilers, ABCD will also improve the accessibility of ABC.
 
-ABCD complements ABC's resource model for separate compilation and dynamic linking. ABCD is suitable for relatively short, widely used functions. ABC resources are suitable for project specific software components and large data objects (to leverage content distribution networks and caching). These two techniques fill very different niches, and between them ABC may be minimal with little concern for performance or parsimony.
+ABCD requires careful standardization to support code distribution (streaming, ABC resources). Fortunately, it is easy to experiment with ABCD-like extensions within a runtime. We can take advantage of this technique long before we standardize, and we can empirically prove the utility of certain accelerators. 
+
+Because ABC is encoded in UTF-8, we have more room for ABCD extensions than we'll likely ever need. I would be surprised if we standardize much more than 500 ABCD functions.
 
 ### ABCD for Collections Oriented Programming
 
@@ -507,7 +519,7 @@ Languages designed for collections oriented programming, such as J, K, APL, or S
 
 During design and development of Awelon Bytecode, it has been very tempting to pursue collections oriented operations and data types. I ultimately decided against this due to the complexity it would add, e.g. needing to make extra choices about which collections to support (arrays, matrices, lists, streams, relations, etc.) and provide the panoply of operators for manipulating them. The conception of ABCD also contributed significantly to my willingness to kick collections oriented features into the future. 
 
-Simply put, a significant subset of ABCD will be collections oriented.
+Simply put, an important subset of ABCD will be collections oriented.
 
 An ABCD interpreter can provide a few under-the-hood data types for compact representations of arrays, matrices, and so on. Where necessary, or where guided by annotation, the interpreter can convert between these compact representations and the more conventional composite of products and sums. A compiler can do similar, of course.
 

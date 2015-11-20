@@ -37,7 +37,7 @@ Library
   hs-source-dirs: hsrc
   default-language: Haskell2010
   build-depends: base (>= 4.7 && < 5)
-    , vcache (>= 0.2.6)
+    , vcache (== 0.2.6)
     , vcache-trie (>= 0.2.4)
 
     , bytestring (>= 0.10.4)
@@ -91,6 +91,8 @@ Library
 
     -- Wikilon.Clock
     Wikilon.Time
+
+    Wikilon.Test.LoadDict
 
   Other-Modules:
 
