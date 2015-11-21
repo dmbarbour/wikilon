@@ -92,7 +92,7 @@ See [command sequences](CommandSequences.md).
 
 An attribute is an annotation *about* nearby code. Essentially, it's a comment, though not necessarily for a human. Examples of this sort of thing: todos, deprecations, licensing, authoring, quotas, categories, keywords, enabling or disabling full-text search, suggested view, extra typechecker options, guides for indexing, guides for robotic maintenance. 
 
-Because they have no meaning within our code, we wrap attributes into a block then it away, e.g. `[{&deprecated}]%`. For expressing attributes in Claw code, I will to use parentheses:
+Because they have no meaning within our code, we wrap attributes into a block, then throw it away, e.g. `[{&deprecated}]%`. For expressing attributes in Claw code, I will to use parentheses:
 
         (license:BSD3 author:dmbarbour category:math)       desugars to
         [{&license:BSD3}{&author:dmbarbour}{&category:math}]%
@@ -103,22 +103,23 @@ The annotations in this context are presented as words. Commas, within an attrib
 
 ### Claw Namespaces
 
-It's useful to have *short* words when writing Claw code. However, all the short words will tend to be monopolized for a given purpose. If we develop a different environment that needs a new meaning for these words, we'll want namespaces so we can now use our words as the short ones.
+It's convenient to have *short* words when writing code. Short words will tend to be monopolized for a given purpose. We'll eventually want to assign a different meaning to the same short words for use in another context. The conventional mechanism in programming languages to handle this issue is *namespaces*, an ability to contextually access names without fully writing them. 
 
-So claw code will support namespace attributes, indicated with the `#` prefix. 
+With claw, we have three constraints that resist conventional namespacing techniques. First, claw is an editable view, a syntactic sugar. Its semantics is a local expansion into bytecode. Hence, claw should not peek at the AO dictionary to help resolve which words belong in which namespace. Second, claw uses names even for expressing numbers, e.g. `2/3` expands to `2 3 ratio`, and we might want namespaces for ratios. Third, claw is intended for use on a command-line. Conventional namespaces are designed for page-oriented programming. A few lines of namespace boiler-plate near the top of a page aren't a huge deal when we follow that a hundred lines of code. But a few lines of boiler-plate will prove irritating in context of a command line. 
+
+My current approach to namespaces involves use of a `#` prefix to set a namespace attribute for a volume of code. 
 
         #foo: 42 bar        desugars fully to
-        [{&ns:foo:}]%#42{%foo:integer}{%foo:bar}
+        [{&ns_foo:_}]%#42{%foo:int}{%foo:bar}
 
-When Claw sees a singleton attribute, it will scan for an updated namespace and use this to guide the render (or, conversely, the desugar). A namespace attribute is small and simple enough to avoid becoming too much boiler-plate. 
+*Note:* Words accessed via namespaces must be valid. For example, we cannot access `foo:9` under namespace `#foo:` because `9` is not a word. The empty string is a valid namespace.
 
-*Aside:* namespaces make our Claw code mildly context sensitive. Our programmers must be aware of namespaces to understand the code, or to copy/paste it into a new context. This critical need for awareness is why I don't permit Claw namespaces to be buried among a bunch of other attributes and assign a visible prefix.
+An extension I'm exploring is to use prefixes e.g. such that `f/` becomes shorthand for `foo:`. This would be more advantageous for long words, and it could mitigate the need to develop redirects by allowing multiple namespaces to be used together. This might be expressed as `#f/foo:` with a variant namespace attribute, perhaps `[{&ns_foo:_f}]%`. This could mitigate the weakness of using only one namespace.
 
-Due to the nature of Claw code as a trivial expansion, we can only have one attribute in any given region of code. The advantage is that we won't have namespaces appearing like a bunch of boiler-plate. The disadvantage is that we are forced to define every word in our new namespace. This could be made tolerable with some automatic tooling. Because it's often convenient to just have a particular namespace for a subprogram, *a namespace expressed within a block of code will extend only to the end of that block*.
+When Claw sees a namespace attribute, it will use this to guide the rendering and desugaring. This gives us mild form of context-sensitive syntax. A namespace in a block only lasts to the end of that block. A namespace attribute is hopefully small enough to avoid becoming too much boiler-plate. However, the limit of *one* namespace for a volume of code can be annoying. It requires adding a bunch of redirects to access words from a different namespace.
 
-A weakness of namespaces is that they can hurt refactoring. Developers must be careful to not move code into a different namespace, e.g. via copy and paste. We could solve this by performing copy-paste on the AO/ABC expansion instead of the claw code, and perhaps record the namespace associated with the selection. Operating at the AO or ABC layers doesn't have any issues with context.
+It is also feasible to separate namespaces from the code, e.g. providing a set of prefixes via the user profile.
 
-*Note:* A namespace string must be empty, or a valid word if taken by itself.
 
 ### Claw Semantics and Round Tripping
 
