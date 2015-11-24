@@ -101,24 +101,23 @@ The annotations in this context are presented as words. Commas, within an attrib
 
 *Aside:* We don't optimize presentation of annotations in normal code because they are easily abstracted behind words. So we just escape those normally. This is not the case for attributes, which are not abstracted.
 
-### Claw Namespaces
+### (experimental) Claw Namespaces
 
 It's convenient to have *short* words when writing code. Short words will tend to be monopolized for a given purpose. We'll eventually want to assign a different meaning to the same short words for use in another context. The conventional mechanism in programming languages to handle this issue is *namespaces*, an ability to contextually access names without fully writing them. 
-
-With claw, we have three constraints that resist conventional namespacing techniques. First, claw is an editable view, a syntactic sugar. Its semantics is a local expansion into bytecode. Hence, claw should not peek at the AO dictionary to help resolve which words belong in which namespace. Second, claw uses names even for expressing numbers, e.g. `2/3` expands to `2 3 ratio`, and we might want namespaces for ratios. Third, claw is intended for use on a command-line. Conventional namespaces are designed for page-oriented programming. A few lines of namespace boiler-plate near the top of a page aren't a huge deal when we follow that a hundred lines of code. But a few lines of boiler-plate will prove irritating in context of a command line. 
 
 My current approach to namespaces involves use of a `#` prefix to set a namespace attribute for a volume of code. 
 
         #foo: 42 bar        desugars fully to
-        [{&ns_foo:_}]%#42{%foo:int}{%foo:bar}
+        [{&_foo:_}]%#42{%foo:int}{%foo:bar}
 
-*Note:* Words accessed via namespaces must be valid. For example, we cannot access `foo:9` under namespace `#foo:` because `9` is not a word. The empty string is a valid namespace.
+Claw uses namespace attributes to guide rendering and expansion. A namespace attribute within a block applies only within that block. Some words cannot be expressed in a given namespace. For example, under `#foo:` the word `bar` cannot be expressed because it lacks a `foo:` prefix, and `foo:9` cannot be expressed because `9` doesn't parse as a valid word. In these cases, the claw view is forced to use the token expansion, e.g. `\{%bar}` or `\{%foo:9}`. 
 
-An extension I'm exploring is to use prefixes e.g. such that `f/` becomes shorthand for `foo:`. This would be more advantageous for long words, and it could mitigate the need to develop redirects by allowing multiple namespaces to be used together. This might be expressed as `#f/foo:` with a variant namespace attribute, perhaps `[{&ns_foo:_f}]%`. This could mitigate the weakness of using only one namespace.
+#### (proposal) Qualified Namespaces
 
-When Claw sees a namespace attribute, it will use this to guide the rendering and desugaring. This gives us mild form of context-sensitive syntax. A namespace in a block only lasts to the end of that block. A namespace attribute is hopefully small enough to avoid becoming too much boiler-plate. However, the limit of *one* namespace for a volume of code can be annoying. It requires adding a bunch of redirects to access words from a different namespace.
+We write `#f/foo:` after which `f/word` expands to `foo:word`. Our namespace attribute would desugar to `[{&_foo:_f}]%`. When rendering words with multiple options, we can heuristically favor the shortest render. Qualified namespaces would alleviate the burden of working with large prefixes or mixing content from multiple namespaces. 
 
-It is also feasible to separate namespaces from the code, e.g. providing a set of prefixes via the user profile.
+Qualified namespaces do enable emergent properties that I'd prefer to resist. Code is organized into deeply hierarchical names despite minor risks of conflict. Namespace declarations become boiler-plate. Developers need more contextual information to understand code. Moving or copying code requires managing more namespaces.
+
 
 
 ### Claw Semantics and Round Tripping

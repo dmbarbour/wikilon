@@ -5,61 +5,79 @@ A sequence in a command language is necessarily a sequence of commands. Even `42
 
 [Command Language for Awelon (Claw)](CommandLine.md) provides a simple Forth-like syntactic sugar above AO bytecode. However, I believe that effective support (an expansion rule) for command sequences could greatly extend the claw experience: embedded tables and lists, conventional block-structured programming, algebraic effects, and a useful variety of DSLs. 
 
-Relevant design goals:
+Desiderata:
 
 * compact representations for lists, tables, large volumes of data
+* aesthetically and ergonomically pleasant syntax, easy to read and write 
 * effective support for DSLs, effects, block-structured programming
-* transparent, comprehensible, uniformly composable, decomposable
+* transparent and comprehensible: humans grasp operational semantics
+* generic: sequence structure is independent of command or effect type
+* easily factored: extract sub-sequences into separate words or methods
+* efficiency; tail calls, simplification, static partial evaluation
+* iterative and incremental processing of the command sequence
 
-By 'decomposable', I mean that I want trivial extraction of subprograms that are expressed as sub-sequences. Where we have `2,3` as a sub-sequence, we should be able to trivially extract this into a separate word as a subprogram. This may be semantic or syntactic. Ideally, both. Easy decomposition is valuable for refactoring and abstraction. By 'uniformly composable', I mean that I can build two sequences into a larger sequence with a short, universal string of bytecode. By 'transparent and comprehensible', I mean that users can easily internalize the sequence model and explain how it operates.
+Being *generic* is especially important for a syntactic sugar like claw. The type of a command is inaccessible at this layer. And easy factoring allows sequences to fit nicely with Awelon project, e.g. with streaming programs and abstraction of stream fragments. 
 
-One promising idea is to leverage [free monads](http://okmij.org/ftp/Computation/free-monad.html). This would potentially enable us to compose commands without knowing much about the types of those commands.
+Some ideas:
 
-## Uniform Command Sequences
+1. uniform commands sequences: commands as blocks; sequence representation.
+1. leverage [free monads](http://okmij.org/ftp/Computation/free-monad.html).
+1. leverage [delimited continuations](https://en.wikipedia.org/wiki/Delimited_continuation). 
+1. leverage [machines (networked stream transducers)](https://dl.dropboxusercontent.com/u/4588997/Machines.pdf)
+1. leverage [arrows](https://en.wikipedia.org/wiki/Arrow_(computer_science))
 
-One sequence semantics I've experimented with:
+I would prefer to not entangle my sequence structure with any particular effects model, i.e. the *sequence structure* should be independent of our *command type*.
 
-        {foo,bar,baz}   desugars to
-        [\[foo] cmd \[bar] cmd \[baz] cmd] cmdseq
+## (rejected!) Uniform Command Sequences
 
-The commands are represented by individual blocks. The sequence is represented by a block that operates sequentially and uniformly upon each command. This has a nice property: composition of sequence blocks is equivalent to concatenation of sequences. The recommended definition is `cmd = \lw^z$`, which allows us to provide a command handler.
+Consider a design where `{foo,bar,baz}` becomes a sequence of blocks, e.g. `[foo]`, `[bar]`, and `[baz]` contained in some sequence representation like a list, stream, or larger block. This model is generic, transparent, comprehensible. Depending on the sequence representation, iterative processing and composition of sequences is feasible. However, this uniform representation has significant disadvantages for a other desiderata: 
 
-        handler  :: (command * st) → st
-        sequence :: (st * (handler * 1)) → (st * (handler * 1))
-        cmd      :: (command * (st * (handler * 1))) → (st * (handler * 1)))
-        cmd = \lw^z$
+* cannot extract a sub-sequence like `{foo,bar}` into a command.
+* cannot simplify command sequences in any meaningful way.
 
-For decompostion, we would need an additional sequence escape syntax for injection of arbitrary code into a sequence block. Potentially, this might be expressed by adding a `/` prefix to the command, for example:
+## Regarding Generic Non-Uniform Commands
 
-        {/foobar, baz}  desugars to
-        \[foobar \[baz] cmd] cmdseq
+Claw is a syntactic sugar and editable view. Therefore:
 
-The motivation for sequence escapes is convenient syntactic abstraction, for example extracting subsequence `foo,bar` into a separate word `foobar`. Syntactic abstraction is an important property for Awelon project, though I encourage developers to favor composable semantic abstractions (such that `foo,bar` may be composed in a type-dependent way into a `foobar` command, no escapes required).
+* syntax must expand trivially to AO bytecode
+* discrimination on commands must be syntactic
 
-I don't like this. It's aesthetically unpleasant.
+By convention, claw expansions favor words like `{%int}` and `{%ratio}`. Words are easy to recognize when computing our editable view. Further, words enable experimentation with alternative environments via namespaces. I will certainly continue with this convention. So we might consider something like `[foo]{%return}` vs. `[bar]{%action}`. 
 
-*Note:* `{}` is a sequence with one empty command. The empty command sequence is `{/}`.
+Any syntactic discrimination will probably involve alternatives to commas. Fortunately, we have many characters we could use in this role: `,;|<>=`. We can also express compositions thereof, like `<*>` and `>>`.
 
-## Non-Uniform Command Sequences 
+## Free Monads
 
-Uniform command sequences have some weaknesses:
+The notion of a 'command sequence' is pretty well captured by 'monads'. Many DSLs are easily expressed with monads. We achieve composition and decomposition via our monad laws. A simple list of numbers could be understood as a writer monad. However, there are issues with shoving Haskell monads into claw:
 
-* we cannot easily join one sequence to another internally
-* consequently, decomposition is syntactic, not semantic
-* 
+* sequence composition operators (`return`, `>>=`, and `>>`) are type specific
+* humans find the monad abstraction relatively difficult to comprehend
+* Haskell relies heavily on data-plumbing of results through variable names
 
-don't allow us to semantically decompose the sequence structure. We don't have any way to logically join one sequence to another from within. We cannot distinguish b
+The first two issues might be addressed by [free and freer monads](http://okmij.org/ftp/Computation/free-monad.html). We can develop a common, simple data structure that supports all necessary compositions. Human programmers then need comprehend only one concrete operational semantics. 
 
-What I don't like about this semantics: 
+The last issue is addressable by fitting commands to AO's style: every command receives and returns our entire program environment. Instead of `action ()`, the simplest AO commands have identity type, `∀a. a → action a`. A proposed command language syntax for command sequences:
 
-* cannot semantically decompose; forced to use syntactic decomposition
-* uniform structure, no ability to usefully discriminate command types
+        {foo;bar;baz;qux}
 
+This would expand to a Haskell equivalent of `foo >=> bar >=> baz >=> (return . qux)`. To fit AO's style, we're favoring Kleisli composition. Every effectful command is followed by a semicolon. Operationally, we might comprehend the semicolon as *yielding* to an external effects handler, from otherwise *pure* code. The space after the final semicolon, thus, is simply pure code. The empty command sequence `{}` corresponds to Haskell's `return`. 
 
+What is a viable syntactic expansion for this sequence? We'll need to ensure that all our monadic composition properties are available, and that we can iteratively process each command. A first attempt:
 
+        [foo \[bar \[baz \[qux rtn] cmd] cmd] cmd]
 
+The command-sequence is a first-class block of type `(a → F m b)`. Here `m` is the effects model we handle, and `F` is our free monad wrapper. Our free monad wrapper essentially has two constructors: `cmd` and `rtn`. Each `cmd` receives an environment wrapped for our effects interpreter, together with a continuation - a following command sequence. 
 
+In Haskell terms:
 
+        data F m a where
+            Rtn :: a → F m a
+            Cmd :: m x → (x → F m a) → F m a
 
+This naive representation corresponds directly to Oleg's initial construction of the Freer Monad. Oleg goes on to develop a more 'extensible' and 'optimal' variation of freer monads in his 2015 paper. I'd like to see if there is an easy adaptation of these Freer monads to claw, without complicating syntax. 
 
+## Lightweight Sequence Punctuation
 
+An option for lightweight sequences is to simply expand select punctuation into words. For example, if `,` expands to the word `comma` but is treated as whitespace (for separating commands), we gain the ability to express lightweight vectors as `[1,2,3]` and matrices as `[[1,2,3],[4,5,6],[7,8,9]]`. This doesn't generalize nicely, but it is probably sufficient for some specialized use-cases.
+
+Between `[1,2,3]` and `{1;2;3;}`, we're only saving one character. Any potential benefit is aesthetic. This might be enough to motivate support for lightweight sequences. But it might be better to wait for a bit and see whether people are satisfied with the monadic sequences.

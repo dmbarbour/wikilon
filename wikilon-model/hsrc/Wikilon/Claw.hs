@@ -22,7 +22,6 @@
 --      ratio       \\{%ratio}
 --      "foo"       \\"foo
 --                  ~ literal
---      {1,2,3}     [\\[1] cmd \\[2] cmd \\[3] cmd]
 --      [foo]       \\[foo] block
 -- 
 -- Claw is easily extensible by adding new expansion rules. Wikilon
@@ -30,14 +29,10 @@
 -- that will work well enough for most use cases. If a few specific
 -- variants are needed, I'll model them in separate modules.
 --
--- A simple namespace feature allows claw code to prefix words to
--- tweak the language for different use cases. Example expansion:
---
---      #X 2\/3     {&ns:X}#2{%Xinteger}#3{%Xinteger}{%Xratio}
---
--- The default namespace is the empty string. There is only one
--- namespace for any volume of code. If a namespace is set within
--- a block, it is scoped to that block.
+-- Claw includes an experimental namespace mechanism. Currently, we
+-- support only one global namespace via `#foo:`, which prefixes all
+-- following words. I'm contemplating an extension for qualified 
+-- namespaces to provide concise access to words with large prefixes.
 -- 
 module Wikilon.Claw
     ( ClawCode(..)
@@ -90,6 +85,13 @@ import qualified Wikilon.ABC.Pure as ABC
 newtype ClawCode = ClawCode { clawOps :: [ClawOp] } 
     deriving (Eq, Ord, Monoid)
 
+-- | A region of claw code has exactly one namespace. This serves as
+-- a prefix for all words within that region of code. Claw namespace
+-- is the only source of context sensitivity in claw code.
+--
+-- A namespace #foo: expands to `[{&_foo:_}]%`.
+type Namespace = UTF8.ByteString
+
 data ClawOp 
     = NS !Namespace     -- #bar:
     | CW !Word          -- mul inc
@@ -103,7 +105,6 @@ data ClawOp
     | NE !ClawExp10     -- exponential
     | TL !ABC.Text      -- text literal
     | BC !ClawCode      -- block of code
-    | CS !ClawCmdSeq    -- command sequence
     | AT ![Attrib]      -- attributes list 
     deriving (Ord, Eq)
 
@@ -122,14 +123,8 @@ instance Show ClawExp10 where
 
 -- TODO: maybe develop a fast Claw parse from a raw 'AODef' bytestring?
 
--- | A region of claw code has exactly one namespace. This serves as
--- a prefix for all words within that region of code. Claw namespace
--- is the only source of context sensitivity in claw code.
-type Namespace = UTF8.ByteString
-
 wInteger, wLiteral, wBlock :: Word
 wRatio, wDecimal, wExp10 :: Word
-wCmd, wCmdSeq :: Word
 
 wInteger = "int"
 wLiteral = "lit"
@@ -137,8 +132,9 @@ wBlock = "block"
 wRatio = "ratio"
 wDecimal = "decimal"
 wExp10 = "exp10"
-wCmd = "cmd"
-wCmdSeq = "cmdseq"
+
+-- under consideration: a simple expansion rule from `,` to `comma`
+-- treating commas as whitespace.
 
 -- | Convert claw code to ABC for interpretation or storage. This is
 -- essentially a 'compiler' for Claw code, though resulting bytecode 
@@ -162,8 +158,10 @@ oneOp = ABC . return
 
 opToABC :: Namespace -> ClawOp -> ABC
 -- low level
-opToABC _ (NS ns) = atToABC [Word ("ns:" <> ns)]
-opToABC ns (CW (Word w)) = oneOp . ABC_Tok . Token $ mconcat ["%", ns, w]
+opToABC _ (NS ns) = atToABC [nsAttr] where
+    nsAttr = Word $ mconcat ["_",ns,"_"]
+opToABC ns (CW (Word w)) = oneOp . ABC_Tok $ wordTok where
+    wordTok = Token $ mconcat ["%", ns, w]
 opToABC _ (P0 op) = oneOp $ ABC_Prim op
 opToABC _ (T0 txt) = oneOp $ ABC_Text txt
 opToABC _ (K0 tok) = oneOp $ ABC_Tok tok
@@ -177,11 +175,6 @@ opToABC ns (ND (D.Decimal dp m)) =
 opToABC ns (NE (ClawExp10 d x)) = expand ns [ND d, NI x, CW wExp10]
 opToABC ns (TL lit) = expand ns [T0 lit, CW wLiteral]
 opToABC ns (BC cc) = expand ns [B0 cc, CW wBlock]
-opToABC ns (CS cmdseq) = expand ns [B0 cc, CW wCmdSeq] where
-    cc = (ClawCode . mconcat . fmap expandCommand) cmdseq
-    expandCommand (cmd,bEsc) = 
-        if bEsc then clawOps cmd 
-                else [B0 cmd, CW wCmd]
 opToABC _ (AT lst) = atToABC lst
 
 atToABC :: [Attrib] -> ABC
@@ -213,15 +206,14 @@ escWord ns (Token tok) = case BS.uncons tok of
     _ -> Nothing
 
 -- | recognize claw namespace from attribute list.
-escNS :: Attrib -> Maybe Namespace
-escNS (Word s) =
-    let bMatchPre = "ns:" `BS.isPrefixOf` s in
-    let ns = BS.drop 3 s in
-    guard (bMatchPre && validNS ns) >> return ns
-
--- | a namespace must be a valid word or the empty string.
-validNS :: Namespace -> Bool
-validNS ns = BS.null ns || isValidWord (Word ns)
+-- Our namespace attribute has the form (_foo:_).
+escNS :: [Attrib] -> Maybe Namespace
+escNS [Word s] = case BS.split '_' s of
+    ["", expansion, prefix] ->
+        guard (BS.null prefix) >> 
+        return expansion
+    _ -> mzero
+escNS _ = mzero
 
 -- | Identify SP and LF identity operators from ABC-layer formatting.
 abcWS :: ABC.PrimOp -> Bool
@@ -242,9 +234,9 @@ escABC ns (ABC_Prim op : ops)
 escABC ns (ABC_Text txt : ops) = T0 txt : escABC ns ops
 escABC ns (ABC_Block b : ABC_Prim ABC_drop : ops)
     | Just lst <- escAttribs (abcOps b)
-    = case lst of
-        [escNS -> Just ns'] -> NS ns' : escABC ns' ops
-        _ -> AT lst : escABC ns ops
+    = case escNS lst of
+        Just ns' -> NS ns' : escABC ns' ops
+        Nothing -> AT lst : escABC ns ops
 escABC ns (ABC_Block abc : ops) = B0 cc : escABC ns ops where
     cc = ClawCode $ escABC ns (ABC.abcOps abc)
 escABC _ [] = []
@@ -301,38 +293,10 @@ rdz (T0 txt : lhs) (CW w : rhs)
 rdz (B0 cc : lhs) (CW w : rhs)
     | (w == wBlock)
     = rdz (BC cc: lhs) rhs 
-rdz (B0 cc : lhs) (CW w : rhs)
-    | (w == wCmdSeq)
-    = rdz (CS (parseCmdSeq cc) : lhs) rhs
 rdz lhs (B0 cc : rhs) = rdz (B0 cc' : lhs) rhs  -- recursion
     where cc' = (ClawCode . reduceClaw . clawOps) cc
 rdz lhs (op : rhs) = rdz (op : lhs) rhs -- progress
 rdz lhs [] = L.reverse lhs -- all done
-
--- A claw commands sequence is represented by a structured block
--- of commands, generally of the following form:
---
---      {foo,bar,baz} desugars to 
---      \[\[foo] cmd \[bar] cmd \[baz] cmd] cmdseq
---
--- However, escapes allow the command seq to be any block at all:
---
---      {/ foo bar, baz} desugars to
---      \[foo bar \[baz] cmd] cmdseq
---
--- Sequence escapes are convenient for syntactic abstraction, but
--- should be used sparingly in well written code.
-parseCmdSeq :: ClawCode -> [(ClawCode, Bool)] 
-parseCmdSeq = loop [] [] . clawOps where
-    esc es = (ClawCode (L.reverse es), True)
-    loop cs es (B0 cmd : CW w : more) | (w == wCmd) = loop cs' [] more where
-        cs' = if L.null es then (c:cs) else (c:e:cs)
-        c = (cmd, False) -- a normal command, not escaped
-        e = esc es       -- prior to command
-    loop cs es (e : more) = loop cs (e:es) more
-    loop cs es [] = fini cs es
-    fini cs [] = L.reverse cs            -- all done
-    fini cs es = L.reverse (esc es : cs) -- final escape
 
 -- | Parse raw integer (e.g. #42) from a reverse-ordered list (24#).
 -- Return remaining operations and the integer so parsed, assuming
@@ -408,7 +372,6 @@ encodeOp (NI i) = BB.string8 (show i)
 encodeOp (ND d) = BB.string8 (show d)
 encodeOp (NR r) = BB.string8 (show r) 
 encodeOp (NE e) = BB.string8 (show e)
-encodeOp (CS cmds) = encCmdSeq cmds 
 encodeOp (P0 op) -- should not happen normally
     | abcWS op = mempty
     | otherwise = BB.char8 '\\' <> c
@@ -423,16 +386,6 @@ encBlock cc = BB.char8 '[' <> encode' cc <> BB.char8 ']'
 
 encTok :: Token -> BB.Builder
 encTok (Token tok) = BB.char8 '{' <> BB.byteString tok <> BB.char8 '}'
-
-encCmdSeq :: [(ClawCode,Bool)] -> BB.Builder
-encCmdSeq (c0:cs) = BB.char8 '{' <> hd <> tl <> BB.char8 '}' where
-    hd = encCmd c0 
-    tl = mconcat $ fmap ((sep <>) . encCmd) cs
-    sep = BB.char8 ',' <> BB.char8 ' ' 
-    encCmd (cmd, bEsc) = e <> c where
-        c = encode' cmd
-        e = if bEsc then BB.char8 '/' else mempty
-encCmdSeq [] = encCmdSeq [(mempty,True)]
 
 -- Claw's encoding of multi-line texts.
 encMultiLineText :: Text -> BB.Builder
@@ -477,9 +430,7 @@ runDecoder dcs = decode' cc bWS ops txt where
 data DecoderCont 
     = DecodeDone
     | DecodeBlock IsEscBlock [ClawOp] DecoderCont  
-    | DecodeCmdSeq IsEscCmd RevCmdSeq [ClawOp] DecoderCont
     deriving (Show)
-type RevCmdSeq = ClawCmdSeq
 type IsEscBlock = Bool
 data DecoderState = DecoderState
     { dcs_text :: LazyUTF8.ByteString   -- ^ text to parse
@@ -504,23 +455,11 @@ decode' cc bWS r txt0 =
                     bType = if bEsc then B0 else BC
                     b = (bType . ClawCode . L.reverse) r
                 _ -> decoderIsStuck
-            ',' -> case cc of -- command sequence separator
-                DecodeCmdSeq bEsc cmds ops ccx -> decode' cc' True [] txt where
-                    cc' = DecodeCmdSeq False cmds' ops ccx
-                    cmds' = currCmd : cmds
-                    currCmd = (ClawCode (L.reverse r), bEsc)
-                _ -> decoderIsStuck
-            '}' -> case cc of
-                DecodeCmdSeq bEsc cmds ops cc' -> decode' cc' False (cs:ops) txt where
-                    cs = CS $ L.reverse (lastCmd : cmds)
-                    lastCmd = (ClawCode (L.reverse r), bEsc)
-                _ -> decoderIsStuck
 
             -- everything else requires a word separator
             _ | not bWS -> decoderIsStuck
 
             '[' -> decode' (DecodeBlock False r cc) True [] txt
-            '{' -> decode' (DecodeCmdSeq False [] r cc) True [] txt
             '"' -> case LBS.elemIndex '"' txt of
                 Nothing -> decoderIsStuck
                 Just idx ->
@@ -531,8 +470,6 @@ decode' cc bWS r txt0 =
             '#' -> 
                 let (lns, txt') = LazyUTF8.span isValidWordChar txt in
                 let ns = LBS.toStrict lns in
-                let bOK = validNS ns in
-                if not bOK then decoderIsStuck else
                 decode' cc False (NS ns : r) txt'
             '(' -> 
                 let (attrs, attrsEnd) = decodeAttribs txt in
@@ -564,13 +501,6 @@ decode' cc bWS r txt0 =
                         let (r', txt') = loop (P0 op0 : r) escTxt in
                         decode' cc False r' txt'
                     _ -> decoderIsStuck -- not a recognized escape
-
-            '/' -> case cc of -- command sequence escape
-                DecodeCmdSeq False cmds ops ccx | L.null r -> 
-                    -- mark 'is escaped command' field
-                    let cc' = DecodeCmdSeq True cmds ops ccx in
-                    decode' cc' True [] txt
-                _ -> decoderIsStuck
 
             _ -> case decodeWordOrNumber txt0 of
                 Just (op, txt') -> decode' cc False (op:r) txt'
