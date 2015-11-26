@@ -84,9 +84,29 @@ An important role of words integer and literal is to place each value at an appr
 
 The escaped form of a block still contains claw code but does not assume any placement word. Mostly, this is necessary so we can reliably represent blocks that were not placed at the default location.
 
-### (experimental) Claw Sequences
+### Claw Command Sequences
 
-See [command sequences](CommandSequences.md).
+Claw supports a command sequencing concept that supports multiple use-cases:
+
+* concise representation of lists and streams
+* monadic programming, effects models and DSLs
+* programming in a continuation-passing style
+* iterative processing, cooperative threading
+
+Command sequences vastly improve the expressiveness of Claw and the utility of AO. The expression and expansion is surprisingly simple:
+
+        [foo,bar,baz]   desugars to     
+        \[foo] \[bar] \[baz] bseq bseq block
+
+        [1,2,3,4,5]     desugars to
+        \[1] \[2] \[3] \[4] \[5] bseq bseq bseq bseq block
+
+        \[a,b,c]        desugars to
+        \[a] \[b] \[c] bseq bseq
+
+Effectively, we view a block that is broken into segments by commas. We process block segments from right to left via the `bseq` word. In general, `bseq` assumes the second block is a continuation, quotes it, and composes it into the first block. The exact details of this composition depend on our use-case and namespace.
+
+See [CommandSequences](CommandSequences.md) for more details.
 
 ### Claw Attributes
 
@@ -101,7 +121,7 @@ The annotations in this context are presented as words. Commas, within an attrib
 
 *Aside:* We don't optimize presentation of annotations in normal code because they are easily abstracted behind words. So we just escape those normally. This is not the case for attributes, which are not abstracted.
 
-### (experimental) Claw Namespaces
+### Claw Namespaces
 
 It's convenient to have *short* words when writing code. Short words will tend to be monopolized for a given purpose. We'll eventually want to assign a different meaning to the same short words for use in another context. The conventional mechanism in programming languages to handle this issue is *namespaces*, an ability to contextually access names without fully writing them. 
 
@@ -110,7 +130,9 @@ My current approach to namespaces involves use of a `#` prefix to set a namespac
         #foo: 42 bar        desugars fully to
         [{&_foo:_}]%#42{%foo:int}{%foo:bar}
 
-Claw uses namespace attributes to guide rendering and expansion. A namespace attribute within a block applies only within that block. Some words cannot be expressed in a given namespace. For example, under `#foo:` the word `bar` cannot be expressed because it lacks a `foo:` prefix, and `foo:9` cannot be expressed because `9` doesn't parse as a valid word. In these cases, the claw view is forced to use the token expansion, e.g. `\{%bar}` or `\{%foo:9}`. 
+Claw uses namespace attributes to guide rendering and expansion. Some words cannot be expressed in a given namespace. For example, under `#foo:` the word `bar` cannot be expressed because it lacks a `foo:` prefix, and `foo:9` cannot be expressed because `9` doesn't parse as a valid word. In these cases, the claw view is forced to use the token expansion, e.g. `\{%bar}` or `\{%foo:9}`. 
+
+A namespace attribute within a delimited command (e.g. a block, or a command within a sequence) will apply only until the end of that command. 
 
 #### (proposal) Qualified Namespaces
 

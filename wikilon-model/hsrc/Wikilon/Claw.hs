@@ -23,6 +23,7 @@
 --      "foo"       \\"foo
 --                  ~ literal
 --      [foo]       \\[foo] block
+--      [foo,bar,baz]   \\[foo] \\[bar] \\[baz] bseq bseq block
 -- 
 -- Claw is easily extensible by adding new expansion rules. Wikilon
 -- will simply hard-code a particular set of extensions or features
@@ -61,6 +62,7 @@ module Wikilon.Claw
     , module Wikilon.Text
     ) where
 
+import Control.Exception (assert)
 import Control.Arrow (first)
 import Control.Applicative
 import Control.Monad
@@ -98,18 +100,18 @@ data ClawOp
     | T0 !Text          -- escaped text
     | K0 !Token         -- escaped token
     | P0 !PrimOp        -- escaped ABC ops
-    | B0 !ClawCode      -- escaped blocks
+    | B0 !ClawCmdSeq    -- escaped block sequence
     | NI !ClawInt       -- integer
     | NR !ClawRatio     -- ratio
     | ND !ClawDecimal   -- decimal
     | NE !ClawExp10     -- exponential
     | TL !ABC.Text      -- text literal
-    | BC !ClawCode      -- block of code
+    | BC !ClawCmdSeq    -- block sequence
     | AT ![Attrib]      -- attributes list 
     deriving (Ord, Eq)
 
+type ClawCmdSeq = [ClawCode] -- non-empty
 type IsEscCmd = Bool
-type ClawCmdSeq = [(ClawCode,IsEscCmd)] 
 type ClawInt = Integer
 type ClawDecimal = D.Decimal -- current limit 255 decimal places
 data ClawRatio = ClawRatio !ClawInt !ClawInt deriving (Eq, Ord)
@@ -123,12 +125,13 @@ instance Show ClawExp10 where
 
 -- TODO: maybe develop a fast Claw parse from a raw 'AODef' bytestring?
 
-wInteger, wLiteral, wBlock :: Word
-wRatio, wDecimal, wExp10 :: Word
+wLiteral, wBlock, wBSeq :: Word
+wInteger, wRatio, wDecimal, wExp10 :: Word
 
-wInteger = "int"
 wLiteral = "lit"
 wBlock = "block"
+wBSeq  = "bseq"
+wInteger = "int"
 wRatio = "ratio"
 wDecimal = "decimal"
 wExp10 = "exp10"
@@ -165,7 +168,12 @@ opToABC ns (CW (Word w)) = oneOp . ABC_Tok $ wordTok where
 opToABC _ (P0 op) = oneOp $ ABC_Prim op
 opToABC _ (T0 txt) = oneOp $ ABC_Text txt
 opToABC _ (K0 tok) = oneOp $ ABC_Tok tok
-opToABC ns (B0 cc) = oneOp $ ABC_Block $ clawToABC' ns cc
+
+-- blocks and command sequences
+opToABC ns (B0 [b]) = oneOp $ ABC_Block $ clawToABC' ns b
+opToABC ns (B0 (b:bs)) = expand ns [B0 [b], B0 bs, CW wBSeq]
+opToABC _ (B0 []) = assert False mempty
+
 -- expansions
 opToABC ns (NI i) = expand ns (escInt ++ [CW wInteger]) where
     escInt = fmap P0 $ ABC.itoabc' i 
@@ -237,8 +245,8 @@ escABC ns (ABC_Block b : ABC_Prim ABC_drop : ops)
     = case escNS lst of
         Just ns' -> NS ns' : escABC ns' ops
         Nothing -> AT lst : escABC ns ops
-escABC ns (ABC_Block abc : ops) = B0 cc : escABC ns ops where
-    cc = ClawCode $ escABC ns (ABC.abcOps abc)
+escABC ns (ABC_Block abc : ops) = B0 [c] : escABC ns ops where
+    c = ClawCode $ escABC ns (ABC.abcOps abc)
 escABC _ [] = []
 
 -- | check a block in a list of  seeing if block is maybe a list of annotations in
@@ -290,11 +298,14 @@ rdz (NI e : ND d : lhs) (CW w : rhs)
 rdz (T0 txt : lhs) (CW w : rhs)
     | (w == wLiteral) && (isInlineableText txt)
     = rdz (TL txt : lhs) rhs
+rdz (B0 cs : B0 [c] : lhs) (CW w : rhs)
+    | (w == wBSeq) 
+    = rdz (B0 (c:cs) : lhs) rhs
 rdz (B0 cc : lhs) (CW w : rhs)
-    | (w == wBlock)
-    = rdz (BC cc: lhs) rhs 
+    | (w == wBlock) 
+    = rdz (BC cc : lhs) rhs 
 rdz lhs (B0 cc : rhs) = rdz (B0 cc' : lhs) rhs  -- recursion
-    where cc' = (ClawCode . reduceClaw . clawOps) cc
+    where cc' = fmap (ClawCode . reduceClaw . clawOps) cc
 rdz lhs (op : rhs) = rdz (op : lhs) rhs -- progress
 rdz lhs [] = L.reverse lhs -- all done
 
@@ -381,8 +392,18 @@ encodeOp (K0 tok) = BB.char8 '\\' <> encTok tok
 encodeOp (B0 cc) = BB.char8 '\\' <> encBlock cc
 encodeOp (AT lst) = BB.char8 '(' <> encodeOps (fmap CW lst) <> BB.char8 ')'
 
-encBlock :: ClawCode -> BB.Builder
-encBlock cc = BB.char8 '[' <> encode' cc <> BB.char8 ']'
+-- Claw blocks generalize into command sequences, i.e. allowing
+-- a simple escape from a block via `,` to support monadic programs
+-- and concise data lists.
+--
+-- I'll probably need to do some smart formatting, eventually, i.e.
+-- with some awareness of appropriate spacing. This could be supported
+-- by attributes.
+encBlock :: ClawCmdSeq -> BB.Builder
+encBlock = enc where
+    enc cs = BB.char8 '[' <> sep cs <> BB.char8 ']'
+    sep = mconcat . L.intersperse cmdSep . fmap encode'
+    cmdSep = BB.char8 ','
 
 encTok :: Token -> BB.Builder
 encTok (Token tok) = BB.char8 '{' <> BB.byteString tok <> BB.char8 '}'
@@ -425,11 +446,10 @@ runDecoder dcs = decode' cc bWS ops txt where
     ops = dcs_ops dcs
     txt = dcs_text dcs 
 
--- | our precision for parse errors is some location within 
--- a possible hierarchical blocks or command sequence. 
+-- | we provide parse errors up to an operation within a block.
 data DecoderCont 
     = DecodeDone
-    | DecodeBlock IsEscBlock [ClawOp] DecoderCont  
+    | DecodeBlock IsEscBlock ClawCmdSeq [ClawOp] DecoderCont  
     deriving (Show)
 type IsEscBlock = Bool
 data DecoderState = DecoderState
@@ -450,16 +470,22 @@ decode' cc bWS r txt0 =
             -- special case elements for word separators
             ' ' -> decode' cc True r txt
             '\n' -> decode' cc True r txt
+            ',' -> case cc of
+                DecodeBlock bEsc cseq ops cc' -> 
+                    let cmd = ClawCode (L.reverse r) in
+                    decode' (DecodeBlock bEsc (cmd:cseq) ops cc') True [] txt
+                _ -> decoderIsStuck
             ']' -> case cc of
-                DecodeBlock bEsc ops cc' -> decode' cc' False (b:ops) txt where
+                DecodeBlock bEsc cseq ops cc' -> decode' cc' False (b:ops) txt where
+                    cmd = ClawCode (L.reverse r)
                     bType = if bEsc then B0 else BC
-                    b = (bType . ClawCode . L.reverse) r
+                    b = bType (L.reverse (cmd:cseq))
                 _ -> decoderIsStuck
 
             -- everything else requires a word separator
             _ | not bWS -> decoderIsStuck
 
-            '[' -> decode' (DecodeBlock False r cc) True [] txt
+            '[' -> decode' (DecodeBlock False [] r cc) True [] txt
             '"' -> case LBS.elemIndex '"' txt of
                 Nothing -> decoderIsStuck
                 Just idx ->
@@ -481,7 +507,7 @@ decode' cc bWS r txt0 =
             '\\' -> case LBS.uncons txt of -- escaped content
                 Nothing -> decoderIsStuck
                 Just (c', escTxt) -> case c' of
-                    '[' -> decode' (DecodeBlock True r cc) True [] escTxt
+                    '[' -> decode' (DecodeBlock True [] r cc) True [] escTxt
                     '"' -> 
                         let (lit,litEnd) = clawTakeText escTxt in
                         case LBS.uncons litEnd of
@@ -520,16 +546,19 @@ charToEscPrim c =
     guard (not (abcWS op)) >>
     return op
 
--- Parse multi-line Claw text after having read the \" prefix. Parses
--- up to the
+-- Parse multi-line Claw text after having read the \" prefix. 
 --
 -- Each line is `LF SP (line of text)`. `LF LF` is treated as `LF SP LF`.
 -- In a correctly encoded text, the following character is `~`.
--- We'll eliminate one line of padding at the start and end of our
--- text before returning it.
+--
+-- If available, we eliminate an empty line from the start and end of
+-- our texts. This allows some vertical space as padding, which I find
+-- easier to parse in most cases. (And I don't believe most texts will
+-- legitimately be padded with empty lines, so no need to optimize for
+-- that use case.) 
 --
 -- I'll ignore spaces following `\"`. 
--- I'll accept `\"~` as empty text.
+-- I'll accept `\"~` as a simple empty text.
 --
 clawTakeText :: LBS.ByteString -> (Text, LBS.ByteString)
 clawTakeText = run where
