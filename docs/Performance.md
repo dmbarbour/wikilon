@@ -5,27 +5,41 @@ I don't expect Wikilon to be blazing fast, but I would like to give it the best 
 
 I have multiple strategies to achieve performance, which should stack nicely:
 
-1. Internal bytecode representation. Fast slicing of bytecode arrays. Quoted values. This internal bytecode shall have a rather trivial expansion back into Awelon bytecode, such that we don't lose any information.
+1. Internal bytecode representation. Quoted values. Text and static value areas. This internal bytecode will have a trivial expansion back into Awelon bytecode, such that we don't need to store our program any other way. It should also have a trivial indexing mechanism, so we can track where we halt in case of failure.
 
 2. Large-value *stowage*. A `{&stow}` annotation tells a runtime to tuck large values into a database, like ABC value resources. Structure sharing is implicit. This allows us to work with larger-than-memory values, e.g. values modeling entire databases. Structure sharing supports Wikilon's application model: we can expect to recompute values many times. Stowage might also find use for discretionary sealers and unsealers, just for structure sharing.
 
-3. Parallelism. At the very least, we can support Haskell's par-seq parallelism by providing `{&par}` and `{&seq}`. We can use work-stealing techniques, with one thread per hardware processor. 
+3. Parallelism. Within a computation, we can support Haskell's par-seq parallelism by providing `{&par}` and `{&seq}`. We can use work-stealing techniques, with one thread per hardware processor. In addition, we'll have multiple threads for propagating updates through dictionaries, or when working with multiple users.
 
-4. Simplification and partial-evaluation of bytecode. A lot of useful work can be performed directly on our bytecode representations or other intermediate representations.
+4. Memory and GC per-thread. Dictionary application threads are truly *pure*, so there is very little sharing between them to worry about. It's easy to treat threads as processes with whole-arena GC. This gives us very predictable GC properties. This greatly augments stowage performance: we can perform it latently as part of GC, which saves us from stowing transient values. Further, we can heuristically stow values when memory runs low, instead of increasing the memory arena. Our arenas can be reasonably large (e.g. 10-20MB, plus binaries and texts, perhaps with multiple layers: nursery and generational). 
 
-5. ABCD-like accelerators. We can recognize specific subprograms and optimize for them. This includes optimized data representations. I especially want ABCD-like accelerations for: vector processing, affine vectors for mutability, working with binaries (and affine binaries), models of floating point computations.
+5. Simplification and partial-evaluation of bytecode. A lot of useful work can be performed directly on our bytecode representations or other intermediate representations.
 
-6. Compilation of bytecode. JIT. AOT. On request by annotations. We can pursue a flexible approach here: an ad-hoc mix of interpreted and compiled code. Ideally, compiled code is easily cached and persisted (e.g. via stowage).
+6. Efficient deep copy. It is feasible to delay copy of deep structure by introducing coarse-grained memory-local reference counts when copying a large data structure. It is also feasible to delay analysis of whether a value is copyable (e.g. marking both copies as assumed copyable, and marking only one of them for validation). Analysis of 'copyable' on a proposed stowage target can be delayed until after stowage. Either way, we can limit the amount of work performed by a copy operator. Special values (blocks, vectors, large texts) might automatically use a reference count. Stowed values track their own copyability properties. 
 
-7. Caching and memoization. Pure computations of AO should be relatively easy to memoize and cache. Structure sharing for large values allows us to cache computations on large values. We can also represent active or lazy computations in a cache: ABC can easily represent its own complete continuation. Effective caching is essential to the [dictionary applications model](ApplicationModel.md).
+7. ABCD-like accelerators. We can recognize specific subprograms and optimize for them. This includes optimized data representations. I especially want ABCD-like accelerations for: vector processing, working with binaries, models of floating point computations. Vectors, binaries, etc. can include their own reference counts, such that we can easily test whether a vector is unique when deciding copy-on-update vs. update-in-place. Affine vectors thus become the default behavior, with O(1) updates. Splits and rejoins on affine vectors can also be made very efficient, i.e. if we 'split' an affine vector, we get two affine vectors. If we later 'rejoin' affine vectors having adjacent storage, we can recombine them into a larger affine vector without copies. This allows very efficient fork-join behaviors.
 
-For several months, I have been trying to do this in Haskell. However, Haskell's high-level data structures and GC are interfering. They're too difficult to integrate with low-level JIT code. My new plan is to implement the performance-critical subset of my runtime in C. I will leverage LLVM as a basis for JIT. 
+8. Compilation of bytecode - AOT, JIT, on request by `{&compile}` annotations on a block. Compiled code might include a model of registers and jumps for use within loopy code. We should support an ad-hoc mix of interpreted and compiled code. Ideally, compiled code is easily cached and persisted (e.g. via stowage). Interpretation will be implemented first, of course, but it should be trivial to introduce compiled code.
 
-For stowage, I will try [sophia key-value storage](http://sphia.org/), which is a better fit for my use case compared to LMDB. The API documentation is very poor, but some of the FFIs for it in other languages have better docs. And I can certainly get enough for my own use cases.
+9. Static or gateway typing. I can push type analysis to the edges of the program, make assertions about which values are copyable, which are numbers, force values to their target data structures. Then I can use an optimized interpreter or compiled region that assumes type safety. This is especially valuable for loopy code.
 
-Wikilon will then integrate this runtime via Haskell's C FFI. Dictionaries will be modeled as as large ABC values. This seems like a useful idea for reflection anyway, or extending Wikilon via the dictionaries. I can model dictionaries, histories, reverse lookup indices, exponential decay models, etc..
+10. Caching and memoization. Pure computations of AO should be relatively easy to memoize and cache. Structure sharing simplifies caching for large values. We can represent active or lazy computations in a cache: ABC can easily represent its own complete continuation. Effective caching is essential to the [dictionary applications model](ApplicationModel.md).
 
-I'll support named roots for persistence, but they'll all be for ABC values.
+Haskell's high level data structures are difficult to integrate with Haskell's low-level JIT code. Haskell's GC is nice, but it requires expensive interactions (ephemeron tables, etc.) with stowage and VCache.
+
+My new plan is:
+
+* implement the performance-critical kernel of my runtime in C or C++
+* leverage LLVM as a basis for JIT
+* integrate LMDB as the basis for stowage
+* support lightweight threads via `{&par}`
+* limit number of passive computation threads
+* dictionaries modeled as ABC values with stowage
+* support 'named root' values, similar to VCache
+
+I'm feeling very good about having this viable path forward after months (arguably, over a year, though much of that was experimenting with and refining the application model) fighting with Haskell for performance. 
+
+With high performance evaluation and caching, Wikilon becomes a super-spreadsheet of sorts. Especially if we later support GPU computations for rendering and physics. Cloud computations might be feasible later, though requiring precise interaction with stowage.
 
 ## Stowage for Large Values
 
@@ -35,13 +49,27 @@ Stowage is useful for modeling larger-than-memory values in cases where only a s
 
 Structure sharing is a common feature for stowage. Computations producing the same stowed values will share the same space. In addition to potential space savings, structure sharing simplifies other potential features such as managing cached computations. 
 
-Stowage of values is designed to closely model ABC value resources, i.e. where we use `{#resourceId'kf}` to name a bytecode resource. Here, `resourceId` is a secure hash of the bytecode, and the `'kf` suffix identifies our resource as a linear quoted value to permit lazy loading and forbid copy/drop. Stowed values could be directly implemented as ABC resources. However, `{&stow}` leaves the representation opaque and local to the runtime, which simplifies GC and allows faster hashing and a far more parsimonious resource identifier.
+Stowage of values is designed to closely model ABC value resources, i.e. where we use `{#resourceId'kf}` to name a bytecode resource. For ABC resources, `resourceId` is a secure hash of the bytecode, and the `'kf` suffix identifies our resource as a linear quoted value to permit lazy loading and forbid copy/drop. Stowed values are the same (more or less) but with parsimonious names (64-bit integers, specific to each runtime) and reference-counting GC.
 
-With a specialized DB model, I can keep the `kf` information (and several more flag bits) directly in my key value, e.g. a simple 64-bit integer.
+A suggestion for stowage may be silently rejected, e.g. if a value is not significantly larger than its stowage overhead. Conversely, we may stow values even without annotated recommendations: when per-thread memory arenas run short on memory, we might heuristically select values from the higher generations for stowage.
 
-A suggestion for stowage may be silently rejected, e.g. because a value is not significantly larger than its stowage overhead. This helps developers a bit because it leads to larger 'chunks' of data corresponding to a couple layers of tree nodes that can be loaded together or compressed together.
+### Stowage Implementation
 
-When serialized for export, stowed values will re-inject the `{&stow}` annotations.
+I'll continue to use LMDB. It's effective, and I have experience with it. I believe some of the complications I faced early can be mitigated: 
+
+* Instead of allocating addresses immediately, stow only upon full-GC passes.
+* We only stow values that are held in the outer memory arenas.
+* We write from an evaluation thread, grabbing exclusive control of LMDB.
+
+Memory arenas give us an effective basis for *batching*. They effectively provide an upper limit for batch size. But we can model batches large enough for efficient writes. Structure sharing is computed by the writer. Addresses are never communicated with other threads until after storage. Transient values aren't stored: a value effectively needs to prove it's long-lived before we bother stowing it. So, stowing the 'head' of a database during streaming updates isn't a problem.
+
+With this design, there is no need for a background writer. We still need incremental GC, but that's easy to do. 
+
+Other thoughts: 
+
+* Optimize representations upon stowage (e.g. recognize possible vectors). 
+* Use Zstandard compression instead of Snappy. It's fast and effective.
+* Modulo special cases, only stow values large enough for compression. 
 
 ## Parallelism 
 
@@ -52,15 +80,31 @@ Awelon Bytecode has a lot of latent parallelism. So the problem becomes teasing 
 
         {&seq} :: (lazy or pending value * env) → (value * env)
 
-Our runtime would support opaque 'pending' results. Trying to operate on the pending result may have us waiting. But we're at least free to move it around, e.g. tuck it into a data structure and spark off a few more parallel computations. With just this much ABC and AO gain access to all of Haskell's well developed [strategies](https://hackage.haskell.org/package/parallel-3.2.0.6/docs/Control-Parallel-Strategies.html) for purely functional parallelism. It's also trivial to implement!
+I'm going to assume we have a *memory arena per thread*, with no sharing. Splitting an arena immediately upon sparking evaluation seems inefficient, too eager. So `{&par}` will not *actually* fork a thread until it can gain its own memory arena. My idea for this is as follows:
 
-It is also feasible to support massively parallel GPU computations. Assume a subprogram is constructed from a constrained set of recognizable functions and data structures that we know how to easily represent on the GPU. Annotate a block containing this subprogram for evaluation on the GPU. The runtime compiles the block to CUDA or OpenCL or a shader language. When we later apply the function, it will compute on the GPU. Other forms of heterogeneous computing, e.g. FPGAs, will frequently follow a similar pattern. Haskell has similar precedent with the [accelerate](https://hackage.haskell.org/package/accelerate) package.
+* represent and note the spark, but continue evaluating non-par route. 
+* construction of separate `{&par}` arena waits until we perform a gen-GC.
+* might have limited pool for waiting sparks: wait for more than one GC.
+* might sequence the evaluation before we ever spark it. 
+* limited number of parallel computations and spark arenas.
+
+It might be useful to track granularity in the `{&par}` request: e.g. the developer can specify whether a computation is likely light or heavy, perhaps via another annotation on the block. We could provide memory arenas of appropriate sizes.
+
+We can operate on pending results in simple ways. We might permit applying additional `{&par}` blocks, for example. We can move pending results easily. We cannot generally *delete* or *copy* a pending result, but we might be able to mark where the assumption was made and compute whether it was a valid assumption later. In this sense, an evaluation might generally include a list of unverified assumptions, e.g. that a particular pending result was delete-able.
+
+This is sufficient to support parallel computation strategies, but it's difficult for an evaluation to actually gain a parallel thread unless the result remains 'pending' until a gen-GC step. Consequently, parallel evaluation only triggers for stuff that we don't actually need for a while. But when it does trigger, we might manage multiple sparks at once. So, techniques like fork-join can be effective, with the first thread possibly processing several sparks before a few more trigger.
+
+### Other Parallelism?
+
+With accelerators, it is feasible to support SIMD and massively parallel GPU computations. Assume a subprogram is constructed from a constrained set of recognizable functions and data structures that we know how to easily represent on the GPU. Annotate a block containing this subprogram for evaluation on the GPU. The runtime compiles the block to CUDA or OpenCL or a shader language. When we later apply the function, it will compute on the GPU. Other forms of heterogeneous computing, e.g. FPGAs, will frequently follow a similar pattern. Haskell has similar precedent with the [accelerate](https://hackage.haskell.org/package/accelerate) package.
 
 In context of a dictionary application, every form of parallelism could kick in for every evaluation. This includes partial evaluations and cache maintenance. I imagine a mature, active, and popular AO dictionary full of apps could productively leverage as many CPUs, GPUs, and other computing devices as you're willing to throw at them.
 
-## Lazy Computation
+## Lazy Computation?
 
-Laziness involves construction of a suspended computation, a pending result, one that doesn't need to be completed immediately. It seems feasible to model this as a special case for value stowage and/or cached computations. My main resistance to lazy computations is that they hinder structure sharing.
+Laziness involves construction of a suspended computation, a pending result, one that doesn't need to be completed immediately. It seems feasible to model this as a special case for value stowage and/or cached computations. My main resistance to lazy computations is that they hinder structure sharing. But we could possibly stow a lazy continuation when we get started, then cache the computed result. 
+
+Laziness+Parallelism might indicate 'background' computations that Wikilon should try to run for a while.
 
 ## Linear Cached Computations
 

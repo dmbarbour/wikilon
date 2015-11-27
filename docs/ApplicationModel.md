@@ -38,14 +38,15 @@ With a long history or big-value commands, applications can potentially grow lar
 
 ## Real-World Effects and Reflection via Software Agents
 
-Effectful dictionary applications must be modeled as multi-agent systems: external software agents (bots) observe our dictionary for some easily observed condition where they can contribute updates to the dictionary. For example, a command-pattern dictionary object may include an 'outbox' for messages in its state model. An external agent would query for this, capture and clear the outbox, and deliver the content. It could also provide a reply service and inject content into an inbox.
+Software agents (colloquially, 'bots') can observe our dictionary for some easily tested conditions, interact with the real world, and contribute updates to the dictionary. For example, a dictionary object may include *an inbox and outbox* for messages, or perhaps a *publish-subscribe arena*. Our 'bot' could integrate the inbox/outbox with external systems (e-mail, twitter, AMQP). Similarly, publish-subscribe could be integrated with external publish-subscribe models (DDS, atom, time-series data). 
 
-This technique generalizes to many kinds of 'effects'. 
+Bots can also reflect on the dictionary. For example, it is possible for a software agent to track down all words attributed with (category:math) and automatically maintain a word that provides an association list of these words to their definitions.
 
-We can model requests for web content, video feeds, news feeds, etc.. We can model control systems for smart houses, multi-media systems, and robots. We can integrate SMTP, Twitter, SMS, databases. We can model reflection and automated error recovery. Managed dictionary techniques allow injected information to eventually be deleted. Low-latency interactions are feasible via Comet-style long polling or a subscriptions model. Real-time effects are feasible if we use timestamps appropriately.
+Interactions can occur in real-time via comet-style long-polling or subscriptions. Of course, this is probably *soft* real-time unless we control a lot of other factors, e.g. caching and number of users and real-time GC.
 
-The primary filter should be a set of opt-in attributes. We shouldn't have software agents jumping in and interacting with our applications uninvited, and it is convenient to easily disable effects while debugging or forking an application object. Attributes additionally enable our software agents to efficiently discover where their attentions are desired.
+The ability to easily control bots will be valuable for developers. Bots should accept declarative guidance from attributes, e.g. to opt-in to bot interactions. Ideally, bots are themselves dictionary applications, keeping state and behavior in the dictionary. 
 
+Wikilon may eventually directly host a useful subset of bots.
 
 ## Managed Dictionaries and Attributes
 
@@ -63,9 +64,9 @@ To declare a list of attributes, I propose prefixing any definition as follows:
 
         [{&hidden}{&opaque}{&frozen}]%
 
-This structure is preserved on import/export but trivially eliminated by simplifiers. It is extensible with ad-hoc new attributes (todos, deprecation, authorship, categories, relations, deprecation, licensing, decay models, etc.) and has no need for runtime semantics. A reverse lookup can find all uses of a token. It's voluminous, but space is cheap. The main disadvantage is that most other dictionary applications will need to recognize and handle this structure, too.
+It is extensible with ad-hoc new attributes: todos, deprecation, authorship, categories, relations, deprecation, licensing, decay models, automatic testing, cache and quota control, security, etc. I expect attributes will be common enough that I've introduced a specialized syntax to my claw view: `(hidden opaque frozen)` desugars to the above. Attributes have no runtime semantics. Dropping the block of annotations via `%` helps clarify this, e.g. a runtime will generally eliminate the entire block during a simplification pass and never wonder what `{&category:math}` is supposed to do.
 
-Note: These attributes only affect a dictionary optimizer. The *frozen* attribute is not a security attribute. If a developer wants to modify the definition for a frozen word, he can do so. Though, a development environment is free to warn the user about the potential issues.
+Note: The *frozen* attribute is not a security attribute. If developers want to modify the definition of a frozen word, they may do so. At worse, they'll face a "do you *really* want to do this?" dialog. Security attributes may have potential utility, though. They're discretionary, but we can enforce them if a dictionary is gated behind a service API. See security, below.
 
 ## Parallelism in Dictionary Applications
 
@@ -97,15 +98,13 @@ On the other hand, we lose those convenient timeouts that rely on hardware race 
 
 ## Security for Dictionary Applications
 
-Imagine our goal is to model a game where each player is limited to viewing and manipulating a shared game world through a personal avatar. The security requirement here involves limiting the players, as opposed to asking them to police themselves.
+To provide security, we must provide 'gated' access to the dictionary, e.g. via a service API. This is similar to how we might control access to a filesystem or database. We could separate authentication from the dictionary to avoid polluting the dictionary with the equivalent of password files.
 
-To implement this security policy requires we cripple player access to the dictionary. Even read-only access is sufficient for players to view the game world through they eyes of any avatar. We could provide a private space for each player to install scripts or macros (e.g. new character animations, musical scores for characters to play on instruments, etc.), but fragmented access to the dictionary would be stifling. The AO programming experience is designed for the holistic dictionary. 
+Imagine our goal is to model a game where each player is limited to viewing and manipulating a shared game world through a personal avatar. Read-only access is sufficient for players to view the game world through they eyes of any avatar. Write access would allow a player to control other characters. Even full access to a private namespace in the dictionary might be problematic because players could retroactively modify their actions. Though, we could support a private copy-on-write namespace for macros and the like.
 
-If we're content that this remains a 'dictionary application' only for our non-player participants (game masters, developers, bots), we can proceed easily enough. Constrain player access to a set of whitelisted dictionary applications that we know to be compatible with our security policy. Player authentication could optionally be separated from dictionary state. But application state would remain within the dictionary.
+Ultimately, the holistic experience of AO dictionary applications would be available only to participants in non-player roles (e.g. game masters, developers, the gateway service). Only these participants have the full ability to debug, snapshot, fork, optimize, etc. the game service. Players may still benefit from dictionary apps indirectly, e.g. we could open up snapshots of the player-enriched game world a month later.
 
-I imagine that most security policies will follow a similar pattern. The features that make AO dictionary applications debuggable also make them hackable. We can still enforce security, but the cost is the ability for some participants to view the application as part of an AO dictionary. Yet, embedding application state in the dictionary remains useful to our developers, and potentially to players after the play is done.
-
-*Aside:* If the number of players is small, asking them to police themselves is reasonable. Shared storytelling, quests, roleplaying, and their like are frequently represented on conventional forums. Doing so on a shared programming medium like AO has potential to create a far more real-time interactive multi-media experience than natural language. It will also automate the administrative burdens. And if a storyteller or player wants to keep a surprise, they can just keep it to themselves, perhaps using a private fork of the dictionary if the surprise needs development and debugging.
+*Aside:* If the number of players is small and the game isn't too competitive, asking players to police themselves is reasonable. Shared storytelling, quests, tabletop roleplaying, interactive fictions, and their like do not benefit from security. Nor would a chess game. 
 
 ## Extraction of Applications from the Dictionary
 
