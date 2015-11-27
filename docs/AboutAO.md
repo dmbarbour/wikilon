@@ -60,10 +60,6 @@ Though ABC doesn't specify a type system, it is designed to support static analy
 
 Static analysis can be greatly extended by use of *annotations*, which may potentially assert properties that would be difficult to express otherwise - e.g. that two blocks are equivalent, or that a function is commutative or associative or idempotent, or that one function is the reverse of another, or that a value should be computed statically.
 
-### Holes: Transitory Undefined Words
-
-A dictionary in a transitory state of development will frequently have a few undefined words. These can serve a useful role in the development context: a development environment can recognize undefined words as 'holes'. The functional type for a hole may be inferred from usage context. A good developoment environment could help developers find an implementation. The number of undefined words should generally be limited based on the amount of active development, and only certain approaches to development will use them (e.g. top-down).
-
 ### DVCS Based Distribution
 
 PLs today widely use package based distribution models. A package of code includes data types and functions, and may depend on other packages of code, all independently developed and versioned. Package based distribution introduces many complications: version conflicts, configuration management, external configuration languages. These complications hinder efforts to refactor, abstract, test, live-code, model application state in code, etc. across multiple packages. 
@@ -71,6 +67,10 @@ PLs today widely use package based distribution models. A package of code includ
 AO favors a far more simple and robust technique: a dictionary contains all dependencies, all words defined. DVCS-based forks and merges are readily applied: developers can fork public dictionaries, update as needed, validate changes, and cherry-pick functions or updates to push back upstream atomically. Instead of packaged libraries, every dictionary is a wholistic ecosystem. 
 
 *Aside:* An interesting possibility is genetic programming. Words serve as genes, definitions as alleles. Fitness can be based on typechecking, unit tests, and score annotations within each dictionary. Take a population of dictionaries and use word-level random merges (and rare mutations) to model sexual recombination. This would be expensive, but reasonably straightforward.
+
+### Leveraging Undefined Words
+
+A dictionary in a transitory state of development will frequently have a few undefined words. These can serve a useful role in the development context: a development environment can recognize undefined words as 'holes'. The type for a hole may be inferred from usage. A good developoment environment should help developers find implementations of this type. The number of undefined words should generally be limited based on the amount of active development, and only certain approaches to development will use them (e.g. top-down).
 
 ### Regarding Large Definitions
 

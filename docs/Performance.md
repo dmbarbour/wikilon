@@ -1,25 +1,31 @@
 
 # Wikilon Performance
 
-I don't expect Wikilon to be blazing fast, not anytime soon. However, I expect to achieve a reasonable degree of performance. Developing simple text games, turtle graphics, or visual novels should be within easy reach. To achieve this, Wikilon will compile ABC to a more efficient internal representation that can trivially be converted back to ABC.
+I don't expect Wikilon to be blazing fast, but I would like to give it the best chance possible. I expect to at least achieve a reasonable level of performance: enough to develop a multiplayer game server, or a robot control system. Developing simple interactive fictions, turtle graphics, or visual novels should be within easy reach. Wikilon shouldn't be a *toy*, but for people to take it seriously we need serious performance.
 
-* Compact: use bytestrings in memory rather than expanded lists.
-* Slicing: no parsing to end of block or text, no escaping text.
-* Embedding: compute constant values only once within a loop.
-* Stowage: structure sharing and lazy loading of large values.
-* Accelerators: common sequences of ABC recognized and optimized.
-* Simplifiers: clean up unnecessary data plumbing, partial evaluations.
-* Parallelism: `{&par}` and `{&seq}` annotations, strategies.
+I have multiple strategies to achieve performance, which should stack nicely:
 
-Additionally, I have several ideas to improve performance further:
+1. Internal bytecode representation. Fast slicing of bytecode arrays. Quoted values. This internal bytecode shall have a rather trivial expansion back into Awelon bytecode, such that we don't lose any information.
 
-* lazy or parallel computations that survive within the cache
-* accelerated data structures, especially vectors 
-* annotation to copy affine vector into 'mutable' vector
-* compile loopy subprograms to machine code for fast evaluation
-* compile subprograms written in constrained manner to GPGPU
+2. Large-value *stowage*. A `{&stow}` annotation tells a runtime to tuck large values into a database, like ABC value resources. Structure sharing is implicit. This allows us to work with larger-than-memory values, e.g. values modeling entire databases. Structure sharing supports Wikilon's application model: we can expect to recompute values many times. Stowage might also find use for discretionary sealers and unsealers, just for structure sharing.
 
-However, some of these require a lot more work to implement or use effectively.
+3. Parallelism. At the very least, we can support Haskell's par-seq parallelism by providing `{&par}` and `{&seq}`. We can use work-stealing techniques, with one thread per hardware processor. 
+
+4. Simplification and partial-evaluation of bytecode. A lot of useful work can be performed directly on our bytecode representations or other intermediate representations.
+
+5. ABCD-like accelerators. We can recognize specific subprograms and optimize for them. This includes optimized data representations. I especially want ABCD-like accelerations for: vector processing, affine vectors for mutability, working with binaries (and affine binaries), models of floating point computations.
+
+6. Compilation of bytecode. JIT. AOT. On request by annotations. We can pursue a flexible approach here: an ad-hoc mix of interpreted and compiled code. Ideally, compiled code is easily cached and persisted (e.g. via stowage).
+
+7. Caching and memoization. Pure computations of AO should be relatively easy to memoize and cache. Structure sharing for large values allows us to cache computations on large values. We can also represent active or lazy computations in a cache: ABC can easily represent its own complete continuation. Effective caching is essential to the [dictionary applications model](ApplicationModel.md).
+
+For several months, I have been trying to do this in Haskell. However, Haskell's high-level data structures and GC are interfering. They're too difficult to integrate with low-level JIT code. My new plan is to implement the performance-critical subset of my runtime in C. I will leverage LLVM as a basis for JIT. 
+
+For stowage, I will try [sophia key-value storage](http://sphia.org/), which is a better fit for my use case compared to LMDB. The API documentation is very poor, but some of the FFIs for it in other languages have better docs. And I can certainly get enough for my own use cases.
+
+Wikilon will then integrate this runtime via Haskell's C FFI. Dictionaries will be modeled as as large ABC values. This seems like a useful idea for reflection anyway, or extending Wikilon via the dictionaries. I can model dictionaries, histories, reverse lookup indices, exponential decay models, etc..
+
+I'll support named roots for persistence, but they'll all be for ABC values.
 
 ## Stowage for Large Values
 
@@ -29,7 +35,9 @@ Stowage is useful for modeling larger-than-memory values in cases where only a s
 
 Structure sharing is a common feature for stowage. Computations producing the same stowed values will share the same space. In addition to potential space savings, structure sharing simplifies other potential features such as managing cached computations. 
 
-Stowage of values is designed to closely model ABC value resources, i.e. where we use `{#resourceId'kf}` to name a bytecode resource. Here, `resourceId` is a secure hash of the bytecode, and the `'kf` suffix identifies our resource as a linear quoted value to permit lazy loading and forbid copy/drop. Stowed values could be directly implemented as ABC resources. However, `{&stow}` leaves the representation opaque and local to the runtime, which simplifies GC and provides more room for optimizations.
+Stowage of values is designed to closely model ABC value resources, i.e. where we use `{#resourceId'kf}` to name a bytecode resource. Here, `resourceId` is a secure hash of the bytecode, and the `'kf` suffix identifies our resource as a linear quoted value to permit lazy loading and forbid copy/drop. Stowed values could be directly implemented as ABC resources. However, `{&stow}` leaves the representation opaque and local to the runtime, which simplifies GC and allows faster hashing and a far more parsimonious resource identifier.
+
+With a specialized DB model, I can keep the `kf` information (and several more flag bits) directly in my key value, e.g. a simple 64-bit integer.
 
 A suggestion for stowage may be silently rejected, e.g. because a value is not significantly larger than its stowage overhead. This helps developers a bit because it leads to larger 'chunks' of data corresponding to a couple layers of tree nodes that can be loaded together or compressed together.
 
@@ -52,13 +60,7 @@ In context of a dictionary application, every form of parallelism could kick in 
 
 ## Lazy Computation
 
-Laziness involves construction of a suspended computation, a pending result, that doesn't need to be completed immediately. In Haskell, laziness has some semantic aspects in that we can have lazy undefined or divergent computations. However, in ABC, laziness would be expressed by annotation `{&lazy}`. Annotations *must not* affect the observable behavior of the program. So laziness must be a performance-only consideration.
-
-Wikilon interprets bytecode. We are not pre-computing our substructural type attributes. Hence, we must not copy or drop our lazy values before fully computing them. A consequence is that we don't need stateful thunks at the level of independent computations. However, at the higher *dictionary application* layer with partial evaluation and cached computations, we may still reuse lazy thunks. Lazy, stateful thunks might give us some nice properties in this context, effectively giving developers access to construct computations in cache. 
-
-Are there better approaches to cached computations? Memoization seems a promising technique, but has the difficulty of uniquely identifying a computation. Even more so if we begin to inject stateful thunks. 
-
-I may need to experiment with laziness to see whether it is worth using in Wikilon.
+Laziness involves construction of a suspended computation, a pending result, one that doesn't need to be completed immediately. It seems feasible to model this as a special case for value stowage and/or cached computations. My main resistance to lazy computations is that they hinder structure sharing.
 
 ## Linear Cached Computations
 
@@ -68,7 +70,7 @@ A very cache-friendly pattern for dictionary applications is where each word beg
         @foo.v2 {%foo.v1}(another command)
         @foo.v3 {%foo.v2}(yet another command)
 
-A very simple technique in context is to cache evaluation results relative to individual words in the dictionary.
+A very simple technique in context is to cache evaluation results for each step, and allow them to decay normally (e.g. via exponential decay models). 
 
 ## Quotas and Caching
 
@@ -77,4 +79,28 @@ As a development platform, Wikilon will host a lot of long-running and non-termi
 * reusable cached computations
 * controlling efforts expended
 
-Laziness could possibly help by allowing fine-grained reuse of a computation that isn't generated until after it is cached. However, laziness isn't ideal for further simplifications and optimizations.
+Caching an 'ongoing' computation with a PVar could be implicit for computations that fail to complete within the quota, enabling background computations or allowing users to poke at a computation until it finishes (202 Accepted). If lazy computations are supported, it is similarly feasible to place those in a PVar if not computed before we cache.
+
+## ABCD-like Accelerators
+
+I can feasibly gain a lot of performance by recognizing subprograms and replacing them with pre-compiled, optimized implementations (and dedicated opcodes). With the right accelerators, it is feasible to have high-performance interpretation.
+
+The difficulty is finding and developing "the right accelerators". My intuition is that these will include:
+
+* vectors, matrices, collections-oriented processing
+* mutable vectors via the 'affine' type
+* floating point models and operations
+* supporting heterogeneous computation (GPGPU, FPGA).
+
+Vectors could be a highly optimized 'view' for lists. Affine vectors might replace the terminating unit with `[]k`. For floating point operations, we will need to *model* the floating point numbers and operations, likely with their many flaws and foibles, such that we can replace the model with hardware floating point numbers. Floating point support is essential if we want to effectively leverage GPGPUs. Effective support for GPGPU computing could greatly improve the utility of ABC, e.g. enabling scientific computation.
+
+Accelerators are wasted in cases where a simple compilation could do the job. Accelerators are best used in cases that JITs alone would have difficulty recognizing or optimizing, especially cases that imply use of specialized datatypes. Applying accelerators before compilation should allow a simple compiler to do a better job.
+
+## Compilation
+
+Awelon Bytecode is designed assuming compilation. Without it, ABC has no chance of competing with more machine-oriented bytecodes like CLR or JVM. The amount of allocation performed by a single ABC evaluation is significant. Compiling helps most in case of loopy and mathy code: the Z-combinator becomes a simple jump, internal data plumbing can be shifted to register allocations, computations can be optimized. 
+
+With accelerators, it becomes feasible to recognize subprograms that can be easily compiled for SIMD or GPGPUs. With this, AO and ABC might achieve world-class performance without sacrificing its pure, trivial semantics.
+
+Targeting LLVM has worked for many people. Seems worth trying.
+

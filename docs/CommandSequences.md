@@ -176,11 +176,9 @@ It is further feasible to support a simple precedence model, e.g. such that we s
         vertibar vertibar
         block
 
-*Aside:* I'd probably call these `cseq` `cseqs` and `cseqv` rather than specifying their visual representation. 
-
 The *potential* motivation for multiple command separators is that they permit alternative compositions and interpretations of commands. For example, we could model alternatives or backtracking directly in our syntax. We can do this without special syntax, but it might be prettier with supporting syntax.
 
-However, working with a single sequencing model is simpler. Our continuations handle one kind of bind. We make fewer assumptions about our interpreter. We don't gain any expressiveness. At best, we're flattening our code a bit and making it a little easier to read. Further, precedence hinders factoring. For example, if I extract the subprogram `q,r|s,t,u;v` and replace it by a word `qrstuv`, the behavior will be different because of of precedence. And this isn't an obvious error like refactoring across blocks (`foo] \[bar` is clearly not a valid definition).
+However, working with a single sequencing model is simpler. Our continuations handle one kind of bind. We make fewer assumptions about our interpreter. We don't gain any expressiveness. At best, we're flattening our code a bit and making it a little easier to read. Further, precedence hinders factoring. For example, if I extract the subprogram `q,r|s,t,u;v` and replace it by a word `qrstuv`, the behavior will be different because of of precedence. And this isn't an obvious error like refactoring across blocks (e.g. `foo] \[bar` is clearly not a valid definition).
 
 
 ### (rejected) Curly Brace Command Sequences
@@ -192,6 +190,6 @@ For greater expressiveness, we could instead favor a different region delimiter.
 
 Does this offer any meaningful advantage? 
 
-Stuffing commands into a list doesn't offer any processing advantages because commands are still opaque. Mostly, this allows treating the last command in a special way, e.g. we might interpret the above program as `foo >=> bar >=> baz >=> (return . qux)`. But special cases in our syntax will hinder composition and factoring, and injecting a `return` is easy to do by hand: `[foo, bar, baz, qux return]`.
+Stuffing commands into a list doesn't offer any processing advantages because commands are still opaque. Mostly, this allows treating the last command in a special way, e.g. we might interpret the above program as `foo >=> bar >=> baz >=> (return . qux)`. But special cases in our syntax will hinder composition and factoring.
 
 There is an opportunity cost for using curly braces here. I might later discover a more effective use for them elsewhere, perhaps delimiting regional DSLs or a specialized view for data list construction. I'd prefer to reserve them for a more strongly motivated use-case, one that aligns with Awelon project goals. 
