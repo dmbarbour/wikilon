@@ -15,7 +15,7 @@ I have multiple strategies to achieve performance, which should stack nicely:
 
 5. Simplification and partial-evaluation of bytecode. A lot of useful work can be performed directly on our bytecode representations or other intermediate representations.
 
-6. Efficient deep copy. It is feasible to delay copy of deep structure by introducing coarse-grained memory-local reference counts when copying a large data structure. It is also feasible to delay analysis of whether a value is copyable (e.g. marking both copies as assumed copyable, and marking only one of them for validation). Analysis of 'copyable' on a proposed stowage target can be delayed until after stowage. Either way, we can limit the amount of work performed by a copy operator. Special values (blocks, vectors, large texts) might automatically use a reference count. Stowed values track their own copyability properties. 
+6. Efficient deep copy. It is feasible to delay copy of deep structure by introducing coarse-grained memory-local reference counts when copying a large data structure. It is also feasible to delay analysis of whether a value is copyable (e.g. marking both copies as assumed copyable, and marking only one of them for validation). Analysis of 'copyable' on a proposed stowage target can be delayed until after stowage. Either way, we can limit the amount of work performed by a copy operator. Special values (blocks, vectors, large texts) might automatically use a reference count. Stowed values track their own copyability properties. (Other ideas: consider tracking substructural properties in pointer bits?)
 
 7. ABCD-like accelerators. We can recognize specific subprograms and optimize for them. This includes optimized data representations. I especially want ABCD-like accelerations for: vector processing, working with binaries, models of floating point computations. Vectors, binaries, etc. can include their own reference counts, such that we can easily test whether a vector is unique when deciding copy-on-update vs. update-in-place. Affine vectors thus become the default behavior, with O(1) updates. Splits and rejoins on affine vectors can also be made very efficient, i.e. if we 'split' an affine vector, we get two affine vectors. If we later 'rejoin' affine vectors having adjacent storage, we can recombine them into a larger affine vector without copies. This allows very efficient fork-join behaviors.
 
@@ -29,17 +29,17 @@ Haskell's high level data structures are difficult to integrate with Haskell's l
 
 My new plan is:
 
-* implement the performance-critical kernel of my runtime in C or C++
-* leverage LLVM as a basis for JIT
+* implement performance-critical kernel in C
+* leverage LLVM (or Clang) as a basis for JIT
 * integrate LMDB as the basis for stowage
 * support lightweight threads via `{&par}`
 * limit number of passive computation threads
 * dictionaries modeled as ABC values with stowage
 * support 'named root' values, similar to VCache
 
-I'm feeling very good about having this viable path forward after months (arguably, over a year, though much of that was experimenting with and refining the application model) fighting with Haskell for performance. 
+I'm feeling very good about having this viable path forward after months (arguably, over a year, though most of that was refining the Wikilon application models) fighting with Haskell for performance. 
 
-With high performance evaluation and caching, Wikilon becomes a super-spreadsheet of sorts. Especially if we later support GPU computations for rendering and physics. Cloud computations might be feasible later, though requiring precise interaction with stowage.
+With high performance evaluation and caching, Wikilon becomes a super-spreadsheet of sorts. Especially if we later support GPU computations for rendering and physics, or remote distributed comptuations.
 
 ## Stowage for Large Values
 
@@ -136,7 +136,7 @@ The difficulty is finding and developing "the right accelerators". My intuition 
 * floating point models and operations
 * supporting heterogeneous computation (GPGPU, FPGA).
 
-Vectors could be a highly optimized 'view' for lists. Affine vectors might replace the terminating unit with `[]k`. For floating point operations, we will need to *model* the floating point numbers and operations, likely with their many flaws and foibles, such that we can replace the model with hardware floating point numbers. Floating point support is essential if we want to effectively leverage GPGPUs. Effective support for GPGPU computing could greatly improve the utility of ABC, e.g. enabling scientific computation.
+Vectors could be a highly optimized 'view' for lists. For floating point operations, we will need to *model* the floating point numbers and operations, likely with their many flaws and foibles, such that we can replace the model with hardware floating point numbers. Floating point support is essential if we want to effectively leverage GPGPUs. Effective support for GPGPU computing could greatly improve the utility of ABC, e.g. enabling scientific computation.
 
 Accelerators are wasted in cases where a simple compilation could do the job. Accelerators are best used in cases that JITs alone would have difficulty recognizing or optimizing, especially cases that imply use of specialized datatypes. Applying accelerators before compilation should allow a simple compiler to do a better job.
 
@@ -146,5 +146,143 @@ Awelon Bytecode is designed assuming compilation. Without it, ABC has no chance 
 
 With accelerators, it becomes feasible to recognize subprograms that can be easily compiled for SIMD or GPGPUs. With this, AO and ABC might achieve world-class performance without sacrificing its pure, trivial semantics.
 
-Targeting LLVM has worked for many people. Seems worth trying.
+Targeting LLVM has worked for many people. Seems worth trying. Haskell has decent support for LLVM.
 
+If I have a hand-rolled interpreter, I'll probably want to access those functions from LLVM. A potential techniq
+
+## Optimized Sums
+
+With sum types, we have some `LRLLRLR` sequence to reach them. I wonder if we can reduce this to a bitfield, maybe even track a few sum flags in value pointers? With even just `L` and `R` in pointers, we could model lists without an extra node. To support *trees* and a fast `Z` operator, we might additionally want `RL` and `RRL`.
+
+We might similarly track affine and relevance properties in value pointers? I'm not sure that will work out. It might simplify copy and drop, or it might interfere with parallelism.
+
+
+# ABC Runtime Design
+
+The following is a sketch of the runtime I'm designing. 
+
+## Environment, Contexts, Memory Layout
+
+A toplevel *environment* will track: 
+
+* LMDB integration for stowage
+* A pool of worker threads for sparks.
+* A semaphore for worker threads
+* A set of active contexts
+
+This allows multiple contexts to interact with the same LMDB environment and share labor for parallel sparks.
+
+A *context* additionally will track:
+
+* A memory region for a computation
+* A set of thread contexts and nurseries
+* callbacks for handling unrecognized tokens
+* callbacks for handling erroneous inputs
+* A set of waiting parallel threads
+* A set of objects proposed for stowage
+
+We can create a context per external computation, or we can use a single context to run multiple computations. The former provides greater control over memory consumption. The latter offers greater access to sharing for cached stowed values. 
+
+I'll probably want to use `mmap` with 
+
+## Addressing, Pointer Layout, and Size Limits
+
+I'll be favoring 32-bit contexts with a maximum size of 4GB.
+
+Reasoning:
+
+* 4GB of memory is a lot for any one Wikilon computation.
+* LMDB stowage mitigates need for large values in memory.
+* We can optimize for large external binaries and texts.
+* We can optimize for large external bytecode resources.
+* Tight addressing improves memory locality and caching.
+* Can model 'remote' computations via multiple contexts.
+
+Memory will be addressed and aligned on 64-bit 'cells'. The lower 3 bits in each address will be leveraged to optimize common representations. It is most important that we optimize for: pairs, unit, lists, trees, booleans, and small numbers. 
+
+The encoding I'll be trying:
+
+* xy0 - small integers 
+* 001 - tagged objects
+* 101 - raw product or unit
+* 111 - product or unit inL
+* 011 - product or unit inR
+
+Small integers encode plus or minus a billion: nine solid digits with a little play at the edges. 
+
+A product is represented by addressing a single cell, just a pair of values. Address 0 represents 'unit'. We optimize a single level of sum types (inL vs. inR) for products and units. This allows us to directly represent lists, booleans, and simple trees (e.g. node vs. leaf) without an extra cell for the sum type.
+
+Tagged objects are used for everything else: arbitrary sums, blocks, sealed values, stowed values, pending parallel computations, compact texts, vectors and matrices, etc.. Tagged objects may be more than one cell in size, depending on their type.
+
+I haven't hammered out the details on 'external' resources, but they at least seem feasible, perhaps as a specialization on stowage.
+
+## Memory Management
+
+Nurseries are collected by a semi-space algorithm: 
+
+* a thread grabs an *empty* nursery
+* all living data is copied into it
+* then we switch nurseries
+
+Our context ensures enough empty nurseries that we never need to wait. And nurseries are small enough (e.g. 256kB or 2MB) that the copy runs very fast. In addition, we'll keep track of the highest address for data from one or two generations ago. Content that would survive a third collection (or a second one, if we have memory pressure) is instead shipped to the full heap.
+
+Our full heap uses a combination of ownership and reference counting, with a conventional free list. Each thread keeps its own free list for the main heap to minimize synchronization when allocating and deleting content. The context's free list requires synchronization (via mutex).
+
+A cell is "owned" by whichever thread has a reference to it, favoring linearity by default. When we make deep copies of large structures, we inject reference count objects (e.g. wrapping every 60-120 items) to avoid performing a full copy immediately. This mostly saves work for future copies and potential copy-delete patterns. The costs of the reference count are amortized.
+
+*Aside:* I've considered a more conventional GC model. But 'ownership by default' allows for some very nice optimizations: a lot of AO data plumbing becomes non-allocating (simply moving pointers or values). Reference counting simplifies potential accelerations for vectors or arrays: split, append, etc.. Also, the simplicity and predictability of reference counting is appealing: with the aforementioned design, Wikilon is hard real-time capable. Further, 'deep copy' seems a rare event in AO. Mostly, we shallow copy blocks as part of fixpoint loops.
+
+## Tagged Objects
+
+A tagged object is represented in memory with the first word (32 bits) indicating how the following words are understood. It's important that tagged objects be simple. Wikilon's GC must understand them.
+
+Important tagged objects include:
+
+* refct wrappers
+* ad-hoc sum types
+* arrays or compact lists
+* compact texts, binaries, bitvectors 
+* stowage indicators and wrappers
+* pending computations
+* sealed values
+* blocks
+* fixpoint blocks
+* JIT or compiled code
+* forwarding objects for copy collection
+
+Most tagged objects will require two cells or more. But there are a few cases where we can squeeze down to just one cell: reference counting wrappers, and ad-hoc sum types. 
+
+### Reference Count Wrappers
+
+A reference count wrapper doesn't avoid a copy. It just delays it, until we're ready to unwrap the object then copy it for real. But this can save us a lot of work in cases where we copy a value many times, investigate it shallowly, and delete. We also want to optimize deletion of copied values, so reference count wrappers will include a bit for that.
+
+I want to squeeze these wrappers down to 1 cell: `(refct, object)`. 
+
+In the worst case, nearly every *word* in memory is pointing to the same refct object. This is feasible if: we build a large lists of copies of the object, compact the list into an array (eliminating the overhead list nodes), then rinse and repeat until memory is full. With 4GB memory, we have at most 1 billion (2^30) words, less the refct object itself.
+
+So... we need to handle reference counts of up to 2^30 - 1. This leaves us only 2 lower bits: one to support fast delete, and one for *this is a refct object*. Consequently, *half* of our tag space will be dedicated to refcts. That's okay. We still have another two billion tags available.
+
+Refct tags will be indicated with a low bit `1`. 
+
+### Ad-hoc Sum Types
+
+
+
+## Arrays 
+
+A viable representation for arrays:
+
+        (array, refct, size, pbuff)     2 cells
+           pbuff → contiguous memory
+
+Separating the refct, size, and pbuff from the actual contiguous memory is necessary for slicing. When refct is 1, we can cut an array into two smaller pieces each with refct 1. We can also append two adjacent units of refct 1 back into a contiguous array. This slice and append, together with some ability to update the array, is valuable for parallelism patterns.
+
+Here's an alternative:
+
+        (array, size, pbuff, pnext)
+            pbuff → contiguous memory
+            pnext → unit or another array
+
+In this case, we don't have an internal reference count. So we're *assuming* we have ownership of the array. This greatly simplifies slicing and joining the buffers. We're using the recovered slot to model a chunked list. This guarantees our 'arrays' still have 'list' performance semantics: O(N) for everything. But it simplifies automatic defragging of arrays.
+
+For a shared array, then, we'll need to wrap our array with refct objects. (I wonder if I can do reference count objects in just 1 cell? Might need to optimize its tag.)
