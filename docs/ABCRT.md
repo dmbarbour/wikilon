@@ -99,14 +99,12 @@ Important tagged objects include:
 
 * refct wrappers
 * ad-hoc sum types
-* arrays, compact lists
-* compact texts, binaries, bitvectors 
+* arrays, compact lists, binaries, texts
 * stowage indicators and wrappers
 * pending computations
 * sealed values
-* blocks
-* fixpoint blocks
-* JIT or compiled code
+* blocks, fixpoint blocks, compiled code
+* big integers
 * forwarding objects for copy collection
 * external resources
 
@@ -131,6 +129,8 @@ The savings from injected reference counts is mostly:
 
 We represent reference counts as a single cell. This gives us a very good amortized overheads, e.g. if we refct every 64 objects we have at most a 0.5 bit overhead per object. Increments and decrements to refct objects must be atomic... unless they're in our nursery, which we can test for easily.
 
+During copy-collection, refct objects will change to a forwarding pointer. Reference counts are the only points of potential sharing, so this is a special case just for them.
+
 *Aside:* If our 'known deleble' bit is 0, that doesn't mean this isn't deleble. It means we *don't know* whether it is deleble. We'll need to validate deletion on the first attempt to delete.
 
 ### Ad-hoc Sum Types
@@ -150,70 +150,102 @@ With 12 tags we can discriminate up to 4096 items. This is more than a human can
 
 ### Arrays and Chunked Lists
 
-From the ABC's perspective, an array is *semantically equivalent* to a list-like structure `λa.λb.μL.((a*L)+b)`. Except this isn't true from a performance-semantics perspective. We will give developers a few annotations like `{&array}` and `{&binary}` to automatically rewrite lists into arrays. Further, we'll support annotations `{&unshared}` and `{&seamless}` to enforce performance semantics. 
+An array is an optimized representation for a list-like structure `λa.λb.μL.((a*L)+b)`. 
 
-The basic `{&array}` type contains normal values at one word each. The `{&binary}` type contains a list of bytes (integers in the range 0..255). An array might automatically be specialized into a binary if this is recognized, but developers are encouraged to request the most precise representation. In the future, we may support more array types (e.g. specialized to a value type), but these two cover most use cases.
+Compared to a list, arrays reduce memory overhead by half and ensure very tight memory locality. But the primary benefit regards how easily common list functions can be accelerated when applied to an array: O(1) length, O(1) indexed lookups and updates, O(1) logical reversal, O(1) split and seamless append, and so on. 
 
 The proposed representation for arrays is:
-
-        (array, size, pbuff, pnext)
-            size → just for pbuff
+                
+        (array, size+offset, pbuff, pnext)
+            offset → 1 bit, skip first word
+            size → number of words in pbuff
             pbuff → 
                 (111) contiguous memory
                 (001) tagged buffer
                     e.g. refct wrapper
-            pnext → one of:
-                an array (tag)
-                a list (inL)
-                b (inR)
+            pnext → whatever follows
 
-The `pnext` directly continues the list after the contents of the buffer. In a *seamless* array, this simply points to our `b` value (inR). But we can leverage this for efficient append of arrays, resulting in chunked lists. A `{&seamless}` annotation asserts its first argument is a seamless array, allowing us to easily debug performance issues. Applying `{&array}` to a chunked array will simply flatten it again.
+This tagged object actually represents an `(a * List a)` pair. We'll further wrap it with another cell for the `inL` sum type. With this, the overhead for an array is 6 words, and we break even when encoding 6 items.
 
-The 
+Annotation `{&array}` compacts a list of values into an array with a single contiguous buffer with `pnext` pointing to the terminal value (usually `unit inR` for a plain list). If allocation fails (e.g. due to memory fragmentation) the computation will halt. The much weaker `{&array~}` allows a runtime to make heuristic chunking decisions, also via `pnext`. Chunked lists are sufficient for many applications of arrays.
 
-Our 'array' tag may include type information. We'll want specialized arrays for binaries at least. A few 'size' bits may be used for offsets. Logical reversal could be represented with the size, the tag, or our pbuff tag bits.
+#### Seamless, Unshared, and Affine Arrays
 
-Theoretically, arrays have the same O(N) properties as plain lists (via `pnext`). But in practice we can expect many arrays to behave as O(1) up to an acceptably large size. To debug performance issues, we need a `{&seamless}` annotation to assert that an alleged array is indeed represented by a single large chunk. Medium sized arrays could easily be wrapped with finger-trees to efficiently model large, flat data structures with high branching factors.
+As far as ABC semantics are concerned, arrays are plain old lists. We can transparently append them to a list, for example. But from a *performance semantics* perspective arrays and lists diverge wildly. To protect performance semantics, I'm proposing two annotations: `{&seamless}` and `{&unshared}`.
 
-Shared arrays will be modeled by wrapping the buffer with a `refct` object. Usefully, this enables array-lists to have both shared and unshared buffers. Also, it's easy for accelerators to recognize this. We can perform O(1) lookup on a shared buffer.
+When the array is encoded as one large chunk, and `pnext` points to the terminal value (no further list elements), we call this a *seamless* array. Seamless arrays guarantee many O(1) accelerated operations. This is valuable in many contexts. We provide a `{&seamless}` annotation to assert that an array is seamless. 
 
-Unshared arrays can be trivially *split*, seamlessly *rejoined*, and *updated in place*. With accelerators for these functions, many useful algorithms and data structures can be implemented efficiently: union find, hashtables, mutable variable models, abstract register machines, in-place quicksort, etc.. We can parallelize many divide-and-conquer techniques such as in-place quicksort. To debug performance issues, we need an `{&unshared}` annotation to assert that an array is not shared.
+Unshared arrays can be split, seamlessly appended, and updated in place, each in O(1) time. These functions provide a powerful foundation for conventionally imperative algorithms and data structures: union find, hashtables, abstract register machines. They also enable logically reshaping arrays into matrices and back. To protect these properties, the `{&unshared}` annotation will assert that our buffer is not shared.
 
+Both `{&seamless}` and `{&unshared}` can be validated dynamically, and efficiently. But we can also give these annotations static semantics for a linter or typechecker, e.g. so we get a compile-time error indicating where sharing was introduced.
 
-For performance debugging, we'll also want to give developers annotations to *assert* that an input is represented by an array, or an unshared array, or that two unshared arrays have the same type and are adjacent.
+As a simple technique, we can also explicitly mark arrays 'affine' by replacing the typical termal unit value with `[]f`. This prevents accidental copy and sharing of the array. 
 
-*Com
+#### Shared Array Buffers 
 
-Separating the refct, size, and pbuff from the actual contiguous memory is necessary for slicing. When refct is 1, we can cut an array into two smaller pieces each with refct 1. We can also append two adjacent units of refct 1 back into a contiguous array. This slice and append, together with some ability to update the array, is valuable for parallelism patterns.
+The copy function `^` will recognize arrays and wrap a reference count around the buffer. Accelerators can recognize this special case, i.e. such that we still have O(1) indexed lookup and non-copying fold/foreach, etc.. It is possible for a chunked list to have different sharing for each chunk. When updating a shared array, we'll implicitly perform a copy-on-write. 
 
-Here's an alternative:
+By default, once a buffer is shared, it remains forever shared. Even if the reference count is reduced to 1, we'll perform copy-on-write and the `{&unshared}` annotation will reject. The goal with this policy is early detection of erroneous conditions, e.g. race conditions with par/seq parallelism or potential for future reordering optimizations.
 
+When developers are confident in their assumption, they may use the `{&unshare}` annotation. This allows developers to indicate that a buffer should no longer be shared. Making this assumption explicit is a useful hint for static analysis. Dynamically, the annotation will validate ownership and remove the refct wrapper, returning the array to an unshared status.
 
-In this case, we don't have an internal reference count. So we're *assuming* we have ownership of the array. This greatly simplifies slicing and joining the buffers. We're using the recovered slot to model a chunked list. This guarantees our 'arrays' still have 'list' performance semantics: O(N) for everything. But it simplifies automatic defragging of arrays.
+#### Logical Reversal
 
-For a shared array, then, we'll need to wrap our array with refct objects. (I wonder if I can do reference count objects in just 1 cell? Might need to optimize its tag.)
+Logical reversal of a chunked list is achieved flipping a bit in the tag of each array chunk (so we have a `reversed array`) together with a conventional reversal of the `pnext` list. The `size+offset` values are not modified. We simply compute our index or pop data from the opposite end of the array.
 
-### Texts
+We reverse *onto* a value, and simultaneously we expose the terminating value. Reversing lists serves as a basis for appending lists or accessing terminals. Though we'll also have accelerators for those specific cases.
 
-The `{&text}` annotation is a specialization on arrays for lists of unicode codepoints, representing in UTF-8 under the hood. We'll make a special point of rejecting: C0 (except LF), DEL, C1, surrogates, and the replacement character. These are the same constraints on the AO dictionary. For performance and type safety, the `{&aolit}` annotation will assert that we can encode a proposed text as an AO literal (which also requires checking that it ends with unit).
+#### Binaries
 
-        (text, utf8)                  1 cell
-            utf8 → binary array
+We can specialize for a list of bytes. A 'byte' is simply an integer in the range 0..255. 
 
-To support fast slicing, we need indices on the text. Our first index is a simple list of `(charCt,byteCt)` pairs at 16 bits per pair. Our second tier index would index the first index with `(charCt, pairCt)`, with 24 bits per pair. Indices may be constructed as needed.
+        (binary, size & offset, pbuff, pnext)
+            3 bit offset into first cell
+            size in bytes, 28 bits (256MB max)
 
-        (text+index, utf8, index1, index2) 2 cells
-            utf8   → binary array
-            index1 → binary array (u8,u8) pairs, (charCt, byteCt)
-            index2 → binary array (u16,u8) pairs, (charCt, pairCt)
+The annotation `{&binary}` is taken as an assertion of both binary type and desired representation. If an argument is not a valid binary, this will fail (statically or dynamically). The weaker `{&binary~}` allows the runtime to use a chunked list representation, selecting a chunk size heuristically (e.g. favoring blocks of 16-64kB).
+ 
+#### Texts
 
-Most accelerators for texts will also apply to binaries (and vice versa). Usefully, texts and indices can be logically reversed. 
+Text is represented by a list-like structure of unicode codepoints, with a short blacklist: C0 (except LF), DEL, C1, surrogates (U+D800-U+DFFF), and the replacement character (U+FFFD). I'm precisely matching the constraints for text data in the AO dictionary. 
 
-*NOTE:* Texts in Wikilon runtimes will be constrained exactly the same way they are in the AO dictionaries: valid UTF-8, forbidding C0 (except LF), DEL, C1, surrogates, and the replacement character. If we try to convert a list to text
+The `{&text}` annotation tries to compact valid text data one large UTF-8 array. If the text is not valid, this fails. The `{&text~}` annotation does the same but encodes the UTF-8 as a chunked list. In addition to our raw text, we need indices for fast slicing, indexing, length.
+
+A proposed representation for text is:
+
+        (text, utf8, index1, index2)
+
+            utf8 is ptr to binary array
+
+            index1: encoding (c, b) pairs
+                skip forward c characters by skipping b bytes
+                small values of c,b : range 1..256
+                invariant: b/4 ≤ c ≤ b
+
+            index2: encoding (c, b, i) triples
+                skip forward c characters by skipping b bytes
+                also skips forward i pairs in index1
+                large values of c,b: range 1..65536
+                small values of i: 1..256
+                invariant: b/4 ≤ c ≤ b
+
+Texts don't have array semantics. Updates to a character may require inserting or removing bytes from the utf-8 representation. The index is limited to a linear factor: this two-layer index allows us to index and slice texts up to 10000 times faster than scanning it character by character. The index has an asymptotic overhead of only 0.8%.
+
+This should be sufficient in practice, e.g. for texts up to twenty megabytes. I would strongly recommend developers model finger-tree ropes and leverage stowage long before reaching that limit.
+
+Conveniently, appending texts can be modeled by appending each array. Logical reversal requires special attention: we reverse each array, but when reading from a reversed 'utf8 binary' we must parse our utf8 binary backwards. We could just make a parser that doesn't care about direction.
 
 ### Large Value Stowage
 
 *Aside:* We can inject refcts for stowed objects as we reconstruct them. This is easy because we know our affine and relevant properties for the stowed values holistically. We can easily compute this information more precisely during reconstruction.
+
+### Pending Computations
+
+### Sealed Values
+
+### Blocks, Fixpoints, Compiled Code
+
+### Big Integers
 
 ### External Resources
 
@@ -222,13 +254,14 @@ These are low priority so I'm not going to bother with external resources beyond
 * scientific computing on very large data sets
 * graphics processing with meshes and textures
 
-In such cases we might wish to surpass a limited 4GB arena, or at least reduce memory pressure. External resources are simplest in context of *binaries*, or other arrays of fixed-width objects. We can transparently leverage list-processing accelerators for indexing, slicing, and updates. We can support both shared, read-only resources and owned, read-write resources. We can atomically take ownership if possible otherwise copy-on-write.
+In such cases we might wish to surpass our limited 4GB arena, or reduce memory pressure. External resources are both simplest and most useful in context of *binaries*, or other arrays of fixed-width objects. We can transparently leverage list-processing accelerators for indexing, slicing, and updates. In terms of representation, external binaries could be modeled as a new tagged buffer type within an array. We'll need to consider external sharing and ownership issues. 
 
-In terms of representation, external binaries could be modeled as arrays of yet another type.
+Texts probably don't need the same high performance treatment as scientific data and graphics processing, but we could externalize them. For ad-hoc ABC values, stowage is the better option: we really need accelerators, cheap copies, and predictable sizes to leverage external storage. 
 
-All candidates for external representation are accelerated models. External data resources are wasted without accelerators. If we cannot access and update the data without all the intermittent dataplumbing, we might as well use normal stowage. Texts probably don't need the same high performance treatment as scientific data and graphics processing, but we could externalize them.
+All candidates for external representation are accelerated models. External data resources are wasted without accelerators. If we cannot access and update the data without all the intermittent dataplumbing, we might as well use normal stowage. 
 
 If we externalize code resources, we'll keep a local copy of the stack of quoted data. This essentially becomes a specialized block representation, keeping the interpreted code and/or compiled native code in a separate arena.
+
 
 ## Par/Seq Parallelism
 
