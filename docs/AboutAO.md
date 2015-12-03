@@ -83,10 +83,10 @@ Words are constrained to be friendly in context of URLs, English text delimiters
 Summary of constraints:
 
 * words are limited to:
- * ASCII if alphabetical, numeral, or in -._~!$'*+:@
+ * ASCII if alphabetical, numeral, or in -._~!$'*+:
  * other UTF-8 except for C1, surrogates, replacement char
  * must not start with a digit or +-. followed by a digit
- * must not end with a . (dot or period)
+ * must not terminate with a . or : (period or colon)
  * no empty words or enormous words. 1..64 bytes UTF-8.
 * tokens are limited to:
  * word dependencies (`{%dupd}{%swap}`)

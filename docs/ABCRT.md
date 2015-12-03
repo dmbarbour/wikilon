@@ -3,20 +3,46 @@
 
 As per [my performance strategy](Performance.md), I'm developing a C runtime: a good interpreter, with a little extra room for JIT compilations. The following is a sketch of the runtime I'm designing. 
 
+## Design Goals
+
+Performance is the primary goal. But some others:
+
+* suspend, checkpoint, persist, reload, resume, copy computations
+* easy to resize, reflect, render, compact suspended computations
+* monadic effects: return control of program environment to caller
+* easily integrate monadic effects with [claw command sequences](CommandSequences.md)
+* on errors or unrecognized tokens, suspend and return to caller
+* precise memory control: model machine's memory in one arena
+* real-time capable: predictable timing and garbage collection
+* no callbacks or handlers, no external dependencies for progress
+
+Also, it might be useful to support a second evaluation mode for type inference.
+
+## External Utilities
+
+I'll actually include a copy of these directly, no shared libs.
+
+* LMDB - embedded key value database
+* ZSTD - real-time, streaming compression
+* Murmur3 - fast, collision-resistant hash 
+
 ## Environment, Contexts, Memory Layout
 
 A toplevel *environment* will track: 
 
 * LMDB integration for stowage
-* A pool of worker threads for sparks.
-* A semaphore for worker threads
-* A set of active contexts
+* A set of computation contexts
+* A pool of worker threads for sparks
+* All necessary semaphores and mutexes
 
-This allows multiple contexts to interact with the same LMDB environment and share labor for parallel sparks.
+This allows multiple contexts to interact with the same LMDB environment and share labor for parallel sparks. Using the same LMDB environment is critical. It isn't safe to open a database more than once. Sharing worker threads is a bit more questionable, but it makes sense: our physical machine only has a limited number of CPUs, and I can model my own time sharing.
+
+Computation in 
+
 
 A *context* additionally will track:
 
-* A memory region for a computation
+* A memory region for all computations
 * A set of thread contexts and nurseries
 * A set of waiting parallel threads
 * A set of objects proposed for stowage
@@ -155,7 +181,9 @@ With 12 tags we can discriminate up to 4096 items. This is more than a human can
 
 ### Arrays and Chunked Lists
 
-An array is an optimized representation for a list-like structure `λa.λb.μL.((a*L)+b)`. 
+An array is an optimized representation for any list structure of form:
+
+        List a b = (a * (List a b)) + b 
 
 Compared to a list, arrays reduce memory overhead by half and ensure very tight memory locality. But the primary benefit regards how easily common list functions can be accelerated when applied to an array: O(1) length, O(1) indexed lookups and updates, O(1) logical reversal, O(1) split and seamless append, and so on. 
 
@@ -172,7 +200,7 @@ The proposed representation for arrays is:
                   e.g. refct for sharing
             pnext → whatever follows
 
-This tagged object actually represents an `(a * List a)` pair. We'll further wrap it with another cell for the `inL` sum type. Together with this sum tag, the overhead for an array is 6 words. Lists require two word per item, so we break even on storage costs when encoding 6 items.
+This tagged object actually represents an `(a * List a b)` pair. We'll further wrap it with another cell for the `inL` sum type. Together with this sum tag, the overhead for an array is 6 words. Lists require two word per item, so we break even on storage costs when encoding 6 items.
 
 Annotation `{&array}` asserts the argument is a list of values and compacts this list into an array with a single contiguous buffer with `pnext` pointing to the terminal value (usually `unit inR` for a plain list). If allocation fails (e.g. due to memory fragmentation), or if the argument is not a valid representation of a list, computation will halt. The weaker `{&array~}` (read: array handwave) allows our runtime to make heuristic chunking decisions, encoding a chunked list in `pnext`. Chunked lists are a high performance data structure, sufficient for many applications of arrays.
 
@@ -225,9 +253,11 @@ We reverse *onto* a value, and simultaneously we expose the terminating value. R
 
 We can specialize for a list of bytes. A 'byte' is simply an integer in the range 0..255. 
 
-        (binary, size & offset, pbuff, pnext)
+        (binary, size+offset, pbuff, pnext)
 
 The annotation `{&binary}` is taken as an assertion of both binary type and desired representation. If an argument is not a valid binary, this assertion will fail (statically or dynamically). The weaker `{&binary~}` allows the runtime to use a chunked list representation, selecting a chunk size heuristically (e.g. favoring blocks of 32kB).
+
+I'd like to support other arrays of fixed-width structure, e.g. if I can get some sort of template like `(i32 * (f32 * u64))`, then I could allocate two cells at a time and properly represent them on load. I'll need to think about this later.
 
 #### Texts
 
@@ -288,9 +318,13 @@ These are low priority so I'm not going to bother with external resources beyond
 * scientific computing on very large data sets
 * graphics processing with meshes and textures
 
-In these cases, and likely others, we will wish to surpass our limited 4GB arena or at least reduce pressure memory and copying for very large objects. External resources will continue to model *pure values*. However, as with arrays, we can update in place if we know there is no sharing and we have appropriate accelerators.
+In these cases, and likely others, we will wish to surpass our limited 4GB arena or at least reduce pressure memory and copying for very large objects. External resources will continue to model pure values. However, as with arrays, we can update in place when we know there is no sharing and we have appropriate accelerators.
 
-Accelerators and accelerated data models, such as arrays, are essential for external resources. They allow us to perform deep observations, transforms, and updates without picking a structure apart. Consequently, external resources aren't great for ad-hoc data structures, but may prove especially convenient in cases like *arrays*
+Accelerators and accelerated data models, such as arrays, are essential for external resources. These allow us to perform deep observations, transforms, and updates without picking a structure apart. Consequently, external resources aren't great for ad-hoc data structures. Arrays, especially of fixed-width data (binaries, for example), are the more tempting targets.
+
+To support suspension, checkpointing, persistence, and resumption of computations, it is necessary that any representation of external resources include a description on how to recover access to it. Some form of specialized stowage might work for this concern. Use of external files is also feasible, though may be more problematic: when we return to an earlier checkpoint, we should have access to the earlier representation despite any potential updates.
+
+, but may prove especially convenient for binary arrays
 
 
  to perform any meaningful observations or updates. Accelerators allow us to perform 

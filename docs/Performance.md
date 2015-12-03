@@ -102,7 +102,7 @@ In context of a dictionary application, every form of parallelism could kick in 
 
 ## Lazy Computation?
 
-Laziness involves construction of a suspended computation, a pending result, one that doesn't need to be completed immediately. It seems feasible to model this as a special case for value stowage and/or cached computations. My main resistance to lazy computations is that they hinder structure sharing. But we could possibly stow a lazy continuation when we get started, then cache the computed result. 
+Laziness involves construction of a suspended computation, a pending result, one that doesn't need to be completed immediately. It seems feasible to model this as a special case for value stowage and/or cached computations. My main resistance to lazy computations is that they hinder structure sharing. But we could possibly stow a lazy continuation when we get started, then cache the computed result. (Maybe use the same stowage id, with a different tag?)
 
 Laziness+Parallelism might indicate 'background' computations that Wikilon should try to run for a while.
 

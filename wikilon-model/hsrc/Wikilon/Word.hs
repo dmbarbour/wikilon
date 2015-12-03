@@ -77,7 +77,6 @@ isValidWordChar c = okASCII || okUnicode where
     badUnicode = isReplacementChar || isSurrogateCodepoint
     isReplacementChar = (n == 0xfffd)
     isSurrogateCodepoint = (0xd800 <= n) && (n <= 0xdfff)
-{-# INLINE isValidWordChar #-}
 
 isValidWord :: Word -> Bool
 isValidWord (Word w) = okSize && okStart && okEnd && okMiddle where
