@@ -64,7 +64,7 @@ wcArray :: UA.UArray Word8 Bool
 wcArray = UA.accumArray (flip const) False (0,127) lst where
     toE c = (fromIntegral (ord c), True)
     lst = fmap toE okChars
-    okChars = alpha ++ num ++ "-._~!$'*+:@"
+    okChars = alpha ++ num ++ "-._~!$'*+:"
     alpha = ['a'..'z']++['A'..'Z']
     num = ['0'..'9']
 {-# NOINLINE wcArray #-}
@@ -87,7 +87,8 @@ isValidWord (Word w) = okSize && okStart && okEnd && okMiddle where
         Just (c, w') | _isDigit c -> False
                      | not (_isPMD c) -> True
                      | otherwise -> maybe True (not . _isDigit . fst) (UTF8.uncons w')
-    okEnd = fromIntegral (ord '.') /= BS.last w
+    okEnd = not . badEnd . fromIntegral $ BS.last w where
+        badEnd n = (n == ord '.') || (n == ord ':')
     okMiddle = L.all isValidWordChar (UTF8.toString w)
 
 -- | maximum size for a word, in bytes
@@ -103,10 +104,10 @@ _isDigit c = ('0' <= c) && (c <= '9')
 -- | heuristic constraints on words, written for humans
 listWordConstraintsForHumans :: [String]
 listWordConstraintsForHumans =
-    ["ASCII if alphabetical, numeral, or in -._~!$'*+:@"
+    ["ASCII if alphabetical, numeral, or in -._~!$'*+:"
     ,"UTF8 except C1, surrogates, and replacement char"
     ,"must not start with digit or +-. followed by digit"
-    ,"must not terminate with a . (dot or period)"
+    ,"must not terminate with . or : (period or colon)"
     ,"UTF8 encoding of word between 1 and " ++ show wordSizeMax ++ " bytes"
     ]
 
