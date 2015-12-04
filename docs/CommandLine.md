@@ -14,10 +14,6 @@ Desirable features for a command line interface:
 
 Command Language for Awelon (claw) is a syntactic sugar and editable view for AO. Claw semantics is a trivial expansion into AO bytecode, and this expansion is reversible, such that we may view and edit AO bytecode as claw code. 
 
-Claw is simple, flexible, and highly extensible. While designed primarily for command line interfaces, extensions have the potential to make Claw suitable for many other environments including visual programming (cf. *Visual Claw* below) and more conventional block structured programming (cf. *Block Structured Programming* below). 
-
-*Aside:* My mental image of an Awelon mascot is an owl. I was thinking of an owl's claws when I named this. But it strikes me now that this also serves as a weak allusion to concatenative programming languages Cat and Kitten. :)
-
 ## Claw Code
 
 General points to help guide the design:
@@ -134,7 +130,7 @@ My current approach to namespaces involves use of a `#` prefix to set a namespac
 
 Claw uses namespace attributes to guide rendering and expansion. Some words cannot be expressed in a given namespace. For example, under `#foo:` the word `bar` cannot be expressed because it lacks a `foo:` prefix, and `foo:9` cannot be expressed because `9` doesn't parse as a valid word. In these cases, the claw view is forced to use the token expansion, e.g. `\{%bar}` or `\{%foo:9}`. 
 
-A namespace attribute within a block is limited to the remaining scope of that block.
+A namespace attribute within a block is limited to the remaining scope of that block. In case of command sequences, namespaces also impact the commas. So developers will need to be aware of this.
 
 There is a proposal for *Qualified Namespaces* that I'm still contemplating.
 
@@ -164,9 +160,21 @@ By editing of canvases, graphs, tables we gain the ability to work with reasonab
 
 Between embedding and a model for graphs, it should be feasible to represent box-and-wire programming environments. Embedding also provides a simple basis for 'connected' views, e.g. where manipulating a slider in one form will manipulate it elsewhere. There are a lot of interesting possibilities here.
 
-Developing a Visual Claw oriented around modern HTML seems very promising. I need to hammer out a bunch of details, though.
+Visual Claw can hide content, e.g. via the `<input type="hidden" ...>` attribute in forms and similar techniques. While I dislike the idea of hiding runtime semantic content, we can benefit from hiding layout attributes. We can also use progressive disclosure techniques, e.g. the ability to drill down into tree-structured data or specify (in hidden attributes) which subtrees are initially visible. 
 
-*Aside:* Visual Claw can feasibly support *hidden* content, including layout attributes and content that is hidden or collapsed by default. This isn't something we can do in a purely textual view. 
+Developing a Visual Claw dialect targeting HTML seems immediately promising and highly feasible. I need to hammer out a bunch of details, though. Also, I'll need to improve performance of my Claw parsers, eventually, to work with the larger visual documents.
+
+### Block Structured Plain Text?
+
+Most programming languages are designed to use block-structured plain text, oriented vertically on a page or screen, as the primary development interface. This style of programming would enable Awelon project to take better advantage of existing tools, and would improve familiarity for potential users.
+
+Claw could be extended to support block structured plain text programming. Most likely, I'd need to introduce the conventional set of mixfix keywords (such as `if then else` and `while do`). As a *view*, adding keywords to Claw isn't difficult. For example, if we suddenly add `while` as a keyword, existing uses of that word would render `\{%while}` to indicate the AO word. There is no risk of breaking code.
+
+However, keywords interfere with factoring and abstraction. We cannot simply take the program fragment `if [cond]` and factor it into a separate word because that `if` is supposedly part of a larger `if_then_else_`. We cannot easily abstract computation of the `[cond]` function. Users would be unable to define new keywords in a first class manner. These properties contradict my long term Awelon project goals. I'm hesitant to pursue a syntax for block structured programming based on keywords.
+
+Further, Visual Claw fulfills half the role effectively and extensibly. For example, `[cond] [body] while_do_` could be rendered appropriately in a block-structured style via a few generic heuristics regard words with underscores (two underscores → captures two Claw elements). No keywords are necessary. The ability to hide a little layout metadata from a user's view, together with a little CSS, can go a long way.
+
+I am more interested in pursuing Visual Claw for now. But if working easily with existing tools in a more familiar syntax proves critical - perhaps through Filesystem in Userspace or Callback File System - it shouldn't take long to develop a set of keywords and an appropriate Claw dialect. (The flexibility of view-based syntax is wonderful.)
 
 ### Named Variables and Lexical Closures
 
@@ -188,13 +196,13 @@ Fortunately, named variables for otherwise tacit concatenative languages are not
             -> x y z { x square y square add y abs sub }
             { -> x y z; x square y square add y abs sub }
 
-I find Factor's syntax difficult to read when layered, e.g. `[| a b | a [| c | c b +] map ]`. Kitten's syntax appeals to me.
+I find Factor's syntax difficult to read when layered, e.g. `[| a b | a [| c | c b +] map ]`.
 
-Factor and Kitten support *lexical closures*. When a name is used within an internal block, it is bound to the value in scope at the time of binding. In Claw, lexical closures would be necessary to use variable names across commands in a sequence. 
+Both Factor and Kitten support *lexical closures*. When a name is used within an internal block, it is bound to the value in scope at the time of binding. Lexical scoping and closure is very convenient for higher order programming. In Claw, lexical closures would be essential for use of variable names across commands in a sequence.
 
-I have yet to develop a reversible desugaring that supports lexical closures. 
+Kitten's locals are a built-in feature. In Factor, the local variables are a syntactic sugar. However, Factor's desugared representation is not reversible. I have yet to develop a simple, reversible desugaring that supports lexical closures. 
 
-Ignoring scope and closures, we could feasibly desugar to:
+Ignoring scope and closure, we could feasibly desugar to:
 
         "z" assign "y" assign "x" assign
         "y" deref square
@@ -203,7 +211,7 @@ Ignoring scope and closures, we could feasibly desugar to:
 
 With appropriate definitions for assign, deref, and scoped, the above program should behave as we expect. We could implement this with a stack of association lists. A compiler, perhaps aided by annotation, should be able to eliminate the runtime overhead of this explicit data plumbing (or at least inform you otherwise). 
 
-But this half baked solution isn't acceptable. I'll return to this issue later.
+But this half baked solution isn't acceptable. Until I have some better ideas, syntactic support for named variables will need to wait.
 
 *Note:* AO introduces a potential complicating concern for named variables: we have *substructural types*, values that cannot be copied or cannot be dropped. For these, we effectively need 'move' semantics instead of 'copy' semantics. It seems feasible, however, for Claw syntax to simply optimize the last use of a named variable to a 'move'. 
 

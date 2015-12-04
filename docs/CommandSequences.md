@@ -116,7 +116,7 @@ AO doesn't do infix notation. However, a claw view can support infix notations w
         [foo, bar, baz, qux] desugars to:
         [foo \[bar \[baz \[qux] seq] seq] seq]
 
-This is a right-associative binding. The continuation is hidden until just before we return. The continuation could easily be shoved into the program environment or returned to our interpreter. Parsing it does require reversing each block at some point, but we're likely to do that anyway.
+This is a right-associative binding. The continuation is hidden until just before we return. The continuation could easily be shoved into the program environment or returned to our interpreter. It isn't difficult to recognize that a block ends with `\[...] seq]`, so the desugaring is reversible in a straightforward way.
 
 ### Reviewing Use Case: Data Sequences
 
