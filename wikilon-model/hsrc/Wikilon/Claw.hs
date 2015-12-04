@@ -561,11 +561,9 @@ charToEscPrim c =
 -- Each line is `LF SP (line of text)`. `LF LF` is treated as `LF SP LF`.
 -- In a correctly encoded text, the following character is `~`.
 --
--- If available, we eliminate an empty line from the start and end of
--- our texts. This allows some vertical space as padding, which I find
--- easier to parse in most cases. (And I don't believe most texts will
--- legitimately be padded with empty lines, so no need to optimize for
--- that use case.) 
+-- If available, we eliminate one empty line each from the start and end
+-- of our texts. This allows some vertical space as padding, which I find
+-- easier to read for large texts. 
 --
 -- I'll ignore spaces following `\"`. 
 -- I'll accept `\"~` as a simple empty text.
