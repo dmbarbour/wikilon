@@ -55,6 +55,8 @@ We could dedicate a page to context within the memory region itself, e.g. the fr
 
 For "effects" integration, I'll favor monadic programming with RESTful interactions: mailboxes or queues for eventful updates, pubsub arenas for watching external data, etc.. similar to how I model this stuff internally within dictionary applications. 
 
+I'm leaning towards a dynamic set of nurseries. We could grow the nursery set and the heap from opposite sides of our arenas. We could also have larger vs. smaller nurseries, for example, within a single context. We could support annotation `{&mem:use_large_nursery}`.
+
 There will be no callbacks. 
 
 ## Addressing, Pointer Layout, and Size Limits
@@ -119,7 +121,7 @@ Further, we can count how many cells were carried from the prior generation, and
 
 ### Free List Algorithms
 
-I don't have any special ideas here. To avoid synchronization, I may track a per-thread free list, rather than using the shared context list for everything. But even this isn't a very special idea. :)
+I don't have any special ideas here. To avoid synchronization, I may track a per-thread free list, rather than using the shared context list for everything. I'm wondering whether I should use a weighted or Fibonacci buddy system.
 
 ## Tagged Objects
 
@@ -169,7 +171,7 @@ During copy-collection, we must replace reference count objects with forwarding 
 Sum objects will be represented by a single cell. 
 
         (sum, object)
-            low bits: eight zeroes. flags our sum object.
+            low bits: eight bits to flag our sum object.
             sum data: sequence of `10` for inL or `01` for inR
                       read from low to high. I.e. inLR is 0110
                       all zeroes at the top. 
@@ -181,11 +183,9 @@ With 12 tags we can discriminate up to 4096 items. This is more than a human can
 
 ### Arrays and Chunked Lists
 
-An array is an optimized representation for any list structure of form:
+An array is an optimized representation for any structure of form: `μL.((a*L)+b)`. This includes normal lists, but also heterogeneous lists, and lists that do not terminate with unit. 
 
-        List a b = (a * (List a b)) + b 
-
-Compared to a list, arrays reduce memory overhead by half and ensure very tight memory locality. But the primary benefit regards how easily common list functions can be accelerated when applied to an array: O(1) length, O(1) indexed lookups and updates, O(1) logical reversal, O(1) split and seamless append, and so on. 
+Compared to a list, arrays reduce memory overhead by half and ensure tight memory locality. But the primary benefit regards how easily common list functions can be accelerated when applied to an array: O(1) length, O(1) indexed lookups and updates, O(1) logical reversal, O(1) split and seamless append, and so on. 
 
 The proposed representation for arrays is:
                 
@@ -263,11 +263,18 @@ I'd like to support other arrays of fixed-width structure, e.g. if I can get som
 
 Text is represented by a list-like structure of unicode codepoints, with a short blacklist: C0 (except LF), DEL, C1, surrogates (U+D800-U+DFFF), and the replacement character (U+FFFD). I'm precisely matching the constraints for text data in the AO dictionary. 
 
-The `{&text}` annotation tries to compact valid text data one large UTF-8 array. If the text is not valid, this fails. The `{&text~}` annotation does the same but encodes the UTF-8 as a chunked list. In addition to our raw text, we need indices for fast slicing, indexing, length.
+The `{&text}` annotation tries to compact valid text data one large UTF-8 array. If the text is not valid, this fails. The `{&text~}` annotation does the same but encodes the UTF-8 as a chunked list. 
 
-A proposed representation for text is:
+A basic proposed representation for most text is:
 
-        (text, utf8, index1, index2)
+        (text, utf8)
+            utf8 is pointer to binary array
+
+Due to the variable size of characters, texts don't have array semantics. Computing length requires scanning and counting characters. Updates require shrinking or expanding the utf8 representation. Further, in most cases, we don't actually want array semantics. We'll mostly be splitting texts based on *content* (e.g. comma separated values or line terminals) not *character count*. 
+
+But we could improve character counting performance with an index:
+
+        (text+index, utf8, index1, index2)
 
             utf8 is ptr to binary array
 
@@ -281,35 +288,55 @@ A proposed representation for text is:
                 large values of c,b: range 1..65536
                 small values of i: 1..256
 
-Texts don't have array semantics. Updates to a character may require inserting or removing bytes from the utf-8 representation. The index is limited to a linear factor: this two-layer index allows us to index and slice texts up to 10000 times faster than scanning it character by character. The index has an asymptotic overhead of 0.8%.
+These indices could be installed heuristically based on text size or need. The asymptotic overhead for the index is less than 0.8%. For texts of 4kB, the overhead is closer to 2.6%. The first layer index lets us scan, slice, and lookup on index 100x faster. The second layer bumps us up to 10000x - still O(N), but a nicer coefficient. These indices would support slicing texts of up to about 20MB. Though I would recommend finger-tree ropes and stowage long before reaching that point.
 
-This should be sufficient in practice, e.g. for texts up to twenty megabytes. I would strongly recommend developers model finger-tree ropes and leverage stowage long before reaching that limit.
-
-Conveniently, appending texts can be modeled trivially by appending each array. Logical reversal requires special attention: we reverse each array, but when reading from a reversed 'utf8 binary' we must parse our utf8 binary backwards. (Or write a UTF-8 parser that works in both directions.)
+Conveniently, appending texts can be modeled by appending each array. Logical reversal requires special attention: we reverse each array, but we'll also need the ability to read reversed utf8. (It's probably easiest to do this transparently in our utf8 reader.)
 
 ### Large Value Stowage
 
-I will use 64-bit identifiers for stowed values. This includes space for tag bits for information that may be useful prior to loading the data: substructural attributes, maybe a rough size estimate, possible support for external binaries (see external resources, below). Addresses are not reused once allocated. Structure sharing will be supported via a hash-based reverse lookup.
+We'll use 62-bit identifiers for stowed values. Addresses are allocated once and never reused. This is convenient from a security and caching perspective: we can securely share stowed data with external systems via simple HMAC. And there are no worries about running out. Allocating 2^62 addresses at the best throughput LMDB can manage today would take almost a million years.
 
-Major aspects for stowage: getting a value in, getting a value back out, and possible cache and GC interactions.
+The reason for 62-bit identifiers is that we can use the remaining two bits for substructural attributes: affine, relevant. This allows us to cheaply validate simple copy/drop data plumbing without connecting to the database. It also corresponds nicely to ABC resources where we might use `{#resourceId'kf}` to indicate the identifier constructs a linear value. 
 
+Developers may represent intention to stow any value by simple annotation, `{&stow}`. 
 
+This results in a simple object in memory: `(stow, target)`. No action is performed immediately. Many stowage requests will be transient, e.g. when applying a stream of updates to a trie represented in our database. So we'll provide ample opportunity for transient requests to be destroyed. Any subsequent access to the target will delete the stow request. Eventually, our `(stow, target)` object is moved from the nursery into the heap. 
 
-*Aside:* We can inject refcts for stowed objects as we reconstruct them. This is easy because we know our affine and relevant properties for the stowed values holistically. We can easily compute this information more precisely during reconstruction.
+At that point, we'll construct a pending stowage object. We cannot perform compression and compaction, unfortunately, because our target may refer to other stowed objects in pending state that still lack an address. A pending stow is still transient, but a background thread may decide to stow it at any time. Hopefully, we can batch a lot of writes.
+
+After stowage succeeds, the target data is cleared from memory. I'm not going to bother with caching content in memory, instead focus on fast loading of data on demand. (The owner-based purity I'm favoring doesn't benefit as much from caching anyway, and we effectively have caching via LMDB.) We'll have a simple stowage identifier. Whatever bindings we need to integrate LMDB's GC so we don't delete data that is rooted in memory. Fortunately, our writer knows that nobody is resurrecting old addresses because our writer assigns all addresses.
+
+If stowage fails (e.g. because there isn't enough space) we could 
+
+We might heuristically refuse to stow smaller fragments, such that we implicitly 'flatten' narrow, tree-structured data. It could be useful to focus stowage on larger chunks, e.g. kilobytes of data.
 
 ### Pending Computations
 
-For par-seq parallelism. Maybe laziness, though I'm not sure there.
+Threads themselves will need to be modeled. In terms of data, we at least have an argument and a continuation. Active computations will have a nursery. We'll need to track computations that are *suspended* because they're waiting for this one. We'll probably want to track all other computations created by this one, hierarchically.
+
+A pending computation will have a reference count. When we *copy* or *drop* a pending computation, we'll track this assumption rather than immediately suspend on it.
 
 ### Sealed Values
 
+We'll only support discretionary sealing. Sealed values are thus straightforward: 
+
+        (sealed, target, symbol...)
+
+We'll probably just use a (size,utf8) for our symbol. We know from AO constraints that our symbol encoding is no more than 63 bytes UTF-8. For sealers of up to 7 bytes, we can use just two cells. Developers can leverage this effectively.
+
 ### Blocks, Fixpoints, Compiled Code
+
+A good representation for blocks is critical. Blocks are copied very frequently, and we process them incrementally, and we'll need to integrate them easily with LLVM compiled code.
+
+TODO: figure this out.
 
 ### Numbers other than Small Integers
 
-ABC is required to support arbitrary precision integers. Additionally, we might want to try to model fixed-width types (via accelerators). And possible support for unboxed arrays.
+ABC is required to support arbitrary precision integers. I would like to use a simple representation in this case. I'd also like to squeeze some extra data into our type tag.
 
+I'm currently thinking we might use something like a var-nat representation, albeit in reverse (little-endian). We can probably squeeze 24-28 bits of data and the sign bit into our tag, such that many 'large' numbers can still be represented in just one cell. We could use 64-bit arithmetic, easily enough.
 
+Eventually, I would like to support fixed-width numbers via accelerators: modulo arithmetic, models of floating point, etc..
 
 ### External Resources
 
@@ -320,24 +347,9 @@ These are low priority so I'm not going to bother with external resources beyond
 
 In these cases, and likely others, we will wish to surpass our limited 4GB arena or at least reduce pressure memory and copying for very large objects. External resources will continue to model pure values. However, as with arrays, we can update in place when we know there is no sharing and we have appropriate accelerators.
 
-Accelerators and accelerated data models, such as arrays, are essential for external resources. These allow us to perform deep observations, transforms, and updates without picking a structure apart. Consequently, external resources aren't great for ad-hoc data structures. Arrays, especially of fixed-width data (binaries, for example), are the more tempting targets.
+Accelerators and accelerated data models, such as arrays, are essential for external resources. These allow us to perform deep observations, transforms, and updates without picking a structure apart. Consequently, external resources aren't great for ad-hoc data structures. Arrays, especially of fixed-width data (binaries, for example), are the more tempting targets. Texts probably don't need the same high performance treatment as scientific data and graphics processing.
 
-To support suspension, checkpointing, persistence, and resumption of computations, it is necessary that any representation of external resources include a description on how to recover access to it. Some form of specialized stowage might work for this concern. Use of external files is also feasible, though may be more problematic: when we return to an earlier checkpoint, we should have access to the earlier representation despite any potential updates.
-
-, but may prove especially convenient for binary arrays
-
-
- to perform any meaningful observations or updates. Accelerators allow us to perform 
-
-External resources are perhaps simplest in context of *binaries*, or other arrays of fixed-width objects. We can immediately leverage list-processing accelerators for indexing, slicing, and updates. The representation for the external resource could be an alternative `pbuff` type (via tagged object). 
-
-
-Texts probably don't need the same high performance treatment as scientific data and graphics processing, but we could externalize them. For ad-hoc ABC values, stowage is the better option: we really need accelerators, cheap copies, and predictable sizes to leverage external storage. 
-
-All candidates for external representation are accelerated models. External data resources are wasted without accelerators. If we cannot access and update the data without all the intermittent dataplumbing, we might as well use normal stowage. 
-
-If we externalize code resources, we'll keep a local copy of the stack of quoted data. This essentially becomes a specialized block representation, keeping the interpreted code and/or compiled native code in a separate arena.
-
+To support suspension, checkpointing, persistence, and resumption of computations, it is necessary that any representation of external resources include a description on how to recover access to it. Some form of specialized stowage might work for this concern. Use of external files is also feasible, though only for read-only content.
 
 ## Par/Seq Parallelism
 
