@@ -23,7 +23,7 @@
 --      "foo"       \\"foo
 --                  ~ literal
 --      [foo]       \\[foo] block
---      [foo,bar,baz]   \\[foo] \\[bar] \\[baz] bseq bseq block
+--      \\[foo,bar,baz]  \\[foo \\[bar \\[baz] seq] seq]
 -- 
 -- Claw is easily extensible by adding new expansion rules. Wikilon
 -- will simply hard-code a particular set of extensions or features
@@ -94,19 +94,20 @@ newtype ClawCode = ClawCode { clawOps :: [ClawOp] }
 -- A namespace #foo: expands to `[{&_foo:_}]%`.
 type Namespace = UTF8.ByteString
 
+-- | Representation for a single Claw operation.
 data ClawOp 
     = NS !Namespace     -- #bar:
     | CW !Word          -- mul inc
     | T0 !Text          -- escaped text
     | K0 !Token         -- escaped token
     | P0 !PrimOp        -- escaped ABC ops
-    | B0 !ClawCmdSeq    -- escaped block sequence
+    | B0 !ClawCmdSeq    -- escaped block 
     | NI !ClawInt       -- integer
     | NR !ClawRatio     -- ratio
     | ND !ClawDecimal   -- decimal
     | NE !ClawExp10     -- exponential
     | TL !ABC.Text      -- text literal
-    | BC !ClawCmdSeq    -- block sequence
+    | BC !ClawCmdSeq    -- block
     | AT ![Attrib]      -- attributes list 
     deriving (Ord, Eq)
 
@@ -125,12 +126,12 @@ instance Show ClawExp10 where
 
 -- TODO: maybe develop a fast Claw parse from a raw 'AODef' bytestring?
 
-wLiteral, wBlock, wBSeq :: Word
+wLiteral, wBlock, wSeq :: Word
 wInteger, wRatio, wDecimal, wExp10 :: Word
 
 wLiteral = "lit"
 wBlock = "block"
-wBSeq  = "bseq"
+wSeq  = "seq"
 wInteger = "int"
 wRatio = "ratio"
 wDecimal = "decimal"
@@ -168,11 +169,8 @@ opToABC ns (CW (Word w)) = oneOp . ABC_Tok $ wordTok where
 opToABC _ (P0 op) = oneOp $ ABC_Prim op
 opToABC _ (T0 txt) = oneOp $ ABC_Text txt
 opToABC _ (K0 tok) = oneOp $ ABC_Tok tok
-
--- blocks and command sequences
-opToABC ns (B0 [b]) = oneOp $ ABC_Block $ clawToABC' ns b
-opToABC ns (B0 (b:bs)) = expand ns [B0 [b], B0 bs, CW wBSeq]
-opToABC _ (B0 []) = assert False mempty
+opToABC ns (B0 bs) = oneOp $ ABC_Block abc where
+    abc = clawToABC' ns (compactSeq bs) 
 
 -- expansions
 opToABC ns (NI i) = expand ns (escInt ++ [CW wInteger]) where
@@ -189,6 +187,12 @@ atToABC :: [Attrib] -> ABC
 atToABC lWords = ABC [attrBlock, ABC_Prim ABC_drop] where 
     lToks = fmap (Token . mappend "&" . unWord) lWords
     attrBlock = ABC_Block $ ABC $ fmap ABC_Tok lToks 
+
+-- | Translate a sequence back to a single command.
+compactSeq :: ClawCmdSeq -> ClawCode
+compactSeq [cc] = cc
+compactSeq (c0:cs) = c0 <> ClawCode [B0 cs, CW wSeq]
+compactSeq [] = assert False mempty
 
 -- | Parse Claw structure from bytecode.
 clawFromABC :: ABC -> ClawCode
@@ -231,7 +235,7 @@ abcWS _ = False
 
 -- | recognize basic claw operations and handle namespace context.
 -- This will also filter all ABC_SP and ABC_LF elements from the
--- input (which simplifies further processing)
+-- input to simplify processing and automate formatting.
 escABC :: Namespace -> [ABC.Op] -> [ClawOp]
 escABC ns (ABC_Tok tok : ops) 
   | Just w <- escWord ns tok = CW w : escABC ns ops
@@ -245,12 +249,12 @@ escABC ns (ABC_Block b : ABC_Prim ABC_drop : ops)
     = case escNS lst of
         Just ns' -> NS ns' : escABC ns' ops
         Nothing -> AT lst : escABC ns ops
-escABC ns (ABC_Block abc : ops) = B0 [c] : escABC ns ops where
-    c = ClawCode $ escABC ns (ABC.abcOps abc)
+escABC ns (ABC_Block abc : ops) = B0 [cc] : escABC ns ops where
+    cc = ClawCode $ escABC ns (ABC.abcOps abc)
 escABC _ [] = []
 
--- | check a block in a list of  seeing if block is maybe a list of annotations in
--- a context where it might need to be a list of attributes.
+-- | Extract annotations from a block consisting only of the
+-- annotations. Assume context where block is immediately dropped.
 escAttribs :: [ABC.Op] -> Maybe [Attrib]
 escAttribs = go [] where
     go r (ABC_Tok (aw -> Just w) : ops) = go (w:r) ops
@@ -265,19 +269,23 @@ escAttribs = go [] where
 -- | collapse structured values from lower level claw code.
 --
 -- Targets:
---  full blocks
---  texts
+--  blocks & cmd sequences.
+--  inline literals
 --  integers
---  ratios
+--  ratios 
 --  decimals
---  exponential notation (base 10, anyway)
+--  exponential notation (base 10)
 --
 -- At the moment, this is not a streaming reducer but rather a
 -- zipper-based implementation. 
 --
 reduceClaw :: [ClawOp] -> [ClawOp]
-reduceClaw = rdz []
+reduceClaw = L.reverse . rdz []
 
+-- note: returned claw ops are in reverse order.
+--
+-- This is convenient for recognizing command sequences
+-- without performing extra list reversals.
 rdz :: [ClawOp] -> [ClawOp] -> [ClawOp]
 rdz lhs (CW w : rhs)
     | (w == wInteger)
@@ -298,16 +306,18 @@ rdz (NI e : ND d : lhs) (CW w : rhs)
 rdz (T0 txt : lhs) (CW w : rhs)
     | (w == wLiteral) && (isInlineableText txt)
     = rdz (TL txt : lhs) rhs
-rdz (B0 cs : B0 [c] : lhs) (CW w : rhs)
-    | (w == wBSeq) 
-    = rdz (B0 (c:cs) : lhs) rhs
 rdz (B0 cc : lhs) (CW w : rhs)
     | (w == wBlock) 
     = rdz (BC cc : lhs) rhs 
-rdz lhs (B0 cc : rhs) = rdz (B0 cc' : lhs) rhs  -- recursion
-    where cc' = fmap (ClawCode . reduceClaw . clawOps) cc
+
+-- recursion on blocks & seq recognition
+rdz lhs (B0 [cmd] : rhs) = rdz (B0 cseq : lhs) rhs where 
+    cseq = case rdz [] (clawOps cmd) of
+        (CW w : B0 cs : rc) | (w == wSeq) -> (c:cs) where
+            c = ClawCode (L.reverse rc) 
+        rc -> [ClawCode (L.reverse rc)] -- full block
 rdz lhs (op : rhs) = rdz (op : lhs) rhs -- progress
-rdz lhs [] = L.reverse lhs -- all done
+rdz lhs [] = lhs -- termination
 
 -- | Parse raw integer (e.g. #42) from a reverse-ordered list (24#).
 -- Return remaining operations and the integer so parsed, assuming

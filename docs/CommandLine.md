@@ -95,7 +95,7 @@ Claw supports a command sequencing concept that supports multiple use-cases:
 * programming in a continuation-passing style
 * iterative processing, cooperative threading
 
-Command sequences vastly improve the expressiveness of Claw and the utility of AO. The expression and expansion is surprisingly simple:
+Command sequences vastly improve the expressiveness of Claw and the utility of AO. The expression and expansion is surprisingly simple. Any block can use commas as command separators:
 
         [foo,bar,baz]   desugars to  
         [foo \[bar \[baz] seq] seq]   
@@ -106,7 +106,7 @@ Command sequences vastly improve the expressiveness of Claw and the utility of A
         \[a,b,c]        desugars to
         \[a \[b \[c] seq] seq]
 
-Effectively, we view a block that is broken into segments by commas. We process block segments from right to left via the `bseq` word. In general, `bseq` assumes the second block is a continuation, quotes it, and composes it into the first block. The exact details of this composition depend on our use-case and namespace.
+Effectively, we can view a comma as a 'yield'. The block exits early, but we also gain access to the remainder of the sequence, the continuation. An external interpreter may study the output, perform external effects or inject data, and continue. The details are left to user definitions of `seq`, the interpreter, and the program environment.
 
 See [CommandSequences](CommandSequences.md) for more details.
 
@@ -136,6 +136,8 @@ Claw uses namespace attributes to guide rendering and expansion. Some words cann
 
 A namespace attribute within a block is limited to the remaining scope of that block.
 
+There is a proposal for *Qualified Namespaces* that I'm still contemplating.
+
 ## Claw Semantics and Round Tripping
 
 Claw code is a simple syntactic sugar and editable view. The entire semantics of claw code is its unambiguous expansion into AO bytecode. Further, this is expansion reversible: a parser can recover structure and present it to the user for editing. Claw can represent any AO bytecode. However, code not written for the Claw view will tend to be full of ugly escapes. Thus, in practice, Claw only supports round-tripping. 
@@ -164,6 +166,8 @@ Between embedding and a model for graphs, it should be feasible to represent box
 
 Developing a Visual Claw oriented around modern HTML seems very promising. I need to hammer out a bunch of details, though.
 
+*Aside:* Visual Claw can feasibly support *hidden* content, including layout attributes and content that is hidden or collapsed by default. This isn't something we can do in a purely textual view. 
+
 ### Named Variables and Lexical Closures
 
 Tacit programming is effective in many problem domains, and is concise when it works. It works in a surprising range of problem domains: fewer than 1% of Factor functions are defined using named locals. But there is a small, essential subset of problem domains (such as polynomial expressions) where tacit programming is too painful. For example:
@@ -184,44 +188,24 @@ Fortunately, named variables for otherwise tacit concatenative languages are not
             -> x y z { x square y square add y abs sub }
             { -> x y z; x square y square add y abs sub }
 
-I find Factor's block syntax is painful to read when layered: `[| a b | a [| c | c b +] map ]`. 
+I find Factor's syntax difficult to read when layered, e.g. `[| a b | a [| c | c b +] map ]`. Kitten's syntax appeals to me.
 
-Factor and Kitten support *lexical scoping*. If a name is used within an internal block, it will be bound correctly to the value assigned. This is a valuable feature: lexical scoping greatly simplifies the construction of higher order programs. Without it, we're forced to explicitly quote and bind values... which isn't awful, but certainly isn't convenient.
+Factor and Kitten support *lexical closures*. When a name is used within an internal block, it is bound to the value in scope at the time of binding. In Claw, lexical closures would be necessary to use variable names across commands in a sequence. 
 
-if you use a variable within an internal block, the correct value will be bound. This is certainly a valuable feature. 
+I have yet to develop a reversible desugaring that supports lexical closures. 
 
+Ignoring scope and closures, we could feasibly desugar to:
 
-Kitten's syntax has the advantage of a *first class* representation: we can use `-> x y;` anywhere in the program to pop a couple variables from our stack. Factor's is a syntactic sugar, but not something I could easily reverse.
+        "z" assign "y" assign "x" assign
+        "y" deref square
+        "x" deref square add
+        "y" deref abs sub
 
+With appropriate definitions for assign, deref, and scoped, the above program should behave as we expect. We could implement this with a stack of association lists. A compiler, perhaps aided by annotation, should be able to eliminate the runtime overhead of this explicit data plumbing (or at least inform you otherwise). 
 
+But this half baked solution isn't acceptable. I'll return to this issue later.
 
-Fortunately, it is not difficult to model named variables where we need them:
-
-        ["z" assign "y" assign "x" assign
-         "y" deref square
-         "x" deref square add
-         "y" deref abs sub
-        ] scoped
-
-With appropriate definitions for assign, deref, and scoped, the above program should behave as we expect. For example, we could implement this with a stack of association lists. Given a simple model and appropriate annotations in our definitions, a compiler should be able to eliminate the runtime overhead of this explicit data plumbing (or at least inform you if it fails). 
-
-Unfortunately, the syntax is verbose and unfriendly. We'll need to do better. 
-
-
-Both Kitten and Factor are constrained to *local* variables. There's somethin
-
-
-Both Factor and Kitten also support *lexical closures*. These are valuable, and represent a distinct form of data plumbing: 
-
-
-### Vertically Structured Programming
-
-
-
-
-
-
-
+*Note:* AO introduces a potential complicating concern for named variables: we have *substructural types*, values that cannot be copied or cannot be dropped. For these, we effectively need 'move' semantics instead of 'copy' semantics. It seems feasible, however, for Claw syntax to simply optimize the last use of a named variable to a 'move'. 
 
 ### Qualified Namespaces
 
@@ -229,5 +213,6 @@ Limiting ourselves to a single namespace has some advantages: it limits how much
 
 We write `#f/foo:` after which `f/word` expands to `foo:word`. Our namespace attribute would desugar to `[{&_foo:_f}]%`. When rendering words with multiple options, we can heuristically favor the shortest render. Qualified namespaces would alleviate the burden of working with large prefixes or mixing content from multiple namespaces. 
 
-Developers need more contextual information to understand code. Moving or copying code requires managing more namespaces.
+*Idea:* In a visual editor, qualified namespaces could support coloring of words, e.g. with `red/foo` being presented as `foo` colored red. Or using a stylesheet to achieve the same with more semantic naming.
+
 

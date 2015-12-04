@@ -113,28 +113,19 @@ In general, only a fraction of our program environment should be shared this way
 
 AO doesn't do infix notation. However, a claw view can support infix notations within a clear, delimited region. Blocks provide clear, delimited regions. We can potentially model sequences blocks by having a command separator 'escape' each block and recombine it. Of course, this needs to work transparently with the existing sugar around blocks. 
 
-        [foo, bar, baz] desugars to:
-        [foo \[bar \[baz] seq] seq]
+        [foo, bar, baz, qux] desugars to:
+        [foo \[bar \[baz \[qux] seq] seq] seq]
 
-This is a right-associative binding. The continuation is hidden until just before we return. The continuation could easily be shoved into the program environment or returned to our interpreter. This particular structure works nicely with specifying a namespace at the start. It will work readily with potential extensions for claw such as named locals and lexical scoping. It's easy to parse. And it's ultimately just a block of code, very predictable.
+This is a right-associative binding. The continuation is hidden until just before we return. The continuation could easily be shoved into the program environment or returned to our interpreter. Parsing it does require reversing each block at some point, but we're likely to do that anyway.
 
-*Aside:* Those `seq] seq] seq]` sequences will compress easily, so the effective representation overhead at the AO layer is negligible. 
-
-### Use Case: Concise List Construction
+### Reviewing Use Case: Data Sequences
 
 One of the motivating use-cases for command sequences is (syntactically) concise construction of data sequences (lists, streams, vectors, matrices, etc.). Assume we've committed to block-delimited sequences. Can we take `[1,2,3]` and turn it easily into a list of numbers? 
 
-        [1 \[2 \[3] seq] seq]
+We can.
 
-We can do this. Minimally, we just need an environment with a data stack and an optional continuation. In each step, we push data to the stack, and the `seq` function (if any) add the continuation. After each step, our interpreter will pop data from the stack and optionally continue.
+The program `[1,2,3]` desugars to `[1 \[2 \[3] seq] seq]`. Assume a program environment containing a data stack and a queue of continuations. Our `seq` function simply pushes the continuation onto the list. After each step, the interpreter pops one datum off the data stack, takes the entire queue of continuations, provides a fresh environment to the next step, and continues. Thus, our comma separated sequence computes a *stream* of data. Converting our (known finite) stream into a list is trivial. 
 
-With some tweaks, we can support abstraction and composition:
+Further, this model of streaming data is *compositional*. We could rewrite `[1,2,3,4,5,6]` as `[1, [2,3,4] inline, 5,6]` or as `[1,2,3] [4,5,6] compseq`. We can abstract sequence fragments into separate words. We can also abstract ad-hoc stream generators.
 
-        [[1,2,3] inline \[4,5,6] seq, 7, 8]
-            is equivalent to
-        [1 \[2,3] seq \[4,5,6] seq \[7,8] seq]
-
-The fact that we `seq` three times requires a more sophisticated continuations model. Unfortunately, a simple stack or queue of continuations won't do the job correctly: with a queue, our ordering is: `1 2 4 7 3 5 8 6`. With a stack it is `1 7 8 4 5 6 2 3`. But we could use a stack of queues, with our interpreter managing the stack. There may be simpler solutions, e.g. using something other than `inline` for internal composition.
-
-Ultimately, the syntax is concise, composable, factorable, and friendly. 
-
+We have a concise, composable, factorable, and friendly syntax for data sequences.
