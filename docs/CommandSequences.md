@@ -111,85 +111,30 @@ In general, only a fraction of our program environment should be shared this way
 
 ## The Sugar: Block-Delimited Sequences
 
-AO doesn't do infix notation. However, a claw view can support infix notations within a clear, delimited region. 
+AO doesn't do infix notation. However, a claw view can support infix notations within a clear, delimited region. Blocks provide clear, delimited regions. We can potentially model sequences blocks by having a command separator 'escape' each block and recombine it. Of course, this needs to work transparently with the existing sugar around blocks. 
 
-Blocks provide clear, delimited regions. We can potentially model sequences blocks by having a command separator 'escape' each block and recombine it. Of course, this needs to work transparently with the existing sugar around blocks. 
+        [foo, bar, baz] desugars to:
+        [foo \[bar \[baz] seq] seq]
 
-        [foo eff, bar ret]  desugars to
-        \[foo eff] \[bar ret] bseq block
+This is a right-associative binding. The continuation is hidden until just before we return. The continuation could easily be shoved into the program environment or returned to our interpreter. This particular structure works nicely with specifying a namespace at the start. It will work readily with potential extensions for claw such as named locals and lexical scoping. It's easy to parse. And it's ultimately just a block of code, very predictable.
 
-For almost any use-case (including monadic blocs), I'll want a right-associative structure. This is favorable for iterative processing, the ability to apply each block and discard it in the order provided by the programmer. We achieve this by sequencing from right to left. 
-
-        [foo, bar, baz, qux] desugars to
-        \[foo] \[bar] \[baz] \[qux] bseq bseq bseq block
-
-With block-based sequences, we're forced to compose every pair of blocks into a larger block with each `bseq` step. There is no discriminating the first block, nor the last one. We must assume that the final block in the sequence has the right shape, the same 'kind' as our overall result. We cannot compute a list of blocks.
-
-With monadic command sequences, we assume every command, first and last, describes a valid command sequence (effect, return, or bind). So, there is no need to discriminate. Also, a block is a natural way to describe monadic command sequences in AO because of how we use program environments for data plumbing. So, the above limits on expressiveness don't hurt for this use case.
-
-*Aside:* Those `bseq bseq bseq` sequences will compress very easily, assuming definitions large enough to need it. I'm not particularly concerned about the overhead in the final AO encoding.
+*Aside:* Those `seq] seq] seq]` sequences will compress easily, so the effective representation overhead at the AO layer is negligible. 
 
 ### Use Case: Concise List Construction
 
-One of the motivating use-cases for command sequences is (syntactically) concise construction of data sequences (lists, streams, vectors, matrices, etc.). Assume we've committed to block-delimited sequences. Can we take `[1,2,3]` and turn it into a list of numbers? Or `[[1,2,3],[4,5,6],[7,8,9]]` into a matrix?
+One of the motivating use-cases for command sequences is (syntactically) concise construction of data sequences (lists, streams, vectors, matrices, etc.). Assume we've committed to block-delimited sequences. Can we take `[1,2,3]` and turn it easily into a list of numbers? 
 
-We can. Though, it may require a specialized namespace. 
+        [1 \[2 \[3] seq] seq]
 
-Assume command sequences of type `cc → (datum * cc)`. Here, `cc` is a list of continuations. Our `bseq` behavior pushes a continuation onto this list first thing (before computing the datum). Every time we yield, our interpreter takes the `datum` value and shares it with a consumer then decides whether it can continue.
+We can do this. Minimally, we just need an environment with a data stack and an optional continuation. In each step, we push data to the stack, and the `seq` function (if any) add the continuation. After each step, our interpreter will pop data from the stack and optionally continue.
 
-We generate a *stream* of numbers, blocks, or other data. This is an efficient, composable model for streams. We can easily abstract and inline sub-sequences (contributing continuations to `cc`). We can easily translate a stream to a list or other data structure. A matrix would require hierarchical stream processing.
+With some tweaks, we can support abstraction and composition:
 
-This syntax is concise, composable, factorable, and friendly. 
+        [[1,2,3] inline \[4,5,6] seq, 7, 8]
+            is equivalent to
+        [1 \[2,3] seq \[4,5,6] seq \[7,8] seq]
 
-Block-delimited sequences are at least as versatile as I hoped.
+The fact that we `seq` three times requires a more sophisticated continuations model. Unfortunately, a simple stack or queue of continuations won't do the job correctly: with a queue, our ordering is: `1 2 4 7 3 5 8 6`. With a stack it is `1 7 8 4 5 6 2 3`. But we could use a stack of queues, with our interpreter managing the stack. There may be simpler solutions, e.g. using something other than `inline` for internal composition.
 
-## Rejected Ideas
+Ultimately, the syntax is concise, composable, factorable, and friendly. 
 
-### (rejected) Multiple Command Separators
-
-It would be easy to extend our syntactic sugar with support for multiple command separators. Consider:
-
-        [foo , bar ; baz | qux] desugars to
-        \[foo] \[bar] \[baz] \[qux] vertibar semicolon comma block
-
-It is further feasible to support a simple precedence model, e.g. such that we sequence commas before semicolons before vertibars. Doing so greatly improves the potential utility of multiple separators by allowing them to apply to *groups* of commands. Aligning precedence with how we're likely to read the text as humans also improves the aesthetic, IMO.
-
-        Precedence: smallest to largest ,;|
-
-        [foo , bar ; baz | qux] desugars to
-        \[foo] \[bar] comma \[baz] semicolon \[qux] vertibar
-
-        [a,b,c;d,e,f;g,h,i|j,k,l;m,n,o;p,q,r|s,t,u;v,w,x;y,z]  desugars to
-
-        \[a] \[b] \[c] comma comma
-        \[d] \[e] \[f] comma comma
-        \[g] \[h] \[i] comma comma
-        semicolon semicolon
-        \[j] \[k] \[l] comma comma
-        \[m] \[n] \[o] comma comma
-        \[p] \[q] \[r] comma comma
-        semicolon semicolon
-        \[s] \[t] \[u] comma comma
-        \[v] \[w] \[x] comma comma
-        \[y] \[z] comma
-        semicolon semicolon
-        vertibar vertibar
-        block
-
-The *potential* motivation for multiple command separators is that they permit alternative compositions and interpretations of commands. For example, we could model alternatives or backtracking directly in our syntax. We can do this without special syntax, but it might be prettier with supporting syntax.
-
-However, working with a single sequencing model is simpler. Our continuations handle one kind of bind. We make fewer assumptions about our interpreter. We don't gain any expressiveness. At best, we're flattening our code a bit and making it a little easier to read. Further, precedence hinders factoring. For example, if I extract the subprogram `q,r|s,t,u;v` and replace it by a word `qrstuv`, the behavior will be different because of of precedence. And this isn't an obvious error like refactoring across blocks (e.g. `foo] \[bar` is clearly not a valid definition).
-
-
-### (rejected) Curly Brace Command Sequences
-
-For greater expressiveness, we could instead favor a different region delimiter. This would allow construction of a list of blocks. For example:
-
-        {foo, bar, baz, qux} desugars to
-        \[foo] \[bar] \[baz] \[qux] cblock cseq cseq cseq
-
-Does this offer any meaningful advantage? 
-
-Stuffing commands into a list doesn't offer any processing advantages because commands are still opaque. Mostly, this allows treating the last command in a special way, e.g. we might interpret the above program as `foo >=> bar >=> baz >=> (return . qux)`. But special cases in our syntax will hinder composition and factoring.
-
-There is an opportunity cost for using curly braces here. I might later discover a more effective use for them elsewhere, perhaps delimiting regional DSLs or a specialized view for data list construction. I'd prefer to reserve them for a more strongly motivated use-case, one that aligns with Awelon project goals. 

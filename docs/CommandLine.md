@@ -12,9 +12,11 @@ Desirable features for a command line interface:
 * blocks for higher order operations `1 [2 mul] 53 repeat`
 * terse encoding of tuples, lists, tables
 
-Command Language for Awelon (claw) is a syntactic sugar and editable view for AO. Claw semantics is a trivial expansion into AO bytecode, and this expansion is reversible, such that we may view and edit AO bytecode as claw code. While claw is optimized for one-liner programs, it is usable for page-structured programming.
+Command Language for Awelon (claw) is a syntactic sugar and editable view for AO. Claw semantics is a trivial expansion into AO bytecode, and this expansion is reversible, such that we may view and edit AO bytecode as claw code. 
 
-Claw is simple, flexible, and extensible. Though intended primarily for command line interfaces, claw may be leveraged for conventional document interfaces and block-structured programming by recognizing sequences like `[cond] [body] while_do_`. Given a structure editor, claw might further be extended with interactive forms - sliders, color pickers, checkboxes, etc. - e.g. by recognizing sequences like `30 slider` or `255 0 0 rgbcolor`. 
+Claw is simple, flexible, and highly extensible. While designed primarily for command line interfaces, extensions have the potential to make Claw suitable for many other environments including visual programming (cf. *Visual Claw* below) and more conventional block structured programming (cf. *Block Structured Programming* below). 
+
+*Aside:* My mental image of an Awelon mascot is an owl. I was thinking of an owl's claws when I named this. But it strikes me now that this also serves as a weak allusion to concatenative programming languages Cat and Kitten. :)
 
 ## Claw Code
 
@@ -95,14 +97,14 @@ Claw supports a command sequencing concept that supports multiple use-cases:
 
 Command sequences vastly improve the expressiveness of Claw and the utility of AO. The expression and expansion is surprisingly simple:
 
-        [foo,bar,baz]   desugars to     
-        \[foo] \[bar] \[baz] bseq bseq block
+        [foo,bar,baz]   desugars to  
+        [foo \[bar \[baz] seq] seq]   
 
         [1,2,3,4,5]     desugars to
-        \[1] \[2] \[3] \[4] \[5] bseq bseq bseq bseq block
+        [1 \[2 \[3 \[4 \[5] seq] seq] seq] seq]
 
         \[a,b,c]        desugars to
-        \[a] \[b] \[c] bseq bseq
+        \[a \[b \[c] seq] seq]
 
 Effectively, we view a block that is broken into segments by commas. We process block segments from right to left via the `bseq` word. In general, `bseq` assumes the second block is a continuation, quotes it, and composes it into the first block. The exact details of this composition depend on our use-case and namespace.
 
@@ -110,7 +112,7 @@ See [CommandSequences](CommandSequences.md) for more details.
 
 ### Claw Attributes
 
-An attribute is an annotation *about* nearby code. Essentially, it's a comment, though not necessarily for a human. Examples of this sort of thing: todos, deprecations, licensing, authoring, quotas, categories, keywords, enabling or disabling full-text search, suggested view, extra typechecker options, guides for indexing, guides for robotic maintenance. 
+An attribute is an annotation *about* nearby code. Essentially, it's a comment, though not necessarily for a human. Examples of this sort of thing: todos, deprecations, licensing, authoring, quotas, categories, keywords, enabling or disabling full-text search, recommendations for viewing and rendering code, extra typechecker options, guides for indexing, guides for robotic maintenance. 
 
 Because they have no meaning within our code, we wrap attributes into a block, then throw it away, e.g. `[{&deprecated}]%`. For expressing attributes in Claw code, I will to use parentheses:
 
@@ -132,26 +134,100 @@ My current approach to namespaces involves use of a `#` prefix to set a namespac
 
 Claw uses namespace attributes to guide rendering and expansion. Some words cannot be expressed in a given namespace. For example, under `#foo:` the word `bar` cannot be expressed because it lacks a `foo:` prefix, and `foo:9` cannot be expressed because `9` doesn't parse as a valid word. In these cases, the claw view is forced to use the token expansion, e.g. `\{%bar}` or `\{%foo:9}`. 
 
-A namespace attribute within a delimited command (e.g. a block, or a command within a sequence) will apply only until the end of that command. 
+A namespace attribute within a block is limited to the remaining scope of that block.
 
-#### (proposal) Qualified Namespaces
+## Claw Semantics and Round Tripping
 
-We write `#f/foo:` after which `f/word` expands to `foo:word`. Our namespace attribute would desugar to `[{&_foo:_f}]%`. When rendering words with multiple options, we can heuristically favor the shortest render. Qualified namespaces would alleviate the burden of working with large prefixes or mixing content from multiple namespaces. 
+Claw code is a simple syntactic sugar and editable view. The entire semantics of claw code is its unambiguous expansion into AO bytecode. Further, this is expansion reversible: a parser can recover structure and present it to the user for editing. Claw can represent any AO bytecode. However, code not written for the Claw view will tend to be full of ugly escapes. Thus, in practice, Claw only supports round-tripping. 
 
-Qualified namespaces do enable emergent properties that I'd prefer to resist. Code is organized into deeply hierarchical names despite minor risks of conflict. Namespace declarations become boiler-plate. Developers need more contextual information to understand code. Moving or copying code requires managing more namespaces.
-
-
-
-### Claw Semantics and Round Tripping
-
-Claw code is essentially a simple syntactic sugar above AO. The entire semantics of claw code is its trivial expansion into AO. Further, this is reversible: a parser can recover structure and present it to the user for editing. The main weakness is that such a parser will be oriented around a common set of words (integer, literal, block, ratio, decimal, exp10). This effectively restricts us to round-tripping, i.e. we can recover useful structure only from bytecode generated by expanding claw code. But this is an acceptable limitation.
-
-In general, spacing and newlines are not preserved.
+Claw does not, in general, preserve spacing and newlines. 
 
 ## Claw Shell and Effects Model
 
-See [Wikilon's application model](ApplicationModel.md). Claw is a good fit for command pattern applications, such as a REPL or shell. Also for iPython-notebook scenarios. Given an appropriate software agent for integrating effects, modeling a Claw 'shell' that reflects on our dictionary or interacts with external services is entirely feasible.
+See [Wikilon's application model](ApplicationModel.md). 
 
-## Multi-Media Claw 
+Claw is a good fit for command pattern applications, such as a REPL or shell. Also for iPython-notebook scenarios. Given an appropriate software agent for integrating effects, modeling a Claw 'shell' that reflects on our dictionary or interacts with external services is entirely feasible.
 
-Assuming an appropriate editor, I would be interested in recognizing *form*-based presentation and widgets, e.g. `30/100 slider` would be recognized and presented as a slider widget. Graphs, diagrams, checkboxes, radio buttons, and more could be modeled this way. This might be considered a dialect of Claw.
+Command sequences make Claw much more effective at these tasks, i.e. we can directly model a series of commands between which we may return to interact with an interpreter or render content.
+
+## Proposals for Future Extensions
+
+### Visual Claw 
+
+Assuming an appropriate editor, I would be interested in recognizing *form*-based presentation and widgets, e.g. `30/100 (slider)` is recognized and rendered as a slider widget. Graphs, diagrams, canvases, tables, trees, checkboxes, selection lists, radio buttons, and a multitude of other stateful widgets could be integrated this way. 
+
+Visual Claw has potential to serve as a rich document model, an intermediate level between Claw text and full evaluation-based dictionary applications. Words defined in Visual Claw would support [direct manipulation](https://en.wikipedia.org/wiki/Direct_manipulation_interface) of the dictionary, and would also serve as *templates*: a dictionary application would copy a template word to provide a form, allow the user to edit and submit, and the result is saved into a new word then integrated (e.g. representing a command). 
+
+By editing of canvases, graphs, tables we gain the ability to work with reasonably large structured documents (up to a few megabytes). We can mitigate growing sizes via hierarchical views and extra support from our dictionary app. An embedded editor for a word might easily be represented by code of the form `foo (embed)`. This might be represented by an HTML iframe. Embedding a slider, then, would allow us to control many definitions from a single widget. 
+
+Between embedding and a model for graphs, it should be feasible to represent box-and-wire programming environments. Embedding also provides a simple basis for 'connected' views, e.g. where manipulating a slider in one form will manipulate it elsewhere. There are a lot of interesting possibilities here.
+
+Developing a Visual Claw oriented around modern HTML seems very promising. I need to hammer out a bunch of details, though.
+
+### Named Variables and Lexical Closures
+
+Tacit programming is effective in many problem domains, and is concise when it works. It works in a surprising range of problem domains: fewer than 1% of Factor functions are defined using named locals. But there is a small, essential subset of problem domains (such as polynomial expressions) where tacit programming is too painful. For example:
+
+        f x y z = y^2 + x^2 − |y|
+
+            might translate to
+
+        f = drop dup square swap abs rot square sub add
+
+Fortunately, named variables for otherwise tacit concatenative languages are not a new idea. Languages [Factor](http://factor-language.blogspot.com/2007/08/named-local-variables-and-lexical.html) and [Kitten](http://kittenlang.org/intro/) include a syntax for this. Examples:
+
+        Factor: two options for defs and blocks.
+            :: f | x y z | y square x square + y abs - .
+            [|x y z| y square x square + y abs -]
+
+        Kitten: two options for aesthetics.
+            -> x y z { x square y square add y abs sub }
+            { -> x y z; x square y square add y abs sub }
+
+I find Factor's block syntax is painful to read when layered: `[| a b | a [| c | c b +] map ]`. 
+
+Factor and Kitten support *lexical scoping*. If a name is used within an internal block, it will be bound correctly to the value assigned. This is a valuable feature: lexical scoping greatly simplifies the construction of higher order programs. Without it, we're forced to explicitly quote and bind values... which isn't awful, but certainly isn't convenient.
+
+if you use a variable within an internal block, the correct value will be bound. This is certainly a valuable feature. 
+
+
+Kitten's syntax has the advantage of a *first class* representation: we can use `-> x y;` anywhere in the program to pop a couple variables from our stack. Factor's is a syntactic sugar, but not something I could easily reverse.
+
+
+
+Fortunately, it is not difficult to model named variables where we need them:
+
+        ["z" assign "y" assign "x" assign
+         "y" deref square
+         "x" deref square add
+         "y" deref abs sub
+        ] scoped
+
+With appropriate definitions for assign, deref, and scoped, the above program should behave as we expect. For example, we could implement this with a stack of association lists. Given a simple model and appropriate annotations in our definitions, a compiler should be able to eliminate the runtime overhead of this explicit data plumbing (or at least inform you if it fails). 
+
+Unfortunately, the syntax is verbose and unfriendly. We'll need to do better. 
+
+
+Both Kitten and Factor are constrained to *local* variables. There's somethin
+
+
+Both Factor and Kitten also support *lexical closures*. These are valuable, and represent a distinct form of data plumbing: 
+
+
+### Vertically Structured Programming
+
+
+
+
+
+
+
+
+### Qualified Namespaces
+
+Limiting ourselves to a single namespace has some advantages: it limits how much context a reader needs to understand the code, and it discourages namespace boiler-plate (e.g. import lists). However, support for multiple namespaces could be convenient for modeling conventional module systems, or integrating hierarchical names.
+
+We write `#f/foo:` after which `f/word` expands to `foo:word`. Our namespace attribute would desugar to `[{&_foo:_f}]%`. When rendering words with multiple options, we can heuristically favor the shortest render. Qualified namespaces would alleviate the burden of working with large prefixes or mixing content from multiple namespaces. 
+
+Developers need more contextual information to understand code. Moving or copying code requires managing more namespaces.
+

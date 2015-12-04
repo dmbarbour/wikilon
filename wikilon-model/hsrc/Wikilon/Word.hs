@@ -92,7 +92,7 @@ isValidWord (Word w) = okSize && okStart && okEnd && okMiddle where
 
 -- | maximum size for a word, in bytes
 wordSizeMax :: Int
-wordSizeMax = 64
+wordSizeMax = 63
 
 _isPMD :: Char -> Bool
 _isPMD = flip L.elem "+-."

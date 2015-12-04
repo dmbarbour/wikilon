@@ -33,21 +33,21 @@ A toplevel *environment* will track:
 * LMDB integration for stowage
 * A set of computation contexts
 * A pool of worker threads for sparks
-* All necessary semaphores and mutexes
+* All needed semaphores and mutexes
 
-This allows multiple contexts to interact with the same LMDB environment and share labor for parallel sparks. Using the same LMDB environment is critical. It isn't safe to open a database more than once. Sharing worker threads is a bit more questionable, but it makes sense: our physical machine only has a limited number of CPUs, and I can model my own time sharing.
+This allows multiple contexts to interact with the same LMDB environment and share labor for parallel sparks. Sharing the LMDB environment is critical. Sharing worker threads makes sense because our machine has a limited amount of physical parallelism and I can easily schedule it myself.
 
-Computation in 
+A *context* must track:
 
-
-A *context* additionally will track:
-
-* A memory region for all computations
-* A set of thread contexts and nurseries
-* A set of waiting parallel threads
+* Multiple active computations (roots and par/seq)
+* A set of nursery regions for active computations 
+* A main heap shared by all computations, tenured data
+* A set of pending parallel computations
 * A set of objects proposed for stowage
 
-We can create a context per external computation, or we can use a single context to run multiple computations. The former provides greater control over memory consumption. The latter offers greater access to sharing for cached stowed values. 
+We can create a big context for a lot of computations, or many smaller contexts. The latter gives better control over memory constraints per computation. But shared contexts might enable more effective sharing of cached data from stowage. Pointers within a context are internal. 
+
+Computations - including stacks and continuations - shall be modeled entirely within our contexts. Computations may exist in a suspended state. A fully suspended computation will release its nursery (tenuring all associated data), but we could support an intermediate suspension state for monadic effects and the like.
 
 I'm not sure about modeling 'thread contexts' as a separate data structure. It might be better to model the entire thread context as a normal data structure (modeled in terms of cells, arrays, etc.) subject to GC. This would make suspending a computation more precise, and might improve reflection on our computations.
 

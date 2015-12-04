@@ -52,6 +52,8 @@ Dictionary applications together with long-polling or subscription is capable of
 
 Many dictionary applications are amenable to *extraction*, e.g. cross-compiling application objects for an Android phone or JavaScript+DOM. An extraction service is effectively another dictionary application. Extraction of dictionary applications *in media res* supports an implicit debug mode, automatic testing of old application sessions, interactive construction of applications from prototypes, and fulfills the role of conventional applications compilers.
 
+*Aside:* A [FUSE view](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) of a Wikilon hosted dictionary is a promising basis for integrating dictionary applications with more conventional tools.
+
 ## Development 
 
 ### Static Analysis
@@ -87,7 +89,7 @@ Summary of constraints:
  * other UTF-8 except for C1, surrogates, replacement char
  * must not start with a digit or +-. followed by a digit
  * must not terminate with a . or : (period or colon)
- * no empty words or enormous words. 1..64 bytes UTF-8.
+ * no empty words or enormous words. 1..63 bytes UTF-8.
 * tokens are limited to:
  * word dependencies (`{%dupd}{%swap}`)
  * discretionary value sealer (`{:foo}`)
