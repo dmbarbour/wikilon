@@ -1,7 +1,7 @@
 
 # ABC Runtime Design
 
-As per [my performance strategy](Performance.md), I'm developing a C runtime: a good interpreter, with a little extra room for JIT compilations. The following is a sketch of the runtime I'm designing. 
+As per [my performance strategy](Performance.md), I'm developing a high performance runtime: a good interpreter, with a little extra room for JIT compilations. The following is a sketch of the runtime I'm designing. 
 
 ## Design Goals
 
@@ -55,7 +55,7 @@ We could dedicate a page to context within the memory region itself, e.g. the fr
 
 For "effects" integration, I'll favor monadic programming with RESTful interactions: mailboxes or queues for eventful updates, pubsub arenas for watching external data, etc.. similar to how I model this stuff internally within dictionary applications. 
 
-I'm leaning towards a dynamic set of nurseries. We could grow the nursery set and the heap from opposite sides of our arenas. We could also have larger vs. smaller nurseries, for example, within a single context. We could support annotation `{&mem:use_large_nursery}`.
+I'm leaning towards a dynamic set of nurseries. We could grow the nursery set and the heap from opposite sides of our arenas. We could also have larger vs. smaller nurseries, for example, within a single context. We could perhaps support annotation `{&mem:use_large_nursery}`.
 
 There will be no callbacks. 
 
@@ -71,6 +71,7 @@ Reasoning:
 * We can optimize for large external bytecode resources.
 * Tight addressing improves memory locality and caching.
 * Can model 'remote' computations via multiple contexts.
+* We can subsequently implement a 64-bit runtime if needed. 
 
 Memory will be addressed and aligned on 64-bit 'cells'. The lower 3 bits in each address will be leveraged to optimize common representations. It is most important that we optimize for: pairs, unit, lists, trees, booleans, and small numbers. 
 
@@ -110,18 +111,24 @@ I want a proper compacting collector. I want the following properties:
 
 * after compaction, data references point backwards
 * lists compact so the spine of data is adjacent.
-* lists feasibly compact directly into data arrays. 
+* large lists may compact directly into chunked lists. 
 * tree structures compact along the tree branches.
 
 Ideally, references within our nursery are frequently in the same cache line. And this same algorithm should work very nicely for shoving content out to the main heap. All of this is feasible, but it requires a stack. Fortunately, we can make some guarantees about stack size, perhaps use the opposite half of the nursery as our stack.
 
-We can keep a pointer to the top of our nursery from just after collection. Upon the next collection, we can count how many addresses we preserve from below this register. This gives us a precise mark for "survived one collection". We'll never tenure anything that hasn't survived one collection and is *about* to survive a second. 
+We can keep a pointer to the top of our nursery from just after collection. Upon the next collection, we can count how many addresses we preserve from below this register. This gives us a precise mark for "survived one collection". We'll never tenure to the heap anything that hasn't survived at least one collection and is about to survive a second. We can also count objects carried from the prior generation, and how many were tenured, and keep recent stats in a ring buffer. Unfortunately, we don't know the layout in memory so we cannot simply 'watermark' the old generation. But this might be enough for heuristic tenuring.
 
-Further, we can count how many cells were carried from the prior generation, and how many were tenured. If we keep a few nursery stats in a ring buffer, we can use them to estimate memory pressure and guide heuristics for tenuring.
+I wonder how well we can simply say: "I'm going to allocate 4kB (or some other size) from the heap, tenure that much, and preserve the rest". I bet this approach could work pretty well and improve heap locality per computation. We could allocate 64kB at a time from the heap and use it to gradually tenure multiple generations.
+
 
 ### Free List Algorithms
 
-I don't have any special ideas here. To avoid synchronization, I may track a per-thread free list, rather than using the shared context list for everything. I'm wondering whether I should use a weighted or Fibonacci buddy system.
+To avoid synchronization, I'll probably track a per-thread free list for content from the heap. We can clear this list on a nursery collection. On nursery collection, we will heuristically shove content into the main memory. We can probably benefit from allocating a large chunk of memory then breaking it into small pieces for allocations from the nursery.
+
+To avoid synchronization, I may track a per-thread free list, rather than using the shared context list for everything. 
+
+A buddy system allocator could be made to work. But I wonder if we can do better for locality, and for coalescing ad-hoc blocks?
+
 
 ## Tagged Objects
 
@@ -326,9 +333,17 @@ We'll probably just use a (size,utf8) for our symbol. We know from AO constraint
 
 ### Blocks, Fixpoints, Compiled Code
 
-A good representation for blocks is critical. Blocks are copied very frequently, and we process them incrementally, and we'll need to integrate them easily with LLVM compiled code.
+A good representation for blocks is critical. Blocks are copied very frequently in loops. We process them incrementally, and we'll need to integrate them easily with LLVM compiled code. For debugging, it would be nice to have some *metric* as to where an error occurs, even if it's a rough metric: replay-based debugging would have us go to a point prior and try again in a debug mode.
 
-TODO: figure this out.
+Our blocks need at least:
+
+* a bytecode representation 
+* a stack for quoted values
+
+Our stack can be modeled by a simple list and our bytecode by a binary. I'll be leveraging an internal bytecode representation, including accelerators and possible fast slicing for content. 
+
+Compilation requires some extra consideration. Apparently, many operating systems enforce that memory cannot be both writable and executable. But I could probably keep LLVM bitcode together with a compiled block. The bigger compilation challenge is modeling the LLVM continuation as needed.
+
 
 ### Numbers other than Small Integers
 
@@ -353,6 +368,15 @@ To support suspension, checkpointing, persistence, and resumption of computation
 
 ## Par/Seq Parallelism
 
+In many cases, a computation requires more space than just its arguments. 
+
+There are special cases like in-place quicksort, but even that will frequently need a thread context and nursery and the rest. But, in the normal case, I expect the best usage for parallelism is likely for a processor to run each computation to completion before starting another. Running a bunch of computations in parallel doesn't save space or CPU cycles.
+
+The exception is for *external requests*: when we have multiple computations to handle separate web-page requests, we shouldn't have those requests all waiting on a prior request. 
+
+Let's generally assume a separate context per external request. We might still queue external requests based on some limited pool of request contexts. We could distinguish this intelligently, e.g. funneling all requests for *updates* on a particular dictionary into a single context. (This gives us serializable updates very easily.)
+
+Worker threads have an convenient breakpoint for context switching: upon nursery collection. So we can model our own 'thread scheduler' so our worker thread changes to do work in another context after it yields. 
 
 
 ## Dead Ideas
