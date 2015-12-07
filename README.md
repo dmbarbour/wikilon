@@ -1,8 +1,6 @@
 Wikilon
 =======
 
-**NOTE:** Wikilon is NOT usable at this time. It's making steady progress, but it's still immature. The content below is based on what I want to be true when I'm closer to finished with Wikilon.
-
 Wikilon is a wiki-inspired software platform and development environment for Awelon project.
 
 An [Awelon Object (AO)](docs/AboutAO.md) dictionary contains a set of words with acyclic definitions. Each word defines a concrete mathematical function, represented in [Awelon Bytecode (ABC)](docs/AboutABC.md). Definitions are stored in their raw bytecode representation, but we generally interact with them through editable views. For example, we have a Forth-like command language named [Claw](docs/CommandLine.md). And [dictionary applications](docs/ApplicationModel.md) can easily model wikis, spreadsheets, forums, REPLs, and other RESTful systems.
@@ -13,4 +11,4 @@ Instead of libraries and packages, AO favors DVCS-like forking and merging as a 
 
 I have a promising [strategy for performance](docs/Performance.md). This should offer performance competitive with Java and C# after maturing, and should not overly complicate. Achieving better than that is feasible, with the right accelerators.
 
-## Setup and Configuration
+**NOTE:** Wikilon's core runtime is being re-implemented for performance. As much as possible, logic for web services will be represented within the dictionary itself. A fresh Wikilon install will probably benefit from a 'starter' dictionary. If enough logic can be moved into the dictionary and the high performance core, Haskell as a dependency might be eliminated.

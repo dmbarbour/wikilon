@@ -23,8 +23,9 @@ Also, it might be useful to support a second evaluation mode for type inference.
 I'll actually include a copy of these directly, no shared libs.
 
 * LMDB - embedded key value database
-* ZSTD - real-time, streaming compression
 * Murmur3 - fast, collision-resistant hash 
+* ZSTD(?) - real-time, streaming compression
+ * very promising, but not entirely stable
 
 ## Environment, Contexts, Memory Layout
 
@@ -55,7 +56,7 @@ We could dedicate a page to context within the memory region itself, e.g. the fr
 
 For "effects" integration, I'll favor monadic programming with RESTful interactions: mailboxes or queues for eventful updates, pubsub arenas for watching external data, etc.. similar to how I model this stuff internally within dictionary applications. 
 
-I'm leaning towards a dynamic set of nurseries. We could grow the nursery set and the heap from opposite sides of our arenas. We could also have larger vs. smaller nurseries, for example, within a single context. We could support annotation `{&mem:use_large_nursery}`.
+I'm not sure what I want to do with nurseries, except perhaps to configure them on a per-context basis. A dynamic set of nurseries is tempting, but I don't think it offers sufficient benefits to really pursue.
 
 There will be no callbacks. 
 
@@ -326,9 +327,18 @@ We'll probably just use a (size,utf8) for our symbol. We know from AO constraint
 
 ### Blocks, Fixpoints, Compiled Code
 
-A good representation for blocks is critical. Blocks are copied very frequently, and we process them incrementally, and we'll need to integrate them easily with LLVM compiled code.
+A good representation for blocks is critical. Blocks are copied very frequently in loops. We process them incrementally, and we'll need to integrate them easily with LLVM compiled code. For debugging, it would be nice to have some *metric* as to where an error occurs, even if it's a rough metric: replay-based debugging would have us go to a point prior and try again in a debug mode.
 
-TODO: figure this out.
+Our blocks need at least:
+
+* a bytecode representation 
+* a stack for quoted values
+
+Our stack can be modeled by a simple list and our bytecode by a binary. I'll be leveraging an internal bytecode representation, including accelerators and possible fast slicing for content. 
+
+Compilation to native code requires extra consideration. Apparently, many operating systems enforce that memory cannot be both writable and executable. But I could probably keep LLVM bitcode together with a compiled block. The bigger compilation challenge is modeling the LLVM continuation as needed. 
+
+*Note:* compilation for external runtimes (apps, unikernels, etc.) will be modeled as an extraction, distinct from Wikilon's internal runtime. My goal with compiled code is to make Wikilon fast enough for lots of immediately practical uses and eventual bootstrapping.
 
 ### Numbers other than Small Integers
 
@@ -353,7 +363,7 @@ To support suspension, checkpointing, persistence, and resumption of computation
 
 ## Par/Seq Parallelism
 
-
+An active computation will construct child computations via `{&par}`. We'll not parallelize until we've proven we have enough work on the active route, e.g. by holding onto our `(par, continuation)` object until it leaves the nursery. We do need to track these computations, such that we can immediately continue them as needed.
 
 ## Dead Ideas
 
