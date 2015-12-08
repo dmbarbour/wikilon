@@ -1,7 +1,11 @@
 
 # ABC Runtime Design
 
-As per [my performance strategy](Performance.md), I'm developing a C runtime: a good interpreter, with a little extra room for JIT compilations. The following is a sketch of the runtime I'm designing. 
+As per [my performance strategy](Performance.md), I'm developing a C runtime: a good interpreter, with room for LLVM based JIT compilation. 
+
+One motivation for the C interpreter is that I need a simple, low-level data representation for the LLVM JIT. I'll be using something very like the Lisp/Scheme representation, consisting mostly of simple pairs of words.
+
+It may be useful to also develop a command-line interface at this layer, if I'm willing to encode Claw code and dictionaries at this level.
 
 ## Design Goals
 
@@ -292,6 +296,23 @@ But we could improve character counting performance with an index:
 These indices could be installed heuristically based on text size or need. The asymptotic overhead for the index is less than 0.8%. For texts of 4kB, the overhead is closer to 2.6%. The first layer index lets us scan, slice, and lookup on index 100x faster. The second layer bumps us up to 10000x - still O(N), but a nicer coefficient. These indices would support slicing texts of up to about 20MB. Though I would recommend finger-tree ropes and stowage long before reaching that point.
 
 Conveniently, appending texts can be modeled by appending each array. Logical reversal requires special attention: we reverse each array, but we'll also need the ability to read reversed utf8. (It's probably easiest to do this transparently in our utf8 reader.)
+
+### Accelerated Association Arrays? (low priority)
+
+It might be useful to heavily optimize an associative structure, e.g. the equivalent of a JSON Object. Motivations include:
+
+* fast indexed lookup without disassembly of the structure
+* optimized representations for small vs. large structures
+* implicit batching of updates, log structured merge trees
+* provides a built-in, optimized model for AO dictionaries
+
+Any accelerated associative structure must have a primary representation deterministic from content. This enables use of alternative representations under the hood, because we can recover the original representation. This excludes most binary search trees because their final structure depends on insertion order. However, this does permit use of a *trie* or of a *sorted association list*. Our keys could simply be a list of integers. This covers texts, binaries, vectors, etc.
+
+The sorted association list is the superior option for acceleration. Other than accelerated lookup, we can't do much to accelerate a trie. Further, the trie representation is sophisticated, difficult to recover from other representations, and requires more logic than I'm comfortable requiring in the runtime. 
+
+For a sorted association list, access as a plain old list is an effective model for iteration. Many array-based accelerators (splits, joins, logical reversals, etc.) are directly applicable. There's much we can do to accelerate large associations. Our runtime can freely trade simplicity and performance. 
+
+Acceleration of association arrays is a tempting possibility.
 
 ### Large Value Stowage
 
