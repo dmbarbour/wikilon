@@ -68,9 +68,9 @@ Nonetheless, claw provides a usable syntax for multi-line embedded text:
         
         ~
 
-Our text begins on the line after `\"`. Each line of claw text is preceded with `LF SP` and the text terminates with `LF ~`. For convenience, `LF LF` is treated as `LF SP LF` so developers don't need to indent empty lines. Other than SP, LF, or ~, any character following LF is an error. For aesthetics, our text is padded with one empty line before and after. One empty line of padding is trimmed from each side when parsing the claw text. The padding is optional unless you actually need the empty lines.
+Our text begins on the line after `\"`. Each line of claw text is preceded with `LF SP` and the text terminates with `LF ~`. For convenience, `LF LF` is treated as `LF SP LF` so developers don't need to indent empty lines. Other than SP, LF, or ~, any character following LF is an error. For aesthetics, our text is padded with one empty line before and after. One empty line of padding is trimmed from each side when parsing the claw text. (The padding is optional, unless you actually need empty lines around the text.)
 
-No default escapes are used within the text body. However, claw is generally limited to the same character set as AO dictionaries. Claw forbids control characters (except LF), DEL, surrogates, and the replacement character. If developers need more than this, they may encode it and functionally rewrite the text afterwards.
+No default escapes are used within the text body. However, claw is generally limited to the same character set as AO dictionaries, forbidding control characters (except LF), DEL, surrogates, and the replacement character. If developers need more than this, they may encode it and functionally rewrite the text afterwards.
 
 I hope for claw to be tolerable as a syntax for text markup, typography, or literate programming. These multi-line literals are a good start: it is lightweight and doesn't require ugly escapes. The weakness is that multi-line text cannot be flexibly indented, which may be awkward in some cases. We might mitigate this functionally or via abstraction of text into separate definitions. But, if this doesn't work out, we might need a more structured view for those roles.
 
