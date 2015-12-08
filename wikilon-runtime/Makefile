@@ -7,17 +7,13 @@ CFLAGS = $(THREADS) $(OPT) $(W) -fPIC -g
 CC = gcc $(CFLAGS)
 OBJECTS = lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o wikrt.o
 
-.PHONY: clean lmdb murmur3 wikrt all lib
+.PHONY: all lib clean 
 
 all: lib
+lib: libwikrt.so
 clean:
 	rm -f $(OBJECTS)
 	rm -f libwikrt.so
-
-lib: libwikrt.so
-lmdb: lmdb/mdb.o lmdb/midl.o
-murmur3: murmur3/murmur3.o
-wikrt: wikrt.o
 
 libwikrt.so: $(OBJECTS) wikrt.lds
 	$(CC) -shared -Wl,--version-script=wikrt.lds,--strip-all -o $@ $(OBJECTS)
@@ -25,12 +21,14 @@ libwikrt.so: $(OBJECTS) wikrt.lds
 wikrt.o: wikrt.c wikrt.h lmdb/lmdb.h murmur3/murmur3.h 
 	$(CC) -o $@ -c wikrt.c
 
+# Directly include copy of LMDB key-value database
 lmdb/mdb.o: lmdb/mdb.c lmdb/lmdb.h lmdb/midl.h
 	$(CC) -Ilmdb -o $@ -c lmdb/mdb.c 
 
 lmdb/midl.o: lmdb/midl.c lmdb/midl.h
 	$(CC) -Ilmdb -o $@ -c lmdb/midl.c
 
+# Directly include copy of Murmur3 hash
 murmur3/murmur3.o: murmur3/murmur3.c murmur3/murmur3.h
 	$(CC) -Imurmur3 -o $@ -c murmur3/murmur3.c
 
