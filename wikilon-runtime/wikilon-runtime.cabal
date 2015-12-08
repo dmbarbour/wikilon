@@ -35,6 +35,7 @@ Extra-source-files:
     csrc/murmur3/murmur3.c
     csrc/wikilon-runtime.h
     csrc/wikrt.c
+    csrc/wikrt.lds
     csrc/Makefile
 
 Source-repository head
@@ -50,6 +51,7 @@ Library
   Exposed-Modules:
     Wikilon.Runtime
   Other-Modules:
+    Wikilon.Runtime.H
 
   ghc-options: -auto-all -Wall 
 
@@ -67,7 +69,8 @@ Library
     csrc/lmdb
     csrc/murmur3
     csrc/
-  cc-options: -W -Wall -O2 -g -pthread -fPIC
+  cc-options: -W -Wall -Wextra -Wno-unused-parameter -O2 -g -pthread -fPIC
+  ld-options: 
   extra-libraries: pthread c
     
 

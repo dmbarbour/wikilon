@@ -1,7 +1,7 @@
 {-# LANGUAGE ForeignFunctionInterface, DeriveDataTypeable #-}
 
 
-module Wikilon.Runtime.API
+module Wikilon.Runtime.H
     (
     ) where
 
