@@ -95,6 +95,8 @@ Library
 
     Wikilon.Test.LoadDict
 
+    Wikilon.Runtime.H
+
   Other-Modules:
 
     Binary.Utils

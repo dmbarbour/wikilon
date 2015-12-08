@@ -3,6 +3,6 @@
 
 // testing integration
 void wikrt_hello(char const * s) {
-    printf("Hello, %s!", (NULL == s) ? "World" : s);
+    printf("Hello, %s!\n", (NULL == s) ? "World" : s);
 }
 
