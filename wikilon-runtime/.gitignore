@@ -1,2 +1,2 @@
 *.o
-libwikilon-runtime.so.1
+*.so

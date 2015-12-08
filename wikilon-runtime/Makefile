@@ -6,22 +6,34 @@ OPT = -O2 -flto
 CFLAGS = $(THREADS) $(OPT) $(W) -fPIC -g 
 CC = gcc $(CFLAGS)
 OBJECTS = lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o wikrt.o
+INSTALL_PREFIX = /usr/local
 
-.PHONY: all lib clean 
+.PHONY: all lib clean install uninstall
 
 all: lib
-lib: libwikilon-runtime.so.1
+
+lib: libwikilon-runtime.so
+
 clean:
 	rm -f $(OBJECTS)
-	rm -f libwikilon-runtime.so.1
+	rm -f libwikilon-runtime.so
 
-libwikilon-runtime.so.1: $(OBJECTS) wikrt.lds
+install: libwikilon-runtime.so
+	mkdir -p $(INSTALL_PREFIX) && test -w $(INSTALL_PREFIX)
+	mkdir -p $(INSTALL_PREFIX)/lib
+	mkdir -p $(INSTALL_PREFIX)/include
+	cp ./libwikilon-runtime.so $(INSTALL_PREFIX)/lib
+	cp ./wikilon-runtime.h $(INSTALL_PREFIX)/include
+
+uninstall:
+	test -w $(INSTALL_PREFIX)
+	rm -f $(INSTALL_PREFIX)/lib/libwikilon-runtime.so
+	rm -f $(INSTALL_PREFIX)/include/wikilon-runtime.h
+
+libwikilon-runtime.so: $(OBJECTS) wikrt.lds
 	$(CC) -shared -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@ -o $@ $(OBJECTS)
 
-# I'll add more files as I need them. Likely:
-#  one file for stowage
-#  one file for utilities
-#  one file for GC
+# I'll add more files as I need them.
 wikrt.o: wikrt.c wikilon-runtime.h lmdb/lmdb.h murmur3/murmur3.h 
 	$(CC) -o $@ -c wikrt.c
 
