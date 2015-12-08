@@ -1,6 +1,6 @@
 # Makefile for Wikilon's Awelon Bytecode Runtime
 
-W = -W -Wall -Wextra -Wno-unused-parameter -Wbad-function-cast -Wuninitialized
+W = -W -Wall -Wextra -Wno-unused-parameter
 THREADS = -pthread
 OPT = -O2 -flto
 CFLAGS = $(THREADS) $(OPT) $(W) -fPIC -g 
