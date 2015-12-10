@@ -48,3 +48,5 @@ lmdb/midl.o: lmdb/midl.c lmdb/midl.h
 murmur3/murmur3.o: murmur3/murmur3.c murmur3/murmur3.h
 	$(CC) -Imurmur3 -o $@ -c murmur3/murmur3.c
 
+# Maybe introduce Keccak or Blake2? E.g. for MAC on stowage?
+
