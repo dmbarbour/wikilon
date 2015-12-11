@@ -17,7 +17,7 @@ Performance is the primary goal. But some others:
 * easily integrate monadic effects with [claw command sequences](CommandSequences.md)
 * on errors or unrecognized tokens, suspend and return to caller
 * precise memory control: model machine's memory in one arena
-* real-time capable: predictable timing and garbage collection
+* hard real-time capable: predictable timing and garbage collection
 * no callbacks or handlers, no external dependencies for progress
 
 Also, it might be useful to support a second evaluation mode for type inference.
@@ -109,7 +109,7 @@ On the main heap, large deletions by `%` may be performed incrementally, e.g. mo
 
 ### Semi-Space Algorithm
 
-We could use a modified variant of Cheney's algorithm to copy content between spaces. We would keep an extra byte-stack, at the opposite end of our free space, that tracks for each allocation whether it is addressed as a 'tagged object' or a 'cell'. This would allow us to properly interpret the object and find the next set of pointers. However, Cheney's algorithm is breadth-first. This has a negative impact on data locality. 
+We could use a modified variant of Cheney's algorithm to copy content between spaces. We would keep an extra bit-stack, at the opposite end of our free space, that tracks for each allocation whether it is addressed as a 'tagged object' or a 'cell'. This would allow us to properly interpret the object and find the next set of pointers. However, Cheney's algorithm is breadth-first. This has a negative impact on data locality. 
 
 I want a proper compacting collector. I want the following properties:
 
@@ -122,7 +122,9 @@ Ideally, references within our nursery are frequently in the same cache line. An
 
 We can keep a pointer to the top of our nursery from just after collection. Upon the next collection, we can count how many addresses we preserve from below this register. This gives us a precise mark for "survived one collection". We'll never tenure anything that hasn't survived one collection and is *about* to survive a second. 
 
-Further, we can count how many cells were carried from the prior generation, and how many were tenured. If we keep a few nursery stats in a ring buffer, we can use them to estimate memory pressure and guide heuristics for tenuring.
+It might be useful to keep a 'survivor' space for the stuff that does survive its second collection. This might reduce copies for data that sticks around - the stuff that would otherwise be slopped back and forth between two nurseries - and reduce fragmentation on the main heap. When this space fills, we simply tenure it on the next GC pass (so it's empty) then begin to refill it again on the following pass. If this shared survivor space is large, e.g. the same size as our nursery, we can make useful real-time guarantees: that a datum is copied no more than so many times in the worst case. 
+
+Copy collection on survivor spaces is feasible, e.g. to limit tenuring. We could also use a short 'chain' of survivor spaces, each with similar properties. Even a short chain could limit most content from reaching the main heap. The main issue is that, once content is on the heap, we'll need to tenure references from the heap.
 
 ### Free List Algorithms
 
@@ -260,9 +262,9 @@ We can specialize for a list of bytes. A 'byte' is simply an integer in the rang
 
         (binary, size+offset, pbuff, pnext)
 
-The annotation `{&binary}` is taken as an assertion of both binary type and desired representation. If an argument is not a valid binary, this assertion will fail (statically or dynamically). The weaker `{&binary~}` allows the runtime to use a chunked list representation, selecting a chunk size heuristically (e.g. favoring blocks of 32kB).
+The annotation `{&binary}` is taken as an assertion of both binary type and desired representation. If an argument is not a valid binary, this assertion will fail (statically or dynamically). The weaker `{&binary~}` allows the runtime to use a chunked list representation and allocate in the nursery region. 
 
-I'd like to support other arrays of fixed-width structure, e.g. if I can get some sort of template like `(i32 * (f32 * u64))`, then I could allocate two cells at a time and properly represent them on load. I'll need to think about this later.
+I'd like to support arrays of other fixed-width structures: floats, fixed-width integers, combinations of these, etc.. But I'll first need to model these fixed width structures. 
 
 #### Texts
 
@@ -293,9 +295,13 @@ But we could improve character counting performance with an index:
                 large values of c,b: range 1..65536
                 small values of i: 1..256
 
-These indices could be installed heuristically based on text size or need. The asymptotic overhead for the index is less than 0.8%. For texts of 4kB, the overhead is closer to 2.6%. The first layer index lets us scan, slice, and lookup on index 100x faster. The second layer bumps us up to 10000x - still O(N), but a nicer coefficient. These indices would support slicing texts of up to about 20MB. Though I would recommend finger-tree ropes and stowage long before reaching that point.
+These indices could be installed heuristically based on text size or need. The asymptotic overhead for the index is less than 0.8%. For texts of 4kB, the overhead is closer to 2.6% due to the index tags. The first layer index lets us scan, slice, and lookup on index 100x faster. The second layer bumps us up to 10000x - still O(N), but a nicer coefficient. These indices would support slicing texts of up to about 20MB. Though I would recommend finger-tree ropes and stowage long before reaching that point.
 
 Conveniently, appending texts can be modeled by appending each array. Logical reversal requires special attention: we reverse each array, but we'll also need the ability to read reversed utf8. (It's probably easiest to do this transparently in our utf8 reader.)
+
+#### Lists of Numbers
+
+We could also go a route of supporting *generic lists of small integers* in an efficient manner, similar to texts but with varint representations or perhaps a varint diff-list. I might consider this if I find a strong use-case.
 
 ### Accelerated Association Arrays? (low priority)
 
@@ -359,6 +365,8 @@ Our stack can be modeled by a simple list and our bytecode by a binary. I'll be 
 
 Compilation to native code requires extra consideration. Apparently, many operating systems enforce that memory cannot be both writable and executable. But I could probably keep LLVM bitcode together with a compiled block. The bigger compilation challenge is modeling the LLVM continuation as needed. 
 
+Fixpoints can probably be optimized heavily. We can validate just once that our block of code is copyable.
+
 *Note:* compilation for external runtimes (apps, unikernels, etc.) will be modeled as an extraction, distinct from Wikilon's internal runtime. My goal with compiled code is to make Wikilon fast enough for lots of immediately practical uses and eventual bootstrapping.
 
 ### Numbers other than Small Integers
@@ -384,7 +392,11 @@ To support suspension, checkpointing, persistence, and resumption of computation
 
 ## Par/Seq Parallelism
 
-An active computation will construct child computations via `{&par}`. We'll not parallelize until we've proven we have enough work on the active route, e.g. by holding onto our `(par, continuation)` object until it leaves the nursery. We do need to track these computations, such that we can immediately continue them as needed.
+An active computation might construct child computations via `{&par}`. 
+
+Coarse grained computations will be important for this to work. So we need some evidence that there is enough work on both branches to continue. A simple technique is perhaps to evaluate a task partially in the current thread before continuing with a parallel computation. Indeed, we could do this with both fragments. 
+
+This might reduce effective utilization of multiple threads, though. Would it be better to use a weaker `{&par~}` annotation to keep content local for a cycle, and `{&par}` for a more strict interpretation? I'm not sure. 
 
 ## Dead Ideas
 
