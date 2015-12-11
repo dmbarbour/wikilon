@@ -1,6 +1,5 @@
 {
   global: 
-    wikrt_strerror;
 
     wikrt_env_create;
     wikrt_env_destroy;

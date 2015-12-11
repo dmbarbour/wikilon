@@ -37,13 +37,20 @@
  *  - Parallelism. Modulo space requirements, pure computations behave
  *    independently of evaluation order. Divide and conquer tactics 
  *    are effective if we can divide into coarse-grained tasks. ABC
- *    easily supports par/seq parallelism.
+ *    easily supports par/seq parallelism. 
  * 
  *  Wikilon runtime supports all of these techniques. Further, large
  *  value stowage comes with an integrated persistence model via LMDB.
  *  Wikilon state is represented using ABC values, which simplifies 
  *  potential reflection and development of software agents.
  *
+ *  @section usage_sec Usage
+ *
+ *  Create an environment. Create a context within that environment.
+ *  Create a task within that context. For persistent interactions, 
+ *  create a transaction as part of your task and load some data from
+ *  the built-in database. When the task is done, destroy it.
+ * 
  *  @section notes_sec Notes
  *
  *  Portability: Wikilon runtime is written for use in Linux with GCC.
@@ -53,9 +60,9 @@
  *  Locking: The LMDB file is only safe for a single application,
  *  and only a single wikrt_env within that application. This is 
  *  guarded by a simple file lock via flock(2). 
- *  
- *  Hot Backup: Currently not supported. It may be useful to model
- *  this explicitly.
+ *
+ *  Hot Backup: Currently not supported. I would like to maybe support
+ *  this explicitly, eventually.
  *
  *  @section license_sec License & Copyright
  *
@@ -127,6 +134,37 @@ typedef struct wikrt_val {
     uintptr_t  address;
 } wikrt_val;
 
+/** @brief Errors during Wikilon Runtime
+ *
+ * Following the normal C conventions, most functions return an error 
+ * condition that allows simple policies on how to handle them. If
+ * there is no error, a zero value (WIKRT_OK) is returned.
+ */
+typedef enum wikrt_err 
+{ WIKRT_OK = 0
+, WIKRT_INVAL           // bad arguments, avoidable programmer error
+
+// External Resource Errors
+, WIKRT_DBERR           // database related errors 
+, WIKRT_NOMEM           // malloc or mmap allocation error
+
+// Special Conditions
+, WIKRT_CXFULL          // context is out of memory
+, WIKRT_NOLINK          // context or environment destroyed
+
+// Transactions
+, WIKRT_CONFLICT        // transaction failed on conflict
+
+// Evaluations
+, WIKRT_TOKEN_STOP      // stop on unrecognized token
+, WIKRT_QUOTA_STOP      // halted on step quota
+, WIKRT_COPY_AFFINE     // copied an affine value
+, WIKRT_DROP_RELEVANT   // dropped a relevant value
+, WIKRT_ASSERT_FAIL     // assertion failure (operator `K`)
+, WIKRT_TYPE_ERROR      // generic type errors
+
+} wikrt_err;
+
 
 /** @brief Structure representing an active computation.
  *
@@ -144,23 +182,6 @@ typedef struct wikrt_val {
  */
 typedef struct wikrt_task { wikrt_val task; } wikrt_task;
 
-/** @brief Structure representing a generic error condition.
- *
- * If there is no error, the zero value is returned. Otherwise, we
- * may return a number that roughly describes the error. We'll favor
- * errors in `<errno.h>` where applicable. E.g.
- *
- * - ETIME - returned on compute quota 
- * - ENOSPC - out of space in context
- * - ENODATA - undefined key in database
- * - ENAMETOOLONG - key too large
- * - EINVAL - invalid arguments
- * - ENOLINK - wikrt_env link severed 
- */
-typedef int wikrt_errno;
-
-/** Obtain textual descriptions of runtime errors. */
-char const* wikrt_strerror(wikrt_errno);
 
 /** @brief Create or Open a Wikilon environment.
  *
@@ -177,9 +198,9 @@ char const* wikrt_strerror(wikrt_errno);
  * An environment may be created without external storage by setting
  * dbMax to 0. In this case, large value stowage is ignored and any
  * txn_begin operations will fail. However, there is no memory-only
- * database option. 
+ * database option (modulo a memory-only filesystem). 
  */
-wikrt_errno wikrt_env_create(wikrt_env**, char const* dirPath, size_t dbMax);
+wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, size_t dbMax);
 
 /** @brief Destroys an environment and free its memory.
  * 
@@ -189,18 +210,14 @@ wikrt_errno wikrt_env_create(wikrt_env**, char const* dirPath, size_t dbMax);
  * crashes, so this serves as a 'graceful' shutdown.
  *
  * The actual memory for the wikrt_env is preserved until the final
- * context is destroyed. However, attempts to create new contexts or
- * further operate within existing contexts will simply fail with
- * ENOLINK.
- * 
+ * context is destroyed. 
  */
 void wikrt_env_destroy(wikrt_env*);
 
-/** @brief Create a Context for Wikilon Tasks and Values
+/** @brief Create a context for computation.
  * 
- * A context includes a model of a heap and may host multiple tasks and
- * transactions. Almost anything you do with the Wikilon runtime requires
- * a context. 
+ * A context includes a heap and may host tasks and transactions. Most
+ * actions involving a runtime require a context and a task within it.
  *
  * The primary parameter for a context is the size of its address space.
  * This is allocated immediately. Eventually, contexts may support more
@@ -208,31 +225,32 @@ void wikrt_env_destroy(wikrt_env*);
  * the defaults will have to suffice. Right now, contexts are limited
  * to a 32-bit internal address space, up to 4GB in size. This limit
  * may be lifted later, but is sufficient for Wikilon's use cases.
+ *
  */ 
-wikrt_errno wikrt_cx_create(wikrt_env*, wikrt_cx**, size_t cxSpace);
+wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, size_t cxSpace);
 
 // todo: support configuration of contexts:
-//  number of active nurseries (if I don't alloc dynamically?)
+//  number of nurseries (or alloc dynamically?)
 //  config for large vs. small nurseries
-
-// todo: whole context actions
-//  suspend a context
-//  clone and defrag a context
 
 /** @brief Destroys a context and frees its memory.
  *
- * Computations in the context will be halted. But memory resources are
- * held until all externally created tasks in context are also destroyed.
+ * Any active computations on the context are suspended. Some memory
+ * resources will be held until all 'tasks' are destroyed. 
  */
 void wikrt_cx_destroy(wikrt_cx*);
 
 /** Every context holds a reference to its environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-// Create tasks: named? 
+/** @brief Create a new task within a context. 
+ *
+ * This may fail if the context is full or destroyed.
+ */
+wikrt_err wikrt_task_create(wikrt_cx*, wikrt_task* dest);
 
-
-
+/** For switching on a value's general type.
+ */
 
 
 /** @brief Transactional Persistence
@@ -270,7 +288,7 @@ bool wikrt_db_keyvalid(char const*);
  * 'commit' to release the transaction. Otherwise, the transaction
  * prevents full recovery of memory from the underlying context, 
  */
-wikrt_errno wikrt_txn_begin(wikrt_task*, wikrt_txn*);
+wikrt_err wikrt_txn_begin(wikrt_task*, wikrt_txn*);
 
 // TODO: potential support for hierarchical transactions (if sufficient demand)
 
@@ -285,8 +303,9 @@ wikrt_errno wikrt_txn_begin(wikrt_task*, wikrt_txn*);
  * succeeds but we'll also report WIKRT_COPY_AFFINE as an error. This
  * enables a caller to decide policy on whether substructural types 
  * are respected for a class of transactions.
+ *
  */
-wikrt_errno wikrt_db_read(wikrt_txn*, char const* key, wikrt_val* dest);
+wikrt_err wikrt_db_read(wikrt_txn*, char const* key, wikrt_val* dest);
 
 /** @brief Write value into our key-value persistence layer.
  * 
@@ -299,7 +318,7 @@ wikrt_errno wikrt_db_read(wikrt_txn*, char const* key, wikrt_val* dest);
  * enables the caller to decide policy on whether substructural types
  * are respected for a class of transactions.
  */
-wikrt_errno wikrt_db_write(wikrt_txn*, char const* key, wikrt_val* val);
+wikrt_err wikrt_db_write(wikrt_txn*, char const* key, wikrt_val* val);
 
 /** @brief Exchange a value from our key-value persistence layer.
  *
@@ -308,7 +327,7 @@ wikrt_errno wikrt_db_write(wikrt_txn*, char const* key, wikrt_val* val);
  * copies during a transaction that updates a value many times (i.e. you
  * can swap for a dummy value like unit).
  */
-wikrt_errno wikrt_db_swap(wikrt_txn*, char const* key, wikrt_val* val);
+wikrt_err wikrt_db_swap(wikrt_txn*, char const* key, wikrt_val* val);
 
 /** @brief Mark a transaction for durability. 
  *
@@ -331,7 +350,7 @@ void wikrt_txn_abort(wikrt_txn*);
  * has been destroyed. Succeed or fail, resources are returned to 
  * the context.
  */
-wikrt_errno wikrt_txn_commit(wikrt_txn*);
+wikrt_err wikrt_txn_commit(wikrt_txn*);
     // TODO: early detection of conflicts
     //       heuristic priority, etc.
 
