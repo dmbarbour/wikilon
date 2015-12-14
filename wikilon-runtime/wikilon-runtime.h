@@ -47,9 +47,8 @@
  *  @section usage_sec Usage
  *
  *  Create an environment. Create a context within that environment.
- *  Create a task within that context. For persistent interactions, 
- *  create a transaction as part of your task and load some data from
- *  the built-in database. When the task is done, destroy it.
+ *  Load some values into the context, possibly via the key-value
+ *  database. Perform computations and analyze the results.
  * 
  *  @section notes_sec Notes
  *
@@ -77,57 +76,51 @@
 
 /** @brief Opaque structure for overall Wikilon environment.
  * 
- * The environment contains elements shared by associated contexts.
- * This includes LMDB storage and a pool of worker threads (one per
- * CPU, with affinity) for any par/seq parallelism. There's no point
- * to having more worker threads than cores.
+ * An environment includes an LMDB instance for large value stowage and
+ * a simple key-value persistence layer. Additionally, the environment
+ * has a pool of worker threads (one on each CPU by default) to support
+ * par/seq parallelism.
+ *
+ * An environment may support multiple concurrent contexts.
  *
  */
 typedef struct wikrt_env wikrt_env;
 
-/** @brief Opaque structure for a specific heap.
+/** @brief Opaque structure representing a heap for computations.
  *
- * A context is an arena for computations. Mostly, it consists of one
- * large address space with a set of active computations. The context
- * may be suspended at any time. If destroyed, all values associated
- * with a context become inaccessible.
+ * A context is a fixed-size arena for computations. Wikilon runtime
+ * currently supports 32-bit arenas, up to 4GB. The lower practical
+ * bound is perhaps 4 megabytes. Large value stowage enables operating
+ * on values considerably larger than the context.
  *
- * Use of multiple smaller contexts, instead of one large context, is
- * convenient for space quotas - ensuring a computation doesn't use 
- * too much space at once. Of course, large value stowage allows a
- * computation to use much more data than is held in memory at any
- * given instant.
- *
- * At the moment, Wikilon only supports 32-bit contexts (max size 
- * 4GB). Eventually, we may additionally support 64-bit contexts
- * with an option at construction time. The lower practical limit
- * for a context is perhaps 4 megabytes (one task, no parallelism). 
+ * Use of many small contexts is convenient for space quotas, ensuring
+ * a computation doesn't use too much space. In Wikilon, we'll tend to
+ * use a pool of contexts to serve web pages. The advantage of a larger
+ * context is greater potential non-copying sharing of data, especially
+ * working with shared arrays. 
+ * 
  */
 typedef struct wikrt_cx wikrt_cx;
 
 /** @brief Reference to a value in a context.
- * 
- * A Wikilon runtime context only supports values for use with Awelon
- * Bytecode (ABC). The five basic values include integers, products,
- * sums, unit, and functions. With these, we can represent lists,
- * trees, opaque objects, and existentials. Arrays, texts, binaries,
- * and a few other types are specialized representations for lists
- * which permit some nice acceleration of list processing functions.
  *
- * Wikilon runtime also supports discretionary value sealing (e.g. 
- * like a newtype wrapper) to help resist type errors.
+ * The value model is oriented around Awelon Bytecode (ABC) and Awelon
+ * Object (AO). The five basic value types are integers, products, sums,
+ * unit, and blocks (aka functions). Beyond these, we have value sealing
+ * (which serves as an ad-hoc type wrapper), and substructural types (a
+ * block may be affine or relevant, limiting copy and drop). Compact, 
+ * specialized representations for lists include arrays, chunked lists,
+ * binaries, texts.
  *
- * Wikilon runtime favors move and deep-copy semantics. The default
- * assumption is that we hold the only reference to any value. This
- * allows nice tricks like if we have pair (a,b) then swap operates
- * in place to form (b,a) instead of allocating a new pair. In place
- * update of arrays is possible with accelerated list processing.
+ * NOTE: Wikilon runtime is oriented around 'move' semantics. This enables
+ * many pure functions to be implemented with non-allocating mutations. 
+ * The cost is that 'copying' a value requires actually copying it. The 
+ * presence of affine and relevant substructural types discourages AO and
+ * ABC programs from using 'copy' and 'drop' for generic programming. 
  *
- * This applies also to values created through this C API. If you create
- * a value, you own it. If you pass that value into task or transaction,
- * that task now owns it. If you want to still hold a copy of the value,
- * you must copy it explicitly. I'll aim to make the API clear.
- *
+ * Move semantics applies also to values created through this C API. If
+ * you create a value, you own it until you pass it on. You can drop the
+ * value if you don't need it anymore. 
  */
 typedef struct wikrt_val {
     wikrt_cx*  context;
@@ -145,7 +138,7 @@ typedef enum wikrt_err
 , WIKRT_INVAL           // bad arguments, avoidable programmer error
 
 // External Resource Errors
-, WIKRT_DBERR           // database related errors 
+, WIKRT_DBERR           // database or filesystem related errors 
 , WIKRT_NOMEM           // malloc or mmap allocation error
 
 // Special Conditions
@@ -153,35 +146,17 @@ typedef enum wikrt_err
 , WIKRT_NOLINK          // context or environment destroyed
 
 // Transactions
-, WIKRT_CONFLICT        // transaction failed on conflict
+, WIKRT_TXN_CONFLICT    // transaction failed on conflict
 
 // Evaluations
-, WIKRT_TOKEN_STOP      // stop on unrecognized token
 , WIKRT_QUOTA_STOP      // halted on step quota
+, WIKRT_TOKEN_STOP      // stop on unrecognized token
 , WIKRT_COPY_AFFINE     // copied an affine value
 , WIKRT_DROP_RELEVANT   // dropped a relevant value
 , WIKRT_ASSERT_FAIL     // assertion failure (operator `K`)
 , WIKRT_TYPE_ERROR      // generic type errors
 
 } wikrt_err;
-
-
-/** @brief Structure representing an active computation.
- *
- * At the C API, operations on values are associated with a task. This
- * binding protects data locality, reduces synchronization overhead, 
- * ensures a reference count is held on the context, and provides a
- * location for any debug output. Tasks are single-threaded, but are
- * not bound to any particular thread.
- *
- * Under the hood, a task allocates from the heap in larger chunks for
- * data locality and to reduce synchronization on the context's free
- * list. A task also may have a 'nursery', a special region for fast
- * allocation and compacting GC that serves a similar role as a stack
- * in more conventional languages.
- */
-typedef struct wikrt_task { wikrt_val task; } wikrt_task;
-
 
 /** @brief Create or Open a Wikilon environment.
  *
@@ -190,140 +165,133 @@ typedef struct wikrt_task { wikrt_val task; } wikrt_task;
  * database does not exist, we'll attempt to create a new one, making
  * parent directories in the filesystem as necessary.
  *
- * This may fail due to any number of permissions errors, or if there
- * isn't enough address space, or if the database is already in use, 
- * or if the given path is invalid, etc.. In case of failure, a NULL 
- * environment is returned, along with a non-zero errno.
+ * This action may fail, most likely for filesystem or database reasons
+ * but potentially because there is insufficient address space for the
+ * dbMax allocation. 
  *
  * An environment may be created without external storage by setting
  * dbMax to 0. In this case, large value stowage is ignored and any
- * txn_begin operations will fail. However, there is no memory-only
- * database option (modulo a memory-only filesystem). 
+ * txn_begin operations will fail. There is no memory-only database
+ * option (modulo a memory-only filesystem). 
  */
 wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, size_t dbMax);
 
-/** @brief Destroys an environment and free its memory.
- * 
- * When you're done with an environment, destroy it. This action will
- * suspend all active computations, wait for active database writes to
- * finish, and perform a final sync. Wikilon attempts to be robust to
- * crashes, so this serves as a 'graceful' shutdown.
+/** @brief Manage reference counts for an environment.
  *
- * The actual memory for the wikrt_env is preserved until the final
- * context is destroyed. 
+ * Adding to the reference count for a Wikilon runtime does not prevent
+ * its destruction, but does ensure a subset of critical resources remain
+ * in memory so we can return WIKRT_NOLINK errors instead of crashing.
+ *
+ * A newly created environment has refct=1. The destroy operation will
+ * implicitly decref. If a live environment's refct is reduced to zero,
+ * it is destroyed automatically. Contexts also manage the refct of the
+ * environment. Hence, it is feasible to create a context then decref
+ * the environment such that the environment is destroyed when there
+ * are no more contexts.
+ */
+void wikrt_env_refct(wikrt_env*, int delta);
+
+/** @brief Destroys an environment and free memory resources. 
+ * 
+ * This attempts a graceful shutdown of the environment and all its
+ * contexts. A small subset of memory resources may remain in memory
+ * until reference counts reduce to zero.
+ *
  */
 void wikrt_env_destroy(wikrt_env*);
 
 /** @brief Create a context for computation.
  * 
  * A context includes a heap and may host tasks and transactions. Most
- * actions involving a runtime require a context and a task within it.
+ * actions involving a runtime require a context. The primary parameter
+ * for a context is the size of its address space, which is allocated
+ * immediately.
  *
- * The primary parameter for a context is the size of its address space.
- * This is allocated immediately. Eventually, contexts may support more
- * configuration, e.g. for nursery sizes and GC heuristics. But for now
- * the defaults will have to suffice. Right now, contexts are limited
- * to a 32-bit internal address space, up to 4GB in size. This limit
- * may be lifted later, but is sufficient for Wikilon's use cases.
- *
+ * This operation may fail with WIKRT_NOMEM if there isn't enough address
+ * space to allocate the context. It may fail with WIKRT_NOLINK if the
+ * environment has been destroyed but you're still holding a reference to
+ * it.
  */ 
 wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, size_t cxSpace);
 
-// todo: support configuration of contexts:
-//  number of nurseries (or alloc dynamically?)
-//  config for large vs. small nurseries
+/** @brief Manage reference counts for a context.
+ *
+ * If concurrent destruction of a context is a risk, threads should
+ * maintain a reference to their context. This doesn't prevent the
+ * destruction, but rather ensures WIKRT_NOLINK errors instead of
+ * crashing outright. 
+ *
+ * A context implicitly has refct=1 when created. Destroying the context
+ * will implicitly decrement its refct; conversely, if the refct is
+ * decremented to zero, the context is implicitly destroyed.
+ */
+void wikrt_cx_refct(wikrt_cx*, int delta);
 
 /** @brief Destroys a context and frees its memory.
  *
- * Any active computations on the context are suspended. Some memory
- * resources will be held until all 'tasks' are destroyed. 
+ * After destroying a context, most operations on from other threads
+ * (that should be holding a refct) will fail with WIKRT_NOLINK. A
+ * context that is created should always be destroyed, either through
+ * this operation or via decrementing the initial refct.
  */
 void wikrt_cx_destroy(wikrt_cx*);
 
-/** Every context holds a reference to its environment. */
+/** A context holds a reference to its environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
-
-/** @brief Create a new task within a context. 
- *
- * This may fail if the context is full or destroyed.
- */
-wikrt_err wikrt_task_create(wikrt_cx*, wikrt_task* dest);
-
-/** For switching on a value's general type.
- */
-
 
 /** @brief Transactional Persistence
  *
- * The Wikilon environment includes a simple key-value database.
+ * The Wikilon environment includes a simple key-value database for
+ * use as a persistence layer that integrates easily with large value
+ * stowage. Transactions enable consistent views of multiple keys and
+ * atomic updates. Durability is optional per transaction.
  *
- * This database is persistent, and is intended to support a persistent
- * runtime. Changes to the database are preserved in the same database
- * as our large value stowage. Durability is optional per transaction or
- * via explicit sync.
- *
- * Keys must be valid AO texts (utf8 strings minus C0 (except LF),
- * DEL, C1, U+D800-U+DFFF, and U+FFFD) and have limited size (no more
- * than 255 bytes). The values are anything we can stow.
- * 
- * NOTE: This database is not directly accessible to ABC computations.
- * Access to a database can be modeled, e.g. as a free monadic effect.
- * Doing so could be useful for constructing software agents. But the
- * normal use is just to persist dictionaries and cached computations,
- * or other application-specific content.
+ * Note: This database is not implicitly accessible to ABC computations.
+ * Access may be modeled explicitly, e.g. as a free monadic effect, like
+ * any other effect. Semantics for the persistence layer are up to each
+ * application.
  */
 typedef struct wikrt_txn { wikrt_val txn; } wikrt_txn;
 #define WIKRT_DB_KEY_SIZE_MAX 255
 
-/** Access the validation code for a proposed key. */
+/** @brief Access the validation code for a proposed key.
+ *
+ * Database keys are constrained to be valid utf-8 texts with up to
+ * 255 bytes excluding control characters (C0, DEL, C1), surrogates
+ * (U+D800 - U+DFFF), and the replacement character (U+FFFD).
+ */
 bool wikrt_db_keyvalid(char const*);
 
 /** @brief Begin a new transaction for key-value persistence.
- *
- * A transaction must be associated with a task, which itself is 
- * bound to a particular runtime context. If the task is destroyed,
- * all transactions are implicitly aborted.
- *
- * After you start a transaction, you must eventually use 'abort' or
- * 'commit' to release the transaction. Otherwise, the transaction
- * prevents full recovery of memory from the underlying context, 
  */
-wikrt_err wikrt_txn_begin(wikrt_task*, wikrt_txn*);
+wikrt_err wikrt_txn_begin(wikrt_cx*, wikrt_txn* dest);
 
-// TODO: potential support for hierarchical transactions (if sufficient demand)
+// todo: support hierarchical transactions if sufficient demand
 
 /** @brief Read a value from our key-value persistence layer.
  * 
  * If a read succeeds, you have a copy of the value from the database
  * or a value written to the same key earlier in the transaction. The
  * read may fail if the only available copy is potentially inconsistent
- * due to a concurrent transaction.
- *
- * If this causes a transaction to copy an affine value, the action
- * succeeds but we'll also report WIKRT_COPY_AFFINE as an error. This
- * enables a caller to decide policy on whether substructural types 
- * are respected for a class of transactions.
+ * due to a concurrent transaction. If the value is not copyable, we 
+ * will copy it anyway but also return WIKRT_COPY_AFFINE like wikrt_copy.
  *
  */
 wikrt_err wikrt_db_read(wikrt_txn*, char const* key, wikrt_val* dest);
 
 /** @brief Write value into our key-value persistence layer.
  * 
- * This function will write a value to our persistence layer. The
- * transaction takes ownership of this value, but you can copy it
- * ahead of time or simply read the key. 
- *
- * If this causes a transaction to overwrite a relevant value, the
- * action succeeds but we'll get an WIKRT_DROP_RELEVANT error. This
- * enables the caller to decide policy on whether substructural types
- * are respected for a class of transactions.
+ * This function will overwrite a key in our persistence layer. The
+ * transaction takes ownership of the given value. If the original
+ * value is not droppable, we'll overwrite it anyway but also return
+ * WIKRT_DROP_RELEVANT like wikrt_drop.
  */
 wikrt_err wikrt_db_write(wikrt_txn*, char const* key, wikrt_val* val);
 
 /** @brief Exchange a value from our key-value persistence layer.
  *
  * Swap a value currently bound to a key with the value provided. This
- * guarantees protection for substructural types, and avoids intermediate
+ * guarantees protection for substructural types and avoids intermediate
  * copies during a transaction that updates a value many times (i.e. you
  * can swap for a dummy value like unit).
  */
@@ -333,7 +301,7 @@ wikrt_err wikrt_db_swap(wikrt_txn*, char const* key, wikrt_val* val);
  *
  * A 'durable' transaction will force the underlying database to
  * push content to disk. Otherwise, transactions only have the ACI
- * properties but will tend to run a bit more efficiently. 
+ * properties but will tend to run with greatly reduced latency.
  */
 void wikrt_txn_durable(wikrt_txn*);
 
@@ -360,6 +328,58 @@ wikrt_err wikrt_txn_commit(wikrt_txn*);
  * sync every five seconds or so to limit potential data loss.
  */
 void wikrt_db_sync(wikrt_env*);
+
+/** @brief Construct the unit value.
+ *
+ * In the current implementation, this doesn't actually require an
+ * allocation. 
+ */
+wikrt_err wikrt_alloc_unit(wikrt_cx*, wikrt_val* dest);
+
+/** @brief Construct an integer value.
+ *
+ * Small integers, within the range of plus or minus a billion,
+ * do not require allocations in the current implementation. They
+ * are represented entirely in the address field. 
+ */
+wikrt_err wikrt_alloc_int(wikrt_cx*, int, wikrt_val* dest);
+wikrt_err wikrt_alloc_int32(wikrt_cx*, int32_t, wikrt_val* dest);
+wikrt_err wikrt_alloc_int64(wikrt_cx*, int64_t, wikrt_val* dest);
+
+/** @brief Construct an integer value from a text representation.
+ *
+ * Expected regex: 0 | (-)?(1-9)(0-9)*
+ *
+ * Very large integers can be constructed through this method or
+ * by a more direct use of bytecode to construct a value.
+ */
+wikrt_err wikrt_alloc_intStr(wikrt_cx*, char const*, wikrt_val* dest);
+
+
+/** @brief Construct an AO text value from a C string.
+ * 
+ * Wikilon runtime only permits valid AO texts. In particular, our
+ * texts must exclude control characters (C0, C1, DEL) except LF,
+ * surrogates (U+D800 to U+DFFF), and the replacement character
+ * (U+FFFD). If these conditions aren't met, WIKRT_INVAL will be
+ * returned.
+ */
+wikrt_err wikrt_alloc_text(wikrt_cx*, char const*, wikrt_val* dest);
+
+/** @brief Construct an AO binary value.
+ *
+ */ 
+
+
+
+
+
+
+
+
+
+
+
 
 // just testing
 void wikrt_hello(char const * s);

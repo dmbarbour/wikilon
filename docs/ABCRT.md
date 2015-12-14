@@ -303,22 +303,21 @@ Conveniently, appending texts can be modeled by appending each array. Logical re
 
 We could also go a route of supporting *generic lists of small integers* in an efficient manner, similar to texts but with varint representations or perhaps a varint diff-list. I might consider this if I find a strong use-case.
 
-### Accelerated Association Arrays? (low priority)
+### Accelerated Association Lists? (low priority)
 
 It might be useful to heavily optimize an associative structure, e.g. the equivalent of a JSON Object. Motivations include:
 
 * fast indexed lookup without disassembly of the structure
 * optimized representations for small vs. large structures
 * implicit batching of updates, log structured merge trees
+* type covers a lot of use cases: records, databases, etc.
 * provides a built-in, optimized model for AO dictionaries
 
-Any accelerated associative structure must have a primary representation deterministic from content. This enables use of alternative representations under the hood, because we can recover the original representation. This excludes most binary search trees because their final structure depends on insertion order. However, this does permit use of a *trie* or of a *sorted association list*. Our keys could simply be a list of integers. This covers texts, binaries, vectors, etc.
+An accelerated associative structure should have a canonical evaluated form, a representation deterministic from content. This enables ad-hoc representation under the hood without metadata. This requirement excludes most binary search trees because their final structure depends on insertion order. However, this does permit use of a *trie* or of a *sorted association list*. Between these, the sorted association list is the superior option for acceleration. It is the simpler model. It allows accelerated lookups and updates, ad-hoc representation (structs, tries, log structured merge trees, etc.). Further, it fits naturally with other list accelerators, e.g. as a basis for iteration.
 
-The sorted association list is the superior option for acceleration. Other than accelerated lookup, we can't do much to accelerate a trie. Further, the trie representation is sophisticated, difficult to recover from other representations, and requires more logic than I'm comfortable requiring in the runtime. 
+I'll need to return to this concept later. I think supporting this idiom in both the representation and type system could greatly simplify modeling of more conventional programming models (OOP, stack frames, etc.). But I also need to be sure it is simple to implement. And I'll need a proper set of annotations and accelerators to make it worthwhile.
 
-For a sorted association list, access as a plain old list is an effective model for iteration. Many array-based accelerators (splits, joins, logical reversals, etc.) are directly applicable. There's much we can do to accelerate large associations. Our runtime can freely trade simplicity and performance. 
-
-Acceleration of association arrays is a tempting possibility.
+More generally, it might be interesting to support ad-hoc 'tables', perhaps column structured? An array of structures as a structure of arrays? With enough good annotations for collections oriented programming, I think a lot of performance issues can be eradicated.
 
 ### Large Value Stowage
 
@@ -373,7 +372,7 @@ Fixpoints can probably be optimized heavily. We can validate just once that our 
 
 ABC is required to support arbitrary precision integers. I would like to use a simple representation in this case. I'd also like to squeeze some extra data into our type tag.
 
-I'm currently thinking we might use something like a var-nat representation, albeit in reverse (little-endian). We can probably squeeze 24-28 bits of data and the sign bit into our tag, such that many 'large' numbers can still be represented in just one cell. We could use 64-bit arithmetic, easily enough.
+A binary coded decimal representation is a viable option for fast translation, i.e. encoding 3 digits for every 10 bits, or perhaps 9 digits every 30 bits. But I'll need to determine how this affects performance of multiplication, addition, and division.
 
 Eventually, I would like to support fixed-width numbers via accelerators: modulo arithmetic, models of floating point, etc..
 
