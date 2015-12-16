@@ -146,9 +146,23 @@ Important tagged objects include:
 * numbers other than small integers
 * external resources
 
-Most tagged objects will require two cells or more. But there are a few cases where we can squeeze down to just one cell: reference counting wrappers, and ad-hoc sum types. 
+Most tagged objects will require two cells or more. But there are a few cases where we can squeeze down to just one cell: reference counting wrappers, and ad-hoc sum types.
 
 ### Reference Count Wrappers
+
+Wikilon favors 'move' semantics, with ownership of values. This enables many pure functions to be implemented by in-place mutation. However, we may benefit from shared structure in specialized cases: 
+
+* Accelerators enable non-destructive access to a value, e.g. we can access the Kth element of a list without dismantling it if we assume a list accelerator. Assuming this is our primary means to access the list, we may benefit from copying it logically.
+
+* With large value stowage, I generally want to assume that copies will be performed in O(1) time after performing `{&stow}` (even if actual stowage is latent). Further, I expect to lazily pay the cost of copy (down to the next stowage layer) upon access to the data. Consequently `{&stow}` is a truly outstanding fit for the notion of logical copies.
+
+* With pending parallel or lazy computations, I probably don't want to wait on the result. It seems more useful to record an assumption that the result will be copyable, and use a logical copy immediately.
+
+Blocks or functions might fit some of these use cases.
+
+A reference count could serve as a basis for logical copies. Instead of performing a deep copy, we wrap a reference count around our value, increment it when we copy, decrement it when the value is dropped or actually copied. The weakness of reference counts is that parallel observers might both make copies of the same value, even though we could have made just one copy. So, we'll probably want to use annotations to guide use of reference counts. 
+
+Stowage is an obvious case. Use of a `{&share}` annotation (any time before performing a copy) would allow programmers to control less obvious cases.
 
 With 4-byte words and a 4GB address space, we have at most 2^30 - 1 references to a refct object. This is almost even achievable via compacting vectors. But this leaves us the two low bits: one to tag refcts, one to tag delebility.
 
@@ -164,6 +178,8 @@ The savings from injected reference counts is mostly:
 * reduced memory pressure if copies are processed sequentially
 * fast future copies, validation already performed behind refct
 * very efficient copy-delete patterns with shallow observations
+
+*NOTE:* In case of parallelism, we might end up copying a value more frequently, i.e. because we hold onto a refct when performing our copy then decref the old copy. It might be necessary to make this behavior explicit via annotation, e.g. preparing for fast copy-delete pattern. Or it could be something we limit to special cases like arrays and 'stowed' values. Maybe a `{&fastcopy}` annotation?
 
 We represent reference counts as a single cell. This gives us a very good amortized overheads, e.g. if we refct every 64 objects we have a 0.5 bit overhead per object. 
 
