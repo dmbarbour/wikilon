@@ -172,8 +172,6 @@ typedef enum wikrt_err
 , WIKRT_TOKEN_STOP      // stop on unrecognized token
 , WIKRT_ASSERT_FAIL     // assertion failure (op `K`)
 , WIKRT_TYPE_ERROR      // generic type errors
-
-
 } wikrt_err;
 
 /** @brief Create or Open a Wikilon environment.
@@ -305,9 +303,7 @@ typedef enum wikrt_val_type
 , WIKRT_VAL_BLOCK       // functional bytecode  
 , WIKRT_VAL_SEALED      // sealed values
 // special cases
-, WIKRT_VAL_STOW        // values awaiting stowage
 , WIKRT_VAL_STOWED      // fully stowed values
-, WIKRT_VAL_PENDING     // parallel or lazy eval
 } wikrt_val_type;
 
 /** Obtain shallow analysis of value type. */
@@ -349,6 +345,20 @@ wikrt_err wikrt_peek_sum(wikrt_val const* s, bool* bInLeft, wikrt_val* dst);
  */
 wikrt_err wikrt_peek_list(wikrt_val const* lst, size_t nMaxElems, wikrt_val* pValArray, size_t* nListElems, wikrt_val* rem);
 
+/** @brief Access a binary value non-destructively.
+ *
+ * A binary is a list of small integers in the range 0..255. We can
+ * copy fragments of the binary to our caller regardless of the
+ * underlying representation. 
+ *
+ * If the argument is not a binary, WIKRT_TYPE_ERROR is returned, but the
+ * output buffer and sizes will contain as much valid binary as feasible.
+ * Hence, a list containing 0,1,2,...,511 could return a buffer with 256
+ * items in binary (0..255) then the `rem` would contain the list with
+ * items 256..511. 
+ */
+wikrt_err wikrt_peek_binary(wikrt_val const* binary, size_t nMaxBytes, unsigned char* dst, size_t* nBytes, wikrt_val* rem);
+
 /** @brief Access a text value non-destructively.
  *
  * A text is a list of utf-8 codepoints with some constraints (forbids
@@ -356,17 +366,11 @@ wikrt_err wikrt_peek_list(wikrt_val const* lst, size_t nMaxElems, wikrt_val* pVa
  * NUL value is not used in Wikilon runtime texts, we can return NUL
  * terminated C strings.
  *
- * In addition to the main output, developers may additionally receive
- * a number of bytes and utf-8 codepoints.
+ * If the argument is not a text, WIKRT_TYPE_ERROR is returned, but the
+ * output parameters will still contain as much valid text as feasible.
+ * See also how this works for wikrt_peek_binary.
  */
 wikrt_err wikrt_peek_text(wikrt_val const* txt, size_t nMaxBytes, char* dst, size_t* nBytes, size_t* nChars, wikrt_val* rem);
-
-/** @brief Access a binary value non-destructively.
- *
- * A binary is a list of small integers in the range 0..255. We can
- * copy fragments of the binary up to the caller.
- */
-
 
 /** @brief Read relatively small integers.
  *
@@ -385,6 +389,33 @@ wikrt_err wikrt_peek_i64(wikrt_val const*, int64_t*);
  */
 wikrt_err wikrt_peek_istr(wikrt_val const*, char* dst, size_t nMaxChars);
 wikrt_err wikrt_peek_isize(wikrt_val const*, int* nBuffSize);
+
+/** @brief buffer for tokens
+ *
+ * ABC {tokens} are expressed between curly braces, e.g. {}. These
+ * tokens must be valid utf-8 texts with some constraints: no control
+ * characters (C0, DEL, C1), no surrogates
+A buffer large enough for the largest tokens allowed by the
+ *  Wikilon runtime.
+ */
+typedef struct wikrt_tok {
+};
+
+/** @brief Peek into a sealed value. 
+ *
+ * Wikilon runtime requires tokens are valid utf-8 texts forbidding
+ * control characters (C0, DEL, C1), surrogates (U+D800 - U+DFFF),
+ * the replacement character (U+FFFD), and curly braces {}, and 
+ * further limited to at most 255 bytes.
+ *
+ * So providing a 256-byte buffer is always sufficient to read the
+ * seal as a NUL-terminated C string. If a smaller buffer is provided,
+ * we'll simply return as much as possible.
+ */
+wikrt_err wikrt_peek_sealed(wikrt_val const*, char* seal, size_t nMaxChars, wikrt_val* ); 
+
+wikrt_
+
 
 /** @brief Dismantle a product and access its elements.
  *
@@ -445,9 +476,9 @@ wikrt_err wikrt_alloc_istr(wikrt_cx*, char const*, wikrt_val* dest);
  * 
  * Wikilon runtime only permits valid AO texts. In particular, our
  * texts must exclude control characters (C0, C1, DEL) except LF,
- * surrogates (U+D800 to U+DFFF), and the replacement character
- * (U+FFFD). If these conditions aren't met, WIKRT_INVAL will be
- * returned.
+ * surrogates (U+D800 to U+DFFF), and replacement character (U+FFFD). 
+ *
+ * If these conditions aren't met, WIKRT_INVAL is returned.
  */
 wikrt_err wikrt_alloc_text(wikrt_cx*, char const*, wikrt_val* dest);
 
@@ -486,6 +517,9 @@ wikrt_err wikrt_alloc_text(wikrt_cx*, char const*, wikrt_val* dest);
  * use as a persistence layer that integrates easily with large value
  * stowage. Transactions enable consistent views of multiple keys and
  * atomic updates. Durability is optional per transaction.
+ *
+ * Keys are strings with limited size and a few constraints, cf. the
+ * wikrt_db_keyvalid function. Values are anything we can stow.
  *
  * Note: This database is not implicitly accessible to ABC computations.
  * Access may be modeled explicitly, e.g. as a free monadic effect, like

@@ -41,9 +41,9 @@ import Wikilon.Word
 --       case sealer is cryptographic (e.g. {:aes$key}). Type is
 --       (v*e)→((sealed v) * e). 
 --   . - value unsealer corresponding to a sealer
---   $ - wraps a cryptographically sealed value, e.g. {$aes:fingerprint}
---   # - resource linking at a global scale, using secure hashes
 --   % - linking at a local scale within an implicit AO dictionary
+--   # - resource linking at a global scale, using secure hashes
+--   $ - might be used for cryptographic value sealing
 newtype Token = Token UTF8.ByteString
     deriving (Eq, Ord)
 
@@ -67,8 +67,8 @@ isValidDictToken (Token tok) = case BS.uncons tok of
     Nothing -> False
 
 isValidSeal :: UTF8.ByteString -> Bool
-isValidSeal s = isValidWord (Word s) && BS.notElem '$' s
+isValidSeal = isValidWord . Word 
 
 isValidAnno :: UTF8.ByteString -> Bool
-isValidAnno a = isValidWord (Word a)
+isValidAnno = isValidWord . Word
 

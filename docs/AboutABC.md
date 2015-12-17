@@ -72,23 +72,30 @@ Numbers use operator `# :: e → (N(0)*e)` to introduce a new zero, then each di
 
 Text is shorthand for producing a list of small numbers between 0 and 1114111 (0x10ffff), the Unicode codepoints. A text list has fixpoint type `µL.((c*L)+1)`, where `c` is a codepoint value. Binaries are encoded using a non-conventional base16 text. 
 
-### Capability Invocations
+### Tokens
 
-Effects in ABC are achieved by invoking environment-provided operators: `{foo}` invokes the environment with token "foo" and the tacit argument. 
+ABC is extensible with tokens, which are expressed by curly braces around a short text such as `{foo}`. There is no way for an ABC program to construct a token, it must simply be part of the bytecode. When a token is reached by an interpreter or compiler, it may be fulfilled by specialized code.
 
-Tokens are *unforgeable* from within ABC. That is, given the string "foo", there is no primitive ABC operator to construct invocation `{foo}`. In an open or distributed system, a token should also be protected from external forgery. This is typically achieved by cryptographic mechanisms, e.g. encryption, secure hashing, signatures, or generation of securely random numbers. 
+Tokens could feasibly be utilized for modeling side-effects, e.g. to invoke an FFI. However, Awelon project favors use of these tokens in purely functional ways:
 
-By capturing an invocation within a block, e.g. `[{foo}]`, we effectively have first-class but unforgeable access to whatever effect the invocation achieves. This is a capability, and is suitable for secure programming under the [capability security model](http://en.wikipedia.org/wiki/Capability-based_security). This is useful in open and distributed systems, which are primary target areas for ABC. Consequently, an invocation token is sometimes described as capability text. 
+* **linking** - with acyclic dependencies and trivial 'inline the referenced bytecode' semantics. Tokens of form `{#secureHashOfBytecode}` are used to link ABC resources in open distributed systems. Tokens of form `{%humanMeaningfulWord}` are used to link definitions within an [AO dictionary](AboutAO.md).
 
-Effectful tokens are typically specific to a virtual machine or runtime environment. However, there are some standard conventions for the special exceptions where we want a token to have a common meaning across independent runtimes in a distributed system. These are usually identified based on the first character:
+* **annotations** - tokens formally having identity semantics, but may be used to optimize performance, make assertions, provide hints for static analysis, integrate debugging tools, etc.. The important requirement is that it's always valid for a compiler or interpreter to *ignore* an annotation that it doesn't understand.
 
-* `{&ann}` - annotation, identity behavior, for performance and debugging.
-* `{:seal}` and `{.seal}` - sealers and unsealers for rights amplification.
-* `{#hashOfCiphertext:hashOfBytecode}` - link and load, separate compilation
+* **attributes** - comments about code, largely intended for software agents. These have no runtime semantics, instead indicate very ad-hoc stuff like authorship, deprecation, modified dates. They may also provide indexing hints, rendering hints, tooling hints, etc. for the code. Attributes are represented by a dropped block of annotations, e.g. of form `[{&attr1}{&attr2}{&attr3}]%`. See the [application model](ApplicationModel.md) for more.
 
-These are discussed with more detail in later sections.
+* **value sealers and unsealers** - a discretionary sealer `{:foo}` has type `(a * e) → (foo:a * e)`, and serves implicitly as a newtype wrapper. To access the sealed value, we can unwrap it with `{.foo}`. Cryptographic sealers are also feasible. See *Value Sealing* below.
 
-*Note:* tokens may not contain characters `{`, `}`, or LF (10). 
+Tokens are constrained as follows:
+
+* valid utf-8 text
+* no more than 63 bytes
+* no control characters (C0, DEL, C1)
+* no surrogates (U+D800 to U+DFFF)
+* no replacement character (U+FFFD)
+* no curly braces `{}`
+
+They may be further constrained within a specific system. Tokens should not receive non-trivial arguments via the token text, though allowing a few flags is reasonable. Most arguments can be provided as actual arguments to the token as parameters.
 
 ## ABC Behavior Details
 
@@ -388,75 +395,61 @@ In many contexts - live programming, orthogonal persistence, open systems - it i
 
 Stability is readily achieved using a filepath/URL metaphor: when 'forking' a uniqueness source, we provide an identifier for the child that is unique within the parent. This stabilizes uniqueness with respect to changes in the order children are constructed. If used with a little discipline, significant restructuring of the source code becomes feasible without damaging persistence or relationships assuming stable identity.
 
-### Value Sealing Types and Capabilities
+### Value Sealing
 
 Value sealing is a simple technique with very wide applications. The setup is simple. We have two capabilities - a 'sealer' and the corresponding 'unsealer'. At runtime, these may be allocated as a pair, using a secure uniqueness source (see above). 
 
         {:u} :: (a*e) → ((u:a)*e)     `:` for seal
         {.u} :: ((u:a)*e) → (a*e)     `.` for unseal
 
-Some sealers will be weak, discretionary tags like `{:foo}`, which serve a useful role as something like a structural type tag to resist accidental coupling to internal data structures or provide hints to a rendering engine. Other sealers may be very strong, using cryptographic keys. We reserve symbol `$` for cryptographic sealers:
+            #42{:foo}                       discretionary sealed data
 
-        {:format$leftKey}             cryptographic sealer
-        {.format$rightKey}            cryptographic unsealer
-        {$format}                     indicate sealed value
+Discretionary sealers offer no real protection. However, they serve a useful role in resisting type errors or providing  rendering hints (e.g. using `{:jpeg}` on a text representing a large binary is a pretty strong hint).
 
-Here, format might be something like 'ecc.secp256k1', indicating how the argument is encrypted or decrypted. The format may be blank to use the defaut. The proposed default is ecc.secp256k1, mostly because it is used by Bitcoin. Elliptic curve cryptography offers asymmetric encryption with relatively small keys compared to RSA.
+We can also use *cryptographic* value sealing, e.g. protected by AES or ECC encryption. Cryptographic sealers allow us to enforce sealer disciplines even in an open distributed system. The details for cryptographic sealing haven't been hammered out, but a viable option is:
 
-Serialization formats for discretionary vs. cryptographic sealed values:
+        {$:format}  :: (k*(a*e)) → ($a*e)
+        {$.format}  :: (k*($a*e)) → (a*e)
+        {$&format}  :: (annotates sealed data)
 
-        #42{:foo}                     discretionary sealed value, clearly 42
-        ["cipherText\n~c]f{$fmt}      cryptographically sealed affine value
+            ["cipherText...\n~]kf{$&aes}    cryptographic sealed data
 
-For discretionary values, we'll serialize values directly into ABC then seal it again at the remote host. Discretionary sealed values are generally accessible to reflective and introspective capabilities even without properly unsealing them.
-
-For cryptographically sealed values, we'll instead serialize into text, then compress and encrypt it similar to an ABC resource. We wrap this in a block to preserve substructural types (affine, relevant, linear, expiration, etc.), and we wrap the value to indicate a cryptographically sealed value and protect the substructural types. The cipherText may contain a proper checksum. In general, cipher texts and keys are encoded in ABC's base16 format to leverage the special compression pass (see encoding of binaries in ABC, below). 
-
-If a value is never serialized, or is serialized only between trusted machines (or machines we already know to possess the unsealer) then we might forego the encryption step. 
+Here the `$` is serving as a prefix roughly meaning 'secured'. We have a sealer, an unsealer, and a sealed data annotation. The key is provided as an argument when sealing or unsealing (perhaps different keys with PKI). The types of both key and encrypted data may be specific to the format, but should generally include a block to record captured substructural attributes (affine, relevant, linear).
 
 Value sealing is an important companion to object capability security. It provides a basis for [rights amplification](http://erights.org/elib/capability/ode/ode-capabilities.html#rights-amp), whereby you can gain extra authority by possessing both a capability and a sealed value, or by unsealing a value to gain a capability. It can also enforce various modularity patterns even in distributed systems. Value sealing should be considered orthogonal to transport-layer encryption. 
 
 ### ABC Resources for Separate Compilation and Dynamic Linking
 
-A good model for separate compilation and dynamic linking is essential for performance at large scales. For ABC, we'll use the form:
+For large, decentralized, open distributed systems, we might model ABC resources by simply taking a secure hash of the resource. This allows the resource to be downloaded from anywhere and validated, and eliminates the need to check for cycles or manage updates.
 
         {#secureHashOfBytecode}
 
-The secure hash serves many useful roles:
-
-* guards against name collisions
-* guards against cyclic dependencies
-* simplifies versioning and caching
-* simplifies download and validation
-
-Given the identifier, we can fetch the resource, validate against the hash, then load it in place of the token. The cache of resources can be cleared heuristically, but is never invalidated due to a new version. In general, we would download the resource from the same connection that mentioned it in the first place, but we could be told to redirect to a separate web service or content distribution network for efficient distribution of large resources.
+Given the identifier, we fetch the resource, validate against the hash, then load it in place of the token. This technique must be combined with cryptographic value sealing if distributing sensitive resources over an untrusted network. A cache of resources can be cleared heuristically, but is never invalidated due to a new version. In general, we would download the resource from the same connection that mentioned it in the first place, but we could be told to redirect to a separate web service or content distribution network for efficient distribution of large resources.
 
 Semantically, ABC resources are simply inlined directly in place of the token. However, for performance we might compile resources into machine code or otherwise pre-process them. The compiled version of a resource can easily be cached together with the downloaded code.
 
-For specifics, I'm favoring SHA3-256 encoded using Awelon's Base16 (alphabet `bdfghjkmnpqstxyz`). So this encodes as in sixty-four characters in after the `#` mark. When obtaining resources, we should generally be able to query whomever provided the resource ID to either obtain it directly or learn where we can download the resource.
+*Hash Algorithm:* I might favor Blake2s-240 from the developers of Tahoe-LAFS. Blake2 is designed for good software performance. Using base32, this would encode in 48 bytes.
+
+*Note:* At small to moderate scales we can probably use [AO dictionaries](AboutAO.md) as our primary basis for separate compilation and linking. However, dictionaries don't scale nearly as well as secure hashes and content addressing.
 
 *Aside:* Paul Chiusano is doing related work with Unison involving [editing resources named by hashes](http://unisonweb.org/2015-06-12/editing.html#post-start). While I've not elected to go this route with AO dictionaries, the techniques he develops seem readily applicable to ABC resources.
 
-#### Sensitive Resources over Untrusted Distribution Networks
-
-Use of a secure hash guards the client against certain abuses. It doesn't matter from where a client downloads a resource because its secure hash is validated. However, if the *provider* of a sensitive resource wishes to use an *untrusted* content distribution network, it's a problem that the resource be presented in plain text or bytecode.
-
-Fortunately, we already have a solution for this: cryptographic value sealing. A resource can provide a sealed value, which is unsealed by another resource. The bulky sealed data is then distributed via the untrusted network. Trusted servers hold onto much smaller resources that include the unsealers. 
-
 #### Specialization: Value Linking
 
-It seems useful to optimize for cases where the resource is of type `[∀e.e→(value*e)]`, i.e. simply exporting a large value. Specializing this case simplifies lazy or parallel loading and processing of large values. We might additionally include a little information about substructural attributes (affine, relevant, linear) that constrain generic data plumbing:
+If we know an ABC resource just computes a value, i.e. has type `e → (value * e)`, we can take advantage of this. For example, we can load the value lazily or in parallel. If we also know substructural attributes, we can copy or drop the value without loading it right away.
+
+To indicate a linear value, we might use:
 
         {#secureResourceIdentifier'kf}
 
-The valid suffixes:
+        Valid Suffixes
 
         '               normal value
         'k              relevant value
         'f              affine value
         'kf             linear value
 
-Usefully, this technique is compositional. I.e. if we build a value from smaller named values, we can compute whether the composite is affine, relevant, or linear without loading any of the values. Other type information could be left to separate annotations, since it is less essential for reasoning about data plumbing behavior.
+Usefully, this simple technique is compositional. We can compute that a composite is affine, relevant, or linear without loading any of the component values. Other type information could be left to separate annotations, since it is less essential for reasoning about data plumbing behavior.
 
 Lazy linking and loading of large, content-addressed data is convenient for working with very large structures and values, i.e. much larger than machine memory.
 
@@ -495,7 +488,7 @@ A specialized compression pass recognizes runs of these characters and rewrites 
             (size in 128..254): 2..128 lines of 32 bytes with LF SP separators
             (size 255): escape prior (248) byte
 
-Byte `(248)` does not naturally appear in UTF-8 text or ABC. The escape is included only to ensure compression is a total function, valid on all bytestrings. Usually, binary compression will be followed by a more conventional compression, e.g. Snappy or GZip.
+Byte `(248)` does not naturally appear in UTF-8 text, and hence does not appear in ABC. The escape is included only to ensure compression is a total function, valid on all bytestrings. Usually, binary compression will be followed by a more conventional compression, e.g. Snappy or GZip.
 
 Efficient *processing* of binaries further requires accelerators like ABCD.
 

@@ -80,7 +80,7 @@ Definitions can potentially grow very large, especially when containing embedded
 
 ## Constraints on Words and Definitions
 
-Words are constrained to be friendly in context of URLs, English text delimiters, and HTML. Tokens are constrained for purity and portability. Texts are constrained to avoid conversion errors (e.g. HTML CRLF conversions, or UTF-8 vs. UTF-16). 
+Words are constrained to be friendly in context of URLs, English text delimiters, and HTML. Tokens are constrained for purity and portability and easy processing. Texts are constrained to avoid conversion errors (e.g. HTML CRLF conversions, or UTF-8 vs. UTF-16). 
 
 Summary of constraints:
 
@@ -89,7 +89,7 @@ Summary of constraints:
  * other UTF-8 except for C1, surrogates, replacement char
  * must not start with a digit or +-. followed by a digit
  * must not terminate with a . or : (period or colon)
- * no empty words or enormous words. 1..63 bytes UTF-8.
+ * no empty words or enormous words. 1..60 bytes UTF-8.
 * tokens are limited to:
  * word dependencies (`{%dupd}{%swap}`)
  * discretionary value sealer (`{:foo}`)
@@ -100,3 +100,4 @@ Summary of constraints:
  * exclude C0 (except LF), DEL, C1
  * exclude surrogate codepoints U+D800..U+DFFF
  * exclude replacement char U+FFFD
+
