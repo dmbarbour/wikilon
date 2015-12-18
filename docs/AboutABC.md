@@ -82,7 +82,7 @@ Tokens could feasibly be utilized for modeling side-effects, e.g. to invoke an F
 
 * **annotations** - tokens formally having identity semantics, but may be used to optimize performance, make assertions, provide hints for static analysis, integrate debugging tools, etc.. The important requirement is that it's always valid for a compiler or interpreter to *ignore* an annotation that it doesn't understand.
 
-* **attributes** - comments about code, largely intended for software agents. These have no runtime semantics, instead indicate very ad-hoc stuff like authorship, deprecation, modified dates. They may also provide indexing hints, rendering hints, tooling hints, etc. for the code. Attributes are represented by a dropped block of annotations, e.g. of form `[{&attr1}{&attr2}{&attr3}]%`. See the [application model](ApplicationModel.md) for more.
+* **attributes** - comments about code, largely intended for software agents. These have no runtime semantics, instead indicate very ad-hoc stuff like authorship, deprecation, modified dates, indexing hints, rendering hints, tooling hints, etc. for the code. Attributes are represented via dropped blocks of annotations, e.g. of form `[{&author:david}{&deprecated}{&noindex}]%`. See the [application model](ApplicationModel.md) for more.
 
 * **value sealers and unsealers** - a discretionary sealer `{:foo}` has type `(a * e) → (foo:a * e)`, and serves implicitly as a newtype wrapper. To access the sealed value, we can unwrap it with `{.foo}`. Cryptographic sealers are also feasible. See *Value Sealing* below.
 
@@ -95,7 +95,7 @@ Tokens are constrained as follows:
 * no replacement character (U+FFFD)
 * no curly braces `{}`
 
-They may be further constrained within a specific system. Tokens should not receive non-trivial arguments via the token text, though allowing a few flags is reasonable. Most arguments can be provided as actual arguments to the token as parameters.
+Tokens may be further constrained within a specific system. Tokens should not receive non-trivial arguments via the token text, though allowing a few flags to tweak behavior is reasonable. For tokens with runtime semantics, arguments can be provided as actual arguments to the token as parameters.
 
 ## ABC Behavior Details
 
@@ -168,24 +168,7 @@ After construction, numbers can be manipulated by a few elementary operations: a
         Q :: (N(non-zero b) * (N(a) * e)) → (N(r) * (N(q) * e))
             such that q integral, r in (b,0] or [0,b), and qb+r = a
 
-ABC is not rich in math, nor especially efficient at it without a good compiler. High performance graphical or scientific computing will require a good compiler or good support for standard floating point number models and operations via ABCD.
-
-#### Regarding Rational and Floating Point Numbers
-
-Originally Awelon Bytecode included the multiplicative inverse:
-
-        / :: (N(non-zero a) * e) → (N(1/a) * e)         (DEPRECATED!)
-
-Exact rational or decimal numbers could then be directly represented in ABC.
-
-        -2/3            #2#3/*-
-        3.14            #314/00/
-
-This is convenient for common scientific or engineering domains. But support for rationals does complicate interpreters. Also, there is no efficient way to extract the exact denominator. Also, it isn't clear how we'll integrate floating point representations from here.
-
-It was decided to perform an experiment: limit ABC's number support to just arbitrary precision integers, leave rational numbers, floating point, etc. to be modeled in libraries. E.g. a rational number might be modeled using a pair of integers and some normalization loops. Floating point numbers might be explicitly modeled via sign, exponent, mantissa. Hopefully, we shall settle on a few numeric models at the library layer that can easily be compiled to use hardware registers or high performance implementations. 
-
-Eventually, use of ABCD might eventually capture the common number models. And if the results of this experiment are disfavored, it is always possible to restore the `/` operation.
+ABC is not rich in math, but accelerators like ABCD can fill the gap. With accelerators, it is feasible to support both floating point computations and high performance vector or matrix math.
 
 ### Text
 
@@ -199,13 +182,13 @@ The ABC stream can contain blocks of unicode (UTF-8) text:
          or terminates text with tilde (126)
         ~
 
-If anything other than space or `~` follows LF, the ABC stream is in error. There are no escape characters except for SP to escape a preceding LF. Semantically, text encodes a list `µL.((element*L)+1)` of small integers in the range 0..1114111 with some constraints to simplify processing of ABC in arbitrary contexts:
+If anything other than space or `~` follows LF, the ABC stream is in error. There are no escape characters except for SP to escape a preceding LF. Semantically, text encodes a list `μText.((codepoint*Text)+1)`. Codepoints are small integers in the range 0..1114111 with an additional constraint to simplify rendering, editing, and processing of embedded texts through other systems:
 
 * no control characters (C0, C1, DEL) except LF
 * no surrogate codepoints (U+D800..U+DFFF)
 * no replacement character (U+FFFD)
 
-*NOTE:* ABC's representation of text and binaries is simplistic. Real text manipulation demands precise knowledge of the characters (ligatures, combining marks, etc.), and benefits from a more sophisticated representation than a flat list of numbers. However, ABC's representation of text is sufficient for its intended role: identifiers, embedded DSLs, etc.
+Proper text manipulation demands precise knowledge of the characters (ligatures, combining marks, etc.), and benefits from a more sophisticated representation than a flat list of numbers. However, ABC's simple representation of text is sufficient for its intended role: identifiers, embedded DSLs, etc.
 
 ### Identity
 
@@ -410,7 +393,7 @@ We can also use *cryptographic* value sealing, e.g. protected by AES or ECC encr
 
         {$:format}  :: (k*(a*e)) → ($a*e)
         {$.format}  :: (k*($a*e)) → (a*e)
-        {$&format}  :: (annotates sealed data)
+        {$&format}  :: (sealer annotation)
 
             ["cipherText...\n~]kf{$&aes}    cryptographic sealed data
 
@@ -430,7 +413,7 @@ Semantically, ABC resources are simply inlined directly in place of the token. H
 
 *Hash Algorithm:* I might favor Blake2s-240 from the developers of Tahoe-LAFS. Blake2 is designed for good software performance. Using base32, this would encode in 48 bytes.
 
-*Note:* At small to moderate scales we can probably use [AO dictionaries](AboutAO.md) as our primary basis for separate compilation and linking. However, dictionaries don't scale nearly as well as secure hashes and content addressing.
+*Note:* At small to moderate scales we can probably use [AO dictionaries](AboutAO.md) as our primary basis for separate compilation and linking. However, due to mutability and consistency concerns, dictionaries don't scale nearly as easily as secure hashes and content addressing.
 
 *Aside:* Paul Chiusano is doing related work with Unison involving [editing resources named by hashes](http://unisonweb.org/2015-06-12/editing.html#post-start). While I've not elected to go this route with AO dictionaries, the techniques he develops seem readily applicable to ABC resources.
 
@@ -481,16 +464,16 @@ To handle this, we may encode large sequences of base16 in a specific alphabet `
          mhfbkxkzktktkpmhfbkdkykpkxfbkpkhfbkjmgmhfbktkdkfkzmfmjkxfy
         ~
 
-A specialized compression pass recognizes runs of these characters and rewrites to a short header and a bytecount. The format I developed for use within Wikilon is especially optimized for texts encoding 32 bytes per line, encoding blocks of up to 4096 bytes (128 lines) with only 0.1% overhead. Here's the format I use internally:
+A specialized compression pass could easily recognize runs of these characters and rewrites to a short header and a bytecount. The format I developed for use within Wikilon is especially optimized for texts encoding 32 bytes per line, encoding blocks of up to 4096 bytes (128 lines) with only 0.1% overhead. Here's the format I use internally:
 
         (248) (size) (bytes)
             (size in 0..127): 4..512 contiguous bytes (multiples of 4)
             (size in 128..254): 2..128 lines of 32 bytes with LF SP separators
             (size 255): escape prior (248) byte
 
-Byte `(248)` does not naturally appear in UTF-8 text, and hence does not appear in ABC. The escape is included only to ensure compression is a total function, valid on all bytestrings. Usually, binary compression will be followed by a more conventional compression, e.g. Snappy or GZip.
+Byte `(248)` does not naturally appear in UTF-8 text, and hence does not appear in ABC. The escape is included only to ensure compression is a total function, valid on all bytestrings. Usually, binary compression will be followed by a more conventional compression, e.g. Snappy or ZStandard.
 
-Efficient *processing* of binaries further requires accelerators like ABCD.
+Efficient *processing* of binaries further requires accelerators like ABCD. The binary is converted to a compact representation - e.g. an array of bytes - then normal list processing accelerators (e.g. to index the list or update at a particular index) may run very efficiently.
 
 ## Awelon Bytecode Deflated (ABCD)
 

@@ -163,6 +163,7 @@ typedef enum wikrt_err
 // Special Conditions
 , WIKRT_CXFULL          // context is out of memory
 , WIKRT_NOLINK          // context or environment destroyed
+, WIKRT_BUFFSZ          // output buffer too small
 
 // Transactions
 , WIKRT_TXN_CONFLICT    // transaction failed on conflict
@@ -293,17 +294,20 @@ wikrt_err wikrt_drop(wikrt_val*, bool bDropRel);
  *
  * Outside of specialized cases (e.g. debug output or rendering, and
  * modeling reflection) we should try to stick with statically typed
- * idioms even when accessing values through the C API. 
+ * idioms even when accessing values through the C API. Use of this
+ * function is an indicator that the C API is doing dynamically typed
+ * behaviors.
  */
 typedef enum wikrt_val_type 
-{ WIKRT_VAL_UNIT        // unit value
-, WIKRT_VAL_PRODUCT     // product (a pair of values)
+{ WIKRT_VAL_UNIT = 1    // unit value
+, WIKRT_VAL_PRODUCT     // product 
 , WIKRT_VAL_INT         // integer values
-, WIKRT_VAL_SUM         // sum type (a choice of values)
+, WIKRT_VAL_SUM         // sum type (includes lists) 
 , WIKRT_VAL_BLOCK       // functional bytecode  
 , WIKRT_VAL_SEALED      // sealed values
 // special cases
 , WIKRT_VAL_STOWED      // fully stowed values
+, WIKRT_VAL_PENDING     // lazy or parallel computation
 } wikrt_val_type;
 
 /** Obtain shallow analysis of value type. */
@@ -318,12 +322,14 @@ wikrt_err wikrt_peek_type(wikrt_val const*, wikrt_val_type* out);
  */
 wikrt_err wikrt_peek_prod(wikrt_val const* p, wikrt_val* fst, wikrt_val* snd);
 
-/** @brief Access a stack of values non-destructively. 
+/** @brief Access a stack of values non-destructively.
  *
  * A stack has the shape (a*(b*(c*(d*e)))). If you ask for two elements,
  * you'd get `a` and `b` in the array, and `(c*(d*e))` in the leftovers.
  * If you ask for more elements than the stack contains, you'll receive
  * WIKRT_TYPE_ERROR.
+ *
+ * Using nStackElems = 1 is equivalent to wikrt_peek_prod.
  */
 wikrt_err wikrt_peek_stack(wikrt_val const* stack, size_t nStackElems, wikrt_val* pValArray, wikrt_val* rem);
 
@@ -339,42 +345,32 @@ wikrt_err wikrt_peek_sum(wikrt_val const* s, bool* bInLeft, wikrt_val* dst);
 
 /** @brief Access a list of values non-destructively.
  *
- * A list has the structure `type List a b = ((a * List a b) + b)`.
- * We can load some number of elements into an array at a time. If
- * the argument is not a list, this fails with WIKRT_TYPE_ERROR. 
+ * A list has the structure `λa.λb.μL.((a*L)+b)`. Some lists may use
+ * a specialized representation, e.g. an array under the hood, but
+ * this representation is transparent to list processing functions.
+ * Annotations can control and enforce specific representations.
+ *
+ * A binary is a list of small integers in 0..255. A text is a list
+ * of Unicode codepoints (0..1114111) with some exceptions (control
+ * characters, surrogates, replacement char). Texts are always valid
+ * C strings because NUL is among the characters forbidden.
+ *
+ * The following peek functions will copy a finite number of elements
+ * from the head of the list into a local buffer for the caller. The
+ * remainder of the list (or the terminal in the right) is returned 
+ * via `rem`. If there is any type error, we return WIKRT_TYPE_ERROR,
+ * but we also return as many elements up to the point as feasible.
+ * The remaining list including the error is returned in `rem`.
+ *
  */
 wikrt_err wikrt_peek_list(wikrt_val const* lst, size_t nMaxElems, wikrt_val* pValArray, size_t* nListElems, wikrt_val* rem);
-
-/** @brief Access a binary value non-destructively.
- *
- * A binary is a list of small integers in the range 0..255. We can
- * copy fragments of the binary to our caller regardless of the
- * underlying representation. 
- *
- * If the argument is not a binary, WIKRT_TYPE_ERROR is returned, but the
- * output buffer and sizes will contain as much valid binary as feasible.
- * Hence, a list containing 0,1,2,...,511 could return a buffer with 256
- * items in binary (0..255) then the `rem` would contain the list with
- * items 256..511. 
- */
 wikrt_err wikrt_peek_binary(wikrt_val const* binary, size_t nMaxBytes, unsigned char* dst, size_t* nBytes, wikrt_val* rem);
-
-/** @brief Access a text value non-destructively.
- *
- * A text is a list of utf-8 codepoints with some constraints (forbids
- * C0 (except LF), DEL, C1, surrogates, replacement char). Because the
- * NUL value is not used in Wikilon runtime texts, we can return NUL
- * terminated C strings.
- *
- * If the argument is not a text, WIKRT_TYPE_ERROR is returned, but the
- * output parameters will still contain as much valid text as feasible.
- * See also how this works for wikrt_peek_binary.
- */
 wikrt_err wikrt_peek_text(wikrt_val const* txt, size_t nMaxBytes, char* dst, size_t* nBytes, size_t* nChars, wikrt_val* rem);
 
 /** @brief Read relatively small integers.
  *
- * If the destination isn't large enough we'll return WIKRT_TYPE_ERROR.
+ * If the destination isn't large enough we'll return WIKRT_BUFFSZ.
+ * If the argument isn't an integer, we'll return WIKRT_TYPE_ERROR.
  */
 wikrt_err wikrt_peek_int(wikrt_val const*, int*);
 wikrt_err wikrt_peek_i32(wikrt_val const*, int32_t*);
@@ -385,69 +381,91 @@ wikrt_err wikrt_peek_i64(wikrt_val const*, int64_t*);
  * Regex: 0 | (-)?(1-9)(0-9)*       (NUL terminated)
  * 
  * If the output buffer is not of sufficient size, we'll return a
- * WIKRT_TYPE_ERROR. Use wikrt_peek_isize to obtain 
+ * WIKRT_BUFFSZ. Calling wikrt_peek_isize will return the required
+ * buffer size (including space for the NUL terminator).
+ *
+ * If the argument is not an integer, these return WIKRT_TYPE_ERROR.
  */
 wikrt_err wikrt_peek_istr(wikrt_val const*, char* dst, size_t nMaxChars);
 wikrt_err wikrt_peek_isize(wikrt_val const*, int* nBuffSize);
 
-/** @brief buffer for tokens
- *
- * ABC {tokens} are expressed between curly braces, e.g. {}. These
- * tokens must be valid utf-8 texts with some constraints: no control
- * characters (C0, DEL, C1), no surrogates
-A buffer large enough for the largest tokens allowed by the
- *  Wikilon runtime.
- */
-typedef struct wikrt_tok {
-};
-
 /** @brief Peek into a sealed value. 
+ * 
+ * The sealer token is copied into tok as a NUL-terminated C string.
+ * If the output buffer is too small, we'll return WIKRT_BUFFSZ but
+ * copy as many characters of token as possible. WIKRT_TOK_BUFFSZ
+ * would ensure there aren't any buffer size issues.
  *
- * Wikilon runtime requires tokens are valid utf-8 texts forbidding
- * control characters (C0, DEL, C1), surrogates (U+D800 - U+DFFF),
- * the replacement character (U+FFFD), and curly braces {}, and 
- * further limited to at most 255 bytes.
- *
- * So providing a 256-byte buffer is always sufficient to read the
- * seal as a NUL-terminated C string. If a smaller buffer is provided,
- * we'll simply return as much as possible.
+ * If argument was not a sealed value, WIKRT_TYPE_ERROR is returned,
+ * the token text is empty, and the value is simply copied to the output.
+ * 
+ * Note: This operation is a form of reflection, similar to  similar to . It is not normally possible
+ * for ABC code to peek into a sealed value.
+ * The sealer token is copied into 'dst
  */
-wikrt_err wikrt_peek_sealed(wikrt_val const*, char* seal, size_t nMaxChars, wikrt_val* ); 
+wikrt_err wikrt_peek_sealed(wikrt_val const*, size_t nMaxBytes, char* tok, wikrt_val* ); 
 
-wikrt_
-
-
-/** @brief Dismantle a product and access its elements.
+/** @brief Maximum buffer size for a token.
  *
- * This gives the caller full ownership of the separate `fst` and `snd`
- * values while the original pair is returned to the allocator. This
- * simplifies further use of the values. Returns WIKRT_TYPE_ERROR if
- * the argument is not a product.
+ * The maximum token size from Awelon Bytecode is 63 bytes. Wikilon
+ * runtime adds a byte for a NUL-terminator to support C strings. 
+ */
+#define WIKRT_TOK_BUFFSZ 64
+
+/** @brief Validate a token.
+ *
+ * Awelon Bytecode tokens have the following constraints:
+ *
+ * - valid utf-8 text
+ * - no more than 63 bytes
+ * - no control chars (C0, DEL, C1)
+ * - no surrogate codepoints (U+D800 to U+DFFF)
+ * - no replacement char (U+FFFD)
+ * - no curly braces `{}`
+ *
+ * This function returns true if the token is valid by these rules.
+ */
+bool wikrt_tokvalid(char const* tok);
+
+
+/** @brief 'Pop' variants dismantle their argument. 
+ *
+ * For many wikrt_peek_X functions, there is a similar wikrt_pop_X
+ * function that dismantles the argument. This provides the caller
+ * ownership of the returned elements.
+ *
+ * For the wikrt_pop_list variants, WIKRT_TYPE_ERROR still allows
+ * partial success that pops elements off the list up to the point
+ * of type error, which is returned in `rem`.
  */
 wikrt_err wikrt_pop_prod(wikrt_val* p, wikrt_val* fst, wikrt_val* snd);
-
-/** @brief Dismantle a stack of values and access the elements.
- * 
- * Cf. peek_stack, except the original stack is destroyed.
- */
 wikrt_err wikrt_pop_stack(wikrt_val* stack, size_t nStackElems, wikrt_val* pValArray, wikrt_val* rem);
-
-/** @brief Dismantle a sum and access the value.
- *
- * This variation is non-allocating in the current implementation.  
- */
 wikrt_err wikrt_pop_sum(wikrt_val* s, bool* bInLeft, wikrt_val* dst);
-
-/** @brief Dismantle a list and access the values.
- *
- * Cf. peek_list, except the original list is destroyed. 
- */
 wikrt_err wikrt_pop_list(wikrt_val* lst, size_t nMaxElems, wikrt_val* pValArray, size_t* nListElems, wikrt_val* rem);
+wikrt_err wikrt_pop_binary(wikrt_val* binary, size_t nMaxBytes, unsigned char* dst, size_t* nBytes, wikrt_val* rem);
+wikrt_err wikrt_pop_text(wikrt_val* txt, size_t nMaxBytes, char* dst, size_t* nBytes, size_t* nChars, wikrt_val* rem);
+wikrt_err wikrt_pop_seal(wikrt_val*, size_t nMaxBytes, char* tok, wikrt_val*);
 
-// thoughts: 
-//  maybe some variant of sscanf pattern matching
-//  support the various accelerated list operations
-//
+/** @brief Wrap a value with a token.
+ *
+ * You must provide a sealing token text, see wikrt_tokvalid for the
+ * constraints. If the token was not valid, WIKRT_INVAL is returned.
+ * This is an ownership passing function, so the value is both input
+ * and output.
+ *
+ * The token is assumed to have type `∀e.(a * e) → (wrapped-a * e)`.
+ * This affects how the wrapped value is serialized. Discretionary
+ * sealers are the prototypical use case: `#42{:foo}`. Cryptographic
+ * data and other special cases would instead use sealer annotation
+ * {$&AES}. 
+ *
+ * Wikilon runtime understands discretionary sealers and sealing 
+ * annotations, and will wrap values automatically when those are
+ * encountered in a normal bytecode stream. Wikilon runtime also
+ * knows discretionary unsealers, i.e. `{.foo}` unwraps a value
+ * previously wrapped with `{:foo}`. 
+ */
+wikrt_err wikrt_wrap_tok(char const* tok, wikrt_val* val);
 
 /** @brief Construct the unit value.
  *
@@ -470,7 +488,6 @@ wikrt_err wikrt_alloc_i64(wikrt_cx*, int64_t, wikrt_val* dest);
  * Expected regex: 0 | (-)?(1-9)(0-9)*      (NUL terminated)
  */
 wikrt_err wikrt_alloc_istr(wikrt_cx*, char const*, wikrt_val* dest);
-// maybe a variant for multiple bases? nah, let's just move on for now.
 
 /** @brief Construct an AO text value from a C string.
  * 

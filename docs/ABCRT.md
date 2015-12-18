@@ -72,12 +72,13 @@ Reasoning:
 
 * 4GB of memory is a lot for any one Wikilon computation.
 * LMDB stowage mitigates need for large values in memory.
-* We can optimize for large external binaries and texts.
-* We can optimize for large external bytecode resources.
+* Binaries, texts, bytecode could use external resources.
 * Tight addressing improves memory locality and caching.
-* Can model 'remote' computations via multiple contexts.
+* Easy to upgrade to 64-bit runtime later, if necessary.
 
-Memory will be addressed and aligned on 64-bit 'cells'. The lower 3 bits in each address will be leveraged to optimize common representations. It is most important that we optimize for: pairs, unit, lists, trees, booleans, and small numbers. 
+I still have mixed feelings about this whenever I read about 512GB servers and 32GB smartphones. But if this ever becomes a problem, this is an easier fix than most.
+
+With 32-bit addressing aligned on 64-bit cells (representing pairs and lists), 3 bits in each address can be leveraged to optimize common representations. It is most important that we optimize for: pairs, unit, lists, trees, booleans, and small numbers. 
 
 The encoding I'll be trying:
 
@@ -89,7 +90,7 @@ The encoding I'll be trying:
 
 Small integers encode plus or minus a billion: nine solid digits with a little play at the edges. 
 
-A product is represented by addressing a single cell, just a pair of values. Address 0 represents 'unit'. We optimize a single level of sum types (inL vs. inR) for products and units. This allows us to directly represent lists, booleans, and simple trees (e.g. node vs. leaf) without an extra cell for the sum type.
+A product is represented by addressing a single cell, just a pair of values. Address 0 represents 'unit'. We optimize a single level of sum types (inL vs. inR) for products and units. This allows us to directly represent lists, booleans, and binary trees (e.g. node vs. leaf) without an extra cell for the sum type. 
 
 Tagged objects are used for everything else: arbitrary sums, blocks, sealed values, stowed values, pending parallel computations, compact texts, vectors and matrices, etc.. Tagged objects may be more than one cell in size, depending on their type.
 
@@ -315,9 +316,6 @@ These indices could be installed heuristically based on text size or need. The a
 
 Conveniently, appending texts can be modeled by appending each array. Logical reversal requires special attention: we reverse each array, but we'll also need the ability to read reversed utf8. (It's probably easiest to do this transparently in our utf8 reader.)
 
-#### Lists of Numbers
-
-We could also go a route of supporting *generic lists of small integers* in an efficient manner, similar to texts but with varint representations or perhaps a varint diff-list. I might consider this if I find a strong use-case.
 
 ### Accelerated Association Lists? (low priority)
 
@@ -413,9 +411,9 @@ Coarse grained computations will be important for this to work. So we need some 
 
 This might reduce effective utilization of multiple threads, though. Would it be better to use a weaker `{&par~}` annotation to keep content local for a cycle, and `{&par}` for a more strict interpretation? I'm not sure. 
 
+
 ## Dead Ideas
 
 ### Array Stacks
 
 The array representation could feasibly be applied to the `(a * (b * (c * (d * e)))))` stack-like structure. However, the benefits would be marginal. We can accelerate swap, rot, etc.. But stacks are best known for their rapid changes in size: push, pop, etc.. In those cases, our compact data structure isn't helping. The main benefit would be compaction of a large stack. 
-
