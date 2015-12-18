@@ -9,18 +9,17 @@
  *  software development. Awelon project uses its own Awelon Bytecode
  *  (ABC). This bytecode is simple and purely functional, but doesn't
  *  perform well in a naive interpreter. To recover performance, many
- *  techniques are utilized.
+ *  techniques must be utilized.
  * 
  *  - Accelerators. Common subprograms (sequences of bytecode) are
  *    recognized and handled as a single opcode internally. We can
  *    accelerate collections-oriented programming, common loops,
  *    matrix math, conditional behaviors, and data plumbing.
  *  
- *  - Mutability. While ABC values are logically immutable, ownership
- *    of values (where a computation holds the only reference) allows
- *    computation by editing values in-place. This greatly reduces the
- *    allocation overheads. Due to substructural types, ABC encourages
- *    writing code with ownership in mind.
+ *  - Moves and Mutations. While ABC values are logically immutable,
+ *    we can permit mutations that are not externally observable. If
+ *    we hold the only reference to a value, we can modify it in place.
+ *    ABC was designed for this use case.
  *
  *  - Compilation. We can annotate that subprograms are compiled JIT
  *    or AOT. Compilers can translate ABC to a form more suitable for
@@ -256,6 +255,10 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** A context holds a reference to its environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
+  //////////////////////////
+ // COMMON DATA PLUMBING //
+//////////////////////////
+
 /** @brief Copy a value. 
  *
  * Wikilon runtime favors 'move' semantics, with a single owner for
@@ -270,8 +273,8 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  *
  * The C API is not required to respect substructural types, though
  * doing so where feasible is highly recommended. If developers wish
- * to ignore affine properties, simply set `bCopyAff` to true. Note:
- * errors due to copyability are latent in case of pending values.
+ * to ignore affine properties, simply set `bCopyAff` to true. Errors
+ * due to affine properties are latent in case of pending values.
  */
 wikrt_err wikrt_copy(wikrt_val const* src, wikrt_val* dest, bool bCopyAff);
 
@@ -286,9 +289,30 @@ wikrt_err wikrt_copy(wikrt_val const* src, wikrt_val* dest, bool bCopyAff);
  * 
  * The C API is not required to respect substructural types, though
  * doing so is recommended. If developers wish to drop relevant values,
- * it is sufficient to set the `bDropRel` flag to true.
+ * the `bDropRel` flag should be set to true. 
  */
 wikrt_err wikrt_drop(wikrt_val*, bool bDropRel);
+
+/** @brief Move a value to another context.
+ *
+ * This simplifies interactions between context. The original value
+ * is generally destroyed during the move. Does nothing if the origin
+ * and destination already have the same context.
+ */
+wikrt_err wikrt_move(wikrt_val* valAtSrc, wikrt_cx* Dest, wikrt_val* valAtDest);
+
+
+  ////////////////////////////
+ // PRIMARY EVALUATION API //
+////////////////////////////
+
+
+
+
+  ///////////////////////////////////////////
+ // GENERIC VALUE ACCESS AND CONSTRUCTION //
+///////////////////////////////////////////
+
 
 /** @brief Shallow analysis of value types, for switching. 
  *
@@ -313,7 +337,7 @@ typedef enum wikrt_val_type
 /** Obtain shallow analysis of value type. */
 wikrt_err wikrt_peek_type(wikrt_val const*, wikrt_val_type* out);
 
-/** @brief Access a product of values non-destructively. 
+/** @brief Peek into a product of values. 
  *
  * This takes a simple structure of the type (a*b) and returns `a`
  * in fst and `b` in snd. The original structure is preserved, so
@@ -322,26 +346,37 @@ wikrt_err wikrt_peek_type(wikrt_val const*, wikrt_val_type* out);
  */
 wikrt_err wikrt_peek_prod(wikrt_val const* p, wikrt_val* fst, wikrt_val* snd);
 
-/** @brief Access a stack of values non-destructively.
+/** @brief Peek into a stack of values.
  *
  * A stack has the shape (a*(b*(c*(d*e)))). If you ask for two elements,
- * you'd get `a` and `b` in the array, and `(c*(d*e))` in the leftovers.
- * If you ask for more elements than the stack contains, you'll receive
- * WIKRT_TYPE_ERROR.
+ * you'd get `a` and `b` in the array, and `(c*(d*e))` in the remainder.
+ * If you ask for more elements than the stack contains, or if the argument
+ * is not a stack, you'll receive WIKRT_TYPE_ERROR.
  *
- * Using nStackElems = 1 is equivalent to wikrt_peek_prod.
+ * Aside: With nStackElems = 1, this is equivalent to wikrt_peek_prod.
  */
 wikrt_err wikrt_peek_stack(wikrt_val const* stack, size_t nStackElems, wikrt_val* pValArray, wikrt_val* rem);
 
-/** @brief Access a sum of values non-destructively.
+/** @brief Peek at a sum value.
  *
- * This takes a simple structure of the type (a+b) and returns either
- * true with `a` in the left or false with `b` in the right. If the
- * value was not a sum, you'll receive WIKRT_TYPE_ERROR.
+ * Wikilon runtime packs multiple sum tags into a single cell. While
+ * this is convenient for performance, it does hinder iterative access
+ * to a sum without allocating a new sum tag. And it's essential that
+ * peek be non-allocating.
  *
- * Note: in general, this function may need to allocate.
+ * So, we instead peek with a fair amount of depth at once, returning 
+ * a string of the form "LRLLLRLLRLLLRRR". This represents the route
+ * to reach the value, reading 'left right left left left right ...'.
+ * If you have a buffer size of at least WIKRT_SUM_BUFFSZ, you will
+ * be able to guarantee that we can unpack at least one step. If
+ * there isn't sufficient space to peek, we'll return WIKRT_BUFFSZ.
+ *
  */
-wikrt_err wikrt_peek_sum(wikrt_val const* s, bool* bInLeft, wikrt_val* dst);
+wikrt_err wikrt_peek_sum(wikrt_val const* sum, size_t nPathBytes, char* path, wikrt_val* val);
+
+/** @brief Path buffer size for wikrt_peek_sum to guarantee progress. */
+#define WIKRT_SUM_BUFFSZ 16
+
 
 /** @brief Access a list of values non-destructively.
  *
@@ -389,44 +424,20 @@ wikrt_err wikrt_peek_i64(wikrt_val const*, int64_t*);
 wikrt_err wikrt_peek_istr(wikrt_val const*, char* dst, size_t nMaxChars);
 wikrt_err wikrt_peek_isize(wikrt_val const*, int* nBuffSize);
 
-/** @brief Peek into a sealed value. 
- * 
- * The sealer token is copied into tok as a NUL-terminated C string.
- * If the output buffer is too small, we'll return WIKRT_BUFFSZ but
- * copy as many characters of token as possible. WIKRT_TOK_BUFFSZ
- * would ensure there aren't any buffer size issues.
+/** @brief Peek into a token-wrapped value. 
+ *
+ * The sealing token is copied into tok as a NUL-terminated C string.
+ * If the output buffer is too small, we'll return WIKRT_BUFFSZ. A 
+ * buffer of  WIKRT_TOK_BUFFSZ will prevent buffer size issues.
  *
  * If argument was not a sealed value, WIKRT_TYPE_ERROR is returned,
  * the token text is empty, and the value is simply copied to the output.
  * 
- * Note: This operation is a form of reflection, similar to  similar to . It is not normally possible
- * for ABC code to peek into a sealed value.
- * The sealer token is copied into 'dst
+ * Note: This operation is a form of reflection, like wikrt_peek_type.
+ * The same caveats apply: it's preferable to avoid this feature outside
+ * of special cases like rendering values for debugging.
  */
-wikrt_err wikrt_peek_sealed(wikrt_val const*, size_t nMaxBytes, char* tok, wikrt_val* ); 
-
-/** @brief Maximum buffer size for a token.
- *
- * The maximum token size from Awelon Bytecode is 63 bytes. Wikilon
- * runtime adds a byte for a NUL-terminator to support C strings. 
- */
-#define WIKRT_TOK_BUFFSZ 64
-
-/** @brief Validate a token.
- *
- * Awelon Bytecode tokens have the following constraints:
- *
- * - valid utf-8 text
- * - no more than 63 bytes
- * - no control chars (C0, DEL, C1)
- * - no surrogate codepoints (U+D800 to U+DFFF)
- * - no replacement char (U+FFFD)
- * - no curly braces `{}`
- *
- * This function returns true if the token is valid by these rules.
- */
-bool wikrt_tokvalid(char const* tok);
-
+wikrt_err wikrt_peek_seal(wikrt_val const*, size_t nMaxBytes, char* tok, wikrt_val* ); 
 
 /** @brief 'Pop' variants dismantle their argument. 
  *
@@ -437,14 +448,105 @@ bool wikrt_tokvalid(char const* tok);
  * For the wikrt_pop_list variants, WIKRT_TYPE_ERROR still allows
  * partial success that pops elements off the list up to the point
  * of type error, which is returned in `rem`.
+ *
+ * Because 'pop' is destructive, sums can be accessed this way one
+ * small step at a time (i.e. nPathBytes = 2).  to how sums are modeled, sums can be accessed via pop with
+ * much smaller steps.  safely done
+ * just one small step at a time. 
  */
 wikrt_err wikrt_pop_prod(wikrt_val* p, wikrt_val* fst, wikrt_val* snd);
 wikrt_err wikrt_pop_stack(wikrt_val* stack, size_t nStackElems, wikrt_val* pValArray, wikrt_val* rem);
-wikrt_err wikrt_pop_sum(wikrt_val* s, bool* bInLeft, wikrt_val* dst);
 wikrt_err wikrt_pop_list(wikrt_val* lst, size_t nMaxElems, wikrt_val* pValArray, size_t* nListElems, wikrt_val* rem);
 wikrt_err wikrt_pop_binary(wikrt_val* binary, size_t nMaxBytes, unsigned char* dst, size_t* nBytes, wikrt_val* rem);
 wikrt_err wikrt_pop_text(wikrt_val* txt, size_t nMaxBytes, char* dst, size_t* nBytes, size_t* nChars, wikrt_val* rem);
-wikrt_err wikrt_pop_seal(wikrt_val*, size_t nMaxBytes, char* tok, wikrt_val*);
+wikrt_err wikrt_pop_seal(wikrt_val* sealedVal, size_t nMaxBytes, char* tok, wikrt_val* unsealedVal);
+wikrt_err wikrt_pop_sum(wikrt_val* sum, size_t nPathBytes, char* path, wikrt_val* val);
+
+
+
+
+/** @brief Maximum buffer size for a token.
+ *
+ * The maximum token size from Awelon Bytecode is 63 bytes. Wikilon
+ * runtime adds a byte for a NUL-terminator to support C strings. 
+ */
+#define WIKRT_TOK_BUFFSZ 64
+
+/** Construct the unit value. 
+ *
+ * This is non-allocating in the current implementation.
+ */
+wikrt_err wikrt_alloc_unit(wikrt_val* out, wikrt_cx*);
+
+/** @brief Construct a product or pair (fst * snd) of values. 
+ *
+ * Both elements of the pair must be from the same context or we'll return
+ * WIKRT_INVAL. The arguments are similar to those for wikrt_pop_prod, 
+ * except the inputs and outputs are inverted.
+ */
+wikrt_err wikrt_alloc_prod(wikrt_val* out, wikrt_val* fst, wikrt_val* snd);
+
+/** @brief Push values onto a stack.
+ *
+ * In this case, we construct the form (a*(b*(c*(d*e)))). The arguments
+ * are similar to those for wikrt_pop_stack, except the inputs and outputs
+ * are inverted.
+ */
+wikrt_err wikrt_alloc_stack(wikrt_val* out, size_t nStackElems, wikrt_val* pValArray, wikrt_val* initialStack);
+
+/** @brief Construct a sum. 
+ *
+ * Wikilon runtime currently optimizes a single level of sums for unit
+ * and product values, i.e. such that (a*b) in the left or unit in the
+ * right are recorded in the reference and require the same amount of
+ * space as (a*b) or unit. This optimizes representation of lists and
+ * of simple (node + leaf) tree structures.
+ *
+ * For deeper sums, Wikilon runtime will also pack several levels per
+ * allocation. Consequently, sums aren't expensive in terms of space.
+ */
+wikrt_err wikrt_alloc_sum(wikrt_val* out, bool bInRight, wikrt_val* val);
+
+/** @brief Push values onto a list. 
+ * 
+ * These variations invert pop_list, pop_binary, pop_text functions.
+ * Except we don't actually need the maximum buffer sizes, only the
+ * actual number of elements. 
+ *
+ * For texts, we may return WIKRT_INVAL if the text is not valid.
+ * See wikrt_text_valid.
+ */
+wikrt_err wikrt_alloc_list(wikrt_val* out, wikrt_val* pValArray, size_t nListElems, wikrt_val* initialList);
+wikrt_err wikrt_alloc_binary(wikrt_val* out, unsigned char const* data, size_t nBytes, wikrt_val* initialList);
+wikrt_err wikrt_alloc_text(wikrt_val* out, char const* text, wikrt_val* initialList);
+
+/** @brief Test whether a text is valid for Wikilon runtime.
+ *
+ * Wikilon runtime expects texts to have a utf-8 encoding, presented
+ * as a NUL-terminated C string, with the following constraints:
+ *
+ * - no control chars (C0, DEL C1) except LF
+ * - no surrogate codepoints (U+D800 to U+DFFF)
+ * - no replacement character (U+FFFD)
+ * 
+ */
+bool wikrt_text_valid(char const*);
+
+
+/** @brief Construct an integer value.
+ *
+ * Small integers, within the range of plus or minus a billion, do not
+ * require allocations. They are represented in the address.
+ */
+wikrt_err wikrt_alloc_int(wikrt_val* out, wikrt_cx*, int);
+wikrt_err wikrt_alloc_i32(wikrt_val* out, wikrt_cx*, int32_t);
+wikrt_err wikrt_alloc_i64(wikrt_val* out, wikrt_cx*, int64_t);
+
+/** @brief Construct an integer value from a text representation.
+ *
+ * Expected regex: 0 | (-)?(1-9)(0-9)*      (NUL terminated)
+ */
+wikrt_err wikrt_alloc_istr(wikrt_val* out, wikrt_cx*, char const*);
 
 /** @brief Wrap a value with a token.
  *
@@ -465,68 +567,39 @@ wikrt_err wikrt_pop_seal(wikrt_val*, size_t nMaxBytes, char* tok, wikrt_val*);
  * knows discretionary unsealers, i.e. `{.foo}` unwraps a value
  * previously wrapped with `{:foo}`. 
  */
-wikrt_err wikrt_wrap_tok(char const* tok, wikrt_val* val);
+wikrt_err wikrt_alloc_seal(char const* tok, wikrt_val* val);
 
-/** @brief Construct the unit value.
+/** @brief Validate a token.
  *
- * In the current implementation, this doesn't actually require an
- * allocation. 
+ * Awelon Bytecode tokens have the following constraints:
+ *
+ * - valid utf-8 text
+ * - no more than 63 bytes
+ * - no control chars (C0, DEL, C1)
+ * - no surrogate codepoints (U+D800 to U+DFFF)
+ * - no replacement char (U+FFFD)
+ * - no curly braces `{}`
+ *
+ * This function returns true if the token is valid by these rules.
  */
-wikrt_err wikrt_alloc_unit(wikrt_cx*, wikrt_val* dest);
+bool wikrt_token_valid(char const* tok);
 
-/** @brief Construct an integer value.
- *
- * Small integers, within the range of plus or minus a billion, do not
- * require allocations. They are represented in the address.
- */
-wikrt_err wikrt_alloc_int(wikrt_cx*, int, wikrt_val* dest);
-wikrt_err wikrt_alloc_i32(wikrt_cx*, int32_t, wikrt_val* dest);
-wikrt_err wikrt_alloc_i64(wikrt_cx*, int64_t, wikrt_val* dest);
 
-/** @brief Construct an integer value from a text representation.
- *
- * Expected regex: 0 | (-)?(1-9)(0-9)*      (NUL terminated)
- */
-wikrt_err wikrt_alloc_istr(wikrt_cx*, char const*, wikrt_val* dest);
-
-/** @brief Construct an AO text value from a C string.
- * 
- * Wikilon runtime only permits valid AO texts. In particular, our
- * texts must exclude control characters (C0, C1, DEL) except LF,
- * surrogates (U+D800 to U+DFFF), and replacement character (U+FFFD). 
- *
- * If these conditions aren't met, WIKRT_INVAL is returned.
- */
-wikrt_err wikrt_alloc_text(wikrt_cx*, char const*, wikrt_val* dest);
-
-/** @brief Construct an AO binary value.
- *
- */ 
+// TODO:
+//   annotations
+//     arrays, assertions
+//   quoting values
+//   composition of blocks
+//   substructural types
+//   floats and doubles
+//     once we have accelerators
+//   
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  /////////////////////////////////////
+ // DATABASE AND PERSISTENCE ENGINE //
+/////////////////////////////////////
 
 /** @brief Transactional Persistence
  *
@@ -535,8 +608,7 @@ wikrt_err wikrt_alloc_text(wikrt_cx*, char const*, wikrt_val* dest);
  * stowage. Transactions enable consistent views of multiple keys and
  * atomic updates. Durability is optional per transaction.
  *
- * Keys are strings with limited size and a few constraints, cf. the
- * wikrt_db_keyvalid function. Values are anything we can stow.
+ * Keys are texts with limited size.
  *
  * Note: This database is not implicitly accessible to ABC computations.
  * Access may be modeled explicitly, e.g. as a free monadic effect, like
@@ -546,13 +618,12 @@ wikrt_err wikrt_alloc_text(wikrt_cx*, char const*, wikrt_val* dest);
 typedef struct wikrt_txn { wikrt_val txn; } wikrt_txn;
 #define WIKRT_DB_KEY_SIZE_MAX 255
 
-/** @brief Access the validation code for a proposed key.
+/** @brief Test validity of a proposed key.
  *
- * Database keys are constrained to be valid utf-8 texts with up to
- * 255 bytes excluding control characters (C0, DEL, C1), surrogates
- * (U+D800 - U+DFFF), and the replacement character (U+FFFD).
+ * Keys must be valid texts, with an additional constraint of at
+ * most 255 bytes in length.  
  */
-bool wikrt_db_keyvalid(char const*);
+bool wikrt_key_valid(char const*);
 
 /** @brief Begin a new transaction for key-value persistence.
  */
@@ -566,7 +637,7 @@ wikrt_err wikrt_txn_begin(wikrt_cx*, wikrt_txn* dest);
  * with the key. Unless `bCopyAff` is set, we may fail due to copying
  * a non-copyable value. This failure may be latent, on commit.
  */
-wikrt_err wikrt_db_read(wikrt_txn*, char const* key, wikrt_val* dest, bool bCopyAff);
+wikrt_err wikrt_txn_read(wikrt_txn*, char const* key, wikrt_val* dest, bool bCopyAff);
 
 /** @brief Write value into our key-value persistence layer.
  * 
@@ -575,7 +646,7 @@ wikrt_err wikrt_db_read(wikrt_txn*, char const* key, wikrt_val* dest, bool bCopy
  * the key. Unless `bDropRel` is set, we may fail due to dropping a
  * non-droppable value. This failure may be latent, on commit.
  */
-wikrt_err wikrt_db_write(wikrt_txn*, char const* key, wikrt_val* val, bool bDropRel);
+wikrt_err wikrt_txn_write(wikrt_txn*, char const* key, wikrt_val* val, bool bDropRel);
 
 /** @brief Exchange a value from our key-value persistence layer.
  *
@@ -584,7 +655,7 @@ wikrt_err wikrt_db_write(wikrt_txn*, char const* key, wikrt_val* val, bool bDrop
  * copies during a transaction that updates a value many times (i.e. you
  * can swap for a dummy value like unit).
  */
-wikrt_err wikrt_db_swap(wikrt_txn*, char const* key, wikrt_val* val);
+wikrt_err wikrt_txn_swap(wikrt_txn*, char const* key, wikrt_val* val);
 
 /** @brief Mark a transaction for durability. 
  *
@@ -617,7 +688,7 @@ wikrt_err wikrt_txn_commit(wikrt_txn*);
  * If you don't explicitly mark transactions durable, consider calling
  * sync every five seconds or so to limit potential data loss.
  */
-void wikrt_db_sync(wikrt_env*);
+void wikrt_env_sync(wikrt_env*);
 
 
 #define WIKILON_RUNTIME_H

@@ -411,6 +411,11 @@ Coarse grained computations will be important for this to work. So we need some 
 
 This might reduce effective utilization of multiple threads, though. Would it be better to use a weaker `{&par~}` annotation to keep content local for a cycle, and `{&par}` for a more strict interpretation? I'm not sure. 
 
+## API
+
+A minimal API is to focus on a 'bytecode stream' as the primary input and output, perhaps with an option for certain Wikilon runtime extensions to the bytecode (e.g. use of `u = vvrwlc`). 
+
+I'd like to support computation with high performance, iterative streams of bytecode, such that we can begin processing the stream before we've finished providing the stream. This may require explicit support, an explicit stream processing task. 
 
 ## Dead Ideas
 
