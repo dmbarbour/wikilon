@@ -114,9 +114,9 @@ In general, only a fraction of our program environment should be shared this way
 AO doesn't do infix notation. However, a claw view can support infix notations within a clear, delimited region. Blocks provide clear, delimited regions. We can potentially model sequences blocks by having a command separator 'escape' each block and recombine it. Of course, this needs to work transparently with the existing sugar around blocks. 
 
         [foo, bar, baz, qux] desugars to:
-        [foo \[bar \[baz \[qux] seq] seq] seq]
+        [foo \[bar \[baz \[qux] yield] yield] yield]
 
-This is a right-associative binding. The continuation is hidden until just before we return. The continuation could easily be shoved into the program environment or returned to our interpreter. It isn't difficult to recognize that a block ends with `\[...] seq]`, so the desugaring is reversible in a straightforward way.
+This is a right-associative binding. The continuation is hidden until just before we return. The continuation could easily be shoved into the program environment or returned to our interpreter. It isn't difficult to recognize that a block ends with `\[...] yield]`, so the desugaring is reversible in a straightforward way.
 
 ### Reviewing Use Case: Data Sequences
 
@@ -124,8 +124,10 @@ One of the motivating use-cases for command sequences is (syntactically) concise
 
 We can.
 
-The program `[1,2,3]` desugars to `[1 \[2 \[3] seq] seq]`. Assume a program environment containing a data stack and a queue of continuations. Our `seq` function simply pushes the continuation onto the list. After each step, the interpreter pops one datum off the data stack, takes the entire queue of continuations, provides a fresh environment to the next step, and continues. Thus, our comma separated sequence computes a *stream* of data. Converting our (known finite) stream into a list is trivial. 
+The program `[1,2,3]` desugars to `[1 \[2 \[3] yield] yield]`. Assume a program environment containing a data stack and a queue of continuations. Our `yield` function simply adds the continuation into the queue. After each step, the interpreter pops one datum off the data stack, pushes the queue of continuations onto a stack, provides a fresh environment to the next step, and continues. Thus, our comma separated sequence computes a *stream* of data. Converting our (known finite) stream into a list is trivial. 
 
-Further, this model of streaming data is *compositional*. We could rewrite `[1,2,3,4,5,6]` as `[1, [2,3,4] inline, 5,6]` or as `[1,2,3] [4,5,6] compseq`. We can abstract sequence fragments into separate words. We can also abstract ad-hoc stream generators.
+Further, this model of streaming data is *compositional*. We could rewrite `[1,2,3,4,5,6]` as `[1, [2,3,4] inline, 5,6]` or as `[1,2,3] [4,5,6] seq`. We can abstract sequence fragments into separate words. We can also abstract ad-hoc stream generators.
 
 We have a concise, composable, factorable, and friendly syntax for data sequences.
+
+

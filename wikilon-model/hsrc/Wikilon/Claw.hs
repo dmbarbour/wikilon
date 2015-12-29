@@ -23,7 +23,7 @@
 --      "foo"       \\"foo
 --                  ~ literal
 --      [foo]       \\[foo] block
---      \\[foo,bar,baz]  \\[foo \\[bar \\[baz] seq] seq]
+--      \\[foo,bar,baz]  \\[foo \\[bar \\[baz] yield] yield]
 -- 
 -- Claw is easily extensible by adding new expansion rules. Wikilon
 -- will simply hard-code a particular set of extensions or features
@@ -126,12 +126,12 @@ instance Show ClawExp10 where
 
 -- TODO: maybe develop a fast Claw parse from a raw 'AODef' bytestring?
 
-wLiteral, wBlock, wSeq :: Word
+wLiteral, wBlock, wYield :: Word
 wInteger, wRatio, wDecimal, wExp10 :: Word
 
 wLiteral = "lit"
 wBlock = "block"
-wSeq  = "seq"
+wYield = "yield"
 wInteger = "int"
 wRatio = "ratio"
 wDecimal = "decimal"
@@ -191,7 +191,7 @@ atToABC lWords = ABC [attrBlock, ABC_Prim ABC_drop] where
 -- | Translate a sequence back to a single command.
 compactSeq :: ClawCmdSeq -> ClawCode
 compactSeq [cc] = cc
-compactSeq (c0:cs) = c0 <> ClawCode [B0 cs, CW wSeq]
+compactSeq (c0:cs) = c0 <> ClawCode [B0 cs, CW wYield]
 compactSeq [] = assert False mempty
 
 -- | Parse Claw structure from bytecode.
@@ -313,7 +313,7 @@ rdz (B0 cc : lhs) (CW w : rhs)
 -- recursion on blocks & seq recognition
 rdz lhs (B0 [cmd] : rhs) = rdz (B0 cseq : lhs) rhs where 
     cseq = case rdz [] (clawOps cmd) of
-        (CW w : B0 cs : rc) | (w == wSeq) -> (c:cs) where
+        (CW w : B0 cs : rc) | (w == wYield) -> (c:cs) where
             c = ClawCode (L.reverse rc) 
         rc -> [ClawCode (L.reverse rc)] -- full block
 rdz lhs (op : rhs) = rdz (op : lhs) rhs -- progress

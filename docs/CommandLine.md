@@ -94,15 +94,15 @@ Claw supports a command sequencing concept that supports multiple use-cases:
 Command sequences vastly improve the expressiveness of Claw and the utility of AO. The expression and expansion is surprisingly simple. Any block can use commas as command separators:
 
         [foo,bar,baz]   desugars to  
-        [foo \[bar \[baz] seq] seq]   
+        [foo \[bar \[baz] yield] yield]   
 
         [1,2,3,4,5]     desugars to
-        [1 \[2 \[3 \[4 \[5] seq] seq] seq] seq]
+        [1 \[2 \[3 \[4 \[5] yield] yield] yield] yield]
 
         \[a,b,c]        desugars to
-        \[a \[b \[c] seq] seq]
+        \[a \[b \[c] yield] yield]
 
-Effectively, we can view a comma as a 'yield'. The block exits early, but we also gain access to the remainder of the sequence, the continuation. An external interpreter may study the output, perform external effects or inject data, and continue. The details are left to user definitions of `seq`, the interpreter, and the program environment.
+Effectively, we can view a comma as a yield operator. The block exits early, but we also gain access to the remainder of the sequence, the continuation. An external interpreter may study the output, perform external effects or inject data, and continue. The details are left to user definitions of yield, the interpreter, and the program environment.
 
 See [CommandSequences](CommandSequences.md) for more details.
 

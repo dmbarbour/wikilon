@@ -87,6 +87,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 /** @brief Opaque structure for overall Wikilon environment.
  * 

@@ -4,7 +4,7 @@
 -- The high performance core of our Wikilon runtime is implemented at the C
 -- layer. 
 module Wikilon.Runtime.H
-    ( wikrt_hello
+    ( 
     ) where
 
 #include <wikilon-runtime.h>
@@ -17,8 +17,8 @@ import Foreign.C
 --  'unsafe': lower overhead, reduced concurrency, no callbacks into Haskell
 
 -- | for now, just providing enough to test our 
-foreign import ccall unsafe "wikilon-runtime.h wikrt_hello" _wikrt_hello :: CString -> IO ()
+--foreign import ccall unsafe "wikilon-runtime.h wikrt_hello" _wikrt_hello :: CString -> IO ()
 
-wikrt_hello :: String -> IO ()
-wikrt_hello = flip withCString _wikrt_hello
+--wikrt_hello :: String -> IO ()
+--wikrt_hello = flip withCString _wikrt_hello
 
