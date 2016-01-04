@@ -80,14 +80,14 @@ Definitions can potentially grow very large, especially when containing embedded
 
 ## Constraints on Words and Definitions
 
-Words are constrained to be friendly in context of URLs, English text delimiters, and HTML. Tokens are constrained for purity and portability and easy processing. Texts are constrained to avoid conversion errors (e.g. HTML CRLF conversions, or UTF-8 vs. UTF-16). 
+Words are constrained to be relatively friendly in context of URLs, English text delimiters, HTML, and [Claw code](CommandLine.md). Tokens are constrained for purity, portability, and easy processing. Texts are constrained to avoid conversion errors (e.g. HTML CRLF conversions, or UTF-8 vs. UTF-16). 
 
 Summary of constraints:
 
 * words are limited to:
  * ASCII if alphabetical, numeral, or in -._~!$'*+:
  * other UTF-8 except for C1, surrogates, replacement char
- * must not start with a digit or +-. followed by a digit
+ * must not start with numeral-like regex `[+-.]*[0-9]` 
  * must not terminate with a . or : (period or colon)
  * no empty words or enormous words. 1..60 bytes UTF-8.
 * tokens are limited to:

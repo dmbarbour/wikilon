@@ -80,15 +80,20 @@ isValidWordChar c = okASCII || okUnicode where
 
 isValidWord :: Word -> Bool
 isValidWord (Word w) = okSize && okStart && okEnd && okMiddle where
-    okSize = (BS.length w <= wordSizeMax)
-    okStart = case UTF8.uncons w of
-        Nothing -> False
-        Just (c, w') | _isDigit c -> False
-                     | not (_isPMD c) -> True
-                     | otherwise -> maybe True (not . _isDigit . fst) (UTF8.uncons w')
+    okSize = (1 <= BS.length w) && (BS.length w <= wordSizeMax)
+    okStart = not (numlike w)
     okEnd = not . badEnd . fromIntegral $ BS.last w where
         badEnd n = (n == ord '.') || (n == ord ':')
     okMiddle = L.all isValidWordChar (UTF8.toString w)
+
+-- numeral-like [+-.]*[0-9] at start
+-- words shouldn't be easy to visually confuse with numbers
+numlike :: UTF8.ByteString -> Bool
+numlike s = case UTF8.uncons s of
+    Nothing -> False
+    Just (c,s') | _isDigit c -> True
+                | _isPMD c -> numlike s'
+                | otherwise -> False
 
 -- | maximum size for a word, in bytes
 wordSizeMax :: Int

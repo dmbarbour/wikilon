@@ -413,9 +413,11 @@ This might reduce effective utilization of multiple threads, though. Would it be
 
 ## API
 
-A minimal API is to focus on a 'bytecode stream' as the primary input and output, perhaps with an option for certain Wikilon runtime extensions to the bytecode (e.g. use of `u = vvrwlc`). 
+A minimal API is to focus on a 'bytecode stream' as the primary input and output, perhaps with an option for certain Wikilon runtime extensions to the bytecode (e.g. use of `u = vvrwlc`). But I'm also interested in direct operation or manipulation on values.
 
 I'd like to support computation with high performance, iterative streams of bytecode, such that we can begin processing the stream before we've finished providing the stream. This may require explicit support, an explicit stream processing task. 
+
+Or maybe I can model a 'stream' value? Or an open ended block? With some ability to keep pushing content to it, and eventually close it.
 
 ## Dead Ideas
 
