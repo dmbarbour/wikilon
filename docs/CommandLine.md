@@ -121,18 +121,20 @@ The annotations in this context are presented as words. Commas, within an attrib
 
 ### Claw Namespaces
 
-It's convenient to have *short* words when writing code. Short words will tend to be monopolized for a given purpose. We'll eventually want to assign a different meaning to the same short words for use in another context. The conventional mechanism in programming languages to handle this issue is *namespaces*, an ability to contextually access names without fully writing them. 
+Claw currently provides a simplistic namespace model: a region of code will have a single namespace, which may be specified as `#prefix`. The namespace implicitly becomes a prefix for all words in the Claw expansion, including implicit words.
 
-My current approach to namespaces involves use of a `#` prefix to set a namespace attribute for a volume of code. 
-
-        #foo: 42 bar        desugars fully to
+        #foo: 42 bar        expands to bytecode
         [{&_foo:_}]%#42{%foo:int}{%foo:bar}
+
+An empty prefix is valid and is also the default namespace.
+
+The goal of namespaces is to support exploration of alternative program models within a single dictionary. This requires alternative definitions for data plumbing and utility words. 
 
 Claw uses namespace attributes to guide rendering and expansion. Some words cannot be expressed in a given namespace. For example, under `#foo:` the word `bar` cannot be expressed because it lacks a `foo:` prefix, and `foo:9` cannot be expressed because `9` doesn't parse as a valid word. In these cases, the claw view is forced to use the token expansion, e.g. `\{%bar}` or `\{%foo:9}`. 
 
 A namespace attribute within a block is limited to the remaining scope of that block. In case of command sequences, namespaces also impact the commas. So developers will need to be aware of this.
 
-There is a proposal for *Qualified Namespaces* that I'm still contemplating.
+There is a proposal for *Qualified Namespaces*, below, that I'm still contemplating.
 
 ## Claw Semantics and Round Tripping
 
@@ -168,13 +170,15 @@ Developing a Visual Claw dialect targeting HTML seems immediately promising and 
 
 Most programming languages are designed to use block-structured plain text, oriented vertically on a page or screen, as the primary development interface. This style of programming would enable Awelon project to take better advantage of existing tools, and would improve familiarity for potential users.
 
-Claw could be extended to support block structured plain text programming. Most likely, I'd need to introduce the conventional set of mixfix keywords (such as `if then else` and `while do`). As a *view*, adding keywords to Claw isn't difficult. For example, if we suddenly add `while` as a keyword, existing uses of that word would render `\{%while}` to indicate the AO word. There is no risk of breaking code.
+Claw could be extended to support block structured plain text programming. 
 
-However, keywords interfere with factoring and abstraction. We cannot simply take the program fragment `if [cond]` and factor it into a separate word because that `if` is supposedly part of a larger `if_then_else_`. We cannot easily abstract computation of the `[cond]` function. Users would be unable to define new keywords in a first class manner. These properties contradict my long term Awelon project goals. I'm hesitant to pursue a syntax for block structured programming based on keywords.
+Most likely, I'd need to introduce the conventional set of mixfix keywords (such as `if then else` and `while do`). As a *view*, adding keywords to Claw isn't difficult. For example, if we suddenly add `while` as a keyword, existing uses of that word would simply render `\{%while}` to indicate our AO word. There is no risk of breaking code.
 
-Further, Visual Claw fulfills half the role effectively and extensibly. For example, `[cond] [body] while_do_` could be rendered appropriately in a block-structured style via a few generic heuristics regard words with underscores (two underscores → captures two Claw elements). No keywords are necessary. The ability to hide a little layout metadata from a user's view, together with a little CSS, can go a long way.
+However, keywords interfere with factoring and abstraction. We cannot simply take the program fragment `if [cond]` and factor it into a separate word when that `if` is part of a larger `if_then_else_`. We cannot readily abstract the `[cond]` function when it is built into the `if_then_else_` syntax instead of provided externally. And it would be difficult for users to define new keywords in a first class manner, i.e. every such extension requires a change to the syntax. These properties conflict with my Awelon project goals.
 
-I am more interested in pursuing Visual Claw for now. But if working easily with existing tools in a more familiar syntax proves critical - perhaps through Filesystem in Userspace or Callback File System - it shouldn't take long to develop a set of keywords and an appropriate Claw dialect. (The flexibility of view-based syntax is wonderful.)
+I imagine that Visual Claw can fulfill the role of presenting a familiar coding style more effectively and extensibly. For example, `[cond] [body] while_do_` could be rendered appropriately in a block-structured style via a few generic heuristics regard words with underscores (two underscores → captures two Claw elements). No keywords are necessary. 
+
+I am more interested in pursuing Visual Claw for now. But if working easily with plain text tools in a more familiar syntax proves critical - perhaps through Filesystem in Userspace or Callback File System - it shouldn't take long to develop a set of keywords and an appropriate Claw dialect. (The flexibility of view-based syntax is wonderful.)
 
 ### Named Variables and Lexical Closures
 
@@ -198,9 +202,9 @@ Fortunately, named variables for otherwise tacit concatenative languages are not
 
 I find Factor's syntax difficult to read when layered, e.g. `[| a b | a [| c | c b +] map ]`.
 
-Both Factor and Kitten support *lexical closures*. When a name is used within an internal block, it is bound to the value in scope at the time of binding. Lexical scoping and closure is very convenient for higher order programming. In Claw, lexical closures would be essential for use of variable names across commands in a sequence.
+Both Factor and Kitten support *lexical closures*. When a name is used within an internal block, it is bound to the value in scope at the time of binding. Lexical scoping and closure is very convenient for higher order programming. In Claw, lexical closures would be necessary for use with command sequences. 
 
-Kitten's locals are a built-in feature. In Factor, the local variables are a syntactic sugar. However, Factor's desugared representation is not reversible. I have yet to develop a simple, reversible desugaring that supports lexical closures. 
+Kitten's locals are a built-in feature. In Factor, the local variables are a syntactic sugar. However, Factor's desugared representation is not reversible. For Claw, any syntax for named variables must be reversible. Unfortunately, I have yet to conceive of a simple, reversible desugaring that supports lexical closures. 
 
 Ignoring scope and closure, we could feasibly desugar to:
 
@@ -213,14 +217,10 @@ With appropriate definitions for assign, deref, and scoped, the above program sh
 
 But this half baked solution isn't acceptable. Until I have some better ideas, syntactic support for named variables will need to wait.
 
-*Note:* AO introduces a potential complicating concern for named variables: we have *substructural types*, values that cannot be copied or cannot be dropped. For these, we effectively need 'move' semantics instead of 'copy' semantics. It seems feasible, however, for Claw syntax to simply optimize the last use of a named variable to a 'move'. 
+*Aside:* Despite potential utility, I have doubts about named local variables. They hinder refactoring because we cannot move a subprogram containing a variable name. They're also a bit more complicated in presence of substructural types, though I suppose we could specialize the *last use* of each variable to use move semantics rather than copy. I wonder if users would be better served by an EDSL for math.
 
 ### Qualified Namespaces
 
-Limiting ourselves to a single namespace has some advantages: it limits how much context a reader needs to understand the code, and it discourages namespace boiler-plate (e.g. import lists). However, support for multiple namespaces could be convenient for modeling conventional module systems, or integrating hierarchical names.
+Constraining users to a single namespace per volume of code encourages a relatively flat namespace and prevents boiler-plate import lists. These are nice properties, so I'm reluctant to support qualified namespaces. However, the potential tweak to support them is trivial:
 
-We write `#f/foo:` after which `f/word` expands to `foo:word`. Our namespace attribute would desugar to `[{&_foo:_f}]%`. When rendering words with multiple options, we can heuristically favor the shortest render. Qualified namespaces would alleviate the burden of working with large prefixes or mixing content from multiple namespaces. 
-
-*Idea:* In a visual editor, qualified namespaces could support coloring of words, e.g. with `red/foo` being presented as `foo` colored red. Or using a stylesheet to achieve the same with more semantic naming.
-
-
+For multiple namespaces, we could write `#f/foo:` after which `f/word` expands to `foo:word`. Our namespace attribute would simply desugar to `[{&_foo:_f}]%`. When rendering words with multiple valid render options, we heuristically favor the shortest render (with `\{%word}` as a last resort). Qualified namespaces would more closely match conventional programming practices, where we tend to have a large list of imports at the top of a large page of code.

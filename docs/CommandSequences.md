@@ -21,7 +21,7 @@ Being *generic* is especially important for a syntactic sugar like claw. The typ
 
 Monadic models support most of the desiderata. Free monads, in particular, support the generic structure independent of the command type. If we pick a specific free monad, we gain a consistent operational semantics that humans can grasp. My best plan, at this time, is to model some specific free monads then develop a simple syntactic sugar sufficient to construct and compose them from the claw view. 
 
-## Free Monads
+## Free(r) Monads
 
 The notion of a 'command sequence' is pretty well captured by 'monads'. Many DSLs are easily expressed with monads. We achieve composition and decomposition via our monad laws. A simple list of numbers could be understood as a writer monad. However, there are issues with shoving Haskell monads into claw:
 
@@ -118,7 +118,13 @@ AO doesn't do infix notation. However, a claw view can support infix notations w
 
 This is a right-associative binding. The continuation is hidden until just before we return. The continuation could easily be shoved into the program environment or returned to our interpreter. It isn't difficult to recognize that a block ends with `\[...] yield]`, so the desugaring is reversible in a straightforward way.
 
-### Reviewing Use Case: Data Sequences
+### Alternative: CPS Variant
+
+From a processing standpoint, `[\[\[\[qux] after baz] after bar] after foo]` is a more tempting expansion. It provides the continuation before processing the function, and supports a continuation passing style. 
+
+Unfortunately, this hinders interaction with namespace attributes and other view properties.  prevents the interpreter from hiding the continuation from the program, guarantees our continuation is always visible to our program, hinders namespaces from applying to the sequence, doesn't compress nicely, and reorders the program compared to the user's view. I'm favoring the current model for now.
+
+### Use Case: Data Sequences
 
 One of the motivating use-cases for command sequences is (syntactically) concise construction of data sequences (lists, streams, vectors, matrices, etc.). Assume we've committed to block-delimited sequences. Can we take `[1,2,3]` and turn it easily into a list of numbers? 
 
@@ -130,4 +136,10 @@ Further, this model of streaming data is *compositional*. We could rewrite `[1,2
 
 We have a concise, composable, factorable, and friendly syntax for data sequences.
 
+### Use Case: Monadic Programming
 
+For monadic programming, as with data sequences, we'll need to include a representation of our continuation in our program environment, such that we may `yield` multiple times. This is necessary for associative grouping properties, i.e. such that a call stack where we yield in the middle of the top call returns a stack of continuations.
+
+ However, our interpreter remains free to capture this continuation. 
+
+ use a similar technique ( of putting our continuation into the program environment. The only difference is that we'll also need to record some sort of 'expected effect' (on our stack, for example) just before yielding. So we either have an effect, or we return. This syntactic sugar is really a bare minimum for monadic code.

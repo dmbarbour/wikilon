@@ -76,56 +76,43 @@ Reasoning:
 * Tight addressing improves memory locality and caching.
 * Easy to upgrade to 64-bit runtime later, if necessary.
 
-I still have mixed feelings about this whenever I read about 512GB servers and 32GB smartphones. But if this ever becomes a problem, this is an easier fix than most.
+I still have mixed feelings about this when I read about 512GB servers and 32GB smartphones. But, at least in theory, the context size limit should be a non-issue. Large value stowage enables us to better control our active set of data. If we specialize for stowed large binaries, we could potentially share references to large binaries between multiple contexts. Finally, I have some ideas for distributing computations across multiple contexts, leveraging virtual 'partition' annotations to model distributed computing.
 
-With 32-bit addressing aligned on 64-bit cells (representing pairs and lists), 3 bits in each address can be leveraged to optimize common representations. It is most important that we optimize for: pairs, unit, lists, trees, booleans, and small numbers. 
+With 32-bit addressing aligned on 64-bit cells (representing pairs and lists), 3 bits in each address can be leveraged to optimize common representations. The encoding I'll be trying:
 
-The encoding I'll be trying:
-
-* xy0 - small integers 
+* xy0 - small integers
 * 001 - tagged objects
-* 101 - product or unit inL
-* 111 - raw product or unit
-* 011 - product or unit inR
+* 111 - pair of values 
+* 011 - pair in right
+* 101 - pair in left
+* NULL address - unit
 
-Small integers encode plus or minus a billion: nine solid digits with a little play at the edges. 
+This gives us compact representation for pairs, units, booleans, lists, simple trees (e.g. node+leaf), and small integers within range of plus or minus a billion. Anything else is represented by tagged objects.
 
-A product is represented by addressing a single cell, just a pair of values. Address 0 represents 'unit'. We optimize a single level of sum types (inL vs. inR) for products and units. This allows us to directly represent lists, booleans, and binary trees (e.g. node vs. leaf) without an extra cell for the sum type. 
-
-Tagged objects are used for everything else: arbitrary sums, blocks, sealed values, stowed values, pending parallel computations, compact texts, vectors and matrices, etc.. Tagged objects may be more than one cell in size, depending on their type.
+For tagged objects, the first word provides information about how to interpret the remainder of the object. The presence of tagged objects does complicate GC because we cannot interpret a pair without knowing an extra bit (literally, one bit) of information from its reference. OTOH, this simplifies normal processing because special cases are recognized before we've loaded the value from memory.
 
 ## Memory Management
 
-Nurseries are collected by a semi-space algorithm. Motivation: efficient allocation, resist fragmentation, improve locality. 
+Awelon Bytecode does 'manual' memory management by default (via the explicit drop operator `%`). This doesn't have the normal problems of manual memory management because there is no possibility for dangling references (no aliasing), and any 'leak' will at least be obvious in the program environment.
 
-Content is tenured to the main heap if it survives at least two collections - more, if memory pressure is low. Our main heap uses a conventional free list. By the generational hypothesis, we're less likely to delete tenured data immediately. Because we tenure in batches, we can avoid micro free-list overheads. Allocation on the nursery itself becomes a simple bump-pointer action. 
+Thus, I have no fundamental need for garbage collection.
 
-Nurseries are relatively small: somewhere between 128kB and 2MB, perhaps depending on our CPU cache sizes. These should be small enough to fit entirely into processor cache, yet large enough to do useful work. A generational collector requires careful interaction between generations. We must either track 'remembered sets' from the older generation, or copy data one direction or the other. I'm leaning towards the latter option, preserving an invariant that our heap never points into the nursery.
+Nonetheless, I believe that I would benefit from bump-pointer per-thread allocations and compacting collections. This theoretically should help avoid synchronization, reduce fragmentation, improve memory locality, favor large batch allocations, and generally enhance performance.
 
-Even within a nursery, we must trace objects that we drop (by `%`) to validate deletion and reach deleted heap objects. For tracing within the nursery, we can reliably use the other half of our semi-space. We can guarantee this space is large enough, and it's otherwise unused space. 
+I would like to try, for example, a 1MB nursery per thread. We can use a semi-space GC method within the nursery, such that we're only using 512kB. This 512kB could further be divided into an allocation space (128kB) and a survivor space (384kB), where our survivors have survived at least *two* allocation-space collections. For the allocation space, we'll track the watermark from the prior copy, and only content from below this watermark that survives the next pass may be moved to the survivor space. The survivor space may then use a similar technique for deciding what may move to the main heap.
 
-On the main heap, large deletions by `%` may be performed incrementally, e.g. modeling a stack or queue of large objects to delete properly. We can also use a thread-local heap free list and deletion stack, such that we only push this up to the main heap just after a nursery GC cycle, e.g. to minimize synchronization, maximize batching, and enable reuse of a thread's local heap area.
+In both cases, we may use height of prior watermark as a pressure heuristic to predictably decide when to promote content to the next generation. Any percentage-based clearing of GC stages (to a final non-copying space) is sufficient to guarantee constant-time amortized overhead for GC.
 
-*Aside:* It is feasible to 'defrag' the main heap, perhaps perform a big copy collection from one context to another (possibly resizing it in the process). But only if there are no active threads in that context.
-
-### Semi-Space Algorithm
-
-We could use a modified variant of Cheney's algorithm to copy content between spaces. We would keep an extra bit-stack, at the opposite end of our free space, that tracks for each allocation whether it is addressed as a 'tagged object' or a 'cell'. This would allow us to properly interpret the object and find the next set of pointers. However, Cheney's algorithm is breadth-first. This has a negative impact on data locality. 
-
-I want a proper compacting collector. I want the following properties:
+Good properties for compacting algorithms:
 
 * after compaction, data references point backwards
-* lists compact so the spine of data is adjacent.
+* lists compact so spine and referenced data separate.
 * lists feasibly compact directly into data arrays. 
 * tree structures compact along the tree branches.
 
-Ideally, references within our nursery are frequently in the same cache line. And this same algorithm should work very nicely for shoving content out to the main heap. All of this is feasible, but it requires a stack. Fortunately, we can make some guarantees about stack size, perhaps use the opposite half of the nursery as our stack.
+This same compacting algorithm should also work for moving surviving content into the main heap, leveraging 'slab' allocations. All of this is feasible, but it requires a stack. Fortunately, we can make some guarantees about stack size, perhaps use the empty half of the nursery as our stack.
 
-We can keep a pointer to the top of our nursery from just after collection. Upon the next collection, we can count how many addresses we preserve from below this register. This gives us a precise mark for "survived one collection". We'll never tenure anything that hasn't survived one collection and is *about* to survive a second. 
-
-It might be useful to keep a 'survivor' space for the stuff that does survive its second collection. This might reduce copies for data that sticks around - the stuff that would otherwise be slopped back and forth between two nurseries - and reduce fragmentation on the main heap. When this space fills, we simply tenure it on the next GC pass (so it's empty) then begin to refill it again on the following pass. If this shared survivor space is large, e.g. the same size as our nursery, we can make useful real-time guarantees: that a datum is copied no more than so many times in the worst case. 
-
-Copy collection on survivor spaces is feasible, e.g. to limit tenuring. We could also use a short 'chain' of survivor spaces, each with similar properties. Even a short chain could limit most content from reaching the main heap. The main issue is that, once content is on the heap, we'll need to tenure references from the heap.
+Do we want more than two stages? I think the benefit is marginal at that point. 
 
 ### Free List Algorithms
 
@@ -137,73 +124,32 @@ A tagged object is represented in memory with the first word (32 bits) indicatin
 
 Important tagged objects include:
 
-* refct wrappers
-* ad-hoc sum types
-* arrays, compact lists, binaries, texts
-* stowage indicators and wrappers
+* deep sum values
+* blocks of code
+* large integers
+* arrays, binaries, texts
+* stowage wrappers
 * pending computations
 * sealed values
-* blocks, fixpoint blocks, compiled code
-* numbers other than small integers
-* external resources
 
-Most tagged objects will require two cells or more. But there are a few cases where we can squeeze down to just one cell: reference counting wrappers, and ad-hoc sum types.
+Arrays, binaries, and texts are compact representations of *lists* (i.e. type `∃a.∃b.μL.((a*L)+b)`). Binaries and texts additionally constrain the element type (to a subset of small integers). Taken together with accelerators (strings of bytecode that we reduce to a single operator under the hood), we may achieve very high performance access and even in-place update for unshared arrays.
 
-### Reference Count Wrappers
+Eventually, I may support floating point numbers, vectors, matrices. I'd love for Wikilon to become a go to solution for scientific computations (perhaps distributed on a cloud and leveraging GPGPU). These are frequently expressed in terms of vector and matrix computations.
 
-Wikilon favors 'move' semantics, with ownership of values. This enables many pure functions to be implemented by in-place mutation. However, we may benefit from shared structure in specialized cases: 
+Some tagged objects - blocks, arrays, stowage, pending - might be shared or aliased. In these cases, they may contain reference counts under the hood. 
 
-* Accelerators enable non-destructive access to a value, e.g. we can access the Kth element of a list without dismantling it if we assume a list accelerator. Assuming this is our primary means to access the list, we may benefit from copying it logically.
+*Aside:* I had an earlier concept of enabling arbitrary values to be reference counted. However, this idea doesn't have very nice predictability properties, especially in context of parallelism. Fortunately, *large value stowage* serves the same role of limiting depth of copies, and does so in a manner more comprehensible to users (conceptually, just copying a stowage address).
 
-* With large value stowage, I generally want to assume that copies will be performed in O(1) time after performing `{&stow}` (even if actual stowage is latent). Further, I expect to lazily pay the cost of copy (down to the next stowage layer) upon access to the data. Consequently `{&stow}` is a truly outstanding fit for the notion of logical copies.
+### Deep Sum Values
 
-* With pending parallel or lazy computations, I probably don't want to wait on the result. It seems more useful to record an assumption that the result will be copyable, and use a logical copy immediately.
+Deep sums are represented by a tagged object, with our sum path (such as `LRLLLRLRRL`) represented directly in the tag. The low eight bits will indicate that our object is a sum, then we'll use two bits per path item (up to depth 12), e.g. `LRLLRLRLRRRL` could be compacted into one tagged object. Deeper sums would just consist of a chain of deep sum objects. We'll always compact sums as much as possible.
 
-Blocks or functions might fit some of these use cases.
+This technique conveniently enables developers to treat deep sums as little different from tagged unions with implicit flattening... even when the number of tags is pretty large.
 
-A reference count could serve as a basis for logical copies. Instead of performing a deep copy, we wrap a reference count around our value, increment it when we copy, decrement it when the value is dropped or actually copied. The weakness of reference counts is that parallel observers might both make copies of the same value, even though we could have made just one copy. So, we'll probably want to use annotations to guide use of reference counts. 
+### Blocks of Code
 
-Stowage is an obvious case. Use of a `{&share}` annotation (any time before performing a copy) would allow programmers to control less obvious cases.
+A block of cod
 
-With 4-byte words and a 4GB address space, we have at most 2^30 - 1 references to a refct object. This is almost even achievable via compacting vectors. But this leaves us the two low bits: one to tag refcts, one to tag delebility.
-
-        (refct, object)
-            refct → high 30 bits is count
-                    lowest bit is 'refct' flag (1)
-                    second lowest bit is 'known deleble'
-
-A reference count qualifies in most cases as lazy or pending object. When we try to observe our refct, we must either assume ownership (if refct is 1), or copy the data (up to the next refct object, which we incref) then decref. When we first try to copy a large object (i.e. that we own entirely), we'll inject refcts every so many items. When we first try to delete an object, we'll mark all the 'known deleble' bits while validating the action.
-
-The savings from injected reference counts is mostly:
-
-* reduced memory pressure if copies are processed sequentially
-* fast future copies, validation already performed behind refct
-* very efficient copy-delete patterns with shallow observations
-
-*NOTE:* In case of parallelism, we might end up copying a value more frequently, i.e. because we hold onto a refct when performing our copy then decref the old copy. It might be necessary to make this behavior explicit via annotation, e.g. preparing for fast copy-delete pattern. Or it could be something we limit to special cases like arrays and 'stowed' values. Maybe a `{&fastcopy}` annotation?
-
-We represent reference counts as a single cell. This gives us a very good amortized overheads, e.g. if we refct every 64 objects we have a 0.5 bit overhead per object. 
-
-Increments and decrements to refct objects on the heap must be atomic due to potential par/seq sharing. Within the nursery, we can perform conventional increment and decrement operations. Doing so may be worthwhile: atomic operations aren't CPU friendly, and we can cheaply test for membership in the nursery.
-
-During copy-collection, we must replace reference count objects with forwarding pointers. Reference counts are the only objects with potential sharing, so this is a special case. We benefit from two more tags: deferred reference counts for wrappers in the nursery, and forwarding pointers used only during GC.
-
-*Aside:* If our 'known deleble' bit is 0, that doesn't mean the object isn't deleble. It means we *don't know* whether it is deleble. We'll need to validate delebility (that a value contains no 'relevant' blocks) on our first attempt to delete. 
-
-### Ad-hoc Sum Types
-
-Sum objects will be represented by a single cell. 
-
-        (sum, object)
-            low bits: eight bits to flag our sum object.
-            sum data: sequence of `10` for inL or `01` for inR
-                      read from low to high. I.e. inLR is 0110
-                      all zeroes at the top. 
-
-
-This encodes up to 12 tags (24 bits of tag data) per sum object. We can chain sum objects if we need more. There is no guarantee that sum objects are as tightly compacted as possible, but they'll tend to compact where it's obvious to do so.
-
-With 12 tags we can discriminate up to 4096 items. This is more than a human can effectively manage. However, machine-generated code might leverage this much or more, e.g. if we develop good optimizers for hierarchical conditional behaviors and leverage them via DSLs. 
 
 ### Arrays and Chunked Lists
 
@@ -327,11 +273,11 @@ It might be useful to heavily optimize an associative structure, e.g. the equiva
 * type covers a lot of use cases: records, databases, etc.
 * provides a built-in, optimized model for AO dictionaries
 
-An accelerated associative structure should have a canonical evaluated form, a representation deterministic from content. This enables ad-hoc representation under the hood without metadata. This requirement excludes most binary search trees because their final structure depends on insertion order. However, this does permit use of a *trie* or of a *sorted association list*. Between these, the sorted association list is the superior option for acceleration. It is the simpler model. It allows accelerated lookups and updates, ad-hoc representation (structs, tries, log structured merge trees, etc.). Further, it fits naturally with other list accelerators, e.g. as a basis for iteration.
+An accelerated associative structure should have a canonical form, a representation deterministic from *content*. This excludes balanced binary search trees because their precise balancing structure depends on insertion order. However, we could use a *trie* or a *sorted association list*. 
 
-I'll need to return to this concept later. I think supporting this idiom in both the representation and type system could greatly simplify modeling of more conventional programming models (OOP, stack frames, etc.). But I also need to be sure it is simple to implement. And I'll need a proper set of annotations and accelerators to make it worthwhile.
+Between these, the sorted association list is the superior option for acceleration. It is the simpler model. It allows many accelerated lookups and updates, ad-hoc representation (structs, tries, log structured merge trees, etc.). Further, it fits naturally with other list accelerators, e.g. as a basis for iteration.
 
-More generally, it might be interesting to support ad-hoc 'tables', perhaps column structured? An array of structures as a structure of arrays? With enough good annotations for collections oriented programming, I think a lot of performance issues can be eradicated.
+I'll need to return to this concept later. I think supporting this idiom in both the representation and type system could greatly simplify modeling of more conventional programming models (OOP, stack frames, etc.). But I also need to be sure it is simple to implement and won't interfere with, for example, structure sharing and stowage. And of course I'll need to develop a proper set of annotations, assertions, and accelerators to make it worthwhile.
 
 ### Large Value Stowage
 
@@ -378,7 +324,7 @@ Our stack can be modeled by a simple list and our bytecode by a binary. I'll be 
 
 Compilation to native code requires extra consideration. Apparently, many operating systems enforce that memory cannot be both writable and executable. But I could probably keep LLVM bitcode together with a compiled block. The bigger compilation challenge is modeling the LLVM continuation as needed. 
 
-Fixpoints can probably be optimized heavily. We can validate just once that our block of code is copyable.
+Fixpoints can probably be optimized heavily. We can eliminate most overhead per loop, validate only once that our block is copyable, etc.. We also know to optimize for looping, e.g. to pull evaluations out of the loop where feasible.
 
 *Note:* compilation for external runtimes (apps, unikernels, etc.) will be modeled as an extraction, distinct from Wikilon's internal runtime. My goal with compiled code is to make Wikilon fast enough for lots of immediately practical uses and eventual bootstrapping.
 
@@ -397,27 +343,51 @@ These are low priority so I'm not going to bother with external resources beyond
 * scientific computing on very large data sets
 * graphics processing with meshes and textures
 
-In these cases, and likely others, we will wish to surpass our limited 4GB arena or at least reduce pressure memory and copying for very large objects. External resources will continue to model pure values. However, as with arrays, we can update in place when we know there is no sharing and we have appropriate accelerators.
+In these cases I may wish to surpass my limited 4GB arena, or avoid copying large structures multiple times for parallel computations. So I need to keep the data outside the context.
 
-Accelerators and accelerated data models, such as arrays, are essential for external resources. These allow us to perform deep observations, transforms, and updates without picking a structure apart. Consequently, external resources aren't great for ad-hoc data structures. Arrays, especially of fixed-width data (binaries, for example), are the more tempting targets. Texts probably don't need the same high performance treatment as scientific data and graphics processing.
+A promising approach might be to have specialized stowage options for large binaries. Whatever we do, we need accelerated models that support efficient, indexed access, and don't require complicated copies. So... binaries, maybe floating point vectors and matrices later. In-place updates are feasible, too, when we hold the only reference to the value!
 
-To support suspension, checkpointing, persistence, and resumption of computations, it is necessary that any representation of external resources include a description on how to recover access to it. Some form of specialized stowage might work for this concern. Use of external files is also feasible, though only for read-only content.
+I'll get back to this later.
 
 ## Par/Seq Parallelism
 
-An active computation might construct child computations via `{&par}`. 
+The simplest parallel computation probably involves applying `{&par}` to a block before application. It might be useful to support a few variants, or alternatively to optimize parallelization on fixpoint blocks.
 
-Coarse grained computations will be important for this to work. So we need some evidence that there is enough work on both branches to continue. A simple technique is perhaps to evaluate a task partially in the current thread before continuing with a parallel computation. Indeed, we could do this with both fragments. 
+It will be important for parallelism to be *very* lightweight, especially with respect to time. This enables parallelism to be used in more cases or finer granularities. If overhead for parallelism is high, we are forced to more severely constrain parallelism. 
 
-This might reduce effective utilization of multiple threads, though. Would it be better to use a weaker `{&par~}` annotation to keep content local for a cycle, and `{&par}` for a more strict interpretation? I'm not sure. 
+Additional parallelism may later be driven by accelerators, e.g. for matrix multiplication or compositions of FBP/FRP-like streaming dataflows. 
 
 ## API
 
-A minimal API is to focus on a 'bytecode stream' as the primary input and output, perhaps with an option for certain Wikilon runtime extensions to the bytecode (e.g. use of `u = vvrwlc`). But I'm also interested in direct operation or manipulation on values.
+I'd like to get Wikilon runtime working ASAP. API development must be balanced with time to a usable partial solution.
 
-I'd like to support computation with high performance, iterative streams of bytecode, such that we can begin processing the stream before we've finished providing the stream. This may require explicit support, an explicit stream processing task. 
+### Context and Environment Management
 
-Or maybe I can model a 'stream' value? Or an open ended block? With some ability to keep pushing content to it, and eventually close it.
+Ability to create an environment and multiple contexts, and interact with them. Also, a simple API for persistent data is important - e.g. a key-value database with atomic transactions will do nicely.
+
+### Evaluation with Dictionaries?
+
+It could be useful to associate a dictionary with our evaluations, where we know how to read the dictionary. This would require a 'standard' representation for dictionaries in stowage... which is doable, especially if we accelerate association lists.
+
+### Streaming Bytecode APIs?
+
+I've been thinking about how (and whether) to support streaming code in Wikilon. 
+
+One option is "open blocks", where we receive fragments of bytecode (not necessarily aligned with blocks, tokens, or texts). We can treat this block as a value. This idea is very flexible. We could compose streams in various ways, replicate them, etc.. But these options also lead to implementation challenges - e.g. we might 'copy' a stream, quote it, apply it in multiple parallel contexts, etc.. so there are potentially synchronization, replication, partial application issues.
+
+A second option is to create 'stream evaluators', where we iteratively apply chunks of bytecode provided as C strings (and perhaps a few blocks, quoted values). This option has similar representation challenges, but none of the greater complications like replication and synchronization. 
+
+I favor this second option at this time. Though, it might be feasible to use the same 'stream injection' API for both, via ad-hoc polymorphism. 
+
+A related issue is whether we should allow observation (and manipulation) of intermediate values. I'm thinking not. We can easily (and far more generally and precisely) inject tokens for intermediate access. Further, access to intermediate content may hinder control over nursery arenas.
+
+### Direct Value Manipulations
+
+Ability to observe, construct, and manipulate values directly would be useful when interfacing between a Wikilon context and some external resources. 
+
+Originally I planned for non-destructive views on values. However, this seems... complicated. It is inconsistent with Awelon Bytecode, move semantics, pending computations, parallel effects (e.g. a debug `{&trace}`). Also, there's little point to non-destructive access unless it's also non-allocating, but it's difficult to (for example) access a few steps in a deep sum value without either destroying it or allocating a new sum object.
+
+So, value manipulations will all be destructive with ownership semantics. Developers will need to copy values if they want a safe reference to the original.
 
 ## Dead Ideas
 

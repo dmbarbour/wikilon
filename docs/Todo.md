@@ -39,6 +39,16 @@
  * visual claw, widgets in source
  * named variables and closures
 
+* Tunable claw ?
+ * enable bytecode views via dictionaries
+ * enable query parameter to select view (or built-in)
+ * 
+ 
+* Neat features
+ * render environments, animate evaluations 
+ * color-coded namespaces
+ * bolder or larger words for expensive words
+
 * less ad-hoc web application views 
  * application logic into AO dictionaries
  * subscriptions model: long polling, web-sockets

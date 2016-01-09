@@ -95,7 +95,7 @@ Summary of constraints:
  * discretionary value sealer (`{:foo}`)
  * discretionary value unsealer (`{.foo}`)
  * annotations (`{&static}{&copyable}`)
- * token modulo prefix is valid word
+ * token text after prefix is valid word
 * texts are limited to:
  * exclude C0 (except LF), DEL, C1
  * exclude surrogate codepoints U+D800..U+DFFF
