@@ -144,7 +144,7 @@ abcOpTable =
 
     ,(ABC_add,'+'), (ABC_negate,'-')
     ,(ABC_multiply,'*'), (ABC_divMod,'Q')
-    ,(ABC_compare,'>')
+    ,(ABC_compare,'G')
 
 
     ,(ABC_newZero,'#')

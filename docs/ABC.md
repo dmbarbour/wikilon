@@ -41,6 +41,8 @@ See AboutABC for full explanations and design. This file just records each code,
         - :: N(a) * e → N(0-a) * e
         Q :: N(non-zero b) * (N(a) * e) → N(r) * (N(q) * e)
             where qb+r = a, q integral, r between 0 and b (excluding b)
+        G :: N(x) * (N(y) * e) → ((N(y)*N(x))+(N(x)*N(y)) * e -- y > x
+            #4 #2 G -- observes 4 > 2. Returns (N(2)*N(4)) on right.
 
         L :: (a + (b + c)) * e → ((a + b) + c) * e
         R :: ((a + b) + c) * e → (a + (b + c)) * e
@@ -55,8 +57,6 @@ See AboutABC for full explanations and design. This file just records each code,
         M :: (a + a') * e → a * e -- merge; a and a' compatible
         K :: (a + b ) * e → b * e -- assert; must be in b
 
-        > :: N(x) * (N(y) * e) → ((N(y)*N(x))+(N(x)*N(y)) * e -- y > x
-            #4 #2 > -- observes 4 > 2. Returns (N(2)*N(4)) on right.
 
 Legend for types: `*` is a product or pair, `+` is a sum or Either type, `[x→y]` is a block type that can map from type `x` to type `y`, `N(x)` indicates a number with value x (numbers should be tracked in types as much as possible). 
 
@@ -111,6 +111,9 @@ June 2015:
 * eliminate `/` operator, leave ABC number type as integers, library-layer rationals
  * original definition: `/ :: N(non-zero a) * e → N(1/a) * e`
  * note: not fully committed to this change, may restore `/` later if necessary
+
+January 2016:
+* replace opcode `>` with `G` to reduce conflict with XML and HTML
 
 ## ABCD
 

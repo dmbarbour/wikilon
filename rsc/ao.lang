@@ -98,7 +98,7 @@
         <match>[lrwzvcLRWZVC]+</match>
     </context>
     <context id="abcFunctionCode" style-ref="function">
-        <match>[okfQDFMK%^$'+*?\x2D\x3E]+</match>
+        <match>[okfQGDFMK%^$'+*?\x2D]+</match>
     </context>
 
     <context id="aoBody" class="no-spell-check">

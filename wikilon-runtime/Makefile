@@ -1,9 +1,9 @@
 # Makefile for Wikilon's Awelon Bytecode Runtime
 
-W = -W -Wall -Wextra -Wno-unused-parameter
+W = -Wall -Wextra -pedantic -Wno-unused-parameter
 THREADS = -pthread
 OPT = -O2 -flto
-CFLAGS = $(THREADS) $(OPT) $(W) -fPIC -g 
+CFLAGS = $(THREADS) $(OPT) $(W) -fPIC -g -std=c11
 CC = gcc $(CFLAGS)
 OBJECTS = lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o wikrt.o
 INSTALL_PREFIX = /usr/local
@@ -13,6 +13,8 @@ INSTALL_PREFIX = /usr/local
 all: lib
 
 lib: libwikilon-runtime.so
+
+# TODO: add tests
 
 clean:
 	rm -f $(OBJECTS)
@@ -34,7 +36,7 @@ libwikilon-runtime.so: $(OBJECTS) wikrt.lds
 	$(CC) -shared -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@ -o $@ $(OBJECTS)
 
 # I'll add more files as I need them.
-wikrt.o: wikrt.c wikilon-runtime.h lmdb/lmdb.h murmur3/murmur3.h 
+wikrt.o: wikrt.c wikrt.h wikilon-runtime.h lmdb/lmdb.h murmur3/murmur3.h 
 	$(CC) -o $@ -c wikrt.c
 
 # Directly include copy of LMDB key-value database

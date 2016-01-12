@@ -82,9 +82,9 @@ With 32-bit addressing aligned on 64-bit cells (representing pairs and lists), 3
 
 * xy0 - small integers
 * 001 - tagged objects
-* 111 - pair of values 
-* 011 - pair in right
+* 011 - pair of values 
 * 101 - pair in left
+* 111 - pair in right
 * NULL address - unit
 
 This gives us compact representation for pairs, units, booleans, lists, simple trees (e.g. node+leaf), and small integers within range of plus or minus a billion. Anything else is represented by tagged objects.
@@ -217,8 +217,6 @@ Alternatively, it might be better to recognize potential overlap upon destructio
 
 *Note:* The overlap object can be omitted for arrays hosted in the nursery.
 
-
-
 #### Logical Reversal
 
 Logical reversal of a chunked list is achieved flipping a bit in the tag of each array chunk (so we have a `reversed array`) together with a conventional reversal of the `pnext` list. The `size+offset` values are not modified. We simply compute our index or pop data from the opposite end of the array.
@@ -268,6 +266,11 @@ These indices could be installed heuristically based on text size or need. The a
 
 Conveniently, appending texts can be modeled by appending each array. Logical reversal requires special attention: we reverse each array, but we'll also need the ability to read reversed utf8. (It's probably easiest to do this transparently in our utf8 reader.)
 
+#### Very Large Lists?
+
+I'm a bit concerned about how very large lists, e.g. with a million elements, will interact with stowage. Fortunately, it shouldn't be difficult for developers to model large ropes, finger-trees, etc.. But there is a good question, then, of how easy or difficult it is for external clients to interact with the rope type.
+
+Maybe it could be a non-issue... e.g. if outputting large texts or binaries for Wikilon webpages, we could favor explicitly representing it as a simple 'stream' value type rather than as a flat 'list'. Same for very large inputs.
 
 ### Accelerated Association Lists? (low priority)
 

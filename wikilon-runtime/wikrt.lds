@@ -10,9 +10,61 @@
     wikrt_cx_incref;
     wikrt_cx_destroy;
     wikrt_cx_env;
+    wikrt_cx_quota;
 
     wikrt_copy;
     wikrt_drop;
+    wikrt_stow;
+
+    wikrt_alloc_i32;
+    wikrt_alloc_i64;
+    wikrt_alloc_istr;
+    wikrt_peek_i32;
+    wikrt_peek_i64;
+    wikrt_peek_istr;
+    wikrt_peek_isize;
+
+    wikrt_iadd;
+    wikrt_imul;
+    wikrt_ineg;
+    wikrt_idiv;
+    wikrt_icmp;
+
+    wikrt_alloc_prod;
+    wikrt_alloc_stack;
+
+    wikrt_pop_prod;
+    wikrt_pop_stack;
+
+
+    wikrt_make_i32;
+    wikrt_make_i64;
+    wikrt_make_istr;
+    wikrt_peek_i32;
+    wikrt_peek_i64;
+    wikrt_peek_istr;
+    wikrt_peek_isize;
+
+    wikrt_quote;
+
+    wikrt_alloc_sum;
+    wikrt_alloc_block;
+    wikrt_alloc_array;
+    wikrt_alloc_binary;
+    wikrt_alloc_text;
+    wikrt_alloc_sealed;
+
+    wikrt_compose;
+    wikrt_affine;
+    wikrt_relevant;
+    wikrt_parallel;
+    wikrt_iadd;
+    wikrt_imul;
+    wikrt_ineg;
+    wikrt_idiv;
+    wirkt_icmp;
+
+    wikrt_peek_type;
 
     wikrt_pop_prod;
     wikrt_pop_stack;
@@ -21,19 +73,6 @@
     wikrt_pop_binary;
     wikrt_pop_text;
     wikrt_pop_seal;
-
-    wikrt_alloc_unit;
-    wikrt_alloc_prod;
-    wikrt_alloc_stack;
-    wikrt_alloc_sum;
-    wikrt_alloc_list;
-    wikrt_alloc_binary;
-    wikrt_alloc_text;
-    wikrt_alloc_int;
-    wikrt_alloc_i32;
-    wikrt_alloc_i64;
-    wikrt_alloc_istr;
-    wikrt_alloc_seal;
 
     wikrt_text_valid;
     wikrt_token_valid;
