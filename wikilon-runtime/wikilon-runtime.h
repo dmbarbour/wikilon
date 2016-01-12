@@ -87,7 +87,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <stddef.h>
 
 /** @brief Opaque structure for overall Wikilon environment.
  * 
@@ -103,18 +102,18 @@ typedef struct wikrt_env wikrt_env;
 
 /** @brief Opaque structure representing a heap for computations.
  *
- * A context is a fixed-size arena for computations. Wikilon runtime
- * limits contexts to four gigabytes in size (i.e. 32-bit address). 
- * This is the limit for 'active' memory resources. A computation may
- * access more than four gigabytes of data via large value stowage.
+ * A context is a fixed-size arena for computations. Wikilon favors a
+ * separate context for each toplevel comptuation, e.g. each web page
+ * and background task. 
  *
- * Use of distributed processing models (where a computation uses 
- * many contexts) may be explored in the future. 
+ * Individually, contexts are limited to 4GB in size because we use
+ * 32-bit value references within each context. However, large value
+ * stowage supports manipulation of data larger than the context.
  * 
  */
 typedef struct wikrt_cx wikrt_cx;
 
-/** @brief A value reference into a context. 
+/** @brief A value reference within a context. 
  *
  * Wikilon's value model is based on Awelon Bytecode. Basic values
  * include integers, products, unit, sums, and blocks. Special case
@@ -122,67 +121,18 @@ typedef struct wikrt_cx wikrt_cx;
  * arrays, texts, and binaries. The latter three are specializations
  * of simple lists.
  *
- * Wikilon values are generally represented within a context and are
- * referenced by 32-bit addresses. However, flag bits enable direct
- * encoding of small integers, units, and booleans (unit + unit) in
- * the value reference. Here 'small integers' includes the range of
- * plus or minus one billion.
+ * Wikilon runtime optimizes for compact representation of common
+ * value types - e.g. pairs, lists, small integers, unit, booleans,
+ * (node + leaf) trees, and deep sums. Lists may be compacted further
+ * into arrays, texts, and binaries.
  *
- * Wikilon runtime optimizes for representing (a*b) pairs and shallow
- * sums of pairs `(a*b)+(c*d)`. This enables compact representation of
- * lists and many (node+leaf) tree structures. Deep sums are also
- * compactly represented, i.e. such that a sum of depth twelve costs 
- * no more space than a sum of depth two.
- *
- * Wikilon runtime assumes linear references. A value reference has
- * clear ownership, with a few special exceptions where reference 
- * counts will be used under the hood.
-
- * only a single owner. Under this assumption, semantically immutable
- * values may be implicitly mutated in place. The mutation will not
- * be observable because there is no shared reference. There are some
- * special exceptions (arrays, recently stowed values) where sharing
- * is performed.
- * 
- * T special exceptions do share data references. For sharing values include arrays, stowed values,
- *  to large values:
- * arrays, stowed values, etc.. In these cases, atomic reference 
- * counting is used under the hood.
- * 
+ * Wikilon runtime assumes linear value references, i.e. that there
+ * is no aliasing. This enables in-place mutation while preserving
+ * purely functional semantics. OTOH, this requires deep copies by
+ * default. Some large values may use reference counting under the
+ * hood, but sharing isn't exposed through the API.
  */ 
 typedef uint32_t wikrt_val;
-
-/** @brief Reference to a value in a context.
- *
- * The value model is oriented around Awelon Bytecode (ABC) and Awelon
- * Object (AO). The five basic value types are integers, products, sums,
- * units, and blocks of bytecode (which serve as first-class functions).
- *
- * We further have value sealing, substructural types, optimized list
- * representations (arrays, binaries, texts), large value stowage, and 
- * pending values (parallelism, laziness, streaming bytecode). 
- *
- * Wikilon runtime is oriented around 'move' semantics. A value has a
- * single 'owner' at a time, who is wholly responsible for manipulating
- * and observing it. As a benefit, this allows many functions to be
- * non-allocating. Unfortunately, it also means that 
-
-But it does mean we use deep copies on values when copies occur.
- * Only stowed values
- *
- * 
-
-This enables
- * many pure functions to be implemented with non-allocating mutations. 
- * The cost is that 'copying' a value requires actually copying it. The 
- * presence of affine and relevant substructural types discourages AO and
- * ABC programs from using 'copy' and 'drop' for generic programming. 
- *
- * Move semantics applies also to values created through this C API. If
- * you create a value, you own it until you pass it on. You can drop the
- * value if you don't need it anymore. 
- */
-
 
 /** @brief Errors during Wikilon Runtime
  *
@@ -195,7 +145,7 @@ typedef enum wikrt_err
 , WIKRT_INVAL           // bad arguments, avoidable programmer error
 
 // External Resource Errors
-, WIKRT_DBERR           // database or filesystem related errors 
+, WIKRT_DBERR           // persistence layer errors 
 , WIKRT_NOMEM           // malloc or mmap allocation error
 
 // Special Conditions
@@ -213,165 +163,143 @@ typedef enum wikrt_err
 , WIKRT_TYPE_ERROR      // generic type errors
 } wikrt_err;
 
-/** @brief Create or Open a Wikilon environment.
+/** @brief Open or Create a Wikilon environment.
  *
- * The developer specifies where the Wikilon environment stores data
- * on the filesystem, and how large this is permitted to grow. If the
- * database does not exist, we'll attempt to create a new one, making
- * parent directories in the filesystem as necessary.
- *
- * This action may fail, most likely for filesystem or database reasons
- * but potentially because there is insufficient address space for the
- * dbMax allocation. 
- *
- * An environment may be created without external storage by setting
- * dbMax to 0. In this case, large value stowage is ignored and any
- * txn_begin operations will fail. There is no memory-only database
- * option (modulo a memory-only filesystem). 
+ * The developer specifies a directory in the filesystem for persistent
+ * data and stowed values. Also, a heuristic indicator for how much space
+ * for persistent storage is permitted in megabyte units. This action may
+ * fail, most likely for filesystem related reasons (e.g. permissions, or
+ * if that directory is already in use by another process). 
  */
-wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, size_t dbMax);
+wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, uint32_t dbMaxMB);
 
-/** @brief Manage reference counts for an environment.
+/** @brief Manage reference counts for an environment. 
  *
- * Adding to the reference count for a Wikilon runtime does not prevent
- * its destruction, but does ensure a subset of critical resources remain
- * in memory so we can return WIKRT_NOLINK errors instead of crashing.
+ * This helps resist concurrency errors. Using reference counts doesn't
+ * prevent destruction, but operations will return WIKRT_NOLINK instead
+ * of undefined behavior if destroyed early. Decref is represented by a
+ * negative delta.
  *
- * A newly created environment has refct=1. The destroy operation will
- * implicitly decref. If a live environment's refct is reduced to zero,
- * it is destroyed automatically. Contexts also manage the refct of the
- * environment. Hence, it is feasible to create a context then decref
- * the environment such that the environment is destroyed when there
- * are no more contexts.
- * 
- * Use a negative delta to decref.
+ * An environment is destroyed implicitly if decref'd more than incref'd. 
  */
 void wikrt_env_incref(wikrt_env*, int delta);
 
-/** @brief Destroys an environment and free memory resources. 
- * 
- * This attempts a graceful shutdown of the environment and all its
- * contexts. A small subset of memory resources may remain in memory
- * until reference counts reduce to zero.
- *
- */
+/** @brief Graceful shutdown of environment and active contexts. */
 void wikrt_env_destroy(wikrt_env*);
 
-/** @brief Create a context for computation.
+/** @brief Create a context for computations.
  * 
- * A context includes a heap and may host tasks and transactions. Most
- * actions involving a runtime require a context. The primary parameter
- * for a context is the size of its address space, which is allocated
- * immediately.
- *
- * This operation may fail with WIKRT_NOMEM if there isn't enough address
- * space to allocate the context. It may fail with WIKRT_NOLINK if the
- * environment has been destroyed but you're still holding a reference to
- * it.
+ * A context consists mostly of one big mmap'd block of memory. The
+ * viable range for sizes is about 4..4000 in megabyte units. The
+ * context cannot be resized once created.
  */ 
-wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, size_t cxSpace);
+wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 
 /** @brief Manage reference counts for a context.
  *
- * If a context is used concurrently, threads should use reference
- * counts to guard against untimely destruction of the context. A
- * newly created context has refct=1, and reducing refct to zero
- * will implicitly destroy the context.
- *
- * Explicitly destroying the context will reduce refct by one and
- * also free up as much memory as possible, so other threads will
- * begin to see WIKRT_NOLINK errors but not crash.
- concurrent destruction of a context is a risk, threads should
- * maintain a reference to their context. This doesn't prevent the
- * destruction, but rather ensures WIKRT_NOLINK errors instead of
- * crashing or undefined behavior.
- *
- * A context implicitly has refct=1 when created. Destroying the context
- * will implicitly decrement its refct; conversely, if the refct is
- * decremented to zero, the context is implicitly destroyed. Use a
- * negative delta to decref.
+ * Using reference counts doesn't prevent destruction of the context,
+ * but ensures access to a destroyed environment returns WIKRT_NOLINK
+ * instead of performing undefined behavior. Decref is represented by
+ * a negative delta.
+ * 
+ * A context is destroyed implicitly if decref'd more than incref'd. 
  */
 void wikrt_cx_incref(wikrt_cx*, int delta);
 
-/** @brief Destroys a context and frees its memory.
- *
- * After destroying a context, most operations on from other threads
- * (that should be holding a refct) will fail with WIKRT_NOLINK. A
- * context that is created should always be destroyed, either through
- * this operation or via decrementing the initial refct.
- */
+/** @brief Gracefully destroy a context and recover its memory. */
 void wikrt_cx_destroy(wikrt_cx*);
 
-/** A context holds a reference to its environment. */
+/** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
   ////////////////////////////
  // VALUE CONSTRUCTION API //
 ////////////////////////////
 
-/** Construct unit value in context. */
-wikrt_err wikrt_alloc_unit(wikrt_val* out, wikrt_cx*);
-
-/** @brief Construct integer in context.
+/** @brief Construct smaller integers.
  *
  * Note: Small integers within range of plus or minus one billion
- * will typically be stored in the address field (via flag bits and
- * alignment of addresses). But larger integers certainly require
- * an allocation.
+ * will be stored in the value reference directly. Outside of this
+ * range, we may allocate multiple cells of memory to store the
+ * value's representation.
  */
-wikrt_err wikrt_alloc_int(wikrt_val* out, wikrt_cx*, int);
-wikrt_err wikrt_alloc_i32(wikrt_val* out, wikrt_cx*, int32_t);
-wikrt_err wikrt_alloc_i64(wikrt_val* out, wikrt_cx*, int64_t);
+wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val* out, int32_t);
+wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val* out, int64_t);
 
-/** @brief Construct integer from a string representation.
+/** @brief Construct larger integers from a string.
  *
  * Expected regex: 0 | (-)?(1-9)(0-9)*
  *
- * Only decimal numbers are supported.
+ * Currently we only support decimal input.
  */
-wikrt_err wikrt_alloc_istr(wikrt_val* out, wikrt_cx*, char const*);
+wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val* out, char const*);
 
-/** @brief Construct a product or pair (fst * snd) of values. 
+/** @brief Construct unit value in context. 
  *
- * Both elements of the pair must be from the same context or we'll return
- * WIKRT_INVAL. The arguments are similar to those for wikrt_pop_prod, 
- * except the inputs and outputs are inverted.
+ * While this is non-allocating, clients are not encouraged to assume
+ * this in the API. I.e. go ahead and 'alloc' a new unit value every
+ * time, even though they're all the same. For performance purposes,
  */
-wikrt_err wikrt_alloc_prod(wikrt_val* out, wikrt_val* fst, wikrt_val* snd);
+wikrt_err wikrt_alloc_unit(wikrt_cx*, wikrt_val* out);
 
-/** @brief Push values onto a stack.
- *
- * In this case, we construct the form (a*(b*(c*(d*e)))). The arguments
- * are similar to those for wikrt_pop_stack, except the inputs and outputs
- * are inverted.
- */
-wikrt_err wikrt_alloc_stack(wikrt_val* out, size_t nStackElems, wikrt_val* pValArray, wikrt_val* initialStack);
+/** @brief Construct a product type, a pair (fst * snd) of values. */
+wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val* out, wikrt_val fst, wikrt_val snd);
 
-/** @brief Construct a sum. 
- *
- * Wikilon runtime currently optimizes a single level of sums for unit
- * and product values, i.e. such that (a*b) in the left or unit in the
- * right are recorded in the reference and require the same amount of
- * space as (a*b) or unit. This optimizes representation of lists and
- * of simple (node + leaf) tree structures.
- *
- * For deeper sums, Wikilon runtime will also pack several levels per
- * allocation. Consequently, sums aren't expensive in terms of space.
- */
-wikrt_err wikrt_alloc_sum(wikrt_val* out, bool bInRight, wikrt_val* val);
+/** @brief Construct a sum type, a choice (x + _) or (_ + x) of values. */
+wikrt_err wikrt_alloc_sum(wikrt_cx*, wikrt_val* out, wikrt_val x, bool inRight);
 
-/** @brief Push values onto a list. 
- * 
- * These variations invert pop_list, pop_binary, pop_text functions.
- * Except we don't actually need the maximum buffer sizes, only the
- * actual number of elements. 
+/** @brief Construct a block value from a string of bytecode. 
  *
- * For texts, we may return WIKRT_INVAL if the text is not valid.
- * See wikrt_text_valid.
+ * A block is expressed by a finite sequence of Awelon Bytecode (ABC),
+ * represented here by a simple C string. In the future, we may also
+ * support ABCD (ABC Deflated) accelerators. Wikilon runtime understands
+ * some annotations and basic value sealing tokens, but others may cause
+ * evaluation to yield to an external handler. 
+ *
+ * Blocks are how we express first class functional behavior in ABC
+ * and in Wikilon. A block represents a purely functional program.
+ * Due to properties of ABC, blocks can be composed by concatenation
+ * of their bytecode.
+ *
+ * As a general rule, constructing a large block then applying it will
+ * be more efficient compared to direct value manipulations. Wikilon
+ * optimizes heavily for this use case.
  */
-wikrt_err wikrt_alloc_list(wikrt_val* out, wikrt_val* pValArray, size_t nListElems, wikrt_val* initialList);
-wikrt_err wikrt_alloc_binary(wikrt_val* out, unsigned char const* data, size_t nBytes, wikrt_val* initialList);
-wikrt_err wikrt_alloc_text(wikrt_val* out, char const* text, wikrt_val* initialList);
+wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val* out, char const* abc);
+  // NOTE: I'll want a stream construction variant for large blocks.
+
+/** @brief Construct a list represented by an array.
+ *
+ * Lists have recursive form `μL.((a*L)+b)`. That is, a list is a choice
+ * of an element `a` and more list in the left or terminate in the right.
+ * Typically `b` is type unit, but we can generalize to other terminals.
+ * Wikilon's naive representation for lists is optimal for linked lists,
+ * just one pointer per element.
+ *
+ * But we can do much better, and improve memory locality besides, by
+ * using array-based representations of lists. Overhead is reduced to
+ * buffer address and size information, once for the full whole array.
+ * Further, we can accelerate many list processing functions: lookup,
+ * update, splits, logical reversals, length, etc..
+ *
+ * Accelerating list processing via arrays is an important performance
+ * strategy for Wikilon runtime. However, relying on very large arrays
+ * (e.g. with a million elements) is not recommended. The goal should
+ * be instead to use smaller arrays as a building block for ropes or
+ * finger tree sequences.
+ *
+ */
+wikrt_err wikrt_alloc_array(wikrt_cx*, wikrt_val* out, wikrt_val const* arr, uint32_t nVals);
+
+/** @brief Construct a binary value.
+ *
+ * Binaries are lists of small integers in range 0..255, albeit with
+ * compact representation as an array. 
+ */
+wikrt_err wikrt_alloc_binary(wikrt_cx*, wikrt_val* out, uint8_t const* binary, uint32_t nBytes);
+
+/** @brief Construct text values from a utf-8, NUL-terminated C string. */
+wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val* out, char const* text);
 
 /** @brief Test whether a text is valid for Wikilon runtime.
  *
@@ -385,27 +313,23 @@ wikrt_err wikrt_alloc_text(wikrt_val* out, char const* text, wikrt_val* initialL
  */
 bool wikrt_text_valid(char const*);
 
-
-/** @brief Wrap a value with a token.
+/** @brief Construct a discretionary sealed value.
  *
- * You must provide a sealing token text, see wikrt_tokvalid for the
- * constraints. If the token was not valid, WIKRT_INVAL is returned.
- * This is an ownership passing function, so the value is both input
- * and output.
+ * Discretionary value sealing operates by wrapping a value with a
+ * sealer, a token of form {:foo}. This serves a similar role as a
+ * newtype wrapper, guarding against accidental access. The value 
+ * must first be unwrapped with {.foo}. A similar idea is applicable
+ * to open distributed systems via cryptographic sealers.
+ * 
+ * The sealer here is constrained by wikrt_token_valid, and must 
+ * include the prefix colon for discretionary seals. Wikilon runtime
+ * does have built-in knowledge for discretionary value sealing.
  *
- * The token is assumed to have type `∀e.(a * e) → (wrapped-a * e)`.
- * This affects how the wrapped value is serialized. Discretionary
- * sealers are the prototypical use case: `#42{:foo}`. Cryptographic
- * data and other special cases would instead use sealer annotation
- * {$&AES}. 
- *
- * Wikilon runtime understands discretionary sealers and sealing 
- * annotations, and will wrap values automatically when those are
- * encountered in a normal bytecode stream. Wikilon runtime also
- * knows discretionary unsealers, i.e. `{.foo}` unwraps a value
- * previously wrapped with `{:foo}`. 
+ * When serializing to bytecode, we assume that sealed values can be
+ * represented by quoting the value and following it by the sealer
+ * as we do with discretionary sealers (e.g. `#42{:foo}`). 
  */
-wikrt_err wikrt_alloc_seal(char const* tok, wikrt_val* val);
+wikrt_err wikrt_alloc_sealed(wikrt_cx*, wikrt_val* out, wikrt_val val, char const* sealer); 
 
 /** @brief Validate a token.
  *
@@ -422,46 +346,91 @@ wikrt_err wikrt_alloc_seal(char const* tok, wikrt_val* val);
  */
 bool wikrt_token_valid(char const* tok);
 
-
-
-
-  //////////////////////////
- // COMMON DATA PLUMBING //
-//////////////////////////
+  /////////////////////////////
+ // VALUE MANIPULATIONS API //
+/////////////////////////////
 
 /** @brief Copy a value. 
  *
- * Wikilon runtime favors 'move' semantics, with a single owner for
- * any given value reference. This enables many pure functions to be
- * implemented with non-allocating in-place mutation. However, it 
- * also requires deep copies instead of value sharing.
+ * Wikilon runtime favors linear 'move' semantics, where we transfer
+ * ownership of a value. This allows update in place. However, this 
+ * also means we must explicitly copy values if we expect to use the
+ * value twice.
  *
- * In some cases - arrays, pending stowage, blocks, etc. - Wikilon
- * runtime might perform a logical copy, and only perform the true 
- * copy of the representation as needed. These cases are driven by
- * annotations. 
+ * Developers should assume this performs a 'deep copy' of a value.
+ * Some special case will not be deep copied, instead using reference
+ * counts, but that feature is generally hidden from this API and is
+ * not something to heavily rely upon.
  *
- * The C API is not required to respect substructural types, though
- * doing so where feasible is highly recommended. If developers wish
- * to ignore affine properties, simply set `bCopyAff` to true. Errors
- * due to affine properties are latent in case of pending values.
+ * The C API may freely ignore the substructural 'affine' constraint
+ * by indicating bCopyAff. If not set, we may have an error now as we
+ * copy or later if we copy a pending (lazy or parallel) value.
  */
-wikrt_err wikrt_copy(wikrt_val const* src, wikrt_val* dest, bool bCopyAff);
+wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
 
-/** @brief Drop a value. Recover context memory resources.
- * 
- * Like conventional C heaps, a context maintains its own free list.
- * Memory resources are returned to this free list, with some special
- * exceptions like values in a nursery arena. Developers should drop
- * values explicitly while they're continuing to use a context or if
- * they wish to guard substructural types. When finished, the entire
- * context may be destroyed rather than managing individual values.
- * 
- * The C API is not required to respect substructural types, though
- * doing so is recommended. If developers wish to drop relevant values,
- * the `bDropRel` flag should be set to true. 
+/** @brief Delete a value.
+ *
+ * If you're done with a value or computation, you should drop it.
+ * Of course, this is only for values you 'own'. Also, you can skip
+ * this step if you're about to destroy the larger context.
+ *
+ * The C API may freely ignore the substructural 'relevant' constraint
+ * by indicating bCopyRel. If not set, we may have an error now as we
+ * drop, or later when evaluation of a pending value completes. Setting
+ * it also enables lazy destruction.
  */
-wikrt_err wikrt_drop(wikrt_val*, bool bDropRel);
+wikirt_err wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
+
+/** @brief Quote a value.
+ *
+ */
+
+// composition
+// affine, relevant
+// parallel, lazy?
+// math: + * - Q >
+
+// reflection
+
+
+  ////////////////////////////
+ // BASIC VALUE ACCESS API //
+////////////////////////////
+
+/** @brief Shallow reflection on value types. 
+ *
+ * Awelon bytecode assumes statically type-safe code. There are no
+ * implicit conversions. Reflecting on the 'type' of a value is mostly
+ * for special features like debug traces or animated evaluation.
+ */
+typedef enum wikrt_val_type 
+{ WIKRT_VAL_UNIT = 1    // unit value
+, WIKRT_VAL_PRODUCT     // product 
+, WIKRT_VAL_INT         // integer values
+, WIKRT_VAL_SUM         // sum type (includes lists) 
+, WIKRT_VAL_BLOCK       // functional bytecode  
+, WIKRT_VAL_SEALED      // sealed values
+// special cases
+, WIKRT_VAL_STOWED      // fully stowed values
+, WIKRT_VAL_PENDING     // lazy or parallel computation
+} wikrt_val_type;
+
+wikrt_err wikrt_peek_type(wikrt_cx*, wikrt_val_type* out, wikrt_val const);
+
+// application or evaluations (special case?)
+//  stream applications?
+
+
+/** @brief Read relatively small integers.
+ *
+ * If the destination isn't large enough we'll return WIKRT_BUFFSZ.
+ * If the argument isn't an integer, we'll return WIKRT_TYPE_ERROR.
+ */
+wikrt_err wikrt_peek_i32(wikrt_cx*, wikrt_val const, int32_t*);
+wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
+
+
+
 
   ////////////////////////////
  // STREAMING BYTECODE API //
@@ -510,111 +479,8 @@ wikrt_err wikrt_stream_append(wikrt_val* s, char const* bytecode);
 
 
 
-  ///////////////////////////////////////////
- // GENERIC VALUE ACCESS AND CONSTRUCTION //
-///////////////////////////////////////////
 
 
-/** @brief Shallow analysis of value types, for switching. 
- *
- * Outside of specialized cases (e.g. debug output or rendering, and
- * modeling reflection) we should try to stick with statically typed
- * idioms even when accessing values through the C API. Use of this
- * function is an indicator that the C API is doing dynamically typed
- * behaviors.
- */
-typedef enum wikrt_val_type 
-{ WIKRT_VAL_UNIT = 1    // unit value
-, WIKRT_VAL_PRODUCT     // product 
-, WIKRT_VAL_INT         // integer values
-, WIKRT_VAL_SUM         // sum type (includes lists) 
-, WIKRT_VAL_BLOCK       // functional bytecode  
-, WIKRT_VAL_SEALED      // sealed values
-// special cases
-, WIKRT_VAL_STOWED      // fully stowed values
-, WIKRT_VAL_PENDING     // lazy or parallel computation
-} wikrt_val_type;
-
-/** Obtain shallow analysis of value type. */
-wikrt_err wikrt_peek_type(wikrt_val const*, wikrt_val_type* out);
-
-/** @brief Peek into a product of values. 
- *
- * This takes a simple structure of the type (a*b) and returns `a`
- * in fst and `b` in snd. The original structure is preserved, so
- * the caller needs to be careful about managing ownership. If the
- * value was not a product, you'll receive WIKRT_TYPE_ERROR.
- */
-wikrt_err wikrt_peek_prod(wikrt_val const* p, wikrt_val* fst, wikrt_val* snd);
-
-/** @brief Peek into a stack of values.
- *
- * A stack has the shape (a*(b*(c*(d*e)))). If you ask for two elements,
- * you'd get `a` and `b` in the array, and `(c*(d*e))` in the remainder.
- * If you ask for more elements than the stack contains, or if the argument
- * is not a stack, you'll receive WIKRT_TYPE_ERROR.
- *
- * Aside: With nStackElems = 1, this is equivalent to wikrt_peek_prod.
- */
-wikrt_err wikrt_peek_stack(wikrt_val const* stack, size_t nStackElems, wikrt_val* pValArray, wikrt_val* rem);
-
-/** @brief Peek at a sum value.
- *
- * Wikilon runtime packs multiple sum tags into a single cell. While
- * this is convenient for performance, it does hinder iterative access
- * to a sum without allocating a new sum tag. And it's essential that
- * peek be non-allocating.
- *
- * So, we instead peek with a fair amount of depth at once, returning 
- * a string of the form "LRLLLRLLRLLLRRR". This represents the route
- * to reach the value, reading 'left right left left left right ...'.
- * If you have a buffer size of at least WIKRT_SUM_BUFFSZ, you will
- * be able to guarantee that we can unpack at least one step. If
- * there isn't sufficient space to peek, we'll return WIKRT_BUFFSZ.
- *
- */
-wikrt_err wikrt_peek_sum(wikrt_val const* sum, size_t nPathBytes, char* path, wikrt_val* val);
-
-/** @brief Path buffer size for wikrt_peek_sum to guarantee progress. */
-#define WIKRT_SUM_BUFFSZ 32
-
-
-/** @brief Access a list of values non-destructively.
- *
- * NOTE: currently this API is broken because, in general, it requires
- * allocating a value in place of `rem` (e.g. when peeking into a text).
- * I may need, as with sum types, to align with natural 'chunking' of a
- * list.
- *
- * A list has the structure `λa.λb.μL.((a*L)+b)`. Some lists may use
- * a specialized representation, e.g. an array under the hood, but
- * this representation is transparent to list processing functions.
- * Annotations can control and enforce specific representations.
- *
- * A binary is a list of small integers in 0..255. A text is a list
- * of Unicode codepoints (0..1114111) with some exceptions (control
- * characters, surrogates, replacement char). Texts are always valid
- * C strings because NUL is among the characters forbidden.
- *
- * The following peek functions will copy a finite number of elements
- * from the head of the list into a local buffer for the caller. The
- * remainder of the list (or the terminal in the right) is returned 
- * via `rem`. If there is any type error, we return WIKRT_TYPE_ERROR,
- * but we also return as many elements up to the point as feasible.
- * The remaining list including the error is returned in `rem`.
- */
-//wikrt_err wikrt_peek_list(wikrt_val const* lst, size_t nMaxElems, wikrt_val* pValArray, size_t* nListElems, wikrt_val* rem);
-//wikrt_err wikrt_peek_binary(wikrt_val const* binary, size_t nMaxBytes, unsigned char* dst, size_t* nBytes, wikrt_val* rem);
-//wikrt_err wikrt_peek_text(wikrt_val const* txt, size_t nMaxBytes, char* dst, size_t* nBytes, size_t* nChars, wikrt_val* rem);
-
-/** @brief Read relatively small integers.
- *
- * If the destination isn't large enough we'll return WIKRT_BUFFSZ.
- * If the argument isn't an integer, we'll return WIKRT_TYPE_ERROR.
- */
-wikrt_err wikrt_peek_int(wikrt_val const*, int*);
-wikrt_err wikrt_peek_i32(wikrt_val const*, int32_t*);
-wikrt_err wikrt_peek_i64(wikrt_val const*, int64_t*);
 
 /** @brief Read a large integer into a text.
  *

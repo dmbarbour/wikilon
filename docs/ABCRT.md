@@ -170,6 +170,8 @@ The proposed representation for arrays is:
                   e.g. refct for sharing
             pnext → whatever follows
 
+*Note:* It might be worthwhile to represent smaller and simpler arrays (limited size, simple slicing, terminating with unit in right) using only a single cell overhead. 
+
 This tagged object actually represents an `(a * List a b)` pair. We'll further wrap it with another cell for the `inL` sum type. Together with this sum tag, the overhead for an array is 6 words. Lists require two word per item, so we break even on storage costs when encoding 6 items.
 
 Annotation `{&array}` asserts the argument is a list of values and compacts this list into an array with a single contiguous buffer with `pnext` pointing to the terminal value (usually `unit inR` for a plain list). If allocation fails (e.g. due to memory fragmentation), or if the argument is not a valid representation of a list, computation will halt. The weaker `{&array~}` (read: array handwave) allows our runtime to make heuristic chunking decisions, encoding a chunked list in `pnext`. Chunked lists are a high performance data structure, sufficient for many applications of arrays.
@@ -202,7 +204,7 @@ A logical split involves taking our array and constructing two non-overlapping a
 
 In the ideal case, our logical division is aligned with memory. When this happens, our buffers are truly independent - not just logically, but also in terms of GC. However, in the worst case, our divided buffer will share cells at each edge. We must determine whom is responsible for destruction of the shared cell.
 
-To handle this, my current best idea is to wrap the buffer like with do for shared buffers, except specialized for sharing edges of the array. This might look like:
+To handle this, one idea is to wrap the buffer like with do for shared buffers, except specialized for sharing edges of the array. This might look like:
 
         (overlap, pbuff, pshareL, pshareR)
             pshareL, pshareR: one of
@@ -211,7 +213,11 @@ To handle this, my current best idea is to wrap the buffer like with do for shar
 
 If we delete our array, we'll decref our shares of the cells at each edge. If we held the last share, we'll take ownership of the associated cell and include it in our argument to the free() function. Otherwise, we leave it to the other shareholder. If instead we recombine our arrays, we can eliminate the share between them.
 
+Alternatively, it might be better to recognize potential overlap upon destruction, and keep some extra metadata per context for tracking 'shared' cells only when destruction occurs. This is a tempting option.
+
 *Note:* The overlap object can be omitted for arrays hosted in the nursery.
+
+
 
 #### Logical Reversal
 
@@ -279,6 +285,8 @@ Between these, the sorted association list is the superior option for accelerati
 
 I'll need to return to this concept later. I think supporting this idiom in both the representation and type system could greatly simplify modeling of more conventional programming models (OOP, stack frames, etc.). But I also need to be sure it is simple to implement and won't interfere with, for example, structure sharing and stowage. And of course I'll need to develop a proper set of annotations, assertions, and accelerators to make it worthwhile.
 
+As a nice generalization of association lists, maybe we could try to optimize representation of 'tables' where we know each element has the same basic row structure. A list of rows might be represented by a row of lists.
+
 ### Large Value Stowage
 
 We'll use 62-bit identifiers for stowed values. Addresses are allocated once and never reused. This is convenient from a security and caching perspective: we can securely share stowed data with external systems via simple HMAC. And there are no worries about running out. Allocating 2^62 addresses at the best throughput LMDB can manage today would take almost a million years.
@@ -338,16 +346,9 @@ Eventually, I would like to support fixed-width numbers via accelerators: modulo
 
 ### External Resources
 
-These are low priority so I'm not going to bother with external resources beyond reasoning about future viability. They seem very viable. Imagine a future context including:
+For some use cases - scientific computing, gaming resources, etc. - I imagine there will be use for binaries multiple GB in size. Via accelerators for indexed access, slicing, lookups, in place updates, etc. it seems feasible to interact with many external resources the same as structures held within the context. 
 
-* scientific computing on very large data sets
-* graphics processing with meshes and textures
-
-In these cases I may wish to surpass my limited 4GB arena, or avoid copying large structures multiple times for parallel computations. So I need to keep the data outside the context.
-
-A promising approach might be to have specialized stowage options for large binaries. Whatever we do, we need accelerated models that support efficient, indexed access, and don't require complicated copies. So... binaries, maybe floating point vectors and matrices later. In-place updates are feasible, too, when we hold the only reference to the value!
-
-I'll get back to this later.
+A few external resources could greatly extend our 4GB arenas for practical use cases. And they could be more or less transparent, if we have specialized value stowage for large binaries or similar.
 
 ## Par/Seq Parallelism
 
@@ -356,6 +357,10 @@ The simplest parallel computation probably involves applying `{&par}` to a block
 It will be important for parallelism to be *very* lightweight, especially with respect to time. This enables parallelism to be used in more cases or finer granularities. If overhead for parallelism is high, we are forced to more severely constrain parallelism. 
 
 Additional parallelism may later be driven by accelerators, e.g. for matrix multiplication or compositions of FBP/FRP-like streaming dataflows. 
+
+### Distributed Parallelism
+
+Can we model parallelism distributed across multiple contexts, with dataflows between them? This seems like a good fit for the 'partitions' concept I developed in RDP, e.g. with annotations moving data between partitions for different parts of the computation.
 
 ## API
 
@@ -393,4 +398,6 @@ So, value manipulations will all be destructive with ownership semantics. Develo
 
 ### Array Stacks
 
-The array representation could feasibly be applied to the `(a * (b * (c * (d * e)))))` stack-like structure. However, the benefits would be marginal. We can accelerate swap, rot, etc.. But stacks are best known for their rapid changes in size: push, pop, etc.. In those cases, our compact data structure isn't helping. The main benefit would be compaction of a large stack. 
+The array representation could feasibly be applied to the `(a * (b * (c * (d * e)))))` stack-like structure. In this case, however, we might need to focus on rapid increase and decrease in the stack size, i.e. by providing empty space for a stack to 'grow' or 'shrink' with push and pop operations. And there is almost no deep indexed access. I think the benefits are likely to be marginal especially since we already support mutation for most stack ops.
+
+
