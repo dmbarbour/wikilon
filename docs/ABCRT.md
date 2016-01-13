@@ -174,7 +174,9 @@ The proposed representation for arrays is:
 
 This tagged object actually represents an `(a * List a b)` pair. We'll further wrap it with another cell for the `inL` sum type. Together with this sum tag, the overhead for an array is 6 words. Lists require two word per item, so we break even on storage costs when encoding 6 items.
 
-Annotation `{&array}` asserts the argument is a list of values and compacts this list into an array with a single contiguous buffer with `pnext` pointing to the terminal value (usually `unit inR` for a plain list). If allocation fails (e.g. due to memory fragmentation), or if the argument is not a valid representation of a list, computation will halt. The weaker `{&array~}` (read: array handwave) allows our runtime to make heuristic chunking decisions, encoding a chunked list in `pnext`. Chunked lists are a high performance data structure, sufficient for many applications of arrays.
+Annotation `{&array}` asserts the argument is a list of values and compacts this list into an array with a single contiguous buffer with `pnext` pointing to the terminal value (usually `unit inR` for a plain list). If allocation fails (e.g. due to memory fragmentation), or if the argument is not a valid representation of a list, computation will halt. 
+
+I might enable a weaker `{&array~}` to support compact lists with array-like segments, or 'chunked lists'. Chunked lists are a high performance data structure, sufficient for many applications of arrays.
 
 *NOTE:* Explicit arrays via `{&array}` must be allocated on the heap. Copy-collection within the nursery interferes with preserving a seamless underlying structure if it occurs during a logical split. The `{&array~}` constructor doesn't have this limitation, and should be favored for small or transient arrays.
 
@@ -235,42 +237,9 @@ I'd like to support arrays of other fixed-width structures: floats, fixed-width 
 
 #### Texts
 
-Text is represented by a list-like structure of unicode codepoints, with a short blacklist: C0 (except LF), DEL, C1, surrogates (U+D800-U+DFFF), and the replacement character (U+FFFD). I'm precisely matching the constraints for text data in the AO dictionary. 
+Text is represented by a list of unicode codepoints, with a short blacklist: C0 (except LF), DEL, C1, surrogates (U+D800-U+DFFF), and the replacement character (U+FFFD). The `{&text}` annotation will compact a list into a UTF-8 binary, or perhaps a chunked list thereof. 
 
-The `{&text}` annotation tries to compact valid text data one large UTF-8 array. If the text is not valid, this fails. The `{&text~}` annotation does the same but encodes the UTF-8 as a chunked list. 
-
-A basic proposed representation for most text is:
-
-        (text, utf8)
-            utf8 is pointer to binary array
-
-Due to the variable size of characters, texts don't have array semantics. Computing length requires scanning and counting characters. Updates require shrinking or expanding the utf8 representation. Further, in most cases, we don't actually want array semantics. We'll mostly be splitting texts based on *content* (e.g. comma separated values or line terminals) not *character count*. 
-
-But we could improve character counting performance with an index:
-
-        (text+index, utf8, index1, index2)
-
-            utf8 is ptr to binary array
-
-            index1: encoding (c, b) pairs
-                skip forward c characters by skipping b bytes
-                small values of c,b : range 1..256
-
-            index2: encoding (c, b, i) triples
-                skip forward c characters by skipping b bytes
-                skip corresponds to i pairs in index1
-                large values of c,b: range 1..65536
-                small values of i: 1..256
-
-These indices could be installed heuristically based on text size or need. The asymptotic overhead for the index is less than 0.8%. For texts of 4kB, the overhead is closer to 2.6% due to the index tags. The first layer index lets us scan, slice, and lookup on index 100x faster. The second layer bumps us up to 10000x - still O(N), but a nicer coefficient. These indices would support slicing texts of up to about 20MB. Though I would recommend finger-tree ropes and stowage long before reaching that point.
-
-Conveniently, appending texts can be modeled by appending each array. Logical reversal requires special attention: we reverse each array, but we'll also need the ability to read reversed utf8. (It's probably easiest to do this transparently in our utf8 reader.)
-
-#### Very Large Lists?
-
-I'm a bit concerned about how very large lists, e.g. with a million elements, will interact with stowage. Fortunately, it shouldn't be difficult for developers to model large ropes, finger-trees, etc.. But there is a good question, then, of how easy or difficult it is for external clients to interact with the rope type.
-
-Maybe it could be a non-issue... e.g. if outputting large texts or binaries for Wikilon webpages, we could favor explicitly representing it as a simple 'stream' value type rather than as a flat 'list'. Same for very large inputs.
+Due to the variable size of characters, utf-8 texts cannot have array performance characteristics. But with a little indexing, we can support skipping through and splitting large texts far more efficiently than we would achieve with linear scanning. 
 
 ### Accelerated Association Lists? (low priority)
 
@@ -396,6 +365,16 @@ Ability to observe, construct, and manipulate values directly would be useful wh
 Originally I planned for non-destructive views on values. However, this seems... complicated. It is inconsistent with Awelon Bytecode, move semantics, pending computations, parallel effects (e.g. a debug `{&trace}`). Also, there's little point to non-destructive access unless it's also non-allocating, but it's difficult to (for example) access a few steps in a deep sum value without either destroying it or allocating a new sum object.
 
 So, value manipulations will all be destructive with ownership semantics. Developers will need to copy values if they want a safe reference to the original.
+
+### Large Binary Inputs and Outputs
+
+Something that has concerned me is how Wikilon will interact with large binary content. Working with multi-gigabyte binaries is problematic if I restrict to 4GB working spaces. Modeling very large binaries as external resources might help, but I'm not comfortable with consuming arbitrary amounts of address space, even if I used `mmap'd` files or whatever to avoid loading them all at once. What other options do we have?
+
+One viable possibility is to have Wikilon understand a relatively simple model or API for ropes or streams, or perhaps even HTTP request handlers, with which we may easily wrap whichever models we favor within our dictionary. 
+
+This would enable large binary *outputs* to be loaded (perhapse even computed) incrementally. Ropes would have the advantage of enabling indexed access, answering those region-based HTTP requests, etc.. Large binary *inputs* are probably less an issue because we simply have some software agent representing the binary within the dictionary in an ad-hoc way (ropes or streams or whatever). 
+
+I think I'll try that route, rather than attempt to solve the problem of representing very large binaries.
 
 ## Dead Ideas
 

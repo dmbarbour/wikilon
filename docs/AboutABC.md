@@ -411,9 +411,9 @@ Given the identifier, we fetch the resource, validate against the hash, then loa
 
 Semantically, ABC resources are simply inlined directly in place of the token. However, for performance we might compile resources into machine code or otherwise pre-process them. The compiled version of a resource can easily be cached together with the downloaded code.
 
-*Hash Algorithm:* I might favor Blake2s-240 from the developers of Tahoe-LAFS. Blake2 is designed for good software performance. Using base32, this would encode in 48 bytes.
+*Hash Algorithm:* I currently favor Blake2s-240 from the developers of Tahoe-LAFS. Blake2 is designed for great software performance. Using a base32 encoding, the hash would encode in 48 bytes, leaving sufficient space in our limited size tokens for a few annotations like value linking (see below).
 
-*Note:* At small to moderate scales we can probably use [AO dictionaries](AboutAO.md) as our primary basis for separate compilation and linking. However, due to mutability and consistency concerns, dictionaries don't scale nearly as easily as secure hashes and content addressing.
+*Note:* At small to moderate scales we can probably use [AO dictionaries](AboutAO.md) as a basis for separate compilation and linking. Dictionaries don't scale to open distributed systems nearly as effectively as identifying resources by secure hash. But they could work for a small group, a connection, a web page, etc..
 
 *Aside:* Paul Chiusano is doing related work with Unison involving [editing resources named by hashes](http://unisonweb.org/2015-06-12/editing.html#post-start). While I've not elected to go this route with AO dictionaries, the techniques he develops seem readily applicable to ABC resources.
 
@@ -442,11 +442,11 @@ ABC encourages an informal notion of "paragraphs" at least in a streaming contex
 
 A paragraph is implicitly expressed by simply including a full, blank line within ABC code. I.e. LF LF in the toplevel stream outside of any block. This corresponds nicely to a paragraph in a text file. Formally, the space between paragraphs just means identity. Paragraphs might be more explicitly indicated by an annotation, e.g. `{&p}`. Paragraphs are discretionary. The reason to respect them is that they're advantageous to everyone involved, i.e. for performance and reasoning.
 
-### Encoding Binaries in ABC
+### Encoding Binary Data in ABC
 
-Programmers often work with binary encoded data, e.g. compressed visual or audio data, secure hashes, ciphertext. I would like the ability to encode MP3 files, texture data, or short video clips as ABC resources. This would allow me to leverage ABC's secure content distribution, caching, partial evaluation, and nearly transparent link model. However, unless embedded binaries can be stored and transmitted efficiently, this simply won't happen.
+Programmers often work with binary encoded data, e.g. compressed visual or audio data, secure hashes, ciphertext. I would like the ability to encode MP3 files, texture data, or short video clips as ABC resources. This would allow me to leverage ABC's secure content distribution, caching, partial evaluation, and nearly transparent link model. However, it's valuable that large binaries can be stored and transmitted efficiently.
 
-To handle this, we may encode large sequences of base16 in a specific alphabet `bdfghjkmnpqstxyz` in embedded text. This alphabet is `a-z` minus vowels `aeiou` and common ABC data plumbing `vrwlc`, and is intended to make our binaries opaque yet visually or heuristically recognizable. For example:
+One simple option is to use a naive encoding of binaries - e.g. base16 - and couple this with a dedicated compression pass for storage or streaming. I propose alphabet `bdfghjkmnpqstxyz` (`a-z` minus vowels `aeiou` and common ABC ops `vrwlc`). This ensures binaries are visually distinct yet opaque.
 
         "htkzmfkjkxfbkpmbmgmjkxfbkhkzktkzmffbmgkpmhfbkdkxkjmhftfbkgkzkymg
          kjkgmhkjmhmjmffbkdkhkpmbkpmgkgkpkykmfbkjktkpmhftfbmgkjkhfbkhkzfb
@@ -464,16 +464,16 @@ To handle this, we may encode large sequences of base16 in a specific alphabet `
          mhfbkxkzktktkpmhfbkdkykpkxfbkpkhfbkjmgmhfbktkdkfkzmfmjkxfy
         ~
 
-A specialized compression pass could easily recognize runs of these characters and rewrites to a short header and a bytecount. The format I developed for use within Wikilon is especially optimized for texts encoding 32 bytes per line, encoding blocks of up to 4096 bytes (128 lines) with only 0.1% overhead. Here's the format I use internally:
+A compression pass could easily recognize runs of these characters and rewrites to a short header and a bytecount. The format I developed for use within Wikilon is especially optimized for texts, encoding 32 bytes per line, encoding blocks of up to 4096 bytes (128 lines) with only 0.1% overhead. Here's the format I use internally:
 
         (248) (size) (bytes)
             (size in 0..127): 4..512 contiguous bytes (multiples of 4)
             (size in 128..254): 2..128 lines of 32 bytes with LF SP separators
             (size 255): escape prior (248) byte
 
-Byte `(248)` does not naturally appear in UTF-8 text, and hence does not appear in ABC. The escape is included only to ensure compression is a total function, valid on all bytestrings. Usually, binary compression will be followed by a more conventional compression, e.g. Snappy or ZStandard.
+Byte `(248)` does not naturally appear in UTF-8 text, and hence does not appear in ABC. The escape is included only to ensure compression is a total function, valid on all bytestrings. This binary compression could be followed by a more conventional compression, e.g. Snappy or the awesome new ZStandard. It is likely that conventional compression is, by itself, sufficient for many use cases.
 
-Efficient *processing* of binaries further requires accelerators like ABCD. The binary is converted to a compact representation - e.g. an array of bytes - then normal list processing accelerators (e.g. to index the list or update at a particular index) may run very efficiently.
+Efficient *processing* of binaries may further require accelerators like ABCD. We can convert our binary to an actual binary representation for runtime use, and use accelerated list processing functions to index the binary or even (via holding a unique reference) update it in place.
 
 ## Awelon Bytecode Deflated (ABCD)
 
@@ -483,7 +483,7 @@ Characters ABC doesn't use will be mapped to common, useful, optimizable ABC sub
 
 ABCD allows ABC to iteratively grow into a high-performance language while preserving ABC's simple semantics. Every ABCD program expands trivially into an ABC program. 
 
-ABCD will greatly improve the performance of ABC interpreters. We gain efficiency by doing more useful work per opcode. If we have opcodes for multiplying matrices, and our program does a lot of that, we'll be spending a greater portion of our time in our pre-compiled matrix multiplication code rather than parsing opcodes and shuffling data. ABCD has great potential for *Collections Oriented Programming* (see below). Because interpreters are much simpler to implement or integrate than compilers, ABCD will also improve the accessibility of ABC.
+ABCD will greatly improve the performance of ABC interpreters. We gain efficiency by doing more useful work per opcode. If we have opcodes for multiplying matrices, and our program does a lot of that, we'll be spending a greater portion of our time in our pre-compiled matrix multiplication code rather than parsing opcodes and shuffling data. ABCD has great potential to enable high performance *Collections Oriented Programming* (see below). Because interpreters are much simpler to implement or integrate than compilers, ABCD will also improve the accessibility of ABC.
 
 ABCD requires careful standardization to support code distribution (streaming, ABC resources). Fortunately, it is easy to experiment with ABCD-like extensions within a runtime. We can take advantage of this technique long before we standardize, and we can empirically prove the utility of certain accelerators. 
 
@@ -491,7 +491,7 @@ Because ABC is encoded in UTF-8, we have more room for ABCD extensions than we'l
 
 ### ABCD for Collections Oriented Programming
 
-Languages designed for collections oriented programming, such as J, K, APL, or SQL, frequently achieve excellent performance even with an interpreter. The bulky computations easily dominate the interpreter overheads, and may even allow an interesting degree of parallelism or use of GPU computing. Scalar manipulations, e.g. adding or comparing individual numbers, tend to be much less efficient when interpreted. 
+Languages designed for collections oriented programming, such as J, K, APL, or SQL, frequently achieve excellent performance (within their domain) even with an interpreter. The bulky computations dominate the interpreter overheads, and may even allow an interesting degree of parallelism or use of GPU computing. Scalar manipulations, e.g. adding or comparing individual numbers, tend to be much less efficient when interpreted. 
 
 During design and development of Awelon Bytecode, it has been very tempting to pursue collections oriented operations and data types. I ultimately decided against this due to the complexity it would add, e.g. needing to make extra choices about which collections to support (arrays, matrices, lists, streams, relations, etc.) and provide the panoply of operators for manipulating them. The conception of ABCD also contributed significantly to my willingness to kick collections oriented features into the future. 
 

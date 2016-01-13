@@ -103,13 +103,12 @@ typedef struct wikrt_env wikrt_env;
 /** @brief Opaque structure representing a heap for computations.
  *
  * A context is a fixed-size arena for computations. Wikilon favors a
- * separate context for each toplevel comptuation, e.g. each web page
- * and background task. 
+ * separate context for each toplevel comptuation, e.g. servicing each
+ * HTTP request, to ensure predictable behavior and control over space.
  *
- * Individually, contexts are limited to 4GB in size because we use
- * 32-bit value references within each context. However, large value
- * stowage supports manipulation of data larger than the context.
- * 
+ * A computation can operate on data much larger than context via large
+ * value stowage, which serves a role similar to virtual memory or use
+ * of a filesystem.
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -136,7 +135,8 @@ typedef enum wikrt_err
 , WIKRT_TXN_CONFLICT    // transaction failed on conflict
 
 // Evaluations
-, WIKRT_QUOTA_STOP      // halted on step quota
+, WIKRT_STREAM_WAIT     // waiting on input
+, WIKRT_QUOTA_STOP      // halted on time/effort quota
 , WIKRT_TOKEN_STOP      // stop on unrecognized token
 , WIKRT_ASSERT_FAIL     // assertion failure (op `K`)
 , WIKRT_TYPE_ERROR      // generic type errors
@@ -197,26 +197,6 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** @brief Set temporal quota for a context.
- *
- * When a context is constructed, it is associated with both a finite
- * amount of space and a finite amount of time or effort. To be most
- * predictable, this effort is specified in terms allocation effort.
- * A time unit is (very roughly!) one megabyte of allocations. 
- *
- * The default quota is 10x the initial context size, indicating that
- * every megabyte could feasibly be rewritten ten times before return.
- * In practice, of course, allocations have non-uniform distribution.
- * Developers may freely set the quota higher or lower.
- *
- * When a context reaches its temporal quota limits, we'll generally
- * return with WIKRT_QUOTA_STOP at a safe point. At that time, the main
- * options are to either abort computation or to reset the quota and 
- * continue.
- */
-void wikrt_cx_quota(wikrt_cx*, uint32_t allocMB);
-
-
 /** @brief A value reference within a context. 
  *
  * Wikilon's value model is based on Awelon Bytecode. Basic values
@@ -235,9 +215,6 @@ void wikrt_cx_quota(wikrt_cx*, uint32_t allocMB);
  * purely functional semantics. OTOH, this requires deep copies by
  * default. Some large values may use reference counting under the
  * hood, but sharing isn't exposed through the API.
- *
- * For cases where we don't transfer ownership of the wikrt_val, I
- * use `wikrt_val const` in the API as a weak form of documentation.
  */ 
 typedef uint32_t wikrt_val;
 
@@ -257,18 +234,16 @@ typedef uint32_t wikrt_val;
 /** @brief Unit in Right is a constant value reference.
  * 
  * The unit value in the right is also the value conventionally 
- * used to represent true, done, nothing, empty list.
+ * used to represent boolean true, done, nothing, empty list.
  */
 #define WIKRT_UNIT_INR 5
 
 /** @brief Unit in Left is a constant value reference.
  * 
  * The unit value in the left is also the value conventionally 
- * used to represent false. In most other cases, we'll favor
- * unit in the right and data in the left.
+ * used to represent boolean false. 
  */
 #define WIKRT_UNIT_INL 7
-
 
 /** @brief Shallow reflection on value types. 
  *
@@ -356,13 +331,18 @@ wikrt_err wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
  */
 wikrt_err wikrt_stow(wikrt_cx*, wikrt_val* out, wikrt_val);
 
+// TODO: Consistent API for injecting content into context.
+//  numbers, pairs, sums, arrays, binaries, texts, blocks, sealed
+//  streaming inputs for blocks, lists
+
+
 /** @brief Construct relatively small integers.
  *
  * Note: Small integers within range of plus or minus one billion
  * will be stored in the value reference directly. Outside of this
  * range, we may allocate memory to store the value representation.
  */
-wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val* out, int32_t);
+wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val* out, intmax_t);
 wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val* out, int64_t);
 
 /** @brief Construct larger integers from a string.
@@ -374,7 +354,7 @@ wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val* out, int64_t);
  */
 wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val* out, char const*);
 
-/** @brief Read relatively small integers.
+/** @brief Read integers that you expect to be relatively small.
  *
  * If the destination isn't large enough we'll return WIKRT_BUFFSZ.
  * If the argument isn't an integer, we'll return WIKRT_TYPE_ERROR.
@@ -430,7 +410,6 @@ typedef enum wikrt_ord
  */
 wikrt_err wikrt_icmp(wikrt_cx*, wikrt_ord* result, wikrt_val const, wikrt_val const);
 
-
 /** @brief Construct a product type, a pair of values (fst * snd). 
  *
  * Products are among the most common structures in Awelon Bytecode
@@ -439,6 +418,8 @@ wikrt_err wikrt_icmp(wikrt_cx*, wikrt_ord* result, wikrt_val const, wikrt_val co
  */
 wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val* out, wikrt_val fst, wikrt_val snd);
 
+/** @brief Access a product type, recovering the fst and snd values. */
+wikrt_err wikrt_split_prod(wikrt_cx*, wikrt_val prod, wikrt_val* fst, wikrt_val* snd);
 
 /** @brief Construct a sum type, a choice of (x + _) or (_ + x). 
  *
@@ -446,28 +427,57 @@ wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val* out, wikrt_val fst, wikrt_val s
  * variable-sized structured data like lists and trees. They are used
  * together with product types. E.g. a list has type `μL.((a*L)+b)`.
  *
- * A shallow sum (in left or in right) for a simple product value (or
- * unit) requires no additional space, being represented instead within
- * the value reference. Deep sums, and sums on other types of data, 
- * require an additional memory cell, but will be 'packed' such that
- * depth nine requires no more space than depth two.
+ * A shallow sum (in left or in right) for a product or unit value is
+ * represented in the value reference with no need for allocation. This
+ * enables direct construction of lists and many (node + leaf) trees to
+ * be acceptably efficient. Deeper sums, or sums on other types of data,
+ * will try to pack multiple levels per allocation. 
  */
 wikrt_err wikrt_alloc_sum(wikrt_cx*, wikrt_val* out, wikrt_val x, bool inRight);
 
+/** @brief Access a sum type, dividing it into a boolean path and value. */
+wikrt_err wikrt_split_sum(wikrt_cx*, wikrt_val sum, wikrt_val* x, bool* inRight);
 
+#if 0
+// todo: return to performance features after the basics are implemented
 
-
-/** @brief Allocate a block of code from a string literal.
+/** @brief Construct a list represented by an array.
  *
- * If you have a simple C string of Awelon bytecode - probably for
- * testing purposes - then you can easily construct a block from 
- * this string. WIKRT_TYPE_ERROR is returned if the string is not
- * valid ABC.
+ * Direct construction of lists `μL.((a*L)+b)` via sums and products will
+ * result in an efficient linked list, one cell per element. Shallow sums
+ * on products are represented in the pointer, instead of by allocation.
+ *
+ * However, linked lists have high space overhead and poor locality. For
+ * these properties, arrays are a better representation. Further, arrays
+ * can heavily accelerate functions like lookup, update, split, append
+ * compared to use of linked lists. Using arrays to represent lists is a
+ * valuable performance strategy.
+ *
+ * wikrt_alloc_array will allocate an array that terminates implicitly
+ * in WIKRT_UNIT_INR.
  */
+wikrt_err wikrt_alloc_array(wikrt_cx*, wikrt_val* out, wikrt_val* arr, uint32_t nVals);
+
+/** @brief Construct a binary value. */
+wikrt_err wikrt_alloc_binary(wikrt_cx*, wikrt_val* out, uint8_t const* binary, uint32_t nBytes);
+
+/** @brief Construct text values from a C string literal. */
+wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val* out, char const* text);
+
+/** @brief Convert existing list into an array, like {&array}. */
+wikrt_err wikrt_anno_array(wikrt_cx*, wikrt_val* out, wikrt_val list);
+    // maybe another method to support chunked lists and {&array~}?
+
+/** @brief Convert existing list of 0..255 into binary, like {&binary}. */
+wikrt_err wikrt_anno_binary(wikrt_cx*, wikrt_val* out, wikrt_val list);
+
+/** @brief Convert existing list of codepoints into a text, like {&text}. */
+wikrt_err wikrt_anno_text(wikrt_cx*, wikrt_val* out, wikrt_val list);
+
+#endif
+
+/** @brief Allocate a block of code from a C string literal. */
 wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val* out, char const* abc);
-
-
-
 
 /** @brief Quote a value into a block.  v → [e → (v * e)]
  *
@@ -531,7 +541,7 @@ wikrt_err wikrt_relevant(wikrt_cx*, wikrt_val* out, wikrt_val);
  * scheduling (modulo quota management). This corresponds roughly to the
  * par/seq parallelism from Haskell.
  */
-wikrt_err wikrt_parallel(wikrt_cx*, wikrt_val* out, wikrt_val);
+wikrt_err wikrt_anno_par(wikrt_cx*, wikrt_val* out, wikrt_val);
 
 // todo: better support pipeline parallelism
 // laziness remains under consideration.
@@ -542,38 +552,6 @@ wikrt_err wikrt_parallel(wikrt_cx*, wikrt_val* out, wikrt_val);
 //  index, reverse, update, slice, append, etc.
 //  array sharing, array rewrites
 //  add as needed
-
-
-/** @brief Construct a list represented by an array.
- *
- * Lists have recursive form `μL.((a*L)+b)`. That is, a list is a choice
- * of an element `a` and more list in the left or terminate in the right.
- * Typically `b` is type unit, but we can generalize to other terminals.
- * Wikilon's naive representation for lists is optimal for linked lists,
- * just one pointer per element.
- *
- * But we can do better - more compact, better memory locality, improve
- * cache coherence - by representing critical lists as arrays. Overhead
- * is reduced to buffer address and size information for the full array.
- * Further, we can accelerate many list processing functions: lookup,
- * update, splits, logical reversals, length, etc..
- *
- * Accelerating list processing via arrays is an important performance
- * strategy for Wikilon runtime, and arrays serve as a useful basis for
- * other efficient data structures (e.g. ropes). Unfortunately, very 
- * large arrays don't work nicely with stowage.
- */
-wikrt_err wikrt_alloc_array(wikrt_cx*, wikrt_val* out, wikrt_val* arr, uint32_t nVals);
-
-/** @brief Construct a binary value.
- *
- * Binaries are lists of small integers in range 0..255, albeit with
- * compact representation as an array. 
- */
-wikrt_err wikrt_alloc_binary(wikrt_cx*, wikrt_val* out, uint8_t const* binary, uint32_t nBytes);
-
-/** @brief Construct text values from a utf-8 C string. */
-wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val* out, char const* text);
 
 /** @brief Test whether a text is valid for Wikilon runtime.
  *
@@ -653,10 +631,10 @@ bool wikrt_token_valid(char const* tok);
 
 
 
-//wikrt_err wikrt_pop_prod(wikrt_cx*, wikrt_val pair, wikrt_val* fst, wikrt_val* snd);
-//wikrt_err wikrt_pop_sum(wikrt_cx*, wikrt_val sum, wikrt_val* x, bool* inRight);
-//wikrt_err wikrt_pop_block(wikrt_cx*, wikrt_val* out, char* abc, uint32_t nBuffSize);
-//wikrt_err wikrt_pop_array(wikrt_cx*, wikrt_val* out, wikrt_val const* arr, uint32_t nVals);
+//wikrt_err wikrt_split_prod(wikrt_cx*, wikrt_val pair, wikrt_val* fst, wikrt_val* snd);
+//wikrt_err wikrt_split_sum(wikrt_cx*, wikrt_val sum, wikrt_val* x, bool* inRight);
+//wikrt_err wikrt_split_block(wikrt_cx*, wikrt_val* out, char* abc, uint32_t nBuffSize);
+//wikrt_err wikrt_split_array(wikrt_cx*, wikrt_val* out, wikrt_val const* arr, uint32_t nVals);
 
 /** @brief Construct a binary value.
  *
@@ -702,11 +680,11 @@ wikrt_err wikrt_alloc_sealed(wikrt_cx*, wikrt_val* out, wikrt_val val, char cons
 #if 0
 /** @brief 'Pop' variants dismantle their argument. 
  *
- * For many wikrt_peek_X functions, there is a similar wikrt_pop_X
+ * For many wikrt_peek_X functions, there is a similar wikrt_split_X
  * function that dismantles the argument. This provides the caller
  * ownership of the returned elements.
  *
- * For the wikrt_pop_list variants, WIKRT_TYPE_ERROR still allows
+ * For the wikrt_split_list variants, WIKRT_TYPE_ERROR still allows
  * partial success that pops elements off the list up to the point
  * of type error, which is returned in `rem`.
  *
@@ -715,12 +693,12 @@ wikrt_err wikrt_alloc_sealed(wikrt_cx*, wikrt_val* out, wikrt_val val, char cons
  * much smaller steps.  safely done
  * just one small step at a time. 
  */
-wikrt_err wikrt_pop_prod(wikrt_val* p, wikrt_val* fst, wikrt_val* snd);
-wikrt_err wikrt_pop_stack(wikrt_val* stack, size_t nStackElems, wikrt_val* pValArray, wikrt_val* rem);
-wikrt_err wikrt_pop_list(wikrt_val* lst, size_t nMaxElems, wikrt_val* pValArray, size_t* nListElems, wikrt_val* rem);
-wikrt_err wikrt_pop_binary(wikrt_val* binary, size_t nMaxBytes, unsigned char* dst, size_t* nBytes, wikrt_val* rem);
-wikrt_err wikrt_pop_text(wikrt_val* txt, size_t nMaxBytes, char* dst, size_t* nBytes, size_t* nChars, wikrt_val* rem);
-wikrt_err wikrt_pop_sum(wikrt_val* sum, size_t nPathBytes, char* path, wikrt_val* val);
+wikrt_err wikrt_split_prod(wikrt_val* p, wikrt_val* fst, wikrt_val* snd);
+wikrt_err wikrt_split_stack(wikrt_val* stack, size_t nStackElems, wikrt_val* pValArray, wikrt_val* rem);
+wikrt_err wikrt_split_list(wikrt_val* lst, size_t nMaxElems, wikrt_val* pValArray, size_t* nListElems, wikrt_val* rem);
+wikrt_err wikrt_split_binary(wikrt_val* binary, size_t nMaxBytes, unsigned char* dst, size_t* nBytes, wikrt_val* rem);
+wikrt_err wikrt_split_text(wikrt_val* txt, size_t nMaxBytes, char* dst, size_t* nBytes, size_t* nChars, wikrt_val* rem);
+wikrt_err wikrt_split_sum(wikrt_val* sum, size_t nPathBytes, char* path, wikrt_val* val);
 
 
 /** @brief Access a sealed value. 
@@ -736,9 +714,36 @@ wikrt_err wikrt_pop_sum(wikrt_val* sum, size_t nPathBytes, char* path, wikrt_val
  * The same caveats apply: it's preferable to avoid this feature outside
  * of special cases like rendering values for debugging.
  */
-wikrt_err wikrt_pop_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v); 
+wikrt_err wikrt_split_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v); 
 #endif
 
+
+#if 0
+/** @brief Set temporal quota for a context.
+ *
+ * When a context is constructed, it is associated with both a finite
+ * amount of space and a finite amount of time or effort. To be most
+ * predictable, this effort is specified in terms allocation effort.
+ * A time unit is (very roughly!) one megabyte of allocations. This 
+ * is only for allocations that are part of evaluating an application
+ * of a block or similar.
+ *
+ * The default quota is 10x the initial context size, indicating that
+ * every megabyte could feasibly be rewritten ten times before return.
+ * In practice, of course, allocations have non-uniform distribution.
+ * Developers may freely set the quota higher or lower.
+ *
+ * When a context reaches its temporal quota limits, we'll generally
+ * return with WIKRT_QUOTA_STOP at a safe point. At that time, the main
+ * options are to either abort computation or to reset the quota and 
+ * continue.
+ */
+void wikrt_cx_quota(wikrt_cx*, uint32_t allocMB);
+
+// QUESTION: Do I want quota for the whole context, or per evaluation?
+// Context level evaluations seems more sensible if I want laziness. 
+// But otherwise, per-eval is sensible and offers better control.
+#endif
 
 
 
