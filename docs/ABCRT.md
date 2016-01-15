@@ -338,6 +338,18 @@ Can we model parallelism distributed across multiple contexts, with dataflows be
 
 I'd like to get Wikilon runtime working ASAP. API development must be balanced with time to a usable partial solution.
 
+The first big problem is IO. I have this context. I need to inject data into it, and extract data out from it. One option, perhaps, is to focus on streaming bytecode. We can inject a stream of bytecode, apply it, and extract data as another stream (via quotation of a block). But I have some doubts about this approach... mostly, it seems difficult to use the data meaningfully without processing it again - this time outside of the context, which largely defeats the purpose...
+
+My other option is to enable entry for common data types: integers, lists, texts, pairs, etc.. And also fast extraction of them. 
+
+### Time Quotas
+
+I'm thinking a good way to model time quotas is based on allocations, in particular nursery allocations. Each GC of the nursery could act as a unit of time (or perhaps one unit per megabyte). 
+
+I have a couple options for time quotas. One is to explicitly model computations, 
+
+
+
 ### Context and Environment Management
 
 Ability to create an environment and multiple contexts, and interact with them. Also, a simple API for persistent data is important - e.g. a key-value database with atomic transactions will do nicely.
@@ -368,7 +380,7 @@ So, value manipulations will all be destructive with ownership semantics. Develo
 
 ### Large Binary Inputs and Outputs
 
-Something that has concerned me is how Wikilon will interact with large binary content. Working with multi-gigabyte binaries is problematic if I restrict to 4GB working spaces. Modeling very large binaries as external resources might help, but I'm not comfortable with consuming arbitrary amounts of address space, even if I used `mmap'd` files or whatever to avoid loading them all at once. What other options do we have?
+Something that has concerned me is how Wikilon will interact with large binary content. Working with multi-gigabyte binaries is problematic if I restrict to 4GB working spaces. Modeling very large binaries as external resources might help, but I'm not comfortable with consuming arbitrary amounts of address space. I used `mmap'd` files or whatever to avoid loading them all at once. What other options do we have?
 
 One viable possibility is to have Wikilon understand a relatively simple model or API for ropes or streams, or perhaps even HTTP request handlers, with which we may easily wrap whichever models we favor within our dictionary. 
 

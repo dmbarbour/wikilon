@@ -197,6 +197,43 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
+/** @brief Supported ABC and ABCD operators as UTF-8 C string.
+ *
+ * The basic 42 ABC operators are
+ *
+ *   lrwzvcLRWZVC \n%^$o'kf#0123456789+*-QG?DFMK
+ *
+ * ABCD extends this set with additional opcodes represented as utf-8
+ * codepoints. These are defined by expansion, ultimately into ABC.
+ * An interpreter can hand-optimize those ABCD opcodes it recognizes.
+ * This corresponds to the notion of 'accelerators', replacing common
+ * subprograms with optimized implementations.
+ */
+char const* wikrt_abcd_operators();
+
+/** @brief Expand a given ABCD opcode.
+ *
+ * ABC will expand with identity, e.g. `v` expands to "v". Any
+ * unrecognized opcode will simply return NULL.
+ */
+char const* wikrt_abcd_expansion(uint32_t opcode);
+
+/** @brief Validate a token.
+ *
+ * Awelon Bytecode tokens have the following constraints:
+ *
+ * - valid utf-8 text
+ * - no more than 63 bytes
+ * - no control chars (C0, DEL, C1)
+ * - no surrogate codepoints (U+D800 to U+DFFF)
+ * - no replacement char (U+FFFD)
+ * - no curly braces `{}`
+ *
+ * This function returns true if the token is valid by these rules.
+ */
+bool wikrt_valid_token(char const* s);
+
+
 /** @brief A value reference within a context. 
  *
  * Wikilon's value model is based on Awelon Bytecode. Basic values
@@ -212,9 +249,9 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  *
  * Wikilon runtime assumes linear value references, i.e. that there
  * is no aliasing. This enables in-place mutation while preserving
- * purely functional semantics. OTOH, this requires deep copies by
- * default. Some large values may use reference counting under the
- * hood, but sharing isn't exposed through the API.
+ * purely functional semantics. API calls that receive wikrt_val as
+ * input will generally take ownership of the value unless indicated
+ * otherwise in documentation.
  */ 
 typedef uint32_t wikrt_val;
 
@@ -245,6 +282,107 @@ typedef uint32_t wikrt_val;
  */
 #define WIKRT_UNIT_INL 7
 
+  ///////////////////////////
+ // DATA INPUT AND OUTPUT //
+///////////////////////////
+
+/** @brief Streaming binary input.
+ *
+ * Streams enable construction and concurrent processing of large binary
+ * values. A 'binary' is a list of integers 0..255. (A 'list' has type
+ * `μL.((a*L)+1)`.) But Wikilon runtime favors an optimized representation
+ * for binaries as a chunked list of array-like segments.
+ *
+ * Usage: Allocate a (stream, binary) pair. Addend the stream many times.
+ * Eventually 'end' the stream. Meanwhile, process the binary as a value.
+ *
+ * Computations may stall with WIKRT_STREAM_WAIT indicating an effort to
+ * read from the stream. Use of wikrt_awaiting_stream can determine which
+ * stream we've stalled on (if there's any doubt).
+ */
+wikrt_err wikrt_alloc_stream(wikrt_cx*, wikrt_val* s, wikrt_val* binary);
+wikrt_err wikrt_addend_stream(wikrt_cx*, wikrt_val s, uint8_t const* chunk, uint32_t size);
+wikrt_err wikrt_end_stream(wikrt_cx*, wikrt_val s);
+wikrt_err wikrt_awaiting_stream(wikrt_cx*, bool* bWaiting, wikrt_val const s);
+
+/** @brief Read binary data from a list-like structure. 
+ *
+ * The argument to wikrt_read is a binary value, a list-like structure
+ * of type `μL.((a*L)+b)` for some arbitrary `b` and where type `a` is
+ * small integers in 0..255. Our read function will fill a buffer with
+ * data from the binary, then return the remainder. Even when errors
+ * occur, we'll read as much as possible and return the remainder at
+ * the point of error.
+ */
+wikrt_err wikrt_read(wikrt_cx*, wikrt_val binary, uint32_t maxBytes, uint32_t* bytesRead, uint8_t* buffer, wikrt_val* rem);
+
+/** @brief Texts to/from utf-8 binaries. 
+ *
+ * ABC doesn't permit arbitrary texts. A short blacklist applies:
+ * 
+ *  - no control chars (C0, DEL, C1) except for LF
+ *  - no surrogate codeponts (U+D800 .. U+DFFF)
+ *  - no replacement char (U+FFFD)
+ *
+ * Violations of these conditions may result in latent runtime errors.
+ */
+wikrt_err wikrt_utf8_to_text(wikrt_cx*, wikrt_val utf8, wikrt_val* text);
+wikrt_err wikrt_text_to_utf8(wikrt_cx*, wikrt_val text, wikrt_val* utf8);
+
+/** Texts to/from blocks of bytecode.
+ *
+ * Wrapping ABC text in a block provides an opportunity for the runtime
+ * to simplify the code, perform partial evaluations, etc.. Converting
+ * the block into text enables serialization of code.
+ *
+ * ABCD extensions are optional for both input and output. If not enabled,
+ * we'll restrict input or output to pure ABC. Otherwise, we'll recognize
+ * operators reported in `wikrt_abcd_operations()` as indicating common
+ * subprograms.
+ */
+wikrt_err wikrt_text_to_block(wikrt_cx*, wikrt_val text, wikrt_val* block, bool bEnableABCD);
+wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_val block, wikrt_val* text, bool bEnableABCD);
+
+/** Allocating small integers. */
+wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val*, int32_t);
+wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val*, int64_t);
+
+/** Allocate large integers from C strings, regex `0 | (-)?[1-9][0-9]*` */
+wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*);
+
+/** Allocate basic products (pairs) and sums (boolean tagged unions). */
+wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val*, wikrt_val fst, wikrt_val snd);
+wikrt_err wikrt_alloc_sum(wikrt_cx*, wikrt_val*, bool inRight, wikrt_val);
+
+/** Wrap a value with a token sealer.
+ *
+ * Wikilon runtime understands discretionary sealers (prefix ':').
+ * Anything else should have similar structure when quoted and
+ * serialized. The sealer must also be a valid token.
+ */
+wikrt_err wikrt_alloc_seal(wikrt_cx*, wikrt_val*, char const* s, wikrt_val v); 
+
+
+/** @brief Read small integer data.
+ *
+ * We will return WIKRT_BUFFSZ if the target buffer is too small for
+ * the given integer. The wikrt_peek_isize function returns a size
+ * that will be large enough for the integer text.
+ *
+ * These peek operations do not assume ownership of the value. So you
+ * must drop
+ */
+wikrt_err wikrt_peek_i32(wikrt_cx*, wikrt_val const, int32_t*);
+wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
+wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, uint32_t buffSize, char* buff, uint32_t* bytesRead);
+wikrt_err wikrt_peek_isize(wikrt_cx*, wikrt_val const, uint32_t* sufficientBuffSize);
+
+
+
+
+
+#if 0
+
 /** @brief Shallow reflection on value types. 
  *
  * Awelon bytecode assumes statically type-safe code. There are no
@@ -264,7 +402,6 @@ typedef enum wikrt_vtype
 } wikrt_vtype;
 
 wikrt_err wikrt_peek_type(wikrt_cx*, wikrt_vtype* out, wikrt_val const);
-
 
 /** @brief Copy a value. 
  *
@@ -331,28 +468,10 @@ wikrt_err wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
  */
 wikrt_err wikrt_stow(wikrt_cx*, wikrt_val* out, wikrt_val);
 
-// TODO: Consistent API for injecting content into context.
+// API for injecting content into context.
 //  numbers, pairs, sums, arrays, binaries, texts, blocks, sealed
 //  streaming inputs for blocks, lists
 
-
-/** @brief Construct relatively small integers.
- *
- * Note: Small integers within range of plus or minus one billion
- * will be stored in the value reference directly. Outside of this
- * range, we may allocate memory to store the value representation.
- */
-wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val* out, intmax_t);
-wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val* out, int64_t);
-
-/** @brief Construct larger integers from a string.
- *
- * Expected regex: 0 | (-)?(1-9)(0-9)*
- *
- * Currently we only support decimal input. The main limit on size
- * of numbers is context size.
- */
-wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val* out, char const*);
 
 /** @brief Read integers that you expect to be relatively small.
  *
@@ -418,7 +537,7 @@ wikrt_err wikrt_icmp(wikrt_cx*, wikrt_ord* result, wikrt_val const, wikrt_val co
  */
 wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val* out, wikrt_val fst, wikrt_val snd);
 
-/** @brief Access a product type, recovering the fst and snd values. */
+/** @brief Destruct a product type, recovering fst and snd values. */
 wikrt_err wikrt_split_prod(wikrt_cx*, wikrt_val prod, wikrt_val* fst, wikrt_val* snd);
 
 /** @brief Construct a sum type, a choice of (x + _) or (_ + x). 
@@ -435,46 +554,8 @@ wikrt_err wikrt_split_prod(wikrt_cx*, wikrt_val prod, wikrt_val* fst, wikrt_val*
  */
 wikrt_err wikrt_alloc_sum(wikrt_cx*, wikrt_val* out, wikrt_val x, bool inRight);
 
-/** @brief Access a sum type, dividing it into a boolean path and value. */
+/** @brief Destruct a sum type, dividing it into a boolean path and value. */
 wikrt_err wikrt_split_sum(wikrt_cx*, wikrt_val sum, wikrt_val* x, bool* inRight);
-
-#if 0
-// todo: return to performance features after the basics are implemented
-
-/** @brief Construct a list represented by an array.
- *
- * Direct construction of lists `μL.((a*L)+b)` via sums and products will
- * result in an efficient linked list, one cell per element. Shallow sums
- * on products are represented in the pointer, instead of by allocation.
- *
- * However, linked lists have high space overhead and poor locality. For
- * these properties, arrays are a better representation. Further, arrays
- * can heavily accelerate functions like lookup, update, split, append
- * compared to use of linked lists. Using arrays to represent lists is a
- * valuable performance strategy.
- *
- * wikrt_alloc_array will allocate an array that terminates implicitly
- * in WIKRT_UNIT_INR.
- */
-wikrt_err wikrt_alloc_array(wikrt_cx*, wikrt_val* out, wikrt_val* arr, uint32_t nVals);
-
-/** @brief Construct a binary value. */
-wikrt_err wikrt_alloc_binary(wikrt_cx*, wikrt_val* out, uint8_t const* binary, uint32_t nBytes);
-
-/** @brief Construct text values from a C string literal. */
-wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val* out, char const* text);
-
-/** @brief Convert existing list into an array, like {&array}. */
-wikrt_err wikrt_anno_array(wikrt_cx*, wikrt_val* out, wikrt_val list);
-    // maybe another method to support chunked lists and {&array~}?
-
-/** @brief Convert existing list of 0..255 into binary, like {&binary}. */
-wikrt_err wikrt_anno_binary(wikrt_cx*, wikrt_val* out, wikrt_val list);
-
-/** @brief Convert existing list of codepoints into a text, like {&text}. */
-wikrt_err wikrt_anno_text(wikrt_cx*, wikrt_val* out, wikrt_val list);
-
-#endif
 
 /** @brief Allocate a block of code from a C string literal. */
 wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val* out, char const* abc);
@@ -602,21 +683,6 @@ wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val* out, char const* abc);
  * as we do with discretionary sealers (e.g. `#42{:foo}`). 
  */
 wikrt_err wikrt_alloc_sealed(wikrt_cx*, wikrt_val* out, wikrt_val val, char const* sealer); 
-
-/** @brief Validate a token.
- *
- * Awelon Bytecode tokens have the following constraints:
- *
- * - valid utf-8 text
- * - no more than 63 bytes
- * - no control chars (C0, DEL, C1)
- * - no surrogate codepoints (U+D800 to U+DFFF)
- * - no replacement char (U+FFFD)
- * - no curly braces `{}`
- *
- * This function returns true if the token is valid by these rules.
- */
-bool wikrt_token_valid(char const* tok);
 
 /** @brief Maximum buffer size for a token.
  *
@@ -803,6 +869,9 @@ wikrt_err wikrt_stream_append(wikrt_val* s, char const* bytecode);
 //     once we have accelerators
 //   
 
+#endif
+
+
   /////////////////////////////////////
  // DATABASE AND PERSISTENCE ENGINE //
 /////////////////////////////////////
@@ -814,22 +883,17 @@ wikrt_err wikrt_stream_append(wikrt_val* s, char const* bytecode);
  * stowage. Transactions enable consistent views of multiple keys and
  * atomic updates. Durability is optional per transaction.
  *
- * Keys are texts with limited size.
+ * Keys are values of limited size, i.e. having a finite expression
+ * in 
  *
  * Note: This database is not implicitly accessible to ABC computations.
- * Access may be modeled explicitly, e.g. as a free monadic effect, like
- * any other effect. Semantics for the persistence layer are up to each
- * application.
+ * Access must be modeled explicitly, like any other algebraic effect,
+ * if it is to be provided at all.
  */
 typedef struct wikrt_txn { wikrt_val txn; } wikrt_txn;
 #define WIKRT_DB_KEY_SIZE_MAX 255
 
-/** @brief Test validity of a proposed key.
- *
- * Keys must be valid texts, with an additional constraint of at
- * most 255 bytes in length.  
- */
-bool wikrt_key_valid(char const*);
+//wikrt_err wikrt_as_key(wikrt_cx*, wikrt_val* key, wikrt_val);
 
 /** @brief Begin a new transaction for key-value persistence.
  */
@@ -895,6 +959,7 @@ wikrt_err wikrt_txn_commit(wikrt_txn*);
  * sync every five seconds or so to limit potential data loss.
  */
 void wikrt_env_sync(wikrt_env*);
+
 
 
 #define WIKILON_RUNTIME_H

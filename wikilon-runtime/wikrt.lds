@@ -11,6 +11,28 @@
     wikrt_cx_destroy;
     wikrt_cx_env;
 
+    wikrt_abcd_operators;
+    wikrt_abcd_expansion;
+
+    wikrt_valid_seal;
+
+    wikrt_alloc_stream;
+    wikrt_addend_stream;
+    wikrt_end_stream;
+    wikrt_awaiting_stream;
+
+    wikrt_alloc_i32;
+    wikrt_alloc_i64;
+    wikrt_alloc_istr;
+    wikrt_alloc_prod;
+    wikrt_alloc_sum;
+    wikrt_alloc_seal;
+
+    wikrt_alloc_ostream;
+    wikrt_read_ostream;
+
+    
+
     wikrt_copy;
     wikrt_drop;
     wikrt_stow;
