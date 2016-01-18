@@ -100,15 +100,17 @@
  */
 typedef struct wikrt_env wikrt_env;
 
-/** @brief Opaque structure representing a heap for computations.
+/** @brief Opaque structure representing substrate for computations.
  *
- * A context is a fixed-size arena for computations. Wikilon favors a
- * separate context for each toplevel comptuation, e.g. servicing each
- * HTTP request, to ensure predictable behavior and control over space.
+ * Computations occur within an evaluation context. They serve a role
+ * similar to virtual machines or OS processes. The context has small
+ * 'active' working set (up to four gigabytes) but may access more 
+ * data via the large values stowage feature.
  *
- * A computation can operate on data much larger than context via large
- * value stowage, which serves a role similar to virtual memory or use
- * of a filesystem.
+ * Each `wikrt_cx*` should be handled in a single-threaded manner. It
+ * may leverage multiple threads under the hood (par-seq parallelism),
+ * but it's assumed that the API for a context is only used from only
+ * one external thread at a time.
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -123,7 +125,7 @@ typedef enum wikrt_err
 , WIKRT_INVAL           // bad arguments, avoidable programmer error
 
 // External Resource Errors
-, WIKRT_DBERR           // persistence layer errors 
+, WIKRT_DBERR           // LMDB or filesystem layer errors 
 , WIKRT_NOMEM           // malloc or mmap allocation error
 
 // Special Conditions
@@ -158,41 +160,39 @@ typedef enum wikrt_err
  */
 wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, uint32_t dbMaxMB);
 
-/** @brief Manage reference counts for an environment. 
+/** @brief Graceful shutdown of environment and active contexts. 
  *
- * This helps resist concurrency errors. Using reference counts doesn't
- * prevent destruction, but operations will return WIKRT_NOLINK instead
- * of undefined behavior if destroyed early. Decref is represented by a
- * negative delta.
- *
- * An environment is destroyed implicitly if decref'd more than incref'd. 
+ * Operations on contexts should eventually abort with WIKRT_NOLINK. 
+ * Contexts must still be individually destroyed to fully release 
+ * their memory.
  */
-void wikrt_env_incref(wikrt_env*, int delta);
-
-/** @brief Graceful shutdown of environment and active contexts. */
 void wikrt_env_destroy(wikrt_env*);
+
+/** @brief Ensure committed transactions are pushed to disk. 
+ *
+ * It is recommended that a background task do this every few seconds if
+ * transactions aren't usually durable. 
+ */
+void wikrt_env_sync(wikrt_env*);
 
 /** @brief Create a context for computations.
  * 
  * A context consists mostly of one big mmap'd block of memory. The
- * viable range for sizes is about 4..4000 in megabyte units. The
- * context cannot be resized once created.
+ * viable range for sizes is about 4..4000 in megabyte units. We'll
+ * generally require at least one megabyte for each computing thread,
+ * plus a few more.
  */ 
 wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 
-/** @brief Manage reference counts for a context.
- *
- * Using reference counts doesn't prevent destruction of the context,
- * but ensures access to a destroyed environment returns WIKRT_NOLINK
- * instead of performing undefined behavior. Decref is represented by
- * a negative delta.
- * 
- * A context is destroyed implicitly if decref'd more than incref'd. 
- */
-void wikrt_cx_incref(wikrt_cx*, int delta);
-
-/** @brief Gracefully destroy a context and recover its memory. */
+/** @brief Destroy a context and return its memory. */
 void wikrt_cx_destroy(wikrt_cx*);
+
+/** @brief Reset a context for use in a pooling system. 
+ *
+ * This returns the context to its 'freshly created' status without
+ * requiring the address space to be unmapped and remapped. 
+ */
+void wikrt_cx_reset(wikrt_cx*);
 
 /** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
@@ -201,7 +201,7 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  *
  * The basic 42 ABC operators are
  *
- *   lrwzvcLRWZVC \n%^$o'kf#0123456789+*-QG?DFMK
+ *   lrwzvcLRWZVC %^$o'kf#0123456789+*-QG?DFMK\n
  *
  * ABCD extends this set with additional opcodes represented as utf-8
  * codepoints. These are defined by expansion, ultimately into ABC.
@@ -211,10 +211,10 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  */
 char const* wikrt_abcd_operators();
 
-/** @brief Expand a given ABCD opcode.
+/** @brief Expand ABCD opcodes to their definitions.
  *
- * ABC will expand with identity, e.g. `v` expands to "v". Any
- * unrecognized opcode will simply return NULL.
+ * The definition may utilize more ABCD, albeit acyclically. Pure ABC
+ * operators will 'expand' to themselves, e.g. 'v' expands to "v".
  */
 char const* wikrt_abcd_expansion(uint32_t opcode);
 
@@ -282,6 +282,15 @@ typedef uint32_t wikrt_val;
  */
 #define WIKRT_UNIT_INL 7
 
+/** @brief Maximum buffer size for token text.
+ *
+ * The maximum token size for Awelon Bytecode is 63 bytes. Wikilon
+ * runtime uses a byte for a NUL-terminator to support C strings. 
+ * Token text does not include the wrapping `{}` braces, just the
+ * text between them.
+ */
+#define WIKRT_TOK_BUFFSZ 64
+
   ///////////////////////////
  // DATA INPUT AND OUTPUT //
 ///////////////////////////
@@ -290,15 +299,16 @@ typedef uint32_t wikrt_val;
  *
  * Streams enable construction and concurrent processing of large binary
  * values. A 'binary' is a list of integers 0..255. (A 'list' has type
- * `μL.((a*L)+1)`.) But Wikilon runtime favors an optimized representation
- * for binaries as a chunked list of array-like segments.
+ * `μL.((a*L)+1)`.) But Wikilon runtime favors a compact representation
+ * for binaries as a composition of array-like segments.
  *
  * Usage: Allocate a (stream, binary) pair. Addend the stream many times.
- * Eventually 'end' the stream. Meanwhile, process the binary as a value.
+ * Eventually 'end' the stream. Meanwhile or afterwards, process the binary
+ * as a value. The stream value cannot be used after ending.
  *
  * Computations may stall with WIKRT_STREAM_WAIT indicating an effort to
- * read from the stream. Use of wikrt_awaiting_stream can determine which
- * stream we've stalled on (if there's any doubt).
+ * read then end of an open stream. The stream in question is flagged so
+ * wikrt_awaiting_stream returns true until addended.
  */
 wikrt_err wikrt_alloc_stream(wikrt_cx*, wikrt_val* s, wikrt_val* binary);
 wikrt_err wikrt_addend_stream(wikrt_cx*, wikrt_val s, uint8_t const* chunk, uint32_t size);
@@ -310,11 +320,12 @@ wikrt_err wikrt_awaiting_stream(wikrt_cx*, bool* bWaiting, wikrt_val const s);
  * The argument to wikrt_read is a binary value, a list-like structure
  * of type `μL.((a*L)+b)` for some arbitrary `b` and where type `a` is
  * small integers in 0..255. Our read function will fill a buffer with
- * data from the binary, then return the remainder. Even when errors
- * occur, we'll read as much as possible and return the remainder at
- * the point of error.
+ * data from the binary then return the remainder. When errors occur,
+ * we'll read as much as possible then return the remainder at the point
+ * of error.
  */
-wikrt_err wikrt_read(wikrt_cx*, wikrt_val binary, uint32_t maxBytes, uint32_t* bytesRead, uint8_t* buffer, wikrt_val* rem);
+wikrt_err wikrt_read(wikrt_cx*, wikrt_val binary, uint32_t buffSize, 
+    uint32_t* bytesRead, uint8_t* buffer, wikrt_val* remainder);
 
 /** @brief Texts to/from utf-8 binaries. 
  *
@@ -324,7 +335,6 @@ wikrt_err wikrt_read(wikrt_cx*, wikrt_val binary, uint32_t maxBytes, uint32_t* b
  *  - no surrogate codeponts (U+D800 .. U+DFFF)
  *  - no replacement char (U+FFFD)
  *
- * Violations of these conditions may result in latent runtime errors.
  */
 wikrt_err wikrt_utf8_to_text(wikrt_cx*, wikrt_val utf8, wikrt_val* text);
 wikrt_err wikrt_text_to_utf8(wikrt_cx*, wikrt_val text, wikrt_val* utf8);
@@ -343,6 +353,10 @@ wikrt_err wikrt_text_to_utf8(wikrt_cx*, wikrt_val text, wikrt_val* utf8);
 wikrt_err wikrt_text_to_block(wikrt_cx*, wikrt_val text, wikrt_val* block, bool bEnableABCD);
 wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_val block, wikrt_val* text, bool bEnableABCD);
 
+/** Alloc a short text or block from a C string literal. */
+wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*);
+wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, bool bEnableABCD);
+
 /** Allocating small integers. */
 wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val*, int32_t);
 wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val*, int64_t);
@@ -350,44 +364,60 @@ wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val*, int64_t);
 /** Allocate large integers from C strings, regex `0 | (-)?[1-9][0-9]*` */
 wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*);
 
-/** Allocate basic products (pairs) and sums (boolean tagged unions). */
-wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val*, wikrt_val fst, wikrt_val snd);
-wikrt_err wikrt_alloc_sum(wikrt_cx*, wikrt_val*, bool inRight, wikrt_val);
-
-/** Wrap a value with a token sealer.
+/** @brief Read small integers.
  *
- * Wikilon runtime understands discretionary sealers (prefix ':').
- * Anything else should have similar structure when quoted and
- * serialized. The sealer must also be a valid token.
- */
-wikrt_err wikrt_alloc_seal(wikrt_cx*, wikrt_val*, char const* s, wikrt_val v); 
-
-
-/** @brief Read small integer data.
- *
- * We will return WIKRT_BUFFSZ if the target buffer is too small for
- * the given integer. The wikrt_peek_isize function returns a size
- * that will be large enough for the integer text.
- *
- * These peek operations do not assume ownership of the value. So you
- * must drop
+ * Unlike most API functions, the following have 'borrow' semantics.
+ * The given wikrt_val remains available for further use. We'll return
+ * WIKRT_BUFFSZ if the target is not large enough.
  */
 wikrt_err wikrt_peek_i32(wikrt_cx*, wikrt_val const, int32_t*);
 wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
-wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, uint32_t buffSize, char* buff, uint32_t* bytesRead);
+
+/** @brief Read larger integers into a string.
+ *
+ * This produces a C string of regex format `0 | (-)?[1-9][0-9]*`.
+ * Use of wikrt_peek_isize will compute conservatively a sufficient
+ * size for our string (including the NUL terminator). Again, this
+ * has borrow semantics; the integer is not destroyed. 
+ */
+wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, uint32_t buffSize, char* buff);
 wikrt_err wikrt_peek_isize(wikrt_cx*, wikrt_val const, uint32_t* sufficientBuffSize);
 
+/** @brief Allocate or disassemble basic product types (pairs of values). */
+wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
+wikrt_err wikrt_split_prod(wikrt_cx*, wikrt_val p, wikrt_val* fst, wikrt_val* snd);
 
+/** @brief Allocate or disassemble basic sum types (boolean choice of values). */
+wikrt_err wikrt_alloc_sum(wikrt_cx*, wikrt_val* c, bool inRight, wikrt_val);
+wikrt_err wikrt_split_sum(wikrt_cx*, wikrt_val c, bool* inRight, wikrt_val*);
 
-
-
-#if 0
-
-/** @brief Shallow reflection on value types. 
+/** @brief Allocate to hide a value behind a sealer token.
  *
- * Awelon bytecode assumes statically type-safe code. There are no
- * implicit conversions. Reflecting on the 'type' of a value is mostly
- * for special features like debug traces or animated evaluation.
+ * Our sealer must be a valid token. Sealer tokens should have type:
+ * `∀e.(a*e)→((Sealed a)*e)`, for purpose of consistent quotation and
+ * serialization. Once sealed, a value is inaccessible until unsealed.
+ * so this serves as a basis for data hiding or structural typing.
+ *
+ * Wikilon runtime knows discretionary sealers, i.e. {:foo} is undone
+ * by {.foo}. Anything else requires special attention. (Note: curly
+ * braces aren't included in the token text, i.e. use ":foo".)
+ */
+wikrt_err wikrt_alloc_seal(wikrt_cx*, wikrt_val* sv, char const* s, wikrt_val v); 
+
+/** @brief Disassemble a sealed value into sealer token and value.
+ *
+ * Our buffer must have size at least WIKRT_TOK_BUFFSZ to avoid any
+ * risks of buffer overfow.
+ */
+wikrt_err wikrt_split_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v);
+
+
+/** @brief Obtain shallow type information for a value.
+ *
+ * This is potentially useful in cases where you might deal with many
+ * types of data, e.g. rendering debug outputs. However, it is not
+ * recommended in general. It is too difficult within Awelon bytecode 
+ * to abstract or simulate behaviors that depend on reflection.
  */
 typedef enum wikrt_vtype 
 { WIKRT_VTYPE_UNIT        // unit value
@@ -405,27 +435,26 @@ wikrt_err wikrt_peek_type(wikrt_cx*, wikrt_vtype* out, wikrt_val const);
 
 /** @brief Copy a value. 
  *
- * Wikilon runtime favors linear 'move' semantics, where we transfer
- * ownership of a value. This allows update in place. However, this 
- * also means we must explicitly copy values if we expect to use the
- * value twice.
+ * Wikilon runtime favors linear 'move' semantics. A value reference is
+ * used without aliasing or sharing. A benefit is that pure functions 
+ * can be implemented without allocations. The cost is that deep copies
+ * are necessary when a value must be copied at all.
  *
- * Developers should assume this performs a 'deep copy' of a value.
- * Some special case will not be deep copied (e.g. values marked for
- * stowage, shared arrays), instead using reference counts, but that
- * feature is generally hidden to clients of this API.
+ * Awelon Bytecode supports substructural types. Normally, a block marked
+ * affine will not be copyable. But the C API is free to ignore such
+ * constraints but must do so explicitly by indicating `bCopyAff`.
  *
- * The C API may freely ignore the substructural 'affine' constraint
- * by indicating bCopyAff. If not set, we may have an error now as we
- * copy or later if we copy a pending (lazy or parallel) value.
+ * Copies may be shallow and lazy in special cases, e.g. use of value
+ * stowage or copies of pending computations. 
  */
 wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
 
-/** @brief Delete a value.
+/** @brief Drop a value.
  *
- * If you're done with a value or computation, you should drop it.
- * Of course, this is only for values you 'own'. Also, you can skip
- * this step if you're about to destroy the larger context.
+ * When done with a value, drop it. This is roughly equivalent to use
+ * of `free()` in C. You may drop any value you own. Of course, if you
+ * are about to destroy or reset the context, you may safely skip the
+ * overheads of freeing individual values.
  *
  * The C API may freely ignore the substructural 'relevant' constraint
  * by indicating bCopyRel. If not set, we may have an error now as we
@@ -434,442 +463,93 @@ wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* copy, wikrt_val const src, bool bCopy
  */
 wikrt_err wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
 
-/** @brief Mark a large value for stowage.
+/** @brief Quote a value into a block. v → [∀e. e → (v * e)].
  *
- * Large value stowage is Wikilon runtime's answer to virtual memory
- * and semi-transparent persistence. With this, we can work with very
- * large tree-structured values - tries, ropes, finger-tree queues.
- * Specialized support for very large binaries is being contemplated.
+ * Quoting a value returns a block that, when applied, regenerates
+ * the value. This is exposed to users in part as a mechanism to
+ * export arbitrary values as a stream of bytecode (via converting
+ * the block to text then the text into a binary).
+ */
+wikrt_err wikrt_quote(wikrt_cx*, wikrt_val* qv, wikrt_val v);
+
+/** @brief Mark a value for stowage.
  *
- * Simply put, stowage exchanges a large value for a smaller token to
- * later recover the value. The value is serialized into an embedded 
- * database like LMDB. Future access to the stowed value will reload
- * it transparently into the context. Structure sharing is implicit,
- * which simplifies reasoning about caching and space requirements.
+ * Value stowage serves a role similar to virtual memory. Stowed values
+ * are replaced by a much smaller reference. Future access to the value
+ * will re-load it into memory. Stowage makes it feasible to operate on
+ * massive tree-based data structures - tries, ropes, etc. - within a
+ * limited working memory.
  *
- * The value is not stowed immediately. However, we will switch to 
- * reference counted copy and drop operations to provide the illusion
- * of immediate stowage with respect to performance. The actual effort
- * to stow the value will await memory pressure or transaction commit. 
- * In common access-update loops, we'll produce intermediate structures
- * that are briefly marked for stowage but shouldn't be stowed. Delay
- * greatly improves performance in those use cases (and for pending
- * computations, batch processing, etc.).
- *
- * Stowage may fail silently if the value isn't large enough compared
- * to the various overheads for stowage.
- *
- * Stowage interacts with persistence via the key-value database and
- * transactions. That is, we may persist references into stowage, which
- * will prevent GC when we eventually halt the application.
+ * Values are not immediately stowed upon request. Instead, stowage will
+ * usually wait for some evidence that the value will not immediately be
+ * accessed. However, stowage does immediately interact with copy/drop.
+ * Stowed objects are only latently copied, as need arises, and otherwise
+ * we'll use reference counting.
  *
  * The `{&stow}` annotation has the same effect, applying stowage to
  * the first element of a pair.
  */
 wikrt_err wikrt_stow(wikrt_cx*, wikrt_val* out, wikrt_val);
 
-// API for injecting content into context.
-//  numbers, pairs, sums, arrays, binaries, texts, blocks, sealed
-//  streaming inputs for blocks, lists
 
+  ////////////////
+ // EVALUATION //
+////////////////
 
-/** @brief Read integers that you expect to be relatively small.
+/** @brief Construct an evaluation. 
  *
- * If the destination isn't large enough we'll return WIKRT_BUFFSZ.
- * If the argument isn't an integer, we'll return WIKRT_TYPE_ERROR.
+ * This doesn't actually begin computation. Rather, it allocates and
+ * prepares the workspace to perform the computation. One must proceed
+ * to `wikrt_step_eval` to perform the computation.
+ *
+ * An evaluation may be treated as something like a lazy value. It
+ * cannot readily be inspected, but it may be used in other values or
+ * quoted and serialized.
  */
-wikrt_err wikrt_peek_i32(wikrt_cx*, wikrt_val const, int32_t*);
-wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
+wikrt_err wikrt_alloc_eval(wikrt_cx*, wikrt_val*, wikrt_val arg, wikrt_val fn);
 
-/** @brief Represent a large integer as a decimal string. 
+// disassembly of eval? Or leave it opaque?
+
+/** @brief Step through an evaluation.
  *
- * You may need wikrt_peek_isize to determine a sufficient buffer.
- * Though, a large fixed sized buffer is sufficient for most tasks.
+ * Wikilon runtime requires a time or effort quota for evaluation. When
+ * the quota reaches zero, we'll return WIKRT_QUOTA_STOP. The programmer
+ * is free to set higher quotas. The quota is relatively coarse grained,
+ * roughly corresponding to megabytes allocated during computation. Any
+ * remaining quota is returned.
+ *
+ * In addition to quota stops, we have WIKRT_TOKEN_STOP for unrecognized 
+ * tokens and possibly WIKRT_STREAM_WAIT for streaming computations. And
+ * of course we'll halt on type errors, assertion failures, etc.. 
  */
-wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, char* dst, uint32_t nBuffSize);
+wikrt_err wikrt_step_eval(wikrt_cx*, wikrt_val* evaluation, uint32_t* quota);
 
-/** @brief Compute sufficient buffer size for wikrt_peek_istr. */
-wikrt_err wikrt_peek_isize(wikrt_cx*, wikrt_val const, uint32_t* buffSize);
-
-/** @brief Add two integers. */
-wikrt_err wikrt_iadd(wikrt_cx*, wikrt_val* out, wikrt_val, wikrt_val);
-
-/** @brief Multiply two integers. */
-wikrt_err wikrt_imul(wikrt_cx*, wikrt_val* out, wikrt_val, wikrt_val);
-
-/** @brief Negate an integer. */
-wikrt_err wikrt_ineg(wikrt_cx*, wikrt_val* out, wikrt_val);
-
-/** @brief Integer division. dividend/divisor → (quotient, remainder)
+/** @brief Handle a token stop.
  *
- * In this case, a zero divisor results in a WIKRT_ASSERT_FAIL, while
- * a non-integral argument results in WIKRT_TYPE_ERROR. Our remainder
- * will always be between zero and the divisor (even if the divisor is
- * negative). Corresponds to ABC operator `Q`.
+ * Upon WIKRT_TOKEN_STOP we may split our evaluation into a triple: the
+ * token, the argument to it, and the continuation. The continuation is
+ * used as the function for wikrt_alloc_eval, but preserves evaluation
+ * context to continue more efficiently than a full allocation. It may
+ * be used as a normal block, however.
+ *
+ * Our token buffer must have size at least WIKRT_TOK_BUFFSZ.
+ *
+ * NOTE: In case of WIKRT_TYPE_ERROR or WIKRT_ASSERT_FAIL, Wikilon runtime
+ * will implicitly treat this as stopping on an {error} and {assert} token
+ * respectively to support a little introspection. However, this is not 
+ * intended to be a primary debugging mechanism.
  */
-wikrt_err wikrt_idiv(wikrt_cx*, wikrt_val* quotient, wikrt_val* remainder, wikrt_val dividend, wikrt_val divisor);
+wikrt_err wikrt_token_stop(wikrt_cx*, wikrt_val eval, wikrt_val* arg, char* tok, wikrt_val* cont);
 
-typedef enum wikrt_ord
-{ WIKRT_LT = -1
-, WIKRT_EQ =  0
-, WIKRT_GT =  1
-} wikrt_ord;
-
-/** @brief Compare two integers.
- *
- * This corresponds to a conventional C comparison API.
- *
- *   -1 WIKRT_LT    first number smaller than second
- *    0 WIKRT_EQ    arguments are equal
- *    1 WIKRT_GT    first number greater than second
- * 
- * This operation is non-destructive. The provided integers remain intact
- * and available for further use. ABC uses operator `G` as the basis for
- * similar integer comparisons.
- */
-wikrt_err wikrt_icmp(wikrt_cx*, wikrt_ord* result, wikrt_val const, wikrt_val const);
-
-/** @brief Construct a product type, a pair of values (fst * snd). 
- *
- * Products are among the most common structures in Awelon Bytecode
- * systems. They serve as a basis for lists, stacks, and more. Their
- * allocation is optimized to only require one cell.
- */
-wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val* out, wikrt_val fst, wikrt_val snd);
-
-/** @brief Destruct a product type, recovering fst and snd values. */
-wikrt_err wikrt_split_prod(wikrt_cx*, wikrt_val prod, wikrt_val* fst, wikrt_val* snd);
-
-/** @brief Construct a sum type, a choice of (x + _) or (_ + x). 
- *
- * Sums in Awelon Bytecode are the basis for conditional behavior and
- * variable-sized structured data like lists and trees. They are used
- * together with product types. E.g. a list has type `μL.((a*L)+b)`.
- *
- * A shallow sum (in left or in right) for a product or unit value is
- * represented in the value reference with no need for allocation. This
- * enables direct construction of lists and many (node + leaf) trees to
- * be acceptably efficient. Deeper sums, or sums on other types of data,
- * will try to pack multiple levels per allocation. 
- */
-wikrt_err wikrt_alloc_sum(wikrt_cx*, wikrt_val* out, wikrt_val x, bool inRight);
-
-/** @brief Destruct a sum type, dividing it into a boolean path and value. */
-wikrt_err wikrt_split_sum(wikrt_cx*, wikrt_val sum, wikrt_val* x, bool* inRight);
-
-/** @brief Allocate a block of code from a C string literal. */
-wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val* out, char const* abc);
-
-/** @brief Quote a value into a block.  v → [e → (v * e)]
- *
- * Quoting a value returns a block of code that, when applied, reproduces
- * the argument, introducing it as the first element of a pair. Quotation
- * becomes the basis for closure and binding of values in Awelon Bytecode.
- * 
- * Wikilon runtime optimizes for quotations and partial evaluations by
- * holding onto values rather than expanding immediately into bytecode.
- * So, when evaluated, we may recover the original value reference. Only
- * when a block is serialized must we truly expand values into bytecode.
- */
-wikrt_err wikrt_quote(wikrt_cx*, wikrt_val* out, wikrt_val);
-
-/** @brief Compose two blocks.  [a → b] → [b → c] → [a → c]
- *
- * Awelon Bytecode is a concatenative programming language. Composition
- * of functions is trivially represented by concatenation of blocks. As
- * a functional programming language, this operation is common.
- */
-wikrt_err wikrt_compose(wikrt_cx*, wikrt_val* out_AtoC, wikrt_val AtoB, wikrt_val BtoC);
-
-/** @brief Mark a block Affine (forbid copy).
- *
- * Substructural types - affine, relevant, linear - serve as a basis for
- * structured programming at the semantic layer instead of the syntactic
- * layer. With substructure, we can enforce multi-step protocols, model
- * precise callback requirements, represent resource constraints, and
- * more. Awelon Bytecode supports substructural types for blocks of code.
- *
- * Marking a block affine prevents it from being copied under normal
- * conditions (via operator `^`). Thus, the block represents a finite
- * resource, something that may be used - performed, evaluated - at 
- * most once. 
- */
-wikrt_err wikrt_affine(wikrt_cx*, wikrt_val* out, wikrt_val);
-
-/** @brief Mark a block Relevant (forbid drop) 
- *
- * Marking a block relevant prevents it from being dropped under normal
- * conditions (via operator `%`). Thus, the block represents a required
- * action, a condition for progress or success. In many cases, relevant
- * objects will also be affine. With both attributes, a block is 'linear'
- * and must be applied exactly once.
- *
- * cf. wikrt_affine.
- */
-wikrt_err wikrt_relevant(wikrt_cx*, wikrt_val* out, wikrt_val);
-
-/** @brief Mark a block for parallel evaluation.
- *
- * Pure functions permit a high degree of parallelism, but it can be
- * difficult to tease it out at the right granularity. To support this
- * parallelism, we're free to mark a block via `{&par}` or through this
- * API function. When later applied, we'll try to evaluate that block
- * in parallel, subject to having a free CPU. 
- *
- * In general, parallel evaluations in Wikilon runtime cannot interact
- * beyond waiting for a result. Consequently, there is never any reason
- * to have more threads active than CPUs, nor any reason for preemptive
- * scheduling (modulo quota management). This corresponds roughly to the
- * par/seq parallelism from Haskell.
- */
-wikrt_err wikrt_anno_par(wikrt_cx*, wikrt_val* out, wikrt_val);
-
-// todo: better support pipeline parallelism
-// laziness remains under consideration.
-
-
-
-// list processing accelerators?
-//  index, reverse, update, slice, append, etc.
-//  array sharing, array rewrites
-//  add as needed
-
-/** @brief Test whether a text is valid for Wikilon runtime.
- *
- * Wikilon runtime expects texts to have a utf-8 encoding, presented
- * as a NUL-terminated C string, with the following constraints:
- *
- * - no control chars (C0, DEL C1) except LF
- * - no surrogate codepoints (U+D800 to U+DFFF)
- * - no replacement character (U+FFFD)
- * 
- */
-bool wikrt_text_valid(char const*);
-
-/** @brief Construct a block value from a string of bytecode. 
- *
- * A block is expressed by a finite sequence of Awelon Bytecode (ABC),
- * represented here by a simple C string. In the future, we may also
- * support ABCD (ABC Deflated) accelerators. Wikilon runtime understands
- * some annotations and basic value sealing tokens, but others may cause
- * evaluation to yield to an external handler. 
- *
- * Blocks are how we express first class functional behavior in ABC
- * and in Wikilon. A block represents a purely functional program.
- * Due to properties of ABC, blocks can be composed by concatenation
- * of their bytecode.
- *
- * As a general rule, constructing a large block then applying it will
- * be more efficient compared to direct value manipulations. Wikilon
- * optimizes heavily for this use case.
- */
-wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val* out, char const* abc);
-  // NOTE: I'll want a stream construction variant for large blocks.
-
-/** @brief Construct a discretionary sealed value.
- *
- * Discretionary value sealing operates by wrapping a value with a
- * sealer, a token of form {:foo}. This serves a similar role as a
- * newtype wrapper, guarding against accidental access. The value 
- * must first be unwrapped with {.foo}. A similar idea is applicable
- * to open distributed systems via cryptographic sealers.
- * 
- * The sealer here is constrained by wikrt_token_valid, and must 
- * include the prefix colon for discretionary seals. Wikilon runtime
- * does have built-in knowledge for discretionary value sealing.
- *
- * When serializing to bytecode, we assume that sealed values can be
- * represented by quoting the value and following it by the sealer
- * as we do with discretionary sealers (e.g. `#42{:foo}`). 
- */
-wikrt_err wikrt_alloc_sealed(wikrt_cx*, wikrt_val* out, wikrt_val val, char const* sealer); 
-
-/** @brief Maximum buffer size for a token.
- *
- * The maximum token size for Awelon Bytecode is 63 bytes. Wikilon
- * runtime adds a byte for a NUL-terminator to support C strings. 
- * The token does not include the `{}` braces, just the text between
- * them.
- */
-#define WIKRT_TOK_BUFFSZ 64
-
-
-
-
-
-//wikrt_err wikrt_split_prod(wikrt_cx*, wikrt_val pair, wikrt_val* fst, wikrt_val* snd);
-//wikrt_err wikrt_split_sum(wikrt_cx*, wikrt_val sum, wikrt_val* x, bool* inRight);
-//wikrt_err wikrt_split_block(wikrt_cx*, wikrt_val* out, char* abc, uint32_t nBuffSize);
-//wikrt_err wikrt_split_array(wikrt_cx*, wikrt_val* out, wikrt_val const* arr, uint32_t nVals);
-
-/** @brief Construct a binary value.
- *
- * Binaries are lists of small integers in range 0..255, albeit with
- * compact representation as an array. 
- */
-wikrt_err wikrt_alloc_binary(wikrt_cx*, wikrt_val* out, uint8_t const* binary, uint32_t nBytes);
-
-/** @brief Construct text values from a utf-8 C string. */
-wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val* out, char const* text);
-
-/** @brief Test whether a text is valid for Wikilon runtime.
- *
- * Wikilon runtime expects texts to have a utf-8 encoding, presented
- * as a NUL-terminated C string, with the following constraints:
- *
- * - no control chars (C0, DEL C1) except LF
- * - no surrogate codepoints (U+D800 to U+DFFF)
- * - no replacement character (U+FFFD)
- * 
- */
-bool wikrt_text_valid(char const*);
-
-/** @brief Construct a discretionary sealed value.
- *
- * Discretionary value sealing operates by wrapping a value with a
- * sealer, a token of form {:foo}. This serves a similar role as a
- * newtype wrapper, guarding against accidental access. The value 
- * must first be unwrapped with {.foo}. A similar idea is applicable
- * to open distributed systems via cryptographic sealers.
- * 
- * The sealer here is constrained by wikrt_token_valid, and must 
- * include the prefix colon for discretionary seals. Wikilon runtime
- * does have built-in knowledge for discretionary value sealing.
- *
- * When serializing to bytecode, we assume that sealed values can be
- * represented by quoting the value and following it by the sealer
- * as we do with discretionary sealers (e.g. `#42{:foo}`). 
- */
-wikrt_err wikrt_alloc_sealed(wikrt_cx*, wikrt_val* out, wikrt_val val, char const* sealer); 
-
-
-#if 0
-/** @brief 'Pop' variants dismantle their argument. 
- *
- * For many wikrt_peek_X functions, there is a similar wikrt_split_X
- * function that dismantles the argument. This provides the caller
- * ownership of the returned elements.
- *
- * For the wikrt_split_list variants, WIKRT_TYPE_ERROR still allows
- * partial success that pops elements off the list up to the point
- * of type error, which is returned in `rem`.
- *
- * Because 'pop' is destructive, sums can be accessed this way one
- * small step at a time (i.e. nPathBytes = 2).  to how sums are modeled, sums can be accessed via pop with
- * much smaller steps.  safely done
- * just one small step at a time. 
- */
-wikrt_err wikrt_split_prod(wikrt_val* p, wikrt_val* fst, wikrt_val* snd);
-wikrt_err wikrt_split_stack(wikrt_val* stack, size_t nStackElems, wikrt_val* pValArray, wikrt_val* rem);
-wikrt_err wikrt_split_list(wikrt_val* lst, size_t nMaxElems, wikrt_val* pValArray, size_t* nListElems, wikrt_val* rem);
-wikrt_err wikrt_split_binary(wikrt_val* binary, size_t nMaxBytes, unsigned char* dst, size_t* nBytes, wikrt_val* rem);
-wikrt_err wikrt_split_text(wikrt_val* txt, size_t nMaxBytes, char* dst, size_t* nBytes, size_t* nChars, wikrt_val* rem);
-wikrt_err wikrt_split_sum(wikrt_val* sum, size_t nPathBytes, char* path, wikrt_val* val);
-
-
-/** @brief Access a sealed value. 
- *
- * The sealer token is copied into tokbuf as a NUL-terminated C string.
- * This token buffer should be at least size WIKRT_TOK_BUFFSZ (64 bytes)
- * to guarantee there is sufficient space. The 
- *
- * If argument was not a sealed value, WIKRT_TYPE_ERROR is returned,
- * the token text is empty, and the value is simply copied to the output.
- * 
- * Note: This operation is a form of reflection, like wikrt_peek_type.
- * The same caveats apply: it's preferable to avoid this feature outside
- * of special cases like rendering values for debugging.
- */
-wikrt_err wikrt_split_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v); 
-#endif
-
-
-#if 0
-/** @brief Set temporal quota for a context.
- *
- * When a context is constructed, it is associated with both a finite
- * amount of space and a finite amount of time or effort. To be most
- * predictable, this effort is specified in terms allocation effort.
- * A time unit is (very roughly!) one megabyte of allocations. This 
- * is only for allocations that are part of evaluating an application
- * of a block or similar.
- *
- * The default quota is 10x the initial context size, indicating that
- * every megabyte could feasibly be rewritten ten times before return.
- * In practice, of course, allocations have non-uniform distribution.
- * Developers may freely set the quota higher or lower.
- *
- * When a context reaches its temporal quota limits, we'll generally
- * return with WIKRT_QUOTA_STOP at a safe point. At that time, the main
- * options are to either abort computation or to reset the quota and 
- * continue.
- */
-void wikrt_cx_quota(wikrt_cx*, uint32_t allocMB);
-
-// QUESTION: Do I want quota for the whole context, or per evaluation?
-// Context level evaluations seems more sensible if I want laziness. 
-// But otherwise, per-eval is sensible and offers better control.
-#endif
-
-
-
-  ////////////////////////////
- // STREAMING BYTECODE API //
-////////////////////////////
-
-/** @brief Construct a stream of bytecode.
- *
- * A stream of bytecode is an open-ended block of bytecode, of some
- * unknown size. The protocol: `alloc append* close`. If you're only
- * going to append at most once, consider directly allocating a block
- * instead.
- *
- * The stream may be used almost anywhere a block may be used - copied, 
- * applied, evaluated, quoted, etc.. But it qualifies as a PENDING value
- * until closed, and cannot be observed as a normal value.
- */
-wikrt_err wikrt_stream_alloc(wikrt_val* out, wikrt_cx*);
-
-/** @brief Append bytecode to our stream.
- *
- * Wikilon uses Awelon Bytecode (ABC), provided here as a NUL-terminated
- * C string (with UTF-8 encoding). We may later support ABCD extensions 
- * for concision, but doing so isn't a high priority at this time.
- *
- * Under the hood, Wikilon may simplify and partially evaluate bytecode.
- * But behavior for valid inputs will be preserved.
- *
- * Provided bytecode may be incomplete, e.g. stopping in the middle of
- * a block, embedded text, or character. The intention with streams is
- * to support buffered processing of bytecode input.
- */
-wikrt_err wikrt_stream_append(wikrt_val* s, char const* bytecode);
-
-/** @brief Close a bytecode stream.
- *
- * When you're done adding bytecode to a stream, close it. This is
- * necessary to complete applications, observe 
- */
-
-/** @brief Construct a block of bytecode.
- *
- * This is equivalent to opening, filling, and closing a stream in
- * one step. This is useful if you know the bytecode ahead of time
- * and it isn't too large to easily represent in memory.
- */
-
-
-// TODO:
-//   annotations
-//     arrays, assertions
-//   quoting values
-//   composition of blocks
-//   substructural types
-//   floats and doubles
-//     once we have accelerators
-//   
-
-#endif
+// NOTE: Wikilon runtime currently provides a minimal API to support
+// injecting bytecode and an initial program environment, evaluating,
+// then extracting or streaming the result.
+//
+// later I might introduce API-level support for:
+//   basic integer math (add, mul, negate, divmod, compare)
+//   function ops (compose, affine, relevant)
+//   annotations (par, array, shared, seamless, eqv, etc.)
+//   accelerators (list processing, floating point, matrix math, etc.)
 
 
   /////////////////////////////////////
@@ -878,22 +558,19 @@ wikrt_err wikrt_stream_append(wikrt_val* s, char const* bytecode);
 
 /** @brief Transactional Persistence
  *
- * The Wikilon environment includes a simple key-value database for
- * use as a persistence layer that integrates easily with large value
- * stowage. Transactions enable consistent views of multiple keys and
- * atomic updates. Durability is optional per transaction.
+ * The Wikilon environment provides a simple key-value database as a
+ * basis for persistence that interacts nicely with value stowage. 
+ * Transactions on this database are atomic and isolated by default.
+ * Durability is optional and consistency is left to the client.
  *
- * Keys are values of limited size, i.e. having a finite expression
- * in 
+ * The keys are texts of limited size. The values are more arbitrary,
+ * pretty much anything we could stow.
  *
  * Note: This database is not implicitly accessible to ABC computations.
  * Access must be modeled explicitly, like any other algebraic effect,
  * if it is to be provided at all.
  */
-typedef struct wikrt_txn { wikrt_val txn; } wikrt_txn;
-#define WIKRT_DB_KEY_SIZE_MAX 255
-
-//wikrt_err wikrt_as_key(wikrt_cx*, wikrt_val* key, wikrt_val);
+typedef wikrt_val wikrt_txn;
 
 /** @brief Begin a new transaction for key-value persistence.
  */
