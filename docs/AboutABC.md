@@ -506,3 +506,4 @@ ABCD offers a viable path to performant collections oriented programming.
 ## Meta
 
 Where appropriate, the generic internet media type for ABC should be `application/vnd.org.awelon.abc`. File extension might be `.abc`, though I'd like to avoid maintaining files full of ABC code. Specific, constrained variants of ABC (e.g. restricting tokens) might use a more specific media type.
+

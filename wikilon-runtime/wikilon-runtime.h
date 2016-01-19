@@ -426,9 +426,9 @@ typedef enum wikrt_vtype
 , WIKRT_VTYPE_SUM         // sum type (includes lists) 
 , WIKRT_VTYPE_BLOCK       // functional bytecode  
 , WIKRT_VTYPE_SEALED      // sealed values
-// special cases
-, WIKRT_VTYPE_STOWED      // fully stowed value refs
-, WIKRT_VTYPE_PENDING     // awaiting computation
+// Special Cases
+, WIKRT_VTYPE_PENDING     // ongoing evaluation
+, WIKRT_VTYPE_STOWED      // value hidden
 } wikrt_vtype;
 
 wikrt_err wikrt_peek_type(wikrt_cx*, wikrt_vtype* out, wikrt_val const);
@@ -463,15 +463,6 @@ wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* copy, wikrt_val const src, bool bCopy
  */
 wikrt_err wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
 
-/** @brief Quote a value into a block. v → [∀e. e → (v * e)].
- *
- * Quoting a value returns a block that, when applied, regenerates
- * the value. This is exposed to users in part as a mechanism to
- * export arbitrary values as a stream of bytecode (via converting
- * the block to text then the text into a binary).
- */
-wikrt_err wikrt_quote(wikrt_cx*, wikrt_val* qv, wikrt_val v);
-
 /** @brief Mark a value for stowage.
  *
  * Value stowage serves a role similar to virtual memory. Stowed values
@@ -491,7 +482,6 @@ wikrt_err wikrt_quote(wikrt_cx*, wikrt_val* qv, wikrt_val v);
  */
 wikrt_err wikrt_stow(wikrt_cx*, wikrt_val* out, wikrt_val);
 
-
   ////////////////
  // EVALUATION //
 ////////////////
@@ -500,15 +490,14 @@ wikrt_err wikrt_stow(wikrt_cx*, wikrt_val* out, wikrt_val);
  *
  * This doesn't actually begin computation. Rather, it allocates and
  * prepares the workspace to perform the computation. One must proceed
- * to `wikrt_step_eval` to perform the computation.
+ * to use `wikrt_step_eval` to actually perform the computation.
  *
- * An evaluation may be treated as something like a lazy value. It
- * cannot readily be inspected, but it may be used in other values or
- * quoted and serialized.
+ * The evaluation may be understood as a 'pending' value. Such values
+ * are second class: they cannot be stowed and should not be wrapped 
+ * into larger structures. However, use of wikrt_quote will capture a
+ * pending value as a block, representing the remaining computation.
  */
 wikrt_err wikrt_alloc_eval(wikrt_cx*, wikrt_val*, wikrt_val arg, wikrt_val fn);
-
-// disassembly of eval? Or leave it opaque?
 
 /** @brief Step through an evaluation.
  *
@@ -521,34 +510,78 @@ wikrt_err wikrt_alloc_eval(wikrt_cx*, wikrt_val*, wikrt_val arg, wikrt_val fn);
  * In addition to quota stops, we have WIKRT_TOKEN_STOP for unrecognized 
  * tokens and possibly WIKRT_STREAM_WAIT for streaming computations. And
  * of course we'll halt on type errors, assertion failures, etc.. 
+ *
+ * If we return WIKRT_OK then we're done, and we have a value rather than
+ * a pending result. Further calls are idempotent, continuing to return the
+ * same value with WIKRT_OK.
  */
 wikrt_err wikrt_step_eval(wikrt_cx*, wikrt_val* evaluation, uint32_t* quota);
 
 /** @brief Handle a token stop.
  *
- * Upon WIKRT_TOKEN_STOP we may split our evaluation into a triple: the
- * token, the argument to it, and the continuation. The continuation is
- * used as the function for wikrt_alloc_eval, but preserves evaluation
- * context to continue more efficiently than a full allocation. It may
- * be used as a normal block, however.
+ * Upon WIKRT_TOKEN_STOP we may split the evaluation into a triple: the
+ * token, an argument to it, and a continuation. The continuation may
+ * be used or serialized as a block, but is specialized for use with 
+ * wikrt_alloc_eval to construct an ongoing evaluation after our argument
+ * has been processed.
  *
- * Our token buffer must have size at least WIKRT_TOK_BUFFSZ.
- *
- * NOTE: In case of WIKRT_TYPE_ERROR or WIKRT_ASSERT_FAIL, Wikilon runtime
- * will implicitly treat this as stopping on an {error} and {assert} token
- * respectively to support a little introspection. However, this is not 
- * intended to be a primary debugging mechanism.
+ * The token buffer should have size at least WIKRT_TOK_BUFFSZ to avoid
+ * any risk of overflow. 
  */
-wikrt_err wikrt_token_stop(wikrt_cx*, wikrt_val eval, wikrt_val* arg, char* tok, wikrt_val* cont);
+wikrt_err wikrt_token_stop(wikrt_cx*, wikrt_val, char* tok, wikrt_val* arg, wikrt_val* cont);
 
-// NOTE: Wikilon runtime currently provides a minimal API to support
-// injecting bytecode and an initial program environment, evaluating,
-// then extracting or streaming the result.
+/** @brief Quote a value into a block. v → [∀e. e → (v * e)]. (') */
+wikrt_err wikrt_quote(wikrt_cx*, wikrt_val, wikrt_val*);
+
+/** @brief Compose two blocks. [a → b] → [b → c] → [a → c]. (o) */
+wikrt_err wikrt_compose(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* ac);
+
+/** @brief Recognized block attributes. Use bitwise-or to compose. 
+ *
+ * Affine and relevant are substructural properties. They serve a role
+ * supporting structured behavior without structured syntax. Affine 
+ * blocks cannot be copied, and relevant blocks cannot be dropped, at
+ * least not by ABC operators `^` and `%`. Linearity is trivially the
+ * composition of affine and relevant attributes.
+ *
+ * Parallel blocks will be evaluated by a worker thread if available.
+ * This corresponds to the {&par} annotation. Worker threads run each
+ * computation to completion before continuing with another, i.e. this
+ * parallelism is not a suitable basis for concurrency.
+ * 
+ */
+typedef enum wikrt_block_attr
+{ WIKRT_AFFINE = 1
+, WIKRT_RELEVANT = 2
+, WIKRT_LINEAR = 3    // eqv. to (WIKRT_AFFINE | WIKRT_RELEVANT)
+, WIKRT_PARALLEL = 16
+} wikrt_block_attr;
+
+/** @brief Add attributes to a block value. */
+wikrt_err wikrt_block_set_attr(wikrt_cx*, wikrt_val, wikrt_block_attr, wikrt_val*);
+
+/** @brief Basic integer math operations: add, mul, negate, divmod (+*-Q) */
+wikrt_err wikrt_iadd(wikrt_cx*, wikrt_val, wikrt_val, wikrt_val*);
+wikrt_err wikrt_imul(wikrt_cx*, wikrt_val, wikrt_val, wikrt_val*);
+wikrt_err wikrt_ineg(wikrt_cx*, wikrt_val, wikrt_val*);
+wikrt_err wikrt_idiv(wikrt_cx*, wikrt_val dividend, wikrt_val divisor, 
+                     wikrt_val* quotient, wikrt_val* remainder); 
+
+/** @brief Common comparison results, expressed as enumeration. */
+typedef enum wikrt_ord { WIKRT_LT = -1, WIKRT_EQ = 0, WIKRT_GT = 1 } wikrt_ord;
+
+/** @brief Integer comparison, non-destructive. */
+wikrt_err wikrt_icmp(wikrt_cx*, wikrt_val const, wikrt_ord*, wikrt_val const);
+
+
+// NOTE: Wikilon runtime provides an API oriented around injection of
+// bytecode and evaluation of it, having only marginal support for 
+// direct evaluation via API calls. 
 //
 // later I might introduce API-level support for:
-//   basic integer math (add, mul, negate, divmod, compare)
-//   function ops (compose, affine, relevant)
-//   annotations (par, array, shared, seamless, eqv, etc.)
+//   affine, relevant, parallel
+//   shared, seamless, eqv
+//   recognized annotations (par, array, shared, seamless, eqv, etc.)
 //   accelerators (list processing, floating point, matrix math, etc.)
 
 
@@ -563,8 +596,8 @@ wikrt_err wikrt_token_stop(wikrt_cx*, wikrt_val eval, wikrt_val* arg, char* tok,
  * Transactions on this database are atomic and isolated by default.
  * Durability is optional and consistency is left to the client.
  *
- * The keys are texts of limited size. The values are more arbitrary,
- * pretty much anything we could stow.
+ * The keys are texts of limited size, up to 255 bytes utf8. The values
+ * are more flexible, anything we could stow. 
  *
  * Note: This database is not implicitly accessible to ABC computations.
  * Access must be modeled explicitly, like any other algebraic effect,
@@ -572,9 +605,9 @@ wikrt_err wikrt_token_stop(wikrt_cx*, wikrt_val eval, wikrt_val* arg, char* tok,
  */
 typedef wikrt_val wikrt_txn;
 
-/** @brief Begin a new transaction for key-value persistence.
+/** @brief Create a new transaction on our key-value database.
  */
-wikrt_err wikrt_txn_begin(wikrt_cx*, wikrt_txn* dest);
+wikrt_err wikrt_txn_create(wikrt_cx*, wikrt_txn* dest);
 
 // todo: support hierarchical transactions if sufficient demand
 
