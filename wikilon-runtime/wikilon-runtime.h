@@ -157,6 +157,8 @@ typedef enum wikrt_err
  * backing database. Stowage annotations will behave normally with respect
  * to copy and drop operations, but never actually stow anything. All
  * transactions will fail with WIKRT_DBERR.
+ *
+ * This will probably fail if the given dirPath doesn't already exist.
  */
 wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, uint32_t dbMaxMB);
 
@@ -164,7 +166,8 @@ wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, uint32_t dbMaxMB);
  *
  * Operations on contexts should eventually abort with WIKRT_NOLINK. 
  * Contexts must still be individually destroyed to fully release 
- * their memory.
+ * their memory. The environment should not be directly used apart
+ * from a context after destruction. 
  */
 void wikrt_env_destroy(wikrt_env*);
 
