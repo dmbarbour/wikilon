@@ -302,6 +302,9 @@ typedef uint32_t wikrt_val;
  * `μL.((a*L)+1)`.) But Wikilon runtime favors a compact representation
  * for binaries as a composition of array-like segments.
  *
+ * Note: support for incremental processing may be eliminated if it has
+ * an overly complicated implementation.
+ *
  * Usage: Allocate a (stream, binary) pair. Addend the stream many times.
  * Eventually 'end' the stream. Meanwhile or afterwards, process the binary
  * as a value. The stream value cannot be used after ending.
@@ -314,6 +317,8 @@ wikrt_err wikrt_alloc_stream(wikrt_cx*, wikrt_val* s, wikrt_val* binary);
 wikrt_err wikrt_addend_stream(wikrt_cx*, wikrt_val s, uint8_t const* chunk, uint32_t size);
 wikrt_err wikrt_end_stream(wikrt_cx*, wikrt_val s);
 wikrt_err wikrt_awaiting_stream(wikrt_cx*, bool* bWaiting, wikrt_val const s);
+
+
 
 /** @brief Read binary data from a list-like structure. 
  *
@@ -501,19 +506,19 @@ wikrt_err wikrt_alloc_eval(wikrt_cx*, wikrt_val*, wikrt_val arg, wikrt_val fn);
 
 /** @brief Step through an evaluation.
  *
- * Wikilon runtime requires a time or effort quota for evaluation. When
- * the quota reaches zero, we'll return WIKRT_QUOTA_STOP. The programmer
- * is free to set higher quotas. The quota is relatively coarse grained,
- * roughly corresponding to megabytes allocated during computation. Any
+ * Each step has a 'quota', a heuristic for computational effort. This
+ * quota is based on allocations rather than wall clock time, so it 
+ * should be relatively consistent. When computation stalls because our
+ * quota reaches zero, we will return WIKRT_QUOTA_STOP. Otherwise, the
  * remaining quota is returned.
  *
- * In addition to quota stops, we have WIKRT_TOKEN_STOP for unrecognized 
- * tokens and possibly WIKRT_STREAM_WAIT for streaming computations. And
- * of course we'll halt on type errors, assertion failures, etc.. 
+ * If we return WIKRT_OK, then computation is complete and our evaluation
+ * is reduced to a value. Further evaluation steps have no additional
+ * effect.
  *
- * If we return WIKRT_OK then we're done, and we have a value rather than
- * a pending result. Further calls are idempotent, continuing to return the
- * same value with WIKRT_OK.
+ * If we return WIKRT_TOKEN_STOP, you may potentially handle the token and
+ * continue. If we return WIKRT_STREAM_WAIT, we can potentially addend the
+ * stream and continue. For most other errors, we cannot continue.
  */
 wikrt_err wikrt_step_eval(wikrt_cx*, wikrt_val* evaluation, uint32_t* quota);
 
@@ -535,6 +540,8 @@ wikrt_err wikrt_quote(wikrt_cx*, wikrt_val, wikrt_val*);
 
 /** @brief Compose two blocks. [a → b] → [b → c] → [a → c]. (o) */
 wikrt_err wikrt_compose(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* ac);
+
+#if 0
 
 /** @brief Recognized block attributes. Use bitwise-or to compose. 
  *
@@ -574,16 +581,12 @@ typedef enum wikrt_ord { WIKRT_LT = -1, WIKRT_EQ = 0, WIKRT_GT = 1 } wikrt_ord;
 wikrt_err wikrt_icmp(wikrt_cx*, wikrt_val const, wikrt_ord*, wikrt_val const);
 
 
-// NOTE: Wikilon runtime provides an API oriented around injection of
-// bytecode and evaluation of it, having only marginal support for 
-// direct evaluation via API calls. 
-//
 // later I might introduce API-level support for:
 //   affine, relevant, parallel
-//   shared, seamless, eqv
-//   recognized annotations (par, array, shared, seamless, eqv, etc.)
-//   accelerators (list processing, floating point, matrix math, etc.)
-
+//   arrays, structure assertion annotations
+//   list processing accelerators
+//   other accelerators? (matrix math, etc.)
+#endif
 
   /////////////////////////////////////
  // DATABASE AND PERSISTENCE ENGINE //
@@ -591,13 +594,12 @@ wikrt_err wikrt_icmp(wikrt_cx*, wikrt_val const, wikrt_ord*, wikrt_val const);
 
 /** @brief Transactional Persistence
  *
- * The Wikilon environment provides a simple key-value database as a
- * basis for persistence that interacts nicely with value stowage. 
- * Transactions on this database are atomic and isolated by default.
- * Durability is optional and consistency is left to the client.
+ * The Wikilon environment has an integrated, persistent key-value
+ * database. This serves as a basis for persistence that interacts
+ * nicely with large value stowage. A transaction is required even
+ * to access and update a single value.
  *
- * The keys are texts of limited size, up to 255 bytes utf8. The values
- * are more flexible, anything we could stow. 
+ * A transaction is represented within a context, but is not a meaningful value of any sort. 
  *
  * Note: This database is not implicitly accessible to ABC computations.
  * Access must be modeled explicitly, like any other algebraic effect,
@@ -605,71 +607,60 @@ wikrt_err wikrt_icmp(wikrt_cx*, wikrt_val const, wikrt_ord*, wikrt_val const);
  */
 typedef wikrt_val wikrt_txn;
 
-/** @brief Create a new transaction on our key-value database.
+/** @brief Validate transaction key.
+ *
+ * Transaction keys must be valid texts of limited size, at most 255
+ * bytes in the utf-8 encoding.
  */
+bool wikrt_valid_key(char const*);
+
+/** @brief Create a new transaction on our key-value database. */
 wikrt_err wikrt_txn_create(wikrt_cx*, wikrt_txn* dest);
 
-// todo: support hierarchical transactions if sufficient demand
-
-/** @brief Read a value from our key-value persistence layer.
+/** @brief Access and update a value in the key-value database. 
  * 
- * This implicitly acts as a 'copy' operation on the value associated
- * with the key. Unless `bCopyAff` is set, we may fail due to copying
- * a non-copyable value. This failure may be latent, on commit.
- */
-wikrt_err wikrt_txn_read(wikrt_txn*, char const* key, wikrt_val* dest, bool bCopyAff);
-
-/** @brief Write value into our key-value persistence layer.
+ * Consistent with move semantics, we favor exchanging one value for
+ * another. This counts as both a read and a write, though a few tricks
+ * under the hood can recognize some read-only or write-only patterns.
  * 
- * Ownership of the value is given to the transaction. This implicitly
- * acts as a 'drop' operation on the value previously associated with 
- * the key. Unless `bDropRel` is set, we may fail due to dropping a
- * non-droppable value. This failure may be latent, on commit.
+ * The default value for any key is WIKRT_UNIT_INR, the conventional
+ * empty container value. Updating a key to have this value effectively
+ * deletes that key from the database.
  */
-wikrt_err wikrt_txn_write(wikrt_txn*, char const* key, wikrt_val* val, bool bDropRel);
+wikrt_err wikrt_txn_swap(wikrt_cx*, wikrt_txn, char const* key, wikrt_val* val);
 
-/** @brief Exchange a value from our key-value persistence layer.
- *
- * Swap a value currently bound to a key with the value provided. This
- * guarantees protection for substructural types and avoids intermediate
- * copies during a transaction that updates a value many times (i.e. you
- * can swap for a dummy value like unit).
- */
-wikrt_err wikrt_txn_swap(wikrt_txn*, char const* key, wikrt_val* val);
+/** @brief Abort and drop the transaction. */
+void wikrt_txn_abort(wikrt_cx*, wikrt_txn);
 
-/** @brief Mark a transaction for durability. 
+/** @brief Attempt to commit a transaction.
  *
- * A 'durable' transaction will force the underlying database to
- * push content to disk. Otherwise, transactions only have the ACI
- * properties but will tend to return with reduced latency. Because
- * Wikilon runtime builds on LMDB, 
- */
-void wikrt_txn_durable(wikrt_txn*);
-
-/** @brief Abort a transaction.
- *
- * Abandon the transaction and return resources to the context.
- */
-void wikrt_txn_abort(wikrt_txn*);
-
-/** @brief Commit a transaction.
- *
- * Attempt to commit a transaction. This may fail if there are
- * conflicts with other transactions, or if the transaction context
- * has been destroyed. Succeed or fail, resources are returned to 
- * the context.
+ * Commit may fail for a variety of reasons, the most likely being
+ * conflict with a concurrent transaction. 
  */
 wikrt_err wikrt_txn_commit(wikrt_txn*);
     // TODO: early detection of conflicts
     //       heuristic priority, etc.
 
-/** @brief Ensure durability of prior transactions. 
+/** @brief Mark a transaction for durability. 
+ * 
+ * By default, transactions are only weakly durable. However, we can
+ * mark a transaction for a strong guarantee of durability. This will
+ * transitively force ancestral transactions to also become durable.
+ *
+ * The cost of durable transactions is latency: we must wait for the
+ * transaction data to commit to disk. Also, when transactions are
+ * small, we may end up writing more pages than we would if multiple
+ * non-durable transactions are batched. 
+ */
+void wikrt_txn_durable(wikrt_cx*, wikrt_txn);
+
+/** @brief Ensure durability of all prior transactions. 
  *  
  * If you don't explicitly mark transactions durable, consider calling
- * sync every five seconds or so to limit potential data loss.
+ * sync every five seconds or so to limit potential data loss. This 
+ * function returns after all prior transactions are flushed to disk.
  */
 void wikrt_env_sync(wikrt_env*);
-
 
 
 #define WIKILON_RUNTIME_H

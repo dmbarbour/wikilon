@@ -50,27 +50,25 @@
     wikrt_copy;
     wikrt_drop;
     wikrt_stow;
-    wikrt_load;
 
     wikrt_alloc_eval;
     wikrt_step_eval;
     wikrt_token_stop;
-
     wikrt_quote;
     wikrt_compose;
+
     wikrt_iadd;
     wikrt_imul;
     wikrt_ineg;
     wikrt_idiv;
-    
-    
+    wikrt_icmp;
+
+    wikrt_valid_key;
 
     wikrt_txn_create;
-    wikrt_txn_commit;
-    wikrt_txn_abort;
-    wikrt_txn_read;
-    wikrt_txn_write;
     wikrt_txn_swap;
+    wikrt_txn_abort;
+    wikrt_txn_commit;
     wikrt_txn_durable;
 
   local: *;
