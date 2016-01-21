@@ -73,10 +73,11 @@ Reasoning:
 * 4GB of memory is a lot for any one Wikilon computation.
 * LMDB stowage mitigates need for large values in memory.
 * Binaries, texts, bytecode could use external resources.
+* Model larger computations with distributed parallelism.
 * Tight addressing improves memory locality and caching.
 * Easy to upgrade to 64-bit runtime later, if necessary.
 
-I still have mixed feelings about this when I read about 512GB servers and 32GB smartphones. But, at least in theory, the context size limit should be a non-issue. Large value stowage enables us to better control our active set of data. If we specialize for stowed large binaries, we could potentially share references to large binaries between multiple contexts. Finally, I have some ideas for distributing computations across multiple contexts, leveraging virtual 'partition' annotations to model distributed computing.
+I still have mixed feelings about this when I read about servers with 512GB RAM. But, at least in theory, the per-context size limit should be a non-issue. And 4GB is reasonably large as a working set. Large value stowage enables us to better control our active set of data. If we specialize for very large binaries and similar, we could potentially share references between multiple contexts on a machine and leverage normal virtual memory (via mmap'd file or similar, if I track reference counts properly). Finally, I have some ideas for distributing computations across multiple contexts, leveraging virtual 'partition' annotations to model distributed computing.
 
 With 32-bit addressing aligned on 64-bit cells (representing pairs and lists), 3 bits in each address can be leveraged to optimize common representations. The encoding I'll be trying:
 
@@ -148,8 +149,9 @@ This technique conveniently enables developers to treat deep sums as little diff
 
 ### Blocks of Code
 
-A block of cod
+How should we represent blocks of code under the hood?
 
+The technique I was using earlier was to compose a binary for bytecode plus a stack for values. The values are popped off the list as needed. I was also using a technique that would allow 'lazy' computations of values, but this is unlikely to remain a useful technique without as much value sharing.
 
 ### Arrays and Chunked Lists
 

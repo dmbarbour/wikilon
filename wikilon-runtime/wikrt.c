@@ -1,6 +1,7 @@
 #include <assert.h>
 #include "wikrt.h"
 
+
 // lockfile to prevent multi-process collisions
 bool init_lockfile(int* pfd, char const* dirPath) 
 {
@@ -8,7 +9,7 @@ bool init_lockfile(int* pfd, char const* dirPath)
     size_t const fplen = dplen + 12;
     char lockFileName[fplen];
     snprintf(lockFileName, fplen, "%s/lockfile", dirPath);
-    int const fd = open(lockFileName, O_CREATE | O_RDONLY);
+    int const fd = open(lockFileName, O_CREAT | O_RDONLY, WIKRT_FILE_MODE);
     if ((-1) == fd) {
         return false;
     }  
@@ -21,12 +22,11 @@ bool init_lockfile(int* pfd, char const* dirPath)
 }
 
 // prepare LMDB database
-bool init_db(wikrt_env* pEnv, char const* dirPath0, uint32_t dbMaxMB) {
+bool init_db(wikrt_env* pEnv, char const* dp, uint32_t dbMaxMB) {
 
-    if((NULL == dp) || (0 == dbMaxMB)) {
-        pEnv->e_db_enable = false;
-        return true;
-    }
+    // ensure "" and "." have same meaning as local directory
+    char const* dirPath = (dp[0] ? dp : ".");
+    size_t const dbMaxBytes = (size_t)dbMaxMB * (1024 * 1024);
 
     // to populate on success:
     int db_lockfile;
@@ -36,16 +36,11 @@ bool init_db(wikrt_env* pEnv, char const* dirPath0, uint32_t dbMaxMB) {
 
     // relevant constants
     int const mdbFlags = MDB_NOTLS | MDB_NOLOCK | MDB_NOMEMINIT;
-    int const mdbMode  = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
     int const f_memory = MDB_CREATE | MDB_INTEGERKEY;
     int const f_keyval = MDB_CREATE;
     int const f_caddrs = MDB_CREATE | MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP;
     int const f_refcts = MDB_CREATE | MDB_INTEGERKEY;
     int const f_refct0 = MDB_CREATE | MDB_INTEGERKEY;
-
-    // ensure "" and "." mean the same thing as directory name 
-    char const* dirPath = dirPath0[0] ? dirPath0 : ".";
-    size_t const dbMaxBytes = size_t(dbMaxMB) * (1024 * 1024);
 
     if(!init_lockfile(&db_lockfile, dirPath)) 
         goto onError;
@@ -56,7 +51,7 @@ bool init_db(wikrt_env* pEnv, char const* dirPath0, uint32_t dbMaxMB) {
     MDB_txn* pTxn;
     if( (0 != mdb_env_set_mapsize(pLMDB, dbMaxBytes)) ||
         (0 != mdb_env_set_maxdbs(pLMDB, 5)) ||
-        (0 != mdb_env_open(pLMDB, dirPath, mdbFlags, mdbMode)) ||
+        (0 != mdb_env_open(pLMDB, dirPath, mdbFlags, WIKRT_FILE_MODE)) ||
         (0 != mdb_txn_begin(pLMDB, NULL, MDB_NOSYNC, &pTxn)))
         goto onErrInitDB;
 
@@ -71,8 +66,15 @@ bool init_db(wikrt_env* pEnv, char const* dirPath0, uint32_t dbMaxMB) {
         goto onErrTxn;
 
     // obtain last allocated address
-    if(0 != mdb_cursor_get(pCursor, &db_last_alloc, NULL, MDB_LAST))
-        db_last_alloc = (1 << 32);
+    MDB_val last_key;
+    if(0 == mdb_cursor_get(pCursor, &last_key, NULL, MDB_LAST)) {
+        assert(sizeof(stowaddr) == last_key.mv_size);
+        db_last_alloc = *((stowaddr*)last_key.mv_data);
+    } else {
+        // default to allocations just past the 
+        // maximum normal address for a resource
+        db_last_alloc = ((stowaddr)1) << 32;
+    }
     mdb_cursor_close(pCursor);
 
     // commit the transaction
@@ -80,7 +82,6 @@ bool init_db(wikrt_env* pEnv, char const* dirPath0, uint32_t dbMaxMB) {
         goto onErrInitDB;
 
     // if we reach this point, we've succeeded.
-    pEnv->e_db_enable = true;
     pEnv->e_db_env = pLMDB;
     pEnv->e_db_lockfile = db_lockfile;
     pEnv->e_db_memory = db_memory;
@@ -88,6 +89,8 @@ bool init_db(wikrt_env* pEnv, char const* dirPath0, uint32_t dbMaxMB) {
     pEnv->e_db_keyval = db_keyval;
     pEnv->e_db_refcts = db_refcts;
     pEnv->e_db_refct0 = db_refct0;
+    pEnv->e_db_last_alloc = db_last_alloc;
+    pEnv->e_db_last_gc = 0;
 
     return true;   
 
@@ -99,7 +102,6 @@ bool init_db(wikrt_env* pEnv, char const* dirPath0, uint32_t dbMaxMB) {
  onErrCreateDB: 
     close(db_lockfile);
  onError:
-    pEnv->e_db_enable = false;
     return false;
 }
 
@@ -109,12 +111,15 @@ wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMa
 
     pEnv->e_cxhead      = NULL;
     pEnv->e_shutdown    = false;
-    pEnv->e_mutex       = PTHREAD_MUTEX_INITIALIZER;
+    pEnv->e_mutex       = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
 
-    if(!init_db(pEnv, dirPath, dbMaxMB)) {
+    // use of key-value database and stowage is optional
+    if((NULL == dirPath) || (0 == dbMaxMB)) { 
+        pEnv->e_db_env = NULL;
+    } else if(!init_db(pEnv, dirPath, dbMaxMB)) {
         free(pEnv);
         return WIKRT_DBERR;
-    }
+    } 
 
     (*ppEnv) = pEnv;
     return WIKRT_OK;

@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 //#include <time.h>
 #include <pthread.h>
@@ -72,10 +73,10 @@ struct wikrt_env {
     stowaddr            e_db_last_gc;
     stowaddr            e_db_last_alloc;
 
-
-
     // todo: ephemeral stowage addresses to prevent GC
     // question: can we combine writes for concurrent transactions?
+    //  I would effectively need to track writes, ensure transactions
+    //  are serialized  
 };
 
 struct wikrt_cx { 
@@ -100,4 +101,6 @@ struct wikrt_cx {
     // do I want a per-context mutex?
 };
 
+
+#define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
 

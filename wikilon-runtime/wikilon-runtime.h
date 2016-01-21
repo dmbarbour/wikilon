@@ -342,28 +342,49 @@ wikrt_err wikrt_read(wikrt_cx*, wikrt_val binary, uint32_t buffSize,
  *  - no control chars (C0, DEL, C1) except for LF
  *  - no surrogate codeponts (U+D800 .. U+DFFF)
  *  - no replacement char (U+FFFD)
- *
  */
 wikrt_err wikrt_utf8_to_text(wikrt_cx*, wikrt_val utf8, wikrt_val* text);
 wikrt_err wikrt_text_to_utf8(wikrt_cx*, wikrt_val text, wikrt_val* utf8);
 
-/** Texts to/from blocks of bytecode.
+// TODO: consider integrating abc-base16 compression for `bdfghjkmnpqstxyz`
+// strings. Consider supporting zstd or similar compression, too. These
+// could be separated from texts, applied directly to binaries.
+
+/** @brief Options for bytecode.
+ *
+ * Wikilon uses Awelon Bytecode (ABC) as its primary serialization model.
+ * Any value may be 'quoted' into a block, then translated to utf8 binary,
+ * and the reverse. 
+ * 
+ * While ABC is flexible, we can compress representation and accelerate
+ * interpreted performance with ABCD (ABC Deflated) extensions. 
+ *
+ * We can also serialize with stowed resources, though this limits code
+ * to round-tripping. We use an HMAC to secure stowage addresses. Note
+ * that stowage addresses may be GC'd before use unless held within the
+ * key-value persistence layer. I'll favor {#stow:addrhmac} for stowed 
+ * resources.
+ *
+ * Use a bitwise 'or' of multiple abc options.
+ */
+typedef enum wikrt_abc_options 
+{ WIKRT_ABC_PRIMOPS = 0 // 42 primitive ops, texts, blocks
+, WIKRT_ABC_DEFLATE = 1 // enable known ABCD extensions
+, WIKRT_ABC_STOWAGE = 2 // enable stowed resource tokens
+} wikrt_abc_options;
+
+/** @brief Serialization for arbitrary values.
  *
  * Wrapping ABC text in a block provides an opportunity for the runtime
  * to simplify the code, perform partial evaluations, etc.. Converting
  * the block into text enables serialization of code.
- *
- * ABCD extensions are optional for both input and output. If not enabled,
- * we'll restrict input or output to pure ABC. Otherwise, we'll recognize
- * operators reported in `wikrt_abcd_operations()` as indicating common
- * subprograms.
  */
-wikrt_err wikrt_text_to_block(wikrt_cx*, wikrt_val text, wikrt_val* block, bool bEnableABCD);
-wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_val block, wikrt_val* text, bool bEnableABCD);
+wikrt_err wikrt_text_to_block(wikrt_cx*, wikrt_val text, wikrt_val* block, wikrt_abc_options);
+wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_val block, wikrt_val* text, wikrt_abc_options);
 
 /** Alloc a short text or block from a C string literal. */
 wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*);
-wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, bool bEnableABCD);
+wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, wikrt_abc_options);
 
 /** Allocating small integers. */
 wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val*, int32_t);
