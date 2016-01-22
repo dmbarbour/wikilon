@@ -1,6 +1,16 @@
 #include <assert.h>
-#include "wikrt.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <stddef.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/mman.h>
 
+#include "wikrt.h"
 
 // lockfile to prevent multi-process collisions
 bool init_lockfile(int* pfd, char const* dirPath) 
@@ -22,7 +32,7 @@ bool init_lockfile(int* pfd, char const* dirPath)
 }
 
 // prepare LMDB database
-bool init_db(wikrt_env* pEnv, char const* dp, uint32_t dbMaxMB) {
+bool init_db(wikrt_env* e, char const* dp, uint32_t dbMaxMB) {
 
     // ensure "" and "." have same meaning as local directory
     char const* dirPath = (dp[0] ? dp : ".");
@@ -82,15 +92,15 @@ bool init_db(wikrt_env* pEnv, char const* dp, uint32_t dbMaxMB) {
         goto onErrInitDB;
 
     // if we reach this point, we've succeeded.
-    pEnv->e_db_env = pLMDB;
-    pEnv->e_db_lockfile = db_lockfile;
-    pEnv->e_db_memory = db_memory;
-    pEnv->e_db_caddrs = db_caddrs;
-    pEnv->e_db_keyval = db_keyval;
-    pEnv->e_db_refcts = db_refcts;
-    pEnv->e_db_refct0 = db_refct0;
-    pEnv->e_db_last_alloc = db_last_alloc;
-    pEnv->e_db_last_gc = 0;
+    e->db_env = pLMDB;
+    e->db_lockfile = db_lockfile;
+    e->db_memory = db_memory;
+    e->db_caddrs = db_caddrs;
+    e->db_keyval = db_keyval;
+    e->db_refcts = db_refcts;
+    e->db_refct0 = db_refct0;
+    e->db_last_alloc = db_last_alloc;
+    e->db_last_gc = 0;
 
     return true;   
 
@@ -106,102 +116,138 @@ bool init_db(wikrt_env* pEnv, char const* dp, uint32_t dbMaxMB) {
 }
 
 wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMaxMB) {
-    wikrt_env* const pEnv = calloc(1, sizeof(wikrt_env));
-    if(NULL == pEnv) return WIKRT_NOMEM;
+    wikrt_env* const e = calloc(1, sizeof(wikrt_env));
+    if(NULL == e) return WIKRT_NOMEM;
 
-    pEnv->e_cxhead      = NULL;
-    pEnv->e_shutdown    = false;
-    pEnv->e_mutex       = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
+    e->cxhd  = NULL;
+    e->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
 
     // use of key-value database and stowage is optional
     if((NULL == dirPath) || (0 == dbMaxMB)) { 
-        pEnv->e_db_env = NULL;
-    } else if(!init_db(pEnv, dirPath, dbMaxMB)) {
-        free(pEnv);
+        e->db_env = NULL;
+    } else if(!init_db(e, dirPath, dbMaxMB)) {
+        free(e);
         return WIKRT_DBERR;
     } 
 
-    (*ppEnv) = pEnv;
+    (*ppEnv) = e;
     return WIKRT_OK;
 }
 
-void wikrt_env_destroy(wikrt_env* pEnv) {
-
-    pthread_mutex_lock(&(pEnv->e_mutex));
-    // force contexts to halt with WIKRT_NOLINK
-    // wait for it? need a signaling mechanism
-    // delay full destruction until last context destroyed?
-
-    // todo:
-    //   final synchronization
-    //   close shared resources
-    //   close env
-    //   destroy pthread mutex
-    if(pEnv->e_db_enable) {
-        pEnv->e_db_enable = false;
-        mdb_env_close(pEnv->e_db_env);
-        close(pEnv->e_db_lockfile);
+void wikrt_env_destroy(wikrt_env* e) {
+    assert(NULL == e->cxhd);
+    if(e->db_enable) {
+        mdb_env_close(e->db_env);
+        close(e->db_lockfile);
     }
-    pthread_mutex_unlock(&(pEnv->e_mutex));
-
-    // if we're the final reference, free the environment.
-    if(NULL == pEnv->e_cxhead) {
-        free(pEnv);
-    }
+    bool const mutexDestroyed = (0 == pthread_mutex_destroy(&(e->mutex)));
+    assert(mutexDestroyed);
+    free(e);
 }
 
 // trivial implementation 
-void wikrt_env_sync(wikrt_env* pEnv) {
-    if(pEnv->e_db_enable) {
+void wikrt_env_sync(wikrt_env* e) {
+    if(e->db_enable) {
         int const force_flush = 1;
-        mdb_env_sync(pEnv->e_db_env, force_flush);
+        mdb_env_sync(e->db_env, force_flush);
     }
 }
 
+size_t cx_size_bytes(uint32_t sizeMB) { 
+    return ((size_t) sizeMB) * (1024 * 1024); 
+}
+
+wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) {
+    pthread_mutex_t* const mx = &(e->mutex);
+    bool const bSizeValid = (1 < sizeMB) && (sizeMB < 4096);
+    if(!bSizeValid) return WIKRT_INVAL;
+    size_t const sizeBytes = cx_size_bytes(sizeMB);
+
+    wikrt_cx* const cx = calloc(1,sizeof(wikrt_cx));
+    if(NULL == cx) return WIKRT_NOMEM;
+
+    static int const prot = PROT_READ | PROT_WRITE | PROT_EXEC;
+    static int const flags = MAP_ANONYMOUS | MAP_PRIVATE;
+    void* const pMem = mmap(NULL, sizeBytes, prot, flags, -1, 0); 
+    if(NULL == pMem) {
+        free(cx);
+        return WIKRT_NOMEM;
+    }
+
+    cx->env    = e;
+    cx->sizeMB = sizeMB;
+    cx->memory = (wikrt_val*) pMem;
+
+    bool const locked = (0 == pthread_mutex_lock(mx));
+    assert(locked);
+    
+    wikrt_cx* const hd = e->cxhd;
+    cx->next = hd;
+    cx->prev = NULL;
+    if(NULL != hd) { hd->prev = cx; }
+    e->cxhd = cx;
+    
+    bool const unlocked = (0 == pthread_mutex_unlock(mx));
+    assert(unlocked);
+
+    // reset our context
+    wikrt_cx_reset(cx);
+    (*ppCX) = cx;
+    return WIKRT_OK;
+}
+
+void wikrt_cx_destroy(wikrt_cx* cx) {
+    wikrt_env* const e = cx->env;
+    pthread_mutex_t* const mx = &(e->mutex);
+
+    // remove context from global context list
+    bool const locked = (0 == pthread_mutex_lock(mx));
+    assert(locked);
+
+    if(NULL != cx->next) { 
+        cx->next->prev = cx->prev; 
+    }
+
+    if(NULL != cx->prev) { 
+        cx->prev->next = cx->next; 
+    } else { 
+        assert(e->cxhd == cx);
+        e->cxhd = cx->next; 
+    }
+
+    bool const unlocked = (0 == pthread_mutex_unlock(mx));
+    assert(unlocked);
+
+    // free memory associated with the context
+    size_t const sizeBytes = cx_size_bytes(cx->sizeMB);
+    bool const unmapped = (0 == munmap(cx->memory, sizeBytes));
+    assert(unmapped);
+    free(cx);
+}
+
+wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
+    return cx->env;
+}
+
+void wikrt_cx_reset(wikrt_cx* cx) {
+    // TODO:
+    //  (a) reset the allocators
+    //  (b) clear global lists
+    //    e.g. ephemeral stowage addresses
+}
+
+char const* wikrt_abcd_operators() {
+    // currently just pure ABC...
+    return u8"lrwzvcLRWZVC %^$o'kf#0123456789+*-QG?DFMK\n";
+}
+
+
+char const* wikrt_abcd_expansion(uint32_t opcode) {
+    // TODO: switch statement? or table?
+    return NULL;
+}
+
 #if 0
-
-/** @brief Create a context for computations.
- * 
- * A context consists mostly of one big mmap'd block of memory. The
- * viable range for sizes is about 4..4000 in megabyte units. We'll
- * generally require at least one megabyte for each computing thread,
- * plus a few more.
- */ 
-wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
-
-/** @brief Destroy a context and return its memory. */
-void wikrt_cx_destroy(wikrt_cx*);
-
-/** @brief Reset a context for use in a pooling system. 
- *
- * This returns the context to its 'freshly created' status without
- * requiring the address space to be unmapped and remapped. 
- */
-void wikrt_cx_reset(wikrt_cx*);
-
-/** @brief A context knows its parent environment. */
-wikrt_env* wikrt_cx_env(wikrt_cx*);
-
-/** @brief Supported ABC and ABCD operators as UTF-8 C string.
- *
- * The basic 42 ABC operators are
- *
- *   lrwzvcLRWZVC %^$o'kf#0123456789+*-QG?DFMK\n
- *
- * ABCD extends this set with additional opcodes represented as utf-8
- * codepoints. These are defined by expansion, ultimately into ABC.
- * An interpreter can hand-optimize those ABCD opcodes it recognizes.
- * This corresponds to the notion of 'accelerators', replacing common
- * subprograms with optimized implementations.
- */
-char const* wikrt_abcd_operators();
-
-/** @brief Expand ABCD opcodes to their definitions.
- *
- * The definition may utilize more ABCD, albeit acyclically. Pure ABC
- * operators will 'expand' to themselves, e.g. 'v' expands to "v".
- */
-char const* wikrt_abcd_expansion(uint32_t opcode);
 
 /** @brief Validate a token.
  *

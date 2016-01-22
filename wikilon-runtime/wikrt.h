@@ -2,19 +2,8 @@
  */
 #pragma once
 
-#include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdlib.h>
-#include <stddef.h>
-#include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/file.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-
-//#include <time.h>
 #include <pthread.h>
 
 #include "lmdb/lmdb.h"
@@ -53,25 +42,21 @@ typedef uint64_t stowaddr;
 
 
 struct wikrt_env { 
-    wikrt_cx           *e_cxhead;  // linked list of contexts
-    pthread_mutex_t     e_mutex;   // shared mutex for environment
-
-    // shutdown indicators
-    bool                e_shutdown;
-
+    wikrt_cx           *cxhd;  // linked list of contexts
+    pthread_mutex_t     mutex;   // shared mutex for environment
 
     // stowage and key-value persistence
     
-    bool                e_db_enable;
-    int                 e_db_lockfile;
-    MDB_env            *e_db_env;
-    MDB_dbi             e_db_memory;
-    MDB_dbi             e_db_caddrs;
-    MDB_dbi             e_db_keyval;
-    MDB_dbi             e_db_refcts;
-    MDB_dbi             e_db_refct0;
-    stowaddr            e_db_last_gc;
-    stowaddr            e_db_last_alloc;
+    bool                db_enable;
+    int                 db_lockfile;
+    MDB_env            *db_env;
+    MDB_dbi             db_memory;
+    MDB_dbi             db_caddrs;
+    MDB_dbi             db_keyval;
+    MDB_dbi             db_refcts;
+    MDB_dbi             db_refct0;
+    stowaddr            db_last_gc;
+    stowaddr            db_last_alloc;
 
     // todo: ephemeral stowage addresses to prevent GC
     // question: can we combine writes for concurrent transactions?
@@ -79,17 +64,19 @@ struct wikrt_env {
     //  are serialized  
 };
 
+// thoughts: should wikrt_cx simply use the mmap'd space?
+//  I'd prefer to avoid pointers within the memory, for now.
 struct wikrt_cx { 
     // for environment's list of contexts
-    wikrt_cx           *cx_next;
-    wikrt_cx           *cx_prev;
+    wikrt_cx           *next;
+    wikrt_cx           *prev;
 
     // a context knows its environment
-    wikrt_env          *cx_env;
+    wikrt_env          *env;
 
     // our primary memory
-    wikrt_val          *cx_memory;  
-    uint32_t            cx_sizeMB; 
+    wikrt_val          *memory;
+    uint32_t            sizeMB; 
 
     // most other data will be represented within cx_memory.
     // But I may need to develop a proper 'header' region.

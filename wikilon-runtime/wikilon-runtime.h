@@ -6,7 +6,8 @@
  *	@section intro_sec Introduction
  *
  *  Wikilon is part of Awelon project, which explores a new model for
- *  software development. Awelon project uses its own Awelon Bytecode
+ *  software development, in which a living system is defined by a set
+ *  of acyclic functions. Awelon project uses its own Awelon Bytecode
  *  (ABC). This bytecode is simple and purely functional, but doesn't
  *  perform well in a naive interpreter. To recover performance, many
  *  techniques must be utilized.
@@ -130,7 +131,6 @@ typedef enum wikrt_err
 
 // Special Conditions
 , WIKRT_CXFULL          // context is out of memory
-, WIKRT_NOLINK          // context or environment destroyed
 , WIKRT_BUFFSZ          // output buffer too small
 
 // Transactions
@@ -162,12 +162,9 @@ typedef enum wikrt_err
  */
 wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, uint32_t dbMaxMB);
 
-/** @brief Graceful shutdown of environment and active contexts. 
+/** @brief Destroy the environment.
  *
- * Operations on contexts should eventually abort with WIKRT_NOLINK. 
- * Contexts must still be individually destroyed to fully release 
- * their memory. The environment should not be directly used apart
- * from a context after destruction. 
+ * All contexts must be destroyed before the environment is destroyed.
  */
 void wikrt_env_destroy(wikrt_env*);
 

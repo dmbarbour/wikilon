@@ -3,7 +3,7 @@
 W = -Wall -Wextra -pedantic -Wno-unused-parameter
 THREADS = -pthread
 OPT = -O2 -flto
-CFLAGS = $(THREADS) $(OPT) $(W) -fPIC -g -std=c11
+CFLAGS = $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
 CC = gcc $(CFLAGS)
 OBJECTS = lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o wikrt.o
 INSTALL_PREFIX = /usr/local
