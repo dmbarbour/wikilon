@@ -236,91 +236,99 @@ void wikrt_cx_reset(wikrt_cx* cx) {
     //    e.g. ephemeral stowage addresses
 }
 
+#if 0
 char const* wikrt_abcd_operators() {
     // currently just pure ABC...
-    return u8"lrwzvcLRWZVC %^$o'kf#0123456789+*-QG?DFMK\n";
+    return u8"lrwzvcLRWZVC \n%^$o'kf#0123456789+*-QG?DFMK";
 }
 
-
 char const* wikrt_abcd_expansion(uint32_t opcode) {
+    switch(opcode) {
+        case 'l': return u8"l";
+        case 'r': return u8"r";
+        case 'w': return u8"w";
+        case 'z': return u8"z";
+        case 'v': return u8"v";
+        case 'c': return u8"c";
+        case 'L': return u8"L";
+        
+    }
     // TODO: switch statement? or table?
     return NULL;
 }
+#endif
+
+// assume valid utf-8 input
+inline uint32_t utf8_readc(uint8_t const** s) {
+    uint8_t const* p = *s;
+    uint32_t const c0 = p[0];
+    if(c0 < 0x80) {
+        (*s) = (p+1);
+        return c0;
+    } else if(c0 < 0xE0) {
+        // two bytes
+        uint32_t const c1 = (uint32_t) p[1];
+        (*s) = (p+2);
+        return ((0x1F & c0) << 6) | ((0x3F & c1));
+    } else if(c0 < 0xF0) {
+        uint32_t const c1 = (uint32_t) p[1];
+        uint32_t const c2 = (uint32_t) p[2];
+        (*s) = (p+3);
+        return ((0x0F & c0) << 12)
+             | ((0x3F & c1) << 6)
+             | ((0x3F & c2));
+    } else {
+        uint32_t const c1 = (uint32_t) p[1];
+        uint32_t const c2 = (uint32_t) p[2];
+        uint32_t const c3 = (uint32_t) p[3];
+        (*s) = (p+4); 
+        return ((0x07 & c0) << 18)
+             | ((0x3F & c1) << 12)
+             | ((0x3F & c2) << 6)
+             | ((0x3F & c3));
+    }
+}
+
+// C0, DEL, C1
+inline bool isControlChar(uint32_t c) {
+    return (c <= 0x1F) || ((0x7F <= c) && (c <= 0x9F));
+}
+
+// 0xD800..0xDFFF
+inline bool isSurrogateCodepoint(uint32_t c) { 
+    return (0xD800 <= c) && (c <= 0xDFFF);
+}
+
+// 0xFFFD
+inline bool isReplacementChar(uint32_t c) {
+    return (0xFFFD == c);
+}
+
+inline bool isValidTokChar(uint32_t c) {
+    bool const bInvalidChar =
+        ('{' == c) || ('}' == c) ||
+        isControlChar(c) ||
+        isSurrogateCodepoint(c) ||
+        isReplacementChar(c);
+    return !bInvalidChar;
+}
+
+// assumes normal form utf-8 argument, NUL-terminated
+bool wikrt_valid_token(char const* s) {
+    // valid size is 1..63 bytes
+    size_t const len = strlen(s);
+    bool const bValidSize = (0 < len) && (len < 64);
+    if(!bValidSize) return false;
+
+    uint8_t const* p = (uint8_t const*) s;
+    while(1) {
+        uint32_t c = utf8_readc(&p);
+        if(0 == c) return true;
+        if(!isValidTokChar(c)) return false;
+    }
+}
 
 #if 0
-
-/** @brief Validate a token.
- *
- * Awelon Bytecode tokens have the following constraints:
- *
- * - valid utf-8 text
- * - no more than 63 bytes
- * - no control chars (C0, DEL, C1)
- * - no surrogate codepoints (U+D800 to U+DFFF)
- * - no replacement char (U+FFFD)
- * - no curly braces `{}`
- *
- * This function returns true if the token is valid by these rules.
- */
-bool wikrt_valid_token(char const* s);
-
-
-/** @brief A value reference within a context. 
- *
- * Wikilon's value model is based on Awelon Bytecode. Basic values
- * include integers, products, unit, sums, and blocks. Special case
- * data includes sealed values, stowed values, pending computations,
- * arrays, texts, and binaries. The latter three are specializations
- * of simple lists.
- *
- * Wikilon runtime optimizes for compact representation of common
- * value types - e.g. pairs, lists, small integers, unit, booleans,
- * (node + leaf) trees, and deep sums. Lists may be compacted further
- * into arrays, texts, and binaries.
- *
- * Wikilon runtime assumes linear value references, i.e. that there
- * is no aliasing. This enables in-place mutation while preserving
- * purely functional semantics. API calls that receive wikrt_val as
- * input will generally take ownership of the value unless indicated
- * otherwise in documentation.
- */ 
-typedef uint32_t wikrt_val;
-
-/** @brief Unit value is a constant value reference. 
- *
- * Unit value frequently serves in products as a placeholder for
- * extensions. It's also used for the bottom of a stack. 
- *
- * ABC code cannot reflect on whether a value is unit... it must
- * statically know that a value is unit (if it cares at all). So
- * clients of this API also shouldn't reflect on whether a value
- * is unit modulo debug traces and other places where reflection
- * is reasonable.
- */
-#define WIKRT_UNIT 3
-
-/** @brief Unit in Right is a constant value reference.
- * 
- * The unit value in the right is also the value conventionally 
- * used to represent boolean true, done, nothing, empty list.
- */
-#define WIKRT_UNIT_INR 5
-
-/** @brief Unit in Left is a constant value reference.
- * 
- * The unit value in the left is also the value conventionally 
- * used to represent boolean false. 
- */
-#define WIKRT_UNIT_INL 7
-
-/** @brief Maximum buffer size for token text.
- *
- * The maximum token size for Awelon Bytecode is 63 bytes. Wikilon
- * runtime uses a byte for a NUL-terminator to support C strings. 
- * Token text does not include the wrapping `{}` braces, just the
- * text between them.
- */
-#define WIKRT_TOK_BUFFSZ 64
 
   ///////////////////////////
  // DATA INPUT AND OUTPUT //

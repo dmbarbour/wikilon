@@ -197,42 +197,51 @@ void wikrt_cx_reset(wikrt_cx*);
 /** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** @brief Supported ABC and ABCD operators as UTF-8 C string.
+#if 0
+/** @brief Supported ABCD operators as utf-8 C string.
  *
- * The basic 42 ABC operators are
+ * ABC and ABCD serialize to utf-8 text. The basic 42 ABC operators 
+ * are all in the ASCII range, hence requiring one byte each.
  *
  *   lrwzvcLRWZVC %^$o'kf#0123456789+*-QG?DFMK\n
  *
- * ABCD extends this set with additional opcodes represented as utf-8
- * codepoints. These are defined by expansion, ultimately into ABC.
- * An interpreter can hand-optimize those ABCD opcodes it recognizes.
- * This corresponds to the notion of 'accelerators', replacing common
- * subprograms with optimized implementations.
+ * Normally, only token texts and text literals embedded in ABC will
+ * use the greater utf-8 range. However, ABCD extends ABC with opcodes
+ * that are defined by expansion into ABC. Use of ABCD extensions can
+ * both compress serializations and accelerate interpreted performance.
+ * 
+ * When requested, Wikilon runtime will provide its entire list of 
+ * ABC and ABCD operators as a static utf-8 string.
  */
 char const* wikrt_abcd_operators();
 
 /** @brief Expand ABCD opcodes to their definitions.
  *
- * The definition may utilize more ABCD, albeit acyclically. Pure ABC
- * operators will 'expand' to themselves, e.g. 'v' expands to "v".
+ * Only ABCD codes are expanded here, anything else (including the
+ * 42 ABC primitives) will return NULL. ABCD codes may expand to
+ * use more ABCD, acyclically.
  */
 char const* wikrt_abcd_expansion(uint32_t opcode);
+#endif
 
 /** @brief Validate a token.
  *
  * Awelon Bytecode tokens have the following constraints:
  *
- * - valid utf-8 text
+ * - valid utf-8 text 
  * - no more than 63 bytes
  * - no control chars (C0, DEL, C1)
  * - no surrogate codepoints (U+D800 to U+DFFF)
  * - no replacement char (U+FFFD)
  * - no curly braces `{}`
  *
- * This function returns true if the token is valid by these rules.
+ * This function assumes the input is valid utf-8, NUL-terminated as
+ * a C string. It returns whether the token text is valid by the other
+ * constraints.
  */
 bool wikrt_valid_token(char const* s);
 
+// todo: easy function to turn a token text into a block?
 
 /** @brief A value reference within a context. 
  *
@@ -295,6 +304,7 @@ typedef uint32_t wikrt_val;
  // DATA INPUT AND OUTPUT //
 ///////////////////////////
 
+#if 0
 /** @brief Streaming binary input.
  *
  * Streams enable construction and concurrent processing of large binary
@@ -318,7 +328,9 @@ wikrt_err wikrt_addend_stream(wikrt_cx*, wikrt_val s, uint8_t const* chunk, uint
 wikrt_err wikrt_end_stream(wikrt_cx*, wikrt_val s);
 wikrt_err wikrt_awaiting_stream(wikrt_cx*, bool* bWaiting, wikrt_val const s);
 
-
+// todo: determine whether streaming data is desirable/needed
+//  (or just a way to inject large binaries?)
+#endif
 
 /** @brief Read binary data from a list-like structure. 
  *
