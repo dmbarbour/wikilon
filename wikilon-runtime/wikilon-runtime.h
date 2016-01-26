@@ -197,13 +197,73 @@ void wikrt_cx_reset(wikrt_cx*);
 /** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-#if 0
+/** @brief Complete enumeration of ABC and supported ABCD opcodes.
+ * 
+ * Wikilon uses Awelon Bytecode (ABC) and ABC Deflated (ABCD) as its
+ * primary serialization models for behavior and data. ABC consists of
+ * 42 primitive operators, while ABCD is defined by acyclic expansion
+ * ultimately into plain ABC.
+ *
+ * ABCD serves two roles. It both compresses the serialized format and
+ * serves as useful accelerators for hand-written interpreters. ABCD 
+ * enables ABC to become a powerful language for collections processing,
+ * linear algebra, etc.. depending on which functions are defined. The
+ * development of ABCD is an ongoing project.
+ *
+ * ABC and ABCD opcodes also correspond to unicode character codepoints,
+ * with UTF-8 being the standard serialization format.
+ */
+typedef enum wikrt_opcode 
+{ ABC_PROD_ASSOCL = 108  // l :: (a * (b * c)) → ((a * b) * c)
+, ABC_PROD_ASSOCR = 114  // r :: ((a * b) * c) → (a * (b * c))
+, ABC_PROD_W_SWAP = 119  // w :: (a * (b * c)) → (b * (a * c))
+, ABC_PROD_Z_SWAP = 122  // z :: (a * (b * (c * d))) → (a * (c * (b * d)))
+, ABC_PROD_INTRO1 = 118  // v :: a → (a * 1)      intro unit
+, ABC_PROD_ELIM1  = 99   // c :: (a * 1) → a      elim unit
+, ABC_SUM_ASSOCL  = 76   // L :: ((a + (b + c)) * e) → (((a + b) + c) * e)
+, ABC_SUM_ASSOCR  = 82   // R :: (((a + b) + c) * e) → ((a + (b + c)) * e)
+, ABC_SUM_W_SWAP  = 87   // W :: ((a + (b + c)) * e) → ((b + (a + c)) * e)
+, ABC_SUM_Z_SWAP  = 90   // Z :: ((a + (b + (c + d))) * e) → ((a + (c + (b + d))) * e)
+, ABC_SUM_INTRO0  = 86   // V :: (a * e) → ((a + 0) * e) 
+, ABC_SUM_ELIM0   = 67   // C :: ((a + 0) * e) → (a * e) 
+, ABC_COPY        = 94   // ^ :: (a * e) → (a * (a * e)) (for copyable a)
+, ABC_DROP        = 37   // % :: (a * e) → e (for droppable a)
+, ABC_SP          = 32   // (SP) :: a → a  (space for formatting)
+, ABC_LF          = 10   // (LF) :: a → a  (newline for formatting)
+, ABC_APPLY       = 36   // $ :: ([a→b] * (a * e)) → (b * e)
+, ABC_COMPOSE     = 111  // o :: ([a→b] * ([b→c] * e)) → ([a→c] * e)
+, ABC_QUOTE       = 39   // ' :: (a * e) → ([∀s.s→(a*s)] * e)
+, ABC_REL         = 107  // k :: ([a→b] * e) → ([a→b]k * e) (mark block non-droppable)
+, ABC_AFF         = 102  // f :: ([a→b] * e) → ([a→b]f * e) (mark block non-copyable) 
+, ABC_INEW        = 35   // # :: e → (I(0) * e)  (pseudo-literal integers, e.g. `#42`)
+, ABC_ID1         = 49   // 1 :: (I(a) * e) → (I(10a+1) * e)
+, ABC_ID2         = 50   // 2 :: (I(a) * e) → (I(10a+2) * e)
+, ABC_ID3         = 51   // 3 :: (I(a) * e) → (I(10a+3) * e)
+, ABC_ID4         = 52   // 4 :: (I(a) * e) → (I(10a+4) * e)
+, ABC_ID5         = 53   // 5 :: (I(a) * e) → (I(10a+5) * e)
+, ABC_ID6         = 54   // 6 :: (I(a) * e) → (I(10a+6) * e)
+, ABC_ID7         = 55   // 7 :: (I(a) * e) → (I(10a+7) * e)
+, ABC_ID8         = 56   // 8 :: (I(a) * e) → (I(10a+8) * e)
+, ABC_ID9         = 57   // 9 :: (I(a) * e) → (I(10a+9) * e)
+, ABC_ID0         = 48   // 0 :: (I(a) * e) → (I(10a+0) * e)
+, ABC_IADD        = 43   // + :: (I(a) * (I(b) * e)) → (I(a+b) * e)
+, ABC_IMUL        = 42   // * :: (I(a) * (I(b) * e)) → (I(a*b) * e)
+, ABC_INEG        = 45   // - :: (I(a) * e) → (I(-a) * e)
+, ABC_IDIV        = 81   // Q :: (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e))
+, ABC_IGT         = 71   // G :: (I(A) * (I(B) * e)) → (((I(B)*I(A)) + (I(A)*I(B))) * e); (in right if B > A)
+, ABC_CONDAP      = 63   // ? :: ([a→c] * ((a+b)*e)) → ((c+b)*e) (block must be droppable)
+, ABC_SUM_DISTRIB = 68   // D :: (a * ((b+c) * e)) → (((a*b) + (a*c)) * e)
+, ABC_SUM_FACTOR  = 70   // F :: (((a*b)+(c*d)) * e) → ((a+c)*((b+d)*e))
+, ABC_SUM_MERGE   = 77   // M :: ((a+a)*e) → (a*e)
+, ABC_SUM_ASSERT  = 75   // K :: ((a+b)*e) → (b*e); assert in right
+} wikrt_opcode;
+
 /** @brief Supported ABCD operators as utf-8 C string.
  *
  * ABC and ABCD serialize to utf-8 text. The basic 42 ABC operators 
  * are all in the ASCII range, hence requiring one byte each.
  *
- *   lrwzvcLRWZVC %^$o'kf#0123456789+*-QG?DFMK\n
+ *   lrwzvcLRWZVC%^ \n$o'kf#1234567890+*-QG?DFMK
  *
  * Normally, only token texts and text literals embedded in ABC will
  * use the greater utf-8 range. However, ABCD extends ABC with opcodes
@@ -215,14 +275,16 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  */
 char const* wikrt_abcd_operators();
 
-/** @brief Expand ABCD opcodes to their definitions.
+/** @brief Expand ABC or ABCD opcodes to their definitions.
  *
- * Only ABCD codes are expanded here, anything else (including the
- * 42 ABC primitives) will return NULL. ABCD codes may expand to
- * use more ABCD, acyclically.
+ * The 42 ABC primitives will return a string containing the same 
+ * character, e.g. 'v' expands to "v". ABCD may expand acyclically to
+ * use more ABCD, but repeated efforts would ultimately expand into
+ * plain old ABC.
+ *
+ * If an opcode is not recognized, NULL is returned.
  */
-char const* wikrt_abcd_expansion(uint32_t opcode);
-#endif
+char const* wikrt_abcd_expansion(wikrt_opcode);
 
 /** @brief Validate a token.
  *
@@ -304,7 +366,7 @@ typedef uint32_t wikrt_val;
  // DATA INPUT AND OUTPUT //
 ///////////////////////////
 
-#if 0
+
 /** @brief Streaming binary input.
  *
  * Streams enable construction and concurrent processing of large binary
@@ -330,7 +392,7 @@ wikrt_err wikrt_awaiting_stream(wikrt_cx*, bool* bWaiting, wikrt_val const s);
 
 // todo: determine whether streaming data is desirable/needed
 //  (or just a way to inject large binaries?)
-#endif
+
 
 /** @brief Read binary data from a list-like structure. 
  *

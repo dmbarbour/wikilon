@@ -236,27 +236,56 @@ void wikrt_cx_reset(wikrt_cx* cx) {
     //    e.g. ephemeral stowage addresses
 }
 
-#if 0
 char const* wikrt_abcd_operators() {
     // currently just pure ABC...
-    return u8"lrwzvcLRWZVC \n%^$o'kf#0123456789+*-QG?DFMK";
+    return u8"lrwzvcLRWZVC%^ \n$o'kf#1234567890+*-QG?DFMK";
 }
 
-char const* wikrt_abcd_expansion(uint32_t opcode) {
-    switch(opcode) {
-        case 'l': return u8"l";
-        case 'r': return u8"r";
-        case 'w': return u8"w";
-        case 'z': return u8"z";
-        case 'v': return u8"v";
-        case 'c': return u8"c";
-        case 'L': return u8"L";
-        
-    }
-    // TODO: switch statement? or table?
-    return NULL;
-}
-#endif
+char const* wikrt_abcd_expansion(uint32_t opcode) { switch(opcode) {
+    case ABC_PROD_ASSOCL: return "l";
+    case ABC_PROD_ASSOCR: return "r";
+    case ABC_PROD_W_SWAP: return "w";
+    case ABC_PROD_Z_SWAP: return "z";
+    case ABC_PROD_INTRO1: return "v";
+    case ABC_PROD_ELIM1:  return "c";
+    case ABC_SUM_ASSOCL:  return "L";
+    case ABC_SUM_ASSOCR:  return "R";
+    case ABC_SUM_W_SWAP:  return "W";
+    case ABC_SUM_Z_SWAP:  return "Z";
+    case ABC_SUM_INTRO0:  return "V";
+    case ABC_SUM_ELIM0:   return "C";
+    case ABC_COPY:        return "^";
+    case ABC_DROP:        return "%";
+    case ABC_SP:          return " ";
+    case ABC_LF:          return "\n";
+    case ABC_APPLY:       return "$";
+    case ABC_COMPOSE:     return "o";
+    case ABC_QUOTE:       return "'";
+    case ABC_REL:         return "k";
+    case ABC_AFF:         return "f";
+    case ABC_INEW:        return "#";
+    case ABC_ID1:         return "1";
+    case ABC_ID2:         return "2";
+    case ABC_ID3:         return "3";
+    case ABC_ID4:         return "4";
+    case ABC_ID5:         return "5";
+    case ABC_ID6:         return "6";
+    case ABC_ID7:         return "7";
+    case ABC_ID8:         return "8";
+    case ABC_ID9:         return "9";
+    case ABC_ID0:         return "0";
+    case ABC_IADD:        return "+";
+    case ABC_IMUL:        return "*";
+    case ABC_INEG:        return "-";
+    case ABC_IDIV:        return "Q";
+    case ABC_IGT:         return "G";
+    case ABC_CONDAP:      return "?";
+    case ABC_SUM_DISTRIB: return "D";
+    case ABC_SUM_FACTOR:  return "F";
+    case ABC_SUM_MERGE:   return "M";
+    case ABC_SUM_ASSERT:  return "K";
+    default: return NULL;
+}}
 
 // assume valid utf-8 input
 inline uint32_t utf8_readc(uint8_t const** s) {
