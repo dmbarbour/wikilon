@@ -77,7 +77,7 @@ Reasoning:
 * Tight addressing improves memory locality and caching.
 * Easy to upgrade to 64-bit runtime later, if necessary.
 
-I still have mixed feelings about this when I read about servers with 512GB RAM. But, at least in theory, the per-context size limit should be a non-issue. And 4GB is reasonably large as a working set. Large value stowage enables us to better control our active set of data. If we specialize for very large binaries and similar, we could potentially share references between multiple contexts on a machine and leverage normal virtual memory (via mmap'd file or similar, if I track reference counts properly). Finally, I have some ideas for distributing computations across multiple contexts, leveraging virtual 'partition' annotations to model distributed computing.
+I still have mixed feelings about this when I read about servers with 512GB RAM. But, at least in theory, the per-context size limit should be a non-issue. Stowage gives us a larger effective address space, yet doesn't 'consume' address space the same way that virtual memory tends to. And if I ever go for distributed parallelism, I could easily run parallel contexts for one computation.
 
 With 32-bit addressing aligned on 64-bit cells (representing pairs and lists), 3 bits in each address can be leveraged to optimize common representations. The encoding I'll be trying:
 

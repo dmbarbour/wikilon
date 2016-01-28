@@ -252,10 +252,10 @@ typedef enum wikrt_opcode
 , ABC_IDIV        = 81   // Q :: (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e))
 , ABC_IGT         = 71   // G :: (I(A) * (I(B) * e)) → (((I(B)*I(A)) + (I(A)*I(B))) * e); (in right if B > A)
 , ABC_CONDAP      = 63   // ? :: ([a→c] * ((a+b)*e)) → ((c+b)*e) (block must be droppable)
-, ABC_SUM_DISTRIB = 68   // D :: (a * ((b+c) * e)) → (((a*b) + (a*c)) * e)
-, ABC_SUM_FACTOR  = 70   // F :: (((a*b)+(c*d)) * e) → ((a+c)*((b+d)*e))
-, ABC_SUM_MERGE   = 77   // M :: ((a+a)*e) → (a*e)
-, ABC_SUM_ASSERT  = 75   // K :: ((a+b)*e) → (b*e); assert in right
+, ABC_DISTRIB     = 68   // D :: (a * ((b+c) * e)) → (((a*b) + (a*c)) * e)
+, ABC_FACTOR      = 70   // F :: (((a*b)+(c*d)) * e) → ((a+c)*((b+d)*e))
+, ABC_MERGE       = 77   // M :: ((a+a)*e) → (a*e)
+, ABC_ASSERT      = 75   // K :: ((a+b)*e) → (b*e); assert in right
 } wikrt_opcode;
 
 /** @brief Supported ABCD operators as utf-8 C string.
@@ -522,7 +522,7 @@ wikrt_err wikrt_split_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v);
 typedef enum wikrt_vtype 
 { WIKRT_VTYPE_UNIT        // unit value
 , WIKRT_VTYPE_PRODUCT     // product 
-, WIKRT_VTYPE_INT         // integer values
+, WIKRT_VTYPE_INTEGER     // integer values
 , WIKRT_VTYPE_SUM         // sum type (includes lists) 
 , WIKRT_VTYPE_BLOCK       // functional bytecode  
 , WIKRT_VTYPE_SEALED      // sealed values

@@ -130,6 +130,8 @@ wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMa
         return WIKRT_DBERR;
     } 
 
+    // maybe create thread pool or task list, etc.?
+
     (*ppEnv) = e;
     return WIKRT_OK;
 }
@@ -145,6 +147,15 @@ void wikrt_env_destroy(wikrt_env* e) {
     free(e);
 }
 
+void wikrt_env_lock(wikrt_env* e) {
+    bool const locked = (0 == pthread_mutex_lock(&(e->mutex)));
+    assert(locked);
+}
+void wikrt_env_unlock(wikrt_env* e) {
+    bool const unlocked = (0 == pthread_mutex_unlock(&(e->mutex)));
+    assert(unlocked);
+}
+
 // trivial implementation 
 void wikrt_env_sync(wikrt_env* e) {
     if(e->db_enable) {
@@ -157,8 +168,8 @@ size_t cx_size_bytes(uint32_t sizeMB) {
     return ((size_t) sizeMB) * (1024 * 1024); 
 }
 
+
 wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) {
-    pthread_mutex_t* const mx = &(e->mutex);
     bool const bSizeValid = (1 < sizeMB) && (sizeMB < 4096);
     if(!bSizeValid) return WIKRT_INVAL;
     size_t const sizeBytes = cx_size_bytes(sizeMB);
@@ -178,45 +189,37 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) {
     cx->sizeMB = sizeMB;
     cx->memory = (wikrt_val*) pMem;
 
-    bool const locked = (0 == pthread_mutex_lock(mx));
-    assert(locked);
-    
-    wikrt_cx* const hd = e->cxhd;
-    cx->next = hd;
-    cx->prev = NULL;
-    if(NULL != hd) { hd->prev = cx; }
-    e->cxhd = cx;
-    
-    bool const unlocked = (0 == pthread_mutex_unlock(mx));
-    assert(unlocked);
+    // set initial memory before adding context to global list
+    // (e.g. to ensure empty stowage lists)
+    wikrt_cx_resetmem(cx);
 
-    // reset our context
-    wikrt_cx_reset(cx);
+    wikrt_env_lock(e); {
+        wikrt_cx* const hd = e->cxhd;
+        cx->next = hd;
+        cx->prev = NULL;
+        if(NULL != hd) { hd->prev = cx; }
+        e->cxhd = cx;
+    } wikrt_env_unlock(e);
+    
     (*ppCX) = cx;
     return WIKRT_OK;
 }
 
 void wikrt_cx_destroy(wikrt_cx* cx) {
     wikrt_env* const e = cx->env;
-    pthread_mutex_t* const mx = &(e->mutex);
 
     // remove context from global context list
-    bool const locked = (0 == pthread_mutex_lock(mx));
-    assert(locked);
-
-    if(NULL != cx->next) { 
-        cx->next->prev = cx->prev; 
-    }
-
-    if(NULL != cx->prev) { 
-        cx->prev->next = cx->next; 
-    } else { 
-        assert(e->cxhd == cx);
-        e->cxhd = cx->next; 
-    }
-
-    bool const unlocked = (0 == pthread_mutex_unlock(mx));
-    assert(unlocked);
+    wikrt_env_lock(e); {
+        if(NULL != cx->next) { 
+            cx->next->prev = cx->prev; 
+        }
+        if(NULL != cx->prev) { 
+            cx->prev->next = cx->next; 
+        } else { 
+            assert(e->cxhd == cx);
+            e->cxhd = cx->next; 
+        }
+    } wikrt_env_unlock(e);
 
     // free memory associated with the context
     size_t const sizeBytes = cx_size_bytes(cx->sizeMB);
@@ -230,15 +233,14 @@ wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
 }
 
 void wikrt_cx_reset(wikrt_cx* cx) {
-    // TODO:
-    //  (a) reset the allocators
-    //  (b) clear global lists
-    //    e.g. ephemeral stowage addresses
+    wikrt_env_lock(cx->env); {
+        wikrt_cx_resetmem(cx);
+    } wikrt_env_unlock(cx->env);
 }
 
 char const* wikrt_abcd_operators() {
     // currently just pure ABC...
-    return u8"lrwzvcLRWZVC%^ \n$o'kf#1234567890+*-QG?DFMK";
+    return u8" lrwzvcLRWZVC%^ \n$o'kf#1234567890+*-QG?DFMK";
 }
 
 char const* wikrt_abcd_expansion(uint32_t opcode) { switch(opcode) {
@@ -280,10 +282,10 @@ char const* wikrt_abcd_expansion(uint32_t opcode) { switch(opcode) {
     case ABC_IDIV:        return "Q";
     case ABC_IGT:         return "G";
     case ABC_CONDAP:      return "?";
-    case ABC_SUM_DISTRIB: return "D";
-    case ABC_SUM_FACTOR:  return "F";
-    case ABC_SUM_MERGE:   return "M";
-    case ABC_SUM_ASSERT:  return "K";
+    case ABC_DISTRIB:     return "D";
+    case ABC_FACTOR:      return "F";
+    case ABC_MERGE:       return "M";
+    case ABC_ASSERT:      return "K";
     default: return NULL;
 }}
 

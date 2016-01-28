@@ -43,29 +43,37 @@ typedef uint64_t stowaddr;
 
 struct wikrt_env { 
     wikrt_cx           *cxhd;  // linked list of contexts
-    pthread_mutex_t     mutex;   // shared mutex for environment
+    pthread_mutex_t     mutex; // shared mutex for environment
 
     // stowage and key-value persistence
-    
-    bool                db_enable;
-    int                 db_lockfile;
-    MDB_env            *db_env;
-    MDB_dbi             db_memory;
-    MDB_dbi             db_caddrs;
-    MDB_dbi             db_keyval;
-    MDB_dbi             db_refcts;
-    MDB_dbi             db_refct0;
-    stowaddr            db_last_gc;
+    bool                db_enable;    
+    int                 db_lockfile;  
+    MDB_env            *db_env;       
+    MDB_dbi             db_memory; // address → value
+    MDB_dbi             db_caddrs; // hash → [address]
+    MDB_dbi             db_keyval; // key → address
+    MDB_dbi             db_refcts; // address → number
+    MDB_dbi             db_refct0; // address → unit
+    stowaddr            db_last_gc; 
     stowaddr            db_last_alloc;
 
-    // todo: ephemeral stowage addresses to prevent GC
+    // todo: the LMDB writer state and locks
+    // todo: worker threads and task queues
+    // todo: ephemeral stowage to control GC
+    // transactions: maybe attempt to combine concurrent transactions
+   
+
     // question: can we combine writes for concurrent transactions?
     //  I would effectively need to track writes, ensure transactions
     //  are serialized  
 };
 
-// thoughts: should wikrt_cx simply use the mmap'd space?
-//  I'd prefer to avoid pointers within the memory, for now.
+void wikrt_env_lock(wikrt_env*);
+void wikrt_env_unlock(wikrt_env*);
+
+// Context currently uses a separate pointer for context memory.
+// -  I'd prefer to avoid outwards pointers from context memory.
+//
 struct wikrt_cx { 
     // for environment's list of contexts
     wikrt_cx           *next;
@@ -88,6 +96,22 @@ struct wikrt_cx {
     // do I want a per-context mutex?
 };
 
+void wikrt_cx_resetmem(wikrt_cx*); 
 
+/** @brief Header for cx->memory
+ *
+ * The most important object in the header is the free list for 
+ * memory allocations. I'll probably want to upgrade to a buddy
+ * system or a sized and sorted free list, later. For now, it's
+ * a 'simplest thing' solution.
+ *
+ * Additionally, we'll need to track ephemeral references to
+ * stowed data. 
+ */
+typedef struct wikrt_memory_hdr
+{ wikrt_val freelist; // linked list of (size, next) pairs
+} wikrt_memory_hdr;
+
+// for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
 
