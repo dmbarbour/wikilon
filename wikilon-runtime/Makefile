@@ -5,7 +5,7 @@ THREADS = -pthread
 OPT = -O2 -flto
 CFLAGS = $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
 CC = gcc $(CFLAGS)
-OBJECTS = lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o wikrt.o
+OBJECTS = lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o wikrt.o
 INSTALL_PREFIX = /usr/local
 
 .PHONY: all lib clean install uninstall
@@ -39,6 +39,10 @@ libwikilon-runtime.so: $(OBJECTS) wikrt.lds
 wikrt.o: wikrt.c wikrt.h wikilon-runtime.h lmdb/lmdb.h murmur3/murmur3.h 
 	$(CC) -o $@ -c wikrt.c
 
+# filesystem utilities
+futil.o: futil.c futil.h
+	$(CC) -o $@ -c futil.c
+
 # Directly include copy of LMDB key-value database
 lmdb/mdb.o: lmdb/mdb.c lmdb/lmdb.h lmdb/midl.h
 	$(CC) -Ilmdb -o $@ -c lmdb/mdb.c 
@@ -51,5 +55,5 @@ murmur3/murmur3.o: murmur3/murmur3.c murmur3/murmur3.h
 	$(CC) -Imurmur3 -o $@ -c murmur3/murmur3.c
 
 # Maybe introduce Keccak or Blake2? E.g. for HMAC on stowage?
-#  
+# Maybe introduce zstd to compress stowed data and streams
 

@@ -1,34 +1,22 @@
-#include <assert.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/file.h>
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <assert.h>
+#include <errno.h>
 #include <sys/mman.h>
 
+#include "futil.h"
 #include "wikrt.h"
 
-// lockfile to prevent multi-process collisions
-bool init_lockfile(int* pfd, char const* dirPath) 
-{
+bool init_lockfile(int* pfd, char const* dirPath) {
     size_t const dplen = strlen(dirPath);
-    size_t const fplen = dplen + 12;
+    size_t const fplen = dplen + 6; // "/lock" + NUL
     char lockFileName[fplen];
-    snprintf(lockFileName, fplen, "%s/lockfile", dirPath);
-    int const fd = open(lockFileName, O_CREAT | O_RDONLY, WIKRT_FILE_MODE);
-    if ((-1) == fd) {
-        return false;
-    }  
-    if(0 != flock(fd, LOCK_EX|LOCK_NB)) {
-        close(fd);
-        return false;
-    }
-    (*pfd) = fd;
-    return true;
+    sprintf(lockFileName, "%s/lock", dirPath);
+    bool const r = lockfile(pfd, lockFileName, WIKRT_FILE_MODE);
+    return r;
 }
 
 // prepare LMDB database
@@ -37,6 +25,10 @@ bool init_db(wikrt_env* e, char const* dp, uint32_t dbMaxMB) {
     // ensure "" and "." have same meaning as local directory
     char const* dirPath = (dp[0] ? dp : ".");
     size_t const dbMaxBytes = (size_t)dbMaxMB * (1024 * 1024);
+
+    // create our directory if necessary
+    if(!mkdirpath(dirPath, WIKRT_FILE_MODE))
+        return false;
 
     // to populate on success:
     int db_lockfile;
@@ -179,6 +171,8 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) {
 
     static int const prot = PROT_READ | PROT_WRITE | PROT_EXEC;
     static int const flags = MAP_ANONYMOUS | MAP_PRIVATE;
+
+    errno = 0;
     void* const pMem = mmap(NULL, sizeBytes, prot, flags, -1, 0); 
     if(NULL == pMem) {
         free(cx);
@@ -193,6 +187,7 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) {
     // (e.g. to ensure empty stowage lists)
     wikrt_cx_resetmem(cx);
 
+    // add to head of global context list
     wikrt_env_lock(e); {
         wikrt_cx* const hd = e->cxhd;
         cx->next = hd;
@@ -240,7 +235,7 @@ void wikrt_cx_reset(wikrt_cx* cx) {
 
 char const* wikrt_abcd_operators() {
     // currently just pure ABC...
-    return u8" lrwzvcLRWZVC%^ \n$o'kf#1234567890+*-QG?DFMK";
+    return u8"lrwzvcLRWZVC%^ \n$o'kf#1234567890+*-QG?DFMK";
 }
 
 char const* wikrt_abcd_expansion(uint32_t opcode) { switch(opcode) {

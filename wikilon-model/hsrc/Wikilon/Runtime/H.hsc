@@ -1,15 +1,19 @@
 
-{-# LANGUAGE ForeignFunctionInterface, EmptyDataDecls #-}
+{-# LANGUAGE ForeignFunctionInterface, EmptyDataDecls, GeneralizedNewtypeDeriving #-}
 -- | This module wraps the `wikilon-runtime.h` for `libwikilon-runtime.so`.
 -- The high performance core of our Wikilon runtime is implemented at the C
 -- layer. 
 module Wikilon.Runtime.H
-    ( WIKRT_ENV
-    , WIKRT_CX
-    , WIKRT_ERR(..)
-    , WIKRT_OPCODE(..)
-    , WIKRT_VTYPE(..)
-    , WIKRT_VAL(..)
+    ( WIKRT_ENV, WIKRT_CX, WIKRT_VAL
+    , WIKRT_ERR(..), table_WIKRT_ERR, WIKRT_ERR_NUM
+    , WIKRT_OPCODE(..), table_WIKRT_OPCODE, WIKRT_OPCODE_NUM
+    , WIKRT_VTYPE(..), table_WIKRT_VTYPE, WIKRT_VTYPE_NUM
+    , WIKRT_ABC_OPTS(..), table_WIKRT_ABC_OPTS, WIKRT_ABC_OPTS_NUM
+    , wikrt_unit, wikrt_unit_inr, wikrt_unit_inl
+    , wikrt_tok_buffsz
+    , wikrt_env_create, wikrt_env_destroy, wikrt_env_sync
+    , wikrt_cx_create, wikrt_cx_destroy, wikrt_cx_reset, wikrt_cx_env
+    , wikrt_abcd_operators, wikrt_abcd_expansion, wikrt_valid_token
     ) where
 
 #include <wikilon-runtime.h>
@@ -24,9 +28,19 @@ import qualified Data.Array.Unboxed as A
 
 data WIKRT_ENV
 data WIKRT_CX
-newtype WIKRT_VAL = WIKRT_VAL Word32
+type WIKRT_VAL = #type wikrt_val
+type CBool = #type bool
+
+wikrt_unit, wikrt_unit_inr, wikrt_unit_inl :: WIKRT_VAL
+wikrt_unit = #const WIKRT_UNIT
+wikrt_unit_inr = #const WIKRT_UNIT_INR
+wikrt_unit_inl = #const WIKRT_UNIT_INL
+
+wikrt_tok_buffsz :: Int
+wikrt_tok_buffsz = #const WIKRT_TOK_BUFFSZ
 
 
+-- | Possible error codes for Wikilon runtime functions.
 data WIKRT_ERR
     = WIKRT_OK
     | WIKRT_INVAL
@@ -41,8 +55,10 @@ data WIKRT_ERR
     | WIKRT_TYPE_ERROR
     deriving (Eq, Ord, Bounded, A.Ix, Show)
 
-wikrtErrVals :: [(WIKRT_ERR, Int)]
-wikrtErrVals =
+type WIKRT_ERR_NUM = CInt
+
+table_WIKRT_ERR :: [(WIKRT_ERR, WIKRT_ERR_NUM)]
+table_WIKRT_ERR =
     [(WIKRT_OK, #const WIKRT_OK)
     ,(WIKRT_INVAL, #const WIKRT_INVAL)
     ,(WIKRT_DBERR, #const WIKRT_DBERR)
@@ -56,7 +72,9 @@ wikrtErrVals =
     ,(WIKRT_TYPE_ERROR, #const WIKRT_TYPE_ERROR)
     ]
 
--- ABC and ABCD opcodes supported by Wikilon
+-- | Complete list of ABC and ABCD opcodes supported by Wikilon.
+-- All ABC opcodes are supported. ABCD will be supported more
+-- gradually and incrementally as it is developed.
 data WIKRT_OPCODE
     = ABC_PROD_ASSOCL
     | ABC_PROD_ASSOCR
@@ -102,8 +120,10 @@ data WIKRT_OPCODE
     | ABC_ASSERT
     deriving (Eq, Ord, Bounded, A.Ix)
 
-wikrtOpCodes :: [(WIKRT_OPCODE, Int)]
-wikrtOpCodes =
+type WIKRT_OPCODE_NUM = CInt
+
+table_WIKRT_OPCODE :: [(WIKRT_OPCODE, WIKRT_OPCODE_NUM)]
+table_WIKRT_OPCODE =
     [(ABC_PROD_ASSOCL, #const ABC_PROD_ASSOCL)
     ,(ABC_PROD_ASSOCR, #const ABC_PROD_ASSOCR)
     ,(ABC_PROD_W_SWAP, #const ABC_PROD_W_SWAP)
@@ -148,6 +168,7 @@ wikrtOpCodes =
     ,(ABC_ASSERT, #const ABC_ASSERT)
     ]
 
+-- | Possible responses to a value type query
 data WIKRT_VTYPE
     = WIKRT_VTYPE_UNIT
     | WIKRT_VTYPE_PRODUCT
@@ -159,8 +180,10 @@ data WIKRT_VTYPE
     | WIKRT_VTYPE_STOWED
     deriving (Eq, Ord, Bounded, A.Ix, Show)
 
-wikrtVType :: [(WIKRT_VTYPE, Int)]
-wikrtVType =
+type WIKRT_VTYPE_NUM = CInt
+
+table_WIKRT_VTYPE :: [(WIKRT_VTYPE, WIKRT_VTYPE_NUM)]
+table_WIKRT_VTYPE =
     [(WIKRT_VTYPE_UNIT, #const WIKRT_VTYPE_UNIT)
     ,(WIKRT_VTYPE_PRODUCT, #const WIKRT_VTYPE_PRODUCT)
     ,(WIKRT_VTYPE_INTEGER, #const WIKRT_VTYPE_INTEGER)
@@ -171,22 +194,55 @@ wikrtVType =
     ,(WIKRT_VTYPE_STOWED, #const WIKRT_VTYPE_STOWED)
     ]
 
-{-
+-- | Serialization options for bytecode input or output.
+--
+-- The deflate option will use known ABCD operators where possible.
+--
+-- Stowage restricts to round tripping with the original environment
+-- but may reduce serialization overheads for large objects. 
+data WIKRT_ABC_OPTS 
+    = WIKRT_ABC_DEFLATE
+    | WIKRT_ABC_STOWAGE
+    deriving (Eq, Ord, Bounded, A.Ix, Show)
+
+type WIKRT_ABC_OPTS_NUM = CInt
+
+table_WIKRT_ABC_OPTS :: [(WIKRT_ABC_OPTS, WIKRT_ABC_OPTS_NUM)]
+table_WIKRT_ABC_OPTS =
+    [(WIKRT_ABC_DEFLATE, #const WIKRT_ABC_DEFLATE)
+    ,(WIKRT_ABC_STOWAGE, #const WIKRT_ABC_STOWAGE)
+    ]
+
 -- FFI
 --  'safe': higher overhead, thread juggling, allows callbacks into Haskell
 --  'unsafe': lower overhead, reduced concurrency, no callbacks into Haskell
-foreign import ccall unsafe "wikilon-runtime.h 
-foreign import ccall unsafe "lmdb.h mdb_version" _mdb_version :: Ptr CInt -> Ptr CInt -> Ptr CInt -> IO CString
- 
+foreign import ccall "wikilon-runtime.h wikrt_env_create" 
+ wikrt_env_create :: Ptr (Ptr WIKRT_ENV) -> CString -> Word32 -> IO WIKRT_ERR_NUM
 
-data WIKRT_OPCODE
-    = 
--}
+foreign import ccall "wikilon-runtime.h wikrt_env_destroy"
+ wikrt_env_destroy :: Ptr WIKRT_ENV -> IO ()
 
+foreign import ccall "wikilon-runtime.h wikrt_env_sync"
+ wikrt_env_sync :: Ptr WIKRT_ENV -> IO ()
 
--- | for now, just providing enough to test our 
---foreign import ccall unsafe "wikilon-runtime.h wikrt_hello" _wikrt_hello :: CString -> IO ()
+foreign import ccall "wikilon-runtime.h wikrt_cx_create"
+ wikrt_cx_create :: Ptr WIKRT_ENV -> Ptr (Ptr WIKRT_CX) -> Word32 -> IO WIKRT_ERR_NUM
 
---wikrt_hello :: String -> IO ()
---wikrt_hello = flip withCString _wikrt_hello
+foreign import ccall "wikilon-runtime.h wikrt_cx_destroy"
+ wikrt_cx_destroy :: Ptr WIKRT_CX -> IO ()
+
+foreign import ccall "wikilon-runtime.h wikrt_cx_reset"
+ wikrt_cx_reset :: Ptr WIKRT_CX -> IO ()
+
+foreign import ccall unsafe "wikilon-runtime.h wikrt_cx_env"
+ wikrt_cx_env :: Ptr WIKRT_CX -> Ptr WIKRT_ENV
+
+foreign import ccall unsafe "wikilon-runtime.h wikrt_abcd_operators"
+ wikrt_abcd_operators :: CString
+
+foreign import ccall unsafe "wikilon-runtime.h wikrt_abcd_expansion"
+ wikrt_abcd_expansion :: WIKRT_OPCODE_NUM -> CString
+
+foreign import ccall unsafe "wikilon-runtime.h wikrt_valid_token"
+ wikrt_valid_token :: CString -> CBool
 

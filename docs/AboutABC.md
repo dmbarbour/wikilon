@@ -485,9 +485,9 @@ ABCD allows ABC to iteratively grow into a high-performance language while prese
 
 ABCD will greatly improve the performance of ABC interpreters. We gain efficiency by doing more useful work per opcode. If we have opcodes for multiplying matrices, and our program does a lot of that, we'll be spending a greater portion of our time in our pre-compiled matrix multiplication code rather than parsing opcodes and shuffling data. ABCD has great potential to enable high performance *Collections Oriented Programming* (see below). Because interpreters are much simpler to implement or integrate than compilers, ABCD will also improve the accessibility of ABC.
 
-ABCD requires careful standardization to support code distribution (streaming, ABC resources). Fortunately, it is easy to experiment with ABCD-like extensions within a runtime. We can take advantage of this technique long before we standardize, and we can empirically prove the utility of certain accelerators. 
+ABCD requires careful standardization to support code distribution (streaming, ABC resources). Fortunately, it is easy to experiment with ABCD-like accelerators within a runtime, assuming some form of cached compilation or JIT. Thus, we can take advantage of this technique long before we standardize, and we can empirically demonstrate the utility of candidate ABCD opcodes. 
 
-Because ABC is encoded in UTF-8, we have more room for ABCD extensions than we'll likely ever need. I would be surprised if we standardize much more than 500 ABCD functions.
+Because ABC is encoded in UTF-8, we have sufficient room for ABCD extensions. A few hundred ABCD opcodes should cover a very broad variety of use cases for compression and acceleration.
 
 ### ABCD for Collections Oriented Programming
 

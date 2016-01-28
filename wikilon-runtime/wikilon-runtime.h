@@ -168,10 +168,11 @@ wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, uint32_t dbMaxMB);
  */
 void wikrt_env_destroy(wikrt_env*);
 
-/** @brief Ensure committed transactions are pushed to disk. 
- *
- * It is recommended that a background task do this every few seconds if
- * transactions aren't usually durable. 
+/** @brief Ensure persistence of key-value transactions. 
+ *  
+ * If you don't explicitly mark transactions durable, consider calling
+ * sync every five seconds or so to limit potential data loss. This 
+ * function returns after all prior transactions are flushed to disk.
  */
 void wikrt_env_sync(wikrt_env*);
 
@@ -431,18 +432,18 @@ wikrt_err wikrt_text_to_utf8(wikrt_cx*, wikrt_val text, wikrt_val* utf8);
  * interpreted performance with ABCD (ABC Deflated) extensions. 
  *
  * We can also serialize with stowed resources, though this limits code
- * to round-tripping. We use an HMAC to secure stowage addresses. Note
- * that stowage addresses may be GC'd before use unless held within the
- * key-value persistence layer. I'll favor {#stow:addrhmac} for stowed 
- * resources.
+ * to round-tripping and requires careful design to ensure stowed data
+ * is not GC'd (e.g. via the key-value database). Stowed addresses will
+ * include an HMAC to secure access to potentially sensitive data stowed
+ * by past computations.
  *
  * Use a bitwise 'or' of multiple abc options.
  */
-typedef enum wikrt_abc_options 
+typedef enum wikrt_abc_opts 
 { WIKRT_ABC_PRIMOPS = 0 // 42 primitive ops, texts, blocks
 , WIKRT_ABC_DEFLATE = 1 // enable known ABCD extensions
 , WIKRT_ABC_STOWAGE = 2 // enable stowed resource tokens
-} wikrt_abc_options;
+} wikrt_abc_opts;
 
 /** @brief Serialization for arbitrary values.
  *
@@ -450,12 +451,12 @@ typedef enum wikrt_abc_options
  * to simplify the code, perform partial evaluations, etc.. Converting
  * the block into text enables serialization of code.
  */
-wikrt_err wikrt_text_to_block(wikrt_cx*, wikrt_val text, wikrt_val* block, wikrt_abc_options);
-wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_val block, wikrt_val* text, wikrt_abc_options);
+wikrt_err wikrt_text_to_block(wikrt_cx*, wikrt_val text, wikrt_val* block, wikrt_abc_opts);
+wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_val block, wikrt_val* text, wikrt_abc_opts);
 
 /** Alloc a short text or block from a C string literal. */
 wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*);
-wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, wikrt_abc_options);
+wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, wikrt_abc_opts);
 
 /** Allocating small integers. */
 wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val*, int32_t);
@@ -749,13 +750,6 @@ wikrt_err wikrt_txn_commit(wikrt_txn*);
  */
 void wikrt_txn_durable(wikrt_cx*, wikrt_txn);
 
-/** @brief Ensure durability of all prior transactions. 
- *  
- * If you don't explicitly mark transactions durable, consider calling
- * sync every five seconds or so to limit potential data loss. This 
- * function returns after all prior transactions are flushed to disk.
- */
-void wikrt_env_sync(wikrt_env*);
 
 
 #define WIKILON_RUNTIME_H

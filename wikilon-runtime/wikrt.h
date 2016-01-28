@@ -17,11 +17,15 @@
  * low bits 101: pointer to pair in left
  * low bits 111: pointer to pair in right
  *
- * Unit represented as pair at 0 address:
+ * Unit represented as pair at address zero:
  *   unit          = 3
  *   unit in left  = 5
  *   unit in right = 7
  */
+
+// stowage: I'll probably want to use zstd or similar compression
+// for large values.
+
 
 /** @brief Stowage address is 64-bit address. 
  *
@@ -51,11 +55,12 @@ struct wikrt_env {
     MDB_env            *db_env;       
     MDB_dbi             db_memory; // address → value
     MDB_dbi             db_caddrs; // hash → [address]
-    MDB_dbi             db_keyval; // key → address
+    MDB_dbi             db_keyval; // key → address or data
     MDB_dbi             db_refcts; // address → number
     MDB_dbi             db_refct0; // address → unit
     stowaddr            db_last_gc; 
     stowaddr            db_last_alloc;
+    // todo: HMAC key(s) for stowed data (persistent via db).
 
     // todo: the LMDB writer state and locks
     // todo: worker threads and task queues
