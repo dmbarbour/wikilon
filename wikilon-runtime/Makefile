@@ -1,24 +1,24 @@
 # Makefile for Wikilon's Awelon Bytecode Runtime
 
-W = -Wall -Wextra -pedantic -Wno-unused-parameter
-THREADS = -pthread
-OPT = -O2 -flto
-CFLAGS = $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
-CC = gcc $(CFLAGS)
-OBJECTS = lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o wikrt.o
-INSTALL_PREFIX = /usr/local
+W := -Wall -Wextra -pedantic -Wno-unused-parameter
+THREADS := -pthread
+OPT := -O2 -flto
+CFLAGS := $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
+CC := gcc $(CFLAGS)
+OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o wikrt.o
+INSTALL_PREFIX := /usr/local
 
-.PHONY: all lib clean install uninstall
+.PHONY: all lib clean install uninstall runtests
 
-all: lib 
+all: lib runtests
 
 lib: libwikilon-runtime.so
-
-# TODO: add C test suite
 
 clean:
 	rm -f $(OBJECTS)
 	rm -f libwikilon-runtime.so
+	rm -f test
+	rm -rf testdir
 
 install: libwikilon-runtime.so
 	mkdir -p $(INSTALL_PREFIX) && test -w $(INSTALL_PREFIX)
@@ -31,6 +31,12 @@ uninstall:
 	test -w $(INSTALL_PREFIX)
 	rm -f $(INSTALL_PREFIX)/lib/libwikilon-runtime.so
 	rm -f $(INSTALL_PREFIX)/include/wikilon-runtime.h
+
+runtests: testSuite
+	LD_LIBRARY_PATH=. ./testSuite
+
+testSuite: wikilon-runtime.h libwikilon-runtime.so testSuite.c
+	$(CC) -o $@ testSuite.c -L. -lwikilon-runtime
 
 libwikilon-runtime.so: $(OBJECTS) wikrt.lds
 	$(CC) -shared -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@ -o $@ $(OBJECTS)

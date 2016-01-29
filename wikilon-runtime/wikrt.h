@@ -4,10 +4,16 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <stddef.h>
 #include <pthread.h>
 
 #include "lmdb/lmdb.h"
 #include "wikilon-runtime.h"
+
+// conventional max/min macros for static values
+#define WIKRT_MAX(a,b) (((a) > (b)) ? (a) : (b))
+#define WIKRT_MIN(a,b) (((a) < (b)) ? (a) : (b))
 
 /** wikrt_val bits
  *
@@ -87,7 +93,7 @@ struct wikrt_cx {
     // a context knows its environment
     wikrt_env          *env;
 
-    // our primary memory
+    // primary memory is flat array of words
     wikrt_val          *memory;
     uint32_t            sizeMB; 
 
@@ -114,9 +120,10 @@ void wikrt_cx_resetmem(wikrt_cx*);
  * stowed data. 
  */
 typedef struct wikrt_memory_hdr
-{ wikrt_val freelist; // linked list of (size, next) pairs
+{ wikrt_val freelist; // linked list of (sizeInBytes, nextAddress) pairs
 } wikrt_memory_hdr;
 
 // for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
+#define WIKRT_DIR_MODE (mode_t)(WIKRT_FILE_MODE | S_IXUSR | S_IXGRP)
 

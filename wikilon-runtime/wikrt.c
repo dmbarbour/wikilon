@@ -1,7 +1,5 @@
 
 #include <stdio.h>
-#include <stdlib.h>
-#include <stddef.h>
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
@@ -27,8 +25,10 @@ bool init_db(wikrt_env* e, char const* dp, uint32_t dbMaxMB) {
     size_t const dbMaxBytes = (size_t)dbMaxMB * (1024 * 1024);
 
     // create our directory if necessary
-    if(!mkdirpath(dirPath, WIKRT_FILE_MODE))
+    if(!mkdirpath(dirPath, WIKRT_DIR_MODE)) {
+        fprintf(stderr, "Failed to create directory: %s\n", dirPath);
         return false;
+    }
 
     // to populate on success:
     int db_lockfile;
@@ -44,8 +44,10 @@ bool init_db(wikrt_env* e, char const* dp, uint32_t dbMaxMB) {
     int const f_refcts = MDB_CREATE | MDB_INTEGERKEY;
     int const f_refct0 = MDB_CREATE | MDB_INTEGERKEY;
 
-    if(!init_lockfile(&db_lockfile, dirPath)) 
+    if(!init_lockfile(&db_lockfile, dirPath)) {
+        fprintf(stderr, "Failed to create lockfile in %s\n", dirPath);
         goto onError;
+    }
 
     if( (0 != mdb_env_create(&pLMDB)))
         goto onErrCreateDB;
@@ -160,9 +162,9 @@ size_t cx_size_bytes(uint32_t sizeMB) {
     return ((size_t) sizeMB) * (1024 * 1024); 
 }
 
-
 wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) {
-    bool const bSizeValid = (1 < sizeMB) && (sizeMB < 4096);
+    // limiting size to 4..4000
+    bool const bSizeValid = (4 <= sizeMB) && (sizeMB <= 4000);
     if(!bSizeValid) return WIKRT_INVAL;
     size_t const sizeBytes = cx_size_bytes(sizeMB);
 
@@ -233,6 +235,27 @@ void wikrt_cx_reset(wikrt_cx* cx) {
     } wikrt_env_unlock(cx->env);
 }
 
+// assumes we have exclusive control of context
+// basic tasks:
+//   reset free list and metadata (for stowage, transactions, etc.)
+//   
+void wikrt_cx_resetmem(wikrt_cx* cx) {
+    wikrt_memory_hdr* hdr = (wikrt_memory_hdr*) cx->memory;
+
+    // I also want to keep my wikrt_memory_hdr outside of active cache lines,
+    // hence WIKRT_MAX.
+    wikrt_val const fl0 = (wikrt_val) WIKRT_MAX(sizeof(wikrt_memory_hdr),256);
+    wikrt_val const szb = (wikrt_val) cx_size_bytes(cx->sizeMB) - fl0;   
+    hdr->freelist = fl0;
+    cx->memory[fl0] = szb; // size of first chunk (full remaining space)
+    cx->memory[fl0+1] = 0; // end of free list
+
+    // any other header cleanup?
+    
+    
+}
+
+
 char const* wikrt_abcd_operators() {
     // currently just pure ABC...
     return u8"lrwzvcLRWZVC%^ \n$o'kf#1234567890+*-QG?DFMK";
@@ -282,6 +305,25 @@ char const* wikrt_abcd_expansion(uint32_t opcode) { switch(opcode) {
     case ABC_MERGE:       return "M";
     case ABC_ASSERT:      return "K";
     default: return NULL;
+}}
+
+char const* wikrt_strerr(wikrt_err e) { switch(e) {
+    case WIKRT_OK:              return "no error";
+    case WIKRT_INVAL:           return "invalid parameters, programmer error";
+    case WIKRT_DBERR:           return "filesystem or database layer error";
+    case WIKRT_NOMEM:           return "out of memory (malloc or mmap failure)";
+    case WIKRT_CXFULL:          return "context full, size quota reached";
+    case WIKRT_BUFFSZ:          return "target buffer too small";
+    case WIKRT_TXN_CONFLICT:    return "transaction conflict";
+    case WIKRT_STREAM_WAIT:     return "open binary stream needs data";
+    case WIKRT_QUOTA_STOP:      return "evaluation effort quota reached";
+    case WIKRT_ASSERT_FAIL:     return "assertion failure";
+    case WIKRT_TYPE_ERROR:      return "type mismatch";
+    default: { 
+        bool const unrecognized_wikrt_err_code = false;
+        assert(unrecognized_wikrt_err_code);
+        return "unrecognized error code";
+    }
 }}
 
 // assume valid utf-8 input

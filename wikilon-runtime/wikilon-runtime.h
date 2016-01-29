@@ -144,6 +144,9 @@ typedef enum wikrt_err
 , WIKRT_TYPE_ERROR      // generic type errors
 } wikrt_err;
 
+/** @brief Translate wikrt_err to human text. */
+char const* wikrt_strerr(wikrt_err);
+
 /** @brief Open or Create a Wikilon environment.
  *
  * The developer specifies a directory in the filesystem for persistent
@@ -179,9 +182,7 @@ void wikrt_env_sync(wikrt_env*);
 /** @brief Create a context for computations.
  * 
  * A context consists mostly of one big mmap'd block of memory. The
- * viable range for sizes is about 4..4000 in megabyte units. We'll
- * generally require at least one megabyte for each computing thread,
- * plus a few more.
+ * valid range for context sizes is 4..4000 in megabyte units. 
  */ 
 wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 
