@@ -13,6 +13,7 @@ module Wikilon.Runtime.H
     , wikrt_tok_buffsz
     , wikrt_env_create, wikrt_env_destroy, wikrt_env_sync
     , wikrt_cx_create, wikrt_cx_destroy, wikrt_cx_reset, wikrt_cx_env
+    , wikrt_cx_size_min, wikrt_cx_size_max
     , wikrt_abcd_operators, wikrt_abcd_expansion, wikrt_valid_token
     ) where
 
@@ -227,6 +228,10 @@ foreign import ccall "wikilon-runtime.h wikrt_env_sync"
 
 foreign import ccall "wikilon-runtime.h wikrt_cx_create"
  wikrt_cx_create :: Ptr WIKRT_ENV -> Ptr (Ptr WIKRT_CX) -> Word32 -> IO WIKRT_ERR_NUM
+
+wikrt_cx_size_min, wikrt_cx_size_max :: Word32
+wikrt_cx_size_min = #const WIKRT_CX_SIZE_MIN
+wikrt_cx_size_max = #const WIKRT_CX_SIZE_MAX
 
 foreign import ccall "wikilon-runtime.h wikrt_cx_destroy"
  wikrt_cx_destroy :: Ptr WIKRT_CX -> IO ()

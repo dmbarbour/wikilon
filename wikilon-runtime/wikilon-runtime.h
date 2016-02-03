@@ -89,6 +89,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// NOTE: Wikilon runtime is still early development. A lot of the goals
+// aren't implemented yet. I'm aiming for a minimal 'spike solution' to
+// start - enough to at least run a lot of useful code.
+
+
 /** @brief Opaque structure for overall Wikilon environment.
  * 
  * An environment includes an LMDB instance for large value stowage and
@@ -149,19 +154,17 @@ char const* wikrt_strerr(wikrt_err);
 
 /** @brief Open or Create a Wikilon environment.
  *
- * The developer specifies a directory in the filesystem for persistent
- * data and stowed values. Also, a heuristic indicator for how much space
- * for persistent storage is permitted in megabyte units. This action may
- * fail, most likely for filesystem related reasons (e.g. permissions, or
- * if that directory is already in use by another process).
+ * The developer specifies a directory and how much space to allocate
+ * for persistent storage. This space will be used for transactions and
+ * stowage, and is also allocated within the address space.
+ * 
+ * It is possible to create an environment without a database by setting
+ * dirPath to NULL and dbMaxMB to 0. In this case, transactions fail and
+ * stowage is mostly ignored. 
  *
- * If you don't need stowage or persistence, you may set the dbMaxMB to 0
- * and the dirPath to NULL. In this case, we'll skip construction of the
- * backing database. Stowage annotations will behave normally with respect
- * to copy and drop operations, but never actually stow anything. All
- * transactions will fail with WIKRT_DBERR.
- *
- * This will probably fail if the given dirPath doesn't already exist.
+ * wikrt_env_create will attempt to recursively create a directory if it
+ * does not exist. The most likely error is WIKRT_DBERR if the directory
+ * cannot be created or opened.
  */
 wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, uint32_t dbMaxMB);
 
@@ -182,9 +185,12 @@ void wikrt_env_sync(wikrt_env*);
 /** @brief Create a context for computations.
  * 
  * A context consists mostly of one big mmap'd block of memory. The
- * valid range for context sizes is 4..4000 in megabyte units. 
+ * viable range for context sizes is 4..4000 in megabyte units. 
  */ 
 wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
+
+#define WIKRT_CX_SIZE_MIN 4
+#define WIKRT_CX_SIZE_MAX 4000
 
 /** @brief Destroy a context and return its memory. */
 void wikrt_cx_destroy(wikrt_cx*);
@@ -259,6 +265,32 @@ typedef enum wikrt_opcode
 , ABC_MERGE       = 77   // M :: ((a+a)*e) → (a*e)
 , ABC_ASSERT      = 75   // K :: ((a+b)*e) → (b*e); assert in right
 } wikrt_opcode;
+
+/** @brief Options for bytecode serialization.
+ *
+ * Wikilon uses Awelon Bytecode (ABC) as its primary serialization model.
+ * Any value may be quoted into a block then serialized to utf8 binary.
+ * Conversely, we can compute values from bytecode.
+ * 
+ * While ABC is flexible, we can compress representation and accelerate
+ * interpreted performance with ABCD (ABC Deflate) extensions. These use
+ * a static, standardized dictionary to encode common ABC subprograms,
+ * especially those amenable to hand optimization (e.g. list processing).
+ *
+ * We can also serialize with stowed resources, though this limits code
+ * to round-tripping and requires careful design to ensure stowed data
+ * is not GC'd. Stowed addresses include an HMAC to secure access to 
+ * potentially sensitive data stowed by past computations.
+ *
+ * Use a bitwise 'or' of multiple abc options, always including 
+ * WIKRT_ABC_PRIMOPS.
+ */
+typedef enum wikrt_abc_opts 
+{ WIKRT_ABC_PRIMOPS = 1 // 42 primitive ops, texts, blocks
+, WIKRT_ABC_DEFLATE = 2 // enable known ABCD extensions
+, WIKRT_ABC_STOWAGE = 4 // enable stowed resource tokens
+} wikrt_abc_opts;
+
 
 /** @brief Supported ABCD operators as utf-8 C string.
  *
@@ -368,6 +400,8 @@ typedef uint32_t wikrt_val;
  // DATA INPUT AND OUTPUT //
 ///////////////////////////
 
+// TODO: develop and implement streaming IO models
+#if 0
 
 /** @brief Streaming binary input.
  *
@@ -392,22 +426,6 @@ wikrt_err wikrt_addend_stream(wikrt_cx*, wikrt_val s, uint8_t const* chunk, uint
 wikrt_err wikrt_end_stream(wikrt_cx*, wikrt_val s);
 wikrt_err wikrt_awaiting_stream(wikrt_cx*, bool* bWaiting, wikrt_val const s);
 
-// todo: determine whether streaming data is desirable/needed
-//  (or just a way to inject large binaries?)
-
-
-/** @brief Read binary data from a list-like structure. 
- *
- * The argument to wikrt_read is a binary value, a list-like structure
- * of type `μL.((a*L)+b)` for some arbitrary `b` and where type `a` is
- * small integers in 0..255. Our read function will fill a buffer with
- * data from the binary then return the remainder. When errors occur,
- * we'll read as much as possible then return the remainder at the point
- * of error.
- */
-wikrt_err wikrt_read(wikrt_cx*, wikrt_val binary, uint32_t buffSize, 
-    uint32_t* bytesRead, uint8_t* buffer, wikrt_val* remainder);
-
 /** @brief Texts to/from utf-8 binaries. 
  *
  * ABC doesn't permit arbitrary texts. A short blacklist applies:
@@ -423,28 +441,6 @@ wikrt_err wikrt_text_to_utf8(wikrt_cx*, wikrt_val text, wikrt_val* utf8);
 // strings. Consider supporting zstd or similar compression, too. These
 // could be separated from texts, applied directly to binaries.
 
-/** @brief Options for bytecode.
- *
- * Wikilon uses Awelon Bytecode (ABC) as its primary serialization model.
- * Any value may be 'quoted' into a block, then translated to utf8 binary,
- * and the reverse. 
- * 
- * While ABC is flexible, we can compress representation and accelerate
- * interpreted performance with ABCD (ABC Deflated) extensions. 
- *
- * We can also serialize with stowed resources, though this limits code
- * to round-tripping and requires careful design to ensure stowed data
- * is not GC'd (e.g. via the key-value database). Stowed addresses will
- * include an HMAC to secure access to potentially sensitive data stowed
- * by past computations.
- *
- * Use a bitwise 'or' of multiple abc options.
- */
-typedef enum wikrt_abc_opts 
-{ WIKRT_ABC_PRIMOPS = 0 // 42 primitive ops, texts, blocks
-, WIKRT_ABC_DEFLATE = 1 // enable known ABCD extensions
-, WIKRT_ABC_STOWAGE = 2 // enable stowed resource tokens
-} wikrt_abc_opts;
 
 /** @brief Serialization for arbitrary values.
  *
@@ -455,16 +451,36 @@ typedef enum wikrt_abc_opts
 wikrt_err wikrt_text_to_block(wikrt_cx*, wikrt_val text, wikrt_val* block, wikrt_abc_opts);
 wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_val block, wikrt_val* text, wikrt_abc_opts);
 
+#endif
+
 /** Alloc a short text or block from a C string literal. */
 wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*);
 wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, wikrt_abc_opts);
+
+/** Allocate a small binary. */
+wikrt_err wikrt_alloc_binary(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
 
 /** Allocating small integers. */
 wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val*, int32_t);
 wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val*, int64_t);
 
+/** @brief Read binary data from a list-like structure. 
+ *
+ * The argument to wikrt_read is a binary value, a list-like structure
+ * of type `μL.((a*L)+b)` for some arbitrary `b` and where type `a` is
+ * small integers in 0..255. Our read function will fill a buffer with
+ * data from the binary then return the remainder. When errors occur,
+ * we'll read as much as possible then return the remainder at the point
+ * of error.
+ */
+wikrt_err wikrt_read(wikrt_cx*, wikrt_val binary, uint32_t buffSize, 
+    uint32_t* bytesRead, uint8_t* buffer, wikrt_val* remainder);
+
+
+#if 0 // after spike solution
 /** Allocate large integers from C strings, regex `0 | (-)?[1-9][0-9]*` */
 wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*);
+#endif
 
 /** @brief Read small integers.
  *

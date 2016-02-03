@@ -1,6 +1,6 @@
 # Makefile for Wikilon's Awelon Bytecode Runtime
 
-W := -Wall -Wextra -pedantic -Wno-unused-parameter
+W := -Wall -Wextra -pedantic -Wno-unused-parameter -Wno-missing-braces
 THREADS := -pthread
 OPT := -O2 -flto
 CFLAGS := $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11

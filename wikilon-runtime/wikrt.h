@@ -11,9 +11,8 @@
 #include "lmdb/lmdb.h"
 #include "wikilon-runtime.h"
 
-// conventional max/min macros for static values
-#define WIKRT_MAX(a,b) (((a) > (b)) ? (a) : (b))
-#define WIKRT_MIN(a,b) (((a) < (b)) ? (a) : (b))
+/** size within a context */
+typedef wikrt_val wikrt_size;
 
 /** wikrt_val bits
  *
@@ -27,7 +26,28 @@
  *   unit          = 3
  *   unit in left  = 5
  *   unit in right = 7
+ *
+ * If we pump up to 64-bit words, I'd introduce tags specific to small
+ * binaries, small texts, large numbers, and perhaps short array lists.
+ *
+ * For many tagged objects, we must use upper bits for extra data.
+ *
+ *   large integers: top ? bits for integer data? 20-30 bits?
+ *     so maybe 1 bit for tag, 1 bit for sign?
+ *   reference counts: no longer a separate object...
  */
+
+// Small integers have range roughly + or - 1 billion. A bit larger
+// than this is alright. I ensure closure of with negation, so the 
+// valid range is (1<<30 - 1) or 1073741823 or its negation. Outside
+// of this range, we'll use a separate 'bignum' representation.
+#define WIKRT_SMALLINT_MAX  1073741823
+#define WIKRT_SMALLINT_MIN -1073741823
+
+// 
+
+
+
 
 // stowage: I'll probably want to use zstd or similar compression
 // for large values.
@@ -49,7 +69,6 @@
  * structures into the same address.
  */ 
 typedef uint64_t stowaddr;
-
 
 struct wikrt_env { 
     wikrt_cx           *cxhd;  // linked list of contexts
@@ -82,20 +101,21 @@ struct wikrt_env {
 void wikrt_env_lock(wikrt_env*);
 void wikrt_env_unlock(wikrt_env*);
 
-// Context currently uses a separate pointer for context memory.
-// -  I'd prefer to avoid outwards pointers from context memory.
-//
 struct wikrt_cx { 
-    // for environment's list of contexts
+    // environment's list of contexts (necessary for global
+    // sweeps, e.g. stowage or transaction conflict).
     wikrt_cx           *next;
     wikrt_cx           *prev;
 
-    // a context knows its environment
+    // a context knows its parent environment
     wikrt_env          *env;
 
     // primary memory is flat array of words
     wikrt_val          *memory;
     uint32_t            sizeMB; 
+
+    // internal context mutex?
+    // pthread_mutex_t     mutex;
 
     // most other data will be represented within cx_memory.
     // But I may need to develop a proper 'header' region.
@@ -109,19 +129,49 @@ struct wikrt_cx {
 
 void wikrt_cx_resetmem(wikrt_cx*); 
 
+/** @brief Per-thread free lists for allocation.
+ *
+ * Minimum allocation for the 32-bit Wikilon runtime is 8 bytes, and all
+ * allocations must be 8-byte aligned. Wikilon runtime heavily focuses on
+ * small allocations, so making these fast is essential. 
+ *
+ * Large allocations will become common in Wikilon runtime once we have
+ * arrays, texts, binaries, and blocks operating properly. I'll need to
+ * decide how to handle these.
+ * 
+ * For the moment, I'll just divide the heap into a few ad-hoc size
+ * classes. Smaller classes will use exact fits, while larger will
+ * use first-fit or similar. I may later provide means to coalesce 
+ * a context's freelists, but I'll do without for now. Later I can
+ * look at TCMalloc or jemalloc to seek better approaches.
+ */
+typedef struct wikrt_freelist {
+    wikrt_val size_class[16];
+} wikrt_freelist;
+
+// we'll provide size on both alloc and free.
+// we'll specify our thread-local free list and the larger context.
+bool wikrt_alloc(wikrt_cx*, wikrt_freelist*, wikrt_val*, wikrt_size);
+void wikrt_free(wikrt_cx*, wikrt_freelist*, wikrt_val, wikrt_size);
+
+#define WIKRT_PAGE_SIZE 4096
+
 /** @brief Header for cx->memory
  *
- * The most important object in the header is the free list for 
- * memory allocations. I'll probably want to upgrade to a buddy
- * system or a sized and sorted free list, later. For now, it's
- * a 'simplest thing' solution.
+ * At the moment, this mostly consists of a 'free list'. When I go
+ * multi-threaded, I may also need a shared free list between the
+ * threads.
  *
- * Additionally, we'll need to track ephemeral references to
- * stowed data. 
+ * Other things context is likely to include:
+ *
+ * - a list of available worker thread contexts (free list, etc.)
+ * - a list of tasks awaiting parallel computations
+ * - a list indexing stowage references to guard against GC
  */
 typedef struct wikrt_memory_hdr
-{ wikrt_val freelist; // linked list of (sizeInBytes, nextAddress) pairs
+{ wikrt_freelist flmain; // 
 } wikrt_memory_hdr;
+
 
 // for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
