@@ -66,9 +66,9 @@ There will be no callbacks.
 
 ## Addressing, Pointer Layout, and Size Limits
 
-I'll be favoring 32-bit contexts with a maximum size of 4GB.
+### Word Size?
 
-Reasoning:
+In favor of 32 bits:
 
 * 4GB of memory is a lot for any one Wikilon computation.
 * LMDB stowage mitigates need for large values in memory.
@@ -77,7 +77,15 @@ Reasoning:
 * Tight addressing improves memory locality and caching.
 * Easy to upgrade to 64-bit runtime later, if necessary.
 
-I still have mixed feelings about this when I read about servers with 512GB RAM. But, at least in theory, the per-context size limit should be a non-issue. Stowage gives us a larger effective address space, yet doesn't 'consume' address space the same way that virtual memory tends to. And if I ever go for distributed parallelism, I could easily run parallel contexts for one computation.
+In favor of 64 bits:
+
+* Simplicity: scale without adding annotations to code.
+* Extra tag bit: eliminate header for more value types.
+
+For Wikilon, I think the 32-bit option is favorable. I doubt I'll want to offer more than 4GB server space to compute a single webpage, for example. And the pressure for users to leverage stowage isn't a bad thing. If implemented well, stowage should be very efficient. Unlike virtual memory pages, stowage frees up the address space.
+
+
+### Pointer Layout
 
 With 32-bit addressing aligned on 64-bit cells (representing pairs and lists), 3 bits in each address can be leveraged to optimize common representations. The encoding I'll be trying:
 
@@ -94,11 +102,13 @@ For tagged objects, the first word provides information about how to interpret t
 
 ## Memory Management
 
-Awelon Bytecode does 'manual' memory management by default (via the explicit drop operator `%`). This doesn't have the normal problems of manual memory management because there is no possibility for dangling references (no aliasing), and any 'leak' will at least be obvious in the program environment.
+Awelon Bytecode has manual memory management via explicit copy and drop operations (`^` and `%`). The normal problems of manual memory management are mitigated: leaks are less likely because they're visible in the program environment and type system, and dangling references aren't possible because there is no mutable state. 
 
-Thus, I have no fundamental need for garbage collection.
+To get started quickly (spike solution, etc.), I should probably just leverage normal manual memory management techniques - a free list, etc.. 
 
-Nonetheless, I believe that I would benefit from bump-pointer per-thread allocations and compacting collections. This theoretically should help avoid synchronization, reduce fragmentation, improve memory locality, favor large batch allocations, and generally enhance performance.
+But long term, I believe that I would benefit from bump-pointer per-thread allocations and compacting collections. This theoretically should avoid synchronization, reduce fragmentation, improve memory locality, and generally enhance performance. When moving large amounts of memory from the nursery into the main allocation space, I'd also avoid lots of fine-grained allocations.
+
+How this works: a computation allocates from a nursery, then when full it moves living content to another nursery.
 
 I would like to try, for example, a 1MB nursery per thread. We can use a semi-space GC method within the nursery, such that we're only using 512kB. This 512kB could further be divided into an allocation space (128kB) and a survivor space (384kB), where our survivors have survived at least *two* allocation-space collections. For the allocation space, we'll track the watermark from the prior copy, and only content from below this watermark that survives the next pass may be moved to the survivor space. The survivor space may then use a similar technique for deciding what may move to the main heap.
 
@@ -115,7 +125,77 @@ This same compacting algorithm should also work for moving surviving content int
 
 Do we want more than two stages? I think the benefit is marginal at that point. 
 
-### Free List Algorithms
+### Memory Allocation Algorithms and Structures
+
+With par-seq parallelism, I'll need a good multi-threaded allocator. TCMalloc is one promising option in this arena. However, a lot of algorithms, including TCMalloc, don't work nicely with the idea of splitting and recombining structures (arrays, etc.) or of fast slab-allocations in context of ABC update patterns.
+
+I need the following properties:
+
+* I can allocate a large space and free smaller fragments of it
+* When we free adjacent spaces, we can eventually coalesce them
+* We can easily find space of a given size
+* Minimal synch between par-seq threads
+
+Ability to free fragments of a larger allocation is important for the ability to split/recombine arrays, and also to perform fast reads from stowage: allocate everything you'll need at once, then fill the space. The last point - minimizing synchronization - is feasible if we simply give each processor its own free-list, and allocate in relatively large chunks from a shared page-heap or similar. This is what TCMalloc does, for example. It works well.
+
+For the other stuff: size-class segregated free lists seem appropriate for fast allocations. If we also track how many fragments we have
+
+Or I might benefit from a simple 'bump-pointer' allocation together with a deferred coalescing model for free'd content. Hmm. The latter option does seem promising. So let's say we do this:
+
+* we have size-segregated allocation-lists.
+ * 
+* we have a 'free list' for all free'd content.
+ * when we free a block, it goes on this list
+ * when this list reaches a certain size:
+  * sort, coalesce, push back into alloc lists
+
+For the other stuff... a variation of QuickFit seems appropriate. I can use a size-sorted array of free lists, or similar. Coalescing of lists can occur as needed.
+
+*Note:* I'd prefer to avoid tree-structured free lists, in part because we cannot iterate through them in constant space, in part because balancing them requires relatively sophisticated algorithms. Let's see how far we can get with singly linked lists, e.g. of (size,next) pairs.
+
+
+
+
+
+
+
+
+For the other stuff, I'm thinking QuickFit is pretty good for my use cases. This means, ideally, that we have a separate linked list for every 'size' we might allocate. But we could probably compromise, and use a set of 'size classes' each with a separate free list, so at least we aren't searching through a bunch of too-small or too-large
+
+
+        
+        
+        
+
+
+A good question is how to quickly find a node of a given size
+
+The greater challenge is to enable coalescing of free'd space together with fast, sized allocations. I essentially need size-sorted structures, plus some ability to find adjacent addresses. 
+
+From a given address+size, it should at least be easy to find the 'next' address and find it in our free list. But this seems like too much work for a fast free operation, and might result in too many splits upon allocation. 
+
+A more promising option, perhaps, is heuristically 'defrag' as a batch process. This wouldn't require indexing both size and address at the same time. A defrag would be driven by some combination of requirement and heuristics. As a batch process, defrag should have relatively good throughput and performance compared to lots of small coalescing operations.
+
+So... maybe size-sorted free lists, like 'QuickFit' algorithm, with occasional coalescing.
+
+
+
+
+ I can create an array of free addresses, sort them, coalesce adjacent addresses (assuming each free address knows its own size, e.g. as the first word), then free the data. 
+
+ free some count (or so many megabytes) of 'chunks'. This could be achieved by a simple algorithm: create a big array, sort it by address, combine adjacent free addresses.
+Each 'address' in our free list could use a simple pattern: (size, next) in a free list. Assuming we know how many free chunks we have, we should be able to easily find  
+
+
+One option, perhaps, is to focus on 
+
+
+
+
+seems a lot more challenging.
+
+
+
 
 I don't have any special ideas here. To avoid synchronization, I may track a per-thread free list, rather than using the shared context list for everything. I'm wondering whether I should use a weighted or Fibonacci buddy system.
 

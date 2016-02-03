@@ -75,7 +75,7 @@ struct wikrt_env {
     pthread_mutex_t     mutex; // shared mutex for environment
 
     // stowage and key-value persistence
-    bool                db_enable;    
+    bool                db_enable;
     int                 db_lockfile;  
     MDB_env            *db_env;       
     MDB_dbi             db_memory; // address → value
@@ -98,6 +98,9 @@ struct wikrt_env {
     //  are serialized  
 };
 
+bool wikrt_db_init(wikrt_env*, char const*, uint32_t dbMaxMB);
+void wikrt_db_destroy(wikrt_env*);
+
 void wikrt_env_lock(wikrt_env*);
 void wikrt_env_unlock(wikrt_env*);
 
@@ -110,8 +113,8 @@ struct wikrt_cx {
     // a context knows its parent environment
     wikrt_env          *env;
 
-    // primary memory is flat array of words
-    wikrt_val          *memory;
+    // primary memory is mutable flat array of whatever
+    void               *memory;
     uint32_t            sizeMB; 
 
     // internal context mutex?
@@ -127,30 +130,30 @@ struct wikrt_cx {
     // do I want a per-context mutex?
 };
 
-void wikrt_cx_resetmem(wikrt_cx*); 
+// scary pointer casting; assumes 'addr' is valid.
+static inline wikrt_val* wikrt_valptr(wikrt_cx* cx, wikrt_val addr) {
+    return (wikrt_val*)(((char*)cx->memory)+addr);
+}
 
-/** @brief Per-thread free lists for allocation.
+// how many size-segregated free-lists?
+#define WIKRT_FLCT 14
+
+/** @brief Memory allocation 'free list'.
  *
- * Minimum allocation for the 32-bit Wikilon runtime is 8 bytes, and all
- * allocations must be 8-byte aligned. Wikilon runtime heavily focuses on
- * small allocations, so making these fast is essential. 
+ * Currently just using size-segregated free lists. Most allocations
+ * for Wikilon runtime will be one or two 'cells'. But larger data
+ * becomes common with support for arrays and binaries.
  *
- * Large allocations will become common in Wikilon runtime once we have
- * arrays, texts, binaries, and blocks operating properly. I'll need to
- * decide how to handle these.
- * 
- * For the moment, I'll just divide the heap into a few ad-hoc size
- * classes. Smaller classes will use exact fits, while larger will
- * use first-fit or similar. I may later provide means to coalesce 
- * a context's freelists, but I'll do without for now. Later I can
- * look at TCMalloc or jemalloc to seek better approaches.
+ * The caller must also provide sizes when deleting objects. No size
+ * headers are used, at least not implicitly. This enables splitting
+ * of arrays, for example. 
  */
 typedef struct wikrt_freelist {
-    wikrt_val size_class[16];
+    wikrt_val free_bytes;
+    wikrt_val frag_count;
+    wikrt_val size_class[WIKRT_FLCT];
 } wikrt_freelist;
 
-// we'll provide size on both alloc and free.
-// we'll specify our thread-local free list and the larger context.
 bool wikrt_alloc(wikrt_cx*, wikrt_freelist*, wikrt_val*, wikrt_size);
 void wikrt_free(wikrt_cx*, wikrt_freelist*, wikrt_val, wikrt_size);
 

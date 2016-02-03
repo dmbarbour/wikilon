@@ -5,121 +5,21 @@
 #include <sys/mman.h>
 #include <assert.h>
 
-#include "futil.h"
 #include "wikrt.h"
 
-bool init_lockfile(int* pfd, char const* dirPath) {
-    size_t const dplen = strlen(dirPath);
-    size_t const fplen = dplen + 6; // "/lock" + NUL
-    char lockFileName[fplen];
-    sprintf(lockFileName, "%s/lock", dirPath);
-    bool const r = lockfile(pfd, lockFileName, WIKRT_FILE_MODE);
-    return r;
-}
+void wikrt_cx_resetmem(wikrt_cx*); 
 
-// prepare LMDB database
-bool init_db(wikrt_env* e, char const* dp, uint32_t dbMaxMB) {
-
-    // ensure "" and "." have same meaning as local directory
-    char const* dirPath = (dp[0] ? dp : ".");
-    size_t const dbMaxBytes = (size_t)dbMaxMB * (1024 * 1024);
-
-    // create our directory if necessary
-    if(!mkdirpath(dirPath, WIKRT_DIR_MODE)) {
-        fprintf(stderr, "Failed to create directory: %s\n", dirPath);
-        return false;
-    }
-
-    // to populate on success:
-    int db_lockfile;
-    MDB_env* pLMDB;
-    MDB_dbi db_memory, db_keyval, db_caddrs, db_refcts, db_refct0;
-    stowaddr db_last_alloc;
-
-    // relevant constants
-    int const mdbFlags = MDB_NOTLS | MDB_NOLOCK | MDB_NOMEMINIT;
-    int const f_memory = MDB_CREATE | MDB_INTEGERKEY;
-    int const f_keyval = MDB_CREATE;
-    int const f_caddrs = MDB_CREATE | MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP;
-    int const f_refcts = MDB_CREATE | MDB_INTEGERKEY;
-    int const f_refct0 = MDB_CREATE | MDB_INTEGERKEY;
-
-    if(!init_lockfile(&db_lockfile, dirPath)) {
-        fprintf(stderr, "Failed to create or obtain lockfile in %s\n", dirPath);
-        goto onError;
-    }
-
-    if( (0 != mdb_env_create(&pLMDB)))
-        goto onErrCreateDB;
-
-    MDB_txn* pTxn;
-    if( (0 != mdb_env_set_mapsize(pLMDB, dbMaxBytes)) ||
-        (0 != mdb_env_set_maxdbs(pLMDB, 5)) ||
-        (0 != mdb_env_open(pLMDB, dirPath, mdbFlags, WIKRT_FILE_MODE)) ||
-        (0 != mdb_txn_begin(pLMDB, NULL, MDB_NOSYNC, &pTxn)))
-        goto onErrInitDB;
-
-    // open our databases
-    MDB_cursor* pCursor;
-    if( (0 != mdb_dbi_open(pTxn, "@", f_memory, &db_memory)) ||
-        (0 != mdb_dbi_open(pTxn, "/", f_keyval, &db_keyval)) ||
-        (0 != mdb_dbi_open(pTxn, "#", f_caddrs, &db_caddrs)) ||
-        (0 != mdb_dbi_open(pTxn, "^", f_refcts, &db_refcts)) ||
-        (0 != mdb_dbi_open(pTxn, "%", f_refct0, &db_refct0)) ||
-        (0 != mdb_cursor_open(pTxn, db_memory, &pCursor))      )
-        goto onErrTxn;
-
-    // obtain last allocated address
-    MDB_val last_key;
-    if(0 == mdb_cursor_get(pCursor, &last_key, NULL, MDB_LAST)) {
-        assert(sizeof(stowaddr) == last_key.mv_size);
-        db_last_alloc = *((stowaddr*)last_key.mv_data);
-    } else {
-        // default to allocations just past the 
-        // maximum normal address for a resource
-        db_last_alloc = ((stowaddr)1) << 32;
-    }
-    mdb_cursor_close(pCursor);
-
-    // commit the transaction
-    if(0 != mdb_txn_commit(pTxn)) 
-        goto onErrInitDB;
-
-    // if we reach this point, we've succeeded.
-    e->db_env = pLMDB;
-    e->db_lockfile = db_lockfile;
-    e->db_memory = db_memory;
-    e->db_caddrs = db_caddrs;
-    e->db_keyval = db_keyval;
-    e->db_refcts = db_refcts;
-    e->db_refct0 = db_refct0;
-    e->db_last_alloc = db_last_alloc;
-    e->db_last_gc = 0;
-
-    return true;   
-
-    // we might jump to error handling below
- onErrTxn:
-    mdb_txn_abort(pTxn);
- onErrInitDB:
-    mdb_env_close(pLMDB);
- onErrCreateDB: 
-    close(db_lockfile);
- onError:
-    return false;
-}
 
 wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMaxMB) {
     wikrt_env* const e = calloc(1, sizeof(wikrt_env));
     if(NULL == e) return WIKRT_NOMEM;
 
-    e->cxhd  = NULL;
     e->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
 
     // use of key-value database and stowage is optional
     if((NULL == dirPath) || (0 == dbMaxMB)) { 
         e->db_env = NULL;
-    } else if(!init_db(e, dirPath, dbMaxMB)) {
+    } else if(!wikrt_db_init(e, dirPath, dbMaxMB)) {
         free(e);
         return WIKRT_DBERR;
     } 
@@ -132,10 +32,7 @@ wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMa
 
 void wikrt_env_destroy(wikrt_env* e) {
     assert(NULL == e->cxhd);
-    if(e->db_enable) {
-        mdb_env_close(e->db_env);
-        close(e->db_lockfile);
-    }
+    wikrt_db_destroy(e);
     pthread_mutex_destroy(&(e->mutex));
     free(e);
 }
@@ -143,6 +40,7 @@ void wikrt_env_destroy(wikrt_env* e) {
 void wikrt_env_lock(wikrt_env* e) {
     pthread_mutex_lock(&(e->mutex));
 }
+
 void wikrt_env_unlock(wikrt_env* e) {
     pthread_mutex_unlock(&(e->mutex));
 }
@@ -188,7 +86,7 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) {
     // (e.g. to ensure empty stowage lists)
     wikrt_cx_resetmem(cx);
 
-    // add to head of global context list
+    // add to global context list
     wikrt_env_lock(e); {
         wikrt_cx* const hd = e->cxhd;
         cx->next = hd;
@@ -231,13 +129,14 @@ wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
 void wikrt_cx_reset(wikrt_cx* cx) {
     // At the moment, contexts don't have any external metadata.
     // I'd prefer to keep it that way, if feasible. Anyhow, this
-    // means a reset is a trivial update to a context's memory.
+    // means a reset is a trivial update to a context's internal
+    // memory. 
     wikrt_env_lock(cx->env); {
         wikrt_cx_resetmem(cx);
     } wikrt_env_unlock(cx->env);
 }
 
-inline size_t page_buffer(size_t sz) {
+static inline size_t page_buffer(size_t sz) {
     size_t const pg = WIKRT_PAGE_SIZE;
     return ((sz + pg - 1) % pg) * pg;
 }
@@ -250,22 +149,7 @@ void wikrt_cx_resetmem(wikrt_cx* cx) {
     wikrt_val const hdrEnd = (wikrt_val) page_buffer(sizeof(wikrt_memory_hdr));
     wikrt_val const szRem = (wikrt_val) cx_size_bytes(cx->sizeMB) - hdrEnd;
     wikrt_free(cx, &(hdr->flmain), hdrEnd, szRem);
-    
 }
-
-// TODO: separate allocation logic into another file.
-bool wikrt_alloc(wikrt_cx* cx, wikrt_freelist* fl, wikrt_val* v, wikrt_size sz)
-{
-    // TODO: allocate memory
-    return false;
-}
-void wikrt_free(wikrt_cx* cx, wikrt_freelist* fl, wikrt_val v, wikrt_size sz)
-{
-    bool const valid_free_addr = (0 != v) && (v == (v & ~7));
-    assert (valid_free_addr);
-    // TODO: free memory.
-}
-
 
 char const* wikrt_abcd_operators() {
     // currently just pure ABC...
@@ -333,7 +217,7 @@ char const* wikrt_strerr(wikrt_err e) { switch(e) {
     default:                    return "unrecognized error code";
 }}
 
-// assume valid utf-8 input
+// assuming valid utf-8 input
 inline uint32_t utf8_readc(uint8_t const** s) {
     uint8_t const* p = *s;
     uint32_t const c0 = p[0];

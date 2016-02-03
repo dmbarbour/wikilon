@@ -5,7 +5,7 @@ THREADS := -pthread
 OPT := -O2 -flto
 CFLAGS := $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
-OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o wikrt.o
+OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o wikrt.o wikrt_mem.o wikrt_db.o
 INSTALL_PREFIX := /usr/local
 
 .PHONY: all lib clean install uninstall runtests
@@ -42,8 +42,14 @@ libwikilon-runtime.so: $(OBJECTS) wikrt.lds
 	$(CC) -shared -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@ -o $@ $(OBJECTS)
 
 # I'll add more files as I need them.
-wikrt.o: wikrt.c wikrt.h wikilon-runtime.h lmdb/lmdb.h murmur3/murmur3.h 
+wikrt.o: wikrt.c wikrt.h wikilon-runtime.h 
 	$(CC) -o $@ -c wikrt.c
+
+wikrt_mem.o: wikrt_mem.c wikrt.h
+	$(CC) -o $@ -c wikrt_mem.c
+
+wikrt_db.o: wikrt_db.c wikrt.h futil.h lmdb/lmdb.h murmur3/murmur3.h
+	$(CC) -o $@ -c wikrt_db.c
 
 # filesystem utilities
 futil.o: futil.c futil.h
