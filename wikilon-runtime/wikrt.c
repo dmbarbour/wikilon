@@ -136,18 +136,15 @@ void wikrt_cx_reset(wikrt_cx* cx) {
     } wikrt_env_unlock(cx->env);
 }
 
-static inline size_t page_buffer(size_t sz) {
-    size_t const pg = WIKRT_PAGE_SIZE;
-    return ((sz + pg - 1) % pg) * pg;
-}
-
 void wikrt_cx_resetmem(wikrt_cx* cx) {
-    wikrt_memory_hdr* hdr = (wikrt_memory_hdr*) cx->memory;
-    (*hdr) = (wikrt_memory_hdr){ 0 }; // clear root memory
+    wikrt_cx_hdr* hdr = (wikrt_cx_hdr*) cx->memory;
+    (*hdr) = (wikrt_cx_hdr){ 0 }; // clear root memory
 
-    // add context modulo header page(s) to the freelist.
-    wikrt_val const hdrEnd = (wikrt_val) page_buffer(sizeof(wikrt_memory_hdr));
+    wikrt_addr const hdrEnd = (wikrt_val) WIKRT_PAGEBUFF(sizeof(wikrt_cx_hdr));
     wikrt_val const szRem = (wikrt_val) cx_size_bytes(cx->sizeMB) - hdrEnd;
+    #undef HDRSZ
+
+    // we'll simply 'free' our chunk of non-header memory.
     wikrt_free(cx, &(hdr->flmain), hdrEnd, szRem);
 }
 

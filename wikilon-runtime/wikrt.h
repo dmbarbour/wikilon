@@ -11,8 +11,19 @@
 #include "lmdb/lmdb.h"
 #include "wikilon-runtime.h"
 
-/** size within a context */
+/** size within a context; documents a positive number of bytes */
 typedef wikrt_val wikrt_size;
+
+/** address within a context; documents offset from origin. */
+typedef wikrt_val wikrt_addr;
+
+/** strip tag bits from our wikrt_val.
+ *
+ * Note that a zero address refers to the unit value, and should 
+ * not be dereferenced (it points into our header arena). Also, 
+ * small integers (low bit zero) should not be converted to addresses. 
+ */
+static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & ~0x7); }
 
 /** wikrt_val bits
  *
@@ -113,7 +124,7 @@ struct wikrt_cx {
     // a context knows its parent environment
     wikrt_env          *env;
 
-    // primary memory is mutable flat array of whatever
+    // primary memory is mutable flat array of some size
     void               *memory;
     uint32_t            sizeMB; 
 
@@ -130,13 +141,17 @@ struct wikrt_cx {
     // do I want a per-context mutex?
 };
 
-// scary pointer casting; assumes 'addr' is valid.
-static inline wikrt_val* wikrt_valptr(wikrt_cx* cx, wikrt_val addr) {
+static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(((char*)cx->memory)+addr);
 }
 
-// how many size-segregated free-lists?
-#define WIKRT_FLCT 14
+/* size-segregated free lists... */
+#define WIKRT_FLCT_QF 16 // quick-fit lists 
+#define WIKRT_FLCT_FF 6 // first-fit lists (exponential)
+#define WIKRT_FLCT (WIKRT_FLCT_QF + WIKRT_FLCT_FF)
+
+/** wikrt size class index, should be in 0..(WIKRT_FLCT-1) */
+typedef int wikrt_sc;
 
 /** @brief Memory allocation 'free list'.
  *
@@ -147,17 +162,21 @@ static inline wikrt_val* wikrt_valptr(wikrt_cx* cx, wikrt_val addr) {
  * The caller must also provide sizes when deleting objects. No size
  * headers are used, at least not implicitly. This enables splitting
  * of arrays, for example. 
+ *
+ * Free lists use (size, addr) pairs, with 0 for the final address.
+ * No tag bits are used, and sizes are in bytes.
  */
 typedef struct wikrt_freelist {
-    wikrt_val free_bytes;
-    wikrt_val frag_count;
-    wikrt_val size_class[WIKRT_FLCT];
+    wikrt_size free_bytes;
+    wikrt_size frag_count;
+    wikrt_addr size_class[WIKRT_FLCT];
 } wikrt_freelist;
 
-bool wikrt_alloc(wikrt_cx*, wikrt_freelist*, wikrt_val*, wikrt_size);
-void wikrt_free(wikrt_cx*, wikrt_freelist*, wikrt_val, wikrt_size);
+bool wikrt_alloc(wikrt_cx*, wikrt_freelist*, wikrt_addr*, wikrt_size);
+void wikrt_free(wikrt_cx*, wikrt_freelist*, wikrt_addr, wikrt_size);
 
-#define WIKRT_PAGE_SIZE 4096
+/** Combine free fragments from a free-list, as much as possible. */
+//void wikrt_coalesce(wikrt_cx*, wikrt_freelist*);
 
 /** @brief Header for cx->memory
  *
@@ -171,10 +190,20 @@ void wikrt_free(wikrt_cx*, wikrt_freelist*, wikrt_val, wikrt_size);
  * - a list of tasks awaiting parallel computations
  * - a list indexing stowage references to guard against GC
  */
-typedef struct wikrt_memory_hdr
-{ wikrt_freelist flmain; // 
-} wikrt_memory_hdr;
+typedef struct wikrt_cx_hdr {
+    wikrt_freelist flmain; // 
+} wikrt_cx_hdr;
 
+// misc. constants and static functions
+#define WIKRT_PAGESIZE 4096
+#define WIKRT_LNBUFF(SZ,LN) (((SZ+(LN-1))/LN)*LN)
+#define WIKRT_LNBUFF_POW2(SZ,LN) ((SZ + (LN - 1)) & ~(LN - 1))
+#define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
+#define WIKRT_CELLSIZE (2 * sizeof(wikrt_val))
+#define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
+#define WIKRT_QFSIZE (WIKRT_FLCT_QF * WIKRT_CELLSIZE)
+#define WIKRT_FFMAX  (WIKRT_QFSIZE * (1 << (WIKRT_FLCT_FF - 1)))
+#define WIKRT_QFCLASS(sz) ((sz - 1) / WIKRT_CELLSIZE)
 
 // for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
