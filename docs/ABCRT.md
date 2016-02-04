@@ -138,7 +138,7 @@ I need the following properties:
 
 Ability to free fragments of a larger allocation is important for the ability to split/recombine arrays, and also to perform fast reads from stowage: allocate everything you'll need at once, then fill the space. The last point - minimizing synchronization - is feasible if we simply give each processor its own free-list, and allocate in relatively large chunks from a shared page-heap or similar. This is what TCMalloc does, for example. It works well.
 
-For the other stuff: size-class segregated free lists seem appropriate for fast allocations. If we also track how many fragments we have
+For the other stuff: some ad-hoc mix of QuickFit and perhaps a few size-segregated first-fit free lists seems appropriate.
 
 Or I might benefit from a simple 'bump-pointer' allocation together with a deferred coalescing model for free'd content. Hmm. The latter option does seem promising. So let's say we do this:
 

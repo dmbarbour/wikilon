@@ -491,6 +491,7 @@ wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*);
 wikrt_err wikrt_peek_i32(wikrt_cx*, wikrt_val const, int32_t*);
 wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
 
+#if 0
 /** @brief Read larger integers into a string.
  *
  * This produces a C string of regex format `0 | (-)?[1-9][0-9]*`.
@@ -500,6 +501,7 @@ wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
  */
 wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, uint32_t buffSize, char* buff);
 wikrt_err wikrt_peek_isize(wikrt_cx*, wikrt_val const, uint32_t* sufficientBuffSize);
+#endif
 
 /** @brief Allocate or disassemble basic product types (pairs of values). */
 wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val* p, wikrt_val fst, wikrt_val snd);

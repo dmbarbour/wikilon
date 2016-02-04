@@ -166,17 +166,17 @@ typedef int wikrt_sc;
  * Free lists use (size, addr) pairs, with 0 for the final address.
  * No tag bits are used, and sizes are in bytes.
  */
-typedef struct wikrt_freelist {
+typedef struct wikrt_fl {
     wikrt_size free_bytes;
     wikrt_size frag_count;
     wikrt_addr size_class[WIKRT_FLCT];
-} wikrt_freelist;
+} wikrt_fl;
 
-bool wikrt_alloc(wikrt_cx*, wikrt_freelist*, wikrt_addr*, wikrt_size);
-void wikrt_free(wikrt_cx*, wikrt_freelist*, wikrt_addr, wikrt_size);
+bool wikrt_alloc(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_size);
+void wikrt_free(wikrt_cx*, wikrt_fl*, wikrt_addr, wikrt_size);
 
 /** Combine free fragments from a free-list, as much as possible. */
-//void wikrt_coalesce(wikrt_cx*, wikrt_freelist*);
+//void wikrt_coalesce(wikrt_cx*, wikrt_fl*);
 
 /** @brief Header for cx->memory
  *
@@ -191,8 +191,28 @@ void wikrt_free(wikrt_cx*, wikrt_freelist*, wikrt_addr, wikrt_size);
  * - a list indexing stowage references to guard against GC
  */
 typedef struct wikrt_cx_hdr {
-    wikrt_freelist flmain; // 
+    wikrt_fl flmain; // 
 } wikrt_cx_hdr;
+
+static inline wikrt_fl* wikrt_flmain(wikrt_cx* cx) { 
+    return &(((wikrt_cx_hdr*)(cx->memory))->flmain);
+}
+
+// To enable thread-local allocations and minimize synchronization, I will
+// use a separate free list for each separate thread. This requires most
+// allocating functions to include a thread-local variant.
+wikrt_err wikrt_alloc_text_tl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*);
+wikrt_err wikrt_alloc_block_tl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, wikrt_abc_opts);
+wikrt_err wikrt_alloc_binary_tl(wikrt_cx*, wikrt_fl*, wikrt_val*, uint8_t const*, size_t);
+wikrt_err wikrt_alloc_i32_tl(wikrt_cx*, wikrt_fl*, wikrt_val*, int32_t);
+wikrt_err wikrt_alloc_i64_tl(wikrt_cx*, wikrt_fl*, wikrt_val*, int64_t);
+wikrt_err wikrt_alloc_prod_tl(wikrt_cx*, wikrt_fl*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
+wikrt_err wikrt_alloc_sum_tl(wikrt_cx*, wikrt_fl*, wikrt_val* c, bool inRight, wikrt_val);
+wikrt_err wikrt_alloc_seal_tl(wikrt_cx*, wikrt_fl*, wikrt_val* sv, char const* s, wikrt_val v); 
+
+wikrt_err wikrt_copy_tl(wikrt_cx*, wikrt_fl*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
+wikrt_err wikrt_drop_tl(wikrt_cx*, wikrt_fl*, wikrt_val, bool bDropRel);
+wikrt_err wikrt_stow_tl(wikrt_cx*, wikrt_fl*, wikrt_val* out, wikrt_val);
 
 // misc. constants and static functions
 #define WIKRT_PAGESIZE 4096

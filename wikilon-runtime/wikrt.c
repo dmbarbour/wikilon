@@ -284,39 +284,24 @@ bool wikrt_valid_token(char const* s) {
     }
 }
 
-
 wikrt_err wikrt_alloc_text(wikrt_cx* cx, wikrt_val* v, char const* s) 
-{
-    // for now, just construct a naive list.
-    return WIKRT_INVAL;
+{ 
+    return wikrt_alloc_text_tl(cx, wikrt_flmain(cx), v, s);
 }
 
 wikrt_err wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, wikrt_abc_opts opts) 
 {
-    return WIKRT_INVAL;
+    return wikrt_alloc_block_tl(cx, wikrt_flmain(cx), v, abc, opts);
 }
 
-wikrt_err wikrt_alloc_i32(wikrt_cx* _cx, wikrt_val* v, int32_t n) 
+wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n) 
 {
-    // small integers?
-    if((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX)) {
-        (*v) = (wikrt_val)(2 * n);
-        return WIKRT_OK;
-    }
-
-    // TODO: Larger integers.
-    return WIKRT_INVAL;
+    return wikrt_alloc_i32_tl(cx, wikrt_flmain(cx), v, n);
 }
 
 wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n) 
 {
-    if((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX)) {
-        (*v) = (wikrt_val)(2 * n);
-        return WIKRT_OK;
-    }
-
-    // TODO: larger integers
-    return WIKRT_INVAL;
+    return wikrt_alloc_i64_tl(cx, wikrt_flmain(cx), v, n);
 }
 
 wikrt_err wikrt_peek_i32(wikrt_cx* cx, wikrt_val const v, int32_t* i32) 
@@ -331,7 +316,7 @@ wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64)
 
 wikrt_err wikrt_alloc_prod(wikrt_cx* cx, wikrt_val* p, wikrt_val fst, wikrt_val snd)
 {
-    return WIKRT_INVAL;
+    return wikrt_alloc_prod_tl(cx, wikrt_flmain(cx), p, fst, snd);
 }
 
 wikrt_err wikrt_split_prod(wikrt_cx* cx, wikrt_val p, wikrt_val* fst, wikrt_val* snd)
@@ -341,11 +326,12 @@ wikrt_err wikrt_split_prod(wikrt_cx* cx, wikrt_val p, wikrt_val* fst, wikrt_val*
 
 wikrt_err wikrt_alloc_sum(wikrt_cx* cx, wikrt_val* c, bool inRight, wikrt_val v)
 {
-    return WIKRT_INVAL;
+    return wikrt_alloc_sum_tl(cx, wikrt_flmain(cx), c, inRight, v);
 }
 
 wikrt_err wikrt_split_sum(wikrt_cx* cx, wikrt_val c, bool* inRight, wikrt_val* v)
 {
     return WIKRT_INVAL;
 }
+
 

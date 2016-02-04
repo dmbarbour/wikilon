@@ -2,15 +2,6 @@
 #include "wikrt.h"
 #include <assert.h>
 
-#if 0
-typedef struct wikrt_freelist {
-    wikrt_val size_class[WIKRT_FLCT]; // (size, next) linked lists, size-segregated
-} wikrt_freelist;
-
-bool wikrt_alloc(wikrt_cx*, wikrt_freelist*, wikrt_val*, wikrt_size);
-void wikrt_free(wikrt_cx*, wikrt_freelist*, wikrt_val, wikrt_size);
-#endif
-
 wikrt_sc wikrt_size_class_ff(wikrt_size const sz) {
     int sc = (WIKRT_FLCT - 1);
     wikrt_size szt = WIKRT_FFMAX;
@@ -28,7 +19,7 @@ static inline wikrt_sc wikrt_size_class(wikrt_size const sz) {
 }
 
 // coalescing is deferred; wikrt_free is O(1)
-void wikrt_free(wikrt_cx* const cx, wikrt_freelist* const fl, wikrt_addr const v, wikrt_size const sz)
+void wikrt_free(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr const v, wikrt_size const sz)
 {
     // assume valid parameters at this layer
     wikrt_size const szb = WIKRT_CELLBUFF(sz);
@@ -42,7 +33,7 @@ void wikrt_free(wikrt_cx* const cx, wikrt_freelist* const fl, wikrt_addr const v
 }
 
 // allocate specifically from the first-fit free-lists
-bool wikrt_alloc_ff(wikrt_cx* const cx, wikrt_freelist* const fl, wikrt_addr* const v, wikrt_size const sz) {
+bool wikrt_alloc_ff(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr* const v, wikrt_size const sz) {
     wikrt_sc sc = wikrt_size_class_ff(sz);
     do {
         wikrt_addr* p = fl->size_class + sc;
@@ -71,7 +62,7 @@ bool wikrt_alloc_ff(wikrt_cx* const cx, wikrt_freelist* const fl, wikrt_addr* co
     return false;
 }
 
-bool wikrt_alloc(wikrt_cx* const cx, wikrt_freelist* const fl, wikrt_addr* const v, wikrt_size const sz)
+bool wikrt_alloc(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr* const v, wikrt_size const sz)
 {
     wikrt_size const szb = WIKRT_CELLBUFF(sz);
     if(szb <= WIKRT_QFSIZE) {
