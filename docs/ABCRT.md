@@ -84,6 +84,9 @@ In favor of 64 bits:
 
 For Wikilon, I think the 32-bit option is favorable. I doubt I'll want to offer more than 4GB server space to compute a single webpage, for example. And the pressure for users to leverage stowage isn't a bad thing. If implemented well, stowage should be very efficient. Unlike virtual memory pages, stowage frees up the address space.
 
+That said, the ease of scaling makes the 64-bit option very tempting. I occasionally read about smart phones with 32GB RAM, or servers with 512GB RAM. While stowage can certainly take advantage of large amounts of RAM, it still involves repeated copying of values.
+
+There is potential for large binaries to be modeled as external to our 32-bit context. I'm not yet convinced this is worth the extra complexity outside of some special circumstances, but it could prove a powerful technique and would effectively extend our runtime context to 64-bits for shared binaries.
 
 ### Pointer Layout
 

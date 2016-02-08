@@ -129,7 +129,8 @@ struct wikrt_cx {
     uint32_t            sizeMB; 
 
     // internal context mutex?
-    // pthread_mutex_t     mutex;
+    // I'll need this for the multi-threaded allocator, if not lockless.
+    //pthread_mutex_t     mutex;
 
     // most other data will be represented within cx_memory.
     // But I may need to develop a proper 'header' region.
@@ -147,7 +148,7 @@ static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
 
 /* size-segregated free lists... */
 #define WIKRT_FLCT_QF 16 // quick-fit lists 
-#define WIKRT_FLCT_FF 6 // first-fit lists (exponential)
+#define WIKRT_FLCT_FF 10 // first-fit lists (exponential)
 #define WIKRT_FLCT (WIKRT_FLCT_QF + WIKRT_FLCT_FF)
 
 /** wikrt size class index, should be in 0..(WIKRT_FLCT-1) */
@@ -156,7 +157,7 @@ typedef int wikrt_sc;
 /** @brief Memory allocation 'free list'.
  *
  * Currently just using size-segregated free lists. Most allocations
- * for Wikilon runtime will be one or two 'cells'. But larger data
+ * for Wikilon runtime will be two or four words. But larger data
  * becomes common with support for arrays and binaries.
  *
  * The caller must also provide sizes when deleting objects. No size
@@ -164,19 +165,22 @@ typedef int wikrt_sc;
  * of arrays, for example. 
  *
  * Free lists use (size, addr) pairs, with 0 for the final address.
- * No tag bits are used, and sizes are in bytes.
+ * No tag bits are used at this layer, and sizes are in bytes.
  */
 typedef struct wikrt_fl {
     wikrt_size free_bytes;
     wikrt_size frag_count;
     wikrt_addr size_class[WIKRT_FLCT];
+    // todo: heuristics for coalesce decisions
+    wikrt_size frag_count_df; // frag count after last coalesce
 } wikrt_fl;
 
 bool wikrt_alloc(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_size);
 void wikrt_free(wikrt_cx*, wikrt_fl*, wikrt_addr, wikrt_size);
+void wikrt_coalesce(wikrt_cx*, wikrt_fl*);
 
 /** Combine free fragments from a free-list, as much as possible. */
-//void wikrt_coalesce(wikrt_cx*, wikrt_fl*);
+
 
 /** @brief Header for cx->memory
  *
