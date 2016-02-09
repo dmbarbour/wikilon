@@ -9,6 +9,7 @@
 #include <pthread.h>
 
 #include "lmdb/lmdb.h"
+#include "utf8.h"
 #include "wikilon-runtime.h"
 
 /** size within a context; documents a positive number of bytes */
@@ -17,13 +18,8 @@ typedef wikrt_val wikrt_size;
 /** address within a context; documents offset from origin. */
 typedef wikrt_val wikrt_addr;
 
-/** strip tag bits from our wikrt_val.
- *
- * Note that a zero address refers to the unit value, and should 
- * not be dereferenced (it points into our header arena). Also, 
- * small integers (low bit zero) should not be converted to addresses. 
- */
-static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & ~0x7); }
+/** tag uses lowest bits of a value */
+typedef wikrt_val wikrt_tag;
 
 /** wikrt_val bits
  *
@@ -47,22 +43,29 @@ static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & ~0x7); }
  *     so maybe 1 bit for tag, 1 bit for sign?
  *   reference counts: no longer a separate object...
  */
+#define WIKRT_TAG_OBJECT    1
+#define WIKRT_TAG_PROD      3
+#define WIKRT_TAG_PROD_INL  5
+#define WIKRT_TAG_PROD_INR  7
 
-// Small integers have range roughly + or - 1 billion. A bit larger
-// than this is alright. I ensure closure of with negation, so the 
-// valid range is (1<<30 - 1) or 1073741823 or its negation. Outside
-// of this range, we'll use a separate 'bignum' representation.
-#define WIKRT_SMALLINT_MAX  1073741823
-#define WIKRT_SMALLINT_MIN -1073741823
+#define WIKRT_MASK_TAG      7
+#define WIKRT_MASK_ADDR     (~WIKRT_MASK_TAG)
 
-// 
+static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & WIKRT_MASK_ADDR); }
+static inline wikrt_tag  wikrt_vtag(wikrt_val v)  { return (v & WIKRT_MASK_TAG);  }
+static inline wikrt_val  wikrt_tag_addr(wikrt_tag t, wikrt_addr a) { return (t | a); }
 
-
-
-
-// stowage: I'll probably want to use zstd or similar compression
-// for large values.
-
+/** @brief small integers
+ * 
+ * Small integers range roughly plus or minus one billion. I imagine
+ * this is enough for many common use cases, though perhaps not for
+ * floating point or rational computations.
+ */
+#define WIKRT_SMALLINT_MAX  ((1 << 30) - 1)
+#define WIKRT_SMALLINT_MIN  (- WIKRT_SMALLINT_MAX)
+static inline wikrt_val wikrt_i2v_small(int32_t n) { return (wikrt_val)(n << 1); }
+static inline int32_t wikrt_v2i_small(wikrt_val v) { return (((int32_t)v) >> 1); }
+static inline bool wikrt_is_smallint(wikrt_val v) { return (0 == (v & 1)); }
 
 /** @brief Stowage address is 64-bit address. 
  *
@@ -129,7 +132,7 @@ struct wikrt_cx {
     uint32_t            sizeMB; 
 
     // internal context mutex?
-    // I'll need this for the multi-threaded allocator, if not lockless.
+    //   may need for multi-threaded allocator if not lockless
     //pthread_mutex_t     mutex;
 
     // most other data will be represented within cx_memory.
@@ -178,9 +181,7 @@ typedef struct wikrt_fl {
 bool wikrt_alloc(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_size);
 void wikrt_free(wikrt_cx*, wikrt_fl*, wikrt_addr, wikrt_size);
 void wikrt_coalesce(wikrt_cx*, wikrt_fl*);
-
-/** Combine free fragments from a free-list, as much as possible. */
-
+bool wikrt_coalesce_maybe(wikrt_cx*, wikrt_fl*, wikrt_size); // heuristic
 
 /** @brief Header for cx->memory
  *
@@ -198,25 +199,32 @@ typedef struct wikrt_cx_hdr {
     wikrt_fl flmain; // 
 } wikrt_cx_hdr;
 
+static inline wikrt_cx_hdr* wikrt_cxh(wikrt_cx* cx) {
+    return ((wikrt_cx_hdr*)(cx->memory));
+}
+
 static inline wikrt_fl* wikrt_flmain(wikrt_cx* cx) { 
-    return &(((wikrt_cx_hdr*)(cx->memory))->flmain);
+    return &(wikrt_cxh(cx)->flmain);
 }
 
 // To enable thread-local allocations and minimize synchronization, I will
 // use a separate free list for each separate thread. This requires most
 // allocating functions to include a thread-local variant.
-wikrt_err wikrt_alloc_text_tl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*);
-wikrt_err wikrt_alloc_block_tl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, wikrt_abc_opts);
-wikrt_err wikrt_alloc_binary_tl(wikrt_cx*, wikrt_fl*, wikrt_val*, uint8_t const*, size_t);
-wikrt_err wikrt_alloc_i32_tl(wikrt_cx*, wikrt_fl*, wikrt_val*, int32_t);
-wikrt_err wikrt_alloc_i64_tl(wikrt_cx*, wikrt_fl*, wikrt_val*, int64_t);
-wikrt_err wikrt_alloc_prod_tl(wikrt_cx*, wikrt_fl*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
-wikrt_err wikrt_alloc_sum_tl(wikrt_cx*, wikrt_fl*, wikrt_val* c, bool inRight, wikrt_val);
-wikrt_err wikrt_alloc_seal_tl(wikrt_cx*, wikrt_fl*, wikrt_val* sv, char const* s, wikrt_val v); 
+wikrt_err wikrt_alloc_text_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*);
+wikrt_err wikrt_alloc_block_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, wikrt_abc_opts);
+wikrt_err wikrt_alloc_binary_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, uint8_t const*, size_t);
+wikrt_err wikrt_alloc_i32_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int32_t);
+wikrt_err wikrt_alloc_i64_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int64_t);
+wikrt_err wikrt_alloc_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
+wikrt_err wikrt_split_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val p, wikrt_val* fst, wikrt_val* snd);
+wikrt_err wikrt_alloc_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val* c, bool inRight, wikrt_val);
+wikrt_err wikrt_split_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val c, bool* inRight, wikrt_val*);
+wikrt_err wikrt_alloc_seal_fl(wikrt_cx*, wikrt_fl*, wikrt_val* sv, char const* s, wikrt_val v); 
+wikrt_err wikrt_cons_fl(wikrt_cx*, wikrt_fl*, wikrt_val* result, wikrt_val elem, wikrt_val list);
 
-wikrt_err wikrt_copy_tl(wikrt_cx*, wikrt_fl*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
-wikrt_err wikrt_drop_tl(wikrt_cx*, wikrt_fl*, wikrt_val, bool bDropRel);
-wikrt_err wikrt_stow_tl(wikrt_cx*, wikrt_fl*, wikrt_val* out, wikrt_val);
+wikrt_err wikrt_copy_fl(wikrt_cx*, wikrt_fl*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
+wikrt_err wikrt_drop_fl(wikrt_cx*, wikrt_fl*, wikrt_val, bool bDropRel);
+wikrt_err wikrt_stow_fl(wikrt_cx*, wikrt_fl*, wikrt_val* out, wikrt_val);
 
 // misc. constants and static functions
 #define WIKRT_PAGESIZE 4096

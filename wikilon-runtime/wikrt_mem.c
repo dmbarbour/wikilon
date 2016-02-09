@@ -39,6 +39,8 @@ void wikrt_free_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr const v, wi
     fl->size_class[sc] = v;
     fl->free_bytes += szb;
     fl->frag_count += 1;
+    // TODO: if our free bytes are high, we might want to
+    // heuristically defrag.
 }
 
 void wikrt_free(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr v, wikrt_size sz)
@@ -113,20 +115,10 @@ bool wikrt_alloc_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr* const v, 
     } else if(wikrt_alloc_ff(cx, fl, v, szb)) {
         // basic first-fit for larger allocations
         return true;
+    } else if(wikrt_coalesce_maybe(cx, fl, szb)) {
+        // retry after coalescing data
+        return wikrt_alloc_b(cx, fl, v, szb);
     } else {
-        // heuristically coalesce data and retry
-        bool const bTryCoalesce = 
-            (fl->frag_count_df != fl->frag_count) &&
-            (fl->free_bytes > (szb * 2));
-        if(bTryCoalesce) {
-            wikrt_coalesce(cx,fl);
-            if(wikrt_alloc_b(cx, fl, v, szb)) {
-                return true;
-            }
-        }
-
-        // if coalesce fails, in a multi-threaded app we might
-        // be able to obtain some data from a shared free-list.
         return false;
     }
 }
@@ -135,6 +127,14 @@ bool wikrt_alloc(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr* v, wikrt_size sz)
 {
     // to avoid recursively re-aligning target size...
     return wikrt_alloc_b(cx,fl,v, WIKRT_CELLBUFF(sz));
+}
+
+bool wikrt_coalesce_maybe(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_size sz) {
+    if((fl->free_bytes < (2 * sz)) || (fl->frag_count == fl->frag_count_df))
+        return false;
+    wikrt_size const fc0 = fl->frag_count;
+    wikrt_coalesce(cx,fl);
+    return (fc0 != fl->frag_count);
 }
 
 // join segregated free-list nodes into a single list

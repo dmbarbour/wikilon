@@ -214,53 +214,7 @@ char const* wikrt_strerr(wikrt_err e) { switch(e) {
     default:                    return "unrecognized error code";
 }}
 
-// assuming valid utf-8 input
-inline uint32_t utf8_readc(uint8_t const** s) {
-    uint8_t const* p = *s;
-    uint32_t const c0 = p[0];
-    if(c0 < 0x80) {
-        (*s) = (p+1);
-        return c0;
-    } else if(c0 < 0xE0) {
-        // two bytes
-        uint32_t const c1 = (uint32_t) p[1];
-        (*s) = (p+2);
-        return ((0x1F & c0) << 6) | ((0x3F & c1));
-    } else if(c0 < 0xF0) {
-        uint32_t const c1 = (uint32_t) p[1];
-        uint32_t const c2 = (uint32_t) p[2];
-        (*s) = (p+3);
-        return ((0x0F & c0) << 12)
-             | ((0x3F & c1) << 6)
-             | ((0x3F & c2));
-    } else {
-        uint32_t const c1 = (uint32_t) p[1];
-        uint32_t const c2 = (uint32_t) p[2];
-        uint32_t const c3 = (uint32_t) p[3];
-        (*s) = (p+4); 
-        return ((0x07 & c0) << 18)
-             | ((0x3F & c1) << 12)
-             | ((0x3F & c2) << 6)
-             | ((0x3F & c3));
-    }
-}
-
-// C0, DEL, C1
-inline bool isControlChar(uint32_t c) {
-    return (c <= 0x1F) || ((0x7F <= c) && (c <= 0x9F));
-}
-
-// 0xD800..0xDFFF
-inline bool isSurrogateCodepoint(uint32_t c) { 
-    return (0xD800 <= c) && (c <= 0xDFFF);
-}
-
-// 0xFFFD
-inline bool isReplacementChar(uint32_t c) {
-    return (0xFFFD == c);
-}
-
-inline bool isValidTokChar(uint32_t c) {
+static inline bool isValidTokChar(uint32_t c) {
     bool const bInvalidChar =
         ('{' == c) || ('}' == c) ||
         isControlChar(c) ||
@@ -272,66 +226,102 @@ inline bool isValidTokChar(uint32_t c) {
 // assumes normal form utf-8 argument, NUL-terminated
 bool wikrt_valid_token(char const* s) {
     // valid size is 1..63 bytes
-    size_t const len = strlen(s);
+    size_t len = strlen(s);
     bool const bValidSize = (0 < len) && (len < 64);
     if(!bValidSize) return false;
 
-    uint8_t const* p = (uint8_t const*) s;
-    while(1) {
-        uint32_t c = utf8_readc(&p);
-        if(0 == c) return true;
-        if(!isValidTokChar(c)) return false;
-    }
+    do {
+        uint32_t cp;
+        size_t const cbytes = utf8_readcp(s,len,&cp);
+        if((0 == cbytes) || !isValidTokChar(cp)) {
+            return false;
+        }
+        s   += cbytes;
+        len -= cbytes;
+    } while(len > 0);
+    return true;
 }
 
 wikrt_err wikrt_alloc_text(wikrt_cx* cx, wikrt_val* v, char const* s) 
 { 
-    return wikrt_alloc_text_tl(cx, wikrt_flmain(cx), v, s);
+    return wikrt_alloc_text_fl(cx, wikrt_flmain(cx), v, s);
 }
 
 wikrt_err wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, wikrt_abc_opts opts) 
 {
-    return wikrt_alloc_block_tl(cx, wikrt_flmain(cx), v, abc, opts);
+    return wikrt_alloc_block_fl(cx, wikrt_flmain(cx), v, abc, opts);
 }
 
 wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n) 
 {
-    return wikrt_alloc_i32_tl(cx, wikrt_flmain(cx), v, n);
+    return wikrt_alloc_i32_fl(cx, wikrt_flmain(cx), v, n);
 }
 
 wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n) 
 {
-    return wikrt_alloc_i64_tl(cx, wikrt_flmain(cx), v, n);
+    return wikrt_alloc_i64_fl(cx, wikrt_flmain(cx), v, n);
 }
 
 wikrt_err wikrt_peek_i32(wikrt_cx* cx, wikrt_val const v, int32_t* i32) 
 {
+    if(wikrt_is_smallint(v)) {
+        (*i32) = wikrt_v2i_small(v);
+        return WIKRT_OK;
+    } 
     return WIKRT_INVAL;
 }
 
 wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64) 
 {
+    if(wikrt_is_smallint(v)) {
+        (*i64) = (int64_t) wikrt_v2i_small(v);
+        return WIKRT_OK;
+    }
     return WIKRT_INVAL;
 }
 
 wikrt_err wikrt_alloc_prod(wikrt_cx* cx, wikrt_val* p, wikrt_val fst, wikrt_val snd)
 {
-    return wikrt_alloc_prod_tl(cx, wikrt_flmain(cx), p, fst, snd);
+    return wikrt_alloc_prod_fl(cx, wikrt_flmain(cx), p, fst, snd);
 }
 
 wikrt_err wikrt_split_prod(wikrt_cx* cx, wikrt_val p, wikrt_val* fst, wikrt_val* snd)
 {
-    return WIKRT_INVAL;
+    return wikrt_split_prod_fl(cx, wikrt_flmain(cx), p, fst, snd);
 }
 
 wikrt_err wikrt_alloc_sum(wikrt_cx* cx, wikrt_val* c, bool inRight, wikrt_val v)
 {
-    return wikrt_alloc_sum_tl(cx, wikrt_flmain(cx), c, inRight, v);
+    return wikrt_alloc_sum_fl(cx, wikrt_flmain(cx), c, inRight, v);
 }
 
 wikrt_err wikrt_split_sum(wikrt_cx* cx, wikrt_val c, bool* inRight, wikrt_val* v)
 {
+    return wikrt_split_sum_fl(cx, wikrt_flmain(cx), c, inRight, v);
+}
+
+wikrt_err wikrt_alloc_text_fl(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_val* const v, char const* s) {
+    wikrt_val* tl = v;
+    
+    (*tl) = WIKRT_UNIT_INR; // terminate list
+
     return WIKRT_INVAL;
 }
+wikrt_err wikrt_alloc_block_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, wikrt_abc_opts);
+wikrt_err wikrt_alloc_binary_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, uint8_t const*, size_t);
+wikrt_err wikrt_alloc_i32_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int32_t);
+wikrt_err wikrt_alloc_i64_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int64_t);
+wikrt_err wikrt_alloc_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
+wikrt_err wikrt_split_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val p, wikrt_val* fst, wikrt_val* snd);
+wikrt_err wikrt_alloc_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val* c, bool inRight, wikrt_val);
+wikrt_err wikrt_split_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val c, bool* inRight, wikrt_val*);
+wikrt_err wikrt_alloc_seal_fl(wikrt_cx*, wikrt_fl*, wikrt_val* sv, char const* s, wikrt_val v); 
+wikrt_err wikrt_cons_fl(wikrt_cx*, wikrt_fl*, wikrt_val* result, wikrt_val elem, wikrt_val list);
+
+wikrt_err wikrt_copy_fl(wikrt_cx*, wikrt_fl*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
+wikrt_err wikrt_drop_fl(wikrt_cx*, wikrt_fl*, wikrt_val, bool bDropRel);
+wikrt_err wikrt_stow_fl(wikrt_cx*, wikrt_fl*, wikrt_val* out, wikrt_val);
+
+
 
 

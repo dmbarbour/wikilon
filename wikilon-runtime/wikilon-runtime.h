@@ -453,8 +453,15 @@ wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_val block, wikrt_val* text, wikrt
 
 #endif
 
-/** Alloc a short text or block from a C string literal. */
+/** Allocate a short text from a C string literal.
+ *
+ * Note: At the moment, this does not validate the input string. It must
+ * be valid utf-8 text with correct constraints
+constraints on control characters, surrogate codepoints, and the replacement charactar. 
+ */
 wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*);
+
+/** Allocate a block of Awelon Bytecode. */
 wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, wikrt_abc_opts);
 
 /** Allocate a small binary. */
