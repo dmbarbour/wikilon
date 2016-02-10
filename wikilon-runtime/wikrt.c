@@ -214,15 +214,6 @@ char const* wikrt_strerr(wikrt_err e) { switch(e) {
     default:                    return "unrecognized error code";
 }}
 
-static inline bool isValidTokChar(uint32_t c) {
-    bool const bInvalidChar =
-        ('{' == c) || ('}' == c) ||
-        isControlChar(c) ||
-        isSurrogateCodepoint(c) ||
-        isReplacementChar(c);
-    return !bInvalidChar;
-}
-
 // assumes normal form utf-8 argument, NUL-terminated
 bool wikrt_valid_token(char const* s) {
     // valid size is 1..63 bytes
@@ -230,35 +221,55 @@ bool wikrt_valid_token(char const* s) {
     bool const bValidSize = (0 < len) && (len < 64);
     if(!bValidSize) return false;
 
-    do {
-        uint32_t cp;
-        size_t const cbytes = utf8_readcp(s,len,&cp);
-        if((0 == cbytes) || !isValidTokChar(cp)) {
+    uint32_t cp;
+    while(len != 0) {
+        if(!utf8_step(&s,&len,&cp) || !isValidTokChar(cp))
             return false;
-        }
-        s   += cbytes;
-        len -= cbytes;
-    } while(len > 0);
+    }
     return true;
 }
 
-wikrt_err wikrt_alloc_text(wikrt_cx* cx, wikrt_val* v, char const* s) 
-{ 
+wikrt_err wikrt_alloc_text(wikrt_cx* cx, wikrt_val* v, char const* s) { 
     return wikrt_alloc_text_fl(cx, wikrt_flmain(cx), v, s);
 }
 
-wikrt_err wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, wikrt_abc_opts opts) 
-{
+/* Currently allocating as a normal list. This means we get a 8x increase in
+ * size of texts (yuck!). But I can go back and add text tagged objects later.
+ */
+wikrt_err wikrt_alloc_text_fl(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_val* const txt, char const* s) {
+    wikrt_err r = WIKRT_OK;
+    size_t len = strlen(s);
+    wikrt_addr* tl = txt;
+    uint32_t cp;
+    while((len != 0) && utf8_step(&s, &len, &cp)) {
+        if(!isValidTxtChar(cp)) { 
+            r = WIKRT_INVAL; 
+            break;
+        }
+        wikrt_addr dst;
+        if(!wikrt_alloc(cx, fl, &dst, WIKRT_CELLSIZE)) {
+            r = WIKRT_CXFULL;
+            break;
+        }
+        (*tl) = wikrt_tag_addr(WIKRT_TAG_PROD_INL, dst);
+        wikrt_val* pv = wikrt_pval(cx, dst);
+        pv[0] = wikrt_i2v_small(cp);
+        tl = (pv + 1);
+    }
+    (*tl) = WIKRT_UNIT_INR;
+    return r;
+}
+
+
+wikrt_err wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, wikrt_abc_opts opts) {
     return wikrt_alloc_block_fl(cx, wikrt_flmain(cx), v, abc, opts);
 }
 
-wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n) 
-{
+wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n) {
     return wikrt_alloc_i32_fl(cx, wikrt_flmain(cx), v, n);
 }
 
-wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n) 
-{
+wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n) {
     return wikrt_alloc_i64_fl(cx, wikrt_flmain(cx), v, n);
 }
 
@@ -280,38 +291,39 @@ wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64)
     return WIKRT_INVAL;
 }
 
-wikrt_err wikrt_alloc_prod(wikrt_cx* cx, wikrt_val* p, wikrt_val fst, wikrt_val snd)
-{
+wikrt_err wikrt_alloc_prod(wikrt_cx* cx, wikrt_val* p, wikrt_val fst, wikrt_val snd) {
     return wikrt_alloc_prod_fl(cx, wikrt_flmain(cx), p, fst, snd);
 }
 
-wikrt_err wikrt_split_prod(wikrt_cx* cx, wikrt_val p, wikrt_val* fst, wikrt_val* snd)
+wikrt_err wikrt_alloc_prod_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* p, wikrt_val fst, wikrt_val snd) 
 {
+    wikrt_addr dst;
+    if(!wikrt_alloc(cx, fl, &dst, WIKRT_CELLSIZE))
+        return WIKRT_CXFULL;
+    (*p) = wikrt_tag_addr(WIKRT_TAG_PROD, dst);
+    wikrt_val* const pv = wikrt_pval(cx, dst);
+    pv[0] = fst;
+    pv[1] = snd;
+    return WIKRT_OK;
+}
+
+wikrt_err wikrt_split_prod(wikrt_cx* cx, wikrt_val p, wikrt_val* fst, wikrt_val* snd) {
     return wikrt_split_prod_fl(cx, wikrt_flmain(cx), p, fst, snd);
 }
 
-wikrt_err wikrt_alloc_sum(wikrt_cx* cx, wikrt_val* c, bool inRight, wikrt_val v)
-{
+wikrt_err wikrt_alloc_sum(wikrt_cx* cx, wikrt_val* c, bool inRight, wikrt_val v) {
     return wikrt_alloc_sum_fl(cx, wikrt_flmain(cx), c, inRight, v);
 }
 
-wikrt_err wikrt_split_sum(wikrt_cx* cx, wikrt_val c, bool* inRight, wikrt_val* v)
-{
+wikrt_err wikrt_split_sum(wikrt_cx* cx, wikrt_val c, bool* inRight, wikrt_val* v) {
     return wikrt_split_sum_fl(cx, wikrt_flmain(cx), c, inRight, v);
 }
 
-wikrt_err wikrt_alloc_text_fl(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_val* const v, char const* s) {
-    wikrt_val* tl = v;
-    
-    (*tl) = WIKRT_UNIT_INR; // terminate list
 
-    return WIKRT_INVAL;
-}
 wikrt_err wikrt_alloc_block_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, wikrt_abc_opts);
 wikrt_err wikrt_alloc_binary_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, uint8_t const*, size_t);
 wikrt_err wikrt_alloc_i32_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int32_t);
 wikrt_err wikrt_alloc_i64_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int64_t);
-wikrt_err wikrt_alloc_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
 wikrt_err wikrt_split_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val p, wikrt_val* fst, wikrt_val* snd);
 wikrt_err wikrt_alloc_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val* c, bool inRight, wikrt_val);
 wikrt_err wikrt_split_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val c, bool* inRight, wikrt_val*);

@@ -29,7 +29,7 @@ static inline wikrt_sc wikrt_size_class(wikrt_size const sz) {
  * Note: With a separate multi-threaded pool, we may use some heuristics
  * to decide whether to push some free space back into the shared pool.
  */
-void wikrt_free_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr const v, wikrt_size const szb)
+void wikrt_free_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr const v, wikrt_sizeb const szb)
 {
     // assume valid parameters at this layer
     wikrt_val* const pv = wikrt_pval(cx,v);
@@ -43,10 +43,7 @@ void wikrt_free_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr const v, wi
     // heuristically defrag.
 }
 
-void wikrt_free(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr v, wikrt_size sz)
-{
-    wikrt_free_b(cx, fl, v, WIKRT_CELLBUFF(sz));
-}
+
 
 /* allocate using a first-fit strategy from a given object size. just
  * checking every element of the free list and selecting the first fit.
@@ -92,7 +89,7 @@ bool wikrt_alloc_ff(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr* const v,
  * find an exact match. This should reduce fragmentation. Large allocations
  * will use first-fit.
  */
-bool wikrt_alloc_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr* const v, wikrt_size const szb)
+bool wikrt_alloc_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr* const v, wikrt_sizeb const szb)
 {
     if(szb <= WIKRT_QFSIZE) {
         wikrt_sc const sc = WIKRT_QFCLASS(szb);
@@ -121,12 +118,6 @@ bool wikrt_alloc_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr* const v, 
     } else {
         return false;
     }
-}
-
-bool wikrt_alloc(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr* v, wikrt_size sz)
-{
-    // to avoid recursively re-aligning target size...
-    return wikrt_alloc_b(cx,fl,v, WIKRT_CELLBUFF(sz));
 }
 
 bool wikrt_coalesce_maybe(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_size sz) {
@@ -168,13 +159,13 @@ void wikrt_fl_split(wikrt_cx* const cx, wikrt_addr const hd, wikrt_addr* const a
     (*tl) = 0;    // 'a' now terminates where 'b' starts.
 }
 
-// after we flatten our free-list, we'll perform a merge-sort.
-// merge-sort is an easy sort for singly linked lists, and it
-// requires at worst some constant amount of space for a context
-// limited to 32-bits.
-//
-// This is just a normal merge-sort. The coalescing of blocks
-// waits for wikrt_coalesce.
+/* After we flatten our free-list, we perform a merge-sort by address.
+ *
+ * The output is an address-ordered permutatation of the input list, no
+ * coalescing is performed. The sort itself uses in-place mutation.
+ *
+ * The smallest free address will be placed at the head of the list.
+ */
 void wikrt_fl_mergesort(wikrt_cx* const cx, wikrt_addr* const hd, wikrt_size const count)
 {
     // base case: any list of size zero or one is sorted
@@ -189,9 +180,8 @@ void wikrt_fl_mergesort(wikrt_cx* const cx, wikrt_addr* const hd, wikrt_size con
     wikrt_fl_mergesort(cx, &a, sza);
     wikrt_fl_mergesort(cx, &b, szb);
 
-    // merge the two lists with lowest addresses at head
     wikrt_addr* tl = hd;
-    while ((0 != a) && (0 != b)) {
+    while ((a != 0) && (b != 0)) {
         if(a < b) {
             (*tl) = a;
             tl = wikrt_pval(cx, a) + 1;
@@ -200,9 +190,9 @@ void wikrt_fl_mergesort(wikrt_cx* const cx, wikrt_addr* const hd, wikrt_size con
             (*tl) = b;
             tl = wikrt_pval(cx, b) + 1;
             b = (*tl);
-        }
+        } 
     }
-    (*tl) = (0 != a) ? a : b;
+    (*tl) = (a != 0) ? a : b;
 }
 
 // combine fragments of free lists
@@ -213,7 +203,7 @@ void wikrt_coalesce(wikrt_cx* cx, wikrt_fl* fl)
     wikrt_addr lst = wikrt_fl_flatten(cx,fl);
     wikrt_fl_mergesort(cx, &lst, flsz);
 
-    // reset old free list
+    // zero the free list
     (*fl) = (wikrt_fl){0}; 
 
     // free each node back, coalescing as we go.
@@ -224,8 +214,8 @@ void wikrt_coalesce(wikrt_cx* cx, wikrt_fl* fl)
         // coalesce adjacent nodes from sorted list
         while((lst + szb) == nxt) {
             wikrt_val* const pn = wikrt_pval(cx,nxt);
-            szb = szb + pn[0];
-            nxt = pn[1];
+            szb += pn[0];
+            nxt =  pn[1];
         }
         wikrt_free_b(cx, fl, lst, szb);
         lst = nxt;
@@ -235,9 +225,7 @@ void wikrt_coalesce(wikrt_cx* cx, wikrt_fl* fl)
     fl->frag_count_df = fl->frag_count;
 
     // THOUGHTS:
-    // This implementation of 'coalesce' isn't optimal if we coalesce
-    // into fragment sizes that we do not use. I think this should
-    // not be a major issue in practice, though. And it could be
-    // handled, eventually, by 
+    // coalesce might be harmful if it means we cannot achieve the
+    // quick-fit. So it really should be a last resort.
 }
 

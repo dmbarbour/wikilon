@@ -12,14 +12,32 @@
 #include "utf8.h"
 #include "wikilon-runtime.h"
 
-/** size within a context; documents a positive number of bytes */
+/** size within a context; documents a number of bytes */
 typedef wikrt_val wikrt_size;
+
+/** size buffered to one cell (i.e. 8 bytes for 32-bit context) */
+typedef wikrt_size wikrt_sizeb;
 
 /** address within a context; documents offset from origin. */
 typedef wikrt_val wikrt_addr;
 
 /** tag uses lowest bits of a value */
 typedef wikrt_val wikrt_tag;
+
+// misc. constants and static functions
+#define WIKRT_PAGESIZE 4096
+#define WIKRT_LNBUFF(SZ,LN) (((SZ+(LN-1))/LN)*LN)
+#define WIKRT_LNBUFF_POW2(SZ,LN) ((SZ + (LN - 1)) & ~(LN - 1))
+#define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
+#define WIKRT_CELLSIZE (2 * sizeof(wikrt_val))
+#define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
+#define WIKRT_QFSIZE (WIKRT_FLCT_QF * WIKRT_CELLSIZE)
+#define WIKRT_FFMAX  (WIKRT_QFSIZE * (1 << (WIKRT_FLCT_FF - 1)))
+#define WIKRT_QFCLASS(sz) ((sz - 1) / WIKRT_CELLSIZE)
+
+// for lockfile, LMDB file
+#define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
+#define WIKRT_DIR_MODE (mode_t)(WIKRT_FILE_MODE | S_IXUSR | S_IXGRP)
 
 /** wikrt_val bits
  *
@@ -178,10 +196,18 @@ typedef struct wikrt_fl {
     wikrt_size frag_count_df; // frag count after last coalesce
 } wikrt_fl;
 
-bool wikrt_alloc(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_size);
-void wikrt_free(wikrt_cx*, wikrt_fl*, wikrt_addr, wikrt_size);
+bool wikrt_alloc_b(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_sizeb);
+void wikrt_free_b(wikrt_cx*, wikrt_fl*, wikrt_addr, wikrt_sizeb);
 void wikrt_coalesce(wikrt_cx*, wikrt_fl*);
 bool wikrt_coalesce_maybe(wikrt_cx*, wikrt_fl*, wikrt_size); // heuristic
+
+static inline bool wikrt_alloc(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr* v, wikrt_size sz) { 
+    return wikrt_alloc_b(cx,fl,v, WIKRT_CELLBUFF(sz)); 
+}
+
+static inline void wikrt_free(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr v, wikrt_size sz) {
+    wikrt_free_b(cx, fl, v, WIKRT_CELLBUFF(sz)); 
+}
 
 /** @brief Header for cx->memory
  *
@@ -226,18 +252,18 @@ wikrt_err wikrt_copy_fl(wikrt_cx*, wikrt_fl*, wikrt_val* copy, wikrt_val const s
 wikrt_err wikrt_drop_fl(wikrt_cx*, wikrt_fl*, wikrt_val, bool bDropRel);
 wikrt_err wikrt_stow_fl(wikrt_cx*, wikrt_fl*, wikrt_val* out, wikrt_val);
 
-// misc. constants and static functions
-#define WIKRT_PAGESIZE 4096
-#define WIKRT_LNBUFF(SZ,LN) (((SZ+(LN-1))/LN)*LN)
-#define WIKRT_LNBUFF_POW2(SZ,LN) ((SZ + (LN - 1)) & ~(LN - 1))
-#define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
-#define WIKRT_CELLSIZE (2 * sizeof(wikrt_val))
-#define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
-#define WIKRT_QFSIZE (WIKRT_FLCT_QF * WIKRT_CELLSIZE)
-#define WIKRT_FFMAX  (WIKRT_QFSIZE * (1 << (WIKRT_FLCT_FF - 1)))
-#define WIKRT_QFCLASS(sz) ((sz - 1) / WIKRT_CELLSIZE)
 
-// for lockfile, LMDB file
-#define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
-#define WIKRT_DIR_MODE (mode_t)(WIKRT_FILE_MODE | S_IXUSR | S_IXGRP)
+static inline bool isValidTokChar(uint32_t c) {
+    bool const bInvalidChar =
+        ('{' == c) || ('}' == c) ||
+        isControlChar(c) || isReplacementChar(c);
+    return !bInvalidChar;
+}
+
+static inline bool isValidTxtChar(uint32_t c) {
+    bool const bInvalidChar =
+        (isControlChar(c) && (c != 10)) || 
+        isReplacementChar(c);
+    return !bInvalidChar;
+}
 
