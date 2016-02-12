@@ -491,9 +491,8 @@ wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*);
 
 /** @brief Read small integers.
  *
- * Unlike most API functions, the following have 'borrow' semantics.
- * The given wikrt_val remains available for further use. We'll return
- * WIKRT_BUFFSZ if the target is not large enough.
+ * The following have 'copy' semantics, i.e. the integer value referenced
+ * is copied into the target buffer but remains available in the context.
  */
 wikrt_err wikrt_peek_i32(wikrt_cx*, wikrt_val const, int32_t*);
 wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
@@ -563,18 +562,20 @@ wikrt_err wikrt_peek_type(wikrt_cx*, wikrt_vtype* out, wikrt_val const);
 /** @brief Copy a value. 
  *
  * Wikilon runtime favors linear 'move' semantics. A value reference is
- * used without aliasing or sharing. A benefit is that pure functions 
- * can be implemented without allocations. The cost is that deep copies
- * are necessary when a value must be copied at all.
+ * used without aliasing or sharing. A benefit is that many functions 
+ * can be implemented without allocation. The cost is that explicit
+ * copies of values are necessary. In ABC, the copy operator '^' is 
+ * naturally explicit.
+ *
+ * This copy function will use an ad-hoc strategy, essentially a deep copy
+ * but with potential for lazy or copy-on-write strategies where Wikilon
+ * runtime is likely to profit from doing so.
  *
  * Awelon Bytecode supports substructural types. Normally, a block marked
  * affine will not be copyable. But the C API is free to ignore such
  * constraints but must do so explicitly by indicating `bCopyAff`.
- *
- * Copies may be shallow and lazy in special cases, e.g. use of value
- * stowage or copies of pending computations. 
  */
-wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
+wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* copy1, wikrt_val const src, bool bCopyAff);
 
 /** @brief Drop a value.
  *

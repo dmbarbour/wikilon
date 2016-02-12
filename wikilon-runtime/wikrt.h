@@ -24,6 +24,7 @@ typedef wikrt_val wikrt_addr;
 /** tag uses lowest bits of a value */
 typedef wikrt_val wikrt_tag;
 
+
 // misc. constants and static functions
 #define WIKRT_PAGESIZE 4096
 #define WIKRT_LNBUFF(SZ,LN) (((SZ+(LN-1))/LN)*LN)
@@ -61,10 +62,10 @@ typedef wikrt_val wikrt_tag;
  *     so maybe 1 bit for tag, 1 bit for sign?
  *   reference counts: no longer a separate object...
  */
-#define WIKRT_TAG_OBJECT    1
-#define WIKRT_TAG_PROD      3
-#define WIKRT_TAG_PROD_INL  5
-#define WIKRT_TAG_PROD_INR  7
+#define WIKRT_O             1
+#define WIKRT_P             3
+#define WIKRT_PL            5
+#define WIKRT_PR            7
 
 #define WIKRT_MASK_TAG      7
 #define WIKRT_MASK_ADDR     (~WIKRT_MASK_TAG)
@@ -81,9 +82,75 @@ static inline wikrt_val  wikrt_tag_addr(wikrt_tag t, wikrt_addr a) { return (t |
  */
 #define WIKRT_SMALLINT_MAX  ((1 << 30) - 1)
 #define WIKRT_SMALLINT_MIN  (- WIKRT_SMALLINT_MAX)
-static inline wikrt_val wikrt_i2v_small(int32_t n) { return (wikrt_val)(n << 1); }
-static inline int32_t wikrt_v2i_small(wikrt_val v) { return (((int32_t)v) >> 1); }
-static inline bool wikrt_is_smallint(wikrt_val v) { return (0 == (v & 1)); }
+static inline wikrt_val wikrt_i2v(int32_t n) { return (wikrt_val)(n << 1); }
+static inline int32_t wikrt_v2i(wikrt_val v) { return (((int32_t)v) >> 1); }
+static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
+
+/** @brief tagged objects 
+ * 
+ * Tagged objects use their first word to indicate their type. The 
+ * first word will also contain data bits when profitable.
+ *
+ * Big Integers: lowest tag bit = 0
+ *
+ *   Big integers are recorded in a packed binary-coded decimal format,
+ *   in particular using 30-bit 'digits' each in the range 0..999999999.
+ *   Big integers always use at least two such digits, in little-endian
+ *   format. In addition, we'll keep a sign bit with the first word, and
+ *   the last word is also indicated by a sign bit.
+ *
+ *   On a 64-bit machine, we probably still want to use 30-bit digits.
+ *
+ * Deep Sums: low tag byte = 1
+ *
+ *   For deep sums, the upper 24 bits are all data bits indicating sums
+ *   of depth one to twelve: `10` for `in left` and `11` for `in right`.
+ *   The second word in our sum is the value, which may reference another
+ *   deep sum. Deep sums should always be packed as much as possible.
+ *
+ * Blocks: low tag byte = 3
+ *
+ *   A block is either: identity, a composition of blocks, or a block with
+ *   one or more operations (using an optimized encoding) together with a
+ *   list of value dependencies. Blocks may be reference-counted to limit
+ *   unnecessary copies of contained data, for cases where we might drop
+ *   the block.
+ *   
+ * Arrays: 
+ *
+ *   Arrays are compact representations of lists and list-like structures,
+ *   i.e. of shape `μL.((a*L)+b)`. Array representations will wait until
+ *   we have accelerators for common list operations (e.g. list index, update,
+ *   append, split, reverse, etc.). Specialized arrays will be desirable for
+ *   binaries and texts.
+ *
+ *   - Basic Arrays: 
+ *   - Binaries:
+ *   - Texts:
+ *
+ * Stowed Values:
+ *   Fully stowed values use a 64-bit reference to LMDB storage, plus a 
+ *   few linked-list references for ephemeron GC purposes. Latent stowage
+ *   is also necessary (no address assigned yet). And we'll need reference
+ *   counting for stowed values.
+ */
+
+#define WIKRT_OTAG_DEEPSUM  1
+#define WIKRT_OTAG_BLOCK    3
+#define WIKRT_OTAG_ARRAY    5
+#define WIKRT_OTAG_STOWAGE  7
+
+#define WIKRT_BIGINT_DIGIT  1000000000
+#define WIKRT_DEEPSUMR      3 /* bits 11 */
+#define WIKRT_DEEPSUML      2 /* bits 10 */
+
+static inline bool wikrt_otag_bigint(wikrt_val v) { return (0 == (1 & v)); }
+static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM == (0xFF & v)); }
+static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == (0xFF & v)); }
+static inline bool wikrt_otag_block(wikrt_val v) { return (WIKRT_OTAG_BLOCK == (0xFF & v)); }
+static inline bool wikrt_bigint_sign(wikrt_val v) { return (0 != (2 & v)); }
+static inline int32_t wikrt_bigint_digit(uint32_t v) { return (int32_t)(v >> 2); }
+
 
 /** @brief Stowage address is 64-bit address. 
  *

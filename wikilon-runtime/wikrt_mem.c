@@ -121,38 +121,34 @@ bool wikrt_alloc_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr* const v, 
 }
 
 bool wikrt_coalesce_maybe(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_size sz) {
-    if((fl->free_bytes < (2 * sz)) || (fl->frag_count == fl->frag_count_df))
-        return false;
     wikrt_size const fc0 = fl->frag_count;
+    if((fl->free_bytes < (2 * sz)) || (fc0 == fl->frag_count_df))
+        return false;
     wikrt_coalesce(cx,fl);
     return (fc0 != fl->frag_count);
 }
 
 // join segregated free-list nodes into a single list
-wikrt_addr wikrt_fl_flatten(wikrt_cx* cx, wikrt_fl* fl) {
+wikrt_addr wikrt_fl_flatten(wikrt_cx* const cx, wikrt_fl* const fl) {
     wikrt_addr r = fl->size_class[0];
     for(wikrt_sc sc = 1; sc < WIKRT_FLCT; ++sc) {
         wikrt_addr* tl = fl->size_class + sc;
-        while(0 != (*tl)) { 
-            // each element in free-list is (size,next) pair
-            wikrt_val* const pv = wikrt_pval(cx,*tl);
-            tl = &(pv[1]);
-        }
-        (*tl) = r;
-        r = fl->size_class[sc];
+        while(0 != (*tl)) { tl = wikrt_pval(cx, (*tl)) + 1; }
+        (*tl) = r;              // addend prior free-list
+        r = fl->size_class[sc]; // take new head
     }
     return r;
 }
 
 void wikrt_fl_split(wikrt_cx* const cx, wikrt_addr const hd, wikrt_addr* const a, wikrt_size const sza, wikrt_addr* const b) 
 {
-    // I assume size is valid for list, that we won't reach a null address.
+    // I assume sza is valid
     (*a) = hd;
     wikrt_addr* tl = a;
     wikrt_size ct = 0;
-    while(ct < sza) {
-        tl = wikrt_pval(cx, (*tl)) + 1;
+    while(ct != sza) {
         ct = ct + 1;
+        tl = wikrt_pval(cx, (*tl)) + 1;
     }
     // at this point 'tl' points to the location of the split.
     (*b) = (*tl); // split remainder of list into 'b'.
@@ -195,37 +191,56 @@ void wikrt_fl_mergesort(wikrt_cx* const cx, wikrt_addr* const hd, wikrt_size con
     (*tl) = (a != 0) ? a : b;
 }
 
-// combine fragments of free lists
+/* combine adjacent fragments of free lists
+ *
+ * This also results in each free-list being sorted by address.
+ */
 void wikrt_coalesce(wikrt_cx* cx, wikrt_fl* fl)
 {
     // obtain an address-sorted list of all nodes
-    wikrt_size const flsz = fl->frag_count;
+    wikrt_size const fc0 = fl->frag_count;
+    wikrt_size const fb0 = fl->free_bytes;
     wikrt_addr lst = wikrt_fl_flatten(cx,fl);
-    wikrt_fl_mergesort(cx, &lst, flsz);
+    wikrt_fl_mergesort(cx, &lst, fc0);
 
-    // zero the free list
+    // zero the free lists
     (*fl) = (wikrt_fl){0}; 
 
-    // free each node back, coalescing as we go.
+    // to preserve address-order, we'll addend to tail of free list
+    wikrt_addr* fltl[WIKRT_FLCT];
+    for(wikrt_sc sc = 0; sc < WIKRT_FLCT; ++sc) {
+        fltl[sc] = fl->size_class + sc;
+    }
+
     while(0 != lst) {
-        wikrt_val* const pv = wikrt_pval(cx,lst);
+        wikrt_val* const pv = wikrt_pval(cx, lst);
         wikrt_size szb = pv[0];
         wikrt_addr nxt = pv[1];
-        // coalesce adjacent nodes from sorted list
+
+        // coalesce adjacent nodes
         while((lst + szb) == nxt) {
-            wikrt_val* const pn = wikrt_pval(cx,nxt);
+            wikrt_val* const pn = wikrt_pval(cx, nxt);
             szb += pn[0];
-            nxt =  pn[1];
+            nxt  = pn[1];
         }
-        wikrt_free_b(cx, fl, lst, szb);
+
+        // addend to tail of associated free-list
+        wikrt_sc const sc = wikrt_size_class(szb);
+        pv[0] = szb;
+        pv[1] = 0;
+        *(fltl[sc]) = lst;
+        fltl[sc] = (pv + 1);
+        fl->free_bytes += szb;
+        fl->frag_count += 1;
+
+        // continue loop with next free fragment
         lst = nxt;
     }
 
     // data for heuristic coalesce
     fl->frag_count_df = fl->frag_count;
 
-    // THOUGHTS:
-    // coalesce might be harmful if it means we cannot achieve the
-    // quick-fit. So it really should be a last resort.
+    // weak validation; ensure we didn't lose any space
+    assert((fc0 >= fl->frag_count) && (fb0 == fl->free_bytes));
 }
 

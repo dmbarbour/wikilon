@@ -233,61 +233,101 @@ wikrt_err wikrt_alloc_text(wikrt_cx* cx, wikrt_val* v, char const* s) {
     return wikrt_alloc_text_fl(cx, wikrt_flmain(cx), v, s);
 }
 
-/* Currently allocating as a normal list. This means we get a 8x increase in
- * size of texts (yuck!). But I can go back and add text tagged objects later.
+/* Currently allocating as a normal list. This means we allocate one
+ * full cell (WIKRT_CELLSIZE) per character, usually an 8x increase.
+ * Yikes! But I plan to later tune this to a dedicated structure.
  */
 wikrt_err wikrt_alloc_text_fl(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_val* const txt, char const* s) {
     wikrt_err r = WIKRT_OK;
     size_t len = strlen(s);
-    wikrt_addr* tl = txt;
+    wikrt_val hd;
+    wikrt_addr* tl = &hd;
     uint32_t cp;
     while((len != 0) && utf8_step(&s, &len, &cp)) {
         if(!isValidTxtChar(cp)) { 
             r = WIKRT_INVAL; 
-            break;
+            goto e;
         }
         wikrt_addr dst;
         if(!wikrt_alloc(cx, fl, &dst, WIKRT_CELLSIZE)) {
             r = WIKRT_CXFULL;
-            break;
+            goto e;
         }
-        (*tl) = wikrt_tag_addr(WIKRT_TAG_PROD_INL, dst);
+        (*tl) = wikrt_tag_addr(WIKRT_PL, dst);
         wikrt_val* pv = wikrt_pval(cx, dst);
-        pv[0] = wikrt_i2v_small(cp);
+        pv[0] = wikrt_i2v(cp);
         tl = (pv + 1);
     }
     (*tl) = WIKRT_UNIT_INR;
+    (*txt) = hd;
+    return WIKRT_OK;
+e: // error; need to free allocated data
+    (*tl) = WIKRT_UNIT_INR;
+    wikrt_drop_fl(cx, fl, hd, true);
+    (*txt) = WIKRT_UNIT_INR;
     return r;
-}
-
-
-wikrt_err wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, wikrt_abc_opts opts) {
-    return wikrt_alloc_block_fl(cx, wikrt_flmain(cx), v, abc, opts);
 }
 
 wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n) {
     return wikrt_alloc_i32_fl(cx, wikrt_flmain(cx), v, n);
 }
 
-wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n) {
-    return wikrt_alloc_i64_fl(cx, wikrt_flmain(cx), v, n);
+
+wikrt_err wikrt_alloc_i32_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, int32_t n) 
+{
+    bool const isSmallInt = ((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX));
+    if(isSmallInt) { 
+        (*v) = wikrt_i2v(n); 
+        return WIKRT_OK; 
+    }
+
+    // TODO: full support for big integers
+    return WIKRT_INVAL;
 }
 
 wikrt_err wikrt_peek_i32(wikrt_cx* cx, wikrt_val const v, int32_t* i32) 
 {
-    if(wikrt_is_smallint(v)) {
-        (*i32) = wikrt_v2i_small(v);
+    // small integers (normal case)
+    if(wikrt_i(v)) {
+        (*i32) = wikrt_v2i(v);
         return WIKRT_OK;
-    } 
+    }
+
+    wikrt_tag const tag = wikrt_vtag(v);
+    wikrt_addr const addr = wikrt_vaddr(v);
+    wikrt_val* const pv = wikrt_pval(cx,addr);
+    
+    bool const isBigInt = (WIKRT_O == tag) && wikrt_otag_bigint(*pv);
+    if(!isBigInt) { return WIKRT_TYPE_ERROR; }
+
+    // TODO: big integers, overflow calculations.
+    return WIKRT_INVAL;
+}
+
+wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n) {
+    return wikrt_alloc_i64_fl(cx, wikrt_flmain(cx), v, n);
+}
+
+wikrt_err wikrt_alloc_i64_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, int64_t n)
+{
+    bool const isSmallInt = ((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX));
+    if(isSmallInt) {
+        (*v) = wikrt_i2v((int32_t)n);
+        return WIKRT_OK;
+    }
+    // TODO: big integers (up to 3 big digits)
     return WIKRT_INVAL;
 }
 
 wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64) 
 {
-    if(wikrt_is_smallint(v)) {
-        (*i64) = (int64_t) wikrt_v2i_small(v);
+    if(wikrt_i(v)) {
+        (*i64) = (int64_t) wikrt_v2i(v);
         return WIKRT_OK;
     }
+
+    // TODO: big integers, simple overflow calculations.
+    //  this will wait until after spike solution.
     return WIKRT_INVAL;
 }
 
@@ -300,7 +340,7 @@ wikrt_err wikrt_alloc_prod_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* p, wikrt_va
     wikrt_addr dst;
     if(!wikrt_alloc(cx, fl, &dst, WIKRT_CELLSIZE))
         return WIKRT_CXFULL;
-    (*p) = wikrt_tag_addr(WIKRT_TAG_PROD, dst);
+    (*p) = wikrt_tag_addr(WIKRT_P, dst);
     wikrt_val* const pv = wikrt_pval(cx, dst);
     pv[0] = fst;
     pv[1] = snd;
@@ -311,26 +351,143 @@ wikrt_err wikrt_split_prod(wikrt_cx* cx, wikrt_val p, wikrt_val* fst, wikrt_val*
     return wikrt_split_prod_fl(cx, wikrt_flmain(cx), p, fst, snd);
 }
 
+wikrt_err wikrt_split_prod_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val p, wikrt_val* fst, wikrt_val* snd) 
+{
+    wikrt_tag const ptag = wikrt_vtag(p);
+    wikrt_addr const paddr = wikrt_vaddr(p);
+    wikrt_val* const pv = wikrt_pval(cx, paddr);
+
+    if((WIKRT_P == ptag) && (0 != paddr)) {
+        (*fst) = pv[0];
+        (*snd) = pv[1];
+        wikrt_free(cx, fl, paddr, WIKRT_CELLSIZE);
+        return WIKRT_OK;
+    } else {
+        return WIKRT_TYPE_ERROR;
+    }
+}
+
+
 wikrt_err wikrt_alloc_sum(wikrt_cx* cx, wikrt_val* c, bool inRight, wikrt_val v) {
     return wikrt_alloc_sum_fl(cx, wikrt_flmain(cx), c, inRight, v);
+}
+
+wikrt_err wikrt_alloc_sum_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* c, bool inRight, wikrt_val const v)
+{
+    wikrt_tag const vtag = wikrt_vtag(v);
+    wikrt_addr const vaddr = wikrt_vaddr(v);
+    wikrt_val* const pv = wikrt_pval(cx, vaddr);
+    if(WIKRT_P == vtag) {
+        // shallow sum on product, pointer manipulation, no allocation
+        wikrt_tag const newtag = inRight ? WIKRT_PR : WIKRT_PL;
+        (*c) = wikrt_tag_addr(newtag, vaddr);
+        return WIKRT_OK;
+    } else if((WIKRT_O == vtag) && wikrt_otag_deepsum(*pv) && ((*pv) < (1 << 30))) {
+        // deepsum has space if bits 30 and 31 are available, i.e. if tag less than (1 << 30).
+        // In this case, no allocation is required. We can update the existing deep sum in place.
+        wikrt_val const sumtag = ((*pv) >> 6) | (inRight ? WIKRT_DEEPSUMR : WIKRT_DEEPSUML);
+        wikrt_val const otag = (sumtag << 8) | WIKRT_OTAG_DEEPSUM;
+        (*pv) = otag;
+        return WIKRT_OK;
+    } else { // allocate deep sum
+        wikrt_addr dst;
+        if(!wikrt_alloc(cx, fl, &dst, WIKRT_CELLSIZE)) {
+            return WIKRT_CXFULL;
+        }
+        wikrt_val const sumtag = (inRight ? WIKRT_DEEPSUMR : WIKRT_DEEPSUML);
+        wikrt_val const otag = (sumtag << 8) | WIKRT_OTAG_DEEPSUM;
+        wikrt_val* const pv = wikrt_pval(cx, dst);
+        pv[0] = otag;
+        pv[1] = v;
+        (*c) = wikrt_tag_addr(WIKRT_O, dst);
+        return WIKRT_OK;
+    }
 }
 
 wikrt_err wikrt_split_sum(wikrt_cx* cx, wikrt_val c, bool* inRight, wikrt_val* v) {
     return wikrt_split_sum_fl(cx, wikrt_flmain(cx), c, inRight, v);
 }
 
+wikrt_err wikrt_split_sum_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val c, bool* inRight, wikrt_val* v)
+{
+    wikrt_tag const tag = wikrt_vtag(c);
+    wikrt_addr const addr = wikrt_vaddr(c);
+    if(WIKRT_PL == tag) {
+        (*inRight) = false;
+        (*v) = wikrt_tag_addr(WIKRT_P, addr);
+        return WIKRT_OK;
+    } else if(WIKRT_PR == tag) {
+        (*inRight) = true;
+        (*v) = wikrt_tag_addr(WIKRT_P, addr);
+        return WIKRT_OK;
+    } else if(WIKRT_O == tag) {
+        wikrt_val* const pv = wikrt_pval(cx, addr);
+        wikrt_val const otag = *pv;
+        if(wikrt_otag_deepsum(otag)) {
+            wikrt_val const s0 = (otag >> 8);
+            (*inRight) = (3 == (3 & s0));
+            wikrt_val const sf = (s0 >> 2);
+            if(0 == sf) { // dealloc deepsum
+                (*v) = pv[1];
+                wikrt_free(cx, fl, addr, WIKRT_CELLSIZE);
+            } else { // keep value, reduce one level 
+                (*v) = c;
+                pv[0] = (sf << 8) | WIKRT_OTAG_DEEPSUM;
+            }
+            return WIKRT_OK;
+        } else if(wikrt_otag_array(otag)) {
+            // TODO: pop value from array, alloc pair
+            return WIKRT_INVAL;
+        } else { return WIKRT_TYPE_ERROR; }
+    } else { return WIKRT_TYPE_ERROR; }
+}
 
-wikrt_err wikrt_alloc_block_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, wikrt_abc_opts);
+wikrt_err wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, wikrt_abc_opts opts) {
+    return wikrt_alloc_block_fl(cx, wikrt_flmain(cx), v, abc, opts);
+}
+
+wikrt_err wikrt_alloc_block_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, char const* abc, wikrt_abc_opts opts) 
+{
+    // TODO: represent block of code
+    return WIKRT_INVAL;
+}
+
 wikrt_err wikrt_alloc_binary_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, uint8_t const*, size_t);
-wikrt_err wikrt_alloc_i32_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int32_t);
-wikrt_err wikrt_alloc_i64_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int64_t);
-wikrt_err wikrt_split_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val p, wikrt_val* fst, wikrt_val* snd);
-wikrt_err wikrt_alloc_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val* c, bool inRight, wikrt_val);
-wikrt_err wikrt_split_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val c, bool* inRight, wikrt_val*);
 wikrt_err wikrt_alloc_seal_fl(wikrt_cx*, wikrt_fl*, wikrt_val* sv, char const* s, wikrt_val v); 
 wikrt_err wikrt_cons_fl(wikrt_cx*, wikrt_fl*, wikrt_val* result, wikrt_val elem, wikrt_val list);
 
-wikrt_err wikrt_copy_fl(wikrt_cx*, wikrt_fl*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
+wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* copy, wikrt_val const src, bool bCopyAff) {
+    return wikrt_copy_fl(cx, wikrt_flmain(cx), copy, src, bCopyAff);
+}
+
+/* small values allow shallow copies */
+static inline bool wikrt_copy_shallow(wikrt_val const src) {
+    return (wikrt_i(src) || (0 == wikrt_vaddr(src)));
+}
+
+/** deep copy a structure
+ *
+ * It will be important to control how much space is used when copying,
+ * i.e. to avoid busting the thread stack. I might need to model the
+ * copy stack within the context itself, albeit with reasonably large
+ * blocks to reduce fragmentation.
+ */
+wikrt_err wikrt_copy_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* copy, wikrt_val const src, bool bCopyAff)
+{
+    // TODO
+    return WIKRT_INVAL;
+}
+
+
+wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_val v, bool bDropRel) {
+    return wikrt_drop_fl(cx, wikrt_flmain(cx), v, bDropRel);
+}
+
+/** delete a large structure
+ *
+ * Similar to 'copy', I need some way to track progress for deletion of 
+ * deep structures in constant extra space. 
+ */
 wikrt_err wikrt_drop_fl(wikrt_cx*, wikrt_fl*, wikrt_val, bool bDropRel);
 wikrt_err wikrt_stow_fl(wikrt_cx*, wikrt_fl*, wikrt_val* out, wikrt_val);
 

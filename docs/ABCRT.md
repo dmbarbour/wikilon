@@ -82,7 +82,7 @@ In favor of 64 bits:
 * Simplicity: scale without adding annotations to code.
 * Extra tag bit: eliminate header for more value types.
 
-For Wikilon, I think the 32-bit option is favorable. I doubt I'll want to offer more than 4GB server space to compute a single webpage, for example. And the pressure for users to leverage stowage isn't a bad thing. If implemented well, stowage should be very efficient. Unlike virtual memory pages, stowage frees up the address space.
+For Wikilon, I think the 32-bit option is favorable. I doubt I'll want to offer more than 4GB RAM to compute any single webpage, for example. And the extra pressure for users to leverage stowage certainly isn't a bad thing. If implemented well, stowage should be very efficient: fast reads, latent batched writes, etc.. Unlike virtual memory pages, stowage frees up the address space, so we can work with a lot more than 4GB data in the end.
 
 That said, the ease of scaling makes the 64-bit option very tempting. I occasionally read about smart phones with 32GB RAM, or servers with 512GB RAM. While stowage can certainly take advantage of large amounts of RAM, it still involves repeated copying of values.
 
@@ -97,7 +97,7 @@ With 32-bit addressing aligned on 64-bit cells (representing pairs and lists), 3
 * 011 - pair of values 
 * 101 - pair in left
 * 111 - pair in right
-* NULL address - unit
+* NULL address - unit instead of pair
 
 This gives us compact representation for pairs, units, booleans, lists, simple trees (e.g. node+leaf), and small integers within range of plus or minus a billion. Anything else is represented by tagged objects.
 
@@ -109,7 +109,7 @@ Awelon Bytecode has manual memory management via explicit copy and drop operatio
 
 To get started quickly (spike solution, etc.), I should probably just leverage normal manual memory management techniques - a free list, etc.. 
 
-But long term, I believe that I would benefit from bump-pointer per-thread allocations and compacting collections. This theoretically should avoid synchronization, reduce fragmentation, improve memory locality, and generally enhance performance. When moving large amounts of memory from the nursery into the main allocation space, I'd also avoid lots of fine-grained allocations.
+But long term, I believe that I would benefit from bump-pointer per-thread allocations and compacting collections. This theoretically should avoid synchronization, reduce fragmentation, improve memory locality, and generally enhance performance. When moving large amounts of memory from the nursery into the main allocation space, I'd also avoid lots of fine-grained allocations. 
 
 How this works: a computation allocates from a nursery, then when full it moves living content to another nursery.
 
@@ -128,6 +128,8 @@ This same compacting algorithm should also work for moving surviving content int
 
 Do we want more than two stages? I think the benefit is marginal at that point. 
 
+*Other Thoughts:* It might be that I'll only want to use a nursery for limited use cases, e.g. objects of up to some small maximum size (one or two cells, perhaps). This could simplify the compaction phase.
+
 ### Memory Allocation Algorithms and Structures
 
 With par-seq parallelism, I'll need a good multi-threaded allocator. TCMalloc is one promising option in this arena. However, a lot of algorithms, including TCMalloc, don't work nicely with the idea of splitting and recombining structures (arrays, etc.) or of fast slab-allocations in context of ABC update patterns.
@@ -141,66 +143,9 @@ I need the following properties:
 
 Ability to free fragments of a larger allocation is important for the ability to split/recombine arrays, and also to perform fast reads from stowage: allocate everything you'll need at once, then fill the space. The last point - minimizing synchronization - is feasible if we simply give each processor its own free-list, and allocate in relatively large chunks from a shared page-heap or similar. This is what TCMalloc does, for example. It works well.
 
-For the other stuff: some ad-hoc mix of QuickFit and perhaps a few size-segregated first-fit free lists seems appropriate.
+For the other stuff: some ad-hoc mix of QuickFit and perhaps a few size-segregated first-fit free lists seems appropriate. I can try coalescing memory after I fail to allocate something - which should be a rare event, in practice.
 
-Or I might benefit from a simple 'bump-pointer' allocation together with a deferred coalescing model for free'd content. Hmm. The latter option does seem promising. So let's say we do this:
-
-* we have size-segregated allocation-lists.
- * 
-* we have a 'free list' for all free'd content.
- * when we free a block, it goes on this list
- * when this list reaches a certain size:
-  * sort, coalesce, push back into alloc lists
-
-For the other stuff... a variation of QuickFit seems appropriate. I can use a size-sorted array of free lists, or similar. Coalescing of lists can occur as needed.
-
-*Note:* I'd prefer to avoid tree-structured free lists, in part because we cannot iterate through them in constant space, in part because balancing them requires relatively sophisticated algorithms. Let's see how far we can get with singly linked lists, e.g. of (size,next) pairs.
-
-
-
-
-
-
-
-
-For the other stuff, I'm thinking QuickFit is pretty good for my use cases. This means, ideally, that we have a separate linked list for every 'size' we might allocate. But we could probably compromise, and use a set of 'size classes' each with a separate free list, so at least we aren't searching through a bunch of too-small or too-large
-
-
-        
-        
-        
-
-
-A good question is how to quickly find a node of a given size
-
-The greater challenge is to enable coalescing of free'd space together with fast, sized allocations. I essentially need size-sorted structures, plus some ability to find adjacent addresses. 
-
-From a given address+size, it should at least be easy to find the 'next' address and find it in our free list. But this seems like too much work for a fast free operation, and might result in too many splits upon allocation. 
-
-A more promising option, perhaps, is heuristically 'defrag' as a batch process. This wouldn't require indexing both size and address at the same time. A defrag would be driven by some combination of requirement and heuristics. As a batch process, defrag should have relatively good throughput and performance compared to lots of small coalescing operations.
-
-So... maybe size-sorted free lists, like 'QuickFit' algorithm, with occasional coalescing.
-
-
-
-
- I can create an array of free addresses, sort them, coalesce adjacent addresses (assuming each free address knows its own size, e.g. as the first word), then free the data. 
-
- free some count (or so many megabytes) of 'chunks'. This could be achieved by a simple algorithm: create a big array, sort it by address, combine adjacent free addresses.
-Each 'address' in our free list could use a simple pattern: (size, next) in a free list. Assuming we know how many free chunks we have, we should be able to easily find  
-
-
-One option, perhaps, is to focus on 
-
-
-
-
-seems a lot more challenging.
-
-
-
-
-I don't have any special ideas here. To avoid synchronization, I may track a per-thread free list, rather than using the shared context list for everything. I'm wondering whether I should use a weighted or Fibonacci buddy system.
+*Note:* I'd prefer to avoid tree-structured free lists - in part because we cannot iterate through them in constant space, in part because balancing them requires relatively sophisticated algorithms. Let's see instead how far we can get with singly linked lists, e.g. of (size,next) pairs.
 
 ## Tagged Objects
 
@@ -216,7 +161,7 @@ Important tagged objects include:
 * pending computations
 * sealed values
 
-Arrays, binaries, and texts are compact representations of *lists* (i.e. type `∃a.∃b.μL.((a*L)+b)`). Binaries and texts additionally constrain the element type (to a subset of small integers). Taken together with accelerators (strings of bytecode that we reduce to a single operator under the hood), we may achieve very high performance access and even in-place update for unshared arrays.
+Arrays, binaries, and texts are compact representations of lists and list-like structures (i.e. type `∃a.∃b.μL.((a*L)+b)`). Binaries and texts additionally constrain the element type (to a subset of small integers). Taken together with accelerators (strings of bytecode that we reduce to a single operator under the hood), we may achieve very high performance access and even in-place update for unshared arrays.
 
 Eventually, I may support floating point numbers, vectors, matrices. I'd love for Wikilon to become a go to solution for scientific computations (perhaps distributed on a cloud and leveraging GPGPU). These are frequently expressed in terms of vector and matrix computations.
 
@@ -257,7 +202,7 @@ The proposed representation for arrays is:
 
 *Note:* It might be worthwhile to represent smaller and simpler arrays (limited size, simple slicing, terminating with unit in right) using only a single cell overhead. 
 
-This tagged object actually represents an `(a * List a b)` pair. We'll further wrap it with another cell for the `inL` sum type. Together with this sum tag, the overhead for an array is 6 words. Lists require two word per item, so we break even on storage costs when encoding 6 items.
+*Note:* I need to decide whether an array represents `(a * List a b)` or just the list itself. I could possibly do both via a simple tag bit in the array type. But it might be simpler and more efficient to dismantle the head of an array whenever we try to access it as a sum type, losing only the ability to seamlessly rejoin.
 
 Annotation `{&array}` asserts the argument is a list of values and compacts this list into an array with a single contiguous buffer with `pnext` pointing to the terminal value (usually `unit inR` for a plain list). If allocation fails (e.g. due to memory fragmentation), or if the argument is not a valid representation of a list, computation will halt. 
 

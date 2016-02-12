@@ -26,7 +26,7 @@ static inline bool utf8_step(char const** s, size_t* strlen, uint32_t* cp)
 /** Validate and obtain string length. 
  *
  * Will return number of consecutive valid utf8 codepoints. 
- * Returns true iff the entire strlen was consumed.
+ * Returns true iff the entire strlen is valid.
  */
 bool utf8_valid_strlen(char const* s, size_t strlen, size_t* utf8len);
 

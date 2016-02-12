@@ -64,8 +64,8 @@ bool utf8_valid_strlen(char const* s, size_t strlen, size_t* utf8len)
 {
     uint32_t cp;
     size_t ct = 0;
-    while((strlen != 0) && utf8_step(&s, &strlen, &cp)) { ++ ct; }
-    if(NULL != utf8len) { (*utf8len) = ct; }
+    while((strlen != 0) && utf8_step(&s, &strlen, &cp)) { ++ct; }
+    (*utf8len) = ct;
     return (0 == strlen);
 }
 
