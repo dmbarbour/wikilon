@@ -87,69 +87,81 @@ static inline int32_t wikrt_v2i(wikrt_val v) { return (((int32_t)v) >> 1); }
 static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 
 /** @brief tagged objects 
- * 
- * Tagged objects use their first word to indicate their type. The 
- * first word will also contain data bits when profitable.
  *
- * Big Integers: lowest tag bit = 0
+ * Currently, I just use the low byte of each tag to indicate its
+ * general type, and the upper 24 bits are used for flags or data.
+ * I'm unlikely to ever need more than a few dozen tags, so this
+ * should be sufficient going forward.
  *
- *   Big integers are recorded in a packed binary-coded decimal format,
- *   in particular using 30-bit 'digits' each in the range 0..999999999.
- *   Big integers always use at least two such digits, in little-endian
- *   format. In addition, we'll keep a sign bit with the first word, and
- *   the last word is also indicated by a sign bit.
- *
- *   On a 64-bit machine, we probably still want to use 30-bit digits.
- *
- * Deep Sums: low tag byte = 1
+ * WIKRT_OTAG_DEEPSUM
  *
  *   For deep sums, the upper 24 bits are all data bits indicating sums
  *   of depth one to twelve: `10` for `in left` and `11` for `in right`.
  *   The second word in our sum is the value, which may reference another
- *   deep sum. Deep sums should always be packed as much as possible.
+ *   deep sum. Deep sums aren't necessarily packed as much as possible,
+ *   but should be heuristically tight.
  *
- * Blocks: low tag byte = 3
+ * WIKRT_OTAG_BIGINT
  *
- *   A block is either: identity, a composition of blocks, or a block with
- *   one or more operations (using an optimized encoding) together with a
- *   list of value dependencies. Blocks may be reference-counted to limit
- *   unnecessary copies of contained data, for cases where we might drop
- *   the block.
+ *   The upper 24 bits contain size and sign. Size is a number of 32-bit
+ *   words. Wikilon runtime currently encodes only 30 bits of data per
+ *   word, ranging 0..999999999 (i.e. a compact binary coded decimal).
+ *   The size is up to (2^23 - 1) words, which corresponds to about 75
+ *   million digits (and 34 megabytes) - an unlikely limit in practice.
+ *   Performance is likely to degrade long before this limit is reached.
+ *
+ *   The encoding is little-endian.
+ *
+ * WIKRT_OTAG_BLOCK
+ *
+ *   A block is either a composition of blocks or a binary for code plus
+ *   a list of quoted dependencies.
+ *
+ * WIKRT_OTAG_SEAL
+ *
+ *   A sealed value includes the value and a copy of the sealer token. 
+ *   Copying the sealer token is perhaps not space-optimal, but it is
+ *   a fixed maximum size so it shouldn't be a big problem. 
  *   
- * Arrays: 
+ * WIKRT_OTAG_ARRAY
  *
- *   Arrays are compact representations of lists and list-like structures,
- *   i.e. of shape `μL.((a*L)+b)`. Array representations will wait until
- *   we have accelerators for common list operations (e.g. list index, update,
- *   append, split, reverse, etc.). Specialized arrays will be desirable for
- *   binaries and texts.
+ *   Arrays are compact representations of lists or list-like structures,
+ *   i.e. of shape `μL.((a*L)+b)`. Rather than requiring a full two-word
+ *   cell per item, an array will generally make do with just one word 
+ *   per item (or less for binaries and texts). With accelerators, these
+ *   arrays shall also enable indexed access, logical split and join, 
+ *   logical reversals, etc..
  *
- *   - Basic Arrays: 
- *   - Binaries:
- *   - Texts:
+ *   Implementation of arrays is low priority at this time, but high
+ *   priority long term.
  *
- * Stowed Values:
+ * WIKRT_OTAG_STOWAGE
  *   Fully stowed values use a 64-bit reference to LMDB storage, plus a 
  *   few linked-list references for ephemeron GC purposes. Latent stowage
  *   is also necessary (no address assigned yet). And we'll need reference
  *   counting for stowed values.
  */
 
-#define WIKRT_OTAG_DEEPSUM  1
-#define WIKRT_OTAG_BLOCK    3
-#define WIKRT_OTAG_ARRAY    5
-#define WIKRT_OTAG_STOWAGE  7
+#define WIKRT_OTAG_BIGINT   73
+#define WIKRT_OTAG_DEEPSUM  83
+#define WIKRT_OTAG_BLOCK    66
+#define WIKRT_OTAG_SEAL     84
+#define WIKRT_OTAG_ARRAY    65
+#define WIKRT_OTAG_STOWAGE  88
+#define LOBYTE(V) ((V) & 0xFF)
 
-#define WIKRT_BIGINT_DIGIT  1000000000
 #define WIKRT_DEEPSUMR      3 /* bits 11 */
 #define WIKRT_DEEPSUML      2 /* bits 10 */
 
-static inline bool wikrt_otag_bigint(wikrt_val v) { return (0 == (1 & v)); }
-static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM == (0xFF & v)); }
-static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == (0xFF & v)); }
-static inline bool wikrt_otag_block(wikrt_val v) { return (WIKRT_OTAG_BLOCK == (0xFF & v)); }
-static inline bool wikrt_bigint_sign(wikrt_val v) { return (0 != (2 & v)); }
-static inline int32_t wikrt_bigint_digit(uint32_t v) { return (int32_t)(v >> 2); }
+#define WIKRT_BIGINT_DIGIT          1000000000
+#define WIKRT_BIGINT_MAX_DIGITS  ((1 << 23) - 1)
+
+static inline bool wikrt_otag_bigint(wikrt_val v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
+static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
+static inline bool wikrt_otag_block(wikrt_val v) { return (WIKRT_OTAG_BLOCK == LOBYTE(v)); }
+static inline bool wikrt_otag_seal(wikrt_val v) { return (WIKRT_OTAG_SEAL == LOBYTE(v)); }
+static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
+static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
 
 
 /** @brief Stowage address is 64-bit address. 
@@ -179,7 +191,7 @@ struct wikrt_env {
     MDB_env            *db_env;       
     MDB_dbi             db_memory; // address → value
     MDB_dbi             db_caddrs; // hash → [address]
-    MDB_dbi             db_keyval; // key → address or data
+    MDB_dbi             db_keyval; // key → (txn, address)
     MDB_dbi             db_refcts; // address → number
     MDB_dbi             db_refct0; // address → unit
     stowaddr            db_last_gc; 
@@ -276,6 +288,7 @@ static inline void wikrt_free(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr v, wikrt_si
     wikrt_free_b(cx, fl, v, WIKRT_CELLBUFF(sz)); 
 }
 
+
 /** @brief Header for cx->memory
  *
  * At the moment, this mostly consists of a 'free list'. When I go
@@ -300,6 +313,7 @@ static inline wikrt_fl* wikrt_flmain(wikrt_cx* cx) {
     return &(wikrt_cxh(cx)->flmain);
 }
 
+
 // To enable thread-local allocations and minimize synchronization, I will
 // use a separate free list for each separate thread. This requires most
 // allocating functions to include a thread-local variant.
@@ -313,21 +327,31 @@ wikrt_err wikrt_split_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val p, wikrt_val* fst,
 wikrt_err wikrt_alloc_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val* c, bool inRight, wikrt_val);
 wikrt_err wikrt_split_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val c, bool* inRight, wikrt_val*);
 wikrt_err wikrt_alloc_seal_fl(wikrt_cx*, wikrt_fl*, wikrt_val* sv, char const* s, wikrt_val v); 
-wikrt_err wikrt_cons_fl(wikrt_cx*, wikrt_fl*, wikrt_val* result, wikrt_val elem, wikrt_val list);
+
+wikrt_err wikrt_alloc_bigint(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, bool sign, uint32_t* digit, wikrt_size n);
 
 wikrt_err wikrt_copy_fl(wikrt_cx*, wikrt_fl*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
 wikrt_err wikrt_drop_fl(wikrt_cx*, wikrt_fl*, wikrt_val, bool bDropRel);
 wikrt_err wikrt_stow_fl(wikrt_cx*, wikrt_fl*, wikrt_val* out, wikrt_val);
 
+wikrt_err wikrt_cons_fl(wikrt_cx*, wikrt_fl*, wikrt_val* aL, wikrt_val a, wikrt_val L);
+wikrt_err wikrt_uncons_fl(wikrt_cx*, wikrt_fl*, wikrt_val aL, wikrt_val* a, wikrt_val* L);
+wikrt_err wikrt_read_fl(wikrt_cx* cx, wikrt_fl*, wikrt_val binary, size_t buffSize, 
+    size_t* bytesRead, uint8_t* buffer, wikrt_val* remainder);
 
-static inline bool isValidTokChar(uint32_t c) {
+// limited 
+static inline bool wikrt_copy_shallow(wikrt_val const src) {
+    return (wikrt_i(src) || (0 == wikrt_vaddr(src)));
+}
+
+static inline bool wikrt_token_char(uint32_t c) {
     bool const bInvalidChar =
         ('{' == c) || ('}' == c) ||
         isControlChar(c) || isReplacementChar(c);
     return !bInvalidChar;
 }
 
-static inline bool isValidTxtChar(uint32_t c) {
+static inline bool wikrt_text_char(uint32_t c) {
     bool const bInvalidChar =
         (isControlChar(c) && (c != 10)) || 
         isReplacementChar(c);

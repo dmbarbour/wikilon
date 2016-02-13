@@ -129,6 +129,7 @@ typedef struct wikrt_cx wikrt_cx;
 typedef enum wikrt_err 
 { WIKRT_OK = 0
 , WIKRT_INVAL           // bad arguments, avoidable programmer error
+, WIKRT_IMPL            // my bad! incomplete implementation here
 
 // External Resource Errors
 , WIKRT_DBERR           // LMDB or filesystem layer errors 
@@ -142,11 +143,8 @@ typedef enum wikrt_err
 , WIKRT_TXN_CONFLICT    // transaction failed on conflict
 
 // Evaluations
-, WIKRT_STREAM_WAIT     // waiting on input
 , WIKRT_QUOTA_STOP      // halted on time/effort quota
-, WIKRT_TOKEN_STOP      // stop on unrecognized token
-, WIKRT_ASSERT_FAIL     // assertion failure (op `K`)
-, WIKRT_TYPE_ERROR      // generic type errors
+, WIKRT_TYPE_ERROR      // generic runtime type errors
 } wikrt_err;
 
 /** @brief Translate wikrt_err to human text. */
@@ -422,20 +420,10 @@ typedef uint32_t wikrt_val;
  * wikrt_awaiting_stream returns true until addended.
  */
 wikrt_err wikrt_alloc_stream(wikrt_cx*, wikrt_val* s, wikrt_val* binary);
-wikrt_err wikrt_addend_stream(wikrt_cx*, wikrt_val s, uint8_t const* chunk, uint32_t size);
+wikrt_err wikrt_addend_stream(wikrt_cx*, wikrt_val s, uint8_t const* chunk, size_t size);
 wikrt_err wikrt_end_stream(wikrt_cx*, wikrt_val s);
 wikrt_err wikrt_awaiting_stream(wikrt_cx*, bool* bWaiting, wikrt_val const s);
 
-/** @brief Texts to/from utf-8 binaries. 
- *
- * ABC doesn't permit arbitrary texts. A short blacklist applies:
- * 
- *  - no control chars (C0, DEL, C1) except for LF
- *  - no surrogate codeponts (U+D800 .. U+DFFF)
- *  - no replacement char (U+FFFD)
- */
-wikrt_err wikrt_utf8_to_text(wikrt_cx*, wikrt_val utf8, wikrt_val* text);
-wikrt_err wikrt_text_to_utf8(wikrt_cx*, wikrt_val text, wikrt_val* utf8);
 
 // TODO: consider integrating abc-base16 compression for `bdfghjkmnpqstxyz`
 // strings. Consider supporting zstd or similar compression, too. These
@@ -453,14 +441,6 @@ wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_val block, wikrt_val* text, wikrt
 
 #endif
 
-/** Allocate a short text from a C string literal.
- *
- * Note: At the moment, this does not validate the input string. It must
- * be valid utf-8 text with correct constraints
-constraints on control characters, surrogate codepoints, and the replacement charactar. 
- */
-wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*);
-
 /** Allocate a block of Awelon Bytecode. */
 wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, wikrt_abc_opts);
 
@@ -471,6 +451,18 @@ wikrt_err wikrt_alloc_binary(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
 wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val*, int32_t);
 wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val*, int64_t);
 
+/** @brief Texts to/from utf-8 binaries. 
+ *
+ * ABC doesn't permit arbitrary texts. A short blacklist applies:
+ * 
+ *  - no control chars (C0, DEL, C1) except for LF
+ *  - no surrogate codeponts (U+D800 .. U+DFFF)
+ *  - no replacement char (U+FFFD)
+ */
+wikrt_err wikrt_utf8_to_text(wikrt_cx*, wikrt_val utf8, wikrt_val* text);
+wikrt_err wikrt_text_to_utf8(wikrt_cx*, wikrt_val text, wikrt_val* utf8);
+wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*);
+
 /** @brief Read binary data from a list-like structure. 
  *
  * The argument to wikrt_read is a binary value, a list-like structure
@@ -480,9 +472,8 @@ wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val*, int64_t);
  * we'll read as much as possible then return the remainder at the point
  * of error.
  */
-wikrt_err wikrt_read(wikrt_cx*, wikrt_val binary, uint32_t buffSize, 
-    uint32_t* bytesRead, uint8_t* buffer, wikrt_val* remainder);
-
+wikrt_err wikrt_read(wikrt_cx*, wikrt_val binary, size_t buffSize, 
+    size_t* bytesRead, uint8_t* buffer, wikrt_val* remainder);
 
 #if 0 // after spike solution
 /** Allocate large integers from C strings, regex `0 | (-)?[1-9][0-9]*` */
@@ -505,8 +496,8 @@ wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
  * size for our string (including the NUL terminator). Again, this
  * has borrow semantics; the integer is not destroyed. 
  */
-wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, uint32_t buffSize, char* buff);
-wikrt_err wikrt_peek_isize(wikrt_cx*, wikrt_val const, uint32_t* sufficientBuffSize);
+wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, size_t buffSize, char* buff);
+wikrt_err wikrt_peek_isize(wikrt_cx*, wikrt_val const, size_t* sufficientBuffSize);
 #endif
 
 /** @brief Allocate or disassemble basic product types (pairs of values). */
@@ -639,30 +630,22 @@ wikrt_err wikrt_alloc_eval(wikrt_cx*, wikrt_val*, wikrt_val arg, wikrt_val fn);
  * is reduced to a value. Further evaluation steps have no additional
  * effect.
  *
- * If we return WIKRT_TOKEN_STOP, you may potentially handle the token and
- * continue. If we return WIKRT_STREAM_WAIT, we can potentially addend the
- * stream and continue. For most other errors, we cannot continue.
+ * The other likely return value is WIKRT_TYPE_ERROR, which will occur
+ * in case of runtime type error or assertion failure. In general, there
+ * is no recovery from a type error.
  */
-wikrt_err wikrt_step_eval(wikrt_cx*, wikrt_val* evaluation, uint32_t* quota);
-
-/** @brief Handle a token stop.
- *
- * Upon WIKRT_TOKEN_STOP we may split the evaluation into a triple: the
- * token, an argument to it, and a continuation. The continuation may
- * be used or serialized as a block, but is specialized for use with 
- * wikrt_alloc_eval to construct an ongoing evaluation after our argument
- * has been processed.
- *
- * The token buffer should have size at least WIKRT_TOK_BUFFSZ to avoid
- * any risk of overflow. 
- */
-wikrt_err wikrt_token_stop(wikrt_cx*, wikrt_val, char* tok, wikrt_val* arg, wikrt_val* cont);
+wikrt_err wikrt_step_eval(wikrt_cx*, wikrt_val* evaluation, uint32_t* effort);
 
 /** @brief Quote a value into a block. v → [∀e. e → (v * e)]. (') */
 wikrt_err wikrt_quote(wikrt_cx*, wikrt_val, wikrt_val*);
 
 /** @brief Compose two blocks. [a → b] → [b → c] → [a → c]. (o) */
 wikrt_err wikrt_compose(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* ac);
+
+// Note: Originally I was planning to support 'token stops' so we could
+// extend the runtime with effects. However, this adds a lot of complexity
+// that Wikilon runtime doesn't need. And effects can be modeled in pure
+// ways via free monads, etc.. 
 
 #if 0
 

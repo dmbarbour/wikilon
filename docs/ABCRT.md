@@ -1,9 +1,7 @@
 
 # ABC Runtime Design
 
-As per [my performance strategy](Performance.md), I'm developing a C runtime: a good interpreter, with room for LLVM based JIT compilation. 
-
-One motivation for the C interpreter is that I need a simple, low-level data representation for the LLVM JIT. I'll be using something very like the Lisp/Scheme representation, consisting mostly of simple pairs of words.
+As per [my performance strategy](Performance.md), I'm developing a C runtime: a good interpreter, with opportunity for LLVM or other JIT compilation. One motivation for the C interpreter is that I need a simple, low-level data representation for the LLVM JIT. I'll be using something very like the Lisp/Scheme representation, consisting mostly of simple pairs of words.
 
 It may be useful to also develop a command-line interface at this layer, if I'm willing to encode Claw code and dictionaries at this level.
 
@@ -11,13 +9,13 @@ It may be useful to also develop a command-line interface at this layer, if I'm 
 
 Performance is the primary goal. But some others:
 
+* precise memory control: model machine's memory in one arena
+* hard real-time capable: predictable timing properties
 * suspend, checkpoint, persist, reload, resume, copy computations
 * easy to resize, reflect, render, compact suspended computations
 * monadic effects: return control of program environment to caller
 * easily integrate monadic effects with [claw command sequences](CommandSequences.md)
 * on errors or unrecognized tokens, suspend and return to caller
-* precise memory control: model machine's memory in one arena
-* hard real-time capable: predictable timing and garbage collection
 * no callbacks or handlers, no external dependencies for progress
 
 Also, it might be useful to support a second evaluation mode for type inference.
