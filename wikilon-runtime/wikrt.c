@@ -52,15 +52,11 @@ void wikrt_env_sync(wikrt_env* e) {
     }
 }
 
-size_t cx_size_bytes(uint32_t sizeMB) { 
-    return ((size_t) sizeMB) * (1024 * 1024); 
-}
-
 wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) {
     bool const bSizeValid = (WIKRT_CX_SIZE_MIN <= sizeMB) 
                          && (sizeMB <= WIKRT_CX_SIZE_MAX);
     if(!bSizeValid) return WIKRT_INVAL;
-    size_t const sizeBytes = cx_size_bytes(sizeMB);
+    size_t const sizeBytes = (size_t)(1024 * 1024) * (size_t) sizeMB;
 
     wikrt_cx* const cx = calloc(1,sizeof(wikrt_cx));
     if(NULL == cx) return WIKRT_NOMEM;
@@ -77,8 +73,8 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) {
     }
 
     cx->env    = e;
-    cx->sizeMB = sizeMB;
-    cx->memory = (wikrt_val*) pMem;
+    cx->memory = pMem;
+    cx->size   = (wikrt_size)sizeBytes;
     //cx->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
 
     // set initial memory before adding context to global list
@@ -115,7 +111,7 @@ void wikrt_cx_destroy(wikrt_cx* cx) {
     } wikrt_env_unlock(e);
 
     // free memory associated with the context
-    size_t const sizeBytes = cx_size_bytes(cx->sizeMB);
+    size_t const sizeBytes = (size_t) cx->size;
     bool const context_unmapped = (0 == munmap(cx->memory, sizeBytes));
     assert(context_unmapped);
     free(cx);
@@ -140,7 +136,7 @@ void wikrt_cx_resetmem(wikrt_cx* cx) {
     (*hdr) = (wikrt_cx_hdr){ 0 }; // clear root memory
 
     wikrt_addr const hdrEnd = (wikrt_val) WIKRT_PAGEBUFF(sizeof(wikrt_cx_hdr));
-    wikrt_val const szRem = (wikrt_val) cx_size_bytes(cx->sizeMB) - hdrEnd;
+    wikrt_sizeb const szRem = cx->size - hdrEnd;
     #undef HDRSZ
 
     // we'll simply 'free' our chunk of non-header memory.
@@ -231,6 +227,7 @@ wikrt_err wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val const v)
             else if(wikrt_otag_deepsum(otag) || wikrt_otag_array(otag)) { (*out) = WIKRT_VTYPE_SUM; }
             else if(wikrt_otag_block(otag)) { (*out) = WIKRT_VTYPE_BLOCK; }
             else if(wikrt_otag_stowage(otag)) { (*out) = WIKRT_VTYPE_STOWED; }
+            else if(wikrt_otag_seal(otag) || wikrt_otag_seal_sm(otag)) { (*out) = WIKRT_VTYPE_SEALED; }
             else { return WIKRT_INVAL; }
         } else { return WIKRT_INVAL; }
     }
@@ -253,18 +250,20 @@ bool wikrt_valid_token(char const* s) {
 }
 
 wikrt_err wikrt_alloc_text(wikrt_cx* cx, wikrt_val* v, char const* s) { 
-    return wikrt_alloc_text_fl(cx, wikrt_flmain(cx), v, s);
+    return wikrt_alloc_text_len(cx, v, s, strlen(s));
+}
+
+wikrt_err wikrt_alloc_text_len(wikrt_cx* cx, wikrt_val* v, char const* s, size_t len) {
+    return wikrt_alloc_text_fl(cx, wikrt_flmain(cx), v, s, len);
 }
 
 /* Currently allocating as a normal list. This means we allocate one
  * full cell (WIKRT_CELLSIZE) per character, usually an 8x increase.
  * Yikes! But I plan to later tune this to a dedicated structure.
  */
-wikrt_err wikrt_alloc_text_fl(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_val* const txt, char const* s) {
-    wikrt_err r = WIKRT_OK;
-    size_t len = strlen(s);
-    wikrt_val hd;
-    wikrt_addr* tl = &hd;
+wikrt_err wikrt_alloc_text_fl(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_val* const txt, char const* s, size_t len) {
+    wikrt_err r = WIKRT_IMPL;
+    wikrt_addr* tl = txt;
     uint32_t cp;
     while((len != 0) && utf8_step(&s, &len, &cp)) {
         if(!wikrt_text_char(cp)) { 
@@ -277,16 +276,15 @@ wikrt_err wikrt_alloc_text_fl(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_val*
             goto e;
         }
         (*tl) = wikrt_tag_addr(WIKRT_PL, dst);
-        wikrt_val* pv = wikrt_pval(cx, dst);
+        wikrt_val* const pv = wikrt_pval(cx, dst);
         pv[0] = wikrt_i2v(cp);
         tl = (pv + 1);
     }
     (*tl) = WIKRT_UNIT_INR;
-    (*txt) = hd;
     return WIKRT_OK;
 e: // error; need to free allocated data
     (*tl) = WIKRT_UNIT_INR;
-    wikrt_drop_fl(cx, fl, hd, true);
+    wikrt_drop_fl(cx, fl, (*txt), true);
     (*txt) = WIKRT_UNIT_INR;
     return r;
 }
@@ -295,33 +293,40 @@ wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n) {
     return wikrt_alloc_i32_fl(cx, wikrt_flmain(cx), v, n);
 }
 
-wikrt_err wikrt_alloc_bigint(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, bool sign, uint32_t* digit, wikrt_size n) 
+
+
+wikrt_err wikrt_alloc_binary(wikrt_cx* cx, wikrt_val* v, uint8_t const* buff, size_t elems) {
+    return wikrt_alloc_binary_fl(cx, wikrt_flmain(cx), v, buff, elems);
+}
+
+/* For the moment, we'll allocate a binary as a plain old list.
+ * This results in an WIKRT_CELLSIZE (8x) expansion at this time. I
+ * will need to use a more compact representation later.
+ */
+wikrt_err wikrt_alloc_binary_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, uint8_t const* buff, size_t nElems)
 {
-    if((n < 2) || (0 == digit[n-1])) {
-        // highest digit must be non-zero!
-        return WIKRT_INVAL;
+    wikrt_err r = WIKRT_IMPL;
+    wikrt_addr* tl = v;
+    uint8_t const* const buffEnd = buff + nElems;
+    while(buff != buffEnd) {
+        uint8_t const e = *(buff++);
+        wikrt_addr dst;
+        if(!wikrt_alloc(cx, fl, &dst, WIKRT_CELLSIZE)) { 
+            r = WIKRT_CXFULL;
+            goto e;
+        } 
+        (*tl) = wikrt_tag_addr(WIKRT_PL, dst);
+        wikrt_val* const pdst = wikrt_pval(cx, dst);
+        pdst[0] = wikrt_i2v((int32_t)e); 
+        tl = (pdst + 1);
     }
-
-    if(n > WIKRT_BIGINT_MAX_DIGITS) {
-        // reached limits of implementation
-        return WIKRT_IMPL; 
-    }
-
-    wikrt_size const szBytes = sizeof(wikrt_val) 
-                             + (n * sizeof(uint32_t));
-
-    wikrt_addr dst;
-    if(!wikrt_alloc(cx, fl, &dst, szBytes)) {
-        return WIKRT_CXFULL;
-    }
-    (*v) = wikrt_tag_addr(WIKRT_O, dst);
-    wikrt_val* const pv = wikrt_pval(cx, dst);
-    pv[0] = (((n << 1) | (sign ? 1 : 0)) << 8) | WIKRT_OTAG_BIGINT;
-    uint32_t* const d = (uint32_t*) (pv + 1);
-    for(wikrt_size ix = 0; ix < n; ++ix) {
-        d[ix] = digit[ix];
-    }
+    (*tl) = WIKRT_UNIT_INR;
     return WIKRT_OK;
+e:
+    (*tl) = WIKRT_UNIT_INR;
+    wikrt_drop_fl(cx, fl, (*v), true);
+    (*v) = WIKRT_UNIT_INR;
+    return r;
 }
 
 wikrt_err wikrt_alloc_i32_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, int32_t n) 
@@ -334,10 +339,23 @@ wikrt_err wikrt_alloc_i32_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, int32_t n
 
     bool const sign = (n < 0);
     if(sign) { n = -n; }
-    uint32_t d[2];
+
+    wikrt_size const nDigits = 2;
+    wikrt_size const allocSz = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
+
+    wikrt_addr dst;
+    if(!wikrt_alloc(cx, fl, &dst, allocSz)) {
+        return WIKRT_CXFULL;
+    }
+    (*v) = wikrt_tag_addr(WIKRT_O, dst);
+
+    wikrt_val* const p = wikrt_pval(cx, dst);
+    p[0] = wikrt_mkotag_bigint(sign, nDigits);
+    uint32_t* const d = (uint32_t*)(p+1);
     d[0] = (uint32_t) (n % WIKRT_BIGINT_DIGIT);
-    d[1] = (uint32_t) (n / WIKRT_BIGINT_DIGIT);
-    return wikrt_alloc_bigint(cx, fl, v, sign, d, 2);
+    d[1] = (uint32_t) (n / WIKRT_BIGINT_DIGIT); 
+
+    return WIKRT_OK;
 }
 
 wikrt_err wikrt_peek_i32(wikrt_cx* cx, wikrt_val const v, int32_t* i32) 
@@ -363,17 +381,34 @@ wikrt_err wikrt_alloc_i64_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, int64_t n
         (*v) = wikrt_i2v((int32_t)n);
         return WIKRT_OK;
     }
-    
+
     bool const sign = (n < 0);
-    if(sign) { n = - n; }
-    uint32_t d[3]; // ~90 bits
-    
-    d[0] = (uint32_t) (n % WIKRT_BIGINT_DIGIT);
-    n /= WIKRT_BIGINT_DIGIT;
-    d[1] = (uint32_t) (n % WIKRT_BIGINT_DIGIT);
-    d[2] = (uint32_t) (n / WIKRT_BIGINT_DIGIT);
-    wikrt_size const nDigits = (0 == d[2]) ? 3 : 2;
-    return wikrt_alloc_bigint(cx, fl, v, sign, d, nDigits);
+    if(sign) { n = -n; }
+    int64_t const d2_max = ((int64_t)WIKRT_DIGIT_MAX * (int64_t)WIKRT_BIGINT_DIGIT) 
+                         + WIKRT_DIGIT_MAX;
+    wikrt_size const nDigits = (n > d2_max) ? 3 : 2;
+    wikrt_size const allocSz = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
+
+    wikrt_addr dst;
+    if(!wikrt_alloc(cx, fl, &dst, allocSz)) {
+        return WIKRT_CXFULL;
+    }
+    (*v) = wikrt_tag_addr(WIKRT_O, dst);
+    wikrt_val* const p = wikrt_pval(cx, dst);
+    p[0] = wikrt_mkotag_bigint(sign, nDigits);
+    uint32_t* const d = (uint32_t*)(p+1);
+
+    if(2 == nDigits) {
+        d[0] = (uint32_t) (n % WIKRT_BIGINT_DIGIT);
+        d[1] = (uint32_t) (n / WIKRT_BIGINT_DIGIT);
+    } else { // 3 big digits
+        d[0] = (uint32_t) (n % WIKRT_BIGINT_DIGIT);
+        n /= WIKRT_BIGINT_DIGIT;
+        d[1] = (uint32_t) (n % WIKRT_BIGINT_DIGIT);
+        d[2] = (uint32_t) (n / WIKRT_BIGINT_DIGIT);
+    }
+
+    return WIKRT_OK;
 }
 
 wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64) 
@@ -502,29 +537,17 @@ wikrt_err wikrt_split_sum_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val c, bool* inRi
 }
 
 wikrt_err wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, wikrt_abc_opts opts) {
-    return wikrt_alloc_block_fl(cx, wikrt_flmain(cx), v, abc, opts);
+    return wikrt_alloc_block_len(cx, v, abc, strlen(abc), opts);
 }
-
-
-
-wikrt_err wikrt_alloc_block_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, char const* abc, wikrt_abc_opts opts) 
+wikrt_err wikrt_alloc_block_len(wikrt_cx* cx, wikrt_val* v, char const* abc, size_t len, wikrt_abc_opts opts) {
+    return wikrt_alloc_block_fl(cx, wikrt_flmain(cx), v, abc, len, opts);
+}
+wikrt_err wikrt_alloc_block_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, char const* abc, size_t strlen, wikrt_abc_opts opts) 
 {
     // TODO: represent block of code
     return WIKRT_IMPL;
 }
 
-
-wikrt_err wikrt_alloc_binary(wikrt_cx* cx, wikrt_val* v, uint8_t const* buff, size_t elems) {
-    return wikrt_alloc_binary_fl(cx, wikrt_flmain(cx), v, buff, elems);
-}
-
-/* For the moment, we'll allocate a binary as a plain old list.
- */
-wikrt_err wikrt_alloc_binary_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, uint8_t const* buff, size_t nElems)
-{
-    // TODO: allocate a binary in the context    
-    return WIKRT_IMPL;
-}
 
 wikrt_err wikrt_alloc_seal_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* sv, char const* s, wikrt_val v)
 {
@@ -559,17 +582,12 @@ wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_val v, bool bDropRel) {
  * Similar to 'copy', I need some way to track progress for deletion of 
  * deep structures in constant extra space. 
  */
-wikrt_err wikrt_drop_fl(wikrt_cx*, wikrt_fl*, wikrt_val, bool bDropRel);
-wikrt_err wikrt_stow_fl(wikrt_cx*, wikrt_fl*, wikrt_val* out, wikrt_val);
-
-wikrt_err wikrt_read(wikrt_cx* cx, wikrt_val binary, size_t buffSize, 
-    size_t* bytesRead, uint8_t* buffer, wikrt_val* remainder) 
+wikrt_err wikrt_drop_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val v, bool bDropRel)
 {
-    return wikrt_read_fl(cx, wikrt_flmain(cx), binary, buffSize, bytesRead, buffer, remainder);
+    return WIKRT_IMPL;
 }
 
-wikrt_err wikrt_read_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val binary, size_t buffSize, 
-    size_t* bytesRead, uint8_t* buffer, wikrt_val* remainder)
+wikrt_err wikrt_stow_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* out)
 {
     return WIKRT_IMPL;
 }

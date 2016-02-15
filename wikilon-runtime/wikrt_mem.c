@@ -1,5 +1,6 @@
 
 #include "wikrt.h"
+#include <string.h>
 #include <assert.h>
 
 bool wikrt_alloc_b(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_size);
@@ -119,6 +120,60 @@ bool wikrt_alloc_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr* const v, 
         return false;
     }
 }
+
+// heuristic fast-fail test for whether to try growing in place.
+static inline bool wikrt_try_grow_inplace(wikrt_cx* cx, wikrt_addr tgt, wikrt_sizeb growsz) {
+    if(tgt >= cx->size) { return false; }
+    wikrt_val const* const ptgt = wikrt_pval(cx, tgt);
+    wikrt_size const tgtsz = *ptgt;
+    return ((tgtsz >= growsz) && (tgtsz == WIKRT_CELLBUFF(tgtsz)));
+    // todo: consider also testing ptgt[1] as valid address
+}
+
+// try to grow an allocation...
+bool wikrt_grow_b(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr* addr, wikrt_sizeb sz0, wikrt_sizeb szf)
+{
+    wikrt_addr const tgt = (*addr) + sz0;
+    wikrt_sizeb const growsz = (szf - sz0);
+
+    if(wikrt_try_grow_inplace(cx, tgt, growsz)) {
+        wikrt_val* const ptgt = wikrt_pval(cx, tgt);
+        wikrt_size const tgtsz = *ptgt;
+        wikrt_size const growsz = (szf - sz0);
+
+        // search local free list for tgt
+        wikrt_sc const sc = wikrt_size_class(tgtsz);
+        wikrt_addr* l = fl->size_class + sc;
+        while((0 != *l) && (tgt != *l)) { 
+            l = 1 + wikrt_pval(cx, *l); 
+        }
+
+        if(tgt == *l) {
+            // grow in place and return
+            (*l) = ptgt[1]; 
+            fl->frag_count -= 1;
+            fl->free_bytes -= tgtsz;
+            if(tgtsz > growsz) {
+                wikrt_free_b(cx, fl, (tgt + growsz), (tgtsz - growsz));
+            }
+            return true;
+        }
+    }
+
+// allocate and shallow copy 
+
+    wikrt_addr const src = (*addr);
+    wikrt_addr dst;
+    if(!wikrt_alloc_b(cx, fl, &dst, szf))
+        return false;
+    wikrt_val const* const psrc = wikrt_pval(cx, src);
+    wikrt_val* const pdst = wikrt_pval(cx, dst);
+    memcpy(pdst, psrc, sz0);
+    wikrt_free_b(cx, fl, src, sz0);
+    return true;
+}
+
+
 
 bool wikrt_coalesce_maybe(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_size sz) {
     wikrt_size const fc0 = fl->frag_count;
@@ -240,7 +295,8 @@ void wikrt_coalesce(wikrt_cx* cx, wikrt_fl* fl)
     // data for heuristic coalesce
     fl->frag_count_df = fl->frag_count;
 
-    // weak validation; ensure we didn't lose any space
+    // weak validation; ensure we didn't lose any space, and
+    // that fragmentation has not increased.
     assert((fc0 >= fl->frag_count) && (fb0 == fl->free_bytes));
 }
 

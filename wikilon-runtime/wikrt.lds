@@ -21,20 +21,22 @@
     wikrt_end_stream;
     wikrt_awaiting_stream;
 
-    wikrt_read;
-
-    wikrt_utf8_to_text;
-    wikrt_text_to_utf8;
-    wikrt_text_to_block;
-    wikrt_block_to_text;
+    wikrt_alloc_binary;
+    wikrt_read_binary;
+    
     wikrt_alloc_text;
+    wikrt_alloc_text_len;
+    wikrt_read_text;
+
     wikrt_alloc_block;
+    wikrt_alloc_block_len;
 
     wikrt_alloc_i32;
     wikrt_alloc_i64;
-    wikrt_alloc_istr;
     wikrt_peek_i32;
     wikrt_peek_i64;
+
+    wikrt_alloc_istr;
     wikrt_peek_istr;
     wikrt_peek_isize;
 

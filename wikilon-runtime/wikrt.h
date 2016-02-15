@@ -119,9 +119,18 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *
  * WIKRT_OTAG_SEAL
  *
- *   A sealed value includes the value and a copy of the sealer token. 
- *   Copying the sealer token is perhaps not space-optimal, but it is
- *   a fixed maximum size so it shouldn't be a big problem. 
+ *   Just a copy of the sealer token together with the value. The data 
+ *   bits will indicate the size in bytes of the sealer token.
+ *
+ *   WIKRT_OTAG_SEAL_SM
+ *
+ *     An optimized representation for small discretionary seals, i.e.
+ *     such as {:map}. Small sealers must start with ':' and have no
+ *     more than three bytes. The sealer bytes are encoded in the data
+ *     bits, and require no additional space.
+ *
+ *     Developers should be encouraged to use discretionary sealers with
+ *     no more than 4 bytes utf-8 including the ':' for best performance.
  *   
  * WIKRT_OTAG_ARRAY
  *
@@ -140,12 +149,15 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *   few linked-list references for ephemeron GC purposes. Latent stowage
  *   is also necessary (no address assigned yet). And we'll need reference
  *   counting for stowed values.
+ *
+ *   I might need to use multiple tags for different stowage.
  */
 
-#define WIKRT_OTAG_BIGINT   73
-#define WIKRT_OTAG_DEEPSUM  83
+#define WIKRT_OTAG_BIGINT   73  
+#define WIKRT_OTAG_DEEPSUM  83 
 #define WIKRT_OTAG_BLOCK    66
 #define WIKRT_OTAG_SEAL     84
+#define WIKRT_OTAG_SEAL_SM  58
 #define WIKRT_OTAG_ARRAY    65
 #define WIKRT_OTAG_STOWAGE  88
 #define LOBYTE(V) ((V) & 0xFF)
@@ -154,14 +166,21 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_DEEPSUML      2 /* bits 10 */
 
 #define WIKRT_BIGINT_DIGIT          1000000000
+#define WIKRT_DIGIT_MAX (WIKRT_BIGINT_DIGIT - 1)
 #define WIKRT_BIGINT_MAX_DIGITS  ((1 << 23) - 1)
 
 static inline bool wikrt_otag_bigint(wikrt_val v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
 static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
 static inline bool wikrt_otag_block(wikrt_val v) { return (WIKRT_OTAG_BLOCK == LOBYTE(v)); }
 static inline bool wikrt_otag_seal(wikrt_val v) { return (WIKRT_OTAG_SEAL == LOBYTE(v)); }
+static inline bool wikrt_otag_seal_sm(wikrt_val v) { return (WIKRT_OTAG_SEAL_SM == LOBYTE(v)); }
 static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
 static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
+
+static inline wikrt_val wikrt_mkotag_bigint(bool sign, wikrt_size nDigits) {
+    return  (((nDigits << 1) | (sign ? 1 : 0)) << 8) | WIKRT_OTAG_BIGINT;
+}
+
 
 
 /** @brief Stowage address is 64-bit address. 
@@ -226,10 +245,10 @@ struct wikrt_cx {
 
     // primary memory is mutable flat array of some size
     void               *memory;
-    uint32_t            sizeMB; 
+    wikrt_sizeb         size;
 
     // internal context mutex?
-    //   may need for multi-threaded allocator if not lockless
+    //   maybe for multi-threaded allocators?
     //pthread_mutex_t     mutex;
 
     // most other data will be represented within cx_memory.
@@ -270,15 +289,18 @@ typedef int wikrt_sc;
 typedef struct wikrt_fl {
     wikrt_size free_bytes;
     wikrt_size frag_count;
+    // other: might want a lazy drop list?
     wikrt_addr size_class[WIKRT_FLCT];
     // todo: heuristics for coalesce decisions
     wikrt_size frag_count_df; // frag count after last coalesce
 } wikrt_fl;
 
+
 bool wikrt_alloc_b(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_sizeb);
 void wikrt_free_b(wikrt_cx*, wikrt_fl*, wikrt_addr, wikrt_sizeb);
 void wikrt_coalesce(wikrt_cx*, wikrt_fl*);
 bool wikrt_coalesce_maybe(wikrt_cx*, wikrt_fl*, wikrt_size); // heuristic
+bool wikrt_grow_b(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_sizeb, wikrt_sizeb);
 
 static inline bool wikrt_alloc(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr* v, wikrt_size sz) { 
     return wikrt_alloc_b(cx,fl,v, WIKRT_CELLBUFF(sz)); 
@@ -286,6 +308,19 @@ static inline bool wikrt_alloc(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr* v, wikrt_
 
 static inline void wikrt_free(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr v, wikrt_size sz) {
     wikrt_free_b(cx, fl, v, WIKRT_CELLBUFF(sz)); 
+}
+
+static inline bool wikrt_realloc(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr* addr, wikrt_size sz0, wikrt_size szf) {
+    sz0 = WIKRT_CELLBUFF(sz0);
+    szf = WIKRT_CELLBUFF(szf);
+    if(sz0 == szf) { 
+        return true; // no realloc needed 
+    } else if(szf > sz0) { 
+        return wikrt_grow_b(cx, fl, addr, sz0, szf); 
+    } else { // shrink
+        wikrt_free_b(cx, fl, ((*addr)+szf), (sz0 - szf)); 
+        return true; 
+    }
 }
 
 
@@ -313,29 +348,26 @@ static inline wikrt_fl* wikrt_flmain(wikrt_cx* cx) {
     return &(wikrt_cxh(cx)->flmain);
 }
 
-
-// To enable thread-local allocations and minimize synchronization, I will
-// use a separate free list for each separate thread. This requires most
-// allocating functions to include a thread-local variant.
-wikrt_err wikrt_alloc_text_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*);
-wikrt_err wikrt_alloc_block_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, wikrt_abc_opts);
+wikrt_err wikrt_alloc_text_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, size_t);
+wikrt_err wikrt_alloc_block_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, size_t, wikrt_abc_opts);
 wikrt_err wikrt_alloc_binary_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, uint8_t const*, size_t);
+
 wikrt_err wikrt_alloc_i32_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int32_t);
 wikrt_err wikrt_alloc_i64_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int64_t);
+wikrt_err wikrt_alloc_istr_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, size_t);
+
 wikrt_err wikrt_alloc_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
 wikrt_err wikrt_split_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val p, wikrt_val* fst, wikrt_val* snd);
+
 wikrt_err wikrt_alloc_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val* c, bool inRight, wikrt_val);
 wikrt_err wikrt_split_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val c, bool* inRight, wikrt_val*);
-wikrt_err wikrt_alloc_seal_fl(wikrt_cx*, wikrt_fl*, wikrt_val* sv, char const* s, wikrt_val v); 
 
-wikrt_err wikrt_alloc_bigint(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, bool sign, uint32_t* digit, wikrt_size n);
+wikrt_err wikrt_alloc_seal_fl(wikrt_cx*, wikrt_fl*, wikrt_val* sv, char const* s, wikrt_val v); 
 
 wikrt_err wikrt_copy_fl(wikrt_cx*, wikrt_fl*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
 wikrt_err wikrt_drop_fl(wikrt_cx*, wikrt_fl*, wikrt_val, bool bDropRel);
-wikrt_err wikrt_stow_fl(wikrt_cx*, wikrt_fl*, wikrt_val* out, wikrt_val);
+wikrt_err wikrt_stow_fl(wikrt_cx*, wikrt_fl*, wikrt_val*);
 
-wikrt_err wikrt_cons_fl(wikrt_cx*, wikrt_fl*, wikrt_val* aL, wikrt_val a, wikrt_val L);
-wikrt_err wikrt_uncons_fl(wikrt_cx*, wikrt_fl*, wikrt_val aL, wikrt_val* a, wikrt_val* L);
 wikrt_err wikrt_read_fl(wikrt_cx* cx, wikrt_fl*, wikrt_val binary, size_t buffSize, 
     size_t* bytesRead, uint8_t* buffer, wikrt_val* remainder);
 
