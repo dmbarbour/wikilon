@@ -108,15 +108,17 @@ typedef struct wikrt_env wikrt_env;
 
 /** @brief Opaque structure representing substrate for computations.
  *
- * Computations occur within an evaluation context. They serve a role
- * similar to virtual machines or OS processes. The context has small
- * 'active' working set (up to four gigabytes) but may access more 
- * data via the large values stowage feature.
+ * A wikrt_cx, a wikilon runtime context, represents both a space and
+ * a single thread for computations. A context has implicit access to
+ * a shared environment for stowage and database transactions. 
  *
- * Each `wikrt_cx*` should be handled in a single-threaded manner. It
- * may leverage multiple threads under the hood (par-seq parallelism),
- * but it's assumed that the API for a context is only used from only
- * one external thread at a time.
+ * At the moment, Wikilon runtime uses a 32-bit context even on 64-bit
+ * machines. This limits our context to 4GB 'active' data. However, use
+ * of large-value stowage and transactions enables access to much more
+ * data, essentially modeling a filesystem and virtual memory.
+ * 
+ * A `wikrt_cx*` must be handled in a single-threaded manner, but may
+ * float between external threads if used by only one at a time. 
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -168,7 +170,8 @@ wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, uint32_t dbMaxMB);
 
 /** @brief Destroy the environment.
  *
- * All contexts must be destroyed before the environment is destroyed.
+ * All contexts must be explicitly destroyed before the environment
+ * is destroyed. If not, this will 'abort()' instead.
  */
 void wikrt_env_destroy(wikrt_env*);
 
@@ -183,20 +186,24 @@ void wikrt_env_sync(wikrt_env*);
 /** @brief Create a context for computations.
  * 
  * A context consists mostly of one big mmap'd block of memory. The
- * valid range for context size is 4..4000 in megabyte units.
+ * valid range for context size is 4..4000 in megabyte units. This
+ * space is specific to the created context, so different contexts
+ * cannot generally share wikrt_val value references.
  */ 
 wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 
 #define WIKRT_CX_SIZE_MIN 4
 #define WIKRT_CX_SIZE_MAX 4000
 
-/** @brief Destroy a context and return its memory. */
+/** @brief Destroy a context and recover memory. */
 void wikrt_cx_destroy(wikrt_cx*);
 
-/** @brief Reset a context for use in a pooling system. 
+/** @brief Reset memory associated with context.
  *
  * This returns the context to its 'freshly created' status without
- * requiring the address space to be unmapped and remapped. 
+ * requiring the address space to be reallocated. Any computations
+ * in the context are invalidated. This may be useful for pooling of
+ * contexts.
  */
 void wikrt_cx_reset(wikrt_cx*);
 
@@ -241,22 +248,22 @@ typedef enum wikrt_opcode
 , ABC_QUOTE       = 39   // ' :: (a * e) → ([∀s.s→(a*s)] * e)
 , ABC_REL         = 107  // k :: ([a→b] * e) → ([a→b]k * e) (mark block non-droppable)
 , ABC_AFF         = 102  // f :: ([a→b] * e) → ([a→b]f * e) (mark block non-copyable) 
-, ABC_INEW        = 35   // # :: e → (I(0) * e)  (pseudo-literal integers, e.g. `#42`)
-, ABC_ID1         = 49   // 1 :: (I(a) * e) → (I(10a+1) * e)
-, ABC_ID2         = 50   // 2 :: (I(a) * e) → (I(10a+2) * e)
-, ABC_ID3         = 51   // 3 :: (I(a) * e) → (I(10a+3) * e)
-, ABC_ID4         = 52   // 4 :: (I(a) * e) → (I(10a+4) * e)
-, ABC_ID5         = 53   // 5 :: (I(a) * e) → (I(10a+5) * e)
-, ABC_ID6         = 54   // 6 :: (I(a) * e) → (I(10a+6) * e)
-, ABC_ID7         = 55   // 7 :: (I(a) * e) → (I(10a+7) * e)
-, ABC_ID8         = 56   // 8 :: (I(a) * e) → (I(10a+8) * e)
-, ABC_ID9         = 57   // 9 :: (I(a) * e) → (I(10a+9) * e)
-, ABC_ID0         = 48   // 0 :: (I(a) * e) → (I(10a+0) * e)
-, ABC_IADD        = 43   // + :: (I(a) * (I(b) * e)) → (I(a+b) * e)
-, ABC_IMUL        = 42   // * :: (I(a) * (I(b) * e)) → (I(a*b) * e)
-, ABC_INEG        = 45   // - :: (I(a) * e) → (I(-a) * e)
-, ABC_IDIV        = 81   // Q :: (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e))
-, ABC_IGT         = 71   // G :: (I(A) * (I(B) * e)) → (((I(B)*I(A)) + (I(A)*I(B))) * e); (in right if B > A)
+, ABC_NUM         = 35   // # :: e → (I(0) * e)  (pseudo-literal integers, e.g. `#42`)
+, ABC_D1          = 49   // 1 :: (I(a) * e) → (I(10a+1) * e)
+, ABC_D2          = 50   // 2 :: (I(a) * e) → (I(10a+2) * e)
+, ABC_D3          = 51   // 3 :: (I(a) * e) → (I(10a+3) * e)
+, ABC_D4          = 52   // 4 :: (I(a) * e) → (I(10a+4) * e)
+, ABC_D5          = 53   // 5 :: (I(a) * e) → (I(10a+5) * e)
+, ABC_D6          = 54   // 6 :: (I(a) * e) → (I(10a+6) * e)
+, ABC_D7          = 55   // 7 :: (I(a) * e) → (I(10a+7) * e)
+, ABC_D8          = 56   // 8 :: (I(a) * e) → (I(10a+8) * e)
+, ABC_D9          = 57   // 9 :: (I(a) * e) → (I(10a+9) * e)
+, ABC_D0          = 48   // 0 :: (I(a) * e) → (I(10a+0) * e)
+, ABC_ADD         = 43   // + :: (I(a) * (I(b) * e)) → (I(a+b) * e)
+, ABC_MUL         = 42   // * :: (I(a) * (I(b) * e)) → (I(a*b) * e)
+, ABC_NEG         = 45   // - :: (I(a) * e) → (I(-a) * e)
+, ABC_DIV         = 81   // Q :: (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e))
+, ABC_GT          = 71   // G :: (I(A) * (I(B) * e)) → (((I(B)*I(A)) + (I(A)*I(B))) * e); (in right if B > A)
 , ABC_CONDAP      = 63   // ? :: ([a→c] * ((a+b)*e)) → ((c+b)*e) (block must be droppable)
 , ABC_DISTRIB     = 68   // D :: (a * ((b+c) * e)) → (((a*b) + (a*c)) * e)
 , ABC_FACTOR      = 70   // F :: (((a*b)+(c*d)) * e) → ((a+c)*((b+d)*e))
@@ -416,7 +423,6 @@ typedef enum wikrt_vtype
 
 wikrt_err wikrt_peek_type(wikrt_cx*, wikrt_vtype* out, wikrt_val const);
 
-
   ///////////////////////////
  // DATA INPUT AND OUTPUT //
 ///////////////////////////
@@ -446,9 +452,11 @@ wikrt_err wikrt_read_binary(wikrt_cx*, size_t buffsz, size_t* bytesRead, uint8_t
  * (C0, C1, DEL) except LF, no surrogate codepoints, no replacement char.
  * A text is modeled as a list of codepoints, but may use a more compact
  * representation under the hood.
+ *
+ * Note: You must provide the length of the text, e.g. via `strlen()` if
+ * providing a C text.
  */
-wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*);
-wikrt_err wikrt_alloc_text_len(wikrt_cx*, wikrt_val*, char const*, size_t);
+wikrt_err wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*, size_t);
 
 /** @brief Read text data from a list-like structure.
  *
@@ -460,8 +468,7 @@ wikrt_err wikrt_read_text(wikrt_cx*, size_t buffsz, size_t* bytesRead,
                           size_t* charsRead, char* buffer, wikrt_val* text);
 
 /** Allocate a block of Awelon Bytecode. */
-wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, wikrt_abc_opts);
-wikrt_err wikrt_alloc_block_len(wikrt_cx*, wikrt_val*, char const*, size_t, wikrt_abc_opts);
+wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, size_t, wikrt_abc_opts);
 
 // Todo: read a block... may need special attention.
 
@@ -556,6 +563,8 @@ wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* cpy, wikrt_val const src, bool bCopyA
  * it also enables lazy destruction.
  */
 wikrt_err wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
+
+// considering: move function, to shift values between contexts
 
 /** @brief Mark a value for stowage.
  *
@@ -778,7 +787,8 @@ wikrt_err wikrt_txn_commit(wikrt_txn*);
  */
 void wikrt_txn_durable(wikrt_cx*, wikrt_txn);
 
-
+// Todo: consider specialized 'variable' alternatives for 
+//  stream processing, queues, logs, or similar?
 
 #define WIKILON_RUNTIME_H
 #endif

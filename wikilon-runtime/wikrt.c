@@ -36,13 +36,6 @@ void wikrt_env_destroy(wikrt_env* e) {
     free(e);
 }
 
-void wikrt_env_lock(wikrt_env* e) {
-    pthread_mutex_lock(&(e->mutex));
-}
-
-void wikrt_env_unlock(wikrt_env* e) {
-    pthread_mutex_unlock(&(e->mutex));
-}
 
 // trivial implementation 
 void wikrt_env_sync(wikrt_env* e) {
@@ -170,22 +163,22 @@ char const* wikrt_abcd_expansion(uint32_t opcode) { switch(opcode) {
     case ABC_QUOTE:       return "'";
     case ABC_REL:         return "k";
     case ABC_AFF:         return "f";
-    case ABC_INEW:        return "#";
-    case ABC_ID1:         return "1";
-    case ABC_ID2:         return "2";
-    case ABC_ID3:         return "3";
-    case ABC_ID4:         return "4";
-    case ABC_ID5:         return "5";
-    case ABC_ID6:         return "6";
-    case ABC_ID7:         return "7";
-    case ABC_ID8:         return "8";
-    case ABC_ID9:         return "9";
-    case ABC_ID0:         return "0";
-    case ABC_IADD:        return "+";
-    case ABC_IMUL:        return "*";
-    case ABC_INEG:        return "-";
-    case ABC_IDIV:        return "Q";
-    case ABC_IGT:         return "G";
+    case ABC_NUM:         return "#";
+    case ABC_D1:          return "1";
+    case ABC_D2:          return "2";
+    case ABC_D3:          return "3";
+    case ABC_D4:          return "4";
+    case ABC_D5:          return "5";
+    case ABC_D6:          return "6";
+    case ABC_D7:          return "7";
+    case ABC_D8:          return "8";
+    case ABC_D9:          return "9";
+    case ABC_D0:          return "0";
+    case ABC_ADD:         return "+";
+    case ABC_MUL:         return "*";
+    case ABC_NEG:         return "-";
+    case ABC_DIV:         return "Q";
+    case ABC_GT:          return "G";
     case ABC_CONDAP:      return "?";
     case ABC_DISTRIB:     return "D";
     case ABC_FACTOR:      return "F";
@@ -223,12 +216,17 @@ wikrt_err wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val const v)
         } else if((WIKRT_O == vtag) && (0 != vaddr)) {
             wikrt_val const* const pv = wikrt_pval(cx, vaddr);
             wikrt_val const otag = pv[0];
-            if(wikrt_otag_bigint(otag)) { (*out) = WIKRT_VTYPE_INTEGER; }
-            else if(wikrt_otag_deepsum(otag) || wikrt_otag_array(otag)) { (*out) = WIKRT_VTYPE_SUM; }
-            else if(wikrt_otag_block(otag)) { (*out) = WIKRT_VTYPE_BLOCK; }
-            else if(wikrt_otag_stowage(otag)) { (*out) = WIKRT_VTYPE_STOWED; }
-            else if(wikrt_otag_seal(otag) || wikrt_otag_seal_sm(otag)) { (*out) = WIKRT_VTYPE_SEALED; }
-            else { return WIKRT_INVAL; }
+            if(wikrt_otag_bigint(otag)) { 
+                (*out) = WIKRT_VTYPE_INTEGER; 
+            } else if(wikrt_otag_deepsum(otag) || wikrt_otag_array(otag)) { 
+                (*out) = WIKRT_VTYPE_SUM; 
+            } else if(wikrt_otag_block(otag)) { 
+                (*out) = WIKRT_VTYPE_BLOCK; 
+            } else if(wikrt_otag_stowage(otag)) { 
+                (*out) = WIKRT_VTYPE_STOWED; 
+            } else if(wikrt_otag_seal(otag) || wikrt_otag_seal_sm(otag)) { 
+                (*out) = WIKRT_VTYPE_SEALED; 
+            } else { return WIKRT_INVAL; }
         } else { return WIKRT_INVAL; }
     }
     return WIKRT_OK;
@@ -249,7 +247,7 @@ bool wikrt_valid_token(char const* s) {
     return true;
 }
 
-wikrt_err wikrt_alloc_text(wikrt_cx* cx, wikrt_val* v, char const* s) { 
+wikrt_err wikrt_alloc_text(wikrt_cx* cx, wikrt_val* v, char const* s, size_t len) { 
     return wikrt_alloc_text_len(cx, v, s, strlen(s));
 }
 
@@ -289,9 +287,13 @@ e: // error; need to free allocated data
     return r;
 }
 
-wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n) {
-    return wikrt_alloc_i32_fl(cx, wikrt_flmain(cx), v, n);
-}
+
+wikrt_err wikrt_read_text_fl(wikrt_cx*, wikrt_fl*, size_t buffsz, size_t* bytesRead, 
+        size_t* charsRead, char* buffer, wikrt_val* text);
+
+
+
+
 
 
 
@@ -327,6 +329,18 @@ e:
     wikrt_drop_fl(cx, fl, (*v), true);
     (*v) = WIKRT_UNIT_INR;
     return r;
+}
+wikrt_err wikrt_read_binary(wikrt_cx* cx, size_t buffsz, 
+        size_t* bytesRead, uint8_t* buffer, wikrt_val* binary)
+{
+    return wikrt_read_binary_fl(cx, wikrt_flmain(cx), 
+}
+wikrt_err wikrt_read_binary_fl(wikrt_cx*, wikrt_fl*, size_t buffsz, size_t* bytesRead, 
+        uint8_t* buffer, wikrt_val* binary)
+
+
+wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n) {
+    return wikrt_alloc_i32_fl(cx, wikrt_flmain(cx), v, n);
 }
 
 wikrt_err wikrt_alloc_i32_fl(wikrt_cx* cx, wikrt_fl* fl, wikrt_val* v, int32_t n) 

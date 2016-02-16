@@ -23,25 +23,27 @@ static inline wikrt_sc wikrt_size_class(wikrt_size const sz) {
          : wikrt_size_class_ff(sz);
 }
 
-
 /* coalescing is deferred; wikrt_free is O(1) in the normal case and
  * only touches the free list and the head of the deleted object.
  *
  * Note: With a separate multi-threaded pool, we may use some heuristics
  * to decide whether to push some free space back into the shared pool.
  */
-void wikrt_free_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr const v, wikrt_sizeb const szb)
+void wikrt_free_b(wikrt_cx* const cx, wikrt_addr const v, wikrt_sizeb const szb)
 {
     // assume valid parameters at this layer
     wikrt_val* const pv = wikrt_pval(cx,v);
     wikrt_sc const sc = wikrt_size_class(szb);
     pv[0] = szb; 
-    pv[1] = fl->size_class[sc];
-    fl->size_class[sc] = v;
-    fl->free_bytes += szb;
-    fl->frag_count += 1;
-    // TODO: if our free bytes are high, we might want to
-    // heuristically defrag.
+    pv[1] = cx->fl.size_class[sc];
+    cx->fl.size_class[sc] = v;
+    cx->fl.free_bytes += szb;
+    cx->fl.frag_count += 1;
+
+    // TODO: if we have free'd up a lot of memory in this thread, we
+    // might want to return that memory to our shared root context.
+    // But I'm not convinced this is the right place for it. Between
+    // computations seems more promising.
 }
 
 
@@ -57,7 +59,7 @@ void wikrt_free_b(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr const v, wi
  * avoid fragmentation due to cache-line and locality concerns (i.e.
  * filling gaps between large objects is unlikely to be cache optimal).
  */
-bool wikrt_alloc_ff(wikrt_cx* const cx, wikrt_fl* const fl, wikrt_addr* const v, wikrt_size const szb) {
+bool wikrt_alloc_ff(wikrt_cx* const cx, wikrt_addr* const v, wikrt_size const szb) {
     wikrt_sc sc = wikrt_size_class(szb);
     do {
         wikrt_addr* p = fl->size_class + sc;

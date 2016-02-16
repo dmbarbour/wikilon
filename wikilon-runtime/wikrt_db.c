@@ -5,17 +5,38 @@
 #include <stdio.h>
 #include <assert.h>
 
+/** Support for persistence and transactions. */ 
+struct wikrt_db { 
+    int                 lockfile;  
+    MDB_env            *env;       
+    MDB_dbi             memory; // address → value
+    MDB_dbi             caddrs; // hash → [address]
+    MDB_dbi             keyval; // key → (txn, address)
+    MDB_dbi             refcts; // address → number
+    MDB_dbi             refct0; // address → unit
+    stowaddr            last_gc; 
+    stowaddr            last_alloc;
+};
+
 bool wikrt_lockfile_init(int* pfd, char const* dirPath) {
     size_t const dplen = strlen(dirPath);
-    size_t const fplen = dplen + 6; // "/lock" + NUL
+    size_t const fplen = dplen + 20;
     char lockFileName[fplen];
-    sprintf(lockFileName, "%s/lock", dirPath);
+    sprintf(lockFileName, "%s/dblock", dirPath);
     bool const r = lockfile(pfd, lockFileName, WIKRT_FILE_MODE);
     return r;
 }
 
 // prepare LMDB database
-bool wikrt_db_init(wikrt_env* e, char const* dp, uint32_t dbMaxMB) {
+bool wikrt_db_init(wikrt_db** pdb, char const* dp, uint32_t dbMaxMB) {
+    (*pdb) = NULL;
+
+    if(!dp || (0 == dbMaxMB)) {
+        return true;
+    }
+
+    wikrt_db* db = calloc(1, sizeof(wikrt_db)); 
+    if(0 == db) { goto onError; }
 
     // ensure "" and "." have same meaning as local directory
     char const* dirPath = (dp[0] ? dp : ".");
@@ -24,7 +45,7 @@ bool wikrt_db_init(wikrt_env* e, char const* dp, uint32_t dbMaxMB) {
     // create our directory if necessary
     if(!mkdirpath(dirPath, WIKRT_DIR_MODE)) {
         fprintf(stderr, "Failed to create directory: %s\n", dirPath);
-        return false;
+        goto onError;
     }
 
     // to populate on success:
@@ -34,7 +55,9 @@ bool wikrt_db_init(wikrt_env* e, char const* dp, uint32_t dbMaxMB) {
     stowaddr db_last_alloc;
 
     // relevant constants
-    int const mdbFlags = MDB_NOTLS | MDB_NOLOCK | MDB_NOMEMINIT;
+    // TODO: Implement my own transaction thread-lock for STM and VCache-style
+    //  batched transactions. But until then, we'll use LMDB's transaction model.
+    int const mdbFlags = /* MDB_NOLOCK | */ MDB_NOTLS | MDB_NOMEMINIT;
     int const f_memory = MDB_CREATE | MDB_INTEGERKEY;
     int const f_keyval = MDB_CREATE;
     int const f_caddrs = MDB_CREATE | MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP;
@@ -83,15 +106,16 @@ bool wikrt_db_init(wikrt_env* e, char const* dp, uint32_t dbMaxMB) {
         goto onErrInitDB;
 
     // if we reach this point, we've succeeded.
-    e->db_env = pLMDB;
-    e->db_lockfile = db_lockfile;
-    e->db_memory = db_memory;
-    e->db_caddrs = db_caddrs;
-    e->db_keyval = db_keyval;
-    e->db_refcts = db_refcts;
-    e->db_refct0 = db_refct0;
-    e->db_last_alloc = db_last_alloc;
-    e->db_last_gc = 0;
+    db->env = pLMDB;
+    db->lockfile = db_lockfile;
+    db->memory = db_memory;
+    db->caddrs = db_caddrs;
+    db->keyval = db_keyval;
+    db->refcts = db_refcts;
+    db->refct0 = db_refct0;
+    db->last_alloc = db_last_alloc;
+    db->last_gc = 0;
+    (*pdb) = db;
 
     return true;   
 
@@ -103,13 +127,17 @@ bool wikrt_db_init(wikrt_env* e, char const* dp, uint32_t dbMaxMB) {
  onErrCreateDB: 
     close(db_lockfile);
  onError:
+    free(db);
     return false;
 }
 
-void wikrt_db_destroy(wikrt_env* e) {
-    if(e->db_enable) {
-        mdb_env_close(e->db_env);
-        close(e->db_lockfile);
+void wikrt_db_destroy(wikrt_db** pdb) {
+    wikrt_db* db = (*pdb);
+    if(NULL != db) {
+        mdb_env_close(db->env);
+        close(db->lockfile);
+        free(db);
+        (*pdb) = NULL;
     }
 }
 

@@ -416,6 +416,22 @@ This would enable large binary *outputs* to be loaded (perhapse even computed) i
 
 I think I'll try that route, rather than attempt to solve the problem of representing very large binaries.
 
+## Other Ideas
+
+### External Parallelism?
+
+At the moment, a 'context' is held by only one thread. I support internal parallelism by `{&par}` annotations. External parallelism could be useful, however, e.g. to enable parallel rendering of a value while computation is ongoing. I could enable this with something like `wikrt_cx_fork(wikrt_cx*, wikrt_cx**)`. Or I could potentially enable values to be moved between contexts?
+
+### Moving Values between Contexts?
+
+Should I have a function for this?
+
+        wikrt_err wikrt_move(wikrt_cx* src, wikrt_val, wikrt_cx* dst, wikrt_val*);
+
+I'm tempted to require that all movement of values between computations be processed through a transactional database system. This would structurally guarantee some nice consistency properties, should not hinder development of transactional queues or pipelines, would enable better logging and histories, etc..
+
+In any case, this would be very low priority. Wikilon itself doesn't need this features.
+
 ## Dead Ideas
 
 ### Array Stacks

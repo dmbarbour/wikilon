@@ -24,6 +24,11 @@ typedef wikrt_val wikrt_addr;
 /** tag uses lowest bits of a value */
 typedef wikrt_val wikrt_tag;
 
+/** intermediate structure between context and env */
+typedef struct wikrt_shm wikrt_shm;
+
+/* LMDB-layer Database. */
+typedef struct wikrt_db wikrt_db;
 
 // misc. constants and static functions
 #define WIKRT_PAGESIZE 4096
@@ -181,8 +186,6 @@ static inline wikrt_val wikrt_mkotag_bigint(bool sign, wikrt_size nDigits) {
     return  (((nDigits << 1) | (sign ? 1 : 0)) << 8) | WIKRT_OTAG_BIGINT;
 }
 
-
-
 /** @brief Stowage address is 64-bit address. 
  *
  * The lowest four bits of the address are reserved for type flags
@@ -200,73 +203,23 @@ static inline wikrt_val wikrt_mkotag_bigint(bool sign, wikrt_size nDigits) {
  */ 
 typedef uint64_t stowaddr;
 
+
+bool wikrt_db_init(wikrt_db**, char const*, uint32_t dbMaxMB);
+void wikrt_db_destroy(wikrt_db**);
+
 struct wikrt_env { 
-    wikrt_cx           *cxhd;  // linked list of contexts
+    wikrt_shm          *list;  // linked list of context roots
     pthread_mutex_t     mutex; // shared mutex for environment
-
-    // stowage and key-value persistence
-    bool                db_enable;
-    int                 db_lockfile;  
-    MDB_env            *db_env;       
-    MDB_dbi             db_memory; // address → value
-    MDB_dbi             db_caddrs; // hash → [address]
-    MDB_dbi             db_keyval; // key → (txn, address)
-    MDB_dbi             db_refcts; // address → number
-    MDB_dbi             db_refct0; // address → unit
-    stowaddr            db_last_gc; 
-    stowaddr            db_last_alloc;
-    // todo: HMAC key(s) for stowed data (persistent via db).
-
-    // todo: the LMDB writer state and locks
-    // todo: worker threads and task queues
-    // todo: ephemeral stowage to control GC
-    // transactions: maybe attempt to combine concurrent transactions
-   
-
-    // question: can we combine writes for concurrent transactions?
-    //  I would effectively need to track writes, ensure transactions
-    //  are serialized  
+    wikrt_db           *db;
 };
 
-bool wikrt_db_init(wikrt_env*, char const*, uint32_t dbMaxMB);
-void wikrt_db_destroy(wikrt_env*);
-
-void wikrt_env_lock(wikrt_env*);
-void wikrt_env_unlock(wikrt_env*);
-
-struct wikrt_cx { 
-    // environment's list of contexts (necessary for global
-    // sweeps, e.g. stowage or transaction conflict).
-    wikrt_cx           *next;
-    wikrt_cx           *prev;
-
-    // a context knows its parent environment
-    wikrt_env          *env;
-
-    // primary memory is mutable flat array of some size
-    void               *memory;
-    wikrt_sizeb         size;
-
-    // internal context mutex?
-    //   maybe for multi-threaded allocators?
-    //pthread_mutex_t     mutex;
-
-    // most other data will be represented within cx_memory.
-    // But I may need to develop a proper 'header' region.
-
-    // todo: for stowage, we must track:
-    //  stowed addresses to prevent GC
-    //  values pending stowage
-
-    // do I want a per-context mutex?
-};
-
-static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
-    return (wikrt_val*)(((char*)cx->memory)+addr);
-}
+static inline void wikrt_env_lock(wikrt_env* e) {
+    pthread_mutex_lock(&(e->mutex)); }
+static inline void wikrt_env_unlock(wikrt_env* e) {
+    pthread_mutex_unlock(&(e->mutex)); }
 
 /* size-segregated free lists... */
-#define WIKRT_FLCT_QF 16 // quick-fit lists 
+#define WIKRT_FLCT_QF 16 // quick-fit lists (sep by cell size)
 #define WIKRT_FLCT_FF 10 // first-fit lists (exponential)
 #define WIKRT_FLCT (WIKRT_FLCT_QF + WIKRT_FLCT_FF)
 
@@ -275,7 +228,8 @@ typedef int wikrt_sc;
 
 /** @brief Memory allocation 'free list'.
  *
- * Currently just using size-segregated free lists. Most allocations
+ * Currently just using size-segregated free lists with a quick-fit
+ * mechanic for smaller sizes. Most allocations
  * for Wikilon runtime will be two or four words. But larger data
  * becomes common with support for arrays and binaries.
  *
@@ -291,91 +245,85 @@ typedef struct wikrt_fl {
     wikrt_size frag_count;
     // other: might want a lazy drop list?
     wikrt_addr size_class[WIKRT_FLCT];
-    // todo: heuristics for coalesce decisions
-    wikrt_size frag_count_df; // frag count after last coalesce
 } wikrt_fl;
 
+/** Shared state for multi-threaded contexts. */ 
+struct wikrt_shm {
+    // doubly-linked list of contexts for env. 
+    wikrt_shm          *next;
+    wikrt_shm          *prev;
 
-bool wikrt_alloc_b(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_sizeb);
-void wikrt_free_b(wikrt_cx*, wikrt_fl*, wikrt_addr, wikrt_sizeb);
-void wikrt_coalesce(wikrt_cx*, wikrt_fl*);
-bool wikrt_coalesce_maybe(wikrt_cx*, wikrt_fl*, wikrt_size); // heuristic
+    // for now, keeping a list of associated contexts
+    wikrt_cx           *list;
+
+    // shared environment for multiple contexts.
+    wikrt_env          *env;
+
+    // lock for shared state within context
+    pthread_mutex_t     mutex;
+
+    // primary context memory
+    void               *memory;
+    size_t              size;
+
+    // shared free-list between threads 
+    wikrt_fl            flroot;
+};
+
+static inline void wikrt_shm_lock(wikrt_shm* shm) {
+    pthread_mutex_lock(&(shm->mutex)); }
+static inline void wikrt_shm_unlock(wikrt_shm* shm) {
+    pthread_mutex_unlock(&(shm->mutex)); }
+
+
+/* The 'wikrt_cx' is effectively the thread-local storage for
+ * wikilon runtime computations. It's assumed this is used from
+ * only one thread.
+ */
+struct wikrt_cx {
+    wikrt_cx           *next; // sibling context
+    wikrt_cx           *prev; // sibling context
+    wikrt_shm          *shm;  // shared memory structures
+    void               *memory; // main memory
+    wikrt_fl            fl;     // local free space
+};
+
+static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
+    return (wikrt_val*)(addr + ((char*)(cx->memory)));
+}
+
+bool wikrt_alloc_b(wikrt_cx*, wikrt_addr*, wikrt_sizeb);
+void wikrt_free_b(wikrt_cx*, wikrt_addr, wikrt_sizeb);
 bool wikrt_grow_b(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_sizeb, wikrt_sizeb);
 
-static inline bool wikrt_alloc(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr* v, wikrt_size sz) { 
-    return wikrt_alloc_b(cx,fl,v, WIKRT_CELLBUFF(sz)); 
+static inline bool wikrt_alloc(wikrt_cx* cx, wikrt_addr* v, wikrt_size sz) { 
+    return wikrt_alloc_b(cx, v, WIKRT_CELLBUFF(sz)); 
 }
 
-static inline void wikrt_free(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr v, wikrt_size sz) {
-    wikrt_free_b(cx, fl, v, WIKRT_CELLBUFF(sz)); 
+static inline void wikrt_free(wikrt_cx* cx, wikrt_addr v, wikrt_size sz) {
+    wikrt_free_b(cx, v, WIKRT_CELLBUFF(sz)); 
 }
 
-static inline bool wikrt_realloc(wikrt_cx* cx, wikrt_fl* fl, wikrt_addr* addr, wikrt_size sz0, wikrt_size szf) {
+static inline bool wikrt_realloc(wikrt_cx* cx, wikrt_addr* addr, wikrt_size sz0, wikrt_size szf) {
     sz0 = WIKRT_CELLBUFF(sz0);
     szf = WIKRT_CELLBUFF(szf);
     if(sz0 == szf) { 
         return true; // no realloc needed 
     } else if(szf > sz0) { 
-        return wikrt_grow_b(cx, fl, addr, sz0, szf); 
+        return wikrt_grow_b(cx, addr, sz0, szf); 
     } else { // shrink
-        wikrt_free_b(cx, fl, ((*addr)+szf), (sz0 - szf)); 
+        wikrt_free_b(cx, ((*addr)+szf), (sz0 - szf)); 
         return true; 
     }
 }
 
 
-/** @brief Header for cx->memory
- *
- * At the moment, this mostly consists of a 'free list'. When I go
- * multi-threaded, I may also need a shared free list between the
- * threads.
- *
- * Other things context is likely to include:
- *
- * - a list of available worker thread contexts (free list, etc.)
- * - a list of tasks awaiting parallel computations
- * - a list indexing stowage references to guard against GC
- */
-typedef struct wikrt_cx_hdr {
-    wikrt_fl flmain; // 
-} wikrt_cx_hdr;
-
-static inline wikrt_cx_hdr* wikrt_cxh(wikrt_cx* cx) {
-    return ((wikrt_cx_hdr*)(cx->memory));
-}
-
-static inline wikrt_fl* wikrt_flmain(wikrt_cx* cx) { 
-    return &(wikrt_cxh(cx)->flmain);
-}
-
-wikrt_err wikrt_alloc_text_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, size_t);
-wikrt_err wikrt_alloc_block_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, size_t, wikrt_abc_opts);
-wikrt_err wikrt_alloc_binary_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, uint8_t const*, size_t);
-
-wikrt_err wikrt_alloc_i32_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int32_t);
-wikrt_err wikrt_alloc_i64_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, int64_t);
-wikrt_err wikrt_alloc_istr_fl(wikrt_cx*, wikrt_fl*, wikrt_val*, char const*, size_t);
-
-wikrt_err wikrt_alloc_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
-wikrt_err wikrt_split_prod_fl(wikrt_cx*, wikrt_fl*, wikrt_val p, wikrt_val* fst, wikrt_val* snd);
-
-wikrt_err wikrt_alloc_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val* c, bool inRight, wikrt_val);
-wikrt_err wikrt_split_sum_fl(wikrt_cx*, wikrt_fl*, wikrt_val c, bool* inRight, wikrt_val*);
-
-wikrt_err wikrt_alloc_seal_fl(wikrt_cx*, wikrt_fl*, wikrt_val* sv, char const* s, wikrt_val v); 
-
-wikrt_err wikrt_copy_fl(wikrt_cx*, wikrt_fl*, wikrt_val* copy, wikrt_val const src, bool bCopyAff);
-wikrt_err wikrt_drop_fl(wikrt_cx*, wikrt_fl*, wikrt_val, bool bDropRel);
-wikrt_err wikrt_stow_fl(wikrt_cx*, wikrt_fl*, wikrt_val*);
-
-wikrt_err wikrt_read_fl(wikrt_cx* cx, wikrt_fl*, wikrt_val binary, size_t buffSize, 
-    size_t* bytesRead, uint8_t* buffer, wikrt_val* remainder);
-
-// limited 
+/* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const src) {
     return (wikrt_i(src) || (0 == wikrt_vaddr(src)));
 }
 
+/* Test whether a valid utf-8 codepoint is okay for a token. */
 static inline bool wikrt_token_char(uint32_t c) {
     bool const bInvalidChar =
         ('{' == c) || ('}' == c) ||
@@ -383,6 +331,7 @@ static inline bool wikrt_token_char(uint32_t c) {
     return !bInvalidChar;
 }
 
+/* Test whether a valid utf-8 codepoint is okay for a text. */
 static inline bool wikrt_text_char(uint32_t c) {
     bool const bInvalidChar =
         (isControlChar(c) && (c != 10)) || 
