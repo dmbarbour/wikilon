@@ -195,6 +195,23 @@ wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 #define WIKRT_CX_SIZE_MIN 4
 #define WIKRT_CX_SIZE_MAX 4000
 
+/** @brief External parallelism within a context.
+ *
+ * A `wikrt_cx*` must be used in a single-threaded manner. If you need
+ * parallel access to a single context, fork the context. This enables
+ * safe access to `wikrt_val` references from another thread, with a
+ * minimal synchronization overhead.
+ *
+ * The primary motivation for forking a context is to provide access to
+ * a computed value to a separate thread, without copying that value.
+ * But note that linear move semantics still apply: only one 'wikrt_cx*'
+ * should control any given value reference.
+ *
+ * All forks must be destroyed individually to recover the main context
+ * memory.
+ */
+wikrt_err wikrt_cx_fork(wikrt_cx*, wikrt_cx**);
+
 /** @brief Destroy a context and recover memory. */
 void wikrt_cx_destroy(wikrt_cx*);
 

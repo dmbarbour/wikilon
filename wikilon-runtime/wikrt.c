@@ -97,6 +97,29 @@ callocErr:
     return WIKRT_NOMEM;
 }
 
+wikrt_err wikrt_cx_fork(wikrt_cx* cx, wikrt_cx** pfork)
+{
+    wikrt_cxm* const cxm = cx->cxm;
+    (*pfork) = NULL;
+    wikrt_cx* fork = calloc(1, sizeof(wikrt_cx));
+    if(NULL == fork) {
+        return WIKRT_NOMEM;
+    }
+
+    fork->cxm = cxm;
+    fork->memory = cxm->memory;
+
+    wikrt_cxm_lock(cxm); {
+        fork->next = cxm->cxlist;
+        if(NULL != fork->next) { fork->next->prev = fork; }
+        cxm->cxlist = fork;
+    } wikrt_cxm_unlock(cxm);
+
+    (*pfork) = fork;
+    return WIKRT_OK;
+}
+
+
 void wikrt_cxm_destroy(wikrt_cxm* cxm) {
     assert(NULL == cxm->cxlist);
     errno = 0;

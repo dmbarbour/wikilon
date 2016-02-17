@@ -6,6 +6,7 @@
     wikrt_env_sync;
 
     wikrt_cx_create;
+    wikrt_cx_fork;
     wikrt_cx_destroy;
     wikrt_cx_env;
 

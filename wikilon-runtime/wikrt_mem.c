@@ -175,8 +175,7 @@ void wikrt_fl_split(void* const mem, wikrt_addr const hd, wikrt_addr* const a, w
 /* After we flatten our free-list, we perform a merge-sort by address.
  *
  * The output is an address-ordered permutatation of the input list, no
- * coalescing is performed. The sort itself uses in-place mutation. It
- * effectively takes constant space.
+ * coalescing is performed. The sort itself uses in-place mutation. 
  *
  * The smallest free address will be placed at the head of the list.
  */
