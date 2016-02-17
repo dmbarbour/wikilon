@@ -198,15 +198,6 @@ wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 /** @brief Destroy a context and recover memory. */
 void wikrt_cx_destroy(wikrt_cx*);
 
-/** @brief Reset memory associated with context.
- *
- * This returns the context to its 'freshly created' status without
- * requiring the address space to be reallocated. Any computations
- * in the context are invalidated. This may be useful for pooling of
- * contexts.
- */
-void wikrt_cx_reset(wikrt_cx*);
-
 /** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 

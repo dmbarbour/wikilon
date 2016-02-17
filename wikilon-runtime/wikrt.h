@@ -25,18 +25,21 @@ typedef wikrt_val wikrt_addr;
 typedef wikrt_val wikrt_tag;
 
 /** intermediate structure between context and env */
-typedef struct wikrt_shm wikrt_shm;
+typedef struct wikrt_cxm wikrt_cxm;
 
 /* LMDB-layer Database. */
 typedef struct wikrt_db wikrt_db;
 
 // misc. constants and static functions
-#define WIKRT_PAGESIZE 4096
 #define WIKRT_LNBUFF(SZ,LN) (((SZ+(LN-1))/LN)*LN)
 #define WIKRT_LNBUFF_POW2(SZ,LN) ((SZ + (LN - 1)) & ~(LN - 1))
-#define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
 #define WIKRT_CELLSIZE (2 * sizeof(wikrt_val))
 #define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
+
+// free list management
+#define WIKRT_FLCT_QF 16 // quick-fit lists (sep by cell size)
+#define WIKRT_FLCT_FF 10 // first-fit lists (exponential)
+#define WIKRT_FLCT (WIKRT_FLCT_QF + WIKRT_FLCT_FF)
 #define WIKRT_QFSIZE (WIKRT_FLCT_QF * WIKRT_CELLSIZE)
 #define WIKRT_FFMAX  (WIKRT_QFSIZE * (1 << (WIKRT_FLCT_FF - 1)))
 #define WIKRT_QFCLASS(sz) ((sz - 1) / WIKRT_CELLSIZE)
@@ -90,6 +93,8 @@ static inline wikrt_val  wikrt_tag_addr(wikrt_tag t, wikrt_addr a) { return (t |
 static inline wikrt_val wikrt_i2v(int32_t n) { return (wikrt_val)(n << 1); }
 static inline int32_t wikrt_v2i(wikrt_val v) { return (((int32_t)v) >> 1); }
 static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
+
+
 
 /** @brief tagged objects 
  *
@@ -171,7 +176,6 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_DEEPSUML      2 /* bits 10 */
 
 #define WIKRT_BIGINT_DIGIT          1000000000
-#define WIKRT_DIGIT_MAX (WIKRT_BIGINT_DIGIT - 1)
 #define WIKRT_BIGINT_MAX_DIGITS  ((1 << 23) - 1)
 
 static inline bool wikrt_otag_bigint(wikrt_val v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
@@ -205,11 +209,12 @@ typedef uint64_t stowaddr;
 
 
 bool wikrt_db_init(wikrt_db**, char const*, uint32_t dbMaxMB);
-void wikrt_db_destroy(wikrt_db**);
+void wikrt_db_destroy(wikrt_db*);
+void wikrt_db_flush(wikrt_db*);
 
 struct wikrt_env { 
-    wikrt_shm          *list;  // linked list of context roots
-    pthread_mutex_t     mutex; // shared mutex for environment
+    wikrt_cxm          *cxmlist;  // linked list of context roots
+    pthread_mutex_t     mutex;    // shared mutex for environment
     wikrt_db           *db;
 };
 
@@ -218,10 +223,6 @@ static inline void wikrt_env_lock(wikrt_env* e) {
 static inline void wikrt_env_unlock(wikrt_env* e) {
     pthread_mutex_unlock(&(e->mutex)); }
 
-/* size-segregated free lists... */
-#define WIKRT_FLCT_QF 16 // quick-fit lists (sep by cell size)
-#define WIKRT_FLCT_FF 10 // first-fit lists (exponential)
-#define WIKRT_FLCT (WIKRT_FLCT_QF + WIKRT_FLCT_FF)
 
 /** wikrt size class index, should be in 0..(WIKRT_FLCT-1) */
 typedef int wikrt_sc;
@@ -229,16 +230,13 @@ typedef int wikrt_sc;
 /** @brief Memory allocation 'free list'.
  *
  * Currently just using size-segregated free lists with a quick-fit
- * mechanic for smaller sizes. Most allocations
- * for Wikilon runtime will be two or four words. But larger data
- * becomes common with support for arrays and binaries.
+ * mechanic for smaller sizes. Most allocations for Wikilon runtime
+ * will be only a few words, so this is a good match to expected 
+ * behavior. 
  *
- * The caller must also provide sizes when deleting objects. No size
- * headers are used, at least not implicitly. This enables splitting
- * of arrays, for example. 
- *
- * Free lists use (size, addr) pairs, with 0 for the final address.
- * No tag bits are used at this layer, and sizes are in bytes.
+ * The wikrt_fl calls provide the 'primitive' allocation strategies.
+ * Coalescing of memory is NOT automatic, so if allocation fails
+ * it might be a valid strategy to coalesce and retry.
  */
 typedef struct wikrt_fl {
     wikrt_size free_bytes;
@@ -247,14 +245,29 @@ typedef struct wikrt_fl {
     wikrt_addr size_class[WIKRT_FLCT];
 } wikrt_fl;
 
+typedef struct wikrt_fltl {
+    wikrt_addr* size_class[WIKRT_FLCT];
+} wikrt_fltl;
+
+// basic strategies without fallback resources
+bool wikrt_fl_alloc(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr*);
+bool wikrt_fl_grow_inplace(void* mem, wikrt_sizeb memsz, wikrt_fl*, wikrt_sizeb sz0, wikrt_addr, wikrt_sizeb szf);
+void wikrt_fl_free(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr);
+void wikrt_fl_coalesce(void* mem, wikrt_fl*);
+
+// staged merge to shrink critical section
+void wikrt_fl_tails(void* mem, wikrt_fl* in, wikrt_fltl* out);
+void wikrt_fl_merge(wikrt_fl* srcHead, wikrt_fltl* srcTail, wikrt_fl* dst);
+
+
 /** Shared state for multi-threaded contexts. */ 
-struct wikrt_shm {
+struct wikrt_cxm {
     // doubly-linked list of contexts for env. 
-    wikrt_shm          *next;
-    wikrt_shm          *prev;
+    wikrt_cxm          *next;
+    wikrt_cxm          *prev;
 
     // for now, keeping a list of associated contexts
-    wikrt_cx           *list;
+    wikrt_cx           *cxlist;
 
     // shared environment for multiple contexts.
     wikrt_env          *env;
@@ -264,16 +277,16 @@ struct wikrt_shm {
 
     // primary context memory
     void               *memory;
-    size_t              size;
+    wikrt_sizeb         size;
 
-    // shared free-list between threads 
-    wikrt_fl            flroot;
+    // root free-list, shared between threads 
+    wikrt_fl            fl;
 };
 
-static inline void wikrt_shm_lock(wikrt_shm* shm) {
-    pthread_mutex_lock(&(shm->mutex)); }
-static inline void wikrt_shm_unlock(wikrt_shm* shm) {
-    pthread_mutex_unlock(&(shm->mutex)); }
+static inline void wikrt_cxm_lock(wikrt_cxm* cxm) {
+    pthread_mutex_lock(&(cxm->mutex)); }
+static inline void wikrt_cxm_unlock(wikrt_cxm* cxm) {
+    pthread_mutex_unlock(&(cxm->mutex)); }
 
 
 /* The 'wikrt_cx' is effectively the thread-local storage for
@@ -283,40 +296,33 @@ static inline void wikrt_shm_unlock(wikrt_shm* shm) {
 struct wikrt_cx {
     wikrt_cx           *next; // sibling context
     wikrt_cx           *prev; // sibling context
-    wikrt_shm          *shm;  // shared memory structures
+    wikrt_cxm          *cxm;  // shared memory structures
     void               *memory; // main memory
     wikrt_fl            fl;     // local free space
 };
 
+static inline bool wikrt_cx_unshared(wikrt_cx* cx) {
+    return ((NULL == cx->next) && (NULL == cx->prev));
+}
 static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->memory)));
 }
 
-bool wikrt_alloc_b(wikrt_cx*, wikrt_addr*, wikrt_sizeb);
-void wikrt_free_b(wikrt_cx*, wikrt_addr, wikrt_sizeb);
-bool wikrt_grow_b(wikrt_cx*, wikrt_fl*, wikrt_addr*, wikrt_sizeb, wikrt_sizeb);
+bool wikrt_allocb(wikrt_cx*, wikrt_sizeb, wikrt_addr*);
+void wikrt_freeb(wikrt_cx*, wikrt_sizeb, wikrt_addr);
+bool wikrt_growb(wikrt_cx*, wikrt_sizeb, wikrt_addr*, wikrt_sizeb);
 
-static inline bool wikrt_alloc(wikrt_cx* cx, wikrt_addr* v, wikrt_size sz) { 
-    return wikrt_alloc_b(cx, v, WIKRT_CELLBUFF(sz)); 
-}
-
-static inline void wikrt_free(wikrt_cx* cx, wikrt_addr v, wikrt_size sz) {
-    wikrt_free_b(cx, v, WIKRT_CELLBUFF(sz)); 
-}
-
-static inline bool wikrt_realloc(wikrt_cx* cx, wikrt_addr* addr, wikrt_size sz0, wikrt_size szf) {
+static inline bool wikrt_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr) {
+    return wikrt_allocb(cx, WIKRT_CELLBUFF(sz), addr); }
+static inline void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr) {
+    wikrt_freeb(cx, WIKRT_CELLBUFF(sz), addr); }
+static inline bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size szf) {
     sz0 = WIKRT_CELLBUFF(sz0);
     szf = WIKRT_CELLBUFF(szf);
-    if(sz0 == szf) { 
-        return true; // no realloc needed 
-    } else if(szf > sz0) { 
-        return wikrt_grow_b(cx, addr, sz0, szf); 
-    } else { // shrink
-        wikrt_free_b(cx, ((*addr)+szf), (sz0 - szf)); 
-        return true; 
-    }
+    if(sz0 == szf) { return true; }
+    else if(szf > sz0) { return wikrt_growb(cx, sz0, addr, szf); }
+    else { wikrt_freeb(cx, (sz0 - szf), ((*addr)+szf)); return true; }
 }
-
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const src) {

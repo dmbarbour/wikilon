@@ -31,14 +31,10 @@ bool wikrt_lockfile_init(int* pfd, char const* dirPath) {
 bool wikrt_db_init(wikrt_db** pdb, char const* dp, uint32_t dbMaxMB) {
     (*pdb) = NULL;
 
-    if(!dp || (0 == dbMaxMB)) {
-        return true;
-    }
-
     wikrt_db* db = calloc(1, sizeof(wikrt_db)); 
-    if(0 == db) { goto onError; }
+    if(NULL == db) { return false; }
 
-    // ensure "" and "." have same meaning as local directory
+    // ensure "" and "." have same meaning as working directory
     char const* dirPath = (dp[0] ? dp : ".");
     size_t const dbMaxBytes = (size_t)dbMaxMB * (1024 * 1024);
 
@@ -131,14 +127,15 @@ bool wikrt_db_init(wikrt_db** pdb, char const* dp, uint32_t dbMaxMB) {
     return false;
 }
 
-void wikrt_db_destroy(wikrt_db** pdb) {
-    wikrt_db* db = (*pdb);
-    if(NULL != db) {
-        mdb_env_close(db->env);
-        close(db->lockfile);
-        free(db);
-        (*pdb) = NULL;
-    }
+void wikrt_db_destroy(wikrt_db* db) {
+    mdb_env_close(db->env);
+    close(db->lockfile);
+    free(db);
+}
+
+void wikrt_db_flush(wikrt_db* db) {
+    int const force_flush = 1;
+    mdb_env_sync(db->env, force_flush);
 }
 
 

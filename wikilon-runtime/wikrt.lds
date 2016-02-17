@@ -7,7 +7,6 @@
 
     wikrt_cx_create;
     wikrt_cx_destroy;
-    wikrt_cx_reset;
     wikrt_cx_env;
 
     wikrt_abcd_operators;
