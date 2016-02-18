@@ -77,11 +77,10 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB)
     cx->cxm = cxm;
     cx->memory = memory;
 
-    // Address zero is reserved to represent 'unit'. 
-    // But everything else may be allocated normally.
-    wikrt_addr const allocStart = WIKRT_CELLSIZE;
-    wikrt_size const allocSize = (sizeBytes - WIKRT_CELLSIZE);
-    wikrt_fl_free(memory, &(cxm->fl), allocSize, allocStart);
+    // Address zero is invalid for allocations (it means 'unit'). 
+    // But everything else is valid.
+    wikrt_addr const a1 = WIKRT_CELLSIZE;
+    wikrt_fl_free(memory, &(cxm->fl), (sizeBytes - a1), a1);
 
     // insert into environment's list of contexts
     wikrt_env_lock(e); {
@@ -152,6 +151,80 @@ void wikrt_cx_destroy(wikrt_cx* cx) {
 wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
     return cx->cxm->env;
 }
+
+void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz); 
+
+bool wikrt_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr) {
+    sz = WIKRT_CELLBUFF(sz);
+    // try to allocate from local free-list.
+    if(wikrt_fl_alloc(cx->memory, &(cx->fl), sz, addr)) 
+    {
+        return true;    // should succeed 99.9% of time...
+    }
+
+    // otherwise acquire a bunch of memory, then retry.
+    wikrt_acquire_shared_memory(cx, WIKRT_PAGEBUFF(sz));
+    return wikrt_fl_alloc(cx->memory, &(cx->fl), sz, addr);
+}
+
+// assuming cxm lock is held
+static inline bool wikrt_acquire_shm(wikrt_cx* cx, wikrt_sizeb sz) 
+{
+    wikrt_addr block;
+    if(wikrt_fl_alloc(cx->memory, &(cx->cxm->fl), sz, &block)) {
+        wikrt_fl_free(cx->memory, &(cx->fl), sz, block);
+        return true;
+    }
+    return false;
+}
+
+void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz)
+{
+    // I want a simple, comprehensible heuristic strategy.
+    //
+    // Current approach:
+    // 
+    // - allocate space directly, if possible.
+    // - otherwise: merge, coalesce, then try once more.
+    //
+    // This must be combined with mechanisms to avoid having
+    // any single thread holding onto too much free memory.
+    // We can systematically allocate our contiguous spaces,
+    // and rebuild our fragmented ones as they're read and 
+    // used. Theoretically, at least.
+    wikrt_cxm* const cxm = cx->cxm;
+    wikrt_cxm_lock(cxm); {
+        if(!wikrt_acquire_shm(cx, sz)) {
+            wikrt_fl_merge(cx->memory, &(cx->fl), &(cxm->fl));
+            wikrt_fl_coalesce(cx->memory, &(cxm->fl));
+            cx->fl = (wikrt_fl) { 0 };
+            wikrt_acquire_shm(cx, sz);
+        }
+    } wikrt_cxm_unlock(cxm);
+}
+
+#if 0
+static inline void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr) {
+    wikrt_freeb(cx, WIKRT_CELLBUFF(sz), addr); }
+static inline bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size szf) {
+    sz0 = WIKRT_CELLBUFF(sz0);
+    szf = WIKRT_CELLBUFF(szf);
+    if(sz0 == szf) { return true; } // same buffered size
+    else if(szf > sz0) { return wikrt_growb(cx, sz0, addr, szf); } // will attempt to grow in place
+    else { wikrt_freeb(cx, (sz0 - szf), ((*addr)+szf)); return true; } // free end of allocation
+}
+
+bool wikrt_allocb(wikrt_cx* cx, wikrt_sizeb sz, wikrt_addr* addr) 
+{
+    if(wikrt_fl_alloc
+}
+
+
+void wikrt_freeb(wikrt_cx*, wikrt_sizeb, wikrt_addr);
+bool wikrt_growb(wikrt_cx*, wikrt_sizeb, wikrt_addr*, wikrt_sizeb);
+#endif
+
+
 
 char const* wikrt_abcd_operators() {
     // currently just pure ABC...

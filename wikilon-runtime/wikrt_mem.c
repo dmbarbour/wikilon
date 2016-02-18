@@ -106,48 +106,15 @@ bool wikrt_fl_alloc_ff(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr
     return false;
 }
 
-bool wikrt_fl_grow_inplace(void* mem, wikrt_sizeb memsz, 
-        wikrt_fl* fl, wikrt_sizeb sz0, wikrt_addr a, wikrt_sizeb szf) 
-{
-    wikrt_addr const tgt = (a + sz0);
-    if(tgt >= memsz) { 
-        // fail fast: cannot grow past end of memory
-        return false; 
-    }
-
-    wikrt_fb const tgtfb = *(wikrt_pfb(mem, tgt));
-    wikrt_sizeb const growsz = (szf - sz0);
-    if( (tgtfb.size != WIKRT_CELLBUFF(tgtfb.size)) || 
-        (tgtfb.next != wikrt_vaddr(tgtfb.next))    ||
-        (tgtfb.size < growsz)                      )
-    {
-        // fail fast, tgt is invalid free-block or too small
-        return false; 
-    }
-    
-    // at this point, the potential to grow in-place exists.
-    // We need to find and remove the target from our array.
-    wikrt_sc const sc = wikrt_size_class(tgtfb.size);
-    wikrt_flst* const l = fl->size_class + sc;
-    wikrt_addr* pa = &(l->head);
-    wikrt_addr prior = 0; // to fix 'l->tail'
-    while(tgt != (*pa)) {
-        if(0 == (*pa)) { return false; }
-        pa = &(wikrt_pfb(mem, (*pa))->next);
-        prior = (*pa);
-    }
-    // remove tgt from free list
-    (*pa) = tgtfb.next;
-    if(tgt == l->tail) { l->tail = prior; }
-    fl->free_bytes -= tgtfb.size;
-    fl->frag_count -= 1;
-
-    // if tgt is larger than we need, release the exta
-    if(tgtfb.size > growsz) {
-        wikrt_fl_free(mem, fl, (tgtfb.size - growsz), (tgt + growsz));
-    }
-    return true;
-}
+// Optimization: Is growing allocations in place worthwhile?
+//
+// It's a bunch of duplicate code. It only triggers in rare cases,
+// which damages robustness. It probably won't work nicely with
+// rapid allocations, small increases, or multi-threading. If we
+// cannot easily predict or control an optimization, it seems an
+// unnecessary source of frustration...
+//
+// Resolution: leave it out. 
 
 // join segregated free-list nodes into a single list
 // this takes roughly constant time via tail pointers

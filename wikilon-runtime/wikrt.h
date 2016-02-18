@@ -35,6 +35,8 @@ typedef struct wikrt_db wikrt_db;
 #define WIKRT_LNBUFF_POW2(SZ,LN) ((SZ + (LN - 1)) & ~(LN - 1))
 #define WIKRT_CELLSIZE (2 * sizeof(wikrt_val))
 #define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
+#define WIKRT_PAGESIZE (1 << 15)
+#define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
 
 // free list management
 #define WIKRT_FLCT_QF 16 // quick-fit lists (sep by cell size)
@@ -299,21 +301,9 @@ static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->memory)));
 }
 
-bool wikrt_allocb(wikrt_cx*, wikrt_sizeb, wikrt_addr*);
-void wikrt_freeb(wikrt_cx*, wikrt_sizeb, wikrt_addr);
-bool wikrt_growb(wikrt_cx*, wikrt_sizeb, wikrt_addr*, wikrt_sizeb);
-
-static inline bool wikrt_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr) {
-    return wikrt_allocb(cx, WIKRT_CELLBUFF(sz), addr); }
-static inline void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr) {
-    wikrt_freeb(cx, WIKRT_CELLBUFF(sz), addr); }
-static inline bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size szf) {
-    sz0 = WIKRT_CELLBUFF(sz0);
-    szf = WIKRT_CELLBUFF(szf);
-    if(sz0 == szf) { return true; } // same buffered size
-    else if(szf > sz0) { return wikrt_growb(cx, sz0, addr, szf); } // will attempt to grow in place
-    else { wikrt_freeb(cx, (sz0 - szf), ((*addr)+szf)); return true; } // free end of allocation
-}
+bool wikrt_alloc(wikrt_cx*, wikrt_size, wikrt_addr*);
+bool wikrt_realloc(wikrt_cx*, wikrt_size, wikrt_addr*, wikrt_size);
+void wikrt_free(wikrt_cx*, wikrt_size, wikrt_addr);
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const src) {
