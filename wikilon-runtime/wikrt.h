@@ -227,37 +227,31 @@ static inline void wikrt_env_unlock(wikrt_env* e) {
 /** wikrt size class index, should be in 0..(WIKRT_FLCT-1) */
 typedef int wikrt_sc;
 
-/** @brief Memory allocation 'free list'.
+/** @brief A singular free-list supporting fast addend. */
+typedef struct wikrt_flst {
+    wikrt_addr head; // top of stack of free-list; empty if zero
+    wikrt_addr tail; // for fast addend; invalid if head is empty
+} wikrt_flst;
+
+/** @brief Size-segregated free lists.
  *
- * Currently just using size-segregated free lists with a quick-fit
- * mechanic for smaller sizes. Most allocations for Wikilon runtime
- * will be only a few words, so this is a good match to expected 
- * behavior. 
- *
- * The wikrt_fl calls provide the 'primitive' allocation strategies.
- * Coalescing of memory is NOT automatic, so if allocation fails
- * it might be a valid strategy to coalesce and retry.
+ * Use of multiple free-lists for different sizes is a known strategy
+ * that has proven effective. Each list is used as a stack, i.e. the
+ * last element free'd is the first allocated. Coalescing is not done
+ * except by explicit call.
  */
 typedef struct wikrt_fl {
     wikrt_size free_bytes;
     wikrt_size frag_count;
-    // other: might want a lazy drop list?
-    wikrt_addr size_class[WIKRT_FLCT];
+    wikrt_flst size_class[WIKRT_FLCT];
 } wikrt_fl;
-
-typedef struct wikrt_fltl {
-    wikrt_addr* size_class[WIKRT_FLCT];
-} wikrt_fltl;
 
 // basic strategies without fallback resources
 bool wikrt_fl_alloc(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr*);
 bool wikrt_fl_grow_inplace(void* mem, wikrt_sizeb memsz, wikrt_fl*, wikrt_sizeb sz0, wikrt_addr, wikrt_sizeb szf);
 void wikrt_fl_free(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr);
 void wikrt_fl_coalesce(void* mem, wikrt_fl*);
-
-// staged merge to shrink critical section
-void wikrt_fl_tails(void* mem, wikrt_fl* in, wikrt_fltl* out);
-void wikrt_fl_merge(wikrt_fl* srcHead, wikrt_fltl* srcTail, wikrt_fl* dst);
+void wikrt_fl_merge(void* mem, wikrt_fl* src, wikrt_fl* dst); // invalidates src
 
 
 /** Shared state for multi-threaded contexts. */ 
@@ -301,9 +295,6 @@ struct wikrt_cx {
     wikrt_fl            fl;     // local free space
 };
 
-static inline bool wikrt_cx_unshared(wikrt_cx* cx) {
-    return ((NULL == cx->next) && (NULL == cx->prev));
-}
 static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->memory)));
 }
@@ -319,9 +310,9 @@ static inline void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr) {
 static inline bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size szf) {
     sz0 = WIKRT_CELLBUFF(sz0);
     szf = WIKRT_CELLBUFF(szf);
-    if(sz0 == szf) { return true; }
-    else if(szf > sz0) { return wikrt_growb(cx, sz0, addr, szf); }
-    else { wikrt_freeb(cx, (sz0 - szf), ((*addr)+szf)); return true; }
+    if(sz0 == szf) { return true; } // same buffered size
+    else if(szf > sz0) { return wikrt_growb(cx, sz0, addr, szf); } // will attempt to grow in place
+    else { wikrt_freeb(cx, (sz0 - szf), ((*addr)+szf)); return true; } // free end of allocation
 }
 
 /* Recognize values represented entirely in the reference. */

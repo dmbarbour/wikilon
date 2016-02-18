@@ -33,16 +33,18 @@ static inline wikrt_sc wikrt_size_class(wikrt_size const sz) {
 }
 
 
-/* coalescing is deferred; wikrt_free is O(1) in the normal case and
- * only touches the free list and the head of the deleted object.
- */
+/* Adding to head of free-list. No coalescing adjacent memory. */
 void wikrt_fl_free(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr addr) 
 {
     wikrt_fb* const pfb = wikrt_pfb(mem, addr);
     wikrt_sc const sc = wikrt_size_class(sz);
+    wikrt_flst* const l = fl->size_class + sc;
+    
     pfb->size = sz;
-    pfb->next = fl->size_class[sc];
-    fl->size_class[sc] = addr;
+    pfb->next = l->head;
+    if(0 == l->head) { l->tail = addr; }
+    l->head = addr;
+
     fl->free_bytes += sz;
     fl->frag_count += 1;
 }
@@ -60,11 +62,10 @@ bool wikrt_fl_alloc(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr)
 {
     _Static_assert(WIKRT_CELLSIZE == sizeof(wikrt_fb), "free-block should match minimum allocation");
     if(sz <= WIKRT_QFSIZE) {
-        wikrt_sc const sc = WIKRT_QFCLASS(sz);
-        wikrt_addr const a = fl->size_class[sc];
-        if(0 != a) {
-            (*addr) = a;
-            fl->size_class[sc] = wikrt_pfb(mem, a)->next;
+        wikrt_flst* const l = fl->size_class + WIKRT_QFCLASS(sz);
+        if(0 != l->head) {
+            (*addr) = l->head;
+            l->head = wikrt_pfb(mem, l->head)->next;
             fl->frag_count -= 1;
             fl->free_bytes -= sz;
             return true;
@@ -82,22 +83,23 @@ bool wikrt_fl_alloc(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr)
 bool wikrt_fl_alloc_ff(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr) {
     wikrt_sc sc = wikrt_size_class(sz);
     do {
-        wikrt_addr* pa = fl->size_class + sc;
-        while(0 != *pa) {
-            wikrt_val  const a    = (*pa);
-            wikrt_fb*  const pfb  = wikrt_pfb(mem, a);
+        wikrt_flst* const l = fl->size_class + sc;
+        wikrt_addr prior = 0; // to repair 'l->tail'
+        wikrt_addr* pa = &(l->head);
+        while(0 != (*pa)) {
+            wikrt_val const a = (*pa);
+            wikrt_fb* const pfb = wikrt_pfb(mem, a);
             if(pfb->size >= sz) {
                 (*addr) = a;
                 (*pa) = pfb->next;
+                if(a == l->tail) { l->tail = prior; }
                 fl->free_bytes -= pfb->size;
                 fl->frag_count -= 1;
-                if(pfb->size > sz) {
-                    wikrt_fl_free(mem, fl, (a + sz), (pfb->size - sz));
+                if(pfb->size > sz) { 
+                    wikrt_fl_free(mem, fl, (pfb->size - sz), (a + sz));
                 }
                 return true;
-            } else {
-                pa = &(pfb->next);
-            }
+            } else { pa = &(pfb->next); }
         }
         sc = sc + 1;
     } while(sc < WIKRT_FLCT);
@@ -124,42 +126,46 @@ bool wikrt_fl_grow_inplace(void* mem, wikrt_sizeb memsz,
     }
     
     // at this point, the potential to grow in-place exists.
+    // We need to find and remove the target from our array.
     wikrt_sc const sc = wikrt_size_class(tgtfb.size);
-    wikrt_addr* pa = fl->size_class + sc;
-    while((0 != *pa) && (tgt != *pa)) { 
-        pa = &(wikrt_pfb(mem, *pa)->next); 
+    wikrt_flst* const l = fl->size_class + sc;
+    wikrt_addr* pa = &(l->head);
+    wikrt_addr prior = 0; // to fix 'l->tail'
+    while(tgt != (*pa)) {
+        if(0 == (*pa)) { return false; }
+        pa = &(wikrt_pfb(mem, (*pa))->next);
+        prior = (*pa);
     }
-
-    if(0 == (*pa)) { 
-        // tgt not found in free-list
-        return false;
-    }
-
-    (*pa) = tgtfb.next; // remove target from free-list
-    fl->frag_count -= 1;
+    // remove tgt from free list
+    (*pa) = tgtfb.next;
+    if(tgt == l->tail) { l->tail = prior; }
     fl->free_bytes -= tgtfb.size;
+    fl->frag_count -= 1;
+
+    // if tgt is larger than we need, release the exta
     if(tgtfb.size > growsz) {
         wikrt_fl_free(mem, fl, (tgtfb.size - growsz), (tgt + growsz));
     }
     return true;
 }
 
-
 // join segregated free-list nodes into a single list
+// this takes roughly constant time via tail pointers
 wikrt_addr wikrt_fl_flatten(void* const mem, wikrt_fl* const fl) {
-    wikrt_addr r = fl->size_class[0];
-    for(wikrt_sc sc = 1; sc < WIKRT_FLCT; ++sc) {
-        wikrt_addr* tl = fl->size_class + sc;
-        while(0 != (*tl)) { tl = &(wikrt_pfb(mem, (*tl))->next); }
-        (*tl) = r;              // addend prior free-list
-        r = fl->size_class[sc]; // take new head
+    wikrt_addr r = 0;
+    for(wikrt_sc sc = 0; sc < WIKRT_FLCT; ++sc) {
+        wikrt_flst* const l = fl->size_class + sc;
+        if(0 != l->head) {
+            wikrt_pfb(mem, l->tail)->next = r;
+            r = l->head;
+        }
     }
     return r;
 }
 
 void wikrt_fl_split(void* const mem, wikrt_addr const hd, wikrt_addr* const a, wikrt_size const sza, wikrt_addr* const b) 
 {
-    // I assume sza is valid
+    // I assume sza is valid (no larger than the list)
     (*a) = hd;
     wikrt_addr* tl = a;
     wikrt_size ct = 0;
@@ -216,37 +222,38 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
     wikrt_size const free_bytes_init = fl->free_bytes;
 
     // obtain an address-sorted list of all nodes
-    wikrt_addr lst = wikrt_fl_flatten(mem, fl);
-    wikrt_fl_mergesort(mem, &lst, frag_count_init);
+    wikrt_addr a = wikrt_fl_flatten(mem, fl);
+    wikrt_fl_mergesort(mem, &a, frag_count_init);
 
     // zero the free lists
     (*fl) = (wikrt_fl){0}; 
 
-    // to preserve address-order, we'll addend to tail of free list
-    wikrt_fltl fltl;
-    for(wikrt_sc sc = 0; sc < WIKRT_FLCT; ++sc) {
-        fltl.size_class[sc] = fl->size_class + sc;
-    }
-
-    while(0 != lst) {
-        wikrt_fb* const pl = wikrt_pfb(mem, lst);
+    // add each element of lst to our free-list
+    // adding to tail, in this case, to preserve address-order.
+    while(0 != a) {
+        wikrt_fb* const pa = wikrt_pfb(mem, a);
 
         // coalesce adjacent nodes
-        while((lst + pl->size) == pl->next) {
-            wikrt_fb* const pn = wikrt_pfb(mem, pl->next);
-            pl->size += pn->size;
-            pl->next = pn->next;
+        while((a + pa->size) == pa->next) {
+            wikrt_fb* const pn = wikrt_pfb(mem, pa->next);
+            pa->size += pn->size;
+            pa->next = pn->next;
         }
 
-        // insert at tail of list.
-        wikrt_sc const sc = wikrt_size_class(pl->size);
-        *(fltl.size_class[sc]) = lst;
-        lst = pl->next;
-        pl->next = 0;
-        fltl.size_class[sc] = &(pl->next); // new tail
-
-        fl->free_bytes += pl->size;
+        // recomputing stats from scratch
+        fl->free_bytes += pa->size;
         fl->frag_count += 1;
+
+        wikrt_sc const sc = wikrt_size_class(pa->size);
+        wikrt_addr const next = pa->next;
+        pa->next = 0; // new end of list
+
+        wikrt_flst* const l = fl->size_class + sc;
+        if(0 == l->head) { l->head = a; }
+        else { wikrt_pfb(mem, l->tail)->next = a; }
+        l->tail = a;
+
+        a = next;
     }
     
     // weak validation
@@ -255,21 +262,23 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
 
 }
 
-void wikrt_fl_tails(void* mem, wikrt_fl* fl, wikrt_fltl* fltl)
+static inline void wikrt_flst_merge(void* mem, wikrt_flst* src, wikrt_flst* dst) 
 {
-    for(wikrt_sc sc = 0; sc < WIKRT_FLCT; ++sc) {
-        wikrt_addr* tl = fl->size_class + sc;
-        while(0 != (*tl)) { tl = &(wikrt_pfb(mem, (*tl))->next); }
-        fltl->size_class[sc] = tl;
+    // prepending src onto dst
+    if(0 != src->head) {
+        if(0 == dst->head) { dst->tail = src->tail; }
+        else { wikrt_pfb(mem, src->tail)->next = dst->head; }
+        dst->head = src->head;
     }
 }
-void wikrt_fl_merge(wikrt_fl* srcHead, wikrt_fltl* srcTail, wikrt_fl* dst)
+
+void wikrt_fl_merge(void* mem, wikrt_fl* src, wikrt_fl* dst)
 {
-    dst->free_bytes += srcHead->free_bytes;
-    dst->frag_count += srcHead->frag_count;
+    // a merge in approximately constant time
+    dst->free_bytes += src->free_bytes;
+    dst->frag_count += src->frag_count;
     for(wikrt_sc sc = 0; sc < WIKRT_FLCT; ++sc) {
-        *(srcTail->size_class[sc]) = dst->size_class[sc];
-        dst->size_class[sc] = srcHead->size_class[sc];
+        wikrt_flst_merge(mem, src->size_class + sc, dst->size_class + sc);
     }
 }
 

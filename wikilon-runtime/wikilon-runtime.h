@@ -188,7 +188,7 @@ void wikrt_env_sync(wikrt_env*);
  * A context consists mostly of one big mmap'd block of memory. The
  * valid range for context size is 4..4000 in megabyte units. This
  * space is specific to the created context, so different contexts
- * cannot generally share wikrt_val value references.
+ * cannot generally share wikrt_val value references. 
  */ 
 wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 
@@ -197,18 +197,21 @@ wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 
 /** @brief External parallelism within a context.
  *
- * A `wikrt_cx*` must be used in a single-threaded manner. If you need
- * parallel access to a single context, fork the context. This enables
- * safe access to `wikrt_val` references from another thread, with a
- * minimal synchronization overhead.
+ * A `wikrt_cx*` must be used single-threaded because it contains 
+ * unsynchronized, stateful structures - such as a local free list.
+ * I'd really hate to impose mutex overheads for most operations.
+ * For parallel access to a context's memory, it is necessary to 
+ * instead fork sibling contexts explicitly.
+ * 
+ * Note that wikrt_val value references remain linear in nature, and
+ * must not be shared by multiple computations or threads. Only one
+ * thread may own a wikrt_val at a time. However, forking contexts
+ * does allow moving the value between computations, e.g. to model
+ * pipeline parallelism or message passing, or background rendering.
  *
- * The primary motivation for forking a context is to provide access to
- * a computed value to a separate thread, without copying that value.
- * But note that linear move semantics still apply: only one 'wikrt_cx*'
- * should control any given value reference.
- *
- * All forks must be destroyed individually to recover the main context
- * memory.
+ * The shared memory underlying a context is not destroyed until
+ * all forks are destroyed. Forking and destroying a context is
+ * relatively cheap and lightweight.
  */
 wikrt_err wikrt_cx_fork(wikrt_cx*, wikrt_cx**);
 
@@ -572,7 +575,7 @@ wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* cpy, wikrt_val const src, bool bCopyA
  */
 wikrt_err wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
 
-// considering: move function, to shift values between contexts
+// TODO: a move function, copy a value between contexts with same environment
 
 /** @brief Mark a value for stowage.
  *

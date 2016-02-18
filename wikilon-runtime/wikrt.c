@@ -26,7 +26,7 @@ wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMa
         return WIKRT_DBERR;
     }
 
-    // maybe create thread pool or task list, etc.?
+    // thread pools? task lists? etc?
 
     (*ppEnv) = e;
     return WIKRT_OK;
@@ -49,7 +49,10 @@ void wikrt_env_sync(wikrt_env* e) {
     }
 }
 
-wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) {
+
+
+wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) 
+{
     (*ppCX) = NULL;
 
     bool const bSizeValid = (WIKRT_CX_SIZE_MIN <= sizeMB) 
@@ -99,10 +102,11 @@ callocErr:
 
 wikrt_err wikrt_cx_fork(wikrt_cx* cx, wikrt_cx** pfork)
 {
+
     wikrt_cxm* const cxm = cx->cxm;
-    (*pfork) = NULL;
     wikrt_cx* fork = calloc(1, sizeof(wikrt_cx));
     if(NULL == fork) {
+        (*pfork) = NULL;
         return WIKRT_NOMEM;
     }
 
@@ -119,45 +123,29 @@ wikrt_err wikrt_cx_fork(wikrt_cx* cx, wikrt_cx** pfork)
     return WIKRT_OK;
 }
 
-
-void wikrt_cxm_destroy(wikrt_cxm* cxm) {
-    assert(NULL == cxm->cxlist);
-    errno = 0;
-    int const unmapStatus = munmap(cxm->memory, cxm->size);
-    bool const unmapSucceeded = (0 == unmapStatus);
-    if(!unmapSucceeded) {
-        fprintf(stderr,"Failure to unmap memory (%s) when destroying context.\n", strerror(errno));
-        abort();
-    }
-    pthread_mutex_destroy(&(cxm->mutex));
-    free(cxm);
-}
-
 void wikrt_cx_destroy(wikrt_cx* cx) {
     wikrt_cxm* const cxm = cx->cxm;
 
-    if(wikrt_cx_unshared(cx)) {
-        // final context, skip merge of free-lists
-        free(cx);
-        cxm->cxlist = NULL;
-        wikrt_cxm_destroy(cxm);
-    } else {
-        // precompute tails for fast critical-section merge
-        wikrt_fltl cx_fltl;
-        wikrt_fl_tails(cx->memory, &(cx->fl), &cx_fltl); 
-        wikrt_cxm_lock(cxm); {
-            // merge free-lists
-            wikrt_fl_merge(&(cx->fl), &cx_fltl, &(cxm->fl));
-            // remove context from context list
-            if(NULL != cx->next) { cx->next->prev = cx->prev; }
-            if(NULL != cx->prev) { cx->prev->next = cx->next; }
-            else { assert(cx == cxm->cxlist); cxm->cxlist = cx->next; }
-        } wikrt_cxm_unlock(cxm);
-        free(cx);
-        if(NULL == cxm->cxlist) {
-            // race condition: now final context
-            wikrt_cxm_destroy(cxm);
+    wikrt_cxm_lock(cxm); {
+        wikrt_fl_merge(cx->memory, &(cx->fl), &(cxm->fl));
+        if(NULL != cx->next) { cx->next->prev = cx->prev; }
+        if(NULL != cx->prev) { cx->prev->next = cx->next; }
+        else { assert(cx == cxm->cxlist); cxm->cxlist = cx->next; }
+    } wikrt_cxm_unlock(cxm);
+    
+    free(cx);
+
+    if(NULL == cxm->cxlist) {
+        // last context for this memory destroyed.
+        errno = 0;
+        int const unmapStatus = munmap(cxm->memory, cxm->size);
+        bool const unmapSucceeded = (0 == unmapStatus);
+        if(!unmapSucceeded) {
+            fprintf(stderr,"Failure to unmap memory (%s) when destroying context.\n", strerror(errno));
+            abort();
         }
+        pthread_mutex_destroy(&(cxm->mutex));
+        free(cxm);
     }
 }
 
