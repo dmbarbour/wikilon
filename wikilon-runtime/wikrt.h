@@ -126,8 +126,8 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *
  * WIKRT_OTAG_BLOCK
  *
- *   A block is either a composition of blocks or a binary for code plus
- *   a list of quoted dependencies.
+ *   The block is a representation of Awelon Bytecode, but optimized for
+ *   fast interpretation.
  *
  * WIKRT_OTAG_SEAL
  *
@@ -272,8 +272,8 @@ struct wikrt_cxm {
     pthread_mutex_t     mutex;
 
     // primary context memory
-    void               *memory;
     wikrt_sizeb         size;
+    void               *memory;
 
     // root free-list, shared between threads 
     wikrt_fl            fl;
@@ -293,8 +293,13 @@ struct wikrt_cx {
     wikrt_cx           *next; // sibling context
     wikrt_cx           *prev; // sibling context
     wikrt_cxm          *cxm;  // shared memory structures
+
     void               *memory; // main memory
     wikrt_fl            fl;     // local free space
+
+    // statistics or metrics
+    uint64_t            ct_bytes_freed; // bytes freed
+    uint64_t            ct_bytes_alloc; // bytes allocated
 };
 
 static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
@@ -302,13 +307,16 @@ static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
 }
 
 bool wikrt_alloc(wikrt_cx*, wikrt_size, wikrt_addr*);
-bool wikrt_realloc(wikrt_cx*, wikrt_size, wikrt_addr*, wikrt_size);
 void wikrt_free(wikrt_cx*, wikrt_size, wikrt_addr);
+bool wikrt_realloc(wikrt_cx*, wikrt_size, wikrt_addr*, wikrt_size);
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const src) {
     return (wikrt_i(src) || (0 == wikrt_vaddr(src)));
 }
+
+
+wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, char const* s, size_t len, wikrt_val v);
 
 /* Test whether a valid utf-8 codepoint is okay for a token. */
 static inline bool wikrt_token_char(uint32_t c) {

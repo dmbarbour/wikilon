@@ -117,7 +117,7 @@ bool wikrt_fl_alloc_ff(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr
 // Resolution: leave it out. 
 
 // join segregated free-list nodes into a single list
-// this takes roughly constant time via tail pointers
+// this takes roughly constant time via tail addresses
 wikrt_addr wikrt_fl_flatten(void* const mem, wikrt_fl* const fl) {
     wikrt_addr r = 0;
     for(wikrt_sc sc = 0; sc < WIKRT_FLCT; ++sc) {
@@ -207,7 +207,7 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
             pa->next = pn->next;
         }
 
-        // recomputing stats from scratch
+        // recompute free list stats
         fl->free_bytes += pa->size;
         fl->frag_count += 1;
 
@@ -229,6 +229,9 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
 
 }
 
+
+
+
 static inline void wikrt_flst_merge(void* mem, wikrt_flst* src, wikrt_flst* dst) 
 {
     // prepending src onto dst
@@ -239,6 +242,11 @@ static inline void wikrt_flst_merge(void* mem, wikrt_flst* src, wikrt_flst* dst)
     }
 }
 
+/** Combine two free-lists, moving nodes from 'src' into 'dst'.
+ *  This is done in constant time via the 'tail' addresses.
+ *
+ *  The 'src' is invalid after this.
+ */
 void wikrt_fl_merge(void* mem, wikrt_fl* src, wikrt_fl* dst)
 {
     // a merge in approximately constant time

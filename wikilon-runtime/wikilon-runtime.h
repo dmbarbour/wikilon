@@ -389,19 +389,28 @@ typedef uint32_t wikrt_val;
  */
 #define WIKRT_UNIT 3
 
-/** @brief Unit in Right is a constant value reference.
- * 
- * The unit value in the right is also the value conventionally 
- * used to represent boolean true, done, nothing, empty list.
- */
-#define WIKRT_UNIT_INR 5
-
 /** @brief Unit in Left is a constant value reference.
  * 
  * The unit value in the left is also the value conventionally 
  * used to represent boolean false. 
  */
-#define WIKRT_UNIT_INL 7
+#define WIKRT_UNIT_INL 5
+
+/** @brief Unit in Right is a constant value reference.
+ * 
+ * The unit value in the right is also the value conventionally 
+ * used to represent boolean true, done, nothing, empty list.
+ */
+#define WIKRT_UNIT_INR 7
+
+/** @brief Void is not a value.
+ *
+ * This is occasionally useful as a placeholder, when you need a
+ * clearly invalid value. It will also be the return value in many
+ * error cases, e.g. for a failed allocation.
+ */
+#define WIKRT_VOID 1
+
 
 /** @brief Maximum buffer size for token text.
  *
@@ -424,7 +433,7 @@ typedef enum wikrt_vtype
 { WIKRT_VTYPE_UNIT        // unit value
 , WIKRT_VTYPE_PRODUCT     // product 
 , WIKRT_VTYPE_INTEGER     // integer values
-, WIKRT_VTYPE_SUM         // sum type (includes lists) 
+, WIKRT_VTYPE_SUM         // sum type (includes lists, arrays) 
 , WIKRT_VTYPE_BLOCK       // functional bytecode  
 , WIKRT_VTYPE_SEALED      // sealed values
 // Special Cases

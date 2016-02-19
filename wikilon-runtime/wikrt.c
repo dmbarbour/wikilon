@@ -73,6 +73,7 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB)
     cxm->env = e;
     cxm->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
     cxm->memory = memory;
+    cxm->size = sizeBytes;
 
     cx->cxm = cxm;
     cx->memory = memory;
@@ -136,6 +137,15 @@ void wikrt_cx_destroy(wikrt_cx* cx) {
 
     if(NULL == cxm->cxlist) {
         // last context for this memory destroyed.
+        // remove context memory from environment
+        wikrt_env* const e = cxm->env;
+        wikrt_env_lock(e); {
+            if(NULL != cxm->next) { cxm->next->prev = cxm->prev; }
+            if(NULL != cxm->prev) { cxm->prev->next = cxm->next; }
+            else { assert(cxm == e->cxmlist); e->cxmlist = cxm->next; }
+        } wikrt_env_unlock(e);
+
+        // release memory back to operating system
         errno = 0;
         int const unmapStatus = munmap(cxm->memory, cxm->size);
         bool const unmapSucceeded = (0 == unmapStatus);
@@ -154,22 +164,30 @@ wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
 
 void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz); 
 
-bool wikrt_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr) {
-    sz = WIKRT_CELLBUFF(sz);
-    // try to allocate from local free-list.
-    if(wikrt_fl_alloc(cx->memory, &(cx->fl), sz, addr)) 
-    {
-        return true;    // should succeed 99.9% of time...
+static inline bool wikrt_alloc_local(wikrt_cx* cx, wikrt_sizeb sz, wikrt_addr* addr) 
+{
+    if(wikrt_fl_alloc(cx->memory, &(cx->fl), sz, addr)) {
+        cx->ct_bytes_alloc += sz;
+        return true;
     }
-
-    // otherwise acquire a bunch of memory, then retry.
-    wikrt_acquire_shared_memory(cx, WIKRT_PAGEBUFF(sz));
-    return wikrt_fl_alloc(cx->memory, &(cx->fl), sz, addr);
+    return false;
 }
 
-// assuming cxm lock is held
+bool wikrt_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr) 
+{
+    sz = WIKRT_CELLBUFF(sz);
+    if(wikrt_alloc_local(cx, sz, addr)) {
+        // should succeed most times
+        return true; 
+    }
+    // otherwise acquire a bunch of memory, then retry.
+    wikrt_acquire_shared_memory(cx, WIKRT_PAGEBUFF(sz));
+    return wikrt_alloc_local(cx, sz, addr);
+}
+
 static inline bool wikrt_acquire_shm(wikrt_cx* cx, wikrt_sizeb sz) 
 {
+    // assuming cxm lock is held
     wikrt_addr block;
     if(wikrt_fl_alloc(cx->memory, &(cx->cxm->fl), sz, &block)) {
         wikrt_fl_free(cx->memory, &(cx->fl), sz, block);
@@ -180,18 +198,17 @@ static inline bool wikrt_acquire_shm(wikrt_cx* cx, wikrt_sizeb sz)
 
 void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz)
 {
-    // I want a simple, comprehensible heuristic strategy.
+    // I want a simple, predictable heuristic strategy that is very
+    // fast for smaller computations (the majority of Wikilon ops).
     //
     // Current approach:
     // 
-    // - allocate space directly, if possible.
-    // - otherwise: merge, coalesce, then try once more.
+    // - allocate space directly, if feasible.
+    // - otherwise: merge, coalesce, retry once.
     //
-    // This must be combined with mechanisms to avoid having
-    // any single thread holding onto too much free memory.
-    // We can systematically allocate our contiguous spaces,
-    // and rebuild our fragmented ones as they're read and 
-    // used. Theoretically, at least.
+    // This should be combined with mechanisms to release memory if
+    // a thread is holding onto too much, i.e. such that threads can
+    // gradually shift ownership of blocks of code.
     wikrt_cxm* const cxm = cx->cxm;
     wikrt_cxm_lock(cxm); {
         if(!wikrt_acquire_shm(cx, sz)) {
@@ -203,28 +220,47 @@ void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz)
     } wikrt_cxm_unlock(cxm);
 }
 
-#if 0
-static inline void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr) {
-    wikrt_freeb(cx, WIKRT_CELLBUFF(sz), addr); }
-static inline bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size szf) {
+void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr) 
+{
+    sz = WIKRT_CELLBUFF(sz);
+    wikrt_fl_free(cx->memory, &(cx->fl), sz, addr);
+    cx->ct_bytes_freed += sz;
+
+    // If a thread has a lot of free space, we may need to release 
+    // some of it back to the common pool. It might be better to 
+    // do this at an external 'boundary' such as the wikrt_eval API.
+    // For the moment, this is non-critical.
+}
+
+
+bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size szf)
+{
     sz0 = WIKRT_CELLBUFF(sz0);
     szf = WIKRT_CELLBUFF(szf);
-    if(sz0 == szf) { return true; } // same buffered size
-    else if(szf > sz0) { return wikrt_growb(cx, sz0, addr, szf); } // will attempt to grow in place
-    else { wikrt_freeb(cx, (sz0 - szf), ((*addr)+szf)); return true; } // free end of allocation
+    if(sz0 == szf) {
+        // no buffered size change 
+        return true; 
+    } else if(szf < sz0) { 
+        // free up a little space at the end of the buffer
+        wikrt_free(cx, (sz0 - szf), ((*addr) + szf)); 
+        return true; 
+    } else {
+        // As an optimization, in-place growth is unreliable and
+        // unpredictable. So, Wikilon runtime doesn't bother. We'll
+        // simply allocate, shallow-copy, and free the original.
+        wikrt_addr const src = (*addr);
+        wikrt_addr dst;
+        if(!wikrt_alloc(cx, szf, &dst)) {
+            return false;
+        }
+        void* const pdst = (void*) wikrt_pval(cx, dst);
+        void const* const psrc = (void*) wikrt_pval(cx, src);
+        memcpy(pdst, psrc, sz0);
+        wikrt_free(cx, sz0, src);
+        (*addr) = dst;
+        return true;
+    }
 }
-
-bool wikrt_allocb(wikrt_cx* cx, wikrt_sizeb sz, wikrt_addr* addr) 
-{
-    if(wikrt_fl_alloc
-}
-
-
-void wikrt_freeb(wikrt_cx*, wikrt_sizeb, wikrt_addr);
-bool wikrt_growb(wikrt_cx*, wikrt_sizeb, wikrt_addr*, wikrt_sizeb);
-#endif
-
-
 
 char const* wikrt_abcd_operators() {
     // currently just pure ABC...
@@ -317,7 +353,10 @@ wikrt_err wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val const v)
             } else if(wikrt_otag_seal(otag) || wikrt_otag_seal_sm(otag)) { 
                 (*out) = WIKRT_VTYPE_SEALED; 
             } else { return WIKRT_INVAL; }
-        } else { return WIKRT_INVAL; }
+        } else { 
+            (*out) = WIKRT_VTYPE_PENDING; 
+            return WIKRT_INVAL; 
+        }
     }
     return WIKRT_OK;
 }
@@ -331,8 +370,9 @@ bool wikrt_valid_token(char const* s) {
 
     uint32_t cp;
     while(len != 0) {
-        if(!utf8_step(&s,&len,&cp) || !wikrt_token_char(cp))
+        if(!utf8_step(&s,&len,&cp) || !wikrt_token_char(cp)) {
             return false;
+        }
     }
     return true;
 }
@@ -366,7 +406,7 @@ wikrt_err wikrt_alloc_text(wikrt_cx* cx, wikrt_val* txt, char const* s, size_t l
 e: // error; need to free allocated data
     (*tl) = WIKRT_UNIT_INR;
     wikrt_drop(cx, (*txt), true);
-    (*txt) = WIKRT_UNIT;
+    (*txt) = WIKRT_VOID;
     return r;
 }
 
@@ -396,7 +436,7 @@ wikrt_err wikrt_alloc_binary(wikrt_cx* cx, wikrt_val* v, uint8_t const* buff, si
 e:
     (*tl) = WIKRT_UNIT_INR;
     wikrt_drop(cx, (*v), true);
-    (*v) = WIKRT_UNIT;
+    (*v) = WIKRT_VOID;
     return r;
 }
 
@@ -416,7 +456,7 @@ wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n)
 
     wikrt_addr dst;
     if(!wikrt_alloc(cx, allocSz, &dst)) {
-        (*v) = WIKRT_UNIT;
+        (*v) = WIKRT_VOID;
         return WIKRT_CXFULL;
     }
     (*v) = wikrt_tag_addr(WIKRT_O, dst);
@@ -428,18 +468,6 @@ wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n)
     d[1] = (uint32_t) (n / WIKRT_BIGINT_DIGIT); 
 
     return WIKRT_OK;
-}
-
-wikrt_err wikrt_peek_i32(wikrt_cx* cx, wikrt_val const v, int32_t* i32) 
-{
-    // small integers (normal case)
-    if(wikrt_i(v)) {
-        (*i32) = wikrt_v2i(v);
-        return WIKRT_OK;
-    }
-
-    // TODO: big integers, overflow calculations.
-    return WIKRT_IMPL;
 }
 
 wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n) 
@@ -459,7 +487,7 @@ wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n)
 
     wikrt_addr dst;
     if(!wikrt_alloc(cx, allocSz, &dst)) {
-        (*v) = WIKRT_UNIT;
+        (*v) = WIKRT_VOID;
         return WIKRT_CXFULL;
     }
 
@@ -479,6 +507,19 @@ wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n)
     }
 
     return WIKRT_OK;
+}
+
+
+wikrt_err wikrt_peek_i32(wikrt_cx* cx, wikrt_val const v, int32_t* i32) 
+{
+    // small integers (normal case)
+    if(wikrt_i(v)) {
+        (*i32) = wikrt_v2i(v);
+        return WIKRT_OK;
+    }
+
+    // TODO: big integers, overflow calculations.
+    return WIKRT_IMPL;
 }
 
 wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64) 
@@ -518,8 +559,8 @@ wikrt_err wikrt_split_prod(wikrt_cx* cx, wikrt_val p, wikrt_val* fst, wikrt_val*
         wikrt_free(cx, WIKRT_CELLSIZE, paddr);
         return WIKRT_OK;
     } else {
-        (*fst) = WIKRT_UNIT;
-        (*snd) = WIKRT_UNIT;
+        (*fst) = WIKRT_VOID;
+        (*snd) = WIKRT_VOID;
         return WIKRT_TYPE_ERROR;
     }
 }
@@ -546,7 +587,7 @@ wikrt_err wikrt_alloc_sum(wikrt_cx* cx, wikrt_val* c, bool inRight, wikrt_val v)
     } else { // need to allocate space
         wikrt_addr dst;
         if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &dst)) {
-            (*c) = WIKRT_UNIT;
+            (*c) = WIKRT_VOID;
             return WIKRT_CXFULL;
         }
         wikrt_val const sumtag = (inRight ? WIKRT_DEEPSUMR : WIKRT_DEEPSUML);
@@ -587,22 +628,69 @@ wikrt_err wikrt_split_sum(wikrt_cx* cx, wikrt_val c, bool* inRight, wikrt_val* v
             }
             return WIKRT_OK;
         } else if(wikrt_otag_array(otag)) {
+            (*inRight) = false;
+            (*v) = WIKRT_VOID;
             // probably expand head of array then retry...
             return WIKRT_IMPL;
-        } else { return WIKRT_TYPE_ERROR; }
-    } else { return WIKRT_TYPE_ERROR; }
+        } 
+    }
+
+    (*inRight) = true;
+    (*v) = WIKRT_VOID;
+    return WIKRT_TYPE_ERROR;
 }
 
 wikrt_err wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, size_t len, wikrt_abc_opts opts) 
 {
+       
     return WIKRT_IMPL;
 }
 
 
-wikrt_err wikrt_alloc_seal(wikrt_cx* cx, wikrt_val* sv, char const* s, wikrt_val v)
+
+wikrt_err wikrt_alloc_seal(wikrt_cx* cx, wikrt_val* sv, char const* s, wikrt_val v) {
+    return wikrt_alloc_seal_len(cx, sv, s, strlen(s), v);
+}
+wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, char const* s, size_t len, wikrt_val v)
 {
-    return WIKRT_IMPL;
-}
+    bool const validLen = (1 <= len) && (len < 64);
+    if(!validLen) { return WIKRT_INVAL; }
+
+    if((':' == s[0]) && (len <= 4)) {
+        // WIKRT_OTAG_SEAL_SM: common special case, small discretionary tags
+        wikrt_addr dst;
+        if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &dst)) {
+            (*sv) = WIKRT_VOID;
+            return WIKRT_CXFULL;
+        }
+        (*sv) = wikrt_tag_addr(WIKRT_O, dst);
+        wikrt_val* const psv = wikrt_pval(cx, dst);
+
+        // store seal in tag!
+        wikrt_val tag = 0;
+        if(len > 3) { tag = (tag << 8) | s[3]; }
+        if(len > 2) { tag = (tag << 8) | s[2]; }
+        if(len > 1) { tag = (tag << 8) | s[1]; }
+        tag = (tag << 8) | WIKRT_OTAG_SEAL_SM;
+        psv[0] = tag;
+        psv[1] = v;
+        return WIKRT_OK;
+    } else {
+        // WIKRT_OTAG_SEAL: rare general case, large tags
+        wikrt_size const szTotal = WIKRT_CELLSIZE + (wikrt_size) len;
+        wikrt_addr dst;
+        if(!wikrt_alloc(cx, szTotal, &dst)) {
+            (*sv) = WIKRT_VOID;
+            return WIKRT_CXFULL;
+        }
+        (*sv) = wikrt_tag_addr(WIKRT_O, dst);
+        wikrt_val* const psv = wikrt_pval(cx,dst);
+        psv[0] = (len << 8) | WIKRT_OTAG_SEAL;
+        psv[1] = v;
+        memcpy((psv + 2), s, len); // copy of sealer text
+        return WIKRT_OK;
+    }
+} 
 
 /** deep copy a structure
  *
