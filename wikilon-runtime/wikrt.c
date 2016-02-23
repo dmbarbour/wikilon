@@ -218,6 +218,9 @@ void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz)
             wikrt_acquire_shm(cx, sz);
         }
     } wikrt_cxm_unlock(cxm);
+
+    // TODO: It might be useful to perform latent stowage at this
+    // stage, too, to recover space based on memory pressure.
 }
 
 void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr) 
@@ -226,6 +229,7 @@ void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr)
     wikrt_fl_free(cx->memory, &(cx->fl), sz, addr);
     cx->ct_bytes_freed += sz;
 
+    // TODO
     // If a thread has a lot of free space, we may need to release 
     // some of it back to the common pool. It might be better to 
     // do this at an external 'boundary' such as the wikrt_eval API.
@@ -383,31 +387,16 @@ bool wikrt_valid_token(char const* s) {
  */
 wikrt_err wikrt_alloc_text(wikrt_cx* cx, wikrt_val* txt, char const* s, size_t len) 
 { 
-    wikrt_err r = WIKRT_IMPL;
+    (*txt) = WIKRT_VOID;
     wikrt_val* tl = txt;
     uint32_t cp;
     while((len != 0) && utf8_step(&s, &len, &cp)) {
-        if(!wikrt_text_char(cp)) { 
-            r = WIKRT_INVAL; 
-            goto e;
-        }
-        wikrt_addr dst;
-        if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &dst)) {
-            r = WIKRT_CXFULL;
-            goto e;
-        }
-        (*tl) = wikrt_tag_addr(WIKRT_PL, dst);
-        wikrt_val* const pv = wikrt_pval(cx, dst);
-        pv[0] = wikrt_i2v(cp);
-        tl = (pv + 1);
+        if(!wikrt_text_char(cp)) { return WIKRT_INVAL; }
+        if(!wikrt_alloc_cellval(cx, tl, WIKRT_PL, wikrt_i2v((int32_t)cp), WIKRT_VOID)) { return WIKRT_CXFULL; }
+        tl = 1 + wikrt_pval(cx, wikrt_vaddr(*tl));
     }
     (*tl) = WIKRT_UNIT_INR;
     return WIKRT_OK;
-e: // error; need to free allocated data
-    (*tl) = WIKRT_UNIT_INR;
-    wikrt_drop(cx, (*txt), true);
-    (*txt) = WIKRT_VOID;
-    return r;
 }
 
 /* For the moment, we'll allocate a binary as a plain old list.
@@ -416,28 +405,16 @@ e: // error; need to free allocated data
  */
 wikrt_err wikrt_alloc_binary(wikrt_cx* cx, wikrt_val* v, uint8_t const* buff, size_t nBytes) 
 {
-    wikrt_err r = WIKRT_IMPL;
+    (*v) = WIKRT_VOID;
     wikrt_val* tl = v;
     uint8_t const* const buffEnd = buff + nBytes;
     while(buff != buffEnd) {
         uint8_t const e = *(buff++);
-        wikrt_addr dst;
-        if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &dst)) { 
-            r = WIKRT_CXFULL;
-            goto e;
-        } 
-        (*tl) = wikrt_tag_addr(WIKRT_PL, dst);
-        wikrt_val* const pdst = wikrt_pval(cx, dst);
-        pdst[0] = wikrt_i2v((int32_t)e); 
-        tl = (pdst + 1);
+        if(!wikrt_alloc_cellval(cx, tl, WIKRT_PL, wikrt_i2v((int32_t)e), WIKRT_VOID)) { return WIKRT_CXFULL; }
+        tl = 1 + wikrt_pval(cx, wikrt_vaddr(*tl));
     }
     (*tl) = WIKRT_UNIT_INR;
     return WIKRT_OK;
-e:
-    (*tl) = WIKRT_UNIT_INR;
-    wikrt_drop(cx, (*v), true);
-    (*v) = WIKRT_VOID;
-    return r;
 }
 
 wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n) 
@@ -516,10 +493,37 @@ wikrt_err wikrt_peek_i32(wikrt_cx* cx, wikrt_val const v, int32_t* i32)
     if(wikrt_i(v)) {
         (*i32) = wikrt_v2i(v);
         return WIKRT_OK;
-    }
+    } 
 
-    // TODO: big integers, overflow calculations.
-    return WIKRT_IMPL;
+    wikrt_tag const tag = wikrt_vtag(v);
+    wikrt_addr const addr = wikrt_vaddr(v);
+    wikrt_val const* const pv = wikrt_pval(cx, addr);
+
+    bool const isBigInt = (WIKRT_O == tag) && (0 != addr) && (wikrt_otag_bigint(*pv));
+    if(!isBigInt) { return WIKRT_INVAL; }
+
+    wikrt_size const nDigits = (*pv) >> 9;
+    uint32_t const* const d = (uint32_t*)(pv + 1);
+    bool const positive = (0 == ((1 << 8) & (*pv)));
+    int32_t const digit = WIKRT_BIGINT_DIGIT;
+
+    if(positive) {
+        _Static_assert((2147483647 == INT32_MAX), "bad INT32_MAX");
+        uint32_t const d1m = 2;
+        uint32_t const d0m = 147483647;
+        bool const overflow = (nDigits > 2) || (d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m));
+        if(overflow) { (*i32) = INT32_MAX; return WIKRT_BUFFSZ; }
+        (*i32) = (d[1] * digit) + d[0];
+        return WIKRT_OK;
+    } else {
+        _Static_assert((-2147483648 == INT32_MIN), "bad INT32_MIN");
+        uint32_t const d1m = 2;
+        uint32_t const d0m = 147483648;
+        bool const underflow = (nDigits > 2) || (d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m));
+        if(underflow) { (*i32) = INT32_MIN; return WIKRT_BUFFSZ; }
+        (*i32) = 0 - ((int32_t)d[1] * digit) - (int32_t)d[0];
+        return WIKRT_OK;
+    }
 }
 
 wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64) 
@@ -529,22 +533,56 @@ wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64)
         return WIKRT_OK;
     }
 
-    // TODO: big integers, simple overflow calculations.
-    //  this will wait until after spike solution.
-    return WIKRT_IMPL;
+    wikrt_tag const tag = wikrt_vtag(v);
+    wikrt_addr const addr = wikrt_vaddr(v);
+    wikrt_val const* const pv = wikrt_pval(cx, addr);
+
+    bool const isBigInt = (WIKRT_O == tag) && (0 != addr) && (wikrt_otag_bigint(*pv));
+    if(!isBigInt) { return WIKRT_INVAL; }
+
+    wikrt_size nDigits = (*pv) >> 9;
+    uint32_t const* const d = (uint32_t*)(pv + 1);
+    bool const positive = (0 == ((1 << 8) & (*pv)));
+    int64_t const digit = WIKRT_BIGINT_DIGIT;
+
+    if(nDigits < 3) {
+        // nDigits is exactly 2 (by construction)
+        int64_t const iAbs = ((int64_t)d[1] * digit) + d[0];
+        (*i64) = positive ? iAbs : (0 - iAbs);
+        return WIKRT_OK;
+    } else if(positive) {
+        _Static_assert((9223372036854775807 == INT64_MAX), "bad INT64_MAX");
+        uint32_t const d2m = 9;
+        uint32_t const d1m = 223372036;
+        uint32_t const d0m = 854775807;
+        bool const overflow = (nDigits > 3) || (d[2] > d2m) ||
+            ((d[2] == d2m) && ((d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m))));
+        if(overflow) { (*i64) = INT64_MAX; return WIKRT_BUFFSZ; }
+        (*i64) = ((int64_t)d[2] * (digit * digit)) 
+               + ((int64_t)d[1] * (digit))
+               + ((int64_t)d[0]);
+        return WIKRT_OK;
+    } else {
+        // GCC complains with the INT64_MIN constant given directly.
+        _Static_assert(((-9223372036854775807 - 1) == INT64_MIN), "bad INT64_MIN");
+        uint32_t const d2m = 9;
+        uint32_t const d1m = 223372036;
+        uint32_t const d0m = 854775808;
+        bool const underflow = (nDigits > 3) || (d[2] > d2m) ||
+            ((d[2] == d2m) && ((d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m))));
+        if(underflow) { (*i64) = INT64_MIN; return WIKRT_BUFFSZ; }
+        (*i64) = 0 - ((int64_t)d[2] * (digit * digit))
+                   - ((int64_t)d[1] * (digit))
+                   - ((int64_t)d[0]);
+        return WIKRT_OK;
+    }
 }
 
 wikrt_err wikrt_alloc_prod(wikrt_cx* cx, wikrt_val* p, wikrt_val fst, wikrt_val snd) 
 {
-    wikrt_addr dst;
-    if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &dst)) {
-        (*p) = WIKRT_UNIT;
+    if(wikrt_alloc_cellval(cx, p, WIKRT_P, fst, snd)) {
         return WIKRT_CXFULL;
-    }
-    (*p) = wikrt_tag_addr(WIKRT_P, dst);
-    wikrt_val* const pv = wikrt_pval(cx, dst);
-    pv[0] = fst;
-    pv[1] = snd;
+    } 
     return WIKRT_OK;
 }
 
@@ -585,17 +623,11 @@ wikrt_err wikrt_alloc_sum(wikrt_cx* cx, wikrt_val* c, bool inRight, wikrt_val v)
         (*c) = v;
         return WIKRT_OK;
     } else { // need to allocate space
-        wikrt_addr dst;
-        if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &dst)) {
-            (*c) = WIKRT_VOID;
-            return WIKRT_CXFULL;
-        }
         wikrt_val const sumtag = (inRight ? WIKRT_DEEPSUMR : WIKRT_DEEPSUML);
         wikrt_val const otag = (sumtag << 8) | WIKRT_OTAG_DEEPSUM;
-        wikrt_val* const pv = wikrt_pval(cx, dst);
-        pv[0] = otag;
-        pv[1] = v;
-        (*c) = wikrt_tag_addr(WIKRT_O, dst);
+        if(!wikrt_alloc_cellval(cx, c, WIKRT_O, otag, v)) {
+            return WIKRT_CXFULL;
+        }
         return WIKRT_OK;
     }
 }
@@ -622,7 +654,7 @@ wikrt_err wikrt_split_sum(wikrt_cx* cx, wikrt_val c, bool* inRight, wikrt_val* v
             if(0 == sf) { // dealloc deepsum
                 (*v) = pv[1];
                 wikrt_free(cx, WIKRT_CELLSIZE, addr);
-            } else { // keep value, reduce one level 
+            } else { // keep value, reduced one level 
                 (*v) = c;
                 pv[0] = (sf << 8) | WIKRT_OTAG_DEEPSUM;
             }
@@ -635,14 +667,13 @@ wikrt_err wikrt_split_sum(wikrt_cx* cx, wikrt_val c, bool* inRight, wikrt_val* v
         } 
     }
 
-    (*inRight) = true;
+    (*inRight) = false;
     (*v) = WIKRT_VOID;
     return WIKRT_TYPE_ERROR;
 }
 
 wikrt_err wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, size_t len, wikrt_abc_opts opts) 
 {
-       
     return WIKRT_IMPL;
 }
 
@@ -666,11 +697,11 @@ wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, char const* s, size_
         (*sv) = wikrt_tag_addr(WIKRT_O, dst);
         wikrt_val* const psv = wikrt_pval(cx, dst);
 
-        // store seal in tag!
+        // represent seal in otag!
         wikrt_val tag = 0;
-        if(len > 3) { tag = (tag << 8) | s[3]; }
-        if(len > 2) { tag = (tag << 8) | s[2]; }
-        if(len > 1) { tag = (tag << 8) | s[1]; }
+        if(len > 3) { tag = (tag << 8) | (uint8_t) s[3]; }
+        if(len > 2) { tag = (tag << 8) | (uint8_t) s[2]; }
+        if(len > 1) { tag = (tag << 8) | (uint8_t) s[1]; }
         tag = (tag << 8) | WIKRT_OTAG_SEAL_SM;
         psv[0] = tag;
         psv[1] = v;
@@ -692,30 +723,114 @@ wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, char const* s, size_
     }
 } 
 
+// NOTE: I'll later want specializations for copying large arrays
+// and their like. But... for now I'll use the C stack in those
+// cases. So lcpy, for now, is just a list of target addresses.
+static void wikrt_copy_step_next(wikrt_cx* cx, wikrt_val* lcpy, wikrt_val** dst) 
+{
+    wikrt_addr const addr = wikrt_vaddr(*lcpy);
+    if(0 == addr) { (*dst) = NULL; }
+    else {
+        wikrt_val* const node = wikrt_pval(cx, addr);
+        (*dst) = wikrt_pval(cx, node[0]);
+        (*lcpy) = node[1];
+        wikrt_free(cx, WIKRT_CELLSIZE, addr);
+    } 
+}
+
+static inline bool wikrt_copy_add_task(wikrt_cx* cx, wikrt_val* lcpy, wikrt_addr a) {
+    return wikrt_alloc_cellval(cx, lcpy, WIKRT_PL, a, (*lcpy));
+}
+
 /** deep copy a structure
  *
  * It will be important to control how much space is used when copying,
- * i.e. to avoid busting the thread stack. I might need to model the
- * copy stack within the context itself, albeit with reasonably large
- * blocks to reduce fragmentation.
+ * especially to avoid recursive copies that might require excessive
+ * stack space. So I'll model may own stack when copying: a list of 
+ * addresses that are to be replaced by a copy of a value at the same
+ * address. I might specialize for working with basic arrays, too.
+ *
  */
-wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* copy, wikrt_val const src, bool bCopyAff) {
-    return WIKRT_IMPL;
+wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool bCopyAff) 
+{
+    (*dst) = origin;
+    if(wikrt_copy_shallow(origin)) { return WIKRT_OK; }
+
+    wikrt_val lcpy = WIKRT_UNIT_INR;
+    while(NULL != dst) {
+        // invariant: dst points to a deep-copy value
+        wikrt_tag const tag = wikrt_vtag(*dst);
+        wikrt_addr const addr = wikrt_vaddr(*dst);
+        wikrt_val* const pv = wikrt_pval(cx, addr);
+        if(WIKRT_O != tag) {
+            // tag is WIKRT_P, WIKRT_PL, or WIKRT_PR; addr points to cell.
+            // this is a common case, and so should be heavily optimized.
+            assert((WIKRT_P == tag) || (WIKRT_PL == tag) || (WIKRT_PR == tag));
+            if(!wikrt_alloc_cellval(cx, dst, tag, pv[0], pv[1])) { return WIKRT_CXFULL; }
+            wikrt_addr const newCell = wikrt_vaddr(*dst);
+            bool const s1 = wikrt_copy_shallow(pv[0]);
+            bool const s2 = wikrt_copy_shallow(pv[1]);
+            if(s1 && s2) { wikrt_copy_step_next(cx, &lcpy, &dst); }
+            else if(s2)  { dst = wikrt_pval(cx, newCell); }
+            else { 
+                dst = 1 + wikrt_pval(cx, newCell); // copy stack/list spine before data
+                if(!s1 && !wikrt_copy_add_task(cx,&lcpy,newCell)) { return WIKRT_CXFULL; }
+            }
+        } else {
+            return WIKRT_IMPL;
+        }
+        // TODO: tagged value objects.
+    }
+    assert(WIKRT_UNIT_INR == lcpy);
+    return WIKRT_OK;
 }
 
 /** delete a large structure
  *
- * Similar to 'copy', I need some way to track progress for deletion of 
- * deep structures in constant extra space. 
+ * It's important to avoid busting the stack when deleting large
+ * lists and other 'deep' structures. In this case, as much as
+ * possible, I'll be constructing the deletion stack from nodes
+ * that are to be freed anyway.
  */
 wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_val v, bool bDropRel) 
 {
+    if(wikrt_copy_shallow(v)) { 
+        return WIKRT_OK; 
+    } 
+
     return WIKRT_IMPL;
+#if 0
+    wikrt_addr const addr = wikrt_vaddr(v);
+    wikrt_val* const pv = wikrt_pval(cx, addr);
+    
+
+wikrt_val* const pv = wikrt_pval(cx, v
+else if(WIKRT_TAG_O == wikrt_vtag(v)) {
+    } else { // simple pair
+        
+        
+    }
+
+    wikrt_addr const addr = wikrt_vaddr(v);
+    wikrt_tag const tag = wikrt_vtag(v);
+    if(
+
+
+
+    return WIKRT_IMPL;
+#endif
 }
 
-
+/** Stowage will need some special considerations, eventually.
+ *
+ * Latent or lazy stowage is essential for performance reasons. We must
+ * not perform stowage until we feel some space pressure, or until we
+ * are planning to commit a transaction. 
+ */
 wikrt_err wikrt_stow(wikrt_cx* cx, wikrt_val* out)
 {
-    return WIKRT_IMPL;
+
+    return WIKRT_OK;
+    //return WIKRT_IMPL;
 }
 

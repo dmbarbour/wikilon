@@ -405,12 +405,11 @@ typedef uint32_t wikrt_val;
 
 /** @brief Void is not a value.
  *
- * This is occasionally useful as a placeholder, when you need a
- * clearly invalid value. It will also be the return value in many
- * error cases, e.g. for a failed allocation.
+ * This is occasionally useful as a placeholder or sentinel, if we need
+ * an obviously invalid value. It will also be the output value in many
+ * error cases, e.g. for failed allocations.
  */
 #define WIKRT_VOID 1
-
 
 /** @brief Maximum buffer size for token text.
  *
@@ -584,7 +583,8 @@ wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* cpy, wikrt_val const src, bool bCopyA
  */
 wikrt_err wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
 
-// TODO: a move function, copy a value between contexts with same environment
+// TODO: a move function, copy a value between contexts with same environment?
+//  Will introduce if need exists...
 
 /** @brief Mark a value for stowage.
  *

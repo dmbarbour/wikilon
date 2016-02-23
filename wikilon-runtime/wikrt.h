@@ -35,8 +35,9 @@ typedef struct wikrt_db wikrt_db;
 #define WIKRT_LNBUFF_POW2(SZ,LN) ((SZ + (LN - 1)) & ~(LN - 1))
 #define WIKRT_CELLSIZE (2 * sizeof(wikrt_val))
 #define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
-#define WIKRT_PAGESIZE (1 << 15)
+#define WIKRT_PAGESIZE (1 << 14)
 #define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
+#define WIKRT_THREADSZ (WIKRT_PAGESIZE << 7) 
 
 // free list management
 #define WIKRT_FLCT_QF 16 // quick-fit lists (sep by cell size)
@@ -115,34 +116,33 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *
  * WIKRT_OTAG_BIGINT
  *
- *   The upper 24 bits contain size and sign. Size is a number of 32-bit
- *   words. Wikilon runtime currently encodes only 30 bits of data per
- *   word, ranging 0..999999999 (i.e. a compact binary coded decimal).
- *   The size is up to (2^23 - 1) words, which corresponds to about 75
- *   million digits (and 34 megabytes) - an unlikely limit in practice.
- *   Performance is likely to degrade long before this limit is reached.
- *
- *   The encoding is little-endian.
+ *   The upper 24 bits contain size and sign. Size is a number of 30-bit
+ *   'digits' in the range 0..999999999 (a compact binary coded decimal).
+ *   Sign requires one bit, so size is limited to 2^23-1 of these digits.
+ *   (This corresponds to 75 million decimal digits.) Size is at least two
+ *   words. The encoding is little-endian.
  *
  * WIKRT_OTAG_BLOCK
  *
  *   The block is a representation of Awelon Bytecode, but optimized for
  *   fast interpretation.
  *
- * WIKRT_OTAG_SEAL
+ *   Note: I may need an intermediate representation for blocks for fast
+ *   simplifications, optimizations, and similar features. I may also want
+ *   a compact representation for composition of blocks.
+ *
+ * WIKRT_OTAG_SEAL   (size, value, sealer)
  *
  *   Just a copy of the sealer token together with the value. The data 
  *   bits will indicate the size in bytes of the sealer token.
  *
- *   WIKRT_OTAG_SEAL_SM
+ *   WIKRT_OTAG_SEAL_SM  (sealer, value)
  *
  *     An optimized representation for small discretionary seals, i.e.
  *     such as {:map}. Small sealers must start with ':' and have no
- *     more than three bytes. The sealer bytes are encoded in the data
- *     bits, and require no additional space.
- *
- *     Developers should be encouraged to use discretionary sealers with
- *     no more than 4 bytes utf-8 including the ':' for best performance.
+ *     more than four bytes. The sealer bytes are encoded in the tag's
+ *     data bits and require no additional space. Developers should be
+ *     encouraged to leverage this feature for performance.
  *   
  * WIKRT_OTAG_ARRAY
  *
@@ -310,13 +310,29 @@ bool wikrt_alloc(wikrt_cx*, wikrt_size, wikrt_addr*);
 void wikrt_free(wikrt_cx*, wikrt_size, wikrt_addr);
 bool wikrt_realloc(wikrt_cx*, wikrt_size, wikrt_addr*, wikrt_size);
 
-/* Recognize values represented entirely in the reference. */
-static inline bool wikrt_copy_shallow(wikrt_val const src) {
-    return (wikrt_i(src) || (0 == wikrt_vaddr(src)));
+// Allocate a cell value tagged with WIKRT_O, WIKRT_P, WIKRT_PL, or WIKRT_PR
+static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* dst, 
+    wikrt_tag tag, wikrt_val v0, wikrt_val v1) 
+{
+    wikrt_addr addr;
+    if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &addr)) { 
+        (*dst) = WIKRT_VOID; 
+        return false; 
+    }
+    (*dst) = wikrt_tag_addr(tag, addr);
+    wikrt_val* const pv = wikrt_pval(cx, addr);
+    pv[0] = v0;
+    pv[1] = v1;
+    return true;
 }
 
+/* Recognize values represented entirely in the reference. */
+static inline bool wikrt_copy_shallow(wikrt_val const v) {
+    return (wikrt_i(v) || (0 == wikrt_vaddr(v)));
+}
 
-wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, char const* s, size_t len, wikrt_val v);
+wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, 
+    char const* s, size_t len, wikrt_val v);
 
 /* Test whether a valid utf-8 codepoint is okay for a token. */
 static inline bool wikrt_token_char(uint32_t c) {
