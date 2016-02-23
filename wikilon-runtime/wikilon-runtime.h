@@ -576,10 +576,9 @@ wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* cpy, wikrt_val const src, bool bCopyA
  * are about to destroy or reset the context, you may safely skip the
  * overheads of freeing individual values.
  *
- * The C API may freely ignore the substructural 'relevant' constraint
- * by indicating bCopyRel. If not set, we may have an error now as we
- * drop, or later when evaluation of a pending value completes. Setting
- * it also enables lazy destruction.
+ * Users of this C API may freely ignore the substructural 'relevant' 
+ * constraint by indicating bDropRel. If not set, we may return an error
+ * now or later (in case of pending computations).  
  */
 wikrt_err wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
 

@@ -144,25 +144,36 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *     data bits and require no additional space. Developers should be
  *     encouraged to leverage this feature for performance.
  *   
- * WIKRT_OTAG_ARRAY
+ * WIKRT_OTAG_ARRAY (priority: low to medium)
  *
- *   Arrays are compact representations of lists or list-like structures,
- *   i.e. of shape `μL.((a*L)+b)`. Rather than requiring a full two-word
- *   cell per item, an array will generally make do with just one word 
- *   per item (or less for binaries and texts). With accelerators, these
- *   arrays shall also enable indexed access, logical split and join, 
- *   logical reversals, etc..
+ *   Awelon Bytecode doesn't truly have 'arrays'. Rather, an array is a
+ *   compact representation for a list, or any list-like structure of 
+ *   shape `μL.((a*L)+b)`. There are at least a few representations for
+ *   arrays:
+ *
+ *    - (size, item1, item2, ..., itemN)
+ *    - (size, buff) with buff→(item1, item2, ..., itemN)
+ *
+ *   I haven't fully decided on a specific representation quite yet. But
+ *   I would like support for logical splitting of arrays. I also want
+ *   some specialized support for large binaries and texts.
  *
  *   Implementation of arrays is low priority at this time, but high
- *   priority long term.
+ *   priority long term (critical for performance with accelerators).
  *
  * WIKRT_OTAG_STOWAGE
+ *
  *   Fully stowed values use a 64-bit reference to LMDB storage, plus a 
  *   few linked-list references for ephemeron GC purposes. Latent stowage
  *   is also necessary (no address assigned yet). And we'll need reference
  *   counting for stowed values.
  *
  *   I might need to use multiple tags for different stowage.
+ *
+ * Under consideration:
+ *
+ * - list lazy append - e.g. to support parallel computations?
+ *   
  */
 
 #define WIKRT_OTAG_BIGINT   73  
@@ -241,6 +252,11 @@ typedef struct wikrt_flst {
  * that has proven effective. Each list is used as a stack, i.e. the
  * last element free'd is the first allocated. Coalescing is not done
  * except by explicit call.
+ *
+ * TODO: I'd like to enable a bump-pointer nursery memory allocation
+ * arena, but this requires knowledge of roots, or external references
+ * into the arena. It may be something I can enable in a limited context
+ * such as a particular wikrt_eval computation.
  */
 typedef struct wikrt_fl {
     wikrt_size free_bytes;

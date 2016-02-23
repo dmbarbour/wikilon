@@ -86,13 +86,15 @@ bool test_vtype_true(wikrt_cx* cx)
         (WIKRT_VTYPE_SUM == t);
 }
 
-bool test_alloc_i32(wikrt_cx* cx, int32_t const iTest) 
+bool test_i32(wikrt_cx* cx, int32_t const iTest) 
 {
     wikrt_val v; wikrt_vtype t; int32_t i;
     int const stAlloc = wikrt_alloc_i32(cx, &v, iTest);
     int const stType = wikrt_peek_type(cx, &t, v);
     int const stPeek = wikrt_peek_i32(cx, v, &i);
     int const stDrop = wikrt_drop(cx, v, false);
+
+    fprintf(stderr, "value read: %d, status: %d\n", i, stPeek);
 
     bool const ok = 
         (WIKRT_OK == stAlloc) && (WIKRT_OK == stType) &&
@@ -103,29 +105,32 @@ bool test_alloc_i32(wikrt_cx* cx, int32_t const iTest)
 }
 
 static inline bool test_alloc_i32_max(wikrt_cx* cx) {
-    return test_alloc_i32(cx, INT32_MAX); }
+    return test_i32(cx, INT32_MAX); }
 static inline bool test_alloc_i32_zero(wikrt_cx* cx) {
-    return test_alloc_i32(cx, 0); }
+    return test_i32(cx, 0); }
 static inline bool test_alloc_i32_min(wikrt_cx* cx) {
-    return test_alloc_i32(cx, INT32_MIN); }
+    return test_i32(cx, INT32_MIN); }
 
 // uses knowledge of internal representation
 static inline bool test_alloc_i32_smallint_min(wikrt_cx* cx) {
-    return test_alloc_i32(cx, 0 - ((1<<30) - 1) ); }
+    return test_i32(cx, 0 - ((1<<30) - 1) ); }
 static inline bool test_alloc_i32_smallint_max(wikrt_cx* cx) {
-    return test_alloc_i32(cx, ((1 << 30) - 1) ); }
+    return test_i32(cx, ((1 << 30) - 1) ); }
 static inline bool test_alloc_i32_largeint_minpos(wikrt_cx* cx) {
-    return test_alloc_i32(cx, (1 << 30)); }
+    return test_i32(cx, (1 << 30)); }
 static inline bool test_alloc_i32_largeint_maxneg(wikrt_cx* cx) {
-    return test_alloc_i32(cx, 0 - (1 << 30)); }
+    return test_i32(cx, 0 - (1 << 30)); }
 
-bool test_alloc_i64(wikrt_cx* cx, int64_t const iTest) 
+bool test_i64(wikrt_cx* cx, int64_t const iTest) 
 {
     wikrt_val v; wikrt_vtype t; int64_t i;
     int const stAlloc = wikrt_alloc_i64(cx, &v, iTest);
     int const stType = wikrt_peek_type(cx, &t, v);
     int const stPeek = wikrt_peek_i64(cx, v, &i);
     int const stDrop = wikrt_drop(cx, v, false);
+
+    fprintf(stderr, "value written: %lld, read: %lld, status: %d\n", iTest, i, stPeek);
+
 
     bool const ok = 
         (WIKRT_OK == stAlloc) && (WIKRT_OK == stType) &&
@@ -136,21 +141,21 @@ bool test_alloc_i64(wikrt_cx* cx, int64_t const iTest)
 }
 
 static inline bool test_alloc_i64_max(wikrt_cx* cx) {
-    return test_alloc_i64(cx, INT64_MAX); }
+    return test_i64(cx, INT64_MAX); }
 static inline bool test_alloc_i64_zero(wikrt_cx* cx) {
-    return test_alloc_i64(cx, 0); }
+    return test_i64(cx, 0); }
 static inline bool test_alloc_i64_min(wikrt_cx* cx) {
-    return test_alloc_i64(cx, INT64_MIN); }
+    return test_i64(cx, INT64_MIN); }
 
 // using knowledge of internal representations
 static inline bool test_alloc_i64_2digit_min(wikrt_cx* cx) {
-    return test_alloc_i64(cx,  -999999999999999999); }
+    return test_i64(cx,  -999999999999999999); }
 static inline bool test_alloc_i64_2digit_max(wikrt_cx* cx) {
-    return test_alloc_i64(cx,   999999999999999999); }
+    return test_i64(cx,   999999999999999999); }
 static inline bool test_alloc_i64_3digit_minpos(wikrt_cx* cx) {
-    return test_alloc_i64(cx,  1000000000000000000); }
+    return test_i64(cx,  1000000000000000000); }
 static inline bool test_alloc_i64_3digit_maxneg(wikrt_cx* cx) {
-    return test_alloc_i64(cx, -1000000000000000000); }
+    return test_i64(cx, -1000000000000000000); }
 
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
