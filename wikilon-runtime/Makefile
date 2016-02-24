@@ -20,7 +20,7 @@ clean:
 	rm -f test
 	rm -rf testdir
 
-install: libwikilon-runtime.so
+install: libwikilon-runtime.so wikilon-runtime.h
 	mkdir -p $(INSTALL_PREFIX) && test -w $(INSTALL_PREFIX)
 	mkdir -p $(INSTALL_PREFIX)/lib
 	mkdir -p $(INSTALL_PREFIX)/include

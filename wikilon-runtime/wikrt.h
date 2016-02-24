@@ -199,8 +199,8 @@ static inline bool wikrt_otag_seal_sm(wikrt_val v) { return (WIKRT_OTAG_SEAL_SM 
 static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
 static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
 
-static inline wikrt_val wikrt_mkotag_bigint(bool sign, wikrt_size nDigits) {
-    return  (((nDigits << 1) | (sign ? 1 : 0)) << 8) | WIKRT_OTAG_BIGINT;
+static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
+    return  (((nDigits << 1) | (positive ? 0 : 1)) << 8) | WIKRT_OTAG_BIGINT;
 }
 
 /** @brief Stowage address is 64-bit address. 

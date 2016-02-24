@@ -423,26 +423,33 @@ wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n)
     if(isSmallInt) { 
         (*v) = wikrt_i2v(n); 
         return WIKRT_OK; 
-    }
+    } 
 
-    bool const sign = (n < 0);
-    if(sign) { n = -n; }
-
+    bool const positive = (n >= 0);
     wikrt_size const nDigits = 2;
     wikrt_size const allocSz = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
 
-    wikrt_addr dst;
-    if(!wikrt_alloc(cx, allocSz, &dst)) {
-        (*v) = WIKRT_VOID;
-        return WIKRT_CXFULL;
+    wikrt_addr addr;
+    if(!wikrt_alloc(cx, allocSz, &addr)) { 
+        (*v) = WIKRT_VOID; 
+        return WIKRT_CXFULL; 
     }
-    (*v) = wikrt_tag_addr(WIKRT_O, dst);
+    (*v) = wikrt_tag_addr(WIKRT_O, addr);
+    wikrt_val* const p = wikrt_pval(cx, addr);
+    p[0] = wikrt_mkotag_bigint(positive, nDigits);
+    uint32_t* const d = (uint32_t*) (p+1);
 
-    wikrt_val* const p = wikrt_pval(cx, dst);
-    p[0] = wikrt_mkotag_bigint(sign, nDigits);
-    uint32_t* const d = (uint32_t*)(p+1);
-    d[0] = (uint32_t) (n % WIKRT_BIGINT_DIGIT);
-    d[1] = (uint32_t) (n / WIKRT_BIGINT_DIGIT); 
+    // int32_t is not closed under negation for INT32_MIN.
+    if(n != INT32_MIN) {
+        _Static_assert(((INT32_MAX + INT32_MIN) == (-1)), "bad negation assumption (int32_t)");
+        n = positive ? n : -n;
+        d[1] = n / WIKRT_BIGINT_DIGIT;
+        d[0] = n % WIKRT_BIGINT_DIGIT;
+    } else {
+        _Static_assert((-2147483648 == INT32_MIN), "bad INT32_MIN");
+        d[1] = 2;
+        d[0] = 147483648;
+    }
 
     return WIKRT_OK;
 }
@@ -455,33 +462,40 @@ wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n)
         return WIKRT_OK;
     }
 
-    bool const sign = (n < 0);
-    if(sign) { n = -n; }
-    int64_t const dmax = (int64_t)WIKRT_BIGINT_DIGIT;
-    int64_t const d2max = ((dmax-1)*(dmax+1));
-    wikrt_size const nDigits = (n > d2max) ? 3 : 2;
+    bool const positive = (n >= 0);
+    uint32_t d0, d1, d2;
+
+    // int64_t is not closed under negation for INT64_MIN
+    if(n != INT64_MIN) {
+        _Static_assert(((INT64_MAX + INT64_MIN) == (-1)), "bad negation assumption (int64_t)");
+        n = positive ? n : -n;
+        d0 = n % WIKRT_BIGINT_DIGIT;
+        n /= WIKRT_BIGINT_DIGIT;
+        d1 = n % WIKRT_BIGINT_DIGIT;
+        d2 = n / WIKRT_BIGINT_DIGIT;
+    } else {
+        // GCC complains with the INT64_MIN constant given directly.
+        _Static_assert(((-9223372036854775807 - 1) == INT64_MIN), "bad INT64_MIN");
+        d2 = 9;
+        d1 = 223372036;
+        d0 = 854775808;
+    }
+
+    wikrt_size const nDigits = (d2 == 0) ? 2 : 3;
     wikrt_size const allocSz = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
 
-    wikrt_addr dst;
-    if(!wikrt_alloc(cx, allocSz, &dst)) {
+    wikrt_addr addr;
+    if(!wikrt_alloc(cx, allocSz, &addr)) {
         (*v) = WIKRT_VOID;
         return WIKRT_CXFULL;
     }
-
-    (*v) = wikrt_tag_addr(WIKRT_O, dst);
-    wikrt_val* const p = wikrt_pval(cx, dst);
-    p[0] = wikrt_mkotag_bigint(sign, nDigits);
+    (*v) = wikrt_tag_addr(WIKRT_O, addr);
+    wikrt_val* const p = wikrt_pval(cx, addr);
+    p[0] = wikrt_mkotag_bigint(positive, nDigits);
     uint32_t* const d = (uint32_t*)(p+1);
-
-    if(2 == nDigits) {
-        d[0] = (uint32_t) (n % WIKRT_BIGINT_DIGIT);
-        d[1] = (uint32_t) (n / WIKRT_BIGINT_DIGIT);
-    } else { // 3 big digits
-        d[0] = (uint32_t) (n % WIKRT_BIGINT_DIGIT);
-        n /= WIKRT_BIGINT_DIGIT;
-        d[1] = (uint32_t) (n % WIKRT_BIGINT_DIGIT);
-        d[2] = (uint32_t) (n / WIKRT_BIGINT_DIGIT);
-    }
+    d[0] = d0;
+    d[1] = d1;
+    if(nDigits >= 3) { d[2] = d2; }
 
     return WIKRT_OK;
 }
@@ -520,7 +534,11 @@ wikrt_err wikrt_peek_i32(wikrt_cx* cx, wikrt_val const v, int32_t* i32)
         uint32_t const d1m = 2;
         uint32_t const d0m = 147483648;
         bool const underflow = (nDigits > 2) || (d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m));
-        if(underflow) { (*i32) = INT32_MIN; return WIKRT_BUFFSZ; }
+        if(underflow) {
+            fprintf(stderr,"wikrt i32 underflow: %u %u %u\n", nDigits, d[1], d[0]); 
+            (*i32) = INT32_MIN; 
+            return WIKRT_BUFFSZ; 
+        }
         (*i32) = 0 - ((int32_t)d[1] * digit) - (int32_t)d[0];
         return WIKRT_OK;
     }
@@ -548,7 +566,7 @@ wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64)
     if(nDigits < 3) {
         // nDigits is exactly 2 by construction, no risk of over or underflow
         int64_t const iAbs = ((int64_t)d[1] * digit) + d[0];
-        (*i64) = positive ? iAbs : (0 - iAbs);
+        (*i64) = positive ? iAbs : -iAbs;
         return WIKRT_OK;
     } else if(positive) {
         _Static_assert((9223372036854775807 == INT64_MAX), "bad INT64_MAX");

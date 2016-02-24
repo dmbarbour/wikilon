@@ -94,8 +94,6 @@ bool test_i32(wikrt_cx* cx, int32_t const iTest)
     int const stPeek = wikrt_peek_i32(cx, v, &i);
     int const stDrop = wikrt_drop(cx, v, false);
 
-    fprintf(stderr, "value read: %d, status: %d\n", i, stPeek);
-
     bool const ok = 
         (WIKRT_OK == stAlloc) && (WIKRT_OK == stType) &&
         (WIKRT_OK == stPeek) && (WIKRT_OK == stDrop) &&
@@ -128,9 +126,6 @@ bool test_i64(wikrt_cx* cx, int64_t const iTest)
     int const stType = wikrt_peek_type(cx, &t, v);
     int const stPeek = wikrt_peek_i64(cx, v, &i);
     int const stDrop = wikrt_drop(cx, v, false);
-
-    fprintf(stderr, "value written: %lld, read: %lld, status: %d\n", iTest, i, stPeek);
-
 
     bool const ok = 
         (WIKRT_OK == stAlloc) && (WIKRT_OK == stType) &&
