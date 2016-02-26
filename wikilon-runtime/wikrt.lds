@@ -38,7 +38,7 @@
 
     wikrt_alloc_istr;
     wikrt_peek_istr;
-    wikrt_peek_isize;
+    wikrt_peek_isz;
 
     wikrt_alloc_prod;
     wikrt_split_prod;

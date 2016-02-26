@@ -511,12 +511,14 @@ wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
  * doesn't guarantee support for more than a million digits, but
  * it will fail rather than return an incorrect result.
  *
- * When reading large integers, asking for an appropriate buffer
- * size may be necessary.
+ * When reading large integers, asking for an appropriate buffer size
+ * may be necessary. wikrt_peek_isz will return the exact number of 
+ * characters to represent the number as a string (not including the
+ * NUL terminal). 
  */
 wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*);
 wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, char* buff, size_t buffsz); 
-wikrt_err wikrt_peek_isz(wikrt_cx*, wikrt_val const, size_t* buffsz);
+wikrt_err wikrt_peek_isz(wikrt_cx*, wikrt_val const, size_t* charCt);
 
 /** @brief Allocate or disassemble basic product types (pairs of values). */
 wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
@@ -689,9 +691,8 @@ wikrt_err wikrt_quote(wikrt_cx*, wikrt_val, wikrt_val*);
 wikrt_err wikrt_compose(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* ac);
 
 // Note: Originally I was planning to support 'token stops' so we could
-// extend the runtime with effects. However, this adds a lot of complexity
-// that Wikilon runtime doesn't need. And effects can be modeled in pure
-// ways via free monads, etc.. 
+// extend the runtime with token-driven effects. However, I'm thinking it
+// may be better to model effects in other ways (e.g. monadically).
 
 #if 0
 

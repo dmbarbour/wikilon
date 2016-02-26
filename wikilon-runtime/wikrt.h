@@ -97,8 +97,6 @@ static inline wikrt_val wikrt_i2v(int32_t n) { return (wikrt_val)(n << 1); }
 static inline int32_t wikrt_v2i(wikrt_val v) { return (((int32_t)v) >> 1); }
 static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 
-
-
 /** @brief tagged objects 
  *
  * Currently, I just use the low byte of each tag to indicate its
@@ -125,11 +123,11 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  * WIKRT_OTAG_BLOCK
  *
  *   The block is a representation of Awelon Bytecode, but optimized for
- *   fast interpretation.
+ *   fast interpretation. Composition of blocks should be O(1).
  *
  *   Note: I may need an intermediate representation for blocks for fast
- *   simplifications, optimizations, and similar features. I may also want
- *   a compact representation for composition of blocks.
+ *   simplifications, optimizations, and similar features. I will also 
+ *   want to ensure composition of blocks is O(1). 
  *
  * WIKRT_OTAG_SEAL   (size, value, sealer)
  *
@@ -155,11 +153,17 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *    - (size, buff) with buff→(item1, item2, ..., itemN)
  *
  *   I haven't fully decided on a specific representation quite yet. But
- *   I would like support for logical splitting of arrays. I also want
- *   some specialized support for large binaries and texts.
+ *   I would like support for logical splitting of arrays, possibly shared
+ *   arrays and reference counting (to leverage accelerators). I also want
+ *   specialized support for large binaries and texts.
  *
  *   Implementation of arrays is low priority at this time, but high
  *   priority long term (critical for performance with accelerators).
+ *   We should probably have some way to insist that all elements of
+ *   an array have the same type for collections-oriented programming.
+ *
+ *   WIKRT_OTAG_BLOB - binary specialization
+ *   WIKRT_OTAG_TEXT - text specialization
  *
  * WIKRT_OTAG_STOWAGE
  *
@@ -176,13 +180,13 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *   
  */
 
-#define WIKRT_OTAG_BIGINT   73  
-#define WIKRT_OTAG_DEEPSUM  83 
-#define WIKRT_OTAG_BLOCK    66
-#define WIKRT_OTAG_SEAL     84
-#define WIKRT_OTAG_SEAL_SM  58
-#define WIKRT_OTAG_ARRAY    65
-#define WIKRT_OTAG_STOWAGE  88
+#define WIKRT_OTAG_BIGINT   78   /* N */
+#define WIKRT_OTAG_DEEPSUM  83   /* S */
+#define WIKRT_OTAG_BLOCK    91   /* [ */
+#define WIKRT_OTAG_SEAL     36   /* $ */
+#define WIKRT_OTAG_SEAL_SM  58   /* : */
+#define WIKRT_OTAG_ARRAY    86   /* V */
+#define WIKRT_OTAG_STOWAGE  64   /* @ */
 #define LOBYTE(V) ((V) & 0xFF)
 
 #define WIKRT_DEEPSUMR      3 /* bits 11 */

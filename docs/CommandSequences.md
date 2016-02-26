@@ -111,18 +111,20 @@ In general, only a fraction of our program environment should be shared this way
 
 ## The Sugar: Block-Delimited Sequences
 
-AO doesn't do infix notation. However, a claw view can support infix notations within a clear, delimited region. Blocks provide clear, delimited regions. We can potentially model sequences blocks by having a command separator 'escape' each block and recombine it. Of course, this needs to work transparently with the existing sugar around blocks. 
+AO doesn't do infix notation. However, a claw view of AO could support infix notations within clear, delimited regions. Blocks provide clear, delimited regions. We can potentially model sequences blocks by using an infix command separator that yields but also returns the remainder of the block.
 
         [foo, bar, baz, qux] desugars to:
         [foo \[bar \[baz \[qux] yield] yield] yield]
 
-This is a right-associative binding. The continuation is hidden until just before we return. The continuation could easily be shoved into the program environment or returned to our interpreter. It isn't difficult to recognize that a block ends with `\[...] yield]`, so the desugaring is reversible in a straightforward way.
+This is a right-associative binding, which is usually a good performance fit. The continuation is hidden from our computation until just before we return. It is relatively easy to sugar or desugar, works with other block sugars, and the sequencing structure compresses nicely if that matters. It also works nicely with a namespace as the first element, i.e. because the namespace will impact all the `yield` words. We can use it for a pseudo-EDSL, e.g. `[#vector: 1, 2, 3, 4]`. 
+
+A disadvantage is that this syntactic sugar does very little to protect monadic semantics. It must be used idiomatically.
 
 ### Alternative: CPS Variant
 
-From a processing standpoint, `[\[\[\[qux] after baz] after bar] after foo]` is a more tempting expansion. It provides the continuation before processing the function, and supports a continuation passing style. 
+From a processing standpoint, `[\[\[\[qux] after baz] after bar] after foo]` is a more tempting expansion. It provides the continuation before processing the function, and easily supports a continuation-passing style. 
 
-Unfortunately, this hinders interaction with namespace attributes and other view properties.  prevents the interpreter from hiding the continuation from the program, guarantees our continuation is always visible to our program, hinders namespaces from applying to the sequence, doesn't compress nicely, and reorders the program compared to the user's view. I'm favoring the current model for now.
+Unfortunately, this hinders interaction with namespace attributes and other view properties. It also prevents the interpreter from hiding the continuation from the program, guarantees our continuation is always visible to our program, hinders namespaces from applying to the sequence, doesn't compress nicely, and reorders the program compared to the user's view. I'm favoring the current model for now.
 
 ### Use Case: Data Sequences
 
@@ -138,8 +140,7 @@ We have a concise, composable, factorable, and friendly syntax for data sequence
 
 ### Use Case: Monadic Programming
 
-For monadic programming, as with data sequences, we'll need to include a representation of our continuation in our program environment, such that we may `yield` multiple times. This is necessary for associative grouping properties, i.e. such that a call stack where we yield in the middle of the top call returns a stack of continuations.
+For monadic programming, as with data sequences, we'll need to include a representation of our continuation in our program environment, such that we may `yield` multiple times if we inline a prior sequence. That, or we'll need to explicitly express `join :: m (m a) → m a` and `return :: a → m a` and other effects, such that `yield` always extends an `m a` structure and optionally immediately continues for `return`. I suspect using an internal continuation in the program environment will be nicer syntactically.
 
- However, our interpreter remains free to capture this continuation. 
+Unfortunately, the proposed command sequence does very little to actually protect monadic semantics. 
 
- use a similar technique ( of putting our continuation into the program environment. The only difference is that we'll also need to record some sort of 'expected effect' (on our stack, for example) just before yielding. So we either have an effect, or we return. This syntactic sugar is really a bare minimum for monadic code.

@@ -321,7 +321,22 @@ We'll probably just use a (size,utf8) for our symbol. We know from AO constraint
 
 ### Blocks, Fixpoints, Compiled Code
 
-A good representation for blocks is critical. Blocks are copied very frequently in loops. We process them incrementally, and we'll need to integrate them easily with LLVM compiled code. For debugging, it would be nice to have some *metric* as to where an error occurs, even if it's a rough metric: replay-based debugging would have us go to a point prior and try again in a debug mode.
+A good representation for blocks is critical. What properties do I need?
+
+* O(1) fast composition
+* O(1) fast quotation of values
+* fast copy for loopy behaviors
+* very fast interpretation
+* (eventual) LLVM compilation!
+ * with nice gateway analyses
+ * with 
+
+In the interest of getting started quickly, I'll deep-copy blocks like everything else. However, reference counts, aliasing and GC might do me much good here if it means I can reduce the number of actual copies of a function in memory or reduce memory-allocation burden. So, long term, this clearly is something to look into.
+
+If I assume reference counts, this means 'fast composition' cannot be modeled with internal mutations. But I could still have a O(1) composition as a pair of blocks. 
+
+
+Blocks are copied very frequently in loops. We process them incrementally, and we'll need to integrate them easily with LLVM compiled code. For debugging, it would be nice to have some *metric* as to where an error occurs, even if it's a rough metric: replay-based debugging would have us go to a point prior and try again in a debug mode.
 
 Our blocks need at least:
 
@@ -370,13 +385,13 @@ The first big problem is IO. I have this context. I need to inject data into it,
 
 My other option is to enable entry for common data types: integers, lists, texts, pairs, etc.. And also fast extraction of them. 
 
-### Time Quotas
+### Time Quotas?
 
-I'm thinking a good way to model time quotas is based on allocations, in particular nursery allocations. Each GC of the nursery could act as a unit of time (or perhaps one unit per megabyte). 
+Wikilon will need to abort computations that run too long. Use of some sort of time or effort-based quota is relevant. It might also be useful to perform 'incremental' computations that only run so long between steps, enabling intervention or re-prioritization.
 
-I have a couple options for time quotas. One is to explicitly model computations, 
+Incremental time quotas are challenging because I must have a well-defined intermediate state that may be continued. It is feasible to only 'halt' on quota at well-defined locations, but it might require extra work for compiled loops (maybe some sort of voluntary yield and continue for loops?)
 
-
+Still need to think about this one.
 
 ### Context and Environment Management
 
@@ -385,18 +400,6 @@ Ability to create an environment and multiple contexts, and interact with them. 
 ### Evaluation with Dictionaries?
 
 It could be useful to associate a dictionary with our evaluations, where we know how to read the dictionary. This would require a 'standard' representation for dictionaries in stowage... which is doable, especially if we accelerate association lists.
-
-### Streaming Bytecode APIs?
-
-I've been thinking about how (and whether) to support streaming code in Wikilon. 
-
-One option is "open blocks", where we receive fragments of bytecode (not necessarily aligned with blocks, tokens, or texts). We can treat this block as a value. This idea is very flexible. We could compose streams in various ways, replicate them, etc.. But these options also lead to implementation challenges - e.g. we might 'copy' a stream, quote it, apply it in multiple parallel contexts, etc.. so there are potentially synchronization, replication, partial application issues.
-
-A second option is to create 'stream evaluators', where we iteratively apply chunks of bytecode provided as C strings (and perhaps a few blocks, quoted values). This option has similar representation challenges, but none of the greater complications like replication and synchronization. 
-
-I favor this second option at this time. Though, it might be feasible to use the same 'stream injection' API for both, via ad-hoc polymorphism. 
-
-A related issue is whether we should allow observation (and manipulation) of intermediate values. I'm thinking not. We can easily (and far more generally and precisely) inject tokens for intermediate access. Further, access to intermediate content may hinder control over nursery arenas.
 
 ### Direct Value Manipulations
 
@@ -408,13 +411,13 @@ So, value manipulations will all be destructive with ownership semantics. Develo
 
 ### Large Binary Inputs and Outputs
 
-Something that has concerned me is how Wikilon will interact with large binary content. Working with multi-gigabyte binaries is problematic if I restrict to 4GB working spaces. Modeling very large binaries as external resources might help, but I'm not comfortable with consuming arbitrary amounts of address space. I used `mmap'd` files or whatever to avoid loading them all at once. What other options do we have?
+Something that has concerned me is how Wikilon will interact with large binary content. Working directly with multi-gigabyte binaries is problematic if I restrict to 4GB working spaces. Modeling very large binaries as external resources might help, but I'm not comfortable with consuming arbitrary amounts of address space. I can used `mmap'd` files or whatever to avoid loading them all at once. What other options do we have?
 
 One viable possibility is to have Wikilon understand a relatively simple model or API for ropes or streams, or perhaps even HTTP request handlers, with which we may easily wrap whichever models we favor within our dictionary. 
 
 This would enable large binary *outputs* to be loaded (perhapse even computed) incrementally. Ropes would have the advantage of enabling indexed access, answering those region-based HTTP requests, etc.. Large binary *inputs* are probably less an issue because we simply have some software agent representing the binary within the dictionary in an ad-hoc way (ropes or streams or whatever). 
 
-I think I'll try that route, rather than attempt to solve the problem of representing very large binaries.
+I think I'll try that route, rather than attempt to solve the problem of representing and directly streaming very large binaries.
 
 ## Other Ideas
 
