@@ -1,15 +1,11 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "wikilon-runtime.h"
 
 #define TESTCX_SIZE (WIKRT_CX_SIZE_MIN)
 #define TESTENV_SIZE (5 * TESTCX_SIZE)
-
-// LCG PRNG for testing. 
-static inline uint32_t rand_next(uint32_t prev) {
-    return (0x7FFFFFFF & ((prev * 1103515245) + 12345));
-}
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct); 
 int fillct(wikrt_cx* cx); // exercise memory management code
@@ -201,27 +197,49 @@ void numstack(wikrt_cx* cx, wikrt_val* stack, int32_t count)
     }
 }
 
+/* destroy a stack and compute its sum. */
+void sumstack(wikrt_cx* cx, wikrt_val* stack, int64_t* sum)
+{
+    wikrt_vtype type;
+    while((WIKRT_OK == wikrt_peek_type(cx, &type, *stack)) &&
+          (WIKRT_VTYPE_PRODUCT == type))
+    {
+        wikrt_val elem;  wikrt_split_prod(cx, (*stack), &elem, stack);
+        int32_t elemVal; wikrt_peek_i32(cx, elem, &elemVal);
+        wikrt_drop(cx, elem, false);
+        *sum += elemVal;
+    }
+}
+
+
 bool test_alloc_prod(wikrt_cx* cx) 
 {
-    int32_t const ct = 1024;
+    int32_t const ct = 111111;
     wikrt_val stack = WIKRT_UNIT;
     numstack(cx, &stack, ct);
 
-    int32_t const expected_sum = (ct * (ct + 1)) / 2;
-    int32_t actual_sum = 0;
-
-    // pop each item from stack and add to sum.
-    wikrt_vtype type;
-    while((WIKRT_OK == wikrt_peek_type(cx, &type, stack)) &&
-          (WIKRT_VTYPE_PRODUCT == type))
-    {
-        wikrt_val elem;  wikrt_split_prod(cx, stack, &elem, &stack);
-        int32_t elemVal; wikrt_peek_i32(cx, elem, &elemVal);
-        wikrt_drop(cx, elem, false);
-        actual_sum += elemVal;
-    }
+    int64_t const expected_sum = (ct * (int64_t)(ct + 1)) / 2;
+    int64_t actual_sum = 0;
+    sumstack(cx, &stack, &actual_sum);
 
     bool const ok = (expected_sum == actual_sum) && (WIKRT_UNIT == stack);
+    return ok;
+}
+
+bool test_copy_prod(wikrt_cx* cx)
+{
+    int32_t const ct = 77777;
+    int64_t const expected_sum = (ct * (int64_t)(ct + 1)) / 2;
+    int64_t sumA = 0;
+    int64_t sumB = 0;
+    wikrt_val v = WIKRT_UNIT_INR;
+    numstack(cx, &v, ct);
+    wikrt_val vcpy;
+    wikrt_copy(cx, &vcpy, v, false);
+    sumstack(cx, &v, &sumA);
+    sumstack(cx, &vcpy, &sumB);
+    bool const ok = (sumA == sumB) && (sumA == expected_sum) 
+                  && (WIKRT_UNIT_INR == vcpy);
     return ok;
 }
 
@@ -236,27 +254,26 @@ static inline void deepsum_path(wikrt_cx* cx, char const* s, wikrt_val* v)
     }
 }
 
-bool test_deepsum_str(wikrt_cx* cx, char const* const sumstr) 
+// destroys val
+bool dismantle_deepsum_path(wikrt_cx* cx, char const* const sumstr, wikrt_val* v) 
 {
     bool ok = true;
-    wikrt_val v = WIKRT_UNIT;
-    deepsum_path(cx, sumstr, &v);
-
     char const* ss = sumstr;
     while(ok && *ss) {
         char const c = *(ss++);
         bool const expected_inR = ('R' == c);
         bool actual_inR;
-        wikrt_err const st = wikrt_split_sum(cx, v, &actual_inR, &v);
+        wikrt_err const st = wikrt_split_sum(cx, (*v), &actual_inR, v);
         ok = (WIKRT_OK == st) && (actual_inR == expected_inR);
     }
+    return ok;
+}
 
-    ok = (WIKRT_UNIT == v) && ok;
-    if(!ok) {
-        fprintf(stderr, "failed deepsum test: %s (rem %d) (val %d)\n", sumstr, (int)strlen(ss), (int)v);
-        wikrt_drop(cx, v, true);
-    } 
-
+bool test_deepsum_str(wikrt_cx* cx, char const* const sumstr) 
+{
+    wikrt_val v = WIKRT_UNIT;
+    deepsum_path(cx, sumstr, &v);
+    bool const ok = dismantle_deepsum_path(cx, sumstr, &v) && (WIKRT_UNIT == v);
     return ok;
 }
 
@@ -275,13 +292,11 @@ bool test_alloc_deepsum_RLR(wikrt_cx* cx) { return test_deepsum_str(cx, "RLR"); 
 bool test_alloc_deepsum_RRL(wikrt_cx* cx) { return test_deepsum_str(cx, "RRL"); }
 bool test_alloc_deepsum_RRR(wikrt_cx* cx) { return test_deepsum_str(cx, "RRR"); }
 
-bool test_deepsum_prng(wikrt_cx* cx, uint32_t const seed, size_t const depth) 
+bool test_deepsum_prng(wikrt_cx* cx, unsigned int seed, size_t const depth) 
 {
-    uint32_t r = seed;
     char buff[depth+1];
     for(size_t ii = 0; ii < depth; ++ii) {
-        r = rand_next(r);
-        buff[ii] = (r & (1<<6)) ? 'R' : 'L';
+        buff[ii] = (rand_r(&seed) & (1<<9)) ? 'R' : 'L';
     }
     buff[depth] = 0;
     return test_deepsum_str(cx, buff);
@@ -289,14 +304,27 @@ bool test_deepsum_prng(wikrt_cx* cx, uint32_t const seed, size_t const depth)
 
 bool test_alloc_deepsum_large(wikrt_cx* cx) 
 {
-    int const count = 4096;
+    int const count = 4000;
     int passed = 0;
     for(int ii = 0; ii < count; ++ii) {
-        if(test_deepsum_prng(cx, ii, 120)) {
+        if(test_deepsum_prng(cx, ii, 70)) {
             ++passed;
         }
     }
     return (passed == count);
+}
+
+bool test_copy_deepsum(wikrt_cx* cx) 
+{
+    char* const str = "LLLLLLLLLLLLLLLLLRRRRRRRRRRRRRRRRRRRRLLRRLLRRLLRRLLRRLLRRLRLRLRLRLRLRRRRRRLLLLRLLRLLLLLLLRLRRRRR";
+    wikrt_val v = WIKRT_UNIT;
+    deepsum_path(cx, str, &v);
+    wikrt_val vcpy = WIKRT_UNIT;
+    bool ok = (WIKRT_OK == wikrt_copy(cx, &vcpy, v, false))
+            && dismantle_deepsum_path(cx, str, &v)
+            && dismantle_deepsum_path(cx, str, &vcpy)
+            && (WIKRT_UNIT == v) && (WIKRT_UNIT == vcpy);
+    return ok;
 }
 
 bool test_pkistr_s(wikrt_cx* cx, int64_t n, char const* const nstr) 
@@ -345,9 +373,36 @@ bool test_pkistr_small(wikrt_cx* cx)
     
     #undef TEST
 
-    return (runct == passct);
+    return ((runct > 0) && (runct == passct));
 
 }
+
+bool test_copy_i64(wikrt_cx* cx, int64_t const test) {
+    wikrt_val i1, i2;
+    wikrt_alloc_i64(cx, &i1, test);
+    wikrt_copy(cx, &i2, i1, false);
+    int64_t n;
+    wikrt_peek_i64(cx, i2, &n);
+    wikrt_drop(cx, i1, false);
+    wikrt_drop(cx, i2, false);
+    bool const ok = (test == n);
+    return ok;
+}
+
+bool test_copy_num(wikrt_cx* cx) 
+{
+    unsigned int r = 0;
+    int testCt = 1000;
+    bool ok = test_copy_i64(cx, INT64_MIN) 
+           && test_copy_i64(cx, INT64_MAX)
+           && test_copy_i64(cx, 0);
+    while(testCt-- > 0) {
+        int64_t testVal = ((int64_t)rand_r(&r) * RAND_MAX) + rand_r(&r);
+        ok = test_copy_i64(cx, testVal) && ok;
+    }
+    return ok;
+}
+
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
@@ -389,10 +444,12 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_alloc_i64_3digit_maxneg);
 
     TCX(test_pkistr_small);
+    TCX(test_copy_num);
 
     // TODO: test istr, isz.
 
     TCX(test_alloc_prod);
+    TCX(test_copy_prod);
 
     TCX(test_alloc_deepsum_L);
     TCX(test_alloc_deepsum_R);
@@ -409,8 +466,10 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_alloc_deepsum_RRL);
     TCX(test_alloc_deepsum_RRR);
     TCX(test_alloc_deepsum_large);
+    TCX(test_copy_deepsum);
 
     //TCX(test_alloc_sealers);
+
 
     // TODO test: texts, binaries.
     // TODO test: math.

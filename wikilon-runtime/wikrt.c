@@ -837,64 +837,95 @@ wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, char const* s, size_
 
 static void wikrt_copy_step_next(wikrt_cx* cx, wikrt_val* lcpy, wikrt_val** dst) 
 {
-    // basic list is (addr, next); will need specialization for arrays.
-    // we'll return a pointer directly to the target addr in memory.
+    // basic list is (addr, next) which corresponds to (addr, 0, 1, next)
+    // alternative is WIKRT_O ref to (addr, step, count, next) for array-like structures.
     wikrt_addr const addr = wikrt_vaddr(*lcpy);
     wikrt_tag const tag = wikrt_vtag(*lcpy);
     wikrt_val* const node = wikrt_pval(cx, addr);
     if(0 == addr) { (*dst) = NULL; }
     else if(WIKRT_PL == tag) {
+        // node → (addr, next)
         (*dst) = wikrt_pval(cx, node[0]);
         (*lcpy) = node[1];
         wikrt_free(cx, WIKRT_CELLSIZE, addr);
+    } else if(WIKRT_O == tag) {
+        // node → (addr, step, count, next)
+        (*dst) = wikrt_pval(cx, node[0]);
+        node[2] -= 1;       // reduce count
+        node[0] += node[1]; // apply step
+        if(0 == node[2]) {
+            (*lcpy) = node[3]; // continue with list
+            wikrt_free(cx, (2 * WIKRT_CELLSIZE), addr);
+        }
     } else {
         fprintf(stderr, "wikrt: invalid copy stack\n");
         abort();
     }
 }
 
-static inline bool wikrt_copy_add_task(wikrt_cx* cx, wikrt_val* lcpy, wikrt_addr a) {
+static bool wikrt_copy_add_task(wikrt_cx* cx, wikrt_val* lcpy, wikrt_addr a) {
     return wikrt_alloc_cellval(cx, lcpy, WIKRT_PL, a, (*lcpy));
+}
+
+static bool wikrt_copy_add_arraytask(wikrt_cx* cx, wikrt_val* lcpy, wikrt_addr a, wikrt_size step, wikrt_size ct) {
+    if(1 == ct) { return wikrt_copy_add_task(cx, lcpy, a); }
+    else { return wikrt_alloc_dcellval(cx, lcpy, a, step, ct, (*lcpy)); }
 }
 
 /** deep copy a structure
  *
- * It will be important to control how much space is used when copying,
- * especially to avoid recursive copies that might require excessive
- * stack space. So I'll model may own stack when copying: a list of 
- * addresses that are to be replaced by a copy of a value at the same
- * address. I might specialize for working with basic arrays, too.
- *
+ * The 'stack' for copies is represented within the context itself. 
+ * Copies for stacks, lists, and arrays is specialized for performance.
  */
 wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool bCopyAff) 
 {
     (*dst) = origin;
     wikrt_val lcpy = WIKRT_UNIT_INR;
     do {
+        wikrt_val const v0 = (*dst);
+
         // shallow copies may be left alone
-        if(wikrt_copy_shallow(*dst)) {
+        if(wikrt_copy_shallow(v0)) {
             wikrt_copy_step_next(cx, &lcpy, &dst);
             continue;
         }
+
         // dst points to a value reference to cx->memory
-        wikrt_tag const tag = wikrt_vtag(*dst);
-        wikrt_addr const addr = wikrt_vaddr(*dst);
+        wikrt_tag const tag = wikrt_vtag(v0);
+        wikrt_addr const addr = wikrt_vaddr(v0);
         wikrt_val const* const pv = wikrt_pval(cx, addr);
         if(WIKRT_O != tag) {
 
-            // tag is WIKRT_P, WIKRT_PL, or WIKRT_PR; addr points to cell.
-            // This is THE common case for structured data (lists, stacks, trees).
-            assert((WIKRT_P == tag) || (WIKRT_PL == tag) || (WIKRT_PR == tag));
-            if(!wikrt_alloc_cellval(cx, dst, tag, pv[0], pv[1])) { goto cxFull; }
-            wikrt_addr const newcell = wikrt_vaddr(*dst);
-            if(!wikrt_copy_shallow(pv[0])) { wikrt_copy_add_task(cx, &lcpy, newcell); }
-            dst = 1 + wikrt_pval(cx, newcell); // copy spine of list or stack before data
+            // tag is WIKRT_P, WIKRT_PL, or WIKRT_PR. Node points to a pair.
+            // This is a common case for structured data - lists, stacks, and
+            // trees. I'll allocate a 'spine' in one chunk, which optimizes
+            // for lists and stacks (and shouldn't hurt other structures).
+            wikrt_size const cellCt = 1 + wikrt_spine_length(cx, pv[1]);
+
+            wikrt_addr spine;
+            if(!wikrt_alloc(cx, (WIKRT_CELLSIZE * cellCt), &spine)) { return WIKRT_CXFULL; }
+            if(!wikrt_copy_add_arraytask(cx, &lcpy, spine, WIKRT_CELLSIZE, cellCt)) { return WIKRT_CXFULL; }
+            (*dst) = wikrt_tag_addr(tag, spine);
+
+            wikrt_val const* hd = pv;
+            wikrt_val intraSpine = spine;
+            for(wikrt_size ii = cellCt; ii > 1; --ii) {
+                wikrt_val* const pintraSpine = wikrt_pval(cx, intraSpine);
+                intraSpine += WIKRT_CELLSIZE; 
+                pintraSpine[0] = hd[0]; // copied later via arraytask
+                pintraSpine[1] = wikrt_tag_addr(wikrt_vtag(hd[1]), intraSpine);
+                hd = wikrt_pval(cx, wikrt_vaddr(hd[1])); // next item.
+            }
+            wikrt_val* const pspineLast = wikrt_pval(cx, intraSpine);
+            pspineLast[0] = hd[0]; // last intra-spine value copied by arraytask
+            pspineLast[1] = hd[1]; // end of spine is not an intra-spine reference
+            dst = 1 + pspineLast; // copy final value in spine.
 
         } else { switch(LOBYTE(*pv)) {
 
             case WIKRT_OTAG_SEAL_SM: // same as DEEPSUM
             case WIKRT_OTAG_DEEPSUM: {
-                if(!wikrt_alloc_cellval(cx, dst, WIKRT_O, pv[0], pv[1])) { goto cxFull; }
+                if(!wikrt_alloc_cellval(cx, dst, WIKRT_O, pv[0], pv[1])) { return WIKRT_CXFULL; }
                 dst = 1 + wikrt_pval(cx, wikrt_vaddr(*dst)); // copy value in sum
             } break;
 
@@ -912,7 +943,7 @@ wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool 
                 wikrt_size const nDigits = (*pv) >> 9;
                 wikrt_size const szAlloc = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
                 wikrt_addr copy;
-                if(!wikrt_alloc(cx, szAlloc, &copy)) { goto cxFull; }
+                if(!wikrt_alloc(cx, szAlloc, &copy)) { return WIKRT_CXFULL; }
                 memcpy(wikrt_pval(cx, copy), pv, szAlloc); // copy the binary data
                 (*dst) = wikrt_tag_addr(WIKRT_O, copy); 
                 wikrt_copy_step_next(cx, &lcpy, &dst);
@@ -923,7 +954,7 @@ wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool 
                 wikrt_size const len = ((*pv) >> 8) & 0x3F; // 1..63 is valid
                 wikrt_size const szAlloc = WIKRT_CELLSIZE + len;
                 wikrt_addr copy;
-                if(!wikrt_alloc(cx, szAlloc, &copy)) { goto cxFull; }
+                if(!wikrt_alloc(cx, szAlloc, &copy)) { return WIKRT_CXFULL; }
                 memcpy(wikrt_pval(cx, copy), pv, szAlloc);
                 (*dst) = wikrt_tag_addr(WIKRT_O, copy);
                 dst = 1 + wikrt_pval(cx, copy); // copy the sealed value
@@ -942,14 +973,6 @@ wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool 
     } while(NULL != dst);
     assert(WIKRT_UNIT_INR == lcpy);
     return WIKRT_OK;
-
-cxFull: 
-    // delete aliases from our copy.
-    while(NULL != dst) {
-        (*dst) = WIKRT_VOID;
-        wikrt_copy_step_next(cx, &lcpy, &dst);
-    }
-    return WIKRT_CXFULL;
 }
 
 
@@ -998,7 +1021,6 @@ wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_val v, bool bDropRel)
 
             // tag is WIKRT_P, WIKRT_PL, or WIKRT_PR; addr points to cell.
             // This is common case for structured data (lists, stacks, trees).
-            assert((WIKRT_P == tag) || (WIKRT_PL == tag) || (WIKRT_PR == tag));
             v = pv[1]; // first delete spine of stack or list.
             pv[1] = ldrop;
             ldrop = wikrt_tag_addr(WIKRT_PL, addr);

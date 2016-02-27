@@ -3,7 +3,7 @@
 
 As per [my performance strategy](Performance.md), I'm developing a C runtime: a good interpreter, with opportunity for LLVM or other JIT compilation. One motivation for the C interpreter is that I need a simple, low-level data representation for the LLVM JIT. I'll be using something very like the Lisp/Scheme representation, consisting mostly of simple pairs of words.
 
-It may be useful to also develop a command-line interface at this layer, if I'm willing to encode Claw code and dictionaries at this level.
+It may be useful to also develop a command-line interface at this layer. I'm somewhat willing to encode Claw code and dictionaries at this level.
 
 ## Design Goals
 
@@ -20,6 +20,8 @@ Performance is the primary goal. But some others:
 
 Also, it might be useful to support a second evaluation mode for type inference.
 
+I'll avoid using tokens or callbacks for side-effects at this time. I'd prefer to encourage effects models that can be easily simulated and tested in a purely functional ABC environment.
+
 ## External Utilities
 
 I'll actually include a copy of these directly, no shared libs.
@@ -29,121 +31,103 @@ I'll actually include a copy of these directly, no shared libs.
 * ZSTD(?) - real-time, streaming compression
  * very promising, but not entirely stable
 
-## Environment, Contexts, Memory Layout
+## Structure
 
-A toplevel *environment* will track: 
+I need an *environment* bound to an underlying stowage and persistence model, e.g. via LMDB. The environment may also be associated with worker threads for par-seq parallelism. I also need *contexts* that associate an environment with a heap of memory for computations. 
 
-* LMDB integration for stowage
-* A set of computation contexts
-* A pool of worker threads for sparks
-* All needed semaphores and mutexes
+Context is a contiguous region of memory, up to ~4GB allowing 32-bit addressing. In general, Wikilon will produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage serves a similar role to virtual memory, but does not consume address space.
 
-This allows multiple contexts to interact with the same LMDB environment and share labor for parallel sparks. Sharing the LMDB environment is critical. Sharing worker threads makes sense because our machine has a limited amount of physical parallelism and I can easily schedule it myself.
+At the moment, memory is manually allocated using conventional heap mechanisms: quick-fit and segregated size lists. I would like to support bump-pointer nursery allocations, too, though doing so may be limited to the duration of a particular evaluation, i.e. so it's easy to determine a 'root set'.
 
-A *context* must track:
+Wikilon runtime will favor linear semantics for values. A value reference has a single owner. Thus, pure functions on values can be implemented by mutations, and a lot of data-plumbing can be non-allocating. The cost is that we must perform deep-copies for `^` operator or when we otherwise share values. Deep copies may be constrained a bit by reference counting at certain boundaries such as stowage, and maybe blocks.
 
-* Multiple active computations (roots and par/seq)
-* A set of nursery regions for active computations 
-* A main heap shared by all computations, tenured data
-* A set of pending parallel computations
-* A set of objects proposed for stowage
+## Representations
 
-We can create a big context for a lot of computations, or many smaller contexts. The latter gives better control over memory constraints per computation. But shared contexts might enable more effective sharing of cached data from stowage. Pointers within a context are internal. 
+Memory is 8-byte aligned, giving 3 tag bits in each pointer. Small numbers and a few small constants are also represented.
+
+* xy0 - small integers; plus or minus (2^30 - 1).
+* 991 - tagged objects (tag, data...)
+* 011 - pairs (val, val)
+* 101 - pair in left
+* 111 - pair in right
+
+The zero address is not allocated. Its meaning depends on the tag bits:
+
+* 001 - void, invalid value
+* 011 - unit
+* 101 - unit in left (false)
+* 111 - unit in right (true, end of list)
+
+Other than pairs, most things are 'tagged objects'. The type of a tagged object is generally determined by the low byte in the first word. The upper three bytes are then additional data, e.g. sizes of things or a few flag bits. After implementing some, I feel it is essential to keep tagged objects structurally simple (even at cost to performance opportunities).
+
+### Big Integers
+
+        tag word: includes size (2..2^23-1) and sign (1 bit)
+        followed by sequence of 30-bit digits
+
+A large integer is represented as a contiguous sequence of 30-bit words. The number of words is recorded in the header, ranging from 2..(2^23 - 1). The sign bit is also in the header. Each word ranges `0 .. 999999999`. This gives us a variant of packed decimal encodings. This limits Wikilon runtime to integers of fewer than ~75 million digits - less than that if context memory is insufficient.
+
+Integers in the range plus or minus `2^30 - 1` are recorded directly in the value reference. This is sufficient for a lot of use cases.
+
+### Deep Sums
+
+        tag word: includes an LRLRLLLR string (2 bits each, depth 1..12)
+        second word is value reference
+
+We'll use 2-bits per `L` or `R` in a deep-sum string, with up to 24-bits of tag data. This enables sums of up to depth 12 per allocation. The value in question may be yet another sum. Compacting deep sums into a single allocation should enable sums to serve a much more effective role as an alternative to enumerations.
+
+Shallow sums refer to pair or unit in left or right, which is instead represented in the tag bits. Shallow sums are convenient as an optimization for representing lists and basic (node + leaf) tree structures.
+
+
+### Blocks
+
+Block representations have been giving me a fair bit of trouble. 
+
+I imagine that I'll have a "compact" representation similar to what I developed in Haskell. That is essentially a compact array of opcodes coupled with a stack of quoted values. Unfortunately, a list of quoted values is perhaps not ideal for performance: I end up deep-copying the values every time I copy the block in any case. 
+
+An alternative is to represent 'compact' values similar to how I would compact representations for stowage. In this case, I can get a blazing-fast slab allocation of a value when I need one. It may be feasible to 'lazily' load these values from the block. 
+
+In any case, I probably need to push forward quickly - focus first upon a naive but usable representation. I can make it fast later.
+
+Long term goals:
+
+* fast quotation 
+* O(1) composition
+* fast interpretation
+* easy simplification
+* optimized LLVM variant
+* efficient conditional behavior
+
+A minimal 'naive' block representation:
+
+        (block header, list of operations)
+
+This is probably good enough for many use cases in the short term. It's at least not going to be worse than the Haskell's pure ABC.
+
+### Arrays
+
+Arrays 
+
+### Reference Counted Objects?
+
+I could probably generalize 'refct objects' to a variant of tagged object, even a single-cell object `(refct, value)`. In this case, if we'd overflow the refct (which can only reach 2^24-1) we could construct another refct object around the value. 
+
+### Value Stowage
+
+### Value Sealers
+
+ABC's discretionary value sealers. We'll optimize for 3-character discretionary sealers like `{:map}` or `{:foo}`, which may be encoded in a single cell. Otherwise, I'll copy the entire token together with the value.
+
+        
+
+### Computations
+
+An ongoing computation... a lazy or parallel value, perhaps.
+
+# Older Stuff
 
 Computations - including stacks and continuations - shall be modeled entirely within our contexts. Computations may exist in a suspended state. A fully suspended computation will release its nursery (tenuring all associated data), but we could support an intermediate suspension state for monadic effects and the like.
 
-I'm not sure about modeling 'thread contexts' as a separate data structure. It might be better to model the entire thread context as a normal data structure (modeled in terms of cells, arrays, etc.) subject to GC. This would make suspending a computation more precise, and might improve reflection on our computations.
-
-We could dedicate a page to context within the memory region itself, e.g. the free list, pending computations, active computations, stowed values, available nurseries, etc.. Modeling the entire computation state in a closed system seems like it should be useful for debugging, suspending, saving and restoring, etc. our computations.
-
-For "effects" integration, I'll favor monadic programming with RESTful interactions: mailboxes or queues for eventful updates, pubsub arenas for watching external data, etc.. similar to how I model this stuff internally within dictionary applications. 
-
-I'm not sure what I want to do with nurseries, except perhaps to configure them on a per-context basis. A dynamic set of nurseries is tempting, but I don't think it offers sufficient benefits to really pursue.
-
-There will be no callbacks. 
-
-## Addressing, Pointer Layout, and Size Limits
-
-### Word Size?
-
-In favor of 32 bits:
-
-* 4GB of memory is a lot for any one Wikilon computation.
-* LMDB stowage mitigates need for large values in memory.
-* Binaries, texts, bytecode could use external resources.
-* Model larger computations with distributed parallelism.
-* Tight addressing improves memory locality and caching.
-* Easy to upgrade to 64-bit runtime later, if necessary.
-
-In favor of 64 bits:
-
-* Simplicity: scale without adding annotations to code.
-* Extra tag bit: eliminate header for more value types.
-
-For Wikilon, I think the 32-bit option is favorable. I doubt I'll want to offer more than 4GB RAM to compute any single webpage, for example. And the extra pressure for users to leverage stowage certainly isn't a bad thing. If implemented well, stowage should be very efficient: fast reads, latent batched writes, etc.. Unlike virtual memory pages, stowage frees up the address space, so we can work with a lot more than 4GB data in the end.
-
-That said, the ease of scaling makes the 64-bit option very tempting. I occasionally read about smart phones with 32GB RAM, or servers with 512GB RAM. While stowage can certainly take advantage of large amounts of RAM, it still involves repeated copying of values.
-
-There is potential for large binaries to be modeled as external to our 32-bit context. I'm not yet convinced this is worth the extra complexity outside of some special circumstances, but it could prove a powerful technique and would effectively extend our runtime context to 64-bits for shared binaries.
-
-### Pointer Layout
-
-With 32-bit addressing aligned on 64-bit cells (representing pairs and lists), 3 bits in each address can be leveraged to optimize common representations. The encoding I'll be trying:
-
-* xy0 - small integers
-* 001 - tagged objects
-* 011 - pair of values 
-* 101 - pair in left
-* 111 - pair in right
-* NULL address - unit instead of pair
-
-This gives us compact representation for pairs, units, booleans, lists, simple trees (e.g. node+leaf), and small integers within range of plus or minus a billion. Anything else is represented by tagged objects.
-
-For tagged objects, the first word provides information about how to interpret the remainder of the object. The presence of tagged objects does complicate GC because we cannot interpret a pair without knowing an extra bit (literally, one bit) of information from its reference. OTOH, this simplifies normal processing because special cases are recognized before we've loaded the value from memory.
-
-## Memory Management
-
-Awelon Bytecode has manual memory management via explicit copy and drop operations (`^` and `%`). The normal problems of manual memory management are mitigated: leaks are less likely because they're visible in the program environment and type system, and dangling references aren't possible because there is no mutable state. 
-
-To get started quickly (spike solution, etc.), I should probably just leverage normal manual memory management techniques - a free list, etc.. 
-
-But long term, I believe that I would benefit from bump-pointer per-thread allocations and compacting collections. This theoretically should avoid synchronization, reduce fragmentation, improve memory locality, and generally enhance performance. When moving large amounts of memory from the nursery into the main allocation space, I'd also avoid lots of fine-grained allocations. 
-
-How this works: a computation allocates from a nursery, then when full it moves living content to another nursery.
-
-I would like to try, for example, a 1MB nursery per thread. We can use a semi-space GC method within the nursery, such that we're only using 512kB. This 512kB could further be divided into an allocation space (128kB) and a survivor space (384kB), where our survivors have survived at least *two* allocation-space collections. For the allocation space, we'll track the watermark from the prior copy, and only content from below this watermark that survives the next pass may be moved to the survivor space. The survivor space may then use a similar technique for deciding what may move to the main heap.
-
-In both cases, we may use height of prior watermark as a pressure heuristic to predictably decide when to promote content to the next generation. Any percentage-based clearing of GC stages (to a final non-copying space) is sufficient to guarantee constant-time amortized overhead for GC.
-
-Good properties for compacting algorithms:
-
-* after compaction, data references point backwards
-* lists compact so spine and referenced data separate.
-* lists feasibly compact directly into data arrays. 
-* tree structures compact along the tree branches.
-
-This same compacting algorithm should also work for moving surviving content into the main heap, leveraging 'slab' allocations. All of this is feasible, but it requires a stack. Fortunately, we can make some guarantees about stack size, perhaps use the empty half of the nursery as our stack.
-
-Do we want more than two stages? I think the benefit is marginal at that point. 
-
-*Other Thoughts:* It might be that I'll only want to use a nursery for limited use cases, e.g. objects of up to some small maximum size (one or two cells, perhaps). This could simplify the compaction phase.
-
-### Memory Allocation Algorithms and Structures
-
-With par-seq parallelism, I'll need a good multi-threaded allocator. TCMalloc is one promising option in this arena. However, a lot of algorithms, including TCMalloc, don't work nicely with the idea of splitting and recombining structures (arrays, etc.) or of fast slab-allocations in context of ABC update patterns.
-
-I need the following properties:
-
-* I can allocate a large space and free smaller fragments of it
-* When we free adjacent spaces, we can eventually coalesce them
-* We can easily find space of a given size
-* Minimal synch between par-seq threads
-
-Ability to free fragments of a larger allocation is important for the ability to split/recombine arrays, and also to perform fast reads from stowage: allocate everything you'll need at once, then fill the space. The last point - minimizing synchronization - is feasible if we simply give each processor its own free-list, and allocate in relatively large chunks from a shared page-heap or similar. This is what TCMalloc does, for example. It works well.
-
-For the other stuff: some ad-hoc mix of QuickFit and perhaps a few size-segregated first-fit free lists seems appropriate. I can try coalescing memory after I fail to allocate something - which should be a rare event, in practice.
-
-*Note:* I'd prefer to avoid tree-structured free lists - in part because we cannot iterate through them in constant space, in part because balancing them requires relatively sophisticated algorithms. Let's see instead how far we can get with singly linked lists, e.g. of (size,next) pairs.
 
 ## Tagged Objects
 

@@ -122,12 +122,6 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *
  * WIKRT_OTAG_BLOCK
  *
- *   The block is a representation of Awelon Bytecode, but optimized for
- *   fast interpretation. Composition of blocks should be O(1).
- *
- *   Note: I may need an intermediate representation for blocks for fast
- *   simplifications, optimizations, and similar features. I will also 
- *   want to ensure composition of blocks is O(1). 
  *
  * WIKRT_OTAG_SEAL   (size, value, sealer)
  *
@@ -144,18 +138,17 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *   
  * WIKRT_OTAG_ARRAY (priority: low to medium)
  *
- *   Awelon Bytecode doesn't truly have 'arrays'. Rather, an array is a
- *   compact representation for a list, or any list-like structure of 
- *   shape `μL.((a*L)+b)`. There are at least a few representations for
- *   arrays:
+ *   A compact representations for list-like structures `μL.((a*L)+b)`.
  *
- *    - (size, item1, item2, ..., itemN)
- *    - (size, buff) with buff→(item1, item2, ..., itemN)
- *
- *   I haven't fully decided on a specific representation quite yet. But
- *   I would like support for logical splitting of arrays, possibly shared
- *   arrays and reference counting (to leverage accelerators). I also want
- *   specialized support for large binaries and texts.
+ *   Goals:
+ *    - minimal overhead for small arrays 
+ *    - logical split and seamless rejoin
+ *    - logical reversal of the array
+ *    - specializations for text and binary data
+ *    - possible support for shared / refct arrays
+ * 
+ *   Representation. 
+
  *
  *   Implementation of arrays is low priority at this time, but high
  *   priority long term (critical for performance with accelerators).
@@ -345,6 +338,40 @@ static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* dst,
     pv[1] = v1;
     return true;
 }
+
+// Allocate a double cell tagged WIKRT_O.
+static inline bool wikrt_alloc_dcellval(wikrt_cx* cx, wikrt_val* dst,
+    wikrt_val v0, wikrt_val v1, wikrt_val v2, wikrt_val v3)
+{
+    wikrt_addr addr;
+    if(!wikrt_alloc(cx, (2 * WIKRT_CELLSIZE), &addr)) { 
+        (*dst) = WIKRT_VOID; 
+        return false; 
+    }
+    (*dst) = wikrt_tag_addr(WIKRT_O, addr);
+    wikrt_val* const pv = wikrt_pval(cx, addr);
+    pv[0] = v0;
+    pv[1] = v1;
+    pv[2] = v2;
+    pv[3] = v3;
+    return true;
+}
+
+/* compute number of cells in 'spine' of list or stack, following the
+ * right hand side of each pair, specific to values of type WIKRT_P,
+ * WIKRT_PL, WIKRT_PR.
+ */
+static inline wikrt_size wikrt_spine_length(wikrt_cx* cx, wikrt_val v) 
+{
+    wikrt_size ct = 0;
+    while( (WIKRT_O != wikrt_vtag(v)) && (0 != wikrt_vaddr(v)) )
+    {
+        v = wikrt_pval(cx, wikrt_vaddr(v))[1];
+        ++ct;
+    }
+    return ct;
+}
+
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const v) {
