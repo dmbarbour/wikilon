@@ -120,8 +120,19 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *   (This corresponds to 75 million decimal digits.) Size is at least two
  *   words. The encoding is little-endian.
  *
- * WIKRT_OTAG_BLOCK
+ * WIKRT_OTAG_BLOCK  (block-header, list-of-ops)
  *
+ *   This refers to a trivial block representation: a list of opcodes and
+ *   quoted values. This representation is useful as an 'expanded' form 
+ *   for various simplifications. The list of opcodes is represented in a
+ *   manner that is transparently copyable and droppable.
+ *
+ *   WIKRT_OTAG_OPVAL 
+ *
+ *   This tag is used for the quotation operation, and also for partial
+ *   evaluations. In the latter case, I'll include a tag bit to suppress
+ *   substructural attribute checks for the contained values. This helps
+ *   with lazy checking of substructural properties.
  *
  * WIKRT_OTAG_SEAL   (size, value, sealer)
  *
@@ -140,20 +151,10 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *
  *   A compact representations for list-like structures `μL.((a*L)+b)`.
  *
- *   Goals:
- *    - minimal overhead for small arrays 
- *    - logical split and seamless rejoin
- *    - logical reversal of the array
- *    - specializations for text and binary data
- *    - possible support for shared / refct arrays
- * 
- *   Representation. 
-
- *
  *   Implementation of arrays is low priority at this time, but high
  *   priority long term (critical for performance with accelerators).
- *   We should probably have some way to insist that all elements of
- *   an array have the same type for collections-oriented programming.
+ *   I'll also need specializations for binaries, texts. And maybe later
+ *   for fixed-width numbers, floating point, etc..
  *
  *   WIKRT_OTAG_BLOB - binary specialization
  *   WIKRT_OTAG_TEXT - text specialization
@@ -167,15 +168,13 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *
  *   I might need to use multiple tags for different stowage.
  *
- * Under consideration:
- *
- * - list lazy append - e.g. to support parallel computations?
  *   
  */
 
 #define WIKRT_OTAG_BIGINT   78   /* N */
 #define WIKRT_OTAG_DEEPSUM  83   /* S */
 #define WIKRT_OTAG_BLOCK    91   /* [ */
+#define WIKRT_OTAG_OPVAL    34   /* " */
 #define WIKRT_OTAG_SEAL     36   /* $ */
 #define WIKRT_OTAG_SEAL_SM  58   /* : */
 #define WIKRT_OTAG_ARRAY    86   /* V */
@@ -188,6 +187,15 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_BIGINT_DIGIT          1000000000
 #define WIKRT_BIGINT_MAX_DIGITS  ((1 << 23) - 1)
 
+// block header bits
+#define WIKRT_BLOCK_RELEVANT (1 << 8)
+#define WIKRT_BLOCK_AFFINE   (1 << 9)
+#define WIKRT_BLOCK_PARALLEL (1 << 10)
+#define WIKRT_BLOCK_LAZY     (1 << 11)
+
+// indicate a quoted opval (lazy substructure)
+#define WIKRT_OPVAL_QUOTE (1 << 8)
+
 static inline bool wikrt_otag_bigint(wikrt_val v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
 static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
 static inline bool wikrt_otag_block(wikrt_val v) { return (WIKRT_OTAG_BLOCK == LOBYTE(v)); }
@@ -195,6 +203,11 @@ static inline bool wikrt_otag_seal(wikrt_val v) { return (WIKRT_OTAG_SEAL == LOB
 static inline bool wikrt_otag_seal_sm(wikrt_val v) { return (WIKRT_OTAG_SEAL_SM == LOBYTE(v)); }
 static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
 static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
+
+static inline bool wikrt_block_rel(wikrt_val v) { return (0 != (WIKRT_BLOCK_RELEVANT & v)); }
+static inline bool wikrt_block_aff(wikrt_val v) { return (0 != (WIKRT_BLOCK_AFFINE & v)); }
+static inline bool wikrt_opval_test_rel(wikrt_val v) { return (0 != (WIKRT_OPVAL_QUOTE & v)); }
+static inline bool wikrt_opval_test_aff(wikrt_val v) { return (0 != (WIKRT_OPVAL_QUOTE & v)); }
 
 static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
     return  (((nDigits << 1) | (positive ? 0 : 1)) << 8) | WIKRT_OTAG_BIGINT;

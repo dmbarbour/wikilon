@@ -567,7 +567,7 @@ wikrt_err wikrt_split_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v);
  *
  * Awelon Bytecode supports substructural types. Normally, a block marked
  * affine will not be copyable. But the C API is free to ignore such
- * constraints but must do so explicitly by indicating `bCopyAff`.
+ * constraints but must do so explicitly by indicating `bCopyAff`. 
  */
 wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* cpy, wikrt_val const src, bool bCopyAff);
 

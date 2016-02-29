@@ -218,6 +218,8 @@ When blocks are quoted or composed, or a structure containing blocks is quoted, 
 
 When a relevant block is copied, both copies are relevant. (*Note:* Technically, only one of the two copies must be relevant. However, it is difficult to explain this in a type system, and difficult to track in a streaming scenario. For simplicity, both copies are relevant.)
 
+*Note:* Substructure may be enforced statically, dynamically, or ignored by a given implementation of ABC. It's essentially a primitive annotation to mitigate the lack of structured syntax and encourage linear programming styles (i.e. avoidance of copy and drop in generic code).
+
 ### Conditional Behavior
 
 A sum type, `(a + b)`, represents that we're either right with `b` or left with `a`. Convention is to pun 'right' with 'true', i.e. `(false+true)` ordering. A sum type is the typical result of making an observation, such as comparing two numbers:

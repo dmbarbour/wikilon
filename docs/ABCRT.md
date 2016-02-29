@@ -58,16 +58,31 @@ The zero address is not allocated. Its meaning depends on the tag bits:
 * 101 - unit in left (false)
 * 111 - unit in right (true, end of list)
 
-Other than pairs, most things are 'tagged objects'. The type of a tagged object is generally determined by the low byte in the first word. The upper three bytes are then additional data, e.g. sizes of things or a few flag bits. After implementing some, I feel it is essential to keep tagged objects structurally simple (even at cost to performance opportunities).
+Other than pairs, most things are 'tagged objects'. The type of a tagged object is generally determined by the low byte in the first word. The upper three bytes are then additional data, e.g. sizes of things or a few flag bits. 
+
+Tagged objects will include:
+
+* big integers
+* deep sum values
+* blocks of code
+* sealed values
+* stowage wrappers
+* pending computations
+* arrays, binaries, texts
+
+After implementing a few, I feel it is essential to keep tagged objects structurally simple (even at cost to performance opportunities). I'll eventually want to extend these further: floating point numbers, vectors and matrices thereof, etc.. 
+
+Note: Awelon Bytecode doesn't directly support generic programming. I may need to model some code indirectly if it's supposed to work with a bunch of different number, vector, and matrix types, for example. But with proper annotations and types, it seems feasible to leverage GPGPUs for scientific computing.
 
 ### Big Integers
 
+Integers in the range plus or minus `2^30 - 1` are recorded directly in a value reference. This is sufficient for a lot of use cases - characters, indexing vectors, etc.. For larger numbers, I'll use a tagged value representation.
+
         tag word: includes size (2..2^23-1) and sign (1 bit)
-        followed by sequence of 30-bit digits
+        followed by sequence 32-bit words of given size
+        each word encodes a 'big digit' in range 0..999999999
 
-A large integer is represented as a contiguous sequence of 30-bit words. The number of words is recorded in the header, ranging from 2..(2^23 - 1). The sign bit is also in the header. Each word ranges `0 .. 999999999`. This gives us a variant of packed decimal encodings. This limits Wikilon runtime to integers of fewer than ~75 million digits - less than that if context memory is insufficient.
-
-Integers in the range plus or minus `2^30 - 1` are recorded directly in the value reference. This is sufficient for a lot of use cases.
+This doesn't quite give us arbitrary precision arithmetic. But we can represent numbers up to 75 million digits before we fail.
 
 ### Deep Sums
 
@@ -78,92 +93,55 @@ We'll use 2-bits per `L` or `R` in a deep-sum string, with up to 24-bits of tag 
 
 Shallow sums refer to pair or unit in left or right, which is instead represented in the tag bits. Shallow sums are convenient as an optimization for representing lists and basic (node + leaf) tree structures.
 
-
 ### Blocks
 
-Block representations have been giving me a fair bit of trouble. 
-
-I imagine that I'll have a "compact" representation similar to what I developed in Haskell. That is essentially a compact array of opcodes coupled with a stack of quoted values. Unfortunately, a list of quoted values is perhaps not ideal for performance: I end up deep-copying the values every time I copy the block in any case. 
-
-An alternative is to represent 'compact' values similar to how I would compact representations for stowage. In this case, I can get a blazing-fast slab allocation of a value when I need one. It may be feasible to 'lazily' load these values from the block. 
-
-In any case, I probably need to push forward quickly - focus first upon a naive but usable representation. I can make it fast later.
-
-Long term goals:
-
-* fast quotation 
-* O(1) composition
-* fast interpretation
-* easy simplification
-* optimized LLVM variant
-* efficient conditional behavior
-
-A minimal 'naive' block representation:
+To get started quickly, I'll implement a 'naive' block representation, consisting of a list of opcodes and quoted values and a few header bits (affine, relevant, parallel, etc.). If I go for tracing JIT, keeping a copy count in the header bits might also be useful. A minimal, naive block representation:
 
         (block header, list of operations)
 
-This is probably good enough for many use cases in the short term. It's at least not going to be worse than the Haskell's pure ABC.
+Operations in a simple block are either small integers indicating a single opcode (possibly an accelerator), or quoted values (block, text, partial evaluation, quotation, etc.). Fast composition may be represented as quoting and inlining a block. Our block header will contain a few flags (affine, relevant, etc.). This naive representation may prove convenient as a base representation for simplification and compilation. 
 
-### Arrays
+A challenge for this representation of blocks is *precise, efficient, dynamic* tracking of substructural type attributes. Internal substructure from partial evaluation as in `[[xyzzy]kf]` mustn't be confused with external sub-structure from quotations like `[xyzzy]kf' == [[xyzzy]kf]kf`. For the moment, I'll just track this by recording a flag bit to perform latent substructure evaluation when copying or dropping quoted values. I'll otherwise suppress substructure checks.
 
-Arrays 
-
-### Reference Counted Objects?
-
-I could probably generalize 'refct objects' to a variant of tagged object, even a single-cell object `(refct, value)`. In this case, if we'd overflow the refct (which can only reach 2^24-1) we could construct another refct object around the value. 
-
-### Value Stowage
+Long term, I'll want a more compact block representation that involves much less copying, and a variant for just-in-time compilations. I'd also like to shift most substructural type checking into static ahead-of-time computations.
 
 ### Value Sealers
 
-ABC's discretionary value sealers. We'll optimize for 3-character discretionary sealers like `{:map}` or `{:foo}`, which may be encoded in a single cell. Otherwise, I'll copy the entire token together with the value.
+ABC's discretionary value sealers. I'll optimize for 3-character (or fewer) discretionary sealers like `{:map}` or `{:foo}`, which may be encoded within tag bits of a single cell. Otherwise, I'll simply copy the token together with the value. I'm not going to 'intern' token strings, mostly to avoid synchronization overheads and to discourage use of large seals.
 
-        
+### Value Stowage
+
+We can annotate a value to moved to persistent storage, or transparently reverse this. 
 
 ### Computations
 
-An ongoing computation... a lazy or parallel value, perhaps.
+Lazy or parallel values, or a 'hole' for values that are still being computed. These will need special attention for performance and quota purposes. I'd prefer to avoid treating pending computations as normal values, but they might make a useful special case?
 
-# Older Stuff
+### Arrays
 
-Computations - including stacks and continuations - shall be modeled entirely within our contexts. Computations may exist in a suspended state. A fully suspended computation will release its nursery (tenuring all associated data), but we could support an intermediate suspension state for monadic effects and the like.
+Arrays are a compact representation for list-like structures `μL.((a*L)+b)`. I want to support logical reversal, fast size computations, fast indexed lookup and update (for accelerators), etc.. But I haven't decided on an exact representation yet.
+
+### More Numerics
+
+ABC supports integers. But other numbers could be supported via arithmetic accelerators or sets of dedicated ops.
+
+* I want good support for vectors, matrices, and related math operations.
+ * Vector arithmetic with SIMD support, etc.
+* Good support for floating point would be nice.
+ * John Gustafson's open interval arithmetic 'unum' is also nice.
+
+
+# older content
+
 
 
 ## Tagged Objects
 
-A tagged object is represented in memory with the first word (32 bits) indicating how the following words are understood. It's important that tagged objects be simple. Wikilon's GC must understand them.
-
-Important tagged objects include:
-
-* deep sum values
-* blocks of code
-* large integers
-* arrays, binaries, texts
-* stowage wrappers
-* pending computations
-* sealed values
-
-Arrays, binaries, and texts are compact representations of lists and list-like structures (i.e. type `∃a.∃b.μL.((a*L)+b)`). Binaries and texts additionally constrain the element type (to a subset of small integers). Taken together with accelerators (strings of bytecode that we reduce to a single operator under the hood), we may achieve very high performance access and even in-place update for unshared arrays.
-
 Eventually, I may support floating point numbers, vectors, matrices. I'd love for Wikilon to become a go to solution for scientific computations (perhaps distributed on a cloud and leveraging GPGPU). These are frequently expressed in terms of vector and matrix computations.
-
-Some tagged objects - blocks, arrays, stowage, pending - might be shared or aliased. In these cases, they may contain reference counts under the hood. 
 
 *Aside:* I had an earlier concept of enabling arbitrary values to be reference counted. However, this idea doesn't have very nice predictability properties, especially in context of parallelism. Fortunately, *large value stowage* serves the same role of limiting depth of copies, and does so in a manner more comprehensible to users (conceptually, just copying a stowage address).
 
-### Deep Sum Values
-
-Deep sums are represented by a tagged object, with our sum path (such as `LRLLLRLRRL`) represented directly in the tag. The low eight bits will indicate that our object is a sum, then we'll use two bits per path item (up to depth 12), e.g. `LRLLRLRLRRRL` could be compacted into one tagged object. Deeper sums would just consist of a chain of deep sum objects. We'll always compact sums as much as possible.
-
-This technique conveniently enables developers to treat deep sums as little different from tagged unions with implicit flattening... even when the number of tags is pretty large.
-
-### Blocks of Code
-
-How should we represent blocks of code under the hood?
-
-The technique I was using earlier was to compose a binary for bytecode plus a stack for values. The values are popped off the list as needed. I was also using a technique that would allow 'lazy' computations of values, but this is unlikely to remain a useful technique without as much value sharing.
-
-### Arrays and Chunked Lists
+# Arrays and Chunked Lists
 
 An array is an optimized representation for any structure of form: `μL.((a*L)+b)`. This includes normal lists, but also heterogeneous lists, and lists that do not terminate with unit. 
 
@@ -253,7 +231,7 @@ Text is represented by a list of unicode codepoints, with a short blacklist: C0 
 
 Due to the variable size of characters, utf-8 texts cannot have array performance characteristics. But with a little indexing, we can support skipping through and splitting large texts far more efficiently than we would achieve with linear scanning. 
 
-### Accelerated Association Lists? (low priority)
+# Accelerated Association Lists? (low priority)
 
 It might be useful to heavily optimize an associative structure, e.g. the equivalent of a JSON Object. Motivations include:
 
@@ -271,7 +249,7 @@ I'll need to return to this concept later. I think supporting this idiom in both
 
 As a nice generalization of association lists, maybe we could try to optimize representation of 'tables' where we know each element has the same basic row structure. A list of rows might be represented by a row of lists.
 
-### Large Value Stowage
+# Large Value Stowage
 
 We'll use 62-bit identifiers for stowed values. Addresses are allocated once and never reused. This is convenient from a security and caching perspective: we can securely share stowed data with external systems via simple HMAC. And there are no worries about running out. Allocating 2^62 addresses at the best throughput LMDB can manage today would take almost a million years.
 
@@ -288,12 +266,6 @@ After stowage succeeds, the target data is cleared from memory. I'm not going to
 If stowage fails (e.g. because there isn't enough space) we could 
 
 We might heuristically refuse to stow smaller fragments, such that we implicitly 'flatten' narrow, tree-structured data. It could be useful to focus stowage on larger chunks, e.g. kilobytes of data.
-
-### Pending Computations
-
-Threads themselves will need to be modeled. In terms of data, we at least have an argument and a continuation. Active computations will have a nursery. We'll need to track computations that are *suspended* because they're waiting for this one. We'll probably want to track all other computations created by this one, hierarchically.
-
-A pending computation will have a reference count. When we *copy* or *drop* a pending computation, we'll track this assumption rather than immediately suspend on it.
 
 ### Sealed Values
 

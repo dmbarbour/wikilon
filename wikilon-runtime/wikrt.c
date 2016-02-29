@@ -806,7 +806,7 @@ wikrt_err wikrt_alloc_seal(wikrt_cx* cx, wikrt_val* sv, char const* s, wikrt_val
 wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, char const* s, size_t len, wikrt_val v)
 {
     bool const validLen = (0 < len) && (len < 64);
-    if(!validLen) { return WIKRT_INVAL; }
+    if(!validLen) { (*sv) = WIKRT_VOID; return WIKRT_INVAL; }
 
     if((':' == s[0]) && (len <= 4)) {
         // WIKRT_OTAG_SEAL_SM: common special case, small discretionary tags
@@ -877,7 +877,7 @@ static bool wikrt_copy_add_arraytask(wikrt_cx* cx, wikrt_val* lcpy, wikrt_addr a
  * The 'stack' for copies is represented within the context itself. 
  * Copies for stacks, lists, and arrays is specialized for performance.
  */
-wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool bCopyAff) 
+wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool const bCopyAff) 
 {
     (*dst) = origin;
     wikrt_val lcpy = WIKRT_UNIT_INR;
@@ -908,7 +908,7 @@ wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool 
             (*dst) = wikrt_tag_addr(tag, spine);
 
             wikrt_val const* hd = pv;
-            wikrt_val intraSpine = spine;
+            wikrt_addr intraSpine = spine;
             for(wikrt_size ii = cellCt; ii > 1; --ii) {
                 wikrt_val* const pintraSpine = wikrt_pval(cx, intraSpine);
                 intraSpine += WIKRT_CELLSIZE; 
@@ -917,7 +917,7 @@ wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool 
                 hd = wikrt_pval(cx, wikrt_vaddr(hd[1])); // next item.
             }
             wikrt_val* const pspineLast = wikrt_pval(cx, intraSpine);
-            pspineLast[0] = hd[0]; // last intra-spine value copied by arraytask
+            pspineLast[0] = hd[0]; // last intra-spine value; copied by arraytask
             pspineLast[1] = hd[1]; // end of spine is not an intra-spine reference
             dst = 1 + pspineLast; // copy final value in spine.
 
@@ -925,13 +925,30 @@ wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool 
 
             case WIKRT_OTAG_SEAL_SM: // same as DEEPSUM
             case WIKRT_OTAG_DEEPSUM: {
+                // (header, value) pairs, referenced via WIKRT_O tag.
                 if(!wikrt_alloc_cellval(cx, dst, WIKRT_O, pv[0], pv[1])) { return WIKRT_CXFULL; }
-                dst = 1 + wikrt_pval(cx, wikrt_vaddr(*dst)); // copy value in sum
+                dst = 1 + wikrt_pval(cx, wikrt_vaddr(*dst)); // copy contained value
             } break;
 
             case WIKRT_OTAG_BLOCK: {
-                // TODO: copy the block
-                return WIKRT_IMPL;
+                // (block-header, opcode-list) with substructural properties
+                bool const bPerformCopy = !wikrt_block_aff(pv[0]) || bCopyAff; 
+                if(!bPerformCopy) { return WIKRT_TYPE_ERROR; } 
+                if(!wikrt_alloc_cellval(cx, dst, WIKRT_O, pv[0], pv[1])) { return WIKRT_CXFULL; }
+                dst = 1 + wikrt_pval(cx, wikrt_vaddr(*dst));
+            } break;
+
+            case WIKRT_OTAG_OPVAL: {
+                // value operator with potential latent copyability checking
+                if(wikrt_opval_test_aff(pv[0]) || bCopyAff) {
+                    if(!wikrt_alloc_cellval(cx, dst, WIKRT_O, pv[0], pv[1])) { return WIKRT_CXFULL; }
+                    dst = 1 + wikrt_pval(cx, wikrt_vaddr(*dst));
+                } else {
+                    // suppress affine checks for this value.
+                    wikrt_err const st = wikrt_copy(cx, dst, (*dst), true);
+                    if(WIKRT_OK != st) { return st; }
+                    wikrt_copy_step_next(cx, &lcpy, &dst);
+                }
             } break;
 
             case WIKRT_OTAG_ARRAY: {
@@ -940,6 +957,7 @@ wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool 
             } break;
 
             case WIKRT_OTAG_BIGINT: {
+                // (size&sign, array of 32-bit digits in 0..999999999)
                 wikrt_size const nDigits = (*pv) >> 9;
                 wikrt_size const szAlloc = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
                 wikrt_addr copy;
@@ -950,7 +968,7 @@ wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool 
             } break;
 
             case WIKRT_OTAG_SEAL: {
-                // sealer token is represented adjacent to cell
+                // (len, value, token). token is adjacent to cell
                 wikrt_size const len = ((*pv) >> 8) & 0x3F; // 1..63 is valid
                 wikrt_size const szAlloc = WIKRT_CELLSIZE + len;
                 wikrt_addr copy;
@@ -1002,7 +1020,7 @@ static void wikrt_drop_step_next(wikrt_cx* cx, wikrt_val* ldrop, wikrt_val* tgt)
  * high latency for large structures. I could switch to lazy deletion
  * later if ever this becomes a problem.
  */
-wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_val v, bool bDropRel) 
+wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_val v, bool const bDropRel) 
 {
     wikrt_val ldrop = WIKRT_UNIT_INR; // list of values to drop
     do {
@@ -1029,14 +1047,30 @@ wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_val v, bool bDropRel)
 
             case WIKRT_OTAG_SEAL_SM: // same as DEEPSUM
             case WIKRT_OTAG_DEEPSUM: {
-                v = pv[1]; // free the value from the sum
+                // (header, value) pair. 
+                v = pv[1]; // free contained value
                 wikrt_free(cx, WIKRT_CELLSIZE, addr);
             } break;
 
-            case WIKRT_OTAG_BLOCK: {
-                // TODO: drop values and bytecode...
 
-                return WIKRT_IMPL;
+            case WIKRT_OTAG_BLOCK: {
+                // (block-header, opcode-list) with substructural properties
+                bool const bPerformDrop = !wikrt_block_rel(pv[0]) || bDropRel;
+                if(!bPerformDrop) { return WIKRT_TYPE_ERROR; } 
+                v = pv[1];
+                wikrt_free(cx, WIKRT_CELLSIZE, addr);
+            } break;
+
+            case WIKRT_OTAG_OPVAL: {
+                if(wikrt_opval_test_rel(pv[0]) || bDropRel) {
+                    v = pv[1]; 
+                    wikrt_free(cx, WIKRT_CELLSIZE, addr);
+                } else {
+                    // suppress relevance checking for value
+                    wikrt_err const st = wikrt_drop(cx, v, true);
+                    if(WIKRT_OK != st) { return st; }
+                    wikrt_drop_step_next(cx, &ldrop, &v);
+                }
             } break;
 
             case WIKRT_OTAG_ARRAY: {
@@ -1060,7 +1094,7 @@ wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_val v, bool bDropRel)
             } break;
 
             case WIKRT_OTAG_STOWAGE: {
-                // TODO: clear stowage from todo-list or ephemeron tables
+                // TODO: clear stowage from todo-lists and ephemeron tables
 
                 return WIKRT_IMPL;
             } break;

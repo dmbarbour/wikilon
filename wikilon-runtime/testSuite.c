@@ -232,14 +232,20 @@ bool test_copy_prod(wikrt_cx* cx)
     int64_t const expected_sum = (ct * (int64_t)(ct + 1)) / 2;
     int64_t sumA = 0;
     int64_t sumB = 0;
-    wikrt_val v = WIKRT_UNIT_INR;
-    numstack(cx, &v, ct);
-    wikrt_val vcpy;
-    wikrt_copy(cx, &vcpy, v, false);
-    sumstack(cx, &v, &sumA);
-    sumstack(cx, &vcpy, &sumB);
-    bool const ok = (sumA == sumB) && (sumA == expected_sum) 
-                  && (WIKRT_UNIT_INR == vcpy);
+    int64_t sumC = 0;
+    wikrt_val a, b, c;
+    a = WIKRT_UNIT_INR;
+    numstack(cx, &a, ct);
+    wikrt_copy(cx, &b, a, false);
+    wikrt_copy(cx, &c, b, false);
+    sumstack(cx, &a, &sumA);
+    sumstack(cx, &b, &sumB);
+    sumstack(cx, &c, &sumC);
+    bool const ok = (sumA == sumB) && (sumB == sumC) &&
+                    (sumC == expected_sum) &&
+                    (WIKRT_UNIT_INR == a) &&
+                    (WIKRT_UNIT_INR == b) &&
+                    (WIKRT_UNIT_INR == c);
     return ok;
 }
 
@@ -292,13 +298,17 @@ bool test_alloc_deepsum_RLR(wikrt_cx* cx) { return test_deepsum_str(cx, "RLR"); 
 bool test_alloc_deepsum_RRL(wikrt_cx* cx) { return test_deepsum_str(cx, "RRL"); }
 bool test_alloc_deepsum_RRR(wikrt_cx* cx) { return test_deepsum_str(cx, "RRR"); }
 
-bool test_deepsum_prng(wikrt_cx* cx, unsigned int seed, size_t const depth) 
-{
-    char buff[depth+1];
-    for(size_t ii = 0; ii < depth; ++ii) {
+void deepsum_prng_string(char* buff, unsigned int seed, size_t const nChars) {
+    for(size_t ii = 0; ii < nChars; ++ii) {
         buff[ii] = (rand_r(&seed) & (1<<9)) ? 'R' : 'L';
     }
-    buff[depth] = 0;
+    buff[nChars] = 0;
+}
+
+bool test_deepsum_prng(wikrt_cx* cx, unsigned int seed, size_t const nChars) 
+{
+    char buff[nChars + 1];
+    deepsum_prng_string(buff, seed, nChars);
     return test_deepsum_str(cx, buff);
 }
 
@@ -316,13 +326,16 @@ bool test_alloc_deepsum_large(wikrt_cx* cx)
 
 bool test_copy_deepsum(wikrt_cx* cx) 
 {
-    char* const str = "LLLLLLLLLLLLLLLLLRRRRRRRRRRRRRRRRRRRRLLRRLLRRLLRRLLRRLLRRLRLRLRLRLRLRRRRRRLLLLRLLRLLLLLLLRLRRRRR";
+    size_t const nChars = 8000;
+    char buff[nChars + 1];
+    deepsum_prng_string(buff, 0, nChars);
+    
     wikrt_val v = WIKRT_UNIT;
-    deepsum_path(cx, str, &v);
+    deepsum_path(cx, buff, &v);
     wikrt_val vcpy = WIKRT_UNIT;
     bool ok = (WIKRT_OK == wikrt_copy(cx, &vcpy, v, false))
-            && dismantle_deepsum_path(cx, str, &v)
-            && dismantle_deepsum_path(cx, str, &vcpy)
+            && dismantle_deepsum_path(cx, buff, &v)
+            && dismantle_deepsum_path(cx, buff, &vcpy)
             && (WIKRT_UNIT == v) && (WIKRT_UNIT == vcpy);
     return ok;
 }
