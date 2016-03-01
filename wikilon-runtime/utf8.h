@@ -23,6 +23,23 @@ static inline bool utf8_step(char const** s, size_t* strlen, uint32_t* cp)
     return (0 != k);
 }
 
+/** Read a single utf-8 codepoint from the end of the text.
+ *
+ * This is intended for use with string reversals. A character is
+ * read from the rear-end of the text. Otherwise this behaves as
+ * utf8_readcp. (It's probably a bit less efficient.)
+ */
+size_t utf8_readcp_r(char const* s, size_t strlen, uint32_t* cp);
+
+/** Read a single character in reverse & update state for convenient looping. */
+static inline bool utf8_step_r(char const* s, size_t* strlen, uint32_t* cp) 
+{
+    size_t const k = utf8_readcp_r(s, (*strlen), cp);
+    (*strlen) -= k;
+    return (0 != k);
+}
+
+
 /** Validate and obtain string length. 
  *
  * Will return number of consecutive valid utf8 codepoints. 

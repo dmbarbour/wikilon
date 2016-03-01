@@ -84,6 +84,8 @@ Integers in the range plus or minus `2^30 - 1` are recorded directly in a value 
 
 This doesn't quite give us arbitrary precision arithmetic. But we can represent numbers up to 75 million digits before we fail.
 
+*Note:* There may be some benefit from using an intermediate sized integer, e.g. one cell for ~56 bits of data. However, after experimenting with this idea, I don't feel the space savings are sufficient compared to the complexity to deal with another case. Further, I find it unlikely that the optimization will be significant: the use of big integers of any sort is expected to be rare.
+
 ### Deep Sums
 
         tag word: includes an LRLRLLLR string (2 bits each, depth 1..12)
@@ -119,7 +121,13 @@ Lazy or parallel values, or a 'hole' for values that are still being computed. T
 
 ### Arrays
 
-Arrays are a compact representation for list-like structures `μL.((a*L)+b)`. I want to support logical reversal, fast size computations, fast indexed lookup and update (for accelerators), etc.. But I haven't decided on an exact representation yet.
+A compact representation for list-like structures `μL.((a*L)+b)`. One that should be suitable for collections-oriented programming. I want to support fast logical slices, seamless append, logical reversal, fast size computations, fast indexed lookup and update (for accelerators), etc.. But I haven't decided on an exact representation yet.
+
+Seamless append would happen when we rejoin two arrays that were previously sliced. The main difficulty with logical slices is the frayed edges, i.e. if we split a normal array with two elements per cell, we might divide in the middle of one cell. Originally, I was considering use of a 'cell sharing' object. But a better technique might be to let only one of the two arrays keep the original cell, and copy data for the other array fragment. When we append arrays, we may easily fill empty spaces within a cell, i.e. restoring the frayed edges.
+
+OTOH, if we allow fraying of arrays, then we need to tune our concepts a bit. Instead of true arrays, we might want to optimize for these to be array chunked lists (a list whose spine is represented by long, array-like chunks). And instead of 
+
+*NOTE:* A useful related feature might involve array chunks with reasonably large 'capacity' at one or both ends, such that we may addend (or prepend) elements without extra allocations. I wonder how we'd annotate and accelerate these properly (some form of `{&pack}` annotation?)
 
 ### More Numerics
 

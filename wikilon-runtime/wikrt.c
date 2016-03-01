@@ -422,57 +422,100 @@ wikrt_err wikrt_alloc_binary(wikrt_cx* cx, wikrt_val* v, uint8_t const* buff, si
     return WIKRT_OK;
 }
 
+wikrt_err wikrt_alloc_medint(wikrt_cx* cx, wikrt_val* v, bool positive, uint32_t d0, uint32_t d1, uint32_t d2)
+{
+    if(0 == d2) {
+        wikrt_size const nDigits = 2;
+        wikrt_size const allocSz = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
+        wikrt_addr addr;
+        if(!wikrt_alloc(cx, allocSz, &addr)) { return WIKRT_CXFULL; }
+        (*v) = wikrt_tag_addr(WIKRT_O, addr);
+        wikrt_val* const p = wikrt_pval(cx, addr);
+        p[0] = wikrt_mkotag_bigint(positive, nDigits);
+        uint32_t* const d = (uint32_t*)(p + 1);
+        d[0] = d0;
+        d[1] = d1;
+        return WIKRT_OK;
+    } else {
+        wikrt_size const nDigits = 3;
+        wikrt_size const allocSz = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
+        wikrt_addr addr;
+        if(!wikrt_alloc(cx, allocSz, &addr)) { return WIKRT_CXFULL; }
+        (*v) = wikrt_tag_addr(WIKRT_O, addr);
+        wikrt_val* const p = wikrt_pval(cx, addr);
+        p[0] = wikrt_mkotag_bigint(positive, nDigits);
+        uint32_t* const d = (uint32_t*)(p + 1);
+        d[0] = d0;
+        d[1] = d1;
+        d[2] = d2;
+        return WIKRT_OK;
+    }
+}
+
+wikrt_err wikrt_peek_medint(wikrt_cx* cx, wikrt_val v, bool* positive, uint32_t* d0, uint32_t* d1, uint32_t* d2)
+{
+    if(wikrt_i(v)) {
+        int32_t n = wikrt_v2i(v);
+        (*positive) = (n >= 0);
+        n = (*positive) ? n : -n;
+        (*d0) = n % WIKRT_BIGINT_DIGIT;
+        (*d1) = n / WIKRT_BIGINT_DIGIT;
+        (*d2) = 0;
+        return WIKRT_OK;
+    }
+
+    wikrt_tag const tag = wikrt_vtag(v);
+    wikrt_addr const addr = wikrt_vaddr(v);
+    wikrt_val const* const pv = wikrt_pval(cx, addr);
+    bool const isBigInt = (0 != addr) && (WIKRT_O == tag) && (wikrt_otag_bigint(*pv));
+    if(!isBigInt) { return WIKRT_TYPE_ERROR; }
+
+    wikrt_size const nDigits = (*pv) >> 9;
+    uint32_t const* const d = (uint32_t*)(pv + 1);
+    (*positive) = (0 == ((1 << 8) & (*pv)));
+    (*d0) = d[0];
+    (*d1) = d[1];
+    (*d2) = (nDigits > 2) ? d[2] : 0;
+    return (nDigits > 3) ? WIKRT_BUFFSZ : WIKRT_OK;
+}
+
+
 wikrt_err wikrt_alloc_i32(wikrt_cx* cx, wikrt_val* v, int32_t n) 
 {
-    bool const isSmallInt = ((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX));
-    if(isSmallInt) { 
-        (*v) = wikrt_i2v(n); 
-        return WIKRT_OK; 
-    } 
-
-    bool const positive = (n >= 0);
-    wikrt_size const nDigits = 2;
-    wikrt_size const allocSz = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
-
-    wikrt_addr addr;
-    if(!wikrt_alloc(cx, allocSz, &addr)) { 
-        (*v) = WIKRT_VOID; 
-        return WIKRT_CXFULL; 
+    if((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX)) {
+        (*v) = wikrt_i2v(n);
+        return WIKRT_OK;
     }
-    (*v) = wikrt_tag_addr(WIKRT_O, addr);
-    wikrt_val* const p = wikrt_pval(cx, addr);
-    p[0] = wikrt_mkotag_bigint(positive, nDigits);
-    uint32_t* const d = (uint32_t*) (p+1);
 
-    // int32_t is not closed under negation for INT32_MIN.
+    bool positive;
+    uint32_t d1, d0;
     if(n != INT32_MIN) {
         _Static_assert(((INT32_MAX + INT32_MIN) == (-1)), "bad assumption (int32_t)");
+        positive = (n >= 0);
         n = positive ? n : -n;
-        d[1] = n / WIKRT_BIGINT_DIGIT;
-        d[0] = n % WIKRT_BIGINT_DIGIT;
+        d0 = n % WIKRT_BIGINT_DIGIT;
+        d1 = n / WIKRT_BIGINT_DIGIT;
     } else {
         _Static_assert((-2147483648 == INT32_MIN), "bad INT32_MIN");
-        d[1] = 2;
-        d[0] = 147483648;
+        positive = false;
+        d1 = 2;
+        d0 = 147483648;
     }
-
-    return WIKRT_OK;
+    return wikrt_alloc_medint(cx, v, positive, d0, d1, 0);
 }
 
 wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n) 
 {
-    bool const isSmallInt = ((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX));
-    if(isSmallInt) {
+    if((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX)) {
         (*v) = wikrt_i2v((int32_t)n);
         return WIKRT_OK;
     }
 
-    bool const positive = (n >= 0);
+    bool positive;
     uint32_t d0, d1, d2;
-
-    // int64_t is not closed under negation for INT64_MIN
     if(n != INT64_MIN) {
         _Static_assert(((INT64_MAX + INT64_MIN) == (-1)), "bad assumption (int64_t)");
+        positive = (n >= 0);
         n = positive ? n : -n;
         d0 = n % WIKRT_BIGINT_DIGIT;
         n /= WIKRT_BIGINT_DIGIT;
@@ -481,30 +524,13 @@ wikrt_err wikrt_alloc_i64(wikrt_cx* cx, wikrt_val* v, int64_t n)
     } else {
         // GCC complains with the INT64_MIN constant given directly.
         _Static_assert(((-9223372036854775807 - 1) == INT64_MIN), "bad INT64_MIN");
+        positive = false;
         d2 = 9;
         d1 = 223372036;
         d0 = 854775808;
     }
-
-    wikrt_size const nDigits = (d2 == 0) ? 2 : 3;
-    wikrt_size const allocSz = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
-
-    wikrt_addr addr;
-    if(!wikrt_alloc(cx, allocSz, &addr)) {
-        (*v) = WIKRT_VOID;
-        return WIKRT_CXFULL;
-    }
-    (*v) = wikrt_tag_addr(WIKRT_O, addr);
-    wikrt_val* const p = wikrt_pval(cx, addr);
-    p[0] = wikrt_mkotag_bigint(positive, nDigits);
-    uint32_t* const d = (uint32_t*)(p+1);
-    d[0] = d0;
-    d[1] = d1;
-    if(nDigits >= 3) { d[2] = d2; }
-
-    return WIKRT_OK;
+    return wikrt_alloc_medint(cx, v, positive, d0, d1, d2);
 }
-
 
 wikrt_err wikrt_peek_i32(wikrt_cx* cx, wikrt_val const v, int32_t* i32) 
 {
@@ -514,33 +540,27 @@ wikrt_err wikrt_peek_i32(wikrt_cx* cx, wikrt_val const v, int32_t* i32)
         return WIKRT_OK;
     } 
 
-    wikrt_tag const tag = wikrt_vtag(v);
-    wikrt_addr const addr = wikrt_vaddr(v);
-    wikrt_val const* const pv = wikrt_pval(cx, addr);
-
-    bool const isBigInt = (WIKRT_O == tag) && (0 != addr) && (wikrt_otag_bigint(*pv));
-    if(!isBigInt) { return WIKRT_TYPE_ERROR; }
-
-    wikrt_size const nDigits = (*pv) >> 9;
-    uint32_t const* const d = (uint32_t*)(pv + 1);
-    bool const positive = (0 == ((1 << 8) & (*pv)));
+    bool positive;
+    uint32_t d0, d1, d2;
+    wikrt_err const st = wikrt_peek_medint(cx, v, &positive, &d0, &d1, &d2);
+    if(WIKRT_OK != st) { return st; }
     int32_t const digit = WIKRT_BIGINT_DIGIT;
 
     if(positive) {
         _Static_assert((2147483647 == INT32_MAX), "bad INT32_MAX");
         uint32_t const d1m = 2;
         uint32_t const d0m = 147483647;
-        bool const overflow = (nDigits > 2) || (d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m));
+        bool const overflow = (d2 != 0) || (d1 > d1m) || ((d1 == d1m) && (d0 > d0m));
         if(overflow) { (*i32) = INT32_MAX; return WIKRT_BUFFSZ; }
-        (*i32) = (d[1] * digit) + d[0];
+        (*i32) = (d1 * digit) + d0;
         return WIKRT_OK;
     } else {
         _Static_assert((-2147483648 == INT32_MIN), "bad INT32_MIN");
         uint32_t const d1m = 2;
         uint32_t const d0m = 147483648;
-        bool const underflow = (nDigits > 2) || (d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m));
+        bool const underflow = (d2 != 0) || (d1 > d1m) || ((d1 == d1m) && (d0 > d0m));
         if(underflow) { (*i32) = INT32_MIN; return WIKRT_BUFFSZ; }
-        (*i32) = 0 - ((int32_t)d[1] * digit) - (int32_t)d[0];
+        (*i32) = 0 - ((int32_t)d1 * digit) - (int32_t)d0;
         return WIKRT_OK;
     }
 }
@@ -552,21 +572,15 @@ wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64)
         return WIKRT_OK;
     }
 
-    wikrt_tag const tag = wikrt_vtag(v);
-    wikrt_addr const addr = wikrt_vaddr(v);
-    wikrt_val const* const pv = wikrt_pval(cx, addr);
-
-    bool const isBigInt = (WIKRT_O == tag) && (0 != addr) && (wikrt_otag_bigint(*pv));
-    if(!isBigInt) { return WIKRT_TYPE_ERROR; }
-
-    wikrt_size nDigits = (*pv) >> 9;
-    uint32_t const* const d = (uint32_t*)(pv + 1);
-    bool const positive = (0 == ((1 << 8) & (*pv)));
+    bool positive;
+    uint32_t d0, d1, d2;
+    wikrt_err const st = wikrt_peek_medint(cx, v, &positive, &d0, &d1, &d2);
+    if(WIKRT_OK != st) { return st; }
     int64_t const digit = WIKRT_BIGINT_DIGIT;
 
-    if(nDigits < 3) {
+    if(0 == d2) {
         // nDigits is exactly 2 by construction, no risk of over or underflow
-        int64_t const iAbs = ((int64_t)d[1] * digit) + d[0];
+        int64_t const iAbs = ((int64_t)d1 * digit) + d0;
         (*i64) = positive ? iAbs : -iAbs;
         return WIKRT_OK;
     } else if(positive) {
@@ -574,12 +588,12 @@ wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64)
         uint32_t const d2m = 9;
         uint32_t const d1m = 223372036;
         uint32_t const d0m = 854775807;
-        bool const overflow = (nDigits > 3) || (d[2] > d2m) ||
-            ((d[2] == d2m) && ((d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m))));
+        bool const overflow = (d2 > d2m) ||
+            ((d2 == d2m) && ((d1 > d1m) || ((d1 == d1m) && (d0 > d0m))));
         if(overflow) { (*i64) = INT64_MAX; return WIKRT_BUFFSZ; }
-        (*i64) = ((int64_t)d[2] * (digit * digit)) 
-               + ((int64_t)d[1] * (digit))
-               + ((int64_t)d[0]);
+        (*i64) = ((int64_t)d2 * (digit * digit)) 
+               + ((int64_t)d1 * (digit))
+               + ((int64_t)d0);
         return WIKRT_OK;
     } else {
         // GCC complains with the INT64_MIN constant given directly.
@@ -587,12 +601,12 @@ wikrt_err wikrt_peek_i64(wikrt_cx* cx, wikrt_val const v, int64_t* i64)
         uint32_t const d2m = 9;
         uint32_t const d1m = 223372036;
         uint32_t const d0m = 854775808;
-        bool const underflow = (nDigits > 3) || (d[2] > d2m) ||
-            ((d[2] == d2m) && ((d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m))));
+        bool const underflow = (d2 > d2m) ||
+            ((d2 == d2m) && ((d1 > d1m) || ((d1 == d1m) && (d0 > d0m))));
         if(underflow) { (*i64) = INT64_MIN; return WIKRT_BUFFSZ; }
-        (*i64) = 0 - ((int64_t)d[2] * (digit * digit))
-                   - ((int64_t)d[1] * (digit))
-                   - ((int64_t)d[0]);
+        (*i64) = 0 - ((int64_t)d2 * (digit * digit))
+                   - ((int64_t)d1 * (digit))
+                   - ((int64_t)d0);
         return WIKRT_OK;
     }
 }
@@ -629,8 +643,8 @@ wikrt_err wikrt_peek_isz(wikrt_cx* cx, wikrt_val const v, size_t* charCt)
     }
 
     (*charCt) = (positive ? 0 : 1) // sign if negative
-              + (9 * innerDigitCt)
-              + wikrt_decimal_size(upperDigit);
+              + wikrt_decimal_size(upperDigit)
+              + (9 * innerDigitCt);
 
     return WIKRT_OK;
 }
@@ -665,8 +679,8 @@ wikrt_err wikrt_peek_istr(wikrt_cx* cx, wikrt_val const v, char* const buff, siz
     }
 
     size_t const buffsz_min = (positive ? 0 : 1) // sign
-                            + (9 * innerDigitCt)
                             + wikrt_decimal_size(upperDigit)
+                            + (9 * innerDigitCt)
                             + 1; // NUL
 
     if(buffsz < buffsz_min) {
@@ -683,7 +697,6 @@ wikrt_err wikrt_peek_istr(wikrt_cx* cx, wikrt_val const v, char* const buff, siz
         WD(n); WD(n); WD(n);
         WD(n); WD(n); WD(n);
         WD(n); WD(n); WD(n);
-        assert(0 == n); // inner digit 0..999999999
     }
     do { WD(upperDigit); } while(0 != upperDigit);
     if(!positive) { *(--s) = '-'; }
@@ -799,11 +812,7 @@ wikrt_err wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, size_t 
 }
 
 
-
-wikrt_err wikrt_alloc_seal(wikrt_cx* cx, wikrt_val* sv, char const* s, wikrt_val v) {
-    return wikrt_alloc_seal_len(cx, sv, s, strlen(s), v);
-}
-wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, char const* s, size_t len, wikrt_val v)
+wikrt_err wikrt_alloc_seal(wikrt_cx* cx, wikrt_val* sv, char const* s, size_t len, wikrt_val v)
 {
     bool const validLen = (0 < len) && (len < 64);
     if(!validLen) { (*sv) = WIKRT_VOID; return WIKRT_INVAL; }
@@ -811,13 +820,11 @@ wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, char const* s, size_
     if((':' == s[0]) && (len <= 4)) {
         // WIKRT_OTAG_SEAL_SM: common special case, small discretionary tags
         // represent seal in otag!
-        wikrt_val tag = 0;
-        if(len > 3) { tag = (tag << 8) | (s[3] & 0xFF); }
-        if(len > 2) { tag = (tag << 8) | (s[2] & 0xFF); }
-        if(len > 1) { tag = (tag << 8) | (s[1] & 0xFF); }
-        tag = (tag << 8) | WIKRT_OTAG_SEAL_SM;
+        #define TAG(N) ((len > N) ? (((wikrt_val)s[N]) << (8*N)) : 0)
+        wikrt_val const tag = TAG(3) | TAG(2) | TAG(1) | WIKRT_OTAG_SEAL_SM;
         if(!wikrt_alloc_cellval(cx, sv, WIKRT_O, tag, v)) { return WIKRT_CXFULL; }
         return WIKRT_OK;
+        #undef TAG
     } else {
         // WIKRT_OTAG_SEAL: rare general case, large tags
         wikrt_size const szTotal = WIKRT_CELLSIZE + (wikrt_size) len;
@@ -834,6 +841,38 @@ wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, char const* s, size_
         return WIKRT_OK;
     }
 } 
+
+wikrt_err wikrt_split_seal(wikrt_cx* cx, wikrt_val sv, char* buff, wikrt_val* v)
+{
+    (*buff) = 0;
+    (*v) = WIKRT_VOID;
+
+    wikrt_addr const addr = wikrt_vaddr(sv);
+    wikrt_tag const tag = wikrt_vtag(sv);
+    if((WIKRT_O != tag) || (0 == addr)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val const* const pv = wikrt_pval(cx, addr);
+
+    if(wikrt_otag_seal_sm(*pv)) {
+        wikrt_val const otag = pv[0];
+        (*v) = pv[1];
+        buff[0] = ':';
+        buff[1] = (char)((otag >> 8 ) & 0xFF);
+        buff[2] = (char)((otag >> 16) & 0xFF);
+        buff[3] = (char)((otag >> 24) & 0xFF);
+        buff[4] = 0;
+        wikrt_free(cx, WIKRT_CELLSIZE, addr);
+        return WIKRT_OK;
+    } else if(wikrt_otag_seal(*pv)) {
+        size_t const len = (pv[0] >> 8) & 0x3F;
+        size_t const allocSz = WIKRT_CELLSIZE + len;
+        memcpy(buff, (pv + 2), len);
+        buff[len] = 0;
+        (*v) = pv[1];
+        wikrt_free(cx, allocSz, addr);
+        return WIKRT_OK;
+    } else { return WIKRT_TYPE_ERROR; }
+
+}
 
 static void wikrt_copy_step_next(wikrt_cx* cx, wikrt_val* lcpy, wikrt_val** dst) 
 {
@@ -940,7 +979,8 @@ wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool 
 
             case WIKRT_OTAG_OPVAL: {
                 // value operator with potential latent copyability checking
-                if(wikrt_opval_test_aff(pv[0]) || bCopyAff) {
+                bool const latentAff = (0 != (WIKRT_OPVAL_LAZYKF & *pv));
+                if(latentAff || bCopyAff) {
                     if(!wikrt_alloc_cellval(cx, dst, WIKRT_O, pv[0], pv[1])) { return WIKRT_CXFULL; }
                     dst = 1 + wikrt_pval(cx, wikrt_vaddr(*dst));
                 } else {
@@ -1062,7 +1102,8 @@ wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_val v, bool const bDropRel)
             } break;
 
             case WIKRT_OTAG_OPVAL: {
-                if(wikrt_opval_test_rel(pv[0]) || bDropRel) {
+                bool const latentRel = (0 != (WIKRT_OPVAL_LAZYKF & *pv));
+                if(latentRel || bDropRel) {
                     v = pv[1]; 
                     wikrt_free(cx, WIKRT_CELLSIZE, addr);
                 } else {
@@ -1100,7 +1141,7 @@ wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_val v, bool const bDropRel)
             } break;
 
             default: {
-                fprintf(stderr, u8"wikrt: copy unrecognized value: %u→(%u,%u...)\n", v, pv[0], pv[1]);
+                fprintf(stderr, u8"wikrt: drop unrecognized value: %u→(%u,%u...)\n", v, pv[0], pv[1]);
                 return WIKRT_IMPL;
             }
         }}

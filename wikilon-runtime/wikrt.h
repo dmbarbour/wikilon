@@ -187,14 +187,16 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_BIGINT_DIGIT          1000000000
 #define WIKRT_BIGINT_MAX_DIGITS  ((1 << 23) - 1)
 
+#define WIKRT_MEDINT_D1MAX  36028796
+
 // block header bits
 #define WIKRT_BLOCK_RELEVANT (1 << 8)
 #define WIKRT_BLOCK_AFFINE   (1 << 9)
 #define WIKRT_BLOCK_PARALLEL (1 << 10)
 #define WIKRT_BLOCK_LAZY     (1 << 11)
 
-// indicate a quoted opval (lazy substructure)
-#define WIKRT_OPVAL_QUOTE (1 << 8)
+// lazy substructure testing for quoted values
+#define WIKRT_OPVAL_LAZYKF (1 << 8)
 
 static inline bool wikrt_otag_bigint(wikrt_val v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
 static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
@@ -206,8 +208,6 @@ static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE 
 
 static inline bool wikrt_block_rel(wikrt_val v) { return (0 != (WIKRT_BLOCK_RELEVANT & v)); }
 static inline bool wikrt_block_aff(wikrt_val v) { return (0 != (WIKRT_BLOCK_AFFINE & v)); }
-static inline bool wikrt_opval_test_rel(wikrt_val v) { return (0 != (WIKRT_OPVAL_QUOTE & v)); }
-static inline bool wikrt_opval_test_aff(wikrt_val v) { return (0 != (WIKRT_OPVAL_QUOTE & v)); }
 
 static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
     return  (((nDigits << 1) | (positive ? 0 : 1)) << 8) | WIKRT_OTAG_BIGINT;
@@ -385,14 +385,14 @@ static inline wikrt_size wikrt_spine_length(wikrt_cx* cx, wikrt_val v)
     return ct;
 }
 
+/* An allocator for integers up to 3 big digits (~90 bits). */
+wikrt_err wikrt_alloc_medint(wikrt_cx*, wikrt_val*, bool positive, uint32_t d0, uint32_t d1, uint32_t d2);
+wikrt_err wikrt_peek_medint(wikrt_cx*, wikrt_val, bool* positive, uint32_t* d0, uint32_t* d1, uint32_t* d2);
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const v) {
     return (wikrt_i(v) || (0 == wikrt_vaddr(v)));
 }
-
-wikrt_err wikrt_alloc_seal_len(wikrt_cx* cx, wikrt_val* sv, 
-    char const* s, size_t len, wikrt_val v);
 
 /* Test whether a valid utf-8 codepoint is okay for a token. */
 static inline bool wikrt_token_char(uint32_t c) {

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <assert.h>
 #include "wikilon-runtime.h"
 
 #define TESTCX_SIZE (WIKRT_CX_SIZE_MIN)
@@ -38,7 +39,9 @@ int main(int argc, char const** argv) {
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(e);
 
-    fprintf(stdout, u8"Available memcells: %d → %d\n", fct0, fctf);
+    fprintf(stdout, u8"Available memcells: %d → %d (%s)\n"
+        , fct0, fctf
+        , ((fct0 == fctf) ? "ok" : "memleak"));
     fprintf(stdout, u8"Passed %d of %d Tests\n", tests_passed, tests_run);
     return ((tests_run == tests_passed) ? ok : err);
 }
@@ -416,6 +419,73 @@ bool test_copy_num(wikrt_cx* cx)
     return ok;
 }
 
+bool test_valid_token_str(char const* s, bool expected) {
+    bool const ok = (expected == wikrt_valid_token(s));
+    if(!ok) { fprintf(stderr, "token validation failed for: %s\n", s); }
+    return ok; 
+}
+
+bool test_valid_token(wikrt_cx* cx)
+{
+    #define ACCEPT(S) test_valid_token_str(S, true)
+    #define REJECT(S) test_valid_token_str(S, false)
+    return ACCEPT("foo")
+        && ACCEPT("hello world")
+        && ACCEPT("<>")
+        && ACCEPT(".:,;|")
+        && ACCEPT("\"")
+        && ACCEPT("@")
+        && ACCEPT("'")
+        && ACCEPT(u8"x→y→z.κλμνξοπρς") // utf-8 okay
+        && REJECT("{foo}") // no curly braces
+        && REJECT("foo\nbar") // no newlines
+        && REJECT("") // too small
+        && ACCEPT("123456789012345678901234567890123456789012345678901234567890123") // max len
+        && REJECT("1234567890123456789012345678901234567890123456789012345678901234") // too large
+        && ACCEPT(u8"←↑→↓←↑→↓←↑→↓←↑→↓←↑→↓←") // max len utf-8
+        && REJECT(u8"←↑→↓←↑→↓←↑→↓←↑→↓←↑→↓←z"); // too large
+    #undef ACCEPT
+    #undef REJECT
+}
+
+static inline size_t strct(char const* const* ps) {
+    size_t ct = 0;
+    while(NULL != (*ps++)) { ++ct; }
+    return ct;
+}
+
+bool test_sealers(wikrt_cx* cx) 
+{
+    char const* const lSeals[] = { ":", "abracadabra", ":m", u8"←↑→↓←↑→↓←↑→↓←↑→↓←↑→↓←"
+                                 , ":cx", ":foobar", ":env", ":xyzzy" };
+    size_t const nSeals = sizeof(lSeals) / sizeof(char const*);
+    assert(nSeals >= 8);
+
+    wikrt_val v = WIKRT_UNIT;
+    for(size_t ii = 0; ii < nSeals; ++ii) {
+        char const* s = lSeals[ii];
+        wikrt_alloc_seal(cx, &v, s, strlen(s), v);
+    }
+
+    // validate copy and drop of sealed values
+    for(size_t ii = 0; ii < 100; ++ii) {
+        wikrt_val tmp = v;
+        wikrt_copy(cx, &v, tmp, false);
+        wikrt_drop(cx, tmp, false);
+    }
+
+    for(size_t ii = nSeals; ii > 0; --ii) {
+        char const* s = lSeals[ii - 1];
+        char buff[WIKRT_TOK_BUFFSZ];
+        wikrt_split_seal(cx, v, buff, &v);
+        if(0 != strcmp(s, buff)) {
+            fprintf(stderr, "expected seal %s, got %s\n", s, buff);
+            return false;
+        }
+    }
+    
+    return (WIKRT_UNIT == v);
+}
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
@@ -481,7 +551,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_alloc_deepsum_large);
     TCX(test_copy_deepsum);
 
-    //TCX(test_alloc_sealers);
+    TCX(test_valid_token);
+    TCX(test_sealers);
 
 
     // TODO test: texts, binaries.

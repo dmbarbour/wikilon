@@ -491,7 +491,14 @@ wikrt_err wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, size_t, wikrt_ab
 
 // Todo: read a block... may need special attention.
 
-/** @brief Allocate small integers. */
+/** @brief Allocate small integers.
+ *
+ * Small integers in the range of plus or minus (2^30 - 1) will be
+ * encoded in a compact representation without allocation. Larger
+ * integers will use a big-integer encoding. Wikilon runtime does 
+ * have a finite limit for big integers, but it's much larger than
+ * most applications will ever require.
+ */
 wikrt_err wikrt_alloc_i32(wikrt_cx*, wikrt_val*, int32_t);
 wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val*, int64_t);
 
@@ -539,11 +546,13 @@ wikrt_err wikrt_split_sum(wikrt_cx*, wikrt_val c, bool* inRight, wikrt_val*);
  * serialization. Once sealed, a value is inaccessible until unsealed.
  * so this serves as a basis for data hiding or structural typing.
  *
- * Wikilon runtime knows discretionary sealers, i.e. {:foo} is undone
- * by {.foo}. Anything else requires special attention. (Note: curly
- * braces aren't included in the token text, i.e. use ":foo".)
+ * Wikilon runtime knows about discretionary sealers, e.g. {:map} and
+ * {.map} serve a similar role to type wrappers. Short discretionary
+ * sealers (four utf8-bytes or fewer, including prefix ':') have an
+ * optimized compact representation, and should be encouraged in most
+ * use cases.
  */
-wikrt_err wikrt_alloc_seal(wikrt_cx*, wikrt_val* sv, char const* s, wikrt_val v); 
+wikrt_err wikrt_alloc_seal(wikrt_cx*, wikrt_val* sv, char const* s, size_t strlen, wikrt_val v); 
 
 /** @brief Disassemble a sealed value into sealer token and value.
  *
