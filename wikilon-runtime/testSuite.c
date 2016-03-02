@@ -347,13 +347,14 @@ bool test_pkistr_s(wikrt_cx* cx, int64_t n, char const* const nstr)
 {
     wikrt_val v;
     wikrt_alloc_i64(cx, &v, n);
-    size_t len;
-    wikrt_peek_isz(cx, v, &len);
+    size_t len = 0;
+    wikrt_peek_istr(cx, v, NULL, &len); // obtain string size
     bool const okSize = (len == strlen(nstr));
-    size_t const buffsz = len + 1;
-    char buff[buffsz];
-    wikrt_peek_istr(cx, v, buff, buffsz);
+
+    char buff[len+1]; buff[len] = 0;
+    wikrt_peek_istr(cx, v, buff, &len); // print integer into buffer
     bool const okBuff = (0 == strcmp(nstr, buff));
+
     wikrt_drop(cx, v, false);
     bool const ok = (okBuff && okSize);
     return ok;

@@ -518,14 +518,13 @@ wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
  * doesn't guarantee support for more than a million digits, but
  * it will fail rather than return an incorrect result.
  *
- * When reading large integers, asking for an appropriate buffer size
- * may be necessary. wikrt_peek_isz will return the exact number of 
- * characters to represent the number as a string (not including the
- * NUL terminal). 
+ * When reading large integers, the `strlen` parameter is both an
+ * input (the size of the available buffer) and an output. On WIKRT_OK
+ * we output the number of characters written. On WIKRT_BUFFSZ, the
+ * strlen reference returns the minimum buffer size.
  */
-wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*);
-wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, char* buff, size_t buffsz); 
-wikrt_err wikrt_peek_isz(wikrt_cx*, wikrt_val const, size_t* charCt);
+wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*, size_t strlen);
+wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, char* buff, size_t* strlen); 
 
 /** @brief Allocate or disassemble basic product types (pairs of values). */
 wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val* p, wikrt_val fst, wikrt_val snd);

@@ -617,46 +617,14 @@ static inline size_t wikrt_decimal_size(uint32_t n) {
     return ct;
 }
 
-wikrt_err wikrt_peek_isz(wikrt_cx* cx, wikrt_val const v, size_t* charCt)
+wikrt_err wikrt_peek_istr(wikrt_cx* cx, wikrt_val const v, char* const buff, size_t* const buffsz)
 {
-    bool positive;
-    uint32_t upperDigit;
-    wikrt_size innerDigitCt;
-
-    if(wikrt_i(v)) {
-        int32_t const i = wikrt_v2i(v);
-
-        positive = (i >= 0);
-        upperDigit = (uint32_t)(positive ? i : -i);
-        innerDigitCt = 0;
-    } else {
-        wikrt_tag const tag = wikrt_vtag(v);
-        wikrt_addr const addr = wikrt_vaddr(v);
-        wikrt_val const* const pv = wikrt_pval(cx, addr);
-        bool const isBigInt = (WIKRT_O == tag) && (0 != addr) && (wikrt_otag_bigint(*pv));
-        if(!isBigInt) { (*charCt) = 0; return WIKRT_TYPE_ERROR; }
-        uint32_t const* const d = (uint32_t*)(pv + 1);
-
-        positive = (0 == ((1 << 8) & (*pv)));
-        innerDigitCt = ((*pv) >> 9) - 1;
-        upperDigit = d[innerDigitCt];
-    }
-
-    (*charCt) = (positive ? 0 : 1) // sign if negative
-              + wikrt_decimal_size(upperDigit)
-              + (9 * innerDigitCt);
-
-    return WIKRT_OK;
-}
-
-
-wikrt_err wikrt_peek_istr(wikrt_cx* cx, wikrt_val const v, char* const buff, size_t buffsz)
-{
-    if(0 == buffsz) { return WIKRT_BUFFSZ; }
     bool positive;
     uint32_t upperDigit;
     uint32_t innerDigitCt;
     uint32_t const* d;
+
+    size_t const buffsz_avail = (*buffsz);
 
     if(wikrt_i(v)) {
         int32_t const i = wikrt_v2i(v);
@@ -670,7 +638,7 @@ wikrt_err wikrt_peek_istr(wikrt_cx* cx, wikrt_val const v, char* const buff, siz
         wikrt_addr const addr = wikrt_vaddr(v);
         wikrt_val const* const pv = wikrt_pval(cx, addr);
         bool const isBigInt = (WIKRT_O == tag) && (0 != addr) && (wikrt_otag_bigint(*pv));
-        if(!isBigInt) { (*buff) = 0; return WIKRT_TYPE_ERROR; }
+        if(!isBigInt) { return WIKRT_TYPE_ERROR; }
         
         d = (uint32_t*)(pv + 1);
         positive = (0 == ((1 << 8) & (*pv)));
@@ -680,17 +648,13 @@ wikrt_err wikrt_peek_istr(wikrt_cx* cx, wikrt_val const v, char* const buff, siz
 
     size_t const buffsz_min = (positive ? 0 : 1) // sign
                             + wikrt_decimal_size(upperDigit)
-                            + (9 * innerDigitCt)
-                            + 1; // NUL
+                            + (9 * innerDigitCt);
 
-    if(buffsz < buffsz_min) {
-        (*buff) = 0;
-        return WIKRT_BUFFSZ;
-    }
+    (*buffsz) = buffsz_min;
+    if(buffsz_min > buffsz_avail) { return WIKRT_BUFFSZ; }
 
     char* s = buff + buffsz_min;
     #define WD(n) { *(--s) = ('0' + (n % 10)); n /= 10; }
-    *(--s) = 0; // NUL terminal
     for(uint32_t ii = 0; ii < innerDigitCt; ++ii) {
         // nine decimal digits per inner digit
         uint32_t n = d[ii];
@@ -706,7 +670,7 @@ wikrt_err wikrt_peek_istr(wikrt_cx* cx, wikrt_val const v, char* const buff, siz
     return WIKRT_OK;
 }
 
-wikrt_err wikrt_alloc_istr(wikrt_cx* cx, wikrt_val* v, char const* istr)
+wikrt_err wikrt_alloc_istr(wikrt_cx* cx, wikrt_val* v, char const* istr, size_t strlen)
 {
     (*v) = WIKRT_VOID;
     return WIKRT_IMPL;
