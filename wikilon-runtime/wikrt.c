@@ -442,19 +442,34 @@ wikrt_err _wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val const v)
         } else if((WIKRT_PL == vtag) || (WIKRT_PR == vtag)) {
             (*out) = WIKRT_VTYPE_SUM;
         } else if((WIKRT_O == vtag) && (0 != vaddr)) {
-            wikrt_val const* const pv = wikrt_pval(cx, vaddr);
+            wikrt_val* const pv = wikrt_pval(cx, vaddr);
             wikrt_val const otag = pv[0];
-            if(wikrt_otag_bigint(otag)) { 
-                (*out) = WIKRT_VTYPE_INTEGER; 
-            } else if(wikrt_otag_deepsum(otag) || wikrt_otag_array(otag)) { 
-                (*out) = WIKRT_VTYPE_SUM; 
-            } else if(wikrt_otag_block(otag)) { 
-                (*out) = WIKRT_VTYPE_BLOCK; 
-            } else if(wikrt_otag_stowage(otag)) { 
-                (*out) = WIKRT_VTYPE_STOWED; 
-            } else if(wikrt_otag_seal(otag) || wikrt_otag_seal_sm(otag)) { 
-                (*out) = WIKRT_VTYPE_SEALED; 
-            } else { return WIKRT_INVAL; }
+            switch(LOBYTE(otag)) {
+                case WIKRT_OTAG_BIGINT: {
+                    (*out) = WIKRT_VTYPE_INTEGER;
+                } break;
+                case WIKRT_OTAG_ARRAY: // same as sum
+                case WIKRT_OTAG_BINARY: // same as sum
+                case WIKRT_OTAG_TEXT: // same as sum
+                case WIKRT_OTAG_DEEPSUM: {
+                    (*out) = WIKRT_VTYPE_SUM;
+                } break;
+                case WIKRT_OTAG_BLOCK: {
+                    (*out) = WIKRT_VTYPE_BLOCK;
+                } break;
+                case WIKRT_OTAG_SEAL_SM: // same as SEAL
+                case WIKRT_OTAG_SEAL: {
+                    (*out) = WIKRT_VTYPE_SEALED;
+                } break;
+                case WIKRT_OTAG_STOWAGE: {
+                    (*out) = WIKRT_VTYPE_STOWED;
+                } break;
+                default: {
+                    fprintf(stderr, u8"wikrt: peek type: unrecognized tag %u\n"
+                                  , (unsigned int)pv[0]);
+                    return WIKRT_INVAL;
+                } break;
+            }
         } else { 
             (*out) = WIKRT_VTYPE_PENDING; 
             return WIKRT_INVAL; 

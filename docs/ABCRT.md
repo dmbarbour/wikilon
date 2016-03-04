@@ -43,7 +43,14 @@ I will want parallelism within each context, and also to minimize synchronizatio
 
 ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, with deep copies favored over aliasing. Linearity allows me to implement many functions (or at least their common cases) without allocation. And rather than GC from a root-set, I can primarily use conventional 'manual' free-lists. The main cost is the copy itself, which may prove expensive (when copying code in a loop, for example).
 
-Tracking a root set is feasible with a thin layer of indirection between API calls and internal logics. I'm not seeing much much benefit for this indirection unless I later choose to pursue conventional or compacting GC. At the very least, this would enforce correct use of `wikrt_move()` and linear usage, and would simplify memory management with parallelism (destroying a context would drop its bound values). OTOH, it might complicate error recovery. I'll always "take" the roots to do something with them, and if that fails what should I put back? 
+Tracking a root set is feasible with a thin layer of indirection between API calls and internal logics. The advantages of tracking a root set:
+
+* precise destruction of values when a fork is destroyed
+* potential to duplicate the context
+* potential for compaction of data, reducing fragmentation
+* better detection of when linearity is violated
+
+OTOH, the indirection does cost a bit. And it may hinder error recovery. But the costs should, in theory at least, be marginal because I'll be pushing most computation to evaluation. We shouldn't be touching the root-set for most operations!
 
 Latent destruction of large structures is a viable option that could avoid unnecessary cleanup efforts when destroying contexts or large values. E.g. I could shift the 'values to destroy' lists into the context itself, and keep a reference to the last item in the list so I can easily append it. I'm not sure latent destruction is the right path to take, though it might improve performance marginally.
 

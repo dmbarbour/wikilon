@@ -183,6 +183,10 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *   is also necessary (no address assigned yet). And we'll need reference
  *   counting for stowed values.
  *
+ *   Thoughts: in addition to substructural attributes, a few tag bits to 
+ *   track the basic 'vtype' of a stowed value could be useful. Then I would
+ *   not need a WIKRT_VTYPE_STOWED, for example.
+ *
  *   I might need to use multiple tags for different stowage.
  */
 
