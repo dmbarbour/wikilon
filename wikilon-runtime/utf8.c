@@ -9,12 +9,11 @@ inline bool isSurrogateCodepoint(uint32_t c) {
 }
 
 
-size_t utf8_readcp(char const* const s, size_t const strlen, uint32_t* const r)
+size_t utf8_readcp(uint8_t const* const s, size_t const strlen, uint32_t* const r)
 {
     if(0 == strlen) { goto e; }
 
-    unsigned char const* p = (unsigned char const*) s;
-    uint32_t const c0 = (*p);
+    uint32_t const c0 = (*s);
 
     if(c0 < 0x80) {
         // U+0 .. U+7F 
@@ -23,7 +22,7 @@ size_t utf8_readcp(char const* const s, size_t const strlen, uint32_t* const r)
     } else if(c0 < 0xE0) {
         // U+80 .. U+7FF 
         if(strlen < 2) goto e;
-        uint32_t const c1 = p[1];
+        uint32_t const c1 = s[1];
         uint32_t const cp = ((0x1F & c0) << 6 )
                           | ((0x3F & c1)      );
         if(!cc(c1) || (cp < 0x80)) { goto e; }
@@ -32,8 +31,8 @@ size_t utf8_readcp(char const* const s, size_t const strlen, uint32_t* const r)
     } else if(c0 < 0xF0) {
         // U+800 .. U+FFFF
         if(strlen < 3) goto e;
-        uint32_t const c1 = p[1];
-        uint32_t const c2 = p[2];
+        uint32_t const c1 = s[1];
+        uint32_t const c2 = s[2];
         uint32_t const cp = ((0x0F & c0) << 12)
                           | ((0x3F & c1) << 6 )
                           | ((0x3F & c2)      );
@@ -43,9 +42,9 @@ size_t utf8_readcp(char const* const s, size_t const strlen, uint32_t* const r)
     } else {
         // U+10000 .. U+10FFFF
         if(strlen < 4) goto e;
-        uint32_t const c1 = p[1];
-        uint32_t const c2 = p[2];
-        uint32_t const c3 = p[3];
+        uint32_t const c1 = s[1];
+        uint32_t const c2 = s[2];
+        uint32_t const c3 = s[3];
         uint32_t const cp = ((0x07 & c0) << 18)
                           | ((0x3F & c1) << 12)
                           | ((0x3F & c2) << 6 )
@@ -60,7 +59,7 @@ e: // if we have any validation errors...
     return 0;
 }
 
-bool utf8_valid_strlen(char const* s, size_t strlen, size_t* utf8len)
+bool utf8_valid_strlen(uint8_t const* s, size_t strlen, size_t* utf8len)
 {
     uint32_t cp;
     size_t ct = 0;
@@ -69,15 +68,14 @@ bool utf8_valid_strlen(char const* s, size_t strlen, size_t* utf8len)
     return (0 == strlen);
 }
 
-size_t utf8_readcp_r(char const* const s, size_t const strlen, uint32_t* const r)
+size_t utf8_readcp_r(uint8_t const* const s, size_t const strlen, uint32_t* const r)
 {
-    unsigned char const* const p = (unsigned char const*) s;
     if(strlen < 1) { goto e; }
-    uint32_t const c0 = p[strlen-1];
+    uint32_t const c0 = s[strlen-1];
     if(c0 < 0x80) { (*r) = c0; return 1; }
 
     if(!cc(c0) || (strlen < 2)) { goto e; }
-    uint32_t const c1 = p[strlen-2];
+    uint32_t const c1 = s[strlen-2];
     if((c1 & 0xE0) == 0xC0) {
         uint32_t const cp = ((0x1F & c1) << 6)
                           | ((0x3F & c0)     );
@@ -87,7 +85,7 @@ size_t utf8_readcp_r(char const* const s, size_t const strlen, uint32_t* const r
     }
 
     if(!cc(c1) || (strlen < 3)) { goto e; }
-    uint32_t const c2 = p[strlen-3];
+    uint32_t const c2 = s[strlen-3];
     if((c2 & 0xF0) == 0xE0) {
         uint32_t const cp = ((0x0F & c2) << 12) 
                           | ((0x3F & c1) << 6 )
@@ -98,7 +96,7 @@ size_t utf8_readcp_r(char const* const s, size_t const strlen, uint32_t* const r
     }
 
     if(!cc(c2) || (strlen < 4)) { goto e; }
-    uint32_t const c3 = p[strlen-4];
+    uint32_t const c3 = s[strlen-4];
     if((c3 & 0xF8) == 0xF0) {
         uint32_t const cp = ((0x07 & c3) << 18)
                           | ((0x3F & c2) << 12)
@@ -113,6 +111,4 @@ e: // if we have any validation errors...
     (*r) = 0xFFFD;
     return 0;
 }
-
-// TODO: 'unsafe' variants.
 

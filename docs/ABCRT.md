@@ -35,11 +35,19 @@ I'll actually include a copy of these directly, no shared libs.
 
 I need an *environment* bound to an underlying stowage and persistence model, e.g. via LMDB. The environment may also be associated with worker threads for par-seq parallelism. I also need *contexts* that associate an environment with a heap of memory for computations. 
 
-Context is a contiguous region of memory, up to ~4GB allowing 32-bit addressing. In general, Wikilon will produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage serves a similar role to virtual memory, but does not consume address space.
+Context is a contiguous region of memory, up to ~4GB enabling 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage serves a similar role to virtual memory, but does not consume address space.
 
-At the moment, memory is manually allocated using conventional heap mechanisms: quick-fit and segregated size lists. I would like to support bump-pointer nursery allocations, too, though doing so may be limited to the duration of a particular evaluation, i.e. so it's easy to determine a 'root set'.
+I will want parallelism within each context, and also to minimize synchronization. So my current plan is to have *wikrt_cx* be a reference to the shared space, but to allow multiple such references (lightweight forks) that enables cheap motion of values between them.
 
-Wikilon runtime will favor linear semantics for values. A value reference has a single owner. Thus, pure functions on values can be implemented by mutations, and a lot of data-plumbing can be non-allocating. The cost is that we must perform deep-copies for `^` operator or when we otherwise share values. Deep copies may be constrained a bit by reference counting at certain boundaries such as stowage, and maybe blocks.
+### Memory Management
+
+ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, with deep copies favored over aliasing. Linearity allows me to implement many functions (or at least their common cases) without allocation. And rather than GC from a root-set, I can primarily use conventional 'manual' free-lists. The main cost is the copy itself, which may prove expensive (when copying code in a loop, for example).
+
+Tracking a root set is feasible with a thin layer of indirection between API calls and internal logics. I'm not seeing much much benefit for this indirection unless I later choose to pursue conventional or compacting GC. At the very least, this would enforce correct use of `wikrt_move()` and linear usage, and would simplify memory management with parallelism (destroying a context would drop its bound values). OTOH, it might complicate error recovery. I'll always "take" the roots to do something with them, and if that fails what should I put back? 
+
+Latent destruction of large structures is a viable option that could avoid unnecessary cleanup efforts when destroying contexts or large values. E.g. I could shift the 'values to destroy' lists into the context itself, and keep a reference to the last item in the list so I can easily append it. I'm not sure latent destruction is the right path to take, though it might improve performance marginally.
+
+*Idea:* I could switch to a register-machine concept for contexts, with each 'context' having some small finite number of root registers. The main advantage of doing so is that I would externalize the register-allocation issue to the client. OTOH, the benefit should be marginal. Most computations hould be handled in terms of block evaluation, not direct manipulation of the context.
 
 ## Representations
 
@@ -119,15 +127,34 @@ We can annotate a value to moved to persistent storage, or transparently reverse
 
 Lazy or parallel values, or a 'hole' for values that are still being computed. These will need special attention for performance and quota purposes. I'd prefer to avoid treating pending computations as normal values, but they might make a useful special case?
 
-### Arrays
+### Arrays or Compact Lists
 
-A compact representation for list-like structures `μL.((a*L)+b)`. One that should be suitable for collections-oriented programming. I want to support fast logical slices, seamless append, logical reversal, fast size computations, fast indexed lookup and update (for accelerators), etc.. But I haven't decided on an exact representation yet.
+Arrays are a compact representation for list-like structures `μL.((a*L)+b)`. In addition to arrays, I'm interested in array-chunked lists similar to Haskell's lazy bytestrings. Those are sufficient to offer most benefits of arrays, after all, while remaining structurally more flexible.
 
-Seamless append would happen when we rejoin two arrays that were previously sliced. The main difficulty with logical slices is the frayed edges, i.e. if we split a normal array with two elements per cell, we might divide in the middle of one cell. Originally, I was considering use of a 'cell sharing' object. But a better technique might be to let only one of the two arrays keep the original cell, and copy data for the other array fragment. When we append arrays, we may easily fill empty spaces within a cell, i.e. restoring the frayed edges.
+Desiderata: besides the benefits of a compact representation, arrays can easily accelerate a lot of list-processing functions. Fast logical slices, seamless append, logical reversal, size computations, indexed lookups and updates, chunked allocation, and compact binaries and texts are feasible. I'd also like (eventually) to support column-structured data, i.e. where a list of pairs is represented as a pair of lists.
 
-OTOH, if we allow fraying of arrays, then we need to tune our concepts a bit. Instead of true arrays, we might want to optimize for these to be array chunked lists (a list whose spine is represented by long, array-like chunks). And instead of 
+Fast slicing implies use of a `buffer` pointer. The arbitrary list terminal and potential for array-chunked lists suggests a `next` pointer. Between two pointers and tagged-object header, I need at least two cells overhead for the array. Other information I need includes: reversal, size, type. Type information isn't immediately essential - if it becomes relevant later, I can probably tweak the array model at that time. For now, I probably can make due nicely with just "array of values" vs. "binary array" and "texts".
 
-*NOTE:* A useful related feature might involve array chunks with reasonably large 'capacity' at one or both ends, such that we may addend (or prepend) elements without extra allocations. I wonder how we'd annotate and accelerate these properly (some form of `{&pack}` annotation?)
+A viable representation:
+
+        (array, size, buffer, next)
+
+Our `array` header will include a 'reversal' bit. Also, we might record space on one side of the buffer (e.g. the left side, lower addresses) for efficient deallocation and seamless append? But that might not be worthwhile... not sure.
+
+When slicing arrays, we might cut in the middle of a cell. In this case, only one of the two arrays will keep the cell, while the other will obtain a copy of the data. We'll need to restore these 'frayed' edges if later we append the two slices.
+
+*NOTE:* If we have arrays with extra space, we might benefit from ArrayList like features. This would require accelerating either `append` or `cons`.
+A useful related feature might involve array chunks with reasonably large 'capacity' at one or both ends, such that we may addend (or prepend) elements without extra allocations. I wonder how we'd annotate and accelerate these properly (some form of `{&pack}` annotation?)
+
+#### Binaries
+
+Probably a simple variant of: 
+
+        (binary, size, buffer, next)
+
+#### Texts
+
+Originally I was thinking I'd have texts include some indices. But this seems too complicated to me. A simpler technique is probably to have texts include *two* sizes: both a size in bytes and a size in characters. When the two sizes are 16-bits each, we'll text chunks of up to 64kB and we'd limit the 'scan' for indexed access to at most 64kB. This is still a lot, but it should be much more efficient than fully scanning multiple-megabyte texts. And it's simple!
 
 ### More Numerics
 
@@ -148,80 +175,6 @@ ABC supports integers. But other numbers could be supported via arithmetic accel
 Eventually, I may support floating point numbers, vectors, matrices. I'd love for Wikilon to become a go to solution for scientific computations (perhaps distributed on a cloud and leveraging GPGPU). These are frequently expressed in terms of vector and matrix computations.
 
 *Aside:* I had an earlier concept of enabling arbitrary values to be reference counted. However, this idea doesn't have very nice predictability properties, especially in context of parallelism. Fortunately, *large value stowage* serves the same role of limiting depth of copies, and does so in a manner more comprehensible to users (conceptually, just copying a stowage address).
-
-# Arrays and Chunked Lists
-
-An array is an optimized representation for any structure of form: `μL.((a*L)+b)`. This includes normal lists, but also heterogeneous lists, and lists that do not terminate with unit. 
-
-Compared to a list, arrays reduce memory overhead by half and ensure tight memory locality. But the primary benefit regards how easily common list functions can be accelerated when applied to an array: O(1) length, O(1) indexed lookups and updates, O(1) logical reversal, O(1) split and seamless append, and so on. 
-
-The proposed representation for arrays is:
-                
-        (array, size+offset, pbuff, pnext)
-            size+offset → small int
-                28 bit size in bytes
-                3 bit offset in bytes
-                word-aligned for arrays
-            pbuff → 
-                (111) contiguous memory
-                (001) special case tag
-                  e.g. refct for sharing
-            pnext → whatever follows
-
-*Note:* It might be worthwhile to represent smaller and simpler arrays (limited size, simple slicing, terminating with unit in right) using only a single cell overhead. 
-
-*Note:* I need to decide whether an array represents `(a * List a b)` or just the list itself. I could possibly do both via a simple tag bit in the array type. But it might be simpler and more efficient to dismantle the head of an array whenever we try to access it as a sum type, losing only the ability to seamlessly rejoin.
-
-Annotation `{&array}` asserts the argument is a list of values and compacts this list into an array with a single contiguous buffer with `pnext` pointing to the terminal value (usually `unit inR` for a plain list). If allocation fails (e.g. due to memory fragmentation), or if the argument is not a valid representation of a list, computation will halt. 
-
-I might enable a weaker `{&array~}` to support compact lists with array-like segments, or 'chunked lists'. Chunked lists are a high performance data structure, sufficient for many applications of arrays.
-
-*NOTE:* Explicit arrays via `{&array}` must be allocated on the heap. Copy-collection within the nursery interferes with preserving a seamless underlying structure if it occurs during a logical split. The `{&array~}` constructor doesn't have this limitation, and should be favored for small or transient arrays.
-
-#### Seamless, Unshared, and Affine Arrays
-
-As far as ABC semantics are concerned, arrays are plain old lists. We can transparently append them to a list, for example. But from a *performance semantics* perspective arrays and lists diverge wildly. To protect performance semantics, I propose two annotations: `{&seamless}` and `{&unshared}`.
-
-When the array is encoded as one large chunk, and `pnext` points to the terminal value (no further list elements), we call this a *seamless* array. Seamless arrays guarantee many O(1) accelerated operations. This is valuable in many contexts. We provide a `{&seamless}` annotation to assert that an array is seamless. 
-
-Unshared arrays can be split, seamlessly appended, and updated in place, each in O(1) time. These functions provide a powerful foundation for conventionally imperative algorithms and data structures: union find, hashtables, abstract register machines. They also enable logically reshaping arrays into matrices and back. To protect these properties, the `{&unshared}` annotation will assert that our buffer is not shared.
-
-Both `{&seamless}` and `{&unshared}` can be validated dynamically, and efficiently. But we can also give these annotations static semantics for a linter or typechecker, e.g. so we get a compile-time error indicating where sharing was introduced.
-
-As a simple technique, we can also explicitly mark arrays 'affine' by replacing the typical termal unit value with `[]f`. This prevents accidental copy and sharing of the array. 
-
-#### Shared Array Buffers 
-
-The copy function `^` will recognize arrays and wrap a reference count around the buffer. Accelerators can recognize this special case, i.e. such that we still have O(1) indexed lookup and non-copying fold/foreach, etc.. It is possible for a chunked list to have different sharing for each chunk. When updating a shared array, we'll implicitly perform a copy-on-write. 
-
-By default, once a buffer is shared, it remains forever shared. Even if the reference count is reduced to 1, we'll perform copy-on-write and the `{&unshared}` annotation will reject. The goal with this policy is early detection of erroneous conditions, e.g. race conditions with par/seq parallelism or potential for future reordering optimizations.
-
-When developers are confident in their assumption, they may use the `{&unshare}` annotation. This allows developers to indicate that a buffer should no longer be shared. Making this assumption explicit is a useful hint for static analysis. Dynamically, the annotation will validate ownership and remove the refct wrapper, returning the array to an unshared status.
-
-#### Logical Split, Seamless Append, Alignment.
-
-A logical split involves taking our array and constructing two non-overlapping arrays that point to the same underlying buffer. Logically, there is no sharing, so we can continue to update the component arrays in place. Later, if we append the two arrays along the same edge that we divided along earlier, we can transparently recombine into a single buffer.
-
-In the ideal case, our logical division is aligned with memory. When this happens, our buffers are truly independent - not just logically, but also in terms of GC. However, in the worst case, our divided buffer will share cells at each edge. We must determine whom is responsible for destruction of the shared cell.
-
-To handle this, one idea is to wrap the buffer like with do for shared buffers, except specialized for sharing edges of the array. This might look like:
-
-        (overlap, pbuff, pshareL, pshareR)
-            pshareL, pshareR: one of
-                tagged (refct, unit) 
-                unit (if no overlap)
-
-If we delete our array, we'll decref our shares of the cells at each edge. If we held the last share, we'll take ownership of the associated cell and include it in our argument to the free() function. Otherwise, we leave it to the other shareholder. If instead we recombine our arrays, we can eliminate the share between them.
-
-Alternatively, it might be better to recognize potential overlap upon destruction, and keep some extra metadata per context for tracking 'shared' cells only when destruction occurs. This is a tempting option.
-
-*Note:* The overlap object can be omitted for arrays hosted in the nursery.
-
-#### Logical Reversal
-
-Logical reversal of a chunked list is achieved flipping a bit in the tag of each array chunk (so we have a `reversed array`) together with a conventional reversal of the `pnext` list. The `size+offset` values are not modified. We simply compute our index or pop data from the opposite end of the array.
-
-We reverse *onto* a value, and simultaneously we expose the terminating value. Reversing lists serves as a basis for appending lists or accessing terminals. (Though we'll also have accelerators for those specific cases.)
 
 #### Binaries
 

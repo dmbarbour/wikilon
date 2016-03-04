@@ -30,43 +30,15 @@ int main(int argc, char const** argv) {
         return err;
     }
 
-    int const fct0 = fillct(cx);
     int tests_run = 0;
     int tests_passed = 0;
     run_tests(cx, &tests_run, &tests_passed);
-    int const fctf = fillct(cx);
 
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(e);
 
-    fprintf(stdout, u8"Available memcells: %d → %d (%s)\n"
-        , fct0, fctf
-        , ((fct0 == fctf) ? "ok" : "memleak"));
     fprintf(stdout, u8"Passed %d of %d Tests\n", tests_passed, tests_run);
     return ((tests_run == tests_passed) ? ok : err);
-}
-
-int fillct(wikrt_cx* cx) 
-{
-    // fill entire context with pairs, then free them.
-    // goal here is to exercise memory management code (coalesce, etc.)
-    // which might otherwise never trigger during testing.
-    int ct = 0;
-    wikrt_val p = WIKRT_UNIT;
-    wikrt_val v;
-    wikrt_err st;
-    do {
-        ++ct;
-        v = p;
-        st = wikrt_alloc_prod(cx, &p, WIKRT_UNIT, v);
-    } while(WIKRT_OK == st);
-    wikrt_drop(cx, v, false);
-
-    // force coalesce: large numbers represented by multi-cell objects
-    wikrt_alloc_i64(cx, &v, INT64_MIN);
-    wikrt_drop(cx, v, false);
-    
-    return (ct - 1);
 }
 
 bool test_tcx(wikrt_cx* cx) { return true; }
@@ -460,7 +432,7 @@ bool test_sealers(wikrt_cx* cx)
     char const* const lSeals[] = { ":", "abracadabra", ":m", u8"←↑→↓←↑→↓←↑→↓←↑→↓←↑→↓←"
                                  , ":cx", ":foobar", ":env", ":xyzzy" };
     size_t const nSeals = sizeof(lSeals) / sizeof(char const*);
-    assert(nSeals >= 8);
+    assert(nSeals > 4);
 
     wikrt_val v = WIKRT_UNIT;
     for(size_t ii = 0; ii < nSeals; ++ii) {
@@ -529,8 +501,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
 
     TCX(test_pkistr_small);
     TCX(test_copy_num);
-
-    // TODO: test istr, isz.
+    // TODO: test alloc_istr
 
     TCX(test_alloc_prod);
     TCX(test_copy_prod);

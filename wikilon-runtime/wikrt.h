@@ -151,13 +151,30 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *
  *   A compact representations for list-like structures `μL.((a*L)+b)`.
  *
- *   Implementation of arrays is low priority at this time, but high
- *   priority long term (critical for performance with accelerators).
- *   I'll also need specializations for binaries, texts. And maybe later
- *   for fixed-width numbers, floating point, etc..
+ *          (array, size, buffer, next)
  *
- *   WIKRT_OTAG_BLOB - binary specialization
- *   WIKRT_OTAG_TEXT - text specialization
+ *   In this case our size is in bytes, and we have an array of value
+ *   references. 
+ *
+ * WIKRT_OTAG_BINARY
+ *
+ *   A specialized array representation for small integers in (0..255).
+ *
+ *          (binary, size, buffer, next).
+ *
+ *   The header will eventually include a reversal bit (once we have
+ *   accelerators for list reversal).  
+ *
+ * WIKRT_OTAG_TEXT
+ *
+ *  A specialized array representation for texts. This is a list of valid
+ *  unicode codepoints that are also valid as ABC embedded texts.
+ *
+ *         (text, (sizeCP, sizeB), buffer, next)
+ *
+ *  Instead of a single size, we'll split 16 bits each to size in codepoints
+ *  and size in bytes. This will help accelerate indexed lookups or splits or
+ *  size computations (involving codepoint counts).
  *
  * WIKRT_OTAG_STOWAGE
  *
@@ -167,17 +184,17 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *   counting for stowed values.
  *
  *   I might need to use multiple tags for different stowage.
- *
- *   
  */
 
 #define WIKRT_OTAG_BIGINT   78   /* N */
 #define WIKRT_OTAG_DEEPSUM  83   /* S */
 #define WIKRT_OTAG_BLOCK    91   /* [ */
-#define WIKRT_OTAG_OPVAL    34   /* " */
+#define WIKRT_OTAG_OPVAL    39   /* ' */
 #define WIKRT_OTAG_SEAL     36   /* $ */
 #define WIKRT_OTAG_SEAL_SM  58   /* : */
 #define WIKRT_OTAG_ARRAY    86   /* V */
+#define WIKRT_OTAG_BINARY   56   /* 8 */
+#define WIKRT_OTAG_TEXT     34   /* " */
 #define WIKRT_OTAG_STOWAGE  64   /* @ */
 #define LOBYTE(V) ((V) & 0xFF)
 
@@ -213,6 +230,35 @@ static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
     return  (((nDigits << 1) | (positive ? 0 : 1)) << 8) | WIKRT_OTAG_BIGINT;
 }
 
+
+/** Internal variants of API calls. 
+ *
+ * This is due to the layer of indirection to handle an external rootlist and
+ * compacting GC. The internal calls do not require root values for input or output.
+ */
+wikrt_err _wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val v);
+wikrt_err _wikrt_alloc_binary(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
+wikrt_err _wikrt_read_binary(wikrt_cx*, size_t buffsz, size_t* bytesRead, uint8_t* buffer, wikrt_val* binary);
+wikrt_err _wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*, size_t);
+wikrt_err _wikrt_read_text(wikrt_cx*, size_t buffsz, size_t* bytesRead, size_t* charsRead, char* buffer, wikrt_val* text);
+wikrt_err _wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, size_t, wikrt_abc_opts);
+wikrt_err _wikrt_alloc_i32(wikrt_cx*, wikrt_val*, int32_t);
+wikrt_err _wikrt_alloc_i64(wikrt_cx*, wikrt_val*, int64_t);
+wikrt_err _wikrt_peek_i32(wikrt_cx*, wikrt_val const, int32_t*);
+wikrt_err _wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
+wikrt_err _wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*, size_t strlen);
+wikrt_err _wikrt_peek_istr(wikrt_cx*, wikrt_val const, char* buff, size_t* strlen); 
+wikrt_err _wikrt_alloc_prod(wikrt_cx*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
+wikrt_err _wikrt_split_prod(wikrt_cx*, wikrt_val p, wikrt_val* fst, wikrt_val* snd);
+wikrt_err _wikrt_alloc_sum(wikrt_cx*, wikrt_val* c, bool inRight, wikrt_val);
+wikrt_err _wikrt_split_sum(wikrt_cx*, wikrt_val c, bool* inRight, wikrt_val*);
+wikrt_err _wikrt_alloc_seal(wikrt_cx*, wikrt_val* sv, char const* s, size_t strlen, wikrt_val v); 
+wikrt_err _wikrt_split_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v);
+wikrt_err _wikrt_copy(wikrt_cx*, wikrt_val* cpy, wikrt_val const src, bool bCopyAff);
+wikrt_err _wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
+wikrt_err _wikrt_move(wikrt_cx* dest, wikrt_val*, wikrt_cx* origin, wikrt_val);
+wikrt_err _wikrt_stow(wikrt_cx*, wikrt_val*);
+
 /** @brief Stowage address is 64-bit address. 
  *
  * The lowest four bits of the address are reserved for type flags
@@ -236,9 +282,10 @@ void wikrt_db_destroy(wikrt_db*);
 void wikrt_db_flush(wikrt_db*);
 
 struct wikrt_env { 
-    wikrt_cxm          *cxmlist;  // linked list of context roots
-    pthread_mutex_t     mutex;    // shared mutex for environment
     wikrt_db           *db;
+    wikrt_cxm          *cxmlist;     // linked list of context roots
+    pthread_mutex_t     mutex;       // shared mutex for environment
+    uint32_t            cxm_created; // stat: wikrt_cx_create() count.
 };
 
 static inline void wikrt_env_lock(wikrt_env* e) {
@@ -281,6 +328,31 @@ void wikrt_fl_free(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr);
 void wikrt_fl_coalesce(void* mem, wikrt_fl*);
 void wikrt_fl_merge(void* mem, wikrt_fl* src, wikrt_fl* dst); // invalidates src
 
+/** @brief Per-context root set. 
+ *
+ * I've decided to track root set per context, mostly to simplify memory
+ * management in context of wikrt_cx_fork(). This may enable compacting
+ * collections to reduce fragmentation, or more conventional GC if I later
+ * choose to go that route.
+ *
+ * At the moment, the 'root set' is modeled separately from the context
+ * main memory. It's represented as an *array* of values. Each entry in
+ * the array is either an internal value reference, or a reference to the
+ * next node in a free-list. (The distinction is via the low-bit. Small
+ * integer representation is used for free-list references.)
+ */
+typedef struct wikrt_rs {
+    wikrt_val* ls; // array of values and indices
+    wikrt_val  fl; // free-list head
+    wikrt_size sz; // array size
+} wikrt_rs;
+
+typedef wikrt_size wikrt_rsi; // root-set index
+
+bool wikrt_rs_peek(wikrt_rs*, wikrt_val*);
+bool wikrt_rs_take(wikrt_rs*, wikrt_val*);
+bool wikrt_rs_prealloc(wikrt_rs*, wikrt_size newRootCt);
+void wikrt_rs_wrap(wikrt_rs*, wikrt_val*);
 
 /** Shared state for multi-threaded contexts. */ 
 struct wikrt_cxm {
@@ -291,14 +363,14 @@ struct wikrt_cxm {
     // for now, keeping a list of associated contexts
     wikrt_cx           *cxlist;
 
-    // shared environment for multiple contexts.
-    wikrt_env          *env;
-
     // lock for shared state within context
     pthread_mutex_t     mutex;
 
+    // shared environment for multiple contexts.
+    wikrt_env          *env;
+
     // primary context memory
-    wikrt_sizeb         size;
+    wikrt_size          size;
     void               *memory;
 
     // root free-list, shared between threads 
@@ -310,18 +382,21 @@ static inline void wikrt_cxm_lock(wikrt_cxm* cxm) {
 static inline void wikrt_cxm_unlock(wikrt_cxm* cxm) {
     pthread_mutex_unlock(&(cxm->mutex)); }
 
-
 /* The 'wikrt_cx' is effectively the thread-local storage for
  * wikilon runtime computations. It's assumed this is used from
  * only one thread.
+ *
+ * Todo: 
+ *   latent destruction of items
+ *   
  */
 struct wikrt_cx {
-    wikrt_cx           *next; // sibling context
-    wikrt_cx           *prev; // sibling context
-    wikrt_cxm          *cxm;  // shared memory structures
-
-    void               *memory; // main memory
-    wikrt_fl            fl;     // local free space
+    wikrt_cx           *next;      // sibling context
+    wikrt_cx           *prev;      // sibling context
+    wikrt_cxm          *cxm;       // shared memory structures
+    wikrt_rs            rs;        // context root-set
+    void               *memory;    // main memory
+    wikrt_fl            fl;        // local free space
 
     // statistics or metrics
     uint64_t            ct_bytes_freed; // bytes freed
@@ -329,12 +404,14 @@ struct wikrt_cx {
 };
 
 static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
-    return (wikrt_val*)(addr + ((char*)(cx->memory)));
+    return (wikrt_val*)(addr + ((char*)(cx->memory))); 
 }
+static inline wikrt_rs* wikrt_cxrs(wikrt_cx* cx) { return &(cx->rs); }
 
 bool wikrt_alloc(wikrt_cx*, wikrt_size, wikrt_addr*);
 void wikrt_free(wikrt_cx*, wikrt_size, wikrt_addr);
 bool wikrt_realloc(wikrt_cx*, wikrt_size, wikrt_addr*, wikrt_size);
+void wikrt_cx_drop_roots(wikrt_cx*);
 
 // Allocate a cell value tagged with WIKRT_O, WIKRT_P, WIKRT_PL, or WIKRT_PR
 static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* dst, 
@@ -342,7 +419,6 @@ static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* dst,
 {
     wikrt_addr addr;
     if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &addr)) { 
-        (*dst) = WIKRT_VOID; 
         return false; 
     }
     (*dst) = wikrt_tag_addr(tag, addr);
@@ -358,7 +434,6 @@ static inline bool wikrt_alloc_dcellval(wikrt_cx* cx, wikrt_val* dst,
 {
     wikrt_addr addr;
     if(!wikrt_alloc(cx, (2 * WIKRT_CELLSIZE), &addr)) { 
-        (*dst) = WIKRT_VOID; 
         return false; 
     }
     (*dst) = wikrt_tag_addr(WIKRT_O, addr);

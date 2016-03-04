@@ -15,7 +15,7 @@ static inline wikrt_fb* wikrt_pfb(void* mem, wikrt_addr a) {
 }
 
 wikrt_sc wikrt_size_class_ff(wikrt_size const sz) {
-    _Static_assert(WIKRT_FLCT_FF > 0, "code assumes WIKRT_FLCT_FF > 0");
+    _Static_assert((WIKRT_FLCT_FF > 0), "code assumes WIKRT_FLCT_FF > 0");
     int sc = (WIKRT_FLCT - 1);
     wikrt_size szt = WIKRT_FFMAX;
     while(szt >= sz) {
@@ -60,7 +60,7 @@ bool wikrt_fl_alloc_ff(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr
  */
 bool wikrt_fl_alloc(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr)
 {
-    _Static_assert(WIKRT_CELLSIZE == sizeof(wikrt_fb), "free-block should match minimum allocation");
+    _Static_assert((WIKRT_CELLSIZE == sizeof(wikrt_fb)), "free-block should match minimum allocation");
     if(sz <= WIKRT_QFSIZE) {
         wikrt_flst* const l = fl->size_class + WIKRT_QFCLASS(sz);
         if(0 != l->head) {

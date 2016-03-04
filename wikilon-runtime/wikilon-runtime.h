@@ -39,7 +39,7 @@
  *    are effective if we can divide into coarse-grained tasks. ABC
  *    easily supports par/seq parallelism. 
  * 
- *  Wikilon runtime supports all of these techniques. Further, large
+ *  Wikilon runtime shall support these techniques. Further, large
  *  value stowage comes with an integrated persistence model via LMDB.
  *  Wikilon state is represented using ABC values, which simplifies 
  *  potential reflection and development of software agents.
@@ -109,16 +109,19 @@ typedef struct wikrt_env wikrt_env;
 /** @brief Opaque structure representing substrate for computations.
  *
  * A wikrt_cx, a wikilon runtime context, represents both a space and
- * a single thread for computations. A context has implicit access to
- * a shared environment for stowage and database transactions. 
+ * a single thread for computations. The space may be shared via fork
+ * and move functions, but a wikrt_cx contains several unsynchronized
+ * structures and must be used from only one thread at a time.
  *
- * At the moment, Wikilon runtime uses a 32-bit context even on 64-bit
- * machines. This limits our context to 4GB 'active' data. However, use
- * of large-value stowage and transactions enables access to much more
- * data, essentially modeling a filesystem and virtual memory.
- * 
- * A `wikrt_cx*` must be handled in a single-threaded manner, but may
- * float between external threads if used by only one at a time. 
+ * A context tracks its implicit 'root set', the values allocated in
+ * the context and exposed via this API. The root set should be small.
+ * Values associated with a context are dropped when the context is
+ * destroyed.
+ *
+ * At the moment, Wikilon runtime uses a 32-bit region even on 64-bit
+ * machines. This limits contexts to 4GB active data. A 64-bit system
+ * could have hundreds of 4GB contexts, and a context can access much
+ * more than 4GB data via stowage (just not all at once).
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -187,8 +190,8 @@ void wikrt_env_sync(wikrt_env*);
  * 
  * A context consists mostly of one big mmap'd block of memory. The
  * valid range for context size is 4..4000 in megabyte units. This
- * space is specific to the created context, so different contexts
- * cannot generally share wikrt_val value references. 
+ * space is specific to the created context, though may be shared
+ * with other contexts via `wikrt_cx_fork()`. 
  */ 
 wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 
@@ -197,21 +200,13 @@ wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 
 /** @brief External parallelism within a context.
  *
- * A `wikrt_cx*` must be used single-threaded because it contains 
- * unsynchronized, stateful structures - such as a local free list.
- * I'd really hate to impose mutex overheads for most operations.
- * For parallel access to a context's memory, it is necessary to 
- * instead fork sibling contexts explicitly.
- * 
- * Note that wikrt_val value references remain linear in nature, and
- * must not be shared by multiple computations or threads. Only one
- * thread may own a wikrt_val at a time. However, forking contexts
- * does allow moving the value between computations, e.g. to model
- * pipeline parallelism or message passing, or background rendering.
+ * Use of `wikrt_cx_fork()` creates a context that shares the same
+ * underlying space as its parent. This means the space quota and
+ * memory fragmentation is shared, but allows very cheap movement
+ * of data (via `wikrt_move()`) into the new context.
  *
- * The shared memory underlying a context is not destroyed until
- * all forks are destroyed. Forking and destroying a context is
- * relatively cheap and lightweight.
+ * This is intended for external parallelism: asynhronous effects,
+ * pipleline models, modeling multi-threaded IO monads, etc..
  */
 wikrt_err wikrt_cx_fork(wikrt_cx*, wikrt_cx**);
 
@@ -366,13 +361,17 @@ bool wikrt_valid_token(char const* s);
  * Wikilon runtime optimizes for compact representation of common
  * value types - e.g. pairs, lists, small integers, unit, booleans,
  * (node + leaf) trees, and deep sums. Lists may be compacted further
- * into arrays, texts, and binaries.
+ * into arrays, texts, and binaries. Small integers, units, etc. are
+ * represented as constant value references.
  *
- * Wikilon runtime assumes linear value references, i.e. that there
- * is no aliasing. This enables in-place mutation while preserving
- * purely functional semantics. API calls that receive wikrt_val as
- * input will generally take ownership of the value unless indicated
- * otherwise in documentation.
+ * Wikilon runtime assumes linear value references, i.e. there is no
+ * aliasing, and a value is bound to a single context at a time. The
+ * benefit is that this enables in-place mutations while preserving
+ * purely functional semantics. (E.g. most ABC data plumbing is non
+ * allocating.) The cost is the need for deep copies of values when
+ * a value will be used more than once. There may be hidden exceptions
+ * to this rule, e.g. aliasing with reference counts, but users of
+ * this API should assume linearity for all value references.
  */ 
 typedef uint32_t wikrt_val;
 
@@ -440,7 +439,7 @@ typedef enum wikrt_vtype
 , WIKRT_VTYPE_STOWED      // value hidden
 } wikrt_vtype;
 
-wikrt_err wikrt_peek_type(wikrt_cx*, wikrt_vtype* out, wikrt_val const);
+wikrt_err wikrt_peek_type(wikrt_cx*, wikrt_vtype* out, wikrt_val);
 
   ///////////////////////////
  // DATA INPUT AND OUTPUT //
@@ -506,9 +505,12 @@ wikrt_err wikrt_alloc_i64(wikrt_cx*, wikrt_val*, int64_t);
  *
  * The following have 'copy' semantics, i.e. the integer value referenced
  * is copied into the target buffer but remains available in the context.
+ * In case of WIKRT_BUFFSZ errors, we'll appropriately return INT32_MIN,
+ * INT32_MAX, INT64_MIN, or INT64_MAX based on whether we've overflowed or
+ * underflowed.
  */
-wikrt_err wikrt_peek_i32(wikrt_cx*, wikrt_val const, int32_t*);
-wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
+wikrt_err wikrt_peek_i32(wikrt_cx*, wikrt_val, int32_t*);
+wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val, int64_t*);
 
 /** @brief Allocate and read arbitrary integers.
  *
@@ -524,7 +526,7 @@ wikrt_err wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
  * strlen reference returns the minimum buffer size.
  */
 wikrt_err wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*, size_t strlen);
-wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val const, char* buff, size_t* strlen); 
+wikrt_err wikrt_peek_istr(wikrt_cx*, wikrt_val, char* buff, size_t* strlen); 
 
 /** @brief Allocate or disassemble basic product types (pairs of values). */
 wikrt_err wikrt_alloc_prod(wikrt_cx*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
@@ -577,23 +579,35 @@ wikrt_err wikrt_split_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v);
  * affine will not be copyable. But the C API is free to ignore such
  * constraints but must do so explicitly by indicating `bCopyAff`. 
  */
-wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* cpy, wikrt_val const src, bool bCopyAff);
+wikrt_err wikrt_copy(wikrt_cx*, wikrt_val* cpy, wikrt_val src, bool bCopyAff);
 
 /** @brief Drop a value.
  *
  * When done with a value, drop it. This is roughly equivalent to use
- * of `free()` in C. You may drop any value you own. Of course, if you
- * are about to destroy or reset the context, you may safely skip the
- * overheads of freeing individual values.
+ * of `free()` in C. However, each context tracks its own root set of
+ * values. Destroying a context will implicitly drop remaining bound
+ * values.
  *
- * Users of this C API may freely ignore the substructural 'relevant' 
- * constraint by indicating bDropRel. If not set, we may return an error
- * now or later (in case of pending computations).  
+ * Developers may freely ignore substructural 'relevance' constraints 
+ * by indicating bDropRel. 
  */
 wikrt_err wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
 
-// TODO: a move function, copy a value between contexts with same environment?
-//  Will introduce if need exists...
+/** @brief Move a value between contexts.
+ *
+ * A value (a wikrt_val) returned via this API is bound to the context in
+ * which it was allocated or computed. Developers should use `wikrt_move()`
+ * to move a value to another context, even if created by `wikrt_cx_fork()`.
+ *
+ * Moving a value between forks is a shallow operation, though it does bind
+ * the value to a different context
+ *
+ * At the moment, moving between forks is a NOP, but in the future we may
+ * track a root set per context and would need to twiddle a little metadata.
+ * Moving between contexts with separate memory spaces involves a deep copy
+ * one one side and a drop on the other.
+ */
+wikrt_err wikrt_move(wikrt_cx* dest, wikrt_val*, wikrt_cx* origin, wikrt_val);
 
 /** @brief Mark a value for stowage.
  *
@@ -638,7 +652,7 @@ wikrt_err wikrt_stow(wikrt_cx*, wikrt_val*);
 wikrt_err wikrt_alloc_stream(wikrt_cx*, wikrt_val* s, wikrt_val* binary);
 wikrt_err wikrt_addend_stream(wikrt_cx*, wikrt_val s, uint8_t const* chunk, size_t size);
 wikrt_err wikrt_end_stream(wikrt_cx*, wikrt_val s);
-wikrt_err wikrt_awaiting_stream(wikrt_cx*, bool* bWaiting, wikrt_val const s);
+wikrt_err wikrt_awaiting_stream(wikrt_cx*, bool* bWaiting, wikrt_val s);
 
 
 // TODO: consider integrating abc-base16 compression for `bdfghjkmnpqstxyz`
@@ -739,7 +753,7 @@ wikrt_err wikrt_idiv(wikrt_cx*, wikrt_val dividend, wikrt_val divisor,
 typedef enum wikrt_ord { WIKRT_LT = -1, WIKRT_EQ = 0, WIKRT_GT = 1 } wikrt_ord;
 
 /** @brief Integer comparison, non-destructive. */
-wikrt_err wikrt_icmp(wikrt_cx*, wikrt_val const, wikrt_ord*, wikrt_val const);
+wikrt_err wikrt_icmp(wikrt_cx*, wikrt_val, wikrt_ord*, wikrt_val);
 
 
 // later I might introduce API-level support for:
