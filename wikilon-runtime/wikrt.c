@@ -283,7 +283,7 @@ static inline void wikrt_rs_free(wikrt_rs* rs, wikrt_rsi ix) {
 /** Unwrap a root value non-destructively. */
 bool wikrt_rs_peek(wikrt_rs* rs, wikrt_val* v) 
 {
-    if(wikrt_copy_shallow(*v)) { return true; }
+    if(wikrt_copy_shallow(*v)) { return (WIKRT_VOID != (*v)); }
     wikrt_rsi const ix = wikrt_v2rsi(*v);
     if(!wikrt_rs_valid(rs, ix)) { (*v) = WIKRT_VOID; return false; }
     (*v) = rs->ls[ix];
@@ -293,7 +293,7 @@ bool wikrt_rs_peek(wikrt_rs* rs, wikrt_val* v)
 /** Unwrap a root value and remove the root. */
 bool wikrt_rs_take(wikrt_rs* rs, wikrt_val* v)
 {
-    if(wikrt_copy_shallow(*v)) { return true; }
+    if(wikrt_copy_shallow(*v)) { return (WIKRT_VOID != (*v)); }
     wikrt_rsi const ix = wikrt_v2rsi(*v);
     if(!wikrt_rs_valid(rs,ix)) { (*v) = WIKRT_VOID; return false; }
     (*v) = rs->ls[ix];
