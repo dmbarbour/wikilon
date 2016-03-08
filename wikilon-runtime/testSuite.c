@@ -43,58 +43,42 @@ int main(int argc, char const** argv) {
 
 bool test_tcx(wikrt_cx* cx) { return true; }
 
-bool test_alloc_true(wikrt_cx* cx) 
+bool match_vtype(wikrt_cx* cx, wikrt_vref const* v, wikrt_vtype const expected_type) 
 {
-    wikrt_val uR;
-    return (WIKRT_OK == wikrt_alloc_sum(cx, &uR, true, WIKRT_UNIT)) &&
-        (WIKRT_UNIT_INR == uR);
+    wikrt_vtype type;
+    return (WIKRT_OK == wikrt_peek_type(cx, &type, v)) 
+        && (expected_type == type);
 }
 
-bool test_alloc_false(wikrt_cx* cx) 
-{
-    wikrt_val uL;
-    return (WIKRT_OK == wikrt_alloc_sum(cx, &uL, false, WIKRT_UNIT)) &&
-        (WIKRT_UNIT_INL == uL);
+bool drop_unit(wikrt_cx* cx, wikrt_vref* v) {
+    return (match_vtype(cx, v, WIKRT_VTYPE_UNIT))
+        && (WIKRT_OK == wikrt_drop(cx, v, false));
 }
 
-bool test_split_true(wikrt_cx* cx)
+bool test_unit(wikrt_cx* cx) 
 {
-    bool b; wikrt_val u;
-    return (WIKRT_OK == wikrt_split_sum(cx, WIKRT_UNIT_INR, &b, &u)) &&
-        (b) && (WIKRT_UNIT == u);
+    wikrt_vref* v;
+    return (WIKRT_OK == wikrt_alloc_unit(cx, &v))
+        && (drop_unit(cx,v));
 }
 
-bool test_split_false(wikrt_cx* cx) 
+static inline bool test_bool(wikrt_cx* cx, bool const bTest) 
 {
-    bool b; wikrt_val u;
-    return (WIKRT_OK == wikrt_split_sum(cx, WIKRT_UNIT_INL, &b, &u)) &&
-        (!b) && (WIKRT_UNIT == u);
+    bool b; 
+    wikrt_vref* v;
+    return (WIKRT_OK == wikrt_alloc_bool(cx, &v, bTest))
+        && match_vtype(cx, v, WIKRT_VTYPE_SUM)
+        && (WIKRT_OK == wikrt_split_sum(cx, v, &b, &v))
+        && (b == bTest) 
+        && drop_unit(cx, v);
 }
 
-bool test_vtype_unit(wikrt_cx* cx) 
-{
-    wikrt_vtype t;
-    return (WIKRT_OK == wikrt_peek_type(cx, &t, WIKRT_UNIT)) &&
-        (WIKRT_VTYPE_UNIT == t);
-}
-
-bool test_vtype_false(wikrt_cx* cx) 
-{
-    wikrt_vtype t;
-    return (WIKRT_OK == wikrt_peek_type(cx, &t, WIKRT_UNIT_INL)) &&
-        (WIKRT_VTYPE_SUM == t);
-}
-
-bool test_vtype_true(wikrt_cx* cx) 
-{
-    wikrt_vtype t;
-    return (WIKRT_OK == wikrt_peek_type(cx, &t, WIKRT_UNIT_INR)) &&
-        (WIKRT_VTYPE_SUM == t);
-}
+static inline bool test_true(wikrt_cx* cx) { return test_bool(cx, true); }
+static inline bool test_false(wikrt_cx* cx) { return test_bool(cx, false); }
 
 bool test_i32(wikrt_cx* cx, int32_t const iTest) 
 {
-    wikrt_val v; wikrt_vtype t; int32_t i;
+    wikrt_vref* v; wikrt_vtype t; int32_t i;
     int const stAlloc = wikrt_alloc_i32(cx, &v, iTest);
     int const stType = wikrt_peek_type(cx, &t, v);
     int const stPeek = wikrt_peek_i32(cx, v, &i);
@@ -108,28 +92,28 @@ bool test_i32(wikrt_cx* cx, int32_t const iTest)
     return ok;
 }
 
-static inline bool test_alloc_i32_max(wikrt_cx* cx) {
+static inline bool test_i32_max(wikrt_cx* cx) {
     return test_i32(cx, INT32_MAX); }
-static inline bool test_alloc_i32_zero(wikrt_cx* cx) {
+static inline bool test_i32_zero(wikrt_cx* cx) {
     return test_i32(cx, 0); }
-static inline bool test_alloc_i32_min(wikrt_cx* cx) {
+static inline bool test_i32_min(wikrt_cx* cx) {
     return test_i32(cx, INT32_MIN); }
-static inline bool test_alloc_i32_nearmin(wikrt_cx* cx) {
+static inline bool test_i32_nearmin(wikrt_cx* cx) {
     return test_i32(cx, (-INT32_MAX)); }
 
 // uses knowledge of internal representation
-static inline bool test_alloc_i32_smallint_min(wikrt_cx* cx) {
+static inline bool test_i32_smallint_min(wikrt_cx* cx) {
     return test_i32(cx, 0 - ((1<<30) - 1) ); }
-static inline bool test_alloc_i32_smallint_max(wikrt_cx* cx) {
+static inline bool test_i32_smallint_max(wikrt_cx* cx) {
     return test_i32(cx, ((1 << 30) - 1) ); }
-static inline bool test_alloc_i32_largeint_minpos(wikrt_cx* cx) {
+static inline bool test_i32_largeint_minpos(wikrt_cx* cx) {
     return test_i32(cx, (1 << 30)); }
-static inline bool test_alloc_i32_largeint_maxneg(wikrt_cx* cx) {
+static inline bool test_i32_largeint_maxneg(wikrt_cx* cx) {
     return test_i32(cx, 0 - (1 << 30)); }
 
 bool test_i64(wikrt_cx* cx, int64_t const iTest) 
 {
-    wikrt_val v; wikrt_vtype t; int64_t i;
+    wikrt_vref* v; wikrt_vtype t; int64_t i;
     int const stAlloc = wikrt_alloc_i64(cx, &v, iTest);
     int const stType = wikrt_peek_type(cx, &t, v);
     int const stPeek = wikrt_peek_i64(cx, v, &i);
@@ -143,61 +127,61 @@ bool test_i64(wikrt_cx* cx, int64_t const iTest)
     return ok;
 }
 
-static inline bool test_alloc_i64_max(wikrt_cx* cx) {
+static inline bool test_i64_max(wikrt_cx* cx) {
     return test_i64(cx, INT64_MAX); }
-static inline bool test_alloc_i64_zero(wikrt_cx* cx) {
+static inline bool test_i64_zero(wikrt_cx* cx) {
     return test_i64(cx, 0); }
-static inline bool test_alloc_i64_min(wikrt_cx* cx) {
+static inline bool test_i64_min(wikrt_cx* cx) {
     return test_i64(cx, INT64_MIN); }
-static inline bool test_alloc_i64_nearmin(wikrt_cx* cx) {
+static inline bool test_i64_nearmin(wikrt_cx* cx) {
     return test_i64(cx, (-INT64_MAX)); }
 
 // using knowledge of internal representations
-static inline bool test_alloc_i64_2digit_min(wikrt_cx* cx) {
+static inline bool test_i64_2digit_min(wikrt_cx* cx) {
     return test_i64(cx,  -999999999999999999); }
-static inline bool test_alloc_i64_2digit_max(wikrt_cx* cx) {
+static inline bool test_i64_2digit_max(wikrt_cx* cx) {
     return test_i64(cx,   999999999999999999); }
-static inline bool test_alloc_i64_3digit_minpos(wikrt_cx* cx) {
+static inline bool test_i64_3digit_minpos(wikrt_cx* cx) {
     return test_i64(cx,  1000000000000000000); }
-static inline bool test_alloc_i64_3digit_maxneg(wikrt_cx* cx) {
+static inline bool test_i64_3digit_maxneg(wikrt_cx* cx) {
     return test_i64(cx, -1000000000000000000); }
 
 /* grow a simple stack of numbers (count .. 1) for testing purposes. */
-void numstack(wikrt_cx* cx, wikrt_val* stack, int32_t count) 
+void numstack(wikrt_cx* cx, wikrt_vref** stack, int32_t count) 
 {
+    wikrt_alloc_unit(cx, stack);
     for(int32_t ii = 1; ii <= count; ++ii) {
-        wikrt_val num;
+        wikrt_vref* num;
         wikrt_alloc_i32(cx, &num, ii);
         wikrt_alloc_prod(cx, stack, num, (*stack));
     }
 }
 
 /* destroy a stack and compute its sum. */
-void sumstack(wikrt_cx* cx, wikrt_val* stack, int64_t* sum)
+void sumstack(wikrt_cx* cx, wikrt_vref** stack, int64_t* sum)
 {
-    wikrt_vtype type;
-    while((WIKRT_OK == wikrt_peek_type(cx, &type, *stack)) &&
-          (WIKRT_VTYPE_PRODUCT == type))
+    while(match_vtype(cx, *stack, WIKRT_VTYPE_PRODUCT)) 
     {
-        wikrt_val elem;  wikrt_split_prod(cx, (*stack), &elem, stack);
+        wikrt_vref* elem;  wikrt_split_prod(cx, (*stack), &elem, stack);
         int32_t elemVal; wikrt_peek_i32(cx, elem, &elemVal);
         wikrt_drop(cx, elem, false);
         *sum += elemVal;
     }
+    drop_unit(cx, *stack);
 }
 
 
 bool test_alloc_prod(wikrt_cx* cx) 
 {
     int32_t const ct = 111111;
-    wikrt_val stack = WIKRT_UNIT;
+    wikrt_vref* stack;
     numstack(cx, &stack, ct);
 
     int64_t const expected_sum = (ct * (int64_t)(ct + 1)) / 2;
     int64_t actual_sum = 0;
     sumstack(cx, &stack, &actual_sum);
 
-    bool const ok = (expected_sum == actual_sum) && (WIKRT_UNIT == stack);
+    bool const ok = (expected_sum == actual_sum);
     return ok;
 }
 
@@ -208,26 +192,23 @@ bool test_copy_prod(wikrt_cx* cx)
     int64_t sumA = 0;
     int64_t sumB = 0;
     int64_t sumC = 0;
-    wikrt_val a, b, c;
-    a = WIKRT_UNIT_INR;
+    wikrt_vref* a, *b, *c;
     numstack(cx, &a, ct);
     wikrt_copy(cx, &b, a, false);
     wikrt_copy(cx, &c, b, false);
     sumstack(cx, &a, &sumA);
     sumstack(cx, &b, &sumB);
     sumstack(cx, &c, &sumC);
-    bool const ok = (sumA == sumB) && (sumB == sumC) &&
-                    (sumC == expected_sum) &&
-                    (WIKRT_UNIT_INR == a) &&
-                    (WIKRT_UNIT_INR == b) &&
-                    (WIKRT_UNIT_INR == c);
+    bool const ok = (sumA == sumB) 
+                 && (sumB == sumC) 
+                 && (sumC == expected_sum);
     return ok;
 }
 
 /** Create a deep sum from a string of type (L|R)*. */
-static inline void deepsum_path(wikrt_cx* cx, char const* s, wikrt_val* v)
+static inline void deepsum_path(wikrt_cx* cx, char const* s, wikrt_vref** v)
 {
-
+    wikrt_alloc_unit(cx, v);
     size_t len = strlen(s);
     while(len > 0) {
         char const c = s[--len];
@@ -236,7 +217,7 @@ static inline void deepsum_path(wikrt_cx* cx, char const* s, wikrt_val* v)
 }
 
 // destroys val
-bool dismantle_deepsum_path(wikrt_cx* cx, char const* const sumstr, wikrt_val* v) 
+bool dismantle_deepsum_path(wikrt_cx* cx, char const* const sumstr, wikrt_vref** v) 
 {
     bool ok = true;
     char const* ss = sumstr;
@@ -247,14 +228,14 @@ bool dismantle_deepsum_path(wikrt_cx* cx, char const* const sumstr, wikrt_val* v
         wikrt_err const st = wikrt_split_sum(cx, (*v), &actual_inR, v);
         ok = (WIKRT_OK == st) && (actual_inR == expected_inR);
     }
-    return ok;
+    return ok && drop_unit(cx, *v);
 }
 
 bool test_deepsum_str(wikrt_cx* cx, char const* const sumstr) 
 {
-    wikrt_val v = WIKRT_UNIT;
+    wikrt_vref* v;
     deepsum_path(cx, sumstr, &v);
-    bool const ok = dismantle_deepsum_path(cx, sumstr, &v) && (WIKRT_UNIT == v);
+    bool const ok = dismantle_deepsum_path(cx, sumstr, &v);
     return ok;
 }
 
@@ -304,20 +285,19 @@ bool test_copy_deepsum(wikrt_cx* cx)
     size_t const nChars = 8000;
     char buff[nChars + 1];
     deepsum_prng_string(buff, 0, nChars);
-    
-    wikrt_val v = WIKRT_UNIT;
+
+    wikrt_vref* v;    
     deepsum_path(cx, buff, &v);
-    wikrt_val vcpy = WIKRT_UNIT;
+    wikrt_vref* vcpy;
     bool ok = (WIKRT_OK == wikrt_copy(cx, &vcpy, v, false))
             && dismantle_deepsum_path(cx, buff, &v)
-            && dismantle_deepsum_path(cx, buff, &vcpy)
-            && (WIKRT_UNIT == v) && (WIKRT_UNIT == vcpy);
+            && dismantle_deepsum_path(cx, buff, &vcpy);
     return ok;
 }
 
 bool test_pkistr_s(wikrt_cx* cx, int64_t n, char const* const nstr) 
 {
-    wikrt_val v;
+    wikrt_vref* v;
     wikrt_alloc_i64(cx, &v, n);
     size_t len = 0;
     wikrt_peek_istr(cx, v, NULL, &len); // obtain string size
@@ -367,7 +347,7 @@ bool test_pkistr_small(wikrt_cx* cx)
 }
 
 bool test_copy_i64(wikrt_cx* cx, int64_t const test) {
-    wikrt_val i1, i2;
+    wikrt_vref* i1, *i2;
     wikrt_alloc_i64(cx, &i1, test);
     wikrt_copy(cx, &i2, i1, false);
     int64_t n;
@@ -434,7 +414,8 @@ bool test_sealers(wikrt_cx* cx)
     size_t const nSeals = sizeof(lSeals) / sizeof(char const*);
     assert(nSeals > 4);
 
-    wikrt_val v = WIKRT_UNIT;
+    wikrt_vref* v;
+    wikrt_alloc_unit(cx, &v);
     for(size_t ii = 0; ii < nSeals; ++ii) {
         char const* s = lSeals[ii];
         wikrt_alloc_seal(cx, &v, s, strlen(s), v);
@@ -442,7 +423,7 @@ bool test_sealers(wikrt_cx* cx)
 
     // validate copy and drop of sealed values
     for(size_t ii = 0; ii < 100; ++ii) {
-        wikrt_val tmp = v;
+        wikrt_vref* tmp = v;
         wikrt_copy(cx, &v, tmp, false);
         wikrt_drop(cx, tmp, false);
     }
@@ -457,7 +438,7 @@ bool test_sealers(wikrt_cx* cx)
         }
     }
     
-    return (WIKRT_UNIT == v);
+    return drop_unit(cx, v);
 }
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
@@ -474,30 +455,26 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     }
     
     TCX(test_tcx);
-    TCX(test_alloc_false);
-    TCX(test_alloc_true);
-    TCX(test_split_false);
-    TCX(test_split_true);
-    TCX(test_vtype_unit);
-    TCX(test_vtype_true);
-    TCX(test_vtype_false);
+    TCX(test_unit);
+    TCX(test_false);
+    TCX(test_true);
 
-    TCX(test_alloc_i32_min);
-    TCX(test_alloc_i32_nearmin);
-    TCX(test_alloc_i32_zero);
-    TCX(test_alloc_i32_max);
-    TCX(test_alloc_i32_smallint_min);
-    TCX(test_alloc_i32_smallint_max);
-    TCX(test_alloc_i32_largeint_minpos);
-    TCX(test_alloc_i32_largeint_maxneg);
-    TCX(test_alloc_i64_min);
-    TCX(test_alloc_i64_nearmin);
-    TCX(test_alloc_i64_zero);
-    TCX(test_alloc_i64_max);
-    TCX(test_alloc_i64_2digit_min);
-    TCX(test_alloc_i64_2digit_max);
-    TCX(test_alloc_i64_3digit_minpos);
-    TCX(test_alloc_i64_3digit_maxneg);
+    TCX(test_i32_min);
+    TCX(test_i32_nearmin);
+    TCX(test_i32_zero);
+    TCX(test_i32_max);
+    TCX(test_i32_smallint_min);
+    TCX(test_i32_smallint_max);
+    TCX(test_i32_largeint_minpos);
+    TCX(test_i32_largeint_maxneg);
+    TCX(test_i64_min);
+    TCX(test_i64_nearmin);
+    TCX(test_i64_zero);
+    TCX(test_i64_max);
+    TCX(test_i64_2digit_min);
+    TCX(test_i64_2digit_max);
+    TCX(test_i64_3digit_minpos);
+    TCX(test_i64_3digit_maxneg);
 
     TCX(test_pkistr_small);
     TCX(test_copy_num);

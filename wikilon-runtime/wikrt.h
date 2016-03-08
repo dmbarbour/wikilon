@@ -2,15 +2,19 @@
  */
 #pragma once
 
+#include "wikilon-runtime.h"
+#include "lmdb/lmdb.h"
+#include "utf8.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stddef.h>
 #include <pthread.h>
 
-#include "lmdb/lmdb.h"
-#include "utf8.h"
-#include "wikilon-runtime.h"
+
+/** Value references internal to a context. */
+typedef uint32_t wikrt_val;
 
 /** size within a context; documents a number of bytes */
 typedef wikrt_val wikrt_size;
@@ -38,6 +42,9 @@ typedef struct wikrt_db wikrt_db;
 #define WIKRT_PAGESIZE (1 << 14)
 #define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
 #define WIKRT_THREADSZ (WIKRT_PAGESIZE << 7) 
+
+// root set management
+#define WIKRT_ROOTSET_SIZE 31 // max number of root values
 
 // free list management
 #define WIKRT_FLCT_QF 16 // quick-fit lists (sep by cell size)
@@ -77,6 +84,12 @@ typedef struct wikrt_db wikrt_db;
 #define WIKRT_P             3
 #define WIKRT_PL            5
 #define WIKRT_PR            7
+
+// address zero 
+#define WIKRT_VOID      WIKRT_O
+#define WIKRT_UNIT      WIKRT_P
+#define WIKRT_UNIT_INL  WIKRT_PL
+#define WIKRT_UNIT_INR  WIKRT_PR
 
 #define WIKRT_MASK_TAG      7
 #define WIKRT_MASK_ADDR     (~WIKRT_MASK_TAG)
@@ -258,7 +271,7 @@ wikrt_err _wikrt_alloc_sum(wikrt_cx*, wikrt_val* c, bool inRight, wikrt_val);
 wikrt_err _wikrt_split_sum(wikrt_cx*, wikrt_val c, bool* inRight, wikrt_val*);
 wikrt_err _wikrt_alloc_seal(wikrt_cx*, wikrt_val* sv, char const* s, size_t strlen, wikrt_val v); 
 wikrt_err _wikrt_split_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v);
-wikrt_err _wikrt_copy(wikrt_cx*, wikrt_val* cpy, wikrt_val const src, bool bCopyAff);
+wikrt_err _wikrt_remote_copy(wikrt_cx* dcx, wikrt_val* dv, wikrt_cx const* ocx, wikrt_val ov, bool const bCopyAff);
 wikrt_err _wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
 wikrt_err _wikrt_move(wikrt_cx* dest, wikrt_val*, wikrt_cx* origin, wikrt_val);
 wikrt_err _wikrt_stow(wikrt_cx*, wikrt_val*);
@@ -339,24 +352,15 @@ void wikrt_fl_merge(void* mem, wikrt_fl* src, wikrt_fl* dst); // invalidates src
  * collections to reduce fragmentation, or more conventional GC if I later
  * choose to go that route.
  *
- * At the moment, the 'root set' is modeled separately from the context
- * main memory. It's represented as an *array* of values. Each entry in
- * the array is either an internal value reference, or a reference to the
- * next node in a free-list. (The distinction is via the low-bit. Small
- * integer representation is used for free-list references.)
+ * At the moment, the 'root set' is fixed-width per context. This greatly
+ * reduces indirection overheads, and works for all Wikilon use cases.
  */
 typedef struct wikrt_rs {
-    wikrt_val* ls; // array of values and indices
-    wikrt_val  fl; // free-list head
-    wikrt_size sz; // array size
+    wikrt_val ls[WIKRT_ROOTSET_SIZE];
+    wikrt_val fl; // free-list head
+    // TODO: I could easily track a little extra data to guard
+    // against accidental reuse of values. 
 } wikrt_rs;
-
-typedef wikrt_size wikrt_rsi; // root-set index
-
-bool wikrt_rs_peek(wikrt_rs*, wikrt_val*);
-bool wikrt_rs_take(wikrt_rs*, wikrt_val*);
-bool wikrt_rs_prealloc(wikrt_rs*, wikrt_size newRootCt);
-void wikrt_rs_wrap(wikrt_rs*, wikrt_val*);
 
 /** Shared state for multi-threaded contexts. */ 
 struct wikrt_cxm {
@@ -395,12 +399,12 @@ static inline void wikrt_cxm_unlock(wikrt_cxm* cxm) {
  *   
  */
 struct wikrt_cx {
-    wikrt_cx           *next;      // sibling context
-    wikrt_cx           *prev;      // sibling context
-    wikrt_cxm          *cxm;       // shared memory structures
-    wikrt_rs            rs;        // context root-set
-    void               *memory;    // main memory
-    wikrt_fl            fl;        // local free space
+    wikrt_cx           *next;       // sibling context
+    wikrt_cx           *prev;       // sibling context
+    wikrt_cxm          *cxm;        // shared memory structures
+    wikrt_rs            rs;         // context root-set
+    void               *memory;     // main memory
+    wikrt_fl            fl;         // local free space
 
     // statistics or metrics
     uint64_t            ct_bytes_freed; // bytes freed
@@ -410,7 +414,6 @@ struct wikrt_cx {
 static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->memory))); 
 }
-static inline wikrt_rs* wikrt_cxrs(wikrt_cx* cx) { return &(cx->rs); }
 
 bool wikrt_alloc(wikrt_cx*, wikrt_size, wikrt_addr*);
 void wikrt_free(wikrt_cx*, wikrt_size, wikrt_addr);

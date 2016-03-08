@@ -16,6 +16,9 @@
 
     wikrt_valid_token;
 
+    wikrt_alloc_unit;
+    wikrt_alloc_bool;
+
     wikrt_alloc_stream;
     wikrt_addend_stream;
     wikrt_end_stream;
@@ -53,6 +56,7 @@
     wikrt_drop;
     wikrt_move;
     wikrt_stow;
+    wikrt_remote_copy;
 
     wikrt_alloc_eval;
     wikrt_step_eval;
