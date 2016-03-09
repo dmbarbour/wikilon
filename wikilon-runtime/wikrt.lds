@@ -40,29 +40,30 @@
     wikrt_sum_distrib;
     wikrt_sum_factor;
 
-    wikrt_alloc_unit;
-    wikrt_split_unit;
+    wikrt_intro_unit;
+    wikrt_elim_unit;
     
-    wikrt_alloc_sum;
-    wikrt_split_sum;
+    wikrt_wrap_sum;
+    wikrt_unwrap_sum;
+    wikrt_unwrap_match_sum;
 
-    wikrt_alloc_i32;
-    wikrt_alloc_i64;
+    wikrt_intro_i32;
+    wikrt_intro_i64;
     wikrt_peek_i32;
     wikrt_peek_i64;
-    wikrt_alloc_istr;
+    wikrt_intro_istr;
     wikrt_peek_istr;
 
-    wikrt_alloc_binary;
+    wikrt_intro_binary;
     wikrt_read_binary;
     
-    wikrt_alloc_text;
+    wikrt_intro_text;
     wikrt_read_text;
 
-    wikrt_alloc_block;
+    wikrt_intro_block;
 
-    wikrt_alloc_seal;
-    wikrt_split_seal;
+    wikrt_wrap_seal;
+    wikrt_unwrap_seal;
 
     wikrt_apply;
     wikrt_step_eval;

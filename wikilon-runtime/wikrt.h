@@ -19,6 +19,7 @@ typedef uint32_t wikrt_val;
 /** size within a context; documents a number of bytes */
 typedef wikrt_val wikrt_size;
 
+
 /** size buffered to one cell (i.e. 8 bytes for 32-bit context) */
 typedef wikrt_size wikrt_sizeb;
 
@@ -41,7 +42,6 @@ typedef struct wikrt_db wikrt_db;
 #define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
 #define WIKRT_PAGESIZE (1 << 14)
 #define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
-#define WIKRT_THREADSZ (WIKRT_PAGESIZE << 7) 
 
 // root set management
 #define WIKRT_ROOTSET_SIZE 31 // max number of root values
@@ -53,6 +53,7 @@ typedef struct wikrt_db wikrt_db;
 #define WIKRT_QFSIZE (WIKRT_FLCT_QF * WIKRT_CELLSIZE)
 #define WIKRT_FFMAX  (WIKRT_QFSIZE * (1 << (WIKRT_FLCT_FF - 1)))
 #define WIKRT_QFCLASS(sz) ((sz - 1) / WIKRT_CELLSIZE)
+#define WIKRT_FREE_THRESH (WIKRT_PAGESIZE << 7)
 
 // for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
@@ -240,8 +241,8 @@ static inline bool wikrt_otag_seal_sm(wikrt_val v) { return (WIKRT_OTAG_SEAL_SM 
 static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
 static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
 
-static inline bool wikrt_block_rel(wikrt_val v) { return (0 != (WIKRT_BLOCK_RELEVANT & v)); }
-static inline bool wikrt_block_aff(wikrt_val v) { return (0 != (WIKRT_BLOCK_AFFINE & v)); }
+static inline bool wikrt_block_is_rel(wikrt_val v) { return (0 != (WIKRT_BLOCK_RELEVANT & v)); }
+static inline bool wikrt_block_is_aff(wikrt_val v) { return (0 != (WIKRT_BLOCK_AFFINE & v)); }
 
 static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
     return  (((nDigits << 1) | (positive ? 0 : 1)) << 8) | WIKRT_OTAG_BIGINT;
@@ -327,10 +328,13 @@ typedef struct wikrt_flst {
  * last element free'd is the first allocated. Coalescing is not done
  * except by explicit call.
  *
- * TODO: I'd like to enable a bump-pointer nursery memory allocation
- * arena, but this requires knowledge of roots, or external references
- * into the arena. It may be something I can enable in a limited context
- * such as a particular wikrt_eval computation.
+ * Thoughts: I think this is not optimal for Wikilon runtime. I would
+ * like to try a bump-pointer allocator with a separate free-list that
+ * can be coalesced as needed. This could be combined with a shared
+ * page-level allocator, so free space is eventually turned into free
+ * pages.
+ *
+ * But for now, I'll move forward with the current implementation.
  */
 typedef struct wikrt_fl {
     wikrt_size free_bytes;
@@ -344,23 +348,6 @@ bool wikrt_fl_grow_inplace(void* mem, wikrt_sizeb memsz, wikrt_fl*, wikrt_sizeb 
 void wikrt_fl_free(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr);
 void wikrt_fl_coalesce(void* mem, wikrt_fl*);
 void wikrt_fl_merge(void* mem, wikrt_fl* src, wikrt_fl* dst); // invalidates src
-
-/** @brief Per-context root set. 
- *
- * I've decided to track root set per context, mostly to simplify memory
- * management in context of wikrt_cx_fork(). This may enable compacting
- * collections to reduce fragmentation, or more conventional GC if I later
- * choose to go that route.
- *
- * At the moment, the 'root set' is fixed-width per context. This greatly
- * reduces indirection overheads, and works for all Wikilon use cases.
- */
-typedef struct wikrt_rs {
-    wikrt_val ls[WIKRT_ROOTSET_SIZE];
-    wikrt_val fl; // free-list head
-    // TODO: I could easily track a little extra data to guard
-    // against accidental reuse of values. 
-} wikrt_rs;
 
 /** Shared state for multi-threaded contexts. */ 
 struct wikrt_cxm {
@@ -402,8 +389,9 @@ struct wikrt_cx {
     wikrt_cx           *next;       // sibling context
     wikrt_cx           *prev;       // sibling context
     wikrt_cxm          *cxm;        // shared memory structures
-    wikrt_rs            rs;         // context root-set
     void               *memory;     // main memory
+    wikrt_val           val;        // context's held value
+    //wikrt_txn           txn;        // context's transaction
     wikrt_fl            fl;         // local free space
 
     // statistics or metrics

@@ -56,6 +56,8 @@ I can track a root-set or favor an implicit value per context. Either would allo
 
 Latent destruction of larger values is a related, viable option, one that could greatly improve destroy/cleanup performance for large contexts, albeit is perhaps limited to destruction that doesn't concern itself with substructural properties (like relevance).
 
+*Idea:* Allocate bump-pointer, then use a single free-list. When a bump-pointer allocation fails, free the remainder of it. When our free list is large enough, coalesce it into large free-chunks and consider copying the context value to eliminate fragmentation. (Internal fragmentation, then, is much less of an issue because I can defrag.)
+
 ## Representations
 
 Memory will be aligned for allocation of two words. With 32-bit words, this gives us 3 tag bits in each pointer. Small numbers and a few small constants are also represented.

@@ -2,11 +2,254 @@
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
+#include <sys/mman.h>
+#include <errno.h>
 
 #include "wikrt.h"
 
-
 void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz); 
+static void wikrt_cx_init(wikrt_cxm*, wikrt_cx*);
+
+char const* wikrt_abcd_operators() {
+    // currently just pure ABC...
+    return u8"lrwzvcLRWZVC%^ \n$o'kf#1234567890+*-QG?DFMK";
+}
+
+char const* wikrt_abcd_expansion(uint32_t opcode) { switch(opcode) {
+    case ABC_PROD_ASSOCL: return "l";
+    case ABC_PROD_ASSOCR: return "r";
+    case ABC_PROD_W_SWAP: return "w";
+    case ABC_PROD_Z_SWAP: return "z";
+    case ABC_PROD_INTRO1: return "v";
+    case ABC_PROD_ELIM1:  return "c";
+    case ABC_SUM_ASSOCL:  return "L";
+    case ABC_SUM_ASSOCR:  return "R";
+    case ABC_SUM_W_SWAP:  return "W";
+    case ABC_SUM_Z_SWAP:  return "Z";
+    case ABC_SUM_INTRO0:  return "V";
+    case ABC_SUM_ELIM0:   return "C";
+    case ABC_COPY:        return "^";
+    case ABC_DROP:        return "%";
+    case ABC_SP:          return " ";
+    case ABC_LF:          return "\n";
+    case ABC_APPLY:       return "$";
+    case ABC_COMPOSE:     return "o";
+    case ABC_QUOTE:       return "'";
+    case ABC_REL:         return "k";
+    case ABC_AFF:         return "f";
+    case ABC_NUM:         return "#";
+    case ABC_D1:          return "1";
+    case ABC_D2:          return "2";
+    case ABC_D3:          return "3";
+    case ABC_D4:          return "4";
+    case ABC_D5:          return "5";
+    case ABC_D6:          return "6";
+    case ABC_D7:          return "7";
+    case ABC_D8:          return "8";
+    case ABC_D9:          return "9";
+    case ABC_D0:          return "0";
+    case ABC_ADD:         return "+";
+    case ABC_MUL:         return "*";
+    case ABC_NEG:         return "-";
+    case ABC_DIV:         return "Q";
+    case ABC_GT:          return "G";
+    case ABC_CONDAP:      return "?";
+    case ABC_DISTRIB:     return "D";
+    case ABC_FACTOR:      return "F";
+    case ABC_MERGE:       return "M";
+    case ABC_ASSERT:      return "K";
+    default: return NULL;
+}}
+
+char const* wikrt_strerr(wikrt_err e) { switch(e) {
+    case WIKRT_OK:              return "no error";
+    case WIKRT_INVAL:           return "invalid parameters, programmer error";
+    case WIKRT_IMPL:            return "reached limit of runtime implementation";
+    case WIKRT_DBERR:           return "filesystem or database layer error";
+    case WIKRT_NOMEM:           return "out of memory (malloc or mmap failure)";
+    case WIKRT_CXFULL:          return "context full, size quota reached";
+    case WIKRT_BUFFSZ:          return "target buffer too small";
+    case WIKRT_TXN_CONFLICT:    return "transaction conflict";
+    case WIKRT_QUOTA_STOP:      return "evaluation effort quota reached";
+    case WIKRT_TYPE_ERROR:      return "type mismatch";
+    default:                    return "unrecognized error code";
+}}
+
+// assumes normal form utf-8 argument, NUL-terminated
+bool wikrt_valid_token(char const* cstr) {
+    _Static_assert((sizeof(char) == sizeof(uint8_t)), "invalid cast from char* to utf8_t*");
+    uint8_t const* s = (uint8_t const*) cstr;
+    size_t len = strlen(cstr);
+    uint32_t cp;
+
+    bool const validLen = ((0 < len) && (len < 64));
+    if(!validLen) { return false; }
+
+    while(len != 0) {
+        if(!utf8_step(&s,&len,&cp) || !wikrt_token_char(cp)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
+wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMaxMB) {
+    _Static_assert(WIKRT_CELLSIZE == WIKRT_CELLBUFF(WIKRT_CELLSIZE), "cell size must be a power of two");
+
+    (*ppEnv) = NULL;
+
+    wikrt_env* const e = calloc(1, sizeof(wikrt_env));
+    if(NULL == e) return WIKRT_NOMEM;
+
+    e->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
+
+    if(!dirPath || (0 == dbMaxMB)) { 
+        e->db = NULL;
+    } else if(!wikrt_db_init(&(e->db), dirPath, dbMaxMB)) {
+        free(e);
+        return WIKRT_DBERR;
+    }
+
+    // thread pools? task lists? etc?
+
+    (*ppEnv) = e;
+    return WIKRT_OK;
+}
+
+void wikrt_env_destroy(wikrt_env* e) {
+    assert(NULL == e->cxmlist);
+    if(NULL != e->db) {
+        wikrt_db_destroy(e->db);
+    }
+    pthread_mutex_destroy(&(e->mutex));
+    free(e);
+}
+
+
+// trivial implementation 
+void wikrt_env_sync(wikrt_env* e) {
+    if(NULL != e->db) { 
+        wikrt_db_flush(e->db); 
+    }
+}
+
+static void wikrt_cx_init(wikrt_cxm* cxm, wikrt_cx* cx) {
+    cx->cxm = cxm;
+    cx->memory = cxm->memory;
+    cx->val = WIKRT_UNIT;
+
+    wikrt_cxm_lock(cxm); {
+        cx->next = cxm->cxlist;
+        if(NULL != cx->next) { cx->next->prev = cx; }
+        cxm->cxlist = cx;
+    } wikrt_cxm_unlock(cxm);
+}
+
+wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) 
+{
+    (*ppCX) = NULL;
+
+    bool const bSizeValid = (WIKRT_CX_SIZE_MIN <= sizeMB) 
+                         && (sizeMB <= WIKRT_CX_SIZE_MAX);
+    if(!bSizeValid) return WIKRT_IMPL;
+    wikrt_sizeb const sizeBytes = (wikrt_sizeb) ((1024 * 1024) * sizeMB);
+
+    wikrt_cxm* const cxm = calloc(1,sizeof(wikrt_cxm));
+    wikrt_cx* const cx = calloc(1,sizeof(wikrt_cx));
+    if((NULL == cxm) || (NULL == cx)) { goto callocErr; }
+
+    static int const prot = PROT_READ | PROT_WRITE | PROT_EXEC;
+    static int const flags = MAP_ANONYMOUS | MAP_PRIVATE;
+    void* const memory = mmap(NULL, sizeBytes, prot, flags, -1, 0); 
+    if(NULL == memory) { goto mmapErr; }
+
+    cxm->cxlist = cx;
+    cxm->env = e;
+    cxm->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
+    cxm->memory = memory;
+    cxm->size = sizeBytes;
+
+    // I'll block cell 0 from allocation (it's used for 'unit'.)
+    // I'll also delay first page of allocations until the end. 
+    wikrt_fl_free(memory, &(cxm->fl), (WIKRT_PAGESIZE - WIKRT_CELLSIZE), WIKRT_CELLSIZE); // first page minus first cell
+    wikrt_fl_free(memory, &(cxm->fl), (sizeBytes - WIKRT_PAGESIZE), WIKRT_PAGESIZE); // all pages after the first
+
+    // initialize thread-local context
+    wikrt_cx_init(cxm, cx);
+
+    // insert into environment's list of contexts
+    wikrt_env_lock(e); {
+        cxm->next = e->cxmlist;
+        if(NULL != cxm->next) { cxm->next->prev = cxm; }
+        e->cxmlist = cxm;
+    } wikrt_env_unlock(e);
+
+    (*ppCX) = cx;
+    return WIKRT_OK;
+
+mmapErr:
+callocErr:
+    free(cxm);
+    free(cx);
+    return WIKRT_NOMEM;
+}
+
+wikrt_err wikrt_cx_fork(wikrt_cx* cx, wikrt_cx** pfork)
+{
+    wikrt_cxm* const cxm = cx->cxm;
+    (*pfork) = calloc(1, sizeof(wikrt_cx));
+    if(NULL == (*pfork)) { return WIKRT_NOMEM; }
+    wikrt_cx_init(cxm, (*pfork));
+    return WIKRT_OK;
+}
+
+void wikrt_cx_destroy(wikrt_cx* cx) {
+    
+    // drop bound val
+    _wikrt_drop(cx, cx->val, true);
+
+    // remove from cxm
+    wikrt_cxm* const cxm = cx->cxm;
+    wikrt_cxm_lock(cxm); {
+        wikrt_fl_merge(cx->memory, &(cx->fl), &(cxm->fl));
+        if(NULL != cx->next) { cx->next->prev = cx->prev; }
+        if(NULL != cx->prev) { cx->prev->next = cx->next; }
+        else { assert(cx == cxm->cxlist); cxm->cxlist = cx->next; }
+    } wikrt_cxm_unlock(cxm);
+    
+    free(cx);
+
+    if(NULL == cxm->cxlist) {
+        // last context for this memory destroyed.
+        // remove context memory from environment
+        wikrt_env* const e = cxm->env;
+        wikrt_env_lock(e); {
+            if(NULL != cxm->next) { cxm->next->prev = cxm->prev; }
+            if(NULL != cxm->prev) { cxm->prev->next = cxm->next; }
+            else { assert(cxm == e->cxmlist); e->cxmlist = cxm->next; }
+        } wikrt_env_unlock(e);
+
+        // release memory back to operating system
+        errno = 0;
+        int const unmapStatus = munmap(cxm->memory, cxm->size);
+        bool const unmapSucceeded = (0 == unmapStatus);
+        if(!unmapSucceeded) {
+            fprintf(stderr,"Failure to unmap memory (%s) when destroying context.\n", strerror(errno));
+            abort();
+        }
+        pthread_mutex_destroy(&(cxm->mutex));
+        free(cxm);
+    }
+}
+
+wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
+    return cx->cxm->env;
+}
+
+
+
+
 
 static inline bool wikrt_alloc_local(wikrt_cx* cx, wikrt_sizeb sz, wikrt_addr* addr) 
 {
@@ -78,13 +321,21 @@ void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr)
     wikrt_fl_free(cx->memory, &(cx->fl), sz, addr);
     cx->ct_bytes_freed += sz;
 
-    // TODO
-    // If a thread has a lot of free space, we may need to release 
-    // some of it back to the common pool. It might be better to 
-    // do this at an external 'boundary' such as the wikrt_eval API.
-    // For the moment, this is non-critical.
+    // It would be a problem in a multi-threaded scenario if any one
+    // context accumulated all the free space. So I'll heuristically
+    // limit each context to a certain amount of local free space.
+    // 
+    // This isn't optimal. It will create fragmentation issues, in the
+    // long run. I need a better allocator design overall. But it will
+    // do well enough for Wikilon's short term use cases.
+    if(cx->fl.free_bytes > WIKRT_FREE_THRESH) {
+        wikrt_cxm* const cxm = cx->cxm;
+        wikrt_cxm_lock(cxm); {
+            wikrt_fl_merge(cx->memory, &(cx->fl), &(cxm->fl));
+            cx->fl = (wikrt_fl) { 0 };
+        } wikrt_cxm_unlock(cxm);
+    }
 }
-
 
 bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size szf)
 {
@@ -118,13 +369,13 @@ bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size sz
 wikrt_err _wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val const v)
 {
     if(wikrt_i(v)) { 
-        (*out) = WIKRT_VTYPE_INTEGER; 
+        (*out) = WIKRT_VTYPE_INT; 
     } else {
         wikrt_tag const vtag = wikrt_vtag(v);
         wikrt_addr const vaddr = wikrt_vaddr(v);
         if(WIKRT_P == vtag) {
             if(0 == vaddr) { (*out) = WIKRT_VTYPE_UNIT; }
-            else { (*out) = WIKRT_VTYPE_PRODUCT; }
+            else { (*out) = WIKRT_VTYPE_PROD; }
         } else if((WIKRT_PL == vtag) || (WIKRT_PR == vtag)) {
             (*out) = WIKRT_VTYPE_SUM;
         } else if((WIKRT_O == vtag) && (0 != vaddr)) {
@@ -132,7 +383,7 @@ wikrt_err _wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val const v)
             wikrt_val const otag = pv[0];
             switch(LOBYTE(otag)) {
                 case WIKRT_OTAG_BIGINT: {
-                    (*out) = WIKRT_VTYPE_INTEGER;
+                    (*out) = WIKRT_VTYPE_INT;
                 } break;
                 case WIKRT_OTAG_ARRAY: // same as sum
                 case WIKRT_OTAG_BINARY: // same as sum
@@ -145,11 +396,10 @@ wikrt_err _wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val const v)
                 } break;
                 case WIKRT_OTAG_SEAL_SM: // same as SEAL
                 case WIKRT_OTAG_SEAL: {
-                    (*out) = WIKRT_VTYPE_SEALED;
+                    (*out) = WIKRT_VTYPE_SEAL;
                 } break;
                 case WIKRT_OTAG_STOWAGE: {
-                    // TODO: consider capturing vtype in stowage tags!
-                    (*out) = WIKRT_VTYPE_STOWED;
+                    (*out) = WIKRT_VTYPE_PEND;
                 } break;
                 default: {
                     fprintf(stderr, u8"wikrt: peek type: unrecognized tag %u\n"
@@ -158,7 +408,7 @@ wikrt_err _wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val const v)
                 } break;
             }
         } else { 
-            (*out) = WIKRT_VTYPE_PENDING; 
+            (*out) = WIKRT_VTYPE_PEND; 
             return WIKRT_INVAL; 
         }
     }
@@ -740,7 +990,7 @@ wikrt_err _wikrt_copy(wikrt_cx* cx, wikrt_val* dst, wikrt_val const origin, bool
 
             case WIKRT_OTAG_BLOCK: {
                 // (block-header, opcode-list) with substructural properties
-                bool const bPerformCopy = !wikrt_block_aff(pv[0]) || bCopyAff; 
+                bool const bPerformCopy = !wikrt_block_is_aff(pv[0]) || bCopyAff; 
                 if(!bPerformCopy) { return WIKRT_TYPE_ERROR; } 
                 if(!wikrt_alloc_cellval(cx, dst, WIKRT_O, pv[0], pv[1])) { return WIKRT_CXFULL; }
                 dst = 1 + wikrt_pval(cx, wikrt_vaddr(*dst));
@@ -864,7 +1114,7 @@ wikrt_err _wikrt_drop(wikrt_cx* cx, wikrt_val v, bool const bDropRel)
 
             case WIKRT_OTAG_BLOCK: {
                 // (block-header, opcode-list) with substructural properties
-                bool const bPerformDrop = !wikrt_block_rel(pv[0]) || bDropRel;
+                bool const bPerformDrop = !wikrt_block_is_rel(pv[0]) || bDropRel;
                 if(!bPerformDrop) { return WIKRT_TYPE_ERROR; } 
                 v = pv[1];
                 wikrt_free(cx, WIKRT_CELLSIZE, addr);
