@@ -43,34 +43,22 @@ int main(int argc, char const** argv) {
 
 bool test_tcx(wikrt_cx* cx) { return true; }
 
-bool match_vtype(wikrt_cx* cx, wikrt_vref const* v, wikrt_vtype const expected_type) 
-{
-    wikrt_vtype type;
-    return (WIKRT_OK == wikrt_peek_type(cx, &type, v)) 
-        && (expected_type == type);
-}
-
-bool drop_unit(wikrt_cx* cx, wikrt_vref* v) {
-    return (match_vtype(cx, v, WIKRT_VTYPE_UNIT))
-        && (WIKRT_OK == wikrt_drop(cx, v, false));
-}
-
 bool test_unit(wikrt_cx* cx) 
 {
-    wikrt_vref* v;
-    return (WIKRT_OK == wikrt_alloc_unit(cx, &v))
-        && (drop_unit(cx,v));
+    return (WIKRT_OK == wikrt_intro_unit(cx)) 
+        && (WIKRT_OK == wikrt_elim_unit(cx));
 }
 
 static inline bool test_bool(wikrt_cx* cx, bool const bTest) 
 {
-    bool b; 
-    wikrt_vref* v;
-    return (WIKRT_OK == wikrt_alloc_bool(cx, &v, bTest))
-        && match_vtype(cx, v, WIKRT_VTYPE_SUM)
-        && (WIKRT_OK == wikrt_split_sum(cx, v, &b, &v))
-        && (b == bTest) 
-        && drop_unit(cx, v);
+    bool b; wikrt_vtype type;
+    wikrt_err st = WIKRT_OK;
+    st |= wikrt_intro_unit(cx);
+    st |= wikrt_wrap_sum(cx, bTest);
+    st |= wikrt_peek_type(cx, &type);
+    st |= wikrt_unwrap_sum(cx, &b);
+    st |= wikrt_elim_unit(cx);
+    return (WIKRT_OK == st) && (bTest == b) && (WIKRT_VTYPE_SUM == type);
 }
 
 static inline bool test_true(wikrt_cx* cx) { return test_bool(cx, true); }
@@ -78,18 +66,17 @@ static inline bool test_false(wikrt_cx* cx) { return test_bool(cx, false); }
 
 bool test_i32(wikrt_cx* cx, int32_t const iTest) 
 {
-    wikrt_vref* v; wikrt_vtype t; int32_t i;
-    int const stAlloc = wikrt_alloc_i32(cx, &v, iTest);
-    int const stType = wikrt_peek_type(cx, &t, v);
-    int const stPeek = wikrt_peek_i32(cx, v, &i);
-    int const stDrop = wikrt_drop(cx, v, false);
-
-    bool const ok = 
-        (WIKRT_OK == stAlloc) && (WIKRT_OK == stType) &&
-        (WIKRT_OK == stPeek) && (WIKRT_OK == stDrop) &&
-        (WIKRT_VTYPE_INTEGER == t) && (iTest == i);
-
-    return ok;
+    int32_t i;
+    wikrt_vtype type; 
+    wikrt_ss ss;
+    wikrt_err st = WIKRT_OK;
+    st |= wikrt_intro_i32(cx, iTest);
+    st |= wikrt_peek_type(cx, &type);
+    st |= wikrt_peek_i32(cx, &i);
+    st |= wikrt_drop(cx, &ss);
+    return (WIKRT_OK == st) && (iTest == i) 
+        && (WIKRT_SS_NORM == ss)
+        && (WIKRT_VTYPE_INT == type);
 }
 
 static inline bool test_i32_max(wikrt_cx* cx) {
@@ -113,18 +100,17 @@ static inline bool test_i32_largeint_maxneg(wikrt_cx* cx) {
 
 bool test_i64(wikrt_cx* cx, int64_t const iTest) 
 {
-    wikrt_vref* v; wikrt_vtype t; int64_t i;
-    int const stAlloc = wikrt_alloc_i64(cx, &v, iTest);
-    int const stType = wikrt_peek_type(cx, &t, v);
-    int const stPeek = wikrt_peek_i64(cx, v, &i);
-    int const stDrop = wikrt_drop(cx, v, false);
-
-    bool const ok = 
-        (WIKRT_OK == stAlloc) && (WIKRT_OK == stType) &&
-        (WIKRT_OK == stPeek) && (WIKRT_OK == stDrop) &&
-        (WIKRT_VTYPE_INTEGER == t) && (iTest == i);
-
-    return ok;
+    int64_t i;
+    wikrt_vtype type; 
+    wikrt_ss ss;
+    wikrt_err st = WIKRT_OK;
+    st |= wikrt_intro_i64(cx, iTest);
+    st |= wikrt_peek_type(cx, &type);
+    st |= wikrt_peek_i64(cx, &i);
+    st |= wikrt_drop(cx, &ss);
+    return (WIKRT_OK == st) && (iTest == i) 
+        && (WIKRT_SS_NORM == ss)
+        && (WIKRT_VTYPE_INT == type);
 }
 
 static inline bool test_i64_max(wikrt_cx* cx) {
@@ -147,39 +133,37 @@ static inline bool test_i64_3digit_maxneg(wikrt_cx* cx) {
     return test_i64(cx, -1000000000000000000); }
 
 /* grow a simple stack of numbers (count .. 1) for testing purposes. */
-void numstack(wikrt_cx* cx, wikrt_vref** stack, int32_t count) 
+void numstack(wikrt_cx* cx, int32_t count) 
 {
-    wikrt_alloc_unit(cx, stack);
+    wikrt_intro_unit(cx);
     for(int32_t ii = 1; ii <= count; ++ii) {
-        wikrt_vref* num;
-        wikrt_alloc_i32(cx, &num, ii);
-        wikrt_alloc_prod(cx, stack, num, (*stack));
+        wikrt_intro_i32(cx, ii);
+        wikrt_assocl(cx);
     }
 }
 
 /* destroy a stack and compute its sum. */
-void sumstack(wikrt_cx* cx, wikrt_vref** stack, int64_t* sum)
-{
-    while(match_vtype(cx, *stack, WIKRT_VTYPE_PRODUCT)) 
-    {
-        wikrt_vref* elem;  wikrt_split_prod(cx, (*stack), &elem, stack);
-        int32_t elemVal; wikrt_peek_i32(cx, elem, &elemVal);
-        wikrt_drop(cx, elem, false);
-        *sum += elemVal;
+void sumstack(wikrt_cx* cx, int64_t* sum)
+{   
+    wikrt_err st = WIKRT_OK;
+    while((WIKRT_OK == st) && !wikrt_match_type(cx, WIKRT_VTYPE_UNIT)) {
+        st |= wikrt_assocr(cx);
+        int32_t elem = 0;
+        st |= wikrt_peek_i32(cx, &elem);
+        wikrt_drop(cx, NULL);
+        (*sum) += elem;
     }
-    drop_unit(cx, *stack);
+    st |= wikrt_elim_unit(cx);
 }
-
 
 bool test_alloc_prod(wikrt_cx* cx) 
 {
     int32_t const ct = 111111;
-    wikrt_vref* stack;
-    numstack(cx, &stack, ct);
+    numstack(cx, ct);
 
     int64_t const expected_sum = (ct * (int64_t)(ct + 1)) / 2;
     int64_t actual_sum = 0;
-    sumstack(cx, &stack, &actual_sum);
+    sumstack(cx, &actual_sum);
 
     bool const ok = (expected_sum == actual_sum);
     return ok;
@@ -189,16 +173,18 @@ bool test_copy_prod(wikrt_cx* cx)
 {
     int32_t const ct = 77777;
     int64_t const expected_sum = (ct * (int64_t)(ct + 1)) / 2;
+
+    numstack(cx, ct);
+    wikrt_copy(cx, NULL);
+    wikrt_copy(cx, NULL);
+
     int64_t sumA = 0;
     int64_t sumB = 0;
     int64_t sumC = 0;
-    wikrt_vref* a, *b, *c;
-    numstack(cx, &a, ct);
-    wikrt_copy(cx, &b, a, false);
-    wikrt_copy(cx, &c, b, false);
-    sumstack(cx, &a, &sumA);
-    sumstack(cx, &b, &sumB);
-    sumstack(cx, &c, &sumC);
+    sumstack(cx, &sumA);
+    sumstack(cx, &sumB);
+    sumstack(cx, &sumC);
+
     bool const ok = (sumA == sumB) 
                  && (sumB == sumC) 
                  && (sumC == expected_sum);
@@ -206,18 +192,18 @@ bool test_copy_prod(wikrt_cx* cx)
 }
 
 /** Create a deep sum from a string of type (L|R)*. */
-static inline void deepsum_path(wikrt_cx* cx, char const* s, wikrt_vref** v)
+static inline void deepsum_path(wikrt_cx* cx, char const* s)
 {
-    wikrt_alloc_unit(cx, v);
+    wikrt_intro_unit(cx);
     size_t len = strlen(s);
     while(len > 0) {
         char const c = s[--len];
-        wikrt_alloc_sum(cx, v, ('R' == c), *v);
+        wikrt_wrap_sum(cx, ('R' == c));
     }
 }
 
 // destroys val
-bool dismantle_deepsum_path(wikrt_cx* cx, char const* const sumstr, wikrt_vref** v) 
+bool dismantle_deepsum_path(wikrt_cx* cx, char const* const sumstr) 
 {
     bool ok = true;
     char const* ss = sumstr;
@@ -225,17 +211,16 @@ bool dismantle_deepsum_path(wikrt_cx* cx, char const* const sumstr, wikrt_vref**
         char const c = *(ss++);
         bool const expected_inR = ('R' == c);
         bool actual_inR;
-        wikrt_err const st = wikrt_split_sum(cx, (*v), &actual_inR, v);
+        wikrt_err const st = wikrt_unwrap_sum(cx, &actual_inR);
         ok = (WIKRT_OK == st) && (actual_inR == expected_inR);
     }
-    return ok && drop_unit(cx, *v);
+    return ok && (WIKRT_OK == wikrt_elim_unit(cx));
 }
 
 bool test_deepsum_str(wikrt_cx* cx, char const* const sumstr) 
 {
-    wikrt_vref* v;
-    deepsum_path(cx, sumstr, &v);
-    bool const ok = dismantle_deepsum_path(cx, sumstr, &v);
+    deepsum_path(cx, sumstr);
+    bool const ok = dismantle_deepsum_path(cx, sumstr);
     return ok;
 }
 
@@ -285,29 +270,25 @@ bool test_copy_deepsum(wikrt_cx* cx)
     size_t const nChars = 8000;
     char buff[nChars + 1];
     deepsum_prng_string(buff, 0, nChars);
-
-    wikrt_vref* v;    
-    deepsum_path(cx, buff, &v);
-    wikrt_vref* vcpy;
-    bool ok = (WIKRT_OK == wikrt_copy(cx, &vcpy, v, false))
-            && dismantle_deepsum_path(cx, buff, &v)
-            && dismantle_deepsum_path(cx, buff, &vcpy);
+    deepsum_path(cx, buff);
+    bool ok = (WIKRT_OK == wikrt_copy(cx, NULL))
+            && dismantle_deepsum_path(cx, buff)
+            && dismantle_deepsum_path(cx, buff);
     return ok;
 }
 
 bool test_pkistr_s(wikrt_cx* cx, int64_t n, char const* const nstr) 
 {
-    wikrt_vref* v;
-    wikrt_alloc_i64(cx, &v, n);
+    wikrt_intro_i64(cx, n);
     size_t len = 0;
-    wikrt_peek_istr(cx, v, NULL, &len); // obtain string size
+    wikrt_peek_istr(cx, NULL, &len); // obtain string size
     bool const okSize = (len == strlen(nstr));
 
     char buff[len+1]; buff[len] = 0;
-    wikrt_peek_istr(cx, v, buff, &len); // print integer into buffer
+    wikrt_peek_istr(cx, buff, &len); // print integer into buffer
     bool const okBuff = (0 == strcmp(nstr, buff));
+    wikrt_drop(cx, NULL);
 
-    wikrt_drop(cx, v, false);
     bool const ok = (okBuff && okSize);
     return ok;
 }
@@ -347,14 +328,14 @@ bool test_pkistr_small(wikrt_cx* cx)
 }
 
 bool test_copy_i64(wikrt_cx* cx, int64_t const test) {
-    wikrt_vref* i1, *i2;
-    wikrt_alloc_i64(cx, &i1, test);
-    wikrt_copy(cx, &i2, i1, false);
-    int64_t n;
-    wikrt_peek_i64(cx, i2, &n);
-    wikrt_drop(cx, i1, false);
-    wikrt_drop(cx, i2, false);
-    bool const ok = (test == n);
+    wikrt_intro_i64(cx, test);
+    wikrt_copy(cx, NULL);
+    int64_t n1, n2;
+    wikrt_peek_i64(cx, &n1);
+    wikrt_drop(cx, NULL);
+    wikrt_peek_i64(cx, &n2);
+    wikrt_drop(cx, NULL);
+    bool const ok = (test == n1) && (n1 == n2);
     return ok;
 }
 
@@ -414,31 +395,29 @@ bool test_sealers(wikrt_cx* cx)
     size_t const nSeals = sizeof(lSeals) / sizeof(char const*);
     assert(nSeals > 4);
 
-    wikrt_vref* v;
-    wikrt_alloc_unit(cx, &v);
+    wikrt_intro_unit(cx);
     for(size_t ii = 0; ii < nSeals; ++ii) {
         char const* s = lSeals[ii];
-        wikrt_alloc_seal(cx, &v, s, strlen(s), v);
+        wikrt_wrap_seal(cx, s);
     }
 
     // validate copy and drop of sealed values
     for(size_t ii = 0; ii < 100; ++ii) {
-        wikrt_vref* tmp = v;
-        wikrt_copy(cx, &v, tmp, false);
-        wikrt_drop(cx, tmp, false);
+        wikrt_copy(cx, NULL);
+        if(ii & 0) { wikrt_wswap(cx); }
+        wikrt_drop(cx, NULL);
     }
 
     for(size_t ii = nSeals; ii > 0; --ii) {
         char const* s = lSeals[ii - 1];
         char buff[WIKRT_TOK_BUFFSZ];
-        wikrt_split_seal(cx, v, buff, &v);
+        wikrt_unwrap_seal(cx, buff);
         if(0 != strcmp(s, buff)) {
             fprintf(stderr, "expected seal %s, got %s\n", s, buff);
             return false;
         }
     }
-    
-    return drop_unit(cx, v);
+    return (WIKRT_OK == wikrt_elim_unit(cx));
 }
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
@@ -447,11 +426,15 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     #define TCX(T)                          \
     {                                       \
         ++(*runct);                         \
-        if(T(cx)) { ++(*passct); }          \
+        wikrt_cx* fork;                     \
+        wikrt_cx_fork(cx,&fork);            \
+        assert(NULL != fork);               \
+        if(T(fork)) { ++(*passct); }        \
         else {                              \
             char const* name = #T ;         \
             fprintf(stderr, errFmt, *runct, name);    \
         }                                   \
+        wikrt_cx_destroy(fork);             \
     }
     
     TCX(test_tcx);

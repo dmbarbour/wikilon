@@ -82,7 +82,6 @@
     wikrt_valid_key;
 
     wikrt_txn_create;
-    wikrt_txn_swap;
     wikrt_txn_read;
     wikrt_txn_write;
     wikrt_txn_abort;

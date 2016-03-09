@@ -11,6 +11,7 @@ Performance is the primary goal. But some others:
 
 * precise memory control: model machine's memory in one arena
 * hard real-time capable: predictable timing properties
+* computation effort control: easily abort infinite loops
 * suspend, checkpoint, persist, reload, resume, copy computations
 * easy to resize, reflect, render, compact suspended computations
 * monadic effects: return control of program environment to caller
@@ -121,6 +122,8 @@ A challenge for this representation of blocks is *precise, efficient, dynamic* t
 
 Long term, I'll want a more compact block representation that involves much less copying, and a variant for just-in-time compilations. I'd also like to shift most substructural type checking into static ahead-of-time computations.
 
+Additionally, I will need a means to convert a block to text for extraction purposes. This could be handled as a special case for streaming output (even if I don't support laziness in general). Or I could just perform this translation eagerly, which would probably be sufficient at least in the short and medium terms.
+
 #### Reading and Writing of Blocks?
 
 Injecting a block into bytecode is straightforward enough. But it is unfortunately unclear how to read a large block back into an output stream.
@@ -140,6 +143,10 @@ We can annotate a value to moved to persistent storage, or transparently reverse
 ### Computations
 
 Lazy or parallel values, or a 'hole' for values that are still being computed. These will need special attention for performance and quota purposes. I'd prefer to avoid treating pending computations as normal values, but they might make a useful special case?
+
+If I support lazy computations, that can potentially simplify many things such as streaming outputs from block-to-text conversions. Laziness is easy to express via annotation, e.g. `{&lazy}` could tag a block. One difficulty with laziness is that we need either to integrate state or to treat them somehow as linear objects (no copy). The other difficulty is integrating laziness appropriately with effort quotas - i.e. it requires we shift the quota to our context, somehow, rather than to a larger evaluation. 
+
+For the moment, I'd prefer to avoid laziness and focus instead upon direct and parallel evaluation. 
 
 ### Arrays or Compact Lists
 
@@ -178,6 +185,13 @@ ABC supports integers. But other numbers could be supported via arithmetic accel
  * Vector arithmetic with SIMD support, etc.
 * Good support for floating point would be nice.
  * John Gustafson's open interval arithmetic 'unum' is also nice.
+
+
+## Evaluation and Time or Effort Quotas
+
+One of the bigger challenges will be supporting evaluation limits, i.e. effort quotas. 
+
+
 
 
 # older content
@@ -321,6 +335,8 @@ My other option is to enable entry for common data types: integers, lists, texts
 Wikilon will need to abort computations that run too long. Use of some sort of time or effort-based quota is relevant. It might also be useful to perform 'incremental' computations that only run so long between steps, enabling intervention or re-prioritization.
 
 Incremental time quotas are challenging because I must have a well-defined intermediate state that may be continued. It is feasible to only 'halt' on quota at well-defined locations, but it might require extra work for compiled loops (maybe some sort of voluntary yield and continue for loops?)
+
+
 
 Still need to think about this one.
 
