@@ -31,44 +31,43 @@ I'll actually include a copy of these directly, no shared libs.
 * ZSTD(?) - real-time, streaming compression
  * very promising, but not entirely stable
 
+### Multi-Process Access?
+
+With LMDB, I have the opportunity to use a single-process or multi-process access to the database. Multi-process access to a database would be very convenient if I want to later develop shells, command-line interpreters, etc. to access this database in the background. But that isn't a use case for Wikilon. For now I should probably favor single-process access using a lockfile, since it's much easier (with LMDB) to go from single-process to multi-process than vice versa.
+
 ## Structure
 
 I need an *environment* bound to an underlying stowage and persistence model, e.g. via LMDB. The environment may also be associated with worker threads for par-seq parallelism. I also need *contexts* that associate an environment with a heap of memory for computations. 
 
-Context is a contiguous region of memory, up to ~4GB enabling 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage serves a similar role to virtual memory, but does not consume address space.
+Context is a contiguous region of memory, up to ~4GB enabling localized 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage serves a similar role to virtual memory, but does not consume address space.
 
 I will want parallelism within each context, and also to minimize synchronization. So my current plan is to have *wikrt_cx* be a reference to the shared space, but to allow multiple such references (lightweight forks) that enables cheap motion of values between them.
 
+### API Thoughts
+
+Originally I was going for a more conventional API where values have handles outside the computation context. But I'm beginning to think this wasn't the best approach, that it would be better aligned with Awelon Bytecode to give each context a *single, implicit* value, a program environment that we manipulate just as we would a value within an ABC computation. This might be coupled with `wikrt_cx_fork()` and `wikrt_move()` or similar, such that a *context* itself serves as the value unit from perspective of the external API.
+
 ### Memory Management
 
-ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, with deep copies favored over aliasing. Linearity allows me to implement many functions (or at least their common cases) without allocation. And rather than GC from a root-set, I can primarily use conventional 'manual' free-lists. The main cost is the copy itself, which may prove expensive (when copying code in a loop, for example).
+ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, with deep copies favored over aliasing. Linearity allows me to implement many functions (or at least their common cases) without allocation. 
 
-Tracking a root set is feasible with a thin layer of indirection between API calls and internal logics. The advantages of tracking a root set:
+I can track a root-set or favor an implicit value per context. Either would allow for conventional or compacting GC if I wish for it. OTOH, I won't much benefit from conventional GC without introducing a bunch of synchronization work at every API call, or adding explicit enter/exit synch calls to the API - something I'd prefer to avoid. Explicit compaction remains feasible essentially by moving a computation to a fresh context.
 
-* precise destruction of values when a fork is destroyed
-* potential to duplicate the context
-* potential for compaction of data, reducing fragmentation
-* better detection of when linearity is violated
-
-OTOH, the indirection does cost a bit. And it may hinder error recovery. But the costs should, in theory at least, be marginal because I'll be pushing most computation to evaluation. We shouldn't be touching the root-set for most operations!
-
-Latent destruction of large structures is a viable option that could avoid unnecessary cleanup efforts when destroying contexts or large values. E.g. I could shift the 'values to destroy' lists into the context itself, and keep a reference to the last item in the list so I can easily append it. I'm not sure latent destruction is the right path to take, though it might improve performance marginally.
-
-*Idea:* I could switch to a register-machine concept for contexts, with each 'context' having some small finite number of root registers. The main advantage of doing so is that I would externalize the register-allocation issue to the client. OTOH, the benefit should be marginal. Most computations hould be handled in terms of block evaluation, not direct manipulation of the context.
+Latent destruction of larger values is a related, viable option, one that could greatly improve destroy/cleanup performance for large contexts, albeit is perhaps limited to destruction that doesn't concern itself with substructural properties (like relevance).
 
 ## Representations
 
-Memory is 8-byte aligned, giving 3 tag bits in each pointer. Small numbers and a few small constants are also represented.
+Memory will be aligned for allocation of two words. With 32-bit words, this gives us 3 tag bits in each pointer. Small numbers and a few small constants are also represented.
 
 * xy0 - small integers; plus or minus (2^30 - 1).
-* 991 - tagged objects (tag, data...)
+* 001 - tagged objects (tag, data...)
 * 011 - pairs (val, val)
 * 101 - pair in left
 * 111 - pair in right
 
 The zero address is not allocated. Its meaning depends on the tag bits:
 
-* 001 - void, invalid value
+* 001 - void, an invalid or undefined linear value
 * 011 - unit
 * 101 - unit in left (false)
 * 111 - unit in right (true, end of list)
@@ -121,6 +120,14 @@ Operations in a simple block are either small integers indicating a single opcod
 A challenge for this representation of blocks is *precise, efficient, dynamic* tracking of substructural type attributes. Internal substructure from partial evaluation as in `[[xyzzy]kf]` mustn't be confused with external sub-structure from quotations like `[xyzzy]kf' == [[xyzzy]kf]kf`. For the moment, I'll just track this by recording a flag bit to perform latent substructure evaluation when copying or dropping quoted values. I'll otherwise suppress substructure checks.
 
 Long term, I'll want a more compact block representation that involves much less copying, and a variant for just-in-time compilations. I'd also like to shift most substructural type checking into static ahead-of-time computations.
+
+#### Reading and Writing of Blocks?
+
+Injecting a block into bytecode is straightforward enough. But it is unfortunately unclear how to read a large block back into an output stream.
+
+#### Binding a Dictionary?
+
+It might be feasible to bind a dictionary value to a context, i.e. such that the dictionary maps `{%word}` tokens to more bytecode. This could be achieved by a simple callback if I don't want to commit to stowed dictionaries. OTOH, this isn't how I want to handle dictionaries long term. Or at all, really.
 
 ### Value Sealers
 

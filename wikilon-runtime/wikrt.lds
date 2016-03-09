@@ -16,64 +16,75 @@
 
     wikrt_valid_token;
 
+    wikrt_peek_type;
+    wikrt_match_type;
+    wikrt_peek_typestr;
+    wikrt_match_typestr;
+
+    wikrt_copy;
+    wikrt_drop;
+    wikrt_move;
+    wikrt_copy_move;
+    wikrt_stow;
+
+    wikrt_wswap;
+    wikrt_zswap;
+    wikrt_assocl;
+    wikrt_assocr;
+    wikrt_swap;
+
+    wikrt_sum_wswap;
+    wikrt_sum_zswap;
+    wikrt_sum_assocl;
+    wikrt_sum_assocr;
+    wikrt_sum_distrib;
+    wikrt_sum_factor;
+
     wikrt_alloc_unit;
-    wikrt_alloc_bool;
-
-    wikrt_alloc_stream;
-    wikrt_addend_stream;
-    wikrt_end_stream;
-    wikrt_awaiting_stream;
-
-    wikrt_alloc_binary;
-    wikrt_read_binary;
+    wikrt_split_unit;
     
-    wikrt_alloc_text;
-    wikrt_alloc_text_len;
-    wikrt_read_text;
-
-    wikrt_alloc_block;
-    wikrt_alloc_block_len;
+    wikrt_alloc_sum;
+    wikrt_split_sum;
 
     wikrt_alloc_i32;
     wikrt_alloc_i64;
     wikrt_peek_i32;
     wikrt_peek_i64;
-
     wikrt_alloc_istr;
     wikrt_peek_istr;
 
-    wikrt_alloc_prod;
-    wikrt_split_prod;
-    wikrt_alloc_sum;
-    wikrt_split_sum;
+    wikrt_alloc_binary;
+    wikrt_read_binary;
+    
+    wikrt_alloc_text;
+    wikrt_read_text;
+
+    wikrt_alloc_block;
 
     wikrt_alloc_seal;
     wikrt_split_seal;
 
-    wikrt_peek_type;
-
-    wikrt_copy;
-    wikrt_drop;
-    wikrt_move;
-    wikrt_stow;
-    wikrt_remote_copy;
-
-    wikrt_alloc_eval;
+    wikrt_apply;
     wikrt_step_eval;
-    wikrt_token_stop;
+    wikrt_quote;
+    wikrt_block_aff;
+    wikrt_block_rel;
+    wikrt_block_par;
     wikrt_quote;
     wikrt_compose;
 
-    wikrt_iadd;
-    wikrt_imul;
-    wikrt_ineg;
-    wikrt_idiv;
-    wikrt_icmp;
+    wikrt_int_add;
+    wikrt_int_mul;
+    wikrt_int_neg;
+    wikrt_int_div;
+    wikrt_int_cmp;
 
     wikrt_valid_key;
 
     wikrt_txn_create;
     wikrt_txn_swap;
+    wikrt_txn_read;
+    wikrt_txn_write;
     wikrt_txn_abort;
     wikrt_txn_commit;
     wikrt_txn_durable;
