@@ -205,7 +205,11 @@ static void wikrt_fl_mergesort(void* const mem, wikrt_addr* const hd, wikrt_size
 }
 
 
-/* Combine all adjacent free addresses. */
+/* Combine all adjacent free addresses. 
+ *
+ * This is O(N*lg(N)) with the number of fragments. It uses an
+ * in-place linked list merge sort of the fragments.
+ */
 void wikrt_fl_coalesce(void* mem, wikrt_fl* fl) 
 {
     wikrt_size const frag_count_init = fl->frag_count;
@@ -229,6 +233,8 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
             pa->size += pn->size;
             pa->next = pn->next;
         }
+        wikrt_addr const merge_next = pa->next;
+        pa->next = a; // close singleton flst (circular)
 
         // recompute free list stats
         fl->free_bytes += pa->size;
@@ -236,8 +242,6 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
 
         wikrt_sc const sc = wikrt_size_class(pa->size);
         wikrt_flst* const l = fl->size_class + sc;
-        wikrt_addr const merge_next = pa->next;
-        pa->next = a; // close singleton flst (circular)
 
         // update free-list, adding new node to end of list.
         (*l) = wikrt_flst_join(mem, (*l), a);
@@ -259,8 +263,8 @@ void wikrt_fl_merge(void* const mem, wikrt_fl* const src, wikrt_fl* const dst)
 {
     // a merge in approximately constant time
     dst->free_bytes += src->free_bytes;
-    src->free_bytes = 0;
     dst->frag_count += src->frag_count;
+    src->free_bytes = 0;
     src->frag_count = 0;
     for(wikrt_sc sc = 0; sc < WIKRT_FLCT; ++sc) {
         wikrt_flst* const lsrc = src->size_class + sc;
@@ -281,7 +285,7 @@ static inline bool wikrt_acquire_shm(wikrt_cx* cx, wikrt_sizeb sz)
     return false;
 }
 
-static void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz)
+void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_size sz) 
 {
     // I want a simple, predictable heuristic strategy that is very
     // fast for smaller computations (the majority of Wikilon ops).
@@ -290,13 +294,11 @@ static void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz)
     // 
     // - allocate space directly, if feasible.
     // - otherwise: merge, coalesce, retry once.
-    // - fallback: acquire all shared space.
+    // - fallback: acquire all remaining shared space.
     //
-    // This should be combined with mechanisms to release memory if
-    // a thread is holding onto too much, i.e. such that threads can
-    // gradually shift ownership of blocks of code. The fallback isn't
-    // so good for multi-threaded contexts, but at that point at our
-    // limits anyway.
+    // The fallback here is a bit extreme, but guarantees the full
+    // memory can be used and only occurs in extreme conditions where
+    // there isn't any large block of free space remaining.
     wikrt_cxm* const cxm = cx->cxm;
     void* const mem = cx->memory;
     wikrt_cxm_lock(cxm); {
@@ -307,8 +309,8 @@ static void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz)
             wikrt_fl_coalesce(mem, &(cxm->fl));
             wikrt_size const ff = cxm->fl.frag_count;
 
-            // heuristic estimate of memory fragmentation
-            cx->fragmentation += (ff > f0) ? (ff - f0) : 0;
+            // track fragmentation of memory
+            cx->fragmentation += ((ff < f0) ? 0 : (ff - f0));
             
             if(!wikrt_acquire_shm(cx, sz)) {
                 wikrt_fl_merge(mem, &(cxm->fl), &(cx->fl));
@@ -316,8 +318,7 @@ static void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz)
         }
     } wikrt_cxm_unlock(cxm);
 
-    // TODO: latent deletion, could be useful.
-    // TODO: latent stowage? or elsewhere?
+
 }
 
 static inline bool wikrt_alloc_local(wikrt_cx* cx, wikrt_sizeb sz, wikrt_addr* addr) 
@@ -329,11 +330,29 @@ static inline bool wikrt_alloc_local(wikrt_cx* cx, wikrt_sizeb sz, wikrt_addr* a
     return false;
 }
 
-/** Currently using a simple allocation strategy. */
+/** Currently using a simple allocation strategy.
+ *
+ * I'll try to allocate locally, if feasible. Coalescing locally could
+ * help in cases like copying stacks and vectors, where I perform slab
+ * allocations, and otherwise doesn't hurt much (because our local free
+ * list has no more than WIKRT_FREE_THRESH bytes.)
+ *
+ * If that doesn't work, we'll try to allocate from the shared space.
+ */
 bool wikrt_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr) 
 {
     sz = WIKRT_CELLBUFF(sz);
-    if(wikrt_alloc_local(cx, sz, addr)) { return true; }
+
+    // allocate locally if feasible.
+    if(cx->fl.free_bytes >= sz) {
+        if(wikrt_alloc_local(cx, sz, addr)) { return true; }
+
+        // coalesce and retry
+        wikrt_fl_coalesce(cx->memory, &(cx->fl));
+        if(wikrt_alloc_local(cx, sz, addr)) { return true; }
+    }
+
+    // otherwise try to use external memory resources.
     wikrt_acquire_shared_memory(cx, WIKRT_PAGEBUFF(sz));
     return wikrt_alloc_local(cx, sz, addr); 
 }
@@ -345,7 +364,7 @@ void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr)
     cx->ct_bytes_freed += sz;
     wikrt_fl_free(cx->memory, &(cx->fl), sz, addr);
 
-    // Don't allow one context to 'own' too much unused space.
+    // Don't allow a context to 'own' too much unused space.
     if(WIKRT_FREE_THRESH < cx->fl.free_bytes) {
         wikrt_release_mem(cx);
     }
