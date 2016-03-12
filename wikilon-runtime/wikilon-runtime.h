@@ -92,26 +92,23 @@
  * has a pool of worker threads (one on each CPU by default) to support
  * par/seq parallelism.
  *
- * An environment may support multiple concurrent contexts.
+ * An environment supports multiple concurrent contexts, representing
+ * different threads and tasks.
  *
  */
 typedef struct wikrt_env wikrt_env;
 
 /** @brief Opaque structure representing a context for computation.
  *
- * A wikrt_cx, a wikilon runtime context, is a space and thread for
- * computation. An initial context is constructed by wikrt_cx_create()
- * to allocate the underlying memory. Use of wikrt_cx_fork() can make
- * additional lightweight contexts that share the same space limits 
- * and enable non-copying wikrt_move() between them. A context has 
- * several unsynchronized data structures, so must be used from one
- * thread at a time.
- *
- * A context binds a single implicit value, initially the unit value.
- * This value is manipulated by many API functions, which operate much
- * like a stream of Awelon Bytecode. Potential values include products,
+ * A wikrt_cx - a wikilon runtime context - represents both a value and
+ * a space in which computations may be performed. Contexts are single
+ * threaded (that is, they must be used from a single thread). It is 
+ * possible to communicate between contexts by use of `wikrt_move()`. 
+ * 
+ * A context contains a single value, to which we may apply a stream of
+ * functions (much like Awelon Bytecode). Values include unit, products,
  * sums, integers, blocks of code, sealed values, and optimized encodings
- * for texts, binaries, lists, etc..
+ * for texts, binaries, lists, etc.. A new context has the unit value.
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -180,35 +177,27 @@ void wikrt_env_sync(wikrt_env*);
 
 /** @brief Create a context for computations.
  * 
- * A context consists mostly of one big mmap'd block of memory. The
- * valid range for context size is 4..4000 in megabyte units. This
- * space is specific to the created context, though may be shared
- * with other contexts via `wikrt_cx_fork()`. 
- *
- * A newly created context will bind the basic 'unit' value.
+ * This creates a new shared-nothing context in the environment with
+ * a given size in megabytes. The context initially contains the unit
+ * value. At the moment, we're limited to contexts between 3 and 4092
+ * megabytes in size (due to use of 32-bit words under the hood).
  */ 
 wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
 
 #define WIKRT_CX_SIZE_MIN 4
-#define WIKRT_CX_SIZE_MAX 4000
+#define WIKRT_CX_SIZE_MAX 4092
 
 /** @brief Lightweight external parallelism.
- *
- * Use of `wikrt_cx_create()` will allocate a dedicated space each
- * time. Use of `wikrt_cx_fork()` is much more lightweight, creating
- * a context that shares the same space as its parent. `wikrt_move()`
- * between forks is very efficient. The space allocated upon create 
- * is preserved until all forks are destroyed.
- *
- * Fork is very lightweight, sufficient to use for short-lived tasks
- * or even just to carry a value from one thread to another. Only one
- * allocation is performed, and the only possible error is WIKRT_NOMEM.
  * 
- * As with wikrt_cx_create, a fork initially binds the unit value.
- *
- * On success, WIKRT_OK is returned and the context is set. Otherwise,
- * an error is returned (likely WIKRT_TYPE_ERROR or WIKRT_NOMEM) and
- * the fork's pointer is NULL.
+ * Use of `wikrt_cx_fork()` creates a lightweight context that shares
+ * the same memory as its parent. Wikilon runtime doesn't support the
+ * aliasing of memory, so context values remain separate. But shared
+ * memory does enable an efficient `wikrt_move()` to communicate data
+ * between two contexts (i.e. without a deep copy).
+ * 
+ * Active forks tend each to require a couple megabytes working memory.
+ * Be certain to account for this in `wikrt_cx_create()`. Passive forks
+ * that merely carry data, OTOH, don't require extra space.
  */
 wikrt_err wikrt_cx_fork(wikrt_cx*, wikrt_cx**);
 
@@ -365,78 +354,23 @@ bool wikrt_valid_token(char const* s);
  */
 #define WIKRT_TOK_BUFFSZ 64
 
-/** @brief Obtain or assert shallow type information for a value. 
+/* Thoughts on reflection.
  *
- * This is intended for debug printing and similar tasks where we 
- * don't necessarily know enough about a value to make good decisions.
- * Wikilon runtime will either *generate* a buffer up to some given
- * size and depth indicating type information, or *assert* a similar
- * type buffer.
+ * Originally I had some code here to 'peek' at the type of a value.
+ * But I don't like how the code for that turns out. A better idea
+ * might be something like:
  *
- * The format is a prefix notation (with `x` and `y` as variables):
+ *     wikrt_refl(cx)  ::  (a*e) → ((meta a) * (a * e)).
  *
- *    *xy  - a pair with type `a` then type `b`
- *    +xy  - a sum type, likely with void in x or y
- *    _    - a void, not a valid value, used in sums
- *    .    - unit value
- *    #    - an integer 
- *    $    - a block or function 
- *    :x   - a sealed value (seal token NOT reported here)
- *    ?    - depth limit or don't care
- *    ~    - pending or stowed values, computation needed
+ * Where 'meta a' is some description of the type and structure of
+ * the value 'a'. This would be allocating, which would simplify the
+ * API. It might generate a simple string.
  *
- * For example, "*#*#*#." represents a stack of 3 integers. Eventually
- * I might support repetitive type analyses, e.g. to detect lists and
- * tree structures.
- *
- * Note: Use of reflection is discouraged in general. Favor use of
- * statically predictable or at worst dependent types.
+ * Meanwhile, I don't immediately need reflection for anything. I will
+ * wait until I have a strong use case for it. In most cases, such as
+ * flexible rendered debug output. In normal cases, it might be better
+ * to emit metadata about program structure without external reflection.
  */
-typedef enum wikrt_vtype 
-{ WIKRT_VTYPE_PROD = 42     // *
-, WIKRT_VTYPE_SUM  = 43     // +
-, WIKRT_VTYPE_UNIT = 46     // .
-, WIKRT_VTYPE_VOID = 95     // _
-, WIKRT_VTYPE_INT  = 35     // #
-, WIKRT_VTYPE_BLOCK = 36    // $
-, WIKRT_VTYPE_SEAL = 58     // :
-, WIKRT_VTYPE_PEND = 126    // ~
-, WIKRT_VTYPE_ANY  = 63     // ?
-} wikrt_vtype;
-
-/** @brief With bound value (a*e), obtain shallowest type of `a`. */
-wikrt_err wikrt_peek_type(wikrt_cx*, wikrt_vtype*);
-
-/** @brief With bound value (a*e), test shallow match on type of `a`. */
-bool wikrt_match_type(wikrt_cx*, wikrt_vtype);
-
-/** @brief Obtain analysis of a value's type. (Non-destructive.)
- * 
- * This variation operates on a buffer, and also limits the depth of the
- * analysis (such that clients can select between breadth and depth). 
- * This operation analyzes the value `a` in an (a*e) pair.
- *
- * The `buffLen` parameter is both an input (max buff length) and output
- * (result buff length). NUL terminal is NOT added, so reserve an extra
- * byte for that if you need to produce a C string.
- *
- * This function will fill as much as the buffer as possible with type
- * information, recording `?` upon reaching a depth limit. The end of 
- * the string can be implicitly understood as accepting any type, i.e.
- * an unlimited stream of `?`.
- */
-wikrt_err wikrt_peek_typestr(wikrt_cx*, char* buff, size_t* buffLen, size_t maxDepth);
-
-/** @brief Match type information on deep structure. (Non-destructive.)
- *
- * In this case the buffer is an input text, and we'll try to match it
- * with the value `a` in a bound (a*b) pair. If we return `true` then 
- * the type was matched. Otherwise, there was a mismatch or other error.
- *
- * Note: Setting strlen is optional for a C string. You may use SIZE_MAX
- * in that case. 
- */
-bool wikrt_match_typestr(wikrt_cx*, char const* str, size_t strLen);
 
   /////////////////////////
  // BASIC DATA PLUMBING //
@@ -446,13 +380,13 @@ bool wikrt_match_typestr(wikrt_cx*, char const* str, size_t strLen);
  * 
  * For the left context, this has type `(a*b)→b`. For the right context,
  * this has type `c→(a*c)`. The `a` value is moved from the left context
- * to the right context. We'll return WIKRT_INVAL if left and right are
- * the same context. For cx_forks sharing the same underlying memory, 
- * move is extremely efficient, requiring no copies or allocation, and
- * is guaranteed to succeed. Otherwise, the value `a` may need to be
- * copied into the right-hand side context.
+ * to the right context. Move returns WIKRT_INVAL and does nothing if 
+ * left and right contexts are the same.
  *
- * This is the primary function for communication between contexts.
+ * Between different forks that share the same memory, `wikrt_move()` is
+ * a non-allocating, non-copying, O(1) operation, guaranteed to succeed
+ * if the argument has the correct type. Otherwise, the value is copied
+ * to the right hand context. 
  *
  * Note that the `wikrt_move` call requires exclusive control over both
  * contexts. In many cases, it may be useful to create intermediate
@@ -483,14 +417,18 @@ typedef enum wikrt_ss
  * doesn't keep enough information to track substructure until the copy is 
  * in progress.) The wikrt_ss* value may also be NULL if you don't need the
  * output.
+ *
+ * This is most likely to fail with WIKRT_CXFULL, though it may fail with 
+ * WIKRT_TYPE_ERROR if the parameter structure is not valid.
  */
 wikrt_err wikrt_copy(wikrt_cx*, wikrt_ss*);
 
 /** @brief Combined copy and move operation. 
  *
  * This is roughly wikrt_copy followed by wikrt_move, albeit in one step.
- * The combination avoids an intermediate copy if the two contexts use 
- * different memory regions.
+ * The combined action has some advantages: it avoids an intermediate copy
+ * between two different memories, and it potentially mitigates memory 
+ * fragmentation between forks (leveraging the target working memory).
  */
 wikrt_err wikrt_copy_move(wikrt_cx*, wikrt_ss*, wikrt_cx*);
 
@@ -500,10 +438,18 @@ wikrt_err wikrt_copy_move(wikrt_cx*, wikrt_ss*, wikrt_cx*);
  * that was dropped. If a relevant or pending value was dropped, that 
  * might be an error in some cases. The wikrt_ss* parameter may be NULL
  * if you don't need that output.
+ *
+ * The only error returned here is WIKRT_TYPE_ERROR if we lack the (a*e)
+ * structure. Drop never fails for other reasons.
  */
 wikrt_err wikrt_drop(wikrt_cx*, wikrt_ss*);
 
-/** (a*(b*c))→(b*(a*c)). ABC op `w` */
+/** (a*(b*c))→(b*(a*c)). ABC op `w`. Non-allocating.
+ *
+ * Most of the basic product manipulations are non-allocating, and
+ * hence can only fail with WIKRT_TYPE_ERROR if the context has an
+ * invalid value.
+ */
 wikrt_err wikrt_wswap(wikrt_cx*);
 
 /** (a*(b*(c*d)))→(a*(c*(b*d))). ABC op `z` */
@@ -528,7 +474,7 @@ wikrt_err wikrt_sum_zswap(wikrt_cx*);
 wikrt_err wikrt_sum_assocl(wikrt_cx*);
 
 /** (((a+b)+c)*e)→((a+(b+c))*e). ABC op `R`. */
-wikrt_err wikrt_sum_assoc(wikrt_cx*);
+wikrt_err wikrt_sum_assocr(wikrt_cx*);
 
 /** ((a+b)*e)→((b+a)*e). ABC ops `VRWLC`. */
 wikrt_err wikrt_sum_swap(wikrt_cx*);
@@ -560,19 +506,19 @@ wikrt_err wikrt_stack_zswap(wikrt_cx*);
 
 /** @brief Allocate and eliminate unit values.
  *
- * Awelon Bytecode has primitive operators `v` and `c` that introduce
- * or eliminate unit values as the second element of a pair. But this
- * API favors allocation and dropping values from the left side.
+ *   wikrt_intro_unit:      (a)→(1*a)       vvrwlc
+ *   wikrt_elim_unit:       (1*a)→(a)       vrwlcc
+ *   wikrt_intro_unit_r:    (a)→(a*1)       v
+ *   wikrt_elim_unit_r:     (a*1)→(a)       c
  *
- *   wikrt_intro_unit:  (a)→(1*a)       vvrwlc
- *   wikrt_elim_unit:  (1*a)→(a)       vrwlcc
- *
- * This may be used together with wikrt_swap to recover the original
- * ABC operator behavior. Use of wikrt_split_unit doesn't actually
- * return any data, but it does assert we're dropping a unit value.
+ * The 'elim' operators may fail with WIKRT_TYPE_ERROR.
+ * The 'intro' operators may fail with WIKRT_CXFULL.
+ * Failure is safe, in the sense that no change is made.
  */
 wikrt_err wikrt_intro_unit(wikrt_cx*);
 wikrt_err wikrt_elim_unit(wikrt_cx*);
+wikrt_err wikrt_intro_unit_r(wikrt_cx*);
+wikrt_err wikrt_elim_unit_r(wikrt_cx*);
 
 /** @brief Allocate and split 'sum' values one step at a time.
  *

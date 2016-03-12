@@ -3,20 +3,19 @@
 #include <string.h>
 #include <assert.h>
 
-typedef int wikrt_sc;
-
 typedef struct wikrt_fb {
     wikrt_size size;
-    wikrt_addr next;
+    wikrt_flst next;
 } wikrt_fb;
 
-static inline wikrt_fb* wikrt_pfb(void* mem, wikrt_addr a) {
-    return (wikrt_fb*)(a + ((char*)mem));
+static inline wikrt_fb* wikrt_pfb(void* mem, wikrt_flst addr) {
+    _Static_assert((WIKRT_CELLSIZE == sizeof(wikrt_fb)), "invalid free-block size");
+    return (wikrt_fb*) wikrt_pval(mem, addr); 
 }
 
-wikrt_sc wikrt_size_class_ff(wikrt_size const sz) {
+static wikrt_sc wikrt_size_class_ff(wikrt_size const sz) {
     _Static_assert((WIKRT_FLCT_FF > 0), "code assumes WIKRT_FLCT_FF > 0");
-    int sc = (WIKRT_FLCT - 1);
+    wikrt_sc sc = (WIKRT_FLCT - 1);
     wikrt_size szt = WIKRT_FFMAX;
     while(szt >= sz) {
         szt = szt >> 1;
@@ -25,31 +24,46 @@ wikrt_sc wikrt_size_class_ff(wikrt_size const sz) {
     return sc;
 }
 
-
 static inline wikrt_sc wikrt_size_class(wikrt_size const sz) {
     return (sz <= WIKRT_QFSIZE) 
          ? (wikrt_sc) WIKRT_QFCLASS(sz) 
          : wikrt_size_class_ff(sz);
 }
 
-
-/* Adding to head of free-list. No coalescing adjacent memory. */
-void wikrt_fl_free(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr addr) 
+static inline wikrt_flst wikrt_flst_singleton(void* mem, wikrt_sizeb sz, wikrt_addr a) 
 {
-    wikrt_fb* const pfb = wikrt_pfb(mem, addr);
-    wikrt_sc const sc = wikrt_size_class(sz);
-    wikrt_flst* const l = fl->size_class + sc;
-    
-    pfb->size = sz;
-    pfb->next = l->head;
-    if(0 == l->head) { l->tail = addr; }
-    l->head = addr;
-
-    fl->free_bytes += sz;
-    fl->frag_count += 1;
+    wikrt_fb* const pa = wikrt_pfb(mem, a);
+    pa->size = sz;
+    pa->next = a;
+    return a;
 }
 
-bool wikrt_fl_alloc_ff(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr);
+/* merge two circular free-lists in constant time.
+ *
+ * The resulting list will allocate the `a` elements before the `b` elements. 
+ */
+static inline wikrt_flst wikrt_flst_join(void* mem, wikrt_flst a, wikrt_flst b) 
+{
+    if(0 == a) { return b; }
+    if(0 == b) { return a; }
+    wikrt_fb* const pa = wikrt_pfb(mem, a);
+    wikrt_fb* const pb = wikrt_pfb(mem, b);
+    wikrt_flst const pa_next = pa->next;
+    pa->next = pb->next;
+    pb->next = pa_next;
+    return b;
+}
+
+/* Add to head of free-list. No coalescing adjacent memory. */
+void wikrt_fl_free(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr addr) 
+{
+    fl->free_bytes += sz;
+    fl->frag_count += 1;
+    wikrt_addr* const l = fl->size_class + wikrt_size_class(sz);
+    (*l) = wikrt_flst_join(mem, wikrt_flst_singleton(mem, sz, addr), (*l));
+}
+
+static bool wikrt_fl_alloc_ff(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr);
 
 /* For small allocations, we'll simply double the allocation if we couldn't
  * find an exact match. This should reduce fragmentation. Large allocations
@@ -63,9 +77,11 @@ bool wikrt_fl_alloc(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr)
     _Static_assert((WIKRT_CELLSIZE == sizeof(wikrt_fb)), "free-block should match minimum allocation");
     if(sz <= WIKRT_QFSIZE) {
         wikrt_flst* const l = fl->size_class + WIKRT_QFCLASS(sz);
-        if(0 != l->head) {
-            (*addr) = l->head;
-            l->head = wikrt_pfb(mem, l->head)->next;
+        if(0 != (*l)) {
+            wikrt_fb* const hd = wikrt_pfb(mem, (*l));
+            (*addr) = hd->next;
+            if((*addr) == (*l)) { (*l) = 0; }
+            else { hd->next = wikrt_pfb(mem, (*addr))->next; }
             fl->frag_count -= 1;
             fl->free_bytes -= sz;
             return true;
@@ -79,31 +95,36 @@ bool wikrt_fl_alloc(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr)
     return wikrt_fl_alloc_ff(mem, fl, sz, addr);
 }
 
-/* allocate using a first-fit strategy. */
-bool wikrt_fl_alloc_ff(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr) {
+/* allocate using a first-fit strategy. 
+ *
+ * This will also rotate our free list such that we always match the
+ * first item in the list. This rotation isn't necessarily optimal,
+ * but it also shouldn't hurt much due to segregation of free lists.
+ */
+static bool wikrt_fl_alloc_ff(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr) {
     wikrt_sc sc = wikrt_size_class(sz);
     do {
-        wikrt_flst* const l = fl->size_class + sc;
-        wikrt_addr prior = 0; // to repair 'l->tail'
-        wikrt_addr* pa = &(l->head);
-        while(0 != (*pa)) {
-            wikrt_val const a = (*pa);
-            wikrt_fb* const pfb = wikrt_pfb(mem, a);
-            if(pfb->size >= sz) {
+        wikrt_flst* const l = fl->size_class + (sc++); // increment included
+        wikrt_flst const l0 = (*l);
+        if(0 == l0) { continue; }
+        wikrt_fb* pl = wikrt_pfb(mem, l0);
+        do {
+            wikrt_flst const a = pl->next;
+            wikrt_fb* const pa = wikrt_pfb(mem, a);
+            if(pa->size >= sz) {
                 (*addr) = a;
-                (*pa) = pfb->next;
-                if(a == l->tail) { l->tail = prior; }
-                fl->free_bytes -= pfb->size;
+                if(pa == pl) { (*l) = 0; }
+                else { pl->next = pa->next; }
+                fl->free_bytes -= pa->size;
                 fl->frag_count -= 1;
-                if(pfb->size > sz) { 
-                    wikrt_fl_free(mem, fl, (pfb->size - sz), (a + sz));
+                if(pa->size > sz) {
+                    wikrt_fl_free(mem, fl, (pa->size - sz), (a + sz));
                 }
                 return true;
-            } else { pa = &(pfb->next); }
-        }
-        sc = sc + 1;
+            } else { (*l) = a; pl = pa; }
+        } while(l0 != (*l));
     } while(sc < WIKRT_FLCT);
-    return false;
+    return false; 
 }
 
 // Optimization: Is growing allocations in place worthwhile?
@@ -116,30 +137,32 @@ bool wikrt_fl_alloc_ff(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr
 //
 // Resolution: leave it out. 
 
-// join segregated free-list nodes into a single list
-// this takes roughly constant time via tail addresses
-wikrt_addr wikrt_fl_flatten(void* const mem, wikrt_fl* const fl) {
-    wikrt_addr r = 0;
+// join segregated free-lists into a single large free-list.
+static inline wikrt_flst wikrt_fl_flatten(void* const mem, wikrt_fl* const fl) {
+    wikrt_flst r = 0;
     for(wikrt_sc sc = 0; sc < WIKRT_FLCT; ++sc) {
-        wikrt_flst* const l = fl->size_class + sc;
-        if(0 != l->head) {
-            wikrt_pfb(mem, l->tail)->next = r;
-            r = l->head;
-        }
+        r = wikrt_flst_join(mem, r, fl->size_class[sc]);
     }
     return r;
 }
 
-void wikrt_fl_split(void* const mem, wikrt_addr const hd, wikrt_addr* const a, wikrt_size const sza, wikrt_addr* const b) 
+// break a circular free-list into a non-circular linked list.
+static inline wikrt_addr wikrt_flst_open(void* mem, wikrt_flst a) {
+    if(0 == a) { return 0; }
+    wikrt_fb* const pa = wikrt_pfb(mem, a);
+    wikrt_addr const hd = pa->next;
+    pa->next = 0;
+    return hd;
+}
+
+static void wikrt_fl_split(void* const mem, wikrt_addr const hd, wikrt_addr* const a,
+                           wikrt_size const sza, wikrt_addr* const b) 
 {
     // I assume sza is valid (no larger than the list)
     (*a) = hd;
     wikrt_addr* tl = a;
     wikrt_size ct = 0;
-    while(ct != sza) {
-        ct = ct + 1;
-        tl = &(wikrt_pfb(mem, (*tl))->next);
-    }
+    while(ct++ != sza) { tl = &(wikrt_pfb(mem, (*tl))->next); }
     // at this point 'tl' points to the location of the split.
     (*b) = (*tl); // split remainder of list into 'b'.
     (*tl) = 0;    // 'a' now terminates where 'b' starts.
@@ -152,7 +175,7 @@ void wikrt_fl_split(void* const mem, wikrt_addr const hd, wikrt_addr* const a, w
  *
  * The smallest free address will be placed at the head of the list.
  */
-void wikrt_fl_mergesort(void* const mem, wikrt_addr* const hd, wikrt_size const count)
+static void wikrt_fl_mergesort(void* const mem, wikrt_addr* const hd, wikrt_size const count)
 {
     // base case: any list of size zero or one is sorted
     if(count < 2) { return; }
@@ -188,8 +211,8 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
     wikrt_size const frag_count_init = fl->frag_count;
     wikrt_size const free_bytes_init = fl->free_bytes;
 
-    // obtain an address-sorted list of all nodes
-    wikrt_addr a = wikrt_fl_flatten(mem, fl);
+    // obtain an address-sorted, acyclic list of nodes
+    wikrt_addr a = wikrt_flst_open(mem, wikrt_fl_flatten(mem, fl));
     wikrt_fl_mergesort(mem, &a, frag_count_init);
 
     // zero the free lists
@@ -212,15 +235,13 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
         fl->frag_count += 1;
 
         wikrt_sc const sc = wikrt_size_class(pa->size);
-        wikrt_addr const next = pa->next;
-        pa->next = 0; // new end of list
-
         wikrt_flst* const l = fl->size_class + sc;
-        if(0 == l->head) { l->head = a; }
-        else { wikrt_pfb(mem, l->tail)->next = a; }
-        l->tail = a;
+        wikrt_addr const merge_next = pa->next;
+        pa->next = a; // close singleton flst (circular)
 
-        a = next;
+        // update free-list, adding new node to end of list.
+        (*l) = wikrt_flst_join(mem, (*l), a);
+        a = merge_next;
     }
     
     // weak validation
@@ -229,32 +250,149 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
 
 }
 
-
-
-
-static inline void wikrt_flst_merge(void* mem, wikrt_flst* src, wikrt_flst* dst) 
-{
-    // prepending src onto dst
-    if(0 != src->head) {
-        if(0 == dst->head) { dst->tail = src->tail; }
-        else { wikrt_pfb(mem, src->tail)->next = dst->head; }
-        dst->head = src->head;
-    }
-}
-
 /** Combine two free-lists, moving nodes from 'src' into 'dst'.
- *  This is done in constant time via the 'tail' addresses.
  *
- *  The 'src' is invalid after this.
+ * Performed in constant time via circular linked list joins. I'll favor
+ * nodes from `dst` before nodes from `src` in the result.
  */
-void wikrt_fl_merge(void* mem, wikrt_fl* src, wikrt_fl* dst)
+void wikrt_fl_merge(void* const mem, wikrt_fl* const src, wikrt_fl* const dst)
 {
     // a merge in approximately constant time
     dst->free_bytes += src->free_bytes;
+    src->free_bytes = 0;
     dst->frag_count += src->frag_count;
+    src->frag_count = 0;
     for(wikrt_sc sc = 0; sc < WIKRT_FLCT; ++sc) {
-        wikrt_flst_merge(mem, src->size_class + sc, dst->size_class + sc);
+        wikrt_flst* const lsrc = src->size_class + sc;
+        wikrt_flst* const ldst = dst->size_class + sc;
+        (*ldst) = wikrt_flst_join(mem, (*ldst), (*lsrc));
+        (*lsrc) = 0;
     }
 }
+
+static inline bool wikrt_acquire_shm(wikrt_cx* cx, wikrt_sizeb sz) 
+{
+    // assuming cxm lock is held
+    wikrt_addr block;
+    if(wikrt_fl_alloc(cx->memory, &(cx->cxm->fl), sz, &block)) {
+        wikrt_fl_free(cx->memory, &(cx->fl), sz, block);
+        return true;
+    }
+    return false;
+}
+
+static void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz)
+{
+    // I want a simple, predictable heuristic strategy that is very
+    // fast for smaller computations (the majority of Wikilon ops).
+    //
+    // Current approach:
+    // 
+    // - allocate space directly, if feasible.
+    // - otherwise: merge, coalesce, retry once.
+    // - fallback: acquire all shared space.
+    //
+    // This should be combined with mechanisms to release memory if
+    // a thread is holding onto too much, i.e. such that threads can
+    // gradually shift ownership of blocks of code. The fallback isn't
+    // so good for multi-threaded contexts, but at that point at our
+    // limits anyway.
+    wikrt_cxm* const cxm = cx->cxm;
+    void* const mem = cx->memory;
+    wikrt_cxm_lock(cxm); {
+        if(!wikrt_acquire_shm(cx, sz)) {
+
+            wikrt_size const f0 = cxm->fl.frag_count;
+            wikrt_fl_merge(mem, &(cx->fl), &(cxm->fl));
+            wikrt_fl_coalesce(mem, &(cxm->fl));
+            wikrt_size const ff = cxm->fl.frag_count;
+
+            // heuristic estimate of memory fragmentation
+            cx->fragmentation += (ff > f0) ? (ff - f0) : 0;
+            
+            if(!wikrt_acquire_shm(cx, sz)) {
+                wikrt_fl_merge(mem, &(cxm->fl), &(cx->fl));
+            }
+        }
+    } wikrt_cxm_unlock(cxm);
+
+    // TODO: latent deletion, could be useful.
+    // TODO: latent stowage? or elsewhere?
+}
+
+static inline bool wikrt_alloc_local(wikrt_cx* cx, wikrt_sizeb sz, wikrt_addr* addr) 
+{
+    if(wikrt_fl_alloc(cx->memory, &(cx->fl), sz, addr)) {
+        cx->ct_bytes_alloc += sz;
+        return true;
+    }
+    return false;
+}
+
+/** Currently using a simple allocation strategy. */
+bool wikrt_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr) 
+{
+    sz = WIKRT_CELLBUFF(sz);
+    if(wikrt_alloc_local(cx, sz, addr)) { return true; }
+    wikrt_acquire_shared_memory(cx, WIKRT_PAGEBUFF(sz));
+    return wikrt_alloc_local(cx, sz, addr); 
+}
+
+/** Free locally. If we overflow, dump everything. */
+void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr) 
+{
+    sz = WIKRT_CELLBUFF(sz);
+    cx->ct_bytes_freed += sz;
+    wikrt_fl_free(cx->memory, &(cx->fl), sz, addr);
+
+    // Don't allow one context to 'own' too much unused space.
+    if(WIKRT_FREE_THRESH < cx->fl.free_bytes) {
+        wikrt_release_mem(cx);
+    }
+}
+
+void wikrt_release_mem(wikrt_cx* cx) 
+{
+    // Estimate exposed memory fragmentation.
+    wikrt_fl_coalesce(cx->memory, &(cx->fl)); 
+    cx->fragmentation += cx->fl.frag_count;
+
+    // Release memory fragments to the commons.
+    wikrt_cxm* const cxm = cx->cxm;
+    wikrt_cxm_lock(cxm); {
+        wikrt_fl_merge(cxm->memory, &(cx->fl), &(cxm->fl));
+    } wikrt_cxm_unlock(cxm);
+}
+
+bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size szf)
+{
+    sz0 = WIKRT_CELLBUFF(sz0);
+    szf = WIKRT_CELLBUFF(szf);
+    if(sz0 == szf) {
+        // no buffered size change 
+        return true; 
+    } else if(szf < sz0) { 
+        // free up a little space at the end of the buffer
+        wikrt_free(cx, (sz0 - szf), ((*addr) + szf)); 
+        return true; 
+    } else {
+        // As an optimization, in-place growth is unreliable and
+        // unpredictable. So, Wikilon runtime doesn't bother. We'll
+        // simply allocate, shallow-copy, and free the original.
+        wikrt_addr const src = (*addr);
+        wikrt_addr dst;
+        if(!wikrt_alloc(cx, szf, &dst)) {
+            return false;
+        }
+        void* const pdst = (void*) wikrt_pval(cx, dst);
+        void const* const psrc = (void*) wikrt_pval(cx, src);
+        memcpy(pdst, psrc, sz0);
+        wikrt_free(cx, sz0, src);
+        (*addr) = dst;
+        return true;
+    }
+}
+
+
 
 

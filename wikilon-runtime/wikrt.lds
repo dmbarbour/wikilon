@@ -16,11 +16,6 @@
 
     wikrt_valid_token;
 
-    wikrt_peek_type;
-    wikrt_match_type;
-    wikrt_peek_typestr;
-    wikrt_match_typestr;
-
     wikrt_copy;
     wikrt_drop;
     wikrt_move;
@@ -42,6 +37,8 @@
 
     wikrt_intro_unit;
     wikrt_elim_unit;
+    wikrt_intro_unit_r;
+    wikrt_elim_unit_r;
     
     wikrt_wrap_sum;
     wikrt_unwrap_sum;

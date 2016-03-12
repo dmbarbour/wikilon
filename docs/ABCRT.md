@@ -42,6 +42,8 @@ I need an *environment* bound to an underlying stowage and persistence model, e.
 
 Context is a contiguous region of memory, up to ~4GB enabling localized 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage serves a similar role to virtual memory, but does not consume address space.
 
+In some cases, parallelism within a context could be useful. For this, I could support lightweight forks that share memory with our primary context. 
+
 I will want parallelism within each context, and also to minimize synchronization. So my current plan is to have *wikrt_cx* be a reference to the shared space, but to allow multiple such references (lightweight forks) that enables cheap motion of values between them.
 
 ### API Thoughts
@@ -50,15 +52,45 @@ Originally I was going for a more conventional API where values have handles out
 
 ### Memory Management
 
-ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, with deep copies favored over aliasing. Linearity allows me to implement many functions (or at least their common cases) without allocation. 
+ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies favored over aliasing. Linearity allows me to implement many functions (or their common cases) without allocation. 
 
-I can track a root-set or favor an implicit value per context. Either would allow for conventional or compacting GC if I wish for it. OTOH, I won't much benefit from conventional GC without introducing a bunch of synchronization work at every API call, or adding explicit enter/exit synch calls to the API - something I'd prefer to avoid. Explicit compaction remains feasible essentially by moving a computation to a fresh context.
+The main difficulty with a bump-pointer nursery is that ABC ops `l` and `r` and so on can easily create a reference from an old-space to the new-space, which complicates tracking of value references as being in distinct spaces.
 
-Latent destruction of larger values is a related, viable option, one that could greatly improve destroy/cleanup performance for large contexts, albeit is perhaps limited to destruction that doesn't concern itself with substructural properties (like relevance).
+I can use conventional free-list mechanisms. With this, fragmentation is a problem, especially in a multi-threaded scenario. Use of `wikrt_move()` is a fragmentation hazard because it results in data being free'd in a separate thread from the one where it was allocated. If that memory is then reused, local fragmentation worsens.
 
-*Idea:* Allocate bump-pointer, then use a single free-list. When a bump-pointer allocation fails, free the remainder of it. When our free list is large enough, coalesce it into large free-chunks and consider copying the context value to eliminate fragmentation. (Internal fragmentation, then, is much less of an issue because I can defrag.)
+One option is to attempt to *defragment* memory, i.e. after we detect our value structure seems badly fragmented, we can rewrite it into a contiguous block of memory. This has a similar cost as a normal GC, touching the 'living' data within a context, albeit with a different goal - to reduce gaps and improve localtiy rather than recover memory.
+
+For the moment, I'll accept high fragmentation so I can move forward with implementation.
+
+Latent destruction of large values is a related, viable feature that could improve cx_destroy performance for large contexts. OTOH, it limits how well we can track substructural properties. So I'll probably leave this feature out for now.
+
+#### Allocator Thoughts
+
+If I'm going to defragment occasionally, I could simplify the allocation model favor bump-pointer allocation. When I have too much free space, I can coalescefree larger page-aligned fragments back to the commons. If we still have too many fragments, we may decide then to defragment.
+
+We'll coalesce, free the largest page-aligned fragments back to the commons, then 
+
+it might be worthwhile to simplify the allocator to favor bump-pointer allocation instead of a more sophisticated free-list. 
+
+OTOH, this would mean we lose local reallocations, unless I use some sort of recycling mechanism (coalesce then recycle?). To minimize fragmentation during normal processing, it seems useful to reuse the free-list for allocations instead of just bump-pointer allocations. We could maybe benefit from using some form of size-segregated free-list both for the free-space and for the target space.
+
+ We allocate by bumping a pointer, then we free to a separate list. When the free list has too much space, we coalesce and push larger page-aligned fragments back up to the parent. If we have too many small fragments (i.e. coalesce doesn't work well enough to push us back below a certain threshold of free space) we can try to defrag the context. This would give many benefits related to compacting garbage collectors.
+
+OTOH, if I'm going to perform compacting GC, do I even need to track a free-list? Well, it probably helps with keeping each collector thread-local. And if I do track a size-segregated free-list, I can probably benefit from local reallocation as a way to stave off defragmentation for a while.
+
+* move large fragments (greater than page size) back
+
+
+ since I'll end up dumping a lot of small holes that I cannot recover.
+
+Reusing space and small gaps is a nice idea, but it's a bad idea to lose access to those. A viable option might be to defrag at some stable point in the implementation, e.g. just after a `wikrt_drop()` or `wikrt_step_eval()` that has free'd up enough space. To defrag, we can: hide current free space, copy the value, drop the old value, dump all free space to commons. This gives us a fresh, compact copy of the context's value, and a fresh space for further allocations. It also ensures that free-space dumped to commons has no lingering objects that would resist future allocations in that space. The cost, of course, is that we must 'touch' the entire living memory, not just the unstable fragments.
+
+
+
 
 ## Representations
+
+*Note:* I've been wavering a lot on 32-bit vs. 64-bit words. With 64-bit, I can grow computations to an almost unlimited extent, which could be useful if I ever want to deal with large objects (movies, holography, massive graphs, etc.). But that also requires more space per allocation. An interesting alternative might be to combine the two mechanisms: a 32-bit local space per context plus a 64-bit shared space. OTOH, 'stowage' essentially does this already. For now, I'll stick to 32-bit words within a context's primary space.
 
 Memory will be aligned for allocation of two words. With 32-bit words, this gives us 3 tag bits in each pointer. Small numbers and a few small constants are also represented.
 
@@ -74,6 +106,8 @@ The zero address is not allocated. Its meaning depends on the tag bits:
 * 011 - unit
 * 101 - unit in left (false)
 * 111 - unit in right (true, end of list)
+
+If I use raw pointers, I think I could 
 
 Other than pairs, most things are 'tagged objects'. The type of a tagged object is generally determined by the low byte in the first word. The upper three bytes are then additional data, e.g. sizes of things or a few flag bits. 
 

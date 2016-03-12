@@ -19,7 +19,6 @@ typedef uint32_t wikrt_val;
 /** size within a context; documents a number of bytes */
 typedef wikrt_val wikrt_size;
 
-
 /** size buffered to one cell (i.e. 8 bytes for 32-bit context) */
 typedef wikrt_size wikrt_sizeb;
 
@@ -53,7 +52,7 @@ typedef struct wikrt_db wikrt_db;
 #define WIKRT_QFSIZE (WIKRT_FLCT_QF * WIKRT_CELLSIZE)
 #define WIKRT_FFMAX  (WIKRT_QFSIZE * (1 << (WIKRT_FLCT_FF - 1)))
 #define WIKRT_QFCLASS(sz) ((sz - 1) / WIKRT_CELLSIZE)
-#define WIKRT_FREE_THRESH (WIKRT_PAGESIZE << 7)
+#define WIKRT_FREE_THRESH (1 << 20)
 
 // for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
@@ -98,6 +97,7 @@ typedef struct wikrt_db wikrt_db;
 static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & WIKRT_MASK_ADDR); }
 static inline wikrt_tag  wikrt_vtag(wikrt_val v)  { return (v & WIKRT_MASK_TAG);  }
 static inline wikrt_val  wikrt_tag_addr(wikrt_tag t, wikrt_addr a) { return (t | a); }
+static inline bool wikrt_p(wikrt_val v) { return (WIKRT_P == wikrt_vtag(v)) && (0 != wikrt_vaddr(v)); }
 
 /** @brief small integers
  * 
@@ -113,10 +113,13 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 
 /** @brief tagged objects 
  *
- * Currently, I just use the low byte of each tag to indicate its
- * general type, and the upper 24 bits are used for flags or data.
+ * Currently, I just use the first byte of the tag to indicate its
+ * general type, and the next few bytes for for flags or data.
  * I'm unlikely to ever need more than a few dozen tags, so this
- * should be sufficient going forward.
+ * should be sufficient almost indefinitely.
+ *
+ * Tagged objects will never be used for basic products, mostly to
+ * keep the logic simpler.
  *
  * WIKRT_OTAG_DEEPSUM
  *
@@ -147,6 +150,11 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *   evaluations. In the latter case, I'll include a tag bit to suppress
  *   substructural attribute checks for the contained values. This helps
  *   with lazy checking of substructural properties.
+ *
+ *   WIKRT_OTAG_TOKEN
+ *
+ *   This tag is used to carry unrecognized tokens. The upper 24 bits
+ *   carry the first 3 bytes of the token. 
  *
  * WIKRT_OTAG_SEAL   (size, value, sealer)
  *
@@ -248,13 +256,33 @@ static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
     return  (((nDigits << 1) | (positive ? 0 : 1)) << 8) | WIKRT_OTAG_BIGINT;
 }
 
+/* Internal API calls. */
+wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
+wikrt_err wikrt_copy_v(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
+void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss*);
+wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val);
+wikrt_err wikrt_sum_wswap_v(wikrt_cx*, wikrt_val);
+
+wikrt_err wikrt_wrap_sum_v(wikrt_cx*, bool inRight, wikrt_val*);
+wikrt_err wikrt_unwrap_sum_v(wikrt_cx*, bool* inRight, wikrt_val*);
+
+#if 0
+wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_zswap_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_assocl_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_assocr_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_swap_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_sum_wswap_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_sum_zswap_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_sum_distrib_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_sum_factor_v(wikrt_cx*, wikrt_val*);
+#endif
 
 /** Internal variants of API calls. 
  *
  * This is due to the layer of indirection to handle an external rootlist and
  * compacting GC. The internal calls do not require root values for input or output.
  */
-wikrt_err _wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val v);
 wikrt_err _wikrt_alloc_binary(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
 wikrt_err _wikrt_read_binary(wikrt_cx*, size_t buffsz, size_t* bytesRead, uint8_t* buffer, wikrt_val* binary);
 wikrt_err _wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*, size_t);
@@ -272,7 +300,6 @@ wikrt_err _wikrt_alloc_sum(wikrt_cx*, wikrt_val* c, bool inRight, wikrt_val);
 wikrt_err _wikrt_split_sum(wikrt_cx*, wikrt_val c, bool* inRight, wikrt_val*);
 wikrt_err _wikrt_alloc_seal(wikrt_cx*, wikrt_val* sv, char const* s, size_t strlen, wikrt_val v); 
 wikrt_err _wikrt_split_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v);
-wikrt_err _wikrt_remote_copy(wikrt_cx* dcx, wikrt_val* dv, wikrt_cx const* ocx, wikrt_val ov, bool const bCopyAff);
 wikrt_err _wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
 wikrt_err _wikrt_move(wikrt_cx* dest, wikrt_val*, wikrt_cx* origin, wikrt_val);
 wikrt_err _wikrt_stow(wikrt_cx*, wikrt_val*);
@@ -311,30 +338,26 @@ static inline void wikrt_env_lock(wikrt_env* e) {
 static inline void wikrt_env_unlock(wikrt_env* e) {
     pthread_mutex_unlock(&(e->mutex)); }
 
-
 /** wikrt size class index, should be in 0..(WIKRT_FLCT-1) */
 typedef int wikrt_sc;
 
-/** @brief A singular free-list supporting fast addend. */
-typedef struct wikrt_flst {
-    wikrt_addr head; // top of stack of free-list; empty if zero
-    wikrt_addr tail; // for fast addend; invalid if head is empty
-} wikrt_flst;
+/** A circular free list of (size, next) pairs. 
+ * 
+ * Note that the head element of a circular singly-linked free list is
+ * also the last one allocated (since we cannot update its prior ref).
+ * It's closer in nature to a tail pointer.
+ */
+typedef wikrt_addr wikrt_flst;
 
 /** @brief Size-segregated free lists.
  *
- * Use of multiple free-lists for different sizes is a known strategy
- * that has proven effective. Each list is used as a stack, i.e. the
- * last element free'd is the first allocated. Coalescing is not done
- * except by explicit call.
+ * Each of these 'free lists' is a *circular* free-list of (size, next)
+ * pairs, or empty (address 0). The circular structure is intended to
+ * simplify splicing of lists while reducing header memory overhead. 
  *
- * Thoughts: I think this is not optimal for Wikilon runtime. I would
- * like to try a bump-pointer allocator with a separate free-list that
- * can be coalesced as needed. This could be combined with a shared
- * page-level allocator, so free space is eventually turned into free
- * pages.
+ * Todo: minimize fragmentation between contexts.
  *
- * But for now, I'll move forward with the current implementation.
+ * For now, I'll move forward with the current implementation.
  */
 typedef struct wikrt_fl {
     wikrt_size free_bytes;
@@ -344,10 +367,9 @@ typedef struct wikrt_fl {
 
 // basic strategies without fallback resources
 bool wikrt_fl_alloc(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr*);
-bool wikrt_fl_grow_inplace(void* mem, wikrt_sizeb memsz, wikrt_fl*, wikrt_sizeb sz0, wikrt_addr, wikrt_sizeb szf);
-void wikrt_fl_free(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr);
-void wikrt_fl_coalesce(void* mem, wikrt_fl*);
-void wikrt_fl_merge(void* mem, wikrt_fl* src, wikrt_fl* dst); // invalidates src
+void wikrt_fl_free(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr); // 
+void wikrt_fl_coalesce(void* mem, wikrt_fl*); // combines adjacent free blocks
+void wikrt_fl_merge(void* mem, wikrt_fl* src, wikrt_fl* dst); // moves free blocks from src to dst
 
 /** Shared state for multi-threaded contexts. */ 
 struct wikrt_cxm {
@@ -389,14 +411,19 @@ struct wikrt_cx {
     wikrt_cx           *next;       // sibling context
     wikrt_cx           *prev;       // sibling context
     wikrt_cxm          *cxm;        // shared memory structures
-    void               *memory;     // main memory
+
+    wikrt_val           txn;        // context's transaction
     wikrt_val           val;        // context's held value
-    //wikrt_txn           txn;        // context's transaction
+
+    void               *memory;     // main memory
     wikrt_fl            fl;         // local free space
 
-    // statistics or metrics
+    // statistics and metrics, supports effort quotas
     uint64_t            ct_bytes_freed; // bytes freed
     uint64_t            ct_bytes_alloc; // bytes allocated
+
+    // fragments returned to commons (by wikrt_free) since defrag
+    uint64_t            fragmentation;
 };
 
 static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
@@ -405,8 +432,8 @@ static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
 
 bool wikrt_alloc(wikrt_cx*, wikrt_size, wikrt_addr*);
 void wikrt_free(wikrt_cx*, wikrt_size, wikrt_addr);
+void wikrt_release_mem(wikrt_cx*);
 bool wikrt_realloc(wikrt_cx*, wikrt_size, wikrt_addr*, wikrt_size);
-void wikrt_cx_drop_roots(wikrt_cx*);
 
 // Allocate a cell value tagged with WIKRT_O, WIKRT_P, WIKRT_PL, or WIKRT_PR
 static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* dst, 

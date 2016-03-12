@@ -126,8 +126,7 @@ void wikrt_env_destroy(wikrt_env* e) {
     free(e);
 }
 
-
-// trivial implementation 
+// trivial implementation via LMDB
 void wikrt_env_sync(wikrt_env* e) {
     if(NULL != e->db) { 
         wikrt_db_flush(e->db); 
@@ -138,6 +137,7 @@ static void wikrt_cx_init(wikrt_cxm* cxm, wikrt_cx* cx) {
     cx->cxm = cxm;
     cx->memory = cxm->memory;
     cx->val = WIKRT_UNIT;
+    cx->txn = WIKRT_UNIT_INR;
 
     wikrt_cxm_lock(cxm); {
         cx->next = cxm->cxlist;
@@ -204,10 +204,11 @@ wikrt_err wikrt_cx_fork(wikrt_cx* cx, wikrt_cx** pfork)
     return WIKRT_OK;
 }
 
-void wikrt_cx_destroy(wikrt_cx* cx) {
-    
-    // drop bound val
+void wikrt_cx_destroy(wikrt_cx* cx) 
+{
+    // drop bound values to recover memory
     _wikrt_drop(cx, cx->val, true);
+    _wikrt_drop(cx, cx->txn, true);
 
     // remove from cxm
     wikrt_cxm* const cxm = cx->cxm;
@@ -247,173 +248,283 @@ wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
     return cx->cxm->env;
 }
 
-
-
-
-
-static inline bool wikrt_alloc_local(wikrt_cx* cx, wikrt_sizeb sz, wikrt_addr* addr) 
+// 
+wikrt_err wikrt_move_deep(wikrt_cx* const lcx, wikrt_val lval, 
+    wikrt_cx* const rcx, wikrt_val* rval)
 {
-    if(wikrt_fl_alloc(cx->memory, &(cx->fl), sz, addr)) {
-        cx->ct_bytes_alloc += sz;
-        return true;
-    }
-    return false;
+    return WIKRT_IMPL;
 }
 
-bool wikrt_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr) 
+wikrt_err wikrt_move(wikrt_cx* const lcx, wikrt_cx* const rcx) 
 {
-    sz = WIKRT_CELLBUFF(sz);
-    if(wikrt_alloc_local(cx, sz, addr)) {
-        // should succeed most times
-        return true; 
-    }
-    // otherwise acquire a bunch of memory, then retry.
-    wikrt_acquire_shared_memory(cx, WIKRT_PAGEBUFF(sz));
-    return wikrt_alloc_local(cx, sz, addr);
-}
+    if(lcx == rcx) { return WIKRT_INVAL; }
 
-static inline bool wikrt_acquire_shm(wikrt_cx* cx, wikrt_sizeb sz) 
-{
-    // assuming cxm lock is held
-    wikrt_addr block;
-    if(wikrt_fl_alloc(cx->memory, &(cx->cxm->fl), sz, &block)) {
-        wikrt_fl_free(cx->memory, &(cx->fl), sz, block);
-        return true;
-    }
-    return false;
-}
+    wikrt_val const v = lcx->val;
+    if(!wikrt_p(v)) { return WIKRT_TYPE_ERROR; }
 
-void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz)
-{
-    // I want a simple, predictable heuristic strategy that is very
-    // fast for smaller computations (the majority of Wikilon ops).
-    //
-    // Current approach:
-    // 
-    // - allocate space directly, if feasible.
-    // - otherwise: merge, coalesce, retry once.
-    // - fallback: acquire all shared space.
-    //
-    // This should be combined with mechanisms to release memory if
-    // a thread is holding onto too much, i.e. such that threads can
-    // gradually shift ownership of blocks of code.
-    wikrt_cxm* const cxm = cx->cxm;
-    void* const mem = cx->memory;
-    wikrt_cxm_lock(cxm); {
-        if(!wikrt_acquire_shm(cx, sz)) {
-            wikrt_fl_merge(mem, &(cx->fl), &(cxm->fl));
-            wikrt_fl_coalesce(mem, &(cxm->fl));
-            cx->fl = (wikrt_fl) { 0 };
-            if(!wikrt_acquire_shm(cx, sz)) {
-                wikrt_fl_merge(mem, &(cxm->fl), &(cx->fl));
-                cxm->fl = (wikrt_fl) { 0 };
-            }
-        }
-    } wikrt_cxm_unlock(cxm);
-
-    // TODO: latent deletion, could be useful.
-    // TODO: latent stowage? or elsewhere?
-}
-
-void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr) 
-{
-    sz = WIKRT_CELLBUFF(sz);
-    wikrt_fl_free(cx->memory, &(cx->fl), sz, addr);
-    cx->ct_bytes_freed += sz;
-
-    // It would be a problem in a multi-threaded scenario if any one
-    // context accumulated all the free space. So I'll heuristically
-    // limit each context to a certain amount of local free space.
-    // 
-    // This isn't optimal. It will create fragmentation issues, in the
-    // long run. I need a better allocator design overall. But it will
-    // do well enough for Wikilon's short term use cases.
-    if(cx->fl.free_bytes > WIKRT_FREE_THRESH) {
-        wikrt_cxm* const cxm = cx->cxm;
-        wikrt_cxm_lock(cxm); {
-            wikrt_fl_merge(cx->memory, &(cx->fl), &(cxm->fl));
-            cx->fl = (wikrt_fl) { 0 };
-        } wikrt_cxm_unlock(cxm);
-    }
-}
-
-bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size szf)
-{
-    sz0 = WIKRT_CELLBUFF(sz0);
-    szf = WIKRT_CELLBUFF(szf);
-    if(sz0 == szf) {
-        // no buffered size change 
-        return true; 
-    } else if(szf < sz0) { 
-        // free up a little space at the end of the buffer
-        wikrt_free(cx, (sz0 - szf), ((*addr) + szf)); 
-        return true; 
+    if(lcx->memory == rcx->memory) {
+        // local move between forks
+        wikrt_val* const pv = wikrt_pval(lcx, wikrt_vaddr(v));
+        lcx->val = pv[1];
+        pv[1] = rcx->val;
+        rcx->val = v;
+        return WIKRT_OK;
     } else {
-        // As an optimization, in-place growth is unreliable and
-        // unpredictable. So, Wikilon runtime doesn't bother. We'll
-        // simply allocate, shallow-copy, and free the original.
-        wikrt_addr const src = (*addr);
-        wikrt_addr dst;
-        if(!wikrt_alloc(cx, szf, &dst)) {
-            return false;
-        }
-        void* const pdst = (void*) wikrt_pval(cx, dst);
-        void const* const psrc = (void*) wikrt_pval(cx, src);
-        memcpy(pdst, psrc, sz0);
-        wikrt_free(cx, sz0, src);
-        (*addr) = dst;
-        return true;
+        // fail-safe move via copy on rhs then drop on lhs.
+        wikrt_err const st = wikrt_copy_move(lcx, NULL, rcx);
+        if(WIKRT_OK == st) { wikrt_drop(lcx, NULL); } 
+        return st;
     }
 }
 
-wikrt_err _wikrt_peek_type(wikrt_cx* cx, wikrt_vtype* out, wikrt_val const v)
+wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_ss* ss)
 {
-    if(wikrt_i(v)) { 
-        (*out) = WIKRT_VTYPE_INT; 
-    } else {
-        wikrt_tag const vtag = wikrt_vtag(v);
-        wikrt_addr const vaddr = wikrt_vaddr(v);
-        if(WIKRT_P == vtag) {
-            if(0 == vaddr) { (*out) = WIKRT_VTYPE_UNIT; }
-            else { (*out) = WIKRT_VTYPE_PROD; }
-        } else if((WIKRT_PL == vtag) || (WIKRT_PR == vtag)) {
-            (*out) = WIKRT_VTYPE_SUM;
-        } else if((WIKRT_O == vtag) && (0 != vaddr)) {
-            wikrt_val* const pv = wikrt_pval(cx, vaddr);
-            wikrt_val const otag = pv[0];
-            switch(LOBYTE(otag)) {
-                case WIKRT_OTAG_BIGINT: {
-                    (*out) = WIKRT_VTYPE_INT;
-                } break;
-                case WIKRT_OTAG_ARRAY: // same as sum
-                case WIKRT_OTAG_BINARY: // same as sum
-                case WIKRT_OTAG_TEXT: // same as sum
-                case WIKRT_OTAG_DEEPSUM: {
-                    (*out) = WIKRT_VTYPE_SUM;
-                } break;
-                case WIKRT_OTAG_BLOCK: {
-                    (*out) = WIKRT_VTYPE_BLOCK;
-                } break;
-                case WIKRT_OTAG_SEAL_SM: // same as SEAL
-                case WIKRT_OTAG_SEAL: {
-                    (*out) = WIKRT_VTYPE_SEAL;
-                } break;
-                case WIKRT_OTAG_STOWAGE: {
-                    (*out) = WIKRT_VTYPE_PEND;
-                } break;
-                default: {
-                    fprintf(stderr, u8"wikrt: peek type: unrecognized tag %u\n"
-                                  , (unsigned int)pv[0]);
-                    return WIKRT_INVAL;
-                } break;
-            }
-        } else { 
-            (*out) = WIKRT_VTYPE_PEND; 
-            return WIKRT_INVAL; 
-        }
+    return wikrt_copy_m(cx, ss, cx);
+}
+
+wikrt_err wikrt_copy_move(wikrt_cx* const lcx, wikrt_ss* ss, wikrt_cx* const rcx)
+{
+    if(lcx == rcx) { return WIKRT_INVAL; }
+    return wikrt_copy_m(lcx, ss, rcx);
+}
+
+wikrt_err wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* rss, wikrt_cx* rcx)
+{
+    // variant of moving copy that procedurally allows for lcx == rcx.
+    // in lcx == rcx case, the copy will be stacked with the original.
+    wikrt_val const v = lcx->val;
+    if(!wikrt_p(v)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pv = wikrt_pval(lcx, wikrt_vaddr(v));
+    
+    lcx->val = pv[1];
+    pv[1] = WIKRT_UNIT;
+
+    wikrt_val copy = WIKRT_VOID;
+    wikrt_ss ss = 0;
+    wikrt_err const st = wikrt_copy_v(lcx, v, &ss, rcx, &copy);
+    if(NULL != rss) { (*rss) = ss; }
+
+    pv[1] = lcx->val;
+    lcx->val = v;
+
+    if(WIKRT_OK == st) {
+        wikrt_pval(rcx, wikrt_vaddr(copy))[1] = rcx->val;
+        rcx->val = copy;
     }
+    return st;
+}
+
+// note: I want a 'safe' copy here, meaning that a failed copy should
+// result in no leaked memory and no damage to the original content.
+wikrt_err wikrt_copy_v(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval)
+{
+    // in this case, 'ss' is guaranteed to be non-NULL.
+    // todo: deep, possibly moving copy of values.
+
+    return WIKRT_IMPL;
+}
+
+wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_ss* rss) 
+{
+    wikrt_val const v = cx->val;
+    if(!wikrt_p(v)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pv = wikrt_pval(cx, wikrt_vaddr(v));
+    cx->val = pv[1];
+    pv[1] = WIKRT_UNIT;
+    wikrt_ss ss = 0;
+    wikrt_drop_v(cx, v, &ss);
+    if(NULL != rss) { (*rss) = ss; }
     return WIKRT_OK;
 }
+
+void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) 
+{
+    _wikrt_drop(cx, v, true); // TODO: fix to use 'ss'
+}
+
+
+wikrt_err wikrt_intro_unit(wikrt_cx* cx)
+{
+    bool const ok = wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, WIKRT_UNIT, cx->val);
+    return (ok ? WIKRT_OK : WIKRT_CXFULL);
+}
+
+wikrt_err wikrt_intro_unit_r(wikrt_cx* cx)
+{
+    bool const ok = wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, cx->val, WIKRT_UNIT);
+    return (ok ? WIKRT_OK : WIKRT_CXFULL);
+}
+
+wikrt_err wikrt_elim_unit(wikrt_cx* cx)
+{
+    wikrt_addr const a = wikrt_vaddr(cx->val);
+    bool const okType = wikrt_p(cx->val) && (WIKRT_UNIT == wikrt_pval(cx,a)[0]);
+    if(!okType) { return WIKRT_TYPE_ERROR; }
+    cx->val = wikrt_pval(cx, a)[1];
+    wikrt_free(cx, WIKRT_CELLSIZE, a);
+    return WIKRT_OK;
+}
+
+wikrt_err wikrt_elim_unit_r(wikrt_cx* cx)
+{
+    wikrt_addr const a = wikrt_vaddr(cx->val);
+    bool const okType = wikrt_p(cx->val) && (WIKRT_UNIT == wikrt_pval(cx,a)[1]);
+    if(!okType) { return WIKRT_TYPE_ERROR; }
+    cx->val = wikrt_pval(cx, a)[0];
+    wikrt_free(cx, WIKRT_CELLSIZE, a);
+    return WIKRT_OK;
+}
+
+wikrt_err wikrt_wrap_sum(wikrt_cx* cx, bool inRight)
+{
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    return wikrt_wrap_sum_v(cx, inRight, wikrt_pval(cx, wikrt_vaddr(cx->val)));
+}
+
+wikrt_err wikrt_unwrap_sum(wikrt_cx* cx, bool* inRight)
+{
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    return wikrt_unwrap_sum_v(cx, inRight, wikrt_pval(cx, wikrt_vaddr(cx->val)));
+}
+
+wikrt_err wikrt_wrap_seal(wikrt_cx* cx, char const* s)
+{
+    return WIKRT_IMPL;
+}
+
+wikrt_err wikrt_unwrap_seal(wikrt_cx* cx, char* buff)
+{
+    return WIKRT_IMPL;
+}
+
+/** (a*(b*c))→(b*(a*c)). ABC op `w` */
+wikrt_err wikrt_wswap(wikrt_cx* cx)
+{
+    return wikrt_wswap_v(cx, cx->val);
+}
+
+/** (a*(b*c))→(b*(a*c)). Preserves outer-inner structure. */
+wikrt_err wikrt_wswap_v(wikrt_cx* const cx, wikrt_val const abc) 
+{
+    if(wikrt_p(abc)) {
+        wikrt_val* const pabc = wikrt_pval(cx, wikrt_vaddr(abc));
+        wikrt_val const bc = pabc[1];
+        if(wikrt_p(bc)) {
+            wikrt_val* const pbc = wikrt_pval(cx, wikrt_vaddr(bc));
+            wikrt_val const b = pbc[0];
+            pbc[0] = pabc[0];
+            pabc[0] = b;
+            return WIKRT_OK;
+        }
+    }
+    return WIKRT_TYPE_ERROR;
+}
+
+/** (a*(b*(c*d)))→(a*(c*(b*d))). ABC op `z` */
+wikrt_err wikrt_zswap(wikrt_cx* cx)
+{
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val const bcd = wikrt_pval(cx, wikrt_vaddr(cx->val))[1];
+    return wikrt_wswap_v(cx, bcd);
+}
+
+/** (a*(b*c))→((a*b)*c). ABC op `l`. */
+wikrt_err wikrt_assocl(wikrt_cx* cx) 
+{
+    wikrt_val const abc = cx->val;
+    if(wikrt_p(abc)) {
+        wikrt_val* const pa_bc = wikrt_pval(cx, wikrt_vaddr(abc));
+        wikrt_val const bc = pa_bc[1];
+        if(wikrt_p(bc)) {
+            wikrt_val* const pbc = wikrt_pval(cx, wikrt_vaddr(bc));
+            wikrt_val const a = pa_bc[0];
+            pa_bc[0] = bc; // old a → bc
+            pa_bc[1] = pbc[1]; // old bc → c
+            pbc[1] = pbc[0]; // old c → b
+            pbc[0] = a; // old b → a
+            return WIKRT_OK;
+        }
+    }
+    return WIKRT_TYPE_ERROR;
+}
+
+/** ((a*b)*c)→(a*(b*c)). ABC op `r`. */
+wikrt_err wikrt_assocr(wikrt_cx* cx)
+{
+    wikrt_val const abc = cx->val;
+    if(wikrt_p(abc)) {
+        wikrt_val* const pab_c = wikrt_pval(cx, wikrt_vaddr(abc));
+        wikrt_val const ab = pab_c[0];
+        if(wikrt_p(ab)) {
+            wikrt_val* const pab = wikrt_pval(cx, wikrt_vaddr(ab));
+            wikrt_val const c = pab_c[1];
+            pab_c[1] = ab;
+            pab_c[0] = pab[0];
+            pab[0] = pab[1];
+            pab[1] = c;
+            return WIKRT_OK;
+        }
+    }
+    return WIKRT_IMPL;
+}
+
+/** (a*b)→(b*a). ABC ops `vrwlc`. */
+wikrt_err wikrt_swap(wikrt_cx* cx)
+{
+    if(wikrt_p(cx->val)) {
+        wikrt_val* const p = wikrt_pval(cx, wikrt_vaddr(cx->val));
+        wikrt_val const fst = p[0];
+        p[0] = p[1];
+        p[1] = fst;
+        return WIKRT_OK;
+    }
+    return WIKRT_TYPE_ERROR;
+}
+
+/** ((a+(b+c))*e)→((b+(a+c))*e). ABC op `W`. */
+wikrt_err wikrt_sum_wswap(wikrt_cx* cx)
+{
+    return WIKRT_IMPL;
+}
+
+/** ((a+(b+(c+d)))*e)→((a+(c+(b+d)))*e). ABC op `Z`. */
+wikrt_err wikrt_sum_zswap(wikrt_cx* cx)
+{
+    return WIKRT_IMPL;
+}
+
+/** ((a+(b+c))*e)→(((a+b)+c)*e). ABC op `L`. */
+wikrt_err wikrt_sum_assocl(wikrt_cx* cx)
+{
+    return WIKRT_IMPL;
+}
+
+/** (((a+b)+c)*e)→((a+(b+c))*e). ABC op `R`. */
+wikrt_err wikrt_sum_assocr(wikrt_cx* cx)
+{
+    return WIKRT_IMPL;
+}
+
+/** ((a+b)*e)→((b+a)*e). ABC ops `VRWLC`. */
+wikrt_err wikrt_sum_swap(wikrt_cx* cx)
+{
+    return WIKRT_IMPL;
+}
+
+/** (a*((b+c)*e))→(((a*b)+(a*c))*e). ABC op `D`. */
+wikrt_err wikrt_sum_distrib(wikrt_cx* cx)
+{
+    return WIKRT_IMPL;
+}
+
+
+/** (((a*b)+(c*d))*e)→((a+c)*((b+d)*e)). ABC op `F`. */
+wikrt_err wikrt_sum_factor(wikrt_cx* cx)
+{
+    return WIKRT_IMPL;
+}
+
+
 
 /* Currently allocating as a normal list. This means we allocate one
  * full cell (WIKRT_CELLSIZE) per character, usually an 8x increase.

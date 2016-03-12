@@ -51,14 +51,13 @@ bool test_unit(wikrt_cx* cx)
 
 static inline bool test_bool(wikrt_cx* cx, bool const bTest) 
 {
-    bool b; wikrt_vtype type;
+    bool b; 
     wikrt_err st = WIKRT_OK;
     st |= wikrt_intro_unit(cx);
     st |= wikrt_wrap_sum(cx, bTest);
-    st |= wikrt_peek_type(cx, &type);
     st |= wikrt_unwrap_sum(cx, &b);
     st |= wikrt_elim_unit(cx);
-    return (WIKRT_OK == st) && (bTest == b) && (WIKRT_VTYPE_SUM == type);
+    return (WIKRT_OK == st) && (bTest == b);
 }
 
 static inline bool test_true(wikrt_cx* cx) { return test_bool(cx, true); }
@@ -67,16 +66,13 @@ static inline bool test_false(wikrt_cx* cx) { return test_bool(cx, false); }
 bool test_i32(wikrt_cx* cx, int32_t const iTest) 
 {
     int32_t i;
-    wikrt_vtype type; 
     wikrt_ss ss;
     wikrt_err st = WIKRT_OK;
     st |= wikrt_intro_i32(cx, iTest);
-    st |= wikrt_peek_type(cx, &type);
     st |= wikrt_peek_i32(cx, &i);
     st |= wikrt_drop(cx, &ss);
     return (WIKRT_OK == st) && (iTest == i) 
-        && (WIKRT_SS_NORM == ss)
-        && (WIKRT_VTYPE_INT == type);
+        && (WIKRT_SS_NORM == ss);
 }
 
 static inline bool test_i32_max(wikrt_cx* cx) {
@@ -101,16 +97,13 @@ static inline bool test_i32_largeint_maxneg(wikrt_cx* cx) {
 bool test_i64(wikrt_cx* cx, int64_t const iTest) 
 {
     int64_t i;
-    wikrt_vtype type; 
     wikrt_ss ss;
     wikrt_err st = WIKRT_OK;
     st |= wikrt_intro_i64(cx, iTest);
-    st |= wikrt_peek_type(cx, &type);
     st |= wikrt_peek_i64(cx, &i);
     st |= wikrt_drop(cx, &ss);
     return (WIKRT_OK == st) && (iTest == i) 
-        && (WIKRT_SS_NORM == ss)
-        && (WIKRT_VTYPE_INT == type);
+        && (WIKRT_SS_NORM == ss);
 }
 
 static inline bool test_i64_max(wikrt_cx* cx) {
@@ -143,17 +136,17 @@ void numstack(wikrt_cx* cx, int32_t count)
 }
 
 /* destroy a stack and compute its sum. */
-void sumstack(wikrt_cx* cx, int64_t* sum)
+int64_t sumstack(wikrt_cx* cx)
 {   
-    wikrt_err st = WIKRT_OK;
-    while((WIKRT_OK == st) && !wikrt_match_type(cx, WIKRT_VTYPE_UNIT)) {
-        st |= wikrt_assocr(cx);
-        int32_t elem = 0;
-        st |= wikrt_peek_i32(cx, &elem);
+    int64_t sum = 0;
+    while(WIKRT_OK == wikrt_assocr(cx)) {
+        int32_t elem = INT32_MIN;
+        wikrt_peek_i32(cx, &elem);
         wikrt_drop(cx, NULL);
-        (*sum) += elem;
+        sum += elem;
     }
-    st |= wikrt_elim_unit(cx);
+    wikrt_elim_unit(cx);
+    return sum;
 }
 
 bool test_alloc_prod(wikrt_cx* cx) 
@@ -162,8 +155,7 @@ bool test_alloc_prod(wikrt_cx* cx)
     numstack(cx, ct);
 
     int64_t const expected_sum = (ct * (int64_t)(ct + 1)) / 2;
-    int64_t actual_sum = 0;
-    sumstack(cx, &actual_sum);
+    int64_t actual_sum = sumstack(cx);
 
     bool const ok = (expected_sum == actual_sum);
     return ok;
@@ -178,12 +170,9 @@ bool test_copy_prod(wikrt_cx* cx)
     wikrt_copy(cx, NULL);
     wikrt_copy(cx, NULL);
 
-    int64_t sumA = 0;
-    int64_t sumB = 0;
-    int64_t sumC = 0;
-    sumstack(cx, &sumA);
-    sumstack(cx, &sumB);
-    sumstack(cx, &sumC);
+    int64_t const sumA = sumstack(cx);
+    int64_t const sumB = sumstack(cx);
+    int64_t const sumC = sumstack(cx);
 
     bool const ok = (sumA == sumB) 
                  && (sumB == sumC) 
