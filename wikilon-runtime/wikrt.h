@@ -113,13 +113,14 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 
 /** @brief tagged objects 
  *
- * Currently, I just use the first byte of the tag to indicate its
+ * Currently, I just use the low byte of the tag word to indicate its
  * general type, and the next few bytes for for flags or data.
  * I'm unlikely to ever need more than a few dozen tags, so this
  * should be sufficient almost indefinitely.
  *
  * Tagged objects will never be used for basic products, mostly to
- * keep the logic simpler.
+ * keep the logic simpler. At the moment, much code assumes that if
+ * we aren't a tagged object, we're a basic pair structure.
  *
  * WIKRT_OTAG_DEEPSUM
  *
@@ -151,10 +152,10 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *   substructural attribute checks for the contained values. This helps
  *   with lazy checking of substructural properties.
  *
- *   WIKRT_OTAG_TOKEN
+ *   WIKRT_OTAG_OPTOK
  *
- *   This tag is used to carry unrecognized tokens. The upper 24 bits
- *   carry the first 3 bytes of the token. 
+ *   This tag is used to carry unrecognized tokens. The tag bits include
+ *   only a length for the token. This token is not NUL-terminated.
  *
  * WIKRT_OTAG_SEAL   (size, value, sealer)
  *
@@ -189,14 +190,12 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *
  * WIKRT_OTAG_TEXT
  *
- *  A specialized array representation for texts. This is a list of valid
- *  unicode codepoints that are also valid as ABC embedded texts.
+ *  A compact list representation for texts that reduces us to 8 bytes overhead
+ *  per (up to) 4096 bytes. It's still O(N) list, but a much tighter O(N) with
+ *  corresponding reductions in slicing and char-count overheads, etc..
  *
- *         (text, (sizeCP, sizeB), buffer, next)
- *
- *  Instead of a single size, we'll split 16 bits each to size in codepoints
- *  and size in bytes. This will help accelerate indexed lookups or splits or
- *  size computations (involving codepoint counts).
+ *  The header includes size of chunk in both bytes and codepoints (12 bits * 2).
+ *  The body contains the 'next' value, e.g. another chunk of text.
  *
  * WIKRT_OTAG_STOWAGE
  *
@@ -216,6 +215,7 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_OTAG_DEEPSUM  83   /* S */
 #define WIKRT_OTAG_BLOCK    91   /* [ */
 #define WIKRT_OTAG_OPVAL    39   /* ' */
+#define WIKRT_OTAG_OPTOK   123   /* { */
 #define WIKRT_OTAG_SEAL     36   /* $ */
 #define WIKRT_OTAG_SEAL_SM  58   /* : */
 #define WIKRT_OTAG_ARRAY    86   /* V */
@@ -249,8 +249,11 @@ static inline bool wikrt_otag_seal_sm(wikrt_val v) { return (WIKRT_OTAG_SEAL_SM 
 static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
 static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
 
-static inline bool wikrt_block_is_rel(wikrt_val v) { return (0 != (WIKRT_BLOCK_RELEVANT & v)); }
-static inline bool wikrt_block_is_aff(wikrt_val v) { return (0 != (WIKRT_BLOCK_AFFINE & v)); }
+static inline void wikrt_capture_block_ss(wikrt_val otag, wikrt_ss* ss)
+{
+    if(WIKRT_BLOCK_RELEVANT & otag) { (*ss) |= WIKRT_SS_REL; }
+    if(WIKRT_BLOCK_AFFINE & otag)   { (*ss) |= WIKRT_SS_AFF; }
+}
 
 static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
     return  (((nDigits << 1) | (positive ? 0 : 1)) << 8) | WIKRT_OTAG_BIGINT;
@@ -258,13 +261,14 @@ static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
 
 /* Internal API calls. */
 wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
-wikrt_err wikrt_copy_v(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
+bool wikrt_copy_v(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
 void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss*);
 wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val);
-wikrt_err wikrt_sum_wswap_v(wikrt_cx*, wikrt_val);
+wikrt_err wikrt_sum_wswap_v(wikrt_cx*, wikrt_val*);
 
 wikrt_err wikrt_wrap_sum_v(wikrt_cx*, bool inRight, wikrt_val*);
 wikrt_err wikrt_unwrap_sum_v(wikrt_cx*, bool* inRight, wikrt_val*);
+
 
 #if 0
 wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val*);
@@ -436,6 +440,7 @@ void wikrt_release_mem(wikrt_cx*);
 bool wikrt_realloc(wikrt_cx*, wikrt_size, wikrt_addr*, wikrt_size);
 
 // Allocate a cell value tagged with WIKRT_O, WIKRT_P, WIKRT_PL, or WIKRT_PR
+// note that 'dst' is only modified on success. Some code depends on this.
 static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* dst, 
     wikrt_tag tag, wikrt_val v0, wikrt_val v1) 
 {
@@ -450,7 +455,8 @@ static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* dst,
     return true;
 }
 
-// Allocate a double cell tagged WIKRT_O.
+// Allocate a double cell tagged WIKRT_O. 
+// note that 'dst' is only modified on success. Some code depends on this.
 static inline bool wikrt_alloc_dcellval(wikrt_cx* cx, wikrt_val* dst,
     wikrt_val v0, wikrt_val v1, wikrt_val v2, wikrt_val v3)
 {
@@ -465,21 +471,6 @@ static inline bool wikrt_alloc_dcellval(wikrt_cx* cx, wikrt_val* dst,
     pv[2] = v2;
     pv[3] = v3;
     return true;
-}
-
-/* compute number of cells in 'spine' of list or stack, following the
- * right hand side of each pair, specific to values of type WIKRT_P,
- * WIKRT_PL, WIKRT_PR.
- */
-static inline wikrt_size wikrt_spine_length(wikrt_cx* cx, wikrt_val v) 
-{
-    wikrt_size ct = 0;
-    while( (WIKRT_O != wikrt_vtag(v)) && (0 != wikrt_vaddr(v)) )
-    {
-        v = wikrt_pval(cx, wikrt_vaddr(v))[1];
-        ++ct;
-    }
-    return ct;
 }
 
 /* An allocator for integers up to 3 big digits (~90 bits). */
