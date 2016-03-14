@@ -54,39 +54,13 @@ Originally I was going for a more conventional API where values have handles out
 
 ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies favored over aliasing. Linearity allows me to implement many functions (or their common cases) without allocation. 
 
-The main difficulty with a bump-pointer nursery is that ABC ops `l` and `r` and so on can easily create a reference from an old-space to the new-space, which complicates tracking of value references as being in distinct spaces.
+*Thoughts:* I've frequently contemplated a bump-pointer nursery. This is feasible, perhaps, though it might require rewriting data plumbing operations to allocate within the nursery (lest `l` and `r` and the like produce references from the old space to the new space). This would probably complicate code a fair bit... so I'll hold off for now. Without a bump-pointer nursery, I cannot guarantee stack-like locality for 'new' values.
 
-I can use conventional free-list mechanisms. With this, fragmentation is a problem, especially in a multi-threaded scenario. Use of `wikrt_move()` is a fragmentation hazard because it results in data being free'd in a separate thread from the one where it was allocated. If that memory is then reused, local fragmentation worsens.
+For the moment, I use a conventional size-segregated free-list and quick-fit mechanisms. With this, fragmentation is a problem, especially in a multi-threaded scenario. Use of `wikrt_move()` is a fragmentation hazard because it results in data being free'd in a separate thread from the one where it was allocated. When that memory is then reused, local fragmentation worsens. I'll accept high fragmentation so I can move forward with implementation.
 
-One option is to attempt to *defragment* memory, i.e. after we detect our value structure seems badly fragmented, we can rewrite it into a contiguous block of memory. This has a similar cost as a normal GC, touching the 'living' data within a context, albeit with a different goal - to reduce gaps and improve localtiy rather than recover memory.
+Latent destruction of large values is a related, viable feature that could improve cx_destroy performance for large contexts values. OTOH, it limits an easy means to track substructural properties. So I'll probably leave this feature out for now.
 
-For the moment, I'll accept high fragmentation so I can move forward with implementation.
-
-Latent destruction of large values is a related, viable feature that could improve cx_destroy performance for large contexts. OTOH, it limits how well we can track substructural properties. So I'll probably leave this feature out for now.
-
-#### Allocator Thoughts
-
-If I'm going to defragment occasionally, I could simplify the allocation model favor bump-pointer allocation. When I have too much free space, I can coalescefree larger page-aligned fragments back to the commons. If we still have too many fragments, we may decide then to defragment.
-
-We'll coalesce, free the largest page-aligned fragments back to the commons, then 
-
-it might be worthwhile to simplify the allocator to favor bump-pointer allocation instead of a more sophisticated free-list. 
-
-OTOH, this would mean we lose local reallocations, unless I use some sort of recycling mechanism (coalesce then recycle?). To minimize fragmentation during normal processing, it seems useful to reuse the free-list for allocations instead of just bump-pointer allocations. We could maybe benefit from using some form of size-segregated free-list both for the free-space and for the target space.
-
- We allocate by bumping a pointer, then we free to a separate list. When the free list has too much space, we coalesce and push larger page-aligned fragments back up to the parent. If we have too many small fragments (i.e. coalesce doesn't work well enough to push us back below a certain threshold of free space) we can try to defrag the context. This would give many benefits related to compacting garbage collectors.
-
-OTOH, if I'm going to perform compacting GC, do I even need to track a free-list? Well, it probably helps with keeping each collector thread-local. And if I do track a size-segregated free-list, I can probably benefit from local reallocation as a way to stave off defragmentation for a while.
-
-* move large fragments (greater than page size) back
-
-
- since I'll end up dumping a lot of small holes that I cannot recover.
-
-Reusing space and small gaps is a nice idea, but it's a bad idea to lose access to those. A viable option might be to defrag at some stable point in the implementation, e.g. just after a `wikrt_drop()` or `wikrt_step_eval()` that has free'd up enough space. To defrag, we can: hide current free space, copy the value, drop the old value, dump all free space to commons. This gives us a fresh, compact copy of the context's value, and a fresh space for further allocations. It also ensures that free-space dumped to commons has no lingering objects that would resist future allocations in that space. The cost, of course, is that we must 'touch' the entire living memory, not just the unstable fragments.
-
-
-
+At the moment, copy on large stacks and lists and such will tend to use slab-allocations for a large 'spine' value, but we will 'free' the same slab one element at a time. I'm not sure what effect this will have on fragmentation - it might help or hurt.
 
 ## Representations
 
@@ -207,11 +181,13 @@ A useful related feature might involve array chunks with reasonably large 'capac
 
 Probably a simple variant of: 
 
-        (binary, size, buffer, next)
+        (binary, size, (pointer to) buffer, next)
+
+The pointer to a buffer enables breaking a binary into slices.
 
 #### Texts
 
-Originally I was thinking I'd have texts include some indices. But this seems too complicated to me. A simpler technique is probably to have texts include *two* sizes: both a size in bytes and a size in characters. When the two sizes are 16-bits each, we'll text chunks of up to 64kB and we'd limit the 'scan' for indexed access to at most 64kB. This is still a lot, but it should be much more efficient than fully scanning multiple-megabyte texts. And it's simple!
+An idea for texts is to use a 'split' size information. E.g. if I used 16 bits for the number of chars and 16 bits for the number of bytes, I get a total 32 bits of size info... and text chunks of no more than 65536 bytes. Since most splitting/slicing/indexing/etc. will need to scan all or part of a buffer, this gives me an implicit buffer index based on our chunk sizes, i.e. enabling me to avoid scanning most of each buffer.
 
 ### More Numerics
 

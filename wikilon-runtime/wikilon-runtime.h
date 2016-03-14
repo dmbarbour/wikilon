@@ -134,7 +134,7 @@ typedef enum wikrt_err
 , WIKRT_BUFFSZ       = (1<< 5)  // output buffer too small
 
 // Transactions
-, WIKRT_TXN_CONFLICT = (1<< 6)  // transaction failed on conflict
+, WIKRT_CONFLICT     = (1<< 6)  // transaction state conflict
 
 // Evaluations
 , WIKRT_QUOTA_STOP   = (1<< 7)  // halted on time/effort quota
@@ -195,17 +195,20 @@ wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
  * memory does enable an efficient `wikrt_move()` to communicate data
  * between two contexts (i.e. without a deep copy).
  * 
- * Active forks tend each to require a couple megabytes working memory.
+ * Active forks tend each to acquire a few megabytes working memory.
  * Be certain to account for this in `wikrt_cx_create()`. Passive forks
- * that merely carry data, OTOH, don't require extra space.
+ * that merely hold or transport data, OTOH, don't require extra space.
  */
 wikrt_err wikrt_cx_fork(wikrt_cx*, wikrt_cx**);
 
 /** @brief Destroy a context and recover memory. 
  *
- * The primary space underlying a context is not destroyed until all
- * forks (from wikrt_cx_fork) are destroyed. However, destroying a
- * fork will at least release the memory bound to its contained value. 
+ * Destroying a context will automatically free the bound values, abort
+ * a transaction if necessary, and release working memory (thread-local
+ * free lists). If it's the last context associated with wikrt_cx_create,
+ * the underlying volume of memory is unmapped and returned to the OS. 
+ *
+ * A wikrt_cx_fork context will hold onto the underlying shared space.
  */
 void wikrt_cx_destroy(wikrt_cx*);
 
@@ -386,7 +389,8 @@ bool wikrt_valid_token(char const* s);
  * Between different forks that share the same memory, `wikrt_move()` is
  * a non-allocating, non-copying, O(1) operation, guaranteed to succeed
  * if the argument has the correct type. Otherwise, the value is copied
- * to the right hand context. 
+ * to the right hand context. There is some risk of memory fragmentation
+ * when values are moved between forks, i.e. due to reduced locality.
  *
  * Note that the `wikrt_move` call requires exclusive control over both
  * contexts. In many cases, it may be useful to create intermediate
@@ -413,10 +417,9 @@ typedef enum wikrt_ss
  *
  * This operation will succeed even for affine or pending values values, but 
  * will also report the substructural metadata. This allows the client to make
- * decisions about whether the copy was acceptable or not. (Wikilon runtime
- * doesn't keep enough information to track substructure until the copy is 
- * in progress.) The wikrt_ss* value may also be NULL if you don't need the
- * output.
+ * decisions about whether a copy was acceptable or not. Wikilon runtime doesn't
+ * keep enough information to track substructure before a copy or drop is in
+ * progress. If the 'ss' information is irrelevant, set it to NULL.
  *
  * This is most likely to fail with WIKRT_CXFULL, though it may fail with 
  * WIKRT_TYPE_ERROR if the parameter structure is not valid.
@@ -425,10 +428,15 @@ wikrt_err wikrt_copy(wikrt_cx*, wikrt_ss*);
 
 /** @brief Combined copy and move operation. 
  *
+ * For the left context, this has type (a*b)→(a*b). For the right context
+ * it has type (c)→(a*c). This corresponds to wikrt_copy followed immediately
+ * by wikrt_move, albeit in one step. The combination avoids an intermediate
+ * copy and reduces risk of memory fragmentation from wikrt_move. 
+ *
  * This is roughly wikrt_copy followed by wikrt_move, albeit in one step.
  * The combined action has some advantages: it avoids an intermediate copy
  * between two different memories, and it potentially mitigates memory 
- * fragmentation between forks (leveraging the target working memory).
+ * fragmentation between forks (copies to the target's working memory).
  */
 wikrt_err wikrt_copy_move(wikrt_cx*, wikrt_ss*, wikrt_cx*);
 

@@ -261,6 +261,7 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
  */
 void wikrt_fl_merge(void* const mem, wikrt_fl* const src, wikrt_fl* const dst)
 {
+    assert(src != dst);
     // a merge in approximately constant time
     dst->free_bytes += src->free_bytes;
     dst->frag_count += src->frag_count;
@@ -272,6 +273,52 @@ void wikrt_fl_merge(void* const mem, wikrt_fl* const src, wikrt_fl* const dst)
         (*ldst) = wikrt_flst_join(mem, (*ldst), (*lsrc));
         (*lsrc) = 0;
     }
+}
+ 
+
+/** acquire some total quantity of space, regardless of fragmentation
+ *
+ * This is inexact. We'll not split any fragments, so we might take more
+ * than requested. If we already know there are no fragments of the given
+ * size, then any overshoot is less than twice the requested space.
+ *
+ * This is O(F) with the number of fragments moved, but favors larger 
+ * fragments first.
+ */
+static bool wikrt_move_frags(void* mem, wikrt_fl* src, wikrt_fl* dst, wikrt_size amt)
+{
+    assert(src != dst);
+    wikrt_size const total_goal = dst->free_bytes + amt;
+    wikrt_sc sc = WIKRT_FLCT;
+
+    while(sc-- > 0) {
+        wikrt_flst* const s = src->size_class + sc;
+        wikrt_flst* const d = dst->size_class + sc;
+        while(0 != (*s)) {
+            wikrt_fb* const ps = wikrt_pfb(mem, (*s));
+            wikrt_flst const f = ps->next;
+            wikrt_fb* const pf = wikrt_pfb(mem, f);
+            wikrt_size const sz = pf->size;
+
+            if(pf == ps) { (*s) = 0; }
+            else { ps->next = pf->next; }
+            pf->next = f; // close fragment list
+
+            // join circular lists, adding `f` to end of list.
+            (*d) = wikrt_flst_join(mem, (*d), f);
+
+            // track changes in statistics.            
+            dst->free_bytes += sz;  
+            dst->frag_count += 1;
+            src->free_bytes -= sz;  
+            src->frag_count -= 1;
+
+            if(dst->free_bytes >= total_goal) { 
+                return true; 
+            }
+        }
+    }
+    return false;
 }
 
 static inline bool wikrt_acquire_shm(wikrt_cx* cx, wikrt_sizeb sz) 
@@ -292,18 +339,14 @@ void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_size sz)
     //
     // Current approach:
     // 
-    // - allocate space directly, if feasible.
+    // - allocate a single slab directly, if feasible.
     // - otherwise: merge, coalesce, retry once.
-    // - fallback: acquire all remaining shared space.
+    // - final fallback: acquire fragmented memory.
     //
-    // The fallback here is a bit extreme, but guarantees the full
-    // memory can be used and only occurs in extreme conditions where
-    // there isn't any large block of free space remaining.
     wikrt_cxm* const cxm = cx->cxm;
     void* const mem = cx->memory;
     wikrt_cxm_lock(cxm); {
         if(!wikrt_acquire_shm(cx, sz)) {
-
             wikrt_size const f0 = cxm->fl.frag_count;
             wikrt_fl_merge(mem, &(cx->fl), &(cxm->fl));
             wikrt_fl_coalesce(mem, &(cxm->fl));
@@ -311,9 +354,9 @@ void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_size sz)
 
             // track fragmentation of memory
             cx->fragmentation += ((ff < f0) ? 0 : (ff - f0));
-            
+
             if(!wikrt_acquire_shm(cx, sz)) {
-                wikrt_fl_merge(mem, &(cxm->fl), &(cx->fl));
+                wikrt_move_frags(mem, &(cxm->fl), &(cx->fl), sz);
             }
         }
     } wikrt_cxm_unlock(cxm);
@@ -368,6 +411,10 @@ void wikrt_free(wikrt_cx* cx, wikrt_size sz, wikrt_addr addr)
     if(WIKRT_FREE_THRESH < cx->fl.free_bytes) {
         wikrt_release_mem(cx);
     }
+
+    // thoughts: it might be wortwhile to free larger blocks of memory
+    // directly to our shared space. But I'm not sure what impact this
+    // would have on fragmentation.
 }
 
 void wikrt_release_mem(wikrt_cx* cx) 
@@ -412,6 +459,14 @@ bool wikrt_realloc(wikrt_cx* cx, wikrt_size sz0, wikrt_addr* addr, wikrt_size sz
     }
 }
 
-
-
+/** Pre-allocate some space. This can simplify logic for a full context case.
+ * TODO? variant that can preallocate multiple fragments.
+ */
+bool wikrt_prealloc(wikrt_cx* cx, wikrt_size size)
+{
+    wikrt_addr addr;
+    if(!wikrt_alloc(cx, size, &addr)) { return false; }
+    wikrt_free(cx, size, addr);
+    return true;
+}
 

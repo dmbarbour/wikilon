@@ -52,7 +52,7 @@ typedef struct wikrt_db wikrt_db;
 #define WIKRT_QFSIZE (WIKRT_FLCT_QF * WIKRT_CELLSIZE)
 #define WIKRT_FFMAX  (WIKRT_QFSIZE * (1 << (WIKRT_FLCT_FF - 1)))
 #define WIKRT_QFCLASS(sz) ((sz - 1) / WIKRT_CELLSIZE)
-#define WIKRT_FREE_THRESH (1 << 20)
+#define WIKRT_FREE_THRESH (1 << 21)
 
 // for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
@@ -97,7 +97,8 @@ typedef struct wikrt_db wikrt_db;
 static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & WIKRT_MASK_ADDR); }
 static inline wikrt_tag  wikrt_vtag(wikrt_val v)  { return (v & WIKRT_MASK_TAG);  }
 static inline wikrt_val  wikrt_tag_addr(wikrt_tag t, wikrt_addr a) { return (t | a); }
-static inline bool wikrt_p(wikrt_val v) { return (WIKRT_P == wikrt_vtag(v)) && (0 != wikrt_vaddr(v)); }
+static inline bool wikrt_p(wikrt_val v) { return (WIKRT_P == wikrt_vtag(v)) && (0 != wikrt_vaddr(v)); } // pair, not unit
+static inline bool wikrt_o(wikrt_val v) { return (WIKRT_O == wikrt_vtag(v)) && (0 != wikrt_vaddr(v)); } // object, not void
 
 /** @brief small integers
  * 
@@ -170,45 +171,11 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *     data bits and require no additional space. Developers should be
  *     encouraged to leverage this feature for performance.
  *   
- * WIKRT_OTAG_ARRAY (priority: low to medium)
- *
- *   A compact representations for list-like structures `μL.((a*L)+b)`.
- *
- *          (array, size, buffer, next)
- *
- *   In this case our size is in bytes, and we have an array of value
- *   references. 
- *
+ * WIKRT_OTAG_ARRAY 
  * WIKRT_OTAG_BINARY
- *
- *   A specialized array representation for small integers in (0..255).
- *
- *          (binary, size, buffer, next).
- *
- *   The header will eventually include a reversal bit (once we have
- *   accelerators for list reversal).  
- *
  * WIKRT_OTAG_TEXT
- *
- *  A compact list representation for texts that reduces us to 8 bytes overhead
- *  per (up to) 4096 bytes. It's still O(N) list, but a much tighter O(N) with
- *  corresponding reductions in slicing and char-count overheads, etc..
- *
- *  The header includes size of chunk in both bytes and codepoints (12 bits * 2).
- *  The body contains the 'next' value, e.g. another chunk of text.
- *
  * WIKRT_OTAG_STOWAGE
  *
- *   Fully stowed values use a 64-bit reference to LMDB storage, plus a 
- *   few linked-list references for ephemeron GC purposes. Latent stowage
- *   is also necessary (no address assigned yet). And we'll need reference
- *   counting for stowed values.
- *
- *   Thoughts: in addition to substructural attributes, a few tag bits to 
- *   track the basic 'vtype' of a stowed value could be useful. Then I would
- *   not need a WIKRT_VTYPE_STOWED, for example.
- *
- *   I might need to use multiple tags for different stowage.
  */
 
 #define WIKRT_OTAG_BIGINT   78   /* N */
@@ -218,10 +185,10 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_OTAG_OPTOK   123   /* { */
 #define WIKRT_OTAG_SEAL     36   /* $ */
 #define WIKRT_OTAG_SEAL_SM  58   /* : */
-#define WIKRT_OTAG_ARRAY    86   /* V */
-#define WIKRT_OTAG_BINARY   56   /* 8 */
-#define WIKRT_OTAG_TEXT     34   /* " */
-#define WIKRT_OTAG_STOWAGE  64   /* @ */
+//#define WIKRT_OTAG_ARRAY    86   /* V */
+//#define WIKRT_OTAG_BINARY   56   /* 8 */
+//#define WIKRT_OTAG_TEXT     34   /* " */
+//#define WIKRT_OTAG_STOWAGE  64   /* @ */
 #define LOBYTE(V) ((V) & 0xFF)
 
 #define WIKRT_DEEPSUMR      3 /* bits 11 */
@@ -246,14 +213,17 @@ static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM 
 static inline bool wikrt_otag_block(wikrt_val v) { return (WIKRT_OTAG_BLOCK == LOBYTE(v)); }
 static inline bool wikrt_otag_seal(wikrt_val v) { return (WIKRT_OTAG_SEAL == LOBYTE(v)); }
 static inline bool wikrt_otag_seal_sm(wikrt_val v) { return (WIKRT_OTAG_SEAL_SM == LOBYTE(v)); }
-static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
-static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
+//static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
+//static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
 
 static inline void wikrt_capture_block_ss(wikrt_val otag, wikrt_ss* ss)
 {
-    if(WIKRT_BLOCK_RELEVANT & otag) { (*ss) |= WIKRT_SS_REL; }
-    if(WIKRT_BLOCK_AFFINE & otag)   { (*ss) |= WIKRT_SS_AFF; }
+    if(NULL != ss) { 
+        if(WIKRT_BLOCK_RELEVANT & otag) { (*ss) |= WIKRT_SS_REL; }
+        if(WIKRT_BLOCK_AFFINE & otag)   { (*ss) |= WIKRT_SS_AFF; }
+    }
 }
+static inline bool wikrt_opval_hides_ss(wikrt_val otag) { return (0 == (WIKRT_OPVAL_LAZYKF & otag)); }
 
 static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
     return  (((nDigits << 1) | (positive ? 0 : 1)) << 8) | WIKRT_OTAG_BIGINT;
@@ -261,13 +231,28 @@ static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
 
 /* Internal API calls. */
 wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
-bool wikrt_copy_v(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
+wikrt_err wikrt_copy_v(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
 void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss*);
+
 wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val);
+
 wikrt_err wikrt_sum_wswap_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_sum_zswap_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_sum_assocl_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_sum_assocr_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_sum_swap_v(wikrt_cx*, wikrt_val*);
 
 wikrt_err wikrt_wrap_sum_v(wikrt_cx*, bool inRight, wikrt_val*);
 wikrt_err wikrt_unwrap_sum_v(wikrt_cx*, bool* inRight, wikrt_val*);
+wikrt_err wikrt_wrap_seal_v(wikrt_cx*, char const* tok, wikrt_val*);
+wikrt_err wikrt_unwrap_seal_v(wikrt_cx*, char* tokbuff, wikrt_val*);
+
+wikrt_err wikrt_alloc_i32_v(wikrt_cx*, wikrt_val*, int32_t);
+wikrt_err wikrt_alloc_i64_v(wikrt_cx*, wikrt_val*, int64_t);
+wikrt_err wikrt_peek_i32_v(wikrt_cx*, wikrt_val const, int32_t*);
+wikrt_err wikrt_peek_i64_v(wikrt_cx*, wikrt_val const, int64_t*);
+wikrt_err wikrt_alloc_istr_v(wikrt_cx*, wikrt_val*, char const*, size_t strlen);
+wikrt_err wikrt_peek_istr_v(wikrt_cx*, wikrt_val const, char* buff, size_t* strlen); 
 
 
 #if 0
@@ -292,21 +277,6 @@ wikrt_err _wikrt_read_binary(wikrt_cx*, size_t buffsz, size_t* bytesRead, uint8_
 wikrt_err _wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*, size_t);
 wikrt_err _wikrt_read_text(wikrt_cx*, size_t buffsz, size_t* bytesRead, size_t* charsRead, char* buffer, wikrt_val* text);
 wikrt_err _wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, size_t, wikrt_abc_opts);
-wikrt_err _wikrt_alloc_i32(wikrt_cx*, wikrt_val*, int32_t);
-wikrt_err _wikrt_alloc_i64(wikrt_cx*, wikrt_val*, int64_t);
-wikrt_err _wikrt_peek_i32(wikrt_cx*, wikrt_val const, int32_t*);
-wikrt_err _wikrt_peek_i64(wikrt_cx*, wikrt_val const, int64_t*);
-wikrt_err _wikrt_alloc_istr(wikrt_cx*, wikrt_val*, char const*, size_t strlen);
-wikrt_err _wikrt_peek_istr(wikrt_cx*, wikrt_val const, char* buff, size_t* strlen); 
-wikrt_err _wikrt_alloc_prod(wikrt_cx*, wikrt_val* p, wikrt_val fst, wikrt_val snd);
-wikrt_err _wikrt_split_prod(wikrt_cx*, wikrt_val p, wikrt_val* fst, wikrt_val* snd);
-wikrt_err _wikrt_alloc_sum(wikrt_cx*, wikrt_val* c, bool inRight, wikrt_val);
-wikrt_err _wikrt_split_sum(wikrt_cx*, wikrt_val c, bool* inRight, wikrt_val*);
-wikrt_err _wikrt_alloc_seal(wikrt_cx*, wikrt_val* sv, char const* s, size_t strlen, wikrt_val v); 
-wikrt_err _wikrt_split_seal(wikrt_cx*, wikrt_val sv, char* s, wikrt_val* v);
-wikrt_err _wikrt_drop(wikrt_cx*, wikrt_val, bool bDropRel);
-wikrt_err _wikrt_move(wikrt_cx* dest, wikrt_val*, wikrt_cx* origin, wikrt_val);
-wikrt_err _wikrt_stow(wikrt_cx*, wikrt_val*);
 
 /** @brief Stowage address is 64-bit address. 
  *
@@ -438,6 +408,11 @@ bool wikrt_alloc(wikrt_cx*, wikrt_size, wikrt_addr*);
 void wikrt_free(wikrt_cx*, wikrt_size, wikrt_addr);
 void wikrt_release_mem(wikrt_cx*);
 bool wikrt_realloc(wikrt_cx*, wikrt_size, wikrt_addr*, wikrt_size);
+bool wikrt_prealloc(wikrt_cx*, wikrt_size);
+static inline bool wikrt_prealloc_cell(wikrt_cx* cx) {
+    if(cx->fl.frag_count > 0) { return true; }
+    return wikrt_prealloc(cx, WIKRT_CELLSIZE); 
+}
 
 // Allocate a cell value tagged with WIKRT_O, WIKRT_P, WIKRT_PL, or WIKRT_PR
 // note that 'dst' is only modified on success. Some code depends on this.
