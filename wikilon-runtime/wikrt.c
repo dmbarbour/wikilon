@@ -248,6 +248,97 @@ wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
     return cx->cxm->env;
 }
 
+typedef struct wikrt_typk {
+    wikrt_cx* cx;
+    char* buff;
+    char* const buffend;
+} wikrt_typk; 
+
+static inline void typk_write(wikrt_typk* pk, wikrt_refl_type ty) { *((pk->buff)++) = (char) ty; }
+
+// this is designed to minimize C-stack depth along the 'spine' of a 
+// stack or list. It also avoids using the WIKRT_TYPE_ANY unless it
+// would take more than one character to express a type. While GCC 
+// can perform tail-call optimizations, it's hand-coded here.
+static void wikrt_typeek_v(wikrt_typk* pk, size_t maxdepth, wikrt_val v)
+{
+    wikrt_val sumbits = 0;
+
+tailcall:  // for hand-coded tail call optimization
+
+    if(pk->buffend == pk->buff) { /* write nothing */ }
+    else if(0 != sumbits) {
+        if(0 == maxdepth) { typk_write(pk, WIKRT_TYPE_ANY); }
+        else {
+            bool const inR = (3 == (3 & sumbits));
+            wikrt_refl_type const ty = inR ? WIKRT_TYPE_SUMR : WIKRT_TYPE_SUML;
+            typk_write(pk, ty);
+            maxdepth -= 1;
+            goto tailcall;
+        }
+    }
+    else if(wikrt_i(v)) { typk_write(pk, WIKRT_TYPE_NUM); }
+    else if(WIKRT_P == wikrt_vtag(v)) {
+        if(0 == wikrt_vaddr(v)) { typk_write(pk, WIKRT_TYPE_UNIT); }
+        else if(0 == maxdepth) { typk_write(pk, WIKRT_TYPE_ANY); }
+        else {
+            typk_write(pk, WIKRT_TYPE_PROD);
+            wikrt_typeek_v(pk, maxdepth, wikrt_pval(pk->cx, wikrt_vaddr(v))[0]);
+            v = wikrt_pval(pk->cx, wikrt_vaddr(v))[1];
+            maxdepth -= 1;
+            goto tailcall;
+        }
+    }
+    else if((WIKRT_PR == wikrt_vtag(v)) || (WIKRT_PL == wikrt_vtag(v))) {
+        sumbits = (WIKRT_PR == wikrt_vtag(v)) ? WIKRT_DEEPSUMR : WIKRT_DEEPSUML;
+        v = wikrt_tag_addr(WIKRT_P, wikrt_vaddr(v));
+        goto tailcall;
+    }
+    else if(WIKRT_VOID == v) { typk_write(pk, WIKRT_TYPE_PEND); }
+    else if(WIKRT_O == wikrt_vtag(v)) {
+        wikrt_val const* const pv = wikrt_pval(pk->cx, wikrt_vaddr(v));
+        switch(LOBYTE(*pv)) {
+            case WIKRT_OTAG_BIGINT: {
+                typk_write(pk, WIKRT_TYPE_NUM);
+            } break;
+            case WIKRT_OTAG_DEEPSUM: {
+                sumbits = (*pv) >> 8;
+                v = pv[1];
+                goto tailcall;
+            } break;
+            case WIKRT_OTAG_BLOCK: {
+                typk_write(pk, WIKRT_TYPE_FUN);
+            } break;
+            case WIKRT_OTAG_SEAL: // same as SEAL_SM
+            case WIKRT_OTAG_SEAL_SM: {
+                typk_write(pk, WIKRT_TYPE_SEAL);
+            } break;
+            default: {
+                fprintf(stderr, "wikrt_peek_typestr: unhandled otag (%d)\n", LOBYTE(*pv));
+                abort();
+            }
+        }
+    }
+    else {
+        fprintf(stderr, "wikrt_peek_typestr: unhandled value type (%d)\n", LOBYTE(v));
+        abort();
+    }
+}
+
+wikrt_err wikrt_peek_typestr(wikrt_cx* cx, char* buff, size_t* buffsize, size_t maxdepth)
+{
+    if(!wikrt_p(cx->val)) {
+        (*buffsize) = 0;
+        return WIKRT_TYPE_ERROR; 
+    }
+    wikrt_typk typk = { cx, buff, buff + (*buffsize) };
+    wikrt_typeek_v(&typk, maxdepth, *(wikrt_pval(cx, wikrt_vaddr(cx->val))));
+    (*buffsize) = (typk.buff - buff);
+    return WIKRT_OK;
+}
+
+
+
 wikrt_err wikrt_move(wikrt_cx* const lcx, wikrt_cx* const rcx) 
 {
     wikrt_val const v = lcx->val;

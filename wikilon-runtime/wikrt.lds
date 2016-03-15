@@ -13,8 +13,8 @@
     wikrt_abcd_operators;
     wikrt_abcd_expansion;
     wikrt_strerr;
-
     wikrt_valid_token;
+    wikrt_peek_typestr;
 
     wikrt_copy;
     wikrt_drop;

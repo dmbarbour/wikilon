@@ -357,23 +357,42 @@ bool wikrt_valid_token(char const* s);
  */
 #define WIKRT_TOK_BUFFSZ 64
 
-/* Thoughts on reflection.
+/** @brief Reflection on Structured Data
  *
- * Originally I had some code here to 'peek' at the type of a value.
- * But I don't like how the code for that turns out. A better idea
- * might be something like:
+ * Reflection is not something that clients of Wikilon should need to
+ * perform frequently. It's intended for efficient debug rendering of
+ * data structures, not for normal logic.
  *
- *     wikrt_refl(cx)  ::  (a*e) → ((meta a) * (a * e)).
+ * Wikilon runtime provides a very simplistic form of reflection: it
+ * can produce a string of text that describes the structure without
+ * very much detail. For example, a pair containing two numbers would
+ * construct a string "P##". The client may only loosely control the
+ * breadth and depth of analysis.
  *
- * Where 'meta a' is some description of the type and structure of
- * the value 'a'. This would be allocating, which would simplify the
- * API. It might generate a simple string.
- *
- * Meanwhile, I don't immediately need reflection for anything. I will
- * wait until I have a strong use case for it. In most cases, such as
- * flexible rendered debug output. In normal cases, it might be better
- * to emit metadata about program structure without external reflection.
+ * Other than this, the most precise reflection is to quote a value,
+ * extract the block into text, then perform a simplistic evaluation.
  */
+typedef enum wikrt_refl_type 
+{ WIKRT_TYPE_UNIT = 85 // U
+, WIKRT_TYPE_PROD = 80 // P(type)(type)
+, WIKRT_TYPE_SUML = 76 // L(type)
+, WIKRT_TYPE_SUMR = 82 // R(type)
+, WIKRT_TYPE_NUM  = 35 // #
+, WIKRT_TYPE_FUN  = 70 // F (substructure NOT listed)
+, WIKRT_TYPE_SEAL = 58 // :(type)  (sealer token is NOT provided)
+, WIKRT_TYPE_PEND = 126 // ~ (pending evaluation, stowed value)
+, WIKRT_TYPE_ANY  = 63 // ? (at maxdepth limit)
+} wikrt_refl_type;
+
+/** @brief Reflection via type string.
+ *
+ * Given a context value of type (a*e), this produces a type string for the
+ * 'a' value. The buffsize parameter is both an input (maximum buffer size)
+ * and output (count of characters written). At the size limit, our type is
+ * truncated. At our depth limit, types are simply replaced by '?' to avoid
+ * consuming additional characters.
+ */
+wikrt_err wikrt_peek_typestr(wikrt_cx*, char* buff, size_t* buffsize, size_t maxdepth);
 
   /////////////////////////
  // BASIC DATA PLUMBING //
