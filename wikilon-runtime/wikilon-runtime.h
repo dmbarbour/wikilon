@@ -118,7 +118,10 @@ typedef struct wikrt_cx wikrt_cx;
  * condition that allows simple policies on how to handle them. If
  * there is no error, a zero value (WIKRT_OK) is returned.
  *
- * In general, wikrt_err values may be bitwise-or'd together.
+ * In general, wikrt_err values may be bitwise-or'd together. 
+ *
+ * Many API functions are 'fail safe' and guarantee that their failure
+ * does not modify the context's data.
  */
 typedef enum wikrt_err 
 { WIKRT_OK           = 0
@@ -215,12 +218,14 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** @brief Complete enumeration of ABC and supported ABCD opcodes.
+/** @brief Complete enumeration Wikilon Runtime opcodes.
  * 
- * Wikilon uses Awelon Bytecode (ABC) and ABC Deflated (ABCD) as its
- * primary serialization models for behavior and data. ABC consists of
- * 42 primitive operators, while ABCD is defined by acyclic expansion
- * ultimately into plain ABC.
+ * Wikilon primarily uses Awelon Bytecode (ABC) and ABC Deflated (ABCD)
+ * as its serialization models for behavior and data. ABC consists of
+ * 42 primitive operators (plus text and block literals), while ABCD is
+ * defined by acyclic expansion ultimately into plain ABC. Under the hood
+ * Wikilon may additionally use experimental ABCD accelerators, available
+ * via simplification of blocks.
  *
  * ABCD serves two roles. It both compresses the serialized format and
  * serves as useful accelerators for hand-written interpreters. ABCD 
@@ -357,53 +362,37 @@ bool wikrt_valid_token(char const* s);
  */
 #define WIKRT_TOK_BUFFSZ 64
 
-/** @brief Reflection on Structured Data
+/* Note: Thoughts on Reflection
  *
- * Reflection is not something that clients of Wikilon should need to
- * perform frequently. It's intended for efficient debug rendering of
- * data structures, not for normal logic.
+ * I've developed some experimental forms of reflection on structured
+ * data for Wikilon, but I've not been satisfied with the results. The
+ * motivation is for efficient debug rendering of data. Knowing that a
+ * value is a pair or a sum can help dismantle it efficiently for the
+ * rendering.
  *
- * Wikilon runtime provides a very simplistic form of reflection: it
- * can produce a string of text that describes the structure without
- * very much detail. For example, a pair containing two numbers would
- * construct a string "P##". The client may only loosely control the
- * breadth and depth of analysis.
+ * The most precise way to extract structured data from Wikilon runtime
+ * for arbitrary reflection is this: quote it as a block, extract that
+ * block as text, then process said text. However, this method has a cost
+ * proportional to amount of text generated, so it isn't lightweight. 
  *
- * Other than this, the most precise reflection is to quote a value,
- * extract the block into text, then perform a simplistic evaluation.
- */
-typedef enum wikrt_refl_type 
-{ WIKRT_TYPE_UNIT = 85 // U
-, WIKRT_TYPE_PROD = 80 // P(type)(type)
-, WIKRT_TYPE_SUML = 76 // L(type)
-, WIKRT_TYPE_SUMR = 82 // R(type)
-, WIKRT_TYPE_NUM  = 35 // #
-, WIKRT_TYPE_FUN  = 70 // F (substructure NOT listed)
-, WIKRT_TYPE_SEAL = 58 // :(type)  (sealer token is NOT provided)
-, WIKRT_TYPE_PEND = 126 // ~ (pending evaluation, stowed value)
-, WIKRT_TYPE_ANY  = 63 // ? (at maxdepth limit)
-} wikrt_refl_type;
-
-/** @brief Reflection via type string.
- *
- * Given a context value of type (a*e), this produces a type string for the
- * 'a' value. The buffsize parameter is both an input (maximum buffer size)
- * and output (count of characters written). At the size limit, our type is
- * truncated. At our depth limit, types are simply replaced by '?' to avoid
- * consuming additional characters.
- */
-wikrt_err wikrt_peek_typestr(wikrt_cx*, char* buff, size_t* buffsize, size_t maxdepth);
+ * An alternative is to rely on typesafe failure for most operations in
+ * Wikilon, e.g. try 'assocl' to detect a pair, and 'unwrap_sum' to access
+ * a sum, and 'elim_unit' to access a unit value. This should perform well
+ * enough, and will exercise code that is used for other purposes. Special
+ * rendering is easily associated with sealed values. 
+ * 
+ */ 
 
   /////////////////////////
  // BASIC DATA PLUMBING //
 /////////////////////////
 
-/** @brief Move a value from one context to another. 
+/** @brief Move a value from one context to another. Fail-safe.
  * 
  * For the left context, this has type `(a*b)→b`. For the right context,
  * this has type `c→(a*c)`. The `a` value is moved from the left context
  * to the right context. Move returns WIKRT_INVAL and does nothing if 
- * left and right contexts are the same.
+ * left and right contexts are identical.
  *
  * Between different forks that share the same memory, `wikrt_move()` is
  * a non-allocating, non-copying, O(1) operation, guaranteed to succeed
@@ -432,7 +421,7 @@ typedef enum wikrt_ss
 , WIKRT_SS_PEND   = (1 << 2)
 } wikrt_ss;
 
-/** @brief (a*e) → (a*(a*e)). ABC op `^`.
+/** @brief (a*e) → (a*(a*e)). ABC op `^`. Fail-safe.
  *
  * This operation will succeed even for affine or pending values values, but 
  * will also report the substructural metadata. This allows the client to make
@@ -445,7 +434,7 @@ typedef enum wikrt_ss
  */
 wikrt_err wikrt_copy(wikrt_cx*, wikrt_ss*);
 
-/** @brief Combined copy and move operation. 
+/** @brief Combined copy and move operation. Fail-safe.
  *
  * For the left context, this has type (a*b)→(a*b). For the right context
  * it has type (c)→(a*c). This corresponds to wikrt_copy followed immediately
@@ -459,7 +448,7 @@ wikrt_err wikrt_copy(wikrt_cx*, wikrt_ss*);
  */
 wikrt_err wikrt_copy_move(wikrt_cx*, wikrt_ss*, wikrt_cx*);
 
-/** @brief (a*e) → e. ABC op `%`.
+/** @brief (a*e) → e. ABC op `%`. Fail-safe.
  *
  * As with copy, this will report substructural attributes of the value
  * that was dropped. If a relevant or pending value was dropped, that 
@@ -471,7 +460,7 @@ wikrt_err wikrt_copy_move(wikrt_cx*, wikrt_ss*, wikrt_cx*);
  */
 wikrt_err wikrt_drop(wikrt_cx*, wikrt_ss*);
 
-/** (a*(b*c))→(b*(a*c)). ABC op `w`. Non-allocating.
+/** (a*(b*c))→(b*(a*c)). ABC op `w`. Non-allocating. Fail-safe.
  *
  * Most of the basic product manipulations are non-allocating, and
  * hence can only fail with WIKRT_TYPE_ERROR if the context has an
@@ -479,17 +468,15 @@ wikrt_err wikrt_drop(wikrt_cx*, wikrt_ss*);
  */
 wikrt_err wikrt_wswap(wikrt_cx*);
 
-/** (a*(b*(c*d)))→(a*(c*(b*d))). ABC op `z` */
+/** (a*(b*(c*d)))→(a*(c*(b*d))). ABC op `z`. Non-allocating. Fail-safe. */
 wikrt_err wikrt_zswap(wikrt_cx*);
 
-/** (a*(b*c))→((a*b)*c). ABC op `l`. */
+/** (a*(b*c))→((a*b)*c). ABC op `l`. Non-allocating. Fail-safe. */
 wikrt_err wikrt_assocl(wikrt_cx*);
 
-/** ((a*b)*c)→(a*(b*c)). ABC op `r`. */
+/** ((a*b)*c)→(a*(b*c)). ABC op `r`. Non-allocating. Fail-safe. */
 wikrt_err wikrt_assocr(wikrt_cx*);
 
-/** (a*b)→(b*a). ABC ops `vrwlc`. */
-wikrt_err wikrt_swap(wikrt_cx*);
 
 /** ((a+(b+c))*e)→((b+(a+c))*e). ABC op `W`. */
 wikrt_err wikrt_sum_wswap(wikrt_cx*);
@@ -503,35 +490,27 @@ wikrt_err wikrt_sum_assocl(wikrt_cx*);
 /** (((a+b)+c)*e)→((a+(b+c))*e). ABC op `R`. */
 wikrt_err wikrt_sum_assocr(wikrt_cx*);
 
-/** ((a+b)*e)→((b+a)*e). ABC ops `VRWLC`. */
-wikrt_err wikrt_sum_swap(wikrt_cx*);
-
 /** (a*((b+c)*e))→(((a*b)+(a*c))*e). ABC op `D`. */
 wikrt_err wikrt_sum_distrib(wikrt_cx*);
 
 /** (((a*b)+(c*d))*e)→((a+c)*((b+d)*e)). ABC op `F`. */
 wikrt_err wikrt_sum_factor(wikrt_cx*);
 
-#if 0
-// consider adding many of these...
+// ACCELERATED DATA PLUMBING
 
-/** ((a*(b*s))*e)→((b*(a*s))*e). ABC ops `rwrwzwlwl`. */
-wikrt_err wikrt_stack_wswap(wikrt_cx*);
+/** (a*b)→(b*a). ABC ops `vrwlc`. Non-allocating. Fail-safe. */
+wikrt_err wikrt_swap(wikrt_cx*);
 
-/** ((a*(b*(c*s)))*e)→((a*(c*(b*s)))*e). ABC ops `rwrwrwzwlwlwl`. */
-wikrt_err wikrt_stack_zswap(wikrt_cx*);
+/** ((a+b)*e)→((b+a)*e). ABC ops `VRWLC`. */
+wikrt_err wikrt_sum_swap(wikrt_cx*);
 
-// `rrwll`      swap on stack
-// `rwrzwll`    assocl on stack 
-// `rrwzlwl`    assocr on stack
-// stack-hand operations (take, put)
-#endif
+/* TODO: introduce accelerators as they're developed. */
 
   ///////////////////////////
  // DATA INPUT AND OUTPUT //
 ///////////////////////////
 
-/** @brief Allocate and eliminate unit values.
+/** @brief Allocate and eliminate unit values. Fail-safe.
  *
  *   wikrt_intro_unit:      (a)→(1*a)       vvrwlc
  *   wikrt_elim_unit:       (1*a)→(a)       vrwlcc
@@ -547,7 +526,7 @@ wikrt_err wikrt_elim_unit(wikrt_cx*);
 wikrt_err wikrt_intro_unit_r(wikrt_cx*);
 wikrt_err wikrt_elim_unit_r(wikrt_cx*);
 
-/** @brief Allocate and split 'sum' values one step at a time.
+/** @brief Allocate and split 'sum' values one step at a time. Fail-safe.
  *
  * Allocation operates on an `(a*e)` value and either returns the
  * `((a+0)*e)` or `((0+a)*e)` depending on the `inRight` parameter.
@@ -562,19 +541,20 @@ wikrt_err wikrt_unwrap_sum(wikrt_cx*, bool* inRight);
 
 // TODO: consider matching deeper structure.
 
-/** @brief Allocation of smaller integers. (e)→(Int*e). */
+/** @brief Allocation of smaller integers. (e)→(Int*e). Fail-safe. */
 wikrt_err wikrt_intro_i32(wikrt_cx*, int32_t);
 wikrt_err wikrt_intro_i64(wikrt_cx*, int64_t);
 
-/** @brief Non-destructively access small integers. (Int*e)→(Int*e). 
+/** @brief Non-destructively access small integers. (Int*e)→(Int*e). Fail-safe.
  *
  * The integer result is returned if possible. In case of a WIKRT_BUFFSZ
- * error, we'll appropriately return INT_MIN or INT_MAX for the size.
+ * error, we'll appropriately return INT_MIN or INT_MAX for the size. The
+ * context's value is not modified in any case.
  */
 wikrt_err wikrt_peek_i32(wikrt_cx*, int32_t*);
 wikrt_err wikrt_peek_i64(wikrt_cx*, int64_t*);
 
-/** @brief Allocation of large integers. (e)→(Int*e).
+/** @brief Allocation of large integers. (e)→(Int*e). Fail-safe.
  *
  * In this case we accept regex: `0 | (-)?[1-9][0-9]*`. Wikilon runtime
  * will support numbers up to a million digits, perhaps more. Wikilon
@@ -585,16 +565,17 @@ wikrt_err wikrt_peek_i64(wikrt_cx*, int64_t*);
  */
 wikrt_err wikrt_intro_istr(wikrt_cx*, char const*, size_t strlen);
 
-/** @brief Non-destructively access a large integer. (Int*e)→(Int*e).
+/** @brief Non-destructively access a large integer. (Int*e)→(Int*e). Fail-safe.
  *
  * The integer is returned as a string of regex `0 | (-)?[1-9][0-9]*`. 
  * The strlen is both input and output. As input, it is the maximum
  * buffer size. As an output, it is the recorded buffer size (on OK)
- * or the required buffer size (on WIKRT_BUFFSZ).
+ * or (on WIKRT_BUFFSZ) the exact required buffer size. No NUL is 
+ * added.
  */
 wikrt_err wikrt_peek_istr(wikrt_cx*, char* buff, size_t* strlen); 
 
-/** @brief Allocate a binary. (e)→(binary*e).
+/** @brief Allocate a binary. (e)→(binary*e). Fail-safe.
  *
  * The binary is modeled as a list of small integers (0..255). It may
  * use a more compact representation, e.g. an array of bytes, under 
@@ -602,7 +583,7 @@ wikrt_err wikrt_peek_istr(wikrt_cx*, char* buff, size_t* strlen);
  */
 wikrt_err wikrt_intro_binary(wikrt_cx*, uint8_t const*, size_t);
 
-/** @brief Incrementally read binary data.
+/** @brief Incrementally read binary data. 
  *
  * Our binary is a list `μL.((a*L)+b)` of bytes (0..255). Incremental 
  * read moves bytes to the client's buffer, dropping them as they're
@@ -621,7 +602,7 @@ wikrt_err wikrt_intro_binary(wikrt_cx*, uint8_t const*, size_t);
  */
 wikrt_err wikrt_read_binary(wikrt_cx*, uint8_t*, size_t*);
 
-/** @brief Allocate a text. 
+/** @brief Allocate a text. Fail-safe.
  *
  * Text must be valid utf-8, and valid as ABC text: no control characters
  * (C0, C1, DEL) except LF, no surrogate codepoints, no replacement char.
@@ -646,14 +627,14 @@ wikrt_err wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
  */
 wikrt_err wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
 
-/** @brief Allocate a block of Awelon Bytecode. (e)→(block * e). 
+/** @brief Allocate a block of Awelon Bytecode. (e)→(block * e). Fail-safe.
  * 
  * As with most input texts in this API, you're free to use a NUL-terminated
  * C string before the maximum size is reached.
  */
 wikrt_err wikrt_intro_block(wikrt_cx*, char const*, size_t, wikrt_abc_opts);
 
-/** @brief Wrap a value with a sealer token. (a * e)→((sealed a) * e).
+/** @brief Wrap a value with a sealer token. (a * e)→((sealed a) * e). Fail-safe.
  *
  * The sealer token is provided as a simple C string. Discretionary 
  * sealers such as ":map" are understood by Wikilon runtime, as they
@@ -662,7 +643,7 @@ wikrt_err wikrt_intro_block(wikrt_cx*, char const*, size_t, wikrt_abc_opts);
  */
 wikrt_err wikrt_wrap_seal(wikrt_cx*, char const*); 
 
-/** @brief Access a sealed value. ((sealed a) * e) → (a * e).
+/** @brief Access a sealed value. ((sealed a) * e) → (a * e). Fail-safe.
  *
  * This returns the sealer token into the provided buffer, which must
  * be at least WIKRT_TOK_BUFFSZ in length to eliminate risk of buffer
@@ -670,7 +651,7 @@ wikrt_err wikrt_wrap_seal(wikrt_cx*, char const*);
  */
 wikrt_err wikrt_unwrap_seal(wikrt_cx*, char*);
 
-/** @brief Mark a value for stowage. (a * e) → ((stowed a) * e)
+/** @brief Mark a value for stowage. (a * e) → ((stowed a) * e). Fail-safe.
  *
  * Value stowage pushes a representation of the value to a backing database
  * and replaces its local representation by a small, unique key value. Use of
@@ -693,7 +674,7 @@ wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_abc_opts);
   ////////////////
  // EVALUATION //
 ////////////////
-/** @brief Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e).
+/** @brief Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e). 
  *
  * This doesn't immediately perform the evaluation, but does prepare for
  * it. To complete the evaluation, proceed with `wikrt_step_eval` on the

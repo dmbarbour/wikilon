@@ -9,7 +9,7 @@
 #define TESTENV_SIZE (5 * TESTCX_SIZE)
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct); 
-int fillct(wikrt_cx* cx); // exercise memory management code
+int fillcount(wikrt_cx* cx); // exercise memory management code
 
 int main(int argc, char const** argv) {
     // return values
@@ -30,15 +30,42 @@ int main(int argc, char const** argv) {
         return err;
     }
 
+
+    int const fct0 = fillcount(cx);
+
     int tests_run = 0;
     int tests_passed = 0;
     run_tests(cx, &tests_run, &tests_passed);
 
+    int const fctf = fillcount(cx);
+
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(e);
 
+    fprintf(stdout, u8"Memory cells: %d → %d (%s)\n", fct0, fctf,
+        ((fct0 == fctf) ? "ok" : "memleak") );
     fprintf(stdout, u8"Passed %d of %d Tests\n", tests_passed, tests_run);
     return ((tests_run == tests_passed) ? ok : err);
+}
+
+int fillcount(wikrt_cx* cx) 
+{
+    // just create a stack of units until we run out of space.
+    // drop the value when finished.
+    int ct = 0;
+    do {
+        if(WIKRT_OK == wikrt_intro_unit(cx)) {
+            wikrt_assocl(cx);
+            ++ct;
+        } else {
+            wikrt_drop(cx, NULL);
+            return ct;
+        }
+
+        if(0 == (ct % 10000)) { 
+            fprintf(stderr, "fillcount: %d\n", ct);
+        }
+    } while(true);
 }
 
 bool test_tcx(wikrt_cx* cx) { return true; }
@@ -418,7 +445,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
         wikrt_cx* fork;                     \
         wikrt_cx_fork(cx,&fork);            \
         assert(NULL != fork);               \
-        if(T(fork)) { ++(*passct); }        \
+        bool const pass = T(fork);          \
+        if(pass) { ++(*passct); }           \
         else {                              \
             char const* name = #T ;         \
             fprintf(stderr, errFmt, *runct, name);    \

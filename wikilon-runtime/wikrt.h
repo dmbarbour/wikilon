@@ -339,7 +339,6 @@ typedef struct wikrt_fl {
     wikrt_flst size_class[WIKRT_FLCT];
 } wikrt_fl;
 
-// basic strategies without fallback resources
 bool wikrt_fl_alloc(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr*);
 void wikrt_fl_free(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr); // 
 void wikrt_fl_coalesce(void* mem, wikrt_fl*); // combines adjacent free blocks
@@ -392,12 +391,10 @@ struct wikrt_cx {
     void               *memory;     // main memory
     wikrt_fl            fl;         // local free space
 
-    // statistics and metrics, supports effort quotas
+    // statistics and metrics, supports quotas and heuristics
     uint64_t            ct_bytes_freed; // bytes freed
     uint64_t            ct_bytes_alloc; // bytes allocated
-
-    // fragments returned to commons (by wikrt_free) since defrag
-    uint64_t            fragmentation;
+    uint64_t            fragmentation;  // fragments added to cxm
 };
 
 static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
@@ -408,11 +405,6 @@ bool wikrt_alloc(wikrt_cx*, wikrt_size, wikrt_addr*);
 void wikrt_free(wikrt_cx*, wikrt_size, wikrt_addr);
 void wikrt_release_mem(wikrt_cx*);
 bool wikrt_realloc(wikrt_cx*, wikrt_size, wikrt_addr*, wikrt_size);
-bool wikrt_prealloc(wikrt_cx*, wikrt_size);
-static inline bool wikrt_prealloc_cell(wikrt_cx* cx) {
-    if(cx->fl.frag_count > 0) { return true; }
-    return wikrt_prealloc(cx, WIKRT_CELLSIZE); 
-}
 
 // Allocate a cell value tagged with WIKRT_O, WIKRT_P, WIKRT_PL, or WIKRT_PR
 // note that 'dst' is only modified on success. Some code depends on this.
@@ -447,10 +439,6 @@ static inline bool wikrt_alloc_dcellval(wikrt_cx* cx, wikrt_val* dst,
     pv[3] = v3;
     return true;
 }
-
-/* An allocator for integers up to 3 big digits (~90 bits). */
-wikrt_err wikrt_alloc_medint(wikrt_cx*, wikrt_val*, bool positive, uint32_t d0, uint32_t d1, uint32_t d2);
-wikrt_err wikrt_peek_medint(wikrt_cx*, wikrt_val, bool* positive, uint32_t* d0, uint32_t* d1, uint32_t* d2);
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const v) {
