@@ -440,6 +440,51 @@ bool test_sealers(wikrt_cx* cx)
     return (WIKRT_OK == wikrt_elim_unit(cx));
 }
 
+static void fillbuff(uint8_t* buff, size_t ct, unsigned int seed) 
+{
+    for(size_t ii = 0; ii < ct; ++ii) {
+        buff[ii] = (rand_r(&seed) & 0xFF);
+    }
+}
+static bool checkbuff(wikrt_cx* cx, uint8_t const* buff, size_t ct)
+{
+    bool inR;
+    int32_t i32;
+    for(size_t ii = 0; ii < ct; ++ii) {
+        bool ok  = (WIKRT_OK == wikrt_unwrap_sum(cx,&inR))
+                && !inR
+                && (WIKRT_OK == wikrt_assocr(cx))
+                && (WIKRT_OK == wikrt_peek_i32(cx, &i32))
+                && (i32 == (int32_t) buff[ii])
+                && (WIKRT_OK == wikrt_drop(cx,NULL));
+        if(!ok) { return false; }
+    }
+    return (WIKRT_OK == wikrt_unwrap_sum(cx, &inR))
+        && (inR)
+        && (WIKRT_OK == wikrt_elim_unit(cx));
+}
+
+bool test_alloc_binary(wikrt_cx* cx) 
+{
+    int const nLoops = 100;
+    for(int ii = 0; ii < nLoops; ++ii) {
+        size_t const buffsz = (100 * ii);
+        uint8_t buff[buffsz];
+        fillbuff(buff, buffsz, ii);
+        wikrt_intro_binary(cx, buff, buffsz);
+        if(!checkbuff(cx, buff, buffsz)) { 
+            fprintf(stderr, "error for binary %d\n", ii);
+            return false; 
+        }
+    }
+    return true;
+}
+
+bool test_alloc_text(wikrt_cx* cx) 
+{
+    return false;
+}
+
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
 
@@ -506,6 +551,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
 
     TCX(test_valid_token);
     TCX(test_sealers);
+    TCX(test_alloc_binary);
+    TCX(test_alloc_text);
 
 
     // TODO test: texts, binaries.

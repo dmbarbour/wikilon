@@ -274,7 +274,7 @@ typedef enum wikrt_opcode
 , ABC_NEG         = 45   // - :: (I(a) * e) → (I(-a) * e)
 , ABC_DIV         = 81   // Q :: (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e))
 , ABC_GT          = 71   // G :: (I(A) * (I(B) * e)) → (((I(B)*I(A)) + (I(A)*I(B))) * e); (in right if B > A)
-, ABC_CONDAP      = 63   // ? :: ([a→c] * ((a+b)*e)) → ((c+b)*e) (block must be droppable)
+, ABC_CONDAP      = 63   // ? :: ([a→c] * ((a+b)*e)) → ((c+b)*e) (for droppable block)
 , ABC_DISTRIB     = 68   // D :: (a * ((b+c) * e)) → (((a*b) + (a*c)) * e)
 , ABC_FACTOR      = 70   // F :: (((a*b)+(c*d)) * e) → ((a+c)*((b+d)*e))
 , ABC_MERGE       = 77   // M :: ((a+a)*e) → (a*e)
@@ -533,8 +533,12 @@ wikrt_err wikrt_elim_unit_r(wikrt_cx*);
  * Split does the opposite, returning the `inRight` condition.
  * 
  * If inRight is false, this corresponds to op `V`. Otherwise to
- * `VVRWLC`.
+ * `VVRWLC`. The unwrap variant provides easy access to a sum.
  *
+ * Both wrap sum and unwrap sum may perform allocation. As a special case,
+ * wrapping a sum around a product or unit, or unwrapping the generated
+ * sum value, does not require allocation and will not fail. Unwrap only
+ * allocates when working with arrays or other compact representations.
  */
 wikrt_err wikrt_wrap_sum(wikrt_cx*, bool inRight);
 wikrt_err wikrt_unwrap_sum(wikrt_cx*, bool* inRight);
@@ -579,11 +583,12 @@ wikrt_err wikrt_peek_istr(wikrt_cx*, char* buff, size_t* strlen);
  *
  * The binary is modeled as a list of small integers (0..255). It may
  * use a more compact representation, e.g. an array of bytes, under 
- * the hood. The binary is implicitly terminated by unit.
+ * the hood. The binary is implicitly terminated by unit. The size
+ * parameter must be exact.
  */
 wikrt_err wikrt_intro_binary(wikrt_cx*, uint8_t const*, size_t);
 
-/** @brief Incrementally read binary data. 
+/** @brief Incrementally read binary data. Destructive.
  *
  * Our binary is a list `μL.((a*L)+b)` of bytes (0..255). Incremental 
  * read moves bytes to the client's buffer, dropping them as they're
@@ -615,7 +620,7 @@ wikrt_err wikrt_read_binary(wikrt_cx*, uint8_t*, size_t*);
  */
 wikrt_err wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
 
-/** @brief Incrementally read a text. 
+/** @brief Incrementally read a text. Destructive.
  *
  * Similar to wikrt_read_binary, but will read text into a utf-8 buffer.
  * The characters read will meet the same constraints as alloc_text, i.e. 
@@ -623,7 +628,7 @@ wikrt_err wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
  *
  * In this case, both `bytes` and `chars` indicate maximums on input and
  * actual values upon output. A utf8 codepoint may be one to four bytes,
- * so `chars` indicates a number of codepoints read.
+ * and `chars` tracks number of codepoints read. 
  */
 wikrt_err wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
 
@@ -752,7 +757,8 @@ wikrt_err wikrt_int_cmp(wikrt_cx*, wikrt_ord*);
 /** @brief Validate database key.
  *
  * Transaction keys must be valid texts of limited size, having at
- * most WIKRT_VALID_KEY_MAXLEN bytes in the utf-8 encoding.
+ * most WIKRT_VALID_KEY_MAXLEN bytes in the utf-8 encoding, and at
+ * least one byte.
  */
 bool wikrt_valid_key(char const*);
 #define WIKRT_VALID_KEY_MAXLEN 255

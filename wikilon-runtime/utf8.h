@@ -23,6 +23,15 @@ static inline bool utf8_step(uint8_t const** s, size_t* byteLen, uint32_t* cp)
     return (0 != k);
 }
 
+/** Return size of current codepoint (no validation). */
+static inline size_t utf8_cpsize(uint8_t const* s) 
+{
+    if((*s) < 0x80) { return 1; }
+    else if((*s) < 0xE0) { return 2; }
+    else if((*s) < 0xF0) { return 3; }
+    else { return 4; }
+}
+
 /** Read a utf-8 character without validation. */
 static inline size_t utf8_readcp_unsafe(uint8_t const* s, uint32_t* cp) 
 {
@@ -50,13 +59,13 @@ static inline size_t utf8_readcp_unsafe(uint8_t const* s, uint32_t* cp)
 
 size_t utf8_readcp_unsafe(uint8_t const* s, uint32_t* cp);
 
-static inline bool utf8_step_unsafe(uint8_t const** s, size_t* byteLen, uint32_t* cp) 
+/* read a codepoint, knowing one is there. */
+static inline uint32_t utf8_step_unsafe(uint8_t const** s)
 {
-    if(0 == (*byteLen)) { return false; }
-    size_t const k = utf8_readcp_unsafe((*s), cp);
+    uint32_t cp;
+    size_t const k = utf8_readcp_unsafe((*s), &cp);
     (*s) += k;
-    (*byteLen) -= k;
-    return true; 
+    return cp;
 }
 
 /** Read a single utf-8 codepoint from the end of the text.

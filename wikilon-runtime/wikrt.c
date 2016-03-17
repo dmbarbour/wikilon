@@ -606,6 +606,7 @@ void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss)
             default: {
                 // TODO: arrays, texts, binaries, stowage, etc.
                 fprintf(stderr, u8"wikrt: drop unrecognized value: %u→(%u,%u...)\n", v, pv[0], pv[1]);
+                wikrt_drop_step_next(cx, &drop_stack, &v);
             }
         }}
     } while(true);
@@ -932,18 +933,14 @@ ewrapa:
     wikrt_wrap_sum_v(cx, inR, pse); // (a*b)→((a*b)+_)
     return st;
 }
-
+   
 
 wikrt_err wikrt_intro_i32(wikrt_cx* cx, int32_t i32)
 {
     wikrt_val v = WIKRT_VOID;
     wikrt_err const st = wikrt_alloc_i32_v(cx, &v, i32);
     if(WIKRT_OK != st) { return st; }
-    if(!wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, v, cx->val)) {
-        wikrt_drop_v(cx, v, NULL);
-        return WIKRT_CXFULL; 
-    }
-    return WIKRT_OK;
+    return wikrt_intro(cx, v);
 }
 
 wikrt_err wikrt_intro_i64(wikrt_cx* cx, int64_t i64)
@@ -951,11 +948,7 @@ wikrt_err wikrt_intro_i64(wikrt_cx* cx, int64_t i64)
     wikrt_val v = WIKRT_VOID;
     wikrt_err const st = wikrt_alloc_i64_v(cx, &v, i64);
     if(WIKRT_OK != st) { return st; }
-    if(!wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, v, cx->val)) {
-        wikrt_drop_v(cx, v, NULL);
-        return WIKRT_CXFULL;
-    }
-    return WIKRT_OK;
+    return wikrt_intro(cx, v);
 }
 
 wikrt_err wikrt_intro_istr(wikrt_cx* cx, char const* s, size_t len) 
@@ -963,11 +956,7 @@ wikrt_err wikrt_intro_istr(wikrt_cx* cx, char const* s, size_t len)
     wikrt_val v = WIKRT_VOID;
     wikrt_err const st = wikrt_alloc_istr_v(cx, &v, s, len);
     if(WIKRT_OK != st) { return st; }
-    if(!wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, v, cx->val)) {
-        wikrt_drop_v(cx, v, NULL);
-        return WIKRT_CXFULL;
-    }
-    return WIKRT_OK;
+    return wikrt_intro(cx, v);
 }
 
 wikrt_err wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
@@ -988,47 +977,112 @@ wikrt_err wikrt_peek_istr(wikrt_cx* cx, char* buff, size_t* len)
     return wikrt_peek_istr_v(cx, wikrt_pval(cx, wikrt_vaddr(cx->val))[0], buff, len);
 }
 
-/* Currently allocating as a normal list. This means we allocate one
- * full cell (WIKRT_CELLSIZE) per character, usually an 8x increase.
- * Yikes! But I plan to later tune this to a dedicated structure.
- */
-wikrt_err _wikrt_alloc_text(wikrt_cx* cx, wikrt_val* txt, char const* cstr, size_t len) 
-{ 
-    _Static_assert((sizeof(char) == sizeof(uint8_t)), "invalid cast from char* to utf8_t*");
-    uint8_t const* s = (uint8_t const*) cstr;
 
-    (*txt) = WIKRT_VOID;
-    wikrt_val* tl = txt;
-    uint32_t cp;
-    while((len != 0) && utf8_step(&s, &len, &cp)) {
-        if(!wikrt_text_char(cp)) { return WIKRT_INVAL; }
-        if(!wikrt_alloc_cellval(cx, tl, WIKRT_PL, wikrt_i2v((int32_t)cp), WIKRT_VOID)) { return WIKRT_CXFULL; }
-        tl = 1 + wikrt_pval(cx, wikrt_vaddr(*tl));
-    }
+wikrt_err wikrt_intro_binary(wikrt_cx* cx, uint8_t const* data, size_t len)
+{
+    wikrt_val v = WIKRT_VOID;
+    wikrt_err const st = wikrt_alloc_binary_v(cx, &v, data, len);
+    if(WIKRT_OK != st) { return st; }
+    return wikrt_intro(cx, v);
+}
 
-    (*tl) = WIKRT_UNIT_INR;
-    return WIKRT_OK;
+wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t len)
+{
+    wikrt_val v = WIKRT_VOID;
+    wikrt_err const st = wikrt_alloc_text_v(cx, &v, s, len);
+    if(WIKRT_OK != st) { return st; }
+    return wikrt_intro(cx, v);
 }
 
 
+bool wikrt_valid_text_len(char const* s, size_t* bytes, size_t* chars)
+{
+    _Static_assert((sizeof(char) == sizeof(uint8_t)), "invalid cast from char* to uint8_t*");
+    uint8_t const* const utf8 = (uint8_t const*)s;
+    size_t const maxlen = (NULL != bytes) ? (*bytes) : SIZE_MAX;
+    size_t len = 0;
+    size_t cct = 0;
+    do {
+        uint32_t cp;
+        size_t const k = utf8_readcp(utf8 + len, maxlen - len, &cp);
+        if((0 == k) || !wikrt_text_char(cp)) { break; }
+        len += k;
+        cct += 1;
+    } while(true);
+    if(NULL != bytes) { (*bytes) = len; }
+    if(NULL != chars) { (*chars) = cct; }
+    return ((maxlen == len) || (0 == utf8[len]));
+}
+
+// Long term, I'll want to use the WIKRT_OTAG_TEXT representation.
+// For now, however, I'll allocate a conventional list structure.
+// (But I'll allocate it as one larger block for now.)
+wikrt_err wikrt_alloc_text_v(wikrt_cx* cx, wikrt_val* v, char const* const s, size_t nBytes) 
+{
+    size_t nChars;
+    if(!wikrt_valid_text_len(s, &nBytes, &nChars)) {
+        return WIKRT_INVAL; // invalid text
+    }
+
+    if(0 == nChars) { // empty text
+        (*v) = WIKRT_UNIT_INR;
+        return WIKRT_OK;
+    }
+
+    // We need one cell per codepoint.
+    if(nChars >= (WIKRT_SIZE_MAX / WIKRT_CELLSIZE)) { return WIKRT_IMPL; }
+    wikrt_size const szAlloc = ((wikrt_size)nChars * WIKRT_CELLSIZE);
+    wikrt_addr spine;
+    if(!wikrt_alloc(cx, szAlloc, &spine)) { return WIKRT_CXFULL; }
+    (*v) = wikrt_tag_addr(WIKRT_PL, spine);
+
+    uint8_t const* u = (uint8_t const*) s;
+    #define READ_NEXT_CODEPOINT() wikrt_i2v((int32_t) utf8_step_unsafe(&u))
+    for(size_t ii = nChars; ii > 1; --ii) 
+    {
+        wikrt_val* const pspine = wikrt_pval(cx, spine);
+        spine += WIKRT_CELLSIZE;
+        pspine[0] = READ_NEXT_CODEPOINT();
+        pspine[1] = wikrt_tag_addr(WIKRT_PL, spine);
+    }
+    wikrt_val* const pspine_last = wikrt_pval(cx, spine);
+    pspine_last[0] = READ_NEXT_CODEPOINT();
+    pspine_last[1] = WIKRT_UNIT_INR;
+    #undef READ_NEXT_CODEPOINT
+    assert((s + nBytes) == (char const*)u);
+    return WIKRT_OK;
+}
 
 /* For the moment, we'll allocate a binary as a plain old list.
  * This results in an WIKRT_CELLSIZE (8x) expansion at this time. I
- * I will support more compact representations later.
+ * I will support a compact WIKRT_OTAG_BINARY representation later.
  */
-wikrt_err _wikrt_alloc_binary(wikrt_cx* cx, wikrt_val* v, uint8_t const* buff, size_t nBytes) 
+wikrt_err wikrt_alloc_binary_v(wikrt_cx* cx, wikrt_val* v, uint8_t const* buff, size_t nBytes) 
 {
-    (*v) = WIKRT_VOID;
-    wikrt_val* tl = v;
-    uint8_t const* const buffEnd = buff + nBytes;
-    while(buff != buffEnd) {
-        uint8_t const e = *(buff++);
-        if(!wikrt_alloc_cellval(cx, tl, WIKRT_PL, wikrt_i2v((int32_t)e), WIKRT_VOID)) { return WIKRT_CXFULL; }
-        tl = 1 + wikrt_pval(cx, wikrt_vaddr(*tl));
+    if(0 == nBytes) { // empty binary
+        (*v) = WIKRT_UNIT_INR;
+        return WIKRT_OK;
     }
-    (*tl) = WIKRT_UNIT_INR;
+
+    // prevent size overflow allocations
+    if(nBytes >= (WIKRT_SIZE_MAX / WIKRT_CELLSIZE)) { return WIKRT_IMPL; }
+    wikrt_size const szAlloc = ((wikrt_size)nBytes * WIKRT_CELLSIZE);
+    wikrt_addr spine;
+    if(!wikrt_alloc(cx, szAlloc, &spine)) { return WIKRT_CXFULL; }
+    (*v) = wikrt_tag_addr(WIKRT_PL, spine);
+
+    size_t const intraSpineBytes = nBytes - 1;
+    for(size_t ii = 0; ii < intraSpineBytes; ++ii) {
+        wikrt_val* const pspine = wikrt_pval(cx, spine);
+        spine += WIKRT_CELLSIZE;
+        pspine[0] = wikrt_i2v(buff[ii]);
+        pspine[1] = wikrt_tag_addr(WIKRT_PL, spine);
+    }
+    wikrt_val* const pspine_last = wikrt_pval(cx, spine);
+    pspine_last[0] = wikrt_i2v(buff[intraSpineBytes]);
+    pspine_last[1] = WIKRT_UNIT_INR;
     return WIKRT_OK;
-}
+} 
 
 static wikrt_err wikrt_alloc_medint(wikrt_cx* cx, wikrt_val* v, bool positive, uint32_t d0, uint32_t d1, uint32_t d2)
 {
@@ -1476,11 +1530,62 @@ wikrt_err wikrt_unwrap_seal_v(wikrt_cx* cx, char* buff, wikrt_val* v)
 
 }
 
+bool wikrt_valid_key_len(char const* k, size_t* len)
+{
+    (*len) = 1 + WIKRT_VALID_KEY_MAXLEN;
+    return wikrt_valid_text_len(k, len, NULL) 
+        && (1 <= (*len)) && ((*len) <= WIKRT_VALID_KEY_MAXLEN);
+}
+
+bool wikrt_valid_key(char const* k) 
+{
+    size_t len;
+    return wikrt_valid_key_len(k, &len);
+}
+    
+// TODO: move transaction processing to a separate file.
+
 void wikrt_txn_abort(wikrt_cx* cx) 
 {
-    // clear transaction record
+    // transactions are trivially recorded as values (for now).
     wikrt_drop_v(cx, cx->txn, NULL);
     cx->txn = WIKRT_VOID;
 }
 
+void wikrt_txn_durable(wikrt_cx* cx)
+{
+
+}
+
+wikrt_err wikrt_txn_create(wikrt_cx* cx) 
+{
+    if(WIKRT_VOID != cx->txn) { 
+        // no hierarchical transactions
+        return WIKRT_IMPL;
+    }
+    return WIKRT_IMPL;
+}
+
+wikrt_err wikrt_txn_commit(wikrt_cx* cx) 
+{
+    // TODO: commit transaction
+    wikrt_txn_abort(cx);
+    return WIKRT_IMPL;
+}
+
+wikrt_err wikrt_txn_write(wikrt_cx* cx, char const* key)
+{
+    size_t keylen;
+    if(!wikrt_valid_key_len(key,&keylen)) { return WIKRT_INVAL; }
+    return WIKRT_IMPL;
+}
+
+wikrt_err wikrt_txn_read(wikrt_cx* cx, char const* key) 
+{
+    size_t keylen;
+    if(!wikrt_valid_key_len(key, &keylen)) { return WIKRT_INVAL; }
+    // TODO: lookup in database, and record in transaction state.
+
+    return WIKRT_IMPL;
+}
 

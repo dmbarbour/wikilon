@@ -15,9 +15,11 @@
 
 /** Value references internal to a context. */
 typedef uint32_t wikrt_val;
+#define WIKRT_VAL_MAX UINT32_MAX
 
 /** size within a context; documents a number of bytes */
 typedef wikrt_val wikrt_size;
+#define WIKRT_SIZE_MAX WIKRT_VAL_MAX
 
 /** size buffered to one cell (i.e. 8 bytes for 32-bit context) */
 typedef wikrt_size wikrt_sizeb;
@@ -172,8 +174,36 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *     encouraged to leverage this feature for performance.
  *   
  * WIKRT_OTAG_ARRAY 
+ *
+ *   An array has type `μL.((a*L)+b)` for some element type `a` and terminal
+ *   type `b`. It's a compact representation of this type, using offsets into
+ *   a region instead of a lazy linked list. Our representation for arrays
+ *   will permit also for chunked lists, i.e. a list of array-like chunks that
+ *   have properties somewhere between lists and arrays.
+ *
+ *   The representation is:  (array-hdr, size, buffer, next).
+ *     With 'buffer' being the address for the first element.
+ *
+ *   The array header may include a bit for local reversal. The `next` value
+ *   may continue the list (possibly with another array) or may terminate it,
+ *   so includes the sum-type of the array's continuation.
+ *
  * WIKRT_OTAG_BINARY
+ *  
+ *   A binary is a specialized array type, elements restricted to the range
+ *   of small numbers in 0..255. The basic array structure is the same.
+ * 
  * WIKRT_OTAG_TEXT
+ *
+ *   A text is a specialized compact list type, using a utf-8 encoding and
+ *   limited segment sizes. In particular, a segment may be no more than
+ *   2^16 bytes. The 'size' field is divided in two parts: the byte count
+ *   and the codepoint count. Larger texts must use the chunked list rep.
+ *
+ *   The motivation here is to constrain how much scanning we must perform
+ *   to index or split a text. With the utf-8 encoding, we don't benefit as
+ *   much from a tight encoding.
+ *
  * WIKRT_OTAG_STOWAGE
  *
  */
@@ -254,6 +284,14 @@ wikrt_err wikrt_peek_i64_v(wikrt_cx*, wikrt_val const, int64_t*);
 wikrt_err wikrt_alloc_istr_v(wikrt_cx*, wikrt_val*, char const*, size_t strlen);
 wikrt_err wikrt_peek_istr_v(wikrt_cx*, wikrt_val const, char* buff, size_t* strlen); 
 
+wikrt_err wikrt_alloc_binary_v(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
+wikrt_err wikrt_alloc_text_v(wikrt_cx*, wikrt_val*, char const*, size_t);
+
+// return number of valid bytes and chars, up to given limits. Return
+// 'true' only if all bytes were read or we stopped on a NUL terminal.
+// Here 'szchars' may be NULL.
+bool wikrt_valid_text_len(char const* s, size_t* szbytes, size_t* szchars);
+bool wikrt_valid_key_len(char const* s, size_t* szBytes);
 
 #if 0
 wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val*);
@@ -272,9 +310,7 @@ wikrt_err wikrt_sum_factor_v(wikrt_cx*, wikrt_val*);
  * This is due to the layer of indirection to handle an external rootlist and
  * compacting GC. The internal calls do not require root values for input or output.
  */
-wikrt_err _wikrt_alloc_binary(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
 wikrt_err _wikrt_read_binary(wikrt_cx*, size_t buffsz, size_t* bytesRead, uint8_t* buffer, wikrt_val* binary);
-wikrt_err _wikrt_alloc_text(wikrt_cx*, wikrt_val*, char const*, size_t);
 wikrt_err _wikrt_read_text(wikrt_cx*, size_t buffsz, size_t* bytesRead, size_t* charsRead, char* buffer, wikrt_val* text);
 wikrt_err _wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, size_t, wikrt_abc_opts);
 
@@ -422,6 +458,16 @@ static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* dst,
     return true;
 }
 
+// add a value to the main context stack
+static inline wikrt_err wikrt_intro(wikrt_cx* cx, wikrt_val v)
+{
+    if(!wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, v, cx->val)) {
+        wikrt_drop_v(cx, v, NULL);
+        return WIKRT_CXFULL;
+    }
+    return WIKRT_OK;
+}
+
 // Allocate a double cell tagged WIKRT_O. 
 // note that 'dst' is only modified on success. Some code depends on this.
 static inline bool wikrt_alloc_dcellval(wikrt_cx* cx, wikrt_val* dst,
@@ -439,6 +485,8 @@ static inline bool wikrt_alloc_dcellval(wikrt_cx* cx, wikrt_val* dst,
     pv[3] = v3;
     return true;
 }
+
+
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const v) {
