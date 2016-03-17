@@ -1255,11 +1255,102 @@ wikrt_err wikrt_peek_istr_v(wikrt_cx* cx, wikrt_val const v, char* const buff, s
     return WIKRT_OK;
 }
 
-wikrt_err wikrt_alloc_istr_v(wikrt_cx* cx, wikrt_val* v, char const* istr, size_t strlen)
+static inline bool wikrt_digit_char(char c) { return (('0' <= c) && (c <= '9')); }
+
+// looking for 0 | (-)?[1-9][0-9]*      optional NUL terminal
+static bool wikrt_valid_istr(char const* s, size_t* len) 
 {
-    return WIKRT_IMPL;
+    size_t const maxlen = (*len);
+    char const* const s0 = s;
+    char const* const eos = s + maxlen;
+
+    if(eos == s) { return false; }
+
+    // special zero case.
+    if('0' == (*s)) { ++s; goto scan_done; } 
+    
+    // (-)?
+    if('-' == (*s)) { ++s; }
+
+    // looking for a positive integer [1-9][0-9]*. At least one char.
+    if((eos == s) || ('0' == (*s))) { return false; }
+    do { 
+        if(!wikrt_digit_char(*s)) { return false; }
+        ++s;
+    } while((eos != s) && (0 != (*s)));
+
+scan_done:
+
+    (*len) = (s - s0);
+    return ((eos == s) || (0 == (*s)));
 }
 
+static inline uint32_t wikrt_read_inner_digit(char const* s) 
+{
+    uint32_t d = 0;
+    #define RD d = (10 * d) + *(s++) - '0'
+    RD; RD; RD;
+    RD; RD; RD;
+    RD; RD; RD;
+    #undef RD
+    return d;
+}
+
+wikrt_err wikrt_alloc_istr_v(wikrt_cx* cx, wikrt_val* v, char const* const istr, size_t len)
+{
+    if(!wikrt_valid_istr(istr, &len)) { return WIKRT_INVAL; }
+
+    char const* eos = istr + len; // reading backward
+    char const* s   = istr;       // reading forward
+
+    // okay, we have a valid input string and string length.    
+    bool positive = true;
+    if('-' == (*s)) {
+        positive = false;
+        ++s;
+        --len;
+    }
+
+    // handle smaller integers by simple translation to int64.
+    // this simplifies identification of 'small' integers.
+    if(len <= 18) { // int64 can robustly handle 18 digits
+        int64_t iAbs = 0;
+        do { iAbs = (10 * iAbs) + ((*s) - '0'); } while(++s != eos);
+        return wikrt_alloc_i64_v(cx, v, (positive ? iAbs : -iAbs));
+    }
+
+    // otherwise, perform an allocation.
+    // divide into an 'upper digit' plus a set of 'inner digits'.
+    size_t const innerDigitCt  = ((len - 1) / 9);
+    size_t const upperDigitLen = (len - (9 * innerDigitCt));
+    assert((innerDigitCt > 0) && (1 <= upperDigitLen) && (upperDigitLen <= 9));
+
+    size_t const nDigits = 1 + innerDigitCt;
+    if(nDigits > WIKRT_BIGINT_MAX_DIGITS) { return WIKRT_IMPL; }
+    wikrt_size const szAlloc = sizeof(wikrt_val) + ((wikrt_size)nDigits * sizeof(uint32_t));
+
+    wikrt_addr addr;
+    if(!wikrt_alloc(cx, szAlloc, &addr)) { return WIKRT_CXFULL; }
+    (*v) = wikrt_tag_addr(WIKRT_O, addr);
+
+    wikrt_val* const pv = wikrt_pval(cx, addr);
+    (*pv) = wikrt_mkotag_bigint(positive, nDigits);
+    uint32_t* const d = (uint32_t*)(1 + pv);
+
+    uint32_t upperDigit = 0;
+    for(size_t ii = 0; ii < upperDigitLen; ++ii) {
+        upperDigit = (10 * upperDigit) + *(s++) - '0';
+    }
+    d[innerDigitCt] = upperDigit;
+
+    for(size_t ii = 0; ii < innerDigitCt; ++ii) {
+        eos -= 9; 
+        d[ii] = wikrt_read_inner_digit(eos);
+    }
+    assert(eos == s);
+    return WIKRT_OK;
+}
+    
 static inline bool wikrt_deepsum_with_free_space(wikrt_cx* cx, wikrt_val v) 
 {
     if(!wikrt_o(v)) { return false; }

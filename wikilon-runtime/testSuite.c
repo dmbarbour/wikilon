@@ -301,9 +301,17 @@ bool test_pkistr_s(wikrt_cx* cx, int64_t n, char const* const nstr)
     bool const okBuff = (0 == strcmp(nstr, buff));
     wikrt_drop(cx, NULL);
 
-    bool const ok = (okBuff && okSize);
+    // also try opposite direction
+    wikrt_intro_istr(cx, buff, len);
+    int64_t i;
+    wikrt_peek_i64(cx, &i);
+    wikrt_drop(cx, NULL);
+    bool const okRev = (n == i);
+
+    bool const ok = (okBuff && okSize && okRev);
     return ok;
 }
+
 
 bool test_pkistr_small(wikrt_cx* cx)
 {
@@ -474,7 +482,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
 
     TCX(test_pkistr_small);
     TCX(test_copy_num);
-    // TODO: test alloc_istr
+    // TODO: math and larger numbers
 
     TCX(test_alloc_prod);
     TCX(test_copy_prod);
