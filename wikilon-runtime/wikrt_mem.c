@@ -2,7 +2,7 @@
 #include "wikrt.h"
 #include <string.h>
 #include <assert.h>
-#include <stdio.h>
+//#include <stdio.h>
 
 typedef struct wikrt_fb {
     wikrt_size size;
@@ -12,6 +12,7 @@ typedef struct wikrt_fb {
 static inline wikrt_fb* wikrt_pfb(void* mem, wikrt_flst addr) {
     return (wikrt_fb*) (addr + (char*)mem); 
 }
+
 
 // basic strategies without fallback resources
 static bool wikrt_fl_alloc_ff(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr);
@@ -90,10 +91,9 @@ bool wikrt_fl_alloc(void* mem, wikrt_fl* fl, wikrt_sizeb sz, wikrt_addr* addr)
             fl->free_bytes -= sz;
             return true;
         } else if(wikrt_fl_alloc(mem, fl, (sz << 1), addr)) {
-            // double sized allocation; free latter half
-            (*l) = wikrt_flst_singleton(mem, sz, sz + (*addr));
-            fl->frag_count += 1;
-            fl->free_bytes += sz;
+            // double sized allocation, then free latter half.
+            // we cannot assume l empty (first-fit leftovers)
+            wikrt_fl_free(mem, fl, sz, sz + (*addr));
             return true;
         }
     }
@@ -280,6 +280,24 @@ void wikrt_fl_merge(void* const mem, wikrt_fl* const src, wikrt_fl* const dst)
         (*lsrc) = 0;
     }
 }
+
+#if 0
+static void wikrt_fl_print(FILE* out, void* mem, wikrt_fl* fl)
+{
+    fprintf(out, "wikrt_fl: frags=%d, bytes=%d\n", (int)fl->frag_count, (int)fl->free_bytes);
+    for(wikrt_sc sc = 0; sc < WIKRT_FLCT; ++sc) {
+        wikrt_flst const l0 = fl->size_class[sc];
+        if(0 == l0) { continue; }
+        fprintf(out, "\t[%d]: ", (int)sc);
+        wikrt_flst iter = l0;
+        do {
+            iter = wikrt_pfb(mem, iter)->next;
+            fprintf(out, " %d(%d)", (int)iter, (int)wikrt_pfb(mem, iter)->size);
+        } while(iter != l0);
+        fprintf(out, "\n");
+    }
+}
+#endif
  
 
 /** acquire some total quantity of space, regardless of fragmentation
@@ -340,6 +358,7 @@ static inline bool wikrt_acquire_shm(wikrt_cx* cx, wikrt_sizeb sz)
 
 static void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_size sz) 
 {
+
     // I want a simple, predictable heuristic strategy that is very
     // fast for smaller computations (the majority of Wikilon ops).
     //
@@ -366,8 +385,6 @@ static void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_size sz)
             }
         }
     } wikrt_cxm_unlock(cxm);
-
-
 }
 
 static inline bool wikrt_alloc_local(wikrt_cx* cx, wikrt_sizeb sz, wikrt_addr* addr) 

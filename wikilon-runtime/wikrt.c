@@ -177,7 +177,7 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB)
     } wikrt_env_unlock(e);
 
     // I'll block cell 0 from allocation (it's used for 'unit'.)
-    // I'll also delay first page of allocations until the end. 
+    // For alignment, allocation of first page is delayed.
     wikrt_fl_free(memory, &(cxm->fl), (WIKRT_PAGESIZE - WIKRT_CELLSIZE), WIKRT_CELLSIZE); // first page minus first cell
     wikrt_fl_free(memory, &(cxm->fl), (sizeBytes - WIKRT_PAGESIZE), WIKRT_PAGESIZE); // all pages after the first
 

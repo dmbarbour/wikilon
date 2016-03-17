@@ -42,7 +42,7 @@ int main(int argc, char const** argv) {
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(e);
 
-    fprintf(stdout, u8"Memory cells: %d → %d (%s)\n", fct0, fctf,
+    fprintf(stdout, u8"Mem cells: %d → %d (%s)\n", fct0, fctf,
         ((fct0 == fctf) ? "ok" : "memleak") );
     fprintf(stdout, u8"Passed %d of %d Tests\n", tests_passed, tests_run);
     return ((tests_run == tests_passed) ? ok : err);
@@ -60,10 +60,6 @@ int fillcount(wikrt_cx* cx)
         } else {
             wikrt_drop(cx, NULL);
             return ct;
-        }
-
-        if(0 == (ct % 10000)) { 
-            fprintf(stderr, "fillcount: %d\n", ct);
         }
     } while(true);
 }
