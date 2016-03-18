@@ -440,35 +440,47 @@ bool test_sealers(wikrt_cx* cx)
     return (WIKRT_OK == wikrt_elim_unit(cx));
 }
 
+static inline bool elim_list_end(wikrt_cx* cx) 
+{
+    bool inR;
+    return (WIKRT_OK == wikrt_unwrap_sum(cx, &inR))
+        && inR && (WIKRT_OK == wikrt_elim_unit(cx));
+}
+
+static inline bool elim_list_i32(wikrt_cx* cx, int32_t e)
+{
+    bool inR;
+    int32_t a;
+    wikrt_err st = 0;
+    st |= wikrt_unwrap_sum(cx, &inR);
+    st |= wikrt_assocr(cx);
+    st |= wikrt_peek_i32(cx, &a);
+    st |= wikrt_drop(cx, NULL);
+
+    bool const ok = (WIKRT_OK == st) && !inR && (a == e);
+    return ok;
+}
+
+static bool checkbuff(wikrt_cx* cx, uint8_t const* buff, size_t ct)
+{
+    for(size_t ii = 0; ii < ct; ++ii) {
+        if(!elim_list_i32(cx, buff[ii])) { return false; }
+    }
+    return elim_list_end(cx);
+}
+
 static void fillbuff(uint8_t* buff, size_t ct, unsigned int seed) 
 {
     for(size_t ii = 0; ii < ct; ++ii) {
         buff[ii] = (rand_r(&seed) & 0xFF);
     }
 }
-static bool checkbuff(wikrt_cx* cx, uint8_t const* buff, size_t ct)
-{
-    bool inR;
-    int32_t i32;
-    for(size_t ii = 0; ii < ct; ++ii) {
-        bool ok  = (WIKRT_OK == wikrt_unwrap_sum(cx,&inR))
-                && !inR
-                && (WIKRT_OK == wikrt_assocr(cx))
-                && (WIKRT_OK == wikrt_peek_i32(cx, &i32))
-                && (i32 == (int32_t) buff[ii])
-                && (WIKRT_OK == wikrt_drop(cx,NULL));
-        if(!ok) { return false; }
-    }
-    return (WIKRT_OK == wikrt_unwrap_sum(cx, &inR))
-        && (inR)
-        && (WIKRT_OK == wikrt_elim_unit(cx));
-}
 
 bool test_alloc_binary(wikrt_cx* cx) 
 {
-    int const nLoops = 100;
+    int const nLoops = 10;
     for(int ii = 0; ii < nLoops; ++ii) {
-        size_t const buffsz = (100 * ii);
+        size_t const buffsz = (10000 * ii);
         uint8_t buff[buffsz];
         fillbuff(buff, buffsz, ii);
         wikrt_intro_binary(cx, buff, buffsz);
@@ -482,7 +494,56 @@ bool test_alloc_binary(wikrt_cx* cx)
 
 bool test_alloc_text(wikrt_cx* cx) 
 {
-    return false;
+    #define REPORT(b) if(!b) { \
+        fprintf(stderr, "text failed: %s\n", #b); \
+        return false; \
+    }
+
+    bool const ascii_hello =
+        (WIKRT_OK == wikrt_intro_text(cx, u8"hello", SIZE_MAX)) &&
+        elim_list_i32(cx, 104) && elim_list_i32(cx, 101) &&
+        elim_list_i32(cx, 108) && elim_list_i32(cx, 108) &&
+        elim_list_i32(cx, 111) && elim_list_end(cx);
+    REPORT(ascii_hello);
+
+    // succeed with NUL terminated string
+    bool const u8 = 
+        (WIKRT_OK == wikrt_intro_text(cx, u8"←↑→↓", SIZE_MAX)) && 
+        elim_list_i32(cx, 0x2190) && elim_list_i32(cx, 0x2191) &&
+        elim_list_i32(cx, 0x2192) && elim_list_i32(cx, 0x2193) &&
+        elim_list_end(cx);
+    REPORT(u8);
+
+    // succeed with size-limited string
+    bool const u8f =
+        (WIKRT_OK == wikrt_intro_text(cx, u8"ab↑cd", 5)) &&
+        elim_list_i32(cx, 97) && elim_list_i32(cx, 98) &&
+        elim_list_i32(cx, 0x2191) && elim_list_end(cx);
+    REPORT(u8f);
+
+    // fail for partial character        
+    bool const u8inval = 
+        (WIKRT_INVAL == wikrt_intro_text(cx, u8"→", 1)) &&
+        (WIKRT_INVAL == wikrt_intro_text(cx, u8"→", 2));
+    REPORT(u8inval);
+
+    // fail for invalid character
+    bool const rejectControlChars =
+        (WIKRT_INVAL == wikrt_intro_text(cx, "\a", SIZE_MAX)) &&
+        (WIKRT_INVAL == wikrt_intro_text(cx, "\r", SIZE_MAX)) &&
+        (WIKRT_INVAL == wikrt_intro_text(cx, "\t", SIZE_MAX));
+    REPORT(rejectControlChars);
+
+    // empty texts
+    bool const emptyTexts =
+        (WIKRT_OK == wikrt_intro_text(cx, "Hello, World!", 0)) &&
+        (WIKRT_OK == wikrt_intro_text(cx, "", SIZE_MAX)) &&
+        elim_list_end(cx) && elim_list_end(cx);
+    REPORT(emptyTexts);
+
+    #undef REPORT
+    
+    return true;
 }
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
