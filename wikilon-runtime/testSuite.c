@@ -494,8 +494,9 @@ bool test_alloc_binary(wikrt_cx* cx)
 
 bool test_alloc_text(wikrt_cx* cx) 
 {
+    char const* const fmt = "test alloc text failed: %s\n";
     #define REPORT(b) if(!b) { \
-        fprintf(stderr, "text failed: %s\n", #b); \
+        fprintf(stderr, fmt, #b); \
         return false; \
     }
 

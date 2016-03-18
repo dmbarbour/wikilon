@@ -233,7 +233,6 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_BLOCK_RELEVANT (1 << 8)
 #define WIKRT_BLOCK_AFFINE   (1 << 9)
 #define WIKRT_BLOCK_PARALLEL (1 << 10)
-#define WIKRT_BLOCK_LAZY     (1 << 11)
 
 // lazy substructure testing for quoted values
 #define WIKRT_OPVAL_LAZYKF (1 << 8)
@@ -288,6 +287,11 @@ wikrt_err wikrt_alloc_binary_v(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
 wikrt_err wikrt_alloc_text_v(wikrt_cx*, wikrt_val*, char const*, size_t);
 wikrt_err wikrt_read_binary_v(wikrt_cx*, wikrt_val*, uint8_t*, size_t*);
 wikrt_err wikrt_read_text_v(wikrt_cx*, wikrt_val*, char* buff, size_t* bytes, size_t* chars);
+
+wikrt_err wikrt_quote_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val* bc);
+wikrt_err wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
+
 
 // return number of valid bytes and chars, up to given limits. Return
 // 'true' only if all bytes were read or we stopped on a NUL terminal.

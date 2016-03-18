@@ -1664,6 +1664,118 @@ wikrt_err wikrt_unwrap_seal_v(wikrt_cx* cx, char* buff, wikrt_val* v)
 
 }
 
+wikrt_err wikrt_quote(wikrt_cx* cx) 
+{
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    return wikrt_quote_v(cx, wikrt_pval(cx, wikrt_vaddr(cx->val)));
+}
+
+wikrt_err wikrt_quote_v(wikrt_cx* cx, wikrt_val* v)
+{
+    // O(1) quotation via value capture:
+    //
+    //  (block, list) where:
+    //     list  = (opval, end-of-list)
+    //     opval = (tag, val)
+    //
+    // we need three pairs for this. 
+    // allocating in one block.
+    wikrt_size const szAlloc = 3 * WIKRT_CELLSIZE;
+    
+    wikrt_addr addr;
+    if(!wikrt_alloc(cx, szAlloc, &addr)) { return WIKRT_CXFULL; }
+
+    wikrt_addr const block = addr;
+    wikrt_addr const list  = addr + WIKRT_CELLSIZE;
+    wikrt_addr const opval = addr + (2 * WIKRT_CELLSIZE);
+
+    wikrt_val* const pblock = wikrt_pval(cx, block);
+    pblock[0] = WIKRT_OTAG_BLOCK;
+    pblock[1] = wikrt_tag_addr(WIKRT_PL, list);
+
+    wikrt_val* const plist = wikrt_pval(cx, list);
+    plist[0]  = wikrt_tag_addr(WIKRT_O, opval);
+    plist[1]  = WIKRT_UNIT_INR;
+
+    wikrt_val* const popval = wikrt_pval(cx, opval);
+    popval[0] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF;
+    popval[1] = (*v);
+
+    (*v) = wikrt_tag_addr(WIKRT_O, block);
+    return WIKRT_OK; 
+}
+
+wikrt_err wikrt_block_aff(wikrt_cx* cx)
+{
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    return wikrt_block_attrib_v(cx, wikrt_pval(cx, wikrt_vaddr(cx->val)), WIKRT_BLOCK_AFFINE);
+}
+
+wikrt_err wikrt_block_rel(wikrt_cx* cx)
+{
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    return wikrt_block_attrib_v(cx, wikrt_pval(cx, wikrt_vaddr(cx->val)), WIKRT_BLOCK_RELEVANT);
+}
+
+wikrt_err wikrt_block_par(wikrt_cx* cx) 
+{
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    return wikrt_block_attrib_v(cx, wikrt_pval(cx, wikrt_vaddr(cx->val)), WIKRT_BLOCK_PARALLEL);
+}
+
+wikrt_err wikrt_block_attrib_v(wikrt_cx* cx, wikrt_val* v, wikrt_val attrib) 
+{
+    if(!wikrt_o(*v)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pv = wikrt_pval(cx, wikrt_vaddr(*v));
+    if(wikrt_otag_block(*pv)) { 
+        (*pv) |= attrib;
+        return WIKRT_OK;
+    } else { return WIKRT_TYPE_ERROR; }
+}
+
+// Thoughts on composing blocks:
+//  I can ensure a O(1) composition by modeling it as
+//  inlining one block into another (i.e. opval plus
+//  a `vr$c` sequence). Or I can have O(N) composition
+//  by concatenating code. 
+//
+//  It may be worthwhile to ensure O(1) composition and
+//  only inline if a simplification or optimization is
+//  performed.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ///////////////////////////
+ // TRANSACTION SUBSYSTEM //
+///////////////////////////
+
 bool wikrt_valid_key_len(char const* k, size_t* len)
 {
     (*len) = 1 + WIKRT_VALID_KEY_MAXLEN;
