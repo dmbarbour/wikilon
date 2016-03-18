@@ -26,10 +26,10 @@ static inline bool utf8_step(uint8_t const** s, size_t* byteLen, uint32_t* cp)
 /** Return size of current codepoint (no validation). */
 static inline size_t utf8_cpsize(uint8_t const* s) 
 {
-    if((*s) < 0x80) { return 1; }
-    else if((*s) < 0xE0) { return 2; }
-    else if((*s) < 0xF0) { return 3; }
-    else { return 4; }
+    uint8_t const c = *s;
+    return  (c < 0x80) ? 1 :
+            (c < 0xE0) ? 2 :
+            (c < 0xF0) ? 3 : 4;
 }
 
 /** Read a utf-8 character without validation. */
@@ -117,4 +117,40 @@ static inline bool isControlChar(uint32_t c) {
 static inline bool isReplacementChar(uint32_t c) {
     return (0xFFFD == c);
 }
+
+static inline size_t utf8_writecp_size(uint32_t cp) {
+    return  (cp <= 0x7F)    ? 1 :
+            (cp <= 0x7FF)   ? 2 :
+            (cp <= 0xFFFF)  ? 3 : 4;
+}
+
+/** Write a codepoint to a buffer, assuming buffer has sufficient size.
+ *  (conservatively, at least four bytes).
+ */
+static inline size_t utf8_writecp_unsafe(uint8_t* buff, uint32_t cp) 
+{
+    if(cp <= 0x7F) { 
+        (*buff) = (uint8_t) cp; 
+        return 1;
+    } else if(cp <= 0x7FF) {
+        //110xxxxx 10xxxxxx 
+        buff[0] = 0xC0 | (0x1F & (cp >>  6));
+        buff[1] = 0x80 | (0x3F & (cp      ));
+        return 2;
+    } else if(cp <= 0xFFFF) {
+        //1110xxxx 10xxxxxx 10xxxxxx
+        buff[0] = 0xE0 | (0x0F & (cp >> 12));
+        buff[1] = 0x80 | (0x3F & (cp >>  6));
+        buff[2] = 0x80 | (0x3F & (cp      ));
+        return 3;
+    } else {
+        //11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+        buff[0] = 0xF0 | (0x03 & (cp >> 18));
+        buff[1] = 0x80 | (0x3F & (cp >> 12));
+        buff[2] = 0x80 | (0x3F & (cp >>  6));
+        buff[3] = 0x80 | (0x3F & (cp      ));
+        return 4;
+    }
+}
+
 

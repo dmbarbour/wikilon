@@ -546,6 +546,50 @@ bool test_alloc_text(wikrt_cx* cx)
     return true;
 }
 
+bool test_read_binary(wikrt_cx* cx) 
+{
+    size_t const buffsz = 12345;
+
+    uint8_t buff_write[buffsz];
+    fillbuff(buff_write, buffsz, buffsz);
+    wikrt_intro_binary(cx, buff_write, buffsz);
+
+    size_t bytes_read = buffsz;
+    uint8_t buff_read[buffsz];
+    wikrt_read_binary(cx, buff_read, &bytes_read);
+
+    if(0 != memcmp(buff_read, buff_write, buffsz)) {
+        char const* const msg = "binaries diverge";
+        fprintf(stderr, "%s\n", msg);
+        return false;
+    }
+    return elim_list_end(cx);
+}
+
+bool test_read_text_s(wikrt_cx* cx, char const* s)
+{
+    size_t const len = strlen(s);
+    wikrt_intro_text(cx, s, SIZE_MAX);
+    char buff[len + 1]; buff[len] = 0;
+
+    size_t readlen = SIZE_MAX;
+    wikrt_read_text(cx, buff, &readlen, NULL);
+    bool const ok = (readlen == len) && (0 == strcmp(s,buff)) && elim_list_end(cx);
+    if(!ok) {
+        fprintf(stderr, "could not read text: %s\n", s);
+    }
+    return ok;
+}
+
+bool test_read_text(wikrt_cx* cx) 
+{
+    return test_read_text_s(cx,"Hello, world!")
+        && test_read_text_s(cx,u8"←↖↑↗→↘↓↙")
+        && test_read_text_s(cx,u8"★★★☆☆")
+        && test_read_text_s(cx,u8"μL.((α*L)+β)")
+        && test_read_text_s(cx,"");
+}
+
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
 
@@ -614,6 +658,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_sealers);
     TCX(test_alloc_binary);
     TCX(test_alloc_text);
+    TCX(test_read_binary);
+    TCX(test_read_text);
 
 
     // TODO test: texts, binaries.

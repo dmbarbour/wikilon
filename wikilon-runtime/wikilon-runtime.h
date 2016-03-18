@@ -623,12 +623,14 @@ wikrt_err wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
 /** @brief Incrementally read a text. Destructive.
  *
  * Similar to wikrt_read_binary, but will read text into a utf-8 buffer.
- * The characters read will meet the same constraints as alloc_text, i.e. 
- * no control chars except LF, no surrogates, no incomplete chars.
- *
- * In this case, both `bytes` and `chars` indicate maximums on input and
- * actual values upon output. A utf8 codepoint may be one to four bytes,
- * and `chars` tracks number of codepoints read. 
+ * The codepoints read will meet the same constraints as alloc_text, i.e. 
+ * no control chars except LF, no surrogates, no incomplete codepoints.
+ * However, Wikilon runtime is ignorant of multi-codepoint characters, so
+ * there is no guarantee that the codepoints read represent a complete
+ * character.
+ * 
+ * The 'chars' parameter enables clients to limit and quickly determine 
+ * the number of codepoints read, but it is optional (NULL permitted).
  */
 wikrt_err wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
 

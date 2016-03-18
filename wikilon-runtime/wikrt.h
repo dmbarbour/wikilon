@@ -286,6 +286,8 @@ wikrt_err wikrt_peek_istr_v(wikrt_cx*, wikrt_val const, char* buff, size_t* strl
 
 wikrt_err wikrt_alloc_binary_v(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
 wikrt_err wikrt_alloc_text_v(wikrt_cx*, wikrt_val*, char const*, size_t);
+wikrt_err wikrt_read_binary_v(wikrt_cx*, wikrt_val*, uint8_t*, size_t*);
+wikrt_err wikrt_read_text_v(wikrt_cx*, wikrt_val*, char* buff, size_t* bytes, size_t* chars);
 
 // return number of valid bytes and chars, up to given limits. Return
 // 'true' only if all bytes were read or we stopped on a NUL terminal.
@@ -304,15 +306,6 @@ wikrt_err wikrt_sum_zswap_v(wikrt_cx*, wikrt_val*);
 wikrt_err wikrt_sum_distrib_v(wikrt_cx*, wikrt_val*);
 wikrt_err wikrt_sum_factor_v(wikrt_cx*, wikrt_val*);
 #endif
-
-/** Internal variants of API calls. 
- *
- * This is due to the layer of indirection to handle an external rootlist and
- * compacting GC. The internal calls do not require root values for input or output.
- */
-wikrt_err _wikrt_read_binary(wikrt_cx*, size_t buffsz, size_t* bytesRead, uint8_t* buffer, wikrt_val* binary);
-wikrt_err _wikrt_read_text(wikrt_cx*, size_t buffsz, size_t* bytesRead, size_t* charsRead, char* buffer, wikrt_val* text);
-wikrt_err _wikrt_alloc_block(wikrt_cx*, wikrt_val*, char const*, size_t, wikrt_abc_opts);
 
 /** @brief Stowage address is 64-bit address. 
  *

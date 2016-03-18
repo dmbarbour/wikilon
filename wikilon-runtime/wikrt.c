@@ -994,6 +994,24 @@ wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t len)
     return wikrt_intro(cx, v);
 }
 
+wikrt_err wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
+{
+    if(!wikrt_p(cx->val)) { (*bytes) = 0; return WIKRT_TYPE_ERROR; }
+    return wikrt_read_binary_v(cx, wikrt_pval(cx, wikrt_vaddr(cx->val)), buff, bytes);
+}
+
+wikrt_err wikrt_read_text(wikrt_cx* cx, char* buff, size_t* bytes, size_t* chars)
+{
+    size_t chars_alt = SIZE_MAX;
+    if(NULL == chars) { chars = &chars_alt; }
+    if(!wikrt_p(cx->val)) { 
+        (*bytes) = 0;
+        (*chars) = 0;
+        return WIKRT_TYPE_ERROR;
+    }
+    return wikrt_read_text_v(cx, wikrt_pval(cx, wikrt_vaddr(cx->val)), buff, bytes, chars);
+}
+
 
 bool wikrt_valid_text_len(char const* s, size_t* bytes, size_t* chars)
 {
@@ -1030,7 +1048,7 @@ wikrt_err wikrt_alloc_text_v(wikrt_cx* cx, wikrt_val* v, char const* const s, si
     }
 
     // We need one cell per codepoint.
-    if(nChars >= (WIKRT_SIZE_MAX / WIKRT_CELLSIZE)) { return WIKRT_IMPL; }
+    if(nChars >= (WIKRT_SIZE_MAX / WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
     wikrt_size const szAlloc = ((wikrt_size)nChars * WIKRT_CELLSIZE);
     wikrt_addr spine;
     if(!wikrt_alloc(cx, szAlloc, &spine)) { return WIKRT_CXFULL; }
@@ -1065,7 +1083,7 @@ wikrt_err wikrt_alloc_binary_v(wikrt_cx* cx, wikrt_val* v, uint8_t const* buff, 
     }
 
     // prevent size overflow allocations
-    if(nBytes >= (WIKRT_SIZE_MAX / WIKRT_CELLSIZE)) { return WIKRT_IMPL; }
+    if(nBytes >= (WIKRT_SIZE_MAX / WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
     wikrt_size const szAlloc = ((wikrt_size)nBytes * WIKRT_CELLSIZE);
     wikrt_addr spine;
     if(!wikrt_alloc(cx, szAlloc, &spine)) { return WIKRT_CXFULL; }
@@ -1083,6 +1101,125 @@ wikrt_err wikrt_alloc_binary_v(wikrt_cx* cx, wikrt_val* v, uint8_t const* buff, 
     pspine_last[1] = WIKRT_UNIT_INR;
     return WIKRT_OK;
 } 
+
+static bool wikrt_read_list_byte(wikrt_cx* cx, wikrt_val* v, uint8_t* byte, wikrt_err* st) 
+{
+    bool inR;
+    wikrt_err const stSum = wikrt_unwrap_sum_v(cx, &inR, v);
+
+    if(WIKRT_OK != stSum) { 
+        (*st) = WIKRT_TYPE_ERROR; 
+        return false; 
+    } 
+
+    if(inR) {
+        (*st) = WIKRT_OK; // end of input
+        wikrt_wrap_sum_v(cx, true, v);
+        return false;
+    }
+ 
+    if(wikrt_p(*v)) {
+        wikrt_addr const addr = wikrt_vaddr(*v);
+        wikrt_val* const pv = wikrt_pval(cx, addr);
+        if(wikrt_i(*pv)) {
+            int32_t const i = wikrt_v2i(*pv);
+            if((0 <= i) && (i <= 0xFF)) {
+                (*byte) = i;
+                (*st) = WIKRT_OK;
+                (*v) = pv[1];
+                wikrt_free(cx, WIKRT_CELLSIZE, addr);
+                return true;
+            } // else not a byte
+        } // else not a small integer
+    } // else not a valid list node
+
+    // our value wasn't of the expected shape (byte * list).
+    (*st) = WIKRT_TYPE_ERROR;
+    wikrt_wrap_sum_v(cx, false, v);
+    return false;
+}
+
+
+wikrt_err wikrt_read_binary_v(wikrt_cx* cx, wikrt_val* v, uint8_t* buff, size_t* size)
+{
+    // for now, naively read byte-at-a-time. When I have support for
+    // WIKRT_OTAG_BINARY, I should try for buffer-copying reads.
+    size_t const max_size = (*size);
+    (*size) = 0;
+    do {
+        if(max_size == (*size)) { return WIKRT_BUFFSZ; }
+        wikrt_err st;
+        if(!wikrt_read_list_byte(cx, v, buff + (*size), &st)) { return st; }
+        (*size) += 1;
+    } while(true);
+}
+
+static bool wikrt_read_list_cp(wikrt_cx* cx, wikrt_val* v, uint32_t* cp, size_t max_utf8, wikrt_err* st) 
+{
+    bool inR;
+    wikrt_err const stSum = wikrt_unwrap_sum_v(cx, &inR, v);
+
+    if(WIKRT_OK != stSum) { 
+        (*st) = WIKRT_TYPE_ERROR; 
+        return false; 
+    } 
+
+    if(inR) {
+        (*st) = WIKRT_OK; // end of input
+        wikrt_wrap_sum_v(cx, true, v);
+        return false;
+    }
+ 
+    if(wikrt_p(*v)) {
+        wikrt_addr const addr = wikrt_vaddr(*v);
+        wikrt_val* const pv = wikrt_pval(cx, addr);
+        if(wikrt_i(*pv)) {
+            int32_t const i = wikrt_v2i(*pv);
+            if((0 <= i) && (i <= 0x10FFFF) && wikrt_text_char(i)) {
+                (*cp) = i;
+                if(utf8_writecp_size(i) > max_utf8) {
+                    // character is too large for buffer
+                    (*st) = WIKRT_BUFFSZ;
+                    wikrt_wrap_sum_v(cx, false, v);
+                    return false;
+                } else {
+                    (*st) = WIKRT_OK;
+                    (*v) = pv[1];
+                    wikrt_free(cx, WIKRT_CELLSIZE, addr);
+                    return true;
+                }
+            } // else not a valid text codepoint
+        } // else not a small integer
+    } // else not a valid list node
+
+    // our value wasn't a (codepoint * list) pair.
+    (*st) = WIKRT_TYPE_ERROR;
+    wikrt_wrap_sum_v(cx, false, v);
+    return false;
+}
+
+wikrt_err wikrt_read_text_v(wikrt_cx* cx, wikrt_val* v, char* s, size_t* bytes, size_t* chars)
+{
+    // for now, naively read one character at a time. When I have support for
+    // WIKRT_OTAG_TEXT, I should consider buffer-copying reads.
+    _Static_assert((sizeof(char) == sizeof(uint8_t)), "dubious cast between char* and uint8_t*");
+    uint8_t* buff = (uint8_t*) s;
+
+    size_t const max_chars = (*chars);
+    size_t const max_bytes = (*bytes);
+    (*chars) = 0;
+    (*bytes) = 0;
+
+    do {
+        if(max_chars == (*chars)) { return WIKRT_BUFFSZ; }
+        uint32_t cp; wikrt_err st;
+        if(!wikrt_read_list_cp(cx, v, &cp, (max_bytes - (*bytes)), &st)) { return st; }
+        (*bytes) += utf8_writecp_unsafe(buff + (*bytes), cp);
+        (*chars) += 1;
+    } while(true);
+}
+
+
 
 static wikrt_err wikrt_alloc_medint(wikrt_cx* cx, wikrt_val* v, bool positive, uint32_t d0, uint32_t d1, uint32_t d2)
 {
@@ -1446,9 +1583,13 @@ wikrt_err wikrt_unwrap_sum_v(wikrt_cx* cx, bool* inRight, wikrt_val* v)
 {
     wikrt_tag const tag = wikrt_vtag(*v);
     wikrt_addr const addr = wikrt_vaddr(*v);
-    if((WIKRT_PL == tag) || (WIKRT_PR == tag)) {
+    if(WIKRT_PL == tag) {
         // unwrap shallow sum for pair or unit value
-        (*inRight) = (WIKRT_PR == tag);
+        (*inRight) = false;
+        (*v) = wikrt_tag_addr(WIKRT_P, addr);
+        return WIKRT_OK;
+    } else if(WIKRT_PR == tag) {
+        (*inRight) = true;
         (*v) = wikrt_tag_addr(WIKRT_P, addr);
         return WIKRT_OK;
     } else if((WIKRT_O == tag) && (0 != addr)) {
@@ -1469,13 +1610,6 @@ wikrt_err wikrt_unwrap_sum_v(wikrt_cx* cx, bool* inRight, wikrt_val* v)
     } 
     return WIKRT_TYPE_ERROR;
 }
-
-wikrt_err _wikrt_alloc_block(wikrt_cx* cx, wikrt_val* v, char const* abc, size_t len, wikrt_abc_opts opts) 
-{
-    (*v) = WIKRT_VOID;
-    return WIKRT_IMPL;
-}
-
 
 wikrt_err wikrt_wrap_seal_v(wikrt_cx* cx, char const* s, wikrt_val* v)
 {
