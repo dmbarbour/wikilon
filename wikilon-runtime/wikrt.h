@@ -36,6 +36,27 @@ typedef struct wikrt_cxm wikrt_cxm;
 /* LMDB-layer Database. */
 typedef struct wikrt_db wikrt_db;
 
+/** @brief Non-standard, proposed ABCD extensions and accelerators.
+ *
+ * This serves as a proving ground for proposed ABCD operators. These
+ * ops are not yet standardized, not accepted by the runtime APIs, and
+ * their opcode designations may change. Some may never become standards.
+ *
+ * Candidates for ABCD are driven by effective acceleration and streaming
+ * bytecode compression. So we'll probably see a lot of stack manipulations
+ * here, and eventually list-processing. Maybe a simple dictionary model or
+ * a table processing model.
+ */
+typedef enum wikrt_opcode_ext
+{ ABCD_INLINE       = 105 // 'i' - vr$c
+, ABCD_TAILCALL     = 101 // 'e' - $c
+, ABCD_SWAP         = 115 // 's' - vrwlc
+, ABCD_SUM_SWAP     =  83 // 'S' - VRWLC
+, ABCD_UNIT         = 117 // 'u' - vvrwlc (or `vs`)
+, ABCD_INL          =  85 // 'U' - VVRWLC (or `VS`) 
+} wikrt_opcode_ext;
+
+
 // misc. constants and static functions
 #define WIKRT_LNBUFF(SZ,LN) (((SZ+(LN-1))/LN)*LN)
 #define WIKRT_LNBUFF_POW2(SZ,LN) ((SZ + (LN - 1)) & ~(LN - 1))
@@ -43,9 +64,6 @@ typedef struct wikrt_db wikrt_db;
 #define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
 #define WIKRT_PAGESIZE (1 << 14)
 #define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
-
-// root set management
-#define WIKRT_ROOTSET_SIZE 31 // max number of root values
 
 // free list management
 #define WIKRT_FLCT_QF 16 // quick-fit lists (sep by cell size)
@@ -227,7 +245,6 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_BIGINT_DIGIT          1000000000
 #define WIKRT_BIGINT_MAX_DIGITS  ((1 << 23) - 1)
 
-#define WIKRT_MEDINT_D1MAX  36028796
 
 // block header bits
 #define WIKRT_BLOCK_RELEVANT (1 << 8)
@@ -263,7 +280,7 @@ wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*);
 wikrt_err wikrt_copy_v(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
 void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss*);
 
-wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val);
+wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val*);
 
 wikrt_err wikrt_sum_wswap_v(wikrt_cx*, wikrt_val*);
 wikrt_err wikrt_sum_zswap_v(wikrt_cx*, wikrt_val*);
@@ -289,9 +306,15 @@ wikrt_err wikrt_read_binary_v(wikrt_cx*, wikrt_val*, uint8_t*, size_t*);
 wikrt_err wikrt_read_text_v(wikrt_cx*, wikrt_val*, char* buff, size_t* bytes, size_t* chars);
 
 wikrt_err wikrt_quote_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val* bc);
+wikrt_err wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* out);
 wikrt_err wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
 
+wikrt_err wikrt_int_add_v(wikrt_cx*, wikrt_val a, wikrt_val b, wikrt_val* r);
+wikrt_err wikrt_int_neg_v(wikrt_cx*, wikrt_val*);
+wikrt_err wikrt_int_mul_v(wikrt_cx*, wikrt_val a, wikrt_val b, wikrt_val* r);
+wikrt_err wikrt_int_div_v(wikrt_cx*, wikrt_val dividend, wikrt_val divisor, 
+    wikrt_val* quotient, wikrt_val* remainder);
+wikrt_err wikrt_int_cmp_v(wikrt_cx*, wikrt_val a, wikrt_ord*, wikrt_val b);
 
 // return number of valid bytes and chars, up to given limits. Return
 // 'true' only if all bytes were read or we stopped on a NUL terminal.
@@ -430,8 +453,11 @@ struct wikrt_cx {
     uint64_t            fragmentation;  // fragments added to cxm
 };
 
-static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_addr addr) {
+static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->memory))); 
+}
+static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_val v) {
+    return wikrt_paddr(cx, wikrt_vaddr(v));
 }
 
 bool wikrt_alloc(wikrt_cx*, wikrt_size, wikrt_addr*);
@@ -449,7 +475,7 @@ static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* dst,
         return false; 
     }
     (*dst) = wikrt_tag_addr(tag, addr);
-    wikrt_val* const pv = wikrt_pval(cx, addr);
+    wikrt_val* const pv = wikrt_paddr(cx, addr);
     pv[0] = v0;
     pv[1] = v1;
     return true;
@@ -475,7 +501,7 @@ static inline bool wikrt_alloc_dcellval(wikrt_cx* cx, wikrt_val* dst,
         return false; 
     }
     (*dst) = wikrt_tag_addr(WIKRT_O, addr);
-    wikrt_val* const pv = wikrt_pval(cx, addr);
+    wikrt_val* const pv = wikrt_paddr(cx, addr);
     pv[0] = v0;
     pv[1] = v1;
     pv[2] = v2;

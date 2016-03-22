@@ -53,11 +53,10 @@
 
     wikrt_intro_binary;
     wikrt_read_binary;
-    
     wikrt_intro_text;
     wikrt_read_text;
-
-    wikrt_intro_block;
+    wikrt_text_to_block;
+    wikrt_block_to_text;
 
     wikrt_wrap_seal;
     wikrt_unwrap_seal;

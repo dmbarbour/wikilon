@@ -176,16 +176,17 @@ static void wikrt_fl_split(void* const mem, wikrt_addr const hd, wikrt_addr* con
     (*tl) = 0;    // 'a' now terminates where 'b' starts.
 }
 
-/* After we flatten our free-list, we perform a merge-sort by address.
+/* After we flatten our free-list, we perform a merge-sort by address. 
+ * At the moment, coalesce is separated for simplicity.
  *
  * The output is an address-ordered permutatation of the input list, no
  * coalescing is performed. The sort itself uses in-place mutation. 
  *
  * The smallest free address will be placed at the head of the list.
  */
-static void wikrt_fl_mergesort(void* const mem, wikrt_addr* const hd, wikrt_size const count)
+static void wikrt_fl_mergesort(void* const mem, wikrt_addr* hd, wikrt_size const count)
 {
-    // base case: any list of size zero or one is sorted
+    // base case: any list of size zero or one is fully sorted and coalesced.
     if(count < 2) { return; }
 
     wikrt_size const sza = count / 2;
@@ -193,7 +194,7 @@ static void wikrt_fl_mergesort(void* const mem, wikrt_addr* const hd, wikrt_size
     wikrt_addr a, b;
 
     // split list in two and sort each half
-    wikrt_fl_split(mem, *hd, &a, sza, &b);
+    wikrt_fl_split(mem, (*hd), &a, sza, &b);
     wikrt_fl_mergesort(mem, &a, sza);
     wikrt_fl_mergesort(mem, &b, szb);
 
@@ -223,13 +224,14 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
     wikrt_size const frag_count_init = fl->frag_count;
     wikrt_size const free_bytes_init = fl->free_bytes;
 
-    // obtain an address-sorted, acyclic list of nodes
+    // obtain the coalesced, address-sorted list of free nodes.
     wikrt_addr a = wikrt_flst_open(mem, wikrt_fl_flatten(mem, fl));
     wikrt_fl_mergesort(mem, &a, frag_count_init);
+
+    // reset the free list.
     (*fl) = (wikrt_fl){0}; 
 
-    // add each element of lst to our free-list
-    // adding to tail, in this case, to preserve address-order.
+    // coalesce adjacent nodes and add back to our free-lists.
     while(0 != a) {
         wikrt_fb* const pa = wikrt_pfb(mem, a);
 
@@ -239,7 +241,7 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
             pa->size += pn->size;
             pa->next = pn->next;
         }
-        wikrt_addr const merge_next = pa->next;
+        wikrt_addr const a_next = pa->next;
         pa->next = a; // close singleton flst (circular)
 
         // recompute free list stats
@@ -251,7 +253,7 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
 
         // update free-list, adding new node to end of list.
         (*l) = wikrt_flst_join(mem, (*l), a);
-        a = merge_next;
+        a = a_next;
     }
     
     // weak validation
@@ -263,7 +265,10 @@ void wikrt_fl_coalesce(void* mem, wikrt_fl* fl)
 /** Combine two free-lists, moving nodes from 'src' into 'dst'.
  *
  * Performed in constant time via circular linked list joins. I'll favor
- * nodes from `dst` before nodes from `src` in the result.
+ * nodes from `dst` before nodes from `src` in the result, though this is
+ * entirely arbitrary.
+ *
+ * The `src` list is zeroed during this process.
  */
 void wikrt_fl_merge(void* const mem, wikrt_fl* const src, wikrt_fl* const dst)
 {

@@ -634,12 +634,19 @@ wikrt_err wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
  */
 wikrt_err wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
 
-/** @brief Allocate a block of Awelon Bytecode. (e)→(block * e). Fail-safe.
- * 
- * As with most input texts in this API, you're free to use a NUL-terminated
- * C string before the maximum size is reached.
+/** @brief Managing bytecode.
+ *
+ * At the moment, bytecode must first be introduced as text, after which it
+ * may be processed into a block of code. Conversions are (text*e)↔(block*e)
+ * on success. At the moment, this is not failure-safe, though the only cost
+ * is dropping the (alleged) text or block argument, i.e. (a*e)→e on failure.
+ *
+ * A round-trip conversion should preserve the exact structure of the input, 
+ * i.e. there is no implicit simplification. Running a simplifier or optimizer
+ * is optional and separate.
  */
-wikrt_err wikrt_intro_block(wikrt_cx*, char const*, size_t, wikrt_abc_opts);
+wikrt_err wikrt_text_to_block(wikrt_cx*, wikrt_abc_opts);
+wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_abc_opts);
 
 /** @brief Wrap a value with a sealer token. (a * e)→((sealed a) * e). Fail-safe.
  *
@@ -671,12 +678,6 @@ wikrt_err wikrt_unwrap_seal(wikrt_cx*, char*);
  * transaction.
  */
 wikrt_err wikrt_stow(wikrt_cx*);
-
-#if 0
-// consider serialization of blocks to and from texts.
-wikrt_err wikrt_text_to_block(wikrt_cx*, wikrt_abc_opts);
-wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_abc_opts);
-#endif
 
   ////////////////
  // EVALUATION //
