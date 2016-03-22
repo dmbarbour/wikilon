@@ -633,7 +633,6 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
 
     TCX(test_pkistr_small);
     TCX(test_copy_num);
-    // TODO: math and larger numbers
 
     TCX(test_alloc_prod);
     TCX(test_copy_prod);
@@ -661,11 +660,12 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_alloc_text);
     TCX(test_read_binary);
     TCX(test_read_text);
+    // TODO: partial reads on texts and binaries
 
+    // TODO: blocks
+    // TODO: evaluations   
+    // TODO: bignum math
 
-    // TODO test: texts, binaries.
-    // TODO test: math.
-    // TODO test: evaluations.
     // TODO test: stowage.
     // TODO test: transactions.
 

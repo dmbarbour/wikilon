@@ -1565,8 +1565,22 @@ wikrt_err wikrt_int_add(wikrt_cx* cx)
     return WIKRT_TYPE_ERROR; // need (a*(b*e)) structure.
 }
 
+static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val n) {
+    return wikrt_i(n) || wikrt_bigint(cx,n); }
+
 wikrt_err wikrt_int_add_v(wikrt_cx* cx, wikrt_val a, wikrt_val b, wikrt_val* r)
 {
+    // optimally handle the small-integer cases.
+    if(wikrt_i(a) && wikrt_i(b)) {
+        int32_t const sum = wikrt_v2i(a) + wikrt_v2i(b);
+        return wikrt_alloc_i32_v(cx, r, sum);
+    }
+    bool const okType = wikrt_integer(cx,a) && wikrt_integer(cx,b);
+    if(!okType) { return WIKRT_TYPE_ERROR; }
+
+    // Handling big integers is important, but for a spike solution the 
+    // small integers are probably sufficient.
+    
     return WIKRT_IMPL;
 }
 
@@ -1593,11 +1607,47 @@ wikrt_err wikrt_int_mul(wikrt_cx* cx)
 
 wikrt_err wikrt_int_mul_v(wikrt_cx* cx, wikrt_val a, wikrt_val b, wikrt_val* r)
 {
+    if(wikrt_i(a) && wikrt_i(b)) {
+        // optimally handle the small-integer cases.
+        int64_t const prod = (int64_t)wikrt_v2i(a) * (int64_t)wikrt_v2i(b);
+        return wikrt_alloc_i64_v(cx, r, prod);
+    }
+    bool const okType = wikrt_integer(cx,a) && wikrt_integer(cx,b);
+    if(!okType) { return WIKRT_TYPE_ERROR; }
+
+    // Handling big integers is important, but for a spike solution the 
+    // small integers are probably sufficient.
+
     return WIKRT_IMPL;
 }
 
 /** @brief Negate an integer. (I(a)*e)→(I(-a)*e). */
-wikrt_err wikrt_int_neg(wikrt_cx*);
+wikrt_err wikrt_int_neg(wikrt_cx* cx)
+{
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    return wikrt_int_neg_v(cx, wikrt_pval(cx, cx->val));
+}
+
+/* Negation of an integer is O(1) and non-allocating in Wikilon
+ * runtime. We either flip a sign bit, or we negate a small int
+ * from a known safe range. 
+ *
+ * Ensuring non-allocating negation is why SMALLINT_MIN is just the
+ * negation of SMALLINT_MAX despite this leaving one element unused
+ * in the representation.
+ */
+wikrt_err wikrt_int_neg_v(wikrt_cx* cx, wikrt_val* v)
+{
+    if(wikrt_i(*v)) { 
+        _Static_assert((WIKRT_SMALLINT_MIN == (- WIKRT_SMALLINT_MAX)), "unsafe negation for small integers");
+        (*v) = wikrt_i2v(- wikrt_v2i(*v)); 
+        return WIKRT_OK;
+    } else if(wikrt_bigint(cx,(*v))) {
+        wikrt_val* const pv = wikrt_pval(cx,(*v));
+        (*pv) ^= (1 << 8); // flip the sign bit.
+        return WIKRT_OK;
+    } else { return WIKRT_TYPE_ERROR; }
+}
 
 /** @brief Divide two integers with remainder.
  *

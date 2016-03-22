@@ -272,7 +272,8 @@ static inline void wikrt_capture_block_ss(wikrt_val otag, wikrt_ss* ss)
 static inline bool wikrt_opval_hides_ss(wikrt_val otag) { return (0 == (WIKRT_OPVAL_LAZYKF & otag)); }
 
 static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
-    return  (((nDigits << 1) | (positive ? 0 : 1)) << 8) | WIKRT_OTAG_BIGINT;
+    wikrt_val const tag_data = (nDigits << 1) | (positive ? 0 : 1);
+    return (tag_data << 8) | WIKRT_OTAG_BIGINT;
 }
 
 /* Internal API calls. */
