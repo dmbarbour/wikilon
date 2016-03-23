@@ -591,6 +591,95 @@ bool test_read_text(wikrt_cx* cx)
         && test_read_text_s(cx,"");
 }
 
+static bool test_match_istr(wikrt_cx* cx, char const* expecting) 
+{
+    size_t len = 0;
+    wikrt_peek_istr(cx, NULL, &len);
+    char buff[len+1]; 
+    buff[len] = 0;
+    wikrt_peek_istr(cx, buff, &len);
+    wikrt_drop(cx, NULL);
+    bool const ok = (0 == strcmp(buff, expecting));
+    if(!ok) {
+        fprintf(stderr, "integer match failed: got %s, expected %s\n", buff, expecting);
+    }
+    return ok;
+}
+
+static bool test_add1(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
+    wikrt_intro_istr(cx, a, SIZE_MAX);
+    wikrt_intro_istr(cx, b, SIZE_MAX);
+    wikrt_int_add(cx);
+    return test_match_istr(cx, expected);
+}
+static bool test_add(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
+    return test_add1(cx, a, b, expected)
+        && test_add1(cx, b, a, expected);
+}
+
+static bool test_mul1(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
+    wikrt_intro_istr(cx, a, SIZE_MAX);
+    wikrt_intro_istr(cx, b, SIZE_MAX);
+    wikrt_int_mul(cx);
+    return test_match_istr(cx, expected);
+}
+static bool test_mul(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
+    return test_mul1(cx, a, b, expected)
+        && test_mul1(cx, b, a, expected);
+}
+
+static bool test_neg1(wikrt_cx* cx, char const* a, char const* expected) {
+    wikrt_intro_istr(cx, a, SIZE_MAX);
+    wikrt_int_neg(cx);
+    return test_match_istr(cx, expected);
+}
+static bool test_neg(wikrt_cx* cx, char const* a, char const* b) {
+    return test_neg1(cx, a, b) && test_neg1(cx, b, a);
+}
+
+static bool test_div(wikrt_cx* cx, char const* dividend, char const* divisor, char const* quotient, char const* remainder)
+{
+    wikrt_intro_istr(cx, dividend, SIZE_MAX);
+    wikrt_intro_istr(cx, divisor, SIZE_MAX);
+    wikrt_int_div(cx);
+    return test_match_istr(cx, remainder)
+        && test_match_istr(cx, quotient);
+}
+
+
+bool test_smallint_math(wikrt_cx* cx)
+{
+    // testing by string comparisons.
+    return test_add(cx,"1","2","3")
+        && test_add(cx,"60","-12","48")
+        && test_neg(cx,"0","0")
+        && test_neg(cx,"1","-1")
+        && test_neg(cx,"42","-42")
+        && test_mul(cx,"1","1044","1044")
+        && test_mul(cx,"129","0","0")
+        && test_mul(cx,"13","12","156")
+        && test_mul(cx,"19","-27","-513")
+        && test_div(cx,"11","3","3","2")
+        && test_div(cx,"-11","3","-4","1")
+        && test_div(cx,"11","-3","-4","-1")
+        && test_div(cx,"-11","-3","3","-2");
+}
+
+bool test_bigint_math(wikrt_cx* cx)
+{
+    return false; // not implemented yet
+#if 0
+    return test_add(cx, "10000000000", "0", "10000000000")
+        && test_add(cx, "10000000000", "20000000000", "30000000000")
+        && test_add(cx, "123456789", "9876543210", "9999999999")
+        && test_add(cx, "-123456789", "9876543210", "9753086421")
+        && test_mul(cx, "123456789", "42", "5185185138")
+        && test_mul(cx, 
+    return false;
+#endif
+}
+
+
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
 
@@ -661,6 +750,9 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_read_binary);
     TCX(test_read_text);
     // TODO: partial reads on texts and binaries
+
+    TCX(test_smallint_math);
+    TCX(test_bigint_math);
 
     // TODO: blocks
     // TODO: evaluations   

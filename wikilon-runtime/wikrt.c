@@ -1056,8 +1056,10 @@ wikrt_err wikrt_alloc_text_v(wikrt_cx* cx, wikrt_val* v, char const* const s, si
     if(!wikrt_alloc(cx, szAlloc, &spine)) { return WIKRT_CXFULL; }
     (*v) = wikrt_tag_addr(WIKRT_PL, spine);
 
+    _Static_assert((WIKRT_SMALLINT_MAX >= 0x10FFFF), "small integers insufficient for unicode codepoints");
+
     uint8_t const* u = (uint8_t const*) s;
-    #define READ_NEXT_CODEPOINT() wikrt_i2v((int32_t) utf8_step_unsafe(&u))
+    #define READ_NEXT_CODEPOINT() wikrt_i2v((wikrt_int) utf8_step_unsafe(&u))
     for(size_t ii = nChars; ii > 1; --ii) 
     {
         wikrt_val* const pspine = wikrt_paddr(cx, spine);
@@ -1124,7 +1126,7 @@ static bool wikrt_read_list_byte(wikrt_cx* cx, wikrt_val* v, uint8_t* byte, wikr
         wikrt_addr const addr = wikrt_vaddr(*v);
         wikrt_val* const pv = wikrt_paddr(cx, addr);
         if(wikrt_i(*pv)) {
-            int32_t const i = wikrt_v2i(*pv);
+            wikrt_int const i = wikrt_v2i(*pv);
             if((0 <= i) && (i <= 0xFF)) {
                 (*byte) = i;
                 (*st) = WIKRT_OK;
@@ -1175,8 +1177,10 @@ static bool wikrt_read_list_cp(wikrt_cx* cx, wikrt_val* v, uint32_t* cp, size_t 
     if(wikrt_p(*v)) {
         wikrt_addr const addr = wikrt_vaddr(*v);
         wikrt_val* const pv = wikrt_paddr(cx, addr);
+        _Static_assert((WIKRT_SMALLINT_MAX >= 0x10FFFF), 
+            "small integers insufficient for unicode codepoints");
         if(wikrt_i(*pv)) {
-            int32_t const i = wikrt_v2i(*pv);
+            wikrt_int const i = wikrt_v2i(*pv);
             if((0 <= i) && (i <= 0x10FFFF) && wikrt_text_char(i)) {
                 (*cp) = i;
                 if(utf8_writecp_size(i) > max_utf8) {
@@ -1256,7 +1260,7 @@ static wikrt_err wikrt_alloc_medint(wikrt_cx* cx, wikrt_val* v, bool positive, u
 wikrt_err wikrt_alloc_i32_v(wikrt_cx* cx, wikrt_val* v, int32_t n) 
 {
     if((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX)) {
-        (*v) = wikrt_i2v(n);
+        (*v) = wikrt_i2v((wikrt_int)n);
         return WIKRT_OK;
     }
 
@@ -1281,7 +1285,7 @@ wikrt_err wikrt_alloc_i32_v(wikrt_cx* cx, wikrt_val* v, int32_t n)
 wikrt_err wikrt_alloc_i64_v(wikrt_cx* cx, wikrt_val* v, int64_t n) 
 {
     if((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX)) {
-        (*v) = wikrt_i2v((int32_t)n);
+        (*v) = wikrt_i2v((wikrt_int)n);
         return WIKRT_OK;
     }
 
@@ -1377,7 +1381,7 @@ wikrt_err wikrt_peek_i64_v(wikrt_cx* cx, wikrt_val const v, int64_t* i64)
         return WIKRT_OK;
     } else {
         // GCC complains with the INT64_MIN constant given directly.
-        _Static_assert(((-9223372036854775807 - 1) == INT64_MIN), "bad INT64_MIN");
+        _Static_assert(((-9223372036854775807) == (1 + INT64_MIN)), "bad INT64_MIN");
         uint32_t const d2m = 9;
         uint32_t const d1m = 223372036;
         uint32_t const d0m = 854775808;
@@ -1572,6 +1576,8 @@ wikrt_err wikrt_int_add_v(wikrt_cx* cx, wikrt_val a, wikrt_val b, wikrt_val* r)
 {
     // optimally handle the small-integer cases.
     if(wikrt_i(a) && wikrt_i(b)) {
+        // two 31-bit ints add to one 32-bit int.
+        _Static_assert((INT32_MAX > (WIKRT_SMALLINT_MAX + WIKRT_SMALLINT_MAX)), "smallint add will overflow");
         int32_t const sum = wikrt_v2i(a) + wikrt_v2i(b);
         return wikrt_alloc_i32_v(cx, r, sum);
     }
@@ -1607,8 +1613,10 @@ wikrt_err wikrt_int_mul(wikrt_cx* cx)
 
 wikrt_err wikrt_int_mul_v(wikrt_cx* cx, wikrt_val a, wikrt_val b, wikrt_val* r)
 {
+    // optimally handle the small-integer cases.
     if(wikrt_i(a) && wikrt_i(b)) {
-        // optimally handle the small-integer cases.
+        // two 31-bit ints should multiply into one 62-bit int.
+        _Static_assert((INT64_MAX / WIKRT_SMALLINT_MAX) > WIKRT_SMALLINT_MAX, "smallint mul will overflow");
         int64_t const prod = (int64_t)wikrt_v2i(a) * (int64_t)wikrt_v2i(b);
         return wikrt_alloc_i64_v(cx, r, prod);
     }
@@ -1649,23 +1657,113 @@ wikrt_err wikrt_int_neg_v(wikrt_cx* cx, wikrt_val* v)
     } else { return WIKRT_TYPE_ERROR; }
 }
 
-/** @brief Divide two integers with remainder.
- *
- * (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e)).
- *
- * The dividend must be non-zero, or we'll return WIKRT_TYPE_ERROR.
+/* (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e)).
  */
-wikrt_err wikrt_int_div(wikrt_cx*); 
+wikrt_err wikrt_int_div(wikrt_cx* cx) 
+{
+    wikrt_val const outer = cx->val;
+    if(wikrt_p(outer)) {
+        wikrt_val* const pouter = wikrt_pval(cx, outer);
+        wikrt_val const inner = pouter[1];
+        if(wikrt_p(inner)) {
+            wikrt_val* const pinner = wikrt_pval(cx, inner);
+            wikrt_val const divisor = pouter[0];
+            wikrt_val const dividend = pinner[0];
+            wikrt_val remainder = WIKRT_VOID;
+            wikrt_val quotient  = WIKRT_VOID;
+            wikrt_err const st = wikrt_int_div_v(cx, dividend, divisor, &quotient, &remainder);
+            if(WIKRT_OK != st) { return st; }
+            pouter[0] = remainder;
+            pinner[0] = quotient;
+            return WIKRT_OK;
+        }
+    }
+    return WIKRT_TYPE_ERROR;
+}
 
-/** @brief Integer comparison result. */
-//typedef enum wikrt_ord { WIKRT_LT = -1, WIKRT_EQ = 0, WIKRT_GT = 1 } wikrt_ord;
+static inline void wikrt_smallnum_divmod(wikrt_int dividend, wikrt_int divisor, wikrt_int* quot, wikrt_int* rem)
+{
+    // I need proper modulus, in [0,divisor) or (divisor,0].
+    // Unfortunately, C's div gives me remainders instead.
+    //
+    //      -11 div  3 → (-3) rem (-2)      BAD
+    //       11 div -3 → (-3) rem  (2)      BAD
+    //      -11 div -3 →  (3) rem (-2)      OK
+    //       11 div  3 →  (3) rem  (2)      OK
+    //
+    // C11 standard guarantees our remainder (%) has the same sign
+    // as the dividend. At the moment, I'll just brute-force the
+    // repair where the divisor has different sign from the remainder.
+    (*quot) = dividend / divisor;
+    (*rem)  = dividend % divisor;
+    bool const needs_repair = (divisor > 0) ? ((*rem) < 0) : ((*rem) > 0);
+    if(needs_repair) {
+        // repair is the same regardless
+        (*rem)  += divisor;
+        (*quot) -= 1;
+    }
+}
+
+/* Requires a non-zero divisor. We guarantee that the remainder is  
+ * between zero (inclusive) and the divisor (exclusive). So this is
+ * not quite identical to C `/` and `%` ops.
+ */ 
+wikrt_err wikrt_int_div_v(wikrt_cx* cx, wikrt_val dividend, wikrt_val divisor, 
+    wikrt_val* quotient, wikrt_val* remainder)
+{
+    // forbid div-by-zero (essentially a dependent type failure)
+    if(WIKRT_IZERO == divisor) { return WIKRT_TYPE_ERROR; }
+
+    // optimally handle the small integer case
+    if(wikrt_i(dividend) && wikrt_i(divisor)) {
+        wikrt_int q,r;
+        wikrt_smallnum_divmod(wikrt_v2i(dividend), wikrt_v2i(divisor), &q, &r);
+        (*quotient) = wikrt_i2v(q);
+        (*remainder) = wikrt_i2v(r);
+        return WIKRT_OK;
+    }
+    bool const okType = wikrt_integer(cx,dividend) && wikrt_integer(cx,divisor);
+    if(!okType) { return WIKRT_TYPE_ERROR; }
+
+    // TODO: support division with big numbers.
+    return WIKRT_IMPL;
+}
 
 /** @brief Compare two integers. Non-destructive. (I(a)*(I(b)*e)).
  *
  * This compares `b` to `a`, matching direct allocation order (i.e. if we
  * allocate zero then four, the comparison is `zero is less than four`).
  */
-wikrt_err wikrt_int_cmp(wikrt_cx*, wikrt_ord*);
+wikrt_err wikrt_int_cmp(wikrt_cx* cx, wikrt_ord* ord)
+{
+    wikrt_val const a = cx->val;
+    if(wikrt_p(a)) {
+        wikrt_val const* const pa = wikrt_pval(cx, a);
+        wikrt_val const b = pa[1];
+        if(wikrt_p(b)) {
+            wikrt_val const* const pb = wikrt_pval(cx, b);
+            return wikrt_int_cmp_v(cx, *pb, ord, *pa);
+        }
+    }
+    return WIKRT_TYPE_ERROR;
+}
+
+//typedef enum wikrt_ord { WIKRT_LT = -1, WIKRT_EQ = 0, WIKRT_GT = 1 } wikrt_ord;
+wikrt_err wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b)
+{
+    // fast handling for common smallnum case
+    if(wikrt_i(a) && wikrt_i(b)) {
+        wikrt_int const ia = wikrt_v2i(a);
+        wikrt_int const ib = wikrt_v2i(b);
+        (*ord) = (ia > ib) ? WIKRT_GT : (ia < ib) ? WIKRT_LT : WIKRT_EQ;
+        return WIKRT_OK; 
+    }
+    bool const okType = wikrt_integer(cx,a) && wikrt_integer(cx,b);
+    if(!okType) { return WIKRT_TYPE_ERROR; }
+
+    // TODO: big number comparisons
+    return WIKRT_IMPL;
+}
 
 
 

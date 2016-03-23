@@ -17,6 +17,10 @@
 typedef uint32_t wikrt_val;
 #define WIKRT_VAL_MAX UINT32_MAX
 
+/** Corresponding signed integer type. */
+typedef int32_t wikrt_int;
+#define WIKRT_INT_MAX INT32_MAX
+
 /** size within a context; documents a number of bytes */
 typedef wikrt_val wikrt_size;
 #define WIKRT_SIZE_MAX WIKRT_VAL_MAX
@@ -128,9 +132,15 @@ static inline bool wikrt_o(wikrt_val v) { return (WIKRT_O == wikrt_vtag(v)) && (
  */
 #define WIKRT_SMALLINT_MAX  ((1 << 30) - 1)
 #define WIKRT_SMALLINT_MIN  (- WIKRT_SMALLINT_MAX)
-static inline wikrt_val wikrt_i2v(int32_t n) { return (wikrt_val)(n << 1); }
-static inline int32_t wikrt_v2i(wikrt_val v) { return (((int32_t)v) >> 1); }
+#define WIKRT_I2V(I) ((wikrt_val)(I << 1))
+#define WIKRT_V2I(V) (((wikrt_int)V) >> 1)
+static inline wikrt_val wikrt_i2v(wikrt_int i) { return WIKRT_I2V(i); }
+static inline wikrt_int wikrt_v2i(wikrt_val v) { return WIKRT_V2I(v); }
 static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
+
+/** The zero integer value. */
+#define WIKRT_IZERO WIKRT_I2V(0) 
+
 
 /** @brief tagged objects 
  *
@@ -361,7 +371,7 @@ struct wikrt_env {
     wikrt_db           *db;
     wikrt_cxm          *cxmlist;     // linked list of context roots
     pthread_mutex_t     mutex;       // shared mutex for environment
-    uint32_t            cxm_created; // stat: wikrt_cx_create() count.
+    uint64_t            cxm_created; // stat: wikrt_cx_create() count.
 };
 
 static inline void wikrt_env_lock(wikrt_env* e) {

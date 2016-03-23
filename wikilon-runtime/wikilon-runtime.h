@@ -739,7 +739,7 @@ wikrt_err wikrt_int_neg(wikrt_cx*);
  *
  * (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e)).
  *
- * The dividend must be non-zero, or we'll return WIKRT_TYPE_ERROR.
+ * The divisor must be non-zero, or we'll return WIKRT_TYPE_ERROR.
  */
 wikrt_err wikrt_int_div(wikrt_cx*); 
 

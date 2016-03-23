@@ -176,17 +176,10 @@ static void wikrt_fl_split(void* const mem, wikrt_addr const hd, wikrt_addr* con
     (*tl) = 0;    // 'a' now terminates where 'b' starts.
 }
 
-/* After we flatten our free-list, we perform a merge-sort by address. 
- * At the moment, coalesce is separated for simplicity.
- *
- * The output is an address-ordered permutatation of the input list, no
- * coalescing is performed. The sort itself uses in-place mutation. 
- *
- * The smallest free address will be placed at the head of the list.
- */
+/* Sort free nodes by ascending address, using an in-place mergesort. */
 static void wikrt_fl_mergesort(void* const mem, wikrt_addr* hd, wikrt_size const count)
 {
-    // base case: any list of size zero or one is fully sorted and coalesced.
+    // base case: list of size zero or one is fully sorted
     if(count < 2) { return; }
 
     wikrt_size const sza = count / 2;
@@ -198,26 +191,27 @@ static void wikrt_fl_mergesort(void* const mem, wikrt_addr* hd, wikrt_size const
     wikrt_fl_mergesort(mem, &a, sza);
     wikrt_fl_mergesort(mem, &b, szb);
 
+    // merge sublists 'a' and 'b'.
     wikrt_addr* tl = hd;
-    while ((a != 0) && (b != 0)) {
+    do {
         if(a < b) {
             (*tl) = a;
             tl = &(wikrt_pfb(mem, a)->next);
             a = (*tl); 
+            if(0 == a) { (*tl) = b; return; }
         } else {
             (*tl) = b;
             tl = &(wikrt_pfb(mem, b)->next);
             b = (*tl);
+            if(0 == b) { (*tl) = a; return; }
         } 
-    }
-    (*tl) = (a != 0) ? a : b;
+    } while(true);
 }
-
 
 /* Combine all adjacent free addresses. 
  *
  * This is O(N*lg(N)) with the number of fragments. It uses an
- * in-place linked list merge sort of the fragments.
+ * in-place linked list merge sort of the fragments. 
  */
 void wikrt_fl_coalesce(void* mem, wikrt_fl* fl) 
 {
@@ -305,19 +299,15 @@ static void wikrt_fl_print(FILE* out, void* mem, wikrt_fl* fl)
 #endif
  
 
-/** acquire some total quantity of space, regardless of fragmentation
+/** attempt to acquire a quantity of space, accepting fragmented memory.
  *
- * This is inexact. We'll not split any fragments, so we might take more
- * than requested. If we already know there are no fragments of the given
- * size, then any overshoot is less than twice the requested space.
- *
- * This is O(F) with the number of fragments moved, but favors larger 
- * fragments first.
+ * On success, this may overshoot the request by most of one fragment. So
+ * it shouldn't be unless we know there is no single fragment large enough
+ * to fulfill the request. This favors larger fragments.
  */
 static bool wikrt_move_frags(void* mem, wikrt_fl* src, wikrt_fl* dst, wikrt_size amt)
 {
     assert(src != dst);
-    wikrt_size const total_goal = dst->free_bytes + amt;
     wikrt_sc sc = WIKRT_FLCT;
 
     while(sc-- > 0) {
@@ -329,11 +319,12 @@ static bool wikrt_move_frags(void* mem, wikrt_fl* src, wikrt_fl* dst, wikrt_size
             wikrt_fb* const pf = wikrt_pfb(mem, f);
             wikrt_size const sz = pf->size;
 
-            if(pf == ps) { (*s) = 0; }
+            // remove fragment from src
+            if(ps == pf) { (*s) = 0; }
             else { ps->next = pf->next; }
-            pf->next = f; // close fragment list
 
-            // join circular lists, adding `f` to end of list.
+            // add fragment to end of dst list
+            pf->next = f;
             (*d) = wikrt_flst_join(mem, (*d), f);
 
             // track changes in statistics.            
@@ -342,9 +333,9 @@ static bool wikrt_move_frags(void* mem, wikrt_fl* src, wikrt_fl* dst, wikrt_size
             src->free_bytes -= sz;  
             src->frag_count -= 1;
 
-            if(dst->free_bytes >= total_goal) { 
-                return true; 
-            }
+            // manage allocation goals
+            if(sz >= amt) { return true; }
+            else { amt -= sz; }
         }
     }
     return false;
@@ -371,7 +362,10 @@ static void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_size sz)
     // 
     // - allocate a single slab directly, if feasible.
     // - otherwise: merge, coalesce, retry once.
-    // - final fallback: acquire fragmented memory.
+    // - final fallback: accept fragmented memory.
+    //
+    // The final case is near to 'thrashing'. Before we get this far,
+    // we should probably also try to recover memory (e.g. stowage).
     //
     wikrt_cxm* const cxm = cx->cxm;
     void* const mem = cx->memory;
