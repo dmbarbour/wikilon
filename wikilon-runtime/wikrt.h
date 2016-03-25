@@ -62,11 +62,11 @@ typedef enum wikrt_opcode_ext
 
 
 // misc. constants and static functions
-#define WIKRT_LNBUFF(SZ,LN) (((SZ+(LN-1))/LN)*LN)
-#define WIKRT_LNBUFF_POW2(SZ,LN) ((SZ + (LN - 1)) & ~(LN - 1))
+#define WIKRT_LNBUFF(SZ,LN) ((((SZ)+((LN)-1))/(LN))*(LN))
+#define WIKRT_LNBUFF_POW2(SZ,LN) (((SZ) + ((LN) - 1)) & ~((LN) - 1))
 #define WIKRT_CELLSIZE (2 * sizeof(wikrt_val))
 #define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
-#define WIKRT_PAGESIZE (1 << 14)
+#define WIKRT_PAGESIZE (1 << 17)
 #define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
 
 // free list management
@@ -115,7 +115,7 @@ typedef enum wikrt_opcode_ext
 #define WIKRT_UNIT_INL  WIKRT_PL
 #define WIKRT_UNIT_INR  WIKRT_PR
 
-#define WIKRT_MASK_TAG      7
+#define WIKRT_MASK_TAG      (WIKRT_CELLSIZE - 1)
 #define WIKRT_MASK_ADDR     (~WIKRT_MASK_TAG)
 
 static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & WIKRT_MASK_ADDR); }
@@ -140,7 +140,6 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 
 /** The zero integer value. */
 #define WIKRT_IZERO WIKRT_I2V(0) 
-
 
 /** @brief tagged objects 
  *
@@ -205,16 +204,16 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *
  *   An array has type `μL.((a*L)+b)` for some element type `a` and terminal
  *   type `b`. It's a compact representation of this type, using offsets into
- *   a region instead of a lazy linked list. Our representation for arrays
- *   will permit also for chunked lists, i.e. a list of array-like chunks that
- *   have properties somewhere between lists and arrays.
+ *   a region instead of a lazy linked list. The representation is
  *
- *   The representation is:  (array-hdr, size, buffer, next).
- *     With 'buffer' being the address for the first element.
+ *      (hdr, size, buffer, next).
+ *          `buffer` is wikrt_addr of first item
+ *          `next` should be (_+b) or continue the list
+ *          `size` is a number of items.
+ *          `hdr` includes a bit for logical reversal   
  *
- *   The array header may include a bit for local reversal. The `next` value
- *   may continue the list (possibly with another array) or may terminate it,
- *   so includes the sum-type of the array's continuation.
+ *   This representation enables chunked-arrays, i.e. lists of array-like
+ *   blocks that are still more efficient than conventional linked lists.
  *
  * WIKRT_OTAG_BINARY
  *  
@@ -224,13 +223,15 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  * WIKRT_OTAG_TEXT
  *
  *   A text is a specialized compact list type, using a utf-8 encoding and
- *   limited segment sizes. In particular, a segment may be no more than
- *   2^16 bytes. The 'size' field is divided in two parts: the byte count
- *   and the codepoint count. Larger texts must use the chunked list rep.
+ *   limited segment sizes. In particular, each segment may be no more than
+ *   2^16 bytes. Our 'size' field is divided into a byte count and codepoint
+ *   count, each ranging 1..2^16. Texts larger than 2^16 bytes are divided
+ *   into multiple chunks. The chunked representation limits how much scanning
+ *   is necessary to index or split a text, providing a simplistic index.
  *
- *   The motivation here is to constrain how much scanning we must perform
- *   to index or split a text. With the utf-8 encoding, we don't benefit as
- *   much from a tight encoding.
+ *   The size field is divided such that the size in bytes is the lower 16 
+ *   bits. Note that we'll probably use the same limits even if we upgrade
+ *   to 64-bit pointers (the overhead is marginal in either case).
  *
  * WIKRT_OTAG_STOWAGE
  *
@@ -243,9 +244,9 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_OTAG_OPTOK   123   /* { */
 #define WIKRT_OTAG_SEAL     36   /* $ */
 #define WIKRT_OTAG_SEAL_SM  58   /* : */
-//#define WIKRT_OTAG_ARRAY    86   /* V */
-//#define WIKRT_OTAG_BINARY   56   /* 8 */
-//#define WIKRT_OTAG_TEXT     34   /* " */
+#define WIKRT_OTAG_ARRAY    86   /* V */
+#define WIKRT_OTAG_BINARY   56   /* 8 */
+#define WIKRT_OTAG_TEXT     34   /* " */
 //#define WIKRT_OTAG_STOWAGE  64   /* @ */
 #define LOBYTE(V) ((V) & 0xFF)
 
@@ -255,6 +256,10 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_BIGINT_DIGIT          1000000000
 #define WIKRT_BIGINT_MAX_DIGITS  ((1 << 23) - 1)
 
+// array, binary, text header
+//   one bit for logical reversals
+//   considering: free bytes to reduce fragmentation
+#define WIKRT_ARRAY_REVERSE  (1 << 8)
 
 // block header bits
 #define WIKRT_BLOCK_RELEVANT (1 << 8)
@@ -301,6 +306,7 @@ wikrt_err wikrt_sum_swap_v(wikrt_cx*, wikrt_val*);
 
 wikrt_err wikrt_wrap_sum_v(wikrt_cx*, bool inRight, wikrt_val*);
 wikrt_err wikrt_unwrap_sum_v(wikrt_cx*, bool* inRight, wikrt_val*);
+wikrt_err wikrt_expand_sum_v(wikrt_cx*, wikrt_val*); 
 wikrt_err wikrt_wrap_seal_v(wikrt_cx*, char const* tok, wikrt_val*);
 wikrt_err wikrt_unwrap_seal_v(wikrt_cx*, char* tokbuff, wikrt_val*);
 

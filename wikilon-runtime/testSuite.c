@@ -659,10 +659,10 @@ bool test_smallint_math(wikrt_cx* cx)
         && test_mul(cx,"129","0","0")
         && test_mul(cx,"13","12","156")
         && test_mul(cx,"19","-27","-513")
-        && test_div(cx,"11","3","3","2")
-        && test_div(cx,"-11","3","-4","1")
-        && test_div(cx,"11","-3","-4","-1")
-        && test_div(cx,"-11","-3","3","-2");
+        && test_div(cx, "11", "3", "3", "2")
+        && test_div(cx,"-11", "3","-4", "1")
+        && test_div(cx, "11","-3","-4","-1")
+        && test_div(cx,"-11","-3", "3","-2");
 }
 
 bool test_bigint_math(wikrt_cx* cx)
@@ -752,7 +752,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     // TODO: partial reads on texts and binaries
 
     TCX(test_smallint_math);
-    TCX(test_bigint_math);
+    //TCX(test_bigint_math);
 
     // TODO: blocks
     // TODO: evaluations   

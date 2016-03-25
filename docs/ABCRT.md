@@ -150,13 +150,19 @@ ABC's discretionary value sealers. I'll optimize for 3-character (or fewer) disc
 
 We can annotate a value to moved to persistent storage, or transparently reverse this. 
 
+*Thoughts*: If stowage is constrained to sealed values, that may simplify implementation code because I only need to handle transparent expansion as part of an 'unseal' operation. Further, this would enable me to present better metadata about sealed values. I believe this is a path worth pursuing or attempting. This is an easy constraint to enforce, and I may proceed with it.
+
+I may need similar alignment for parallelism or laziness, to avoid true transparent transforms. A simple notion of parallelism occurring behind a sealer is interesting because it would also align nicely with a notion of distributed computing (each sealer acts as a logical space for computation). So we could have something like `{&par:sealer}` that operates on sealed values of the appropriate type. OTOH, I could just require `{&par}` be paired with `{&seq}` for best performance.
+
 ### Computations
 
-Lazy or parallel values, or a 'hole' for values that are still being computed. These will need special attention for performance and quota purposes. I'd prefer to avoid treating pending computations as normal values, but they might make a useful special case?
+I'd prefer to avoid arbitrary 'force to type' code scattered about. This would impact stowage, laziness, parallelism. If I enforce that stowage, laziness, and parallelism are always behind a sealer token, this would simplify my runtime code. This alignment may also simplify presentation and metadata, and eventual distribution. So, for now, let's assume I'll be aiming for this feature.
 
 If I support lazy computations, that can potentially simplify many things such as streaming outputs from block-to-text conversions. Laziness is easy to express via annotation, e.g. `{&lazy}` could tag a block. One difficulty with laziness is that we need either to integrate state or to treat them somehow as linear objects (no copy). The other difficulty is integrating laziness appropriately with effort quotas - i.e. it requires we shift the quota to our context, somehow, rather than to a larger evaluation. 
 
 For the moment, I'd prefer to avoid laziness and focus instead upon direct and parallel evaluation. 
+
+An interesting possibility, with laziness, is to apply partial-`{&seq}` requests with limited quotas. So long as we don't actually observe the resulting value, we don't need to wait.
 
 ### Arrays or Compact Lists
 

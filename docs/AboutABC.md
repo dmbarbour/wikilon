@@ -438,6 +438,8 @@ Usefully, this simple technique is compositional. We can compute that a composit
 
 Lazy linking and loading of large, content-addressed data is convenient for working with very large structures and values, i.e. much larger than machine memory.
 
+*Thoughts:* It may prove useful to align value resources with value sealers, i.e. such that we can indicate a value sealer token in the resource identifier. This would serve both as metadata (mostly for debugging and presentation) and should simplify our interpreter representations (because we don't need lazy loading for arbitrary types).
+
 ### ABC Paragraphs
 
 ABC encourages an informal notion of "paragraphs" at least in a streaming context. A paragraph separates a batch of code, serving as a soft indicator of "this is a good point for incremental processing". A well-behaved ABC stream should provide relatively small paragraphs (up to a few kilobytes), and a well-behaved ABC stream processor should respect paragraphs up to some reasonable maximum size (e.g. 64kB) and heuristically prefer to process a whole number of paragraphs at a time. The batch would be typechecked, JIT compiled, then (ideally) applied atomically. 
