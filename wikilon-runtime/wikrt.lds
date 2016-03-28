@@ -6,7 +6,6 @@
     wikrt_env_sync;
 
     wikrt_cx_create;
-    wikrt_cx_fork;
     wikrt_cx_destroy;
     wikrt_cx_env;
 
@@ -14,11 +13,11 @@
     wikrt_abcd_expansion;
     wikrt_strerr;
     wikrt_valid_token;
+    wikrt_api_ver;
 
     wikrt_copy;
+    wikrt_copy_remote;
     wikrt_drop;
-    wikrt_move;
-    wikrt_copy_move;
     wikrt_stow;
 
     wikrt_wswap;

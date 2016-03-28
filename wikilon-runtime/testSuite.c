@@ -686,16 +686,12 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     #define TCX(T)                          \
     {                                       \
         ++(*runct);                         \
-        wikrt_cx* fork;                     \
-        wikrt_cx_fork(cx,&fork);            \
-        assert(NULL != fork);               \
-        bool const pass = T(fork);          \
+        bool const pass = T(cx);            \
         if(pass) { ++(*passct); }           \
         else {                              \
             char const* name = #T ;         \
             fprintf(stderr, errFmt, *runct, name);    \
         }                                   \
-        wikrt_cx_destroy(fork);             \
     }
     
     TCX(test_tcx);

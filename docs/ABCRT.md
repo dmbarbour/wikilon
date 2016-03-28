@@ -36,6 +36,12 @@ I'll actually include a copy of these directly, no shared libs.
 
 With LMDB, I have the opportunity to use a single-process or multi-process access to the database. Multi-process access to a database would be very convenient if I want to later develop shells, command-line interpreters, etc. to access this database in the background. But that isn't a use case for Wikilon. For now I should probably favor single-process access using a lockfile, since it's much easier (with LMDB) to go from single-process to multi-process than vice versa.
 
+If I do favor multi-process access, I'll need to somehow track ephemeral stowage references safely between processes. This is non-trivial.
+
+### Regarding Error Reporting
+
+Originally I was returning an 'error' value for most functions. I'm beginning to think this was a bad idea. First, it overly complicates the client API. Second, most errors are not recoverable. Third, tracking the exact cause of error is expensive. I may be better served by accumulating errors, similar to a context-specific `errno` or an error list of sorts, or by wrapping error values. By simply tracking, at the context level, whether an error has occurred.
+
 ## Structure
 
 I need an *environment* bound to an underlying stowage and persistence model, e.g. via LMDB. The environment may also be associated with worker threads for par-seq parallelism. I also need *contexts* that associate an environment with a heap of memory for computations. 
@@ -52,15 +58,11 @@ Originally I was going for a more conventional API where values have handles out
 
 ### Memory Management
 
-ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies favored over aliasing. Linearity allows me to implement many functions (or their common cases) without allocation. 
+ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies favored over aliasing. Linearity allows me to implement many functions (or their common cases) without allocation.
 
-*Thoughts:* I've frequently contemplated a bump-pointer nursery. This is feasible, perhaps, though it might require rewriting data plumbing operations to allocate within the nursery (lest `l` and `r` and the like produce references from the old space to the new space). This would probably complicate code a fair bit... so I'll hold off for now. Without a bump-pointer nursery, I cannot guarantee stack-like locality for 'new' values.
+Bump-pointer allocators, together with two-space collectors, would also serve me very well. Parallelism would be 'heavy' in the sense that it copies computation data, but could also be 'lightweight' in the sense that it only triggers upon compacting GC - i.e. when data is to be copied regardless. Two-space compacting could drive both stowage and quotas, and the extra space would be convenient for stowage without runtime allocations (assuming stowage is no more expensive than a local representation). Stowage would serve as the implicit 'old space' where we no longer copy-collect data.
 
-For the moment, I use a conventional size-segregated free-list and quick-fit mechanisms. With this, fragmentation is a problem, especially in a multi-threaded scenario. Use of `wikrt_move()` is a fragmentation hazard because it results in data being free'd in a separate thread from the one where it was allocated. When that memory is then reused, local fragmentation worsens. I'll accept high fragmentation so I can move forward with implementation.
-
-Latent destruction of large values is a related, viable feature that could improve cx_destroy performance for large contexts values. OTOH, it limits an easy means to track substructural properties. So I'll probably leave this feature out for now.
-
-At the moment, copy on large stacks and lists and such will tend to use slab-allocations for a large 'spine' value, but we will 'free' the same slab one element at a time. I'm not sure what effect this will have on fragmentation - it might help or hurt.
+A potential difficulty with a moving collector is that I must represent active computation state within the memory region and deal with any changes in pointers after each allocation. I might achieve this by modeling a small set of active registers or similar... i.e. our active computation stack, as necessary. It would also serve as a scratch space as needed.
 
 ## Representations
 
@@ -148,13 +150,22 @@ ABC's discretionary value sealers. I'll optimize for 3-character (or fewer) disc
 
 ### Value Stowage
 
-We can annotate a value to moved to persistent storage, or transparently reverse this. 
+We annotate a value to moved to persistent storage, or transparently reverse this. 
 
-*Thoughts*: If stowage is constrained to sealed values, that may simplify implementation code because I only need to handle transparent expansion as part of an 'unseal' operation. Further, this would enable me to present better metadata about sealed values. I believe this is a path worth pursuing or attempting. This is an easy constraint to enforce, and I may proceed with it.
+It might be useful to align stowage with value sealers, i.e. such that stowage may only occur at sealed values. This would simplify processing of stowage because the 'transparent' stowage would only need to be handled at an unseal operation. Further, it would provide some typeful metadata around each node - relatively convenient for debugging. Conversely, having implicit stowage upon sealing a value could be convenient for space management purposes.
 
-I may need similar alignment for parallelism or laziness, to avoid true transparent transforms. A simple notion of parallelism occurring behind a sealer is interesting because it would also align nicely with a notion of distributed computing (each sealer acts as a logical space for computation). So we could have something like `{&par:sealer}` that operates on sealed values of the appropriate type. OTOH, I could just require `{&par}` be paired with `{&seq}` for best performance.
+(Parallel computations may benefit from similar techniques, to avoid 'transparent' translation of types and to essentially name the computation.)
 
 ### Computations
+
+*Thoughts:* Lightweight parallelism has been a sticky point for me. It complicates memory management, increases risk of memory fragmentation. Heavy-weight shared-nothing parallelism could reduce synchronization a great deal, but has a larger overhead to copy data between threads. This could be mitigated by having some shared resources (e.g. binaries, blocks).
+
+
+I'd benefit from focusing instead on fast alloc/free and fast processing within a context. Fast logical copy may also prove more useful than I was initially thinking, at least for specific value types (e.g. blocks, maybe binaries and arrays). Though, I could presumably achieve that much with reference counting.
+
+An interesting option, perhaps, is to combine a fast bump-pointer alloc and GC (instead of `free`) with scope-limited copying of blocks etc.. 
+
+
 
 I'd prefer to avoid arbitrary 'force to type' code scattered about. This would impact stowage, laziness, parallelism. If I enforce that stowage, laziness, and parallelism are always behind a sealer token, this would simplify my runtime code. This alignment may also simplify presentation and metadata, and eventual distribution. So, for now, let's assume I'll be aiming for this feature.
 
@@ -209,7 +220,7 @@ ABC supports integers. But other numbers could be supported via arithmetic accel
 
 One of the bigger challenges will be supporting evaluation limits, i.e. effort quotas. 
 
-
+## Parallelism
 
 
 # older content

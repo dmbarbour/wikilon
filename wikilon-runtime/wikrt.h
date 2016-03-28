@@ -69,14 +69,10 @@ typedef enum wikrt_opcode_ext
 #define WIKRT_PAGESIZE (1 << 17)
 #define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
 
-// free list management
-#define WIKRT_FLCT_QF 16 // quick-fit lists (sep by cell size)
-#define WIKRT_FLCT_FF 10 // first-fit lists (exponential)
-#define WIKRT_FLCT (WIKRT_FLCT_QF + WIKRT_FLCT_FF)
-#define WIKRT_QFSIZE (WIKRT_FLCT_QF * WIKRT_CELLSIZE)
-#define WIKRT_FFMAX  (WIKRT_QFSIZE * (1 << (WIKRT_FLCT_FF - 1)))
-#define WIKRT_QFCLASS(sz) ((sz - 1) / WIKRT_CELLSIZE)
-#define WIKRT_FREE_THRESH (1 << 21)
+// I'll reserve one cell at the start for error capture on CXFULL.
+// The zero address is also reserved for unit and void values. 
+#define WIKRT_ALLOC_START (2 * WIKRT_CELLSIZE)
+
 
 // for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
@@ -375,9 +371,9 @@ void wikrt_db_flush(wikrt_db*);
 
 struct wikrt_env { 
     wikrt_db           *db;
-    wikrt_cxm          *cxmlist;     // linked list of context roots
-    pthread_mutex_t     mutex;       // shared mutex for environment
-    uint64_t            cxm_created; // stat: wikrt_cx_create() count.
+    wikrt_cx           *cxlist;     // linked list of context roots
+    size_t              cxsize;     // size for each new context
+    pthread_mutex_t     mutex;      // shared mutex for environment
 };
 
 static inline void wikrt_env_lock(wikrt_env* e) {
@@ -385,148 +381,82 @@ static inline void wikrt_env_lock(wikrt_env* e) {
 static inline void wikrt_env_unlock(wikrt_env* e) {
     pthread_mutex_unlock(&(e->mutex)); }
 
-/** wikrt size class index, should be in 0..(WIKRT_FLCT-1) */
-typedef int wikrt_sc;
-
-/** A circular free list of (size, next) pairs. 
- * 
- * Note that the head element of a circular singly-linked free list is
- * also the last one allocated (since we cannot update its prior ref).
- * It's closer in nature to a tail pointer.
- */
-typedef wikrt_addr wikrt_flst;
-
-/** @brief Size-segregated free lists.
+/** wikrt_cx internal state.
  *
- * Each of these 'free lists' is a *circular* free-list of (size, next)
- * pairs, or empty (address 0). The circular structure is intended to
- * simplify splicing of lists while reducing header memory overhead. 
- *
- * Todo: minimize fragmentation between contexts.
- *
- * For now, I'll move forward with the current implementation.
- */
-typedef struct wikrt_fl {
-    wikrt_size free_bytes;
-    wikrt_size frag_count;
-    wikrt_flst size_class[WIKRT_FLCT];
-} wikrt_fl;
-
-bool wikrt_fl_alloc(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr*);
-void wikrt_fl_free(void* mem, wikrt_fl*, wikrt_sizeb, wikrt_addr); // 
-void wikrt_fl_coalesce(void* mem, wikrt_fl*); // combines adjacent free blocks
-void wikrt_fl_merge(void* mem, wikrt_fl* src, wikrt_fl* dst); // moves free blocks from src to dst
-
-/** Shared state for multi-threaded contexts. */ 
-struct wikrt_cxm {
-    // doubly-linked list of contexts for env. 
-    wikrt_cxm          *next;
-    wikrt_cxm          *prev;
-
-    // for now, keeping a list of associated contexts
-    wikrt_cx           *cxlist;
-
-    // lock for shared state within context
-    pthread_mutex_t     mutex;
-
-    // shared environment for multiple contexts.
+ * I've decided to try a bump-pointer allocation with a semi-space
+ * collection process.
+ */ 
+struct wikrt_cx {
+    // doubly-linked list of contexts in environment.
+    wikrt_cx           *cxnext;
+    wikrt_cx           *cxprev;
     wikrt_env          *env;
 
-    // primary context memory
-    wikrt_size          size;
-    void               *memory;
+    // maybe add a mutex, if necessary
 
-    // root free-list, shared between threads 
-    wikrt_fl            fl;
+    // Memory
+    void*               mem;        // active memory
+    wikrt_addr          alloc;      // bump-pointer allocation
+    wikrt_size          size;       // size of memory
+
+    wikrt_val           val;    // primary value
+    wikrt_val           txn;    // transaction data
+
+    // semispace garbage collection.
+    void*               ssp;    // for GC, scratch
+    wikrt_size          compaction_size;    // memory after compaction
+    wikrt_size          compaction_count;   // count of compactions
+
+    // Other... maybe move error tracking here?
 };
 
-static inline void wikrt_cxm_lock(wikrt_cxm* cxm) {
-    pthread_mutex_lock(&(cxm->mutex)); }
-static inline void wikrt_cxm_unlock(wikrt_cxm* cxm) {
-    pthread_mutex_unlock(&(cxm->mutex)); }
-
-/* The 'wikrt_cx' is effectively the thread-local storage for
- * wikilon runtime computations. It's assumed this is used from
- * only one thread.
- *
- * Todo: 
- *   latent destruction of items
- *   
- */
-struct wikrt_cx {
-    wikrt_cx           *next;       // sibling context
-    wikrt_cx           *prev;       // sibling context
-    wikrt_cxm          *cxm;        // shared memory structures
-
-    wikrt_val           txn;        // context's transaction
-    wikrt_val           val;        // context's held value
-
-    void               *memory;     // main memory
-    wikrt_fl            fl;         // local free space
-
-    // statistics and metrics, supports quotas and heuristics
-    uint64_t            ct_bytes_freed; // bytes freed
-    uint64_t            ct_bytes_alloc; // bytes allocated
-    uint64_t            fragmentation;  // fragments added to cxm
-};
 
 static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr addr) {
-    return (wikrt_val*)(addr + ((char*)(cx->memory))); 
+    return (wikrt_val*)(addr + ((char*)(cx->mem))); 
 }
 static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_paddr(cx, wikrt_vaddr(v));
 }
 
-bool wikrt_alloc(wikrt_cx*, wikrt_size, wikrt_addr*);
-void wikrt_free(wikrt_cx*, wikrt_size, wikrt_addr);
-void wikrt_release_mem(wikrt_cx*);
-bool wikrt_realloc(wikrt_cx*, wikrt_size, wikrt_addr*, wikrt_size);
+/* NOTE: Because I'm using a moving GC, I need to be careful about
+ * how I represent and process allocations. Any allocation I wish 
+ * to preserve must be represented in the root set. When copying an
+ * array or similar, I'll need to be sure that all the contained 
+ * values are copied upon moving them.
+ *
+ * Despite being a semi-space collector, I still use linear values
+ * and mutation in place where feasible. So locality shouldn't be
+ * a huge problem for carefully designed
+ */
 
-// Allocate a cell value tagged with WIKRT_O, WIKRT_P, WIKRT_PL, or WIKRT_PR
-// note that 'dst' is only modified on success. Some code depends on this.
-static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* dst, 
-    wikrt_tag tag, wikrt_val v0, wikrt_val v1) 
+// copy from mem to ssp. swap ssp to mem.
+void wikrt_mem_compact(wikrt_cx*);
+static inline bool wikrt_mem_available(wikrt_cx* cx, wikrt_size sz) {
+    return ((cx->size - cx->alloc) >= sz); }
+static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz) {
+    if(wikrt_mem_available(cx,sz)) { return true; }
+    wikrt_mem_compact(cx);
+    return wikrt_mem_available(cx,sz);
+}
+
+// Allocate a given amount of space, assuming enough space is reserved.
+// There is no risk of reorganizing data. But there is risk of overflow.
+static inline wikrt_addr wikrt_alloc_unsafe(wikrt_cx* cx, wikrt_sizeb sz) 
 {
-    wikrt_addr addr;
-    if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &addr)) { 
-        return false; 
-    }
-    (*dst) = wikrt_tag_addr(tag, addr);
-    wikrt_val* const pv = wikrt_paddr(cx, addr);
-    pv[0] = v0;
-    pv[1] = v1;
+    wikrt_addr result = cx->alloc;
+    cx->alloc += sz;
+    return result;
+}
+
+// Note: need to ensure that each allocation becomes a proper value on our
+// stack, strictly before the next allocation.
+static inline bool wikrt_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr) 
+{
+    sz = WIKRT_CELLBUFF(sz);
+    if(!wikrt_mem_reserve(cx, sz)) { return false; }
+    (*addr) = wikrt_alloc_unsafe(cx, sz);
     return true;
 }
-
-// add a value to the main context stack
-static inline wikrt_err wikrt_intro(wikrt_cx* cx, wikrt_val v)
-{
-    if(!wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, v, cx->val)) {
-        wikrt_drop_v(cx, v, NULL);
-        return WIKRT_CXFULL;
-    }
-    return WIKRT_OK;
-}
-
-// Allocate a double cell tagged WIKRT_O. 
-// note that 'dst' is only modified on success. Some code depends on this.
-static inline bool wikrt_alloc_dcellval(wikrt_cx* cx, wikrt_val* dst,
-    wikrt_val v0, wikrt_val v1, wikrt_val v2, wikrt_val v3)
-{
-    wikrt_addr addr;
-    if(!wikrt_alloc(cx, (2 * WIKRT_CELLSIZE), &addr)) { 
-        return false; 
-    }
-    (*dst) = wikrt_tag_addr(WIKRT_O, addr);
-    wikrt_val* const pv = wikrt_paddr(cx, addr);
-    pv[0] = v0;
-    pv[1] = v1;
-    pv[2] = v2;
-    pv[3] = v3;
-    return true;
-}
-
-
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const v) {

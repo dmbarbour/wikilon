@@ -8,7 +8,6 @@
 #include "wikrt.h"
 
 void wikrt_acquire_shared_memory(wikrt_cx* cx, wikrt_sizeb sz); 
-static void wikrt_cx_init(wikrt_cxm*, wikrt_cx*);
 
 char const* wikrt_abcd_operators() {
     // currently just pure ABC...
@@ -93,21 +92,34 @@ bool wikrt_valid_token(char const* cstr) {
     return true;
 }
 
-wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMaxMB) {
+uint32_t wikrt_api_ver() 
+{
+    _Static_assert(WIKRT_API_VER < UINT32_MAX, "bad value for WIKRT_API_VER");
+    return WIKRT_API_VER;
+}
+
+wikrt_err wikrt_env_create(wikrt_env** ppEnv, wikrt_env_options const* opts) {
     _Static_assert(WIKRT_SIZE_MAX >= 4294967295, "minimum 32-bit words (for texts, etc.)"); 
     _Static_assert(WIKRT_CELLSIZE == WIKRT_CELLBUFF(WIKRT_CELLSIZE), "cell size must be a power of two");
     _Static_assert(WIKRT_PAGESIZE == WIKRT_PAGEBUFF(WIKRT_PAGESIZE), "page size must be a power of two");
 
+    assert((NULL != ppEnv) && (NULL != opts));
     (*ppEnv) = NULL;
 
+    size_t const cxMemMB = (0 == opts->cxMemMB) ? WIKRT_CX_MIN_SIZE : (size_t)(opts->cxMemMB);
+    bool const okCxSize =  ((WIKRT_CX_MIN_SIZE <= cxMemMB) && (cxMemMB <= WIKRT_CX_MAX_SIZE))
+                        && (cxMemMB < (SIZE_MAX >> 21)); // last condition to prevent overflow on 32-bit systems
+    if(!okCxSize) { return WIKRT_INVAL; }
+
     wikrt_env* const e = calloc(1, sizeof(wikrt_env));
-    if(NULL == e) return WIKRT_NOMEM;
+    if(NULL == e) { return WIKRT_NOMEM; }
+    e->cxsize = cxMemMB << 20; 
 
     e->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
 
-    if(!dirPath || (0 == dbMaxMB)) { 
+    if(!opts->dirPath || (0 == opts->dbMaxMB)) { 
         e->db = NULL;
-    } else if(!wikrt_db_init(&(e->db), dirPath, dbMaxMB)) {
+    } else if(!wikrt_db_init(&(e->db), opts->dirPath, opts->dbMaxMB)) {
         free(e);
         return WIKRT_DBERR;
     }
@@ -119,7 +131,7 @@ wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMa
 }
 
 void wikrt_env_destroy(wikrt_env* e) {
-    assert(NULL == e->cxmlist);
+    assert(NULL == e->cxlist);
     if(NULL != e->db) {
         wikrt_db_destroy(e->db);
     }
@@ -134,140 +146,81 @@ void wikrt_env_sync(wikrt_env* e) {
     }
 }
 
-static void wikrt_cx_init(wikrt_cxm* cxm, wikrt_cx* cx) {
-    cx->cxm = cxm;
-    cx->memory = cxm->memory;
-    cx->val = WIKRT_UNIT;
-    cx->txn = WIKRT_VOID;
-
-    wikrt_cxm_lock(cxm); {
-        cx->next = cxm->cxlist;
-        if(NULL != cx->next) { cx->next->prev = cx; }
-        cxm->cxlist = cx;
-    } wikrt_cxm_unlock(cxm);
-}
-
-wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t sizeMB) 
+wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX) 
 {
     (*ppCX) = NULL;
-
-    bool const bSizeValid = (WIKRT_CX_SIZE_MIN <= sizeMB) 
-                         && (sizeMB <= WIKRT_CX_SIZE_MAX);
-    if(!bSizeValid) return WIKRT_IMPL;
-    wikrt_sizeb const sizeBytes = (wikrt_sizeb) ((1024 * 1024) * sizeMB);
-
-    wikrt_cxm* const cxm = calloc(1,sizeof(wikrt_cxm));
-    wikrt_cx* const cx = calloc(1,sizeof(wikrt_cx));
-    if((NULL == cxm) || (NULL == cx)) { goto callocErr; }
-
+    wikrt_cx* const cx = calloc(1, sizeof(wikrt_cx));
+    if(NULL == cx) { goto callocErr; }
+    
     static int const prot = PROT_READ | PROT_WRITE | PROT_EXEC;
     static int const flags = MAP_ANONYMOUS | MAP_PRIVATE;
-    void* const memory = mmap(NULL, sizeBytes, prot, flags, -1, 0); 
-    if(NULL == memory) { goto mmapErr; }
+    size_t const twospace_size = 2 * e->cxsize;
+    void* const twospace = mmap(NULL, twospace_size, prot, flags, -1, 0);
+    if(NULL == twospace) { goto mmapErr; }
 
-    cxm->env = e;
-    cxm->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
-    cxm->memory = memory;
-    cxm->size = sizeBytes;
+    cx->env     = e;
+    cx->mem     = twospace;
+    cx->ssp     = (void*)(cx->size + ((char*)cx->mem));
+    cx->alloc   = WIKRT_ALLOC_START; 
+    cx->size    = (wikrt_size)(e->cxsize);
+    cx->val     = WIKRT_UNIT;
+    cx->txn     = WIKRT_VOID;
 
-    // insert into environment's list of context roots
+    // track context in list
     wikrt_env_lock(e); {
-        cxm->next = e->cxmlist;
-        if(NULL != cxm->next) { cxm->next->prev = cxm; }
-        e->cxmlist = cxm;
+        cx->cxnext = e->cxlist;
+        if(NULL != cx->cxnext) { cx->cxnext->cxprev = cx; }
+        e->cxlist = cx;
     } wikrt_env_unlock(e);
-
-    // I'll block cell 0 from allocation (it's used for 'unit'.)
-    // For alignment, allocation of first page is delayed. It might
-    // be useful to eventually support page-aligned memory in the cxm.
-    wikrt_fl_free(memory, &(cxm->fl), (WIKRT_PAGESIZE - WIKRT_CELLSIZE), WIKRT_CELLSIZE); // first page minus first cell
-    wikrt_fl_free(memory, &(cxm->fl), (sizeBytes - WIKRT_PAGESIZE), WIKRT_PAGESIZE); // all pages after the first
-
-    // initialize thread-local context
-    wikrt_cx_init(cxm, cx);
 
     (*ppCX) = cx;
     return WIKRT_OK;
 
 mmapErr:
 callocErr:
-    free(cxm);
     free(cx);
     return WIKRT_NOMEM;
 }
 
-wikrt_err wikrt_cx_fork(wikrt_cx* cx, wikrt_cx** pfork)
-{
-    wikrt_cxm* const cxm = cx->cxm;
-    (*pfork) = calloc(1, sizeof(wikrt_cx));
-    if(NULL == (*pfork)) { return WIKRT_NOMEM; }
-    wikrt_cx_init(cxm, (*pfork));
-    return WIKRT_OK;
-}
-
 void wikrt_cx_destroy(wikrt_cx* cx) 
 {
-    // drop bound values to recover memory
-    wikrt_drop_v(cx, cx->val, NULL);    cx->val = WIKRT_VOID;
-    wikrt_txn_abort(cx);
+    // remove context from environment.
+    wikrt_env* const e = cx->env;
+    wikrt_env_lock(e); {
+        if(NULL != cx->cxnext) { cx->cxnext->cxprev = cx->cxprev; }
+        if(NULL != cx->cxprev) { cx->cxprev->cxnext = cx->cxnext; }
+        else { assert(cx == e->cxlist); e->cxlist = cx->cxnext; }
+    } wikrt_env_unlock(e);
 
-    // remove cx from cxm
-    wikrt_cxm* const cxm = cx->cxm;
-    wikrt_cxm_lock(cxm); {
-        wikrt_fl_merge(cx->memory, &(cx->fl), &(cxm->fl));
-        if(NULL != cx->next) { cx->next->prev = cx->prev; }
-        if(NULL != cx->prev) { cx->prev->next = cx->next; }
-        else { assert(cx == cxm->cxlist); cxm->cxlist = cx->next; }
-    } wikrt_cxm_unlock(cxm);
-    
-    free(cx);
+    // TODO: consider flyweight allocator for a few contexts.
 
-    if(NULL == cxm->cxlist) {
-        // last context for this memory destroyed.
-        // remove context memory from environment
-        wikrt_env* const e = cxm->env;
-        wikrt_env_lock(e); {
-            if(NULL != cxm->next) { cxm->next->prev = cxm->prev; }
-            if(NULL != cxm->prev) { cxm->prev->next = cxm->next; }
-            else { assert(cxm == e->cxmlist); e->cxmlist = cxm->next; }
-        } wikrt_env_unlock(e);
-
-        // release memory back to operating system
-        errno = 0;
-        int const unmapStatus = munmap(cxm->memory, cxm->size);
-        bool const unmapSucceeded = (0 == unmapStatus);
-        if(!unmapSucceeded) {
-            fprintf(stderr,"Failure to unmap memory (%s) when destroying context.\n", strerror(errno));
-            abort(); // this is some sort of OS failure.
-        }
-        pthread_mutex_destroy(&(cxm->mutex));
-        free(cxm);
+    // free the memory-mapped twospace
+    errno = 0;
+    void* const twospace = (cx->mem < cx->ssp) ? cx->mem : cx->ssp;
+    size_t const twospace_size = 2 * e->cxsize;
+    int const unmapStatus = munmap(twospace, twospace_size);
+    if(0 != unmapStatus) {
+        fprintf(stderr,"Failure to unmap memory (%s) when destroying context.\n", strerror(errno));
+        abort(); // this is some sort of OS failure.
     }
+
+    // recover memory from context structure.
+    free(cx);
 }
 
 wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
-    return cx->cxm->env;
+    return cx->env;
 }
 
 wikrt_err wikrt_move(wikrt_cx* const lcx, wikrt_cx* const rcx) 
 {
-    if(lcx == rcx) { return WIKRT_INVAL; }
-
-    if(lcx->cxm == rcx->cxm) {
-        // local move between forks, non-allocating.
-        wikrt_val const v = lcx->val;
-        if(!wikrt_p(v)) { return WIKRT_TYPE_ERROR; }
-        wikrt_val* const pv = wikrt_pval(lcx, v);
-        lcx->val = pv[1]; 
-        pv[1] = rcx->val; 
-        rcx->val = v;
-        return WIKRT_OK;
-    } else {
-        // fail-safe move via copy to rhs then drop from lhs.
-        wikrt_err const st = wikrt_copy_move(lcx, NULL, rcx);
-        if(WIKRT_OK == st) { wikrt_drop(lcx, NULL); } 
-        return st;
-    }
+    // this function could feasibly be optimized, especially if
+    // I later restore the wikrt_cx_fork() feature. But for now,
+    // we'll simply deep copy the value then drop the original
+    // if the copy succeeds.
+    wikrt_err const st = wikrt_copy_move(lcx, NULL, rcx);
+    if(WIKRT_OK == st) { wikrt_drop(lcx, NULL); } 
+    return st;
 }
 
 wikrt_err wikrt_copy(wikrt_cx* cx, wikrt_ss* ss)
@@ -1948,6 +1901,7 @@ wikrt_err wikrt_unwrap_sum_v(wikrt_cx* cx, bool* inRight, wikrt_val* v)
             return WIKRT_OK;
         } else { 
             // Note: I reserve one cell for fail-safe data plumbing.
+            // This ensures I can rebuild the sum type after expansion.
             wikrt_addr reserved_cell;
             if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &reserved_cell)) { return WIKRT_CXFULL; }
             wikrt_err const st = wikrt_expand_sum_v(cx, v);

@@ -34,10 +34,9 @@
  *    need for external persistence (e.g. no need for true filesystem
  *    access).
  *
- *  - Parallelism. Modulo space requirements, pure computations behave
- *    independently of evaluation order. Divide and conquer tactics 
- *    are effective if we can divide into coarse-grained tasks. ABC
- *    easily supports par/seq parallelism. 
+ *  - Parallelism. Pure computations can be parallelized easily because
+ *    their behavior is independent of evaluation order. Though, they
+ *    may fail non-deterministically due to memory consumption.
  * 
  *  Wikilon runtime shall support these techniques. I'll also support
  *  an integrated key-value store for stowage-friendly persistence.
@@ -100,15 +99,10 @@ typedef struct wikrt_env wikrt_env;
 
 /** @brief Opaque structure representing a context for computation.
  *
- * A wikrt_cx - a wikilon runtime context - represents both a value and
- * a space in which computations may be performed. Contexts are single
- * threaded (that is, they must be used from a single thread). It is 
- * possible to communicate between contexts by use of `wikrt_move()`. 
- * 
- * A context contains a single value, to which we may apply a stream of
- * functions (much like Awelon Bytecode). Values include unit, products,
- * sums, integers, blocks of code, sealed values, and optimized encodings
- * for texts, binaries, lists, etc.. A new context has the unit value.
+ * A wikrt_cx holds a single value that may be manipulated by a single
+ * external thread in order to perform a computation. The manipulations
+ * may introduce data and process it. The 'value' in question is used
+ * implicitly as a stack in most cases.
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -137,7 +131,7 @@ typedef enum wikrt_err
 , WIKRT_BUFFSZ       = (1<< 5)  // output buffer too small
 
 // Transactions
-, WIKRT_CONFLICT     = (1<< 6)  // transaction state conflict
+, WIKRT_CONFLICT     = (1<< 6)  // any transaction conflict
 
 // Evaluations
 , WIKRT_QUOTA_STOP   = (1<< 7)  // halted on time/effort quota
@@ -147,21 +141,45 @@ typedef enum wikrt_err
 /** @brief Translate a single wikrt_err to human text. */
 char const* wikrt_strerr(wikrt_err);
 
-/** @brief Open or Create a Wikilon environment.
+/** @brief Support a simple consistency check for dynamic library.
  *
- * The developer specifies a directory and how much space to allocate
- * for persistent storage. This space will be used for transactions and
- * stowage, and is also allocated within the address space.
- * 
- * It is possible to create an environment without a database by setting
- * dirPath to NULL and dbMaxMB to 0. In this case, transactions fail and
- * stowage is mostly ignored. 
- *
- * wikrt_env_create will attempt to recursively create a directory if it
- * does not exist. The most likely error is WIKRT_DBERR if the directory
- * cannot be created or opened.
+ * Compare WIKRT_API_VER to wikrt_api_ver(). If they aren't the same,
+ * then your app was compiled against a different interface than the
+ * dynamic lib implements. This is just a simple sanity check.
  */
-wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, uint32_t dbMaxMB);
+uint32_t wikrt_api_ver();
+#define WIKRT_API_VER 20160328
+
+/** @brief Configuration options for an environment. 
+ *
+ * Zero or NULL is always an accepted value, resulting in some default or 
+ * disabling the associated feature. All contexts are the same size in 
+ * Wikilon because this simplifies parallelism and eventual flyweight
+ * allocation features.
+ *
+ * Wikilon runtime will attempt to create dirPath (including parents) if
+ * necessary and feasible.
+ *
+ * Context size is currently limited to about 4 gigabytes. Wikilon runtime
+ * uses 32-bit within a context. Use of stowage is necessary for computations
+ * that will process more than 4GB at once, the idea being to treat memory as
+ * a cache for stowed data.
+ *
+ * Context address space is currently doubled for semispace memory management.
+ */
+typedef struct wikrt_env_options 
+{
+    char const* dirPath;        // where is our persistent database and stowage?
+    uint32_t    dbMaxMB;        // how much space (megabytes) for database and stowage?
+    uint32_t    cxMemMB;        // how much space (megabytes) for context memory? 
+    uint32_t    maxPar;         // how many {&par} threads (shared by contexts)?
+} wikrt_env_options;
+
+#define WIKRT_CX_MIN_SIZE 4
+#define WIKRT_CX_MAX_SIZE 4092
+
+/** @brief Open or Create a Wikilon environment with given options. */
+wikrt_err wikrt_env_create(wikrt_env**, wikrt_env_options const*);
 
 /** @brief Destroy the environment.
  *
@@ -182,37 +200,20 @@ void wikrt_env_sync(wikrt_env*);
  * 
  * This creates a new shared-nothing context in the environment with
  * a given size in megabytes. The context initially contains the unit
- * value. At the moment, we're limited to contexts between 3 and 4092
- * megabytes in size (due to use of 32-bit words under the hood).
- */ 
-wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t sizeMB);
-
-#define WIKRT_CX_SIZE_MIN 4
-#define WIKRT_CX_SIZE_MAX 4092
-
-/** @brief Lightweight external parallelism.
- * 
- * Use of `wikrt_cx_fork()` creates a lightweight context that shares
- * the same memory as its parent. Wikilon runtime doesn't support the
- * aliasing of memory, so context values remain separate. But shared
- * memory does enable an efficient `wikrt_move()` to communicate data
- * between two contexts (i.e. without a deep copy).
- * 
- * Active forks tend each to acquire a few megabytes working memory.
- * Be certain to account for this in `wikrt_cx_create()`. Passive forks
- * that merely hold or transport data, OTOH, don't require extra space.
+ * value, but may be loaded with more data via the `wikrt_intro` verbs
+ * or key-value reads against the implicit database.
  */
-wikrt_err wikrt_cx_fork(wikrt_cx*, wikrt_cx**);
+wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**);
 
-/** @brief Destroy a context and recover memory. 
- *
- * Destroying a context will automatically free the bound values, abort
- * a transaction if necessary, and release working memory (thread-local
- * free lists). If it's the last context associated with wikrt_cx_create,
- * the underlying volume of memory is unmapped and returned to the OS. 
- *
- * A wikrt_cx_fork context will hold onto the underlying shared space.
+/* Note: I originally pursued `wikrt_cx_fork()` as a basis for lightweight
+ * external parallelism. At this time, however, I feel the synchronization
+ * overheads, memory fragmentation, and other costs are not worthwhile. If
+ * external parallelism is necessary, we can instead copy values from one
+ * context to another which isn't cheap but is only paid for at specific
+ * boundaries.
  */
+
+/** @brief Destroy a context and recover memory. */
 void wikrt_cx_destroy(wikrt_cx*);
 
 /** @brief A context knows its parent environment. */
@@ -391,20 +392,8 @@ bool wikrt_valid_token(char const* s);
  * 
  * For the left context, this has type `(a*b)→b`. For the right context,
  * this has type `c→(a*c)`. The `a` value is moved from the left context
- * to the right context. Move returns WIKRT_INVAL and does nothing if 
- * left and right contexts are identical.
- *
- * Between different forks that share the same memory, `wikrt_move()` is
- * a non-allocating, non-copying, O(1) operation, guaranteed to succeed
- * if the argument has the correct type. Otherwise, the value is copied
- * to the right hand context. There is some risk of memory fragmentation
- * when values are moved between forks, i.e. due to reduced locality.
- *
- * Note that the `wikrt_move` call requires exclusive control over both
- * contexts. In many cases, it may be useful to create intermediate
- * 'messenger' forks to carry data between threads, i.e. such that the
- * creator pushes data to the messenger then the receiver takes data
- * from the messenger.
+ * to the right context. Move fails if left and right contexts are the
+ * same, or if the RHS context isn't large enough. 
  */
 wikrt_err wikrt_move(wikrt_cx*, wikrt_cx*);
 
@@ -436,15 +425,9 @@ wikrt_err wikrt_copy(wikrt_cx*, wikrt_ss*);
 
 /** @brief Combined copy and move operation. Fail-safe.
  *
- * For the left context, this has type (a*b)→(a*b). For the right context
- * it has type (c)→(a*c). This corresponds to wikrt_copy followed immediately
- * by wikrt_move, albeit in one step. The combination avoids an intermediate
- * copy and reduces risk of memory fragmentation from wikrt_move. 
- *
- * This is roughly wikrt_copy followed by wikrt_move, albeit in one step.
- * The combined action has some advantages: it avoids an intermediate copy
- * between two different memories, and it potentially mitigates memory 
- * fragmentation between forks (copies to the target's working memory).
+ * This is equivalent to wikrt_copy followed by wikrt_move in one step.
+ * It has performance advantages over performing copy and move in separate
+ * steps.
  */
 wikrt_err wikrt_copy_move(wikrt_cx*, wikrt_ss*, wikrt_cx*);
 
