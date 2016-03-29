@@ -60,9 +60,13 @@ Originally I was going for a more conventional API where values have handles out
 
 ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies favored over aliasing. Linearity allows me to implement many functions (or their common cases) without allocation.
 
-Bump-pointer allocators, together with two-space collectors, would also serve me very well. Parallelism would be 'heavy' in the sense that it copies computation data, but could also be 'lightweight' in the sense that it only triggers upon compacting GC - i.e. when data is to be copied regardless. Two-space compacting could drive both stowage and quotas, and the extra space would be convenient for stowage without runtime allocations (assuming stowage is no more expensive than a local representation). Stowage would serve as the implicit 'old space' where we no longer copy-collect data.
+Bump-pointer allocators, together with two-space collectors, should also serve me well. I initially tried more conventional memory management with size-segregated free-lists. But that doesn't work nicely with slab allocations for composite values or incremental deallocation of values. Free fragments are small and allocated blocks are large, and we end up coalescing memory more frequently than we reuse it. 
 
-A potential difficulty with a moving collector is that I must represent active computation state within the memory region and deal with any changes in pointers after each allocation. I might achieve this by modeling a small set of active registers or similar... i.e. our active computation stack, as necessary. It would also serve as a scratch space as needed.
+A compacting collector seems a good fit for Wikilon's common use cases. It's a stop-the-world collector, albeit constrained to a single thread. This shouldn't be a major issue for pure computations (i.e. stop the world does not change latency of side-effects unless there are side-effects). 
+
+One concern is *parallelism*. With a two-space collector and bump-pointer allocation, I cannot efficiently allow parallelism within a context. It would require too much synchronization (for bumping the pointer, for halting other threads during compaction, etc.). However, I can always freely copy or move data from one context to another. So I still have access to parallelism... it's just not very lightweight unless the expression of the computation is small. (Stowage might help here?) OTOH, if I activate parallel evaluations only when I would normally perform copy-collection, then I also don't perform any *extra* copies. But I might lose some good parallelism opportunities. 
+
+Another concern is that I need to be very careful with a moving collector to not use references after any potential compaction.
 
 ## Representations
 

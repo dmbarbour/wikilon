@@ -151,27 +151,27 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX)
     (*ppCX) = NULL;
     wikrt_cx* const cx = calloc(1, sizeof(wikrt_cx));
     if(NULL == cx) { goto callocErr; }
-    
+
+    // We'll allocate twice the requested space. We'll use the extra
+    // both as a semispace and (when necessary) as a scratch space.
     static int const prot = PROT_READ | PROT_WRITE | PROT_EXEC;
     static int const flags = MAP_ANONYMOUS | MAP_PRIVATE;
     size_t const twospace_size = 2 * e->cxsize;
     void* const twospace = mmap(NULL, twospace_size, prot, flags, -1, 0);
     if(NULL == twospace) { goto mmapErr; }
+    
+    wikrt_size const size = (wikrt_size)(e->cxsize);
+    void* const mem = twospace;
+    void* const ssp = (void*)(size + (char*)mem);
 
     cx->env     = e;
-    cx->mem     = twospace;
-    cx->ssp     = (void*)(cx->size + ((char*)cx->mem));
-    cx->alloc   = WIKRT_ALLOC_START; 
-    cx->size    = (wikrt_size)(e->cxsize);
-    cx->val     = WIKRT_UNIT;
-    cx->txn     = WIKRT_VOID;
-
-    // track context in list
-    wikrt_env_lock(e); {
-        cx->cxnext = e->cxlist;
-        if(NULL != cx->cxnext) { cx->cxnext->cxprev = cx; }
-        e->cxlist = cx;
-    } wikrt_env_unlock(e);
+    cx->val     = WIKRT_UNIT; // initial value for every context
+    cx->txn     = WIKRT_VOID; // no transaction in memory
+    cx->size    = size; 
+    cx->alloc   = size; // we'll work towards zero 
+    cx->mem     = mem;
+    cx->ssp     = ssp;
+    wikrt_add_cx_to_env(cx);
 
     (*ppCX) = cx;
     return WIKRT_OK;
@@ -182,22 +182,37 @@ callocErr:
     return WIKRT_NOMEM;
 }
 
-void wikrt_cx_destroy(wikrt_cx* cx) 
+void wikrt_add_cx_to_env(wikrt_cx* cx) 
 {
-    // remove context from environment.
+    wikrt_env* const e = cx->env;
+    wikrt_env_lock(e); {
+        cx->cxnext = e->cxlist;
+        if(NULL != cx->cxnext) { cx->cxnext->cxprev = cx; }
+        e->cxlist = cx;
+        cx->cxprev = NULL;
+    } wikrt_env_unlock(e);
+}
+
+void wikrt_remove_cx_from_env(wikrt_cx* cx) 
+{
     wikrt_env* const e = cx->env;
     wikrt_env_lock(e); {
         if(NULL != cx->cxnext) { cx->cxnext->cxprev = cx->cxprev; }
         if(NULL != cx->cxprev) { cx->cxprev->cxnext = cx->cxnext; }
-        else { assert(cx == e->cxlist); e->cxlist = cx->cxnext; }
+        else { assert(e->cxlist == cx); e->cxlist = cx->cxnext; }
     } wikrt_env_unlock(e);
+    cx->cxnext = NULL;
+    cx->cxprev = NULL;
+}
 
-    // TODO: consider flyweight allocator for a few contexts.
+void wikrt_cx_destroy(wikrt_cx* cx) 
+{
+    wikrt_remove_cx_from_env(cx);
 
-    // free the memory-mapped twospace
+    // free the memory-mapped region
     errno = 0;
     void* const twospace = (cx->mem < cx->ssp) ? cx->mem : cx->ssp;
-    size_t const twospace_size = 2 * e->cxsize;
+    size_t const twospace_size = 2 * ((size_t)cx->size);
     int const unmapStatus = munmap(twospace, twospace_size);
     if(0 != unmapStatus) {
         fprintf(stderr,"Failure to unmap memory (%s) when destroying context.\n", strerror(errno));
@@ -211,6 +226,42 @@ void wikrt_cx_destroy(wikrt_cx* cx)
 wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
     return cx->env;
 }
+
+void wikrt_mem_compact(wikrt_cx* cx) 
+{
+    // It's easiest to think about 'compaction' as just a move operation, 
+    // albeit one that we know our destination has sufficient space.
+    wikrt_cx cx0 = (*cx);
+
+    // swap semispace and memory; reset allocator
+    cx->ssp = cx0.mem;
+    cx->mem = cx0.ssp;
+    cx->alloc = cx->size;
+    
+    // Note: ephemerons will require special attention. Either I add cx0 to
+    // our environment briefly (I'd prefer to avoid this synchronization)
+    // Or I favor a framed mechanism (e.g. a two-frame bloom filter) such
+    // that I can write one frame while reading the other. 
+    
+    // copy roots with assumption of sufficient space.
+    wikrt_copy_r(&cx0, cx0.txn, NULL, cx, &(cx->txn));
+    wikrt_copy_r(&cx0, cx0.val, NULL, cx, &(cx->val));
+    _Static_assert((2 == WIKRT_CX_ROOT_CT), "TODO: more than val and txn!"); // maintenance check
+
+    // keep stats. compaction count is useful for effort quotas. 
+    // compaction size is useful for heuristic memory pressure.
+    cx->compaction_count += 1;
+    cx->compaction_size  = (cx->size - cx->alloc);
+}
+
+bool wikrt_compacting_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr)
+{
+    sz = WIKRT_CELLBUFF(sz);
+    if(!wikrt_mem_reserve(cx, sz)) { return false; }
+    (*addr) = wikrt_alloc_from_reserve(cx, sz);
+    return true;
+}
+
 
 wikrt_err wikrt_move(wikrt_cx* const lcx, wikrt_cx* const rcx) 
 {

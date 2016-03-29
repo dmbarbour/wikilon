@@ -122,15 +122,15 @@ A disadvantage is that this syntactic sugar does very little to protect monadic 
 
 ### Alternative: CPS Variant
 
-From a processing standpoint, `[\[\[\[qux] after baz] after bar] after foo]` is a more tempting expansion. It provides the continuation before processing the function, and easily supports a continuation-passing style. 
+From a runtime processing standpoint, `[\[\[\[qux] after baz] after bar] after foo]` is a tempting expansion. Relevantly, it's easy to ensure that multiple expansions such as `[\[qux] after \[baz] after \[bar] after foo]` have the same behavior as the compact style by simply having `after` constructing a list-stack. This makes it trivial to `inline` one CPS block into another. 
 
-Unfortunately, this hinders interaction with namespace attributes and other view properties. It also prevents the interpreter from hiding the continuation from the program, guarantees our continuation is always visible to our program, hinders namespaces from applying to the sequence, doesn't compress nicely, and reorders the program compared to the user's view. I'm favoring the current model for now.
+For contrast, with the proposed `yield` we must use a more sophisticated structure and process if we `inline` one sequence into another. We can still use a list-stack, but it's in reverse order from how we want to process it. OTOH, the `yield` technique ensures our expanded order matches our input order, compresses very nicely, and works easily with features like namespace attributes. 
 
 ### Use Case: Data Sequences
 
 One of the motivating use-cases for command sequences is (syntactically) concise construction of data sequences (lists, streams, vectors, matrices, etc.). Assume we've committed to block-delimited sequences. Can we take `[1,2,3]` and turn it easily into a list of numbers? 
 
-We can.
+We can. 
 
 The program `[1,2,3]` desugars to `[1 \[2 \[3] yield] yield]`. Assume a program environment containing a data stack and a queue of continuations. Our `yield` function simply adds the continuation into the queue. After each step, the interpreter pops one datum off the data stack, pushes the queue of continuations onto a stack, provides a fresh environment to the next step, and continues. Thus, our comma separated sequence computes a *stream* of data. Converting our (known finite) stream into a list is trivial. 
 

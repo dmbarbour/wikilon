@@ -69,11 +69,6 @@ typedef enum wikrt_opcode_ext
 #define WIKRT_PAGESIZE (1 << 17)
 #define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
 
-// I'll reserve one cell at the start for error capture on CXFULL.
-// The zero address is also reserved for unit and void values. 
-#define WIKRT_ALLOC_START (2 * WIKRT_CELLSIZE)
-
-
 // for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
 #define WIKRT_DIR_MODE (mode_t)(WIKRT_FILE_MODE | S_IXUSR | S_IXGRP)
@@ -290,6 +285,21 @@ static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
 /* Internal API calls. */
 wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
 wikrt_err wikrt_copy_v(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
+
+// wikrt_val_size: return a value's size and substructural properties.
+//   The returned size is the number of bytes needed to copy the value.
+//
+// Thoughts: I'm thinking to use a two-pass copy. One pass finds the
+// size to reserve enough space (if necessary). Our second pass copies 
+// the value. I can probably bypass the size test when contexts have
+// not allocated much, though I'll first need to ensure size is robust.
+wikrt_size wikrt_val_size(wikrt_cx* cx, wikrt_val v);
+#define WIKRT_VAL_SIZE_BYPASS_IF_SAFE 0
+
+// wikrt_copy_r: assume sufficient reserved space.
+void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
+
+
 void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss*);
 
 wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val*);
@@ -381,10 +391,15 @@ static inline void wikrt_env_lock(wikrt_env* e) {
 static inline void wikrt_env_unlock(wikrt_env* e) {
     pthread_mutex_unlock(&(e->mutex)); }
 
+void wikrt_add_cx_to_env(wikrt_cx* cx);
+void wikrt_remove_cx_from_env(wikrt_cx* cx);
+
 /** wikrt_cx internal state.
  *
  * I've decided to try a bump-pointer allocation with a semi-space
- * collection process.
+ * collection process. I'll also allocate downwards, i.e. loading
+ * my heap in reverse order, since this reduces computation for
+ * allocations (avoiding 'size' in most computations).
  */ 
 struct wikrt_cx {
     // doubly-linked list of contexts in environment.
@@ -392,11 +407,9 @@ struct wikrt_cx {
     wikrt_cx           *cxprev;
     wikrt_env          *env;
 
-    // maybe add a mutex, if necessary
-
     // Memory
     void*               mem;        // active memory
-    wikrt_addr          alloc;      // bump-pointer allocation
+    wikrt_addr          alloc;      // allocate towards zero
     wikrt_size          size;       // size of memory
 
     wikrt_val           val;    // primary value
@@ -409,7 +422,8 @@ struct wikrt_cx {
 
     // Other... maybe move error tracking here?
 };
-
+// just for sanity checks
+#define WIKRT_CX_ROOT_CT 2
 
 static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->mem))); 
@@ -431,32 +445,25 @@ static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_val v) {
 
 // copy from mem to ssp. swap ssp to mem.
 void wikrt_mem_compact(wikrt_cx*);
-static inline bool wikrt_mem_available(wikrt_cx* cx, wikrt_size sz) {
-    return ((cx->size - cx->alloc) >= sz); }
-static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz) {
+static inline bool wikrt_mem_available(wikrt_cx* cx, wikrt_sizeb sz) { return (sz < cx->alloc); }
+static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz) 
+{
     if(wikrt_mem_available(cx,sz)) { return true; }
     wikrt_mem_compact(cx);
     return wikrt_mem_available(cx,sz);
-}
+} 
 
-// Allocate a given amount of space, assuming enough space is reserved.
-// There is no risk of reorganizing data. But there is risk of overflow.
-static inline wikrt_addr wikrt_alloc_unsafe(wikrt_cx* cx, wikrt_sizeb sz) 
-{
-    wikrt_addr result = cx->alloc;
-    cx->alloc += sz;
-    return result;
+// Allocate a given amount of space, assuming sufficient space is reserved.
+// This will not risk compacting and moving data. OTOH, if there isn't enough
+// space we'll have a very severe bug.
+static inline wikrt_addr wikrt_alloc_from_reserve(wikrt_cx* cx, wikrt_sizeb sz) {
+    cx->alloc -= sz; 
+    return cx->alloc; 
 }
 
 // Note: need to ensure that each allocation becomes a proper value on our
 // stack, strictly before the next allocation.
-static inline bool wikrt_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr) 
-{
-    sz = WIKRT_CELLBUFF(sz);
-    if(!wikrt_mem_reserve(cx, sz)) { return false; }
-    (*addr) = wikrt_alloc_unsafe(cx, sz);
-    return true;
-}
+bool wikrt_compacting_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr);
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const v) {
