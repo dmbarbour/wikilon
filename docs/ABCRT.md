@@ -38,10 +38,6 @@ With LMDB, I have the opportunity to use a single-process or multi-process acces
 
 If I do favor multi-process access, I'll need to somehow track ephemeral stowage references safely between processes. This is non-trivial.
 
-### Regarding Error Reporting
-
-Originally I was returning an 'error' value for most functions. I'm beginning to think this was a bad idea. First, it overly complicates the client API. Second, most errors are not recoverable. Third, tracking the exact cause of error is expensive. I may be better served by accumulating errors, similar to a context-specific `errno` or an error list of sorts, or by wrapping error values. By simply tracking, at the context level, whether an error has occurred.
-
 ## Structure
 
 I need an *environment* bound to an underlying stowage and persistence model, e.g. via LMDB. The environment may also be associated with worker threads for par-seq parallelism. I also need *contexts* that associate an environment with a heap of memory for computations. 
@@ -54,7 +50,9 @@ I will want parallelism within each context, and also to minimize synchronizatio
 
 ### API Thoughts
 
-Originally I was going for a more conventional API where values have handles outside the computation context. But I'm beginning to think this wasn't the best approach, that it would be better aligned with Awelon Bytecode to give each context a *single, implicit* value, a program environment that we manipulate just as we would a value within an ABC computation. This might be coupled with `wikrt_cx_fork()` and `wikrt_move()` or similar, such that a *context* itself serves as the value unit from perspective of the external API.
+Originally I was going for a more conventional API where values have handles outside the computation context. But I'm beginning to think this wasn't the best approach, that it would be better aligned with Awelon Bytecode to give each context a *single, implicit* value, a program environment that we manipulate just as we would a value within an ABC computation.
+
+Originally I was returning an error value for most API calls. I'm beginning to believe this is a bad idea. It complicates and clutters my client's API. It might be better to capture error state within a context after a stream of commands, and report that errors have occurred (upon request).
 
 ### Memory Management
 

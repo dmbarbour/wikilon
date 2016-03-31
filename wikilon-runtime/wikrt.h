@@ -142,7 +142,7 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  * Tagged objects will never be used for basic products, mostly to
  * keep the logic simpler. At the moment, much code assumes that if
  * we aren't a tagged object, we're a basic pair structure.
- *
+ * 
  * WIKRT_OTAG_DEEPSUM
  *
  *   For deep sums, the upper 24 bits are all data bits indicating sums
@@ -197,10 +197,10 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *   type `b`. It's a compact representation of this type, using offsets into
  *   a region instead of a lazy linked list. The representation is
  *
- *      (hdr, size, buffer, next).
+ *      (hdr, next, size, buffer).
  *          `buffer` is wikrt_addr of first item
- *          `next` should be (_+b) or continue the list
  *          `size` is a number of items.
+ *          `next` should be (_+b) or continue the list
  *          `hdr` includes a bit for logical reversal   
  *
  *   This representation enables chunked-arrays, i.e. lists of array-like
@@ -216,16 +216,27 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *   A text is a specialized compact list type, using a utf-8 encoding and
  *   limited segment sizes. In particular, each segment may be no more than
  *   2^16 bytes. Our 'size' field is divided into a byte count and codepoint
- *   count, each ranging 1..2^16. Texts larger than 2^16 bytes are divided
- *   into multiple chunks. The chunked representation limits how much scanning
- *   is necessary to index or split a text, providing a simplistic index.
+ *   count, ranging 1..(2^16 - 1). Generally I won't reach the max size.
  *
- *   The size field is divided such that the size in bytes is the lower 16 
- *   bits. Note that we'll probably use the same limits even if we upgrade
- *   to 64-bit pointers (the overhead is marginal in either case).
+ *      (hdr, next, (size-chars, size-bytes), buffer)
+ *          size-bytes is lower 16 bits
+ *          size-chars encoded in upper bits
  *
- * WIKRT_OTAG_STOWAGE
+ *   The chunked representation limits how much scanning is necessary to 
+ *   index or split a text, providing a simplistic linear index (speed up
+ *   indexing by a factor of up to 2^16. For very large texts, of course.
  *
+ * WIKRT_OTAG_STOWAGE (planned)
+ *
+ *    I must track references to stowed resources. Note: I might want to
+ *    couple stowage with value sealers.
+ *
+ * WIKRT_OTAG_ERROR (potential)
+ *
+ *    It might be useful to wrap a value after a type error occurs, perhaps
+ *    include flag bits suggesting the nature of this type error and which 
+ *    type was expected instead. This might be understood as a specialized
+ *    value sealer.
  */
 
 #define WIKRT_OTAG_BIGINT   78   /* N */
@@ -291,15 +302,18 @@ wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*);
 wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val v);
 #define WIKRT_ALLOW_SIZE_BYPASS 0
 
-// wikrt_vss_ssp: compute substructural attributes of a value.
-//   Uses scratch space as a stack. This is only used when
-//   dropping values for which we need the substructure.
-wikrt_ss wikrt_vss_ssp(wikrt_cx* cx, wikrt_val v);
-
-// wikrt_copy_r: assumes sufficient reserve space!
+void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* stack, wikrt_val v, wikrt_ss* ss);
 void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
 
-void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss*);
+// NOTE: use of a moving allocator will break most of the following functions.
+//  A few may be safe if they're known to be non-allocating, but even that is
+//  dubious. 
+//
+//  An alternative may be to track a small set of roots/registers within our
+//  context to carry data during a potentially allocating computation. These
+//  registers aren't necessarily exposed to our client.
+
+#if 0
 
 wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val*);
 
@@ -315,11 +329,8 @@ wikrt_err wikrt_expand_sum_v(wikrt_cx*, wikrt_val*);
 wikrt_err wikrt_wrap_seal_v(wikrt_cx*, char const* tok, wikrt_val*);
 wikrt_err wikrt_unwrap_seal_v(wikrt_cx*, char* tokbuff, wikrt_val*);
 
-wikrt_err wikrt_alloc_i32_v(wikrt_cx*, wikrt_val*, int32_t);
-wikrt_err wikrt_alloc_i64_v(wikrt_cx*, wikrt_val*, int64_t);
 wikrt_err wikrt_peek_i32_v(wikrt_cx*, wikrt_val const, int32_t*);
 wikrt_err wikrt_peek_i64_v(wikrt_cx*, wikrt_val const, int64_t*);
-wikrt_err wikrt_alloc_istr_v(wikrt_cx*, wikrt_val*, char const*, size_t strlen);
 wikrt_err wikrt_peek_istr_v(wikrt_cx*, wikrt_val const, char* buff, size_t* strlen); 
 
 wikrt_err wikrt_alloc_binary_v(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
@@ -337,24 +348,13 @@ wikrt_err wikrt_int_mul_v(wikrt_cx*, wikrt_val a, wikrt_val b, wikrt_val* r);
 wikrt_err wikrt_int_div_v(wikrt_cx*, wikrt_val dividend, wikrt_val divisor, 
     wikrt_val* quotient, wikrt_val* remainder);
 wikrt_err wikrt_int_cmp_v(wikrt_cx*, wikrt_val a, wikrt_ord*, wikrt_val b);
+#endif
 
 // return number of valid bytes and chars, up to given limits. Return
 // 'true' only if all bytes were read or we stopped on a NUL terminal.
 // Here 'szchars' may be NULL.
 bool wikrt_valid_text_len(char const* s, size_t* szbytes, size_t* szchars);
 bool wikrt_valid_key_len(char const* s, size_t* szBytes);
-
-#if 0
-wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_zswap_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_assocl_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_assocr_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_swap_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_sum_wswap_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_sum_zswap_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_sum_distrib_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_sum_factor_v(wikrt_cx*, wikrt_val*);
-#endif
 
 /** @brief Stowage address is 64-bit address. 
  *
@@ -382,6 +382,7 @@ struct wikrt_env {
     wikrt_db           *db;
     wikrt_cx           *cxlist;     // linked list of context roots
     size_t              cxsize;     // size for each new context
+    uint64_t            cxcount;    // how many contexts created?
     pthread_mutex_t     mutex;      // shared mutex for environment
 };
 
@@ -399,6 +400,12 @@ void wikrt_remove_cx_from_env(wikrt_cx* cx);
  * collection process. I'll also allocate downwards, i.e. loading
  * my heap in reverse order, since this reduces computation for
  * allocations (avoiding 'size' in most computations).
+ *
+ * Regarding stowage references: rather than precise stowage tracking, 
+ * try a bloom filter, refresh on memory compaction. This should be
+ * sufficient while allowing an acceptable level of GC. If I include
+ * a little salt, that would help prevent cases where a false positive
+ * is held for too long.
  */ 
 struct wikrt_cx {
     // doubly-linked list of contexts in environment.
@@ -418,6 +425,7 @@ struct wikrt_cx {
     void*               ssp;    // for GC, scratch
     wikrt_size          compaction_size;    // memory after compaction
     wikrt_size          compaction_count;   // count of compactions
+    uint64_t            cxid;   // unique context identifier within env
 
     // Other... maybe move error tracking here?
 };
@@ -461,18 +469,31 @@ static inline wikrt_addr wikrt_alloc_r(wikrt_cx* cx, wikrt_sizeb sz)
     return cx->alloc; 
 }
 
-// introduce a cell from a known reserved space
-static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) 
+static inline void wikrt_alloc_cellval_r(wikrt_cx* cx, wikrt_val* dst, wikrt_tag tag, wikrt_val fst, wikrt_val snd) 
 {
-    wikrt_addr const a = wikrt_alloc_r(cx, WIKRT_CELLSIZE);
-    wikrt_val* const pa = wikrt_paddr(cx, a);
-    pa[0] = v;
-    pa[1] = cx->val;
-    cx->val = wikrt_tag_addr(WIKRT_P, a);
+    wikrt_addr const addr = wikrt_alloc_r(cx, WIKRT_CELLSIZE);
+    wikrt_val* const pa = wikrt_paddr(cx, addr);
+    pa[0] = fst;
+    pa[1] = snd;
+    (*dst) = wikrt_tag_addr(tag, addr);
+}
+static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) {
+    wikrt_alloc_cellval_r(cx, &(cx->val), WIKRT_P, v, cx->val); 
 }
 
 // allocate with potential memory compaction to make space
 bool wikrt_alloc_c(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr);
+
+static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* tgt, wikrt_tag tag, wikrt_val fst, wikrt_val snd)
+{
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
+    wikrt_alloc_cellval_r(cx, tgt, tag, fst, snd);
+    return true;
+}
+static inline wikrt_err wikrt_intro_smallval(wikrt_cx* cx, wikrt_val v) {
+    bool const ok = wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, v, cx->val);
+    return (ok ? WIKRT_OK : WIKRT_CXFULL); 
+}
 
 // Other thoughts: It could be useful to keep free-lists regardless,
 // and allocate from them only after the bump-pointer arena is full
