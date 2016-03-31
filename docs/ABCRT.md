@@ -66,7 +66,9 @@ A compacting collector seems a good fit for Wikilon's common use cases. It's a s
 
 One concern is *parallelism*. With a two-space collector and bump-pointer allocation, I cannot efficiently allow parallelism within a context. It would require too much synchronization (for bumping the pointer, for halting other threads during compaction, etc.). However, I can always freely copy or move data from one context to another. So I still have access to parallelism... it's just not very lightweight unless the expression of the computation is small. (Stowage might help here?) OTOH, if I activate parallel evaluations only when I would normally perform copy-collection, then I also don't perform any *extra* copies. But I might lose some good parallelism opportunities. 
 
-Another concern is that I need to be very careful with a moving collector to not use references after any potential compaction.
+Another concern is that I need to be very careful with a moving collector to not use references after any potential compaction. This might mean some extra work in some cases.
+
+It is feasible to combine bump-pointer allocation with free-lists, though I'm uncertain that doing so is worth the effort. Doing so would enable allocations to continue for some time after the region has been filled, but would also mean extra work for both the allocator and the 'free' function and would have less predictable fragmentation behavior.
 
 ## Representations
 

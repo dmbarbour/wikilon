@@ -254,11 +254,11 @@ void wikrt_mem_compact(wikrt_cx* cx)
     cx->compaction_size  = (cx->size - cx->alloc);
 }
 
-bool wikrt_compacting_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr)
+bool wikrt_alloc_c(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr)
 {
     sz = WIKRT_CELLBUFF(sz);
     if(!wikrt_mem_reserve(cx, sz)) { return false; }
-    (*addr) = wikrt_alloc_from_reserve(cx, sz);
+    (*addr) = wikrt_alloc_r(cx, sz);
     return true;
 }
 
@@ -289,95 +289,336 @@ wikrt_err wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, wikrt_cx* rcx)
 {
     // base implementation for both wikrt_copy and wikrt_copy_move.
     // in lcx == rcx case, the copy is stacked above the original.
-    wikrt_val const v = lcx->val;
-    if(!wikrt_p(v)) { return WIKRT_TYPE_ERROR; }
-    wikrt_val* const pv = wikrt_pval(lcx, v);
+    if(!wikrt_p(lcx->val)) { return WIKRT_TYPE_ERROR; }
 
-    // lcx has (a * e), detach (a * 1) for copying, leave 'e' in lcx 
-    lcx->val = pv[1];
-    pv[1] = WIKRT_UNIT;
+    // reserve space in `rcx`.
+    wikrt_size const max_alloc = WIKRT_CELLSIZE + (lcx->size - lcx->alloc);
+    bool const sufficient_space = 
+            (wikrt_mem_available(rcx, max_alloc) && WIKRT_ALLOW_SIZE_BYPASS)
+        ||  (wikrt_mem_reserve(rcx, wikrt_vsize_ssp(lcx, *(wikrt_pval(lcx, lcx->val)))
+                                  + WIKRT_CELLSIZE));
+    if(!sufficient_space) { return WIKRT_CXFULL; }
 
-    // copy (a * 1) into the right-hand side context
-    wikrt_val copy = WIKRT_VOID;
-    wikrt_err const status = wikrt_copy_v(lcx, v, ss, rcx, &copy);
-
-    // succeed or fail, re-attach the (a * 1) to the lcx
-    pv[1] = lcx->val;
-    lcx->val = v;
-
-    if(WIKRT_OK == status) {
-        // attach the copied (a * 1) to the rcx
-        wikrt_pval(rcx, copy)[1] = rcx->val;
-        rcx->val = copy;
-    }
-    return status;
+    // note: mem_reserve may move lcx->val if lcx == rcx.
+    // anyhow, we now have space to perform our copy!
+    wikrt_val const copy_src = *(wikrt_pval(lcx, lcx->val));
+    wikrt_val copy_dst = WIKRT_VOID;
+    wikrt_copy_r(lcx, copy_src, ss, rcx, &copy_dst);
+    wikrt_intro_r(rcx, copy_dst);
+    return WIKRT_OK;
 }
 
-/* Our 'copy_stack' consists of a list of addresses whose lcx-side values we must
- * still copy. The stack is on the 'rcx' side to ensure copy only fails if the rcx
- * is full.
- */
-static void wikrt_copy_step_next(wikrt_cx* rcx, wikrt_val* copy_stack, wikrt_val** dst) 
+// stack mirrors copy stack, only carrying elements that need allocation.
+static inline void wikrt_add_size_task(wikrt_val** s, wikrt_val v) {
+    if(!wikrt_copy_shallow(v)) { *((*s)++) = v; }}
+
+wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val const v0)
 {
-    wikrt_addr const addr = wikrt_vaddr(*copy_stack);
-    wikrt_tag const tag = wikrt_vtag(*copy_stack);
-    wikrt_val* const node = wikrt_paddr(rcx, addr);
-    if(0 == addr) { (*dst) = NULL; }
-    else if(WIKRT_PL == tag) {
-        // node is (addr, next)
-        (*dst) = wikrt_paddr(rcx, node[0]);
-        (*copy_stack) = node[1];
-        wikrt_free(rcx, WIKRT_CELLSIZE, addr);
-    } else if(WIKRT_O == tag) {
-        // node is (addr, step, steps remaining, next)
-        // we step backwards for locality reasons.
-        // 'remaining' is zero when we are done.
-        (*dst) = wikrt_paddr(rcx, node[0]);
-        if(0 == node[2]) {
-            (*copy_stack) = node[3];
-            wikrt_free(rcx, (2 * WIKRT_CELLSIZE), addr);
-        } else {
-            node[0] -= node[1]; // step backwards
-            node[2] -= 1;       // step completed
-        }
-    } else {
-        // this should never happen
-        fprintf(stderr, "wikrt: invalid copy stack\n");
-        abort();
-    }
-}
+    wikrt_size result = 0;
+    wikrt_val* const s0 = (wikrt_val*)(cx->ssp); // stack of values to be examined.
+    wikrt_val* s = s0;
+    wikrt_add_size_task(&s,v0);
+    while(s0 != s) {
+        wikrt_val const v = *(--s);
+        wikrt_val const* const pv = wikrt_pval(cx, v);
+        if(WIKRT_O != wikrt_vtag(v)) {
+            // WIKRT_P, WIKRT_PL, WIKRT_PR
+            wikrt_add_size_task(&s, pv[0]); // first value
+            wikrt_add_size_task(&s, pv[1]); // second value
+            result += WIKRT_CELLSIZE;
+        } else { switch(LOBYTE(*pv)) {
+            // simple (tag,value) pairs:
+            case WIKRT_OTAG_SEAL_SM:
+            case WIKRT_OTAG_BLOCK:  
+            case WIKRT_OTAG_OPVAL:  
+            case WIKRT_OTAG_DEEPSUM: {
+                result += WIKRT_CELLSIZE;
+                wikrt_add_size_task(&s, pv[1]); // wrapped value
+            } break;
+            case WIKRT_OTAG_BIGINT: {
+                wikrt_size const nDigits = ((*pv) >> 9);
+                wikrt_size const szAlloc = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
+                result += WIKRT_CELLBUFF(szAlloc);
+            } break;
+            case WIKRT_OTAG_OPTOK: {
+                wikrt_size const toklen = ((*pv) >> 8) & 0x3F;
+                wikrt_size const szAlloc = sizeof(wikrt_val) + toklen;
+                result += WIKRT_CELLBUFF(szAlloc);
+            } break;
+            case WIKRT_OTAG_SEAL: {
+                wikrt_size const toklen = ((*pv) >> 8) & 0x3F;
+                wikrt_size const szAlloc = WIKRT_CELLSIZE + toklen;
+                result += WIKRT_CELLBUFF(szAlloc);
+                wikrt_add_size_task(&s,pv[1]); // sealed value
+            } break;
+            case WIKRT_OTAG_BINARY: {
+                // (hdr, size, buffer, next).
+                wikrt_size const bytect = pv[1];
+                result += (2 * WIKRT_CELLSIZE) + WIKRT_CELLBUFF(bytect);
+                wikrt_add_size_task(&s,pv[3]); // continue list
+            } break;
+            case WIKRT_OTAG_TEXT: {
+                // (hdr, (size-chars, size_bytes), buffer, next).
+                wikrt_size const bytect = (pv[1] & 0xFFFF);
+                result += (2 * WIKRT_CELLSIZE) + WIKRT_CELLBUFF(bytect);
+                wikrt_add_size_task(&s,pv[3]); // continue list
+            } break;
+            case WIKRT_OTAG_ARRAY: {
+                // (hdr, elemct, buffer, next).
+                wikrt_size const elemct = pv[1];
+                wikrt_size const buffsz = elemct + sizeof(wikrt_val);
+                result += (2 * WIKRT_CELLSIZE) + WIKRT_CELLBUFF(buffsz);
+                wikrt_val const* const pbuff = wikrt_paddr(cx, pv[2]);
+                // size for each element in the array...
+                for(wikrt_size ii = 0; ii < elemct; ++ii) {
+                    wikrt_add_size_task(&s,pbuff[ii]);
+                } 
+                wikrt_add_size_task(&s,pv[3]); // continue list
+            } break;
+            default: {
+                fprintf(stderr, "%s: unrecognized tagged value (tag %x)"
+                       ,__FUNCTION__, (unsigned int)(*pv));
+                abort();
+            } 
+        }} // end else { switch() {
+    } // end of loop
+    return result;
+} 
 
-static inline bool wikrt_copy_add_task(wikrt_cx* rcx, wikrt_val* copy_stack, wikrt_addr addr) {
-    return wikrt_alloc_cellval(rcx, copy_stack, WIKRT_PL, addr, (*copy_stack));
-}
+static inline void wikrt_add_ss_task(wikrt_val** s, wikrt_val v) {
+    if(!wikrt_copy_shallow(v)) { *((*s)++) = v; }}
 
-static inline bool wikrt_copy_add_arraytask(wikrt_cx* rcx, wikrt_val* copy_stack, 
-    wikrt_addr addr, wikrt_size step, wikrt_size count) 
+wikrt_ss wikrt_vss_ssp(wikrt_cx* cx, wikrt_val const v0)
 {
-    if(1 == count) { return wikrt_copy_add_task(rcx, copy_stack, addr); }
-    else { 
-        // I'll process the array in reverse order, such that the last items
-        // we touch are near the head of the array. This optimizes for stacks
-        // and basic lists. It isn't optimal for reversed arrays, though.
-        wikrt_addr const remaining = (count - 1);
-        wikrt_addr const last = addr + (step * remaining);
-        return wikrt_alloc_dcellval(rcx, copy_stack, last, step, remaining, (*copy_stack));
-    }
+    wikrt_ss result = 0;
+    wikrt_val* const s0 = (wikrt_val*)(cx->ssp); // scratch space as stack
+    wikrt_val* s = s0; // head of stack
+    wikrt_add_ss_task(&s, v0);
+    while(s0 != s) {
+        wikrt_val const v = *(--s);
+        wikrt_val const* const pv = wikrt_pval(cx, v);
+        if(WIKRT_O != wikrt_vtag(v)) {
+            wikrt_add_ss_task(&s,pv[0]);
+            wikrt_add_ss_task(&s,pv[1]);
+        } else { switch(LOBYTE(*pv)) {
+            // NOPs
+            case WIKRT_OTAG_BIGINT:
+            case WIKRT_OTAG_OPTOK: {
+                /* nop */
+            } break;
+
+            // (tag, val, ...) inheriting from 'val'
+            case WIKRT_OTAG_SEAL:   
+            case WIKRT_OTAG_SEAL_SM:
+            case WIKRT_OTAG_DEEPSUM: {
+                wikrt_add_ss_task(&s,pv[1]);
+            } break;
+
+            // block headers are only source of substructure
+            case WIKRT_OTAG_BLOCK: {
+                wikrt_capture_block_ss(*pv, &result);
+                wikrt_add_ss_task(&s,pv[1]);
+            } break;
+
+            // opval type may hide substructure (for partial eval)
+            case WIKRT_OTAG_OPVAL: {
+                if(!wikrt_opval_hides_ss(*pv)) {
+                    wikrt_add_ss_task(&s,pv[1]);
+                }
+            } break;
+
+            // (hdr, size, buffer, next)
+            case WIKRT_OTAG_TEXT: // same as OTAG_BINARY
+            case WIKRT_OTAG_BINARY: {
+                wikrt_add_ss_task(&s,pv[3]);
+            } break;
+
+            // arrays! (hdr, elemct, buffer, next)
+            case WIKRT_OTAG_ARRAY: {
+                wikrt_size const elemct = pv[1];
+                wikrt_val const* const pbuff = wikrt_paddr(cx, pv[2]);
+                for(wikrt_size ii = 0; ii < elemct; ++ii) {
+                    wikrt_add_ss_task(&s,pbuff[ii]);
+                }
+                wikrt_add_ss_task(&s,pv[3]);
+            } break;
+
+            default: {
+                fprintf(stderr, "%s: unrecognized tag (%x)"
+                    , __FUNCTION__, (unsigned int)(*pv));
+                abort();
+            }
+        }} // ends else { switch(*pv) { 
+    } 
+    return result;
 }
 
-/* compute number of cells in 'spine' of list or stack for slab copies. 
- */
-static inline wikrt_size wikrt_spine_length(wikrt_cx* cx, wikrt_val v) 
+// I wonder how well this will optimize? will rcx->mem be extracted as a loop invariant?
+static inline void wikrt_cpv(wikrt_cx* rcx, wikrt_addr** s, wikrt_val const* pv, wikrt_addr addr, wikrt_size ix) 
 {
-    wikrt_size ct = 0;
-    while(!wikrt_copy_shallow(v) && (WIKRT_O != wikrt_vtag(v))) 
-    {
-        v = wikrt_pval(cx, v)[1];
-        ct += 1;
-    }
-    return ct;
+    wikrt_val const v = pv[ix];
+    wikrt_addr const dst = addr + (ix * sizeof(wikrt_val));
+    *(wikrt_paddr(rcx,dst)) = v;
+    if(!wikrt_copy_shallow(v)) { *((*s)++) = dst; }
 }
 
+// (for internal use by wikrt_copy_r only)
+// mostly this is needed to handle WIKRT_OTAG_OPVAL properly, 
+//  to hide `ss` for quoted values constructed by partial evaluation.
+static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* const ss
+                         ,wikrt_addr* const s0, wikrt_val* dst) 
+{
+    if(wikrt_copy_shallow(*dst)) { return; }
+
+    wikrt_addr* s = s0;
+    do {
+        // invariant: `dst` constains non-shallow reference into lcx->mem 
+        wikrt_val const v = (*dst);
+        wikrt_tag const tag = wikrt_vtag(v);
+        wikrt_val const* const pv = wikrt_pval(lcx, v);
+        if(WIKRT_O != tag) {
+            // WIKRT_P, WIKRT_PL, WIKRT_PR
+            wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLSIZE);
+            (*dst) = wikrt_tag_addr(tag, addr);
+            wikrt_cpv(rcx, &s, pv, addr, 0);
+            wikrt_cpv(rcx, &s, pv, addr, 1);
+        } else { switch(LOBYTE(*pv)) {
+
+            // basic (tag, val) pairs
+            case WIKRT_OTAG_SEAL_SM: // same as OTAG_DEEPSUM
+            case WIKRT_OTAG_DEEPSUM: {
+                wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLSIZE);
+                (*dst) = wikrt_tag_addr(WIKRT_O, addr);
+                *(wikrt_paddr(rcx, addr)) = *pv;
+                wikrt_cpv(rcx, &s, pv, addr, 1);
+            } break;
+
+            // block is (tag, val) with substructure
+            case WIKRT_OTAG_BLOCK: {
+                wikrt_capture_block_ss(*pv, ss);
+                wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLSIZE);
+                (*dst) = wikrt_tag_addr(WIKRT_O, addr);
+                *(wikrt_paddr(rcx, addr)) = *pv;
+                wikrt_cpv(rcx, &s, pv, addr, 1);
+            } break;
+
+            // opval is special case, may hide substructure
+            case WIKRT_OTAG_OPVAL: {
+                wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLSIZE);
+                (*dst) = wikrt_tag_addr(WIKRT_O, addr);
+                *(wikrt_paddr(rcx, addr)) = *pv;
+                if((NULL == ss) || !wikrt_opval_hides_ss(*pv)) {
+                    wikrt_cpv(rcx, &s, pv, addr, 1);
+                } else {
+                    dst = 1 + wikrt_paddr(rcx, addr);
+                    (*dst) = pv[1];
+                    wikrt_copy_rs(rcx, lcx, NULL, s, dst);
+                }
+            } break;
+
+            case WIKRT_OTAG_OPTOK: {
+                wikrt_size const toklen = ((*pv) >> 8) & 0x3F;
+                wikrt_size const szAlloc = sizeof(wikrt_val) + toklen;
+                wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(szAlloc));
+                (*dst) = wikrt_tag_addr(WIKRT_O, addr);
+                memcpy(wikrt_paddr(rcx, addr), pv, szAlloc);
+            } break;
+
+            case WIKRT_OTAG_BIGINT: {
+                wikrt_size const nDigits = ((*pv) >> 9);
+                wikrt_size const szAlloc = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
+                wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(szAlloc));
+                (*dst) = wikrt_tag_addr(WIKRT_O, addr);
+                memcpy(wikrt_paddr(rcx, addr), pv, szAlloc);
+            } break;
+
+            case WIKRT_OTAG_SEAL: {
+                wikrt_size const toklen = ((*pv) >> 8) & 0x3F;
+                wikrt_size const szAlloc = WIKRT_CELLSIZE + toklen;
+                wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(szAlloc));
+                (*dst) = wikrt_tag_addr(WIKRT_O, addr);
+                memcpy(wikrt_paddr(rcx, addr), pv, szAlloc);
+                wikrt_cpv(rcx, &s, pv, addr, 1);
+            } break;
+
+            case WIKRT_OTAG_BINARY: {
+                // (hdr, size, buffer, next).
+                wikrt_size const bytect = pv[1];
+                wikrt_addr const buff = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(bytect));
+                memcpy(wikrt_paddr(rcx, buff), wikrt_paddr(lcx, pv[2]), bytect);
+
+                wikrt_addr const hdr = wikrt_alloc_r(rcx, (2 * WIKRT_CELLSIZE));
+                wikrt_val* const phd = wikrt_paddr(rcx, hdr);
+                phd[0] = pv[0]; // tag
+                phd[1] = pv[1]; // size
+                phd[2] = buff;  // copied buffer
+                wikrt_cpv(rcx, &s, pv, hdr, 3); // continue list
+                (*dst) = wikrt_tag_addr(WIKRT_O, hdr);
+            } break;
+            case WIKRT_OTAG_TEXT: {
+                // (hdr, (size-chars, size_bytes), buffer, next).
+                wikrt_size const bytect = (pv[1] & 0xFFFF);
+                wikrt_addr const buff = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(bytect));
+                memcpy(wikrt_paddr(rcx, buff), wikrt_paddr(lcx, pv[2]), bytect);
+
+                wikrt_addr const hdr  = wikrt_alloc_r(rcx, (2 * WIKRT_CELLSIZE));
+                wikrt_val* const phd = wikrt_paddr(rcx, hdr);
+                phd[0] = pv[0]; // tag
+                phd[1] = pv[1]; // sizes (chars and bytes)
+                phd[2] = buff;  // copied buffer
+                wikrt_cpv(rcx, &s, pv, hdr, 3); // continue list
+                (*dst) = wikrt_tag_addr(WIKRT_O, hdr);
+            } break;
+            case WIKRT_OTAG_ARRAY: {
+                // (hdr, elemct, buffer, next).
+                wikrt_size const elemct = pv[1];
+                wikrt_size const buffsz = elemct + sizeof(wikrt_val);
+                wikrt_addr const buff = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(buffsz));
+                wikrt_val const* const pbuff0 = wikrt_paddr(lcx, pv[2]);
+                for(wikrt_size ii = 0; ii < elemct; ++ii) {
+                    wikrt_cpv(rcx, &s, pbuff0, ii);
+                }
+                wikrt_addr const hdr  = wikrt_alloc_r(rcx, (2 * WIKRT_CELLSIZE));
+                wikrt_val* const phd = wikrt_paddr(rcx, hdr);
+                phd[0] = pv[0]; // tag
+                phd[1] = pv[1]; // count
+                phd[2] = buff;  // copied buffer
+                wikrt_cpv(rcx, &s, pv, hdr, 3);
+
+
+                wikrt_val* const phd
+                
+
+                wikrt_val const* const pbuff = wikrt_paddr(cx, pv[2]);
+                // size for each element in the array...
+                for(wikrt_size ii = 0; ii < elemct; ++ii) {
+                    wikrt_add_size_task(&s,pbuff[ii]);
+                } 
+                wikrt_add_size_task(&s,pv[3]); // continue list
+            } break;
+
+            default: {
+                fprintf(stderr, "%s: unrecognized tag (%x)"
+                    , __FUNCTION__, (unsigned int)(*pv));
+                abort();
+            }
+        }} 
+        dst = (s0 == s) ? NULL : wikrt_paddr(rcx, *(--s));
+    } while(NULL != dst);
+}
+
+void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval)
+{
+    // Note: I'm using a stack in rcx->mem that is strictly smaller than the space
+    // we have yet to allocate (i.e. every time we pop one word from the stack, we
+    // allocate at least two words). If rcx has sufficient size for the lval, it
+    // will necessarily have sufficient size for the stack.
+    if(NULL != ss) { (*ss) = 0; }
+    (*rval) = lval;
+    wikrt_copy_rs(lcx, rcx, ss, ((wikrt_addr*)(rcx->mem)), rval);
+}
+
+#if 0
 wikrt_err wikrt_copy_v(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* const rval)
 {
     if(NULL != ss) { (*ss) = 0; }
@@ -569,6 +810,8 @@ cxfull:
     (*rval) = WIKRT_VOID;
     return WIKRT_CXFULL;
 }
+
+#endif
 
 wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_ss* ss) 
 {

@@ -284,21 +284,20 @@ static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
 
 /* Internal API calls. */
 wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
-wikrt_err wikrt_copy_v(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
 
-// wikrt_val_size: return a value's size and substructural properties.
-//   The returned size is the number of bytes needed to copy the value.
-//
-// Thoughts: I'm thinking to use a two-pass copy. One pass finds the
-// size to reserve enough space (if necessary). Our second pass copies 
-// the value. I can probably bypass the size test when contexts have
-// not allocated much, though I'll first need to ensure size is robust.
-wikrt_size wikrt_val_size(wikrt_cx* cx, wikrt_val v);
-#define WIKRT_VAL_SIZE_BYPASS_IF_SAFE 0
+// wikrt_vsize_ssp: return space required to deep-copy a value. 
+//   Uses scratch space as a stack. May be bypassed if we can
+//   easily determine that we have sufficient size.
+wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val v);
+#define WIKRT_ALLOW_SIZE_BYPASS 0
 
-// wikrt_copy_r: assume sufficient reserved space.
+// wikrt_vss_ssp: compute substructural attributes of a value.
+//   Uses scratch space as a stack. This is only used when
+//   dropping values for which we need the substructure.
+wikrt_ss wikrt_vss_ssp(wikrt_cx* cx, wikrt_val v);
+
+// wikrt_copy_r: assumes sufficient reserve space!
 void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
-
 
 void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss*);
 
@@ -456,14 +455,28 @@ static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz)
 // Allocate a given amount of space, assuming sufficient space is reserved.
 // This will not risk compacting and moving data. OTOH, if there isn't enough
 // space we'll have a very severe bug.
-static inline wikrt_addr wikrt_alloc_from_reserve(wikrt_cx* cx, wikrt_sizeb sz) {
+static inline wikrt_addr wikrt_alloc_r(wikrt_cx* cx, wikrt_sizeb sz) 
+{
     cx->alloc -= sz; 
     return cx->alloc; 
 }
 
-// Note: need to ensure that each allocation becomes a proper value on our
-// stack, strictly before the next allocation.
-bool wikrt_compacting_alloc(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr);
+// introduce a cell from a known reserved space
+static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) 
+{
+    wikrt_addr const a = wikrt_alloc_r(cx, WIKRT_CELLSIZE);
+    wikrt_val* const pa = wikrt_paddr(cx, a);
+    pa[0] = v;
+    pa[1] = cx->val;
+    cx->val = wikrt_tag_addr(WIKRT_P, a);
+}
+
+// allocate with potential memory compaction to make space
+bool wikrt_alloc_c(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr);
+
+// Other thoughts: It could be useful to keep free-lists regardless,
+// and allocate from them only after the bump-pointer arena is full
+// or when a valid sized element is at the head of the list. 
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const v) {
