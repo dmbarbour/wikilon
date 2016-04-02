@@ -148,38 +148,18 @@ char const* wikrt_strerr(wikrt_err);
  * dynamic lib implements. This is just a simple sanity check.
  */
 uint32_t wikrt_api_ver();
-#define WIKRT_API_VER 20160328
+#define WIKRT_API_VER 20160401
 
-/** @brief Configuration options for an environment. 
+/** @brief Open or Create a Wikilon environment with given options. 
  *
- * Zero or NULL is always an accepted value, resulting in some default or 
- * disabling the associated feature. All contexts are the same size in 
- * Wikilon because this simplifies parallelism and eventual flyweight
- * allocation features.
- *
- * Wikilon runtime will attempt to create dirPath (including parents) if
- * necessary and feasible.
- *
- * Context size is currently limited to about 4 gigabytes. Wikilon runtime
- * uses 32-bit within a context. Use of stowage is necessary for computations
- * that will process more than 4GB at once, the idea being to treat memory as
- * a cache for stowed data.
- *
- * Context address space is currently doubled for semispace memory management.
+ * The primary options here indicate where our backing store for stowage
+ * and persistence will be held, and how much space we're permitted to 
+ * use. At the moment, this space requires an equivalent amount of address
+ * space (since I'm using a memory-mapped LMDB database). The directory
+ * and size may be NULL and zero if no stowage is desired.
+ * 
  */
-typedef struct wikrt_env_options 
-{
-    char const* dirPath;        // where is our persistent database and stowage?
-    uint32_t    dbMaxMB;        // how much space (megabytes) for database and stowage?
-    uint32_t    cxMemMB;        // how much space (megabytes) for context memory? 
-    uint32_t    maxPar;         // how many {&par} threads (shared by contexts)?
-} wikrt_env_options;
-
-#define WIKRT_CX_MIN_SIZE 4
-#define WIKRT_CX_MAX_SIZE 4092
-
-/** @brief Open or Create a Wikilon environment with given options. */
-wikrt_err wikrt_env_create(wikrt_env**, wikrt_env_options const*);
+wikrt_err wikrt_env_create(wikrt_env**, char const* dirPath, uint32_t dbMaxMB);
 
 /** @brief Destroy the environment.
  *
@@ -202,8 +182,16 @@ void wikrt_env_sync(wikrt_env*);
  * a given size in megabytes. The context initially contains the unit
  * value, but may be loaded with more data via the `wikrt_intro` verbs
  * or key-value reads against the implicit database.
+ *
+ * Note: Wikilon runtime currently uses 32-bit references within a context.
+ * This limits context's active memory to about 4GB (cf WIKRT_CX_MAX_SIZE).
+ * This reservation is currently doubled for the semi-space collector. If a
+ * computation needs more than 4GB memory or data, it must leverage stowage.
  */
-wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**);
+wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t cxSizeMB);
+
+#define WIKRT_CX_MIN_SIZE 4
+#define WIKRT_CX_MAX_SIZE 4092
 
 /* Note: I originally pursued `wikrt_cx_fork()` as a basis for lightweight
  * external parallelism. At this time, however, I feel the synchronization
@@ -388,7 +376,7 @@ bool wikrt_valid_token(char const* s);
  // BASIC DATA PLUMBING //
 /////////////////////////
 
-/** @brief Move a value from one context to another. Fail-safe.
+/** @brief Move a value from one context to another.
  * 
  * For the left context, this has type `(a*b)→b`. For the right context,
  * this has type `c→(a*c)`. The `a` value is moved from the left context
@@ -410,7 +398,7 @@ typedef enum wikrt_ss
 , WIKRT_SS_PEND   = (1 << 2)
 } wikrt_ss;
 
-/** @brief (a*e) → (a*(a*e)). ABC op `^`. Fail-safe.
+/** @brief (a*e) → (a*(a*e)). ABC op `^`. 
  *
  * This operation will succeed even for affine or pending values values, but 
  * will also report the substructural metadata. This allows the client to make
@@ -423,7 +411,7 @@ typedef enum wikrt_ss
  */
 wikrt_err wikrt_copy(wikrt_cx*, wikrt_ss*);
 
-/** @brief Combined copy and move operation. Fail-safe.
+/** @brief Combined copy and move operation.
  *
  * This is equivalent to wikrt_copy followed by wikrt_move in one step.
  * It has performance advantages over performing copy and move in separate
@@ -431,7 +419,7 @@ wikrt_err wikrt_copy(wikrt_cx*, wikrt_ss*);
  */
 wikrt_err wikrt_copy_move(wikrt_cx*, wikrt_ss*, wikrt_cx*);
 
-/** @brief (a*e) → e. ABC op `%`. Fail-safe.
+/** @brief (a*e) → e. ABC op `%`.
  *
  * As with copy, this will report substructural attributes of the value
  * that was dropped. If a relevant or pending value was dropped, that 
@@ -443,7 +431,7 @@ wikrt_err wikrt_copy_move(wikrt_cx*, wikrt_ss*, wikrt_cx*);
  */
 wikrt_err wikrt_drop(wikrt_cx*, wikrt_ss*);
 
-/** (a*(b*c))→(b*(a*c)). ABC op `w`. Non-allocating. Fail-safe.
+/** (a*(b*c))→(b*(a*c)). ABC op `w`. 
  *
  * Most of the basic product manipulations are non-allocating, and
  * hence can only fail with WIKRT_TYPE_ERROR if the context has an
@@ -451,13 +439,13 @@ wikrt_err wikrt_drop(wikrt_cx*, wikrt_ss*);
  */
 wikrt_err wikrt_wswap(wikrt_cx*);
 
-/** (a*(b*(c*d)))→(a*(c*(b*d))). ABC op `z`. Non-allocating. Fail-safe. */
+/** (a*(b*(c*d)))→(a*(c*(b*d))). ABC op `z`. */
 wikrt_err wikrt_zswap(wikrt_cx*);
 
-/** (a*(b*c))→((a*b)*c). ABC op `l`. Non-allocating. Fail-safe. */
+/** (a*(b*c))→((a*b)*c). ABC op `l`. */
 wikrt_err wikrt_assocl(wikrt_cx*);
 
-/** ((a*b)*c)→(a*(b*c)). ABC op `r`. Non-allocating. Fail-safe. */
+/** ((a*b)*c)→(a*(b*c)). ABC op `r`. */
 wikrt_err wikrt_assocr(wikrt_cx*);
 
 

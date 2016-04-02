@@ -326,19 +326,25 @@ Most static languages reject programs unless they're provably correct according 
 
 It also may give ABC a more dynamic feel, especially combined with dependently typed structures. ABC's philosophy is close in nature to [gradual typing](http://en.wikipedia.org/wiki/Gradual_typing), albeit with more inference and less annotation.
 
-### Annotations as Capabilities
+### Annotations for Performance and Debugging
 
-Annotations are expressed as capability text using prefix `&` as in `{&asynch}`. Annotations must not impact the observable, formal semantics of a valid program - i.e. a valid program should behave equivalently if any given annotation is removed. However, annotations are useful for debugging, performance suggestions, and to help identify invalid programs. 
+Annotations are tokens for debugging or performance. Annotations are indicated by use of an `&` prefix in the token, e.g. in `{&fork}` or `{&≡}`. Annotations must not affect the observable results of a correct program, and an ABC interpreter or compiler should be able to ignore annotations that it does not recognize. However, annotations may cause an incorrect program to fail, and incorrect use of annotations may result in an incorrect program. 
 
-* suggest use of parallel evaluation; `{&asynch}`
-* suggest dynamic compilation of a block; `{&compile}`
-* suggest use of memoization or caching
-* hints for typing safety or proving termination
-* assert structural equivalence of two values; `{&≡}`
-* improve blame, error, and warning messages
-* breakpoints, location info, console traces
+Ideas for what annotations might do:
 
-The intention with annotations is that they can be rather ad-hoc, and that ABC runtimes may ignore those it does not recognize. When processing ABC through optimization pipelines, unrecognized annotations should generally be passed forward.
+* support parallel or lazy computation
+* stow and load values to a backing store
+* hints for type or termination checking
+* debug output, breakpoints, location tracking
+* optimized representations (e.g. arrays) 
+* trash data while perserving substructure
+* compile or JIT computed blocks of code 
+* move computations and data to a GPGPU
+* support and enable memoization or caching
+
+In many cases, use of annotations may be coupled. For example, use of a `{&fork}` annotation to parallelize a computation might be coupled with a `{&join}` annotation to synchronize and access the computed result. Any attempt to access the parallel value without performing the `{&join}` may then be an error. Coupling can greatly simplify implementation by eliminating need for transparent handling of, for example, a parallel pair during an `wrzl` operation.
+
+Eventually, we should have a large set of de-facto standard annotations that are recognized by most runtimes. Meanwhile, each runtime is free to define its own set.
 
 ### Spatial-Temporal Types and Capabilities
 
@@ -389,7 +395,7 @@ Value sealing is a simple technique with very wide applications. The setup is si
 
             #42{:foo}                       discretionary sealed data
 
-Discretionary sealers offer no real protection. However, they serve a useful role in resisting type errors or providing  rendering hints (e.g. using `{:jpeg}` on a text representing a large binary is a pretty strong hint).
+Discretionary sealers offer no real protection. However, they serve a useful role in resisting type errors or providing  rendering hints (e.g. using `{:jpeg}` on a text representing a large binary is a pretty strong hint). 
 
 We can also use *cryptographic* value sealing, e.g. protected by AES or ECC encryption. Cryptographic sealers allow us to enforce sealer disciplines even in an open distributed system. The details for cryptographic sealing haven't been hammered out, but a viable option is:
 
@@ -403,54 +409,41 @@ Here the `$` is serving as a prefix roughly meaning 'secured'. We have a sealer,
 
 Value sealing is an important companion to object capability security. It provides a basis for [rights amplification](http://erights.org/elib/capability/ode/ode-capabilities.html#rights-amp), whereby you can gain extra authority by possessing both a capability and a sealed value, or by unsealing a value to gain a capability. It can also enforce various modularity patterns even in distributed systems. Value sealing should be considered orthogonal to transport-layer encryption. 
 
-### ABC Resources for Separate Compilation and Dynamic Linking
+### ABC Resources for Large Values, Separate Compilation, Dynamic Linking
 
-For large, decentralized, open distributed systems, we might model ABC resources by simply taking a secure hash of the resource. This allows the resource to be downloaded from anywhere and validated, and eliminates the need to check for cycles or manage updates.
+ABC values may be quoted to generate a string of bytecode having type `e → (value * e)`. This bytecode can be given a unique identifier. The value can then be replaced by its identifier until it needs to be loaded into memory. This concept is both simple and versatile. Some roles:
 
-        {#secureHashOfBytecode}
+* virtual memory, work with gigabytes in much less memory
+* reference values without transmitting them across network
+* compression, store big value only once then name it many times
+* dynamic linking, load functions shortly before inlining them
+* separate compilation, maintain cache of compiled functions
 
-Given the identifier, we fetch the resource, validate against the hash, then load it in place of the token. This technique must be combined with cryptographic value sealing if distributing sensitive resources over an untrusted network. A cache of resources can be cleared heuristically, but is never invalidated due to a new version. In general, we would download the resource from the same connection that mentioned it in the first place, but we could be told to redirect to a separate web service or content distribution network for efficient distribution of large resources.
+Resource identifiers will in general be local to a runtime environment (potentially a distributed environment). Local resource identifiers have the advantage of using smaller identifiers and supporting precise garbage collection. With a network session, local resource identifiers could be shared with a remote client who may ask for (and optionally cache) the returned value. (Such requests could easily be protected by HMAC.) For ideal caching, a resource identifier should never be reused (unless the same value is constructed again).
 
-Semantically, ABC resources are simply inlined directly in place of the token. However, for performance we might compile resources into machine code or otherwise pre-process them. The compiled version of a resource can easily be cached together with the downloaded code.
+It is also feasible to create *global* resource identifiers, using a secure hash of the bytecode. These do make GC difficult. At the moment, there is very little need for global identifiers, but they might become interesting if ABC runtimes are widely used. A service could graduate widely used local resources into global ones.
 
-*Hash Algorithm:* I currently favor Blake2s-240 from the developers of Tahoe-LAFS. Blake2 is designed for great software performance. Using a base32 encoding, the hash would encode in 48 bytes, leaving sufficient space in our limited size tokens for a few annotations like value linking (see below).
+Within an ABC stream, an ABC resource will be indicated by token. For local resources in Wikilon runtime, I am currently considering something like:
 
-*Note:* At small to moderate scales we can probably use [AO dictionaries](AboutAO.md) as a basis for separate compilation and linking. Dictionaries don't scale to open distributed systems nearly as effectively as identifying resources by secure hash. But they could work for a small group, a connection, a web page, etc..
+        {'kf/Scope/ResourceID}
 
-*Aside:* Paul Chiusano is doing related work with Unison involving [editing resources named by hashes](http://unisonweb.org/2015-06-12/editing.html#post-start). While I've not elected to go this route with AO dictionaries, the techniques he develops seem readily applicable to ABC resources.
+The prefix `'kf` is indicating a value resource `'` along with the substructural attributes `kf`. A value without substructural constraints could voluntarily the `kf`. The `Scope` could feasibly identify a server or session or global scope. Some general rules are first that a `Scope/ResourceID` should never be reused for a different value (such that a cached resource is never invalid, though access may expire), and second that resources be unforgeable (such that a hacker cannot guess at identifiers and retrieve security-sensitive information). Use of a 60-80 bit HMAC in a local resource ID is probably sufficient to prevent forgery.
 
-#### Specialization: Value Linking
+Unlike URLs, we're constrained to 63 bytes for our token strings. Scope and ResourceID have practical size limits, and sophisticated hierarchical structure is not recommended.
 
-If we know an ABC resource just computes a value, i.e. has type `e → (value * e)`, we can take advantage of this. For example, we can load the value lazily or in parallel. If we also know substructural attributes, we can copy or drop the value without loading it right away.
+Use of ABC resources will be driven by related annotations. I'm proposing `{&stow}` to construct the value resource (and reduce memory pressure) coupled with `{&load}` to subsequently access it, forcing it into local memory. Stowage is *latent*, which is very important for performance: if we repeatedly `{&stow}` and `{&load}` a value within a loop, we'll not get around to serializing our value to an external store (not before our loop terminates). While stowage is local, it seems feasible to graduate a stowed value to ever wider scopes based on profiling network traffic.
 
-To indicate a linear value, we might use:
+Anyhow, between the explicit use of `{&load}` and fast access to its substructural attributes, we can perform generic data plumbing on our value resource *without* loading it.
 
-        {#secureResourceIdentifier'kf}
+*Aside:* Originally I had ABC resources for arbitrary code then value resources were a specialization. However, I did not have a good story for how the ABC resources come to exist in the first place. The current approach may still be used with arbitrary code (e.g. `{&load}vr$c` to load and inline) and seems to have a better story in general.
 
-        Valid Suffixes
-
-        '               normal value
-        'k              relevant value
-        'f              affine value
-        'kf             linear value
-
-Usefully, this simple technique is compositional. We can compute that a composite is affine, relevant, or linear without loading any of the component values. Other type information could be left to separate annotations, since it is less essential for reasoning about data plumbing behavior.
-
-Lazy linking and loading of large, content-addressed data is convenient for working with very large structures and values, i.e. much larger than machine memory.
-
-*Thoughts:* It may prove useful to align value resources with value sealers, i.e. such that we can indicate a value sealer token in the resource identifier. This would serve both as metadata (mostly for debugging and presentation) and should simplify our interpreter representations (because we don't need lazy loading for arbitrary types).
-
-### ABC Paragraphs
-
-ABC encourages an informal notion of "paragraphs" at least in a streaming context. A paragraph separates a batch of code, serving as a soft indicator of "this is a good point for incremental processing". A well-behaved ABC stream should provide relatively small paragraphs (up to a few kilobytes), and a well-behaved ABC stream processor should respect paragraphs up to some reasonable maximum size (e.g. 64kB) and heuristically prefer to process a whole number of paragraphs at a time. The batch would be typechecked, JIT compiled, then (ideally) applied atomically. 
-
-A paragraph is implicitly expressed by simply including a full, blank line within ABC code. I.e. LF LF in the toplevel stream outside of any block. This corresponds nicely to a paragraph in a text file. Formally, the space between paragraphs just means identity. Paragraphs might be more explicitly indicated by an annotation, e.g. `{&p}`. Paragraphs are discretionary. The reason to respect them is that they're advantageous to everyone involved, i.e. for performance and reasoning.
+*Aside:* I've contemplated coupling value resources with value sealing instead. They are closely related. However, I've decided the proposed separation of responsibilities is simpler, and use of annotations helps indicate that this is ultimately a performance concept.
 
 ### Encoding Binary Data in ABC
 
 Programmers often work with binary encoded data, e.g. compressed visual or audio data, secure hashes, ciphertext. I would like the ability to encode MP3 files, texture data, or short video clips as ABC resources. This would allow me to leverage ABC's secure content distribution, caching, partial evaluation, and nearly transparent link model. However, it's valuable that large binaries can be stored and transmitted efficiently.
 
-One simple option is to use a naive encoding of binaries - e.g. base16 - and couple this with a dedicated compression pass for storage or streaming. I propose alphabet `bdfghjkmnpqstxyz` (`a-z` minus vowels `aeiou` and common ABC ops `vrwlc`). This ensures binaries are visually distinct yet opaque.
+One simple option is to use a naive encoding of binaries - e.g. base16 - and couple this with a dedicated compression pass for storage or streaming. I propose alphabet `bdfghjkmnpqstxyz` (`a-z` minus vowels `aeiou` and common ABC ops `vrwlc`). This ensures binaries are visually distinct, yet opaque.
 
         "htkzmfkjkxfbkpmbmgmjkxfbkhkzktkzmffbmgkpmhfbkdkxkjmhftfbkgkzkymg
          kjkgmhkjmhmjmffbkdkhkpmbkpmgkgkpkykmfbkjktkpmhftfbmgkjkhfbkhkzfb
@@ -471,7 +464,7 @@ One simple option is to use a naive encoding of binaries - e.g. base16 - and cou
 A compression pass could easily recognize runs of these characters and rewrites to a short header and a bytecount. The format I developed for use within Wikilon is especially optimized for texts, encoding 32 bytes per line, encoding blocks of up to 4096 bytes (128 lines) with only 0.1% overhead. Here's the format I use internally:
 
         (248) (size) (bytes)
-            (size in 0..127): 4..512 contiguous bytes (multiples of 4)
+            (size in 0..127): 8..512 contiguous bytes (multiples of 4)
             (size in 128..254): 2..128 lines of 32 bytes with LF SP separators
             (size 255): escape prior (248) byte
 

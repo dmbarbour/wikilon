@@ -237,6 +237,14 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *    include flag bits suggesting the nature of this type error and which 
  *    type was expected instead. This might be understood as a specialized
  *    value sealer.
+ *
+ * WIKRT_OTAG_TRASH (potential)
+ *
+ *    It might be useful to annotate a value as garbage, without necessarily
+ *    dropping it with the `%` operation, in context of substructural values.
+ *    So marked, this value becomes inaccessible, and we may later void the
+ *    value (e.g. upon compaction or memory pressure) while preserving its
+ *    substructural attributes.
  */
 
 #define WIKRT_OTAG_BIGINT   78   /* N */
@@ -381,7 +389,6 @@ void wikrt_db_flush(wikrt_db*);
 struct wikrt_env { 
     wikrt_db           *db;
     wikrt_cx           *cxlist;     // linked list of context roots
-    size_t              cxsize;     // size for each new context
     uint64_t            cxcount;    // how many contexts created?
     pthread_mutex_t     mutex;      // shared mutex for environment
 };
@@ -418,8 +425,13 @@ struct wikrt_cx {
     wikrt_addr          alloc;      // allocate towards zero
     wikrt_size          size;       // size of memory
 
-    wikrt_val           val;    // primary value
-    wikrt_val           txn;    // transaction data
+    // registers, root data
+    wikrt_val           val;        // primary value 
+    wikrt_val           a,b,c,d;    // volatile registers
+    wikrt_val           pc;         // program counter (eval)
+    wikrt_val           cc;         // continuation stack (eval)
+    wikrt_val           txn;        // transaction data
+        // consider including: debug output, debug call stack 
 
     // semispace garbage collection.
     void*               ssp;    // for GC, scratch
@@ -430,7 +442,7 @@ struct wikrt_cx {
     // Other... maybe move error tracking here?
 };
 // just for sanity checks
-#define WIKRT_CX_ROOT_CT 2
+#define WIKRT_CX_REGISTER_CT 8
 
 static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->mem))); 
@@ -494,6 +506,28 @@ static inline wikrt_err wikrt_intro_smallval(wikrt_cx* cx, wikrt_val v) {
     bool const ok = wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, v, cx->val);
     return (ok ? WIKRT_OK : WIKRT_CXFULL); 
 }
+
+// move value of type WIKRT_P, WIKRT_PL, or WIKRT_PR from `src` to `dst`.
+//  E.g. if src is `(a,b)` and dst is `c`, then after move we have (b) and (a,c).
+static inline void wikrt_reg_move(wikrt_cx* cx, wikrt_val* src, wikrt_val* dst)
+{
+    wikrt_val  const v = (*src);
+    wikrt_val* const pv = wikrt_pval(cx, v);
+    (*src)  = pv[1];
+    pv[1]   = (*dst);
+    (*dst)  = v;
+}
+
+// fast drop of top element from register stack.
+static inline void wikrt_reg_fast_drop(wikrt_cx* cx, wikrt_val* reg) {
+    (*reg) = wikrt_pval(cx, (*reg))[1]; 
+}
+
+static inline void wikrt_pval_swap(wikrt_val* a, wikrt_val* b) {
+    wikrt_val const tmp = (*b);
+    (*b) = (*a);
+    (*a) = tmp;
+} 
 
 // Other thoughts: It could be useful to keep free-lists regardless,
 // and allocate from them only after the bump-pointer arena is full

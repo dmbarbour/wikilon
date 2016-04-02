@@ -98,33 +98,24 @@ uint32_t wikrt_api_ver()
     return WIKRT_API_VER;
 }
 
-wikrt_err wikrt_env_create(wikrt_env** ppEnv, wikrt_env_options const* opts) {
+wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMaxMB) {
     _Static_assert(WIKRT_SIZE_MAX >= 4294967295, "minimum 32-bit words (for texts, etc.)"); 
     _Static_assert(WIKRT_CELLSIZE == WIKRT_CELLBUFF(WIKRT_CELLSIZE), "cell size must be a power of two");
     _Static_assert(WIKRT_PAGESIZE == WIKRT_PAGEBUFF(WIKRT_PAGESIZE), "page size must be a power of two");
 
-    assert((NULL != ppEnv) && (NULL != opts));
     (*ppEnv) = NULL;
-
-    size_t const cxMemMB = (0 == opts->cxMemMB) ? WIKRT_CX_MIN_SIZE : (size_t)(opts->cxMemMB);
-    bool const okCxSize =  ((WIKRT_CX_MIN_SIZE <= cxMemMB) && (cxMemMB <= WIKRT_CX_MAX_SIZE))
-                        && (cxMemMB < (SIZE_MAX >> 21)); // last condition to prevent overflow on 32-bit systems
-    if(!okCxSize) { return WIKRT_INVAL; }
 
     wikrt_env* const e = calloc(1, sizeof(wikrt_env));
     if(NULL == e) { return WIKRT_NOMEM; }
-    e->cxsize = cxMemMB << 20; 
-
     e->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
 
-    if(!opts->dirPath || (0 == opts->dbMaxMB)) { 
+    if((NULL == dirPath) || (0 == dbMaxMB)) { 
         e->db = NULL;
-    } else if(!wikrt_db_init(&(e->db), opts->dirPath, opts->dbMaxMB)) {
+    } else if(!wikrt_db_init(&(e->db), dirPath, dbMaxMB)) {
         free(e);
         return WIKRT_DBERR;
     }
-
-    // thread pools? task lists? etc?
+    // thread pools? etc?
 
     (*ppEnv) = e;
     return WIKRT_OK;
@@ -146,9 +137,19 @@ void wikrt_env_sync(wikrt_env* e) {
     }
 }
 
-wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX) 
+wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t cxSizeMB) 
 {
     (*ppCX) = NULL;
+
+    // validate sizes according to API declarations
+    bool const okSize = (WIKRT_CX_MIN_SIZE <= cxSizeMB) 
+                     && (cxSizeMB <= WIKRT_CX_MAX_SIZE);
+    if(!okSize) { return WIKRT_INVAL; }
+
+    // also prevent size_t overflows on 32-bit systems
+    size_t const mem_size = cxSizeMB << 20;
+    if(mem_size > (SIZE_MAX / 2)) { return WIKRT_NOMEM; }
+
     wikrt_cx* const cx = calloc(1, sizeof(wikrt_cx));
     if(NULL == cx) { goto callocErr; }
 
@@ -156,21 +157,30 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX)
     // both as a semispace and (when necessary) as a scratch space.
     static int const prot = PROT_READ | PROT_WRITE | PROT_EXEC;
     static int const flags = MAP_ANONYMOUS | MAP_PRIVATE;
-    size_t const twospace_size = 2 * e->cxsize;
-    void* const twospace = mmap(NULL, twospace_size, prot, flags, -1, 0);
+    void* const twospace = mmap(NULL, (mem_size * 2), prot, flags, -1, 0);
     if(NULL == twospace) { goto mmapErr; }
     
-    wikrt_size const size = (wikrt_size)(e->cxsize);
+    wikrt_size const size = (wikrt_size)mem_size;
     void* const mem = twospace;
     void* const ssp = (void*)(size + (char*)mem);
 
     cx->env     = e;
-    cx->val     = WIKRT_UNIT; // initial value for every context
-    cx->txn     = WIKRT_VOID; // no transaction in memory
     cx->size    = size; 
     cx->alloc   = size; // we'll work towards zero 
     cx->mem     = mem;
     cx->ssp     = ssp;
+
+    // initialize registers
+    cx->val     = WIKRT_UNIT; 
+    cx->pc      = WIKRT_UNIT_INR;
+    cx->cc      = WIKRT_UNIT_INR;
+    cx->txn     = WIKRT_UNIT_INR;
+    cx->a       = WIKRT_VOID;
+    cx->b       = WIKRT_VOID;
+    cx->c       = WIKRT_VOID;
+    cx->d       = WIKRT_VOID;
+    _Static_assert((8 == WIKRT_CX_REGISTER_CT), "todo: missing register initializations"); // maintenance check
+
     wikrt_add_cx_to_env(cx);
 
     (*ppCX) = cx;
@@ -246,8 +256,21 @@ void wikrt_mem_compact(wikrt_cx* cx)
     
     // copy roots with assumption of sufficient space.
     wikrt_copy_r(&cx0, cx0.txn, NULL, cx, &(cx->txn));
+    wikrt_copy_r(&cx0, cx0.cc,  NULL, cx, &(cx->cc));
+    wikrt_copy_r(&cx0, cx0.pc,  NULL, cx, &(cx->pc));
     wikrt_copy_r(&cx0, cx0.val, NULL, cx, &(cx->val));
-    _Static_assert((2 == WIKRT_CX_ROOT_CT), "TODO: more than val and txn!"); // maintenance check
+    wikrt_copy_r(&cx0, cx0.d,   NULL, cx, &(cx->d));
+    wikrt_copy_r(&cx0, cx0.c,   NULL, cx, &(cx->c));
+    wikrt_copy_r(&cx0, cx0.b,   NULL, cx, &(cx->b));
+    wikrt_copy_r(&cx0, cx0.a,   NULL, cx, &(cx->a));
+    _Static_assert((8 == WIKRT_CX_REGISTER_CT), "todo: missing register compactions"); // maintenance check
+
+    // refresh semispace as if freshly mmap'd.
+    errno = 0;
+    if(0 != madvise(cx->ssp, cx->size, MADV_DONTNEED)) {
+        fprintf(stderr, "%s: madvise failed (%s)\n", __FUNCTION__, strerror(errno));
+        abort();
+    }
 
     // keep stats. compaction count is useful for effort quotas. 
     // compaction size is useful for heuristic memory pressure.
@@ -695,36 +718,36 @@ wikrt_err wikrt_unwrap_seal(wikrt_cx* cx, char* buff)
 /** (a*(b*c))→(b*(a*c)). ABC op `w` */
 wikrt_err wikrt_wswap(wikrt_cx* cx)
 {
-    return wikrt_wswap_v(cx, &(cx->val));
-}
-wikrt_err wikrt_wswap_v(wikrt_cx* const cx, wikrt_val* const v) 
-{
-    // no need to allocate at this time, so just using value of (*v).
-    wikrt_val const abc = (*v); 
+    // This is the single most common operation in ABC, so I'm commited
+    wikrt_val const abc = cx->val;
     if(wikrt_p(abc)) {
-        wikrt_val* const pabc = wikrt_pval(cx, abc);
-        wikrt_val const bc = pabc[1];
+        wikrt_val* const pabc = wikrt_pval(cx,abc);
+        wikrt_val  const bc   = pabc[1];
         if(wikrt_p(bc)) {
-            wikrt_val* const pbc = wikrt_pval(cx, bc);
-            wikrt_val const b = pbc[0];
-            pbc[0] = pabc[0];
-            pabc[0] = b;
+            wikrt_val* const pbc = wikrt_pval(cx,bc);
+            wikrt_pval_swap(pabc, pbc);
             return WIKRT_OK;
         }
     }
+    // any allocating use cases we need to handle?
     return WIKRT_TYPE_ERROR;
 }
 
 /** (a*(b*(c*d)))→(a*(c*(b*d))). ABC op `z` */
 wikrt_err wikrt_zswap(wikrt_cx* cx)
 {
+    // hide `a` temporarily; run wswap on what's left.
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_wswap_v(cx, 1 + wikrt_pval(cx, cx->val));
+    wikrt_move_p(cx, &(cx->val), &(cx->a));
+    wikrt_err const st = wikrt_wswap(cx);
+    wikrt_move_p(cx, &(cx->a), &(cx->val));
+    return st;
 }
 
 /** (a*(b*c))→((a*b)*c). ABC op `l`. */
 wikrt_err wikrt_assocl(wikrt_cx* cx) 
 {
+    // this op must be blazing fast in normal case.
     wikrt_val const abc = cx->val;
     if(wikrt_p(abc)) {
         wikrt_val* const pa_bc = wikrt_pval(cx, abc);
@@ -745,6 +768,7 @@ wikrt_err wikrt_assocl(wikrt_cx* cx)
 /** ((a*b)*c)→(a*(b*c)). ABC op `r`. */
 wikrt_err wikrt_assocr(wikrt_cx* cx)
 {
+    // this op must be blazing fast in normal case.
     wikrt_val const abc = cx->val;
     if(wikrt_p(abc)) {
         wikrt_val* const pab_c = wikrt_pval(cx, abc);

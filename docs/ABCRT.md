@@ -42,11 +42,10 @@ If I do favor multi-process access, I'll need to somehow track ephemeral stowage
 
 I need an *environment* bound to an underlying stowage and persistence model, e.g. via LMDB. The environment may also be associated with worker threads for par-seq parallelism. I also need *contexts* that associate an environment with a heap of memory for computations. 
 
-Context is a contiguous region of memory, up to ~4GB enabling localized 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage serves a similar role to virtual memory, but does not consume address space.
+Context is a contiguous region of memory, up to ~4GB enabling local 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage serves a similar role to virtual memory, but does not consume address space.
 
 In some cases, parallelism within a context could be useful. For this, I could support lightweight forks that share memory with our primary context. 
 
-I will want parallelism within each context, and also to minimize synchronization. So my current plan is to have *wikrt_cx* be a reference to the shared space, but to allow multiple such references (lightweight forks) that enables cheap motion of values between them.
 
 ### API Thoughts
 
@@ -60,13 +59,9 @@ ABC is well suited for manual memory management due to its explicit copy and dro
 
 Bump-pointer allocators, together with two-space collectors, should also serve me well. I initially tried more conventional memory management with size-segregated free-lists. But that doesn't work nicely with slab allocations for composite values or incremental deallocation of values. Free fragments are small and allocated blocks are large, and we end up coalescing memory more frequently than we reuse it. 
 
-A compacting collector seems a good fit for Wikilon's common use cases. It's a stop-the-world collector, albeit constrained to a single thread. This shouldn't be a major issue for pure computations (i.e. stop the world does not change latency of side-effects unless there are side-effects). 
+A compacting collector seems a good fit for Wikilon's common use cases. It's a stop-the-world collector, albeit constrained to a single thread. This shouldn't be a major issue for pure computations (no side effects to hurt latencies). It is feasible to combine a compacting collector with free-lists, to reuse the small spaces. However, I have doubts that adding this would offer sufficient benefit to pay for the complications it introduces. A two-space collector has the advantage of being delightfully simple.
 
-One concern is *parallelism*. With a two-space collector and bump-pointer allocation, I cannot efficiently allow parallelism within a context. It would require too much synchronization (for bumping the pointer, for halting other threads during compaction, etc.). However, I can always freely copy or move data from one context to another. So I still have access to parallelism... it's just not very lightweight unless the expression of the computation is small. (Stowage might help here?) OTOH, if I activate parallel evaluations only when I would normally perform copy-collection, then I also don't perform any *extra* copies. But I might lose some good parallelism opportunities. 
-
-Another concern is that I need to be very careful with a moving collector to not use references after any potential compaction. This might mean some extra work in some cases.
-
-It is feasible to combine bump-pointer allocation with free-lists, though I'm uncertain that doing so is worth the effort. Doing so would enable allocations to continue for some time after the region has been filled, but would also mean extra work for both the allocator and the 'free' function and would have less predictable fragmentation behavior.
+One concern is *parallelism*. With a two-space collector and bump-pointer allocation, I cannot efficiently support parallelism within a context. It would require too much synchronization, e.g. for bumping the pointer, for halting other threads during compaction, etc.. I can copy data to another context, however. And I could presumably leverage `{&par}` and `{&seq}` annotations to drive parallelism. 
 
 ## Representations
 
@@ -158,26 +153,17 @@ We annotate a value to moved to persistent storage, or transparently reverse thi
 
 It might be useful to align stowage with value sealers, i.e. such that stowage may only occur at sealed values. This would simplify processing of stowage because the 'transparent' stowage would only need to be handled at an unseal operation. Further, it would provide some typeful metadata around each node - relatively convenient for debugging. Conversely, having implicit stowage upon sealing a value could be convenient for space management purposes.
 
-(Parallel computations may benefit from similar techniques, to avoid 'transparent' translation of types and to essentially name the computation.)
+Alternatively, I could use coupled annotetions, e.g. `{&stow}` and `{&load}`, with the latter necessary to access a previously stowed value. But I do like the idea of coupling load instead to unseal except maybe as an option.
 
 ### Computations
 
-*Thoughts:* Lightweight parallelism has been a sticky point for me. It complicates memory management, increases risk of memory fragmentation. Heavy-weight shared-nothing parallelism could reduce synchronization a great deal, but has a larger overhead to copy data between threads. This could be mitigated by having some shared resources (e.g. binaries, blocks).
+Besides active computations, I expect I'll be wanting parallel or lazy computations eventually. Originally, I was imagining that I'd handle these behaviors almost transparently. However, in retrospect, I don't believe this is a good idea. I'd prefer to avoid any transparent translations between representations, as those greatly complicate the runtime and reasoning about progress, quotas, etc..
+
+I've decided instead to update the documentation of ABC to describe 'coupled' annotations. So, for laziness, I might require a user couple it with an annotation to force a computation. This way, I don't need to check for each operation whether I have yet to evaluate something or other. Similar, synchronization for parallel computations would be more precise.
+
+With coupled annotations, I can focus most runtime code on just a fast straightline interpreter (with very few extra conditional behaviors). Even better if I can later eliminate gateway checks for type safety, though that would probably require JIT.
 
 
-I'd benefit from focusing instead on fast alloc/free and fast processing within a context. Fast logical copy may also prove more useful than I was initially thinking, at least for specific value types (e.g. blocks, maybe binaries and arrays). Though, I could presumably achieve that much with reference counting.
-
-An interesting option, perhaps, is to combine a fast bump-pointer alloc and GC (instead of `free`) with scope-limited copying of blocks etc.. 
-
-
-
-I'd prefer to avoid arbitrary 'force to type' code scattered about. This would impact stowage, laziness, parallelism. If I enforce that stowage, laziness, and parallelism are always behind a sealer token, this would simplify my runtime code. This alignment may also simplify presentation and metadata, and eventual distribution. So, for now, let's assume I'll be aiming for this feature.
-
-If I support lazy computations, that can potentially simplify many things such as streaming outputs from block-to-text conversions. Laziness is easy to express via annotation, e.g. `{&lazy}` could tag a block. One difficulty with laziness is that we need either to integrate state or to treat them somehow as linear objects (no copy). The other difficulty is integrating laziness appropriately with effort quotas - i.e. it requires we shift the quota to our context, somehow, rather than to a larger evaluation. 
-
-For the moment, I'd prefer to avoid laziness and focus instead upon direct and parallel evaluation. 
-
-An interesting possibility, with laziness, is to apply partial-`{&seq}` requests with limited quotas. So long as we don't actually observe the resulting value, we don't need to wait.
 
 ### Arrays or Compact Lists
 

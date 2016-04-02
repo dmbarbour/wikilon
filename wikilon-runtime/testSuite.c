@@ -12,6 +12,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct);
 int fillcount(wikrt_cx* cx); // exercise memory management code
 
 int main(int argc, char const** argv) {
+    assert(WIKRT_API_VER == wikrt_api_ver());
+
     // return values
     int const ok  = 0;
     int const err = (-1);

@@ -83,17 +83,6 @@ There are some common conventions based on prefix characters. For example:
 
 Annotations can support debugging and performance. Discretionary value sealing act as structural type tags. Cryptographic sealers support rights amplification and other security patterns. ABC resources are named by a combination of secure hashes to look up and decrypt the bytecode; they serve a valuable role in separate compilation and dynamic linking, and for saving bandwidth and storage at larger scales.
 
-## Existing Annotations
-
-While annotations are not strongly standardized, it's nice to avoid conflicts and reuse annotations where feasible. I expect some de-facto standards to emerge. Here are some annotations currently in use:
-
-        {&≡}  (that's U+2261) - (a*(a*e))→(a*(a*e)); assert structural equality
-        {&static}             - (a*e)→(a*e); try to compute `a` at compile time
-        {&asynch}             - ([a→b]*e)→([a→b]*e); compute block in parallel
-        {&compile}            - ([a→b]*e)→([a→b]*e); optimize performance for block
-
-In general, annotations may be ignored by an environment that doesn't recognize them, and are discretionary within environments that do recognize them. Annotations always have an identity type, and should have no observable impact on a correct program's behavior (modulo performance, debugger integration, etc.). 
-
 ## ABC CHANGE LOG
 
 March 2014: 
