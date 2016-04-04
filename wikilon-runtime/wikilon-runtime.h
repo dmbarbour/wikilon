@@ -342,10 +342,10 @@ bool wikrt_valid_token(char const* s);
 // todo: easy function to turn a token text into a block?
 
 
-/** @brief Maximum buffer size for token text.
+/** @brief buffer size to read a token string.
  *
  * The maximum token size for Awelon Bytecode is 63 bytes. Wikilon
- * runtime uses a byte for a NUL-terminator to support C strings. 
+ * runtime adds a byte for a NUL-terminator to support C strings. 
  * Token text does not include the wrapping `{}` braces, just the
  * text between them.
  */
@@ -388,8 +388,10 @@ wikrt_err wikrt_move(wikrt_cx*, wikrt_cx*);
 /** @brief Metadata about substructural properties of a value.
  *
  * A 'normal' value can be copied or dropped. An affine value should
- * not be copied, and a relevant value should not be dropped. These
- * substructural properties are valuable for 
+ * not be copied, and a relevant value should not be dropped. The 
+ * pending substructure is returned if a value contains a lazy or
+ * parallel or remote value whose substructural properties are not
+ * easily computed.
  */
 typedef enum wikrt_ss
 { WIKRT_SS_NORM   = 0

@@ -171,14 +171,14 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t cxSizeMB)
     cx->ssp     = ssp;
 
     // initialize registers
-    cx->val     = WIKRT_UNIT; 
-    cx->pc      = WIKRT_UNIT_INR;
-    cx->cc      = WIKRT_UNIT_INR;
-    cx->txn     = WIKRT_UNIT_INR;
-    cx->a       = WIKRT_VOID;
-    cx->b       = WIKRT_VOID;
-    cx->c       = WIKRT_VOID;
-    cx->d       = WIKRT_VOID;
+    cx->val     = WIKRT_REG_VAL_INIT; 
+    cx->pc      = WIKRT_REG_PC_INIT;
+    cx->cc      = WIKRT_REG_CC_INIT;
+    cx->txn     = WIKRT_REG_TXN_INIT;
+    cx->a       = WIKRT_REG_VOL_INIT;
+    cx->b       = WIKRT_REG_VOL_INIT;
+    cx->c       = WIKRT_REG_VOL_INIT;
+    cx->d       = WIKRT_REG_VOL_INIT;
     _Static_assert((8 == WIKRT_CX_REGISTER_CT), "todo: missing register initializations"); // maintenance check
 
     wikrt_add_cx_to_env(cx);
@@ -244,10 +244,13 @@ void wikrt_mem_compact(wikrt_cx* cx)
     // albeit one that we know our destination has sufficient space.
     wikrt_cx cx0 = (*cx);
 
-    // swap semispace and memory; reset allocator
+    // swap semispace and memory; reset allocators 
     cx->ssp = cx0.mem;
     cx->mem = cx0.ssp;
     cx->alloc = cx->size;
+
+    // Note: if ever I introduce free lists, clear them here.
+    _Static_assert((0 == WIKRT_FLCT), "todo: handle free lists");
     
     // Note: ephemerons will require special attention. Either I add cx0 to
     // our environment briefly (I'd prefer to avoid this synchronization)
@@ -265,7 +268,10 @@ void wikrt_mem_compact(wikrt_cx* cx)
     wikrt_copy_r(&cx0, cx0.a,   NULL, cx, &(cx->a));
     _Static_assert((8 == WIKRT_CX_REGISTER_CT), "todo: missing register compactions"); // maintenance check
 
-    // refresh semispace as if freshly mmap'd.
+
+    // refresh our semispace as if freshly mmap'd.
+    // This should help cut memory requirements, shifting instead to
+    // 'mere' address-space requirements.
     errno = 0;
     if(0 != madvise(cx->ssp, cx->size, MADV_DONTNEED)) {
         fprintf(stderr, "%s: madvise failed (%s)\n", __FUNCTION__, strerror(errno));
@@ -364,12 +370,12 @@ wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val const v0)
                 result += WIKRT_CELLBUFF(szAlloc);
             } break;
             case WIKRT_OTAG_OPTOK: {
-                wikrt_size const toklen = ((*pv) >> 8) & 0x3F;
+                wikrt_size const toklen = ((*pv) >> 8);
                 wikrt_size const szAlloc = sizeof(wikrt_val) + toklen;
                 result += WIKRT_CELLBUFF(szAlloc);
             } break;
             case WIKRT_OTAG_SEAL: {
-                wikrt_size const toklen = ((*pv) >> 8) & 0x3F;
+                wikrt_size const toklen = ((*pv) >> 8);
                 wikrt_size const szAlloc = WIKRT_CELLSIZE + toklen;
                 result += WIKRT_CELLBUFF(szAlloc);
                 wikrt_add_size_task(&s,pv[1]); // sealed value
@@ -466,17 +472,18 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
                 wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLSIZE);
                 (*dst) = wikrt_tag_addr(WIKRT_O, addr);
                 *(wikrt_paddr(rcx, addr)) = *pv;
-                if((NULL == ss) || !wikrt_opval_hides_ss(*pv)) {
-                    wikrt_cpv(rcx, &s, pv, addr, 1);
-                } else {
+                if((NULL != ss) && wikrt_opval_hides_ss(*pv)) {
+                    // hide substructure
                     dst = 1 + wikrt_paddr(rcx, addr);
                     (*dst) = pv[1];
                     wikrt_copy_rs(rcx, lcx, NULL, s, dst);
+                } else {
+                    wikrt_cpv(rcx, &s, pv, addr, 1);
                 }
             } break;
 
             case WIKRT_OTAG_OPTOK: {
-                wikrt_size const toklen = ((*pv) >> 8) & 0x3F;
+                wikrt_size const toklen = ((*pv) >> 8);
                 wikrt_size const szAlloc = sizeof(wikrt_val) + toklen;
                 wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(szAlloc));
                 (*dst) = wikrt_tag_addr(WIKRT_O, addr);
@@ -492,7 +499,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
             } break;
 
             case WIKRT_OTAG_SEAL: {
-                wikrt_size const toklen = ((*pv) >> 8) & 0x3F;
+                wikrt_size const toklen = ((*pv) >> 8);
                 wikrt_size const szAlloc = WIKRT_CELLSIZE + toklen;
                 wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(szAlloc));
                 (*dst) = wikrt_tag_addr(WIKRT_O, addr);
@@ -596,13 +603,13 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_
             wikrt_add_drop_task(&s,pv[0]);
             wikrt_add_drop_task(&s,pv[1]);
         } else { switch(LOBYTE(*pv)) {
-            // terminal binary values
+            // (tag, binary)
             case WIKRT_OTAG_BIGINT:
             case WIKRT_OTAG_OPTOK: {
                 // nothing to do here
             } break;
 
-            // (tag, val, ... optional binary ,,,) 
+            // (tag, val, (... potential binary ...)) 
             case WIKRT_OTAG_SEAL:   
             case WIKRT_OTAG_SEAL_SM:
             case WIKRT_OTAG_BINARY:
@@ -611,7 +618,7 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_
                 wikrt_add_drop_task(&s,pv[1]);
             } break;
 
-            // block headers are the primary source of substructure.
+            // block headers are my primary source of substructure.
             case WIKRT_OTAG_BLOCK: {
                 wikrt_capture_block_ss(*pv, ss);
                 wikrt_add_drop_task(&s,pv[1]);
@@ -619,10 +626,11 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_
 
             // opval type may hide substructure (for partial eval)
             case WIKRT_OTAG_OPVAL: {
-                if((NULL == ss) || !wikrt_opval_hides_ss(*pv)) {
-                    wikrt_add_drop_task(&s, pv[1]);
-                } else {
+                if((NULL != ss) && wikrt_opval_hides_ss(*pv)) {
+                    // drop with ss hidden; preserve stack location
                     wikrt_drop_sv(cx, s, pv[1], NULL);
+                } else {
+                    wikrt_add_drop_task(&s, pv[1]);
                 }
             } break;
 
@@ -636,7 +644,7 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_
                 wikrt_add_drop_task(&s,pv[1]);
             } break;
 
-            // future notes: stowed value substructure. And I may
+            // future notes: stowed value substructure. May
             //  need something special for parallelism (if any).
 
             default: {
@@ -652,25 +660,19 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_
 wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_ss* ss) 
 {
     if(NULL != ss) { (*ss) = 0; }
-    wikrt_val const v = cx->val;
-    if(!wikrt_p(v)) { return WIKRT_TYPE_ERROR; }
-    wikrt_val* const pv = wikrt_pval(cx,v);
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pv = wikrt_pval(cx,cx->val);
     cx->val = pv[1];
-    pv[1] = WIKRT_UNIT;
-    wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), v, ss);
+    wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), pv[0], ss);
     return WIKRT_OK;
 }
 
-wikrt_err wikrt_intro_unit(wikrt_cx* cx)
-{
-    bool const ok = wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, WIKRT_UNIT, cx->val);
-    return (ok ? WIKRT_OK : WIKRT_CXFULL);
+wikrt_err wikrt_intro_unit(wikrt_cx* cx) {
+    return wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, WIKRT_UNIT, cx->val); 
 }
 
-wikrt_err wikrt_intro_unit_r(wikrt_cx* cx)
-{
-    bool const ok = wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, cx->val, WIKRT_UNIT);
-    return (ok ? WIKRT_OK : WIKRT_CXFULL);
+wikrt_err wikrt_intro_unit_r(wikrt_cx* cx) {
+    return wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, cx->val, WIKRT_UNIT); 
 }
 
 wikrt_err wikrt_elim_unit(wikrt_cx* cx)
@@ -691,35 +693,10 @@ wikrt_err wikrt_elim_unit_r(wikrt_cx* cx)
     return WIKRT_OK;
 }
 
-wikrt_err wikrt_wrap_sum(wikrt_cx* cx, bool inRight)
-{
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_wrap_sum_v(cx, inRight, wikrt_pval(cx, cx->val));
-}
 
-wikrt_err wikrt_unwrap_sum(wikrt_cx* cx, bool* inRight)
+// non-allocating, data moving, fail-safe wswap
+static inline wikrt_err wikrt_wswap_v(wikrt_cx* cx, wikrt_val const abc) 
 {
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_unwrap_sum_v(cx, inRight, wikrt_pval(cx, cx->val));
-}
-
-wikrt_err wikrt_wrap_seal(wikrt_cx* cx, char const* s)
-{
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_wrap_seal_v(cx, s, wikrt_pval(cx, cx->val));
-}
-
-wikrt_err wikrt_unwrap_seal(wikrt_cx* cx, char* buff)
-{
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_unwrap_seal_v(cx, buff, wikrt_pval(cx, cx->val));
-}
-
-/** (a*(b*c))→(b*(a*c)). ABC op `w` */
-wikrt_err wikrt_wswap(wikrt_cx* cx)
-{
-    // This is the single most common operation in ABC, so I'm commited
-    wikrt_val const abc = cx->val;
     if(wikrt_p(abc)) {
         wikrt_val* const pabc = wikrt_pval(cx,abc);
         wikrt_val  const bc   = pabc[1];
@@ -729,8 +706,13 @@ wikrt_err wikrt_wswap(wikrt_cx* cx)
             return WIKRT_OK;
         }
     }
-    // any allocating use cases we need to handle?
     return WIKRT_TYPE_ERROR;
+}
+
+/** (a*(b*c))→(b*(a*c)). ABC op `w` */
+wikrt_err wikrt_wswap(wikrt_cx* cx)
+{
+    return wikrt_wswap_v(cx,cx->val);
 }
 
 /** (a*(b*(c*d)))→(a*(c*(b*d))). ABC op `z` */
@@ -738,10 +720,7 @@ wikrt_err wikrt_zswap(wikrt_cx* cx)
 {
     // hide `a` temporarily; run wswap on what's left.
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    wikrt_move_p(cx, &(cx->val), &(cx->a));
-    wikrt_err const st = wikrt_wswap(cx);
-    wikrt_move_p(cx, &(cx->a), &(cx->val));
-    return st;
+    return wikrt_wswap_v(cx, *(wikrt_pval(cx, cx->val)));
 }
 
 /** (a*(b*c))→((a*b)*c). ABC op `l`. */
@@ -791,142 +770,292 @@ wikrt_err wikrt_swap(wikrt_cx* cx)
 {
     if(wikrt_p(cx->val)) {
         wikrt_val* const p = wikrt_pval(cx, cx->val);
-        wikrt_val const temp = p[0];
-        p[0] = p[1];
-        p[1] = temp;
+        wikrt_pval_swap(p, (1 + p));
         return WIKRT_OK;
     }
     return WIKRT_TYPE_ERROR;
 }
 
-/** ((a+(b+c))*e)→((b+(a+c))*e). ABC op `W`. */
-wikrt_err wikrt_sum_wswap(wikrt_cx* cx)
+
+wikrt_err wikrt_wrap_seal(wikrt_cx* cx, char const* s)
 {
+    // Ensure we have sufficient space for a sealer token.
+    size_t const worst_case_alloc = WIKRT_CELLSIZE + WIKRT_TOK_BUFFSZ;
+    if(!wikrt_mem_reserve(cx, worst_case_alloc)) { return WIKRT_CXFULL; }
+
+    // basic validation of input.
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_sum_wswap_v(cx, wikrt_pval(cx, cx->val));
+    if(!wikrt_valid_token(s)) { return WIKRT_INVAL; }
+
+    // wrap head value in a seal.
+    wikrt_size const len = strlen(s);
+    if((':' == *s) && (len <= 4)) {
+        // WIKRT_OTAG_SEAL_SM: optimized case, small discretionary sealers
+        #define TAG(N) ((len > N) ? (((wikrt_val)s[N]) << (8*N)) : 0)
+        wikrt_val const otag = TAG(3) | TAG(2) | TAG(1) | WIKRT_OTAG_SEAL_SM;
+        #undef TAG
+        wikrt_val* const v = wikrt_pval(cx, cx->val);
+        wikrt_alloc_cellval_r(cx, v, WIKRT_O, otag, (*v));
+        return WIKRT_OK;
+    } else {
+        // WIKRT_OTAG_SEAL: general case, large or arbitrary sealers
+        wikrt_size const szData  = WIKRT_CELLSIZE + len;
+        wikrt_size const szAlloc = WIKRT_CELLBUFF(szData); 
+        wikrt_addr const addr = wikrt_alloc_r(cx, szAlloc);
+        wikrt_val* const pa = wikrt_paddr(cx, addr);
+        wikrt_val* const pv = wikrt_pval(cx, cx->val);
+        pa[0] = (len << 8) | WIKRT_OTAG_SEAL;
+        pa[1] = (*pv);
+        memcpy((2+pa), s, len);
+        (*pv) = wikrt_tag_addr(WIKRT_O, addr);
+        return WIKRT_OK;
+    }
 }
 
-/** (a+(b+c))→(b+(a+c)).
- *
- * This only allocates if we're in the 'a' position. Conveniently,
- * if we fail to allocate to shift 'a' to 'b', we're still in the
- * 'a' position.
- *
- * That said, that's a shallow analysis. If wikrt_unwrap_sum can
- * allocate, this may fail unless wikrt_unwrap_sum also preserves
- * an extra cell whenever it allocates. 
- */
-wikrt_err wikrt_sum_wswap_v(wikrt_cx* cx, wikrt_val* v)
+wikrt_err wikrt_unwrap_seal(wikrt_cx* cx, char* buff)
+{
+    // I'm assuming (via API docs) that `buff` is WIKRT_TOK_BUFFSZ
+    (*buff) = 0;
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+    if(!wikrt_o(*v)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pv = wikrt_pval(cx, (*v));
+
+    if(wikrt_otag_seal_sm(*pv)) {
+        wikrt_val const otag = *pv;
+        buff[0] = ':';
+        buff[1] = (char)((otag >> 8 ) & 0xFF);
+        buff[2] = (char)((otag >> 16) & 0xFF);
+        buff[3] = (char)((otag >> 24) & 0xFF);
+        buff[4] = 0;
+        (*v) = pv[1];
+        return WIKRT_OK;
+    } else if(wikrt_otag_seal(*pv)) {
+        size_t const len = ((*pv) >> 8);
+        memcpy(buff, (2 + pv), len);
+        buff[len] = 0;
+        (*v) = pv[1];
+        return WIKRT_OK; 
+    } else { return WIKRT_TYPE_ERROR; }
+}
+
+wikrt_err wikrt_wrap_sum(wikrt_cx* cx, bool inR) 
+{
+    if(!wikrt_mem_reserve(cx, WIKRT_WRAP_SUM_RESERVE)) { return WIKRT_CXFULL; }
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    wikrt_wrap_sum_rv(cx, inR, wikrt_pval(cx, cx->val));
+    return WIKRT_OK;
+}
+
+static inline bool wikrt_deepsum_with_free_space(wikrt_cx* cx, wikrt_val v) 
+{
+    if(!wikrt_o(v)) { return false; }
+    wikrt_val const otag = *(wikrt_pval(cx, v));
+    // need two bits free space to squeeze in another sum step.
+    return wikrt_otag_deepsum(otag) && (otag < (WIKRT_VAL_MAX >> 2));
+}
+
+void wikrt_wrap_sum_rv(wikrt_cx* cx, bool inRight, wikrt_val* v)
+{
+    if(WIKRT_P == wikrt_vtag(*v)) {
+        // non-allocating wrap sum for unit or product. 
+        // Useful for compact representation of lists.
+        wikrt_tag const tag = inRight ? WIKRT_PR : WIKRT_PL;
+        (*v) = wikrt_tag_addr(tag, wikrt_vaddr(*v));
+    } else if(wikrt_deepsum_with_free_space(cx, (*v))) {
+        // non-allocating deep sum extension.
+        wikrt_val* const pv = wikrt_pval(cx, (*v));
+        wikrt_val const s0 = (*pv) >> 8;
+        wikrt_val const sf = (s0 << 2) | (inRight ? WIKRT_DEEPSUMR : WIKRT_DEEPSUML); 
+        wikrt_val const otag = (sf << 8) | WIKRT_OTAG_DEEPSUM;
+        (*pv) = otag;
+    } else { 
+        // allocation of deepsum wrapper
+        // Note: I'm thinking about using a dedicated free-list for deepsums.
+        // The motivation would be to eliminate average-case allocation for
+        // data plumbing with sum types, reusing some temporary locations. 
+        wikrt_val const sf = inRight ? WIKRT_DEEPSUMR : WIKRT_DEEPSUML;
+        wikrt_val const otag = (sf << 8) | WIKRT_OTAG_DEEPSUM;
+        wikrt_alloc_cellval_r(cx, v, WIKRT_O, otag, (*v));
+    }
+}
+
+wikrt_err wikrt_unwrap_sum(wikrt_cx* cx, bool* inRight) 
+{
+    // reserve space, move value into cx->a to simplify unwrap
+    if(!wikrt_mem_reserve(cx, WIKRT_UNWRAP_SUM_RESERVE)) { return WIKRT_CXFULL; }
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    return wikrt_unwrap_sum_rv(cx, inRight, wikrt_pval(cx, cx->val));
+}
+
+wikrt_err wikrt_unwrap_sum_rv(wikrt_cx* cx, bool* inRight, wikrt_val* v)
+{ retry: {
+    wikrt_val const tag = wikrt_vtag(*v);
+    wikrt_val const addr = wikrt_vaddr(*v);
+    if(WIKRT_PL == tag) {
+        (*inRight) = false;
+        (*v) = wikrt_tag_addr(WIKRT_P, addr);
+        return WIKRT_OK;
+    } else if(WIKRT_PR == tag) {
+        (*inRight) = true;
+        (*v) = wikrt_tag_addr(WIKRT_P, addr);
+        return WIKRT_OK;
+    } else if((WIKRT_O == tag) && (0 != addr)) {
+        wikrt_val* const pv = wikrt_paddr(cx, addr);
+        if(wikrt_otag_deepsum(*pv)) {
+            wikrt_val const s0 = (*pv) >> 8;
+            (*inRight) = (3 == (3 & s0));
+            wikrt_val const sf = s0 >> 2;
+            if(0 == sf) { 
+                (*v) = pv[1]; // drop deepsum wrapper
+                // add deepsum wrapper to dedicated free list?
+            } else { 
+                (*pv) = sf << 8 | WIKRT_OTAG_DEEPSUM;
+            }
+        } else {
+            // not a deepsum, but might still be array or stream or similar
+            wikrt_err const st = wikrt_expand_sum_rv(cx, v);
+            if(WIKRT_OK != st) { return st; }
+            goto retry;
+        }
+    } else { return WIKRT_TYPE_ERROR; }
+}}
+
+/* expand a sum-type value. */
+wikrt_err wikrt_expand_sum_ra(wikrt_cx* cx) 
+{
+    if(!wikrt_o(cx->a)) { return WIKRT_TYPE_ERROR; }
+    fprintf(stderr, "%s: TODO: expand sum object (%x)\n", __FUNCTION__, (int)(wikrt_pval(cx,cx->a)[0]));
+    return WIKRT_IMPL;
+}
+
+wikrt_err wikrt_sum_wswap(wikrt_cx* cx)
+{
+    // For now, just brute-force ops like this.
+    if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return WIKRT_CXFULL; }
+    else if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    else { return wikrt_sum_wswap_rv(cx, wikrt_pval(cx, cx->val)); }
+}
+
+wikrt_err wikrt_sum_zswap(wikrt_cx* cx)
+{
+    if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return WIKRT_CXFULL; }
+    else if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    else { return wikrt_sum_zswap_rv(cx, wikrt_pval(cx, cx->val)); }
+}
+
+wikrt_err wikrt_sum_assocl(wikrt_cx* cx) 
+{
+    if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return WIKRT_CXFULL; }
+    else if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    else { return wikrt_sum_assocl_rv(cx, wikrt_pval(cx, cx->val)); }
+}
+
+wikrt_err wikrt_sum_assocr(wikrt_cx* cx)
+{
+    if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return WIKRT_CXFULL; }
+    else if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    else { return wikrt_sum_assocr_rv(cx, wikrt_pval(cx, cx->val)); }
+}
+
+wikrt_err wikrt_sum_swap(wikrt_cx* cx) 
+{
+    if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return WIKRT_CXFULL; }
+    else if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    else { return wikrt_sum_swap_rv(cx, wikrt_pval(cx, cx->val)); }
+}
+
+wikrt_err wikrt_sum_wswap_rv(wikrt_cx* cx, wikrt_val* v) 
 {
     bool inBC;
-    wikrt_err st = wikrt_unwrap_sum_v(cx, &inBC, v);
+    wikrt_err st = wikrt_unwrap_sum_rv(cx, &inBC, v);
     if(WIKRT_OK != st) { return st; }
-    else if(!inBC) { // we have 'a'.
-        wikrt_wrap_sum_v(cx, false, v);
-        return wikrt_wrap_sum_v(cx, true, v);
-    } else { // we have (b + c).
+    else if(!inBC) { // a → (_ + (a + _))
+        wikrt_wrap_sum_rv(cx, false, v); 
+        wikrt_wrap_sum_rv(cx, true, v);
+        return WIKRT_OK;
+    } else {
         bool inC;
-        st = wikrt_unwrap_sum_v(cx, &inC, v);
-        if(WIKRT_OK != st) {
-            wikrt_wrap_sum_v(cx, inBC, v); // ? → (_ + ?)
+        st = wikrt_unwrap_sum_rv(cx, &inC, v);
+        if(WIKRT_OK != st) { // 
+            wikrt_wrap_sum_rv(cx, true, v);
             return st;
-        } else if(!inC) { // we have 'b'
-            wikrt_wrap_sum_v(cx, false, v);
+        } else if(!inC) { // 'b' → (b + _)
+            wikrt_wrap_sum_rv(cx, false, v);
             return WIKRT_OK;
         } else { // we have 'c'.
-            wikrt_wrap_sum_v(cx, true, v);
-            wikrt_wrap_sum_v(cx, true, v);
+            wikrt_wrap_sum_rv(cx, true, v);
+            wikrt_wrap_sum_rv(cx, true, v);
             return WIKRT_OK;
         }
     }
 }
 
-/** ((a+(b+(c+d)))*e)→((a+(c+(b+d)))*e). ABC op `Z`. */
-wikrt_err wikrt_sum_zswap(wikrt_cx* cx)
-{
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_sum_zswap_v(cx, wikrt_pval(cx, cx->val));
-}
-
-wikrt_err wikrt_sum_zswap_v(wikrt_cx* cx, wikrt_val* v)
+wikrt_err wikrt_sum_zswap_rv(wikrt_cx* cx, wikrt_val* v) 
 {
     bool inBCD;
-    wikrt_err st = wikrt_unwrap_sum_v(cx, &inBCD, v);
+    wikrt_err st = wikrt_unwrap_sum_rv(cx, &inBCD, v);
     if(WIKRT_OK != st) { return st; }
-    else if(inBCD) { st = wikrt_sum_wswap_v(cx, v); }
-    wikrt_wrap_sum_v(cx, inBCD, v);
+    if(inBCD) { st = wikrt_sum_wswap_rv(cx, v); }
+    wikrt_wrap_sum_rv(cx, inBCD, v);
     return st;
 }
 
-/** ((a+(b+c))*e)→(((a+b)+c)*e). ABC op `L`. */
-wikrt_err wikrt_sum_assocl(wikrt_cx* cx)
-{
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_sum_assocl_v(cx, wikrt_pval(cx, cx->val));
-}
-
-/** (a+(b+c)) → ((a+b)+c). Allocates only from 'a' position. */
-wikrt_err wikrt_sum_assocl_v(wikrt_cx* cx, wikrt_val* v) 
+// (a+(b+c))→((a+b)+c).
+wikrt_err wikrt_sum_assocl_rv(wikrt_cx* cx, wikrt_val* v) 
 {
     bool inBC;
-    wikrt_err st = wikrt_unwrap_sum_v(cx, &inBC, v);
+    wikrt_err st = wikrt_unwrap_sum_rv(cx, &inBC, v);
     if(WIKRT_OK != st) { return st; }
-    else if(!inBC) { // we have 'a'.
-        wikrt_wrap_sum_v(cx, false, v); // recover 'a' in left.
-        return wikrt_wrap_sum_v(cx, false, v); // now 'a' in left-of-left.
+    else if(!inBC) { // a → ((a + _) + _)
+        wikrt_wrap_sum_rv(cx, false, v);
+        wikrt_wrap_sum_rv(cx, false, v);
+        return WIKRT_OK;
     } else {
         bool inC;
-        st = wikrt_unwrap_sum_v(cx, &inC, v);
-        wikrt_wrap_sum_v(cx, true, v); // (b+c) on failure or b or c, in right of something.
-        if((WIKRT_OK == st) && !inC) { wikrt_wrap_sum_v(cx, false, v); }
+        st = wikrt_unwrap_sum_rv(cx, &inC, v);
+        wikrt_wrap_sum_rv(cx, true, v);
+        if((WIKRT_OK == st) && !inC) { wikrt_wrap_sum_rv(cx, false, v); }
         return st;
     }
 }
 
-/** (((a+b)+c)*e)→((a+(b+c))*e). ABC op `R`. */
-wikrt_err wikrt_sum_assocr(wikrt_cx* cx)
-{
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_sum_assocr_v(cx, wikrt_pval(cx, cx->val));
-}
 
-/** ((a+b)+c)→(a+(b+c)). Allocates from 'c' position. */
-wikrt_err wikrt_sum_assocr_v(wikrt_cx* cx, wikrt_val* v)
+// ((a+b)+c)→(a+(b+c)).  
+wikrt_err wikrt_sum_assocr_rv(wikrt_cx* cx, wikrt_val* v)
 {
     bool inC;
-    wikrt_err st = wikrt_unwrap_sum_v(cx, &inC, v);
+    wikrt_err st = wikrt_unwrap_sum_rv(cx, &inC, v);
     if(WIKRT_OK != st) { return st; }
-    else if(inC) { // we have 'c'.
-        wikrt_wrap_sum_v(cx, true, v);
-        return wikrt_wrap_sum_v(cx, true, v);
-    } else {
+    else if(inC) { // 'c' → (_ + (_ + c))
+        wikrt_wrap_sum_rv(cx, true, v);
+        wikrt_wrap_sum_rv(cx, true, v);
+        return WIKRT_OK;
+    } else { // in (a+b) in left → 'a' in left or 'b' in left of right.
         bool inB;
-        st = wikrt_unwrap_sum_v(cx, &inB, v);
-        wikrt_wrap_sum_v(cx, false, v); // (a+b) on failure, or a or b, in left of something.
-        if((WIKRT_OK == st) && inB) { wikrt_wrap_sum_v(cx, true, v); }
+        st = wikrt_unwrap_sum_rv(cx, &inB, v);
+        wikrt_wrap_sum_rv(cx, false, v); // (a+b) on failure, or a or b, in left of something.
+        if((WIKRT_OK == st) && inB) { wikrt_wrap_sum_rv(cx, true, v); }
         return st;
     }
 }
 
-/** ((a+b)*e)→((b+a)*e). ABC ops `VRWLC`. */
-wikrt_err wikrt_sum_swap(wikrt_cx* cx)
+wikrt_err wikrt_sum_swap_rv(wikrt_cx* cx, wikrt_val* v)
 {
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_sum_swap_v(cx, wikrt_pval(cx, cx->val));
+    bool inR;
+    wikrt_err const st = wikrt_unwrap_sum_rv(cx, &inR, v);
+    if(WIKRT_OK != st) { return st; }
+    wikrt_wrap_sum_rv(cx, !inR, v);
+    return WIKRT_OK;
 }
 
-/** (a+b)→(b+a). */
-wikrt_err wikrt_sum_swap_v(wikrt_cx* cx, wikrt_val* v)
-{
-    bool inRight;
-    wikrt_err st = wikrt_unwrap_sum_v(cx, &inRight, v);
-    if(WIKRT_OK != st) { return st; }
-    return wikrt_wrap_sum_v(cx, !inRight, v);
-}
 
 /** (a*((b+c)*e))→(((a*b)+(a*c))*e). ABC op `D`. */
 wikrt_err wikrt_sum_distrib(wikrt_cx* cx)
 {
+    // potential allocation only at unwrap of (b+c)
+    if(!wikrt_mem_reserve(cx, WIKRT_UNWRAP_SUM_RESERVE)) { return WIKRT_CXFULL; }
+
     wikrt_val const ase = cx->val;
     if(!wikrt_p(ase)) { return WIKRT_TYPE_ERROR; }
     wikrt_val* const pase = wikrt_pval(cx, ase);
@@ -936,7 +1065,7 @@ wikrt_err wikrt_sum_distrib(wikrt_cx* cx)
     wikrt_val* const pse = wikrt_pval(cx, se);
 
     bool inR;
-    wikrt_err const st = wikrt_unwrap_sum_v(cx, &inR, pse);
+    wikrt_err const st = wikrt_unwrap_sum_rv(cx, &inR, pse);
     if(WIKRT_OK != st) { return st; }
 
     // perform distribution. shifts outer pair without allocation.
@@ -950,37 +1079,31 @@ wikrt_err wikrt_sum_distrib(wikrt_cx* cx)
 /** (((a*b)+(c*d))*e)→((a+c)*((b+d)*e)). ABC op `F`. */
 wikrt_err wikrt_sum_factor(wikrt_cx* cx)
 {
+    wikrt_size const worst_case_alloc = WIKRT_UNWRAP_SUM_RESERVE 
+                                      + (2 * WIKRT_WRAP_SUM_RESERVE);
+    if(!wikrt_mem_reserve(cx, worst_case_alloc)) { return WIKRT_CXFULL; }
+
     wikrt_val const se = cx->val;
     if(!wikrt_p(se)) { return WIKRT_TYPE_ERROR; }
     wikrt_val* const pse = wikrt_pval(cx, se);
 
     bool inR;
-    wikrt_err st = wikrt_unwrap_sum_v(cx, &inR, pse);
+    wikrt_err st = wikrt_unwrap_sum_rv(cx, &inR, pse);
     if(WIKRT_OK != st) { return st; }
+
     wikrt_val const ab = *pse;
     if(!wikrt_p(ab)) {
-        wikrt_wrap_sum_v(cx, inR, pse); // recover original.
+        wikrt_wrap_sum_rv(cx, inR, pse); // recover original.
         return WIKRT_TYPE_ERROR; 
     }
 
-    // wrapping values is a likely source of allocations.
     wikrt_val* const pab = wikrt_pval(cx, ab);
-    st = wikrt_wrap_sum_v(cx, inR, pab); // a → (a + _)
-    if(WIKRT_OK != st) { goto ewrapa; }
-    st = wikrt_wrap_sum_v(cx, inR, 1 + pab); // b → (b + _)
-    if(WIKRT_OK != st) { goto ewrapb; }
-
-    // succeeded.
-    pse[0]  = pab[1]; // ((b+_) * e)
-    pab[1]  = se;     // ((a+_) * ((b+_) * e))
+    wikrt_wrap_sum_rv(cx, inR, pab); 
+    wikrt_wrap_sum_rv(cx, inR, (1 + pab));
+    pse[0] = pab[1];
+    pab[1] = se;
     cx->val = ab;
     return WIKRT_OK;
-
-ewrapb: 
-    wikrt_unwrap_sum_v(cx, &inR, pab); // (a+_)→a
-ewrapa: 
-    wikrt_wrap_sum_v(cx, inR, pse); // (a*b)→((a*b)+_)
-    return st;
 }
 
 wikrt_err wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
@@ -1004,18 +1127,17 @@ wikrt_err wikrt_peek_istr(wikrt_cx* cx, char* buff, size_t* len)
 
 wikrt_err wikrt_intro_binary(wikrt_cx* cx, uint8_t const* data, size_t len)
 {
-    wikrt_val v = WIKRT_VOID;
-    wikrt_err const st = wikrt_alloc_binary_v(cx, &v, data, len);
+    wikrt_err const st = wikrt_alloc_binary_reg(cx, &(cx->a), data, len);
     if(WIKRT_OK != st) { return st; }
-    return wikrt_intro(cx, v);
+    return wikrt_intro_reg(cx, &(cx->a));
 }
 
 wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t len)
 {
     wikrt_val v = WIKRT_VOID;
-    wikrt_err const st = wikrt_alloc_text_v(cx, &v, s, len);
+    wikrt_err const st = wikrt_alloc_text_reg(cx, &(cx->a), s, len);
     if(WIKRT_OK != st) { return st; }
-    return wikrt_intro(cx, v);
+    return wikrt_intro_reg(cx, &(cx->a));
 }
 
 wikrt_err wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
@@ -1790,149 +1912,6 @@ wikrt_err wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b
 }
 
 
-
-static inline bool wikrt_deepsum_with_free_space(wikrt_cx* cx, wikrt_val v) 
-{
-    if(!wikrt_o(v)) { return false; }
-    wikrt_val const otag = *(wikrt_pval(cx, v));
-    // need two bits free space to squeeze in another sum step.
-    return wikrt_otag_deepsum(otag) && (otag < (WIKRT_VAL_MAX >> 2));
-}
- 
-wikrt_err wikrt_wrap_sum_v(wikrt_cx* cx, bool inRight, wikrt_val* v) 
-{
-    if(WIKRT_P == wikrt_vtag(*v)) {
-        // shallow sum for product or unit values, non-allocating.
-        // this covers conventional 'lists' and some 'trees'.
-        wikrt_tag const newtag = inRight ? WIKRT_PR : WIKRT_PL;
-        (*v) = wikrt_tag_addr(newtag, wikrt_vaddr(*v));
-        return WIKRT_OK;
-    } else if(wikrt_deepsum_with_free_space(cx, (*v))) {
-        // extend an existing deepsum without requiring allocation.
-        wikrt_val* const pv = wikrt_pval(cx, (*v));
-        wikrt_val const s0 = (*pv) >> 8; // chop WIKRT_OTAG_DEEPSUM
-        wikrt_val const sf = (s0 << 2) | (inRight ? WIKRT_DEEPSUMR : WIKRT_DEEPSUML);
-        wikrt_val const otag = (sf << 8) | WIKRT_OTAG_DEEPSUM;
-        (*pv) = otag;
-        return WIKRT_OK;
-    } else { 
-        // allocate fresh deepsum to wrap value
-        wikrt_val const sf = (inRight ? WIKRT_DEEPSUMR : WIKRT_DEEPSUML);
-        wikrt_val const otag = (sf << 8) | WIKRT_OTAG_DEEPSUM;
-        if(!wikrt_alloc_cellval(cx, v, WIKRT_O, otag, (*v))) {  return WIKRT_CXFULL; }
-        return WIKRT_OK;
-    }
-}
-
-
-/* Note: Most sum-type data plumbing code assumes that `wikrt_unwrap_sum_v`
- * is non-allocating or at least may be followed by wikrt_wrap_sum_v. This
- * holds at the moment, but may need special consideration for arrays and
- * possible lazy streams.
- */
-wikrt_err wikrt_unwrap_sum_v(wikrt_cx* cx, bool* inRight, wikrt_val* v) 
-{ retry: {
-
-    wikrt_tag const tag = wikrt_vtag(*v);
-    wikrt_addr const addr = wikrt_vaddr(*v);
-    if(WIKRT_PL == tag) {
-        // unwrap sum from pair or unit value
-        (*inRight) = false;
-        (*v) = wikrt_tag_addr(WIKRT_P, addr);
-        return WIKRT_OK;
-    } else if(WIKRT_PR == tag) {
-        // unwrap sum from pair or unit value
-        (*inRight) = true;
-        (*v) = wikrt_tag_addr(WIKRT_P, addr);
-        return WIKRT_OK;
-    } else if((WIKRT_O == tag) && (0 != addr)) {
-        // common case is 'deep sum'.
-        // But we may also unpack array, binary, stowage, etc..
-        wikrt_val* const pv = wikrt_paddr(cx, addr);
-        if(wikrt_otag_deepsum(*pv)) {
-            wikrt_val const s0 = ((*pv) >> 8);
-            wikrt_val const sf = (s0 >> 2);
-            (*inRight) = (3 == (3 & s0));
-            if(0 == sf) { // dealloc deepsum wrapper
-                (*v) = pv[1];
-                wikrt_free(cx, WIKRT_CELLSIZE, addr);
-            } else { // keep deepsum, but smaller 
-                *pv = (sf << 8) | WIKRT_OTAG_DEEPSUM;
-            }
-            return WIKRT_OK;
-        } else { 
-            // Note: I reserve one cell for fail-safe data plumbing.
-            // This ensures I can rebuild the sum type after expansion.
-            wikrt_addr reserved_cell;
-            if(!wikrt_alloc(cx, WIKRT_CELLSIZE, &reserved_cell)) { return WIKRT_CXFULL; }
-            wikrt_err const st = wikrt_expand_sum_v(cx, v);
-            wikrt_free(cx, WIKRT_CELLSIZE, reserved_cell); 
-            if(WIKRT_OK != st) { return st; }
-            goto retry;
-        }
-    }
-    return WIKRT_TYPE_ERROR;
-}}
-
-/* Try to expand a compact sum value - i.e. array or stream. */
-wikrt_err wikrt_expand_sum_v(wikrt_cx* cx, wikrt_val* v)
-{
-    return WIKRT_IMPL;
-}
-
-wikrt_err wikrt_wrap_seal_v(wikrt_cx* cx, char const* s, wikrt_val* v)
-{
-    if(!wikrt_valid_token(s)) { return WIKRT_INVAL; }
-    wikrt_size const len = 0x3F & strlen(s);
-    if((':' == *s) && (len <= 4)) {
-        // WIKRT_OTAG_SEAL_SM: optimized case, small discretionary sealers
-        #define TAG(N) ((len > N) ? (((wikrt_val)s[N]) << (8*N)) : 0)
-        wikrt_val const otag = TAG(3) | TAG(2) | TAG(1) | WIKRT_OTAG_SEAL_SM;
-        if(!wikrt_alloc_cellval(cx, v, WIKRT_O, otag, (*v))) { return WIKRT_CXFULL; }
-        return WIKRT_OK;
-        #undef TAG
-    } else {
-        // WIKRT_OTAG_SEAL: general case, large or arbitrary sealers
-        wikrt_size const szAlloc = WIKRT_CELLSIZE + len;
-        wikrt_addr addr;
-        if(!wikrt_alloc(cx, szAlloc, &addr)) { return WIKRT_CXFULL; }
-        wikrt_val* const psv = wikrt_paddr(cx,addr);
-        psv[0] = (len << 8) | WIKRT_OTAG_SEAL;
-        psv[1] = (*v);
-        memcpy((psv + 2), s, len); // copy of sealer text
-        (*v) = wikrt_tag_addr(WIKRT_O, addr);
-        return WIKRT_OK;
-    }
-} 
-
-wikrt_err wikrt_unwrap_seal_v(wikrt_cx* cx, char* buff, wikrt_val* v)
-{
-    (*buff) = 0;
-    if(!wikrt_o(*v)) { return WIKRT_TYPE_ERROR; }
-    wikrt_addr const addr = wikrt_vaddr(*v);
-    wikrt_val const* const pv = wikrt_paddr(cx, addr);
-    if(wikrt_otag_seal_sm(*pv)) {
-        wikrt_val const otag = *pv;
-        (*v) = pv[1];
-        buff[0] = ':';
-        buff[1] = (char)((otag >> 8 ) & 0xFF);
-        buff[2] = (char)((otag >> 16) & 0xFF);
-        buff[3] = (char)((otag >> 24) & 0xFF);
-        buff[4] = 0;
-        wikrt_free(cx, WIKRT_CELLSIZE, addr);
-        return WIKRT_OK;
-    } else if(wikrt_otag_seal(*pv)) {
-        size_t const len = ((*pv) >> 8) & 0x3F;
-        size_t const szAlloc = WIKRT_CELLSIZE + len;
-        memcpy(buff, (pv + 2), len);
-        buff[len] = 0;
-        (*v) = pv[1];
-        wikrt_free(cx, szAlloc, addr);
-        return WIKRT_OK;
-    } else { return WIKRT_TYPE_ERROR; }
-
-}
-
 wikrt_err wikrt_quote(wikrt_cx* cx) 
 {
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
@@ -2126,8 +2105,9 @@ bool wikrt_valid_key(char const* k)
 void wikrt_txn_abort(wikrt_cx* cx) 
 {
     // transactions are trivially recorded as values (for now).
+    
     wikrt_drop_v(cx, cx->txn, NULL);
-    cx->txn = WIKRT_VOID;
+    cx->txn = WIKRT_REG_TXN_INIT;
 }
 
 void wikrt_txn_durable(wikrt_cx* cx)

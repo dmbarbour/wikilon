@@ -435,9 +435,7 @@ Use of ABC resources will be driven by related annotations. I'm proposing `{&sto
 
 Anyhow, between the explicit use of `{&load}` and fast access to its substructural attributes, we can perform generic data plumbing on our value resource *without* loading it.
 
-*Aside:* Originally I had ABC resources for arbitrary code then value resources were a specialization. However, I did not have a good story for how the ABC resources come to exist in the first place. The current approach may still be used with arbitrary code (e.g. `{&load}vr$c` to load and inline) and seems to have a better story in general.
-
-*Aside:* I've contemplated coupling value resources with value sealing instead. They are closely related. However, I've decided the proposed separation of responsibilities is simpler, and use of annotations helps indicate that this is ultimately a performance concept.
+*Aside:* Originally I had ABC resources for arbitrary code and value resources were the specialization. However, this does not have a good story for how the ABC resources are decided in the first place, leaving that to some unnamed external agent. The current approach has a more complete story, and works well enough with arbitrary code - e.g. `{'/resource}{&load}vr$c` to specify a block resource then immediately inline it.
 
 ### Encoding Binary Data in ABC
 

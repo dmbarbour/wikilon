@@ -313,33 +313,41 @@ wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val v);
 void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* stack, wikrt_val v, wikrt_ss* ss);
 void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
 
-// NOTE: use of a moving allocator will break most of the following functions.
-//  A few may be safe if they're known to be non-allocating, but even that is
-//  dubious. 
+// Due to use of a moving allocator, I must be careful about how
+// I express operations on values unless I know I have sufficient
+// space in reserve. 
 //
-//  An alternative may be to track a small set of roots/registers within our
-//  context to carry data during a potentially allocating computation. These
-//  registers aren't necessarily exposed to our client.
+// The simplest way to avoid errors in most cases is to reserve
+// as much space as I'll need to perform an operation up front,
+// at least for sophisticated multi-step operations.
 
-#if 0
+wikrt_err wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v);
+void wikrt_wrap_sum_rv(wikrt_cx*, bool inR, wikrt_val* v);
+wikrt_err wikrt_unwrap_sum_rv(wikrt_cx*, bool* inR, wikrt_val* v);
+#define WIKRT_WRAP_SUM_RESERVE WIKRT_CELLSIZE
+#define WIKRT_EXPAND_SUM_RESERVE WIKRT_CELLSIZE
+#define WIKRT_UNWRAP_SUM_RESERVE WIKRT_EXPAND_SUM_RESERVE
 
-wikrt_err wikrt_wswap_v(wikrt_cx*, wikrt_val*);
-
-wikrt_err wikrt_sum_wswap_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_sum_zswap_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_sum_assocl_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_sum_assocr_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_sum_swap_v(wikrt_cx*, wikrt_val*);
-
-wikrt_err wikrt_wrap_sum_v(wikrt_cx*, bool inRight, wikrt_val*);
-wikrt_err wikrt_unwrap_sum_v(wikrt_cx*, bool* inRight, wikrt_val*);
-wikrt_err wikrt_expand_sum_v(wikrt_cx*, wikrt_val*); 
-wikrt_err wikrt_wrap_seal_v(wikrt_cx*, char const* tok, wikrt_val*);
-wikrt_err wikrt_unwrap_seal_v(wikrt_cx*, char* tokbuff, wikrt_val*);
+wikrt_err wikrt_sum_wswap_rv(wikrt_cx*, wikrt_val* v);
+wikrt_err wikrt_sum_zswap_rv(wikrt_cx*, wikrt_val* v);
+wikrt_err wikrt_sum_assocl_rv(wikrt_cx*, wikrt_val* v);
+wikrt_err wikrt_sum_assocr_rv(wikrt_cx*, wikrt_val* v);
+wikrt_err wikrt_sum_swap_rv(wikrt_cx*, wikrt_val* v);
+// conservative free-space requirement for sum manipulations (sum_wswap, etc.)
+#define WIKRT_SUMOP_RESERVE (4 * (WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE))
 
 wikrt_err wikrt_peek_i32_v(wikrt_cx*, wikrt_val const, int32_t*);
 wikrt_err wikrt_peek_i64_v(wikrt_cx*, wikrt_val const, int64_t*);
 wikrt_err wikrt_peek_istr_v(wikrt_cx*, wikrt_val const, char* buff, size_t* strlen); 
+
+// For large allocations where I cannot easily predict the size, I should
+// most likely indicate a register as my target. Combining this responsibility
+// with introducing a value (e.g. adding it to our stack) is a mistake.
+
+#if 0
+wikrt_err wikrt_wrap_seal_v(wikrt_cx*, char const* tok, wikrt_val*);
+wikrt_err wikrt_unwrap_seal_v(wikrt_cx*, char* tokbuff, wikrt_val*);
+
 
 wikrt_err wikrt_alloc_binary_v(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
 wikrt_err wikrt_alloc_text_v(wikrt_cx*, wikrt_val*, char const*, size_t);
@@ -403,16 +411,15 @@ void wikrt_remove_cx_from_env(wikrt_cx* cx);
 
 /** wikrt_cx internal state.
  *
- * I've decided to try a bump-pointer allocation with a semi-space
- * collection process. I'll also allocate downwards, i.e. loading
- * my heap in reverse order, since this reduces computation for
- * allocations (avoiding 'size' in most computations).
+ * I've decided to favor a bump-pointer allocation with a semi-space
+ * collection process. I'll probably need special handling for stowed
+ * values (I may try a bloom filter). 
  *
- * Regarding stowage references: rather than precise stowage tracking, 
- * try a bloom filter, refresh on memory compaction. This should be
- * sufficient while allowing an acceptable level of GC. If I include
- * a little salt, that would help prevent cases where a false positive
- * is held for too long.
+ * Ideas:
+ *
+ * I could benefit from limited use of free cells to ensure that sum
+ * type data plumbing is non-allocating on average. I should try it
+ * and profile it, perhaps as a special case.
  */ 
 struct wikrt_cx {
     // doubly-linked list of contexts in environment.
@@ -432,6 +439,7 @@ struct wikrt_cx {
     wikrt_val           cc;         // continuation stack (eval)
     wikrt_val           txn;        // transaction data
         // consider including: debug output, debug call stack 
+        // might also track multiple computations for laziness
 
     // semispace garbage collection.
     void*               ssp;    // for GC, scratch
@@ -443,6 +451,12 @@ struct wikrt_cx {
 };
 // just for sanity checks
 #define WIKRT_CX_REGISTER_CT 8
+#define WIKRT_REG_VOL_INIT WIKRT_VOID /* for a,b,c,d */
+#define WIKRT_REG_TXN_INIT WIKRT_UNIT_INR
+#define WIKRT_REG_PC_INIT WIKRT_UNIT_INR
+#define WIKRT_REG_CC_INIT WIKRT_UNIT_INR
+#define WIKRT_REG_VAL_INIT WIKRT_UNIT
+#define WIKRT_FLCT 0 /* memory freelist count (currently none) */
 
 static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->mem))); 
@@ -496,15 +510,14 @@ static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) {
 // allocate with potential memory compaction to make space
 bool wikrt_alloc_c(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr);
 
-static inline bool wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* tgt, wikrt_tag tag, wikrt_val fst, wikrt_val snd)
+static inline wikrt_err wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* tgt, wikrt_tag tag, wikrt_val fst, wikrt_val snd)
 {
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
     wikrt_alloc_cellval_r(cx, tgt, tag, fst, snd);
-    return true;
+    return WIKRT_OK;
 }
 static inline wikrt_err wikrt_intro_smallval(wikrt_cx* cx, wikrt_val v) {
-    bool const ok = wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, v, cx->val);
-    return (ok ? WIKRT_OK : WIKRT_CXFULL); 
+    return wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, v, cx->val);
 }
 
 // move value of type WIKRT_P, WIKRT_PL, or WIKRT_PR from `src` to `dst`.
