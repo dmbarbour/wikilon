@@ -2,6 +2,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 #include <errno.h>
 
@@ -249,8 +250,9 @@ void wikrt_mem_compact(wikrt_cx* cx)
     cx->mem = cx0.ssp;
     cx->alloc = cx->size;
 
-    // Note: if ever I introduce free lists, clear them here.
-    _Static_assert((0 == WIKRT_FLCT), "todo: handle free lists");
+    // heuristic free lists can be cleared
+    // cx->freecells = 0;
+    _Static_assert((0 == WIKRT_FREE_LISTS), "todo: handle free lists");
     
     // Note: ephemerons will require special attention. Either I add cx0 to
     // our environment briefly (I'd prefer to avoid this synchronization)
@@ -600,6 +602,7 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_
         wikrt_val const v = *(--s);
         wikrt_val const* const pv = wikrt_pval(cx, v);
         if(WIKRT_O != wikrt_vtag(v)) {
+            // WIKRT_P, WIKRT_PL, or WIKRT_PR
             wikrt_add_drop_task(&s,pv[0]);
             wikrt_add_drop_task(&s,pv[1]);
         } else { switch(LOBYTE(*pv)) {
@@ -871,9 +874,6 @@ void wikrt_wrap_sum_rv(wikrt_cx* cx, bool inRight, wikrt_val* v)
         (*pv) = otag;
     } else { 
         // allocation of deepsum wrapper
-        // Note: I'm thinking about using a dedicated free-list for deepsums.
-        // The motivation would be to eliminate average-case allocation for
-        // data plumbing with sum types, reusing some temporary locations. 
         wikrt_val const sf = inRight ? WIKRT_DEEPSUMR : WIKRT_DEEPSUML;
         wikrt_val const otag = (sf << 8) | WIKRT_OTAG_DEEPSUM;
         wikrt_alloc_cellval_r(cx, v, WIKRT_O, otag, (*v));
@@ -921,12 +921,52 @@ wikrt_err wikrt_unwrap_sum_rv(wikrt_cx* cx, bool* inRight, wikrt_val* v)
     } else { return WIKRT_TYPE_ERROR; }
 }}
 
-/* expand a sum-type value. */
-wikrt_err wikrt_expand_sum_ra(wikrt_cx* cx) 
+// Transparent expansions on compact sum values, mostly for arrays,
+// texts, and binaries. This might see additional use for streaming
+// blocks to text or similar. 
+//
+// I assume sufficient space is available (WIKRT_EXPAND_SUM_RESERVE). 
+// Currently, I allocate one cell at most for one WIKRT_PL list node.
+wikrt_err wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v) 
 {
-    if(!wikrt_o(cx->a)) { return WIKRT_TYPE_ERROR; }
-    fprintf(stderr, "%s: TODO: expand sum object (%x)\n", __FUNCTION__, (int)(wikrt_pval(cx,cx->a)[0]));
-    return WIKRT_IMPL;
+    if(!wikrt_o(*v)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pv = wikrt_pval(cx, (*v));
+    switch(LOBYTE(*pv)) {
+        case WIKRT_OTAG_ARRAY: {
+            // pop one element from the array.
+            // (hdr, next, size, buffer)
+            wikrt_val const* const buff = wikrt_paddr(cx, pv[3]);
+            pv[3] += sizeof(wikrt_val);
+            pv[2] -= 1;
+            wikrt_val const hd = *buff;
+            wikrt_val const tl = (0 == pv[2]) ? pv[1] : (*v);
+            wikrt_alloc_cellval_r(cx, v, WIKRT_PL, hd, tl);
+        } return WIKRT_OK;
+        case WIKRT_OTAG_BINARY: {
+            // (hdr, next, size, buffer)
+            uint8_t const* const buff = (uint8_t*) wikrt_paddr(cx,pv[3]);
+            pv[3] += 1;
+            pv[2] -= 1;
+            uint8_t const hd = *buff;
+            wikrt_val const tl = (0 == pv[2]) ? pv[1] : (*v);
+            wikrt_alloc_cellval_r(cx, v, WIKRT_PL, hd, tl);
+        } return WIKRT_OK;
+        case WIKRT_OTAG_TEXT: {
+            // (hdr, next, (size-char, size-byte), buffer
+            uint8_t const* const s = (uint8_t*) wikrt_paddr(cx, pv[3]);
+            uint32_t cp;
+            size_t const kBytes = utf8_readcp_unsafe(s, &cp);
+            size_t const szcp = ((1 << 16) | kBytes); // 1 char and 1-4 bytes
+            assert(pv[2] >= szcp); // sanity check
+            pv[3] += kBytes;
+            pv[2] -= szcp;
+            _Static_assert((0x10FFFF <= WIKRT_SMALLINT_MAX), "assuming any codepoint fits in a small integer");
+            wikrt_val const hd = wikrt_i2v((wikrt_int)cp);
+            wikrt_val const tl = (0 == pv[2]) ? pv[1] : (*v);
+            wikrt_alloc_cellval_r(cx, v, WIKRT_PL, hd, tl);
+        } return WIKRT_OK;
+        default: return WIKRT_TYPE_ERROR;
+    }
 }
 
 wikrt_err wikrt_sum_wswap(wikrt_cx* cx)
@@ -1124,20 +1164,113 @@ wikrt_err wikrt_peek_istr(wikrt_cx* cx, char* buff, size_t* len)
     return wikrt_peek_istr_v(cx, wikrt_pval(cx, cx->val)[0], buff, len);
 }
 
-
+// Allocate WIKRT_OTAG_BINARY, and add it to our stack
 wikrt_err wikrt_intro_binary(wikrt_cx* cx, uint8_t const* data, size_t len)
 {
-    wikrt_err const st = wikrt_alloc_binary_reg(cx, &(cx->a), data, len);
-    if(WIKRT_OK != st) { return st; }
-    return wikrt_intro_reg(cx, &(cx->a));
+    // to resist overflow with `len` manipulations
+    _Static_assert((WIKRT_SIZE_MAX >> 20) > WIKRT_CX_MAX_SIZE, 
+        "todo: improve resistance to size overflows");
+    if((len >= (WIKRT_CX_MAX_SIZE << 20)) { return WIKRT_CXFULL; }
+
+    wikrt_size const szBuff = WIKRT_CELLBUFF((wikrt_size)len);
+    wikrt_size const szAlloc = (3 * WIKRT_CELLSIZE) + szBuff;
+    if(!wikrt_mem_reserve(cx, szAlloc)) { return WIKRT_CXFULL; }
+
+    if(0 == len) { 
+        wikrt_intro_r(cx, WIKRT_UNIT_INR);
+        return WIKRT_OK;
+    }
+
+    // okay, we have sufficient space. Let's do this.
+    //   hdr→(otag, next, size, buffer)
+    //   buffer→copy of data 
+    //   introduce 'hdr' on stack as tagged value
+    wikrt_addr const buff = wikrt_alloc_r(cx, szBuff);
+    uint8_t* const pbuff = (uint8_t*)wikrt_paddr(cx, buff);
+    memcpy(wikrt_paddr(cx, buff), data, len);
+
+    wikrt_addr const hdr = wikrt_alloc_r(cx, (2 * WIKRT_CELLSIZE));
+    wikrt_val* const phdr = wikrt_paddr(cx, hdr);
+    phdr[0] = WIKRT_OTAG_BINARY;
+    phdr[1] = WIKRT_UNIT_INR;
+    phdr[2] = (wikrt_size) len;
+    phdr[3] = buff;
+    wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, hdr));
 }
 
-wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t len)
+wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
 {
-    wikrt_val v = WIKRT_VOID;
-    wikrt_err const st = wikrt_alloc_text_reg(cx, &(cx->a), s, len);
-    if(WIKRT_OK != st) { return st; }
-    return wikrt_intro_reg(cx, &(cx->a));
+    size_t nChars;
+    if(!wikrt_valid_text_len(s, &nBytes, &nChars)) {
+        return WIKRT_INVAL; // invalid text
+    }
+
+    _Static_assert((WIKRT_SIZE_MAX >> 20) > WIKRT_CX_MAX_SIZE, 
+        "todo: improve resistance to size overflows");
+    if(nBytes >= (WIKRT_CX_MAX_SIZE << 20)) { return WIKRT_CXFULL; }
+
+    // Text allocation happens in multiple smaller 'chunks' of at most
+    // 2^16-1 bytes, each with its own header. Conservatively, I cannot
+    // expect to fit more than 2^16-4 bytes into a chunk (since I need
+    // to ensure a whole number of characters). I'll allocate each chunk
+    // separately within our context.
+    size_t const szFullChunk        = (1<<16) - 4;
+    size_t const nFullChunks        = nBytes / szFullChunk;
+    size_t const maxSzFinalChunk    = nBytes % szFullChunk;
+    size_t const rsvHdrs            = 1 + nFullChunks;
+    size_t const szReserve = ((2*WIKRT_CELLSIZE)*rsvHdrs)
+                           + (WIKRT_CELLBUFF(szFullChunk)*nFullChunks)
+                           + WIKRT_CELLBUFF(maxSzFinalChunk)
+                           + WIKRT_CELLSIZE; // for the stack intro
+    if(!wikrt_mem_reserve(cx, szReserve)) { return WIKRT_CXFULL; }
+
+    // We have enough space. Only thing left to do is load the data.
+    
+    // load the text headers.
+    wikrt_intro_r(cx, WIKRT_VOID); // we'll replace the VOID with the text
+    wikrt_val* tail = wikrt_pval(cx, cx->val); // initially pointing at the VOID
+    assert(WIKRT_VOID == (*tail));
+    while(buff_end != buff) {
+        wikrt_addr const hdr = wikrt_alloc_r(cx, (2 * WIKRT_CELLSIZE));
+        (*tail) = wikrt_tag_addr(cx, hdr);
+        wikrt_val* const phdr = wikrt_paddr(cx, hdr);
+        phdr[0] = WIKRT_OTAG_TEXT;
+        tail = (1 + phdr); // to be loaded later
+        phdr[3] = buff;
+
+        uint8_t const* const const pbuff = (uint8_t const*) wikrt_paddr(cx,buff);
+        wikrt_addr const safeBuffBytes = min((buff_end - buff), safeBuffMax);
+
+        wikrt_size buffBytes = 0;
+        wikrt_size buffChars = 0;
+        do {
+            size_t const k = utf8_cpsize(pbuff + buffBytes);
+            buffChars += 1;
+            buffBytes += (wikrt_size)k;
+        } while(buff < safeBuffMax);
+        assert((buffChars <= buffBytes) && (buffBytes < (1 << 16)));
+        phdr[2] = (buffChars << 16) | buffBytes; // (size-chars, size-bytes) 
+    
+
+
+        buff += nBytes;
+
+
+        s += nBytes;
+            ++nChars;
+            
+            s += k;
+            nBytes -= k;
+            
+            wikrt_size const k = 
+static inline size_t utf8_cpsize(uint8_t const* s) 
+
+        } while((0 != nBytes) && (buff <= maxBuff))
+
+        tail = (1 + phdr); // assigned later
+    }
+    (*tail) = WIKRT_UNIT_INR; // terminate the text.
+    return WIKRT_OK;
 }
 
 wikrt_err wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
@@ -1177,78 +1310,6 @@ bool wikrt_valid_text_len(char const* s, size_t* bytes, size_t* chars)
     if(NULL != chars) { (*chars) = cct; }
     return ((maxlen == len) || (0 == utf8[len]));
 }
-
-// Long term, I'll want to use the WIKRT_OTAG_TEXT representation.
-// For now, however, I'll allocate a conventional list structure.
-// (But I'll allocate it as one larger block for now.)
-wikrt_err wikrt_alloc_text_v(wikrt_cx* cx, wikrt_val* v, char const* const s, size_t nBytes) 
-{
-    size_t nChars;
-    if(!wikrt_valid_text_len(s, &nBytes, &nChars)) {
-        return WIKRT_INVAL; // invalid text
-    }
-
-    if(0 == nChars) { // empty text
-        (*v) = WIKRT_UNIT_INR;
-        return WIKRT_OK;
-    }
-
-    // We need one cell per codepoint.
-    if(nChars >= (WIKRT_SIZE_MAX / WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
-    wikrt_size const szAlloc = ((wikrt_size)nChars * WIKRT_CELLSIZE);
-    wikrt_addr spine;
-    if(!wikrt_alloc(cx, szAlloc, &spine)) { return WIKRT_CXFULL; }
-    (*v) = wikrt_tag_addr(WIKRT_PL, spine);
-
-    _Static_assert((WIKRT_SMALLINT_MAX >= 0x10FFFF), "small integers insufficient for unicode codepoints");
-
-    uint8_t const* u = (uint8_t const*) s;
-    #define READ_NEXT_CODEPOINT() wikrt_i2v((wikrt_int) utf8_step_unsafe(&u))
-    for(size_t ii = nChars; ii > 1; --ii) 
-    {
-        wikrt_val* const pspine = wikrt_paddr(cx, spine);
-        spine += WIKRT_CELLSIZE;
-        pspine[0] = READ_NEXT_CODEPOINT();
-        pspine[1] = wikrt_tag_addr(WIKRT_PL, spine);
-    }
-    wikrt_val* const pspine_last = wikrt_paddr(cx, spine);
-    pspine_last[0] = READ_NEXT_CODEPOINT();
-    pspine_last[1] = WIKRT_UNIT_INR;
-    #undef READ_NEXT_CODEPOINT
-    assert((s + nBytes) == (char const*)u);
-    return WIKRT_OK;
-}
-
-/* For the moment, we'll allocate a binary as a plain old list.
- * This results in an WIKRT_CELLSIZE (8x) expansion at this time. I
- * I will support a compact WIKRT_OTAG_BINARY representation later.
- */
-wikrt_err wikrt_alloc_binary_v(wikrt_cx* cx, wikrt_val* v, uint8_t const* buff, size_t nBytes) 
-{
-    if(0 == nBytes) { // empty binary
-        (*v) = WIKRT_UNIT_INR;
-        return WIKRT_OK;
-    }
-
-    // prevent size overflow allocations
-    if(nBytes >= (WIKRT_SIZE_MAX / WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
-    wikrt_size const szAlloc = ((wikrt_size)nBytes * WIKRT_CELLSIZE);
-    wikrt_addr spine;
-    if(!wikrt_alloc(cx, szAlloc, &spine)) { return WIKRT_CXFULL; }
-    (*v) = wikrt_tag_addr(WIKRT_PL, spine);
-
-    size_t const intraSpineBytes = nBytes - 1;
-    for(size_t ii = 0; ii < intraSpineBytes; ++ii) {
-        wikrt_val* const pspine = wikrt_paddr(cx, spine);
-        spine += WIKRT_CELLSIZE;
-        pspine[0] = wikrt_i2v(buff[ii]);
-        pspine[1] = wikrt_tag_addr(WIKRT_PL, spine);
-    }
-    wikrt_val* const pspine_last = wikrt_paddr(cx, spine);
-    pspine_last[0] = wikrt_i2v(buff[intraSpineBytes]);
-    pspine_last[1] = WIKRT_UNIT_INR;
-    return WIKRT_OK;
-} 
 
 static bool wikrt_read_list_byte(wikrt_cx* cx, wikrt_val* v, uint8_t* byte, wikrt_err* st) 
 {
@@ -1378,13 +1439,11 @@ static wikrt_err wikrt_intro_bigint(wikrt_cx* const cx, bool const positive
     wikrt_size const isize = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
     wikrt_sizeb const iszb = WIKRT_CELLBUFF(isize);
 
-    // I need space for the integer plus one cell for the cx->val stack    
+    // space for the integer, plus one cell for the cx->val stack    
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE + iszb)) { return WIKRT_CXFULL; }
 
     // copy our integer.
     wikrt_addr const addr = wikrt_alloc_r(cx, iszb);
-    wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, addr));
-
     wikrt_val* const p = wikrt_paddr(cx, addr);
     p[0] = wikrt_mkotag_bigint(positive, nDigits);
     uint32_t* const dcpy = (uint32_t*)(1 + p);
@@ -1394,14 +1453,19 @@ static wikrt_err wikrt_intro_bigint(wikrt_cx* const cx, bool const positive
         dcpy[ii] = dsrc[ii];
     }
     
-    // push it onto our stack, then return
+    // add value to stack
+    wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, addr));
     return WIKRT_OK;
 }
     
 wikrt_err wikrt_intro_i32(wikrt_cx* cx, int32_t n) 
 {
+    wikrt_size const szMaxBigInt = sizeof(wikrt_val) + (2 * sizeof(uint32_t));
+    wikrt_size const worst_case_alloc = WIKRT_CELLSIZE + WIKRT_CELLBUFF(szMaxBigInt);
+    if(!wikrt_mem_reserve(cx, worst_case_alloc)) { return WIKRT_CXFULL; }
+
     if((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX)) {
-        return wikrt_intro_smallval(cx, wikrt_i2v((wikrt_int)n);
+        wikrt_intro_r(cx, wikrt_i2v((wikrt_int)n));
     }
 
     bool positive;

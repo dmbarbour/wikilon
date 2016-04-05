@@ -245,6 +245,12 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
  *    So marked, this value becomes inaccessible, and we may later void the
  *    value (e.g. upon compaction or memory pressure) while preserving its
  *    substructural attributes.
+ *
+ * I'd like to explore some other possibilities, e.g. values as types, multi
+ * world computations (run this computation with `1,2,3,4,5`).
+
+, constraint sets, or imaginary values (i.e. such that
+ * (a+b) can process both `a` and `b`). 
  */
 
 #define WIKRT_OTAG_BIGINT   78   /* N */
@@ -340,6 +346,12 @@ wikrt_err wikrt_peek_i32_v(wikrt_cx*, wikrt_val const, int32_t*);
 wikrt_err wikrt_peek_i64_v(wikrt_cx*, wikrt_val const, int64_t*);
 wikrt_err wikrt_peek_istr_v(wikrt_cx*, wikrt_val const, char* buff, size_t* strlen); 
 
+#if 0
+bool wikrt_alloc_i32_reg(wikrt_cx* cx, wikrt_val* reg, int32_t);
+bool wikrt_alloc_i64_reg(wikrt_cx* cx, wikrt_val* reg, int64_t);
+bool wikrt_alloc_istr_reg(wikrt_cx* cx, wikrt_val* reg, char const* buff, size_t len);
+#endif
+
 // For large allocations where I cannot easily predict the size, I should
 // most likely indicate a register as my target. Combining this responsibility
 // with introducing a value (e.g. adding it to our stack) is a mistake.
@@ -415,11 +427,10 @@ void wikrt_remove_cx_from_env(wikrt_cx* cx);
  * collection process. I'll probably need special handling for stowed
  * values (I may try a bloom filter). 
  *
- * Ideas:
- *
- * I could benefit from limited use of free cells to ensure that sum
- * type data plumbing is non-allocating on average. I should try it
- * and profile it, perhaps as a special case.
+ * I'm contemplating additional use of free lists to optimize a few
+ * heuristic cases, reducing allocations for sum type data plumbing
+ * and perhaps for list processing with arrays. However, this must be
+ * weighed against the additional use of conditional expressions.
  */ 
 struct wikrt_cx {
     // doubly-linked list of contexts in environment.
@@ -441,6 +452,9 @@ struct wikrt_cx {
         // consider including: debug output, debug call stack 
         // might also track multiple computations for laziness
 
+    // free-list memory recycling
+    // wikrt_addr          freecells;  // list of cell-sized objects
+
     // semispace garbage collection.
     void*               ssp;    // for GC, scratch
     wikrt_size          compaction_size;    // memory after compaction
@@ -456,7 +470,7 @@ struct wikrt_cx {
 #define WIKRT_REG_PC_INIT WIKRT_UNIT_INR
 #define WIKRT_REG_CC_INIT WIKRT_UNIT_INR
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
-#define WIKRT_FLCT 0 /* memory freelist count (currently none) */
+#define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
 
 static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->mem))); 

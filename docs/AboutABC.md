@@ -328,12 +328,12 @@ It also may give ABC a more dynamic feel, especially combined with dependently t
 
 ### Annotations for Performance and Debugging
 
-Annotations are tokens for debugging or performance. Annotations are indicated by use of an `&` prefix in the token, e.g. in `{&fork}` or `{&≡}`. Annotations must not affect the observable results of a correct program, and an ABC interpreter or compiler should be able to ignore annotations that it does not recognize. However, annotations may cause an incorrect program to fail, and incorrect use of annotations may result in an incorrect program. 
+Annotations are tokens for debugging or performance. Annotations are indicated by use of an `&` prefix in the token, e.g. in `{&fork}` or `{&≡}`. Annotations must not affect the logically observable behavior of a correct program. An ABC interpreter or compiler should be able to ignore annotations that it does not recognize. However, annotations may cause an incorrect program to fail. Further, incorrect use of annotations (e.g. making a bad type assertion) may result in an incorrect program.
 
 Ideas for what annotations might do:
 
 * support parallel or lazy computation
-* stow and load values to a backing store
+* stow and load values from a backing store
 * hints for type or termination checking
 * debug output, breakpoints, location tracking
 * optimized representations (e.g. arrays) 
@@ -341,6 +341,8 @@ Ideas for what annotations might do:
 * compile or JIT computed blocks of code 
 * move computations and data to a GPGPU
 * support and enable memoization or caching
+
+For example, an annotation `{&trash}` might indicate that a value *will not be observed or touched* in the future, and that any attempt to do so is an error. This assertion enables a runtime to drop unnecessary data from memory (leaving a much smaller placeholder). It could easily be used to simulate networks, systems, or applications that leak data over time.
 
 In many cases, use of annotations may be coupled. For example, use of a `{&fork}` annotation to parallelize a computation might be coupled with a `{&join}` annotation to synchronize and access the computed result. Any attempt to access the parallel value without performing the `{&join}` may then be an error. Coupling can greatly simplify implementation by eliminating need for transparent handling of, for example, a parallel pair during an `wrzl` operation.
 
