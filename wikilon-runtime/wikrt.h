@@ -112,8 +112,11 @@ typedef enum wikrt_opcode_ext
 static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & WIKRT_MASK_ADDR); }
 static inline wikrt_tag  wikrt_vtag(wikrt_val v)  { return (v & WIKRT_MASK_TAG);  }
 static inline wikrt_val  wikrt_tag_addr(wikrt_tag t, wikrt_addr a) { return (t | a); }
-static inline bool wikrt_p(wikrt_val v) { return (WIKRT_P == wikrt_vtag(v)) && (0 != wikrt_vaddr(v)); } // pair, not unit
-static inline bool wikrt_o(wikrt_val v) { return (WIKRT_O == wikrt_vtag(v)) && (0 != wikrt_vaddr(v)); } // object, not void
+static inline bool wikrt_tagged_valref(wikrt_tag t, wikrt_val v) { return ((t != v) && (t == wikrt_vtag(v))); }
+static inline bool wikrt_p(wikrt_val v)  { return wikrt_tagged_valref(WIKRT_P, v);  }
+static inline bool wikrt_pl(wikrt_val v) { return wikrt_tagged_valref(WIKRT_PL, v); }
+static inline bool wikrt_pr(wikrt_val v) { return wikrt_tagged_valref(WIKRT_PR, v); }
+static inline bool wikrt_o(wikrt_val v)  { return wikrt_tagged_valref(WIKRT_O, v);  }
 
 /** @brief small integers
  * 
@@ -307,6 +310,7 @@ static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
     return (tag_data << 8) | WIKRT_OTAG_BIGINT;
 }
 
+
 /* Internal API calls. */
 wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
 
@@ -341,10 +345,6 @@ wikrt_err wikrt_sum_assocr_rv(wikrt_cx*, wikrt_val* v);
 wikrt_err wikrt_sum_swap_rv(wikrt_cx*, wikrt_val* v);
 // conservative free-space requirement for sum manipulations (sum_wswap, etc.)
 #define WIKRT_SUMOP_RESERVE (4 * (WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE))
-
-wikrt_err wikrt_peek_i32_v(wikrt_cx*, wikrt_val const, int32_t*);
-wikrt_err wikrt_peek_i64_v(wikrt_cx*, wikrt_val const, int64_t*);
-wikrt_err wikrt_peek_istr_v(wikrt_cx*, wikrt_val const, char* buff, size_t* strlen); 
 
 #if 0
 bool wikrt_alloc_i32_reg(wikrt_cx* cx, wikrt_val* reg, int32_t);
@@ -472,6 +472,12 @@ struct wikrt_cx {
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
 #define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
 
+// A strategy for 'splitting' an array is to simply share references
+// within a cell. This is safe only if we overcommit allocations, i.e.
+// such that we have needed space for a future wikrt_mem_compact.
+#define WIKRT_ALLOW_OVERCOMMIT_BUFFER_SHARING 1
+
+
 static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->mem))); 
 }
@@ -500,6 +506,9 @@ static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz)
     return wikrt_mem_available(cx,sz);
 } 
 
+// variant to limit compaction to a one-time thing.
+bool wikrt_mem_try_reserve(wikrt_cx* cx, wikrt_sizeb sz, bool* compacted);
+
 // Allocate a given amount of space, assuming sufficient space is reserved.
 // This will not risk compacting and moving data. OTOH, if there isn't enough
 // space we'll have a very severe bug.
@@ -521,18 +530,22 @@ static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) {
     wikrt_alloc_cellval_r(cx, &(cx->val), WIKRT_P, v, cx->val); 
 }
 
-// allocate with potential memory compaction to make space
-bool wikrt_alloc_c(wikrt_cx* cx, wikrt_size sz, wikrt_addr* addr);
-
 static inline wikrt_err wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* tgt, wikrt_tag tag, wikrt_val fst, wikrt_val snd)
 {
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
     wikrt_alloc_cellval_r(cx, tgt, tag, fst, snd);
     return WIKRT_OK;
 }
+
 static inline wikrt_err wikrt_intro_smallval(wikrt_cx* cx, wikrt_val v) {
-    return wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, v, cx->val);
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
+    wikrt_intro_r(cx, v);
+    return WIKRT_OK;
 }
+
+
+static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
+    wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), v, ss); }
 
 // move value of type WIKRT_P, WIKRT_PL, or WIKRT_PR from `src` to `dst`.
 //  E.g. if src is `(a,b)` and dst is `c`, then after move we have (b) and (a,c).
@@ -580,4 +593,10 @@ static inline bool wikrt_text_char(uint32_t c) {
         isReplacementChar(c);
     return !bInvalidChar;
 }
+
+
+static inline bool wikrt_bigint(wikrt_cx* cx, wikrt_val v) {
+    return wikrt_o(v) && wikrt_otag_bigint(*wikrt_pval(cx, v));
+}
+
 
