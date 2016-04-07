@@ -293,7 +293,9 @@ static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM 
 static inline bool wikrt_otag_block(wikrt_val v) { return (WIKRT_OTAG_BLOCK == LOBYTE(v)); }
 static inline bool wikrt_otag_seal(wikrt_val v) { return (WIKRT_OTAG_SEAL == LOBYTE(v)); }
 static inline bool wikrt_otag_seal_sm(wikrt_val v) { return (WIKRT_OTAG_SEAL_SM == LOBYTE(v)); }
-//static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
+static inline bool wikrt_otag_binary(wikrt_val v) { return (WIKRT_OTAG_BINARY == LOBYTE(v)); }
+static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
+static inline bool wikrt_otag_text(wikrt_val v) { return (WIKRT_OTAG_TEXT == LOBYTE(v)); }
 //static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
 
 static inline void wikrt_capture_block_ss(wikrt_val otag, wikrt_ss* ss)
@@ -346,11 +348,12 @@ wikrt_err wikrt_sum_swap_rv(wikrt_cx*, wikrt_val* v);
 // conservative free-space requirement for sum manipulations (sum_wswap, etc.)
 #define WIKRT_SUMOP_RESERVE (4 * (WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE))
 
-#if 0
-bool wikrt_alloc_i32_reg(wikrt_cx* cx, wikrt_val* reg, int32_t);
-bool wikrt_alloc_i64_reg(wikrt_cx* cx, wikrt_val* reg, int64_t);
-bool wikrt_alloc_istr_reg(wikrt_cx* cx, wikrt_val* reg, char const* buff, size_t len);
-#endif
+// Allocate an i32 or i64 assuming sufficient reserved memory.
+wikrt_val wikrt_alloc_i32_rv(wikrt_cx* cx, int32_t);
+wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t);
+#define WIKRT_SIZEOF_BIGINT(DIGITS) (sizeof(wikrt_val) + ((DIGITS) * sizeof(uint32_t)))
+#define WIKRT_ALLOC_I32_RESERVE WIKRT_CELLBUFF(WIKRT_SIZEOF_BIGINT(2))
+#define WIKRT_ALLOC_I64_RESERVE WIKRT_CELLBUFF(WIKRT_SIZEOF_BIGINT(3))
 
 // For large allocations where I cannot easily predict the size, I should
 // most likely indicate a register as my target. Combining this responsibility

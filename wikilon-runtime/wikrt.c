@@ -99,9 +99,12 @@ uint32_t wikrt_api_ver()
 }
 
 wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMaxMB) {
-    _Static_assert(WIKRT_SIZE_MAX >= 4294967295, "minimum 32-bit words (for texts, etc.)"); 
     _Static_assert(WIKRT_CELLSIZE == WIKRT_CELLBUFF(WIKRT_CELLSIZE), "cell size must be a power of two");
     _Static_assert(WIKRT_PAGESIZE == WIKRT_PAGEBUFF(WIKRT_PAGESIZE), "page size must be a power of two");
+    _Static_assert(WIKRT_SMALLINT_MAX >= (WIKRT_BIGINT_DIGIT - 1), "bigint should be at least two digits");
+    _Static_assert(WIKRT_SMALLINT_MAX >= 0xFF, "smallint should be sufficient for binary values");
+    _Static_assert(WIKRT_SMALLINT_MAX >= 0x10FFFF, "smallint should be sufficient for unicode codepoints");
+    _Static_assert(sizeof(uint8_t) == sizeof(char), "in general, assuming uint8_t and char are same size");
 
     (*ppEnv) = NULL;
 
@@ -926,7 +929,7 @@ wikrt_err wikrt_unwrap_sum_rv(wikrt_cx* cx, bool* inRight, wikrt_val* v)
 // I assume sufficient space is available (WIKRT_EXPAND_SUM_RESERVE). 
 // Currently, I allocate one cell at most for one WIKRT_PL list node.
 //
-// TODO: support logical reversals
+// TODO: support logically reversed arrays
 wikrt_err wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v) 
 {
     if(!wikrt_o(*v)) { return WIKRT_TYPE_ERROR; }
@@ -969,9 +972,13 @@ wikrt_err wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v)
     }
 }
 
+// Thoughts: I'd like to maybe ensure sum manipulations are non-allocating,
+// at least on average. One option here might be to use free-lists in some
+// very limited capacity, together with reserving enough to guarantee that
+// allocation will succeed.
+
 wikrt_err wikrt_sum_wswap(wikrt_cx* cx)
 {
-    // For now, just brute-force ops like this.
     if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return WIKRT_CXFULL; }
     else if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
     else { return wikrt_sum_wswap_rv(cx, wikrt_pval(cx, cx->val)); }
@@ -1211,6 +1218,7 @@ wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
     wikrt_intro_r(cx, WIKRT_VOID); // I'll patch up that WIKRT_VOID later.
 
     // Allocate in chunks of no more than 2^16-1 bytes.
+    // (Limited chunk size serves as an implicit index.)
     size_t const max_chunk = 0xFFFF;
     while(!at_end_of_text(s,nBytes)) 
     {
@@ -1222,6 +1230,7 @@ wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
         wikrt_valid_text_len(s, &bytes, &chars); 
         assert((chars <= bytes) && (bytes <= max_bytes));
 
+        // abort if we've hit an invalid character.
         if(0 == chars) { wikrt_drop(cx,NULL); return WIKRT_INVAL; }
 
         // obtain sufficient space.
@@ -1276,7 +1285,8 @@ wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
 }
 
 static inline bool wikrt_value_is_binary(wikrt_cx* cx, wikrt_val v) {
-    return (wikrt_o(v) && wikrt_otag_binary(*(wikrt_pval(cx,v))); }
+    return (wikrt_o(v) && wikrt_otag_binary(*(wikrt_pval(cx,v)))); 
+}
 
 wikrt_err wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
 {
@@ -1284,41 +1294,46 @@ wikrt_err wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
     (*bytes) = 0;
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
 
-    wikrt_size const step_mem = WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE;
     do {
-        if(!wikrt_mem_reserve(cx, step_mem)) { return WIKRT_CXFULL; }
-        wikrt_val* const v = wikrt_pval(cx, cx->val);
+        wikrt_val const v0 = wikrt_pval(cx, cx->val)[0];
+        if(wikrt_pl(v0)) { // basic list node
 
-        if(WIKRT_PL == wikrt_vtag(*v)) { // basic list node
-
-            wikrt_val const* const pv = wikrt_pval(cx, (*v));
+            wikrt_val const* const pv = wikrt_pval(cx, v0);
             if(!wikrt_i(*pv)) { return WIKRT_TYPE_ERROR; }
-            _Static_assert((WIKRT_SMALLINT_MIN <= 0) && (255 <= WIKRT_SMALLINT_MAX))
+            _Static_assert(((WIKRT_SMALLINT_MIN <= 0) && (255 <= WIKRT_SMALLINT_MAX))
                 , "assume bytes are small integers");
             wikrt_int const i = wikrt_v2i(*pv);
             bool const okByte = ((0 <= i) && (i <= 255));
             if(!okByte) { return WIKRT_TYPE_ERROR; }
             if(max_bytes == (*bytes)) { return WIKRT_BUFFSZ; } // output limited
             buff[(*bytes)++] = (uint8_t) i;
-            (*v) = pv[1]; // step to next list element.
+            wikrt_pval(cx,cx->val)[0] = pv[1]; // step next in list
 
-        } else if(wikrt_value_is_binary(cx, (*v))) { // compact binary
-
-            wikrt_val* const phd = wikrt_pval(cx, (*v));
+        } 
+        // TODO: write tests for full and partial reads on binaries
+        #if defined(WIKRT_ENABLE_FAST_READ) && WIKRT_ENABLE_FAST_READ
+        else if(wikrt_value_is_binary(cx, v0)) { // compact binary
+            wikrt_val* const phd = wikrt_pval(cx, v0);
             size_t const output_size_limit = (max_bytes - (*bytes));
             bool const output_limited = phd[2] > output_size_limit; 
             if(output_limited) { // read as much binary as possible
                 memcpy(buff + (*bytes), wikrt_paddr(cx, phd[3]), output_size_limit);
                 phd[2] -= (wikrt_size)output_size_limit;
                 phd[3] += (wikrt_size)output_size_limit;
+                (*bytes) += output_size_limit;
                 return WIKRT_BUFFSZ;
             } else { // binary is fully read
                 memcpy(buff + (*bytes), wikrt_paddr(cx, phd[3]), phd[2]);
-                (*v) = phd[1];
+                (*bytes) += phd[2];
+                wikrt_pval(cx, cx->val)[0] = phd[1];
             }
+        } 
+        #endif
+        else { // maybe terminal, maybe expandable
 
-        } else { // maybe terminal, maybe expandable
-
+            wikrt_size const step_mem = WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE;
+            if(!wikrt_mem_reserve(cx, step_mem)) { return WIKRT_CXFULL; } // may move cx->val
+            wikrt_val* const v = wikrt_pval(cx, cx->val);
             bool inR;
             wikrt_err const st = wikrt_unwrap_sum_rv(cx, &inR, v);
             if(WIKRT_OK != st) { return st; }
@@ -1332,10 +1347,20 @@ wikrt_err wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
     } while(true);
 }
 
+static inline bool wikrt_value_is_text(wikrt_cx* cx, wikrt_val v) {
+    return (wikrt_o(v) && wikrt_otag_text(*(wikrt_pval(cx,v)))); 
+}
+
+
 wikrt_err wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
 {
+    _Static_assert(sizeof(uint8_t) == sizeof(char), "assuming natural cast between uint8_t and char");
+    uint8_t* const dst = (uint8_t*) buff;
+
+    // allow 'charct' to be NULL. But handle it in just one place.
     size_t charct_local = SIZE_MAX;
     if(NULL == charct) { charct = &charct_local; }
+
     size_t const max_buffsz = (*buffsz);
     size_t const max_charct = (*charct);
     (*buffsz) = 0;
@@ -1343,105 +1368,94 @@ wikrt_err wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* char
     
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
 
-
-
-    return WIKRT_IMPL;
-
-}
-
-#if 0
-
-
-wikrt_err wikrt_read_binary_v(wikrt_cx* cx, wikrt_val* v, uint8_t* buff, size_t* size)
-{
-    // for now, naively read byte-at-a-time. When I have support for
-    // WIKRT_OTAG_BINARY, I should try for buffer-copying reads.
-    size_t const max_size = (*size);
-    (*size) = 0;
-}
-
-static bool wikrt_read_list_cp(wikrt_cx* cx, wikrt_val* v, uint32_t* cp, size_t max_utf8, wikrt_err* st) 
-{
-    bool inR;
-    wikrt_err const stSum = wikrt_unwrap_sum_v(cx, &inR, v);
-
-    if(WIKRT_OK != stSum) { 
-        (*st) = WIKRT_TYPE_ERROR; 
-        return false; 
-    } 
-
-    if(inR) {
-        (*st) = WIKRT_OK; // end of input
-        wikrt_wrap_sum_v(cx, true, v);
-        return false;
-    }
- 
-    if(wikrt_p(*v)) {
-        wikrt_addr const addr = wikrt_vaddr(*v);
-        wikrt_val* const pv = wikrt_paddr(cx, addr);
-        _Static_assert((WIKRT_SMALLINT_MAX >= 0x10FFFF), 
-            "small integers insufficient for unicode codepoints");
-        if(wikrt_i(*pv)) {
-            wikrt_int const i = wikrt_v2i(*pv);
-            if((0 <= i) && (i <= 0x10FFFF) && wikrt_text_char(i)) {
-                (*cp) = i;
-                if(utf8_writecp_size(i) > max_utf8) {
-                    // character is too large for buffer
-                    (*st) = WIKRT_BUFFSZ;
-                    wikrt_wrap_sum_v(cx, false, v);
-                    return false;
-                } else {
-                    (*st) = WIKRT_OK;
-                    (*v) = pv[1];
-                    wikrt_free(cx, WIKRT_CELLSIZE, addr);
-                    return true;
-                }
-            } // else not a valid text codepoint
-        } // else not a small integer
-    } // else not a valid list node
-
-    // our value wasn't a (codepoint * list) pair.
-    (*st) = WIKRT_TYPE_ERROR;
-    wikrt_wrap_sum_v(cx, false, v);
-    return false;
-}
-
-wikrt_err wikrt_read_text_v(wikrt_cx* cx, wikrt_val* v, char* s, size_t* bytes, size_t* chars)
-{
-    // for now, naively read one character at a time. When I have support for
-    // WIKRT_OTAG_TEXT, I should consider buffer-copying reads.
-    _Static_assert((sizeof(char) == sizeof(uint8_t)), "dubious cast between char* and uint8_t*");
-    uint8_t* buff = (uint8_t*) s;
-
-    size_t const max_chars = (*chars);
-    size_t const max_bytes = (*bytes);
-    (*chars) = 0;
-    (*bytes) = 0;
-
     do {
-        if(max_chars == (*chars)) { return WIKRT_BUFFSZ; }
-        uint32_t cp; wikrt_err st;
-        if(!wikrt_read_list_cp(cx, v, &cp, (max_bytes - (*bytes)), &st)) { return st; }
-        (*bytes) += utf8_writecp_unsafe(buff + (*bytes), cp);
-        (*chars) += 1;
+        wikrt_val const v0 = wikrt_pval(cx, cx->val)[0];
+        if(wikrt_pl(v0)) { // basic list node
+
+            wikrt_val const* const pv = wikrt_pval(cx, v0);
+            if(!wikrt_i(*pv)) { return WIKRT_TYPE_ERROR; }
+            _Static_assert(((WIKRT_SMALLINT_MIN <= 0) && (0x10FFFF <= WIKRT_SMALLINT_MAX))
+                , "assuming unicode codepoints are small integers");
+            wikrt_int const i = wikrt_v2i(*pv);
+            bool const okChar = ((0 <= i) && (i <= 0x10FFFF) && wikrt_text_char(i));
+            if(!okChar) { return WIKRT_TYPE_ERROR; }
+            size_t const next_buffsz = (*buffsz) + utf8_writecp_size(i);
+            if((max_charct == (*charct)) || (next_buffsz > max_buffsz)) { return WIKRT_BUFFSZ; }
+            utf8_writecp_unsafe(dst + (*buffsz), i); 
+            (*buffsz) = next_buffsz;
+            (*charct) += 1;
+            wikrt_pval(cx, cx->val)[0] = pv[1]; // step to next element in list
+
+        } 
+        // TODO: write tests for full and partial reads on texts
+        #if defined(WIKRT_ENABLE_FAST_READ) && WIKRT_ENABLE_FAST_READ 
+        else if(wikrt_value_is_text(cx, v0)) {
+    
+            wikrt_val* const phd = wikrt_pval(cx, v0);
+            size_t const txt_bytes = phd[2] & 0xFFFF;
+            size_t const txt_chars = phd[2] >> 16;
+            size_t const output_byte_limit = (max_buffsz - (*buffsz));
+            size_t const output_char_limit = (max_charct - (*charct));
+            bool const output_limited = (txt_bytes > output_byte_limit) || (txt_chars > output_char_limit);
+            uint8_t const* const src = wikrt_paddr(cx, phd[3]);
+
+            if(output_limited) { 
+                // determine how much we can copy
+                size_t cct = 0;
+                size_t bct = 0;
+                do {
+                    size_t const k = utf8_readcp_size(src + bct);
+                    bool const limit_reached = 
+                        (output_char_limit == cct) ||
+                        ((bct + k) > output_byte_limit);
+                    if(limit_reached) { break; }
+                    cct += 1;
+                    bct += k;
+                } while(true);
+                
+                memcpy(dst + (*buffsz), src, bct);
+                (*buffsz) += bct;
+                (*charct) += cct;
+                phd[2] -= (((wikrt_size)cct << 16) | (wikrt_size)bct);
+                phd[3] += (wikrt_size)bct;
+                return WIKRT_BUFFSZ;
+
+            } else { // input limited
+                memcpy(dst + (*buffsz), src, txt_bytes);
+                (*buffsz) += txt_bytes;
+                (*charct) += txt_chars;
+                wikrt_pval(cx, cx->val)[0] = phd[1];
+            }
+        } 
+        #endif
+        else { // maybe terminal, maybe expandable
+
+            wikrt_size const step_mem = WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE;
+            if(!wikrt_mem_reserve(cx, step_mem)) { return WIKRT_CXFULL; } // may move cx->val
+            wikrt_val* const v = wikrt_pval(cx, cx->val);
+            bool inR;
+            wikrt_err const st = wikrt_unwrap_sum_rv(cx, &inR, v);
+            if(WIKRT_OK != st) { return st; }
+            wikrt_wrap_sum_rv(cx, inR, v); 
+            if(inR) { return WIKRT_OK; } 
+            
+            // unwrap/wrap should expand a list node.
+            if(!wikrt_pl(*v)) { return WIKRT_TYPE_ERROR; }
+
+        }
     } while(true);
 }
-#endif
 
-// introduce a medium-to-large big-integer by copying.
-static wikrt_err wikrt_intro_bigint(wikrt_cx* const cx, bool const positive
+// Allocate a large integer by copying a given array of digits.
+// Assumes a sufficient reserve.
+static wikrt_val wikrt_alloc_bigint_rv(wikrt_cx* const cx, bool const positive
     , uint32_t const* const dsrc, wikrt_size nDigits)
 {
-    assert(nDigits >= 2);
-    if(nDigits > WIKRT_BIGINT_MAX_DIGITS) { return WIKRT_IMPL; }
-    wikrt_size const isize = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
-    wikrt_sizeb const iszb = WIKRT_CELLBUFF(isize);
+    assert((2 <= nDigits) && (nDigits <= WIKRT_BIGINT_MAX_DIGITS));
+    wikrt_size const isize = WIKRT_SIZEOF_BIGINT(nDigits);
 
-    // space for the integer, plus one cell for the cx->val stack    
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE + iszb)) { return WIKRT_CXFULL; }
-
-    // copy our integer.
-    wikrt_addr const addr = wikrt_alloc_r(cx, iszb);
+    // copy our integer!
+    wikrt_addr const addr = wikrt_alloc_r(cx, WIKRT_CELLBUFF(isize));
     wikrt_val* const p = wikrt_paddr(cx, addr);
     p[0] = wikrt_mkotag_bigint(positive, nDigits);
     uint32_t* const dcpy = (uint32_t*)(1 + p);
@@ -1450,39 +1464,45 @@ static wikrt_err wikrt_intro_bigint(wikrt_cx* const cx, bool const positive
     for(wikrt_size ii = 2; ii < nDigits; ++ii) {
         dcpy[ii] = dsrc[ii];
     }
-    
-    // add value to stack
-    wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, addr));
-    return WIKRT_OK;
+    return wikrt_tag_addr(WIKRT_O, addr);
 }
     
-wikrt_err wikrt_intro_i32(wikrt_cx* cx, int32_t n) 
+wikrt_val wikrt_alloc_i32_rv(wikrt_cx* cx, int32_t n)
 {
     if((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX)) {
-        return wikrt_intro_smallval(cx, wikrt_i2v((wikrt_int)n));
-    }
+        return wikrt_i2v((wikrt_int)n);
+    } 
 
     bool positive;
     uint32_t d[2];
-    if(n != INT32_MIN) {
+    if(INT32_MIN != n) {
         _Static_assert(((INT32_MAX + INT32_MIN) == (-1)), "bad assumption (int32_t)");
         positive = (n >= 0);
         n = positive ? n : -n;
         d[0] = n % WIKRT_BIGINT_DIGIT;
         d[1] = n / WIKRT_BIGINT_DIGIT;
     } else {
+        // special case because -INT32_MIN is not represented in int32_t
         _Static_assert((-2147483648 == INT32_MIN), "unexpected INT32_MIN");
         positive = false;
-        d[1] = 2;
         d[0] = 147483648;
+        d[1] = 2;
     }
-    return wikrt_intro_bigint(cx, positive, d, 2);
+    return wikrt_alloc_bigint_rv(cx, positive, d, 2);
 }
 
-wikrt_err wikrt_intro_i64(wikrt_cx* cx, int64_t n) 
+wikrt_err wikrt_intro_i32(wikrt_cx* cx, int32_t n) 
+{
+    wikrt_size const max_alloc = WIKRT_ALLOC_I32_RESERVE + WIKRT_CELLSIZE;
+    if(!wikrt_mem_reserve(cx, max_alloc)) { return WIKRT_CXFULL; }
+    wikrt_intro_r(cx, wikrt_alloc_i32_rv(cx, n));
+    return WIKRT_OK;
+}
+
+wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t n)
 {
     if((WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX)) {
-        return wikrt_intro_smallval(cx, wikrt_i2v((wikrt_int)n));
+        return wikrt_i2v((wikrt_int)n);
     }
 
     bool positive;
@@ -1496,15 +1516,24 @@ wikrt_err wikrt_intro_i64(wikrt_cx* cx, int64_t n)
         d[1] = n % WIKRT_BIGINT_DIGIT;
         d[2] = n / WIKRT_BIGINT_DIGIT;
     } else {
+        // special case because -INT64_MIN is not represented in int64_t
         // GCC complains with the INT64_MIN constant given directly.
-        _Static_assert(((-9223372036854775807 - 1) == INT64_MIN), "unexpected INT64_MIN");
+        _Static_assert(((-9223372036854775807) == (1 + INT64_MIN)), "unexpected INT64_MIN");
         positive = false;
-        d[2] = 9;
-        d[1] = 223372036;
         d[0] = 854775808;
+        d[1] = 223372036;
+        d[2] = 9;
     }
     wikrt_size const nDigits = (0 == d[2]) ? 2 : 3;
-    return wikrt_intro_bigint(cx, positive, d, nDigits);
+    return wikrt_alloc_bigint_rv(cx, positive, d, nDigits);
+}
+
+wikrt_err wikrt_intro_i64(wikrt_cx* cx, int64_t n) 
+{
+    wikrt_size const max_alloc = WIKRT_ALLOC_I64_RESERVE + WIKRT_CELLSIZE;
+    if(!wikrt_mem_reserve(cx, max_alloc)) { return WIKRT_CXFULL; }
+    wikrt_intro_r(cx, wikrt_alloc_i64_rv(cx, n));
+    return WIKRT_OK;
 }
 
 wikrt_err wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
@@ -1544,7 +1573,6 @@ wikrt_err wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
         (*i32) = 0 - ((int32_t)d[1] * digit) - (int32_t)d[0];
         return WIKRT_OK;
     }
-    return wikrt_peek_i32_v(cx, wikrt_pval(cx, cx->val)[0], i32);
 }
 
 wikrt_err wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
@@ -1598,8 +1626,6 @@ wikrt_err wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
                    - ((int64_t)d[0]);
         return WIKRT_OK;
     }
-
-    return wikrt_peek_i64_v(cx, wikrt_pval(cx, cx->val)[0], i64);
 }
 
 // count digits to express a number
@@ -1609,7 +1635,7 @@ static inline size_t wikrt_decimal_size(uint32_t n) {
     return ct;
 }
 
-wikrt_err wikrt_peek_istr(wikrt_cx* cx, char* buff, size_t* buffsz)
+wikrt_err wikrt_peek_istr(wikrt_cx* cx, char* const buff, size_t* const buffsz)
 {
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];

@@ -24,7 +24,7 @@ static inline bool utf8_step(uint8_t const** s, size_t* byteLen, uint32_t* cp)
 }
 
 /** Return size of current codepoint (no validation). */
-static inline size_t utf8_cpsize(uint8_t const* s) 
+static inline size_t utf8_readcp_size(uint8_t const* s) 
 {
     uint8_t const c = *s;
     return  (c < 0x80) ? 1 :
