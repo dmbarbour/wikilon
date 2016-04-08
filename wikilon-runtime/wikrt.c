@@ -1748,10 +1748,10 @@ wikrt_err wikrt_intro_istr(wikrt_cx* cx, char const* const istr, size_t len)
 
     // handle smaller integers by simple translation to int64.
     // this simplifies identification of 'small' integers.
-    if(len <= 18) { // int64 can robustly handle 18 digits
+    if(len <= 18) { // int64 robustly supports 18 decimal digits
         int64_t iAbs = 0;
         do { iAbs = (10 * iAbs) + ((*s) - '0'); } while(++s != eos);
-        return wikrt_alloc_i64_v(cx, v, (positive ? iAbs : -iAbs));
+        return wikrt_intro_i64(cx, (positive ? iAbs : -iAbs));
     }
 
     // otherwise, perform an allocation.
@@ -1764,9 +1764,10 @@ wikrt_err wikrt_intro_istr(wikrt_cx* cx, char const* const istr, size_t len)
     if(nDigits > WIKRT_BIGINT_MAX_DIGITS) { return WIKRT_IMPL; }
     wikrt_size const isize = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
     wikrt_sizeb const iszb = WIKRT_CELLBUFF(isize);
+    wikrt_size const szReserve = iszb + WIKRT_CELLSIZE;
 
     // allocate everything we need
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE + iszb)) { return WIKRT_CXFULL; }
+    if(!wikrt_mem_reserve(cx, szReserve)) { return WIKRT_CXFULL; }
     wikrt_addr const addr = wikrt_alloc_r(cx, iszb);
     wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, addr));
 
@@ -1784,150 +1785,89 @@ wikrt_err wikrt_intro_istr(wikrt_cx* cx, char const* const istr, size_t len)
     for(size_t ii = 0; ii < upperDigitLen; ++ii) {
         ud = (10 * ud) + *(s++) - '0';
     }
-    d[innerDigitCt] = upperDigit;
+    d[innerDigitCt] = ud;
 
     assert(eos == s);
     return WIKRT_OK;
 }
-    
-/** @brief Add two integers. (I(a)*(I(b)*e))→(I(a+b)*e). */
+
+
+// Add two integers from stack.
 wikrt_err wikrt_int_add(wikrt_cx* cx)
 {
-    wikrt_val const a = cx->val;
-    if(wikrt_p(a)) {
-        wikrt_val* const pa = wikrt_pval(cx, a);
-        wikrt_val const b = pa[1];
-        if(wikrt_p(b)) {
-            wikrt_val* const pb = wikrt_pval(cx, b);
-            wikrt_val r = WIKRT_VOID;
-
-            // TODO: fix allocation/compaction safety for this.
-            //  at the moment, our values can easily move.
-            //  would a 'tmp' value register help? or maybe a second stack?
-
-            wikrt_err const st = wikrt_int_add_v(cx, *pb, *pa, &r);
-            if(WIKRT_OK != st) { return st; }
-            *pb = r;
-            cx->val = b;
-            return WIKRT_OK;
-        }
-    }
-    return WIKRT_TYPE_ERROR; // need (a*(b*e)) structure.
-}
-
-static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val n) {
-    return wikrt_i(n) || wikrt_bigint(cx,n); }
-
-wikrt_err wikrt_int_add_v(wikrt_cx* cx, wikrt_val a, wikrt_val b, wikrt_val* r)
-{
-    // optimally handle the small-integer cases.
+    // ensure correct types for addition.
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pabe = wikrt_pval(cx, cx->val);
+    if(!wikrt_p(pabe[1])) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pbe = wikrt_pval(cx, pabe[1]);
+    wikrt_val const a = *pabe;
+    wikrt_val const b = *pbe;
+    
+    // Optimize for common case: small integer addition.
     if(wikrt_i(a) && wikrt_i(b)) {
-        // two 31-bit ints add to one 32-bit int.
-        _Static_assert((INT32_MAX > (WIKRT_SMALLINT_MAX + WIKRT_SMALLINT_MAX)), "smallint add will overflow");
-        int32_t const sum = wikrt_v2i(a) + wikrt_v2i(b);
-        return wikrt_alloc_i32_v(cx, r, sum);
-    }
+        _Static_assert(((WIKRT_SMALLINT_MAX + WIKRT_SMALLINT_MAX) < INT32_MAX), "smallint add can overflow");
+        int32_t const sum = wikrt_v2i(*pabe) + wikrt_v2i(*pbe);
+        cx->val = pabe[1]; // drop `a`, keep slot for `b` to avoid allocation.
+        if(!wikrt_mem_reserve(cx, WIKRT_ALLOC_I32_RESERVE)) { return WIKRT_CXFULL; }
+        wikrt_pval(cx, cx->val)[0] = wikrt_alloc_i32_rv(cx, sum);
+        return WIKRT_OK;
+     }
+
+    // Ensure safe type for addition.
     bool const okType = wikrt_integer(cx,a) && wikrt_integer(cx,b);
     if(!okType) { return WIKRT_TYPE_ERROR; }
 
-    // Handling big integers is important, but for a spike solution the 
-    // small integers are probably sufficient.
-    
+    // Thoughts: try to add in place with carry, i.e. favor non-allocating
+    // add whenever feasible.
     return WIKRT_IMPL;
 }
 
-/** @brief Multiply two integers. (I(a)*(I(b)*e))→(I(a*b)*e). */
+// Multiply two integers from stack.
 wikrt_err wikrt_int_mul(wikrt_cx* cx)
 {
-    wikrt_val const a = cx->val;
-    if(wikrt_p(a)) {
-        wikrt_val* const pa = wikrt_pval(cx, a);
-        wikrt_val const b = pa[1];
-        if(wikrt_p(b)) {
-            wikrt_val* const pb = wikrt_pval(cx, b);
-            wikrt_val r = WIKRT_VOID;
-            wikrt_err const st = wikrt_int_mul_v(cx, *pb, *pa, &r);
-            if(WIKRT_OK != st) { return st; }
-            *pb = r;
-            cx->val = b;
-            wikrt_free(cx, WIKRT_CELLSIZE, wikrt_vaddr(a));
-            return WIKRT_OK;
-        }
-    }
-    return WIKRT_TYPE_ERROR; // need (a*(b*e)) structure.
-}
-
-wikrt_err wikrt_int_mul_v(wikrt_cx* cx, wikrt_val a, wikrt_val b, wikrt_val* r)
-{
-    // optimally handle the small-integer cases.
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pabe = wikrt_pval(cx,cx->val);
+    if(!wikrt_p(pabe[1])) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pbe = wikrt_pval(cx, pabe[1]);
+    wikrt_val const a = *pabe;
+    wikrt_val const b = *pbe;
+    
+    // Optimize for common case: small integer multiplication.
     if(wikrt_i(a) && wikrt_i(b)) {
-        // two 31-bit ints should multiply into one 62-bit int.
-        _Static_assert((INT64_MAX / WIKRT_SMALLINT_MAX) > WIKRT_SMALLINT_MAX, "smallint mul will overflow");
-        int64_t const prod = (int64_t)wikrt_v2i(a) * (int64_t)wikrt_v2i(b);
-        return wikrt_alloc_i64_v(cx, r, prod);
+        _Static_assert((INT64_MAX / WIKRT_SMALLINT_MAX) > WIKRT_SMALLINT_MAX, "smallint mul can overflow");
+        int64_t const prod = ((int64_t)wikrt_v2i(a)) * ((int64_t)wikrt_v2i(b));
+        cx->val = pabe[1]; // drop `a`, keep slot for `b` to avoid allocation.
+        if(!wikrt_mem_reserve(cx, WIKRT_ALLOC_I64_RESERVE)) { return WIKRT_CXFULL; }
+        wikrt_pval(cx, cx->val)[0] = wikrt_alloc_i64_rv(cx, prod);
+        return WIKRT_OK;
     }
-    bool const okType = wikrt_integer(cx,a) && wikrt_integer(cx,b);
+
+    // Ensure valid type for input.
+    bool const okType = wikrt_integer(cx, a) && wikrt_integer(cx, b);
     if(!okType) { return WIKRT_TYPE_ERROR; }
 
-    // Handling big integers is important, but for a spike solution the 
-    // small integers are probably sufficient.
-
+    // Multiply big integers.
     return WIKRT_IMPL;
 }
 
-/** @brief Negate an integer. (I(a)*e)→(I(-a)*e). */
+// Negate an integer. This operation is non-allocating.
 wikrt_err wikrt_int_neg(wikrt_cx* cx)
 {
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_int_neg_v(cx, wikrt_pval(cx, cx->val));
-}
-
-/* Negation of an integer is O(1) and non-allocating in Wikilon
- * runtime. We either flip a sign bit, or we negate a small int
- * from a known safe range. 
- *
- * Ensuring non-allocating negation is why SMALLINT_MIN is just the
- * negation of SMALLINT_MAX despite this leaving one element unused
- * in the representation.
- */
-wikrt_err wikrt_int_neg_v(wikrt_cx* cx, wikrt_val* v)
-{
-    if(wikrt_i(*v)) { 
-        _Static_assert((WIKRT_SMALLINT_MIN == (- WIKRT_SMALLINT_MAX)), "unsafe negation for small integers");
-        (*v) = wikrt_i2v(- wikrt_v2i(*v)); 
-        return WIKRT_OK;
-    } else if(wikrt_bigint(cx,(*v))) {
-        wikrt_val* const pv = wikrt_pval(cx,(*v));
-        (*pv) ^= (1 << 8); // flip the sign bit.
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+    if(wikrt_i(*v)) {
+        _Static_assert((WIKRT_SMALLINT_MIN == (- WIKRT_SMALLINT_MAX)), "small integer negation should be closed");
+        (*v) = wikrt_i2v(- wikrt_v2i(*v));
+        return WIKRT_OK; 
+    } else if(wikrt_bigint(cx, *v)) {
+        wikrt_val* const pv = wikrt_pval(cx, (*v));
+        (*pv) ^= (1 << 8); // flip the sign bit
         return WIKRT_OK;
     } else { return WIKRT_TYPE_ERROR; }
 }
 
-/* (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e)).
- */
-wikrt_err wikrt_int_div(wikrt_cx* cx) 
-{
-    wikrt_val const outer = cx->val;
-    if(wikrt_p(outer)) {
-        wikrt_val* const pouter = wikrt_pval(cx, outer);
-        wikrt_val const inner = pouter[1];
-        if(wikrt_p(inner)) {
-            wikrt_val* const pinner = wikrt_pval(cx, inner);
-            wikrt_val const divisor = pouter[0];
-            wikrt_val const dividend = pinner[0];
-            wikrt_val remainder = WIKRT_VOID;
-            wikrt_val quotient  = WIKRT_VOID;
-            wikrt_err const st = wikrt_int_div_v(cx, dividend, divisor, &quotient, &remainder);
-            if(WIKRT_OK != st) { return st; }
-            pouter[0] = remainder;
-            pinner[0] = quotient;
-            return WIKRT_OK;
-        }
-    }
-    return WIKRT_TYPE_ERROR;
-}
 
-static inline void wikrt_smallnum_divmod(wikrt_int dividend, wikrt_int divisor, wikrt_int* quot, wikrt_int* rem)
+static inline void wikrt_smallint_divmod(wikrt_int dividend, wikrt_int divisor, wikrt_int* quot, wikrt_int* rem)
 {
     // I need proper modulus, i.e. where the sign is the same
     // as the divisor. C11 instead guarantees that the % has
@@ -1949,28 +1889,30 @@ static inline void wikrt_smallnum_divmod(wikrt_int dividend, wikrt_int divisor, 
     }
 }
 
-/* Requires a non-zero divisor. We guarantee that the remainder is  
- * between zero (inclusive) and the divisor (exclusive). So this is
- * not quite identical to C `/` and `%` ops.
- */ 
-wikrt_err wikrt_int_div_v(wikrt_cx* cx, wikrt_val dividend, wikrt_val divisor, 
-    wikrt_val* quotient, wikrt_val* remainder)
+// (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e)).
+wikrt_err wikrt_int_div(wikrt_cx* cx) 
 {
-    // forbid div-by-zero (treated as a dependent type failure)
-    if(WIKRT_IZERO == divisor) { return WIKRT_TYPE_ERROR; }
+    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pouter = wikrt_pval(cx, cx->val);
+    if(!wikrt_p(pouter[1])) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pinner = wikrt_pval(cx, pouter[1]);
+    wikrt_val const divisor = pouter[0];
+    wikrt_val const dividend = pinner[0];
+    if(WIKRT_IZERO == divisor) { return WIKRT_TYPE_ERROR; } // div-by-zero
 
-    // optimally handle the small integer case
     if(wikrt_i(dividend) && wikrt_i(divisor)) {
+        // if our inputs are small-ints, so are our outputs.
         wikrt_int q,r;
-        wikrt_smallnum_divmod(wikrt_v2i(dividend), wikrt_v2i(divisor), &q, &r);
-        (*quotient) = wikrt_i2v(q);
-        (*remainder) = wikrt_i2v(r);
+        wikrt_smallint_divmod(wikrt_v2i(dividend), wikrt_v2i(divisor), &q, &r);
+        pouter[0] = wikrt_i2v(r);
+        pinner[0] = wikrt_i2v(q);
         return WIKRT_OK;
     }
-    bool const okType = wikrt_integer(cx,dividend) && wikrt_integer(cx,divisor);
+
+    bool const okType = wikrt_integer(cx,divisor) && wikrt_integer(cx, dividend);
     if(!okType) { return WIKRT_TYPE_ERROR; }
 
-    // TODO: support division with big numbers.
+    // TODO: support big number division
     return WIKRT_IMPL;
 }
 

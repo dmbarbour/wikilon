@@ -359,26 +359,18 @@ wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t);
 // most likely indicate a register as my target. Combining this responsibility
 // with introducing a value (e.g. adding it to our stack) is a mistake.
 
+// (after validating types...)
+//wikrt_err wikrt_bigint_add(wikrt_cx*);
+//wikrt_err wikrt_bigint_mul(wikrt_cx*);
+//wikrt_err wikrt_bigint_div(wikrt_cx*);
+
+// non-allocating comparison.
+wikrt_err wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b);
+
 #if 0
-wikrt_err wikrt_wrap_seal_v(wikrt_cx*, char const* tok, wikrt_val*);
-wikrt_err wikrt_unwrap_seal_v(wikrt_cx*, char* tokbuff, wikrt_val*);
-
-
-wikrt_err wikrt_alloc_binary_v(wikrt_cx*, wikrt_val*, uint8_t const*, size_t);
-wikrt_err wikrt_alloc_text_v(wikrt_cx*, wikrt_val*, char const*, size_t);
-wikrt_err wikrt_read_binary_v(wikrt_cx*, wikrt_val*, uint8_t*, size_t*);
-wikrt_err wikrt_read_text_v(wikrt_cx*, wikrt_val*, char* buff, size_t* bytes, size_t* chars);
-
 wikrt_err wikrt_quote_v(wikrt_cx*, wikrt_val*);
 wikrt_err wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* out);
 wikrt_err wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
-
-wikrt_err wikrt_int_add_v(wikrt_cx*, wikrt_val a, wikrt_val b, wikrt_val* r);
-wikrt_err wikrt_int_neg_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_int_mul_v(wikrt_cx*, wikrt_val a, wikrt_val b, wikrt_val* r);
-wikrt_err wikrt_int_div_v(wikrt_cx*, wikrt_val dividend, wikrt_val divisor, 
-    wikrt_val* quotient, wikrt_val* remainder);
-wikrt_err wikrt_int_cmp_v(wikrt_cx*, wikrt_val a, wikrt_ord*, wikrt_val b);
 #endif
 
 // return number of valid bytes and chars, up to given limits. Return
@@ -597,9 +589,9 @@ static inline bool wikrt_text_char(uint32_t c) {
     return !bInvalidChar;
 }
 
-
 static inline bool wikrt_bigint(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_bigint(*wikrt_pval(cx, v));
 }
-
-
+static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
+    return wikrt_i(v) || wikrt_bigint(cx,v); 
+}
