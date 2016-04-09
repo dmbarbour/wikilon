@@ -42,7 +42,7 @@ libwikilon-runtime.so: $(OBJECTS) wikrt.lds
 	$(CC) -shared -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@ -o $@ $(OBJECTS)
 
 # I'll add more files as I need them.
-wikrt.o: wikrt.c wikrt.h utf8.h lmdb/lmdb.h
+wikrt.o: wikrt.c wikrt.h utf8.h lmdb/lmdb.h wikilon-runtime.h
 	$(CC) -o $@ -c wikrt.c
 
 wikrt_db.o: wikrt_db.c wikrt.h futil.h lmdb/lmdb.h
