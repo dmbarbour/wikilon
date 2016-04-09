@@ -62,7 +62,6 @@ int fillcount(wikrt_cx* cx)
             wikrt_assocl(cx);
             ++ct;
         } else {
-            fprintf(stderr, "fill reached %d\n", ct);
             wikrt_drop(cx, NULL);
             return ct;
         }

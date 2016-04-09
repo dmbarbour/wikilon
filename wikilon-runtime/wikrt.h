@@ -12,7 +12,6 @@
 #include <stddef.h>
 #include <pthread.h>
 
-
 /** Value references internal to a context. */
 typedef uint32_t wikrt_val;
 #define WIKRT_VAL_MAX UINT32_MAX
@@ -440,7 +439,6 @@ struct wikrt_cx {
 
     // registers, root data
     wikrt_val           val;        // primary value 
-    wikrt_val           a,b,c,d;    // volatile registers
     wikrt_val           pc;         // program counter (eval)
     wikrt_val           cc;         // continuation stack (eval)
     wikrt_val           txn;        // transaction data
@@ -459,8 +457,7 @@ struct wikrt_cx {
     // Other... maybe move error tracking here?
 };
 // just for sanity checks
-#define WIKRT_CX_REGISTER_CT 8
-#define WIKRT_REG_VOL_INIT WIKRT_VOID /* for a,b,c,d */
+#define WIKRT_CX_REGISTER_CT 4
 #define WIKRT_REG_TXN_INIT WIKRT_UNIT_INR
 #define WIKRT_REG_PC_INIT WIKRT_UNIT_INR
 #define WIKRT_REG_CC_INIT WIKRT_UNIT_INR
@@ -524,20 +521,6 @@ static inline void wikrt_alloc_cellval_r(wikrt_cx* cx, wikrt_val* dst, wikrt_tag
 static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) {
     wikrt_alloc_cellval_r(cx, &(cx->val), WIKRT_P, v, cx->val); 
 }
-
-static inline wikrt_err wikrt_alloc_cellval(wikrt_cx* cx, wikrt_val* tgt, wikrt_tag tag, wikrt_val fst, wikrt_val snd)
-{
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
-    wikrt_alloc_cellval_r(cx, tgt, tag, fst, snd);
-    return WIKRT_OK;
-}
-
-static inline wikrt_err wikrt_intro_smallval(wikrt_cx* cx, wikrt_val v) {
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
-    wikrt_intro_r(cx, v);
-    return WIKRT_OK;
-}
-
 
 static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
     wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), v, ss); }

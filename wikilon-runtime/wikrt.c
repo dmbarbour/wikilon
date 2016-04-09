@@ -178,11 +178,7 @@ wikrt_err wikrt_cx_create(wikrt_env* e, wikrt_cx** ppCX, uint32_t cxSizeMB)
     cx->pc      = WIKRT_REG_PC_INIT;
     cx->cc      = WIKRT_REG_CC_INIT;
     cx->txn     = WIKRT_REG_TXN_INIT;
-    cx->a       = WIKRT_REG_VOL_INIT;
-    cx->b       = WIKRT_REG_VOL_INIT;
-    cx->c       = WIKRT_REG_VOL_INIT;
-    cx->d       = WIKRT_REG_VOL_INIT;
-    _Static_assert((8 == WIKRT_CX_REGISTER_CT), "todo: missing register initializations"); // maintenance check
+    _Static_assert((4 == WIKRT_CX_REGISTER_CT), "todo: missing register initializations"); // maintenance check
 
     wikrt_add_cx_to_env(cx);
 
@@ -266,16 +262,9 @@ void wikrt_mem_compact(wikrt_cx* cx)
     wikrt_copy_r(&cx0, cx0.cc,  NULL, cx, &(cx->cc));
     wikrt_copy_r(&cx0, cx0.pc,  NULL, cx, &(cx->pc));
     wikrt_copy_r(&cx0, cx0.val, NULL, cx, &(cx->val));
-    wikrt_copy_r(&cx0, cx0.d,   NULL, cx, &(cx->d));
-    wikrt_copy_r(&cx0, cx0.c,   NULL, cx, &(cx->c));
-    wikrt_copy_r(&cx0, cx0.b,   NULL, cx, &(cx->b));
-    wikrt_copy_r(&cx0, cx0.a,   NULL, cx, &(cx->a));
-    _Static_assert((8 == WIKRT_CX_REGISTER_CT), "todo: missing register compactions"); // maintenance check
+    _Static_assert((4 == WIKRT_CX_REGISTER_CT), "todo: missing register compactions"); // maintenance check
 
-
-    // refresh our semispace as if freshly mmap'd.
-    // This should help cut memory requirements, shifting instead to
-    // 'mere' address-space requirements.
+    // refresh semispace as if freshly mmap'd to reduce swap pressure.
     errno = 0;
     if(0 != madvise(cx->ssp, cx->size, MADV_DONTNEED)) {
         fprintf(stderr, "%s: madvise failed (%s)\n", __FUNCTION__, strerror(errno));
@@ -286,6 +275,9 @@ void wikrt_mem_compact(wikrt_cx* cx)
     // compaction size is useful for heuristic memory pressure.
     cx->compaction_count += 1;
     cx->compaction_size  = (cx->size - cx->alloc);
+
+    // sanity check: free space shouldn't shrink upon compaction.
+    assert(cx->alloc >= cx0.alloc);
 }
 
 bool wikrt_mem_try_reserve(wikrt_cx* cx, wikrt_size sz, bool* compacted) 
@@ -443,6 +435,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
         wikrt_val const v = (*dst);
         wikrt_tag const tag = wikrt_vtag(v);
         wikrt_val const* const pv = wikrt_pval(lcx, v);
+
         if(WIKRT_O != tag) {
             // WIKRT_P, WIKRT_PL, WIKRT_PR
             wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLSIZE);
@@ -480,7 +473,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
                     // hide substructure
                     dst = 1 + wikrt_paddr(rcx, addr);
                     (*dst) = pv[1];
-                    wikrt_copy_rs(rcx, lcx, NULL, s, dst);
+                    wikrt_copy_rs(lcx, rcx, NULL, s, dst);
                 } else {
                     wikrt_cpv(rcx, &s, pv, addr, 1);
                 }
@@ -672,11 +665,15 @@ wikrt_err wikrt_drop(wikrt_cx* cx, wikrt_ss* ss)
 }
 
 wikrt_err wikrt_intro_unit(wikrt_cx* cx) {
-    return wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, WIKRT_UNIT, cx->val); 
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
+    wikrt_alloc_cellval_r(cx, &(cx->val), WIKRT_P, WIKRT_UNIT, cx->val);
+    return WIKRT_OK;
 }
 
 wikrt_err wikrt_intro_unit_r(wikrt_cx* cx) {
-    return wikrt_alloc_cellval(cx, &(cx->val), WIKRT_P, cx->val, WIKRT_UNIT); 
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return WIKRT_CXFULL; }
+    wikrt_alloc_cellval_r(cx, &(cx->val), WIKRT_P, cx->val, WIKRT_UNIT);
+    return WIKRT_OK;
 }
 
 wikrt_err wikrt_elim_unit(wikrt_cx* cx)
@@ -883,7 +880,6 @@ void wikrt_wrap_sum_rv(wikrt_cx* cx, bool inRight, wikrt_val* v)
 
 wikrt_err wikrt_unwrap_sum(wikrt_cx* cx, bool* inRight) 
 {
-    // reserve space, move value into cx->a to simplify unwrap
     if(!wikrt_mem_reserve(cx, WIKRT_UNWRAP_SUM_RESERVE)) { return WIKRT_CXFULL; }
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
     return wikrt_unwrap_sum_rv(cx, inRight, wikrt_pval(cx, cx->val));
