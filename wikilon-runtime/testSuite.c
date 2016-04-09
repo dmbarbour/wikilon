@@ -5,8 +5,8 @@
 #include <assert.h>
 #include "wikilon-runtime.h"
 
-#define TESTCX_SIZE (WIKRT_CX_SIZE_MIN)
-#define TESTENV_SIZE (5 * TESTCX_SIZE)
+#define TESTCX_SIZE (WIKRT_CX_MIN_SIZE)
+#define TESTENV_SIZE (4 * TESTCX_SIZE)
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct); 
 int fillcount(wikrt_cx* cx); // exercise memory management code
@@ -32,21 +32,23 @@ int main(int argc, char const** argv) {
         return err;
     }
 
-
+    wikrt_intro_unit(cx);
+    wikrt_elim_unit(cx);
     int const fct0 = fillcount(cx);
 
     int tests_run = 0;
     int tests_passed = 0;
     run_tests(cx, &tests_run, &tests_passed);
+    fprintf(stdout, u8"Passed %d of %d Tests\n", tests_passed, tests_run);
 
     int const fctf = fillcount(cx);
+
+    fprintf(stdout, u8"Mem cells: %d → %d (%s)\n", fct0, fctf,
+        ((fct0 == fctf) ? "ok" : "memleak") );
 
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(e);
 
-    fprintf(stdout, u8"Mem cells: %d → %d (%s)\n", fct0, fctf,
-        ((fct0 == fctf) ? "ok" : "memleak") );
-    fprintf(stdout, u8"Passed %d of %d Tests\n", tests_passed, tests_run);
     return ((tests_run == tests_passed) ? ok : err);
 }
 
@@ -60,6 +62,7 @@ int fillcount(wikrt_cx* cx)
             wikrt_assocl(cx);
             ++ct;
         } else {
+            fprintf(stderr, "fill reached %d\n", ct);
             wikrt_drop(cx, NULL);
             return ct;
         }
@@ -452,7 +455,7 @@ static inline bool elim_list_end(wikrt_cx* cx)
 static inline bool elim_list_i32(wikrt_cx* cx, int32_t e)
 {
     bool inR;
-    int32_t a;
+    int32_t a = INT32_MIN;
     wikrt_err st = 0;
     st |= wikrt_unwrap_sum(cx, &inR);
     st |= wikrt_assocr(cx);
@@ -460,6 +463,9 @@ static inline bool elim_list_i32(wikrt_cx* cx, int32_t e)
     st |= wikrt_drop(cx, NULL);
 
     bool const ok = (WIKRT_OK == st) && !inR && (a == e);
+    if(!ok) {
+        fprintf(stderr, "elim list elem. st=%s, a=%d, e=%d\n", wikrt_strerr(st), (int)a, (int)e);
+    }
     return ok;
 }
 

@@ -52,12 +52,12 @@ typedef struct wikrt_db wikrt_db;
  * a table processing model.
  */
 typedef enum wikrt_opcode_ext
-{ ABCD_INLINE       = 105 // 'i' - vr$c
-, ABCD_TAILCALL     = 101 // 'e' - $c
-, ABCD_SWAP         = 115 // 's' - vrwlc
-, ABCD_SUM_SWAP     =  83 // 'S' - VRWLC
-, ABCD_UNIT         = 117 // 'u' - vvrwlc (or `vs`)
-, ABCD_INL          =  85 // 'U' - VVRWLC (or `VS`) 
+{ EXTOP_INLINE       = 105 // 'i' - vr$c
+, EXTOP_TAILCALL     = 101 // 'e' - $c
+, EXTOP_SWAP         = 115 // 's' - vrwlc
+, EXTOP_SUM_SWAP     =  83 // 'S' - VRWLC
+, EXTOP_UNIT         = 117 // 'u' - vvrwlc (or `vs`)
+, EXTOP_INL          =  85 // 'U' - VVRWLC (or `VS`) 
 } wikrt_opcode_ext;
 
 
@@ -366,7 +366,7 @@ wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t);
 
 // non-allocating comparison.
 wikrt_err wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b);
-
+wikrt_err wikrt_block_attrib(wikrt_cx* cx, wikrt_val attrib);
 #if 0
 wikrt_err wikrt_quote_v(wikrt_cx*, wikrt_val*);
 wikrt_err wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* out);
@@ -595,3 +595,7 @@ static inline bool wikrt_bigint(wikrt_cx* cx, wikrt_val v) {
 static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
     return wikrt_i(v) || wikrt_bigint(cx,v); 
 }
+static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
+    return wikrt_o(v) && wikrt_otag_block(*wikrt_pval(cx, v)); 
+}
+

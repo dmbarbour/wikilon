@@ -212,6 +212,10 @@ One of the bigger challenges will be supporting evaluation limits, i.e. effort q
 
 ## Parallelism
 
+## Static vs. Dynamic Typing?
+
+I'd like to eventually have access to an "assume static type safety" option for faster evaluation, i.e. skipping all the runtime checks. This might only work for JIT code, though.
+
 
 # older content
 

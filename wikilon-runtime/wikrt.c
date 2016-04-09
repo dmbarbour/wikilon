@@ -913,6 +913,7 @@ wikrt_err wikrt_unwrap_sum_rv(wikrt_cx* cx, bool* inRight, wikrt_val* v)
             } else { 
                 (*pv) = sf << 8 | WIKRT_OTAG_DEEPSUM;
             }
+            return WIKRT_OK;
         } else {
             // not a deepsum, but might still be array or stream or similar
             wikrt_err const st = wikrt_expand_sum_rv(cx, v);
@@ -929,7 +930,6 @@ wikrt_err wikrt_unwrap_sum_rv(wikrt_cx* cx, bool* inRight, wikrt_val* v)
 // I assume sufficient space is available (WIKRT_EXPAND_SUM_RESERVE). 
 // Currently, I allocate one cell at most for one WIKRT_PL list node.
 //
-// TODO: support logically reversed arrays
 wikrt_err wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v) 
 {
     if(!wikrt_o(*v)) { return WIKRT_TYPE_ERROR; }
@@ -950,7 +950,7 @@ wikrt_err wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v)
             uint8_t const* const buff = (uint8_t*) wikrt_paddr(cx,pv[3]);
             pv[3] += 1;
             pv[2] -= 1;
-            uint8_t const hd = *buff;
+            wikrt_val const hd = wikrt_i2v((wikrt_int)(*buff));
             wikrt_val const tl = (0 == pv[2]) ? pv[1] : (*v);
             wikrt_alloc_cellval_r(cx, v, WIKRT_PL, hd, tl);
         } return WIKRT_OK;
@@ -1798,8 +1798,9 @@ wikrt_err wikrt_int_add(wikrt_cx* cx)
     // ensure correct types for addition.
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
     wikrt_val* const pabe = wikrt_pval(cx, cx->val);
-    if(!wikrt_p(pabe[1])) { return WIKRT_TYPE_ERROR; }
-    wikrt_val* const pbe = wikrt_pval(cx, pabe[1]);
+    wikrt_val const be = pabe[1];
+    if(!wikrt_p(be)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pbe = wikrt_pval(cx, be);
     wikrt_val const a = *pabe;
     wikrt_val const b = *pbe;
     
@@ -1807,7 +1808,7 @@ wikrt_err wikrt_int_add(wikrt_cx* cx)
     if(wikrt_i(a) && wikrt_i(b)) {
         _Static_assert(((WIKRT_SMALLINT_MAX + WIKRT_SMALLINT_MAX) < INT32_MAX), "smallint add can overflow");
         int32_t const sum = wikrt_v2i(*pabe) + wikrt_v2i(*pbe);
-        cx->val = pabe[1]; // drop `a`, keep slot for `b` to avoid allocation.
+        cx->val = be; // drop `a`, keep slot for `b` to avoid allocation.
         if(!wikrt_mem_reserve(cx, WIKRT_ALLOC_I32_RESERVE)) { return WIKRT_CXFULL; }
         wikrt_pval(cx, cx->val)[0] = wikrt_alloc_i32_rv(cx, sum);
         return WIKRT_OK;
@@ -1827,8 +1828,9 @@ wikrt_err wikrt_int_mul(wikrt_cx* cx)
 {
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
     wikrt_val* const pabe = wikrt_pval(cx,cx->val);
-    if(!wikrt_p(pabe[1])) { return WIKRT_TYPE_ERROR; }
-    wikrt_val* const pbe = wikrt_pval(cx, pabe[1]);
+    wikrt_val const be = pabe[1];
+    if(!wikrt_p(be)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pbe = wikrt_pval(cx, be);
     wikrt_val const a = *pabe;
     wikrt_val const b = *pbe;
     
@@ -1836,7 +1838,7 @@ wikrt_err wikrt_int_mul(wikrt_cx* cx)
     if(wikrt_i(a) && wikrt_i(b)) {
         _Static_assert((INT64_MAX / WIKRT_SMALLINT_MAX) > WIKRT_SMALLINT_MAX, "smallint mul can overflow");
         int64_t const prod = ((int64_t)wikrt_v2i(a)) * ((int64_t)wikrt_v2i(b));
-        cx->val = pabe[1]; // drop `a`, keep slot for `b` to avoid allocation.
+        cx->val = be; // drop `a`, keep slot for `b` to avoid allocation.
         if(!wikrt_mem_reserve(cx, WIKRT_ALLOC_I64_RESERVE)) { return WIKRT_CXFULL; }
         wikrt_pval(cx, cx->val)[0] = wikrt_alloc_i64_rv(cx, prod);
         return WIKRT_OK;
@@ -1952,146 +1954,97 @@ wikrt_err wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b
     return WIKRT_IMPL;
 }
 
-
+// Quotation - capturing a value into a block in O(1) time.
 wikrt_err wikrt_quote(wikrt_cx* cx) 
 {
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_quote_v(cx, wikrt_pval(cx, cx->val));
-}
-
-wikrt_err wikrt_quote_v(wikrt_cx* cx, wikrt_val* v)
-{
-    // O(1) quotation via value capture:
-    //
-    //  (block, list) where:
-    //     list  = (opval, end-of-list)
-    //     opval = (tag, val)
-    //
-    // we need three pairs for this. 
-    // allocating in one block.
     wikrt_size const szAlloc = 3 * WIKRT_CELLSIZE;
-    
-    wikrt_addr addr;
-    if(!wikrt_alloc(cx, szAlloc, &addr)) { return WIKRT_CXFULL; }
-
-    wikrt_addr const opval = addr;
-    wikrt_addr const list  = addr + WIKRT_CELLSIZE;
-    wikrt_addr const block = addr + (2 * WIKRT_CELLSIZE);
-
-    wikrt_val* const popval = wikrt_paddr(cx, opval);
-    popval[0] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF;
-    popval[1] = (*v);
-
-    wikrt_val* const plist = wikrt_paddr(cx, list);
-    plist[0]  = wikrt_tag_addr(WIKRT_O, opval);
-    plist[1]  = WIKRT_UNIT_INR;
-
-    wikrt_val* const pblock = wikrt_paddr(cx, block);
-    pblock[0] = WIKRT_OTAG_BLOCK;
-    pblock[1] = wikrt_tag_addr(WIKRT_PL, list);
-
-    (*v) = wikrt_tag_addr(WIKRT_O, block);
-    return WIKRT_OK; 
-}
-
-wikrt_err wikrt_block_aff(wikrt_cx* cx)
-{
+    if(!wikrt_mem_reserve(cx, szAlloc)) { return WIKRT_CXFULL; }
     if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_block_attrib_v(cx, wikrt_pval(cx, cx->val), WIKRT_BLOCK_AFFINE);
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+
+    // (block, ((opval, (*v)), end-of-list))
+    wikrt_addr const a = wikrt_alloc_r(cx, szAlloc);
+    wikrt_val* const pa = wikrt_paddr(cx, a);
+    pa[0] = WIKRT_OTAG_BLOCK;
+    pa[1] = wikrt_tag_addr(WIKRT_PL, a + WIKRT_CELLSIZE);
+    pa[2] = wikrt_tag_addr(WIKRT_O, a + (2 * WIKRT_CELLSIZE));
+    pa[3] = WIKRT_UNIT_INR;
+    pa[4] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF;
+    pa[5] = (*v);
+    (*v) = wikrt_tag_addr(WIKRT_O, a);
+    return WIKRT_OK;
 }
 
-wikrt_err wikrt_block_rel(wikrt_cx* cx)
-{
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_block_attrib_v(cx, wikrt_pval(cx, cx->val), WIKRT_BLOCK_RELEVANT);
+wikrt_err wikrt_block_aff(wikrt_cx* cx) {
+    return wikrt_block_attrib(cx, WIKRT_BLOCK_AFFINE); 
 }
-
-wikrt_err wikrt_block_par(wikrt_cx* cx) 
-{
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    return wikrt_block_attrib_v(cx, wikrt_pval(cx, cx->val), WIKRT_BLOCK_PARALLEL);
+wikrt_err wikrt_block_rel(wikrt_cx* cx) {
+    return wikrt_block_attrib(cx, WIKRT_BLOCK_RELEVANT); 
 }
-
-wikrt_err wikrt_block_attrib_v(wikrt_cx* cx, wikrt_val* v, wikrt_val attrib) 
-{
-    if(!wikrt_o(*v)) { return WIKRT_TYPE_ERROR; }
-    wikrt_val* const pv = wikrt_pval(cx, (*v));
-    if(wikrt_otag_block(*pv)) { 
-        (*pv) |= attrib;
-        return WIKRT_OK;
-    } else { return WIKRT_TYPE_ERROR; }
+wikrt_err wikrt_block_par(wikrt_cx* cx) {
+    return wikrt_block_attrib(cx, WIKRT_BLOCK_PARALLEL);
 }
-
-/** Compose two blocks. ([a→b]*([b→c]*e))→([a→c]*e). */
-wikrt_err wikrt_compose(wikrt_cx* cx)
+wikrt_err wikrt_block_attrib(wikrt_cx* cx, wikrt_val attrib) 
 {
-    wikrt_val const a = cx->val;
-    if(wikrt_p(a)) {
-        wikrt_val* const pa = wikrt_pval(cx, a);
-        wikrt_val const b = pa[1];
-        if(wikrt_p(b)) {
-            wikrt_val* const pb = wikrt_pval(cx, b);
-            wikrt_val r = WIKRT_VOID;
-            wikrt_err const st = wikrt_compose_v(cx, *pa, *pb, &r);
-            if(WIKRT_OK != st) { return st; }
-            wikrt_free(cx, WIKRT_CELLSIZE, wikrt_vaddr(a));
-            pb[0] = r;
-            cx->val = b;
-            return WIKRT_OK;
+    if(wikrt_p(cx->val)) {
+        wikrt_val const v = wikrt_pval(cx, cx->val)[0];
+        if(wikrt_o(v)) {
+            wikrt_val* const pv = wikrt_pval(cx, v);
+            if(wikrt_otag_block(*pv)) {
+                (*pv) |= attrib;
+                return WIKRT_OK;
+            }
         }
     }
     return WIKRT_TYPE_ERROR;
 }
 
-static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val b) {
-    return wikrt_o(b) && wikrt_otag_block(*wikrt_pval(cx, b)); }
 
-/* At the moment, I want to ensure O(1) composition of blocks. 
- *
- * An easy technique is essentially to construct `[(a→b)]vr$c(b→c)`. This
- * leverages the WIKRT_OTAG_OPVAL type, and thus does not need to inspect
- * the main structure of either block. 
- *
- * I might be able to optimize a little by inspecting for composition of
- * a simple quotation, or track composition of 'small' blocks by inlining.
- * OTOH, I could also leave that for an annotation-driven simplification 
- * process.
- *
- * I don't want to be clever about this, so for now I'll favor composition
- * that doesn't require inspection.
- */
-wikrt_err wikrt_compose_v(wikrt_cx* cx, wikrt_val const ab, wikrt_val const bc, wikrt_val* out)
+// Compose two blocks in O(1) time. ([a→b]*([b→c]*e))→([a→c]*e).
+//
+// The most natural approach to composition in ABC is concatenation. However,
+// I'm not currently structuring blocks to make this trivial. An alternative
+// O(1) implementation involves producing:
+//
+//      [[a→b] inline b→c] 
+//
+// Here `inline` refers to ABC sequence `vr$c`. I can leverage EXTOP_INLINE as
+// an accelerator with that same behavior. This block may be simplified later
+// by proper inlining. 
+wikrt_err wikrt_compose(wikrt_cx* cx)
 {
-    bool const okType = wikrt_blockval(cx, ab) && wikrt_blockval(cx, bc);
+    wikrt_size const szAlloc = (2 * WIKRT_CELLSIZE); // + reusing one cell
+    if(!wikrt_mem_reserve(cx, szAlloc)) { return WIKRT_CXFULL; }
+
+    wikrt_val const abe = cx->val;
+    if(!wikrt_p(abe)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pabe = wikrt_pval(cx, abe);
+    wikrt_val const be = pabe[1];
+    if(!wikrt_p(be)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val* const pbe = wikrt_pval(cx, be);
+
+    wikrt_val const fn_ab = pabe[0];
+    wikrt_val const fn_bc = pbe[0];
+    bool const okType = wikrt_blockval(cx, fn_ab) 
+                     && wikrt_blockval(cx, fn_bc);
     if(!okType) { return WIKRT_TYPE_ERROR; }
 
-    wikrt_val* const pbc = wikrt_pval(cx, bc);
-    
-    wikrt_addr addr;
-    wikrt_size const szAlloc = 3 * WIKRT_CELLSIZE;
-    if(!wikrt_alloc(cx, szAlloc, &addr)) { return WIKRT_CXFULL; }
+    wikrt_addr const a = wikrt_alloc_r(cx, szAlloc);
+    wikrt_val* const pa = wikrt_paddr(cx, a);
+    wikrt_val* const pfnbc = wikrt_pval(cx, fn_bc);
 
-    wikrt_addr const addr_ap_bc = addr;
-    wikrt_addr const addr_ab_val = addr + WIKRT_CELLSIZE;
-    wikrt_addr const addr_ab_ap_bc = addr + (2 * WIKRT_CELLSIZE);
-
-    wikrt_val* const pap_bc = wikrt_paddr(cx, addr_ap_bc);
-    pap_bc[0] = wikrt_i2v(ABCD_INLINE); // apply a block inline
-    pap_bc[1] = pbc[1];                 // followd by bc ops (list)
-
-    wikrt_val* const pab_val = wikrt_paddr(cx, addr_ab_val);
-    pab_val[0] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF; // quoting
-    pab_val[1] = ab; // the ab block
-
-    wikrt_val* const pab_ap_bc = wikrt_paddr(cx, addr_ab_ap_bc);
-    pab_ap_bc[0] = wikrt_tag_addr(WIKRT_O, addr_ab_val);
-    pab_ap_bc[1] = wikrt_tag_addr(WIKRT_PL, addr_ap_bc);
-    
-    pbc[1] = wikrt_tag_addr(WIKRT_PL, addr_ab_ap_bc);
-
-    (*out) = bc;
-    return WIKRT_OK;     
+    cx->val = be; // drop the `[a→b]` stack element
+    pa[0] = wikrt_tag_addr(WIKRT_O, wikrt_vaddr(abe)); // reusing `([a→b]*_)` cell
+    pabe[0] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF;
+    pabe[1] = fn_ab;
+    pa[1] = wikrt_tag_addr(WIKRT_PL, a + WIKRT_CELLSIZE);
+    pa[2] = WIKRT_I2V(EXTOP_INLINE);
+    pa[3] = pfnbc[1];
+    pfnbc[1] = wikrt_tag_addr(WIKRT_PL, a); // [b→c] ⇒ [[a→b] inline b→c].
+    return WIKRT_OK;
 }
+
+
 
 
 
