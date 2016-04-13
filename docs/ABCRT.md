@@ -23,6 +23,8 @@ Also, it might be useful to support a second evaluation mode for type inference.
 
 I'll avoid using tokens or callbacks for side-effects at this time. I'd prefer to encourage effects models that can be easily simulated and tested in a purely functional ABC environment.
 
+NOTE: I must finish a 'fast' implementation before worrying about detailed performance issues.
+
 ## External Utilities
 
 I'll actually include a copy of these directly, no shared libs.
@@ -30,13 +32,13 @@ I'll actually include a copy of these directly, no shared libs.
 * LMDB - embedded key value database
 * Murmur3 - fast, collision-resistant hash 
 * ZSTD(?) - real-time, streaming compression
- * very promising, but not entirely stable
+ * promising... but not entirely stable
 
 ### Multi-Process Access?
 
-With LMDB, I have the opportunity to use a single-process or multi-process access to the database. Multi-process access to a database would be very convenient if I want to later develop shells, command-line interpreters, etc. to access this database in the background. But that isn't a use case for Wikilon. For now I should probably favor single-process access using a lockfile, since it's much easier (with LMDB) to go from single-process to multi-process than vice versa.
+With LMDB, I have the opportunity to use a single-process or multi-process access to the database. Multi-process access to a database would be very convenient if I want to later develop shells, command-line interpreters, etc. to access this database in the background. However, multi-process manipulation does complicate tracking for ephemeral stowage.
 
-If I do favor multi-process access, I'll need to somehow track ephemeral stowage references safely between processes. This is non-trivial.
+One option for ephemeron tracking is to maintain a bloom filter per context, recording stowage within each context. A simple 'mmap' file could suffice here, keeping a stack of filters. But it does seem more sophisticated than a single-process approach. For Wikilon, single-process should be sufficient for now.
 
 ## Structure
 
@@ -44,8 +46,7 @@ I need an *environment* bound to an underlying stowage and persistence model, e.
 
 Context is a contiguous region of memory, up to ~4GB enabling local 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage serves a similar role to virtual memory, but does not consume address space.
 
-In some cases, parallelism within a context could be useful. For this, I could support lightweight forks that share memory with our primary context. 
-
+In some cases, parallelism within a context could be useful. For this, I could support lightweight forks that share memory with our primary context.
 
 ### API Thoughts
 
@@ -62,6 +63,16 @@ Bump-pointer allocators, together with two-space collectors, should also serve m
 A compacting collector seems a good fit for Wikilon's common use cases. It's a stop-the-world collector, albeit constrained to a single thread. This shouldn't be a major issue for pure computations (no side effects to hurt latencies). It is feasible to combine a compacting collector with free-lists, to reuse the small spaces. However, I have doubts that adding this would offer sufficient benefit to pay for the complications it introduces. A two-space collector has the advantage of being delightfully simple.
 
 One concern is *parallelism*. With a two-space collector and bump-pointer allocation, I cannot efficiently support parallelism within a context. It would require too much synchronization, e.g. for bumping the pointer, for halting other threads during compaction, etc.. I can copy data to another context, however. And I could presumably leverage `{&par}` and `{&seq}` annotations to drive parallelism. 
+
+### Support for 'Shared' Objects?
+
+In some cases - e.g. for high performance loops in code - I may wish to have multiple references to a single object, perhaps with reference counting. In particular, I may want this for fixpoint functions to avoid deep-copying a block on every step. A difficulty with shared objects is copying the shared reference structure.
+
+This might be achieved most easily with a thin layer of indirection, i.e. such that I'm explicitly copying a reference rather than the shared value. Upon copying a reference, I am free to manage reference counts (if it's important). Alternatively, I could manage some form of bloom filter on references for conservative GC.
+
+My environment-level 'stowage' is already a shared space in this style. I might be able to leverage this, but I'd prefer to not mix responsibilities much. I could instead handle this at the `wikrt_env` layer, an implicit shared space for all contexts. Alternatively, I could handle this at the `wikrt_cx` layer. Doing so would complicate the copying of these shared objects between contexts. But it should also simplify cleanup. (It might be possible to have the best of both by moving shared objects from the local `wirkt_cx` to the shared `wikrt_env` upon a copy/move between contexts, or by use of hash tables for local structure sharing, etc.)
+
+Avoidance of deep-copy will likely prove essential for performance of blocks of code within tight loops from fixpoint functions, because this is the most common source of 'copying' in well designed ABC systems.
 
 ## Representations
 
@@ -127,17 +138,23 @@ To get started quickly, I'll implement a 'naive' block representation, consistin
 
         (block header, list of operations)
 
-Operations in a simple block are either small integers indicating a single opcode (possibly an accelerator), or quoted values (block, text, partial evaluation, quotation, etc.). Fast composition may be represented as quoting and inlining a block. Our block header will contain a few flags (affine, relevant, etc.). This naive representation may prove convenient as a base representation for simplification and compilation. 
+Operations in a block are either small integers indicating a single opcode (possibly an accelerator), or quoted values (block, text, partial evaluation, quotation, etc.). Fast composition may be represented as quoting and inlining a block. Our block header will contain a few flags (affine, relevant, etc.). This naive representation may prove convenient as a base representation for simplification and compilation. 
 
-A challenge for this representation of blocks is *precise, efficient, dynamic* tracking of substructural type attributes. Internal substructure from partial evaluation as in `[[xyzzy]kf]` mustn't be confused with external sub-structure from quotations like `[xyzzy]kf' == [[xyzzy]kf]kf`. For the moment, I'll just track this by recording a flag bit to perform latent substructure evaluation when copying or dropping quoted values. I'll otherwise suppress substructure checks.
+A challenge for this representation of blocks is *precise, efficient, dynamic* tracking of substructural type attributes. Internal substructure from partial evaluation as in `[[xyzzy]kf]` mustn't be confused with external sub-structure from quotations like `[xyzzy]kf' == [[xyzzy]kf]kf`. For the moment, I'll track substructure by recording a flag bit to track lazy substructure for quoted values.
 
-Long term, I'll want a more compact block representation that involves much less copying, and a variant for just-in-time compilations. I'd also like to shift most substructural type checking into static ahead-of-time computations.
+Long term, I'll also want *compact* blocks (e.g. a compact text plus a stack of quoted values, or internalizing quoted values similar to stowage) and *just-in-time compiled blocks*. These will be essential for performance at large scale.
 
-Additionally, I will need a means to convert a block to text for extraction purposes. This could be handled as a special case for streaming output (even if I don't support laziness in general). Or I could just perform this translation eagerly, which would probably be sufficient at least in the short and medium terms.
+#### Performance for Tight Loops
+
+Loops in ABC are performed by copying a block then applying one of the two copies in a tight fixpoint behavior. However, repeatedly creating deep copies of a block seems like a very bad idea for performance. How can we avoid doing so? 
+
+One option is to move the block into a separate non-copying space - a shared object space - such that we may process the block without copying it. We might need to copy quoted values, but quoted values containing blocks may in turn reference back into the shared space. This feature might be coupled with the notion of 'compact' blocks... and potentially with stowage.
+
+We can potentially have these shared objects be local to a context, i.e. keeping a stack of sorts. But having multi-context shared objects would have some advantages for performance (copying continuations, shared JIT efforts, etc.).
 
 #### Reading and Writing of Blocks?
 
-Injecting a block into bytecode is straightforward enough. But it is unfortunately unclear how to read a large block back into an output stream.
+To incrementally read a large block, we should first translate it into a large text or binary. For symmetry, pushing a large block into our code should transform large texts or binaries. The choice of text vs. binary is a bit more questionable, but the performance difference should be negligible. Either should work easily enough.
 
 #### Binding a Dictionary?
 
@@ -212,10 +229,13 @@ One of the bigger challenges will be supporting evaluation limits, i.e. effort q
 
 ## Parallelism
 
+Parallelism is perhaps most easily handled with paired annotations, e.g. a `{&fork}` annotation coupled to a `{&join}` annotation. The `{&fork}` annotation might apply to a lazy computation (like in Haskell) or perhaps as a specialized block attribute. 
+
+With parallelism and semi-space GC, I'll probably need *multiple* contexts. Or perhaps to (somehow) divide an existing context into several smaller fragments. Division of a context into multiple parts is feasible, at least. But it seems likely to become overly complicated. It should be a lot easier to just have a pool of small contexts for parallelism at the wikrt_env layer, or to create fresh contexts as needed.
+
 ## Static vs. Dynamic Typing?
 
-I'd like to eventually have access to an "assume static type safety" option for faster evaluation, i.e. skipping all the runtime checks. This might only work for JIT code, though.
-
+I'd like to eventually have access to an "assume static type safety" option for faster evaluation, i.e. skipping all the runtime checks. However, this might only work for compiled code. I might also need to add gateway checks for inputs.
 
 # older content
 

@@ -41,7 +41,6 @@
     
     wikrt_wrap_sum;
     wikrt_unwrap_sum;
-    wikrt_unwrap_match_sum;
 
     wikrt_intro_i32;
     wikrt_intro_i64;
@@ -52,16 +51,18 @@
 
     wikrt_intro_binary;
     wikrt_read_binary;
+
     wikrt_intro_text;
     wikrt_read_text;
-    wikrt_text_to_block;
-    wikrt_block_to_text;
 
     wikrt_wrap_seal;
     wikrt_unwrap_seal;
 
+    wikrt_text_to_block;
+    wikrt_block_to_text;
     wikrt_apply;
     wikrt_step_eval;
+
     wikrt_quote;
     wikrt_block_aff;
     wikrt_block_rel;

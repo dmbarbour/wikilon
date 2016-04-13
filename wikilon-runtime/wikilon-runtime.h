@@ -148,7 +148,7 @@ char const* wikrt_strerr(wikrt_err);
  * dynamic lib implements. This is just a simple sanity check.
  */
 uint32_t wikrt_api_ver();
-#define WIKRT_API_VER 20160401
+#define WIKRT_API_VER 20160413
 
 /** @brief Open or Create a Wikilon environment with given options. 
  *
@@ -185,8 +185,11 @@ void wikrt_env_sync(wikrt_env*);
  *
  * Note: Wikilon runtime currently uses 32-bit references within a context.
  * This limits context's active memory to about 4GB (cf WIKRT_CX_MAX_SIZE).
- * This reservation is currently doubled for the semi-space collector. If a
- * computation needs more than 4GB memory or data, it must leverage stowage.
+ *
+ * Note: Wikilon runtime contexts use considerably more address space than
+ * the requested allocation. On 64-bit systems, addres space is an abundant
+ * resource, so this should be a non-issue. On 32-bit systems, this reduces 
+ * the effective maximum context size to a few hundred megabytes.
  */
 wikrt_err wikrt_cx_create(wikrt_env*, wikrt_cx**, uint32_t cxSizeMB);
 
@@ -270,32 +273,6 @@ typedef enum wikrt_opcode
 , ABC_ASSERT      = 75   // K :: ((a+b)*e) → (b*e); assert in right
 } wikrt_opcode;
 
-/** @brief Options for bytecode serialization.
- *
- * Wikilon uses Awelon Bytecode (ABC) as its primary serialization model.
- * Any value may be quoted into a block then serialized to utf8 binary.
- * Conversely, we can compute values from bytecode.
- * 
- * While ABC is flexible, we can compress representation and accelerate
- * interpreted performance with ABCD (ABC Deflate) extensions. These use
- * a static, standardized dictionary to encode common ABC subprograms,
- * especially those amenable to hand optimization (e.g. list processing).
- *
- * We can also serialize with stowed resources, though this limits code
- * to round-tripping and requires careful design to ensure stowed data
- * is not GC'd. Stowed addresses include an HMAC to secure access to 
- * potentially sensitive data stowed by past computations.
- *
- * Use a bitwise 'or' of multiple abc options, always including 
- * WIKRT_ABC_PRIMOPS.
- */
-typedef enum wikrt_abc_opts 
-{ WIKRT_ABC_PRIMOPS = 1 // 42 primitive ops, texts, blocks
-, WIKRT_ABC_DEFLATE = 2 // enable known ABCD extensions
-, WIKRT_ABC_STOWAGE = 4 // enable stowed resource tokens
-} wikrt_abc_opts;
-
-
 /** @brief Supported ABCD operators as utf-8 C string.
  *
  * ABC and ABCD serialize to utf-8 text. The basic 42 ABC operators 
@@ -353,23 +330,18 @@ bool wikrt_valid_token(char const* s);
 
 /* Note: Thoughts on Reflection
  *
- * I've developed some experimental forms of reflection on structured
- * data for Wikilon, but I've not been satisfied with the results. The
- * motivation is for efficient debug rendering of data. Knowing that a
- * value is a pair or a sum can help dismantle it efficiently for the
- * rendering.
- *
- * The most precise way to extract structured data from Wikilon runtime
- * for arbitrary reflection is this: quote it as a block, extract that
- * block as text, then process said text. However, this method has a cost
- * proportional to amount of text generated, so it isn't lightweight. 
- *
- * An alternative is to rely on typesafe failure for most operations in
- * Wikilon, e.g. try 'assocl' to detect a pair, and 'unwrap_sum' to access
- * a sum, and 'elim_unit' to access a unit value. This should perform well
- * enough, and will exercise code that is used for other purposes. Special
- * rendering is easily associated with sealed values. 
+ * I've experimented with a few variations of reflection for Wikilon
+ * runtime. But I've not been very satisfied with the resulting API 
+ * and the underlying implementation.
  * 
+ * For most cases, Wikilon runtime should be assuming that computations
+ * are statically typed. Even something like debug rendering of data 
+ * could be tuned such that the caller provides rendering hints that
+ * encode type information. 
+ *
+ * If necessary, clients of Wikilon runtime may use brute force, e.g.
+ * use `unwrap_sum` on a suspected sum value and see if it returns a
+ * WIKRT_TYPE_ERROR.
  */ 
 
   /////////////////////////
@@ -609,17 +581,27 @@ wikrt_err wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
 
 /** @brief Managing bytecode.
  *
- * At the moment, bytecode must first be introduced as text, after which it
- * may be processed into a block of code. Conversions are (text*e)↔(block*e)
- * on success. At the moment, this is not failure-safe, though the only cost
- * is dropping the (alleged) text or block argument, i.e. (a*e)→e on failure.
+ * The primary way of injecting code into Wikilon runtime is to inject text
+ * (utf-8) then to translate that text into a block. Conversely, we may
+ * extract code translating it to a text then incrementally reading the text.
  *
- * A round-trip conversion should preserve the exact structure of the input, 
- * i.e. there is no implicit simplification. Running a simplifier or optimizer
- * is optional and separate.
+ * On success: (text*e) → (block*e)  (or the inverse)
+ * On failure: the text or block argument is dropped.
+ *
+ * There is no implicit simplification and very little optimization. A round
+ * trip conversion, if successful, returns exactly the same text as the input. 
+ * Simplification will be supported by a separate call.
+ *
+ * Wikilon runtime will parse ABC and ABCD extensions from `wikrt_opcode`, and
+ * arbitrary tokens within the constraints of `wikrt_valid_token`. However, the
+ * built-in evaluator won't necessarily know how to handle an arbitrary token.
+ * 
+ * 
+ * them will fail during evaluation (modulo annotations, which are ignored if
+ * not recognized).
  */
-wikrt_err wikrt_text_to_block(wikrt_cx*, wikrt_abc_opts);
-wikrt_err wikrt_block_to_text(wikrt_cx*, wikrt_abc_opts);
+wikrt_err wikrt_text_to_block(wikrt_cx*);
+wikrt_err wikrt_block_to_text(wikrt_cx*);
 
 /** @brief Wrap a value with a sealer token. (a * e)→((sealed a) * e). Fail-safe.
  *
@@ -657,19 +639,23 @@ wikrt_err wikrt_stow(wikrt_cx*);
 ////////////////
 /** @brief Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e). 
  *
- * This doesn't immediately perform the evaluation, but does prepare for
- * it. To complete the evaluation, proceed with `wikrt_step_eval` on the
- * pending value.
+ * This prepares a lazy evaluation of `b`. To complete the evaluation,
+ * use wikrt_step_eval on the pending value until complete.
  */
 wikrt_err wikrt_apply(wikrt_cx*);
 
 /** @brief Step an evaluation.  ((pending a) * e) → (a * e).
  *
- * This operation consumes an 'effort quota', which corresponds roughly
- * to megabytes allocated. Quotas are only tested at internal 'apply' 
- * (operator '$' or '?') actions, so are imprecise. If the quota reaches 
- * zero, we return WIKRT_QUOTA_STOP and our value remains pending (but
- * hopefully some progress has been made).
+ * This operation consumes an 'effort quota', which is heuristic in
+ * nature but corresponds roughly to megabytes allocated (including
+ * compactions). If the quota reaches zero, we return WIKRT_QUOTA_STOP
+ * and our value remains pending. It's also possible we'll halt with
+ * WIKRT_TYPE_ERROR or other errors. On WIKRT_OK, we have our final
+ * output value.
+ *
+ * Under consideration: Support a WIKRT_TOKEN_STOP when evaluation
+ * cannot continue because we encounter an unrecognized token. Enable
+ * the client to process the token and continue evaluation.
  */
 wikrt_err wikrt_step_eval(wikrt_cx*, uint32_t* effort);
 

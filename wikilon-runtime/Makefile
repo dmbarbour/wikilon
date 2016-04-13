@@ -5,7 +5,7 @@ THREADS := -pthread
 OPT := -O2 -flto
 CFLAGS := $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
-OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o utf8.o wikrt.o wikrt_db.o
+OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o utf8.o wikrt.o wikrt_parse.o wikrt_db.o
 INSTALL_PREFIX := /usr/local
 
 .PHONY: all lib clean install uninstall runtests
@@ -47,6 +47,9 @@ wikrt.o: wikrt.c wikrt.h utf8.h lmdb/lmdb.h wikilon-runtime.h
 
 wikrt_db.o: wikrt_db.c wikrt.h futil.h lmdb/lmdb.h
 	$(CC) -o $@ -c wikrt_db.c
+
+wikrt_parse.o: wikrt_parse.c wikrt.h wikilon-runtime.h utf8.h
+	$(CC) -o $@ -c wikrt_parse.c
 
 # unicode utilities
 utf8.o: utf8.c utf8.h

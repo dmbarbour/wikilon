@@ -145,7 +145,7 @@ static inline size_t utf8_writecp_unsafe(uint8_t* buff, uint32_t cp)
         return 3;
     } else {
         //11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
-        buff[0] = 0xF0 | (0x03 & (cp >> 18));
+        buff[0] = 0xF0 | (0x07 & (cp >> 18));
         buff[1] = 0x80 | (0x3F & (cp >> 12));
         buff[2] = 0x80 | (0x3F & (cp >>  6));
         buff[3] = 0x80 | (0x3F & (cp      ));

@@ -311,7 +311,6 @@ static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
     return (tag_data << 8) | WIKRT_OTAG_BIGINT;
 }
 
-
 /* Internal API calls. */
 wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
 
@@ -371,6 +370,8 @@ wikrt_err wikrt_quote_v(wikrt_cx*, wikrt_val*);
 wikrt_err wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* out);
 wikrt_err wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
 #endif
+
+#define WIKRT_ENABLE_FAST_READ 1
 
 // return number of valid bytes and chars, up to given limits. Return
 // 'true' only if all bytes were read or we stopped on a NUL terminal.
@@ -458,9 +459,9 @@ struct wikrt_cx {
 };
 // just for sanity checks
 #define WIKRT_CX_REGISTER_CT 4
-#define WIKRT_REG_TXN_INIT WIKRT_UNIT_INR
-#define WIKRT_REG_PC_INIT WIKRT_UNIT_INR
-#define WIKRT_REG_CC_INIT WIKRT_UNIT_INR
+#define WIKRT_REG_TXN_INIT WIKRT_VOID
+#define WIKRT_REG_PC_INIT WIKRT_VOID
+#define WIKRT_REG_CC_INIT WIKRT_VOID
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
 #define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
 
@@ -525,27 +526,26 @@ static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) {
 static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
     wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), v, ss); }
 
-// move value of type WIKRT_P, WIKRT_PL, or WIKRT_PR from `src` to `dst`.
-//  E.g. if src is `(a,b)` and dst is `c`, then after move we have (b) and (a,c).
-static inline void wikrt_reg_move(wikrt_cx* cx, wikrt_val* src, wikrt_val* dst)
-{
-    wikrt_val  const v = (*src);
-    wikrt_val* const pv = wikrt_pval(cx, v);
-    (*src)  = pv[1];
-    pv[1]   = (*dst);
-    (*dst)  = v;
-}
-
-// fast drop of top element from register stack.
-static inline void wikrt_reg_fast_drop(wikrt_cx* cx, wikrt_val* reg) {
-    (*reg) = wikrt_pval(cx, (*reg))[1]; 
-}
-
 static inline void wikrt_pval_swap(wikrt_val* a, wikrt_val* b) {
     wikrt_val const tmp = (*b);
     (*b) = (*a);
     (*a) = tmp;
 } 
+
+// non-allocating, data moving, fail-safe wswap
+static inline wikrt_err wikrt_wswap_v(wikrt_cx* cx, wikrt_val const abc) 
+{
+    if(wikrt_p(abc)) {
+        wikrt_val* const pabc = wikrt_pval(cx,abc);
+        wikrt_val  const bc   = pabc[1];
+        if(wikrt_p(bc)) {
+            wikrt_val* const pbc = wikrt_pval(cx,bc);
+            wikrt_pval_swap(pabc, pbc);
+            return WIKRT_OK;
+        }
+    }
+    return WIKRT_TYPE_ERROR;
+}
 
 // Other thoughts: It could be useful to keep free-lists regardless,
 // and allocate from them only after the bump-pointer arena is full
@@ -581,4 +581,3 @@ static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
 static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_block(*wikrt_pval(cx, v)); 
 }
-

@@ -217,6 +217,13 @@ void wikrt_remove_cx_from_env(wikrt_cx* cx)
 
 void wikrt_cx_destroy(wikrt_cx* cx) 
 {
+    // Clear data. This is more or less a NOP initially. If I develop
+    // refct objects in some future, this may become more critical.
+    wikrt_txn_abort(cx); // reset transaction (if any)
+    wikrt_drop_v(cx, cx->val, NULL); cx->val = WIKRT_REG_VAL_INIT;
+    wikrt_drop_v(cx, cx->cc, NULL);  cx->cc = WIKRT_REG_CC_INIT;
+    wikrt_drop_v(cx, cx->pc, NULL);  cx->pc = WIKRT_REG_PC_INIT;
+
     wikrt_remove_cx_from_env(cx);
 
     // free the memory-mapped region
@@ -692,22 +699,6 @@ wikrt_err wikrt_elim_unit_r(wikrt_cx* cx)
     if(WIKRT_UNIT != pv[1]) { return WIKRT_TYPE_ERROR; }
     cx->val = pv[0];
     return WIKRT_OK;
-}
-
-
-// non-allocating, data moving, fail-safe wswap
-static inline wikrt_err wikrt_wswap_v(wikrt_cx* cx, wikrt_val const abc) 
-{
-    if(wikrt_p(abc)) {
-        wikrt_val* const pabc = wikrt_pval(cx,abc);
-        wikrt_val  const bc   = pabc[1];
-        if(wikrt_p(bc)) {
-            wikrt_val* const pbc = wikrt_pval(cx,bc);
-            wikrt_pval_swap(pabc, pbc);
-            return WIKRT_OK;
-        }
-    }
-    return WIKRT_TYPE_ERROR;
 }
 
 /** (a*(b*c))→(b*(a*c)). ABC op `w` */
@@ -1232,7 +1223,7 @@ wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
         // obtain sufficient space.
         wikrt_size const szBuff = WIKRT_CELLBUFF(bytes);
         wikrt_size const szHdr  = (2 * WIKRT_CELLSIZE);
-        wikrt_size const szReserve = szHdr + szBuff + WIKRT_CELLSIZE;
+        wikrt_size const szReserve = szHdr + szBuff;
         if(!wikrt_mem_try_reserve(cx, szReserve, &compacted)) { 
             wikrt_drop(cx,NULL); return WIKRT_CXFULL; 
         }
@@ -1306,21 +1297,21 @@ wikrt_err wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
             wikrt_pval(cx,cx->val)[0] = pv[1]; // step next in list
 
         } 
-        // TODO: write tests for full and partial reads on binaries
-        #if defined(WIKRT_ENABLE_FAST_READ) && WIKRT_ENABLE_FAST_READ
+        #if WIKRT_ENABLE_FAST_READ
         else if(wikrt_value_is_binary(cx, v0)) { // compact binary
+            // optimize read for WIKRT_OTAG_BINARY
+            // (hdr, next, size, buffer)
             wikrt_val* const phd = wikrt_pval(cx, v0);
             size_t const output_size_limit = (max_bytes - (*bytes));
             bool const output_limited = phd[2] > output_size_limit; 
+            size_t const bytes_read = output_limited ? output_size_limit : phd[2];
+            memcpy(buff + (*bytes), wikrt_paddr(cx, phd[3]), bytes_read);
+            (*bytes) += bytes_read;
             if(output_limited) { // read as much binary as possible
-                memcpy(buff + (*bytes), wikrt_paddr(cx, phd[3]), output_size_limit);
-                phd[2] -= (wikrt_size)output_size_limit;
-                phd[3] += (wikrt_size)output_size_limit;
-                (*bytes) += output_size_limit;
+                phd[2] -= (wikrt_size) bytes_read;
+                phd[3] += (wikrt_size) bytes_read;
                 return WIKRT_BUFFSZ;
             } else { // binary is fully read
-                memcpy(buff + (*bytes), wikrt_paddr(cx, phd[3]), phd[2]);
-                (*bytes) += phd[2];
                 wikrt_pval(cx, cx->val)[0] = phd[1];
             }
         } 
@@ -1383,17 +1374,17 @@ wikrt_err wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* char
             wikrt_pval(cx, cx->val)[0] = pv[1]; // step to next element in list
 
         } 
-        // TODO: write tests for full and partial reads on texts
-        #if defined(WIKRT_ENABLE_FAST_READ) && WIKRT_ENABLE_FAST_READ 
+        #if WIKRT_ENABLE_FAST_READ
         else if(wikrt_value_is_text(cx, v0)) {
-    
+            // optimize read for WIKRT_OTAG_TEXT
+            // (hdr, next, (size-chars, size-bytes), buffer) 
             wikrt_val* const phd = wikrt_pval(cx, v0);
             size_t const txt_bytes = phd[2] & 0xFFFF;
             size_t const txt_chars = phd[2] >> 16;
             size_t const output_byte_limit = (max_buffsz - (*buffsz));
             size_t const output_char_limit = (max_charct - (*charct));
             bool const output_limited = (txt_bytes > output_byte_limit) || (txt_chars > output_char_limit);
-            uint8_t const* const src = wikrt_paddr(cx, phd[3]);
+            uint8_t const* const src = (uint8_t const*) wikrt_paddr(cx, phd[3]);
 
             if(output_limited) { 
                 // determine how much we can copy
@@ -2071,8 +2062,6 @@ wikrt_err wikrt_compose(wikrt_cx* cx)
 
 
 
-
-
   ///////////////////////////
  // TRANSACTION SUBSYSTEM //
 ///////////////////////////
@@ -2095,9 +2084,7 @@ bool wikrt_valid_key(char const* k)
 void wikrt_txn_abort(wikrt_cx* cx) 
 {
     // transactions are trivially recorded as values (for now).
-    
-    wikrt_drop_v(cx, cx->txn, NULL);
-    cx->txn = WIKRT_REG_TXN_INIT;
+    wikrt_drop_v(cx, cx->txn, NULL); cx->txn = WIKRT_REG_TXN_INIT;
 }
 
 void wikrt_txn_durable(wikrt_cx* cx)

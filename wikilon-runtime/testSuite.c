@@ -7,6 +7,7 @@
 
 #define TESTCX_SIZE (WIKRT_CX_MIN_SIZE)
 #define TESTENV_SIZE (4 * TESTCX_SIZE)
+#define TEST_FILL 1 
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct); 
 int fillcount(wikrt_cx* cx); // exercise memory management code
@@ -32,19 +33,20 @@ int main(int argc, char const** argv) {
         return err;
     }
 
-    wikrt_intro_unit(cx);
-    wikrt_elim_unit(cx);
+    #if TEST_FILL
     int const fct0 = fillcount(cx);
+    #endif
 
     int tests_run = 0;
     int tests_passed = 0;
     run_tests(cx, &tests_run, &tests_passed);
     fprintf(stdout, u8"Passed %d of %d Tests\n", tests_passed, tests_run);
 
+    #if TEST_FILL
     int const fctf = fillcount(cx);
-
     fprintf(stdout, u8"Mem cells: %d → %d (%s)\n", fct0, fctf,
         ((fct0 == fctf) ? "ok" : "memleak") );
+    #endif
 
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(e);
@@ -56,10 +58,14 @@ int fillcount(wikrt_cx* cx)
 {
     // just create a stack of units until we run out of space.
     // drop the value when finished.
-    int ct = 0;
+    
+    // base element of stack
+    if(WIKRT_OK != wikrt_intro_unit(cx)) { return 0; } 
+
+    int ct = 1;
     do {
         if(WIKRT_OK == wikrt_intro_unit(cx)) {
-            wikrt_assocl(cx);
+            wikrt_assocl(cx); 
             ++ct;
         } else {
             wikrt_drop(cx, NULL);
@@ -554,45 +560,67 @@ bool test_alloc_text(wikrt_cx* cx)
     return true;
 }
 
-bool test_read_binary(wikrt_cx* cx) 
+bool test_read_binary_chunks(wikrt_cx* cx, uint8_t const* buff, size_t buffsz, size_t const read_chunk) 
 {
-    size_t const buffsz = 12345;
-
-    uint8_t buff_write[buffsz];
-    fillbuff(buff_write, buffsz, buffsz);
-    wikrt_intro_binary(cx, buff_write, buffsz);
-
-    size_t bytes_read = buffsz;
-    uint8_t buff_read[buffsz];
-    wikrt_read_binary(cx, buff_read, &bytes_read);
-
-    if(0 != memcmp(buff_read, buff_write, buffsz)) {
-        char const* const msg = "binaries diverge";
-        fprintf(stderr, "%s\n", msg);
-        return false;
-    }
+    uint8_t buff_read[read_chunk];
+    size_t bytes_read;
+    wikrt_intro_binary(cx, buff, buffsz);
+    do {
+        bytes_read = read_chunk;
+        wikrt_read_binary(cx, buff_read, &bytes_read);
+        if(0 != memcmp(buff_read, buff, bytes_read)) { return false; }
+        buff += bytes_read;
+    } while(0 != bytes_read);
     return elim_list_end(cx);
 }
 
-bool test_read_text_s(wikrt_cx* cx, char const* s)
+
+bool test_read_binary(wikrt_cx* cx) 
+{
+    size_t const buffsz = 12345;
+    uint8_t buff[buffsz];
+    fillbuff(buff, buffsz, buffsz);
+    bool const ok = 
+        test_read_binary_chunks(cx, buff, buffsz, buffsz) &&
+        test_read_binary_chunks(cx, buff, buffsz, (buffsz - 1)) &&
+        test_read_binary_chunks(cx, buff, buffsz, (buffsz + 1)) &&
+        test_read_binary_chunks(cx, buff, buffsz, (buffsz / 3)) &&
+        test_read_binary_chunks(cx, buff, buffsz, (buffsz / 3) + 1) &&
+        test_read_binary_chunks(cx, buff, buffsz, (buffsz / 3) - 1) &&
+        test_read_binary_chunks(cx, buff, buffsz, (buffsz / 2)) && 
+        true;
+    return ok;
+}
+
+bool test_read_text_chunks(wikrt_cx* cx, char const* s, size_t const chunk_chars, size_t const chunk_bytes)
+{
+    char buff_read[chunk_bytes];
+    size_t bytes_read;
+    size_t chars_read;
+    wikrt_intro_text(cx, s, SIZE_MAX);
+    do {
+        bytes_read = chunk_bytes;
+        chars_read = chunk_chars;
+        wikrt_read_text(cx, buff_read, &bytes_read, &chars_read);
+        if(0 != memcmp(buff_read, s, bytes_read)) { return false; }
+        s += bytes_read;
+    } while(0 != bytes_read);
+    return elim_list_end(cx);
+}
+
+bool test_read_text_s(wikrt_cx* cx, char const* s) 
 {
     size_t const len = strlen(s);
-    wikrt_intro_text(cx, s, SIZE_MAX);
-    char buff[len + 1]; buff[len] = 0;
-
-    size_t readlen = SIZE_MAX;
-    wikrt_read_text(cx, buff, &readlen, NULL);
-    bool const ok = (readlen == len) && (0 == strcmp(s,buff)) && elim_list_end(cx);
-    if(!ok) {
-        fprintf(stderr, "could not read text: %s\n", s);
-    }
-    return ok;
+    return test_read_text_chunks(cx, s, SIZE_MAX, len)
+        && test_read_text_chunks(cx, s, SIZE_MAX, len + 1)
+        && test_read_text_chunks(cx, s, SIZE_MAX, 4)   
+        && test_read_text_chunks(cx, s, 1, 4);
 }
 
 bool test_read_text(wikrt_cx* cx) 
 {
-    return test_read_text_s(cx,"Hello, world!")
-        && test_read_text_s(cx,u8"←↖↑↗→↘↓↙")
+    return test_read_text_s(cx,"Hello, world! This is a test string.")
+        && test_read_text_s(cx,u8"←↖↑↗→↘↓↙←↖↑↗→↘↓↙←↖↑↗→↘↓↙←↖↑↗→↘↓↙←↖↑↗→")
         && test_read_text_s(cx,u8"★★★☆☆")
         && test_read_text_s(cx,u8"μL.((α*L)+β)")
         && test_read_text_s(cx,"");
@@ -752,7 +780,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_alloc_text);
     TCX(test_read_binary);
     TCX(test_read_text);
-    // TODO: partial reads on texts and binaries
+    // TODO: test at least one very large string (> 64kB)
 
     TCX(test_smallint_math);
     //TCX(test_bigint_math);
