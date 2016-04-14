@@ -779,8 +779,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_alloc_deepsum_RLR);
     TCX(test_alloc_deepsum_RRL);
     TCX(test_alloc_deepsum_RRR);
-    //TCX(test_alloc_deepsum_large);
-    //TCX(test_copy_deepsum);
+    TCX(test_alloc_deepsum_large);
+    TCX(test_copy_deepsum);
     // TODO: tests for sum_distrib and sum_factor
 
     TCX(test_valid_token);
