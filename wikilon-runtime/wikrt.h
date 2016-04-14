@@ -316,7 +316,7 @@ wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*);
 
 // wikrt_vsize_ssp: return space required to deep-copy a value. 
 //   Uses scratch space as a stack. May be bypassed if we can
-//   easily determine that we have sufficient size.
+//   efficiently determine that we have sufficient size.
 wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val v);
 #define WIKRT_ALLOW_SIZE_BYPASS 0
 
@@ -332,8 +332,8 @@ void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wi
 // at least for sophisticated multi-step operations.
 
 wikrt_err wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v);
-void wikrt_wrap_sum_rv(wikrt_cx*, bool inR, wikrt_val* v);
-wikrt_err wikrt_unwrap_sum_rv(wikrt_cx*, bool* inR, wikrt_val* v);
+void wikrt_wrap_sum_rv(wikrt_cx*, wikrt_sum_tag, wikrt_val* v);
+wikrt_err wikrt_unwrap_sum_rv(wikrt_cx*, wikrt_sum_tag*, wikrt_val* v);
 #define WIKRT_WRAP_SUM_RESERVE WIKRT_CELLSIZE
 #define WIKRT_EXPAND_SUM_RESERVE WIKRT_CELLSIZE
 #define WIKRT_UNWRAP_SUM_RESERVE WIKRT_EXPAND_SUM_RESERVE

@@ -148,7 +148,7 @@ char const* wikrt_strerr(wikrt_err);
  * dynamic lib implements. This is just a simple sanity check.
  */
 uint32_t wikrt_api_ver();
-#define WIKRT_API_VER 20160413
+#define WIKRT_API_VER 20160414
 
 /** @brief Open or Create a Wikilon environment with given options. 
  *
@@ -485,8 +485,9 @@ wikrt_err wikrt_elim_unit_r(wikrt_cx*);
  * sum value, does not require allocation and will not fail. Unwrap only
  * allocates when working with arrays or other compact representations.
  */
-wikrt_err wikrt_wrap_sum(wikrt_cx*, bool inRight);
-wikrt_err wikrt_unwrap_sum(wikrt_cx*, bool* inRight);
+typedef enum wikrt_sum_tag { WIKRT_INL = 0, WIKRT_INR = 1 } wikrt_sum_tag;
+wikrt_err wikrt_wrap_sum(wikrt_cx*, wikrt_sum_tag inRight);
+wikrt_err wikrt_unwrap_sum(wikrt_cx*, wikrt_sum_tag* inRight);
 
 // TODO: consider matching deeper structure.
 

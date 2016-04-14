@@ -84,13 +84,14 @@ bool test_unit(wikrt_cx* cx)
 
 static inline bool test_bool(wikrt_cx* cx, bool const bTest) 
 {
-    bool b; 
+    wikrt_sum_tag const t = bTest ? WIKRT_INR : WIKRT_INL;
+    wikrt_sum_tag b; 
     wikrt_err st = WIKRT_OK;
     st |= wikrt_intro_unit(cx);
-    st |= wikrt_wrap_sum(cx, bTest);
+    st |= wikrt_wrap_sum(cx, t);
     st |= wikrt_unwrap_sum(cx, &b);
     st |= wikrt_elim_unit(cx);
-    return (WIKRT_OK == st) && (bTest == b);
+    return (WIKRT_OK == st) && (t == b);
 }
 
 static inline bool test_true(wikrt_cx* cx) { return test_bool(cx, true); }
@@ -220,7 +221,8 @@ static inline void deepsum_path(wikrt_cx* cx, char const* s)
     size_t len = strlen(s);
     while(len > 0) {
         char const c = s[--len];
-        wikrt_wrap_sum(cx, ('R' == c));
+        wikrt_sum_tag const lr = ('R' == c) ? WIKRT_INR : WIKRT_INL;
+        wikrt_wrap_sum(cx, lr);
     }
 }
 
@@ -231,10 +233,15 @@ bool dismantle_deepsum_path(wikrt_cx* cx, char const* const sumstr)
     char const* ss = sumstr;
     while(ok && *ss) {
         char const c = *(ss++);
-        bool const expected_inR = ('R' == c);
-        bool actual_inR;
-        wikrt_err const st = wikrt_unwrap_sum(cx, &actual_inR);
-        ok = (WIKRT_OK == st) && (actual_inR == expected_inR);
+        wikrt_sum_tag lr;
+        wikrt_err const st = wikrt_unwrap_sum(cx, &lr);
+        bool const tagMatched = 
+            ((WIKRT_INL == lr) && ('L' == c)) ||
+            ((WIKRT_INR == lr) && ('R' == c));
+        ok = (WIKRT_OK == st) && tagMatched;
+    }
+    if(!ok) {
+        fprintf(stderr, "sum mismatch - %s at char %d\n", sumstr, (int)(ss - sumstr));
     }
     return ok && (WIKRT_OK == wikrt_elim_unit(cx));
 }
@@ -452,22 +459,23 @@ bool test_sealers(wikrt_cx* cx)
 
 static inline bool elim_list_end(wikrt_cx* cx) 
 {
-    bool inR;
-    return (WIKRT_OK == wikrt_unwrap_sum(cx, &inR))
-        && inR && (WIKRT_OK == wikrt_elim_unit(cx));
+    wikrt_sum_tag lr;
+    return (WIKRT_OK == wikrt_unwrap_sum(cx, &lr))
+        && (WIKRT_INR == lr) 
+        && (WIKRT_OK == wikrt_elim_unit(cx));
 }
 
 static inline bool elim_list_i32(wikrt_cx* cx, int32_t e)
 {
-    bool inR;
+    wikrt_sum_tag lr;
     int32_t a = INT32_MIN;
     wikrt_err st = 0;
-    st |= wikrt_unwrap_sum(cx, &inR);
+    st |= wikrt_unwrap_sum(cx, &lr);
     st |= wikrt_assocr(cx);
     st |= wikrt_peek_i32(cx, &a);
     st |= wikrt_drop(cx, NULL);
 
-    bool const ok = (WIKRT_OK == st) && !inR && (a == e);
+    bool const ok = (WIKRT_OK == st) && (WIKRT_INL == lr) && (a == e);
     if(!ok) {
         fprintf(stderr, "elim list elem. st=%s, a=%d, e=%d\n", wikrt_strerr(st), (int)a, (int)e);
     }
@@ -771,8 +779,9 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_alloc_deepsum_RLR);
     TCX(test_alloc_deepsum_RRL);
     TCX(test_alloc_deepsum_RRR);
-    TCX(test_alloc_deepsum_large);
-    TCX(test_copy_deepsum);
+    //TCX(test_alloc_deepsum_large);
+    //TCX(test_copy_deepsum);
+    // TODO: tests for sum_distrib and sum_factor
 
     TCX(test_valid_token);
     TCX(test_sealers);
@@ -781,6 +790,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_read_binary);
     TCX(test_read_text);
     // TODO: test at least one very large string (> 64kB)
+    
 
     TCX(test_smallint_math);
     //TCX(test_bigint_math);
