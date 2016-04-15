@@ -57,8 +57,6 @@ static inline size_t utf8_readcp_unsafe(uint8_t const* s, uint32_t* cp)
     }
 }
 
-size_t utf8_readcp_unsafe(uint8_t const* s, uint32_t* cp);
-
 /* read a codepoint, knowing one is there. */
 static inline uint32_t utf8_step_unsafe(uint8_t const** s)
 {
@@ -123,6 +121,7 @@ static inline size_t utf8_writecp_size(uint32_t cp) {
             (cp <= 0x7FF)   ? 2 :
             (cp <= 0xFFFF)  ? 3 : 4;
 }
+#define UTF8_MAX_CP_SIZE 4
 
 /** Write a codepoint to a buffer, assuming buffer has sufficient size.
  *  (conservatively, at least four bytes).

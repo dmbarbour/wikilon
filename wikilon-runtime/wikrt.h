@@ -65,8 +65,8 @@ typedef enum wikrt_opcode_ext
 #define WIKRT_LNBUFF_POW2(SZ,LN) (((SZ) + ((LN) - 1)) & ~((LN) - 1))
 #define WIKRT_CELLSIZE (2 * sizeof(wikrt_val))
 #define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
-#define WIKRT_PAGESIZE (1 << 17)
-#define WIKRT_PAGEBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_PAGESIZE)
+
+static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n); }
 
 // for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
@@ -378,6 +378,9 @@ wikrt_err wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
 // Here 'szchars' may be NULL.
 bool wikrt_valid_text_len(char const* s, size_t* szbytes, size_t* szchars);
 bool wikrt_valid_key_len(char const* s, size_t* szBytes);
+
+// given length, determine if we have a valid token
+bool wikrt_valid_token_l(char const* s, size_t len);
 
 /** @brief Stowage address is 64-bit address. 
  *

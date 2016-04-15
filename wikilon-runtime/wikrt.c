@@ -76,15 +76,17 @@ char const* wikrt_strerr(wikrt_err e) { switch(e) {
 
 // assumes normal form utf-8 argument, NUL-terminated
 bool wikrt_valid_token(char const* cstr) {
-    _Static_assert((sizeof(char) == sizeof(uint8_t)), "invalid cast from char* to utf8_t*");
-    uint8_t const* s = (uint8_t const*) cstr;
-    size_t len = strlen(cstr);
-    uint32_t cp;
+    return wikrt_valid_token_l(cstr, strlen(cstr));
+}
 
-    bool const validLen = ((0 < len) && (len < 64));
+bool wikrt_valid_token_l(char const* cstr, size_t len) {
+    _Static_assert((sizeof(char) == sizeof(uint8_t)), "invalid cast from char* to utf8_t*");
+    bool const validLen = ((0 < len) && (len < WIKRT_TOK_BUFFSZ));
     if(!validLen) { return false; }
 
-    while(len != 0) {
+    uint32_t cp;
+    uint8_t const* s = (uint8_t const*) cstr;
+    while(0 != len) {
         if(!utf8_step(&s,&len,&cp) || !wikrt_token_char(cp)) {
             return false;
         }
@@ -100,7 +102,6 @@ uint32_t wikrt_api_ver()
 
 wikrt_err wikrt_env_create(wikrt_env** ppEnv, char const* dirPath, uint32_t dbMaxMB) {
     _Static_assert(WIKRT_CELLSIZE == WIKRT_CELLBUFF(WIKRT_CELLSIZE), "cell size must be a power of two");
-    _Static_assert(WIKRT_PAGESIZE == WIKRT_PAGEBUFF(WIKRT_PAGESIZE), "page size must be a power of two");
     _Static_assert(WIKRT_SMALLINT_MAX >= (WIKRT_BIGINT_DIGIT - 1), "bigint should be at least two digits");
     _Static_assert(WIKRT_SMALLINT_MAX >= 0xFF, "smallint should be sufficient for binary values");
     _Static_assert(WIKRT_SMALLINT_MAX >= 0x10FFFF, "smallint should be sufficient for unicode codepoints");
@@ -381,36 +382,36 @@ wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val const v0)
             case WIKRT_OTAG_BIGINT: {
                 wikrt_size const nDigits = ((*pv) >> 9);
                 wikrt_size const szAlloc = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
-                result += WIKRT_CELLBUFF(szAlloc);
+                result += wikrt_cellbuff(szAlloc);
             } break;
             case WIKRT_OTAG_OPTOK: {
                 wikrt_size const toklen = ((*pv) >> 8);
                 wikrt_size const szAlloc = sizeof(wikrt_val) + toklen;
-                result += WIKRT_CELLBUFF(szAlloc);
+                result += wikrt_cellbuff(szAlloc);
             } break;
             case WIKRT_OTAG_SEAL: {
                 wikrt_size const toklen = ((*pv) >> 8);
                 wikrt_size const szAlloc = WIKRT_CELLSIZE + toklen;
-                result += WIKRT_CELLBUFF(szAlloc);
+                result += wikrt_cellbuff(szAlloc);
                 wikrt_add_size_task(&s,pv[1]); // sealed value
             } break;
             case WIKRT_OTAG_BINARY: {
                 // (hdr, next, size, buffer).
                 wikrt_size const bytect = pv[2];
-                result += (2 * WIKRT_CELLSIZE) + WIKRT_CELLBUFF(bytect);
+                result += (2 * WIKRT_CELLSIZE) + wikrt_cellbuff(bytect);
                 wikrt_add_size_task(&s, pv[1]); // continue list
             } break;
             case WIKRT_OTAG_TEXT: {
                 // (hdr, next, (size-chars, size_bytes), buffer).
                 wikrt_size const bytect = (pv[2] & 0xFFFF);
-                result += (2 * WIKRT_CELLSIZE) + WIKRT_CELLBUFF(bytect);
+                result += (2 * WIKRT_CELLSIZE) + wikrt_cellbuff(bytect);
                 wikrt_add_size_task(&s,pv[1]); // continue list
             } break;
             case WIKRT_OTAG_ARRAY: {
                 // (hdr, next, elemct, buffer).
                 wikrt_size const elemct = pv[2];
                 wikrt_size const buffsz = elemct * sizeof(wikrt_val);
-                result += (2 * WIKRT_CELLSIZE) + WIKRT_CELLBUFF(buffsz);
+                result += (2 * WIKRT_CELLSIZE) + wikrt_cellbuff(buffsz);
                 wikrt_val const* const parray = wikrt_paddr(cx, pv[3]);
                 for(wikrt_size ii = 0; ii < elemct; ++ii) {
                     wikrt_add_size_task(&s, parray[ii]);
@@ -500,7 +501,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
             case WIKRT_OTAG_OPTOK: {
                 wikrt_size const toklen = ((*pv) >> 8);
                 wikrt_size const szAlloc = sizeof(wikrt_val) + toklen;
-                wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(szAlloc));
+                wikrt_addr const addr = wikrt_alloc_r(rcx, wikrt_cellbuff(szAlloc));
                 (*dst) = wikrt_tag_addr(WIKRT_O, addr);
                 memcpy(wikrt_paddr(rcx, addr), pv, szAlloc);
             } break;
@@ -508,7 +509,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
             case WIKRT_OTAG_BIGINT: {
                 wikrt_size const nDigits = ((*pv) >> 9);
                 wikrt_size const szAlloc = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
-                wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(szAlloc));
+                wikrt_addr const addr = wikrt_alloc_r(rcx, wikrt_cellbuff(szAlloc));
                 (*dst) = wikrt_tag_addr(WIKRT_O, addr);
                 memcpy(wikrt_paddr(rcx, addr), pv, szAlloc);
             } break;
@@ -516,7 +517,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
             case WIKRT_OTAG_SEAL: {
                 wikrt_size const toklen = ((*pv) >> 8);
                 wikrt_size const szAlloc = WIKRT_CELLSIZE + toklen;
-                wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(szAlloc));
+                wikrt_addr const addr = wikrt_alloc_r(rcx, wikrt_cellbuff(szAlloc));
                 (*dst) = wikrt_tag_addr(WIKRT_O, addr);
                 memcpy(wikrt_paddr(rcx, addr), pv, szAlloc);
                 wikrt_cpv(rcx, &s, pv, addr, 1);
@@ -525,7 +526,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
             case WIKRT_OTAG_BINARY: {
                 // (hdr, next, size, buffer).
                 wikrt_size const bytect = pv[2];
-                wikrt_addr const buff = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(bytect));
+                wikrt_addr const buff = wikrt_alloc_r(rcx, wikrt_cellbuff(bytect));
                 memcpy(wikrt_paddr(rcx, buff), wikrt_paddr(lcx, pv[3]), bytect);
 
                 wikrt_addr const hdr = wikrt_alloc_r(rcx, (2 * WIKRT_CELLSIZE));
@@ -540,7 +541,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
             case WIKRT_OTAG_TEXT: {
                 // (hdr, next, (size-chars, size_bytes), buffer).
                 wikrt_size const bytect = (pv[2] & 0xFFFF);
-                wikrt_addr const buff = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(bytect));
+                wikrt_addr const buff = wikrt_alloc_r(rcx, wikrt_cellbuff(bytect));
                 memcpy(wikrt_paddr(rcx, buff), wikrt_paddr(lcx, pv[3]), bytect);
 
                 wikrt_addr const hdr = wikrt_alloc_r(rcx, (2 * WIKRT_CELLSIZE));
@@ -556,7 +557,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
                 // (hdr, next, elemct, buffer).
                 wikrt_size const elemct = pv[2];
                 wikrt_size const buffsz = elemct + sizeof(wikrt_val);
-                wikrt_addr const buff = wikrt_alloc_r(rcx, WIKRT_CELLBUFF(buffsz));
+                wikrt_addr const buff = wikrt_alloc_r(rcx, wikrt_cellbuff(buffsz));
                 wikrt_val const* const parray = wikrt_paddr(lcx, pv[3]);
                 for(wikrt_size ii = 0; ii < elemct; ++ii) {
                     wikrt_cpv(rcx, &s, parray, buff, ii);
@@ -803,7 +804,7 @@ wikrt_err wikrt_wrap_seal(wikrt_cx* cx, char const* s)
     } else {
         // WIKRT_OTAG_SEAL: general case, large or arbitrary sealers
         wikrt_size const szData  = WIKRT_CELLSIZE + len;
-        wikrt_size const szAlloc = WIKRT_CELLBUFF(szData); 
+        wikrt_size const szAlloc = wikrt_cellbuff(szData); 
         wikrt_addr const addr = wikrt_alloc_r(cx, szAlloc);
         wikrt_val* const pa = wikrt_paddr(cx, addr);
         wikrt_val* const pv = wikrt_pval(cx, cx->val);
@@ -1171,7 +1172,7 @@ wikrt_err wikrt_intro_binary(wikrt_cx* cx, uint8_t const* data, size_t len)
         "todo: improve resistance to size overflows");
     if(len >= ((size_t)WIKRT_CX_MAX_SIZE << 20)) { return WIKRT_CXFULL; }
 
-    wikrt_size const szBuff = WIKRT_CELLBUFF((wikrt_size)len);
+    wikrt_size const szBuff = wikrt_cellbuff((wikrt_size)len);
     wikrt_size const szAlloc = (3 * WIKRT_CELLSIZE) + szBuff;
     if(!wikrt_mem_reserve(cx, szAlloc)) { return WIKRT_CXFULL; }
 
@@ -1244,7 +1245,7 @@ wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
         if(0 == chars) { wikrt_drop(cx,NULL); return WIKRT_INVAL; }
 
         // obtain sufficient space.
-        wikrt_size const szBuff = WIKRT_CELLBUFF(bytes);
+        wikrt_size const szBuff = wikrt_cellbuff(bytes);
         wikrt_size const szHdr  = (2 * WIKRT_CELLSIZE);
         wikrt_size const szReserve = szHdr + szBuff;
         if(!wikrt_mem_try_reserve(cx, szReserve, &compacted)) { 
@@ -1465,7 +1466,7 @@ static wikrt_val wikrt_alloc_bigint_rv(wikrt_cx* const cx, bool const positive
     wikrt_size const isize = WIKRT_SIZEOF_BIGINT(nDigits);
 
     // copy our integer!
-    wikrt_addr const addr = wikrt_alloc_r(cx, WIKRT_CELLBUFF(isize));
+    wikrt_addr const addr = wikrt_alloc_r(cx, wikrt_cellbuff(isize));
     wikrt_val* const p = wikrt_paddr(cx, addr);
     p[0] = wikrt_mkotag_bigint(positive, nDigits);
     uint32_t* const dcpy = (uint32_t*)(1 + p);
@@ -1773,7 +1774,7 @@ wikrt_err wikrt_intro_istr(wikrt_cx* cx, char const* const istr, size_t len)
     size_t const nDigits = 1 + innerDigitCt;
     if(nDigits > WIKRT_BIGINT_MAX_DIGITS) { return WIKRT_IMPL; }
     wikrt_size const isize = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
-    wikrt_sizeb const iszb = WIKRT_CELLBUFF(isize);
+    wikrt_sizeb const iszb = wikrt_cellbuff(isize);
     wikrt_size const szReserve = iszb + WIKRT_CELLSIZE;
 
     // allocate everything we need

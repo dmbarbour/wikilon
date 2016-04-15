@@ -595,11 +595,7 @@ wikrt_err wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
  *
  * Wikilon runtime will parse ABC and ABCD extensions from `wikrt_opcode`, and
  * arbitrary tokens within the constraints of `wikrt_valid_token`. However, the
- * built-in evaluator won't necessarily know how to handle an arbitrary token.
- * 
- * 
- * them will fail during evaluation (modulo annotations, which are ignored if
- * not recognized).
+ * built-in evaluator won't necessarily handle arbitrary tokens.
  */
 wikrt_err wikrt_text_to_block(wikrt_cx*);
 wikrt_err wikrt_block_to_text(wikrt_cx*);
