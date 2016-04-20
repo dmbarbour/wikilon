@@ -1,5 +1,6 @@
 #include "utf8.h"
 
+
 static inline bool cc(uint32_t c) { return (0x80 == ((c) & 0xC0)); }
 static inline bool surrogate(uint32_t c) { return ((0xD800 <= c) && (c <= 0xDFFF)); }
 
@@ -11,6 +12,7 @@ inline bool isSurrogateCodepoint(uint32_t c) {
 
 size_t utf8_readcp(uint8_t const* const s, size_t const strlen, uint32_t* const r)
 {
+    _Static_assert((sizeof(uint8_t) == 1), "assuming uint8_t has size 1");
     if(0 == strlen) { goto e; }
 
     uint32_t const c0 = (*s);

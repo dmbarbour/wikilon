@@ -5,7 +5,8 @@ THREADS := -pthread
 OPT := -O2 -flto
 CFLAGS := $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
-OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o utf8.o wikrt.o wikrt_parse.o wikrt_db.o
+OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o utf8.o \
+    wikrt.o wikrt_parse.o wikrt_write.o wikrt_db.o
 INSTALL_PREFIX := /usr/local
 
 .PHONY: all lib clean install uninstall runtests
@@ -43,32 +44,35 @@ libwikilon-runtime.so: $(OBJECTS) wikrt.lds
 
 # I'll add more files as I need them.
 wikrt.o: wikrt.c wikrt.h utf8.h lmdb/lmdb.h wikilon-runtime.h
-	$(CC) -o $@ -c wikrt.c
+	$(CC) -o $@ -c $<
 
 wikrt_db.o: wikrt_db.c wikrt.h futil.h lmdb/lmdb.h
-	$(CC) -o $@ -c wikrt_db.c
+	$(CC) -o $@ -c $<
 
 wikrt_parse.o: wikrt_parse.c wikrt.h wikilon-runtime.h utf8.h
-	$(CC) -o $@ -c wikrt_parse.c
+	$(CC) -o $@ -c $<
+
+wikrt_write.o: wikrt_write.c wikrt.h wikilon-runtime.h utf8.h
+	$(CC) -o $@ -c $<
 
 # unicode utilities
 utf8.o: utf8.c utf8.h
-	$(CC) -o $@ -c utf8.c
+	$(CC) -o $@ -c $<
 
 # filesystem utilities
 futil.o: futil.c futil.h
-	$(CC) -o $@ -c futil.c
+	$(CC) -o $@ -c $<
 
 # Directly include copy of LMDB key-value database
 lmdb/mdb.o: lmdb/mdb.c lmdb/lmdb.h lmdb/midl.h
-	$(CC) -Ilmdb -o $@ -c lmdb/mdb.c 
+	$(CC) -Ilmdb -o $@ -c $<
 
 lmdb/midl.o: lmdb/midl.c lmdb/midl.h
-	$(CC) -Ilmdb -o $@ -c lmdb/midl.c
+	$(CC) -Ilmdb -o $@ -c $<
 
 # Directly include copy of Murmur3 hash
 murmur3/murmur3.o: murmur3/murmur3.c murmur3/murmur3.h
-	$(CC) -Imurmur3 -o $@ -c murmur3/murmur3.c
+	$(CC) -Imurmur3 -o $@ -c $<
 
 # Maybe introduce Keccak or Blake2? E.g. for HMAC on stowage?
 # Maybe introduce zstd to compress stowed data and streams

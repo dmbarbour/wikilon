@@ -556,7 +556,6 @@ bool test_read_binary_chunks(wikrt_cx* cx, uint8_t const* buff, size_t buffsz, s
 {
     uint8_t buff_read[read_chunk];
     size_t bytes_read;
-    wikrt_intro_binary(cx, buff, buffsz);
     do {
         bytes_read = read_chunk;
         wikrt_read_binary(cx, buff_read, &bytes_read);
@@ -572,6 +571,11 @@ bool test_read_binary(wikrt_cx* cx)
     size_t const buffsz = 12345;
     uint8_t buff[buffsz];
     fillbuff(buff, buffsz, buffsz);
+    wikrt_intro_binary(cx, buff, buffsz); // first copy
+    // need a total seven copies of the binary, for seven tests
+    wikrt_copy(cx, NULL); wikrt_copy(cx, NULL); wikrt_copy(cx, NULL);
+    wikrt_copy(cx, NULL); wikrt_copy(cx, NULL); wikrt_copy(cx, NULL);
+
     bool const ok = 
         test_read_binary_chunks(cx, buff, buffsz, buffsz) &&
         test_read_binary_chunks(cx, buff, buffsz, (buffsz - 1)) &&
@@ -589,7 +593,6 @@ bool test_read_text_chunks(wikrt_cx* cx, char const* s, size_t const chunk_chars
     char buff_read[chunk_bytes];
     size_t bytes_read;
     size_t chars_read;
-    wikrt_intro_text(cx, s, SIZE_MAX);
     do {
         bytes_read = chunk_bytes;
         chars_read = chunk_chars;
@@ -603,6 +606,9 @@ bool test_read_text_chunks(wikrt_cx* cx, char const* s, size_t const chunk_chars
 bool test_read_text_s(wikrt_cx* cx, char const* s) 
 {
     size_t const len = strlen(s);
+    wikrt_intro_text(cx, s, SIZE_MAX); // first copy
+    // need a total four copies of the text for four tests
+    wikrt_copy(cx, NULL); wikrt_copy(cx, NULL); wikrt_copy(cx, NULL);
     return test_read_text_chunks(cx, s, SIZE_MAX, len)
         && test_read_text_chunks(cx, s, SIZE_MAX, len + 1)
         && test_read_text_chunks(cx, s, SIZE_MAX, 4)   
@@ -755,7 +761,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
 
     #define TCX(T)                          \
-    {                                       \
+    do {                                    \
         ++(*runct);                         \
         bool const pass = T(cx);            \
         if(pass) { ++(*passct); }           \
@@ -763,7 +769,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
             char const* name = #T ;         \
             fprintf(stderr, errFmt, *runct, name);    \
         }                                   \
-    }
+    } while(0)
     
     TCX(test_tcx);
     TCX(test_unit);
@@ -818,6 +824,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_alloc_text);
     TCX(test_read_binary);
     TCX(test_read_text);
+    // TODO: test copy for binary and text
     // TODO: test at least one very large string (> 64kB)
     
 

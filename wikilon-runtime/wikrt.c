@@ -60,19 +60,32 @@ char const* wikrt_abcd_expansion(uint32_t opcode) { switch(opcode) {
     default: return NULL;
 }}
 
-char const* wikrt_strerr(wikrt_err e) { switch(e) {
-    case WIKRT_OK:              return "no error";
-    case WIKRT_INVAL:           return "invalid parameters, programmer error";
-    case WIKRT_IMPL:            return "reached limit of runtime implementation";
-    case WIKRT_DBERR:           return "filesystem or database layer error";
-    case WIKRT_NOMEM:           return "out of memory (malloc or mmap failure)";
-    case WIKRT_CXFULL:          return "context full, size quota reached";
-    case WIKRT_BUFFSZ:          return "target buffer too small";
-    case WIKRT_CONFLICT:        return "transaction conflict";
-    case WIKRT_QUOTA_STOP:      return "evaluation effort quota reached";
-    case WIKRT_TYPE_ERROR:      return "type mismatch";
-    default:                    return "unrecognized error code";
-}}
+char const* wikrt_strerr(wikrt_err e) { 
+    wikrt_err const all_errors
+        = WIKRT_OK | WIKRT_INVAL | WIKRT_IMPL | WIKRT_DBERR | WIKRT_NOMEM 
+        | WIKRT_CXFULL | WIKRT_BUFFSZ | WIKRT_CONFLICT | WIKRT_QUOTA_STOP 
+        | WIKRT_TYPE_ERROR ;
+
+    if(0 != (e & ~all_errors)) { 
+
+        return "unrecognized error code"; 
+
+    } else { switch(e) {
+
+        case WIKRT_OK:              return "no error";
+        case WIKRT_INVAL:           return "invalid parameters, programmer error";
+        case WIKRT_IMPL:            return "reached limit of runtime implementation";
+        case WIKRT_DBERR:           return "filesystem or database layer error";
+        case WIKRT_NOMEM:           return "out of memory (malloc or mmap failure)";
+        case WIKRT_CXFULL:          return "context full, size quota reached";
+        case WIKRT_BUFFSZ:          return "target buffer too small";
+        case WIKRT_CONFLICT:        return "transaction conflict";
+        case WIKRT_QUOTA_STOP:      return "evaluation effort quota reached";
+        case WIKRT_TYPE_ERROR:      return "type mismatch";
+        default:                    return "multiple errors";
+
+    }}
+}
 
 // assumes normal form utf-8 argument, NUL-terminated
 bool wikrt_valid_token(char const* cstr) {

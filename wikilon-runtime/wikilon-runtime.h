@@ -589,16 +589,25 @@ wikrt_err wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
  * On success: (text*e) → (block*e)  (or the inverse)
  * On failure: the text or block argument is dropped.
  *
- * There is no implicit simplification and very little optimization. A round
- * trip conversion, if successful, returns exactly the same text as the input. 
- * Simplification will be supported by a separate call.
- *
+ * There is no simplification or optimization. The code is not validated beyond
+ * ensuring it parses as bytecode. (I.e. type safety is not validated.) A round
+ * trip conversion from text to block to text should return the original text.
+ * Optimizations on a block must be performed by separate function calls. 
+ * 
  * Wikilon runtime will parse ABC and ABCD extensions from `wikrt_opcode`, and
  * arbitrary tokens within the constraints of `wikrt_valid_token`. However, the
  * built-in evaluator won't necessarily handle arbitrary tokens.
+ *
+ * NOTE: if you're using stowage, you may need to be careful to ensure a copy
+ * of the block remains in memory. Otherwise, stowed value references may be
+ * garbage collected. Text doesn't ensure a strong reference to a resource. 
  */
 wikrt_err wikrt_text_to_block(wikrt_cx*);
 wikrt_err wikrt_block_to_text(wikrt_cx*);
+
+// NOTE: I may later need options for how to handle stowed value references.
+// Also, I might want to expand ABC. Do I use tokens? Do I implicitly expand? 
+// For now, however, I'll treat stowed values as tokens wherever appropriate.
 
 /** @brief Wrap a value with a sealer token. (a * e)→((sealed a) * e). Fail-safe.
  *
@@ -617,7 +626,7 @@ wikrt_err wikrt_wrap_seal(wikrt_cx*, char const*);
  */
 wikrt_err wikrt_unwrap_seal(wikrt_cx*, char*);
 
-/** @brief Mark a value for stowage. (a * e) → ((stowed a) * e). Fail-safe.
+/** @brief Mark a value for stowage. (a * e) → ((stowed a) * e).
  *
  * Value stowage pushes a representation of the value to a backing database
  * and replaces its local representation by a small, unique key value. Use of
@@ -630,6 +639,11 @@ wikrt_err wikrt_unwrap_seal(wikrt_cx*, char*);
  * transaction.
  */
 wikrt_err wikrt_stow(wikrt_cx*);
+
+// NOTE: I'll eventually want some support for accessing the resource ID
+// for a stowed value. This would force stowage, rather than allow it to
+// happen lazily. Conversely, the ability to access a value by resource ID
+// could be very convenient. 
 
   ////////////////
  // EVALUATION //

@@ -30,21 +30,35 @@ NOTE: I must finish a 'fast' implementation before worrying about detailed perfo
 I'll actually include a copy of these directly, no shared libs.
 
 * LMDB - embedded key value database
+ * considering LevelDB and similar
 * Murmur3 - fast, collision-resistant hash 
 * ZSTD(?) - real-time, streaming compression
  * promising... but not entirely stable
 
 ### Multi-Process Access?
 
-With LMDB, I have the opportunity to use a single-process or multi-process access to the database. Multi-process access to a database would be very convenient if I want to later develop shells, command-line interpreters, etc. to access this database in the background. However, multi-process manipulation does complicate tracking for ephemeral stowage.
+With LMDB, I have the opportunity to use a single-process or multi-process access to the database. Multi-process access to a database would be very convenient if I want to later develop shells, command-line interpreters, etc. to access this database in the background. However, multi-process manipulation does complicate tracking of ephemeral values. 
 
-One option for ephemeron tracking is to maintain a bloom filter per context, recording stowage within each context. A simple 'mmap' file could suffice here, keeping a stack of filters. But it does seem more sophisticated than a single-process approach. For Wikilon, single-process should be sufficient for now.
+For my anticipated use case, multi-process access is not critical. Also, I can always develop command-line interpreters and shells that use HTTP queries against a local web service instead of direct access to the database.
+
+### LMDB vs. LevelDB?
+
+LMDB and LevelDB both are mature and efficient implementations of key-value databases backed by a filesystem. Both keep recently accessed or updated objects in memory. Both are effectively single-threaded writers and multi-threaded readers. LMDB mostly uses the OS as its background process (via `mmap`).
+
+LevelDB has the disadvantage of being a lot more sophisticated internally (with background threads, lots of value copies, etc.). But it does have two advantages worth considering:
+
+* LevelDB will automatically shrink due to compaction phases. 
+* LevelDB can compress large chunks, across multiple values
+
+Shrinking the database is *probably* a non-issue. Wikilon's expected use case is for monotonic growth, a little exponential decay as needed to limit the growth. I can *manually* compact a database if necessary, though it might require halting, and might require a fresh disk. (The fact that this compaction would mirror semi-space collection is kind of nice.)
+
+Compression is a minor concern, but it might improve performance by a fair margin.
 
 ## Structure
 
 I need an *environment* bound to an underlying stowage and persistence model, e.g. via LMDB. The environment may also be associated with worker threads for par-seq parallelism. I also need *contexts* that associate an environment with a heap of memory for computations. 
 
-Context is a contiguous region of memory, up to ~4GB enabling local 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage serves a similar role to virtual memory, but does not consume address space.
+Context is a contiguous region of memory, up to ~4GB enabling local 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage will serve a similar role to virtual memory, but does not consume the greater 'address space'.
 
 In some cases, parallelism within a context could be useful. For this, I could support lightweight forks that share memory with our primary context.
 
@@ -52,7 +66,9 @@ In some cases, parallelism within a context could be useful. For this, I could s
 
 Originally I was going for a more conventional API where values have handles outside the computation context. But I'm beginning to think this wasn't the best approach, that it would be better aligned with Awelon Bytecode to give each context a *single, implicit* value, a program environment that we manipulate just as we would a value within an ABC computation.
 
-Originally I was returning an error value for most API calls. I'm beginning to believe this is a bad idea. It complicates and clutters my client's API. It might be better to capture error state within a context after a stream of commands, and report that errors have occurred (upon request).
+Originally I was returning an error value for most API calls. I'm beginning to believe this is a bad idea. It complicates and clutters my client's API. It might prove better to capture error state within a context after a stream of commands, and report upon request that errors have occurred. 
+
+Alternatively, I can switch to using C++ internally with an efficient exceptions implementation. This would give me the 'zero cost' exceptions with a minimal use of runtime checks. However, this wouldn't be a good fit for the Haskell interaction...
 
 ### Memory Management
 
@@ -166,11 +182,11 @@ ABC's discretionary value sealers. I'll optimize for 3-character (or fewer) disc
 
 ### Value Stowage
 
-We annotate a value to moved to persistent storage, or transparently reverse this. 
+We annotate a value to moved to persistent storage, or reverse this. Originally, I wanted 'transparent' loading of stowed values, but in retrospect this was a bad design decision: e.g. instead of just "are you a pair?" I need to handle "are you a pair OR are you stowed?". So I've decided to instead leverage paired annotations, e.g. `{&stow}` and `{&load}`.
 
-It might be useful to align stowage with value sealers, i.e. such that stowage may only occur at sealed values. This would simplify processing of stowage because the 'transparent' stowage would only need to be handled at an unseal operation. Further, it would provide some typeful metadata around each node - relatively convenient for debugging. Conversely, having implicit stowage upon sealing a value could be convenient for space management purposes.
+For implementing stowage, I need to represent each value in the database. I may either use a dedicated internal representation, or I can aim for a sized 'copy' of a value, representing the database copy of the value as a sort of micro-context for `wikrt_copy_move`. The copy option seems promising for simplicity reasons. It greatly reduces the amount of specialized code I need to write and maintain. It would exactly preserve structure and information. I may need 'handlers' for copying stowage references and other special case values. 
 
-Alternatively, I could use coupled annotetions, e.g. `{&stow}` and `{&load}`, with the latter necessary to access a previously stowed value. But I do like the idea of coupling load instead to unseal except maybe as an option.
+A dedicated representation should be more compact, e.g. no need to encode addresses between cells. But, at least for now, I should favor simplicity over compaction. I can specialize some versioning features so I can later switch between these techniques.
 
 ### Computations
 
