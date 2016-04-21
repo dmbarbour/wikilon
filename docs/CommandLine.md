@@ -134,7 +134,7 @@ Claw uses namespace attributes to guide rendering and expansion. Some words cann
 
 A namespace attribute within a block is limited to the remaining scope of that block. In case of command sequences, namespaces also impact the commas. So developers will need to be aware of this.
 
-There is a proposal for *Qualified Namespaces*, below, that I'm still contemplating.
+There is a proposal for *Qualified Namespaces*, below, that I'm still contemplating. I'm not convinced it's a good idea, even if it could be useful in some limited contexts. (There is a trade-off between concision and sophistication of context sensitivity.)
 
 ## Claw Semantics and Round Tripping
 

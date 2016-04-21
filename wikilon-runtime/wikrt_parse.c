@@ -74,6 +74,8 @@ static void wikrt_reverse_opslist(wikrt_cx* cx)
 
 static bool wikrt_flush_parse_text(wikrt_cx* cx, wikrt_parse_state* p)
 {
+    _Static_assert((WIKRT_PARSE_BUFFSZ <= 0xFFFF), "parse buffer too large to trivially flush");
+
     if(0 == p->buffsz) { return true; } // nothing to flush
 
     // sanity check
@@ -108,17 +110,14 @@ static bool wikrt_flush_parse_text(wikrt_cx* cx, wikrt_parse_state* p)
     return true;
 }
 
-static bool wikrt_write_parse_text_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t cp) 
+static bool wikrt_parser_write_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t cp) 
 {
     _Static_assert((WIKRT_PARSE_BUFFSZ >= UTF8_MAX_CP_SIZE), "parse buffer too small to safely process text");
-    _Static_assert((WIKRT_PARSE_BUFFSZ <= 0xFFFF), "parse buffer too large to trivially flush to text chunk");
     p->charct += 1;
     p->buffsz += utf8_writecp_unsafe((p->buff + p->buffsz), cp);
     if(p->buffsz >= (WIKRT_PARSE_BUFFSZ - UTF8_MAX_CP_SIZE)) {
-        bool const okFlush = wikrt_flush_parse_text(cx, p);
-        if(!okFlush) { return false; }
-    }
-    return true;
+        return wikrt_flush_parse_text(cx, p);
+    } else { return true; }
 }
 
 // After we build a block or text, we'll need to push it into the
@@ -225,12 +224,13 @@ static wikrt_err wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint3
 
         // Prior LF must be followed by SP or ~
         if(' ' == cp) { // SP escapes prior LF
-            if(!wikrt_write_parse_text_char(cx, p, '\n')) { return WIKRT_CXFULL; }
+            if(!wikrt_parser_write_char(cx, p, '\n')) { return WIKRT_CXFULL; }
             p->type = WIKRT_PARSE_TXT;
         } else if('~' == cp) { // ~ terminates text 
             if(!wikrt_fini_parse_text(cx, p)) { return WIKRT_CXFULL; }
             p->type = WIKRT_PARSE_OP;
         } else { return WIKRT_TYPE_ERROR; }
+
     } return WIKRT_OK;
     case WIKRT_PARSE_TXT: {
         _Static_assert((10 == '\n'), "assuming '\\n' is 10, LF");
@@ -238,7 +238,7 @@ static wikrt_err wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint3
         // Within an embedded ABC text.
         if('\n' == cp) { p->type = WIKRT_PARSE_TXT_LF; }
         else if(!wikrt_text_char(cp)) { return WIKRT_TYPE_ERROR; }
-        else if(!wikrt_write_parse_text_char(cx, p, cp)) { return WIKRT_CXFULL; }
+        else if(!wikrt_parser_write_char(cx, p, cp)) { return WIKRT_CXFULL; }
 
     } return WIKRT_OK;
     case WIKRT_PARSE_OP: {
@@ -323,30 +323,34 @@ static inline wikrt_err wikrt_step_parse(wikrt_cx* cx, wikrt_parse_state* p, uin
 // (reversed ops * (unit * (emptyText * e))) → (block * e)
 static wikrt_err wikrt_fini_parse(wikrt_cx* cx, wikrt_parse_state* p) 
 {
-    bool const okParseState = (0 == p->depth) && (WIKRT_PARSE_OP == p->type);
+    wikrt_reverse_opslist(cx);  // (ops * (unit * (text * e)))
+    wikrt_assocl(cx);           // ((ops * unit) * (text * e))
 
-    wikrt_reverse_opslist(cx);
-    wikrt_assocl(cx); 
-    wikrt_wswap(cx); // (text * ((ops * unit) * e))
-
-    // Drop the empty text.
-    bool const atEndOfText = (WIKRT_UNIT_INR == wikrt_pval(cx, cx->val)[0]);
-    wikrt_drop(cx, NULL);
-
-    // Reuse the (ops * unit) cell as a (block ops) object.
+    // Reuse (ops * unit) cell as an `(OTAG_BLOCK ops)` object.
     wikrt_val* const v = wikrt_pval(cx, cx->val);
     wikrt_addr const a = wikrt_vaddr(*v);
     wikrt_val* const pa = wikrt_paddr(cx, a);
-    bool const atEndOfStack = (WIKRT_UNIT == pa[1]);
+    bool const stackIsEmpty = (WIKRT_UNIT == pa[1]);
     pa[1] = pa[0]; //
     pa[0] = WIKRT_OTAG_BLOCK;
     (*v) = wikrt_tag_addr(WIKRT_O, a);
 
-    bool const everythingIsOk = okParseState && atEndOfText && atEndOfStack;
-    if(!everythingIsOk) { 
+    wikrt_wswap(cx);            // (text * (block * e))
+
+    // Drop the empty text.
+    bool const textIsEmpty = (WIKRT_UNIT_INR == wikrt_pval(cx, cx->val)[0]);
+    wikrt_drop(cx, NULL); // drop text argument (even if not empty)
+
+    bool const validFinalParserState 
+         = (0 == p->depth) && stackIsEmpty
+        && (WIKRT_PARSE_OP == p->type) 
+        && textIsEmpty;
+        
+    if(!validFinalParserState) { 
         wikrt_drop(cx, NULL); // drop our block
         return WIKRT_TYPE_ERROR; 
     }
+
     return WIKRT_OK;
 }
 
@@ -376,27 +380,24 @@ wikrt_err wikrt_text_to_block(wikrt_cx* cx)
     // read and process the text!
     size_t const max_read = WIKRT_PARSE_READSZ;
     char buff[max_read];
-    size_t bytes_read;
+    do { // cx has (ops * (stack * (text * e)))
 
-    do { // (object * (stack * (text * e)))
-
-        // Read a chunk of text into our read buffer.
         wikrt_assocl(cx); wikrt_wswap(cx); // swizzle text to top
-        bytes_read = max_read;
+        size_t bytes_read = max_read;
         wikrt_read_text(cx, buff, &bytes_read, NULL);
         wikrt_wswap(cx); wikrt_assocr(cx); // swizzle text to bottom
 
         if(0 == bytes_read) { 
-            // If we didn't read anything, we're finished.
+            // possible success, or possible bad text
             return wikrt_fini_parse(cx, &p); 
-        } else {
-            // Otherwise, process the read buffer.
-            wikrt_err const status = wikrt_step_parse(cx, &p, (uint8_t const*) buff, bytes_read);
-            if(WIKRT_OK != status) {
-                // drop our object, stack, text values then fail.
-                wikrt_drop(cx, NULL); wikrt_drop(cx, NULL); wikrt_drop(cx, NULL);
-                return status;
-            }
         }
+
+        wikrt_err const st = wikrt_step_parse(cx, &p, (uint8_t const*) buff, bytes_read);
+        if(WIKRT_OK != st) { // drop ops, stack, text
+            wikrt_drop(cx, NULL); wikrt_drop(cx, NULL); wikrt_drop(cx, NULL);
+            return st;
+        }
+
     } while(true);
+
 }

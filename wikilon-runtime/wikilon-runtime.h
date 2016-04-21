@@ -148,7 +148,7 @@ char const* wikrt_strerr(wikrt_err);
  * dynamic lib implements. This is just a simple sanity check.
  */
 uint32_t wikrt_api_ver();
-#define WIKRT_API_VER 20160414
+#define WIKRT_API_VER 20160421
 
 /** @brief Open or Create a Wikilon environment with given options. 
  *
@@ -582,32 +582,29 @@ wikrt_err wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
 
 /** @brief Managing bytecode.
  *
- * The primary way of injecting code into Wikilon runtime is to inject text
- * (utf-8) then to translate that text into a block. Conversely, we may
- * extract code translating it to a text then incrementally reading the text.
+ * These are two essential functions for Wikilon runtime. Introducing text
+ * containing bytecode, then parse that text into a block of code. Evaluate.
+ * Conversely, quote values and convert to text as basis for serialization. 
  *
- * On success: (text*e) → (block*e)  (or the inverse)
- * On failure: the text or block argument is dropped.
+ * Awelon Bytecode (ABC) is designed to be a printable subset of UTF-8. The
+ * primitive operations are within the ASCII subset, but texts, tokens, and 
+ * ABCD extensions will leverage the larger UTF-8 space. See wikrt_opcode 
+ * for the available opcodes (which match unicode codepoints). Anyhow, we 
+ * convert blocks to and from valid texts (cf. wikrt_intro_text). 
  *
- * There is no simplification or optimization. The code is not validated beyond
- * ensuring it parses as bytecode. (I.e. type safety is not validated.) A round
+ * On success: (text*e) → (block*e)    (or inverse)
+ * On failure: drops alleged text or block argument
+ *
+ * There is no simplification or optimization. The text is not validated beyond
+ * ensuring it parses as bytecode. (E.g. type safety is not validated.) A round
  * trip conversion from text to block to text should return the original text.
- * Optimizations on a block must be performed by separate function calls. 
- * 
- * Wikilon runtime will parse ABC and ABCD extensions from `wikrt_opcode`, and
- * arbitrary tokens within the constraints of `wikrt_valid_token`. However, the
- * built-in evaluator won't necessarily handle arbitrary tokens.
+ * Further processing of a block will require separate function calls.
  *
- * NOTE: if you're using stowage, you may need to be careful to ensure a copy
- * of the block remains in memory. Otherwise, stowed value references may be
- * garbage collected. Text doesn't ensure a strong reference to a resource. 
+ * NOTE: The `[]` for the toplevel block is implicit, both for input and output. 
+ * NOTE: See wikrt_peek_sv about interaction with value stowage.
  */
 wikrt_err wikrt_text_to_block(wikrt_cx*);
 wikrt_err wikrt_block_to_text(wikrt_cx*);
-
-// NOTE: I may later need options for how to handle stowed value references.
-// Also, I might want to expand ABC. Do I use tokens? Do I implicitly expand? 
-// For now, however, I'll treat stowed values as tokens wherever appropriate.
 
 /** @brief Wrap a value with a sealer token. (a * e)→((sealed a) * e). Fail-safe.
  *
@@ -628,19 +625,86 @@ wikrt_err wikrt_unwrap_seal(wikrt_cx*, char*);
 
 /** @brief Mark a value for stowage. (a * e) → ((stowed a) * e).
  *
- * Value stowage pushes a representation of the value to a backing database
- * and replaces its local representation by a small, unique key value. Use of
- * structure sharing helps mitigate space usage for common computations.
+ * This corresponds to annotation {&stow}. Stowage moves a value to a backing
+ * database, leaving a much smaller 'key' value in its place. The value may
+ * subsequently be accessed via {&load}. This fulfills the roles of virtual
+ * memory and filesystems, albeit in a manner friendly to purely functional
+ * computation.
  *
- * Stowage is lazy for important performance reasons. When constructing a
- * tree with stowed nodes, nodes near the root will be accessed and updated
- * frequently and so should not be stowed immediately. Instead, stowage will
- * tend to wait until there is memory pressure or it is necessary for some
- * transaction.
+ * For performance reasons, stowage is lazy. This allows a computation that
+ * loads, updates, and stows a value in a tight loop to avoid unnecessary
+ * traffic with the backing database. Stowage will happens heuristically. 
+ * However, stowage can be forced by subsequent use of wikrt_peek_sv.
+ *
+ * In Wikilon runtime, stowage is implicitly coupled with structure sharing.
+ * That is, values with identical representation will have the same resource 
+ * identifier. However, this isn't strongly normalizing - a value may have 
+ * more than one representation, and hence more than one ID. Also, after GC,
+ * a value may be bound to a fresh resource ID.
  */
 wikrt_err wikrt_stow(wikrt_cx*);
 
-// NOTE: I'll eventually want some support for accessing the resource ID
+/** @brief Load a stowed value. ((stowed a) * e) → (a * e).
+ *
+ * This corresponds to annotation {&load}. We'll copy the stowed value
+ * from our backing database into active memory. If the value was not 
+ * yet stowed due to laziness, we'll simply unwrap the stowage marker.
+ */
+wikrt_err wikrt_load(wikrt_cx*);
+
+/** @brief Inject a stowed value by resource ID. e → ((stowed a) * e)
+ *
+ * A typical resource token might look like {'/environmentId/resourceId},
+ * and includes authentication (e.g. via HMAC). Substructural type info
+ * is also included, e.g. {'kf/environmentId/resourceId} would indicate
+ * a relevant (k) and affine (f) value resource ('), hence restricting 
+ * use of ABC copy ^ and drop % ops.
+ *
+ * With wikrt_intro_sv, you'll use the token text, i.e. dropping the {}
+ * curly braces but including the initial `'` character. The resource ID
+ * must be a valid token (cf. wikrt_valid_token). This token is generally
+ * obtained via `wikrt_peek_sv` or `wikrt_block_to_text`.
+ *
+ * Introducing a stowed value by ID may fail for a variety of reasons.
+ *
+ * - value is bound to the wrong environment
+ * - authentication failure of the resource ID
+ * - resource ID has since been GC'd
+ *
+ * In these cases, I'll return WIKRT_INVAL but leave a placeholder on
+ * the stack (and `wikrt_load` will fail instead). We may fail for more
+ * mundane reasons - an unparseable resource token (WIKRT_TYPE_ERROR) or
+ * a full context (WIKRT_CXFULL). For those, our context is unmodified.
+ */
+wikrt_err wikrt_intro_sv(wikrt_cx*, char const* resourceId);
+
+/** @brief Access resource ID for a stowed value. Non-destructive.
+ *
+ * Given context of type ∀a,e.((stowed a) * e), returns the resource
+ * ID of the stowed value. Forces stowage if still lazily pending.
+ *
+ * The output buffer should have size at least WIKRT_TOK_BUFFSZ, and
+ * is returned as a NUL-terminated C string. Due to authentication,
+ * resource identifiers will typically use most of this space.
+ *
+ * Wikilon runtime uses cryptographic HMAC authentication to prevent 
+ * forgery or guessing of resource IDs. This simplifies security, i.e.
+ * supporting capability-based security models.
+ * 
+ * Another way to access resource IDs is use of `wikrt_block_to_text`.
+ * In this case, resource IDs may appear within tokens in the text.
+ *
+ * IMPORTANT NOTE: Stowed value resources are garbage collected, but
+ * resource IDs held outside our environment are not considered by GC
+ * algorithms. To guard against GC, hold onto a context containing a
+ * stowed value (e.g. for a client-server session) or leverage the
+ * transactional persistence subsystem to hold the stowed value.
+ */
+wikrt_err wikrt_peek_sv(wikrt_cx*, char* buff);
+
+
+
+// NOTE: I'll  want some support for accessing the resource ID
 // for a stowed value. This would force stowage, rather than allow it to
 // happen lazily. Conversely, the ability to access a value by resource ID
 // could be very convenient. 

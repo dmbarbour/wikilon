@@ -186,7 +186,7 @@ We annotate a value to moved to persistent storage, or reverse this. Originally,
 
 For implementing stowage, I need to represent each value in the database. I may either use a dedicated internal representation, or I can aim for a sized 'copy' of a value, representing the database copy of the value as a sort of micro-context for `wikrt_copy_move`. The copy option seems promising for simplicity reasons. It greatly reduces the amount of specialized code I need to write and maintain. It would exactly preserve structure and information. I may need 'handlers' for copying stowage references and other special case values. 
 
-A dedicated representation should be more compact, e.g. no need to encode addresses between cells. But, at least for now, I should favor simplicity over compaction. I can specialize some versioning features so I can later switch between these techniques.
+A dedicated representation should be far more compact. There is no need to encode addresses between cells when they're known to be adjacent within an encoding. But I should probably favor simplicity over compaction.
 
 ### Computations
 

@@ -15,10 +15,15 @@
     wikrt_valid_token;
     wikrt_api_ver;
 
-    wikrt_copy;
-    wikrt_copy_remote;
     wikrt_drop;
+    wikrt_copy;
+    wikrt_copy_move;
+
     wikrt_stow;
+    wikrt_load;
+    wikrt_peek_sv;
+    wikrt_intro_sv;
+    wikrt_intro_rsv;
 
     wikrt_wswap;
     wikrt_zswap;
@@ -60,6 +65,7 @@
 
     wikrt_text_to_block;
     wikrt_block_to_text;
+
     wikrt_apply;
     wikrt_step_eval;
 
