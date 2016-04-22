@@ -116,15 +116,13 @@ AO doesn't do infix notation. However, a claw view of AO could support infix not
         [foo, bar, baz, qux] desugars to:
         [foo \[bar \[baz \[qux] yield] yield] yield]
 
-This is a right-associative binding, which is usually a good performance fit. The continuation is hidden from our computation until just before we return. It is relatively easy to sugar or desugar, works with other block sugars, and the sequencing structure compresses nicely if that matters. It also works nicely with a namespace as the first element, i.e. because the namespace will impact all the `yield` words. We can use it for a pseudo-EDSL, e.g. `[#vector: 1, 2, 3, 4]`. 
-
-A disadvantage is that this syntactic sugar does very little to protect monadic semantics. It must be used idiomatically.
+This is a right-associative binding, which is usually a good performance fit. The continuation is hidden from our computation until just before we return. It is relatively easy to sugar or desugar, works with other block sugars, and the `yield] yield] yield]` sequence compresses nicely. It works nicely with namespaces, so can use it for a pseudo-EDSL, e.g. `[#vector: 1, 2, 3, 4]`. The order of the source code is preserved. And the operational semantics are easy to explain and understand.
 
 ### Alternative: CPS Variant
 
-From a runtime processing standpoint, `[\[\[\[qux] after baz] after bar] after foo]` is a tempting expansion. Relevantly, it's easy to ensure that multiple expansions such as `[\[qux] after \[baz] after \[bar] after foo]` have the same behavior as the compact style by simply having `after` constructing a list-stack. This makes it trivial to `inline` one CPS block into another. 
+From a runtime processing standpoint, `[\[\[\[qux] after baz] after bar] after foo]` is a tempting alternative sequence expansion. Processing of this continuation is simplified: just add the continuation to a provided stack of continuations. 
 
-For contrast, with the proposed `yield` we must use a more sophisticated structure and process if we `inline` one sequence into another. We can still use a list-stack, but it's in reverse order from how we want to process it. OTOH, the `yield` technique ensures our expanded order matches our input order, compresses very nicely, and works easily with features like namespace attributes. 
+While either approach should support my use cases, I believe the `yield` based expansion has the stronger benefits: order preserving, compatibility with namespaces, and structured control over the continuation. However, the CPS variant should be slightly more efficient.
 
 ### Use Case: Data Sequences
 

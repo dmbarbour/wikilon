@@ -74,28 +74,27 @@ Text is shorthand for producing a list of small numbers between 0 and 1114111 (0
 
 ### Tokens
 
-ABC is extensible with tokens, which are expressed by curly braces around a short text such as `{foo}`. There is no way for an ABC program to construct a token, it must simply be part of the bytecode. When a token is reached by an interpreter or compiler, it may be fulfilled by specialized code.
+ABC is extensible with tokens, which are expressed by curly braces around a short text such as `{foo}`. Currently, tokens are used for:
 
-Tokens could feasibly be utilized for modeling side-effects, e.g. to invoke an FFI. However, Awelon project favors use of these tokens in purely functional ways:
+* **linking** - with acyclic dependencies and trivial 'inline the referenced bytecode' semantics. Tokens of form `{'kf/scope/resourceId}` are used to link values. Tokens of form `{%humanMeaningfulWord}` are used to link definitions within an [AO dictionary](AboutAO.md).
 
-* **linking** - with acyclic dependencies and trivial 'inline the referenced bytecode' semantics. Tokens of form `{#secureHashOfBytecode}` are used to link ABC resources in open distributed systems. Tokens of form `{%humanMeaningfulWord}` are used to link definitions within an [AO dictionary](AboutAO.md).
+* **annotations** - tokens starting with `&`, such as `{&par}`, `{&seq}`, `{&stow}`, `{&load}`, `{&text}`. Annotations support performance, debugging, static analysis. Correct use of annotations will have identity semantics, while incorrect use may cause a program to fail. It should be safe for a compiler or interpreter to ignore annotations that it does not recognize.
 
-* **annotations** - tokens formally having identity semantics, but may be used to optimize performance, make assertions, provide hints for static analysis, integrate debugging tools, etc.. The important requirement is that it's always valid for a compiler or interpreter to *ignore* an annotation that it doesn't understand.
-
-* **attributes** - comments about code, largely intended for software agents. These have no runtime semantics, instead indicate very ad-hoc stuff like authorship, deprecation, modified dates, indexing hints, rendering hints, tooling hints, etc. for the code. Attributes are represented via dropped blocks of annotations, e.g. of form `[{&author:david}{&deprecated}{&noindex}]%`. See the [application model](ApplicationModel.md) for more.
+* **attributes** - annotations without runtime semantics, used instead as metadata about code. Attributes provide hints for indexing, rendering, tooling. Attributes are represented by a dropped block of annotations, e.g. `[{&author:david}{&deprecated}{&noindex}]%`. See the [application model](ApplicationModel.md) for more.
 
 * **value sealers and unsealers** - a discretionary sealer `{:foo}` has type `(a * e) → (foo:a * e)`, and serves implicitly as a newtype wrapper. To access the sealed value, we can unwrap it with `{.foo}`. Cryptographic sealers are also feasible. See *Value Sealing* below.
 
-Tokens are constrained as follows:
+Like normal ABC bytecode, tokens should have purely functional semantics (at least with respect to optimization). However, this still leaves room for privileged effects - e.g. reflection, backtracking, uniqueness providers. Conventional imperative effects must instead be handled by monadic programming and other purely functional models.
 
-* valid utf-8 text
-* no more than 63 bytes
-* no control characters (C0, DEL, C1)
-* no surrogates (U+D800 to U+DFFF)
-* no replacement character (U+FFFD)
-* no curly braces `{}`
+Token texts are constrained as follows:
 
-Tokens may be further constrained within a specific system. Tokens should not receive non-trivial arguments via the token text, though allowing a few flags to tweak behavior is reasonable. For tokens with runtime semantics, arguments can be provided as actual arguments to the token as parameters.
+* forbid control codes (C0, C1, DEL)
+* forbid surrogate codes (U+D800..U+DFFF)
+* forbid replacement char (U+FFFD)
+* forbidsthe curly braces: `{}`
+* between 1 and 63 bytes UTF-8
+
+Tokens may be further constrained within a specific codebase, e.g. an AO dictionary. 
 
 ## ABC Behavior Details
 
@@ -342,7 +341,7 @@ Ideas for what annotations might do:
 * move computations and data to a GPGPU
 * support and enable memoization or caching
 
-For example, an annotation `{&trash}` might indicate that a value *will not be observed or touched* in the future, and that any attempt to do so is an error. This assertion enables a runtime to drop unnecessary data from memory (leaving a much smaller placeholder). It could easily be used to simulate networks, systems, or applications that leak data over time.
+For example, an annotation `{&trash}` might indicate that a block *will never be applied* in the future. An attempt to violate this annotation would become an obvious error in the software. Such annotations would enable users to effectively drop 'relevant' values from the runtime's memory, more or less equivalent to `/dev/null`. This may be convenient when simulating a network, for example.
 
 In many cases, use of annotations may be coupled. For example, use of a `{&fork}` annotation to parallelize a computation might be coupled with a `{&join}` annotation to synchronize and access the computed result. Any attempt to access the parallel value without performing the `{&join}` may then be an error. Coupling can greatly simplify implementation by eliminating need for transparent handling of, for example, a parallel pair during an `wrzl` operation.
 

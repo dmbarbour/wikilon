@@ -246,7 +246,7 @@ typedef enum wikrt_opcode
 , ABC_SP          = 32   // (SP) :: a → a  (space for formatting)
 , ABC_LF          = 10   // (LF) :: a → a  (newline for formatting)
 , ABC_APPLY       = 36   // $ :: ([a→b] * (a * e)) → (b * e)
-, ABC_COMPOSE     = 111  // o :: ([a→b] * ([b→c] * e)) → ([a→c] * e)
+, ABC_COMPOSE     = 109  // m :: ([a→b] * ([b→c] * e)) → ([a→c] * e)
 , ABC_QUOTE       = 39   // ' :: (a * e) → ([∀s.s→(a*s)] * e)
 , ABC_REL         = 107  // k :: ([a→b] * e) → ([a→b]k * e) (mark block non-droppable)
 , ABC_AFF         = 102  // f :: ([a→b] * e) → ([a→b]f * e) (mark block non-copyable) 
@@ -702,6 +702,10 @@ wikrt_err wikrt_intro_sv(wikrt_cx*, char const* resourceId);
  */
 wikrt_err wikrt_peek_sv(wikrt_cx*, char* buff);
 
+
+
+// TODO: consider support for fast-diffing values that use stowage.
+//  I'd want to 
 
 
 // NOTE: I'll  want some support for accessing the resource ID

@@ -19,7 +19,7 @@ See AboutABC for full explanations and design. This file just records each code,
         ^ :: (Copyable x) ⇒ (x * e) → (x * (x * e))
 
         $ :: [x→x'] * (x * e) → (x' * e)
-        o :: [x→y] * ([y→z] * e) → [x→z] * e
+        m :: [x→y] * ([y→z] * e) → [x→z] * e
         ' :: (Quotable x) ⇒ (x * e) → ([s→(x*s)] * e)
         k :: ([x→y] * e) → ([x→y]k * e) -- keep, relevant, no drop
         f :: ([x→y] * e) → ([x→y]f * e) -- affine, no copy
@@ -60,28 +60,19 @@ See AboutABC for full explanations and design. This file just records each code,
 
 Legend for types: `*` is a product or pair, `+` is a sum or Either type, `[x→y]` is a block type that can map from type `x` to type `y`, `N(x)` indicates a number with value x (numbers should be tracked in types as much as possible). 
 
-Text is modeled is a list of small natural numbers (in range 0 to 1114111). Lists are modeled using a structure of form `µL.((elem*L)+1)`. Text begins immediately after the `"` character. The `\n` (LF, 10) character must be followed by an SP to escape it, or followed by `~` (tilde, 126) to terminate the text. Thus, the minimal empty text is three characters `"\n~`. (Note: I'm considering having text encode a simple bytestring, with elements in the range 0..255 instead of 0..1114111. See Changes Under Consideration, below.)
+        "embedded text
+         may have multiple lines
+        ~
 
-Aside: The design of ABC is avoiding vowels, to avoid spelling naughty words. It isn't a strong design constraint, and I have used `o` due to visual similarity with the traditional function composition operator. Also, use of `@` (64) and backquote (96) will be avoided to support hosting ABC in external streams or texts.
+Embedded text is a compact representation for a list of type `μL.((codepoint*L)+1)` where codepoints are natural numbers in range 0 to 1114111. There are a few blacklisted codepoints for embedded texts: control characters - C0, C1, DEL (excepting LF) - surrogates (U+D800..U+DFFF), and the replacement character (U+FFFD). Other non-printing characters (e.g. zero-width space) are not recommended. LF is escaped by following it with SP, while the text is terminated by the two character sequence LF ~.
 
 ## Tokens and Capabilities
 
-Tokens in ABC are simply expressed using text between curly braces, `{foo}`. The token is unforgeable from within ABC, and the text is often cryptographically secure from outside ABC. A capability can be expressed by wrapping a token in a block, e.g. `[{foo}]`. When invoked, the token's text is passed to the current environment to determine its effect. In many cases, capability text is specific to an environment. 
+Tokens in ABC are extensions to the bytecode. Tokens may be context-specific to a codebase, a runtime, or even a network session. Tokens are expressed by wrapping a short text between curly braces, e.g. `{foo}`. (Token texts must be valid embedded texts, 1 to 63 bytes utf8, and forbid curly braces and LF.) Environment specific tokens should include an HMAC or other authentication to resist forgery, to simplify reasoning about security.
 
-There are some common conventions based on prefix characters. For example:
+Tokens must have *pure* semantics. Tokens mustn't constrain us against laziness, parallelism, and caching. However, within this limitation, tokens may support privileged or security-sensitive effects, such as reflection, copying affine values, or backtracking upon error. Together with affine blocks (to partition and sequence access to 'worlds'), tokens could feasibly be leveraged for ad-hoc side effects (cf. Clean and Mercury programming languages). 
 
-        {&foo}  :: a → a                - annotation capability
-
-        {:foo}  :: (a*e) → ((foo:a)*e)  - discretionary sealer
-        {.foo}  :: ((foo:a)*e) → (a*e)  - discretionary unsealer
-
-        {:format$leftKey}               - cryptographic sealer
-        {.format$rightKey}              - cryptographic unsealer
-        {$format}                       - indicates sealed value
-
-        {#kjhfmskpzgzdqbqstdh...}       - ABC resource
-
-Annotations can support debugging and performance. Discretionary value sealing act as structural type tags. Cryptographic sealers support rights amplification and other security patterns. ABC resources are named by a combination of secure hashes to look up and decrypt the bytecode; they serve a valuable role in separate compilation and dynamic linking, and for saving bandwidth and storage at larger scales.
+However, Awelon project favors externalizing and explicitly handling effects, e.g. [free monads](CommandSequences.md), [dictionary apps](ApplicationModel.md), [virtual machine models](NetworkModel.md). Awelon project uses tokens mostly for modularity and linking, performance annotations, metadata attributes, and type safety. 
 
 ## ABC CHANGE LOG
 
@@ -104,6 +95,11 @@ June 2015:
 January 2016:
 * replace opcode `>` with `G` to reduce conflict with XML and HTML
 
+April 2016:
+* change `o` for compose to `m`, to eliminate use of vowels.
+
 ## ABCD
 
-None yet! ABCD will use UTF-8 characters starting after the C1 charset and will develop according to empirical analysis of common subprogram patterns that offer effective compression and optimization benefits. Also, formal correctness proofs will be essential for every ABCD operation. Naturally, ABCD won't make progress until we have large and mature ABC systems. But prototypes for ABCD can easily be used internally by interpreters.
+ABCD extends ABC with a standard dictionary of functions, i.e. such that a single character expands into a subprogram that is well defined in ABC. If well chosen, ABCD operators compress streaming bytecode, improve interpreted performance, and simplify optimization. For best results, the standardization process for ABCD must be both empirical and carefully reasoned.
+
+I have yet to define ABCD extensions. Candidates for extension should first be explored within implementations of ABC.

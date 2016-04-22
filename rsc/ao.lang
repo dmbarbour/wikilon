@@ -98,7 +98,10 @@
         <match>[lrwzvcLRWZVC]+</match>
     </context>
     <context id="abcFunctionCode" style-ref="function">
-        <match>[okfQGDFMK%^$'+*?\x2D]+</match>
+        <match>[mkfQGDFMK%^$'+*?\x2D]+</match>
+    </context>
+    <context id="deprecatedABC" style-ref="def:error">
+        <match>[o>]</match>
     </context>
 
     <context id="aoBody" class="no-spell-check">
@@ -110,6 +113,7 @@
             <context ref="embeddedNumeral"/>
             <context ref="abcDataPlumbing"/>
             <context ref="abcFunctionCode"/>
+            <context ref="deprecatedABC"/>
         </include>
     </context>
 

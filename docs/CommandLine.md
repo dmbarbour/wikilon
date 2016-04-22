@@ -45,7 +45,7 @@ This approach to literal values is easily extensible with new notations. I would
 
 #### Multi-Line Literals
 
-Inline literals are sufficient for most command line use cases, e.g. labels like `"foo"`, test strings like `"Hello, World!"`, and micro-DSLs like regular expressions. Claw doesn't have built-in character escapes, and it isn't difficult to define your `literal` function to rewrite substrings like `"\n"`, `"\q"`, and `"\\"` to model escapes of newlines and double-quotes and escapes.
+Inline literals are sufficient for most command line use cases, e.g. labels like `"foo"`, test strings like `"Hello, World!"`, and micro-DSLs like regular expressions. Claw doesn't have built-in character escapes, and it isn't difficult to define your `lit` function to statically rewrite substrings like `"\n"`, `"\q"`, and `"\\"` to model escapes of newlines and double-quotes and escapes.
 
 Nonetheless, claw provides a usable syntax for multi-line embedded text:
 
@@ -66,7 +66,7 @@ Nonetheless, claw provides a usable syntax for multi-line embedded text:
          nulla pariatur. Excepteur sint occaecat cupidatat non proident, 
          sunt in culpa qui officia deserunt mollit anim id est laborum.
         
-        ~
+        ~ lit
 
 Our text begins on the line after `\"`. Each line of claw text is preceded with `LF SP` and the text terminates with `LF ~`. For convenience, `LF LF` is treated as `LF SP LF` so developers don't need to indent empty lines. Other than SP, LF, or ~, any character following LF is an error. For aesthetics, our text is padded with one empty line before and after. One empty line of padding is trimmed from each side when parsing the claw text. (The padding is optional, unless you actually need empty lines around the text.)
 
@@ -91,7 +91,7 @@ Claw supports a command sequencing concept that supports multiple use-cases:
 * programming in a continuation-passing style
 * iterative processing, cooperative threading
 
-Command sequences vastly improve the expressiveness of Claw and the utility of AO. The expression and expansion is surprisingly simple. Any block can use commas as command separators:
+Command sequences vastly improve the expressiveness of Claw and the utility of AO. The expression and expansion is surprisingly simple. A block can use commas as command separators:
 
         [foo,bar,baz]   desugars to  
         [foo \[bar \[baz] yield] yield]   
@@ -102,22 +102,20 @@ Command sequences vastly improve the expressiveness of Claw and the utility of A
         \[a,b,c]        desugars to
         \[a \[b \[c] yield] yield]
 
-Effectively, we can view a comma as a yield operator. The block exits early, but we also gain access to the remainder of the sequence, the continuation. An external interpreter may study the output, perform external effects or inject data, and continue. The details are left to user definitions of yield, the interpreter, and the program environment.
-
-See [CommandSequences](CommandSequences.md) for more details.
+Effectively, we can view a comma as a yield operator. The block exits at the comma, but first adds the remainder of the block to the program environment. See [CommandSequences](CommandSequences.md) for more details.
 
 ### Claw Attributes
 
-An attribute is an annotation *about* nearby code. Essentially, it's a comment, though not necessarily for a human. Examples of this sort of thing: todos, deprecations, licensing, authoring, quotas, categories, keywords, enabling or disabling full-text search, recommendations for viewing and rendering code, extra typechecker options, guides for indexing, guides for robotic maintenance. 
+An attribute is an annotation *about* nearby code. Essentially, it's a comment, though not generally intended for a human. Examples of this sort of thing: todos, deprecations, licensing, authoring, quotas, categories, keywords, enabling or disabling full-text search, recommendations for viewing and rendering code, extra typechecker options, guides for indexing, guides for robotic maintenance. 
 
-Because they have no meaning within our code, we wrap attributes into a block, then throw it away, e.g. `[{&deprecated}]%`. For expressing attributes in Claw code, I will to use parentheses:
+For attributes in Claw code, I will to use parentheses:
 
         (license:BSD3 author:dmbarbour category:math)       desugars to
         [{&license:BSD3}{&author:dmbarbour}{&category:math}]%
 
-The annotations in this context are presented as words. Commas, within an attributes list, are ignored as whitespace.
+In general, the structure and location of an attribute may be relevant to its external meaning. However, attributes have no runtime behavior, so we'll quickly drop the block containing them. Any simplifier of ABC code will trivially eliminate this block.
 
-*Aside:* We don't optimize presentation of annotations in normal code because they are easily abstracted behind words. So we just escape those normally. This is not the case for attributes, which are not abstracted.
+*Aside:* Claw makes no attempt to optimize normal use of annotations, where the expectation is to simply define a word for each annotation. Attributes are a special case.
 
 ### Claw Namespaces
 
@@ -134,7 +132,7 @@ Claw uses namespace attributes to guide rendering and expansion. Some words cann
 
 A namespace attribute within a block is limited to the remaining scope of that block. In case of command sequences, namespaces also impact the commas. So developers will need to be aware of this.
 
-There is a proposal for *Qualified Namespaces*, below, that I'm still contemplating. I'm not convinced it's a good idea, even if it could be useful in some limited contexts. (There is a trade-off between concision and sophistication of context sensitivity.)
+There is a proposal for *Qualified Namespaces*, below, that I'm still contemplating. I'm not convinced it's a good idea, even if it could be useful in some limited contexts. (There is a trade-off between concision and sophistication of context.)
 
 ## Claw Semantics and Round Tripping
 
