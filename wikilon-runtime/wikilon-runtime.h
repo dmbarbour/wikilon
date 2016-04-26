@@ -600,8 +600,11 @@ wikrt_err wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
  * trip conversion from text to block to text should return the original text.
  * Further processing of a block will require separate function calls.
  *
- * NOTE: The `[]` for the toplevel block is implicit, both for input and output. 
- * NOTE: See wikrt_peek_sv about interaction with value stowage.
+ * NOTE: The `[]` for the toplevel block is implicit, both on input and output.
+ *
+ * NOTE: A block may reference stowed values (e.g. via quote and compose). Such
+ * stowed value references will be preserved as resource tokens. See wikrt_peek_sv
+ * for more information.
  */
 wikrt_err wikrt_text_to_block(wikrt_cx*);
 wikrt_err wikrt_block_to_text(wikrt_cx*);

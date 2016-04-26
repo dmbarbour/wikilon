@@ -584,3 +584,8 @@ static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
 static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_block(*wikrt_pval(cx, v)); 
 }
+
+// utility for construction of large texts.
+void wikrt_reverse_text_chunks(wikrt_cx* cx);
+
+

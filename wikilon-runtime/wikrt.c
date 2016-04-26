@@ -1239,7 +1239,7 @@ wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
 
     // introduce slot in cx->val space to hold text.
     if(!wikrt_mem_try_reserve(cx, WIKRT_CELLSIZE, &compacted)) { return WIKRT_CXFULL; }
-    wikrt_intro_r(cx, WIKRT_VOID); // I'll patch up that WIKRT_VOID later.
+    wikrt_intro_r(cx, WIKRT_UNIT_INR); // initial reversed text.
 
     // Allocate in chunks of no more than 2^16-1 bytes.
     // (Limited chunk size serves as an implicit index.)
@@ -1283,17 +1283,7 @@ wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
         nBytes  -= bytes;
     }
 
-    // Reverse our stack of text buffers.
-    wikrt_val tl = WIKRT_UNIT_INR;
-    wikrt_val hd = wikrt_pval(cx,cx->val)[0];
-    while(WIKRT_VOID != hd) {
-        wikrt_val* const phd = wikrt_pval(cx, hd);
-        wikrt_val const next = phd[1];
-        phd[1] = tl;
-        tl = hd;
-        hd = next;
-    }
-    wikrt_pval(cx,cx->val)[0] = tl;
+    wikrt_reverse_text_chunks(cx);
     return WIKRT_OK;
 
     // Alternative Implementation Ideas:
@@ -1307,6 +1297,34 @@ wikrt_err wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
     // the ideas could easily be combined. OTOH, I doubt intro_text is going
     // to be my performance bottleneck - the current implementation is okay.
 }
+
+// utility used by intro_text, block to text, text to block
+// construct a text in reverse chunk order, then repair order.
+void wikrt_reverse_text_chunks(wikrt_cx* cx) 
+{
+    // (text * e) → (text * e), with `text` strictly in chunks
+    // of type WIKRT_OTAG_TEXT.
+    //
+    // Our text chunks are reverse ordered right now, e.g.
+    //
+    // we have  "World!" → ", " → "Hello"
+    // we want  "Hello" → ", " → "World!"
+    //
+    // Of course, our chunks may be much larger (up to 2^16 - 1 bytes).
+    // But the idea is the same.
+    wikrt_val hd = wikrt_pval(cx, cx->val)[0];
+    wikrt_val txt = WIKRT_UNIT_INR;
+    while(WIKRT_UNIT_INR != hd) {
+        wikrt_val* const phd = wikrt_pval(cx, hd);
+        assert(wikrt_o(hd) && wikrt_otag_text(*phd));
+        wikrt_val const next = phd[1];
+        phd[1] = txt;
+        txt = hd;
+        hd = next;
+    }
+    wikrt_pval(cx, cx->val)[0] = txt;
+}
+
 
 static inline bool wikrt_value_is_binary(wikrt_cx* cx, wikrt_val v) {
     return (wikrt_o(v) && wikrt_otag_binary(*(wikrt_pval(cx,v)))); 

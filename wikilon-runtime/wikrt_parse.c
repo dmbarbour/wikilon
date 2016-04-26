@@ -153,25 +153,8 @@ static bool wikrt_fini_parse_text(wikrt_cx* cx, wikrt_parse_state* p)
     // Allocate the final chunk of text (if necessary and possible).
     if(!wikrt_flush_parse_text(cx, p)) { return false; }
 
-    // Our text chunks are reverse ordered right now, e.g.
-    //
-    // we have  "World!" → ", " → "Hello"
-    // we want  "Hello" → ", " → "World!"
-    //
-    // Of course, our chunks are much larger than that, based on
-    // WIKRT_PARSE_BUFFSZ. Fortunately, repairing the order is a
-    // trivial operation, and doesn't require allocation.
-    wikrt_val hd = wikrt_pval(cx, cx->val)[0];
-    wikrt_val txt = WIKRT_UNIT_INR;
-    while(WIKRT_UNIT_INR != hd) {
-        wikrt_val const t = hd;
-        wikrt_val* const pt = wikrt_pval(cx, t);
-        assert(wikrt_o(t) && wikrt_otag_text(*pt)); // assume text chunks!
-        hd = pt[1]; // next chunk
-        pt[1] = txt;
-        txt = t;
-    }
-    wikrt_pval(cx, cx->val)[0] = txt;
+    // repair ordering of text chunks.
+    wikrt_reverse_text_chunks(cx);
 
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
     wikrt_fini_parse_opval_r(cx);
