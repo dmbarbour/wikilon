@@ -7,8 +7,11 @@
 #include <stdio.h>
 #include "wikrt.h"
 
-// For the moment, this conversion to text is eager. The context
-// will contain three values:
+// For the moment, this conversion to text is eager. Lazy streams will
+// be desirable in the future, e.g. if I want to expand stowed values
+// rather than merely reference them. 
+//
+// Our processing stack consists of the following pieces:
 //
 //   (1) the current list of operators we're processing
 //   (2) a stack corresponding to `] continuation` for quoted blocks 
@@ -16,7 +19,8 @@
 //
 // This ordering also corresponds to the expected frequency of access.
 // So our context can provide this as a stack of three items, i.e.
-// (ops * (blocks * (texts * e))).
+// (ops * (blocks * (texts * e))). The `blocks` element includes some
+// substructural information for any `kf` suffix or the like.
 //
 // The `ops` list will also be used to break down complex values, spreading
 // them into multiple operations. This can grow memory requirements.
@@ -46,6 +50,43 @@ typedef struct wikrt_writer_state
     wikrt_size charct;
     uint8_t    buff[WIKRT_WRITE_BUFFSZ];
 } wikrt_writer_state;
+
+// Note: All of these strings should be ASCII.
+// op2abc_table contains zero for accelerators 
+#define OP(X) [OP_##X] = ABC_##X
+static wikrt_abc wikrt_op2abc_table[OP_COUNT] =
+ { OP(SP), OP(LF)
+ , OP(PROD_ASSOCL), OP(PROD_ASSOCR)
+ , OP(PROD_W_SWAP), OP(PROD_Z_SWAP)
+ , OP(PROD_INTRO1), OP(PROD_ELIM1)
+ , OP(SUM_ASSOCL), OP(SUM_ASSOCR)
+ , OP(SUM_W_SWAP), OP(SUM_Z_SWAP)
+ , OP(SUM_INTRO0), OP(SUM_ELIM0)
+ , OP(COPY), OP(DROP)
+ , OP(APPLY), OP(COMPOSE), OP(QUOTE), OP(REL), OP(AFF)
+ , OP(NUM)
+ , OP(D1), OP(D2), OP(D3), OP(D4), OP(D5)
+ , OP(D6), OP(D7), OP(D8), OP(D9), OP(D0)
+ , OP(ADD), OP(MUL), OP(NEG), OP(DIV), OP(GT)
+ , OP(CONDAP), OP(DISTRIB), OP(FACTOR), OP(MERGE), OP(ASSERT)
+ };
+#undef OP
+
+wikrt_err writer_TAILCALL(wikrt_cx* cx, wikrt_writer_state* w);
+wikrt_err writer_INLINE(wikrt_cx* cx, wikrt_writer_state* w);
+wikrt_err writer_PROD_SWAP(wikrt_cx* cx, wikrt_writer_state* w);
+wikrt_err writer_INTRO_UNIT(wikrt_cx* cx, wikrt_writer_state* w);
+wikrt_err writer_SUM_SWAP(wikrt_cx* cx, wikrt_writer_state* w);
+wikrt_err writer_INTRO_VOID(wikrt_cx* cx, wikrt_writer_state* w);
+
+typedef wikrt_err (*wikrt_writer)(wikrt_cx*, wikrt_writer_state*);
+#define OP(X) [ACCEL_##X] = writer_##X
+static wikrt_writer wikrt_accel2abc_table[OP_COUNT] =
+ { OP(TAILCALL), OP(INLINE)
+ , OP(PROD_SWAP), OP(INTRO_UNIT)
+ , OP(SUM_SWAP), OP(INTRO_VOID)
+ };
+#undef OP
 
 // (block * e) → (opslist * e)
 static bool wikrt_writer_unwrap_block(wikrt_cx* cx) 
@@ -81,7 +122,7 @@ static wikrt_err wikrt_writer_init(wikrt_cx* cx, wikrt_writer_state* w)
     w->relevant = false;
     w->affine   = false;
 
-    w->depth  = 0; // empty stack
+    w->depth  = 0; // empty block stack
     w->buffsz = 0; // empty buffer
     w->charct = 0;
 
@@ -150,7 +191,8 @@ static wikrt_err wikrt_writer_fini(wikrt_cx* cx, wikrt_writer_state* w)
     bool const empty_stack = (0 == w->depth) && (WIKRT_UNIT == wikrt_pval(cx, cx->val)[0]);
     wikrt_drop(cx, NULL); // drop stack (even if not empty)
 
-    // Assuming valid input types, the main source of failure will be
+    // Assuming valid input (by the time we start writing), our only
+    // source of error is 
     // reaching the memory limits of our context, either upon flush or
     // when processing quoted values. 
     bool const ok = flushed && empty_ops && empty_stack;

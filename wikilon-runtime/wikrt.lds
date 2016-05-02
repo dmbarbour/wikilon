@@ -9,8 +9,6 @@
     wikrt_cx_destroy;
     wikrt_cx_env;
 
-    wikrt_abcd_operators;
-    wikrt_abcd_expansion;
     wikrt_strerr;
     wikrt_valid_token;
     wikrt_api_ver;

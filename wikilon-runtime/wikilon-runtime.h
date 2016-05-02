@@ -6,55 +6,34 @@
  *	@section intro_sec Introduction
  *
  *  Wikilon is part of Awelon project, which explores a new model for
- *  software development, in which a living system is defined by a set
- *  of acyclic functions. Awelon project uses its own Awelon Bytecode
+ *  software development. Awelon project uses its own Awelon Bytecode
  *  (ABC). This bytecode is simple and purely functional, but doesn't
  *  perform well in a naive interpreter. To recover performance, many
  *  techniques must be utilized.
  * 
- *  - Accelerators. Common subprograms (sequences of bytecode) are
- *    recognized and handled as a single opcode internally. We can
- *    accelerate collections-oriented programming, common loops,
- *    matrix math, conditional behaviors, and data plumbing.
+ *  - Accelerators. Common subprograms are recognized and handled as a
+ *    single opcode internally. 
  *  
- *  - Linearity and Move Semantics. While ABC values are logically
- *    immutable, it is possible to mutate values in place when only
- *    one reference to the value exists. Wikilon runtime makes this
- *    the default behavior because it's a good fit for ABC semantics.
+ *  - Linearity and Move Semantics. In-place update has pure semantics
+ *    when we know a representation is not shared or aliased. This is
+ *    a good fit for ABC.
  *
- *  - Compilation. We can annotate that subprograms are compiled JIT
- *    or AOT. Compilers can translate ABC to a form more suitable for
- *    modern hardware (e.g. abstract register and stack machines) and
- *    eliminate runtime data plumbing. With LLVM, it is feasible to
- *    achieve competitive performance.
+ *  - Compilation. I aim to support an LLVM-based JIT.
  *
  *  - Large value stowage. Databases, filesystems, graphs, documents,
  *    game worlds, and more can be modeled as large immutable values
- *    that are only partially loaded into active memory. This reduces
- *    need for external persistence (e.g. no need for true filesystem
- *    access).
+ *    if the bulk of the value is backed to disk rather than memory.
  *
- *  - Parallelism. Pure computations can be parallelized easily because
+ *  - Parallelism. Pure computations may be parallelized easily because
  *    their behavior is independent of evaluation order. Though, they
  *    may fail non-deterministically due to memory consumption.
  * 
  *  Wikilon runtime shall support these techniques. I'll also support
  *  an integrated key-value store for stowage-friendly persistence.
  *
- *  Effectful code with Wikilon runtime is modeled using Free Monads
- *  and similar techniques instead of using tokens. That is, a client
- *  can inspect a value after a computation and decide to perform some
- *  external effect and inject more data. But there are no callbacks,
- *  no stopping on arbitrary tokens. This helps ensure effects can be
- *  modeled in a pure simulation.
- *
- *  Wikilon runtime is designed to provide very predictable performance,
- *  suitable for real-time systems. Memory is managed manually via copy
- *  and drop operators, and a context's memory is separated (with regards
- *  to fragmentation etc.) from other tasks. Optimizations will be driven
- *  by programmer-controlled annotations. External parallelism is very
- *  'linear' in nature, operating on separate parts of a problem then 
- *  rejoining the pieces.
+ *  Effectful code in Awelon project is primarily modeled using free
+ *  monads, tuple spaces, and similar designs (rather than callbacks
+ *  or FFI). Wikilon runtime doesn't support callbacks.
  *
  *  @section usage_sec Usage
  *
@@ -210,25 +189,16 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** @brief Complete enumeration Wikilon Runtime opcodes.
+/** @brief Complete enumeration of Wikilon Runtime opcodes.
  * 
- * Wikilon primarily uses Awelon Bytecode (ABC) and ABC Deflated (ABCD)
- * as its serialization models for behavior and data. ABC consists of
- * 42 primitive operators (plus text and block literals), while ABCD is
- * defined by acyclic expansion ultimately into plain ABC. Under the hood
- * Wikilon may additionally use experimental ABCD accelerators, available
- * via simplification of blocks.
+ * Wikilon uses Awelon Bytecode (ABC) as its serialization models for 
+ * behavior and data. ABC consists of 42 primitive operators, plus text
+ * literals, blocks, and tokens.
  *
- * ABCD serves two roles. It both compresses the serialized format and
- * serves as useful accelerators for hand-written interpreters. ABCD 
- * enables ABC to become a powerful language for collections processing,
- * linear algebra, etc.. depending on which functions are defined. The
- * development of ABCD is an ongoing project.
- *
- * ABC and ABCD opcodes also correspond to unicode character codepoints,
- * with UTF-8 being the standard serialization format.
+ * Opcodes are valid ASCII and UTF-8 codepoints. In general, ABC has an
+ * expansion as UTF-8. 
  */
-typedef enum wikrt_opcode 
+typedef enum wikrt_abc
 { ABC_PROD_ASSOCL = 108  // l :: (a * (b * c)) → ((a * b) * c)
 , ABC_PROD_ASSOCR = 114  // r :: ((a * b) * c) → (a * (b * c))
 , ABC_PROD_W_SWAP = 119  // w :: (a * (b * c)) → (b * (a * c))
@@ -271,33 +241,10 @@ typedef enum wikrt_opcode
 , ABC_FACTOR      = 70   // F :: (((a*b)+(c*d)) * e) → ((a+c)*((b+d)*e))
 , ABC_MERGE       = 77   // M :: ((a+a)*e) → (a*e)
 , ABC_ASSERT      = 75   // K :: ((a+b)*e) → (b*e); assert in right
-} wikrt_opcode;
+} wikrt_abc;
 
-/** @brief Supported ABCD operators as utf-8 C string.
- *
- * ABC and ABCD serialize to utf-8 text. The basic 42 ABC operators 
- * are all in the ASCII range, hence requiring one byte each.
- *
- *   lrwzvcLRWZVC%^ \n$o'kf#1234567890+*-QG?DFMK
- *
- * Normally, only token texts and text literals embedded in ABC will
- * use the greater utf-8 range. However, ABCD extends ABC with opcodes
- * that are defined by expansion into ABC. Use of ABCD extensions can
- * both compress serializations and accelerate interpreted performance.
- * 
- * When requested, Wikilon runtime will provide its entire list of 
- * ABC and ABCD operators as a static utf-8 string.
- */
-char const* wikrt_abcd_operators();
-
-/** @brief Expand ABC or ABCD opcodes to their definitions.
- *
- * The 42 ABC primitives will return a string containing the same 
- * character, e.g. 'v' expands to "v". Otherwise, we'll expand to
- * at least two opcodes (possibly including more ABCD). If the
- * argument is not a recognized opcode, NULL is returned.
- */
-char const* wikrt_abcd_expansion(wikrt_opcode);
+// Thoughts: Wikilon runtime will use accelerators instead of ABCD.
+// I'll want to list the accelerators that Wikilon supports.
 
 /** @brief Validate a token.
  *
@@ -312,20 +259,10 @@ char const* wikrt_abcd_expansion(wikrt_opcode);
  *
  * This function assumes the input is valid utf-8, NUL-terminated as
  * a C string. It returns whether the token text is valid by the other
- * constraints.
+ * constraints. When reading a token, use a buffer of WIKRT_TOK_BUFFSZ
+ * (or larger) to safely receive the token text.
  */
 bool wikrt_valid_token(char const* s);
-
-// todo: easy function to turn a token text into a block?
-
-
-/** @brief buffer size to read a token string.
- *
- * The maximum token size for Awelon Bytecode is 63 bytes. Wikilon
- * runtime adds a byte for a NUL-terminator to support C strings. 
- * Token text does not include the wrapping `{}` braces, just the
- * text between them.
- */
 #define WIKRT_TOK_BUFFSZ 64
 
 /* Note: Thoughts on Reflection

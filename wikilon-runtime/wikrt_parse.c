@@ -27,6 +27,26 @@ typedef struct {
 // How much to read in one step.
 #define WIKRT_PARSE_READSZ (30 * 1000)
 
+#define OP(X) [ABC_##X] = OP_##X
+static wikrt_op const wikrt_abc2op_ascii_table[128] = 
+{ OP(PROD_ASSOCL), OP(PROD_ASSOCR)
+, OP(PROD_W_SWAP), OP(PROD_Z_SWAP)
+, OP(PROD_INTRO1), OP(PROD_ELIM1)
+, OP(SUM_ASSOCL), OP(SUM_ASSOCR)
+, OP(SUM_W_SWAP), OP(SUM_Z_SWAP)
+, OP(SUM_INTRO0), OP(SUM_ELIM0)
+, OP(COPY), OP(DROP)
+, OP(SP), OP(LF)
+, OP(APPLY), OP(COMPOSE), OP(QUOTE), OP(REL), OP(AFF)
+, OP(NUM)
+, OP(D1), OP(D2), OP(D3), OP(D4), OP(D5)
+, OP(D6), OP(D7), OP(D8), OP(D9), OP(D0)
+, OP(ADD), OP(MUL), OP(NEG), OP(DIV), OP(GT)
+, OP(CONDAP), OP(DISTRIB), OP(FACTOR), OP(MERGE), OP(ASSERT)
+};
+#undef OP
+
+
 /* In addition to wikrt_parser_state, the context will hold a lot of data.
  * In particular, it will hold:
  *
@@ -131,7 +151,7 @@ static bool wikrt_parser_write_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t
 // Assumes reserve of at least WIKRT_CELLSIZE.
 static void wikrt_fini_parse_opval_r(wikrt_cx* cx)
 {
-    // Quote the value by wrapping it with WIKRT_OPVAL.
+    // Wrap value with WIKRT_OPVAL.
     wikrt_val* const v = wikrt_pval(cx, cx->val);
     wikrt_alloc_cellval_r(cx, v, WIKRT_O, WIKRT_OTAG_OPVAL, (*v)); // text → opval
 
@@ -153,7 +173,7 @@ static bool wikrt_fini_parse_text(wikrt_cx* cx, wikrt_parse_state* p)
     // Allocate the final chunk of text (if necessary and possible).
     if(!wikrt_flush_parse_text(cx, p)) { return false; }
 
-    // repair ordering of text chunks.
+    // repair ordering of text.
     wikrt_reverse_text_chunks(cx);
 
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
@@ -267,17 +287,18 @@ static wikrt_err wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint3
             p->buffsz = 0;
             p->charct = 0;
 
-        } else {
+        } else if(cp < 128) {
+            _Static_assert((WIKRT_SMALLINT_MAX >= OP_COUNT), "assuming ops are smallnums");
+            wikrt_op const op = wikrt_abc2op_ascii_table[cp];
 
-            bool const recognizedOpCode = (NULL != wikrt_abcd_expansion(cp));
-            if(!recognizedOpCode) { return WIKRT_TYPE_ERROR; }
-            _Static_assert((WIKRT_SMALLINT_MAX >= 0x10FFFF), "assuming chars are smallnums");
-            wikrt_intro_r(cx, wikrt_i2v((wikrt_int)cp));
+            if(OP_INVAL == op) { return WIKRT_TYPE_ERROR; }
+
+            wikrt_intro_r(cx, wikrt_i2v(op));
 
             // (op * (ops * e)) → ((op : ops) * e)
             wikrt_assocl(cx);
             wikrt_wrap_sum(cx, WIKRT_INL);
-        }
+        } else { return WIKRT_TYPE_ERROR; }
     } return WIKRT_OK;
     default: {
         fprintf(stderr, "%s: invalid parser state (%d)\n", __FUNCTION__, p->type);

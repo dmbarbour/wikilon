@@ -1,7 +1,7 @@
 
 # ABC Runtime Design
 
-As per [my performance strategy](Performance.md), I'm developing a C runtime: a good interpreter, with opportunity for LLVM or other JIT compilation. One motivation for the C interpreter is that I need a simple, low-level data representation for the LLVM JIT. I'll be using something very like the Lisp/Scheme representation, consisting mostly of simple pairs of words.
+As per [my performance strategy](Performance.md), I'm developing a C runtime: a good interpreter, hopefully enabling LLVM or other JIT compilation. One motivation for a C interpreter is that I need a simple, obvious data representation for my LLVM JIT. I'll be using something very like the Lisp/Scheme representation, consisting mostly of simple pairs of words.
 
 It may be useful to also develop a command-line interface at this layer. I'm somewhat willing to encode Claw code and dictionaries at this level.
 
@@ -72,9 +72,11 @@ Alternatively, I can switch to using C++ internally with an efficient exceptions
 
 ### Memory Management
 
-ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies favored over aliasing. Linearity allows me to implement many functions (or their common cases) without allocation.
+ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies favored over aliasing. Linearity allows me to implement many functions - especially data plumbing - without allocation.
 
-Bump-pointer allocators, together with two-space collectors, should also serve me well. I initially tried more conventional memory management with size-segregated free-lists. But that doesn't work nicely with slab allocations for composite values or incremental deallocation of values. Free fragments are small and allocated blocks are large, and we end up coalescing memory more frequently than we reuse it. 
+Bump-pointer allocators, together with two-space collectors, should also serve me well. I initially tried more conventional memory management with size-segregated free-lists. But that doesn't work nicely with slab allocations for copying composite values (e.g. allocating enough space for every element in a list or stack or tree). Free fragments are small, and allocated blocks are large, and we end up coalescing memory too frequently.
+
+It may be useful to have regions within memory, e.g. a bump pointer nursery, old space, a stack. I'd probably need to leverage write barriers to make this work, e.g. so I can copy on write. I'm not sure the complexity is worthwhile. 
 
 A compacting collector seems a good fit for Wikilon's common use cases. It's a stop-the-world collector, albeit constrained to a single thread. This shouldn't be a major issue for pure computations (no side effects to hurt latencies). It is feasible to combine a compacting collector with free-lists, to reuse the small spaces. However, I have doubts that adding this would offer sufficient benefit to pay for the complications it introduces. A two-space collector has the advantage of being delightfully simple.
 
@@ -90,9 +92,15 @@ My environment-level 'stowage' is already a shared space in this style. I might 
 
 Avoidance of deep-copy will likely prove essential for performance of blocks of code within tight loops from fixpoint functions, because this is the most common source of 'copying' in well designed ABC systems.
 
+### Errno Error Handling?
+
+Rather than return an error from each step, it might be more efficient to accumulate error information then report it upon request. OTOH, this doesn't really change the number of checks I need to perform, e.g. for type safety and safe allocation. Even if I used C++ exceptions upon error, I'd still need to perform the conditional check that leads to the exception call. 
+
+
+
 ## Representations
 
-*Note:* I've been wavering a lot on 32-bit vs. 64-bit words. With 64-bit, I can grow computations to an almost unlimited extent, which could be useful if I ever want to deal with large objects (movies, holography, massive graphs, etc.). But that also requires more space per allocation. An interesting alternative might be to combine the two mechanisms: a 32-bit local space per context plus a 64-bit shared space. OTOH, 'stowage' essentially does this already. For now, I'll stick to 32-bit words within a context's primary space.
+I'm still waffling between 32-bit vs. 64-bit pointers, and on the allocation/GC models. I might try to fix this up later. With 64-bit machine pointers, I could reduce indirection and use much larger contexts. But there would be some space overhead.
 
 Memory will be aligned for allocation of two words. With 32-bit words, this gives us 3 tag bits in each pointer. Small numbers and a few small constants are also represented.
 
@@ -108,8 +116,6 @@ The zero address is not allocated. Its meaning depends on the tag bits:
 * 011 - unit
 * 101 - unit in left (false)
 * 111 - unit in right (true, end of list)
-
-If I use raw pointers, I think I could 
 
 Other than pairs, most things are 'tagged objects'. The type of a tagged object is generally determined by the low byte in the first word. The upper three bytes are then additional data, e.g. sizes of things or a few flag bits. 
 

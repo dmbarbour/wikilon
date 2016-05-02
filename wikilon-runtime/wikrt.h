@@ -39,26 +39,43 @@ typedef struct wikrt_cxm wikrt_cxm;
 /* LMDB-layer Database. */
 typedef struct wikrt_db wikrt_db;
 
-/** @brief Non-standard, proposed ABCD extensions and accelerators.
+/** @brief Internal opcodes. 
  *
- * This serves as a proving ground for proposed ABCD operators. These
- * ops are not yet standardized, not accepted by the runtime APIs, and
- * their opcode designations may change. Some may never become standards.
- *
- * Candidates for ABCD are driven by effective acceleration and streaming
- * bytecode compression. So we'll probably see a lot of stack manipulations
- * here, and eventually list-processing. Maybe a simple dictionary model or
- * a table processing model.
+ * Internal opcodes include our primitive 42 opcodes in addition to
+ * accelerators. Internal opcodes are encoded for adjacency in jump
+ * tables and efficient compaction rather than for convenient textual
+ * representation.
  */
-typedef enum wikrt_opcode_ext
-{ EXTOP_INLINE       = 105 // 'i' - vr$c
-, EXTOP_TAILCALL     = 101 // 'e' - $c
-, EXTOP_SWAP         = 115 // 's' - vrwlc
-, EXTOP_SUM_SWAP     =  83 // 'S' - VRWLC
-, EXTOP_UNIT         = 117 // 'u' - vvrwlc (or `vs`)
-, EXTOP_INL          =  85 // 'U' - VVRWLC (or `VS`) 
-} wikrt_opcode_ext;
+typedef enum wikrt_intern_op
+{ OP_INVAL = 0
 
+// Block: Primitive ABC (42 ops, codes 1..42)
+, OP_SP, OP_LF
+, OP_PROD_ASSOCL, OP_PROD_ASSOCR
+, OP_PROD_W_SWAP, OP_PROD_Z_SWAP
+, OP_PROD_INTRO1, OP_PROD_ELIM1
+, OP_SUM_ASSOCL, OP_SUM_ASSOCR
+, OP_SUM_W_SWAP, OP_SUM_Z_SWAP
+, OP_SUM_INTRO0, OP_SUM_ELIM0
+, OP_COPY, OP_DROP
+, OP_APPLY, OP_COMPOSE, OP_QUOTE, OP_REL, OP_AFF
+, OP_NUM
+, OP_D1, OP_D2, OP_D3, OP_D4, OP_D5
+, OP_D6, OP_D7, OP_D8, OP_D9, OP_D0
+, OP_ADD, OP_MUL, OP_NEG, OP_DIV, OP_GT
+, OP_CONDAP, OP_DISTRIB, OP_FACTOR, OP_MERGE, OP_ASSERT
+
+// Block: Accelerators
+, ACCEL_TAILCALL    // $c
+, ACCEL_INLINE      // vr$c
+, ACCEL_PROD_SWAP   // vrwlc
+, ACCEL_INTRO_UNIT  // vvrwlc
+, ACCEL_SUM_SWAP    // VRWLC
+, ACCEL_INTRO_VOID  // VVRWLC
+
+// Misc.
+, OP_COUNT  // how many ops are defined?
+} wikrt_op;
 
 // misc. constants and static functions
 #define WIKRT_LNBUFF(SZ,LN) ((((SZ)+((LN)-1))/(LN))*(LN))
