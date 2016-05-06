@@ -6,16 +6,24 @@
     wikrt_env_sync;
 
     wikrt_cx_create;
+    wikrt_cx_reset;
     wikrt_cx_destroy;
     wikrt_cx_env;
 
-    wikrt_strerr;
-    wikrt_valid_token;
     wikrt_api_ver;
+    wikrt_valid_token;
 
-    wikrt_drop;
-    wikrt_copy;
+    wikrt_error;
+    wikrt_set_error;
+
+    wikrt_refltype;
+
+    wikrt_copy; 
+    wikrt_copyf;
     wikrt_copy_move;
+    wikrt_copyf_move;
+    wikrt_drop;
+    wikrt_dropk;
 
     wikrt_stow;
     wikrt_load;

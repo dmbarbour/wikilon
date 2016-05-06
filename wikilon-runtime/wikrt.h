@@ -77,6 +77,9 @@ typedef enum wikrt_intern_op
 , OP_COUNT  // how many ops are defined?
 } wikrt_op;
 
+// for static assertions, i.e. so I don't forget to edit something
+#define WIKRT_ACCEL_COUNT 6
+
 // misc. constants and static functions
 #define WIKRT_LNBUFF(SZ,LN) ((((SZ)+((LN)-1))/(LN))*(LN))
 #define WIKRT_LNBUFF_POW2(SZ,LN) (((SZ) + ((LN) - 1)) & ~((LN) - 1))
@@ -289,7 +292,7 @@ static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
 #define WIKRT_DEEPSUML      2 /* bits 10 */
 
 #define WIKRT_BIGINT_DIGIT          1000000000
-#define WIKRT_BIGINT_MAX_DIGITS  ((1 << 23) - 1)
+#define WIKRT_BIGINT_MAX_DIGITS  ((1 << 12) - 1)
 
 // array, binary, text header
 //   one bit for logical reversals

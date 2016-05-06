@@ -47,16 +47,19 @@ static wikrt_op const wikrt_abc2op_ascii_table[128] =
 #undef OP
 
 
-/* In addition to wikrt_parser_state, the context will hold a lot of data.
+/* In addition to wikrt_parser_state, our context must hold some data.
  * In particular, it will hold:
  *
- *   (1) The object actively being constructed
+ *   (1) An object being constructed (text or block)
  *   (2) A stack of continuations to return to
  *   (3) The text that we're reading
  *
- * These are ordered in expected frequency of access. So order on our
- * stack will be (object * (stack * (text * e))). Our 'object' is either
- * an inverse list of operators, or an inverse list of text chunks.
+ * I can read big buffer chunks of text then process them, such that 
+ * the above is in approximate order of access (for common sizes).
+ * One option is to hold these in cx->val, e.g. as a triple:
+ *
+ *    (object * (stack * (text * e)))
+ *
  */
 
 static bool wikrt_intro_parse(wikrt_cx* cx, wikrt_parse_state* p) 

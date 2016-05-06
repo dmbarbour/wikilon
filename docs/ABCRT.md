@@ -74,9 +74,11 @@ Alternatively, I can switch to using C++ internally with an efficient exceptions
 
 ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies favored over aliasing. Linearity allows me to implement many functions - especially data plumbing - without allocation.
 
-Bump-pointer allocators, together with two-space collectors, should also serve me well. I initially tried more conventional memory management with size-segregated free-lists. But that doesn't work nicely with slab allocations for copying composite values (e.g. allocating enough space for every element in a list or stack or tree). Free fragments are small, and allocated blocks are large, and we end up coalescing memory too frequently.
+Bump-pointer allocators, together with two-space compacting collectors, should also serve me well. I initially tried more conventional memory management with size-segregated free-lists. But that doesn't work nicely with slab allocations for copying composite values (e.g. allocating enough space for every element in a list or stack or tree). Free fragments are small, and allocated blocks are large, and we end up coalescing memory frequently.
 
-It may be useful to have regions within memory, e.g. a bump pointer nursery, old space, a stack. I'd probably need to leverage write barriers to make this work, e.g. so I can copy on write. I'm not sure the complexity is worthwhile. 
+The main issue with a two-space collector is working easily with parallelism. I need either to stop-the-world for GC and add a mutex for allocation, or move a parallel computation into a separate space so there is no interference between threads. I'm leaning more towards the non-synchronizing parallelism, even though it implies greater overheads for simplicity. The overheads shouldn't be too bad insofar as they're subtracted from our compaction efforts.
+
+It might be useful to favor tighter context memory, e.g. based on observed memory pressure. Graduate from a few megabytes up to a given maximum size. Tight computations would then have tight memory locality properties. I'm not entirely convinced of this route, but it's easy enough to apply monotonically and profile later, or to test if memory pressure is low and occasionally shrink the space in use.
 
 A compacting collector seems a good fit for Wikilon's common use cases. It's a stop-the-world collector, albeit constrained to a single thread. This shouldn't be a major issue for pure computations (no side effects to hurt latencies). It is feasible to combine a compacting collector with free-lists, to reuse the small spaces. However, I have doubts that adding this would offer sufficient benefit to pay for the complications it introduces. A two-space collector has the advantage of being delightfully simple.
 
@@ -92,7 +94,9 @@ My environment-level 'stowage' is already a shared space in this style. I might 
 
 Avoidance of deep-copy will likely prove essential for performance of blocks of code within tight loops from fixpoint functions, because this is the most common source of 'copying' in well designed ABC systems.
 
-### Errno Error Handling?
+### Error Handling?
+
+The main errors I can expect are: type errors and quota errors. Neither error is especially recoverable. Rather than assume recovery from errors, it seems wise to halt a runtime shortly after an error is recognized. The main cost here is that we cannot 
 
 Rather than return an error from each step, it might be more efficient to accumulate error information then report it upon request. OTOH, this doesn't really change the number of checks I need to perform, e.g. for type safety and safe allocation. Even if I used C++ exceptions upon error, I'd still need to perform the conditional check that leads to the exception call. 
 
@@ -156,6 +160,14 @@ Shallow sums refer to pair or unit in left or right, which is instead represente
 
 ### Blocks
 
+An efficient representation for code will be essential for performance.
+
+Naively, I could represent code as a simple list of operations. I could extend this via special objects for tokens and values. It might be convenient to start with a naive representation for code. But this representation won't be very efficient - expensive to copy and process, with poor locality properties.
+
+An alternative is to develop a compact representation - a compact block of operations together with a stack of quoted values, a special case operator to pop one value from this stack. This might not even be a 'block' representation, but rather a list fragment representation similar to how I represent arrays and texts.
+
+
+
 To get started quickly, I'll implement a 'naive' block representation, consisting of a list of opcodes and quoted values and a few header bits (affine, relevant, parallel, etc.). If I go for tracing JIT, keeping a copy count in the header bits might also be useful. A minimal, naive block representation:
 
         (block header, list of operations)
@@ -199,6 +211,10 @@ A dedicated representation should be far more compact. There is no need to encod
 Besides active computations, I expect I'll be wanting parallel or lazy computations eventually. Originally, I was imagining that I'd handle these behaviors almost transparently. However, in retrospect, I don't believe this is a good idea. I'd prefer to avoid any transparent translations between representations, as those greatly complicate the runtime and reasoning about progress, quotas, etc..
 
 I've decided instead to update the documentation of ABC to describe 'coupled' annotations. So, for laziness, I might require a user couple it with an annotation to force a computation. This way, I don't need to check for each operation whether I have yet to evaluate something or other. Similar, synchronization for parallel computations would be more precise.
+
+It might also be wise to conservatively treat pending (lazy or parallel) values as linear with respect to copy and drop operations. This enforces use of sequencing to copy a value. Copying of parallel values may be problematic for other reasons, though.
+
+Do I really need parallelism within a computation? Hmm. It could be very useful, for scalability, to have computations that pick apart a much larger database. So, I suppose it may be worthwhile?
 
 With coupled annotations, I can focus most runtime code on just a fast straightline interpreter (with very few extra conditional behaviors). Even better if I can later eliminate gateway checks for type safety, though that would probably require JIT.
 
