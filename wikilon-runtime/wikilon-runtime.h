@@ -72,7 +72,7 @@ uint32_t wikrt_api_ver();
 typedef enum wikrt_ecode
 { WIKRT_OK = 0      // no error
 , WIKRT_IMPL        // incomplete implementation (server error)
-, WIKRT_QUOTA       // computation failed due to resource limits
+, WIKRT_FULL        // computation failed due to space limits
 , WIKRT_ETYPE       // runtime type error (includes div-by-zero, dependent types)
 } wikrt_ecode;
 
@@ -377,8 +377,8 @@ void wikrt_intro_i64(wikrt_cx*, int64_t);
 /** @brief Non-destructively read small integers. (Int*e)→(Int*e).
  *
  * These functions return true on success. If the integer is not in range,
- * or if the context does not have an integer in the appropriate location
- * these functions return false.
+ * or if the context does not have an integer in the appropriate location,
+ * these functions return false and the buffer is not modified.
  */
 bool wikrt_peek_i32(wikrt_cx*, int32_t*);
 bool wikrt_peek_i64(wikrt_cx*, int64_t*);
@@ -402,8 +402,7 @@ void wikrt_intro_istr(wikrt_cx*, char const*, size_t);
  * buffer size. As an output, it is a recorded buffer size (on true)
  * or a required buffer size (on false). 
  *
- * If the argument is a non-integer, we'll always return false and 
- * required strlen zero.
+ * If the argument is a non-integer, we'll return false and strlen zero.
  */
 bool wikrt_peek_istr(wikrt_cx*, char* buff, size_t* strlen); 
 
@@ -435,11 +434,8 @@ void wikrt_read_binary(wikrt_cx*, uint8_t*, size_t*);
  * Text must be valid utf-8, and valid as ABC text: no control characters
  * (C0, C1, DEL) except LF, no surrogate codepoints, no replacement char.
  * A text is modeled as a list of codepoints, but may use a more compact
- * representation under the hood.
- *
- * Note: A NUL-terminated C string is also accepted, in which case you may
- * use SIZE_MAX for the length parameter. NUL itself is in C0 so is not an
- * accepted character within text.
+ * representation under the hood. Length is given in bytes. NUL-terminated
+ * C strings are also accepted (use SIZE_MAX).
  */
 void wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
 
@@ -588,10 +584,11 @@ void wikrt_intro_sv(wikrt_cx*, char const* resourceId);
  */
 void wikrt_peek_sv(wikrt_cx*, char* buff);
 
-
-
-// TODO: consider support for fast-diffing values that use stowage.
-//  I'd want to 
+// TODO: support for fast-diffing of values that use stowage?
+//
+//  Or should I stick to semantic-layer diffs, e.g. keeping
+//  time information, hashes, or update counters in the tree
+//  structure.
 
 
 // NOTE: I'll  want some support for accessing the resource ID
@@ -605,24 +602,24 @@ void wikrt_peek_sv(wikrt_cx*, char* buff);
 /** @brief Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e). 
  *
  * This prepares a lazy evaluation of `b`. To complete the evaluation,
- * use wikrt_step_eval on the pending value until complete.
+ * repeat wikrt_step_eval on the pending value until complete.
  */
-wikrt_err wikrt_apply(wikrt_cx*);
+void wikrt_apply(wikrt_cx*);
 
 /** @brief Step an evaluation.  ((pending a) * e) → (a * e).
  *
- * This operation consumes an 'effort quota', which is heuristic in
- * nature but corresponds roughly to megabytes allocated (including
- * compactions). If the quota reaches zero, we return WIKRT_QUOTA_STOP
- * and our value remains pending. It's also possible we'll halt with
- * WIKRT_TYPE_ERROR or other errors. On WIKRT_OK, we have our final
- * output value.
+ * If called with a pending value, we process it for a given effort
+ * quota - a heuristic, imprecise quota to ensure client has control
+ * of CPU costs and wall clock time. 
  *
- * Under consideration: Support a WIKRT_TOKEN_STOP when evaluation
- * cannot continue because we encounter an unrecognized token. Enable
- * the client to process the token and continue evaluation.
- */
-wikrt_err wikrt_step_eval(wikrt_cx*, uint32_t* effort);
+ * After each step, we'll return either 'true' indicating that another
+ * step is needed, or 'false' indicating evaluation has finished. If
+ * called for a non-pending value, or after an error has occurred, we
+ * simply return 'false'. It may be useful to check wikrt_error after
+ * getting a false result, as evaluation may have failed due to type
+ * errors or other resource limits.
+ */ 
+bool wikrt_step_eval(wikrt_cx*, uint32_t effort);
 
 /** @brief Quote a value. (a * e) → ((∀e'. e'→(a*e'))*e).
  *
@@ -631,13 +628,13 @@ wikrt_err wikrt_step_eval(wikrt_cx*, uint32_t* effort);
  * the resulting block. Wikilon runtime favors performance over precise
  * dynamic tracking of substructural attributes.
  */
-wikrt_err wikrt_quote(wikrt_cx*);
+void wikrt_quote(wikrt_cx*);
 
 /** @brief Mark a block affine (non-copyable). (block*e)→(block*e). */
-wikrt_err wikrt_block_aff(wikrt_cx*);
+void wikrt_block_aff(wikrt_cx*);
 
 /** @brief Mark a block relevant (non-droppable). (block*e)→(block*e). */
-wikrt_err wikrt_block_rel(wikrt_cx*);
+void wikrt_block_rel(wikrt_cx*);
 
 /** @brief Mark a block for parallel evaluation. (block*e)→(block*e). 
  *
@@ -645,37 +642,39 @@ wikrt_err wikrt_block_rel(wikrt_cx*);
  * internal to a wikrt_step_eval. Wikilon runtime guarantees there is
  * no parallel evaluation upon returning from wikrt_step_eval.
  */
-wikrt_err wikrt_block_par(wikrt_cx*);
+void wikrt_block_par(wikrt_cx*);
 
 /** @brief Compose two blocks. ([a→b]*([b→c]*e))→([a→c]*e). */
-wikrt_err wikrt_compose(wikrt_cx*);
+void wikrt_compose(wikrt_cx*);
 
 /** @brief Add two integers. (I(a)*(I(b)*e))→(I(a+b)*e). */
-wikrt_err wikrt_int_add(wikrt_cx*);
+void wikrt_int_add(wikrt_cx*);
 
 /** @brief Multiply two integers. (I(a)*(I(b)*e))→(I(a*b)*e). */
-wikrt_err wikrt_int_mul(wikrt_cx*);
+void wikrt_int_mul(wikrt_cx*);
 
 /** @brief Negate an integer. (I(a)*e)→(I(-a)*e). */
-wikrt_err wikrt_int_neg(wikrt_cx*);
+void wikrt_int_neg(wikrt_cx*);
 
 /** @brief Divide two integers with remainder.
  *
  * (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e)).
  *
- * The divisor must be non-zero, or we'll return WIKRT_TYPE_ERROR.
+ * The divisor must be non-zero, otherwise the context will enter an
+ * error state (a dependent type error).
  */
-wikrt_err wikrt_int_div(wikrt_cx*); 
+void wikrt_int_div(wikrt_cx*); 
 
 /** @brief Integer comparison result. */
 typedef enum wikrt_ord { WIKRT_LT = -1, WIKRT_EQ = 0, WIKRT_GT = 1 } wikrt_ord;
 
-/** @brief Compare two integers. Non-destructive. (I(a)*(I(b)*e)).
+/** @brief Compare two integers. (I(a)*(I(b)*e)).
  *
- * This compares `b` to `a`, matching direct allocation order (i.e. if we
- * allocate zero then four, the comparison is `zero is less than four`).
+ * This compares `b` to `a`, i.e. such that if we allocate zero then four
+ * then compare, we effectively insert the comparison between the zero and
+ * the four.
  */
-wikrt_err wikrt_int_cmp(wikrt_cx*, wikrt_ord*);
+void wikrt_int_cmp(wikrt_cx*, wikrt_ord*);
 
   /////////////////////////////////////
  // DATABASE AND PERSISTENCE ENGINE //
@@ -683,67 +682,73 @@ wikrt_err wikrt_int_cmp(wikrt_cx*, wikrt_ord*);
 
 /** @brief Validate database key.
  *
- * Transaction keys must be valid texts of limited size, having at
- * most WIKRT_VALID_KEY_MAXLEN bytes in the utf-8 encoding, and at
- * least one byte.
+ * Modulo size, transaction keys must first be valid texts (as per
+ * wikrt_intro_text), and must further obey a simple size limit of
+ * no more than WIKRT_VALID_KEY_MAXLEN bytes. 
  */
 bool wikrt_valid_key(char const*);
 #define WIKRT_VALID_KEY_MAXLEN 255
 
 /** @brief Begin a transaction with the current context.
  *
- * At the moment, a context may have one implicit, non-hierarchical
- * transaction. This transaction must be created before database 
- * operations. After a transaction commits or aborts, a new one may
- * be started. Transactions affect only database interactions.
+ * This gives the context opportunity to prepare any data structures
+ * to track a transaction. Currently, a context may have only one
+ * transaction active (i.e. no hierarchical transactions), i.e. you
+ * must abort or commit before creating another. Read and write fail
+ * if performed without a transaction.
  *
- * Note: transactions are NOT backtracking by default. Support for
- * backtracking is feasible but requires explicitly duplicating the
- * context.
+ * A transaction is not reified as a value within the context, rather
+ * it is an implicit object attached to the context. It is recommended,
+ * but not enforced, that effects and communications (such as wikrt_move)
+ * only be performed between transactions.
  */
-wikrt_err wikrt_txn_create(wikrt_cx*);
+void wikrt_txn_create(wikrt_cx*);
 
-/** @brief Read a value from the implicit key-value database. (e)→(v*e). 
- * 
- * Rather than 'undefined' keys, all valid keys are defined with an
- * implicit default value - unit in right - until otherwise set. So
- * it's easy to access any key and simply ask for its value. 
+/** @brief Read a value from the key-value database. (e)→(v*e). 
  *
- * Due to Wikilon runtime's preference for linear move semantics, every
- * read requires copying a value. This may be mitigated by stowage in
- * larger values.
+ * Wikilon runtime provides an implicit, stowage friendly, key-value
+ * database. Values held by such a database may be rather arbitrary.
+ *
+ * A key, if not previously written, has a default value of unit in 
+ * the right (a value conventionally used for empty lists, absence
+ * of a value, completion, and truth).
  */
-wikrt_err wikrt_txn_read(wikrt_cx*, char const* key);
+void wikrt_txn_read(wikrt_cx*, char const* key);
 
 /** @brief Write a value into the implicit key-value database. (v*e)→(e).
  *
  * This writes a value from the context back into the database at a named
  * location. Writing the default value - unit in right - will effectively
- * delete that key.
+ * delete a key from the database.
  */
-wikrt_err wikrt_txn_write(wikrt_cx*, char const* key);
+void wikrt_txn_write(wikrt_cx*, char const* key);
 
-/** @brief Abort active transaction (if any). */
+/** @brief Abort current transaction. */
 void wikrt_txn_abort(wikrt_cx*);
 
 /** @brief Attempt to commit active transaction.
  *
- * If this fails, the transaction is implicitly aborted. Transactions
- * may fail due to conflicts, or due to writing incomplete values (a
- * pending value), etc..
+ * This operation will either return 'true' if the transaction commits
+ * or 'false' if it fails, in which case it is aborted. Transactions
+ * may fail due to optimistic concurrency conflicts. 
+ *
+ * Wikilon runtime favors optimistic concurrency as the default. If it
+ * is important for throughput to constrain updates on some subset of 
+ * keys, consider use of client-side structures such as a queue.
  */
-wikrt_err wikrt_txn_commit(wikrt_cx*);
+bool wikrt_txn_commit(wikrt_cx*);
 
 /** @brief Mark a transaction for durability. 
  * 
- * Transactions are not durable by default, but may be marked durable
- * at any point during the transaction (e.g. based on data involved).
- * A durable transaction will require extra synchronization overheads
- * (flushing data to disk) but will be robust by the time it returns
- * to the client.
+ * Transactions are 'volatile' by default - they may be lost if you
+ * lose power shortly after wikrt_txn_commit. The benefit is reduced
+ * latency and potential to batch transaction writes to disk. 
  *
- * Non-durable transactions can be made durable retroactively by use
- * of `wikrt_env_sync()`. 
+ * If durability is important for a particular transaction, simply mark
+ * it durable. This ensures that the transaction (and its dependencies)
+ * are flushed to disk before we return from wikrt_txn_commit.
+ *
+ * Otherwise, consider periodically invoking wikrt_env_sync().
  */
 void wikrt_txn_durable(wikrt_cx*);
 

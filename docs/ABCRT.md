@@ -104,22 +104,24 @@ Rather than return an error from each step, it might be more efficient to accumu
 
 ## Representations
 
-I'm still waffling between 32-bit vs. 64-bit pointers, and on the allocation/GC models. I might try to fix this up later. With 64-bit machine pointers, I could reduce indirection and use much larger contexts. But there would be some space overhead.
+I'm still waffling between 32-bit vs. 64-bit native machine pointers and on the allocation/GC models. I might try to fix this up later. With 64-bit machine pointers, I could reduce indirection, leverage larger contexts, have larger 'small integers', and more readily support region-based GC (because I wouldn't need a base address). But there would be some space overhead. 
+
+If I was restricted to small integers of at least 60 bits, that should probably be sufficient for most use cases. I don't need fantastic support for bignums.
 
 Memory will be aligned for allocation of two words. With 32-bit words, this gives us 3 tag bits in each pointer. Small numbers and a few small constants are also represented.
 
-* xy0 - small integers; plus or minus (2^30 - 1).
-* 001 - tagged objects (tag, data...)
-* 011 - pairs (val, val)
-* 101 - pair in left
-* 111 - pair in right
+* xy1 - small integers; plus or minus (2^30 - 1).
+* 000 - tagged objects (tag, data...)
+* 010 - pairs (val, val)
+* 100 - pair in left
+* 110 - pair in right
 
 The zero address is not allocated. Its meaning depends on the tag bits:
 
-* 001 - void, an invalid or undefined linear value
-* 011 - unit
-* 101 - unit in left (false)
-* 111 - unit in right (true, end of list)
+* 000 - void, an invalid or undefined linear value
+* 010 - unit
+* 100 - unit in left (false)
+* 110 - unit in right (true, end of list)
 
 Other than pairs, most things are 'tagged objects'. The type of a tagged object is generally determined by the low byte in the first word. The upper three bytes are then additional data, e.g. sizes of things or a few flag bits. 
 
@@ -208,11 +210,11 @@ A dedicated representation should be far more compact. There is no need to encod
 
 ### Computations
 
-Besides active computations, I expect I'll be wanting parallel or lazy computations eventually. Originally, I was imagining that I'd handle these behaviors almost transparently. However, in retrospect, I don't believe this is a good idea. I'd prefer to avoid any transparent translations between representations, as those greatly complicate the runtime and reasoning about progress, quotas, etc..
+Besides active computations, I expect I'll be wanting parallel or lazy computations eventually. Originally, I was imagining that I'd handle these behaviors almost transparently. However, in retrospect, I don't believe this is a good idea. I'd prefer to avoid any transparent translations between representations because those greatly complicate the runtime and reasoning about progress, quotas, etc..
 
 I've decided instead to update the documentation of ABC to describe 'coupled' annotations. So, for laziness, I might require a user couple it with an annotation to force a computation. This way, I don't need to check for each operation whether I have yet to evaluate something or other. Similar, synchronization for parallel computations would be more precise.
 
-It might also be wise to conservatively treat pending (lazy or parallel) values as linear with respect to copy and drop operations. This enforces use of sequencing to copy a value. Copying of parallel values may be problematic for other reasons, though.
+It might also be wise to conservatively treat pending (lazy or parallel) values as linear with respect to copy and drop operations. This enables use of sequencing to copy a value. Copying of parallel values may be problematic for other reasons, though.
 
 Do I really need parallelism within a computation? Hmm. It could be very useful, for scalability, to have computations that pick apart a much larger database. So, I suppose it may be worthwhile?
 

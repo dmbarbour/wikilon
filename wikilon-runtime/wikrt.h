@@ -41,10 +41,9 @@ typedef struct wikrt_db wikrt_db;
 
 /** @brief Internal opcodes. 
  *
- * Internal opcodes include our primitive 42 opcodes in addition to
+ * Internal opcodes include ABC's primitive 42 opcodes in addition to
  * accelerators. Internal opcodes are encoded for adjacency in jump
- * tables and efficient compaction rather than for convenient textual
- * representation.
+ * tables rather than for convenient textual representation.
  */
 typedef enum wikrt_intern_op
 { OP_INVAL = 0
@@ -77,6 +76,13 @@ typedef enum wikrt_intern_op
 , OP_COUNT  // how many ops are defined?
 } wikrt_op;
 
+typedef enum wikrt_ss
+{ WIKRT_SS_NORM = 0
+, WIKRT_SS_REL  = 1<<0
+, WIKRT_SS_AFF  = 1<<1
+, WIKRT_SS_PEND = 1<<2
+} wikrt_ss;
+
 // for static assertions, i.e. so I don't forget to edit something
 #define WIKRT_ACCEL_COUNT 6
 
@@ -91,6 +97,9 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
 // for lockfile, LMDB file
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
 #define WIKRT_DIR_MODE (mode_t)(WIKRT_FILE_MODE | S_IXUSR | S_IXGRP)
+
+#define WIKRT_EDIV0 WIKRT_ETYPE
+
 
 /** wikrt_val bits
  *
@@ -114,10 +123,10 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
  *     so maybe 1 bit for tag, 1 bit for sign?
  *   reference counts: no longer a separate object...
  */
-#define WIKRT_O             1
-#define WIKRT_P             3
-#define WIKRT_PL            5
-#define WIKRT_PR            7
+#define WIKRT_O             0
+#define WIKRT_P             2
+#define WIKRT_PL            4
+#define WIKRT_PR            6
 
 // address zero 
 #define WIKRT_VOID      WIKRT_O
@@ -145,11 +154,11 @@ static inline bool wikrt_o(wikrt_val v)  { return wikrt_tagged_valref(WIKRT_O, v
  */
 #define WIKRT_SMALLINT_MAX  ((1 << 30) - 1)
 #define WIKRT_SMALLINT_MIN  (- WIKRT_SMALLINT_MAX)
-#define WIKRT_I2V(I) ((wikrt_val)(I << 1))
+#define WIKRT_I2V(I) ((wikrt_val)(I << 1) | 1)
 #define WIKRT_V2I(V) (((wikrt_int)V) >> 1)
 static inline wikrt_val wikrt_i2v(wikrt_int i) { return WIKRT_I2V(i); }
 static inline wikrt_int wikrt_v2i(wikrt_val v) { return WIKRT_V2I(v); }
-static inline bool wikrt_i(wikrt_val v) { return (0 == (v & 1)); }
+static inline bool wikrt_i(wikrt_val v) { return (1 == (v & 1)); }
 
 /** The zero integer value. */
 #define WIKRT_IZERO WIKRT_I2V(0) 
@@ -332,7 +341,7 @@ static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
 }
 
 /* Internal API calls. */
-wikrt_err wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
+void wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
 
 // wikrt_vsize_ssp: return space required to deep-copy a value. 
 //   Uses scratch space as a stack. May be bypassed if we can
@@ -351,18 +360,18 @@ void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wi
 // as much space as I'll need to perform an operation up front,
 // at least for sophisticated multi-step operations.
 
-wikrt_err wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v);
+void wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v);
 void wikrt_wrap_sum_rv(wikrt_cx*, wikrt_sum_tag, wikrt_val* v);
-wikrt_err wikrt_unwrap_sum_rv(wikrt_cx*, wikrt_sum_tag*, wikrt_val* v);
+void wikrt_unwrap_sum_rv(wikrt_cx*, wikrt_sum_tag*, wikrt_val* v);
 #define WIKRT_WRAP_SUM_RESERVE WIKRT_CELLSIZE
 #define WIKRT_EXPAND_SUM_RESERVE WIKRT_CELLSIZE
 #define WIKRT_UNWRAP_SUM_RESERVE WIKRT_EXPAND_SUM_RESERVE
 
-wikrt_err wikrt_sum_wswap_rv(wikrt_cx*, wikrt_val* v);
-wikrt_err wikrt_sum_zswap_rv(wikrt_cx*, wikrt_val* v);
-wikrt_err wikrt_sum_assocl_rv(wikrt_cx*, wikrt_val* v);
-wikrt_err wikrt_sum_assocr_rv(wikrt_cx*, wikrt_val* v);
-wikrt_err wikrt_sum_swap_rv(wikrt_cx*, wikrt_val* v);
+void wikrt_sum_wswap_rv(wikrt_cx*, wikrt_val* v);
+void wikrt_sum_zswap_rv(wikrt_cx*, wikrt_val* v);
+void wikrt_sum_assocl_rv(wikrt_cx*, wikrt_val* v);
+void wikrt_sum_assocr_rv(wikrt_cx*, wikrt_val* v);
+void wikrt_sum_swap_rv(wikrt_cx*, wikrt_val* v);
 // conservative free-space requirement for sum manipulations (sum_wswap, etc.)
 #define WIKRT_SUMOP_RESERVE (4 * (WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE))
 
@@ -373,22 +382,25 @@ wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t);
 #define WIKRT_ALLOC_I32_RESERVE WIKRT_CELLBUFF(WIKRT_SIZEOF_BIGINT(2))
 #define WIKRT_ALLOC_I64_RESERVE WIKRT_CELLBUFF(WIKRT_SIZEOF_BIGINT(3))
 
+// validate (Int * (Int * e)) environment.
+bool wikrt_int_int(wikrt_cx*);
+
 // For large allocations where I cannot easily predict the size, I should
 // most likely indicate a register as my target. Combining this responsibility
 // with introducing a value (e.g. adding it to our stack) is a mistake.
 
 // (after validating types...)
-//wikrt_err wikrt_bigint_add(wikrt_cx*);
-//wikrt_err wikrt_bigint_mul(wikrt_cx*);
-//wikrt_err wikrt_bigint_div(wikrt_cx*);
+//void wikrt_bigint_add(wikrt_cx*);
+//void wikrt_bigint_mul(wikrt_cx*);
+//void wikrt_bigint_div(wikrt_cx*);
 
 // non-allocating comparison.
-wikrt_err wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b);
-wikrt_err wikrt_block_attrib(wikrt_cx* cx, wikrt_val attrib);
+void wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b);
+void wikrt_block_attrib(wikrt_cx* cx, wikrt_val attrib);
 #if 0
-wikrt_err wikrt_quote_v(wikrt_cx*, wikrt_val*);
-wikrt_err wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* out);
-wikrt_err wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
+void wikrt_quote_v(wikrt_cx*, wikrt_val*);
+void wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* out);
+void wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
 #endif
 
 #define WIKRT_ENABLE_FAST_READ 1
@@ -461,6 +473,9 @@ struct wikrt_cx {
     wikrt_addr          alloc;      // allocate towards zero
     wikrt_size          size;       // size of memory
 
+    // Error status
+    wikrt_ecode         ecode;      // WIKRT_OK or earliest error
+
     // registers, root data
     wikrt_val           val;        // primary value 
     wikrt_val           pc;         // program counter (eval)
@@ -513,17 +528,9 @@ static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_val v) {
  */
 
 // copy from mem to ssp. swap ssp to mem.
-void wikrt_mem_compact(wikrt_cx*);
 static inline bool wikrt_mem_available(wikrt_cx* cx, wikrt_sizeb sz) { return (sz < cx->alloc); }
-static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz) 
-{
-    if(wikrt_mem_available(cx,sz)) { return true; }
-    wikrt_mem_compact(cx);
-    return wikrt_mem_available(cx,sz);
-} 
+bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz);
 
-// variant to limit compaction to a one-time thing.
-bool wikrt_mem_try_reserve(wikrt_cx* cx, wikrt_sizeb sz, bool* compacted);
 
 // Allocate a given amount of space, assuming sufficient space is reserved.
 // This will not risk compacting and moving data. OTOH, if there isn't enough
@@ -556,7 +563,7 @@ static inline void wikrt_pval_swap(wikrt_val* a, wikrt_val* b) {
 } 
 
 // non-allocating, data moving, fail-safe wswap
-static inline wikrt_err wikrt_wswap_v(wikrt_cx* cx, wikrt_val const abc) 
+static inline void wikrt_wswap_v(wikrt_cx* cx, wikrt_val const abc) 
 {
     if(wikrt_p(abc)) {
         wikrt_val* const pabc = wikrt_pval(cx,abc);
@@ -576,6 +583,7 @@ static inline wikrt_err wikrt_wswap_v(wikrt_cx* cx, wikrt_val const abc)
 
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const v) {
+    // small numbers or zero address
     return (wikrt_i(v) || (0 == wikrt_vaddr(v)));
 }
 
@@ -608,4 +616,8 @@ static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
 // utility for construction of large texts.
 void wikrt_reverse_text_chunks(wikrt_cx* cx);
 
+static inline bool wikrt_cx_has_txn(wikrt_cx* cx) { 
+    return (WIKRT_REG_TXN_INIT == cx->txn); 
+}
+void wikrt_drop_txn(wikrt_cx*);
 
