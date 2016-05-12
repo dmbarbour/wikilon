@@ -83,6 +83,9 @@ typedef enum wikrt_ss
 , WIKRT_SS_PEND = 1<<2
 } wikrt_ss;
 
+static inline bool wikrt_ss_copyable(wikrt_ss ss)  { return (0 == (ss & (WIKRT_SS_PEND | WIKRT_SS_AFF)); }
+static inline bool wikrt_ss_droppable(wikrt_ss ss) { return (0 == (ss & (WIKRT_SS_PEND | WIKRT_SS_REL)); }
+
 // for static assertions, i.e. so I don't forget to edit something
 #define WIKRT_ACCEL_COUNT 6
 
@@ -300,8 +303,10 @@ static inline bool wikrt_i(wikrt_val v) { return (1 == (v & 1)); }
 #define WIKRT_DEEPSUMR      3 /* bits 11 */
 #define WIKRT_DEEPSUML      2 /* bits 10 */
 
+// I want to keep integers small enough for easy stowage
+// and access, regardless of context size.
 #define WIKRT_BIGINT_DIGIT          1000000000
-#define WIKRT_BIGINT_MAX_DIGITS  ((1 << 12) - 1)
+#define WIKRT_BIGINT_MAX_DIGITS     ((1<<12)-1) // ~16kB
 
 // array, binary, text header
 //   one bit for logical reversals
@@ -381,9 +386,6 @@ wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t);
 #define WIKRT_SIZEOF_BIGINT(DIGITS) (sizeof(wikrt_val) + ((DIGITS) * sizeof(uint32_t)))
 #define WIKRT_ALLOC_I32_RESERVE WIKRT_CELLBUFF(WIKRT_SIZEOF_BIGINT(2))
 #define WIKRT_ALLOC_I64_RESERVE WIKRT_CELLBUFF(WIKRT_SIZEOF_BIGINT(3))
-
-// validate (Int * (Int * e)) environment.
-bool wikrt_int_int(wikrt_cx*);
 
 // For large allocations where I cannot easily predict the size, I should
 // most likely indicate a register as my target. Combining this responsibility
@@ -524,12 +526,11 @@ static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_val v) {
  *
  * Despite being a semi-space collector, I still use linear values
  * and mutation in place where feasible. So locality shouldn't be
- * a huge problem for carefully designed
+ * a huge problem for carefully designed.
  */
 
-// copy from mem to ssp. swap ssp to mem.
 static inline bool wikrt_mem_available(wikrt_cx* cx, wikrt_sizeb sz) { return (sz < cx->alloc); }
-bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz);
+bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz); // also sets error upon failure
 
 
 // Allocate a given amount of space, assuming sufficient space is reserved.

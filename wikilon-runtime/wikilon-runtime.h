@@ -71,9 +71,10 @@ uint32_t wikrt_api_ver();
 /** Wikilon runtime error codes. */
 typedef enum wikrt_ecode
 { WIKRT_OK = 0      // no error
-, WIKRT_IMPL        // incomplete implementation (server error)
-, WIKRT_FULL        // computation failed due to space limits
-, WIKRT_ETYPE       // runtime type error (includes div-by-zero, dependent types)
+, WIKRT_INVAL       // invalid use of API, client error
+, WIKRT_IMPL        // incomplete implementation
+, WIKRT_CXFULL      // computation failed due to space limits
+, WIKRT_ETYPE       // runtime type error, div-by-zero
 } wikrt_ecode;
 
 /** @brief Check a context for runtime errors. 
@@ -376,9 +377,9 @@ void wikrt_intro_i64(wikrt_cx*, int64_t);
 
 /** @brief Non-destructively read small integers. (Int*e)→(Int*e).
  *
- * These functions return true on success. If the integer is not in range,
- * or if the context does not have an integer in the appropriate location,
- * these functions return false and the buffer is not modified.
+ * These functions return true on success. Otherwise they return false.
+ * The min or max for the type will be output if the reason for failure
+ * is underflow or overflow, respectively.
  */
 bool wikrt_peek_i32(wikrt_cx*, int32_t*);
 bool wikrt_peek_i64(wikrt_cx*, int64_t*);
@@ -400,7 +401,9 @@ void wikrt_intro_istr(wikrt_cx*, char const*, size_t);
  * The integer is returned as a string of regex `0 | (-)?[1-9][0-9]*`. 
  * The strlen is both input and output. As input, it is the maximum
  * buffer size. As an output, it is a recorded buffer size (on true)
- * or a required buffer size (on false). 
+ * or a required buffer size (on false). The NUL character is NOT 
+ * added to the end of the output buffer, but a client can easily add
+ * one via strlen.
  *
  * If the argument is a non-integer, we'll return false and strlen zero.
  */

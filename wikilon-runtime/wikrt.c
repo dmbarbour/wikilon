@@ -79,8 +79,10 @@ void wikrt_env_sync(wikrt_env* e) {
 
 wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB) 
 {
-    _Static_assert((SIZE_MAX >> 21) > WIKRT_CX_MAX_SIZE, "review 32-bit size computations for semi-space");
-    assert((NULL != e) && (WIKRT_CX_MIN_SIZE <= cxSizeMB) && (cxSizeMB <= WIKRT_CX_MAX_SIZE));
+    assert(NULL != e);
+    size_t const size = ((size_t)cxSizeMB << 20);
+    bool const validSize = (size < (SIZE_MAX / 2)) && (WIKRT_CX_MIN_SIZE <= cxSizeMB) && (cxSizeMB <= WIKRT_CX_MAX_SIZE);
+    if(!validSize) { return NULL; } 
 
     wikrt_cx* const cx = calloc(1, sizeof(wikrt_cx));
     if(NULL == cx) { return NULL; }
@@ -205,7 +207,7 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     wikrt_copy_r(&cx0, cx0.val, NULL, cx, &(cx->val));
     _Static_assert((4 == WIKRT_CX_REGISTER_CT), "todo: missing register compactions"); // maintenance check
 
-    // refresh semispace as if freshly mmap'd to reduce swap pressure.
+    // reset semispace to reduce swap pressure.
     errno = 0;
     if(0 != madvise(cx->ssp, cx->size, MADV_DONTNEED)) {
         fprintf(stderr, "%s: madvise failed (%s)\n", __FUNCTION__, strerror(errno));
@@ -239,9 +241,7 @@ void wikrt_move(wikrt_cx* const lcx, wikrt_cx* const rcx)
 void wikrt_copy(wikrt_cx* cx) {
     wikrt_ss ss = 0;
     wikrt_copy_m(cx, &ss, cx);
-
-    // fail if we copy an affine or pending value
-    if(0 != (ss & (WIKRT_SS_AFF | WIKRT_SS_PEND))) {
+    if(!wikrt_ss_copyable(ss)) {
         wikrt_set_error(cx, WIKRT_ETYPE);
     }
 }
@@ -255,7 +255,7 @@ void wikrt_copy_move(wikrt_cx* lcx, wikrt_cx* rcx) {
     if(lcx == rcx) { wikrt_set_error(lcx, WIKRT_INVAL); return; }
     wikrt_ss ss = 0;
     wikrt_copy_m(lcx, &ss, rcx);
-    if(0 != (ss & (WIKRT_SS_AFF | WIKRT_SS_PEND))) {
+    if(!wikrt_ss_copyable(ss)) {
         wikrt_set_error(cx, WIKRT_ETYPE);
     }
 }
@@ -269,15 +269,18 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, wikrt_cx* rcx)
 {
     // base implementation for both wikrt_copy and wikrt_copy_move.
     // in lcx == rcx case, the copy is stacked above the original.
-    if(!wikrt_p(lcx->val)) { return WIKRT_TYPE_ERROR; }
+    if(!wikrt_p(lcx->val)) {
+        wikrt_set_error(cx, WIKRT_ETYPE);
+        return;
+    }
 
     // reserve space in `rcx`. Also, size estimates for validation.
     wikrt_size const max_alloc = WIKRT_CELLSIZE + (lcx->size - lcx->alloc);
     bool const use_size_bypass = WIKRT_ALLOW_SIZE_BYPASS && wikrt_mem_available(rcx, max_alloc);
     wikrt_size const alloc_est = use_size_bypass ? 0 : (WIKRT_CELLSIZE + wikrt_vsize_ssp(lcx, *(wikrt_pval(lcx, lcx->val))));
-    if(!wikrt_mem_reserve(rcx, alloc_est)) { return WIKRT_CXFULL; }
+    if(!wikrt_mem_reserve(rcx, alloc_est)) { return; }
 
-    // Note: wikrt_mem_reserve may move lcx->val (whenever lcx == rcx).
+    // Note: wikrt_mem_reserve may move lcx->val (when lcx == rcx).
     // anyhow, we now have sufficient space to perform our copy!
     wikrt_size const fs0 = rcx->alloc;
     wikrt_val const copy_src = *(wikrt_pval(lcx, lcx->val));
@@ -290,13 +293,11 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, wikrt_cx* rcx)
     bool const alloc_est_ok = use_size_bypass || (alloc_est == alloc_act);
     if(!alloc_est_ok) {
         // This is a serious implementation error. Maybe something is missing
-        // from wikrt_vsize? Or from wikrt_copy?
+        // from wikrt_vsize? Or from wikrt_copy_r?
         fprintf(stderr, "%s: invalid size estimate for copy (est %d, act %d)\n",
             __FUNCTION__, (int)alloc_est, (int)alloc_act);
         abort();
     }
-
-    return WIKRT_OK;
 }
 
 // stack mirrors copy stack, only carrying elements that need allocation.
@@ -1512,9 +1513,9 @@ void wikrt_intro_i64(wikrt_cx* cx, int64_t n)
     return WIKRT_OK;
 }
 
-void wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
+bool wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
 {
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    if(wikrt_error(cx) || !wikrt_p(cx->val)) { return false; }
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];
 
     // small integers (normal case)
@@ -1522,7 +1523,7 @@ void wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
         _Static_assert(((INT32_MIN <= WIKRT_SMALLINT_MIN) && (WIKRT_SMALLINT_MAX <= INT32_MAX))
             , "todo: fix overflow handling for small integers");
         (*i32) = (int32_t) wikrt_v2i(v);
-        return WIKRT_OK;
+        return true;
     } 
 
     if(!wikrt_bigint(cx,v)) { return WIKRT_TYPE_ERROR; }
@@ -1537,23 +1538,23 @@ void wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
         uint32_t const d1m = 2;
         uint32_t const d0m = 147483647;
         bool const overflow = (nDigits > 2) || (d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m));
-        if(overflow) { (*i32) = INT32_MAX; return WIKRT_BUFFSZ; }
+        if(overflow) { (*i32) = INT32_MAX; return false; }
         (*i32) = (d[1] * digit) + d[0];
-        return WIKRT_OK;
+        return true;
     } else {
         _Static_assert((-2147483648 == INT32_MIN), "bad INT32_MIN");
         uint32_t const d1m = 2;
         uint32_t const d0m = 147483648;
         bool const underflow = (nDigits > 2) || (d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m));
-        if(underflow) { (*i32) = INT32_MIN; return WIKRT_BUFFSZ; }
+        if(underflow) { (*i32) = INT32_MIN; return false; }
         (*i32) = 0 - ((int32_t)d[1] * digit) - (int32_t)d[0];
-        return WIKRT_OK;
+        return true;
     }
 }
 
-void wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
+bool wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
 {
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    if(wikrt_error(cx) || !wikrt_p(cx->val)) { return false; }
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];
 
     // small integers (probably a common case)
@@ -1561,7 +1562,7 @@ void wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
         _Static_assert(((INT64_MIN <= WIKRT_SMALLINT_MIN) && (WIKRT_SMALLINT_MAX <= INT64_MAX))
             , "todo: fix overflow handling for small integers");
         (*i64) = (int64_t) wikrt_v2i(v);
-        return WIKRT_OK;
+        return true;
     }
 
     if(!wikrt_bigint(cx,v)) { return WIKRT_TYPE_ERROR; }
@@ -1575,7 +1576,7 @@ void wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
         // no risk of over or underflow
         int64_t const iAbs = ((int64_t)d[1] * digit) + d[0];
         (*i64) = positive ? iAbs : -iAbs;
-        return WIKRT_OK;
+        return true;
     } else if(positive) {
         _Static_assert((9223372036854775807 == INT64_MAX), "bad INT64_MAX");
         uint32_t const d2m = 9;
@@ -1583,11 +1584,11 @@ void wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
         uint32_t const d0m = 854775807;
         bool const overflow = (nDigits > 3) || (d[2] > d2m) ||
             ((d[2] == d2m) && ((d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m))));
-        if(overflow) { (*i64) = INT64_MAX; return WIKRT_BUFFSZ; }
+        if(overflow) { (*i64) = INT64_MAX; return false; }
         (*i64) = ((int64_t)d[2] * (digit * digit)) 
                + ((int64_t)d[1] * (digit))
                + ((int64_t)d[0]);
-        return WIKRT_OK;
+        return true;
     } else {
         // GCC complains with the INT64_MIN constant given directly.
         _Static_assert(((-9223372036854775807) == (1 + INT64_MIN)), "bad INT64_MIN");
@@ -1596,11 +1597,11 @@ void wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
         uint32_t const d0m = 854775808;
         bool const underflow = (nDigits > 3) || (d[2] > d2m) ||
             ((d[2] == d2m) && ((d[1] > d1m) || ((d[1] == d1m) && (d[0] > d0m))));
-        if(underflow) { (*i64) = INT64_MIN; return WIKRT_BUFFSZ; }
+        if(underflow) { (*i64) = INT64_MIN; return false; }
         (*i64) = 0 - ((int64_t)d[2] * (digit * digit))
                    - ((int64_t)d[1] * (digit))
                    - ((int64_t)d[0]);
-        return WIKRT_OK;
+        return true;
     }
 }
 
@@ -1611,11 +1612,13 @@ static inline size_t wikrt_decimal_size(uint32_t n) {
     return ct;
 }
 
-void wikrt_peek_istr(wikrt_cx* cx, char* const buff, size_t* const buffsz)
+bool wikrt_peek_istr(wikrt_cx* cx, char* const buff, size_t* const buffsz)
 {
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    wikrt_val const v = wikrt_pval(cx, cx->val)[0];
+    bool const ok_state = !wikrt_error(cx) && wikrt_p(cx->val) && 
+                          wikrt_integer(cx, wikrt_pval(cx, cx->val)[0]);
+    if(!ok_state) { (*buffsz) = 0; return false; }
 
+    wikrt_val const v = wikrt_pval(cx, cx->val)[0];
     bool positive;
     uint32_t upperDigit;
     uint32_t innerDigitCt;
@@ -1631,10 +1634,9 @@ void wikrt_peek_istr(wikrt_cx* cx, char* const buff, size_t* const buffsz)
         upperDigit = (uint32_t)(positive ? i : -i);
         innerDigitCt = 0;
     } else {
-        if(!wikrt_bigint(cx, v)) { return WIKRT_TYPE_ERROR; }
         wikrt_val const* const pv = wikrt_pval(cx, v);
         size_t const digitCt = ((*pv) >> 9);
-        assert(digitCt >= 2);
+        assert(wikrt_otag_bigint(*pv) && (digitCt >= 2));
 
         positive = (0 == ((1 << 8) & (*pv)));
         d = (uint32_t const*)(1 + pv);
@@ -1647,7 +1649,7 @@ void wikrt_peek_istr(wikrt_cx* cx, char* const buff, size_t* const buffsz)
                             + wikrt_decimal_size(upperDigit)
                             + (9 * innerDigitCt);
     (*buffsz) = buffsz_min;
-    if(buffsz_min > buffsz_avail) { return WIKRT_BUFFSZ; }
+    if(buffsz_min > buffsz_avail) { return false; }
 
     char* s = buff + buffsz_min;
     #define WD(n) { *(--s) = ('0' + (n % 10)); n /= 10; }
@@ -1662,8 +1664,7 @@ void wikrt_peek_istr(wikrt_cx* cx, char* const buff, size_t* const buffsz)
     #undef WD
     if(!positive) { *(--s) = '-'; }
     assert(buff == s); // assert match expected size
-
-    return WIKRT_OK;
+    return true;
 }
 
 static inline bool wikrt_digit_char(char c) { return (('0' <= c) && (c <= '9')); }
@@ -1698,6 +1699,7 @@ scan_done:
 
 static inline uint32_t wikrt_read_inner_digit(char const* s) 
 {
+    // read exactly nine decimal digits
     uint32_t d = 0;
     #define RD d = (10 * d) + *(s++) - '0'
     RD; RD; RD;
@@ -1709,7 +1711,7 @@ static inline uint32_t wikrt_read_inner_digit(char const* s)
 
 void wikrt_intro_istr(wikrt_cx* cx, char const* const istr, size_t len)
 {
-    if(!wikrt_valid_istr(istr, &len)) { return WIKRT_INVAL; }
+    if(!wikrt_valid_istr(istr, &len)) { wikrt_set_error(cx, WIKRT_INVAL); return; }
 
     char const* eos = istr + len; // reading backward
     char const* s   = istr;       // reading forward
@@ -1727,7 +1729,8 @@ void wikrt_intro_istr(wikrt_cx* cx, char const* const istr, size_t len)
     if(len <= 18) { // int64 robustly supports 18 decimal digits
         int64_t iAbs = 0;
         do { iAbs = (10 * iAbs) + ((*s) - '0'); } while(++s != eos);
-        return wikrt_intro_i64(cx, (positive ? iAbs : -iAbs));
+        wikrt_intro_i64(cx, (positive ? iAbs : -iAbs));
+        return;
     }
 
     // otherwise, perform an allocation.
@@ -1737,13 +1740,16 @@ void wikrt_intro_istr(wikrt_cx* cx, char const* const istr, size_t len)
     assert((innerDigitCt > 0) && (1 <= upperDigitLen) && (upperDigitLen <= 9));
 
     size_t const nDigits = 1 + innerDigitCt;
-    if(nDigits > WIKRT_BIGINT_MAX_DIGITS) { return WIKRT_IMPL; }
+    if(nDigits > WIKRT_BIGINT_MAX_DIGITS) { 
+        wikrt_set_error(cx, WIKRT_IMPL); // too many digits
+        return;
+    }
     wikrt_size const isize = sizeof(wikrt_val) + (nDigits * sizeof(uint32_t));
     wikrt_sizeb const iszb = wikrt_cellbuff(isize);
     wikrt_size const szReserve = iszb + WIKRT_CELLSIZE;
 
     // allocate everything we need
-    if(!wikrt_mem_reserve(cx, szReserve)) { return WIKRT_CXFULL; }
+    if(!wikrt_mem_reserve(cx, szReserve)) { return; }
     wikrt_addr const addr = wikrt_alloc_r(cx, iszb);
     wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, addr));
 
@@ -1764,11 +1770,11 @@ void wikrt_intro_istr(wikrt_cx* cx, char const* const istr, size_t len)
     d[innerDigitCt] = ud;
 
     assert(eos == s);
-    return WIKRT_OK;
 }
 
-bool wikrt_int_int(wikrt_cx* cx)
+static inline bool wikrt_cx_has_two_ints(wikrt_cx* cx)
 {
+    // looking for (int * (int * e)). 
     wikrt_val const a = cx->val;
     if(wikrt_p(a)) {
         wikrt_val* const pa = wikrt_pval(cx, a);
@@ -1785,7 +1791,7 @@ bool wikrt_int_int(wikrt_cx* cx)
 // Add two integers from stack.
 void wikrt_int_add(wikrt_cx* cx)
 {
-    if(!wikrt_int_int(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(!wikrt_cx_has_two_ints(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_val* const pabe = wikrt_pval(cx, cx->val);
     wikrt_val const be = pabe[1];
     wikrt_val* const pbe = wikrt_pval(cx, be);
@@ -1797,7 +1803,7 @@ void wikrt_int_add(wikrt_cx* cx)
         _Static_assert(((WIKRT_SMALLINT_MAX + WIKRT_SMALLINT_MAX) < INT32_MAX), "smallint add can overflow");
         int32_t const sum = wikrt_v2i(*pabe) + wikrt_v2i(*pbe);
         cx->val = be; // drop `a`, keep slot for `b` to avoid allocation.
-        if(!wikrt_mem_reserve(cx, WIKRT_ALLOC_I32_RESERVE)) { return WIKRT_CXFULL; }
+        if(!wikrt_mem_reserve(cx, WIKRT_ALLOC_I32_RESERVE)) { return; }
         wikrt_pval(cx, cx->val)[0] = wikrt_alloc_i32_rv(cx, sum);
     } else {
         // TODO: add big numbers
@@ -1805,10 +1811,12 @@ void wikrt_int_add(wikrt_cx* cx)
     }
 }
 
+
+
 // Multiply two integers from stack.
 void wikrt_int_mul(wikrt_cx* cx)
 {
-    if(!wikrt_int_int(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(!wikrt_cx_has_two_ints(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_val* const pabe = wikrt_pval(cx,cx->val);
     wikrt_val const be = pabe[1];
     wikrt_val* const pbe = wikrt_pval(cx, be);
@@ -1819,8 +1827,9 @@ void wikrt_int_mul(wikrt_cx* cx)
     if(wikrt_i(a) && wikrt_i(b)) {
         _Static_assert((INT64_MAX / WIKRT_SMALLINT_MAX) > WIKRT_SMALLINT_MAX, "smallint mul can overflow");
         int64_t const prod = ((int64_t)wikrt_v2i(a)) * ((int64_t)wikrt_v2i(b));
-        cx->val = be; // drop `a`, keep slot for `b` to avoid allocation.
-        wikrt_pval(cx, cx->val)[0] = wikrt_alloc_i64_v(cx, prod);
+        cx->val = be; // drop the `a` cell but recycle location of `b`.
+        if(!wikrt_mem_reserve(cx, WIKRT_ALLOC_I64_RESERVE)) { return; }
+        wikrt_pval(cx, cx->val)[0] = wikrt_alloc_i64_rv(cx, prod);
     } else {
         // TODO: Multiply big integers.
         wikrt_set_error(cx, WIKRT_IMPL);
@@ -1871,7 +1880,7 @@ static inline void wikrt_smallint_divmod(wikrt_int dividend, wikrt_int divisor, 
 // (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e)).
 void wikrt_int_div(wikrt_cx* cx) 
 {
-    if(!wikrt_int_int(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(!wikrt_cx_has_two_ints(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_val* const pouter = wikrt_pval(cx, cx->val);
     wikrt_val* const pinner = wikrt_pval(cx, pouter[1]);
     wikrt_val const divisor = pouter[0];
@@ -1898,7 +1907,7 @@ void wikrt_int_div(wikrt_cx* cx)
  */
 void wikrt_int_cmp(wikrt_cx* cx, wikrt_ord* ord)
 {
-    if(!wikrt_int_int(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(!wikrt_cx_has_two_ints(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_val* const pa = wikrt_pval(cx, cx->val);
     wikrt_val* const pb = wikrt_pval(cx, pa[1]);
     wikrt_int_cmp_v(cx, *pb, ord, *pa);
@@ -1965,6 +1974,20 @@ void wikrt_block_attrib(wikrt_cx* cx, wikrt_val attrib)
 }
 
 
+static inline bool wikrt_cx_has_two_blocks(wikrt_cx* cx) {
+    wikrt_val const abe = cx->val;
+    if(wikrt_p(abe)) {
+        wikrt_val* const pa = wikrt_pval(cx, abe);
+        wikrt_val const be = pa[1];
+        if(wikrt_p(be)) {
+            wikrt_val* const pb = wikrt_pval(cx, be);
+            return wikrt_blockval(cx, *pa) 
+                && wikrt_blockval(cx, *pb);
+        }
+    }
+    return false;
+}
+
 // Compose two blocks in O(1) time. ([a→b]*([b→c]*e))→([a→c]*e).
 //
 // The most natural approach to composition in ABC is concatenation. However,
@@ -1979,34 +2002,28 @@ void wikrt_block_attrib(wikrt_cx* cx, wikrt_val attrib)
 void wikrt_compose(wikrt_cx* cx)
 {
     wikrt_size const szAlloc = (2 * WIKRT_CELLSIZE); // + reusing one cell
-    if(!wikrt_mem_reserve(cx, szAlloc)) { return WIKRT_CXFULL; }
+    if(!wikrt_mem_reserve(cx, szAlloc)) { return; }
+    if(!wikrt_cx_has_two_blocks(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
-    wikrt_val const abe = cx->val;
-    if(!wikrt_p(abe)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val  const abe = cx->val;
     wikrt_val* const pabe = wikrt_pval(cx, abe);
-    wikrt_val const be = pabe[1];
-    if(!wikrt_p(be)) { return WIKRT_TYPE_ERROR; }
+    wikrt_val  const be = pabe[1];
     wikrt_val* const pbe = wikrt_pval(cx, be);
-
-    wikrt_val const fn_ab = pabe[0];
-    wikrt_val const fn_bc = pbe[0];
-    bool const okType = wikrt_blockval(cx, fn_ab) 
-                     && wikrt_blockval(cx, fn_bc);
-    if(!okType) { return WIKRT_TYPE_ERROR; }
+    wikrt_val  const fn_ab = pabe[0];
+    wikrt_val  const fn_bc = pbe[0];
+    wikrt_val* const pfnbc = wikrt_pval(cx, fn_bc);
 
     wikrt_addr const a = wikrt_alloc_r(cx, szAlloc);
     wikrt_val* const pa = wikrt_paddr(cx, a);
-    wikrt_val* const pfnbc = wikrt_pval(cx, fn_bc);
 
     cx->val = be; // drop the `[a→b]` stack element
-    pa[0] = wikrt_tag_addr(WIKRT_O, wikrt_vaddr(abe)); // reusing `([a→b]*_)` cell
-    pabe[0] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF;
+    pabe[0] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF; // recycle cell for opval
     pabe[1] = fn_ab;
+    pa[0] = wikrt_tag_addr(WIKRT_O, wikrt_vaddr(abe)); 
     pa[1] = wikrt_tag_addr(WIKRT_PL, a + WIKRT_CELLSIZE);
     pa[2] = WIKRT_I2V(ACCEL_INLINE);
     pa[3] = pfnbc[1];
     pfnbc[1] = wikrt_tag_addr(WIKRT_PL, a); // [b→c] ⇒ [[a→b] inline b→c].
-    return WIKRT_OK;
 }
 
 
@@ -2086,10 +2103,10 @@ void wikrt_txn_durable(wikrt_cx* cx)
 
 void wikrt_txn_create(wikrt_cx* cx) 
 {
-    if(wikrt_cx_has_txn(cx)) { 
-        // no hierarchical transactions
-        wikrt_set_error(cx, WIKRT_INVAL);
-        return;
+    if(wikrt_cx_has_txn(cx)) {
+        // prevent hierarchical transactions 
+        wikrt_set_error(cx, WIKRT_INVAL); 
+        return; 
     }
 }
 
@@ -2102,18 +2119,19 @@ bool wikrt_txn_commit(wikrt_cx* cx)
 
 void wikrt_txn_write(wikrt_cx* cx, char const* key)
 {
-    if(!wikrt_p(cx
     size_t keylen;
-    if(!wikrt_valid_key_len(key,&keylen)) { return WIKRT_INVAL; }
-    return WIKRT_IMPL;
+    if(!wikrt_valid_key_len(key,&keylen)) { wikrt_set_error(cx, WIKRT_INVAL); return; }
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+
+    // TODO: write to database
+    wikrt_set_error(cx, WIKRT_IMPL);
 }
 
 void wikrt_txn_read(wikrt_cx* cx, char const* key) 
 {
     size_t keylen;
-    if(!wikrt_valid_key_len(key, &keylen)) { return WIKRT_INVAL; }
+    if(!wikrt_valid_key_len(key, &keylen)) { wikrt_set_error(cx, WIKRT_INVAL); return; }
     // TODO: lookup in database, and record in transaction state.
-
-    return WIKRT_IMPL;
+    wikrt_set_error(cx, WIKRT_IMPL);
 }
 
