@@ -161,7 +161,7 @@ static inline bool wikrt_o(wikrt_val v)  { return wikrt_tagged_valref(WIKRT_O, v
 #define WIKRT_V2I(V) (((wikrt_int)V) >> 1)
 static inline wikrt_val wikrt_i2v(wikrt_int i) { return WIKRT_I2V(i); }
 static inline wikrt_int wikrt_v2i(wikrt_val v) { return WIKRT_V2I(v); }
-static inline bool wikrt_i(wikrt_val v) { return (1 == (v & 1)); }
+static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
 
 /** The zero integer value. */
 #define WIKRT_IZERO WIKRT_I2V(0) 
@@ -405,7 +405,7 @@ void wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* out);
 void wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
 #endif
 
-#define WIKRT_ENABLE_FAST_READ 1
+#define WIKRT_ENABLE_FAST_READ 0
 
 // return number of valid bytes and chars, up to given limits. Return
 // 'true' only if all bytes were read or we stopped on a NUL terminal.
@@ -585,7 +585,7 @@ static inline void wikrt_wswap_v(wikrt_cx* cx, wikrt_val const abc)
 /* Recognize values represented entirely in the reference. */
 static inline bool wikrt_copy_shallow(wikrt_val const v) {
     // small numbers or zero address
-    return (wikrt_i(v) || (0 == wikrt_vaddr(v)));
+    return (wikrt_smallint(v) || (0 == wikrt_vaddr(v)));
 }
 
 /* Test whether a valid utf-8 codepoint is okay for a token. */
@@ -608,7 +608,7 @@ static inline bool wikrt_bigint(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_bigint(*wikrt_pval(cx, v));
 }
 static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
-    return wikrt_i(v) || wikrt_bigint(cx,v); 
+    return wikrt_smallint(v) || wikrt_bigint(cx,v); 
 }
 static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_block(*wikrt_pval(cx, v)); 

@@ -377,9 +377,9 @@ void wikrt_intro_i64(wikrt_cx*, int64_t);
 
 /** @brief Non-destructively read small integers. (Int*e)→(Int*e).
  *
- * These functions return true on success. Otherwise they return false.
- * The min or max for the type will be output if the reason for failure
- * is underflow or overflow, respectively.
+ * These functions return true on success. On error, they return false
+ * and output zero, min, or max (using min or max only for underflow 
+ * and overflow respectively).  
  */
 bool wikrt_peek_i32(wikrt_cx*, int32_t*);
 bool wikrt_peek_i64(wikrt_cx*, int64_t*);
@@ -422,13 +422,13 @@ void wikrt_intro_binary(wikrt_cx*, uint8_t const*, size_t);
  *
  * Our binary is a list `μL.((e*L)+t)` of bytes (0..255). Incremental 
  * read moves data to the client's buffer destructively, so sequential
- * reads will gradually consume the entire binary.
+ * reads gradually consume an entire binary.
  *
  *    (binary*e)→(smaller binary*e)
  *
- * The given size_t* field is both input (maximum buffer size) and output
- * (how many bytes are actually read). If the argument is not a binary, 
- * reading will halt and we'll set an error state.
+ * In case of error, we'll stop reading and set an error state in
+ * the context. I.e. you should statically know that your argument
+ * is a valid binary.
  */
 void wikrt_read_binary(wikrt_cx*, uint8_t*, size_t*);
 
@@ -447,9 +447,10 @@ void wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
  * Similar to wikrt_read_binary, but will read text into a utf-8 buffer.
  * The codepoints read will meet the same constraints as alloc_text, i.e. 
  * no control chars except LF, no surrogates, no incomplete codepoints.
- * However, Wikilon runtime is ignorant of multi-codepoint characters, so
- * there is no guarantee that the codepoints read represent a complete
- * character.
+ *
+ * In case of error, we'll stop reading and the context will enter an
+ * error state. So this shouldn't be used unless you know your argument
+ * should be a valid text.
  * 
  * The 'chars' parameter enables clients to limit and quickly determine 
  * the number of codepoints read, but it is optional (NULL permitted).

@@ -1267,16 +1267,18 @@ static inline bool wikrt_value_is_binary(wikrt_cx* cx, wikrt_val v) {
 
 void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
 {
+    _Static_assert(sizeof(uint8_t) == 1, "assuming sizeof(uint8_t) is 1");
+
     size_t const max_bytes = (*bytes);
     (*bytes) = 0;
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
     do {
         wikrt_val const v0 = wikrt_pval(cx, cx->val)[0];
         if(wikrt_pl(v0)) { // basic list node
 
             wikrt_val const* const pv = wikrt_pval(cx, v0);
-            if(!wikrt_i(*pv)) { return WIKRT_TYPE_ERROR; }
+            if(!wikrt_smallint(*pv)) { return WIKRT_TYPE_ERROR; }
             _Static_assert(((WIKRT_SMALLINT_MIN <= 0) && (255 <= WIKRT_SMALLINT_MAX))
                 , "assume bytes are small integers");
             wikrt_int const i = wikrt_v2i(*pv);
@@ -1328,10 +1330,14 @@ static inline bool wikrt_value_is_text(wikrt_cx* cx, wikrt_val v) {
     return (wikrt_o(v) && wikrt_otag_text(*(wikrt_pval(cx,v)))); 
 }
 
-
 void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
 {
     _Static_assert(sizeof(uint8_t) == sizeof(char), "assuming natural cast between uint8_t and char");
+    _Static_assert(((WIKRT_SMALLINT_MIN <= 0) && (0x10FFFF <= WIKRT_SMALLINT_MAX))
+        , "assuming unicode codepoints are small integers");
+
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+
     uint8_t* const dst = (uint8_t*) buff;
 
     // allow 'charct' to be NULL. But handle it in just one place.
@@ -1342,27 +1348,24 @@ void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
     size_t const max_charct = (*charct);
     (*buffsz) = 0;
     (*charct) = 0;
-    
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
 
     do {
-        wikrt_val const v0 = wikrt_pval(cx, cx->val)[0];
-        if(wikrt_pl(v0)) { // basic list node
+        wikrt_val const list = wikrt_pval(cx, cx->val)[0];
+        if(wikrt_pl(list)) { // basic list cons node
+            wikrt_val const* const pnode = wikrt_pval(cx, list);
+            wikrt_val const elem = *pnode;
+            bool const okTextChar = wikrt_smallint(elem) 
+                && (elem <= WIKRT_I2V(0x10FFFF)) 
+                && wikrt_text_char(WIKRT_V2I(elem));
+            if(!okTextChar) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
-            wikrt_val const* const pv = wikrt_pval(cx, v0);
-            if(!wikrt_i(*pv)) { return WIKRT_TYPE_ERROR; }
-            _Static_assert(((WIKRT_SMALLINT_MIN <= 0) && (0x10FFFF <= WIKRT_SMALLINT_MAX))
-                , "assuming unicode codepoints are small integers");
-            wikrt_int const i = wikrt_v2i(*pv);
-            bool const okChar = ((0 <= i) && (i <= 0x10FFFF) && wikrt_text_char(i));
-            if(!okChar) { return WIKRT_TYPE_ERROR; }
-            size_t const next_buffsz = (*buffsz) + utf8_writecp_size(i);
-            if((max_charct == (*charct)) || (next_buffsz > max_buffsz)) { return WIKRT_BUFFSZ; }
-            utf8_writecp_unsafe(dst + (*buffsz), i); 
+            uint32_t const cp = wikrt_v2i(elem);
+            size_t const next_buffsz = (*buffsz) + utf8_writecp_size(cp);
+            if((max_charct == (*charct)) || (next_buffsz > max_buffsz)) { return; } // not enough space in buffer
+            utf8_writecp_unsafe(dst + (*buffsz), cp);
             (*buffsz) = next_buffsz;
             (*charct) += 1;
-            wikrt_pval(cx, cx->val)[0] = pv[1]; // step to next element in list
-
+            wikrt_pval(cx, cx->val)[0] = pnode[1];
         } 
         #if WIKRT_ENABLE_FAST_READ
         else if(wikrt_value_is_text(cx, v0)) {
@@ -1395,7 +1398,7 @@ void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
                 (*charct) += cct;
                 phd[2] -= (((wikrt_size)cct << 16) | (wikrt_size)bct);
                 phd[3] += (wikrt_size)bct;
-                return WIKRT_BUFFSZ;
+                return; // reached end of buffer
 
             } else { // input limited
                 memcpy(dst + (*buffsz), src, txt_bytes);
@@ -1406,19 +1409,15 @@ void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
         } 
         #endif
         else { // maybe terminal, maybe expandable
-
-            wikrt_size const step_mem = WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE;
-            if(!wikrt_mem_reserve(cx, step_mem)) { return WIKRT_CXFULL; } // may move cx->val
-            wikrt_val* const v = wikrt_pval(cx, cx->val);
             wikrt_sum_tag lr;
-            void const st = wikrt_unwrap_sum_rv(cx, &lr, v);
-            if(WIKRT_OK != st) { return st; }
-            wikrt_wrap_sum_rv(cx, lr, v); 
-            if(WIKRT_INL != lr) { return WIKRT_OK; } 
-            
-            // unwrap/wrap should expand a list node.
-            if(!wikrt_pl(*v)) { return WIKRT_TYPE_ERROR; }
+            wikrt_unwrap_sum(cx, &lr); 
+            wikrt_wrap_sum(cx, lr);
 
+            if(WIKRT_INR == lr) { return; } // done reading
+
+            // I assume that unwrap/wrap will expand a list node.
+            bool const list_node_expanded = wikrt_pl(*wikrt_pval(cx, cx->val));
+            if(!list_node_expanded) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
         }
     } while(true);
 }
@@ -1471,9 +1470,8 @@ wikrt_val wikrt_alloc_i32_rv(wikrt_cx* cx, int32_t n)
 void wikrt_intro_i32(wikrt_cx* cx, int32_t n) 
 {
     wikrt_size const max_alloc = WIKRT_ALLOC_I32_RESERVE + WIKRT_CELLSIZE;
-    if(!wikrt_mem_reserve(cx, max_alloc)) { return WIKRT_CXFULL; }
+    if(!wikrt_mem_reserve(cx, max_alloc)) { return; }
     wikrt_intro_r(cx, wikrt_alloc_i32_rv(cx, n));
-    return WIKRT_OK;
 }
 
 wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t n)
@@ -1508,25 +1506,32 @@ wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t n)
 void wikrt_intro_i64(wikrt_cx* cx, int64_t n) 
 {
     wikrt_size const max_alloc = WIKRT_ALLOC_I64_RESERVE + WIKRT_CELLSIZE;
-    if(!wikrt_mem_reserve(cx, max_alloc)) { return WIKRT_CXFULL; }
+    if(!wikrt_mem_reserve(cx, max_alloc)) { return; }
     wikrt_intro_r(cx, wikrt_alloc_i64_rv(cx, n));
-    return WIKRT_OK;
+}
+
+static inline bool wikrt_cx_has_integer(wikrt_cx* cx) {
+    return wikrt_p(cx->val) 
+        && wikrt_integer(cx, wikrt_pval(cx, cx->val)[0]);
 }
 
 bool wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
 {
-    if(wikrt_error(cx) || !wikrt_p(cx->val)) { return false; }
+    bool const peek_ok = !wikrt_error(cx) && wikrt_cx_has_integer(cx);
+    if(!peek_ok) { (*i32) = 0; return false; }
+
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];
 
     // small integers (normal case)
-    if(wikrt_i(v)) {
+    if(wikrt_smallint(v)) {
         _Static_assert(((INT32_MIN <= WIKRT_SMALLINT_MIN) && (WIKRT_SMALLINT_MAX <= INT32_MAX))
             , "todo: fix overflow handling for small integers");
         (*i32) = (int32_t) wikrt_v2i(v);
         return true;
     } 
 
-    if(!wikrt_bigint(cx,v)) { return WIKRT_TYPE_ERROR; }
+    assert(wikrt_bigint(cx, v)); // if not smallint, assume bigint
+
     wikrt_val const* const pv = wikrt_pval(cx, v);
     bool const positive = (0 == ((1<<8) & *pv));
     wikrt_size const nDigits = (*pv) >> 9;
@@ -1554,18 +1559,21 @@ bool wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
 
 bool wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
 {
-    if(wikrt_error(cx) || !wikrt_p(cx->val)) { return false; }
+    bool const peek_ok = !wikrt_error(cx) && wikrt_cx_has_integer(cx);
+    if(!peek_ok) { (*i64) = 0; return false; }
+
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];
 
     // small integers (probably a common case)
-    if(wikrt_i(v)) {
+    if(wikrt_smallint(v)) {
         _Static_assert(((INT64_MIN <= WIKRT_SMALLINT_MIN) && (WIKRT_SMALLINT_MAX <= INT64_MAX))
             , "todo: fix overflow handling for small integers");
         (*i64) = (int64_t) wikrt_v2i(v);
         return true;
     }
 
-    if(!wikrt_bigint(cx,v)) { return WIKRT_TYPE_ERROR; }
+    assert(wikrt_bigint(cx,v)); // if not smallint, assume bigint
+
     wikrt_val const* const pv = wikrt_pval(cx, v);
     bool const positive = (0 == ((1<<8) & *pv));
     wikrt_size const nDigits = (*pv) >> 9;
@@ -1614,9 +1622,8 @@ static inline size_t wikrt_decimal_size(uint32_t n) {
 
 bool wikrt_peek_istr(wikrt_cx* cx, char* const buff, size_t* const buffsz)
 {
-    bool const ok_state = !wikrt_error(cx) && wikrt_p(cx->val) && 
-                          wikrt_integer(cx, wikrt_pval(cx, cx->val)[0]);
-    if(!ok_state) { (*buffsz) = 0; return false; }
+    bool const peek_ok = !wikrt_error(cx) && wikrt_cx_has_integer(cx);
+    if(!peek_ok) { (*buffsz) = 0; return false; }
 
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];
     bool positive;
@@ -1624,7 +1631,7 @@ bool wikrt_peek_istr(wikrt_cx* cx, char* const buff, size_t* const buffsz)
     uint32_t innerDigitCt;
     uint32_t const* d;
 
-    if(wikrt_i(v)) {
+    if(wikrt_smallint(v)) {
         _Static_assert((WIKRT_SMALLINT_MIN == (- WIKRT_SMALLINT_MAX)), "negation of smallint must be closed");
         _Static_assert((INT32_MIN <= WIKRT_SMALLINT_MIN) && (WIKRT_SMALLINT_MAX <= INT32_MAX), "smallint too big");
         int32_t const i = wikrt_v2i(v);
@@ -1799,7 +1806,7 @@ void wikrt_int_add(wikrt_cx* cx)
     wikrt_val const b = *pbe;
     
     // Optimize for common case: small integer addition.
-    if(wikrt_i(a) && wikrt_i(b)) {
+    if(wikrt_smallint(a) && wikrt_smallint(b)) {
         _Static_assert(((WIKRT_SMALLINT_MAX + WIKRT_SMALLINT_MAX) < INT32_MAX), "smallint add can overflow");
         int32_t const sum = wikrt_v2i(*pabe) + wikrt_v2i(*pbe);
         cx->val = be; // drop `a`, keep slot for `b` to avoid allocation.
@@ -1824,7 +1831,7 @@ void wikrt_int_mul(wikrt_cx* cx)
     wikrt_val const b = *pbe;
     
     // Optimize for common case: small integer multiplication.
-    if(wikrt_i(a) && wikrt_i(b)) {
+    if(wikrt_smallint(a) && wikrt_smallint(b)) {
         _Static_assert((INT64_MAX / WIKRT_SMALLINT_MAX) > WIKRT_SMALLINT_MAX, "smallint mul can overflow");
         int64_t const prod = ((int64_t)wikrt_v2i(a)) * ((int64_t)wikrt_v2i(b));
         cx->val = be; // drop the `a` cell but recycle location of `b`.
@@ -1841,7 +1848,7 @@ void wikrt_int_neg(wikrt_cx* cx)
 {
     if(wikrt_p(cx->val)) { 
         wikrt_val* const v = wikrt_pval(cx, cx->val);
-        if(wikrt_i(*v)) {
+        if(wikrt_smallint(*v)) {
             _Static_assert((WIKRT_SMALLINT_MIN == (- WIKRT_SMALLINT_MAX)), "small integer negation should be closed");
             (*v) = wikrt_i2v(- wikrt_v2i(*v));
             return;
@@ -1887,7 +1894,7 @@ void wikrt_int_div(wikrt_cx* cx)
     wikrt_val const dividend = pinner[0];
     if(WIKRT_IZERO == divisor) { 
         wikrt_set_error(cx, WIKRT_EDIV0); 
-    } else if(wikrt_i(dividend) && wikrt_i(divisor)) {
+    } else if(wikrt_smallint(dividend) && wikrt_smallint(divisor)) {
         // if our inputs are small-ints, so are our outputs.
         wikrt_int q,r;
         wikrt_smallint_divmod(wikrt_v2i(dividend), wikrt_v2i(divisor), &q, &r);
@@ -1917,7 +1924,7 @@ void wikrt_int_cmp(wikrt_cx* cx, wikrt_ord* ord)
 void wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b)
 {
     // fast handling for common smallnum case
-    if(wikrt_i(a) && wikrt_i(b)) {
+    if(wikrt_smallint(a) && wikrt_smallint(b)) {
         wikrt_int const ia = wikrt_v2i(a);
         wikrt_int const ib = wikrt_v2i(b);
         (*ord) = (ia > ib) ? WIKRT_GT : (ia < ib) ? WIKRT_LT : WIKRT_EQ;
