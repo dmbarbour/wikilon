@@ -530,7 +530,10 @@ static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_val v) {
  */
 
 static inline bool wikrt_mem_available(wikrt_cx* cx, wikrt_sizeb sz) { return (sz < cx->alloc); }
-bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz); // also sets error upon failure
+bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz);
+static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz) { 
+    return wikrt_mem_available(cx, sz) ? true : wikrt_mem_gc_then_reserve(cx, sz); 
+}
 
 
 // Allocate a given amount of space, assuming sufficient space is reserved.
@@ -563,20 +566,6 @@ static inline void wikrt_pval_swap(wikrt_val* a, wikrt_val* b) {
     (*a) = tmp;
 } 
 
-// non-allocating, data moving, fail-safe wswap
-static inline void wikrt_wswap_v(wikrt_cx* cx, wikrt_val const abc) 
-{
-    if(wikrt_p(abc)) {
-        wikrt_val* const pabc = wikrt_pval(cx,abc);
-        wikrt_val  const bc   = pabc[1];
-        if(wikrt_p(bc)) {
-            wikrt_val* const pbc = wikrt_pval(cx,bc);
-            wikrt_pval_swap(pabc, pbc);
-            return WIKRT_OK;
-        }
-    }
-    return WIKRT_TYPE_ERROR;
-}
 
 // Other thoughts: It could be useful to keep free-lists regardless,
 // and allocate from them only after the bump-pointer arena is full
