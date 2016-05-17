@@ -229,7 +229,7 @@ bool wikrt_valid_token(char const* s);
 
 /** Shallow reflection over values. */
 typedef enum wikrt_type
-{ WIKRT_TYPE_UND        // an undefined type
+{ WIKRT_TYPE_UNDEF      // an undefined type
 , WIKRT_TYPE_INT        // any integer
 , WIKRT_TYPE_PROD       // a pair of values
 , WIKRT_TYPE_UNIT       // the unit value
@@ -238,7 +238,7 @@ typedef enum wikrt_type
 , WIKRT_TYPE_SEAL       // discretionary sealed value
 , WIKRT_TYPE_STOW       // stowed value reference
 , WIKRT_TYPE_PEND       // pending lazy or parallel value
-} wikrt_vtype;
+} wikrt_val_type;
 
 /** @brief Reflection on values.
  *
@@ -252,7 +252,7 @@ typedef enum wikrt_type
  * it would be preferable for the code itself to provide rendering
  * suggestions. Please use this sparingly.
  */
-wikrt_type wikrt_vtype(wikrt_cx*);
+wikrt_val_type wikrt_type(wikrt_cx*);
 
   /////////////////////////
  // BASIC DATA PLUMBING //
@@ -493,7 +493,8 @@ void wikrt_block_to_text(wikrt_cx*);
  * may be unsealed (by a {.map} token). Short discretionary sealers
  * (no more than 4 bytes, including the ':') have a compact encoding.
  *
- * The empty string is a special case and will not seal a value.
+ * Note that a valid token string cannot be empty. It must be between
+ * one and sixty-three bytes in the utf-8 representation.
  */
 void wikrt_wrap_seal(wikrt_cx*, char const*); 
 
@@ -502,11 +503,6 @@ void wikrt_wrap_seal(wikrt_cx*, char const*);
  * This returns the sealer token into the provided buffer, which must
  * be at least WIKRT_TOK_BUFFSZ in length to eliminate risk of buffer
  * overflow. This token is NUL-terminated.
- *
- * If the argument is not a sealed value, the empty string is returned.
- * There is no potential for this function to error out. (Motivation is
- * that it should be feasible to transparently remove discretionary seals
- * without affecting program behavior.)
  */
 void wikrt_unwrap_seal(wikrt_cx*, char*);
 

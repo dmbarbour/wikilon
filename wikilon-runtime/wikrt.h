@@ -83,8 +83,8 @@ typedef enum wikrt_ss
 , WIKRT_SS_PEND = 1<<2
 } wikrt_ss;
 
-static inline bool wikrt_ss_copyable(wikrt_ss ss)  { return (0 == (ss & (WIKRT_SS_PEND | WIKRT_SS_AFF)); }
-static inline bool wikrt_ss_droppable(wikrt_ss ss) { return (0 == (ss & (WIKRT_SS_PEND | WIKRT_SS_REL)); }
+static inline bool wikrt_ss_copyable(wikrt_ss ss)  { return (0 == (ss & (WIKRT_SS_AFF | WIKRT_SS_PEND))); }
+static inline bool wikrt_ss_droppable(wikrt_ss ss) { return (0 == (ss & (WIKRT_SS_REL | WIKRT_SS_PEND))); }
 
 // for static assertions, i.e. so I don't forget to edit something
 #define WIKRT_ACCEL_COUNT 6

@@ -80,8 +80,10 @@ void wikrt_env_sync(wikrt_env* e) {
 wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB) 
 {
     assert(NULL != e);
-    size_t const size = ((size_t)cxSizeMB << 20);
-    bool const validSize = (size < (SIZE_MAX / 2)) && (WIKRT_CX_MIN_SIZE <= cxSizeMB) && (cxSizeMB <= WIKRT_CX_MAX_SIZE);
+    size_t const size = ((size_t)cxSizeMB * (1024 * 1024));
+    bool const validSize = (size < (SIZE_MAX / 2)) 
+        && (WIKRT_CX_MIN_SIZE <= cxSizeMB) 
+        && (cxSizeMB <= WIKRT_CX_MAX_SIZE);
 
     if(!validSize) { return NULL; }
 
@@ -91,7 +93,6 @@ wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB)
     // validate sizes according to API declarations
     static int const prot = PROT_READ | PROT_WRITE | PROT_EXEC;
     static int const flags = MAP_ANONYMOUS | MAP_PRIVATE;
-    size_t const size = ((size_t)cxSizeMB) << 20;
     void* const twospace = mmap(NULL, (2 * size), prot, flags, -1, 0);
     if(NULL == twospace) { free(cx); return NULL; }
     
@@ -187,7 +188,6 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     cx->ssp = cx0.mem;
     cx->mem = cx0.ssp;
     cx->alloc = cx->size;
-    cx->stowage_pending = 0;
 
     // heuristic free lists can be cleared
     // cx->freecells = 0;
@@ -232,9 +232,9 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
 
     // TODO: If compaction fails to recover sufficient space,
     // but a sufficient amount of stowage is pending, we can
-    // stow this data then retry.
+    // stow this data then retry. 
 
-    wikrt_set_error(cx, WIKRT_FULL);
+    wikrt_set_error(cx, WIKRT_CXFULL);
     return false;
 } 
 
@@ -262,7 +262,8 @@ void wikrt_copy_move(wikrt_cx* lcx, wikrt_cx* rcx) {
     wikrt_ss ss = 0;
     wikrt_copy_m(lcx, &ss, rcx);
     if(!wikrt_ss_copyable(ss)) {
-        wikrt_set_error(cx, WIKRT_ETYPE);
+        wikrt_set_error(lcx, WIKRT_ETYPE);
+        wikrt_set_error(rcx, WIKRT_ETYPE);
     }
 }
 
@@ -275,13 +276,17 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, wikrt_cx* rcx)
 {
     // base implementation for both wikrt_copy and wikrt_copy_move.
     // in lcx == rcx case, the copy is stacked above the original.
-    if(!wikrt_p(lcx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(!wikrt_p(lcx->val)) { 
+        wikrt_set_error(lcx, WIKRT_ETYPE); 
+        wikrt_set_error(rcx, WIKRT_ETYPE);
+        return;
+    }
 
     // reserve space in `rcx`. Also, size estimates for validation.
     wikrt_size const max_alloc = WIKRT_CELLSIZE + (lcx->size - lcx->alloc);
     bool const use_size_bypass = WIKRT_ALLOW_SIZE_BYPASS && wikrt_mem_available(rcx, max_alloc);
     wikrt_size const alloc_est = use_size_bypass ? 0 : (WIKRT_CELLSIZE + wikrt_vsize_ssp(lcx, *(wikrt_pval(lcx, lcx->val))));
-    if(!wikrt_mem_reserve(rcx, alloc_est)) { return; }
+    if(!wikrt_mem_reserve(rcx, alloc_est)) { wikrt_dropk(lcx); return; }
 
     // Note: wikrt_mem_reserve may move lcx->val (when lcx == rcx).
     // anyhow, we now have sufficient space to perform our copy!
@@ -301,6 +306,38 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, wikrt_cx* rcx)
             __FUNCTION__, (int)alloc_est, (int)alloc_act);
         abort();
     }
+}
+
+
+wikrt_val_type wikrt_type(wikrt_cx* cx) 
+{
+    bool const okPeek = wikrt_p(cx->val) && !wikrt_error(cx);
+    if(!okPeek) { return WIKRT_TYPE_UNDEF; }
+    wikrt_val const v = wikrt_pval(cx, cx->val)[0];
+    wikrt_tag const tag = wikrt_vtag(v);
+    if(wikrt_smallint(v)) { return WIKRT_TYPE_INT; }
+    else if(WIKRT_P == tag) { return (WIKRT_UNIT == v) ? WIKRT_TYPE_UNIT : WIKRT_TYPE_PROD; }
+    else if((WIKRT_PL == tag) || (WIKRT_PR == tag)) { return WIKRT_TYPE_SUM; }
+    else {
+        assert(WIKRT_O == tag);
+        if(WIKRT_VOID == v) { return WIKRT_TYPE_UNDEF; }
+        wikrt_val* const pv = wikrt_pval(cx, v);
+        switch(LOBYTE(*pv)) {
+            case WIKRT_OTAG_BIGINT:     return WIKRT_TYPE_INT; 
+
+            case WIKRT_OTAG_ARRAY:      // is a list, which is a sum
+            case WIKRT_OTAG_BINARY:     // is a list, which is a sum
+            case WIKRT_OTAG_TEXT:       // is a list, which is a sum
+            case WIKRT_OTAG_DEEPSUM:    return WIKRT_TYPE_SUM; 
+
+            case WIKRT_OTAG_BLOCK:      return WIKRT_TYPE_BLOCK;
+
+            case WIKRT_OTAG_SEAL_SM:    // is a sealed value
+            case WIKRT_OTAG_SEAL:       return WIKRT_TYPE_SEAL;
+            
+            default:                    return WIKRT_TYPE_UNDEF;
+        }
+    } 
 }
 
 // build stack of items that need at least one cell to allocate
@@ -665,7 +702,7 @@ void wikrt_elim_unit(wikrt_cx* cx)
 void wikrt_elim_unit_r(wikrt_cx* cx)
 {
     bool const type_ok = wikrt_p(cx->val) && (WIKRT_UNIT == (wikrt_pval(cx, cx->val)[1]));
-    if(!type_ok) { wikrt_set-error(cx, WIKRT_ETYPE); return; }
+    if(!type_ok) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     cx->val = wikrt_pval(cx, cx->val)[0];
 }
 
@@ -756,34 +793,33 @@ void wikrt_wrap_seal(wikrt_cx* cx, char const* s)
 {
     // Ensure we have sufficient space for a sealer token.
     size_t const worst_case_alloc = WIKRT_CELLSIZE + WIKRT_TOK_BUFFSZ;
-    if(!wikrt_mem_reserve(cx, worst_case_alloc)) { return WIKRT_CXFULL; }
+    if(!wikrt_mem_reserve(cx, worst_case_alloc)) { return; }
 
     // basic validation of input.
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    if(!wikrt_valid_token(s)) { return WIKRT_INVAL; }
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(!wikrt_valid_token(s)) { wikrt_set_error(cx, WIKRT_INVAL); return; }
 
     // wrap head value in a seal.
     wikrt_size const len = strlen(s);
     if((':' == *s) && (len <= 4)) {
+        _Static_assert(sizeof(wikrt_val) >= 4, "assume at least four bytes");
         // WIKRT_OTAG_SEAL_SM: optimized case, small discretionary sealers
         #define TAG(N) ((len > N) ? (((wikrt_val)s[N]) << (8*N)) : 0)
         wikrt_val const otag = TAG(3) | TAG(2) | TAG(1) | WIKRT_OTAG_SEAL_SM;
         #undef TAG
         wikrt_val* const v = wikrt_pval(cx, cx->val);
         wikrt_alloc_cellval_r(cx, v, WIKRT_O, otag, (*v));
-        return WIKRT_OK;
     } else {
         // WIKRT_OTAG_SEAL: general case, large or arbitrary sealers
+        assert(len < WIKRT_TOK_BUFFSZ);
         wikrt_size const szData  = WIKRT_CELLSIZE + len;
-        wikrt_size const szAlloc = wikrt_cellbuff(szData); 
-        wikrt_addr const addr = wikrt_alloc_r(cx, szAlloc);
+        wikrt_addr const addr = wikrt_alloc_r(cx, wikrt_cellbuff(szData));
         wikrt_val* const pa = wikrt_paddr(cx, addr);
         wikrt_val* const pv = wikrt_pval(cx, cx->val);
         pa[0] = (len << 8) | WIKRT_OTAG_SEAL;
         pa[1] = (*pv);
         memcpy((2+pa), s, len);
         (*pv) = wikrt_tag_addr(WIKRT_O, addr);
-        return WIKRT_OK;
     }
 }
 
@@ -791,27 +827,30 @@ void wikrt_unwrap_seal(wikrt_cx* cx, char* buff)
 {
     // I'm assuming (via API docs) that `buff` is WIKRT_TOK_BUFFSZ
     (*buff) = 0;
-    if(!wikrt_p(cx->val)) { return WIKRT_TYPE_ERROR; }
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    if(!wikrt_o(*v)) { return WIKRT_TYPE_ERROR; }
-    wikrt_val* const pv = wikrt_pval(cx, (*v));
-
-    if(wikrt_otag_seal_sm(*pv)) {
-        wikrt_val const otag = *pv;
-        buff[0] = ':';
-        buff[1] = (char)((otag >> 8 ) & 0xFF);
-        buff[2] = (char)((otag >> 16) & 0xFF);
-        buff[3] = (char)((otag >> 24) & 0xFF);
-        buff[4] = 0;
-        (*v) = pv[1];
-        return WIKRT_OK;
-    } else if(wikrt_otag_seal(*pv)) {
-        size_t const len = ((*pv) >> 8);
-        memcpy(buff, (2 + pv), len);
-        buff[len] = 0;
-        (*v) = pv[1];
-        return WIKRT_OK; 
-    } else { return WIKRT_TYPE_ERROR; }
+    if(wikrt_p(cx->val)) {
+        wikrt_val* const v = wikrt_pval(cx, cx->val);
+        if(wikrt_o(*v)) {
+            wikrt_val* const pv = wikrt_pval(cx, (*v));
+            if(wikrt_otag_seal_sm(*pv)) {
+                wikrt_val const otag = *pv;
+                buff[0] = ':';
+                buff[1] = (char)((otag >> 8 ) & 0xFF);
+                buff[2] = (char)((otag >> 16) & 0xFF);
+                buff[3] = (char)((otag >> 24) & 0xFF);
+                buff[4] = 0;
+                (*v) = pv[1];
+                return;
+            } else if(wikrt_otag_seal(*pv)) {
+                size_t const len = ((*pv) >> 8);
+                assert(len < WIKRT_TOK_BUFFSZ);
+                memcpy(buff, (2 + pv), len);
+                buff[len] = 0;
+                (*v) = pv[1];
+                return;
+            }
+        }
+    }
+    wikrt_set_error(cx, WIKRT_ETYPE);
 }
 
 void wikrt_wrap_sum(wikrt_cx* cx, wikrt_sum_tag sum) 
