@@ -39,24 +39,17 @@
 #define WIKRT_WRITE_BUFFSZ (40 * 1000)
 typedef struct wikrt_writer_state 
 {
-    // in case of error
-    bool       cxfull;
-    
     // conditions for current block
-    bool       lazykf;
-    bool       relevant;
-    bool       affine;
-
+    bool rel, aff, lazykf;
     wikrt_size depth;
+
     wikrt_size bytect;
     wikrt_size charct;
-    uint8_t   *buff;
+    uint8_t    buff[WIKRT_WRITE_BUFFSZ];
 } wikrt_writer_state;
 
-static inline wikrt_size wikrt_writer_buff_free(wikrt_writer_state const* w) 
-{
-    return (WIKRT_WRITE_BUFFSZ - (w->buffsz)); 
-}
+// For bitfield tracking substructure
+#define WIKRT_SS_LAZYKF (1 << 7)
 
 // Note: All of these strings should be ASCII.
 // op2abc_table contains zero for accelerators 
@@ -83,12 +76,12 @@ static wikrt_abc wikrt_op2abc_table[OP_COUNT] =
 // general case, I might eventually have accelerators that contain
 // specific blocks or texts. So I'm using function pointers for the
 // writing of multiple elements.
-static void writer_TAILCALL(wikrt_cx* cx, wikrt_writer_state* w);
-static void writer_INLINE(wikrt_cx* cx, wikrt_writer_state* w);
-static void writer_PROD_SWAP(wikrt_cx* cx, wikrt_writer_state* w);
-static void writer_INTRO_UNIT(wikrt_cx* cx, wikrt_writer_state* w);
-static void writer_SUM_SWAP(wikrt_cx* cx, wikrt_writer_state* w);
-static void writer_INTRO_VOID(wikrt_cx* cx, wikrt_writer_state* w);
+static void writer_TAILCALL(wikrt_writer_state* w);
+static void writer_INLINE(wikrt_writer_state* w);
+static void writer_PROD_SWAP(wikrt_writer_state* w);
+static void writer_INTRO_UNIT(wikrt_writer_state* w);
+static void writer_SUM_SWAP(wikrt_writer_state* w);
+static void writer_INTRO_VOID(wikrt_writer_state* w);
 
 typedef void (*wikrt_writer)(wikrt_cx*, wikrt_writer_state*);
 #define ACCEL(X) [ACCEL_##X] = writer_##X
@@ -103,7 +96,7 @@ _Static_assert((6 == WIKRT_ACCEL_COUNT), "missing accelerator writer?");
 static void wikrt_writer_flush(wikrt_cx* cx, wikrt_writer_state* w)
 {
     _Static_assert((WIKRT_WRITE_BUFFSZ <= 0xFFFF), "write buffer too large to trivially flush");
-    if(0 == w->buffsz) { return; }
+    if(0 == w->buffsz) { return; } // quick exit
 
     // sanity check
     assert((w->buffsz <= WIKRT_WRITE_BUFFSZ)
@@ -115,13 +108,8 @@ static void wikrt_writer_flush(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_sizeb const szHdr   = 2 * WIKRT_CELLSIZE;
     wikrt_sizeb const szAlloc = szHdr + szBuff;
 
-    bool const flush_space_available = wikrt_mem_reserve(cx, szAlloc);
-    bool const no_prior_errors = !(w->cxfull);
-
-    if(flush_space_available && no_prior_errors) {
-        // Complete the flush of data.
-
-        wikrt_assocl(cx); wikrt_wswap(cx); // swizzle texts to top
+    if(wikrt_mem_reserve(cx, szAlloc)) { 
+        wikrt_assocl(cx); wikrt_wswap(cx); // swizzle text outputs to top
         wikrt_val* const v = wikrt_pval(cx, cx->val);
 
         wikrt_addr const addr_buff = wikrt_alloc_r(cx, szBuff);
@@ -138,16 +126,12 @@ static void wikrt_writer_flush(wikrt_cx* cx, wikrt_writer_state* w)
         phdr[1] = (*v);
         (*v) = wikrt_tag_addr(WIKRT_O, addr_hdr);
         wikrt_wswap(cx); wikrt_assocr(cx); // return texts to bottom
-       
-    } else { 
-        // Otherwise, we'll record that we have a full context.
-        // This will prevent future flushes, too.
-        w->cxfull = true; 
     }
 
     // regardless of success or failure, clear the buffer
     w->buffsz = 0;
     w->charct = 0;
+
 }
 
 static void wikrt_writer_putchar(wikrt_cx* cx, wikrt_writer_state* w, uint32_t cp)
@@ -216,44 +200,36 @@ static void writer_INTRO_VOID(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_write_op(cx, w, ACCEL_SUM_SWAP);
 }
 
-static inline bool wikrt_writer_pop_stack(wikrt_cx* cx, wikrt_writer_state* w)
+static inline void wikrt_writer_pop_stack(wikrt_cx* cx, wikrt_writer_state* w)
 {
-    assert(WIKRT_UNIT_INR == wikrt_pval(cx, cx->val)[0]);
-    if(0 == w->depth) { return false; } // empty stack
-    
-    bool const write_eob = wikrt_writer_putchar(cx, w, ']');
-    bool const write_rel = !(w->relevant) || wikrt_writer_putchar(cx, w, ABC_REL);
-    bool const write_aff = !(w->affine) || wikrt_writer_putchar(cx, w, ABC_AFF);
+    assert((WIKRT_UNIT_INR == wikrt_pval(cx, cx->val)[0]) && (w->depth > 0));
 
-    bool const okEOB = write_eob && write_rel && write_aff;
-    if(!okEOB) { return false; }
+    wikrt_writer_putchar(cx, w, ']');
+    if(w->rel) { wikrt_writer_putchar(cx, w, ABC_REL); }
+    if(w->aff) { wikrt_writer_putchar(cx, w, ABC_AFF); }
 
-    // Context has (ops * (stack * (texts * e))).
-    //   ops is empty list (we assert this above)
-    //   stack is ((ss*ops')*stack') and 'ss' has substructural info.
-    //   target is: (ss * (ops' * (stack' * (texts * e))).
-    wikrt_err st = WIKRT_OK;
-    st |= wikrt_drop(cx, NULL); // drop ops
-    st |= wikrt_assocr(cx); // pop stack
-    st |= wikrt_assocr(cx); // separate `ss` and `ops`
-    assert(WIKRT_OK == st); // this operation should not fail (non-allocating, type safe by impl).
+    // initially (emptyOps * (stack * (text * e))) where
+    //   stack is ((ss*ops')*stack')
+    wikrt_dropk(cx);
+    wikrt_assocr(cx);
+    wikrt_assocr(cx);
 
     // Access and update substructure for our parent.
     wikrt_val const ss_val = wikrt_pval(cx, cx->val)[0];
     assert(wikrt_i(ss_val));
-    wikrt_drop(cx, NULL); // drop `ss`
+    wikrt_dropk(cx); // drop `ss`
 
     wikrt_int const ss = wikrt_v2i(ss_val);
+    w->rel = (0 != (ss & WIKRT_SS_REL)) || (w->lazykf && w->rel);
+    w->aff = (0 != (ss & WIKRT_SS_AFF)) || (w->lazykf && w->aff);
+    w->lazykf = (0 != (ss & WIKRT_SS_LAZYKF));
     w->depth -= 1;
-    w->relevant = (0 != (ss & WIKRT_SS_REL)) || (w->lazykf && w->relevant);
-    w->affine = (0 != (ss & WIKRT_SS_AFF)) || (w->lazykf && w->affine);
-    w->lazykf = (0 != (ss & WIKRT_SS_PEND)); // overloading use
 
-    // Leave with context (ops' * (stack' * (texts * e))). 
-    // Our next step will involve processing the next op.
-    return true;
+    // exiting with context (ops' * (stack' * (texts * e))). 
+    //  and 'ss' merged into wirkt_writer_state
 }
 
+#if 0
 static inline bool wikrt_writer_step(wikrt_cx* cx, wikrt_writer_state* w) 
 {
     // Reserve as much space as we might need.
@@ -262,12 +238,12 @@ static inline bool wikrt_writer_step(wikrt_cx* cx, wikrt_writer_state* w)
 
     // (ops * (stack * (texts * e))).
     wikrt_sum_tag lr;
-    wikrt_err const stSum = wikrt_unwrap_sum(cx, &lr);
-    assert(WIKRT_OK == stSum); // bad op type?
+    wikrt_unwrap_sum(cx, &lr);
 
     if(WIKRT_INR == lr) {
         wikrt_wrap_sum(cx, lr); // end of ops
-        return wikrt_writer_pop_stack(cx, w); 
+        wikrt_writer_pop_stack(cx, w); 
+        return true;
     } 
 
     // ((op*ops') * (stack * (texts * e))).
@@ -366,92 +342,53 @@ static inline bool wikrt_writer_step(wikrt_cx* cx, wikrt_writer_state* w)
     //  maybe keep a w->status instead of returning booleans in each step.
 }
 
+#endif
+
+static inline bool wikrt_cx_has_block(wikrt_cx* cx) {
+    return wikrt_p(cx->val) && wikrt_blockval(cx, *wikrt_pval(cx, cx->val));
+}
+
+static inline void wikrt_writer_state_init(wikrt_writer_state* w) 
+{
+    w->rel      = false;
+    w->aff      = false;
+    w->lazykf   = false;
+    w->depth    = 0;
+    w->bytect   = 0;
+    w->charct   = 0;
+}
 
 /* convert a block on the stack to text. */
-wikrt_err wikrt_block_to_text(wikrt_cx* cx)
+void wikrt_block_to_text(wikrt_cx* cx)
 {
     // Expecting (block * e).
-    bool const okType = wikrt_p(cx->val)
-                     && wikrt_blockval(cx, wikrt_pval(cx, cx->val)[0]);
-    if(!okType) {
-        wikrt_drop(cx, NULL);
-        return WIKRT_TYPE_ERROR;
-    }
-
-    // Prepare (ops * (continuation * (texts * e))) context.
-    if(!wikrt_mem_reserve(cx, (2 * WIKRT_CELLSIZE)) {
-        wikrt_drop(cx, NULL);
-        return WIKRT_CXFULL; 
-    }
+    if(!wikrt_cx_has_block(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(!wikrt_mem_reserve(cx, (2 * WIKRT_CELLSIZE))) { return; }
 
     wikrt_intro_r(cx, WIKRT_UNIT_INR); wikrt_wswap(cx); // initial texts (empty list)
     wikrt_intro_r(cx, WIKRT_UNIT); wikrt_wswap(cx);     // initial continuation (unit)
 
-    // Prepare our buffer.
-    uint8_t wbuff[WIKRT_WRITER_BUFFSZ];
-    wikrt_writer_state w = { .buff = wbuff };
+    wikrt_writer_state w;
+    wikrt_writer_state_init(&w);
 
-    // Process every operation. Assume a valid block structure. Only 
-    // possible error is to run out of space during write. We'll not
-    // optimize for the error case.
-    do {
-        
+    // Write every operator. This may fail at some intermediate step,
+    // but should succeed in general (i.e. there should be no type
+    // errors, and context shouldn't grow much unless we add a lot
+    // more accelerators).
+    while(wikrt_write_small_step(&w,cx)) { /* continue */ }
 
-    } while(1);
+    if(WIKRT_OK != wikrt_error(cx)) { return; }
 
-    
-
-    // context should be (ops * (stack * (texts * e))).
-    // `ops` should be an empty list. 
-    // `stack` should be an empty stack.
-    // `texts` is in reverse chunk order
-    wikrt_writer_flush(cx, w);
+    wikrt_writer_flush(cx, &w);
     assert(0 == w->depth);
 
     bool const empty_ops = (WIKRT_UNIT_INR == wikrt_pval(cx, cx->val)[0]);
-    wikrt_drop(cx, NULL); // drop ops (even if not empty)
+    wikrt_dropk(cx); // drop ops (even if not empty)
     bool const empty_stack = (0 == w->depth) && (WIKRT_UNIT == wikrt_pval(cx, cx->val)[0]);
-    wikrt_drop(cx, NULL); // drop stack (even if not empty)
+    wikrt_dropk(cx); // drop stack (even if not empty)
 
-
-    if(WIKRT_OK != w->status) {
-        wikrt_drop(cx, NULL);
-        wikrt_drop(cx, NULL);
-        wikrt_drop(cx, NULL);
-        return;
-    }
-
-
-    // Assuming valid input (by the time we start writing), our only
-    // source of error is 
-    // reaching the memory limits of our context, either upon flush or
-    // when processing quoted values. 
-    bool const ok = flushed && empty_ops && empty_stack;
-    if(!ok) { w->status = WIKRT_CXFULL; }
-wikrt_drop(cx, NULL); return WIKRT_CXFULL; }
-
-    wikrt_reverse_text_chunks(cx); // repair ordering of text
-    return WIKRT_OK;
-
-
-    // since I have a block, the only other error will be
-    // WIKRT_CXFULL. I need to prepare our stack, then process
-    // every operator.
-    wikrt_writer_state w;
-    w.
-    
-
-
-    if(!wikrt_p(cx->val) || !wikrt_blockval(cx, wikrt_pval(cx, cx-
-
-
-    wikrt_writer_state w;
-    wikrt_err const stInit = wikrt_writer_init(cx, &w);
-    if(WIKRT_OK != stInit) {
-        wikrt_drop(cx, NULL); 
-        return stInit; 
-    }
-    while(wikrt_writer_step(cx, &w)) { /* NOP */ }
-    return wikrt_writer_fini(cx, &w);
+    bool const ok_state = empty_ops && empty_stack;
+    if(!ok_state) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    wikrt_reverse_text_chunks(cx); // repair order of text
 }
 

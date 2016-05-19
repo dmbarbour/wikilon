@@ -111,25 +111,27 @@ static void wikrt_flush_parse_text(wikrt_cx* cx, wikrt_parse_state* p)
 
     wikrt_sizeb const szBuff  = wikrt_cellbuff(p->buffsz);
     wikrt_sizeb const szAlloc = szBuff + (2 * WIKRT_CELLSIZE);
-    if(!wikrt_mem_reserve(cx,szAlloc)) { return; }
+    if(wikrt_mem_reserve(cx,szAlloc)) { 
 
-    // context should (texts * e).
-    wikrt_val* const texts = wikrt_pval(cx, cx->val);
+        // context should (texts * e).
+        wikrt_val* const texts = wikrt_pval(cx, cx->val);
 
-    // copy text from parse buffer into context
-    wikrt_addr const addr_buff = wikrt_alloc_r(cx, szBuff);
-    memcpy(wikrt_paddr(cx, addr_buff), p->buff, p->buffsz);
+        // copy text from parse buffer into context
+        wikrt_addr const addr_buff = wikrt_alloc_r(cx, szBuff);
+        memcpy(wikrt_paddr(cx, addr_buff), p->buff, p->buffsz);
 
-    // (OTAG_TEXT, next, (size-char, size-bytes), buffer)
-    wikrt_addr const addr_hdr = wikrt_alloc_r(cx, (2 * WIKRT_CELLSIZE));
-    wikrt_val* const phdr = wikrt_paddr(cx, addr_hdr);
-    phdr[0] = WIKRT_OTAG_TEXT;
-    phdr[1] = (*texts);
-    phdr[2] = (p->charct << 16) | (p->buffsz);
-    phdr[3] = addr_buff;
-    (*texts) = wikrt_tag_addr(WIKRT_O, addr_hdr);
+        // (OTAG_TEXT, next, (size-char, size-bytes), buffer)
+        wikrt_addr const addr_hdr = wikrt_alloc_r(cx, (2 * WIKRT_CELLSIZE));
+        wikrt_val* const phdr = wikrt_paddr(cx, addr_hdr);
+        phdr[0] = WIKRT_OTAG_TEXT;
+        phdr[1] = (*texts);
+        phdr[2] = (p->charct << 16) | (p->buffsz);
+        phdr[3] = addr_buff;
+        (*texts) = wikrt_tag_addr(WIKRT_O, addr_hdr);
 
-    // clear buffer and continue
+    }
+
+    // clear buffer before continuing even on flush failure
     p->buffsz = 0;
     p->charct = 0;
 }

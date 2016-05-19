@@ -76,6 +76,9 @@ typedef enum wikrt_intern_op
 , OP_COUNT  // how many ops are defined?
 } wikrt_op;
 
+// for static assertions, i.e. so I don't forget to edit something
+#define WIKRT_ACCEL_COUNT 6
+
 typedef enum wikrt_ss
 { WIKRT_SS_NORM = 0
 , WIKRT_SS_REL  = 1<<0
@@ -86,8 +89,6 @@ typedef enum wikrt_ss
 static inline bool wikrt_ss_copyable(wikrt_ss ss)  { return (0 == (ss & (WIKRT_SS_AFF | WIKRT_SS_PEND))); }
 static inline bool wikrt_ss_droppable(wikrt_ss ss) { return (0 == (ss & (WIKRT_SS_REL | WIKRT_SS_PEND))); }
 
-// for static assertions, i.e. so I don't forget to edit something
-#define WIKRT_ACCEL_COUNT 6
 
 // misc. constants and static functions
 #define WIKRT_LNBUFF(SZ,LN) ((((SZ)+((LN)-1))/(LN))*(LN))

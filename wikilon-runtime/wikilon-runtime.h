@@ -457,31 +457,33 @@ void wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
  */
 void wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
 
-/** @brief Managing bytecode.
+/** @brief Serialization and Programming
  *
- * These are two essential functions for Wikilon runtime. Introducing text
- * containing bytecode, then parse that text into a block of code. Evaluate.
- * Conversely, quote values and convert to text as basis for serialization. 
+ * Introducing and extracting bytecode are the primary bases for ad-hoc
+ * serialization. Arbitrary values can be serialized by first quoting 
+ * them into a block then converting the block to text. Injecting bytecode
+ * is also necessary prior to any useful evaluation.
  *
- * Awelon Bytecode (ABC) is designed to be a printable subset of UTF-8. The
- * primitive operations are within the ASCII subset, but texts, tokens, and 
- * ABCD extensions will leverage the larger UTF-8 space. See wikrt_opcode 
- * for the available opcodes (which match unicode codepoints). Anyhow, we 
- * convert blocks to and from valid texts (cf. wikrt_intro_text). 
+ *  text to block: (text*e) → (block*e)
+ *  block to text: (block*e) → (text*e)
  *
- * On success: (text*e) → (block*e)    (or inverse)
- * On failure: drops alleged text or block argument
+ * Awelon Bytecode (ABC) is the accepted format for code. This is a subset
+ * of UTF-8 unicode, with a small set of primitives and only a few types of
+ * data (e.g. integers but no floating point). This minimal bytecode can be
+ * accelerated by recognizing common subprograms (substrings).
  *
- * There is no simplification or optimization. The text is not validated beyond
- * ensuring it parses as bytecode. (E.g. type safety is not validated.) A round
- * trip conversion from text to block to text should return the original text.
- * Further processing of a block will require separate function calls.
+ * There is no implicit simplification or optimization. The text is validated
+ * only insofar as ensuring it parses, not that it represents a valid program.
+ * A round trip conversion (text to block to text) should return the original
+ * text.
  *
- * NOTE: The `[]` for the toplevel block is implicit, both on input and output.
+ * NOTE: The `[]` at the top level is implicit. The text represents bytecode
+ * contained within the top level block. Blocks are always finite.
  *
  * NOTE: A block may reference stowed values (e.g. via quote and compose). Such
- * stowed value references will be preserved as resource tokens. See wikrt_peek_sv
- * for more information.
+ * stowed value references are represented by resource tokens. cf. wikrt_peek_sv
+ * for detailed information. If stowage is possible, you may need to hold another
+ * reference to the block (via copy or key-value database) to prevent GC.
  */
 void wikrt_text_to_block(wikrt_cx*);
 void wikrt_block_to_text(wikrt_cx*);
