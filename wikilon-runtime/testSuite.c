@@ -4,10 +4,10 @@
 #include <stdlib.h>
 #include <assert.h>
 #include "wikilon-runtime.h"
+#include "utf8.h"
 
 #define TESTCX_SIZE (WIKRT_CX_MIN_SIZE)
 #define TESTENV_SIZE (4 * TESTCX_SIZE)
-#define TEST_FILL 1 
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct); 
 int fillcount(wikrt_cx* cx); // exercise memory management code
@@ -19,34 +19,17 @@ int main(int argc, char const** argv) {
     int const ok  = 0;
     int const err = (-1);
 
-    wikrt_env* e;
-    wikrt_err const env_created = wikrt_env_create(&e,"testdir/db", TESTENV_SIZE);
-    if(WIKRT_OK != env_created) {
-        fprintf(stderr, "env create: %s\n", wikrt_strerr(env_created));
+    wikrt_env* const e = wikrt_env_create("testdir/db", TESTENV_SIZE);
+    wikrt_cx* const cx = wikrt_cx_create(e, TESTCX_SIZE);
+    if(NULL == cx) { 
+        fprintf(stderr, "failed to create wikilon runtime environment or context\n");
         return err;
     }
-
-    wikrt_cx* cx;
-    wikrt_err const cx_created = wikrt_cx_create(e, &cx, TESTCX_SIZE);
-    if(WIKRT_OK != cx_created) {
-        fprintf(stderr, "cx create: %s\n", wikrt_strerr(cx_created));
-        return err;
-    }
-
-    #if TEST_FILL
-    int const fct0 = fillcount(cx);
-    #endif
 
     int tests_run = 0;
     int tests_passed = 0;
     run_tests(cx, &tests_run, &tests_passed);
     fprintf(stdout, u8"Passed %d of %d Tests\n", tests_passed, tests_run);
-
-    #if TEST_FILL
-    int const fctf = fillcount(cx);
-    fprintf(stdout, u8"Mem cells: %d → %d (%s)\n", fct0, fctf,
-        ((fct0 == fctf) ? "ok" : "memleak") );
-    #endif
 
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(e);
@@ -54,94 +37,67 @@ int main(int argc, char const** argv) {
     return ((tests_run == tests_passed) ? ok : err);
 }
 
-int fillcount(wikrt_cx* cx) 
+void test_unit(wikrt_cx* cx) 
 {
-    // just create a stack of units until we run out of space.
-    // drop the value when finished.
-    
-    // base element of stack
-    if(WIKRT_OK != wikrt_intro_unit(cx)) { return 0; } 
-
-    int ct = 1;
-    do {
-        if(WIKRT_OK == wikrt_intro_unit(cx)) {
-            wikrt_assocl(cx); 
-            ++ct;
-        } else {
-            wikrt_drop(cx, NULL);
-            return ct;
-        }
-    } while(true);
+    wikrt_intro_unit(cx);
+    wikrt_elim_unit(cx);
 }
 
-bool test_tcx(wikrt_cx* cx) { return true; }
-
-bool test_unit(wikrt_cx* cx) 
-{
-    return (WIKRT_OK == wikrt_intro_unit(cx)) 
-        && (WIKRT_OK == wikrt_elim_unit(cx));
-}
-
-bool test_bool(wikrt_cx* cx, bool const bTest) 
+void test_bool(wikrt_cx* cx, bool const bTest) 
 {
     wikrt_sum_tag const t = bTest ? WIKRT_INR : WIKRT_INL;
     wikrt_sum_tag b; 
-    wikrt_err st = WIKRT_OK;
-    st |= wikrt_intro_unit(cx);
-    st |= wikrt_wrap_sum(cx, t);
-    st |= wikrt_unwrap_sum(cx, &b);
-    st |= wikrt_elim_unit(cx);
-    return (WIKRT_OK == st) && (t == b);
+
+    wikrt_intro_unit(cx);
+    wikrt_wrap_sum(cx, t);
+    wikrt_unwrap_sum(cx, &b);
+    wikrt_elim_unit(cx);
+
+    if(t != b) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
-bool test_true(wikrt_cx* cx) { return test_bool(cx, true); }
-bool test_false(wikrt_cx* cx) { return test_bool(cx, false); }
+void test_true(wikrt_cx* cx) { test_bool(cx, true); }
+void test_false(wikrt_cx* cx) { test_bool(cx, false); }
 
-bool test_i32(wikrt_cx* cx, int32_t const iTest) 
+void test_i32(wikrt_cx* cx, int32_t const iTest) 
 {
     int32_t i;
-    wikrt_ss ss;
-    wikrt_err st = WIKRT_OK;
-    st |= wikrt_intro_i32(cx, iTest);
-    st |= wikrt_peek_i32(cx, &i);
-    st |= wikrt_drop(cx, &ss);
-    return (WIKRT_OK == st) && (iTest == i) 
-        && (WIKRT_SS_NORM == ss);
+    wikrt_intro_i32(cx, iTest);
+    wikrt_peek_i32(cx, &i);
+    wikrt_drop(cx);
+    if(i != iTest) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
-bool test_i32_max(wikrt_cx* cx) { return test_i32(cx, INT32_MAX); }
-bool test_i32_zero(wikrt_cx* cx) { return test_i32(cx, 0); }
-bool test_i32_min(wikrt_cx* cx) { return test_i32(cx, INT32_MIN); }
-bool test_i32_nearmin(wikrt_cx* cx) { return test_i32(cx, (-INT32_MAX)); }
+void test_i32_max(wikrt_cx* cx) { test_i32(cx, INT32_MAX); }
+void test_i32_zero(wikrt_cx* cx) { test_i32(cx, 0); }
+void test_i32_min(wikrt_cx* cx) { test_i32(cx, INT32_MIN); }
+void test_i32_nearmin(wikrt_cx* cx) { test_i32(cx, (-INT32_MAX)); }
 
 // uses knowledge of internal representation
-bool test_i32_smallint_min(wikrt_cx* cx) { return test_i32(cx, 0 - ((1<<30) - 1) ); }
-bool test_i32_smallint_max(wikrt_cx* cx) { return test_i32(cx, ((1 << 30) - 1) ); }
-bool test_i32_largeint_minpos(wikrt_cx* cx) { return test_i32(cx, (1 << 30)); }
-bool test_i32_largeint_maxneg(wikrt_cx* cx) { return test_i32(cx, 0 - (1 << 30)); }
+void test_i32_smallint_min(wikrt_cx* cx) { test_i32(cx, 0 - ((1<<30) - 1) ); }
+void test_i32_smallint_max(wikrt_cx* cx) { test_i32(cx, ((1 << 30) - 1) ); }
+void test_i32_largeint_minpos(wikrt_cx* cx) { test_i32(cx, (1 << 30)); }
+void test_i32_largeint_maxneg(wikrt_cx* cx) { test_i32(cx, 0 - (1 << 30)); }
 
-bool test_i64(wikrt_cx* cx, int64_t const iTest) 
+void test_i64(wikrt_cx* cx, int64_t const iTest) 
 {
     int64_t i;
-    wikrt_ss ss;
-    wikrt_err st = WIKRT_OK;
-    st |= wikrt_intro_i64(cx, iTest);
-    st |= wikrt_peek_i64(cx, &i);
-    st |= wikrt_drop(cx, &ss);
-    return (WIKRT_OK == st) && (iTest == i) 
-        && (WIKRT_SS_NORM == ss);
+    wikrt_intro_i64(cx, iTest);
+    wikrt_peek_i64(cx, &i);
+    wikrt_drop(cx);
+    if(i != iTest) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
-bool test_i64_max(wikrt_cx* cx) { return test_i64(cx, INT64_MAX); }
-bool test_i64_zero(wikrt_cx* cx) { return test_i64(cx, 0); }
-bool test_i64_min(wikrt_cx* cx) { return test_i64(cx, INT64_MIN); }
-bool test_i64_nearmin(wikrt_cx* cx) { return test_i64(cx, (-INT64_MAX)); }
+void test_i64_max(wikrt_cx* cx) { test_i64(cx, INT64_MAX); }
+void test_i64_zero(wikrt_cx* cx) { test_i64(cx, 0); }
+void test_i64_min(wikrt_cx* cx) { test_i64(cx, INT64_MIN); }
+void test_i64_nearmin(wikrt_cx* cx) { test_i64(cx, (-INT64_MAX)); }
 
 // using knowledge of internal representations
-bool test_i64_2digit_min(wikrt_cx* cx) { return test_i64(cx,  -999999999999999999); }
-bool test_i64_2digit_max(wikrt_cx* cx) { return test_i64(cx,   999999999999999999); }
-bool test_i64_3digit_minpos(wikrt_cx* cx) { return test_i64(cx,  1000000000000000000); }
-bool test_i64_3digit_maxneg(wikrt_cx* cx) { return test_i64(cx, -1000000000000000000); }
+void test_i64_2digit_min(wikrt_cx* cx) { test_i64(cx,  -999999999999999999); }
+void test_i64_2digit_max(wikrt_cx* cx) { test_i64(cx,   999999999999999999); }
+void test_i64_3digit_minpos(wikrt_cx* cx) { test_i64(cx,  1000000000000000000); }
+void test_i64_3digit_maxneg(wikrt_cx* cx) { test_i64(cx, -1000000000000000000); }
 
 /* grow a simple stack of numbers (count .. 1) for testing purposes. */
 void numstack(wikrt_cx* cx, int32_t count) 
@@ -153,49 +109,49 @@ void numstack(wikrt_cx* cx, int32_t count)
     }
 }
 
-/* destroy a stack and compute its sum. */
-int64_t sumstack(wikrt_cx* cx)
+/* destroy a stack of count elements and compute its sum. */
+int64_t sumstack(wikrt_cx* cx, int32_t count)
 {   
     int64_t sum = 0;
-    while(WIKRT_OK == wikrt_assocr(cx)) {
+    for(int32_t ii = 0; ii < count; ++ii) {
         int32_t elem = INT32_MIN;
+        wikrt_assocr(cx);
         wikrt_peek_i32(cx, &elem);
-        wikrt_drop(cx, NULL);
+        wikrt_drop(cx);
         sum += elem;
     }
     wikrt_elim_unit(cx);
     return sum;
 }
 
-bool test_alloc_prod(wikrt_cx* cx) 
+void test_alloc_prod(wikrt_cx* cx) 
 {
     int32_t const ct = 111111;
-    numstack(cx, ct);
-
     int64_t const expected_sum = (ct * (int64_t)(ct + 1)) / 2;
-    int64_t actual_sum = sumstack(cx);
 
-    bool const ok = (expected_sum == actual_sum);
-    return ok;
+    numstack(cx, ct);
+    int64_t actual_sum = sumstack(cx, ct);
+
+    if(expected_sum != actual_sum) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
-bool test_copy_prod(wikrt_cx* cx)
+void test_copy_prod(wikrt_cx* cx)
 {
     int32_t const ct = 77777;
     int64_t const expected_sum = (ct * (int64_t)(ct + 1)) / 2;
 
     numstack(cx, ct);
-    wikrt_copy(cx, NULL);
-    wikrt_copy(cx, NULL);
+    wikrt_copy(cx);
+    wikrt_copy(cx);
 
-    int64_t const sumA = sumstack(cx);
-    int64_t const sumB = sumstack(cx);
-    int64_t const sumC = sumstack(cx);
+    int64_t const sumA = sumstack(cx,ct);
+    int64_t const sumB = sumstack(cx,ct);
+    int64_t const sumC = sumstack(cx,ct);
 
     bool const ok = (sumA == sumB) 
                  && (sumB == sumC) 
                  && (sumC == expected_sum);
-    return ok;
+    if(!ok) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
 /** Create a deep sum from a string of type (L|R)*. */
@@ -218,16 +174,17 @@ bool dismantle_deepsum_path(wikrt_cx* cx, char const* const sumstr)
     while(ok && *ss) {
         char const c = *(ss++);
         wikrt_sum_tag lr;
-        wikrt_err const st = wikrt_unwrap_sum(cx, &lr);
+        wikrt_unwrap_sum(cx, &lr);
         bool const tagMatched = 
             ((WIKRT_INL == lr) && ('L' == c)) ||
             ((WIKRT_INR == lr) && ('R' == c));
-        ok = (WIKRT_OK == st) && tagMatched;
+        ok = tagMatched;
     }
     if(!ok) {
         fprintf(stderr, "sum mismatch - %s at char %d\n", sumstr, (int)(ss - sumstr));
     }
-    return ok && (WIKRT_OK == wikrt_elim_unit(cx));
+    wikrt_elim_unit(cx);
+    return ok;
 }
 
 bool test_deepsum_str(wikrt_cx* cx, char const* const sumstr) 
@@ -268,10 +225,10 @@ bool test_deepsum_prng(wikrt_cx* cx, unsigned int seed, size_t const nChars)
 
 bool test_alloc_deepsum_large(wikrt_cx* cx) 
 {
-    int const count = 4000;
+    int const count = 400;
     int passed = 0;
     for(int ii = 0; ii < count; ++ii) {
-        if(test_deepsum_prng(cx, ii, 70)) {
+        if(test_deepsum_prng(cx, ii, ii)) {
             ++passed;
         }
     }
@@ -284,9 +241,9 @@ bool test_copy_deepsum(wikrt_cx* cx)
     char buff[nChars + 1];
     deepsum_prng_string(buff, 0, nChars);
     deepsum_path(cx, buff);
-    bool ok = (WIKRT_OK == wikrt_copy(cx, NULL))
-            && dismantle_deepsum_path(cx, buff)
-            && dismantle_deepsum_path(cx, buff);
+    wikrt_copy(cx);
+    bool ok = dismantle_deepsum_path(cx, buff)
+           && dismantle_deepsum_path(cx, buff);
     return ok;
 }
 
@@ -300,13 +257,13 @@ bool test_pkistr_s(wikrt_cx* cx, int64_t n, char const* const nstr)
     char buff[len+1]; buff[len] = 0;
     wikrt_peek_istr(cx, buff, &len); // print integer into buffer
     bool const okBuff = (0 == strcmp(nstr, buff));
-    wikrt_drop(cx, NULL);
+    wikrt_drop(cx);
 
     // also try opposite direction
     wikrt_intro_istr(cx, buff, len);
     int64_t i;
     wikrt_peek_i64(cx, &i);
-    wikrt_drop(cx, NULL);
+    wikrt_drop(cx);
     bool const okRev = (n == i);
 
     bool const ok = (okBuff && okSize && okRev);
@@ -350,12 +307,12 @@ bool test_pkistr_small(wikrt_cx* cx)
 
 bool test_copy_i64(wikrt_cx* cx, int64_t const test) {
     wikrt_intro_i64(cx, test);
-    wikrt_copy(cx, NULL);
+    wikrt_copy(cx);
     int64_t n1, n2;
     wikrt_peek_i64(cx, &n1);
-    wikrt_drop(cx, NULL);
+    wikrt_drop(cx);
     wikrt_peek_i64(cx, &n2);
-    wikrt_drop(cx, NULL);
+    wikrt_drop(cx);
     bool const ok = (test == n1) && (n1 == n2);
     return ok;
 }
@@ -423,10 +380,10 @@ bool test_sealers(wikrt_cx* cx)
     }
 
     // validate copy and drop of sealed values
-    for(size_t ii = 0; ii < 100; ++ii) {
-        wikrt_copy(cx, NULL);
-        if(ii & 0) { wikrt_wswap(cx); }
-        wikrt_drop(cx, NULL);
+    for(size_t ii = 0; ii < 12; ++ii) {
+        wikrt_copyf(cx);
+        if(ii & 1) { wikrt_wswap(cx); }
+        wikrt_dropk(cx);
     }
 
     for(size_t ii = nSeals; ii > 0; --ii) {
@@ -438,40 +395,44 @@ bool test_sealers(wikrt_cx* cx)
             return false;
         }
     }
-    return (WIKRT_OK == wikrt_elim_unit(cx));
+    wikrt_elim_unit(cx);
+    return true;
 }
 
-bool elim_list_end(wikrt_cx* cx) 
+void read_sum(wikrt_cx* cx, wikrt_sum_tag e) 
 {
     wikrt_sum_tag lr;
-    return (WIKRT_OK == wikrt_unwrap_sum(cx, &lr))
-        && (WIKRT_INR == lr) 
-        && (WIKRT_OK == wikrt_elim_unit(cx));
+    wikrt_unwrap_sum(cx, &lr);
+    if(lr != e) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
-bool elim_list_i32(wikrt_cx* cx, int32_t e)
+
+void elim_list_end(wikrt_cx* cx) 
 {
-    wikrt_sum_tag lr;
+    read_sum(cx, WIKRT_INR);
+    wikrt_elim_unit(cx);
+}
+
+int32_t pop_list_i32(wikrt_cx* cx)
+{
     int32_t a = INT32_MIN;
-    wikrt_err st = 0;
-    st |= wikrt_unwrap_sum(cx, &lr);
-    st |= wikrt_assocr(cx);
-    st |= wikrt_peek_i32(cx, &a);
-    st |= wikrt_drop(cx, NULL);
-
-    bool const ok = (WIKRT_OK == st) && (WIKRT_INL == lr) && (a == e);
-    if(!ok) {
-        fprintf(stderr, "elim list elem. st=%s, a=%d, e=%d\n", wikrt_strerr(st), (int)a, (int)e);
-    }
-    return ok;
+    read_sum(cx, WIKRT_INL);
+    wikrt_assocr(cx);
+    wikrt_peek_i32(cx, &a);
+    wikrt_dropk(cx);
+    return a;
 }
 
-bool checkbuff(wikrt_cx* cx, uint8_t const* buff, size_t ct)
+void elim_list_i32(wikrt_cx* cx, int32_t e) {
+    if(pop_list_i32(cx) != e) { wikrt_set_error(cx, WIKRT_ETYPE); }
+}
+
+void checkbuff(wikrt_cx* cx, uint8_t const* buff, size_t ct)
 {
     for(size_t ii = 0; ii < ct; ++ii) {
-        if(!elim_list_i32(cx, buff[ii])) { return false; }
+        elim_list_i32(cx, buff[ii]);
     }
-    return elim_list_end(cx);
+    elim_list_end(cx);
 }
 
 void fillbuff(uint8_t* buff, size_t ct, unsigned int seed) 
@@ -481,114 +442,78 @@ void fillbuff(uint8_t* buff, size_t ct, unsigned int seed)
     }
 }
 
-bool test_alloc_binary(wikrt_cx* cx) 
+void test_alloc_binary(wikrt_cx* cx) 
 {
     int const nLoops = 10;
     for(int ii = 0; ii < nLoops; ++ii) {
-        size_t const buffsz = (10000 * ii);
+        size_t const buffsz = (2000 * ii);
         uint8_t buff[buffsz];
         fillbuff(buff, buffsz, ii);
         wikrt_intro_binary(cx, buff, buffsz);
-        if(!checkbuff(cx, buff, buffsz)) { 
-            fprintf(stderr, "error for binary %d\n", ii);
-            return false; 
-        }
+        checkbuff(cx, buff, buffsz);
     }
-    return true;
 }
 
-bool test_alloc_text(wikrt_cx* cx) 
+void elim_cstr(wikrt_cx* cx, char const* cstr) 
 {
-    char const* const fmt = "test alloc text failed: %s\n";
-    #define REPORT(b) if(!b) { \
-        fprintf(stderr, fmt, #b); \
-        return false; \
-    }
-
-    bool const ascii_hello =
-        (WIKRT_OK == wikrt_intro_text(cx, u8"hello", SIZE_MAX)) &&
-        elim_list_i32(cx, 104) && elim_list_i32(cx, 101) &&
-        elim_list_i32(cx, 108) && elim_list_i32(cx, 108) &&
-        elim_list_i32(cx, 111) && elim_list_end(cx);
-    REPORT(ascii_hello);
-
-    // succeed with NUL terminated string
-    bool const u8 = 
-        (WIKRT_OK == wikrt_intro_text(cx, u8"←↑→↓", SIZE_MAX)) && 
-        elim_list_i32(cx, 0x2190) && elim_list_i32(cx, 0x2191) &&
-        elim_list_i32(cx, 0x2192) && elim_list_i32(cx, 0x2193) &&
-        elim_list_end(cx);
-    REPORT(u8);
-
-    // succeed with size-limited string
-    bool const u8f =
-        (WIKRT_OK == wikrt_intro_text(cx, u8"ab↑cd", 5)) &&
-        elim_list_i32(cx, 97) && elim_list_i32(cx, 98) &&
-        elim_list_i32(cx, 0x2191) && elim_list_end(cx);
-    REPORT(u8f);
-
-    // fail for partial character        
-    bool const u8inval = 
-        (WIKRT_INVAL == wikrt_intro_text(cx, u8"→", 1)) &&
-        (WIKRT_INVAL == wikrt_intro_text(cx, u8"→", 2));
-    REPORT(u8inval);
-
-    // fail for invalid character
-    bool const rejectControlChars =
-        (WIKRT_INVAL == wikrt_intro_text(cx, "\a", SIZE_MAX)) &&
-        (WIKRT_INVAL == wikrt_intro_text(cx, "\r", SIZE_MAX)) &&
-        (WIKRT_INVAL == wikrt_intro_text(cx, "\t", SIZE_MAX));
-    REPORT(rejectControlChars);
-
-    // empty texts
-    bool const emptyTexts =
-        (WIKRT_OK == wikrt_intro_text(cx, "Hello, World!", 0)) &&
-        (WIKRT_OK == wikrt_intro_text(cx, "", SIZE_MAX)) &&
-        elim_list_end(cx) && elim_list_end(cx);
-    REPORT(emptyTexts);
-
-    #undef REPORT
-    
-    return true;
+    uint8_t const* s = (uint8_t const*) cstr;
+    do {
+        int32_t const cp = (int32_t) utf8_step_unsafe(&s);
+        if(0 == cp) { break; }
+        elim_list_i32(cx, cp);
+    } while(!wikrt_error(cx));
+    elim_list_end(cx);
 }
 
-bool test_read_binary_chunks(wikrt_cx* cx, uint8_t const* buff, size_t buffsz, size_t const read_chunk) 
+void test_alloc_text(wikrt_cx* cx) 
+{
+    wikrt_intro_text(cx, u8"abc←↑→↓", 12);
+    elim_cstr(cx, u8"abc←↑→");
+
+    wikrt_intro_text(cx, u8"abc←↑", SIZE_MAX);
+    elim_cstr(cx, u8"abc←↑");
+
+    wikrt_intro_text(cx, "hello, world!", 0);
+    elim_cstr(cx, "");
+}
+
+void read_binary_chunks(wikrt_cx* cx, uint8_t const* buff, size_t buffsz, size_t const read_chunk) 
 {
     uint8_t buff_read[read_chunk];
     size_t bytes_read;
     do {
         bytes_read = read_chunk;
         wikrt_read_binary(cx, buff_read, &bytes_read);
-        if(0 != memcmp(buff_read, buff, bytes_read)) { return false; }
+        if(0 != memcmp(buff_read, buff, bytes_read)) { 
+            wikrt_set_error(cx, WIKRT_ETYPE); 
+            return;
+        }
         buff += bytes_read;
     } while(0 != bytes_read);
-    return elim_list_end(cx);
+    elim_list_end(cx);
 }
 
 
-bool test_read_binary(wikrt_cx* cx) 
+void test_read_binary(wikrt_cx* cx) 
 {
     size_t const buffsz = 12345;
     uint8_t buff[buffsz];
     fillbuff(buff, buffsz, buffsz);
     wikrt_intro_binary(cx, buff, buffsz); // first copy
     // need a total seven copies of the binary, for seven tests
-    wikrt_copy(cx, NULL); wikrt_copy(cx, NULL); wikrt_copy(cx, NULL);
-    wikrt_copy(cx, NULL); wikrt_copy(cx, NULL); wikrt_copy(cx, NULL);
+    wikrt_copy(cx); wikrt_copy(cx); wikrt_copy(cx);
+    wikrt_copy(cx); wikrt_copy(cx); wikrt_copy(cx);
 
-    bool const ok = 
-        test_read_binary_chunks(cx, buff, buffsz, buffsz) &&
-        test_read_binary_chunks(cx, buff, buffsz, (buffsz - 1)) &&
-        test_read_binary_chunks(cx, buff, buffsz, (buffsz + 1)) &&
-        test_read_binary_chunks(cx, buff, buffsz, (buffsz / 3)) &&
-        test_read_binary_chunks(cx, buff, buffsz, (buffsz / 3) + 1) &&
-        test_read_binary_chunks(cx, buff, buffsz, (buffsz / 3) - 1) &&
-        test_read_binary_chunks(cx, buff, buffsz, (buffsz / 2)) && 
-        true;
-    return ok;
+    read_binary_chunks(cx, buff, buffsz, buffsz);
+    read_binary_chunks(cx, buff, buffsz, (buffsz - 1));
+    read_binary_chunks(cx, buff, buffsz, (buffsz + 1));
+    read_binary_chunks(cx, buff, buffsz, (buffsz / 3));
+    read_binary_chunks(cx, buff, buffsz, (buffsz / 3) + 1);
+    read_binary_chunks(cx, buff, buffsz, (buffsz / 3) - 1);
+    read_binary_chunks(cx, buff, buffsz, (buffsz / 2));
 }
 
-bool test_read_text_chunks(wikrt_cx* cx, char const* s, size_t const chunk_chars, size_t const chunk_bytes)
+void read_text_chunks(wikrt_cx* cx, char const* s, size_t const chunk_chars, size_t const chunk_bytes)
 {
     char buff_read[chunk_bytes];
     size_t bytes_read;
@@ -597,110 +522,115 @@ bool test_read_text_chunks(wikrt_cx* cx, char const* s, size_t const chunk_chars
         bytes_read = chunk_bytes;
         chars_read = chunk_chars;
         wikrt_read_text(cx, buff_read, &bytes_read, &chars_read);
-        if(0 != memcmp(buff_read, s, bytes_read)) { return false; }
+        if(0 != memcmp(buff_read, s, bytes_read)) { 
+            wikrt_set_error(cx, WIKRT_ETYPE);
+            return;
+        }
         s += bytes_read;
     } while(0 != bytes_read);
-    return elim_list_end(cx);
+    elim_list_end(cx);
 }
 
-bool test_read_text_s(wikrt_cx* cx, char const* s) 
+void read_text_cstr(wikrt_cx* cx, char const* s) 
 {
     size_t const len = strlen(s);
     wikrt_intro_text(cx, s, SIZE_MAX); // first copy
-    // need a total four copies of the text for four tests
-    wikrt_copy(cx, NULL); wikrt_copy(cx, NULL); wikrt_copy(cx, NULL);
-    return test_read_text_chunks(cx, s, SIZE_MAX, len)
-        && test_read_text_chunks(cx, s, SIZE_MAX, len + 1)
-        && test_read_text_chunks(cx, s, SIZE_MAX, 4)   
-        && test_read_text_chunks(cx, s, 1, 4);
+    // need four copies of the text for four tests
+    wikrt_copy(cx); 
+    wikrt_copy(cx); 
+    wikrt_copy(cx);
+    read_text_chunks(cx, s, SIZE_MAX, len);
+    read_text_chunks(cx, s, SIZE_MAX, len + 1);
+    read_text_chunks(cx, s, SIZE_MAX, 4);
+    read_text_chunks(cx, s, 1, 4);
 }
 
-bool test_read_text(wikrt_cx* cx) 
+void test_read_text(wikrt_cx* cx) 
 {
-    return test_read_text_s(cx,"Hello, world! This is a test string.")
-        && test_read_text_s(cx,u8"←↖↑↗→↘↓↙←↖↑↗→↘↓↙←↖↑↗→↘↓↙←↖↑↗→↘↓↙←↖↑↗→")
-        && test_read_text_s(cx,u8"★★★☆☆")
-        && test_read_text_s(cx,u8"μL.((α*L)+β)")
-        && test_read_text_s(cx,"");
+    read_text_cstr(cx,"Hello, world! This is a test string.");
+    read_text_cstr(cx,u8"←↖↑↗→↘↓↙←↖↑↗→↘↓↙←↖↑↗→↘↓↙←↖↑↗→↘↓↙←↖↑↗→");
+    read_text_cstr(cx,u8"★★★☆☆");
+    read_text_cstr(cx,u8"μL.((α*L)+β)");
+    read_text_cstr(cx,"");
 }
 
-bool test_match_istr(wikrt_cx* cx, char const* expecting) 
+void read_istr(wikrt_cx* cx, char const* expecting) 
 {
     size_t len = 0;
     wikrt_peek_istr(cx, NULL, &len);
     char buff[len+1]; 
     buff[len] = 0;
     wikrt_peek_istr(cx, buff, &len);
-    wikrt_drop(cx, NULL);
-    bool const ok = (0 == strcmp(buff, expecting));
-    if(!ok) {
+    wikrt_drop(cx);
+    if(0 != strcmp(buff, expecting)) {
+        wikrt_set_error(cx, WIKRT_ETYPE);
         fprintf(stderr, "integer match failed: got %s, expected %s\n", buff, expecting);
     }
-    return ok;
 }
 
-bool test_add1(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
+void test_add1(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
     wikrt_intro_istr(cx, a, SIZE_MAX);
     wikrt_intro_istr(cx, b, SIZE_MAX);
     wikrt_int_add(cx);
-    return test_match_istr(cx, expected);
+    read_istr(cx, expected);
 }
-bool test_add(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
-    return test_add1(cx, a, b, expected)
-        && test_add1(cx, b, a, expected);
+void test_add(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
+    test_add1(cx, a, b, expected);
+    test_add1(cx, b, a, expected);
 }
 
-bool test_mul1(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
+void test_mul1(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
     wikrt_intro_istr(cx, a, SIZE_MAX);
     wikrt_intro_istr(cx, b, SIZE_MAX);
     wikrt_int_mul(cx);
-    return test_match_istr(cx, expected);
+    read_istr(cx, expected);
 }
-bool test_mul(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
-    return test_mul1(cx, a, b, expected)
-        && test_mul1(cx, b, a, expected);
+void test_mul(wikrt_cx* cx, char const* a, char const* b, char const* expected) {
+    test_mul1(cx, a, b, expected);
+    test_mul1(cx, b, a, expected);
 }
 
-bool test_neg1(wikrt_cx* cx, char const* a, char const* expected) {
+void test_neg1(wikrt_cx* cx, char const* a, char const* expected) {
     wikrt_intro_istr(cx, a, SIZE_MAX);
     wikrt_int_neg(cx);
-    return test_match_istr(cx, expected);
+    read_istr(cx, expected);
 }
-bool test_neg(wikrt_cx* cx, char const* a, char const* b) {
-    return test_neg1(cx, a, b) && test_neg1(cx, b, a);
+void test_neg(wikrt_cx* cx, char const* a, char const* b) {
+    test_neg1(cx, a, b);
+    test_neg1(cx, b, a);
 }
 
-bool test_div(wikrt_cx* cx, char const* dividend, char const* divisor, char const* quotient, char const* remainder)
+void test_div(wikrt_cx* cx, char const* dividend, char const* divisor, char const* quotient, char const* remainder)
 {
     wikrt_intro_istr(cx, dividend, SIZE_MAX);
     wikrt_intro_istr(cx, divisor, SIZE_MAX);
     wikrt_int_div(cx);
-    return test_match_istr(cx, remainder)
-        && test_match_istr(cx, quotient);
+    read_istr(cx, remainder);
+    read_istr(cx, quotient);
 }
 
 
-bool test_smallint_math(wikrt_cx* cx)
+void test_smallint_math(wikrt_cx* cx)
 {
     // testing by string comparisons.
-    return test_add(cx,"1","2","3")
-        && test_add(cx,"60","-12","48")
-        && test_neg(cx,"0","0")
-        && test_neg(cx,"1","-1")
-        && test_neg(cx,"42","-42")
-        && test_mul(cx,"1","1044","1044")
-        && test_mul(cx,"129","0","0")
-        && test_mul(cx,"13","12","156")
-        && test_mul(cx,"19","-27","-513")
-        && test_div(cx, "11", "3", "3", "2")
-        && test_div(cx,"-11", "3","-4", "1")
-        && test_div(cx, "11","-3","-4","-1")
-        && test_div(cx,"-11","-3", "3","-2");
+    test_add(cx,"1","2","3");
+    test_add(cx,"60","-12","48");
+    test_neg(cx,"0","0");
+    test_neg(cx,"1","-1");
+    test_neg(cx,"42","-42");
+    test_mul(cx,"1","1044","1044");
+    test_mul(cx,"129","0","0");
+    test_mul(cx,"13","12","156");
+    test_mul(cx,"19","-27","-513");
+    test_div(cx, "11", "3", "3", "2");
+    test_div(cx,"-11", "3","-4", "1");
+    test_div(cx, "11","-3","-4","-1");
+    test_div(cx,"-11","-3", "3","-2");
 }
 
-bool test_bigint_math(wikrt_cx* cx)
+void test_bigint_math(wikrt_cx* cx)
 {
-    return false; // not implemented yet
+    wikrt_set_error(cx, WIKRT_IMPL);
 #if 0
     return test_add(cx, "10000000000", "0", "10000000000")
         && test_add(cx, "10000000000", "20000000000", "30000000000")
@@ -712,66 +642,63 @@ bool test_bigint_math(wikrt_cx* cx)
 #endif
 }
 
-bool test_sum_distrib_b(wikrt_cx* cx, bool inR) {
+void test_sum_distrib_b(wikrt_cx* cx, bool inR) {
     char const * const a = "42";
     char const * const b = "11";
-    wikrt_err st = WIKRT_OK;
-    wikrt_sum_tag const lr_write = inR ? WIKRT_INR : WIKRT_INL;
-    st |= wikrt_intro_istr(cx, a, SIZE_MAX);
-    st |= wikrt_wrap_sum(cx, lr_write);
-    st |= wikrt_intro_istr(cx, b, SIZE_MAX);
-    st |= wikrt_sum_distrib(cx);
-    wikrt_sum_tag lr_read;
-    st |= wikrt_unwrap_sum(cx, &lr_read);
-    st |= wikrt_assocr(cx); // ((42 * 11) * e) → (42 * (11 * e)) 
-    return test_match_istr(cx, b) 
-        && test_match_istr(cx, a)
-        && (lr_write == lr_read)
-        && (WIKRT_OK == st);
+    wikrt_sum_tag const lr = inR ? WIKRT_INR : WIKRT_INL;
+    wikrt_intro_istr(cx, a, SIZE_MAX);
+    wikrt_wrap_sum(cx, lr);
+    wikrt_intro_istr(cx, b, SIZE_MAX);
+    wikrt_sum_distrib(cx);
+    read_sum(cx, lr);
+    wikrt_assocr(cx); // ((42 * 11) * e) → (42 * (11 * e)) 
+    read_istr(cx, b);
+    read_istr(cx, a);
 }
-bool test_sum_distrib(wikrt_cx* cx) {
-    return test_sum_distrib_b(cx, true) 
-        && test_sum_distrib_b(cx, false);
+void test_sum_distrib(wikrt_cx* cx) {
+    test_sum_distrib_b(cx, true);
+    test_sum_distrib_b(cx, false);
 }
 
-bool test_sum_factor_b(wikrt_cx* cx, bool inR) {
+
+void test_sum_factor_b(wikrt_cx* cx, bool inR) 
+{
     char const* const a = "42";
     char const* const b = "11";
-    wikrt_err st = WIKRT_OK;
     wikrt_sum_tag const lr = inR ? WIKRT_INR : WIKRT_INL;
-    st |= wikrt_intro_istr(cx, a, SIZE_MAX);
-    st |= wikrt_intro_istr(cx, b, SIZE_MAX);
-    st |= wikrt_assocl(cx);
-    st |= wikrt_wrap_sum(cx, lr);
-    st |= wikrt_sum_factor(cx);
-    wikrt_sum_tag blr, alr;
-    st |= wikrt_unwrap_sum(cx, &blr);
-    bool const okb = test_match_istr(cx, b) && (lr == blr);
-    st |= wikrt_unwrap_sum(cx, &alr);
-    bool const oka = test_match_istr(cx, a) && (lr == alr);
-    return (WIKRT_OK == st) && okb && oka;
+
+    wikrt_intro_istr(cx, a, SIZE_MAX);
+    wikrt_intro_istr(cx, b, SIZE_MAX);
+    wikrt_assocl(cx);
+    wikrt_wrap_sum(cx, lr);
+    wikrt_sum_factor(cx);
+
+    read_sum(cx, lr); read_istr(cx, b);
+    read_sum(cx, lr); read_istr(cx, a);
 }
-bool test_sum_factor(wikrt_cx* cx) {
-    return test_sum_factor_b(cx, true)
-        && test_sum_factor_b(cx, false);
+
+void test_sum_factor(wikrt_cx* cx) {
+    test_sum_factor_b(cx, true);
+    test_sum_factor_b(cx, false);
 }
 
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
+    wikrt_cx_reset(cx);
 
-    #define TCX(T)                          \
+    #define TCX(TEST)                       \
     do {                                    \
         ++(*runct);                         \
-        bool const pass = T(cx);            \
-        if(pass) { ++(*passct); }           \
+        TEST(cx);                           \
+        if(!wikrt_error(cx)) { ++(*passct); } \
         else {                              \
-            char const* name = #T ;         \
+            char const* name = #TEST ;      \
             fprintf(stderr, errFmt, *runct, name);    \
         }                                   \
+        wikrt_cx_reset(cx);                 \
     } while(0)
-    
-    TCX(test_tcx);
+
     TCX(test_unit);
     TCX(test_false);
     TCX(test_true);
@@ -829,7 +756,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     
 
     TCX(test_smallint_math);
-    //TCX(test_bigint_math);
+    TCX(test_bigint_math);
 
     // TODO: blocks
     // TODO: evaluations   

@@ -22,16 +22,13 @@
 // object. So we can have (object * (cont * (texts * e))) as our cx->val
 // during our eager write efforts.
 //
-// A particular concern is blocks with WIKRT_OPVAL_LAZYKF, which require
-// I introduce substructure of a contained value. prior to continuing the
-// computation. If a quoted value contains an affine block, then the block
-// it is quoted into also becomes affine. I'll need to track the attributes
-// of each block, and handle them properly when pushing and popping blocks.
+// A particular concern is blocks with WIKRT_OPVAL_LAZYKF, which requires
+// I promote substructure of contained values to the substructure of the
+// current block of code. I'll track this with a continuation stack.
 //
-// For simplicity, I'm going to assume valid input after reading the OTAG_BLOCK
-// header, then process every element in that block even if we run out of space
-// to write our results. The only error after we get moving is WIKRT_CXFULL.
-// No need to optimize the error case by short circuiting.
+// I will assume a valid block after reading the OTAG_BLOCK header. The
+// most likely source of error is a full context, which might happen 
+// when expanding opvals.
 //
 
 // A reasonable chunk size for our texts.
@@ -200,6 +197,9 @@ static void writer_INTRO_VOID(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_write_op(cx, w, ACCEL_SUM_SWAP);
 }
 
+// (ops * (stack * (text * e))) → (ops' * (stack' * (text * e)))
+//   where `stack` is ((ss * ops') * stack')
+//   and `ss` accumulates substructure
 static inline void wikrt_writer_pop_stack(wikrt_cx* cx, wikrt_writer_state* w)
 {
     assert((WIKRT_UNIT_INR == wikrt_pval(cx, cx->val)[0]) && (w->depth > 0));
@@ -228,6 +228,16 @@ static inline void wikrt_writer_pop_stack(wikrt_cx* cx, wikrt_writer_state* w)
     // exiting with context (ops' * (stack' * (texts * e))). 
     //  and 'ss' merged into wirkt_writer_state
 }
+
+// (block * e) → (ops * e)
+static void wikrt_writer_open_block(wikrt_cx* cx) 
+{
+    // `block` is (OTAG_BLOCK, ops) pair.
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+    wikrt_val* const pblock = wikrt_pval(cx, (*v));
+    (*v) = pblock[1]; // dropping the OTAG
+}
+
 
 #if 0
 static inline bool wikrt_writer_step(wikrt_cx* cx, wikrt_writer_state* w) 
@@ -344,6 +354,23 @@ static inline bool wikrt_writer_step(wikrt_cx* cx, wikrt_writer_state* w)
 
 #endif
 
+
+static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
+{
+    wikrt_sum_tag lr;
+    wikrt_unwrap_sum(cx, &lr);
+    if(WIKRT_UNIT_INR == lr) {
+        if(0 == w->depth) { return false; }
+        wikrt_wrap_sum(cx, lr);
+        wikrt_writer_pop_stack(cx, w); 
+        return true; 
+    } else {
+        assert(wikrt_p(cx->val));
+        wikrt_val* const v = wikrt_pval(cx, cx->val);
+        
+    }
+}
+
 static inline bool wikrt_cx_has_block(wikrt_cx* cx) {
     return wikrt_p(cx->val) && wikrt_blockval(cx, *wikrt_pval(cx, cx->val));
 }
@@ -365,6 +392,7 @@ void wikrt_block_to_text(wikrt_cx* cx)
     if(!wikrt_cx_has_block(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     if(!wikrt_mem_reserve(cx, (2 * WIKRT_CELLSIZE))) { return; }
 
+    wikrt_writer_open_block(cx);                        // block → ops
     wikrt_intro_r(cx, WIKRT_UNIT_INR); wikrt_wswap(cx); // initial texts (empty list)
     wikrt_intro_r(cx, WIKRT_UNIT); wikrt_wswap(cx);     // initial continuation (unit)
 
@@ -375,7 +403,7 @@ void wikrt_block_to_text(wikrt_cx* cx)
     // but should succeed in general (i.e. there should be no type
     // errors, and context shouldn't grow much unless we add a lot
     // more accelerators).
-    while(wikrt_write_small_step(&w,cx)) { /* continue */ }
+    while(wikrt_writer_small_step(cx,&w)) { /* continue */ }
 
     if(WIKRT_OK != wikrt_error(cx)) { return; }
 

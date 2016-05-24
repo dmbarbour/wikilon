@@ -79,7 +79,8 @@ void wikrt_env_sync(wikrt_env* e) {
 
 wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB) 
 {
-    assert(NULL != e);
+    if(NULL == e) { return NULL; }
+
     size_t const size = ((size_t)cxSizeMB * (1024 * 1024));
     bool const validSize = (size < (SIZE_MAX / 2)) 
         && (WIKRT_CX_MIN_SIZE <= cxSizeMB) 

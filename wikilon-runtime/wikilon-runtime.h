@@ -135,6 +135,8 @@ void wikrt_env_sync(wikrt_env*);
  * upon construction. Use of stowed values can enable access to more
  * memory than this. At the moment we're limited to about 4GB active
  * memory due to 32-bit internal references. (This may change later.)
+ *
+ * Will return NULL if given a NULL environment.
  */
 wikrt_cx* wikrt_cx_create(wikrt_env*, uint32_t cxSizeMB);
 
