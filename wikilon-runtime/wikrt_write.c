@@ -22,6 +22,9 @@
 // object. So we can have (object * (cont * (texts * e))) as our cx->val
 // during our eager write efforts.
 //
+// Is there a better way to organize this? Use of value registers might
+// be a little more convenient.
+//
 // A particular concern is blocks with WIKRT_OPVAL_LAZYKF, which requires
 // I promote substructure of contained values to the substructure of the
 // current block of code. I'll track this with a continuation stack.
@@ -48,10 +51,9 @@ typedef struct wikrt_writer_state
 // For bitfield tracking substructure
 #define WIKRT_SS_LAZYKF (1 << 7)
 
-// Note: All of these strings should be ASCII.
-// op2abc_table contains zero for accelerators 
+// Basic ABC (elements in ASCII range)
 #define OP(X) [OP_##X] = ABC_##X
-static wikrt_abc wikrt_op2abc_table[OP_COUNT] =
+static uint8_t wikrt_op2abc_table[OP_COUNT] =
  { OP(SP), OP(LF)
  , OP(PROD_ASSOCL), OP(PROD_ASSOCR)
  , OP(PROD_W_SWAP), OP(PROD_Z_SWAP)
@@ -73,12 +75,12 @@ static wikrt_abc wikrt_op2abc_table[OP_COUNT] =
 // general case, I might eventually have accelerators that contain
 // specific blocks or texts. So I'm using function pointers for the
 // writing of multiple elements.
-static void writer_TAILCALL(wikrt_writer_state* w);
-static void writer_INLINE(wikrt_writer_state* w);
-static void writer_PROD_SWAP(wikrt_writer_state* w);
-static void writer_INTRO_UNIT(wikrt_writer_state* w);
-static void writer_SUM_SWAP(wikrt_writer_state* w);
-static void writer_INTRO_VOID(wikrt_writer_state* w);
+static void writer_TAILCALL(wikrt_cx*, wikrt_writer_state* w);
+static void writer_INLINE(wikrt_cx*, wikrt_writer_state* w);
+static void writer_PROD_SWAP(wikrt_cx*, wikrt_writer_state* w);
+static void writer_INTRO_UNIT(wikrt_cx*, wikrt_writer_state* w);
+static void writer_SUM_SWAP(wikrt_cx*, wikrt_writer_state* w);
+static void writer_INTRO_VOID(wikrt_cx*, wikrt_writer_state* w);
 
 typedef void (*wikrt_writer)(wikrt_cx*, wikrt_writer_state*);
 #define ACCEL(X) [ACCEL_##X] = writer_##X
@@ -93,15 +95,15 @@ _Static_assert((6 == WIKRT_ACCEL_COUNT), "missing accelerator writer?");
 static void wikrt_writer_flush(wikrt_cx* cx, wikrt_writer_state* w)
 {
     _Static_assert((WIKRT_WRITE_BUFFSZ <= 0xFFFF), "write buffer too large to trivially flush");
-    if(0 == w->buffsz) { return; } // quick exit
+    if(0 == w->bytect) { return; } // quick exit
 
     // sanity check
-    assert((w->buffsz <= WIKRT_WRITE_BUFFSZ)
-        && (w->charct <= w->buffsz)
-        && (w->buffsz <= (UTF8_MAX_CP_SIZE * w->charct)));
+    assert((w->bytect <= WIKRT_WRITE_BUFFSZ)
+        && (w->charct <= w->bytect)
+        && (w->bytect <= (UTF8_MAX_CP_SIZE * w->charct)));
 
     // (ops * (stack * (texts * e)))
-    wikrt_sizeb const szBuff  = wikrt_cellbuff(w->buffsz);
+    wikrt_sizeb const szBuff  = wikrt_cellbuff(w->bytect);
     wikrt_sizeb const szHdr   = 2 * WIKRT_CELLSIZE;
     wikrt_sizeb const szAlloc = szHdr + szBuff;
 
@@ -110,13 +112,13 @@ static void wikrt_writer_flush(wikrt_cx* cx, wikrt_writer_state* w)
         wikrt_val* const v = wikrt_pval(cx, cx->val);
 
         wikrt_addr const addr_buff = wikrt_alloc_r(cx, szBuff);
-        memcpy(wikrt_paddr(cx, addr_buff), w->buff, w->buffsz);
+        memcpy(wikrt_paddr(cx, addr_buff), w->buff, w->bytect);
 
         // hdr is (OTAG_TEXT, next, (size-chars, size-bytes), buffer).
         wikrt_addr const addr_hdr = wikrt_alloc_r(cx, szHdr);
         wikrt_val* const phdr = wikrt_paddr(cx, addr_hdr);
         phdr[0] = WIKRT_OTAG_TEXT;
-        phdr[2] = (w->charct << 16) | w->buffsz;
+        phdr[2] = (w->charct << 16) | w->bytect;
         phdr[3] = addr_buff;
 
         // output written texts so far (in reverse chunk order)
@@ -126,7 +128,7 @@ static void wikrt_writer_flush(wikrt_cx* cx, wikrt_writer_state* w)
     }
 
     // regardless of success or failure, clear the buffer
-    w->buffsz = 0;
+    w->bytect = 0;
     w->charct = 0;
 
 }
@@ -135,15 +137,26 @@ static void wikrt_writer_putchar(wikrt_cx* cx, wikrt_writer_state* w, uint32_t c
 {
     assert(wikrt_text_char(cp)); // write valid text.
     _Static_assert((WIKRT_WRITE_BUFFSZ >= UTF8_MAX_CP_SIZE), "write buffer too small for safely processing text");
-    if(w->buffsz > (WIKRT_WRITE_BUFFSZ - UTF8_MAX_CP_SIZE)) { wikrt_writer_flush(cx, w); } 
-    w->buffsz += utf8_writecp_unsafe((w->buff + w->buffsz), cp);
+    if(w->bytect > (WIKRT_WRITE_BUFFSZ - UTF8_MAX_CP_SIZE)) { wikrt_writer_flush(cx, w); } 
+    w->bytect += utf8_writecp_unsafe((w->buff + w->bytect), cp);
     w->charct += 1;
+}
+
+static void wikrt_writer_putcstr(wikrt_cx* cx, wikrt_writer_state* w, char const* const buff)
+{
+    _Static_assert(sizeof(uint8_t) == sizeof(char), "unsafe cast between char and uint8_t");
+    uint8_t const* s = (uint8_t const*) buff;
+    do {
+        uint32_t cp = utf8_step_unsafe(&s);
+        if(0 == cp) { break; }
+        wikrt_writer_putchar(cx, w, cp);
+    } while(true);
 }
 
 static void wikrt_write_op(wikrt_cx* cx, wikrt_writer_state* w, wikrt_op op) 
 {
     assert((OP_INVAL < op) && (op < OP_COUNT));
-    wikrt_abc const abc_opchar = wikrt_op2abc_table[op];
+    uint8_t const abc_opchar = wikrt_op2abc_table[op];
     if(0 != abc_opchar) { 
         wikrt_writer_putchar(cx, w, abc_opchar); 
     } else { 
@@ -197,7 +210,7 @@ static void writer_INTRO_VOID(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_write_op(cx, w, ACCEL_SUM_SWAP);
 }
 
-// (ops * (stack * (text * e))) → (ops' * (stack' * (text * e)))
+// (empty ops * (stack * (text * e))) → (ops' * (stack' * (text * e)))
 //   where `stack` is ((ss * ops') * stack')
 //   and `ss` accumulates substructure
 static inline void wikrt_writer_pop_stack(wikrt_cx* cx, wikrt_writer_state* w)
@@ -216,7 +229,7 @@ static inline void wikrt_writer_pop_stack(wikrt_cx* cx, wikrt_writer_state* w)
 
     // Access and update substructure for our parent.
     wikrt_val const ss_val = wikrt_pval(cx, cx->val)[0];
-    assert(wikrt_i(ss_val));
+    assert(wikrt_smallint(ss_val));
     wikrt_dropk(cx); // drop `ss`
 
     wikrt_int const ss = wikrt_v2i(ss_val);
@@ -238,136 +251,52 @@ static void wikrt_writer_open_block(wikrt_cx* cx)
     (*v) = pblock[1]; // dropping the OTAG
 }
 
-
-#if 0
-static inline bool wikrt_writer_step(wikrt_cx* cx, wikrt_writer_state* w) 
-{
-    // Reserve as much space as we might need.
-    wikrt_size const worst_case_alloc = WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE + (4 * WIKRT_CELLSIZE);
-    if(!wikrt_mem_reserve(cx, worst_case_alloc)) { return false; }
-
-    // (ops * (stack * (texts * e))).
-    wikrt_sum_tag lr;
-    wikrt_unwrap_sum(cx, &lr);
-
-    if(WIKRT_INR == lr) {
-        wikrt_wrap_sum(cx, lr); // end of ops
-        wikrt_writer_pop_stack(cx, w); 
-        return true;
-    } 
-
-    // ((op*ops') * (stack * (texts * e))).
-    wikrt_err const stPair = wikrt_assocr(cx); 
-    assert(WIKRT_OK == stPair); // this must be a pair.
-       
-    // (op * (ops' * (stack * (texts * e)))
-
-    // Basic operations represented by small integers
-    wikrt_val const op = wikrt_pval(cx, cx->val)[0];
-    if(wikrt_i(op)) {
-        wikrt_drop(cx, NULL);
-        return wikrt_write_op(cx, w, wikrt_v2i(op));
-    } 
-
-    // otherwise our `op` should be OPVAL or OPTOK.
-    assert(wikrt_o(cx, op));
-    wikrt_val* const opref = wikrt_pval(cx, op);
-    wikrt_val const otag = LOBYTE(*opref);
-    if(WIKRT_OTAG_OPVAL == otag) {
-        return wikrt_write_opval
-        wikrt_val const val = opref[1];
-        
-
-    } else if(WIKRT_OTAG_OPTOK == otag) {
-        wikrt_size const toksz = (*opref) >> 8;
-        assert((0 < toksz) && (toksz < WIKRT_TOK_BUFFSZ));
-
-        uint8_t tokbuff[WIKRT_TOK_BUFFSZ];
-        memcpy(tokbuff, (1 + opref), toksz);
-        wikrt_drop(cx, NULL); // drop optok
-        
-        uint8_t* s = tokbuff;
-        uint8_t* const s_end = tokbuff + toksz;
-
-        bool ok = wikrt_writer_putchar(cx, w, '{');
-        do {
-            uint32_t const cp = utf8_step_unsafe(&s);
-            assert(wikrt_token_char(cp));
-            ok = ok && wikrt_writer_putchar(cx, w, cp);
-        } while(s_end != s);
-        ok = ok && wikrt_writer_putchar(cx, w, '}');
-        return ok;
-    }
-
-
-
-        do { ok = ok && wikrt_writer_putchar(cx, w, utf8_step_unsafe(&s)) && ok; } while(s_end != s);
-        
-            uint32_t cp = utf8_step_unsafe(cx, w, &s);
-            wikrt_writer_putchar
-
-
-        
-
-        ok = 
-                
-
-
-
-        wikrt_drop(cx, 
-
-        
-    } else {
-        fprintf(stderr, "%s: unrecognized operator type", __FUNCTION__);
-        abort();
-    }
-    
-        
-        
-        
-        // Otherwise we should have an (optok _text_) or (opval _val_). 
-        assert(wikrt_o(op0)); 
-        wikrt_val const* const pobj = wikrt_pval(cx, op0);
-        wikrt_val const otag = LOBYTE(*pobj);
-        if(WIKRT_OTAG_OPVAL == otag) {
-        } else if(WIKRT_OTAG_OPTOK == otag) {
-        } else {
-            fprintf(stderr, "%s: unrecognized 
-        }
-        if(WIKRT_OTAG_OPTOK == otag) {
-        } else if(WIKRT_OTAG_OPVAL == 
-
-            
-        
-        
-        return wikrt_writer_step_op(cx, w);
-    } else if(WIKRT_UNIT_INR == ops) {
-        return wikrt_writer_pop_stack(cx, w);
-    } else {
-        fprintf(stderr, "%s: unrecognized operator in block\n", __FUNCTION__);
-        abort();
-    }
-
-    // ALTERNATIVE: use wikrt_unwrap_sum and wikrt_assocr to get current `op` on top.
-    //  maybe keep a w->status instead of returning booleans in each step.
-}
-
-#endif
-
-
 static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
 {
     wikrt_sum_tag lr;
     wikrt_unwrap_sum(cx, &lr);
     if(WIKRT_UNIT_INR == lr) {
+        // End of current block.
         if(0 == w->depth) { return false; }
         wikrt_wrap_sum(cx, lr);
         wikrt_writer_pop_stack(cx, w); 
         return true; 
-    } else {
-        assert(wikrt_p(cx->val));
-        wikrt_val* const v = wikrt_pval(cx, cx->val);
-        
+    } 
+
+    assert(wikrt_p(cx->val));
+    wikrt_assocr(cx); // (op * (ops * (cont * (text * e)))))
+    wikrt_val const opv = wikrt_pval(cx, cx->val)[0];
+    if(wikrt_smallint(opv)) {
+        wikrt_dropk(cx);
+        wikrt_write_op(cx, w, (wikrt_op) wikrt_v2i(opv));
+        return true;
+    }
+
+    // Other than plain ops, we have optok or opval.
+    assert(wikrt_o(opv));
+    wikrt_val const otag = wikrt_pval(cx, opv)[0];
+    wikrt_val const otag_type = LOBYTE(otag);
+    if(WIKRT_OTAG_OPVAL == otag_type) {
+
+        // TODO: For printing values, I need to handle every value case.
+        // In most cases, I need to break an opval into components and 
+        // print each component separately. 
+        wikrt_set_error(cx, WIKRT_IMPL);
+        wikrt_dropk(cx);
+        return true;
+
+    } else { // OTAG_OPTOK
+        size_t const toklen = (otag >> 8);
+        assert((WIKRT_OTAG_OPTOK == otag_type) && (toklen < WIKRT_TOK_BUFFSZ));
+        char tokbuff[WIKRT_TOK_BUFFSZ];
+        memcpy(tokbuff, 1 + wikrt_pval(cx, opv), toklen);
+        tokbuff[toklen] = 0;
+
+        wikrt_dropk(cx); // drop optok
+        wikrt_writer_putchar(cx, w, '{');
+        wikrt_writer_putcstr(cx, w, tokbuff);
+        wikrt_writer_putchar(cx, w, '}');
+        return true;
     }
 }
 
@@ -406,17 +335,10 @@ void wikrt_block_to_text(wikrt_cx* cx)
     while(wikrt_writer_small_step(cx,&w)) { /* continue */ }
 
     if(WIKRT_OK != wikrt_error(cx)) { return; }
-
+    assert(0 == w.depth);
     wikrt_writer_flush(cx, &w);
-    assert(0 == w->depth);
-
-    bool const empty_ops = (WIKRT_UNIT_INR == wikrt_pval(cx, cx->val)[0]);
-    wikrt_dropk(cx); // drop ops (even if not empty)
-    bool const empty_stack = (0 == w->depth) && (WIKRT_UNIT == wikrt_pval(cx, cx->val)[0]);
-    wikrt_dropk(cx); // drop stack (even if not empty)
-
-    bool const ok_state = empty_ops && empty_stack;
-    if(!ok_state) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_reverse_text_chunks(cx); // repair order of text
+    wikrt_dropk(cx); // drop ops
+    wikrt_dropk(cx); // drop cont
+    wikrt_reverse_text_chunks(cx); // repair text order
 }
 

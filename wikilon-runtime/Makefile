@@ -6,7 +6,7 @@ OPT := -O2 -flto
 CFLAGS := $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
 OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o utf8.o \
-    wikrt.o wikrt_parse.o wikrt_db.o # wikrt_write.o
+    wikrt.o wikrt_parse.o wikrt_db.o wikrt_write.o
 INSTALL_PREFIX := /usr/local
 
 .PHONY: all lib clean install uninstall runtests
