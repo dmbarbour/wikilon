@@ -35,7 +35,7 @@ uint32_t wikrt_api_ver()
 
 wikrt_ecode wikrt_error(wikrt_cx* cx) { return cx->ecode; }
 void wikrt_set_error(wikrt_cx* cx, wikrt_ecode e) {
-    if(!wikrt_error(cx)) { cx->ecode = e; }
+    if(!wikrt_has_error(cx)) { cx->ecode = e; }
 }
 
 
@@ -225,7 +225,7 @@ static void wikrt_mem_compact(wikrt_cx* cx)
 bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
 {
     // if we're in an error state, prevent GC
-    if(WIKRT_OK != wikrt_error(cx)) { return false; }
+    if(wikrt_has_error(cx)) { return false; }
 
     // basic compacting GC
     wikrt_mem_compact(cx);
@@ -312,7 +312,7 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, wikrt_cx* rcx)
 
 wikrt_val_type wikrt_type(wikrt_cx* cx) 
 {
-    bool const okPeek = wikrt_p(cx->val) && !wikrt_error(cx);
+    bool const okPeek = wikrt_p(cx->val) && !wikrt_has_error(cx);
     if(!okPeek) { return WIKRT_TYPE_UNDEF; }
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];
     wikrt_tag const tag = wikrt_vtag(v);
@@ -926,7 +926,7 @@ void wikrt_unwrap_sum_rv(wikrt_cx* cx, wikrt_sum_tag* sum, wikrt_val* v)
         } else {
             // expand element from array, binary, etc.
             wikrt_expand_sum_rv(cx, v);
-            if(!wikrt_error(cx)) { goto retry; }
+            if(!wikrt_has_error(cx)) { goto retry; }
         }
     } else { wikrt_set_error(cx, WIKRT_ETYPE); }
 }}
@@ -1264,6 +1264,7 @@ void wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
 // construct a text in reverse chunk order, then repair order.
 void wikrt_reverse_text_chunks(wikrt_cx* cx) 
 {
+    if(wikrt_has_error(cx)) { return; }
     // (text * e) → (text * e), with `text` strictly in chunks
     // of type WIKRT_OTAG_TEXT.
     //
@@ -1300,7 +1301,9 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
 
     size_t const max_bytes = (*bytes);
     (*bytes) = 0;
-    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+
+    bool const okTryRead = wikrt_p(cx->val) && !wikrt_has_error(cx);
+    if(!okTryRead) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
     do {
         wikrt_val const list = wikrt_pval(cx, cx->val)[0];
@@ -1357,8 +1360,6 @@ void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
     _Static_assert(((WIKRT_SMALLINT_MIN <= 0) && (0x10FFFF <= WIKRT_SMALLINT_MAX))
         , "assuming unicode codepoints are small integers");
 
-    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-
     uint8_t* const dst = (uint8_t*) buff;
 
     // allow 'charct' to be NULL. But handle it in just one place.
@@ -1369,6 +1370,9 @@ void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
     size_t const max_charct = (*charct);
     (*buffsz) = 0;
     (*charct) = 0;
+
+    bool const okTryRead = wikrt_p(cx->val) && !wikrt_has_error(cx);
+    if(!okTryRead) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
     do {
         wikrt_val const list = wikrt_pval(cx, cx->val)[0];
@@ -1538,7 +1542,7 @@ static inline bool wikrt_cx_has_integer(wikrt_cx* cx) {
 
 bool wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
 {
-    bool const peek_ok = !wikrt_error(cx) && wikrt_cx_has_integer(cx);
+    bool const peek_ok = !wikrt_has_error(cx) && wikrt_cx_has_integer(cx);
     if(!peek_ok) { (*i32) = 0; return false; }
 
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];
@@ -1580,7 +1584,7 @@ bool wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
 
 bool wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
 {
-    bool const peek_ok = !wikrt_error(cx) && wikrt_cx_has_integer(cx);
+    bool const peek_ok = !wikrt_has_error(cx) && wikrt_cx_has_integer(cx);
     if(!peek_ok) { (*i64) = 0; return false; }
 
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];
@@ -1643,7 +1647,7 @@ static inline size_t wikrt_decimal_size(uint32_t n) {
 
 bool wikrt_peek_istr(wikrt_cx* cx, char* const buff, size_t* const buffsz)
 {
-    bool const peek_ok = !wikrt_error(cx) && wikrt_cx_has_integer(cx);
+    bool const peek_ok = !wikrt_has_error(cx) && wikrt_cx_has_integer(cx);
     if(!peek_ok) { (*buffsz) = 0; return false; }
 
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];

@@ -682,6 +682,84 @@ void test_sum_factor(wikrt_cx* cx) {
     test_sum_factor_b(cx, false);
 }
 
+#if 0
+bool test_serialize_cstr(wikrt_cx* cx, char const* abc)
+{
+    size_t const len = strlen(abc);
+    wikrt_intro_text(cx, abc, len);
+    wikrt_text_to_block(cx);
+
+    wikrt_block_to_text(cx);
+    char buff[len + 1];
+    size_t bufflen = len + 1;
+    wikrt_read_text(cx, buff, &bufflen, NULL);
+    buff[len] = 0;
+    elim_list_end(cx);
+
+    bool const ok = (len == bufflen) && (0 == strcmp(abc, buff)) && !wikrt_error(cx);
+    return ok;
+}
+#endif
+
+char const* const valid_abc_strings[] =
+ { "vrlwcz", "VRWLCZ", "%^", " \n", "$", "mkf'", "#9876543210-", "+*-Q", "G", "DFMK"
+ , "{x}", "{%word}", "{:seal}", "{simple tokens}", "{←↖↑↗→↘↓↙←}"
+ , "{0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde}"
+ , "[]", "[[]]", "[[[]]]", "[[[[]]]]"
+ , "\" \n~", "\"\n~", "\"hello, world!\n this text has two lines\n~"
+ , NULL
+ };
+
+void test_parse_abc(wikrt_cx* cx) 
+{
+    bool ok = true;
+    for(int ix = 0; (NULL != valid_abc_strings[ix]); ++ix) 
+    {
+        char const* const abc = valid_abc_strings[ix];
+        wikrt_intro_text(cx, abc, SIZE_MAX);
+        wikrt_text_to_block(cx);
+        wikrt_dropk(cx);
+
+        if(WIKRT_OK != wikrt_error(cx)) {
+            fprintf(stderr, "%s: failed to introduce ABC[%d]: %s\n", __FUNCTION__, ix, abc);
+            ok = false;
+        } else {
+            fprintf(stderr, "%s: ok ABC[%d]: %s\n", __FUNCTION__, ix, abc); 
+        }
+        wikrt_cx_reset(cx);
+    }
+
+    if(!ok) { wikrt_set_error(cx, WIKRT_ETYPE); }
+}
+
+char const* const invalid_abc_strings[] = 
+ { "a", "e", "i", "o", "u"
+ , "[", "]", "{", "}", "{}", "{\n}", "{x{y}"
+ , "{0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}" // oversized token
+ , "\"", "~", "\"\n.\n~"
+ , NULL // terminate list 
+ };   
+
+void test_reject_parse(wikrt_cx* cx) 
+{
+    bool ok = true;
+    for(int ix = 0; (NULL != invalid_abc_strings[ix]); ++ix) {
+        char const* s = invalid_abc_strings[ix];
+
+        wikrt_intro_text(cx, s, SIZE_MAX);
+        wikrt_text_to_block(cx);
+        if(!wikrt_error(cx)) {
+            fprintf(stderr, "%s: accepted invalid ABC (%d): %s\n", __FUNCTION__, ix, s);
+            ok = false;
+        } else { 
+           // fprintf(stderr, "%s: rejected invalid ABC (%d): %s\n", __FUNCTION__, ix, s); 
+        }
+        wikrt_cx_reset(cx);
+    }
+
+    if(!ok) { wikrt_set_error(cx, WIKRT_ETYPE); }
+}
+
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
@@ -753,11 +831,16 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_read_text);
     // TODO: test copy for binary and text
     // TODO: test at least one very large string (> 64kB)
+    // TODO: test rejection of invalid texts
     
 
     TCX(test_smallint_math);
-    TCX(test_bigint_math);
+    //TCX(test_bigint_math);
 
+    TCX(test_reject_parse);
+    //TCX(test_parse_abc);
+
+    // TODO: serialization for quoted values
     // TODO: blocks
     // TODO: evaluations   
     // TODO: bignum math

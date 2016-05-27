@@ -318,8 +318,8 @@ static inline void wikrt_writer_state_init(wikrt_writer_state* w)
 void wikrt_block_to_text(wikrt_cx* cx)
 {
     // Expecting (block * e).
-    if(!wikrt_cx_has_block(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     if(!wikrt_mem_reserve(cx, (2 * WIKRT_CELLSIZE))) { return; }
+    if(!wikrt_cx_has_block(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
     wikrt_writer_open_block(cx);                        // block → ops
     wikrt_intro_r(cx, WIKRT_UNIT_INR); wikrt_wswap(cx); // initial texts (empty list)

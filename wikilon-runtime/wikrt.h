@@ -511,6 +511,7 @@ struct wikrt_cx {
 // such that we have needed space for a future wikrt_mem_compact.
 #define WIKRT_ALLOW_OVERCOMMIT_BUFFER_SHARING 1
 
+static inline bool wikrt_has_error(wikrt_cx* cx) { return (WIKRT_OK != cx->ecode); }
 
 static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->mem))); 

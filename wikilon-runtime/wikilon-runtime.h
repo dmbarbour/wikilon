@@ -25,9 +25,11 @@
  *  data into this context. Perform ad-hoc computations. Check for errors.
  *  Extract or store results.
  *
- *  Rather than 'fail safe' behavior, Wikilon runtime only ensures that
- *  runtime type errors, quota errors, and transaction conflict errors
- *  are confined to a context.
+ *  Wikilon runtime attempts to ensure that failures are confined to their
+ *  context, assuming valid arguments. I.e. runtime type errors, space quota
+ *  limits, transaction conflicts, etc. will only result in an error state
+ *  (observable via `wikrt_error`). A few operations that do not modify the
+ *  context may be fail-safe.
  *
  *  @section license_sec License & Copyright
  *
