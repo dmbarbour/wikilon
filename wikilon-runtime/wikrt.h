@@ -196,17 +196,18 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
  *
  * WIKRT_OTAG_BLOCK  (block-header, list-of-ops)
  *
- *   This refers to a trivial block representation: a list of opcodes and
- *   quoted values. This representation is useful as an 'expanded' form 
- *   for various simplifications. The list of opcodes is represented in a
- *   manner that is transparently copyable and droppable.
+ *   This refers to a trivial block representation: a list of opcodes, 
+ *   tokens, and captured values. Opcodes are represented by small 
+ *   integers and include accelerators. Quoted values are also used
+ *   for embedded blocks or texts. 
  *
  *   WIKRT_OTAG_OPVAL 
  *
- *   This tag is used for the quotation operation, and also for partial
- *   evaluations. In the latter case, I'll include a tag bit to suppress
- *   substructural attribute checks for the contained values. This helps
- *   with lazy checking of substructural properties.
+ *   This tag is used for embedded blocks and texts, for fast quotation
+ *   of values, and for partial evaluation efforts. A tag bit is used to
+ *   track whether the substructural attributes should be inherited by
+ *   the containing block, enabling lazy evaluation of substructural 
+ *   attributes.
  *
  *   WIKRT_OTAG_OPTOK
  *
@@ -320,7 +321,12 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
 #define WIKRT_BLOCK_PARALLEL (1 << 10)
 
 // lazy substructure testing for quoted values
-#define WIKRT_OPVAL_LAZYKF (1 << 8)
+#define WIKRT_OPVAL_LAZYKF      (1 << 8)
+
+// force serialization of a text as a linked list.
+//  this affects embedded texts within block_to_text.
+//  mostly avoid redundant tests for safe text object.
+#define WIKRT_OPVAL_LLTEXT      (1 << 9)
 
 static inline bool wikrt_otag_bigint(wikrt_val v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
 static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
@@ -505,6 +511,7 @@ struct wikrt_cx {
 #define WIKRT_REG_CC_INIT WIKRT_VOID
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
 #define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
+#define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
 
 // A strategy for 'splitting' an array is to simply share references
 // within a cell. This is safe only if we overcommit allocations, i.e.
@@ -547,16 +554,17 @@ static inline wikrt_addr wikrt_alloc_r(wikrt_cx* cx, wikrt_sizeb sz)
     return cx->alloc; 
 }
 
-static inline void wikrt_alloc_cellval_r(wikrt_cx* cx, wikrt_val* dst, wikrt_tag tag, wikrt_val fst, wikrt_val snd) 
+static inline wikrt_val wikrt_alloc_cellval_r(wikrt_cx* cx, wikrt_tag tag, wikrt_val fst, wikrt_val snd) 
 {
     wikrt_addr const addr = wikrt_alloc_r(cx, WIKRT_CELLSIZE);
     wikrt_val* const pa = wikrt_paddr(cx, addr);
     pa[0] = fst;
     pa[1] = snd;
-    (*dst) = wikrt_tag_addr(tag, addr);
+    return wikrt_tag_addr(tag, addr);
 }
+
 static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) {
-    wikrt_alloc_cellval_r(cx, &(cx->val), WIKRT_P, v, cx->val); 
+    cx->val = wikrt_alloc_cellval_r(cx, WIKRT_P, v, cx->val); 
 }
 
 static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
@@ -613,3 +621,31 @@ static inline bool wikrt_cx_has_txn(wikrt_cx* cx) {
 }
 void wikrt_drop_txn(wikrt_cx*);
 
+// (a * (as * e)) → (a:as * e); same as `lV`
+static inline void wikrt_cons(wikrt_cx* cx)
+{
+    wikrt_assocl(cx);
+    wikrt_wrap_sum(cx, WIKRT_INL);
+}
+
+// (x * (y * (xs * e)) → (y * (x:xs * e))
+static inline void wikrt_consd(wikrt_cx* cx) 
+{
+    wikrt_zswap(cx);
+    wikrt_cons(cx);
+    wikrt_wswap(cx);
+}
+
+static inline void wikrt_elim_sum(wikrt_cx* cx, wikrt_sum_tag const lr_expected) 
+{
+    wikrt_sum_tag lr;
+    wikrt_unwrap_sum(cx, &lr);
+    if(lr_expected != lr) { wikrt_set_error(cx, WIKRT_ETYPE); }
+}
+
+// drop a list terminal (while validating its type)
+static inline void wikrt_elim_list_end(wikrt_cx* cx)
+{
+    wikrt_elim_sum(cx, WIKRT_INR);
+    wikrt_elim_unit(cx);
+}

@@ -593,6 +593,8 @@ static inline void wikrt_add_drop_task(wikrt_val** s, wikrt_val v) {
 
 void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_ss* ss) 
 {
+    _Static_assert(!WIKRT_NEED_FREE_ACTION, "must update drop to free explicitly");
+
     // currently don't need to touch anything if not tracking `ss`.
     // This might change if I introduce reference counted value types
     // or free list allocators.
@@ -667,8 +669,11 @@ void wikrt_drop(wikrt_cx* cx)
 {
     wikrt_ss ss = 0;
     if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+
+    _Static_assert(!WIKRT_NEED_FREE_ACTION, "free dropped cell");
     wikrt_val* const pv = wikrt_pval(cx,cx->val);
     cx->val = pv[1];
+
     wikrt_drop_v(cx, pv[0], &ss);
     if(!wikrt_ss_droppable(ss)) {
         wikrt_set_error(cx, WIKRT_ETYPE);
@@ -678,19 +683,22 @@ void wikrt_drop(wikrt_cx* cx)
 void wikrt_dropk(wikrt_cx* cx) 
 {
     if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+
+    _Static_assert(!WIKRT_NEED_FREE_ACTION, "free dropped cell");
     wikrt_val* const pv = wikrt_pval(cx, cx->val);
     cx->val = pv[1];
+
     wikrt_drop_v(cx, pv[0], NULL);
 }
 
 void wikrt_intro_unit(wikrt_cx* cx) {
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
-    wikrt_alloc_cellval_r(cx, &(cx->val), WIKRT_P, WIKRT_UNIT, cx->val);
+    cx->val = wikrt_alloc_cellval_r(cx, WIKRT_P, WIKRT_UNIT, cx->val);
 }
 
 void wikrt_intro_unit_r(wikrt_cx* cx) {
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
-    wikrt_alloc_cellval_r(cx, &(cx->val), WIKRT_P, cx->val, WIKRT_UNIT);
+    cx->val = wikrt_alloc_cellval_r(cx, WIKRT_P, cx->val, WIKRT_UNIT);
 }
 
 void wikrt_elim_unit(wikrt_cx* cx)
@@ -808,8 +816,9 @@ void wikrt_wrap_seal(wikrt_cx* cx, char const* s)
         #define TAG(N) ((len > N) ? (((wikrt_val)s[N]) << (8*N)) : 0)
         wikrt_val const otag = TAG(3) | TAG(2) | TAG(1) | WIKRT_OTAG_SEAL_SM;
         #undef TAG
+        
         wikrt_val* const v = wikrt_pval(cx, cx->val);
-        wikrt_alloc_cellval_r(cx, v, WIKRT_O, otag, (*v));
+        (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
     } else {
         // WIKRT_OTAG_SEAL: general case, large or arbitrary sealers
         assert(len < WIKRT_TOK_BUFFSZ);
@@ -826,6 +835,8 @@ void wikrt_wrap_seal(wikrt_cx* cx, char const* s)
 
 void wikrt_unwrap_seal(wikrt_cx* cx, char* buff)
 {
+    _Static_assert(!WIKRT_NEED_FREE_ACTION, "must free token on unwrap");
+
     // I'm assuming (via API docs) that `buff` is WIKRT_TOK_BUFFSZ
     (*buff) = 0;
     if(wikrt_p(cx->val)) {
@@ -888,7 +899,7 @@ void wikrt_wrap_sum_rv(wikrt_cx* cx, wikrt_sum_tag const sum, wikrt_val* v)
         // allocation of deepsum wrapper
         wikrt_val const sf = inL ? WIKRT_DEEPSUML : WIKRT_DEEPSUMR;
         wikrt_val const otag = (sf << 8) | WIKRT_OTAG_DEEPSUM;
-        wikrt_alloc_cellval_r(cx, v, WIKRT_O, otag, (*v));
+        (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
     }
 }
 
@@ -917,6 +928,7 @@ void wikrt_unwrap_sum_rv(wikrt_cx* cx, wikrt_sum_tag* sum, wikrt_val* v)
             (*sum) = inL ? WIKRT_INL : WIKRT_INR;
             wikrt_val const sf = s0 >> 2;
             if(0 == sf) { 
+                _Static_assert(!WIKRT_NEED_FREE_ACTION, "must free sum on unwrap");
                 (*v) = pv[1]; // drop deepsum wrapper
                 // maybe add deepsum wrapper to special free list?
                 // I could eliminate allocation - on average - from VRWLCZ data plumbing
@@ -951,7 +963,7 @@ void wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v)
             pv[2] -= 1;
             wikrt_val const hd = *buff;
             wikrt_val const tl = (0 == pv[2]) ? pv[1] : (*v);
-            wikrt_alloc_cellval_r(cx, v, WIKRT_PL, hd, tl);
+            (*v) = wikrt_alloc_cellval_r(cx, WIKRT_PL, hd, tl);
         } break;
         case WIKRT_OTAG_BINARY: {
             // (hdr, next, size, buffer)
@@ -960,7 +972,7 @@ void wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v)
             pv[2] -= 1;
             wikrt_val const hd = wikrt_i2v((wikrt_int)(*buff));
             wikrt_val const tl = (0 == pv[2]) ? pv[1] : (*v);
-            wikrt_alloc_cellval_r(cx, v, WIKRT_PL, hd, tl);
+            (*v) = wikrt_alloc_cellval_r(cx, WIKRT_PL, hd, tl);
         } break;
         case WIKRT_OTAG_TEXT: {
             // (hdr, next, (size-char, size-byte), buffer)
@@ -974,7 +986,7 @@ void wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v)
             _Static_assert((0x10FFFF <= WIKRT_SMALLINT_MAX), "assuming any codepoint fits in a small integer");
             wikrt_val const hd = wikrt_i2v((wikrt_int)cp);
             wikrt_val const tl = (0 == pv[2]) ? pv[1] : (*v);
-            wikrt_alloc_cellval_r(cx, v, WIKRT_PL, hd, tl);
+            (*v) = wikrt_alloc_cellval_r(cx, WIKRT_PL, hd, tl);
         } break;
         default: {
             wikrt_set_error(cx, WIKRT_ETYPE);

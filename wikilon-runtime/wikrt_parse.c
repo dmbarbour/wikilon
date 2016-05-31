@@ -161,7 +161,7 @@ static void wikrt_fini_parse_opval(wikrt_cx* cx)
 
     // Wrap value with WIKRT_OPVAL.
     wikrt_val* const v = wikrt_pval(cx, cx->val);
-    wikrt_alloc_cellval_r(cx, v, WIKRT_O, WIKRT_OTAG_OPVAL, (*v)); // text → opval
+    (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, WIKRT_OTAG_OPVAL, (*v)); // text → opval
 
     // Now we add opval to list. Corresponds to ABC code `wrzw lV`
     wikrt_wswap(cx);    // ((ops * stack) * (opval * e))  
@@ -271,7 +271,7 @@ static void wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t c
 
             // wrap `ops` in (block ops) so we have a full value
             wikrt_val* const v = wikrt_pval(cx, cx->val);
-            wikrt_alloc_cellval_r(cx, v, WIKRT_O, WIKRT_OTAG_BLOCK, (*v)); 
+            (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, WIKRT_OTAG_BLOCK, (*v)); 
             wikrt_fini_parse_opval(cx);
 
         } else if('{' == cp) {
