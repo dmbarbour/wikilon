@@ -47,7 +47,9 @@ static wikrt_op const wikrt_abc2op_ascii_table[128] =
 #undef OP
 
 static inline wikrt_op wikrt_cp_to_op(uint32_t cp) {
-    return (cp < 128) ? wikrt_abc2op_ascii_table[cp] : OP_INVAL;
+    wikrt_op const result = (cp < 128) ? wikrt_abc2op_ascii_table[cp] : OP_INVAL;
+    // fprintf(stderr, "%s: %d → %d\n", __FUNCTION__, cp, result);
+    return result;
 }
 
 
@@ -72,8 +74,10 @@ static void wikrt_intro_parse(wikrt_cx* cx, wikrt_parse_state* p)
     if(!wikrt_mem_reserve(cx, szAlloc)) { return; }
     wikrt_intro_r(cx, WIKRT_UNIT);      // introduce our stack
     wikrt_intro_r(cx, WIKRT_UNIT_INR);  // toplevel (reverse) list of ops
-    p->type = WIKRT_PARSE_OP;
-    p->depth = 0;
+    p->type   = WIKRT_PARSE_OP; // expecting an operator
+    p->depth  = 0;
+    p->bytect = 0;
+    p->charct = 0;
 }
 
 // Ops are initially constructed in a reverse-ordered list.
@@ -90,8 +94,13 @@ static void wikrt_reverse_opslist(wikrt_cx* cx)
     while(WIKRT_UNIT_INR != hd) 
     {
         // assuming cons list (cell per value), cf. wikrt_cons
-        assert(wikrt_pl(hd)); 
         wikrt_val* const phd = wikrt_pval(cx, hd);
+        if(!wikrt_pl(hd)) {
+            fprintf(stderr, "%s: unexpected oplist (%d → %d, %d)\n"
+                , __FUNCTION__, (int)hd, (int)phd[0], (int)phd[1]);
+            abort();
+        }
+        assert(wikrt_pl(hd)); 
         wikrt_val const next_hd = phd[1];
         phd[1] = tl;
         tl = hd;
@@ -148,63 +157,14 @@ static void wikrt_parser_write_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t
     } 
 }
 
-// After we build a block or text, we'll need to push it into the
-// `ops` list on our current stack.
-//
-// (val * ((ops * stack) * e)) → (opval:ops) * (stack * e)
-//
-// For our simplistic parser, our `val` should be a text or block.
-// E.g. because we aren't simplifying numbers.
-static void wikrt_fini_parse_opval(wikrt_cx* cx)
-{
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
-
-    // Wrap value with WIKRT_OPVAL.
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, WIKRT_OTAG_OPVAL, (*v)); // text → opval
-
-    // Now we add opval to list. Corresponds to ABC code `wrzw lV`
-    wikrt_wswap(cx);    // ((ops * stack) * (opval * e))  
-    wikrt_assocr(cx);   // (ops * (stack * (opval * e)))  
-    wikrt_zswap(cx);    // (ops * (opval * (stack * e)))  
-    wikrt_wswap(cx);    // (opval * (ops * (stack * e)))  
-
-    wikrt_assocl(cx);   // ((opval * ops) * (stack * e))  
-    wikrt_wrap_sum(cx, WIKRT_INL); // ((opval:ops) * (stack * e))
-}
-
-static void wikrt_fini_parse_text(wikrt_cx* cx, wikrt_parse_state* p) 
-{
-    assert(WIKRT_PARSE_TXT_LF == p->type);
-    wikrt_flush_parse_text(cx, p);
-    wikrt_reverse_text_chunks(cx);
-    wikrt_fini_parse_opval(cx);
-}
-
 static void wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t cp)
 { switch(p->type) {
     case WIKRT_PARSE_TOK: {
         _Static_assert(('}' == 125), "assuming '}' is 125"); 
         if('}' == cp) {
 
-            // ensure valid token size
-            if(0 == p->bytect) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-            assert(p->bytect < WIKRT_TOK_BUFFSZ); // true by construction, see below
-
-            wikrt_sizeb const optoksz = wikrt_cellbuff(p->bytect + sizeof(wikrt_val));
-            wikrt_sizeb const szAlloc = WIKRT_CELLSIZE + optoksz;
-            if(!wikrt_mem_reserve(cx, szAlloc)) { return; }
-
-            wikrt_addr const a = wikrt_alloc_r(cx, optoksz);
-            wikrt_val* const pa = wikrt_paddr(cx, a);
-            pa[0] = (p->bytect << 8) | WIKRT_OTAG_OPTOK;
-            memcpy(1 + pa, p->buff, p->bytect);
-
-            wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, a));  // (optok * (ops * e))
-            wikrt_assocl(cx);                               // ((optok * ops) * e)
-            wikrt_wrap_sum(cx, WIKRT_INL);                  // ((optok : ops) * e)
-
-            // done with token, parse next op
+            if(!wikrt_intro_optok(cx, (char const*) p->buff, p->bytect)) { return; }
+            wikrt_cons(cx);
             p->type = WIKRT_PARSE_OP;
 
         } else { 
@@ -212,12 +172,12 @@ static void wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t c
                 "assuming buffer sufficient for slightly oversized tokens");
 
             size_t const next_toksz = p->bytect + utf8_writecp_size(cp);
-            if(!wikrt_token_char(cp) || (next_toksz >= WIKRT_TOK_BUFFSZ)) {
-                wikrt_set_error(cx, WIKRT_ETYPE); // invalid token
-            } else {
+            if(wikrt_token_char(cp) && (next_toksz < WIKRT_TOK_BUFFSZ)) {
                 utf8_writecp_unsafe((p->buff + p->bytect), cp);
                 p->charct += 1;
                 p->bytect = next_toksz;
+            } else {
+                wikrt_set_error(cx, WIKRT_ETYPE); // invalid token
             }
         }
     } break;
@@ -231,7 +191,14 @@ static void wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t c
             wikrt_parser_write_char(cx, p, '\n');
             p->type = WIKRT_PARSE_TXT;
         } else if('~' == cp) { // ~ terminates text 
-            wikrt_fini_parse_text(cx, p);
+
+            wikrt_flush_parse_text(cx, p);
+            wikrt_reverse_text_chunks(cx);
+
+            wikrt_wrap_otag(cx, WIKRT_OTAG_OPVAL);
+            wikrt_accel_wrzw(cx); // expand stack below text
+            wikrt_cons(cx); // add text opval to ops
+
             p->type = WIKRT_PARSE_OP;
         } else { 
             wikrt_set_error(cx, WIKRT_ETYPE); 
@@ -253,26 +220,27 @@ static void wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t c
         _Static_assert(('{' == 123), "assuming '{' is 123");
         _Static_assert(('"' == 34), "assuming '\"' is 34");
 
-        if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
+        if(!wikrt_mem_reserve(cx, (2 * WIKRT_CELLSIZE))) { return; }
 
         if('[' == cp) {
-
             // Begin a new block. We have (ops * (stack * (text * e))).
             wikrt_assocl(cx); // ((ops*stack)*(text*e)) - add ops added to stack
             wikrt_intro_r(cx, WIKRT_UNIT_INR); // (ops' * ((ops*stack) * (texts * e))) - new ops list
+
             p->depth += 1;
+            p->type = WIKRT_PARSE_OP;
 
         } else if(']' == cp) {
-
             if(p->depth < 1) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
            
-            p->depth -= 1;
-            wikrt_reverse_opslist(cx); // ops now in proper order
+            wikrt_reverse_opslist(cx); // ops to a proper order
+            wikrt_wrap_otag_r(cx, WIKRT_OTAG_BLOCK); // (block ops)
+            wikrt_wrap_otag_r(cx, WIKRT_OTAG_OPVAL); // (opval (block ops))
+            wikrt_accel_wrzw(cx); // expand stack below block opval
+            wikrt_cons(cx);  // add block opval to parent's ops
 
-            // wrap `ops` in (block ops) so we have a full value
-            wikrt_val* const v = wikrt_pval(cx, cx->val);
-            (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, WIKRT_OTAG_BLOCK, (*v)); 
-            wikrt_fini_parse_opval(cx);
+            p->depth -= 1;
+            p->type = WIKRT_PARSE_OP;
 
         } else if('{' == cp) {
 
@@ -281,22 +249,15 @@ static void wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t c
             p->charct = 0;
 
         } else if('"' == cp) {
-
-            wikrt_intro_r(cx, WIKRT_UNIT_INR);  // (text * ((ops*stack)*e))
-            wikrt_assocl(cx);                   // ((text * (ops*stack))*e)
+            wikrt_assocl(cx); // ((ops * stack) * (in-text * e))
+            wikrt_intro_r(cx, WIKRT_UNIT_INR);  // (out-text * (stack' * (in-text * e)))
             p->type = WIKRT_PARSE_TXT;
             p->bytect = 0;
             p->charct = 0;
 
         } else {
-            _Static_assert((WIKRT_SMALLINT_MAX >= OP_COUNT), "assuming ops are smallnums");
-            wikrt_op const op = wikrt_cp_to_op(cp);
-
-            if(OP_INVAL == op) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-
-            wikrt_intro_r(cx, wikrt_i2v(op));
-            wikrt_assocl(cx);
-            wikrt_wrap_sum(cx, WIKRT_INL);
+            if(!wikrt_intro_op(cx, wikrt_cp_to_op(cp))) { return; }
+            wikrt_cons(cx);
         } 
     } break;
     default: {
@@ -324,25 +285,12 @@ static void wikrt_fini_parse(wikrt_cx* cx, wikrt_parse_state* p)
     if(!parseStateSeemsOk) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
     wikrt_reverse_opslist(cx);  // (ops * (unit * (text * e)))
-    wikrt_wswap(cx);            // (unit * (ops * (text * e)))
-    wikrt_assocl(cx);           // ((unit * ops) * (text * e))
+    wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK); // (block * (unit * (text * e)))
 
-    // Reuse (ops * unit) cell as an `(OTAG_BLOCK ops)` object.
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    wikrt_addr const a = wikrt_vaddr(*v);
-    wikrt_val* const pa = wikrt_paddr(cx, a);
-    bool const stackIsEmpty = (WIKRT_UNIT == pa[0]);
-    pa[0] = WIKRT_OTAG_BLOCK;
-    (*v) = wikrt_tag_addr(WIKRT_O, a); 
-
-    wikrt_wswap(cx);            // (text * (block * e))
-
-    // Drop the empty text.
-    bool const textIsEmpty = (WIKRT_UNIT_INR == wikrt_pval(cx, cx->val)[0]);
-    wikrt_dropk(cx); // drop text argument (even if not empty)
-
-    bool const validFinalParserState = stackIsEmpty && textIsEmpty;
-    if(!validFinalParserState) { wikrt_set_error(cx, WIKRT_ETYPE); }
+    wikrt_wswap(cx);     // (unit * (block * (text * e)))
+    wikrt_elim_unit(cx); // (block * (text * e))
+    wikrt_wswap(cx);     // (text * (block * e))
+    wikrt_elim_list_end(cx); // (block * e)
 }
 
 /* Construct a block value from a text. 
@@ -362,17 +310,49 @@ void wikrt_text_to_block(wikrt_cx* cx)
     wikrt_intro_parse(cx, &p);
 
     // read and process the text!
-    size_t const max_read = WIKRT_PARSE_READSZ;
     size_t bytes_read;
-    char buff[max_read];
+    char buff[WIKRT_PARSE_READSZ];
     do { // cx has (ops * (stack * (text * e)))
         wikrt_assocl(cx); wikrt_wswap(cx); // swizzle text to top
-        bytes_read = max_read;
+        bytes_read = WIKRT_PARSE_READSZ;
         wikrt_read_text(cx, buff, &bytes_read, NULL);
         wikrt_wswap(cx); wikrt_assocr(cx); // swizzle text to bottom
         wikrt_step_parse(cx, &p, (uint8_t const*) buff, bytes_read);
     } while(0 != bytes_read);
 
     wikrt_fini_parse(cx, &p);
-
 }
+
+
+// utility functions
+
+bool wikrt_intro_optok(wikrt_cx* cx, char const* tok, size_t sz) 
+{
+    bool const validSize = ((0 < sz) && (sz < WIKRT_TOK_BUFFSZ));
+    if(!validSize) { wikrt_set_error(cx, WIKRT_ETYPE); return false; }
+
+    wikrt_size const szOptok = wikrt_cellbuff(sizeof(wikrt_val) + (wikrt_size)sz);
+    wikrt_size const szAlloc = szOptok + WIKRT_CELLSIZE;
+
+    if(!wikrt_mem_reserve(cx, szAlloc)) { return false; }
+
+    wikrt_addr const a = wikrt_alloc_r(cx, szOptok);
+    wikrt_val* const pa = wikrt_paddr(cx, a);
+    pa[0] = WIKRT_OTAG_OPTOK | (sz << 8);
+    memcpy(1 + pa, tok, sz);
+    wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, a));
+
+    return true;
+}
+
+bool wikrt_intro_op(wikrt_cx* cx, wikrt_op op) 
+{
+    bool const validOp = ((OP_INVAL < op) && (op < OP_COUNT));
+    if(!validOp) { wikrt_set_error(cx, WIKRT_ETYPE); return false; }
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
+    wikrt_intro_op_r(cx, op);
+    return true;
+}
+
+
+

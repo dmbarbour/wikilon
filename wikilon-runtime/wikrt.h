@@ -33,6 +33,9 @@ typedef wikrt_val wikrt_addr;
 /** tag uses lowest bits of a value */
 typedef wikrt_val wikrt_tag;
 
+/** otag is first value in a WIKRT_O object */
+typedef wikrt_val wikrt_otag;
+
 /** intermediate structure between context and env */
 typedef struct wikrt_cxm wikrt_cxm;
 
@@ -72,12 +75,20 @@ typedef enum wikrt_intern_op
 , ACCEL_SUM_SWAP    // VRWLC
 , ACCEL_INTRO_VOID  // VVRWLC
 
+// deep structure manipulations
+, ACCEL_wrzw  // (a * ((b * c) * d)) → (a * (b * (c * d)))
+, ACCEL_wzlw  // (a * (b * (c * d))) → (a * ((b * c) * d))
+
+// potential future accelerators?
+//  stack-level manipulations
+//  fixpoint functions (plus future support for non-copying loopy code)
+//  
+
 // Misc.
 , OP_COUNT  // how many ops are defined?
 } wikrt_op;
-
-// for static assertions, i.e. so I don't forget to edit something
-#define WIKRT_ACCEL_COUNT 6
+#define WIKRT_ACCEL_START ACCEL_TAILCALL
+#define WIKRT_ACCEL_COUNT (OP_COUNT - WIKRT_ACCEL_START)
 
 typedef enum wikrt_ss
 { WIKRT_SS_NORM = 0
@@ -323,9 +334,7 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
 // lazy substructure testing for quoted values
 #define WIKRT_OPVAL_LAZYKF      (1 << 8)
 
-// force serialization of a text as a linked list.
-//  this affects embedded texts within block_to_text.
-//  mostly avoid redundant tests for safe text object.
+// render text as a basic list of numbers
 #define WIKRT_OPVAL_LLTEXT      (1 << 9)
 
 static inline bool wikrt_otag_bigint(wikrt_val v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
@@ -411,6 +420,10 @@ void wikrt_quote_v(wikrt_cx*, wikrt_val*);
 void wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* out);
 void wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
 #endif
+
+// for text to/from block, in wikrt_parse.c
+bool wikrt_intro_optok(wikrt_cx* cx, char const*, size_t); // e → (optok * e)
+bool wikrt_intro_op(wikrt_cx* cx, wikrt_op op); // e → (op * e)
 
 #define WIKRT_ENABLE_FAST_READ 0
 
@@ -567,6 +580,24 @@ static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) {
     cx->val = wikrt_alloc_cellval_r(cx, WIKRT_P, v, cx->val); 
 }
 
+// (v*e) → ((otag v) * e). E.g. for opval, block. Requires WIKRT_CELLSIZE.
+static inline void wikrt_wrap_otag_r(wikrt_cx* cx, wikrt_otag otag) {
+    _Static_assert((WIKRT_SMALLINT_MAX >= OP_COUNT), "assuming ops are smallnums");
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+    (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
+}
+
+// if we have already reserved WIKRT_CELLSIZE and know we have a valid op
+static inline void wikrt_intro_op_r(wikrt_cx* cx, wikrt_op op) { wikrt_intro_r(cx, wikrt_i2v(op)); }
+
+// try to reserve memory, if successful wrap a value with otag.
+static inline bool wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
+    wikrt_wrap_otag_r(cx, otag);
+    return true; 
+}
+
+
 static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
     wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), v, ss); }
 
@@ -649,3 +680,7 @@ static inline void wikrt_elim_list_end(wikrt_cx* cx)
     wikrt_elim_sum(cx, WIKRT_INR);
     wikrt_elim_unit(cx);
 }
+
+
+void wikrt_accel_wrzw(wikrt_cx* cx); // (a * ((b * c) * d)) → (a * (b * (c * d)))
+void wikrt_accel_wzlw(wikrt_cx* cx); // (a * (b * (c * d))) → (a * ((b * c) * d))

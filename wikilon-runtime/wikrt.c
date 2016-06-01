@@ -703,6 +703,7 @@ void wikrt_intro_unit_r(wikrt_cx* cx) {
 
 void wikrt_elim_unit(wikrt_cx* cx)
 {
+    _Static_assert(!WIKRT_NEED_FREE_ACTION, "need to recycle cell on elim_unit");
     bool const type_ok = wikrt_p(cx->val) && (WIKRT_UNIT == (wikrt_pval(cx, cx->val)[0]));
     if(!type_ok) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     cx->val = wikrt_pval(cx, cx->val)[1];
@@ -710,6 +711,7 @@ void wikrt_elim_unit(wikrt_cx* cx)
 
 void wikrt_elim_unit_r(wikrt_cx* cx)
 {
+    _Static_assert(!WIKRT_NEED_FREE_ACTION, "need to recycle cell on elim_unit_r");
     bool const type_ok = wikrt_p(cx->val) && (WIKRT_UNIT == (wikrt_pval(cx, cx->val)[1]));
     if(!type_ok) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     cx->val = wikrt_pval(cx, cx->val)[0];
@@ -744,13 +746,11 @@ void wikrt_zswap(wikrt_cx* cx)
     wikrt_wswap_v(cx, wikrt_pval(cx, cx->val)[1]);
 }
 
-/** (a*(b*c))→((a*b)*c). ABC op `l`. */
-void wikrt_assocl(wikrt_cx* cx) 
+static void wikrt_assocl_v(wikrt_cx* cx, wikrt_val a_bc) 
 {
     // this op must be blazing fast in normal case.
-    wikrt_val const abc = cx->val;
-    if(wikrt_p(abc)) {
-        wikrt_val* const pa_bc = wikrt_pval(cx, abc);
+    if(wikrt_p(a_bc)) {
+        wikrt_val* const pa_bc = wikrt_pval(cx, a_bc);
         wikrt_val const bc = pa_bc[1];
         if(wikrt_p(bc)) {
             wikrt_val* const pbc = wikrt_pval(cx, bc);
@@ -764,26 +764,42 @@ void wikrt_assocl(wikrt_cx* cx)
     }
     wikrt_set_error(cx, WIKRT_ETYPE);
 }
-
-/** ((a*b)*c)→(a*(b*c)). ABC op `r`. */
-void wikrt_assocr(wikrt_cx* cx)
+/** (a*(b*c))→((a*b)*c). ABC op `l`. */
+void wikrt_assocl(wikrt_cx* cx) { wikrt_assocl_v(cx, cx->val); }
+void wikrt_accel_wzlw(wikrt_cx* cx) 
 {
+    // (a * (b * (c * d))) → (a * ((b * c) * d))
+    if(wikrt_p(cx->val)) { wikrt_assocl_v(cx, wikrt_pval(cx, cx->val)[1]); }
+    else { wikrt_set_error(cx, WIKRT_ETYPE); }   
+}
+
+static void wikrt_assocr_v(wikrt_cx* cx, wikrt_val ab_c) 
+{
+    // ((a*b)*c) → (a*(b*c))
     // this op must be blazing fast in normal case.
-    wikrt_val const abc = cx->val;
-    if(wikrt_p(abc)) {
-        wikrt_val* const pab_c = wikrt_pval(cx, abc);
+    if(wikrt_p(ab_c)) {
+        wikrt_val* const pab_c = wikrt_pval(cx, ab_c);
         wikrt_val const ab = pab_c[0];
         if(wikrt_p(ab)) {
             wikrt_val* const pab = wikrt_pval(cx, ab);
             wikrt_val const c = pab_c[1];
             pab_c[1] = ab;
             pab_c[0] = pab[0];
-            pab[0] = pab[1];
+            pab[0] = pab[1]; // b
             pab[1] = c;
             return;
         }
     }
     wikrt_set_error(cx, WIKRT_ETYPE);
+}
+
+/** ((a*b)*c)→(a*(b*c)). ABC op `r`. */
+void wikrt_assocr(wikrt_cx* cx) { wikrt_assocr_v(cx, cx->val); }
+void wikrt_accel_wrzw(wikrt_cx* cx) 
+{
+    // (a * ((b*c)*d)) → (a * (b * (c * d))), i.e. `r` on second element
+    if(wikrt_p(cx->val)) { wikrt_assocr_v(cx, wikrt_pval(cx, cx->val)[1]); }
+    else { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
 /** (a*b)→(b*a). ABC ops `vrwlc`. */
@@ -796,7 +812,6 @@ void wikrt_swap(wikrt_cx* cx)
     }
     wikrt_set_error(cx, WIKRT_ETYPE);
 }
-
 
 void wikrt_wrap_seal(wikrt_cx* cx, char const* s)
 {
@@ -844,6 +859,7 @@ void wikrt_unwrap_seal(wikrt_cx* cx, char* buff)
         if(wikrt_o(*v)) {
             wikrt_val* const pv = wikrt_pval(cx, (*v));
             if(wikrt_otag_seal_sm(*pv)) {
+                _Static_assert(WIKRT_TOK_BUFFSZ >= 4, "token buffsize much too small");
                 wikrt_val const otag = *pv;
                 buff[0] = ':';
                 buff[1] = (char)((otag >> 8 ) & 0xFF);

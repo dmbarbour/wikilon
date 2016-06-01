@@ -29,19 +29,11 @@
 // most likely source of error is a full context, which might happen 
 // when expanding opvals.
 
-
-typedef enum 
-{ WIKRT_WRITE_OPS  // 
-, WIKRT_WRITE_TXT  // incrementally write large texts
-, WIKRT_WRITE_INT  // incrementally write big numbers
-} wikrt_write_type;
-
 // A reasonable chunk size for our texts.
 //  must be smaller than WIKRT_OTAG_TEXT chunks (max size 0xFFFF)
 #define WIKRT_WRITE_BUFFSZ (40 * 1000)
 typedef struct wikrt_writer_state 
 {
-    wikrt_write_type type;
     // conditions for current block
     bool rel, aff, lazykf;
     wikrt_size depth;
@@ -74,16 +66,17 @@ static uint8_t wikrt_op2abc_table[OP_COUNT] =
  };
 #undef OP
 
-// I'd prefer to maybe use a table of `wikrt_op const*`. But for the
-// general case, I might eventually have accelerators that contain
-// specific blocks or texts. So I'm using function pointers for the
-// writing of multiple elements.
+// I'd prefer to maybe use a table, but it won't generalize easily
+// if the table contains constants of any sort. For now, this will
+// work (in a brute force sort of way).
 static void writer_TAILCALL(wikrt_cx*, wikrt_writer_state* w);
 static void writer_INLINE(wikrt_cx*, wikrt_writer_state* w);
 static void writer_PROD_SWAP(wikrt_cx*, wikrt_writer_state* w);
 static void writer_INTRO_UNIT(wikrt_cx*, wikrt_writer_state* w);
 static void writer_SUM_SWAP(wikrt_cx*, wikrt_writer_state* w);
 static void writer_INTRO_VOID(wikrt_cx*, wikrt_writer_state* w);
+static void writer_wrzw(wikrt_cx*, wikrt_writer_state* w);
+static void writer_wzlw(wikrt_cx*, wikrt_writer_state* w);
 
 typedef void (*wikrt_writer)(wikrt_cx*, wikrt_writer_state*);
 #define ACCEL(X) [ACCEL_##X] = writer_##X
@@ -91,8 +84,9 @@ static wikrt_writer wikrt_accel_writers[OP_COUNT] =
  { ACCEL(TAILCALL),  ACCEL(INLINE)
  , ACCEL(PROD_SWAP), ACCEL(INTRO_UNIT)
  , ACCEL(SUM_SWAP),  ACCEL(INTRO_VOID)
+ , ACCEL(wrzw),      ACCEL(wzlw)
  };
-_Static_assert((6 == WIKRT_ACCEL_COUNT), "missing accelerator writer?");
+_Static_assert((8 == WIKRT_ACCEL_COUNT), "missing accelerator writer?");
 #undef ACCEL
 
 static void wikrt_writer_flush(wikrt_cx* cx, wikrt_writer_state* w)
@@ -212,12 +206,42 @@ static void writer_INTRO_VOID(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_write_op(cx, w, OP_SUM_INTRO0);
     wikrt_write_op(cx, w, ACCEL_SUM_SWAP);
 }
+static void writer_wrzw(wikrt_cx* cx, wikrt_writer_state* w)
+{
+    wikrt_write_op(cx, w, OP_PROD_W_SWAP);
+    wikrt_write_op(cx, w, OP_PROD_ASSOCR);
+    wikrt_write_op(cx, w, OP_PROD_Z_SWAP);
+    wikrt_write_op(cx, w, OP_PROD_W_SWAP);
+}
+static void writer_wzlw(wikrt_cx* cx, wikrt_writer_state* w)
+{
+    wikrt_write_op(cx, w, OP_PROD_W_SWAP);
+    wikrt_write_op(cx, w, OP_PROD_Z_SWAP);
+    wikrt_write_op(cx, w, OP_PROD_ASSOCL);
+    wikrt_write_op(cx, w, OP_PROD_W_SWAP);
+}
+
+
+
+// (block * e) → (ops * e), returning otag
+static wikrt_otag wikrt_writer_open_block(wikrt_cx* cx) 
+{
+    // `block` is (OTAG_BLOCK ops) pair.
+    _Static_assert(!WIKRT_NEED_FREE_ACTION, "free the 'block' tag");
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+    wikrt_val* const pblock = wikrt_pval(cx, (*v));
+    wikrt_otag const otag = (*pblock);
+    assert(WIKRT_OTAG_BLOCK == LOBYTE(otag));
+    (*v) = pblock[1]; // dropping the OTAG
+    return otag;
+}
 
 // (empty ops * (stack * (text * e))) → (ops' * (stack' * (text * e)))
 //   where `stack` is ((ss * ops') * stack')
 //   and `ss` accumulates substructure
 static inline void wikrt_writer_pop_stack(wikrt_cx* cx, wikrt_writer_state* w)
 {
+    _Static_assert((']' == 93), "assuming ']' is 93");
     assert((WIKRT_UNIT_INR == wikrt_pval(cx, cx->val)[0]) && (w->depth > 0));
 
     wikrt_writer_putchar(cx, w, ']');
@@ -245,22 +269,43 @@ static inline void wikrt_writer_pop_stack(wikrt_cx* cx, wikrt_writer_state* w)
     //  and 'ss' merged into wirkt_writer_state
 }
 
-// (block * e) → (ops * e)
-static void wikrt_writer_open_block(wikrt_cx* cx) 
+// ((block ops') * (ops * (stack * (texts * e)))) → 
+//   (ops' * (stack' * (texts' * e)))
+//  where stack' = ((ss*ops)*stack) and texts' includes the '['
+static inline void wikrt_writer_push_stack(wikrt_cx* cx, wikrt_writer_state* w, bool block_lazykf) 
 {
-    // `block` is (OTAG_BLOCK, ops) pair.
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    wikrt_val* const pblock = wikrt_pval(cx, (*v));
-    assert(WIKRT_OTAG_BLOCK == LOBYTE(*pblock));
-    (*v) = pblock[1]; // dropping the OTAG
+    _Static_assert(('[' == 91), "assuming '[' is 91");
+
+    wikrt_otag const block_tag = wikrt_writer_open_block(cx); // (block ops') → ops'
+
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
+    wikrt_wswap(cx); wikrt_zswap(cx); // (ops * (stack * (block * (texts * e))))
+
+    wikrt_int const ss = (w->rel ? WIKRT_SS_REL : 0) 
+                       | (w->aff ? WIKRT_SS_AFF : 0) 
+                       | (w->lazykf ? WIKRT_SS_LAZYKF : 0);
+
+    wikrt_intro_r(cx, wikrt_i2v(ss));
+    wikrt_assocl(cx); // ((ss*ops) * (stack * (ops' * ...))))
+    wikrt_assocl(cx); // (((ss*ops)*stack) * (ops' * ...))) = (stack' * (ops' * ...))
+    wikrt_wswap(cx);  // (ops' * (stack' * (texts * e)))
+
+    w->rel = (0 != (WIKRT_BLOCK_RELEVANT & block_tag));
+    w->aff = (0 != (WIKRT_BLOCK_AFFINE & block_tag));
+    w->lazykf = block_lazykf;
+    w->depth += 1;
+
+    wikrt_writer_putchar(cx, w, '[');
+}
+
+static inline bool wikrt_is_text_chunk(wikrt_cx* cx, wikrt_val v) {
+    return wikrt_o(v) && wikrt_otag_text(*wikrt_pval(cx, v));
 }
 
 // embed a text value if it's suitably formulated 
-static bool wikrt_is_embeddable_textval(wikrt_cx* cx, wikrt_val v) {
+static bool wikrt_is_embeddable_text(wikrt_cx* cx, wikrt_val v) {
     do {
-        bool const is_compact_text = wikrt_o(v) 
-            && wikrt_otag_text(wikrt_pval(cx, v)[0]);
-        if(!is_compact_text) { return false; }
+        if(!wikrt_is_text_chunk(cx, v)) { return false; }
         v = wikrt_pval(cx, v)[1]; // next element
     } while(WIKRT_UNIT_INR != v);
     return true;
@@ -339,11 +384,6 @@ static void wikrt_write_text(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_assocr(cx); // open cont back to (ops * (stack * ...))
 }
 
-static inline void wikrt_intro_op(wikrt_cx* cx, wikrt_op op) {
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
-    wikrt_intro_r(cx, wikrt_i2v(op));
-}
-
 // given (val * (ops * (stack * (texts * e))))
 //  return (ops' * (stack' * (texts' * e)))
 //
@@ -351,179 +391,99 @@ static inline void wikrt_intro_op(wikrt_cx* cx, wikrt_op op) {
 // divided into extra ops to be written later. Block values will write
 // the opening character then grow the stack.
 //
-// A significant challenge here is writing texts.
-static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_val opval_tag) 
+// A significant challenge here is writing of embedded texts. When I 
+// encounter a WIKRT_OTAG_TEXT, it is possible that I won't want to
+// write it as a text value. 
+//
+// Other potential issues: rendering arrays and binaries might benefit
+// from injecting {&array} and {&binary} annotations. I'd need to 
+// somehow track that I've injected them, though.
+static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opval_tag) 
 { tailcall: { switch(wikrt_type(cx)) {
+
     case WIKRT_TYPE_PROD: {
-    } break;
-    case WIKRT_TYPE_UNIT: {
-    } break;
-    case WIKRT_TYPE_SUM: {
-    } break;
-    case WIKRT_TYPE_INT: { 
-        wikrt_write_int(cx, w); 
+        // (a * b) pair → write b, write a, write `l` to pair them
+        wikrt_intro_op(cx, OP_PROD_ASSOCL);
+        wikrt_consd(cx);
+        wikrt_assocr(cx);
+        wikrt_wrap_otag(cx, opval_tag);
+        wikrt_consd(cx);
+        goto tailcall;
     } break;
 
+    case WIKRT_TYPE_UNIT: {
+        wikrt_dropk(cx);
+        wikrt_write_op(cx, w, ACCEL_INTRO_UNIT);
+        return;
+    } break;
+
+    case WIKRT_TYPE_INT: { 
+        wikrt_write_int(cx, w); 
+        return;
+    } break;
+
+    case WIKRT_TYPE_SUM: {
+
+        // special handling to print obvious embeddable texts
+        bool const render_text_as_list = (0 != (WIKRT_OPVAL_LLTEXT & opval_tag));
+        wikrt_val const v =  wikrt_pval(cx, cx->val)[0];
+        if(!render_text_as_list && wikrt_is_text_chunk(cx, v)) {
+            if(wikrt_is_embeddable_text(cx, v)) { 
+                wikrt_write_text(cx, w); 
+                return;
+            } else {
+                opval_tag |= WIKRT_OPVAL_LLTEXT;
+            }
+        }
+
+        // unwrap the value, but add code to re-wrap it.
+        wikrt_sum_tag lr;
+        wikrt_unwrap_sum(cx, &lr);
+        wikrt_op const sumop = (WIKRT_INL == lr) ? OP_SUM_INTRO0 : ACCEL_INTRO_VOID;
+        wikrt_intro_op(cx, sumop);
+        wikrt_consd(cx);
+        goto tailcall;
+
+    } break;
+
+    case WIKRT_TYPE_BLOCK: {
+        // I'll need to print '[' and push our block to our stack.
+        bool const lazykf = (0 != (WIKRT_OPVAL_LAZYKF & opval_tag));
+        wikrt_writer_push_stack(cx, w, lazykf);
+        return;
+    } break;
+
+    case WIKRT_TYPE_SEAL: {
+        // print contained value then the sealer token (via optok)
+        char tokbuff[WIKRT_TOK_BUFFSZ];
+        wikrt_unwrap_seal(cx, tokbuff);
+        wikrt_intro_optok(cx, tokbuff, strlen(tokbuff));
+        wikrt_consd(cx);
+        goto tailcall;
+
+    } break;
+
+    case WIKRT_TYPE_STOW: {
+        // Stowage will print as a token. I will also need to capture
+        // substructure if our value is LAZYKF.
+        fprintf(stderr, "todo: write stowed values\n");
+        wikrt_set_error(cx, WIKRT_IMPL);
+        return;
+    } break;
+
+    case WIKRT_TYPE_PEND: {
+        // I'll need to somehow print the lazy continuation.
+        fprintf(stderr, "todo: write pending values\n");
+        wikrt_set_error(cx, WIKRT_IMPL);
+        return;
+    } break;
 
     case WIKRT_TYPE_UNDEF:
     default: {
         wikrt_set_error(cx, WIKRT_ETYPE);
+        return;
     } break;
 }}}
-
-{ WIKRT_TYPE_UNDEF      // an undefined type
-, WIKRT_TYPE_INT        // any integer
-, WIKRT_TYPE_PROD       // a pair of values
-, WIKRT_TYPE_UNIT       // the unit value
-, WIKRT_TYPE_SUM        // value in left or right
-, WIKRT_TYPE_BLOCK      // block of code, a function
-, WIKRT_TYPE_SEAL       // discretionary sealed value
-, WIKRT_TYPE_STOW       // stowed value reference
-, WIKRT_TYPE_PEND       // pending lazy or parallel value
-
-    WIKRT_
-
-
-}}}
-
-    wikrt_val const v = wikrt_pval(cx, cx->val)[0];
-    wikrt_val const tag = wikrt_vtag(v);
-
-    if(WIKRT_UNIT == v) { 
-        wikrt_dropk(cx); 
-        wikrt_write_op(cx, w, ACCEL_INTRO_UNIT); 
-    } else if(WIKRT_P == tag) {
-        // pair (a * b) serializes to: b a `l`. 
-        wikrt_intro_op(cx, OP_ASSOCL);
-        wikrt_consd(cx); // write `l` later
-
-        wikrt_assocr(cx); 
-        wikrt_wrap_opval(cx, lazykf); 
-        wikrt_consd(cx); // write `a` later
-
-        // this leaves us with (b * (ops' * (stack * (texts * e))).
-        goto tailcall; // write b now.
-    } else if((WIKRT_PL == tag) || (WIKRT_PR == tag)) {
-
-
-
-        
-
-        wikrt_pval(cx, cx->val)[0] = wikrt_tag_addr(cx, wikrt_vaddr(v));
-        
-
-
-
-    }
-        
-
-        if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
-        wikrt_intro_r(cx, wikrt_i2v(OP_ASSOCL));
-        wikrt_consd(cx);
-        wikrt_wswap(cx);
-        wikrt_assocr(cx);
-        wikrt_wrap_opval_r(cx, lazykf);
-        wikrt_consd(cx);
-        wikrt_assocr(cx);
-        wikrt_
-
-
-        wikrt_wswap(cx);
-        wikrt_assocr(cx);
-        wikrt_
-        wikrt_zswap(cx);
-        wikrt
-        
-        
-
-    } else if((WIKRT_PL == tag) || (WIKRT_PR == tag)) {
-        wikrt_wswap(cx); // get 'ops' on top
-
-        wikrt_pval(cx, cx->val)[0] = wikrt_tag_addr(WIKRT_P, wikrt_vaddr(v));
-        wikrt_op const op = (WIKRT_PL == tag) ? OP_INTRO0 : ACCEL_INTRO_VOID;
-        wikrt_val const opv = wikrt_i2v(op); 
-        wikrt_intro_r(cx, opv);
-
-        wikrt_cons(cx);
-        wikrt_wswap(cx);
-        wikrt_assocl(cx);
-        goto tailcall;
-    } else if(wikrt_smallint(v)) {
-        
-    }
-WIKRT_PR == tag) {
-
-    }
-    if(wikrt_smallint(v)) { 
-        wikrt_write_int(cx, w); 
-    } else if(WIKRT_UNIT == v) { 
-        wikrt_dropk(cx); 
-        wikrt_write_op(cx, w, ACCEL_INTRO_UNIT);
-    } else if((WIKRT_PL == tag) || (WIKRT_PR == tag)) {
-        
-        w
-        wikrt_write_integer(cx)
-        size_t nDigits
-        wikrt_
-    }  
-    
-    if(wikrt_integer(cx, v)) {
-    } else if(wikrt_is_embeddable_text(cx, v)) {
-        // we need (val * (cont * (texts * e))) to write to our texts.
-        // 
-
-    } else if(
-    if(wikrt_is_embeddable_text_val(cx, val)) {
-    } else if(wikrt_integer(cx,val)) {
-    }
-    if(0 == wikrt_vaddr(val))
-    
-    
-
-
-    
-
-
-
-
-
-
-            wikrt_val const v = popv[1];
-
-            if(wikrt_smallint(v)) {
-            } else if(WIKRT_O == wikrt_vtag(v)) {
-            } else if
-            
-            // Directly printable types: blocks, embeddedable texts, and integers.
-            if(wikrt_integer(cx, v)) {
-                
-            } else if(
-
-                        
-            
-        
-        
-
- 
-    wikrt_assocr(cx); // (op * (ops * (cont * (text * e)))))
-    wikrt_val const opv = wikrt_pval(cx, cx->val)[0];
-    if(wikrt_smallint(opv)) {
-    } else { assert(wikrt_o(opv));
-        // Expecting OTAG_OPVAL or OTAG_OPTOK 
-        wikrt_val const otag = wikrt_pval(cx, opv)[0];
-        wikrt_val const otag_type = LOBYTE(otag);
-        if(WIKRT_OTAG_OPVAL == otag_type) {
-            wikrt_write_opval(cx, w);
-        } else { assert(WIKRT_OTAG_OPTOK == otag_type);
-            size_t const toklen = (otag >> 8);
-            char tokbuff[toklen + 1];
-            memcpy(tokbuff, 1 + wikrt_pval(cx, opv), toklen);
-            tokbuff[toklen] = 0;
-
-            wikrt_dropk(cx); // drop optok
-        }
-    }
-}}
 
 static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
 {
@@ -587,7 +547,6 @@ static inline bool wikrt_cx_has_block(wikrt_cx* cx) {
 
 static inline void wikrt_writer_state_init(wikrt_writer_state* w) 
 {
-    w->type     = WIKRT_WRITE_OP;
     w->rel      = false;
     w->aff      = false;
     w->lazykf   = false;

@@ -210,7 +210,10 @@ typedef enum wikrt_abc
 } wikrt_abc;
 
 // Thoughts: Wikilon runtime will use accelerators instead of ABCD.
-// I'll want to list the accelerators that Wikilon supports.
+
+// NOTE: I'll eventually want to export recognized accelerators and annotations.
+// I'm not sure how to best go about this, though. Maybe as a simple AO dictionary
+// string, to provide a compact representation.
 
 /** @brief Validate a token.
  *
@@ -508,7 +511,8 @@ void wikrt_wrap_seal(wikrt_cx*, char const*);
  *
  * This returns the sealer token into the provided buffer, which must
  * be at least WIKRT_TOK_BUFFSZ in length to eliminate risk of buffer
- * overflow. This token is NUL-terminated.
+ * overflow. This token is NUL-terminated. On error, an empty string
+ * will be returned (which is not a valid token).
  */
 void wikrt_unwrap_seal(wikrt_cx*, char*);
 
