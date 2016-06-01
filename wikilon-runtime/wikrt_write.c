@@ -46,6 +46,17 @@ typedef struct wikrt_writer_state
 // For bitfield tracking substructure
 #define WIKRT_SS_LAZYKF (1 << 7)
 
+static inline void wikrt_writer_state_init(wikrt_writer_state* w) 
+{
+    w->rel      = false;
+    w->aff      = false;
+    w->lazykf   = false;
+    w->depth    = 0;
+    w->bytect   = 0;
+    w->charct   = 0;
+}
+
+
 // Basic ABC (elements in ASCII range)
 #define OP(X) [OP_##X] = ABC_##X
 static uint8_t wikrt_op2abc_table[OP_COUNT] =
@@ -489,7 +500,7 @@ static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
 {
     wikrt_sum_tag lr;
     wikrt_unwrap_sum(cx, &lr);
-    if(WIKRT_UNIT_INR == lr) {
+    if(WIKRT_INR == lr) {
         // End of current block.
         if(0 == w->depth) { return false; }
         wikrt_wrap_sum(cx, lr);
@@ -545,16 +556,6 @@ static inline bool wikrt_cx_has_block(wikrt_cx* cx) {
     return wikrt_p(cx->val) && wikrt_blockval(cx, *wikrt_pval(cx, cx->val));
 }
 
-static inline void wikrt_writer_state_init(wikrt_writer_state* w) 
-{
-    w->rel      = false;
-    w->aff      = false;
-    w->lazykf   = false;
-    w->depth    = 0;
-    w->bytect   = 0;
-    w->charct   = 0;
-}
-
 /* convert a block on the stack to text. */
 void wikrt_block_to_text(wikrt_cx* cx)
 {
@@ -562,9 +563,10 @@ void wikrt_block_to_text(wikrt_cx* cx)
     if(!wikrt_mem_reserve(cx, (2 * WIKRT_CELLSIZE))) { return; }
     if(!wikrt_cx_has_block(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
-    wikrt_writer_open_block(cx);                        // block → ops
+    // (block * e) → (ops * (unit * (text * e)))
     wikrt_intro_r(cx, WIKRT_UNIT_INR); wikrt_wswap(cx); // initial texts (empty list)
     wikrt_intro_r(cx, WIKRT_UNIT); wikrt_wswap(cx);     // initial continuation (unit)
+    wikrt_writer_open_block(cx);                        // block → ops
 
     wikrt_writer_state w;
     wikrt_writer_state_init(&w);
