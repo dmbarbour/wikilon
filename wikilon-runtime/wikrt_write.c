@@ -315,10 +315,10 @@ static inline bool wikrt_is_text_chunk(wikrt_cx* cx, wikrt_val v) {
 
 // embed a text value if it's suitably formulated 
 static bool wikrt_is_embeddable_text(wikrt_cx* cx, wikrt_val v) {
-    do {
+    while(WIKRT_UNIT_INR != v) {
         if(!wikrt_is_text_chunk(cx, v)) { return false; }
         v = wikrt_pval(cx, v)[1]; // next element
-    } while(WIKRT_UNIT_INR != v);
+    }
     return true;
 }
 
@@ -343,13 +343,14 @@ static void wikrt_write_int(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_peek_istr(cx, buff, &len);
     wikrt_dropk(cx); // drop the integer
 
-    bool const negate = ('-' == buff[0]);
-    char const* s = buff + (negate ? 1 : 0);
-  
-    // write the pseudo-literal integer
     wikrt_writer_putchar(cx, w, ABC_NUM);
-    do { wikrt_writer_putchar(cx, w, *s++); } while(*s);
-    if(negate) { wikrt_writer_putchar(cx, w, ABC_NEG); }
+    if('0' != buff[0]) { // except for zero (`#` not `#0`)
+        // write the pseudo-literal integer. 
+        bool const negate = ('-' == buff[0]);
+        char const* s = buff + (negate ? 1 : 0);
+        do { wikrt_writer_putchar(cx, w, *s++); } while(*s);
+        if(negate) { wikrt_writer_putchar(cx, w, ABC_NEG); }
+    } 
 }
 
 // given (textval * (ops * (stack * (output text * e)))
@@ -439,7 +440,7 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
         bool const render_text_as_list = (0 != (WIKRT_OPVAL_LLTEXT & opval_tag));
         wikrt_val const v =  wikrt_pval(cx, cx->val)[0];
         if(!render_text_as_list && wikrt_is_text_chunk(cx, v)) {
-            if(wikrt_is_embeddable_text(cx, v)) { 
+            if(wikrt_is_embeddable_text(cx, wikrt_pval(cx,v)[1])) { 
                 wikrt_write_text(cx, w); 
                 return;
             } else {
@@ -530,7 +531,12 @@ static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
 
             _Static_assert(!WIKRT_NEED_FREE_ACTION, "must free opval wrapper");
             pv[0] = popv[1]; // drop opval wrapper
-            wikrt_write_val(cx, w, otag); // otag is needed for lazykf and lltext
+
+            // force parsed texts to write as texts (mostly for empty text)
+            bool const emtext = (0 != (WIKRT_OPVAL_EMTEXT & otag));
+
+            if(emtext) { wikrt_write_text(cx, w); }
+            else { wikrt_write_val(cx, w, otag); }
 
         } else {
 

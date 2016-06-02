@@ -13,21 +13,28 @@ char const* const valid_abc_strings[] =
  { ""
  , "vrlwcz", "VRWLCZ", "%^", " \n", "$", "mkf'", "#9876543210-", "+*-Q", "G", "DFMK"
  , "[  ]", "[vc]", "[v[vc]lc]", "[v[v[vc]lc]lc]", "[v[v[v[vc]lc]lc]lc]"
- , "[[]]", "[[[]]]", "[[[[]]]]"
+ , "[]", "[[]]", "[[[]]]", "[[[[]]]]"
  , "[ ]", "[ [ ] ]", "[ [ [ ] ] ]", "[ [ [ [ ] ] ] ]"
+ , " [] [[]] [[] [[]]] [[] [[]] [[] [[]]]] [[] [[]] [[] [[]]] [[] [[]] [[] [[]]]]] \n"
+   "[[] [[]] [[] [[]]] [[] [[]] [[] [[]]]] [[] [[]] [[] [[]]] [[] [[]] [[] [[]]]]]]  " 
  , "wrzl", "rwrzwll", "{%p}{:ratio}", "vvrwlcl"
  , "[^'m]m^'m", "'[^'mw^'zmwvr$c]^'mwm", "rwrzvrwr$wlcl"
- , "{x}", "{%word}", "{:seal}", "{simple tokens}", "{←↖↑↗→↘↓↙←}"
+ , "{x}", "{x}{y}{xyzzy}", "{%word}", "{:seal}", "{token with space}", "{$@#:._-/\\!}", "{←↖↑↗→↘↓↙←}"
  , "{0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde}"
  , "[{hello world}]kf"
- , "\" \n~", "\"hello, world!\n this text has two lines\n~"
+ , "\" \n~", "\"\n~"
+ , "\"hello, world!\n"
+    " this text has two lines\n"
+    "~"
+ , "[\" \n~]", "[\"\n~]", "[\"hello, world!\n~]"
  , NULL
  };
-// note: leaving empty text out of strings for now, since it becomes `vvrwlcVVRWLC` when written.
 
 char const* const invalid_abc_strings[] = 
  { "a", "e", "i", "o", "u"
- , "[", "]", "{", "}", "{}", "{\n}", "{x{y}"
+ , "\a", "\t", "\r"
+ , "[", "]", "[c[v]", "[v]c]"
+ , "{", "}", "{}", "{\n}", "{x{y}"
  , "{0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}" // oversized token
  , "\"", "~", "\"\n.\n~"
  , NULL // terminate list 
@@ -580,6 +587,32 @@ void test_read_text(wikrt_cx* cx)
     read_text_cstr(cx,"");
 }
 
+void test_big_text(wikrt_cx* cx) 
+{
+    // I need a test for texts of more than 64kB to cover the split case.
+    // I'll use a 250kB text for this test.
+    size_t const txt_maxlen = 250 * 1000;
+    char txtbuff[txt_maxlen];
+
+    char const* const src = u8"←↖↑↗→↘↓↙";
+    size_t const src_len = strlen(src);
+
+    char* wbuff = txtbuff;
+    char* const wbuff_max = wbuff + txt_maxlen - (src_len + 1);
+    while(wbuff < wbuff_max) { memcpy(wbuff, src, src_len); wbuff += src_len; }
+    (*wbuff) = 0;
+    //size_t const txtlen = (wbuff - txtbuff);
+
+    wikrt_intro_text(cx, txtbuff, SIZE_MAX); 
+    wikrt_copy(cx);
+    wikrt_copy(cx);
+    read_text_chunks(cx, txtbuff, SIZE_MAX, 30002);
+    read_text_chunks(cx, txtbuff, SIZE_MAX, 3001);
+    read_text_chunks(cx, txtbuff, SIZE_MAX, 304);
+}
+
+
+
 void read_istr(wikrt_cx* cx, char const* expecting) 
 {
     size_t len = 0;
@@ -755,7 +788,7 @@ void test_write_abc_str(wikrt_cx* cx, char const* abc)
     wikrt_intro_text(cx, abc, SIZE_MAX);
     wikrt_text_to_block(cx);
     wikrt_block_to_text(cx); 
-    size_t len = 60 + strlen(abc);
+    size_t len = 800;
     char buff[len]; 
     wikrt_read_text(cx, buff, &len, NULL);
     buff[len] = 0;
@@ -784,6 +817,163 @@ void test_reject_parse_str(wikrt_cx* cx, char const* s)
 void test_parse_abc(wikrt_cx* cx) { test_arg_list(cx, valid_abc_strings, test_parse_abc_str); }
 void test_write_abc(wikrt_cx* cx) { test_arg_list(cx, valid_abc_strings, test_write_abc_str); }
 void test_reject_parse(wikrt_cx* cx) { test_arg_list(cx, invalid_abc_strings, test_reject_parse_str); }
+
+void val2txt(wikrt_cx* cx) { wikrt_quote(cx); wikrt_block_to_text(cx); }
+
+void test_quote_unit(wikrt_cx* cx) 
+{ 
+    wikrt_intro_unit(cx); val2txt(cx); elim_cstr(cx, "vvrwlc"); 
+}
+
+void test_quote_int(wikrt_cx* cx)
+{
+    wikrt_intro_i32(cx, 0); val2txt(cx);  elim_cstr(cx, "#");
+    wikrt_intro_i32(cx, -7); val2txt(cx); elim_cstr(cx, "#7-");
+    wikrt_intro_i32(cx, 42); val2txt(cx); elim_cstr(cx, "#42");
+}
+
+void test_quote_pair(wikrt_cx* cx)
+{
+    wikrt_intro_i32(cx, 42);
+    wikrt_intro_i32(cx, -7);
+    wikrt_wswap(cx);
+    wikrt_assocl(cx);
+    val2txt(cx);
+
+    size_t len = 79;
+    char buff[len+1];
+    wikrt_read_text(cx, buff, &len, NULL);
+    buff[len] = 0;
+
+    bool const ok = (0 == strcmp(buff, "#7-#42l")) 
+                 || (0 == strcmp(buff, "#42#7-wl"));
+    if(!ok) { wikrt_set_error(cx, WIKRT_ETYPE); }
+}
+
+void test_quote_sum(wikrt_cx* cx)
+{
+    wikrt_intro_i32(cx, -7); wikrt_wrap_sum(cx, WIKRT_INL); val2txt(cx); elim_cstr(cx, "#7-V");
+    wikrt_intro_i32(cx, 42); wikrt_wrap_sum(cx, WIKRT_INR); val2txt(cx); elim_cstr(cx, "#42VVRWLC");
+}
+
+void test_quote_seal(wikrt_cx* cx)
+{
+    wikrt_intro_i32(cx, 108);
+    wikrt_wrap_seal(cx, ":this");
+    wikrt_wrap_seal(cx, ":is");
+    wikrt_wrap_seal(cx, "a");
+    wikrt_wrap_seal(cx, "test");
+    val2txt(cx);
+    elim_cstr(cx, "#108{:this}{:is}{a}{test}");
+}
+
+void test_quote_text(wikrt_cx* cx) 
+{
+    wikrt_intro_text(cx, "Hello, World!", SIZE_MAX); val2txt(cx); elim_cstr(cx, "\"Hello, World!\n~");
+    wikrt_intro_text(cx, "multi\nline", SIZE_MAX); val2txt(cx); elim_cstr(cx, "\"multi\n line\n~");
+    wikrt_intro_text(cx, u8"★★★ → ★★", SIZE_MAX); val2txt(cx); elim_cstr(cx, u8"\"★★★ → ★★\n~");
+}
+
+void test_quote_empty_text(wikrt_cx* cx) 
+{
+    wikrt_intro_text(cx, "", SIZE_MAX); 
+    val2txt(cx);
+    size_t len = 79;
+    char buff[len+1];
+    wikrt_read_text(cx, buff, &len, NULL);
+    buff[len] = 0;
+    bool const ok = (0 == strcmp(buff, "vvrwlcVVRWLC"))
+                 || (0 == strcmp(buff, "\"\n~"));
+    if(!ok) { wikrt_set_error(cx, WIKRT_ETYPE); }
+
+}
+
+void test_quote_block(wikrt_cx* cx)
+{
+    wikrt_intro_i32(cx, -57); 
+    wikrt_quote(cx); 
+    val2txt(cx); 
+    elim_cstr(cx, "[#57-]");
+
+    wikrt_intro_text(cx, u8"{hello}{★}{world}", SIZE_MAX); 
+    wikrt_text_to_block(cx);
+    val2txt(cx); 
+    elim_cstr(cx, u8"[{hello}{★}{world}]");
+}
+
+void test_quote_block_ss(wikrt_cx* cx)
+{
+    wikrt_intro_unit(cx);
+    wikrt_wrap_sum(cx, WIKRT_INR);
+
+    wikrt_text_to_block(cx);
+    wikrt_copy(cx);
+    wikrt_copy(cx);
+    wikrt_copy(cx);
+
+    wikrt_block_rel(cx); 
+    val2txt(cx); 
+    elim_cstr(cx, "[]k");
+
+    wikrt_block_aff(cx);
+    val2txt(cx);
+    elim_cstr(cx, "[]f");
+
+    wikrt_block_rel(cx);
+    wikrt_block_aff(cx);
+    val2txt(cx);
+    elim_cstr(cx, "[]kf");
+
+    wikrt_block_aff(cx);
+    wikrt_block_rel(cx);
+    val2txt(cx);
+    elim_cstr(cx, "[]kf"); // give no `fk`s. 
+}
+
+void deep_wrap_val(wikrt_cx* cx) 
+{
+    wikrt_intro_unit(cx); wikrt_assocl(cx);
+    wikrt_quote(cx);
+    wikrt_wrap_seal(cx, ":s");
+    wikrt_intro_unit(cx); wikrt_wswap(cx); wikrt_assocl(cx);
+    wikrt_wrap_sum(cx, WIKRT_INL);
+    wikrt_wrap_sum(cx, WIKRT_INR);
+    wikrt_wrap_sum(cx, WIKRT_INL);
+    wikrt_quote(cx);
+    wikrt_wrap_sum(cx, WIKRT_INR);
+    wikrt_wrap_seal(cx, "deep wrapped value");
+}
+
+void test_aff(wikrt_cx* cx) 
+{
+    wikrt_intro_i32(cx, 0);
+    wikrt_quote(cx);
+    wikrt_block_aff(cx);
+    deep_wrap_val(cx);
+
+    if(wikrt_error(cx)) { return; }
+    wikrt_copy(cx); // this is an error
+
+    if(!wikrt_error(cx)) {
+        wikrt_set_error(cx, WIKRT_ETYPE);
+    } else { wikrt_cx_reset(cx); }
+}
+
+void test_rel(wikrt_cx* cx)
+{
+    wikrt_intro_i32(cx, 0); 
+    wikrt_quote(cx);
+    wikrt_block_rel(cx);
+    deep_wrap_val(cx);
+
+    if(wikrt_error(cx)) { return; }
+    wikrt_drop(cx); // this is an error
+
+    if(!wikrt_error(cx)) {
+        wikrt_set_error(cx, WIKRT_ETYPE);
+    } else { wikrt_cx_reset(cx); }
+
+}
 
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
@@ -854,6 +1044,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_alloc_text);
     TCX(test_read_binary);
     TCX(test_read_text);
+    TCX(test_big_text);
     // TODO: test copy for binary and text
     // TODO: test at least one very large string (> 64kB)
     // TODO: test rejection of invalid texts
@@ -865,6 +1056,25 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_reject_parse);
     TCX(test_parse_abc);
     TCX(test_write_abc);
+
+    TCX(test_quote_unit);
+    TCX(test_quote_int);
+    TCX(test_quote_pair);
+    TCX(test_quote_sum);
+    TCX(test_quote_text);
+    TCX(test_quote_empty_text);
+    TCX(test_quote_seal);
+    TCX(test_quote_block);
+    TCX(test_quote_block_ss);
+
+    TCX(test_aff);
+    TCX(test_rel);
+
+    // TODO: 
+    //   serialization for pending computations.
+    //   serialization for stowed values
+    //   test of structure sharing for stowed values
+
 
     // TODO: serialization for quoted values
     // TODO: blocks

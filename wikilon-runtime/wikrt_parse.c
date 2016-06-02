@@ -52,7 +52,6 @@ static inline wikrt_op wikrt_cp_to_op(uint32_t cp) {
     return result;
 }
 
-
 /* In addition to wikrt_parser_state, our context must hold some data.
  * In particular, it will hold:
  *
@@ -195,7 +194,7 @@ static void wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t c
             wikrt_flush_parse_text(cx, p);
             wikrt_reverse_text_chunks(cx);
 
-            wikrt_wrap_otag(cx, WIKRT_OTAG_OPVAL);
+            wikrt_wrap_otag(cx, (WIKRT_OTAG_OPVAL | WIKRT_OPVAL_EMTEXT));
             wikrt_accel_wrzw(cx); // expand stack below text
             wikrt_cons(cx); // add text opval to ops
 

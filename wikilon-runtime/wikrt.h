@@ -331,11 +331,18 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
 #define WIKRT_BLOCK_AFFINE   (1 << 9)
 #define WIKRT_BLOCK_PARALLEL (1 << 10)
 
-// lazy substructure testing for quoted values
-#define WIKRT_OPVAL_LAZYKF      (1 << 8)
+// block inherits substructural attributes from contained value
+// this is used for quoted values within a block.
+#define WIKRT_OPVAL_LAZYKF      (1 << 8)  
 
-// render text as a basic list of numbers
-#define WIKRT_OPVAL_LLTEXT      (1 << 9)
+// render text as a basic list of numbers, to avoid O(N^2) rendering issues
+#define WIKRT_OPVAL_LLTEXT      (1 << 9)  
+
+// forcibly render as embedded text
+// intended to ensure text→block→text is identity 
+// (e.g. for the empty text case)
+#define WIKRT_OPVAL_EMTEXT      (1 << 10) 
+
 
 static inline bool wikrt_otag_bigint(wikrt_val v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
 static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
@@ -580,23 +587,9 @@ static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) {
     cx->val = wikrt_alloc_cellval_r(cx, WIKRT_P, v, cx->val); 
 }
 
-// (v*e) → ((otag v) * e). E.g. for opval, block. Requires WIKRT_CELLSIZE.
-static inline void wikrt_wrap_otag_r(wikrt_cx* cx, wikrt_otag otag) {
-    _Static_assert((WIKRT_SMALLINT_MAX >= OP_COUNT), "assuming ops are smallnums");
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
-}
 
 // if we have already reserved WIKRT_CELLSIZE and know we have a valid op
 static inline void wikrt_intro_op_r(wikrt_cx* cx, wikrt_op op) { wikrt_intro_r(cx, wikrt_i2v(op)); }
-
-// try to reserve memory, if successful wrap a value with otag.
-static inline bool wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
-    wikrt_wrap_otag_r(cx, otag);
-    return true; 
-}
-
 
 static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
     wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), v, ss); }
@@ -681,6 +674,22 @@ static inline void wikrt_elim_list_end(wikrt_cx* cx)
     wikrt_elim_unit(cx);
 }
 
-
 void wikrt_accel_wrzw(wikrt_cx* cx); // (a * ((b * c) * d)) → (a * (b * (c * d)))
 void wikrt_accel_wzlw(wikrt_cx* cx); // (a * (b * (c * d))) → (a * ((b * c) * d))
+
+
+// (v*e) → ((otag v) * e). E.g. for opval, block. Requires WIKRT_CELLSIZE.
+static inline void wikrt_wrap_otag_r(wikrt_cx* cx, wikrt_otag otag) {
+    _Static_assert((WIKRT_SMALLINT_MAX >= OP_COUNT), "assuming ops are smallnums");
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+    (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
+}
+
+// try to reserve memory, if successful wrap a value with otag.
+static inline bool wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
+    wikrt_wrap_otag_r(cx, otag);
+    return true; 
+}
+
+
