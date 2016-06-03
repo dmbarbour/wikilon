@@ -1,5 +1,6 @@
 
 #include "futil.h"
+#include "lmdb/lmdb.h"
 #include "wikrt.h"
 #include <string.h>
 #include <stdio.h>

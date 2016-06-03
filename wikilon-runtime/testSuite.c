@@ -951,8 +951,12 @@ void test_aff(wikrt_cx* cx)
     wikrt_block_aff(cx);
     deep_wrap_val(cx);
 
+    wikrt_copyf(cx); // `copyf` allows copy of affine value
+    wikrt_wswap(cx); // ensure copy preserves affine
+    wikrt_drop(cx);  // this is okay (drop affine value)
+
     if(wikrt_error(cx)) { return; }
-    wikrt_copy(cx); // this is an error
+    wikrt_copy(cx); // this is an error (copy affine value)
 
     if(!wikrt_error(cx)) {
         wikrt_set_error(cx, WIKRT_ETYPE);
@@ -966,8 +970,12 @@ void test_rel(wikrt_cx* cx)
     wikrt_block_rel(cx);
     deep_wrap_val(cx);
 
+    wikrt_copy(cx);  // this is okay (copy of relevant value)
+    wikrt_wswap(cx); // ensure copy preserves relevance
+    wikrt_dropk(cx); // `dropk` allows drop of relevant values
+
     if(wikrt_error(cx)) { return; }
-    wikrt_drop(cx); // this is an error
+    wikrt_drop(cx); // this is an error (drop relevant value)
 
     if(!wikrt_error(cx)) {
         wikrt_set_error(cx, WIKRT_ETYPE);
@@ -1072,17 +1080,18 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
 
     // TODO: 
     //   serialization for pending computations.
-    //   serialization for stowed values
-    //   test of structure sharing for stowed values
 
 
-    // TODO: serialization for quoted values
-    // TODO: blocks
     // TODO: evaluations   
+    // TODO: evaluation of quoted values
     // TODO: bignum math
 
     // TODO test: stowage.
+    //   serialization for stowed values
+    //   test of structure sharing for stowed values
+    //   test of rel/affine substructure for stowed values
     // TODO test: transactions.
+    //   and persistence of values, count testSuite runs. 
 
     #undef TCX
 }

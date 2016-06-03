@@ -3,7 +3,6 @@
 #pragma once
 
 #include "wikilon-runtime.h"
-#include "lmdb/lmdb.h"
 #include "utf8.h"
 
 #include <stdbool.h>
@@ -532,6 +531,10 @@ struct wikrt_cx {
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
 #define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
+
+// Consider:
+//  a debug list for warnings (e.g. via {&warn} or {&error})
+//  a space for non-copying loopy code - somehow, eventually
 
 // A strategy for 'splitting' an array is to simply share references
 // within a cell. This is safe only if we overcommit allocations, i.e.
