@@ -209,7 +209,8 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
  *   This refers to a trivial block representation: a list of opcodes, 
  *   tokens, and captured values. Opcodes are represented by small 
  *   integers and include accelerators. Quoted values are also used
- *   for embedded blocks or texts. 
+ *   for embedded blocks or texts. Tag bits in the block header indicate
+ *   affine and relevance substructural attributes.
  *
  *   WIKRT_OTAG_OPVAL 
  *
@@ -285,18 +286,16 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
  *    value sealer.
  *
  * WIKRT_OTAG_TRASH (potential)
+ * 
+ *    Alternatively to dropping values with `%`, we can use {&trash} to mark
+ *    a value as no longer relevant to the future of a computation. Observation
+ *    of a trashed value is a type error. However, relevant and linear values
+ *    may be trashed without error, unlike dropping the values. Essentially the
+ *    /dev/null of Wikilon runtime.
  *
- *    It might be useful to annotate a value as garbage, without necessarily
- *    dropping it with the `%` operation, in context of substructural values.
- *    So marked, this value becomes inaccessible, and we may later void the
- *    value (e.g. upon compaction or memory pressure) while preserving its
- *    substructural attributes.
- *
- * I'd like to explore some other possibilities, e.g. values as types, multi
- * world computations (run this computation with `1,2,3,4,5`).
-
-, constraint sets, or imaginary values (i.e. such that
- * (a+b) can process both `a` and `b`). 
+ * I'd like to eventually explore logical copies that work with the idea of
+ * linear or affine values, but I haven't good ideas for this yet - use of
+ * sum types might work.
  */
 
 #define WIKRT_OTAG_BIGINT   78   /* N */
@@ -310,6 +309,7 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
 #define WIKRT_OTAG_BINARY   56   /* 8 */
 #define WIKRT_OTAG_TEXT     34   /* " */
 //#define WIKRT_OTAG_STOWAGE  64   /* @ */
+#define WIKRT_OTAG_TRASH    95   /* _ */
 #define LOBYTE(V) ((V) & 0xFF)
 
 #define WIKRT_DEEPSUMR      3 /* bits 11 */
@@ -343,14 +343,15 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
 #define WIKRT_OPVAL_EMTEXT      (1 << 10) 
 
 
-static inline bool wikrt_otag_bigint(wikrt_val v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
-static inline bool wikrt_otag_deepsum(wikrt_val v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
-static inline bool wikrt_otag_block(wikrt_val v) { return (WIKRT_OTAG_BLOCK == LOBYTE(v)); }
-static inline bool wikrt_otag_seal(wikrt_val v) { return (WIKRT_OTAG_SEAL == LOBYTE(v)); }
-static inline bool wikrt_otag_seal_sm(wikrt_val v) { return (WIKRT_OTAG_SEAL_SM == LOBYTE(v)); }
-static inline bool wikrt_otag_binary(wikrt_val v) { return (WIKRT_OTAG_BINARY == LOBYTE(v)); }
-static inline bool wikrt_otag_array(wikrt_val v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
-static inline bool wikrt_otag_text(wikrt_val v) { return (WIKRT_OTAG_TEXT == LOBYTE(v)); }
+static inline bool wikrt_otag_bigint(wikrt_otag v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
+static inline bool wikrt_otag_deepsum(wikrt_otag v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
+static inline bool wikrt_otag_block(wikrt_otag v) { return (WIKRT_OTAG_BLOCK == LOBYTE(v)); }
+static inline bool wikrt_otag_seal(wikrt_otag v) { return (WIKRT_OTAG_SEAL == LOBYTE(v)); }
+static inline bool wikrt_otag_seal_sm(wikrt_otag v) { return (WIKRT_OTAG_SEAL_SM == LOBYTE(v)); }
+static inline bool wikrt_otag_binary(wikrt_otag v) { return (WIKRT_OTAG_BINARY == LOBYTE(v)); }
+static inline bool wikrt_otag_array(wikrt_otag v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
+static inline bool wikrt_otag_text(wikrt_otag v) { return (WIKRT_OTAG_TEXT == LOBYTE(v)); }
+static inline bool wikrt_otag_trash(wikrt_otag v) { return (WIKRT_OTAG_TRASH == LOBYTE(v)); }
 //static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
 
 static inline void wikrt_capture_block_ss(wikrt_val otag, wikrt_ss* ss)
@@ -379,13 +380,13 @@ wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val v);
 void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* stack, wikrt_val v, wikrt_ss* ss);
 void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
 
-// Due to use of a moving allocator, I must be careful about how
-// I express operations on values unless I know I have sufficient
-// space in reserve. 
-//
-// The simplest way to avoid errors in most cases is to reserve
-// as much space as I'll need to perform an operation up front,
-// at least for sophisticated multi-step operations.
+// Thoughts: It might be worthwhile to add some extra flags to wikrt_copy_r, to indicate whether
+// it is a moving copy (the original will be deleted). Mostly that could be useful for heuristic
+// stowage or moving large, stable binaries and texts into shared objects.
+
+// Due to use of a compacting collector (potentially during any
+// allocation) I must be certain to reserve space if I need to
+// ensure stable locations in memory for multiple allocations.
 
 void wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v);
 void wikrt_wrap_sum_rv(wikrt_cx*, wikrt_sum_tag, wikrt_val* v);
@@ -521,8 +522,13 @@ struct wikrt_cx {
     wikrt_size          compaction_count;   // count of compactions
     uint64_t            cxid;   // unique context identifier within env
 
+    // statistics for effort heuristics
+    uint64_t            bytes_compacted;  // bytes copied during compaction
+    uint64_t            bytes_collected;  // bytes allocated then collected
+
     // Other... maybe move error tracking here?
 };
+
 // just for sanity checks
 #define WIKRT_CX_REGISTER_CT 4
 #define WIKRT_REG_TXN_INIT WIKRT_VOID
@@ -534,7 +540,9 @@ struct wikrt_cx {
 
 // Consider:
 //  a debug list for warnings (e.g. via {&warn} or {&error})
-//  a space for non-copying loopy code - somehow, eventually
+//  a space for non-copying loopy code - shared memory that
+//    is more accessible than stowage?
+//  
 
 // A strategy for 'splitting' an array is to simply share references
 // within a cell. This is safe only if we overcommit allocations, i.e.
@@ -638,6 +646,9 @@ static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
 }
 static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_block(*wikrt_pval(cx, v)); 
+}
+static inline bool wikrt_trashval(wikrt_cx* cx, wikrt_val v) {
+    return wikrt_o(v) && wikrt_otag_trash(*wikrt_pval(cx, v));
 }
 
 // utility for construction of large texts.

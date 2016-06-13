@@ -983,6 +983,20 @@ void test_rel(wikrt_cx* cx)
 
 }
 
+void test_trash(wikrt_cx* cx) 
+{
+    wikrt_intro_i32(cx, 99);
+    wikrt_quote(cx);
+    wikrt_block_rel(cx);
+    wikrt_wrap_seal(cx, ":test");
+
+    wikrt_copy(cx);
+    val2txt(cx); elim_cstr(cx, "[#99]k{:test}");
+
+    wikrt_trash(cx);
+    val2txt(cx); elim_cstr(cx, "[]k{&trash}");
+}
+
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
@@ -1077,6 +1091,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
 
     TCX(test_aff);
     TCX(test_rel);
+    TCX(test_trash);
 
     // TODO: 
     //   serialization for pending computations.

@@ -84,15 +84,25 @@ A compacting collector seems a good fit for Wikilon's common use cases. It's a s
 
 One concern is *parallelism*. With a two-space collector and bump-pointer allocation, I cannot efficiently support parallelism within a context. It would require too much synchronization, e.g. for bumping the pointer, for halting other threads during compaction, etc.. I can copy data to another context, however. And I could presumably leverage `{&par}` and `{&seq}` annotations to drive parallelism. 
 
-### Support for 'Shared' Objects?
+#### Support for Shared and Non-Copying Objects in Memory?
 
-In some cases - e.g. for high performance loops in code - I may wish to have multiple references to a single object, perhaps with reference counting. In particular, I may want this for fixpoint functions to avoid deep-copying a block on every step. A difficulty with shared objects is copying the shared reference structure.
+Linear memory is usually convenient, but it requires many deep copies. The ability to reference something without copying it, to create a shared object or value, and to avoid GC of this object? It could be quite convenient, in general. Stowage sort of works this way, but for binaries, texts, and compact blocks of loopy code, we should try to do better.
 
-This might be achieved most easily with a thin layer of indirection, i.e. such that I'm explicitly copying a reference rather than the shared value. Upon copying a reference, I am free to manage reference counts (if it's important). Alternatively, I could manage some form of bloom filter on references for conservative GC.
+Some options:
 
-My environment-level 'stowage' is already a shared space in this style. I might be able to leverage this, but I'd prefer to not mix responsibilities much. I could instead handle this at the `wikrt_env` layer, an implicit shared space for all contexts. Alternatively, I could handle this at the `wikrt_cx` layer. Doing so would complicate the copying of these shared objects between contexts. But it should also simplify cleanup. (It might be possible to have the best of both by moving shared objects from the local `wirkt_cx` to the shared `wikrt_env` upon a copy/move between contexts, or by use of hash tables for local structure sharing, etc.)
+* use the C heap (malloc/free). unfortunate fragmentation.
+* allocate an address space per `wikrt_env*` for sharing among contexts.
+* split a context's space into both a workspace and shared space.
 
-Avoidance of deep-copy will likely prove essential for performance of blocks of code within tight loops from fixpoint functions, because this is the most common source of 'copying' in well designed ABC systems.
+Use of a per-environment address space introduces the possibility of persistence. However, in the absence of ACID transactional updates, good paging control, etc. this is probably not a worthwhile feature to pursue. LMDB provides there. Also, GC is likely going to be a pain for shared spaces of any sort.
+
+I'm leaning towards a per-context shared object space, which might be shared for lightweight internal parallelism. This could simplify GC and allocation issues, and would eliminate potential of runtime quota failures due to activity within other computations.
+
+GC of a non-copying shared space is an issue. Either we use reference counts (in which case we cannot short-circuit `wikrt_drop()`) or we can scan a linked list against some root-set (e.g. a bloom filter).
+
+Avoidance of deep-copy will be essential for performance of loopy code and JIT'd compiled code.
+
+*Aside:* I've thought about trying to use the context 2-space for shared objects. However, working with forwarding pointers and different kinds of copies seems problematic. If I could ensure structure sharing for shared objects (e.g indirecting through a 'shared object' hashtable) that could potentially work, but I'd rather avoid sophisticated lookup functions to access the shared objects.
 
 ### Error Handling?
 
@@ -100,15 +110,9 @@ The main errors I can expect are: type errors and quota errors. Neither error is
 
 Rather than return an error from each step, it might be more efficient to accumulate error information then report it upon request. OTOH, this doesn't really change the number of checks I need to perform, e.g. for type safety and safe allocation. Even if I used C++ exceptions upon error, I'd still need to perform the conditional check that leads to the exception call. 
 
-
-
 ## Representations
 
-I'm still waffling between 32-bit vs. 64-bit native machine pointers and on the allocation/GC models. I might try to fix this up later. With 64-bit machine pointers, I could reduce indirection, leverage larger contexts, have larger 'small integers', and more readily support region-based GC (because I wouldn't need a base address). But there would be some space overhead. 
-
-If I was restricted to small integers of at least 60 bits, that should probably be sufficient for most use cases. I don't need fantastic support for bignums.
-
-Memory will be aligned for allocation of two words. With 32-bit words, this gives us 3 tag bits in each pointer. Small numbers and a few small constants are also represented.
+For now, I'm using 32-bit words. I might try to create a 64-bit runtime later, but getting the current one working is more critical. Memory in the main (linear object) space will be aligned for allocation of two words. With 32-bit words, this gives us 3 tag bits per pointer. Small numbers and a few special constants are also represented. 
 
 * xy1 - small integers; plus or minus (2^30 - 1).
 * 000 - tagged objects (tag, data...)
@@ -116,9 +120,9 @@ Memory will be aligned for allocation of two words. With 32-bit words, this give
 * 100 - pair in left
 * 110 - pair in right
 
-The zero address is not allocated. Its meaning depends on the tag bits:
+The zero address is not allocated. Its meaning depends on tag bits:
 
-* 000 - void, an invalid or undefined linear value
+* 000 - void, an invalid or undefined value
 * 010 - unit
 * 100 - unit in left (false)
 * 110 - unit in right (true, end of list)
@@ -137,7 +141,7 @@ Tagged objects will include:
 
 After implementing a few, I feel it is essential to keep tagged objects structurally simple (even at cost to performance opportunities). I'll eventually want to extend these further: floating point numbers, vectors and matrices thereof, etc.. 
 
-Note: Awelon Bytecode doesn't directly support generic programming. I may need to model some code indirectly if it's supposed to work with a bunch of different number, vector, and matrix types, for example. But with proper annotations and types, it seems feasible to leverage GPGPUs for scientific computing.
+NOTE: Switching to a 64-bit representation is very tempting. It would simplify support for very large computations. It would reduce indirection. The main cost would be some extra address space and transport overhead, and less efficiency for any expanded form of binaries, blocks, or texts. It would also force me to use an alt representation for stowage... but that isn't necessarily a bad thing.
 
 ### Big Integers
 
@@ -168,8 +172,6 @@ Naively, I could represent code as a simple list of operations. I could extend t
 
 An alternative is to develop a compact representation - a compact block of operations together with a stack of quoted values, a special case operator to pop one value from this stack. This might not even be a 'block' representation, but rather a list fragment representation similar to how I represent arrays and texts.
 
-
-
 To get started quickly, I'll implement a 'naive' block representation, consisting of a list of opcodes and quoted values and a few header bits (affine, relevant, parallel, etc.). If I go for tracing JIT, keeping a copy count in the header bits might also be useful. A minimal, naive block representation:
 
         (block header, list of operations)
@@ -182,9 +184,15 @@ Long term, I'll also want *compact* blocks (e.g. a compact text plus a stack of 
 
 #### Performance for Tight Loops
 
-Loops in ABC are performed by copying a block then applying one of the two copies in a tight fixpoint behavior. However, repeatedly creating deep copies of a block seems like a very bad idea for performance. How can we avoid doing so? 
+Loops in ABC are performed by a fixpoint operation, which repeatedly:
 
-One option is to move the block into a separate non-copying space - a shared object space - such that we may process the block without copying it. We might need to copy quoted values, but quoted values containing blocks may in turn reference back into the shared space. This feature might be coupled with the notion of 'compact' blocks... and potentially with stowage.
+* copies a block
+* fixpoints one copy
+* applies the other
+
+For performance, it would be most convenient if we do not deep-copy larger blocks or subprograms. Instead, we favor a *shared object* between copies. It will be essential to have a decent shared-object model for this. 
+
+When a block contains a representation for a complex value (potentially another block) I'll need some way to process values without extra copying. Thus, evaluation of the block needs to produce the value. And an inner block generated during evaluation can directly reference the outer block plus an offset or similar. Effectively, I need some compact representation of 'values' to go with other compact code. This particular aspect could be related to value stowage!
 
 We can potentially have these shared objects be local to a context, i.e. keeping a stack of sorts. But having multi-context shared objects would have some advantages for performance (copying continuations, shared JIT efforts, etc.).
 
@@ -196,17 +204,29 @@ To incrementally read a large block, we should first translate it into a large t
 
 It might be feasible to bind a dictionary value to a context, i.e. such that the dictionary maps `{%word}` tokens to more bytecode. This could be achieved by a simple callback if I don't want to commit to stowed dictionaries. OTOH, this isn't how I want to handle dictionaries long term. Or at all, really.
 
+### Accelerators via DSLs
+
+It might be worthwhile to pursue the 'accelerator via DSL' approach for performance at some point. If we want C language for a given subprogram, for example, we could model a C interpreter then accelerate its operation. C is perhaps not an optimal target to fit into a purely functional program, but there may be other low level languages for which this is a useful idea. (Especially anything that will fit casually into a GPGPU.)
+
 ### Value Sealers
 
 ABC's discretionary value sealers. I'll optimize for 3-character (or fewer) discretionary sealers like `{:map}` or `{:foo}`, which may be encoded within tag bits of a single cell. Otherwise, I'll simply copy the token together with the value. I'm not going to 'intern' token strings, mostly to avoid synchronization overheads and to discourage use of large seals.
 
 ### Value Stowage
 
-We annotate a value to moved to persistent storage, or reverse this. Originally, I wanted 'transparent' loading of stowed values, but in retrospect this was a bad design decision: e.g. instead of just "are you a pair?" I need to handle "are you a pair OR are you stowed?". So I've decided to instead leverage paired annotations, e.g. `{&stow}` and `{&load}`.
+We annotate a value to moved to persistent storage, or reverse this. Originally, I was planning on entirely *transparent* stowage. However, that complicates the path for normal computations, i.e. I must repeatedly test whether or not I have a stowed value. So I'm now favoring paired annotations: `{&stow}` and `{&load}`. 
 
-For implementing stowage, I need to represent each value in the database. I may either use a dedicated internal representation, or I can aim for a sized 'copy' of a value, representing the database copy of the value as a sort of micro-context for `wikrt_copy_move`. The copy option seems promising for simplicity reasons. It greatly reduces the amount of specialized code I need to write and maintain. It would exactly preserve structure and information. I may need 'handlers' for copying stowage references and other special case values. 
+IMPLEMENTATION: I know of two basic options. 
 
-A dedicated representation should be far more compact. There is no need to encode addresses between cells when they're known to be adjacent within an encoding. But I should probably favor simplicity over compaction.
+1. I can attempt to use the *same* representation for stowage that I use at runtime, and treat stowage as a micro-context of sorts to `wikrt_copy_move` between. This approach is straightforward, but it also means I have to use relative addressing and is not very compact in a 64-bit system.
+
+2. I can create an alternative compact representation - a binary string, perhaps with specialized representation of additional stowage references. This string will require specialized code to process and copy and so on. This separation of concerns has the advantage of being relatively robust - e.g. the outside contexts could switch transparently from 32-bit to 64-bit.
+
+The `copy_move` option is tempting because it reuses code for more things, and it will eventually become quite stable. I'm likely to stick to 32-bit computations on this path - with stow and load, and shared-object support for large binaries or vectors to get 64-bit behavior.
+
+However, the alternative compact representation might also serve as a better fit for a 'compact' representation of bytecode, e.g. to quickly rebuild a large value without copying internal structure of blocks. I'm not entirely sure this would work out, though.
+
+For now, I'm probably going to favor the `copy_move` option, just for getting started more quickly.
 
 ### Computations
 
@@ -219,8 +239,6 @@ It might also be wise to conservatively treat pending (lazy or parallel) values 
 Do I really need parallelism within a computation? Hmm. It could be very useful, for scalability, to have computations that pick apart a much larger database. So, I suppose it may be worthwhile?
 
 With coupled annotations, I can focus most runtime code on just a fast straightline interpreter (with very few extra conditional behaviors). Even better if I can later eliminate gateway checks for type safety, though that would probably require JIT.
-
-
 
 ### Arrays or Compact Lists
 

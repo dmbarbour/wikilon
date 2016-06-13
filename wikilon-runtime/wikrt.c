@@ -213,13 +213,15 @@ static void wikrt_mem_compact(wikrt_cx* cx)
         abort();
     }
 
+    // sanity check: compaction must not grow memory
+    assert(cx->alloc >= cx0.alloc);
+
     // keep stats. compaction count is useful for effort quotas. 
     // compaction size is useful for heuristic memory pressure.
     cx->compaction_count += 1;
     cx->compaction_size  = (cx->size - cx->alloc);
-
-    // sanity check: compaction must not grow memory
-    assert(cx->alloc >= cx0.alloc);
+    cx->bytes_collected  += (cx->alloc - cx0.alloc);
+    cx->bytes_compacted  += cx->compaction_size;
 }
 
 bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
@@ -336,6 +338,7 @@ wikrt_val_type wikrt_type(wikrt_cx* cx)
             case WIKRT_OTAG_SEAL_SM:    // is a sealed value
             case WIKRT_OTAG_SEAL:       return WIKRT_TYPE_SEAL;
             
+            case WIKRT_OTAG_TRASH:      // undefined type
             default:                    return WIKRT_TYPE_UNDEF;
         }
     } 
@@ -465,6 +468,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
             } break;
 
             // block is (tag, val) with substructure
+            case WIKRT_OTAG_TRASH: // same as WIKRT_OTAG_BLOCK
             case WIKRT_OTAG_BLOCK: {
                 wikrt_capture_block_ss(*pv, ss);
                 wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLSIZE);
@@ -628,6 +632,7 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_
             } break;
 
             // block headers are my primary source of substructure.
+            case WIKRT_OTAG_TRASH: // same as WIKRT_OTAG_BLOCK
             case WIKRT_OTAG_BLOCK: {
                 wikrt_capture_block_ss(*pv, ss);
                 wikrt_add_drop_task(&s,pv[1]);
@@ -689,6 +694,25 @@ void wikrt_dropk(wikrt_cx* cx)
     cx->val = pv[1];
 
     wikrt_drop_v(cx, pv[0], NULL);
+}
+
+void wikrt_trash(wikrt_cx* cx)
+{
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    _Static_assert(!WIKRT_NEED_FREE_ACTION, "free trashed data");
+
+    wikrt_val* const pv = wikrt_pval(cx, cx->val);
+    wikrt_ss ss = 0;
+    wikrt_drop_v(cx, *pv, &ss);
+    (*pv) = WIKRT_UNIT_INR;
+
+    // use block relevant/affine tags.
+    wikrt_otag const otag 
+        = WIKRT_OTAG_TRASH
+        | (wikrt_ss_copyable(ss)  ? 0 : WIKRT_BLOCK_AFFINE)
+        | (wikrt_ss_droppable(ss) ? 0 : WIKRT_BLOCK_RELEVANT);
+    
+    wikrt_wrap_otag(cx, otag);
 }
 
 void wikrt_intro_unit(wikrt_cx* cx) {

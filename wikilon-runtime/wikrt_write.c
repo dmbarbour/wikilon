@@ -405,7 +405,7 @@ static void wikrt_write_text(wikrt_cx* cx, wikrt_writer_state* w)
 //
 // A significant challenge here is writing of embedded texts. When I 
 // encounter a WIKRT_OTAG_TEXT, it is possible that I won't want to
-// write it as a text value. 
+// write it as a text value (e.g. list doesn't terminate properly).
 //
 // Other potential issues: rendering arrays and binaries might benefit
 // from injecting {&array} and {&binary} annotations. I'd need to 
@@ -492,8 +492,20 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
 
     case WIKRT_TYPE_UNDEF:
     default: {
-        wikrt_set_error(cx, WIKRT_ETYPE);
-        return;
+        wikrt_val* const pv = wikrt_pval(cx, cx->val);
+        if(wikrt_trashval(cx, *pv)) {
+            // Special case: trashed values serialize as empty blocks
+            // followed by the {&trash} annotation.
+            wikrt_val* const pobj = wikrt_pval(cx, *pv);
+            pobj[0] = (~0xFF & pobj[0]) | WIKRT_OTAG_BLOCK; // write as block
+            assert(WIKRT_UNIT_INR == pobj[1]); // should be empty block
+            wikrt_intro_optok(cx, "&trash", 6);
+            wikrt_consd(cx);
+            goto tailcall; // write the block, next.
+        } else { 
+            wikrt_set_error(cx, WIKRT_ETYPE); 
+            return;
+        }
     } break;
 }}}
 

@@ -24,12 +24,12 @@
     wikrt_copyf_move;
     wikrt_drop;
     wikrt_dropk;
+    wikrt_trash;
 
     wikrt_stow;
     wikrt_load;
     wikrt_peek_sv;
     wikrt_intro_sv;
-    wikrt_intro_rsv;
 
     wikrt_wswap;
     wikrt_zswap;

@@ -133,11 +133,6 @@ void wikrt_env_sync(wikrt_env*);
  * A fresh context has the unit value. This value is manipulated by
  * functions that introduce data or perform computations. 
  *
- * Contexts are currently limited to small 'active' memory specified
- * upon construction. Use of stowed values can enable access to more
- * memory than this. At the moment we're limited to about 4GB active
- * memory due to 32-bit internal references. (This may change later.)
- *
  * Will return NULL if given a NULL environment.
  */
 wikrt_cx* wikrt_cx_create(wikrt_env*, uint32_t cxSizeMB);
@@ -516,6 +511,20 @@ void wikrt_wrap_seal(wikrt_cx*, char const*);
  */
 void wikrt_unwrap_seal(wikrt_cx*, char*);
 
+/** @brief (a * e) → ((trashed a) * e). Annotation {&trash}.
+ *
+ * When done using a value, the normal option is to drop it. However, dropping
+ * a value is illegal for relevant or linear values. Use of {&trash} instead
+ * the runtime that the value will not be observed in the future. The memory 
+ * can be recycled, but future attempts to observe the value would result in
+ * a runtime type error.
+ *
+ * A trashed linear value should serialize as `[]kf{&trash}`, i.e. preserving
+ * substructure but no other information of the input value `a`. The dynamic
+ * type of a trashed value is 'WIKRT_TYPE_UNDEF'. 
+ */
+void wikrt_trash(wikrt_cx*);
+
 /** @brief Mark a value for stowage. (a * e) → ((stowed a) * e).
  *
  * This corresponds to annotation {&stow}. Stowage moves a value to a backing
@@ -550,6 +559,37 @@ void wikrt_stow(wikrt_cx*);
  */
 void wikrt_load(wikrt_cx*);
 
+/** @brief Access resource ID for a stowed value.
+ *
+ * Given context of type ∀a,e.((stowed a) * e), returns the resource
+ * ID of the stowed value. Forces stowage if still lazily pending.
+ *
+ * The output buffer must have size at least WIKRT_TOK_BUFFSZ, and
+ * is returned as a NUL-terminated C string. Due to authentication,
+ * e.g. including an HMAC, resource identifiers will frequently use
+ * much of this space. The use of authentication ensures capability
+ * security for any sensitive data held via stowage.
+ * 
+ * Note that stowed values are garbage collected by the environment.
+ * To prevent GC of a value while holding an external reference, you
+ * must hold a context that continues to reference the value, or put
+ * a reference to the stowed value in the key-value database.
+ *
+ * If the argument is not a stowed value, this function returns the
+ * empty string but does not add an error to the context. 
+ * 
+ * Another way to access resource IDs is use of `wikrt_block_to_text`.
+ * In this case, resource IDs may appear within tokens in the text.
+ *
+ * IMPORTANT NOTE: Stowed value resources are garbage collected, but
+ * resource IDs held outside our environment are not considered by GC
+ * algorithms. To guard against GC, hold onto a context containing a
+ * stowed value (e.g. for a client-server session) or leverage the
+ * transactional persistence subsystem to hold the stowed value.
+ */
+void wikrt_peek_sv(wikrt_cx*, char* buff);
+
+
 /** @brief Inject a stowed value by resource ID. e → ((stowed a) * e)
  *
  * A typical resource token might look like {'/environmentId/resourceId},
@@ -565,71 +605,40 @@ void wikrt_load(wikrt_cx*);
  *
  * If a resource token is not parsable, we'll treat that as an error. If 
  * it's non-local or has since been GC'd, we'll treat that instead as a
- * load-time error.
+ * load-time error. 
  */
 void wikrt_intro_sv(wikrt_cx*, char const* resourceId);
 
-/** @brief Access resource ID for a stowed value.
- *
- * Given context of type ∀a,e.((stowed a) * e), returns the resource
- * ID of the stowed value. Forces stowage if still lazily pending.
- *
- * The output buffer should have size at least WIKRT_TOK_BUFFSZ, and
- * is returned as a NUL-terminated C string. Due to authentication,
- * resource identifiers will typically use most of this space. If the
- * argument is not a stowed value, we'll return an empty string.
- *
- * Wikilon runtime uses cryptographic HMAC authentication to prevent 
- * forgery or guessing of resource IDs. This simplifies security, i.e.
- * supporting capability-based security models.
- * 
- * Another way to access resource IDs is use of `wikrt_block_to_text`.
- * In this case, resource IDs may appear within tokens in the text.
- *
- * IMPORTANT NOTE: Stowed value resources are garbage collected, but
- * resource IDs held outside our environment are not considered by GC
- * algorithms. To guard against GC, hold onto a context containing a
- * stowed value (e.g. for a client-server session) or leverage the
- * transactional persistence subsystem to hold the stowed value.
- */
-void wikrt_peek_sv(wikrt_cx*, char* buff);
-
-// TODO: support for fast-diffing of values that use stowage?
-//
-//  Or should I stick to semantic-layer diffs, e.g. keeping
-//  time information, hashes, or update counters in the tree
-//  structure.
-
-
-// NOTE: I'll  want some support for accessing the resource ID
-// for a stowed value. This would force stowage, rather than allow it to
-// happen lazily. Conversely, the ability to access a value by resource ID
-// could be very convenient. 
 
   ////////////////
  // EVALUATION //
 ////////////////
 /** @brief Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e). 
  *
- * This prepares a lazy evaluation of `b`. To complete the evaluation,
- * repeat wikrt_step_eval on the pending value until complete.
+ * Apply a function (a block) to a value to produce a latent value. The
+ * actual evaluation is performed by wikrt_eval_step. A pending value
+ * may be quoted or manipulated, but is more or less opaque.
+ *
+ * If there are type errors, they generally will not be discovered until
+ * we begin stepping the evaluation.
  */
 void wikrt_apply(wikrt_cx*);
 
 /** @brief Step an evaluation.  ((pending a) * e) → (a * e).
  *
- * If called with a pending value, we process it for a given effort
- * quota - a heuristic, imprecise quota to ensure client has control
- * of CPU costs and wall clock time. 
+ * Each step performs a heuristic, small, finite amount of work. The amount of
+ * work is weakly deterministic, in the sense that it's implementation dependent
+ * but should be consistent within the implementation (depending also on context
+ * parameters, etc.).
  *
- * After each step, we'll return either 'true' indicating that another
- * step is needed, or 'false' indicating evaluation has finished. If
- * called for a non-pending value, or after an error has occurred, we
- * simply return 'false'. It may be useful to check wikrt_error after
- * getting a false result, as evaluation may have failed due to type
- * errors or other resource limits.
+ * This step returns `true` if another step is needed, or `false` otherwise. On
+ * returning false, we either have the computed value or we have entered an error
+ * state (cf. wikrt_error).
  */ 
-bool wikrt_step_eval(wikrt_cx*, uint32_t effort);
+bool wikrt_step_eval(wikrt_cx*);
+
+// thoughts: I'm still thinking about how to support flexible token
+// behaviors. But it isn't a priority for Wikilon runtime's use case.
 
 /** @brief Quote a value. (a * e) → ((∀e'. e'→(a*e'))*e).
  *
