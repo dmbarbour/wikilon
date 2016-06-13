@@ -239,6 +239,7 @@ typedef enum wikrt_type
 , WIKRT_TYPE_BLOCK      // block of code, a function
 , WIKRT_TYPE_SEAL       // discretionary sealed value
 , WIKRT_TYPE_STOW       // stowed value reference
+, WIKRT_TYPE_TRASH      // placeholder for discarded value
 , WIKRT_TYPE_PEND       // pending lazy or parallel value
 } wikrt_val_type;
 
@@ -521,7 +522,7 @@ void wikrt_unwrap_seal(wikrt_cx*, char*);
  *
  * A trashed linear value should serialize as `[]kf{&trash}`, i.e. preserving
  * substructure but no other information of the input value `a`. The dynamic
- * type of a trashed value is 'WIKRT_TYPE_UNDEF'. 
+ * type of a trashed value is 'WIKRT_TYPE_TRASH'. 
  */
 void wikrt_trash(wikrt_cx*);
 

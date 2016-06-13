@@ -333,12 +333,12 @@ wikrt_val_type wikrt_type(wikrt_cx* cx)
             case WIKRT_OTAG_TEXT:       // is a list, which is a sum
             case WIKRT_OTAG_DEEPSUM:    return WIKRT_TYPE_SUM; 
 
+            case WIKRT_OTAG_TRASH:      return WIKRT_TYPE_TRASH;
             case WIKRT_OTAG_BLOCK:      return WIKRT_TYPE_BLOCK;
 
             case WIKRT_OTAG_SEAL_SM:    // is a sealed value
             case WIKRT_OTAG_SEAL:       return WIKRT_TYPE_SEAL;
             
-            case WIKRT_OTAG_TRASH:      // undefined type
             default:                    return WIKRT_TYPE_UNDEF;
         }
     } 

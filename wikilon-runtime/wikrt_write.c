@@ -490,23 +490,20 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
         return;
     } break;
 
+    case WIKRT_TYPE_TRASH: {  // e.g. []kf{&trash} for linear value
+        wikrt_val* const pobj = wikrt_pval(cx, *wikrt_pval(cx, cx->val));
+        assert(wikrt_otag_trash(pobj[0]) && (WIKRT_UNIT_INR == pobj[1]));
+        pobj[0] = ((~0xFF) & pobj[0]) | WIKRT_OTAG_BLOCK; // write as block
+        wikrt_intro_optok(cx, "&trash", 6); // after the block
+        wikrt_consd(cx); 
+        goto tailcall;
+    } break;
+
     case WIKRT_TYPE_UNDEF:
     default: {
-        wikrt_val* const pv = wikrt_pval(cx, cx->val);
-        if(wikrt_trashval(cx, *pv)) {
-            // Special case: trashed values serialize as empty blocks
-            // followed by the {&trash} annotation.
-            wikrt_val* const pobj = wikrt_pval(cx, *pv);
-            pobj[0] = (~0xFF & pobj[0]) | WIKRT_OTAG_BLOCK; // write as block
-            assert(WIKRT_UNIT_INR == pobj[1]); // should be empty block
-            wikrt_intro_optok(cx, "&trash", 6);
-            wikrt_consd(cx);
-            goto tailcall; // write the block, next.
-        } else { 
-            wikrt_set_error(cx, WIKRT_ETYPE); 
-            return;
-        }
-    } break;
+        wikrt_set_error(cx, WIKRT_ETYPE); 
+        return;
+    }
 }}}
 
 static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
