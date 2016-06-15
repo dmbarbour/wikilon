@@ -18,11 +18,11 @@ _Static_assert((INTPTR_MIN == INT64_MIN) &&
 _Static_assert(sizeof(uint8_t) == sizeof(char), "Wikilon runtime casts between char and uint8_t");
 
 /** Value references internal to a context. */
-typedef uintptr_t wikrt_val;
+typedef uint32_t wikrt_val;
 #define WIKRT_VAL_MAX UINT32_MAX
 
 /** Corresponding signed integer type. */
-typedef intptr_t wikrt_int;
+typedef int32_t wikrt_int;
 #define WIKRT_INT_MAX INT32_MAX
 
 /** size within a context; documents a number of bytes */
