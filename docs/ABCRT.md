@@ -72,7 +72,7 @@ Alternatively, I can switch to using C++ internally with an efficient exceptions
 
 ### Memory Management
 
-ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies favored over aliasing. Linearity allows me to implement many functions - especially data plumbing - without allocation.
+ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies over aliasing. Linearity allows me to implement many functions - especially data plumbing - without allocation.
 
 Bump-pointer allocators, together with two-space compacting collectors, should also serve me well. I initially tried more conventional memory management with size-segregated free-lists. But that doesn't work nicely with slab allocations for copying composite values (e.g. allocating enough space for every element in a list or stack or tree). Free fragments are small, and allocated blocks are large, and we end up coalescing memory frequently.
 
@@ -86,15 +86,23 @@ One concern is *parallelism*. With a two-space collector and bump-pointer alloca
 
 #### Support for Shared and Non-Copying Objects in Memory?
 
-Linear memory is usually convenient, but it requires many deep copies. The ability to reference something without copying it, to create a shared object or value, and to avoid GC of this object? It could be quite convenient, in general. Stowage sort of works this way, but for binaries, texts, and compact blocks of loopy code, we should try to do better.
+Linear memory is convenient but it requires many deep copies. The ability to compute large objects without copying them every GC pass? It could be quite convenient, in general. *Stowage* sort of works that way, but has a large copy overhead per access. I need a lower latency option - objects *in memory* but not copied, i.e. in a separate region of memory. 
 
 Some options:
 
+* stable access to stowage via long-running transactions.
+* cache stowed values in memory via some other mechanism.
 * use the C heap (malloc/free). unfortunate fragmentation.
 * allocate an address space per `wikrt_env*` for sharing among contexts.
 * split a context's space into both a workspace and shared space.
 
-Use of a per-environment address space introduces the possibility of persistence. However, in the absence of ACID transactional updates, good paging control, etc. this is probably not a worthwhile feature to pursue. LMDB provides there. Also, GC is likely going to be a pain for shared spaces of any sort.
+I like the idea of modeling shared objects as a form of *stable access to stowed data*. With LMDB, we can use direct pointers into mmap'd regions so long as we hold onto our read-only transactions. LMDB would not recycle the associated pages of data. An advantage is that we automatically get flexible structure sharing. This idea does need us to release transactions periodically (e.g. upon GC) and probably to support ranged access to values. 
+
+Copying and caching a value seems like a lot of extra work for what LMDB already does via mmap + read-only transactions. I'd be forced to implement an additional form of cross-context GC to manage this cache. Let's avoid this if viable.
+
+The other three options suffer for lack of local value identity. It becomes difficult to maintain structure sharing across copies of the value and especially when moving data into and out of stowage. And we have a bunch of new GC challenges!
+
+So, for now, I'm going to try for 'Shared Memory = LMDB Stowage (mmap + volatile RO transactions)'.
 
 I'm leaning towards a per-context shared object space, which might be shared for lightweight internal parallelism. This could simplify GC and allocation issues, and would eliminate potential of runtime quota failures due to activity within other computations.
 
@@ -141,17 +149,23 @@ Tagged objects will include:
 
 After implementing a few, I feel it is essential to keep tagged objects structurally simple (even at cost to performance opportunities). I'll eventually want to extend these further: floating point numbers, vectors and matrices thereof, etc.. 
 
-NOTE: Switching to a 64-bit representation is very tempting. It would simplify support for very large computations. It would reduce indirection. The main cost would be some extra address space and transport overhead, and less efficiency for any expanded form of binaries, blocks, or texts. It would also force me to use an alt representation for stowage... but that isn't necessarily a bad thing.
+#### 64-bit Absolute Addressing Representation?
+
+If I go for a 64-bit representation, I'd use absolute addressing instead of not offsets into a region. I cannot use direct value representations for stowed values or blocks. That isn't necessarily a bad thing - less fragile to changes in a runtime implementation, at least!
+
+Absolute addressing may complicate some things. Relative addressing makes stowage easy, for example: we can represent stowed values as copies into a distinct context with local addressing. With absolute addressing, we essentially need an alternative value representation for stowing values - something more structured than bytecode.
+
+I can probably disable 'big numbers' and restrict myself to 'small numbers' with (for example) 61-bit representations.
 
 ### Big Integers
 
-Integers in the range plus or minus `2^30 - 1` are recorded directly in a value reference. This is sufficient for a lot of use cases - characters, indexing vectors, etc.. For larger numbers, I'll use a tagged value representation.
+Integers in the range plus or minus `2^30 - 1` are recorded directly in a value reference. In a 64-bit implementation, this could potentially extend to about `2^62-1` (big integers become unnecessary for most computations). Small integers are sufficient for a lot of use cases: characters, indexing vectors, etc.. For larger numbers, I'll use a tagged value representation.
 
-        tag word: includes size (2..2^23-1) and sign (1 bit)
+        tag word: includes size (in words), sign (1 bit)
         followed by sequence 32-bit words of given size
         each word encodes a 'big digit' in range 0..999999999
 
-This doesn't quite give us arbitrary precision arithmetic. But we can represent numbers up to 75 million digits before we fail.
+In a 32-bit implementation, the tag word may also include the lowest 'big digit' if doing so is convenient.
 
 *Note:* There may be some benefit from using an intermediate sized integer, e.g. one cell for ~56 bits of data. However, after experimenting with this idea, I don't feel the space savings are sufficient compared to the complexity to deal with another case. Further, I find it unlikely that the optimization will be significant: the use of big integers of any sort is expected to be rare.
 
@@ -160,7 +174,7 @@ This doesn't quite give us arbitrary precision arithmetic. But we can represent 
         tag word: includes an LRLRLLLR string (2 bits each, depth 1..12)
         second word is value reference
 
-We'll use 2-bits per `L` or `R` in a deep-sum string, with up to 24-bits of tag data. This enables sums of up to depth 12 per allocation. The value in question may be yet another sum. Compacting deep sums into a single allocation should enable sums to serve a much more effective role as an alternative to enumerations.
+We'll use 2-bits per `L` or `R` in a deep-sum string, with up to 24-bits of tag data. This enables sums of up to depth 12 per allocation. The value in question may be yet another sum. Compacting deep sums into a single allocation should enable sums to serve a much more effective role as an alternative to enumerations. In a 64-bit system, this could be bumped up to depth 28.
 
 Shallow sums refer to pair or unit in left or right, which is instead represented in the tag bits. Shallow sums are convenient as an optimization for representing lists and basic (node + leaf) tree structures.
 
@@ -218,16 +232,14 @@ We annotate a value to moved to persistent storage, or reverse this. Originally,
 
 IMPLEMENTATION: I know of two basic options. 
 
-1. I can attempt to use the *same* representation for stowage that I use at runtime, and treat stowage as a micro-context of sorts to `wikrt_copy_move` between. This approach is straightforward, but it also means I have to use relative addressing and is not very compact in a 64-bit system.
+1. I can attempt to use the *same* representation for stowage that I use at runtime, and treat stowage as a micro-context of sorts to `wikrt_copy_move` between. This approach relies on relative addressing, e.g. such that pointers are all relative to a base address. Dealing with shared objects may be complicated (size computations for stowage vs. sharing would diverge).
 
-2. I can create an alternative compact representation - a binary string, perhaps with specialized representation of additional stowage references. This string will require specialized code to process and copy and so on. This separation of concerns has the advantage of being relatively robust - e.g. the outside contexts could switch transparently from 32-bit to 64-bit.
+2. I can create an alternative compact representation for values. A binary string, perhaps with specialized representation of additional stowage references. This is pretty much a 'VCacheable' approach. We could limit stowage binaries to (for example) one or two megabytes.
 
-The `copy_move` option is tempting because it reuses code for more things, and it will eventually become quite stable. I'm likely to stick to 32-bit computations on this path - with stow and load, and shared-object support for large binaries or vectors to get 64-bit behavior.
+A `copy_move` option is tempting in its simplicity. But it seems fragile to changes in the runtime. Using separate representations is very likely to be more robust. Also, an approach to stowage will need to properly handle shared object data internally. This could become a complicating factor if we're not very careful about it. 
 
-However, the alternative compact representation might also serve as a better fit for a 'compact' representation of bytecode, e.g. to quickly rebuild a large value without copying internal structure of blocks. I'm not entirely sure this would work out, though.
-
-For now, I'm probably going to favor the `copy_move` option, just for getting started more quickly.
-
+If stowage is used together with value sharing, I might also benefit from supporting stowage together with range slices. I'll need to think about it, at least.
+ 
 ### Computations
 
 Besides active computations, I expect I'll be wanting parallel or lazy computations eventually. Originally, I was imagining that I'd handle these behaviors almost transparently. However, in retrospect, I don't believe this is a good idea. I'd prefer to avoid any transparent translations between representations because those greatly complicate the runtime and reasoning about progress, quotas, etc..
@@ -294,6 +306,37 @@ With parallelism and semi-space GC, I'll probably need *multiple* contexts. Or p
 ## Static vs. Dynamic Typing?
 
 I'd like to eventually have access to an "assume static type safety" option for faster evaluation, i.e. skipping all the runtime checks. However, this might only work for compiled code. I might also need to add gateway checks for inputs.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # older content
 

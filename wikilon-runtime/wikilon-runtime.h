@@ -21,15 +21,14 @@
  *
  *  @section usage_sec Usage
  *
- *  Create an environment, then a context within that environment. Load
- *  data into this context. Perform ad-hoc computations. Check for errors.
- *  Extract or store results.
+ *  Create an environment. Create a context within that environment. Load
+ *  data and ABC programs into this context. Perform ad-hoc computations.
+ *  Check for errors. Extract or store results. Data may be loaded from or
+ *  stored into the environment's key-value database.
  *
- *  Wikilon runtime attempts to ensure that failures are confined to their
- *  context, assuming valid arguments. I.e. runtime type errors, space quota
- *  limits, transaction conflicts, etc. will only result in an error state
- *  (observable via `wikrt_error`). A few operations that do not modify the
- *  context may be fail-safe.
+ *  Wikilon runtime ensures most failures are confined to their context. 
+ *  However, there are obvious limits to this, e.g. if the database
+ *  is filled, that would hinder concurrent work with the database.
  *
  *  @section license_sec License & Copyright
  *
@@ -103,13 +102,13 @@ void wikrt_set_error(wikrt_cx*, wikrt_ecode);
 /** @brief Open or Create a Wikilon environment with backing database.
  *
  * The given filesystem directory is where we'll maintain persistent 
- * key-value database and hibernate our very large tree-structured
- * values. At the moment, this is an LMDB database.
+ * key-value database and stow large tree-structured values. At the
+ * moment, this is an LMDB database. Parents in the dirPath will be
+ * created as necessary.
  *
- * This operation returns NULL on failure. The most likely cause for
- * failure is permissions issues in creating the given directory. But
- * there may also be problems if the maxMB size is too large for mmap,
- * if we're out of memory, or if the context is already in use.
+ * This operation returns NULL on failure. Failure is most likely due
+ * to permissions in creating the given directory or because the DB
+ * maximum size is too large to mmap.
  */
 wikrt_env* wikrt_env_create(char const* dirPath, uint32_t dbMaxMB);
 
@@ -128,17 +127,27 @@ void wikrt_env_destroy(wikrt_env*);
  */
 void wikrt_env_sync(wikrt_env*);
 
+// TODO: backup or compaction functions 
+
 /** @brief Create a context for computations.
  * 
  * A fresh context has the unit value. This value is manipulated by
  * functions that introduce data or perform computations. 
  *
- * Will return NULL if given a NULL environment.
+ * Will return NULL if given a NULL environment. 
  */
 wikrt_cx* wikrt_cx_create(wikrt_env*, uint32_t cxSizeMB);
 
-#define WIKRT_CX_MIN_SIZE 4
-#define WIKRT_CX_MAX_SIZE 4092
+/** @brief Release cached resources associated with a context. 
+ *
+ * If you're not going to use a context for a while, signal with 
+ * wikrt_cx_relax to release control of cached memory. This is 
+ * This might be useful if you plan to hold onto a context for a while
+ * without further manipulations. It tells the context to relax its grip
+ * on cached data resources. This is action is usually periodic, driven
+ * by garbage collection, so is unnecessary outside of special cases.
+ */
+void wikrt_cx_relax(wikrt_cx*);
 
 /** @brief Reset context to fresh condition, as if newly created. */
 void wikrt_cx_reset(wikrt_cx*);
@@ -374,7 +383,7 @@ void wikrt_unwrap_sum(wikrt_cx*, wikrt_sum_tag* inRight);
 
 // TODO: consider matching deeper structure.
 
-/** @brief Allocation of smaller integers. (e)→(Int*e). */
+/** @brief Allocation of integers. (e)→(Int*e). */
 void wikrt_intro_i32(wikrt_cx*, int32_t);
 void wikrt_intro_i64(wikrt_cx*, int64_t);
 
@@ -382,7 +391,7 @@ void wikrt_intro_i64(wikrt_cx*, int64_t);
  *
  * These functions return true on success. On error, they return false
  * and output zero, min, or max (using min or max only for underflow 
- * and overflow respectively).  
+ * and overflow respectively, zero for other errors).  
  */
 bool wikrt_peek_i32(wikrt_cx*, int32_t*);
 bool wikrt_peek_i64(wikrt_cx*, int64_t*);
@@ -396,6 +405,10 @@ bool wikrt_peek_i64(wikrt_cx*, int64_t*);
  *
  * Note: This will also stop reading on a NUL character, so SIZE_MAX is
  * okay if you have NUL-terminated strings.
+ *
+ * Note: Wikilon runtime may fail with WIKRT_IMPL if you attempt to load
+ * or use an integer outside the range it effectively supports. It will
+ * not silently introduce errors by wrapping or truncating integers.
  */
 void wikrt_intro_istr(wikrt_cx*, char const*, size_t);
 

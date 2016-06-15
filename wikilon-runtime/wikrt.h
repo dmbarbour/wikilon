@@ -11,19 +11,25 @@
 #include <stddef.h>
 #include <pthread.h>
 
+_Static_assert((INTPTR_MIN == INT64_MIN) && 
+               (INTPTR_MAX == INT64_MAX) &&
+               (UINTPTR_MAX == UINT64_MAX)
+              ,"Wikilon runtime expects a 64-bit system");
+_Static_assert(sizeof(uint8_t) == sizeof(char), "Wikilon runtime casts between char and uint8_t");
+
 /** Value references internal to a context. */
-typedef uint32_t wikrt_val;
+typedef uintptr_t wikrt_val;
 #define WIKRT_VAL_MAX UINT32_MAX
 
 /** Corresponding signed integer type. */
-typedef int32_t wikrt_int;
+typedef intptr_t wikrt_int;
 #define WIKRT_INT_MAX INT32_MAX
 
 /** size within a context; documents a number of bytes */
 typedef wikrt_val wikrt_size;
 #define WIKRT_SIZE_MAX WIKRT_VAL_MAX
 
-/** size buffered to one cell (i.e. 8 bytes for 32-bit context) */
+/** size buffered to one two-word cell. 16 bytes for a 64-bit context. */
 typedef wikrt_size wikrt_sizeb;
 
 /** address within a context; documents offset from origin. */
@@ -335,7 +341,7 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
 #define WIKRT_OPVAL_LAZYKF      (1 << 8)  
 
 // render text as a basic list of numbers, to avoid O(N^2) rendering issues
-#define WIKRT_OPVAL_LLTEXT      (1 << 9)  
+#define WIKRT_OPVAL_ASLIST      (1 << 9)  
 
 // forcibly render as embedded text
 // intended to ensure text→block→text is identity 

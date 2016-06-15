@@ -78,8 +78,12 @@ static uint8_t wikrt_op2abc_table[OP_COUNT] =
 #undef OP
 
 // I'd prefer to maybe use a table, but it won't generalize easily
-// if the table contains constants of any sort. For now, this will
-// work (in a brute force sort of way).
+// if the table contains constants of any sort. 
+//
+// OTOH, I could maybe create an operator for each 'constant' that
+// I use within any accelerator. This would provide a simple basis
+// for fast interpretation of new accelerators.
+//
 static void writer_TAILCALL(wikrt_cx*, wikrt_writer_state* w);
 static void writer_INLINE(wikrt_cx*, wikrt_writer_state* w);
 static void writer_PROD_SWAP(wikrt_cx*, wikrt_writer_state* w);
@@ -437,14 +441,14 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
     case WIKRT_TYPE_SUM: {
 
         // special handling to print obvious embeddable texts
-        bool const render_text_as_list = (0 != (WIKRT_OPVAL_LLTEXT & opval_tag));
+        bool const render_text_as_list = (0 != (WIKRT_OPVAL_ASLIST & opval_tag));
         wikrt_val const v =  wikrt_pval(cx, cx->val)[0];
         if(!render_text_as_list && wikrt_is_text_chunk(cx, v)) {
             if(wikrt_is_embeddable_text(cx, wikrt_pval(cx,v)[1])) { 
                 wikrt_write_text(cx, w); 
                 return;
             } else {
-                opval_tag |= WIKRT_OPVAL_LLTEXT;
+                opval_tag |= WIKRT_OPVAL_ASLIST;
             }
         }
 

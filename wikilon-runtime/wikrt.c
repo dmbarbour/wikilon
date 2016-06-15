@@ -82,9 +82,7 @@ wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB)
     if(NULL == e) { return NULL; }
 
     size_t const size = ((size_t)cxSizeMB * (1024 * 1024));
-    bool const validSize = (size < (SIZE_MAX / 2)) 
-        && (WIKRT_CX_MIN_SIZE <= cxSizeMB) 
-        && (cxSizeMB <= WIKRT_CX_MAX_SIZE);
+    bool const validSize = (0 < size) && (size < (SIZE_MAX / 2));
 
     if(!validSize) { return NULL; }
 
@@ -1203,11 +1201,8 @@ void wikrt_sum_factor(wikrt_cx* cx)
 void wikrt_intro_binary(wikrt_cx* cx, uint8_t const* data, size_t len)
 {
     // to resist overflow with `len` manipulations
-    _Static_assert(((WIKRT_SIZE_MAX >> 20) > WIKRT_CX_MAX_SIZE), 
-        "todo: improve resistance to size overflows");
-
-    if(len >= ((size_t)WIKRT_CX_MAX_SIZE << 20)) { wikrt_set_error(cx, WIKRT_CXFULL); return; }
-    wikrt_size const szBuff = wikrt_cellbuff((wikrt_size)len);
+    if(len >= cx->size) { wikrt_set_error(cx, WIKRT_CXFULL); return; }
+    wikrt_sizeb const szBuff = wikrt_cellbuff((wikrt_size)len);
     wikrt_size const szAlloc = (3 * WIKRT_CELLSIZE) + szBuff;
     if(!wikrt_mem_reserve(cx, szAlloc)) { return; }
 

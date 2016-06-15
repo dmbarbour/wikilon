@@ -6,7 +6,7 @@
 #include "wikilon-runtime.h"
 #include "utf8.h"
 
-#define TESTCX_SIZE (WIKRT_CX_MIN_SIZE)
+#define TESTCX_SIZE 4
 #define TESTENV_SIZE (4 * TESTCX_SIZE)
 
 char const* const valid_abc_strings[] =

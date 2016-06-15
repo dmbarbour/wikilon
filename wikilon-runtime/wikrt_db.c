@@ -23,7 +23,7 @@ bool wikrt_lockfile_init(int* pfd, char const* dirPath) {
     size_t const dplen = strlen(dirPath);
     size_t const fplen = dplen + 20;
     char lockFileName[fplen];
-    sprintf(lockFileName, "%s/dblock", dirPath);
+    sprintf(lockFileName, "%s/wikrt_lock", dirPath);
     bool const r = lockfile(pfd, lockFileName, WIKRT_FILE_MODE);
     return r;
 }
@@ -52,15 +52,20 @@ bool wikrt_db_init(wikrt_db** pdb, char const* dp, uint32_t dbMaxMB) {
     stowaddr db_last_alloc;
 
     // relevant constants
-    // TODO: Implement my own transaction thread-lock for STM and VCache-style
-    //  batched transactions. But until then, we'll use LMDB's transaction model.
+    //
+    // Note: I would like to use MDB_NOLOCK and instead manage concurrency 
+    // within the process, i.e. so I'm not limited to a static number of
+    // readers. Haskell VCache does this.
+    int const nMaxReaders = 500;
     int const mdbFlags = /* MDB_NOLOCK | */ MDB_NOTLS | MDB_NOMEMINIT;
+    int const nDatabaseCount = 5;
     int const f_memory = MDB_CREATE | MDB_INTEGERKEY;
     int const f_keyval = MDB_CREATE;
     int const f_caddrs = MDB_CREATE | MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP;
     int const f_refcts = MDB_CREATE | MDB_INTEGERKEY;
     int const f_refct0 = MDB_CREATE | MDB_INTEGERKEY;
 
+    // single process access is necessary for GC purposes
     if(!wikrt_lockfile_init(&db_lockfile, dirPath)) {
         fprintf(stderr, "Failed to create or obtain lockfile in %s\n", dirPath);
         goto onError;
@@ -71,7 +76,8 @@ bool wikrt_db_init(wikrt_db** pdb, char const* dp, uint32_t dbMaxMB) {
 
     MDB_txn* pTxn;
     if( (0 != mdb_env_set_mapsize(pLMDB, dbMaxBytes)) ||
-        (0 != mdb_env_set_maxdbs(pLMDB, 5)) ||
+        (0 != mdb_env_set_maxdbs(pLMDB, nDatabaseCount)) ||
+        (0 != mdb_env_set_maxreaders(pLMDB, nMaxReaders)) ||
         (0 != mdb_env_open(pLMDB, dirPath, mdbFlags, WIKRT_FILE_MODE)) ||
         (0 != mdb_txn_begin(pLMDB, NULL, MDB_NOSYNC, &pTxn)))
         goto onErrInitDB;
