@@ -15,15 +15,18 @@ _Static_assert((INTPTR_MIN == INT64_MIN) &&
                (INTPTR_MAX == INT64_MAX) &&
                (UINTPTR_MAX == UINT64_MAX)
               ,"Wikilon runtime expects a 64-bit system");
-_Static_assert(sizeof(uint8_t) == sizeof(char), "Wikilon runtime casts between char and uint8_t");
+_Static_assert((sizeof(uintptr_t) == 8), "Expecting eight byte pointers.");
+_Static_assert((sizeof(uint8_t) == 1), "Expecting one byte octets.");
+_Static_assert((sizeof(uint8_t) == sizeof(char)), "Expecting safe cast between char and uint8_t");
 
 /** Value references internal to a context. */
-typedef uint32_t wikrt_val;
-#define WIKRT_VAL_MAX UINT32_MAX
+typedef uintptr_t wikrt_val;
+#define WIKRT_VAL_MAX UINTPTR_MAX
+
 
 /** Corresponding signed integer type. */
-typedef int32_t wikrt_int;
-#define WIKRT_INT_MAX INT32_MAX
+typedef intptr_t wikrt_int;
+#define WIKRT_INT_MAX INTPTR_MAX
 
 /** size within a context; documents a number of bytes */
 typedef wikrt_val wikrt_size;
@@ -121,61 +124,82 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
 #define WIKRT_EDIV0 WIKRT_ETYPE
 
 
-/** wikrt_val bits
+/** wikrt_val bits (64-bit runtime edition)
  *
- * low bits xy0: small integers
- * low bits 001: tagged object
- * low bits 011: pointer to pair
- * low bits 101: pointer to pair in left
- * low bits 111: pointer to pair in right
+ * Goals: eighteen-digit small integers, eliminate checking of
+ * NULL pointers, and favor absolute pointer values. A pair in
+ * left or right should be encoded in tag bits. Use of the zero
+ * address should probably cause a segfault, so we quickly learn
+ * of any uninitialized data.
  *
- * Unit represented as pair at address zero:
- *   unit          = 3
- *   unit in left  = 5
- *   unit in right = 7
+ * It would be convenient if we can simply look at, say, the low
+ * few bits and discriminate immediately with a case statement
+ * for deep copies, size computations, etc..
  *
- * If we pump up to 64-bit words, I'd introduce tags specific to small
- * binaries, small texts, large numbers, and perhaps short array lists.
+ * Candidate 'Minimal':
  *
- * For many tagged objects, we must use upper bits for extra data.
+ * third bit 0: pointers
+ *  00 tagged objects
+ *  01 pair value
+ *  10 pair in left
+ *  11 pair in right
+ * third bit 1: ref constants
+ *  00 small integers
+ *  01 unit
+ *  10 unit in left
+ *  11 unit in right
  *
- *   large integers: top ? bits for integer data? 20-30 bits?
- *     so maybe 1 bit for tag, 1 bit for sign?
- *   reference counts: no longer a separate object...
+ * This candidate does not attempt to optimize sums beyond what is
+ * essential for compact lists and booleans. It does not attempt to
+ * support an extended set of constants, has no room for symbols.
+ * The test for whether a value needs a deep-copy is efficient.
+ * Use of a NULL reference will segfault. 
+ *
+ * This is a decent encoding, though I'll need to adjust it a lot if
+ * I ever want to add new constants.
+ *
  */
-#define WIKRT_O             0
-#define WIKRT_P             2
-#define WIKRT_PL            4
-#define WIKRT_PR            6
+#define WIKRT_O     0
+#define WIKRT_P     1
+#define WIKRT_PL    2
+#define WIKRT_PR    3
+#define WIKRT_I     4
+#define WIKRT_U     5
+#define WIKRT_UL    6
+#define WIKRT_UR    7
 
-// address zero 
-#define WIKRT_VOID      WIKRT_O
-#define WIKRT_UNIT      WIKRT_P
-#define WIKRT_UNIT_INL  WIKRT_PL
-#define WIKRT_UNIT_INR  WIKRT_PR
+#define wikrt_copy_shallow(V) (4 & (V)) 
+static inline bool wikrt_copy_deep(wikrt_val v) { return !wikrt_copy_shallow(v); }
 
-#define WIKRT_MASK_TAG      (WIKRT_CELLSIZE - 1)
-#define WIKRT_MASK_ADDR     (~WIKRT_MASK_TAG)
+// Small constants
+#define WIKRT_UNIT        WIKRT_U
+#define WIKRT_UNIT_INL    WIKRT_UL
+#define WIKRT_UNIT_INR    WIKRT_UR
 
-static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & WIKRT_MASK_ADDR); }
-static inline wikrt_tag  wikrt_vtag(wikrt_val v)  { return (v & WIKRT_MASK_TAG);  }
+#define WIKRT_REF_MASK_TAG    (7)     
+#define WIKRT_REF_MASK_ADDR   (~WIKRT_REF_MASK_TAG)
+
+static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & WIKRT_REF_MASK_ADDR); }
+static inline wikrt_tag  wikrt_vtag(wikrt_val v)  { return (v & WIKRT_REF_MASK_TAG);  }
 static inline wikrt_val  wikrt_tag_addr(wikrt_tag t, wikrt_addr a) { return (t | a); }
-static inline bool wikrt_tagged_valref(wikrt_tag t, wikrt_val v) { return ((t != v) && (t == wikrt_vtag(v))); }
-static inline bool wikrt_p(wikrt_val v)  { return wikrt_tagged_valref(WIKRT_P, v);  }
-static inline bool wikrt_pl(wikrt_val v) { return wikrt_tagged_valref(WIKRT_PL, v); }
-static inline bool wikrt_pr(wikrt_val v) { return wikrt_tagged_valref(WIKRT_PR, v); }
-static inline bool wikrt_o(wikrt_val v)  { return wikrt_tagged_valref(WIKRT_O, v);  }
 
-/** @brief small integers
- * 
- * Small integers range roughly plus or minus one billion. I imagine
- * this is enough for many common use cases, though perhaps not for
- * floating point or rational computations.
+// I'll probably want to deprecate these
+static inline bool wikrt_p(wikrt_val v) { return (WIKRT_P == wikrt_vtag(v)); }
+static inline bool wikrt_pl(wikrt_val v) { return (WIKRT_PL == wikrt_vtag(v)); }
+static inline bool wikrt_pr(wikrt_val v) { return (WIKRT_PR == wikrt_vtag(v)); }
+static inline bool wikrt_o(wikrt_val v) { return (WIKRT_O == wikrt_vtag(v)); }
+
+/** @brief small integers (64 bit Wikilon Runtime)
+ *
+ * Small integers are indicated by low bits `100`. This gives 61 bits for
+ * the integer data - or 60 bits together with a sign. This gives us a full
+ * eighteen digits of valid integer representation, enough that I'm not going
+ * to worry about big integers any time soon.
  */
-#define WIKRT_SMALLINT_MAX  ((1 << 30) - 1)
+#define WIKRT_SMALLINT_MAX  ((1 << 60) - 1)
 #define WIKRT_SMALLINT_MIN  (- WIKRT_SMALLINT_MAX)
-#define WIKRT_I2V(I) ((wikrt_val)(I << 1) | 1)
-#define WIKRT_V2I(V) (((wikrt_int)V) >> 1)
+#define WIKRT_I2V(I) (WIKRT_I | (((wikrt_val)I) << 3))
+#define WIKRT_V2I(V) (((wikrt_int)V) >> 3)
 static inline wikrt_val wikrt_i2v(wikrt_int i) { return WIKRT_I2V(i); }
 static inline wikrt_int wikrt_v2i(wikrt_val v) { return WIKRT_V2I(v); }
 static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
@@ -621,12 +645,6 @@ static inline void wikrt_pval_swap(wikrt_val* a, wikrt_val* b) {
 // Other thoughts: It could be useful to keep free-lists regardless,
 // and allocate from them only after the bump-pointer arena is full
 // or when a valid sized element is at the head of the list. 
-
-/* Recognize values represented entirely in the reference. */
-static inline bool wikrt_copy_shallow(wikrt_val const v) {
-    // small numbers or zero address
-    return (wikrt_smallint(v) || (0 == wikrt_vaddr(v)));
-}
 
 /* Test whether a valid utf-8 codepoint is okay for a token. */
 static inline bool wikrt_token_char(uint32_t c) {

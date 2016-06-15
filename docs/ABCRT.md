@@ -122,18 +122,21 @@ Rather than return an error from each step, it might be more efficient to accumu
 
 For now, I'm using 32-bit words. I might try to create a 64-bit runtime later, but getting the current one working is more critical. Memory in the main (linear object) space will be aligned for allocation of two words. With 32-bit words, this gives us 3 tag bits per pointer. Small numbers and a few special constants are also represented. 
 
+Example: 
 * xy1 - small integers; plus or minus (2^30 - 1).
 * 000 - tagged objects (tag, data...)
 * 010 - pairs (val, val)
 * 100 - pair in left
 * 110 - pair in right
 
-The zero address is not allocated. Its meaning depends on tag bits:
+With 32 bits, I don't have much room for encoding special constants like unit. However, I could overload the zero address for this role.
 
 * 000 - void, an invalid or undefined value
 * 010 - unit
 * 100 - unit in left (false)
 * 110 - unit in right (true, end of list)
+
+Sadly, overloading this address adds a bunch of conditional checks and potential pipeline stalls. I'd prefer to avoid this. With 64 bits, I could afford to dedicate fewer bits to small integers, or use an extra alignment bit.
 
 Other than pairs, most things are 'tagged objects'. The type of a tagged object is generally determined by the low byte in the first word. The upper three bytes are then additional data, e.g. sizes of things or a few flag bits. 
 
@@ -151,7 +154,9 @@ After implementing a few, I feel it is essential to keep tagged objects structur
 
 #### 64-bit Absolute Addressing Representation?
 
-If I go for a 64-bit representation, I'd use absolute addressing instead of not offsets into a region. I cannot use direct value representations for stowed values or blocks. That isn't necessarily a bad thing - less fragile to changes in a runtime implementation, at least!
+If I go for a 64-bit representation, I'd use absolute addressing instead of offsets into a region. I also want to eliminate unit, void, etc. as pointers - i.e. I should not need to test whether a reference is NULL. So I can use some extra tag bits for that.
+
+I cannot use direct value representations for stowed values or blocks. That isn't necessarily a bad thing - less fragile to changes in a runtime implementation, at least!
 
 Absolute addressing may complicate some things. Relative addressing makes stowage easy, for example: we can represent stowed values as copies into a distinct context with local addressing. With absolute addressing, we essentially need an alternative value representation for stowing values - something more structured than bytecode.
 
