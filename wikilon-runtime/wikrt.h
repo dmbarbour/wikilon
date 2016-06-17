@@ -171,17 +171,16 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
 #define wikrt_copy_shallow(V) (4 & (V)) 
 static inline bool wikrt_copy_deep(wikrt_val v) { return !wikrt_copy_shallow(v); }
 
-// Small constants
+// full names of small constants
 #define WIKRT_UNIT        WIKRT_U
 #define WIKRT_UNIT_INL    WIKRT_UL
 #define WIKRT_UNIT_INR    WIKRT_UR
 
 #define WIKRT_REF_MASK_TAG    (7)     
 #define WIKRT_REF_MASK_ADDR   (~WIKRT_REF_MASK_TAG)
-
-static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & WIKRT_REF_MASK_ADDR); }
-static inline wikrt_tag  wikrt_vtag(wikrt_val v)  { return (v & WIKRT_REF_MASK_TAG);  }
-static inline wikrt_val  wikrt_tag_addr(wikrt_tag t, wikrt_addr a) { return (t | a); }
+#define wikrt_vaddr(V) ((V) & WIKRT_REF_MASK_ADDR)
+#define wikrt_vtag(V) ((V) & WIKRT_REF_MASK_TAG)
+#define wikrt_tag_addr(TAG,ADDR) ((TAG) | (ADDR))
 
 // I'll probably want to deprecate these
 static inline bool wikrt_p(wikrt_val v) { return (WIKRT_P == wikrt_vtag(v)); }
@@ -191,12 +190,11 @@ static inline bool wikrt_o(wikrt_val v) { return (WIKRT_O == wikrt_vtag(v)); }
 
 /** @brief small integers (64 bit Wikilon Runtime)
  *
- * Small integers are indicated by low bits `100`. This gives 61 bits for
- * the integer data - or 60 bits together with a sign. This gives us a full
- * eighteen digits of valid integer representation, enough that I'm not going
- * to worry about big integers any time soon.
+ * Small integers are indicated by low bits `100` and guarantee eighteen good
+ * decimal digits. Wikilon runtime probably won't do much to support larger
+ * integers. 
  */
-#define WIKRT_SMALLINT_MAX  ((1 << 60) - 1)
+#define WIKRT_SMALLINT_MAX  (999999999999999999)
 #define WIKRT_SMALLINT_MIN  (- WIKRT_SMALLINT_MAX)
 #define WIKRT_I2V(I) (WIKRT_I | (((wikrt_val)I) << 3))
 #define WIKRT_V2I(V) (((wikrt_int)V) >> 3)
@@ -245,10 +243,9 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
  *   WIKRT_OTAG_OPVAL 
  *
  *   This tag is used for embedded blocks and texts, for fast quotation
- *   of values, and for partial evaluation efforts. A tag bit is used to
- *   track whether the substructural attributes should be inherited by
- *   the containing block, enabling lazy evaluation of substructural 
- *   attributes.
+ *   of values, and for partial evaluation efforts. One tag bit enables
+ *   the substructure of the value to be promoted to the containing block
+ *   so we don't need to compute it immediately upon quoting a value. 
  *
  *   WIKRT_OTAG_OPTOK
  *
@@ -561,9 +558,9 @@ struct wikrt_cx {
 
 // just for sanity checks
 #define WIKRT_CX_REGISTER_CT 4
-#define WIKRT_REG_TXN_INIT WIKRT_VOID
-#define WIKRT_REG_PC_INIT WIKRT_VOID
-#define WIKRT_REG_CC_INIT WIKRT_VOID
+#define WIKRT_REG_TXN_INIT WIKRT_UNIT_INR
+#define WIKRT_REG_PC_INIT WIKRT_UNIT_INR
+#define WIKRT_REG_CC_INIT WIKRT_UNIT_INR
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
 #define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */

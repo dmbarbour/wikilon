@@ -293,7 +293,7 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, wikrt_cx* rcx)
     // anyhow, we now have sufficient space to perform our copy!
     wikrt_size const fs0 = rcx->alloc;
     wikrt_val const copy_src = *(wikrt_pval(lcx, lcx->val));
-    wikrt_val copy_dst = WIKRT_VOID;
+    wikrt_val copy_dst = WIKRT_UNIT;
     wikrt_copy_r(lcx, copy_src, ss, rcx, &copy_dst);
     wikrt_intro_r(rcx, copy_dst);
     wikrt_size const fsf = rcx->alloc;
@@ -321,7 +321,6 @@ wikrt_val_type wikrt_type(wikrt_cx* cx)
     else if((WIKRT_PL == tag) || (WIKRT_PR == tag)) { return WIKRT_TYPE_SUM; }
     else {
         assert(WIKRT_O == tag);
-        if(WIKRT_VOID == v) { return WIKRT_TYPE_UNDEF; }
         wikrt_val* const pv = wikrt_pval(cx, v);
         switch(LOBYTE(*pv)) {
             case WIKRT_OTAG_BIGINT:     return WIKRT_TYPE_INT; 

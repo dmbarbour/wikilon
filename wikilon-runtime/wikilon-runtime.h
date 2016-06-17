@@ -508,11 +508,10 @@ void wikrt_block_to_text(wikrt_cx*);
  *
  * The sealer token is provided as a simple C string. Discretionary 
  * sealers such as ":map" are understood by Wikilon runtime, as they
- * may be unsealed (by a {.map} token). Short discretionary sealers
- * (no more than 4 bytes, including the ':') have a compact encoding.
+ * may be unsealed (by a {.map} token). Short sealer strings have a 
+ * more compact encoding (effectively interned).
  *
- * Note that a valid token string cannot be empty. It must be between
- * one and sixty-three bytes in the utf-8 representation.
+ * See wikrt_valid_token() for information on valid sealer strings.
  */
 void wikrt_wrap_seal(wikrt_cx*, char const*); 
 
