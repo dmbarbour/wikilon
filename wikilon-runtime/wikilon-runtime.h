@@ -383,7 +383,14 @@ void wikrt_unwrap_sum(wikrt_cx*, wikrt_sum_tag* inRight);
 
 // TODO: consider matching deeper structure.
 
-/** @brief Allocation of integers. (e)→(Int*e). */
+/** @brief Allocation of integers. (e)→(Int*e).
+ *
+ * Note: Wikilon runtime currently only supports a subset of integers,
+ * particularly those that can be expressed with 18 decimal digits or
+ * fewer (i.e. -999999999999999999..999999999999999999). This is about
+ * 61 bits of integer data. Eventually, large numbers may be supported,
+ * but only with sufficient demand for them.
+ */
 void wikrt_intro_i32(wikrt_cx*, int32_t);
 void wikrt_intro_i64(wikrt_cx*, int64_t);
 

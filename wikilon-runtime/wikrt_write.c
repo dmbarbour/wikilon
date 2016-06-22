@@ -473,7 +473,7 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
         // print contained value then the sealer token (via optok)
         char tokbuff[WIKRT_TOK_BUFFSZ];
         wikrt_unwrap_seal(cx, tokbuff);
-        wikrt_intro_optok(cx, tokbuff, strlen(tokbuff));
+        wikrt_intro_optok(cx, tokbuff);
         wikrt_consd(cx);
         goto tailcall;
 
@@ -498,7 +498,7 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
         wikrt_val* const pobj = wikrt_pval(cx, *wikrt_pval(cx, cx->val));
         assert(wikrt_otag_trash(pobj[0]) && (WIKRT_UNIT_INR == pobj[1]));
         pobj[0] = ((~0xFF) & pobj[0]) | WIKRT_OTAG_BLOCK; // write as block
-        wikrt_intro_optok(cx, "&trash", 6); // after the block
+        wikrt_intro_optok(cx, "&trash"); // after the block
         wikrt_consd(cx); 
         goto tailcall;
     } break;
@@ -552,20 +552,15 @@ static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
             else { wikrt_write_val(cx, w, otag); }
 
         } else {
-
-            assert(WIKRT_OTAG_OPTOK == otype);
-
-            size_t const toklen = (otag >> 8);
+            // This should be a 'sealed' unit value, 
+            // i.e. OTAG_SEAL or OTAG_SEAL_SM.
             char tokbuff[WIKRT_TOK_BUFFSZ];
-            assert(toklen < WIKRT_TOK_BUFFSZ);
-            memcpy(tokbuff, 1 + popv, toklen);
-            tokbuff[toklen] = 0;
+            wikrt_unwrap_seal(cx, tokbuff);
+            wikrt_elim_unit(cx);
             
-            wikrt_dropk(cx); // drop optok
             wikrt_writer_putchar(cx, w, '{');
             wikrt_writer_putcstr(cx, w, tokbuff);
             wikrt_writer_putchar(cx, w, '}');
-
         } 
     }
     return !wikrt_has_error(cx);

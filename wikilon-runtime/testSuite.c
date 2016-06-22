@@ -121,16 +121,10 @@ void test_i64(wikrt_cx* cx, int64_t const iTest)
     if(i != iTest) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
-void test_i64_max(wikrt_cx* cx) { test_i64(cx, INT64_MAX); }
-void test_i64_zero(wikrt_cx* cx) { test_i64(cx, 0); }
-void test_i64_min(wikrt_cx* cx) { test_i64(cx, INT64_MIN); }
-void test_i64_nearmin(wikrt_cx* cx) { test_i64(cx, (-INT64_MAX)); }
 
-// using knowledge of internal representations
-void test_i64_2digit_min(wikrt_cx* cx) { test_i64(cx,  -999999999999999999); }
-void test_i64_2digit_max(wikrt_cx* cx) { test_i64(cx,   999999999999999999); }
-void test_i64_3digit_minpos(wikrt_cx* cx) { test_i64(cx,  1000000000000000000); }
-void test_i64_3digit_maxneg(wikrt_cx* cx) { test_i64(cx, -1000000000000000000); }
+void test_i64_zero(wikrt_cx* cx) { test_i64(cx, 0); }
+void test_i64_18d_min(wikrt_cx* cx) { test_i64(cx,  -999999999999999999); }
+void test_i64_18d_max(wikrt_cx* cx) { test_i64(cx,   999999999999999999); }
 
 /* grow a simple stack of numbers (count .. 1) for testing purposes. */
 void numstack(wikrt_cx* cx, int32_t count) 
@@ -326,11 +320,7 @@ bool test_pkistr_small(wikrt_cx* cx)
     TEST(2147483648);
     TEST(2147483649);
     TEST(999999999999999999);
-    TEST(1000000000000000000);
-    TEST(9223372036854775807);
     TEST(-999999999999999999);
-    TEST(-1000000000000000000);
-    TEST(-9223372036854775807);
     
     #undef TEST
 
@@ -354,12 +344,12 @@ bool test_copy_num(wikrt_cx* cx)
 {
     unsigned int r = 0;
     int testCt = 1000;
-    bool ok = test_copy_i64(cx, INT64_MIN) 
-           && test_copy_i64(cx, INT64_MAX)
-           && test_copy_i64(cx, 0);
+    bool ok = test_copy_i64(cx,-999999999999999999) 
+           && test_copy_i64(cx, 0)
+           && test_copy_i64(cx, 999999999999999999);
     while(testCt-- > 0) {
         int64_t testVal = ((int64_t)rand_r(&r) * RAND_MAX) + rand_r(&r);
-        ok = test_copy_i64(cx, testVal) && ok;
+        ok = test_copy_i64(cx, testVal % 1000000000000000000) && ok;
     }
     return ok;
 }
@@ -477,7 +467,7 @@ void fillbuff(uint8_t* buff, size_t ct, unsigned int seed)
 
 void test_alloc_binary(wikrt_cx* cx) 
 {
-    int const nLoops = 10;
+    int const nLoops = 1;
     for(int ii = 0; ii < nLoops; ++ii) {
         size_t const buffsz = (2000 * ii);
         uint8_t buff[buffsz];
@@ -1026,14 +1016,9 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_i32_smallint_max);
     TCX(test_i32_largeint_minpos);
     TCX(test_i32_largeint_maxneg);
-    TCX(test_i64_min);
-    TCX(test_i64_nearmin);
     TCX(test_i64_zero);
-    TCX(test_i64_max);
-    TCX(test_i64_2digit_min);
-    TCX(test_i64_2digit_max);
-    TCX(test_i64_3digit_minpos);
-    TCX(test_i64_3digit_maxneg);
+    TCX(test_i64_18d_min);
+    TCX(test_i64_18d_max);
 
     TCX(test_pkistr_small);
     TCX(test_copy_num);

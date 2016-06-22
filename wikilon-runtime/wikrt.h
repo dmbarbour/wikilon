@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <limits.h>
 #include <pthread.h>
 
 _Static_assert((INTPTR_MIN == INT64_MIN) && 
@@ -168,6 +169,10 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
 #define WIKRT_UL    6
 #define WIKRT_UR    7
 
+// for static assertions
+#define WIKRT_USING_MINIMAL_BITREP 1
+
+// WIKRT_I, WIKRT_U, WIKRT_UL, WIKRT_UR are 'shallow copy'.
 #define wikrt_copy_shallow(V) (4 & (V)) 
 static inline bool wikrt_copy_deep(wikrt_val v) { return !wikrt_copy_shallow(v); }
 
@@ -191,8 +196,8 @@ static inline bool wikrt_o(wikrt_val v) { return (WIKRT_O == wikrt_vtag(v)); }
 /** @brief small integers (64 bit Wikilon Runtime)
  *
  * Small integers are indicated by low bits `100` and guarantee eighteen good
- * decimal digits. Wikilon runtime probably won't do much to support larger
- * integers. 
+ * decimal digits. Wikilon runtime probably won't take the effort to support
+ * larger integers any time soon.
  */
 #define WIKRT_SMALLINT_MAX  (999999999999999999)
 #define WIKRT_SMALLINT_MIN  (- WIKRT_SMALLINT_MAX)
@@ -200,7 +205,8 @@ static inline bool wikrt_o(wikrt_val v) { return (WIKRT_O == wikrt_vtag(v)); }
 #define WIKRT_V2I(V) (((wikrt_int)V) >> 3)
 static inline wikrt_val wikrt_i2v(wikrt_int i) { return WIKRT_I2V(i); }
 static inline wikrt_int wikrt_v2i(wikrt_val v) { return WIKRT_V2I(v); }
-static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
+static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v)); }
+
 
 /** The zero integer value. */
 #define WIKRT_IZERO WIKRT_I2V(0) 
@@ -224,13 +230,11 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
  *   deep sum. Deep sums aren't necessarily packed as much as possible,
  *   but should be heuristically tight.
  *
- * WIKRT_OTAG_BIGINT
- *
- *   The upper 24 bits contain size and sign. Size is a number of 30-bit
- *   'digits' in the range 0..999999999 (a compact binary coded decimal).
- *   Sign requires one bit, so size is limited to 2^23-1 of these digits.
- *   (This corresponds to 75 million decimal digits.) Size is at least two
- *   words. The encoding is little-endian.
+ * WIKRT_OTAG_BIGINT (disabled for 64-bit)
+ *   Disabled: arbitrary width integers are cool, but I probably need to
+ *   use a library to get them working correctly, quickly. This is more
+ *   than I want to do at the moment. Anyhow, it shouldn't be difficult
+ *   to find a good representation for big numbers.
  *
  * WIKRT_OTAG_BLOCK  (block-header, list-of-ops)
  *
@@ -247,10 +251,12 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
  *   the substructure of the value to be promoted to the containing block
  *   so we don't need to compute it immediately upon quoting a value. 
  *
- *   WIKRT_OTAG_OPTOK
- *
- *   This tag is used to carry unrecognized tokens. The tag bits include
- *   only a length for the token. This token is not NUL-terminated.
+ *   WIKRT_OTAG_SEAL(_SM)
+ * 
+ *   Tokens will be represented in the trivial block by just overloading
+ *   the token sealer, with a fixed 'unit' value. This simplifies much
+ *   processing and performance. Recognized tokens will eventually have
+ *   dedicated 
  *
  * WIKRT_OTAG_SEAL   (size, value, sealer)
  *
@@ -325,11 +331,11 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
  * sum types might work.
  */
 
-#define WIKRT_OTAG_BIGINT   78   /* N */
+//#define WIKRT_OTAG_BIGINT   78   /* N */
+
 #define WIKRT_OTAG_DEEPSUM  83   /* S */
 #define WIKRT_OTAG_BLOCK    91   /* [ */
 #define WIKRT_OTAG_OPVAL    39   /* ' */
-#define WIKRT_OTAG_OPTOK   123   /* { */
 #define WIKRT_OTAG_SEAL     36   /* $ */
 #define WIKRT_OTAG_SEAL_SM  58   /* : */
 #define WIKRT_OTAG_ARRAY    86   /* V */
@@ -341,11 +347,6 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
 
 #define WIKRT_DEEPSUMR      3 /* bits 11 */
 #define WIKRT_DEEPSUML      2 /* bits 10 */
-
-// I want to keep integers small enough for easy stowage
-// and access, regardless of context size.
-#define WIKRT_BIGINT_DIGIT          1000000000
-#define WIKRT_BIGINT_MAX_DIGITS     ((1<<12)-1) // ~16kB
 
 // array, binary, text header
 //   one bit for logical reversals
@@ -361,6 +362,14 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
 // this is used for quoted values within a block.
 #define WIKRT_OPVAL_LAZYKF      (1 << 8)  
 
+// Currently, support for large integers is disabled. This enables
+// simple assertions
+#if defined(WIKRT_OTAG_BIGINT)
+#define WIKRT_HAS_BIGINT 1
+#else
+#define WIKRT_HAS_BIGINT 0
+#endif
+
 // render text as a basic list of numbers, to avoid O(N^2) rendering issues
 #define WIKRT_OPVAL_ASLIST      (1 << 9)  
 
@@ -369,8 +378,6 @@ static inline bool wikrt_smallint(wikrt_val v) { return (1 == (v & 1)); }
 // (e.g. for the empty text case)
 #define WIKRT_OPVAL_EMTEXT      (1 << 10) 
 
-
-static inline bool wikrt_otag_bigint(wikrt_otag v) { return (WIKRT_OTAG_BIGINT == LOBYTE(v)); }
 static inline bool wikrt_otag_deepsum(wikrt_otag v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
 static inline bool wikrt_otag_block(wikrt_otag v) { return (WIKRT_OTAG_BLOCK == LOBYTE(v)); }
 static inline bool wikrt_otag_seal(wikrt_otag v) { return (WIKRT_OTAG_SEAL == LOBYTE(v)); }
@@ -389,11 +396,6 @@ static inline void wikrt_capture_block_ss(wikrt_val otag, wikrt_ss* ss)
     }
 }
 static inline bool wikrt_opval_hides_ss(wikrt_val otag) { return (0 == (WIKRT_OPVAL_LAZYKF & otag)); }
-
-static inline wikrt_val wikrt_mkotag_bigint(bool positive, wikrt_size nDigits) {
-    wikrt_val const tag_data = (nDigits << 1) | (positive ? 0 : 1);
-    return (tag_data << 8) | WIKRT_OTAG_BIGINT;
-}
 
 /* Internal API calls. */
 void wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
@@ -430,21 +432,14 @@ void wikrt_sum_swap_rv(wikrt_cx*, wikrt_val* v);
 // conservative free-space requirement for sum manipulations (sum_wswap, etc.)
 #define WIKRT_SUMOP_RESERVE (4 * (WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE))
 
-// Allocate an i32 or i64 assuming sufficient reserved memory.
-wikrt_val wikrt_alloc_i32_rv(wikrt_cx* cx, int32_t);
-wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t);
-#define WIKRT_SIZEOF_BIGINT(DIGITS) (sizeof(wikrt_val) + ((DIGITS) * sizeof(uint32_t)))
-#define WIKRT_ALLOC_I32_RESERVE WIKRT_CELLBUFF(WIKRT_SIZEOF_BIGINT(2))
-#define WIKRT_ALLOC_I64_RESERVE WIKRT_CELLBUFF(WIKRT_SIZEOF_BIGINT(3))
-
 // For large allocations where I cannot easily predict the size, I should
 // most likely indicate a register as my target. Combining this responsibility
 // with introducing a value (e.g. adding it to our stack) is a mistake.
 
-// (after validating types...)
-//void wikrt_bigint_add(wikrt_cx*);
-//void wikrt_bigint_mul(wikrt_cx*);
-//void wikrt_bigint_div(wikrt_cx*);
+wikrt_val wikrt_alloc_i32_rv(wikrt_cx* cx, int32_t);
+wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t);
+#define WIKRT_ALLOC_I32_RESERVE 0
+#define WIKRT_ALLOC_I64_RESERVE 0
 
 // non-allocating comparison.
 void wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b);
@@ -456,8 +451,8 @@ void wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
 #endif
 
 // for text to/from block, in wikrt_parse.c
-bool wikrt_intro_optok(wikrt_cx* cx, char const*, size_t); // e → (optok * e)
-bool wikrt_intro_op(wikrt_cx* cx, wikrt_op op); // e → (op * e)
+void wikrt_intro_optok(wikrt_cx* cx, char const*); // e → (optok * e)
+void wikrt_intro_op(wikrt_cx* cx, wikrt_op op); // e → (op * e)
 
 #define WIKRT_ENABLE_FAST_READ 0
 
@@ -612,6 +607,10 @@ static inline wikrt_addr wikrt_alloc_r(wikrt_cx* cx, wikrt_sizeb sz)
     return cx->alloc; 
 }
 
+static inline wikrt_sizeb wikrt_mem_in_use(wikrt_cx* cx) { 
+    return (cx->size - cx->alloc); 
+}
+
 static inline wikrt_val wikrt_alloc_cellval_r(wikrt_cx* cx, wikrt_tag tag, wikrt_val fst, wikrt_val snd) 
 {
     wikrt_addr const addr = wikrt_alloc_r(cx, WIKRT_CELLSIZE);
@@ -659,11 +658,9 @@ static inline bool wikrt_text_char(uint32_t c) {
     return !bInvalidChar;
 }
 
-static inline bool wikrt_bigint(wikrt_cx* cx, wikrt_val v) {
-    return wikrt_o(v) && wikrt_otag_bigint(*wikrt_pval(cx, v));
-}
 static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
-    return wikrt_smallint(v) || wikrt_bigint(cx,v); 
+    // big integers disabled
+    return wikrt_smallint(v); 
 }
 static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_block(*wikrt_pval(cx, v)); 
@@ -726,5 +723,4 @@ static inline bool wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
     wikrt_wrap_otag_r(cx, otag);
     return true; 
 }
-
 

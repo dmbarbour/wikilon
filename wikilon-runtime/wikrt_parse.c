@@ -161,8 +161,8 @@ static void wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t c
     case WIKRT_PARSE_TOK: {
         _Static_assert(('}' == 125), "assuming '}' is 125"); 
         if('}' == cp) {
-
-            if(!wikrt_intro_optok(cx, (char const*) p->buff, p->bytect)) { return; }
+            p->buff[p->bytect] = 0; // so we have a C string.
+            wikrt_intro_optok(cx, (char const*) p->buff);
             wikrt_cons(cx);
             p->type = WIKRT_PARSE_OP;
 
@@ -255,7 +255,7 @@ static void wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t c
             p->charct = 0;
 
         } else {
-            if(!wikrt_intro_op(cx, wikrt_cp_to_op(cp))) { return; }
+            wikrt_intro_op(cx, wikrt_cp_to_op(cp));
             wikrt_cons(cx);
         } 
     } break;
@@ -325,32 +325,20 @@ void wikrt_text_to_block(wikrt_cx* cx)
 
 // utility functions
 
-bool wikrt_intro_optok(wikrt_cx* cx, char const* tok, size_t sz) 
+void wikrt_intro_optok(wikrt_cx* cx, char const* tok) 
 {
-    bool const validSize = ((0 < sz) && (sz < WIKRT_TOK_BUFFSZ));
-    if(!validSize) { wikrt_set_error(cx, WIKRT_ETYPE); return false; }
-
-    wikrt_size const szOptok = wikrt_cellbuff(sizeof(wikrt_val) + (wikrt_size)sz);
-    wikrt_size const szAlloc = szOptok + WIKRT_CELLSIZE;
-
-    if(!wikrt_mem_reserve(cx, szAlloc)) { return false; }
-
-    wikrt_addr const a = wikrt_alloc_r(cx, szOptok);
-    wikrt_val* const pa = wikrt_paddr(cx, a);
-    pa[0] = WIKRT_OTAG_OPTOK | (sz << 8);
-    memcpy(1 + pa, tok, sz);
-    wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, a));
-
-    return true;
+    // A 'token' operator is currently represented as a sealed unit value.
+    // But special recognized tokens should eventually be rewritten as ops. 
+    wikrt_intro_unit(cx);
+    wikrt_wrap_seal(cx, tok);
 }
 
-bool wikrt_intro_op(wikrt_cx* cx, wikrt_op op) 
+void wikrt_intro_op(wikrt_cx* cx, wikrt_op op) 
 {
     bool const validOp = ((OP_INVAL < op) && (op < OP_COUNT));
-    if(!validOp) { wikrt_set_error(cx, WIKRT_ETYPE); return false; }
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
+    if(!validOp) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
     wikrt_intro_op_r(cx, op);
-    return true;
 }
 
 
