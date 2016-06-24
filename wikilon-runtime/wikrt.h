@@ -568,8 +568,8 @@ struct wikrt_cx {
 //  
 
 // A strategy for 'splitting' an array is to simply share references
-// within a cell. This is safe only if we overcommit allocations, i.e.
-// such that we have needed space for a future wikrt_mem_compact.
+// within a cell. This is safe only if we allocate the extra space to
+// split them for real in the future.
 #define WIKRT_ALLOW_OVERCOMMIT_BUFFER_SHARING 1
 
 static inline bool wikrt_has_error(wikrt_cx* cx) { return (WIKRT_OK != cx->ecode); }
@@ -577,14 +577,6 @@ static inline bool wikrt_has_error(wikrt_cx* cx) { return (WIKRT_OK != cx->ecode
 #define wikrt_paddr(CX,A) ((wikrt_val*)A)
 #define wikrt_pval(CX,V)  wikrt_paddr(CX, wikrt_vaddr(V))
 
-#if 0
-static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr addr) {
-    return (wikrt_val*)(addr + ((char*)(cx->mem))); 
-}
-static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_val v) {
-    return wikrt_paddr(cx, wikrt_vaddr(v));
-}
-#endif
 
 /* NOTE: Because I'm using a moving GC, I need to be careful about
  * how I represent and process allocations. Any allocation I wish 
