@@ -144,7 +144,7 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
  *  01 pair value
  *  10 pair in left
  *  11 pair in right
- * third bit 1: ref constants
+ * third bit 1: small constants
  *  00 small integers
  *  01 unit
  *  10 unit in left
@@ -198,6 +198,7 @@ static inline bool wikrt_o(wikrt_val v) { return (WIKRT_O == wikrt_vtag(v)); }
  * Small integers are indicated by low bits `100` and guarantee eighteen good
  * decimal digits. Wikilon runtime probably won't take the effort to support
  * larger integers any time soon.
+ *
  */
 #define WIKRT_SMALLINT_MAX  (999999999999999999)
 #define WIKRT_SMALLINT_MIN  (- WIKRT_SMALLINT_MAX)
@@ -573,12 +574,17 @@ struct wikrt_cx {
 
 static inline bool wikrt_has_error(wikrt_cx* cx) { return (WIKRT_OK != cx->ecode); }
 
+#define wikrt_paddr(CX,A) ((wikrt_val*)A)
+#define wikrt_pval(CX,V)  wikrt_paddr(CX, wikrt_vaddr(V))
+
+#if 0
 static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr addr) {
     return (wikrt_val*)(addr + ((char*)(cx->mem))); 
 }
 static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_paddr(cx, wikrt_vaddr(v));
 }
+#endif
 
 /* NOTE: Because I'm using a moving GC, I need to be careful about
  * how I represent and process allocations. Any allocation I wish 
@@ -597,14 +603,13 @@ static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz) {
     return wikrt_mem_available(cx, sz) ? true : wikrt_mem_gc_then_reserve(cx, sz); 
 }
 
-
 // Allocate a given amount of space, assuming sufficient space is reserved.
 // This will not risk compacting and moving data. OTOH, if there isn't enough
 // space we'll have a very severe bug.
 static inline wikrt_addr wikrt_alloc_r(wikrt_cx* cx, wikrt_sizeb sz) 
 {
     cx->alloc -= sz; 
-    return cx->alloc; 
+    return (cx->alloc + ((wikrt_addr) cx->mem)); // Now using absolute addressing!
 }
 
 static inline wikrt_sizeb wikrt_mem_in_use(wikrt_cx* cx) { 
