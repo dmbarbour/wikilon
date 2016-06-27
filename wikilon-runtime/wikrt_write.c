@@ -44,7 +44,7 @@ typedef struct wikrt_writer_state
 } wikrt_writer_state;
 
 // For bitfield tracking substructure
-#define WIKRT_SS_LAZYKF (1 << 7)
+#define WIKRT_WRITER_LAZYKF (1 << 7)
 
 static inline void wikrt_writer_state_init(wikrt_writer_state* w) 
 {
@@ -277,7 +277,7 @@ static inline void wikrt_writer_pop_stack(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_int const ss = wikrt_v2i(ss_val);
     w->rel = (0 != (ss & WIKRT_SS_REL)) || (w->lazykf && w->rel);
     w->aff = (0 != (ss & WIKRT_SS_AFF)) || (w->lazykf && w->aff);
-    w->lazykf = (0 != (ss & WIKRT_SS_LAZYKF));
+    w->lazykf = (0 != (ss & WIKRT_WRITER_LAZYKF));
     w->depth -= 1;
 
     // exiting with context (ops' * (stack' * (texts * e))). 
@@ -298,7 +298,7 @@ static inline void wikrt_writer_push_stack(wikrt_cx* cx, wikrt_writer_state* w, 
 
     wikrt_int const ss = (w->rel ? WIKRT_SS_REL : 0) 
                        | (w->aff ? WIKRT_SS_AFF : 0) 
-                       | (w->lazykf ? WIKRT_SS_LAZYKF : 0);
+                       | (w->lazykf ? WIKRT_WRITER_LAZYKF : 0);
 
     wikrt_intro_r(cx, wikrt_i2v(ss));
     wikrt_assocl(cx); // ((ss*ops) * (stack * (ops' * ...))))
@@ -347,7 +347,7 @@ static void wikrt_write_int(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_peek_istr(cx, buff, &len);
     wikrt_dropk(cx); // drop the integer
 
-    wikrt_writer_putchar(cx, w, ABC_NUM);
+    wikrt_writer_putchar(cx, w, ABC_NUM);  // `#` to introduce number
     if('0' != buff[0]) { // except for zero (`#` not `#0`)
         // write the pseudo-literal integer. 
         bool const negate = ('-' == buff[0]);

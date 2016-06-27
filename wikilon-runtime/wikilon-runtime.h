@@ -533,15 +533,16 @@ void wikrt_unwrap_seal(wikrt_cx*, char*);
 
 /** @brief (a * e) → ((trashed a) * e). Annotation {&trash}.
  *
- * When done using a value, the normal option is to drop it. However, dropping
- * a value is illegal for relevant or linear values. Use of {&trash} instead
- * the runtime that the value will not be observed in the future. The memory 
- * can be recycled, but future attempts to observe the value would result in
- * a runtime type error.
- *
- * A trashed linear value should serialize as `[]kf{&trash}`, i.e. preserving
- * substructure but no other information of the input value `a`. The dynamic
- * type of a trashed value is 'WIKRT_TYPE_TRASH'. 
+ * The normal way to destroy a value is to drop it, with `%` or wikrt_drop.
+ * However, dropping a value is not always legal due to substructural types.
+ * An alternative is to 'trash' a value, i.e. tell the runtime that you will
+ * not be using that value again. Doing so replaces a large value with a small
+ * placeholder that minimally preserves the value's substructural properties.
+ * 
+ * Attempting to access a trashed value will result in a runtime type error.
+ * However, you can test for trashed values with wikrt_type or serialization.
+ * A trashed value (regardless of the original) serializes as `[]kf{&trash}`
+ * with presence of `k` and `f` depending on relevant and affine substructure.
  */
 void wikrt_trash(wikrt_cx*);
 
@@ -555,7 +556,7 @@ void wikrt_trash(wikrt_cx*);
  *
  * For performance reasons, stowage is lazy. This allows a computation that
  * loads, updates, and stows a value in a tight loop to avoid unnecessary
- * traffic with the backing database. Stowage will happens heuristically. 
+ * traffic with the backing database. Stowage will happen heuristically. 
  * However, stowage can be forced by subsequent use of wikrt_peek_sv.
  *
  * In Wikilon runtime, stowage is implicitly coupled with structure sharing.
@@ -640,7 +641,8 @@ void wikrt_intro_sv(wikrt_cx*, char const* resourceId);
  * may be quoted or manipulated, but is more or less opaque.
  *
  * If there are type errors, they generally will not be discovered until
- * we begin stepping the evaluation.
+ * we begin stepping the evaluation. The pending value is considered 
+ * linear by default, i.e. dropping or copying it is an error.
  */
 void wikrt_apply(wikrt_cx*);
 
@@ -676,9 +678,13 @@ void wikrt_block_aff(wikrt_cx*);
 void wikrt_block_rel(wikrt_cx*);
 
 /** @brief Mark a block for parallel evaluation. (block*e)→(block*e). 
+ * 
+ * Indicate a block should, when applied, be evaluated in parallel with
+ * a toplevel or parent block.
  *
- * Note: this doesn't affect a top-level evaluation, only applications
- * internal to a wikrt_step_eval. Wikilon runtime guarantees there is
+ * Note: this doesn't affect a top-level evaluation. Also, parallelism
+ * is not guaranteed. Parallelism applies only within wikrt_step_eval,
+ * so  Wikilon runtime guarantees there is
  * no parallel evaluation upon returning from wikrt_step_eval.
  */
 void wikrt_block_par(wikrt_cx*);

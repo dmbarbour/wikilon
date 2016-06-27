@@ -778,17 +778,10 @@ void test_write_abc_str(wikrt_cx* cx, char const* abc)
     wikrt_intro_text(cx, abc, SIZE_MAX);
     wikrt_text_to_block(cx);
     wikrt_block_to_text(cx); 
-    size_t len = 800;
-    char buff[len]; 
-    wikrt_read_text(cx, buff, &len, NULL);
-    buff[len] = 0;
-    elim_list_end(cx);
-    
-    bool const exact_match = (0 == strcmp(abc, buff));
-    if(!exact_match) { wikrt_set_error(cx, WIKRT_ETYPE); }
+    elim_cstr(cx, abc);
 
     if(WIKRT_OK != wikrt_error(cx)) {
-        fprintf(stderr, "%s: failed to write ABC: `%s` → `%s`\n", __FUNCTION__, abc, buff);
+        fprintf(stderr, "%s: failed to write and recover ABC: `%s`\n", __FUNCTION__, abc);
     }
 }
 
@@ -985,6 +978,28 @@ void test_trash(wikrt_cx* cx)
 
     wikrt_trash(cx);
     val2txt(cx); elim_cstr(cx, "[]k{&trash}");
+
+    wikrt_intro_unit(cx);
+    wikrt_quote(cx);
+    wikrt_block_aff(cx);
+    wikrt_wrap_seal(cx, ":affineTest");
+    wikrt_copyf(cx);
+    val2txt(cx); elim_cstr(cx, "[vvrwlc]f{:affineTest}");
+    
+    wikrt_trash(cx);
+    val2txt(cx); elim_cstr(cx, "[]f{&trash}");
+
+    wikrt_intro_i32(cx, -12345);
+    wikrt_quote(cx);
+    wikrt_block_aff(cx);
+    wikrt_block_rel(cx);
+    wikrt_wrap_seal(cx, ":relevantAndAffine");
+    wikrt_copyf(cx);
+    val2txt(cx); elim_cstr(cx, "[#12345-]kf{:relevantAndAffine}");
+    wikrt_trash(cx);
+
+    val2txt(cx); elim_cstr(cx, "[]kf{&trash}");
+
 }
 
 
@@ -1078,13 +1093,18 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_rel);
     TCX(test_trash);
 
-    // TODO: 
-    //   serialization for pending computations.
-
-
     // TODO: evaluations   
     // TODO: evaluation of quoted values
+    // TODO: evaluation with composition
     // TODO: bignum math
+
+
+    // TODO: 
+    //  comput
+    //   serialization for pending computations.
+    // 
+
+
 
     // TODO test: stowage.
     //   serialization for stowed values

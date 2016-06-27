@@ -319,13 +319,17 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
  *    type was expected instead. This might be understood as a specialized
  *    value sealer.
  *
- * WIKRT_OTAG_TRASH (potential)
- * 
- *    Alternatively to dropping values with `%`, we can use {&trash} to mark
- *    a value as no longer relevant to the future of a computation. Observation
- *    of a trashed value is a type error. However, relevant and linear values
- *    may be trashed without error, unlike dropping the values. Essentially the
- *    /dev/null of Wikilon runtime.
+ * WIKRT_OTAG_TRASH
+ *
+ *    A placeholder for a value that has been marked as garbage, allowing
+ *    its memory to be recycled. Preserves substructural properties. Any
+ *    attempt to access or observe the value results in a type error, but
+ *    it may be deleted or copied like the original value.
+ *
+ * WIKRT_OTAG_PEND
+ *
+ *    A type that describes an ongoing computation. Just a tagged value
+ *    to distinguish it.
  *
  * I'd like to eventually explore logical copies that work with the idea of
  * linear or affine values, but I haven't good ideas for this yet - use of
@@ -334,16 +338,17 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
 
 //#define WIKRT_OTAG_BIGINT   78   /* N */
 
-#define WIKRT_OTAG_DEEPSUM  83   /* S */
+#define WIKRT_OTAG_DEEPSUM  43   /* + */
 #define WIKRT_OTAG_BLOCK    91   /* [ */
 #define WIKRT_OTAG_OPVAL    39   /* ' */
-#define WIKRT_OTAG_SEAL     36   /* $ */
+#define WIKRT_OTAG_SEAL     123  /* { */
 #define WIKRT_OTAG_SEAL_SM  58   /* : */
 #define WIKRT_OTAG_ARRAY    86   /* V */
 #define WIKRT_OTAG_BINARY   56   /* 8 */
 #define WIKRT_OTAG_TEXT     34   /* " */
 //#define WIKRT_OTAG_STOWAGE  64   /* @ */
 #define WIKRT_OTAG_TRASH    95   /* _ */
+#define WIKRT_OTAG_PEND     126  /* ~ */
 #define LOBYTE(V) ((V) & 0xFF)
 
 #define WIKRT_DEEPSUMR      3 /* bits 11 */
@@ -401,10 +406,9 @@ static inline bool wikrt_opval_hides_ss(wikrt_val otag) { return (0 == (WIKRT_OP
 /* Internal API calls. */
 void wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
 
-// wikrt_vsize_ssp: return space required to deep-copy a value. 
-//   Uses scratch space as a stack. May be bypassed if we can
-//   efficiently determine that we have sufficient size.
-wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val v);
+// wikrt_vsize: return allocation required to deep-copy a value. 
+//   Use a given stack space for recursive structure tasks.
+wikrt_size wikrt_vsize(wikrt_cx* cx, wikrt_val* stack, wikrt_val v);
 #define WIKRT_ALLOW_SIZE_BYPASS 0
 
 void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* stack, wikrt_val v, wikrt_ss* ss);
