@@ -236,21 +236,6 @@ static void writer_wzlw(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_write_op(cx, w, OP_PROD_W_SWAP);
 }
 
-
-
-// (block * e) → (ops * e), returning otag
-static wikrt_otag wikrt_writer_open_block(wikrt_cx* cx) 
-{
-    // `block` is (OTAG_BLOCK ops) pair.
-    _Static_assert(!WIKRT_NEED_FREE_ACTION, "free the 'block' tag");
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    wikrt_val* const pblock = wikrt_pval(cx, (*v));
-    wikrt_otag const otag = (*pblock);
-    assert(WIKRT_OTAG_BLOCK == LOBYTE(otag));
-    (*v) = pblock[1]; // dropping the OTAG
-    return otag;
-}
-
 // (empty ops * (stack * (text * e))) → (ops' * (stack' * (text * e)))
 //   where `stack` is ((ss * ops') * stack')
 //   and `ss` accumulates substructure
@@ -291,7 +276,7 @@ static inline void wikrt_writer_push_stack(wikrt_cx* cx, wikrt_writer_state* w, 
 {
     _Static_assert(('[' == 91), "assuming '[' is 91");
 
-    wikrt_otag const block_tag = wikrt_writer_open_block(cx); // (block ops') → ops'
+    wikrt_otag const block_tag = wikrt_open_block_ops(cx); // (block ops') → ops'
 
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
     wikrt_wswap(cx); wikrt_zswap(cx); // (ops * (stack * (block * (texts * e))))
@@ -580,7 +565,7 @@ void wikrt_block_to_text(wikrt_cx* cx)
     // (block * e) → (ops * (unit * (text * e)))
     wikrt_intro_r(cx, WIKRT_UNIT_INR); wikrt_wswap(cx); // initial texts (empty list)
     wikrt_intro_r(cx, WIKRT_UNIT); wikrt_wswap(cx);     // initial continuation (unit)
-    wikrt_writer_open_block(cx);                        // block → ops
+    wikrt_open_block_ops(cx);                           // block → ops
 
     wikrt_writer_state w;
     wikrt_writer_state_init(&w);

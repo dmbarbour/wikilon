@@ -666,6 +666,10 @@ static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
 static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_block(*wikrt_pval(cx, v)); 
 }
+
+// (block * e) → (ops * e), returning block tag (e.g. with substructure)
+wikrt_otag wikrt_open_block_ops(wikrt_cx* cx);
+
 static inline bool wikrt_trashval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_trash(*wikrt_pval(cx, v));
 }
@@ -724,4 +728,5 @@ static inline bool wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
     wikrt_wrap_otag_r(cx, otag);
     return true; 
 }
+
 
