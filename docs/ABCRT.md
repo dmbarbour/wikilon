@@ -72,45 +72,27 @@ Alternatively, I can switch to using C++ internally with an efficient exceptions
 
 ### Memory Management
 
-ABC is well suited for manual memory management due to its explicit copy and drop operators. This couples nicely with a preference for linear structure and 'move' semantics, deep copies over aliasing. Linearity allows me to implement many functions - especially data plumbing - without allocation.
+ABC is well suited for 'manual' memory management due to its explicit copy and drop operators. It's convenient if most memory is linear so that we can have non-allocating data plumbing operations (at least for common cases). And bump-pointer allocation and slab allocations are useful for locality and performance, potentially favorable to free lists (though something like TCMalloc wouldn't be bad).
 
-Bump-pointer allocators, together with two-space compacting collectors, should also serve me well. I initially tried more conventional memory management with size-segregated free-lists. But that doesn't work nicely with slab allocations for copying composite values (e.g. allocating enough space for every element in a list or stack or tree). Free fragments are small, and allocated blocks are large, and we end up coalescing memory frequently.
+Because I'm running pure code without side-effects, throughput is more important than latency during computation. There is a lot of freedom on what to do with memory. For now, I'm going for the 2-space compacting copying collector per context, which ensures fragmentation will never be an issue at the cost of copying memory occasionally.
 
-The main issue with a two-space collector is working easily with parallelism. I need either to stop-the-world for GC and add a mutex for allocation, or move a parallel computation into a separate space so there is no interference between threads. I'm leaning more towards the non-synchronizing parallelism, even though it implies greater overheads for simplicity. The overheads shouldn't be too bad insofar as they're subtracted from our compaction efforts.
-
-It might be useful to favor tighter context memory, e.g. based on observed memory pressure. Graduate from a few megabytes up to a given maximum size. Tight computations would then have tight memory locality properties. I'm not entirely convinced of this route, but it's easy enough to apply monotonically and profile later, or to test if memory pressure is low and occasionally shrink the space in use.
-
-A compacting collector seems a good fit for Wikilon's common use cases. It's a stop-the-world collector, albeit constrained to a single thread. This shouldn't be a major issue for pure computations (no side effects to hurt latencies). It is feasible to combine a compacting collector with free-lists, to reuse the small spaces. However, I have doubts that adding this would offer sufficient benefit to pay for the complications it introduces. A two-space collector has the advantage of being delightfully simple.
-
-One concern is *parallelism*. With a two-space collector and bump-pointer allocation, I cannot efficiently support parallelism within a context. It would require too much synchronization, e.g. for bumping the pointer, for halting other threads during compaction, etc.. I can copy data to another context, however. And I could presumably leverage `{&par}` and `{&seq}` annotations to drive parallelism. 
+Parallelism within a computation could also be valuable. I may need to eventually move away from the shared memory idea in favor of free spaces for multiple threads. Though, this could be mitigated by good support for non-copying shared memory and objects.
 
 #### Support for Shared and Non-Copying Objects in Memory?
 
-Linear memory is convenient but it requires many deep copies. The ability to compute large objects without copying them every GC pass? It could be quite convenient, in general. *Stowage* sort of works that way, but has a large copy overhead per access. I need a lower latency option - objects *in memory* but not copied, i.e. in a separate region of memory. 
+Linear memory is convenient but it requires frequent deep copies. This is especially a problem for blocks in a fixpoint loop, and for large binary data. I would like some form of stable memory for binaries and blocks of code. 
+
+The ability to compute large objects without copying them every GC pass? It could be quite convenient, in general. *Stowage* sort of works that way, but has a large copy overhead per access. I need a lower latency option - objects *in memory* but not copied, i.e. in a separate region of memory. 
 
 Some options:
 
-* stable access to stowage via long-running transactions.
+* divide context into both a workspace and shared space.
+* shared space at `wikrt_env` layer instead.
+* shared space via C heap, malloc/free, reference counting.
+* stable access for stowage addresses via read-only transactions.
 * cache stowed values in memory via some other mechanism.
-* use the C heap (malloc/free). unfortunate fragmentation.
-* allocate an address space per `wikrt_env*` for sharing among contexts.
-* split a context's space into both a workspace and shared space.
 
-I like the idea of modeling shared objects as a form of *stable access to stowed data*. With LMDB, we can use direct pointers into mmap'd regions so long as we hold onto our read-only transactions. LMDB would not recycle the associated pages of data. An advantage is that we automatically get flexible structure sharing. This idea does need us to release transactions periodically (e.g. upon GC) and probably to support ranged access to values. 
-
-Copying and caching a value seems like a lot of extra work for what LMDB already does via mmap + read-only transactions. I'd be forced to implement an additional form of cross-context GC to manage this cache. Let's avoid this if viable.
-
-The other three options suffer for lack of local value identity. It becomes difficult to maintain structure sharing across copies of the value and especially when moving data into and out of stowage. And we have a bunch of new GC challenges!
-
-So, for now, I'm going to try for 'Shared Memory = LMDB Stowage (mmap + volatile RO transactions)'.
-
-I'm leaning towards a per-context shared object space, which might be shared for lightweight internal parallelism. This could simplify GC and allocation issues, and would eliminate potential of runtime quota failures due to activity within other computations.
-
-GC of a non-copying shared space is an issue. Either we use reference counts (in which case we cannot short-circuit `wikrt_drop()`) or we can scan a linked list against some root-set (e.g. a bloom filter).
-
-Avoidance of deep-copy will be essential for performance of loopy code and JIT'd compiled code.
-
-*Aside:* I've thought about trying to use the context 2-space for shared objects. However, working with forwarding pointers and different kinds of copies seems problematic. If I could ensure structure sharing for shared objects (e.g indirecting through a 'shared object' hashtable) that could potentially work, but I'd rather avoid sophisticated lookup functions to access the shared objects.
+The simplest of these options to implement is to use the C heap and reference counting for shared objects. This would at least offer a simple way to get started. I also like the idea of modeling shared memory in terms of stable access to stowed binaries via read-only LMDB transactions. That would preserve structure sharing of shared objects.
 
 ### Error Handling?
 
@@ -120,86 +102,44 @@ Rather than return an error from each step, it might be more efficient to accumu
 
 ## Representations
 
-For now, I'm using 32-bit words. I might try to create a 64-bit runtime later, but getting the current one working is more critical. Memory in the main (linear object) space will be aligned for allocation of two words. With 32-bit words, this gives us 3 tag bits per pointer. Small numbers and a few special constants are also represented. 
+I'm giving a try to 64-bit representations. Absolute pointers. Bit flags. No special address checks.
 
-Example: 
-* xy1 - small integers; plus or minus (2^30 - 1).
-* 000 - tagged objects (tag, data...)
-* 010 - pairs (val, val)
-* 100 - pair in left
-* 110 - pair in right
+* 000 - tagged object
+* 001 - pair value
+* 010 - pair in left
+* 011 - pair in right
+* 100 - small integers
+* 101 - ref constant 
+* 110 - ref constant in left
+* 111 - ref constant in right
 
-With 32 bits, I don't have much room for encoding special constants like unit. However, I could overload the zero address for this role.
+64-bit small integers can carry 18 decimal digit integers. For simplicity, that's my current limit. I might eventually support big integer math. At the moment, the only 'ref constant' is the unit value.
 
-* 000 - void, an invalid or undefined value
-* 010 - unit
-* 100 - unit in left (false)
-* 110 - unit in right (true, end of list)
+Tagged objects include:
 
-Sadly, overloading this address adds a bunch of conditional checks and potential pipeline stalls. I'd prefer to avoid this. With 64 bits, I could afford to dedicate fewer bits to small integers, or use an extra alignment bit.
-
-Other than pairs, most things are 'tagged objects'. The type of a tagged object is generally determined by the low byte in the first word. The upper three bytes are then additional data, e.g. sizes of things or a few flag bits. 
-
-Tagged objects will include:
-
-* big integers
 * deep sum values
 * blocks of code
 * sealed values
-* stowage wrappers
 * pending computations
-* arrays, binaries, texts
+* compact structures: arrays, binaries, texts
+* stowage wrappers
 
 After implementing a few, I feel it is essential to keep tagged objects structurally simple (even at cost to performance opportunities). I'll eventually want to extend these further: floating point numbers, vectors and matrices thereof, etc.. 
 
-#### 64-bit Absolute Addressing Representation?
-
-If I go for a 64-bit representation, I'd use absolute addressing instead of offsets into a region. I also want to eliminate unit, void, etc. as pointers - i.e. I should not need to test whether a reference is NULL. So I can use some extra tag bits for that.
-
-I cannot use direct value representations for stowed values or blocks. That isn't necessarily a bad thing - less fragile to changes in a runtime implementation, at least!
-
-Absolute addressing may complicate some things. Relative addressing makes stowage easy, for example: we can represent stowed values as copies into a distinct context with local addressing. With absolute addressing, we essentially need an alternative value representation for stowing values - something more structured than bytecode.
-
-I can probably disable 'big numbers' and restrict myself to 'small numbers' with (for example) 61-bit representations.
-
-### Big Integers
-
-Integers in the range plus or minus `2^30 - 1` are recorded directly in a value reference. In a 64-bit implementation, this could potentially extend to about `2^62-1` (big integers become unnecessary for most computations). Small integers are sufficient for a lot of use cases: characters, indexing vectors, etc.. For larger numbers, I'll use a tagged value representation.
-
-        tag word: includes size (in words), sign (1 bit)
-        followed by sequence 32-bit words of given size
-        each word encodes a 'big digit' in range 0..999999999
-
-In a 32-bit implementation, the tag word may also include the lowest 'big digit' if doing so is convenient.
-
-*Note:* There may be some benefit from using an intermediate sized integer, e.g. one cell for ~56 bits of data. However, after experimenting with this idea, I don't feel the space savings are sufficient compared to the complexity to deal with another case. Further, I find it unlikely that the optimization will be significant: the use of big integers of any sort is expected to be rare.
-
 ### Deep Sums
 
-        tag word: includes an LRLRLLLR string (2 bits each, depth 1..12)
+        tag word: includes an LRLRLLLR string (2 bits each)
         second word is value reference
 
-We'll use 2-bits per `L` or `R` in a deep-sum string, with up to 24-bits of tag data. This enables sums of up to depth 12 per allocation. The value in question may be yet another sum. Compacting deep sums into a single allocation should enable sums to serve a much more effective role as an alternative to enumerations. In a 64-bit system, this could be bumped up to depth 28.
+We'll use 2-bits per `L` or `R` in a deep-sum string. In a 32-bit system this gives depth 12 per allocation. In 64-bit system, depth 28 per allocation. 
 
-Shallow sums refer to pair or unit in left or right, which is instead represented in the tag bits. Shallow sums are convenient as an optimization for representing lists and basic (node + leaf) tree structures.
+Shallow sums apply to pairs and reference constants. Mostly, this enables lists and booleans to have high performance representations.
 
 ### Blocks
 
-An efficient representation for code will be essential for performance.
+An efficient non-copying representation for blocks of code will be essential for performance with loopy code and fixpoints. However, for the moment, I'm favoring a naive representation: a simple list of operations. I might end up with mixed block models via composition. So "list of operations" should be the piece I optimize, similar to a binary.
 
-Naively, I could represent code as a simple list of operations. I could extend this via special objects for tokens and values. It might be convenient to start with a naive representation for code. But this representation won't be very efficient - expensive to copy and process, with poor locality properties.
-
-An alternative is to develop a compact representation - a compact block of operations together with a stack of quoted values, a special case operator to pop one value from this stack. This might not even be a 'block' representation, but rather a list fragment representation similar to how I represent arrays and texts.
-
-To get started quickly, I'll implement a 'naive' block representation, consisting of a list of opcodes and quoted values and a few header bits (affine, relevant, parallel, etc.). If I go for tracing JIT, keeping a copy count in the header bits might also be useful. A minimal, naive block representation:
-
-        (block header, list of operations)
-
-Operations in a block are either small integers indicating a single opcode (possibly an accelerator), or quoted values (block, text, partial evaluation, quotation, etc.). Fast composition may be represented as quoting and inlining a block. Our block header will contain a few flags (affine, relevant, etc.). This naive representation may prove convenient as a base representation for simplification and compilation. 
-
-A challenge for this representation of blocks is *precise, efficient, dynamic* tracking of substructural type attributes. Internal substructure from partial evaluation as in `[[xyzzy]kf]` mustn't be confused with external sub-structure from quotations like `[xyzzy]kf' == [[xyzzy]kf]kf`. For the moment, I'll track substructure by recording a flag bit to track lazy substructure for quoted values.
-
-Long term, I'll also want *compact* blocks (e.g. a compact text plus a stack of quoted values, or internalizing quoted values similar to stowage) and *just-in-time compiled blocks*. These will be essential for performance at large scale.
+To support lazy computation of substructural attributes, a flag is used for quoted values to indicate the parent should inherit its substructure.
 
 #### Performance for Tight Loops
 
@@ -347,27 +287,6 @@ I'd like to eventually have access to an "assume static type safety" option for 
 
 
 
-## Tagged Objects
-
-Eventually, I may support floating point numbers, vectors, matrices. I'd love for Wikilon to become a go to solution for scientific computations (perhaps distributed on a cloud and leveraging GPGPU). These are frequently expressed in terms of vector and matrix computations.
-
-*Aside:* I had an earlier concept of enabling arbitrary values to be reference counted. However, this idea doesn't have very nice predictability properties, especially in context of parallelism. Fortunately, *large value stowage* serves the same role of limiting depth of copies, and does so in a manner more comprehensible to users (conceptually, just copying a stowage address).
-
-#### Binaries
-
-We can specialize for a list of bytes. A 'byte' is simply an integer in the range 0..255. 
-
-        (binary, size+offset, pbuff, pnext)
-
-The annotation `{&binary}` is taken as an assertion of both binary type and desired representation. If an argument is not a valid binary, this assertion will fail (statically or dynamically). The weaker `{&binary~}` allows the runtime to use a chunked list representation and allocate in the nursery region. 
-
-I'd like to support arrays of other fixed-width structures: floats, fixed-width integers, combinations of these, etc.. But I'll first need to model these fixed width structures. 
-
-#### Texts
-
-Text is represented by a list of unicode codepoints, with a short blacklist: C0 (except LF), DEL, C1, surrogates (U+D800-U+DFFF), and the replacement character (U+FFFD). The `{&text}` annotation will compact a list into a UTF-8 binary, or perhaps a chunked list thereof. 
-
-Due to the variable size of characters, utf-8 texts cannot have array performance characteristics. But with a little indexing, we can support skipping through and splitting large texts far more efficiently than we would achieve with linear scanning. 
 
 # Accelerated Association Lists? (low priority)
 
@@ -412,52 +331,6 @@ We'll only support discretionary sealing. Sealed values are thus straightforward
         (sealed, target, symbol...)
 
 We'll probably just use a (size,utf8) for our symbol. We know from AO constraints that our symbol encoding is no more than 63 bytes UTF-8. For sealers of up to 7 bytes, we can use just two cells. Developers can leverage this effectively.
-
-### Blocks, Fixpoints, Compiled Code
-
-A good representation for blocks is critical. What properties do I need?
-
-* O(1) fast composition
-* O(1) fast quotation of values
-* fast copy for loopy behaviors
-* very fast interpretation
-* (eventual) LLVM compilation!
- * with nice gateway analyses
- * with 
-
-In the interest of getting started quickly, I'll deep-copy blocks like everything else. However, reference counts, aliasing and GC might do me much good here if it means I can reduce the number of actual copies of a function in memory or reduce memory-allocation burden. So, long term, this clearly is something to look into.
-
-If I assume reference counts, this means 'fast composition' cannot be modeled with internal mutations. But I could still have a O(1) composition as a pair of blocks. 
-
-
-Blocks are copied very frequently in loops. We process them incrementally, and we'll need to integrate them easily with LLVM compiled code. For debugging, it would be nice to have some *metric* as to where an error occurs, even if it's a rough metric: replay-based debugging would have us go to a point prior and try again in a debug mode.
-
-Our blocks need at least:
-
-* a bytecode representation 
-* a stack for quoted values
-
-Our stack can be modeled by a simple list and our bytecode by a binary. I'll be leveraging an internal bytecode representation, including accelerators and possible fast slicing for content. 
-
-Compilation to native code requires extra consideration. Apparently, many operating systems enforce that memory cannot be both writable and executable. But I could probably keep LLVM bitcode together with a compiled block. The bigger compilation challenge is modeling the LLVM continuation as needed. 
-
-Fixpoints can probably be optimized heavily. We can eliminate most overhead per loop, validate only once that our block is copyable, etc.. We also know to optimize for looping, e.g. to pull evaluations out of the loop where feasible.
-
-*Note:* compilation for external runtimes (apps, unikernels, etc.) will be modeled as an extraction, distinct from Wikilon's internal runtime. My goal with compiled code is to make Wikilon fast enough for lots of immediately practical uses and eventual bootstrapping.
-
-### Numbers other than Small Integers
-
-ABC is required to support arbitrary precision integers. I would like to use a simple representation in this case. I'd also like to squeeze some extra data into our type tag.
-
-A binary coded decimal representation is a viable option for fast translation, i.e. encoding 3 digits for every 10 bits, or perhaps 9 digits every 30 bits. But I'll need to determine how this affects performance of multiplication, addition, and division.
-
-Eventually, I would like to support fixed-width numbers via accelerators: modulo arithmetic, models of floating point, etc..
-
-### External Resources
-
-For some use cases - scientific computing, gaming resources, etc. - I imagine there will be use for binaries multiple GB in size. Via accelerators for indexed access, slicing, lookups, in place updates, etc. it seems feasible to interact with many external resources the same as structures held within the context. 
-
-A few external resources could greatly extend our 4GB arenas for practical use cases. And they could be more or less transparent, if we have specialized value stowage for large binaries or similar.
 
 ## Par/Seq Parallelism
 

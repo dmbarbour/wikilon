@@ -174,9 +174,10 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
 
 // WIKRT_I, WIKRT_U, WIKRT_UL, WIKRT_UR are 'shallow copy'.
 #define wikrt_copy_shallow(V) (4 & (V)) 
-static inline bool wikrt_copy_deep(wikrt_val v) { return !wikrt_copy_shallow(v); }
 
 // full names of small constants
+// Note that I could develop 'ref constants' other than unit.
+// Those would transparently benefit from the shallow sums.
 #define WIKRT_UNIT        WIKRT_U
 #define WIKRT_UNIT_INL    WIKRT_UL
 #define WIKRT_UNIT_INR    WIKRT_UR
@@ -319,13 +320,17 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
  *    type was expected instead. This might be understood as a specialized
  *    value sealer.
  *
- * WIKRT_OTAG_TRASH (potential)
- * 
- *    Alternatively to dropping values with `%`, we can use {&trash} to mark
- *    a value as no longer relevant to the future of a computation. Observation
- *    of a trashed value is a type error. However, relevant and linear values
- *    may be trashed without error, unlike dropping the values. Essentially the
- *    /dev/null of Wikilon runtime.
+ * WIKRT_OTAG_TRASH
+ *
+ *    A placeholder for a value that has been marked as garbage, allowing
+ *    its memory to be recycled. Preserves substructural properties. Any
+ *    attempt to access or observe the value results in a type error, but
+ *    it may be deleted or copied like the original value.
+ *
+ * WIKRT_OTAG_PEND
+ *
+ *    A type that describes an ongoing computation. Just a tagged value
+ *    to distinguish it.
  *
  * I'd like to eventually explore logical copies that work with the idea of
  * linear or affine values, but I haven't good ideas for this yet - use of
@@ -334,16 +339,17 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
 
 //#define WIKRT_OTAG_BIGINT   78   /* N */
 
-#define WIKRT_OTAG_DEEPSUM  83   /* S */
+#define WIKRT_OTAG_DEEPSUM  43   /* + */
 #define WIKRT_OTAG_BLOCK    91   /* [ */
 #define WIKRT_OTAG_OPVAL    39   /* ' */
-#define WIKRT_OTAG_SEAL     36   /* $ */
+#define WIKRT_OTAG_SEAL     123  /* { */
 #define WIKRT_OTAG_SEAL_SM  58   /* : */
 #define WIKRT_OTAG_ARRAY    86   /* V */
 #define WIKRT_OTAG_BINARY   56   /* 8 */
 #define WIKRT_OTAG_TEXT     34   /* " */
 //#define WIKRT_OTAG_STOWAGE  64   /* @ */
 #define WIKRT_OTAG_TRASH    95   /* _ */
+#define WIKRT_OTAG_PEND     126  /* ~ */
 #define LOBYTE(V) ((V) & 0xFF)
 
 #define WIKRT_DEEPSUMR      3 /* bits 11 */
@@ -387,6 +393,7 @@ static inline bool wikrt_otag_binary(wikrt_otag v) { return (WIKRT_OTAG_BINARY =
 static inline bool wikrt_otag_array(wikrt_otag v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
 static inline bool wikrt_otag_text(wikrt_otag v) { return (WIKRT_OTAG_TEXT == LOBYTE(v)); }
 static inline bool wikrt_otag_trash(wikrt_otag v) { return (WIKRT_OTAG_TRASH == LOBYTE(v)); }
+static inline bool wikrt_otag_pend(wikrt_otag v) { return (WIKRT_OTAG_PEND == LOBYTE(v)); }
 //static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
 
 static inline void wikrt_capture_block_ss(wikrt_val otag, wikrt_ss* ss)
@@ -401,10 +408,9 @@ static inline bool wikrt_opval_hides_ss(wikrt_val otag) { return (0 == (WIKRT_OP
 /* Internal API calls. */
 void wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
 
-// wikrt_vsize_ssp: return space required to deep-copy a value. 
-//   Uses scratch space as a stack. May be bypassed if we can
-//   efficiently determine that we have sufficient size.
-wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val v);
+// wikrt_vsize: return allocation required to deep-copy a value. 
+//   Use a given stack space for recursive structure tasks.
+wikrt_size wikrt_vsize(wikrt_cx* cx, wikrt_val* stack, wikrt_val v);
 #define WIKRT_ALLOW_SIZE_BYPASS 0
 
 void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* stack, wikrt_val v, wikrt_ss* ss);
@@ -662,6 +668,10 @@ static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
 static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_block(*wikrt_pval(cx, v)); 
 }
+
+// (block * e) → (ops * e), returning block tag (e.g. with substructure)
+wikrt_otag wikrt_open_block_ops(wikrt_cx* cx);
+
 static inline bool wikrt_trashval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_trash(*wikrt_pval(cx, v));
 }
@@ -674,11 +684,26 @@ static inline bool wikrt_cx_has_txn(wikrt_cx* cx) {
 }
 void wikrt_drop_txn(wikrt_cx*);
 
+// e → (empty * e)
+static inline void wikrt_intro_empty_list(wikrt_cx* cx)
+{
+    wikrt_intro_unit(cx);
+    wikrt_wrap_sum(cx, WIKRT_INR);
+}
+
 // (a * (as * e)) → (a:as * e); same as `lV`
 static inline void wikrt_cons(wikrt_cx* cx)
 {
     wikrt_assocl(cx);
     wikrt_wrap_sum(cx, WIKRT_INL);
+}
+
+// (a * e) → (list of a * e)
+static inline void wikrt_wrap_list_singleton(wikrt_cx* cx) 
+{
+    wikrt_intro_empty_list(cx);
+    wikrt_wswap(cx);
+    wikrt_cons(cx);
 }
 
 // (x * (y * (xs * e)) → (y * (x:xs * e))
@@ -720,4 +745,5 @@ static inline bool wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
     wikrt_wrap_otag_r(cx, otag);
     return true; 
 }
+
 

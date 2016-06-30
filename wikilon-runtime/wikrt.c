@@ -210,15 +210,15 @@ static void wikrt_mem_compact(wikrt_cx* cx)
         abort();
     }
 
-    // sanity check: compaction must not grow memory
-    assert(cx->alloc >= cx0.alloc);
+    // sanity check: compaction must not increase memory usage.
+    assert(wikrt_mem_in_use(&cx0) >= wikrt_mem_in_use(cx));
 
     // keep stats. compaction count is useful for effort quotas. 
     // compaction size is useful for heuristic memory pressure.
     cx->compaction_count += 1;
-    cx->compaction_size  = (cx->size - cx->alloc);
-    cx->bytes_collected  += (cx->alloc - cx0.alloc);
+    cx->compaction_size  = wikrt_mem_in_use(cx);
     cx->bytes_compacted  += cx->compaction_size;
+    cx->bytes_collected  += wikrt_mem_in_use(&cx0) - cx->compaction_size;
 }
 
 bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
@@ -281,21 +281,21 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, wikrt_cx* rcx)
     // reserve space in `rcx`. Also, size estimates for validation.
     wikrt_size const max_alloc = WIKRT_CELLSIZE + wikrt_mem_in_use(lcx);
     bool const use_size_bypass = WIKRT_ALLOW_SIZE_BYPASS && wikrt_mem_available(rcx, max_alloc);
-    wikrt_size const alloc_est = use_size_bypass ? 0 
-                               : (WIKRT_CELLSIZE + wikrt_vsize_ssp(lcx, wikrt_pval(lcx, lcx->val)[0]));
+    wikrt_size const alloc_est = use_size_bypass ? 0 : (WIKRT_CELLSIZE 
+                               + wikrt_vsize(lcx, lcx->ssp, wikrt_pval(lcx, lcx->val)[0]));
     if(!wikrt_mem_reserve(rcx, alloc_est)) { return; }
 
     // Note: wikrt_mem_reserve may move lcx->val (when lcx == rcx).
     // anyhow, we now have sufficient space to perform our copy!
-    wikrt_size const fs0 = rcx->alloc;
+    wikrt_size const s0 = wikrt_mem_in_use(rcx);
     wikrt_val const copy_src = *(wikrt_pval(lcx, lcx->val));
     wikrt_val copy_dst = WIKRT_UNIT;
     wikrt_copy_r(lcx, copy_src, ss, rcx, &copy_dst);
     wikrt_intro_r(rcx, copy_dst);
-    wikrt_size const fsf = rcx->alloc;
+    wikrt_size const sf = wikrt_mem_in_use(rcx);
 
     // Validate size estimate.
-    wikrt_size const alloc_act = fs0 - fsf;
+    wikrt_size const alloc_act = sf - s0;
     bool const alloc_est_ok = use_size_bypass || (alloc_est == alloc_act);
     if(!alloc_est_ok) {
         // This is a serious implementation error. Maybe something is missing
@@ -334,6 +334,8 @@ wikrt_val_type wikrt_type(wikrt_cx* cx)
                 case WIKRT_OTAG_SEAL_SM: // sealed value
                 case WIKRT_OTAG_SEAL: return WIKRT_TYPE_SEAL;
 
+                case WIKRT_OTAG_PEND: return WIKRT_TYPE_PEND;
+
                 default: {
                     fprintf(stderr, "%s: unhandled type %d\n", __FUNCTION__, (int)LOBYTE(otag));
                     abort();
@@ -349,10 +351,9 @@ static inline void wikrt_add_size_task(wikrt_val** s, wikrt_val v) {
     if(!wikrt_copy_shallow(v)) { *((*s)++) = v; }
 }
 
-wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val const v0)
+wikrt_size wikrt_vsize(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0)
 {
     wikrt_size result = 0;
-    wikrt_val* const s0 = (wikrt_val*)(cx->ssp); // stack of values to be examined.
     wikrt_val* s = s0;
     wikrt_add_size_task(&s,v0);
     while(s0 != s) {
@@ -368,6 +369,7 @@ wikrt_size wikrt_vsize_ssp(wikrt_cx* cx, wikrt_val const v0)
             case WIKRT_OTAG_SEAL_SM:
             case WIKRT_OTAG_BLOCK:  
             case WIKRT_OTAG_OPVAL:  
+            case WIKRT_OTAG_PEND:
             case WIKRT_OTAG_DEEPSUM: {
                 result += WIKRT_CELLSIZE;
                 wikrt_add_size_task(&s, pv[1]); // wrapped value
@@ -452,6 +454,15 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
             // basic (tag, val) pairs
             case WIKRT_OTAG_SEAL_SM: // same as OTAG_DEEPSUM
             case WIKRT_OTAG_DEEPSUM: {
+                wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLSIZE);
+                (*dst) = wikrt_tag_addr(WIKRT_O, addr);
+                *(wikrt_paddr(rcx, addr)) = *pv;
+                wikrt_cpv(rcx, &s, pv, addr, 1);
+            } break;
+
+            // (tag, val) with WIKRT_SS_PEND
+            case WIKRT_OTAG_PEND: {
+                if(NULL != ss) { (*ss) |= WIKRT_SS_PEND; }
                 wikrt_addr const addr = wikrt_alloc_r(rcx, WIKRT_CELLSIZE);
                 (*dst) = wikrt_tag_addr(WIKRT_O, addr);
                 *(wikrt_paddr(rcx, addr)) = *pv;
@@ -554,11 +565,10 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
 
 void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval)
 {
-    // Note: I use a stack in rcx->mem (that builds upwards from zero). This stack
-    // only contains addresses in rcx->mem that contain values referencing lcx->mem.
-    // Since each such value requires an allocation of at least a full cell, I can
-    // guarantee that this stack is smaller than my remaining available space.
-    // 
+    // Note: I use a stack in rcx->mem (that builds upwards from zero). An invariant
+    // is that this stack is always smaller than the space left to be allocated. This
+    // is achieved by ensuring only addresses that need to be allocated are recorded
+    // within the stack.
     if(NULL != ss) { (*ss) = 0; }
     (*rval) = lval;
     wikrt_copy_rs(lcx, rcx, ss, ((wikrt_addr*)(rcx->mem)), rval);
@@ -598,6 +608,12 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_
             case WIKRT_OTAG_TEXT:
             case WIKRT_OTAG_DEEPSUM: {
                 wikrt_add_drop_task(&s,pv[1]);
+            } break;
+
+            // (tag, val) with WIKRT_SS_PEND
+            case WIKRT_OTAG_PEND: {
+                if(NULL != ss) { (*ss) |= WIKRT_SS_PEND; }
+                wikrt_add_drop_task(&s, pv[1]);
             } break;
 
             // block headers are my primary source of substructure.
@@ -880,6 +896,18 @@ void wikrt_wrap_sum(wikrt_cx* cx, wikrt_sum_tag sum)
     if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_wrap_sum_rv(cx, sum, wikrt_pval(cx, cx->val));
 }
+
+_Static_assert((WIKRT_DEEPSUML == (WIKRT_DEEPSUML & 3)) && // 2 bits
+               (WIKRT_DEEPSUMR == (WIKRT_DEEPSUMR & 3)) && // 2 bits
+               (WIKRT_DEEPSUML != WIKRT_DEEPSUMR) &&       // distinct
+               (WIKRT_DEEPSUML != 0) && (WIKRT_DEEPSUMR != 0) // non-zero
+              , "assumptions for deep sum structure");
+
+_Static_assert((WIKRT_PL == (1 + WIKRT_P)) && (WIKRT_PR == (2 + WIKRT_P)) &&
+               (WIKRT_UL == (1 + WIKRT_U)) && (WIKRT_UR == (2 + WIKRT_U)) &&
+               (WIKRT_USING_MINIMAL_BITREP)
+              , "assumptions for shallow sum structures in reference");
+
 
 static inline bool wikrt_deepsum_with_free_space(wikrt_cx* cx, wikrt_val v) 
 {
