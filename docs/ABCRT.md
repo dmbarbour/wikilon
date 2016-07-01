@@ -1,9 +1,11 @@
 
 # ABC Runtime Design
 
-As per [my performance strategy](Performance.md), I'm developing a C runtime: a good interpreter, hopefully enabling LLVM or other JIT compilation. One motivation for a C interpreter is that I need a simple, obvious data representation for my LLVM JIT. I'll be using something very like the Lisp/Scheme representation, consisting mostly of simple pairs of words.
+As per [my performance strategy](Performance.md), I'm currently developing a C runtime: a good interpreter with a simplified representation for values to eventually enable LLVM or other JIT compilation. I'll be using something very like the Lisp/Scheme representation, with data consisting mostly of simple pairs of words.
 
-It may be useful to also develop a command-line interface at this layer. I'm somewhat willing to encode Claw code and dictionaries at this level.
+It may be useful to also develop a command-line interface and computation experience at this layer. I would like to encode dictionaries in both value stowage. Dictionary import/export is viable. Supporting a Claw syntax is feasible.
+
+NOTE: In retrospect, it might be better to focus entirely on a Haskell+LLVM implementation. I could still operate on a memory-mapped region for data representation purposes. But I wouldn't also have a bunch of redundant code. At this point, however, backtracking is a bit more expensive than I'd prefer.
 
 ## Design Goals
 
@@ -25,15 +27,13 @@ I'll avoid using tokens or callbacks for side-effects at this time. I'd prefer t
 
 NOTE: I must finish a 'fast' implementation before worrying about detailed performance issues.
 
-## External Utilities
+## Extra Utilities
 
 I'll actually include a copy of these directly, no shared libs.
 
+* Murmur3 - fast, collision-resistant hash 
 * LMDB - embedded key value database
  * considering LevelDB and similar
-* Murmur3 - fast, collision-resistant hash 
-* ZSTD(?) - real-time, streaming compression
- * promising... but not entirely stable
 
 ### Multi-Process Access?
 
@@ -161,7 +161,7 @@ To incrementally read a large block, we should first translate it into a large t
 
 #### Binding a Dictionary?
 
-It might be feasible to bind a dictionary value to a context, i.e. such that the dictionary maps `{%word}` tokens to more bytecode. This could be achieved by a simple callback if I don't want to commit to stowed dictionaries. OTOH, this isn't how I want to handle dictionaries long term. Or at all, really.
+It seems feasible to bind a context to a dictionary, i.e. such that the dictionary implicitly maps `{%word}` tokens to a block of code. This would greatly simplify interpretation of code.
 
 ### Accelerators via DSLs
 
@@ -186,6 +186,44 @@ A `copy_move` option is tempting in its simplicity. But it seems fragile to chan
 If stowage is used together with value sharing, I might also benefit from supporting stowage together with range slices. I'll need to think about it, at least.
  
 ### Computations
+
+For pending computations, I could probably use a `(block * value)` pair with a tagged object wrapper. This would actually work pretty well, so long as it isn't the representation used during actual evaluation. The `$` operator effectively needs a stack. But I could easily rebuild a block via composition between evaluation steps. 
+
+That might be insufficient for ongoing parallel evaluations. For those, I might need some special attention or indirection to track dependencies between contexts. It might be best to focus on 'distributed' parallelism, i.e. where we assume a parallel value is computed remotely with some moderate copying overheads. 
+
+ I may need to work out the details for parallel evaluation and how it interacts with partial evaluation and copy/drop at a later time.
+
+
+I need a good representation for ongoing, lazy, or otherwise lazy pending computations. Optimally, this representation should be good for:
+
+* partial computations (halt and continue)
+* lazy application to an incomplete value
+* parallel evaluation, with halt and continue
+
+
+
+ Unfortunately, this would make the `$` operator expensive since I'd need to add the  For O(1) application, I need to use a stack-like structure, e.g. `(ops stack * value)`. 
+
+For lazy evaluation, I would additionally need to extend the opposite end of the ops stack, so a deque or a banker's queue is appropriate. `((ops stack * ops tail) * value)`. Potentially, the tail end would need to consist of full ops stacks. This is getting rather more sophisticated than I'd prefer, however.
+
+For 
+
+
+ For lazy application, I need a *queue*, i.e. such that I can add to the opposite end of the stack. So something like a banker's queue seems appropriate:
+
+        (stack of ops, reversed stack of ops)
+
+Lazy application or `{&force}` annotations would add to the reversed stack. 
+
+When the stack of ops is empty, I reverse the seconda new one from the 
+
+The parallel evaluations thing is giving me the most trouble at this time, but I do have some ideas for how to provide a little indirection there: 
+
+* i.e. I would need to have something like an array of linear parallel values
+
+
+
+
 
 Besides active computations, I expect I'll be wanting parallel or lazy computations eventually. Originally, I was imagining that I'd handle these behaviors almost transparently. However, in retrospect, I don't believe this is a good idea. I'd prefer to avoid any transparent translations between representations because those greatly complicate the runtime and reasoning about progress, quotas, etc..
 
@@ -257,38 +295,9 @@ I'd like to eventually have access to an "assume static type safety" option for 
 
 
 
+# Other ideas
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# older content
-
-
-
-
-# Accelerated Association Lists? (low priority)
+## Accelerated Association Lists? (low priority)
 
 It might be useful to heavily optimize an associative structure, e.g. the equivalent of a JSON Object. Motivations include:
 
@@ -298,116 +307,17 @@ It might be useful to heavily optimize an associative structure, e.g. the equiva
 * type covers a lot of use cases: records, databases, etc.
 * provides a built-in, optimized model for AO dictionaries
 
-An accelerated associative structure should have a canonical form, a representation deterministic from *content*. This excludes balanced binary search trees because their precise balancing structure depends on insertion order. However, we could use a *trie* or a *sorted association list*. 
+An accelerated associative structure should have a canonical form, a representation deterministic from *content*. This excludes balanced binary search trees because their precise balancing structure depends on insertion order. However, I could use a *trie* or a *sorted association list*. 
 
-Between these, the sorted association list is the superior option for acceleration. It is the simpler model. It allows many accelerated lookups and updates, ad-hoc representation (structs, tries, log structured merge trees, etc.). Further, it fits naturally with other list accelerators, e.g. as a basis for iteration.
+Between these, the sorted association list is the superior option for acceleration. It is the simpler model. It allows many accelerated lookups and updates, ad-hoc representation (structs, tries, log structured merge trees, etc.). Further, it fits naturally with other list accelerators, e.g. as a basis for iteration. Besides that, the trie doesn't really *need* any acceleration.
+
+More generally, extending from *association list* to proper sorted *relational table* might be useful.
 
 I'll need to return to this concept later. I think supporting this idiom in both the representation and type system could greatly simplify modeling of more conventional programming models (OOP, stack frames, etc.). But I also need to be sure it is simple to implement and won't interfere with, for example, structure sharing and stowage. And of course I'll need to develop a proper set of annotations, assertions, and accelerators to make it worthwhile.
 
 As a nice generalization of association lists, maybe we could try to optimize representation of 'tables' where we know each element has the same basic row structure. A list of rows might be represented by a row of lists.
 
-# Large Value Stowage
-
-We'll use 62-bit identifiers for stowed values. Addresses are allocated once and never reused. This is convenient from a security and caching perspective: we can securely share stowed data with external systems via simple HMAC. And there are no worries about running out. Allocating 2^62 addresses at the best throughput LMDB can manage today would take almost a million years.
-
-The reason for 62-bit identifiers is that we can use the remaining two bits for substructural attributes: affine, relevant. This allows us to cheaply validate simple copy/drop data plumbing without connecting to the database. It also corresponds nicely to ABC resources where we might use `{#resourceId'kf}` to indicate the identifier constructs a linear value. 
-
-Developers may represent intention to stow any value by simple annotation, `{&stow}`. 
-
-This results in a simple object in memory: `(stow, target)`. No action is performed immediately. Many stowage requests will be transient, e.g. when applying a stream of updates to a trie represented in our database. So we'll provide ample opportunity for transient requests to be destroyed. Any subsequent access to the target will delete the stow request. Eventually, our `(stow, target)` object is moved from the nursery into the heap. 
-
-At that point, we'll construct a pending stowage object. We cannot perform compression and compaction, unfortunately, because our target may refer to other stowed objects in pending state that still lack an address. A pending stow is still transient, but a background thread may decide to stow it at any time. Hopefully, we can batch a lot of writes.
-
-After stowage succeeds, the target data is cleared from memory. I'm not going to bother with caching content in memory, instead focus on fast loading of data on demand. (The owner-based purity I'm favoring doesn't benefit as much from caching anyway, and we effectively have caching via LMDB.) We'll have a simple stowage identifier. Whatever bindings we need to integrate LMDB's GC so we don't delete data that is rooted in memory. Fortunately, our writer knows that nobody is resurrecting old addresses because our writer assigns all addresses.
-
-If stowage fails (e.g. because there isn't enough space) we could 
-
-We might heuristically refuse to stow smaller fragments, such that we implicitly 'flatten' narrow, tree-structured data. It could be useful to focus stowage on larger chunks, e.g. kilobytes of data.
-
-### Sealed Values
-
-We'll only support discretionary sealing. Sealed values are thus straightforward: 
-
-        (sealed, target, symbol...)
-
-We'll probably just use a (size,utf8) for our symbol. We know from AO constraints that our symbol encoding is no more than 63 bytes UTF-8. For sealers of up to 7 bytes, we can use just two cells. Developers can leverage this effectively.
-
-## Par/Seq Parallelism
-
-The simplest parallel computation probably involves applying `{&par}` to a block before application. It might be useful to support a few variants, or alternatively to optimize parallelization on fixpoint blocks.
-
-It will be important for parallelism to be *very* lightweight, especially with respect to time. This enables parallelism to be used in more cases or finer granularities. If overhead for parallelism is high, we are forced to more severely constrain parallelism. 
-
-Additional parallelism may later be driven by accelerators, e.g. for matrix multiplication or compositions of FBP/FRP-like streaming dataflows. 
-
-### Distributed Parallelism
-
-Can we model parallelism distributed across multiple contexts, with dataflows between them? This seems like a good fit for the 'partitions' concept I developed in RDP, e.g. with annotations moving data between partitions for different parts of the computation.
-
-## API
-
-I'd like to get Wikilon runtime working ASAP. API development must be balanced with time to a usable partial solution.
-
-The first big problem is IO. I have this context. I need to inject data into it, and extract data out from it. One option, perhaps, is to focus on streaming bytecode. We can inject a stream of bytecode, apply it, and extract data as another stream (via quotation of a block). But I have some doubts about this approach... mostly, it seems difficult to use the data meaningfully without processing it again - this time outside of the context, which largely defeats the purpose...
-
-My other option is to enable entry for common data types: integers, lists, texts, pairs, etc.. And also fast extraction of them. 
-
-### Time Quotas?
-
-Wikilon will need to abort computations that run too long. Use of some sort of time or effort-based quota is relevant. It might also be useful to perform 'incremental' computations that only run so long between steps, enabling intervention or re-prioritization.
-
-Incremental time quotas are challenging because I must have a well-defined intermediate state that may be continued. It is feasible to only 'halt' on quota at well-defined locations, but it might require extra work for compiled loops (maybe some sort of voluntary yield and continue for loops?)
-
-
-
-Still need to think about this one.
-
-### Context and Environment Management
-
-Ability to create an environment and multiple contexts, and interact with them. Also, a simple API for persistent data is important - e.g. a key-value database with atomic transactions will do nicely.
-
-### Evaluation with Dictionaries?
+## Evaluation with Dictionaries?
 
 It could be useful to associate a dictionary with our evaluations, where we know how to read the dictionary. This would require a 'standard' representation for dictionaries in stowage... which is doable, especially if we accelerate association lists.
-
-### Direct Value Manipulations
-
-Ability to observe, construct, and manipulate values directly would be useful when interfacing between a Wikilon context and some external resources. 
-
-Originally I planned for non-destructive views on values. However, this seems... complicated. It is inconsistent with Awelon Bytecode, move semantics, pending computations, parallel effects (e.g. a debug `{&trace}`). Also, there's little point to non-destructive access unless it's also non-allocating, but it's difficult to (for example) access a few steps in a deep sum value without either destroying it or allocating a new sum object.
-
-So, value manipulations will all be destructive with ownership semantics. Developers will need to copy values if they want a safe reference to the original.
-
-### Large Binary Inputs and Outputs
-
-Something that has concerned me is how Wikilon will interact with large binary content. Working directly with multi-gigabyte binaries is problematic if I restrict to 4GB working spaces. Modeling very large binaries as external resources might help, but I'm not comfortable with consuming arbitrary amounts of address space. I can used `mmap'd` files or whatever to avoid loading them all at once. What other options do we have?
-
-One viable possibility is to have Wikilon understand a relatively simple model or API for ropes or streams, or perhaps even HTTP request handlers, with which we may easily wrap whichever models we favor within our dictionary. 
-
-This would enable large binary *outputs* to be loaded (perhapse even computed) incrementally. Ropes would have the advantage of enabling indexed access, answering those region-based HTTP requests, etc.. Large binary *inputs* are probably less an issue because we simply have some software agent representing the binary within the dictionary in an ad-hoc way (ropes or streams or whatever). 
-
-I think I'll try that route, rather than attempt to solve the problem of representing and directly streaming very large binaries.
-
-## Other Ideas
-
-### External Parallelism?
-
-At the moment, a 'context' is held by only one thread. I support internal parallelism by `{&par}` annotations. External parallelism could be useful, however, e.g. to enable parallel rendering of a value while computation is ongoing. I could enable this with something like `wikrt_cx_fork(wikrt_cx*, wikrt_cx**)`. Or I could potentially enable values to be moved between contexts?
-
-### Moving Values between Contexts?
-
-Should I have a function for this?
-
-        wikrt_err wikrt_move(wikrt_cx* src, wikrt_val, wikrt_cx* dst, wikrt_val*);
-
-I'm tempted to require that all movement of values between computations be processed through a transactional database system. This would structurally guarantee some nice consistency properties, should not hinder development of transactional queues or pipelines, would enable better logging and histories, etc..
-
-In any case, this would be very low priority. Wikilon itself doesn't need this features.
-
-## Dead Ideas
-
-### Array Stacks
-
-The array representation could feasibly be applied to the `(a * (b * (c * (d * e)))))` stack-like structure. In this case, however, we might need to focus on rapid increase and decrease in the stack size, i.e. by providing empty space for a stack to 'grow' or 'shrink' with push and pop operations. And there is almost no deep indexed access. I think the benefits are likely to be marginal especially since we already support mutation for most stack ops.
-
 

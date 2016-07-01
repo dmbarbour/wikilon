@@ -94,7 +94,7 @@ data PrimOp
     | ABC_apply     -- $ :: ([x→y]*(x*e)) → (y*e)
     | ABC_condApply -- ? :: ((b@[x→x'])*((x+y)*e)) → ((x'+y)*e)  for droppable b
     | ABC_quote     -- ' :: (a*e) → ([s→(a*s)]*e)               
-    | ABC_compose   -- o :: ([x→y]*([y→z]*e)) → ([x→z]*e)
+    | ABC_compose   -- m :: ([x→y]*([y→z]*e)) → ([x→z]*e)
     | ABC_relevant  -- k :: ([x→y]*e) → ([x→y]*e) mark block relevant (no drop)
     | ABC_affine    -- f :: ([x→y]*e) → ([x→y]*e) mark block affine (no copy)
 
@@ -115,7 +115,7 @@ data PrimOp
     | ABC_multiply   -- * :: (N(x)*(N(y)*e)) → (N(x*y)*e) 
     | ABC_divMod     -- Q :: (N(b)*(N(a)*e)) → (N(r)*(N(q)*e))
                      --   assert non-zero b; qb+r = a; r in range [0,b) or (b,0]
-    | ABC_compare    -- > :: (N(x)*(N(y)*e)) → (((N(y)*N(x)) + (N(x)*N(y))) * e)
+    | ABC_compare    -- G :: (N(x)*(N(y)*e)) → (((N(y)*N(x)) + (N(x)*N(y))) * e)
                      --   test if y > x, returning in right if true 
                      --   e.g. #4 #2 > results in (N(2)*N(4)) in right
 
@@ -137,7 +137,7 @@ abcOpTable =
     ,(ABC_copy,'^'), (ABC_drop,'%')
 
     ,(ABC_apply,'$'), (ABC_condApply,'?')
-    ,(ABC_quote,'\''), (ABC_compose,'o')
+    ,(ABC_quote,'\''), (ABC_compose,'m')
     ,(ABC_relevant,'k'), (ABC_affine,'f')
 
     ,(ABC_distrib,'D'), (ABC_factor,'F'), (ABC_merge,'M'), (ABC_assert,'K')

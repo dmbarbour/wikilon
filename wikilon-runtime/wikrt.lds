@@ -36,15 +36,18 @@
     wikrt_zswap;
     wikrt_assocl;
     wikrt_assocr;
-    wikrt_swap;
 
     wikrt_sum_wswap;
     wikrt_sum_zswap;
     wikrt_sum_assocl;
     wikrt_sum_assocr;
-    wikrt_sum_swap;
     wikrt_sum_distrib;
     wikrt_sum_factor;
+
+    wikrt_accel_swap;
+    wikrt_accel_sum_swap;
+    wikrt_accel_wrzw;
+    wikrt_accel_wzlw;
 
     wikrt_intro_unit;
     wikrt_elim_unit;

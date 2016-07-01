@@ -255,10 +255,10 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
  *
  *   WIKRT_OTAG_SEAL(_SM)
  * 
- *   Tokens will be represented in the trivial block by just overloading
- *   the token sealer, with a fixed 'unit' value. This simplifies much
- *   processing and performance. Recognized tokens will eventually have
- *   dedicated 
+ *   Tokens not recognized as specialized operators will be represented 
+ *   using sealed 'unit' values. The cost of doing so is marginal (one
+ *   extra word per token). And this means there is no extra allocation
+ *   for applying sealer tokens.
  *
  * WIKRT_OTAG_SEAL   (size, value, sealer)
  *
@@ -329,8 +329,9 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
  *
  * WIKRT_OTAG_PEND
  *
- *    A type that describes an ongoing computation. Just a tagged value
- *    to distinguish it.
+ *    Just a tagged (block * value) pair, representing an incomplete
+ *    or latent evaluation. Parallel values may receive special attention
+ *    later, but I'll probably use a different OTAG.
  *
  * I'd like to eventually explore logical copies that work with the idea of
  * linear or affine values, but I haven't good ideas for this yet - use of
@@ -435,7 +436,7 @@ void wikrt_sum_wswap_rv(wikrt_cx*, wikrt_val* v);
 void wikrt_sum_zswap_rv(wikrt_cx*, wikrt_val* v);
 void wikrt_sum_assocl_rv(wikrt_cx*, wikrt_val* v);
 void wikrt_sum_assocr_rv(wikrt_cx*, wikrt_val* v);
-void wikrt_sum_swap_rv(wikrt_cx*, wikrt_val* v);
+void wikrt_accel_sum_swap_rv(wikrt_cx*, wikrt_val* v);
 // conservative free-space requirement for sum manipulations (sum_wswap, etc.)
 #define WIKRT_SUMOP_RESERVE (4 * (WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE))
 
@@ -562,7 +563,7 @@ struct wikrt_cx {
 #define WIKRT_CX_REGISTER_CT 4
 #define WIKRT_REG_TXN_INIT WIKRT_UNIT_INR
 #define WIKRT_REG_PC_INIT WIKRT_UNIT_INR
-#define WIKRT_REG_CC_INIT WIKRT_UNIT_INR
+#define WIKRT_REG_CC_INIT WIKRT_UNIT
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
 #define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
@@ -672,6 +673,9 @@ static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
 // (block * e) → (ops * e), returning block tag (e.g. with substructure)
 wikrt_otag wikrt_open_block_ops(wikrt_cx* cx);
 
+// (pending (list of [op] * value))
+wikrt_otag wikrt_open_pending(wikrt_cx* cx);
+
 static inline bool wikrt_trashval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_trash(*wikrt_pval(cx, v));
 }
@@ -727,9 +731,6 @@ static inline void wikrt_elim_list_end(wikrt_cx* cx)
     wikrt_elim_sum(cx, WIKRT_INR);
     wikrt_elim_unit(cx);
 }
-
-void wikrt_accel_wrzw(wikrt_cx* cx); // (a * ((b * c) * d)) → (a * (b * (c * d)))
-void wikrt_accel_wzlw(wikrt_cx* cx); // (a * (b * (c * d))) → (a * ((b * c) * d))
 
 
 // (v*e) → ((otag v) * e). E.g. for opval, block. Requires WIKRT_CELLSIZE.

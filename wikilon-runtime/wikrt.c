@@ -812,7 +812,7 @@ void wikrt_accel_wrzw(wikrt_cx* cx)
 }
 
 /** (a*b)→(b*a). ABC ops `vrwlc`. */
-void wikrt_swap(wikrt_cx* cx)
+void wikrt_accel_swap(wikrt_cx* cx)
 {
     if(wikrt_p(cx->val)) {
         wikrt_val* const p = wikrt_pval(cx, cx->val);
@@ -1066,11 +1066,11 @@ void wikrt_sum_assocr(wikrt_cx* cx)
     wikrt_sum_assocr_rv(cx, wikrt_pval(cx, cx->val));
 }
 
-void wikrt_sum_swap(wikrt_cx* cx) 
+void wikrt_accel_sum_swap(wikrt_cx* cx) 
 {
     if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return; }
     if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_sum_swap_rv(cx, wikrt_pval(cx, cx->val));
+    wikrt_accel_sum_swap_rv(cx, wikrt_pval(cx, cx->val));
 }
 
 // (a + (b + c)) → (b + (a + c))
@@ -1139,7 +1139,7 @@ void wikrt_sum_assocr_rv(wikrt_cx* cx, wikrt_val* v)
     }
 }
 
-void wikrt_sum_swap_rv(wikrt_cx* cx, wikrt_val* v)
+void wikrt_accel_sum_swap_rv(wikrt_cx* cx, wikrt_val* v)
 {
     wikrt_sum_tag lr;
     wikrt_unwrap_sum_rv(cx, &lr, v);

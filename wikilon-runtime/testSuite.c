@@ -1058,6 +1058,16 @@ void test_eval_fixpoint(wikrt_cx* cx)
     elim_cstr(cx, "[][^'mw^'zmwvr$c]^'mw^'zmwvr$c");
 }
 
+void test_quote_apply(wikrt_cx* cx) 
+{
+    // also tests that `wikrt_apply` performs no immediate evaluation.
+    wikrt_intro_istr(cx, "-7", SIZE_MAX);
+    intro_block(cx, "^^*+");
+    wikrt_apply(cx);
+    val2txt(cx);
+    elim_cstr(cx, "#7-[^^*+]{&lazy}$");
+}
+
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
@@ -1148,6 +1158,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_aff);
     TCX(test_rel);
     TCX(test_trash);
+
+    TCX(test_quote_apply);
 
     // TODO: evaluations
     TCX(test_eval_vrwlc);

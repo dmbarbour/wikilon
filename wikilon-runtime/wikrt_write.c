@@ -488,10 +488,24 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
     } break;
 
     case WIKRT_TYPE_PEND: {
-        // I'll need to somehow print the lazy continuation.
-        fprintf(stderr, "todo: write pending values\n");
-        wikrt_set_error(cx, WIKRT_IMPL);
-        return;
+        wikrt_val* const pobj = wikrt_pval(cx, *wikrt_pval(cx, cx->val));
+        if(wikrt_otag_pend(*pobj)) {
+            // (pending (block * value)) → `value block {&lazy} $`
+            wikrt_wswap(cx);
+            wikrt_intro_op(cx, OP_APPLY); wikrt_cons(cx);
+            wikrt_intro_optok(cx, "&lazy"); wikrt_cons(cx);
+            wikrt_wswap(cx);
+
+            wikrt_open_pending(cx); 
+            wikrt_assocr(cx); // (block * (value * (ops * ...)))
+            wikrt_wrap_otag(cx, WIKRT_OTAG_OPVAL);
+            wikrt_consd(cx);
+
+            goto tailcall; // print the value
+        } else {
+            fprintf(stderr, "%s: unrecognized pending value\n", __FUNCTION__);
+            abort();
+        }
     } break;
 
     case WIKRT_TYPE_TRASH: {  // e.g. []kf{&trash} for linear value

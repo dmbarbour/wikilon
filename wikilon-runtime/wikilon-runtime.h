@@ -342,12 +342,18 @@ void wikrt_sum_factor(wikrt_cx*);
 // ACCELERATED DATA PLUMBING
 
 /** (a*b)→(b*a). ABC ops `vrwlc`. Non-allocating. Fail-safe. */
-void wikrt_swap(wikrt_cx*);
+void wikrt_accel_swap(wikrt_cx*);
 
 /** ((a+b)*e)→((b+a)*e). ABC ops `VRWLC`. */
-void wikrt_sum_swap(wikrt_cx*);
+void wikrt_accel_sum_swap(wikrt_cx*);
 
-/* TODO: introduce accelerators as they're developed. */
+/** (a * ((b * c) * d)) → (a * (b * (c * d))). ABC ops `wrzw`. */
+void wikrt_accel_wrzw(wikrt_cx* cx);
+
+/** (a * (b * (c * d))) → (a * ((b * c) * d)). ABC ops `wzlw`. */
+void wikrt_accel_wzlw(wikrt_cx* cx);
+
+/* I'll introduce accelerators as they're developed. */
 
   ///////////////////////////
  // DATA INPUT AND OUTPUT //
@@ -639,8 +645,9 @@ void wikrt_intro_sv(wikrt_cx*, char const* resourceId);
  * actual evaluation is performed by wikrt_eval_step. A pending value
  * may be quoted or manipulated, but is more or less opaque.
  *
- * If there are type errors, they generally will not be discovered until
- * we begin stepping the evaluation.
+ * Wikilon runtime treats the latent value as lazy for most purposes. It 
+ * will serialize as `value[continuation]{&lazy}$` if quoted the converted
+ * to text. Full support for explicit laziness may exist in the future.
  */
 void wikrt_apply(wikrt_cx*);
 
@@ -651,9 +658,8 @@ void wikrt_apply(wikrt_cx*);
  * but should be consistent within the implementation (depending also on context
  * parameters, etc.).
  *
- * This step returns `true` if another step is needed, or `false` otherwise. On
- * returning false, we either have the computed value or we have entered an error
- * state (cf. wikrt_error).
+ * A step returns `true` if more steps are needed, `false` otherwise. On returning
+ * false, we have computed the value or noticed an error state (cf. wikrt_error).
  */ 
 bool wikrt_step_eval(wikrt_cx*);
 
