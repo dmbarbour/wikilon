@@ -558,8 +558,8 @@ struct wikrt_cx {
 
 // just for sanity checks
 #define WIKRT_CX_REGISTER_CT 4
-#define WIKRT_REG_TXN_INIT WIKRT_UNIT_INR
-#define WIKRT_REG_PC_INIT WIKRT_UNIT_INR
+#define WIKRT_REG_TXN_INIT WIKRT_UNIT
+#define WIKRT_REG_PC_INIT WIKRT_UNIT
 #define WIKRT_REG_CC_INIT WIKRT_UNIT
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
 #define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
@@ -577,7 +577,7 @@ struct wikrt_cx {
 // split them for real in the future.
 #define WIKRT_ALLOW_OVERCOMMIT_BUFFER_SHARING 1
 
-static inline bool wikrt_has_error(wikrt_cx* cx) { return (WIKRT_OK != cx->ecode); }
+#define wikrt_has_error(cx) (cx->ecode)
 
 #define wikrt_paddr(CX,A) ((wikrt_val*)A)
 #define wikrt_pval(CX,V)  wikrt_paddr(CX, wikrt_vaddr(V))
@@ -671,8 +671,8 @@ static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
 // (block * e) → (ops * e), returning block tag (e.g. with substructure)
 wikrt_otag wikrt_open_block_ops(wikrt_cx* cx);
 
-// (pending (list of [op] * value))
-wikrt_otag wikrt_open_pending(wikrt_cx* cx);
+// (pending (block * value)) * e → (block * value) * e
+void wikrt_open_pending(wikrt_cx* cx);
 
 static inline bool wikrt_trashval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_trash(*wikrt_pval(cx, v));

@@ -92,7 +92,7 @@ Some options:
 * stable access for stowage addresses via read-only transactions.
 * cache stowed values in memory via some other mechanism.
 
-The simplest of these options to implement is to use the C heap and reference counting for shared objects. This would at least offer a simple way to get started. I also like the idea of modeling shared memory in terms of stable access to stowed binaries via read-only LMDB transactions. That would preserve structure sharing of shared objects.
+The simplest of these options to implement is to use the C heap and reference counting (or other GC) for shared objects. This would at least offer a simple, robust way to get started. Modeling shared memory in terms of stable access to stowed binary data would be better - simplify structure sharing and garbage collection, and more or less eliminate need for copying data from the stowage layer.
 
 ### Error Handling?
 
@@ -187,49 +187,13 @@ If stowage is used together with value sharing, I might also benefit from suppor
  
 ### Computations
 
-For pending computations, I could probably use a `(block * value)` pair with a tagged object wrapper. This would actually work pretty well, so long as it isn't the representation used during actual evaluation. The `$` operator effectively needs a stack. But I could easily rebuild a block via composition between evaluation steps. 
+For pending computations, I could probably use a `(block * value)` pair together with a tagged object wrapper. This would work pretty well, so long as it isn't the representation used *during* evaluation. During evaluation, I'd divide the block into a stack of computations via `$` and `?` operations. Then, if a computation doesn't complete before its time quota, I simply rebuild a block via O(1) composition.
 
-That might be insufficient for ongoing parallel evaluations. For those, I might need some special attention or indirection to track dependencies between contexts. It might be best to focus on 'distributed' parallelism, i.e. where we assume a parallel value is computed remotely with some moderate copying overheads. 
+With a block and value, it's easy to extend the block with additional work (it's just composition). So I could have lazy application of blocks if I want them. The main difficulty, I think, would be working with parallel computation. Special attention will be needed for parallelism, I think. It's low priority at the moment. 
 
- I may need to work out the details for parallel evaluation and how it interacts with partial evaluation and copy/drop at a later time.
+#### Lazy Computation
 
-
-I need a good representation for ongoing, lazy, or otherwise lazy pending computations. Optimally, this representation should be good for:
-
-* partial computations (halt and continue)
-* lazy application to an incomplete value
-* parallel evaluation, with halt and continue
-
-
-
- Unfortunately, this would make the `$` operator expensive since I'd need to add the  For O(1) application, I need to use a stack-like structure, e.g. `(ops stack * value)`. 
-
-For lazy evaluation, I would additionally need to extend the opposite end of the ops stack, so a deque or a banker's queue is appropriate. `((ops stack * ops tail) * value)`. Potentially, the tail end would need to consist of full ops stacks. This is getting rather more sophisticated than I'd prefer, however.
-
-For 
-
-
- For lazy application, I need a *queue*, i.e. such that I can add to the opposite end of the stack. So something like a banker's queue seems appropriate:
-
-        (stack of ops, reversed stack of ops)
-
-Lazy application or `{&force}` annotations would add to the reversed stack. 
-
-When the stack of ops is empty, I reverse the seconda new one from the 
-
-The parallel evaluations thing is giving me the most trouble at this time, but I do have some ideas for how to provide a little indirection there: 
-
-* i.e. I would need to have something like an array of linear parallel values
-
-
-
-
-
-Besides active computations, I expect I'll be wanting parallel or lazy computations eventually. Originally, I was imagining that I'd handle these behaviors almost transparently. However, in retrospect, I don't believe this is a good idea. I'd prefer to avoid any transparent translations between representations because those greatly complicate the runtime and reasoning about progress, quotas, etc..
-
-I've decided instead to update the documentation of ABC to describe 'coupled' annotations. So, for laziness, I might require a user couple it with an annotation to force a computation. This way, I don't need to check for each operation whether I have yet to evaluate something or other. Similar, synchronization for parallel computations would be more precise.
-
-It might also be wise to conservatively treat pending (lazy or parallel) values as linear with respect to copy and drop operations. This enables use of sequencing to copy a value. Copying of parallel values may be problematic for other reasons, though.
+Laziness with Wikilon Runtime is a bit troublesome. It's easy to implement, fortunately. Making laziness explicit, rather than implicit and transparent, would be necessary to minimize dynamic conditional checks and synchronization. The main issue with laziness is 
 
 Do I really need parallelism within a computation? Hmm. It could be very useful, for scalability, to have computations that pick apart a much larger database. So, I suppose it may be worthwhile?
 
@@ -256,15 +220,23 @@ A useful related feature might involve array chunks with reasonably large 'capac
 
 #### Binaries
 
-Probably a simple variant of: 
+The current representation for a binary is:
 
-        (binary, size, (pointer to) buffer, next)
+        (binary, next, size, pBuffer)
 
-The pointer to a buffer enables breaking a binary into slices.
+This represents a fragment of a list, with the `next` continuing the list. The buffer is fully copied whenever the value is copied, including during compacting GC. 
+
+A non-copying representation for binaries would need to have something like:
+
+        (shared-binary, next, size, offset, head, buffer)
+
+The `head` would need to include information to prevent GC. And the `buffer` would be for fast access, it might be recomputed from the `head` and `offset` after copying. A `size` would potentially allow an underlying shared binary to be divided into multiple chunks, i.e. a binary of 10kB could be divided into 10 1kB chunks. 
 
 #### Texts
 
-An idea for texts is to use a 'split' size information. E.g. if I used 16 bits for the number of chars and 16 bits for the number of bytes, I get a total 32 bits of size info... and text chunks of no more than 65536 bytes. Since most splitting/slicing/indexing/etc. will need to scan all or part of a buffer, this gives me an implicit buffer index based on our chunk sizes, i.e. enabling me to avoid scanning most of each buffer.
+Texts are a specialization on binaries. At the moment, limit sizes to 16 bits, and store both size-in-bytes and size-in-characters for each chunk. This gives a simple index into a very large text.
+
+As with binaries, I'll probably eventually want a good non-copying shared text representation.
 
 ### More Numerics
 

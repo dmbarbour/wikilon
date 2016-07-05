@@ -503,7 +503,8 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
 
             goto tailcall; // print the value
         } else {
-            fprintf(stderr, "%s: unrecognized pending value\n", __FUNCTION__);
+            wikrt_set_error(cx, WIKRT_IMPL);
+            fprintf(stderr, "%s: unhandled pending value\n", __FUNCTION__);
             abort();
         }
     } break;
@@ -519,8 +520,9 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
 
     case WIKRT_TYPE_UNDEF:
     default: {
-        wikrt_set_error(cx, WIKRT_ETYPE); 
-        return;
+        wikrt_set_error(cx, WIKRT_IMPL);
+        fprintf(stderr, "%s: unhandled value printer\n", __FUNCTION__);
+        abort();
     }
 }}}
 

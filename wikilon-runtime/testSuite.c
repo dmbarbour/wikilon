@@ -1030,6 +1030,20 @@ void run_block_inline(wikrt_cx* cx, int effort)
     wikrt_elim_unit_r(cx);
 }
 
+void test_eval_id(wikrt_cx* cx)
+{
+    char const* const a = "-7";
+    char const* const b = "49";
+    wikrt_intro_istr(cx, a, SIZE_MAX);
+    wikrt_intro_istr(cx, b, SIZE_MAX);
+    wikrt_assocl(cx);
+    intro_block(cx, "");
+    run_block(cx, 1);
+    wikrt_assocr(cx);
+    read_istr(cx, b);
+    read_istr(cx, a);
+}
+
 void test_eval_vrwlc(wikrt_cx* cx)
 {
     char const* const a = "-7";
@@ -1162,6 +1176,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_quote_apply);
 
     // TODO: evaluations
+    TCX(test_eval_id);
     TCX(test_eval_vrwlc);
     TCX(test_eval_fixpoint);
 
