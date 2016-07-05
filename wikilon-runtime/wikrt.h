@@ -407,7 +407,7 @@ static inline void wikrt_capture_block_ss(wikrt_val otag, wikrt_ss* ss)
 static inline bool wikrt_opval_hides_ss(wikrt_val otag) { return (0 == (WIKRT_OPVAL_LAZYKF & otag)); }
 
 /* Internal API calls. */
-void wikrt_copy_m(wikrt_cx*, wikrt_ss*, wikrt_cx*); 
+void wikrt_copy_m(wikrt_cx*, wikrt_ss*, bool moving_copy, wikrt_cx*); 
 
 // wikrt_vsize: return allocation required to deep-copy a value. 
 //   Use a given stack space for recursive structure tasks.
@@ -415,11 +415,8 @@ wikrt_size wikrt_vsize(wikrt_cx* cx, wikrt_val* stack, wikrt_val v);
 #define WIKRT_ALLOW_SIZE_BYPASS 0
 
 void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* stack, wikrt_val v, wikrt_ss* ss);
-void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval);
-
-// Thoughts: It might be worthwhile to add some extra flags to wikrt_copy_r, to indicate whether
-// it is a moving copy (the original will be deleted). Mostly that could be useful for heuristic
-// stowage or moving large, stable binaries and texts into shared objects.
+void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx, wikrt_val* rval);
+//  moving_copy: true if we're actually moving the value, i.e. the origin is dropped.
 
 // Due to use of a compacting collector (potentially during any
 // allocation) I must be certain to reserve space if I need to
@@ -567,6 +564,7 @@ struct wikrt_cx {
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
 #define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
+#define WIKRT_HAS_SHARED_REFCT_OBJECTS 0 /* for static assertions */
 
 // Consider:
 //  a debug list for warnings (e.g. via {&warn} or {&error})

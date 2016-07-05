@@ -189,7 +189,8 @@ static void wikrt_mem_compact(wikrt_cx* cx)
 
     // heuristic free lists can be cleared
     // cx->freecells = 0;
-    _Static_assert((0 == WIKRT_FREE_LISTS), "todo: handle free lists");
+    _Static_assert((0 == WIKRT_FREE_LISTS) && (!WIKRT_NEED_FREE_ACTION)
+        , "todo: handle free lists");
     
     // Note: ephemerons will require special attention. Either I add cx0 to
     // our environment briefly (I'd prefer to avoid this synchronization)
@@ -197,11 +198,16 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     // that I can write one frame while reading the other. 
     
     // copy roots with assumption of sufficient space.
-    wikrt_copy_r(&cx0, cx0.txn, NULL, cx, &(cx->txn));
-    wikrt_copy_r(&cx0, cx0.cc,  NULL, cx, &(cx->cc));
-    wikrt_copy_r(&cx0, cx0.pc,  NULL, cx, &(cx->pc));
-    wikrt_copy_r(&cx0, cx0.val, NULL, cx, &(cx->val));
+    wikrt_copy_r(&cx0, cx0.txn, NULL, true, cx, &(cx->txn));
+    wikrt_copy_r(&cx0, cx0.cc,  NULL, true, cx, &(cx->cc));
+    wikrt_copy_r(&cx0, cx0.pc,  NULL, true, cx, &(cx->pc));
+    wikrt_copy_r(&cx0, cx0.val, NULL, true, cx, &(cx->val));
     _Static_assert((4 == WIKRT_CX_REGISTER_CT), "todo: missing register compactions"); // maintenance check
+
+    // Note: I'd prefer to avoid reference counting for shared objects.
+    // But if I add that, I'll either need to indicate in copy_r a flag that
+    // I'm moving the values OR perform a separate deletion pass.
+    _Static_assert(!WIKRT_HAS_SHARED_REFCT_OBJECTS, "todo: figure out refcts during compaction");
 
     // reset semispace to reduce swap pressure.
     errno = 0;
@@ -240,43 +246,48 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
 
 void wikrt_move(wikrt_cx* const lcx, wikrt_cx* const rcx) 
 {
-    wikrt_copy_move(lcx, rcx);
+    if(lcx == rcx) { wikrt_set_error(lcx, WIKRT_INVAL); return; }
+    wikrt_copy_m(lcx, NULL, true, rcx);
     wikrt_dropk(lcx);
+}
+
+void wikrt_copyf(wikrt_cx* cx) {
+    wikrt_copy_m(cx, NULL, false, cx);
+}
+
+void wikrt_copyf_move(wikrt_cx* lcx, wikrt_cx* rcx) {
+    if(lcx == rcx) { wikrt_set_error(lcx, WIKRT_INVAL); return; }
+    wikrt_copy_m(lcx, NULL, false, rcx);
 }
 
 void wikrt_copy(wikrt_cx* cx) {
     wikrt_ss ss = 0;
-    wikrt_copy_m(cx, &ss, cx);
+    wikrt_copy_m(cx, &ss, false, cx);
     if(!wikrt_ss_copyable(ss)) {
         wikrt_set_error(cx, WIKRT_ETYPE);
     }
 }
 
-void wikrt_copyf(wikrt_cx* cx) {
-    wikrt_copy_m(cx, NULL, cx);
-}
-
-
 void wikrt_copy_move(wikrt_cx* lcx, wikrt_cx* rcx) {
     if(lcx == rcx) { wikrt_set_error(lcx, WIKRT_INVAL); return; }
     wikrt_ss ss = 0;
-    wikrt_copy_m(lcx, &ss, rcx);
+    wikrt_copy_m(lcx, &ss, false, rcx);
     if(!wikrt_ss_copyable(ss)) {
         wikrt_set_error(lcx, WIKRT_ETYPE);
         wikrt_set_error(rcx, WIKRT_ETYPE);
     }
 }
 
-void wikrt_copyf_move(wikrt_cx* lcx, wikrt_cx* rcx) {
-    if(lcx == rcx) { wikrt_set_error(lcx, WIKRT_INVAL); return; }
-    wikrt_copy_m(lcx, NULL, rcx);
-}
 
-void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, wikrt_cx* rcx)
+void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx)
 {
     // base implementation for both wikrt_copy and wikrt_copy_move.
     // in lcx == rcx case, the copy is stacked above the original.
-    if(!wikrt_p(lcx->val)) { wikrt_set_error(rcx, WIKRT_ETYPE); return; }
+    if(!wikrt_p(lcx->val)) { 
+        wikrt_set_error(lcx, WIKRT_ETYPE); 
+        wikrt_set_error(rcx, WIKRT_ETYPE); 
+        return; 
+    }
 
     // reserve space in `rcx`. Also, size estimates for validation.
     wikrt_size const max_alloc = WIKRT_CELLSIZE + wikrt_mem_in_use(lcx);
@@ -290,7 +301,7 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, wikrt_cx* rcx)
     wikrt_size const s0 = wikrt_mem_in_use(rcx);
     wikrt_val const copy_src = *(wikrt_pval(lcx, lcx->val));
     wikrt_val copy_dst = WIKRT_UNIT;
-    wikrt_copy_r(lcx, copy_src, ss, rcx, &copy_dst);
+    wikrt_copy_r(lcx, copy_src, ss, moving_copy, rcx, &copy_dst);
     wikrt_intro_r(rcx, copy_dst);
     wikrt_size const sf = wikrt_mem_in_use(rcx);
 
@@ -428,8 +439,9 @@ static inline void wikrt_cpv(wikrt_cx* rcx, wikrt_addr** s
 // (for internal use by wikrt_copy_r only)
 // mostly this is needed to handle WIKRT_OTAG_OPVAL properly, 
 //  to hide `ss` for quoted values constructed by partial evaluation.
-static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* const ss
-                         ,wikrt_addr* const s0, wikrt_val* dst) 
+static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx
+                         ,wikrt_ss* const ss, bool const moving_copy, wikrt_addr* const s0
+                         ,wikrt_val* dst) 
 {
     if(wikrt_copy_shallow(*dst)) { return; }
 
@@ -488,7 +500,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
                     // hide substructure
                     dst = 1 + wikrt_paddr(rcx, addr);
                     (*dst) = pv[1];
-                    wikrt_copy_rs(lcx, rcx, NULL, s, dst);
+                    wikrt_copy_rs(lcx, rcx, NULL, moving_copy, s, dst);
                 } else {
                     wikrt_cpv(rcx, &s, pv, addr, 1);
                 }
@@ -563,7 +575,7 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx, wikrt_ss* co
     } while(NULL != dst);
 }
 
-void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wikrt_val* rval)
+void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx, wikrt_val* rval)
 {
     // Note: I use a stack in rcx->mem (that builds upwards from zero). An invariant
     // is that this stack is always smaller than the space left to be allocated. This
@@ -571,7 +583,7 @@ void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, wikrt_cx* rcx, wi
     // within the stack.
     if(NULL != ss) { (*ss) = 0; }
     (*rval) = lval;
-    wikrt_copy_rs(lcx, rcx, ss, ((wikrt_addr*)(rcx->mem)), rval);
+    wikrt_copy_rs(lcx, rcx, ss, moving_copy, ((wikrt_addr*)(rcx->mem)), rval);
 }
 
 
