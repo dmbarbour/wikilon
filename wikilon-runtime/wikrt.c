@@ -299,7 +299,7 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx)
     // Note: wikrt_mem_reserve may move lcx->val (when lcx == rcx).
     // anyhow, we now have sufficient space to perform our copy!
     wikrt_size const s0 = wikrt_mem_in_use(rcx);
-    wikrt_val const copy_src = *(wikrt_pval(lcx, lcx->val));
+    wikrt_val const copy_src = wikrt_pval(lcx, lcx->val)[0];
     wikrt_val copy_dst = WIKRT_UNIT;
     wikrt_copy_r(lcx, copy_src, ss, moving_copy, rcx, &copy_dst);
     wikrt_intro_r(rcx, copy_dst);
@@ -332,7 +332,7 @@ wikrt_val_type wikrt_type(wikrt_cx* cx)
         case WIKRT_PR: return WIKRT_TYPE_SUM;
         case WIKRT_I:  return WIKRT_TYPE_INT;
         case WIKRT_O: {
-            wikrt_val const otag = wikrt_pval(cx, v)[0];
+            wikrt_val const otag = wikrt_pobj(cx, v)[0];
             switch(LOBYTE(otag)) {
                 case WIKRT_OTAG_ARRAY:  // list → sum
                 case WIKRT_OTAG_BINARY: // list → sum
@@ -877,7 +877,7 @@ void wikrt_unwrap_seal(wikrt_cx* cx, char* buff)
     if(wikrt_p(cx->val)) {
         wikrt_val* const v = wikrt_pval(cx, cx->val);
         if(wikrt_o(*v)) {
-            wikrt_val* const pv = wikrt_pval(cx, (*v));
+            wikrt_val* const pv = wikrt_pobj(cx, (*v));
             if(wikrt_otag_seal_sm(*pv)) {
                 _Static_assert((WIKRT_TOK_BUFFSZ > sizeof(wikrt_val)), "don't overflow buffer");
                 wikrt_otag otag = (*pv);
@@ -924,7 +924,7 @@ _Static_assert((WIKRT_PL == (1 + WIKRT_P)) && (WIKRT_PR == (2 + WIKRT_P)) &&
 static inline bool wikrt_deepsum_with_free_space(wikrt_cx* cx, wikrt_val v) 
 {
     if(!wikrt_o(v)) { return false; }
-    wikrt_val const otag = *(wikrt_pval(cx, v));
+    wikrt_val const otag = *wikrt_pobj(cx, v);
     // need two bits free space to squeeze in another sum step.
     return wikrt_otag_deepsum(otag) && (otag < (WIKRT_VAL_MAX >> 2));
 }
@@ -940,7 +940,7 @@ void wikrt_wrap_sum_rv(wikrt_cx* cx, wikrt_sum_tag const sum, wikrt_val* v)
         (*v) += inL ? 1 : 2;
     } else if(wikrt_deepsum_with_free_space(cx, (*v))) {
         // extend existing deepsum.
-        wikrt_val* const pv = wikrt_pval(cx, (*v));
+        wikrt_val* const pv = wikrt_pobj(cx, (*v));
         wikrt_val const s0 = (*pv) >> 8;
         wikrt_val const sf = (s0 << 2) | (inL ? WIKRT_DEEPSUML : WIKRT_DEEPSUMR); 
         wikrt_val const otag = (sf << 8) | WIKRT_OTAG_DEEPSUM;
@@ -972,7 +972,7 @@ void wikrt_unwrap_sum_rv(wikrt_cx* cx, wikrt_sum_tag* sum, wikrt_val* v)
             (*v) -= 1;
         }
     } else if(wikrt_o(*v)) {
-        wikrt_val* const pv = wikrt_pval(cx, (*v));
+        wikrt_val* const pv = wikrt_pobj(cx, (*v));
         if(wikrt_otag_deepsum(*pv)) {
             wikrt_val const s0 = (*pv) >> 8;
             bool const inL = (WIKRT_DEEPSUML == (3 & s0));
@@ -1005,7 +1005,7 @@ void wikrt_unwrap_sum_rv(wikrt_cx* cx, wikrt_sum_tag* sum, wikrt_val* v)
 void wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v) 
 {
     if(!wikrt_o(*v)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_val* const pv = wikrt_pval(cx, (*v));
+    wikrt_val* const pv = wikrt_pobj(cx, (*v));
     switch(LOBYTE(*pv)) {
         case WIKRT_OTAG_ARRAY: {
             // pop one element from the array.
@@ -1339,7 +1339,7 @@ void wikrt_reverse_text_chunks(wikrt_cx* cx)
     wikrt_val hd = wikrt_pval(cx, cx->val)[0];
     wikrt_val txt = WIKRT_UNIT_INR;
     while(WIKRT_UNIT_INR != hd) {
-        wikrt_val* const phd = wikrt_pval(cx, hd);
+        wikrt_val* const phd = wikrt_pobj(cx, hd);
         assert(wikrt_o(hd) && wikrt_otag_text(*phd));
         wikrt_val const next = phd[1];
         phd[1] = txt;
@@ -1351,7 +1351,7 @@ void wikrt_reverse_text_chunks(wikrt_cx* cx)
 
 
 static inline bool wikrt_value_is_binary(wikrt_cx* cx, wikrt_val v) {
-    return (wikrt_o(v) && wikrt_otag_binary(*(wikrt_pval(cx,v)))); 
+    return (wikrt_o(v) && wikrt_otag_binary(*(wikrt_pobj(cx,v)))); 
 }
 
 void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
@@ -1382,7 +1382,7 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
         else if(wikrt_value_is_binary(cx, v0)) { // compact binary
             // optimize read for WIKRT_OTAG_BINARY
             // (hdr, next, size, buffer)
-            wikrt_val* const phd = wikrt_pval(cx, v0);
+            wikrt_val* const phd = wikrt_pobj(cx, v0);
             size_t const output_size_limit = (max_bytes - (*bytes));
             bool const output_limited = phd[2] > output_size_limit; 
             size_t const bytes_read = output_limited ? output_size_limit : phd[2];
@@ -1412,7 +1412,7 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
 }
 
 static inline bool wikrt_value_is_text(wikrt_cx* cx, wikrt_val v) {
-    return (wikrt_o(v) && wikrt_otag_text(*(wikrt_pval(cx,v)))); 
+    return (wikrt_o(v) && wikrt_otag_text(*(wikrt_pobj(cx,v)))); 
 }
 
 void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
@@ -1457,7 +1457,7 @@ void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
         else if(wikrt_value_is_text(cx, v0)) {
             // optimize read for WIKRT_OTAG_TEXT
             // (hdr, next, (size-chars, size-bytes), buffer) 
-            wikrt_val* const phd = wikrt_pval(cx, v0);
+            wikrt_val* const phd = wikrt_pobj(cx, v0);
             size_t const txt_bytes = phd[2] & 0xFFFF;
             size_t const txt_chars = phd[2] >> 16;
             size_t const output_byte_limit = (max_buffsz - (*buffsz));

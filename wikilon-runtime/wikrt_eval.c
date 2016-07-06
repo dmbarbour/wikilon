@@ -1,6 +1,18 @@
 
 #include <assert.h>
+#include <stdio.h>
+#include <string.h>
 #include "wikrt.h"
+
+
+/* At the moment, I'm just using GC as a heuristic to decide how
+ * much evaluation to perform. I'm currently checking whenever I
+ * reach the end of a function block. 
+ *
+ * If an error is infinite recursion, evaluation will stop because
+ * a `copy` fails and the stack depth will reach its limit.
+ */
+#define WIKRT_EVAL_COMPACTION_STEPS 4
 
 /*
  * A pending value is just a tagged (block * value) pair.
@@ -44,23 +56,111 @@ void wikrt_open_pending(wikrt_cx* cx)
     wikrt_set_error(cx, WIKRT_ETYPE); 
 }
 
-void wikrt_require_fresh_eval(wikrt_cx* cx)
+static inline void wikrt_require_fresh_eval(wikrt_cx* cx)
 {
     bool const is_fresh_eval = (WIKRT_REG_CC_INIT == cx->cc) && (WIKRT_REG_PC_INIT == cx->pc);
     if(!is_fresh_eval) { wikrt_set_error(cx, WIKRT_IMPL); }
 }
 
-// assuming (a*b) and c, update it to be b and (a*c).
-// i.e. shift the (a*_) cell to the right.
-static inline void wikrt_move_cell_right(wikrt_cx* cx, wikrt_val* a, wikrt_val* b)
+static inline void wikrt_run_eval_token(wikrt_cx* cx, char const* token)
 {
-    assert(wikrt_p(*a));
-    wikrt_pval_swap(1 + wikrt_pval(cx,(*a)), b); // (a*c) and b
-    wikrt_pval_swap(a, b);                       // b and (a*c)
+    if('&' == *token) {
+        // TODO: handle annotations
+    } else if('.' == *token) {
+        char seal[WIKRT_TOK_BUFFSZ];
+        wikrt_unwrap_seal(cx, seal);
+        bool const match_seal = (':' == *seal) && (0 == strcmp(seal+1,token+1));
+        if(!match_seal) { wikrt_set_error(cx, WIKRT_ETYPE); }
+    } else if(':' == *token) {
+        // big sealer tokens should be rare.
+        wikrt_wrap_seal(cx, token);
+    } else {
+        wikrt_set_error(cx, WIKRT_IMPL);
+    }
+    
 }
 
+static void wikrt_run_eval_object(wikrt_cx* cx) 
+{
+    // handle extended operators: tokens and opvals.
+    // The operator should be on the cx->val stack.
+    assert(wikrt_p(cx->val) && wikrt_o(*wikrt_pval(cx, cx->val)));
+    wikrt_val* const pv = wikrt_pval(cx, cx->val);
+    wikrt_val* const pobj = wikrt_pobj(cx, *pv);
+
+    if(wikrt_otag_opval(*pobj)) {
+        _Static_assert(!WIKRT_NEED_FREE_ACTION, "todo: free WIKRT_OTAG_OPVAL cell");
+        pv[0] = pobj[1]; 
+    } else if(wikrt_otag_seal_sm(*pobj)) {
+        if(!wikrt_p(pv[1])) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+        wikrt_pval_swap(pobj+1, wikrt_pval(cx, pv[1]));
+        wikrt_wswap(cx);
+        wikrt_elim_unit(cx);
+    } else if(wikrt_otag_seal(*pobj)) {
+        char tokbuff[WIKRT_TOK_BUFFSZ];
+        wikrt_unwrap_seal(cx, tokbuff);
+        wikrt_elim_unit(cx);
+        wikrt_run_eval_token(cx, tokbuff);
+    } else {
+        wikrt_set_error(cx, WIKRT_IMPL);
+        fprintf(stderr, "%s: unhandled operation (%d)\n", __FUNCTION__, (int) LOBYTE(*pobj));
+        abort();
+    }
+}
+
+static void wikrt_run_eval_operator(wikrt_cx* cx, wikrt_op op)
+{
+}
+ 
 void wikrt_run_eval_step(wikrt_cx* cx) 
 {
+    // To resist infinite loops from tying up the client, I'll just use GC
+    // compaction steps to estimate total work performed and limit it to
+    // some maximum relative to start. 
+    uint64_t const tick_stop = cx->compaction_count + WIKRT_EVAL_COMPACTION_STEPS;
+
+    // Loop: repeatedly: obtain an operation then execute it.
+    // Eventually I'll need a compact, high performance variant. 
+    do { // Obtain an operation from cx->pc.
+        if(WIKRT_PL == wikrt_vtag(cx->pc)) {
+            wikrt_addr const addr = wikrt_vaddr(cx->pc);
+            wikrt_val* const node = wikrt_paddr(cx,addr);
+            wikrt_val const  op   = node[0];
+            if(wikrt_smallint(op)) {
+                _Static_assert(!WIKRT_NEED_FREE_ACTION, "review and repair: free program list cells");
+                cx->pc  = node[1];
+                wikrt_run_eval_operator(cx, (wikrt_op) wikrt_v2i(op));
+            } else {
+                cx->pc  = node[1];
+                node[1] = cx->val;
+                cx->val = wikrt_tag_addr(WIKRT_P, addr);
+                wikrt_run_eval_object(cx);
+            }
+        } else if(WIKRT_UNIT_INR == cx->pc) {
+            bool const abort_eval_step = (cx->compaction_count >= tick_stop) || wikrt_has_error(cx);
+            if(abort_eval_step) { return; }
+
+            wikrt_val* const pcc = wikrt_pval(cx, cx->cc);
+            if(WIKRT_PL == wikrt_vtag(*pcc)) {  
+                _Static_assert(!WIKRT_NEED_FREE_ACTION, "todo: free stack cons cell");
+                wikrt_val* const pstack = wikrt_pval(cx, (*pcc));
+                cx->pc = pstack[0]; // pop the call stack
+                (*pcc) = pstack[1]; 
+                continue;
+            } else if(WIKRT_UNIT_INR == (*pcc)) {
+                return; // execution complete! 
+            } else {
+                // This shouldn't be possible.
+                fprintf(stderr, "%s: unhandled evaluation stack type\n", __FUNCTION__);
+                abort();
+            }
+        } else {
+            fprintf(stderr, "%s: unhandled (compact?) operations list type\n", __FUNCTION__);
+            abort();
+        }
+    } while(true);
+    
+    #undef eval_timeout
 }
 
 /* Step through an evaluation.  
@@ -78,10 +178,8 @@ void wikrt_run_eval_step(wikrt_cx* cx)
  *
  *    cx->pc will contain my operations list (program counter)
  *    cx->cc will contain a (stack, e) pair.
- * A couple registers are used for evaluation. First, the
- * `pc` register is used for the current list of operations.
- * Second, the `cc` register is used for the stack. (These
- * stand for `program counter` and `current continuation`.)
+ *
+ * The stack is simply a list of ops-lists.
  */ 
 bool wikrt_step_eval(wikrt_cx* cx)
 {

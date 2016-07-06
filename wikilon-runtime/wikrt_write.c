@@ -237,20 +237,6 @@ static void writer_wzlw(wikrt_cx* cx, wikrt_writer_state* w)
 }
 
 
-
-// (block * e) → (ops * e), returning otag
-static wikrt_otag wikrt_writer_open_block(wikrt_cx* cx) 
-{
-    // `block` is (OTAG_BLOCK ops) pair.
-    _Static_assert(!WIKRT_NEED_FREE_ACTION, "free the 'block' tag");
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    wikrt_val* const pblock = wikrt_pval(cx, (*v));
-    wikrt_otag const otag = (*pblock);
-    assert(WIKRT_OTAG_BLOCK == LOBYTE(otag));
-    (*v) = pblock[1]; // dropping the OTAG
-    return otag;
-}
-
 // (empty ops * (stack * (text * e))) → (ops' * (stack' * (text * e)))
 //   where `stack` is ((ss * ops') * stack')
 //   and `ss` accumulates substructure
@@ -291,7 +277,7 @@ static inline void wikrt_writer_push_stack(wikrt_cx* cx, wikrt_writer_state* w, 
 {
     _Static_assert(('[' == 91), "assuming '[' is 91");
 
-    wikrt_otag const block_tag = wikrt_writer_open_block(cx); // (block ops') → ops'
+    wikrt_otag const block_tag = wikrt_open_block_ops(cx); // (block ops') → ops'
 
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
     wikrt_wswap(cx); wikrt_zswap(cx); // (ops * (stack * (block * (texts * e))))
@@ -510,9 +496,10 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
     } break;
 
     case WIKRT_TYPE_TRASH: {  // e.g. []kf{&trash} for linear value
-        wikrt_val* const pobj = wikrt_pval(cx, *wikrt_pval(cx, cx->val));
-        assert(wikrt_otag_trash(pobj[0]) && (WIKRT_UNIT_INR == pobj[1]));
-        pobj[0] = ((~0xFF) & pobj[0]) | WIKRT_OTAG_BLOCK; // write as block
+        wikrt_val const v = wikrt_pval(cx, cx->val)[0];
+        wikrt_val* const pobj = wikrt_pobj(cx, v);
+        assert(wikrt_o(v) && wikrt_otag_trash(pobj[0]) && (WIKRT_UNIT_INR == pobj[1]));
+        pobj[0] = ((~0xFF) & pobj[0]) | WIKRT_OTAG_BLOCK; // write as block, preserve substructure
         wikrt_intro_optok(cx, "&trash"); // after the block
         wikrt_consd(cx); 
         goto tailcall;
@@ -552,7 +539,7 @@ static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
 
         // Expecting OTAG_OPVAL or OTAG_OPTOK.
         assert(wikrt_o(opv));
-        wikrt_val* const popv = wikrt_pval(cx, opv);
+        wikrt_val* const popv = wikrt_pobj(cx, opv);
         wikrt_val const otag = popv[0];
         wikrt_val const otype = LOBYTE(otag);
 
@@ -596,7 +583,7 @@ void wikrt_block_to_text(wikrt_cx* cx)
     // (block * e) → (ops * (unit * (text * e)))
     wikrt_intro_r(cx, WIKRT_UNIT_INR); wikrt_wswap(cx); // initial texts (empty list)
     wikrt_intro_r(cx, WIKRT_UNIT); wikrt_wswap(cx);     // initial continuation (unit)
-    wikrt_writer_open_block(cx);                        // block → ops
+    wikrt_open_block_ops(cx);                           // block → ops
 
     wikrt_writer_state w;
     wikrt_writer_state_init(&w);

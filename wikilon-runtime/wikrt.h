@@ -57,7 +57,7 @@ typedef struct wikrt_db wikrt_db;
  * accelerators. Internal opcodes are encoded for adjacency in jump
  * tables rather than for convenient textual representation.
  */
-typedef enum wikrt_intern_op
+typedef enum wikrt_op
 { OP_INVAL = 0
 
 // Block: Primitive ABC (42 ops, codes 1..42)
@@ -388,6 +388,7 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
 
 static inline bool wikrt_otag_deepsum(wikrt_otag v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
 static inline bool wikrt_otag_block(wikrt_otag v) { return (WIKRT_OTAG_BLOCK == LOBYTE(v)); }
+static inline bool wikrt_otag_opval(wikrt_otag v) { return (WIKRT_OTAG_OPVAL == LOBYTE(v)); }
 static inline bool wikrt_otag_seal(wikrt_otag v) { return (WIKRT_OTAG_SEAL == LOBYTE(v)); }
 static inline bool wikrt_otag_seal_sm(wikrt_otag v) { return (WIKRT_OTAG_SEAL_SM == LOBYTE(v)); }
 static inline bool wikrt_otag_binary(wikrt_otag v) { return (WIKRT_OTAG_BINARY == LOBYTE(v)); }
@@ -546,7 +547,7 @@ struct wikrt_cx {
     // semispace garbage collection.
     void*               ssp;    // for GC, scratch
     wikrt_size          compaction_size;    // memory after compaction
-    wikrt_size          compaction_count;   // count of compactions
+    uint64_t            compaction_count;   // count of compactions
     uint64_t            cxid;   // unique context identifier within env
 
     // statistics for effort heuristics
@@ -581,6 +582,13 @@ struct wikrt_cx {
 
 #define wikrt_paddr(CX,A) ((wikrt_val*)A)
 #define wikrt_pval(CX,V)  wikrt_paddr(CX, wikrt_vaddr(V))
+
+#if (0 == WIKRT_O)
+// take advantage of WIKRT_O == 0
+#define wikrt_pobj(CX,V)  wikrt_paddr((CX),(V))
+#else
+#define wikrt_pobj(CX,V)  wikrt_pval((CX),(V))
+#endif
 
 
 /* NOTE: Because I'm using a moving GC, I need to be careful about
@@ -665,7 +673,7 @@ static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
     return wikrt_smallint(v); 
 }
 static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
-    return wikrt_o(v) && wikrt_otag_block(*wikrt_pval(cx, v)); 
+    return wikrt_o(v) && wikrt_otag_block(*wikrt_pobj(cx, v)); 
 }
 
 // (block * e) → (ops * e), returning block tag (e.g. with substructure)
@@ -675,7 +683,7 @@ wikrt_otag wikrt_open_block_ops(wikrt_cx* cx);
 void wikrt_open_pending(wikrt_cx* cx);
 
 static inline bool wikrt_trashval(wikrt_cx* cx, wikrt_val v) {
-    return wikrt_o(v) && wikrt_otag_trash(*wikrt_pval(cx, v));
+    return wikrt_o(v) && wikrt_otag_trash(*wikrt_pobj(cx, v));
 }
 
 // utility for construction of large texts.

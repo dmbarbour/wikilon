@@ -92,14 +92,9 @@ static void wikrt_reverse_opslist(wikrt_cx* cx)
     wikrt_val tl = WIKRT_UNIT_INR;
     while(WIKRT_UNIT_INR != hd) 
     {
+        assert(wikrt_pl(hd));
         // assuming cons list (cell per value), cf. wikrt_cons
         wikrt_val* const phd = wikrt_pval(cx, hd);
-        if(!wikrt_pl(hd)) {
-            fprintf(stderr, "%s: unexpected oplist (%d → %d, %d)\n"
-                , __FUNCTION__, (int)hd, (int)phd[0], (int)phd[1]);
-            abort();
-        }
-        assert(wikrt_pl(hd)); 
         wikrt_val const next_hd = phd[1];
         phd[1] = tl;
         tl = hd;
