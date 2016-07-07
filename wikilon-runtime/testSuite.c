@@ -17,6 +17,7 @@ char const* const valid_abc_strings[] =
  , "[ ]", "[ [ ] ]", "[ [ [ ] ] ]", "[ [ [ [ ] ] ] ]"
  , " [] [[]] [[] [[]]] [[] [[]] [[] [[]]]] [[] [[]] [[] [[]]] [[] [[]] [[] [[]]]]] \n"
    "[[] [[]] [[] [[]]] [[] [[]] [[] [[]]]] [[] [[]] [[] [[]]] [[] [[]] [[] [[]]]]]]  " 
+ , "$c", "vr$c"
  , "wrzl", "rwrzwll", "{%p}{:ratio}", "vvrwlcl"
  , "[^'m]m^'m", "'[^'mw^'zmwvr$c]^'mwm", "rwrzvrwr$wlcl"
  , "{x}", "{x}{y}{xyzzy}", "{%word}", "{:seal}", "{token with space}", "{$@#:._-/\\!}", "{←↖↑↗→↘↓↙←}"
@@ -1179,12 +1180,13 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_eval_id);
     TCX(test_eval_vrwlc);
     TCX(test_eval_fixpoint);
-
+    // TODO: evaluation with numbers (test all digits)
+    // TODO: test comparison of numbers and eval variant
+    // TODO: evaluation with composition
     // TODO: evaluation with simple loops
     // TODO: evaluation with ad-hoc annotations
     // TODO: evaluation with value sealers
     // TODO: evaluation of quoted values
-    // TODO: evaluation with composition
     // TODO: test infinite evaluation returns
     // TODO: bignum math
 

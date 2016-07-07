@@ -59,7 +59,7 @@ static inline void wikrt_writer_state_init(wikrt_writer_state* w)
 
 // Basic ABC (elements in ASCII range)
 #define OP(X) [OP_##X] = ABC_##X
-static uint8_t wikrt_op2abc_table[OP_COUNT] =
+static const uint8_t wikrt_op2abc_table[OP_COUNT] =
  { OP(SP), OP(LF)
  , OP(PROD_ASSOCL), OP(PROD_ASSOCR)
  , OP(PROD_W_SWAP), OP(PROD_Z_SWAP)
@@ -95,7 +95,7 @@ static void writer_wzlw(wikrt_cx*, wikrt_writer_state* w);
 
 typedef void (*wikrt_writer)(wikrt_cx*, wikrt_writer_state*);
 #define ACCEL(X) [ACCEL_##X] = writer_##X
-static wikrt_writer wikrt_accel_writers[OP_COUNT] =
+static const wikrt_writer wikrt_accel_writers[OP_COUNT] =
  { ACCEL(TAILCALL),  ACCEL(INLINE)
  , ACCEL(PROD_SWAP), ACCEL(INTRO_UNIT)
  , ACCEL(SUM_SWAP),  ACCEL(INTRO_VOID)
@@ -507,9 +507,11 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
 
     case WIKRT_TYPE_UNDEF:
     default: {
-        wikrt_set_error(cx, WIKRT_IMPL);
-        fprintf(stderr, "%s: unhandled value printer\n", __FUNCTION__);
-        abort();
+        if(!wikrt_has_error(cx)) {
+            wikrt_set_error(cx, WIKRT_IMPL);
+            fprintf(stderr, "%s: unhandled value printer\n", __FUNCTION__);
+            abort();
+        }
     }
 }}}
 

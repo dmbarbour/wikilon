@@ -1,5 +1,6 @@
 // This file is just for `wikrt_text_to_block` and any variants.
-// It involves a simplistic hand-written parser.
+// It involves a simplistic hand-written parser that recognizes
+// tail-call opportunities.
 
 #include <string.h>
 #include <assert.h>
@@ -84,8 +85,6 @@ static void wikrt_intro_parse(wikrt_cx* cx, wikrt_parse_state* p)
 //   (reversed ops * e) → (ops * e)
 static void wikrt_reverse_opslist(wikrt_cx* cx) 
 {
-    if(wikrt_has_error(cx)) { return; }
-
     // Goal is to reverse the operations list.
     // The current implementation is non-allocating.
     wikrt_val hd = wikrt_pval(cx, cx->val)[0];
@@ -101,6 +100,45 @@ static void wikrt_reverse_opslist(wikrt_cx* cx)
         hd = next_hd;
     }
     wikrt_pval(cx, cx->val)[0] = tl;
+}
+
+// Recognizing tailcalls is an essential optimization for
+// large, loopy computations. At a bare minimum, I must
+// recognize blocks ending with `$c]` in either the parser
+// or the evaluator. I chose to do this bare minimum in
+// the parser. Explicit simplification and optimization 
+// can do more.
+static void wikrt_parser_accel_tailcall(wikrt_cx* cx)
+{
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+    if(wikrt_pl(*v)) {
+        wikrt_val* const x = wikrt_pval(cx, *v);
+        if((WIKRT_I2V(OP_PROD_ELIM1) == x[0]) && wikrt_pl(x[1])) {
+            wikrt_val* const y = wikrt_pval(cx, x[1]);
+            if(WIKRT_I2V(OP_APPLY) == y[0]) {
+                _Static_assert(!WIKRT_NEED_FREE_ACTION, "free cell when parsing tailcall");
+                x[1] = y[1];
+                x[0] = WIKRT_I2V(ACCEL_TAILCALL); // $c
+            }
+        }
+    }
+}
+
+// Given (reversed ops * e), return (block * e).
+//
+// To simplify the evaluator and the tail-call optimization
+// (without relying on a simplification pass), the parser will
+// also recognize `$c` at the end of the
+//   it might be worthwhile to try to recognize a `$c]` TCO
+//   opportunity here.
+//  
+static void wikrt_parser_finish_block(wikrt_cx* cx)
+{
+    if(wikrt_has_error(cx)) { return; }
+
+    wikrt_parser_accel_tailcall(cx);
+    wikrt_reverse_opslist(cx);  
+    wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK);
 }
 
 static void wikrt_flush_parse_text(wikrt_cx* cx, wikrt_parse_state* p)
@@ -227,9 +265,8 @@ static void wikrt_step_parse_char(wikrt_cx* cx, wikrt_parse_state* p, uint32_t c
         } else if(']' == cp) {
             if(p->depth < 1) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
            
-            wikrt_reverse_opslist(cx); // ops to a proper order
-            wikrt_wrap_otag_r(cx, WIKRT_OTAG_BLOCK); // (block ops)
-            wikrt_wrap_otag_r(cx, WIKRT_OTAG_OPVAL); // (opval (block ops))
+            wikrt_parser_finish_block(cx); // reversed ops → block
+            wikrt_wrap_otag_r(cx, WIKRT_OTAG_OPVAL); // (opval block ops))
             wikrt_accel_wrzw(cx); // expand stack below block opval
             wikrt_cons(cx);  // add block opval to parent's ops
 
@@ -278,9 +315,7 @@ static void wikrt_fini_parse(wikrt_cx* cx, wikrt_parse_state* p)
     bool const parseStateSeemsOk = (0 == p->depth) && (WIKRT_PARSE_OP == p->type) && !wikrt_has_error(cx);
     if(!parseStateSeemsOk) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
-    wikrt_reverse_opslist(cx);  // (ops * (unit * (text * e)))
-    wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK); // (block * (unit * (text * e)))
-
+    wikrt_parser_finish_block(cx); // reversed ops → block
     wikrt_wswap(cx);     // (unit * (block * (text * e)))
     wikrt_elim_unit(cx); // (block * (text * e))
     wikrt_wswap(cx);     // (text * (block * e))

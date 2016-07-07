@@ -689,7 +689,10 @@ void wikrt_block_rel(wikrt_cx*);
  */
 void wikrt_block_par(wikrt_cx*);
 
-/** @brief Compose two blocks. ([a→b]*([b→c]*e))→([a→c]*e). */
+/** @brief Compose two blocks. ([a→b]*([b→c]*e))→([a→c]*e). 
+ *
+ * 
+ */
 void wikrt_compose(wikrt_cx*);
 
 /** @brief Add two integers. (I(a)*(I(b)*e))→(I(a+b)*e). */

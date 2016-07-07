@@ -5,25 +5,178 @@
 #include "wikrt.h"
 
 
-/* At the moment, I'm just using GC as a heuristic to decide how
- * much evaluation to perform. I'm currently checking whenever I
- * reach the end of a function block. 
+/* NOTES:
  *
- * If an error is infinite recursion, evaluation will stop because
- * a `copy` fails and the stack depth will reach its limit.
- */
-#define WIKRT_EVAL_COMPACTION_STEPS 4
-
-/*
- * A pending value is just a tagged (block * value) pair.
- *
- * This gives a very simplistic structure between evaluations. During an
- * evaluation, however, I'll need to build a stack via `$` and `?` ops.
- * If an evaluation step should return before evaluation completes, I
- * rebuild a (block * value) pair from the stack.
+ * Representation:
+ * 
+ * A pending value is just a tagged (block * value) pair. During an
+ * evaluation, however, I'll need to build a stack that I can return
+ * to in O(1) time. I can rebuild (block * value) from the stack.
  *
  * The 'stack' in question could simply be a list of `ops` lists.
+ *
+ * Quotas:
+ *
+ * I need to stop evaluation after so much effort. This shouldn't
+ * be tested too frequently, so at the start or end of a function
+ * call should work. If at the end of a function call, I'll need
+ * to be certain to test during tail-calls, too.
+ *
+ * Termination must also occur if a space quota is hit. This can
+ * be achieved by testing for error upon `$` operators.
+ *
+ * Tail Call Optimization and Loopy Code:
+ *
+ * The 'tail call optimization' or TCO involves recognizing a `$c`
+ * operator sequence at the end of a function call. It allows a
+ * loopy computation to continue without increasing the call stack.
+ * Some accelerators include the TCO, if performed at the end of
+ * a block. So I have a choice:
+ *
+ *  * recognize a TCO accelerator in the parser
+ *  * recognize TCO `$c]` sequence in the evaluator
+ *
+ * I've decided to move this responsibility into the parser. 
  */
+
+#define WIKRT_EVAL_COMPACTION_STEPS 4
+
+
+static void _wikrt_nop(wikrt_cx* cx) {  /* NOP */  }
+static void _wikrt_sum_intro0(wikrt_cx* cx) 
+{ 
+    wikrt_wrap_sum(cx, WIKRT_INL); 
+}
+static void _wikrt_sum_elim0(wikrt_cx* cx) 
+{
+    wikrt_sum_tag lr;
+    wikrt_unwrap_sum(cx, &lr);
+    if(WIKRT_INL != lr) { wikrt_set_error(cx, WIKRT_ETYPE); }
+}
+static void _wikrt_intro_num(wikrt_cx* cx) { wikrt_intro_i32(cx, 0); }
+static void wikrt_dK(wikrt_cx* cx, int32_t k) 
+{
+    // I could probably do faster integer building.
+    // But it shouldn't be especially relevant with simplification.
+    wikrt_intro_i32(cx, 10);
+    wikrt_int_mul(cx);
+    wikrt_intro_i32(cx, k);
+    wikrt_int_add(cx);
+}
+static void _wikrt_d0(wikrt_cx* cx) { wikrt_dK(cx, 0); }
+static void _wikrt_d1(wikrt_cx* cx) { wikrt_dK(cx, 1); }
+static void _wikrt_d2(wikrt_cx* cx) { wikrt_dK(cx, 2); }
+static void _wikrt_d3(wikrt_cx* cx) { wikrt_dK(cx, 3); }
+static void _wikrt_d4(wikrt_cx* cx) { wikrt_dK(cx, 4); }
+static void _wikrt_d5(wikrt_cx* cx) { wikrt_dK(cx, 5); }
+static void _wikrt_d6(wikrt_cx* cx) { wikrt_dK(cx, 6); }
+static void _wikrt_d7(wikrt_cx* cx) { wikrt_dK(cx, 7); }
+static void _wikrt_d8(wikrt_cx* cx) { wikrt_dK(cx, 8); }
+static void _wikrt_d9(wikrt_cx* cx) { wikrt_dK(cx, 9); }
+
+static void _wikrt_eval_step_apply(wikrt_cx* cx) 
+{
+    fprintf(stderr, "todo %s\n", __FUNCTION__);
+    wikrt_set_error(cx, WIKRT_IMPL);
+}
+static void _wikrt_int_cmp_gt(wikrt_cx* cx) 
+{
+    fprintf(stderr, "todo %s\n", __FUNCTION__);
+    wikrt_set_error(cx, WIKRT_IMPL);
+}
+static void _wikrt_eval_step_condap(wikrt_cx* cx) 
+{
+    fprintf(stderr, "todo %s\n", __FUNCTION__);
+    wikrt_set_error(cx, WIKRT_IMPL);
+}
+static void _wikrt_eval_step_inline(wikrt_cx* cx) 
+{
+    fprintf(stderr, "todo %s\n", __FUNCTION__);
+    wikrt_set_error(cx, WIKRT_IMPL);
+}
+static void _wikrt_eval_step_tailcall(wikrt_cx* cx) 
+{
+    // ([a→b]*(a*unit))→b. 
+    // Translate to an ([a→b]*b) inline operation.
+    wikrt_assocl(cx);
+    wikrt_elim_unit_r(cx);
+    _wikrt_eval_step_inline(cx);
+}
+
+
+static void _wikrt_sum_merge(wikrt_cx* cx) 
+{
+    wikrt_sum_tag lr;
+    wikrt_unwrap_sum(cx, &lr);
+    // do nothing with lr result
+}
+static void _wikrt_sum_assert(wikrt_cx* cx)
+{
+    wikrt_sum_tag lr;
+    wikrt_unwrap_sum(cx, &lr);
+    if(WIKRT_INR != lr) { wikrt_set_error(cx, WIKRT_ETYPE); }
+}
+static void _wikrt_accel_intro_void(wikrt_cx* cx)
+{
+    wikrt_wrap_sum(cx, WIKRT_INR);
+}
+
+typedef void (*wikrt_op_evalfn)(wikrt_cx*);
+static const wikrt_op_evalfn wikrt_op_evalfn_table[OP_COUNT] = 
+{ [OP_SP] = _wikrt_nop
+, [OP_LF] = _wikrt_nop
+, [OP_PROD_ASSOCL] = wikrt_assocl
+, [OP_PROD_ASSOCR] = wikrt_assocr
+, [OP_PROD_W_SWAP] = wikrt_wswap
+, [OP_PROD_Z_SWAP] = wikrt_zswap
+, [OP_PROD_INTRO1] = wikrt_intro_unit_r
+, [OP_PROD_ELIM1] = wikrt_elim_unit_r
+, [OP_SUM_ASSOCL] = wikrt_sum_assocl
+, [OP_SUM_ASSOCR] = wikrt_sum_assocr
+, [OP_SUM_W_SWAP] = wikrt_sum_wswap
+, [OP_SUM_Z_SWAP] = wikrt_sum_zswap
+, [OP_SUM_INTRO0] = _wikrt_sum_intro0
+, [OP_SUM_ELIM0] = _wikrt_sum_elim0
+, [OP_COPY] = wikrt_copy
+, [OP_DROP] = wikrt_drop
+, [OP_APPLY] = _wikrt_eval_step_apply
+, [OP_COMPOSE] = wikrt_compose
+, [OP_QUOTE] = wikrt_quote
+, [OP_REL] = wikrt_block_rel
+, [OP_AFF] = wikrt_block_aff
+, [OP_NUM] = _wikrt_intro_num
+, [OP_D0] = _wikrt_d0
+, [OP_D1] = _wikrt_d1
+, [OP_D2] = _wikrt_d2
+, [OP_D3] = _wikrt_d3
+, [OP_D4] = _wikrt_d4
+, [OP_D5] = _wikrt_d5
+, [OP_D6] = _wikrt_d6
+, [OP_D7] = _wikrt_d7
+, [OP_D8] = _wikrt_d8
+, [OP_D9] = _wikrt_d9
+, [OP_ADD] = wikrt_int_add
+, [OP_MUL] = wikrt_int_mul
+, [OP_NEG] = wikrt_int_neg
+, [OP_DIV] = wikrt_int_div
+, [OP_GT] = _wikrt_int_cmp_gt
+, [OP_CONDAP] = _wikrt_eval_step_condap
+, [OP_DISTRIB] = wikrt_sum_distrib
+, [OP_FACTOR] = wikrt_sum_factor
+, [OP_MERGE] = _wikrt_sum_merge
+, [OP_ASSERT] = _wikrt_sum_assert
+
+, [ACCEL_TAILCALL] = _wikrt_eval_step_tailcall
+, [ACCEL_INLINE] = _wikrt_eval_step_inline
+, [ACCEL_PROD_SWAP] = wikrt_accel_swap
+, [ACCEL_INTRO_UNIT] = wikrt_intro_unit
+, [ACCEL_SUM_SWAP]  = wikrt_accel_sum_swap
+, [ACCEL_INTRO_VOID] = _wikrt_accel_intro_void
+, [ACCEL_wrzw] = wikrt_accel_wrzw
+, [ACCEL_wzlw] = wikrt_accel_wzlw
+}; 
+
+
 
 /* Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e).
  *
@@ -110,15 +263,13 @@ static void wikrt_run_eval_object(wikrt_cx* cx)
 
 static void wikrt_run_eval_operator(wikrt_cx* cx, wikrt_op op)
 {
+    assert((OP_INVAL < op) && (op < OP_COUNT));
+    wikrt_op_evalfn_table[op](cx);
 }
  
 void wikrt_run_eval_step(wikrt_cx* cx) 
 {
-    // To resist infinite loops from tying up the client, I'll just use GC
-    // compaction steps to estimate total work performed and limit it to
-    // some maximum relative to start. 
     uint64_t const tick_stop = cx->compaction_count + WIKRT_EVAL_COMPACTION_STEPS;
-
     // Loop: repeatedly: obtain an operation then execute it.
     // Eventually I'll need a compact, high performance variant. 
     do { // Obtain an operation from cx->pc.
@@ -137,8 +288,8 @@ void wikrt_run_eval_step(wikrt_cx* cx)
                 wikrt_run_eval_object(cx);
             }
         } else if(WIKRT_UNIT_INR == cx->pc) {
-            bool const abort_eval_step = (cx->compaction_count >= tick_stop) || wikrt_has_error(cx);
-            if(abort_eval_step) { return; }
+            bool const eval_abort = (cx->compaction_count >= tick_stop) || wikrt_has_error(cx);
+            if(eval_abort) { return; }
 
             wikrt_val* const pcc = wikrt_pval(cx, cx->cc);
             if(WIKRT_PL == wikrt_vtag(*pcc)) {  
