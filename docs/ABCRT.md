@@ -5,7 +5,7 @@ As per [my performance strategy](Performance.md), I'm currently developing a C r
 
 It may be useful to also develop a command-line interface and computation experience at this layer. I would like to encode dictionaries in both value stowage. Dictionary import/export is viable. Supporting a Claw syntax is feasible.
 
-NOTE: In retrospect, it might be better to focus entirely on a Haskell+LLVM implementation. I could still operate on a memory-mapped region for data representation purposes. But I wouldn't also have a bunch of redundant code. At this point, however, backtracking is a bit more expensive than I'd prefer.
+NOTE: In retrospect, it might have been wiser to focus entirely on a Haskell+LLVM implementation, skipping the interpreter entirely. It could still operate on a memory-mapped region for data representation purposes. Essentially, I'd be developing a process model wherby I fill a volume with simply formatted data then prepare high performance code to operate upon it. At this point, however, backtracking is more expensive than I'd prefer. The JIT remains viable.
 
 ## Design Goals
 
@@ -78,6 +78,8 @@ Because I'm running pure code without side-effects, throughput is more important
 
 Parallelism within a computation could also be valuable. I may need to eventually move away from the shared memory idea in favor of free spaces for multiple threads. Though, this could be mitigated by good support for non-copying shared memory and objects.
 
+TODO: Consider 'graduating' context size between compactions. This would allow a 4GB context to act as a 4MB context when the data is small, for example, costing only address space. This would be achieved easily by allocating big chunks of memory after each compaction based on estimated usage. It could be configured by an extra function call on the process.
+
 #### Support for Shared and Non-Copying Objects in Memory?
 
 Linear memory is convenient but it requires frequent deep copies. This is especially a problem for blocks in a fixpoint loop, and for large binary data. I would like some form of stable memory for binaries and blocks of code. 
@@ -93,6 +95,10 @@ Some options:
 * cache stowed values in memory via some other mechanism.
 
 The simplest of these options to implement is to use the C heap and reference counting (or other GC) for shared objects. This would at least offer a simple, robust way to get started. Modeling shared memory in terms of stable access to stowed binary data would be better - simplify structure sharing and garbage collection, and more or less eliminate need for copying data from the stowage layer.
+
+#### Other Ideas
+
+Focusing on collections-oriented processing, e.g. with lists and vectors. 
 
 ### Error Handling?
 
@@ -155,9 +161,9 @@ When a block contains a representation for a complex value (potentially another 
 
 We can potentially have these shared objects be local to a context, i.e. keeping a stack of sorts. But having multi-context shared objects would have some advantages for performance (copying continuations, shared JIT efforts, etc.).
 
-#### Reading and Writing of Blocks?
+#### Serialization of Blocks?
 
-To incrementally read a large block, we should first translate it into a large text or binary. For symmetry, pushing a large block into our code should transform large texts or binaries. The choice of text vs. binary is a bit more questionable, but the performance difference should be negligible. Either should work easily enough.
+For now, I'm using text as an intermediate structure for parsing blocks. It might be useful to eventually develop some means to stream text input and output, i.e. to work with very large blocks of code. But for now, focusing on small amounts of code or paragraph-structured program streams (i.e. paragraps separated by LF LF) would probably work well enough.
 
 #### Binding a Dictionary?
 
@@ -191,13 +197,29 @@ For pending computations, I could probably use a `(block * value)` pair together
 
 With a block and value, it's easy to extend the block with additional work (it's just composition). So I could have lazy application of blocks if I want them. The main difficulty, I think, would be working with parallel computation. Special attention will be needed for parallelism, I think. It's low priority at the moment. 
 
-#### Lazy Computation
+#### Lazy Computation?
 
-Laziness with Wikilon Runtime is a bit troublesome. It's easy to implement, fortunately. Making laziness explicit, rather than implicit and transparent, would be necessary to minimize dynamic conditional checks and synchronization. The main issue with laziness is 
+Laziness with Wikilon Runtime is troublesome. It's easy to implement short-term laziness with paired annotations. The troublesome bit is how laziness should interact with cache, value stowage, substructural types, type safety, termination, and the like.
 
-Do I really need parallelism within a computation? Hmm. It could be very useful, for scalability, to have computations that pick apart a much larger database. So, I suppose it may be worthwhile?
+One option is to effectively treat lazy computations as *linear*. This would limit the damage from copying lazy values - shared dependencies at the dictionary level could still replicate lazy computations. Sadly, it still wouldn't provide useful laziness at a cache layer.
 
-With coupled annotations, I can focus most runtime code on just a fast straightline interpreter (with very few extra conditional behaviors). Even better if I can later eliminate gateway checks for type safety, though that would probably require JIT.
+For now, I'll just table the whole issue. It might prove favorable to model laziness explicitly, e.g. via command sequences or other stepped streaming models. Parallelism is more critical, I think.
+
+#### Parallel Computation?
+
+I've been recently developing a simple model for pure functional parallelism suitable for heavy-weight processes. See [purely functional processes](http://lambda-the-ultimate.org/node/5357#comment-92995) and [pure process parallelism](https://awelonblue.wordpress.com/2016/07/08/pure-process-parallelism/).
+
+The idea is that we annotate an affine *process function* (PF) of general type:
+
+        type PF = argument → (result * PF)
+
+Rather than offloading a *specific computation* into another thread, the idea is to offload a *process function* in a stable manner that can be called many times - with a large sequence of arguments and results. When we call the PF, the argument is essentially queued, the 'future' result is returned immediately, and returned PF is immediately available for the next call.
+
+The sequence of arguments conveniently amortizes the overhead for offloading the function in the first place. This gives pretty good control over how many processes are created. It gives us something similar to 'partitioned' computations of RDP, without all the overhead of naming and identity. (Of course, we can always model identity - a lookup table, etc..) 
+
+This works nicely with external, explicit orchestration of the network and pipeline parallelism.
+
+Holding data in a PF could also serve a role similar to stowage. And variant on parallelism should work very well with cached computations.
 
 ### Arrays or Compact Lists
 
@@ -252,20 +274,9 @@ ABC supports integers. But other numbers could be supported via arithmetic accel
 
 One of the bigger challenges will be supporting evaluation limits, i.e. effort quotas. 
 
-## Parallelism
-
-Parallelism is perhaps most easily handled with paired annotations, e.g. a `{&fork}` annotation coupled to a `{&join}` annotation. The `{&fork}` annotation might apply to a lazy computation (like in Haskell) or perhaps as a specialized block attribute. 
-
-With parallelism and semi-space GC, I'll probably need *multiple* contexts. Or perhaps to (somehow) divide an existing context into several smaller fragments. Division of a context into multiple parts is feasible, at least. But it seems likely to become overly complicated. It should be a lot easier to just have a pool of small contexts for parallelism at the wikrt_env layer, or to create fresh contexts as needed.
-
 ## Static vs. Dynamic Typing?
 
-I'd like to eventually have access to an "assume static type safety" option for faster evaluation, i.e. skipping all the runtime checks. However, this might only work for compiled code. I might also need to add gateway checks for inputs.
-
-
-
-
-
+I'd like to eventually have access to an "assume type safety" option on the interpreter for very fast evaluation, skipping dynamic runtime type checks. But I'll need to wait until I'm either confident in the type safety checks, or able to use a separate virtual machine for the evaluation. 
 
 # Other ideas
 

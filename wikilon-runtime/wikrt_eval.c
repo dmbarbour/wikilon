@@ -15,15 +15,16 @@
  *
  * The 'stack' in question could simply be a list of `ops` lists.
  *
- * Quotas:
+ * Effort Quota:
  *
- * I need to stop evaluation after so much effort. This shouldn't
- * be tested too frequently, so at the start or end of a function
- * call should work. If at the end of a function call, I'll need
- * to be certain to test during tail-calls, too.
+ * Infinite loops would be a problem. So I'll just halt a computation
+ * that appears to take too long. Eventually (with parallelism) I may
+ * need something sophisticated, like a shared pool for computation
+ * effort. 
  *
- * Termination must also occur if a space quota is hit. This can
- * be achieved by testing for error upon `$` operators.
+ * Testing the quota currently occurs whenever we end a block call,
+ * including for tail calls. So we might run a bit over. This isn't
+ * a big deal.
  *
  * Tail Call Optimization and Loopy Code:
  *
@@ -43,6 +44,8 @@
 
 
 static void _wikrt_nop(wikrt_cx* cx) {  /* NOP */  }
+
+
 static void _wikrt_sum_intro0(wikrt_cx* cx) 
 { 
     wikrt_wrap_sum(cx, WIKRT_INL); 
@@ -53,7 +56,24 @@ static void _wikrt_sum_elim0(wikrt_cx* cx)
     wikrt_unwrap_sum(cx, &lr);
     if(WIKRT_INL != lr) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
-static void _wikrt_intro_num(wikrt_cx* cx) { wikrt_intro_i32(cx, 0); }
+static void _wikrt_sum_merge(wikrt_cx* cx) 
+{
+    wikrt_sum_tag lr;
+    wikrt_unwrap_sum(cx, &lr);
+    // do nothing with lr result
+}
+static void _wikrt_sum_assert(wikrt_cx* cx)
+{
+    wikrt_sum_tag lr;
+    wikrt_unwrap_sum(cx, &lr);
+    if(WIKRT_INR != lr) { wikrt_set_error(cx, WIKRT_ETYPE); }
+}
+static void _wikrt_accel_intro_void(wikrt_cx* cx)
+{
+    wikrt_wrap_sum(cx, WIKRT_INR);
+}
+
+
 static void wikrt_dK(wikrt_cx* cx, int32_t k) 
 {
     // I could probably do faster integer building.
@@ -63,6 +83,7 @@ static void wikrt_dK(wikrt_cx* cx, int32_t k)
     wikrt_intro_i32(cx, k);
     wikrt_int_add(cx);
 }
+static void _wikrt_intro_num(wikrt_cx* cx) { wikrt_intro_i32(cx, 0); }
 static void _wikrt_d0(wikrt_cx* cx) { wikrt_dK(cx, 0); }
 static void _wikrt_d1(wikrt_cx* cx) { wikrt_dK(cx, 1); }
 static void _wikrt_d2(wikrt_cx* cx) { wikrt_dK(cx, 2); }
@@ -73,13 +94,23 @@ static void _wikrt_d6(wikrt_cx* cx) { wikrt_dK(cx, 6); }
 static void _wikrt_d7(wikrt_cx* cx) { wikrt_dK(cx, 7); }
 static void _wikrt_d8(wikrt_cx* cx) { wikrt_dK(cx, 8); }
 static void _wikrt_d9(wikrt_cx* cx) { wikrt_dK(cx, 9); }
+static void _wikrt_int_cmp_gt(wikrt_cx* cx) 
+{
+//  G :: N(x) * (N(y) * e) → ((N(y)*N(x))+(N(x)*N(y)) * e -- y > x
+//       #4 #2 G -- observes 4 > 2. Returns (N(2)*N(4)) on right.
+    wikrt_ord gt;
+    wikrt_int_cmp(cx, &gt);
+    if(WIKRT_GT == gt) {
+        wikrt_assocl(cx);
+        wikrt_wrap_sum(cx, WIKRT_INR);
+    } else {
+        wikrt_wswap(cx);
+        wikrt_assocl(cx);
+        wikrt_wrap_sum(cx, WIKRT_INL);
+    }
+}
 
 static void _wikrt_eval_step_apply(wikrt_cx* cx) 
-{
-    fprintf(stderr, "todo %s\n", __FUNCTION__);
-    wikrt_set_error(cx, WIKRT_IMPL);
-}
-static void _wikrt_int_cmp_gt(wikrt_cx* cx) 
 {
     fprintf(stderr, "todo %s\n", __FUNCTION__);
     wikrt_set_error(cx, WIKRT_IMPL);
@@ -101,24 +132,6 @@ static void _wikrt_eval_step_tailcall(wikrt_cx* cx)
     wikrt_assocl(cx);
     wikrt_elim_unit_r(cx);
     _wikrt_eval_step_inline(cx);
-}
-
-
-static void _wikrt_sum_merge(wikrt_cx* cx) 
-{
-    wikrt_sum_tag lr;
-    wikrt_unwrap_sum(cx, &lr);
-    // do nothing with lr result
-}
-static void _wikrt_sum_assert(wikrt_cx* cx)
-{
-    wikrt_sum_tag lr;
-    wikrt_unwrap_sum(cx, &lr);
-    if(WIKRT_INR != lr) { wikrt_set_error(cx, WIKRT_ETYPE); }
-}
-static void _wikrt_accel_intro_void(wikrt_cx* cx)
-{
-    wikrt_wrap_sum(cx, WIKRT_INR);
 }
 
 typedef void (*wikrt_op_evalfn)(wikrt_cx*);
@@ -176,8 +189,6 @@ static const wikrt_op_evalfn wikrt_op_evalfn_table[OP_COUNT] =
 , [ACCEL_wzlw] = wikrt_accel_wzlw
 }; 
 
-
-
 /* Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e).
  *
  * At the moment, this constructs a (pending (block * value)) structure.
@@ -215,10 +226,17 @@ static inline void wikrt_require_fresh_eval(wikrt_cx* cx)
     if(!is_fresh_eval) { wikrt_set_error(cx, WIKRT_IMPL); }
 }
 
+static inline void wikrt_run_eval_anno(wikrt_cx* cx, char const* strAnno)
+{
+    // Ignoring annotations is safe so long as coupled annotations
+    // are handled appropriately. For the most part, annotation tokens
+    // that Wikilon runtime recognizes should be detected at the parser.
+}
+
 static inline void wikrt_run_eval_token(wikrt_cx* cx, char const* token)
 {
-    if('&' == *token) {
-        // TODO: handle annotations
+    if('&' == *token) { 
+        wikrt_run_eval_anno(cx, token);
     } else if('.' == *token) {
         char seal[WIKRT_TOK_BUFFSZ];
         wikrt_unwrap_seal(cx, seal);
@@ -227,6 +245,10 @@ static inline void wikrt_run_eval_token(wikrt_cx* cx, char const* token)
     } else if(':' == *token) {
         // big sealer tokens should be rare.
         wikrt_wrap_seal(cx, token);
+    } else if('\'' == *token) {
+        // Assume token is resource ID for a local stowed value. NOTE: this
+        // is better handled by the parser than by the evaluator.
+        wikrt_intro_sv(cx, token);
     } else {
         wikrt_set_error(cx, WIKRT_IMPL);
     }
@@ -267,9 +289,9 @@ static void wikrt_run_eval_operator(wikrt_cx* cx, wikrt_op op)
     wikrt_op_evalfn_table[op](cx);
 }
  
-void wikrt_run_eval_step(wikrt_cx* cx) 
+void wikrt_run_eval_step(wikrt_cx* cx, int tick_steps) 
 {
-    uint64_t const tick_stop = cx->compaction_count + WIKRT_EVAL_COMPACTION_STEPS;
+    uint64_t const tick_stop = cx->compaction_count + tick_steps;
     // Loop: repeatedly: obtain an operation then execute it.
     // Eventually I'll need a compact, high performance variant. 
     do { // Obtain an operation from cx->pc.
@@ -288,7 +310,7 @@ void wikrt_run_eval_step(wikrt_cx* cx)
                 wikrt_run_eval_object(cx);
             }
         } else if(WIKRT_UNIT_INR == cx->pc) {
-            bool const eval_abort = (cx->compaction_count >= tick_stop) || wikrt_has_error(cx);
+            bool const eval_abort = (cx->compaction_count > tick_stop) || wikrt_has_error(cx);
             if(eval_abort) { return; }
 
             wikrt_val* const pcc = wikrt_pval(cx, cx->cc);
@@ -354,7 +376,7 @@ bool wikrt_step_eval(wikrt_cx* cx)
     wikrt_elim_unit(cx);
 
     // At this point: cx->cc and cx->pc are initialized.
-    wikrt_run_eval_step(cx); // run main evaluation loop
+    wikrt_run_eval_step(cx, WIKRT_EVAL_COMPACTION_STEPS); // run main evaluation loop
 
     bool const finished = 
         (WIKRT_UNIT_INR == cx->pc) &&

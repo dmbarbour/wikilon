@@ -138,14 +138,12 @@ void wikrt_env_sync(wikrt_env*);
  */
 wikrt_cx* wikrt_cx_create(wikrt_env*, uint32_t cxSizeMB);
 
-/** @brief Release cached resources associated with a context. 
+/** @brief Release any cached resources associated with a context. 
  *
  * If you're not going to use a context for a while, signal with 
- * wikrt_cx_relax to release control of cached memory. This is 
- * This might be useful if you plan to hold onto a context for a while
- * without further manipulations. It tells the context to relax its grip
- * on cached data resources. This is action is usually periodic, driven
- * by garbage collection, so is unnecessary outside of special cases.
+ * wikrt_cx_relax to release control of unnecessary resources. This
+ * might cause a garbage collection to release memory pages, for 
+ * example.
  */
 void wikrt_cx_relax(wikrt_cx*);
 
@@ -155,6 +153,7 @@ void wikrt_cx_reset(wikrt_cx*);
 /** @brief Destroy a context, recover memory. */
 void wikrt_cx_destroy(wikrt_cx*);
 
+// Maybe add some context performance tuning opportunities.
 
 /** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
@@ -681,18 +680,9 @@ void wikrt_block_aff(wikrt_cx*);
 /** @brief Mark a block relevant (non-droppable). (block*e)→(block*e). */
 void wikrt_block_rel(wikrt_cx*);
 
-/** @brief Mark a block for parallel evaluation. (block*e)→(block*e). 
- *
- * Note: this doesn't affect a top-level evaluation, only applications
- * internal to a wikrt_step_eval. Wikilon runtime guarantees there is
- * no parallel evaluation upon returning from wikrt_step_eval.
- */
-void wikrt_block_par(wikrt_cx*);
+// Laziness and Parallelism? Maybe eventually.
 
-/** @brief Compose two blocks. ([a→b]*([b→c]*e))→([a→c]*e). 
- *
- * 
- */
+/** @brief Compose two blocks. ([a→b]*([b→c]*e))→([a→c]*e). */
 void wikrt_compose(wikrt_cx*);
 
 /** @brief Add two integers. (I(a)*(I(b)*e))→(I(a+b)*e). */

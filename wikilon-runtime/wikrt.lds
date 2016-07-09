@@ -82,7 +82,6 @@
     wikrt_quote;
     wikrt_block_aff;
     wikrt_block_rel;
-    wikrt_block_par;
     wikrt_quote;
     wikrt_compose;
 

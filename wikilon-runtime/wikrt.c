@@ -149,6 +149,7 @@ void wikrt_cx_reset(wikrt_cx* cx)
 
     // wikrt_cx_reset will also clear our error status.
     cx->ecode = WIKRT_OK;
+    cx->alloc = 0; // clear allocator
 }
 
 
@@ -234,7 +235,14 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
 
     // basic compacting GC
     wikrt_mem_compact(cx);
-    if(wikrt_mem_available(cx,sz)) { return true; }
+    if(wikrt_mem_available(cx,sz)) { 
+        // TODO: consider allocating a volume of empty space. This would
+        // improve memory locality  for 'graduated'
+        // memory, i.e. to improve memory locality for  some empty space for 'graduated'
+    
+        return true; 
+    }
+
 
     // TODO: If compaction fails to recover sufficient space,
     // but a sufficient amount of stowage is pending, we can
@@ -1874,7 +1882,7 @@ void wikrt_quote(wikrt_cx* cx)
 
 void wikrt_block_aff(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_AFFINE); }
 void wikrt_block_rel(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_RELEVANT); }
-void wikrt_block_par(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_PARALLEL); }
+//void wikrt_block_par(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_PARALLEL); }
 
 void wikrt_block_attrib(wikrt_cx* cx, wikrt_val attrib) 
 {
@@ -1966,10 +1974,28 @@ void wikrt_compose(wikrt_cx* cx)
 
 
 
+  ///////////////////
+ // VALUE STOWAGE //
+///////////////////
+// stubs for now
 
-
-
-
+void wikrt_stow(wikrt_cx* cx) 
+{
+    /* NOP for now (annotation) */ 
+}
+void wikrt_load(wikrt_cx* cx)
+{
+    /* NOP for now (annotation) */
+}
+void wikrt_intro_sv(wikrt_cx* cx, char const* resourceId)
+{
+    wikrt_set_error(cx, WIKRT_IMPL);
+}
+void wikrt_peek_sv(wikrt_cx* cx, char* resourceId)
+{
+    (*resourceId) = 0;
+    wikrt_set_error(cx, WIKRT_IMPL);
+}
 
 
 

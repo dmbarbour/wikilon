@@ -364,7 +364,6 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
 // block header bits
 #define WIKRT_BLOCK_RELEVANT (1 << 8)
 #define WIKRT_BLOCK_AFFINE   (1 << 9)
-#define WIKRT_BLOCK_PARALLEL (1 << 10)
 
 // block inherits substructural attributes from contained value
 // this is used for quoted values within a block.
