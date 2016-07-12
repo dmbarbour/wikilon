@@ -197,29 +197,27 @@ For pending computations, I could probably use a `(block * value)` pair together
 
 With a block and value, it's easy to extend the block with additional work (it's just composition). So I could have lazy application of blocks if I want them. The main difficulty, I think, would be working with parallel computation. Special attention will be needed for parallelism, I think. It's low priority at the moment. 
 
-#### Lazy Computation?
+#### Parallel Computation
 
-Laziness with Wikilon Runtime is troublesome. It's easy to implement short-term laziness with paired annotations. The troublesome bit is how laziness should interact with cache, value stowage, substructural types, type safety, termination, and the like.
+Due to my memory management decisions (compacting collector, separate heap per context), the overhead for initiating parallel evaluation, and communicating between parallel threads, is large. Further, it will get worse if ever I support distributed parallel computing. It's very important to me that any solution for parallelism should be transparently scalable to high performance distributed computing (mesh networks, cloud, etc.). 
 
-One option is to effectively treat lazy computations as *linear*. This would limit the damage from copying lazy values - shared dependencies at the dictionary level could still replicate lazy computations. Sadly, it still wouldn't provide useful laziness at a cache layer.
-
-For now, I'll just table the whole issue. It might prove favorable to model laziness explicitly, e.g. via command sequences or other stepped streaming models. Parallelism is more critical, I think.
-
-#### Parallel Computation?
-
-I've been recently developing a simple model for pure functional parallelism suitable for heavy-weight processes. See [purely functional processes](http://lambda-the-ultimate.org/node/5357#comment-92995) and [pure process parallelism](https://awelonblue.wordpress.com/2016/07/08/pure-process-parallelism/).
-
-The idea is that we annotate an affine *process function* (PF) of general type:
+My idea is to use affine *process functions* (PF) of general form:
 
         type PF = argument → (result * PF)
 
-Rather than offloading a *specific computation* into another thread, the idea is to offload a *process function* in a stable manner that can be called many times - with a large sequence of arguments and results. When we call the PF, the argument is essentially queued, the 'future' result is returned immediately, and returned PF is immediately available for the next call.
+A function of this form may be annotated for parallelism. The runtime may evaluate a PF so annotated in a separate process. Calling the process function with an argument is effectively a remote procedure call. The 'returned' PF remains in the separate process and may immediately be called again, effectively enqueuing messages. The result is returned as an asynchronous future. Lightweight futures enable pipeline parallelism and orchestration of communications between processes.
 
-The sequence of arguments conveniently amortizes the overhead for offloading the function in the first place. This gives pretty good control over how many processes are created. It gives us something similar to 'partitioned' computations of RDP, without all the overhead of naming and identity. (Of course, we can always model identity - a lookup table, etc..) 
+For performance, this design enables clients to amortize the overhead of creating a process across a series or stream of calls. This design is also very predictable. Clients control communication costs - argument and result are communicated, while PF and encapsulated state are not copied. Parallelism and synchronization are also under control. PF is also a good fit for many use cases and parallelism strategies.
 
-This works nicely with external, explicit orchestration of the network and pipeline parallelism.
+Annotations involved may include: `{&fork}` on a PF to turn it into a thread, `{&join}` an asynchronous result to access it, and `{&asynch}` to treat any arbitrary value as asynchronous (i.e. equivalent to passing it through an identity process, to simplify lightweight communications).
 
-Holding data in a PF could also serve a role similar to stowage. And variant on parallelism should work very well with cached computations.
+*Note:* This parallelism concept is theoretically extremely scalable. Up there with Erlang processes, at least. Scaling to distributed computing systems is feasible, and it can work transparently for local use.
+
+#### Lazy Computation? Not too important.
+
+Laziness with Wikilon Runtime is troublesome. It's easy to implement 'local' laziness with paired annotations. The troublesome bit is how laziness should interact with cache, stowage, parallelism, etc.. One option is to effectively treat lazy computations as *linear*. This would limit the damage from copying lazy values. Shared dependencies at the dictionary level could still replicate a lazy computation.
+ 
+For now, I'll table the issue. Laziness is not critical for performance or scalability. It might prove favorable to model laziness explicitly in terms of command sequences, streams, continuation passing style, or other *semantically* incremental computation.
 
 ### Arrays or Compact Lists
 
@@ -254,11 +252,15 @@ A non-copying representation for binaries would need to have something like:
 
 The `head` would need to include information to prevent GC. And the `buffer` would be for fast access, it might be recomputed from the `head` and `offset` after copying. A `size` would potentially allow an underlying shared binary to be divided into multiple chunks, i.e. a binary of 10kB could be divided into 10 1kB chunks. 
 
-#### Texts
+#### Texts - Wrap a Binary
 
-Texts are a specialization on binaries. At the moment, limit sizes to 16 bits, and store both size-in-bytes and size-in-characters for each chunk. This gives a simple index into a very large text.
+Originally I modeled texts as a *specialization* on binaries. With hindsight, it might be better to treat texts as a simple wrapper for a shared binary, e.g. `(text, binary)`, requiring termination with a normal list finisher.
 
-As with binaries, I'll probably eventually want a good non-copying shared text representation.
+* reuse alternative binary data representations - shared binaries, too
+* texts strictly valid for embedding in ABC, simplifies conversion code
+* leave structuring large texts to client code (e.g. finger tree ropes)
+
+Accelerators on texts are limited without an index, requiring a linear scan of the binary. However, this could be mitigated by encouraging programmers to model large texts using a finger-tree or other rope model.
 
 ### More Numerics
 

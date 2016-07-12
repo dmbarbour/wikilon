@@ -293,20 +293,10 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
  *   A binary is a specialized array type, elements restricted to the range
  *   of small numbers in 0..255. The basic array structure is the same.
  * 
- * WIKRT_OTAG_TEXT
+ * WIKRT_OTAG_UTF8
  *
- *   A text is a specialized compact list type, using a utf-8 encoding and
- *   limited segment sizes. In particular, each segment may be no more than
- *   2^16 bytes. Our 'size' field is divided into a byte count and codepoint
- *   count, ranging 1..(2^16 - 1). Generally I won't reach the max size.
- *
- *      (hdr, next, (size-chars, size-bytes), buffer)
- *          size-bytes is lower 16 bits
- *          size-chars encoded in upper bits
- *
- *   The chunked representation limits how much scanning is necessary to 
- *   index or split a text, providing a simplistic linear index (speed up
- *   indexing by a factor of up to 2^16. For very large texts, of course.
+ *   (utf8, binary). Wraps a binary list terminating in unit to treat it as
+ *   an embedded utf8 text. The binary must be known to be valid utf8 text.
  *
  * WIKRT_OTAG_STOWAGE (planned)
  *
@@ -347,7 +337,7 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
 #define WIKRT_OTAG_SEAL_SM  58   /* : */
 #define WIKRT_OTAG_ARRAY    86   /* V */
 #define WIKRT_OTAG_BINARY   56   /* 8 */
-#define WIKRT_OTAG_TEXT     34   /* " */
+#define WIKRT_OTAG_UTF8     34   /* " */
 //#define WIKRT_OTAG_STOWAGE  64   /* @ */
 #define WIKRT_OTAG_TRASH    95   /* _ */
 #define WIKRT_OTAG_PEND     126  /* ~ */
@@ -371,19 +361,10 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
 
 // Currently, support for large integers is disabled. This enables
 // simple assertions
-#if defined(WIKRT_OTAG_BIGINT)
-#define WIKRT_HAS_BIGINT 1
-#else
 #define WIKRT_HAS_BIGINT 0
-#endif
 
 // render text as a basic list of numbers, to avoid O(N^2) rendering issues
 #define WIKRT_OPVAL_ASLIST      (1 << 9)  
-
-// forcibly render as embedded text
-// intended to ensure text→block→text is identity 
-// (e.g. for the empty text case)
-#define WIKRT_OPVAL_EMTEXT      (1 << 10) 
 
 static inline bool wikrt_otag_deepsum(wikrt_otag v) { return (WIKRT_OTAG_DEEPSUM == LOBYTE(v)); }
 static inline bool wikrt_otag_block(wikrt_otag v) { return (WIKRT_OTAG_BLOCK == LOBYTE(v)); }
@@ -392,7 +373,7 @@ static inline bool wikrt_otag_seal(wikrt_otag v) { return (WIKRT_OTAG_SEAL == LO
 static inline bool wikrt_otag_seal_sm(wikrt_otag v) { return (WIKRT_OTAG_SEAL_SM == LOBYTE(v)); }
 static inline bool wikrt_otag_binary(wikrt_otag v) { return (WIKRT_OTAG_BINARY == LOBYTE(v)); }
 static inline bool wikrt_otag_array(wikrt_otag v) { return (WIKRT_OTAG_ARRAY == LOBYTE(v)); }
-static inline bool wikrt_otag_text(wikrt_otag v) { return (WIKRT_OTAG_TEXT == LOBYTE(v)); }
+static inline bool wikrt_otag_utf8(wikrt_otag v) { return (WIKRT_OTAG_UTF8 == LOBYTE(v)); }
 static inline bool wikrt_otag_trash(wikrt_otag v) { return (WIKRT_OTAG_TRASH == LOBYTE(v)); }
 static inline bool wikrt_otag_pend(wikrt_otag v) { return (WIKRT_OTAG_PEND == LOBYTE(v)); }
 //static inline bool wikrt_otag_stowage(wikrt_val v) { return (WIKRT_OTAG_STOWAGE == LOBYTE(v)); }
@@ -418,37 +399,6 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* stack, wikrt_val v, wikrt_ss* ss);
 void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx, wikrt_val* rval);
 //  moving_copy: true if we're actually moving the value, i.e. the origin is dropped.
 
-// Due to use of a compacting collector (potentially during any
-// allocation) I must be certain to reserve space if I need to
-// ensure stable locations in memory for multiple allocations.
-
-void wikrt_expand_sum_rv(wikrt_cx* cx, wikrt_val* v);
-void wikrt_wrap_sum_rv(wikrt_cx*, wikrt_sum_tag, wikrt_val* v);
-void wikrt_unwrap_sum_rv(wikrt_cx*, wikrt_sum_tag*, wikrt_val* v);
-#define WIKRT_WRAP_SUM_RESERVE WIKRT_CELLSIZE
-#define WIKRT_EXPAND_SUM_RESERVE WIKRT_CELLSIZE
-#define WIKRT_UNWRAP_SUM_RESERVE WIKRT_EXPAND_SUM_RESERVE
-
-void wikrt_sum_wswap_rv(wikrt_cx*, wikrt_val* v);
-void wikrt_sum_zswap_rv(wikrt_cx*, wikrt_val* v);
-void wikrt_sum_assocl_rv(wikrt_cx*, wikrt_val* v);
-void wikrt_sum_assocr_rv(wikrt_cx*, wikrt_val* v);
-void wikrt_accel_sum_swap_rv(wikrt_cx*, wikrt_val* v);
-// conservative free-space requirement for sum manipulations (sum_wswap, etc.)
-#define WIKRT_SUMOP_RESERVE (4 * (WIKRT_UNWRAP_SUM_RESERVE + WIKRT_WRAP_SUM_RESERVE))
-
-// For large allocations where I cannot easily predict the size, I should
-// most likely indicate a register as my target. Combining this responsibility
-// with introducing a value (e.g. adding it to our stack) is a mistake.
-
-wikrt_val wikrt_alloc_i32_rv(wikrt_cx* cx, int32_t);
-wikrt_val wikrt_alloc_i64_rv(wikrt_cx* cx, int64_t);
-#define WIKRT_ALLOC_I32_RESERVE 0
-#define WIKRT_ALLOC_I64_RESERVE 0
-
-// non-allocating comparison.
-void wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b);
-void wikrt_block_attrib(wikrt_cx* cx, wikrt_val attrib);
 #if 0
 void wikrt_quote_v(wikrt_cx*, wikrt_val*);
 void wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* out);
@@ -519,6 +469,9 @@ void wikrt_remove_cx_from_env(wikrt_cx* cx);
  * weighed against the additional use of conditional expressions.
  */ 
 struct wikrt_cx {
+    // unique context identifier within env
+    uint64_t            cxid;       
+
     // doubly-linked list of contexts in environment.
     wikrt_cx           *cxnext;
     wikrt_cx           *cxprev;
@@ -530,7 +483,7 @@ struct wikrt_cx {
     wikrt_size          size;       // size of memory
 
     // Error status
-    wikrt_ecode         ecode;      // WIKRT_OK or earliest error
+    wikrt_ecode         ecode;      // WIKRT_OK or first error
 
     // registers, root data
     wikrt_val           val;        // primary value 
@@ -543,17 +496,13 @@ struct wikrt_cx {
     // free-list memory recycling
     // wikrt_addr          freecells;  // list of cell-sized objects
 
-    // semispace garbage collection.
+    // semispace and garbage collection.
     void*               ssp;    // for GC, scratch
-    wikrt_size          compaction_size;    // memory after compaction
-    uint64_t            compaction_count;   // count of compactions
-    uint64_t            cxid;   // unique context identifier within env
-
-    // statistics for effort heuristics
+    wikrt_size          compaction_size;  // memory after compaction
+    uint64_t            compaction_count; // count of compactions
     uint64_t            bytes_compacted;  // bytes copied during compaction
     uint64_t            bytes_collected;  // bytes allocated then collected
 
-    // Other... maybe move error tracking here?
 };
 
 // just for sanity checks
@@ -565,6 +514,10 @@ struct wikrt_cx {
 #define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
 #define WIKRT_HAS_SHARED_REFCT_OBJECTS 0 /* for static assertions */
+
+// Tuning parameters to use less than full context memory if possible?
+//   I'm thinking it might be best to make this a dynamic tuning 
+//   parameter per context.
 
 // Consider:
 //  a debug list for warnings (e.g. via {&warn} or {&error})
@@ -633,9 +586,10 @@ static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) {
     cx->val = wikrt_alloc_cellval_r(cx, WIKRT_P, v, cx->val); 
 }
 
-
 // if we have already reserved WIKRT_CELLSIZE and know we have a valid op
-static inline void wikrt_intro_op_r(wikrt_cx* cx, wikrt_op op) { wikrt_intro_r(cx, wikrt_i2v(op)); }
+static inline void wikrt_intro_op_r(wikrt_cx* cx, wikrt_op op) { 
+    wikrt_intro_r(cx, wikrt_i2v(op)); 
+}
 
 static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
     wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), v, ss); }
@@ -672,7 +626,15 @@ static inline bool wikrt_integer(wikrt_cx* cx, wikrt_val v) {
     return wikrt_smallint(v); 
 }
 static inline bool wikrt_blockval(wikrt_cx* cx, wikrt_val v) {
-    return wikrt_o(v) && wikrt_otag_block(*wikrt_pobj(cx, v)); 
+    return (wikrt_o(v) && wikrt_otag_block(*wikrt_pobj(cx, v))); 
+}
+
+static inline bool wikrt_value_is_utf8(wikrt_cx* cx, wikrt_val v) {
+    return (wikrt_o(v) && wikrt_otag_utf8(*(wikrt_pobj(cx,v)))); 
+}
+
+static inline bool wikrt_value_is_compact_binary(wikrt_cx* cx, wikrt_val v) {
+    return (wikrt_o(v) && wikrt_otag_binary(*(wikrt_pobj(cx,v)))); 
 }
 
 // (block * e) → (ops * e), returning block tag (e.g. with substructure)
@@ -685,8 +647,8 @@ static inline bool wikrt_trashval(wikrt_cx* cx, wikrt_val v) {
     return wikrt_o(v) && wikrt_otag_trash(*wikrt_pobj(cx, v));
 }
 
-// utility for construction of large texts.
-void wikrt_reverse_text_chunks(wikrt_cx* cx);
+// utility for incremental construction of large binaries and texts.
+void wikrt_reverse_binary_chunks(wikrt_cx* cx);
 
 static inline bool wikrt_cx_has_txn(wikrt_cx* cx) { 
     return (WIKRT_REG_TXN_INIT == cx->txn); 
@@ -737,10 +699,8 @@ static inline void wikrt_elim_list_end(wikrt_cx* cx)
     wikrt_elim_unit(cx);
 }
 
-
 // (v*e) → ((otag v) * e). E.g. for opval, block. Requires WIKRT_CELLSIZE.
 static inline void wikrt_wrap_otag_r(wikrt_cx* cx, wikrt_otag otag) {
-    _Static_assert((WIKRT_SMALLINT_MAX >= OP_COUNT), "assuming ops are smallnums");
     wikrt_val* const v = wikrt_pval(cx, cx->val);
     (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
 }
