@@ -6,7 +6,7 @@
 #include "wikilon-runtime.h"
 #include "utf8.h"
 
-#define TESTCX_SIZE 4
+#define TESTCX_SIZE 20
 #define TESTENV_SIZE (4 * TESTCX_SIZE)
 
 char const* const valid_abc_strings[] =
@@ -405,9 +405,9 @@ bool test_sealers(wikrt_cx* cx)
 
     // validate copy and drop of sealed values
     for(size_t ii = 0; ii < 12; ++ii) {
-        wikrt_copyf(cx);
+        wikrt_copy(cx);
         if(ii & 1) { wikrt_wswap(cx); }
-        wikrt_dropk(cx);
+        wikrt_drop(cx);
     }
 
     for(size_t ii = nSeals; ii > 0; --ii) {
@@ -443,7 +443,7 @@ int32_t pop_list_i32(wikrt_cx* cx)
     read_sum(cx, WIKRT_INL);
     wikrt_assocr(cx);
     wikrt_peek_i32(cx, &a);
-    wikrt_dropk(cx);
+    wikrt_drop(cx);
     return a;
 }
 
@@ -934,14 +934,16 @@ void test_aff(wikrt_cx* cx)
     wikrt_quote(cx);
     wikrt_block_aff(cx);
     deep_wrap_val(cx);
-
-    wikrt_copyf(cx); // `copyf` allows copy of affine value
-    wikrt_wswap(cx); // ensure copy preserves affine
     wikrt_drop(cx);  // this is okay (drop affine value)
 
+    wikrt_intro_i32(cx, 1);
+    wikrt_quote(cx);
+    wikrt_block_aff(cx);
+    deep_wrap_val(cx);
+    
     if(wikrt_error(cx)) { return; }
-    wikrt_copy(cx); // this is an error (copy affine value)
 
+    wikrt_copy(cx); // this is an error (copy affine value)
     if(!wikrt_error(cx)) {
         wikrt_set_error(cx, WIKRT_ETYPE);
     } else { wikrt_cx_reset(cx); }
@@ -953,18 +955,13 @@ void test_rel(wikrt_cx* cx)
     wikrt_quote(cx);
     wikrt_block_rel(cx);
     deep_wrap_val(cx);
-
     wikrt_copy(cx);  // this is okay (copy of relevant value)
-    wikrt_wswap(cx); // ensure copy preserves relevance
-    wikrt_dropk(cx); // `dropk` allows drop of relevant values
-
     if(wikrt_error(cx)) { return; }
-    wikrt_drop(cx); // this is an error (drop relevant value)
 
+    wikrt_drop(cx); // this is an error (drop relevant value)
     if(!wikrt_error(cx)) {
         wikrt_set_error(cx, WIKRT_ETYPE);
     } else { wikrt_cx_reset(cx); }
-
 }
 
 void test_trash(wikrt_cx* cx) 
@@ -973,10 +970,8 @@ void test_trash(wikrt_cx* cx)
     wikrt_quote(cx);
     wikrt_block_rel(cx);
     wikrt_wrap_seal(cx, ":test");
-
     wikrt_copy(cx);
     val2txt(cx); elim_cstr(cx, "[#99]k{:test}");
-
     wikrt_trash(cx);
     val2txt(cx); elim_cstr(cx, "[]k{&trash}");
 
@@ -984,9 +979,6 @@ void test_trash(wikrt_cx* cx)
     wikrt_quote(cx);
     wikrt_block_aff(cx);
     wikrt_wrap_seal(cx, ":affineTest");
-    wikrt_copyf(cx);
-    val2txt(cx); elim_cstr(cx, "[vvrwlc]f{:affineTest}");
-    
     wikrt_trash(cx);
     val2txt(cx); elim_cstr(cx, "[]f{&trash}");
 
@@ -995,10 +987,7 @@ void test_trash(wikrt_cx* cx)
     wikrt_block_aff(cx);
     wikrt_block_rel(cx);
     wikrt_wrap_seal(cx, ":relevantAndAffine");
-    wikrt_copyf(cx);
-    val2txt(cx); elim_cstr(cx, "[#12345-]kf{:relevantAndAffine}");
     wikrt_trash(cx);
-
     val2txt(cx); elim_cstr(cx, "[]kf{&trash}");
 
 }

@@ -477,32 +477,33 @@ struct wikrt_cx {
     wikrt_cx           *cxprev;
     wikrt_env          *env;
 
-    // Memory
-    void*               mem;        // active memory
-    wikrt_addr          alloc;      // allocate towards zero
-    wikrt_size          size;       // size of memory
-
-    // Error status
     wikrt_ecode         ecode;      // WIKRT_OK or first error
+
+    // Memory
+    void*               ssp;        // scratch space (and GC)
+    void*               mem;        // active memory
 
     // registers, root data
     wikrt_val           val;        // primary value 
     wikrt_val           pc;         // program counter (eval)
     wikrt_val           cc;         // continuation stack (eval)
     wikrt_val           txn;        // transaction data
-        // consider including: debug output, debug call stack 
-        // might also track multiple computations for laziness
 
-    // free-list memory recycling
-    // wikrt_addr          freecells;  // list of cell-sized objects
+    wikrt_addr          alloc;      // allocate towards zero
+    wikrt_size          size;       // maximum size of memory
+    wikrt_size          skip;       // volume of reserved memory (to favor recycling)
+    wikrt_addr          ofree;      // a 'single-element' free list (special use case)
 
     // semispace and garbage collection.
-    void*               ssp;    // for GC, scratch
     wikrt_size          compaction_size;  // memory after compaction
     uint64_t            compaction_count; // count of compactions
     uint64_t            bytes_compacted;  // bytes copied during compaction
     uint64_t            bytes_collected;  // bytes allocated then collected
 
+    // others: 
+    //   debug output or warnings
+    //   child contexts for parallelism
+    //   track futures and stowage
 };
 
 // just for sanity checks
@@ -511,13 +512,28 @@ struct wikrt_cx {
 #define WIKRT_REG_PC_INIT WIKRT_UNIT
 #define WIKRT_REG_CC_INIT WIKRT_UNIT
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
-#define WIKRT_FREE_LISTS 0 /* memory freelist count (currently none) */
+#define WIKRT_FREE_LISTS 1 /* memory freelist count (currently none) */
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
 #define WIKRT_HAS_SHARED_REFCT_OBJECTS 0 /* for static assertions */
 
-// Tuning parameters to use less than full context memory if possible?
-//   I'm thinking it might be best to make this a dynamic tuning 
-//   parameter per context.
+/* Thoughts on a simple free list:
+ *
+ * I think I'd benefit greatly from a simple, single element free
+ * list specifically for the wikrt_wrap_otag use case. This would
+ * improve performance working with sum-type data plumbing and any
+ * reads on utf8 texts.
+ */
+
+/* For large contexts (e.g. 20MB+) I will want to try to use less than
+ * the maximum available space. Doing so improves memory locality and 
+ * reduce virtual memory pressure, though the virtual memory space is 
+ * still reserved. It's very simple to allocate an empty 'skip' space.
+ *
+ * If a context is within (MEM_FACTOR+1) of being full, this will do 
+ * nothing. For small contexts, it's also effectively a NOP.
+ */
+#define WIKRT_MEM_FACTOR 4 /* free space for some factor of current use (if possible) */
+#define WIKRT_MEM_PAGEMB 2 /* free space in chunks of so many megabytes (if possible) */
 
 // Consider:
 //  a debug list for warnings (e.g. via {&warn} or {&error})
@@ -569,8 +585,10 @@ static inline wikrt_addr wikrt_alloc_r(wikrt_cx* cx, wikrt_sizeb sz)
     return (cx->alloc + ((wikrt_addr) cx->mem)); // Now using absolute addressing!
 }
 
-static inline wikrt_sizeb wikrt_mem_in_use(wikrt_cx* cx) { 
-    return (cx->size - cx->alloc); 
+// How much space have we allocated with data since last compaction?
+//  Note that some of this memory might be dead if GC'd.
+static inline wikrt_size wikrt_mem_in_use(wikrt_cx* cx) { 
+    return ((cx->size - cx->alloc) - cx->skip); 
 }
 
 static inline wikrt_val wikrt_alloc_cellval_r(wikrt_cx* cx, wikrt_tag tag, wikrt_val fst, wikrt_val snd) 
@@ -699,17 +717,7 @@ static inline void wikrt_elim_list_end(wikrt_cx* cx)
     wikrt_elim_unit(cx);
 }
 
-// (v*e) → ((otag v) * e). E.g. for opval, block. Requires WIKRT_CELLSIZE.
-static inline void wikrt_wrap_otag_r(wikrt_cx* cx, wikrt_otag otag) {
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
-}
-
-// try to reserve memory, if successful wrap a value with otag.
-static inline bool wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
-    wikrt_wrap_otag_r(cx, otag);
-    return true; 
-}
+// (v*e) → ((otag v) * e). Try to wrap a value with an otag. 
+void wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag);
 
 

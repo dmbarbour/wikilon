@@ -165,10 +165,6 @@ We can potentially have these shared objects be local to a context, i.e. keeping
 
 For now, I'm using text as an intermediate structure for parsing blocks. It might be useful to eventually develop some means to stream text input and output, i.e. to work with very large blocks of code. But for now, focusing on small amounts of code or paragraph-structured program streams (i.e. paragraps separated by LF LF) would probably work well enough.
 
-#### Binding a Dictionary?
-
-It seems feasible to bind a context to a dictionary, i.e. such that the dictionary implicitly maps `{%word}` tokens to a block of code. This would greatly simplify interpretation of code.
-
 ### Accelerators via DSLs
 
 It might be worthwhile to pursue the 'accelerator via DSL' approach for performance at some point. If we want C language for a given subprogram, for example, we could model a C interpreter then accelerate its operation. C is perhaps not an optimal target to fit into a purely functional program, but there may be other low level languages for which this is a useful idea. (Especially anything that will fit casually into a GPGPU.)
@@ -183,19 +179,21 @@ We annotate a value to moved to persistent storage, or reverse this. Originally,
 
 IMPLEMENTATION: I know of two basic options. 
 
-1. I can attempt to use the *same* representation for stowage that I use at runtime, and treat stowage as a micro-context of sorts to `wikrt_copy_move` between. This approach relies on relative addressing, e.g. such that pointers are all relative to a base address. Dealing with shared objects may be complicated (size computations for stowage vs. sharing would diverge).
+1. I can attempt to use the *same* representation for stowage that I use at runtime, and treat stowage as a micro-context of sorts to `wikrt_copy_move` between. This approach relies on relative addressing, e.g. such that pointers are all relative to a base address. 
 
-2. I can create an alternative compact representation for values. A binary string, perhaps with specialized representation of additional stowage references. This is pretty much a 'VCacheable' approach. We could limit stowage binaries to (for example) one or two megabytes.
+2. I can create an alternative compact representation for values, perhaps oriented around a 'quoted block' view. This could be oriented towards a shared object model. This is pretty much a 'VCacheable' approach. We could limit stowage binaries to (for example) one or two megabytes.
 
-A `copy_move` option is tempting in its simplicity. But it seems fragile to changes in the runtime. Using separate representations is very likely to be more robust. Also, an approach to stowage will need to properly handle shared object data internally. This could become a complicating factor if we're not very careful about it. 
+A `copy_move` option is tempting in its simplicity. But it seems fragile to changes in the runtime, and difficult to integrate with value sharing (I'll always need to copy the value to use it). So I'm leaning towards the second option.
 
-If stowage is used together with value sharing, I might also benefit from supporting stowage together with range slices. I'll need to think about it, at least.
+*Note:* Value stowage shall include a structure sharing model. I.e. if the same value is stowed a hundred times, we'll route them all to the same interned representation. In a distributed runtime, this structure sharing may be latent, i.e. lazily combining values produced at different nodes. (But Wikilon runtime isn't distributed quite yet.)
  
 ### Computations
 
 For pending computations, I could probably use a `(block * value)` pair together with a tagged object wrapper. This would work pretty well, so long as it isn't the representation used *during* evaluation. During evaluation, I'd divide the block into a stack of computations via `$` and `?` operations. Then, if a computation doesn't complete before its time quota, I simply rebuild a block via O(1) composition.
 
 With a block and value, it's easy to extend the block with additional work (it's just composition). So I could have lazy application of blocks if I want them. The main difficulty, I think, would be working with parallel computation. Special attention will be needed for parallelism, I think. It's low priority at the moment. 
+
+I've decided not to support client-defined tokens. Wikilon doesn't need them, and they complicate parallelism.
 
 #### Parallel Computation
 
@@ -211,9 +209,9 @@ For performance, this design enables clients to amortize the overhead of creatin
 
 Annotations involved may include: `{&fork}` on a PF to turn it into a thread, `{&join}` an asynchronous result to access it, and `{&asynch}` to treat any arbitrary value as asynchronous (i.e. equivalent to passing it through an identity process, to simplify lightweight communications).
 
-*Note:* This parallelism concept is theoretically extremely scalable. Up there with Erlang processes, at least. Scaling to distributed computing systems is feasible, and it can work transparently for local use.
+*Note:* This process function parallelism concept is, at least in theory, extremely scalable. Processes can use their own heaps and GC. Processes may be moved transparently to remote physical machines. Queues of messages enable flexible batch processing. Promise pipelining can be leveraged for flexible communication relationships. Communication patterns can be recognized - i.e. if we know or anticipate a value from process A will be read by process D, we can send it from A to D. 
 
-#### Lazy Computation? Not too important.
+#### Lazy Computation? (not yet)
 
 Laziness with Wikilon Runtime is troublesome. It's easy to implement 'local' laziness with paired annotations. The troublesome bit is how laziness should interact with cache, stowage, parallelism, etc.. One option is to effectively treat lazy computations as *linear*. This would limit the damage from copying lazy values. Shared dependencies at the dictionary level could still replicate a lazy computation.
  
@@ -262,47 +260,6 @@ Originally I modeled texts as a *specialization* on binaries. With hindsight, it
 
 Accelerators on texts are limited without an index, requiring a linear scan of the binary. However, this could be mitigated by encouraging programmers to model large texts using a finger-tree or other rope model.
 
-### More Numerics
-
-ABC supports integers. But other numbers could be supported via arithmetic accelerators or sets of dedicated ops.
-
-* I want good support for vectors, matrices, and related math operations.
- * Vector arithmetic with SIMD support, etc.
-* Good support for floating point would be nice.
- * John Gustafson's open interval arithmetic 'unum' is also nice.
-
-
-## Evaluation and Time or Effort Quotas
-
-One of the bigger challenges will be supporting evaluation limits, i.e. effort quotas. 
-
 ## Static vs. Dynamic Typing?
 
-I'd like to eventually have access to an "assume type safety" option on the interpreter for very fast evaluation, skipping dynamic runtime type checks. But I'll need to wait until I'm either confident in the type safety checks, or able to use a separate virtual machine for the evaluation. 
-
-# Other ideas
-
-## Accelerated Association Lists? (low priority)
-
-It might be useful to heavily optimize an associative structure, e.g. the equivalent of a JSON Object. Motivations include:
-
-* fast indexed lookup without disassembly of the structure
-* optimized representations for small vs. large structures
-* implicit batching of updates, log structured merge trees
-* type covers a lot of use cases: records, databases, etc.
-* provides a built-in, optimized model for AO dictionaries
-
-An accelerated associative structure should have a canonical form, a representation deterministic from *content*. This excludes balanced binary search trees because their precise balancing structure depends on insertion order. However, I could use a *trie* or a *sorted association list*. 
-
-Between these, the sorted association list is the superior option for acceleration. It is the simpler model. It allows many accelerated lookups and updates, ad-hoc representation (structs, tries, log structured merge trees, etc.). Further, it fits naturally with other list accelerators, e.g. as a basis for iteration. Besides that, the trie doesn't really *need* any acceleration.
-
-More generally, extending from *association list* to proper sorted *relational table* might be useful.
-
-I'll need to return to this concept later. I think supporting this idiom in both the representation and type system could greatly simplify modeling of more conventional programming models (OOP, stack frames, etc.). But I also need to be sure it is simple to implement and won't interfere with, for example, structure sharing and stowage. And of course I'll need to develop a proper set of annotations, assertions, and accelerators to make it worthwhile.
-
-As a nice generalization of association lists, maybe we could try to optimize representation of 'tables' where we know each element has the same basic row structure. A list of rows might be represented by a row of lists.
-
-## Evaluation with Dictionaries?
-
-It could be useful to associate a dictionary with our evaluations, where we know how to read the dictionary. This would require a 'standard' representation for dictionaries in stowage... which is doable, especially if we accelerate association lists.
-
+I'd like to eventually have access to an "assume type safety" option on the interpreter for very fast evaluation, skipping dynamic runtime type checks, or at least splitting the effort from the primary computation. I'll need to wait until I'm either confident in the type safety checks, or able to use a separate virtual machine for the evaluation. 

@@ -279,33 +279,26 @@ void wikrt_move(wikrt_cx*, wikrt_cx*);
 
 /** @brief (a*e) → (a*(a*e)). ABC op `^`. 
  *
- * This has two variations. The `wikrt_copy` variant is the same as ABC 
- * op `^`, and will fail for values that are not copyable. Non-copyable
- * values include both affine blocks and pending values from laziness or
- * parallelism. The `wikrt_copyf` variant will copy any value.
- *
- * Copy can easily fail if there is not enough space in the context.
+ * Note: Some values are logically non-copyable. Among these are affine
+ * blocks and pending computations. Copy is also likely to fail due to
+ * lack of space, if the context is close to full.
  */
 void wikrt_copy(wikrt_cx*);
-void wikrt_copyf(wikrt_cx*);
 
 /** @brief Copy and Move as a combined operation.
  *
- * When we copy a value then immediately move it, we can potentially avoid
- * a large intermediate copy by combining the two operations. 
+ * If we wikrt_copy then wikrt_move, we effectively pay for two copies.
+ * By combining the two, we can avoid the intermediate copy. 
  */
 void wikrt_copy_move(wikrt_cx*, wikrt_cx*);
-void wikrt_copyf_move(wikrt_cx*, wikrt_cx*);
 
 /** @brief (a*e) → e. ABC op `%`.
  *
- * This has two variations. The `wikrt_drop` variant is the same as ABC op
- * `%` and will fail if we drop values that are non-droppable - e.g. relevant
- * blocks or pending values from laziness or parallelism. The `wikrt_dropk`
- * variant will destroy normally non-droppable values.
+ * You may drop a value from the context. The value must be droppable, i.e.
+ * neither linear nor relevant. If you're dealing with values that might not
+ * be droppable, but you want to drop them anyway, use wikrt_trash.
  */
 void wikrt_drop(wikrt_cx*);
-void wikrt_dropk(wikrt_cx*);
 
 /** (a*(b*c))→(b*(a*c)). ABC op `w`. */
 void wikrt_wswap(wikrt_cx*);
@@ -540,13 +533,13 @@ void wikrt_unwrap_seal(wikrt_cx*, char*);
  *
  * When done using a value, the normal option is to drop it. However, dropping
  * a value is illegal for relevant or linear values. Use of {&trash} instead
- * the runtime that the value will not be observed in the future. The memory 
- * can be recycled, but future attempts to observe the value would result in
- * a runtime type error.
+ * tells the runtime that a value will not be observed. The memory is recycled,
+ * leaving a lightweight place holder instead of the original value. All future
+ * attempts to observe the value will result in runtime type errors.
  *
  * A trashed linear value should serialize as `[]kf{&trash}`, i.e. preserving
  * substructure but no other information of the input value `a`. The dynamic
- * type of a trashed value is 'WIKRT_TYPE_TRASH'. 
+ * type of a trashed value is 'WIKRT_TYPE_TRASH'.
  */
 void wikrt_trash(wikrt_cx*);
 
@@ -638,10 +631,10 @@ void wikrt_intro_sv(wikrt_cx*, char const* resourceId);
   ////////////////
  // EVALUATION //
 ////////////////
-/** @brief Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e). 
+/** @brief Construct a pending value. ((a→b)*(a*e)) → ((pending b) * e).
  *
  * Apply a function (a block) to a value to produce a latent value. The
- * actual evaluation is performed by wikrt_eval_step. A pending value
+ * actual evaluation is delayed until wikrt_eval_step. A pending value
  * may be quoted or manipulated, but is more or less opaque.
  *
  * Wikilon runtime treats the latent value as lazy for most purposes. It 

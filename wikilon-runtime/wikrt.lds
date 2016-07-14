@@ -20,12 +20,10 @@
     wikrt_refltype;
 
     wikrt_copy; 
-    wikrt_copyf;
-    wikrt_copy_move;
-    wikrt_copyf_move;
     wikrt_drop;
-    wikrt_dropk;
     wikrt_trash;
+    wikrt_move;
+    wikrt_copy_move;
 
     wikrt_stow;
     wikrt_load;
