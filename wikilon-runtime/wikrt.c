@@ -195,9 +195,12 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     cx->alloc = cx->size;
     cx->skip = 0;
 
-    // memory recycling free lists may simply be cleared
-    cx->free_obj = 0;
-    _Static_assert((1 == WIKRT_FREE_LISTS) && (!WIKRT_NEED_FREE_ACTION)
+    // Free lists are used only to recycle memory a bit before compaction
+    // occurs. (The benefits of recycling marginal in most cases, but can
+    // be significant in some common special cases.) Any free list should 
+    // simply be cleared back to zero.
+    cx->free_obj = 0; // a single item free list
+    _Static_assert((1 == WIKRT_FREE_LIST_CT) && (!WIKRT_NEED_FREE_ACTION)
         , "todo: handle free lists");
     
     // Note: ephemerons will require special attention. Either I add cx0 to
@@ -415,12 +418,13 @@ wikrt_size wikrt_vsize(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0)
             wikrt_add_size_task(&s, pv[1]); // second value
             result += WIKRT_CELLSIZE;
         } else { switch(LOBYTE(*pv)) {
-            // simple (tag,value) pairs:
-            case WIKRT_OTAG_SEAL_SM:
+            // simple (otag,value) pairs:
+            case WIKRT_OTAG_TRASH:
             case WIKRT_OTAG_BLOCK:  
             case WIKRT_OTAG_OPVAL:  
-            case WIKRT_OTAG_PEND:
             case WIKRT_OTAG_UTF8:
+            case WIKRT_OTAG_PEND:
+            case WIKRT_OTAG_SEAL_SM:
             case WIKRT_OTAG_DEEPSUM: {
                 result += WIKRT_CELLSIZE;
                 wikrt_add_size_task(&s, pv[1]); // wrapped value
@@ -937,7 +941,7 @@ void wikrt_wrap_sum(wikrt_cx* cx, wikrt_sum_tag sum)
 
     bool const inL = (WIKRT_INL == sum);
     wikrt_val* const v = wikrt_pval(cx, cx->val);
-    if(1 == (3 & *v)) {
+    if(1 == (3 & (*v))) {
         // WIKRT_P and WIKRT_U have shallow encoding for sums.
         // WIKRT_P → WIKRT_PL or WIKRT_PR. 
         // WIKRT_U → WIKRT_UL or WIKRT_UR.
@@ -958,18 +962,18 @@ void wikrt_wrap_sum(wikrt_cx* cx, wikrt_sum_tag sum)
 }
 
 void wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
-    _Static_assert(WIKRT_O == 0, "assuming wikrt_addr and object are the same");
-
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
     if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
-    wikrt_addr const obj = (0 == cx->free_obj) ? wikrt_alloc_r(cx, WIKRT_CELLSIZE) : cx->free_obj;
+    wikrt_addr const a = (0 == cx->free_obj) ? wikrt_alloc_r(cx, WIKRT_CELLSIZE) 
+                       :                       wikrt_vaddr(cx->free_obj);
     cx->free_obj = 0;
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    wikrt_val* const o = wikrt_pobj(cx, obj);
-    o[0] = otag;
-    o[1] = (*v);
-    (*v) = obj;
+
+    wikrt_val* const pv = wikrt_pval(cx, cx->val);
+    wikrt_val* const po = wikrt_paddr(cx, a);
+    po[0] = otag;
+    po[1] = pv[0];
+    pv[0] = wikrt_tag_addr(WIKRT_O, a);
 }
 
 
@@ -1007,19 +1011,24 @@ static void wikrt_expand_sum(wikrt_cx* cx)
         case WIKRT_OTAG_UTF8: {
             // (utf8, binary). 
             // drop utf8 tag, extract up to four bytes from binary,
-            // then read the character. I might later try to recycle
-            // the utf8 tag space to cut allocation efforts in half.
+            // then read the character. I will try to reuse the `utf8` 
+            // tag to minimize allocation.
             _Static_assert(!WIKRT_NEED_FREE_ACTION, "free utf8 tag");
-            cx->free_obj = (*v); // try to recycle memory
+            cx->free_obj = (*v); // recycle memory (via wikrt_wrap_otag below)
             (*v) = pv[1]; // access the binary.
 
-            uint8_t buff[4];
+            uint8_t buff[UTF8_MAX_CP_SIZE];
             size_t readct = 1;
             wikrt_read_binary(cx, buff, &readct);
-            if(0 == readct) { return; } // empty text → empty list (is okay)
+            if(0 == readct) { return; }
+
             size_t const bytes_needed = utf8_readcp_size(buff) - 1; // 0-3
-            readct = bytes_needed;
-            if(0 != readct) { wikrt_read_binary(cx, buff, &readct); }
+            if(0 != bytes_needed) {
+                assert(bytes_needed <= 3); 
+                readct = bytes_needed;
+                wikrt_read_binary(cx, (1 + buff), &readct);
+                assert((bytes_needed == readct) || (wikrt_has_error(cx)));
+            }
 
             uint32_t cp;
             utf8_readcp_unsafe(buff, &cp);
@@ -1220,28 +1229,6 @@ bool wikrt_valid_text_len(char const* s, size_t* bytes, size_t* chars)
     return ((maxlen == len) || (0 == utf8[len]));
 }
 
-// Incremental construction of large binary and text data.
-void wikrt_reverse_binary_chunks(wikrt_cx* cx) 
-{
-    if(wikrt_has_error(cx)) { return; }
-
-    // Given a sequence of binary chunks in reverse order
-    //   each of form (header, next, size, buffer)
-    // reverse the chunk ordering.
-
-    wikrt_val hd = wikrt_pval(cx, cx->val)[0];
-    wikrt_val binary = WIKRT_UNIT_INR;
-    while(WIKRT_UNIT_INR != hd) {
-        wikrt_val* const phd = wikrt_pobj(cx, hd);
-        assert(wikrt_value_is_compact_binary(cx, *phd));
-        wikrt_val const next = phd[1];
-        phd[1] = binary;
-        binary = hd;
-        hd = next;
-    }
-    wikrt_pval(cx, cx->val)[0] = binary;
-}
-
 void wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
 {
     // Validate text binary. Determine actual size if NUL-terminated.
@@ -1277,7 +1264,9 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
             if(max_bytes == (*bytes)) { return; } // output limited
             buff[(*bytes)++] = (uint8_t) byte;
             (*v) = pnode[1]; // step next in list
-        } else if(wikrt_value_is_compact_binary(cx, (*v))) {
+        } 
+        #if 0
+        else if(wikrt_value_is_compact_binary(cx, (*v))) {
             // optimize read for WIKRT_OTAG_BINARY
             // (hdr, next, size, buffer)
             wikrt_val* const phd = wikrt_pobj(cx, (*v));
@@ -1293,7 +1282,9 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
             } else { // binary is fully read
                 (*v) = phd[1];
             }
-        } else { // maybe terminal, maybe expandable
+        } 
+        #endif
+        else { // maybe terminal, maybe expandable
             wikrt_sum_tag lr;
             wikrt_unwrap_sum(cx, &lr); 
             wikrt_wrap_sum(cx, lr);
@@ -1346,9 +1337,8 @@ void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
             (*charct) += 1;
             wikrt_pval(cx, cx->val)[0] = pnode[1];
         } 
-        // TODO: fast read for text as (utf8, binary) wrapper.
-        //   Maybe read as much as possible as binary, then 'put back'
-        //   up to three overflow bytes from the next character.
+        // TODO: fast read for (utf8, binary) text.
+        //   Read the binary. Return data if we overshoot.
         else { // maybe terminal, maybe expandable
             wikrt_sum_tag lr;
             wikrt_unwrap_sum(cx, &lr); 
@@ -1367,8 +1357,7 @@ void wikrt_intro_i32(wikrt_cx* cx, int32_t n)
 {
     _Static_assert(((WIKRT_SMALLINT_MIN <= INT32_MIN) && (INT32_MAX <= WIKRT_SMALLINT_MAX)), 
         "assuming no risk of smallint overflow for introducing i32");
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
-    wikrt_intro_r(cx, wikrt_i2v(n));
+    wikrt_intro_smallval(cx, wikrt_i2v(n));
 }
 
 void wikrt_intro_i64(wikrt_cx* cx, int64_t n) 
@@ -1376,8 +1365,8 @@ void wikrt_intro_i64(wikrt_cx* cx, int64_t n)
     _Static_assert((INT64_MIN < WIKRT_SMALLINT_MIN), "assuming overflow is possible");
     bool const is_smallint = (WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX);
     if(is_smallint) { 
-        if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
-        wikrt_intro_r(cx, wikrt_i2v(n));
+        wikrt_intro_smallval(cx, wikrt_i2v(n));
+        return;
     } 
     _Static_assert(!WIKRT_HAS_BIGINT, "todo: large i64 to big integers");
     wikrt_set_error(cx, WIKRT_IMPL);
@@ -1544,14 +1533,12 @@ void wikrt_int_add(wikrt_cx* cx)
     wikrt_val* const pabe = wikrt_pval(cx, cx->val);
     wikrt_val const be = pabe[1];
     wikrt_val* const pbe = wikrt_pval(cx, be);
-    wikrt_val const a = *pabe;
-    wikrt_val const b = *pbe;
 
     _Static_assert(!WIKRT_HAS_BIGINT, "assuming small integers");
     _Static_assert((WIKRT_INT_MAX == INT64_MAX), "assuming 64 bit smallints");
     _Static_assert(((2 * WIKRT_SMALLINT_MAX) < WIKRT_INT_MAX), "overflow for smallint add"); 
 
-    int64_t const sum = wikrt_v2i(a) + wikrt_v2i(b); 
+    int64_t const sum = wikrt_v2i(*pabe) + wikrt_v2i(*pbe); 
     bool const range_ok = ((WIKRT_SMALLINT_MIN <= sum) && (sum <= WIKRT_SMALLINT_MAX));
     if(!range_ok) { wikrt_set_error(cx, WIKRT_IMPL); return; }
     (*pbe) = wikrt_i2v(sum);
@@ -1565,13 +1552,12 @@ void wikrt_int_mul(wikrt_cx* cx)
     wikrt_val* const pabe = wikrt_pval(cx,cx->val);
     wikrt_val const be = pabe[1];
     wikrt_val* const pbe = wikrt_pval(cx, be);
-    wikrt_val const a = *pabe;
-    wikrt_val const b = *pbe;
 
     _Static_assert((INT64_MAX == WIKRT_INT_MAX), "assuming 64-bit small integers");
     _Static_assert(!WIKRT_HAS_BIGINT, "assuming no big integers for now, integers are small");
 
-    __int128 const prod = ((__int128)a) * ((__int128)b);
+    __int128 const prod = ((__int128) wikrt_v2i(*pabe)) 
+                        * ((__int128) wikrt_v2i( *pbe));
     bool const range_ok = ((WIKRT_SMALLINT_MIN <= prod) && (prod <= WIKRT_SMALLINT_MAX));
     if(!range_ok) { wikrt_set_error(cx, WIKRT_IMPL); return; }
 

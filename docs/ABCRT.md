@@ -119,7 +119,7 @@ I'm giving a try to 64-bit representations. Absolute pointers. Bit flags. No spe
 * 110 - ref constant in left
 * 111 - ref constant in right
 
-64-bit small integers can carry 18 decimal digit integers. For simplicity, that's my current limit. I might eventually support big integer math. At the moment, the only 'ref constant' is the unit value.
+For the small integers with 64 bits, I will carry exactly 18 decimal digit integers, i.e. plus or minus 999999999999999999. (In part because it's easy to describe and explain.) I might eventually support big integer math. The small 'ref constants' can include: the unit value, an explicit 'garbage' value with substructure, and perhaps small texts.
 
 Tagged objects include:
 
@@ -260,6 +260,7 @@ Originally I modeled texts as a *specialization* on binaries. With hindsight, it
 
 Accelerators on texts are limited without an index, requiring a linear scan of the binary. However, this could be mitigated by encouraging programmers to model large texts using a finger-tree or other rope model.
 
-## Static vs. Dynamic Typing?
+### Garbage and Memory Recycling
 
-I'd like to eventually have access to an "assume type safety" option on the interpreter for very fast evaluation, skipping dynamic runtime type checks, or at least splitting the effort from the primary computation. I'll need to wait until I'm either confident in the type safety checks, or able to use a separate virtual machine for the evaluation. 
+Assuming a value that might be relevant or linear but that will not be used, annotate it as garbage with `{&trash}`. This allows the runtime to recycle the memory immediately. A placeholder is left, requiring only a small constant amount of space. Attempting to observe the placeholder will appear as a type error. The value will preserve known substructural attributes of the original (with pending values or parallel futures treated as linear).
+

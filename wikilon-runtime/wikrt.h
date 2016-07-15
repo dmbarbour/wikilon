@@ -84,9 +84,13 @@ typedef enum wikrt_op
 , ACCEL_SUM_SWAP    // VRWLC
 , ACCEL_INTRO_VOID  // VVRWLC
 
-// deep structure manipulations
+// deeper data plumbing
 , ACCEL_wrzw  // (a * ((b * c) * d)) → (a * (b * (c * d)))
 , ACCEL_wzlw  // (a * (b * (c * d))) → (a * ((b * c) * d))
+
+// common data plumbing
+//, ACCEL_rw // ((a * b) * c) → (b * (a * c))
+//, ACCEL_wl // (b * (a * c)) → ((a * b) * c)
 
 // potential future accelerators?
 //  stack-level manipulations
@@ -137,27 +141,26 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
  * few bits and discriminate immediately with a case statement
  * for deep copies, size computations, etc..
  *
- * Candidate 'Minimal':
+ * Candidate 'Minimal Bitrep':
  *
- * third bit 0: pointers
+ * prefix bit 0: pointers
  *  00 tagged objects
  *  01 pair value
  *  10 pair in left
  *  11 pair in right
- * third bit 1: small constants
+ * prefix bit 1: small constants
  *  00 small integers
- *  01 unit
- *  10 unit in left
- *  11 unit in right
+ *  01 constant
+ *  10 constant in left
+ *  11 constant in right
+ *
+ * The prefix bit could be on right or left. I chose left (value 4).
+ * The small constants currently include only unit, encoded as zero.
  *
  * This candidate does not attempt to optimize sums beyond what is
- * essential for compact lists and booleans. It does not attempt to
- * support an extended set of constants, has no room for symbols.
- * The test for whether a value needs a deep-copy is efficient.
- * Use of a NULL reference will segfault. 
- *
- * This is a decent encoding, though I'll need to adjust it a lot if
- * I ever want to add new constants.
+ * essential for compact lists and booleans. The set of constants
+ * could be large, however, e.g. small texts up to a few bytes. But
+ * anything that might be affine or relevant should be in WIKRT_O.
  *
  */
 #define WIKRT_O     0
@@ -175,9 +178,11 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
 // WIKRT_I, WIKRT_U, WIKRT_UL, WIKRT_UR are 'shallow copy'.
 #define wikrt_copy_shallow(V) (4 & (V)) 
 
-// full names of small constants
-// Note that I could develop 'ref constants' other than unit.
-// Those would transparently benefit from the shallow sums.
+// Small constants: 
+// 
+// Unit will be encoded as the constant zero.
+
+
 #define WIKRT_UNIT        WIKRT_U
 #define WIKRT_UNIT_INL    WIKRT_UL
 #define WIKRT_UNIT_INR    WIKRT_UR
@@ -512,16 +517,20 @@ struct wikrt_cx {
 #define WIKRT_REG_PC_INIT WIKRT_UNIT
 #define WIKRT_REG_CC_INIT WIKRT_UNIT
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
-#define WIKRT_FREE_LISTS 1 /* memory freelist count (currently none) */
+#define WIKRT_FREE_LIST_CT 1 /* memory freelist count (currently none) */
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
 #define WIKRT_HAS_SHARED_REFCT_OBJECTS 0 /* for static assertions */
 
-/* Thoughts on a simple free list:
+/* Regarding `free_obj` - a single 'free object' (just one cell). This
+ * is intended to mitigate the edge case where sequences of deep sum 
+ * manipulations (and sometimes single operators) tend to rapidly free
+ * then allocate a single cell. The other big use case is for reading
+ * text, which requires accessing the binary then wrapping the utf8
+ * again.
  *
- * I think I'd benefit greatly from a simple, single element free
- * list specifically for the wikrt_wrap_otag use case. This would
- * improve performance working with sum-type data plumbing and any
- * reads on utf8 texts.
+ * My estimate is that this will cut allocations in half for naively
+ * reading texts, and cut them to near zero for basic sum data plumbing.
+ * But the performance gain is likely to be marginal in general.
  */
 
 /* For large contexts (e.g. 20MB+) I will want to try to use less than
@@ -529,10 +538,10 @@ struct wikrt_cx {
  * reduce virtual memory pressure, though the virtual memory space is 
  * still reserved. It's very simple to allocate an empty 'skip' space.
  *
- * If a context is within (MEM_FACTOR+1) of being full, this will do 
- * nothing. For small contexts, it's also effectively a NOP.
+ * If a context is within WIKRT_MEM_FACTOR of being full, this will do 
+ * nothing. I further increase free memory to a given page boundary.
  */
-#define WIKRT_MEM_FACTOR 4 /* free space for some factor of current use (if possible) */
+#define WIKRT_MEM_FACTOR 5 /* free space for some factor of current use (if possible) */
 #define WIKRT_MEM_PAGEMB 2 /* free space in chunks of so many megabytes (if possible) */
 
 // Consider:
@@ -561,10 +570,6 @@ _Static_assert((0 == WIKRT_O), "assuming WIKRT_O has no bit flags");
  * to preserve must be represented in the root set. When copying an
  * array or similar, I'll need to be sure that all the contained 
  * values are copied upon moving them.
- *
- * Despite being a semi-space collector, I still use linear values
- * and mutation in place where feasible. So locality shouldn't be
- * a huge problem for carefully designed.
  */
 
 static inline bool wikrt_mem_available(wikrt_cx* cx, wikrt_sizeb sz) { return (sz < cx->alloc); }
@@ -600,11 +605,12 @@ static inline wikrt_val wikrt_alloc_cellval_r(wikrt_cx* cx, wikrt_tag tag, wikrt
 static inline void wikrt_intro_r(wikrt_cx* cx, wikrt_val v) {
     cx->val = wikrt_alloc_cellval_r(cx, WIKRT_P, v, cx->val); 
 }
-
-// if we have already reserved WIKRT_CELLSIZE and know we have a valid op
-static inline void wikrt_intro_op_r(wikrt_cx* cx, wikrt_op op) { 
-    wikrt_intro_r(cx, wikrt_i2v(op)); 
+static inline void wikrt_intro_smallval(wikrt_cx* cx, wikrt_val v) 
+{
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
+    wikrt_intro_r(cx, v);
 }
+
 
 static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
     wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), v, ss); }
@@ -672,9 +678,8 @@ void wikrt_drop_txn(wikrt_cx*);
 
 // e → (empty * e)
 static inline void wikrt_intro_empty_list(wikrt_cx* cx)
-{
-    wikrt_intro_unit(cx);
-    wikrt_wrap_sum(cx, WIKRT_INR);
+{   
+    wikrt_intro_smallval(cx, WIKRT_UNIT_INR); 
 }
 
 // (a * (as * e)) → (a:as * e); same as `lV`

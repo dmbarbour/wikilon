@@ -12,6 +12,7 @@
 char const* const valid_abc_strings[] =
  { ""
  , "vrlwcz", "VRWLCZ", "%^", " \n", "$", "mkf'", "#9876543210-", "+*-Q", "G", "DFMK"
+ , "\n\n\n\n\n", "      "
  , "[  ]", "[vc]", "[v[vc]lc]", "[v[v[vc]lc]lc]", "[v[v[v[vc]lc]lc]lc]"
  , "[]", "[[]]", "[[[]]]", "[[[[]]]]"
  , "[ ]", "[ [ ] ]", "[ [ [ ] ] ]", "[ [ [ [ ] ] ] ]"
@@ -23,7 +24,8 @@ char const* const valid_abc_strings[] =
  , "{x}", "{x}{y}{xyzzy}", "{%word}", "{:seal}", "{token with space}", "{$@#:._-/\\!}", "{←↖↑↗→↘↓↙←}"
  , "{0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde}"
  , "[{hello world}]kf"
- , "\" \n~", "\"\n~"
+ , "{empty string} \"\n~"
+ , "{space string} \" \n~"
  , "\"hello, world!\n"
     " this text has two lines\n"
     "~"
@@ -491,14 +493,21 @@ void elim_cstr(wikrt_cx* cx, char const* cstr)
 
 void test_alloc_text(wikrt_cx* cx) 
 {
+    char const* const helloWorld = "hello, world!";
+    wikrt_intro_text(cx, helloWorld, 0);
+    elim_cstr(cx, "");
+
+    wikrt_intro_text(cx, helloWorld, SIZE_MAX);
+    elim_cstr(cx, helloWorld);
+
+    wikrt_intro_text(cx, u8"→", 3);
+    elim_cstr(cx, u8"→");
+
     wikrt_intro_text(cx, u8"abc←↑→↓", 12);
     elim_cstr(cx, u8"abc←↑→");
 
     wikrt_intro_text(cx, u8"abc←↑", SIZE_MAX);
     elim_cstr(cx, u8"abc←↑");
-
-    wikrt_intro_text(cx, "hello, world!", 0);
-    elim_cstr(cx, "");
 }
 
 void read_binary_chunks(wikrt_cx* cx, uint8_t const* buff, size_t buffsz, size_t const read_chunk) 
@@ -765,6 +774,7 @@ void test_arg_list(wikrt_cx* cx, char const* const* ss, void (*test)(wikrt_cx*, 
 
 void test_parse_abc_str(wikrt_cx* cx, char const* abc)
 {
+    fprintf(stderr, "Test string: %s\n", abc);
     wikrt_intro_text(cx, abc, SIZE_MAX);
     wikrt_text_to_block(cx);
     wikrt_drop(cx);
@@ -1077,16 +1087,16 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
     wikrt_cx_reset(cx);
 
-    #define TCX(TEST)                       \
-    do {                                    \
-        ++(*runct);                         \
-        TEST(cx);                           \
-        if(!wikrt_error(cx)) { ++(*passct); } \
-        else {                              \
-            char const* name = #TEST ;      \
-            fprintf(stderr, errFmt, *runct, name);    \
-        }                                   \
-        wikrt_cx_reset(cx);                 \
+    #define TCX(TEST)                               \
+    do {                                            \
+        char const* name = #TEST ;                  \
+        ++(*runct);                                 \
+        TEST(cx);                                   \
+        if(!wikrt_error(cx)) { ++(*passct); }       \
+        else {                                      \
+            fprintf(stderr, errFmt, *runct, name);  \
+        }                                           \
+        wikrt_cx_reset(cx);                         \
     } while(0)
 
     TCX(test_unit);
@@ -1130,8 +1140,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_sum_distrib);
     TCX(test_sum_factor);
 
-    // TODO: test data plumbing!!!!
-    //   vrwlcz, VRWLCZ
+    // TODO: test data plumbing functions
+    //   vrwlcz, VRWLCZ, swaps, etc.
     
 
 
