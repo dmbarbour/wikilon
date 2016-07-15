@@ -195,9 +195,9 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     cx->alloc = cx->size;
     cx->skip = 0;
 
-    // heuristic free lists can be cleared
-    // cx->freecells = 0;
-    _Static_assert((0 == WIKRT_FREE_LISTS) && (!WIKRT_NEED_FREE_ACTION)
+    // memory recycling free lists may simply be cleared
+    cx->free_obj = 0;
+    _Static_assert((1 == WIKRT_FREE_LISTS) && (!WIKRT_NEED_FREE_ACTION)
         , "todo: handle free lists");
     
     // Note: ephemerons will require special attention. Either I add cx0 to
@@ -845,10 +845,6 @@ void wikrt_accel_swap(wikrt_cx* cx)
 
 void wikrt_wrap_seal(wikrt_cx* cx, char const* s)
 {
-    // Ensure we have sufficient space for a sealer token.
-    size_t const worst_case_alloc = WIKRT_CELLSIZE + WIKRT_TOK_BUFFSZ;
-    if(!wikrt_mem_reserve(cx, worst_case_alloc)) { return; }
-
     // basic validation of input.
     if(!wikrt_valid_token(s)) { wikrt_set_error(cx, WIKRT_INVAL); return; }
     if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
@@ -856,18 +852,20 @@ void wikrt_wrap_seal(wikrt_cx* cx, char const* s)
     // wrap head value in a seal.
     wikrt_size const len = strlen(s);
     if((':' == *s) && (len <= sizeof(wikrt_val))) {
+
         _Static_assert((':' == WIKRT_OTAG_SEAL_SM), "small seal tag should match token string (if little-endian)");
         wikrt_val otag = 0;
         wikrt_size ix = len;
         do { otag = (otag << 8) | (wikrt_val)s[--ix]; } while(0 != ix);
-        
-        wikrt_val* const v = wikrt_pval(cx, cx->val);
-        (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
+        wikrt_wrap_otag(cx, otag);
+
     } else {
         // WIKRT_OTAG_SEAL: general case, large or arbitrary sealers
         assert(len < WIKRT_TOK_BUFFSZ);
-        wikrt_size const szData  = WIKRT_CELLSIZE + len;
-        wikrt_addr const addr = wikrt_alloc_r(cx, wikrt_cellbuff(szData));
+        wikrt_size const szAlloc = WIKRT_CELLSIZE + wikrt_cellbuff(len);
+        if(!wikrt_mem_reserve(cx, szAlloc)) { return; }
+
+        wikrt_addr const addr = wikrt_alloc_r(cx, szAlloc);
         wikrt_val* const pa = wikrt_paddr(cx, addr);
         wikrt_val* const pv = wikrt_pval(cx, cx->val);
         pa[0] = (len << 8) | WIKRT_OTAG_SEAL;
@@ -896,6 +894,7 @@ void wikrt_unwrap_seal(wikrt_cx* cx, char* buff)
                     otag = (otag >> 8);
                 } while(sizeof(wikrt_val) != ix);
                 buff[ix] = 0;
+                cx->free_obj = (*v);
                 (*v) = pv[1];
                 return;
             } else if(wikrt_otag_seal(*pv)) {
@@ -934,7 +933,6 @@ static inline bool wikrt_deepsum_with_free_space(wikrt_cx* cx, wikrt_val v)
 void wikrt_wrap_sum(wikrt_cx* cx, wikrt_sum_tag sum) 
 {
     _Static_assert(WIKRT_USING_MINIMAL_BITREP, "after any bitrep change, review this function.");
-
     if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
     bool const inL = (WIKRT_INL == sum);
@@ -958,22 +956,20 @@ void wikrt_wrap_sum(wikrt_cx* cx, wikrt_sum_tag sum)
         wikrt_wrap_otag(cx, otag);
     }
 }
-// (v*e) → ((otag v) * e). E.g. for opval, block. Requires WIKRT_CELLSIZE.
-static inline void wikrt_wrap_otag_r(wikrt_cx* cx, wikrt_otag otag) {
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
-}
 
 void wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
-    if(cx->free_obj) {
-        wikrt_val* const v = wikrt_pval(cx, cx->val);
-        wikrt_val* const o = wikrt_pobj(cx, cx->free_obj);
-        o[0] = otag;
-        o[1] = (*v);
-        (*v) = cx->free_obj;
-    }
-    else if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return false; }
-    else { wikrt_wrap_otag_r(cx, otag); return true; }
+    _Static_assert(WIKRT_O == 0, "assuming wikrt_addr and object are the same");
+
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+
+    wikrt_addr const obj = (0 == cx->free_obj) ? wikrt_alloc_r(cx, WIKRT_CELLSIZE) : cx->free_obj;
+    cx->free_obj = 0;
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+    wikrt_val* const o = wikrt_pobj(cx, obj);
+    o[0] = otag;
+    o[1] = (*v);
+    (*v) = obj;
 }
 
 
@@ -1014,17 +1010,20 @@ static void wikrt_expand_sum(wikrt_cx* cx)
             // then read the character. I might later try to recycle
             // the utf8 tag space to cut allocation efforts in half.
             _Static_assert(!WIKRT_NEED_FREE_ACTION, "free utf8 tag");
+            cx->free_obj = (*v); // try to recycle memory
             (*v) = pv[1]; // access the binary.
+
             uint8_t buff[4];
             size_t readct = 1;
             wikrt_read_binary(cx, buff, &readct);
             if(0 == readct) { return; } // empty text → empty list (is okay)
-            size_t const bytes_needed = utf8_readcp_size(buff) - 1;
+            size_t const bytes_needed = utf8_readcp_size(buff) - 1; // 0-3
             readct = bytes_needed;
             if(0 != readct) { wikrt_read_binary(cx, buff, &readct); }
 
             uint32_t cp;
             utf8_readcp_unsafe(buff, &cp);
+
             wikrt_wrap_otag(cx, WIKRT_OTAG_UTF8);
             wikrt_intro_i32(cx, (int32_t) cp);
             wikrt_cons(cx);
@@ -1061,9 +1060,8 @@ void wikrt_unwrap_sum(wikrt_cx* cx, wikrt_sum_tag* sum)
             wikrt_val const sf = s0 >> 2;
             if(0 == sf) { 
                 _Static_assert(!WIKRT_NEED_FREE_ACTION, "must free sum on unwrap");
+                cx->free_obj = (*v); // recycle this object (e.g. for wrap_sum).
                 (*v) = pv[1]; // drop deepsum wrapper
-                // maybe add deepsum wrapper to special free list?
-                // ensure primitive sum manipulations are non-allocating.
             } else { 
                 (*pv) = sf << 8 | WIKRT_OTAG_DEEPSUM;
             }
@@ -1085,163 +1083,94 @@ void wikrt_unwrap_sum(wikrt_cx* cx, wikrt_sum_tag* sum)
 // allocation will succeed.
 void wikrt_sum_wswap(wikrt_cx* cx)
 {
-    if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return; }
-    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_sum_wswap_rv(cx, wikrt_pval(cx, cx->val));
+    wikrt_sum_tag a_bc; // (a + (b + c))
+    wikrt_unwrap_sum(cx, &a_bc);
+    if(WIKRT_INL == a_bc) {
+        wikrt_wrap_sum(cx, WIKRT_INL); // (a + _)
+        wikrt_wrap_sum(cx, WIKRT_INR); // (_ + (a + _))
+    } else {
+        wikrt_sum_tag b_c;
+        wikrt_unwrap_sum(cx, &b_c);
+        if(WIKRT_INL == b_c) { // 'b' → (b + _)
+            wikrt_wrap_sum(cx, WIKRT_INL); // (b + _)
+        } else { // we have 'c'.
+            wikrt_wrap_sum(cx, WIKRT_INR); // (_ + c)
+            wikrt_wrap_sum(cx, WIKRT_INR); // (_ + (_ + c))
+        }
+    }
 }
 
 void wikrt_sum_zswap(wikrt_cx* cx)
 {
-    if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return; }
-    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_sum_zswap_rv(cx, wikrt_pval(cx, cx->val));
+    wikrt_sum_tag a_bcd;
+    wikrt_unwrap_sum(cx, &a_bcd);
+    if(WIKRT_INR == a_bcd) { wikrt_sum_wswap(cx); }
+    wikrt_wrap_sum(cx, a_bcd);
 }
 
 void wikrt_sum_assocl(wikrt_cx* cx) 
 {
-    if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return; }
-    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_sum_assocl_rv(cx, wikrt_pval(cx, cx->val));
+    wikrt_sum_tag a_bc;
+    wikrt_unwrap_sum(cx, &a_bc);
+    if(WIKRT_INL == a_bc) { // a → ((a + _) + _)
+        wikrt_wrap_sum(cx, WIKRT_INL);
+        wikrt_wrap_sum(cx, WIKRT_INL);
+    } else {
+        wikrt_sum_tag b_c;
+        wikrt_unwrap_sum(cx, &b_c); 
+        wikrt_wrap_sum(cx, WIKRT_INR); // (_ + b) or (_ + c) (or (_ + ?) on error)
+        if(WIKRT_INL == b_c) { 
+            wikrt_wrap_sum(cx, WIKRT_INL);  // ((_ + b) + _)
+        }
+    }
 }
 
 void wikrt_sum_assocr(wikrt_cx* cx)
 {
-    if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return; }
-    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_sum_assocr_rv(cx, wikrt_pval(cx, cx->val));
+    wikrt_sum_tag ab_c;
+    wikrt_unwrap_sum(cx, &ab_c);
+    if(WIKRT_INL != ab_c) { // 'c' → (_ + (_ + c))
+        wikrt_wrap_sum(cx, WIKRT_INR);
+        wikrt_wrap_sum(cx, WIKRT_INR);
+    } else { // in (a+b) in left → 'a' in left or 'b' in left of right.
+        wikrt_sum_tag a_b;
+        wikrt_unwrap_sum(cx, &a_b);
+        wikrt_wrap_sum(cx, WIKRT_INL); // (a + _) or (b + _)
+        if(WIKRT_INL != a_b) { 
+            wikrt_wrap_sum(cx, WIKRT_INR); // (_ + (b + _))
+        }
+    }
 }
 
 void wikrt_accel_sum_swap(wikrt_cx* cx) 
 {
-    if(!wikrt_mem_reserve(cx, WIKRT_SUMOP_RESERVE)) { return; }
-    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_accel_sum_swap_rv(cx, wikrt_pval(cx, cx->val));
-}
-
-// (a + (b + c)) → (b + (a + c))
-void wikrt_sum_wswap_rv(wikrt_cx* cx, wikrt_val* v) 
-{
-    wikrt_sum_tag a_bc; // (a + (b + c))
-    wikrt_unwrap_sum_rv(cx, &a_bc, v);
-    if(WIKRT_INL == a_bc) {
-        wikrt_wrap_sum_rv(cx, WIKRT_INL, v); // (a + _)
-        wikrt_wrap_sum_rv(cx, WIKRT_INR, v); // (_ + (a + _))
-    } else {
-        wikrt_sum_tag b_c;
-        wikrt_unwrap_sum_rv(cx, &b_c, v);
-        if(WIKRT_INL == b_c) { // 'b' → (b + _)
-            wikrt_wrap_sum_rv(cx, WIKRT_INL, v); // (b + _)
-        } else { // we have 'c'.
-            wikrt_wrap_sum_rv(cx, WIKRT_INR, v); // (_ + c)
-            wikrt_wrap_sum_rv(cx, WIKRT_INR, v); // (_ + (_ + c))
-        }
-    }
-}
-
-// (a + (b + (c + d))) → (a + (c + (b + d)))
-void wikrt_sum_zswap_rv(wikrt_cx* cx, wikrt_val* v) 
-{
-    wikrt_sum_tag a_bcd;
-    wikrt_unwrap_sum_rv(cx, &a_bcd, v);
-    if(WIKRT_INL != a_bcd) { wikrt_sum_wswap_rv(cx, v); }
-    wikrt_wrap_sum_rv(cx, a_bcd, v);
-}
-
-// (a+(b+c))→((a+b)+c).
-void wikrt_sum_assocl_rv(wikrt_cx* cx, wikrt_val* v) 
-{
-    wikrt_sum_tag a_bc;
-    wikrt_unwrap_sum_rv(cx, &a_bc, v);
-    if(WIKRT_INL == a_bc) { // a → ((a + _) + _)
-        wikrt_wrap_sum_rv(cx, WIKRT_INL, v);
-        wikrt_wrap_sum_rv(cx, WIKRT_INL, v);
-    } else {
-        wikrt_sum_tag b_c;
-        wikrt_unwrap_sum_rv(cx, &b_c, v); 
-        wikrt_wrap_sum_rv(cx, WIKRT_INR, v); // (_ + b) or (_ + c) (or (_ + ?) on error)
-        if(WIKRT_INL == b_c) { 
-            wikrt_wrap_sum_rv(cx, WIKRT_INL, v);  // ((_ + b) + _)
-        }
-    }
-}
-
-
-// ((a+b)+c)→(a+(b+c)).  
-void wikrt_sum_assocr_rv(wikrt_cx* cx, wikrt_val* v)
-{
-    wikrt_sum_tag ab_c;
-    wikrt_unwrap_sum_rv(cx, &ab_c, v);
-    if(WIKRT_INL != ab_c) { // 'c' → (_ + (_ + c))
-        wikrt_wrap_sum_rv(cx, WIKRT_INR, v);
-        wikrt_wrap_sum_rv(cx, WIKRT_INR, v);
-    } else { // in (a+b) in left → 'a' in left or 'b' in left of right.
-        wikrt_sum_tag a_b;
-        wikrt_unwrap_sum_rv(cx, &a_b, v);
-        wikrt_wrap_sum_rv(cx, WIKRT_INL, v); // (a + _) or (b + _)
-        if(WIKRT_INL != a_b) { 
-            wikrt_wrap_sum_rv(cx, WIKRT_INR, v); // (_ + (b + _))
-        }
-    }
-}
-
-void wikrt_accel_sum_swap_rv(wikrt_cx* cx, wikrt_val* v)
-{
     wikrt_sum_tag lr;
-    wikrt_unwrap_sum_rv(cx, &lr, v);
+    wikrt_unwrap_sum(cx, &lr);
     wikrt_sum_tag const rl = (WIKRT_INL == lr) ? WIKRT_INR : WIKRT_INL; // swapped tag.
-    wikrt_wrap_sum_rv(cx, rl, v);
+    wikrt_wrap_sum(cx, rl);
 }
-
 
 /** (a*((b+c)*e))→(((a*b)+(a*c))*e). ABC op `D`. */
 void wikrt_sum_distrib(wikrt_cx* cx)
 {
-    // potential allocation for unwrap of (b+c)
-    wikrt_size const worst_case_alloc = WIKRT_UNWRAP_SUM_RESERVE;
-    if(!wikrt_mem_reserve(cx, worst_case_alloc)) { return; }
-
-    wikrt_val const ase = cx->val;
-    if(!wikrt_p(ase)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_val* const pase = wikrt_pval(cx, ase);
-
-    wikrt_val const se = pase[1];
-    if(!wikrt_p(se)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_val* const pse = wikrt_pval(cx, se);
-
+    wikrt_wswap(cx);
     wikrt_sum_tag lr;
-    wikrt_unwrap_sum_rv(cx, &lr, pse);
-
-    wikrt_val const ptag = (WIKRT_INL == lr) ? WIKRT_PL : WIKRT_PR;
-    // perform distribution. shifts outer pair without allocation.
-    pase[1] = pse[0]; // (a*b) or (a*c)
-    pse[0] = wikrt_tag_addr(ptag, wikrt_vaddr(ase));
-    cx->val = se;
+    wikrt_unwrap_sum(cx, &lr);
+    wikrt_wswap(cx);
+    wikrt_assocl(cx);
+    wikrt_wrap_sum(cx, lr);
 }
-
 
 /** (((a*b)+(c*d))*e)→((a+c)*((b+d)*e)). ABC op `F`. */
 void wikrt_sum_factor(wikrt_cx* cx)
 {
-    wikrt_size const worst_case_alloc = WIKRT_UNWRAP_SUM_RESERVE 
-                                      + (2 * WIKRT_WRAP_SUM_RESERVE);
-    if(!wikrt_mem_reserve(cx, worst_case_alloc)) { return; }
-
-    wikrt_val const se = cx->val;
-    if(!wikrt_p(se)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_val* const pse = wikrt_pval(cx, se);
-
     wikrt_sum_tag lr;
-    wikrt_unwrap_sum_rv(cx, &lr, pse);
-
-    wikrt_val const ab = *pse;
-    if(!wikrt_p(ab)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-
-    wikrt_val* const pab = wikrt_pval(cx, ab);
-    wikrt_wrap_sum_rv(cx, lr, pab); 
-    wikrt_wrap_sum_rv(cx, lr, (1 + pab));
-    pse[0] = pab[1];
-    pab[1] = se;
-    cx->val = ab;
+    wikrt_unwrap_sum(cx, &lr);
+    wikrt_assocr(cx);
+    wikrt_wswap(cx);
+    wikrt_wrap_sum(cx, lr);
+    wikrt_wswap(cx);
+    wikrt_wrap_sum(cx, lr);
 }
 
 // Allocate WIKRT_OTAG_BINARY, and add it to our stack

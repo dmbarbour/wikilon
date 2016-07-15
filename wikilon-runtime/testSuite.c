@@ -1130,6 +1130,11 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_sum_distrib);
     TCX(test_sum_factor);
 
+    // TODO: test data plumbing!!!!
+    //   vrwlcz, VRWLCZ
+    
+
+
     TCX(test_valid_token);
     TCX(test_sealers);
     TCX(test_alloc_binary);
@@ -1140,7 +1145,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     // TODO: test copy for binary and text
     // TODO: test at least one very large string (> 64kB)
     // TODO: test rejection of invalid texts
-    
+
 
     TCX(test_smallint_math);
     //TCX(test_bigint_math);

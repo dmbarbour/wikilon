@@ -492,7 +492,7 @@ struct wikrt_cx {
     wikrt_addr          alloc;      // allocate towards zero
     wikrt_size          size;       // maximum size of memory
     wikrt_size          skip;       // volume of reserved memory (to favor recycling)
-    wikrt_addr          ofree;      // a 'single-element' free list (special use case)
+    wikrt_addr          free_obj;   // recycle a single cell's allocation
 
     // semispace and garbage collection.
     wikrt_size          compaction_size;  // memory after compaction
@@ -551,12 +551,9 @@ struct wikrt_cx {
 #define wikrt_paddr(CX,A) ((wikrt_val*)A)
 #define wikrt_pval(CX,V)  wikrt_paddr(CX, wikrt_vaddr(V))
 
-#if (0 == WIKRT_O)
 // take advantage of WIKRT_O == 0
+_Static_assert((0 == WIKRT_O), "assuming WIKRT_O has no bit flags");
 #define wikrt_pobj(CX,V)  wikrt_paddr((CX),(V))
-#else
-#define wikrt_pobj(CX,V)  wikrt_pval((CX),(V))
-#endif
 
 
 /* NOTE: Because I'm using a moving GC, I need to be careful about
@@ -717,7 +714,7 @@ static inline void wikrt_elim_list_end(wikrt_cx* cx)
     wikrt_elim_unit(cx);
 }
 
-// (v*e) → ((otag v) * e). Try to wrap a value with an otag. 
+// (v*e) → ((otag v) * e). Wrap a value with an otag. 
 void wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag);
 
 
