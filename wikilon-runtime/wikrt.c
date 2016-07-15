@@ -1254,8 +1254,10 @@ void wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
     wikrt_wrap_otag(cx, WIKRT_OTAG_UTF8);
 }
 
-void wikrt_read_binary_v(wikrt_cx* cx, uint8_t* buff, size_t* bytes, wikrt_val* v) 
+void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
 {
+    bool const okTryRead = wikrt_p(cx->val) && !wikrt_has_error(cx);
+    if(!okTryRead) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     // NOTE: This function must not allocate. It may eliminate data.
     _Static_assert(sizeof(uint8_t) == 1, "assuming sizeof(uint8_t) is 1");
     _Static_assert(((WIKRT_SMALLINT_MIN <= 0) && (255 <= WIKRT_SMALLINT_MAX))
@@ -1265,25 +1267,20 @@ void wikrt_read_binary_v(wikrt_cx* cx, uint8_t* buff, size_t* bytes, wikrt_val* 
     (*bytes) = 0;
 
     do {
-        wikrt_val const list = (*v);
-        if(wikrt_pl(list)) { // basic list node
-            wikrt_val const* const pnode = wikrt_pval(cx, list);
+        wikrt_val* const v = wikrt_pval(cx, cx->val);
+        if(wikrt_pl(*v)) { // basic list node
+            wikrt_val const* const pnode = wikrt_pval(cx, (*v));
             wikrt_int const byte = wikrt_v2i(*pnode);
             bool const okByte = wikrt_smallint(*pnode) && ((0 <= byte) && (byte <= 255)); 
             if(!okByte) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
             if(max_bytes == (*bytes)) { return; } // output limited
             buff[(*bytes)++] = (uint8_t) byte;
-            wikrt_pval(cx,cx->val)[0] = pnode[1]; // step next in list
-        } else if(wikrt_value_is_compact_binary(cx, list)) {
-            
-        } else {
-            bool const ok = (WIKRT_UNIT_INR == list) || wikrt
-
-) { // compact binary
+            (*v) = pnode[1]; // step next in list
+        } else if(wikrt_value_is_compact_binary(cx, (*v))) {
             // optimize read for WIKRT_OTAG_BINARY
             // (hdr, next, size, buffer)
-            wikrt_val* const phd = wikrt_pobj(cx, list);
+            wikrt_val* const phd = wikrt_pobj(cx, (*v));
             size_t const output_size_limit = (max_bytes - (*bytes));
             bool const output_limited = phd[2] > output_size_limit; 
             size_t const bytes_read = output_limited ? output_size_limit : phd[2];
@@ -1296,11 +1293,7 @@ void wikrt_read_binary_v(wikrt_cx* cx, uint8_t* buff, size_t* bytes, wikrt_val* 
             } else { // binary is fully read
                 (*v) = phd[1];
             }
-        } 
-        else if(wikrt_value_is_array(cx, list)) {
         } else { // maybe terminal, maybe expandable
-            
-
             wikrt_sum_tag lr;
             wikrt_unwrap_sum(cx, &lr); 
             wikrt_wrap_sum(cx, lr);
@@ -1312,14 +1305,6 @@ void wikrt_read_binary_v(wikrt_cx* cx, uint8_t* buff, size_t* bytes, wikrt_val* 
             if(!list_node_expanded) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
         }
     } while(true);
-}
-
-void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
-{
-    bool const okTryRead = wikrt_p(cx->val) && !wikrt_has_error(cx);
-    if(!okTryRead) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_read_binary_v(cx, buff, bytes, wikrt_pval(cx, cx->val));
-
 }
 
 
@@ -1568,23 +1553,9 @@ void wikrt_int_add(wikrt_cx* cx)
 
     int64_t const sum = wikrt_v2i(a) + wikrt_v2i(b); 
     bool const range_ok = ((WIKRT_SMALLINT_MIN <= sum) && (sum <= WIKRT_SMALLINT_MAX));
-    if(!range_ok) { wikrt_set_error(cx, WIKRT_IMPL); }
-    
-    _Static_assert(((2 * WIKRT_SMALLINT_MAX)
-
-
-    
-    // Optimize for common case: small integer addition.
-    if(wikrt_smallint(a) && wikrt_smallint(b)) {
-        int64_t const sum = wikrt_v2i(a) + wikrt_v2i(b); // no risk of overflow
-        cx->val = be; // drop `a`
-        if(!wikrt_mem_reserve(cx, WIKRT_ALLOC_I64_RESERVE)) { return; }
-        wikrt_pval(cx, cx->val)[0] = wikrt_alloc_i64_rv(cx, sum);
-        return;
-    } 
-
-    // TODO: add big numbers
-    wikrt_set_error(cx, WIKRT_IMPL);
+    if(!range_ok) { wikrt_set_error(cx, WIKRT_IMPL); return; }
+    (*pbe) = wikrt_i2v(sum);
+    cx->val = be;
 }
 
 // Multiply two integers from stack.
@@ -1676,24 +1647,9 @@ void wikrt_int_cmp(wikrt_cx* cx, wikrt_ord* ord)
     wikrt_val* const pb = wikrt_pval(cx, pa[1]);
     _Static_assert(!WIKRT_HAS_BIGINT, "assuming small integers");
 
-    wikrt_int const ia = wikrt_v2i(a);
-    wikrt_int const ib = wikrt_v2i(b);
-    (*ord) = (ia > ib) ? WIKRT_GT : (ia < ib) ? WIKRT_LT : WIKRT_EQ;
-}
-
-//typedef enum wikrt_ord { WIKRT_LT = -1, WIKRT_EQ = 0, WIKRT_GT = 1 } wikrt_ord;
-void wikrt_int_cmp_v(wikrt_cx* cx, wikrt_val a, wikrt_ord* ord, wikrt_val b)
-{
-    // fast handling for common smallnum case
-    if(wikrt_smallint(a) && wikrt_smallint(b)) {
-    }
-    bool const okType = wikrt_integer(cx,a) && wikrt_integer(cx,b);
-    if(!okType) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-
-
-    // TODO: big number comparisons
-    wikrt_set_error(cx, WIKRT_IMPL);
-    return;
+    wikrt_int const a = wikrt_v2i(*pa);
+    wikrt_int const b = wikrt_v2i(*pb);
+    (*ord) = (a > b) ? WIKRT_GT : (a < b) ? WIKRT_LT : WIKRT_EQ;
 }
 
 // Quotation - capturing a value into a block in O(1) time.
