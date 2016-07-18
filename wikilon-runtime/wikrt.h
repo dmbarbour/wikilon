@@ -414,12 +414,10 @@ void wikrt_block_attrib_v(wikrt_cx*, wikrt_val*, wikrt_val attribs);
 void wikrt_intro_optok(wikrt_cx* cx, char const*); // e → (optok * e)
 void wikrt_intro_op(wikrt_cx* cx, wikrt_op op); // e → (op * e)
 
-#define WIKRT_ENABLE_FAST_READ 0
-
 // return number of valid bytes and chars, up to given limits. Return
 // 'true' only if all bytes were read or we stopped on a NUL terminal.
 // Here 'szchars' may be NULL.
-bool wikrt_valid_text_len(char const* s, size_t* szbytes, size_t* szchars);
+bool wikrt_valid_text_len(char const* s, size_t* szbytes);
 bool wikrt_valid_key_len(char const* s, size_t* szBytes);
 
 // given length, determine if we have a valid token
@@ -496,8 +494,7 @@ struct wikrt_cx {
 
     wikrt_addr          alloc;      // allocate towards zero
     wikrt_size          size;       // maximum size of memory
-    wikrt_size          skip;       // volume of reserved memory (to favor recycling)
-    wikrt_addr          free_obj;   // recycle a single cell's allocation
+    wikrt_size          skip;       // volume of reserved memory (favor recycling)
 
     // semispace and garbage collection.
     wikrt_size          compaction_size;  // memory after compaction
@@ -517,20 +514,17 @@ struct wikrt_cx {
 #define WIKRT_REG_PC_INIT WIKRT_UNIT
 #define WIKRT_REG_CC_INIT WIKRT_UNIT
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
-#define WIKRT_FREE_LIST_CT 1 /* memory freelist count (currently none) */
+#define WIKRT_FREE_LIST_CT 0 /* memory freelist count (currently none) */
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
 #define WIKRT_HAS_SHARED_REFCT_OBJECTS 0 /* for static assertions */
 
-/* Regarding `free_obj` - a single 'free object' (just one cell). This
- * is intended to mitigate the edge case where sequences of deep sum 
- * manipulations (and sometimes single operators) tend to rapidly free
- * then allocate a single cell. The other big use case is for reading
- * text, which requires accessing the binary then wrapping the utf8
- * again.
+/* Idea: I could try to track a free list, perhaps a single element, for
+ * specific cases, e.g. the deep-sum tag (for VRWLCZ ops) and for opening
+ * and closing the UTF8 tag or OPVAL tags when writing. Doing so could
+ * save a fair portion of allocations in some special cases.
  *
- * My estimate is that this will cut allocations in half for naively
- * reading texts, and cut them to near zero for basic sum data plumbing.
- * But the performance gain is likely to be marginal in general.
+ * However, so far the savings have been marginal at best. So I'm going to
+ * omit this for now (as an unnecessary complication).
  */
 
 /* For large contexts (e.g. 20MB+) I will want to try to use less than
@@ -553,7 +547,7 @@ struct wikrt_cx {
 // A strategy for 'splitting' an array is to simply share references
 // within a cell. This is safe only if we allocate the extra space to
 // split them for real in the future.
-#define WIKRT_ALLOW_OVERCOMMIT_BUFFER_SHARING 1
+#define WIKRT_ALLOW_OVERCOMMIT_BUFFER_SHARING 0
 
 #define wikrt_has_error(cx) (cx->ecode)
 
@@ -610,6 +604,14 @@ static inline void wikrt_intro_smallval(wikrt_cx* cx, wikrt_val v)
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
     wikrt_intro_r(cx, v);
 }
+static inline void wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+    (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
+}
+
+
 
 
 static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {

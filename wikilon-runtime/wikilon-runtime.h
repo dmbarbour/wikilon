@@ -469,14 +469,12 @@ void wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
  * The codepoints read will meet the same constraints as alloc_text, i.e. 
  * no control chars except LF, no surrogates, no incomplete codepoints.
  *
- * In case of error, we'll stop reading and the context will enter an
- * error state. So this shouldn't be used unless you know your argument
- * should be a valid text.
- * 
- * The 'chars' parameter enables clients to limit and quickly determine 
- * the number of codepoints read, but it is optional (NULL permitted).
+ * In case of error, we stop reading and the context enters an error state.
+ * The user should statically know that the argument is a valid text. If
+ * you need to control number of characters read, operate at the integer 
+ * level instead of this buffer level.
  */
-void wikrt_read_text(wikrt_cx*, char*, size_t* bytes, size_t* chars);
+void wikrt_read_text(wikrt_cx*, char*, size_t* bytes);
 
 /** @brief Serialization and Programming
  *

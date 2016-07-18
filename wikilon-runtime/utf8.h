@@ -66,37 +66,6 @@ static inline uint32_t utf8_step_unsafe(uint8_t const** s)
     return cp;
 }
 
-/** Read a single utf-8 codepoint from the end of the text.
- *
- * This is intended for use with string reversals. A character is
- * read from the rear-end of the text. Otherwise this behaves as
- * utf8_readcp. (It's probably a bit less efficient.)
- */
-size_t utf8_readcp_r(uint8_t const* s, size_t strlen, uint32_t* cp);
-
-/** Read a single character in reverse & update state for convenient looping. */
-static inline bool utf8_step_r(uint8_t const* s, size_t* strlen, uint32_t* cp) 
-{
-    size_t const k = utf8_readcp_r(s, (*strlen), cp);
-    (*strlen) -= k;
-    return (0 != k);
-}
-
-/** Read a utf-8 character from the end of the text without validation. */
-static inline size_t utf8_readcp_unsafe_r(uint8_t const* s, size_t byteLen, uint32_t* cp)
-{
-    s += byteLen; 
-    while(0x80 == ((*s) & 0xC0)) { --s; }
-    return utf8_readcp_unsafe(s, cp); 
-}
-
-static inline bool utf8_step_unsafe_r(uint8_t const* s, size_t* byteLen, uint32_t* cp)
-{
-    if(0 == (*byteLen)) { return false; }
-    (*byteLen) -= utf8_readcp_unsafe_r(s, (*byteLen), cp);
-    return true;
-}
-
 /** Validate and obtain utf8 string length. 
  *
  * Will return number of consecutive valid utf8 codepoints. 

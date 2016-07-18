@@ -10,9 +10,8 @@
 #define TESTENV_SIZE (4 * TESTCX_SIZE)
 
 char const* const valid_abc_strings[] =
- { ""
+ { "", " ", "\n", "\n\n\n\n\n", "      "
  , "vrlwcz", "VRWLCZ", "%^", " \n", "$", "mkf'", "#9876543210-", "+*-Q", "G", "DFMK"
- , "\n\n\n\n\n", "      "
  , "[  ]", "[vc]", "[v[vc]lc]", "[v[v[vc]lc]lc]", "[v[v[v[vc]lc]lc]lc]"
  , "[]", "[[]]", "[[[]]]", "[[[[]]]]"
  , "[ ]", "[ [ ] ]", "[ [ [ ] ] ]", "[ [ [ [ ] ] ] ]"
@@ -546,15 +545,13 @@ void test_read_binary(wikrt_cx* cx)
     read_binary_chunks(cx, buff, buffsz, (buffsz / 2));
 }
 
-void read_text_chunks(wikrt_cx* cx, char const* s, size_t const chunk_chars, size_t const chunk_bytes)
+void read_text_chunks(wikrt_cx* cx, char const* s, size_t const chunk_bytes)
 {
     char buff_read[chunk_bytes];
     size_t bytes_read;
-    size_t chars_read;
     do {
         bytes_read = chunk_bytes;
-        chars_read = chunk_chars;
-        wikrt_read_text(cx, buff_read, &bytes_read, &chars_read);
+        wikrt_read_text(cx, buff_read, &bytes_read);
         if(0 != memcmp(buff_read, s, bytes_read)) { 
             wikrt_set_error(cx, WIKRT_ETYPE);
             return;
@@ -572,10 +569,10 @@ void read_text_cstr(wikrt_cx* cx, char const* s)
     wikrt_copy(cx); 
     wikrt_copy(cx); 
     wikrt_copy(cx);
-    read_text_chunks(cx, s, SIZE_MAX, len);
-    read_text_chunks(cx, s, SIZE_MAX, len + 1);
-    read_text_chunks(cx, s, SIZE_MAX, 4);
-    read_text_chunks(cx, s, 1, 4);
+    read_text_chunks(cx, s, len);
+    read_text_chunks(cx, s, len + 1);
+    read_text_chunks(cx, s, 4);
+    read_text_chunks(cx, s, 11);
 }
 
 void test_read_text(wikrt_cx* cx) 
@@ -606,9 +603,9 @@ void test_big_text(wikrt_cx* cx)
     wikrt_intro_text(cx, txtbuff, SIZE_MAX); 
     wikrt_copy(cx);
     wikrt_copy(cx);
-    read_text_chunks(cx, txtbuff, SIZE_MAX, 30002);
-    read_text_chunks(cx, txtbuff, SIZE_MAX, 3001);
-    read_text_chunks(cx, txtbuff, SIZE_MAX, 304);
+    read_text_chunks(cx, txtbuff, 30002);
+    read_text_chunks(cx, txtbuff, 3001);
+    read_text_chunks(cx, txtbuff, 304);
 }
 
 
@@ -751,7 +748,7 @@ bool test_serialize_cstr(wikrt_cx* cx, char const* abc)
     wikrt_block_to_text(cx);
     char buff[len + 1];
     size_t bufflen = len + 1;
-    wikrt_read_text(cx, buff, &bufflen, NULL);
+    wikrt_read_text(cx, buff, &bufflen);
     buff[len] = 0;
     elim_list_end(cx);
 
@@ -774,7 +771,6 @@ void test_arg_list(wikrt_cx* cx, char const* const* ss, void (*test)(wikrt_cx*, 
 
 void test_parse_abc_str(wikrt_cx* cx, char const* abc)
 {
-    fprintf(stderr, "Test string: %s\n", abc);
     wikrt_intro_text(cx, abc, SIZE_MAX);
     wikrt_text_to_block(cx);
     wikrt_drop(cx);
@@ -786,12 +782,18 @@ void test_parse_abc_str(wikrt_cx* cx, char const* abc)
 void test_write_abc_str(wikrt_cx* cx, char const* abc)
 {
     // fprintf(stderr, "%s: arg `%s`\n", __FUNCTION__, abc);
-    wikrt_intro_text(cx, abc, SIZE_MAX);
+    wikrt_intro_text(cx, abc, SIZE_MAX); 
     wikrt_text_to_block(cx);
-    wikrt_block_to_text(cx); 
-    elim_cstr(cx, abc);
+    if(wikrt_error(cx)) { wikrt_cx_reset(cx); return; } // shows up as failure in test_parse_abc_str
 
-    if(WIKRT_OK != wikrt_error(cx)) {
+    wikrt_block_to_text(cx); 
+    if(wikrt_error(cx)) { // failed to write ABC at all
+        fprintf(stderr, "%s: failed to write ABC to text: `%s`\n", __FUNCTION__, abc);
+        return;
+    }
+
+    elim_cstr(cx, abc);
+    if(WIKRT_OK != wikrt_error(cx)) { // text→block→text was not exact identity function
         fprintf(stderr, "%s: failed to write and recover ABC: `%s`\n", __FUNCTION__, abc);
     }
 }
@@ -836,7 +838,7 @@ void test_quote_pair(wikrt_cx* cx)
 
     size_t len = 79;
     char buff[len+1];
-    wikrt_read_text(cx, buff, &len, NULL);
+    wikrt_read_text(cx, buff, &len);
     buff[len] = 0;
 
     bool const ok = (0 == strcmp(buff, "#7-#42l")) 
@@ -874,7 +876,7 @@ void test_quote_empty_text(wikrt_cx* cx)
     val2txt(cx);
     size_t len = 79;
     char buff[len+1];
-    wikrt_read_text(cx, buff, &len, NULL);
+    wikrt_read_text(cx, buff, &len);
     buff[len] = 0;
     bool const ok = (0 == strcmp(buff, "vvrwlcVVRWLC"))
                  || (0 == strcmp(buff, "\"\n~"));

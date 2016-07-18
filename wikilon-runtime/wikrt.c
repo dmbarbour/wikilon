@@ -199,8 +199,7 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     // occurs. (The benefits of recycling marginal in most cases, but can
     // be significant in some common special cases.) Any free list should 
     // simply be cleared back to zero.
-    cx->free_obj = 0; // a single item free list
-    _Static_assert((1 == WIKRT_FREE_LIST_CT) && (!WIKRT_NEED_FREE_ACTION)
+    _Static_assert((0 == WIKRT_FREE_LIST_CT) && (!WIKRT_NEED_FREE_ACTION)
         , "todo: handle free lists");
     
     // Note: ephemerons will require special attention. Either I add cx0 to
@@ -898,7 +897,6 @@ void wikrt_unwrap_seal(wikrt_cx* cx, char* buff)
                     otag = (otag >> 8);
                 } while(sizeof(wikrt_val) != ix);
                 buff[ix] = 0;
-                cx->free_obj = (*v);
                 (*v) = pv[1];
                 return;
             } else if(wikrt_otag_seal(*pv)) {
@@ -934,11 +932,11 @@ static inline bool wikrt_deepsum_with_free_space(wikrt_cx* cx, wikrt_val v)
     return wikrt_otag_deepsum(otag) && (otag < (WIKRT_VAL_MAX >> 2));
 }
 
-void wikrt_wrap_sum(wikrt_cx* cx, wikrt_sum_tag sum) 
+// wikrt_wrap_sum, assuming wikrt_p(cx->val). Mostly to ensure optimization
+// across multiple calls is viable.
+static void wikrt_wrap_sum_p(wikrt_cx* cx, wikrt_sum_tag sum)
 {
     _Static_assert(WIKRT_USING_MINIMAL_BITREP, "after any bitrep change, review this function.");
-    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-
     bool const inL = (WIKRT_INL == sum);
     wikrt_val* const v = wikrt_pval(cx, cx->val);
     if(1 == (3 & (*v))) {
@@ -961,30 +959,20 @@ void wikrt_wrap_sum(wikrt_cx* cx, wikrt_sum_tag sum)
     }
 }
 
-void wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
-    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
+void wikrt_wrap_sum(wikrt_cx* cx, wikrt_sum_tag sum) 
+{
     if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-
-    wikrt_addr const a = (0 == cx->free_obj) ? wikrt_alloc_r(cx, WIKRT_CELLSIZE) 
-                       :                       wikrt_vaddr(cx->free_obj);
-    cx->free_obj = 0;
-
-    wikrt_val* const pv = wikrt_pval(cx, cx->val);
-    wikrt_val* const po = wikrt_paddr(cx, a);
-    po[0] = otag;
-    po[1] = pv[0];
-    pv[0] = wikrt_tag_addr(WIKRT_O, a);
+    wikrt_wrap_sum_p(cx, sum);
 }
-
 
 // Expansion of a compact sum value. 
 // is not a sum that can be expanded.
-static void wikrt_expand_sum(wikrt_cx* cx) 
+static void wikrt_expand_sum_p(wikrt_cx* cx) 
 {
     if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
 
     wikrt_val* const v = wikrt_pval(cx, cx->val);
-    bool const ok_type = wikrt_p(cx->val) && wikrt_o(*v);
+    bool const ok_type = wikrt_o(*v);
     if(!ok_type) { wikrt_set_error(cx, WIKRT_ETYPE); }
     wikrt_val* const pv = wikrt_pobj(cx, (*v));
 
@@ -1014,7 +1002,6 @@ static void wikrt_expand_sum(wikrt_cx* cx)
             // then read the character. I will try to reuse the `utf8` 
             // tag to minimize allocation.
             _Static_assert(!WIKRT_NEED_FREE_ACTION, "free utf8 tag");
-            cx->free_obj = (*v); // recycle memory (via wikrt_wrap_otag below)
             (*v) = pv[1]; // access the binary.
 
             uint8_t buff[UTF8_MAX_CP_SIZE];
@@ -1044,12 +1031,11 @@ static void wikrt_expand_sum(wikrt_cx* cx)
     } // end switch
 }
 
-
-void wikrt_unwrap_sum(wikrt_cx* cx, wikrt_sum_tag* sum) 
+// unwrap sum but assuming cx->val is a pair. This is more to
+// ensure static linking of the implementation.
+static void wikrt_unwrap_sum_p(wikrt_cx* cx, wikrt_sum_tag* sum)
 { tailcall: { 
     _Static_assert(WIKRT_USING_MINIMAL_BITREP, "after any bitrep change, review this function.");
-    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-
     wikrt_val* const v = wikrt_pval(cx, cx->val);
 
     if(2 & (*v)) { // WIKRT_PL, WIKRT_PR, WIKRT_UL, WIKRT_UR
@@ -1069,7 +1055,6 @@ void wikrt_unwrap_sum(wikrt_cx* cx, wikrt_sum_tag* sum)
             wikrt_val const sf = s0 >> 2;
             if(0 == sf) { 
                 _Static_assert(!WIKRT_NEED_FREE_ACTION, "must free sum on unwrap");
-                cx->free_obj = (*v); // recycle this object (e.g. for wrap_sum).
                 (*v) = pv[1]; // drop deepsum wrapper
             } else { 
                 (*pv) = sf << 8 | WIKRT_OTAG_DEEPSUM;
@@ -1077,14 +1062,37 @@ void wikrt_unwrap_sum(wikrt_cx* cx, wikrt_sum_tag* sum)
             
         } else {
             // expand element from array, binary, etc.
-            wikrt_expand_sum(cx);
+            wikrt_expand_sum_p(cx);
             if(!wikrt_has_error(cx)) { goto tailcall; }
         }
     } else { wikrt_set_error(cx, WIKRT_ETYPE); }
 }}
 
 
+void wikrt_unwrap_sum(wikrt_cx* cx, wikrt_sum_tag* sum) 
+{
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    wikrt_unwrap_sum_p(cx, sum);
+}
 
+static void wikrt_sum_wswap_p(wikrt_cx* cx) 
+{
+    wikrt_sum_tag a_bc; // (a + (b + c))
+    wikrt_unwrap_sum_p(cx, &a_bc);
+    if(WIKRT_INL == a_bc) {
+        wikrt_wrap_sum_p(cx, WIKRT_INL); // (a + _)
+        wikrt_wrap_sum_p(cx, WIKRT_INR); // (_ + (a + _))
+    } else {
+        wikrt_sum_tag b_c;
+        wikrt_unwrap_sum_p(cx, &b_c);
+        if(WIKRT_INL == b_c) { // 'b' → (b + _)
+            wikrt_wrap_sum_p(cx, WIKRT_INL); // (b + _)
+        } else { // we have 'c'.
+            wikrt_wrap_sum_p(cx, WIKRT_INR); // (_ + c)
+            wikrt_wrap_sum_p(cx, WIKRT_INR); // (_ + (_ + c))
+        }
+    }
+}
 
 // Thoughts: I'd like to maybe ensure sum manipulations are non-allocating,
 // at least on average. One option here might be to use free-lists in some
@@ -1092,71 +1100,62 @@ void wikrt_unwrap_sum(wikrt_cx* cx, wikrt_sum_tag* sum)
 // allocation will succeed.
 void wikrt_sum_wswap(wikrt_cx* cx)
 {
-    wikrt_sum_tag a_bc; // (a + (b + c))
-    wikrt_unwrap_sum(cx, &a_bc);
-    if(WIKRT_INL == a_bc) {
-        wikrt_wrap_sum(cx, WIKRT_INL); // (a + _)
-        wikrt_wrap_sum(cx, WIKRT_INR); // (_ + (a + _))
-    } else {
-        wikrt_sum_tag b_c;
-        wikrt_unwrap_sum(cx, &b_c);
-        if(WIKRT_INL == b_c) { // 'b' → (b + _)
-            wikrt_wrap_sum(cx, WIKRT_INL); // (b + _)
-        } else { // we have 'c'.
-            wikrt_wrap_sum(cx, WIKRT_INR); // (_ + c)
-            wikrt_wrap_sum(cx, WIKRT_INR); // (_ + (_ + c))
-        }
-    }
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    wikrt_sum_wswap_p(cx);
 }
 
 void wikrt_sum_zswap(wikrt_cx* cx)
 {
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_sum_tag a_bcd;
-    wikrt_unwrap_sum(cx, &a_bcd);
-    if(WIKRT_INR == a_bcd) { wikrt_sum_wswap(cx); }
-    wikrt_wrap_sum(cx, a_bcd);
+    wikrt_unwrap_sum_p(cx, &a_bcd);
+    if(WIKRT_INR == a_bcd) { wikrt_sum_wswap_p(cx); }
+    wikrt_wrap_sum_p(cx, a_bcd);
 }
 
 void wikrt_sum_assocl(wikrt_cx* cx) 
 {
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_sum_tag a_bc;
-    wikrt_unwrap_sum(cx, &a_bc);
+    wikrt_unwrap_sum_p(cx, &a_bc);
     if(WIKRT_INL == a_bc) { // a → ((a + _) + _)
-        wikrt_wrap_sum(cx, WIKRT_INL);
-        wikrt_wrap_sum(cx, WIKRT_INL);
+        wikrt_wrap_sum_p(cx, WIKRT_INL);
+        wikrt_wrap_sum_p(cx, WIKRT_INL);
     } else {
         wikrt_sum_tag b_c;
-        wikrt_unwrap_sum(cx, &b_c); 
-        wikrt_wrap_sum(cx, WIKRT_INR); // (_ + b) or (_ + c) (or (_ + ?) on error)
+        wikrt_unwrap_sum_p(cx, &b_c); 
+        wikrt_wrap_sum_p(cx, WIKRT_INR); // (_ + b) or (_ + c) (or (_ + ?) on error)
         if(WIKRT_INL == b_c) { 
-            wikrt_wrap_sum(cx, WIKRT_INL);  // ((_ + b) + _)
+            wikrt_wrap_sum_p(cx, WIKRT_INL);  // ((_ + b) + _)
         }
     }
 }
 
 void wikrt_sum_assocr(wikrt_cx* cx)
 {
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_sum_tag ab_c;
-    wikrt_unwrap_sum(cx, &ab_c);
+    wikrt_unwrap_sum_p(cx, &ab_c);
     if(WIKRT_INL != ab_c) { // 'c' → (_ + (_ + c))
-        wikrt_wrap_sum(cx, WIKRT_INR);
-        wikrt_wrap_sum(cx, WIKRT_INR);
+        wikrt_wrap_sum_p(cx, WIKRT_INR);
+        wikrt_wrap_sum_p(cx, WIKRT_INR);
     } else { // in (a+b) in left → 'a' in left or 'b' in left of right.
         wikrt_sum_tag a_b;
-        wikrt_unwrap_sum(cx, &a_b);
-        wikrt_wrap_sum(cx, WIKRT_INL); // (a + _) or (b + _)
+        wikrt_unwrap_sum_p(cx, &a_b);
+        wikrt_wrap_sum_p(cx, WIKRT_INL); // (a + _) or (b + _)
         if(WIKRT_INL != a_b) { 
-            wikrt_wrap_sum(cx, WIKRT_INR); // (_ + (b + _))
+            wikrt_wrap_sum_p(cx, WIKRT_INR); // (_ + (b + _))
         }
     }
 }
 
 void wikrt_accel_sum_swap(wikrt_cx* cx) 
 {
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_sum_tag lr;
-    wikrt_unwrap_sum(cx, &lr);
+    wikrt_unwrap_sum_p(cx, &lr);
     wikrt_sum_tag const rl = (WIKRT_INL == lr) ? WIKRT_INR : WIKRT_INL; // swapped tag.
-    wikrt_wrap_sum(cx, rl);
+    wikrt_wrap_sum_p(cx, rl);
 }
 
 /** (a*((b+c)*e))→(((a*b)+(a*c))*e). ABC op `D`. */
@@ -1210,29 +1209,26 @@ void wikrt_intro_binary(wikrt_cx* cx, uint8_t const* data, size_t len)
     wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, hdr));
 }
 
-bool wikrt_valid_text_len(char const* s, size_t* bytes, size_t* chars)
+bool wikrt_valid_text_len(char const* s, size_t* bytes)
 {
     _Static_assert((sizeof(char) == sizeof(uint8_t)), "invalid cast from char* to uint8_t*");
     uint8_t const* const utf8 = (uint8_t const*)s;
-    size_t const maxlen = (NULL != bytes) ? (*bytes) : SIZE_MAX;
+    size_t const maxlen = (*bytes);
     size_t len = 0;
-    size_t cct = 0;
     do {
         uint32_t cp;
         size_t const k = utf8_readcp(utf8 + len, maxlen - len, &cp);
         if((0 == k) || !wikrt_text_char(cp)) { break; }
         len += k;
-        cct += 1;
     } while(true);
-    if(NULL != bytes) { (*bytes) = len; }
-    if(NULL != chars) { (*chars) = cct; }
+    (*bytes) = len;
     return ((maxlen == len) || (0 == utf8[len]));
 }
 
 void wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
 {
     // Validate text binary. Determine actual size if NUL-terminated.
-    if(!wikrt_valid_text_len(s, &nBytes, NULL)) { 
+    if(!wikrt_valid_text_len(s, &nBytes)) { 
         wikrt_set_error(cx, WIKRT_INVAL); 
         return; 
     }
@@ -1264,9 +1260,7 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
             if(max_bytes == (*bytes)) { return; } // output limited
             buff[(*bytes)++] = (uint8_t) byte;
             (*v) = pnode[1]; // step next in list
-        } 
-        #if 0
-        else if(wikrt_value_is_compact_binary(cx, (*v))) {
+        } else if(wikrt_value_is_compact_binary(cx, (*v))) {
             // optimize read for WIKRT_OTAG_BINARY
             // (hdr, next, size, buffer)
             wikrt_val* const phd = wikrt_pobj(cx, (*v));
@@ -1283,11 +1277,10 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
                 (*v) = phd[1];
             }
         } 
-        #endif
         else { // maybe terminal, maybe expandable
             wikrt_sum_tag lr;
-            wikrt_unwrap_sum(cx, &lr); 
-            wikrt_wrap_sum(cx, lr);
+            wikrt_unwrap_sum_p(cx, &lr); 
+            wikrt_wrap_sum_p(cx, lr);
 
             if(WIKRT_INR == lr) { return; } // done reading, at end of list
 
@@ -1298,23 +1291,38 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
     } while(true);
 }
 
+static void wikrt_putback_incomplete_utf8(wikrt_cx* cx, char const* str, size_t* sz)
+{
+    _Static_assert(sizeof(uint8_t) == sizeof(char), "assuming natural cast between uint8_t and char");
 
-void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
+    if(0 == (*sz)) { return; }
+    uint8_t const* const buff_end = (uint8_t const*) str + (*sz);
+    uint8_t const* cpf = buff_end; 
+    while(0x80 == ((*(--cpf)) & 0xC0)) { /* NOP */ }
+
+    bool const cpf_complete = ((cpf + utf8_readcp_size(cpf)) == buff_end);
+    if(cpf_complete) { return; }
+
+    // put back one byte at a time.
+    uint8_t const* s = buff_end;
+    do { 
+        wikrt_intro_i32(cx, (int32_t) *(--s)); 
+        wikrt_cons(cx); 
+    } while(cpf != s);
+
+    // adjust size
+    (*sz) = ((char const*) cpf) - str;
+}
+
+void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz)
 {
     _Static_assert(sizeof(uint8_t) == sizeof(char), "assuming natural cast between uint8_t and char");
     _Static_assert(((WIKRT_SMALLINT_MIN <= 0) && (0x10FFFF <= WIKRT_SMALLINT_MAX))
         , "assuming unicode codepoints are small integers");
 
     uint8_t* const dst = (uint8_t*) buff;
-
-    // allow 'charct' to be NULL. But handle it in just one place.
-    size_t charct_local = SIZE_MAX;
-    if(NULL == charct) { charct = &charct_local; }
-
     size_t const max_buffsz = (*buffsz);
-    size_t const max_charct = (*charct);
     (*buffsz) = 0;
-    (*charct) = 0;
 
     bool const okTryRead = wikrt_p(cx->val) && !wikrt_has_error(cx);
     if(!okTryRead) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
@@ -1331,18 +1339,30 @@ void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz, size_t* charct)
 
             uint32_t const cp32 = (uint32_t) cp;
             size_t const next_buffsz = (*buffsz) + utf8_writecp_size(cp32);
-            if((max_charct == (*charct)) || (next_buffsz > max_buffsz)) { return; } // not enough space in buffer
+            if(next_buffsz > max_buffsz) { return; } // not enough space in buffer
             utf8_writecp_unsafe(dst + (*buffsz), cp32);
             (*buffsz) = next_buffsz;
-            (*charct) += 1;
             wikrt_pval(cx, cx->val)[0] = pnode[1];
-        } 
-        // TODO: fast read for (utf8, binary) text.
-        //   Read the binary. Return data if we overshoot.
-        else { // maybe terminal, maybe expandable
+        } else if(wikrt_value_is_utf8(cx, list)) {
+            _Static_assert(!WIKRT_NEED_FREE_ACTION, "todo: free OTAG_UTF8 node");
+            _Static_assert((sizeof(uint8_t) == sizeof(char)), "cast from char* to uint8_t* for utf8");
+            wikrt_pval(cx, cx->val)[0] = wikrt_pobj(cx, list)[1]; // drop the UTF8 tag
+
+            // Read into the buffer.
+            size_t const max_bytes_read = max_buffsz - (*buffsz);
+            size_t bytes_read = max_bytes_read;
+            wikrt_read_binary(cx, (uint8_t*) buff, &bytes_read);
+            (*buffsz) += bytes_read;
+
+            // Put some bytes back if necessary. Wrap the remaining text.
+            wikrt_putback_incomplete_utf8(cx, buff, buffsz);
+            wikrt_wrap_otag(cx, WIKRT_OTAG_UTF8);
+            // We have either filled the buffer or finished reading the text.
+            return;
+        } else { // maybe terminal, maybe expandable
             wikrt_sum_tag lr;
-            wikrt_unwrap_sum(cx, &lr); 
-            wikrt_wrap_sum(cx, lr);
+            wikrt_unwrap_sum_p(cx, &lr); 
+            wikrt_wrap_sum_p(cx, lr);
 
             if(WIKRT_INR == lr) { return; } // done reading
 
@@ -1786,7 +1806,7 @@ void wikrt_peek_sv(wikrt_cx* cx, char* resourceId)
 bool wikrt_valid_key_len(char const* k, size_t* len)
 {
     (*len) = 1 + WIKRT_VALID_KEY_MAXLEN;
-    return wikrt_valid_text_len(k, len, NULL) 
+    return wikrt_valid_text_len(k, len) 
         && (1 <= (*len)) && ((*len) <= WIKRT_VALID_KEY_MAXLEN);
 }
 

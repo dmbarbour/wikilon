@@ -320,7 +320,7 @@ void wikrt_text_to_block(wikrt_cx* cx)
     do { // cx has (ops * (stack * (text * e)))
         wikrt_assocl(cx); wikrt_wswap(cx); // swizzle text to top
         bytes_read = WIKRT_PARSE_READSZ;
-        wikrt_read_text(cx, buff, &bytes_read, NULL); 
+        wikrt_read_text(cx, buff, &bytes_read); 
         wikrt_wswap(cx); wikrt_assocr(cx); // swizzle text to bottom
         wikrt_step_parse(cx, &p, (uint8_t const*) buff, bytes_read);
     } while(0 != bytes_read);

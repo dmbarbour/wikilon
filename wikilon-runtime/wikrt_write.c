@@ -489,8 +489,8 @@ static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_unwrap_sum(cx, &lr);
     if(WIKRT_INR == lr) {
         // End of current block.
+        wikrt_wrap_sum(cx, lr); // 
         if(0 == w->depth) { return false; }
-        wikrt_wrap_sum(cx, lr);
         wikrt_writer_pop_stack(cx, w); 
         return true; 
     } 
@@ -512,7 +512,6 @@ static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
         wikrt_val* const popv = wikrt_pobj(cx, opv);
         if(WIKRT_OTAG_OPVAL == LOBYTE(*popv)) {
             _Static_assert(!WIKRT_NEED_FREE_ACTION, "must free opval wrapper");
-            cx->free_obj = opv; // recycle opval wrapper. 
             pv[0] = popv[1]; // drop opval wrapper
             wikrt_write_val(cx, w, popv[0]); // 
 
@@ -541,9 +540,11 @@ static inline bool wikrt_cx_has_block(wikrt_cx* cx) {
 void wikrt_block_to_text(wikrt_cx* cx)
 {
 
+    if(wikrt_has_error(cx)) { return; }
+
     // (block * e) → (ops * (unit * (text * e)))
-    wikrt_intro_empty_list(cx); wikrt_wswap(cx); // initial texts (empty list)
-    wikrt_intro_unit(cx); wikrt_wswap(cx); // initial continuation stack
+    wikrt_intro_empty_list(cx); wikrt_wswap(cx); // initial output text (empty list)
+    wikrt_intro_unit(cx); wikrt_wswap(cx); // initial continuation stack (unit)
     wikrt_open_block_ops(cx);              // block → ops
 
     wikrt_writer_state w;
@@ -556,6 +557,7 @@ void wikrt_block_to_text(wikrt_cx* cx)
     while(wikrt_writer_small_step(cx,&w)) { /* continue */ }
 
     if(wikrt_has_error(cx)) { return; }
+
     assert(0 == w.depth);
     wikrt_writer_flush(cx, &w);
     wikrt_elim_list_end(cx); // drop empty toplevel ops
