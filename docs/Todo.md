@@ -5,9 +5,11 @@
  * build my own arenas & GC models
  * optimized bytecode representations
  * leverage partial evaluations
+ * JIT compilation of bytecode
  * unit tests
 
 * simple console evaluators via C runtime
+ * Haskell/C implementation of `aoi`
  * bytecode
  * dictionary & Claw APIs (aoi?)
 

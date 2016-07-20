@@ -1658,7 +1658,7 @@ void wikrt_int_cmp(wikrt_cx* cx, wikrt_ord* ord)
 
     wikrt_int const a = wikrt_v2i(*pa);
     wikrt_int const b = wikrt_v2i(*pb);
-    (*ord) = (a > b) ? WIKRT_GT : (a < b) ? WIKRT_LT : WIKRT_EQ;
+    (*ord) = (b > a) ? WIKRT_GT : (b < a) ? WIKRT_LT : WIKRT_EQ;
 }
 
 // Quotation - capturing a value into a block in O(1) time.

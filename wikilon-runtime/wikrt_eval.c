@@ -17,14 +17,18 @@
  *
  * Effort Quota:
  *
- * Infinite loops would be a problem. So I'll just halt a computation
+ * Infinite loops will be a problem. So I'll just halt any computation
  * that appears to take too long. Eventually (with parallelism) I may
  * need something sophisticated, like a shared pool for computation
  * effort. 
  *
- * Testing the quota currently occurs whenever we end a block call,
+ * Testing our quota currently occurs whenever we end a block call,
  * including for tail calls. So we might run a bit over. This isn't
  * a big deal.
+ *
+ * How much work is 'too much'? I might eventually tune this when
+ * loading the environment. But for now, I'll use a simple estimate
+ * based on 'so many GC ticks'.
  *
  * Tail Call Optimization and Loopy Code:
  *
@@ -121,6 +125,7 @@ static void _wikrt_int_cmp_gt(wikrt_cx* cx)
 //       #4 #2 G -- observes 4 > 2. Returns (N(2)*N(4)) on right.
     wikrt_ord gt;
     wikrt_int_cmp(cx, &gt);
+
     if(WIKRT_GT == gt) {
         wikrt_assocl(cx);
         wikrt_wrap_sum(cx, WIKRT_INR);

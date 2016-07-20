@@ -1078,7 +1078,75 @@ void test_eval_vrwlc(wikrt_cx* cx)
 }
 
 void test_eval_quote(wikrt_cx* cx) {
-    wikrt_set_error(cx, WIKRT_IMPL);
+    char const* const a = "-7";
+    char const* const b = "49";
+    wikrt_intro_istr(cx, a, SIZE_MAX);
+    wikrt_intro_istr(cx, b, SIZE_MAX);
+    wikrt_assocl(cx);
+    wikrt_quote(cx);
+    run_block_inline(cx, 1);
+    wikrt_assocr(cx);
+    read_istr(cx, b);
+    read_istr(cx, a);
+}
+
+// input: a block of type `∀a.a→(Int*a)` and an expected result. Limited effort.
+void test_eval_abc2i(wikrt_cx* cx, char const* const abc, int64_t const expected) 
+{
+    if(wikrt_error(cx)) { return; }
+    int const max_effort = 4;
+    char const* const seal = u8"∀";
+    wikrt_intro_unit(cx);
+    wikrt_wrap_seal(cx, seal);
+    intro_block(cx, abc);
+    run_block(cx, max_effort);
+    wikrt_assocr(cx);
+    wikrt_wswap(cx);
+    char sealbuff[WIKRT_TOK_BUFFSZ];
+    wikrt_unwrap_seal(cx, sealbuff);
+    wikrt_elim_unit(cx);
+    int64_t actual;
+    wikrt_peek_i64(cx, &actual);
+
+    bool const okResult = (0 == strcmp(seal, sealbuff)) && (expected == actual);
+    if(!okResult) { 
+        fprintf(stderr, "%s: failed evaluation of `%s` (expecting %lld, got %lld)\n", 
+            __FUNCTION__, 
+            abc, 
+            (long long int) expected,
+            (long long int) actual);
+        wikrt_set_error(cx, WIKRT_ETYPE);
+    }
+}
+
+void test_eval_num(wikrt_cx* cx)
+{
+    test_eval_abc2i(cx, "#", 0);
+    test_eval_abc2i(cx, "#0", 0);
+    test_eval_abc2i(cx, "#7-", -7);
+    test_eval_abc2i(cx, "#8\n675 309", 8675309);
+    test_eval_abc2i(cx, "#09876543210", 9876543210);
+}
+
+void test_eval_math(wikrt_cx* cx) 
+{
+    test_eval_abc2i(cx, "#7-^^*+", 42);
+    test_eval_abc2i(cx, "#6^^*+", 42);
+
+    test_eval_abc2i(cx, "#11#3  Q%",  3); test_eval_abc2i(cx, "#11#3  Qw%",  2);
+    test_eval_abc2i(cx, "#11-#3 Q%", -4); test_eval_abc2i(cx, "#11-#3 Qw%",  1);
+    test_eval_abc2i(cx, "#11#3- Q%", -4); test_eval_abc2i(cx, "#11#3- Qw%", -1);
+    test_eval_abc2i(cx, "#11-#3-Q%",  3); test_eval_abc2i(cx, "#11-#3-Qw%", -2);
+}
+
+void test_eval_comparison(wikrt_cx* cx)
+{
+    test_eval_abc2i(cx, "#7#7 G VRWLC Krw%", 7);
+    test_eval_abc2i(cx, "#7#7 G VRWLC Kr %", 7);
+    test_eval_abc2i(cx, "#6#7 G VRWLC Krw%", 6);  
+    test_eval_abc2i(cx, "#6#7 G VRWLC Kr %", 7);
+    test_eval_abc2i(cx, "#7#6 G       Krw%", 6);
+    test_eval_abc2i(cx, "#7#6 G       Kr %", 7);
 }
 
 void test_eval_compose(wikrt_cx* cx) {
@@ -1213,11 +1281,13 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     // TODO: evaluations
     TCX(test_eval_id);
     TCX(test_eval_vrwlc);
+    TCX(test_eval_num);
+    TCX(test_eval_math);
+    TCX(test_eval_comparison);
+    // Test comparisons.
     TCX(test_eval_quote);
     TCX(test_eval_compose);
     TCX(test_eval_fixpoint);
-    // TODO: evaluation with numbers (test all digits)
-    // TODO: test comparison of numbers and eval variant
     // TODO: evaluation with composition
     // TODO: evaluation with simple loops
     // TODO: evaluation with ad-hoc annotations
