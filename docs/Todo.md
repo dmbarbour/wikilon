@@ -8,6 +8,8 @@
  * JIT compilation of bytecode
  * unit tests
 
+optimize composition for singleton op blocks
+
 * simple console evaluators via C runtime
  * Haskell/C implementation of `aoi`
  * bytecode

@@ -1155,24 +1155,33 @@ void test_eval_quote(wikrt_cx* cx) {
 
 void test_eval_fixpoint(wikrt_cx* cx) 
 {
-    wikrt_set_error(cx, WIKRT_IMPL);
-#if 0
-    intro_block(cx, "");
-    intro_block(cx, " '[^'mw^'zmwvr$c]^'mwm ");
-    run_block_inline(cx, 1);
+    // minimal fixpoint function: [^'m]m^'m
+    //  (not a constant overhead variant)
+    // This doubles the argument function size,
+    // but is okay for small functions.
+    test_eval_abc2i(cx, "#[w#2*#1+w] [^'m]m^'m vr$c vr$c vr$c vr$c vr$c %", 31);
+}
 
-    wikrt_copy(cx); print_val(cx); fprintf(stderr, "\n");
-
-    run_block_inline(cx, 1);
-
-    wikrt_copy(cx); print_val(cx); fprintf(stderr, "\n");
-
-    run_block_inline(cx, 1);
-    run_block_inline(cx, 1);
-    run_block_inline(cx, 1);
-    wikrt_block_to_text(cx);
-    elim_cstr(cx, "[][^'mw^'zmwvr$c]^'mw^'zmwvr$c");
-#endif
+void test_eval_fixpoint_sto(wikrt_cx* cx)
+{
+    // a more sophisticated fixpoint function: 
+    //  '[^'mw^'zmwvr$c]^'mwm
+    //
+    // Example: [{%foo}] '[^'mw^'zmwvr$c]^'mwm
+    //        = [[{%foo}]] [^'mw^'zmwvr$c] ^'mwm
+    //        = [[{%foo}]] [^'mw^'zmwvr$c] [[^'mw^'zmwvr$c]] mwm
+    //        = [[{%foo}]] [[^'mw^'zmwvr$c]^'mw^'zmwvr$c] wm
+    //        = [[{%foo}][^'mw^'zmwvr$c]^'mw^'zmwvr$c]
+    //
+    // Applied: [{%foo}][^'mw^'zmwvr$c]^'mw^'zmwvr$c
+    //        = [{%foo}][[^'mw^'zmwvr$c]^'mw^'zmwvr$c]w^'zmwvr$c
+    //        = [[^'mw^'zmwvr$c]^'mw^'zmwvr$c][{%foo}][[{%foo}]]zmwvr$c
+    //        = [[{%foo}][^'mw^'zmwvr$c]^'mw^'zmwvr$c][{%foo}]vr$c
+    //
+    // Anyhow, the important point is that we only have one `[{%foo}]` within
+    // the fixpoint block. We briefly have two, but only when we're about to
+    // apply one.
+    test_eval_abc2i(cx, "#[w#100+w] '[^'mw^'zmwvr$c]^'mwm  vr$c vr$c vr$c vr$c %", 400);
 }
 
 void test_quote_apply(wikrt_cx* cx) 
@@ -1288,11 +1297,10 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_eval_compose);
     TCX(test_eval_quote);
     TCX(test_eval_fixpoint);
-    // TODO: evaluation with composition
-    // TODO: evaluation with simple loops
+    TCX(test_eval_fixpoint_sto);
+    // TODO: evaluation with simple loops. E.g. a fibonacci function.
     // TODO: evaluation with ad-hoc annotations
     // TODO: evaluation with value sealers
-    // TODO: evaluation of quoted values
     // TODO: test infinite evaluation returns
     // TODO: bignum math
 
