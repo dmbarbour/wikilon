@@ -211,11 +211,20 @@ Annotations involved may include: `{&fork}` on a PF to turn it into a thread, `{
 
 *Note:* This process function parallelism concept is, at least in theory, extremely scalable. Processes can use their own heaps and GC. Processes may be moved transparently to remote physical machines. Queues of messages enable flexible batch processing. Promise pipelining can be leveraged for flexible communication relationships. Communication patterns can be recognized - i.e. if we know or anticipate a value from process A will be read by process D, we can send it from A to D. 
 
-#### Lazy Computation? (not yet)
+#### Lazy Computation? 
 
-Laziness with Wikilon Runtime is troublesome. It's easy to implement 'local' laziness with paired annotations. The troublesome bit is how laziness should interact with cache, stowage, parallelism, etc.. One option is to effectively treat lazy computations as *linear*. This would limit the damage from copying lazy values. Shared dependencies at the dictionary level could still replicate a lazy computation.
- 
-For now, I'll table the issue. Laziness is not critical for performance or scalability. It might prove favorable to model laziness explicitly in terms of command sequences, streams, continuation passing style, or other *semantically* incremental computation.
+The concept of 'lazy' computations seems rather troublesome. The issue is: how shall laziness interact with persistence, parallelism, distribution, substructural types, caching, termination, etc.? I haven't found an approach I find fully satisfactory.
+
+A simplistic laziness option that I'm considering is this:
+
+* a block may be marked lazy by annotation, `{&lazy}`
+* when applied, that block returns a lazy future value
+* lazy futures may be synchronized by `{&join}`
+* lazy future is effectively a special case asynch value
+
+The main benefit I gain from this form of explicit laziness (relative to explicitly carting around a `(value, block)` pair) - is the opacity of the value, potential to optimize (to partially or wholly evaluate). Additionally, laziness as a future can be lifted easily to a one-off parallel computation, e.g. by a `{&par}` annotation.
+
+Explicit laziness does hinder some things, such as treating simple lists as streams. But this isn't a big problem. I don't really want to encourage too much use of laziness. It might prove favorable to model incremental computation explicitly in terms of command sequences, streams, continuation passing style, etc. than to use laziness in most cases. Laziness is not essential for performance or scalability.
 
 ### Arrays or Compact Lists
 
@@ -264,3 +273,14 @@ Accelerators on texts are limited without an index, requiring a linear scan of t
 
 Assuming a value that might be relevant or linear but that will not be used, annotate it as garbage with `{&trash}`. This allows the runtime to recycle the memory immediately. A placeholder is left, requiring only a small constant amount of space. Attempting to observe the placeholder will appear as a type error. The value will preserve known substructural attributes of the original (with pending values or parallel futures treated as linear).
 
+## Shared Blocks and Internal Bytecode
+
+I need high performance, non-copying, compact, shared memory blocks of code. This is essential for performance. I must be able to:
+
+* interpret directly out of a byte string
+* reference sub-blocks as sub-regions of the byte string
+* reference large texts or binaries in the byte string
+
+To simplify internal references, I must separate tracking of dependencies vs. access to stowed data. Value sharing will be limited to blocks and binaries, I think. And for data that can be efficiently represented as blocks or binaries, such as texts.
+
+Anyhow, I need a representation for bytecode that is suitable for this compact usage. I might include a 'stop' or 'yield' bytecode to simplify termination.

@@ -6,7 +6,7 @@
 #include "wikilon-runtime.h"
 #include "utf8.h"
 
-#define TESTCX_SIZE 20
+#define TESTCX_SIZE 4
 #define TESTENV_SIZE (4 * TESTCX_SIZE)
 
 char const* const valid_abc_strings[] =
@@ -39,6 +39,7 @@ char const* const invalid_abc_strings[] =
  , "{", "}", "{}", "{\n}", "{x{y}"
  , "{0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}" // oversized token
  , "\"", "~", "\"\n.\n~"
+ , "\"\a\n~", "\"\t\n~", "\"\r\n~"
  , NULL // terminate list 
  };   
 
@@ -71,6 +72,38 @@ int main(int argc, char const** argv) {
 
     return ((tests_run == tests_passed) ? ok : err);
 }
+
+
+void read_sum(wikrt_cx* cx, wikrt_sum_tag e) 
+{
+    wikrt_sum_tag lr;
+    wikrt_unwrap_sum(cx, &lr);
+    if(lr != e) { wikrt_set_error(cx, WIKRT_ETYPE); }
+}
+void elim_list_end(wikrt_cx* cx) 
+{
+    read_sum(cx, WIKRT_INR);
+    wikrt_elim_unit(cx);
+}
+
+
+void val2txt(wikrt_cx* cx) { wikrt_quote(cx); wikrt_block_to_text(cx); }
+void print_text(wikrt_cx* cx) {
+    if(wikrt_error(cx)) { fprintf(stderr, "{error}"); return; }
+
+    size_t const max_len = 800;
+    char buff[max_len];
+    do {
+        size_t len = max_len;
+        wikrt_read_text(cx, buff, &len);
+        if(0 == len) { return; }
+        fwrite(buff, len, 1, stderr);
+    } while(true);
+    elim_list_end(cx);
+    assert(!wikrt_error(cx));
+}
+void print_val(wikrt_cx* cx) { val2txt(cx); print_text(cx); }
+
 
 void test_unit(wikrt_cx* cx) 
 {
@@ -424,20 +457,6 @@ bool test_sealers(wikrt_cx* cx)
     return true;
 }
 
-void read_sum(wikrt_cx* cx, wikrt_sum_tag e) 
-{
-    wikrt_sum_tag lr;
-    wikrt_unwrap_sum(cx, &lr);
-    if(lr != e) { wikrt_set_error(cx, WIKRT_ETYPE); }
-}
-
-
-void elim_list_end(wikrt_cx* cx) 
-{
-    read_sum(cx, WIKRT_INR);
-    wikrt_elim_unit(cx);
-}
-
 int32_t pop_list_i32(wikrt_cx* cx)
 {
     int32_t a = INT32_MIN;
@@ -568,10 +587,7 @@ void read_text_cstr(wikrt_cx* cx, char const* s)
     // need four copies of the text for four tests
     wikrt_copy(cx); 
     wikrt_copy(cx); 
-    wikrt_copy(cx);
     read_text_chunks(cx, s, len);
-    read_text_chunks(cx, s, len + 1);
-    read_text_chunks(cx, s, 4);
     read_text_chunks(cx, s, 11);
 }
 
@@ -814,7 +830,7 @@ void test_parse_abc(wikrt_cx* cx) { test_arg_list(cx, valid_abc_strings, test_pa
 void test_write_abc(wikrt_cx* cx) { test_arg_list(cx, valid_abc_strings, test_write_abc_str); }
 void test_reject_parse(wikrt_cx* cx) { test_arg_list(cx, invalid_abc_strings, test_reject_parse_str); }
 
-void val2txt(wikrt_cx* cx) { wikrt_quote(cx); wikrt_block_to_text(cx); }
+
 
 void test_quote_unit(wikrt_cx* cx) 
 { 
@@ -1061,17 +1077,34 @@ void test_eval_vrwlc(wikrt_cx* cx)
     read_istr(cx, b);
 }
 
+void test_eval_quote(wikrt_cx* cx) {
+    wikrt_set_error(cx, WIKRT_IMPL);
+}
+
+void test_eval_compose(wikrt_cx* cx) {
+    wikrt_set_error(cx, WIKRT_IMPL);
+}
+
 void test_eval_fixpoint(wikrt_cx* cx) 
 {
+    wikrt_set_error(cx, WIKRT_IMPL);
+#if 0
     intro_block(cx, "");
     intro_block(cx, " '[^'mw^'zmwvr$c]^'mwm ");
     run_block_inline(cx, 1);
+
+    wikrt_copy(cx); print_val(cx); fprintf(stderr, "\n");
+
     run_block_inline(cx, 1);
+
+    wikrt_copy(cx); print_val(cx); fprintf(stderr, "\n");
+
     run_block_inline(cx, 1);
     run_block_inline(cx, 1);
     run_block_inline(cx, 1);
     wikrt_block_to_text(cx);
     elim_cstr(cx, "[][^'mw^'zmwvr$c]^'mw^'zmwvr$c");
+#endif
 }
 
 void test_quote_apply(wikrt_cx* cx) 
@@ -1144,8 +1177,6 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
 
     // TODO: test data plumbing functions
     //   vrwlcz, VRWLCZ, swaps, etc.
-    
-
 
     TCX(test_valid_token);
     TCX(test_sealers);
@@ -1154,9 +1185,6 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_read_binary);
     TCX(test_read_text);
     TCX(test_big_text);
-    // TODO: test copy for binary and text
-    // TODO: test at least one very large string (> 64kB)
-    // TODO: test rejection of invalid texts
 
 
     TCX(test_smallint_math);
@@ -1185,6 +1213,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     // TODO: evaluations
     TCX(test_eval_id);
     TCX(test_eval_vrwlc);
+    TCX(test_eval_quote);
+    TCX(test_eval_compose);
     TCX(test_eval_fixpoint);
     // TODO: evaluation with numbers (test all digits)
     // TODO: test comparison of numbers and eval variant

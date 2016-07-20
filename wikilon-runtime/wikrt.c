@@ -1291,6 +1291,9 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
     } while(true);
 }
 
+// Since I just dump a big utf-8 string into a binary field, I might have an incomplete
+// character at the tail end of the string. I need to ensure the returned bytestring
+// only contains complete codepoints. Therefore, I need to put back up to three bytes.
 static void wikrt_putback_incomplete_utf8(wikrt_cx* cx, char const* str, size_t* sz)
 {
     _Static_assert(sizeof(uint8_t) == sizeof(char), "assuming natural cast between uint8_t and char");

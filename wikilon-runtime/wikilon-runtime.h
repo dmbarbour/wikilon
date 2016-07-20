@@ -633,11 +633,13 @@ void wikrt_intro_sv(wikrt_cx*, char const* resourceId);
  *
  * Apply a function (a block) to a value to produce a latent value. The
  * actual evaluation is delayed until wikrt_eval_step. A pending value
- * may be quoted or manipulated, but is more or less opaque.
+ * may be quoted (serializes as `value[continuation]{&lazy}$`), but is 
+ * otherwise opaque. The exact state of the value and continuation after
+ * an incomplete wikrt_step_eval is non-deterministic.
  *
- * Wikilon runtime treats the latent value as lazy for most purposes. It 
- * will serialize as `value[continuation]{&lazy}$` if quoted the converted
- * to text. Full support for explicit laziness may exist in the future.
+ * Note: This implies explicit laziness, which is only minimally supported
+ * by Wikilon runtime. Internally, a pending value may be explicitly forced
+ * by {&join}, essentially a special case asynchronous value.
  */
 void wikrt_apply(wikrt_cx*);
 
@@ -649,7 +651,8 @@ void wikrt_apply(wikrt_cx*);
  * parameters, etc.).
  *
  * A step returns `true` if more steps are needed, `false` otherwise. On returning
- * false, we have computed the value or noticed an error state (cf. wikrt_error).
+ * false, we have either computed the value or entered an error state. Check for
+ * errors with `wikrt_error`.
  */ 
 bool wikrt_step_eval(wikrt_cx*);
 
@@ -665,10 +668,10 @@ bool wikrt_step_eval(wikrt_cx*);
  */
 void wikrt_quote(wikrt_cx*);
 
-/** @brief Mark a block affine (non-copyable). (block*e)→(block*e). */
+/** @brief Mark a block affine (non-copyable). (block*e)→(block*e). Op `f`. */
 void wikrt_block_aff(wikrt_cx*);
 
-/** @brief Mark a block relevant (non-droppable). (block*e)→(block*e). */
+/** @brief Mark a block relevant (non-droppable). (block*e)→(block*e). Op `k`. */
 void wikrt_block_rel(wikrt_cx*);
 
 // Laziness and Parallelism? Maybe eventually.

@@ -6,14 +6,25 @@
 #include <stdio.h>
 #include <assert.h>
 
-/** Support for persistence and transactions. */ 
+/** Support for persistence and transactions.
+ *
+ * - 64 bit addresses are used (plus substructure)
+ * - an address is defined only once, immutable
+ * - memdep is defined only if dependencies exist
+ * - either refcts or refct0 is defined, not both
+ * - hash is based on just the memory field.
+ * - dependencies duplicate in memory and memdep.
+ *
+ * It might be useful to model fragments for value stowage,
+ */ 
 struct wikrt_db { 
     int                 lockfile;  
     MDB_env            *env;       
-    MDB_dbi             memory; // address → value
-    MDB_dbi             caddrs; // hash → [address]
+    MDB_dbi             memory; // address → binary value (no need to parse it)
+    MDB_dbi             memdep; // address → address list (dependencies of value)
+    MDB_dbi             caddrs; // hash → [address] (for structure sharing)
     MDB_dbi             keyval; // key → (txn, address)
-    MDB_dbi             refcts; // address → number
+    MDB_dbi             refcts; // address → natural
     MDB_dbi             refct0; // address → unit
     stowaddr            last_gc; 
     stowaddr            last_alloc;
@@ -48,7 +59,7 @@ bool wikrt_db_init(wikrt_db** pdb, char const* dp, uint32_t dbMaxMB) {
     // to populate on success:
     int db_lockfile;
     MDB_env* pLMDB;
-    MDB_dbi db_memory, db_keyval, db_caddrs, db_refcts, db_refct0;
+    MDB_dbi db_memory, db_memdep, db_keyval, db_caddrs, db_refcts, db_refct0;
     stowaddr db_last_alloc;
 
     // relevant constants
@@ -58,8 +69,9 @@ bool wikrt_db_init(wikrt_db** pdb, char const* dp, uint32_t dbMaxMB) {
     // readers. Haskell VCache does this.
     int const nMaxReaders = 500;
     int const mdbFlags = /* MDB_NOLOCK | */ MDB_NOTLS | MDB_NOMEMINIT;
-    int const nDatabaseCount = 5;
+    int const nDatabaseCount = 6;
     int const f_memory = MDB_CREATE | MDB_INTEGERKEY;
+    int const f_memdep = MDB_CREATE | MDB_INTEGERKEY;
     int const f_keyval = MDB_CREATE;
     int const f_caddrs = MDB_CREATE | MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP;
     int const f_refcts = MDB_CREATE | MDB_INTEGERKEY;
@@ -85,6 +97,7 @@ bool wikrt_db_init(wikrt_db** pdb, char const* dp, uint32_t dbMaxMB) {
     // open our databases
     MDB_cursor* pCursor;
     if( (0 != mdb_dbi_open(pTxn, "@", f_memory, &db_memory)) ||
+        (0 != mdb_dbi_open(pTxn, "~", f_memdep, &db_memdep)) ||
         (0 != mdb_dbi_open(pTxn, "/", f_keyval, &db_keyval)) ||
         (0 != mdb_dbi_open(pTxn, "#", f_caddrs, &db_caddrs)) ||
         (0 != mdb_dbi_open(pTxn, "^", f_refcts, &db_refcts)) ||

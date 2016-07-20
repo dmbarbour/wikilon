@@ -5,7 +5,11 @@
  * build my own arenas & GC models
  * optimized bytecode representations
  * leverage partial evaluations
+ * unit tests
 
+* simple console evaluators via C runtime
+ * bytecode
+ * dictionary & Claw APIs (aoi?)
 
 * persistence and reflection
  * dictionaries as runtime values

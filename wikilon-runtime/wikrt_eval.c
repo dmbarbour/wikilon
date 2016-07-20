@@ -42,6 +42,27 @@
 
 #define WIKRT_EVAL_COMPACTION_STEPS 4
 
+static inline void wikrt_eval_push_op(wikrt_cx* cx, wikrt_op op) 
+{
+    if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
+    cx->pc = wikrt_alloc_cellval_r(cx, WIKRT_PL, wikrt_i2v(op), cx->pc);
+}
+
+// (v*e) → e, with `v` added to head of `pc` as an opval.
+static inline void wikrt_eval_push_opval(wikrt_cx* cx)
+{
+    // quote `v` into an opval
+    wikrt_wrap_otag(cx, WIKRT_OTAG_OPVAL);
+
+    // shift opval over to cx->pc
+    if(!wikrt_p(cx->val)) { return; }
+    wikrt_addr const a = wikrt_vaddr(cx->val);
+    wikrt_val* const pa = wikrt_paddr(cx, a);
+    cx->val = pa[1];
+    pa[1] = cx->pc;
+    cx->pc = wikrt_tag_addr(WIKRT_PL, a);
+}
+
 
 static void _wikrt_nop(wikrt_cx* cx) {  /* NOP */  }
 
@@ -68,7 +89,7 @@ static void _wikrt_sum_assert(wikrt_cx* cx)
     wikrt_unwrap_sum(cx, &lr);
     if(WIKRT_INR != lr) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
-static void _wikrt_accel_intro_void(wikrt_cx* cx)
+static void _wikrt_accel_intro_void_left(wikrt_cx* cx)
 {
     wikrt_wrap_sum(cx, WIKRT_INR);
 }
@@ -110,29 +131,87 @@ static void _wikrt_int_cmp_gt(wikrt_cx* cx)
     }
 }
 
-static void _wikrt_eval_step_apply(wikrt_cx* cx) 
-{
-    fprintf(stderr, "todo %s\n", __FUNCTION__);
-    wikrt_set_error(cx, WIKRT_IMPL);
+static inline bool wikrt_block_lazy(wikrt_otag otag) { 
+    return (0 != (WIKRT_BLOCK_LAZY & otag));
 }
-static void _wikrt_eval_step_condap(wikrt_cx* cx) 
-{
-    fprintf(stderr, "todo %s\n", __FUNCTION__);
-    wikrt_set_error(cx, WIKRT_IMPL);
-}
+
 static void _wikrt_eval_step_inline(wikrt_cx* cx) 
 {
-    fprintf(stderr, "todo %s\n", __FUNCTION__);
-    wikrt_set_error(cx, WIKRT_IMPL);
+    // ([a→b]*a) → b. Equivalent to ABC code `vr$c`.
+
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+    bool const okType = wikrt_p(cx->val) && wikrt_o(*v) && wikrt_p(cx->cc);
+    if(!okType) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    wikrt_val* const obj = wikrt_pobj(cx, (*v));
+
+    if(!wikrt_otag_block(*obj)) { 
+        wikrt_set_error(cx, WIKRT_ETYPE); 
+    } 
+    else if(wikrt_block_lazy(*obj)) {
+        // Explicit laziness will simply involve wrapping our block.
+        // For now, I'm treating lazy pending values as a specialized
+        // form of asynchronous value. We can force evaluation with
+        // {&join}.
+        if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
+        cx->val = wikrt_alloc_cellval_r(cx, WIKRT_O, WIKRT_OTAG_PEND, cx->val);
+    }
+    else {
+        wikrt_addr const obj_addr = wikrt_vaddr_obj(*v);
+        wikrt_val* const pctr = &(cx->pc);
+        wikrt_val* const cstk = wikrt_pval(cx, cx->cc);
+        // For both tail calls and regular calls, I'll push an operations list
+        // to the cx->cc stack. Tail call optimization simply involves swapping
+        // the applied function with an identity function (an empty ops list) 
+        // whenever possible.
+        _Static_assert(!WIKRT_NEED_FREE_ACTION, "dropping a cell during evaluation");
+        obj[0]  = (*pctr);
+        (*pctr) = obj[1];
+        obj[1]  = (*cstk);
+        (*cstk) = wikrt_tag_addr(WIKRT_PL, obj_addr);
+        cx->val = v[1]; 
+        if(WIKRT_UNIT_INR == obj[0]) { 
+            // the tail call optimization. 
+            obj[0]  = (*pctr);
+            (*pctr) = WIKRT_UNIT_INR;
+        }
+    }
 }
 static void _wikrt_eval_step_tailcall(wikrt_cx* cx) 
 {
     // ([a→b]*(a*unit))→b. 
-    // Translate to an ([a→b]*b) inline operation.
+    // Translate to an ([a→b]*a) inline operation.
     wikrt_assocl(cx);
     wikrt_elim_unit_r(cx);
     _wikrt_eval_step_inline(cx);
 }
+static void _wikrt_eval_step_apply(wikrt_cx* cx) 
+{
+    // ([a→b]*(a*e)) → (b*e) 
+    // For simplicity, I'll just route this through the `inline` code,
+    // even though it will never be in tail call position.
+    wikrt_assocl(cx); wikrt_accel_swap(cx);  // (e * ([a→b]*a))
+    wikrt_eval_push_op(cx, ACCEL_PROD_SWAP); 
+    wikrt_eval_push_opval(cx); // quote `e`
+    _wikrt_eval_step_inline(cx);
+}
+static void _wikrt_eval_step_condap(wikrt_cx* cx) 
+{
+    wikrt_wswap(cx); // (block * (sum * e)) → (sum * (block * e))
+    wikrt_sum_tag lr;
+    wikrt_unwrap_sum(cx, &lr);
+    if(WIKRT_INR == lr) {
+        wikrt_wrap_sum(cx, lr); // preserve sum type
+        wikrt_wswap(cx);  
+        wikrt_drop(cx);  // drop block, fails if relevant.
+    } else {
+        wikrt_eval_push_op(cx, OP_SUM_INTRO0); // return argument to left after apply.
+        wikrt_wswap(cx);
+        _wikrt_eval_step_apply(cx); // normal application of a block.
+    }
+}
+
+
+
 
 typedef void (*wikrt_op_evalfn)(wikrt_cx*);
 static const wikrt_op_evalfn wikrt_op_evalfn_table[OP_COUNT] = 
@@ -182,9 +261,9 @@ static const wikrt_op_evalfn wikrt_op_evalfn_table[OP_COUNT] =
 , [ACCEL_TAILCALL] = _wikrt_eval_step_tailcall
 , [ACCEL_INLINE] = _wikrt_eval_step_inline
 , [ACCEL_PROD_SWAP] = wikrt_accel_swap
-, [ACCEL_INTRO_UNIT] = wikrt_intro_unit
+, [ACCEL_INTRO_UNIT_LEFT] = wikrt_intro_unit
 , [ACCEL_SUM_SWAP]  = wikrt_accel_sum_swap
-, [ACCEL_INTRO_VOID] = _wikrt_accel_intro_void
+, [ACCEL_INTRO_VOID_LEFT] = _wikrt_accel_intro_void_left
 , [ACCEL_wrzw] = wikrt_accel_wrzw
 , [ACCEL_wzlw] = wikrt_accel_wzlw
 }; 
@@ -328,7 +407,7 @@ void wikrt_run_eval_step(wikrt_cx* cx, int tick_steps)
                 abort();
             }
         } else {
-            fprintf(stderr, "%s: unhandled (compact?) operations list type\n", __FUNCTION__);
+            fprintf(stderr, "%s: unhandled (compact?) operations list type (%lld)\n", __FUNCTION__, (long long int) cx->pc);
             abort();
         }
     } while(true);

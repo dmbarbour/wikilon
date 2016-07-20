@@ -85,9 +85,9 @@ static const uint8_t wikrt_op2abc_table[OP_COUNT] =
 static void writer_TAILCALL(wikrt_cx*, wikrt_writer_state* w);
 static void writer_INLINE(wikrt_cx*, wikrt_writer_state* w);
 static void writer_PROD_SWAP(wikrt_cx*, wikrt_writer_state* w);
-static void writer_INTRO_UNIT(wikrt_cx*, wikrt_writer_state* w);
+static void writer_INTRO_UNIT_LEFT(wikrt_cx*, wikrt_writer_state* w);
 static void writer_SUM_SWAP(wikrt_cx*, wikrt_writer_state* w);
-static void writer_INTRO_VOID(wikrt_cx*, wikrt_writer_state* w);
+static void writer_INTRO_VOID_LEFT(wikrt_cx*, wikrt_writer_state* w);
 static void writer_wrzw(wikrt_cx*, wikrt_writer_state* w);
 static void writer_wzlw(wikrt_cx*, wikrt_writer_state* w);
 
@@ -95,8 +95,8 @@ typedef void (*wikrt_writer)(wikrt_cx*, wikrt_writer_state*);
 #define ACCEL(X) [ACCEL_##X] = writer_##X
 static const wikrt_writer wikrt_accel_writers[OP_COUNT] =
  { ACCEL(TAILCALL),  ACCEL(INLINE)
- , ACCEL(PROD_SWAP), ACCEL(INTRO_UNIT)
- , ACCEL(SUM_SWAP),  ACCEL(INTRO_VOID)
+ , ACCEL(PROD_SWAP), ACCEL(INTRO_UNIT_LEFT)
+ , ACCEL(SUM_SWAP),  ACCEL(INTRO_VOID_LEFT)
  , ACCEL(wrzw),      ACCEL(wzlw)
  };
 _Static_assert((8 == WIKRT_ACCEL_COUNT), "missing accelerator writer?");
@@ -183,7 +183,7 @@ static void writer_PROD_SWAP(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_write_op(cx, w, OP_PROD_ASSOCL);
     wikrt_write_op(cx, w, OP_PROD_ELIM1);
 }
-static void writer_INTRO_UNIT(wikrt_cx* cx, wikrt_writer_state* w)
+static void writer_INTRO_UNIT_LEFT(wikrt_cx* cx, wikrt_writer_state* w)
 {
     // v(vrwlc)
     wikrt_write_op(cx, w, OP_PROD_INTRO1);
@@ -198,7 +198,7 @@ static void writer_SUM_SWAP(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_write_op(cx, w, OP_SUM_ASSOCL);
     wikrt_write_op(cx, w, OP_SUM_ELIM0);
 }
-static void writer_INTRO_VOID(wikrt_cx* cx, wikrt_writer_state* w)
+static void writer_INTRO_VOID_LEFT(wikrt_cx* cx, wikrt_writer_state* w)
 {
     // V(VRWLC)
     wikrt_write_op(cx, w, OP_SUM_INTRO0);
@@ -389,7 +389,7 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
 
     case WIKRT_TYPE_UNIT: {
         wikrt_elim_unit(cx);
-        wikrt_write_op(cx, w, ACCEL_INTRO_UNIT);
+        wikrt_write_op(cx, w, ACCEL_INTRO_UNIT_LEFT);
         return;
     } break;
 
@@ -410,7 +410,7 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
         // sums. But it is straightforward.
         wikrt_sum_tag lr;
         wikrt_unwrap_sum(cx, &lr);
-        wikrt_op const sumop = (WIKRT_INL == lr) ? OP_SUM_INTRO0 : ACCEL_INTRO_VOID;
+        wikrt_op const sumop = (WIKRT_INL == lr) ? OP_SUM_INTRO0 : ACCEL_INTRO_VOID_LEFT;
         wikrt_intro_op(cx, sumop); wikrt_consd(cx); // add sum constructor to ops
         goto tailcall; // process contained value
     } break;
@@ -489,7 +489,7 @@ static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_unwrap_sum(cx, &lr);
     if(WIKRT_INR == lr) {
         // End of current block.
-        wikrt_wrap_sum(cx, lr); // 
+        wikrt_wrap_sum(cx, lr); // simplify structural invariants
         if(0 == w->depth) { return false; }
         wikrt_writer_pop_stack(cx, w); 
         return true; 
@@ -510,13 +510,14 @@ static inline bool wikrt_writer_small_step(wikrt_cx* cx, wikrt_writer_state* w)
         // Expecting OTAG_OPVAL or a Sealed unit value.
         assert(wikrt_o(opv));
         wikrt_val* const popv = wikrt_pobj(cx, opv);
-        if(WIKRT_OTAG_OPVAL == LOBYTE(*popv)) {
+        if(wikrt_otag_opval(*popv)) {
             _Static_assert(!WIKRT_NEED_FREE_ACTION, "must free opval wrapper");
             pv[0] = popv[1]; // drop opval wrapper
             wikrt_write_val(cx, w, popv[0]); // 
 
-            // Note: recycling the opval tag here should save about 50%
-            // allocations for pairs and 33% for list structures.
+            // Note: recycling the opval tag here could save about 50%
+            // allocations for writing pairs and 33% for lists. So this is
+            // a good location for a small free-list element.
         } else {
             // This should be a 'sealed' unit value, 
             // i.e. OTAG_SEAL or OTAG_SEAL_SM.

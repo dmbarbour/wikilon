@@ -80,9 +80,9 @@ typedef enum wikrt_op
 , ACCEL_TAILCALL    // $c
 , ACCEL_INLINE      // vr$c
 , ACCEL_PROD_SWAP   // vrwlc
-, ACCEL_INTRO_UNIT  // vvrwlc
-, ACCEL_SUM_SWAP    // VRWLC
-, ACCEL_INTRO_VOID  // VVRWLC
+, ACCEL_INTRO_UNIT_LEFT  // vvrwlc
+, ACCEL_SUM_SWAP         // VRWLC
+, ACCEL_INTRO_VOID_LEFT  // VVRWLC
 
 // deeper data plumbing
 , ACCEL_wrzw  // (a * ((b * c) * d)) → (a * (b * (c * d)))
@@ -95,7 +95,7 @@ typedef enum wikrt_op
 // potential future accelerators?
 //  stack-level manipulations
 //  fixpoint functions (plus future support for non-copying loopy code)
-//  
+
 
 // Misc.
 , OP_COUNT  // how many ops are defined?
@@ -357,8 +357,9 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
 #define WIKRT_ARRAY_REVERSE  (1 << 8)
 
 // block header bits
-#define WIKRT_BLOCK_RELEVANT (1 << 8)
-#define WIKRT_BLOCK_AFFINE   (1 << 9)
+#define WIKRT_BLOCK_RELEVANT (1 << 8)  // forbid drop
+#define WIKRT_BLOCK_AFFINE   (1 << 9)  // forbid copy
+#define WIKRT_BLOCK_LAZY     (1 << 10) // when applied, create a pending computation
 
 // block inherits substructural attributes from contained value
 // this is used for quoted values within a block.
@@ -556,7 +557,8 @@ struct wikrt_cx {
 
 // take advantage of WIKRT_O == 0
 _Static_assert((0 == WIKRT_O), "assuming WIKRT_O has no bit flags");
-#define wikrt_pobj(CX,V)  wikrt_paddr((CX),(V))
+#define wikrt_vaddr_obj(V) (V)
+#define wikrt_pobj(CX,V)  wikrt_paddr((CX),wikrt_vaddr_obj(V))
 
 
 /* NOTE: Because I'm using a moving GC, I need to be careful about
