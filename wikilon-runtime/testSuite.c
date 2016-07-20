@@ -1077,19 +1077,6 @@ void test_eval_vrwlc(wikrt_cx* cx)
     read_istr(cx, b);
 }
 
-void test_eval_quote(wikrt_cx* cx) {
-    char const* const a = "-7";
-    char const* const b = "49";
-    wikrt_intro_istr(cx, a, SIZE_MAX);
-    wikrt_intro_istr(cx, b, SIZE_MAX);
-    wikrt_assocl(cx);
-    wikrt_quote(cx);
-    run_block_inline(cx, 1);
-    wikrt_assocr(cx);
-    read_istr(cx, b);
-    read_istr(cx, a);
-}
-
 // input: a block of type `∀a.a→(Int*a)` and an expected result. Limited effort.
 void test_eval_abc2i(wikrt_cx* cx, char const* const abc, int64_t const expected) 
 {
@@ -1123,8 +1110,8 @@ void test_eval_num(wikrt_cx* cx)
 {
     test_eval_abc2i(cx, "#", 0);
     test_eval_abc2i(cx, "#0", 0);
-    test_eval_abc2i(cx, "#7-", -7);
-    test_eval_abc2i(cx, "#8\n675 309", 8675309);
+    test_eval_abc2i(cx, "#7 -", -7);
+    test_eval_abc2i(cx, "# 8\n675 309", 8675309);
     test_eval_abc2i(cx, "#09876543210", 9876543210);
 }
 
@@ -1150,8 +1137,21 @@ void test_eval_comparison(wikrt_cx* cx)
 }
 
 void test_eval_compose(wikrt_cx* cx) {
-    wikrt_set_error(cx, WIKRT_IMPL);
+    test_eval_abc2i(cx, "#7-[*+][^^]m vr$c", 42);
+    test_eval_abc2i(cx, "#6 [^^][*+]wm vr$c", 42);
 }
+
+void test_eval_quote(wikrt_cx* cx) {
+    char const* const a = "42";
+    wikrt_intro_istr(cx, a, SIZE_MAX);
+    wikrt_quote(cx);
+    run_block_inline(cx, 1);
+    read_istr(cx, a);
+
+    test_eval_abc2i(cx, "#7-'[^^*+]wm vr$c", 42);
+    test_eval_abc2i(cx, "#6'[vr$c^^*+] vr$c", 42);
+}
+
 
 void test_eval_fixpoint(wikrt_cx* cx) 
 {
@@ -1179,10 +1179,10 @@ void test_quote_apply(wikrt_cx* cx)
 {
     // also tests that `wikrt_apply` performs no immediate evaluation.
     wikrt_intro_istr(cx, "-7", SIZE_MAX);
-    intro_block(cx, "^^*+");
+    intro_block(cx, "v^^*+");
     wikrt_apply(cx);
     val2txt(cx);
-    elim_cstr(cx, "#7-[^^*+]{&lazy}$");
+    elim_cstr(cx, "#7-[v^^*+]{&lazy}$");
 }
 
 
@@ -1285,8 +1285,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_eval_math);
     TCX(test_eval_comparison);
     // Test comparisons.
-    TCX(test_eval_quote);
     TCX(test_eval_compose);
+    TCX(test_eval_quote);
     TCX(test_eval_fixpoint);
     // TODO: evaluation with composition
     // TODO: evaluation with simple loops
