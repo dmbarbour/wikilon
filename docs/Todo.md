@@ -4,16 +4,15 @@
 * performance and C runtime
  * build my own arenas & GC models
  * optimized bytecode representations
+ * optimize composition of a singleton block
  * leverage partial evaluations
  * JIT compilation of bytecode
  * unit tests
 
-optimize composition for singleton op blocks
-
 * simple console evaluators via C runtime
  * Haskell/C implementation of `aoi`
  * bytecode
- * dictionary & Claw APIs (aoi?)
+ * maybe a Claw editor (reader/writer)
 
 * persistence and reflection
  * dictionaries as runtime values

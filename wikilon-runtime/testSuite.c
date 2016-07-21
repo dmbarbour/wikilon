@@ -1194,6 +1194,11 @@ void test_quote_apply(wikrt_cx* cx)
     elim_cstr(cx, "#7-[v^^*+]{&lazy}$");
 }
 
+void test_eval_anno(wikrt_cx* cx)
+{
+    test_eval_abc2i(cx, "#7-{&testAnno}^^*+", 42);
+}
+
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
@@ -1298,7 +1303,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_eval_quote);
     TCX(test_eval_fixpoint);
     TCX(test_eval_fixpoint_sto);
-    // TODO: evaluation with simple loops. E.g. a fibonacci function.
+    TCX(test_eval_anno);
+    // TODO: simple loops. E.g. a fibonacci function.
     // TODO: evaluation with ad-hoc annotations
     // TODO: evaluation with value sealers
     // TODO: test infinite evaluation returns

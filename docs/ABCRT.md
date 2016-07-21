@@ -37,7 +37,11 @@ I'll actually include a copy of these directly, no shared libs.
 
 ### Multi-Process Access?
 
-With LMDB, I have the opportunity to use a single-process or multi-process access to the database. Multi-process access to a database would be very convenient if I want to later develop shells, command-line interpreters, etc. to access this database in the background. However, multi-process manipulation does complicate tracking of ephemeral values. 
+With LMDB, I have an opportunity to support multi-process access to the associated database. This could be very convenient, as it would enable shells, CLIs, and such to coexist. The main trouble will be tracking of ephemeron values, i.e. to enable GC involving value stowage. 
+
+Ephemeral data might be tracked most easily by use of a shared mmap file with bloom filters or the like. 
+
+ Multi-process access to a database would be very convenient if I want to later develop shells, command-line interpreters, etc. to access this database in the background. However, multi-process manipulation does complicate tracking of ephemeral values. 
 
 For my anticipated use case, multi-process access is not critical. Also, I can always develop command-line interpreters and shells that use HTTP queries against a local web service instead of direct access to the database.
 
