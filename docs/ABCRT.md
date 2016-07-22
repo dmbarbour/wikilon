@@ -230,6 +230,7 @@ The main benefit I gain from this form of explicit laziness (relative to explici
 
 Explicit laziness does hinder some things, such as treating simple lists as streams. But this isn't a big problem. I don't really want to encourage too much use of laziness. It might prove favorable to model incremental computation explicitly in terms of command sequences, streams, continuation passing style, etc. than to use laziness in most cases. Laziness is not essential for performance or scalability.
 
+
 ### Arrays or Compact Lists
 
 Arrays are a compact representation for list-like structures `μL.((a*L)+b)`. In addition to arrays, I'm interested in array-chunked lists similar to Haskell's lazy bytestrings. Those are sufficient to offer most benefits of arrays, after all, while remaining structurally more flexible.
@@ -288,3 +289,4 @@ I need high performance, non-copying, compact, shared memory blocks of code. Thi
 To simplify internal references, I must separate tracking of dependencies vs. access to stowed data. Value sharing will be limited to blocks and binaries, I think. And for data that can be efficiently represented as blocks or binaries, such as texts.
 
 Anyhow, I need a representation for bytecode that is suitable for this compact usage. I might include a 'stop' or 'yield' bytecode to simplify termination.
+

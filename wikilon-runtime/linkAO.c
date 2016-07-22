@@ -1,12 +1,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <assert.h>
 
 static char const* linkAO_helpMsg() { return u8""
  "USAGE: linkAO yourFile.ao [-w word | -d definition]\n"
@@ -94,6 +96,105 @@ char* aoWrapWord(char const* word)
 }
 
 size_t fstatSize(int fd) { struct stat st; fstat(fd, &st); return (size_t) st.st_size; }
+
+/* Indexing the AO file: I need a very fast lookup, given a word, to find its
+ * definition in memory. This will be the core of the fast linker. A linear 
+ * collision hash is a reasonable option. I don't need deletion - I assume
+ * the AO file will remain constant during evaluation.
+ *
+ * Since I know that the word and definition are separated by a single character
+ * (either SP or LF), it is sufficient that I know where to find the `@word` 
+ * header, the word size, and the definition size. 
+ */
+
+typedef struct wordDef {    
+    char const* where; // reference to `@` symbol at start of def in file
+    size_t      sizes; // size for word (low 6 bits) and definition size.
+        // sizes omits two bytes: the `@` symbol and the SP or LF
+        //   that separates each word from its definition.
+} wordDef;
+
+static inline uint8_t wd_wordSize(wordDef const* wd) { return (0x3F & wd->sizes); }
+static inline char const* wd_word(wordDef const* wd) { return (1 + wd->where);    } // skip the `@`
+static inline size_t wd_defSize(wordDef const* wd)   { return (wd->sizes >> 6);   }
+static inline char const* wd_def(wordDef const* wd)  { return ((2 + wd_wordSize(wd)) + wd->where); } // skip `@` and SP|LF
+
+typedef struct wdTable {
+    size_t      size; // total number of available slots
+    size_t      fill; // how many filled slots (for collision hash management)
+    wordDef*    item; // the `where` field is NULL if unfilled.
+} wdTable;
+
+// a simple, public domain hash for use with hashtables
+static inline uint64_t hash_fnv64(uint8_t const* data, size_t size) {
+    uint64_t hash = (uint64_t)14695981039346656037ull;
+    while(size > 0) {
+        hash ^= data[--size];
+        hash *= 1099511628211;
+    }
+    return hash;
+}
+
+// Find writable location in a hashtable. Assume hashtable has empty cells.
+wordDef* wdTable_lookup(wdTable const* tbl, char const* word, uint8_t wordSize) {
+    _Static_assert(sizeof(uint8_t) == sizeof(char), "casting from char* to uint8_t*");
+    uint64_t h = hash_fnv64((uint8_t const*) word, (size_t) wordSize);
+    size_t ix = h % tbl->size;
+    do {
+        wordDef* const r = tbl->item + ix;
+        if(NULL == r->where) { return r; } // word is undefined.
+        bool const matchWord = (wordSize == (0xFF & r->sizes))
+                            && (0 == memcmp((1 + r->where), word, wordSize));
+        if(matchWord) { return r; }
+        ix = (ix + 1) % tbl->size; // linear collision search.        
+    } while(1);
+}
+
+void wdTable_drop(wdTable* tbl) { free(tbl->item); (*tbl) = (wdTable){0}; }
+void wdTable_resize(wdTable* tbl, size_t targetSize) 
+{
+    assert(targetSize > tbl->fill);
+
+    wdTable old = (*tbl);
+    tbl->size = targetSize;   
+    tbl->item = calloc(tbl->size, sizeof(wordDef));
+    tbl->fill = 0;
+    if(NULL == tbl->item) { abort(); }
+
+    for(size_t ix = 0; ix < old.size; ++ix) {
+        wordDef const* oldWD = old.item + ix;
+        if(NULL == oldWD->where) { continue; }
+        wordDef* newWD = wdTable_lookup(tbl, wd_word(oldWD), wd_wordSize(oldWD));
+        assert(NULL == newWD->where);
+        (*newWD) = (*oldWD); // same memory reference
+        ++(tbl->fill);
+    }
+
+    assert(old.fill == tbl->fill);
+    wdTable_drop(&old);
+}
+
+// insert a word, possibly overwrite
+void wdTable_insert(wdTable* tbl, wordDef const* wd) 
+{
+    assert(NULL != wd->where);
+
+    // c. 70% fill for efficient linear collision hash
+    bool const grow = ((tbl->fill * 10) >= (tbl->size * 7)); 
+    if(grow) { wdTable_resize(tbl, ((1 + tbl->size) * 2)); }
+
+    // insert the data.
+    wordDef* tgt = wdTable_lookup(tbl, wd_word(wd), wd_wordSize(wd));
+    if(NULL == tgt->where) { ++(tbl->fill); }
+    (*tgt) = (*wd);
+}
+
+
+
+
+
+
+
 
 int main(int argc, char const* const argv[])
 {
