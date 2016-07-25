@@ -19,9 +19,9 @@ A trivial example dictionary:
          assuming typical (stack*ext) environment
         ~l
 
-This is format suitable for simple text files and streams. Each word definition starts at `@` at the beginning of a line, followed by the word, followed by SP or LF, then the definition in ABC. This is unambiguous: ABC never includes `@` at the beginning of a line. A lot of words will use just one line in the file.
+This is format suitable for simple text files and streams. Each word definition starts at `@` at the beginning of a line, followed by the word, followed by SP or LF, then the definition in ABC. This is unambiguous: ABC never includes `@` at the beginning of a line. A lot of words will use just one line within the file.
 
-To simplify generation of such files, there is no constraint on ordering of words. If a word is defined more than once, the final definition of that word is favored. It is thus feasible to represent not just a current dictionary, but also its update history, or an append-only update stream for a reactive system. 
+To simplify generation and use of such files, there is no constraint on ordering of words. If a word is defined more than once, the final definition of that word is favored. It is thus feasible to represent not just a current dictionary, but also its update history, or an append-only update stream for a reactive system. Anything prior to the first `@` definition is ignored.
 
 Use file suffix **.ao**, or `text/vnd.org.awelon.aodict` in context of an HTTP transfer. 
 

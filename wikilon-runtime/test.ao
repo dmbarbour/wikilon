@@ -1,0 +1,11 @@
+@.fix '[^'mw^'zmw{%.i}]^'mwm
+@.i {&AOLinkerFail}
+@←↙↓↘→↗↑↖←↙↓↘→↗↑↖←↙↓↘
+@id 
+@hello "Hello,
+ world!
+~
+@cycle1 {%cycle1}
+@cycle2 {%cycle2.a}
+@cycle2.a {%cycle2}
+@.i vr$c

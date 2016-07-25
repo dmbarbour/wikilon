@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <assert.h>
 
+#define AO_MAX_WORDSIZE 60
+
 static char const* linkAO_helpMsg() { return u8""
  "USAGE: linkAO yourFile.ao [-w word | -d definition]\n"
  "  unless provided as argument, read definition from STDIN\n"
@@ -25,6 +27,7 @@ static char const* linkAO_helpMsg() { return u8""
  "is replaced by the definition for that word from the AO file.\n"
  ;
 }
+
 
 typedef struct 
 {
@@ -103,21 +106,23 @@ size_t fstatSize(int fd) { struct stat st; fstat(fd, &st); return (size_t) st.st
  * the AO file will remain constant during evaluation.
  *
  * Since I know that the word and definition are separated by a single character
- * (either SP or LF), it is sufficient that I know where to find the `@word` 
- * header, the word size, and the definition size. 
+ * (either SP or LF), it is sufficient that I know where to find the pointer to
+ * the `word def` pointer, and the word size. 
  */
 
-typedef struct wordDef {    
-    char const* where; // reference to `@` symbol at start of def in file
-    size_t      sizes; // size for word (low 6 bits) and definition size.
-        // sizes omits two bytes: the `@` symbol and the SP or LF
-        //   that separates each word from its definition.
+typedef struct wordDef {
+    char const* where; // ref to `word (SP|LF) def` in a file.
+    size_t      sizes; // size for word (low 6 bits) and definition.
+        // sizes omits the separator byte (SP or LF).
 } wordDef;
 
-static inline uint8_t wd_wordSize(wordDef const* wd) { return (0x3F & wd->sizes); }
-static inline char const* wd_word(wordDef const* wd) { return (1 + wd->where);    } // skip the `@`
-static inline size_t wd_defSize(wordDef const* wd)   { return (wd->sizes >> 6);   }
-static inline char const* wd_def(wordDef const* wd)  { return ((2 + wd_wordSize(wd)) + wd->where); } // skip `@` and SP|LF
+static inline bool wd_undefined(wordDef const* wd)   { return (NULL == wd->where); }
+_Static_assert((AO_MAX_WORDSIZE < 64), "assuming word sizes under 64 bytes");
+static inline uint8_t wd_wordSize(wordDef const* wd) { return (0x3F & wd->sizes);  }
+static inline char const* wd_word(wordDef const* wd) { return wd->where;           }
+static inline size_t wd_defSize(wordDef const* wd)   { return (wd->sizes >> 6);    }
+static inline char const* wd_def(wordDef const* wd)  { return ((1 + wd_wordSize(wd)) + wd->where); } // skip word + SP|LF
+
 
 typedef struct wdTable {
     size_t      size; // total number of available slots
@@ -136,15 +141,15 @@ static inline uint64_t hash_fnv64(uint8_t const* data, size_t size) {
 }
 
 // Find writable location in a hashtable. Assume hashtable has empty cells.
-wordDef* wdTable_lookup(wdTable const* tbl, char const* word, uint8_t wordSize) {
+wordDef* wdTable_lookup(wdTable const* tbl, char const* const word, uint8_t const wordSize) {
     _Static_assert(sizeof(uint8_t) == sizeof(char), "casting from char* to uint8_t*");
     uint64_t h = hash_fnv64((uint8_t const*) word, (size_t) wordSize);
     size_t ix = h % tbl->size;
     do {
         wordDef* const r = tbl->item + ix;
-        if(NULL == r->where) { return r; } // word is undefined.
-        bool const matchWord = (wordSize == (0xFF & r->sizes))
-                            && (0 == memcmp((1 + r->where), word, wordSize));
+        if(wd_undefined(r)) { return r; }
+        bool const matchWord = (wordSize == wd_wordSize(r))
+                            && (0 == memcmp(word, wd_word(r), wordSize));
         if(matchWord) { return r; }
         ix = (ix + 1) % tbl->size; // linear collision search.        
     } while(1);
@@ -179,9 +184,9 @@ void wdTable_insert(wdTable* tbl, wordDef const* wd)
 {
     assert(NULL != wd->where);
 
-    // c. 70% fill for efficient linear collision hash
+    // c. ~70% fill for efficient linear collision hash
     bool const grow = ((tbl->fill * 10) >= (tbl->size * 7)); 
-    if(grow) { wdTable_resize(tbl, ((1 + tbl->size) * 2)); }
+    if(grow) { wdTable_resize(tbl, ((1 + tbl->size) * 2)); } // 0,2,6,14,30... (2^K - 2)
 
     // insert the data.
     wordDef* tgt = wdTable_lookup(tbl, wd_word(wd), wd_wordSize(wd));
@@ -189,6 +194,69 @@ void wdTable_insert(wdTable* tbl, wordDef const* wd)
     (*tgt) = (*wd);
 }
 
+// Given a definition `word def`, return the size of the word. The
+// word and definition are divided by SP or LF. If there is no 
+// division, we'll return defSize.
+size_t findWordSize(char const* fullDef, size_t defSize) 
+{
+    for(size_t ix = 0; ix < defSize; ++ix) {
+        char const c = fullDef[ix];
+        bool const split = (' ' == c) || ('\n' == c);
+        if(split) { return ix; }
+    }
+    return defSize;
+}
+
+// Return pointer to start of the next definition. 
+// Or to memEnd no such definition is found. 
+// Also, count lines for debugging purposes.
+static void scanToAODef(char const** mem, char const* const memEnd, size_t* lnct) 
+{
+    bool const spaceToScan = (*mem) < memEnd;
+    if(!spaceToScan) { return; }
+    char const* const searchEnd = memEnd - 1;
+    do {
+        char const* const nextLF = memchr((*mem), '\n', searchEnd - (*mem));
+        if(NULL == nextLF) { (*mem) = memEnd; return; }
+        ++(*lnct);
+        (*mem) = 1 + nextLF;
+    } while((memEnd != *mem) && ('@' != **mem));
+}
+
+void fillTableFromAOFile(wdTable* tbl, char const* mem, size_t size)
+{
+    char const* const memEnd = mem + size;
+    size_t lfct = 0;
+    size_t defct = 0;
+
+    // Skip the header if necessary.
+    if((size > 0) && ('@' != *mem)) { 
+        scanToAODef(&mem, memEnd, &lfct); 
+    }
+
+    while(memEnd != mem) 
+    {
+        size_t const ln_debug = lfct + 1;
+        assert('@' == *mem); ++mem; // drop the `@`
+        ++defct;
+        char const* const wdRef = mem;
+        scanToAODef(&mem, memEnd, &lfct);
+        bool const finalDef = (mem == memEnd);
+        size_t const wdRefSize = (mem - wdRef) - (finalDef ? 1 : 0); // drop trailing LF from size.
+        size_t const wordSize = findWordSize(wdRef, wdRefSize);
+        size_t const defSize = (wordSize < wdRefSize) ? ((wdRefSize - wordSize) - 1) : 0;
+        bool const okSizes = (wordSize <= AO_MAX_WORDSIZE) && (defSize < (SIZE_MAX >> 6));
+        if(!okSizes) {
+            fprintf(stderr, "Error processing definition %lld (line %lld)\n"
+                   , (long long int) defct
+                   , (long long int) ln_debug
+                   );
+        } else {
+            wordDef const wd = { .where = wdRef, .sizes = ((defSize << 6) | wordSize) };
+            wdTable_insert(tbl, &wd);
+        }
+    }
+} 
 
 
 
@@ -215,26 +283,34 @@ int main(int argc, char const* const argv[])
         fprintf(stderr, "Could not open file `%s` for reading.\n", a.aoFile);
         return -1;
     }
-    size_t const fileSize = fstatSize(aoFile);
-    void* const memFile = mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, aoFile, 0);
+    size_t const memFileSize = fstatSize(aoFile);
+    char const* const memFile 
+        = mmap(NULL, memFileSize, PROT_READ, MAP_PRIVATE, aoFile, 0);
 
     // Index our memory file.
     if(NULL == memFile) {
         fprintf(stderr, "Could not map file `%s` (size %lld) into memory\n"
-            , a.aoFile, (long long int) fileSize);
+            , a.aoFile, (long long int) memFileSize);
         return -1;
-    } else {
-        fprintf(stderr, "`%s` loaded, size %lld\n", a.aoFile, (long long int) fileSize);
     }
 
-    char const* const prog = (NULL == a.program) ? readToString(stdin)
-                           : a.programIsWord     ? aoWrapWord(a.program)
-                           :                       strdup(a.program);
+    wdTable table = (wdTable){ 0 };
+    fillTableFromAOFile(&table, memFile, memFileSize);
+
+    fprintf(stderr, "File `%s` loaded. Size %lld bytes, %lld definitions.\n"
+        , a.aoFile, (long long int) memFileSize, (long long int) table.fill);
+
+    char* const prog = (NULL == a.program) ? readToString(stdin)
+                     : a.programIsWord     ? aoWrapWord(a.program)
+                     :                       strdup(a.program);
 
     if(NULL == prog) {
         fprintf(stderr, "Could not obtain input program.\n");
         return -1;
     }
+
+    free(prog);
+    wdTable_drop(&table);
 
     return 0;
 }
