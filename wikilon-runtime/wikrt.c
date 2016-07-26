@@ -1239,8 +1239,6 @@ void wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
 
 void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
 {
-    bool const okTryRead = wikrt_p(cx->val) && !wikrt_has_error(cx);
-    if(!okTryRead) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     // NOTE: This function must not allocate. It may eliminate data.
     _Static_assert(sizeof(uint8_t) == 1, "assuming sizeof(uint8_t) is 1");
     _Static_assert(((WIKRT_SMALLINT_MIN <= 0) && (255 <= WIKRT_SMALLINT_MAX))
@@ -1248,6 +1246,8 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
 
     size_t const max_bytes = (*bytes);
     (*bytes) = 0;
+
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
     do {
         wikrt_val* const v = wikrt_pval(cx, cx->val);
@@ -1327,8 +1327,7 @@ void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz)
     size_t const max_buffsz = (*buffsz);
     (*buffsz) = 0;
 
-    bool const okTryRead = wikrt_p(cx->val) && !wikrt_has_error(cx);
-    if(!okTryRead) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
 
     do {
         wikrt_val const list = wikrt_pval(cx, cx->val)[0];
@@ -1404,8 +1403,7 @@ bool wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
 {
     _Static_assert(!WIKRT_HAS_BIGINT, "assuming just small integers for now");
     _Static_assert((WIKRT_SMALLINT_MIN <= INT32_MIN), "assuming possible overflow for i32"); 
-    bool const peek_ok = !wikrt_has_error(cx) && wikrt_cx_has_integer(cx);
-    if(!peek_ok) { (*i32) = 0; return false; }
+    if(!wikrt_cx_has_integer(cx)) { (*i32) = 0; return false; }
     wikrt_int const i = wikrt_v2i(wikrt_pval(cx, cx->val)[0]);
     if(i > INT32_MAX) { (*i32) = INT32_MAX; return false; }
     else if(INT32_MIN > i) { (*i32) = INT32_MIN; return false; }
@@ -1415,9 +1413,9 @@ bool wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
 bool wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
 {
     _Static_assert(!WIKRT_HAS_BIGINT, "assuming just small integers for now");
-    _Static_assert((INT64_MIN <= WIKRT_SMALLINT_MIN), "assuming no overflow for Wikilon integer to i64"); 
-    bool const peek_ok = !wikrt_has_error(cx) && wikrt_cx_has_integer(cx);
-    if(!peek_ok) { (*i64) = 0; return false; }
+    _Static_assert(((INT64_MIN <= WIKRT_SMALLINT_MIN) && (WIKRT_SMALLINT_MAX <= INT64_MAX))
+        , "assuming no overflow for Wikilon integer to i64"); 
+    if(!wikrt_cx_has_integer(cx)) { (*i64) = 0; return false; }
     (*i64) = (int64_t) wikrt_v2i(wikrt_pval(cx, cx->val)[0]);
     return true;
 }
@@ -1435,8 +1433,7 @@ bool wikrt_peek_istr(wikrt_cx* cx, char* const buff, size_t* const buffsz)
     _Static_assert((WIKRT_SMALLINT_MIN == (- WIKRT_SMALLINT_MAX)), "assuming closed negation of smallint");
     _Static_assert((WIKRT_INT_MAX > WIKRT_SMALLINT_MAX), "potential overflow for peek_istr");
 
-    bool const peek_ok = !wikrt_has_error(cx) && wikrt_cx_has_integer(cx);
-    if(!peek_ok) { (*buffsz) = 0; return false; }
+    if(!wikrt_cx_has_integer(cx)) { (*buffsz) = 0; return false; }
     wikrt_int const i = wikrt_v2i(wikrt_pval(cx, cx->val)[0]);
     bool const positive = (i >= 0);
     wikrt_int upperDigit = positive ? i : -i; 
@@ -1715,6 +1712,23 @@ static inline bool wikrt_cx_has_two_blocks(wikrt_cx* cx) {
     return false;
 }
 
+// scan to the end of a 'short' operator lists with a limited amount of
+// effort. The effort determines how much we'll inline by concatenation
+// before we switch to an indirect `[[a→b] inline b→c]` format on compose.
+//
+// Given the `[]vr$c` overhead when printing, a preliminary recommendation
+// is to inline at least 6 ops to limit serialization overheads to 50% for
+// this naive inlining method.
+static inline wikrt_val* wikrt_end_of_short_opslist(wikrt_cx* cx, wikrt_val* list, uint32_t effort)
+{
+    do {
+        if(wikrt_pl(*list)) { list = 1 + wikrt_pval(cx, (*list)); }
+        else if(WIKRT_UNIT_INR == (*list)) { return list; }
+        else { return NULL; } // TODO: compact operations lists
+    } while(effort-- > 0);
+    return NULL;
+}
+
 // Compose two blocks in O(1) time. ([a→b]*([b→c]*e))→([a→c]*e).
 //
 // The most natural approach to composition in ABC is concatenation. However,
@@ -1726,6 +1740,10 @@ static inline bool wikrt_cx_has_two_blocks(wikrt_cx* cx) {
 // Here `inline` refers to ABC sequence `vr$c`. I can leverage EXTOP_INLINE as
 // an accelerator with that same behavior. This block may be simplified later
 // by proper inlining. 
+//
+// As a special case, I'll inline short blocks from the `[a→b]` structure more
+// directly. This optimizes for binding of quoted values.
+// 
 void wikrt_compose(wikrt_cx* cx)
 {
     wikrt_size const szAlloc = (2 * WIKRT_CELLSIZE); // + reusing one cell
@@ -1738,19 +1756,37 @@ void wikrt_compose(wikrt_cx* cx)
     wikrt_val* const pbe = wikrt_pval(cx, be);
     wikrt_val  const fn_ab = pabe[0];
     wikrt_val  const fn_bc = pbe[0];
-    wikrt_val* const pfnbc = wikrt_pval(cx, fn_bc);
+    wikrt_val* const pfnab = wikrt_pobj(cx, fn_ab);
+    wikrt_val* const pfnbc = wikrt_pobj(cx, fn_bc);
 
-    wikrt_addr const a = wikrt_alloc_r(cx, szAlloc);
-    wikrt_val* const pa = wikrt_paddr(cx, a);
+    // Optimize for case where `[a→b]` is a 'small' function.
+    static uint32_t const small_fn = 8; // functions up to 8 ops are inlined
+    wikrt_val* const eoab = wikrt_end_of_short_opslist(cx, 1+pfnab, small_fn);
+    if(NULL != eoab) {
+        // Concatenative inlining. Non-allocating.
 
-    cx->val = be; // drop the `[a→b]` stack element
-    pabe[0] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF; // recycle cell for opval
-    pabe[1] = fn_ab;
-    pa[0] = wikrt_tag_addr(WIKRT_O, wikrt_vaddr(abe)); 
-    pa[1] = wikrt_tag_addr(WIKRT_PL, a + WIKRT_CELLSIZE);
-    pa[2] = WIKRT_I2V(ACCEL_INLINE);
-    pa[3] = pfnbc[1];
-    pfnbc[1] = wikrt_tag_addr(WIKRT_PL, a); // [b→c] ⇒ [[a→b] inline b→c].
+        _Static_assert(!WIKRT_NEED_FREE_ACTION, "dropping several cells on compose");
+        assert(WIKRT_UNIT_INR == *eoab);
+        (*eoab)   = pfnbc[1]; // addend the functions
+        pfnbc[1]  = pfnab[1]; // `[a→c]` code to `[b→c]` slot
+        (*pfnbc) |= (*pfnab); // preserve substructure
+        cx->val   = be;       // drop the old `[a→b]` slot
+        return;
+
+    } else {
+
+        wikrt_addr const a = wikrt_alloc_r(cx, szAlloc);
+        wikrt_val* const pa = wikrt_paddr(cx, a);
+
+        cx->val = be; // drop the `[a→b]` stack element
+        pabe[0] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF; // recycle cell for opval
+        pabe[1] = fn_ab;
+        pa[0] = wikrt_tag_addr(WIKRT_O, wikrt_vaddr(abe)); 
+        pa[1] = wikrt_tag_addr(WIKRT_PL, a + WIKRT_CELLSIZE);
+        pa[2] = WIKRT_I2V(ACCEL_INLINE);
+        pa[3] = pfnbc[1];
+        pfnbc[1] = wikrt_tag_addr(WIKRT_PL, a); // [b→c] ⇒ [[a→b] inline b→c].
+    }
 }
 
 

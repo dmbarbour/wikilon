@@ -1,37 +1,47 @@
 # Makefile for Wikilon's Awelon Bytecode Runtime
 
-W := -Wall -Wextra -Werror -Wno-unused-parameter
+W := -Wall -Wextra -Wno-unused-parameter
 THREADS := -pthread
 OPT := -O2 -flto
 CFLAGS := $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
-OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o utf8.o \
+RUNTIME_OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o utf8.o \
     wikrt.o wikrt_parse.o wikrt_write.o wikrt_eval.o wikrt_db.o 
+LINKAO_OBJECTS := AO/aofile.o linkAO.o
 INSTALL_PREFIX := /usr/local
 
-.PHONY: all lib clean install uninstall runtests
+.PHONY: all lib clean install uninstall runtests 
 
 all: lib runtests runABC linkAO 
 
 lib: libwikilon-runtime.so
 
 clean:
-	rm -f $(OBJECTS)
+	rm -f $(RUNTIME_OBJECTS) $(LINKAO_OBJECTS) $(RUNABC_OBJECTS)
 	rm -f libwikilon-runtime.so
-	rm -f test
+	rm -f runABC linkAO testSuite
 	rm -rf testdir
 
-install: libwikilon-runtime.so wikilon-runtime.h
-	mkdir -p $(INSTALL_PREFIX) && test -w $(INSTALL_PREFIX)
+install: mkpaths libwikilon-runtime.so wikilon-runtime.h runABC linkAO
+	mkdir -p $(INSTALL_PREFIX)
+	test -w $(INSTALL_PREFIX)
 	mkdir -p $(INSTALL_PREFIX)/lib
 	mkdir -p $(INSTALL_PREFIX)/include
+	mkdir -p $(INSTALL_PREFIX)/bin
+	test -w $(INSTALL_PREFIX)/lib
+	test -w $(INSTALL_PREFIX)/include
+	test -w $(INSTALL_PREFIX)/bin
 	cp ./libwikilon-runtime.so $(INSTALL_PREFIX)/lib
 	cp ./wikilon-runtime.h $(INSTALL_PREFIX)/include
+	cp ./linkAO $(INSTALL_PREFIX)/bin
+	cp ./runABC $(INSTALL_PREFIX)/bin
 
 uninstall:
 	test -w $(INSTALL_PREFIX)
 	rm -f $(INSTALL_PREFIX)/lib/libwikilon-runtime.so
 	rm -f $(INSTALL_PREFIX)/include/wikilon-runtime.h
+	rm -f $(INSTALL_PREFIX)/bin/linkAO
+	rm -f $(INSTALL_PREFIX)/bin/runABC
 
 runtests: testSuite
 	LD_LIBRARY_PATH=. ./testSuite
@@ -42,11 +52,11 @@ testSuite: testSuite.c wikilon-runtime.h libwikilon-runtime.so
 runABC: runABC.c wikilon-runtime.h libwikilon-runtime.so 
 	$(CC) $< -o $@ -L. -lwikilon-runtime
 
-linkAO: linkAO.c
-	$(CC) $< -o $@
+linkAO: $(LINKAO_OBJECTS)
+	$(CC) -o $@ $(LINKAO_OBJECTS)
 
-libwikilon-runtime.so: $(OBJECTS) wikrt.lds
-	$(CC) -shared -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@ -o $@ $(OBJECTS)
+libwikilon-runtime.so: $(RUNTIME_OBJECTS) wikrt.lds
+	$(CC) -shared -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@ -o $@ $(RUNTIME_OBJECTS)
 
 # I'll add more files as I need them.
 wikrt.o: wikrt.c wikrt.h utf8.h lmdb/lmdb.h wikilon-runtime.h
@@ -70,6 +80,13 @@ utf8.o: utf8.c utf8.h
 
 # filesystem utilities
 futil.o: futil.c futil.h
+	$(CC) -o $@ -c $<
+
+# AO utilities
+AO/aofile.o: AO/aofile.c AO/aofile.h
+	$(CC) -o $@ -c $<
+
+linkAO.o: linkAO.c AO/aofile.h
 	$(CC) -o $@ -c $<
 
 # Directly include copy of LMDB key-value database

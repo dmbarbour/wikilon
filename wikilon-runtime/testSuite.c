@@ -1138,7 +1138,7 @@ void test_eval_comparison(wikrt_cx* cx)
 
 void test_eval_compose(wikrt_cx* cx) {
     test_eval_abc2i(cx, "#7-[*+][^^]m vr$c", 42);
-    test_eval_abc2i(cx, "#6 [^^][*+]wm vr$c", 42);
+    test_eval_abc2i(cx, "#6 [       ^       ^][       *       +]wm vr$c", 42);
 }
 
 void test_eval_quote(wikrt_cx* cx) {
