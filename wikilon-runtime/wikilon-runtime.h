@@ -36,6 +36,7 @@
  *  LICENSE: BSD 3-clause <https://opensource.org/licenses/BSD-3-Clause>
  *
  */
+#pragma once
 #ifndef WIKILON_RUNTIME_H
 
 #include <stdint.h>

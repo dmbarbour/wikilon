@@ -1,3 +1,5 @@
+#include "aofile.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -11,14 +13,13 @@
 #include <unistd.h>
 #include <assert.h>
 
-#include "aofile.h"
 
 #define AO_WORDSIZE_MIN  1
 #define AO_WORDSIZE_MAX  60
 
 // note: I only index words of valid size.
 typedef struct wdef {
-    uint64_t where; // offset into AO file
+    uint64_t where; // offset into the AO file
     uint64_t sizes; // (definition size << 6) | wordSize
 } wdef;
 
@@ -26,8 +27,8 @@ typedef struct wdef {
 // Undefined slots use `sizes = 0`.
 typedef struct wdef_table {
     size_t   space;
-    size_t   fill;
-    wdef*    data;
+    size_t   elems;
+    wdef*    table;
 } wdef_table;
 
 struct AOFile {
@@ -37,7 +38,6 @@ struct AOFile {
     wdef_table  index; 
 };
 
-#if 0
 static uint64_t hash_fnv64(uint8_t const* data, size_t size) {
     uint64_t hash = (uint64_t)14695981039346656037ull;
     while(size > 0) {
@@ -46,7 +46,110 @@ static uint64_t hash_fnv64(uint8_t const* data, size_t size) {
     }
     return hash;
 }
-#endif
+
+static inline char const* src(AOFile const* ao) { return (char const*)(ao->src_file_mmap); }
+static inline AOWord wd2w(AOFile const* ao, wdef wd) 
+{
+    return (AOWord){ .str = (src(ao) + wd.where)
+                   , .len = (0x3F & wd.sizes)
+                   };
+}
+static inline AODef wd2d(AOFile const* ao, wdef wd)
+{
+    return (AODef){ .str = (src(ao) + wd.where + (0x3F & wd.sizes) + 1) // offset by word + SP/LF sep
+                  , .len = (wd.sizes >> 6)
+                  };
+}
+
+// Find the hash index for the given word, or the blank space
+// in the index where we'd insert said word. This assumes that
+// the element either exists or there is sufficient space to
+// add it.
+static size_t AOFile_word_index(AOFile const* ao, AOWord const w) 
+{
+    _Static_assert((sizeof(uint8_t) == sizeof(char)), "casting from char* to uint8_t*");
+    uint64_t const h = hash_fnv64((uint8_t const*)w.str, w.len);
+    size_t const hmax = ao->index.space;
+    size_t ix = h % hmax;
+    do {
+        wdef const wd = ao->index.table[ix];
+        if(0 == wd.sizes) { return ix; }
+        AOWord const cw = wd2w(ao, wd);
+        bool const match = (cw.len == w.len) 
+                        && (0 == memcmp(cw.str, w.str, w.len));
+        if(match) { return ix; }
+        ix = (1 + ix) % hmax;
+    } while(1);
+}
+
+// Resize the index to a given target size.
+static void AOFile_index_resize(AOFile* ao, size_t newSize)
+{
+    wdef_table const oldIndex = ao->index;
+    assert(newSize > oldIndex.elems);
+    ao->index = (wdef_table){ .space = newSize
+                            , .elems = 0
+                            , .table = calloc(newSize, sizeof(wdef))
+                            };
+    if(NULL == ao->index.table) { abort(); }
+    for(size_t ix = 0; ix < oldIndex.space; ++ix) 
+    {
+        wdef const wd = oldIndex.table[ix];
+        if(0 == wd.sizes) { continue; }
+        AOWord const w = wd2w(ao, wd);
+        size_t const newIx = AOFile_word_index(ao, w);
+        ao->index.table[newIx] = wd;
+        ++(ao->index.elems);
+    }
+    assert(ao->index.elems == oldIndex.elems);
+    free(oldIndex.table);
+}
+
+static void AOFile_index_insert(AOFile* ao, wdef wd)
+{
+    assert(0 != wd.sizes);
+    bool const grow = (ao->index.elems * 10) >= (ao->index.space * 7);
+    if(grow) { AOFile_index_resize(ao, (2 * (1 + ao->index.space))); }
+    size_t const insIx = AOFile_word_index(ao, wd2w(ao, wd));
+    wdef* const slot = insIx + ao->index.table;
+    if(0 == slot->sizes) { ++(ao->index.elems); }
+    (*slot) = wd;
+}
+
+AODef AOFile_lookup(AOFile* ao, AOWord w) 
+{
+    size_t const ix = AOFile_word_index(ao, w);
+    wdef const wd = ao->index.table[ix];
+    if(0 == wd.sizes) { return (AODef){0}; }
+    return wd2d(ao,wd);
+}
+
+// I'll iterate through the hashtable. This means I look up
+// the given word in the hashtable, find the next table index
+// in use, then return the word associated with that index.
+AOWord AOFile_iterate(AOFile* ao, AOWord w)
+{
+    size_t const ix0 = (NULL == w.str) ? 0 : (1 + AOFile_word_index(ao, w));
+    size_t const ixf = ao->index.space;
+    for(size_t ix = ix0; ix < ixf; ++ix) 
+    {
+        wdef const wd = ao->index.table[ix];
+        if(0 == wd.sizes) { continue; }
+        return wd2w(ao,wd);
+    }
+    return (AOWord){0}; // end of iteration
+}
+
+    
+
+
+static void AOFile_build_index(AOFile* ao)
+{
+    
+
+    // TODO: build the index
+}
+
 
 static size_t readFileSize(int fd)
 {
@@ -54,10 +157,6 @@ static size_t readFileSize(int fd)
     return (0 == fstat(fd, &st)) ? (size_t) st.st_size : 0;
 }
 
-static void AOFile_build_index(AOFile* ao)
-{
-    // TODO: build the index
-}
 
 AOFile* AOFile_load(char const* source) 
 {
@@ -78,122 +177,20 @@ AOFile* AOFile_load(char const* source)
     return ao;
 }
 
-AODef AOFile_lookup(AOFile* ao, AOWord w)
-{
-    return (AODef){0};
-}
-
-AOWord AOFile_iterate(AOFile* ao, AOWord w)
-{
-     return (AOWord){0};   
-}
-
 size_t AOFile_size(AOFile* ao) 
 {
-    return (ao->index.fill);
+    return (ao->index.elems);
 }
 
 
 void AOFile_unload(AOFile* ao) 
 {
-    free(ao->index.data);
+    free(ao->index.table);
     munmap(ao->src_file_mmap, ao->src_file_size);
     free(ao);
 }
 
 #if 0
-
-//size_t fstatSize(int fd) { struct stat st; fstat(fd, &st); return (size_t) st.st_size; }
-
-
-
-
-
-/* Indexing the AO file: I need a very fast lookup, given a word, to find its
- * definition in memory. This will be the core of the fast linker. A linear 
- * collision hash is a reasonable option. I don't need deletion - I assume
- * the AO file will remain constant during evaluation.
- *
- * Since I know that the word and definition are separated by a single character
- * (either SP or LF), it is sufficient that I know where to find the pointer to
- * the `word def` pointer, and the word size. 
- */
-
-typedef struct wordDef {
-    char const* where; // ref to `word (SP|LF) def` in a file.
-    size_t      sizes; // size for word (low 6 bits) and definition.
-        // sizes omits the separator byte (SP or LF).
-} wordDef;
-
-static inline bool wd_undefined(wordDef const* wd)   { return (NULL == wd->where); }
-_Static_assert((AO_MAX_WORDSIZE < 64), "assuming word sizes under 64 bytes");
-static inline uint8_t wd_wordSize(wordDef const* wd) { return (0x3F & wd->sizes);  }
-static inline char const* wd_word(wordDef const* wd) { return wd->where;           }
-static inline size_t wd_defSize(wordDef const* wd)   { return (wd->sizes >> 6);    }
-static inline char const* wd_def(wordDef const* wd)  { return ((1 + wd_wordSize(wd)) + wd->where); } // skip word + SP|LF
-
-
-typedef struct wdTable {
-    size_t      size; // total number of available slots
-    size_t      fill; // how many filled slots (for collision hash management)
-    wordDef*    item; // the `where` field is NULL if unfilled.
-} wdTable;
-
-// a simple, public domain hash for use with hashtables
-
-// Find writable location in a hashtable. Assume hashtable has empty cells.
-wordDef* wdTable_lookup(wdTable const* tbl, char const* const word, uint8_t const wordSize) {
-    _Static_assert(sizeof(uint8_t) == sizeof(char), "casting from char* to uint8_t*");
-    uint64_t h = hash_fnv64((uint8_t const*) word, (size_t) wordSize);
-    size_t ix = h % tbl->size;
-    do {
-        wordDef* const r = tbl->item + ix;
-        if(wd_undefined(r)) { return r; }
-        bool const matchWord = (wordSize == wd_wordSize(r))
-                            && (0 == memcmp(word, wd_word(r), wordSize));
-        if(matchWord) { return r; }
-        ix = (ix + 1) % tbl->size; // linear collision search.        
-    } while(1);
-}
-
-void wdTable_drop(wdTable* tbl) { free(tbl->item); (*tbl) = (wdTable){0}; }
-void wdTable_resize(wdTable* tbl, size_t targetSize) 
-{
-    assert(targetSize > tbl->fill);
-
-    wdTable old = (*tbl);
-    tbl->size = targetSize;   
-    tbl->item = calloc(tbl->size, sizeof(wordDef));
-    tbl->fill = 0;
-    if(NULL == tbl->item) { abort(); }
-
-    for(size_t ix = 0; ix < old.size; ++ix) {
-        wordDef const* oldWD = old.item + ix;
-        if(NULL == oldWD->where) { continue; }
-        wordDef* newWD = wdTable_lookup(tbl, wd_word(oldWD), wd_wordSize(oldWD));
-        assert(NULL == newWD->where);
-        (*newWD) = (*oldWD); // same memory reference
-        ++(tbl->fill);
-    }
-
-    assert(old.fill == tbl->fill);
-    wdTable_drop(&old);
-}
-
-// insert a word, possibly overwrite
-void wdTable_insert(wdTable* tbl, wordDef const* wd) 
-{
-    assert(NULL != wd->where);
-
-    // c. ~70% fill for efficient linear collision hash
-    bool const grow = ((tbl->fill * 10) >= (tbl->size * 7)); 
-    if(grow) { wdTable_resize(tbl, ((1 + tbl->size) * 2)); } // 0,2,6,14,30... (2^K - 2)
-
-    // insert the data.
-    wordDef* tgt = wdTable_lookup(tbl, wd_word(wd), wd_wordSize(wd));
-    if(NULL == tgt->where) { ++(tbl->fill); }
-    (*tgt) = (*wd);
-}
 
 // Given a definition `word def`, return the size of the word. The
 // word and definition are divided by SP or LF. If there is no 

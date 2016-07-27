@@ -1,19 +1,16 @@
-
-/** Utilities for indexing and interacting with an AO file.
+/** Utilities for interacting with an AO File.
  *
- * USAGE: Load the file, lookup any number of words, then unload.
- * You may also iterate through words in the file.  
+ * Features: lookup definitions by word, iterate through
+ * words in the file.
  *
- * Notes: This code assumes our file will NOT be modified concurrently.
- * Validity of the AO code is not tested. The only check on words is
- * that they are 1..60 bytes and end in SP or LF. (Invalid words will
- * simply be ignored.)
- *
- * I might eventually want to support a persistent index. It would 
- * make a difference when working with large AO files, enabling reuse
- * of the index. However, it isn't really critical for existing use
- * cases.
+ * Potential future features include append-only edits and 
+ * persistent indexes (with maintenance over edits). These
+ * could enable command-line processes to use the AO file
+ * as a lightweight filesystem or database.
  */
+
+#pragma once
+#include <stddef.h>
 
 struct AOFile;
 typedef struct AOFile AOFile;
@@ -33,10 +30,10 @@ struct AOFile_String {
 typedef struct AOFile_String AODef;
 typedef struct AOFile_String AOWord;
 
-/** Load an AO file. 
+/** Load an AO file
  *
  * The main task this performs is to construct an in-memory for the
- * file, and memory-map the file for efficient reference.
+ * file, and memory-map the file for efficient reference. 
  */
 AOFile* AOFile_load(char const* aofile);
 
@@ -48,6 +45,13 @@ AOFile* AOFile_load(char const* aofile);
 AODef AOFile_lookup(AOFile*, AOWord);
 
 /** Iterate through defined words in the file.
+ *
+ * The argument is the 'current' word, and the return value is the 'next'
+ * word. The undefined word `(AOWord){0}` is the alpha and the omega here,
+ * i.e. serving as both an initial sentinel and a final result once all
+ * words have been processed. (Effectively, iteration performs a cycle.)
+ *
+ * The iteration may be messed up if the file is modified.
  *
  * Use the undefined word, `(AOWord){0}`, to get started. Then use each
  * returned word to access the next one. An undefined word is returned
@@ -72,12 +76,3 @@ size_t AOFile_size(AOFile*);
  * API will be released by this. 
  */
 void AOFile_unload(AOFile*);
-
-
-// TODO? I'm interested in perhaps supporting:
-//
-//   validation of AO (guarantee against cycles)
-//   fast 'reverse lookup' of arbitrary tokens
-//
-// But such indices can be separated, easily enough.
-

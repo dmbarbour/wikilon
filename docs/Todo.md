@@ -10,6 +10,8 @@
  * unit tests
 
 * simple console evaluators via C runtime
+  * add definitions
+  * persistent index
  * Haskell/C implementation of `aoi`
  * bytecode
  * maybe a Claw editor (reader/writer)
