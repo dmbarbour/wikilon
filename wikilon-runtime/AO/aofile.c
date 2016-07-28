@@ -17,11 +17,15 @@
 #define AO_WORDSIZE_MIN  1
 #define AO_WORDSIZE_MAX  60
 
-// note: I only index words of valid size.
+// Since I might want a persistent index in the future...
+// for now, I'm going to keep this as relative offsets.
 typedef struct wdef {
     uint64_t where; // offset into the AO file
     uint64_t sizes; // (definition size << 6) | wordSize
 } wdef;
+
+_Static_assert((UINT64_MAX >= SIZE_MAX), "assuming sufficient space for offsets");
+
 
 // A linear collision hash table. Monotonic. (No deletion.)
 // Undefined slots use `sizes = 0`.
@@ -47,16 +51,16 @@ static uint64_t hash_fnv64(uint8_t const* data, size_t size) {
     return hash;
 }
 
-static inline char const* src(AOFile const* ao) { return (char const*)(ao->src_file_mmap); }
+static inline char const* aosrc(AOFile const* ao) { return (char const*)(ao->src_file_mmap); }
 static inline AOWord wd2w(AOFile const* ao, wdef wd) 
 {
-    return (AOWord){ .str = (src(ao) + wd.where)
+    return (AOWord){ .str = (aosrc(ao) + wd.where)
                    , .len = (0x3F & wd.sizes)
                    };
 }
 static inline AODef wd2d(AOFile const* ao, wdef wd)
 {
-    return (AODef){ .str = (src(ao) + wd.where + (0x3F & wd.sizes) + 1) // offset by word + SP/LF sep
+    return (AODef){ .str = (aosrc(ao) + wd.where + (0x3F & wd.sizes) + 1) // offset by word + SP/LF sep
                   , .len = (wd.sizes >> 6)
                   };
 }
@@ -109,7 +113,7 @@ static void AOFile_index_insert(AOFile* ao, wdef wd)
 {
     assert(0 != wd.sizes);
     bool const grow = (ao->index.elems * 10) >= (ao->index.space * 7);
-    if(grow) { AOFile_index_resize(ao, (2 * (1 + ao->index.space))); }
+    if(grow) { AOFile_index_resize(ao, (2 * (8 + ao->index.space))); }
     size_t const insIx = AOFile_word_index(ao, wd2w(ao, wd));
     wdef* const slot = insIx + ao->index.table;
     if(0 == slot->sizes) { ++(ao->index.elems); }
@@ -140,14 +144,60 @@ AOWord AOFile_iterate(AOFile* ao, AOWord w)
     return (AOWord){0}; // end of iteration
 }
 
+// Scan to just after the next `\n@` in the file. 
+// If no such location exists, return NULL instead. 
+static inline char const* scan_to_wdef(char const* s, char const* const sf) {
+    _Static_assert((('@' == 64) && ('\n' == 10)), "assuming ASCII");
+    char c_prev = 0;
+    while(sf != s) {
+        char const c = *(s++);
+        if(('@' == c) && ('\n' == c_prev)) { return s; }
+        c_prev = c;
+    }
+    return NULL;
+}
     
+// Given `word def` pair separated by SP or LF, return pointer to the def.
+// If no separator is found, return NULL.
+static inline char const* scan_to_def(char const* s, char const* const sf) {
+    _Static_assert(((' ' == 32) && ('\n' == 10)), "assuming ASCII");
+    while(sf != s) {
+        char const c = *(s++);
+        if((' ' == c) || ('\n' == c)) { return s; }
+    }
+    return NULL;
+}
 
 
 static void AOFile_build_index(AOFile* ao)
 {
-    
+    if(0 == ao->src_file_size) { return; }
 
-    // TODO: build the index
+    char const* const s0 = aosrc(ao);
+    char const* const sf = s0 + ao->src_file_size;
+    char const* s = ('@' == *s0) ? (1 + s0) : scan_to_wdef(s0, sf);
+
+    while(NULL != s) {
+        // `s` points to start of `word def` pair. It is possible that there
+        // is no definition, in which case we'll also 
+        char const* const wdef_start = s;
+        s = scan_to_wdef(s, sf); // step to next word def pair.
+        char const* const wdef_end  = (NULL == s) ? sf : s - 2; // step back from `\n@`
+        char const* const def_start = scan_to_def(wdef_start, wdef_end);
+        char const* const word_end  = (NULL == def_start) ? wdef_end : (def_start - 1); // step back SP or LF
+        size_t const def_size  = (NULL == def_start) ? 0 : (wdef_end - def_start);
+        size_t const word_size = (word_end - wdef_start);
+
+        bool const okWordSize = (AO_WORDSIZE_MIN <= word_size) 
+                             && (word_size <= AO_WORDSIZE_MAX);
+        bool const okDefSize = (def_size < (SIZE_MAX >> 6));
+        bool const okSizes = okWordSize && okDefSize;
+        if(!okSizes) { continue; } // silently skip errors
+        wdef const wd = { .where = (wdef_start - s0) // offset in file
+                        , .sizes = ((def_size << 6) | word_size) // size info
+                        };
+        AOFile_index_insert(ao,wd);
+    }
 }
 
 
@@ -190,69 +240,3 @@ void AOFile_unload(AOFile* ao)
     free(ao);
 }
 
-#if 0
-
-// Given a definition `word def`, return the size of the word. The
-// word and definition are divided by SP or LF. If there is no 
-// division, we'll return defSize.
-size_t findWordSize(char const* fullDef, size_t defSize) 
-{
-    for(size_t ix = 0; ix < defSize; ++ix) {
-        char const c = fullDef[ix];
-        bool const split = (' ' == c) || ('\n' == c);
-        if(split) { return ix; }
-    }
-    return defSize;
-}
-
-// Return pointer to start of the next definition. 
-// Or to memEnd no such definition is found. 
-// Also, count lines for debugging purposes.
-static void scanToAODef(char const** mem, char const* const memEnd, size_t* lnct) 
-{
-    bool const spaceToScan = (*mem) < memEnd;
-    if(!spaceToScan) { return; }
-    char const* const searchEnd = memEnd - 1;
-    do {
-        char const* const nextLF = memchr((*mem), '\n', searchEnd - (*mem));
-        if(NULL == nextLF) { (*mem) = memEnd; return; }
-        ++(*lnct);
-        (*mem) = 1 + nextLF;
-    } while((memEnd != *mem) && ('@' != **mem));
-}
-
-void fillTableFromAOFile(wdTable* tbl, char const* mem, size_t size)
-{
-    char const* const memEnd = mem + size;
-    size_t lfct = 0;
-    size_t defct = 0;
-
-    // Skip the header if necessary.
-    if((size > 0) && ('@' != *mem)) { 
-        scanToAODef(&mem, memEnd, &lfct); 
-    }
-
-    while(memEnd != mem) 
-    {
-        size_t const ln_debug = lfct + 1;
-        assert('@' == *mem); ++mem; // drop the `@`
-        ++defct;
-        char const* const wdRef = mem;
-        scanToAODef(&mem, memEnd, &lfct);
-        bool const finalDef = (mem == memEnd);
-        size_t const wdRefSize = (mem - wdRef) - (finalDef ? 1 : 0); // drop trailing LF from size.
-        size_t const wordSize = findWordSize(wdRef, wdRefSize);
-        size_t const defSize = (wordSize < wdRefSize) ? ((wdRefSize - wordSize) - 1) : 0;
-        bool const okSizes = (wordSize <= AO_MAX_WORDSIZE) && (defSize < (SIZE_MAX >> 6));
-        if(!okSizes) {
-            fprintf(stderr, "Error processing definition %lld (line %lld)\n"
-                   , (long long int) defct
-                   , (long long int) ln_debug
-                   );
-        } else {
-            wordDef const wd = { .where = wdRef, .sizes = ((defSize << 6) | wordSize) };
-            wdTable_insert(tbl, &wd);
-        }
-    }
-} 
-#endif

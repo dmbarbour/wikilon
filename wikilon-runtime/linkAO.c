@@ -26,7 +26,11 @@ static char const* linkAO_helpMsg() { return u8""
  "\n"
  "linkAO takes an AO file together with a word or definition, and produces\n"
  "an ABC stream. Linking is trivial: every {%word} token is replaced by that\n"
- "word's definition. Minimal validation is performed.\n"
+ "word's definition.\n"
+ "\n"
+ "Minimal validation is performed: words have valid size, cycles are detected,\n"
+ "and balance of brackets is tested within each word. linkAO will exit with a\n"
+ "non-zero result upon error.\n"
  ;
 }
 
@@ -107,6 +111,91 @@ char* linkAO_program(linkAO_args const* args)
     }
 }
 
+/* Linking the AO program is trivial. Essentially, I just need to
+ * find every `{%word}` token and replace it by the definition at
+ * `word`. However, this simple idea is complicated a little: 
+ *
+ *  - must detect cycles (eventually)
+ *  - must parse for tokens (so we don't link within text)
+ *  - validate balance of `[]` (because cannot validate later) 
+ */
+typedef struct {
+    char const* s; // current location in source
+    char const* e; // end of current source segment
+    size_t      b; // count of `[` not yet balanced
+} prog;
+
+// a contiguous stack that might be resized
+typedef struct {
+    size_t space;  // available size for stack
+    size_t depth;  // current size of stack 
+    prog*  data;   // start of stack
+} pstack;
+
+/* Detect a cycle on the call stack. This can only detect a cycle if we're
+ * already in one, i.e. when the top of the stack is part of the cycle.
+ * But it's a trivial test, and may be performed at any time we suspect a
+ * cycle (e.g. before resizing the stack).
+ */
+size_t detect_cycle(pstack const* stack)
+{
+    size_t ix = stack->depth;
+    if(0 == ix) { return 0; }
+    char const* const ce = stack->data[--ix].e;
+    while(0 != ix) 
+    {
+        char const* const se = stack->data[--ix].e;
+        if(se == ce) { return (1 + ix); }
+    }
+    return 0;
+}
+
+// Assume we're pointing to just after a `{%word}` token.
+// Print that word. This is meant for debugging output.
+void print_prior_word(FILE* out, char const* s) 
+{
+    --s; // back up in stream
+    assert('}' == (*s)); // should be at end of token
+    do { --s; } while ((*s) != '{'); // scan to start of token
+    ++s; // drop start of token
+    assert('%' == (*s)); // should be a {%word} token
+    while('}' != (*s)) { fputc(*(s++), out); } // print the word
+}
+
+void print_cycle(FILE* out, pstack const* stack, size_t ix)
+{
+    print_prior_word(out, stack->data[ix++].e);
+    while(ix < stack->depth) {
+        fputc(' ', out); // separator
+        print_prior_word(out, stack->data[ix++].e);
+    }
+}
+
+void assert_no_cycles(pstack* stack) 
+{
+    size_t const cycle_start = detect_cycle(stack);
+    if(0 != cycle_start) {
+        size_t const cycle_size = stack->depth - cycle_start;
+        fprintf(stderr, "Cycle of %d word(s): ", (int) cycle_size);
+        print_cycle(stderr, stack, cycle_start);
+        fputc('\n', stderr);
+        exit(-1);
+    }
+}
+
+void push_stack(pstack* stack, prog p)
+{
+    if(stack->depth == stack->space) {
+        assert_no_cycles(stack);
+        stack->space = (2 * (8 + stack->space));
+        stack->data = realloc(stack->data, (sizeof(prog) * stack->space));
+        if(NULL == stack->data) { abort(); }
+    }
+    stack->data[(stack->depth)++] = p;
+}
+
+
+
 int main(int argc, char const* const argv[])
 {
     linkAO_args a = parseArgs(1 + argv);
@@ -129,18 +218,21 @@ int main(int argc, char const* const argv[])
         return -1;
     } 
 
-    AOFile* const aofile = AOFile_load(a.aoFile);
-    if(NULL == aofile) {
+    AOFile* const ao = AOFile_load(a.aoFile);
+    if(NULL == ao) {
         char const* const error = (0 != errno) ? strerror(errno) : "Unspecified error";
         fprintf(stderr, "Could not load AO source `%s`. %s.\n", a.aoFile, error);
         return -1;
+    } else {
+        fprintf(stderr, "File `%s` loaded. %d definitions.\n"
+            , a.aoFile, (int) AOFile_size(ao));
     }
 
     char* const prog = linkAO_program(&a);
     // TODO: process the program!
     fprintf(stderr, "TODO: process program `%s`\n", prog);
     free(prog);
-    AOFile_unload(aofile);
+    AOFile_unload(ao);
     return 0;
 }
 
