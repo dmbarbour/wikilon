@@ -7,16 +7,15 @@
  * optimize composition of a singleton block
  * leverage partial evaluations
  * JIT compilation of bytecode
- * unit tests
+ * unit tests - develop a `test.ao` file.
 
 * AO command line utilities?
  * Is doing so worth the effort? It might be better to:
   * focus on developing a web server or similar. 
   * create CLI and FUSE adapters that use server.
- * persistent index
- * append-only definitions
+ * persistent index is necessary for large AO files
+ * append-only dictionary simplifies index updates
  * possible Claw utilities
- * potential for FUSE
 
 * simple console evaluators via C runtime
   * add definitions

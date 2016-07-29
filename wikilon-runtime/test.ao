@@ -4,7 +4,7 @@
 @hello "Hello,
  world!
 ~
-@cycle1 {%cycle1}
-@cycle2 {%cycle2.a}
-@cycle2.a {%cycle2}
+@cycle1 v{%cycle1}c
+@cycle2 v{%cycle2.a}
+@cycle2.a c{%cycle2}
 @.i vr$c

@@ -1,3 +1,5 @@
+#include "AO/aofile.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -10,7 +12,6 @@
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
-#include "AO/aofile.h"
 
 static char const* linkAO_helpMsg() { return u8""
  "USAGE: linkAO yourFile.ao [-w word | -d definition]\n"
@@ -46,6 +47,7 @@ typedef struct
     char const* def;     // definition to use
     char const* badArg;  
 } linkAO_args;
+
 
 bool match(char const* arg, char const* action) { return (0 == strcmp(arg, action)); }
 bool matchSuffix(char const* arg, char const* suf, size_t sl) {
@@ -94,7 +96,7 @@ char* streamToString(FILE* source)
  * stream processing of STDIN, but it isn't a critical
  * feature at this time.
  */
-char* linkAO_program(linkAO_args const* args) 
+char* linkAO_args_progStr(linkAO_args const* args) 
 {
     if(args->word) {
         size_t const len = 3 + strlen(args->word); // {%word}
@@ -110,6 +112,7 @@ char* linkAO_program(linkAO_args const* args)
         return streamToString(stdin);
     }
 }
+
 
 /* Linking the AO program is trivial. Essentially, I just need to
  * find every `{%word}` token and replace it by the definition at
@@ -150,24 +153,29 @@ size_t detect_cycle(pstack const* stack)
     return 0;
 }
 
+
 // Assume we're pointing to just after a `{%word}` token.
 // Print that word. This is meant for debugging output.
-void print_prior_word(FILE* out, char const* s) 
+void print_prior_word(FILE* out, char const* const e) 
 {
-    --s; // back up in stream
-    assert('}' == (*s)); // should be at end of token
-    do { --s; } while ((*s) != '{'); // scan to start of token
-    ++s; // drop start of token
-    assert('%' == (*s)); // should be a {%word} token
-    while('}' != (*s)) { fputc(*(s++), out); } // print the word
+    char const* const tok_end = (e - 1);
+    assert('}' == *tok_end); // we should be at at token
+    char const* tok_start = tok_end - 1;
+    while('{' != (*tok_start)) { --tok_start; }
+    assert('%' == tok_start[1]); // token is word
+    char const* const word_start = tok_start + 2;
+    fwrite(word_start, 1, (tok_end - word_start), out);
 }
 
-void print_cycle(FILE* out, pstack const* stack, size_t ix)
+// Print the stack in a given range of indices
+void print_stack_range(FILE* out, pstack const* stack
+  , size_t ix, size_t const stop)
 {
-    print_prior_word(out, stack->data[ix++].e);
-    while(ix < stack->depth) {
+    if(ix >= stop) { fputs("(empty)", out); return; }
+    print_prior_word(out, stack->data[ix++].s);
+    while(ix < stop) {
         fputc(' ', out); // separator
-        print_prior_word(out, stack->data[ix++].e);
+        print_prior_word(out, stack->data[ix++].s);
     }
 }
 
@@ -175,10 +183,11 @@ void assert_no_cycles(pstack* stack)
 {
     size_t const cycle_start = detect_cycle(stack);
     if(0 != cycle_start) {
+        fflush(stdout);
         size_t const cycle_size = stack->depth - cycle_start;
-        fprintf(stderr, "Cycle of %d word(s): ", (int) cycle_size);
-        print_cycle(stderr, stack, cycle_start);
-        fputc('\n', stderr);
+        fprintf(stderr, "\ncycle of %d word(s) detected: ", (int) cycle_size);
+        print_stack_range(stderr, stack, cycle_start, stack->depth);
+        fprintf(stderr, "\n");
         exit(-1);
     }
 }
@@ -193,6 +202,98 @@ void push_stack(pstack* stack, prog p)
     }
     stack->data[(stack->depth)++] = p;
 }
+
+// Given a pointer to a token start `{`, scan to the end
+// of that token and return a reference to just after the
+// `}`. If no such terminator exists, return NULL; 
+char const* skipToken(char const* s, char const* e)
+{
+    assert('{' == (*s));
+    do {
+        char const c = *(s++);
+        if('}' == c) { return s; }
+    } while(e != s);
+    return NULL;
+}
+
+
+// Return address one character AFTER the `\n~` indicating the
+// end of text. Return NULL if the text is not escaped properly
+// or is not terminated within the given range.
+char const* skipText(char const* s, char const* const e)
+{
+    do {
+        if(e == s) { return NULL; }
+        char const c = *(s++);
+        if('\n' == c) {
+            if(e == s) { return NULL; }
+            char const esc = *(s++);
+            if('~' == esc) { return s; }
+            else if(' ' != esc) { return NULL; }
+        }
+    } while(1);
+}
+
+_Noreturn void linkAO_fail(pstack* stack, char const* msg)
+{
+    fflush(stdout);
+
+    fprintf(stderr, "\nlinkAO failure - %s\n", msg);
+    fprintf(stderr, "  STACK: ");
+    print_stack_range(stderr, stack, 0, stack->depth); 
+    fprintf(stderr, "\n");
+    fflush(stderr);
+    exit(-1);
+}
+
+// At the moment, linkAO is quite ad-hoc and unsuitable for library use.
+// It will exit in event of failure.
+void linkAO(FILE* out, AOFile* ao, pstack* stack) 
+{
+    while(0 != stack->depth) 
+    {
+        prog p = stack->data[--(stack->depth)];
+        while(p.s != p.e) 
+        {
+            if('"' == *p.s) {
+                // Embedded text. Just print it to the output.
+                char const* eot = skipText(p.s, p.e);
+                if(NULL == eot) { linkAO_fail(stack, "invalid text"); }
+                fwrite(p.s, 1, (eot - p.s), out);
+                p.s = eot;
+            } else if('{' == *p.s) {
+                // A token. Link any {%word} tokens. Print the rest.
+                char const* eot = skipToken(p.s, p.e);  
+                if(NULL == eot) { linkAO_fail(stack, "invalid token"); }
+                if('%' == p.s[1]) {
+                    // Link the definition identified by this token.
+                    AOWord const w = (AOWord){ .str = (2 + p.s), 
+                                               .len = ((eot - p.s) - 3) };
+                    AODef const d = AOFile_lookup(ao,w);
+                    p.s = eot; 
+                    push_stack(stack, p); // No 'tail calls' here
+                    p = (prog){ .s = d.str, .e = (d.str + d.len), .b = 0 };
+                    if(NULL == d.str) { linkAO_fail(stack, "undefined word"); }
+
+                } else {
+                    // pass the token to the output.
+                    fwrite(p.s, 1, (eot - p.s), out);
+                    p.s = eot;
+                }
+            } else {
+                // CHARACTER TO PRINT
+                if('[' == *p.s) { ++(p.b); }
+                else if(']' == *p.s) {
+                    if(0 == p.b) { linkAO_fail(stack, "block brackets `[]` imbalance"); }
+                    --p.b;
+                }
+                fputc(*(p.s++), out);
+            }
+        }
+    }
+    fflush(stdout);
+}
+
 
 
 
@@ -223,16 +324,17 @@ int main(int argc, char const* const argv[])
         char const* const error = (0 != errno) ? strerror(errno) : "Unspecified error";
         fprintf(stderr, "Could not load AO source `%s`. %s.\n", a.aoFile, error);
         return -1;
-    } else {
-        fprintf(stderr, "File `%s` loaded. %d definitions.\n"
-            , a.aoFile, (int) AOFile_size(ao));
     }
 
-    char* const prog = linkAO_program(&a);
-    // TODO: process the program!
-    fprintf(stderr, "TODO: process program `%s`\n", prog);
-    free(prog);
+    char* const progStr = linkAO_args_progStr(&a);
+
+    pstack stack = { 0 };
+    prog   p = { .s = progStr, .e = (progStr + strlen(progStr)), .b = 0 };
+    push_stack(&stack, p);
+    linkAO(stdout, ao, &stack);
+    free(progStr);
     AOFile_unload(ao);
+    fputc('\n', stderr); // in case of output to console
     return 0;
 }
 

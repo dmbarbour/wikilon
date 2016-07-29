@@ -114,7 +114,8 @@ static void AOFile_index_insert(AOFile* ao, wdef wd)
     assert(0 != wd.sizes);
     bool const grow = (ao->index.elems * 10) >= (ao->index.space * 7);
     if(grow) { AOFile_index_resize(ao, (2 * (8 + ao->index.space))); }
-    size_t const insIx = AOFile_word_index(ao, wd2w(ao, wd));
+    AOWord const w = wd2w(ao,wd);
+    size_t const insIx = AOFile_word_index(ao,w);
     wdef* const slot = insIx + ao->index.table;
     if(0 == slot->sizes) { ++(ao->index.elems); }
     (*slot) = wd;
