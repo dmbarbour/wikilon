@@ -284,12 +284,14 @@ void linkAO(FILE* out, AOFile* ao, pstack* stack)
                 // CHARACTER TO PRINT
                 if('[' == *p.s) { ++(p.b); }
                 else if(']' == *p.s) {
-                    if(0 == p.b) { linkAO_fail(stack, "block brackets `[]` imbalance"); }
+                    if(0 == p.b) { linkAO_fail(stack, "block brackets `]` imbalance"); }
                     --p.b;
                 }
                 fputc(*(p.s++), out);
             }
         }
+
+        if(0 != p.b) { linkAO_fail(stack, "block brackets `[` imbalance"); }
     }
     fflush(stdout);
 }

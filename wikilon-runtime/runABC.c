@@ -1,9 +1,15 @@
+// runABC is intended mostly to simplify testing and benchmarking
+// of the Wikilon C runtime. It receives an ABC string on STDIN, 
+// performs basic evaluation, and generates a string on STDOUT.
+//
+// In the future, there may be some support for 'sessions', i.e.
+// for manipulating a persistent value in the runtime. 
+#include "wikilon-runtime.h"
 
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "wikilon-runtime.h"
 
 #define APP_VER 20160721
 
@@ -16,7 +22,7 @@ static char const* runABC_helpMsg() { return u8""
  "given value. E.g. `#7 #6 *` should result in output `#42`.\n"
  "\n"
  "Input is from STDIN and output printed to STDOUT. This is currently\n"
- "not incremental. The full input must be provided before any output.\n"
+ "not incremental. The full input must be received before any output.\n"
  "In general, the input should be provided via an upstream process\n"
  "such as linkABC.\n"
  "\n"
