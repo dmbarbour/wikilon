@@ -1742,7 +1742,8 @@ static inline wikrt_val* wikrt_end_of_short_opslist(wikrt_cx* cx, wikrt_val* lis
 // by proper inlining. 
 //
 // As a special case, I'll inline short blocks from the `[a→b]` structure more
-// directly. This optimizes for binding of quoted values.
+// directly. This can potentially reduce allocation and improve performance,
+// especially for binding of quoted values.
 // 
 void wikrt_compose(wikrt_cx* cx)
 {
@@ -1760,7 +1761,7 @@ void wikrt_compose(wikrt_cx* cx)
     wikrt_val* const pfnbc = wikrt_pobj(cx, fn_bc);
 
     // Optimize for case where `[a→b]` is a 'small' function.
-    static uint32_t const small_fn = 8; // functions up to 8 ops are inlined
+    static uint32_t const small_fn = 6;
     wikrt_val* const eoab = wikrt_end_of_short_opslist(cx, 1+pfnab, small_fn);
     if(NULL != eoab) {
         // Concatenative inlining. Non-allocating.

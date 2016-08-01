@@ -274,19 +274,34 @@ Originally I modeled texts as a *specialization* on binaries. With hindsight, it
 
 Accelerators on texts are limited without an index, requiring a linear scan of the binary. However, this could be mitigated by encouraging programmers to model large texts using a finger-tree or other rope model.
 
-### Garbage and Memory Recycling
+### Trashed Data and Memory Recycling
 
 Assuming a value that might be relevant or linear but that will not be used, annotate it as garbage with `{&trash}`. This allows the runtime to recycle the memory immediately. A placeholder is left, requiring only a small constant amount of space. Attempting to observe the placeholder will appear as a type error. The value will preserve known substructural attributes of the original (with pending values or parallel futures treated as linear).
 
 ## Shared Blocks and Internal Bytecode
 
-I need high performance, non-copying, compact, shared memory blocks of code. This is essential for performance. I must be able to:
+I need high performance, non-copying, compact, shared memory blocks of code. The 'sharing' is performance essential for tight loops of code (because fixpoint copies code). But sharing for `wikrt_move()` could be very convenient. This is most essential for performance. I must be able to:
 
-* interpret directly out of a byte string
+* interpret program directly from the shared byte string
 * reference sub-blocks as sub-regions of the byte string
-* reference large texts or binaries in the byte string
+* reference large texts or binaries from the byte string
 
 To simplify internal references, I must separate tracking of dependencies vs. access to stowed data. Value sharing will be limited to blocks and binaries, I think. And for data that can be efficiently represented as blocks or binaries, such as texts.
 
 Anyhow, I need a representation for bytecode that is suitable for this compact usage. I might include a 'stop' or 'yield' bytecode to simplify termination.
 
+## Debugging
+
+### Printf Style Debugging (High Priority)
+
+At least for the short term, something like Haskell's `Debug.Trace` (i.e. debug by printf) could be very convenient. This would allow output of warnings, debug traces, etc.. This is feasible by annotation. E.g. use of `{&trace} :: ∀e.(text * e)→(trashed text * e)` writing the given text to an output stream. For the 95% use case, this should be sufficient to support a finite size trace buffer (e.g. of 64kB) and simply truncate messages beyond that point. (*Note:* Trashing the argument is convenient for efficient destructive processing.)
+
+An interesting variant is to trace arbitrary *values* instead. This would enable very flexible expression of outputs, e.g. including output of infinite streams or reactive machines. But I'm not convinced that this would actually serve any practical use case for debugging.
+
+### Stack/Continuation Traces (Low Priority)
+
+It might be convenient to somehow emit stack traces when debugging. This is feasible if we introduce locators in our code, i.e. such that I can scan the continuation and find all the current markers. But I'm not convinced of this technique.
+
+### Rendering Programs (Long Term)
+
+What I'd really like to do for debugging is 'render' the environment and its evolution, zooming in where the error (e.g. an assertion failure) occurs. This can benefit from recomputing purely functional behaviors.

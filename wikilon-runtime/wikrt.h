@@ -461,6 +461,7 @@ static inline void wikrt_env_unlock(wikrt_env* e) {
 void wikrt_add_cx_to_env(wikrt_cx* cx);
 void wikrt_remove_cx_from_env(wikrt_cx* cx);
 
+
 /** wikrt_cx internal state.
  *
  * I've decided to favor a bump-pointer allocation with a semi-space
@@ -515,6 +516,7 @@ struct wikrt_cx {
 #define WIKRT_REG_PC_INIT WIKRT_UNIT
 #define WIKRT_REG_CC_INIT WIKRT_UNIT
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
+#define WIKRT_REG_WL_INIT WIKRT_UNIT_INR
 #define WIKRT_FREE_LIST_CT 0 /* memory freelist count (currently none) */
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
 #define WIKRT_HAS_SHARED_REFCT_OBJECTS 0 /* for static assertions */

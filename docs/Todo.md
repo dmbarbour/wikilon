@@ -2,27 +2,23 @@
 # TODO
 
 * performance and C runtime
- * build my own arenas & GC models
- * optimized bytecode representations
- * optimize composition of a singleton block
- * leverage partial evaluations
- * JIT compilation of bytecode
+ * build my own arenas & GC models (DONE)
+ * optimized bytecode representations!
+  * compact bytecode 
+  * JIT compilation (annotation guided?)
+ * simplifier, partial evaluation, dead code and value elim
+  * trace `{&trash}` and dropped data backwards, eliminate source
  * unit tests - develop a `test.ao` file.
 
-* AO command line utilities?
- * Is doing so worth the effort? It might be better to:
-  * focus on developing a web server or similar. 
-  * create CLI and FUSE adapters that use server.
- * persistent index is necessary for large AO files
- * append-only dictionary simplifies index updates
- * possible Claw utilities
+* Support debugging. 
+ * Maybe a variant of `Debug.Trace` or `printf` debugging.
+ * This could be used for lightweight warnings, etc.
 
-* simple console evaluators via C runtime
-  * add definitions
-  * persistent index
- * Haskell/C implementation of `aoi`
- * bytecode
- * maybe a Claw editor (reader/writer)
+* Command Line and Console Utilities
+ * Consider utilizing FUSE or Web Server
+ * Consider persistent **.ao** file as append only log
+  * persistent index is necessary for large AO files
+  * append-only dictionary simplifies index updates
 
 * persistence and reflection
  * dictionaries as runtime values

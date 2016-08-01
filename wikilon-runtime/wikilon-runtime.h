@@ -627,6 +627,45 @@ void wikrt_peek_sv(wikrt_cx*, char* buff);
 void wikrt_intro_sv(wikrt_cx*, char const* resourceId);
 
 
+  ///////////////
+ // DEBUGGING //
+///////////////
+/** @brief Enable tracing for printf style debugging.
+ *
+ * Wikilon runtime recognizes a `{&trace}` annotation, which supports
+ * lightweight printf/stderr style debugging. This is appropriate more
+ * for tracing, TODOs, etc. than for true errors. 
+ *
+ *    {&trace} :: ∀e. (text * e) → ((trashed text) * e)
+ *
+ * Trace messages are printed to a finite trace buffer. Messages that
+ * would overflow this buffer are simply dropped. The assumption is 
+ * that, for example, 64kB of trace messages should be sufficient for
+ * a human developer to isolate errors, and that stable code will
+ * remove the trace code.
+ */
+bool wikrt_trace_enable(wikrt_cx*, size_t);
+
+/** @brief Equivalent to invoking the {&trace} annotation.
+ *
+ * This trashes the text input (cf. wikrt_trash). So you'll probably
+ * want to drop the value afterwards. 
+ */
+void wikrt_trace_write(wikrt_cx*);
+
+/** @brief Access trace messages.
+ * 
+ * Each call returns a pointer to the next trace message, or NULL
+ * if there are no pending messages. Each message is a valid UTF-8 
+ * C string, a pointer into the internal trace buffer. Each message
+ * becomes invalid after reading the next message. The assumption
+ * is that you'll do something sensible with each message.
+ *
+ * Trace messages are preserved by wikrt_cx_reset and wikrt_set_error.
+ */
+char const* wikrt_trace_read(wikrt_cx*);
+
+
   ////////////////
  // EVALUATION //
 ////////////////

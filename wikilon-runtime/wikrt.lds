@@ -89,6 +89,10 @@
     wikrt_int_div;
     wikrt_int_cmp;
 
+    wikrt_trace_enable;
+    wikrt_trace_write;
+    wikrt_trace_read;
+
     wikrt_valid_key;
 
     wikrt_txn_create;

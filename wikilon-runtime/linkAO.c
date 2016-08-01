@@ -247,57 +247,52 @@ _Noreturn void linkAO_fail(pstack* stack, char const* msg)
 }
 
 // At the moment, linkAO is quite ad-hoc and unsuitable for library use.
-// It will exit in event of failure.
+// It will exit in event of failure. This implementation will scan as
+// forward as far as possible in the AO source then print large chunks
+// of bytecode.
+// 
+// Assumes non-empty stack.
 void linkAO(FILE* out, AOFile* ao, pstack* stack) 
-{
-    while(0 != stack->depth) 
-    {
+{ tailcall:
+    do { 
         prog p = stack->data[--(stack->depth)];
-        while(p.s != p.e) 
+        char const* s = p.s;
+        while(s != p.e) 
         {
-            if('"' == *p.s) {
-                // Embedded text. Just print it to the output.
-                char const* eot = skipText(p.s, p.e);
-                if(NULL == eot) { linkAO_fail(stack, "invalid text"); }
-                fwrite(p.s, 1, (eot - p.s), out);
-                p.s = eot;
-            } else if('{' == *p.s) {
-                // A token. Link any {%word} tokens. Print the rest.
-                char const* eot = skipToken(p.s, p.e);  
+            if('"' == *s) {
+                s = skipText(s, p.e);
+                if(NULL == s) { linkAO_fail(stack, "invalid text"); }
+            } else if('{' == *s) {
+                char const* const eot = skipToken(s, p.e);
                 if(NULL == eot) { linkAO_fail(stack, "invalid token"); }
-                if('%' == p.s[1]) {
-                    // Link the definition identified by this token.
-                    AOWord const w = (AOWord){ .str = (2 + p.s), 
-                                               .len = ((eot - p.s) - 3) };
-                    AODef const d = AOFile_lookup(ao,w);
-                    p.s = eot; 
-                    push_stack(stack, p); // No 'tail calls' here
-                    p = (prog){ .s = d.str, .e = (d.str + d.len), .b = 0 };
-                    if(NULL == d.str) { linkAO_fail(stack, "undefined word"); }
+                if('%' == s[1]) {
+                    fwrite(p.s, 1, (s - p.s), out); // print code up to token
+                    p.s = eot;                      // skip token upon return
+                    push_stack(stack, p);           // return to program later
 
-                } else {
-                    // pass the token to the output.
-                    fwrite(p.s, 1, (eot - p.s), out);
-                    p.s = eot;
-                }
+                    // Link definition identified by the token.
+                    AOWord const w = (AOWord){ .str = (2 + s)
+                                             , .len = ((eot - s) - 3) };
+                    AODef const d = AOFile_lookup(ao,w);
+                    if(NULL == d.str) { linkAO_fail(stack, "undefined word"); }
+                    push_stack(stack, (prog){ .s = d.str, .e = (d.str + d.len), .b = 0 });
+                    goto tailcall;
+                } else { s = eot; } // scan past the token
             } else {
-                // CHARACTER TO PRINT
-                if('[' == *p.s) { ++(p.b); }
-                else if(']' == *p.s) {
+                char const c = *(s++); // scan past character
+                if('[' == c) { ++(p.b); }
+                else if(']' == c) {
                     if(0 == p.b) { linkAO_fail(stack, "block brackets `]` imbalance"); }
-                    --p.b;
+                    --(p.b);
                 }
-                fputc(*(p.s++), out);
             }
         }
-
+        // Scanned to end of input.
+        fwrite(p.s, 1, (p.e - p.s), out);
         if(0 != p.b) { linkAO_fail(stack, "block brackets `[` imbalance"); }
-    }
+    } while(0 != stack->depth);
     fflush(stdout);
 }
-
-
-
 
 int main(int argc, char const* const argv[])
 {

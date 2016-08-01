@@ -1,5 +1,7 @@
-@.fix '[^'mw^'zmw{%.i}]^'mwm
+@.fix [{%.y}{%.i}]^'mw'm
+@.y ^'mw^'zmw
 @.i {&AOLinkerFail}
+@.i vr$c
 @id 
 @hello "Hello,
  world!
@@ -7,8 +9,5 @@
 @cycle1 v{%cycle1}c
 @cycle2 v{%cycle2.a}
 @cycle2.a c{%cycle2}
-@.i vr$c
-@imbL [
-@imbR ]
-@imbTok {&hello 
-@imbTxt "hello
+@&warn {&warn}
+@&assert_eq {&≡}
