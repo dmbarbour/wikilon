@@ -1199,6 +1199,20 @@ void test_eval_anno(wikrt_cx* cx)
     test_eval_abc2i(cx, "#7-{&testAnno}^^*+", 42);
 }
 
+void test_trace(wikrt_cx* cx) 
+{
+    do {} while(NULL != wikrt_trace_read(cx)); // clear trace buff
+    char const* const testString = u8"★★★This is a test trace message.★★★";
+    wikrt_trace_enable(cx, 1000);
+    wikrt_intro_text(cx, testString, SIZE_MAX);
+    wikrt_trace_write(cx);
+    wikrt_drop(cx);
+    bool const match_message = (0 == strcmp(testString, wikrt_trace_read(cx)));
+    bool const single_message = (NULL == wikrt_trace_read(cx));
+    bool const ok = match_message && single_message;
+    if(!ok) { wikrt_set_error(cx, WIKRT_ETYPE); }
+}
+
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
@@ -1304,6 +1318,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_eval_fixpoint);
     TCX(test_eval_fixpoint_sto);
     TCX(test_eval_anno);
+
+    TCX(test_trace);
     // TODO: simple loops. E.g. a fibonacci function.
     // TODO: evaluation with ad-hoc annotations
     // TODO: evaluation with value sealers

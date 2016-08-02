@@ -242,40 +242,38 @@ static void wikrt_mem_compact(wikrt_cx* cx)
 
 bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
 {
-    // If we're in an error state, prevent GC. This will short-circuit
-    // further computations.
+    // If in error state, prevent GC to more quickly abort computation.
     if(wikrt_has_error(cx)) { return false; }
+
+    wikrt_size const prior_size = cx->compaction_size;
 
     // basic compacting GC
     wikrt_mem_compact(cx);
-    if(wikrt_mem_available(cx,sz)) {
-        // Success! But large contexts might have too much space! Filling
-        // a large volume of memory with mostly dead data is bad for VM
-        // pressure. Operating in a smaller volume of memory is good for
-        // both VM and cache locality. We'll try to stay within a certain
-        // factor of live data (aligned up to a basic page size).
-
-        wikrt_size const inuse = cx->compaction_size + sz;
-        wikrt_size const desired = WIKRT_MEM_FACTOR * inuse;
-        wikrt_size const pgsz = (WIKRT_MEM_PAGEMB << 20);
-        wikrt_size const target = WIKRT_LNBUFF(desired, pgsz); // page aligned
-
-        // Drop memory if appropriate.
-        if(cx->alloc > target) {
-            cx->skip  = (cx->alloc - target);
-            cx->alloc = target;
-        }
-    
-        return true; 
+    if(!wikrt_mem_available(cx,sz)) {
+        wikrt_set_error(cx, WIKRT_CXFULL);
+        return false;
     }
 
-
-    // TODO: If compaction fails to recover sufficient space,
-    // but a sufficient amount of stowage is pending, we can
-    // stow this data then retry. 
-
-    wikrt_set_error(cx, WIKRT_CXFULL);
-    return false;
+    // Success! 
+    //
+    // But large contexts might have TOO MUCH space. By this, I mean
+    // that we'll be creating too much pressure on the VM system and
+    // hurting cache locality by using more memory than we need. So
+    // I'll drop some of the available memory.
+    _Static_assert((WIKRT_MEM_FACTOR >= 0) 
+                && (WIKRT_MEM_FACTOR_PRIOR >= 0) 
+                && (WIKRT_MEM_PAGEMB >= 1),
+                "insane memory management heuristics");
+    wikrt_size const desired = (WIKRT_MEM_FACTOR * cx->compaction_size) 
+                             + (WIKRT_MEM_FACTOR_PRIOR * prior_size)
+                             + sz;
+    wikrt_size const pgsz = (WIKRT_MEM_PAGEMB << 20);
+    wikrt_size const target = WIKRT_LNBUFF(desired, pgsz); // page aligned
+    if(cx->alloc > target) {
+        cx->skip  = (cx->alloc - target);
+        cx->alloc = target;
+    }
+    return true; 
 } 
 
 
@@ -1815,23 +1813,24 @@ bool wikrt_trace_enable(wikrt_cx* cx, size_t bufsz)
 
 void wikrt_trace_write(wikrt_cx* cx) 
 {
-    // Read into the remaining space.
-    // Ensure sufficient space for a NUL terminal.
+    // Read into the remaining space. We need at least two bytes 
+    // for a one byte message plus the NUL terminal.
     size_t const space_avail = cx->tb.size - cx->tb.writer;
-    size_t bytes_read = (0 == space_avail) ? 0 : (space_avail - 1);
+    if(space_avail < 2) { wikrt_trash(cx); return; }
+
+    size_t bytes_read = (space_avail - 1);
     char* const trace_buf = cx->tb.buf + cx->tb.writer; 
     wikrt_read_text(cx, trace_buf, &bytes_read);
     trace_buf[bytes_read] = 0;
 
     // keep message if non-empty and we have full message.
-    wikrt_sum_tag lr; wikrt_unwrap_sum(cx, &lr);
-
+    wikrt_sum_tag lr; 
+    wikrt_unwrap_sum(cx, &lr);
     bool const ok_msg = (0 < bytes_read) && (WIKRT_INR == lr);
     if(ok_msg) { cx->tb.writer += (bytes_read + 1); }
 
-    // Since trace annotation destructively modifies input, 
-    // annotate whatever remains as trashed. This avoids
-    // need for implicit copies of trace strings. 
+    // mark the text argument as trashed to preserve observable
+    // identity behavior.
     wikrt_trash(cx); 
 }
 

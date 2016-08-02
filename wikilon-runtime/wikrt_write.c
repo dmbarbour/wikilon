@@ -45,10 +45,10 @@ typedef struct wikrt_writer_state
 // For bitfield tracking substructure
 #define WIKRT_SS_LAZYKF (1 << 7)
 
-static inline void wikrt_writer_state_init(wikrt_writer_state* w) 
+static inline void wikrt_writer_state_init(wikrt_writer_state* w, wikrt_otag block_tag) 
 {
-    w->rel      = false;
-    w->aff      = false;
+    w->rel      = (0 != (WIKRT_BLOCK_RELEVANT & block_tag));
+    w->aff      = (0 != (WIKRT_BLOCK_AFFINE & block_tag));
     w->lazykf   = false;
     w->depth    = 0;
     w->bytect   = 0;
@@ -537,19 +537,18 @@ static inline bool wikrt_cx_has_block(wikrt_cx* cx) {
     return wikrt_p(cx->val) && wikrt_blockval(cx, *wikrt_pval(cx, cx->val));
 }
 
-/* convert a block on the stack to text. */
-void wikrt_block_to_text(wikrt_cx* cx)
-{
 
-    if(wikrt_has_error(cx)) { return; }
+wikrt_ss wikrt_block_to_text_ss(wikrt_cx* cx) 
+{
+    if(wikrt_has_error(cx)) { return 0; }
 
     // (block * e) → (ops * (unit * (text * e)))
     wikrt_intro_empty_list(cx); wikrt_wswap(cx); // initial output text (empty list)
     wikrt_intro_unit(cx); wikrt_wswap(cx); // initial continuation stack (unit)
-    wikrt_open_block_ops(cx);              // block → ops
+    wikrt_otag const block_tag = wikrt_open_block_ops(cx); // block → ops
 
     wikrt_writer_state w;
-    wikrt_writer_state_init(&w);
+    wikrt_writer_state_init(&w, block_tag);
 
     // Write every operator. This may fail at some intermediate step,
     // but should succeed in general (i.e. there should be no type
@@ -557,7 +556,7 @@ void wikrt_block_to_text(wikrt_cx* cx)
     // more accelerators).
     while(wikrt_writer_small_step(cx,&w)) { /* continue */ }
 
-    if(wikrt_has_error(cx)) { return; }
+    if(wikrt_has_error(cx)) { return 0; }
 
     assert(0 == w.depth);
     wikrt_writer_flush(cx, &w);
@@ -565,5 +564,14 @@ void wikrt_block_to_text(wikrt_cx* cx)
     wikrt_elim_unit(cx); // drop empty continuation stack
     wikrt_reverse_binary_chunks(cx);      // repair binary chunk order
     wikrt_wrap_otag(cx, WIKRT_OTAG_UTF8); // wrap the utf8 tag
+
+    return (w.rel ? WIKRT_SS_REL : 0)
+         | (w.aff ? WIKRT_SS_AFF : 0);
+}
+
+/* convert a block on the stack to text. */
+void wikrt_block_to_text(wikrt_cx* cx)
+{
+    wikrt_block_to_text_ss(cx); // ignore toplevel substructure
 }
 

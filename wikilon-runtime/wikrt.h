@@ -83,14 +83,12 @@ typedef enum wikrt_op
 , ACCEL_INTRO_UNIT_LEFT  // vvrwlc
 , ACCEL_SUM_SWAP         // VRWLC
 , ACCEL_INTRO_VOID_LEFT  // VVRWLC
-
-// deeper data plumbing
 , ACCEL_wrzw  // (a * ((b * c) * d)) → (a * (b * (c * d)))
 , ACCEL_wzlw  // (a * (b * (c * d))) → (a * ((b * c) * d))
-
-// common data plumbing
 //, ACCEL_rw // ((a * b) * c) → (b * (a * c))
 //, ACCEL_wl // (b * (a * c)) → ((a * b) * c)
+//, ACCEL_ANNO_TRACE // {&trace}
+
 
 // potential future accelerators?
 //  stack-level manipulations
@@ -112,7 +110,6 @@ typedef enum wikrt_ss
 
 static inline bool wikrt_ss_copyable(wikrt_ss ss)  { return (0 == (ss & (WIKRT_SS_AFF | WIKRT_SS_PEND))); }
 static inline bool wikrt_ss_droppable(wikrt_ss ss) { return (0 == (ss & (WIKRT_SS_REL | WIKRT_SS_PEND))); }
-
 
 // misc. constants and static functions
 #define WIKRT_LNBUFF(SZ,LN) ((((SZ)+((LN)-1))/(LN))*(LN))
@@ -405,6 +402,10 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* stack, wikrt_val v, wikrt_ss* ss);
 void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx, wikrt_val* rval);
 //  moving_copy: true if we're actually moving the value, i.e. the origin is dropped.
 
+// as block_to_text, but also return toplevel substructure.
+wikrt_ss wikrt_block_to_text_ss(wikrt_cx* cx);
+
+
 #if 0
 void wikrt_quote_v(wikrt_cx*, wikrt_val*);
 void wikrt_compose_v(wikrt_cx*, wikrt_val ab, wikrt_val bc, wikrt_val* out);
@@ -545,13 +546,20 @@ struct wikrt_cx {
  * still reserved. It's very simple to allocate an empty 'skip' space.
  *
  * If a context is within WIKRT_MEM_FACTOR of being full, this will do 
- * nothing. I further increase free memory to a given page boundary.
+ * nothing. I also use prior memory consumption as a stabilizing factor,
+ * i.e. to smooth over rapid fluctuations in context size. 
  */
-#define WIKRT_MEM_FACTOR 5 /* free space for some factor of current use (if possible) */
+#define WIKRT_MEM_FACTOR 3 /* free space for some factor of current use (if possible) */
+#define WIKRT_MEM_FACTOR_PRIOR 2 /* free space for some factor of prior use (if possible) */
 #define WIKRT_MEM_PAGEMB 2 /* free space in chunks of so many megabytes (if possible) */
 
 // Consider:
-//  a debug list for warnings (e.g. via {&warn} or {&error})
+// - limit thrashing efforts... e.g. if our context doesn't have enough
+//   free space, we might just want to call the computation. This could
+//   be based having three sequential "over 50%" loads, for example. 
+//   - or at least offer a way for clients to get some GC stats
+
+// Consider:
 //  a space for non-copying loopy code - shared memory that
 //    is more accessible than stowage?
 //  

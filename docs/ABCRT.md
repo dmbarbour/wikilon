@@ -278,6 +278,12 @@ Accelerators on texts are limited without an index, requiring a linear scan of t
 
 Assuming a value that might be relevant or linear but that will not be used, annotate it as garbage with `{&trash}`. This allows the runtime to recycle the memory immediately. A placeholder is left, requiring only a small constant amount of space. Attempting to observe the placeholder will appear as a type error. The value will preserve known substructural attributes of the original (with pending values or parallel futures treated as linear).
 
+Trashed values can be serialized as `[]kf{&trash}` with `kf` depending on substructural type.
+
+### Undefined Values and Computations
+
+Trashed data also serves a potential useful role for TODO implementations, or serving similar to Haskell's `undefined` values.
+
 ## Shared Blocks and Internal Bytecode
 
 I need high performance, non-copying, compact, shared memory blocks of code. The 'sharing' is performance essential for tight loops of code (because fixpoint copies code). But sharing for `wikrt_move()` could be very convenient. This is most essential for performance. I must be able to:
@@ -290,18 +296,54 @@ To simplify internal references, I must separate tracking of dependencies vs. ac
 
 Anyhow, I need a representation for bytecode that is suitable for this compact usage. I might include a 'stop' or 'yield' bytecode to simplify termination.
 
-## Debugging
+## Debugging, Profiling, Feedback
+
+Debugging, profiling, etc.. 
+
+While Wikilon runtime is focused on 'pure' computations, profiling and debugging outputs don't really count against this assuming they don't affect the observable behavior of the program or mainline IO models.
 
 ### Printf Style Debugging (High Priority)
 
-At least for the short term, something like Haskell's `Debug.Trace` (i.e. debug by printf) could be very convenient. This would allow output of warnings, debug traces, etc.. This is feasible by annotation. E.g. use of `{&trace} :: ∀e.(text * e)→(trashed text * e)` writing the given text to an output stream. For the 95% use case, this should be sufficient to support a finite size trace buffer (e.g. of 64kB) and simply truncate messages beyond that point. (*Note:* Trashing the argument is convenient for efficient destructive processing.)
+Haskell's `Debug.Trace` (i.e. debug by printf) is convenient as a short term debugging technique. This allows output of warnings, todos, ad-hoc traces, etc.. This is feasible by annotation. Proposed:
 
-An interesting variant is to trace arbitrary *values* instead. This would enable very flexible expression of outputs, e.g. including output of infinite streams or reactive machines. But I'm not convinced that this would actually serve any practical use case for debugging.
+        {&trace} :: ∀v,e.(v * e)→((trashed v) * e)
 
-### Stack/Continuation Traces (Low Priority)
+For performance, I keep trace messages in a finite trace buffer separated from normal GC. Trashing the argument additionally enables destructive read of the text without implicit copies. Despite risk of losing some messages on overflow, this should cover the 99% use case easily enough. Even dumping 64kB should be sufficient for obtaining a useful view of what's happening within a computation.
 
-It might be convenient to somehow emit stack traces when debugging. This is feasible if we introduce locators in our code, i.e. such that I can scan the continuation and find all the current markers. But I'm not convinced of this technique.
+The decision to trace arbitrary values is questionable. It certainly improves flexibility, potential extension to richer debugging methods (e.g. based on rendering or exploring a value). All traced values become parseable, accessible to normal manipulations and flexible rendering, etc.. On the other hand, it is likely to hinder legibility when used for anything more than plain text and positive integers.
 
-### Rendering Programs (Long Term)
+### Stack Traces (Mid Priority)
 
-What I'd really like to do for debugging is 'render' the environment and its evolution, zooming in where the error (e.g. an assertion failure) occurs. This can benefit from recomputing purely functional behaviors.
+Stack traces are convenient for profiling and debugging both. A 'stack' is really a representation for a 'continuation'. So what I'd want for stack traces is to scan through a continuation and obtain a human-meaningful description for the current state of the computation.
+
+A simple approach, perhaps, is to use annotations like `{&@foo}` just *after* the foo computation. This indicates we're computing something to do with `foo` until the annotation is removed from the computation. Then, as needed (e.g. upon error, or for profiling) I would scan the continuation for these annotations. (First class blocks from `foo` could be given appropriate continuation symbols like `{&@]foo}`.)
+
+Stack trace annotations could be introduced automatically by a linker. A simplifier could easily shifting them around to protect tail call optimizations, eliminate annotations for tiny computations, etc..
+
+### Profiling (Mid Priority)
+
+For profiling, I need some good *methods* of profiling. Brainstorming:
+
+* Perform periodic stack traces and keep a record. 
+ * Efficient. Especially if stack traces are efficient.
+ * Rough but representative. Imprecise, but hits common cases.
+* Use annotations to update named counters. 
+ * Unclear how to use them effectively.
+ * Expensive.
+* First-class, opaque "timer" values. Basic stop-watch functionality.
+ * Opaque. Timers cannot be observed by normal code.
+ * Might primarily output via `{&trace}`.
+
+Periodic stack trace is very simple and effective. I should certainly implement it.
+
+Use of first-class 'timer' values is interesting. 
+
+A timer can be represented by a simple integer. For a paused timer, this would represent time elapsed (e.g. in microseconds). For an active timer, it would represent the logical start time, relative to an implicit epoch. When we transition from active to paused or vice versa, we can simply look up the current time and subtract the timer's current value.
+
+        Code                                Result
+        #{&timer}                           #{&timer}
+        {&timer-start}                      #1470173451234567{&timer-active}
+        {&timer-pause}                      #123{&timer}
+            (if ~123 time units elapsed between start and pause)
+
+Of course, this is impure. We must be cautious about exposing timer values to our client code. So timers will generally be opaque, much like trashed values. We'll only be able to access timers via `{&trace}` and perhaps through some special toplevel methods. Conveniently, timers are plain old data in every other relevant sense - they may be dropped, copied, etc..

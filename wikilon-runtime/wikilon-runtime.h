@@ -530,15 +530,16 @@ void wikrt_unwrap_seal(wikrt_cx*, char*);
 
 /** @brief (a * e) → ((trashed a) * e). Annotation {&trash}.
  *
- * When done using a value, the normal option is to drop it. However, dropping
- * a value is illegal for relevant or linear values. Use of {&trash} instead
- * tells the runtime that a value will not be observed. The memory is recycled,
- * leaving a lightweight place holder instead of the original value. All future
- * attempts to observe the value will result in runtime type errors.
+ * When done using a value, the normal option is to drop it. However, 
+ * dropping a value is illegal for relevant or linear values. Use of 
+ * {&trash} tells a runtime instead that a value will not be observed.
+ * This enables memory to be recycled, replacing the value with a 
+ * lightweight place holder. Any future attempt to observe the value
+ * will result in a runtime type error.
  *
- * A trashed linear value should serialize as `[]kf{&trash}`, i.e. preserving
- * substructure but no other information of the input value `a`. The dynamic
- * type of a trashed value is 'WIKRT_TYPE_TRASH'.
+ * A trashed linear value serializes as `[]kf{&trash}`, i.e. preserving
+ * both substructure and the 'trashed' type. The dynamic type for trashed
+ * values is 'WIKRT_TYPE_TRASH'. 
  */
 void wikrt_trash(wikrt_cx*);
 
@@ -630,41 +631,43 @@ void wikrt_intro_sv(wikrt_cx*, char const* resourceId);
   ///////////////
  // DEBUGGING //
 ///////////////
-/** @brief Enable tracing for printf style debugging.
+/** @brief Enable tracing for flexible debugging.
  *
  * Wikilon runtime recognizes a `{&trace}` annotation, which supports
  * lightweight printf/stderr style debugging. This is appropriate more
- * for tracing, TODOs, etc. than for true errors. 
+ * for tracing, TODOs, etc. than for errors (cf. wikrt_trace_write).
+ * By default, trace is disabled (i.e. size zero buffer). The buffer may
+ * be resized when empty (cf. wikrt_trace_read).
  *
- *    {&trace} :: ∀e. (text * e) → ((trashed text) * e)
- *
- * Trace messages are stored to a finite trace buffer. Messages that
- * would overflow this buffer and empty messages are simply dropped.
- * This will return `false` if it fails for any reason, e.g. if the
- * buffer cannot be allocated or if an existing buffer contains any
- * messages.
+ * For most use cases, a small buffer will be sufficient for debugging.
+ * Stable, complete code shouldn't be very noisy.
  */
 bool wikrt_trace_enable(wikrt_cx*, size_t trace_buffer_size);
 
 /** @brief Equivalent to invoking the {&trace} annotation.
  *
- * This trashes the text input (cf. wikrt_trash). So you'll probably
- * want to drop the value afterwards. 
+ *    {&trace} :: ∀v,e. (v * e) → ((trashed v) * e)
+ *
+ * Tracing will serialize arbitrary values to a special trace buffer.
+ * Values that would overflow this buffer are simply dropped. In most
+ * cases, the values will be simple plain text.
+ *
+ * As an annotation, tracing is a logical identity. For efficiency,
+ * it trashes the argument to avoid need for implicit copies. See 
+ * wikrt_trash and the {&trash} annotation.
  */
 void wikrt_trace_write(wikrt_cx*);
 
-/** @brief Access trace messages.
- * 
- * Each call returns a C string pointer to a traced message, iterating
- * through them in sequence, then returns NULL when no messages remain.
- * Each returned message becomes invalid upon reading the next message.
- * The trace buffer is guaranteed to reset upon read returning NULL to
- * allow more messages to be stored. 
+/** @brief Iterate and process trace messages.
  *
- * Expected use case is to handle all trace messages between each call 
- * to wikrt_step_eval or to store all messages for the computation and
- * handle them afterwards. Either way, it wouldn't take a very large
- * buffer to be quite useful for debugging.
+ * Each call returns a C string pointer to the next traced message in
+ * the buffer, then returns NULL when the buffer is empty. Each string
+ * should be considered invalid upon reading the next message. The 
+ * buffer will accept new messages after being fully emptied.
+ *
+ * Expected use cases: Streaming output - empty the buffer after each
+ * call to wikrt_step_eval. Aggregated output - read the buffer only  
+ * after the computation completes. 
  *
  * Trace messages are preserved by wikrt_cx_reset and wikrt_set_error.
  */
