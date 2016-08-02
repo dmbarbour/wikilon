@@ -164,6 +164,9 @@ void wikrt_cx_destroy(wikrt_cx* cx)
     wikrt_cx_reset(cx); // clean up context
     wikrt_remove_cx_from_env(cx);
 
+    // free the trace buffer (if any)
+    free(cx->tb.buf);
+
     // free the memory-mapped region
     errno = 0;
     void* const twospace = (cx->mem < cx->ssp) ? cx->mem : cx->ssp;
@@ -1792,7 +1795,60 @@ void wikrt_compose(wikrt_cx* cx)
 
 
 
+  /////////////////////
+ // DEBUG TRACE OUT //
+/////////////////////
 
+bool wikrt_trace_enable(wikrt_cx* cx, size_t bufsz) 
+{
+    if(0 != cx->tb.writer) { return false; } // don't resize while in use!
+    assert(0 == cx->tb.reader); 
+    cx->tb.buf = realloc(cx->tb.buf, bufsz);
+    if(NULL == cx->tb.buf) {
+        cx->tb.size = 0;
+        return (0 == bufsz);
+    } else {
+        cx->tb.size = bufsz;
+        return true;
+    }
+}
+
+void wikrt_trace_write(wikrt_cx* cx) 
+{
+    // Read into the remaining space.
+    // Ensure sufficient space for a NUL terminal.
+    size_t const space_avail = cx->tb.size - cx->tb.writer;
+    size_t bytes_read = (0 == space_avail) ? 0 : (space_avail - 1);
+    char* const trace_buf = cx->tb.buf + cx->tb.writer; 
+    wikrt_read_text(cx, trace_buf, &bytes_read);
+    trace_buf[bytes_read] = 0;
+
+    // keep message if non-empty and we have full message.
+    wikrt_sum_tag lr; wikrt_unwrap_sum(cx, &lr);
+
+    bool const ok_msg = (0 < bytes_read) && (WIKRT_INR == lr);
+    if(ok_msg) { cx->tb.writer += (bytes_read + 1); }
+
+    // Since trace annotation destructively modifies input, 
+    // annotate whatever remains as trashed. This avoids
+    // need for implicit copies of trace strings. 
+    wikrt_trash(cx); 
+}
+
+char const* wikrt_trace_read(wikrt_cx* cx) 
+{
+    if(cx->tb.reader == cx->tb.writer) {
+        // reset the trace buffer.
+        cx->tb.reader = 0;
+        cx->tb.writer = 0;
+        return NULL;
+    } else {
+        assert(cx->tb.reader < cx->tb.writer);
+        char const* const msg = cx->tb.buf + cx->tb.reader;
+        cx->tb.reader += (1 + strlen(msg));
+        return msg;
+    }
+}
 
 
 

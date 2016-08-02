@@ -461,6 +461,13 @@ static inline void wikrt_env_unlock(wikrt_env* e) {
 void wikrt_add_cx_to_env(wikrt_cx* cx);
 void wikrt_remove_cx_from_env(wikrt_cx* cx);
 
+/** trace buffer */
+typedef struct trace_buf { 
+    char*       buf;
+    size_t      size;
+    size_t      reader;
+    size_t      writer;
+} trace_buf;
 
 /** wikrt_cx internal state.
  *
@@ -504,8 +511,10 @@ struct wikrt_cx {
     uint64_t            bytes_compacted;  // bytes copied during compaction
     uint64_t            bytes_collected;  // bytes allocated then collected
 
-    // others: 
-    //   debug output or warnings
+    // trace output for printf style debugging & warnings
+    trace_buf           tb;
+
+    // other:
     //   child contexts for parallelism
     //   track futures and stowage
 };
