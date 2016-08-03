@@ -277,6 +277,22 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
     return true; 
 } 
 
+void wikrt_peek_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s)
+{
+    s->gc_cycle_count = cx->compaction_count;
+    s->gc_bytes_collected = cx->bytes_collected;
+    s->gc_bytes_processed = cx->bytes_compacted + cx->bytes_collected;
+    s->memory_lastgc  = cx->compaction_size;
+    s->memory_current = wikrt_mem_in_use(cx);
+    s->memory_nextgc  = cx->size - cx->skip;
+    s->memory_maximum = cx->size; 
+
+    // sanity check
+    assert((s->memory_lastgc  <= s->memory_current) 
+        && (s->memory_current <= s->memory_nextgc )
+        && (s->memory_nextgc  <= s->memory_maximum));
+}
+
 
 void wikrt_cx_relax(wikrt_cx* cx) {
     // If contexts hold onto resources, might need to do something special
@@ -1207,32 +1223,11 @@ void wikrt_intro_binary(wikrt_cx* cx, uint8_t const* data, size_t len)
     wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, hdr));
 }
 
-bool wikrt_valid_text_len(char const* s, size_t* bytes)
+void wikrt_anno_binary(wikrt_cx* cx) 
 {
-    _Static_assert((sizeof(char) == sizeof(uint8_t)), "invalid cast from char* to uint8_t*");
-    uint8_t const* const utf8 = (uint8_t const*)s;
-    size_t const maxlen = (*bytes);
-    size_t len = 0;
-    do {
-        uint32_t cp;
-        size_t const k = utf8_readcp(utf8 + len, maxlen - len, &cp);
-        if((0 == k) || !wikrt_text_char(cp)) { break; }
-        len += k;
-    } while(true);
-    (*bytes) = len;
-    return ((maxlen == len) || (0 == utf8[len]));
-}
-
-void wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
-{
-    // Validate text binary. Determine actual size if NUL-terminated.
-    if(!wikrt_valid_text_len(s, &nBytes)) { 
-        wikrt_set_error(cx, WIKRT_INVAL); 
-        return; 
-    }
-    // Just introduce text as a single binary chunk.
-    wikrt_intro_binary(cx, (uint8_t const*)s, nBytes);
-    wikrt_wrap_otag(cx, WIKRT_OTAG_UTF8);
+    // TODO: refactor the read_binary function so it's useful for
+    // heuristically reconstructing or just the smaller binary 
+    // fragments. 
 }
 
 void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
@@ -1289,6 +1284,35 @@ void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes)
     } while(true);
 }
 
+
+bool wikrt_valid_text_len(char const* s, size_t* bytes)
+{
+    _Static_assert((sizeof(char) == sizeof(uint8_t)), "invalid cast from char* to uint8_t*");
+    uint8_t const* const utf8 = (uint8_t const*)s;
+    size_t const maxlen = (*bytes);
+    size_t len = 0;
+    do {
+        uint32_t cp;
+        size_t const k = utf8_readcp(utf8 + len, maxlen - len, &cp);
+        if((0 == k) || !wikrt_text_char(cp)) { break; }
+        len += k;
+    } while(true);
+    (*bytes) = len;
+    return ((maxlen == len) || (0 == utf8[len]));
+}
+
+void wikrt_intro_text(wikrt_cx* cx, char const* s, size_t nBytes)
+{
+    // Validate text binary. Determine actual size if NUL-terminated.
+    if(!wikrt_valid_text_len(s, &nBytes)) { 
+        wikrt_set_error(cx, WIKRT_INVAL); 
+        return; 
+    }
+    // Just introduce text as a single binary chunk.
+    wikrt_intro_binary(cx, (uint8_t const*)s, nBytes);
+    wikrt_wrap_otag(cx, WIKRT_OTAG_UTF8);
+}
+
 // Since I just dump a big utf-8 string into a binary field, I might have an incomplete
 // character at the tail end of the string. I need to ensure the returned bytestring
 // only contains complete codepoints. Therefore, I need to put back up to three bytes.
@@ -1313,6 +1337,13 @@ static void wikrt_putback_incomplete_utf8(wikrt_cx* cx, char const* str, size_t*
 
     // adjust size
     (*sz) = ((char const*) cpf) - str;
+}
+
+void wikrt_anno_text(wikrt_cx* cx)
+{
+    // TODO: I probably want to reuse code with wikrt_read_text 
+    //   to efficiently rebuild my text value. 
+    //   This will require some refactoring.
 }
 
 void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz)
@@ -1695,6 +1726,8 @@ static void wikrt_block_attrib(wikrt_cx* cx, wikrt_val attrib)
 
 void wikrt_block_aff(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_AFFINE); }
 void wikrt_block_rel(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_RELEVANT); }
+void wikrt_block_lazy(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_LAZY); }
+void wikrt_block_fork(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_FORK); }
 
 static inline bool wikrt_cx_has_two_blocks(wikrt_cx* cx) {
     wikrt_val const abe = cx->val;

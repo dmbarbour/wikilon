@@ -29,6 +29,10 @@ char const* const valid_abc_strings[] =
     " this text has two lines\n"
     "~"
  , "[\" \n~]", "[\"\n~]", "[\"hello, world!\n~]"
+   // ensure recognized annotations will round-trip.
+ , "{&trace}{&trash}{&stow}{&load}"
+ , "{&lazy}{&fork}{&join}{&asynch}"
+ , "{&text}{&binary}"
  , NULL
  };
 

@@ -68,7 +68,7 @@ typedef struct wikrt_cx wikrt_cx;
  * dynamic lib implements. This is just a simple sanity check.
  */
 uint32_t wikrt_api_ver();
-#define WIKRT_API_VER 20160421
+#define WIKRT_API_VER 20160803
 
 /** Wikilon runtime error codes. */
 typedef enum wikrt_ecode
@@ -364,18 +364,18 @@ void wikrt_elim_unit(wikrt_cx*);
 void wikrt_intro_unit_r(wikrt_cx*);
 void wikrt_elim_unit_r(wikrt_cx*);
 
-/** @brief Allocate and split 'sum' values one step at a time.
+/** @brief Introduce and extract 'sum' values.
  *
- * Allocation operates on an `(a*e)` value and either returns the
- * `((a+0)*e)` or `((0+a)*e)` depending on the `inRight` parameter.
- * Split does the opposite, returning the `inRight` condition.
- * 
- * If inRight is false, this corresponds to op `V`. Otherwise to
- * `VVRWLC`. The unwrap variant provides easy access to a sum.
+ * Wrap:    (a * e) → ((a+0) * e)  (if WIKRT_INL)
+ *                  → ((0+a) * e)  (if WIKRT_INR)
+ * Unwrap:  ((a+_) * e) → (a * e)  with WIKRT_INL
+ *          ((_+a) * e) → (a * e)  with WIKRT_INR
  *
- * In case of unwrap error, the given sum tag is not modified. You
- * can test that the operation succeeds with `!wikrt_error(cx)`. 
+ * Note: Wikilon runtime optimizes for shallow sums on pairs or the
+ * unit value. Representation for lists, booleans, and simple trees
+ * of ((data*(left*right))+1) is reasonably efficient.
  */
+
 typedef enum wikrt_sum_tag { WIKRT_INL = 0, WIKRT_INR = 1 } wikrt_sum_tag;
 void wikrt_wrap_sum(wikrt_cx*, wikrt_sum_tag inRight);
 void wikrt_unwrap_sum(wikrt_cx*, wikrt_sum_tag* inRight);
@@ -435,8 +435,7 @@ bool wikrt_peek_istr(wikrt_cx*, char* buff, size_t* strlen);
  *
  * The binary is modeled as a list of small integers (0..255). It may
  * use a more compact representation, e.g. an array of bytes, under 
- * the hood. A list has type `μL.((e*L) + t)`. In this case, the terminal
- * type `t` is unit. 
+ * the hood. A list has type `μL.((e*L) + 1)`. 
  */
 void wikrt_intro_binary(wikrt_cx*, uint8_t const*, size_t);
 
@@ -453,6 +452,25 @@ void wikrt_intro_binary(wikrt_cx*, uint8_t const*, size_t);
  * is a valid binary.
  */
 void wikrt_read_binary(wikrt_cx*, uint8_t*, size_t*);
+
+/** @brief Mark a value as binary. The {&binary} annotation.
+ *
+ *    (binary * e) → (binary * e)
+ *
+ * This tells a runtime that a given value should be a binary, and to
+ * favor a compact byte string representation (i.e. a list containing
+ * large binary fragments, instead of a cell per byte; memory savings 
+ * can approach 16x.)
+ */
+void wikrt_anno_binary(wikrt_cx* cx);
+
+// Note: use of {&binary} is okay for small to medium binaries, but
+// is not suitable for very large binaries. For large binaries, the
+// client may need to favor rope-like structures with value stowage. 
+//
+// I'm exploring ideas for a shared memory space. Binaries, texts,
+// and program fragments might be represented as external resources
+// related to value stowage. 
 
 /** @brief Allocate a text.
  *
@@ -477,6 +495,17 @@ void wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
  */
 void wikrt_read_text(wikrt_cx*, char*, size_t* bytes);
 
+/** @brief Mark a value as text. The {&text} annotation.
+ *
+ *  (text * e) → (text * e)
+ * 
+ * This tells a runtime that a given value should be a text, to favor
+ * a compact utf8 byte string representation, and to serialize the
+ * value as embedded text (e.g. for trace or quote + block to text).
+ * If a value is already represented as text, this has a very low cost.
+ */
+void wikrt_anno_text(wikrt_cx*);
+
 /** @brief Serialization and Programming
  *
  * Introducing and extracting bytecode are the primary bases for ad-hoc
@@ -496,9 +525,6 @@ void wikrt_read_text(wikrt_cx*, char*, size_t* bytes);
  * only insofar as ensuring it parses, not that it represents a valid program.
  * A round trip conversion (text to block to text) should return the original
  * text.
- *
- * NOTE: The `[]` at the top level is implicit. The text represents bytecode
- * contained within the top level block. Blocks are always finite.
  *
  * NOTE: A block may reference stowed values (e.g. via quote and compose). Such
  * stowed value references are represented by resource tokens. cf. wikrt_peek_sv
@@ -564,6 +590,11 @@ void wikrt_trash(wikrt_cx*);
  */
 void wikrt_stow(wikrt_cx*);
 
+
+  //////////////////////
+ // MEMORY EXTENSION //
+//////////////////////
+
 /** @brief Load a stowed value. ((stowed a) * e) → (a * e).
  *
  * This corresponds to annotation {&load}. We'll copy the stowed value
@@ -628,9 +659,15 @@ void wikrt_peek_sv(wikrt_cx*, char* buff);
 void wikrt_intro_sv(wikrt_cx*, char const* resourceId);
 
 
-  ///////////////
- // DEBUGGING //
-///////////////
+  //////////////////////
+ // RUNTIME FEEDBACK //
+//////////////////////
+// Debugging, Profiling, Etc..
+// 
+// - trace supports printf style debugging. 
+// - simplistic profiling via GC stats is possible
+// - TODO: stack traces, and periodic profiling traces.
+
 /** @brief Enable tracing for flexible debugging.
  *
  * Wikilon runtime recognizes a `{&trace}` annotation, which supports
@@ -649,8 +686,12 @@ bool wikrt_trace_enable(wikrt_cx*, size_t trace_buffer_size);
  *    {&trace} :: ∀v,e. (v * e) → ((trashed v) * e)
  *
  * Tracing will serialize arbitrary values to a special trace buffer.
- * Values that would overflow this buffer are simply dropped. In most
- * cases, the values should be plain text for a legible render.
+ * Values that would overflow this buffer are simply dropped. 
+ *
+ * Arbitrary values may be traced. It's important that developers favor
+ * trace messages that are render easily in the development environment,
+ * and preferably aren't too large. But Wikilon runtime doesn't enforce 
+ * any opinions on the structure of trace messages.
  *
  * As an annotation, tracing is a logical identity. For efficiency,
  * it trashes the argument to avoid need for implicit copies. See 
@@ -676,6 +717,29 @@ void wikrt_trace_write(wikrt_cx*);
  */
 char const* wikrt_trace_read(wikrt_cx*);
 
+/** Overview of a context's memory usage.
+ *
+ * For large contexts, Wikilon will often use a 'soft' GC threshold
+ * to help control memory and cache pressures. I.e. a 200MB context
+ * and a 4MB context might behave about the same for computations
+ * with minimal memory requirements.
+ */
+typedef struct wikrt_mem_stats { 
+    uint64_t  gc_cycle_count;     // how many GC cycles?
+    uint64_t  gc_bytes_processed; // ~ total GC effort 
+    uint64_t  gc_bytes_collected; // ~ useful GC effort
+    size_t    memory_lastgc;      // memory in use just after prior GC
+    size_t    memory_current;     // memory currently in use
+    size_t    memory_nextgc;      // soft maximum (next GC threshold)
+    size_t    memory_maximum;     // hard maximum (CXFULL error)
+} wikrt_mem_stats;
+
+/** @brief Diagnostic peek at context memory usage.
+ *
+ * This isn't really sufficient for interesting profiles. But it can
+ * at least help diagnose a thrashing computation.
+ */
+void wikrt_peek_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
 
   ////////////////
  // EVALUATION //

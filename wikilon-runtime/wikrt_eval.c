@@ -136,7 +136,7 @@ static void _wikrt_int_cmp_gt(wikrt_cx* cx)
     }
 }
 
-static inline bool wikrt_block_lazy(wikrt_otag otag) { 
+static inline bool wikrt_block_is_flagged_lazy(wikrt_otag otag) { 
     return (0 != (WIKRT_BLOCK_LAZY & otag));
 }
 
@@ -152,7 +152,7 @@ static void _wikrt_eval_step_inline(wikrt_cx* cx)
     if(!wikrt_otag_block(*obj)) { 
         wikrt_set_error(cx, WIKRT_ETYPE); 
     } 
-    else if(wikrt_block_lazy(*obj)) {
+    else if(wikrt_block_is_flagged_lazy(*obj)) {
         // Explicit laziness will simply involve wrapping our block.
         // For now, I'm treating lazy pending values as a specialized
         // form of asynchronous value. We can force evaluation with
@@ -215,7 +215,17 @@ static void _wikrt_eval_step_condap(wikrt_cx* cx)
     }
 }
 
+static void _wikrt_todo_asynch(wikrt_cx* cx) 
+{
+    // TODO: mark a value as 'asynchronous' 
+    // i.e. so it acts as if processed via forked identity
+}
 
+static void _wikrt_todo_join(wikrt_cx* cx)
+{
+    // TODO: 'join' will attempt rendezvous with a parallel 
+    //   and/or lazy computation.
+}
 
 
 typedef void (*wikrt_op_evalfn)(wikrt_cx*);
@@ -271,7 +281,20 @@ static const wikrt_op_evalfn wikrt_op_evalfn_table[OP_COUNT] =
 , [ACCEL_INTRO_VOID_LEFT] = _wikrt_accel_intro_void_left
 , [ACCEL_wrzw] = wikrt_accel_wrzw
 , [ACCEL_wzlw] = wikrt_accel_wzlw
+, [ACCEL_ANNO_TRACE] = wikrt_trace_write
+, [ACCEL_ANNO_TRASH] = wikrt_trash
+, [ACCEL_ANNO_LOAD] = wikrt_load
+, [ACCEL_ANNO_STOW] = wikrt_stow
+, [ACCEL_ANNO_LAZY] = wikrt_block_lazy
+, [ACCEL_ANNO_FORK] = wikrt_block_fork
+, [ACCEL_ANNO_JOIN] = _wikrt_todo_join
+, [ACCEL_ANNO_ASYNCH] = _wikrt_todo_asynch
+, [ACCEL_ANNO_TEXT] = wikrt_anno_text
+, [ACCEL_ANNO_BINARY] = wikrt_anno_binary
 }; 
+
+_Static_assert((WIKRT_ACCEL_COUNT == 18), 
+    "evaluator is missing accelerators");
 
 /* Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e).
  *

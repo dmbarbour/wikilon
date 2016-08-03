@@ -76,23 +76,36 @@ typedef enum wikrt_op
 , OP_ADD, OP_MUL, OP_NEG, OP_DIV, OP_GT
 , OP_CONDAP, OP_DISTRIB, OP_FACTOR, OP_MERGE, OP_ASSERT
 
-// Block: Accelerators
+// Block: Accelerators. 
+// Note: This must be an append-only once stowage is working.
+// But until then I'm free to tweak things around a fair bit.
 , ACCEL_TAILCALL    // $c
 , ACCEL_INLINE      // vr$c
 , ACCEL_PROD_SWAP   // vrwlc
+, ACCEL_SUM_SWAP    // VRWLC
 , ACCEL_INTRO_UNIT_LEFT  // vvrwlc
-, ACCEL_SUM_SWAP         // VRWLC
 , ACCEL_INTRO_VOID_LEFT  // VVRWLC
 , ACCEL_wrzw  // (a * ((b * c) * d)) → (a * (b * (c * d)))
 , ACCEL_wzlw  // (a * (b * (c * d))) → (a * ((b * c) * d))
+, ACCEL_ANNO_TRACE  // {&trace}
+, ACCEL_ANNO_TRASH  // {&trash}
+, ACCEL_ANNO_LOAD   // {&load}
+, ACCEL_ANNO_STOW   // {&stow}
+, ACCEL_ANNO_LAZY   // {&lazy}
+, ACCEL_ANNO_FORK   // {&fork}
+, ACCEL_ANNO_JOIN   // {&join}
+, ACCEL_ANNO_ASYNCH // {&asynch}
+, ACCEL_ANNO_TEXT   // {&text}
+, ACCEL_ANNO_BINARY // {&binary}
 //, ACCEL_rw // ((a * b) * c) → (b * (a * c))
 //, ACCEL_wl // (b * (a * c)) → ((a * b) * c)
-//, ACCEL_ANNO_TRACE // {&trace}
-
+//, ACCEL_rzl // ((a * b) * (c * d)) → ((a * c) * (b * d))
 
 // potential future accelerators?
 //  stack-level manipulations
-//  fixpoint functions (plus future support for non-copying loopy code)
+//  fixpoint functions (a constant overhead variant)
+//  loop functions (repeat, foreach, etc.)
+//  collections processing (list access, cut, update)
 
 
 // Misc.
@@ -246,7 +259,8 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
  *   tokens, and captured values. Opcodes are represented by small 
  *   integers and include accelerators. Quoted values are also used
  *   for embedded blocks or texts. Tag bits in the block header indicate
- *   affine and relevance substructural attributes.
+ *   affine and relevance substructural attributes, and optionally some
+ *   annotations for use (e.g. lazy/parallel).
  *
  *   WIKRT_OTAG_OPVAL 
  *
@@ -356,7 +370,8 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
 // block header bits
 #define WIKRT_BLOCK_RELEVANT (1 << 8)  // forbid drop
 #define WIKRT_BLOCK_AFFINE   (1 << 9)  // forbid copy
-#define WIKRT_BLOCK_LAZY     (1 << 10) // when applied, create a pending computation
+#define WIKRT_BLOCK_LAZY     (1 << 10) // call by need result
+#define WIKRT_BLOCK_FORK     (1 << 11) // parallel evaluation
 
 
 // block inherits substructural attributes from contained value
@@ -516,7 +531,7 @@ struct wikrt_cx {
 
     // semispace and garbage collection.
     wikrt_size          compaction_size;  // memory after compaction
-    uint64_t            compaction_count; // count of compactions
+    uint64_t            compaction_count;  // count of compactions
     uint64_t            bytes_compacted;  // bytes copied during compaction
     uint64_t            bytes_collected;  // bytes allocated then collected
 
@@ -561,11 +576,14 @@ struct wikrt_cx {
 #define WIKRT_MEM_FACTOR_PRIOR 2 /* free space for some factor of prior use (if possible) */
 #define WIKRT_MEM_PAGEMB 2 /* free space in chunks of so many megabytes (if possible) */
 
-// Consider:
-// - limit thrashing efforts... e.g. if our context doesn't have enough
-//   free space, we might just want to call the computation. This could
-//   be based having three sequential "over 50%" loads, for example. 
-//   - or at least offer a way for clients to get some GC stats
+/* Thrash control? 
+ *
+ * If memory is consistently near-full after compaction, we're "thrashing".
+ * We end up spending more time managing memory than usefully computing.
+ *
+ * At the very least, it would be useful to export statistics to the client
+ * so the client can make useful heuristic decisions regarding thrashing.
+ */
 
 // Consider:
 //  a space for non-copying loopy code - shared memory that
@@ -612,7 +630,7 @@ static inline wikrt_addr wikrt_alloc_r(wikrt_cx* cx, wikrt_sizeb sz)
 
 // How much space have we allocated with data since last compaction?
 //  Note that some of this memory might be dead if GC'd.
-static inline wikrt_size wikrt_mem_in_use(wikrt_cx* cx) { 
+static inline wikrt_size wikrt_mem_in_use(wikrt_cx const* cx) { 
     return ((cx->size - cx->alloc) - cx->skip); 
 }
 
@@ -753,4 +771,6 @@ static inline void wikrt_elim_list_end(wikrt_cx* cx)
 // (v*e) → ((otag v) * e). Wrap a value with an otag. 
 void wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag);
 
+void wikrt_block_lazy(wikrt_cx*);
+void wikrt_block_fork(wikrt_cx*);
 

@@ -2,10 +2,11 @@
 // It involves a simplistic hand-written parser that recognizes
 // tail-call opportunities.
 
+#include "wikrt.h"
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
-#include "wikrt.h"
+#include <ctype.h>
 
 typedef enum 
 { WIKRT_PARSE_OP  = 0
@@ -328,8 +329,15 @@ void wikrt_text_to_block(wikrt_cx* cx)
     wikrt_fini_parse(cx, &p);
 }
 
-
 // utility functions
+static inline bool match(char const* s1, char const* s2) { 
+    return (0 == strcmp(s1,s2)); }
+
+static void wikrt_intro_optok_basic(wikrt_cx* cx, char const* tok) 
+{ 
+    wikrt_intro_unit(cx); 
+    wikrt_wrap_seal(cx, tok); 
+}
 
 void wikrt_intro_optok(wikrt_cx* cx, char const* tok) 
 {
@@ -342,10 +350,22 @@ void wikrt_intro_optok(wikrt_cx* cx, char const* tok)
         // stowage resource identifiers 
         wikrt_intro_sv(cx, tok);
         wikrt_wrap_otag(cx, WIKRT_OTAG_OPVAL);
-    } else {
-        wikrt_intro_unit(cx);
-        wikrt_wrap_seal(cx, tok);
-    }
+    } else if('&' == *tok) {
+        // TODO: consider creating a static binary search table.
+        char const* anno = 1 + tok;
+        if(!islower(*anno)) { wikrt_intro_optok_basic(cx, tok); } // accelerate basic symbols only
+        else if(match(anno, "trash"))  { wikrt_intro_op(cx, ACCEL_ANNO_TRASH); }
+        else if(match(anno, "trace"))  { wikrt_intro_op(cx, ACCEL_ANNO_TRACE); }
+        else if(match(anno, "load"))   { wikrt_intro_op(cx, ACCEL_ANNO_LOAD); }
+        else if(match(anno, "stow"))   { wikrt_intro_op(cx, ACCEL_ANNO_STOW); }
+        else if(match(anno, "lazy"))   { wikrt_intro_op(cx, ACCEL_ANNO_LAZY); }
+        else if(match(anno, "fork"))   { wikrt_intro_op(cx, ACCEL_ANNO_FORK); }
+        else if(match(anno, "join"))   { wikrt_intro_op(cx, ACCEL_ANNO_JOIN); }
+        else if(match(anno, "asynch")) { wikrt_intro_op(cx, ACCEL_ANNO_ASYNCH); }
+        else if(match(anno, "text"))   { wikrt_intro_op(cx, ACCEL_ANNO_TEXT); }
+        else if(match(anno, "binary")) { wikrt_intro_op(cx, ACCEL_ANNO_BINARY); }
+        else { wikrt_intro_optok_basic(cx, tok); }
+    } else { wikrt_intro_optok_basic(cx, tok); }
 }
 
 void wikrt_intro_op(wikrt_cx* cx, wikrt_op op) 

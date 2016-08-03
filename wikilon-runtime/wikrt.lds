@@ -64,9 +64,11 @@
 
     wikrt_intro_binary;
     wikrt_read_binary;
+    wikrt_anno_binary;
 
     wikrt_intro_text;
     wikrt_read_text;
+    wikrt_anno_text;
 
     wikrt_wrap_seal;
     wikrt_unwrap_seal;
@@ -92,6 +94,7 @@
     wikrt_trace_enable;
     wikrt_trace_write;
     wikrt_trace_read;
+    wikrt_peek_mem_stats;
 
     wikrt_valid_key;
 

@@ -90,6 +90,16 @@ static void writer_SUM_SWAP(wikrt_cx*, wikrt_writer_state* w);
 static void writer_INTRO_VOID_LEFT(wikrt_cx*, wikrt_writer_state* w);
 static void writer_wrzw(wikrt_cx*, wikrt_writer_state* w);
 static void writer_wzlw(wikrt_cx*, wikrt_writer_state* w);
+static void writer_ANNO_TRACE(wikrt_cx*, wikrt_writer_state* w);
+static void writer_ANNO_TRASH(wikrt_cx*, wikrt_writer_state* w);
+static void writer_ANNO_LOAD(wikrt_cx*, wikrt_writer_state* w);
+static void writer_ANNO_STOW(wikrt_cx*, wikrt_writer_state* w);
+static void writer_ANNO_LAZY(wikrt_cx*, wikrt_writer_state* w);
+static void writer_ANNO_FORK(wikrt_cx*, wikrt_writer_state* w);
+static void writer_ANNO_JOIN(wikrt_cx*, wikrt_writer_state* w);
+static void writer_ANNO_ASYNCH(wikrt_cx*, wikrt_writer_state* w);
+static void writer_ANNO_TEXT(wikrt_cx*, wikrt_writer_state* w);
+static void writer_ANNO_BINARY(wikrt_cx*, wikrt_writer_state* w);
 
 typedef void (*wikrt_writer)(wikrt_cx*, wikrt_writer_state*);
 #define ACCEL(X) [ACCEL_##X] = writer_##X
@@ -98,9 +108,14 @@ static const wikrt_writer wikrt_accel_writers[OP_COUNT] =
  , ACCEL(PROD_SWAP), ACCEL(INTRO_UNIT_LEFT)
  , ACCEL(SUM_SWAP),  ACCEL(INTRO_VOID_LEFT)
  , ACCEL(wrzw),      ACCEL(wzlw)
+ , ACCEL(ANNO_TRACE), ACCEL(ANNO_TRASH)
+ , ACCEL(ANNO_LOAD), ACCEL(ANNO_STOW)
+ , ACCEL(ANNO_LAZY), ACCEL(ANNO_FORK), ACCEL(ANNO_JOIN), ACCEL(ANNO_ASYNCH)
+ , ACCEL(ANNO_TEXT), ACCEL(ANNO_BINARY) 
  };
-_Static_assert((8 == WIKRT_ACCEL_COUNT), "missing accelerator writer?");
+_Static_assert((18 == WIKRT_ACCEL_COUNT), "missing accelerator writer?");
 #undef ACCEL
+
 
 static void wikrt_writer_flush(wikrt_cx* cx, wikrt_writer_state* w)
 {
@@ -218,6 +233,18 @@ static void writer_wzlw(wikrt_cx* cx, wikrt_writer_state* w)
     wikrt_write_op(cx, w, OP_PROD_ASSOCL);
     wikrt_write_op(cx, w, OP_PROD_W_SWAP);
 }
+
+static void writer_ANNO_TRACE(wikrt_cx* cx, wikrt_writer_state* w) { wikrt_writer_putcstr(cx, w, "{&trace}"); }   
+static void writer_ANNO_TRASH(wikrt_cx* cx, wikrt_writer_state* w) { wikrt_writer_putcstr(cx, w, "{&trash}"); }
+static void writer_ANNO_LOAD(wikrt_cx* cx, wikrt_writer_state* w)  { wikrt_writer_putcstr(cx, w, "{&load}"); }
+static void writer_ANNO_STOW(wikrt_cx* cx, wikrt_writer_state* w)  { wikrt_writer_putcstr(cx, w, "{&stow}"); }
+static void writer_ANNO_LAZY(wikrt_cx* cx, wikrt_writer_state* w)  { wikrt_writer_putcstr(cx, w, "{&lazy}"); }
+static void writer_ANNO_FORK(wikrt_cx* cx, wikrt_writer_state* w)  { wikrt_writer_putcstr(cx, w, "{&fork}"); }
+static void writer_ANNO_JOIN(wikrt_cx* cx, wikrt_writer_state* w)  { wikrt_writer_putcstr(cx, w, "{&join}"); }
+static void writer_ANNO_ASYNCH(wikrt_cx* cx, wikrt_writer_state* w) { wikrt_writer_putcstr(cx, w, "{&asynch}"); }
+static void writer_ANNO_TEXT(wikrt_cx* cx, wikrt_writer_state* w)   { wikrt_writer_putcstr(cx, w, "{&text}"); }
+static void writer_ANNO_BINARY(wikrt_cx* cx, wikrt_writer_state* w) { wikrt_writer_putcstr(cx, w, "{&binary}"); }
+
 
 
 // (empty ops * (stack * (text * e))) → (ops' * (stack' * (text * e)))
@@ -424,7 +451,6 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
 
     case WIKRT_TYPE_SEAL: {
         // print contained value then the sealer token.
-        // tokens are represented by sealed unit values.
         char tokbuff[WIKRT_TOK_BUFFSZ];
         wikrt_unwrap_seal(cx, tokbuff);
         wikrt_intro_optok(cx, tokbuff); wikrt_consd(cx);
@@ -451,7 +477,7 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
             // (pending (block * value)) → `value block {&lazy} $`
             wikrt_wswap(cx);
             wikrt_intro_op(cx, OP_APPLY);   wikrt_cons(cx); // add '$' to ops
-            wikrt_intro_optok(cx, "&lazy"); wikrt_cons(cx); // add {&lazy} to ops
+            wikrt_intro_op(cx, ACCEL_ANNO_LAZY); wikrt_cons(cx); // add {&lazy} to ops
             wikrt_wswap(cx);
 
             wikrt_open_pending(cx); // extract the (block * value) pair.
@@ -469,8 +495,8 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
         wikrt_val const v = wikrt_pval(cx, cx->val)[0];
         wikrt_val* const pobj = wikrt_pobj(cx, v);
         assert(wikrt_o(v) && wikrt_otag_trash(pobj[0]) && (WIKRT_UNIT_INR == pobj[1]));
-        pobj[0] = ((~0xFF) & pobj[0]) | WIKRT_OTAG_BLOCK; // write as block, preserve substructure
-        wikrt_intro_optok(cx, "&trash"); wikrt_consd(cx); // after the block
+        pobj[0] = ((~0xFF) & pobj[0]) | WIKRT_OTAG_BLOCK; // write a block to preserve substructure
+        wikrt_intro_op(cx, ACCEL_ANNO_TRASH); wikrt_consd(cx); // {&trash} the block to preserve opacity
         goto tailcall; // print as a block
     } break;
 

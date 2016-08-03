@@ -316,36 +316,11 @@ The decision to trace arbitrary values is... questionable. It does improve flexi
 
 Stack traces are convenient for profiling and debugging both. A 'stack' is really a representation for a 'continuation'. So what I'd want for stack traces is to scan through a continuation and obtain a human-meaningful description for the current state of the computation.
 
-A simple approach, perhaps, is to use annotations like `{&@foo}` just *after* the foo computation. This indicates we're computing something to do with `foo` until the annotation is removed from the computation. Then, as needed (e.g. upon error, or for profiling) I would scan the continuation for these annotations. (First class blocks from `foo` could be given appropriate continuation symbols like `{&@]foo}`.)
-
-Stack trace annotations could be introduced automatically by a linker. A simplifier could easily shifting them around to protect tail call optimizations, eliminate annotations for tiny computations, etc..
+This seems to be a bit of a challenge. It might be best to require explicit tracking of sources, e.g. something like `[foo] {&@location} inline`. Such stack trace annotations be introduced by a linker, not just by hand.
 
 ### Profiling (Mid Priority)
 
-For profiling, I need some good *methods* of profiling. Brainstorming:
+For profiling, the best idea I have so far is to leverage periodic stack traces (e.g. upon GC), especially if I can make those efficient. With each stack trace, I can record some metadata (time, memory stats, etc.). It might also be feasible to add a `{&prof}` annotation to a stack trace for a given block/location, i.e. for more precise profiling.
 
-* Perform periodic stack traces and keep a record. 
- * Efficient. Especially if stack traces are efficient.
- * Rough but representative. Imprecise, but hits common cases.
-* Use annotations to update named counters. 
- * Unclear how to use them effectively.
- * Expensive.
-* First-class, opaque "timer" values. Basic stop-watch functionality.
- * Opaque. Timers cannot be observed by normal code.
- * Might primarily output via `{&trace}`.
+I had an interesting idea to use [opaque timer values](https://awelonblue.wordpress.com/2016/08/02/profiling-pure-code/). But in context of value stowage (and possible caching of computations), I think it wouldn't work out very nicely. 
 
-Periodic stack trace is very simple and effective. I should certainly implement it.
-
-Use of first-class 'timer' values is interesting. A timer can be represented by a simple integer. For a paused timer, this would represent time elapsed (e.g. in microseconds). For an active timer, it would represent the logical start time, relative to an implicit epoch. When we transition from active to paused or vice versa, we can simply look up the current time and subtract the timer's value.
-
-        Code                                Result
-        #{&timer}                           #{&timer}
-        {&timer-start}                      #1470173451234567{&timer-active}
-        {&timer-pause}                      #123{&timer}
-            (e.g. if 123 microseconds elapse between start and pause)
-
-Of course, this is impure. We must be cautious about exposing timer values to our client code. So timers will generally be opaque, much like trashed values. 
-
-To access timer values in a flexible way, e.g. to format them into a text string, I might need a model of 'debug output' perhaps based on a partitioned computation model (i.e. so we have a 'debug out' partition that permits certain annotations to function). But that is not essential for an immediate use case. For now I can access timers via `{&trace}` or toplevel IO models.
-
-*Note:* A related possibility with opaque timers is to use them to control time quotas.
