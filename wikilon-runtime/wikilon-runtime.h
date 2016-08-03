@@ -650,7 +650,7 @@ bool wikrt_trace_enable(wikrt_cx*, size_t trace_buffer_size);
  *
  * Tracing will serialize arbitrary values to a special trace buffer.
  * Values that would overflow this buffer are simply dropped. In most
- * cases, the values will be simple plain text.
+ * cases, the values should be plain text for a legible render.
  *
  * As an annotation, tracing is a logical identity. For efficiency,
  * it trashes the argument to avoid need for implicit copies. See 
@@ -664,6 +664,9 @@ void wikrt_trace_write(wikrt_cx*);
  * the buffer, then returns NULL when the buffer is empty. Each string
  * should be considered invalid upon reading the next message. The 
  * buffer will accept new messages after being fully emptied.
+ *
+ * Trace messages contain ABC that would simply regenerate the traced
+ * value. In most cases, this should just be a plain text.
  *
  * Expected use cases: Streaming output - empty the buffer after each
  * call to wikrt_step_eval. Aggregated output - read the buffer only  

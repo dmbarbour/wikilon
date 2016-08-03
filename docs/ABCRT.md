@@ -308,9 +308,9 @@ Haskell's `Debug.Trace` (i.e. debug by printf) is convenient as a short term deb
 
         {&trace} :: ∀v,e.(v * e)→((trashed v) * e)
 
-For performance, I keep trace messages in a finite trace buffer separated from normal GC. Trashing the argument additionally enables destructive read of the text without implicit copies. Despite risk of losing some messages on overflow, this should cover the 99% use case easily enough. Even dumping 64kB should be sufficient for obtaining a useful view of what's happening within a computation.
+For performance, I keep trace messages in a finite trace buffer separated from normal GC. Trashing an argument additionally enables destructive read of text without implicit copies. Despite risk of losing some messages on overflow, this should cover the 99% use case easily enough. Even dumping 64kB should be sufficient for generating a useful debug-view of what's happening within a computation.
 
-The decision to trace arbitrary values is questionable. It certainly improves flexibility, potential extension to richer debugging methods (e.g. based on rendering or exploring a value). All traced values become parseable, accessible to normal manipulations and flexible rendering, etc.. On the other hand, it is likely to hinder legibility when used for anything more than plain text and positive integers.
+The decision to trace arbitrary values is... questionable. It does improve flexibility of expression, enabling structured data with external rendering techniques. But it might hinder legibility of a plain text rendering a bit. Fortunately, plain text embedded in ABC should be reasonably legible.
 
 ### Stack Traces (Mid Priority)
 
@@ -336,14 +336,16 @@ For profiling, I need some good *methods* of profiling. Brainstorming:
 
 Periodic stack trace is very simple and effective. I should certainly implement it.
 
-Use of first-class 'timer' values is interesting. 
-
-A timer can be represented by a simple integer. For a paused timer, this would represent time elapsed (e.g. in microseconds). For an active timer, it would represent the logical start time, relative to an implicit epoch. When we transition from active to paused or vice versa, we can simply look up the current time and subtract the timer's current value.
+Use of first-class 'timer' values is interesting. A timer can be represented by a simple integer. For a paused timer, this would represent time elapsed (e.g. in microseconds). For an active timer, it would represent the logical start time, relative to an implicit epoch. When we transition from active to paused or vice versa, we can simply look up the current time and subtract the timer's value.
 
         Code                                Result
         #{&timer}                           #{&timer}
         {&timer-start}                      #1470173451234567{&timer-active}
         {&timer-pause}                      #123{&timer}
-            (if ~123 time units elapsed between start and pause)
+            (e.g. if 123 microseconds elapse between start and pause)
 
-Of course, this is impure. We must be cautious about exposing timer values to our client code. So timers will generally be opaque, much like trashed values. We'll only be able to access timers via `{&trace}` and perhaps through some special toplevel methods. Conveniently, timers are plain old data in every other relevant sense - they may be dropped, copied, etc..
+Of course, this is impure. We must be cautious about exposing timer values to our client code. So timers will generally be opaque, much like trashed values. 
+
+To access timer values in a flexible way, e.g. to format them into a text string, I might need a model of 'debug output' perhaps based on a partitioned computation model (i.e. so we have a 'debug out' partition that permits certain annotations to function). But that is not essential for an immediate use case. For now I can access timers via `{&trace}` or toplevel IO models.
+
+*Note:* A related possibility with opaque timers is to use them to control time quotas.

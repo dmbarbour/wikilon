@@ -259,11 +259,12 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
     // But large contexts might have TOO MUCH space. By this, I mean
     // that we'll be creating too much pressure on the VM system and
     // hurting cache locality by using more memory than we need. So
-    // I'll drop some of the available memory.
+    // if I have a lot more memory than I apparently need, I'll drop
+    // some of it. 
     _Static_assert((WIKRT_MEM_FACTOR >= 0) 
                 && (WIKRT_MEM_FACTOR_PRIOR >= 0) 
                 && (WIKRT_MEM_PAGEMB >= 1),
-                "insane memory management heuristics");
+                "sane memory management heuristics");
     wikrt_size const desired = (WIKRT_MEM_FACTOR * cx->compaction_size) 
                              + (WIKRT_MEM_FACTOR_PRIOR * prior_size)
                              + sz;
@@ -717,11 +718,7 @@ void wikrt_trash(wikrt_cx* cx)
     (*pv) = WIKRT_UNIT_INR;
 
     // use block relevant/affine tags.
-    wikrt_otag const otag 
-        = WIKRT_OTAG_TRASH
-        | (wikrt_ss_copyable(ss)  ? 0 : WIKRT_BLOCK_AFFINE)
-        | (wikrt_ss_droppable(ss) ? 0 : WIKRT_BLOCK_RELEVANT);
-    
+    wikrt_otag const otag = WIKRT_OTAG_TRASH | wikrt_ss_to_block_flags(ss);
     wikrt_wrap_otag(cx, otag);
 }
 
@@ -1814,24 +1811,40 @@ bool wikrt_trace_enable(wikrt_cx* cx, size_t bufsz)
 void wikrt_trace_write(wikrt_cx* cx) 
 {
     // Read into the remaining space. We need at least two bytes 
-    // for a one byte message plus the NUL terminal.
+    // for a one byte message plus the NUL terminal. Of course,
+    // the only one byte message is `#`. But that's okay.
     size_t const space_avail = cx->tb.size - cx->tb.writer;
     if(space_avail < 2) { wikrt_trash(cx); return; }
 
+    // Represent any value as an ABC program to recompute the value.
+    // I'll need to preserve the substructure, however.
+    wikrt_quote(cx);
+    wikrt_ss const ss = wikrt_block_to_text_ss(cx);
+
+    // Read the text, as much as possible, into our trace buffer.
     size_t bytes_read = (space_avail - 1);
     char* const trace_buf = cx->tb.buf + cx->tb.writer; 
     wikrt_read_text(cx, trace_buf, &bytes_read);
     trace_buf[bytes_read] = 0;
 
-    // keep message if non-empty and we have full message.
+    // Check whether the full text is read before trashing it.
     wikrt_sum_tag lr; 
     wikrt_unwrap_sum(cx, &lr);
-    bool const ok_msg = (0 < bytes_read) && (WIKRT_INR == lr);
-    if(ok_msg) { cx->tb.writer += (bytes_read + 1); }
+    wikrt_trash(cx);
 
-    // mark the text argument as trashed to preserve observable
-    // identity behavior.
-    wikrt_trash(cx); 
+    // Stop tracing new messages if in an error state.
+    if(wikrt_has_error(cx)) { return; } 
+
+    // Check for complete message.
+    assert(bytes_read > 0); // Empty program is id, not a quoted value.
+    bool const have_complete_msg = (WIKRT_INR == lr);
+    if(have_complete_msg) { cx->tb.writer += (bytes_read + 1); }
+
+    // Preserve substructure. Add flags to the trash value.
+    wikrt_val* const pv = wikrt_pval(cx, cx->val);
+    wikrt_val* const po = wikrt_pobj(cx, (*pv));
+    assert(wikrt_p(cx->val) && wikrt_o(*pv) && wikrt_otag_trash(*po));
+    (*po) |= wikrt_ss_to_block_flags(ss);
 }
 
 char const* wikrt_trace_read(wikrt_cx* cx) 

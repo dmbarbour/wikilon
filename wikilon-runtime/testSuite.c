@@ -500,6 +500,7 @@ void test_alloc_binary(wikrt_cx* cx)
 
 void elim_cstr(wikrt_cx* cx, char const* cstr) 
 {
+    if(NULL == cstr) { cstr = ""; }
     uint8_t const* s = (uint8_t const*) cstr;
     do {
         int32_t const cp = (int32_t) utf8_step_unsafe(&s);
@@ -1202,15 +1203,23 @@ void test_eval_anno(wikrt_cx* cx)
 void test_trace(wikrt_cx* cx) 
 {
     do {} while(NULL != wikrt_trace_read(cx)); // clear trace buff
-    char const* const testString = u8"★★★This is a test trace message.★★★";
+    char const* const testMsg1 = u8"★★★This is a\n\ntest trace message.★★★";
+    int64_t testMsg2 = -9876543210;
     wikrt_trace_enable(cx, 1000);
-    wikrt_intro_text(cx, testString, SIZE_MAX);
-    wikrt_trace_write(cx);
-    wikrt_drop(cx);
-    bool const match_message = (0 == strcmp(testString, wikrt_trace_read(cx)));
-    bool const single_message = (NULL == wikrt_trace_read(cx));
-    bool const ok = match_message && single_message;
-    if(!ok) { wikrt_set_error(cx, WIKRT_ETYPE); }
+
+    // msg{&trace}%. Test for both text and an integer.
+    wikrt_intro_text(cx, testMsg1, SIZE_MAX); wikrt_trace_write(cx); wikrt_drop(cx);
+    wikrt_intro_i64(cx, testMsg2); wikrt_trace_write(cx); wikrt_drop(cx);
+
+    // Compare to quoted values. Also tests order of trace messages.
+    wikrt_intro_text(cx, testMsg1, SIZE_MAX); val2txt(cx); 
+    elim_cstr(cx, wikrt_trace_read(cx));
+
+    wikrt_intro_i64(cx, testMsg2); val2txt(cx); 
+    elim_cstr(cx, wikrt_trace_read(cx));
+
+    // Since we only traced two messages, the buffer should be empty.
+    if(NULL != wikrt_trace_read(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
 

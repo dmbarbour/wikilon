@@ -358,6 +358,7 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
 #define WIKRT_BLOCK_AFFINE   (1 << 9)  // forbid copy
 #define WIKRT_BLOCK_LAZY     (1 << 10) // when applied, create a pending computation
 
+
 // block inherits substructural attributes from contained value
 // this is used for quoted values within a block.
 #define WIKRT_OPVAL_LAZYKF      (1 << 8)  
@@ -389,6 +390,13 @@ static inline void wikrt_capture_block_ss(wikrt_val otag, wikrt_ss* ss)
     }
 }
 static inline bool wikrt_opval_hides_ss(wikrt_val otag) { return (0 == (WIKRT_OPVAL_LAZYKF & otag)); }
+
+static inline wikrt_otag wikrt_ss_to_block_flags(wikrt_ss ss) 
+{
+    return (wikrt_ss_copyable(ss)  ? 0 : WIKRT_BLOCK_AFFINE)
+         | (wikrt_ss_droppable(ss) ? 0 : WIKRT_BLOCK_RELEVANT);
+}
+
 
 /* Internal API calls. */
 void wikrt_copy_m(wikrt_cx*, wikrt_ss*, bool moving_copy, wikrt_cx*); 
