@@ -12,7 +12,7 @@ INSTALL_PREFIX := /usr/local
 
 .PHONY: all lib clean install uninstall runtests 
 
-all: lib runtests runABC linkAO 
+all: lib runtests runABC linkAO
 
 lib: libwikilon-runtime.so
 
@@ -47,10 +47,10 @@ runtests: testSuite
 	LD_LIBRARY_PATH=. ./testSuite
 
 testSuite: testSuite.c wikilon-runtime.h libwikilon-runtime.so 
-	$(CC) $< -o $@ -L. -lwikilon-runtime
+	$(CC) -o $@ $< -L. -lwikilon-runtime
 
 runABC: runABC.c wikilon-runtime.h libwikilon-runtime.so 
-	$(CC) $< -o $@ -L. -lwikilon-runtime
+	$(CC) -o $@ $< -L. -lwikilon-runtime
 
 linkAO: $(LINKAO_OBJECTS)
 	$(CC) -o $@ $(LINKAO_OBJECTS)

@@ -302,8 +302,6 @@ void wikrt_cx_relax(wikrt_cx* cx) {
     // For now, just a non-operation.
 }
 
-
-
 void wikrt_move(wikrt_cx* const lcx, wikrt_cx* const rcx) 
 {
     if(lcx == rcx) { wikrt_set_error(lcx, WIKRT_INVAL); return; }
@@ -1223,19 +1221,100 @@ void wikrt_intro_binary(wikrt_cx* cx, uint8_t const* data, size_t len)
     wikrt_intro_r(cx, wikrt_tag_addr(WIKRT_O, hdr));
 }
 
+// Heuristically decide whether we have a 'compact binary'.
+// For now, any sequence of WIKRT_OTAG_BINARY is accepted
+// if it terminates in unit in the right.
+bool wikrt_val_is_compact_binary(wikrt_cx* cx, wikrt_val v)
+{ 
+    while(wikrt_o(v)) {
+        wikrt_val* const pobj = wikrt_pobj(cx, v);
+        if(!wikrt_otag_binary(*pobj)) { return false; }
+        v = pobj[1];
+    } 
+    return (WIKRT_UNIT_INR == v);
+}
+
+// Incremental construction of large binary and text data.
+void wikrt_reverse_binary_chunks(wikrt_cx* cx) 
+{
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); }
+    if(wikrt_has_error(cx)) { return; }
+
+    // Given a sequence of binary chunks in reverse order
+    //   each of form (header, next, size, buffer)
+    // reverse the chunk ordering.
+
+    wikrt_val hd = wikrt_pval(cx, cx->val)[0];
+    wikrt_val binary = WIKRT_UNIT_INR;
+    while(WIKRT_UNIT_INR != hd) {
+        // expecting (binary, next, size, buffer) objects (strictly)
+        assert(wikrt_value_is_compact_binary(cx, hd));
+        wikrt_val* const phd = wikrt_pobj(cx, hd);
+        wikrt_val const next = phd[1];
+        phd[1] = binary;
+        binary = hd;
+        hd = next;
+    }
+    wikrt_pval(cx, cx->val)[0] = binary;
+}
+
+void wikrt_cons_binary_chunk(wikrt_cx* cx, uint8_t const* bytes, size_t bytect)
+{
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(0 == bytect) { return; }
+
+    wikrt_sizeb const szBuff  = wikrt_cellbuff((wikrt_size)bytect);
+    wikrt_sizeb const szHdr   = (2 * WIKRT_CELLSIZE);
+    wikrt_sizeb const szAlloc = szHdr + szBuff;
+    if(!wikrt_mem_reserve(cx, szAlloc)) { return; }
+
+    wikrt_addr const addr_buff = wikrt_alloc_r(cx, szBuff);
+    wikrt_addr const addr_hdr = wikrt_alloc_r(cx, szHdr);
+    wikrt_val* const phdr = wikrt_paddr(cx, addr_hdr);
+    wikrt_val* const v = wikrt_pval(cx, cx->val);
+
+    // buffer just needs a straight copy of the input
+    memcpy(wikrt_paddr(cx, addr_buff), bytes, bytect);
+
+    // hdr is (OTAG_BINARY, next, (size-chars, size-bytes), buffer).
+    phdr[0] = WIKRT_OTAG_BINARY;
+    phdr[1] = (*v);
+    phdr[2] = (wikrt_size) bytect;
+    phdr[3] = addr_buff;
+    (*v) = wikrt_tag_addr(WIKRT_O, addr_hdr);
+}
+
+// binary→binary, compacting via reasonably large chunks
+void wikrt_compact_binary(wikrt_cx* cx) 
+{
+    size_t const buff_size = 60 * 1000;
+    uint8_t buff[buff_size];
+
+    wikrt_intro_empty_list(cx); 
+    wikrt_wswap(cx);
+    do {
+        size_t bytes_read = buff_size;
+        wikrt_read_binary(cx, buff, &bytes_read);
+        if(0 == bytes_read) { break; }
+        wikrt_wswap(cx);
+        wikrt_cons_binary_chunk(cx, buff, bytes_read);
+        wikrt_wswap(cx);
+    } while(1);
+    wikrt_elim_list_end(cx);
+    wikrt_reverse_binary_chunks(cx);
+}
+
 void wikrt_anno_binary(wikrt_cx* cx) 
 {
-    // TODO: refactor the read_binary function so it's useful for
-    // heuristically reconstructing or just the smaller binary 
-    // fragments. 
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    if(wikrt_val_is_compact_binary(cx, wikrt_pval(cx, cx->val)[0])) { return; }
+    else { wikrt_compact_binary(cx); }
 }
 
 void wikrt_read_binary(wikrt_cx* cx, uint8_t* buff, size_t* bytes) 
 {
     // NOTE: This function must not allocate. It may eliminate data.
     _Static_assert(sizeof(uint8_t) == 1, "assuming sizeof(uint8_t) is 1");
-    _Static_assert(((WIKRT_SMALLINT_MIN <= 0) && (255 <= WIKRT_SMALLINT_MAX))
-        , "assume bytes are small integers");
 
     size_t const max_bytes = (*bytes);
     (*bytes) = 0;
@@ -1339,11 +1418,33 @@ static void wikrt_putback_incomplete_utf8(wikrt_cx* cx, char const* str, size_t*
     (*sz) = ((char const*) cpf) - str;
 }
 
+void wikrt_compact_text(wikrt_cx* cx)
+{
+    _Static_assert((sizeof(char) == sizeof(uint8_t)), "casting between uint8_t and char");
+    size_t const buff_size = 60 * 1000;
+    char buff[buff_size];
+
+    wikrt_intro_empty_list(cx); 
+    wikrt_wswap(cx);
+    do {
+        size_t bytes_read = buff_size;
+        wikrt_read_text(cx, buff, &bytes_read);
+        if(0 == bytes_read) { break; }
+        wikrt_wswap(cx);
+        wikrt_cons_binary_chunk(cx, (uint8_t*) buff, bytes_read);
+        wikrt_wswap(cx);
+    } while(1);
+    wikrt_elim_list_end(cx);
+    wikrt_reverse_binary_chunks(cx);
+    wikrt_wrap_otag(cx, WIKRT_OTAG_UTF8);
+}
+
 void wikrt_anno_text(wikrt_cx* cx)
 {
-    // TODO: I probably want to reuse code with wikrt_read_text 
-    //   to efficiently rebuild my text value. 
-    //   This will require some refactoring.
+    // in this case, we'll assume any tagged UTF-8 value is compact.
+    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); }
+    if(wikrt_value_is_utf8(cx, wikrt_pval(cx,cx->val)[0])) { return; }
+    else { wikrt_compact_text(cx); }
 }
 
 void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz)

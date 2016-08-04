@@ -533,6 +533,18 @@ void test_alloc_text(wikrt_cx* cx)
     elim_cstr(cx, u8"abc←↑");
 }
 
+void intro_empty_list(wikrt_cx* cx) { 
+    wikrt_intro_unit(cx);
+    wikrt_wrap_sum(cx, WIKRT_INR);
+}
+void push_list_i32(wikrt_cx* cx, int32_t i32) 
+{
+    wikrt_intro_i32(cx, i32);
+    wikrt_assocl(cx);
+    wikrt_wrap_sum(cx, WIKRT_INL);
+}
+
+
 void read_binary_chunks(wikrt_cx* cx, uint8_t const* buff, size_t buffsz, size_t const read_chunk) 
 {
     uint8_t buff_read[read_chunk];
@@ -1226,6 +1238,27 @@ void test_trace(wikrt_cx* cx)
     if(NULL != wikrt_trace_read(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
+void test_anno_text(wikrt_cx* cx)
+{
+    intro_empty_list(cx);
+    val2txt(cx);
+    elim_cstr(cx, "vvrwlcVVRWLC");
+
+    intro_empty_list(cx);
+    wikrt_anno_text(cx);
+    val2txt(cx);
+    elim_cstr(cx, "\"\n~");
+
+    intro_empty_list(cx);
+    push_list_i32(cx, 'b');
+    push_list_i32(cx, 0x2192);
+    push_list_i32(cx, 'a');
+    wikrt_anno_text(cx);
+    val2txt(cx);
+    elim_cstr(cx, u8"\"a→b\n~");
+}
+
+
 
 void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     char const* errFmt = "test #%d failed: %s\n";
@@ -1294,6 +1327,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_read_binary);
     TCX(test_read_text);
     TCX(test_big_text);
+    TCX(test_anno_text);
 
 
     TCX(test_smallint_math);

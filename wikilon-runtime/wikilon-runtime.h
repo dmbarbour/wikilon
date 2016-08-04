@@ -441,15 +441,10 @@ void wikrt_intro_binary(wikrt_cx*, uint8_t const*, size_t);
 
 /** @brief Incrementally read binary data. Destructive.
  *
- * Our binary is a list `μL.((e*L)+t)` of bytes (0..255). Incremental 
- * read moves data to the client's buffer destructively, so sequential
- * reads gradually consume an entire binary.
- *
  *    (binary*e)→(smaller binary*e)
  *
- * In case of error, we'll stop reading and set an error state in
- * the context. I.e. you should statically know that your argument
- * is a valid binary.
+ * Destructively read binary data from the context into the client
+ * buffer. Multiple sequential reads gradually consume the binary.
  */
 void wikrt_read_binary(wikrt_cx*, uint8_t*, size_t*);
 
@@ -461,6 +456,9 @@ void wikrt_read_binary(wikrt_cx*, uint8_t*, size_t*);
  * favor a compact byte string representation (i.e. a list containing
  * large binary fragments, instead of a cell per byte; memory savings 
  * can approach 16x.)
+ *
+ * If the binary is already represented as a compact byte string, this
+ * will have a very low cost.
  */
 void wikrt_anno_binary(wikrt_cx* cx);
 
@@ -484,6 +482,8 @@ void wikrt_intro_text(wikrt_cx*, char const* str, size_t len);
 
 /** @brief Incrementally read a text. Destructive.
  *
+ *   (text * e) → (smaller text * e)
+ * 
  * Similar to wikrt_read_binary, but will read text into a utf-8 buffer.
  * The codepoints read will meet the same constraints as alloc_text, i.e. 
  * no control chars except LF, no surrogates, no incomplete codepoints.
@@ -499,10 +499,13 @@ void wikrt_read_text(wikrt_cx*, char*, size_t* bytes);
  *
  *  (text * e) → (text * e)
  * 
- * This tells a runtime that a given value should be a text, to favor
+ * This tells a runtime that a given value should be a text, to ensure
  * a compact utf8 byte string representation, and to serialize the
  * value as embedded text (e.g. for trace or quote + block to text).
- * If a value is already represented as text, this has a very low cost.
+ *
+ * If a value is already represented as compact text, this has a low
+ * cost. Otherwise, it may perform a full copy operation to rebuild
+ * the text.
  */
 void wikrt_anno_text(wikrt_cx*);
 
@@ -535,11 +538,10 @@ void wikrt_text_to_block(wikrt_cx*);
 void wikrt_block_to_text(wikrt_cx*);
 
 /** @brief Wrap a value with a sealer token. (a * e)→((sealed a) * e).
- *
- * The sealer token is provided as a simple C string. Discretionary 
- * sealers such as ":map" are understood by Wikilon runtime, as they
- * may be unsealed (by a {.map} token). Short sealer strings have a 
- * more compact encoding (effectively interned).
+ * 
+ * Wikilon runtime only knows about discretionary sealers, such as
+ * {:map} and {.map} to seal then subsequently unseal the value. For
+ * this case, you'd use ":map" for wrap_seal.
  *
  * See wikrt_valid_token() for information on valid sealer strings.
  */

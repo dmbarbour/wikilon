@@ -298,7 +298,7 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
  *      (hdr, next, size, buffer).
  *          `buffer` is wikrt_addr of first item
  *          `size` is a number of items.
- *          `next` should be (_+b) or continue the list
+ *          `next` continues the list (or terminates it)
  *          `hdr` includes a bit for logical reversal   
  *
  *   This representation enables chunked-arrays, i.e. lists of array-like
@@ -311,8 +311,9 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
  * 
  * WIKRT_OTAG_UTF8
  *
- *   (utf8, binary). Wraps a binary list terminating in unit to treat it as
- *   an embedded utf8 text. The binary must be known to be valid utf8 text.
+ *   (utf8, binary). Wrap a utf8 binary terminating in unit. This is the
+ *   default for embedded texts, and is necessary to serialize text as 
+ *   embedded. 
  *
  * WIKRT_OTAG_STOWAGE (planned)
  *
@@ -718,6 +719,7 @@ static inline bool wikrt_trashval(wikrt_cx* cx, wikrt_val v) {
 }
 
 // utility for incremental construction of large binaries and texts.
+void wikrt_cons_binary_chunk(wikrt_cx* cx, uint8_t const* buff, size_t buffSize);
 void wikrt_reverse_binary_chunks(wikrt_cx* cx);
 
 static inline bool wikrt_cx_has_txn(wikrt_cx* cx) { 

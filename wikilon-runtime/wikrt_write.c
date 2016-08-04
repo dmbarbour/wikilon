@@ -29,9 +29,17 @@
 // most likely source of error is a full context, which might happen 
 // when expanding opvals.
 
+// Thoughts: more compact representations?
+//
+//   WIKRT_UNIT as "\n~ (4 chars) where vvrwlc is 6. (meh).
+//   WIKRT_UNIT_INR, "\n~ (3 chars) where vvrwlcVVRWLC is 12. (tempting.)
+//
+// I'm not sure these are worthwhile, though. Especially not once we
+// include stream compression or eventual ABCD extensions.
+
 // A reasonable chunk size for our texts.
 //  must be smaller than WIKRT_OTAG_TEXT chunks (max size 0xFFFF)
-#define WIKRT_WRITE_BUFFSZ (40 * 1000)
+#define WIKRT_WRITE_BUFFSZ (60 * 1000)
 typedef struct wikrt_writer_state 
 {
     // conditions for current block
@@ -121,30 +129,9 @@ static void wikrt_writer_flush(wikrt_cx* cx, wikrt_writer_state* w)
 {
     if(0 == w->bytect) { return; } // quick exit
 
-    // (ops * (stack * (texts * e)))
-    wikrt_sizeb const szBuff  = wikrt_cellbuff(w->bytect);
-    wikrt_sizeb const szHdr   = (2 * WIKRT_CELLSIZE);
-    wikrt_sizeb const szAlloc = szHdr + szBuff;
-
-    if(wikrt_mem_reserve(cx, szAlloc)) { 
-        wikrt_assocl(cx); wikrt_wswap(cx); // swizzle text outputs to top
-        wikrt_val* const v = wikrt_pval(cx, cx->val);
-
-        wikrt_addr const addr_buff = wikrt_alloc_r(cx, szBuff);
-        memcpy(wikrt_paddr(cx, addr_buff), w->buff, w->bytect);
-
-        // hdr is (OTAG_TEXT, next, (size-chars, size-bytes), buffer).
-        wikrt_addr const addr_hdr = wikrt_alloc_r(cx, szHdr);
-        wikrt_val* const phdr = wikrt_paddr(cx, addr_hdr);
-        phdr[0] = WIKRT_OTAG_BINARY;
-        phdr[2] = w->bytect;
-        phdr[3] = addr_buff;
-
-        // output written texts so far (in reverse chunk order)
-        phdr[1] = (*v);
-        (*v) = wikrt_tag_addr(WIKRT_O, addr_hdr);
-        wikrt_wswap(cx); wikrt_assocr(cx); // return texts to bottom
-    }
+    wikrt_assocl(cx); wikrt_wswap(cx); // swizzle text outputs to top
+    wikrt_cons_binary_chunk(cx, w->buff, w->bytect);
+    wikrt_wswap(cx); wikrt_assocr(cx); // return texts to bottom
 
     // regardless of success or failure, clear the buffer
     w->bytect = 0;

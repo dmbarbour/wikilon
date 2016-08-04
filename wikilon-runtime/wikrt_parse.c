@@ -140,25 +140,8 @@ static void wikrt_parser_finish_block(wikrt_cx* cx)
 
 static void wikrt_flush_parse_text(wikrt_cx* cx, wikrt_parse_state* p)
 {
-    if(0 == p->bytect) { return; } // nothing to flush
-    wikrt_sizeb const szBuff  = wikrt_cellbuff(p->bytect);
-    wikrt_sizeb const szAlloc = szBuff + (2 * WIKRT_CELLSIZE);
-    if(wikrt_mem_reserve(cx,szAlloc) && wikrt_p(cx->val)) {
-        // At the moment, we're building binary chunks.
-        wikrt_addr const addr_buff = wikrt_alloc_r(cx, szBuff);
-        memcpy(wikrt_paddr(cx, addr_buff), p->buff, p->bytect);
-
-        // (OTAG_BINARY, next, (size-char, size-bytes), buffer)
-        wikrt_addr const addr_hdr = wikrt_alloc_r(cx, (2 * WIKRT_CELLSIZE));
-        wikrt_val* const phdr = wikrt_paddr(cx, addr_hdr);
-        wikrt_val* const chunks = wikrt_pval(cx, cx->val);
-        phdr[0] = WIKRT_OTAG_BINARY;
-        phdr[1] = (*chunks);
-        phdr[2] = p->bytect;
-        phdr[3] = addr_buff;
-        (*chunks) = wikrt_tag_addr(WIKRT_O, addr_hdr);
-    }
-    // clear buffer before continuing, even on flush failure
+    if(0 == p->bytect) { return; }
+    wikrt_cons_binary_chunk(cx, p->buff, p->bytect);
     p->bytect = 0;
 }
 
@@ -373,30 +356,6 @@ void wikrt_intro_op(wikrt_cx* cx, wikrt_op op)
     bool const validOp = ((OP_INVAL < op) && (op < OP_COUNT));
     if(!validOp) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_intro_smallval(cx, wikrt_i2v(op));
-}
-
-// Incremental construction of large binary and text data.
-void wikrt_reverse_binary_chunks(wikrt_cx* cx) 
-{
-    if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); }
-    if(wikrt_has_error(cx)) { return; }
-
-    // Given a sequence of binary chunks in reverse order
-    //   each of form (header, next, size, buffer)
-    // reverse the chunk ordering.
-
-    wikrt_val hd = wikrt_pval(cx, cx->val)[0];
-    wikrt_val binary = WIKRT_UNIT_INR;
-    while(WIKRT_UNIT_INR != hd) {
-        // expecting (binary, next, size, buffer) objects (strictly)
-        assert(wikrt_value_is_compact_binary(cx, hd));
-        wikrt_val* const phd = wikrt_pobj(cx, hd);
-        wikrt_val const next = phd[1];
-        phd[1] = binary;
-        binary = hd;
-        hd = next;
-    }
-    wikrt_pval(cx, cx->val)[0] = binary;
 }
 
 

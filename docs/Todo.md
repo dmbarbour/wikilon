@@ -1,33 +1,56 @@
 
 # TODO
 
-* performance and C runtime
- * build my own arenas & GC models (DONE)
- * optimized bytecode representations!
-  * compact bytecode 
-  * JIT compilation (annotation guided?)
- * simplifier, partial evaluation, dead code and value elim
-  * trace `{&trash}` and dropped data backwards, eliminate source
- * unit tests - develop a `test.ao` file.
+My primary efforts at the moment should be:
 
-* Support debugging. 
- * Maybe a variant of `Debug.Trace` or `printf` debugging.
- * This could be used for lightweight warnings, etc.
+* easy testing of bytecode
+ * runABC 
 
-* Command Line and Console Utilities
- * Consider utilizing FUSE or Web Server
- * Consider persistent **.ao** file as append only log
-  * persistent index is necessary for large AO files
-  * append-only dictionary simplifies index updates
+* persistence and stowage
+
+* profiling and debugging
+ * stack trace
+ * profiling options
+
+* get web service active again!
+ * develop useful application models
+ * develop some console style apps
+
+* command line utilities
+ * favor via web service, not filesystem
+ * support queries, claw, computations
+ * support import/export to AO files
+  * with or without history
+ * FUSE adapter (maybe)
+
+* runtime performance
+ * compact bytecode
+ * shared memory (loopy code, binaries, texts)
+ * simplification and optimizations
+  * partial evaluation and applications
+  * dead code and data elim - trash, etc..
+
+* extraction of data
+ * texts, images/video, sound/music
+ * binaries
+ * cacheable results, please.
+
+## Lower Priority (for now)
+
+* dictonary applications
+ * model of edit and debug sessions
+ * multi-media interactive fictions 
+ * multi-media multi user dungeons 
+ * quests
 
 * persistence and reflection
  * dictionaries as runtime values
  * Wikilon state as runtime values
  * eliminate dependency on VCache
 
-* simplify semantics
- * (DONE) inline semantics for word definitions 
- * (DONE) simplified Wikilon application model 
+* extraction of executables or libraries
+ * extract to Rust, C, JavaScript
+ * perhaps via reflection of dictionaries
 
 * background computations
  * for types, errors, cycles, undefined words
@@ -47,15 +70,13 @@
  * automatic debugging and error isolation
 
 * heavier focus on Claw views and dictionary apps
- * (DONE) model for claw command sequences
- * (DONE) improve claw view for large texts
- * visual claw, widgets in source
- * named variables and closures
+ * visual claw, stateful widgets in source
+ * named variables and closures (?)
+  * I haven't found any variation of this I like
+  * maybe to fix a local `x y z` variable environment
 
-* Tunable claw ?
- * enable bytecode views via dictionaries
- * enable query parameter to select view (or built-in)
- * 
+* Tunable claw (not critical)
+ * bytecode views defined within dictionaries?
  
 * Neat features
  * render environments, animate evaluations 
@@ -92,10 +113,6 @@
  * JavaScript + DOM
  * Unikernels or Docker apps
 
-* develop FUSE adapters and command line tools
- * directly above C runtime or via web services
- * support for editing multiple words in one file
-
 * user model
  * names and logins
  * themes, configuration
@@ -105,4 +122,4 @@
 
 Note that I've decided to model almost everything as dictionary apps, including stuff like edit sessions, bug trackers, and users. The idea, or goal, is to keep all of this information uniformly available for import, export, history, views of the dictionary, etc..
 
-
+The main challenge with this concept is security. Security *within* an AO dictionary isn't really a feasible thing. What we can probably do, however, is control interactions (merges, dataflows, etc.) between dictionaries, and perhaps also constrain merging of value sealers. An external agent would make decisions given a set of dictionaries.

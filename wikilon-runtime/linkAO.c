@@ -35,9 +35,16 @@ static char const* linkAO_helpMsg() { return u8""
  ;
 }
 
-// TODO: 
+// TODO maybe (if there's a strong use case).
 //  * Potentially support a persistent index for large AO files. 
 //  * Support append-only edits, maybe via separate editAO tool.
+//  * Remove 'comments' from output, of form [...]% and "...\n~%
+//    (at least within one word).
+//  * Support Claw input for convenience (maybe via `readClaw`)
+//  * Support paragraph-safe output for streaming computation.
+//
+// I'm not sure I'll find enough use for linkAO beyond some testing
+// and benchmarking. 
 
 typedef struct 
 {
@@ -255,20 +262,19 @@ _Noreturn void linkAO_fail(pstack* stack, char const* msg)
 void linkAO(FILE* out, AOFile* ao, pstack* stack) 
 { tailcall:
     do { 
-        prog p = stack->data[--(stack->depth)];
-        char const* s = p.s;
-        while(s != p.e) 
+        prog* const p = stack->data + (stack->depth - 1);
+        char const* s = p->s;
+        while(s != p->e) 
         {
             if('"' == *s) {
-                s = skipText(s, p.e);
+                s = skipText(s, p->e);
                 if(NULL == s) { linkAO_fail(stack, "invalid text"); }
             } else if('{' == *s) {
-                char const* const eot = skipToken(s, p.e);
+                char const* const eot = skipToken(s, p->e);
                 if(NULL == eot) { linkAO_fail(stack, "invalid token"); }
                 if('%' == s[1]) {
-                    fwrite(p.s, 1, (s - p.s), out); // print code up to token
-                    p.s = eot;                      // skip token upon return
-                    push_stack(stack, p);           // return to program later
+                    fwrite(p->s, 1, (s - p->s), out); // print code up to token
+                    p->s = eot;                       // skip token upon return
 
                     // Link definition identified by the token.
                     AOWord const w = (AOWord){ .str = (2 + s)
@@ -280,16 +286,17 @@ void linkAO(FILE* out, AOFile* ao, pstack* stack)
                 } else { s = eot; } // scan past the token
             } else {
                 char const c = *(s++); // scan past character
-                if('[' == c) { ++(p.b); }
+                if('[' == c) { ++(p->b); }
                 else if(']' == c) {
-                    if(0 == p.b) { linkAO_fail(stack, "block brackets `]` imbalance"); }
-                    --(p.b);
+                    if(0 == p->b) { linkAO_fail(stack, "block brackets `]` imbalance"); }
+                    --(p->b);
                 }
             }
         }
         // Scanned to end of input.
-        fwrite(p.s, 1, (p.e - p.s), out);
-        if(0 != p.b) { linkAO_fail(stack, "block brackets `[` imbalance"); }
+        fwrite(p->s, 1, (p->e - p->s), out);
+        --(stack->depth);
+        if(0 != p->b) { linkAO_fail(stack, "block brackets `[` imbalance"); }
     } while(0 != stack->depth);
     fflush(stdout);
 }
@@ -326,7 +333,7 @@ int main(int argc, char const* const argv[])
     char* const progStr = linkAO_args_progStr(&a);
 
     pstack stack = { 0 };
-    prog   p = { .s = progStr, .e = (progStr + strlen(progStr)), .b = 0 };
+    prog p = { .s = progStr, .e = (progStr + strlen(progStr)), .b = 0 };
     push_stack(&stack, p);
     linkAO(stdout, ao, &stack);
     free(progStr);

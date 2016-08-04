@@ -310,7 +310,11 @@ Haskell's `Debug.Trace` (i.e. debug by printf) is convenient as a short term deb
 
 For performance, I keep trace messages in a finite trace buffer separated from normal GC. Trashing an argument additionally enables destructive read of text without implicit copies. Despite risk of losing some messages on overflow, this should cover the 99% use case easily enough. Even dumping 64kB should be sufficient for generating a useful debug-view of what's happening within a computation.
 
-The decision to trace arbitrary values is... questionable. It does improve flexibility of expression, enabling structured data with external rendering techniques. But it might hinder legibility of a plain text rendering a bit. Fortunately, plain text embedded in ABC should be reasonably legible.
+The decision to trace arbitrary values is... questionable. It does improve flexibility of expression, enabling structured data subject to ad-hoc external rendering techniques. OTOH, it might hinder legibility of a plain text rendering a bit. Fortunately, plain text embedded in ABC should be reasonably legible.
+
+### Fail Fast 
+
+The `{&trash}` annotation can serve a useful role for partial failure, i.e. creating the logical equivalent of an `undefined` value. A variant `{&abort}` annotation might serve a useful role in simply halting the computation.
 
 ### Stack Traces (Mid Priority)
 
