@@ -314,7 +314,7 @@ The decision to trace arbitrary values is... questionable. It does improve flexi
 
 ### Fail Fast 
 
-The `{&trash}` annotation can serve a useful role for partial failure, i.e. creating the logical equivalent of an `undefined` value. A variant `{&abort}` annotation might serve a useful role in simply halting the computation.
+The `{&trash}` or `{&trace}` annotation could serve a useful role for partial failure, i.e. creating the logical equivalent of an `undefined` value. It might be convenient to develop a variant of `{&trace}` that dumps the whole environment, e.g. `{&abort}`.
 
 ### Stack Traces (Mid Priority)
 

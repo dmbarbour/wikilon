@@ -49,7 +49,7 @@
 
     <!-- Word Definition Headers; simplified regex for words -->
     <define-regex id="wc">[^\x00-\x20\[\]{}(|)"]</define-regex>
-    <define-regex id="ws">[ \x0A]</define-regex>
+    <define-regex id="ws">[ \n]</define-regex>
     <define-regex id="word">\%{wc}+</define-regex>
 
     <!-- Tokens -->
@@ -65,15 +65,6 @@
         <match>\{[\x2E\x3A]\%{word}\}</match>
     </context>
 
-    <!-- Recognizing Embedded Binaries (ABC Base 16 variant) -->
-    <define-regex id="b16c">[bdfghjkmnpqstxyz]</define-regex>
-    <define-regex id="b16b">\%{b16c}\%{b16c}</define-regex>
-    <define-regex id="b16w">\%{b16b}\%{b16b}\%{b16b}\%{b16b}</define-regex>
-    <define-regex id="b16s">\%{b16w}+</define-regex>
-    <context id="embeddedBinary" class="no-spell-check" style-ref="binary">
-        <match>\%{b16s}</match>
-    </context>
-
     <!-- Recognizing Embedded Texts -->
     <context id="embeddedText" style-ref="literal" class="string" class-disabled="no-spell-check">
         <start>"</start>
@@ -82,9 +73,6 @@
             <context id="badEscapeLF" style-ref="def:error">
                 <match>^[^ ~]</match>
             </context>
-            <context ref="embeddedBinary"/>
-            <context ref="def:in-comment"/>
-            <context ref="markdown:markdown-syntax"/>
         </include>
     </context>
 
@@ -118,7 +106,7 @@
     </context>
 
     <context id="defineWord" class="no-spell-check" style-ref="define">
-        <match>^@\%{word}\%{ws}</match>
+        <match>^@\%{word}[ \xA]</match>
     </context>
 
     <context id="ao" class="no-spell-check">

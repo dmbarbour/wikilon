@@ -152,11 +152,9 @@ static void _wikrt_eval_step_inline(wikrt_cx* cx)
     if(!wikrt_otag_block(*obj)) { 
         wikrt_set_error(cx, WIKRT_ETYPE); 
     } 
-    else if(wikrt_block_is_flagged_lazy(*obj)) {
-        // Explicit laziness will simply involve wrapping our block.
-        // For now, I'm treating lazy pending values as a specialized
-        // form of asynchronous value. We can force evaluation with
-        // {&join}.
+    else if(0 != (WIKRT_BLOCK_LAZY & *obj)) {
+        // Lazy blocks produce pending values. 
+        (*obj) &= ~(WIKRT_BLOCK_LAZY); // don't preserve laziness
         if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
         cx->val = wikrt_alloc_cellval_r(cx, WIKRT_O, WIKRT_OTAG_PEND, cx->val);
     }
@@ -215,16 +213,27 @@ static void _wikrt_eval_step_condap(wikrt_cx* cx)
     }
 }
 
-static void _wikrt_todo_asynch(wikrt_cx* cx) 
+static void _wikrt_asynch(wikrt_cx* cx) 
 {
-    // TODO: mark a value as 'asynchronous' 
-    // i.e. so it acts as if processed via forked identity
+    // The `{&asynch}` annotation is intended to mark a value as
+    // asynchronous. For now, I'll just model it as a lazy value
+    // to ensure access is via `{&join}`.
+    wikrt_intro_id_block(cx);
+    wikrt_block_lazy(cx);
+    _wikrt_eval_step_apply(cx);
 }
 
-static void _wikrt_todo_join(wikrt_cx* cx)
+static void _wikrt_join(wikrt_cx* cx)
 {
-    // TODO: 'join' will attempt rendezvous with a parallel 
-    //   and/or lazy computation.
+    // The {&join} annotation serves a role similar to `seq` in Haskell.
+    // It tells our runtime to wait upon a pending computation.
+    
+    // At the moment, pending computations are all modeled as (block*value)
+    // pairs (hidden behind the `pending` tag). This might change in the 
+    // future, e.g. for efficient asynch values. 
+    wikrt_open_pending(cx);
+    wikrt_assocr(cx);
+    _wikrt_eval_step_apply(cx);
 }
 
 
@@ -287,8 +296,8 @@ static const wikrt_op_evalfn wikrt_op_evalfn_table[OP_COUNT] =
 , [ACCEL_ANNO_STOW] = wikrt_stow
 , [ACCEL_ANNO_LAZY] = wikrt_block_lazy
 , [ACCEL_ANNO_FORK] = wikrt_block_fork
-, [ACCEL_ANNO_JOIN] = _wikrt_todo_join
-, [ACCEL_ANNO_ASYNCH] = _wikrt_todo_asynch
+, [ACCEL_ANNO_JOIN] = _wikrt_join
+, [ACCEL_ANNO_ASYNCH] = _wikrt_asynch
 , [ACCEL_ANNO_TEXT] = wikrt_anno_text
 , [ACCEL_ANNO_BINARY] = wikrt_anno_binary
 }; 

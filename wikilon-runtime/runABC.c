@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <time.h>
 
 #define APP_VER 20160721
 
@@ -101,7 +102,7 @@ void print_trace_messages(wikrt_cx* cx)
     do {
         char const* const msg = wikrt_trace_read(cx);
         if(NULL == msg) { break; }
-        fprintf(stderr, "[{&trace}]%%\n%s\n", msg);
+        fprintf(stderr, "[{&trace}]%%    %s\n", msg);
     } while(1);
 }
 
@@ -118,17 +119,11 @@ void print_text(wikrt_cx* cx, FILE* out)
     wikrt_drop(cx);
 }
 
-void print_value(wikrt_cx* cx, FILE* out)
-{
-    wikrt_quote(cx);
-    wikrt_block_to_text(cx);
-    print_text(cx, out);
-    fputc('\n', out);
-    fflush(out);
-}
 
 int main(int argc, char const* const argv[]) 
 {
+    srand((unsigned int)time(NULL));
+
     runABC_args a = parseArgs(1+argv); // skip argv[0], program name
     if(a.help) { printHelp(stdout); return 0; }
     else if(a.badArg) { 
@@ -145,25 +140,38 @@ int main(int argc, char const* const argv[])
 
     // enable a record of {&trace} messages (if requested)
     if(a.trace) { 
-        size_t const trace_buff_size = 60 * 1000;
+        size_t const trace_buff_size = 100 * 1000;
         wikrt_trace_enable(cx, trace_buff_size); 
     }
 
-    // model our `∀e` by use of a randomly sealed linear value.
+    // model `∀e` by use of a pseudo-randomly sealed linear value.
+    //  i.e. something like `[]kf{:123456}`, but with the
+    //  digits being unpredictable so they won't be part of any
+    //  source code.
     char runABC_seal[WIKRT_TOK_BUFFSZ];
     unsigned int sealerId = ((unsigned int)rand()) % 1000000;
-    sprintf(runABC_seal, ":runABC-%06u", sealerId);
-    intro_block(cx, "");
-    wikrt_block_aff(cx);
-    wikrt_block_rel(cx);
+    sprintf(runABC_seal, ":%06u", sealerId);
+    intro_block(cx, ""); 
+    wikrt_block_aff(cx); // cannot copy e
+    wikrt_block_rel(cx); // cannot drop e
     wikrt_wrap_seal(cx, runABC_seal);
 
-    // I'd like to do some streaming computations. ABC is designed for
-    // it, after all. But for now, just grab entire STDIN as one large
-    // program and process it.
+    // When done constructing the value, destroy the `∀e` environment.
+    // I.e. compose the `∀e.e→(v*e)` with a `∀v.(v*e)→v` for the
+    // specific initial environment we provide. 
+    char elim_e[WIKRT_TOK_BUFFSZ + 8];
+    sprintf(elim_e, "vrw{.%s}$c", (1 + runABC_seal));
+    intro_block(cx, elim_e);
+
+    // For now, just grab entire input program from STDIN.
     char* prog = streamToString(stdin);
     intro_block(cx, prog);
     free(prog);
+
+    // at this point we have
+    //    ([∀e.e→(v*e)] * ([∀v.(v*e)→v] * (e * 1))).
+    wikrt_compose(cx); // ([e→v]*(e*1))
+    wikrt_apply(cx);   // ((pending v) * 1)
 
     if(wikrt_error(cx)) {
         char const* const e = (WIKRT_CXFULL == wikrt_error(cx)) ? "too large" : "bad parse";
@@ -171,34 +179,41 @@ int main(int argc, char const* const argv[])
         return -1;
     }
 
-    wikrt_apply(cx);
+    // Okay, go ahead and perform evaluations.
     int effort = 0;
     bool needs_more_work = true;
     while((effort++ < a.quota) && needs_more_work) {
         needs_more_work = wikrt_step_eval(cx);
         print_trace_messages(cx);
     }
+    fflush(stderr);
 
-    // ensure type of comptuation.
-    wikrt_assocr(cx); wikrt_wswap(cx); // ((v*e)*1) → (e*(v*1))
-    char envSeal[WIKRT_TOK_BUFFSZ];
-    wikrt_unwrap_seal(cx, envSeal); 
-    if(!match(runABC_seal, envSeal)) { 
-        // we expected`:runABC-999999 (or similar)
-        wikrt_set_error(cx, WIKRT_ETYPE); 
+    // Translate our result to text.
+    wikrt_quote(cx);
+    if(needs_more_work) {
+        // add a `{&join}` to unwrap the pending result.
+        intro_block(cx, "{&join}");
+        wikrt_wswap(cx);
+        wikrt_compose(cx);
     }
-    wikrt_wswap(cx); // (v * (e * 1))
-
-    // print our text output. 
-    print_value(cx, stdout);
+    wikrt_block_to_text(cx);
 
     if(wikrt_error(cx)) {
-        char const* const e = (WIKRT_CXFULL == wikrt_error(cx)) ? "out of memory" 
-                            : needs_more_work ? "insufficient effort" 
-                            : "runtime type error";
-        fprintf(stderr, "error evaluating ABC program: %s\n", e);
+        char const* const e = (WIKRT_CXFULL == wikrt_error(cx)) ? 
+            "out of memory" : "runtime type error";
+        fprintf(stderr, "evaluation failure: %s\n", e);
         return -1;
-    } 
+    }
+
+    char const* const attrib_result = "{&ABC}{&result}";
+    char const* const attrib_incomplete = needs_more_work ? "{&incomplete}" : "";
+
+    fprintf(stdout, "[%s%s]%%    ", attrib_result, attrib_incomplete);
+    print_text(cx, stdout);
+    fflush(stdout);
+    fputc('\n', stderr); // in case of console output
+
+    assert(!wikrt_error(cx)); // shouldn't be new errors for extracting text.
 
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(env);

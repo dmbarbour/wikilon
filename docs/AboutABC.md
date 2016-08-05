@@ -327,7 +327,9 @@ It also may give ABC a more dynamic feel, especially combined with dependently t
 
 ### Annotations for Performance and Debugging
 
-Annotations are tokens for debugging or performance. Annotations are indicated by use of an `&` prefix in the token, e.g. in `{&fork}` or `{&≡}`. Annotations must not affect the logically observable behavior of a correct program. An ABC interpreter or compiler should be able to ignore annotations that it does not recognize. However, annotations may cause an incorrect program to fail. Further, incorrect use of annotations (e.g. making a bad type assertion) may result in an incorrect program.
+Annotations are tokens for debugging or performance. Annotations are indicated by use of an `&` prefix in the token, e.g. in `{&lazy}` or `{&join}`. Annotations have *identity* semantics - they do not affect the logically observable behavior of a correct program. However, annotations may cause an incorrect program to fail. And incorrect use of annotations may cause a program to be incorrect. 
+
+The idea is that a runtime should be able to ignore annotations (or sets of related annotations) that it does not recognize and still produce the same result, albeit perhaps less efficiently.
 
 Ideas for what annotations might do:
 
@@ -335,57 +337,27 @@ Ideas for what annotations might do:
 * stow and load values from a backing store
 * hints for type or termination checking
 * debug output, breakpoints, location tracking
-* optimized representations (e.g. arrays) 
+* optimized representations (e.g. compact text) 
 * trash data while perserving substructure
 * compile or JIT computed blocks of code 
 * move computations and data to a GPGPU
 * support and enable memoization or caching
 
-For example, an annotation `{&trash}` might indicate that a block *will never be applied* in the future. An attempt to violate this annotation would become an obvious error in the software. Such annotations would enable users to effectively drop 'relevant' values from the runtime's memory, more or less equivalent to `/dev/null`. This may be convenient when simulating a network, for example.
+For example, an annotation `{&trash}` might indicate that a value will never be observed in the future, enabling its memory to be recycled while leaving a lightweight placeholder. And `{&trace}` might serialize a value to a debug output buffer, and also trash it.
 
-In many cases, use of annotations may be coupled. For example, use of a `{&fork}` annotation to parallelize a computation might be coupled with a `{&join}` annotation to synchronize and access the computed result. Any attempt to access the parallel value without performing the `{&join}` may then be an error. Coupling can greatly simplify implementation by eliminating need for transparent handling of, for example, a parallel pair during an `wrzl` operation.
+Correct use of annotations may be paired. For example, with explicit laziness we might use `{&lazy}` to mark a block to generate pending values, then use `{&join}` on pending values to observe them. Explicit `{&join}` is not as convenient as laziness by default, but it does simplify implementation.
 
-Eventually, we should have a large set of de-facto standard annotations that are recognized by most runtimes. Meanwhile, each runtime is free to define its own set.
+Annotations may require specific types. A simple case is that `{&text}` might require a `∀e.(text*e)` argument, and would compact the text value and ensure it serializes as embedded text.
 
-### Spatial-Temporal Types and Capabilities
+### Parallelism
 
-ABC is designed for RDP, and RDP's design leverages a model of spatial-temporal types in a context of programming overlay networks, heterogeneous computing, and distributed systems. For security reasons, these spatial-temporal types cannot be directly observed or manipulated by ABC primitives. However, they may be influenced or observed by capability invocations.
+For scalable parallelism, I propose a `{&fork}` annotation. 
 
-A 'spatial' type is essentially a description of *where* a value is. This includes physical locations with varying precision - server, client, GPU, FPGA, specific threads. Additionally, virtual or logical locations may be modeled to simplify reasoning about interactions between subprograms, or to model staging or pipelines.
+Fork receives a *process function* of recursive form `type P i o = [i → (o * P i o)]`. The runtime would then move the function into a separate process, i.e. with its own memory manager and input queue. Applying the function would then enqueue the argument (of type `i`) and immediately return a pending result of type `o` and the handle to enqueue the next argument. Use of `{&join}` would later allow the caller (or any other process) to wait on the `o` result.
 
-A 'temporal' type is a description of *when* a value can be observed, and might be described as a rational number of seconds from program start. Temporal types are useful to control reactive feedback loops and to understand and manage latencies in distributed systems. Upper bounds - expirations - are also useful. They help model timeout protocols, control distribution, and interact in interesting ways with substructural types.
+It is possible to fork a process for a single invocation. But the process function design can amortize the costs of constructing the process and its initial state over a sequence of multiple calls. It also provides effective control over communication costs. This should scale far more effectively than Haskell's par/seq pattern (which assumes ultra-lightweight parallelism and communication).
 
-The space-time model is a matter of convention, with a de-facto standard that is not part of ABC's definition. It is enforced through the capabilities protocols. My current vision has the following characteristics:
-
-1. Adding two numbers, comparing two values, quoting a structure, etc. requires all inputs coexist in space-time. Some delay for adding or comparing numbers may be implicit, but movement is generally explicit. 
-2. Temporal manipulations use a 'temporal cursor' concept: rather than delaying values directly, you advance values to a cursor, which can be manipulated independently. (The idea is to maximize idempotence and commutativity of delay operations.)
-3. New substructural types may be introduced, notably *expiration* for blocks. A block can be marked for expiration, such that it is an error to apply it after a known point in time. For relevant blocks, it may further be an error to delay it beyond that point. Similarly, blocks may be specific to location.
-4. Spatial manipulations are very specific, i.e. each capability representing a *directed edge* between spaces in a connectivity graph. Developers can constrain the connectivity graph in useful ways, e.g. to enforce staging of computation. 
-5. For security reasons, reflection on spatial-temporal types is separate from distribution and manipulation. In general, we don't want most code to be sensitive to where it executes.
-
-The intention is that these capabilities are distributed *statically*, i.e. using partial evaluation or a staged model, such that the spatial-temporal information is available at compile-time. Also, while spatial-temporal types and capabilities are intended primarily for RDP, I expect they would be useful for imperative programming.
-
-*NOTE:* Distributed systems must admit the possibility of non-deterministic disruption. In many cases, it can be useful to model distribution capabilities as having the possibility of failure. 
-
-*NOTE:* Physical resources are almost always location specific, and must be manipulated from the right location. The idea is to put code near the resource, rather than to remotely manipulate it.
-
-### Uniqueness Types and Capabilities
-
-Modeling creation of 'new' or 'unique' values requires special consideration in ABC. Due to spatial idempotence, two equivalent requests for a 'new' value must return the same result. Consequently, it is necessary to ensure that each request for a unique value is a unique request.
-
-Linear and affine types are useful in this endeavor. ABC systems can model a 'uniqueness source' - a unique capability that generates unique values on demand. While a uniqueness source cannot be copied (because it would no longer be unique!), it may be *forked* such that there are now two unique uniqueness sources. An operation to construct a unique value will consume the uniqueness source, so it becomes necessary to iterate between forking and construction. 
-
-New unique constructs will typically be one of:
-
-* a sealer/unsealer pair (see Value Sealing, below)
-* exclusive capabilities to access a state resource
-* a cryptographically secure pseduo-random number generator 
-
-Exclusive state capabilities correspond to conventional allocations, e.g. to `newIORef` in Haskell. For some state models (specifically, those that also respect *causal commutativity*, though this excludes most imperative state models) it may be permissible to share access to the state after obtaining the initially exclusive capabilities. 
-
-In many contexts - live programming, orthogonal persistence, open systems - it is useful to ensure *stability* of unique values. 
-
-Stability is readily achieved using a filepath/URL metaphor: when 'forking' a uniqueness source, we provide an identifier for the child that is unique within the parent. This stabilizes uniqueness with respect to changes in the order children are constructed. If used with a little discipline, significant restructuring of the source code becomes feasible without damaging persistence or relationships assuming stable identity.
+I'm also interested in supporting GPGPU computing as an orthogonal basis for high performance parallelism. But that's likely to rely on ABCD extensions for vector/matrix/collections processing.
 
 ### Value Sealing
 
@@ -410,33 +382,38 @@ Here the `$` is serving as a prefix roughly meaning 'secured'. We have a sealer,
 
 Value sealing is an important companion to object capability security. It provides a basis for [rights amplification](http://erights.org/elib/capability/ode/ode-capabilities.html#rights-amp), whereby you can gain extra authority by possessing both a capability and a sealed value, or by unsealing a value to gain a capability. It can also enforce various modularity patterns even in distributed systems. Value sealing should be considered orthogonal to transport-layer encryption. 
 
-### ABC Resources for Large Values, Separate Compilation, Dynamic Linking
+### Value Stowage and Data Resources
 
-ABC values may be quoted to generate a string of bytecode having type `e → (value * e)`. This bytecode can be given a unique identifier. The value can then be replaced by its identifier until it needs to be loaded into memory. This concept is both simple and versatile. Some roles:
+ABC values might be quoted to generate a string of bytecode having type `e → (value * e)`. This bytecode could be given a unique identifier in a runtime or network. The identifier would then serve as a lightweight placeholder for the value until it needs to be loaded into memory. 
 
-* virtual memory, work with gigabytes in much less memory
-* reference values without transmitting them across network
-* compression, store big value only once then name it many times
-* dynamic linking, load functions shortly before inlining them
-* separate compilation, maintain cache of compiled functions
+This concept is simple and versatile. Some roles:
 
-Resource identifiers will in general be local to a runtime environment (potentially a distributed environment). Local resource identifiers have the advantage of using smaller identifiers and supporting precise garbage collection. With a network session, local resource identifiers could be shared with a remote client who may ask for (and optionally cache) the returned value. (Such requests could easily be protected by HMAC.) For ideal caching, a resource identifier should never be reused (unless the same value is constructed again).
+* replaces virtual memory, work with big data in much less memory
+* compression - cache a large value once, reference it many times
+* hypermedia of sorts - lightweight naming for remote values
+* dynamic linking - load a function just before inlining
+* separate compilation - compile the named functions
 
-It is also feasible to create *global* resource identifiers, using a secure hash of the bytecode. These do make GC difficult. At the moment, there is very little need for global identifiers, but they might become interesting if ABC runtimes are widely used. A service could graduate widely used local resources into global ones.
+Resource identifiers could potentially exist at multiple scopes. E.g. use of a secure hash could support global identifiers, at the cost of complicating GC. Conversely, local identifiers might be favored within an environment or a point-to-point connection, perhaps guarded by HMAC for security. For simplified caching, a resource identifier should never be reused for a different value.
 
-Within an ABC stream, an ABC resource will be indicated by token. For local resources in Wikilon runtime, I am currently considering something like:
+Value resources could feasibly be represented within an ABC stream by a variety of mechanisms. We could feasibly use lazy values as a basis. For example, `#1234567[{load}]{&lazy}$` would tell our runtime to lazily load resource ID 1234567 upon a future `{&join}` request. Unfortunately, any separation of the resource identifier from a `{load}` action complicates potential interactions with garbage collection. 
 
-        {'kf/Scope/ResourceID}
+A proposed serialization is to shove resources into a single token:
 
-The prefix `'kf` is indicating a value resource `'` along with the substructural attributes `kf`. A value without substructural constraints could voluntarily the `kf`. The `Scope` could feasibly identify a server or session or global scope. Some general rules are first that a `Scope/ResourceID` should never be reused for a different value (such that a cached resource is never invalid, though access may expire), and second that resources be unforgeable (such that a hacker cannot guess at identifiers and retrieve security-sensitive information). Use of a 60-80 bit HMAC in a local resource ID is probably sufficient to prevent forgery.
+        {'kf/Scope/Resource}
 
-Unlike URLs, we're constrained to 63 bytes for our token strings. Scope and ResourceID have practical size limits, and sophisticated hierarchical structure is not recommended.
+The prefix `'kf` indicates first that we are identifying a value resource `'` then its substructural attributes `kf` followed by a search scope and resource ID. The resource should include an HMAC or other bearer token to authenticate requests. A token limits us to 63 bytes. Fortunately, this is sufficient in practice... assuming we avoid hierarchical IDs.
 
-Use of ABC resources will be driven by related annotations. I'm proposing `{&stow}` to construct the value resource (and reduce memory pressure) coupled with `{&load}` to subsequently access it, forcing it into local memory. Stowage is *latent*, which is very important for performance: if we repeatedly `{&stow}` and `{&load}` a value within a loop, we'll not get around to serializing our value to an external store (not before our loop terminates). While stowage is local, it seems feasible to graduate a stowed value to ever wider scopes based on profiling network traffic.
+Use of ABC resources is guided by annotations. The proposal is:
 
-Anyhow, between the explicit use of `{&load}` and fast access to its substructural attributes, we can perform generic data plumbing on our value resource *without* loading it.
+* `{&stow}` shoves a value into cold storage, e.g. into a database
+* `{&load}` accesses a resource, copying it into local memory
 
-*Aside:* Originally I had ABC resources for arbitrary code and value resources were the specialization. However, this does not have a good story for how the ABC resources are decided in the first place, leaving that to some unnamed external agent. The current approach has a more complete story, and works well enough with arbitrary code - e.g. `{'/resource}{&load}vr$c` to specify a block resource then immediately inline it.
+Optimally, stowage is *latent*, enabling load-stow-load-stow loops to avoid most intermediate interactions with the database. This is feasible by integrating stowage with any form of generational garbage collection. Memory pressure heuristics might also increase latency, and thus further reduce unnecessary network traffic.
+
+Value stowage provides a simple and robust basis for shared libraries, separate compilation, dynamic linking, etc.. This is represented by simple patterns such as `{'kf/Scope/Resource}vr$c` to load a block of code as a value, then inline it (with `vr$c`). Conveniently, it is feasible to perform compilation entirely within an ABC program via annotations.
+
+*NOTE:* It seems feasible to unify stowage with asynchronous values. However, I'm still hesitant to do so, due to performance concerns.
 
 ### Encoding Binary Data in ABC
 

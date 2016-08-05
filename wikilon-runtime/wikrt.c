@@ -267,7 +267,7 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
                 "sane memory management heuristics");
     wikrt_size const desired = (WIKRT_MEM_FACTOR * cx->compaction_size) 
                              + (WIKRT_MEM_FACTOR_PRIOR * prior_size)
-                             + sz;
+                             + ((WIKRT_MEM_FACTOR + 1) * sz);
     wikrt_size const pgsz = (WIKRT_MEM_PAGEMB << 20);
     wikrt_size const target = WIKRT_LNBUFF(desired, pgsz); // page aligned
     if(cx->alloc > target) {
@@ -374,6 +374,15 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx)
     }
 }
 
+static inline wikrt_val_type wikrt_typeof_const(wikrt_cx* cx, wikrt_val v)
+{
+    if(WIKRT_UNIT == v) { return WIKRT_TYPE_UNIT; }
+    else if(WIKRT_NORMAL_TRASH == v) { return WIKRT_TYPE_TRASH; }
+    else {
+        fprintf(stderr, "%s: unrecognized constant %d\n", __FUNCTION__, (int)(v));
+        abort();
+    }
+}
 
 wikrt_val_type wikrt_type(wikrt_cx* cx) 
 {
@@ -381,7 +390,7 @@ wikrt_val_type wikrt_type(wikrt_cx* cx)
     if(!okPeek) { return WIKRT_TYPE_UNDEF; }
     wikrt_val const v = wikrt_pval(cx, cx->val)[0];
     switch(wikrt_vtag(v)) {
-        case WIKRT_U: return WIKRT_TYPE_UNIT;
+        case WIKRT_U: return wikrt_typeof_const(cx,v);
         case WIKRT_P: return WIKRT_TYPE_PROD;
         case WIKRT_UL: // sum
         case WIKRT_UR: // sum
@@ -721,19 +730,25 @@ void wikrt_drop(wikrt_cx* cx)
     }
 }
 
+void wikrt_erase_trashval(wikrt_cx* cx, wikrt_ss ss)
+{
+    wikrt_val* const pv = wikrt_pval(cx, cx->val);
+    if(0 == ss) { 
+        (*pv) = WIKRT_NORMAL_TRASH; 
+    } else {
+        (*pv) = WIKRT_UNIT_INR;
+        wikrt_otag const otag = WIKRT_OTAG_TRASH | wikrt_ss_to_block_flags(ss);
+        wikrt_wrap_otag(cx, otag);
+    }
+}
+
 void wikrt_trash(wikrt_cx* cx)
 {
     if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    _Static_assert(!WIKRT_NEED_FREE_ACTION, "free trashed data");
-
     wikrt_val* const pv = wikrt_pval(cx, cx->val);
     wikrt_ss ss = 0;
     wikrt_drop_v(cx, *pv, &ss);
-    (*pv) = WIKRT_UNIT_INR;
-
-    // use block relevant/affine tags.
-    wikrt_otag const otag = WIKRT_OTAG_TRASH | wikrt_ss_to_block_flags(ss);
-    wikrt_wrap_otag(cx, otag);
+    wikrt_erase_trashval(cx, ss);
 }
 
 void wikrt_intro_unit(wikrt_cx* cx) {
@@ -1861,6 +1876,12 @@ static inline wikrt_val* wikrt_end_of_short_opslist(wikrt_cx* cx, wikrt_val* lis
     return NULL;
 }
 
+void wikrt_intro_id_block(wikrt_cx* cx)
+{
+    wikrt_intro_smallval(cx, WIKRT_UNIT_INR);
+    wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK);
+}
+
 // Compose two blocks in O(1) time. ([a→b]*([b→c]*e))→([a→c]*e).
 //
 // The most natural approach to composition in ABC is concatenation. However,
@@ -1964,7 +1985,7 @@ void wikrt_trace_write(wikrt_cx* cx)
     // Check whether the full text is read before trashing it.
     wikrt_sum_tag lr; 
     wikrt_unwrap_sum(cx, &lr);
-    wikrt_trash(cx);
+    wikrt_erase_trashval(cx, ss);
 
     // Stop tracing new messages if in an error state.
     if(wikrt_has_error(cx)) { return; } 
@@ -1973,12 +1994,6 @@ void wikrt_trace_write(wikrt_cx* cx)
     assert(bytes_read > 0); // Empty program is id, not a quoted value.
     bool const have_complete_msg = (WIKRT_INR == lr);
     if(have_complete_msg) { cx->tb.writer += (bytes_read + 1); }
-
-    // Preserve substructure. Add flags to the trash value.
-    wikrt_val* const pv = wikrt_pval(cx, cx->val);
-    wikrt_val* const po = wikrt_pobj(cx, (*pv));
-    assert(wikrt_p(cx->val) && wikrt_o(*pv) && wikrt_otag_trash(*po));
-    (*po) |= wikrt_ss_to_block_flags(ss);
 }
 
 char const* wikrt_trace_read(wikrt_cx* cx) 

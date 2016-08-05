@@ -566,8 +566,8 @@ void wikrt_unwrap_seal(wikrt_cx*, char*);
  * will result in a runtime type error.
  *
  * A trashed linear value serializes as `[]kf{&trash}`, i.e. preserving
- * both substructure and the 'trashed' type. The dynamic type for trashed
- * values is 'WIKRT_TYPE_TRASH'. 
+ * both substructure and the 'trashed' type but losing the original data
+ * and structure of the value.
  */
 void wikrt_trash(wikrt_cx*);
 

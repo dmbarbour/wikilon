@@ -17,7 +17,7 @@ all: lib runtests runABC linkAO
 lib: libwikilon-runtime.so
 
 clean:
-	rm -f $(RUNTIME_OBJECTS) $(LINKAO_OBJECTS) $(RUNABC_OBJECTS)
+	rm -f $(RUNTIME_OBJECTS) $(LINKAO_OBJECTS)
 	rm -f libwikilon-runtime.so
 	rm -f runABC linkAO testSuite
 	rm -rf testdir

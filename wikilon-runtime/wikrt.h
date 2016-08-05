@@ -182,6 +182,12 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
 #define WIKRT_UL    6
 #define WIKRT_UR    7
 
+#define WIKRT_REF_MASK_TAG    (7)     
+#define WIKRT_REF_MASK_ADDR   (~WIKRT_REF_MASK_TAG)
+#define wikrt_vaddr(V) ((V) & WIKRT_REF_MASK_ADDR)
+#define wikrt_vtag(V) ((V) & WIKRT_REF_MASK_TAG)
+#define wikrt_tag_addr(TAG,ADDR) ((TAG) | (ADDR))
+
 // for static assertions
 #define WIKRT_USING_MINIMAL_BITREP 1
 
@@ -189,19 +195,27 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
 #define wikrt_copy_shallow(V) (4 & (V)) 
 
 // Small constants: 
+//
+// The most important small constant is the 'unit' value, which enables
+// the unit-left and unit-right (booleans, empty list, etc.) to also
+// be encoded in a single word.
 // 
-// Unit will be encoded as the constant zero.
+// Trash that can be copied or dropped as a normal value, normal trash,
+// is also encoded as a small constant to maximize memory recovery.
+//
+// For performance reasons, small constants must not directly encode 
+// pairs nor anything with substructural types. Encoding pairs wrapped
+// with sums, e.g. short lists, is okay. Small constants might encode
+// small binary or textual data (for records, tables, etc.).
 
 
 #define WIKRT_UNIT        WIKRT_U
 #define WIKRT_UNIT_INL    WIKRT_UL
 #define WIKRT_UNIT_INR    WIKRT_UR
 
-#define WIKRT_REF_MASK_TAG    (7)     
-#define WIKRT_REF_MASK_ADDR   (~WIKRT_REF_MASK_TAG)
-#define wikrt_vaddr(V) ((V) & WIKRT_REF_MASK_ADDR)
-#define wikrt_vtag(V) ((V) & WIKRT_REF_MASK_TAG)
-#define wikrt_tag_addr(TAG,ADDR) ((TAG) | (ADDR))
+#define WIKRT_SMALL_CONST(N) (WIKRT_U | (N << 3))
+#define WIKRT_NORMAL_TRASH   WIKRT_SMALL_CONST(1)
+
 
 // I'll probably want to deprecate these
 static inline bool wikrt_p(wikrt_val v) { return (WIKRT_P == wikrt_vtag(v)); }
@@ -213,8 +227,7 @@ static inline bool wikrt_o(wikrt_val v) { return (WIKRT_O == wikrt_vtag(v)); }
  *
  * Small integers are indicated by low bits `100` and guarantee eighteen good
  * decimal digits. Wikilon runtime probably won't take the effort to support
- * larger integers any time soon.
- *
+ * larger integers any time soon. 
  */
 #define WIKRT_SMALLINT_MAX  (999999999999999999)
 #define WIKRT_SMALLINT_MIN  (- WIKRT_SMALLINT_MAX)
@@ -329,16 +342,17 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
  *
  * WIKRT_OTAG_TRASH
  *
- *    A placeholder for a value that has been marked as garbage, allowing
- *    its memory to be recycled. Preserves substructural properties. Any
- *    attempt to access or observe the value results in a type error, but
- *    it may be deleted or copied like the original value.
+ *    A placeholder value, generally produced by the {&trash} or {&trace}
+ *    annotations. The original value was marked as garbage, its memory
+ *    recycled, leaving only this opaque hole. This form of trash has 
+ *    substructural attributes, otherwise I favor WIKRT_NORMAL_TRASH.
  *
  * WIKRT_OTAG_PEND
  *
- *    Just a tagged (block * value) pair, representing an incomplete
- *    or latent evaluation. Parallel values may receive special attention
- *    later, but I'll probably use a different OTAG.
+ *    A pending value, e.g. from a latent or parallel computation. Pending
+ *    values are currently represented by `(pending (block * value))` as
+ *    lazy values in general. I might specialize in the future, or just use
+ *    blocks with special tokens.
  *
  * I'd like to eventually explore logical copies that work with the idea of
  * linear or affine values, but I haven't good ideas for this yet - use of
@@ -659,8 +673,7 @@ static inline void wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
     (*v) = wikrt_alloc_cellval_r(cx, WIKRT_O, otag, (*v));
 }
 
-
-
+void wikrt_intro_id_block(wikrt_cx* cx);
 
 static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
     wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), v, ss); }
@@ -714,8 +727,10 @@ wikrt_otag wikrt_open_block_ops(wikrt_cx* cx);
 // (pending (block * value)) * e → (block * value) * e
 void wikrt_open_pending(wikrt_cx* cx);
 
+void wikrt_erase_trashval(wikrt_cx* cx, wikrt_ss ss); // (v*e)→(trash*e)
 static inline bool wikrt_trashval(wikrt_cx* cx, wikrt_val v) {
-    return wikrt_o(v) && wikrt_otag_trash(*wikrt_pobj(cx, v));
+    return (WIKRT_NORMAL_TRASH == v)
+        || (wikrt_o(v) && wikrt_otag_trash(*wikrt_pobj(cx, v)));
 }
 
 // utility for incremental construction of large binaries and texts.

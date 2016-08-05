@@ -480,11 +480,17 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
 
     case WIKRT_TYPE_TRASH: {  // e.g. []kf{&trash} for linear value
         wikrt_val const v = wikrt_pval(cx, cx->val)[0];
-        wikrt_val* const pobj = wikrt_pobj(cx, v);
-        assert(wikrt_o(v) && wikrt_otag_trash(pobj[0]) && (WIKRT_UNIT_INR == pobj[1]));
-        pobj[0] = ((~0xFF) & pobj[0]) | WIKRT_OTAG_BLOCK; // write a block to preserve substructure
-        wikrt_intro_op(cx, ACCEL_ANNO_TRASH); wikrt_consd(cx); // {&trash} the block to preserve opacity
-        goto tailcall; // print as a block
+        if(WIKRT_NORMAL_TRASH == v) {
+            wikrt_drop(cx);
+            wikrt_writer_putcstr(cx, w, "#{&trash}");
+            return;
+        } else {
+            wikrt_val* const pobj = wikrt_pobj(cx, v);
+            assert(wikrt_o(v) && wikrt_otag_trash(pobj[0]) && (WIKRT_UNIT_INR == pobj[1]));
+            pobj[0] = ((~0xFF) & pobj[0]) | WIKRT_OTAG_BLOCK; // write a block to preserve substructure
+            wikrt_intro_op(cx, ACCEL_ANNO_TRASH); wikrt_consd(cx); // {&trash} the block to preserve opacity
+            goto tailcall; // print as a block
+        }
     } break;
 
     case WIKRT_TYPE_UNDEF:
