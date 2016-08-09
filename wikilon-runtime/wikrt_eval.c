@@ -11,16 +11,12 @@
  * representing incomplete application of the block to the value.
  * Use of `wikrt_step_eval` will apply the block with a reasonable
  * effort, then return. 
-
-pending value is just a tagged (block * value) pair.
- During
- * evaluation, I'll need to build a stack that I can return
- * to in O(1) time. I can rebuild (block * value) from the stack.
- *
- * The 'stack' in question could simply be a list of `ops` lists.
  *
  * Effort Quota:
- *
+ * 
+ * I've decided to leave this decision to the API client, albeit with
+ * only a few sensible options. See wikrt_set_step_effort().
+*
  * Infinite loops will be a problem. So I'll just halt any computation
  * that appears to take too long. Eventually (with parallelism) I may
  * need something sophisticated, like a shared pool for computation
@@ -47,8 +43,6 @@ pending value is just a tagged (block * value) pair.
  *
  * I've decided to move this responsibility into the parser. 
  */
-
-#define WIKRT_EVAL_COMPACTION_STEPS 4
 
 static inline void wikrt_eval_push_op(wikrt_cx* cx, wikrt_op op) 
 {
@@ -147,9 +141,8 @@ static inline bool wikrt_block_is_flagged_lazy(wikrt_otag otag) {
 static void _wikrt_eval_step_inline(wikrt_cx* cx) 
 {
     // ([a→b]*a) → b. Equivalent to ABC code `vr$c`.
-
     wikrt_val* const v = wikrt_pval(cx, cx->val);
-    bool const okType = wikrt_p(cx->val) && wikrt_o(*v) && wikrt_p(cx->cc);
+    bool const okType = wikrt_p(cx->val) && wikrt_o(*v);
     if(!okType) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
     wikrt_val* const obj = wikrt_pobj(cx, (*v));
 
@@ -298,7 +291,7 @@ static const wikrt_op_evalfn wikrt_op_evalfn_table[OP_COUNT] =
 _Static_assert((WIKRT_ACCEL_COUNT == 17), 
     "evaluator is missing accelerators");
 
-/* Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e).
+/* Construct an evaluation. ([a→b]*(a*e)) → ((future b) * e).
  *
  * At the moment, this constructs a (pending (block * value)) structure.
  * The function wikrt_step_eval will need to preserve this structure if
@@ -361,8 +354,8 @@ static void wikrt_run_eval_object(wikrt_cx* cx)
 {
     // handle extended operators: tokens and opvals.
     // The operator should be on the cx->val stack.
-    assert(wikrt_p(cx->val) && wikrt_o(*wikrt_pval(cx, cx->val)));
     wikrt_val* const pv = wikrt_pval(cx, cx->val);
+    assert(wikrt_p(cx->val) && wikrt_o(*pv));
     wikrt_val* const pobj = wikrt_pobj(cx, *pv);
 
     if(wikrt_otag_opval(*pobj)) {
@@ -391,13 +384,13 @@ static void wikrt_run_eval_operator(wikrt_cx* cx, wikrt_op op)
     wikrt_op_evalfn_table[op](cx);
 }
  
-void wikrt_run_eval_step(wikrt_cx* cx, int tick_steps) 
+void wikrt_run_eval_step(wikrt_cx* cx) 
 {
-    uint64_t const tick_stop = cx->compaction_count + tick_steps;
-    // Loop: repeatedly: obtain an operation then execute it.
-    // Eventually I'll need a compact, high performance variant. 
-    do { // Obtain an operation from cx->pc.
-        if(WIKRT_PL == wikrt_vtag(cx->pc)) {
+    // TODO: use effort model.
+    uint64_t const tick_stop = cx->compaction_count + 5;
+    do { 
+        // Run basic ops in a tight loop.
+        while(wikrt_pl(cx->pc)) { 
             wikrt_addr const addr = wikrt_vaddr(cx->pc);
             wikrt_val* const node = wikrt_paddr(cx,addr);
             wikrt_val const  op   = node[0];
@@ -411,19 +404,27 @@ void wikrt_run_eval_step(wikrt_cx* cx, int tick_steps)
                 cx->val = wikrt_tag_addr(WIKRT_P, addr);
                 wikrt_run_eval_object(cx);
             }
-        } else if(WIKRT_UNIT_INR == cx->pc) {
-            bool const eval_abort = (cx->compaction_count > tick_stop) || wikrt_has_error(cx);
-            if(eval_abort) { return; }
+        }
 
+        // TODO: Develop and handle 'compact' operations sequences.
+
+        if(WIKRT_UNIT_INR == cx->pc) {
+            ++(cx->blocks_evaluated);
+
+            // Pop the call stack. Unless we've errored out, or it's empty,
+            // or we've reached our quota limitations.
             wikrt_val* const pcc = wikrt_pval(cx, cx->cc);
-            if(WIKRT_PL == wikrt_vtag(*pcc)) {  
+            bool const halt = wikrt_has_error(cx)
+                           || (WIKRT_UNIT_INR == (*pcc))
+                           || (cx->compaction_count >= tick_stop);
+            if(halt) { return; }
+
+            if(wikrt_pl(*pcc)) {
+                // pop call stack
                 _Static_assert(!WIKRT_NEED_FREE_ACTION, "todo: free stack cons cell");
-                wikrt_val* const pstack = wikrt_pval(cx, (*pcc));
-                cx->pc = pstack[0]; // pop the call stack
-                (*pcc) = pstack[1]; 
-                continue;
-            } else if(WIKRT_UNIT_INR == (*pcc)) {
-                return; // execution complete! 
+                wikrt_val* const node = wikrt_pval(cx, (*pcc));
+                cx->pc = node[0];
+                (*pcc) = node[1];  
             } else {
                 // This shouldn't be possible.
                 fprintf(stderr, "%s: unhandled evaluation stack type\n", __FUNCTION__);
@@ -434,70 +435,66 @@ void wikrt_run_eval_step(wikrt_cx* cx, int tick_steps)
             abort();
         }
     } while(true);
-    
-    #undef eval_timeout
 }
 
-/* Step through an evaluation.  
+/* Step fully or partially through evaluation of a future value.
+ * At the moment, this is just lazy futures. But parallel futures
+ * are also viable.
  *
- *    ((pending a) * e) → ((pending a) * e) on `true`
- *    ((pending a) * e) → (a * e) on `false` without errors
+ *    ((future a) * e) → (((future a) + a) * e)
  *
- * The pending tag wraps a (block * value) pair. I'll keep a
- * stack of incomplete operations lists during evaluation.
- *
- * During evaluation, the `e` value is hidden and I need a
- * stack for performance reasons. Additionally, I want very
- * fast access to the operations list. So I'll use the two
- * eval registers as follows:
- *
- *    cx->pc will contain my operations list (program counter)
- *    cx->cc will contain a (stack, e) pair.
- *
- * The stack is simply a list of ops-lists.
+ * During evaluation, the `e` value is tucked into cx->cc so it
+ * can be reliably recovered whether or evaluation completes. I
+ * also use a call stack (again in cx->cc). 
  */ 
 void wikrt_step_eval(wikrt_cx* cx)
 {
     // preliminary
     wikrt_require_fresh_eval(cx);
-    if(wikrt_has_error(cx)) { return false; }
+    wikrt_open_pending(cx);
+    if(wikrt_has_error(cx)) { return; }
 
-    // tuck `e` and an empty continuation stack into `cx->cc`. 
-    assert(WIKRT_REG_CC_INIT == cx->cc);
+    assert((WIKRT_REG_CC_INIT == cx->cc) 
+        && (WIKRT_REG_PC_INIT == cx->pc));
+
+    cx->pc = WIKRT_UNIT_INR;
     cx->cc = WIKRT_UNIT_INR;
-    wikrt_pval_swap(wikrt_pval(cx, cx->val), &(cx->cc));
-    wikrt_pval_swap(&(cx->val), &(cx->cc));
+    wikrt_pval_swap(wikrt_pval(cx, cx->val), &(cx->cc)); 
+    wikrt_pval_swap(&(cx->val), &(cx->cc)); 
 
-    // initialize `cx->pc` with the block's operations list. 
-    // Remove as much indirection as feasible.
-    assert(WIKRT_REG_PC_INIT == cx->pc);
-    wikrt_open_block_ops(cx);
-    wikrt_pval_swap(wikrt_pval(cx, cx->val), &(cx->pc));
-    _Static_assert((WIKRT_REG_PC_INIT == WIKRT_UNIT), "assuming elim_unit for pc");
-    wikrt_elim_unit(cx);
+    // At this point we have:
+    //  cx->val = (block * arg)
+    //  cx->cc  = (empty stack list * env)
+    //  cx->pc  = empty ops list
 
-    // At this point: cx->cc and cx->pc are initialized.
-    wikrt_run_eval_step(cx, WIKRT_EVAL_COMPACTION_STEPS); // run main evaluation loop
+    // Initiate then run our computation.
+    wikrt_run_eval_operator(cx, ACCEL_INLINE);
+    wikrt_run_eval_step(cx);
 
-    bool const finished = 
+    if(wikrt_has_error(cx)) { return; } // abandon effort
+
+    bool const finished =
         (WIKRT_UNIT_INR == cx->pc) &&
         (WIKRT_UNIT_INR == wikrt_pval(cx, cx->cc)[0]);
 
     if(finished) {
-        // recover the hidden `e` value from cx->cc
+        // recover the captured `e` value from cx->cc
         wikrt_pval_swap(&(cx->val), wikrt_pval(cx, cx->cc));
         wikrt_pval_swap(&(cx->val), &(cx->cc));
 
         // restore the registers.
         cx->pc = WIKRT_REG_PC_INIT;
         cx->cc = WIKRT_REG_CC_INIT;
+        
+        // Return our value 'in the right' to indicate completion.
+        wikrt_wrap_sum(cx, WIKRT_INR);
 
-        return false;
     } else {
+        // incomplete evaluation!
+        assert(WIKRT_UNIT_INR == cx->pc); // assume at least completed block
         // TODO: rebuild the `block` for the next evaluation step. Restore
         // the pending value structure and registers.
         wikrt_set_error(cx, WIKRT_IMPL);
-        return !wikrt_has_error(cx);
     }
 }
 

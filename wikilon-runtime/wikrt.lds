@@ -78,6 +78,7 @@
 
     wikrt_apply;
     wikrt_step_eval;
+    wikrt_set_step_effort;
 
     wikrt_quote;
     wikrt_block_aff;

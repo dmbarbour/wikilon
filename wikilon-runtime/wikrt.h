@@ -544,13 +544,18 @@ struct wikrt_cx {
     wikrt_size          skip;       // volume of reserved memory (favor recycling)
 
     // semispace and garbage collection.
-    wikrt_size          compaction_size;  // memory after compaction
+    wikrt_size          compaction_size;   // memory after compaction
     uint64_t            compaction_count;  // count of compactions
-    uint64_t            bytes_compacted;  // bytes copied during compaction
-    uint64_t            bytes_collected;  // bytes allocated then collected
+    uint64_t            bytes_compacted;   // bytes copied during compaction
+    uint64_t            bytes_collected;   // bytes allocated then collected
 
     // trace output for printf style debugging & warnings
     trace_buf           tb;
+
+    // controlling evaluation effort
+    wikrt_effort_model  effort_model;
+    uint32_t            step_effort;
+    uint64_t            blocks_evaluated;
 
     // other:
     //   child contexts for parallelism
@@ -559,11 +564,10 @@ struct wikrt_cx {
 
 // just for sanity checks
 #define WIKRT_CX_REGISTER_CT 4
-#define WIKRT_REG_TXN_INIT WIKRT_UNIT
-#define WIKRT_REG_PC_INIT WIKRT_UNIT
-#define WIKRT_REG_CC_INIT WIKRT_UNIT
+#define WIKRT_REG_TXN_INIT WIKRT_NORMAL_TRASH
+#define WIKRT_REG_PC_INIT WIKRT_NORMAL_TRASH
+#define WIKRT_REG_CC_INIT WIKRT_NORMAL_TRASH
 #define WIKRT_REG_VAL_INIT WIKRT_UNIT
-#define WIKRT_REG_WL_INIT WIKRT_UNIT_INR
 #define WIKRT_FREE_LIST_CT 0 /* memory freelist count (currently none) */
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
 #define WIKRT_HAS_SHARED_REFCT_OBJECTS 0 /* for static assertions */
@@ -573,8 +577,8 @@ struct wikrt_cx {
  * and closing the UTF8 tag or OPVAL tags when writing. Doing so could
  * save a fair portion of allocations in some special cases.
  *
- * However, so far the savings have been marginal at best. So I'm going to
- * omit this for now (as an unnecessary complication).
+ * However, with an experiment the savings have been marginal at best. 
+ * So I'm going to omit this for now (it adds complexity). 
  */
 
 /* For large contexts (e.g. 20MB+) I will want to try to use less than

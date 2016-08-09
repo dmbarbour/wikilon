@@ -187,8 +187,12 @@ int main(int argc, char const* const argv[])
     int effort = 0;
     bool needs_more_work = true;
     while((effort++ < a.quota) && needs_more_work) {
-        needs_more_work = wikrt_step_eval(cx);
+        wikrt_step_eval(cx);
         print_trace_messages(cx);
+        wikrt_sum_tag lr; 
+        wikrt_unwrap_sum(cx, &lr);
+        bool const done = (WIKRT_INR == lr) || wikrt_error(cx);
+        needs_more_work = !done;
     }
     fflush(stderr);
 

@@ -238,32 +238,6 @@ typedef enum wikrt_abc
 bool wikrt_valid_token(char const* s);
 #define WIKRT_TOK_BUFFSZ 64
 
-/** Shallow reflection over values. */
-typedef enum wikrt_type
-{ WIKRT_TYPE_UNDEF      // an undefined type
-, WIKRT_TYPE_INT        // any integer
-, WIKRT_TYPE_PROD       // a pair of values
-, WIKRT_TYPE_UNIT       // the unit value
-, WIKRT_TYPE_SUM        // value in left or right
-, WIKRT_TYPE_BLOCK      // block of code, a function
-, WIKRT_TYPE_SEAL       // discretionary sealed value
-, WIKRT_TYPE_STOW       // stowed value reference
-, WIKRT_TYPE_TRASH      // placeholder for discarded value
-, WIKRT_TYPE_FUTURE     // a lazy or asynchronous future value
-} wikrt_val_type;
-
-/** @brief Reflection on values.
- *
- * Given a context with type (a*e), this reflects the type of `a`.
- * WIKRT_TYPE_UNDEF is returned if `a` does not exist or the context
- * is in any error state. This operation does not modify the context.
- *
- * The primary purpose of reflection on types is to simplify debug
- * rendering. However, it would generally be preferable if data has
- * its own rendering functions.
- */
-wikrt_val_type wikrt_type(wikrt_cx*);
-
   /////////////////////////
  // BASIC DATA PLUMBING //
 /////////////////////////
@@ -375,10 +349,8 @@ void wikrt_elim_unit_r(wikrt_cx*);
  */
 
 typedef enum wikrt_sum_tag { WIKRT_INL = 0, WIKRT_INR = 1 } wikrt_sum_tag;
-void wikrt_wrap_sum(wikrt_cx*, wikrt_sum_tag inRight);
-void wikrt_unwrap_sum(wikrt_cx*, wikrt_sum_tag* inRight);
-
-// TODO: consider matching deeper structure.
+void wikrt_wrap_sum(wikrt_cx*, wikrt_sum_tag);
+void wikrt_unwrap_sum(wikrt_cx*, wikrt_sum_tag*);
 
 /** @brief Allocation of integers. (e)→(Int*e).
  *
@@ -617,10 +589,33 @@ void wikrt_env_gc(wikrt_env*);
  */
 void wikrt_cx_gc(wikrt_cx*);
 
+/** Overview of a context's memory usage.
+ *
+ * For large contexts, Wikilon will often use a 'soft' GC threshold
+ * to help control memory and cache pressures. I.e. a 200MB context
+ * and a 4MB context might behave about the same for computations
+ * with minimal memory requirements.
+ */
+typedef struct wikrt_mem_stats { 
+    uint64_t  gc_cycle_count;     // how many GC cycles?
+    uint64_t  gc_bytes_processed; // ~ total GC effort 
+    uint64_t  gc_bytes_collected; // ~ useful GC effort
+    size_t    memory_lastgc;      // memory in use just after prior GC
+    size_t    memory_current;     // memory currently in use
+    size_t    memory_nextgc;      // soft maximum (next GC threshold)
+    size_t    memory_maximum;     // hard maximum (CXFULL error)
+} wikrt_mem_stats;
 
-  //////////////////////
- // RUNTIME FEEDBACK //
-//////////////////////
+/** @brief Diagnostic peek at context memory usage.
+ *
+ * This isn't really sufficient for interesting profiles. But it can
+ * at least help diagnose a thrashing computation.
+ */
+void wikrt_peek_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
+
+  ///////////////
+ // DEBUGGING //
+///////////////
 // Debugging, Profiling, Etc..
 // 
 // - trace supports printf style debugging. 
@@ -676,33 +671,36 @@ void wikrt_trace_write(wikrt_cx*);
  */
 char const* wikrt_trace_read(wikrt_cx*);
 
-/** Overview of a context's memory usage.
- *
- * For large contexts, Wikilon will often use a 'soft' GC threshold
- * to help control memory and cache pressures. I.e. a 200MB context
- * and a 4MB context might behave about the same for computations
- * with minimal memory requirements.
- */
-typedef struct wikrt_mem_stats { 
-    uint64_t  gc_cycle_count;     // how many GC cycles?
-    uint64_t  gc_bytes_processed; // ~ total GC effort 
-    uint64_t  gc_bytes_collected; // ~ useful GC effort
-    size_t    memory_lastgc;      // memory in use just after prior GC
-    size_t    memory_current;     // memory currently in use
-    size_t    memory_nextgc;      // soft maximum (next GC threshold)
-    size_t    memory_maximum;     // hard maximum (CXFULL error)
-} wikrt_mem_stats;
+/** Shallow reflection over values. */
+typedef enum wikrt_type
+{ WIKRT_TYPE_UNDEF      // an undefined type
+, WIKRT_TYPE_INT        // any integer
+, WIKRT_TYPE_PROD       // a pair of values
+, WIKRT_TYPE_UNIT       // the unit value
+, WIKRT_TYPE_SUM        // value in left or right
+, WIKRT_TYPE_BLOCK      // block of code, a function
+, WIKRT_TYPE_SEAL       // discretionary sealed value
+, WIKRT_TYPE_STOW       // stowed value reference
+, WIKRT_TYPE_TRASH      // placeholder for discarded value
+, WIKRT_TYPE_FUTURE     // a lazy or asynchronous future value
+} wikrt_val_type;
 
-/** @brief Diagnostic peek at context memory usage.
+/** @brief Reflection on values.
  *
- * This isn't really sufficient for interesting profiles. But it can
- * at least help diagnose a thrashing computation.
+ * Given a context with type (a*e), this reflects the type of `a`.
+ * WIKRT_TYPE_UNDEF is returned if `a` does not exist or the context
+ * is in any error state. This operation does not modify the context.
+ *
+ * The primary purpose of reflection on types is to simplify debug
+ * rendering. However, in general it is preferable that data to be
+ * rendered comes with its own rendering models (such that rendering
+ * can be performed without reflection or external tooling).
  */
-void wikrt_peek_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
+wikrt_val_type wikrt_type(wikrt_cx*);
 
-  ////////////////
- // EVALUATION //
-////////////////
+  /////////////////
+ // COMPUTATION //
+/////////////////
 /** @brief Apply function lazily. ([a→b] * (a * e)) → ((future b) * e)
  *
  * This function immediately returns a lazy future representing the
@@ -717,14 +715,12 @@ void wikrt_apply(wikrt_cx*);
 /** @brief Step an evaluation. ((future a) * e) → (((future a) + a) * e)
  * 
  * Each step performs a finite, heuristic amount of labor towards complete
- * evaluation. If evaluation successfully completes, the result is returned
- * in the right. Otherwise, an updated future is returned in the left.
- * Evaluation error is possible, so be sure to test wikrt_error.
+ * evaluation. If evaluation successfully completes, a result is returned
+ * in the right. Otherwise, an updated future is returned in the left. Or
+ * there might be a runtime type or memory error, so do test wikrt_error.
  * 
- * Wikilon runtime attempts to keep the labor 'weakly deterministic'. The
- * same program, step count, context setup, and runtime version should have
- * the same intermediate results. However, how much work is performed by
- * a step is not precisely defined. 
+ * Note: Default effort is unspecified, though good enough for most use 
+ * cases. Clients may specify an effort model via wikrt_set_step_effort.
  */ 
 void wikrt_step_eval(wikrt_cx*);
 
@@ -746,49 +742,40 @@ void wikrt_block_rel(wikrt_cx*);
 /** @brief Explicit lazy evaluation. Annotation {&lazy}. 
  *
  *    {&lazy} :: ([a → b] * e) → ([a → (future b)] * e) 
+ *    {&join} :: ((future a) * e) → (a * e)
  * 
- * Explicit laziness enables an incomplete value to be returned. But
- * it should not be used to model infinite structures.
+ * Explicit laziness enables an incomplete value to be returned. The
+ * value may be accessed by wikrt_step_eval or `{&join}` from within
+ * another computation.
  *
- * At the moment, lazy values are conservatively treated as linear.
- * So they must be evaluated to perform a copy or drop. This may 
- * change in the future.
+ * Note: At the moment, futures are conservatively treated as linear.
  */
 void wikrt_block_lazy(wikrt_cx*);
 
 /** @brief Scalable parallel evaluation. Annotation {&fork}.
  *
- * Process functions (PF) and asynchronous futures are an effective
- * basis for purely functional parallelism. 
+ * Process functions (PF) with asynchronous futures are an effective
+ * and simple basis for purely functional parallelism. 
  *
  *     PF           [i → (o * PF)]
  *     forked PF    [i → ((future o) * (forked PF))]
  *     {&fork}      (PF * e) → ((forked PF) * e)
  *     {&join}      ((future a) * e) → (a * e)
  *
- * A process function is easily evaluated as a separate process, hence
- * the name. The returned PF becomes the next state of the process.
+ * The forked process function may be evaluated in a separate context
+ * or process. When applied, the call returns 'immediately' with a
+ * future result and the next PF (which represents the future state
+ * of the process). The returned PF may immediately be called again,
+ * effectively enqueing arguments to the process. Parallelism is 
+ * achieved by doing work before joining (which synchronizes).
+ * 
+ * Process functions are best used together with explicit models for
+ * incremental computation and concurrency, such as message passing 
+ * or flow-based programming.
  *
- * The `{&fork}` annotation tells Wikilon runtime to parallelize this
- * as a separate process - e.g. a separate thread with a separate heap
- * or context. Use of separate OS-layer processes is feasible. A call
- * to the forked PF enqueues the argument `i` and immediately returns
- * an asynchronous future for `o` and the next PF. 
- *
- *     {&fork} :: (PF * e) → ((forked PF) * e)
- *     forked PF :: [i → ((asynch o) * (forked PF)]
- *
- * The asynchronous future result `o` may be observed only after use of
- * `{&join}`, which forces synchronization. Parallelism is achieved by
- * performing other work before join, potentially passing the future to
- * another process. The returned PF may be immediately applied to the
- * next argument, implicitly enqueuing arguments to the process created
- * by fork. 
- *
- * This design is simple, scalable, and expressive within the limits of
- * purely functional behavior. For greatest effectiveness, it should be 
- * used together with explicit models for incremental computation and
- * concurrency.
+ * Note: while immediate return is the common case, processes have
+ * bounded input queues and 'push back' in case of fast producers
+ * calling slower consumers. This helps control memory consumption.
  */
 void wikrt_block_fork(wikrt_cx*);
 
@@ -823,6 +810,33 @@ typedef enum wikrt_ord { WIKRT_LT = -1, WIKRT_EQ = 0, WIKRT_GT = 1 } wikrt_ord;
  * the four.
  */
 void wikrt_int_cmp(wikrt_cx*, wikrt_ord*);
+
+  ///////////////////////
+ // PEFORMANCE TUNING //
+///////////////////////
+
+/** Effort models. */
+typedef enum wikrt_effort_model 
+{ WIKRT_EFFORT_BLOCKS       // effort is blocks evaluated
+, WIKRT_EFFORT_GC_CYCLES    // effort is GC cycle count
+, WIKRT_EFFORT_MEGABYTES    // effort is megabytes allocated
+, WIKRT_EFFORT_MICROSECS    // effort is elapsed microseconds
+} wikrt_effort_model;
+
+/** @brief Tune effort per wikrt_step_eval.
+ *
+ * Tune both effort model and the effort value. Larger steps, with
+ * greater effort, are more efficient. But smaller steps simplify
+ * debugging, isolation of errors, and enable the thread to react
+ * to external events.
+ *
+ * Other than 'microsecs', effort models are weakly deterministic
+ * in the sense that the amount of work should be reproducible for
+ * the given initial state, computation, runtime implementation,
+ * and so on. The 'blocks' and 'megabytes' options are robust to
+ * changes in context size.
+ */
+void wikrt_set_step_effort(wikrt_cx*, wikrt_effort_model, uint32_t effort);
 
   /////////////////////////////////////
  // DATABASE AND PERSISTENCE ENGINE //

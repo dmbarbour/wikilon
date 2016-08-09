@@ -1052,7 +1052,11 @@ void run_block(wikrt_cx* cx, int effort)
 {
     wikrt_apply(cx);
     while((effort--) > 0) {
-        if(!wikrt_step_eval(cx)) { return; }
+        wikrt_step_eval(cx);
+        wikrt_sum_tag lr; 
+        wikrt_unwrap_sum(cx, &lr);
+        bool const done = (WIKRT_INR == lr) || wikrt_error(cx);
+        if(done) { return; }
     }
     wikrt_set_error(cx, WIKRT_CXFULL);
 }

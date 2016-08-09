@@ -328,12 +328,7 @@ void wikrt_intro_optok(wikrt_cx* cx, char const* tok)
     // value. However, a special case is made for resource identifiers
     // or annotations with specific handlers (which reduce to a single
     // opcode).
-    if('\'' == *tok) {
-        _Static_assert((39 == '\''), "prefix on resource identifier in ASCII/UTF8");
-        // stowage resource identifiers 
-        wikrt_intro_sv(cx, tok);
-        wikrt_wrap_otag(cx, WIKRT_OTAG_OPVAL);
-    } else if('&' == *tok) {
+    if('&' == *tok) {
         // TODO: consider creating a static binary search table.
         char const* anno = 1 + tok;
         if(!islower(*anno)) { wikrt_intro_optok_basic(cx, tok); } // accelerate basic symbols only
@@ -347,6 +342,10 @@ void wikrt_intro_optok(wikrt_cx* cx, char const* tok)
         else if(match(anno, "text"))   { wikrt_intro_op(cx, ACCEL_ANNO_TEXT); }
         else if(match(anno, "binary")) { wikrt_intro_op(cx, ACCEL_ANNO_BINARY); }
         else { wikrt_intro_optok_basic(cx, tok); }
+    } else if('\'' == *tok) {
+        // TODO: stowed value resources
+        wikrt_intro_optok_basic(cx, tok);
+        wikrt_set_error(cx, WIKRT_IMPL);
     } else { wikrt_intro_optok_basic(cx, tok); }
 }
 
