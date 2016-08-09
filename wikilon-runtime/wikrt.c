@@ -153,7 +153,7 @@ void wikrt_cx_reset(wikrt_cx* cx)
     wikrt_drop_v(cx, cx->pc, NULL);  cx->pc = WIKRT_REG_PC_INIT;
     _Static_assert((4 == WIKRT_CX_REGISTER_CT), "missing register resets");
 
-    // clear errors, release resources
+    // clear errors and release external resources
     cx->ecode = WIKRT_OK;
     wikrt_cx_relax(cx);
 }
@@ -411,7 +411,7 @@ wikrt_val_type wikrt_type(wikrt_cx* cx)
                 case WIKRT_OTAG_SEAL_SM: // sealed value
                 case WIKRT_OTAG_SEAL: return WIKRT_TYPE_SEAL;
 
-                case WIKRT_OTAG_PEND: return WIKRT_TYPE_PEND;
+                case WIKRT_OTAG_PEND: return WIKRT_TYPE_FUTURE;
 
                 default: {
                     fprintf(stderr, "%s: unhandled type %d\n", __FUNCTION__, (int)LOBYTE(otag));
@@ -1963,37 +1963,27 @@ bool wikrt_trace_enable(wikrt_cx* cx, size_t bufsz)
     }
 }
 
-void wikrt_trace_write(wikrt_cx* cx) 
+static void wikrt_trace_record_text(wikrt_cx* cx)
 {
-    // Read into the remaining space. We need at least two bytes 
-    // for a one byte message plus the NUL terminal. Of course,
-    // the only one byte message is `#`. But that's okay.
     size_t const space_avail = cx->tb.size - cx->tb.writer;
-    if(space_avail < 2) { wikrt_trash(cx); return; }
+    if(0 == space_avail) { return; }
 
-    // Represent any value as an ABC program to recompute the value.
-    // I'll need to preserve the substructure, however.
-    wikrt_quote(cx);
-    wikrt_ss const ss = wikrt_block_to_text_ss(cx);
-
-    // Read the text, as much as possible, into our trace buffer.
     size_t bytes_read = (space_avail - 1);
     char* const trace_buf = cx->tb.buf + cx->tb.writer; 
     wikrt_read_text(cx, trace_buf, &bytes_read);
     trace_buf[bytes_read] = 0;
 
-    // Check whether the full text is read before trashing it.
-    wikrt_sum_tag lr; 
-    wikrt_unwrap_sum(cx, &lr);
+    wikrt_sum_tag lr; wikrt_unwrap_sum(cx, &lr);
+    bool const msgOK = (WIKRT_INR == lr) && !wikrt_has_error(cx);
+    cx->tb.writer += msgOK ? (bytes_read + 1) : 0;
+}
+
+void wikrt_trace_write(wikrt_cx* cx) 
+{
+    wikrt_quote(cx);
+    wikrt_ss const ss = wikrt_block_to_text_ss(cx);
+    wikrt_trace_record_text(cx);
     wikrt_erase_trashval(cx, ss);
-
-    // Stop tracing new messages if in an error state.
-    if(wikrt_has_error(cx)) { return; } 
-
-    // Check for complete message.
-    assert(bytes_read > 0); // Empty program is id, not a quoted value.
-    bool const have_complete_msg = (WIKRT_INR == lr);
-    if(have_complete_msg) { cx->tb.writer += (bytes_read + 1); }
 }
 
 char const* wikrt_trace_read(wikrt_cx* cx) 

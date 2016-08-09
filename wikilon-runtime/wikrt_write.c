@@ -105,7 +105,6 @@ static void writer_ANNO_STOW(wikrt_cx*, wikrt_writer_state* w);
 static void writer_ANNO_LAZY(wikrt_cx*, wikrt_writer_state* w);
 static void writer_ANNO_FORK(wikrt_cx*, wikrt_writer_state* w);
 static void writer_ANNO_JOIN(wikrt_cx*, wikrt_writer_state* w);
-static void writer_ANNO_ASYNCH(wikrt_cx*, wikrt_writer_state* w);
 static void writer_ANNO_TEXT(wikrt_cx*, wikrt_writer_state* w);
 static void writer_ANNO_BINARY(wikrt_cx*, wikrt_writer_state* w);
 
@@ -118,10 +117,10 @@ static const wikrt_writer wikrt_accel_writers[OP_COUNT] =
  , ACCEL(wrzw),      ACCEL(wzlw)
  , ACCEL(ANNO_TRACE), ACCEL(ANNO_TRASH)
  , ACCEL(ANNO_LOAD), ACCEL(ANNO_STOW)
- , ACCEL(ANNO_LAZY), ACCEL(ANNO_FORK), ACCEL(ANNO_JOIN), ACCEL(ANNO_ASYNCH)
+ , ACCEL(ANNO_LAZY), ACCEL(ANNO_FORK), ACCEL(ANNO_JOIN)
  , ACCEL(ANNO_TEXT), ACCEL(ANNO_BINARY) 
  };
-_Static_assert((18 == WIKRT_ACCEL_COUNT), "missing accelerator writer?");
+_Static_assert((17 == WIKRT_ACCEL_COUNT), "missing accelerator writer?");
 #undef ACCEL
 
 
@@ -228,7 +227,6 @@ static void writer_ANNO_STOW(wikrt_cx* cx, wikrt_writer_state* w)  { wikrt_write
 static void writer_ANNO_LAZY(wikrt_cx* cx, wikrt_writer_state* w)  { wikrt_writer_putcstr(cx, w, "{&lazy}"); }
 static void writer_ANNO_FORK(wikrt_cx* cx, wikrt_writer_state* w)  { wikrt_writer_putcstr(cx, w, "{&fork}"); }
 static void writer_ANNO_JOIN(wikrt_cx* cx, wikrt_writer_state* w)  { wikrt_writer_putcstr(cx, w, "{&join}"); }
-static void writer_ANNO_ASYNCH(wikrt_cx* cx, wikrt_writer_state* w) { wikrt_writer_putcstr(cx, w, "{&asynch}"); }
 static void writer_ANNO_TEXT(wikrt_cx* cx, wikrt_writer_state* w)   { wikrt_writer_putcstr(cx, w, "{&text}"); }
 static void writer_ANNO_BINARY(wikrt_cx* cx, wikrt_writer_state* w) { wikrt_writer_putcstr(cx, w, "{&binary}"); }
 
@@ -452,7 +450,7 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
         return;
     } break;
 
-    case WIKRT_TYPE_PEND: {
+    case WIKRT_TYPE_FUTURE: {
         // treat quoted pending computations as linear.
         bool const lazykf = (0 != (WIKRT_OPVAL_LAZYKF & opval_tag));
         if(lazykf) { w->rel = true; w->aff = true; }
@@ -478,19 +476,20 @@ static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opva
         }
     } break;
 
-    case WIKRT_TYPE_TRASH: {  // e.g. []kf{&trash} for linear value
-        wikrt_val const v = wikrt_pval(cx, cx->val)[0];
-        if(WIKRT_NORMAL_TRASH == v) {
-            wikrt_drop(cx);
-            wikrt_writer_putcstr(cx, w, "#{&trash}");
-            return;
+    case WIKRT_TYPE_TRASH: {  
+        // Print as `val {&trash}`
+        wikrt_intro_op(cx, ACCEL_ANNO_TRASH); wikrt_consd(cx); // {&trash}
+        wikrt_val* const v = wikrt_pval(cx, cx->val);
+        if(WIKRT_NORMAL_TRASH == (*v)) { 
+            // print as zero value `#`
+            (*v) = WIKRT_IZERO;
         } else {
-            wikrt_val* const pobj = wikrt_pobj(cx, v);
-            assert(wikrt_o(v) && wikrt_otag_trash(pobj[0]) && (WIKRT_UNIT_INR == pobj[1]));
-            pobj[0] = ((~0xFF) & pobj[0]) | WIKRT_OTAG_BLOCK; // write a block to preserve substructure
-            wikrt_intro_op(cx, ACCEL_ANNO_TRASH); wikrt_consd(cx); // {&trash} the block to preserve opacity
-            goto tailcall; // print as a block
+            // print block with substructure (OTAG_TRASH → OTAG_BLOCK)
+            wikrt_val* const pobj = wikrt_pobj(cx, (*v));
+            assert(wikrt_o(*v) && wikrt_otag_trash(*pobj));
+            (*pobj) = ((~0xFF) & *pobj) | WIKRT_OTAG_BLOCK;
         }
+        goto tailcall; // print value
     } break;
 
     case WIKRT_TYPE_UNDEF:

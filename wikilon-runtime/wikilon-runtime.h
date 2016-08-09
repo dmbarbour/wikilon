@@ -68,7 +68,7 @@ typedef struct wikrt_cx wikrt_cx;
  * dynamic lib implements. This is just a simple sanity check.
  */
 uint32_t wikrt_api_ver();
-#define WIKRT_API_VER 20160803
+#define WIKRT_API_VER 20160808
 
 /** Wikilon runtime error codes. */
 typedef enum wikrt_ecode
@@ -249,20 +249,18 @@ typedef enum wikrt_type
 , WIKRT_TYPE_SEAL       // discretionary sealed value
 , WIKRT_TYPE_STOW       // stowed value reference
 , WIKRT_TYPE_TRASH      // placeholder for discarded value
-, WIKRT_TYPE_PEND       // pending lazy or parallel value
+, WIKRT_TYPE_FUTURE     // a lazy or asynchronous future value
 } wikrt_val_type;
 
 /** @brief Reflection on values.
  *
- * Given a context with type (a*e), this reflects the type of `a`,
- * returning WIKRT_TYPE_UND if `a` does not exist or if the context
- * is in an error state. This operation is fail safe, it will not
- * cause an error in the context.
+ * Given a context with type (a*e), this reflects the type of `a`.
+ * WIKRT_TYPE_UNDEF is returned if `a` does not exist or the context
+ * is in any error state. This operation does not modify the context.
  *
- * NOTE: Clients of Wikilon runtime should only need reflection for
- * special cases, such as rendering ad-hoc values. Even in these cases,
- * it would be preferable for the code itself to provide rendering
- * suggestions. Please use this sparingly.
+ * The primary purpose of reflection on types is to simplify debug
+ * rendering. However, it would generally be preferable if data has
+ * its own rendering functions.
  */
 wikrt_val_type wikrt_type(wikrt_cx*);
 
@@ -556,109 +554,68 @@ void wikrt_wrap_seal(wikrt_cx*, char const*);
  */
 void wikrt_unwrap_seal(wikrt_cx*, char*);
 
-/** @brief (a * e) → ((trashed a) * e). Annotation {&trash}.
+  ////////////////////
+ // MEMORY CONTROL //
+////////////////////
+
+/** @brief (a * e) → (trash * e). Annotation {&trash}.
  *
- * When done using a value, the normal option is to drop it. However, 
- * dropping a value is illegal for relevant or linear values. Use of 
- * {&trash} tells a runtime instead that a value will not be observed.
- * This enables memory to be recycled, replacing the value with a 
- * lightweight place holder. Any future attempt to observe the value
- * will result in a runtime type error.
- *
- * A trashed linear value serializes as `[]kf{&trash}`, i.e. preserving
- * both substructure and the 'trashed' type but losing the original data
- * and structure of the value.
+ * Use of `{&trash}` serves as a way to delete data without logically
+ * dropping it. Instead, trash tells the runtime that a given value
+ * will not be observed, and hence the memory may be recycled and the
+ * object in question replaced by a lightweight place holder. Only 
+ * substructural type is preserved. A trashed linear value serializes
+ * as `[]kf{&trash}` to preserve both the substructure and the fact
+ * that it's trash.
  */
 void wikrt_trash(wikrt_cx*);
 
 /** @brief Mark a value for stowage. (a * e) → ((stowed a) * e).
  *
- * This corresponds to annotation {&stow}. Stowage moves a value to a backing
- * database, leaving a much smaller 'key' value in its place. The value may
- * subsequently be accessed via {&load}. This fulfills the roles of virtual
- * memory and filesystems, albeit in a manner friendly to purely functional
- * computation.
+ * This corresponds to annotation {&stow}. Stowage moves large values 
+ * to a backing database, leaving a lightweight placeholder instead.
+ * The stowed value may subsequently be accessed via {&load}. 
  *
- * For performance reasons, stowage is lazy. This allows a computation that
- * loads, updates, and stows a value in a tight loop to avoid unnecessary
- * traffic with the backing database. Stowage will happens heuristically. 
- * However, stowage can be forced by subsequent use of wikrt_peek_sv.
+ * Stowage enables a small context to work with big data. Databases can
+ * be modeled as first class values, using data structures like tries,
+ * log structured merge trees, or hitchhiker trees. Massive deques can
+ * be modeled efficiently as finger tree ropes.
  *
- * In Wikilon runtime, stowage is implicitly coupled with structure sharing.
- * That is, values with identical representation will have the same resource 
- * identifier. However, this isn't strongly normalizing - a value may have 
- * more than one representation, and hence more than one ID. Also, after GC,
- * a value may be bound to a fresh resource ID.
+ * A representation for a stowed value can be obtained by quoting
+ * and serializing the value. In general, this representation may
+ * only be used within the same environment. Also, unless there is
+ * some other reference to the value (e.g. via persistence layer) 
+ * the value may be garbage collected. 
  */
 void wikrt_stow(wikrt_cx*);
-
-
-  //////////////////////
- // MEMORY EXTENSION //
-//////////////////////
 
 /** @brief Load a stowed value. ((stowed a) * e) → (a * e).
  *
  * This corresponds to annotation {&load}. We'll copy the stowed value
- * from our backing database into active memory. If the value was not 
- * yet stowed due to laziness, we'll simply unwrap the stowage marker.
- * Loading a value that was not at least marked for stowage is an error. 
- *
- * Note that we can hold references to values from other runtimes, but
- * we cannot load them, at least not at the moment. Attempting to do so
- * will result in an error.
+ * from our backing database into active memory. Loading a value that 
+ * was not previously stowed is an error. Loading a value that was not
+ * stowed by the current runtime environment (or was subsequently GC'd) 
+ * will also result in an error.
  */
 void wikrt_load(wikrt_cx*);
 
-/** @brief Access resource ID for a stowed value.
+/** @brief Garbage collection of environment-level resources.
  *
- * Given context of type ∀a,e.((stowed a) * e), returns the resource
- * ID of the stowed value. Forces stowage if still lazily pending.
- *
- * The output buffer must have size at least WIKRT_TOK_BUFFSZ, and
- * is returned as a NUL-terminated C string. Due to authentication,
- * e.g. including an HMAC, resource identifiers will frequently use
- * much of this space. The use of authentication ensures capability
- * security for any sensitive data held via stowage.
- * 
- * Note that stowed values are garbage collected by the environment.
- * To prevent GC of a value while holding an external reference, you
- * must hold a context that continues to reference the value, or put
- * a reference to the stowed value in the key-value database.
- *
- * If the argument is not a stowed value, this function returns the
- * empty string but does not add an error to the context. 
- * 
- * Another way to access resource IDs is use of `wikrt_block_to_text`.
- * In this case, resource IDs may appear within tokens in the text.
- *
- * IMPORTANT NOTE: Stowed value resources are garbage collected, but
- * resource IDs held outside our environment are not considered by GC
- * algorithms. To guard against GC, hold onto a context containing a
- * stowed value (e.g. for a client-server session) or leverage the
- * transactional persistence subsystem to hold the stowed value.
+ * Most significantly, this forces GC of stowed values. Normally,
+ * stowed values will be incrementally GC'd while new values are
+ * stowed. This will force a full GC.
  */
-void wikrt_peek_sv(wikrt_cx*, char* buff);
+void wikrt_env_gc(wikrt_env*); 
 
-
-/** @brief Inject a stowed value by resource ID. e → ((stowed a) * e)
+/** @brief Garbage collection of context-level resources.
  *
- * A typical resource token might look like {'/environmentId/resourceId},
- * and includes authentication (e.g. via HMAC). Substructural type info
- * is also included, e.g. {'kf/environmentId/resourceId} would indicate
- * a relevant (k) and affine (f) value resource ('), hence restricting 
- * use of ABC copy ^ and drop % ops.
- *
- * With wikrt_intro_sv, you'll use the token text, i.e. dropping the {}
- * curly braces but including the initial `'` character. The resource ID
- * must be a valid token (cf. wikrt_valid_token). This token is generally
- * obtained via `wikrt_peek_sv` or `wikrt_block_to_text`.
- *
- * If a resource token is not parsable, we'll treat that as an error. If 
- * it's non-local or has since been GC'd, we'll treat that instead as a
- * load-time error. 
+ * This forces immediate GC for a context's memory. Usually, GC for
+ * a context occurs whenever it fills memory (with some heuristic
+ * modifiers based on history of memory usage). So explicit GC is 
+ * unnecessary outside of special circumstances like profiling of
+ * precise memory usage.
  */
-void wikrt_intro_sv(wikrt_cx*, char const* resourceId);
+void wikrt_cx_gc(wikrt_cx*);
 
 
   //////////////////////
@@ -746,35 +703,30 @@ void wikrt_peek_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
   ////////////////
  // EVALUATION //
 ////////////////
-/** @brief Construct a pending value. ((a→b)*(a*e)) → ((pending b) * e).
+/** @brief Apply function lazily. ([a→b] * (a * e)) → ((future b) * e)
  *
- * Apply a function (a block) to a value to produce a latent value. The
- * actual evaluation is delayed until wikrt_eval_step. A pending value
- * may be quoted (serializes as `value[continuation]{&lazy}$`), but is 
- * otherwise opaque. The exact state of the value and continuation after
- * an incomplete wikrt_step_eval is non-deterministic.
+ * This function immediately returns a lazy future representing the
+ * application of the function to its argument. Actual evaluation is
+ * performed by wikrt_step_eval.
  *
- * Note: This implies explicit laziness, which is only minimally supported
- * by Wikilon runtime. Internally, a pending value may be explicitly forced
- * by {&join}, essentially a special case asynchronous value.
+ * If quoted and serialized before any evaluation, the future should
+ * have form `a[a→b]{&lazy}$`. 
  */
 void wikrt_apply(wikrt_cx*);
 
-/** @brief Step an evaluation.  ((pending a) * e) → (a * e).
- *
- * Each step performs a heuristic, small, finite amount of work. The amount of
- * work is weakly deterministic, in the sense that it's implementation dependent
- * but should be consistent within the implementation (depending also on context
- * parameters, etc.).
- *
- * A step returns `true` if more steps are needed, `false` otherwise. On returning
- * false, we have either computed the value or entered an error state. Check for
- * errors with `wikrt_error`.
+/** @brief Step an evaluation. ((future a) * e) → (((future a) + a) * e)
+ * 
+ * Each step performs a finite, heuristic amount of labor towards complete
+ * evaluation. If evaluation successfully completes, the result is returned
+ * in the right. Otherwise, an updated future is returned in the left.
+ * Evaluation error is possible, so be sure to test wikrt_error.
+ * 
+ * Wikilon runtime attempts to keep the labor 'weakly deterministic'. The
+ * same program, step count, context setup, and runtime version should have
+ * the same intermediate results. However, how much work is performed by
+ * a step is not precisely defined. 
  */ 
-bool wikrt_step_eval(wikrt_cx*);
-
-// thoughts: I'm still thinking about how to support flexible token
-// behaviors. But it isn't a priority for Wikilon runtime's use case.
+void wikrt_step_eval(wikrt_cx*);
 
 /** @brief Quote a value. (a * e) → ((∀e'. e'→(a*e'))*e).
  *
@@ -791,7 +743,54 @@ void wikrt_block_aff(wikrt_cx*);
 /** @brief Mark a block relevant (non-droppable). (block*e)→(block*e). Op `k`. */
 void wikrt_block_rel(wikrt_cx*);
 
-// Laziness and Parallelism? Maybe eventually.
+/** @brief Explicit lazy evaluation. Annotation {&lazy}. 
+ *
+ *    {&lazy} :: ([a → b] * e) → ([a → (future b)] * e) 
+ * 
+ * Explicit laziness enables an incomplete value to be returned. But
+ * it should not be used to model infinite structures.
+ *
+ * At the moment, lazy values are conservatively treated as linear.
+ * So they must be evaluated to perform a copy or drop. This may 
+ * change in the future.
+ */
+void wikrt_block_lazy(wikrt_cx*);
+
+/** @brief Scalable parallel evaluation. Annotation {&fork}.
+ *
+ * Process functions (PF) and asynchronous futures are an effective
+ * basis for purely functional parallelism. 
+ *
+ *     PF           [i → (o * PF)]
+ *     forked PF    [i → ((future o) * (forked PF))]
+ *     {&fork}      (PF * e) → ((forked PF) * e)
+ *     {&join}      ((future a) * e) → (a * e)
+ *
+ * A process function is easily evaluated as a separate process, hence
+ * the name. The returned PF becomes the next state of the process.
+ *
+ * The `{&fork}` annotation tells Wikilon runtime to parallelize this
+ * as a separate process - e.g. a separate thread with a separate heap
+ * or context. Use of separate OS-layer processes is feasible. A call
+ * to the forked PF enqueues the argument `i` and immediately returns
+ * an asynchronous future for `o` and the next PF. 
+ *
+ *     {&fork} :: (PF * e) → ((forked PF) * e)
+ *     forked PF :: [i → ((asynch o) * (forked PF)]
+ *
+ * The asynchronous future result `o` may be observed only after use of
+ * `{&join}`, which forces synchronization. Parallelism is achieved by
+ * performing other work before join, potentially passing the future to
+ * another process. The returned PF may be immediately applied to the
+ * next argument, implicitly enqueuing arguments to the process created
+ * by fork. 
+ *
+ * This design is simple, scalable, and expressive within the limits of
+ * purely functional behavior. For greatest effectiveness, it should be 
+ * used together with explicit models for incremental computation and
+ * concurrency.
+ */
+void wikrt_block_fork(wikrt_cx*);
 
 /** @brief Compose two blocks. ([a→b]*([b→c]*e))→([a→c]*e). */
 void wikrt_compose(wikrt_cx*);

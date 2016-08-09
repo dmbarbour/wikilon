@@ -1,12 +1,30 @@
-@fix [{%y}{%i}]^'mw'm
-@y ^'mw^'zmw
+@fix [^'mw^'zmw{%i}]^'mw'm
+@fix.doc 
+"USAGE:     [program] fix
+ BEHAVIOR: [[program] fix program]
+ 
+ Fixpoint is the primary basis for loopy code in ABC systems.
+ The `program` should have a type that accepts itself as an
+ argument. Note that fix does not immediately apply the program.
+ 
+ The favored implementation of fixpoint will copy the program
+ and inline it immediately before evaluation.
+~
 @i vr$c
 @if wlD[rwl]?Mrr%{%i}
+@if.doc 
+"USAGE: (a+b) [inA] [inB] if
+ 
+ The `a` or `b` value is left on the stack, and the respective `inA`
+ or `inB` function is applied.
+~
 @dec #1-+
 @dip wvrwlcr$vrwlc
 @dip.doc "([y→y'] * (x * y)) → (x * y')
 ~
-@dip2 wzlw{%dip}r
+@l.dip wzlw
+@r.dip wrzw
+@dip2 {%l.dip}{%dip}r
 @hello 
 "Hello,
  world!
@@ -19,13 +37,14 @@
 @repeat.doc 
 "USAGE: [block] 100 repeat
 ~
+
 @EQ {%NEQ}{%not}
 @not VRWLC
 @NEQ G[vrGc]?R
 @assertEQ1 {%assertEQ}%
 @assertEQ {%EQ}Kr
-@repeat.test #[#4+{%trace}]#100{%repeat} #400 {%assertEQ1}
-@bench.repeat10k #[#4+{%trace}]#10 000 {%repeat}  #40 000 {%assertEQ1}
+@repeat.test #[{%trace}#4+]#100{%repeat} #400 {%assertEQ1}
+@bench.repeat10k #[{%trace}#4+]#10 000 {%repeat}  #40 000 {%assertEQ1}
 @bench.repeat100k #[#4+]#100 000 {%repeat}  #400 000 {%assertEQ1}
 @bench.repeat1M #[#4+]#1 000 000 {%repeat}  #4 000 000 {%assertEQ1}
 @bench.repeat10M #[#4+]#10 000 000 {%repeat}  #40 000 000 {%assertEQ1}

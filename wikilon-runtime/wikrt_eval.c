@@ -7,10 +7,14 @@
 
 /* NOTES:
  *
- * Representation:
- * 
- * A pending value is just a tagged (block * value) pair. During an
- * evaluation, however, I'll need to build a stack that I can return
+ * Representation: Apply will produce a tagged (block * value) pair,
+ * representing incomplete application of the block to the value.
+ * Use of `wikrt_step_eval` will apply the block with a reasonable
+ * effort, then return. 
+
+pending value is just a tagged (block * value) pair.
+ During
+ * evaluation, I'll need to build a stack that I can return
  * to in O(1) time. I can rebuild (block * value) from the stack.
  *
  * The 'stack' in question could simply be a list of `ops` lists.
@@ -213,24 +217,14 @@ static void _wikrt_eval_step_condap(wikrt_cx* cx)
     }
 }
 
-static void _wikrt_asynch(wikrt_cx* cx) 
-{
-    // The `{&asynch}` annotation is intended to mark a value as
-    // asynchronous. For now, I'll just model it as a lazy value
-    // to ensure access is via `{&join}`.
-    wikrt_intro_id_block(cx);
-    wikrt_block_lazy(cx);
-    _wikrt_eval_step_apply(cx);
-}
-
-static void _wikrt_join(wikrt_cx* cx)
+static void wikrt_eval_join(wikrt_cx* cx)
 {
     // The {&join} annotation serves a role similar to `seq` in Haskell.
     // It tells our runtime to wait upon a pending computation.
     
     // At the moment, pending computations are all modeled as (block*value)
     // pairs (hidden behind the `pending` tag). This might change in the 
-    // future, e.g. for efficient asynch values. 
+    // future, e.g. for efficient asynch futures. 
     wikrt_open_pending(cx);
     wikrt_assocr(cx);
     _wikrt_eval_step_apply(cx);
@@ -296,13 +290,12 @@ static const wikrt_op_evalfn wikrt_op_evalfn_table[OP_COUNT] =
 , [ACCEL_ANNO_STOW] = wikrt_stow
 , [ACCEL_ANNO_LAZY] = wikrt_block_lazy
 , [ACCEL_ANNO_FORK] = wikrt_block_fork
-, [ACCEL_ANNO_JOIN] = _wikrt_join
-, [ACCEL_ANNO_ASYNCH] = _wikrt_asynch
+, [ACCEL_ANNO_JOIN] = wikrt_eval_join
 , [ACCEL_ANNO_TEXT] = wikrt_anno_text
 , [ACCEL_ANNO_BINARY] = wikrt_anno_binary
 }; 
 
-_Static_assert((WIKRT_ACCEL_COUNT == 18), 
+_Static_assert((WIKRT_ACCEL_COUNT == 17), 
     "evaluator is missing accelerators");
 
 /* Construct an evaluation. ((a→b)*(a*e)) → ((pending b) * e).
@@ -315,6 +308,7 @@ void wikrt_apply(wikrt_cx* cx)
 {
     bool const okType = wikrt_p(cx->val) && wikrt_blockval(cx, *wikrt_pval(cx, cx->val));
     if(!okType) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+
     wikrt_assocl(cx);
     wikrt_wrap_otag(cx, WIKRT_OTAG_PEND);
 }
@@ -342,17 +336,12 @@ static inline void wikrt_require_fresh_eval(wikrt_cx* cx)
     if(!is_fresh_eval) { wikrt_set_error(cx, WIKRT_IMPL); }
 }
 
-static inline void wikrt_run_eval_anno(wikrt_cx* cx, char const* strAnno)
-{
-    // Ignoring annotations is safe so long as coupled annotations
-    // are handled appropriately. For the most part, annotation tokens
-    // that Wikilon runtime recognizes should be detected at the parser.
-}
-
 static inline void wikrt_run_eval_token(wikrt_cx* cx, char const* token)
 {
-    if('&' == *token) { 
-        wikrt_run_eval_anno(cx, token);
+    if('&' == *token) {
+        // The parser will recognize annotations I want to handle
+        // and replace them by the appropriate accelerators. For
+        // unrecognized annotations, just ignore them.
     } else if('.' == *token) {
         char seal[WIKRT_TOK_BUFFSZ];
         wikrt_unwrap_seal(cx, seal);
@@ -361,11 +350,8 @@ static inline void wikrt_run_eval_token(wikrt_cx* cx, char const* token)
     } else if(':' == *token) {
         // big sealer tokens should be rare.
         wikrt_wrap_seal(cx, token);
-    } else if('\'' == *token) {
-        // Assume token is resource ID for a local stowed value. NOTE: this
-        // is better handled by the parser than by the evaluator.
-        wikrt_intro_sv(cx, token);
     } else {
+        // unrecognized tokens are errors.
         wikrt_set_error(cx, WIKRT_IMPL);
     }
     
@@ -470,11 +456,10 @@ void wikrt_run_eval_step(wikrt_cx* cx, int tick_steps)
  *
  * The stack is simply a list of ops-lists.
  */ 
-bool wikrt_step_eval(wikrt_cx* cx)
+void wikrt_step_eval(wikrt_cx* cx)
 {
     // preliminary
     wikrt_require_fresh_eval(cx);
-    wikrt_open_pending(cx); // ((block * value) * e)
     if(wikrt_has_error(cx)) { return false; }
 
     // tuck `e` and an empty continuation stack into `cx->cc`. 

@@ -11,7 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+
 #include <time.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #define APP_VER 20160721
 
@@ -122,7 +125,8 @@ void print_text(wikrt_cx* cx, FILE* out)
 
 int main(int argc, char const* const argv[]) 
 {
-    srand((unsigned int)time(NULL));
+    unsigned int seed = (17 * (unsigned int)time(NULL))
+                      + (7919 * (unsigned int)getpid());
 
     runABC_args a = parseArgs(1+argv); // skip argv[0], program name
     if(a.help) { printHelp(stdout); return 0; }
@@ -149,7 +153,7 @@ int main(int argc, char const* const argv[])
     //  digits being unpredictable so they won't be part of any
     //  source code.
     char runABC_seal[WIKRT_TOK_BUFFSZ];
-    unsigned int sealerId = ((unsigned int)rand()) % 1000000;
+    unsigned int sealerId = ((unsigned int)rand_r(&seed)) % 1000000;
     sprintf(runABC_seal, ":%06u", sealerId);
     intro_block(cx, ""); 
     wikrt_block_aff(cx); // cannot copy e

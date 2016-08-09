@@ -33,7 +33,7 @@ ABC has many interesting or unusual properties that distinguish it from other by
 
 ## The ABC Stream
 
-ABC is represented in a stream of UTF-8 encoded characters. There are no sections, no headers or footers. There is just the stream, potentially unbounded in length. ABC is designed to be visible, printable. Text, blocks, invocations, and the encoding of numbers are at least weakly legible:
+ABC is represented in a stream of UTF-8 encoded characters. There are no sections, no headers or footers. There is just the stream, potentially unbounded in length. ABC is designed to be visible, printable. Text, blocks, tokens, and the encoding of numbers are at least weakly legible:
 
         [blocks[[are]nestable]]
         #42
@@ -43,7 +43,8 @@ ABC is represented in a stream of UTF-8 encoded characters. There are no section
          can be terminated by LF ~ (10 126), which adds no characters.
          ABC text has no need for escapes, other than SP after LF.
         ~
-        {capabilityText}
+        {tokens}{&annotations}{:sealers}{%aowords}
+        [{&attributes}]%
         vrwlc
 
 This visibility seems useful for didactic purposes and debugging. For similar reasons, ABC supports two whitespace characters (LF (10) and SP (32)) assigning to them the identity function (type `∀x.x→x`), to simplify formatting of ABC for human view.
@@ -351,102 +352,68 @@ Annotations may require specific types. A simple case is that `{&text}` might re
 
 ### Parallelism
 
-For scalable parallelism, I propose a `{&fork}` annotation. 
+For scalable parallelism, I propose fork and join annotations together with a *process functions* (PF) concept an asynchronous futures.
 
-Fork receives a *process function* of recursive form `type P i o = [i → (o * P i o)]`. The runtime would then move the function into a separate process, i.e. with its own memory manager and input queue. Applying the function would then enqueue the argument (of type `i`) and immediately return a pending result of type `o` and the handle to enqueue the next argument. Use of `{&join}` would later allow the caller (or any other process) to wait on the `o` result.
+        PF          ∃i,o.   [i → (o * PF)]
+        forked PF   ∃i,o.   [i → ((future o) * (forked PF))]
+        {&fork}     ∀e.     (PF * e) → ((forked PF) * e)
+        {&join}     ∀e.     ((future a) * e) → (a * e)
 
-It is possible to fork a process for a single invocation. But the process function design can amortize the costs of constructing the process and its initial state over a sequence of multiple calls. It also provides effective control over communication costs. This should scale far more effectively than Haskell's par/seq pattern (which assumes ultra-lightweight parallelism and communication).
+When a forked PF is called, a parallel runtime will immediately return the asynchronous future and the next forked PF as a pair. The returned PF encodes the next process state and is available for further calls, effectively enqueuing sequential requests. The join operation will synchronize, waiting for the future result to become available. Copy, drop, stowage, etc. may also force synchronization, depending on the runtime.
 
-I'm also interested in supporting GPGPU computing as an orthogonal basis for high performance parallelism. But that's likely to rely on ABCD extensions for vector/matrix/collections processing.
+A process function can amortize costs of constructing heavy weight processes over its sequence of calls. It is possible to use a PF for a single invocation, e.g. to model Haskell style par/seq parallelism. But in general, the assumption is heavier processes and control over them. 
+
+*Note1:* A runtime can use push back mechanisms to ensure fast producer processes don't run too far ahead of slow consumers. I.e. the 'immediate' call above may be restricted to a condition where there is sufficient space in a queue. Use of push back can be valuable for real-time and embedded systems. Pushback can be guided explicitly by additional annotations on our forked PF.
+
+*Note2:* Parallelism at other scales (especially GPGPU) will be developed later.
+
+### Laziness
+
+Explicit laziness might be represented using annotations and futures.
+
+        {&lazy}     ∀e.     ([a → b] * e) → ([a → (future b)] * e)
+        {&join}     ∀e.     ((future a) * e) → (a * e)
+
+This is used together with the join annotation (cf. Parallelism) to access the value. Explicit laziness can serve a useful role in contexts of both static and dynamic optimization, staging, partial evaluations. 
+
+Unlike with implicit laziness, we cannot *transparently* turn lists into infinite data structures or 'tie knots' in recursive data structures. In context of Awelon Bytecode, lazy infinite data structures should be avoided in any case. It *should* be possible to remove annotations from a correct program without affecting observable program behavior. 
 
 ### Value Sealing
 
-Value sealing is a simple technique with very wide applications. The setup is simple. We have two capabilities - a 'sealer' and the corresponding 'unsealer'. At runtime, these may be allocated as a pair, using a secure uniqueness source (see above). 
+Discretionary sealers 'seal' or 'unseal' a value with a symbol.
 
         {:u} :: (a*e) → ((u:a)*e)     `:` for seal
         {.u} :: ((u:a)*e) → (a*e)     `.` for unseal
+        #42{:foo}                     discretionary sealed data
 
-            #42{:foo}                       discretionary sealed data
+This serves a role similar to type wrappers, simplifying type checking and flexible rendering. However, this isn't very effective for security (at least not by itself). 
 
-Discretionary sealers offer no real protection. However, they serve a useful role in resisting type errors or providing  rendering hints (e.g. using `{:jpeg}` on a text representing a large binary is a pretty strong hint). 
+*Related:*
 
-We can also use *cryptographic* value sealing, e.g. protected by AES or ECC encryption. Cryptographic sealers allow us to enforce sealer disciplines even in an open distributed system. The details for cryptographic sealing haven't been hammered out, but a viable option is:
+Cryptographic sealing for open distributed systems seems feasible. Something like:
 
-        {$:format}  :: (k*(a*e)) → ($a*e)
-        {$.format}  :: (k*($a*e)) → (a*e)
-        {$&format}  :: (sealer annotation)
+        {$:AES} :: ((key * a) * e) → ((sealed a) * e)
+        {$&AES} :: (crypto-val * e) → ((sealed a) * e)
+        {$.AES} :: ((key * (sealed a)) * e) → (a * e)
 
-            ["cipherText...\n~]kf{$&aes}    cryptographic sealed data
+However, there are many challenges surrounding cryptographic sealing regarding potential interaction with lazy or parallel futures, value stowage, and garbage collection. And they aren't a good fit for some proposed [application models](ApplicationModel.md) with AO/ABC.
 
-Here the `$` is serving as a prefix roughly meaning 'secured'. We have a sealer, an unsealer, and a sealed data annotation. The key is provided as an argument when sealing or unsealing (perhaps different keys with PKI). The types of both key and encrypted data may be specific to the format, but should generally include a block to record captured substructural attributes (affine, relevant, linear).
+### Value Stowage
 
-Value sealing is an important companion to object capability security. It provides a basis for [rights amplification](http://erights.org/elib/capability/ode/ode-capabilities.html#rights-amp), whereby you can gain extra authority by possessing both a capability and a sealed value, or by unsealing a value to gain a capability. It can also enforce various modularity patterns even in distributed systems. Value sealing should be considered orthogonal to transport-layer encryption. 
+The simple 'value stowage' model can support big data, massive computations, separate compilation and dynamic linking, compression and structure sharing, efficient data distribution, etc.. This model consists of just two annotations:
 
-### Value Stowage and Data Resources
+        {&stow} :: (v * e) → ((stowed v) * e)
+        {&load} :: ((stowed v) * e) → (v * e)
 
-ABC values might be quoted to generate a string of bytecode having type `e → (value * e)`. This bytecode could be given a unique identifier in a runtime or network. The identifier would then serve as a lightweight placeholder for the value until it needs to be loaded into memory. 
+Conceptually, `{&stow}` will serialize a value into some form of backing database, leaving a lightweight placeholder in its stead. Conversely, `{&load}` will access the database and load the data into local memory. Stowage is optimally a bit *latent*, such that high frequency stow-load patterns are eliminated and writes to the database may be batched. 
 
-This concept is simple and versatile. Some roles:
+Stowage is most effectively used together with data structures like ropes, tries, finger trees where contained data can be accessed without loading the entire value into memory. However, it can also work effectively with streaming data structures such that we can can access and process the data. Data structures oriented towards efficient, 'shallow' writes - e.g. log-structured merge trees, hitchhiker trees - easily applied in context of stowage.
 
-* replaces virtual memory, work with big data in much less memory
-* compression - cache a large value once, reference it many times
-* hypermedia of sorts - lightweight naming for remote values
-* dynamic linking - load a function just before inlining
-* separate compilation - compile the named functions
+It is feasible to use variations of stowage references in a distributed runtime, or even an open distributed system, to support lightweight communications referencing very large values and 'sessions'. Simple patterns like `{&load}vr$c` - together with a good cache - provide a basis for separate compilation and dynamic linking.
 
-Resource identifiers could potentially exist at multiple scopes. E.g. use of a secure hash could support global identifiers, at the cost of complicating GC. Conversely, local identifiers might be favored within an environment or a point-to-point connection, perhaps guarded by HMAC for security. For simplified caching, a resource identifier should never be reused for a different value.
+The proposed representation for stowed values is `{'kf/scope/resourceID}`. Here `'` indicates a quoted value, the `kf` the substructural attributes, and the scope and resource identify the value. Our resource ID might include an HMAC for security.  For lightweight values that aren't worth serializing, however, we might simply end up with `#42{&stow}`.
 
-Value resources could feasibly be represented within an ABC stream by a variety of mechanisms. We could feasibly use lazy values as a basis. For example, `#1234567[{load}]{&lazy}$` would tell our runtime to lazily load resource ID 1234567 upon a future `{&join}` request. Unfortunately, any separation of the resource identifier from a `{load}` action complicates potential interactions with garbage collection. 
-
-A proposed serialization is to shove resources into a single token:
-
-        {'kf/Scope/Resource}
-
-The prefix `'kf` indicates first that we are identifying a value resource `'` then its substructural attributes `kf` followed by a search scope and resource ID. The resource should include an HMAC or other bearer token to authenticate requests. A token limits us to 63 bytes. Fortunately, this is sufficient in practice... assuming we avoid hierarchical IDs.
-
-Use of ABC resources is guided by annotations. The proposal is:
-
-* `{&stow}` shoves a value into cold storage, e.g. into a database
-* `{&load}` accesses a resource, copying it into local memory
-
-Optimally, stowage is *latent*, enabling load-stow-load-stow loops to avoid most intermediate interactions with the database. This is feasible by integrating stowage with any form of generational garbage collection. Memory pressure heuristics might also increase latency, and thus further reduce unnecessary network traffic.
-
-Value stowage provides a simple and robust basis for shared libraries, separate compilation, dynamic linking, etc.. This is represented by simple patterns such as `{'kf/Scope/Resource}vr$c` to load a block of code as a value, then inline it (with `vr$c`). Conveniently, it is feasible to perform compilation entirely within an ABC program via annotations.
-
-*NOTE:* It seems feasible to unify stowage with asynchronous values. However, I'm still hesitant to do so, due to performance concerns.
-
-### Encoding Binary Data in ABC
-
-Programmers often work with binary encoded data, e.g. compressed visual or audio data, secure hashes, ciphertext. I would like the ability to encode MP3 files, texture data, or short video clips as ABC resources. This would allow me to leverage ABC's secure content distribution, caching, partial evaluation, and nearly transparent link model. However, it's valuable that large binaries can be stored and transmitted efficiently.
-
-One simple option is to use a naive encoding of binaries - e.g. base16 - and couple this with a dedicated compression pass for storage or streaming. I propose alphabet `bdfghjkmnpqstxyz` (`a-z` minus vowels `aeiou` and common ABC ops `vrwlc`). This ensures binaries are visually distinct, yet opaque.
-
-        "htkzmfkjkxfbkpmbmgmjkxfbkhkzktkzmffbmgkpmhfbkdkxkjmhftfbkgkzkymg
-         kjkgmhkjmhmjmffbkdkhkpmbkpmgkgkpkykmfbkjktkpmhftfbmgkjkhfbkhkzfb
-         kjkpmjmgkxkzkhfbmhkjkxmbkzmffbkpkykgkpkhkpkhmjkymhfbmjmhfbktkdkf
-         kzmfkjfbkjmhfbkhkzktkzmfkjfbkxkdkmkykdfbkdktkpmdmjkdfyfbjjmhfbkj
-         kykpkxfbkdkhfbkxkpkykpkxfbmkkjkykpkdkxftfbmdmjkpmgfbkykzmgmhmfmj
-         khfbkjmnkjmfkgkpmhkdmhkpkzkyfbmjktktkdkxkgkzfbktkdkfkzmfkpmgfbky
-         kpmgkpfbmjmhfbkdktkpmdmjkpmbfbkjmnfbkjkdfbkgkzkxkxkzkhkzfbkgkzky
-         mgkjmdmjkdmhfyfbhhmjkpmgfbkdmjmhkjfbkpmfmjmfkjfbkhkzktkzmffbkpky
-         fbmfkjmbmfkjknkjkykhkjmfkpmhfbkpkyfbmkkzktmjmbmhkdmhkjfbmkkjktkp
-         mhfbkjmgmgkjfbkgkpktktmjkxfbkhkzktkzmfkjfbkjmjfbkkmjkmkpkdmhfbky
-         mjktktkdfbmbkdmfkpkdmhmjmffyfbhjmnkgkjmbmhkjmjmffbmgkpkymhfbkzkg
-         kgkdkjkgkdmhfbkgmjmbkpkhkdmhkdmhfbkykzkyfbmbmfkzkpkhkjkymhftfbmg
-         mjkymhfbkpkyfbkgmjktmbkdfbmdmjkpfbkzkkkkkpkgkpkdfbkhkjmgkjmfmjky
-         mhfbkxkzktktkpmhfbkdkykpkxfbkpkhfbkjmgmhfbktkdkfkzmfmjkxfy
-        ~
-
-A compression pass could easily recognize runs of these characters and rewrites to a short header and a bytecount. The format I developed for use within Wikilon is especially optimized for texts, encoding 32 bytes per line, encoding blocks of up to 4096 bytes (128 lines) with only 0.1% overhead. Here's the format I use internally:
-
-        (248) (size) (bytes)
-            (size in 0..127): 8..512 contiguous bytes (multiples of 4)
-            (size in 128..254): 2..128 lines of 32 bytes with LF SP separators
-            (size 255): escape prior (248) byte
-
-Byte `(248)` does not naturally appear in UTF-8 text, and hence does not appear in ABC. The escape is included only to ensure compression is a total function, valid on all bytestrings. This binary compression could be followed by a more conventional compression, e.g. Snappy or the awesome new ZStandard. It is likely that conventional compression is, by itself, sufficient for many use cases.
-
-Efficient *processing* of binaries may further require accelerators like ABCD. We can convert our binary to an actual binary representation for runtime use, and use accelerated list processing functions to index the binary or even (via holding a unique reference) update it in place.
+*Aside:* The main challenge surrounding value stowage is *garbage collection*. However, it is not a particularly difficult problem outside of open distributed systems. Translating stowage references at certain network boundaries can help a lot. Efficient interaction with parallel and lazy futures may also prove challenging.
 
 ## Awelon Bytecode Deflated (ABCD)
 

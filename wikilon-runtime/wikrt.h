@@ -94,7 +94,6 @@ typedef enum wikrt_op
 , ACCEL_ANNO_LAZY   // {&lazy}
 , ACCEL_ANNO_FORK   // {&fork}
 , ACCEL_ANNO_JOIN   // {&join}
-, ACCEL_ANNO_ASYNCH // {&asynch}
 , ACCEL_ANNO_TEXT   // {&text}
 , ACCEL_ANNO_BINARY // {&binary}
 //, ACCEL_rw // ((a * b) * c) → (b * (a * c))

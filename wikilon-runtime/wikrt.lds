@@ -4,12 +4,14 @@
     wikrt_env_create;
     wikrt_env_destroy;
     wikrt_env_sync;
+    wikrt_env_gc;
 
     wikrt_cx_create;
     wikrt_cx_relax;
     wikrt_cx_reset;
     wikrt_cx_destroy;
     wikrt_cx_env;
+    wikrt_cx_gc;
 
     wikrt_api_ver;
     wikrt_valid_token;
@@ -27,8 +29,6 @@
 
     wikrt_stow;
     wikrt_load;
-    wikrt_peek_sv;
-    wikrt_intro_sv;
 
     wikrt_wswap;
     wikrt_zswap;
@@ -82,6 +82,8 @@
     wikrt_quote;
     wikrt_block_aff;
     wikrt_block_rel;
+    wikrt_block_lazy;
+    wikrt_block_fork;
     wikrt_quote;
     wikrt_compose;
 

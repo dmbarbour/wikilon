@@ -46,7 +46,7 @@ uninstall:
 runtests: testSuite
 	LD_LIBRARY_PATH=. ./testSuite
 
-testSuite: testSuite.c wikilon-runtime.h libwikilon-runtime.so 
+testSuite: testSuite.c testAO.h wikilon-runtime.h libwikilon-runtime.so 
 	$(CC) -o $@ $< -L. -lwikilon-runtime
 
 runABC: runABC.c wikilon-runtime.h libwikilon-runtime.so 

@@ -60,11 +60,9 @@ Compression is a minor concern, but it might improve performance by a fair margi
 
 ## Structure
 
-I need an *environment* bound to an underlying stowage and persistence model, e.g. via LMDB. The environment may also be associated with worker threads for par-seq parallelism. I also need *contexts* that associate an environment with a heap of memory for computations. 
+I need an *environment* bound to an underlying stowage and persistence model, e.g. via LMDB. The environment may also be associated with worker threads for parallelism. I also need *contexts* that associate an environment with a heap of memory for computations. 
 
 Context is a contiguous region of memory, up to ~4GB enabling local 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage will serve a similar role to virtual memory, but does not consume the greater 'address space'.
-
-In some cases, parallelism within a context could be useful. For this, I could support lightweight forks that share memory with our primary context.
 
 ### API Thoughts
 
@@ -79,8 +77,6 @@ Alternatively, I can switch to using C++ internally with an efficient exceptions
 ABC is well suited for 'manual' memory management due to its explicit copy and drop operators. It's convenient if most memory is linear so that we can have non-allocating data plumbing operations (at least for common cases). And bump-pointer allocation and slab allocations are useful for locality and performance, potentially favorable to free lists (though something like TCMalloc wouldn't be bad).
 
 Because I'm running pure code without side-effects, throughput is more important than latency during computation. There is a lot of freedom on what to do with memory. For now, I'm going for the 2-space compacting copying collector per context, which ensures fragmentation will never be an issue at the cost of copying memory occasionally.
-
-Parallelism within a computation could also be valuable. I may need to eventually move away from the shared memory idea in favor of free spaces for multiple threads. Though, this could be mitigated by good support for non-copying shared memory and objects.
 
 TODO: Consider 'graduating' context size between compactions. This would allow a 4GB context to act as a 4MB context when the data is small, for example, costing only address space. This would be achieved easily by allocating big chunks of memory after each compaction based on estimated usage. It could be configured by an extra function call on the process.
 
@@ -106,7 +102,9 @@ Focusing on collections-oriented processing, e.g. with lists and vectors.
 
 ### Error Handling?
 
-The main errors I can expect are: type errors and quota errors. Neither error is especially recoverable. Rather than assume recovery from errors, it seems wise to halt a runtime shortly after an error is recognized. The main cost here is that we cannot 
+The main errors I can expect are: type errors and quota errors. Neither error is very recoverable. Rather than assume recovery from errors, it seems wise to halt a runtime shortly after an error is recognized. 
+
+I could potentially use a C long-jump, e.g. by setting an 'on-error' callback behavior, to ensure preservation of the environment in which the error occurred. This would simplify dumping the environment upon error, which might be useful for debugging. Alternatively, I could automatically try to trace the environment upon error.
 
 Rather than return an error from each step, it might be more efficient to accumulate error information then report it upon request. OTOH, this doesn't really change the number of checks I need to perform, e.g. for type safety and safe allocation. Even if I used C++ exceptions upon error, I'd still need to perform the conditional check that leads to the exception call. 
 
@@ -201,19 +199,22 @@ I've decided not to support client-defined tokens. Wikilon doesn't need them, an
 
 #### Parallel Computation
 
-Due to my memory management decisions (compacting collector, separate heap per context), the overhead for initiating parallel evaluation, and communicating between parallel threads, is large. Further, it will get worse if ever I support distributed parallel computing. It's very important to me that any solution for parallelism should be transparently scalable to high performance distributed computing (mesh networks, cloud, etc.). 
+Due to use of a compacting collector and bump-pointer allocation, I cannot parallelize computation within a single context/heap. So I need a design suitable for process-level parallelism that does not share any heaps (though they might still share access to special objects - e.g. via stowage). Though, this isn't a bad thing: process-level parallelism has potential to be vastly more scalable (supporting mesh networks, cloud computations, etc..)
 
-My idea is to use affine *process functions* (PF) of general form:
+My idea is to use affine *process functions* (PF) together with asynchronous futures.
 
-        type PF = argument → (result * PF)
+        PF          [i → (o * PF)]
+        forked PF   [i → ((future o) * (forked PF))]
+        {&fork}     (PF * e) → ((forked PF) * e)
+        {&join}     ((future a) * e) → (a * e)
 
-A function of this form may be annotated for parallelism. The runtime may evaluate a PF so annotated in a separate process. Calling the process function with an argument is effectively a remote procedure call. The 'returned' PF remains in the separate process and may immediately be called again, effectively enqueuing messages. The result is returned as an asynchronous future. Lightweight futures enable pipeline parallelism and orchestration of communications between processes.
+A forked PF may be computed as a separate process - a separate thread, generally with its own heap. Communication involves copying data between processes. When applied, the forked PF 'immediately' (modulo pushback) returns the future result and the next PF. Parallelism is achieved by performing work between applying the PF and joining the result. The next PF may be called immediately, effectively enqueing sequential calls to the process.
 
-For performance, this design enables clients to amortize the overhead of creating a process across a series or stream of calls. This design is also very predictable. Clients control communication costs - argument and result are communicated, while PF and encapsulated state are not copied. Parallelism and synchronization are also under control. PF is also a good fit for many use cases and parallelism strategies.
+This design for parallelism is simple, highly scalable, and expressive within the limits of purely functional behavior. There is no direct expression of non-determinism or deadlock. But it is possible to model process pipelines, message passing, one-off processes, etc.. The costs of constructing a heavier process can be amortized over multiple calls. Because processes have individual heaps, we avoid many GC scaling challenges of multi-threading.
 
-Annotations involved may include: `{&fork}` on a PF to turn it into a thread, `{&join}` an asynchronous result to access it, and `{&asynch}` to treat any arbitrary value as asynchronous (i.e. equivalent to passing it through an identity process, to simplify lightweight communications).
+*Pushback:* Fast 'producer' processes can easily run too far ahead of slow 'consumer' processes. This hurts performance and requires too much memory. We can mitigate this with pushback: each process is given a finite queue for pending messages in addition to whatever message it is processing. If this queue is at its limit, we should wait to call the PF.
 
-*Note:* This process function parallelism concept is, at least in theory, extremely scalable. Processes can use their own heaps and GC. Processes may be moved transparently to remote physical machines. Queues of messages enable flexible batch processing. Promise pipelining can be leveraged for flexible communication relationships. Communication patterns can be recognized - i.e. if we know or anticipate a value from process A will be read by process D, we can send it from A to D. 
+*Peformance Notes:* Each process has a finite queue for pending requests (in addition to the request it is handling). When that queue is filled, the caller waits. This limits 'producer' processes from running too far ahead of 'consumer' processes while still enabling processes to operate outside of lockstep. Pushback, note, could be explicitly guided by annotations, or left to heuristic scheduling.
 
 #### Lazy Computation? 
 
@@ -308,13 +309,15 @@ Haskell's `Debug.Trace` (i.e. debug by printf) is convenient as a short term deb
 
         {&trace} :: ∀v,e.(v * e)→((trashed v) * e)
 
-For performance, I keep trace messages in a finite trace buffer separated from normal GC. Trashing an argument additionally enables destructive read of text without implicit copies. Despite risk of losing some messages on overflow, this should cover the 99% use case easily enough. Even dumping 64kB should be sufficient for generating a useful debug-view of what's happening within a computation.
+For predictable performance, I keep trace messages in a separate buffer from the normal evaluation. At th
+
+Trashing an argument additionally enables destructive read of text without implicit copies. Despite risk of losing some messages on overflow, this should cover the 99% use case easily enough. Even dumping 64kB should be sufficient for generating a useful debug-view of what's happening within a computation.
 
 The decision to trace arbitrary values is... questionable. It does improve flexibility of expression, enabling structured data subject to ad-hoc external rendering techniques. OTOH, it might hinder legibility of a plain text rendering a bit. Fortunately, plain text embedded in ABC should be reasonably legible.
 
 ### Fail Fast 
 
-The `{&trash}` or `{&trace}` annotation could serve a useful role for partial failure, i.e. creating the logical equivalent of an `undefined` value. It might be convenient to develop a variant of `{&trace}` that dumps the whole environment, e.g. `{&abort}`.
+The `{&trash}` or `{&trace}` annotation could serve a useful role for partial failure, i.e. creating the logical equivalent of an `undefined` value. It might also be convenient to develop a variant of `{&trace}` that essentially traces the whole environment, e.g. `{&abort}`.
 
 ### Stack Traces (Mid Priority)
 

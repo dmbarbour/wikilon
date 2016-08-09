@@ -344,7 +344,6 @@ void wikrt_intro_optok(wikrt_cx* cx, char const* tok)
         else if(match(anno, "lazy"))   { wikrt_intro_op(cx, ACCEL_ANNO_LAZY); }
         else if(match(anno, "fork"))   { wikrt_intro_op(cx, ACCEL_ANNO_FORK); }
         else if(match(anno, "join"))   { wikrt_intro_op(cx, ACCEL_ANNO_JOIN); }
-        else if(match(anno, "asynch")) { wikrt_intro_op(cx, ACCEL_ANNO_ASYNCH); }
         else if(match(anno, "text"))   { wikrt_intro_op(cx, ACCEL_ANNO_TEXT); }
         else if(match(anno, "binary")) { wikrt_intro_op(cx, ACCEL_ANNO_BINARY); }
         else { wikrt_intro_optok_basic(cx, tok); }

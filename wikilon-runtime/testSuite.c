@@ -5,6 +5,7 @@
 #include <assert.h>
 #include "wikilon-runtime.h"
 #include "utf8.h"
+#include "testAO.h"
 
 #define TESTCX_SIZE 4
 #define TESTENV_SIZE (4 * TESTCX_SIZE)
@@ -1201,6 +1202,11 @@ void test_eval_fixpoint_sto(wikrt_cx* cx)
     test_eval_abc2i(cx, "#[w#100+w] '[^'mw^'zmwvr$c]^'mwm  vr$c vr$c vr$c vr$c %", 400);
 }
 
+void test_eval_loop(wikrt_cx* cx)
+{
+    test_eval_abc2i(cx, "#[#4+]#100" ABC_REPEAT, 400);
+}
+
 void test_quote_apply(wikrt_cx* cx) 
 {
     // also tests that `wikrt_apply` performs no immediate evaluation.
@@ -1364,6 +1370,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_eval_quote);
     TCX(test_eval_fixpoint);
     TCX(test_eval_fixpoint_sto);
+    TCX(test_eval_loop);
     TCX(test_eval_anno);
 
     TCX(test_trace);

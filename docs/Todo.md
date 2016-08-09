@@ -3,8 +3,7 @@
 
 My primary efforts at the moment should be:
 
-* easy testing of bytecode
- * runABC 
+* debug step eval for long quotas effort
 
 * persistence and stowage
 
