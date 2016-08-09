@@ -43,9 +43,10 @@
 @NEQ G[vrGc]?R
 @assertEQ1 {%assertEQ}%
 @assertEQ {%EQ}Kr
-@repeat.test #[{%trace}#4+]#100{%repeat} #400 {%assertEQ1}
-@bench.repeat10k #[{%trace}#4+]#10 000 {%repeat}  #40 000 {%assertEQ1}
-@bench.repeat100k #[#4+]#100 000 {%repeat}  #400 000 {%assertEQ1}
-@bench.repeat1M #[#4+]#1 000 000 {%repeat}  #4 000 000 {%assertEQ1}
-@bench.repeat10M #[#4+]#10 000 000 {%repeat}  #40 000 000 {%assertEQ1}
+@inc4 #4+
+@repeat.test #[{%inc4}]#100{%repeat} #400 {%assertEQ1}
+@bench.repeat10k #[{%inc4}]#10 000 {%repeat}  #40 000 {%assertEQ1}
+@bench.repeat100k #[{%inc4}]#100 000 {%repeat}  #400 000 {%assertEQ1}
+@bench.repeat1M #[{%inc4}]#1 000 000 {%repeat}  #4 000 000 {%assertEQ1}
+@bench.repeat10M #[{%inc4}]#10 000 000 {%repeat}  #40 000 000 {%assertEQ1}
 @zero #

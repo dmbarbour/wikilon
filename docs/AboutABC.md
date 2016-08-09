@@ -400,20 +400,22 @@ However, there are many challenges surrounding cryptographic sealing regarding p
 
 ### Value Stowage
 
-The simple 'value stowage' model can support big data, massive computations, separate compilation and dynamic linking, compression and structure sharing, efficient data distribution, etc.. This model consists of just two annotations:
+A simple 'value stowage' supports larger-than-memory data and computations, separate compilation and dynamic linking, efficient distributed data, etc.. This model is achieved through just two annotations:
 
         {&stow} :: (v * e) → ((stowed v) * e)
         {&load} :: ((stowed v) * e) → (v * e)
 
-Conceptually, `{&stow}` will serialize a value into some form of backing database, leaving a lightweight placeholder in its stead. Conversely, `{&load}` will access the database and load the data into local memory. Stowage is optimally a bit *latent*, such that high frequency stow-load patterns are eliminated and writes to the database may be batched. 
+Stowing a large value pushes it into a backing storage, e.g. a filesystem or database. A lightweight placeholder is left in the value's stead. Loading a value moves data in the opposite direction. The backing store will frequently be many orders of magnitude larger than the memory allocated to a computation, and it may use independent garbage collection model. (Stowing a *small* value, based on a heuristic threshold, may just wrap it.)
 
-Stowage is most effectively used together with data structures like ropes, tries, finger trees where contained data can be accessed without loading the entire value into memory. However, it can also work effectively with streaming data structures such that we can can access and process the data. Data structures oriented towards efficient, 'shallow' writes - e.g. log-structured merge trees, hitchhiker trees - easily applied in context of stowage.
+By modeling tree structures (e.g. a trie, B+ tree, or log-structured merge tree) and stowing tree nodes, it is feasible to represent massive databases as first-class values. Finger-tree ropes can serve as an effective basis for logs and queues. Patterns such as loading code just before inlining it (`{&load}vr$c`) serve as a logical basis for dynamic linking, and might access a compiled and cached representation of the loaded code.
 
-It is feasible to use variations of stowage references in a distributed runtime, or even an open distributed system, to support lightweight communications referencing very large values and 'sessions'. Simple patterns like `{&load}vr$c` - together with a good cache - provide a basis for separate compilation and dynamic linking.
+To get the most out of value stowage, it must be used together with a persistence or caching model, such that the data may be reused across many independent computations without recomputing it. Structure sharing might further augment stowage, saving space when a value is computed many times. In a distributed system, stowed values could serve a role similar to hypermedia, enabling code to reference many large values without immediately downloading it. 
 
-The proposed representation for stowed values is `{'kf/scope/resourceID}`. Here `'` indicates a quoted value, the `kf` the substructural attributes, and the scope and resource identify the value. Our resource ID might include an HMAC for security.  For lightweight values that aren't worth serializing, however, we might simply end up with `#42{&stow}`.
+The proposed serialization for stowed value placeholders is use of a token:
 
-*Aside:* The main challenge surrounding value stowage is *garbage collection*. However, it is not a particularly difficult problem outside of open distributed systems. Translating stowage references at certain network boundaries can help a lot. Efficient interaction with parallel and lazy futures may also prove challenging.
+        {'kf/scope/resourceID}
+
+The prefix `'kf` indicates a stowed value (`'`) with relevant and affine substructural properties (`kf`). The scope helps constrain the search space, and the rest identifies the value. The resourceID should include a secure HMAC if otherwise forgeable (like an incremental number). The limit on token size (63 bytes) should not be an issue, though hierarchical URLs are not viable.
 
 ## Awelon Bytecode Deflated (ABCD)
 

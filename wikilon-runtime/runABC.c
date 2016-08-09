@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #define APP_VER 20160721
+#define TRACE_LOG_SIZE (64 * 1024)
 
 // To avoid redundancy, just writing the program description as a string.
 static char const* runABC_helpMsg() { return u8""
@@ -24,15 +25,18 @@ static char const* runABC_helpMsg() { return u8""
  "\n"
  "The primary input is a stream of ABC on STDIN, of (default) type `∀e.e→(v*e)`.\n"
  "The stream is evaluated, and the value is serialized as another stream of ABC\n"
- "on STDOUT.\n"
+ "on STDOUT. Errors and trace messages print to STDERR.\n"
  "\n"
  "Options:\n"
- "  -mem megabytes  Memory quota for evaluation, default 32.\n"
- "  -quota effort   Heuristic CPU effort quota, default 100.\n"
- "  -trace          Print available trace messages to STDERR.\n"
- "  -prof           Print available profiling output to STDERR.\n"
+ "  -m megabytes    Memory quota for evaluation. (default 32)\n"
+ "  -q(t) effort    Heuristic CPU effort quota, of type (t).\n"
+ "      -qm         Effort is megabytes allocated. (default 1000)\n"
+ "      -qb         Effort is blocks evaluated.\n"
+ "      -qt         Effort is milliseconds elapsed.\n"
+ "      -qp         Effort is processor time milliseconds.\n"
+ "      -qg         Effort is garbage collector passes.\n"
  "  -rt directory   Necessary for stowage or persistence.\n"
- "  -rtdb gigabytes Maximum persistent database, default 32.\n"
+ "  -rtdb gigabytes Maximum persistent database. (default 32)\n"
  "  -?              Print this help message.\n"
  "\n"
  "Alternative output models may be supported in the future, e.g. for\n"
@@ -42,8 +46,8 @@ static char const* runABC_helpMsg() { return u8""
 
 typedef struct { 
     int  mem;
-    int  quota;
-    bool trace;
+    wikrt_effort_model effort_model;
+    int effort_value;
     bool prof;
     char const* rt;
     int  rtdb;
@@ -51,25 +55,41 @@ typedef struct {
     bool version;
     char const* badArg;
 } runABC_args;
-#define default_args (runABC_args){ .mem = 32, .quota = 1000, .rtdb = 32, 0 }
+#define default_args (runABC_args){ .mem = 32, .rtdb = 32,        \
+    .effort_model = WIKRT_EFFORT_MEGABYTES, .effort_value = 1000, \
+    0 }
 
 bool match(char const* a, char const* b) { return (0 == strcmp(a,b)); }
+bool is_quota_type(char c, wikrt_effort_model* m)
+{ switch(c) {
+    case 'm': (*m) = WIKRT_EFFORT_MEGABYTES; return true;
+    case 'b': (*m) = WIKRT_EFFORT_BLOCKS;    return true;
+    case 't': (*m) = WIKRT_EFFORT_MILLISECS; return true;
+    case 'p': (*m) = WIKRT_EFFORT_CPU_TIME;  return true;
+    case 'g': (*m) = WIKRT_EFFORT_GC_CYCLES; return true;
+    default: return false;
+}}
+bool quota_model_arg(char const* arg, wikrt_effort_model* m) {
+    return ('-' == arg[0])
+        && ('q' == arg[1])
+        && is_quota_type(arg[2],m)
+        && (0 == arg[3]);
+}
 
 runABC_args parseArgs(char const* const* argv)
 {
     runABC_args a = default_args;
-
+    wikrt_effort_model m;
     while(*argv) {
         char const* const arg = *(argv++);
         if(match(arg, "-?")) { a.help = true; }
-        else if(match(arg, "-trace")) { a.trace = true; }
-        else if(*argv && match(arg, "-mem")) { a.mem = atoi(*(argv++)); }
-        else if(*argv && match(arg, "-quota")) { a.quota = atoi(*(argv++)); }
-        else if(*argv && match(arg, "-rt")) { a.rt = *(argv++); }
-        else if(*argv && match(arg, "-rtdb")) { a.rtdb = atoi(*(argv++)); }
+        else if(*argv && match(arg, "-m")) { a.mem = atoi(*(argv++)); }
+        else if(*argv && quota_model_arg(arg, &m)) {
+            a.effort_value = atoi(*(argv++));
+            a.effort_model = m;
+        } else if(*argv && match(arg, "-rtdb")) { a.rtdb = atoi(*(argv++)); }
         else { a.badArg = arg; }
     }
-
     return a;
 }
 
@@ -105,8 +125,9 @@ void print_trace_messages(wikrt_cx* cx)
     do {
         char const* const msg = wikrt_trace_read(cx);
         if(NULL == msg) { break; }
-        fprintf(stderr, "[{&trace}]%%    %s\n", msg);
+        fprintf(stderr, "[{&trace}]%% %s\n", msg);
     } while(1);
+    fflush(stderr);
 }
 
 void print_text(wikrt_cx* cx, FILE* out)
@@ -122,6 +143,20 @@ void print_text(wikrt_cx* cx, FILE* out)
     wikrt_drop(cx);
 }
 
+void print_mem_stats(wikrt_cx* cx)
+{
+    wikrt_mem_stats m;
+    wikrt_peek_mem_stats(cx, &m);
+    fprintf(stderr, "GC  cycle count:      %llu\n"
+                    "    bytes processed:  %llu\n"
+                    "    bytes collected:  %llu\n"
+                    "Memory in use:        %llu\n"
+        , (unsigned long long) m.gc_cycle_count
+        , (unsigned long long) m.gc_bytes_processed
+        , (unsigned long long) m.gc_bytes_collected
+        , (unsigned long long) m.memory_current
+        );
+}
 
 int main(int argc, char const* const argv[]) 
 {
@@ -142,16 +177,11 @@ int main(int argc, char const* const argv[])
         return -1; 
     }
 
-    // enable a record of {&trace} messages (if requested)
-    if(a.trace) { 
-        size_t const trace_buff_size = 100 * 1000;
-        wikrt_trace_enable(cx, trace_buff_size); 
-    }
+    // Configure context.
+    wikrt_trace_enable(cx, TRACE_LOG_SIZE); 
+    wikrt_set_step_effort(cx, a.effort_model, (uint32_t) a.effort_value);
 
-    // model `∀e` by use of a pseudo-randomly sealed linear value.
-    //  i.e. something like `[]kf{:123456}`, but with the
-    //  digits being unpredictable so they won't be part of any
-    //  source code.
+    // model `∀e` by use of a randomly sealed linear value.
     char runABC_seal[WIKRT_TOK_BUFFSZ];
     unsigned int sealerId = ((unsigned int)rand_r(&seed)) % 1000000;
     sprintf(runABC_seal, ":%06u", sealerId);
@@ -167,7 +197,7 @@ int main(int argc, char const* const argv[])
     sprintf(elim_e, "vrw{.%s}$c", (1 + runABC_seal));
     intro_block(cx, elim_e);
 
-    // For now, just grab entire input program from STDIN.
+    // grab entire program from STDIN.
     char* prog = streamToString(stdin);
     intro_block(cx, prog);
     free(prog);
@@ -178,50 +208,49 @@ int main(int argc, char const* const argv[])
     wikrt_apply(cx);   // ((pending v) * 1)
 
     if(wikrt_error(cx)) {
-        char const* const e = (WIKRT_CXFULL == wikrt_error(cx)) ? "too large" : "bad parse";
-        fprintf(stderr, "error loading ABC program: %s\n", e);
+        wikrt_ecode const e = wikrt_error(cx);
+        char const* const emsg = (WIKRT_CXFULL == e) ? "input too large" 
+                                                     : "bad parse";
+        fprintf(stderr, "error loading ABC program: %s\n", emsg);
         return -1;
     }
 
-    // Okay, go ahead and perform evaluations.
-    int effort = 0;
-    bool needs_more_work = true;
-    while((effort++ < a.quota) && needs_more_work) {
-        wikrt_step_eval(cx);
-        print_trace_messages(cx);
-        wikrt_sum_tag lr; 
-        wikrt_unwrap_sum(cx, &lr);
-        bool const done = (WIKRT_INR == lr) || wikrt_error(cx);
-        needs_more_work = !done;
-    }
-    fflush(stderr);
-
-    // Translate our result to text.
+    // Perform our evaluation. 
+    wikrt_step_eval(cx);  // (future result) → ((future result) + result)
+    print_trace_messages(cx);
+    wikrt_sum_tag lr; 
+    wikrt_unwrap_sum(cx, &lr);
     wikrt_quote(cx);
-    if(needs_more_work) {
-        // add a `{&join}` to unwrap the pending result.
+    bool const incomplete = !wikrt_error(cx) && (WIKRT_INL == lr);
+
+    // Either we have (future a) or `a` on stack.
+    if(incomplete) {
+        // addend `{&join}` to unwrap incomplete future
         intro_block(cx, "{&join}");
         wikrt_wswap(cx);
         wikrt_compose(cx);
     }
     wikrt_block_to_text(cx);
 
-    if(wikrt_error(cx)) {
-        char const* const e = (WIKRT_CXFULL == wikrt_error(cx)) ? 
-            "out of memory" : "runtime type error";
-        fprintf(stderr, "evaluation failure: %s\n", e);
-        return -1;
-    }
-
-    char const* const attrib_result = "{&ABC}{&result}";
-    char const* const attrib_incomplete = needs_more_work ? "{&incomplete}" : "";
-
-    fprintf(stdout, "[%s%s]%%    ", attrib_result, attrib_incomplete);
+    char const* const attrib_origin = "{&runABC}";
+    char const* const attrib_incomplete = incomplete ? "{&incomplete}" : "";
+    char const* const attrib_error = wikrt_error(cx) ? "{&error}" : "";
+    fprintf(stdout, "[%s%s%s]%% ", attrib_origin, attrib_incomplete, attrib_error);
     print_text(cx, stdout);
     fflush(stdout);
     fputc('\n', stderr); // in case of console output
 
-    assert(!wikrt_error(cx)); // shouldn't be new errors for extracting text.
+    //print_mem_stats(cx);
+
+    if(wikrt_error(cx)) {
+        wikrt_ecode const e = wikrt_error(cx);
+        char const* const emsg = 
+            (WIKRT_CXFULL == e) ? "out of memory" :
+            (WIKRT_IMPL == e)   ? "impl error" :
+                                  "type error"; 
+        fprintf(stderr, "evaluation failure: %s\n", emsg);
+        return -1;
+    }
 
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(env);

@@ -35,15 +35,21 @@ uint32_t wikrt_api_ver()
 
 wikrt_ecode wikrt_error(wikrt_cx* cx) { return cx->ecode; }
 
-void wikrt_set_error(wikrt_cx* cx, wikrt_ecode e) {
+void wikrt_set_error(wikrt_cx* cx, wikrt_ecode e) 
+{
     if(!wikrt_has_error(cx) && (WIKRT_OK != e)) {
         wikrt_cx_relax(cx); // release resources
         cx->ecode = e;
     }
 }
 
+void wikrt_env_gc(wikrt_env* env) 
+{
+    // TODO: full garbage collection of value stowage.
+}
 
-wikrt_env* wikrt_env_create(char const* dirPath, uint32_t dbMaxMB) {
+wikrt_env* wikrt_env_create(char const* dirPath, uint32_t dbMaxMB) 
+{
     _Static_assert(WIKRT_CELLSIZE == WIKRT_CELLBUFF(WIKRT_CELLSIZE), "cell size must be a power of two");
     _Static_assert(WIKRT_SMALLINT_MAX >= 0xFF, "smallint should be sufficient for binary values");
     _Static_assert(WIKRT_SMALLINT_MAX >= 0x10FFFF, "smallint should be sufficient for unicode codepoints");
@@ -115,10 +121,14 @@ wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB)
     cx->txn     = WIKRT_REG_TXN_INIT;
     _Static_assert((4 == WIKRT_CX_REGISTER_CT), "todo: missing register initializations"); // maintenance check
 
+    // set a reasonable default effort for wikrt_step_eval
+    wikrt_set_step_effort(cx, WIKRT_DEFAULT_EFFORT_MODEL, 
+                              WIKRT_DEFAULT_EFFORT_VALUE);
+
+    
     wikrt_add_cx_to_env(cx);
     return cx;
 }
-
 
 void wikrt_add_cx_to_env(wikrt_cx* cx) 
 {
@@ -238,6 +248,10 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     cx->compaction_size  = wikrt_mem_in_use(cx);
     cx->bytes_compacted  += cx->compaction_size;
     cx->bytes_collected  += wikrt_mem_in_use(&cx0) - cx->compaction_size;
+}
+
+void wikrt_cx_gc(wikrt_cx* cx) { 
+    wikrt_mem_compact(cx); 
 }
 
 bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)

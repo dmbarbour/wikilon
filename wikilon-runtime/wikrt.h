@@ -554,7 +554,7 @@ struct wikrt_cx {
 
     // controlling evaluation effort
     wikrt_effort_model  effort_model;
-    uint32_t            step_effort;
+    uint32_t            effort_value;
     uint64_t            blocks_evaluated;
 
     // other:
@@ -572,36 +572,21 @@ struct wikrt_cx {
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
 #define WIKRT_HAS_SHARED_REFCT_OBJECTS 0 /* for static assertions */
 
-/* Idea: I could try to track a free list, perhaps a single element, for
- * specific cases, e.g. the deep-sum tag (for VRWLCZ ops) and for opening
- * and closing the UTF8 tag or OPVAL tags when writing. Doing so could
- * save a fair portion of allocations in some special cases.
- *
- * However, with an experiment the savings have been marginal at best. 
- * So I'm going to omit this for now (it adds complexity). 
- */
-
-/* For large contexts (e.g. 20MB+) I will want to try to use less than
- * the maximum available space. Doing so improves memory locality and 
- * reduce virtual memory pressure, though the virtual memory space is 
- * still reserved. It's very simple to allocate an empty 'skip' space.
- *
- * If a context is within WIKRT_MEM_FACTOR of being full, this will do 
- * nothing. I also use prior memory consumption as a stabilizing factor,
- * i.e. to smooth over rapid fluctuations in context size. 
- */
-#define WIKRT_MEM_FACTOR 3 /* free space for some factor of current use (if possible) */
+// For large memory contexts, reduce VM pressure and improve
+// locality by using a smaller fraction of the memory arena 
+#define WIKRT_MEM_FACTOR 4 /* free space for some factor of current use (if possible) */
 #define WIKRT_MEM_FACTOR_PRIOR 2 /* free space for some factor of prior use (if possible) */
 #define WIKRT_MEM_PAGEMB 2 /* free space in chunks of so many megabytes (if possible) */
 
-/* Thrash control? 
- *
- * If memory is consistently near-full after compaction, we're "thrashing".
- * We end up spending more time managing memory than usefully computing.
- *
- * At the very least, it would be useful to export statistics to the client
- * so the client can make useful heuristic decisions regarding thrashing.
- */
+// Default effort model. I've decided megabytes allocated is a good
+// default model because it's robust to changes in context size, and
+// is a decent metric of the 'size' of a computation. A few hundred
+// megabytes effort is non-trivial. 
+#define WIKRT_DEFAULT_EFFORT_MODEL WIKRT_EFFORT_MEGABYTES
+#define WIKRT_DEFAULT_EFFORT_VALUE 1000
+
+// estimate of effort up until moment of call. 
+uint64_t wikrt_effort_snapshot(wikrt_cx*);
 
 // Consider:
 //  a space for non-copying loopy code - shared memory that

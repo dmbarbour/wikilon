@@ -68,7 +68,7 @@ typedef struct wikrt_cx wikrt_cx;
  * dynamic lib implements. This is just a simple sanity check.
  */
 uint32_t wikrt_api_ver();
-#define WIKRT_API_VER 20160808
+#define WIKRT_API_VER 20160809
 
 /** Wikilon runtime error codes. */
 typedef enum wikrt_ecode
@@ -719,8 +719,9 @@ void wikrt_apply(wikrt_cx*);
  * in the right. Otherwise, an updated future is returned in the left. Or
  * there might be a runtime type or memory error, so do test wikrt_error.
  * 
- * Note: Default effort is unspecified, though good enough for most use 
- * cases. Clients may specify an effort model via wikrt_set_step_effort.
+ * Note: Default effort is unspecified, but sufficient to make reasonable
+ * progress per step. Clients may specify the heuristic effort model via
+ * wikrt_set_step_effort.
  */ 
 void wikrt_step_eval(wikrt_cx*);
 
@@ -820,7 +821,8 @@ typedef enum wikrt_effort_model
 { WIKRT_EFFORT_BLOCKS       // effort is blocks evaluated
 , WIKRT_EFFORT_GC_CYCLES    // effort is GC cycle count
 , WIKRT_EFFORT_MEGABYTES    // effort is megabytes allocated
-, WIKRT_EFFORT_MICROSECS    // effort is elapsed microseconds
+, WIKRT_EFFORT_MILLISECS    // effort is elapsed milliseconds
+, WIKRT_EFFORT_CPU_TIME     // effort is CPU milliseconds
 } wikrt_effort_model;
 
 /** @brief Tune effort per wikrt_step_eval.
@@ -832,9 +834,8 @@ typedef enum wikrt_effort_model
  *
  * Other than 'microsecs', effort models are weakly deterministic
  * in the sense that the amount of work should be reproducible for
- * the given initial state, computation, runtime implementation,
- * and so on. The 'blocks' and 'megabytes' options are robust to
- * changes in context size.
+ * the given initial state. The 'blocks' and 'megabytes' options 
+ * are additionally robust to changes in context size.
  */
 void wikrt_set_step_effort(wikrt_cx*, wikrt_effort_model, uint32_t effort);
 

@@ -1,36 +1,20 @@
-
-#include <assert.h>
-#include <stdio.h>
-#include <string.h>
-#include "wikrt.h"
-
-
 /* NOTES:
  *
  * Representation: Apply will produce a tagged (block * value) pair,
- * representing incomplete application of the block to the value.
- * Use of `wikrt_step_eval` will apply the block with a reasonable
- * effort, then return. 
+ * same as lazy values. Use of `wikrt_step_eval` will apply the block
+ * within a finite effort quota, then return. 
  *
- * Effort Quota:
+ * Effort Quota: I've decided to leave this decision to the client,
+ * via wikrt_set_step_effort. The options are limited, but should
+ * cover most use cases.
+ *
+ * Tail Call Optimization: Long-running loops rely on tail calls 
+ * to control memory usage for loopy code. I'll be sure to recognize
+ * `[...$c]` patterns in the parser. This enables tail calls without
+ * requiring a full optimization pass.
  * 
- * I've decided to leave this decision to the API client, albeit with
- * only a few sensible options. See wikrt_set_step_effort().
-*
- * Infinite loops will be a problem. So I'll just halt any computation
- * that appears to take too long. Eventually (with parallelism) I may
- * need something sophisticated, like a shared pool for computation
- * effort. 
- *
- * Testing our quota currently occurs whenever we end a block call,
- * including for tail calls. So we might run a bit over. This isn't
- * a big deal.
- *
- * How much work is 'too much'? I might eventually tune this when
- * loading the environment. But for now, I'll use a simple estimate
- * based on 'so many GC ticks'.
- *
- * Tail Call Optimization and Loopy Code:
+ * 
+ * 
  *
  * The 'tail call optimization' or TCO involves recognizing a `$c`
  * operator sequence at the end of a function call. It allows a
@@ -43,6 +27,71 @@
  *
  * I've decided to move this responsibility into the parser. 
  */
+
+
+
+#define _POSIX_C_SOURCE 200809L
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include "wikrt.h"
+
+/* reasonable 'effort' clocks
+ *  The best available options are Linux specific.
+ *  I might need to develop portability options, later.
+ */
+#if defined(CLOCK_BOOTTIME)
+#define WIKRT_RT_CLOCK  CLOCK_BOOTTIME
+#else 
+#define WIKRT_RT_CLOCK  CLOCK_MONOTONIC
+#endif
+
+#define WIKRT_CPU_CLOCK CLOCK_THREAD_CPUTIME_ID
+
+
+static uint64_t wikrt_time_effort(wikrt_cx* cx, clockid_t clk_id) 
+{
+    struct timespec tm;
+    if(0 == clock_gettime(clk_id, &tm)) {
+        // time to millisecs
+        return (((uint64_t)tm.tv_sec)  *    1000)
+             + (((uint64_t)tm.tv_nsec) / 1000000);
+    } else {
+        fprintf(stderr, "%s: failed to read clock for quota\n", __FUNCTION__);
+        wikrt_set_error(cx, WIKRT_IMPL);
+        return 0;
+    }
+}
+
+static uint64_t wikrt_alloc_effort(wikrt_cx* cx)
+{
+    wikrt_size const alloc_bytes = cx->bytes_collected + wikrt_mem_in_use(cx);
+    return (uint64_t)(alloc_bytes >> 20); // bytes → megabytes
+}
+
+uint64_t wikrt_effort_snapshot(wikrt_cx* cx)
+{ switch(cx->effort_model) {
+    case WIKRT_EFFORT_BLOCKS:       return cx->blocks_evaluated;
+    case WIKRT_EFFORT_GC_CYCLES:    return cx->compaction_count;
+    case WIKRT_EFFORT_MEGABYTES:    return wikrt_alloc_effort(cx);
+    case WIKRT_EFFORT_MILLISECS:    return wikrt_time_effort(cx, WIKRT_RT_CLOCK);
+    case WIKRT_EFFORT_CPU_TIME:     return wikrt_time_effort(cx, WIKRT_CPU_CLOCK);
+    default: {
+        wikrt_set_error(cx, WIKRT_INVAL);
+        fprintf(stderr, "%s: unhandled wikrt_effort_model (%d)\n", 
+            __FUNCTION__, (int)(cx->effort_model));
+        return 0;
+    } 
+}}
+
+// User control of 'wikrt_step_eval' effort.
+void wikrt_set_step_effort(wikrt_cx* cx, wikrt_effort_model m, uint32_t e)
+{
+    cx->effort_model = m;
+    cx->effort_value = e;
+    wikrt_effort_snapshot(cx); // validate model
+}
 
 static inline void wikrt_eval_push_op(wikrt_cx* cx, wikrt_op op) 
 {
@@ -159,20 +208,14 @@ static void _wikrt_eval_step_inline(wikrt_cx* cx)
         wikrt_addr const obj_addr = wikrt_vaddr_obj(*v);
         wikrt_val* const pctr = &(cx->pc);
         wikrt_val* const cstk = wikrt_pval(cx, cx->cc);
-        // For both tail calls and regular calls, I'll push an operations list
-        // to the cx->cc stack. Tail call optimization simply involves swapping
-        // the applied function with an identity function (an empty ops list) 
-        // whenever possible.
         _Static_assert(!WIKRT_NEED_FREE_ACTION, "dropping a cell during evaluation");
-        obj[0]  = (*pctr);
-        (*pctr) = obj[1];
+        obj[0]  = obj[1]; 
         obj[1]  = (*cstk);
         (*cstk) = wikrt_tag_addr(WIKRT_PL, obj_addr);
-        cx->val = v[1]; 
-        if(WIKRT_UNIT_INR == obj[0]) { 
-            // the tail call optimization. 
-            obj[0]  = (*pctr);
-            (*pctr) = WIKRT_UNIT_INR;
+        cx->val = v[1];     // drop cell
+        if(WIKRT_UNIT_INR != (*pctr)) { 
+            // this was not a tail call.
+            wikrt_pval_swap(obj, pctr); 
         }
     }
 }
@@ -378,17 +421,18 @@ static void wikrt_run_eval_object(wikrt_cx* cx)
     }
 }
 
+
 static void wikrt_run_eval_operator(wikrt_cx* cx, wikrt_op op)
 {
     assert((OP_INVAL < op) && (op < OP_COUNT));
     wikrt_op_evalfn_table[op](cx);
 }
- 
-void wikrt_run_eval_step(wikrt_cx* cx) 
+
+static void wikrt_eval_loop(wikrt_cx* cx) 
 {
-    // TODO: use effort model.
-    uint64_t const tick_stop = cx->compaction_count + 5;
+    uint64_t const effort_start = wikrt_effort_snapshot(cx);
     do { 
+
         // Run basic ops in a tight loop.
         while(wikrt_pl(cx->pc)) { 
             wikrt_addr const addr = wikrt_vaddr(cx->pc);
@@ -408,34 +452,104 @@ void wikrt_run_eval_step(wikrt_cx* cx)
 
         // TODO: Develop and handle 'compact' operations sequences.
 
-        if(WIKRT_UNIT_INR == cx->pc) {
+        if(wikrt_has_error(cx)) { return; } // Halt on error.
+        else if(WIKRT_UNIT_INR == cx->pc) {
             ++(cx->blocks_evaluated);
-
-            // Pop the call stack. Unless we've errored out, or it's empty,
-            // or we've reached our quota limitations.
             wikrt_val* const pcc = wikrt_pval(cx, cx->cc);
-            bool const halt = wikrt_has_error(cx)
-                           || (WIKRT_UNIT_INR == (*pcc))
-                           || (cx->compaction_count >= tick_stop);
-            if(halt) { return; }
+            if(WIKRT_UNIT_INR == (*pcc)) { return; } // Halt on completion.
 
+            // Halt on step quota if necessary.
+            uint64_t const effort_current = wikrt_effort_snapshot(cx);
+            uint64_t const step_effort = (effort_current - effort_start);
+            bool const quota_reached = (step_effort >= cx->effort_value); 
+            if(quota_reached) { return; } // Halt on quota.
+
+            // If we haven't halted, pop the stack and continue.
             if(wikrt_pl(*pcc)) {
-                // pop call stack
                 _Static_assert(!WIKRT_NEED_FREE_ACTION, "todo: free stack cons cell");
                 wikrt_val* const node = wikrt_pval(cx, (*pcc));
                 cx->pc = node[0];
                 (*pcc) = node[1];  
             } else {
                 // This shouldn't be possible.
-                fprintf(stderr, "%s: unhandled evaluation stack type\n", __FUNCTION__);
+                fprintf(stderr, "%s: unhandled continuation stack type\n", __FUNCTION__);
                 abort();
             }
         } else {
-            fprintf(stderr, "%s: unhandled (compact?) operations list type (%lld)\n", __FUNCTION__, (long long int) cx->pc);
+            fprintf(stderr, "%s: unhandled program list type (%d)\n", __FUNCTION__, (int) cx->pc);
             abort();
         }
     } while(true);
 }
+
+static void wikrt_eval_init(wikrt_cx* cx)
+{
+    assert((WIKRT_REG_CC_INIT == cx->cc) 
+        && (WIKRT_REG_PC_INIT == cx->pc));
+    cx->pc = WIKRT_UNIT_INR;
+    cx->cc = WIKRT_UNIT_INR;
+
+    wikrt_open_pending(cx);
+    wikrt_pval_swap(wikrt_pval(cx, cx->val), &(cx->cc)); 
+    wikrt_pval_swap(&(cx->val), &(cx->cc)); 
+    wikrt_run_eval_operator(cx, ACCEL_INLINE); // begin this block
+}
+
+static void wikrt_eval_fini(wikrt_cx* cx)
+{
+    if(wikrt_has_error(cx)) { return; } // abandon effort
+
+    // cc has (stack * e). Tuck `e` back into cx->val.
+    wikrt_pval_swap(&(cx->val), wikrt_pval(cx, cx->cc));
+    wikrt_pval_swap(&(cx->val), &(cx->cc));
+    // cx->val is (v * e), cx->cc is just `stack`
+
+    bool const complete = (WIKRT_UNIT_INR == cx->pc) 
+                       && (WIKRT_UNIT_INR == cx->cc);
+    if(complete) {
+        cx->pc = WIKRT_REG_PC_INIT;
+        cx->cc = WIKRT_REG_CC_INIT;
+        wikrt_wrap_sum(cx, WIKRT_INR); // complete result in right
+        return;
+    }
+
+    if(!wikrt_mem_reserve(cx, (2 * WIKRT_CELLSIZE))) { return; }
+
+    // move cx->cc (continuation stack) onto cx->val.  (stack * (v * e))
+    wikrt_intro_r(cx, WIKRT_REG_CC_INIT);  
+    wikrt_pval_swap(&(cx->cc), wikrt_pval(cx, cx->val));
+ 
+    // move cx->pc (current program list) onto cx->val. (ops * (stack * (v * e)))
+    wikrt_intro_r(cx, WIKRT_REG_PC_INIT);  
+    wikrt_pval_swap(&(cx->pc), wikrt_pval(cx, cx->val));
+
+    // use cx->pc ops as an initial continuation. 
+    // This is probably an empty block, but that's fine.
+    wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK);
+
+    wikrt_wswap(cx);
+    wikrt_sum_tag lr;
+    wikrt_unwrap_sum(cx, &lr);
+    while((WIKRT_INL == lr) && !wikrt_has_error(cx)) {
+        // we have ((ops*stack') * (cc * (val * e))) in cx->val
+        wikrt_assocr(cx); 
+        wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK); // ops → block
+        wikrt_zswap(cx); 
+        wikrt_wswap(cx);    // cc to top to compose cc before block
+        wikrt_compose(cx);  // compose block and ops
+        wikrt_wswap(cx);    // stack' back to top
+        wikrt_unwrap_sum(cx, &lr); // continue loop
+    }
+    wikrt_elim_unit(cx); // remove empty stack.
+
+    // we now have (cc * (val * e)). The `cc` captures the original 
+    // call stack. It isn't guaranteed to exactly preserve structure,
+    // e.g. compose may heuristically inline vs. quote. But it should
+    // preserve behavior.
+    wikrt_apply(cx); // back to the (future * e)
+    wikrt_wrap_sum(cx, WIKRT_INL); // incomplete result in left
+}
+
 
 /* Step fully or partially through evaluation of a future value.
  * At the moment, this is just lazy futures. But parallel futures
@@ -451,54 +565,11 @@ void wikrt_step_eval(wikrt_cx* cx)
 {
     // preliminary
     wikrt_require_fresh_eval(cx);
-    wikrt_open_pending(cx);
     if(wikrt_has_error(cx)) { return; }
-
-    assert((WIKRT_REG_CC_INIT == cx->cc) 
-        && (WIKRT_REG_PC_INIT == cx->pc));
-
-    cx->pc = WIKRT_UNIT_INR;
-    cx->cc = WIKRT_UNIT_INR;
-    wikrt_pval_swap(wikrt_pval(cx, cx->val), &(cx->cc)); 
-    wikrt_pval_swap(&(cx->val), &(cx->cc)); 
-
-    // At this point we have:
-    //  cx->val = (block * arg)
-    //  cx->cc  = (empty stack list * env)
-    //  cx->pc  = empty ops list
-
-    // Initiate then run our computation.
-    wikrt_run_eval_operator(cx, ACCEL_INLINE);
-    wikrt_run_eval_step(cx);
-
-    if(wikrt_has_error(cx)) { return; } // abandon effort
-
-    bool const finished =
-        (WIKRT_UNIT_INR == cx->pc) &&
-        (WIKRT_UNIT_INR == wikrt_pval(cx, cx->cc)[0]);
-
-    if(finished) {
-        // recover the captured `e` value from cx->cc
-        wikrt_pval_swap(&(cx->val), wikrt_pval(cx, cx->cc));
-        wikrt_pval_swap(&(cx->val), &(cx->cc));
-
-        // restore the registers.
-        cx->pc = WIKRT_REG_PC_INIT;
-        cx->cc = WIKRT_REG_CC_INIT;
-        
-        // Return our value 'in the right' to indicate completion.
-        wikrt_wrap_sum(cx, WIKRT_INR);
-
-    } else {
-        // incomplete evaluation!
-        assert(WIKRT_UNIT_INR == cx->pc); // assume at least completed block
-        // TODO: rebuild the `block` for the next evaluation step. Restore
-        // the pending value structure and registers.
-        wikrt_set_error(cx, WIKRT_IMPL);
-    }
+    wikrt_eval_init(cx);
+    wikrt_eval_loop(cx);
+    wikrt_eval_fini(cx);
 }
-
-
 
 // (block * e) → (ops * e), returning otag
 wikrt_otag wikrt_open_block_ops(wikrt_cx* cx) 
