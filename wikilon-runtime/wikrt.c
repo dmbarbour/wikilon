@@ -272,7 +272,7 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
 
     // Ideally I could release and regain memory, e.g. with madvise.
     // But I've been having some difficulty with madvise and mmap
-    // based arenas recently.
+    // based arenas recently, at least for very large arenas.
 
     return true;
 } 

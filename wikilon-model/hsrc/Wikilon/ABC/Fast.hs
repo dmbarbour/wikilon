@@ -12,7 +12,8 @@
 --
 module Wikilon.ABC.Fast
     ( ABC
-    , Op(..), expandOps, compactOps
+    , Op(..)
+    , expandOps, compactOps
     , V(..), purifyV
     , ExtOp(..), extOpTable, extCharToOp, extOpToChar
     , PrimOp(..)

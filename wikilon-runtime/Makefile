@@ -10,7 +10,7 @@ RUNTIME_OBJECTS := lmdb/mdb.o lmdb/midl.o murmur3/murmur3.o futil.o utf8.o \
 LINKAO_OBJECTS := AO/aofile.o linkAO.o
 INSTALL_PREFIX := /usr/local
 
-.PHONY: all lib clean install uninstall runtests 
+.PHONY: all lib clean install install_paths uninstall runtests
 
 all: lib runtests runABC linkAO
 
@@ -22,15 +22,13 @@ clean:
 	rm -f runABC linkAO testSuite
 	rm -rf testdir
 
-install: mkpaths libwikilon-runtime.so wikilon-runtime.h runABC linkAO
-	mkdir -p $(INSTALL_PREFIX)
-	test -w $(INSTALL_PREFIX)
-	mkdir -p $(INSTALL_PREFIX)/lib
-	mkdir -p $(INSTALL_PREFIX)/include
-	mkdir -p $(INSTALL_PREFIX)/bin
-	test -w $(INSTALL_PREFIX)/lib
-	test -w $(INSTALL_PREFIX)/include
-	test -w $(INSTALL_PREFIX)/bin
+install_paths:
+	mkdir -p $(INSTALL_PREFIX)         && test -w $(INSTALL_PREFIX)
+	mkdir -p $(INSTALL_PREFIX)/lib     && test -w $(INSTALL_PREFIX)/lib
+	mkdir -p $(INSTALL_PREFIX)/include && test -w $(INSTALL_PREFIX)/include
+	mkdir -p $(INSTALL_PREFIX)/bin     && test -w $(INSTALL_PREFIX)/bin
+
+install: libwikilon-runtime.so wikilon-runtime.h runABC linkAO install_paths
 	cp ./libwikilon-runtime.so $(INSTALL_PREFIX)/lib
 	cp ./wikilon-runtime.h $(INSTALL_PREFIX)/include
 	cp ./linkAO $(INSTALL_PREFIX)/bin
