@@ -496,7 +496,7 @@ static inline void wikrt_env_lock(wikrt_env* e) {
 static inline void wikrt_env_unlock(wikrt_env* e) {
     pthread_mutex_unlock(&(e->mutex)); }
 
-void wikrt_add_cx_to_env(wikrt_cx* cx);
+void wikrt_add_cx_to_env(wikrt_cx* cx, wikrt_env*);
 void wikrt_remove_cx_from_env(wikrt_cx* cx);
 
 /** trace buffer */

@@ -92,26 +92,22 @@ wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB)
     if(NULL == e) { return NULL; }
 
     size_t const size = ((size_t)cxSizeMB * (1024 * 1024));
-    bool const validSize = (0 < size) && (size < (SIZE_MAX / 2));
+    bool const validSize = (0 < size) 
+                        && (size < (SIZE_MAX / 8)) // let's not push limits here
+                        && (cxSizeMB == (size >> 20)); // shift doesn't overflow
 
     if(!validSize) { return NULL; }
 
     wikrt_cx* const cx = calloc(1, sizeof(wikrt_cx));
-    if(NULL == cx) { return NULL; }
+    void* const mem = malloc(size);
+    void* const ssp = malloc(size);
 
-    // validate sizes according to API declarations
-    static int const prot = PROT_READ | PROT_WRITE | PROT_EXEC;
-    static int const flags = MAP_ANONYMOUS | MAP_PRIVATE;
-    void* const twospace = mmap(NULL, (2 * size), prot, flags, -1, 0);
-    if(NULL == twospace) { free(cx); return NULL; }
-    
-    void* const mem = twospace;
-    void* const ssp = (void*)(size + (char*)mem);
+    bool const alloc_ok = (NULL != cx) && (NULL != mem) && (NULL != ssp);
+    if(!alloc_ok) { free(cx); free(mem); free(ssp); return NULL; }
 
-    cx->env     = e;
-    cx->size    = (wikrt_size) size; 
     cx->mem     = mem;
     cx->ssp     = ssp;
+    cx->size    = (wikrt_size) size; 
     cx->ecode   = WIKRT_OK;
 
     // initialize value registers
@@ -126,14 +122,15 @@ wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB)
                               WIKRT_DEFAULT_EFFORT_VALUE);
 
     
-    wikrt_add_cx_to_env(cx);
+    wikrt_add_cx_to_env(cx, e);
     return cx;
 }
 
-void wikrt_add_cx_to_env(wikrt_cx* cx) 
+void wikrt_add_cx_to_env(wikrt_cx* cx, wikrt_env* e) 
 {
-    wikrt_env* const e = cx->env;
+    assert(NULL == cx->env);
     wikrt_env_lock(e); {
+        cx->env = e;
         cx->cxid = ++(e->cxcount); 
         cx->cxnext = e->cxlist;
         if(NULL != cx->cxnext) { cx->cxnext->cxprev = cx; }
@@ -144,6 +141,7 @@ void wikrt_add_cx_to_env(wikrt_cx* cx)
 
 void wikrt_remove_cx_from_env(wikrt_cx* cx) 
 {
+    assert(NULL != cx->env);
     wikrt_env* const e = cx->env;
     wikrt_env_lock(e); {
         if(NULL != cx->cxnext) { cx->cxnext->cxprev = cx->cxprev; }
@@ -151,6 +149,7 @@ void wikrt_remove_cx_from_env(wikrt_cx* cx)
         else { assert(e->cxlist == cx); e->cxlist = cx->cxnext; }
         cx->cxnext = NULL;
         cx->cxprev = NULL;
+        cx->env = NULL;
     } wikrt_env_unlock(e);
 }
 
@@ -177,15 +176,9 @@ void wikrt_cx_destroy(wikrt_cx* cx)
     // free the trace buffer (if any)
     free(cx->tb.buf);
 
-    // free the memory-mapped region
-    errno = 0;
-    void* const twospace = (cx->mem < cx->ssp) ? cx->mem : cx->ssp;
-    size_t const twospace_size = 2 * ((size_t)cx->size);
-    int const unmapStatus = munmap(twospace, twospace_size);
-    if(0 != unmapStatus) {
-        fprintf(stderr,"Failure to unmap memory (%s) when destroying context.\n", strerror(errno));
-        abort(); // this is some sort of OS failure.
-    }
+    // free the memory and scratch arenas
+    free(cx->mem);
+    free(cx->ssp);
 
     // recover wikrt_cx structure
     free(cx);
@@ -193,31 +186,6 @@ void wikrt_cx_destroy(wikrt_cx* cx)
 
 wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
     return cx->env;
-}
-
-static void wikrt_mem_advise(wikrt_cx* cx)
-{
-    errno = 0;
-    // I would like to relieve memory pressure in larger contexts.
-    // This is achievable by madvise(... MADV_DONTNEED). This will
-    // result in zero'd pages, which isn't a problem for my scratch
-    // space.
-    //
-    // Unfortunately, releasing the scratch space results in enormous
-    // volumes of minor page faults the moment it's needed again. The
-    // actual time costs aren't so bad in my test environment, but I
-    // am not so confident that will hold.
-    size_t const klo = (WIKRT_MEM_PAGEMB << 20);
-    size_t const khi = (1<<18); 
-    bool const ok_to_clear = cx->size > (klo + khi);
-    if(ok_to_clear) { 
-        void* const  addr = (void*)(klo + (char*)cx->ssp);
-        size_t const size = (size_t)(cx->size - (klo + khi));
-        if(0 != madvise(addr, size, MADV_DONTNEED)) {
-            fprintf(stderr, "%s: madvise failed (%s)\n", __FUNCTION__, strerror(errno));
-            abort();
-        }
-    }
 }
 
 static void wikrt_mem_compact(wikrt_cx* cx) 
@@ -266,14 +234,8 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     cx->compaction_size  = wikrt_mem_in_use(cx);
     cx->bytes_compacted  += cx->compaction_size;
     cx->bytes_collected  += wikrt_mem_in_use(&cx0) - cx->compaction_size;
-
-    // Provide some advise for further memory use.
-    wikrt_mem_advise(cx);
 }
 
-void wikrt_cx_gc(wikrt_cx* cx) { 
-    wikrt_mem_compact(cx); 
-}
 
 bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
 {
@@ -289,13 +251,11 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
         return false;
     }
 
-    // Success! 
-    //
-    // But large contexts might have TOO MUCH space. By this, I mean
-    // that we'll be creating too much pressure on the VM system and
-    // hurting cache locality by using more memory than we need. So
-    // if I have a lot more memory than I apparently need, I'll drop
-    // some of it. 
+    // Large contexts can create a lot of undesirable VM pressure and hurt
+    // memory locality. This can be mitigated by using less than maximum
+    // memory, and by use of madvise(DONTNEED) to clear memory allocations 
+    // that won't see reuse in the near future.
+
     _Static_assert((WIKRT_MEM_FACTOR >= 0) 
                 && (WIKRT_MEM_FACTOR_PRIOR >= 0) 
                 && (WIKRT_MEM_PAGEMB >= 1),
@@ -309,8 +269,19 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
         cx->skip  = (cx->alloc - target);
         cx->alloc = target;
     }
-    return true; 
+
+    // Ideally I could release and regain memory, e.g. with madvise.
+    // But I've been having some difficulty with madvise and mmap
+    // based arenas recently.
+
+    return true;
 } 
+
+void wikrt_cx_gc(wikrt_cx* cx) { 
+    wikrt_mem_gc_then_reserve(cx, 0); 
+}
+
+
 
 void wikrt_peek_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s)
 {

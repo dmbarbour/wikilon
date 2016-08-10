@@ -226,7 +226,11 @@ A simplistic laziness option that I'm considering is this:
 * when applied, that block returns a lazy future value
 * lazy futures may be forced by use of `{&join}`
 
-The main benefit I gain from this form of explicit laziness (relative to explicitly carting around a `(value, block)` pair) - is the opacity of the value, potential to optimize (to partially or wholly evaluate). Additionally, laziness as a future can be lifted easily to a one-off parallel computation, e.g. by a `{&par}` annotation.
+A lazy value might minimally be represented by a `lazy ([a→v] * a)` tagged pair. Unfortunately, this won't support *copying* of the lazy value (without copying the computation). But it would work for a linear or affine lazy value. Laziness with copying might need alternative features - state or caching.
+
+A lazy value informs the runtime/compiler/optimizer that a given function will ONLY be applied to a specific value. This can simplify partial evaluation.
+
+ (relative to explicitly carting around a `(value, block)` pair) - is the opacity of the value, potential to optimize (to partially or wholly evaluate). Additionally, laziness as a future can be lifted easily to a one-off parallel computation, e.g. by a `{&par}` annotation.
 
 Explicit laziness does hinder some things, such as treating simple lists as streams. But this isn't a big problem. I don't really want to encourage too much use of laziness. It might prove favorable to model incremental computation explicitly in terms of command sequences, streams, continuation passing style, etc.. Unlike parallelism, laziness is not essential for performance or scalability, just occasionally convenient.
 
