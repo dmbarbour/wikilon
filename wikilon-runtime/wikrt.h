@@ -574,9 +574,9 @@ struct wikrt_cx {
 
 // For large memory contexts, reduce VM pressure and improve
 // locality by using a smaller fraction of the memory arena 
-#define WIKRT_MEM_FACTOR 4 /* free space for some factor of current use (if possible) */
-#define WIKRT_MEM_FACTOR_PRIOR 2 /* free space for some factor of prior use (if possible) */
-#define WIKRT_MEM_PAGEMB 2 /* free space in chunks of so many megabytes (if possible) */
+#define WIKRT_MEM_FACTOR        4 /* preserve some factor of current use */
+#define WIKRT_MEM_FACTOR_PRIOR  2 /* preserve some factor of prior use  */
+#define WIKRT_MEM_PAGEMB        2 /* preserve blocks of so many megabytes */
 
 // Default effort model. I've decided megabytes allocated is a good
 // default model because it's robust to changes in context size, and

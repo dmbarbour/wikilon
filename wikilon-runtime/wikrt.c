@@ -195,6 +195,31 @@ wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
     return cx->env;
 }
 
+static void wikrt_mem_advise(wikrt_cx* cx)
+{
+    errno = 0;
+    // I would like to relieve memory pressure in larger contexts.
+    // This is achievable by madvise(... MADV_DONTNEED). This will
+    // result in zero'd pages, which isn't a problem for my scratch
+    // space.
+    //
+    // Unfortunately, releasing the scratch space results in enormous
+    // volumes of minor page faults the moment it's needed again. The
+    // actual time costs aren't so bad in my test environment, but I
+    // am not so confident that will hold.
+    size_t const klo = (WIKRT_MEM_PAGEMB << 20);
+    size_t const khi = (1<<18); 
+    bool const ok_to_clear = cx->size > (klo + khi);
+    if(ok_to_clear) { 
+        void* const  addr = (void*)(klo + (char*)cx->ssp);
+        size_t const size = (size_t)(cx->size - (klo + khi));
+        if(0 != madvise(addr, size, MADV_DONTNEED)) {
+            fprintf(stderr, "%s: madvise failed (%s)\n", __FUNCTION__, strerror(errno));
+            abort();
+        }
+    }
+}
+
 static void wikrt_mem_compact(wikrt_cx* cx) 
 {
 
@@ -232,13 +257,6 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     // I'm moving the values OR perform a separate deletion pass.
     _Static_assert(!WIKRT_HAS_SHARED_REFCT_OBJECTS, "todo: figure out refcts during compaction");
 
-    // reset semispace to reduce swap pressure.
-    errno = 0;
-    if(0 != madvise(cx->ssp, cx->size, MADV_DONTNEED)) {
-        fprintf(stderr, "%s: madvise failed (%s)\n", __FUNCTION__, strerror(errno));
-        abort();
-    }
-
     // sanity check: compaction must not increase memory usage.
     assert(wikrt_mem_in_use(&cx0) >= wikrt_mem_in_use(cx));
 
@@ -248,6 +266,9 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     cx->compaction_size  = wikrt_mem_in_use(cx);
     cx->bytes_compacted  += cx->compaction_size;
     cx->bytes_collected  += wikrt_mem_in_use(&cx0) - cx->compaction_size;
+
+    // Provide some advise for further memory use.
+    wikrt_mem_advise(cx);
 }
 
 void wikrt_cx_gc(wikrt_cx* cx) { 

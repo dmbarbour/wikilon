@@ -218,18 +218,18 @@ This design for parallelism is simple, highly scalable, and expressive within th
 
 #### Lazy Computation? 
 
-The concept of 'lazy' computations seems rather troublesome. The issue is: how shall laziness interact with persistence, parallelism, distribution, substructural types, caching, termination, etc.? I haven't found an approach I find fully satisfactory.
+The concept of 'lazy' computations seems rather troublesome. The issues are: how should laziness interact with persistence, parallelism, distribution, substructural types, caching, termination, etc.? I haven't found an approach I find entirely satisfactory. 
 
 A simplistic laziness option that I'm considering is this:
 
 * a block may be marked lazy by annotation, `{&lazy}`
 * when applied, that block returns a lazy future value
-* lazy futures may be synchronized by `{&join}`
-* lazy future is effectively a special case asynch value
+* lazy futures may be forced by use of `{&join}`
 
 The main benefit I gain from this form of explicit laziness (relative to explicitly carting around a `(value, block)` pair) - is the opacity of the value, potential to optimize (to partially or wholly evaluate). Additionally, laziness as a future can be lifted easily to a one-off parallel computation, e.g. by a `{&par}` annotation.
 
-Explicit laziness does hinder some things, such as treating simple lists as streams. But this isn't a big problem. I don't really want to encourage too much use of laziness. It might prove favorable to model incremental computation explicitly in terms of command sequences, streams, continuation passing style, etc. than to use laziness in most cases. Laziness is not essential for performance or scalability.
+Explicit laziness does hinder some things, such as treating simple lists as streams. But this isn't a big problem. I don't really want to encourage too much use of laziness. It might prove favorable to model incremental computation explicitly in terms of command sequences, streams, continuation passing style, etc.. Unlike parallelism, laziness is not essential for performance or scalability, just occasionally convenient.
+
 
 
 ### Arrays or Compact Lists

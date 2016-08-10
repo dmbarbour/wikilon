@@ -1,4 +1,6 @@
-@fix [^'mw^'zmw{%i}]^'mw'm
+@fix [{%fix.i}]w'm
+@fix.i [{%fix.z}]{%fix.z}
+@fix.z ^'mw^'zmw{%i}
 @fix.doc 
 "USAGE:     [program] fix
  BEHAVIOR: [[program] fix program]

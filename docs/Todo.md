@@ -3,13 +3,38 @@
 
 My primary efforts at the moment should be:
 
-* debug step eval for long quotas effort
+* profile Haskell interpreter vs C interpreter.
+ * use a few shared, simple benchmarks
+ * make sure I have a good start, here
+
+* simplifiers and accelerators for C's ABC code
+ * support existing accelerators
+ * develop widely useful accelerators:
+  * fixpoint-inline (fix.i)
+  * `if` and `if_` behaviors.
+  * common EQ/NEQ behavior.
+  * sum→boolean conversion.
+  * some deep stack manipulations
+ * develop specialized accelerators:
+  * deep structural manipulations
+  * list processing accelerators
+  * consider support for 'compact' texts
+
+* compact bytecode model
+ * simplify fast-copy, etc..
+ * contain binaries, blocks, and texts
+ * design with eye towards sharing
+
+* shared bytecode model
+ * avoid full copies for large bytecode.
+ * for now, maybe separate from stowage.
 
 * persistence and stowage
+ * potential for shared, stable object models
 
-* profiling and debugging
- * stack trace
- * profiling options
+* profiling and debugging of AO code
+ * simplified stack traces
+ * other profiling options
 
 * get web service active again!
  * develop useful application models
