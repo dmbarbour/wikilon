@@ -14,7 +14,7 @@ module Wikilon.ABC.Fast
     ( ABC
     , Op(..)
     , expandOps, compactOps
-    , V(..), purifyV
+    , V(..), purifyV, block
     , ExtOp(..), extOpTable, extCharToOp, extOpToChar
     , PrimOp(..)
     , Token
@@ -101,6 +101,9 @@ data V
     -- todo: add support for parallel evaluation
     --       (maybe support laziness, too). 
     --       (maybe persistent laziness? could be cool.)
+
+block :: ABC -> V
+block abc = B abc zeroBits
 
 
 -- contemplating support for: 
