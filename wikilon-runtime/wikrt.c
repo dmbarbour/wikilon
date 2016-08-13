@@ -1810,8 +1810,18 @@ void wikrt_int_cmp(wikrt_cx* cx, wikrt_ord* ord)
 }
 
 // Quotation - capturing a value into a block in O(1) time.
+// This is a very frequent operation, so I try to make it fast.
 void wikrt_quote(wikrt_cx* cx) 
 {
+    #if 0
+    // non-optimized version:
+    wikrt_wrap_otag(cx, (WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF));
+    wikrt_intro_empty_list(cx);
+    wikrt_wswap(cx);
+    wikrt_cons(cx);
+    wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK);
+    #else 
+
     wikrt_size const szAlloc = 3 * WIKRT_CELLSIZE;
     if(!wikrt_mem_reserve(cx, szAlloc)) { return; }
     if(!wikrt_p(cx->val)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
@@ -1829,124 +1839,149 @@ void wikrt_quote(wikrt_cx* cx)
     pa[4] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF;
     pa[5] = (*v);
     (*v) = wikrt_tag_addr(WIKRT_O, a);
+    #endif
 }
 
-static void wikrt_block_attrib(wikrt_cx* cx, wikrt_val attrib) 
+
+void wikrt_intro_id_block(wikrt_cx* cx)
 {
+    wikrt_intro_empty_list(cx);
+    wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK);
+}
+
+// given ([a→b]*e), get a pointer to the block.
+static inline wikrt_val* wikrt_peek_block(wikrt_cx* cx) {
     if(wikrt_p(cx->val)) {
-        wikrt_val const v = wikrt_pval(cx, cx->val)[0];
-        if(wikrt_o(v)) {
-            wikrt_val* const pv = wikrt_pobj(cx, v);
-            if(wikrt_otag_block(*pv)) {
-                (*pv) |= attrib;
-                return;
+        wikrt_val* const v = wikrt_pval(cx, cx->val);
+        if(wikrt_o(*v)) {
+            wikrt_val* const b = wikrt_pobj(cx, (*v));
+            if(wikrt_otag_block(*b)) {
+                return b;
             }
         }
     }
     wikrt_set_error(cx, WIKRT_ETYPE);
+    return NULL;
 }
+
+static void wikrt_block_quote_inline_attrib(wikrt_cx* cx, wikrt_otag attrib)
+{
+    wikrt_intro_empty_list(cx);
+    wikrt_intro_op(cx, ACCEL_INLINE);
+    wikrt_cons(cx); // add the `vr$c` op
+    wikrt_wswap(cx);
+    wikrt_wrap_otag(cx, (WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF));
+    wikrt_cons(cx); // quote original block
+    wikrt_wrap_otag(cx, (WIKRT_OTAG_BLOCK | attrib));
+}
+
+static void wikrt_block_attrib(wikrt_cx* cx, wikrt_otag attrib)
+{
+    assert(0 == (attrib & 0xFF)); // do not overwrite the `OTAG_BLOCK` byte.
+    wikrt_val* const b = wikrt_peek_block(cx);
+    if(!b) { return; }
+
+    // Safe attributes are commutative and idempotent. 
+    // In additon to all the safe attributes, a block may encode ONE unsafe
+    // attribute, which may be ordering or replication dependent.
+    wikrt_otag const unsafe_attribs = ~(WIKRT_SAFE_BLOCK_ATTRIBS | WIKRT_OTAG_BLOCK);
+    bool const attrib_is_safe = (0 == (attrib & unsafe_attribs));
+    bool const block_is_safe = (0 == ((*b) & unsafe_attribs));
+    if(attrib_is_safe || block_is_safe) { 
+        (*b) |= attrib; 
+        return;
+    } 
+
+    // This should be a very rare case, e.g. for {&lazy}{&lazy} blocks.
+    // I'll represent this case via quotation + inline. I don't need it
+    // to be super efficient or pretty. For example:
+    //
+    //   [block]{&lazy}{&lazy}          will represent as:
+    //   [[block]{&lazy}vr$c]{&lazy}
+    //
+    wikrt_block_quote_inline_attrib(cx, attrib);
+}
+
 
 void wikrt_block_aff(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_AFFINE); }
 void wikrt_block_rel(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_RELEVANT); }
 void wikrt_block_lazy(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_LAZY); }
 void wikrt_block_fork(wikrt_cx* cx) { wikrt_block_attrib(cx, WIKRT_BLOCK_FORK); }
 
-static inline bool wikrt_cx_has_two_blocks(wikrt_cx* cx) {
-    wikrt_val const abe = cx->val;
-    if(wikrt_p(abe)) {
-        wikrt_val* const pa = wikrt_pval(cx, abe);
-        wikrt_val const be = pa[1];
-        if(wikrt_p(be)) {
-            wikrt_val* const pb = wikrt_pval(cx, be);
-            return wikrt_blockval(cx, *pa) 
-                && wikrt_blockval(cx, *pb);
-        }
-    }
-    return false;
+
+// Given a `[block]{&lazy}` (or other decorator, like {&fork}`)
+// convert it to a `[[block]{&lazy}inline]`.
+static void wikrt_hide_block_decorators(wikrt_cx* cx) 
+{
+    wikrt_otag const dec_attr = ~(WIKRT_SAFE_BLOCK_ATTRIBS | WIKRT_OTAG_BLOCK);
+    wikrt_val* const b = wikrt_peek_block(cx);
+    if(!b) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
+    bool const b_dec = (0 != ((*b) & dec_attr));
+    if(!b_dec) { return; }
+    wikrt_block_quote_inline_attrib(cx, 0);
 }
 
-// scan to the end of a 'short' operator lists with a limited amount of
-// effort. The effort determines how much we'll inline by concatenation
-// before we switch to an indirect `[[a→b] inline b→c]` format on compose.
-//
-// Given the `[]vr$c` overhead when printing, a preliminary recommendation
-// is to inline at least 6 ops to limit serialization overheads to 50% for
-// this naive inlining method.
-static inline wikrt_val* wikrt_end_of_short_opslist(wikrt_cx* cx, wikrt_val* list, uint32_t effort)
+// Scan to the end of a block with finite effort.
+static wikrt_val* wikrt_scan_to_block_end(wikrt_cx* cx, wikrt_size effort)
 {
+    wikrt_val* const b = wikrt_peek_block(cx);
+    if(!b) { wikrt_set_error(cx, WIKRT_ETYPE); return NULL; }
+    wikrt_val* list = (1 + b);
     do {
         if(wikrt_pl(*list)) { list = 1 + wikrt_pval(cx, (*list)); }
         else if(WIKRT_UNIT_INR == (*list)) { return list; }
-        else { return NULL; } // TODO: compact operations lists
+        else { 
+            // should not happen
+            fprintf(stderr, "%s: unhandled extension to opslist model\n", __FUNCTION__);
+            abort();
+        }
     } while(effort-- > 0);
     return NULL;
 }
 
-void wikrt_intro_id_block(wikrt_cx* cx)
-{
-    wikrt_intro_smallval(cx, WIKRT_UNIT_INR);
-    wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK);
-}
-
-// Compose two blocks in O(1) time. ([a→b]*([b→c]*e))→([a→c]*e).
-//
-// The most natural approach to composition in ABC is concatenation. However,
-// I'm not currently structuring blocks to make this trivial. An alternative
-// O(1) implementation involves producing:
-//
-//      [[a→b] inline b→c] 
-//
-// Here `inline` refers to ABC sequence `vr$c`. I can leverage EXTOP_INLINE as
-// an accelerator with that same behavior. This block may be simplified later
-// by proper inlining. 
-//
-// As a special case, I'll inline short blocks from the `[a→b]` structure more
-// directly. This can potentially reduce allocation and improve performance,
-// especially for binding of quoted values.
-// 
+/* Regarding Block Composition
+ *
+ * Awelon Bytecode is concatenative. Composition of functions [a→b] 
+ * and [b→c] can be represented by concatenation of their bytecode.
+ * However, this doesn't work for 'decorated' blocks, e.g. with the
+ * {&lazy} or {&fork} modifiers. Concatenation for large blocks might
+ * also be too expensive.
+ *
+ * To address these issues, I'll take a quick look at each block. If
+ * too decorated, I'll wrap them as [[block] inline]. Similarly, if
+ * the `[a→b]` type larger than a given threshold, I'll rewrite it
+ * as [[a→b] inline]. THEN I'll concatenate. So most of the time,
+ * concatenation should work directly (which has a pretty aesthetic
+ * and is slightly more efficient).
+ */
 void wikrt_compose(wikrt_cx* cx)
 {
-    wikrt_size const szAlloc = (2 * WIKRT_CELLSIZE); // + reusing one cell
-    if(!wikrt_mem_reserve(cx, szAlloc)) { return; }
-    if(!wikrt_cx_has_two_blocks(cx)) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-
-    wikrt_val  const abe = cx->val;
-    wikrt_val* const pabe = wikrt_pval(cx, abe);
-    wikrt_val  const be = pabe[1];
-    wikrt_val* const pbe = wikrt_pval(cx, be);
-    wikrt_val  const fn_ab = pabe[0];
-    wikrt_val  const fn_bc = pbe[0];
-    wikrt_val* const pfnab = wikrt_pobj(cx, fn_ab);
-    wikrt_val* const pfnbc = wikrt_pobj(cx, fn_bc);
-
-    // Optimize for case where `[a→b]` is a 'small' function.
-    static uint32_t const small_fn = 6;
-    wikrt_val* const eoab = wikrt_end_of_short_opslist(cx, 1+pfnab, small_fn);
-    if(NULL != eoab) {
-        // Concatenative inlining. Non-allocating.
-
-        _Static_assert(!WIKRT_NEED_FREE_ACTION, "dropping several cells on compose");
-        assert(WIKRT_UNIT_INR == *eoab);
-        (*eoab)   = pfnbc[1]; // addend the functions
-        pfnbc[1]  = pfnab[1]; // `[a→c]` code to `[b→c]` slot
-        (*pfnbc) |= (*pfnab); // preserve substructure
-        cx->val   = be;       // drop the old `[a→b]` slot
-        return;
-
-    } else {
-
-        wikrt_addr const a = wikrt_alloc_r(cx, szAlloc);
-        wikrt_val* const pa = wikrt_paddr(cx, a);
-
-        cx->val = be; // drop the `[a→b]` stack element
-        pabe[0] = WIKRT_OTAG_OPVAL | WIKRT_OPVAL_LAZYKF; // recycle cell for opval
-        pabe[1] = fn_ab;
-        pa[0] = wikrt_tag_addr(WIKRT_O, wikrt_vaddr(abe)); 
-        pa[1] = wikrt_tag_addr(WIKRT_PL, a + WIKRT_CELLSIZE);
-        pa[2] = WIKRT_I2V(ACCEL_INLINE);
-        pa[3] = pfnbc[1];
-        pfnbc[1] = wikrt_tag_addr(WIKRT_PL, a); // [b→c] ⇒ [[a→b] inline b→c].
+    // prep: remove decorators, avoid concat for large functions.
+    wikrt_size const smallfn = 15;
+    wikrt_wswap(cx);
+    wikrt_hide_block_decorators(cx);
+    wikrt_wswap(cx);
+    wikrt_hide_block_decorators(cx);
+    wikrt_val* eoab = wikrt_scan_to_block_end(cx, smallfn);
+    if(!eoab) {
+        wikrt_block_quote_inline_attrib(cx, 0);
+        eoab = wikrt_scan_to_block_end(cx, WIKRT_SIZE_MAX);
     }
+
+    if(wikrt_has_error(cx)) { return; }
+
+    // perform the concatenation. non-allocating from here.
+    assert((NULL != eoab) && (WIKRT_UNIT_INR == (*eoab)));
+    _Static_assert(!WIKRT_NEED_FREE_ACTION, "free memory within compose");
+ 
+    wikrt_val* const pabe  = wikrt_pval(cx, cx->val);
+    wikrt_val* const pbe   = wikrt_pval(cx, pabe[1]);
+    wikrt_val* const pfnab = wikrt_pobj(cx, *pabe);
+    wikrt_val* const pfnbc = wikrt_pobj(cx, *pbe);
+    wikrt_pval_swap(eoab, (1 + pfnbc));
+    wikrt_pval_swap((1 + pfnab), (1 + pfnbc));
+    (*pfnbc) |= (*pfnab); // preserve substructure
+    cx->val  = pabe[1];
 }
 
 

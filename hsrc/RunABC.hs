@@ -36,6 +36,7 @@ quoteEvalResult (cc, v) = [ABC_Val v, ABC_Val (ABC.block abc), ABC_Prim P.ABC_ap
 
 main :: IO ()
 main = 
+    preserveNewlines >> 
     LBS.hGetContents Sys.stdin >>= \ prog ->
     case P.decode prog of
         Left stuck -> 
@@ -43,4 +44,10 @@ main =
         Right abc -> 
             let result = runABC defaultQuota (ABC.fromPureABC abc) in
             Sys.hPutStrLn Sys.stdout $ show result
+
+preserveNewlines :: IO ()
+preserveNewlines = 
+    mapM_ (flip Sys.hSetNewlineMode Sys.noNewlineTranslation) $
+    [Sys.stdout, Sys.stderr, Sys.stdin]
+
 

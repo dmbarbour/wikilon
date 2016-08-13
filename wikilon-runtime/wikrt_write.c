@@ -231,7 +231,6 @@ static void writer_ANNO_TEXT(wikrt_cx* cx, wikrt_writer_state* w)   { wikrt_writ
 static void writer_ANNO_BINARY(wikrt_cx* cx, wikrt_writer_state* w) { wikrt_writer_putcstr(cx, w, "{&binary}"); }
 
 
-
 // (empty ops * (stack * (text * e))) → (ops' * (stack' * (text * e)))
 //   where `stack` is ((ss * ops') * stack')
 //   and `ss` accumulates substructure
@@ -241,6 +240,10 @@ static inline void wikrt_writer_pop_stack(wikrt_cx* cx, wikrt_writer_state* w)
     assert((WIKRT_UNIT_INR == wikrt_pval(cx, cx->val)[0]) && (w->depth > 0));
 
     wikrt_writer_putbyte(cx, w, ']');
+
+    // Write substructural attributes. 
+    //  I might try to optimize cases like `kf$` or `kfvr$c` to
+    //  suppress writing of irrelevant substructural attributes.
     if(w->rel) { wikrt_writer_putbyte(cx, w, ABC_REL); }
     if(w->aff) { wikrt_writer_putbyte(cx, w, ABC_AFF); }
 
@@ -272,10 +275,20 @@ static inline void wikrt_writer_push_stack(wikrt_cx* cx, wikrt_writer_state* w, 
 {
     _Static_assert(('[' == 91), "assuming '[' is 91");
 
-    wikrt_otag const block_tag = wikrt_open_block_ops(cx); // (block ops') → ops'
+    wikrt_otag const tag = wikrt_open_block_ops(cx); // (block ops') → ops'
+    wikrt_wswap(cx); wikrt_zswap(cx); // (ops * (stack * (ops' * (texts * e))))
 
-    wikrt_wswap(cx); wikrt_zswap(cx); // (ops * (stack * (block * (texts * e))))
+    // Write evaluation mode flags - `{&lazy}` or `{&fork}`.
+    if(wikrt_otag_has_flags(tag, WIKRT_BLOCK_LAZY)) { 
+        wikrt_intro_op(cx, ACCEL_ANNO_LAZY);    // `{&lazy}` after block 
+        wikrt_cons(cx); 
+    }
+    if(wikrt_otag_has_flags(tag, WIKRT_BLOCK_FORK)) {
+        wikrt_intro_op(cx, ACCEL_ANNO_FORK);    // `{&fork}` after block
+        wikrt_cons(cx);
+    }
 
+    // Build the continuation stack. We'll return to it later.
     wikrt_int const ss = (w->rel ? WIKRT_SS_REL : 0) 
                        | (w->aff ? WIKRT_SS_AFF : 0) 
                        | (w->lazykf ? WIKRT_SS_LAZYKF : 0);
@@ -285,8 +298,8 @@ static inline void wikrt_writer_push_stack(wikrt_cx* cx, wikrt_writer_state* w, 
     wikrt_assocl(cx); // (((ss*ops)*stack) * (ops' * ...))) = (stack' * (ops' * ...))
     wikrt_wswap(cx);  // (ops' * (stack' * (texts * e)))
 
-    w->rel = (0 != (WIKRT_BLOCK_RELEVANT & block_tag));
-    w->aff = (0 != (WIKRT_BLOCK_AFFINE & block_tag));
+    w->rel = wikrt_otag_has_flags(tag, WIKRT_BLOCK_RELEVANT);
+    w->aff = wikrt_otag_has_flags(tag, WIKRT_BLOCK_AFFINE);
     w->lazykf = block_lazykf;
     w->depth += 1;
 

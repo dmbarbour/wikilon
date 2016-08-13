@@ -705,7 +705,8 @@ wikrt_val_type wikrt_type(wikrt_cx*);
  *
  * This function immediately returns a lazy future representing the
  * application of the function to its argument. Actual evaluation is
- * performed by wikrt_step_eval.
+ * performed by wikrt_step_eval. Note that attributes like lazy/fork
+ * do not apply to toplevel applications.
  *
  * If quoted and serialized before any evaluation, the future should
  * have form `a[a→b]{&lazy}$`. 

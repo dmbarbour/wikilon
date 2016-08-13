@@ -3,6 +3,17 @@
 
 My primary efforts at the moment should be:
 
+* bug fixes:
+ * consider fork/lazy/future as an *algebraic type*
+  * e.g. `{&lazy}{&lazy}` or `{&fork}{&fork}`
+  * also `{&lazy}{&fork}` vs `{&fork}{&lazy}`
+  * also interaction with compositon operator
+   * I could model O(1) composition with `[[block1]vr$c[block2]vr$c]`
+   * this would take just one extra cell in the current runtime
+  * tune behavior for full consistency OR
+  * limit one evaluation mode per block
+ * write `{&lazy}` or `{&fork}` annotation when writing a block
+
 * profile Haskell interpreter vs C interpreter.
  * use a few shared, simple benchmarks
  * make sure I have a good start, here

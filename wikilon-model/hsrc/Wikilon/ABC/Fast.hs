@@ -26,7 +26,7 @@ module Wikilon.ABC.Fast
 
     , copyable, droppable
 
-    , Flags, f_aff, f_rel
+    , Flags, f_aff, f_rel, f_lazy, f_fork
     ) where
 
 import Control.Applicative
@@ -84,11 +84,11 @@ data Op
     deriving (Eq, Typeable)
 
 -- | Values that can be represented in ABC, with a simple
--- extension for larger than memory values. Later, I might
--- add additional extensions for fast vector and matrix
--- processing and similar.
+-- extension for larger than memory values. Explicit lazy
+-- and error values are a possibility. Favoring Int64 to
+-- be more comparable with C runtime performance.
 data V 
-    = N !Integer        -- number (integer)
+    = N {-# UNPACK #-} !Int64 -- numbers (integers)
     | P V V             -- product of values
     | L V | R V         -- sum of values (left or right)
     | U                 -- unit value
@@ -96,6 +96,7 @@ data V
     | S !Token V        -- sealed and special values
     | T !Text           -- embedded text value
     | X (VRef V) Flags  -- external value resource
+    | Z ABC V           -- lazy application of block
     deriving (Eq, Typeable)
 
     -- todo: add support for parallel evaluation
@@ -213,6 +214,7 @@ showsV (T txt) = shows (Pure.ABC_Text txt)
 showsV (X ref kf) = showString "{#" . rsc . qv . showsKF kf . showChar '}' where
     rsc = showString "V:" . shows (unsafeVRefAddr ref) -- local resource id
     qv = showChar '\'' -- resource represents a quoted value
+showsV (Z abc v) = showV v . showsV (B abc zeroBits) . showString "{&lazy}" . shows ABC_apply
 
 showsKF :: Flags -> ShowS
 showsKF kf = k . f where

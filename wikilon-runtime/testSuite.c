@@ -1221,6 +1221,58 @@ void test_quote_apply(wikrt_cx* cx)
     elim_cstr(cx, "#7-[v^^*+]{&lazy}$");
 }
 
+void test_quote_compose(wikrt_cx* cx)
+{
+    // Testing for aesthetics of composition!
+    // k before f.
+    intro_block(cx, ""); wikrt_block_aff(cx); 
+    intro_block(cx, ""); wikrt_block_rel(cx);
+    wikrt_compose(cx); val2txt(cx); elim_cstr(cx, "[]kf");
+
+    intro_block(cx, ""); wikrt_block_rel(cx);
+    intro_block(cx, ""); wikrt_block_aff(cx); 
+    wikrt_compose(cx); val2txt(cx); elim_cstr(cx, "[]kf");
+
+    // Small blocks: simple concatenation should be the case. 
+    // I'm going to assume that 4 ops is a 'small' block. 
+    intro_block(cx, "cccc"); 
+    intro_block(cx, "vvvv"); 
+    wikrt_compose(cx);
+    val2txt(cx);
+    elim_cstr(cx, "[vvvvcccc]");
+    
+    // Large blocks: first block should use [[block]inline] form.
+    // I'm going to assume that 32+ ops is a 'large' block.
+    intro_block(cx, "cccccccccccccccccccccccccccccccc"); 
+    intro_block(cx, "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"); 
+    wikrt_compose(cx);
+    val2txt(cx);
+    elim_cstr(cx, "[[vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv]vr$ccccccccccccccccccccccccccccccccc]");
+
+    // Blocks with lazy/fork decorators must also use [[block]inline] form.
+    intro_block(cx, "{bar}"); wikrt_block_lazy(cx);
+    intro_block(cx, "{foo}"); wikrt_block_fork(cx);
+    wikrt_compose(cx);
+    val2txt(cx);
+    elim_cstr(cx, "[[{foo}]{&fork}vr$c[{bar}]{&lazy}vr$c]");
+}
+
+void test_block_dec(wikrt_cx* cx) 
+{
+    // block 'decorators' that affect their evaluation mode.. 
+    // Evaluation of lazy-lazy, fork-fork, lazy-fork, fork-lazy.
+    // This is effectively a stability test for now. If the representation
+    intro_block(cx, "{test}");
+    wikrt_block_lazy(cx);
+    wikrt_block_lazy(cx);
+    wikrt_block_fork(cx);
+    wikrt_block_fork(cx);
+    wikrt_block_lazy(cx);
+    val2txt(cx);
+    elim_cstr(cx, "[[[[[{test}]{&lazy}vr$c]{&lazy}vr$c]{&fork}vr$c]{&fork}vr$c]{&lazy}");
+
+}
+
 void test_eval_anno(wikrt_cx* cx)
 {
     test_eval_abc2i(cx, "#7-{&testAnno}^^*+", 42);
@@ -1362,6 +1414,8 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_trash);
 
     TCX(test_quote_apply);
+    TCX(test_quote_compose);
+    TCX(test_block_dec);
 
     // TODO: evaluations
     TCX(test_eval_id);

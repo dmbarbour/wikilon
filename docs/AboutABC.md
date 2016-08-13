@@ -374,9 +374,11 @@ Explicit laziness might be represented using annotations and futures.
         {&lazy}     ∀e.     ([a → b] * e) → ([a → (future b)] * e)
         {&join}     ∀e.     ((future a) * e) → (a * e)
 
-This is used together with the join annotation (cf. Parallelism) to access the value. Explicit laziness can serve a useful role in contexts of both static and dynamic optimization, staging, partial evaluations. 
+This is used together with the join annotation (cf. Parallelism) to access the value. Explicit laziness can serve a useful role in contexts of optimization and partial evaluations. The system has clear information that our function is applied to a specific value.
 
 Unlike with implicit laziness, we cannot *transparently* turn lists into infinite data structures or 'tie knots' in recursive data structures. In context of Awelon Bytecode, lazy infinite data structures should be avoided in any case. It *should* be possible to remove annotations from a correct program without affecting observable program behavior. 
+
+*Note:* For consistent behavior, `future` should be an algebraic type. Consequently, `{&lazy}` and `{&fork}` should be algebraic operations. This requires special attention to representation and function composition.
 
 ### Value Sealing
 

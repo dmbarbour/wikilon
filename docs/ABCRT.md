@@ -218,23 +218,16 @@ This design for parallelism is simple, highly scalable, and expressive within th
 
 #### Lazy Computation? 
 
-The concept of 'lazy' computations seems rather troublesome. The issues are: how should laziness interact with persistence, parallelism, distribution, substructural types, caching, termination, etc.? I haven't found an approach I find entirely satisfactory. 
+The concept of 'lazy' computations seems rather troublesome. The issues are: how should laziness interact with persistence, parallelism, distribution, substructural types, caching, termination, etc.? I haven't found an approach I find entirely satisfactory. A simplistic laziness option that I'm considering is this:
 
-A simplistic laziness option that I'm considering is this:
+        {&lazy}     ([a → b] * e) → ([a → (future b)] * e)
+        {&join}     ((future a) * e) → (a * e)
 
-* a block may be marked lazy by annotation, `{&lazy}`
-* when applied, that block returns a lazy future value
-* lazy futures may be forced by use of `{&join}`
+The block is marked lazy. When applied, the block returns future result. This result may be joined normally. Under the hood, a linear or affine future could be represented by a trivial `(block * value)` pair internally, while a copyable future might use the same representation until copied, at which point it might be evaluated or (if that fails) upgraded to a parallel future.
 
-A lazy value might minimally be represented by a `lazy ([a→v] * a)` tagged pair. Unfortunately, this won't support *copying* of the lazy value (without copying the computation). But it would work for a linear or affine lazy value. Laziness with copying might need alternative features - state or caching.
+Lazy futures are useful for optimization and performance roles. Compared to explicit `(block * value)` pairs, lazy values indicate their value is a consequence of a specific computation, that the block and value are tightly coupled, which simplifies partial evaluations.
 
-A lazy value informs the runtime/compiler/optimizer that a given function will ONLY be applied to a specific value. This can simplify partial evaluation.
-
- (relative to explicitly carting around a `(value, block)` pair) - is the opacity of the value, potential to optimize (to partially or wholly evaluate). Additionally, laziness as a future can be lifted easily to a one-off parallel computation, e.g. by a `{&par}` annotation.
-
-Explicit laziness does hinder some things, such as treating simple lists as streams. But this isn't a big problem. I don't really want to encourage too much use of laziness. It might prove favorable to model incremental computation explicitly in terms of command sequences, streams, continuation passing style, etc.. Unlike parallelism, laziness is not essential for performance or scalability, just occasionally convenient.
-
-
+*Note:* Futures are algebraic types. Hence, applying `{&lazy}` twice to a block will have different behavior than applying it only once. But the wikilon runtime will probably optimize for the case where only a single evaluation-mode tweak is applied.
 
 ### Arrays or Compact Lists
 
@@ -313,15 +306,11 @@ Haskell's `Debug.Trace` (i.e. debug by printf) is convenient as a short term deb
 
         {&trace} :: ∀v,e.(v * e)→((trashed v) * e)
 
-For predictable performance, I keep trace messages in a separate buffer from the normal evaluation. At th
+For predictable performance, I keep trace messages in a separate buffer from the normal evaluation. This could be a buffer of structured values, or a buffer of pre-serialized values. (At the moment, I'm using pre-serialized.)
 
 Trashing an argument additionally enables destructive read of text without implicit copies. Despite risk of losing some messages on overflow, this should cover the 99% use case easily enough. Even dumping 64kB should be sufficient for generating a useful debug-view of what's happening within a computation.
 
 The decision to trace arbitrary values is... questionable. It does improve flexibility of expression, enabling structured data subject to ad-hoc external rendering techniques. OTOH, it might hinder legibility of a plain text rendering a bit. Fortunately, plain text embedded in ABC should be reasonably legible.
-
-### Fail Fast 
-
-The `{&trash}` or `{&trace}` annotation could serve a useful role for partial failure, i.e. creating the logical equivalent of an `undefined` value. It might also be convenient to develop a variant of `{&trace}` that essentially traces the whole environment, e.g. `{&abort}`.
 
 ### Stack Traces (Mid Priority)
 

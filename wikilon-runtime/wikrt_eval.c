@@ -190,32 +190,25 @@ static inline bool wikrt_block_is_flagged_lazy(wikrt_otag otag) {
 static void _wikrt_eval_step_inline(wikrt_cx* cx) 
 {
     // ([a→b]*a) → b. Equivalent to ABC code `vr$c`.
-    wikrt_val* const v = wikrt_pval(cx, cx->val);
-    bool const okType = wikrt_p(cx->val) && wikrt_o(*v);
-    if(!okType) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-    wikrt_val* const obj = wikrt_pobj(cx, (*v));
-
-    if(!wikrt_otag_block(*obj)) { 
-        wikrt_set_error(cx, WIKRT_ETYPE); 
-    } 
-    else if(0 != (WIKRT_BLOCK_LAZY & *obj)) {
+    wikrt_otag const tag = wikrt_open_block_ops(cx);
+    if(wikrt_has_error(cx)) { return; }
+    else if(0 != (WIKRT_BLOCK_LAZY & tag)) {
         // Lazy blocks produce pending values. 
-        (*obj) &= ~(WIKRT_BLOCK_LAZY); // don't preserve laziness
+        wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK); // drop other flags
         if(!wikrt_mem_reserve(cx, WIKRT_CELLSIZE)) { return; }
         cx->val = wikrt_alloc_cellval_r(cx, WIKRT_O, WIKRT_OTAG_PEND, cx->val);
     }
     else {
-        wikrt_addr const obj_addr = wikrt_vaddr_obj(*v);
+        wikrt_addr const addr = wikrt_vaddr(cx->val);
+        wikrt_val* const node = wikrt_paddr(cx, addr);
         wikrt_val* const pctr = &(cx->pc);
         wikrt_val* const cstk = wikrt_pval(cx, cx->cc);
-        _Static_assert(!WIKRT_NEED_FREE_ACTION, "dropping a cell during evaluation");
-        obj[0]  = obj[1]; 
-        obj[1]  = (*cstk);
-        (*cstk) = wikrt_tag_addr(WIKRT_PL, obj_addr);
-        cx->val = v[1];     // drop cell
+        cx->val = node[1];
+        node[1] = (*cstk);
+        (*cstk) = wikrt_tag_addr(WIKRT_PL, addr);
         if(WIKRT_UNIT_INR != (*pctr)) { 
             // this was not a tail call.
-            wikrt_pval_swap(obj, pctr); 
+            wikrt_pval_swap(node, pctr); 
         }
     }
 }
@@ -338,13 +331,12 @@ _Static_assert((WIKRT_ACCEL_COUNT == 17),
  *
  * At the moment, this constructs a (pending (block * value)) structure.
  * The function wikrt_step_eval will need to preserve this structure if
- * it returns `true`.
+ * it returns `true`. Any flags on the block are dropped by apply.
  */
 void wikrt_apply(wikrt_cx* cx) 
 {
-    bool const okType = wikrt_p(cx->val) && wikrt_blockval(cx, *wikrt_pval(cx, cx->val));
-    if(!okType) { wikrt_set_error(cx, WIKRT_ETYPE); return; }
-
+    wikrt_open_block_ops(cx); // validate type
+    wikrt_wrap_otag(cx, WIKRT_OTAG_BLOCK); 
     wikrt_assocl(cx);
     wikrt_wrap_otag(cx, WIKRT_OTAG_PEND);
 }

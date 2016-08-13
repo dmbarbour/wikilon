@@ -384,9 +384,14 @@ static inline bool wikrt_smallint(wikrt_val v) { return (WIKRT_I == wikrt_vtag(v
 // block header bits
 #define WIKRT_BLOCK_RELEVANT (1 << 8)  // forbid drop
 #define WIKRT_BLOCK_AFFINE   (1 << 9)  // forbid copy
-#define WIKRT_BLOCK_LAZY     (1 << 10) // call by need result
-#define WIKRT_BLOCK_FORK     (1 << 11) // parallel evaluation
+#define WIKRT_BLOCK_LAZY     (1 << 16) // call by need result
+#define WIKRT_BLOCK_FORK     (1 << 17) // parallel evaluation
 
+// safe attributes: commutative, idempotent, and compositional.
+//  right now, this is just our substructural attributes
+#define WIKRT_SAFE_BLOCK_ATTRIBS (WIKRT_BLOCK_RELEVANT | WIKRT_BLOCK_AFFINE)
+
+static inline bool wikrt_otag_has_flags(wikrt_otag val, wikrt_otag flags) { return (flags == (val & flags)); }
 
 // block inherits substructural attributes from contained value
 // this is used for quoted values within a block.
@@ -414,12 +419,13 @@ static inline bool wikrt_otag_pend(wikrt_otag v) { return (WIKRT_OTAG_PEND == LO
 static inline void wikrt_capture_block_ss(wikrt_val otag, wikrt_ss* ss)
 {
     if(NULL != ss) { 
-        if(WIKRT_BLOCK_RELEVANT & otag) { (*ss) |= WIKRT_SS_REL; }
-        if(WIKRT_BLOCK_AFFINE & otag)   { (*ss) |= WIKRT_SS_AFF; }
+        (*ss) |= (wikrt_otag_has_flags(otag, WIKRT_BLOCK_RELEVANT) ? WIKRT_SS_REL : 0)
+              |  (wikrt_otag_has_flags(otag, WIKRT_BLOCK_AFFINE)   ? WIKRT_SS_AFF : 0);   
     }
 }
-static inline bool wikrt_opval_hides_ss(wikrt_val otag) { return (0 == (WIKRT_OPVAL_LAZYKF & otag)); }
-
+static inline bool wikrt_opval_hides_ss(wikrt_val otag) { 
+    return !wikrt_otag_has_flags(otag, WIKRT_OPVAL_LAZYKF);
+}
 static inline wikrt_otag wikrt_ss_to_block_flags(wikrt_ss ss) 
 {
     return (wikrt_ss_copyable(ss)  ? 0 : WIKRT_BLOCK_AFFINE)
@@ -574,8 +580,8 @@ struct wikrt_cx {
 
 // For large memory contexts, reduce VM pressure and improve
 // locality by using a smaller fraction of the memory arena 
-#define WIKRT_MEM_FACTOR        4 /* preserve some factor of current use */
-#define WIKRT_MEM_FACTOR_PRIOR  2 /* preserve some factor of prior use  */
+#define WIKRT_MEM_FACTOR        6 /* preserve some factor of current use */
+#define WIKRT_MEM_FACTOR_PRIOR  3 /* preserve some factor of prior use  */
 #define WIKRT_MEM_PAGEMB        2 /* preserve blocks of so many megabytes */
 
 // Default effort model. I've decided megabytes allocated is a good
@@ -726,7 +732,7 @@ void wikrt_cons_binary_chunk(wikrt_cx* cx, uint8_t const* buff, size_t buffSize)
 void wikrt_reverse_binary_chunks(wikrt_cx* cx);
 
 static inline bool wikrt_cx_has_txn(wikrt_cx* cx) { 
-    return (WIKRT_REG_TXN_INIT == cx->txn); 
+    return (WIKRT_REG_TXN_INIT != cx->txn); 
 }
 void wikrt_drop_txn(wikrt_cx*);
 
