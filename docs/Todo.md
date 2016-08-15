@@ -3,28 +3,19 @@
 
 My primary efforts at the moment should be:
 
-* bug fixes:
- * consider fork/lazy/future as an *algebraic type*
-  * e.g. `{&lazy}{&lazy}` or `{&fork}{&fork}`
-  * also `{&lazy}{&fork}` vs `{&fork}{&lazy}`
-  * also interaction with compositon operator
-   * I could model O(1) composition with `[[block1]vr$c[block2]vr$c]`
-   * this would take just one extra cell in the current runtime
-  * tune behavior for full consistency OR
-  * limit one evaluation mode per block
- * write `{&lazy}` or `{&fork}` annotation when writing a block
-
 * profile Haskell interpreter vs C interpreter.
  * use a few shared, simple benchmarks
  * make sure I have a good start, here
 
-* simplifiers and accelerators for C's ABC code
- * support existing accelerators
- * develop widely useful accelerators:
-  * fixpoint-inline (fix.i)
-  * `if` and `if_` behaviors.
+* simplify & accelerate Wikilon's ABC code
+ * systematic support for accelerators
+ * develop more wide use accelerators
+  * fast fixpoint inline (fix.i)
+   * maybe as an attribute?
+  * faster conditionals
+   * `if` and `if_` behaviors.
   * common EQ/NEQ behavior.
-  * sum→boolean conversion.
+  * sum to boolean conversion.
   * some deep stack manipulations
  * develop specialized accelerators:
   * deep structural manipulations
@@ -36,12 +27,14 @@ My primary efforts at the moment should be:
  * contain binaries, blocks, and texts
  * design with eye towards sharing
 
+* persistence and stowage
+ * potential for shared, stable object models
+
+
 * shared bytecode model
  * avoid full copies for large bytecode.
  * for now, maybe separate from stowage.
 
-* persistence and stowage
- * potential for shared, stable object models
 
 * profiling and debugging of AO code
  * simplified stack traces

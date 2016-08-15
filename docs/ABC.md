@@ -72,7 +72,7 @@ Tokens in ABC are extensions to the bytecode. Tokens may be context-specific to 
 
 Tokens must have *pure* semantics. Tokens mustn't constrain us against laziness, parallelism, and caching. However, within this limitation, tokens may support privileged or security-sensitive effects, such as reflection, copying affine values, or backtracking upon error. Together with affine blocks (to partition and sequence access to 'worlds'), tokens could feasibly be leveraged for ad-hoc side effects (cf. Clean and Mercury programming languages). 
 
-However, Awelon project favors externalizing and explicitly handling effects, e.g. [free monads](CommandSequences.md), [dictionary apps](ApplicationModel.md), [virtual machine models](NetworkModel.md). Awelon project uses tokens mostly for modularity and linking, performance annotations, metadata attributes, and type safety. 
+However, Awelon project favors externalizing and explicitly handling effects, e.g. via use of [command sequences](CommandLine.md), [dictionary apps](ApplicationModel.md), [virtual machine models](NetworkModel.md). Awelon project uses tokens mostly for modularity and linking, performance annotations, metadata attributes, and type safety. 
 
 ## ABC CHANGE LOG
 

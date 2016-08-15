@@ -1261,7 +1261,11 @@ void test_block_dec(wikrt_cx* cx)
 {
     // block 'decorators' that affect their evaluation mode.. 
     // Evaluation of lazy-lazy, fork-fork, lazy-fork, fork-lazy.
-    // This is effectively a stability test for now. If the representation
+    //
+    // This is effectively a stability test for now, so I get a warning
+    // if the representation changes. In practice, multiple decorators
+    // on a block (modulo special composition options) should be extremely
+    // rare so I'm unlikely to see this outside of explicit testing.
     intro_block(cx, "{test}");
     wikrt_block_lazy(cx);
     wikrt_block_lazy(cx);

@@ -1,8 +1,9 @@
 
-Kyle Blake has developed abcc, which does some typechecking based on an infinite terms model.
+# Typechecking for Wikilon
 
-I'd like also to look into Bidirectional Typechecking. I think it could be a good fit.
+Kyle Blake developed abcc, which does some typechecking based on an infinite terms model. 
 
-I would like to explore some approach to nominative types
+Bidirectional Typechecking seems a very natural fit. 
 
-I could get something akin to nominative types by simply assuming a given word should have the same type wherever it is used (unless indicated otherwise). And type assertions could thus be modeled in the dictionary, e.g. having `type:A foo type:B` in the dictionary, we effectively assert that given type:A and processing by foo, we return type:B.
+Is there a good way to *name* types? Would it be better to name them via recognition? Or annotation? Or some representation of types that I can name/assert/validate?
+

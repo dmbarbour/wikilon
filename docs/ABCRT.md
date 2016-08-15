@@ -17,7 +17,7 @@ Performance is the primary goal. But some others:
 * suspend, checkpoint, persist, reload, resume, copy computations
 * easy to resize, reflect, render, compact suspended computations
 * monadic effects: return control of program environment to caller
-* easily integrate monadic effects with [claw command sequences](CommandSequences.md)
+* easily integrate effects models with [claw command sequences](CommandLine.md)
 * on errors or unrecognized tokens, suspend and return to caller
 * no callbacks or handlers, no external dependencies for progress
 
@@ -78,7 +78,7 @@ ABC is well suited for 'manual' memory management due to its explicit copy and d
 
 Because I'm running pure code without side-effects, throughput is more important than latency during computation. There is a lot of freedom on what to do with memory. For now, I'm going for the 2-space compacting copying collector per context, which ensures fragmentation will never be an issue at the cost of copying memory occasionally.
 
-TODO: Consider 'graduating' context size between compactions. This would allow a 4GB context to act as a 4MB context when the data is small, for example, costing only address space. This would be achieved easily by allocating big chunks of memory after each compaction based on estimated usage. It could be configured by an extra function call on the process.
+*Note:* For very large contexts, memory may be *gradually* grown towards a maximum, e.g. by 'skipping' a flexible volume of memory when we have a lot more space than we need. Effectively, a soft GC threshold by allocating empty space.
 
 #### Support for Shared and Non-Copying Objects in Memory?
 
@@ -95,6 +95,11 @@ Some options:
 * cache stowed values in memory via some other mechanism.
 
 The simplest of these options to implement is to use the C heap and reference counting (or other GC) for shared objects. This would at least offer a simple, robust way to get started. Modeling shared memory in terms of stable access to stowed binary data would be better - simplify structure sharing and garbage collection, and more or less eliminate need for copying data from the stowage layer.
+
+#### Free Lists for Large Objects
+
+I'm very tempted to support free-lists for allocating larger data.
+
 
 #### Other Ideas
 

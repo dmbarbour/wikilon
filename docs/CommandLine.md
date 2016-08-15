@@ -84,25 +84,20 @@ The escaped form of a block still contains claw code but does not assume any pla
 
 ### Claw Command Sequences
 
-Claw supports a command sequencing concept that supports multiple use-cases:
+A lightweight and aesthetically pleasant syntax for *command sequences* can greatly augment Claw's expressiveness, enabling:
 
-* concise representation of lists and streams
+* concise representation for streaming data
 * monadic programming, effects models and DSLs
-* programming in a continuation-passing style
-* iterative processing, cooperative threading
+* incremental computing, cooperative threading
 
-Command sequences vastly improve the expressiveness of Claw and the utility of AO. The expression and expansion is surprisingly simple. A block can use commas as command separators:
+The proposed sugar uses explicit continuation passing style:
 
-        [foo,bar,baz]   desugars to  
-        [foo \[bar \[baz] yield] yield]   
+        [foo, bar, baz, qux] desugars to:
+        [\[\[\[qux] cc baz] cc bar] cc foo]
 
-        [1,2,3,4,5]     desugars to
-        [1 \[2 \[3 \[4 \[5] yield] yield] yield] yield]
+A programmer might understand the comma as a form of *yield* operator, enabling intermediate return. We yield just after each comma. Processing the continuation first enables our continuation to be modeled implemented as a simple stack, and is relatively (e.g. if `foo` uses `cc` internally, we'll push objects onto the stack in the correct order). Importantly, command sequences are universally subject to *transparent* abstraction, procedural and infinite constructions, inlining, etc..
 
-        \[a,b,c]        desugars to
-        \[a \[b \[c] yield] yield]
-
-Effectively, we can view a comma as a yield operator. The block exits at the comma, but first adds the remainder of the block to the program environment. See [CommandSequences](CommandSequences.md) for more details.
+Streams of data are trivially expressed as command sequnces, e.g. `[1,2,3,4,5]`. Just provide a continuation then pop the value to step through the stream. Effects models take a little extra work. For example, the client of the command sequence might need to inject data before continuing to handle an input request. 
 
 ### Claw Attributes
 
