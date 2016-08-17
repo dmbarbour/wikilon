@@ -27,7 +27,7 @@
 @l.dip wzlw
 @r.dip wrzw
 @dip2 {%l.dip}{%dip}r
-@hello 
+@hello
 "Hello,
  world!
 ~

@@ -352,33 +352,32 @@ Annotations may require specific types. A simple case is that `{&text}` might re
 
 ### Parallelism
 
-For scalable parallelism, I propose fork and join annotations together with a *process functions* (PF) concept an asynchronous futures.
+For scalable parallelism, I propose fork and join annotations together with a simple *process functions* (PF) and asynchronous futures concepts.
 
-        PF          ∃i,o.   [i → (o * PF)]
-        forked PF   ∃i,o.   [i → ((future o) * (forked PF))]
-        {&fork}     ∀e.     (PF * e) → ((forked PF) * e)
-        {&join}     ∀e.     ((future a) * e) → (a * e)
+        PF i o      [i → (o * (PF i o))]
+        {&fork}     ((PF i o) * e) → ((PF i (future o)) * e)
+        {&join}     ((future a) * e) → (a * e)
 
-When a forked PF is called, a parallel runtime will immediately return the asynchronous future and the next forked PF as a pair. The returned PF encodes the next process state and is available for further calls, effectively enqueuing sequential requests. The join operation will synchronize, waiting for the future result to become available. Copy, drop, stowage, etc. may also force synchronization, depending on the runtime.
+When a forked PF is called, a parallel runtime can immediately return an asynchronous future result and the next forked PF. Synchronization occurs upon attempting to 'join' the future result, and parallelism is achieved by delaying synchronization. (Copying a forked PF may also involve synchronization, but in practice should be a non-issue.) Returning the 'next' PF effectively allows for stateful processes models. Any model of process control signals, message passing, termination, etc. must be represented via the input-output data types. 
 
-A process function can amortize costs of constructing heavy weight processes over its sequence of calls. It is possible to use a PF for a single invocation, e.g. to model Haskell style par/seq parallelism. But in general, the assumption is heavier processes and control over them. 
+Process functions may be implemented with independent heaps, potentially as separate OS level processes, perhaps even distributed across physical nodes. The costs of initializing a process can generally be amortized over a series of calls to the process. A runtime may freely use heuristic pushback to keep fast producers from running too far ahead of slow consumers, i.e. to control memory overhead. PF parallelism can be efficient, scalable, predictable, and should generally be easier to control than Haskell's par/seq parallelism.
 
-*Note1:* A runtime can use push back mechanisms to ensure fast producer processes don't run too far ahead of slow consumers. I.e. the 'immediate' call above may be restricted to a condition where there is sufficient space in a queue. Use of push back can be valuable for real-time and embedded systems. Pushback can be guided explicitly by additional annotations on our forked PF.
+*Note:* GPGPU and vector processing parallelism will be developed later, and will use an orthogonal basis. 
 
-*Note2:* Parallelism at other scales (especially GPGPU) will be developed later.
+*Aside:* Serialization of process functions with parallelism/futures is non-trivial. One must model reconstruction of parallel futures with flexible relationships between processes. 
 
 ### Laziness
 
 Explicit laziness might be represented using annotations and futures.
 
-        {&lazy}     ∀e.     ([a → b] * e) → ([a → (future b)] * e)
-        {&join}     ∀e.     ((future a) * e) → (a * e)
+        {&lazy}     ([a → b] * e) → ([a → (future b)] * e)
+        {&join}     ((future a) * e) → (a * e)
 
-This is used together with the join annotation (cf. Parallelism) to access the value. Explicit laziness can serve a useful role in contexts of optimization and partial evaluations. The system has clear information that our function is applied to a specific value.
+The join annotation is the same used for parallelism, enabling some opacity regarding the nature of a future. With laziness, any value may be wrapped as a future via `[]{&lazy}$`.
 
-Unlike with implicit laziness, we cannot *transparently* turn lists into infinite data structures or 'tie knots' in recursive data structures. In context of Awelon Bytecode, lazy infinite data structures should be avoided in any case. It *should* be possible to remove annotations from a correct program without affecting observable program behavior. 
+Explicit laziness is much less expressive than implicit laziness. But that isn't a bad thing. There is no need to deal with cyclic values, tied knots, etc.. And modeling infinite data structures with laziness should be discouraged anyway, because ideally we can remove annotations without inviting divergence.
 
-*Note:* For consistent behavior, `future` should be an algebraic type. Consequently, `{&lazy}` and `{&fork}` should be algebraic operations. This requires special attention to representation and function composition.
+*Note:* Futures, laziness, fork, etc. are algebraic. A `{&lazy}{&lazy}` block should return a `(future (future b))` which must in turn be joined *twice* to access the data. In the general case, there may be intermediate computations between joins. If flag bits are used to represent block attributes, then `[block]{&lazy}{&lazy}` might need to be rewritten as the equivalent function `[[block]{&lazy}vr$c]{&lazy}` to preserve algebraic properties.
 
 ### Value Sealing
 
@@ -407,17 +406,19 @@ A simple 'value stowage' supports larger-than-memory data and computations, sepa
         {&stow} :: (v * e) → ((stowed v) * e)
         {&load} :: ((stowed v) * e) → (v * e)
 
-Stowing a large value pushes it into a backing storage, e.g. a filesystem or database. A lightweight placeholder is left in the value's stead. Loading a value moves data in the opposite direction. The backing store will frequently be many orders of magnitude larger than the memory allocated to a computation, and it may use independent garbage collection model. (Stowing a *small* value, based on a heuristic threshold, may just wrap it.)
+Stowing a large value pushes it into a backing storage, e.g. a filesystem or database. A lightweight placeholder is left in the value's stead. Loading a value moves data in the opposite direction. The backing store will frequently be many orders of magnitude larger than the memory allocated to a computation, and it may use independent garbage collection model.
 
 By modeling tree structures (e.g. a trie, B+ tree, or log-structured merge tree) and stowing tree nodes, it is feasible to represent massive databases as first-class values. Finger-tree ropes can serve as an effective basis for logs and queues. Patterns such as loading code just before inlining it (`{&load}vr$c`) serve as a logical basis for dynamic linking, and might access a compiled and cached representation of the loaded code.
 
 To get the most out of value stowage, it must be used together with a persistence or caching model, such that the data may be reused across many independent computations without recomputing it. Structure sharing might further augment stowage, saving space when a value is computed many times. In a distributed system, stowed values could serve a role similar to hypermedia, enabling code to reference many large values without immediately downloading it. 
 
-The proposed serialization for stowed value placeholders is use of a token:
+A proposed serialization for stowed value placeholders is use of a token:
 
         {'kf/scope/resourceID}
 
-The prefix `'kf` indicates a stowed value (`'`) with relevant and affine substructural properties (`kf`). The scope helps constrain the search space, and the rest identifies the value. The resourceID should include a secure HMAC if otherwise forgeable (like an incremental number). The limit on token size (63 bytes) should not be an issue, though hierarchical URLs are not viable.
+The prefix `'kf` indicates a stowed value (`'`) with relevant and affine substructural properties (`kf`). The scope helps constrain the search space, and the rest identifies the value. The resourceID should include a secure HMAC if otherwise forgeable (like an incremental number). The limit on token size (63 bytes) should not be an issue in practice, though hierarchically structured resource identifiers like URLs are not viable.
+
+*Note:* Stowage is algebraic. If for some silly reason we `{&stow}{&stow}` a value, we would conversely need to load it twice. However, values smaller than a heuristic threshold don't need to be backed to disk at all. The second `{&stow}` command could instead be represented as a lightweight value wrapper.
 
 ## Awelon Bytecode Deflated (ABCD)
 

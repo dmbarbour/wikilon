@@ -69,6 +69,9 @@ data Op
     | ABC_Tok  {-# UNPACK #-} !Token
     deriving (Eq, Ord)
 
+-- thoughts: I could ensure O(1) composition for these 
+-- blocks via the [[a→b] inline b→c] format.
+
 -- | The forty-two primitive operations.
 data PrimOp 
     -- basic data shuffling: twelve ops

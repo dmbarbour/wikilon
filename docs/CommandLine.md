@@ -93,11 +93,11 @@ A lightweight and aesthetically pleasant syntax for *command sequences* can grea
 The proposed sugar uses explicit continuation passing style:
 
         [foo, bar, baz, qux] desugars to:
-        [\[\[\[qux] cc baz] cc bar] cc foo]
+        [\[\[\[qux] after baz] after bar] after foo]
 
-A programmer might understand the comma as a form of *yield* operator, enabling intermediate return. We yield just after each comma. Processing the continuation first enables our continuation to be modeled implemented as a simple stack, and is relatively (e.g. if `foo` uses `cc` internally, we'll push objects onto the stack in the correct order). Importantly, command sequences are universally subject to *transparent* abstraction, procedural and infinite constructions, inlining, etc..
+A command sequence is a block that receives a continuation stack, potentially extends it with `after`, then does some work for the first command in the sequence. The comma might informally be understood as a *yield* action, enabling an intermediate return step after performing each command. The intermediate return enables our caller to extract or inject data, model effects, etc.. Streaming data can be trivially expressed as command sequences, e.g. `[1,2,3,4,5]`, with the caller simply extracting a single value after each step.
 
-Streams of data are trivially expressed as command sequnces, e.g. `[1,2,3,4,5]`. Just provide a continuation then pop the value to step through the stream. Effects models take a little extra work. For example, the client of the command sequence might need to inject data before continuing to handle an input request. 
+Command sequences are transparently subject to abstraction, procedural construction, and modeling both finite and infinite streams of data or actions. Inlining or 'joining' a command sequence is valid and behaves as one would expect assuming simple stack-based implementations of `after`. 
 
 ### Claw Attributes
 
@@ -108,9 +108,20 @@ For attributes in Claw code, I will to use parentheses:
         (license:BSD3 author:dmbarbour category:math)       desugars to
         [{&license:BSD3}{&author:dmbarbour}{&category:math}]%
 
-In general, the structure and location of an attribute may be relevant to its external meaning. However, attributes have no runtime behavior, so we'll quickly drop the block containing them. Any simplifier of ABC code will trivially eliminate this block.
+Dropping the block ensures the annotations have no runtime behavior. Use of annotation symbols simplifies development of reverse lookup indices, and avoids the issue of creating link dependencies. A flat list of symbols keeps it simple, while allowing limited structure (like non-dependency relationships between words) to be expressed if necessary.
 
-*Aside:* Claw makes no attempt to optimize normal use of annotations, where the expectation is to simply define a word for each annotation. Attributes are a special case.
+*Aside:* Normal annotations must still be expressed as `\{&annotation}` in Claw. But we can abstract annotations behind words like any other code. Attributes need special attention because, like source comments, they cannot be abstracted.
+
+### Claw Source Comments? (Not yet.)
+
+Conventional C-style comments could trivially be represented in Claw via dropping embedded texts. 
+
+        "This is a comment.
+        ~%
+
+Such text could be presented using conventional C-style or Haskell style comments.
+
+However, I'm reluctant to support comments within source code. My intuition is that separating comments from source - e.g. into separate words like `foo.doc` and `foo.talk` to describe `foo` - will make the data contained in the comments more accessible for a lot of interesting use cases. Further, I would indirectly encourage factoring code into smaller functions that can be documented independently.
 
 ### Claw Namespaces
 

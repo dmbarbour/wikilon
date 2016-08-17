@@ -208,14 +208,14 @@ Due to use of a compacting collector and bump-pointer allocation, I cannot paral
 
 My idea is to use affine *process functions* (PF) together with asynchronous futures.
 
-        PF          [i → (o * PF)]
-        forked PF   [i → ((future o) * (forked PF))]
-        {&fork}     (PF * e) → ((forked PF) * e)
+        PF i o      [i → (o * PF)]
+        {&fork}     ((PF i o) * e) → ((PF i (future o)) * e)
         {&join}     ((future a) * e) → (a * e)
 
 A forked PF may be computed as a separate process - a separate thread, generally with its own heap. Communication involves copying data between processes. When applied, the forked PF 'immediately' (modulo pushback) returns the future result and the next PF. Parallelism is achieved by performing work between applying the PF and joining the result. The next PF may be called immediately, effectively enqueing sequential calls to the process.
 
 This design for parallelism is simple, highly scalable, and expressive within the limits of purely functional behavior. There is no direct expression of non-determinism or deadlock. But it is possible to model process pipelines, message passing, one-off processes, etc.. The costs of constructing a heavier process can be amortized over multiple calls. Because processes have individual heaps, we avoid many GC scaling challenges of multi-threading.
+
 
 *Pushback:* Fast 'producer' processes can easily run too far ahead of slow 'consumer' processes. This hurts performance and requires too much memory. We can mitigate this with pushback: each process is given a finite queue for pending messages in addition to whatever message it is processing. If this queue is at its limit, we should wait to call the PF.
 

@@ -29,13 +29,13 @@
 // most likely source of error is a full context, which might happen 
 // when expanding opvals.
 
-// Thoughts: more compact representations?
+// Thoughts: more compact representations? For example:
 //
-//   WIKRT_UNIT as "\n~ (4 chars) where vvrwlc is 6. (meh).
-//   WIKRT_UNIT_INR, "\n~ (3 chars) where vvrwlcVVRWLC is 12. (tempting.)
+//   WIKRT_UNIT_INR, "\n~ (3 chars) where vvrwlcVVRWLC is 12
 //
-// I'm not sure these are worthwhile, though. Especially not once we
-// include stream compression or eventual ABCD extensions.
+// I'm not sure it's worthwhile, though. Especially not once we
+// include stream compression or eventual ABCD extensions. I'll just
+// make sure extensions for tighter representations make the list.
 
 // A reasonable chunk size for our texts.
 //  must be smaller than WIKRT_OTAG_TEXT chunks (max size 0xFFFF)

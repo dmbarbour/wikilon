@@ -1305,7 +1305,9 @@ void wikrt_cons_binary_chunk(wikrt_cx* cx, uint8_t const* bytes, size_t bytect)
     (*v) = wikrt_tag_addr(WIKRT_O, addr_hdr);
 }
 
-// binary→binary, compacting via reasonably large chunks
+// binary→binary, compacting via reasonably large chunks.
+// It might be worthwhile to find the final size then
+// convert all at once.
 void wikrt_compact_binary(wikrt_cx* cx) 
 {
     size_t const buff_size = 60 * 1000;

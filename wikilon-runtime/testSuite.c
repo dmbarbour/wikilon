@@ -1240,14 +1240,6 @@ void test_quote_compose(wikrt_cx* cx)
     wikrt_compose(cx);
     val2txt(cx);
     elim_cstr(cx, "[vvvvcccc]");
-    
-    // Large blocks: first block should use [[block]inline] form.
-    // I'm going to assume that 32+ ops is a 'large' block.
-    intro_block(cx, "cccccccccccccccccccccccccccccccc"); 
-    intro_block(cx, "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"); 
-    wikrt_compose(cx);
-    val2txt(cx);
-    elim_cstr(cx, "[[vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv]vr$ccccccccccccccccccccccccccccccccc]");
 
     // Blocks with lazy/fork decorators must also use [[block]inline] form.
     intro_block(cx, "{bar}"); wikrt_block_lazy(cx);
@@ -1255,6 +1247,36 @@ void test_quote_compose(wikrt_cx* cx)
     wikrt_compose(cx);
     val2txt(cx);
     elim_cstr(cx, "[[{foo}]{&fork}vr$c[{bar}]{&lazy}vr$c]");
+}
+
+void test_quote_compose_large_block(wikrt_cx* cx)
+{
+    // Large blocks: first block should use [[block]inline] form
+    // when composing, to ensure O(1) composition. But this test
+    // might need some updating if I use compact bytecode on
+    // parse in the future (which is quite possible).  
+    intro_block(cx, "cccccccccccccccccccccccccccccccc"); 
+    intro_block(cx, "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"); 
+    wikrt_compose(cx);
+    val2txt(cx);
+
+    char const* const ok1 = "[[vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv]vr$ccccccccccccccccccccccccccccccccc]";
+    char const* const ok2 = "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvcccccccccccccccccccccccccccccccc";
+
+    size_t len = 4 + strlen(ok1);
+    char buff[len + 1];
+    wikrt_read_text(cx, buff, &len);
+    buff[len] = 0;
+
+
+    if(0 == strcmp(buff, ok1)) {
+        // expected
+    } else if(0 == strcmp(buff, ok2)) {
+        // not a failure per se, but not testing what I'm hoping to test.
+        fprintf(stderr, "%s: a correct result, but fails to test for O(1) compose.", __FUNCTION__);
+    } else {
+        wikrt_set_error(cx, WIKRT_ETYPE);
+    }
 }
 
 void test_block_dec(wikrt_cx* cx) 
@@ -1419,6 +1441,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
 
     TCX(test_quote_apply);
     TCX(test_quote_compose);
+    TCX(test_quote_compose_large_block);
     TCX(test_block_dec);
 
     // TODO: evaluations

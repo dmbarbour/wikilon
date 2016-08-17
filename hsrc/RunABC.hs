@@ -14,35 +14,40 @@ import Wikilon.ABC.Fast (ABC, V(..), Op(..), ExtOp(..))
 import qualified Wikilon.ABC.Eval as ABC
 
 defaultQuota :: ABC.Quota
-defaultQuota = 100000000
+defaultQuota = 10000000
 
-runABC :: ABC.Quota -> ABC -> ABC 
-runABC q p = ABC.compactOps $ quoteEvalResult $ ABC.eval q p' v0 where
+runABC :: ABC.Quota -> ABC.OnTok -> ABC -> ABC 
+runABC = run where
+    run quota ontok prog 
+        = ABC.compactOps 
+        $ (:[]) . ABC_Val . quoteResult 
+        $ ABC.eval quota ontok (wrap prog) v0
     sealer   = ":runABC"
     unsealer = ".runABC"
-    v0 = S sealer linearIdentity
-    linearIdentity = B mempty (ABC.f_aff .|. ABC.f_rel)
-    p' = [ ABC_Val (ABC.block p)
-         , ABC_Ext ExtOp_Inline
-         , ABC_Ext ExtOp_Swap
-         , ABC_Tok unsealer
-         , ABC_Ext ExtOp_Inline
-         ]
-
-quoteEvalResult :: ([Op], V) -> [Op]
-quoteEvalResult ([], v) = [ABC_Val v]
-quoteEvalResult (cc, v) = [ABC_Val v, ABC_Val (ABC.block abc), ABC_Prim P.ABC_apply]
-    where abc = ABC.compactOps cc
+    v0 = S sealer (B mempty linear)
+    linear = (ABC.f_aff .|. ABC.f_rel)
+    wrap p = 
+        [ ABC_Val (ABC.block p)
+        , ABC_Ext ExtOp_Inline
+        , ABC_Ext ExtOp_Swap
+        , ABC_Tok unsealer
+        , ABC_Ext ExtOp_Inline
+        ]
+    quoteResult ([], v) = v
+    quoteResult (ops, v) = Z (ABC.compactOps ops) v
 
 main :: IO ()
 main = 
     preserveNewlines >> 
-    LBS.hGetContents Sys.stdin >>= \ prog ->
-    case P.decode prog of
+    LBS.hGetContents Sys.stdin >>= \ src ->
+    case P.decode src of
         Left stuck -> 
             Sys.hPutStrLn Sys.stderr $ "parse error:\n" ++ show stuck
-        Right abc -> 
-            let result = runABC defaultQuota (ABC.fromPureABC abc) in
+        Right abc -> do
+            let quota = defaultQuota 
+            let onTok = ABC.defaultOnTok 
+            let prog = ABC.fromPureABC abc 
+            let result = runABC quota onTok prog 
             Sys.hPutStrLn Sys.stdout $ show result
 
 preserveNewlines :: IO ()

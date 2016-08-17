@@ -33,6 +33,7 @@ import Control.Applicative
 import Control.Monad
 import Data.Typeable (Typeable)
 import Data.Word
+import Data.Int
 import Data.Bits
 import Data.Monoid
 import Data.Maybe (mapMaybe)
@@ -79,24 +80,26 @@ data ABC = ABC
 data Op
     = ABC_Prim  !PrimOp     -- the basic 42 ABC operators
     | ABC_Ext   !ExtOp      -- ABCD-like performance extensions
-    | ABC_Val   V           -- a quoted value, block, or text
+    | ABC_Val   !V          -- a quoted value, block, or text
     | ABC_Tok   !Token      -- e.g. value sealers, annotations
     deriving (Eq, Typeable)
 
 -- | Values that can be represented in ABC, with a simple
--- extension for larger than memory values. Explicit lazy
--- and error values are a possibility. Favoring Int64 to
--- be more comparable with C runtime performance.
+-- extension for larger than memory values. 
+--
+-- Values are strict. Any laziness or parallelism will be
+-- modeled explicitly. Integers are constrained to match
+-- Wikilon runtime (more or less).
 data V 
     = N {-# UNPACK #-} !Int64 -- numbers (integers)
-    | P V V             -- product of values
-    | L V | R V         -- sum of values (left or right)
+    | P !V !V           -- product of values
+    | L !V | R !V       -- sum of values (left or right)
     | U                 -- unit value
-    | B ABC Flags       -- block value
-    | S !Token V        -- sealed and special values
+    | B !ABC !Flags     -- block value
+    | S !Token !V       -- sealed and special values
     | T !Text           -- embedded text value
-    | X (VRef V) Flags  -- external value resource
-    | Z ABC V           -- lazy application of block
+    | X !(VRef V) !Flags  -- external value resource
+    | Z !ABC V          -- lazy application of block
     deriving (Eq, Typeable)
 
     -- todo: add support for parallel evaluation
@@ -115,13 +118,18 @@ block abc = B abc zeroBits
 --   lazily applied blocks (for simplification)
 --
 
--- | Flags for substructural or special block attributes. Mostly, 
--- I have affine and relevant types, but I might later add support
--- for parallelism, laziness, etc. of blocks. Maybe alternative
--- cache modes or some heuristics information for large values.
+-- | Flags for substructural or block decorator attributes.
+-- For decorators, only one at a time may apply, but a block can
+-- be wrapped e.g. [[block]{&lazy}vr$c]{&fork}. 
 --
-newtype Flags = Flags { unFlags :: Word8 }
+-- For parallelism, I'm going to favor a process function concept
+-- that effectively shifts the computation into an alternative
+-- thread that can enqueue multiple requests and provide future
+-- results. Laziness is simpler and will generally be considered
+-- non-copyable.
+newtype Flags = Flags { unFlags :: Word8 } 
     deriving (Eq, Bits)
+
 
 -- | Accelerated operations corresponding to common substrings of
 -- Awelon Bytecode (and hence to common functions). These encode
@@ -203,23 +211,25 @@ instance Show ExtOp where
 -- we'll show a value in an extended bytecode form, with 
 -- resource tokens in place of stowed values.
 showsV :: V -> ShowS
-showsV (N n) = shows $ Pure.itoabc' n
+showsV (N n) = shows $ Pure.itoabc' (toInteger n)
 showsV (P a b) = showsV a . showsV b . shows ABC_w . shows ABC_l
 showsV (L a) = showsV a . shows ABC_V
 showsV (R b) = showsV b . shows ABC_V . shows ExtOp_Mirror
 showsV (U) = shows ABC_v . shows ExtOp_Swap
-showsV (B abc kf) = showChar '[' . shows abc . showChar ']' . showsKF kf
+showsV (B abc kf) = showChar '[' . shows abc . showChar ']' . showsFlags kf
 showsV (S tok v) = showsV v . shows tok
 showsV (T txt) = shows (Pure.ABC_Text txt)
-showsV (X ref kf) = showString "{#" . rsc . qv . showsKF kf . showChar '}' where
+showsV (X ref kf) = showString "{#" . rsc . qv . showsFlags kf . showChar '}' where
     rsc = showString "V:" . shows (unsafeVRefAddr ref) -- local resource id
     qv = showChar '\'' -- resource represents a quoted value
-showsV (Z abc v) = showV v . showsV (B abc zeroBits) . showString "{&lazy}" . shows ABC_apply
+showsV (Z abc v) = showsV v . showsV (B abc f_lazy) . shows ABC_apply
 
-showsKF :: Flags -> ShowS
-showsKF kf = k . f where
-    k = if f_includes f_rel kf then showChar 'k' else id
-    f = if f_includes f_aff kf then showChar 'f' else id
+showsFlags :: Flags -> ShowS
+showsFlags f = rel . aff . lazy . fork where
+    rel = if f_includes f_rel f then showChar 'k' else id
+    aff = if f_includes f_aff f then showChar 'f' else id
+    lazy = if f_includes f_lazy f then showString "{&lazy}" else id
+    fork = if f_includes f_fork f then showString "{&fork}" else id
 
 showsOp :: Op -> ShowS
 showsOp (ABC_Prim op) = shows op
@@ -409,7 +419,7 @@ rdRef _ = impossible "underflow reading stowed value reference"
 -- the normal processing needs if we encoded the value in ABC, and does
 -- not need to be recomputed in each step of a loop.
 cbVal :: V -> CacheBuilder
-cbVal (N n) = (mempty, BB.char8 '#' <> bbVarInt n)
+cbVal (N n) = (mempty, BB.char8 '#' <> bbVarInt (toInteger n))
 cbVal (P a b) = cbChar8 'P' <> cbVal a <> cbVal b
 cbVal (L a) = cbChar8 'L' <> cbVal a
 cbVal (R b) = cbChar8 'R' <> cbVal b
@@ -419,6 +429,7 @@ cbVal (S (Token tok) v) = (mempty,bbtok) <> cbVal v where
     bbtok = BB.char8 '{' <> BB.byteString tok <> BB.char8 '}'
 cbVal (T txt) = (mempty, BB.char8 '"' <> bbSizedSlice txt)
 cbVal (X ref kf) = cbChar8 'X' <> cbFlags kf <> cbRef ref
+cbVal (Z abc v) = cbChar8 'Z' <> cbABC abc <> cbVal v
 
 cbToCE :: CacheBuilder -> CacheEnc
 cbToCE (refs,bb) = (CE refs bytes) where
@@ -428,7 +439,7 @@ rdVal :: CacheEnc -> (V, CacheEnc)
 rdVal (CE refs sInit) = case LBS.uncons sInit of
     Nothing -> impossible "underflow attempting to read value"
     Just (c, s) -> case c of
-        '#' -> let (n, s') = rdVarInt s in (N n, CE refs s')
+        '#' -> let (n, s') = rdVarInt s in (N (fromInteger n), CE refs s')
         'P' ->
             let (a, cea) = rdVal (CE refs s) in
             let (b, ce') = rdVal cea in
@@ -453,6 +464,10 @@ rdVal (CE refs sInit) = case LBS.uncons sInit of
             let (kf, cef) = rdFlags (CE refs s) in
             let (ref, ce') = rdRef cef in
             (X ref kf, ce')
+        'Z' ->
+            let (abc, cea) = rdABC (CE refs s) in
+            let (val, ce') = rdVal cea in
+            (Z abc val, ce')
         _ -> impossible $ show c ++ " unrecognized prefix for cached value"
 
 -- as rdVal, but errors if there is any content remaining in the CacheEnc
@@ -534,19 +549,22 @@ purifyV' :: V -> [Pure.Op] -> [Pure.Op]
 purifyV' = vops where
     abcStr = (++) . Pure.abcOps
     pureOp = (:)
-    vops (N i) = abcStr $ Pure.itoabc i
+    vops (N i) = abcStr $ Pure.itoabc (toInteger i)
     vops (P a b) = vops b . vops a . abcStr "l"
     vops (L a) = vops a . abcStr "V"
     vops (R b) = vops b . abcStr "VVRWLC"
     vops (U) = abcStr "vvrwlc"
-    vops (B abc flags) = b . k . f where
+    vops (B abc flags) = b . k . f . lazy . fork where
         -- might later need flags for parallelism, memoization, etc.
         b = pureOp (Pure.ABC_Block (purifyABC abc))
         k = if f_copyable flags then id else abcStr "k"
         f = if f_droppable flags then id else abcStr "f"
+        lazy = if f_includes f_lazy flags then abcStr "{&lazy}" else id
+        fork = if f_includes f_fork flags then abcStr "{&fork}" else id
     vops (S tok v) = vops v . pureOp (Pure.ABC_Tok tok)
     vops (T txt) = pureOp (Pure.ABC_Text txt)
-    vops (X ref _) = vops (deref' ref) . pureOp (Pure.ABC_Tok "&stow")
+    vops (X ref _) = vops (deref' ref) . abcStr "{&stow}"
+    vops (Z abc v) = vops v . vops (B abc zeroBits) . abcStr "{&lazy}$"
 
 -- Note: I'm using a transparent compression here, albeit only for 
 -- sufficiently large objects having an acceptable compression ratio.
@@ -609,13 +627,30 @@ instance VCacheable ABC where
 -- that an X ref is not droppable due to transitively containing
 -- such a block.
 f_rel :: Flags
-f_rel = Flags 0x01
+f_rel = Flags $ 1 `shiftL` 0
 
 -- | A flag indicating that a block is affine (forbids copy), or
 -- that an X ref is not copyable due to transitively containing
 -- such a block.
 f_aff :: Flags
-f_aff = Flags 0x02
+f_aff = Flags $ 1 `shiftL` 1
+
+-- | A flag marking a block as 'lazy'. This delays the computation
+-- of the whole block, representing a lazy value instead that may
+-- be accessed via explicit `{&join}`. 
+f_lazy :: Flags
+f_lazy = Flags $ 1 `shiftL` 2
+
+-- | A flag marking a block for 'parallel' evaluation. This assumes
+-- the block is a process function, e.g. of the general form:
+--
+--    type PF i o = i -> (o, PF i o)
+--    fork :: PF i o -> PF i (future o)
+--
+-- A forked PF will produce 'future' output values, which may later
+-- be synchronized via `{&join}`.
+f_fork :: Flags
+f_fork = Flags $ 1 `shiftL` 3
 
 
 
@@ -646,6 +681,7 @@ copyable (B _ kf) = f_copyable kf
 copyable (S _ v) = copyable v
 copyable (T _) = True
 copyable (X _ kf) = f_copyable kf
+copyable (Z _ _) = False
 
 -- | Test whether a value is droppable by % (not relevant)
 droppable :: V -> Bool
@@ -658,6 +694,7 @@ droppable (B _ kf) = f_droppable kf
 droppable (S _ v) = droppable v
 droppable (T _) = True
 droppable (X _ kf) = f_droppable kf
+droppable (Z _ _) = False
 
 -- monoid instance shall compose functionality, running all
 -- operations (and popping all values) off the first function
