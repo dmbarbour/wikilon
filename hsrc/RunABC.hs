@@ -14,21 +14,21 @@ import Wikilon.ABC.Fast (ABC, V(..), Op(..), ExtOp(..))
 import qualified Wikilon.ABC.Eval as ABC
 
 defaultQuota :: ABC.Quota
-defaultQuota = 10000000
+defaultQuota = 100000000
 
-runABC :: ABC.Quota -> ABC.OnTok -> ABC -> ABC 
+-- assumes ABC argument of type 
+runABC :: ABC.Quota -> ABC.OnTok -> ABC -> V
 runABC = run where
     run quota ontok prog 
-        = ABC.compactOps 
-        $ (:[]) . ABC_Val . quoteResult 
+        = quoteResult 
         $ ABC.eval quota ontok (wrap prog) v0
-    sealer   = ":runABC"
+    sealer   = ":runABC" -- could add hash of code for uniqueness
     unsealer = ".runABC"
     v0 = S sealer (B mempty linear)
     linear = (ABC.f_aff .|. ABC.f_rel)
-    wrap p = 
-        [ ABC_Val (ABC.block p)
-        , ABC_Ext ExtOp_Inline
+    wrap p = ABC_Val (ABC.block p) : finish
+    finish =  
+        [ ABC_Ext ExtOp_Inline
         , ABC_Ext ExtOp_Swap
         , ABC_Tok unsealer
         , ABC_Ext ExtOp_Inline
@@ -48,7 +48,8 @@ main =
             let onTok = ABC.defaultOnTok 
             let prog = ABC.fromPureABC abc 
             let result = runABC quota onTok prog 
-            Sys.hPutStrLn Sys.stdout $ show result
+            let abcOut = ABC.purifyABC (ABC.fastQuote result)
+            Sys.hPutStrLn Sys.stdout $ show abcOut
 
 preserveNewlines :: IO ()
 preserveNewlines = 

@@ -1,20 +1,19 @@
+# Recent
+
+Performance profiling. Comparisons in Perf.md.
 
 # TODO
 
 My primary efforts at the moment should be:
 
-* profile Haskell interpreter vs C interpreter.
- * use a few shared, simple benchmarks
- * make sure I have a good start, here
-
-* simplify & accelerate Wikilon's ABC code
- * systematic support for accelerators
- * develop more wide use accelerators
+* simplify and accelerate ABC code!
+ * recognize existing accelerators
+ * then develop MORE accelerators
   * fast fixpoint inline (fix.i)
    * maybe as an attribute?
   * faster conditionals
    * `if` and `if_` behaviors.
-  * common EQ/NEQ behavior.
+  * common EQ/NEQ comparisons.
   * sum to boolean conversion.
   * some deep stack manipulations
  * develop specialized accelerators:
@@ -29,12 +28,11 @@ My primary efforts at the moment should be:
 
 * persistence and stowage
  * potential for shared, stable object models
-
+ * use for web service storage!
 
 * shared bytecode model
  * avoid full copies for large bytecode.
  * for now, maybe separate from stowage.
-
 
 * profiling and debugging of AO code
  * simplified stack traces

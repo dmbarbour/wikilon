@@ -14,7 +14,7 @@ module Wikilon.ABC.Fast
     ( ABC
     , Op(..)
     , expandOps, compactOps
-    , V(..), purifyV, block
+    , V(..), purifyV, block, fastQuote
     , ExtOp(..), extOpTable, extCharToOp, extOpToChar
     , PrimOp(..)
     , Token
@@ -91,15 +91,15 @@ data Op
 -- modeled explicitly. Integers are constrained to match
 -- Wikilon runtime (more or less).
 data V 
-    = N {-# UNPACK #-} !Int64 -- numbers (integers)
-    | P !V !V           -- product of values
-    | L !V | R !V       -- sum of values (left or right)
-    | U                 -- unit value
-    | B !ABC !Flags     -- block value
-    | S !Token !V       -- sealed and special values
-    | T !Text           -- embedded text value
-    | X !(VRef V) !Flags  -- external value resource
-    | Z !ABC V          -- lazy application of block
+    = N {-# UNPACK #-} !Int64   -- numbers (integers)
+    | P !V !V                   -- product of values
+    | L !V | R !V               -- sum of values (left or right)
+    | U                         -- unit value
+    | B !ABC {-# UNPACK #-} !Flags           -- block value
+    | S !Token !V               -- sealed and special values
+    | T !Text                   -- embedded text value
+    | X !(VRef V) {-# UNPACK #-} !Flags    -- external value resource
+    | Z !ABC V                  -- lazy application of block
     deriving (Eq, Typeable)
 
     -- todo: add support for parallel evaluation
@@ -109,6 +109,13 @@ data V
 block :: ABC -> V
 block abc = B abc zeroBits
 
+-- | fast quote, but does not track substructure.
+fastQuote :: V -> ABC
+fastQuote v = ABC 
+    { abc_code = "_"
+    , abc_toks = []
+    , abc_data = [v] 
+    }
 
 -- contemplating support for: 
 --   binaries (a specialized vector?)
