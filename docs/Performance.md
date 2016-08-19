@@ -9,7 +9,7 @@ I have multiple strategies to achieve performance, which should stack nicely:
 
 2. Large-value *stowage*. A `{&stow}` annotation tells a runtime to tuck large values into a database, like ABC value resources. Structure sharing is implicit. This allows us to work with larger-than-memory values, e.g. values modeling entire databases. Structure sharing supports Wikilon's application model: we can expect to recompute values many times. Stowage might also find use for discretionary sealers and unsealers, just for structure sharing.
 
-3. Parallelism. Within a computation, we can support Haskell's par-seq parallelism by providing `{&par}` and `{&seq}`. We can use work-stealing techniques, with one thread per hardware processor. In addition, we'll have multiple threads for propagating updates through dictionaries, or when working with multiple users.
+3. Parallelism. Use `{&fork}`, `{&join}`, and asynchronous futures to model multi-process parallelism within a computation. 
 
 4. Memory and GC per-thread. Dictionary application threads are truly *pure*, so there is very little sharing between them to worry about. It's easy to treat threads as processes with whole-arena GC. This gives us very predictable GC properties. This greatly augments stowage performance: we can perform it latently as part of GC, which saves us from stowing transient values. Further, we can heuristically stow values when memory runs low, instead of increasing the memory arena. Our arenas can be reasonably large (e.g. 10-20MB, plus binaries and texts, perhaps with multiple layers: nursery and generational). 
 
@@ -32,7 +32,7 @@ My new plan is:
 * implement performance-critical kernel in C
 * leverage LLVM (or Clang) as a basis for JIT
 * integrate LMDB as the basis for stowage
-* support lightweight threads via `{&par}`
+* support lightweight threads via `{&fork}`
 * limit number of passive computation threads
 * dictionaries modeled as ABC values with stowage
 * support 'named root' values, similar to VCache
@@ -73,43 +73,13 @@ Other thoughts:
 
 ## Parallelism 
 
-Awelon Bytecode has a lot of latent parallelism. So the problem becomes teasing it out at an appropriate granularity to keep the overheads low and the processors busy. We can utilize a simple variant of [parallel Haskell's](https://hackage.haskell.org/package/parallel-3.2.0.6/docs/Control-Parallel.html) `par` and `seq` techniques.
-
-        {&par} :: (block * env) → (block with 'par' attribute * env)
-        USAGE: (prep args)[(expensive)]{&par}$(move pending result)
-
-        {&seq} :: (lazy or pending value * env) → (value * env)
-
-I'm going to assume we have a *memory arena per thread*, with no sharing. Splitting an arena immediately upon sparking evaluation seems inefficient, too eager. So `{&par}` will not *actually* fork a thread until it can gain its own memory arena. My idea for this is as follows:
-
-* represent and note the spark, but continue evaluating non-par route. 
-* construction of separate `{&par}` arena waits until we perform a gen-GC.
-* might have limited pool for waiting sparks: wait for more than one GC.
-* might sequence the evaluation before we ever spark it. 
-* limited number of parallel computations and spark arenas.
-
-It might be useful to track granularity in the `{&par}` request: e.g. the developer can specify whether a computation is likely light or heavy, perhaps via another annotation on the block. We could provide memory arenas of appropriate sizes.
-
-We can operate on pending results in simple ways. We might permit applying additional `{&par}` blocks, for example. We can move pending results easily. We cannot generally *delete* or *copy* a pending result, but we might be able to mark where the assumption was made and compute whether it was a valid assumption later. In this sense, an evaluation might generally include a list of unverified assumptions, e.g. that a particular pending result was delete-able.
-
-This is sufficient to support parallel computation strategies, but it's difficult for an evaluation to actually gain a parallel thread unless the result remains 'pending' until a gen-GC step. Consequently, parallel evaluation only triggers for stuff that we don't actually need for a while. But when it does trigger, we might manage multiple sparks at once. So, techniques like fork-join can be effective, with the first thread possibly processing several sparks before a few more trigger.
+(Old content outdated, see [ABCRT.md](ABCRT.md) and [Parallelism.md](Parallelism.md).)
 
 ### Other Parallelism?
 
 With accelerators, it is feasible to support SIMD and massively parallel GPU computations. Assume a subprogram is constructed from a constrained set of recognizable functions and data structures that we know how to easily represent on the GPU. Annotate a block containing this subprogram for evaluation on the GPU. The runtime compiles the block to CUDA or OpenCL or a shader language. When we later apply the function, it will compute on the GPU. Other forms of heterogeneous computing, e.g. FPGAs, will frequently follow a similar pattern. Haskell has similar precedent with the [accelerate](https://hackage.haskell.org/package/accelerate) package.
 
 In context of a dictionary application, every form of parallelism could kick in for every evaluation. This includes partial evaluations and cache maintenance. I imagine a mature, active, and popular AO dictionary full of apps could productively leverage as many CPUs, GPUs, and other computing devices as you're willing to throw at them.
-
-## Lazy Computation?
-
-Laziness involves construction of a suspended computation, a pending result, one that doesn't need to be completed immediately. The difficulties I see with laziness are:
-
-1. It doesn't interact nicely with serialization and distribution
-2. It doesn't interact nicely with structure sharing for stowage
-3. Laziness as a *semantics* hinders reasoning about divergence
-4. Affine substructure and effectful tokens undermines laziness
-
-At this time, I'm leaning towards avoiding laziness entirely, except insofar as we model it explicitly (explicit streams vs. lists, for example). But would it still be useful to support weak laziness annotations? I'm not sure.
 
 ## Linear Cached Computations
 
@@ -145,9 +115,11 @@ Vectors could be a highly optimized 'view' for lists. For floating point operati
 
 Accelerators are wasted in cases where a simple compilation could do the job. Accelerators are best used in cases that JITs alone would have difficulty recognizing or optimizing, especially cases that imply use of specialized datatypes. Applying accelerators before compilation should allow a simple compiler to do a better job.
 
+*Aside:* It might be useful to indicate accelerators via annotations, such that we don't need to search for them arbitrarily. But it might not matter too much, unless accelerators look too similar.
+
 ## Compilation
 
-Awelon Bytecode is designed assuming compilation. Without it, ABC has no chance of competing with more machine-oriented bytecodes like CLR or JVM. The amount of allocation performed by a single ABC evaluation is significant. Compiling helps most in case of loopy and mathy code: the Z-combinator becomes a simple jump, internal data plumbing can be shifted to register allocations, computations can be optimized. 
+Awelon Bytecode is designed assuming compilation. Without it, ABC has no chance of competing with more machine-oriented bytecodes like CLR or JVM. The amount of allocation performed by an ABC evaluation is significant. Compiling helps in case of loopy and mathy code: the Z-combinator becomes a simple jump, internal data plumbing can be shifted to register allocations, computations can be optimized. 
 
 With accelerators, it becomes feasible to recognize subprograms that can be easily compiled for SIMD or GPGPUs. With this, AO and ABC might achieve world-class performance without sacrificing its pure, trivial semantics.
 

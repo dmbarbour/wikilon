@@ -8,10 +8,10 @@ My primary efforts at the moment should be:
 
 * simplify and accelerate ABC code!
  * recognize existing accelerators
- * then develop MORE accelerators
+ * develop MORE accelerators
   * fast fixpoint inline (fix.i)
    * maybe as an attribute?
-  * faster conditionals
+  * faster conditional behavior.
    * `if` and `if_` behaviors.
   * common EQ/NEQ comparisons.
   * sum to boolean conversion.
@@ -21,14 +21,21 @@ My primary efforts at the moment should be:
   * list processing accelerators
   * consider support for 'compact' texts
 
-* compact bytecode model
- * simplify fast-copy, etc..
- * contain binaries, blocks, and texts
- * design with eye towards sharing
+* compact, fast bytecode
+ * optionally compact during parse
+ * high performance quotations
+  * directly contain binaries, texts, blocks.
+  * explicit reserve for structured data
+ * design with eye toward shared objects.
 
 * persistence and stowage
  * potential for shared, stable object models
  * use for web service storage!
+
+* [parallelism](Parallelism.md)! 
+ * get `{&fork}` and `{&join}` working
+
+
 
 * shared bytecode model
  * avoid full copies for large bytecode.
@@ -62,6 +69,20 @@ My primary efforts at the moment should be:
  * cacheable results, please.
 
 ## Lower Priority (for now)
+
+* faster basic bytecode!
+ * typechecked, preallocated variants.
+ * explicit memory reservations. 
+ * ability to run a block unchecked.
+ * explicit type tests. Basic Block Value?
+
+* programmable completion for linkAO
+ * maybe add default linkAO file via env.
+ * really want to write `linkAO -w foo[TAB]`.
+ * but it's low priority
+
+* claw to AO conversion (and vice versa)
+ * simplify command line testing, please.
 
 * dictonary applications
  * model of edit and debug sessions

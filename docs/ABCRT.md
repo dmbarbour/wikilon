@@ -100,7 +100,6 @@ The simplest of these options to implement is to use the C heap and reference co
 
 I'm very tempted to support free-lists for allocating larger data.
 
-
 #### Other Ideas
 
 Focusing on collections-oriented processing, e.g. with lists and vectors. 
@@ -162,7 +161,9 @@ Loops in ABC are performed by a fixpoint operation, which repeatedly:
 * fixpoints one copy
 * applies the other
 
-For performance, it would be most convenient if we do not deep-copy larger blocks or subprograms. Instead, we favor a *shared object* between copies. It will be essential to have a decent shared-object model for this. 
+For performance, it would be most convenient if we do not deep-copy larger blocks or subprograms. Instead, we ideally have a *shared object* between copies. Any contained 'values' will simply be reproduced by the shared object as needed. 
+
+Even better if our shared object block knows how much memory it needs, i.e. such that it can use preallocated space for the computation. 
 
 When a block contains a representation for a complex value (potentially another block) I'll need some way to process values without extra copying. Thus, evaluation of the block needs to produce the value. And an inner block generated during evaluation can directly reference the outer block plus an offset or similar. Effectively, I need some compact representation of 'values' to go with other compact code. This particular aspect could be related to value stowage!
 
@@ -172,28 +173,18 @@ We can potentially have these shared objects be local to a context, i.e. keeping
 
 For now, I'm using text as an intermediate structure for parsing blocks. It might be useful to eventually develop some means to stream text input and output, i.e. to work with very large blocks of code. But for now, focusing on small amounts of code or paragraph-structured program streams (i.e. paragraps separated by LF LF) would probably work well enough.
 
-### Accelerators via DSLs
-
-It might be worthwhile to pursue the 'accelerator via DSL' approach for performance at some point. If we want C language for a given subprogram, for example, we could model a C interpreter then accelerate its operation. C is perhaps not an optimal target to fit into a purely functional program, but there may be other low level languages for which this is a useful idea. (Especially anything that will fit casually into a GPGPU.)
-
 ### Value Sealers
 
-ABC's discretionary value sealers. I'll optimize for 3-character (or fewer) discretionary sealers like `{:map}` or `{:foo}`, which may be encoded within tag bits of a single cell. Otherwise, I'll simply copy the token together with the value. I'm not going to 'intern' token strings, mostly to avoid synchronization overheads and to discourage use of large seals.
+ABC's discretionary value sealers. I'll optimize for short discretionary sealers like `{:map}` or `{:foo}`, which may be encoded within tag bits of a single cell. At the moment, this means up to six or seven bytes, which covers many sealers. I'm not going to 'intern' token strings, mostly to avoid synchronization overheads and to discourage use of large seals.
 
 ### Value Stowage
 
-We annotate a value to moved to persistent storage, or reverse this. Originally, I was planning on entirely *transparent* stowage. However, that complicates the path for normal computations, i.e. I must repeatedly test whether or not I have a stowed value. So I'm now favoring paired annotations: `{&stow}` and `{&load}`. 
+Paired annotations: `{&stow}` and `{&load}`. I can stow a value to a backing database (LMDB) or load a value from said database. Latency on stowage is critical for several use cases. I'll probably want to perform value stowage *immediately before* garbage collection (so my scratch space is available and I avoid extra copies). And that only for values having survived at least one GC already. I might end up tracking stowage via some form of ephemeron table that is rebuilt upon GC.
 
-IMPLEMENTATION: I know of two basic options. 
+I might want some explicit structure sharing for stowed values, e.g. some way to say that THIS stowed value is a copy of THAT one (in O(1) time), and they'll all share the same resource identifier when stowage finally commences. Dropping a stowed value is simpler, since I can just deep-drop the value. And if I load a copied, stowed value, I can explicitly copy it then.
 
-1. I can attempt to use the *same* representation for stowage that I use at runtime, and treat stowage as a micro-context of sorts to `wikrt_copy_move` between. This approach relies on relative addressing, e.g. such that pointers are all relative to a base address. 
+Value stowage should ideally work nicely with the 'shared object' concept, enabling large blocks of code to be used efficiently without copying. This is not critical, but LMDB could potentially enable direct access to shared memory. Or I could use an explicit shared-object cache. 
 
-2. I can create an alternative compact representation for values, perhaps oriented around a 'quoted block' view. This could be oriented towards a shared object model. This is pretty much a 'VCacheable' approach. We could limit stowage binaries to (for example) one or two megabytes.
-
-A `copy_move` option is tempting in its simplicity. But it seems fragile to changes in the runtime, and difficult to integrate with value sharing (I'll always need to copy the value to use it). So I'm leaning towards the second option.
-
-*Note:* Value stowage shall include a structure sharing model. I.e. if the same value is stowed a hundred times, we'll route them all to the same interned representation. In a distributed runtime, this structure sharing may be latent, i.e. lazily combining values produced at different nodes. (But Wikilon runtime isn't distributed quite yet.)
- 
 ### Computations
 
 For pending computations, I could probably use a `(block * value)` pair together with a tagged object wrapper. This would work pretty well, so long as it isn't the representation used *during* evaluation. During evaluation, I'd divide the block into a stack of computations via `$` and `?` operations. Then, if a computation doesn't complete before its time quota, I simply rebuild a block via O(1) composition.
@@ -214,8 +205,9 @@ My idea is to use affine *process functions* (PF) together with asynchronous fut
 
 A forked PF may be computed as a separate process - a separate thread, generally with its own heap. Communication involves copying data between processes. When applied, the forked PF 'immediately' (modulo pushback) returns the future result and the next PF. Parallelism is achieved by performing work between applying the PF and joining the result. The next PF may be called immediately, effectively enqueing sequential calls to the process.
 
-This design for parallelism is simple, highly scalable, and expressive within the limits of purely functional behavior. There is no direct expression of non-determinism or deadlock. But it is possible to model process pipelines, message passing, one-off processes, etc.. The costs of constructing a heavier process can be amortized over multiple calls. Because processes have individual heaps, we avoid many GC scaling challenges of multi-threading.
+This design for parallelism is simple, highly scalable, and expressive within the limits of purely functional behavior. Costs of constructing a process can be amortized over multiple calls. There is no direct expression of non-determinism or deadlock. But it is possible to model process pipelines, message passing, one-off processes, etc.. The costs of constructing a heavier process can be amortized over multiple calls. Because processes have individual heaps, we avoid many GC scaling challenges of multi-threading.
 
+I'll be brainstorming implementation ideas in [Parallelism.md](Parallelism.md)
 
 *Pushback:* Fast 'producer' processes can easily run too far ahead of slow 'consumer' processes. This hurts performance and requires too much memory. We can mitigate this with pushback: each process is given a finite queue for pending messages in addition to whatever message it is processing. If this queue is at its limit, we should wait to call the PF.
 
@@ -329,3 +321,9 @@ For profiling, the best idea I have so far is to leverage periodic stack traces 
 
 I had an interesting idea to use [opaque timer values](https://awelonblue.wordpress.com/2016/08/02/profiling-pure-code/). But in context of value stowage (and possible caching of computations), I think it wouldn't work out very nicely. 
 
+
+## Miscellaneous Ideas
+
+### Accelerators via DSLs
+
+It might be worthwhile to pursue the 'accelerator via DSL' approach for performance at some point. If we want C language for a given subprogram, for example, we could model a C interpreter then accelerate its operation. C is perhaps not an optimal target to fit into a purely functional program, but there may be other low level languages for which this is a useful idea. (Especially anything that will fit casually into a GPGPU.)

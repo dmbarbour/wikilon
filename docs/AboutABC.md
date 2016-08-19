@@ -92,10 +92,10 @@ Token texts are constrained as follows:
 * forbid control codes (C0, C1, DEL)
 * forbid surrogate codes (U+D800..U+DFFF)
 * forbid replacement char (U+FFFD)
-* forbidsthe curly braces: `{}`
-* between 1 and 63 bytes UTF-8
+* forbid the curly braces: `{}`
+* size limit, 1 to 255 bytes UTF-8
 
-Tokens may be further constrained within a specific codebase, e.g. an AO dictionary. 
+Tokens may be further constrained per use case. For example, [AO dictionaries](AboutAO.md) further constrain token size and structure, restricting to a subset of tokens with local, pure, well understood behavior. But allowing for larger tokens in general is convenient for resource identifiers or cryptographic sealers in context of open distributed programming.
 
 ## ABC Behavior Details
 
@@ -416,7 +416,7 @@ A proposed serialization for stowed value placeholders is use of a token:
 
         {'kf/scope/resourceID}
 
-The prefix `'kf` indicates a stowed value (`'`) with relevant and affine substructural properties (`kf`). The scope helps constrain the search space, and the rest identifies the value. The resourceID should include a secure HMAC if otherwise forgeable (like an incremental number). The limit on token size (63 bytes) should not be an issue in practice, though hierarchically structured resource identifiers like URLs are not viable.
+The prefix `'kf` indicates a stowed value (`'`) with relevant and affine substructural properties (`kf`). The scope helps constrain the search space, and the rest identifies the value. The resourceID should include a secure HMAC if otherwise forgeable (like an incremental number). The limit on token size (255 bytes) should not be an issue in practice, though hierarchically structured resource identifiers like URLs are not viable.
 
 *Note:* Stowage is algebraic. If for some silly reason we `{&stow}{&stow}` a value, we would conversely need to load it twice. However, values smaller than a heuristic threshold don't need to be backed to disk at all. The second `{&stow}` command could instead be represented as a lightweight value wrapper.
 

@@ -85,6 +85,13 @@ uint64_t wikrt_effort_snapshot(wikrt_cx* cx)
     } 
 }}
 
+static bool wikrt_quota_stop(wikrt_cx* cx, uint64_t effort_start)
+{
+    uint64_t const effort_current = wikrt_effort_snapshot(cx);
+    uint64_t const effort_elapsed = (effort_current - effort_start);
+    return (effort_elapsed >= cx->effort_value);
+}
+
 // User control of 'wikrt_step_eval' effort.
 void wikrt_set_step_effort(wikrt_cx* cx, wikrt_effort_model m, uint32_t e)
 {
@@ -448,13 +455,9 @@ static void wikrt_eval_loop(wikrt_cx* cx)
         else if(WIKRT_UNIT_INR == cx->pc) {
             ++(cx->blocks_evaluated);
             wikrt_val* const pcc = wikrt_pval(cx, cx->cc);
-            if(WIKRT_UNIT_INR == (*pcc)) { return; } // Halt on completion.
 
-            // Halt on step quota if necessary.
-            uint64_t const effort_current = wikrt_effort_snapshot(cx);
-            uint64_t const step_effort = (effort_current - effort_start);
-            bool const quota_reached = (step_effort >= cx->effort_value); 
-            if(quota_reached) { return; } // Halt on quota.
+            if(WIKRT_UNIT_INR == (*pcc)) { return; } // Halt on completion.
+            if(wikrt_quota_stop(cx, effort_start)) { return; } // Halt on quota.
 
             // If we haven't halted, pop the stack and continue.
             if(wikrt_pl(*pcc)) {
@@ -468,6 +471,7 @@ static void wikrt_eval_loop(wikrt_cx* cx)
                 abort();
             }
         } else {
+            // This shouldn't be possible. Error in operators list.
             fprintf(stderr, "%s: unhandled program list type (%d)\n", __FUNCTION__, (int) cx->pc);
             abort();
         }

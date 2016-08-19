@@ -14,9 +14,10 @@
 #include <errno.h>
 
 static char const* linkAO_helpMsg() { return u8""
- "USAGE: linkAO yourFile.ao [-w word | -d definition]\n"
- "  unless provided as argument, read definition from STDIN\n"
+ "USAGE: linkAO [yourDict.ao] [-w word | -d definition]\n"
+ "  unless argument provided, read AO definition from STDIN\n"
  "  output is Awelon Bytecode (ABC) stream printed to STDOUT\n"
+ "  uses AO_FILE from environment if no `.ao` file specified\n"
  "\n"
  "An AO file represents a program dictionary, a set of `@word definition`\n"
  "pairs with each word on a new line. Definitions are Awelon Bytecode with\n"
@@ -74,6 +75,8 @@ linkAO_args parseArgs(char const* const* argv)
         else if(!a.aoFile && matchSuffix(arg, ".ao", 3)) { a.aoFile = arg; }
         else { a.badArg = arg; }
     }
+    if(!a.aoFile) { a.aoFile = getenv("AO_FILE"); }
+
     return a;
 } 
 

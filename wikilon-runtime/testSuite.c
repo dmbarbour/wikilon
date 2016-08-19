@@ -10,6 +10,9 @@
 #define TESTCX_SIZE 4
 #define TESTENV_SIZE (4 * TESTCX_SIZE)
 
+#define B32 "bdfghjkmnpqstxyzBDFGHJKMNPQSTXYZ"
+
+
 char const* const valid_abc_strings[] =
  { "", " ", "\n", "\n\n\n\n\n", "      "
  , "vrlwcz", "VRWLCZ", "%^", " \n", "$", "mkf'", "#9876543210-", "+*-Q", "G", "DFMK"
@@ -22,7 +25,7 @@ char const* const valid_abc_strings[] =
  , "wrzl", "rwrzwll", "{%p}{:ratio}", "vvrwlcl"
  , "[^'m]m^'m", "'[^'mw^'zmwvr$c]^'mwm", "rwrzvrwr$wlcl"
  , "{x}", "{x}{y}{xyzzy}", "{%word}", "{:seal}", "{token with space}", "{$@#:._-/\\!}", "{←↖↑↗→↘↓↙←}"
- , "{0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde}"
+ , "{" B32 B32 B32 B32 B32 B32 B32 "bdfghjkmnpqstxyzBDFGHJKMNPQSTXY}" // new size limit (255 bytes)
  , "[{hello world}]kf"
  , "{empty string} \"\n~"
  , "{space string} \" \n~"
@@ -37,12 +40,13 @@ char const* const valid_abc_strings[] =
  , NULL
  };
 
+
 char const* const invalid_abc_strings[] = 
  { "a", "e", "i", "o", "u"
  , "\a", "\t", "\r"
  , "[", "]", "[c[v]", "[v]c]"
  , "{", "}", "{}", "{\n}", "{x{y}"
- , "{0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}" // oversized token
+ , "{" B32 B32 B32 B32 B32 B32 B32 B32 "}" // oversized (256 bytes)
  , "\"", "~", "\"\n.\n~"
  , "\"\a\n~", "\"\t\n~", "\"\r\n~"
  , NULL // terminate list 
@@ -415,10 +419,8 @@ bool test_valid_token(wikrt_cx* cx)
         && REJECT("{foo}") // no curly braces
         && REJECT("foo\nbar") // no newlines
         && REJECT("") // too small
-        && ACCEPT("123456789012345678901234567890123456789012345678901234567890123") // max len
-        && REJECT("1234567890123456789012345678901234567890123456789012345678901234") // too large
-        && ACCEPT(u8"←↑→↓←↑→↓←↑→↓←↑→↓←↑→↓←") // max len utf-8
-        && REJECT(u8"←↑→↓←↑→↓←↑→↓←↑→↓←↑→↓←z"); // too large
+        && ACCEPT(u8"←↑→↓←↑→↓←↑→↓←↑→↓←↑→↓←") 
+        && REJECT(B32 B32 B32 B32 B32 B32 B32 B32); // oversized
     #undef ACCEPT
     #undef REJECT
 }

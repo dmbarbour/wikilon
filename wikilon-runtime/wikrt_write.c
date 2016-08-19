@@ -402,7 +402,7 @@ static void wikrt_write_utf8(wikrt_cx* cx, wikrt_writer_state* w)
 // from injecting {&array} and {&binary} annotations. I'd need to 
 // somehow track that I've injected them, though.
 static void wikrt_write_val(wikrt_cx* cx, wikrt_writer_state* w, wikrt_otag opval_tag) 
-{ tailcall: { switch(wikrt_type(cx)) {
+{ tailcall: { switch(wikrt_peek_type(cx)) {
 
     case WIKRT_TYPE_PROD: {
         // (a * b) pair → write b, write a, write `l` to pair them

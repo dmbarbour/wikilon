@@ -50,10 +50,8 @@ Inline literals are sufficient for most command line use cases, e.g. labels like
 Nonetheless, claw provides a usable syntax for multi-line embedded text:
 
         some commands \"
-        
          This is an example multi-line
          literal with "double quotes".
-        
         ~ more commands
 
         (author:Cicero date:BCE45 lang:latin) \"
@@ -68,7 +66,7 @@ Nonetheless, claw provides a usable syntax for multi-line embedded text:
         
         ~ lit
 
-Our text begins on the line after `\"`. Each line of claw text is preceded with `LF SP` and the text terminates with `LF ~`. For convenience, `LF LF` is treated as `LF SP LF` so developers don't need to indent empty lines. Other than SP, LF, or ~, any character following LF is an error. For aesthetics, our text is padded with one empty line before and after. One empty line of padding is trimmed from each side when parsing the claw text. (The padding is optional, unless you actually need empty lines around the text.)
+Our text begins after `\"`, on a new line. For aesthetics and convenience, up to one blank line will be truncated from each edge of the literal. (I assume texts that intentionally start or end with empty lines are the rare case.) Lines of text must be indented by one `SP` character, but empty lines needn't be indented (i.e. `LF LF` expands to `LF SP LF` within the text).
 
 No default escapes are used within the text body. However, claw is generally limited to the same character set as AO dictionaries, forbidding control characters (except LF), DEL, surrogates, and the replacement character. If developers need more than this, they may encode it and functionally rewrite the text afterwards.
 
@@ -84,20 +82,14 @@ The escaped form of a block still contains claw code but does not assume any pla
 
 ### Claw Command Sequences
 
-A lightweight and aesthetically pleasant syntax for *command sequences* can greatly augment Claw's expressiveness, enabling:
-
-* concise representation for streaming data
-* monadic programming, effects models and DSLs
-* incremental computing, cooperative threading
-
-The proposed sugar uses explicit continuation passing style:
+A lightweight notation for a *sequence* of commands is valuable for many purposes: concise data representation, embedded DSLs, coroutines or cooperative threading models, etc.. Claw provides a suitable notation:
 
         [foo, bar, baz, qux] desugars to:
         [\[\[\[qux] after baz] after bar] after foo]
 
-A command sequence is a block that receives a continuation stack, potentially extends it with `after`, then does some work for the first command in the sequence. The comma might informally be understood as a *yield* action, enabling an intermediate return step after performing each command. The intermediate return enables our caller to extract or inject data, model effects, etc.. Streaming data can be trivially expressed as command sequences, e.g. `[1,2,3,4,5]`, with the caller simply extracting a single value after each step.
+A command sequence is simply a block of code, albeit with predictable structure. The block structure limits the scope of the comma command separators. The expectation is to use this block in a continuation passing style, i.e. the block receives a continuation and may extend it with the word `after`. Then each command separator might be understood informally as a *yield* action.
 
-Command sequences are transparently subject to abstraction, procedural construction, and modeling both finite and infinite streams of data or actions. Inlining or 'joining' a command sequence is valid and behaves as one would expect assuming simple stack-based implementations of `after`. 
+Claw command sequences enable concise data, e.g. using `[1,2,3,4,5]` to represent a list of numbers or `[[1,2,3],[4,5,6],[7,8,9]]` for a matrix. This could then be extracted into our list data structure. Due to their opaque structure, command sequences can be transparently used together with procedurally constructed streams, and it is possible to abstract and inline subsequences.
 
 ### Claw Attributes
 
@@ -172,17 +164,9 @@ Developing a Visual Claw dialect targeting HTML seems immediately promising and 
 
 ### Block Structured Plain Text?
 
-Most programming languages are designed to use block-structured plain text, oriented vertically on a page or screen, as the primary development interface. This style of programming would enable Awelon project to take better advantage of existing tools, and would improve familiarity for potential users.
+Most programming languages are designed to use block-structured plain text, oriented vertically on a page or screen, as the primary development interface. This style of programming would enable Awelon project to take better advantage of existing tools, and would improve familiarity for potential users. OTOH, I'm so far reluctant to pursue this. While I could define some keywords, I can't help but think it would interfere with refactoring.
 
-Claw could be extended to support block structured plain text programming. 
-
-Most likely, I'd need to introduce the conventional set of mixfix keywords (such as `if then else` and `while do`). As a *view*, adding keywords to Claw isn't difficult. For example, if we suddenly add `while` as a keyword, existing uses of that word would simply render `\{%while}` to indicate our AO word. There is no risk of breaking code.
-
-However, keywords interfere with factoring and abstraction. We cannot simply take the program fragment `if [cond]` and factor it into a separate word when that `if` is part of a larger `if_then_else_`. We cannot readily abstract the `[cond]` function when it is built into the `if_then_else_` syntax instead of provided externally. And it would be difficult for users to define new keywords in a first class manner, i.e. every such extension requires a change to the syntax. These properties conflict with my Awelon project goals.
-
-I imagine that Visual Claw can fulfill the role of presenting a familiar coding style more effectively and extensibly. For example, `[cond] [body] while_do_` could be rendered appropriately in a block-structured style via a few generic heuristics regard words with underscores (two underscores → captures two Claw elements). No keywords are necessary. 
-
-I am more interested in pursuing Visual Claw for now. But if working easily with plain text tools in a more familiar syntax proves critical - perhaps through Filesystem in Userspace or Callback File System - it shouldn't take long to develop a set of keywords and an appropriate Claw dialect. (The flexibility of view-based syntax is wonderful.)
+Fortunately, I think Visual Claw could feasibly support richly structured programming without being too awkward about it.
 
 ### Named Variables and Lexical Closures
 
@@ -225,6 +209,6 @@ But this half baked solution isn't acceptable. Until I have some better ideas, s
 
 ### Qualified Namespaces
 
-Constraining users to a single namespace per volume of code encourages a relatively flat namespace and prevents boiler-plate import lists. These are nice properties, so I'm reluctant to support qualified namespaces. However, the potential tweak to support them is trivial:
+Constraining users to a single namespace per volume of code encourages a flat namespace and resists boiler-plate import lists. These are nice properties, so I'm reluctant to support qualified namespaces. However, the potential tweak to support them is trivial:
 
 For multiple namespaces, we could write `#f/foo:` after which `f/word` expands to `foo:word`. Our namespace attribute would simply desugar to `[{&_foo:_f}]%`. When rendering words with multiple valid render options, we heuristically favor the shortest render (with `\{%word}` as a last resort). Qualified namespaces would more closely match conventional programming practices, where we tend to have a large list of imports at the top of a large page of code.

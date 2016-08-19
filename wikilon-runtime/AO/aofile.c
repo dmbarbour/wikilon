@@ -189,6 +189,7 @@ static void AOFile_build_index(AOFile* ao)
         size_t const def_size  = (NULL == def_start) ? 0 : (wdef_end - def_start);
         size_t const word_size = (word_end - wdef_start);
 
+        _Static_assert((AO_WORDSIZE_MAX < (1 << 6)), "risk of word size overflow");
         bool const okWordSize = (AO_WORDSIZE_MIN <= word_size) 
                              && (word_size <= AO_WORDSIZE_MAX);
         bool const okDefSize = (def_size < (SIZE_MAX >> 6));

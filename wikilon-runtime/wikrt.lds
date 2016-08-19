@@ -19,13 +19,9 @@
     wikrt_error;
     wikrt_set_error;
 
-    wikrt_refltype;
-
     wikrt_copy; 
     wikrt_drop;
     wikrt_trash;
-    wikrt_move;
-    wikrt_copy_move;
 
     wikrt_stow;
     wikrt_load;
@@ -98,6 +94,8 @@
     wikrt_trace_write;
     wikrt_trace_read;
     wikrt_peek_mem_stats;
+    wikrt_peek_type;
+    wikrt_peek_size;
 
     wikrt_valid_key;
 

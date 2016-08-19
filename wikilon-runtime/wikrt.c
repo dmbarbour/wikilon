@@ -308,6 +308,10 @@ void wikrt_cx_relax(wikrt_cx* cx) {
     // For now, just a non-operation.
 }
 
+#if 0 
+// NOTE: I need to carefully consider how I'll support communication
+// between contexts in the presence of parallel futures. Whether I
+// even want to try.
 void wikrt_move(wikrt_cx* const lcx, wikrt_cx* const rcx) 
 {
     if(lcx == rcx) { wikrt_set_error(lcx, WIKRT_INVAL); return; }
@@ -319,14 +323,6 @@ void wikrt_move(wikrt_cx* const lcx, wikrt_cx* const rcx)
     wikrt_drop_v(lcx, pv[0], NULL);
 }
 
-void wikrt_copy(wikrt_cx* cx) {
-    wikrt_ss ss = 0;
-    wikrt_copy_m(cx, &ss, false, cx);
-    if(!wikrt_ss_copyable(ss)) {
-        wikrt_set_error(cx, WIKRT_ETYPE);
-    }
-}
-
 void wikrt_copy_move(wikrt_cx* lcx, wikrt_cx* rcx) {
     if(lcx == rcx) { wikrt_set_error(lcx, WIKRT_INVAL); return; }
     wikrt_ss ss = 0;
@@ -336,7 +332,27 @@ void wikrt_copy_move(wikrt_cx* lcx, wikrt_cx* rcx) {
         wikrt_set_error(rcx, WIKRT_ETYPE);
     }
 }
+#endif
 
+void wikrt_copy(wikrt_cx* cx) {
+    wikrt_ss ss = 0;
+    wikrt_copy_m(cx, &ss, false, cx);
+    if(!wikrt_ss_copyable(ss)) {
+        wikrt_set_error(cx, WIKRT_ETYPE);
+    }
+}
+
+static inline wikrt_size wikrt_peek_size_ssp(wikrt_cx* cx) {
+    return WIKRT_CELLSIZE
+         + wikrt_vsize(cx, cx->ssp, *wikrt_pval(cx, cx->val));
+}
+
+size_t wikrt_peek_size(wikrt_cx* cx)
+{
+    _Static_assert((SIZE_MAX >= WIKRT_SIZE_MAX), "assuming size_t and wikrt_size are equivalent.");
+    if(!wikrt_p(cx->val)) { return 0; }
+    return wikrt_peek_size_ssp(cx);
+}
 
 void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx)
 {
@@ -355,8 +371,7 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx)
     // reserve space in `rcx`. Also, size estimates for validation.
     wikrt_size const max_alloc = WIKRT_CELLSIZE + wikrt_mem_in_use(lcx);
     bool const use_size_bypass = WIKRT_ALLOW_SIZE_BYPASS && wikrt_mem_available(rcx, max_alloc);
-    wikrt_size const alloc_est = use_size_bypass ? 0 : (WIKRT_CELLSIZE 
-                               + wikrt_vsize(lcx, lcx->ssp, wikrt_pval(lcx, lcx->val)[0]));
+    wikrt_size const alloc_est = use_size_bypass ? 0 : wikrt_peek_size_ssp(lcx);
     if(!wikrt_mem_reserve(rcx, alloc_est)) { return; }
 
     // Note: wikrt_mem_reserve may move lcx->val (when lcx == rcx).
@@ -390,7 +405,7 @@ static inline wikrt_val_type wikrt_typeof_const(wikrt_cx* cx, wikrt_val v)
     }
 }
 
-wikrt_val_type wikrt_type(wikrt_cx* cx) 
+wikrt_val_type wikrt_peek_type(wikrt_cx* cx) 
 {
     bool const okPeek = wikrt_p(cx->val) && !wikrt_has_error(cx);
     if(!okPeek) { return WIKRT_TYPE_UNDEF; }
@@ -650,11 +665,9 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_
 {
     _Static_assert(!WIKRT_NEED_FREE_ACTION, "must update drop to free explicitly");
 
-    // currently don't need to touch anything if not tracking `ss`.
-    // This might change if I introduce reference counted value types
-    // or free list allocators.
-    bool const fast_escape = (NULL == ss);
-    if(fast_escape) { return; }
+    // Short circuiting deletion is a possibility, but it might not work so
+    // well for dealing with futures, shared objects, etc.. So for now I will
+    // touch stuff when it is destroyed.
 
     wikrt_val* s = s0;
     wikrt_add_drop_task(&s,v0);

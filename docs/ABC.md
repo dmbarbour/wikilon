@@ -68,7 +68,7 @@ Embedded text is a compact representation for a list of type `μL.((codepoint*L)
 
 ## Tokens and Capabilities
 
-Tokens in ABC are extensions to the bytecode. Tokens may be context-specific to a codebase, a runtime, or even a network session. Tokens are expressed by wrapping a short text between curly braces, e.g. `{foo}`. (Token texts must be valid embedded texts, 1 to 63 bytes utf8, and forbid curly braces and LF.) Environment specific tokens should include an HMAC or other authentication to resist forgery, to simplify reasoning about security.
+Tokens in ABC are extensions to the bytecode. Tokens may be context-specific to a codebase, a runtime, or even a network session. Tokens are expressed by wrapping a short text between curly braces, e.g. `{foo}`. (Token texts must be valid embedded texts, 1 to 255 bytes utf8, forbidding curly braces, control chars, and LF.) Environment specific tokens should include an HMAC or other authentication to resist forgery, to simplify reasoning about security.
 
 Tokens must have *pure* semantics. Tokens mustn't constrain us against laziness, parallelism, and caching. However, within this limitation, tokens may support privileged or security-sensitive effects, such as reflection, copying affine values, or backtracking upon error. Together with affine blocks (to partition and sequence access to 'worlds'), tokens could feasibly be leveraged for ad-hoc side effects (cf. Clean and Mercury programming languages). 
 
@@ -97,6 +97,9 @@ January 2016:
 
 April 2016:
 * change `o` for compose to `m`, to eliminate use of vowels.
+
+August 2016:
+* allow larger tokens to allow for large resource ID hashes
 
 ## ABCD
 

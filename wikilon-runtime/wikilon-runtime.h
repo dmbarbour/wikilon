@@ -68,7 +68,7 @@ typedef struct wikrt_cx wikrt_cx;
  * dynamic lib implements. This is just a simple sanity check.
  */
 uint32_t wikrt_api_ver();
-#define WIKRT_API_VER 20160809
+#define WIKRT_API_VER 20160819
 
 /** Wikilon runtime error codes. */
 typedef enum wikrt_ecode
@@ -236,19 +236,11 @@ typedef enum wikrt_abc
  * (or larger) to safely receive the token text.
  */
 bool wikrt_valid_token(char const* s);
-#define WIKRT_TOK_BUFFSZ 64
+#define WIKRT_TOK_BUFFSZ 256
 
   /////////////////////////
  // BASIC DATA PLUMBING //
 /////////////////////////
-
-/** @brief Move a value from one context to another.
- * 
- * For the left context, this has type `(a*b)→b`. For the right context,
- * this has type `c→(a*c)`. The `a` value is moved from the left context
- * to the right context. Left and right contexts must not be the same.
- */
-void wikrt_move(wikrt_cx*, wikrt_cx*);
 
 /** @brief (a*e) → (a*(a*e)). ABC op `^`. 
  *
@@ -257,13 +249,6 @@ void wikrt_move(wikrt_cx*, wikrt_cx*);
  * lack of space, if the context is close to full.
  */
 void wikrt_copy(wikrt_cx*);
-
-/** @brief Copy and Move as a combined operation.
- *
- * If we wikrt_copy then wikrt_move, we effectively pay for two copies.
- * By combining the two, we can avoid the intermediate copy. 
- */
-void wikrt_copy_move(wikrt_cx*, wikrt_cx*);
 
 /** @brief (a*e) → e. ABC op `%`.
  *
@@ -284,7 +269,6 @@ void wikrt_assocl(wikrt_cx*);
 
 /** ((a*b)*c)→(a*(b*c)). ABC op `r`. */
 void wikrt_assocr(wikrt_cx*);
-
 
 /** ((a+(b+c))*e)→((b+(a+c))*e). ABC op `W`. */
 void wikrt_sum_wswap(wikrt_cx*);
@@ -613,6 +597,15 @@ typedef struct wikrt_mem_stats {
  */
 void wikrt_peek_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
 
+/** @brief Size for a single value.
+ *
+ * Given an `(a*e)` environment, this computes the size of the `(a*1)`
+ * cell, i.e. the amount of memory required to copy the value (if it
+ * is copyable), or the amount recovered if we drop the value. This
+ * will return 0 if we don't have an `(a*e)` environment.
+ */
+size_t wikrt_peek_size(wikrt_cx* cx);
+
   ///////////////
  // DEBUGGING //
 ///////////////
@@ -672,7 +665,7 @@ void wikrt_trace_write(wikrt_cx*);
 char const* wikrt_trace_read(wikrt_cx*);
 
 /** Shallow reflection over values. */
-typedef enum wikrt_type
+typedef enum wikrt_val_type
 { WIKRT_TYPE_UNDEF      // an undefined type
 , WIKRT_TYPE_INT        // any integer
 , WIKRT_TYPE_PROD       // a pair of values
@@ -696,7 +689,7 @@ typedef enum wikrt_type
  * rendered comes with its own rendering models (such that rendering
  * can be performed without reflection or external tooling).
  */
-wikrt_val_type wikrt_type(wikrt_cx*);
+wikrt_val_type wikrt_peek_type(wikrt_cx*);
 
   /////////////////
  // COMPUTATION //
@@ -833,10 +826,11 @@ typedef enum wikrt_effort_model
  * debugging, isolation of errors, and enable the thread to react
  * to external events.
  *
- * Other than 'microsecs', effort models are weakly deterministic
+ * Other than the time-based models, efforts are weakly deterministic
  * in the sense that the amount of work should be reproducible for
- * the given initial state. The 'blocks' and 'megabytes' options 
- * are additionally robust to changes in context size.
+ * the given initial context. The 'blocks' and 'megabytes' options 
+ * are additionally robust to changes in context size. No model is
+ * precise.
  */
 void wikrt_set_step_effort(wikrt_cx*, wikrt_effort_model, uint32_t effort);
 

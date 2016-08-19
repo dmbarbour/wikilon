@@ -96,11 +96,14 @@ typedef enum wikrt_op
 , ACCEL_ANNO_JOIN   // {&join}
 , ACCEL_ANNO_TEXT   // {&text}
 , ACCEL_ANNO_BINARY // {&binary}
+//, ACCEL_ANNO_SIMPLIFY  // {&simplify}
+//, ACCEL_ANNO_OPTIMIZE  // {&optimize}
 //, ACCEL_rw // ((a * b) * c) → (b * (a * c))
 //, ACCEL_wl // (b * (a * c)) → ((a * b) * c)
 //, ACCEL_rzl // ((a * b) * (c * d)) → ((a * c) * (b * d))
 
 // potential future accelerators?
+//  increment and decrement by 1.
 //  stack-level manipulations
 //  fixpoint functions (a constant overhead variant)
 //  loop functions (repeat, foreach, etc.)
