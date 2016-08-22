@@ -106,3 +106,4 @@ August 2016:
 ABCD extends ABC with a standard dictionary of functions, i.e. such that a single character expands into a subprogram that is well defined in ABC. If well chosen, ABCD operators compress streaming bytecode, improve interpreted performance, and simplify optimization. For best results, the standardization process for ABCD must be both empirical and carefully reasoned.
 
 I have yet to define ABCD extensions. Candidates for extension should first be explored within implementations of ABC.
+

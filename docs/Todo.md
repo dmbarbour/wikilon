@@ -35,9 +35,7 @@ My primary efforts at the moment should be:
 * [parallelism](Parallelism.md)! 
  * get `{&fork}` and `{&join}` working
 
-
-
-* shared bytecode model
+* shared bytecode objects 
  * avoid full copies for large bytecode.
  * for now, maybe separate from stowage.
 

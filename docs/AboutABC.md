@@ -1,35 +1,28 @@
 # Awelon Bytecode
 
-Awelon Bytecode (ABC) is a bedrock component of the Awelon project. ABC consists of about forty operators, embedded text, blocks of ABC (to model first class functions), and a [capability secure](http://en.wikipedia.org/wiki/Capability-based_security) model to access external effects. The effects model is further leveraged to support dynamic linking, separate compilation, and performance annotations. 
+Awelon Bytecode (ABC) is the bedrock component of the Awelon project. ABC consists of a small number of operators, embedded texts, blocks of ABC (to model first class functions), and a [capability secure](http://en.wikipedia.org/wiki/Capability-based_security) model to access external effects. The effects model is further leveraged to support dynamic linking, separate compilation, and performance annotations. 
 
 **Why a new Bytecode?**
 
-Awelon project has several concepts that are not well supported by existing languages or bytecodes. Among these: Awelon is aimed at open distributed systems, which requires special attention to security, serializability, aliasing, and linking. Awelon project includes Reactive Demand Programming (see [AboutRDP](AboutRDP.md)) which benefits from declarative optimizations and equational reasoning at the bytecode level. Awelon project aims to unify the user and programmer experiences, such that objects are readily shared and directly useful as software components, and even user input is modeled as a continuous stream of code that can be mined for tools and user macros.
+Most bytecodes get entangled with the evaluation environment due to use of aliasing, state, pointers, and jumps. While this can aide performance, those bytecodes a poor fit for use cases that involve treating computations, objects, and procedural generation of data as first-class values. Further, they are a poor fit for the 'vision' of Awelon project. 
+
+Awelon project explores a different vision for how humans should interact with computers, one oriented towards augmented reality where humans can exist 'within' a computation rather than existing 'above' the computation and apart from it. For example, a *streamable* code can easily represent user actions. And an [application model](ApplicationModel.md) that is amenable to representation in a codebase makes it easy for humans to control and share their experience. 
 
 **Distinguishing Properties**
 
-ABC has many interesting or unusual properties that distinguish it from other bytecodes and programming languages.
+Features that ABC pursues:
 
-* ABC is *streamable*. This means the bytecode can be incrementally executed as it arrives then quickly forgotten. We might stream bytecode to modify a web page, subscribe to a publishing service, or command a robot in real time. The bytecode can manipulate values and/or capability-based APIs. Streamability is essential to the Awelon project vision, to support new forms of tooling. For comparison, conventional bytecodes are designed for the [stored-program computer](http://en.wikipedia.org/wiki/Von_Neumann_architecture#History), and might 'jump back' to model a loop. ABC is streamed, not stored, and ABC does not jump. Loops are modeled instead using [fixpoint combinators](http://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator). 
+* ABC is *streamable*. This means bytecode can be incrementally processed, e.g. to modify a state, then quickly forgotten. In practice, this means the bytecode cannot support backwards 'jumps'. ABC takes this a step further and simply avoids jumps entirely. However, conditional behavior and loops may still be expressed in terms of first-class functions and fixpoint combinators.
 
-* Unlike most bytecodes, ABC is *weakly legible*. Natural numbers have an obvious encoding, e.g. `#42` encodes the number forty-two. Text literals can be embedded directly. Basic operators use printable characters, visible in a text editor. Effects are accessed through visually obvious and often human-meaningful tokens between curly braces, e.g. `{foo}` (perhaps guarded by HMAC). In a suitable environment, even richly structured data - meshes, images, matrices, graphs, music notation, etc. - might be [embedded as renderable literal objects](doc/ExtensibleLiteralTypes.md) in ABC. The intention is to simplify learning ABC, debugging, disassembly, modification, and extraction of useful software components.
+* ABC aims to be *weakly legible*, such that a human who knows code can easily develop or debug it via simple text editor. Better, it should support editable views suitable for direct human manipulations (such as [claw](CommandLine.md)). Ideally, such editable views could be extended to support richly structured, interactive data (meshes, image canvases, matrices, graphs, music notation, etc..).
 
-* ABC is almost purely *functional*. ABC's basic operators have purely functional semantics. ABC does not have a concept for references or aliasing. And ABC's value types are immutable. Further, side-effects are uniformly constrained to respect *spatial idempotence* and *causal commutativity*: invoking the same effect twice with the same argument must be the same as invoking it once, and ordering of effects is controlled only by the computation of arguments. Thus even effectful code allows a lot of nice equational reasoning (and optimizations) similar to pure code. 
+* ABC is purely functional. Computations may freely be cached, replicated, recomputed, and are characterized by values produced. ABC does support a potential escape for this, via tokens. But Awelon project uses tokens compatible with pure computation.
 
-* ABC supports a high degree of deterministic parallelism. Any block application (operators `$` or `?`) may be computed in serial or in parallel without changing the result of a valid program. The difficulty isn't one of finding opportunities for parallelism, but rather one of optimizing it. Developers may guide parallelism explicitly by use of annotations, and optimizers may inject parallelism decisions based on heuristics and profiling.
+* ABC supports very large values, such that massive databases or filesystems can be modeled as first-class values. This is achieved by a *value stowage* concept - essentially, an explicit approach to virtual memory. This reduces need to integrate external databases or filesystems, which is convenient for purely functional computations.
 
-* ABC is multi-paradigm, but in a rather non-conventional sense. ABC can support *functional, imperative, or reactive* programming based on the compiler used and the set of effectful capabilities made available as arguments to the program. Valid optimizations for ABC are the same regardless of paradigm. A single ABC subprogram can often be reused for many different paradigms. 
+* ABC will support scalable multi-processor parallelism, guided by annotation. Long term, there may also be support for fine-grained data parallelism, accelerating subprograms via GPGPUs or similar.
 
-* ABC is a [*tacit, concatenative* language](http://concatenative.org/wiki/view/Concatenative%20language), similar in nature to Forth, Joy, Factor, and Cat. Concatenating two valid ABC subprogram strings is the same as composing their functions, and it is trivial to extract subprograms into reusable software components. Though, unlike the aforementioned languages, ABC doesn't allow user-defined names (that's left to [higher level languages](AboutAO.md)) and is not stack-based (instead operating on products, sums, and numbers). 
-
-* ABC is *strongly typesafe*, and amenable to static analysis. To the extent safety isn't validated statically, the runtime may enforce it dynamically. It is feasible to typecheck and infer safety for most ABC code, with minimal runtime checks at certain boundaries, e.g. when working with remote systems or side effects. 
-
-* ABC supports [*substructural* typing](http://en.wikipedia.org/wiki/Substructural_type_system), in the form of adding affine (no copy) and relevant (no drop) attributes to blocks. This allows ABC to enforce structured programming behaviors without relying on a structured syntax.
-
-* ABC is highly suitable for *open, distributed programming*. Arbitrary values can be serialized, communicated, and incrementally updated via streaming bytecode. Blocks are easily serialized and can model first class functions, mobile agents, or interactive applications. Capability secure effects and cryptographic value sealing can enable ad-hoc mashups of mutually distrustful subprograms and services. ABC's unusual separate compilation and linking model makes it easy to securely reuse code and data across independent services.
-
-* ABC is highly suitable for staged programming. First class functions in ABC have a simple representation as blocks of ABC code, which makes it easy to recompile a function composed in an earlier programming stage. This is very useful for developing domain specific languages because they can achieve a high level of performance and compilation to native code. 
-
+* ABC is a tacit, concatenative bytecode. It is not difficult to refactor and extract a subprogram for reuse elsewhere. This couples with the ease of parametric abstraction in pure code.
 
 ## The ABC Stream
 
