@@ -60,9 +60,9 @@ Efficient extraction of these data types will rely on accelerators and runtime k
 
 ## General Support for Command Sequences
 
-The idea with a *command sequence* is that we iterate through a sequence of commands, but enable the client to perform some intermediate work after each command. Command sequences are convenient for concise data representations, DSLs, monadic effects models, etc.. I had previously developed support for [claw command sequences](CommandLine.md), as an editable view of code. 
+The idea with a *command sequence* is that we iterate through a sequence of commands, but enable the client to perform some intermediate work after each command. Command sequences are convenient for concise data representations, DSLs, monadic effects models, etc.. An intriguing possibility is that *natural numbers* and *embedded texts* are specific instances of command sequences. 
 
-An intriguing possibility is that *natural numbers* and *embedded texts* are specific instances of command sequences. Setting aside the specifics of representation or view, we might have the general form:
+Setting aside the specifics of representation, consider the general forms:
 
         #3 == (,,,)
         #0 == ()
@@ -73,12 +73,10 @@ An intriguing possibility is that *natural numbers* and *embedded texts* are spe
         [B][A](foo,bar,baz) ap = foo [[B][A](bar,baz) ap] A
         [B][A]() ap = B
 
-At the bytecode level, command sequences might be supported as simple views on a block, e.g. such that our 'comma' is simply a standard accelerator. Perhaps something like: `[[foo][[bar][[baz][%i]c]c]c]`. 
+At the bytecode level, command sequences might be represented as simple views on a standard block structure, e.g. such that our 'comma' is simply an ABCD operator. Something like: `[[foo][[bar][[baz][zi]c]c]c]`. It may be worthwhile to compare alternative Church encodings, but I think the one provided should work well enough.
 
-It may be worthwhile to compare alternative Church encodings. But, at the very least, avoiding need for *fixpoint* combinators for every little sequence seems a win. In many ways, actually, this is essentially a fit for J/K/APL style collections processing without loops.
+*Aside:* I had previously developed support for [claw command sequences](CommandLine.md) as an editable view of code. But their specific representation seems an awkward fit for minimalist ABC, and doesn't generalize nicely to numbers and texts.
 
 
 ## Efficient Runtime Representations
-
-
 
