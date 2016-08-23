@@ -21,13 +21,12 @@ _Static_assert((sizeof(uint8_t) == 1), "Expecting one byte octets.");
 _Static_assert((sizeof(uint8_t) == sizeof(char)), "Expecting safe cast between char and uint8_t");
 
 /** Value references internal to a context. */
-typedef uintptr_t wikrt_val;
-#define WIKRT_VAL_MAX UINTPTR_MAX
-
+typedef uint32_t wikrt_val;
+#define WIKRT_VAL_MAX UINT32_MAX
 
 /** Corresponding signed integer type. */
-typedef intptr_t wikrt_int;
-#define WIKRT_INT_MAX INTPTR_MAX
+typedef int32_t wikrt_int;
+#define WIKRT_INT_MAX INT32_MAX
 
 /** size within a context; documents a number of bytes */
 typedef wikrt_val wikrt_size;
@@ -44,9 +43,6 @@ typedef wikrt_val wikrt_tag;
 
 /** otag is first value in a WIKRT_O object */
 typedef wikrt_val wikrt_otag;
-
-/** intermediate structure between context and env */
-typedef struct wikrt_cxm wikrt_cxm;
 
 /* LMDB-layer Database. */
 typedef struct wikrt_db wikrt_db;
@@ -225,13 +221,12 @@ static inline bool wikrt_pl(wikrt_val v) { return (WIKRT_PL == wikrt_vtag(v)); }
 static inline bool wikrt_pr(wikrt_val v) { return (WIKRT_PR == wikrt_vtag(v)); }
 static inline bool wikrt_o(wikrt_val v) { return (WIKRT_O == wikrt_vtag(v)); }
 
-/** @brief small integers (64 bit Wikilon Runtime)
+/** @brief small integers (32 bit Wikilon Runtime)
  *
- * Small integers are indicated by low bits `100` and guarantee eighteen good
- * decimal digits. Wikilon runtime probably won't take the effort to support
- * larger integers any time soon. 
+ * Small integers are, at the moment, indicated by low bits `100`.
+ * So I'm limited to about 2^28 or ~256 million. 
  */
-#define WIKRT_SMALLINT_MAX  (999999999999999999)
+#define WIKRT_SMALLINT_MAX  ((1<<28)-1)
 #define WIKRT_SMALLINT_MIN  (- WIKRT_SMALLINT_MAX)
 #define WIKRT_I2V(I) (WIKRT_I | (((wikrt_val)I) << 3))
 #define WIKRT_V2I(V) (((wikrt_int)V) >> 3)
@@ -518,14 +513,14 @@ typedef struct trace_buf {
 
 /** wikrt_cx internal state.
  *
- * I've decided to favor a bump-pointer allocation with a semi-space
- * collection process. I'll probably need special handling for stowed
- * values (I may try a bloom filter). 
+ * A context is represented primarily by a contiguous block of memory,
+ * with relative addressing. 
  *
- * I'm contemplating additional use of free lists to optimize a few
- * heuristic cases, reducing allocations for sum type data plumbing
- * and perhaps for list processing with arrays. However, this must be
- * weighed against the additional use of conditional expressions.
+ *     [(context)(mem).......(ssp)........]
+ *
+ * Allocation is simply bump-pointer towards the given cap. At this 
+ * time there are no free lists, so we simply perform a compaction
+ * and switch to the other space whenever an allocation fails.
  */ 
 struct wikrt_cx {
     // unique context identifier within env
@@ -538,27 +533,25 @@ struct wikrt_cx {
 
     wikrt_ecode         ecode;      // WIKRT_OK or first error
 
-    // Memory
-    void*               ssp;        // scratch space (and GC)
-    void*               mem;        // active memory
-
     // registers, root data
     wikrt_val           val;        // primary value 
     wikrt_val           pc;         // program counter (eval)
     wikrt_val           cc;         // continuation stack (eval)
     wikrt_val           txn;        // transaction data
 
-    wikrt_addr          alloc;      // allocate towards zero
-    wikrt_size          size;       // maximum size of memory
-    wikrt_size          skip;       // volume of reserved memory (favor recycling)
+    // memory management
+    wikrt_addr          mem0;       // allocator start (for size)
+    wikrt_addr          alloc;      // next allocation address
+    wikrt_addr          cap;        // soft allocation limit
+    wikrt_size          size;       // hard allocation limit
 
-    // semispace and garbage collection.
+    // memory statistics
     wikrt_size          compaction_size;   // memory after compaction
     uint64_t            compaction_count;  // count of compactions
     uint64_t            bytes_compacted;   // bytes copied during compaction
     uint64_t            bytes_collected;   // bytes allocated then collected
 
-    // trace output for printf style debugging & warnings
+    // secondary output buffer 
     trace_buf           tb;
 
     // controlling evaluation effort
@@ -583,8 +576,8 @@ struct wikrt_cx {
 
 // For large memory contexts, reduce VM pressure and improve
 // locality by using a smaller fraction of the memory arena 
-#define WIKRT_MEM_FACTOR        6 /* preserve some factor of current use */
-#define WIKRT_MEM_FACTOR_PRIOR  3 /* preserve some factor of prior use  */
+#define WIKRT_MEM_FACTOR        7 /* preserve some factor of current use */
+#define WIKRT_MEM_FACTOR_PRIOR  4 /* preserve some factor of prior use  */
 #define WIKRT_MEM_PAGEMB        2 /* preserve blocks of so many megabytes */
 
 // Default effort model. I've decided megabytes allocated is a good
@@ -597,10 +590,9 @@ struct wikrt_cx {
 // estimate of effort up until moment of call. 
 uint64_t wikrt_effort_snapshot(wikrt_cx*);
 
-// Consider:
-//  a space for non-copying loopy code - shared memory that
-//    is more accessible than stowage?
-//  
+// TODO: Develop a 'shared object' space at the wikrt_env layer.
+// I.e. so I can work with large programs, binaries, texts without
+// deep copying or creating extra GC memory pressure.
 
 // A strategy for 'splitting' an array is to simply share references
 // within a cell. This is safe only if we allocate the extra space to
@@ -609,7 +601,7 @@ uint64_t wikrt_effort_snapshot(wikrt_cx*);
 
 #define wikrt_has_error(cx) (cx->ecode)
 
-#define wikrt_paddr(CX,A) ((wikrt_val*)A)
+#define wikrt_paddr(CX,A) ((wikrt_val*)((char*)CX)+A)
 #define wikrt_pval(CX,V)  wikrt_paddr(CX, wikrt_vaddr(V))
 
 // take advantage of WIKRT_O == 0
@@ -625,10 +617,15 @@ _Static_assert((0 == WIKRT_O), "assuming WIKRT_O has no bit flags");
  * values are copied upon moving them.
  */
 
-static inline bool wikrt_mem_available(wikrt_cx* cx, wikrt_sizeb sz) { return (sz < cx->alloc); }
+static inline bool wikrt_mem_available(wikrt_cx* cx, wikrt_sizeb sz) 
+{ 
+    return ((cx->alloc + sz) <= cx->cap);
+}
 bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz);
-static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz) { 
-    return wikrt_mem_available(cx, sz) ? true : wikrt_mem_gc_then_reserve(cx, sz); 
+static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz) 
+{ 
+    return wikrt_mem_available(cx, sz) ? true 
+         : wikrt_mem_gc_then_reserve(cx, sz); 
 }
 
 // Allocate a given amount of space, assuming sufficient space is reserved.
@@ -636,14 +633,15 @@ static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz) {
 // space we'll have a very severe bug.
 static inline wikrt_addr wikrt_alloc_r(wikrt_cx* cx, wikrt_sizeb sz) 
 {
-    cx->alloc -= sz; 
-    return (cx->alloc + ((wikrt_addr) cx->mem)); // Now using absolute addressing!
+    wikrt_addr const r = cx->alloc;
+    cx->alloc += sz;
+    return r;
 }
 
 // How much space have we allocated with data since last compaction?
 //  Note that some of this memory might be dead if GC'd.
 static inline wikrt_size wikrt_mem_in_use(wikrt_cx const* cx) { 
-    return ((cx->size - cx->alloc) - cx->skip); 
+    return (cx->alloc - cx->mem0);
 }
 
 static inline wikrt_val wikrt_alloc_cellval_r(wikrt_cx* cx, wikrt_tag tag, wikrt_val fst, wikrt_val snd) 

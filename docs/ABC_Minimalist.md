@@ -19,15 +19,16 @@ Consider some code:
 
 This looks and acts *a lot* like a stack language. However, there is no stack per se, just a program under evaluation by rewriting. A significant difference is that there is no *stack underflow*. When we do not have enough arguments to the left, no rewrite occurs. Simultaneously, our runtime is free to perform deeper rewriting. 
 
-A useful consequence is that we can 'grow' our programs at either edge. Adding to the left side provides extra inputs for our program to ingest. And adding to the right hand side enables processing of the program's outputs. In the common case, a function will only handle a finite stream of input. But in the general case, I might accept unbounded streams. (I might consider carefully how to statically type the latter case!)
+Potential benefits:
 
-Stream processing of inputs by sub programs offers a potential, simple basis for pipeline parallelism without requiring a model for parallel futures (nor for pipelines/channels/etc.). Additionally, constructs of the form `[[B] D]` would frequently admit further evaluation in parallel (though we might specifically indicate that intention by annotation). In general, we can achieve a great deal of parallelism without requiring the more expressive fork/join futures.
+* great fit for application model, evaluate and cache abitrary words
+* reduced need for explicitly 'paired' annotations, may capture in block 
+* stream processing, chomp inputs on left, produce outputs to right
+* flexibly provide more inputs or process outputs from any program
+* latent parallelism, e.g. we could process `[[B] D]` immediately
+* convenient value stowage, uniform value model (values are programs)
 
-So far, this idea for a minimalist ABC seems very promising for flexibility and parallelism.
-
-## Excellent for Application Model
-
-Minimalist ABC is an *excellent* fit for the [application model](ApplicationModel.md) I've been developing since late 2014. There is no need to provide input or context to evaluate each word in a dictionary, and I can easily integrate a cache. And I need only a general view on 'programs', rather than separate views/renderings for both programs and values. (Though, if I rely on AO words for my view, I might need to track extra metadata or perform reverse lookups to produce cached views with words.)
+This idea for a minimalist ABC seems very promising.
 
 ## Systems Integration with Minimalist ABC
 
@@ -58,25 +59,49 @@ Efficient extraction of these data types will rely on accelerators and runtime k
 
 *Aside:* I might explicitly use the UTF-8 expansion for text, e.g. such that `→` expands as three bytes rather than one larger codepoint. This would be more convenient for many use cases, especially those involving construction of maps, tries, hashes, etc.. It's generally more convenient for efficient processing and extraction.
 
-## General Support for Command Sequences
+### Generalizing Data to Command Sequences
 
-The idea with a *command sequence* is that we iterate through a sequence of commands, but enable the client to perform some intermediate work after each command. Command sequences are convenient for concise data representations, DSLs, monadic effects models, etc.. An intriguing possibility is that *natural numbers* and *embedded texts* are specific instances of command sequences. 
-
-Setting aside the specifics of representation, consider the general forms:
+A *command sequence* is a data structure that describes iteration through a sequence of 'commands'. Effective support for command sequences is good for concise data representation, DSLs, monadic effects, modeling cooperative multi-threading, etc.. An intriguing possibility is that *natural numbers* and *embedded texts* can be understood as specific instances of command sequences. Setting aside the specifics of representation and syntax, consider:
 
         #3 == (,,,)
         #0 == ()
         "hello" == (#104, #101, #108, #108, #111)
+        "" == ()
 
             generalized Church encodings:
 
         [B][A](foo,bar,baz) ap = foo [[B][A](bar,baz) ap] A
         [B][A]() ap = B
 
-At the bytecode level, command sequences might be represented as simple views on a standard block structure, e.g. such that our 'comma' is simply an ABCD operator. Something like: `[[foo][[bar][[baz][zi]c]c]c]`. It may be worthwhile to compare alternative Church encodings, but I think the one provided should work well enough.
+Command sequences will be modeled as editable views, not a primitive feature of the bytecode. For example, `(foo,bar,baz)` above could be a view of `[[foo][[bar][[baz][e]c]c]c]` (for appropriate ops and accelerator `e` and `c`). But it's pretty cool if we can *understand* numbers and texts as command sequences.
 
-*Aside:* I had previously developed support for [claw command sequences](CommandLine.md) as an editable view of code. But their specific representation seems an awkward fit for minimalist ABC, and doesn't generalize nicely to numbers and texts.
+*Aside:* The general idiom of using `[B][A]` with an iterator - a command sequence - seems a convenient basis for collections oriented programming without explicit loops or fixpoints (and hence no risk of non-termination).
 
+### Effects Integration
+
+Minimalist ABC will still favor monadic effects or any lightweight variant on that idea. We'll output a representation of a request (perhaps a command or query) together with a continuation. The halting condition could in general have the form `Continuation [Request]` or `[Continuation][Request]`. In either case, we can provide a response then continue.
+
+## Evaluation Control
+
+Use of `{&par}` and `{&seq}` could work pretty well in Minimalist ABC. The idea would be: we have a block containing a subprogram. We want to evaluate that subprogram as far as possible now, rather than later.
+
+## API Thoughts
+
+The modified API will operate on a context that contains a program. I'll probably favor a 'right biased' API, in the sense that stuff is usually injected in the RHS. However, a simple *move* function could let me move a value from the RHS of one context and inline it on the LHS of another (or the same) context. This would thus provide a very simple mechanism for injecting extra inputs on the left, and for stream processing in general.
+
+An interesting possibility is to open a block and lay down bytecodes and such one at a time, perhaps perform some intermediate evaluations, then close the block. This would help separate the issue of injecting code from that of parsing it. 
 
 ## Efficient Runtime Representations
+
+A pointer has spare bits that are convenient for tagging and embedding of values. For my original ABC, these bits were largely oriented around pairs, sums, and small integers. With minimalist ABC, any focus for tight representation would instead orient around natural numbers, opcodes, and block embeddings. In both cases, the general escape for 'tagged' objects, allowing me to handle arbitrary special cases (like stowage or texts) is essential.
+
+Our context holds a 'program', potentially appends at both ends, and may extract data from the right hand side. In addition, we might want to perform ad-hoc evaluation internally to a block - i.e. open it up, iterate through for evaluation, then exit. Further, rather than reset to a canonical representation between quota steps, we might save some effort by essentially leaving a 'cursor' wherever we stopped evaluation. I imagine the Huet 'zipper' concept will prove a good fit for modeling this rather ad-hoc mix of program extension and evaluation context.
+
+Compact bytecode will be important for performance with iterative code, just as it is for the original ABC. Shared objects would be similarly critical. I'll need to get an early start on these features.
+
+Use of a JIT compiler seems a little bit awkward in context of program rewriting. But I believe it can work - at the very least, we can simply restrict a JIT to subprograms where we *know* we have all the inputs available.
+
+## The Minimal Bytecode
+
+
 

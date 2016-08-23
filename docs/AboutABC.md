@@ -39,40 +39,39 @@ ABC is directly encoded using a (mostly) printable subset of UTF-8 characters. T
          ABC text has no need for escapes, other than SP after LF.
         ~
         {tokens}{&annotations}{:sealers}{%aowords}
-        [{&attributes}]%
         vrwlc
 
-## ABC Behavior Overview
+The ABC (or ABCD) stream is a sequence of operators, numbers, literals, blocks, and tokens. Effective code additionally requires knowing a few idioms and conventions. Operators are expressed by a single character. Primitive operators are in the ASCII range, as are the most common ABCD accelerators. The larger unicode range provides plenty of space for ABCD to potentially grow. Natural numbers are expressed using eleven dedicated operators `#9876543210`. 
 
-The ABC stream is a sequence of operators, blocks of ABC, embedded texts, and tokens. ABCD effectively extends the set of operators.
+        #42
+        #3141 #3 {%decimal}
+        #2 #3 {%ratio}
 
-### Operators
+The `#` operator introduces a zero value. The `0..9` digit operators each "multiply by ten, add digit". The intention is to support weakly legible numeric data at the ABC layer. Numbers can be manipulated by related math operators, and more sophisticated number types (like ratios or decimal floating point) can be modeled explicitly. 
 
-### Literals
+Literals embed arbitrary text within ABC, and are understood as syntactic sugar for a much larger program that would construct the same text number by number. Literals are constrained: no C0 (except LF), no C1, no DEL, no surrogates, no replacement character.
 
-### Tokens
+        "this is a text
+         it may have multiple LF lines
+         each LF is indented by SP
+         we terminate by LF ~
+        ~
 
-ABC is extensible with tokens, which are expressed by curly braces around a short text, such as `{foo}`. Tokens are used for:
+Unlike many languages, texts do not have 'escape' characters excepting the `LF SP` sequence. If you want `\n` to mean something other than the two composing characters, you'll need to postprocess the text explicitly. While ABC generalizes for multi-line texts at the ABC layer, [claw](CommandLine.md) and other editable views of ABC will frequently support *inline* text like `"hello"`, so long as it contains no end-quote.
 
-* **linking** - include other code in the form of a directed acyclic graph. [AO dictionaries](AboutAO.md) use a general form `{%word}` to bind to words in an implicit dictionary. Use of *value stowage* (described later) enables flexible a single value.
+At this time, literals correspond to a *list* of codepoints, e.g. `μL.((N*L)+1)`. I am contemplating an alternative, inspired from *command sequences*. In this alternative, we might have `[B][A]"hello" ap == #104 [[B][A] "ello" ap] A`, enabling flexible iteration without a fixpoint.
 
-* **annotations** - tokens starting with `&`, such as `{&par}`, `{&seq}`, `{&stow}`, `{&load}`, `{&text}`. Annotations support performance, debugging, static analysis. Correct use of annotations will have identity semantics, while incorrect use may cause a program to fail. It should be safe for a compiler or interpreter to ignore annotations that it does not recognize.
+Blocks are expressed by square brackets `[]` and may contain an arbitrary subprogram. Blocks effectively serve as the first-class functions of Awelon Bytecode, and serve an essential role in expressing conditional or iterative behavior.
 
-* **attributes** - annotations without runtime semantics, used instead as metadata about code. Attributes provide hints for indexing, rendering, tooling. Attributes are represented by a dropped block of annotations, e.g. `[{&author:david}{&deprecated}{&noindex}]%`. See the [application model](ApplicationModel.md) for more.
+Tokens are expressed by short texts within curly braces `{}`. Tokens enable flexible extensions to bytecode. 
 
-* **value sealers and unsealers** - a discretionary sealer `{:foo}` has type `(a * e) → (foo:a * e)`, and serves implicitly as a newtype wrapper. To access the sealed value, we can unwrap it with `{.foo}`. Cryptographic sealers are also feasible. See *Value Sealing* below.
+        {&par} {&seq} {&stow} {&trace}  -- annotations
+        {%inline} {%ratio} {%decimal}   -- link words (AO dictionaries)
+        {'scope/resourceId}             -- link value stowage
+        {:map} {:stats} {.stats} {.map} -- discretionary value sealing
 
-Like normal ABC bytecode, tokens should have purely functional semantics (at least with respect to optimization). However, this still leaves room for privileged effects - e.g. reflection, backtracking, uniqueness providers. Conventional imperative effects must instead be handled by monadic programming and other purely functional models.
+Awelon project generally uses tokens in a *purely functional* manner. Annotations, prefixed by `&`, logically have identity type but may serve a valuable role with respect to performance or debugging. Linking words in our AO dictionary is essential for *concise expression* of larger programs. Value stowage can serve a similar role when integrating cached compiled or big data, and potentially can work in large scopes like open distributed systems. Token texts are limited to 255 bytes UTF-8, may not include curly braces or LF, and otherwise share the limitations of literals.
 
-Token texts are constrained as follows:
-
-* forbid control codes (C0, C1, DEL)
-* forbid surrogate codes (U+D800..U+DFFF)
-* forbid replacement char (U+FFFD)
-* forbid the curly braces: `{}`
-* size limit, 1 to 255 bytes UTF-8
-
-Tokens may be further constrained per use case. For example, [AO dictionaries](AboutAO.md) further constrain token size and structure, restricting to a subset of tokens with local, pure, well understood behavior. But allowing for larger tokens in general is convenient for resource identifiers or cryptographic sealers in context of open distributed programming.
 
 ## ABC Behavior Details
 
@@ -126,46 +125,7 @@ Higher order programming can be modeled as a block that expects a block as an ar
 
 ### Numbers
 
-ABC's primitive number type is arbitrary precision rationals. In some cases - when the required range and precision or error properties are well understood - a compiler may substitute use of integers, fixpoint, or floating point numbers. 
-
-Natural numbers can be expressed using pseudo-literal constructors in ABC:
-
-        # :: e → N(0) * e
-        0 :: N(x) * e → N(10x+0) * e
-        1 :: N(x) * e → N(10x+1) * e
-        2 :: N(x) * e → N(10x+2) * e
-        ...
-        9 :: N(x) * e → N(10x+9) * e
-
-After construction, numbers can be manipulated by a few elementary operations: add, multiply, negate, and divmod (to simplify inference of precision and modulus):
-
-        + :: (N(a) * (N(b) * e)) → (N(a+b) * e)
-        * :: (N(a) * (N(b) * e)) → (N(a*b) * e)
-        - :: (N(a) * e) → (N(0-a) * e)
-        Q :: (N(non-zero b) * (N(a) * e)) → (N(r) * (N(q) * e))
-            such that q integral, r in (b,0] or [0,b), and qb+r = a
-
-ABC is not rich in math, but accelerators like ABCD can fill the gap. With accelerators, it is feasible to support both floating point computations and high performance vector or matrix math.
-
 ### Text
-
-The ABC stream can contain blocks of unicode (UTF-8) text:
-        
-        "text has a block format 
-         it starts with double quote
-         it may continue on multiple lines
-         each ending with linefeed (10)
-         which is escaped by following space
-         or terminates text with tilde (126)
-        ~
-
-If anything other than space or `~` follows LF, the ABC stream is in error. There are no escape characters except for SP to escape a preceding LF. Semantically, text encodes a list `μText.((codepoint*Text)+1)`. Codepoints are small integers in the range 0..1114111 with an additional constraint to simplify rendering, editing, and processing of embedded texts through other systems:
-
-* no control characters (C0, C1, DEL) except LF
-* no surrogate codepoints (U+D800..U+DFFF)
-* no replacement character (U+FFFD)
-
-Proper text manipulation demands precise knowledge of the characters (ligatures, combining marks, etc.), and benefits from a more sophisticated representation than a flat list of numbers. However, ABC's simple representation of text is sufficient for its intended role: identifiers, embedded DSLs, etc.
 
 ### Identity
 

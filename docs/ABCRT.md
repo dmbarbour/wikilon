@@ -1,11 +1,11 @@
 
 # ABC Runtime Design
 
-As per [my performance strategy](Performance.md), I'm currently developing a C runtime: a good interpreter with a simplified representation for values to eventually enable LLVM or other JIT compilation. I'll be using something very like the Lisp/Scheme representation, with data consisting mostly of simple pairs of words.
+As per [my performance strategy](Performance.md), I'm currently developing a C runtime: a good interpreter with a simple, uniform representation to enable LLVM or other JIT compilation. I'll be using something very like the Lisp/Scheme representation, with data consisting mostly of simple pairs of words.
 
-It may be useful to also develop a command-line interface and computation experience at this layer. I would like to encode dictionaries in both value stowage. Dictionary import/export is viable. Supporting a Claw syntax is feasible.
+It could be useful to also develop a command-line interface and computation experience at this layer, for testing and benchmarking, etc., via console. I would like to encode dictionaries in both value stowage. Dictionary import/export is viable. Supporting a Claw syntax is feasible.
 
-NOTE: In retrospect, it might have been wiser to focus entirely on a Haskell+LLVM implementation, skipping the interpreter entirely. It could still operate on a memory-mapped region for data representation purposes. Essentially, I'd be developing a process model wherby I fill a volume with simply formatted data then prepare high performance code to operate upon it. At this point, however, backtracking is more expensive than I'd prefer. The JIT remains viable.
+NOTE: In retrospect, it may have been wiser to focus entirely on a Haskell+LLVM implementation, skipping the interpreter entirely. It could still operate on a memory-mapped region for data representation purposes. Essentially, I'd be developing a process model wherby I fill a volume with simply formatted data then prepare high performance code to operate upon it. At this point, however, backtracking is more expensive than I'd prefer. The JIT remains viable.
 
 ## Design Goals
 
@@ -37,80 +37,74 @@ I'll actually include a copy of these directly, no shared libs.
 
 ### Multi-Process Access?
 
-With LMDB, I have an opportunity to support multi-process access to the associated database. This could be very convenient, as it would enable shells, CLIs, and such to coexist. The main trouble will be tracking of ephemeron values, i.e. to enable GC involving value stowage. 
-
-Ephemeral data might be tracked most easily by use of a shared mmap file with bloom filters or the like. 
-
- Multi-process access to a database would be very convenient if I want to later develop shells, command-line interpreters, etc. to access this database in the background. However, multi-process manipulation does complicate tracking of ephemeral values. 
+With LMDB, I have an opportunity to support multi-process access to the associated database. This could be very convenient, as it would enable shells, CLIs, and so on to coexist without querying a web service. The primary difficulty would be be tracking ephemeral stowage within a process. I might need to use an extra file-based memory mmap for bloom filters. Alternatively, I could use simple timeout techniques when our value reaches a zero reference count, holding onto dead values for a few hours or days.
 
 For my anticipated use case, multi-process access is not critical. Also, I can always develop command-line interpreters and shells that use HTTP queries against a local web service instead of direct access to the database.
 
 ### LMDB vs. LevelDB?
 
-LMDB and LevelDB both are mature and efficient implementations of key-value databases backed by a filesystem. Both keep recently accessed or updated objects in memory. Both are effectively single-threaded writers and multi-threaded readers. LMDB mostly uses the OS as its background process (via `mmap`).
+LMDB and LevelDB both are mature and efficient implementations of key-value databases backed by a filesystem. Both keep recently accessed or updated objects in memory. Both are effectively single-writer and multi-reader at any given time. 
 
-LevelDB has the disadvantage of being a lot more sophisticated internally (with background threads, lots of value copies, etc.). But it does have two advantages worth considering:
+LMDB uses the OS as its background process (via `mmap`). No additional threads or caching are needed. LevelDB has a significant disadvantage of being very sophisticated internally - background threads, data copies, etc.. OTOH, LevelDB does support shrinking the database files (via file compaction phases). And LevelDB can compress multiple keys and records together.
 
-* LevelDB will automatically shrink due to compaction phases. 
-* LevelDB can compress large chunks, across multiple values
+LevelDB doesn't truly fit Wikilon's use cases. For *any* wiki, the natural tendency is monotonic growth. This is even more so if we effectively track page histories. Thus, shrinking a database file isn't essential during normal use cases. If necessary, our file can be manually compacted by copying contained data. 
 
-Shrinking the database is *probably* a non-issue. Wikilon's expected use case is for monotonic growth, a little exponential decay as needed to limit the growth. I can *manually* compact a database if necessary, though it might require halting, and might require a fresh disk. (The fact that this compaction would mirror semi-space collection is kind of nice.)
+Compression might improve performance by a fair margin, but must be weighted against zero-copy for our data.
 
-Compression is a minor concern, but it might improve performance by a fair margin.
+## API Concepts
+
+A context will hold a single, implicit object. The API will directly manipulate this object: injection of input or code, stepwise evaluation with quota-based limits, flexible extraction or use of results. This API should more or less reflect how the program itself operates on code, albeit with somewhat more freedom.
+
+Rather than fine-grained errors per API call, I'll try to report errors at the program's toplevel. Precise debugging will be driven more by annotations and automatic testing. 
 
 ## Structure
 
-I need an *environment* bound to an underlying stowage and persistence model, e.g. via LMDB. The environment may also be associated with worker threads for parallelism. I also need *contexts* that associate an environment with a heap of memory for computations. 
+        wikrt_env   - - -   database
+            |          (stow, persist)
+          (1:N)
+            |
+        wikrt_cx    - - -  mem & ssp
+                         (data) (scratch)
+                          (swap on GC)
 
-Context is a contiguous region of memory, up to ~4GB enabling local 32-bit addressing. In general, Wikilon shall produce one context to evaluate each web page. Contexts will generally be much smaller than the 4GB limit (e.g. 10-100MB). A context may interact with a lot more data than its size suggests via large value stowage. Stowage will serve a similar role to virtual memory, but does not consume the greater 'address space'.
+I have a toplevel environment that binds a shared database. Then I can have multiple contexts, each with their own memory. I am currently using a semispace for simplified GC. A context doesn't need very much space, so I am contemplating use of a relative 32-bit representation within context local space.
 
-### API Thoughts
+## Memory Management
 
-Originally I was going for a more conventional API where values have handles outside the computation context. But I'm beginning to think this wasn't the best approach, that it would be better aligned with Awelon Bytecode to give each context a *single, implicit* value, a program environment that we manipulate just as we would a value within an ABC computation.
+### 32 bit Context Arenas
 
-Originally I was returning an error value for most API calls. I'm beginning to believe this is a bad idea. It complicates and clutters my client's API. It might prove better to capture error state within a context after a stream of commands, and report upon request that errors have occurred. 
+After exploring a 64 bit implementation, I'm leaning in favor of the 32-bit context (at least for its active memory). The 64 bit model with direct pointers did not (noticably) improve performance. And I could probably improve 32-bit performance by addressing memory directly from our `cx` pointer rather than `cx->mem`. The main benefit of using 32-bit is that it effectively doubles memory and CPU cache efficiency for the common case objects (lists, cons stacks, etc.).
 
-Alternatively, I can switch to using C++ internally with an efficient exceptions implementation. This would give me the 'zero cost' exceptions with a minimal use of runtime checks. However, this wouldn't be a good fit for the Haskell interaction...
+I can encode context, memory, and semispace as one contiguous array.
 
-### Memory Management
+        [context .... (mem) ..... (ssp)........]
 
-ABC is well suited for 'manual' memory management due to its explicit copy and drop operators. It's convenient if most memory is linear so that we can have non-allocating data plumbing operations (at least for common cases). And bump-pointer allocation and slab allocations are useful for locality and performance, potentially favorable to free lists (though something like TCMalloc wouldn't be bad).
+I must tweak my allocator for this, e.g. to work in terms of negative offsets from context. And I might need to tweak my GC process just a bit so I can operate an intermediate context.
 
-Because I'm running pure code without side-effects, throughput is more important than latency during computation. There is a lot of freedom on what to do with memory. For now, I'm going for the 2-space compacting copying collector per context, which ensures fragmentation will never be an issue at the cost of copying memory occasionally.
+### Graduated Memory Use
 
-*Note:* For very large contexts, memory may be *gradually* grown towards a maximum, e.g. by 'skipping' a flexible volume of memory when we have a lot more space than we need. Effectively, a soft GC threshold by allocating empty space.
+For very large contexts (e.g. 100MB) and very small computations (e.g. 10kB) it is inefficient to consume the whole 100MB before performing GC. Doing so creates unnecessary memory and cache pressures. Fortunately, it should not be difficult at all to basically use a *soft cap* for how much we may allocate our next GC.
 
-#### Support for Shared and Non-Copying Objects in Memory?
+### Parallelism and Zero Copy Communications
 
-Linear memory is convenient but it requires frequent deep copies. This is especially a problem for blocks in a fixpoint loop, and for large binary data. I would like some form of stable memory for binaries and blocks of code. 
+Contexts are (mostly) shared-nothing, each able to run in its own thread. To minimize blocking and improve batching, and reduce need for data copies, I propose a simple communication mechanism. It works as follows:
 
-The ability to compute large objects without copying them every GC pass? It could be quite convenient, in general. *Stowage* sort of works that way, but has a large copy overhead per access. I need a lower latency option - objects *in memory* but not copied, i.e. in a separate region of memory. 
+* each context has a queue for outgoing messages.
+* each context has a reader-writer lock for messages.
+* a context may notify when it has a messages for another. 
+* a context must grab the reader lock to access messages.
+* the reader may freely mark its own messages for deletion.
+* a context must grab the writer lock for compacting GC.
 
-Some options:
+This gives us a relatively simple design that limits blocking to a short window surrounding GC.
 
-* divide context into both a workspace and shared space.
-* shared space at `wikrt_env` layer instead.
-* shared space via C heap, malloc/free, reference counting.
-* stable access for stowage addresses via read-only transactions.
-* cache stowed values in memory via some other mechanism.
+### Shared Objects
 
-The simplest of these options to implement is to use the C heap and reference counting (or other GC) for shared objects. This would at least offer a simple, robust way to get started. Modeling shared memory in terms of stable access to stowed binary data would be better - simplify structure sharing and garbage collection, and more or less eliminate need for copying data from the stowage layer.
+A 'shared object' is one where we copy a reference rather than the data. 
 
-#### Free Lists for Large Objects
+Shared objects are essential for high performance code, especially in ABC where we don't have backwards 'jumps' and any iteration is instead modeled in terms of copying code (e.g. as part of a fixpoint loop). Shared objects are also separate from normal GC, and thus effectively reduce memory pressure and relative GC effort. Shared objects are closely related to value stowage. The main difference is the emphasis: shared objects are all about *low latency reads*, whereas for stowage, potential latency concerns are rather less essential.
 
-I'm very tempted to support free-lists for allocating larger data.
-
-#### Other Ideas
-
-Focusing on collections-oriented processing, e.g. with lists and vectors. 
-
-### Error Handling?
-
-The main errors I can expect are: type errors and quota errors. Neither error is very recoverable. Rather than assume recovery from errors, it seems wise to halt a runtime shortly after an error is recognized. 
-
-I could potentially use a C long-jump, e.g. by setting an 'on-error' callback behavior, to ensure preservation of the environment in which the error occurred. This would simplify dumping the environment upon error, which might be useful for debugging. Alternatively, I could automatically try to trace the environment upon error.
-
-Rather than return an error from each step, it might be more efficient to accumulate error information then report it upon request. OTOH, this doesn't really change the number of checks I need to perform, e.g. for type safety and safe allocation. Even if I used C++ exceptions upon error, I'd still need to perform the conditional check that leads to the exception call. 
+I'm leaning towards tracking shared objects in the `wikrt_env` layer, such that sharing is uniform across contexts within the environment. An interesting possibility is to leverage LMDB's stowage layer directly for shared objects, via its memory mapped direct access. At least for cases where our object was already stowed.
 
 ## Representations
 

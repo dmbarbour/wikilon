@@ -132,8 +132,9 @@ void wikrt_env_sync(wikrt_env*);
 
 /** @brief Create a context for computations.
  * 
- * A fresh context has the unit value. This value is manipulated by
- * functions that introduce data or perform computations. 
+ * Create a fresh context that has a given 'working' memory. Note
+ * that this space is less than 100% effective due to the GC model.
+ * A fresh context will implicitly contain the *unit* value. 
  *
  * Will return NULL if given a NULL environment. 
  */

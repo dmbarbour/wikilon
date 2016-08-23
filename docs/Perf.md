@@ -25,6 +25,10 @@ Interpreters:
  * No simplifier or accelerators. 
  * No shared objects. 
  * Time excludes linking.
+* **runABC 32 bit Wikilon**
+ * memory relative offsets
+ * smaller integer types
+ * 
 
 ## Repeat 10M
 
