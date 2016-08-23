@@ -1,4 +1,6 @@
 
+# Can I find a better baseline code?
+
 A lot of Wikilon's goals could be accomplished with alternative languages to ABC, assuming the basics are preserved. 
 
 What are the basics?
@@ -12,10 +14,12 @@ What are the basics?
 * app states are values, composable
 * minimal boiler plate for programs
 * streamable code, to model user actions
+* easy control of program structure
 
 Extra properties that would be convenient:
 
 * editable views even after computation
+* weakly legible programs, debug text dump
 * guarantee termination of computation
 * predictable space requirements
 * static, flexible, dependent types
@@ -23,19 +27,43 @@ Extra properties that would be convenient:
 * lightweight parallelism
 * easy, high quality, fast compilation
 
-Some thoughts regarding **original ABC**, things to tune/fix:
+ABC's weaknesses as it exists today:
 
-Separation of code (blocks) and values (products, sums, numbers) seems to hinder uniform rendering of computations, complicates partial or lazy evaluations, and effectively limits streaming evaluation to just the right-hand side of our program. In turn, that limits parallelism, e.g. a computation "modifies state" instead of "processes and produces streams".
+* Separation of code from values (products, sums, numbers) complicates. 
+ * extra operators in my 'primitive' bytecode
+ * must provide arguments/contexts for evaluation
+ * need paired annotations for value stowage
+ * need paired annotations for parallel futures
+ * both editable views of code and rendering of values
 
-It would be most convenient if command sequences (e.g. in [claw](CommandLine.md)) could be conveniently rendered within ad-hoc computations, i.e. such that I'm using standard formations rather than linking words like `{%after}`. It would also be convenient if *texts* were understood as streamable command sequences rather than lists.
+* Substructural types are great, but...
+ * dynamic checking difficult with lazy or parallel futures
+ * might be better to use annotations, weak type assertions
 
-Substructural types are cool, but it's difficult to get the strong typing correct in a dynamic context... especially in presence of lazy/parallel futures. It might be worthwhile to shift these to annotations like `{&rel}` and `{&aff}` and just make a best effort at enforcing them dynamically (weakly typed). Static type checks can enforce them more thoroughly.
+* Flat composition `[A][B] → [A B]` is O(sizeof(A))
+ * can use `[[A] inline B]` for O(1). 
+ * might be worthwhile to make explicit.
 
-Flat composition of the form `[A][B] → [A B]` is generally O(sizeof(A)). I can implement this in O(1) as `[[A] inline B]`. But it might be wortwhile to make this explicit by default.
+* Embedded texts as *linked lists* complicates things.
+ * cannot easily compose, abstract, rewrite, or generate
+ * consider instead [claw-like command sequences](CommandLine.md)
 
-Effective support for *futures* would be convenient, both for parallelism and integration of side effects. I'm not certain this is worth pursuing directly at the bytecode level. But a variant on `runAsync` could make for a nice monad to accelerate in the style of Haskell's `runST`. I'd also like to look into optimistic/speculative parallelism techniques suitable for pure functions. For such features, I might need to pursue a static type system more rigorously.
+* Command sequences are AO only, depending on word view.
+ * command sequences are a general computing feature!
+ * ideally, we can do command sequences at ABC layer.
 
-Having forty some basic ops gives okay base performance but fails to create sufficient pressure for accelerators or ABCD extensions. It may prove better to instead use a smaller 'base' and get started on extensions earlier.
+* Direct use of unicode default codepoints is problematic
+ * results in very 'wide' tries or maps without 
 
-## ABC Alt Proposal
+* Serialization of fork/join futures is awkward.
+ * must reconstruct parallel evaluation context.
+ * futures cannot be allowed to escape context.
+ * complicates interaction stowage, distrib, etc..
 
+* Static type safety needs more attention.
+ * higher order types, would like to accelerate a `runST` equivalent
+ * consider explicit futures, pure single-assignment promises `runAsync`
+
+## Proposal: Minimalist ABC
+
+See [ABC_Minimalist.md](ABC_Minimalist.md)

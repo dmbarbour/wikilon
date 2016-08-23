@@ -1,6 +1,8 @@
 # Awelon Bytecode
 
-Awelon Bytecode (ABC) is the bedrock component of the Awelon project. ABC consists of a small number of operators, embedded texts, blocks of ABC (to model first class functions), and a [capability secure](http://en.wikipedia.org/wiki/Capability-based_security) model to access external effects. The effects model is further leveraged to support dynamic linking, separate compilation, and performance annotations. 
+Awelon Bytecode (ABC) is a bedrock component of the Awelon project. ABC consists of a small number of operators, embedded texts, blocks of ABC (first class functions), and ad-hoc symbolic *tokens* that are primarily used for performance annotations, typechecking, debugging, linking, and similar roles. ABCD extends ABC with a standard dictionary of common functions defined in terms of ABC primitive operators, simplifying interpreted performance and compression.
+
+*Note:* ABC is undergoing a *potential* revision, one that simplifies it further. Whether this proceeds will depend on how well it works out in practice. See [the proposed model](ABC_Minimalist.md). This could have a huge impact on some aspects of what is described below, but not so much on the larger ideas.
 
 **Why a new Bytecode?**
 
@@ -10,11 +12,9 @@ Awelon project explores a different vision for how humans should interact with c
 
 **Distinguishing Properties**
 
-Features that ABC pursues:
-
 * ABC is *streamable*. This means bytecode can be incrementally processed, e.g. to modify a state, then quickly forgotten. In practice, this means the bytecode cannot support backwards 'jumps'. ABC takes this a step further and simply avoids jumps entirely. However, conditional behavior and loops may still be expressed in terms of first-class functions and fixpoint combinators.
 
-* ABC aims to be *weakly legible*, such that a human who knows code can easily develop or debug it via simple text editor. Better, it should support editable views suitable for direct human manipulations (such as [claw](CommandLine.md)). Ideally, such editable views could be extended to support richly structured, interactive data (meshes, image canvases, matrices, graphs, music notation, etc..).
+* ABC aims to be *weakly legible*, such that a human who knows code can easily develop or debug at the bytecode layer. This weak legibility can potentially be further augmented by techniques like rendering editable views based on program structure (cf. [command language for awelon](CommandLine.md)).
 
 * ABC is purely functional. Computations may freely be cached, replicated, recomputed, and are characterized by values produced. ABC does support a potential escape for this, via tokens. But Awelon project uses tokens compatible with pure computation.
 
@@ -22,11 +22,13 @@ Features that ABC pursues:
 
 * ABC will support scalable multi-processor parallelism, guided by annotation. Long term, there may also be support for fine-grained data parallelism, accelerating subprograms via GPGPUs or similar.
 
-* ABC is a tacit, concatenative bytecode. It is not difficult to refactor and extract a subprogram for reuse elsewhere. This couples with the ease of parametric abstraction in pure code.
+* ABC is amenable to static typing. That is, static typing may usefully be performed at a *bytecode* level. This can be convenient. It allows us to mix typechecking with other stages of programming and evaluation in a flexible, ad-hoc manner.
+
+* ABC is concatenative. There are no headers, footers, or 'sections' within the code. We can literally concatenate any two syntactically well formed ABC programs into a third, and semantically it will correspond to a composition of the programs.
 
 ## The ABC Stream
 
-ABC is represented in a stream of UTF-8 encoded characters. There are no sections, no headers or footers. There is just the stream, potentially unbounded in length. ABC is designed to be visible, printable. Text, blocks, tokens, and the encoding of numbers are at least weakly legible:
+ABC is directly encoded using a (mostly) printable subset of UTF-8 characters. The bytecode provides a means to embed texts, first-class subprograms called 'blocks', and tokens. Limited whitespace is permitted - LF and SP (U+10 and U+32). Formally, whitespace encodes the identity behavior, and hence can be injected or eliminated between other operators. An ABC program can be 'streamed' by processing individual operations as we reach them, but most programs will be finite in size regardless.
 
         [blocks[[are]nestable]]
         #42
@@ -40,37 +42,19 @@ ABC is represented in a stream of UTF-8 encoded characters. There are no section
         [{&attributes}]%
         vrwlc
 
-This visibility seems useful for didactic purposes and debugging. For similar reasons, ABC supports two whitespace characters (LF (10) and SP (32)) assigning to them the identity function (type `∀x.x→x`), to simplify formatting of ABC for human view.
-
 ## ABC Behavior Overview
 
-The ABC stream contains operators, literals (blocks, text, numbers), and invocations.
+The ABC stream is a sequence of operators, blocks of ABC, embedded texts, and tokens. ABCD effectively extends the set of operators.
 
 ### Operators
 
-Each operator is represented as a single character, denoting a function. For example, operator `r` denotes the right association function, with type `((a * b) * c) → (a * (b * c))`, and `w` denotes the stack swap operator `(a * (b * c)) → (b * (a * c))`. ABC has a fixed finite alphabet of operators.
-
-ABC operators are applied in sequence to an implicit value external to the ABC stream. This value is typically a composite, constructed of `(a * b)` pairs. This value may represent documents, a stack-based computing environment, or many things. 
-
-ABC operators manipulate a small part of this structure using a stack-like metaphor whereby `(a * (b * (c * ...)))` represents a stack with top three elements `a`, `b`, and `c`. Deep manipulations are modeled by shuffling relevant elements to the top of the stack, manipulating them, then shuffling them back to their proper location. (Idiomatically, ABC paragraphs should start and end with elements in proper location.) *NOTE:* data shuffling can become expensive if ABC is interpreted, but a great deal can be eliminated if ABC is compiled.
-
-Developers can legitimately comprehend juxtaposition as functional composition. The ABC sequence `rw` has type `((a * b) * c) → (b * (a * c))`. Conversely, an ABC program can easily be decomposed into valid subprograms and software components.
-
 ### Literals
-
-Blocks and text are the literals of ABC. They require special attention by the ABC reader and result in values added to the stack. Numbers are a pseudo-literal. Literals can be understood as functions that introduce a value.
-
-A block contains a finite sequence of ABC code, and may be understood as a first-class function that simply introduces its value. E.g. `[rw]` has type `x → [((a * b) * c) → (b * (a * c))] * x`. Blocks are the foundation for loops, conditional behavior, and higher order programming. Blocks also support security, protecting interests of both provider (by encapsulating information or authority) and user (by constraining access on apply: `$ :: [x→x']*(x*e)→(x'*e)`).
-
-Numbers use operator `# :: e → (N(0)*e)` to introduce a new zero, then each digit `0-9` has meaning of the form `3 :: N(x)*e → N(10x+3)*e`. Thus, numbers aren't literals, but natural numbers such as `#123` are close enough for legibility. Rational numbers are produced through operations on natural numbers, e.g. `#2#3/*` is two thirds.
-
-Text is shorthand for producing a list of small numbers between 0 and 1114111 (0x10ffff), the Unicode codepoints. A text list has fixpoint type `µL.((c*L)+1)`, where `c` is a codepoint value. Binaries are encoded using a non-conventional base16 text. 
 
 ### Tokens
 
-ABC is extensible with tokens, which are expressed by curly braces around a short text such as `{foo}`. Currently, tokens are used for:
+ABC is extensible with tokens, which are expressed by curly braces around a short text, such as `{foo}`. Tokens are used for:
 
-* **linking** - with acyclic dependencies and trivial 'inline the referenced bytecode' semantics. Tokens of form `{'kf/scope/resourceId}` are used to link values. Tokens of form `{%humanMeaningfulWord}` are used to link definitions within an [AO dictionary](AboutAO.md).
+* **linking** - include other code in the form of a directed acyclic graph. [AO dictionaries](AboutAO.md) use a general form `{%word}` to bind to words in an implicit dictionary. Use of *value stowage* (described later) enables flexible a single value.
 
 * **annotations** - tokens starting with `&`, such as `{&par}`, `{&seq}`, `{&stow}`, `{&load}`, `{&text}`. Annotations support performance, debugging, static analysis. Correct use of annotations will have identity semantics, while incorrect use may cause a program to fail. It should be safe for a compiler or interpreter to ignore annotations that it does not recognize.
 
@@ -263,35 +247,6 @@ This operator represents a form of divergence: if we're in the left, that's equi
 
 This section discusses a few high level properties of ABC's design and context that cannot readily be inferred from the earlier operators or tacit concatenative streamable structure.
 
-### Causal Commutativity and Spatial Idempotence
-
-ABC requires causal commutativity and spatial idempotence for effects models.
-
-Causal commutativity means that there is no ordering relationship unless there is a visible dependency where an output of one behavior is observed or manipulated by the next. This property is valuable for optimizations (cf. [Causal Commutative Arrows and their Optimization](http://haskell.cs.yale.edu/?post_type=publication&p=72) by Hai Liu, Eric Chang, Paul Hudak). 
-
-        conventional commutativity: (ABC does not generally have)
-            foo bar = bar foo
-        causal commutativity: (ABC requires and assumes)
-            [foo] first [bar] second = [bar] second [foo] first
-              where first  :: [a→a'] * (a*b) → (a'*b)
-                    second :: [b→b'] * (a*(b*c)) → (a*(b'*c))
-
-Spatial idempotence means that, if the same action is performed twice with the same inputs, there is no additional observable impact. This property is also extremely valuable for optimizations, e.g. in content distribution networks. 
-
-        conventional idempotence: (ABC does not generally have)
-            foo foo = foo
-        spatial idempotence: (ABC requires and assumes)
-            [foo] first dup = dup [foo] first [foo] second
-              where first  :: [a→a'] * (a*b) → (a'*b)
-                    second :: [b→b'] * (a*(b*c)) → (a*(b'*c))
-                    dup    :: (x * e) → (x * (x * e))
-
-ABC is designed primarily for reactive demand programming (RDP), which naturally has both spatial idempotence and causal commutativity. By requiring these properties, ABC code can be uniformly optimized without tracking usage context. 
-
-Fortunately, it is not difficult to enforce spatial idempotence and causal commutativity even for imperative programming styles. Primarily, one favors linear objects such that duplicate effects cannot be expressed and effects for each object are serialized. Where necessary, capability secure [oracle machine](http://en.wikipedia.org/wiki/Oracle_machine) idioms allow controlled expression of race conditions.
-
-Spatial idempotence and causal commutativity offer valuable properties for equational reasoning and optimizations. ABC programs can be manipulated in many ways similar to pure functions.
-
 ### Fast and Loose Reasoning for Termination
 
 ABC favors a philosophy of 'fast and loose reasoning' about termination properties. (cf. [Fast and Loose Reasoning is Morally Correct](http://www.cse.chalmers.se/~nad/publications/danielsson-et-al-popl2006.html), Danielsson, Hughes, et al. POPL 2006.) The idea is that - with respect to optimizations, equational laws, rewriting, loop fusion, parallelization, laziness - we should assume every subprogram terminates (or is intended to). 
@@ -304,20 +259,11 @@ Termination is a weak property. In practice, we often wish to reason about perfo
 
 ### Flexible Safety Analysis
 
-ABC has an implicit type system with six structural types (pair, sum, unit, void, number, block), substructural types (relevant, affine, expires), and modal types for spatial-temporal attributes (latency, location, sealed values). Termination analysis is recommended to validate fast-and-loose reasoning. ABC further supports inference of dependent types or contracts by use of operator `K`.
+ABC is amenable to static typing, but I haven't decided on any particular types model or inference algorithms. A specific context (such as an AO dictionary) might require code pass certain safety inspections before admitting it, which can provide a simple basis for type safe programming.
 
-However, ABC does not specify any inference algorithms. I hope instead to enable independent evolution of analysis, a growing array of recognizers and strategies to prove safe structures, algorithms, and architectures. 
+An interesting possibility is to model types as structured identity-functions. For example, an integer might be idiomatically represented as `[#+]` (adding zero). And `[vr[A-type]$w[B-type]$lc]` might similarly represent the type for an `(A*B)` pair. Block types could be modeled in terms of composing type assertions. Use of an annotation like `{&type-id} :: ∃a.([a→a]*e)→([a→a]*e)` could both tell our compiler that we have a type description and that it can be wholly eliminated by the optimizer. Dynamic types could feasibly be named by the secure hash of such functions. 
 
-Instead, ABC has a philosophy:
-
-* prove it right, pass it silently
-* prove it wrong, raise an error
-* indecision, pass with a warning and check at runtime
-* incrementally improve strategies to efficiently decide more programs
-
-Most static languages reject programs unless they're provably correct according to the type system. ABC's more relaxed philosophy accepts (with warning) code that is not provably wrong. This enables analysis to vary between lightweight and heavyweight. 
-
-It also may give ABC a more dynamic feel, especially combined with dependently typed structures. ABC's philosophy is close in nature to [gradual typing](http://en.wikipedia.org/wiki/Gradual_typing), albeit with more inference and less annotation.
+The potential for inference and injecting explicit declarations enables ABC to flexibly approach static type safety.
 
 ### Annotations for Performance and Debugging
 
