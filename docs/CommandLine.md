@@ -82,21 +82,15 @@ The escaped form of a block still contains claw code but does not assume any pla
 
 ### Claw Command Sequences
 
-A lightweight notation for a *sequence* of commands is valuable for many purposes: concise data representation, embedded DSLs, coroutines or cooperative threading models, etc.. Claw will provide a suitable notation. One option is to leverage those curly braces, since I'm not generally using them. Something like:
-
-        {foo, bar, baz, qux} desugars to:
-        [[foo] {bar, baz, qux} cmd] cseq
-        {} desugars to: [eof]
-
-Using curly braces is convenient. It allows me to wrap each command like `foo` into `[foo]`. But it does seem feasible to support command sequences with explicit continuation passing, e.g. of the form:
+A lightweight notation for a *sequence* of commands is valuable for many purposes: concise data representation, embedded DSLs, coroutines or cooperative threading models, etc.. Claw will provide a suitable notation. The main proposal is based on explicit continuation passing style:
 
         [foo, bar, baz, qux] desugars to:
+        [\[bar, baz, qux] after foo] (...)
         [\[\[\[qux] after baz] after bar] after foo]
 
-In either case, we can easily use this for concise data, e.g. `[1,2,3,4,5]` or `[[1,2,3],[4,5,6],[7,8,9]]`. And it's also feasible to compose and abstract our command sequences, albeit depending on the definitions involved (e.g. of `after` or `cmd`).
+Concise data is easy to represent, e.g. `[1,2,3,4,5]` or `[[1,2,3],[4,5,6],[7,8,9]]`. And it's also feasible to compose and abstract our command sequences, or form infinite streams of data.
 
-*Aside:* The Minimalist ABC proposal would require something closer to the first command sequence model.
-
+*Note:* An alternative proposal is `[foo,bar,baz] = [foo [bar,baz] yield]`. But I feel the CPS option is both more expressive and easier to use because we can simply build a stack of continuations. I've also considered options that use another delimiter like `{foo, bar, baz}`, which could let me capture `[foo]` as a command. But this always causes trouble with `{}` which is somewhat ambiguous as an empty command sequence vs. single empty command.
 
 ### Claw Attributes
 
