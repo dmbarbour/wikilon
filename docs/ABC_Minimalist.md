@@ -23,19 +23,41 @@ Potential benefits:
 
 * easily evaluate and cache computations without context
 * renders and views can focus on a common program type
-* lazy blocks by default, reduces need for paired annotations
+* lazy blocks by default reduces need for paired annotations
 * pipeline processing implicit, much latent parallelism
 * just one type simplifies compaction, stowage, sharing 
-* toplevel doesn't need balanced `[]` for evaluation.
+* with rewriting, easily model `[` and `]` as operators
 
 This idea for a minimalist ABC seems very promising. 
 
-We should double check some things before committing...
+I contemplated a few of my concerns below, including systems integration, control of behavior, error detection, and performance. But I'm satisfied minimalist ABC is better or at least no worse than the original flavor in each of those categories.
 
-* effective external systems integration
-* obvious control over program behavior
-* error recognition and static type safety
-* performance, optimization, compilation
+## The Bytecode
+
+The proposed base is just four primitive combinators. 
+
+        [A][B]x     == B[A]         (exec)
+        [A][B]c     == [[A]B]       (cons)
+        [A]d        == [A][A]       (dup)
+        [A]k        ==              (kill)
+
+This base is small, complete, and friendly to substructural types. The constructor action `c` is O(1) with simple list representations, which is convenient. Outside this base, we also have the `[]` square bracket characters for block structure, and whitespace characters (SP and LF - 32 and 10) for simple formatting.
+
+For ease of integration with external systems, ABC supports natural numbers like `#42` or `#65535` and embedded literals. The syntax from the original ABC is unchanged.
+
+        "embedded text literals
+         may have multiple lines
+         LF escaped by following SP
+         terminates with LF ~
+        ~
+
+However, the *semantics* for numbers and literals are different. Numbers are a syntactic sugar for a Church encoding or variant thereof. The exact details are undecided. However, we shall at least be able to use numbers to iterate (e.g. `#42` can iterate up to 42 times). Similarly, texts will enable iteration through the associated utf-8 byte encoding.
+
+ABC supports contextual extensions via tokens, short texts in curly braces like `{foo}`. Their function hasn't changed much. Annotation tokens like `{&par}`, `{&nat}`, or `{&trace}` support performance and debugging. Discretionary value sealing `{:s}` and `{.s}` supports lightweight labeling and safety. Linking of code and data might be expressed by `{%swap}` in an AO dictionary or `{'stowageId}` to reference external objects.
+
+Because ABC is minimal, I'll be focusing early on an ABCD variant, providing an extended dictionary of opcodes that are defined in terms of our basic four.
+
+*Aside:* The homage to [XKCD](xkcd.com), my favorite web comic, is intentional. I was only one operator away (`k` was originally `z`, for `zap`) and decided to go for it. But the language is still called Awelon Bytecode (ABC).
 
 ## Systems Integration with Minimalist ABC
 
@@ -76,15 +98,23 @@ A good effects model for purely functional programming must support interception
 
 ### Structurally Scoped Computation
 
-Controlling scope of a computation doesn't improve expressiveness or power, but it does make easier the comprehension of our code, enabling efficient debugging and isolation of errors. Consider:
+Scoping a computation doesn't improve expressiveness or power, but it does make for easier comprehension of code, simplified debugging and isolation of errors. A simple mechanism to control scope is to hide some specific content. For example, using the `dip` combinator, we can hide value `[A]` from our computation `B`:
 
-        [A][B]cat   == [A B]
+        [A][B]dip   == B[A]
+
+I assume our programmers will learn a useful set of standard combinators like `dip`. However, the left-scope of this computation, e.g. how many values it consumes or produces, is not immediately obvious. It requires knowledge about the type of `B`, which in general might be an argument from some distant location in the program. What we want is to control scope *structurally*, i.e. using local syntax and combinators that do not require knowledge of `B`. 
+ 
+My proposal is to use blocks together with a structure assertion:
+
         [A][B]cons  == [[A]B]
-        [A[B]]read  == [A][B]
+        [A][B]cat   == [A B]
+        [[A]]{&1}   == [[A]]
 
-I believe these provide an effective and sufficient basis for scoped evaluation. Effectively, a block may double as an evaluation scope (which can receive inputs via `cons` or `cat`), while the `read` action forces evaluation at least far enough to extract some useful data.
+Blocks implicitly delimit scope of contained subprograms. 
 
-*Aside:* I find `read` interesting. In addition to controlling scope, it provides a simple foundation for laziness and call-by-need evaluation and partial evaluations. Further, it very naturally expresses coroutines and continuations, i.e. the `[A]` block can be understood as where we continue after yielding.
+Use of `cons` can feed a finite number of *inputs* to the scoped subprogram, while `cat` enables their ad-hoc dynamic construction. Annotation `{&1}` asserts that the computation produces a single value. That assertion is easily lifted to any finitary output (e.g. `[[]]cat{&1}` for zero outputs or `[[]cons cons cons]cat{&1}` for three outputs). For convenience and performance, a runtime might simply provide `{&0}`..`{&9}`. These size assertions can be removed upon verification by a static type checker or efficiently checked dynamically. 
+
+Developers thus explicitly provide a finite set of inputs, assert a finite set of outputs, then run. They can be confident that the computation will fail fast rather than escape its scope. This is weaker than proper static types, of course, but it's still an effective basis for rapidly isolating errors in a codebase.
 
 ### Discretionary Value Sealing
 
@@ -134,20 +164,22 @@ The annotation creates an *error value*. It can be copied or dropped like any ot
 
 ### Dynamic Error Recognition
 
-Dynamic error recognition needs to be cheap or rare, preferably both. One obvious candidate for dynamic error recognition is runtime type assertions for data that our runtime recognizes specifically. This might be expressed by annotation. For example:
+Dynamic error recognition needs to be efficient. One obvious candidate for dynamic error recognition is runtime type assertions about data that our runtime knows how to recognize efficiently. This can be expressed by annotation. For example:
 
         #42 {&nat}
         "hello" {&lit}
+        [[A]]{&1}
+        [[A][B][C]]{&3}
 
-It's also easy to recognize errors like:
+It's also easy to recognize substructure or value sealing errors:
 
         [A]{&aff} copy
-        [A]{:s} action
-        [] read
+        [A]{&rel} drop
+        [A]{:s} op  
+        [A]{.s} op
 
-Weak substructural types are designed to support efficient recognition. For value sealer/unsealer tokens, the pattern `value token action` is easily recognized as an error. And for `read`, the only thing to do is to evaluate within the given block until at least one output is generated - because there are no more inputs during this computation, recognizing error conditions becomes trivial.
+This is more or less the limit of efficient dynamic error recognition. We could feasibly introduce annotations to assert structural or behavioral equivalence, but those wouldn't be conditions we want to verify dynamically. (Even structural equivalence can be expensive to test in context of parallel computations and similar.)
 
-Taken together with `read`, it could be very useful to assert we have an empty program, e.g. `[]{&nop}`. This way we can make assertions about numbers of inputs and outputs, and that we're quite certain we're done. 
 
 When dynamic errors are discovered in a subprogram, we should wrap them with `{&error}` (and inline the result) for easy and consistent reporting.
 
@@ -217,88 +249,89 @@ Candidate representation:
 
         (Small Constants)
         singleton blocks, one for every opcode!
-        (that's all we NEED including identity op)
+        (that's all we need if we include identity opcode)
 
         (Common Opcodes)
         A very few ABC codes
         Recognized annotations
         A great many accelerators
 
-This seems an efficient and lightweight representation. I still have that free slot `010`. I'm tempted to use it for zipper-objects representing 'open' blocks.
+This seems an efficient and lightweight representation. 
 
 ### Parallel Runtime
 
-I intend to support **pipeline parallelism**, such that we may flexibly express computations that stream outputs from one task as inputs to another. Parallelism can be indicated by marking a block with `{&par}`, indicating that evaluation should proceed in parallel. To pipeline, we need to associate parallel evaluations such that the output of one process becomes input to another. This might be expressed by 'inlining' the parallel computations. For example:
+I intend to support **pipeline parallelism**, such that we may flexibly express computations that stream outputs from one task as inputs to another. Parallelism can be indicated by marking a block with `{&par}`, indicating that evaluation should proceed in parallel. Pipelining happens when multiple parallel computations are composed or inlined together. Consider:
 
         [A]{&par}i  [B]{&par}i
 
-When connecting independent parallel computations, our parent can connect them directly so it no longer intervenes in their communications. This is a dynamic action, allowing for cases where computations are composed long after being constructed, or intermediate processes complete. 
+A runtime can dynamically recognize this case during evaluation, then directly attach output from `[A]` to input of `[B]` such that communication is no longer indirected through the parent. Establishing connections dynamically is expressive, enabling pipelines that shrink or grow over time (e.g. because `[]{&par}i` can be removed from a pipeline, while another computation may split into multiple paralle processes).
 
-Pipeline parallelism isn't the only option. For example, we can use `{&par}` with `cons` and `read` to model precisely controlled communications between processes in something closer to a rendezvous style. Parallelism is then achieved by performing other work between `cons` and `read`, or by buffering some reads.
+A runtime may use parallelism even if not indicated. It might be useful, for example, to divide `A [B]{&par}i C` into three parallel computations. However, it is feasible to model some sort of processor affinity groups so sequential bits remain sequential.
 
 See [Parallism.md](Parallelism.md) for more on context-local implementation.
 
-### Program Representation
+### Program Evaluation
 
-My primary "block" representation is a list of `(op, block)` cons cells, terminating with a *singleton block* (the empty block being modeled as singleton-identity). 
+The normal program representation a list of `(op, block)` cons cells, terminating with a singleton block (`[]` is singleton identity). During evaluation, we can use a Huet zipper as a basis to 'open' this list and work within it. This effectively gives us a `(stack, prog)` pair - i.e. the reversed program to our left can be understood as a stack, and the program is operating upon it. The main difference is that our 'stack' might contain actions, not just values. 
 
-During evaluation, I'll likely need to represent an 'open' block with a Huet zipper to model where I'm working, e.g. `(left-code, right-code)`. Our left-code will mostly contain values, and the right contains the operations we're applying. This effectively serves as our 'data stack' during evaluation. 
-
-Applying code results in 'block' values being inlined into current evaluation. We could inline these directly, i.e. `[A]i == A`. But doing so is O(len(A)), which is expensive if `A` is large. In general, we'll instead logically inline our code (via tagged action). At most, we'll need only deal with *one* inlined block at a time, with the call 'stack' being flattened into right-code.
-
-            [[A]iB]i    ==  [A][iB]i    == [A]i[B]i
-
-Evaluation isn't order restricted. An evaluator can work *anywhere* within the program. It quite feasible to open multiple zippers and split the program into 'interesting' chunks. This can prevent evaluation from getting 'stuck' on any one thing or failing to initiate `{&par}` threads and similarly important tasks.
+It is possible to divide a program into multiple subprograms, each with its own zipper, i.e. to effectively support processing of multiple expressions at once and moving data between them without unnecessary 'scanning' of the program. The ability to evaluate 'wide' in addition to 'deep' can resist getting stuck on any one problem.
 
 Use of `{&par}` essentially enables programmers to control chunking of evaluation, specify the 'interesting' parts of the computation that deserve special focus. Every `{&par}` node would additionally be hooked into a big work pool and pipelines that carry values from one process to another. The "work pool" might be understood as simply a way to attach *very deeply* into within the program, in a thread-safe manner.
 
 ### Compilation
 
-I plan eventually to support a 'compact' bytecode representation - a binary sequence where the contained binary (contained blocks, texts, binaries, big numbers etc.) can easily be sliced from it. 
+I'm not sure how to go about compilation of term rewrite programs. I'm certain it's been done (and a quick Google search confirms this). But even if I couldn't compile those programs, I can at least compile functions that are 'complete' in the sense of accepting a finite number of arguments and producing a finite number of results.
 
-Binaries in general could make for useful 'shared' objects to avoid multiple in-memory copies.
-
-could make for useful 'shared' objects
-
-Such representations may reserve sufficient memory for each 'checkpoint', and proceed through a series of checkpoints. A JIT representation of the compact bytecode will take this idea further.
-
-
-
-
-I'm leaning towards use of linked list based 'stacks' and 'programs' as the normal mode. We might use some zipper concepts to preserve a 'cursor' to wherever evaluation is occurring.
-
-Use of 'compact' bytecode representations, and eventual JIT representations, will be valuable for efficient evaluation, albeit mostly in cases where evaluation can proceed to completion. For incomplete evaluations, a lot of allocations will be needed.
-
-
-
+Aside from compilation, it would be convenient to at least support *compaction* of bytecode, such that I'm touching less memory during evaluation, copying less memory during iteration, etc..
 
 ### Performance Annotations
 
-Evaluation Control
+**Evaluation Control**
 
 * `{&par}` - begin parallel evaluation of contained subprogram
-* `{&seq}` - force partial evaluation of contained subprogram
+* `{&seq}` - evaluate subprogram with same priority as parent
+* `{&lazy}` - reduced priority for computation when applied
+* `{&asap}` - compute a value with greater priority than parent 
 
-It might be useful to include suggested evaluation strategies, e.g. `{&eval-wide}` vs. `{&eval-deep}`. 
+The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing static computation of values. Use of `{&seq}{&asap}` would further allow for 'deep' evaluations (`{&asap}` is shallow). Interestingly, `{&seq}{&lazy}` is a possibility, indicating that we first want to evaluate the program as far as possible, then evaluate it by need when later applied.
 
-I'm contemplating `{&static}` and `{&asap}`, but it isn't clear to me how to proceed with them.
+**Representation Control**
 
-Representation control
+* `{&lit}` - pack into a compact text format
+* `{&nat}` - use runtime's natural number format
+* `{&binary}` - represent a compact sequence of bytes
+* `{&stow}` - move data out of working memory
+* `{&compact}` - pack bytecode into tight compact format
+* `{&compile}` - indicate compilation for performance
+* `{&jit}` - heuristic compilation decision
 
-* `{&lit}` - force to a compact text format (or error)
-* `{&nat}` - force to a natural number format (or error)
-
-
-## The Minimal Bytecode
-
-
-*Aside:* In context of parallelism and laziness, a convenient function might be `[X [A]] pop == [X][A]`, i.e. a sort of reflective action representing a demand-driven computation or partial evaluation. This is a rather tempting feature to include as a primitive in minimalist ABC.
 
 ## Numbers, Literals, and Command Sequences
 
-An intriguing possibility is that *natural numbers* and *embedded texts* might be modeled as specific instances of command sequences. Command sequences are useful for concise data representation, DSLs, monadic effects, modeling cooperative multi-threading, etc.. If we can unify the two concepts, that would be convenient both didactically and for uniform utility, accelerators, etc..
+Command sequences are useful for concise data representation, DSLs, monadic effects, modeling cooperative multi-threading, and more. Command sequences are a natural *iteration* concept in a language where we don't really have 'data', only commands (which might generate data). Given how proposed encodings for numbers and literals also act as iterators, an intriguing possibility is to unify the three ideas.
 
-With [claw command sequences](CommandLine.md) our command sequence is given a general meaning: `[foo,bar,baz] == [[bar,baz] after foo]`. I've also experimented with the variant `[foo,bar,baz] == [foo [bar,baz] yield]`. In both cases, `foo` is not wrapped as `[foo]`, which is convenient because it means we do not need to distinguish `foo` 
+Desiderata for unification:
+
+* Numbers and texts have a simple, uniform encoding.
+* Encoding is compatible with [claw command sequences](CommandLine.md).
+* Iteration may be aborted or saved and continued.
+* Easy to compose and abstract command sequences.
+* Can use iteration without a fixpoint function.
+
+
+
+an intriguing possibility is to unify *natural numbers* and *embedded texts*.
+An intriguing possibility is that *natural numbers* and *embedded texts* might be modeled as specific instances of command sequences.
+
+
+
+
+With [claw command sequences](CommandLine.md) our command sequence is given a general meaning: `[foo,bar,baz] == [[bar,baz] after foo]`. I've also experimented with the variant `[foo,bar,baz] == [foo [bar,baz] yield]`. In both cases, I have a plain old block with some patterned convention. 
+
+I would greatly prefer if my minimalist ABC command sequences can utilize to one of these two conventions, i.e. no *implicit* terminator, no wrapping `foo` into `[foo]`.
+
+
+In both cases, `foo` is not wrapped as `[foo]`, which is convenient because it means we do not need to distinguish `foo` 
  Notably, `foo` is not wrapped up as `[foo]`, and we do not explicitly terminate the sequence.
 
 , such as we don't need to think hard about an *empty* command sequence vs. 
