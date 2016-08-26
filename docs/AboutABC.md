@@ -227,11 +227,9 @@ The potential for inference and injecting explicit declarations enables ABC to f
 
 ### Annotations for Performance and Debugging
 
-Annotations are tokens for debugging or performance. Annotations are indicated by use of an `&` prefix in the token, e.g. in `{&lazy}` or `{&join}`. Annotations have *identity* semantics - they do not affect the logically observable behavior of a correct program. However, annotations may cause an incorrect program to fail. And incorrect use of annotations may cause a program to be incorrect. 
+Annotations are tokens for debugging or performance. Annotations are indicated by use of an `&` prefix in the token, e.g. `{&text}`. Annotations have *identity* semantics - they do not affect the logically observable behavior of a correct program. However, annotations may cause a program to fail, e.g. if the program is incorrect or the annotations are used incorrectly.
 
-The idea is that a runtime should be able to ignore annotations (or sets of related annotations) that it does not recognize and still produce the same result, albeit perhaps less efficiently.
-
-Ideas for what annotations might do:
+The intention is that a runtime should be able to ignore annotations it does not know about, or that are disabled for a particular use case. Some ideas for what annotations might do:
 
 * support parallel or lazy computation
 * stow and load values from a backing store
@@ -243,40 +241,12 @@ Ideas for what annotations might do:
 * move computations and data to a GPGPU
 * support and enable memoization or caching
 
-For example, an annotation `{&trash}` might indicate that a value will never be observed in the future, enabling its memory to be recycled while leaving a lightweight placeholder. And `{&trace}` might serialize a value to a debug output buffer, and also trash it.
+For example, an annotation `{&trash}` might indicate that a value will never be observed in the future, enabling its memory to be recycled while leaving a lightweight placeholder. Use of `{&trace}` might serialize a value to a debug output buffer or queue.
 
-Correct use of annotations may be paired. For example, with explicit laziness we might use `{&lazy}` to mark a block to generate pending values, then use `{&join}` on pending values to observe them. Explicit `{&join}` is not as convenient as laziness by default, but it does simplify implementation.
+Annotations may be paired, e.g. such that a `{&fork}` to parallelize a computation must be paired with a `{&join}` to access its result. Pairing annotations can simplify a runtime implementation, but unfortunately does resist transparency of optimizations. 
 
-Annotations may require specific types. A simple case is that `{&text}` might require a `∀e.(text*e)` argument, and would compact the text value and ensure it serializes as embedded text.
+Annotations may specify types, i.e. they can be *typed* identity functions. A simple case is that `{&text}` might require a `∀e.(text*e)` argument, and would compact the text value and ensure it serializes as embedded text.
 
-### Parallelism
-
-For scalable parallelism, I propose fork and join annotations together with a simple *process functions* (PF) and asynchronous futures concepts.
-
-        PF i o      [i → (o * (PF i o))]
-        {&fork}     ((PF i o) * e) → ((PF i (future o)) * e)
-        {&join}     ((future a) * e) → (a * e)
-
-When a forked PF is called, a parallel runtime can immediately return an asynchronous future result and the next forked PF. Synchronization occurs upon attempting to 'join' the future result, and parallelism is achieved by delaying synchronization. (Copying a forked PF may also involve synchronization, but in practice should be a non-issue.) Returning the 'next' PF effectively allows for stateful processes models. Any model of process control signals, message passing, termination, etc. must be represented via the input-output data types. 
-
-Process functions may be implemented with independent heaps, potentially as separate OS level processes, perhaps even distributed across physical nodes. The costs of initializing a process can generally be amortized over a series of calls to the process. A runtime may freely use heuristic pushback to keep fast producers from running too far ahead of slow consumers, i.e. to control memory overhead. PF parallelism can be efficient, scalable, predictable, and should generally be easier to control than Haskell's par/seq parallelism.
-
-*Note:* GPGPU and vector processing parallelism will be developed later, and will use an orthogonal basis. 
-
-*Aside:* Serialization of process functions with parallelism/futures is non-trivial. One must model reconstruction of parallel futures with flexible relationships between processes. 
-
-### Laziness
-
-Explicit laziness might be represented using annotations and futures.
-
-        {&lazy}     ([a → b] * e) → ([a → (future b)] * e)
-        {&join}     ((future a) * e) → (a * e)
-
-The join annotation is the same used for parallelism, enabling some opacity regarding the nature of a future. With laziness, any value may be wrapped as a future via `[]{&lazy}$`.
-
-Explicit laziness is much less expressive than implicit laziness. But that isn't a bad thing. There is no need to deal with cyclic values, tied knots, etc.. And modeling infinite data structures with laziness should be discouraged anyway, because ideally we can remove annotations without inviting divergence.
-
-*Note:* Futures, laziness, fork, etc. are algebraic. A `{&lazy}{&lazy}` block should return a `(future (future b))` which must in turn be joined *twice* to access the data. In the general case, there may be intermediate computations between joins. If flag bits are used to represent block attributes, then `[block]{&lazy}{&lazy}` might need to be rewritten as the equivalent function `[[block]{&lazy}vr$c]{&lazy}` to preserve algebraic properties.
 
 ### Value Sealing
 

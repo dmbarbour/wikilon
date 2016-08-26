@@ -1,65 +1,41 @@
+
 # Parallel Runtime
 
-Parallelism will use separate memory per CPU, with no direct sharing of memory. This simplifies GC. 
+It turns out that use of fork-join process functions as a basis for parallelism is a source of much pain downstream, when we might later attempt to serialize the computation containing the futures, or 'move' values to another context. 
 
-Originally, I was thinking to use Haskell-style par-seq parallelism. For example, we could construct a lazy value then parallelize its evaluation with `{&par}` or `{&need}`. This form of parallelism is convenient, in that parallel values can be treated as plain old values in many contexts. However, the technique isn't all that scalable.
+* Par/seq parallelism preserves locality so doesn't complicate serialization
+* Later, model single-assignment futures/promises as monad then accelerate it
 
-An interesting alternative that I've developed is oriented around the idea of *process functions*, whereby a function may be forked and treated as a separate process.
+## Context Local Parallelism
 
-        PF i o = [i → (o * PF i o)]
-        {&fork} :: ((PF i o) * e) → ((PF i (future o)) * e)
-        {&join} :: ((future a) * e) → (a * e)
+Multi-context parallelism simplifies GC but complicates space quotas, local sharing for futures, etc.. So let's go back to single-context parallelism, but carry some lessons back. In particular, reverse older ideas: free-lists within a thread, occasional compacting collection.
 
-Process functions are more sophisticated than par-seq because of the `(o * PF i o)` division. However, they are simultaneously more expressive and scalable. Par/seq can be implemented by a one-off fork/join action. But we can easily construct large processes just once then amortize their construction/state costs over a series of calls. Unlike with par/seq, we can afford to use remote processes for parallelism.
+The main difficulty with multiple threads per context is:
 
-Conveniently, we can understand our forked PF as having an implicit *queue* for messages that have yet to be handled. We can also freely use techniques like pushback to help control memory, prevent fast producers from running too far ahead of slow consumers. (The purely functional structure ensures that pushback introduces no risk of deadlock.)
+* need thread-local allocation regions
+* need larger duty cycles between compacting GC
+* need extra free memory per migrant thread 
+* failed allocation must be resumable error
 
-So, that's the *idea* anyway. How will we implement this?
+Our thread-local allocator can be modeled passing an extra variable around. We can use thread local GC (free lists) to recover memory and extend our duty cycle. Main thread will perform compaction as a major GC as needed. Rather than 'protect' allocations, favor a fail-safe approach: build 'loose' values then update things only when our state is easily resumable. Upon allocation failure, then, our worker thread - perhaps even the main thread - can just long-jump out of there. 
 
-## Desiderata
+* workers are active only during eval steps
+* free-list GC locally within each thread
+* compacting GC full context by API thread
+* reader-writer lock to guard compaction
+* long-jump and drop work in case of failures
+* only write valid states into context
+ * nothing we can't easily resume
+* context tracks *available work*
+ * not individual computations
 
-* Minimize synchronization latency.
-* Minimize copying of messages.
-* Minimize interference with GC.
-* Support buffering/batching.
-* Load balancing of work. 
-* Configurable parallelism.
-* N:M lightweight process model.
-* Copy and Drop for parallel futures.
-* Upgrade lazy futures to parallel.
-* Integrate easily with stowage.
+## Shared Local Objects
 
-## Load Balancing vs. Work Stealing
+Shared context-local objects seem a lot more promising if most 'copies' are local to our environment. We might need to handle it as a special for the *rare* case of copying data between environments, but that's quite feasible. Actually, if we restrict *shared local objects* to *binaries* 
 
-Load balancing is an interesting problem. Ideally, we want to simultaneously keep CPUs busy *and* minimize communication between them. Simple techniques like work stealing can 'keep CPUs busy'. But minimizing communication may require a larger analysis of dataflows relationships.
+## A runAsync Monad Accelerator? (low priority)
 
-## Communications between Contexts
+Single-assignment futures are useful for building channels between arbitrary subprograms. An interesting possibility is to create a monad for single-assignment futures, then provide an accelerated `runAsync` implementation that uses more direct communication methods. Getting a static typechecker to the point where it could call an acceleration 'safe' would be very useful.
 
-I would like zero-copy communication between contexts to be the default, but allowing for value copying when appropriate. Something like:
-
-* messages are formed in our sender context
- * sender *does not* touch messages after send.
-* sender alerts receiver of available messages
- * e.g. increment a number in a comms matrix
-* receiver waits for good time to receive or copy
- * just after GC, before computing skip space
-  * good for batch processing, minimize copies
-* receiver processes available message sources
- * directly read messages in sender context.
- * need a reader-writer lock against GC!
- * messages marked delete/forward when done.
-
-This could work well, I think. I lock primarily against the GC process. Thus, most of the time the messages are available for reading without synchronizations. Forwarding of messages could require special attention, but for now I could model that explicitly by copying and forwarding the messages, and it shouldn't be critical to optimize. 
-
-Anyhow, this design avoids any stop-the-world locks. And it doesn't even lock individual threads for very long. OTOH, it leaves plenty of challenges surrounding expression of messages to send.
-
-## Message Set
-
-Contexts should be able to:
-
-* request work.
-* send work.
-* track forwarding of processes.
-* track forwarding of futures(?). 
-* 
+This is low priority, especially compared to accelerating vector/matrix math and graphics processing.
 

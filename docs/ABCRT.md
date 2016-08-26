@@ -85,26 +85,30 @@ I must tweak my allocator for this, e.g. to work in terms of negative offsets fr
 
 For very large contexts (e.g. 100MB) and very small computations (e.g. 10kB) it is inefficient to consume the whole 100MB before performing GC. Doing so creates unnecessary memory and cache pressures. Fortunately, it should not be difficult at all to basically use a *soft cap* for how much we may allocate our next GC.
 
-### Parallelism and Zero Copy Communications
+### Parallelism 
 
-Contexts are (mostly) shared-nothing, each able to run in its own thread. To minimize blocking and improve batching, and reduce need for data copies, I propose a simple communication mechanism. It works as follows:
+Context-local parallelism is quite feasible.
 
-* each context has a queue for outgoing messages.
-* each context has a reader-writer lock for messages.
-* a context may notify when it has a messages for another. 
-* a context must grab the reader lock to access messages.
-* the reader may freely mark its own messages for deletion.
-* a context must grab the writer lock for compacting GC.
+See [Parallelism.md](Parallelism.md)
 
-This gives us a relatively simple design that limits blocking to a short window surrounding GC.
+### Garbage Collection
+
+Each thread manages its own free lists. The main thread will occasionally perform a full compaction. 
+
+If I have large binary objects getting copied around frequently in context, consider a 'mature' space that is compacted less frequently to amortize the relative costs. The mature space can simply grow from the opposite edge of our memory as the normal allocation.
 
 ### Shared Objects
 
-A 'shared object' is one where we copy a reference rather than the data. 
+A 'shared object' is one where we copy our reference rather than the data. Motivations:
 
-Shared objects are essential for high performance code, especially in ABC where we don't have backwards 'jumps' and any iteration is instead modeled in terms of copying code (e.g. as part of a fixpoint loop). Shared objects are also separate from normal GC, and thus effectively reduce memory pressure and relative GC effort. Shared objects are closely related to value stowage. The main difference is the emphasis: shared objects are all about *low latency reads*, whereas for stowage, potential latency concerns are rather less essential.
+* avoid wasting memory on multiple copies of code
+* reduce memory pressure and hence need for GC 
 
-I'm leaning towards tracking shared objects in the `wikrt_env` layer, such that sharing is uniform across contexts within the environment. An interesting possibility is to leverage LMDB's stowage layer directly for shared objects, via its memory mapped direct access. At least for cases where our object was already stowed.
+Shared objects work best for binaries, where I won't be destructively observing them. This includes texts and compact bytecode modeled as binaries. Potentially JIT code, which might need special attention.
+
+Context-local shared objects need structure-sharing within each context to avoid 'exploding' the number of copies when moving data into a new context. A mature GC space may also be necessary to avoid copying the object too frequently during compaction.
+
+I suspect shared objects at the `wikrt_env` layer would be best for performance, especially if there is a lot of communication between contexts.
 
 ## Representations
 
