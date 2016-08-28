@@ -54,8 +54,7 @@ Nonetheless, claw provides a usable syntax for multi-line embedded text:
          literal with "double quotes".
         ~ more commands
 
-        (author:Cicero date:BCE45 lang:latin) \"
-        
+        \"
          Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
          eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut 
          enim ad minim veniam, quis nostrud exercitation ullamco laboris
@@ -63,7 +62,6 @@ Nonetheless, claw provides a usable syntax for multi-line embedded text:
          in reprehenderit in voluptate velit esse cillum dolore eu fugiat 
          nulla pariatur. Excepteur sint occaecat cupidatat non proident, 
          sunt in culpa qui officia deserunt mollit anim id est laborum.
-        
         ~ lit
 
 Our text begins after `\"`, on a new line. For aesthetics and convenience, up to one blank line will be truncated from each edge of the literal. (I assume texts that intentionally start or end with empty lines are the rare case.) Lines of text must be indented by one `SP` character, but empty lines needn't be indented (i.e. `LF LF` expands to `LF SP LF` within the text).
@@ -92,18 +90,18 @@ Concise data is easy to represent, e.g. `[1,2,3,4,5]` or `[[1,2,3],[4,5,6],[7,8,
 
 *Note:* An alternative proposal is `[foo,bar,baz] = [foo [bar,baz] yield]`. But I feel the CPS option is both more expressive and easier to use because we can simply build a stack of continuations. I've also considered options that use another delimiter like `{foo, bar, baz}`, which could let me capture `[foo]` as a command. But this always causes trouble with `{}` which is somewhat ambiguous as an empty command sequence vs. single empty command.
 
-### Claw Attributes
+### Claw Attributes (Deprecated.)
 
-An attribute is an annotation *about* nearby code. Essentially, it's a comment, though not generally intended for a human. Examples of this sort of thing: todos, deprecations, licensing, authoring, quotas, categories, keywords, enabling or disabling full-text search, recommendations for viewing and rendering code, extra typechecker options, guides for indexing, guides for robotic maintenance. 
+The idea with attributes is to provide annotations *about* source code within said code. For example: authorship, rendering, metadata for software agents. My earlier proposal offered a lightweight syntactic sugar:
 
-For attributes in Claw code, I will to use parentheses:
+        (author:dave year:2016)
+        [{&author:dave}{&year:2016}]%
 
-        (license:BSD3 author:dmbarbour category:math)       desugars to
-        [{&license:BSD3}{&author:dmbarbour}{&category:math}]%
+Annotations in a block that we drop easily. Such attributes would be easily discovered by a search through the resulting AO code. Unfortunately, such attributes are lost upon evaluation of the code, are not subject to any form of abstraction or composition (making them unsuitable for types). And the attributes are not semantically accessible.
 
-Dropping the block ensures the annotations have no runtime behavior. Use of annotation symbols simplifies development of reverse lookup indices, and avoids the issue of creating link dependencies. A flat list of symbols keeps it simple, while allowing limited structure (like non-dependency relationships between words) to be expressed if necessary.
+An alternative for most attributes is to use a separate word. For example, if I'm defining word `foo`, I could easily define `foo.about` and `foo.talk` and `foo.doc` and `foo.bots` and so on. This would allow a lot more abstraction of the attributes involved, potential to build richer models. It's a simple convention that a dictionary extraction tool could recognize. And the words would be semantically accessible within the program if ever we need them. 
 
-*Aside:* Normal annotations must still be expressed as `\{&annotation}` in Claw. But we can abstract annotations behind words like any other code. Attributes need special attention because, like source comments, they cannot be abstracted.
+So for now, I think I'll push attributes upwards into our dictionary.
 
 ### Claw Source Comments? (Not yet.)
 
@@ -114,7 +112,7 @@ Conventional C-style comments could trivially be represented in Claw via droppin
 
 Such text could be presented using conventional C-style or Haskell style comments.
 
-However, I'm reluctant to support comments within source code. My intuition is that separating comments from source - e.g. into separate words like `foo.doc` and `foo.talk` to describe `foo` - will make the data contained in the comments more accessible for a lot of interesting use cases. Further, I would indirectly encourage factoring code into smaller functions that can be documented independently.
+However, I'm reluctant to support comments within source code. My intuition is that separating comments from source - e.g. into separate words like `foo.doc` and `foo.talk` to comment upon `foo` - will make the data contained in the comments more accessible for a lot of interesting use cases (e.g. modeling `foo.talk` as a forum application). Further, I would indirectly encourage factoring code into smaller functions that can be documented independently.
 
 ### Claw Namespaces
 
@@ -152,6 +150,8 @@ Command sequences make Claw much more effective at these tasks, i.e. we can dire
 ### Visual Claw 
 
 Assuming an appropriate editor, I would be interested in recognizing *form*-based presentation and widgets, e.g. `30/100 (slider)` is recognized and rendered as a slider widget. Graphs, diagrams, canvases, tables, trees, checkboxes, selection lists, radio buttons, and a multitude of other stateful widgets could be integrated this way. 
+
+Buttons and eventful widgets aren't a very good fit, though I suppose they could be associated with an append-only log and command pattern structure elsewhere in the codebase. Not too different from an HTTP POST action.
 
 Visual Claw has potential to serve as a rich document model, an intermediate level between Claw text and full evaluation-based dictionary applications. Words defined in Visual Claw would support [direct manipulation](https://en.wikipedia.org/wiki/Direct_manipulation_interface) of the dictionary, and would also serve as *templates*: a dictionary application would copy a template word to provide a form, allow the user to edit and submit, and the result is saved into a new word then integrated (e.g. representing a command). 
 

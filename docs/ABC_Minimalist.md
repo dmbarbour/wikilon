@@ -21,16 +21,20 @@ This looks and acts *a lot* like a stack language. However, there is no stack pe
 
 Potential benefits:
 
-* easily evaluate and cache computations without context
-* renders and views can focus on a common program type
-* easy to animate, whole programs changing over time
-* easy to debug, can easily 'see' whole program state 
-* pipeline processing implicit, much latent parallelism
-* just one type simplifies compaction, stowage, sharing 
+* evaluate without context, no 'input' setup
+* no need to specialize a partial evaluator
+* every definition in a codebase doubles as test
+* evaluate many fragments of program in parallel
+* can evaluate in presence of unrecognized tokens
+* rendering may focus on only one type of value
+* render evaluated output for every page/cell
+* potential to animate evaluation by quota or gate
+* debugging simplified, view of program under eval
+* stowage simplified, just one type to handle
 
 This idea for a minimalist ABC seems very promising. 
 
-I contemplated a few of my concerns below, including systems integration, control of behavior, error detection, and performance. But I'm satisfied minimalist ABC is better or at least no worse than the original flavor in each of those categories.
+After contemplating my concerns below, I think minimalist ABC is better in many areas than normal ABC, and no worse in others. These areas include systems integration (e.g. data input and extraction), control and scoping of behavior, error detection, and performance. 
 
 ## The Bytecode
 
@@ -85,11 +89,12 @@ ABCD will likely get started with arithmetic and common data plumbing (like `i` 
 
 ### ABC Tokens
 
-ABC supports symbolic extensions by embedding tokens in code. Tokens are short texts wrapped by curly braces, e.g. `{foo}`. In addition to being valid literal texts, tokens are limited to 255 bytes utf-8, and additionally forbid LF and the curly braces internally. ABC tokens must have *pure* semantics, but there's great deal they can do within that limit. Examples:
+ABC supports symbolic extensions by embedding tokens in code. Tokens are short texts wrapped by curly braces, e.g. `{foo}`. In addition to being valid literal texts, tokens are limited to 255 bytes utf-8, and exclude LF and the curly braces internally. ABC tokens must have *pure* semantics, but there's great deal they can do within that limit. Examples:
 
-* hibernate large values to save working memory
 * acyclic, static or dynamic linking of code
+* stow large values to disk, save working memory
 * evaluation strategy, parallelism, and staging
+* enable remote evaluation in a cloud or mesh
 * control compilation and optimization efforts
 * manifest type assertions, static or dynamic
 * control scope and interaction of computations
@@ -97,19 +102,21 @@ ABC supports symbolic extensions by embedding tokens in code. Tokens are short t
 * add debugging breakpoints or tracepoints
 * provide hints for rendering of results
 
-I currently use tokens for annotations, sealing, and linking.
+I currently use tokens for annotations, gates, seals, and links.
 
-Annotation tokens use the `&` prefix. Their main feature is that they can be dropped by a runtime that doesn't understand them. Annotations are very useful for performance, manifest type safety, and debugging. For example, `{&par}` marks a block for parallel evaluation, `{&nat}` might assert we have a natural number, `{&@foo}` might model a break or trace point, and `{&jit}` might tell our runtime to compile some code.
+Annotations are identified by a `&` prefix, and have miscellaneous use but always have *identity* semantics. For example, `{&par}` marks a block for parallel evaluation, `{&nat}` might assert we have a natural number, and `{&jit}` might tell our runtime to compile some code. 
 
-Sealing uses paired tokens, e.g. `{:foo}` and `{.foo}`. The semantics is simply that `{.s}{:s}` and `{:s}{.s}` must be *identity behaviors*, equivalent (modulo performance) to an empty program. One must use `[{:s}]` and `[{.s}]` to apply sealers to specific parts of a computation.
+Gates are identified by prefix `@`, e.g. `{@bp123}`. Gates provide a simple basis for active debugging. At the runtime level, gates may be configured by name to serve as breakpoints, tracepoints, or to let data pass. They can easily be leveraged to animate program evaluation.
 
-Linking replaces a token by a ABC program. For example, in [Awelon Object](AboutAO.md) our token `{%foo}` is replaced by definition of `foo` in the bound dictionary. Linking must be acyclic.
+Sealing uses paired tokens, e.g. `{:foo}` and `{.foo}`. The semantics is simply that `{.s}{:s}` and `{:s}{.s}` must be *identity behaviors*. With program rewriting, we can simply delete those sequences, but it's also feasible to use wrapper/unwrapper techniques on whole streams of values. One must use `[{:s}]` and `[{.s}]` to scope sealers to specific parts of a computation.
+
+Linking replaces a token by a ABC program. For example, in [Awelon Object](AboutAO.md) our token `{%foo}` is replaced by definition of `foo` in the bound dictionary. Value stowage also produces links. Links must form a directed acyclic graph, and every linked program must at least be syntactically complete (e.g. `[]` blocks balanced, literals terminated). 
 
 ## Ideas and Idioms
 
-### Controlling Scoping 
+### Controlling Scope
 
-Our primitive apply operation is `[A][B]apply == B[A]`. Thus, it comes a built-in mechanism to scope the right side of our computation. However, we also want control of the *left* scope, i.e. how items the computation will consume or leave. To achieve this control, we can use *blocks* to delimit scope. 
+Our primitive apply operation is `[A][B]a == B[A]`. Thus, it comes a built-in mechanism to scope the right side of our computation. However, we also want control of the *left* scope, i.e. how many items the computation will consume or leave. To achieve this control, we can use *blocks* to delimit scope. 
 
         [A][B]b     == [[A]B]
         [[A]]{&1}   == [[A]]
@@ -158,44 +165,36 @@ The annotation creates an *error value*. It can be copied or dropped like any ot
 
 The runtime may additionally maintain a list of errors in the program, e.g. for efficient access.
 
-### Active Debugging: Breakpoints, Tracepoints
+### Static Analysis and Type Safety
 
-Program rewriting makes 'debugging' relatively easy, since it's feasible to extract a representation of our program at arbitrary times. But this doesn't make breakpoints useless! Indeed, I believe we can make even easier use of them. My proposal is to model a sort of 'named gate' annotation.
+ABC with type declarations is amenable to static typing. Tokens such as `{&nat}`, `{&aff}`, `{&1}`, and `{:s}` provide a foundation from which static type inference could proceed. 
 
-        {&@foo}         (gate foo)
-        {&@1234}        (gate 1234)
+Rich types are feasible. It's a bad idea to squeeze much logic into a token, but it is feasible to use programs or data to describe types. Given an [AO dictionary](AboutAO.md), types could be associated with each word via a simple convention like using `foo.type` to describe the type of `foo`. We could also use a pattern like `[foo][type]{&type}d` as a basis for inline declarations of types.
 
-Every gate has a state, configured at the runtime level. These states include: open, tracing, and closed. This determines how our gate behaves when there is a value to its left and some demand to its right.
+### Gates for Active Debugging
 
-        [A]{&@foo}  == [A]          (if open or trace)
-        [A]{&@foo}  == [A]{&@foo}   (if closed)
+Program rewriting makes debugging relatively easy. We can render the whole program 'state' after something goes wrong. Use of breakpoints can augment this further by enabling developers to observe intermediate states and step through problematic parts of a computation. 
 
-A tracing gate acts as an open gate but additionally add the value to a gate-specific log. This would support log-based debugging or profiling, and potentially offer a basis for rendering or animating a long-running computation.
+I propose to reify breakpoints by use of 'named gate' tokens. The behavior of a gate will be configured by name at the runtime level, e.g. as open, closed, trace.
 
-A closed gate acts instead as a breakpoint. In context of program rewriting, our 'gates' aren't true breakpoints because computation continues for the rest of the program. We simply don't move data across a closed gate. When we do return, there may be *many* computations stalled on gates, deterministically. To continue computation, developers simply delete the specific `{&@foo}` tokens that are blocking the progress they are interested in observing then continue. (A debugging runtime could optimize for common patterns of continuing all or local parts of the program.)
+        [A]{@foo} == [A]            (if open or trace)
+        [A]{@foo} == [A]{@foo:123}  (if closed. `123` unique)
 
-This mechanism promises to be simple, effective, low overhead, and offer reasonable HCI integration. 
+Our closed gate acts much like a breakpoint. Any upstream computation that depends on `[A]` will stall. Our runtime will continue evaluation for anything that isn't waiting on that gate. When we return, our program might be stalled on *many* gates. Depending on the computation, we might stall on multiple instances of our `{@foo}` gate. 
 
-*Note:* Operating outside the semantics and effects models of our program seems acceptable for debugging or profiling, but is a bad idea in general. Tactics like 'delete the `{&@foo}` token and continue' shouldn't be used for anything else.
+To 'continue' our program, we'll must delete some of the stalled breakpoints then run more evaluation steps. Renaming gates upon stalling makes it easier both to highlight active breakpoints for a user and to specify which breakpoints to delete. For example, we might delete `{@foo:*}` or `{@foo:123}` specifically.
 
-### Manifest Types
+A tracing gate acts as an open gate but additionally adds the value to a gate-specific log for debugging purposes. This would support log-based debugging and profiling (including printf-style debugging). However, other than requiring much less space, tracing isn't nearly as good for debugging as would be *program animation* because you lose the context to really grok the log.
 
-Manifest typing is certainly feasible. Consider:
+#### Gates for Program Animation
 
-        [B]{&typeDescriptor}
-        [B][typeDescriptor]{&type}d
+To animate on `{@foo}` we take a snapshot, evaluate as far as we can go, delete all the `{@foo:*}` gates, then repeat until no `{@foo:*}` gates are generated. Ultimately, we have many megabytes or gigabytes of deterministic program snapshots representing valid temporal progression that we can render into frames and animate.
 
-Ideally, this can be used with some static type inference. At runtime, we might choose to omit such checks.
+Hopefully, these snapshots will share enough structure that it's easy to focus on important changes. But that's up to developers choosing good breakpoints. However, at the very least, gates offer a lot more predictable structure than would quota driven snapshots.
 
-Use of an ABC value for the type descriptor is a very interesting idea, IMO. It can enable flexible abstraction and composition of type descriptors within a codebase. Further, these values can simply be fed back into a type checker *also* provided in the codebase, enabling user development of static type safety. 
+Rendering with multiple gates is straightforward. The most useful strategies are probably 'parallel' or 'hierarchical'. For parallel, we just treat `{@foo}` and `{@bar}` as a single gate, and continue them together. For the hierarchical, we run `{@foo}` as far as it can go, take a single step in `{@bar}`, then go back to `{@foo}`. We could random or interleave strategies or similar, but I suspect those would share less structure between frames. 
 
-### Rendering Attributes and Animated Evaluation
-
-Directly manipulating a program after it's in evaluation is problematic. But simply rendering it for evaluation seems within reason. We can probably use annotations to attach rendering attributes to subprograms much like I describe for manifest types, above. 
-
-        [B][renderOptions]{&render}d
-
-The `[renderOptions]{&render}d` could then be reconstructed when we serialize our values, making the attribute accessible to a rendering tool. OTOH, it might be simpler and more efficient, and a better separation of concerns, to simply drive rendering by use of value sealing. 
+Program animation might be augmented by providing some annotations to guide rendering decisions.
 
 ## Runtime and Performance
 
@@ -328,23 +327,42 @@ I have several desiderata:
 * monadic structure, join a sequence from within
 * easy to abstract command sequences, too
 * iteration may be aborted early or continued later
-* do not need a fixpoint to perform iteration
+* do not need a fixpoint to perform most iteration
 
-Structurally, I have a few relevant options:
+Structurally, a general form is:
 
-        [foo (bar, baz) comma]
-        [(bar, baz) comma foo]
-        [[foo](bar,baz) comma]
+        (foo, bar, baz) == [[foo](bar,baz)s]
+             (bar, baz) == [[bar](baz)s]
+                  (baz) == [[baz]#s]
 
-In our first option, `comma` doesn't have much reliable access to the environment. 
+I could flip `[foo]` and `(bar,baz)`. For legibility reasons, however, it seems wise to keep the actions in sequence order.
 
-For the second option, any iteration action performed by `comma` won't have access to the data produced by `foo`, so `foo` would need to perform the handler action itself. Though, it might be feasible to capture this as part of our continuation.
+By reifying our command, caging `foo` within `[foo]`, we can provide our sequence action `s` with control over its context. Less general forms including `[foo(bar,baz)s]` or `[(bar,baz)s foo]` make it more difficult to control context. I would favor a less general form *if* it nicely fits the unification semantics.
+
+I think I can discard models of the form `[D][A]#3i == A A A D`. I need to capture the continuation at least briefly to model aborting the sequence or controlling incremental evaluation. So below are are various semantic options I'm considering. 
+
+        [D][A]#i             == D
+            # == [di]
+
+        [D][A](foo,bar,baz)i == foo [[D][A](bar,baz)i] A
+        [D][A](foo,bar,baz)i == [[D][A](bar,baz)i] foo A
+        [D][A](foo,bar,baz)i == [[D][A](bar,baz)i] [foo] A
+
+        [D][A](foo,bar,baz)i == foo  [D][A](bar,baz) A
+        [D][A](foo,bar,baz)i == [D][A](bar,baz) foo A
+        [D][A](foo,bar,baz)i == [D][A](bar,baz) [foo] A
+
+The last option is the most expressive, and is sufficient to construct any of the others. But being more expressive isn't necessarily a *good* thing, e.g. exposing `[foo]` means we can splice, dice, and reorder commands, making it difficult to reason about the sequence. Applying `foo` after continuation means `foo` is always forced to deal with data plumbing of moving continuations up the chain, and removes a lot of control over evaluation from the handler `A`.
+
+What is the *minimum* sufficient expressiveness for my desiderata?
+
+It seems I can do most of what I want with the least expressive first option. If I need CPS, I can model this as a `[action] call/cc` request being passed to handler `A`. If I need monadic binding, I could potentially model a `(sequence) join` output, passing the buck to `A` to flatten the result. Is that acceptable? It seems a bit painful, but it might be easy enough to use with some conventions for monadic sequences.
 
 
+Assuming we take the first op
 
 
-Potential behaviors:
-
+      
         [B][A] #2 i == [[B][A]#1 i] A   == [[B]A]A
         [B][A] #1 i == [[B][A]#0 i] A   ==  [B]A
         [B][A] #0 i == B

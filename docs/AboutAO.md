@@ -89,12 +89,12 @@ Summary of constraints:
  * no empty words or enormous words. 1..60 bytes UTF-8.
 * tokens are limited to:
  * word dependencies (`{%dupd}{%swap}`)
- * discretionary value sealer (`{:foo}`)
- * discretionary value unsealer (`{.foo}`)
+ * value sealing (`{:foo} {.foo}`)
  * annotations (`{&static}{&copyable}`)
- * token text after prefix is valid word
+ * debug gates for breakpoints or trace points (`{@foo}`)
 * texts are limited to:
  * exclude C0 (except LF), DEL, C1
  * exclude surrogate codepoints U+D800..U+DFFF
  * exclude replacement char U+FFFD
 
+I might increase word size limits to support embedding secure hashes, 
