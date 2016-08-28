@@ -3,7 +3,7 @@
 
 A simpler ABC is (hopefully) a better ABC.
 
-THE BIG IDEAS: 
+THE BIG (DIFFERENT) IDEAS: 
 
 * confluent, context free rewriting combinators
 * minimal base plus early start on accelerators
@@ -23,10 +23,10 @@ Potential benefits:
 
 * easily evaluate and cache computations without context
 * renders and views can focus on a common program type
-* lazy blocks by default reduces need for paired annotations
+* easy to animate, whole programs changing over time
+* easy to debug, can easily 'see' whole program state 
 * pipeline processing implicit, much latent parallelism
 * just one type simplifies compaction, stowage, sharing 
-* with rewriting, easily model `[` and `]` as operators
 
 This idea for a minimalist ABC seems very promising. 
 
@@ -36,100 +36,97 @@ I contemplated a few of my concerns below, including systems integration, contro
 
 The proposed base is just four primitive combinators. 
 
-        [A][B]x     == B[A]         (exec)
-        [A][B]c     == [[A]B]       (cons)
-        [A]d        == [A][A]       (dup)
-        [A]k        ==              (kill)
+        [A][B]a     == B[A]         (apply)
+        [A][B]b     == [[A]B]       (build)
+        [A]c        == [A][A]       (copy)
+        [A]d        ==              (drop)
 
-This base is small, complete, and friendly to substructural types. The constructor action `c` is O(1) with simple list representations, which is convenient. Outside this base, we also have the `[]` square bracket characters for block structure, and whitespace characters (SP and LF - 32 and 10) for simple formatting.
+This base is small, complete, and friendly to substructural types. Additionally, the `[]` square brackets delimit first-class subprograms. The empty program is valid and has identity semantics. All programs and data have a formal semantics as a finite expansion to sequences or streams of just six characters `[abcd]`.
 
-For ease of integration with external systems, ABC supports natural numbers like `#42` or `#65535` and embedded literals. The syntax from the original ABC is unchanged.
+For performance and convenience, ABC provides more than the primitives:
 
-        "embedded text literals
+* Lightweight formatting: SP and LF are equivalent to the empty program. 
+* Compact embeddings for data: numbers and embedded literals.
+* A standard Dictionary of accelerated bytecodes for performance. 
+* Symbolic extensions for performance, safety, debugging, linking.
+
+ABC is restricted to purely functional computation. However, ABC is easily used to construct effectful programs using [monadic effects](http://okmij.org/ftp/Haskell/extensible/more.pdf) or other [application models](ApplicationModel.md) that shift the actual performance of effects to an external agent. (I wonder if tuple spaces would be a good fit.)
+
+### ABC Data Embedding
+
+Natural numbers are embedded as `#42` or `#108`. The character `#` introduces a new zero value while the digits `0-9` each multiply by ten then add the digit. When applied, natural numbers would iterate a given program based on their specified count. 
+
+Embedded literals have the format:
+
+        "start with character `"`
          may have multiple lines
-         LF escaped by following SP
-         terminates with LF ~
+         LF is escaped by following SP
+         text terminates with LF ~
         ~
 
-However, the *semantics* for numbers and literals are different. Numbers are a syntactic sugar for a Church encoding or variant thereof. The exact details are undecided. However, we shall at least be able to use numbers to iterate (e.g. `#42` can iterate up to 42 times). Similarly, texts will enable iteration through the associated utf-8 byte encoding.
+Literals must be valid UTF-8 with a small blacklist (no control (C0, C1, DEL) except LF, no surrogates, and no replacement char). When applied as a program, literals will support iteration over every contained UTF-8 byte. The assumption here is that byte-level ops are the common ones. 
 
-ABC supports contextual extensions via tokens, short texts in curly braces like `{foo}`. Their function hasn't changed much. Annotation tokens like `{&par}`, `{&nat}`, or `{&trace}` support performance and debugging. Discretionary value sealing `{:s}` and `{.s}` supports lightweight labeling and safety. Linking of code and data might be expressed by `{%swap}` in an AO dictionary or `{'stowageId}` to reference external objects.
+An implementation of ABC is expected to provide compact representations rather than expand these into the Church encodings, i.e. to an extent that we're actually working with small numbers and bytestrings under the hood.
 
-Because ABC is minimal, I'll be focusing early on an ABCD variant, providing an extended dictionary of opcodes that are defined in terms of our basic four.
+I haven't chosen a formal representation yet. I'm aiming to unify *Numbers, Literals, and Command Sequences*.
 
-*Aside:* The homage to [XKCD](xkcd.com), my favorite web comic, is intentional. I was only one operator away (`k` was originally `z`, for `zap`) and decided to go for it. But the language is still called Awelon Bytecode (ABC).
+### The ABC Dictionary
 
-## Systems Integration with Minimalist ABC
+ABC includes a standard set of additional operators, each bound to a UTF-8 codepoint and defined by its expansion to an `[abcd]` sequence. The operators `#1234567890` for embedding number data are examples of ABCD operators. There are many potential motivations for adding an operator to the dictionary:
 
-It's necessary for Awelon's vision to support efficient and predictable integration with external systems. In a broad sense, such integration includes data input, extraction of results, and use of time and space. Rendering of intermediate computations may also be part of this integration. If these things aren't efficient and predictable, there is no way minimalist ABC could become a practical language.
+* ease of reading, rendering, editing code
+* easier injection and extraction of data
+* greatly improves interpreted performance
+* simplifies optimization and compilation 
 
-I posit that I should minimally support:
+ABC doesn't need dictionaries just to compress code. For that, we'll use token-based linking. So the primary motivations are oriented around performance, HCI, and efficient integration with external systems. But ideally a candidate supports all these roles at once.
 
-* small numbers and basic arithmetic
-* embedding and construction of text
+ABCD will likely get started with arithmetic and common data plumbing (like `i` for inline instead of `[][]baad`). Long term, I'd like to have operators that allow me to easily embed binaries within text, perhaps render images when rendering code, support for rich number models (rationals, decimals), GPGPU accelerated vector processing, or acceleration of monads for stuff like stateful programming (like Haskell's `runST`) or futures/promises.
 
-Within the 'minimalist' goal of having only one data type - a program - these values should themselves be understood as programs that we can evaluate. I can easily eschew primitive support for negative integers. And if I'm just interested in natural numbers, I can easily give those *meaning as programs* by treating them as shorthand for a Church encoding. 
+### ABC Tokens
 
-        [B][A] #2 i == [[B][A]#1 i] A   == [[B]A]A
-        [B][A] #1 i == [[B][A]#0 i] A   ==  [B]A
-        [B][A] #0 i == B
+ABC supports symbolic extensions by embedding tokens in code. Tokens are short texts wrapped by curly braces, e.g. `{foo}`. In addition to being valid literal texts, tokens are limited to 255 bytes utf-8, and additionally forbid LF and the curly braces internally. ABC tokens must have *pure* semantics, but there's great deal they can do within that limit. Examples:
 
-This encoding can work. But I'm not committed to it. I'm contemplating whether I can unify *Numbers, Literals, and Command Sequences* (see below). If I can do so, I'll probably go with whatever I come up with there. Regardless of the specific encoding, I assume we will be able to Church-encode useful arithmetic operations: successor, predecessor, addition, subtraction, multiplication, divmod, etc.. By accelerating these arithmetic operators, our performance won't be hurt by the Church encoding. 
+* hibernate large values to save working memory
+* acyclic, static or dynamic linking of code
+* evaluation strategy, parallelism, and staging
+* control compilation and optimization efforts
+* manifest type assertions, static or dynamic
+* control scope and interaction of computations
+* mark values or computations as erroneous
+* add debugging breakpoints or tracepoints
+* provide hints for rendering of results
 
-Conveniently, number types also act as a basis for conditional behavior, i.e. selecting the `A` vs. `B` behavior.
+I currently use tokens for annotations, sealing, and linking.
 
-For consistency, we can leverage a similar model for texts. Something like:
+Annotation tokens use the `&` prefix. Their main feature is that they can be dropped by a runtime that doesn't understand them. Annotations are very useful for performance, manifest type safety, and debugging. For example, `{&par}` marks a block for parallel evaluation, `{&nat}` might assert we have a natural number, `{&@foo}` might model a break or trace point, and `{&jit}` might tell our runtime to compile some code.
 
-        [B][A] "hello" i == #104 [[B][A] "ello" i] A
-        [B][A]  "ello" i == #101 [[B][A]  "llo" i] A
-        ...
-        [B][A]     "o" i == #111 [[B][A]     "" i] A
-        [B][A]      "" i == B
+Sealing uses paired tokens, e.g. `{:foo}` and `{.foo}`. The semantics is simply that `{.s}{:s}` and `{:s}{.s}` must be *identity behaviors*, equivalent (modulo performance) to an empty program. One must use `[{:s}]` and `[{.s}]` to apply sealers to specific parts of a computation.
 
-The original ABC's embedding of text is pretty useful, so I'll probably stick with it. I don't want to sacrifice legibility, so I'm still leaning in favor of 
+Linking replaces a token by a ABC program. For example, in [Awelon Object](AboutAO.md) our token `{%foo}` is replaced by definition of `foo` in the bound dictionary. Linking must be acyclic.
 
-*Aside:* I might explicitly use the UTF-8 expansion for text, e.g. such that `→` expands as three bytes rather than one larger codepoint. This would be more convenient for many use cases, especially those involving construction of maps, tries, hashes, etc.. It's generally more convenient for efficient processing and extraction.
+## Ideas and Idioms
 
-### Effect Models Integration
+### Controlling Scoping 
 
-A good effects model for purely functional programming must support interception of effects, such that we can evaluate our program in a simulated environment or wrap and adapt the effects to a different context. Minimalist ABC mustn't compromise this, so any effects models must be at the value level, operating only on the right-hand side of the program stream. We could model effects via a monadic `[Continuation][Request]` pair, for example.
+Our primitive apply operation is `[A][B]apply == B[A]`. Thus, it comes a built-in mechanism to scope the right side of our computation. However, we also want control of the *left* scope, i.e. how items the computation will consume or leave. To achieve this control, we can use *blocks* to delimit scope. 
 
-## Controlling Program Behavior
-
-### Structurally Scoped Computation
-
-Scoping a computation doesn't improve expressiveness or power, but it does make for easier comprehension of code, simplified debugging and isolation of errors. A simple mechanism to control scope is to hide some specific content. For example, using the `dip` combinator, we can hide value `[A]` from our computation `B`:
-
-        [A][B]dip   == B[A]
-
-I assume our programmers will learn a useful set of standard combinators like `dip`. However, the left-scope of this computation, e.g. how many values it consumes or produces, is not immediately obvious. It requires knowledge about the type of `B`, which in general might be an argument from some distant location in the program. What we want is to control scope *structurally*, i.e. using local syntax and combinators that do not require knowledge of `B`. 
- 
-My proposal is to use blocks together with a structure assertion:
-
-        [A][B]cons  == [[A]B]
-        [A][B]cat   == [A B]
+        [A][B]b     == [[A]B]
         [[A]]{&1}   == [[A]]
 
-Blocks implicitly delimit scope of contained subprograms. 
+Our build operator `b` can control movement of input into the computation. If we expect three inputs, that becomes `bbb`. To control the number of outputs we can use an annotation, such that we can verify it statically or fail fast dynamically. The `{&1}` annotation can be generalized to any number of arguments (e.g. `[i[]]b{&1}` would assert an zero results while `[i[]bbb]b{&1}` would assert three results). But for convenience and performance, I could provide `{&0}`..`{&9}`.)
 
-Use of `cons` can feed a finite number of *inputs* to the scoped subprogram, while `cat` enables their ad-hoc dynamic construction. Annotation `{&1}` asserts that the computation produces a single value. That assertion is easily lifted to any finitary output (e.g. `[[]]cat{&1}` for zero outputs or `[[]cons cons cons]cat{&1}` for three outputs). For convenience and performance, a runtime might simply provide `{&0}`..`{&9}`. These size assertions can be removed upon verification by a static type checker or efficiently checked dynamically. 
+Developers thus explicitly provide a finite set of inputs and assert a finite set of outputs, and control scope.
 
-Developers thus explicitly provide a finite set of inputs, assert a finite set of outputs, then run. They can be confident that the computation will fail fast rather than escape its scope. This is weaker than proper static types, of course, but it's still an effective basis for rapidly isolating errors in a codebase.
+### Data Encapsulation
 
-### Discretionary Value Sealing
-
-We can use paired sealer and unsealer tokens of form `{:x}` and `{.x}` to resist *accidental* access to a value's structure, i.e. providing a lightweight type wrapper of sorts. For *correct* code, removing sealer/unsealer pairs should have no effect (except perhaps to improve performance). But incorrect code will generally fail fast. And even if something funny is happening, our developers can easily search a codebase for tokens to isolate where the error might have been introduced.
-
-Discretionary sealing is adapted to minimalist ABC by a simple pair of rewrite rules:
-
-        {:s}{.s} == 
-        {.s}{:s} ==
-
-We must use the tokens within blocks `[{:x}]` for scoped application of seals. Also, while the latter rewrite rule is based on a valid optimization (unseal then seal with the same token is effectively a non-operation), it does improve our expressiveness because it means we can freely grow even sealed subprograms from both the left and the right. 
+The sealer tokens (e.g. `{:s}` and `{.s}`) can easily be used to model opaque data types and structures, e.g. by composing them into blocks.
 
 ### Weak Substructural Types
 
-Substructural types are very useful for structuring the *behavior* of an application, independently of structured syntax and data models. Minimalist ABC won't provide strong enforcement for these types, but will provide enough to guard against accidental errors. The proposal is as follows:
+Substructural types are very expressive for structuring application behavior independently of syntax. For example, while the common resource pattern `open use* close` can be enforced by a structured syntax or RAII pattern, we could instead model this by constructing a linear handle (with sealed data) upon `open` and destroying it later, in the `close` action. This would give us a lot more flexibility to use the resource within the program.
+
+However, I'm not convinced I won't want an escape for substructure, e.g. to model lossy networks or backtracking. So my proposal is to enforce these types only weakly. The proposal is as follows:
 
         [A]{&rel} == [A]    (mark relevant)
         [A]{&aff} == [A]    (mark affine)
@@ -140,15 +137,9 @@ Substructural types are very useful for structuring the *behavior* of an applica
 * a block both affine and relevant is called 'linear'
 * block compositions preserve substructure
 
-We could model a general copy or drop function that ignores substructure by prefixing with `[] cons {&nss}` (and unwrapping our copies). But the weak types could help developers isolate many errors.
+We can then model a general copy or drop function that ignores substructure by prefixing with `[] cons {&nss}` (and unwrapping our copies). But developers will be able to reason about substructure except where they explicitly choose to bypass it, and it will be a lot easier to search and find every relevant bypass by searching for clients of the `{&nss}` within a subprogram.
 
-## Recognizing Errors and Static Type Safety
-
-Early detection of errors is very useful for software engineering. Ideally, we want to find errors before evaluation, or even during edits. If not that, we need to recognize error conditions dynamically, during evaluation, such that we can report, flag, count, and highlight the errors.
-
-With term rewriting, we might understand an error as a 'stuck' computation - a computation that produces no values, no matter how many inputs it receives.
-
-### Programmer Specified Errors
+### Runtime Errors
 
 Programmers might specify errors to indicate:
 
@@ -156,69 +147,67 @@ Programmers might specify errors to indicate:
 * incorrect use (partial functions)
 * assertion failures (implementation error)
 
-We could simply use an `{&error}` annotation for programmer errors.
+I propose an `{&error}` annotation to indicate errors within code.
 
         "todo: implement foo"{&error}
 
-The annotation creates an *error value*. It can be copied or dropped like any other value. An attempt to observe the error value (e.g. through application) will cause our computation to become 'stuck' at that point. 
+The annotation creates an *error value*. It can be copied or dropped like any other value. An attempt to observe the error value (e.g. through application) becomes the actual error. This will cause computation to become 'stuck' at that point. Whenever our runtime dynamically recognizes an error, it should also use `{&error}`.
 
-### Dynamic Error Recognition
+        [A]{&aff}c  ==  [[A]{&aff}c]{&error}i
+        [A]{:s}i    ==  [[A]{:s}i]{&error}i
 
-Dynamic error recognition needs to be efficient. One obvious candidate for dynamic error recognition is runtime type assertions about data that our runtime knows how to recognize efficiently. This can be expressed by annotation. For example:
+The runtime may additionally maintain a list of errors in the program, e.g. for efficient access.
 
-        #42 {&nat}
-        "hello" {&lit}
-        [[A]]{&1}
-        [[A][B][C]]{&3}
+### Active Debugging: Breakpoints, Tracepoints
 
-It's also easy to recognize substructure or value sealing errors:
+Program rewriting makes 'debugging' relatively easy, since it's feasible to extract a representation of our program at arbitrary times. But this doesn't make breakpoints useless! Indeed, I believe we can make even easier use of them. My proposal is to model a sort of 'named gate' annotation.
 
-        [A]{&aff} copy
-        [A]{&rel} drop
-        [A]{:s} op  
-        [A]{.s} op
+        {&@foo}         (gate foo)
+        {&@1234}        (gate 1234)
 
-This is more or less the limit of efficient dynamic error recognition. We could feasibly introduce annotations to assert structural or behavioral equivalence, but those wouldn't be conditions we want to verify dynamically. (Even structural equivalence can be expensive to test in context of parallel computations and similar.)
+Every gate has a state, configured at the runtime level. These states include: open, tracing, and closed. This determines how our gate behaves when there is a value to its left and some demand to its right.
 
+        [A]{&@foo}  == [A]          (if open or trace)
+        [A]{&@foo}  == [A]{&@foo}   (if closed)
 
-When dynamic errors are discovered in a subprogram, we should wrap them with `{&error}` (and inline the result) for easy and consistent reporting.
+A tracing gate acts as an open gate but additionally add the value to a gate-specific log. This would support log-based debugging or profiling, and potentially offer a basis for rendering or animating a long-running computation.
 
-        #42 {&lit}      == [#42 {&lit}]{&error} inline
-        [A]{&aff} copy  == [[A]{&aff} copy]{&error} inline
+A closed gate acts instead as a breakpoint. In context of program rewriting, our 'gates' aren't true breakpoints because computation continues for the rest of the program. We simply don't move data across a closed gate. When we do return, there may be *many* computations stalled on gates, deterministically. To continue computation, developers simply delete the specific `{&@foo}` tokens that are blocking the progress they are interested in observing then continue. (A debugging runtime could optimize for common patterns of continuing all or local parts of the program.)
 
-### Static Type Safety
+This mechanism promises to be simple, effective, low overhead, and offer reasonable HCI integration. 
+
+*Note:* Operating outside the semantics and effects models of our program seems acceptable for debugging or profiling, but is a bad idea in general. Tactics like 'delete the `{&@foo}` token and continue' shouldn't be used for anything else.
+
+### Manifest Types
 
 Manifest typing is certainly feasible. Consider:
 
         [B]{&typeDescriptor}
-        [B][typeDescriptor]{&type} drop
+        [B][typeDescriptor]{&type}d
 
-Together with a fair bit of type inference (look into bidirectional type checking), and potentially some static partial evaluation, static typing has excellent potential to be straightforward. Manifest type annotations also make an excellent location to flag with `{&error}` if there are issues.
+Ideally, this can be used with some static type inference. At runtime, we might choose to omit such checks.
 
-Modeling type descriptors as ABC values is an excellent option. It enables abstraction and composition of types, gradual development of our type systems, and 
-
-Use of an ABC value for the type descriptor is promising. It enables flexible abstraction and composition of type descriptors, expression of sophisticated types, and we can use such type descriptors directly if we later move type checking into user code.
+Use of an ABC value for the type descriptor is a very interesting idea, IMO. It can enable flexible abstraction and composition of type descriptors within a codebase. Further, these values can simply be fed back into a type checker *also* provided in the codebase, enabling user development of static type safety. 
 
 ## Runtime and Performance
 
 ### API
 
-Rather than build a value that contains some blocks and computations, I'll build one larger program or block and iteratively evaluate against a quota. I'd like to support construction of the program *without* requiring an ABC parse, so this will work by:
+The API will be oriented around building a 'program' left to right in terms of injecting data (texts, numbers) and operations, evaluating it, then extracting data. We might also identify errors, extract trace messages, or continue evaluations involving breakpoints. 
 
-* build program by injecting values and operations from left to right.
- * runtime may perform lightweight evaluations at each step.
-* open and close block `[]` are effectively operators
- * closing a 'toplevel' block is main error at this point
-* may capture toplevel as a block
-* may move blocks to another context
-* evaluate with quota-driven 'steps':
- * evaluating the 'program', not any specific object
- * evaluator may heuristically seek both depth and breadth
- * breadth necessary to initiate `{&par}` and similar
-* extract values from right
- * easy access to numbers
- * destructive access to texts, binaries
- * reflection on how many values available
+During evaluation, all program level errors are modeled via `{&error}`. The context level issue of 'running out of memory' shall be handled by a checkpoint-based evaluation mode so that, while we might lose a little work, our program state remains valid.
+
+*Aside:* For work with AO dictionaries, it seems hugely useful to support injection of dictionary into our context. This would happen during 'program build' time, and we could evaluate even if we don't know a definition. E.g. if we forget to define `{%foo}`, we can fail. Injected definitions could be immutable after assignment.
+
+*Aside:* I won't introduce support for binaries yet - at least not before accelerators exist to simplify rendering within a program. 
+
+### Linking in Context
+
+With program rewriting, I can continue evaluation in the presence of unknown tokens, we'll just not be able to move data across that token. Thus, there is no reason to restrict against tokens we don't recognize. 
+
+An interesting related point is that we can easily provide ABC definitions for these tokens, in a linker style.
+
+Rather than repeating the work of injecting code into a context every time, ideally we can reify our dictionary just once then reuse it many times, perhaps integrated with value stowage. So this might be modeled by an API that introduces a special 'dictionary value' and enables constrained updates thereof, yet ensures this value is subject to stowage. I.e. runtime-layer data encapsulation. I think that, by this means, we could gain a great deal of performance.
 
 ### Bit Representations
 
@@ -278,6 +267,8 @@ It is possible to divide a program into multiple subprograms, each with its own 
 
 Use of `{&par}` essentially enables programmers to control chunking of evaluation, specify the 'interesting' parts of the computation that deserve special focus. Every `{&par}` node would additionally be hooked into a big work pool and pipelines that carry values from one process to another. The "work pool" might be understood as simply a way to attach *very deeply* into within the program, in a thread-safe manner.
 
+*Todo:* I know the above evaluator will work well, but it would be nice to support something closer to a Forth-like stack. At least for cases where I know it can mostly complete. Alternatively, it might be feasible to use a contiguous stack in place of our list-based zipper stacks (maybe a tagged object?).
+
 ### Compilation
 
 I'm not sure how to go about compilation of term rewrite programs. I'm certain it's been done (and a quick Google search confirms this). But even if I couldn't compile those programs, I can at least compile functions that are 'complete' in the sense of accepting a finite number of arguments and producing a finite number of results.
@@ -301,6 +292,7 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 * `{&nat}` - use runtime's natural number format
 * `{&binary}` - represent a compact sequence of bytes
 * `{&stow}` - move data out of working memory
+* `{&trash}` - stowage to a bit bucket (preserves substructure)
 * `{&compact}` - pack bytecode into tight compact format
 * `{&compile}` - indicate compilation for performance
 * `{&jit}` - heuristic compilation decision
@@ -308,75 +300,52 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 
 ## Numbers, Literals, and Command Sequences
 
-Command sequences are useful for concise data representation, DSLs, monadic effects, modeling cooperative multi-threading, and more. Command sequences are a natural *iteration* concept in a language where we don't really have 'data', only commands (which might generate data). Given how proposed encodings for numbers and literals also act as iterators, an intriguing possibility is to unify the three ideas.
+Command sequences are useful for concise data representation, DSLs, monadic effects, modeling cooperative multi-threading, and more. Proposed Church encodings for numbers and literals also act as iterators. An intriguing possibility is to unify the ideas. 
 
-Desiderata for unification:
+Assume command sequences are rendered as `(foo,bar,baz)` in a generic view. My idea of unification looks like the following:
 
-* Numbers and texts have a simple, uniform encoding.
-* Encoding is compatible with [claw command sequences](CommandLine.md).
-* Iteration may be aborted or saved and continued.
-* Easy to compose and abstract command sequences.
-* Can use iteration without a fixpoint function.
+        #       ==  #
+        #1      ==  (n)
+        #2      ==  (n,n)
+        #3      ==  (n,n,n)
+            where `n` is ideally empty program
+        
+        ""      ==  #
+        "h"     ==  (#104 m)
+        "hello" ==  (#104 m, #101 m, #108 m, #108 m, #111 m)
+            where `m` is ideally empty program
 
+I have several desiderata:
 
+* monadic structure, join a sequence from within
+* easy to abstract command sequences, too
+* iteration may be aborted early or continued later
+* do not need a fixpoint to perform iteration
 
-an intriguing possibility is to unify *natural numbers* and *embedded texts*.
-An intriguing possibility is that *natural numbers* and *embedded texts* might be modeled as specific instances of command sequences.
+Structurally, I have a few relevant options:
 
+        [foo (bar, baz) comma]
+        [(bar, baz) comma foo]
+        [[foo](bar,baz) comma]
 
+In our first option, `comma` doesn't have much reliable access to the environment. 
 
-
-With [claw command sequences](CommandLine.md) our command sequence is given a general meaning: `[foo,bar,baz] == [[bar,baz] after foo]`. I've also experimented with the variant `[foo,bar,baz] == [foo [bar,baz] yield]`. In both cases, I have a plain old block with some patterned convention. 
-
-I would greatly prefer if my minimalist ABC command sequences can utilize to one of these two conventions, i.e. no *implicit* terminator, no wrapping `foo` into `[foo]`.
-
-
-In both cases, `foo` is not wrapped as `[foo]`, which is convenient because it means we do not need to distinguish `foo` 
- Notably, `foo` is not wrapped up as `[foo]`, and we do not explicitly terminate the sequence.
-
-, such as we don't need to think hard about an *empty* command sequence vs. 
-
-
-
-A challenge for command sequences is distinguishing a sequence containing a single empty command (the identity function) vs. a sequence containing an empty command. 
-
-The main difficulty with command sequences, of course, is distinguishing an empty command 
+For the second option, any iteration action performed by `comma` won't have access to the data produced by `foo`, so `foo` would need to perform the handler action itself. Though, it might be feasible to capture this as part of our continuation.
 
 
-        "hello" == (#104, #101, #108, #108, #111)
-        "" == ()
-        #3 == (,,,)
-        #0 == ()
 
-            generalized behavior:
+
+Potential behaviors:
+
+        [B][A] #2 i == [[B][A]#1 i] A   == [[B]A]A
+        [B][A] #1 i == [[B][A]#0 i] A   ==  [B]A
+        [B][A] #0 i == B
+
+        [B][A] "hello" i == #104 [[B][A] "ello" i] A
+        [B][A]  "ello" i == #101 [[B][A]  "llo" i] A
+        ...
+        [B][A]     "o" i == #111 [[B][A]     "" i] A
+        [B][A]      "" i == B
 
         [B][A](foo,bar,baz) ap == foo [[B][A](bar,baz) ap] A
-        [B][A]() ap == B
 
-A potential difficulty with this is distinguishing an empty sequence `()` from a singleton sequence with an empty command, e.g. `(baz)`. 
-
-
-
-
-This isn't a bad model for command sequences. It can iterate without a fixpoint loop. It can't capture the continuation implicitly, but we can model continuatio passing explicitly if we so desire. At the bytecode level, such command sequences might be represented as `[[foo][[bar][[baz][e]c]c]c]` with appropriate `e` and `c`. 
-
-But that isn't the only option. We could instead generalize as:
-
-        "hello" == (#104 C, #101 C, #108 C, #108 C, #111 C)
-        #3 == (t,t,t,)
-
-
-
-
-A variant model producing `[[B][A](bar,baz) ap][A] foo` would also work well, more sensitive to the type of `foo` and `A` but also more expressive due to implicit continuation capture
-
-a bit more expressive but also )
-
-
-OTOH, this is not the only option. With a tweak to how we model texts, we could be using:
-
-        [B][A](foo,bar,baz) ap = [[B][A](bar,baz) ap] foo A
-
-This option requires `A` to be aware of the type of commands like `foo`, and for commands like `foo` to be aware of the continuation.
-
-*Note:* ABC will not include a syntax for command sequences. They aren't essential for systems integration, and the plain bytecode representation will be efficient enough (especially with appropriate accelerators). Instead, command sequences are presented as *editable views* of bytecode, such as with [claw command sequences](CommandLine.md).
