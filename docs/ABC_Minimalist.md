@@ -189,6 +189,14 @@ Ideally, this can be used with some static type inference. At runtime, we might 
 
 Use of an ABC value for the type descriptor is a very interesting idea, IMO. It can enable flexible abstraction and composition of type descriptors within a codebase. Further, these values can simply be fed back into a type checker *also* provided in the codebase, enabling user development of static type safety. 
 
+### Rendering Attributes and Animated Evaluation
+
+Directly manipulating a program after it's in evaluation is problematic. But simply rendering it for evaluation seems within reason. We can probably use annotations to attach rendering attributes to subprograms much like I describe for manifest types, above. 
+
+        [B][renderOptions]{&render}d
+
+The `[renderOptions]{&render}d` could then be reconstructed when we serialize our values, making the attribute accessible to a rendering tool. OTOH, it might be simpler and more efficient, and a better separation of concerns, to simply drive rendering by use of value sealing. 
+
 ## Runtime and Performance
 
 ### API
