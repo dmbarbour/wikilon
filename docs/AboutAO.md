@@ -91,10 +91,9 @@ Summary of constraints:
  * word dependencies (`{%dupd}{%swap}`)
  * value sealing (`{:foo} {.foo}`)
  * annotations (`{&static}{&copyable}`)
- * debug gates for breakpoints or trace points (`{@foo}`)
+ * gates for active debugging (`{@foo}`)
 * texts are limited to:
  * exclude C0 (except LF), DEL, C1
  * exclude surrogate codepoints U+D800..U+DFFF
  * exclude replacement char U+FFFD
 
-I might increase word size limits to support embedding secure hashes, 

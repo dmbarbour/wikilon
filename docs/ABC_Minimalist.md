@@ -70,9 +70,22 @@ Embedded literals have the format:
 
 Literals must be valid UTF-8 with a small blacklist (no control (C0, C1, DEL) except LF, no surrogates, and no replacement char). When applied as a program, literals will support iteration over every contained UTF-8 byte. The assumption here is that byte-level ops are the common ones. 
 
-An implementation of ABC is expected to provide compact representations rather than expand these into the Church encodings, i.e. to an extent that we're actually working with small numbers and bytestrings under the hood.
+Semantically, these data embeddings have a Church encoding suitable for command sequences in general. ABC doesn't provide a syntactic sugar for command sequences, but assume an [editable view](CommandLine.md) presented them as: `(foo, bar, baz)`, then we have:
 
-I haven't chosen a formal representation yet. I'm aiming to unify *Numbers, Literals, and Command Sequences*.
+        [D][A](foo,bar,baz)i == foo [[D][A](bar,baz)i] A
+        [D][A]# i == D
+
+        #0      == #
+        #1      == ()
+        #2      == (,)
+        #5      == (,,,,)
+
+        ""      == #
+        "h"     == (#104)
+        "hello" == (#104, #101, #108, #108, #111)
+
+These semantics are easy enough to achieve within ABC, e.g. using forms `#=[di] (a)=[[a]#s]` for some sequence combinator `s`. (Which I'll work out soon enough.) More usefully, I think this will be an effective sequencing model for a lot of use cases.
+
 
 ### The ABC Dictionary
 
@@ -99,14 +112,14 @@ ABC supports symbolic extensions by embedding tokens in code. Tokens are short t
 * manifest type assertions, static or dynamic
 * control scope and interaction of computations
 * mark values or computations as erroneous
-* add debugging breakpoints or tracepoints
+* add debugging breakpoints or logpoints
 * provide hints for rendering of results
 
 I currently use tokens for annotations, gates, seals, and links.
 
 Annotations are identified by a `&` prefix, and have miscellaneous use but always have *identity* semantics. For example, `{&par}` marks a block for parallel evaluation, `{&nat}` might assert we have a natural number, and `{&jit}` might tell our runtime to compile some code. 
 
-Gates are identified by prefix `@`, e.g. `{@bp123}`. Gates provide a simple basis for active debugging. At the runtime level, gates may be configured by name to serve as breakpoints, tracepoints, or to let data pass. They can easily be leveraged to animate program evaluation.
+Gates are identified by prefix `@`, e.g. `{@bp123}`. Gates provide a simple basis for active debugging. At the runtime level, gates may be configured by name to serve as breakpoints, logpoints, or to let data pass. They can easily be leveraged to animate program evaluation.
 
 Sealing uses paired tokens, e.g. `{:foo}` and `{.foo}`. The semantics is simply that `{.s}{:s}` and `{:s}{.s}` must be *identity behaviors*. With program rewriting, we can simply delete those sequences, but it's also feasible to use wrapper/unwrapper techniques on whole streams of values. One must use `[{:s}]` and `[{.s}]` to scope sealers to specific parts of a computation.
 
@@ -175,18 +188,20 @@ Rich types are feasible. It's a bad idea to squeeze much logic into a token, but
 
 Program rewriting makes debugging relatively easy. We can render the whole program 'state' after something goes wrong. Use of breakpoints can augment this further by enabling developers to observe intermediate states and step through problematic parts of a computation. 
 
-I propose to reify breakpoints by use of 'named gate' tokens. The behavior of a gate will be configured by name at the runtime level, e.g. as open, closed, trace.
+I propose to reify breakpoints by use of 'named gate' tokens. The behavior of a gate will be configured by name at the runtime level, e.g. as open, closed, logging, tracing.
 
-        [A]{@foo} == [A]            (if open or trace)
+        [A]{@foo} == [A]            (if open)
         [A]{@foo} == [A]{@foo:123}  (if closed. `123` unique)
 
 Our closed gate acts much like a breakpoint. Any upstream computation that depends on `[A]` will stall. Our runtime will continue evaluation for anything that isn't waiting on that gate. When we return, our program might be stalled on *many* gates. Depending on the computation, we might stall on multiple instances of our `{@foo}` gate. 
 
-To 'continue' our program, we'll must delete some of the stalled breakpoints then run more evaluation steps. Renaming gates upon stalling makes it easier both to highlight active breakpoints for a user and to specify which breakpoints to delete. For example, we might delete `{@foo:*}` or `{@foo:123}` specifically.
+To 'continue' our program, we'll must delete some of the stalled breakpoints then run more evaluation steps. Renaming gates upon stalling makes it easier both to highlight active breakpoints for a user and to specify which breakpoints to delete. For example, we might delete `{@foo:*}` or `{@foo:123}` specifically. Continuing specific paths in program while leaving the rest frozen could be a simple
 
-A tracing gate acts as an open gate but additionally adds the value to a gate-specific log for debugging purposes. This would support log-based debugging and profiling (including printf-style debugging). However, other than requiring much less space, tracing isn't nearly as good for debugging as would be *program animation* because you lose the context to really grok the log.
+A logging gate acts as an open gate but additionally copies each value to a gate specific log. This can support conventional log-based debugging, profiling, and a few other use-cases. Of course, it also has many weaknesses of conventional log-based debugging, such as providing limited context. To see entire program states while still offering a temporal progression, one sould instead try *program animation*.
 
-#### Gates for Program Animation
+A tracing gate will add contagious 'markers' to our values, with a limited generation or hop count. I haven't worked out the details quite yet, but the intention is that
+
+#### Use of Gates for Program Animation
 
 To animate on `{@foo}` we take a snapshot, evaluate as far as we can go, delete all the `{@foo:*}` gates, then repeat until no `{@foo:*}` gates are generated. Ultimately, we have many megabytes or gigabytes of deterministic program snapshots representing valid temporal progression that we can render into frames and animate.
 
@@ -196,11 +211,12 @@ Rendering with multiple gates is straightforward. The most useful strategies are
 
 Program animation might be augmented by providing some annotations to guide rendering decisions.
 
+
 ## Runtime and Performance
 
 ### API
 
-The API will be oriented around building a 'program' left to right in terms of injecting data (texts, numbers) and operations, evaluating it, then extracting data. We might also identify errors, extract trace messages, or continue evaluations involving breakpoints. 
+The API will be oriented around building a 'program' left to right in terms of injecting data (texts, numbers) and operations, evaluating it, then extracting data. We might also identify errors, extract log messages, or continue evaluations involving breakpoints. 
 
 During evaluation, all program level errors are modeled via `{&error}`. The context level issue of 'running out of memory' shall be handled by a checkpoint-based evaluation mode so that, while we might lose a little work, our program state remains valid.
 
@@ -299,79 +315,5 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 * `{&nat}` - use runtime's natural number format
 * `{&binary}` - represent a compact sequence of bytes
 * `{&stow}` - move data out of working memory
-* `{&trash}` - stowage to a bit bucket (preserves substructure)
-* `{&compact}` - pack bytecode into tight compact format
-* `{&compile}` - indicate compilation for performance
-* `{&jit}` - heuristic compilation decision
-
-
-## Numbers, Literals, and Command Sequences
-
-Command sequences are useful for concise data representation, DSLs, monadic effects, modeling cooperative multi-threading, and more. Proposed Church encodings for numbers and literals also act as iterators. An intriguing possibility is to unify the ideas. 
-
-Assume command sequences are rendered as `(foo,bar,baz)` in a generic view. My idea of unification looks like the following:
-
-        #       ==  #
-        #1      ==  (n)
-        #2      ==  (n,n)
-        #3      ==  (n,n,n)
-            where `n` is ideally empty program
-        
-        ""      ==  #
-        "h"     ==  (#104 m)
-        "hello" ==  (#104 m, #101 m, #108 m, #108 m, #111 m)
-            where `m` is ideally empty program
-
-I have several desiderata:
-
-* monadic structure, join a sequence from within
-* easy to abstract command sequences, too
-* iteration may be aborted early or continued later
-* do not need a fixpoint to perform most iteration
-
-Structurally, a general form is:
-
-        (foo, bar, baz) == [[foo](bar,baz)s]
-             (bar, baz) == [[bar](baz)s]
-                  (baz) == [[baz]#s]
-
-I could flip `[foo]` and `(bar,baz)`. For legibility reasons, however, it seems wise to keep the actions in sequence order.
-
-By reifying our command, caging `foo` within `[foo]`, we can provide our sequence action `s` with control over its context. Less general forms including `[foo(bar,baz)s]` or `[(bar,baz)s foo]` make it more difficult to control context. I would favor a less general form *if* it nicely fits the unification semantics.
-
-I think I can discard models of the form `[D][A]#3i == A A A D`. I need to capture the continuation at least briefly to model aborting the sequence or controlling incremental evaluation. So below are are various semantic options I'm considering. 
-
-        [D][A]#i             == D
-            # == [di]
-
-        [D][A](foo,bar,baz)i == foo [[D][A](bar,baz)i] A
-        [D][A](foo,bar,baz)i == [[D][A](bar,baz)i] foo A
-        [D][A](foo,bar,baz)i == [[D][A](bar,baz)i] [foo] A
-
-        [D][A](foo,bar,baz)i == foo  [D][A](bar,baz) A
-        [D][A](foo,bar,baz)i == [D][A](bar,baz) foo A
-        [D][A](foo,bar,baz)i == [D][A](bar,baz) [foo] A
-
-The last option is the most expressive, and is sufficient to construct any of the others. But being more expressive isn't necessarily a *good* thing, e.g. exposing `[foo]` means we can splice, dice, and reorder commands, making it difficult to reason about the sequence. Applying `foo` after continuation means `foo` is always forced to deal with data plumbing of moving continuations up the chain, and removes a lot of control over evaluation from the handler `A`.
-
-What is the *minimum* sufficient expressiveness for my desiderata?
-
-It seems I can do most of what I want with the least expressive first option. If I need CPS, I can model this as a `[action] call/cc` request being passed to handler `A`. If I need monadic binding, I could potentially model a `(sequence) join` output, passing the buck to `A` to flatten the result. Is that acceptable? It seems a bit painful, but it might be easy enough to use with some conventions for monadic sequences.
-
-
-Assuming we take the first op
-
-
-      
-        [B][A] #2 i == [[B][A]#1 i] A   == [[B]A]A
-        [B][A] #1 i == [[B][A]#0 i] A   ==  [B]A
-        [B][A] #0 i == B
-
-        [B][A] "hello" i == #104 [[B][A] "ello" i] A
-        [B][A]  "ello" i == #101 [[B][A]  "llo" i] A
-        ...
-        [B][A]     "o" i == #111 [[B][A]     "" i] A
-        [B][A]      "" i == B
-
-        [B][A](foo,bar,baz) ap == foo [[B][A](bar,baz) ap] A
+* `{&trash}` - recycle memory (error value), but preserve annotations
 

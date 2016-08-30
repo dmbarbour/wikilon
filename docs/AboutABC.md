@@ -225,9 +225,9 @@ An interesting possibility is to model types as structured identity-functions. F
 
 The potential for inference and injecting explicit declarations enables ABC to flexibly approach static type safety.
 
-### Annotations for Performance and Debugging
+### Annotations
 
-Annotations are tokens for debugging or performance. Annotations are indicated by use of an `&` prefix in the token, e.g. `{&text}`. Annotations have *identity* semantics - they do not affect the logically observable behavior of a correct program. However, annotations may cause a program to fail, e.g. if the program is incorrect or the annotations are used incorrectly.
+Annotations are tokens for safety or performance. Annotations are indicated by use of an `&` prefix in the token, e.g. `{&text}`. Annotations must have *identity* semantics - they do not affect the logically observable behavior of a correct program. However, annotations may cause a program to fail, e.g. if the program is incorrect or the annotations are used incorrectly.
 
 The intention is that a runtime should be able to ignore annotations it does not know about, or that are disabled for a particular use case. Some ideas for what annotations might do:
 
@@ -241,12 +241,11 @@ The intention is that a runtime should be able to ignore annotations it does not
 * move computations and data to a GPGPU
 * support and enable memoization or caching
 
-For example, an annotation `{&trash}` might indicate that a value will never be observed in the future, enabling its memory to be recycled while leaving a lightweight placeholder. Use of `{&trace}` might serialize a value to a debug output buffer or queue.
+For example, an annotation `{&trash}` might indicate that a value will never be observed in the future, enabling its memory to be recycled while leaving a lightweight placeholder. 
 
 Annotations may be paired, e.g. such that a `{&fork}` to parallelize a computation must be paired with a `{&join}` to access its result. Pairing annotations can simplify a runtime implementation, but unfortunately does resist transparency of optimizations. 
 
 Annotations may specify types, i.e. they can be *typed* identity functions. A simple case is that `{&text}` might require a `∀e.(text*e)` argument, and would compact the text value and ensure it serializes as embedded text.
-
 
 ### Value Sealing
 
@@ -267,6 +266,16 @@ Cryptographic sealing for open distributed systems seems feasible. Something lik
         {$.AES} :: ((key * (sealed a)) * e) → (a * e)
 
 However, there are many challenges surrounding cryptographic sealing regarding potential interaction with lazy or parallel futures, value stowage, and garbage collection. And they aren't a good fit for some proposed [application models](ApplicationModel.md) with AO/ABC.
+
+### Gates for Active Debugging
+
+In [minimalist ABC](ABC_Minimalist.md) I proposed use of `{@foo}` gates as a basis for debugging. The behavior of a gate is configured at the runtime level: a 'closed' gate acts as a breakpoint, an 'open' gate just passes data, and a 'trace' gate will 
+
+Our runtime can configure for every gate name
+
+Depending on our runtime configuration, such gates could serve as:
+
+* break
 
 ### Value Stowage
 
