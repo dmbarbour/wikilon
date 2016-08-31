@@ -45,18 +45,18 @@ The proposed base is just four primitive combinators.
         [A]c        == [A][A]       (copy)
         [A]d        ==              (drop)
 
-This base is small, complete, and friendly to substructural types. Additionally, the `[]` square brackets delimit first-class subprograms. The empty program is valid and has identity semantics. All programs and data have a formal semantics as a finite expansion to sequences or streams of just six characters `[abcd]`.
+This base is small, complete, and friendly to substructural types. Additionally, the `[]` square brackets delimit first-class subprograms. The empty program is valid and has identity semantics. All programs and data in ABC have a formal semantics as a finite expansion to a sequence of just six characters, `[abcd]`.
 
 For performance and convenience, ABC provides more than the primitives:
 
-* Lightweight formatting: SP and LF are equivalent to the empty program. 
-* Compact embeddings for data: numbers and embedded literals.
-* A standard Dictionary of accelerated bytecodes for performance. 
+* Lightweight formatting: SP and LF equivalent to empty program. 
+* Embeddings for numbers, literals, and symbol structured data.
+* A standard dictionary of accelerated opcodes for performance. 
 * Symbolic extensions for performance, safety, debugging, linking.
 
 ABC is restricted to purely functional computation. However, ABC is easily used to construct effectful programs using [monadic effects](http://okmij.org/ftp/Haskell/extensible/more.pdf) or other [application models](ApplicationModel.md) that shift the actual performance of effects to an external agent. (I wonder if tuple spaces would be a good fit.)
 
-### ABC Data Embedding
+### Numbers and Literals
 
 Natural numbers are embedded as `#42` or `#108`. The character `#` introduces a new zero value while the digits `0-9` each multiply by ten then add the digit. When applied, natural numbers would iterate a given program based on their specified count. 
 
@@ -70,10 +70,7 @@ Embedded literals have the format:
 
 Literals must be valid UTF-8 with a small blacklist (no control (C0, C1, DEL) except LF, no surrogates, and no replacement char). When applied as a program, literals will support iteration over every contained UTF-8 byte. The assumption here is that byte-level ops are the common ones. 
 
-Semantically, these data embeddings have a Church encoding suitable for command sequences in general. ABC doesn't provide a syntactic sugar for command sequences, but assume an [editable view](CommandLine.md) presented them as: `(foo, bar, baz)`, then we have:
-
-        [D][A](foo,bar,baz)i == foo [[D][A](bar,baz)i] A
-        [D][A]# i == D
+Semantically, these data embeddings have a Church encoding, one that unifies nicely with command sequences. ABC doesn't provide a concise representation for command sequences. However, an [editable view](CommandLine.md) can present something like: `(foo,bar,baz)`. In this case, our unification is:
 
         #0      == #
         #1      == ()
@@ -84,10 +81,14 @@ Semantically, these data embeddings have a Church encoding suitable for command 
         "h"     == (#104)
         "hello" == (#104, #101, #108, #108, #111)
 
-These semantics are easy enough to achieve within ABC, e.g. using forms `#=[di] (a)=[[a]#s]` for some sequence combinator `s`. (Which I'll work out soon enough.) More usefully, I think this will be an effective sequencing model for a lot of use cases.
+        [B][A](foo,bar,baz)i == foo [[B][A](bar,baz)i] A
+        [B][A](baz) == baz [[B][A]#i] A
+        [B][A]#i == B
+        [A]i == A
 
+The semantics is to follow each action in the sequence with a client-provided action. This is generic. Monadic sequences can be represented if our actions `(foo,bar,baz)` each includes another possibly empty command sequence, and `[A]` uses a fixpoint. But a lot of useful iteration can be expressed without fixpoints. Todo: Provide definitions for these semantics.
 
-### The ABC Dictionary
+### The Dictionary
 
 ABC includes a standard set of additional operators, each bound to a UTF-8 codepoint and defined by its expansion to an `[abcd]` sequence. The operators `#1234567890` for embedding number data are examples of ABCD operators. There are many potential motivations for adding an operator to the dictionary:
 
@@ -100,9 +101,9 @@ ABC doesn't need dictionaries just to compress code. For that, we'll use token-b
 
 ABCD will likely get started with arithmetic and common data plumbing (like `i` for inline instead of `[][]baad`). Long term, I'd like to have operators that allow me to easily embed binaries within text, perhaps render images when rendering code, support for rich number models (rationals, decimals), GPGPU accelerated vector processing, or acceleration of monads for stuff like stateful programming (like Haskell's `runST`) or futures/promises.
 
-### ABC Tokens
+### Tokens
 
-ABC supports symbolic extensions by embedding tokens in code. Tokens are short texts wrapped by curly braces, e.g. `{foo}`. In addition to being valid literal texts, tokens are limited to 255 bytes utf-8, and exclude LF and the curly braces internally. ABC tokens must have *pure* semantics, but there's great deal they can do within that limit. Examples:
+ABC supports symbolic extensions by embedding tokens in code. Tokens are short texts wrapped by curly braces, e.g. `{foo}`. In addition to being valid literal texts, tokens are limited to 255 bytes utf-8, and exclude LF and the curly braces internally. ABC tokens must have pure, local semantics. However, there's great deal they can do within that limit. Examples:
 
 * acyclic, static or dynamic linking of code
 * stow large values to disk, save working memory
@@ -114,16 +115,48 @@ ABC supports symbolic extensions by embedding tokens in code. Tokens are short t
 * mark values or computations as erroneous
 * add debugging breakpoints or logpoints
 * provide hints for rendering of results
+* lightweight symbol structured data
 
-I currently use tokens for annotations, gates, seals, and links.
+I use tokens for annotations, gates, sealing, linking, and structured data.
 
 Annotations are identified by a `&` prefix, and have miscellaneous use but always have *identity* semantics. For example, `{&par}` marks a block for parallel evaluation, `{&nat}` might assert we have a natural number, and `{&jit}` might tell our runtime to compile some code. 
 
-Gates are identified by prefix `@`, e.g. `{@bp123}`. Gates provide a simple basis for active debugging. At the runtime level, gates may be configured by name to serve as breakpoints, logpoints, or to let data pass. They can easily be leveraged to animate program evaluation.
+Gates are identified by prefix `@`, e.g. `{@bp123}`. Gates provide a simple basis for active debugging. At the runtime level, gates may be configured by name to serve as breakpoints, logpoints, tracepoints, or to simply let data pass. They can easily be leveraged to animate program evaluation.
 
-Sealing uses paired tokens, e.g. `{:foo}` and `{.foo}`. The semantics is simply that `{.s}{:s}` and `{:s}{.s}` must be *identity behaviors*. With program rewriting, we can simply delete those sequences, but it's also feasible to use wrapper/unwrapper techniques on whole streams of values. One must use `[{:s}]` and `[{.s}]` to scope sealers to specific parts of a computation.
+Sealing uses paired tokens, e.g. `{:foo}` and `{.foo}`. The semantics is simply that `{.s}{:s}` and `{:s}{.s}` are *identity behaviors*. With program rewriting, we can simply delete those sequences, but it's also feasible to use wrapper/unwrapper techniques on whole streams of values. One must use `[{:s}]` and `[{.s}]` to scope sealers to specific parts of a computation.
 
-Linking replaces a token by a ABC program. For example, in [Awelon Object](AboutAO.md) our token `{%foo}` is replaced by definition of `foo` in the bound dictionary. Value stowage also produces links. Links must form a directed acyclic graph, and every linked program must at least be syntactically complete (e.g. `[]` blocks balanced, literals terminated). 
+Linking replaces a token by a ABC program. For example, in [Awelon Object](AboutAO.md) our token `{%foo}` is replaced by definition of `foo` in the bound dictionary. Value stowage also produces links. Links must form a directed acyclic graph, and every linked program must at least be syntactically complete (e.g. `[]` blocks balanced, literals terminated).
+
+Structured data is described below.
+
+### Structured Data: Records and Variants
+
+ABC leverages tokens to support records and variants. Nothing in this section increases the expressiveness of ABC. By design, it is entirely possible to implement these records and variants in terms of `[abcd]` strings. However, eschewing the definition and making their use more explicit simplifies:
+
+* data entry and extraction, language interop
+* plain text legibility and flexible rendering
+* structural type safety, static or dynamic
+* performance, be it interpreted or compiled
+
+Usage:
+
+        {#}[A]{/foo}[B]{/bar} {*foo}  ==  {#}[B]{/bar}  [A]
+        [B][A]{#c}{?c} == {#c} A
+        [B][A]{#d}{?c} == {#c} B
+
+Tokens:
+
+        {#}             empty anonymous record
+        {/field}        write the record field
+        {*field}        read field from record
+        {#class}        empty variant record
+        {?class}        match variant record
+
+Record operations are linear. It is invalid to read a field that has not been written, and invalid to write a field twice, but reading removes the field from the record thus update may be expressed as a read-write action. Use of these field operations on anything other than a record (anonymous or variant) is an error. Variant records are subject to lightweight pattern matching. Matching against anything that is not specifically a variant record is an error. 
+
+Records may be copied or dropped (ops `c` and `d`) if and only if those operations are permitted for every individual member. Records are not usable as functions, i.e. use of `a` or `b` with a record as the top stack argument is an error.
+
+*Note:* ABC offers no features to reflectively enumerate fields or test existence of a field in ABC's primitive records. The client is expected to know the types being received, or at least the options for variants. Restricting how much can be observed about a record simplifies static typing, e.g. with row and variant polymorphism.
 
 ## Ideas and Idioms
 
