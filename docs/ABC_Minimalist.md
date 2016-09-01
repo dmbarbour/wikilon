@@ -252,11 +252,9 @@ An ABC program consists of `[abcd]` sequences with embedded `{tokens}`. Construc
 
 We could request a token `"/foo"` and get back `[{/foo}]`. 
 
-By modeling metaprogramming monadically, we gain a *lot* of advantages. Metaprogramming becomes first class, subject to composition, abstraction, and flexible reuse. With a free monad, the special `{runMP}` construct might be wrapped or entirely replaced by user-defined code, enabling testing in various mockup environments and precise control over dependencies. The `{runMP}` action also provides a clear scope for staging.
+By modeling metaprogramming monadically, we gain a *lot* of advantages. Metaprogramming becomes first class, subject to composition, abstraction, and flexible reuse. With a free monad, the special `{runMP}` construct might be wrapped or entirely replaced by user-defined code, enabling testing in various mockup environments and precise control over dependencies. The runMonad action action provides a clear scope for staging.
 
-In context of [AO dictionaries](AboutAO.md), we might eschew `{runMP}` in favor of a filesystem-like build system (which is a good fit for the [application model](ApplicationModel.md)). For example, given `foo.make = [program in a make monad]` we run the program to reconstruct `foo` whenever its recorded dependencies change. The make monad would double as a metaprogramming monad, providing a means to construct tokens.
-
-
+In context of [AO dictionaries](AboutAO.md), we might eschew `{runMP}` in favor of a filesystem-like build model at the dictionary layer. For example, given `foo.make = [program in a make monad]` we run the program to reconstruct `foo` whenever its recorded dependencies change. The make monad would double as a metaprogramming monad, providing a means to construct tokens. And this should be a good fit for the [application model](ApplicationModel.md).
 
 ## Runtime and Performance
 
