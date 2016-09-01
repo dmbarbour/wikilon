@@ -248,13 +248,11 @@ Program animation might be augmented by providing some annotations to guide rend
 
 An ABC program consists of `[abcd]` sequences with embedded `{tokens}`. Construction of `[abcd]` sequences requires no special attention. Thus a complete metaprogramming solution only needs to inject tokens. The challenge is to achieve this without compromising effective static reasoning or reusability of code. My best ideas so far involve modeling construction of tokens as an *effect*. 
 
-        [program in MP monad]{runMP}
+        [program in MP monad] {runMP}
 
-We could request a token `"/foo"` and get back `[{/foo}]`. 
+The simplest `{runMP}` monad might simply answer every request with a wrapped token. For example, we could request a token `"/foo"` and get back `[{/foo}]`. Note that `{runMP}` might not exist as an explicit token, but rather be implicit to a programming environment. For example, within an [AO dictionary](AboutAO.md) we might use `foo.make = [program in MP monad]` and implicitly reconstruct `foo` from `foo.make` whenever its dependencies change. (A staged build system is an easy fit for Awelon project's [application models](ApplicationModel.md).)
 
-By modeling metaprogramming monadically, we gain a *lot* of advantages. Metaprogramming becomes first class, subject to composition, abstraction, and flexible reuse. With a free monad, the special `{runMP}` construct might be wrapped or entirely replaced by user-defined code, enabling testing in various mockup environments and precise control over dependencies. The runMonad action action provides a clear scope for staging.
-
-In context of [AO dictionaries](AboutAO.md), we might eschew `{runMP}` in favor of a filesystem-like build model at the dictionary layer. For example, given `foo.make = [program in a make monad]` we run the program to reconstruct `foo` whenever its recorded dependencies change. The make monad would double as a metaprogramming monad, providing a means to construct tokens. And this should be a good fit for the [application model](ApplicationModel.md).
+Monadic metaprogramming is first class, subject to composition, abstraction, and flexible reuse. Assuming MP is a free monad, we can intercept the requests, simulate and test how the metaprogram would behave under a variety of mockup environments and configurations. There is very clear staging between the metaprogram and its computed output. Any competing model for metaprogramming will need to do at least this well for serious consideration.
 
 ## Runtime and Performance
 
