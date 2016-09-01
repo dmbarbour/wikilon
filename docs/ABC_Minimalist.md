@@ -68,7 +68,7 @@ Embedded literals have the format:
          text terminates with LF ~
         ~
 
-Literals must be valid UTF-8 with a small blacklist (no control (C0, C1, DEL) except LF, no surrogates, and no replacement char). When applied as a program, literals will support iteration over every contained UTF-8 byte. The assumption here is that byte-level ops are the common ones. 
+Literals must be valid UTF-8 with a small blacklist (no control (C0, C1, DEL) except LF, no surrogates, and no replacement char). When applied as a program, literals will support iteration over every contained UTF-8 byte. (The assumption here is that byte-level ops are the common case.)
 
 Semantically, these data embeddings have a Church encoding, one that unifies nicely with command sequences. ABC doesn't provide a concise representation for command sequences. However, an [editable view](CommandLine.md) can present something like: `(foo,bar,baz)`. In this case, our unification is:
 
@@ -131,7 +131,7 @@ Structured data is described below.
 
 ### Structured Data: Records and Variants
 
-ABC leverages tokens to support records and variants. Nothing in this section increases the expressiveness of ABC. By design, it is entirely possible to implement these records and variants in terms of `[abcd]` strings. However, eschewing the definition and making their use more explicit simplifies:
+ABC structured data leverages tokens to support row-polymorphic records and polymorphic variants. Nothing here increases expressiveness of ABC, i.e. the tokens involved could be modeled in terms of *linking* ABC subprograms. However, leaving the definitions and representations implicit simplifies:
 
 * data entry and extraction, language interop
 * plain text legibility and flexible rendering
@@ -152,11 +152,11 @@ Tokens:
         {#class}        empty variant record
         {?class}        match variant record
 
-Record operations are linear. It is invalid to read a field that has not been written, and invalid to write a field twice, but reading removes the field from the record thus update may be expressed as a read-write action. Use of these field operations on anything other than a record (anonymous or variant) is an error. Variant records are subject to lightweight pattern matching. Matching against anything that is not specifically a variant record is an error. 
+Record operations are linear. It is invalid to read a field that is not in the record, it is invalid to write a field that is already in the record, and reading removes a field from a record. Update may be expressed as a read-write action. 
 
-Records may be copied or dropped (ops `c` and `d`) if and only if those operations are permitted for every individual member. Records are not usable as functions, i.e. use of `a` or `b` with a record as the top stack argument is an error.
+Use of field operations on anything other than an anonymous or variant record is an error. Matching against anything that is not specifically a variant record is an error. Records may be copied or dropped (ops `c` and `d`) if and only if those operations are permitted for every contained member. Records are not usable as functions, i.e. use of `a` or `b` with a record as the primary argument is an error.
 
-*Note:* ABC offers no features to reflectively enumerate fields or test existence of a field in ABC's primitive records. The client is expected to know the types being received, or at least the options for variants. Restricting how much can be observed about a record simplifies static typing, e.g. with row and variant polymorphism.
+*Note:* See metaprogramming idioms for construction of types from data.
 
 ## Ideas and Idioms
 
@@ -243,6 +243,19 @@ Hopefully, these snapshots will share enough structure that it's easy to focus o
 Rendering with multiple gates is straightforward. The most useful strategies are probably 'parallel' or 'hierarchical'. For parallel, we just treat `{@foo}` and `{@bar}` as a single gate, and continue them together. For the hierarchical, we run `{@foo}` as far as it can go, take a single step in `{@bar}`, then go back to `{@foo}`. We could random or interleave strategies or similar, but I suspect those would share less structure between frames. 
 
 Program animation might be augmented by providing some annotations to guide rendering decisions.
+
+## ABC Metaprogramming
+
+An ABC program consists of `[abcd]` sequences with embedded `{tokens}`. Construction of `[abcd]` sequences requires no special attention. Thus a complete metaprogramming solution only needs to inject tokens. The challenge is to achieve this without compromising effective static reasoning or reusability of code. My best ideas so far involve modeling construction of tokens as an *effect*. 
+
+        [program in MP monad]{runMP}
+
+We could request a token `"/foo"` and get back `[{/foo}]`. 
+
+By modeling metaprogramming monadically, we gain a *lot* of advantages. Metaprogramming becomes first class, subject to composition, abstraction, and flexible reuse. With a free monad, the special `{runMP}` construct might be wrapped or entirely replaced by user-defined code, enabling testing in various mockup environments and precise control over dependencies. The `{runMP}` action also provides a clear scope for staging.
+
+In context of [AO dictionaries](AboutAO.md), we might eschew `{runMP}` in favor of a filesystem-like build system (which is a good fit for the [application model](ApplicationModel.md)). For example, given `foo.make = [program in a make monad]` we run the program to reconstruct `foo` whenever its recorded dependencies change. The make monad would double as a metaprogramming monad, providing a means to construct tokens.
+
 
 
 ## Runtime and Performance
@@ -349,4 +362,6 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 * `{&binary}` - represent a compact sequence of bytes
 * `{&stow}` - move data out of working memory
 * `{&trash}` - recycle memory (error value), but preserve annotations
+
+
 
