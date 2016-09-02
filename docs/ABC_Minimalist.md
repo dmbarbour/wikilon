@@ -50,7 +50,7 @@ This base is small, complete, and friendly to substructural types. Additionally,
 For performance and convenience, ABC provides more than the primitives:
 
 * Lightweight formatting: SP and LF equivalent to empty program. 
-* Embeddings for numbers, literals, and symbol structured data.
+* Lightweight embeddings for data: natural numbers, literals.
 * A standard dictionary of accelerated opcodes for performance. 
 * Symbolic extensions for performance, safety, debugging, linking.
 
@@ -58,7 +58,7 @@ ABC is restricted to purely functional computation. However, ABC is easily used 
 
 ### Numbers and Literals
 
-Natural numbers are embedded as `#42` or `#108`. The character `#` introduces a new zero value while the digits `0-9` each multiply by ten then add the digit. When applied, natural numbers would iterate a given program based on their specified count. 
+Natural numbers are embedded as `#42` or `#108`. The operator `#` introduces a new zero value while the operators `0-9` each multiply by ten then add the digit. When applied, natural numbers would iterate a given program based on their specified count. 
 
 Embedded literals have the format:
 
@@ -115,7 +115,6 @@ ABC supports symbolic extensions by embedding tokens in code. Tokens are short t
 * mark values or computations as erroneous
 * add debugging breakpoints or logpoints
 * provide hints for rendering of results
-* lightweight symbol structured data
 
 I use tokens for annotations, gates, sealing, and linking.
 
@@ -327,7 +326,11 @@ It seems feasible to shift the modeling of structured data primarily to ABCD.
 
 It will take time to develop the right ABCD extensions. But meanwhile, data entry at least can be simplified by use of an appropriate [claw](CommandLine.md) extension for JSON-like data. And data extraction can always use active extraction. This should also give me time to find a *right* data model for my actual use cases, without committing early to a specification I might later regret.
 
-### Structured Data: Records and Variants (Deprecated)
+And if it turns out I really need symbol structured data... 
+
+I can more easily add it later than remove it later.
+
+### Symbol Structured Data: Records and Variants (Deprecated)
 
 ABC structured data leverages tokens to support row-polymorphic records and polymorphic variants. Nothing here increases expressiveness of ABC, i.e. the tokens involved could be modeled in terms of *linking* ABC subprograms. However, leaving the definitions and representations implicit simplifies:
 
