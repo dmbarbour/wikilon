@@ -68,6 +68,7 @@ wikrt_env* wikrt_env_create(char const* dirPath, uint32_t dbMaxMB)
         return NULL;
     }
     // thread pools? etc?
+    // probably will configure thread pools after construction
     return e;
 }
 
@@ -89,26 +90,37 @@ void wikrt_env_sync(wikrt_env* e) {
 
 wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB) 
 {
-    if(NULL == e) { return NULL; }
+    if((NULL == e) || (cxSizeMB < 1)) { errno = EINVAL; return NULL; }
 
-    size_t const size = ((size_t)cxSizeMB * (1024 * 1024));
-    bool const validSize = (0 < size) 
-                        && (size < (SIZE_MAX / 8)) // let's not push limits here
-                        && (cxSizeMB == (size >> 20)); // shift doesn't overflow
+    // Allocate contiguous [(context)(arena1)....(arena2)....].
+    // Buffer the context to keep it out of the wikrt_cx cache line.
+    size_t const bcx_size = WIKRT_LNBUFF_POW2(sizeof(wikrt_cx), 256);
+    size_t const alloc_size = ((size_t)cxSizeMB * (1024 * 1024)) - bcx_size;
+    if(alloc_size >= WIKRT_SIZE_MAX) { errno = EFBIG; return NULL; }
+    wikrt_cx* const cx = malloc(alloc_size);
+    if(NULL == cx) { return NULL; }
 
-    if(!validSize) { return NULL; }
+    // Initialize the context.
+    (*cx) = (wikrt_cx){0}; // clear everything!
+    cx->gclock = (pthread_rwlock_t)PTHREAD_RWLOCK_INITIALIZER;
+    cx->cxlock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    cx->ecode  = WIKRT_OK;
 
-    wikrt_cx* const cx = calloc(1, sizeof(wikrt_cx));
-    void* const mem = malloc(size);
-    void* const ssp = malloc(size);
+    cx->size   = (wikrt_size)((alloc_size - bcx_size) / 2);
+    cx->arena1 = (wikrt_addr) bcx_size;
+    cx->arena2 = cx->arena1 + cx->size;
+    cx->last   = cx->arena2 + cx->size;
 
-    bool const alloc_ok = (NULL != cx) && (NULL != mem) && (NULL != ssp);
-    if(!alloc_ok) { free(cx); free(mem); free(ssp); return NULL; }
+    assert((cx->size == wikrt_cellbuff(cx->size))
+        && (cx->last == (wikrt_addr) alloc_size));
 
-    cx->mem     = mem;
-    cx->ssp     = ssp;
-    cx->size    = (wikrt_size) size; 
-    cx->ecode   = WIKRT_OK;
+    // initalize allocators
+    cx->m_mem   = cx->last;
+    cx->m_alloc = cx->m_mem;
+    cx->mem     = cx->arena2;
+    cx->alloc   = cx->mem;
+    cx->cap     = cx->mem; // force GC upon alloc
+    cx->ssp     = cx->arena1;
 
     // initialize value registers
     cx->val     = WIKRT_REG_VAL_INIT; 
@@ -121,7 +133,7 @@ wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB)
     wikrt_set_step_effort(cx, WIKRT_DEFAULT_EFFORT_MODEL, 
                               WIKRT_DEFAULT_EFFORT_VALUE);
 
-    
+    // add our context to our environment.
     wikrt_add_cx_to_env(cx, e);
     return cx;
 }
@@ -131,7 +143,6 @@ void wikrt_add_cx_to_env(wikrt_cx* cx, wikrt_env* e)
     assert(NULL == cx->env);
     wikrt_env_lock(e); {
         cx->env = e;
-        cx->cxid = ++(e->cxcount); 
         cx->cxnext = e->cxlist;
         if(NULL != cx->cxnext) { cx->cxnext->cxprev = cx; }
         e->cxlist = cx;
@@ -152,6 +163,7 @@ void wikrt_remove_cx_from_env(wikrt_cx* cx)
         cx->env = NULL;
     } wikrt_env_unlock(e);
 }
+
 
 void wikrt_cx_reset(wikrt_cx* cx) 
 {
@@ -176,11 +188,10 @@ void wikrt_cx_destroy(wikrt_cx* cx)
     // free the trace buffer (if any)
     free(cx->tb.buf);
 
-    // free the memory and scratch arenas
-    free(cx->mem);
-    free(cx->ssp);
+    pthread_mutex_destroy(&(cx->cxlock));
+    pthread_rwlock_destroy(&(cx->gclock));
 
-    // recover wikrt_cx structure
+    // recover wikrt_cx structure and memory.
     free(cx);
 }
 
@@ -190,6 +201,16 @@ wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
 
 static void wikrt_mem_compact(wikrt_cx* cx) 
 {
+    // MULTI THREAD TODO: 
+    // - tell worker threads to get out
+    // - use gc write lock to wait for workers
+    // - decide whether to GC mature memory
+
+    // Compaction is simply a memory movement action, from the current
+    // thread to the current GC space. 
+    wikrt 
+
+
 
     // It's easiest to think about 'compaction' as just a move operation, 
     // albeit one that we know our destination has sufficient space.
@@ -199,7 +220,6 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     cx->ssp = cx0.mem;
     cx->mem = cx0.ssp;
     cx->alloc = cx->size;
-    cx->skip = 0;
 
     // Free lists are used only to recycle memory a bit before compaction
     // occurs. (The benefits of recycling marginal in most cases, but can
@@ -226,22 +246,19 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     _Static_assert(!WIKRT_HAS_SHARED_REFCT_OBJECTS, "todo: figure out refcts during compaction");
 
     // sanity check: compaction must not increase memory usage.
-    assert(wikrt_mem_in_use(&cx0) >= wikrt_mem_in_use(cx));
+    assert(wikrt_memory_volume(&cx0) >= wikrt_memory_volume(cx));
 
     // keep stats. compaction count is useful for effort quotas. 
     // compaction size is useful for heuristic memory pressure.
     cx->compaction_count += 1;
-    cx->compaction_size  = wikrt_mem_in_use(cx);
+    cx->compaction_size  = wikrt_memory_volume(cx);
     cx->bytes_compacted  += cx->compaction_size;
-    cx->bytes_collected  += wikrt_mem_in_use(&cx0) - cx->compaction_size;
+    cx->bytes_collected  += wikrt_memory_volume(&cx0) - cx->compaction_size;
 }
 
 
 bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
 {
-    // If in error state, prevent GC to more quickly abort computation.
-    if(wikrt_has_error(cx)) { return false; }
-
     wikrt_size const prior_size = cx->compaction_size;
 
     // basic compacting GC
@@ -251,10 +268,18 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
         return false;
     }
 
-    // Large contexts can create a lot of undesirable VM pressure and hurt
-    // memory locality. This can be mitigated by using less than maximum
-    // memory, and by use of madvise(DONTNEED) to clear memory allocations 
-    // that won't see reuse in the near future.
+    // If our context is larger than necessary, that may create some VM
+    // pressure that isn't necessary or desirable. This can be mitigated
+    // by using less than maximum memory, or potentially by use of 
+    // madvise(DONTNEED) to clear memory allocations that won't see reuse
+    // in the near future. OTOH, I've had some difficulty with madvise,
+    // and in particular how it is less than conservative and doesn't work
+    // on larger memory arenas.
+    //
+    // I might end up tweaking this idea a little, i.e. to allow a context
+    // to effectively 'grow' in size but without shrinking. Or I might
+    // just eliminate the idea entirely as irrelevant with migrant worker
+    // threads.
 
     _Static_assert((WIKRT_MEM_FACTOR >= 0) 
                 && (WIKRT_MEM_FACTOR_PRIOR >= 0) 
@@ -264,15 +289,11 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
                              + (WIKRT_MEM_FACTOR_PRIOR * prior_size)
                              + ((WIKRT_MEM_FACTOR + 1) * sz);
     wikrt_size const pgsz = (WIKRT_MEM_PAGEMB << 20);
-    wikrt_size const target = WIKRT_LNBUFF(desired, pgsz); // page aligned
-    if(cx->alloc > target) {
-        cx->skip  = (cx->alloc - target);
-        cx->alloc = target;
+    wikrt_addr const target = WIKRT_LNBUFF(desired, pgsz); // page aligned
+    if(wikrt_mem_available(cx,(target - cx->mem))) {
+        cx->cap = target;
     }
 
-    // Ideally I could release and regain memory, e.g. with madvise.
-    // But I've been having some difficulty with madvise and mmap
-    // based arenas recently, at least for very large arenas.
 
     return true;
 } 
@@ -289,8 +310,8 @@ void wikrt_peek_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s)
     s->gc_bytes_collected = cx->bytes_collected;
     s->gc_bytes_processed = cx->bytes_compacted + cx->bytes_collected;
     s->memory_lastgc  = cx->compaction_size;
-    s->memory_current = wikrt_mem_in_use(cx);
-    s->memory_nextgc  = cx->size - cx->skip;
+    s->memory_current = wikrt_memory_volume(cx);
+    s->memory_nextgc  = (cx->cap - cx->mem) + wikrt_mature_volume(cx);
     s->memory_maximum = cx->size; 
 
     // sanity check
@@ -308,32 +329,6 @@ void wikrt_cx_relax(wikrt_cx* cx) {
     // For now, just a non-operation.
 }
 
-#if 0 
-// NOTE: I need to carefully consider how I'll support communication
-// between contexts in the presence of parallel futures. Whether I
-// even want to try.
-void wikrt_move(wikrt_cx* const lcx, wikrt_cx* const rcx) 
-{
-    if(lcx == rcx) { wikrt_set_error(lcx, WIKRT_INVAL); return; }
-    wikrt_copy_m(lcx, NULL, true, rcx);
-    if(wikrt_has_error(lcx)) { return; }
-
-    wikrt_val* const pv = wikrt_pval(lcx, lcx->val);
-    lcx->val = pv[1];
-    wikrt_drop_v(lcx, pv[0], NULL);
-}
-
-void wikrt_copy_move(wikrt_cx* lcx, wikrt_cx* rcx) {
-    if(lcx == rcx) { wikrt_set_error(lcx, WIKRT_INVAL); return; }
-    wikrt_ss ss = 0;
-    wikrt_copy_m(lcx, &ss, false, rcx);
-    if(!wikrt_ss_copyable(ss)) {
-        wikrt_set_error(lcx, WIKRT_ETYPE);
-        wikrt_set_error(rcx, WIKRT_ETYPE);
-    }
-}
-#endif
-
 void wikrt_copy(wikrt_cx* cx) {
     wikrt_ss ss = 0;
     wikrt_copy_m(cx, &ss, false, cx);
@@ -342,9 +337,18 @@ void wikrt_copy(wikrt_cx* cx) {
     }
 }
 
+// Get a address for top edge of cx->ssp after assuming ssp
+// contains the mature space. Useful for a stack counting 
+// downwards. 
+static wikrt_addr wikrt_ssp_last(wikrt_cx* cx)
+{
+    return (cx->ssp + (cx->size - wikrt_mature_volume(cx)));
+}
+
+
 static inline wikrt_size wikrt_peek_size_ssp(wikrt_cx* cx) {
     return WIKRT_CELLSIZE
-         + wikrt_vsize(cx, cx->ssp, *wikrt_pval(cx, cx->val));
+         + wikrt_vsize(cx, wikrt_paddr(cx, cx->ssp), *wikrt_pval(cx, cx->val));
 }
 
 size_t wikrt_peek_size(wikrt_cx* cx)
@@ -369,19 +373,19 @@ void wikrt_copy_m(wikrt_cx* lcx, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx)
     }
 
     // reserve space in `rcx`. Also, size estimates for validation.
-    wikrt_size const max_alloc = WIKRT_CELLSIZE + wikrt_mem_in_use(lcx);
+    wikrt_size const max_alloc = WIKRT_CELLSIZE + wikrt_memory_volume(lcx);
     bool const use_size_bypass = WIKRT_ALLOW_SIZE_BYPASS && wikrt_mem_available(rcx, max_alloc);
     wikrt_size const alloc_est = use_size_bypass ? 0 : wikrt_peek_size_ssp(lcx);
     if(!wikrt_mem_reserve(rcx, alloc_est)) { return; }
 
     // Note: wikrt_mem_reserve may move lcx->val (when lcx == rcx).
     // anyhow, we now have sufficient space to perform our copy!
-    wikrt_size const s0 = wikrt_mem_in_use(rcx);
+    wikrt_size const s0 = wikrt_memory_volume(rcx);
     wikrt_val const copy_src = wikrt_pval(lcx, lcx->val)[0];
     wikrt_val copy_dst = WIKRT_UNIT;
     wikrt_copy_r(lcx, copy_src, ss, moving_copy, rcx, &copy_dst);
     wikrt_intro_r(rcx, copy_dst);
-    wikrt_size const sf = wikrt_mem_in_use(rcx);
+    wikrt_size const sf = wikrt_memory_volume(rcx);
 
     // Validate size estimate.
     wikrt_size const alloc_act = sf - s0;
@@ -445,8 +449,9 @@ wikrt_val_type wikrt_peek_type(wikrt_cx* cx)
 }
 
 // build stack of items that need at least one cell to allocate
+// In this case, I'm going to assume our stack counts upwards.
 static inline void wikrt_add_size_task(wikrt_val** s, wikrt_val v) {
-    if(!wikrt_copy_shallow(v)) { *((*s)++) = v; }
+    if(!wikrt_copy_shallow(v)) { *((*s)++)) = v; }
 }
 
 wikrt_size wikrt_vsize(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0)
@@ -507,11 +512,15 @@ wikrt_size wikrt_vsize(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0)
     return result;
 } 
 
-// Add an address to our copy stack.
+// Add an address to our copy stack. 
+//
+// This uses a temporary stack at the upper edge of our allocation range
+// and counting downwards. The assumption is that we already know we have
+// enough space for the value being constructed.
 static inline void wikrt_add_copy_task(wikrt_cx* rcx, wikrt_addr** s, wikrt_val v, wikrt_addr a) 
 {
     *(wikrt_paddr(rcx,a)) = v;
-    if(!wikrt_copy_shallow(v)) { *((*s)++) = a; }
+    if(!wikrt_copy_shallow(v)) { *(--(*s)) = a; }
 }
 static inline void wikrt_cpv(wikrt_cx* rcx, wikrt_addr** s
     , wikrt_val const* pv, wikrt_addr addr, wikrt_size ix) 
@@ -640,21 +649,19 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx
             }
         }} 
 
-        dst = (s0 == s) ? NULL : wikrt_paddr(rcx, *(--s));
+        dst = (s0 == s) ? NULL : wikrt_paddr(rcx, *(s++));
     } while(NULL != dst);
 }
 
 void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx, wikrt_val* rval)
 {
-    // Note: I use a stack in rcx->mem (that builds upwards from zero). An invariant
-    // is that this stack is always smaller than the space left to be allocated. This
-    // is achieved by ensuring only addresses that need to be allocated are recorded
-    // within the stack.
+    // I'm allocating from rcx->alloc towards rcx->cap. So I'm using a stack that
+    // counts downwards from rcx->cap towards rcx->alloc. The invariant is that this
+    // stack is always smaller than the space I have yet to allocate.
     if(NULL != ss) { (*ss) = 0; }
     (*rval) = lval;
-    wikrt_copy_rs(lcx, rcx, ss, moving_copy, ((wikrt_addr*)(rcx->mem)), rval);
+    wikrt_copy_rs(lcx, rcx, ss, moving_copy, wikrt_paddr(rcx, rcx->cap), rval);
 }
-
 
 static inline void wikrt_add_drop_task(wikrt_val** s, wikrt_val v) {
     // any copy_shallow values are also shallow for drop.
@@ -732,6 +739,10 @@ void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0, wikrt_
             }
         }} // ends else { switch(*pv) { 
     } // end loop
+}
+
+void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
+    wikrt_drop_sv(cx, wikrt_paddr(cx, cx->ssp), v, ss);
 }
 
 void wikrt_drop(wikrt_cx* cx) 
@@ -1568,19 +1579,16 @@ static inline bool wikrt_cx_has_integer(wikrt_cx* cx) {
 bool wikrt_peek_i32(wikrt_cx* cx, int32_t* i32)
 {
     _Static_assert(!WIKRT_HAS_BIGINT, "assuming just small integers for now");
-    _Static_assert((WIKRT_SMALLINT_MIN <= INT32_MIN), "assuming possible overflow for i32"); 
+    _Static_assert((INT32_MIN <= WIKRT_SMALLINT_MIN), "assuming no overflow for i32");
     if(!wikrt_cx_has_integer(cx)) { (*i32) = 0; return false; }
-    wikrt_int const i = wikrt_v2i(wikrt_pval(cx, cx->val)[0]);
-    if(i > INT32_MAX) { (*i32) = INT32_MAX; return false; }
-    else if(INT32_MIN > i) { (*i32) = INT32_MIN; return false; }
-    else { (*i32) = (int32_t)i; return true; }
+    (*i32) = (int32_t) wikrt_v2i(wikrt_pval(cx, cx->val)[0]);
+    return true;
 }
 
 bool wikrt_peek_i64(wikrt_cx* cx, int64_t* i64)
 {
     _Static_assert(!WIKRT_HAS_BIGINT, "assuming just small integers for now");
-    _Static_assert(((INT64_MIN <= WIKRT_SMALLINT_MIN) && (WIKRT_SMALLINT_MAX <= INT64_MAX))
-        , "assuming no overflow for Wikilon integer to i64"); 
+    _Static_assert((INT64_MIN <= WIKRT_SMALLINT_MIN), "assuming no overflow for Wikilon integer to i64"); 
     if(!wikrt_cx_has_integer(cx)) { (*i64) = 0; return false; }
     (*i64) = (int64_t) wikrt_v2i(wikrt_pval(cx, cx->val)[0]);
     return true;

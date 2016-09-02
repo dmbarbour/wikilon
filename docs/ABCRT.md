@@ -55,7 +55,7 @@ Compression might improve performance by a fair margin, but must be weighted aga
 
 A context will hold a single, implicit object. The API will directly manipulate this object: injection of input or code, stepwise evaluation with quota-based limits, flexible extraction or use of results. This API should more or less reflect how the program itself operates on code, albeit with somewhat more freedom.
 
-Rather than fine-grained errors per API call, I'll try to report errors at the program's toplevel. Precise debugging will be driven more by annotations and automatic testing. 
+I'd like to have 'errors' be an okay thing, like the worst that happens is we don't make any progress during evaluation, unless the problem was expressing an over sized program. If a program is too large, we might have options to divide it into smaller pieces automatically, or to resize our context to fit.
 
 ## Structure
 
@@ -87,7 +87,9 @@ For very large contexts (e.g. 100MB) and very small computations (e.g. 10kB) it 
 
 ### Parallelism 
 
-Context-local parallelism is quite feasible.
+Context-local parallelism is quite feasible. 
+
+It seems the main hit I'll take is that I cannot assume full access to the scratch space when computing certain things. This can make compact copies more difficult, for example (without using a big C stack) because I might need to allocate some memory just for copy metadata.
 
 See [Parallelism.md](Parallelism.md)
 
@@ -106,7 +108,15 @@ A 'shared object' is one where we copy our reference rather than the data. Motiv
 
 Shared objects work best for binaries, where I won't be destructively observing them. This includes texts and compact bytecode modeled as binaries. Potentially JIT code, which might need special attention.
 
-Context-local shared objects need structure-sharing within each context to avoid 'exploding' the number of copies when moving data into a new context. A mature GC space may also be necessary to avoid copying the object too frequently during compaction.
+Context-local shared objects could simplify a lot of problems related to memory management, i.e. because I won't need external buffering just to get most of the advantages. The cost is that it may complicate GC, or require mostly redundant logic for copy operator vs. GC. (This isn't too bad, the logic is simple enough and I could make it simpler by eliminating some data types.)
+
+I could perhaps simplify by copying without a guarantee of sufficient space, albeit at the cost of performing a great deal more conditional checks. This could be mitigated, perhaps, by (at least for lists) computing sizes and allocating larger sequences. 
+
+ larger chunks.
+
+Context-local shared objects need structure-sharing within each context to avoid 'exploding' the number of copies when moving data into a new context. A mature GC space may also be necessary to avoid copying the object too frequently during compaction. 
+
+ task of GC for our mature space seems somewhat problematic.
 
 I suspect shared objects at the `wikrt_env` layer would be best for performance, especially if there is a lot of communication between contexts.
 

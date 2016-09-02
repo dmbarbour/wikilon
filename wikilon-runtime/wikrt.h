@@ -12,14 +12,6 @@
 #include <limits.h>
 #include <pthread.h>
 
-_Static_assert((INTPTR_MIN == INT64_MIN) && 
-               (INTPTR_MAX == INT64_MAX) &&
-               (UINTPTR_MAX == UINT64_MAX)
-              ,"Wikilon runtime expects a 64-bit system");
-_Static_assert((sizeof(uintptr_t) == 8), "Expecting eight byte pointers.");
-_Static_assert((sizeof(uint8_t) == 1), "Expecting one byte octets.");
-_Static_assert((sizeof(uint8_t) == sizeof(char)), "Expecting safe cast between char and uint8_t");
-
 /** Value references internal to a context. */
 typedef uint32_t wikrt_val;
 #define WIKRT_VAL_MAX UINT32_MAX
@@ -434,12 +426,20 @@ static inline wikrt_otag wikrt_ss_to_block_flags(wikrt_ss ss)
 /* Internal API calls. */
 void wikrt_copy_m(wikrt_cx*, wikrt_ss*, bool moving_copy, wikrt_cx*); 
 
+wikrt_addr wikrt_ssp_last(wikrt_cx* cx);
+
 // wikrt_vsize: return allocation required to deep-copy a value. 
 //   Use a given stack space for recursive structure tasks.
+//
+// TODO: I'll need to tweak this to receive a pair of stacks, one to count
+// shared context-local objects once and only once, the other to count and
+// scan the normal objects.
 wikrt_size wikrt_vsize(wikrt_cx* cx, wikrt_val* stack, wikrt_val v);
 #define WIKRT_ALLOW_SIZE_BYPASS 0
 
 void wikrt_drop_sv(wikrt_cx* cx, wikrt_val* stack, wikrt_val v, wikrt_ss* ss);
+void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss);
+
 void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx, wikrt_val* rval);
 //  moving_copy: true if we're actually moving the value, i.e. the origin is dropped.
 
@@ -484,6 +484,7 @@ bool wikrt_valid_token_l(char const* s, size_t len);
 typedef uint64_t stowaddr;
 
 
+
 bool wikrt_db_init(wikrt_db**, char const*, uint32_t dbMaxMB);
 void wikrt_db_destroy(wikrt_db*);
 void wikrt_db_flush(wikrt_db*);
@@ -513,43 +514,65 @@ typedef struct trace_buf {
 
 /** wikrt_cx internal state.
  *
- * A context is represented primarily by a contiguous block of memory,
- * with relative addressing. 
+ * The main task of a context is managing memory. A context is represented
+ * primarily by a contiguous block of memory with relative addressing. 
  *
- *     [(context)(mem).......(ssp)........]
+ *     [(context)(arena1).....(arena2).....]
  *
- * Allocation is simply bump-pointer towards the given cap. At this 
- * time there are no free lists, so we simply perform a compaction
- * and switch to the other space whenever an allocation fails.
+ * Memory is divided into two primary arenas. We'll be using a compacting
+ * collector, so allocation is less than 50% efficient. However, this is
+ * mostly an issue for active memory, not for stowage or big data. Within
+ * memory, we have two arenas, and two growth zones - active and mature. 
+ *
+ * Mature memory grows downwards from the top of an arena, while any active
+ * memory grows upwards from the bottom of an arena. Data moves to the mature
+ * space during compaction. Compaction infrequently hits the mature space,
+ * e.g. once every thirty cycles.
+ *
+ * Active memory may also leverage free-list GC. This enables migrant worker
+ * threads to perform more useful work between compactions, which is handled
+ * by the API thread.
  */ 
 struct wikrt_cx {
-    // unique context identifier within env
-    uint64_t            cxid;       
-
     // doubly-linked list of contexts in environment.
+    wikrt_env          *env;
     wikrt_cx           *cxnext;
     wikrt_cx           *cxprev;
-    wikrt_env          *env;
 
+    // context-level locks
+    pthread_rwlock_t    gclock;     // prevent compacting GC
+    pthread_mutex_t     cxlock;     // shared wikrt_cx stuff
+
+    // context status
     wikrt_ecode         ecode;      // WIKRT_OK or first error
 
-    // registers, root data
+    // memory management
+    wikrt_size          size;       // Size of one arena. 
+    wikrt_addr          arena1;     // Start of first arena  (sizeof(wikrt_cx) + buffer)
+    wikrt_addr          arena2;     // Start of second arena (arena1+size)
+    wikrt_addr          last;       // First invalid address (arena2+size)
+
+    wikrt_addr          m_mem;      // start of mature space (arena2 or last)
+    wikrt_addr          m_alloc;    // bottom of mature space (allocate downwards)
+    
+    wikrt_addr          ssp;        // scratch space location (opposite mem)
+    wikrt_addr          mem;        // active memory arena (arena1 or arena2).
+    wikrt_addr          alloc;      // active memory allocation cursor.
+    wikrt_addr          cap;        // soft cap for next compacting GC.
+
+    // registers, rooted data
     wikrt_val           val;        // primary value 
     wikrt_val           pc;         // program counter (eval)
     wikrt_val           cc;         // continuation stack (eval)
     wikrt_val           txn;        // transaction data
 
-    // memory management
-    wikrt_addr          mem0;       // allocator start (for size)
-    wikrt_addr          alloc;      // next allocation address
-    wikrt_addr          cap;        // soft allocation limit
-    wikrt_size          size;       // hard allocation limit
 
     // memory statistics
-    wikrt_size          compaction_size;   // memory after compaction
-    uint64_t            compaction_count;  // count of compactions
-    uint64_t            bytes_compacted;   // bytes copied during compaction
-    uint64_t            bytes_collected;   // bytes allocated then collected
+    wikrt_size          compaction_size;    // memory after compaction
+    uint64_t            compaction_count;   // count of compactions
+    uint64_t            compaction_mmct;    // count mature memory compactions 
+    uint64_t            bytes_compacted;    // bytes copied during compaction
+    uint64_t            bytes_collected;    // bytes allocated then collected
 
     // secondary output buffer 
     trace_buf           tb;
@@ -563,6 +586,16 @@ struct wikrt_cx {
     //   child contexts for parallelism
     //   track futures and stowage
 };
+
+/* Notes on shared memory: 
+ *
+ * Context local shared memory is a bit finicky. I need to be careful that
+ * every reference to my mature memory space also has a a value in my
+ * unshared space, or I might break stacks when computing sizes of things.
+ * Fortunately, I'd probably want to do that anyway, to support offset and
+ * range within the shared binary.
+ */
+
 
 // just for sanity checks
 #define WIKRT_CX_REGISTER_CT 4
@@ -619,7 +652,7 @@ _Static_assert((0 == WIKRT_O), "assuming WIKRT_O has no bit flags");
 
 static inline bool wikrt_mem_available(wikrt_cx* cx, wikrt_sizeb sz) 
 { 
-    return ((cx->alloc + sz) <= cx->cap);
+    return ((cx->cap - cx->alloc) >= sz);
 }
 bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz);
 static inline bool wikrt_mem_reserve(wikrt_cx* cx, wikrt_sizeb sz) 
@@ -638,10 +671,13 @@ static inline wikrt_addr wikrt_alloc_r(wikrt_cx* cx, wikrt_sizeb sz)
     return r;
 }
 
-// How much space have we allocated with data since last compaction?
-//  Note that some of this memory might be dead if GC'd.
-static inline wikrt_size wikrt_mem_in_use(wikrt_cx const* cx) { 
-    return (cx->alloc - cx->mem0);
+static inline wikrt_size wikrt_mature_volume(wikrt_cx* cx) { return (cx->m_mem - cx->m_alloc); }
+static inline wikrt_size wikrt_active_volume(wikrt_cx* cx) { return (cx->alloc - cx->mem); }
+
+// How much memory is in use, based on allocation since prior compaction. 
+static inline wikrt_size wikrt_memory_volume(wikrt_cx const* cx) { 
+    return wikrt_active_volume(cx) 
+         + wikrt_mature_volume(cx);
 }
 
 static inline wikrt_val wikrt_alloc_cellval_r(wikrt_cx* cx, wikrt_tag tag, wikrt_val fst, wikrt_val snd) 
@@ -669,9 +705,6 @@ static inline void wikrt_wrap_otag(wikrt_cx* cx, wikrt_otag otag) {
 }
 
 void wikrt_intro_id_block(wikrt_cx* cx);
-
-static inline void wikrt_drop_v(wikrt_cx* cx, wikrt_val v, wikrt_ss* ss) {
-    wikrt_drop_sv(cx, (wikrt_val*)(cx->ssp), v, ss); }
 
 static inline void wikrt_pval_swap(wikrt_val* a, wikrt_val* b) {
     wikrt_val const tmp = (*b);

@@ -858,8 +858,8 @@ bool wikrt_valid_key(char const*);
  *
  * A transaction is not reified as a value within the context, rather
  * it is an implicit object attached to the context. It is recommended,
- * but not enforced, that effects and communications (such as wikrt_move)
- * only be performed between transactions.
+ * but not enforced, that effects or communications between contexts 
+ * be performed between transactions.
  */
 void wikrt_txn_create(wikrt_cx*);
 
