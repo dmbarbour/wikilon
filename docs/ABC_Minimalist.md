@@ -117,7 +117,7 @@ ABC supports symbolic extensions by embedding tokens in code. Tokens are short t
 * provide hints for rendering of results
 * lightweight symbol structured data
 
-I use tokens for annotations, gates, sealing, linking, and structured data.
+I use tokens for annotations, gates, sealing, and linking.
 
 Annotations are identified by a `&` prefix, and have miscellaneous use but always have *identity* semantics. For example, `{&par}` marks a block for parallel evaluation, `{&nat}` might assert we have a natural number, and `{&jit}` might tell our runtime to compile some code. 
 
@@ -126,37 +126,6 @@ Gates are identified by prefix `@`, e.g. `{@bp123}`. Gates provide a simple basi
 Sealing uses paired tokens, e.g. `{:foo}` and `{.foo}`. The semantics is simply that `{.s}{:s}` and `{:s}{.s}` are *identity behaviors*. With program rewriting, we can simply delete those sequences, but it's also feasible to use wrapper/unwrapper techniques on whole streams of values. One must use `[{:s}]` and `[{.s}]` to scope sealers to specific parts of a computation.
 
 Linking replaces a token by a ABC program. For example, in [Awelon Object](AboutAO.md) our token `{%foo}` is replaced by definition of `foo` in the bound dictionary. Value stowage also produces links. Links must form a directed acyclic graph, and every linked program must at least be syntactically complete (e.g. `[]` blocks balanced, literals terminated).
-
-Structured data is described below.
-
-### Structured Data: Records and Variants
-
-ABC structured data leverages tokens to support row-polymorphic records and polymorphic variants. Nothing here increases expressiveness of ABC, i.e. the tokens involved could be modeled in terms of *linking* ABC subprograms. However, leaving the definitions and representations implicit simplifies:
-
-* data entry and extraction, language interop
-* plain text legibility and flexible rendering
-* structural type safety, static or dynamic
-* performance, be it interpreted or compiled
-
-Usage:
-
-        {#}[A]{/foo}[B]{/bar} {*foo}  ==  {#}[B]{/bar}  [A]
-        [B][A]{#c}{?c} == {#c} A
-        [B][A]{#d}{?c} == {#c} B
-
-Tokens:
-
-        {#}             empty anonymous record
-        {/field}        write the record field
-        {*field}        read field from record
-        {#class}        empty variant record
-        {?class}        match variant record
-
-Record operations are linear. It is invalid to read a field that is not in the record, it is invalid to write a field that is already in the record, and reading removes a field from a record. Update may be expressed as a read-write action. 
-
-Use of field operations on anything other than an anonymous or variant record is an error. Matching against anything that is not specifically a variant record is an error. Records may be copied or dropped (ops `c` and `d`) if and only if those operations are permitted for every contained member. Records are not usable as functions, i.e. use of `a` or `b` with a record as the primary argument is an error.
-
-*Note:* See metaprogramming idioms for construction of types from data.
 
 ## Ideas and Idioms
 
@@ -243,16 +212,6 @@ Hopefully, these snapshots will share enough structure that it's easy to focus o
 Rendering with multiple gates is straightforward. The most useful strategies are probably 'parallel' or 'hierarchical'. For parallel, we just treat `{@foo}` and `{@bar}` as a single gate, and continue them together. For the hierarchical, we run `{@foo}` as far as it can go, take a single step in `{@bar}`, then go back to `{@foo}`. We could random or interleave strategies or similar, but I suspect those would share less structure between frames. 
 
 Program animation might be augmented by providing some annotations to guide rendering decisions.
-
-## ABC Metaprogramming
-
-An ABC program consists of `[abcd]` sequences with embedded `{tokens}`. Construction of `[abcd]` sequences requires no special attention. Thus a complete metaprogramming solution only needs to inject tokens. The challenge is to achieve this without compromising effective static reasoning or reusability of code. My best ideas so far involve modeling construction of tokens as an *effect*. 
-
-        [program in MP monad] {runMP}
-
-The simplest `{runMP}` monad might simply answer every request with a wrapped token. For example, we could request a token `"/foo"` and get back `[{/foo}]`. Note that `{runMP}` might not exist as an explicit token, but rather be implicit to a programming environment. For example, within an [AO dictionary](AboutAO.md) we might use `foo.make = [program in MP monad]` and implicitly reconstruct `foo` from `foo.make` whenever its dependencies change. (A staged build system is an easy fit for Awelon project's [application models](ApplicationModel.md).)
-
-Monadic metaprogramming is first class, subject to composition, abstraction, and flexible reuse. Assuming MP is a free monad, we can intercept the requests, simulate and test how the metaprogram would behave under a variety of mockup environments and configurations. There is very clear staging between the metaprogram and its computed output. Any competing model for metaprogramming will need to do at least this well for serious consideration.
 
 ## Runtime and Performance
 
@@ -360,4 +319,48 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 * `{&trash}` - recycle memory (error value), but preserve annotations
 
 
+## Deprecating Symbolic Structure and Metaprogramming 
+
+The idea of using tokens for structured data (polymorphic records and variants) would give me a jump start for turning ABC into a practical language. However, it comes with a large cost: I require *metaprogramming* to introduce new tokens - new field names or variants. I ultimately don't need metaprogramming for anything else. 
+
+It seems feasible to shift the modeling of structured data primarily to ABCD.
+
+It will take time to develop the right ABCD extensions. But meanwhile, data entry at least can be simplified by use of an appropriate [claw](CommandLine.md) extension for JSON-like data. And data extraction can always use active extraction. This should also give me time to find a *right* data model for my actual use cases, without committing early to a specification I might later regret.
+
+### Structured Data: Records and Variants (Deprecated)
+
+ABC structured data leverages tokens to support row-polymorphic records and polymorphic variants. Nothing here increases expressiveness of ABC, i.e. the tokens involved could be modeled in terms of *linking* ABC subprograms. However, leaving the definitions and representations implicit simplifies:
+
+* data entry and extraction, language interop
+* plain text legibility and flexible rendering
+* structural type safety, static or dynamic
+* performance, be it interpreted or compiled
+
+Usage:
+
+        {#}[A]{/foo}[B]{/bar} {*foo}  ==  {#}[B]{/bar}  [A]
+        [B][A]{#c}{?c} == {#c} A
+        [B][A]{#d}{?c} == {#c} B
+
+Tokens:
+
+        {#}             empty anonymous record
+        {/field}        write the record field
+        {*field}        read field from record
+        {#class}        empty variant record
+        {?class}        match variant record
+
+Record operations are linear. It is invalid to read a field that is not in the record, it is invalid to write a field that is already in the record, and reading removes a field from a record. Update may be expressed as a read-write action. 
+
+Use of field operations on anything other than an anonymous or variant record is an error. Matching against anything that is not specifically a variant record is an error. Records may be copied or dropped (ops `c` and `d`) if and only if those operations are permitted for every contained member. Records are not usable as functions, i.e. use of `a` or `b` with a record as the primary argument is an error.
+
+### ABC Metaprogramming (Deprecated)
+
+An ABC program consists of `[abcd]` sequences with embedded `{tokens}`. Construction of `[abcd]` sequences requires no special attention. Thus a complete metaprogramming solution only needs to inject tokens. The challenge is to achieve this without compromising effective static reasoning or reusability of code. My best ideas so far involve modeling construction of tokens as an *effect*. 
+
+        [program in MP monad] {runMP}
+
+The simplest `{runMP}` monad might simply answer every request with a wrapped token. We could request a token `"/foo"` and get back `[{/foo}]`. Note that `{runMP}` might not exist as an explicit token, but rather be implicit to a programming environment. Within an [AO dictionary](AboutAO.md) we might use `foo.make = [program in MP monad]` and implicitly reconstruct `foo` from `foo.make` whenever its dependencies change. (A staged build system is an easy fit for Awelon project's [application models](ApplicationModel.md).)
+
+Monadic metaprogramming is first class, subject to composition, abstraction, and flexible reuse. Assuming MP is a free monad, we can intercept the requests, simulate and test how the metaprogram would behave under a variety of mockup environments and configurations. There is very clear staging between the metaprogram and its computed output. Any competing model for metaprogramming will need to do at least this well for serious consideration.
 
