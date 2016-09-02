@@ -191,26 +191,14 @@ Program rewriting makes debugging relatively easy. We can render the whole progr
 
 I propose to reify breakpoints by use of 'named gate' tokens. The behavior of a gate will be configured by name at the runtime level, e.g. as open, closed, logging, tracing.
 
-        [A]{@foo} == [A]            (if open)
-        [A]{@foo} == [A]{@foo:123}  (if closed. `123` unique)
+        [A]{@foo} == [A]            (if open, logging, tracing)
+        [A]{@foo} == [A]{@foo:123}  (if closed. `123` unique in output)
 
-Our closed gate acts much like a breakpoint. Any upstream computation that depends on `[A]` will stall. Our runtime will continue evaluation for anything that isn't waiting on that gate. When we return, our program might be stalled on *many* gates. Depending on the computation, we might stall on multiple instances of our `{@foo}` gate. 
+A logging gate copies data value to a log, perhaps with some profiling metadata. Tracing gates tag values as they pass through with simple markers, enabling us to better know their origins. Logging gates support the common printf-style of debugging, while tracing gates can provide extra context in a language without stacks.
 
-To 'continue' our program, we'll must delete some of the stalled breakpoints then run more evaluation steps. Renaming gates upon stalling makes it easier both to highlight active breakpoints for a user and to specify which breakpoints to delete. For example, we might delete `{@foo:*}` or `{@foo:123}` specifically. Continuing specific paths in program while leaving the rest frozen could be a simple
+A closed gate acts much like a breakpoint, and stalls computations depending on `[A]`. Other parts of the program will continue evaluation, so it is possible we'll stall on many gates, or many instances of the same gate. To continue computation, we may explicitly open arbitrary gates upon which we're stalled. Stalling gates are renamed to simplify precise identification.
 
-A logging gate acts as an open gate but additionally copies each value to a gate specific log. This can support conventional log-based debugging, profiling, and a few other use-cases. Of course, it also has many weaknesses of conventional log-based debugging, such as providing limited context. To see entire program states while still offering a temporal progression, one sould instead try *program animation*.
-
-A tracing gate will add contagious 'markers' to our values, with a limited generation or hop count. I haven't worked out the details quite yet, but the intention is that
-
-#### Use of Gates for Program Animation
-
-To animate on `{@foo}` we take a snapshot, evaluate as far as we can go, delete all the `{@foo:*}` gates, then repeat until no `{@foo:*}` gates are generated. Ultimately, we have many megabytes or gigabytes of deterministic program snapshots representing valid temporal progression that we can render into frames and animate.
-
-Hopefully, these snapshots will share enough structure that it's easy to focus on important changes. But that's up to developers choosing good breakpoints. However, at the very least, gates offer a lot more predictable structure than would quota driven snapshots.
-
-Rendering with multiple gates is straightforward. The most useful strategies are probably 'parallel' or 'hierarchical'. For parallel, we just treat `{@foo}` and `{@bar}` as a single gate, and continue them together. For the hierarchical, we run `{@foo}` as far as it can go, take a single step in `{@bar}`, then go back to `{@foo}`. We could random or interleave strategies or similar, but I suspect those would share less structure between frames. 
-
-Program animation might be augmented by providing some annotations to guide rendering decisions.
+Repeatedly evaluating with closed gates, taking a snapshot, then continuing can support program animation with a lot more structure than rendering on quota, and provides the same benefits of 'logging' but with a lot more available context.
 
 ## Runtime and Performance
 
@@ -322,13 +310,13 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 
 The idea of using tokens for structured data (polymorphic records and variants) would give me a jump start for turning ABC into a practical language. However, it comes with a large cost: I require *metaprogramming* to introduce new tokens - new field names or variants. I ultimately don't need metaprogramming for anything else. 
 
-It seems feasible to shift the modeling of structured data primarily to ABCD.
+It seems feasible to shift the modeling of structured data primarily to ABCD, i.e. by developing appropriate accelerators to receive the data.
 
-It will take time to develop the right ABCD extensions. But meanwhile, data entry at least can be simplified by use of an appropriate [claw](CommandLine.md) extension for JSON-like data. And data extraction can always use active extraction. This should also give me time to find a *right* data model for my actual use cases, without committing early to a specification I might later regret.
+It will take time to develop the right ABCD extensions. Meanwhile, data entry at least can be simplified by use of an appropriate [claw](CommandLine.md) extension for JSON-like data, or perhaps use of an association sequence/list. And data extraction can always use active extraction. This should also give me time to find a *right* data model for my actual use cases, without committing early to a specification I might later regret.
 
-And if it turns out I really need symbol structured data... 
+And if it turns out I need symbol/token structured data... I can more easily add it later than remove it later.
 
-I can more easily add it later than remove it later.
+Also, while metaprogramming may be convenient in other contexts, anything that involves searching the codebase would better be modeled explicitly - e.g. modeling indexed collections within the dictionary - because doing so simplifies solidifying results or testing with various different results, and also simplifies dependency management.
 
 ### Symbol Structured Data: Records and Variants (Deprecated)
 
@@ -361,9 +349,9 @@ Use of field operations on anything other than an anonymous or variant record is
 
 An ABC program consists of `[abcd]` sequences with embedded `{tokens}`. Construction of `[abcd]` sequences requires no special attention. Thus a complete metaprogramming solution only needs to inject tokens. The challenge is to achieve this without compromising effective static reasoning or reusability of code. My best ideas so far involve modeling construction of tokens as an *effect*. 
 
-        [program in MP monad] {runMP}
+        [program in Meta monad] {runMeta}
 
-The simplest `{runMP}` monad might simply answer every request with a wrapped token. We could request a token `"/foo"` and get back `[{/foo}]`. Note that `{runMP}` might not exist as an explicit token, but rather be implicit to a programming environment. Within an [AO dictionary](AboutAO.md) we might use `foo.make = [program in MP monad]` and implicitly reconstruct `foo` from `foo.make` whenever its dependencies change. (A staged build system is an easy fit for Awelon project's [application models](ApplicationModel.md).)
+The simplest `{runMeta}` monad might answer every request with a wrapped token. We could request a token `"/foo"` and get back `[{/foo}]`. Note that `{runMeta}` might not exist as an explicit token, but rather be implicit to a programming environment. Within an [AO dictionary](AboutAO.md) we might use `foo.make = [program in Meta monad]` and implicitly reconstruct `foo` from `foo.make` whenever its recorded dependencies change. (A staged build system is an easy fit for Awelon project's [application models](ApplicationModel.md).)
 
-Monadic metaprogramming is first class, subject to composition, abstraction, and flexible reuse. Assuming MP is a free monad, we can intercept the requests, simulate and test how the metaprogram would behave under a variety of mockup environments and configurations. There is very clear staging between the metaprogram and its computed output. Any competing model for metaprogramming will need to do at least this well for serious consideration.
+Monadic metaprogramming is first class, subject to composition, abstraction, and flexible reuse. Assuming a free monad, we can intercept the requests, simulate and test how the metaprogram would behave under a variety of mockup environments and configurations. There is very clear staging between the metaprogram and its computed output, no risk of incomplete output, and it's easy to record requested dependencies. Any competing model for metaprogramming should do at least this well for serious consideration.
 

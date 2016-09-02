@@ -269,13 +269,7 @@ However, there are many challenges surrounding cryptographic sealing regarding p
 
 ### Gates for Active Debugging
 
-In [minimalist ABC](ABC_Minimalist.md) I proposed use of `{@foo}` gates as a basis for debugging. The behavior of a gate is configured at the runtime level: a 'closed' gate acts as a breakpoint, an 'open' gate just passes data, and a 'trace' gate will 
-
-Our runtime can configure for every gate name
-
-Depending on our runtime configuration, such gates could serve as:
-
-* break
+In [minimalist ABC](ABC_Minimalist.md) I proposed use of `{@foo}` gates as a basis for debugging. The behavior of a gate is configured at the runtime level: a 'closed' gate acts as a breakpoint, an 'open' gate just passes data, a 'log' gate will record data to a log, and a 'trace' gate will tag data so we can work out where it's been.
 
 ### Value Stowage
 
