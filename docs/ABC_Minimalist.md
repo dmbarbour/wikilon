@@ -256,7 +256,9 @@ Candidate representation:
         Recognized annotations
         A great many accelerators
 
-This seems an efficient and lightweight representation. 
+This seems an efficient and lightweight representation.
+
+I'm not sure how I'll use that `010` tag. Maybe for 'zipper' objects or finger-trees for open blocks during evaluation. Maybe for context-local shared objects (refcts, etc.).
 
 ### Parallel Runtime
 
@@ -282,7 +284,9 @@ Use of `{&par}` essentially enables programmers to control chunking of evaluatio
 
 ### Compilation
 
-I'm not sure how to go about compilation of term rewrite programs. I'm certain it's been done (and a quick Google search confirms this). But even if I couldn't compile those programs, I can at least compile functions that are 'complete' in the sense of accepting a finite number of arguments and producing a finite number of results.
+I'm not sure how to go about compilation of term rewrite programs. I'm certain it's been done (and a quick Google search confirms this). But let's just assume I won't succeed much at compilation in cases where I cannot completely apply a value.
+
+That still leaves a useful subset: given a compiled subprogram, I can wait to evaluate until I have a sufficient amount of input for its *arity* before applying. I can also ensure the arguments are fully evaluated. Thus, the problem reduces to evaluation of a more conventional, purely functional program. And if need arises, I can easily flip back to a compiled program's source to perform some partial applications or whatever.
 
 Aside from compilation, it would be convenient to at least support *compaction* of bytecode, such that I'm touching less memory during evaluation, copying less memory during iteration, etc..
 
@@ -304,7 +308,6 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 * `{&binary}` - represent a compact sequence of bytes
 * `{&stow}` - move data out of working memory
 * `{&trash}` - recycle memory (error value), but preserve annotations
-
 
 ## Deprecating Symbolic Structure and Metaprogramming 
 

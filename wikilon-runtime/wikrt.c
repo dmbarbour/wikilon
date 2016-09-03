@@ -207,8 +207,10 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     // - decide whether to GC mature memory
 
     // Compaction is simply a memory movement action, from the current
-    // thread to the current GC space. 
-    wikrt 
+    // thread to the current GC space.
+    wikrt_pval_swap(&(cx->mem), &(cx->ssp));
+    cx->cap = cx->mem + 
+    
 
 
 
@@ -656,8 +658,8 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx
 void wikrt_copy_r(wikrt_cx* lcx, wikrt_val lval, wikrt_ss* ss, bool moving_copy, wikrt_cx* rcx, wikrt_val* rval)
 {
     // I'm allocating from rcx->alloc towards rcx->cap. So I'm using a stack that
-    // counts downwards from rcx->cap towards rcx->alloc. The invariant is that this
-    // stack is always smaller than the space I have yet to allocate.
+    // counts downwards from rcx->cap towards rcx->alloc. The invariant is that 
+    // this stack is always smaller than the volume I have yet to allocate.
     if(NULL != ss) { (*ss) = 0; }
     (*rval) = lval;
     wikrt_copy_rs(lcx, rcx, ss, moving_copy, wikrt_paddr(rcx, rcx->cap), rval);

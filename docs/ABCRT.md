@@ -89,9 +89,13 @@ For very large contexts (e.g. 100MB) and very small computations (e.g. 10kB) it 
 
 Context-local parallelism is quite feasible. 
 
-It seems the main hit I'll take is that I cannot assume full access to the scratch space when computing certain things. This can make compact copies more difficult, for example (without using a big C stack) because I might need to allocate some memory just for copy metadata.
-
 See [Parallelism.md](Parallelism.md)
+
+It seems I'll take a hit, however, with respect to easy access to a stack for compact deep copies. The scratch space I've been using is *convenient* for fast copy and computing sizes of things. But synchronizing use of that space would easily become a synchronization bottleneck.
+
+### Checkpoints
+
+For safe evaluation and parallelism, an idea is to leverage a 'checkpoint' model. Intermediate constructions will not be rooted, so if I run out of memory during evaluation I don't need to recover from an out-of-memory status. Rooted constructs will always be a valid state, so the worst case is that I lose some progress on intermediate computations. The main issue here is potential for logging objects to be reported twice, which is not a big problem.
 
 ### Garbage Collection
 
@@ -108,17 +112,22 @@ A 'shared object' is one where we copy our reference rather than the data. Motiv
 
 Shared objects work best for binaries, where I won't be destructively observing them. This includes texts and compact bytecode modeled as binaries. Potentially JIT code, which might need special attention.
 
-Context-local shared objects could simplify a lot of problems related to memory management, i.e. because I won't need external buffering just to get most of the advantages. The cost is that it may complicate GC, or require mostly redundant logic for copy operator vs. GC. (This isn't too bad, the logic is simple enough and I could make it simpler by eliminating some data types.)
+Context-local shared objects could simplify a lot of problems related to memory management, i.e. because I won't need external buffering just to get most of the advantages. The cost is that it may complicate GC vs. copy vs. move. I'll generally need different logics to squeeze the most performance from each case. 
 
-I could perhaps simplify by copying without a guarantee of sufficient space, albeit at the cost of performing a great deal more conditional checks. This could be mitigated, perhaps, by (at least for lists) computing sizes and allocating larger sequences. 
+If I use reference counts in context of a compacting collector and multiple threads, I don't need to keep them exact. I can correct reference counts as needed. 
 
- larger chunks.
+### Fast Deep Copy
 
-Context-local shared objects need structure-sharing within each context to avoid 'exploding' the number of copies when moving data into a new context. A mature GC space may also be necessary to avoid copying the object too frequently during compaction. 
+With linear objects, much performance comes from having unique references I'm free to destructively manipulate. Unfortunately, assuming parallelism, I lose exclusive access to a per-context scratch space that is guaranteed to be large enough to serve as a stack for deep copies. And I'd rather avoid synchronization on the scratch space (e.g. use of a mutex).
 
- task of GC for our mature space seems somewhat problematic.
+Ideally, I would like to deep-copy with O(1) space. 
 
-I suspect shared objects at the `wikrt_env` layer would be best for performance, especially if there is a lot of communication between contexts.
+This is feasible if I ensure sufficient space within the tree structure to perform the traversal. The Morris algorithm could be adapted. I need a single list `null` value, at least for deep list objects. That *does* seem a viable feature: a smarter `cons` operation that handles expansion of compact singletons. The Morris algorithm performs big iteration operations down a RHS, which might also serve as a convenient moment for performing deep copy of a list spine.
+
+If this doesn't work out, I can accept a less than ideal solution. 
+
+And there are some possibilities like *latent* deep copies with shared objects. However, I'd prefer to avoid that as an implicit feature.
+
 
 ## Representations
 
