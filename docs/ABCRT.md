@@ -51,6 +51,8 @@ LevelDB doesn't truly fit Wikilon's use cases. For *any* wiki, the natural tende
 
 Compression might improve performance by a fair margin, but must be weighted against zero-copy for our data.
 
+*Thoughts:* Use lazy reference counting and updates for extra performance.
+
 ## API Concepts
 
 A context will hold a single, implicit object. The API will directly manipulate this object: injection of input or code, stepwise evaluation with quota-based limits, flexible extraction or use of results. This API should more or less reflect how the program itself operates on code, albeit with somewhat more freedom.
@@ -91,7 +93,7 @@ Context-local parallelism is quite feasible.
 
 See [Parallelism.md](Parallelism.md)
 
-It seems I'll take a hit, however, with respect to easy access to a stack for compact deep copies. The scratch space I've been using is *convenient* for fast copy and computing sizes of things. But synchronizing use of that space would easily become a synchronization bottleneck.
+It seems I'll take a hit, however, with respect to easy access to a scratch space stack for deep copies. The scratch space I've been using is *convenient* for fast copy and computing sizes of things. But synchronizing use of that space would easily become a synchronization bottleneck.
 
 ### Checkpoints
 
@@ -112,22 +114,15 @@ A 'shared object' is one where we copy our reference rather than the data. Motiv
 
 Shared objects work best for binaries, where I won't be destructively observing them. This includes texts and compact bytecode modeled as binaries. Potentially JIT code, which might need special attention.
 
-Context-local shared objects could simplify a lot of problems related to memory management, i.e. because I won't need external buffering just to get most of the advantages. The cost is that it may complicate GC vs. copy vs. move. I'll generally need different logics to squeeze the most performance from each case. 
-
-If I use reference counts in context of a compacting collector and multiple threads, I don't need to keep them exact. I can correct reference counts as needed. 
+Context-local shared objects should simplify some problems related to memory and quota management. This does complicate code by requiring different logics for most efficient 'local copy' vs. 'remote copy'. For now, I'll just drop the remote copy feature.
 
 ### Fast Deep Copy
 
 With linear objects, much performance comes from having unique references I'm free to destructively manipulate. Unfortunately, assuming parallelism, I lose exclusive access to a per-context scratch space that is guaranteed to be large enough to serve as a stack for deep copies. And I'd rather avoid synchronization on the scratch space (e.g. use of a mutex).
 
-Ideally, I would like to deep-copy with O(1) space. 
+Ideally, I want an efficient deep-copy with O(1) space.
 
-This is feasible if I ensure sufficient space within the tree structure to perform the traversal. The Morris algorithm could be adapted. I need a single list `null` value, at least for deep list objects. That *does* seem a viable feature: a smarter `cons` operation that handles expansion of compact singletons. The Morris algorithm performs big iteration operations down a RHS, which might also serve as a convenient moment for performing deep copy of a list spine.
-
-If this doesn't work out, I can accept a less than ideal solution. 
-
-And there are some possibilities like *latent* deep copies with shared objects. However, I'd prefer to avoid that as an implicit feature.
-
+The Morris algorithm could be adapted. This would require that all lists are predictably terminated by the same value, i.e. the equivalent of a `null`, such that I don't need to remember that value in particular. This seems viable, even in context of singleton lists (so long as said singleton lists aren't at the end of a normal list chain). 
 
 ## Representations
 

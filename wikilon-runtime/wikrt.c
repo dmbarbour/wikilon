@@ -201,27 +201,22 @@ wikrt_env* wikrt_cx_env(wikrt_cx* cx) {
 
 static void wikrt_mem_compact(wikrt_cx* cx) 
 {
+    // TODO before or within mem_compact call.
     // MULTI THREAD TODO: 
-    // - tell worker threads to get out
-    // - use gc write lock to wait for workers
-    // - decide whether to GC mature memory
+    // - signal worker threads to get out (cx status)
+    // - use gc write lock to wait for workers.
+    // SPLIT MEMORY TODO:
+    // - decide whether to GC mature memory, or 
+    //   paramaterize this decision.
 
-    // Compaction is simply a memory movement action, from the current
-    // thread to the current GC space.
+    wikrt_size const vol0 = wikrt_memory_volume(cx);
+    assert(cx->size >= vol0);
+
+    // Compaction involves swapping the memory and scratch arenas,
+    // then copying rooted values into over to memory. 
     wikrt_pval_swap(&(cx->mem), &(cx->ssp));
-    cx->cap = cx->mem + 
-    
-
-
-
-    // It's easiest to think about 'compaction' as just a move operation, 
-    // albeit one that we know our destination has sufficient space.
-    wikrt_cx cx0 = (*cx);
-
-    // swap semispace and memory; reset allocators 
-    cx->ssp = cx0.mem;
-    cx->mem = cx0.ssp;
-    cx->alloc = cx->size;
+    cx->alloc = cx->mem;
+    cx->cap   = cx->mem + cx->size;
 
     // Free lists are used only to recycle memory a bit before compaction
     // occurs. (The benefits of recycling marginal in most cases, but can
@@ -236,10 +231,10 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     // that I can write one frame while reading the other. 
     
     // copy roots with assumption of sufficient space.
-    wikrt_copy_r(&cx0, cx0.txn, NULL, true, cx, &(cx->txn));
-    wikrt_copy_r(&cx0, cx0.cc,  NULL, true, cx, &(cx->cc));
-    wikrt_copy_r(&cx0, cx0.pc,  NULL, true, cx, &(cx->pc));
-    wikrt_copy_r(&cx0, cx0.val, NULL, true, cx, &(cx->val));
+    wikrt_copy_r(cx, cx->txn, NULL, true, cx, &(cx->txn));
+    wikrt_copy_r(cx, cx->cc,  NULL, true, cx, &(cx->cc));
+    wikrt_copy_r(cx, cx->pc,  NULL, true, cx, &(cx->pc));
+    wikrt_copy_r(cx, cx->val, NULL, true, cx, &(cx->val));
     _Static_assert((4 == WIKRT_CX_REGISTER_CT), "todo: missing register compactions"); // maintenance check
 
     // Note: I'd prefer to avoid reference counting for shared objects.
@@ -248,14 +243,14 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     _Static_assert(!WIKRT_HAS_SHARED_REFCT_OBJECTS, "todo: figure out refcts during compaction");
 
     // sanity check: compaction must not increase memory usage.
-    assert(wikrt_memory_volume(&cx0) >= wikrt_memory_volume(cx));
+    assert(vol0 >= wikrt_memory_volume(cx));
 
     // keep stats. compaction count is useful for effort quotas. 
     // compaction size is useful for heuristic memory pressure.
     cx->compaction_count += 1;
     cx->compaction_size  = wikrt_memory_volume(cx);
     cx->bytes_compacted  += cx->compaction_size;
-    cx->bytes_collected  += wikrt_memory_volume(&cx0) - cx->compaction_size;
+    cx->bytes_collected  += vol0 - cx->compaction_size;
 }
 
 
@@ -453,7 +448,7 @@ wikrt_val_type wikrt_peek_type(wikrt_cx* cx)
 // build stack of items that need at least one cell to allocate
 // In this case, I'm going to assume our stack counts upwards.
 static inline void wikrt_add_size_task(wikrt_val** s, wikrt_val v) {
-    if(!wikrt_copy_shallow(v)) { *((*s)++)) = v; }
+    if(!wikrt_copy_shallow(v)) { *((*s)++) = v; }
 }
 
 wikrt_size wikrt_vsize(wikrt_cx* cx, wikrt_val* const s0, wikrt_val const v0)

@@ -40,12 +40,12 @@ After contemplating my concerns below, I think minimalist ABC is better in many 
 
 The proposed base is just four primitive combinators. 
 
-        [A][B]a     == B[A]         (apply)
-        [A][B]b     == [[A]B]       (build)
-        [A]c        == [A][A]       (copy)
-        [A]d        ==              (drop)
+        [B][A]a     == A[B]         (apply)
+        [B][A]b     == [[B]A]       (bind)
+           [A]c     == [A][A]       (copy)
+           [A]d     ==              (drop)
 
-This base is small, complete, and friendly to substructural types. Additionally, the `[]` square brackets delimit first-class subprograms. The empty program is valid and has identity semantics. All programs and data in ABC have a formal semantics as a finite expansion to a sequence of just six characters, `[abcd]`.
+This base is small, complete, and friendly to substructural types. The `[]` square brackets delimit first-class subprograms. The empty program is valid and has identity semantics. All programs and data in ABC have a formal semantics as a finite expansion to a sequence of just six characters, `[abcd]`.
 
 For performance and convenience, ABC provides more than the primitives:
 
@@ -70,7 +70,7 @@ Embedded literals have the format:
 
 Literals must be valid UTF-8 with a small blacklist (no control (C0, C1, DEL) except LF, no surrogates, and no replacement char). When applied as a program, literals will support iteration over every contained UTF-8 byte. (The assumption here is that byte-level ops are the common case.)
 
-Semantically, these data embeddings have a Church encoding, one that unifies nicely with command sequences. ABC doesn't provide a concise representation for command sequences. However, an [editable view](CommandLine.md) can present something like: `(foo,bar,baz)`. In this case, our unification is:
+Semantically, these data embeddings have a Church encoding, one that unifies nicely with command sequences. ABC doesn't provide a concise representation for command sequences. However, an [editable view](CommandLine.md) may present something like: `(foo,bar,baz)`. In this case, our unification is:
 
         #0      == #
         #1      == ()

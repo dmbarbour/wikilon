@@ -426,8 +426,6 @@ static inline wikrt_otag wikrt_ss_to_block_flags(wikrt_ss ss)
 /* Internal API calls. */
 void wikrt_copy_m(wikrt_cx*, wikrt_ss*, bool moving_copy, wikrt_cx*); 
 
-wikrt_addr wikrt_ssp_last(wikrt_cx* cx);
-
 // wikrt_vsize: return allocation required to deep-copy a value. 
 //   Use a given stack space for recursive structure tasks.
 //
@@ -521,17 +519,16 @@ typedef struct trace_buf {
  *
  * Memory is divided into two primary arenas. We'll be using a compacting
  * collector, so allocation is less than 50% efficient. However, this is
- * mostly an issue for active memory, not for stowage or big data. Within
- * memory, we have two arenas, and two growth zones - active and mature. 
+ * mostly an issue for active memory, not for stowage or big data. 
  *
- * Mature memory grows downwards from the top of an arena, while any active
- * memory grows upwards from the bottom of an arena. Data moves to the mature
- * space during compaction. Compaction infrequently hits the mature space,
- * e.g. once every thirty cycles.
+ * I am contemplating a separate divide for 'mature' objects, growing from
+ * the top of one arena. The motivation is to reduce frequency of compaction
+ * for objects that have already survived many compactions, likely only for
+ * shared objects.
  *
  * Active memory may also leverage free-list GC. This enables migrant worker
  * threads to perform more useful work between compactions, which is handled
- * by the API thread.
+ * by the API thread. However, precision isn't critical in this case.
  */ 
 struct wikrt_cx {
     // doubly-linked list of contexts in environment.
@@ -671,13 +668,16 @@ static inline wikrt_addr wikrt_alloc_r(wikrt_cx* cx, wikrt_sizeb sz)
     return r;
 }
 
-static inline wikrt_size wikrt_mature_volume(wikrt_cx* cx) { return (cx->m_mem - cx->m_alloc); }
-static inline wikrt_size wikrt_active_volume(wikrt_cx* cx) { return (cx->alloc - cx->mem); }
+static inline wikrt_size wikrt_mature_volume(wikrt_cx const* cx) { 
+    return (cx->m_mem - cx->m_alloc); 
+}
+static inline wikrt_size wikrt_active_volume(wikrt_cx const* cx) { 
+    return (cx->alloc - cx->mem); 
+}
 
-// How much memory is in use, based on allocation since prior compaction. 
+// How much memory is in use? 
 static inline wikrt_size wikrt_memory_volume(wikrt_cx const* cx) { 
-    return wikrt_active_volume(cx) 
-         + wikrt_mature_volume(cx);
+    return wikrt_active_volume(cx) + wikrt_mature_volume(cx);
 }
 
 static inline wikrt_val wikrt_alloc_cellval_r(wikrt_cx* cx, wikrt_tag tag, wikrt_val fst, wikrt_val snd) 
