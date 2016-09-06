@@ -631,7 +631,7 @@ uint64_t wikrt_effort_snapshot(wikrt_cx*);
 
 #define wikrt_has_error(cx) (cx->ecode)
 
-#define wikrt_paddr(CX,A) ((wikrt_val*)((char*)CX)+A)
+#define wikrt_paddr(CX,A) ((wikrt_val*)(A + (char*)(CX)))
 #define wikrt_pval(CX,V)  wikrt_paddr(CX, wikrt_vaddr(V))
 
 // take advantage of WIKRT_O == 0

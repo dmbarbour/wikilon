@@ -120,9 +120,9 @@ Context-local shared objects should simplify some problems related to memory and
 
 With linear objects, much performance comes from having unique references I'm free to destructively manipulate. Unfortunately, assuming parallelism, I lose exclusive access to a per-context scratch space that is guaranteed to be large enough to serve as a stack for deep copies. And I'd rather avoid synchronization on the scratch space (e.g. use of a mutex).
 
-Ideally, I want an efficient deep-copy with O(1) space.
+Ideally, I want an efficient, high performance deep-copy with O(1) space.
 
-The Morris algorithm could be adapted. This would require that all lists are predictably terminated by the same value, i.e. the equivalent of a `null`, such that I don't need to remember that value in particular. This seems viable, even in context of singleton lists (so long as said singleton lists aren't at the end of a normal list chain). 
+The Morris algorithm could be adapted. This requires that all lists/stacks are predictably terminated by the same value, i.e. the equivalent of a `null`, such that I don't need to remember any value in particular. This seems viable, even if I optimize singleton lists, by having a smarter `cons` action. Granted, this ultimately amounts to providing extra space within the tree to perform the copy. But it should work for other traversals too - e.g. rendering/printing 
 
 ## Representations
 

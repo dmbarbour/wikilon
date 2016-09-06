@@ -7,7 +7,7 @@
 #include "utf8.h"
 #include "testAO.h"
 
-#define TESTCX_SIZE 4
+#define TESTCX_SIZE 8
 #define TESTENV_SIZE (4 * TESTCX_SIZE)
 
 #define B32 "bdfghjkmnpqstxyzBDFGHJKMNPQSTXYZ"
@@ -145,30 +145,17 @@ void test_i32(wikrt_cx* cx, int32_t const iTest)
     if(i != iTest) { wikrt_set_error(cx, WIKRT_ETYPE); }
 }
 
-void test_i32_max(wikrt_cx* cx) { test_i32(cx, INT32_MAX); }
 void test_i32_zero(wikrt_cx* cx) { test_i32(cx, 0); }
-void test_i32_min(wikrt_cx* cx) { test_i32(cx, INT32_MIN); }
-void test_i32_nearmin(wikrt_cx* cx) { test_i32(cx, (-INT32_MAX)); }
 
-// uses knowledge of internal representation
-void test_i32_smallint_min(wikrt_cx* cx) { test_i32(cx, 0 - ((1<<30) - 1) ); }
-void test_i32_smallint_max(wikrt_cx* cx) { test_i32(cx, ((1 << 30) - 1) ); }
-void test_i32_largeint_minpos(wikrt_cx* cx) { test_i32(cx, (1 << 30)); }
-void test_i32_largeint_maxneg(wikrt_cx* cx) { test_i32(cx, 0 - (1 << 30)); }
-
-void test_i64(wikrt_cx* cx, int64_t const iTest) 
+void test_i32_misc(wikrt_cx* cx) 
 {
-    int64_t i;
-    wikrt_intro_i64(cx, iTest);
-    wikrt_peek_i64(cx, &i);
-    wikrt_drop(cx);
-    if(i != iTest) { wikrt_set_error(cx, WIKRT_ETYPE); }
+    test_i32(cx,1);
+    test_i32(cx,42);
+    test_i32(cx, 12345678);
+    test_i32(cx,-12345678);
+    test_i32(cx,-42);
+    test_i32(cx,-1);
 }
-
-
-void test_i64_zero(wikrt_cx* cx) { test_i64(cx, 0); }
-void test_i64_18d_min(wikrt_cx* cx) { test_i64(cx,  -999999999999999999); }
-void test_i64_18d_max(wikrt_cx* cx) { test_i64(cx,   999999999999999999); }
 
 /* grow a simple stack of numbers (count .. 1) for testing purposes. */
 void numstack(wikrt_cx* cx, int32_t count) 
@@ -353,6 +340,11 @@ bool test_pkistr_small(wikrt_cx* cx)
     TEST(0);
     TEST(1);
     TEST(-1);
+    TEST(12345678);
+    TEST(-12345678);
+
+    #if 0
+    // Need support for big integers
     TEST(-1073741824);
     TEST(-1073741823);
     TEST(1073741823);
@@ -365,7 +357,8 @@ bool test_pkistr_small(wikrt_cx* cx)
     TEST(2147483649);
     TEST(999999999999999999);
     TEST(-999999999999999999);
-    
+    #endif
+
     #undef TEST
 
     return ((runct > 0) && (runct == passct));
@@ -381,20 +374,6 @@ bool test_copy_i64(wikrt_cx* cx, int64_t const test) {
     wikrt_peek_i64(cx, &n2);
     wikrt_drop(cx);
     bool const ok = (test == n1) && (n1 == n2);
-    return ok;
-}
-
-bool test_copy_num(wikrt_cx* cx) 
-{
-    unsigned int r = 0;
-    int testCt = 1000;
-    bool ok = test_copy_i64(cx,-999999999999999999) 
-           && test_copy_i64(cx, 0)
-           && test_copy_i64(cx, 999999999999999999);
-    while(testCt-- > 0) {
-        int64_t testVal = ((int64_t)rand_r(&r) * RAND_MAX) + rand_r(&r);
-        ok = test_copy_i64(cx, testVal % 1000000000000000000) && ok;
-    }
     return ok;
 }
 
@@ -1136,7 +1115,7 @@ void test_eval_num(wikrt_cx* cx)
     test_eval_abc2i(cx, "#0", 0);
     test_eval_abc2i(cx, "#7 -", -7);
     test_eval_abc2i(cx, "# 8\n675 309", 8675309);
-    test_eval_abc2i(cx, "#09876543210", 9876543210);
+    //test_eval_abc2i(cx, "#09876543210", 9876543210);
 }
 
 void test_eval_math(wikrt_cx* cx) 
@@ -1310,7 +1289,7 @@ void test_trace(wikrt_cx* cx)
 {
     do {} while(NULL != wikrt_trace_read(cx)); // clear trace buff
     char const* const testMsg1 = u8"★★★This is a\n\ntest trace message.★★★";
-    int64_t testMsg2 = -9876543210;
+    int64_t testMsg2 = -8675309;
     wikrt_trace_enable(cx, 1000);
 
     // msg{&trace}%. Test for both text and an integer.
@@ -1370,20 +1349,9 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
     TCX(test_false);
     TCX(test_true);
 
-    TCX(test_i32_min);
-    TCX(test_i32_nearmin);
     TCX(test_i32_zero);
-    TCX(test_i32_max);
-    TCX(test_i32_smallint_min);
-    TCX(test_i32_smallint_max);
-    TCX(test_i32_largeint_minpos);
-    TCX(test_i32_largeint_maxneg);
-    TCX(test_i64_zero);
-    TCX(test_i64_18d_min);
-    TCX(test_i64_18d_max);
-
+    TCX(test_i32_misc);
     TCX(test_pkistr_small);
-    TCX(test_copy_num);
 
     TCX(test_alloc_prod);
     TCX(test_copy_prod);

@@ -251,6 +251,7 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     cx->compaction_size  = wikrt_memory_volume(cx);
     cx->bytes_compacted  += cx->compaction_size;
     cx->bytes_collected  += vol0 - cx->compaction_size;
+
 }
 
 
@@ -333,15 +334,6 @@ void wikrt_copy(wikrt_cx* cx) {
         wikrt_set_error(cx, WIKRT_ETYPE);
     }
 }
-
-// Get a address for top edge of cx->ssp after assuming ssp
-// contains the mature space. Useful for a stack counting 
-// downwards. 
-static wikrt_addr wikrt_ssp_last(wikrt_cx* cx)
-{
-    return (cx->ssp + (cx->size - wikrt_mature_volume(cx)));
-}
-
 
 static inline wikrt_size wikrt_peek_size_ssp(wikrt_cx* cx) {
     return WIKRT_CELLSIZE
@@ -1551,9 +1543,14 @@ void wikrt_read_text(wikrt_cx* cx, char* buff, size_t* buffsz)
 
 void wikrt_intro_i32(wikrt_cx* cx, int32_t n) 
 {
-    _Static_assert(((WIKRT_SMALLINT_MIN <= INT32_MIN) && (INT32_MAX <= WIKRT_SMALLINT_MAX)), 
-        "assuming no risk of smallint overflow for introducing i32");
-    wikrt_intro_smallval(cx, wikrt_i2v(n));
+    _Static_assert((INT32_MIN < WIKRT_SMALLINT_MIN), "assuming overflow is possible");
+    bool const is_smallint = (WIKRT_SMALLINT_MIN <= n) && (n <= WIKRT_SMALLINT_MAX);
+    if(is_smallint) {
+        wikrt_intro_smallval(cx, wikrt_i2v(n));
+        return;
+    }
+    _Static_assert(!WIKRT_HAS_BIGINT, "todo: large i32 to big integer");
+    wikrt_set_error(cx, WIKRT_IMPL);
 }
 
 void wikrt_intro_i64(wikrt_cx* cx, int64_t n) 
@@ -1725,11 +1722,12 @@ void wikrt_int_add(wikrt_cx* cx)
     wikrt_val const be = pabe[1];
     wikrt_val* const pbe = wikrt_pval(cx, be);
 
-    _Static_assert(!WIKRT_HAS_BIGINT, "assuming small integers");
-    _Static_assert((WIKRT_INT_MAX == INT64_MAX), "assuming 64 bit smallints");
-    _Static_assert(((2 * WIKRT_SMALLINT_MAX) < WIKRT_INT_MAX), "overflow for smallint add"); 
+    // TODO: Since I'm switching to 32-bit system, I'll need to support big integers.
 
-    int64_t const sum = wikrt_v2i(*pabe) + wikrt_v2i(*pbe); 
+    _Static_assert(!WIKRT_HAS_BIGINT, "assuming small integers");
+    _Static_assert((INT32_MAX >= (2 * WIKRT_SMALLINT_MAX)), "safe i32 add"); 
+
+    int32_t const sum = wikrt_v2i(*pabe) + wikrt_v2i(*pbe); 
     bool const range_ok = ((WIKRT_SMALLINT_MIN <= sum) && (sum <= WIKRT_SMALLINT_MAX));
     if(!range_ok) { wikrt_set_error(cx, WIKRT_IMPL); return; }
     (*pbe) = wikrt_i2v(sum);
@@ -1744,12 +1742,11 @@ void wikrt_int_mul(wikrt_cx* cx)
     wikrt_val const be = pabe[1];
     wikrt_val* const pbe = wikrt_pval(cx, be);
 
-    _Static_assert((INT64_MAX == WIKRT_INT_MAX), "assuming 64-bit small integers");
     _Static_assert(!WIKRT_HAS_BIGINT, "assuming no big integers for now, integers are small");
-
-    __int128 const prod = ((__int128) wikrt_v2i(*pabe)) 
-                        * ((__int128) wikrt_v2i( *pbe));
-    bool const range_ok = ((WIKRT_SMALLINT_MIN <= prod) && (prod <= WIKRT_SMALLINT_MAX));
+    _Static_assert(WIKRT_SMALLINT_MAX < (INT64_MAX / WIKRT_SMALLINT_MAX)
+        , "assuming i64 large enough for multiply");
+    int64_t const prod = ((int64_t) wikrt_v2i(*pabe)) * ((int64_t) wikrt_v2i(*pbe));
+    bool const range_ok = (WIKRT_SMALLINT_MIN <= prod) && (prod <= WIKRT_SMALLINT_MAX);
     if(!range_ok) { wikrt_set_error(cx, WIKRT_IMPL); return; }
 
     (*pbe) = wikrt_i2v((wikrt_int)prod);

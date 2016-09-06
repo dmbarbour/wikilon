@@ -66,7 +66,7 @@ static uint64_t wikrt_time_effort(wikrt_cx* cx, clockid_t clk_id)
 
 static uint64_t wikrt_alloc_effort(wikrt_cx* cx)
 {
-    wikrt_size const alloc_bytes = cx->bytes_collected + wikrt_mem_in_use(cx);
+    wikrt_size const alloc_bytes = cx->bytes_collected + wikrt_memory_volume(cx);
     return (uint64_t)(alloc_bytes >> 20); // bytes → megabytes
 }
 
