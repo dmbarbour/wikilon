@@ -1,4 +1,8 @@
 
+// for aligned_alloc, I need _ISOC11_SOURCE
+#define _ISOC11_SOURCE
+
+
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
@@ -90,14 +94,17 @@ void wikrt_env_sync(wikrt_env* e) {
 
 wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB) 
 {
+    _Static_assert((sizeof(wikrt_cx) < WIKRT_CX_ALIGN), 
+        "context header larger than alignment.");
+    _Static_assert((WIKRT_CX_ALIGN < (1<<17)), "too much alignment");
+
     if((NULL == e) || (cxSizeMB < 1)) { errno = EINVAL; return NULL; }
 
     // Allocate contiguous [(context)(arena1)....(arena2)....].
-    // Buffer the context to keep it out of the wikrt_cx cache line.
-    size_t const bcx_size = WIKRT_LNBUFF_POW2(sizeof(wikrt_cx), 256);
-    size_t const alloc_size = ((size_t)cxSizeMB * (1024 * 1024)) - bcx_size;
+    // Aligned allocation to simplify reasoning about performance.
+    size_t const alloc_size = ((size_t)cxSizeMB * (1024 * 1024)) - WIKRT_CX_ALIGN;
     if(alloc_size >= WIKRT_SIZE_MAX) { errno = EFBIG; return NULL; }
-    wikrt_cx* const cx = malloc(alloc_size);
+    wikrt_cx* const cx = aligned_alloc(WIKRT_CX_ALIGN, alloc_size);
     if(NULL == cx) { return NULL; }
 
     // Initialize the context.
@@ -106,13 +113,17 @@ wikrt_cx* wikrt_cx_create(wikrt_env* e, uint32_t cxSizeMB)
     cx->cxlock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     cx->ecode  = WIKRT_OK;
 
-    cx->size   = (wikrt_size)((alloc_size - bcx_size) / 2);
-    cx->arena1 = (wikrt_addr) bcx_size;
+    #ifdef WIKRT_DIRECT_ADDRESSING
+    wikrt_addr const addr_zero = (wikrt_addr)(uintptr_t)cx;
+    #else /* use relative addressing */
+    wikrt_addr const addr_zero = 0;
+    #endif
+
+    cx->size   = (wikrt_size)((alloc_size - WIKRT_CX_ALIGN) / 2);
+    cx->arena1 = (wikrt_addr) WIKRT_CX_ALIGN + addr_zero;
     cx->arena2 = cx->arena1 + cx->size;
     cx->last   = cx->arena2 + cx->size;
-
-    assert((cx->size == wikrt_cellbuff(cx->size))
-        && (cx->last == (wikrt_addr) alloc_size));
+    assert(cx->last == ((wikrt_addr)alloc_size + addr_zero));
 
     // initalize allocators
     cx->m_mem   = cx->last;
@@ -229,12 +240,13 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     // our environment briefly (I'd prefer to avoid this synchronization)
     // Or I favor a framed mechanism (e.g. a two-frame bloom filter) such
     // that I can write one frame while reading the other. 
-    
+
     // copy roots with assumption of sufficient space.
     wikrt_copy_r(cx, cx->txn, NULL, true, cx, &(cx->txn));
     wikrt_copy_r(cx, cx->cc,  NULL, true, cx, &(cx->cc));
     wikrt_copy_r(cx, cx->pc,  NULL, true, cx, &(cx->pc));
     wikrt_copy_r(cx, cx->val, NULL, true, cx, &(cx->val));
+
     _Static_assert((4 == WIKRT_CX_REGISTER_CT), "todo: missing register compactions"); // maintenance check
 
     // Note: I'd prefer to avoid reference counting for shared objects.
@@ -251,14 +263,14 @@ static void wikrt_mem_compact(wikrt_cx* cx)
     cx->compaction_size  = wikrt_memory_volume(cx);
     cx->bytes_compacted  += cx->compaction_size;
     cx->bytes_collected  += vol0 - cx->compaction_size;
-
+    if(cx->largest_size < cx->compaction_size) {
+        cx->largest_size = cx->compaction_size;
+    }
 }
 
 
 bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
 {
-    wikrt_size const prior_size = cx->compaction_size;
-
     // basic compacting GC
     wikrt_mem_compact(cx);
     if(!wikrt_mem_available(cx,sz)) {
@@ -266,33 +278,21 @@ bool wikrt_mem_gc_then_reserve(wikrt_cx* cx, wikrt_sizeb sz)
         return false;
     }
 
-    // If our context is larger than necessary, that may create some VM
-    // pressure that isn't necessary or desirable. This can be mitigated
-    // by using less than maximum memory, or potentially by use of 
-    // madvise(DONTNEED) to clear memory allocations that won't see reuse
-    // in the near future. OTOH, I've had some difficulty with madvise,
-    // and in particular how it is less than conservative and doesn't work
-    // on larger memory arenas.
-    //
-    // I might end up tweaking this idea a little, i.e. to allow a context
-    // to effectively 'grow' in size but without shrinking. Or I might
-    // just eliminate the idea entirely as irrelevant with migrant worker
-    // threads.
-
-    _Static_assert((WIKRT_MEM_FACTOR >= 0) 
-                && (WIKRT_MEM_FACTOR_PRIOR >= 0) 
+    // At this point we've succeeded. We have enough space to allocate
+    // the new object. However, to mitigate memory pressure problems,
+    // I'll model a memory that monotonically increases in size from
+    // one GC to another.
+    _Static_assert((WIKRT_MEM_FACTOR >= 1) 
                 && (WIKRT_MEM_PAGEMB >= 1),
                 "sane memory management heuristics");
-    wikrt_size const desired = (WIKRT_MEM_FACTOR * cx->compaction_size) 
-                             + (WIKRT_MEM_FACTOR_PRIOR * prior_size)
-                             + ((WIKRT_MEM_FACTOR + 1) * sz);
-    wikrt_size const pgsz = (WIKRT_MEM_PAGEMB << 20);
-    wikrt_addr const target = WIKRT_LNBUFF(desired, pgsz); // page aligned
-    if(wikrt_mem_available(cx,(target - cx->mem))) {
-        cx->cap = target;
+    wikrt_size const avail = cx->cap - cx->alloc;
+    wikrt_size const inuse = (cx->largest_size + sz);
+    bool const oversized = ((avail / WIKRT_MEM_FACTOR) > inuse);
+    wikrt_addr const target = cx->alloc + (inuse * WIKRT_MEM_FACTOR);
+    wikrt_addr const desired = WIKRT_LNBUFF(target, (WIKRT_MEM_PAGEMB << 20));
+    if(oversized && (target <= desired) && (desired < cx->cap)) {
+        cx->cap = desired;
     }
-
-
     return true;
 } 
 
@@ -528,6 +528,8 @@ static void wikrt_copy_rs(wikrt_cx* const lcx, wikrt_cx* const rcx
 
     wikrt_addr* s = s0;
     do {
+        //assert((wikrt_paddr(rcx, rcx->alloc) < s) && (s <= wikrt_paddr(rcx, rcx->cap)));
+
         // invariant: `dst` constains non-shallow reference into lcx->mem 
         // Thus WIKRT_U, WIKRT_UL, WIKRT_UR, and WIKRT_I are not found.
         wikrt_val const v = (*dst);

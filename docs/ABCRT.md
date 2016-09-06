@@ -71,21 +71,28 @@ I'd like to have 'errors' be an okay thing, like the worst that happens is we do
 
 I have a toplevel environment that binds a shared database. Then I can have multiple contexts, each with their own memory. I am currently using a semispace for simplified GC. A context doesn't need very much space, so I am contemplating use of a relative 32-bit representation within context local space.
 
+
 ## Memory Management
 
-### 32 bit Context Arenas
+### 32-bit vs. 64-bit?
 
-After exploring a 64 bit implementation, I'm leaning in favor of the 32-bit context (at least for its active memory). The 64 bit model with direct pointers did not (noticably) improve performance. And I could probably improve 32-bit performance by addressing memory directly from our `cx` pointer rather than `cx->mem`. The main benefit of using 32-bit is that it effectively doubles memory and CPU cache efficiency for the common case objects (lists, cons stacks, etc.).
+Regarding 'context' size, this is an issue I've returned to many times. In favor of 32-bits, I get vastly more efficient use of memory within a context. For example, a list cell costs only 8 bytes instead of 16 bytes. In favor of 64-bits, we can easily scale beyond a few gigabytes working memory per context. Direct addressing from 64-bit seems to offer slight performance advantages, circa 4%.
 
-I can encode context, memory, and semispace as one contiguous array.
+I believe that, for my intended use cases, a 50% memory savings will be more valuable than a minor CPU savings, and that scaling beyond 2GB active memory for a single context will have very close to zero value. So 32-bit has a solid advantage here. Further, even with 32-bit addressing limits, scaling is quite feasible via use of stowage, shared binary objects, and multi-context parallelism.
+
+For now, I'll go with 32-bit by default, albeit perhaps enabling a compile-time switch and constructing both a 32-bit and 64-bit runtime.
+
+### Addressing
+
+I can encode the context, memory, and semispace as one contiguous array.
 
         [context .... (mem) ..... (ssp)........]
 
-I must tweak my allocator for this, e.g. to work in terms of negative offsets from context. And I might need to tweak my GC process just a bit so I can operate an intermediate context.
+For 32-bit systems, addressing is relative to our context as a 'zero' address. In a 64-bit context, addressing would be absolute. Thus, in the 32-bit variant, only one indirection is needed.
 
 ### Graduated Memory Use
 
-For very large contexts (e.g. 100MB) and very small computations (e.g. 10kB) it is inefficient to consume the whole 100MB before performing GC. Doing so creates unnecessary memory and cache pressures. Fortunately, it should not be difficult at all to basically use a *soft cap* for how much we may allocate our next GC.
+For very large contexts (e.g. 100MB) and very small computations (e.g. 10kB) it is inefficient to consume the whole 100MB before performing GC. Doing so creates unnecessary memory and cache pressures. Fortunately, it should not be difficult at all to basically use a *soft cap* for how much we allocate before next GC.
 
 ### Parallelism 
 

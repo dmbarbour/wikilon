@@ -28,17 +28,19 @@ Interpreters:
 * **runABC 32 bit Wikilon**
  * memory relative offsets
  * smaller integer types
- * 
+
+
 
 ## Repeat 10M
 
-* old `aoi` interpreter: 213 seconds
-* alpha `runABC` Haskell: 413 seconds
-* alpha `runABC` Wikilon: 19.2 seconds
+* old aoi interpreter: 213 seconds
+* alpha runABC Haskell: 413 seconds
+* alpha runABC Wikilon: 19.0 seconds 
+* runABC 32 bit Wikilon: 19.7 seconds
 
-This is a promising start. A 10x improvement over my old `aoi` interpreter even before optimization work or JIT. 
+This is a promising start. A 10x improvement over my old `aoi` interpreter even before optimization work or JIT. This also demonstrates that the 32-bit vs. 64-bit doesn't make a significant difference on CPU performance, while effectively doubling the working context space. 
 
-However, objectively this is not *good* performance. 20 seconds for 10M loops is ~2 microseconds per loop. I hope to achieve *at least* another 10x improvement here in the medium term, via accelerators. Long term, a ~100x improvement is desirable via JIT.
+However, objectively this is not *good* performance. 20 seconds for 10M loops is ~2 microseconds per loop. I hope to achieve *at least* another 10x improvement here in the medium term, via accelerators. Long term, a ~100x improvement is desirable via JIT. 
 
  Cheap fixpoints and loops will almost certainly be a basis for many object/stream models.
 

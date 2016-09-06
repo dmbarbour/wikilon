@@ -12,6 +12,9 @@
 #include <limits.h>
 #include <pthread.h>
 
+//#define WIKRT_32_BIT
+
+#ifdef WIKRT_32_BIT
 /** Value references internal to a context. */
 typedef uint32_t wikrt_val;
 #define WIKRT_VAL_MAX UINT32_MAX
@@ -20,6 +23,14 @@ typedef uint32_t wikrt_val;
 typedef int32_t wikrt_int;
 #define WIKRT_INT_MAX INT32_MAX
 
+#else
+typedef uintptr_t wikrt_val;
+#define WIKRT_VAL_MAX UINTPTR_MAX
+
+typedef int64_t wikrt_int;
+#define WIKRT_INT_MAX INT64_MAX
+#endif
+
 /** size within a context; documents a number of bytes */
 typedef wikrt_val wikrt_size;
 #define WIKRT_SIZE_MAX WIKRT_VAL_MAX
@@ -27,8 +38,13 @@ typedef wikrt_val wikrt_size;
 /** size buffered to one two-word cell. 16 bytes for a 64-bit context. */
 typedef wikrt_size wikrt_sizeb;
 
-/** address within a context; documents offset from origin. */
+/** address within the context */
 typedef wikrt_val wikrt_addr;
+
+/** favor direct addressing if feasible! */
+#if (UINTPTR_MAX == WIKRT_SIZE_MAX)
+#define WIKRT_DIRECT_ADDRESSING 
+#endif
 
 /** tag uses lowest bits of a value */
 typedef wikrt_val wikrt_tag;
@@ -38,6 +54,8 @@ typedef wikrt_val wikrt_otag;
 
 /* LMDB-layer Database. */
 typedef struct wikrt_db wikrt_db;
+
+
 
 /** @brief Internal opcodes. 
  *
@@ -174,9 +192,13 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
 
 #define WIKRT_REF_MASK_TAG    (7)     
 #define WIKRT_REF_MASK_ADDR   (~WIKRT_REF_MASK_TAG)
-#define wikrt_vaddr(V) ((V) & WIKRT_REF_MASK_ADDR)
-#define wikrt_vtag(V) ((V) & WIKRT_REF_MASK_TAG)
-#define wikrt_tag_addr(TAG,ADDR) ((TAG) | (ADDR))
+
+static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (v & WIKRT_REF_MASK_ADDR); }
+static inline wikrt_val  wikrt_vtag(wikrt_val v) { return (v & WIKRT_REF_MASK_TAG); }
+static inline wikrt_val  wikrt_tag_addr(wikrt_val tag, wikrt_val addr) { return (tag | addr); }
+//#define wikrt_vaddr(V) ((V) & WIKRT_REF_MASK_ADDR)
+//#define wikrt_vtag(V) ((V) & WIKRT_REF_MASK_TAG)
+//#define wikrt_tag_addr(TAG,ADDR) ((TAG) | (ADDR))
 
 // for static assertions
 #define WIKRT_USING_MINIMAL_BITREP 1
@@ -565,6 +587,7 @@ struct wikrt_cx {
 
 
     // memory statistics
+    wikrt_size          largest_size;       // largest size after compaction
     wikrt_size          compaction_size;    // memory after compaction
     uint64_t            compaction_count;   // count of compactions
     uint64_t            compaction_mmct;    // count mature memory compactions 
@@ -583,6 +606,9 @@ struct wikrt_cx {
     //   child contexts for parallelism
     //   track futures and stowage
 };
+
+#define WIKRT_CX_ALIGN (1<<12)
+
 
 /* Notes on shared memory: 
  *
@@ -604,11 +630,9 @@ struct wikrt_cx {
 #define WIKRT_NEED_FREE_ACTION 0 /* for static assertions */
 #define WIKRT_HAS_SHARED_REFCT_OBJECTS 0 /* for static assertions */
 
-// For large memory contexts, reduce VM pressure and improve
-// locality by using a smaller fraction of the memory arena 
-#define WIKRT_MEM_FACTOR        7 /* preserve some factor of current use */
-#define WIKRT_MEM_FACTOR_PRIOR  4 /* preserve some factor of prior use  */
-#define WIKRT_MEM_PAGEMB        2 /* preserve blocks of so many megabytes */
+// For large memory contexts, reduce VM pressure and improve locality 
+#define WIKRT_MEM_FACTOR        10 /* preserve some factor of current use */
+#define WIKRT_MEM_PAGEMB        2  /* preserve blocks of so many megabytes */
 
 // Default effort model. I've decided megabytes allocated is a good
 // default model because it's robust to changes in context size, and
@@ -631,13 +655,25 @@ uint64_t wikrt_effort_snapshot(wikrt_cx*);
 
 #define wikrt_has_error(cx) (cx->ecode)
 
-#define wikrt_paddr(CX,A) ((wikrt_val*)(A + (char*)(CX)))
-#define wikrt_pval(CX,V)  wikrt_paddr(CX, wikrt_vaddr(V))
+static inline wikrt_val* wikrt_paddr(wikrt_cx* cx, wikrt_addr a) {
+    #ifdef WIKRT_DIRECT_ADDRESSING
+    return (wikrt_val*) (a);
+    #else
+    return (wikrt_val*) (a + (char*)cx);
+    #endif
+}
+
+
+static inline wikrt_val* wikrt_pval(wikrt_cx* cx, wikrt_val v) {
+    return wikrt_paddr(cx, wikrt_vaddr(v));
+}
 
 // take advantage of WIKRT_O == 0
 _Static_assert((0 == WIKRT_O), "assuming WIKRT_O has no bit flags");
-#define wikrt_vaddr_obj(V) (V)
-#define wikrt_pobj(CX,V)  wikrt_paddr((CX),wikrt_vaddr_obj(V))
+static inline wikrt_addr wikrt_vaddr_obj(wikrt_val v) { return v; }
+static inline wikrt_val* wikrt_pobj(wikrt_cx* cx, wikrt_val v) {
+    return wikrt_paddr(cx, wikrt_vaddr_obj(v));
+}
 
 
 /* NOTE: Because I'm using a moving GC, I need to be careful about
