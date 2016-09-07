@@ -210,6 +210,8 @@ During evaluation, all program level errors are modeled via `{&error}`. The cont
 
 *Aside:* For work with AO dictionaries, it seems hugely useful to support injection of dictionary into our context. This would happen during 'program build' time, and we could evaluate even if we don't know a definition. E.g. if we forget to define `{%foo}`, we can fail. Injected definitions could be immutable after assignment.
 
+*Note:* I may provide an option/mode to perform lightweight optimization and simplification during program entry. But I will want a version that exactly preserves a program as entered.
+
 *Aside:* I won't introduce support for binaries yet - at least not before accelerators exist to simplify rendering within a program. 
 
 ### Linking in Context
@@ -357,4 +359,8 @@ An ABC program consists of `[abcd]` sequences with embedded `{tokens}`. Construc
 The simplest `{runMeta}` monad might answer every request with a wrapped token. We could request a token `"/foo"` and get back `[{/foo}]`. Note that `{runMeta}` might not exist as an explicit token, but rather be implicit to a programming environment. Within an [AO dictionary](AboutAO.md) we might use `foo.make = [program in Meta monad]` and implicitly reconstruct `foo` from `foo.make` whenever its recorded dependencies change. (A staged build system is an easy fit for Awelon project's [application models](ApplicationModel.md).)
 
 Monadic metaprogramming is first class, subject to composition, abstraction, and flexible reuse. Assuming a free monad, we can intercept the requests, simulate and test how the metaprogram would behave under a variety of mockup environments and configurations. There is very clear staging between the metaprogram and its computed output, no risk of incomplete output, and it's easy to record requested dependencies. Any competing model for metaprogramming should do at least this well for serious consideration.
+
+## Command Sequence Syntax? Maybe later.
+
+I'm tempted to support `(foo,bar,baz)` as a syntactic sugar at the bytecode level. 
 

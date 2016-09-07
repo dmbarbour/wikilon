@@ -1,109 +1,118 @@
+# Awelon Bytecode
 
-See AboutABC for full explanations and design. This file just records each code, and a pseudocode representation of its type.
+This document is a minimal summary of Awelon Bytecode (ABC). See [about ABC](AboutABC.md) for design details. This is a major revision from the prior ABC, towards a [minimalist](ABC_Minimalist.md) solution. 
 
-## Operators and Literals
+## Primitives
 
-        [] :: (special - block literal)
-        "~ :: (special - text literal)
-        {} :: (special - token or capability; see below)
-        (|) :: (reserved)
-        SP,LF :: x → x (whitespace as identity)
+Four primitive combinators `abcd`:
 
-        l :: (a * (b * c)) → ((a * b) * c)
-        r :: ((a * b) * c) → (a * (b * c))
-        w :: (a * (b * c)) → (b * (a * c))
-        z :: (a * (b * (c * d))) → (a * (c * (b * d)))
-        v :: a → (a * 1)
-        c :: (a * 1) → a
-        % :: (Droppable x) ⇒ (x * e) → e
-        ^ :: (Copyable x) ⇒ (x * e) → (x * (x * e))
+        [B][A]a     ==      A[B]            (apply)
+        [B][A]b     ==      [[B]A]          (bind)
+           [A]c     ==      [A][A]          (copy)
+           [A]d     ==                      (drop)
 
-        $ :: [x→x'] * (x * e) → (x' * e)
-        m :: [x→y] * ([y→z] * e) → [x→z] * e
-        ' :: (Quotable x) ⇒ (x * e) → ([s→(x*s)] * e)
-        k :: ([x→y] * e) → ([x→y]k * e) -- keep, relevant, no drop
-        f :: ([x→y] * e) → ([x→y]f * e) -- affine, no copy
+A block is a subprogram delimited by square brackets `[]`. 
 
-        # :: e → (N(0) * e)
-        0 :: N(x) * e → N(10x+0) * e
-        1 :: N(x) * e → N(10x+1) * e
-        2 :: N(x) * e → N(10x+2) * e
-        3 :: N(x) * e → N(10x+3) * e
-        4 :: N(x) * e → N(10x+4) * e
-        5 :: N(x) * e → N(10x+5) * e
-        6 :: N(x) * e → N(10x+6) * e
-        7 :: N(x) * e → N(10x+7) * e
-        8 :: N(x) * e → N(10x+8) * e
-        9 :: N(x) * e → N(10x+9) * e
+The `[abcd]` set is Turing complete and friendly for substructural types. ABC programs have a formal semantics as an expansion to a finite sequence of these six characters. ABC values always have a Church-encoding and semantics, though developers aren't forced to use them that way. 
 
-        + :: N(a) * (N(b) * e) → N(a+b) * e
-        * :: N(a) * (N(b) * e) → N(a*b) * e
-        - :: N(a) * e → N(0-a) * e
-        Q :: N(non-zero b) * (N(a) * e) → N(r) * (N(q) * e)
-            where qb+r = a, q integral, r between 0 and b (excluding b)
-        G :: N(x) * (N(y) * e) → ((N(y)*N(x))+(N(x)*N(y)) * e -- y > x
-            #4 #2 G -- observes 4 > 2. Returns (N(2)*N(4)) on right.
+## Data Embedding
 
-        L :: (a + (b + c)) * e → ((a + b) + c) * e
-        R :: ((a + b) + c) * e → (a + (b + c)) * e
-        W :: (a + (b + c)) * e → (b + (a + c)) * e
-        Z :: (a + (b + (c + d))) * e → (a + (c + (b + d))) * e
-        V :: a * e → (a + 0) * e
-        C :: (a + 0) * e → a * e
+Natural numbers may be embedded using the form `#42` or `#108`. Here `#` introduces a new zero value, while `1234567890` each have a 'multiply by ten, add digit' effect. 
 
-        ? :: (Droppable b) :: b@[x→x'] * ((x+y)*e) → (x'+y)*e
-        D :: a * ((b+c) * e) → ((a*b) + (a*c)) * e -- distrib
-        F :: ((a*b) + (c*d)) * e → (a+c) * ((b+d) * e) -- partial factor
-        M :: (a + a') * e → a * e -- merge; a and a' compatible
-        K :: (a + b ) * e → b * e -- assert; must be in b
+Literals may be embedded as UTF-8 sequences:
 
-
-Legend for types: `*` is a product or pair, `+` is a sum or Either type, `[x→y]` is a block type that can map from type `x` to type `y`, `N(x)` indicates a number with value x (numbers should be tracked in types as much as possible). 
-
-        "embedded text
+        "start with character `"`
          may have multiple lines
+         simple blacklist:
+            C0 (except LF)
+            DEL
+            C1
+            surrogate codepoints
+            replacement character
+         LF is escaped by following SP
+         text terminates with LF ~
         ~
 
-Embedded text is a compact representation for a list of type `μL.((codepoint*L)+1)` where codepoints are natural numbers in range 0 to 1114111. There are a few blacklisted codepoints for embedded texts: control characters - C0, C1, DEL (excepting LF) - surrogates (U+D800..U+DFFF), and the replacement character (U+FFFD). Other non-printing characters (e.g. zero-width space) are not recommended. LF is escaped by following it with SP, while the text is terminated by the two character sequence LF ~.
+*Aside:* While ABC does not support inline literals, some [editable views](CommandLine.md) will do so. For convenience in examples, a subprogram like `"hello"` is to be understood as an inline representation for the obvious literal of five characters, even though it would include a line break in ABC.
 
-## Tokens and Capabilities
+The formal semantics of natural numbers and literals is based on Church-encoded command sequences of NOPs or UTF-8 bytes respectively. ABC does not provide a convenient syntax for these sequences. However, assuming a presentation like `(foo,bar,baz)` for a sequence of three commands:
 
-Tokens in ABC are extensions to the bytecode. Tokens may be context-specific to a codebase, a runtime, or even a network session. Tokens are expressed by wrapping a short text between curly braces, e.g. `{foo}`. (Token texts must be valid embedded texts, 1 to 255 bytes utf8, forbidding curly braces, control chars, and LF.) Environment specific tokens should include an HMAC or other authentication to resist forgery, to simplify reasoning about security.
+        #7          ==      (,,,,,,)
+        #3          ==      (,,)
+        #1          ==      ()
+        #0          ==      #
 
-Tokens must have *pure* semantics. Tokens mustn't constrain us against laziness, parallelism, and caching. However, within this limitation, tokens may support privileged or security-sensitive effects, such as reflection, copying affine values, or backtracking upon error. Together with affine blocks (to partition and sequence access to 'worlds'), tokens could feasibly be leveraged for ad-hoc side effects (cf. Clean and Mercury programming languages). 
+        "hello"     ==      (#104, #101, #108, #108, #111)
+        "→"         ==      (#226, #134, #146)
+        "h"         ==      (#104)
+        ""          ==      #
 
-However, Awelon project favors externalizing and explicitly handling effects, e.g. via use of [command sequences](CommandLine.md), [dictionary apps](ApplicationModel.md), [virtual machine models](NetworkModel.md). Awelon project uses tokens mostly for modularity and linking, performance annotations, metadata attributes, and type safety. 
+These sequences have the following behavioral semantics:
+        
+        [B][A](foo,bar,baz)i    ==      foo [[B][A](bar,baz)i] A
+        [B][A](bar,baz)i        ==      bar [[B][A](baz)i] A
+        [B][A](baz)i            ==      baz [[B][A]#i] A
+        [B][A]#i                ==      B
+        [A]i                    ==      A
+
+This is a flexible sequence model, capable of finite iteration, short circuiting, and monadic programming depending on the types of the commands and `A`. It's also directly usable as a conditional behavior, e.g. `#` vs. `()` roughly correspond to `false` vs. `true`. The expansion semantics hasn't been fully worked out yet. 
+
+        #               =   [di]
+        i               =   [][]baad
+        (foo,bar,baz)   =   [[foo](bar,baz)s]
+        (baz)           =   [[baz]#s]
+
+It's the definition of `s` that I haven't implemented quite yet.
+
+## Formatting
+
+ABC is designed to be *weakly legible*, though is intended for use together with editable views like [claw](CommandLine.md). To aide legibility, simple formatting characters - SP (32) and LF (10) - are freely permitted within ABC. These have identity semantics, equivalent to an empty program. 
+
+Further, ABC will *commit to avoiding* certain characters, to simplify embedding of ABC in contexts like documentation, HTML, intelligent editors, editable views, or dictionary exports. In particular, the following characters shall be avoided at the ABC toplevel:
+
+        <>@&:;,.=_`\(|)
+
+These characters may be used within tokens and embedded literals, of course. Additionally, ABC shall never utilize a character that is forbidden from literal text (such as control characters). 
+
+## Accelerators
+
+In addition to `abcd` primitives, ABC shall include a standard dictionary of 'accelerators' aimed primarily at improving legibility, convenience, or performance. For example, natural numbers are accelerators because embedding number data is important. The bulk of this document will be defining accelerators. Eventually. Choosing accelerators is a slow process with careful vetting. 
+
+        Usage               Behavior            Definition
+        [A]i                A                   [][]baad
+        #                                       [di]                   
+        0                                       {#10}*{#0}+
+        1                                       {#10}*{#1}+
+        2                                       {#10}*{#2}+
+        ..
+        9                                       {#10}*{#9}+
+
+        (Tentative Accelerators)
+        [B][A]w             [A][B]              []ba
+
+        (Intermediate Definitions)
+        {#0}                                    #
+        {#1}                                    #{S}
+        {#2}                                    #{S}{S}
+        ..
+        {#9}                                    #{S}{S}{S}{S}{S}{S}{S}{S}{S}
+        {#10}                                   #{S}{S}{S}{S}{S}{S}{S}{S}{S}{S}
+        {S}                                     []{w}[{s}]bb
+
+
+## Tokens
+
+Tokens have the form of short text between curly braces, e.g. `{foo}`. Like accelerators, tokens must have a pure, formal semantics as a finite `[abcd]` expansion. The text between the two braces is limited to 255 UTF-8 bytes, which must be valid literal texts but additionally forbids LF and `{}`. 
+
+Most tokens have **identity semantics**, i.e. removing them from the code does not impact its formal behavior. Tokens with identity semantics can broadly support performance, safety, security, debugging, and rendering. For example, `[A]{&jit}` is formally no different from `[A]`, but would tell a runtime to force just-in-time compilation.
+
+Other tokens have **linking semantics**, inlining a named subprogram. For example, in [AO](AboutAO.md), the token `{%foo}` will formally inline the definition of word `foo` in place of the token. In a distributed system, linking might use secure hashes. Linking in ABC systems must always be acyclic.
+
+For more information on tokens and the abundant idioms surrounding them, see the primary [ABC document](AboutABC.md).
+
+*Aside:* Based on experimentation, tokens should not be used to model symbolic data such as variant tags or record fields. It's a bad idea because it introduces a need for sophisticated metaprogramming. Instead, *accelerators* should be used for structured data, together with tokens to annotate and assert general structure.
 
 ## ABC CHANGE LOG
 
-March 2014: 
-* eliminated operators `PSBN`, which would observe type information
-
-April 2014: 
-* made `>` monomorphic, so it operates only on a pair of numbers
-* modify list type from `µL.(1+(elem*L))` to `µL.((elem*L)+1)`
- * this impacts meaning of embedded texts
-
-August 2014
-* swap order of arguments to operator `o`, to better match common use
-
-June 2015:
-* eliminate `/` operator, leave ABC number type as integers, library-layer rationals
- * original definition: `/ :: N(non-zero a) * e → N(1/a) * e`
- * note: not fully committed to this change, may restore `/` later if necessary
-
-January 2016:
-* replace opcode `>` with `G` to reduce conflict with XML and HTML
-
-April 2016:
-* change `o` for compose to `m`, to eliminate use of vowels.
-
-August 2016:
-* allow larger tokens to allow for large resource ID hashes
-
-## ABCD
-
-ABCD extends ABC with a standard dictionary of functions, i.e. such that a single character expands into a subprogram that is well defined in ABC. If well chosen, ABCD operators compress streaming bytecode, improve interpreted performance, and simplify optimization. For best results, the standardization process for ABCD must be both empirical and carefully reasoned.
-
-I have yet to define ABCD extensions. Candidates for extension should first be explored within implementations of ABC.
+September 2016: Major revision to [minimalist ABC](ABC_Minimalist.md). Old content deprecated and deleted. Subsequent changes should be oriented mostly around *Accelerators*.
 
