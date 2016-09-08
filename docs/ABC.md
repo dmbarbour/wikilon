@@ -74,7 +74,7 @@ Further, ABC will *commit to avoiding* certain characters, to simplify embedding
 
 These characters may be used within tokens and embedded literals, of course. Additionally, ABC shall never utilize a character that is forbidden from literal text (such as control characters). 
 
-## Accelerators
+## Standard Accelerators
 
 In addition to `abcd` primitives, ABC shall include a standard dictionary of 'accelerators' aimed primarily at improving legibility, convenience, or performance. For example, natural numbers are accelerators because embedding number data is important. The bulk of this document will be defining accelerators. Eventually. Choosing accelerators is a slow process with careful vetting. 
 
@@ -114,5 +114,6 @@ For more information on tokens and the abundant idioms surrounding them, see the
 
 ## ABC CHANGE LOG
 
-September 2016: Major revision to [minimalist ABC](ABC_Minimalist.md). Old content deprecated and deleted. Subsequent changes should be oriented mostly around *Accelerators*.
-
+September 2016: 
+* revision to [minimalist ABC](ABC_Minimalist.md)
+* old content now deprecated and deleted

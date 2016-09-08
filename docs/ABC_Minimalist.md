@@ -298,7 +298,6 @@ Aside from compilation, it would be convenient to at least support *compaction* 
 
 * `{&par}` - begin parallel evaluation of contained subprogram
 * `{&seq}` - evaluate subprogram with same priority as parent
-* `{&lazy}` - reduced priority for computation when applied
 * `{&asap}` - compute a value with greater priority than parent 
 
 The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing static computation of values. Use of `{&seq}{&asap}` would further allow for 'deep' evaluations (`{&asap}` is shallow). Interestingly, `{&seq}{&lazy}` is a possibility, indicating that we first want to evaluate the program as far as possible, then evaluate it by need when later applied.
@@ -309,7 +308,8 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 * `{&nat}` - use runtime's natural number format
 * `{&binary}` - represent a compact sequence of bytes
 * `{&stow}` - move data out of working memory
-* `{&trash}` - recycle memory (error value), but preserve annotations
+* `{&load}` - advise that a stowed value will be needed soon
+* `{&trash}` - recycle memory but preserve trace and substructure
 
 ## Deprecating Symbolic Structure and Metaprogramming 
 
