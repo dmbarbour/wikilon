@@ -36,6 +36,33 @@ Here, object `foo` has a pointer to its head version that we update, and a word 
 
 With a long history or big-value commands, applications can potentially grow larger than memory. This is acceptable, so long as developers leverage [stowage](Performance.md) to indicate which parts of the value should be kept out of immediate memory. With stowage, we can model massive tree structures, modeling filesystems and databases and large queues, only loading the pieces we need for each command or view.
 
+## Incremental Computing with Dictionary Apps
+
+Dictionaries apps have a very 'spreadsheet-like' aspect to them, so incremental computing will be highly valuable for performance. Incremental computing means minimizing computation after each update. Consider a scenario involving a database object and a useful view of that object:
+
+        ...
+        @myDB.v99 {%myDB.v98}(update99)
+        @myDB     {%myDB.v99}
+
+        @myDB:usefulView   {%myDB}{%usefulView}
+
+If we assume a cached version of `myDB.v98` then it seems obvious that we can incrementally compute and cache `myDB.v99`, so at least that respect for our incremental computing is straightforward. The challenge, then, regards incremental computing of the useful view of our database.
+
+One feasible solution involves caching. Assumptions:
+
+* the view is compositional
+* the database object has multiple 'component' partitions
+* the updates are isolated to just a few components
+* annotation `{&cache}` creates caching functions
+
+By *view is compositional*, I mean that the view of the composite is a function of the views of the components. Formally, `∃F.∀x,*,y. V(x*y) = F(V(x), quote(*), V(y))` for our view `V`. I believe that a lot of useful views fit this criteria, or at least can be made to fit with a little wrapping and tuning.
+
+Annotation `[V]{&cache}` will create the caching version of function `V`. This must load the cache if it already exists, so our runtime will use a serialization of `[V]` (perhaps indirectly, via secure hash or stowage address) to load the appropriate cache. In general, we'll also need to serialize *arguments* to `[V]` to access cached results or save new results. With a cached view function, we can directly apply it within composition view function to access deep cache structure.
+
+Efficient use of cache can be achieved by heuristic decisions about what to cache. At the runtime layer, we may observe effort vs. space tradeoffs, and avoid caching if recomputing is relatively cheap. At the development layer, we might make explicit, conditional decisions about which views to try caching, so we aren't serializing minor or unstable components.
+
+It seems that explicit caching could serve effectively as a basis for incremental computation in dictionary apps, at least for a useful subset of views and related processes.
+
 ## Real-World Effects and Reflection via Software Agents
 
 Software agents (colloquially, 'bots') can observe our dictionary for some easily tested conditions, interact with the real world, and contribute updates to the dictionary. For example, a dictionary object may include *an inbox and outbox* for messages, or perhaps a *publish-subscribe arena*. Our 'bot' could integrate the inbox/outbox with external systems (e-mail, twitter, AMQP). Similarly, publish-subscribe could be integrated with external publish-subscribe models (DDS, atom, time-series data). 
@@ -67,6 +94,7 @@ To declare a list of attributes, I propose prefixing any definition as follows:
 It is extensible with ad-hoc new attributes: todos, deprecation, authorship, categories, relations, deprecation, licensing, decay models, automatic testing, cache and quota control, security, etc. I expect attributes will be common enough that I've introduced a specialized syntax to my claw view: `(hidden opaque frozen)` desugars to the above. Attributes have no runtime semantics. Dropping the block of annotations via `%` helps clarify this, e.g. a runtime will generally eliminate the entire block during a simplification pass and never wonder what `{&category:math}` is supposed to do.
 
 Note: The *frozen* attribute is not a security attribute. If developers want to modify the definition of a frozen word, they may do so. At worse, they'll face a "do you *really* want to do this?" dialog. Security attributes may have potential utility, though. They're discretionary, but we can enforce them if a dictionary is gated behind a service API. See security, below.
+
 
 ## Parallelism in Dictionary Applications
 
@@ -113,3 +141,4 @@ Extraction of applications allows Wikilon to double as a more conventional appli
 The extractor itself is a RESTful dictionary application, and downloading a compiled version of some function may be expressed as a trivial HTTP GET on a link. Extractors will frequently be specific to a particular application model. And "application model" can be interpreted very loosely here. We could have extractors specifically for image data, for example, computing an image and converting to PNG or SVG. 
 
 For Wikilon, the short term goal is to support immediately useful extractors like compiling to JavaScript or presenting an SVG view, even if each such extractor must be specifically within Haskell code. The long term goal is to allow definition of new extractors from within the dictionary, e.g. functions that will receive on the stack a powerblock of reflective capabilities and a command target.
+

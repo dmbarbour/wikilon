@@ -32,14 +32,14 @@ ABC has many unusual features that make it suitable for Awelon project:
 
 See [ABC](ABC.md) and [minimalist ABC](ABC_Minimalist.md) for details. 
 
-But the very short version:
+But the very short summary:
 
         (PRIMITIVES)
 
-        [B][A]a == A[B]
-        [B][A]b == [[B]A]
-           [A]c == [A][A]
-           [A]d ==
+        [B][A]a == A[B]         (apply)
+        [B][A]b == [[B]A]       (bind)
+           [A]c == [A][A]       (copy)
+           [A]d ==              (drop)
         
         (STANDARD ACCELERATORS)
 
@@ -106,7 +106,9 @@ Performance annotations can do things like:
 * `{&nat}` - assert natural number, use runtime's natural number rep
 * `{&stow}` - move a large value out of working memory, load it lazily
 * `{&load}` - advise that a stowed will soon be needed
-* `{&jit}` - compile a subprogram
+* `{&cache}` - use caching implementation for function
+* `{&opt}` - simplify and optimize a subprogram 
+* `{&jit}` - compile a function 
 
 Use of annotations to control staging and compilation has potential to be very effective in giving developers control of the performance of their code. In general, annotations on representation also support type checking and may be effectively used together with accelerators to squeeze the most performance from a representation.
 

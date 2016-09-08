@@ -91,6 +91,10 @@ A very cache-friendly pattern for dictionary applications is where each word beg
 
 A very simple technique in context is to cache evaluation results for each step, and allow them to decay normally (e.g. via exponential decay models). 
 
+## Explicit Caching
+
+Implement a `[V]{&cache}` that uses the stowage layer for explicit cache control and incremental computing. 
+
 ## Quotas and Caching
 
 As a development platform, Wikilon will host a lot of long-running and non-terminating code. Ideally, ABC programs should always terminate, but divergent code is possible because it's buggy or malign. And long-running code may exist because it's non-terminating or simply really expensive. I've been wondering how to best address this concern in context of:

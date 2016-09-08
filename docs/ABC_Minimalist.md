@@ -286,13 +286,15 @@ Use of `{&par}` essentially enables programmers to control chunking of evaluatio
 
 ### Compilation
 
-I'm not sure how to go about compilation of term rewrite programs. I'm certain it's been done (and a quick Google search confirms this). But let's just assume I won't succeed much at compilation in cases where I cannot completely apply a value.
+I'm not sure how to go about compilation of term rewrite programs. I'm certain it's been done (and a quick Google search confirms this). But let's just assume I won't succeed much at compilation in cases where I cannot completely apply a function. That is, I need to ensure I have the function's full 'arity' before application, at least for functions with static arity.
 
 That still leaves a useful subset: given a compiled subprogram, I can wait to evaluate until I have a sufficient amount of input for its *arity* before applying. I can also ensure the arguments are fully evaluated. Thus, the problem reduces to evaluation of a more conventional, purely functional program. And if need arises, I can easily flip back to a compiled program's source to perform some partial applications or whatever.
 
 Aside from compilation, it would be convenient to at least support *compaction* of bytecode, such that I'm touching less memory during evaluation, copying less memory during iteration, etc..
 
 ### Performance Annotations
+
+Some potential annotations for performance.
 
 **Evaluation Control**
 
@@ -310,10 +312,13 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 * `{&stow}` - move data out of working memory
 * `{&load}` - advise that a stowed value will be needed soon
 * `{&trash}` - recycle memory but preserve trace and substructure
+* `{&cache}` - cache applications of a function (dictionary scale)
+* `{&opt}` - extra efforts towards simplifying and optimizing
+* `{&jit}` - optimize a function by compiling it
 
 ## Deprecating Symbolic Structure and Metaprogramming 
 
-The idea of using tokens for structured data (polymorphic records and variants) would give me a jump start for turning ABC into a practical language. However, it comes with a large cost: I require *metaprogramming* to introduce new tokens - new field names or variants. I ultimately don't need metaprogramming for anything else. 
+The idea of using tokens for structured data (polymorphic records and variants) would give me a jump start for turning ABC into a practical language. However, it comes with a large cost: I require *metaprogramming* to introduce new tokens - new field names or variants. I ultimately don't need metaprogramming for anything else, and I'd appreciate that metaprogramming not require any special attention.
 
 It seems feasible to shift the modeling of structured data primarily to ABCD, i.e. by developing appropriate accelerators to receive the data.
 
@@ -360,7 +365,8 @@ The simplest `{runMeta}` monad might answer every request with a wrapped token. 
 
 Monadic metaprogramming is first class, subject to composition, abstraction, and flexible reuse. Assuming a free monad, we can intercept the requests, simulate and test how the metaprogram would behave under a variety of mockup environments and configurations. There is very clear staging between the metaprogram and its computed output, no risk of incomplete output, and it's easy to record requested dependencies. Any competing model for metaprogramming should do at least this well for serious consideration.
 
-## Command Sequence Syntax? Maybe later.
+## Optimization
 
-I'm tempted to support `(foo,bar,baz)` as a syntactic sugar at the bytecode level. 
+The primitive rewrite rules are insufficient for optimization in many cases. For example, `[]a` or `[i]b` could be eliminated from a program without affecting its observable behavior. But more interesting than *identity* behaviors are possibilities like moving complete computations past incomplete computations that are known to ignore a particular item on the stack. I wonder how much of that might be performed by discipline, instead.
 
+I think it will be valuable to develop a large set of rewrite rules suitable for optimizations.
