@@ -153,137 +153,45 @@ This model of attributes is useful because:
 
 Attributes are rather ad-hoc, subject to de-facto standardization by the agents (human and software). For example, `foo.gc` might describe how to handle all of `foo.v*` rather than require specific definitions like `foo.v3.gc`. 
 
-Embracing this idiom only requires we default to exporting `foo.*` whenever we export `foo`. At the definition level, our dictionaries remain acyclic. But it is feasible for `foo` to refer to `bar` and `bar.x` to refer back to `foo`. 
+Embracing this idiom only requires we default to exporting `foo.*` whenever we export `foo`, and renaming `foo.*` whenever we rename `foo`. At the definition level, our dictionaries remain acyclic. But it is feasible for `foo` to refer to `bar` and `bar.x` to refer back to `foo`. 
 
 For modeling 'objects', consider a spreadsheet. The attribute `foo.cA1` might indicate definition for cell `A1` when `foo` is rendered as a spreadsheet, and may be bundled with a few hundred more cells. While not OOP by itself, there is some general sense that a [bundle of attributes](https://en.wikipedia.org/wiki/Bundle_theory), e.g. for export and rendering, is what we humans perceive to be an 'object'.
 
-I'll expand on the 'objects' with the *Security* concern, below.
+## Security for Dictionary Applications
 
-## Object Capability Security for Dictionary Applications
+When multiple agents muck about in a stateful dictionary, it becomes valuable to precisely control who interacts with what. Fortunately, the rich computational structure of our dictionary admits some expressive security models. Automatic curation is feasible, rejecting updates that break types or tests. We can also adapt object capability security. Consider two authorities:
 
-Securing a dictionary is not dissimilar from securing multi-user filesystems or databases. However, I am not particularly impressed how most filesystems and databases handle security. Let's see if we can do a better job here.
+* query *object* via *interface* 
+* update *object* via *interface*
 
-What do I want to secure?
+In context of a dictionary, words are the smallest unit that we observe and control. Our interface and object name words. Authorities can generally be represented and shared via cryptographic bearer-tokens of the form `update:object/interface/HMAC`. User logins might be modeled as a bag of bearer tokens together with relevant view states (active edits, color schemes, alerts, etc..).
 
-* words are the unit of state, update, and observation
-* definitions may encapsulate sensitive information
-* structure of updates and type of results is critical
+Query and update permissions specify an interface:
 
-Tentatively, I contemplate coarse word-level permissions:
+        query interface:    Params → Object → Result
+        update interface:   Params → Object → Object
 
-* *read* - we can see the underlying definition for a word
-* *query* - we can query a definition and observe result
-* *write* - we can overwrite an existing definition directly
-* *update* - we can apply iterative updates to a definition
+These interfaces constrain our agents. We're only permitted to observe the result of our query, which allows for flexible information hiding. Similarly, update interfaces constrain which updates may be expressed for our object. There is a most powerful interface: `apply :: (o → a) → o → a`, which can be used to construct any other interface. 
 
-This is similar to a filesystem, but with 'query' and 'update' permissions enabling me to control a bit more structure. Consider the update action specifically. A general approach is something like:
+At the dictionary level, updates could be implemented by command pattern:
 
-        @foo.update (action)
+        @alice.foo.update (alice's foo update interface)
+        @bob.foo.update (bob's foo update interface)
+
         @foo.v0 (init foo)
-        @foo.v1 [{%foo.v0}][(update1)]{%foo.update}
-        @foo.v2 [{%foo.v2}][(update2)]{%foo.update}
-        @foo {%foo.v2}
+        @foo.v1 [{%foo.v0}][Parameters1]{%alice.foo.update}
+        @foo.v2 [{%foo.v1}][Parameters2]{%alice.foo.update}
+        @foo.v3 [{%foo.v2}][Parameters3]{%bob.foo.update}
+        @foo    {%foo.v3}
 
-Unfortunately, the above update model isn't very precise or extensible, i.e. because the `[(update)]` value provides access to *all* the possible update methods. I think it would be useful to restrict agents to specific updates. Thusly, we might break updates into multiple methods. For example:
+Queries might instead be reified in the dictionary:
 
-        @foo.update.methodA (methodA)
-        @foo.update.methodB (methodB)
-        @foo.v0 (init foo)
-        @foo.v1 [{%foo.v0}][(updateArgs1)]{%foo.update.methodA}
-        @foo.v2 [{%foo.v1}][(updateArgs2)]{%foo.update.methodB}
-        @foo {%foo.v2}
+        @alice.foo.query (alice's foo interface)
+        @alice.foo.q0 [{%foo}][Params]{%alice.foo.query}
 
-With this, I can now give an agent permission for a specific subset of *update* methods. I believe the same idea can be adapted to *query* methods, i.e. such that we may define queries on an object then automatically gain permission to observe and use the results of said query. Further, *read* and *write* can be modeled as specific query and update methods. 
+*Aside:* Agent specific interfaces give us a lot of precision. If modeling a multi-user dungeon, for example, players might each have interfaces specific their avatar. This also enables precise management and revocation of authority.
 
-Documenting, explaining, and managing permissions at the level of fine-grained methods is likely to prove painful. However, we can easily document coarse-grained 'methods' and instead call them 'interfaces'. An interesting property is that these interfaces themselves might also be objects, subject to update.
-
-An important 
-
-
-
-
-updates and queries may both be restricted such that they fail with error if they don't complete - i.e. produce a single value - within reasonable quota limits. 
-
-
-this seems rather *too* fine grained. Documenting and explaining permissions at the level of individual methods will be painful. I think a happy medium might involve interfaces, with the following features:
-
-* interfaces can provide multiple update and query methods
-
-
-i.e. such that we can say that Alice has access to object `foo` through a specific set of interfaces `bar, baz, qux`. I'll get back to the question of 'what is an interface' in just a bit.
-
-At this 
-
-
-
-At this point, we're getting something arbitrarily close to object-oriented. 
-
-
-
-
-Everything I'm describing of what we're discussing with 'updates' can easily be generalized to 'queries'. 
-
-Also, *read* and *write* permissions are effectively specializations on update and queries.
-
-
-
-But I think we can do better than this.
-
-
-
-At this point, we have the ability to give agents method-level permissions for updating an object.
-
-        
-
-
-
-
-
- could actually scale to support *multiple* update actions, such that agents could be given very specific update permissions. 
-
-        @foo.update.action1 (action1)
-        @foo.update.action2 (action2)
-        
-
-
-
-
-
-
-
-For *update*, I'm assuming we'll use a simple `[Update][Program]i` model, producing a new program - i.e.
-
-
-The *write* permission would be strictly stronger than *update*, and *read* is strictly st
-
-
-source code (because sensitive info) but we can query
-
-
-To guard sensitive information, it must be possible to observe/evaluate a function without seeing its source code. (But ability to read would imply evaluation.) 
-
-We'll need *read* access to be separate from *observe* access, i.e. where the latter requires a simple model like producing an output. 
-
-
-, simple techniques like 'access control lists' can be made to work. Capab
-
-To provide security, we must constrain access to the dictionary. imilar to security problems surrounding multi-user filesystems or databases. 
-
-
-
-
- In particular, the following features must be controlled:
-
-* ability to write or update
-* ability t
-
-, e.g. via a service API. This is similar to how we might control access to a filesystem or database. We could separate authentication from the dictionary to avoid polluting the dictionary with the equivalent of password files.
-
-Imagine our goal is to model a game where each player is limited to viewing and manipulating a shared game world through a personal avatar. Read-only access is sufficient for players to view the game world through they eyes of any avatar. Write access would allow a player to control other characters. Even full access to a private namespace in the dictionary might be problematic because players could retroactively modify their actions. Though, we could support a private copy-on-write namespace for macros and the like.
-
-Ultimately, the holistic experience of AO dictionary applications would be available only to participants in non-player roles (e.g. game masters, developers, the gateway service). Only these participants have the full ability to debug, snapshot, fork, optimize, etc. the game service. Players may still benefit from dictionary apps indirectly, e.g. we could open up snapshots of the player-enriched game world a month later.
-
-*Aside:* If the number of players is small and the game isn't too competitive, asking players to police themselves is reasonable. Shared storytelling, quests, tabletop roleplaying, interactive fictions, and their like do not benefit from security. Nor would a chess game. 
+Besides query and update, we'd need authorities for source level reads, writes, delete, rename, fork, search and discovery, and other such features. I imagine it would be *frustrating* to use a dictionary through a limited interface, but it might not matter too much if there's a clear divide between users and administrators.
 
 ## Extraction of Applications from the Dictionary
 
