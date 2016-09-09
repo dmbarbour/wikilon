@@ -86,7 +86,7 @@ Summary of constraints:
  * other UTF-8 except for C1, surrogates, replacement char
  * must not start with numeral-like regex `[+-.]*[0-9]` 
  * must not terminate with a . or : (period or colon)
- * no empty words, valid sizes are 1..254 bytes UTF-8
+ * no empty words, 1..254 bytes UTF-8.
 * tokens are limited to:
  * word dependencies (`{%dupd}{%swap}`)
  * value sealing (`{:foo} {.foo}`)
@@ -98,3 +98,4 @@ Summary of constraints:
  * exclude surrogate codepoints U+D800..U+DFFF
  * exclude replacement char U+FFFD
 
+Word size is only restricted based on token size. This is sufficient to model some deep, hierarchical structure for words, e.g. to model objects and attributes. However, it is recommended to dictionaries relatively flat.

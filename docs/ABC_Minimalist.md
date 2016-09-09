@@ -88,6 +88,8 @@ Semantically, these data embeddings have a Church encoding, one that unifies nic
 
 The semantics is to follow each action in the sequence with a client-provided action. This is generic. Monadic sequences can be represented if our actions `(foo,bar,baz)` each includes another possibly empty command sequence, and `[A]` uses a fixpoint. But a lot of useful iteration can be expressed without fixpoints. Todo: Provide definitions for these semantics.
 
+*Note:* I should review and test monadic use of these sequences in practice. I cannot directly bind one sequence into another because at the point of `foo`, I do not know `[A]`.
+
 ### The Dictionary
 
 ABC includes a standard set of additional operators, each bound to a UTF-8 codepoint and defined by its expansion to an `[abcd]` sequence. The operators `#1234567890` for embedding number data are examples of ABCD operators. There are many potential motivations for adding an operator to the dictionary:
@@ -208,19 +210,17 @@ The API will be oriented around building a 'program' left to right in terms of i
 
 During evaluation, all program level errors are modeled via `{&error}`. The context level issue of 'running out of memory' shall be handled by a checkpoint-based evaluation mode so that, while we might lose a little work, our program state remains valid.
 
-*Aside:* For work with AO dictionaries, it seems hugely useful to support injection of dictionary into our context. This would happen during 'program build' time, and we could evaluate even if we don't know a definition. E.g. if we forget to define `{%foo}`, we can fail. Injected definitions could be immutable after assignment.
-
 *Note:* I may provide an option/mode to perform lightweight optimization and simplification during program entry. But I will want a version that exactly preserves a program as entered.
 
 *Aside:* I won't introduce support for binaries yet - at least not before accelerators exist to simplify rendering within a program. 
 
-### Linking in Context
+### AO Linking and Dictionaries
 
-With program rewriting, I can continue evaluation in the presence of unknown tokens, we'll just not be able to move data across that token. Thus, there is no reason to restrict against tokens we don't recognize. 
+With program rewriting, I can continue evaluation in the presence of unknown tokens, we'll just not be able to move data across that token. Thus, there is no reason to restrict against tokens we don't recognize.
 
-An interesting related point is that we can easily provide ABC definitions for these tokens, in a linker style.
+It seems that I could easily provide ABC definitions for linker tokens as a context parameter. Ideally in a manner that allows me to construct a 'dictionary' once then reuse it for many computations. Wrapping a dictionary data structure within a simple function of type `Token → Maybe Program` or `Text → Maybe Text` should probably work effectively, while permitting clients to decide the more general structure.
 
-Rather than repeating the work of injecting code into a context every time, ideally we can reify our dictionary just once then reuse it many times, perhaps integrated with value stowage. So this might be modeled by an API that introduces a special 'dictionary value' and enables constrained updates thereof, yet ensures this value is subject to stowage. I.e. runtime-layer data encapsulation. I think that, by this means, we could gain a great deal of performance.
+With rewriting, the final output of a program can preserve most link structure that isn't directly used. This should greatly simplify debugging by allowing more symbolic context in the debug output.
 
 ### Bit Representations
 
@@ -251,11 +251,13 @@ Candidate representation:
 
         (Small Constants)
         singleton blocks, one for every opcode!
+        plus the empty block, etc.
         (that's all we need if we include identity opcode)
 
         (Common Opcodes)
         A very few ABC codes
         Recognized annotations
+        An 'undefined' token def 
         A great many accelerators
 
 This seems an efficient and lightweight representation.
@@ -316,6 +318,7 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 * `{&opt}` - extra efforts towards simplifying and optimizing
 * `{&jit}` - optimize a function by compiling it
 
+
 ## Deprecating Symbolic Structure and Metaprogramming 
 
 The idea of using tokens for structured data (polymorphic records and variants) would give me a jump start for turning ABC into a practical language. However, it comes with a large cost: I require *metaprogramming* to introduce new tokens - new field names or variants. I ultimately don't need metaprogramming for anything else, and I'd appreciate that metaprogramming not require any special attention.
@@ -370,3 +373,4 @@ Monadic metaprogramming is first class, subject to composition, abstraction, and
 The primitive rewrite rules are insufficient for optimization in many cases. For example, `[]a` or `[i]b` could be eliminated from a program without affecting its observable behavior. But more interesting than *identity* behaviors are possibilities like moving complete computations past incomplete computations that are known to ignore a particular item on the stack. I wonder how much of that might be performed by discipline, instead.
 
 I think it will be valuable to develop a large set of rewrite rules suitable for optimizations.
+

@@ -151,15 +151,28 @@ This model of attributes is useful because:
 * attributes are easily preserved across imports, exports
 * convenient, flexible notion for dictionary-level objects
 
-Attributes are rather ad-hoc, subject to de-facto standardization by the agents (human and software). For example, `foo.gc` might describe how to handle all of `foo.v*` rather than require specific definitions like `foo.v3.gc`. 
+This idiom only requires default bundling:
 
-Embracing this idiom only requires we default to exporting `foo.*` whenever we export `foo`, and renaming `foo.*` whenever we rename `foo`. At the definition level, our dictionaries remain acyclic. But it is feasible for `foo` to refer to `bar` and `bar.x` to refer back to `foo`. 
+* export `foo.*` whenever we export `foo`
+* rename `foo.*` whenever we rename `foo`
+* delete `foo.*` whenever we delete `foo`
+* replicate `foo.*` and internal bindings to clone `foo`
 
-For modeling 'objects', consider a spreadsheet. The attribute `foo.cA1` might indicate definition for cell `A1` when `foo` is rendered as a spreadsheet, and may be bundled with a few hundred more cells. While not OOP by itself, there is some general sense that a [bundle of attributes](https://en.wikipedia.org/wiki/Bundle_theory), e.g. for export and rendering, is what we humans perceive to be an 'object'.
+With hierarchical structure, every word becomes a potential object or a filesystem-like directory, albeit based only on bundling conventions. The definitions themselves remain acyclic, but at the 'object' level we may easily express cyclic relationships, e.g. by having attributes that indicate context.
+
+Attributes have no semantics beyond the de-facto conventions surrounding them. Attributes like `foo.gc` might cover deep policy for memory management within object `foo`, such that we don't specifically need `.gc` attributes within the individual attributes. Attributes like `foo.doc` may describe other attributes.
+
+## Explicit Spreadsheets
+
+An AO dictionary with a cache for incremental computing gives us some very spreadsheet-like characteristics. An update to a definition may readily propagate through a dictionary. But we can take this further by explicitly modeling spreadsheets - as in a grid of cells that can be edited and rendered. This is easily achieved by use of attributes and objects.
+
+Trivially, we could use `mySheet.A1` to define cell `A1` for rendering in a conventional spreadsheet. However, I suspect it would be more useful to use a hierarchical structure, such as: `mySheet.row.column` (or `.column.row`). This should simplify moving to higher dimensions and symbolic identifiers in both dimensions. We could easily render with automatic ordering based on row names or column values.
 
 ## Security for Dictionary Applications
 
-When multiple agents muck about in a stateful dictionary, it becomes valuable to precisely control who interacts with what. Fortunately, the rich computational structure of our dictionary admits some expressive security models. Automatic curation is feasible, rejecting updates that break types or tests. We can also adapt object capability security. Consider two authorities:
+When multiple agents muck about in a stateful dictionary, it becomes valuable to precisely control who interacts with what. Fortunately, the rich computational structure of our dictionary admits some expressive security models. Automatic curation is feasible, rejecting updates that break types or tests. We can also adapt object capability security. 
+
+Consider two authorities:
 
 * query *object* via *interface* 
 * update *object* via *interface*
@@ -184,20 +197,19 @@ At the dictionary level, updates could be implemented by command pattern:
         @foo.v3 [{%foo.v2}][Parameters3]{%bob.foo.update}
         @foo    {%foo.v3}
 
-Queries might instead be reified in the dictionary:
+Queries might be reified in the dictionary:
 
         @alice.foo.query (alice's foo interface)
         @alice.foo.q0 [{%foo}][Params]{%alice.foo.query}
 
+For the update case, we may be limited to constant parameters. It may require a separate authority for retroactive update.
+
 *Aside:* Agent specific interfaces give us a lot of precision. If modeling a multi-user dungeon, for example, players might each have interfaces specific their avatar. This also enables precise management and revocation of authority.
 
-Besides query and update, we'd need authorities for source level reads, writes, delete, rename, fork, search and discovery, and other such features. I imagine it would be *frustrating* to use a dictionary through a limited interface, but it might not matter too much if there's a clear divide between users and administrators.
+The above model is insufficient, and could probably be improved. In addition to query and update, we need authorities regarding source-level reads, writes, delete, rename, fork, history, search and discovery, and other such features. In general, I imagine it would be *frustrating* to use a dictionary through a limited interface, and it would certainly undermine some advantages of dictionary applications. 
 
-## Extraction of Applications from the Dictionary
+Nonetheless, it seems dictionaries could be used as an effective foundation for mutually distrustful multi-agent systems with a relatively generic security layer.
 
-Extraction of applications allows Wikilon to double as a more conventional application development platform, e.g. compiling a separate binary for a desktop or android phone, or a JavaScript+DOM program for a web page. 
+## Extraction of Applications
 
-The extractor itself is a RESTful dictionary application, and downloading a compiled version of some function may be expressed as a trivial HTTP GET on a link. Extractors will frequently be specific to a particular application model. And "application model" can be interpreted very loosely here. We could have extractors specifically for image data, for example, computing an image and converting to PNG or SVG. 
-
-For Wikilon, the short term goal is to support immediately useful extractors like compiling to JavaScript or presenting an SVG view, even if each such extractor must be specifically within Haskell code. The long term goal is to allow definition of new extractors from within the dictionary, e.g. functions that will receive on the stack a powerblock of reflective capabilities and a command target.
-
+Extracting and compiling an 'application' for external use is certainly feasible, especially for certain kinds of applications (e.g. those with monadic effects models). Ideally, this extraction process should be very simple and cacheable, expressed as a simple HTTP GET.

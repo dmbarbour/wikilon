@@ -104,13 +104,13 @@ In addition to `abcd` primitives, ABC shall include a standard dictionary of 'ac
 
 Tokens have the form of short text between curly braces, e.g. `{foo}`. Like accelerators, tokens must have a pure, formal semantics as a finite `[abcd]` expansion. The text between the two braces is limited to 255 UTF-8 bytes, which must be valid literal texts but additionally forbids LF and `{}`. 
 
-Most tokens have **identity semantics**, i.e. removing them from the code does not impact its formal behavior. Tokens with identity semantics can broadly support performance, safety, security, debugging, and rendering. For example, `[A]{&jit}` is formally no different from `[A]`, but would tell a runtime to force just-in-time compilation.
+Most tokens have *identity semantics*, i.e. removing them from the code does not impact its formal behavior. Tokens with identity semantics can broadly support performance, safety, security, debugging, and rendering. For example, `[A]{&jit}` is formally no different from `[A]`, but would tell a runtime to force just-in-time compilation.
 
-Other tokens have **linking semantics**, inlining a named subprogram. For example, in [AO](AboutAO.md), the token `{%foo}` will formally inline the definition of word `foo` in place of the token. In a distributed system, linking might use secure hashes. Linking in ABC systems must always be acyclic.
+Remaining tokens have *linking semantics*, inlining a named subprogram. For example, in [AO](AboutAO.md), the token `{%foo}` will formally inline the definition of word `foo` in place of the token. In a distributed system, linking might use secure hashes. Linking in ABC systems must always be acyclic.
 
 For more information on tokens and the abundant idioms surrounding them, see the primary [ABC document](AboutABC.md).
 
-*Aside:* Based on experimentation, tokens should not be used to model symbolic data such as variant tags or record fields. It's a bad idea because it introduces a need for sophisticated metaprogramming. Instead, *accelerators* should be used for structured data, together with tokens to annotate and assert general structure.
+*Aside:* Based on experimentation, tokens should never be used to introduce symbolic data types such as variant tags or record fields. Introducing a massive set of symbols creates a need for sophisticated metaprogramming. Instead, accelerators, numbers, and literals should be used for structured data, with some annotations to assert general structure.
 
 ## ABC CHANGE LOG
 
