@@ -86,12 +86,13 @@ Summary of constraints:
  * other UTF-8 except for C1, surrogates, replacement char
  * must not start with numeral-like regex `[+-.]*[0-9]` 
  * must not terminate with a . or : (period or colon)
- * no empty words or enormous words. 1..60 bytes UTF-8.
+ * no empty words, valid sizes are 1..254 bytes UTF-8
 * tokens are limited to:
  * word dependencies (`{%dupd}{%swap}`)
  * value sealing (`{:foo} {.foo}`)
  * annotations (`{&static}{&copyable}`)
  * gates for active debugging (`{@foo}`)
+ * 1..255 bytes, valid text, no LF or `{}`
 * texts are limited to:
  * exclude C0 (except LF), DEL, C1
  * exclude surrogate codepoints U+D800..U+DFFF

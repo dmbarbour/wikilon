@@ -1,6 +1,8 @@
 
 # Command Language for Awelon (claw)
 
+*NOTE:* This document needs an overhaul for [minimalist ABC](ABC_Minimalist.md).
+
 Awelon project and Wikilon will benefit from effective command line interfaces, e.g. for [modeling a REPL and shell](ApplicationModel.md). In context of Wikilon, providing console-like services through HTML forms or JavaScript should not be difficult. The underlying [Awelon Object (AO)](AboutAO.md) bytecode is unsuitable for this application in its raw form.
 
 Desirable features for a command line interface:
@@ -80,6 +82,17 @@ The escaped form of a block still contains claw code but does not assume any pla
 
 ### Claw Command Sequences
 
+A lightweight notation for a sequence, with flexible interpretation. 
+
+        (foo,bar,baz)   desugars to
+        [\[foo] \(bar,baz) SEQ]
+        
+        (baz) desugars to
+        [\[baz] ESEQ SEQ]
+
+Note that `()` is a sequence with a single empty command, while `ESEQ` is our empty sequence.
+
+
 A lightweight notation for a *sequence* of commands is valuable for many purposes: concise data representation, embedded DSLs, coroutines or cooperative threading models, etc.. Claw will provide a suitable notation. The main proposal is based on explicit continuation passing style:
 
         [foo, bar, baz, qux] desugars to:
@@ -90,7 +103,7 @@ Concise data is easy to represent, e.g. `[1,2,3,4,5]` or `[[1,2,3],[4,5,6],[7,8,
 
 *Note:* An alternative proposal is `[foo,bar,baz] = [foo [bar,baz] yield]`. But I feel the CPS option is both more expressive and easier to use because we can simply build a stack of continuations. I've also considered options that use another delimiter like `{foo, bar, baz}`, which could let me capture `[foo]` as a command. But this always causes trouble with `{}` which is somewhat ambiguous as an empty command sequence vs. single empty command.
 
-### Claw Attributes (Deprecated.)
+### Claw Comments and Attributes (Deprecated.)
 
 The idea with attributes is to provide annotations *about* source code within said code. For example: authorship, rendering, metadata for software agents. My earlier proposal offered a lightweight syntactic sugar:
 
