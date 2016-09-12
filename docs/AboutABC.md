@@ -48,12 +48,15 @@ But the very short summary:
 
         (DATA EMBEDDING - Church encoded sequences)
 
-        "hello, embedded text!
-         all literals are multi-line
-         LF ~ terminates the text
-         forbid C0, C1, DEL, surrogates, U+FFFD
-         except LF. LF SP escapes new line
-         no other escapes; "\n" is four bytes
+        "literals are multi-line
+         indentation based
+         LF (10) is special character:
+            LF SP   new line, drop SP
+            LF LF   same as LF SP LF
+            LF ~    terminates text
+         no other special characters
+         may contain "double quotes"
+         capable of embedding ABC
         ~
         
         #42

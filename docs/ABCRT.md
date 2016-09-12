@@ -51,7 +51,7 @@ LevelDB doesn't truly fit Wikilon's use cases. For *any* wiki, the natural tende
 
 Compression might improve performance by a fair margin, but must be weighted against zero-copy for our data.
 
-*Misc. Thoughts:* Lazy reference counting should greatly improve performance for stowage, by eliminating unnecessary RC updates and cleanly separating our GC task from the normal stowage tasks. We don't even need to add new objects to a zero reference count table.
+*Misc. Thoughts:* Lazy reference counting should greatly improve performance for stowage, by eliminating many unnecessary RC updates and cleanly separating GC tasks from the normal stowage tasks. We won't even need to add new objects to a zero reference count table.
 
 ## API Concepts
 

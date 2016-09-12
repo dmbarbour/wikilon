@@ -40,7 +40,7 @@ Interpreters:
 
 This is a promising start. A 10x improvement over my old `aoi` interpreter even before optimization work or JIT. This also demonstrates that the 32-bit vs. 64-bit doesn't make a significant difference on CPU performance, while effectively doubling the working context space. 
 
-However, objectively this is not *good* performance. 20 seconds for 10M loops is ~2 microseconds per loop. I hope to achieve *at least* another 10x improvement here in the medium term, via accelerators. Long term, a ~100x improvement is desirable via JIT. 
+However, objectively this is not *good* performance. 20 seconds for 10M loops is ~2 microseconds per loop. I hope to achieve *at least* another 10x improvement here in the medium term, via fixpoint accelerators. Long term, a ~100x improvement is desirable via JIT. 
 
  Cheap fixpoints and loops will almost certainly be a basis for many object/stream models.
 

@@ -63,12 +63,14 @@ Natural numbers are embedded as `#42` or `#108`. The operator `#` introduces a n
 Embedded literals have the format:
 
         "start with character `"`
-         may have multiple lines
-         LF is escaped by following SP
-         text terminates with LF ~
+         may have multiple lines:
+            LF SP (new line of text)
+            LF LF (same as LF SP LF)
+            LF ~  (terminate text)
+         LF is only special character.
         ~
 
-Literals must be valid UTF-8 with a small blacklist (no control (C0, C1, DEL) except LF, no surrogates, and no replacement char). When applied as a program, literals will support iteration over every contained UTF-8 byte. (The assumption here is that byte-level ops are the common case.)
+Literals must be valid UTF-8 with a small blacklist - no control (C0, C1, DEL) except LF, no surrogates, and no replacement char. When applied as a program, literals will support iteration over every contained UTF-8 byte. The assumption here is that byte-level ops are the common case.
 
 Semantically, these data embeddings have a Church encoding, one that unifies nicely with command sequences. ABC doesn't provide a concise representation for command sequences. However, an [editable view](CommandLine.md) may present something like: `(foo,bar,baz)`. In this case, our unification is:
 
@@ -86,11 +88,11 @@ Semantically, these data embeddings have a Church encoding, one that unifies nic
         [B][A]#i == B
         [A]i == A
 
-The semantics is to follow each action in the sequence with a client-provided action. This is generic. Monadic sequences can be represented if our actions `(foo,bar,baz)` each includes another possibly empty command sequence, and `[A]` uses a fixpoint. But a lot of useful iteration can be expressed without fixpoints. Todo: Provide definitions for these semantics.
+The semantics is to follow each action in the sequence with a client-provided action. This is generic. Free monadic sequences can be represented if our actions `(foo,bar,baz)` each may return a continuation or otherwise join a command sequence in the parent. Monadic programming and monadic loops will require a fixpoint, but a lot of useful iteration can be expressed without fixpoints. 
 
-*Note:* I should review and test monadic use of these sequences in practice. I cannot directly bind one sequence into another because at the point of `foo`, I do not know `[A]`.
+*Todo:* Provide definitions for these semantics. Test convenience of monadic programming with this semantics.
 
-### The Dictionary
+### ABC Dictionary (ABCD)
 
 ABC includes a standard set of additional operators, each bound to a UTF-8 codepoint and defined by its expansion to an `[abcd]` sequence. The operators `#1234567890` for embedding number data are examples of ABCD operators. There are many potential motivations for adding an operator to the dictionary:
 
@@ -202,7 +204,23 @@ A closed gate acts much like a breakpoint, and stalls computations depending on 
 
 Repeatedly evaluating with closed gates, taking a snapshot, then continuing can support program animation with a lot more structure than rendering on quota, and provides the same benefits of 'logging' but with a lot more available context.
 
-## Runtime and Performance
+## Concerning Performance
+
+ABC will be impractical unless it also performs competitively. Ideally, it should perform well even in the short or mid term, at least for some critical areas like: floating point numbers, linear algebra, binary data processing, scalable parallelism. Performance concerns also include data entry and extraction (for efficient integration), and type checking and compilation.
+
+ABCD and similar runtime-level features will play a major role for performance. By developing a dictionary around common data structures and operations on them, a runtime is free to use optimized representations, hand-optimized implementations, and potentially some higher level rewrite optimizations. This can be coupled with annotations like `{&lit}` or `{&nat}` to encourage use of specialized representations.
+
+### Binary Data
+
+ABC excludes a binary 'literal' type for legibility reasons. However, it seems feasible to develop an *accelerator* that takes a text literal (e.g. base16 or base64) and converts it to a binary sequence. Upon doing so, we can represent binaries at the runtime layer and serialize them back to ABC or extract them as needed. 
+
+Efficient processing of binary data will probably require accelerators for slicing, indexed access, indexed update, and composition of slices.
+
+### Floating Point Numbers
+
+I need a good story for floating point numbers in order to support GPGPU computing. Any floating point number can be represented by a triple - exponent, mantissa, sign. I may need to precisely model floating point arithmetic - including inaccuracies - before accelerating it. That seems painful but feasible.
+
+## Runtime
 
 ### API
 
@@ -319,7 +337,7 @@ The `{&asap}` annotation is a lightweight basis for staging, e.g. for forcing st
 * `{&jit}` - optimize a function by compiling it
 
 
-## Deprecating Symbolic Structure and Metaprogramming 
+## Symbolic Structure and Metaprogramming? Nope.
 
 The idea of using tokens for structured data (polymorphic records and variants) would give me a jump start for turning ABC into a practical language. However, it comes with a large cost: I require *metaprogramming* to introduce new tokens - new field names or variants. I ultimately don't need metaprogramming for anything else, and I'd appreciate that metaprogramming not require any special attention.
 
@@ -358,7 +376,7 @@ Record operations are linear. It is invalid to read a field that is not in the r
 
 Use of field operations on anything other than an anonymous or variant record is an error. Matching against anything that is not specifically a variant record is an error. Records may be copied or dropped (ops `c` and `d`) if and only if those operations are permitted for every contained member. Records are not usable as functions, i.e. use of `a` or `b` with a record as the primary argument is an error.
 
-### ABC Metaprogramming (Deprecated)
+### ABC Metaprogramming (Unnecessary w/o Symbolic Structure)
 
 An ABC program consists of `[abcd]` sequences with embedded `{tokens}`. Construction of `[abcd]` sequences requires no special attention. Thus a complete metaprogramming solution only needs to inject tokens. The challenge is to achieve this without compromising effective static reasoning or reusability of code. My best ideas so far involve modeling construction of tokens as an *effect*. 
 
@@ -367,10 +385,3 @@ An ABC program consists of `[abcd]` sequences with embedded `{tokens}`. Construc
 The simplest `{runMeta}` monad might answer every request with a wrapped token. We could request a token `"/foo"` and get back `[{/foo}]`. Note that `{runMeta}` might not exist as an explicit token, but rather be implicit to a programming environment. Within an [AO dictionary](AboutAO.md) we might use `foo.make = [program in Meta monad]` and implicitly reconstruct `foo` from `foo.make` whenever its recorded dependencies change. (A staged build system is an easy fit for Awelon project's [application models](ApplicationModel.md).)
 
 Monadic metaprogramming is first class, subject to composition, abstraction, and flexible reuse. Assuming a free monad, we can intercept the requests, simulate and test how the metaprogram would behave under a variety of mockup environments and configurations. There is very clear staging between the metaprogram and its computed output, no risk of incomplete output, and it's easy to record requested dependencies. Any competing model for metaprogramming should do at least this well for serious consideration.
-
-## Optimization
-
-The primitive rewrite rules are insufficient for optimization in many cases. For example, `[]a` or `[i]b` could be eliminated from a program without affecting its observable behavior. But more interesting than *identity* behaviors are possibilities like moving complete computations past incomplete computations that are known to ignore a particular item on the stack. I wonder how much of that might be performed by discipline, instead.
-
-I think it will be valuable to develop a large set of rewrite rules suitable for optimizations.
-
