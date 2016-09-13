@@ -189,6 +189,8 @@ ABC with type declarations is amenable to static typing. Tokens such as `{&nat}`
 
 Rich types are feasible. It's a bad idea to squeeze much logic into a token, but it is feasible to use programs or data to describe types. Given an [AO dictionary](AboutAO.md), types could be associated with each word via a simple convention like using `foo.type` to describe the type of `foo`. We could also use a pattern like `[foo][type]{&type}d` as a basis for inline declarations of types.
 
+*Aside:* I should get started on static typing early, I think. Start with simple types then expand. I imagine this will make JIT compilation a lot easier.
+
 ### Gates for Active Debugging
 
 Program rewriting makes debugging relatively easy. We can render the whole program 'state' after something goes wrong. Use of breakpoints can augment this further by enabling developers to observe intermediate states and step through problematic parts of a computation. 
@@ -204,6 +206,8 @@ A closed gate acts much like a breakpoint, and stalls computations depending on 
 
 Repeatedly evaluating with closed gates, taking a snapshot, then continuing can support program animation with a lot more structure than rendering on quota, and provides the same benefits of 'logging' but with a lot more available context.
 
+*Aside:* I am tempted to avoid support for 'logging' gates entirely, in favor of program animation. However, logging might offer an easier start.
+
 ## Concerning Performance
 
 ABC will be impractical unless it also performs competitively. Ideally, it should perform well even in the short or mid term, at least for some critical areas like: floating point numbers, linear algebra, binary data processing, scalable parallelism. Performance concerns also include data entry and extraction (for efficient integration), and type checking and compilation.
@@ -218,27 +222,42 @@ Efficient processing of binary data will probably require accelerators for slici
 
 ### Floating Point Numbers
 
-I need a good story for floating point numbers in order to support GPGPU computing. Any floating point number can be represented by a triple - exponent, mantissa, sign. I may need to precisely model floating point arithmetic - including inaccuracies - before accelerating it. That seems painful but feasible.
+I need a good story for floating point numbers in order to support GPGPU computing. A floating point number can be represented by a triple - exponent, mantissa, sign. I may need to precisely model floating point arithmetic, including its weaknesses or inaccuracies, before accelerating it. That seems painful but feasible.
 
 ## Runtime
 
 ### API
 
-The API will be oriented around building a 'program' left to right in terms of injecting data (texts, numbers) and operations, evaluating it, then extracting data. We might also identify errors, extract log messages, or continue evaluations involving breakpoints. 
-
-During evaluation, all program level errors are modeled via `{&error}`. The context level issue of 'running out of memory' shall be handled by a checkpoint-based evaluation mode so that, while we might lose a little work, our program state remains valid.
+The API will be oriented around building a 'program' left to right in terms of injecting data (texts, numbers) and operations, evaluating it, then extracting data. We also need APIs for active debugging and persistence.
 
 *Note:* I may provide an option/mode to perform lightweight optimization and simplification during program entry. But I will want a version that exactly preserves a program as entered.
 
 *Aside:* I won't introduce support for binaries yet - at least not before accelerators exist to simplify rendering within a program. 
 
-### AO Linking and Dictionaries
+### API for external linking and dictionaries
 
-With program rewriting, I can continue evaluation in the presence of unknown tokens, we'll just not be able to move data across that token. Thus, there is no reason to restrict against tokens we don't recognize.
+With program rewriting, dynamic linking is easy. Even when linking fails, computation may continue around the unknown token. Dynamic linking is advantageous for debugging because we can render a symbolic context after failure. Dynamic linking is convenient for separate compilation because we may load pre-compiled versions of code, and reuse them across multiple computations. So, I believe this is a worthy pursuit.
 
-It seems that I could easily provide ABC definitions for linker tokens as a context parameter. Ideally in a manner that allows me to construct a 'dictionary' once then reuse it for many computations. Wrapping a dictionary data structure within a simple function of type `Token → Maybe Program` or `Text → Maybe Text` should probably work effectively, while permitting clients to decide the more general structure.
+To support separate compilation and other caching, I'll probably want a two-level linking format:
 
-With rewriting, the final output of a program can preserve most link structure that isn't directly used. This should greatly simplify debugging by allowing more symbolic context in the debug output.
+        {%word} → ResourceID
+        ResourceID → Program
+
+This two-level structure has a lot of advantages. First, I can easily guarantee that my program dependencies are acyclic and well-formed. Second, I can cache computations against a stowage ID, for example:
+
+        ResourceID → Type
+        ResourceID → LLVM Bitcode
+        Type → ResourceIDs (reverse lookup)
+
+Third, I can support flexible structure sharing of program data and cached computations across many versions of the dictionary. This is valuable for supporting DVCS-style development of Wikilon - rapid versioning, forking, merging, etc..
+
+A `ResourceID` is a small representation for a program. It could be achieved by secure hash or by stowage. I'm leaning towards the latter option because it's more compact, simplifies local GC, is easily secured by HMAC, etc.. I could use normal heuristics here, i.e. where smaller resources (under so many bytes) are represented directly instead of indirecting through a lookup table. It shouldn't change the caching behavior, so long as the maximum size for a `ResourceID` is bounded.
+
+Use of *stowage* specifically for resources should simplify development of *reflective applications*, e.g. agents that view a dictionary, i.e. because the `ResourceID → Program` lookup can be implicit... as may be access to much cached computations, assuming a suitable caching model.
+
+To simplify debugging, programs could have tokens embedded that indicate their origin. This could easily be driven by attributes or similar, or just preserve certain debug tokens across many partial evaluations (like gates).
+
+*Aside:* Bidirectional lookup tables between secure hash and resource IDs may be developed later, if necessary.
 
 ### Bit Representations
 

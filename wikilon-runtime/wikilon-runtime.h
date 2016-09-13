@@ -5,30 +5,38 @@
  *
  *	@section intro_sec Introduction
  *
- *  Wikilon runtime consists of an interpreter for Awelon Bytecode (ABC)
- *  together with a persistence layer. Wikilon is part of Awelon project,
- *  which explores a new model of software development that relies on the
- *  streamable, serializable, and purely functional nature of ABC.
+ *  Wikilon runtime consists of an interpreter for Awelon Bytecode (ABC),
+ *  together with stowage, caching, linking layers via symbolic {tokens} 
+ *  flexibly embedded in the bytecode, plus a simple persistence feature.
  *
- *  Wikilon relies on 'stowage' - a concept for pure computations over
- *  larger than memory data. Database states are represented as pure values
- *  with stowage. Integration with the persistence layer is essential for
- *  efficient stowage.
+ *  Wikilon is part of Awelon project, which explores a new model for
+ *  software development. ABC is simple, streamable, serializable, purely
+ *  functional, and may be implemented by local rewriting - and thus may 
+ *  be evaluated and debugged without much context. The application model
+ *  involves representing application state directly in a codebase.
  *
- *  Wikilon Runtime should eventually support both accelerated operations
- *  for common subprograms, parallelism, and high quality just-in-time
- *  compilation. But the immediate focus is efficient interpretation.
+ *  Use of stowage enables multi-gigabyte data structures to be modeled as
+ *  first-class values, avoiding one major pitfall of purely functional
+ *  programming - i.e. eliminating need for external databases or filesystem
+ *  IO. Support for caching further mitigates need for state, enabling a
+ *  high level of incremental programming, so modifying the codebase doesn't
+ *  recompute more than necessary.
+ *
+ *  Wikilon runtime aims to achieve a competitive level of performance 
+ *  from ABC via parallelism, just-in-time compilation, and hand optimized
+ *  acceleration for common subprograms. However, an interpreter is the
+ *  primary model used.
  *
  *  @section usage_sec Usage
  *
  *  Create an environment. Create a context within that environment. Load
- *  data and ABC programs into this context. Perform ad-hoc computations.
- *  Check for errors. Extract or store results. Data may be loaded from or
- *  stored into the environment's key-value database.
+ *  an ABC program (including data) into the context. Evaluate in small
+ *  steps. Check for errors. Extract the evaluated program or information.
  *
- *  Wikilon runtime ensures most failures are confined to their context. 
- *  However, there are obvious limits to this, e.g. if the database
- *  is filled, that would hinder concurrent work with the database.
+ *  Errors are confined to their context, and are generally represented
+ *  within an evaluated program. The main unrecoverable error is to input
+ *  a program larger than the context can store (because stowage is not
+ *  implicit). 
  *
  *  @section license_sec License & Copyright
  *
@@ -46,18 +54,24 @@
 /** @brief Opaque structure for overall Wikilon environment.
  * 
  * An environment specifies the filesystem location for large values and
- * persistence (currently via LMDB). An environment might also provide any
- * worker threads.
+ * persistence via a key-value store (currently via LMDB). An environment
+ * may also be configured with a shared pool of worker threads for light
+ * weight parallelism and similar machine-model resources.
  */
 typedef struct wikrt_env wikrt_env;
 
 /** @brief Opaque structure representing a context for computation.
  *
- * A wikrt_cx holds a value - a 'program environment' potentially with
- * multiple implicit stacks - and may be manipulated by a single thread
- * to perform a computation. While these manipulations may be performed
- * by C code, the primary approach to manipulation is to load blocks of
- * bytecode into memory and use them to perform computations.
+ * A context has a space quota, and primarily contains a 'program'.
+ * Some of a context's space may be used for active debugging - logs 
+ * or program snapshots, for example. Due to garbage collection, a
+ * context should usually be operating at a small fraction of full
+ * capacity, e.g. less than 25%.
+ * 
+ * From the Wikilon runtime API, a context is single-threaded. That is,
+ * a context must not be used from more than one thread at a time. But
+ * no thread-local storage is used, so it is safe to use a context via
+ * external mutex or within an M:N threading model with work stealing.
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -65,10 +79,34 @@ typedef struct wikrt_cx wikrt_cx;
  *
  * Compare WIKRT_API_VER to wikrt_api_ver(). If they aren't the same,
  * then your app was compiled against a different interface than the
- * dynamic lib implements. This is just a simple sanity check.
+ * linked object implements. This is a rather convenient sanity check.
  */
 uint32_t wikrt_api_ver();
-#define WIKRT_API_VER 20160819
+#define WIKRT_API_VER 20160913
+
+/** @brief Create a Wikilon environment. 
+ *
+ * Configuration is separate. The only possible error here is to return
+ * NULL because there is insufficient memory to create the environment.
+ */
+wikrt_env* wikrt_env_create();
+
+/** @brief Release environment memory.
+ *
+ * This must occur only after associated contexts have been destroyed.
+ */
+void wikrt_env_destroy(wikrt_env*);
+
+
+/** @brief Wikilon Runtime's Error Model
+ *
+ * With program rewriting, most errors are modeled *within* the program,
+ * for example by use of a `[subprogram]{&error}i` pattern. Developers
+ * may explicitly use an `{&error}` or `{&trash}` annotation to create
+ * error objects that will become runtime errors if observed.
+ *
+ * A major exception 
+ */
 
 /** Wikilon runtime error codes. */
 typedef enum wikrt_ecode
@@ -100,18 +138,6 @@ wikrt_ecode wikrt_error(wikrt_cx*);
  */
 void wikrt_set_error(wikrt_cx*, wikrt_ecode);
 
-/** @brief Open or Create a Wikilon environment with backing database.
- *
- * The given filesystem directory is where we'll maintain persistent 
- * key-value database and stow large tree-structured values. At the
- * moment, this is an LMDB database. Parents in the dirPath will be
- * created as necessary.
- *
- * This operation returns NULL on failure. Failure is most likely due
- * to permissions in creating the given directory or because the DB
- * maximum size is too large to mmap.
- */
-wikrt_env* wikrt_env_create(char const* dirPath, uint32_t dbMaxMB);
 
 /** @brief Destroy the environment.
  *
@@ -839,75 +865,133 @@ void wikrt_set_step_effort(wikrt_cx*, wikrt_effort_model, uint32_t effort);
  // DATABASE AND PERSISTENCE ENGINE //
 /////////////////////////////////////
 
-/** @brief Validate database key.
+/** @brief Associate environment to filesystem stowage and persistence.
  *
- * Modulo size, transaction keys must first be valid texts (as per
- * wikrt_intro_text), and must further obey a simple size limit of
- * no more than WIKRT_VALID_KEY_MAXLEN bytes. 
+ * This is currently implemented by LMDB, and will consume a volume of
+ * memory-mapped address space corresponding to a fixed maximum amount
+ * of stowage, and the maximum database file size. The directory and its
+ * parents will be created if necessary.
+ *
+ * At this time, our environment may only have one such association,
+ * is single-assignment (may not be modified after set), and should
+ * be set prior to any context has need of it. Further, the database
+ * is currently limited to a single process to simplify stowage GC. 
+ * This property is weakly guarded by lockfile.
  */
-bool wikrt_valid_key(char const*);
-#define WIKRT_VALID_KEY_MAXLEN 255
+bool wikrt_db_open(wikrt_env*, char const* dirPath, uint32_t dbMaxMB);
 
-/** @brief Begin a transaction with the current context.
+/** @brief Flush pending writes to disk. 
  *
- * This gives the context opportunity to prepare any data structures
- * to track a transaction. Currently, a context may have only one
- * transaction active (i.e. no hierarchical transactions), i.e. you
- * must abort or commit before creating another. Read and write fail
- * if performed without a transaction.
+ * Wikilon runtime database does not guarantee 'durability' of writes
+ * by default. Use of wikrt_db_sync will push pending writes to disk.
+ */
+void wikrt_db_sync(wikrt_env*);
+
+/** @brief Force garbage collection on stowage and persistence layer.
  *
- * A transaction is not reified as a value within the context, rather
- * it is an implicit object attached to the context. It is recommended,
- * but not enforced, that effects or communications between contexts 
- * be performed between transactions.
+ * Wikilon runtime does not frequently garbage collect the database
+ * layer, and may favor incremental or imprecise collection in most
+ * cases. Explicitly requesting GC, however, will force deep, precise
+ * analysis. 
+ */
+void wikrt_db_gc(wikrt_env*);
+
+/** @brief Deep copy an environment's database.
+ *
+ * This is useful for backup, and potentially for compaction if a 
+ * database has many empty pages. Returns false if it fails for any
+ * reason, and `errno` may be set appropriately. Note that this does
+ * not imply GC, and you probably want to force GC before copy.
+ */
+bool wikrt_db_clone(wikrt_env*, char const* copyPath);
+
+/** @brief Replace large value with database-backed placeholder.
+ * 
+ * This is equivalent to injecting a `{&stow}` annotation into the
+ * program. In general, stowage is lazy and heuristic. A 'small'
+ * value might not be replaced at all, and a 'large' value might not
+ * be replaced immediately. Serializing a stowed value may force the 
+ * decision.
+ *
+ * If a value is stowed, it will be replaced by a stowed resource token
+ * that may contain some metadata about substructural attributes, data
+ * type, and an HMAC for security. It's important that stowage be used
+ * with transactional persistence to control against accidental GC.
+ *
+ * If there is no database available, the `{&stow}` indicator may be
+ * left in the context.
+ */
+void wikrt_stow(wikrt_cx*);
+
+/** @brief Load a previously stowed value.
+ *
+ * This is equivalent to injecting a `{&load}` annotation into the
+ * program. When applied to a stowed value, that value is loaded into
+ * memory immediately. If applied to any other value, the action is 
+ * more or less a NOP. By default, stowed data is loaded as needed.
+ */
+void wikrt_load(wikrt_cx*);
+
+/** @brief Read persistent key from database.
+ *
+ * The value is copied onto the program stack. By default, all keys are
+ * defined with value `#` - the empty sequence or option value. 
+ */
+void wikrt_key_read(wikrt_cx*, char const* key);
+
+/** @brief Write value to key in database.
+ *  
+ * A value is moved from the program stack into the database or the
+ * current transaction. If there is no obvious value, or the key is
+ * not valid, we may return 'false'. Valid database keys have the 
+ * same size and structure restrictions as tokens.
+ *
+ * Writing the default `#` value is equivalent to deleting the key
+ * from the database.
+ */
+bool wikrt_key_write(wikrt_cx*, char const* key);
+
+/** @brief Begin a transaction within the current context.
+ *
+ * A context may have only one open transaction. Reads and writes
+ * within a transaction will be tracked until the transaction is
+ * aborted or committed. Upon commit, the transaction may succeed
+ * or fail. After success, concurrent conflicting transactions will
+ * fail. Transactions are not guaranteed to be precise in detecting 
+ * conflict. However, they do guarantee progress. At least one
+ * write will succeed in case of conflicts.
+ *
+ * Reads and writes do not need a transaction. Without a transaction, 
+ * reads and writes are still individually atomic.
  */
 void wikrt_txn_create(wikrt_cx*);
 
-/** @brief Read a value from the key-value database. (e)→(v*e). 
+/** @brief Abort context transaction.
  *
- * Wikilon runtime provides an implicit, stowage friendly, key-value
- * database. Values held by such a database may be rather arbitrary.
- *
- * A key, if not previously written, has a default value of unit in 
- * the right (a value conventionally used for empty lists, absence
- * of a value, completion, and truth).
+ * This abandons a transaction, releasing associated resources. There
+ * is no guarantee of consistency, not even for read-only operations.
  */
-void wikrt_txn_read(wikrt_cx*, char const* key);
-
-/** @brief Write a value into the implicit key-value database. (v*e)→(e).
- *
- * This writes a value from the context back into the database at a named
- * location. Writing the default value - unit in right - will effectively
- * delete a key from the database.
- */
-void wikrt_txn_write(wikrt_cx*, char const* key);
-
-/** @brief Abort current transaction. */
 void wikrt_txn_abort(wikrt_cx*);
 
-/** @brief Attempt to commit active transaction.
+/** @brief Attempt to commit a transaction.
  *
- * This operation will either return 'true' if the transaction commits
- * or 'false' if it fails, in which case it is aborted. Transactions
- * may fail due to optimistic concurrency conflicts. 
+ * This will return 'true' if the transaction successfully commits,
+ * 'false' if it's forced to abort. Either way, transaction resources
+ * are released, and there is otherwise no change to context state.
  *
- * Wikilon runtime favors optimistic concurrency as the default. If it
- * is important for throughput to constrain updates on some subset of 
- * keys, consider use of client-side structures such as a queue.
+ * NOTE: There is no default effort to 'rewind' context upon failure.
+ * If that behavior is necessary, it must be modeled explicitly.
  */
 bool wikrt_txn_commit(wikrt_cx*);
 
-/** @brief Mark a transaction for durability. 
- * 
- * Transactions are 'volatile' by default - they may be lost if you
- * lose power shortly after wikrt_txn_commit. The benefit is reduced
- * latency and potential to batch transaction writes to disk. 
+/** @brief Mark transaction for durability. 
  *
- * If durability is important for a particular transaction, simply mark
- * it durable. This ensures that the transaction (and its dependencies)
- * are flushed to disk before we return from wikrt_txn_commit.
+ * Transactions are not durable by default, enabling work to buffer
+ * and batch more efficiently. Marking a transaction durable ensures
+ * durability for that transaction and its transitive dependencies.
  *
- * Otherwise, consider periodically invoking wikrt_env_sync().
+ * In practice, durable transactions probably use wikrt_db_sync(), 
+ * but the client of this API shouldn't assume so.
  */
 void wikrt_txn_durable(wikrt_cx*);
 

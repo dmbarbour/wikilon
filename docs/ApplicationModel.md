@@ -133,7 +133,7 @@ Regarding *mechanics* of declaration, see *Attributes and Objects*, below.
 
 ## Attributes and Objects
 
-It is not uncommon that we'll want associative metadata for words: documentation, discussion, version, authorship, copyright, licensing, special rendering instructions, memory management, sophisticated types or proofs, etc.. To address a lot of these concerns, a simple mechanism is to use 'dot' attributes:
+It is not uncommon that we'll want associative metadata for words: documentation, discussion, version, authorship, copyright, licensing, rendering hints, memory management, rich types or proofs, etc.. To address a lot of these concerns, a simple mechanism is to use 'dot' attributes:
 
 * `foo.doc` to document `foo`
 * `foo.talk` to discuss `foo`
@@ -146,6 +146,7 @@ It is not uncommon that we'll want associative metadata for words: documentation
 This model of attributes is useful because:
 
 * attribute updates don't invalidate cache unnecessarily
+* attributes can be used together with values in cache
 * attributes get full access to templating, abstraction
 * attributes can model cyclic relationships (parent)
 * attributes are easily preserved across imports, exports
@@ -170,7 +171,7 @@ Trivially, we could use `mySheet.A1` to define cell `A1` for rendering in a conv
 
 ## Security for Dictionary Applications
 
-When multiple agents muck about in a stateful dictionary, it becomes valuable to precisely control who interacts with what. Fortunately, the rich computational structure of our dictionary admits some expressive security models. Automatic curation is feasible, rejecting updates that break types or tests. We can also adapt object capability security. 
+When multiple agents muck about in a stateful dictionary, it becomes valuable to precisely control who interacts with what. Fortunately, the rich computational structure of our dictionary admits some expressive security models. For example, automatic curation is feasible - rejecting updates that break types or tests. We can also adapt object capability security for a dictionary-level object model.
 
 Consider two authorities:
 

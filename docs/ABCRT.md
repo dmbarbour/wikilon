@@ -51,7 +51,7 @@ LevelDB doesn't truly fit Wikilon's use cases. For *any* wiki, the natural tende
 
 Compression might improve performance by a fair margin, but must be weighted against zero-copy for our data.
 
-*Misc. Thoughts:* Lazy reference counting should greatly improve performance for stowage, by eliminating many unnecessary RC updates and cleanly separating GC tasks from the normal stowage tasks. We won't even need to add new objects to a zero reference count table.
+*Misc. Thoughts:* Lazy reference counting should greatly improve performance for stowage, by eliminating many unnecessary RC updates and cleanly separating GC tasks from the normal stowage tasks. Persistent roots should *not* be reference counted, instead using a shallow scan as part of a GC task. If I do multi-process persistence, then each process will contribute to our persistent root set.
 
 ## API Concepts
 

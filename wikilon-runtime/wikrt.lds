@@ -1,19 +1,34 @@
 {
   global: 
 
+    wikrt_api_ver;
+
     wikrt_env_create;
     wikrt_env_destroy;
-    wikrt_env_sync;
-    wikrt_env_gc;
 
     wikrt_cx_create;
+    wikrt_cx_destroy;
     wikrt_cx_relax;
     wikrt_cx_reset;
-    wikrt_cx_destroy;
     wikrt_cx_env;
     wikrt_cx_gc;
 
-    wikrt_api_ver;
+    wikrt_stow;
+    wikrt_load;
+    wikrt_db_open;
+    wikrt_db_copy;
+    wikrt_db_sync;
+    wikrt_db_gc;
+    wikrt_key_read;
+    wikrt_key_write;
+    wikrt_key_drop;
+    wikrt_txn_create;
+    wikrt_txn_abort;
+    wikrt_txn_commit;
+    wikrt_txn_durable;
+
+
+
     wikrt_valid_token;
 
     wikrt_error;
@@ -96,15 +111,6 @@
     wikrt_peek_mem_stats;
     wikrt_peek_type;
     wikrt_peek_size;
-
-    wikrt_valid_key;
-
-    wikrt_txn_create;
-    wikrt_txn_read;
-    wikrt_txn_write;
-    wikrt_txn_abort;
-    wikrt_txn_commit;
-    wikrt_txn_durable;
 
   local: *;
 };

@@ -64,7 +64,7 @@ Note that `eseq` is our empty sequence, and that `()` is a sequence containing a
 
 ## Embedding Bytecode
 
-Tokens, also, are represented directly in Claw, e.g. `{%foo}` in Claw will be represented directly by `{%foo}` in the bytecode. AO words desugar to the appropriate token, so `foo` desugars to `{%foo}` (assuming the empty namespace). Blocks are represented directly but contain claw code rather than raw bytecode. Thus, `[foo] bar` will desugar to `[{%foo}]{%bar}`.
+Tokens are represented directly in Claw, e.g. `{%foo}` in Claw will be represented directly by `{%foo}` in the bytecode. AO words desugar to the appropriate token, so `foo` desugars to `{%foo}` (assuming the empty namespace). Blocks are represented directly but contain claw code rather than raw bytecode. Thus, `[foo] bar` will desugar to `[{%foo}]{%bar}`.
 
 ABC bytecodes are embedded as word-like structures with an escape prefix: `\dcba` expands to the sequence of four ABC operators `dcba`. 
 
