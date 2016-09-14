@@ -5,44 +5,29 @@
  *
  *	@section intro_sec Introduction
  *
- *  Wikilon runtime consists of an interpreter for Awelon Bytecode (ABC),
- *  together with stowage, caching, linking layers via symbolic {tokens} 
- *  flexibly embedded in the bytecode, plus a simple persistence feature.
- *
  *  Wikilon is part of Awelon project, which explores a new model for
- *  software development. ABC is simple, streamable, serializable, purely
- *  functional, and may be implemented by local rewriting - and thus may 
- *  be evaluated and debugged without much context. The application model
- *  involves representing application state directly in a codebase.
+ *  software development. Awelon Bytecode (ABC) is a primary component 
+ *  of Awelon project. ABC is simple, streamable, serializable, purely
+ *  functional, and is evaluated by local rewriting. This is a bytecode
+ *  that can be understood, shared, composed, evaluated, and debugged 
+ *  with almost no context or setup.
  *
- *  Use of stowage enables multi-gigabyte data structures to be modeled as
- *  first-class values, avoiding one major pitfall of purely functional
- *  programming - i.e. eliminating need for external databases or filesystem
- *  IO. Support for caching further mitigates need for state, enabling a
- *  high level of incremental programming, so modifying the codebase doesn't
- *  recompute more than necessary.
- *
- *  Wikilon runtime aims to achieve a competitive level of performance 
- *  from ABC via parallelism, just-in-time compilation, and hand optimized
- *  acceleration for common subprograms. However, an interpreter is the
- *  primary model used.
+ *  Wikilon runtime consists of an interpreter for ABC together with 
+ *  persistence, stowage, caching, parallelism, and linking support for
+ *  large scale computations. The intention is to add JIT compilation, 
+ *  such that Wikilon becomes performance competitive with other systems.
  *
  *  @section usage_sec Usage
  *
- *  Create an environment. Create a context within that environment. Load
- *  an ABC program (including data) into the context. Evaluate in small
- *  steps. Check for errors. Extract the evaluated program or information.
- *
- *  Errors are confined to their context, and are generally represented
- *  within an evaluated program. The main unrecoverable error is to input
- *  a program larger than the context can store (because stowage is not
- *  implicit). 
+ *  Create an environment. Create a context within that environment. Enter
+ *  an ABC program (including data) into the context. Check entry errors.
+ *  Evaluate in small steps. Check for runtime errors. Extract evaluated
+ *  program or information.
  *
  *  @section license_sec License & Copyright
  *
  *  (c) 2015-2016 David Barbour
  *  LICENSE: BSD 3-clause <https://opensource.org/licenses/BSD-3-Clause>
- *
  */
 #pragma once
 #ifndef WIKILON_RUNTIME_H
@@ -62,16 +47,15 @@ typedef struct wikrt_env wikrt_env;
 
 /** @brief Opaque structure representing a context for computation.
  *
- * A context has a space quota, and primarily contains a 'program'.
- * Some of a context's space may be used for active debugging - logs 
- * or program snapshots, for example. Due to garbage collection, a
- * context should usually be operating at a small fraction of full
- * capacity, e.g. less than 25%.
- * 
- * From the Wikilon runtime API, a context is single-threaded. That is,
- * a context must not be used from more than one thread at a time. But
- * no thread-local storage is used, so it is safe to use a context via
- * external mutex or within an M:N threading model with work stealing.
+ * A context has a fixed-size memory and contains the ABC program and
+ * potentially some miscellaneous metadata (log messages, etc..). The
+ * context APIs are single threaded, though some internal parallelism
+ * may be achieved via worker threads.
+ *
+ * USAGE NOTE: Resize and defragmentation of memory may be achieved
+ * by moving a computation to another context. Clients should plan to
+ * defragment for long-running computations, e.g. via a small rotating
+ * pool of defrag contexts. 
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -86,161 +70,183 @@ uint32_t wikrt_api_ver();
 
 /** @brief Create a Wikilon environment. 
  *
- * Configuration is separate. The only possible error here is to return
- * NULL because there is insufficient memory to create the environment.
+ * After creation, the environment may be further configured by 
+ * `wikrt_db_open()` and `wikrt_env_threadpool()`. And you may
+ * create contexts by `wikrt_cx_create()`. 
  */
 wikrt_env* wikrt_env_create();
 
-/** @brief Release environment memory.
+/** @brief Release environment memory. 
  *
- * This must occur only after associated contexts have been destroyed.
+ * Don't do this without first destroying associated contexts.
  */
 void wikrt_env_destroy(wikrt_env*);
 
-
-/** @brief Wikilon Runtime's Error Model
- *
- * With program rewriting, most errors are modeled *within* the program,
- * for example by use of a `[subprogram]{&error}i` pattern. Developers
- * may explicitly use an `{&error}` or `{&trash}` annotation to create
- * error objects that will become runtime errors if observed.
- *
- * A major exception 
- */
-
-/** Wikilon runtime error codes. */
-typedef enum wikrt_ecode
-{ WIKRT_OK = 0      // no error
-, WIKRT_INVAL       // invalid use of API, client error
-, WIKRT_IMPL        // incomplete implementation
-, WIKRT_CXFULL      // computation failed due to space limits
-, WIKRT_ETYPE       // runtime type error, div-by-zero
-} wikrt_ecode;
-
-/** @brief Check a context for runtime errors. 
- *
- * A Wikilon runtime context is either in an OK state or in an error
- * state. Once an error state is reached, all further computations are
- * considered invalid. Transactions will fail. Extraction of data will 
- * fail. Etc.. `wikrt_error(cx)` will return coarse information about
- * the earliest runtime error.
- *
- * Runtime errors outside the wikrt_ecode range are possible via 
- * wikrt_seterr.
- */
-wikrt_ecode wikrt_error(wikrt_cx*);
-
-/** @brief Mark a computation context as erroneous.
- * 
- * This will set a WIKRT_OK context into the specified error state.
- * There is no difference in behavior between error states except
- * for the wikrt_error() call. 
- */
-void wikrt_set_error(wikrt_cx*, wikrt_ecode);
-
-
-/** @brief Destroy the environment.
- *
- * All contexts must be explicitly destroyed before the environment
- * is destroyed. 
- */
-void wikrt_env_destroy(wikrt_env*);
-
-/** @brief Ensure persistence of key-value transactions. 
- *  
- * If you don't explicitly mark transactions durable, consider calling
- * sync every five seconds or so to limit potential data loss. This 
- * function returns after all prior transactions are flushed to disk.
- */
-void wikrt_env_sync(wikrt_env*);
-
-// TODO: backup or compaction functions 
-
-/** @brief Create a context for computations.
- * 
- * Create a fresh context that has a given 'working' memory. Note
- * that this space is less than 100% effective due to the GC model.
- * A fresh context will implicitly contain the *unit* value. 
- *
- * Will return NULL if given a NULL environment. 
- */
+/** @brief Create a fixed-size context for computations. */
 wikrt_cx* wikrt_cx_create(wikrt_env*, uint32_t cxSizeMB);
 
-/** @brief Release any cached resources associated with a context. 
- *
- * If you're not going to use a context for a while, signal with 
- * wikrt_cx_relax to release control of unnecessary resources. This
- * might cause a garbage collection to release memory pages, for 
- * example.
- */
-void wikrt_cx_relax(wikrt_cx*);
-
-/** @brief Reset context to fresh condition, as if newly created. */
+/** @brief Reset context to a freshly created condition. */
 void wikrt_cx_reset(wikrt_cx*);
 
 /** @brief Destroy a context, recover memory. */
 void wikrt_cx_destroy(wikrt_cx*);
 
-// Maybe add some context performance tuning opportunities.
-
 /** @brief A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** @brief Complete enumeration of Wikilon Runtime opcodes.
- * 
- * Wikilon uses Awelon Bytecode (ABC) as its serialization models for 
- * behavior and data. ABC consists of 42 primitive operators, plus text
- * literals, blocks, and tokens.
- *
- * Opcodes are valid ASCII and UTF-8 codepoints. In general, ABC has an
- * expansion as UTF-8. 
- */
-typedef enum wikrt_abc
-{ ABC_PROD_ASSOCL = 108  // l :: (a * (b * c)) → ((a * b) * c)
-, ABC_PROD_ASSOCR = 114  // r :: ((a * b) * c) → (a * (b * c))
-, ABC_PROD_W_SWAP = 119  // w :: (a * (b * c)) → (b * (a * c))
-, ABC_PROD_Z_SWAP = 122  // z :: (a * (b * (c * d))) → (a * (c * (b * d)))
-, ABC_PROD_INTRO1 = 118  // v :: a → (a * 1)      intro unit
-, ABC_PROD_ELIM1  = 99   // c :: (a * 1) → a      elim unit
-, ABC_SUM_ASSOCL  = 76   // L :: ((a + (b + c)) * e) → (((a + b) + c) * e)
-, ABC_SUM_ASSOCR  = 82   // R :: (((a + b) + c) * e) → ((a + (b + c)) * e)
-, ABC_SUM_W_SWAP  = 87   // W :: ((a + (b + c)) * e) → ((b + (a + c)) * e)
-, ABC_SUM_Z_SWAP  = 90   // Z :: ((a + (b + (c + d))) * e) → ((a + (c + (b + d))) * e)
-, ABC_SUM_INTRO0  = 86   // V :: (a * e) → ((a + 0) * e) 
-, ABC_SUM_ELIM0   = 67   // C :: ((a + 0) * e) → (a * e) 
-, ABC_COPY        = 94   // ^ :: (a * e) → (a * (a * e)) (for copyable a)
-, ABC_DROP        = 37   // % :: (a * e) → e (for droppable a)
-, ABC_SP          = 32   // (SP) :: a → a  (space for formatting)
-, ABC_LF          = 10   // (LF) :: a → a  (newline for formatting)
-, ABC_APPLY       = 36   // $ :: ([a→b] * (a * e)) → (b * e)
-, ABC_COMPOSE     = 109  // m :: ([a→b] * ([b→c] * e)) → ([a→c] * e)
-, ABC_QUOTE       = 39   // ' :: (a * e) → ([∀s.s→(a*s)] * e)
-, ABC_REL         = 107  // k :: ([a→b] * e) → ([a→b]k * e) (mark block non-droppable)
-, ABC_AFF         = 102  // f :: ([a→b] * e) → ([a→b]f * e) (mark block non-copyable) 
-, ABC_NUM         = 35   // # :: e → (I(0) * e)  (pseudo-literal integers, e.g. `#42`)
-, ABC_D1          = 49   // 1 :: (I(a) * e) → (I(10a+1) * e)
-, ABC_D2          = 50   // 2 :: (I(a) * e) → (I(10a+2) * e)
-, ABC_D3          = 51   // 3 :: (I(a) * e) → (I(10a+3) * e)
-, ABC_D4          = 52   // 4 :: (I(a) * e) → (I(10a+4) * e)
-, ABC_D5          = 53   // 5 :: (I(a) * e) → (I(10a+5) * e)
-, ABC_D6          = 54   // 6 :: (I(a) * e) → (I(10a+6) * e)
-, ABC_D7          = 55   // 7 :: (I(a) * e) → (I(10a+7) * e)
-, ABC_D8          = 56   // 8 :: (I(a) * e) → (I(10a+8) * e)
-, ABC_D9          = 57   // 9 :: (I(a) * e) → (I(10a+9) * e)
-, ABC_D0          = 48   // 0 :: (I(a) * e) → (I(10a+0) * e)
-, ABC_ADD         = 43   // + :: (I(a) * (I(b) * e)) → (I(a+b) * e)
-, ABC_MUL         = 42   // * :: (I(a) * (I(b) * e)) → (I(a*b) * e)
-, ABC_NEG         = 45   // - :: (I(a) * e) → (I(-a) * e)
-, ABC_DIV         = 81   // Q :: (I(divisor) * (I(dividend) * e)) → (I(remainder) * (I(quotient) * e))
-, ABC_GT          = 71   // G :: (I(A) * (I(B) * e)) → (((I(B)*I(A)) + (I(A)*I(B))) * e); (in right if B > A)
-, ABC_CONDAP      = 63   // ? :: ([a→c] * ((a+b)*e)) → ((c+b)*e) (for droppable block)
-, ABC_DISTRIB     = 68   // D :: (a * ((b+c) * e)) → (((a*b) + (a*c)) * e)
-, ABC_FACTOR      = 70   // F :: (((a*b)+(c*d)) * e) → ((a+c)*((b+d)*e))
-, ABC_MERGE       = 77   // M :: ((a+a)*e) → (a*e)
-, ABC_ASSERT      = 75   // K :: ((a+b)*e) → (b*e); assert in right
-} wikrt_abc;
+  //////////
+ // META //
+//////////
 
-// Thoughts: Wikilon runtime will use accelerators instead of ABCD.
+/** @brief Obtain string listing recognized ABC operators.
+ *
+ * This includes the four primitives `abcd` plus any recognized
+ * ABC dictionary accelerators like `\n#1234567890 wi`. It's a 
+ * UTF-8 string so some codes require multiple bytes.
+ */
+char const* wikrt_abc_list();
+
+/** @brief Test for a valid token string. */
+bool wikrt_valid_token(char const* tokstr);
+
+  ////////////////////////////
+ // PROGRAM AND DATA ENTRY //
+////////////////////////////
+
+/** @brief Open a block. 
+ *
+ * This effectively enters a `[` into a program stream and enables
+ * further program entry to operate within a block
+ */
+void wikrt_block_open(wikrt_cx*);
+
+/** @brief Close a block.
+ *
+ * This effectively enters a `]` into the program stream, balancing a
+ * prior wikrt_block_open(). This may result in a negative balance, 
+ * resulting in a poorly structured program fragment. Don't do that.
+ */
+void wikrt_block_close(wikrt_cx*);
+
+/** @brief Apply a block. ABC `a`. [B][A]a == A[B]. */
+void wikrt_apply(wikrt_cx*);
+
+/** @brief Bind a value to a block. ABC `b`. [B][A]b == [[B]A]. */
+void wikrt_bind(wikrt_cx*);
+
+/** @brief Copy a value. ABC `c`. [A]c == [A][A]. */
+void wikrt_copy(wikrt_cx*);
+
+/** @brief Drop a value. ABC `d`. [A]d ==    . */
+void wikrt_drop(wikrt_cx*);
+
+/** @brief Inject arbitrary token. {foo}.
+ *
+ * Note: It is recommended that most tokens go through dedicated
+ * APIs, if only to better document the intention. 
+ */
+void wikrt_token(wikrt_cx*, char const*);
+void wikrt_token_l(wikrt_cx*, char const*, size_t);
+
+/** @brief Embed text literal data. */
+void wikrt_text(wikrt_cx*, char const*);
+void wikrt_text_l(wikrt_cx*, char const*, size_t);
+
+/** @brief Embed numeric data. 
+ *
+ * Until more accelerators are developed, only natural numbers are
+ * well supported. But I'd like to support floating point numbers at 
+ * some point.
+ */
+void wikrt_nat(wikrt_cx*, uint64_t);
+
+/** @brief Extend program via ABC text fragment. 
+ *
+ * This is a convenient way to inject a code fragment if you have the
+ * serialized bytecode representation. The code fragment must be valid
+ * in a minimal sense that texts and tokens are complete. Blocks don't
+ * need to be complete and balanced, but it is recommended. 
+ */
+void wikrt_abc(wikrt_cx*, char const* abc);
+void wikrt_abc_l(wikrt_cx*, char const* abc, size_t);
+
+
+
+
+/** @brief Swap two values. [B][A]w == [A][B]; w = []ba. */
+void wikrt_swap(wikrt_cx*);
+
+/** @brief Inline a value. [A]i == A; i = []wad. */
+void wikrt_inline(wikrt_cx*);
+
+
+/** @brief Extend current program via ABC text.
+ * 
+ * This is a convenient way to inject a subprogram if you already have
+ * a text representation for large fragments of it. This requires a
+ * valid program 
+
+but additionally stores the program
+ * as it parses.
+ *
+ * GENERAL NOTE ON PROGRAM ENTRY
+ *
+ * Program entry always extends the right hand side of the existing program.
+ * T
+  in the context, and may be deeply embedded
+ * if the contex
+ 
+
+SIZE_MAX). The return value indicates
+ * how much of the input program parsed correctly. 
+
+ *
+ *For a correct 
+ * subprogram, with `len = wikrt_abc(cx, abc, maxlen)
+
+
+ * Program entry always adds to the right hand side of the current
+ * program. 
+ * 
+ * This is a convenient way to enter large but relatively static
+ * programs. The subprogram in question must be valid bytecode,
+ * no imbalanced brackets or braces, embedded texts complete, 
+ * valid tokens, etc.. There are no particular constraints on 
+ * tokens other than that they be valid.
+ *
+ * NOTE: Program entry is always left-to-right. It's possible to grow
+ * a large program by injecting many small ABC strings, or to evaluate
+ * incrementally between chunks.
+ */
+
+void wikrt_abc_str(wikrt_cx*, char const* abc, size_t);
+
+
+/** @brief Inject an ABC string directly. 
+ *
+ * This a
+ * This is an easy way to enter a subprogra easiest way to enter a program.
+ *
+ */
+size_t wikrt_abcstr(wikrt_cx*, char const* abc);
+size_t wikrt_abcstr_len(wikrt_cx*, char const* abc, size_t);
+
+
+/** @brief ABC primitive `a` - apply. [B][A]a == A[B]. */ 
+void wikrt_apply(wikrt_cx*);
+
+/** @brief ABC primitive `b` - bind. [B][A]b == [[B]A]. */
+void wikrt_bind(wikrt_cx*);
+
+/** @brief ABC primitive `c` - copy. [A]c == [A][A]. */
+void wikrt_tok(wikrt_cx* cx);
+
+/** 
+void wikrt_nat(wikrt_cx* cx, uint64_t);
+
+
+
+
 
 // NOTE: I'll eventually want to export recognized accelerators and annotations.
 // I'm not sure how to best go about this, though. Maybe as a simple AO dictionary
@@ -537,6 +543,9 @@ void wikrt_wrap_seal(wikrt_cx*, char const*);
  */
 void wikrt_unwrap_seal(wikrt_cx*, char*);
 
+
+
+
   ////////////////////
  // MEMORY CONTROL //
 ////////////////////
@@ -553,59 +562,15 @@ void wikrt_unwrap_seal(wikrt_cx*, char*);
  */
 void wikrt_trash(wikrt_cx*);
 
-/** @brief Mark a value for stowage. (a * e) → ((stowed a) * e).
+/** @brief Force a full garbage collection of context.
  *
- * This corresponds to annotation {&stow}. Stowage moves large values 
- * to a backing database, leaving a lightweight placeholder instead.
- * The stowed value may subsequently be accessed via {&load}. 
- *
- * Stowage enables a small context to work with big data. Databases can
- * be modeled as first class values, using data structures like tries,
- * log structured merge trees, or hitchhiker trees. Massive deques can
- * be modeled efficiently as finger tree ropes.
- *
- * A representation for a stowed value can be obtained by quoting
- * and serializing the value. In general, this representation may
- * only be used within the same environment. Also, unless there is
- * some other reference to the value (e.g. via persistence layer) 
- * the value may be garbage collected. 
- */
-void wikrt_stow(wikrt_cx*);
-
-/** @brief Load a stowed value. ((stowed a) * e) → (a * e).
- *
- * This corresponds to annotation {&load}. We'll copy the stowed value
- * from our backing database into active memory. Loading a value that 
- * was not previously stowed is an error. Loading a value that was not
- * stowed by the current runtime environment (or was subsequently GC'd) 
- * will also result in an error.
- */
-void wikrt_load(wikrt_cx*);
-
-/** @brief Garbage collection of environment-level resources.
- *
- * Most significantly, this forces GC of stowed values. Normally,
- * stowed values will be incrementally GC'd while new values are
- * stowed. This will force a full GC.
- */
-void wikrt_env_gc(wikrt_env*); 
-
-/** @brief Garbage collection of context-level resources.
- *
- * This forces immediate GC for a context's memory. Usually, GC for
- * a context occurs whenever it fills memory (with some heuristic
- * modifiers based on history of memory usage). So explicit GC is 
- * unnecessary outside of special circumstances like profiling of
- * precise memory usage.
+ * This generally isn't necessary, but it's useful if you need more
+ * precise memory and fragmentation stats. 
  */
 void wikrt_cx_gc(wikrt_cx*);
 
 /** Overview of a context's memory usage.
  *
- * For large contexts, Wikilon will often use a 'soft' GC threshold
- * to help control memory and cache pressures. I.e. a 200MB context
- * and a 4MB context might behave about the same for computations
- * with minimal memory requirements.
  */
 typedef struct wikrt_mem_stats { 
     uint64_t  gc_cycle_count;     // how many GC cycles?
@@ -837,14 +802,19 @@ void wikrt_int_cmp(wikrt_cx*, wikrt_ord*);
  // PEFORMANCE TUNING //
 ///////////////////////
 
-/** Effort models. */
-typedef enum wikrt_effort_model 
-{ WIKRT_EFFORT_BLOCKS       // effort is blocks evaluated
-, WIKRT_EFFORT_GC_CYCLES    // effort is GC cycle count
-, WIKRT_EFFORT_MEGABYTES    // effort is megabytes allocated
-, WIKRT_EFFORT_MILLISECS    // effort is elapsed milliseconds
-, WIKRT_EFFORT_CPU_TIME     // effort is CPU milliseconds
-} wikrt_effort_model;
+/** @brief Configure environment level thread pool.
+ *
+ * Parallel computation is performed by a pool of worker threads at
+ * the environment level. These threads only operate on contexts
+ * that are actively being evaluated from the API-layer, and only
+ * where parallelism is explicitly annotated.
+ *
+ * The default pool size is zero. Increasing the thread pool will
+ * perform immediate allocation of the worker threads. Shrinking it
+ * is asynchronous, but eventually extra workers will be dropped.
+ */
+void wikrt_env_threadpool(wikrt_env*, uint32_t pool_size);
+
 
 /** @brief Tune effort per wikrt_step_eval.
  *
@@ -905,30 +875,35 @@ void wikrt_db_gc(wikrt_env*);
  */
 bool wikrt_db_clone(wikrt_env*, char const* copyPath);
 
-/** @brief Replace large value with database-backed placeholder.
+/** @brief Larger than memory data and computations. {&stow}.
  * 
- * This is equivalent to injecting a `{&stow}` annotation into the
- * program. In general, stowage is lazy and heuristic. A 'small'
- * value might not be replaced at all, and a 'large' value might not
- * be replaced immediately. Serializing a stowed value may force the 
- * decision.
+ * Stowage provides a basis for computing with larger than memory
+ * data structures, serving a role similar to virtual memory but
+ * with richer structure and greater precision. A `[LARGE VALUE]`
+ * is generally replaced by a `[{'resourceId}]` token value, with
+ * the data being serialized to a backing store (cf. wikrt_db_open).
  *
- * If a value is stowed, it will be replaced by a stowed resource token
- * that may contain some metadata about substructural attributes, data
- * type, and an HMAC for security. It's important that stowage be used
- * with transactional persistence to control against accidental GC.
+ * This feature enables representation of massive data structures as
+ * first-class values, entire databases or filesystems. Trees designed
+ * for filesystem use (such as log-structured merge trees) will offer
+ * excellent performance when modeled with stowage. Large, flat data
+ * structures may be represented by finger-tree deques or ropes.
+ * 
+ * Stowage is heuristic. Smaller values may be left alone, represented
+ * in line. Stowage may be delayed to improve batches or avoid stowage
+ * of short-lived values. Wikilon runtime will make a best effort at
+ * structure sharing, gradually eliminating redundant representations.
  *
- * If there is no database available, the `{&stow}` indicator may be
- * left in the context.
+ * NOTE: Wikilon runtime secures stowage tokens by simple HMAC. Thus
+ * they may be understood as secure capabilities, bearer tokens, and
+ * accessed via HTTP lookup.
  */
 void wikrt_stow(wikrt_cx*);
 
-/** @brief Load a previously stowed value.
+/** @brief Inline a previously stowed resource. {&load}.
  *
- * This is equivalent to injecting a `{&load}` annotation into the
- * program. When applied to a stowed value, that value is loaded into
- * memory immediately. If applied to any other value, the action is 
- * more or less a NOP. By default, stowed data is loaded as needed.
+ * This counters a `{&stow}` action. Normally, stowed data will be
+ * accessed as needed, but this can force the action early. 
  */
 void wikrt_load(wikrt_cx*);
 

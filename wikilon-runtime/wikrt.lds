@@ -5,13 +5,36 @@
 
     wikrt_env_create;
     wikrt_env_destroy;
+    wikrt_env_threadpool;
 
     wikrt_cx_create;
     wikrt_cx_destroy;
-    wikrt_cx_relax;
     wikrt_cx_reset;
     wikrt_cx_env;
+
+    wikrt_abc_list;
+    wikrt_tok_valid;
+
+    wikrt_block_open;
+    wikrt_block_close;
+    wikrt_apply;
+    wikrt_bind;
+    wikrt_copy; 
+    wikrt_drop;
+
+    wikrt_abc;
+    wikrt_abc_l;
+
+    wikrt_text;
+    wikrt_text_l;
+    wikrt_nat;
+    
+    wikrt_swap;
+    wikrt_inline;
+
+    wikrt_trash;
     wikrt_cx_gc;
+
 
     wikrt_stow;
     wikrt_load;
@@ -21,7 +44,6 @@
     wikrt_db_gc;
     wikrt_key_read;
     wikrt_key_write;
-    wikrt_key_drop;
     wikrt_txn_create;
     wikrt_txn_abort;
     wikrt_txn_commit;
@@ -29,73 +51,21 @@
 
 
 
-    wikrt_valid_token;
 
     wikrt_error;
     wikrt_set_error;
 
-    wikrt_copy; 
-    wikrt_drop;
-    wikrt_trash;
-
-    wikrt_stow;
-    wikrt_load;
-
-    wikrt_wswap;
-    wikrt_zswap;
-    wikrt_assocl;
-    wikrt_assocr;
-
-    wikrt_sum_wswap;
-    wikrt_sum_zswap;
-    wikrt_sum_assocl;
-    wikrt_sum_assocr;
-    wikrt_sum_distrib;
-    wikrt_sum_factor;
-
-    wikrt_accel_swap;
-    wikrt_accel_sum_swap;
-    wikrt_accel_wrzw;
-    wikrt_accel_wzlw;
-
-    wikrt_intro_unit;
-    wikrt_elim_unit;
-    wikrt_intro_unit_r;
-    wikrt_elim_unit_r;
-    
-    wikrt_wrap_sum;
-    wikrt_unwrap_sum;
-
-    wikrt_intro_i32;
-    wikrt_intro_i64;
-    wikrt_peek_i32;
-    wikrt_peek_i64;
-    wikrt_intro_istr;
-    wikrt_peek_istr;
-
-    wikrt_intro_binary;
-    wikrt_read_binary;
-    wikrt_anno_binary;
-
-    wikrt_intro_text;
-    wikrt_read_text;
-    wikrt_anno_text;
-
     wikrt_wrap_seal;
     wikrt_unwrap_seal;
 
-    wikrt_text_to_block;
-    wikrt_block_to_text;
-
-    wikrt_apply;
     wikrt_step_eval;
     wikrt_set_step_effort;
 
-    wikrt_quote;
     wikrt_block_aff;
     wikrt_block_rel;
     wikrt_block_lazy;
     wikrt_block_fork;
+
     wikrt_quote;
     wikrt_compose;
 

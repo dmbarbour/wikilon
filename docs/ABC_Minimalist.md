@@ -281,14 +281,17 @@ Candidate representation:
 
         (Tagged Items)
         tag uses first byte via (uint8_t*) reference.
-        same tag set is used for both. 
+        same tag set is used for both
+            any tagged object may become a tagged action
+            equivalent to 'inlining' said object
+            no extra allocation necessary
         special tags for 'small' binaries/texts.
             (smaller, reverse ordered)
         actions include compact bytecode, etc..
 
         (Small Constants)
         singleton blocks, one for every opcode!
-        plus the empty block, etc.
+        plus the empty block (null)
         (that's all we need if we include identity opcode)
 
         (Common Opcodes)

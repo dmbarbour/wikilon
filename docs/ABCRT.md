@@ -1,7 +1,7 @@
 
 # ABC Runtime Design
 
-As per [my performance strategy](Performance.md), I'm currently developing a C runtime: a good interpreter with a simple, uniform representation to enable LLVM or other JIT compilation. I'll be using something very like the Lisp/Scheme representation, with data consisting mostly of simple pairs of words.
+As per [my performance strategy](Performance.md), I'm currently developing a C runtime: an interpreter with a simple data representation to support LLVM or a hand-written JIT compilation. I'll be using something very like the Lisp/Scheme representation, with data consisting mostly of simple pairs of words.
 
 It could be useful to also develop a command-line interface and computation experience at this layer, for testing and benchmarking, etc., via console. I would like to encode dictionaries in both value stowage. Dictionary import/export is viable. Supporting a Claw syntax is feasible.
 
@@ -35,11 +35,11 @@ I'll actually include a copy of these directly, no shared libs.
 * LMDB - embedded key value database
  * considering LevelDB and similar
 
-### Multi-Process Access?
+### Multi-Process Access? No.
 
-With LMDB, I have an opportunity to support multi-process access to the associated database. This could be very convenient, as it would enable shells, CLIs, and so on to coexist without querying a web service. The primary difficulty would be be tracking ephemeral stowage within a process. I might need to use an extra file-based memory mmap for bloom filters. Alternatively, I could use simple timeout techniques when our value reaches a zero reference count, holding onto dead values for a few hours or days.
+With LMDB, I have an opportunity to support multi-process access to the associated database. This could be very convenient, as it would enable shells, CLIs, and so on to coexist without querying a web service. The primary difficulty would be be tracking ephemeral stowage references between processes - i.e. so we don't GC any important, stowed data.
 
-For my anticipated use case, multi-process access is not critical. Also, I can always develop command-line interpreters and shells that use HTTP queries against a local web service instead of direct access to the database.
+However, I'll probably reject this for now. I don't need multi-process access to build a web service. And I can always model multi-process access in terms if *interaction* with the web service. Doing so would simplify precise control over the database layer, and switching to a different backing store.
 
 ### LMDB vs. LevelDB?
 
