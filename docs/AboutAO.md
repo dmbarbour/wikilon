@@ -12,20 +12,18 @@ AO specifies a simple **.ao** file format for import and export.
 
 A trivial example dictionary:
 
-        @swap rwrwzwlwl
-        @swapd rw {%swap} wl
-        @swapd.doc "x y z -- y x z
+        @swap []ba
+        @swapd [{%swap}]a
+        @swapd.doc "[C][B][A] -- [B][C][A]
          swap just under the top stack element
          assuming typical (stack*ext) environment
-        ~l
+        ~
 
-This is format suitable for simple text files and streams. Each word definition starts at `@` at the beginning of a line, followed by the word, followed by SP or LF, then the definition in ABC. This is unambiguous: ABC never includes `@` at the beginning of a line. A lot of words will use just one line within the file.
+This is format suitable for simple text files and streams. Each word definition starts at `@` at the beginning of a line, followed by the word, followed by SP or LF, then the definition in ABC. This is unambiguous: valid ABC never includes `@` at the beginning of a line. A lot of words will use just one line within the file. There is no constraint on ordering of words. If a word is defined more than once, the final definition is used.
 
-To simplify generation and use of such files, there is no constraint on ordering of words. If a word is defined more than once, the final definition of that word is favored. It is thus feasible to represent not just a current dictionary, but also its update history, or an append-only update stream for a reactive system. Anything prior to the first `@` definition is ignored.
+It is thus feasible to represent not just a current dictionary, but also its update history, or an append-only update stream for a reactive system. Anything prior to the first `@` definition is ignored.
 
 Use file suffix **.ao**, or `text/vnd.org.awelon.aodict` in context of an HTTP transfer. 
-
-*Note:* To explicitly represent that a word is undefined, define that word to itself. E.g. `@swap {%swap}`. Cyclic definitions are never valid with AO. However, this should only be necessary for update streams or histories.
 
 ## Programmable Views
 
@@ -73,29 +71,33 @@ A dictionary in a transitory state of development will frequently have a few und
 
 ### Regarding Large Definitions
 
-Definitions can potentially grow very large, especially when containing embedded texts or with dictionary applications. However, huge definitions are not recommended, as they hinder incremental computations, reuse, memory management. At the moment, I'm not suggesting any hard caps for definition sizes, but raising some warnings or flags for very large definitions is recommended. A host may compress very large definitions to mitigate the issue.
+Definitions can potentially grow very large, especially when containing embedded texts or with dictionary applications. However, huge definitions are not recommended, as they may hinder incremental computation, reuse, memory management, and developer comprehension.
+
+A very large text might be better broken into smaller texts - e.g. per chapter, paragraph, or other meaningful fragment. A large binary modeled via text might better be divided into 'pages', such that persistent structure and edits can be modeled can reusing most pages. Sophisticated definitions consisting of many components (e.g. more than ten to twenty elements) might be better factored into smaller fragments that can be documented and understood incrementally.
+
+At the moment, I'm not suggesting hard caps for definition sizes. But soft caps - warnings, quota limits - may serve to discourage oversized definitions. 
 
 ## Constraints on Words and Definitions
 
-Words are constrained to be relatively friendly in context of URLs, English text delimiters, HTML, and [Claw code](CommandLine.md). Tokens are constrained for purity, portability, and easy processing. Texts are constrained to avoid conversion errors (e.g. HTML CRLF conversions, or UTF-8 vs. UTF-16). 
+Words are minimally constrained to be relatively friendly in context of URLs, English text delimiters, HTML, [claw code](CommandLine.md), and AO dictionaries/streams. Tokens are constrained for purity, portability, and easy processing. Texts are constrained to avoid conversion errors (e.g. HTML CRLF conversions, or UTF-8 vs. UTF-16). 
 
 Summary of constraints:
 
-* words are limited to:
+* words are limited:
  * ASCII if alphabetical, numeral, or in -._~!$'*+:
- * other UTF-8 except for C1, surrogates, replacement char
+ * UTF-8 excepting C1, surrogates, replacement char
  * must not start with numeral-like regex `[+-.]*[0-9]` 
  * must not terminate with a . or : (period or colon)
- * no empty words, 1..254 bytes UTF-8.
+ * no empty or enormous words, 1..60 bytes UTF-8.
 * tokens are limited to:
  * word dependencies (`{%dupd}{%swap}`)
  * value sealing (`{:foo} {.foo}`)
- * annotations (`{&static}{&copyable}`)
+ * annotations (`{&seq}{&jit}`)
  * gates for active debugging (`{@foo}`)
- * 1..255 bytes, valid text, no LF or `{}`
+ * modulo prefix, tokens are valid words
 * texts are limited to:
  * exclude C0 (except LF), DEL, C1
  * exclude surrogate codepoints U+D800..U+DFFF
  * exclude replacement char U+FFFD
 
-Word size is only restricted based on token size. This is sufficient to model some deep, hierarchical structure for words, e.g. to model objects and attributes. However, it is recommended to dictionaries relatively flat.
+Words may be further limited in context of a given system or application model, e.g. unicode normalization and case folding to reduce ambiguity, and forbidding unicode spaces and separators. However, I'd prefer to avoid more sophisticated rules at this layer.

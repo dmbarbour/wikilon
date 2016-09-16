@@ -140,8 +140,7 @@ It is not uncommon that we'll want associative metadata for words: documentation
 * `foo.gc` for managed `foo` 
 * `foo.type` for type hints 
 * `foo.proof` for theorem provers
-* `foo.hash` for verifying `foo`
-* `foo.version` for version info
+* `foo.class` to approach OOP
 
 This model of attributes is useful because:
 
@@ -157,17 +156,57 @@ This idiom only requires default bundling:
 * export `foo.*` whenever we export `foo`
 * rename `foo.*` whenever we rename `foo`
 * delete `foo.*` whenever we delete `foo`
-* replicate `foo.*` and internal bindings to clone `foo`
 
-With hierarchical structure, every word becomes a potential object or a filesystem-like directory, albeit based only on bundling conventions. The definitions themselves remain acyclic, but at the 'object' level we may easily express cyclic relationships, e.g. by having attributes that indicate context.
+Similarly, if we 'fork' an object, we might clone all the attributes and rewrite internal structure.
 
-Attributes have no semantics beyond the de-facto conventions surrounding them. Attributes like `foo.gc` might cover deep policy for memory management within object `foo`, such that we don't specifically need `.gc` attributes within the individual attributes. Attributes like `foo.doc` may describe other attributes.
+*Important:* Deep hierarchical structure is unnecessary and discouraged.
+
+Attributes with rich structure can be defined by reference to another toplevel object in the dictionary. Richly attributed references, similarly, may also be reified as objects. Thus we never need more than one level of attribute. Favoring a 'flat' namespace also gives us shorter words, a more object-oriented and relational structure, more precise security decisions, etc.. 
+
+To discourage deep hierarchy, AO words remain size-limited to 60 bytes UTF-8. Shallow hierarchy seems acceptable, so long as it remains close to flat.
+
+Attributes have no semantics beyond the de-facto conventions durrounding them. An attribute like `foo.gc` may cover policy for GC of all attributes within `foo`, not just `foo` itself. It is feasible to use attributes like `foo.class` to model something similar to class-based or prototype-based OOP, or at least support inheritance of attributes.
 
 ## Explicit Spreadsheets
 
-An AO dictionary with a cache for incremental computing gives us some very spreadsheet-like characteristics. An update to a definition may readily propagate through a dictionary. But we can take this further by explicitly modeling spreadsheets - as in a grid of cells that can be edited and rendered. This is easily achieved by use of attributes and objects.
+An AO dictionary with a cache for incremental computing gives us some spreadsheet-like characteristics. An update to a definition may propagate through our dictionary. However, we can take this further by explicitly modeling spreadsheets - a grid of reactive cells that can be edited in table form, and are bundled for rendering and export. 
 
-Trivially, we could use `mySheet.A1` to define cell `A1` for rendering in a conventional spreadsheet. However, I suspect it would be more useful to use a hierarchical structure, such as: `mySheet.row.column` (or `.column.row`). This should simplify moving to higher dimensions and symbolic identifiers in both dimensions. We could easily render with automatic ordering based on row names or column values.
+Trivially, we could use a convention like `mySheet.A1` to define cell `A1`, or a slightly more structured `mySheet.1.A`. However, I believe we can do much better.
+
+Define each row by *reference* to another object, e.g. `@mySheet.1 {%foo}`. Then use attributes of the referenced object as columns, e.g. `foo.A` and `foo.B` fill columns `A` and `B` for row `1`. The definition of `foo` may be treated as a special attribute `foo.@`. In general, we may also render rows by object name, e.g. rendering `foo` instead of `1` in the row. And we can automatically sort rows based on a choice of row number, object name, attribute data, etc..
+
+Modeling spreadsheets as collections of object references allows spreadsheets to serve as direct manipulation interfaces and lightweight development environments instead of passive 'views' of the dictionary. We can model higher-dimensional spreadsheets, e.g. where each row is a spreadsheet. Multiple spreadsheets can easily share structure, but we may just as easily define fresh objects like `mySheet:1` when introducing a new row. When we introduce security models, we may enforce them at row-level. Visual or interactive renderings for objects readily apply.
+
+## Immutable Objects
+
+Immutability can be supported by a simple convention of naming objects by secure hash of their content. This immutability is verifiable even across import/export actions. Here, I propose a `$` prefix for objects so named. 
+
+        $hash
+        $hash.license
+        $hash.author
+        $hash.type
+        $hash.proof
+        $hash.render
+        $hash.doc
+        $hash.common_name
+
+All attributes are protected by the secure hash, and I assume any transitive dependencies are also immutable. Such objects should provide a very nice middle ground between stowage resources and mutable AO dictionary structure. They can be shared between dictionaries easily, cached, searched, composed, rendered, etc.. Type declarations or prover hints are preserved.
+
+A `common_name` attribute could record the original name, as used in any documentation, to support debugging, search, projectional editing, and so on.
+
+Computing the hash is easy, just build a AO file of the content without the hash, ordered by name, then take the secure hash of that AO file. Verification is similarly easy - strip the hash and recompute, or just distribute the AO file with the hash stripped.
+
+        @$ (main definition)
+        @$.author (author)
+        @$.common_name (original name)
+        @$.doc (documentation)
+        @$.license (license)
+        @$.render (rendering hints)
+        @$.type (type declaration)
+
+Of course, because we're including all attributes, we might end up with some strongly connected components. In those cases, the entire strongly connected component will need to be treated as a single immutable object and hashed together, albeit with a little room for subcomponent structure - e.g. we might use `$hash:1` and `$hash:2` to refer to the first and second subcomponents respectively.
+
+With 60 byte words, we can use a 40 byte secure hash (200 bits base 32), a 4 byte subcomponent id, and 12 byte human meaningful attribute labels. That should cover most use cases.
 
 ## Security for Dictionary Applications
 
