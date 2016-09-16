@@ -87,6 +87,8 @@ For these reasons, Claw eschews inline comments in favor of separate documentati
 
 ### Claw Namespaces
 
+*Aside:* This should be reconsidered in presence of an `{%word@resource}` AO layer linking model. It may be I want claw namespaces to operate with the linking model. But I'm uncertain about that. Linking should be pretty rare.
+
 Namespaces are a mixed feature. On one hand, they may lead to concise, readable code. On the other, namespace management may become boiler-plate, and namespaces themselves are a weak form of context sensitivity that hinders refactoring and local reasoning about code. 
 
 Claw provides very simplistic support for a single namespace per region of code. The namespace is simply added as a prefix to every word in the desugaring.

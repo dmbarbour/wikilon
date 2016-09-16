@@ -179,34 +179,9 @@ Modeling spreadsheets as collections of object references allows spreadsheets to
 
 ## Immutable Objects
 
-Immutability can be supported by a simple convention of naming objects by secure hash of their content. This immutability is verifiable even across import/export actions. Here, I propose a `$` prefix for objects so named. 
+Immutable objects are most readily modeled via the AO link layer, e.g. we end up with `{%foo@secureHash}` and we can validate the secure hash for the immutable dictionary which contains `foo` among other objects. In general, we could reduce each source to the scope of either a single object or a strongly connected component (where multiple objects refer to each other via attributes).
 
-        $hash
-        $hash.license
-        $hash.author
-        $hash.type
-        $hash.proof
-        $hash.render
-        $hash.doc
-        $hash.common_name
-
-All attributes are protected by the secure hash, and I assume any transitive dependencies are also immutable. Such objects should provide a very nice middle ground between stowage resources and mutable AO dictionary structure. They can be shared between dictionaries easily, cached, searched, composed, rendered, etc.. Type declarations or prover hints are preserved.
-
-A `common_name` attribute could record the original name, as used in any documentation, to support debugging, search, projectional editing, and so on.
-
-Computing the hash is easy, just build a AO file of the content without the hash, ordered by name, then take the secure hash of that AO file. Verification is similarly easy - strip the hash and recompute, or just distribute the AO file with the hash stripped.
-
-        @$ (main definition)
-        @$.author (author)
-        @$.common_name (original name)
-        @$.doc (documentation)
-        @$.license (license)
-        @$.render (rendering hints)
-        @$.type (type declaration)
-
-Of course, because we're including all attributes, we might end up with some strongly connected components. In those cases, the entire strongly connected component will need to be treated as a single immutable object and hashed together, albeit with a little room for subcomponent structure - e.g. we might use `$hash:1` and `$hash:2` to refer to the first and second subcomponents respectively.
-
-With 60 byte words, we can use a 40 byte secure hash (200 bits base 32), a 4 byte subcomponent id, and 12 byte human meaningful attribute labels. That should cover most use cases.
+Immutable objects have potential to greatly improve the efficiency of large AO systems. They are easily shared, validated, cached, separately compiled, and linked by secure hash. But they preserve application-level structure and attributes, which simplifies tooling - search, rendering, type checking, and anything else we might support with attributes.
 
 ## Security for Dictionary Applications
 

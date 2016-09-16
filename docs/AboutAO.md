@@ -19,11 +19,19 @@ A trivial example dictionary:
          assuming typical (stack*ext) environment
         ~
 
-This is format suitable for simple text files and streams. Each word definition starts at `@` at the beginning of a line, followed by the word, followed by SP or LF, then the definition in ABC. This is unambiguous: valid ABC never includes `@` at the beginning of a line. A lot of words will use just one line within the file. There is no constraint on ordering of words. If a word is defined more than once, the final definition is used.
+This is format suitable for simple text files and streams. Each word definition starts at `@` at the beginning of a line, followed by the word, followed by SP or LF, then the definition in ABC. There is no constraint on ordering of words, nor that all words are defined. If a word is defined more than once, only the last version counts.
 
-It is thus feasible to represent not just a current dictionary, but also its update history, or an append-only update stream for a reactive system. Anything prior to the first `@` definition is ignored.
+Use file suffix **.ao**, or `text/vnd.org.awelon.aodict` in context of an HTTP transfer.
 
-Use file suffix **.ao**, or `text/vnd.org.awelon.aodict` in context of an HTTP transfer. 
+*Aside:* It is feasible to extend this **.ao** format to support multiple targets, branching and merging of dictionaries, and other useful actions by adding forms like `@@TARGET dictname`, `@@INCLUDE dictname`, `@@RENAME foo bar`, and so on.
+
+*Aside 2:* While **.ao** files are simple and useful, another good option is to represent AO dictionaries as first-class ABC values. This simplifies reflection, composition, transparent procedural generation (metaprogramming), etc..
+
+## AO Linking, Versioning, and Namespaces
+
+Tokens of form `{%word@source}` may bind the definition of `word` in a dictionary identified as `source`. In context of AO file exports, we search file *source.ao* for `@word`. Every source is a namespace, thus `{%foo}` in context of `source` is implicitly `{%foo@source}`. 
+
+Linking will be most useful in context of *immutable* dictionaries, for example where `source` includes a secure hash. This fills an important niche - there is no other convenient, robust, and cache-friendly means to express and enforce immutability for specific fragments of an AO dictionary. Further, immutable objects avoid the maintenance and configuration management challenges that plague conventional shared libraries.
 
 ## Programmable Views
 
@@ -84,7 +92,7 @@ Words are minimally constrained to be relatively friendly in context of URLs, En
 Summary of constraints:
 
 * words are limited:
- * ASCII if alphabetical, numeral, or in -._~!$'*+:
+ * ASCII if alphabetical, numeral, or in -._~!'*$+:
  * UTF-8 excepting C1, surrogates, replacement char
  * must not start with numeral-like regex `[+-.]*[0-9]` 
  * must not terminate with a . or : (period or colon)
@@ -94,7 +102,7 @@ Summary of constraints:
  * value sealing (`{:foo} {.foo}`)
  * annotations (`{&seq}{&jit}`)
  * gates for active debugging (`{@foo}`)
- * modulo prefix, tokens are valid words
+ * gates, seals, annotations are valid words (modulo prefix)
 * texts are limited to:
  * exclude C0 (except LF), DEL, C1
  * exclude surrogate codepoints U+D800..U+DFFF
