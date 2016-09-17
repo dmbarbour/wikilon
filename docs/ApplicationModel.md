@@ -179,7 +179,9 @@ Modeling spreadsheets as collections of object references allows spreadsheets to
 
 ## Immutable Objects
 
-Immutable objects are most readily modeled via the AO link layer, e.g. we end up with `{%foo@secureHash}` and we can validate the secure hash for the immutable dictionary which contains `foo` among other objects. In general, we could reduce each source to the scope of either a single object or a strongly connected component (where multiple objects refer to each other via attributes).
+Immutable objects will be modeled via the AO link layer. Token `{%foo@source}` will link an object `foo` from another dictionary, `source`. When `source` is identified by secure hash, we can easily validate that we have a specific, immutable `foo` object. 
+
+can validate the secure hash for the immutable dictionary which contains `foo` among other objects. In general, we could reduce each source to the scope of either a single object or a strongly connected component (where multiple objects refer to each other via attributes).
 
 Immutable objects have potential to greatly improve the efficiency of large AO systems. They are easily shared, validated, cached, separately compiled, and linked by secure hash. But they preserve application-level structure and attributes, which simplifies tooling - search, rendering, type checking, and anything else we might support with attributes.
 

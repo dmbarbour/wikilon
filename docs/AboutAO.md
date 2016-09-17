@@ -1,14 +1,14 @@
-# Awelon Object Language (AO)
+# Awelon Object (AO)
 
-Awelon Object (AO) language directly uses [Awelon Bytecode (ABC)](AboutABC.md) as a foundation for functional programming. 
+Awelon Object (AO) isn't an independent language, rather it is a linking, distribution, and security model for [Awelon Bytecode (ABC)](AboutABC.md). AO defines tokens of the form `{%word}` and `{%word@dict}` and how they interact with dictionary objects. Dictionaries are the basic unit of linking and sharing in AO. 
 
-AO is very simple. The primary structure is the dictionary, which defines a finite set of words. Definitions are encoded in Awelon Bytecode and may refer to other words in the dictionary via `{%word}` tokens. The meaning of a word token is, trivially, to substitute the word's definition. Dependencies between words form a directed acyclic graph, thus a complete inline expansion of an AO program results in a finite string of bytecode. 
+A dictionary consists of a set of words, with a definition for each word. The definitions are encoded in ABC, but may use `{%word}` tokens to link another word defined in the same dictionary, or `{%word@source}` to link a word as defined in the dictionary specified by a set of `source.attribute` words. Semantically, linking a word means inlining its definition. Dependencies between definitions must form a directed acyclic graph, such that inlining all the things will have a finite expansion. (ABC loops can be represented by anonymous fixpoint combinators.)
 
-Instead of conventional syntax, AO assumes human developers will use editable views to manipulate dictionary code. Directly reading or writing bytecode would be intolerable, but views can be rich and problem specific. See *Editable Views of Bytecode* and *Dictionary Applications*, below. Views may be implemented by a development environment, a web service, or a FUSE adapter.
+These dictionaries enable efficient sharing of objects and code. Very importantly, dictionaries also carry ad-hoc associative metadata. For example, given `word@source` a system may look up `word.doc@source` and `word.type@source`, or even `word.author@source` or `word.example@source`. This associative metadata enables an environment to render and explain code effectively, and may help humans comprehend it.
 
-## Import/Export
+## Dictionary Representation
 
-AO specifies a simple **.ao** file format for import and export. 
+AO defines a standard **.ao** file format, suitable for import and export. 
 
 A trivial example dictionary:
 
@@ -19,51 +19,83 @@ A trivial example dictionary:
          assuming typical (stack*ext) environment
         ~
 
-This is format suitable for simple text files and streams. Each word definition starts at `@` at the beginning of a line, followed by the word, followed by SP or LF, then the definition in ABC. There is no constraint on ordering of words, nor that all words are defined. If a word is defined more than once, only the last version counts.
+Each definition has the form `@word definition`, starting at the beginning of a line. It's a simple SP (32) between the word and definition. A definition continues until the end of a file or until the next definition starts. There is no risk of ambiguity: ABC does not and will not use `@` for anything.
 
 Use file suffix **.ao**, or `text/vnd.org.awelon.aodict` in context of an HTTP transfer.
 
-*Aside:* It is feasible to extend this **.ao** format to support multiple targets, branching and merging of dictionaries, and other useful actions by adding forms like `@@TARGET dictname`, `@@INCLUDE dictname`, `@@RENAME foo bar`, and so on.
+## Editing AO
 
-*Aside 2:* While **.ao** files are simple and useful, another good option is to represent AO dictionaries as first-class ABC values. This simplifies reflection, composition, transparent procedural generation (metaprogramming), etc..
+Dictionaries are optimally manipulated through projectional editor systems. The Forth-like [claw](CommandLine.md) view is suitable for a minimal text-only input, and is a fair bit more legible than AO. But in general, only projectional editors can make effective use of [Awelon's application models](ApplicationModel.md). 
 
-## AO Linking, Versioning, and Namespaces
+An interesting possibility for filesystem integration is to use a *FUSE* (Filesystem in Userspace) view, perhaps operating via the web service. If done properly, this could simplify integration with emacs, vim, and other nice text editors.
 
-Tokens of form `{%word@source}` may bind the definition of `word` in a dictionary identified as `source`. In context of AO file exports, we search file *source.ao* for `@word`. Every source is a namespace, thus `{%foo}` in context of `source` is implicitly `{%foo@source}`. 
+Editing a **.ao** file by hand, or even a set of linked files, is feasible. But it's also a chore. Outside of early development (e.g. bootstrapping), I wouldn't recommend it to anyone.
 
-Linking will be most useful in context of *immutable* dictionaries, for example where `source` includes a secure hash. This fills an important niche - there is no other convenient, robust, and cache-friendly means to express and enforce immutability for specific fragments of an AO dictionary. Further, immutable objects avoid the maintenance and configuration management challenges that plague conventional shared libraries.
+## Linking AO
 
-## Programmable Views
+A `{%word}` token links within the current dictionary. To link between dictionaries, we use `{%word@source}`, and we must also define `{%source}` within the current dictionary. For example:
 
-### Editable Views of AO Bytecode
+        @source "file" "foo.ao"
 
-An example editable view is the [Command Language for Awelon (claw)](CommandLine.md), which provides a Forth-like experience optimized for command-line or REPL oriented programming. Claw supports numbers (integers, ratios, decimals), words, and small texts. For example, `2/3` expands to `2 3 ratio` which ultimately expands to bytecode `#2{%int}#3{%int}{%ratio}`. The expansion is reversible, bi-directional. When reading the generated bytecode through a claw view, the developer will see `2/3`.
+A source is defined by a `"Tag" [Value]` pair, which may be computed. The tag will be a short text that tells our linker how to interpret the value. The value will frequently just be another text - e.g. a URL, filename, secure hash. Structured values are possible, and we may want them for multi-homing, security models, composition, or computation. The interpretation is ultimately ad-hoc, subject to extension and de-facto standardization. 
 
-It is possible to extend claw with structured programming features. Code of form `[cond] [body] while_do_` could be recognized and presented as a conventional while-do loop. We can take inspiration from XML, problem-specific languages, or something more esoteric. Modeling monadic bindings and DSLs is feasible. For interactive environments or live coding we might be interested in programming with widgets, e.g. `30/100 (slider)` might be rendered as a slider widget at 30 with an implicit domain 0..100 (from the denominator). Stateful widgets - sliders, checkboxes, radio buttons, color pickers, canvases, graphs, etc. - are generally a good fit for interactive source code.
+*Aside:* Computing sources introduces some interesting possibilities like switch-driven dependencies. Modeling sources via words also simplifies hand-switching.
 
-Editable views needn't be extensions of claw, of course. Though, for user convenience, it's preferable to make most extensions compatible with a claw view. It's easy enough to use a set of flags to enable or disable certain extensions.
+### Dictionary Inheritance
 
-Alternatively, we can move beyond parsing and editing structure within a string of bytecode and focus instead on dictionary-level structures between words. This can allow us to render and manipulate *semantic* content - embedded databases and graphs and objects - rather than local syntactic structure. See *Dictionary Applications and Objects* below.
+AO supports inheritance by recognizing `parent` as a special link source.
 
-### Dictionary Applications
+        @parent "local" "d/foo"
 
-A dictionary application is an application whose state is hosted within a healthy dictionary. See [Wikilon's application model](ApplicationModel.md) for the detailed exploration of this idea. The short version: application state is modeled in the dictionary, applications help users view and edit the dictionary in certain ways (e.g. as a forum or spreadsheet), and external software agents can integrate real-world effects or reflection where we need them. 
+When a `{%word}` is not defined locally, the linker may search the parent. However, the parent's words are treated as if they were defined locally, such that any local definitions will override those in the parent. If a word is not defined in the parent, search may proceed to the grandparent and much deeper ancestors. 
 
-Dictionary applications naturally support portability, persistence, versioning, undo, refactoring, incremental computation, caching, continuous testing, live coding, and RESTful designs (external agents pulling information or pushing updates). Low-latency applications are feasible with long-polling or subscription models. 
+*Aside:* While this may seem limited to single inheritance, that really just depends on how our 'parent' source is defined. If a linker provides means to describe a composition of sources, then multiple inheritance immediately becomes possible. It might even be useful, e.g. model dictionary-level genetic programming via pseudo-randomized composition of sources.
 
-Dictionary applications together with long-polling or subscription is capable of modeling almost any application. Documents, databases, REPL sessions, multi-user dungeons, etc. are all viable. A few relevant patterns are discussed under [Wikilon's application model](ApplicationModel.md). With cache-friendly update patterns, performance may be acceptable.
+### Link Layer Metaprogramming
 
-Many dictionary applications are amenable to *extraction*, e.g. cross-compiling application objects for an Android phone or JavaScript+DOM. An extraction service is effectively another dictionary application. Extraction of dictionary applications *in media res* supports an implicit debug mode, automatic testing of old application sessions, interactive construction of applications from prototypes, and fulfills the role of conventional applications compilers.
+It is feasible to leverage the AO link layer for flexible metaprogramming. We only need to introduce a source model that *computes* a dictionary as a first-class ABC value rather than *links* an external resource.
 
-*Aside:* A [FUSE view](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) of a Wikilon hosted dictionary is a promising basis for integrating dictionary applications with more conventional tools.
+### Immutable or Monotonic Dictionaries
 
-## Development 
+Linking of mutable things creates a lot of challenges for synchronization, update propagation, caching, etc.. So, whenever possible, we should favor linking of immutable dictionaries (e.g. identified by secure hash), or monotonic dictionaries (where we add new definitions, maybe GC old ones, but never reuse a name).
 
-### Static Analysis
+With immutable dictionaries, dictionary inheritance provides a relatively simple and effective means to logically 'edit' dictionaries.
 
-Though ABC doesn't specify a type system, it is designed to support static analysis. An AO dictionary under development should undergo continuous static analysis such that developers are always aware of potential issues - obvious type errors, non-termination, linter warnings, etc..
+## Static and Dynamic Linking
 
-Static analysis can be greatly extended by use of *annotations*, which may potentially assert properties that would be difficult to express otherwise - e.g. that two blocks are equivalent, or that a function is commutative or associative or idempotent, or that one function is the reverse of another, or that a value should be computed statically.
+
+
+Because ABC is pure and uses local rewriting based evaluation, the worst that happens when linking fails is that a `{%word@source}` remains unevaluated, and we'll need to track link scopes at runtime.
+
+## Constraints on Words and Definitions
+
+A word is a
+
+Words are minimally constrained to be relatively friendly in context of URLs, English text delimiters, HTML, [claw code](CommandLine.md), and AO dictionaries/streams. Tokens are constrained for purity, portability, and easy processing. Texts are constrained to avoid conversion errors (e.g. HTML CRLF conversions, or UTF-8 vs. UTF-16). 
+
+Summary of constraints:
+
+* words are limited as follows:
+ * ASCII if alphabetical, numeral, or in -._~!'*+:
+ * UTF-8 excepting C1, surrogates, replacement char
+ * must not start with numeral-like regex `[+-.]*[0-9]` 
+ * must not start or end with . or : (period or colon)
+ * no empty or enormous words, 1..30 bytes UTF-8.
+* tokens are limited to:
+ * word dependencies (`{%dupd}{%swap}`)
+ * value sealing (`{:foo} {.foo}`)
+ * annotations (`{&seq}{&jit}`)
+ * gates for active debugging (`{@foo}`)
+ * gates, seals, annotations are words (modulo prefix)
+* texts are limited to:
+ * exclude C0 (except LF), DEL, C1
+ * exclude surrogate codepoints U+D800..U+DFFF
+ * exclude replacement char U+FFFD
+
+Words may be further limited in context of a given system or application model, e.g. unicode normalization and case folding to reduce ambiguity, and forbidding unicode spaces and separators. However, I'd prefer to avoid more sophisticated rules at this layer.
+
+
+## Development Idioms
 
 ### DVCS Based Distribution
 
@@ -84,28 +116,3 @@ Definitions can potentially grow very large, especially when containing embedded
 A very large text might be better broken into smaller texts - e.g. per chapter, paragraph, or other meaningful fragment. A large binary modeled via text might better be divided into 'pages', such that persistent structure and edits can be modeled can reusing most pages. Sophisticated definitions consisting of many components (e.g. more than ten to twenty elements) might be better factored into smaller fragments that can be documented and understood incrementally.
 
 At the moment, I'm not suggesting hard caps for definition sizes. But soft caps - warnings, quota limits - may serve to discourage oversized definitions. 
-
-## Constraints on Words and Definitions
-
-Words are minimally constrained to be relatively friendly in context of URLs, English text delimiters, HTML, [claw code](CommandLine.md), and AO dictionaries/streams. Tokens are constrained for purity, portability, and easy processing. Texts are constrained to avoid conversion errors (e.g. HTML CRLF conversions, or UTF-8 vs. UTF-16). 
-
-Summary of constraints:
-
-* words are limited:
- * ASCII if alphabetical, numeral, or in -._~!'*$+:
- * UTF-8 excepting C1, surrogates, replacement char
- * must not start with numeral-like regex `[+-.]*[0-9]` 
- * must not terminate with a . or : (period or colon)
- * no empty or enormous words, 1..60 bytes UTF-8.
-* tokens are limited to:
- * word dependencies (`{%dupd}{%swap}`)
- * value sealing (`{:foo} {.foo}`)
- * annotations (`{&seq}{&jit}`)
- * gates for active debugging (`{@foo}`)
- * gates, seals, annotations are valid words (modulo prefix)
-* texts are limited to:
- * exclude C0 (except LF), DEL, C1
- * exclude surrogate codepoints U+D800..U+DFFF
- * exclude replacement char U+FFFD
-
-Words may be further limited in context of a given system or application model, e.g. unicode normalization and case folding to reduce ambiguity, and forbidding unicode spaces and separators. However, I'd prefer to avoid more sophisticated rules at this layer.

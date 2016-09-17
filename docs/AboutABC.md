@@ -12,19 +12,19 @@ Most bytecodes aren't designed with such applications in mind.
 
 ABC has many unusual features that make it suitable for Awelon project:
 
-* ABC **internalizes data**. Data is modeled as part of the code rather than eschewing responsibility to a separate filesystem or database. This simplifies composition, validation, partial evaluation, parallel evaluation, staging, and procedural generation of data artifacts. Taken together with caching and linking, it is feasible to work with very 'big' data.
+* ABC is **easily serialized and rendered**. ABC has a plain-text encoding that directly embeds numbers and literals. Thus, even a simple text editor can provide a useful view for debugging and comprehending code. Sophisticated graphical renderings are also feasible assuming suitable data types.
 
-* ABC is **renderable**. ABC has a plain-text encoding that directly embeds numbers and literals. Thus, even a simple text editor can provide a useful view for debugging and comprehending code. Sophisticated *graphical* renderings are feasible via tokens for rendering hints.
+* ABC **embraces data**. Where most languages shift responsibility for data to an external filesystem or database, ABC prefers to internalize it. Doing so simplifies serialization, persistence, composition, static safety, partial evaluation and staging, transparent procedural generation, and modeling interactive objects. Further, this readily extends to larger-than-memory data via a stowage model and persistent data structures.
 
-* ABC is **evaluated by rewriting**. Any ABC subprogram may usefully be evaluated and rendered. This addresses HCI goals of computation being something continuous and omnipresent, code and data being active artifacts that apply upon contact rather than waiting for a 'main' control flow. It enables immediate, useful examples. Further, it allows us to produce useful outputs even if evaluation halts on quota limits.
+* ABC is **evaluated by local rewriting**. ABC subprogram may usefully be evaluated with very little context, e.g. no need to provide arguments, no need to reach a subprogram from a main function. The bytecode is effectively an active material: just place it and watch it flow together. Further, partially evaluated results are useful even if our quota times out. Local rewriting simplifies a lot of Awelon project's HCI visions for computation being continuous, omnipresent, easily observed, composed, and tested.
 
-* ABC is **purely functional**. The rewriting semantics are simple, confluent, local, and context-free. Computations may be freely be cached, replicated, recomputed. ABC subprograms have predictable behavior even when shared or evaluated in a different system.
+* ABC is **purely functional**. The rewriting semantics are simple, confluent, and context-free. Computations may be freely be cached or replicated. Modulo performance and quota limits, ABC computations have deterministic behavior no matter which runtime evaluates them.
 
-* ABC is **concatenative**. Composition of ABC artifacts is as easy to express as concatenating their subprograms. There is no sophisticated binding to perform, no headers or footers to manipulate. Conversely, decomposition is also straightforward - just extract a subprogram.
+* ABC is **concatenative**. Composition of ABC functions is a simple concatenation of their programs. There is no sophisticated binding to perform, no headers or footers to manipulate. Conversely, decomposition is also straightforward, simply cutting programs apart at well defined fragments.
 
-* ABC is **streamable**. Unbounded programs can processed iteratively with old code being forgotten even as new code is introduced. This supports soft, fluid metaphors for many applications of code - e.g. code flows over objects to modify them, or human actions as streams of code. 
+* ABC is **streamable**. Unbounded programs can processed iteratively. Old code is forgotten even as new code is introduced. This supports soft, fluid metaphors involving streams of code gradually modifying objects in a context. Human actions can also be modeled as streams of code.
 
-* ABC is **pervasively parallel**. Rewriting means we aren't constrained by a specific control flow, i.e. arbitrary subprograms may evaluate in parallel, and partial outputs from one subprogram might be immediately pipelined as inputs to the next. Pervasive parallelism enables software artifacts to scale to many developers. It also simplifies debugging, since we aren't constrained by control flow to experience a single error in the code per evaluation.
+* ABC is **naturally parallel**. There is no single point of control flow, no 'main' function to operate as a single pinhole for a CPU's attention. Rewriting may operate on all parts of a program at once. Further, ABC has a clear data flow, consuming inputs on the left and producing outputs on the right, which lends itself easily to pipeline parallelism.
 
 * ABC is amenable to **type checking**, static and dynamic, at the bytecode level. This simplifies safe sharing and linking, and reduces the need for a staged workflow. We can feel confident and secure in widely distributing ABC.
 
@@ -41,34 +41,31 @@ But the very short summary:
            [A]c == [A][A]       (copy)
            [A]d ==              (drop)
         
-        (STANDARD ACCELERATORS)
+        (DATA EMBEDDING - Church encoded)
 
-        [A]i == A               i = [][]baad
-        #1234567890             (eleven accelerators)
+        #1234567890             (accelerate natural numbers)
 
-        (DATA EMBEDDING - Church encoded sequences)
-
-        "literals are multi-line
-         indentation based
-         LF (10) is special character:
+        "literals are multi-line UTF-8
+         they start with character " (32)
+         linefeed is special character:
             LF SP   new line, drop SP
             LF LF   same as LF SP LF
             LF ~    terminates text
          no other special characters
+         blacklist characters:
+            C0 (except LF), DEL, C1
+            surrogate codepoints
+            replacement character
          may contain "double quotes"
          capable of embedding ABC
         ~
-        
-        #42
-        #108
 
         (TOKENS)
 
         [A]{&annotation}    (performance, safety, misc.)
         [A]{@gate}          (active debugging)
         {:seal}{.seal}      (stream sealing)
-        {%word}             (AO dictionary linking)
-        {'resource}         (runtime value linking)
+        {%word}             (dictionary linking)
 
 ## Performance
 
@@ -115,11 +112,14 @@ Performance annotations can do things like:
 
 Use of annotations to control staging and compilation has potential to be very effective in giving developers control of the performance of their code. In general, annotations on representation also support type checking and may be effectively used together with accelerators to squeeze the most performance from a representation.
 
-### Separate Compilation and Linking
+### Linking, Caching, and Separate Compilation
 
-ABC readily supports value-layer linking, e.g. by secure hash of the subprogram being linked. It is very convenient and effective to associate `{&jit}` compilations and the like with the same secure hash, such that the runtime has the opportunity to cache compilation efforts and also get easy structure sharing.
+ABC performs linking via the [Awelon Object (AO)](AboutAO.md) model. That is, we use tokens of form `{%word}` to within an implicit dictionary in context. And we use `{%word@source}` to link to a specific dictionary. The external dictionary is described more thoroughly by another word, `{%source}`. 
 
-For performance, compilation will be essential. Separate compilation and linking is possible by compiling at linker boundaries, i.e. such that when a runtime is asked to 'link' some code it has the opportunity to link either the ABC bytecode or a highly optimized representation from a trusted cache.
+In general, link boundaries are convenient opportunities for caching. Short tokens name large objects and computations. Thus, cache lookups become *cheap*. 
+
+For competitive performance, compilation will be essential. Compilation of ABC will primarily use just-in-time techniques, but precisely controlled via `{&jit}` and similar annotations. Static and separate compilation are feasible by performing 'just in time' compilation in a staged computation, e.g. via `{&asap}` annotations. 
+
 
 ## ABC Assumptions and Idioms
 
@@ -202,11 +202,6 @@ By modeling tree structures (e.g. a trie, B+ tree, or log-structured merge tree)
 
 To get the most out of value stowage, it must be used together with a persistence or caching model, such that the data may be reused across many independent computations without recomputing it. Structure sharing might further augment stowage, saving space when a value is computed many times. In a distributed system, stowed values could serve a role similar to hypermedia, enabling code to reference many large values without immediately downloading it. 
 
-A proposed serialization for stowed value placeholders is use of a token:
-
-        {'kf/scope/resourceID}
-
-The prefix `'kf` indicates a stowed value (`'`) with relevant and affine substructural properties (`kf`). The scope helps constrain the search space, and the rest identifies the value. The resourceID should include a secure HMAC if otherwise forgeable (like an incremental number). The limit on token size (255 bytes) should not be an issue in practice, though hierarchically structured resource identifiers like URLs are not viable.
 
 *Note:* Stowage is algebraic. If for some silly reason we `{&stow}{&stow}` a value, we would conversely need to load it twice. However, values smaller than a heuristic threshold don't need to be backed to disk at all. The second `{&stow}` command could instead be represented as a lightweight value wrapper.
 

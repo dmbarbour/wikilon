@@ -107,7 +107,7 @@ ABCD will likely get started with arithmetic and common data plumbing (like `i` 
 
 ### Tokens
 
-ABC supports symbolic extensions by embedding tokens in code. Tokens are short texts wrapped by curly braces, e.g. `{foo}`. In addition to being valid literal texts, tokens are limited to 255 bytes utf-8, and exclude LF and the curly braces internally. ABC tokens must have pure, local semantics. However, there's great deal they can do within that limit. Examples:
+ABC supports symbolic extensions by embedding tokens in code. Tokens are short texts wrapped by curly braces, e.g. `{foo}`. In addition to being valid literal texts, tokens are limited to 62 bytes utf-8, and forbid LF and the curly braces internally. ABC tokens must have pure semantics. However, there's great deal they can do within that limit. Examples:
 
 * acyclic, static or dynamic linking of code
 * stow large values to disk, save working memory
@@ -128,7 +128,7 @@ Gates are identified by prefix `@`, e.g. `{@bp123}`. Gates provide a simple basi
 
 Sealing uses paired tokens, e.g. `{:foo}` and `{.foo}`. The semantics is simply that `{.s}{:s}` and `{:s}{.s}` are *identity behaviors*. With program rewriting, we can simply delete those sequences, but it's also feasible to use wrapper/unwrapper techniques on whole streams of values. One must use `[{:s}]` and `[{.s}]` to scope sealers to specific parts of a computation.
 
-Linking replaces a token by a ABC program. For example, in [Awelon Object](AboutAO.md) our token `{%foo}` is replaced by definition of `foo` in the bound dictionary. Value stowage also produces links. Links must form a directed acyclic graph, and every linked program must at least be syntactically complete (e.g. `[]` blocks balanced, literals terminated).
+Link tokens use a `%` prefix, e.g. `{%word}`. Linking is based on the [Awelon Object (AO)](AboutAO.md) model. Semantically, each token inlines the word's ABC definition. Dependencies must form a directed acyclic graph, such that it's feasible to inline everything without affecting program behavior. Stowage also leverages this linking model.
 
 ## Ideas and Idioms
 
@@ -187,7 +187,7 @@ The runtime may additionally maintain a list of errors in the program, e.g. for 
 
 ABC with type declarations is amenable to static typing. Tokens such as `{&nat}`, `{&aff}`, `{&1}`, and `{:s}` provide a foundation from which static type inference could proceed. 
 
-Rich types are feasible. It's a bad idea to squeeze much logic into a token, but it is feasible to use programs or data to describe types. Given an [AO dictionary](AboutAO.md), types could be associated with each word via a simple convention like using `foo.type` to describe the type of `foo`. We could also use a pattern like `[foo][type]{&type}d` as a basis for inline declarations of types.
+Rich types are feasible. It's a bad idea to squeeze much logic into a token, but it is feasible to use programs or data to describe types. Given a dictionary, types could be associated with each word via a simple convention like using `foo.type` to describe the type of `foo`. We could also use a pattern like `[foo][type]{&type}d` as a basis for inline declarations of types.
 
 *Aside:* I should get started on static typing early, I think. Start with simple types then expand. I imagine this will make JIT compilation a lot easier.
 
@@ -234,11 +234,13 @@ The API will be oriented around building a 'program' left to right in terms of i
 
 *Aside:* I won't introduce support for binaries yet - at least not before accelerators exist to simplify rendering within a program. 
 
-### API for external linking and dictionaries
+### API for linking and dictionaries
+
+*Note:* This API will need some review upon introducing an AO-level linking model, e.g. with `{%word@source}`. Mostly, we may need to bind multiple dictionaries, one for each `source`. See also [Linking.md](Linking.md). I think the ideas below will hold, mostly.
 
 With program rewriting, dynamic linking is easy. Even when linking fails, computation may continue around the unknown token. Dynamic linking is advantageous for debugging because we can render a symbolic context after failure. Dynamic linking is convenient for separate compilation because we may load pre-compiled versions of code, and reuse them across multiple computations. So, I believe this is a worthy pursuit.
 
-To support separate compilation and other caching, I'll probably want a two-level linking format:
+To support separate compilation and other caching, I may want a two-level linking format:
 
         {%word} → ResourceID
         ResourceID → Program
@@ -398,12 +400,9 @@ Record operations are linear. It is invalid to read a field that is not in the r
 
 Use of field operations on anything other than an anonymous or variant record is an error. Matching against anything that is not specifically a variant record is an error. Records may be copied or dropped (ops `c` and `d`) if and only if those operations are permitted for every contained member. Records are not usable as functions, i.e. use of `a` or `b` with a record as the primary argument is an error.
 
-### ABC Metaprogramming (Unnecessary w/o Symbolic Structure)
+### ABC Metaprogramming
 
-An ABC program consists of `[abcd]` sequences with embedded `{tokens}`. Construction of `[abcd]` sequences requires no special attention. Thus a complete metaprogramming solution only needs to inject tokens. The challenge is to achieve this without compromising effective static reasoning or reusability of code. My best ideas so far involve modeling construction of tokens as an *effect*. 
+*Note:* Metaprogramming will be shifted to our dictionary link layer.
 
-        [program in Meta monad] {runMeta}
+Fortunately, it's also largely unnecessary without ad-hoc symbolic tokens.
 
-The simplest `{runMeta}` monad might answer every request with a wrapped token. We could request a token `"/foo"` and get back `[{/foo}]`. Note that `{runMeta}` might not exist as an explicit token, but rather be implicit to a programming environment. Within an [AO dictionary](AboutAO.md) we might use `foo.make = [program in Meta monad]` and implicitly reconstruct `foo` from `foo.make` whenever its recorded dependencies change. (A staged build system is an easy fit for Awelon project's [application models](ApplicationModel.md).)
-
-Monadic metaprogramming is first class, subject to composition, abstraction, and flexible reuse. Assuming a free monad, we can intercept the requests, simulate and test how the metaprogram would behave under a variety of mockup environments and configurations. There is very clear staging between the metaprogram and its computed output, no risk of incomplete output, and it's easy to record requested dependencies. Any competing model for metaprogramming should do at least this well for serious consideration.

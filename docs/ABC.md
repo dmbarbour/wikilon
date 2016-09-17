@@ -24,13 +24,14 @@ Literals may be embedded as UTF-8 sequences:
         "start with character `"`
          may have multiple lines
          simple blacklist:
-            C0 (except LF)
-            DEL
-            C1
+            C0 (except LF), DEL, C1
             surrogate codepoints
             replacement character
-         LF is escaped by following SP
-         text terminates with LF ~
+         LF gets special attention:
+            LF SP   keep LF, drop SP
+            LF LF   keep LF, continue
+            LF ~    drop LF, terminate
+         There are no other special chars.
         ~
 
 *Aside:* While ABC does not support inline literals, some [editable views](CommandLine.md) will do so. For convenience in examples, a subprogram like `"hello"` is to be understood as an inline representation for the obvious literal of five characters, even though it would include a line break in ABC.
@@ -102,11 +103,13 @@ In addition to `abcd` primitives, ABC shall include a standard dictionary of 'ac
 
 ## Tokens
 
-Tokens have the form of short text between curly braces, e.g. `{foo}`. Like accelerators, tokens must have a pure, formal semantics as a finite `[abcd]` expansion. The text between the two braces is limited to 255 UTF-8 bytes, which must be valid literal texts but additionally forbids LF and `{}`. 
+Tokens have the form of short text between curly braces, e.g. `{foo}`. Like accelerators, tokens must have a pure, formal semantics as a finite `[abcd]` expansion. 
+
+Tokens are limited. The total token size, including curly braces, is limited to 64 bytes, i.e. 62 UTF-8 bytes between braces. They must be valid within a text literal, and may not contain LF, SP, or curly braces.
 
 Most tokens have *identity semantics*, i.e. removing them from the code does not impact its formal behavior. Tokens with identity semantics can broadly support performance, safety, security, debugging, and rendering. For example, `[A]{&jit}` is formally no different from `[A]`, but would tell a runtime to force just-in-time compilation.
 
-Remaining tokens have *linking semantics*, inlining a named subprogram. For example, in [AO](AboutAO.md), the token `{%foo}` will formally inline the definition of word `foo` in place of the token. In a distributed system, linking might use secure hashes. Linking in ABC systems must always be acyclic.
+Remaining tokens have *linking semantics*, inlining a named subprogram. For example, token `{%foo}` will formally inline the definition of word `foo` in place of the token. In a distributed system, linking might use secure hashes. Linking in ABC systems must always be acyclic.
 
 For more information on tokens and the abundant idioms surrounding them, see the primary [ABC document](AboutABC.md).
 
@@ -117,3 +120,4 @@ For more information on tokens and the abundant idioms surrounding them, see the
 September 2016: 
 * revision to [minimalist ABC](ABC_Minimalist.md)
 * old content now deprecated and deleted
+* tokens revised to maximum 62 UTF-8 bytes

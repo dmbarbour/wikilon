@@ -85,9 +85,9 @@ The problems with inline comments are multifarious. Inline comments bulk up code
 
 For these reasons, Claw eschews inline comments in favor of separate documentation attributes, e.g. using words like `foo.doc` to document word `foo`. 
 
-### Claw Namespaces
+### Claw Namespaces (Tentative)
 
-*Aside:* This should be reconsidered in presence of an `{%word@resource}` AO layer linking model. It may be I want claw namespaces to operate with the linking model. But I'm uncertain about that. Linking should be pretty rare.
+*Aside:* This should be reconsidered in presence of an `{%word@resource}` AO layer linking model. It may be I want claw namespaces to operate with the linking model. But I'm uncertain about this. Until I'm certain one way or the other, I my delay use of claw namespaces.
 
 Namespaces are a mixed feature. On one hand, they may lead to concise, readable code. On the other, namespace management may become boiler-plate, and namespaces themselves are a weak form of context sensitivity that hinders refactoring and local reasoning about code. 
 
