@@ -1,10 +1,10 @@
 # Awelon Object (AO)
 
-Awelon Object (AO) isn't an independent language, rather it is a linking, distribution, and security model for [Awelon Bytecode (ABC)](AboutABC.md). AO defines tokens of the form `{%word}` and `{%word@dict}` and how they interact with dictionary objects. Dictionaries are the basic unit of linking and sharing in AO. 
+Awelon Object (AO) is a linking model for [Awelon Bytecode (ABC)](AboutABC.md). AO defines tokens for linking and how they interact with dictionary objects. Dictionaries are the basic unit of linking and sharing in AO. 
 
-A dictionary consists of a set of words, with a definition for each word. The definitions are encoded in ABC, but may use `{%word}` tokens to link another word defined in the same dictionary, or `{%word@source}` to link a word as defined in the dictionary specified by a set of `source.attribute` words. Semantically, linking a word means inlining its definition. Dependencies between definitions must form a directed acyclic graph, such that inlining all the things will have a finite expansion. (ABC loops can be represented by anonymous fixpoint combinators.)
+A dictionary consists of a set of words and a definition for each word. Definitions are encoded in ABC. Use of a `{%word}` token logically substitutes that word's definition in place of the token. For valid AO, dependencies between definitions must form a directed acyclic graph, such that statically inlining all link tokens has a finite expansion. Hence, linking has no affect on program semantics. 
 
-These dictionaries enable efficient sharing of objects and code. Very importantly, dictionaries also carry ad-hoc associative metadata. For example, given `word@source` a system may look up `word.doc@source` and `word.type@source`, or even `word.author@source` or `word.example@source`. This associative metadata enables an environment to render and explain code effectively, and may help humans comprehend it.
+Use of `{%word@dict}` tokens enables linking between named dictionaries. A linker operates in a context of named dictionaries, each of which is an implicit namespace. Dictionaries in a linker context must also have acyclic relationships.
 
 ## Dictionary Representation
 
@@ -19,13 +19,15 @@ A trivial example dictionary:
          assuming typical (stack*ext) environment
         ~
 
-Each definition has the form `@word definition`, starting at the beginning of a line. It's a simple SP (32) between the word and definition. A definition continues until the end of a file or until the next definition starts. There is no risk of ambiguity: ABC does not and will not use `@` for anything.
+Each definition has the form `@word definition`, starting at the beginning of a line. It's a simple SP (32) between the word and definition. A definition continues until the end of a file or until the next definition starts. There is no risk of ambiguity: ABC does not and will not use `@` for anything. There are no constraints on the order of definitions, and later definitions will overwrite earlier ones.
+
+It is feasible to extend this AO with actions for streaming updates, such as `@@RENAME foo bar` and `@@PARENT dictName`, or even `@@TARGET dictName` to enable modeling multiple dictionaries in one file.
 
 Use file suffix **.ao**, or `text/vnd.org.awelon.aodict` in context of an HTTP transfer.
 
 ## Editing AO
 
-Dictionaries are optimally manipulated through projectional editor systems. The Forth-like [claw](CommandLine.md) view is suitable for a minimal text-only input, and is a fair bit more legible than AO. But in general, only projectional editors can make effective use of [Awelon's application models](ApplicationModel.md). 
+Dictionaries are optimally manipulated through projectional editor systems. The Forth-like [claw](CommandLine.md) view is suitable for a minimal text-only input, and is a fair bit more legible than AO. But Awelon project's [application models](ApplicationModel.md) needs richer environments. 
 
 An interesting possibility for filesystem integration is to use a *FUSE* (Filesystem in Userspace) view, perhaps operating via the web service. If done properly, this could simplify integration with emacs, vim, and other nice text editors.
 
@@ -33,67 +35,41 @@ Editing a **.ao** file by hand, or even a set of linked files, is feasible. But 
 
 ## Linking AO
 
-A `{%word}` token links within the current dictionary. To link between dictionaries, we use `{%word@source}`, and we must also define `{%source}` within the current dictionary. For example:
+A linker will operate in context of:
 
-        @source "file" "foo.ao"
+* a collection of named dictionaries
+* the name of the current dictionary
+* the program - ABC with link tokens
 
-A source is defined by a `"Tag" [Value]` pair, which may be computed. The tag will be a short text that tells our linker how to interpret the value. The value will frequently just be another text - e.g. a URL, filename, secure hash. Structured values are possible, and we may want them for multi-homing, security models, composition, or computation. The interpretation is ultimately ad-hoc, subject to extension and de-facto standardization. 
+The name of the current dictionary is necessary for any `{%word}` tokens in the initial program. The use of `{%word@dict}` tokens will use the dictionary named `dict`. In general, a linker should work with dictionary *values* or a consistent transactional snapshot, such that evaluation is not affected by concurrent edits. 
 
-*Aside:* Computing sources introduces some interesting possibilities like switch-driven dependencies. Modeling sources via words also simplifies hand-switching.
+Our linker may generally test for cyclic dependencies or undefined words, and do a little static work to load dependencies into working memory and bind tokens to the appropriate targets. In case of compiled subprograms, linking may also bind those together.
 
-### Dictionary Inheritance
+## Sharing AO
 
-AO supports inheritance by recognizing `parent` as a special link source.
+To communicate an AO program, while preserving its behavior, requires communicating its linker context. Similarly, to compose independent AO computations requires composing their linker contexts. Composition of linker contexts may, in the general case, require logically renaming dictionaries that share a name but refer to different resources.
 
-        @parent "local" "d/foo"
+To simplify sharing, one goal is to minimize the need for renaming. Thus, we choose dictionary names that are unique at the global scope. Fortunately, this is not a difficult problem. A common registry, simple naming schema, version identifiers, GUIDs or secure hashes, etc. can be used in naming of things. And while they're not *proof* against collision, they can ensure renaming dictionaries is a rare event in practice.
 
-When a `{%word}` is not defined locally, the linker may search the parent. However, the parent's words are treated as if they were defined locally, such that any local definitions will override those in the parent. If a word is not defined in the parent, search may proceed to the grandparent and much deeper ancestors. 
+To further simplify sharing, we may favor *immutable* dictionaries, perhaps including a secure hash or version identifier in the name. Doing so mitigates concerns surrounding update propagation and cache invalidation.
 
-*Aside:* While this may seem limited to single inheritance, that really just depends on how our 'parent' source is defined. If a linker provides means to describe a composition of sources, then multiple inheritance immediately becomes possible. It might even be useful, e.g. model dictionary-level genetic programming via pseudo-randomized composition of sources.
+*Aside:* A valuable feature for sharing AO is that it may include a lot of metadata. From `word` we might also look up `word.doc`, `word.type`, `word.example`, `word.author`. All this extra data can simplify search, rendering, projectional editing, testing, and human comprehension.
 
-### Link Layer Metaprogramming
+## Dictionary Inheritance
 
-It is feasible to leverage the AO link layer for flexible metaprogramming. We only need to introduce a source model that *computes* a dictionary as a first-class ABC value rather than *links* an external resource.
+AO doesn't make strong assumptions about how a dictionary is constructed. A useful technique is to say: "this dictionary is the same as that one, but with some tweaks". A prototype inheritance or patching model seems appropriate. 
 
-### Immutable or Monotonic Dictionaries
+With a **.ao** format, this might require some extensions like adding `@@PARENT dictName` metadata. When a `{%word}` is not defined locally, the linker would search the parent dictionary for the same word as if it were locally defined. Then the grandparent, and so on.
 
-Linking of mutable things creates a lot of challenges for synchronization, update propagation, caching, etc.. So, whenever possible, we should favor linking of immutable dictionaries (e.g. identified by secure hash), or monotonic dictionaries (where we add new definitions, maybe GC old ones, but never reuse a name).
+## Value Stowage and AO Dictionaries
 
-With immutable dictionaries, dictionary inheritance provides a relatively simple and effective means to logically 'edit' dictionaries.
+ABC supports taking large values and replacing them with a lightweight link token.
 
-## Static and Dynamic Linking
+        [BIG VALUE]{&stow}      =>      [{%resourceId$HMAC@stowage}]
 
+I assume our linker context is extended to provide a default stowage dictionary. Stowage dictionaries support monotonic updates. Additionally, they may be secured against casual reading to protect sensitive data from computations sharing the same resource. Thus, we might use an HMAC to validate read access to each stowed resource.
 
-
-Because ABC is pure and uses local rewriting based evaluation, the worst that happens when linking fails is that a `{%word@source}` remains unevaluated, and we'll need to track link scopes at runtime.
-
-## Constraints on Words and Definitions
-
-A word is a
-
-Words are minimally constrained to be relatively friendly in context of URLs, English text delimiters, HTML, [claw code](CommandLine.md), and AO dictionaries/streams. Tokens are constrained for purity, portability, and easy processing. Texts are constrained to avoid conversion errors (e.g. HTML CRLF conversions, or UTF-8 vs. UTF-16). 
-
-Summary of constraints:
-
-* words are limited as follows:
- * ASCII if alphabetical, numeral, or in -._~!'*+:
- * UTF-8 excepting C1, surrogates, replacement char
- * must not start with numeral-like regex `[+-.]*[0-9]` 
- * must not start or end with . or : (period or colon)
- * no empty or enormous words, 1..30 bytes UTF-8.
-* tokens are limited to:
- * word dependencies (`{%dupd}{%swap}`)
- * value sealing (`{:foo} {.foo}`)
- * annotations (`{&seq}{&jit}`)
- * gates for active debugging (`{@foo}`)
- * gates, seals, annotations are words (modulo prefix)
-* texts are limited to:
- * exclude C0 (except LF), DEL, C1
- * exclude surrogate codepoints U+D800..U+DFFF
- * exclude replacement char U+FFFD
-
-Words may be further limited in context of a given system or application model, e.g. unicode normalization and case folding to reduce ambiguity, and forbidding unicode spaces and separators. However, I'd prefer to avoid more sophisticated rules at this layer.
-
+An interesting possibility is to permit multiple stowage dictionaries in a linker context, and specify which one we're using, e.g. `{&stow@foo}` to tell the evaluator to use a specific stowage dictionary `foo`. 
 
 ## Development Idioms
 
@@ -115,4 +91,22 @@ Definitions can potentially grow very large, especially when containing embedded
 
 A very large text might be better broken into smaller texts - e.g. per chapter, paragraph, or other meaningful fragment. A large binary modeled via text might better be divided into 'pages', such that persistent structure and edits can be modeled can reusing most pages. Sophisticated definitions consisting of many components (e.g. more than ten to twenty elements) might be better factored into smaller fragments that can be documented and understood incrementally.
 
-At the moment, I'm not suggesting hard caps for definition sizes. But soft caps - warnings, quota limits - may serve to discourage oversized definitions. 
+At the moment, I'm not suggesting hard caps for definition sizes. 
+
+## Constraints on Words and Definitions
+
+Words are minimally constrained to be relatively friendly in context of URLs, English text delimiters, HTML, [claw code](CommandLine.md), and AO dictionaries/streams. 
+
+Summary of constraints on words:
+
+* ASCII if alphabetical, numeral, or in -._~!$'*+:
+* UTF-8 excepting C1, surrogates, replacement char
+* must not start with numeral-like regex `[+-.]*[0-9]` 
+* must not start or end with . or : (period or colon)
+* no empty or enormous words, 1..30 bytes UTF-8.
+* dictionary names use the same constraints
+
+Words may be further limited in context of a given system or application model, e.g. unicode normalization and case folding to reduce ambiguity, forbid unicode spaces and separators. However, I'd prefer to avoid more sophisticated rules at this layer.
+
+## Security
+

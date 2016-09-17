@@ -105,19 +105,19 @@ In addition to `abcd` primitives, ABC shall include a standard dictionary of 'ac
 
 Tokens have the form of short text between curly braces, e.g. `{foo}`. Like accelerators, tokens must have a pure, formal semantics as a finite `[abcd]` expansion. 
 
-Tokens are limited. The total token size, including curly braces, is limited to 64 bytes, i.e. 62 UTF-8 bytes between braces. They must be valid within a text literal, and may not contain LF, SP, or curly braces.
-
 Most tokens have *identity semantics*, i.e. removing them from the code does not impact its formal behavior. Tokens with identity semantics can broadly support performance, safety, security, debugging, and rendering. For example, `[A]{&jit}` is formally no different from `[A]`, but would tell a runtime to force just-in-time compilation.
 
 Remaining tokens have *linking semantics*, inlining a named subprogram. For example, token `{%foo}` will formally inline the definition of word `foo` in place of the token. In a distributed system, linking might use secure hashes. Linking in ABC systems must always be acyclic.
 
+Structurally, tokens are constrained more severely than embedded literals: they're limited to 64 bytes UTF-8 (including the curly braces) and may not contain LF or curly braces internally. 
+
 For more information on tokens and the abundant idioms surrounding them, see the primary [ABC document](AboutABC.md).
 
-*Aside:* Based on experimentation, tokens should never be used to introduce symbolic data types such as variant tags or record fields. Introducing a massive set of symbols creates a need for sophisticated metaprogramming. Instead, accelerators, numbers, and literals should be used for structured data, with some annotations to assert general structure.
+*Aside:* Based on experimentation, tokens should not be used to introduce symbolic data types such as variant tags or record fields. Introducing a massive set of symbols creates a need for sophisticated metaprogramming. Instead, accelerators, numbers, and literals should be used for structured data, with some annotations to assert general structure.
 
 ## ABC CHANGE LOG
 
 September 2016: 
 * revision to [minimalist ABC](ABC_Minimalist.md)
 * old content now deprecated and deleted
-* tokens revised to maximum 62 UTF-8 bytes
+* tokens texts limited to 62 bytes UTF-8
