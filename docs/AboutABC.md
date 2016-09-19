@@ -101,11 +101,9 @@ Performance annotations can do things like:
 
 * `{&par}` - parallelize a subprogram
 * `{&seq}` - force evaluation of a subprogram
-* `{&asap}` - prioritize a *deep* computation
 * `{&lit}` - assert literal type, use runtime's embedded text rep
 * `{&nat}` - assert natural number, use runtime's natural number rep
-* `{&stow}` - move a large value out of working memory, load it lazily
-* `{&load}` - advise that a stowed will soon be needed
+* `{&stow}` - move value to linker layer, away from working memory
 * `{&cache}` - use caching implementation for function
 * `{&opt}` - simplify and optimize a subprogram 
 * `{&jit}` - compile a function 

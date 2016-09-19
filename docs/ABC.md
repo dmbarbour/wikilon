@@ -77,10 +77,14 @@ These characters may be used within tokens and embedded literals, of course. Add
 
 ## Standard Accelerators
 
-In addition to `abcd` primitives, ABC shall include a standard dictionary of 'accelerators' aimed primarily at improving legibility, convenience, or performance. For example, natural numbers are accelerators because embedding number data is important. The bulk of this document will be defining accelerators. Eventually. Choosing accelerators is a slow process with careful vetting. 
+In addition to `[abcd]` primitives, ABC shall include a standard dictionary of accelerated operations aimed primarily at improving legibility, convenience, and performance. Each accelerator is formally defined by expansion into an `[abcd]` sequence, but in practice we'll tend to use hand-optimized code.
+
+*Note:* The need for standard accelerators is greatly mitigated by use of [Awelon Object (AO)](AboutAO.md), which uses `{%word}` tokens for lightweight linking. A runtime can easily provide a standard dictionary of accelerated functions, e.g. `{%multiply@std2016}`. A consequence is that we may choose
+
+For example, natural numbers are accelerators because embedding number data is important. The bulk of this document will be defining accelerators. Eventually. Choosing accelerators is a slow process with careful vetting. 
 
         Usage               Behavior            Definition
-        [A]i                A                   [][]baad
+        (Natural Numbers)
         #                                       [di]                   
         0                                       {#10}*{#0}+
         1                                       {#10}*{#1}+
@@ -88,7 +92,13 @@ In addition to `abcd` primitives, ABC shall include a standard dictionary of 'ac
         ..
         9                                       {#10}*{#9}+
 
+
+
         (Tentative Accelerators)
+        [A]i                A                   []wad
+        [B][A]w             [A][B]              ua
+        [A]u                [[A]]               []b
+        [B][A]o             [B A]               
         [B][A]w             [A][B]              []ba
 
         (Intermediate Definitions)

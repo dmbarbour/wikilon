@@ -185,7 +185,7 @@ The runtime may additionally maintain a list of errors in the program, e.g. for 
 
 ### Static Analysis and Type Safety
 
-ABC with type declarations is amenable to static typing. Tokens such as `{&nat}`, `{&aff}`, `{&1}`, and `{:s}` provide a foundation from which static type inference could proceed. 
+ABC with type declarations is amenable to static typing. Tokens such as `{&nat}`, `{&aff}`, `{&*1}`, and `{:s}` provide a foundation from which static type inference could proceed. 
 
 Rich types are feasible. It's a bad idea to squeeze much logic into a token, but it is feasible to use programs or data to describe types. Given a dictionary, types could be associated with each word via a simple convention like using `foo.type` to describe the type of `foo`. We could also use a pattern like `[foo][type]{&type}d` as a basis for inline declarations of types.
 
