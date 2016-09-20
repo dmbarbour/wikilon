@@ -4,11 +4,9 @@ Awelon Bytecode (ABC) provides a computational medium in which ideas, data, and 
 
 ## Why a New Bytecode?
 
-Awelon project has a vision for human-computer interaction that places users within the environment rather than above or apart from it. I am exploring [alternative application models](ApplicationModel.md) where humans and software agents operate upon a "codebase" that is simultaneously a "database", offering a simple foundation for state. The ability to render, manipulate, compose, decompose, evaluate, and share software artifacts is essential. 
+Awelon project has a vision for human-computer interaction that places users within the environment rather than above or apart from it. This vision includes alternative [application models](ApplicationModel.md) where humans and software agents operate upon a codebase in a shared environment, and a [linked evaluation model](AboutAO.md) that preserves ad-hoc structure meaningful to humans and software agents.
 
 Most bytecodes aren't designed with such applications in mind.
-
-## Distinguishing Features
 
 ABC has many unusual features that make it suitable for Awelon project:
 
@@ -18,7 +16,7 @@ ABC has many unusual features that make it suitable for Awelon project:
 
 * ABC is **evaluated by local rewriting**. ABC subprogram may usefully be evaluated with very little context, e.g. no need to provide arguments, no need to reach a subprogram from a main function. The bytecode is effectively an active material: just place it and watch it flow together. Further, partially evaluated results are useful even if our quota times out. Local rewriting simplifies a lot of Awelon project's HCI visions for computation being continuous, omnipresent, easily observed, composed, and tested.
 
-* ABC is **purely functional**. The rewriting semantics are simple, confluent, and context-free. Computations may be freely be cached or replicated. Modulo performance and quota limits, ABC computations have deterministic behavior no matter which runtime evaluates them.
+* ABC is **purely functional**. The rewriting semantics are simple, confluent, and context-free. Computations may be freely be cached or replicated. Modulo performance and quotas, ABC computations have deterministic behavior no matter which runtime evaluates them.
 
 * ABC is **concatenative**. Composition of ABC functions is a simple concatenation of their programs. There is no sophisticated binding to perform, no headers or footers to manipulate. Conversely, decomposition is also straightforward, simply cutting programs apart at well defined fragments.
 
@@ -30,68 +28,110 @@ ABC has many unusual features that make it suitable for Awelon project:
 
 ## The Bytecode
 
-See [ABC](ABC.md) and [minimalist ABC](ABC_Minimalist.md) for details. 
+See also [ABC](ABC.md) and [minimalist ABC](ABC_Minimalist.md). 
 
-But the very short summary:
+### Primitives
 
-        (PRIMITIVES)
+ABC has only four primitive combinators `abcd`.
 
         [B][A]a == A[B]         (apply)
         [B][A]b == [[B]A]       (bind)
            [A]c == [A][A]       (copy)
            [A]d ==              (drop)
-        
-        (DATA EMBEDDING - Church encoded)
 
-        #1234567890             (accelerate natural numbers)
+In addition to these four combinators, we have the `[]` block structure. A primitive ABC program consists of a stream of `[abcd]`. The blocks should be properly balanced, i.e. every `[` has a matching `]` and vice versa. 
+
+Non-primitive ABC program must be reducible to a primitive ABC program by expanding data representations with their Church encodings, inlining linker tokens, eliminating other tokens. Doing so would hurt performance and hinder debugging, but would not affect the observable results. 
+
+The potential reduction to just four primitives makes ABC relatively easy to comprehend. There aren't any surprises, no corner cases to handle. And these primitives are useful functions even for high level code, easy to understand and to implement efficiently.
+
+### Data Embedding
+
+ABC's data embedding simplifies data entry, extraction, and debugging by presenting data in forms that humans can comprehend and tools can easily access. Natural numbers use eleven operators `#1234567890`. These are designed such that `#42` will compute a Church encoded 42. Text literals use an embedded encoding:
 
         "literals are multi-line UTF-8
          they start with character " (32)
+         blacklist characters:
+            C0 (except LF), DEL, C1
+            surrogate codepoints
+            replacement character
          linefeed is special character:
             LF SP   new line, drop SP
             LF LF   same as LF SP LF
             LF ~    terminates text
          no other special characters
-         blacklist characters:
-            C0 (except LF), DEL, C1
-            surrogate codepoints
-            replacement character
-         may contain "double quotes"
-         capable of embedding ABC
         ~
 
-        (TOKENS)
+The chosen Church encoding is suitable to unify literals and numbers with more general iterators and coroutines. For example, if I assume `(foo,bar,baz)` represented a general sequence, then the following semantics would apply:
 
-        [A]{&annotation}    (performance, safety, misc.)
-        [A]{@gate}          (active debugging)
-        {:seal}{.seal}      (stream sealing)
-        {%word}             (dictionary linking)
+        #5      == (,,,,)
+        #3      == (,,)
+        #0      == #
 
-## Performance
+        "hello" == (#104, #101, #108, #108, #111)
+        ""      == #
 
-Performance was sacrificed to make room for those other nice features. Naive interpretation of ABC is unlikely to be performance competitive with Java bytecode or CLR, which have a structure closer to 'the machine'. 
+        [B][A](foo,bar,baz)i == foo [[B][A](bar,baz)i] A
+        [B][A]#i             == B
 
-There are a number of methods to ameliorate performance issues with ABC, but many of them are *long term* and will take a while to develop. A solution is to simply use ABC where it's efficient (e.g. producing an SVG data structure) and offload low-level model processing (e.g. rendering of SVG). I aim to gradually expand the scope of the former, e.g. via use of accelerators and annotations to shift subprograms to GPGPU or FPGA computing.
+        [A]i == A;  i = [][]baad
 
-### Accelerators
+From this, we might derive that `#` is equivalent to `[di]`. Sequences generally have a structure `(foo,bar,baz) = [[foo](bar,baz)s]`, terminating with `[[baz]#s]` for some `s`. (The elements might be flipped if that leads to a cleaner definition. I still need to derive the definition for `s`.)
 
-We can recognize common sequences of bytecode and replace them by another opcode, one that is easier to hand implement or use in further optimizations. For example:
+*Note:* The syntax `(foo,bar,baz)` is not supported at the ABC layer, but a variation is available in the [claw](CommandLine.md) view.
 
-        [B][A]w == [A][B]       w = []ba
-        [A]i    == A            i = []wad
+### Whitespace
 
-ABC shall include a dictionary of standard accelerators to simplify rendering and performance. That dictionary will evolve slowly. Experimental accelerators will generally be internal to our interpreters or compilers.
+SP and LF are permitted in ABC. They have identity semantics, equivalent to the empty program. Essentially, this just permits some lightweight formatting of byte code for easier reading.
 
-We might develop accelerators oriented around:
+### Tokens
+
+Tokens have form `{foo}`, a short text wrapped in curly braces. Tokens enable symbolic extensions to ABC. Semantically, tokens are restricted by the normal rules for ABC: it must be possible to reduce every token to a primitive, purely functional `[abcd]` sequence. Tokens in ABC fall primarily into two groups:
+
+* tokens with *identity* semantics support performance, safety, or debugging
+* tokens with *linking* semantics support structured development
+
+ABC's favored linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. 
+
+Tokens with *identity* semantics include seals, gates, and annotations. Seals help developers prevent or detect scope errors, similar to a newtype declaration. Gates support active debugging: breakpoints, logging, tracing, rendering of an evaluation process. Annotations are more ad-hoc, but generally support performance or debugging. 
+
+### ABC Standard Dictionary
+
+ABC includes a standard dictionary of opcodes defined in terms of an `[abcd]` string. This standard dictionary will develop with the motivation to improve:
+
+* performance and optimization
+* data entry and extraction
+
+The opcodes `#1234567890` are examples of such opcodes, and support both motivations. Likely we'll introduce natural number arithmetic and a number of related features. Eventually. Potential target areas:
 
 * floating point number models
-* linear algebra (vector and matrix math)
+* linear algebra, matrix math
 * polymorphic records and variants
 * a Haskell style `runST` monad
 * a futures and promises monad
-* DSLs for pipelining computations
 
-The main difficulty with the *accelerators* approach is that it will take a long time to develop. This is a slow start, long term approach to performance. Though, we can at least isolate a few subprograms that *really* benefit from acceleration.
+The ABC standard dictionary will be very carefully curated and vetted, both formally and empirically. Fortunately, use of [Awelon Object (AO)](AboutAO.md) enables programmers to achieve similar benefits without special attention, albeit using bulkier (and less aesthetic) tokens instead of single character opcodes.
+
+
+
+       
+
+
+        [B][A]#0i       ==      B
+        [B][A]#1i       ==
+
+
+## ABC Performance
+
+Some strategies to ameliorate performance concerns:
+
+First, a runtime can provide a dictionary of accelerated functions via the [Awelon Object (AO)](AboutAO.md) layer that serves the same roles as the ABC standard dictionary. For example, Wikilon could provide a read-only, built-in AO dictionary `wikrt` such that words like `{%mul@wikrt}` have suitable definition but can be heavily optimized in the runtime and receive special attention from a JIT compiler. This dictionary should be exportable like other AO dictionaries (no opaque definitions).
+
+Second, a runtime can leverage compilation, e.g. via use of `{&jit}` annotations. Within AO evaluations, we get some implicit staging so our explicit JIT annotations effectively become staged compilations.
+
+Third, we can focus initially on outputs that have lower computational overhead, e.g. produce an SVG data structure instead of rendering to a binary at the ABC computation layer. As ABC's performance improves, the applicable domain will grow. But initially we can concentrate on the pieces it's adequate on then pass the buck up to the effects layer.
+
+While ABC's design compromises its straightline performance, ABC is relatively amenable to parallelism and incremental computing. Use of annotations may help further:
 
 ### Performance Annotations
 
@@ -103,35 +143,79 @@ Performance annotations can do things like:
 * `{&seq}` - force evaluation of a subprogram
 * `{&lit}` - assert literal type, use runtime's embedded text rep
 * `{&nat}` - assert natural number, use runtime's natural number rep
-* `{&stow}` - move value to linker layer, away from working memory
-* `{&cache}` - use caching implementation for function
-* `{&opt}` - simplify and optimize a subprogram 
+* `{&stow}` - move value to link layer, away from working memory
+* `{&cache}` - try to use cached result or add result to cache
+* `{&opt}` - try to simplify and optimize a subprogram 
 * `{&jit}` - compile a function 
 
 Use of annotations to control staging and compilation has potential to be very effective in giving developers control of the performance of their code. In general, annotations on representation also support type checking and may be effectively used together with accelerators to squeeze the most performance from a representation.
 
-### Linking, Caching, and Separate Compilation
-
-ABC performs linking via the [Awelon Object (AO)](AboutAO.md) model. That is, we use tokens of form `{%word}` to within an implicit dictionary in context. And we use `{%word@source}` to link to a specific dictionary. The external dictionary is described more thoroughly by another word, `{%source}`. 
-
-In general, link boundaries are convenient opportunities for caching. Short tokens name large objects and computations. Thus, cache lookups become *cheap*. 
-
-For competitive performance, compilation will be essential. Compilation of ABC will primarily use just-in-time techniques, but precisely controlled via `{&jit}` and similar annotations. Static and separate compilation are feasible by performing 'just in time' compilation in a staged computation, e.g. via `{&asap}` annotations. 
-
-
 ## ABC Assumptions and Idioms
 
-This section discusses a few high level properties of ABC's design and context that cannot readily be inferred from the earlier operators or tacit concatenative streamable structure.
+### Computations Terminate
 
-### Fast and Loose Reasoning for Termination
+ABC is purely functional. Any effects are explicit, e.g. using a free monadic effects models. Modulo debugging, to extract useful output from a computation requires that it terminate properly. Consequently, the assumption is that all computations terminate. With respect to optimizations, loop fusion, parallelization, laziness, and so on we'll simply assume every expression terminates and bypass the whole issue of denotational divergence. If any prover determines that a computations won't terminate, we can report that as an error. 
 
-ABC favors a philosophy of 'fast and loose reasoning' about termination properties. (cf. [Fast and Loose Reasoning is Morally Correct](http://www.cse.chalmers.se/~nad/publications/danielsson-et-al-popl2006.html), Danielsson, Hughes, et al. POPL 2006.) The idea is that - with respect to optimizations, equational laws, rewriting, loop fusion, parallelization, laziness - we should assume every subprogram terminates (or is intended to). 
+Of course, ABC is Turing complete. We cannot prove termination in the most general case. But I suspect termination can be proven for most expressions.
 
-To help enforce and remind developers of this philosophy, ABC compilers should perform termination analysis, and long-running programs should be modeled as RDP behaviors or incremental processes (e.g. `μProc.[a→(Proc*b)]`).
+*Aside:* Even with a termination guarantee, we'll generally need to run under a quota. Unless we can prove a linear-time guarantee or similar.
 
-ABC is Turing complete, so we can't expect a decision to be reached for every program. However, termination analysis is really about avoiding errors in reasoning. And *most errors aren't subtle*. Accidental non-terminations often can be detected, and many developers will write reusable software such that analysis passes without a 'could not prove' warning.
+### Church Encoded Data
 
-Termination is a weak property. In practice, we often wish to reason about performance characteristics: latency, memory requirements, resource usage. Ackermann function terminates, but not within reasonable bounds. However, termination is a great start.
+Natural n
+
+        #1234567890             (natural numbers)
+
+        "literals are multi-line UTF-8
+         they start with character " (32)
+         blacklist characters:
+            C0 (except LF), DEL, C1
+            surrogate codepoints
+            replacement character
+         linefeed is special character:
+            LF SP   new line, drop SP
+            LF LF   same as LF SP LF
+            LF ~    terminates text
+         no other special characters
+        ~
+
+
+### Conditional Behavior
+
+
+
+### Static Type Safety
+
+To simplify static type safety analysis, we'll generally operate on an assumption: that the program stack should have statically predictable types.
+
+
+### Iteration and Loops
+
+ABC can support ad-hoc loops via a fixpoint combinator. However, for many use cases, iteration is unnecessary. F ABC numbers and texts support iteration directly:
+
+        
+
+
+
+
+
+
+
+
+        [A]{&annotation}    (performance, safety, misc.)
+        [A]{@gate}          (active debugging)
+        {:seal}{.seal}      (stream sealing)
+        {%word}             (AO dictionary linking)
+
+
+
+
+### Numbers, Literals, and Sequences
+
+### Runtime Error Reporting
+
+
+
 
 ### Flexible Safety Analysis
 

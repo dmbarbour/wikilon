@@ -34,33 +34,6 @@ Here, object `foo` has a pointer to its head version that we update, and a word 
 
 With a long history or big-value commands, applications can potentially grow larger than memory. This is acceptable, so long as developers leverage [stowage](Performance.md) to indicate which parts of the value should be kept out of immediate memory. With stowage, we can model massive tree structures, modeling filesystems and databases and large queues, only loading the pieces we need for each command or view.
 
-## Incremental Computing with Dictionary Apps
-
-Dictionaries apps have a very 'spreadsheet-like' aspect to them, so incremental computing will be highly valuable for performance. Incremental computing means minimizing computation after each update. Consider a scenario involving a database object and a useful view of that object:
-
-        ...
-        @myDB.v99 {%myDB.v98}(update99)
-        @myDB     {%myDB.v99}
-
-        @myDB:usefulView   {%myDB}{%usefulView}
-
-If we assume a cached version of `myDB.v98` then it seems obvious that we can incrementally compute and cache `myDB.v99`, so at least that respect for our incremental computing is straightforward. The challenge, then, regards incremental computing of the useful view of our database.
-
-One feasible solution involves caching. Assumptions:
-
-* the view is compositional
-* the database object has multiple 'component' partitions
-* the updates are isolated to just a few components
-* annotation `{&cache}` creates caching functions
-
-By *view is compositional*, I mean that the view of the composite is a function of the views of the components. Formally, `∃F.∀x,*,y. V(x*y) = F(V(x), quote(*), V(y))` for our view `V`. I believe that a lot of useful views fit this criteria, or at least can be made to fit with a little wrapping and tuning. Time-series data processing, for example, is almost always compositional in this sense.
-
-Annotation `[V]{&cache}` will create the caching version of function `V`. This must load the cache if it already exists, so our runtime will use a serialization of `[V]` (perhaps indirectly, via secure hash or stowage address) to load the appropriate cache. In general, we'll also need to serialize *arguments* to `[V]` to access cached results or save new results. With a cached view function, we can directly apply it within composition view function to access deep cache structure.
-
-Efficient use of cache can be achieved by heuristic decisions about what to cache. At the runtime layer, we may observe effort vs. space tradeoffs, and avoid caching if recomputing is relatively cheap. At the development layer, we might make explicit, conditional decisions about which views to try caching, so we aren't serializing minor or unstable components.
-
-It seems that explicit caching could serve effectively as a basis for incremental computation in dictionary apps, even in the presence of state, for a widely useful subset of views and related processes. 
-
 ## Real-World Effects and Reflection via Software Agents
 
 Software agents (colloquially, 'bots') can observe our dictionary for some easily tested conditions, interact with the real world, and contribute updates to the dictionary. For example, a dictionary object may include *an inbox and outbox* for messages, or perhaps a *publish-subscribe arena*. Our 'bot' could integrate the inbox/outbox with external systems (e-mail, twitter, AMQP). Similarly, publish-subscribe could be integrated with external publish-subscribe models (DDS, atom, time-series data). 
@@ -186,6 +159,8 @@ can validate the secure hash for the immutable dictionary which contains `foo` a
 Immutable objects have potential to greatly improve the efficiency of large AO systems. They are easily shared, validated, cached, separately compiled, and linked by secure hash. But they preserve application-level structure and attributes, which simplifies tooling - search, rendering, type checking, and anything else we might support with attributes.
 
 ## Security for Dictionary Applications
+
+*TODO:* Design in context of multi-dictionary evaluations.
 
 When multiple agents muck about in a stateful dictionary, it becomes valuable to precisely control who interacts with what. Fortunately, the rich computational structure of our dictionary admits some expressive security models. For example, automatic curation is feasible - rejecting updates that break types or tests. We can also adapt object capability security for a dictionary-level object model.
 
