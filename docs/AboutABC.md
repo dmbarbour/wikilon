@@ -10,7 +10,7 @@ Most bytecodes aren't designed with such applications in mind.
 
 ABC has many unusual features that make it suitable for Awelon project:
 
-* ABC is **easily serialized and rendered**. ABC has a plain-text encoding that directly embeds numbers and literals. Thus, even a simple text editor can provide a useful view for debugging and comprehending code. Sophisticated graphical renderings are also feasible assuming suitable data types.
+* ABC is **easily serialized and rendered**. ABC has a plain-text encoding that directly embeds numbers and literals. Thus, even a simple text editor can provide a useful view for debugging and comprehending code. AO is designed for use with editable views, projectional editors. Sophisticated graphical renderings are feasible.
 
 * ABC **embraces data**. Where most languages shift responsibility for data to an external filesystem or database, ABC prefers to internalize it. Doing so simplifies serialization, persistence, composition, static safety, partial evaluation and staging, transparent procedural generation, and modeling interactive objects. Further, this readily extends to larger-than-memory data via a stowage model and persistent data structures.
 
@@ -22,9 +22,7 @@ ABC has many unusual features that make it suitable for Awelon project:
 
 * ABC is **streamable**. Unbounded programs can processed iteratively. Old code is forgotten even as new code is introduced. This supports soft, fluid metaphors involving streams of code gradually modifying objects in a context. Human actions can also be modeled as streams of code.
 
-* ABC is **naturally parallel**. There is no single point of control flow, no 'main' function to operate as a single pinhole for a CPU's attention. Rewriting may operate on all parts of a program at once. Further, ABC has a clear data flow, consuming inputs on the left and producing outputs on the right, which lends itself easily to pipeline parallelism.
-
-* ABC is amenable to **type checking**, static and dynamic, at the bytecode level. This simplifies safe sharing and linking, and reduces the need for a staged workflow. We can feel confident and secure in widely distributing ABC.
+* ABC is amenable to **type checking** and static analysis at the bytecode level. This simplifies safe sharing and linking, and reduces the need for a staged workflows. We can feel confident and secure in widely distributing ABC.
 
 ## The Bytecode
 
@@ -43,7 +41,7 @@ In addition to these four combinators, we have the `[]` block structure. A primi
 
 Non-primitive ABC program must be reducible to a primitive ABC program by expanding data representations with their Church encodings, inlining linker tokens, eliminating other tokens. Doing so would hurt performance and hinder debugging, but would not affect the observable results. 
 
-The potential reduction to just four primitives makes ABC relatively easy to comprehend. There aren't any surprises, no corner cases to handle. And these primitives are useful functions even for high level code, easy to understand and to implement efficiently.
+The potential reduction to just four primitives makes ABC relatively easy to comprehend. There aren't any surprises, no corner cases to handle. And these primitives are *useful* even for high level code, easy to understand and to implement efficiently.
 
 ### Data Embedding
 
@@ -88,67 +86,152 @@ SP and LF are permitted in ABC. They have identity semantics, equivalent to the 
 
 Tokens have form `{foo}`, a short text wrapped in curly braces. Tokens enable symbolic extensions to ABC. Semantically, tokens are restricted by the normal rules for ABC: it must be possible to reduce every token to a primitive, purely functional `[abcd]` sequence. Tokens in ABC fall primarily into two groups:
 
-* tokens with *identity* semantics support performance, safety, or debugging
-* tokens with *linking* semantics support structured development
+* tokens with *identity* semantics for performance, safety, debugging
+* tokens with *linking* semantics for structured development
 
-ABC's favored linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. 
+Tokens with *identity* semantics include seals, gates, and annotations. These are described more thoroughly later in this document. Seals support lightweight types and controlled scope. Gates support active debugging - breakpoints, logging, etc.. Annotations serve ad-hoc purpose but require explicit runtime support. Seals, gates, and annotations are discussed in later sections.
 
-Tokens with *identity* semantics include seals, gates, and annotations. Seals help developers prevent or detect scope errors, similar to a newtype declaration. Gates support active debugging: breakpoints, logging, tracing, rendering of an evaluation process. Annotations are more ad-hoc, but generally support performance or debugging. 
+ABC's favored linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. During evaluation, the token is substituted for the word's definition when doing so enables evaluation to proceed. 
 
-### ABC Standard Dictionary
+### ABC Dictionary
 
-ABC includes a standard dictionary of opcodes defined in terms of an `[abcd]` string. This standard dictionary will develop with the motivation to improve:
+ABC includes a standard dictionary of opcodes defined in terms of an `[abcd]` string. This dictionary will gradually develop with the motivation to improve:
 
 * performance and optimization
 * data entry and extraction
 
-The opcodes `#1234567890` are examples of such opcodes, and support both motivations. Likely we'll introduce natural number arithmetic and a number of related features. Eventually. Potential target areas:
+The initial standard dictionary consists only of opcodes `#1234567890`. These support both motivations, and were deemed essential for effective data entry. Eventually, ABC might include:
 
+* natural number arithmetic
+* binary and list processing
 * floating point number models
 * linear algebra, matrix math
 * polymorphic records and variants
 * a Haskell style `runST` monad
 * a futures and promises monad
 
-The ABC standard dictionary will be very carefully curated and vetted, both formally and empirically. Fortunately, use of [Awelon Object (AO)](AboutAO.md) enables programmers to achieve similar benefits without special attention, albeit using bulkier (and less aesthetic) tokens instead of single character opcodes.
+The ABC standard dictionary will be carefully curated and vetted, and thus moves very slowly. Fortunately, use of [Awelon Object (AO) dictionaries](AboutAO.md) supports similar benefits without rigorous standardization. Use of runtime built-in AO dictionaries can provide an empirical testbed for potential ABC dictionary extensions.
+
+## ABC Evaluation and Performance
+
+### Evaluation Strategy
+
+The general evaluation strategy for AO is:
+
+* prioritize annotated strategies
+* first evaluate the outer program
+* then evaluate within each block
+
+Evaluating the outer program gives us opportunity to apply annotations to blocks, or to drop blocks. Effectively, this strategy gives us call-by-need input, strict output by default, with potential to annotate it into something different.
+
+Because ABC is purely functional and we assume all valid computations terminate, evaluation strategy doesn't have any semantic impact.
+
+### Big Step Accelerators
+
+ABC performance is achieved primarily by big-step rewriting with known functions. For example, consider the an inline function `i`:
+
+        [A]i == A
+        i = [][]baad
+
+We can efficiently evaluate `i` much more efficiently than `[][]baad`.
+
+Big-step rewriting becomes especially valuable when working with Church-encoded data structures. For example, if we know some function `+` is equivalent to addition when applied to numbers, then we can efficiently rewrite `#23 #19 +` to `#42`. The runtime/compiler can stick to *compact* representations rather than expanding the Church encoding. Efficient processing of massive texts, vectors, binaries, matrices, etc. is feasible.
+
+Useful functions like `i` and `+` may eventually become part of the ABC standard dictionary, enabling use like bytecodes. However, the ABC standard dictionary moves very slowly and will have a slow vetting process. 
+
+In the mean time, we can achieve similar (albeit less portable) benefits by having each runtime/compiler specify a *built-in* [AO dictionary](AboutAO.md). For example, wikilon runtime might provide `{%i@wikrt}` and `{%+@wikrt}`. This dictionary of built-ins should be subject to normal perusal and export.
+
+*Aside:* Use of built-in functions avoids need for sophisticated recognition algorithms. It is possible than an optimizer could recognize `[][]baad` and replace it by `{%i@wikrt}`, but it is unnecessary to do so.
+
+### Rewrite Optimizations
+
+The basic rewrite rules admit some rewrites for performance. For example, `[]a` - applying identity - can be rewritten to the empty program. 
+
+We get more potential rewrites when we start working at higher levels. For example, we can also eliminate `[i]b` or `[]bi`. Loop fusions for collections processing like `[F] map [G] map == [F G] compose map` are viable if our `map` function is sufficiently restricted.
+
+I intend eventually that developers can propose rewrite rules and simple proofs of correctness for them. Likely, this will occur at the [AO](AboutAO.md) layer, which has both symbolic names room for attributes, metadata, and rewrite strategies. Meanwhile, rewrite optimizations are at least feasible for built-in functions.
+
+### Compilation
+
+A runtime can provide a `[function]{&jit}` annotation such that we construct a more efficient representation for evaluation of the function. Taken together with [AO dictionaries](AboutAO.md) and a little caching, we can effectively achieve staged compilation for important words. Effective use of JIT may be limited to cases where it's easy to determine static types.
+
+Compiling an executable independent of the ABC runtime is feasible as a case of *program extraction*. More generally, program extraction might translate an ABC program to a Haskell module, JavaScript object, or C function. Program extraction requires a well understood program type to integrate the resulting program with its context. In case of independent executables, the program type will likely be some variant on monadic IO.
+
+Awelon project favors [application models](ApplicationModel.md) that do not rely on program extraction, so local `{&jit}` compilation more appropriate for basic performance concerns. However, I would like to support both techniques.
+
+### Parallelism and Concurrency
+
+ABC supports simplistic parallelism: it is easy to evaluate different sub-expressions in parallel. Use of the `{&par}` annotation can make this intention explicit.
+
+
+The simplest form of parallelism is just to compute one part of a program in parallel with other parts. Use of the `[A]{&par}
+
+
+A `[A]{&par}` annotation indicates evaluation of `[A]` in parallel with the ongoing parent computation. A parent can parallelize man computations in this manner then do something with the results. This lightweight parallelism is good for many use cases. However, it doesn't enable much communication between parallel threads.
+
+To achieve higher levels of parallelism with communicating tasks, we must:
+
+* model a deterministic, concurrent computation
+* accelerate evaluation of this concurrency model 
+
+With this technique, evaluation and communication may proceed in a non-deterministic order without unnecessary bottlnecks, but we 
+
+, but we'll ultimately produce a deterministic result. Non-deterministic identifiers are possible, too.
+
+
+To cover the more general case, I propose a futures/promises monad with four actions:
+
+* **new**: create a new future promise pair
+* **wait**: obtain a future's value
+* **fulfill**: 
+* **fork**: create a new parallel computation
 
 
 
-       
 
 
-        [B][A]#0i       ==      B
-        [B][A]#1i       ==
+ multi-threaded Futures/Promises monad, similarly to how Haskell accelerates `runST`. 
 
 
-## ABC Performance
 
-Some strategies to ameliorate performance concerns:
 
-First, a runtime can provide a dictionary of accelerated functions via the [Awelon Object (AO)](AboutAO.md) layer that serves the same roles as the ABC standard dictionary. For example, Wikilon could provide a read-only, built-in AO dictionary `wikrt` such that words like `{%mul@wikrt}` have suitable definition but can be heavily optimized in the runtime and receive special attention from a JIT compiler. This dictionary should be exportable like other AO dictionaries (no opaque definitions).
 
-Second, a runtime can leverage compilation, e.g. via use of `{&jit}` annotations. Within AO evaluations, we get some implicit staging so our explicit JIT annotations effectively become staged compilations.
 
-Third, we can focus initially on outputs that have lower computational overhead, e.g. produce an SVG data structure instead of rendering to a binary at the ABC computation layer. As ABC's performance improves, the applicable domain will grow. But initially we can concentrate on the pieces it's adequate on then pass the buck up to the effects layer.
+, this is ultimately a very weak parallelism model because we cannot express communication between parallel tasks.
 
-While ABC's design compromises its straightline performance, ABC is relatively amenable to parallelism and incremental computing. Use of annotations may help further:
+ encourage parallel evaluation for a subprogram - i.e. a pool of worker threads could process many `{&par}` requests in parallel. But a lot more parallelism is possible.
+
+
+Pipeline parallelism requires communication between consumer and producer threads. 
+
+* pipeline parallelism requires multiple communicating 
+
+use of `{&par}` still requires I believe we can do better than that. 
+
+A powerful pattern for parallelism is futures and promises, such that we create
+
+### Explicit Laziness
+
+
 
 ### Performance Annotations
 
-Developers may leverage annotation tokens for performance. Most performance annotations should be treated as *strong* requests: implement or fail fast. This gives developers effective control over performance. However, heuristic or discretionary performance annotations may also be useful.
+Annotations can be used for performance in many ways:
 
-Performance annotations can do things like:
-
-* `{&par}` - parallelize a subprogram
-* `{&seq}` - force evaluation of a subprogram
-* `{&lit}` - assert literal type, use runtime's embedded text rep
-* `{&nat}` - assert natural number, use runtime's natural number rep
+* `{&seq}` - evaluate subprogram immediately 
+* `{&par}` - parallelize evaluation of subprogram
+* `{&lazy}` - delay computation of subprogram
+* `{&lit}` - force argument into text literal representation
+* `{&nat}` - force argument into natural number representation
 * `{&stow}` - move value to link layer, away from working memory
-* `{&cache}` - try to use cached result or add result to cache
-* `{&opt}` - try to simplify and optimize a subprogram 
-* `{&jit}` - compile a function 
+* `{&cache}` - use cached result or add result to cache
+* `{&memo}` - same as `{&cache}` but with volatile memory
+* `{&opt}` - simplify and optimize a subprogram 
+* `{&jit}` - compile a function for runtime internal use
 
 Use of annotations to control staging and compilation has potential to be very effective in giving developers control of the performance of their code. In general, annotations on representation also support type checking and may be effectively used together with accelerators to squeeze the most performance from a representation.
+
+*Note:* Use of `{&lazy}` above may be closer in nature to to call-by-need. If you want something closer to conventional laziness where we cache the result, use `{&memo}{&lazy}`.
 
 ## ABC Assumptions and Idioms
 

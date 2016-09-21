@@ -12,28 +12,22 @@ Dictionaries are the basic unit of AO evaluation.
 
         eval :: Dictionary → Dictionary
 
-Evaluation operates on each definition in a dictionary. Linking is interleaved with evaluation, performed only when it enables evaluation to proceed beyond a trivial inlining of code. Ultimately, our evaluated dictionary will preserve much link structure, which simplifies debugging and rendering. Human-meaningful symbols like `{%word}` may remain in the evaluated code, as do associative attributes like `{%word.doc}` or `{%word.type}`.
-
-Evaluation may proceed with undefined words. An undefined word will simply not be linked, i.e. it will be treated symbolically. 
+Evaluation operates on each definition in a dictionary. Linking is performed dynamically, only when it enables evaluation to proceed beyond trivial inlining of code. Ultimately, our evaluated dictionary will preserve much link structure. Human-meaningful symbols like `{%word}` will remain in the evaluated code, as do associative attributes like `word.doc` and `word.type`.
 
 ### Arity Annotations
 
-Arity annotations offer a simple means to control evaluation progress, and hence to control linking and preservation of link structure. Each annotation has the given arity. These are defined by a set of rewrite rules of form:
+Arity annotations offer a simple mechanism to control evaluation progress and hence to control runtime linking. This can be useful to limit degeneration of program structure to overly fine-grained partial evaluation. These are defined by a set of rewrite rules of form:
 
-        [A]{&/1}            ==      [A]
-        [A][B]{&/2}         ==      [A][B]
-        [A][B][C]{&/3}      ==      [A][B][C]
-        ...
+        [A][B]{&/2}                         == [A][B]
+        [A][B][C]{&/3}                      == [A][B][C]
+           ...
+        [A][B][C][D][E][F][G][H][I]{&/9}    == [A][B][C][D][E][F][G][H][I]
 
-For AO, arity annotations should be supported up to at least `{&/8}`. 
+Each annotation effectively has the given arity. I propose that AO should support arity annotations 2..9, a total eight options. Lower arities are unnecessary because all primitives have arity at least one. And higher arities should be unnecessary in practice.
 
-How this works is that, in a `{%producer}{%consumer}` scenario, our consumer may contain an arity annotation such that we know it's waiting on at least K more inputs before we have any need to link it. Upon evaluating `{%producer}` we can easily see how many outputs it makes available. If that number isn't at least K, we can avoid linking.
+In a `{%producer}{%consumer}` scenario, our consumer may contain an arity annotation so that we know it's waiting on at least K more inputs before evaluation may progress. We can also compute how many outputs our evaluated producer makes available. If the count is sufficient, we link both and proceed with evaluation. Otherwise, evaluation will halt and we'll preserve the link structure.
 
-### Multi-Dictionary Evaluation Contexts
-
-AO can be evaluated in context of multiple named dictionaries. Tokens of the form `{%word@dict}` name a word in another dictionary. Each dictionary is an implicit namespace, i.e. unadorned tokens like `{%multiply}` in context of dictionary `myMath` are equivalent to `{%multiply@myMath}`. 
-
-For all AO-layer purposes, we can consider the pool of available dictionaries to just be one much larger dictionary with a simplistic namespace. Where multiple dictionaries can make a useful difference is meta-level system concerns: ownership, mutability, group connectivity, sharing, security, etc.. Dictionaries are readily identified as a named group.
+There is no strong constraint that our arity match the entire input requirement for a computation. It may be useful to use arity annotations to control partial evaluations.
 
 ### Large Value Stowage
 
@@ -44,13 +38,100 @@ In context of AO, stowage involves creating new word tokens during evaluation.
         [large value]{&stow}  == [{%resourceId}]
         [small value]{&stow}  == [small value]
 
-Here `{%resourceId}` is a word whose definition is equivalent to `large value`. We might stow to a separate dictionary, e.g. `{%resourceId@stowage}`. For a shared stowage dictionary, we may need to address security concerns (perhaps by including a small HMAC in the resource ID). Stowage has overhead, so an evaluator should make a heuristic decision about whether to stow depending on the value size.
+Here `{%resourceId}` is a word whose definition is equivalent to `large value`. Stowage has overhead, so an evaluator should make a heuristic decision about whether to stow depending on the value size.
 
 How resource IDs are named is left to the evaluator and runtime. Stowage doesn't need deterministic naming, though at least having stable names would be convenient for humans, rendering tools, caching, etc. that interact with the results in contexts like incremental computation. Structure sharing could also be useful.
 
 ### Incremental Computing and Caching 
 
-Incremental computing is essential for Awelon's application models, and effective use of cache is critical for incremental computing. A typical change to a codebase will do some mix of adding new code and updating old code. (Even a simple command pattern, for example, will add a new 'command' then update the 'head'.) 
+Consider two common [application patterns](ApplicationModel.md):
+
+* **command pattern** - We model an application as an initial state followed by a long sequence of update action, potentially resulting in massive databases. It is possible that we'll tweak/undo recent actions and recompute state, but that's mostly near the head of the application. Older actions may gradually be made immutable, composed, and garbage collected. 
+
+* **view pattern** - We model reactive views that query and summarize the state of one or more applications. Application states, in general, are massive databases, but we can assume most updates are small - affecting only a small part of that database. It's important that we can compute the update for our view without recomputing the entire database. 
+
+The command pattern suggests that we should be caching near the head of our app, such that adding new words does not require recomputing the entire application state. The view problem cannot be solved for the general case, so I assume two light constraints:
+
+* large applications have persistent, compositional structure
+* views are compositional: `∃f.∀x*y. V(x*y) = f(V(x),*,V(y))`
+
+Our application state is modeled by a compositional structure `x*y`. With persistence, updates will tend to involve either the the `x` or `y` but not both. Hence, it becomes feasible to leverage a cached `V(x)` or `V(y)` from a prior computation. This applies hierarchically, i.e. `x` might equal `v*w`. Many systems will fit this pattern or can be made to fit with a little consideration.
+
+A question, then, is how do we know what to cache? I propose the following:
+
+* we *implicitly* cache evaluation over words
+* we *explicitly* cache any other computation
+
+Cached evaluation over words is a natural fit for AO. It makes no difference for our evaluated dictionary whether we substitute token `{%word}` with its original definition or its cached, evaluated definition. Because `{%word}` may be used more than once in a dictionary, we will frequently benefit from caching rather than recomputing. In context of incremental computation, our cached result would additionally be used over time.
+
+Explicit caching can be expressed by annotation, i.e. `[computation]{&cache}`.
+
+The `{&cache}` annotation does not force evaluation. When evaluation does occur, our evaluator will first search its cache. If the cached value is not available, we'll perform the computation to completion then decide whether or not to add it to our cache. 
+
+*Note:* An evaluator may make heuristic decisions about whether to cache based on time/space tradeoffs. This applies for both implicit and explicit caching.
+
+
+
+
+ of dictionary words effectively gives us lazy evaluation on our dictionary. In this case, caching is mostly important because a `{%word}` may be used more than once. Rather than link and evaluate its definition every time, we might choose to evaluate the word's definition once and use the 
+
+ It makes no difference whether we substitute `{%word}` by its definition or its *evaluated* definition, so in general we might as well cache our evaluations and save some work in cases where a word is used more than once.
+
+
+
+This is straightforward enough: we want caching of words anyway because it makes no difference whether we subsitute `{%word}` by a dfi
+
+ - i.e. evaluate just what is needed for your current computation, keep a record so we don't repeat evaluation unnecessarily. But it's a bit less stringent. We might perform some recomputations, might choose not to preserve cache for cheap computations.
+
+suggests that our `eval :: Dictionary → Dictionary` is augmented with a cache, such that we don't rec
+
+ is more or less equivalent to *lazy* evaluation on a dictionary, though 
+
+
+Evaluation may be lazy. That is, we don't need to evaluate a word before there is cause to do so, and we can usefully cache our evaluated results. If we aren't exporting our resulting dictionary, there is no need to evaluate the whole thing.
+
+
+
+we could cache view `V` on our application state `x*y`
+
+These assumptions seem a good fit for a lot of applications and databases. Anyhow, this means we might cache `V(x)` and `V(y)`. 
+
+For the view pattern, we might need more general caching of computations. 
+
+
+The former
+
+
+To do this, we'll try for *compositional*
+
+
+ that we don't need to review the entire database if there are only a few small, relevant changes.
+
+When an application is updated, it's important that we efficiently compute the changes in the view rather than reprocessing the entire application state.
+
+ In any case, this pattern suggests we must be caching near the 'head' of our dictionary.
+
+
+* **spreadsheet pattern** - 
+
+Older actions tend to become immutable,
+
+This leads to long chains of computations to c
+
+ - i.e. the command . This leads to long chains of computations within our dictionary. 
+
+* we update an application state via a 
+
+Large data structures are incrementally updated via command patterns. 
+
+With stowage, we'll be constructing large data structures. and incrementally updating them through command patterns. We can recompute these structures via 
+
+ Effective use of cache is critical for incremental computing. I assume, to start with, that evaluations on *words* will generally be cached.
+
+In addition to caching evaluations of words, we must cache evaluation on more ad-hoc computations, i.e. such that small changes to large data structures (trees and similar) result in incremental computations for computed views. 
+
+
+, and effective use of cache is critical for incremental computing. A typical change to a codebase will do some mix of adding new code and updating old code. (Even a simple command pattern, for example, will add a new 'command' then update the 'head'.) 
 
 Thus, incremental computing requires caching at both the dictionary level (so we can compute new objects) and potentially at the value level (such that a minor change in application state requires only minor recomputation of a view). 
 
@@ -99,21 +180,22 @@ Efficient use of cache can be achieved by heuristic decisions about what to cach
 
 It seems that explicit caching could serve effectively as a basis for incremental computation in dictionary apps, even in the presence of state, for a widely useful subset of views and related processes. 
 
+## Dictionary Representation
 
-
-## Sharing and Composing AO
-
-To share any AO program requires sharing the dictionary. This context will frequently be implicit in the communication medium. For example, in a web service, the dictionary would be held by our server. Composing AO programs encounters challenges when there are name conflicts. In that case, we may need to translate, renaming words with conflicting definitions before integration. A multi-dictionary evaluation context shifts the concern to conflict between dictionary names.
-
-To simplify sharing, one goal is to reduce renaming. This can be achieved by de-facto standardization of names, a centralized name registry (like a code wiki), simple naming schema (e.g. use domain name in dictionary name), secure hashes, random GUIDs, etc..
-
-Another challenge surrounding sharing is update propagation. As much as possible, we'll want to share immutable or monotonic dictionaries that simplify caching. But ultimately a lot of [application models](ApplicationModel.md) rely on mutable dictionaries.
+I assume a common pattern during development will involve forking a dictionary, performing a few simple edits, then observing how those changes will affect our evaluated results. It's convenient if our AO dictionary representation supports this behavior efficiently.
 
 
 
-## Representing AO
 
-AO does not make strong assumptions about how dictionaries are represented. One might use a hashtable, database, filesystem, first-class ABC values, etc.. However, AO does define a simple **.ao** file format for import and export purposes. 
+### Multi-Dictionary Contexts
+
+As a simple convention, we can take `{%word@dict}` to refer to a word in a named dictionary. Every dictionary acts implicitly as a namespace, such that within dictionary `myMath` the token `{%multiply}` may logically be rewritten to `{%multiply@myMath}`. Our evaluation context then becomes a set of named dictionaries. 
+
+For AO layer purposes, the set of named dictionaries is effectively one composite dictionary. But modeling multiple dictionaries can be convenient in other layers - e.g. security, versioning, representation. For example, in a filesystem, we can use one file or directory named dictionary. We can support features like prototypal inheritance of dictionaries. We can name dictionaries with a secure hash to guard immutability. We can have some dictionaries that are more heavily curated and trusted than others.
+
+### AO Import and Export
+
+AO does not make strong assumptions about how dictionaries are represented. One might use a hashtable, database, filesystem, first-class ABC values, etc.. However, AO does define a simple **.ao** filesystem representation for import and export purposes. 
 
         @swap []ba
         @swapd [{%swap}]a
@@ -122,17 +204,51 @@ AO does not make strong assumptions about how dictionaries are represented. One 
          assuming typical (stack*ext) environment
         ~
 
-Each definition has the form `@word definition`, starting at the beginning of a line. It's a simple SP (32) between the word and definition. A definition continues until the end of a file or until the next definition starts. There is no risk of ambiguity: ABC does not and will not use `@` for anything. There are no constraints on the order of definitions, and a later definition of a word will overwrite an earlier definition.
+Each definition has the form `@word definition`, starting at the beginning of a line. It's a simple SP (32) between the word and definition. A definition continues until the end of a file or until the next definition starts. There is no risk of ambiguity: ABC does not and will not use `@` for anything. There are no constraints on the order of definitions, and a later definition of a word will overwrite an earlier definition. 
 
-A multi-dictionary context might be exported as an directory or archive, containing one file per dictionary.
+For multi-dictionary contexts, we'll use one file per named dictionary, and we leverage directory structure just a little such that dictionary `foo.bar` uses file `foo/bar.ao`. 
 
-Use file suffix **.ao**, or `text/vnd.org.awelon.aodict` in context of an HTTP transfer.
 
-## Developing AO
+
+## Development of AO
+
+### Editable Views
 
 Editing dictionary files by hand is feasible. But it's also a chore. Outside of early development (e.g. bootstrapping), I wouldn't recommend it to anyone. Dictionaries are optimally manipulated through projectional editor systems. The Forth-like [claw](CommandLine.md) view is suitable for a minimal text-only input, and is a fair bit more legible than AO. But Awelon project's [application models](ApplicationModel.md) are based on richer development environments. 
 
 An interesting possibility for filesystem integration is to use a *FUSE* (Filesystem in Userspace) view, perhaps operating via the web service. If done properly, this could simplify integration with emacs, vim, and other nice text editors.
+
+
+### Sharing and Composing AO
+
+The dictionary is the unit of sharing in AO. This 
+
+If there is need to do so, it is not difficult to extract a minimum useful dictionary for a given application. We take some initial set of words, then compute a transitive closure including attributive metadata (such that for `word` we also include `word.doc` and `word.type`). A copy of a dictionary may be disconnected from any further updates to the origin.
+
+
+ it should be sufficient to share a URL or similar.
+
+
+
+
+
+To share an AO program requires sharing a dictionary, or at least part of one. It is not difficult to compute a transitive closure of all the relevant words for a given program, and export just that subset.
+
+. This context will frequently be implicit in the communication medium. For example, in a web service, the dictionary would be held by our server. Composing AO programs encounters challenges when there are name conflicts. In that case, we may need to translate, renaming words with conflicting definitions before integration. A multi-dictionary evaluation context shifts the concern to conflict between dictionary names.
+
+To simplify sharing, one goal is to reduce renaming. This can be achieved by de-facto standardization of names, a centralized name registry (like a code wiki), simple naming schema (e.g. use domain name in dictionary name), secure hashes, random GUIDs, etc..
+
+Another challenge surrounding sharing is update propagation. As much as possible, we'll want to share immutable or monotonic dictionaries that simplify caching. But ultimately a lot of [application models](ApplicationModel.md) rely on mutable dictionaries.
+
+
+
+
+## Securing AO
+
+Potentially, we might stow to a named dictionary, e.g. `{%resourceId@stowage}`. In this case, we may wish to include an HMAC in our resource IDs.
+
+We might stow to a separate dictionary, e.g. `{%resourceId@stowage}`. For a shared stowage dictionary, we may need to address security concerns (perhaps by including a small HMAC in the resource ID). 
+
 
 ## Futures and Promises?
 
