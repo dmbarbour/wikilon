@@ -2,7 +2,7 @@
 
 Awelon Object (AO) is a useful set of conventions for [Awelon Bytecode (ABC)](AboutABC.md). AO defines tokens for linking and how they interact with evaluation in context of dictionaries.
 
-A dictionary consists of a set of words and a definition for each word. Definitions are encoded in ABC. Linking a `{%word}` token logically substitutes that word's evaluated definition in place of the token. Dependencies between definitions must form a directed acyclic graph, such that all link tokens could be eliminated in by a finite expansion to inlined code. Hence, linking has no effect on ABC's expressiveness.
+A dictionary consists of a set of words and a definition for each word. Definitions are encoded in ABC. Linking a `{%word}` token logically substitutes that word's definition in place of the token. Dependencies between definitions must form a directed acyclic graph, such that all link tokens could be eliminated in by a finite expansion to inlined code. Hence, linking has no effect on ABC's expressiveness.
 
 Dictionaries serve as a unit of evaluation, development, linking, and distribution in AO, and as a foundation for Awelon project's various [application models](ApplicationModel.md). In general, if there are meta-level features like security or immutability, they must be specified on a per-dictionary basis.
 
