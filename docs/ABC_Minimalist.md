@@ -51,7 +51,7 @@ Candidate representation:
         111     common operation codes
 
         000     block (list of ops)
-        010     (a deep copy value)
+        010     (unused, deep object)
         100     tagged objects
         110     tagged actions
 
@@ -82,8 +82,6 @@ Candidate representation:
         A great many accelerators
 
 This seems an efficient and lightweight representation.
-
-I'm not sure how I'll use that `010` tag. Maybe for 'zipper' objects or finger-trees for open blocks during evaluation. Maybe for context-local shared objects (refcts, etc.).
 
 ### Parallel Runtime
 

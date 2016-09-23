@@ -82,24 +82,56 @@ Cached evaluation over words is a natural fit for AO. We evaluate before linking
 
 Explicit caching can be expressed by annotation, i.e. `[computation]{&cache}`. The `{&cache}` annotation does not force evaluation. But when evaluation does occur, the evaluator will first search its cache. If the cached result is not available, we'll perform the computation then decide heuristically whether to add it to the cache (based on time/space tradeoffs). 
 
-Serializing computations has overhead, and caching is wasted if the computation is cheap. Developers can improve cache efficiency by careful use of stowage (to reduce serialization overheads) and by making suitable 'cache points' more explicit in their data structures. That can generally be achieved by buffering of recent updates into larger batches, such that we cache on the older data and recompute from the buffer.
+Serializing computations has overhead, and caching is wasted if the computation is cheap. Developers can improve cache efficiency first by careful use of stowage to reduce serialization overheads, and second by making suitable 'cache points' more explicit in their data structures. That can generally be achieved by buffering of recent updates into larger batches, such that we cache on the older data and recompute from the buffer.
 
-### Gate Configuration and Debugging
+### Cached AO Evaluation
 
-ABC uses a concept of configurable `{@gate}` tokens for debug output. An interesting possibility is to model this output as part of the AO dictionary. But I'm not convinced it's a good idea. It might be better to have debug views for evaluations on a specific word.
+Caching in AO is complicated by the goal to preserve link structure. This section is a simple proposal that should work pretty well:
+
+* in runtime `{%foo}` token has hidden data:
+ * result of `[foo evaluated def]{&stow}`
+ * fast linker metadata - arity, outputs
+ * if foo is redirect, bind redirect target
+ * deep link structure preserved in stowage
+
+* we maintain cache of AO words to metadata
+ * cache is incomplete, lazily reconstructed
+ * rebuild using `[word original def]{&cache}` 
+ * used to bind `{%foo}` to hidden data
+ * tracks failed evaluations (errors, cycles, etc.)
+ * may track time/space evaluation efforts
+
+* also have reverse lookup (word → clients) table
+ * enable transitive invalidation of word cache
+ * transitively invalidate on definition update
+ * may transitively invalidate to recover space
+  * requires some good usage metrics
+
+Explicit `[computation]{&cache}` is simple, leveraging that contained `{%foo}` tokens contain a deeply immutable stowage identifiers. So we don't need to perform any lookups outside the cache table.
+
+* computation is serialized as if for stowage
+* use secure hash on serialization (if large)
+* map serialization to stowed evaluation
+
+The disadvantage of this design is that AO word evaluations are cached even in cases where recomputation would be cheaper than the space cost. The AO word cache must also be maintained explicitly. 
+
+OTOH, our tokens will frequently bind small definitions directly (since `{&stow}` doesn't always go to disk), and lookups will be efficient and simple. I suspect the simplicity benefits will outweigh the potential space hit from storing an extra representation for every definition.
 
 ## Dictionary Representation
 
-I assume a common pattern during development will involve forking a dictionary, performing a few simple edits, then observing how those changes will affect our evaluated results. It's convenient if our AO dictionary representation supports this behavior efficiently.
-
-
-
+I assume a common pattern during development will involve forking a dictionary, performing a few simple edits, observing how those changes will affect our evaluated results, and occasionally merging updates back. It's convenient if our AO dictionary representation supports this behavior efficiently.
 
 ### Multi-Dictionary Contexts
 
 As a simple convention, we can take `{%word@dict}` to refer to a word in a named dictionary. Every dictionary acts implicitly as a namespace, such that within dictionary `myMath` the token `{%multiply}` may logically be rewritten to `{%multiply@myMath}`. Our evaluation context then becomes a set of named dictionaries. 
 
-For AO layer purposes, the set of named dictionaries is effectively one composite dictionary. But modeling multiple dictionaries can be convenient in other layers - e.g. security, versioning, representation. For example, in a filesystem, we can use one file or directory named dictionary. We can support features like prototypal inheritance of dictionaries. We can name dictionaries with a secure hash to guard immutability. We can have some dictionaries that are more heavily curated and trusted than others.
+For AO layer purposes, the set of named dictionaries is effectively one composite dictionary. But modeling multiple dictionaries can be convenient in other layers - e.g. security, versioning, representation. For example, in a filesystem, we might use one file per named dictionary. We can support features like prototypal inheritance of dictionaries. We can name component dictionaries with a secure hash to guard immutability while leaving the rest mutable. 
+
+### Dictionary Inheritance
+
+A useful technique is to say: "this dictionary is the same as that one, but with the following tweaks". 
+
+
 
 ### AO Import and Export
 
@@ -126,6 +158,9 @@ Editing dictionary files by hand is feasible. But it's also a chore. Outside of 
 
 An interesting possibility for filesystem integration is to use a *FUSE* (Filesystem in Userspace) view, perhaps operating via the web service. If done properly, this could simplify integration with emacs, vim, and other nice text editors.
 
+### Active Debugging
+
+Developers should be able to evaluate a word or subset of an AO dictionary in 'debug' modes using `{@gate}` tokens and a provided configuration. 
 
 ### Sharing and Composing AO
 
@@ -151,35 +186,20 @@ Another challenge surrounding sharing is update propagation. As much as possible
 
 
 
-## Securing AO
+### AO Layer Security
 
 Potentially, we might stow to a named dictionary, e.g. `{%resourceId@stowage}`. In this case, we may wish to include an HMAC in our resource IDs.
 
 We might stow to a separate dictionary, e.g. `{%resourceId@stowage}`. For a shared stowage dictionary, we may need to address security concerns (perhaps by including a small HMAC in the resource ID). 
 
 
-## Futures and Promises?
-
-Would introducing words, a bit like stowage, be a good basis for concurrent futures and promises? This seems an interesting possibility, at least.
-
-
 ## Development Idioms
-
-### Dictionary Inheritance
-
-A useful technique is to say: "this dictionary is the same as that one, but with the following tweaks". A prototype inheritance or patching model would be useful in this context. For the **.ao** format, this might be represented by an extension like `@@PARENT source`. When a `{%word}` is not defined locally, the linker would search the parent source for the same word, as if it were locally defined. Then the grandparent, and so on.
 
 ### Leveraging Undefined Words
 
-Undefined words can serve a useful role in a development context. They serve as 'holes', and an ABC system might help developers discover their definitions based on inferred type and usage. With ABC rewriting based evaluation, these holes also support lightweight symbolic partial evaluations. 
+Undefined words can serve a useful role in a development context. They serve as 'holes'. An ABC system might help developers discover definitions based on inferred type and usage. Or we might just use the words as undefined symbols for some symbolic partial evaluation.
 
-### Regarding Large Definitions
 
-Definitions can potentially grow very large, especially when containing embedded texts or with dictionary applications. However, huge definitions are not recommended, as they may hinder incremental computation, reuse, memory management, and developer comprehension.
-
-A very large text might be better broken into smaller texts - e.g. per chapter, paragraph, or other meaningful fragment. A large binary modeled via text might better be divided into 'pages', such that persistent structure and edits can be modeled can reusing most pages. Sophisticated definitions consisting of many components (e.g. more than ten to twenty elements) might be better factored into smaller fragments that can be documented and understood incrementally.
-
-At the moment, I'm not suggesting hard caps for definition sizes. 
 
 ## Constraints on Words and Definitions
 
