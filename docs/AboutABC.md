@@ -22,7 +22,7 @@ ABC has many unusual features that make it suitable for Awelon project:
 
 * ABC is **streamable**. Unbounded programs can processed iteratively. Old code is forgotten even as new code is introduced. This supports soft, fluid metaphors involving streams of code gradually modifying objects in a context. Human actions can also be modeled as streams of code.
 
-* ABC is **incremental**. A consequence of serializability and purely functional semantics is that caching computations is safe and easy. Systematic caching enables incremental computation, which is necessary for Awelon project's application models.
+* ABC is **incremental**. Between purely functional semantics, large value stowage, and serializability, caching is safe, efficient, and easy. Systematic caching and a few software patterns enables incremental computation, which is important for Awelon project's application models. 
 
 * ABC is amenable to **type checking** and static analysis at the bytecode level. This simplifies safe sharing and linking, and reduces the need for a staged workflows. We can feel confident and secure in widely distributing ABC.
 
@@ -102,7 +102,7 @@ ABC includes a standard dictionary of opcodes defined in terms of an `[abcd]` st
 * performance and optimization
 * data entry and extraction
 
-The initial standard dictionary consists only of opcodes `#1234567890`. These support both motivations, and were deemed essential for effective data entry. Eventually, ABC might include:
+The initial standard dictionary consists only of opcodes `#1234567890`. These support both motivations, and were deemed essential for effective data entry. I might also add inline, swap, and compose. Eventually, ABC might include:
 
 * natural number arithmetic
 * binary and list processing
@@ -121,12 +121,12 @@ The ABC standard dictionary will be carefully curated and vetted, and thus moves
 The general evaluation strategy for ABC is:
 
 * evaluate outer program
-* evaluate within blocks
 * prioritize annotations
+* evaluate final results
 
-Effectively, evaluation defaults to call-by-need input to a computation and strict outputs. This is unusual for most purely functional languages, but gives us opportunity to apply annotations or conditionally drop parts of the output rather than evaluate them. 
+Effectively, ABC evaluation defaults to call-by-need internally. But when the toplevel evaluation halts, we'll run back through the program and recursively evaluate every contained block (unless marked `{&lazy}`). This gives us ample opportunity to apply annotations or drop actions conditionally.
 
-A runtime has discretion to deviate from this strategy.
+[Awelon Object](AboutAO.md) additionally performs staging, implicitly.
 
 ### Big Step Accelerators
 
@@ -141,13 +141,13 @@ Big-step rewriting becomes especially valuable when working with Church-encoded 
 
 Useful functions like `i` and `+` may eventually become part of the ABC standard dictionary, enabling use like bytecodes. However, the ABC standard dictionary moves very slowly and will have a slow vetting process. 
 
-In the mean time, we can achieve similar (albeit less portable) benefits by having each runtime/compiler specify a *built-in* [AO dictionary](AboutAO.md). For example, wikilon runtime might provide `{%i@wikrt}` and `{%+@wikrt}`. This dictionary of built-ins should be subject to normal perusal and export.
+In the mean time, we can achieve similar (albeit less portable) benefits by having a runtime provide a built-in [AO dictionary](AboutAO.md), and perhaps recognize built-ins from other popular runtimes. For example, wikilon runtime might provide `{%i@wikrt}` and `{%+@wikrt}`. This dictionary of built-ins should be subject to normal perusal and export.
 
 *Aside:* Use of built-in functions avoids need for sophisticated recognition algorithms. It is possible than an optimizer could recognize `[][]baad` and replace it by `{%i@wikrt}`, but it is unnecessary to do so.
 
 ### Rewrite Optimizations
 
-The basic rewrite rules admit some rewrites for performance. For example, `[]a` - applying identity - can be rewritten to the empty program. We get more useful rewrites when we start working at higher levels. For example, we can also eliminate `[i]b` or `[]bi`. Loop fusions for collections processing like `[F] map [G] map == [F G] compose map` are viable, assuming the `map` function is sufficiently restricted.
+The basic rewrite rules admit some rewrites for performance. For example, `[]a` - applying identity - can be rewritten to the empty program. We get more useful rewrites when we start working at higher levels. For example, we can also eliminate `[i]b` or rewrite `bi => i`. Loop fusions for collections processing like `[F] map [G] map => [F G] compose map` are viable, assuming the `map` function is sufficiently restricted.
 
 I intend that developers can propose rewrite rules, preferably together with a proof of correctness. Meanwhile, rewrite optimizations are at least available for built-in functions and perhaps a trusted subset of the dictionary.
 
@@ -161,63 +161,150 @@ Awelon project favors [application models](ApplicationModel.md) that do not rely
 
 ### Parallelism and Concurrency
 
-ABC's purity supports a simple form of parallelism: we can evaluate many subexpressions at once. This particular form of parallelism is made explicit by the `[computation]{&par}` annotation. However, while `{&par}` is lightweight and has useful applications, it is not very expressive because parallel components cannot communicate.
+ABC's purity supports a simple form of parallelism: we can evaluate many subexpressions at the same time. This can be made explicit by `[computation]{&par}`. This form of parallelism is useful for many divide-and-conquer use cases. Unfortunately, it is not very expressive and not suitable for all problem domains.
 
-Fortunately, it is feasible to achieve more expressive parallelism. In general:
+To cover parallelism more generally, ABC can leverage big-step accelerators for a deterministic concurrency model. For example, we might model a system based on Kahn process networks or flow-based programming:
 
-* design a deterministic, concurrent computation model
-* accelerate evaluation of this model with a built-in
+* monadic processes with named ports
+* declarative wiring of named ports
+* a set of message packets in flight
 
-Viable models include: 
+This system is deterministic given simple constraints:
 
-* single-assignment futures monad
-* [Kahn process networks](https://en.wikipedia.org/wiki/Kahn_process_networks)
-* [flow-based programming](https://en.wikipedia.org/wiki/Flow-based_programming)
-* [network stream transducers](https://github.com/ekmett/machines)
+* only one process may write to each wire
+* messages pending on wire are FIFO ordered
+* reading a wire implicitly waits for data
 
-The single-assignment futures monad is problematic. We cannot ensure determinism without a sophisticated static analysis, to ensure that created futures don't escape the evaluation and that futures are resolved only once. Avoiding models that construct 'new' identifiers seems wise.
+*Aside:* Flow-based programming would additionally include a natural number bound for each wire, how many pending messages it can carry before forcing a writer to wait. A bound makes it a lot easier to control memory use and ensure CPU fairness.
 
-Support for other models hasn't been fully reviewed. KPN or a variant of FBP seem a promising balance between expressiveness and simplicity. The machines model seems much more sophisticated than I'd prefer to deal with.
+A pure function can evaluate the system description to its conclusion, producing a deterministic final state. Our client may then reflect upon this result: extract output messages, inject new input messages, rewire if desired, etc.. The system is easily integrated with external effects models, performing effects in batches based on pending messages. After we modify the system, we can again perform evaluation.
 
-In any case, the idea of supporting communication between parallel components via accelerated function evaluation seems simple, effective, and worth pursuing. It isn't high priority, but we can move beyond the limits of simple parallelism when need for greater scalability arises. 
+We can take this function and *accelerate* it, e.g. using a runtime built-in. 
 
-Similarly, it is feasible to achieve GPGPU parallelism given suitable built-ins for linear algebra.
+Accelerating the evaluation function would enable a runtime to evaluate the system in a natural manner, using queues to buffer communications between components. Further, we could evaluate some of the reflection actions - e.g. for injecting and extracting messages. By doing so, we would preserve the runtime's internal representation of the system for common update actions, enabling subsequent evaluations to proceed with appropriately reduced overheads.
 
-### Cached Computation
+I believe this approach is very promising in its simplicity and utility. Between `{&par}` and an `evalFBP` accelerator, ABC can support a great deal of useful parallelism at the CPU layer. To further cover GPGPU or SSE parallelism requires additional accelerators, e.g. oriented around linear algebra. 
 
-### Value Stowage
+### Stowage and Caching
+
+Stowage and caching are covered in greater detail in the [Awelon Object (AO)](AboutAO.md) documentation. But the general summary is:
+
+        [large value]{&stow}    =>  [{%resource}]
+        [small value]{&stow}    =>  [small value]
+        [computation]{&cache}   =>  [cache value]
+
+Use of stowage supports larger than memory values and computations, offloading bulky data to disk. It might be understood as a more precise, explicit model of virtual memory.
+
+Cache uses a serialized computation as a representation for a value. We'll look up the computation in a table. If found, we replace the computation by its result without performing all the intermediate steps. Otherwise, we perform the computation and heuristically decide whether to add it to the table (based on time/space tradeoff). 
+
+The serialization requirement for caching has some overhead, so developers are encouraged to make suitable 'cache-points' explicit such that the time/space tradeoff is probably a good one. Use of stowage can help ameliorate cache overheads by controlling synchronization costs.
+
+### Lazy Evaluation
+
+By the general evaluation strategy, call-by-need is the default for inputs to a computation. It can be preserved for outputs, too, via explicit use of a `[computation]{&lazy}` annotation. In AO, lazy evaluations are not implicitly cached, which may be a problem if you copy a lazy computation. If need to cache lazy evaluations, make it explicit with `{&cache}{&lazy}` (or `{&lazy}{&cache}`, order makes no difference).
+
+Laziness may freely be used to model infinite data structures - e.g. infinite streams, trees, etc.. Evaluation of such structures would not terminate in an ABC evaluator that doesn't the `{&lazy}` annotation, but all relevant ABC evaluators will support laziness.
 
 ### Performance Annotations
 
 Many annotations are used for performance:
 
-* `{&seq}` - evaluate subprogram immediately 
-* `{&par}` - parallelize evaluation of subprogram
+* `{&seq}` - evaluate subprogram immediately (shallow)
+* `{&seq*}` - as `{&seq}` but evaluates results too
+* `{&par}` - parallelize evaluation of subprogram (shallow)
+* `{&par*}` - as `{&par}` but evaluates results too
 * `{&lazy}` - call by need evaluation for subprogram
 * `{&lit}` - force argument to text literal representation
 * `{&nat}` - force argument to natural number representation
 * `{&stow}` - move value to link layer, away from working memory
-* `{&trash}` - drop value but preserve placeholder with metadata
+* `{&trash}` - drop data but keep placeholder, substructure
 * `{&cache}` - use cached result or add result to cache
 * `{&opt}` - simplify and optimize a subprogram 
 * `{&jit}` - compile a function for runtime internal use
 
 Use of annotations to control staging and compilation has potential to be very effective in giving developers control of the performance of their code. In general, annotations on representation also support type checking and may be effectively used together with accelerators to squeeze the most performance from a representation.
 
-*Note:* If you want something close to conventional laziness where we cache the result, use `{&cache}{&lazy}`.
 
 ## ABC Assumptions and Idioms
 
 ### Annotations
 
-### Seals
+Annotations are tokens with prefix `&` as in `{&seq}`, `{&lazy}`, or `{&cache}`. Annotations affect the ABC evaluator, tuning evaluation to improve performance or debugging. In general, annotations should not be used for anything that cannot be easily handled by an interpreter at runtime. Annotations not recognized by the runtime will be deleted during evaluation.
 
-### Gates
+For debugging purposes, annotations tend to cause a program to fail fast, e.g. `{&nat}` provides a runtime type assertion that our argument is a natural number, or `{&error}` enables runtimes and developers both to record errors in the output. In some cases, these can be leveraged by static type analysis.
 
-### Program Animation
+### Weak Substructural Types
+
+Substructural types are very expressive for structuring application behavior independently of syntax. For example, while the common resource pattern `open use* close` can be enforced by a structured syntax or RAII pattern, we could instead model this by constructing a linear handle (with sealed data) upon `open` and destroying it later, in the `close` action. This would give us a lot more flexibility to use the resource within the program.
+
+However, I'm not convinced I won't want an escape for substructure, e.g. to model lossy networks or backtracking. So my proposal is to enforce these types only weakly. The proposal is as follows:
+
+        [A]{&rel} == [A]    (mark relevant)
+        [A]{&aff} == [A]    (mark affine)
+        [A]{&nss} == [A]    (clear marks)
+
+* a block marked relevant may not be dropped
+* a block marked affine may not be copied
+* a block both affine and relevant is called 'linear'
+* block compositions preserve substructure
+
+We can then model a general copy or drop function that ignores substructure by prefixing with `[] cons {&nss}` (and unwrapping our copies). But developers will be able to reason about substructure except where they explicitly choose to bypass it, and it will be a lot easier to search and find every relevant bypass by searching for clients of the `{&nss}` within a subprogram.
+
+### Structural Scopes
+
+ABC provides a simple mechanism for controlling scope of a computation. Assume we have Function that takes two inputs and produces three outputs on the stack. A structurally scoped application can be represented as:
+
+        [A][B][Function]bb{&tuple3}i
+
+What we're doing here is binding two arguments to the function, asserting that there are three outputs, then inlining those outputs into our main code. Dynamically, the `{&tuple3}` annotation requires a simple bit of reflection and otherwise we'll turn our result into an error value. 
+
+        [[A][B][C]]{&tuple3}    =>  [[A][B][C]]
+
+Like `{&nat}` and `{&lit}`, the `{&tuple3}` annotation is also a simple constraint that can contribute to static type analysis and may be eliminated from code if we can statically prove the behavior.
+
+### Value Sealing
+
+Seals come in pairs with a user-defined symbol - `{:foo}` and `{.foo}`. Seals are defined by simple rewrite semantics: `{:foo}{.foo}` will reduce to the empty program. Frequently, seals will be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`. Seals serve useful roles as lightweight dynamic type declarations and useful rendering hints for structured data.
 
 ### Runtime Error Reporting
 
+To simplify error reporting and debugging, we'll want to record known errors in the generated program. There are a number of ways to achieve this. To accomplish this, we can use an `{&error}` annotation around a bad subprogram. An evaluator can freely inject the error annotation, delimiting the bad code:
+
+        #42{&lit}       =>  [#42{&lit}]{&error}i
+        [A]{&aff}c      =>  [[A]{&aff}c]{&error}i
+        [A]{:s}d        =>  [[A]{:s}d]{&error}i
+        [[A]]{&tuple2}  =>  [[A]]{&tuple2}{&error}
+
+Developers can freely specify errors, construct ad-hoc error values.
+
+        "TODO: fix foo yesterday!"{&error}
+
+Error values can be passed around, copied, and dropped like normal values. Error values will not be further evaluated. Evaluation becomes stuck insofar as an attempt is made to observe the error value, e.g. the `{&error}i` pattern. Being stuck on an error does not generate further errors. But the remainder of the computation may still evaluate, so we might report many runtime errors rather than the first one.
+
+### Gates for Active Debugging
+
+By 'active debugging' I mean breakpoints, logging, and other techniques that give programmers a debug view. For active debugging, ABC uses `{@foo}` tokens. The gate name is a user-defined symbol. The behavior of a gate is configured at the evaluator level. For example:
+
+        [A]{@foo}   =>  [A]                 (if gate open or logging)
+        [A]{@foo}   =>  [A]{@foo:123}       (if closed, 123 unique)
+
+An open gate passes the value. A logging gate also passes the value, but first copies the value to a configured log. A closed gate acts a like a better breakpoint and stalls computation locally. A useful pattern is `[{@foo}i]b` to shift evaluation stalls from a producer to a consumer. 
+
+It is possible to stall on multiple instances of a closed gate `{@foo}`. For example, if you map a function containing `{@foo}` over a list containing a hundred values, you might have a hundred stalled computations. We'll give each stalled gate a unique identifier in the output, such that it's easy to locate all `{@foo:*}` activations or delete just a few of them by name.
+
+### Program Animation and History Debugging
+
+When debugging, ideally we want a proper spatial-temporal history. Logs provide a lightweight temporal history, but lose a lot of useful spatial context. Breakpoints provide useful spatial context, but lose valuable temporal contexts. But we can have both!
+
+To get both at the same time, we repeatedly:
+
+* evaluate with closed gates
+* take a snapshot of program state
+* open some stalled gates
+
+Ultimately, we'll have a series of snapshots representing intermediate evaluation states. Conveniently, these states are *deterministically* structured by the breakpoints, rather than having ad-hoc structure from pausing on a quota. This stable structure should greatly simplify stable rendering.
+
+There are many strategies for choosing which gates to open between frames, depending on how we want to focus our animations. E.g. we could always open the rightmost stalled gate, or open the leftmost and rightmost to burn from both ends, or interleave opening all `{@foo:*}` stalled gates with all `{@bar:*}` gates, or hierarchical strategies, and so on.
 
 ### Conditional Behavior
 
@@ -244,5 +331,8 @@ As a general rule, ABC assumes correct computations will terminate. ABC has no u
 
 ### Type Safety Analysis
 
+ABC evaluation can proceed with type errors, and the worst that happens is nonsense output. Static typing isn't essential. But static analysis and continuous warnings about likely type errors will almost certainly result in a cleaner codebase and better informed programmers.
 
+Tokens such as `{&nat}`, `{&aff}`, `{&tuple3}`, and `{:s}{.s}` provide a lightweight foundation from which static type inference may proceed. At the AO layer, it is possible to add rich type declarations for words. For example, the word `foo.type` could - by convention - be understood as a type declaration for the word `foo`.
 
+Another useful type assumption is that the program's "stack" should have a stable type despite conditional behavior. We can generally consider the `[A][B][C][D]` structure to the left of a computation as a stack for typing purposes. This assumption would limit dependent type inference, but we could add that back in via type declarations.
