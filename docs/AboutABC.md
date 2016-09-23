@@ -224,6 +224,94 @@ Many annotations are used for performance:
 
 Use of annotations to control staging and compilation has potential to be very effective in giving developers control of the performance of their code. In general, annotations on representation also support type checking and may be effectively used together with accelerators to squeeze the most performance from a representation.
 
+## Static Type Safety for ABC
+
+ABC's behavior does not depend on any type judgements, hence ABC may be evaluated dynamically. But static analysis of type safety can nonetheless offer significant benefits:
+
+* a clean, robust, trustworthy codebase
+* type-sensitive projectional editors
+* verifiable documentation, informed programmers
+* typeful rendering and program extraction
+* JIT compilation without dynamic checks
+
+It is my intention that most ABC codebases be strongly, statically type safe. 
+
+The foundation for ABC's type system is program structure. For example, there is a clear structural difference between `[[A][B]]` vs. `[[A][B][C]]` because, when applied, the first introduces two objects into our program, while the latter introduces three. Similarly, there is an obvious difference between `[dd]` and `[ddd]` because the first removes two items, and the second removes three. 
+
+Our basic assumption for static typing is that: every block-delimited function should have a statically predictable effect when applied to program structure. Thus, we assign types to each block. (Note that we do not necessarily assign types to AO words.)
+
+ill assume that any delimited function like `[A]` should have  static type safety is that a function, when applied, should have a statically predictable effect on program structure.
+
+
+We might conveniently think about a subprogram as *taking* some inputs of given types, then then *putting* some outputs. We could represent this in take/put order:
+        
+        foo :: A B C → D E
+        [c][b][a] foo => [d][e]
+
+This allows for convenient composition of type.
+
+
+
+        bar : E → F
+        baz : F D → G H I
+
+        foo bar : A B C → D F
+        bar baz : E D → G H I
+        foo bar baz : A B C → G H I
+
+
+
+
+
+        [c][b][a] foo => [d][e]
+        [d][e] bar => [d][f]
+        [d][f] baz => [g][h][i]
+
+
+
+These
+
+
+
+
+, we move beyond merely counting objects. We must know the structural type for each argument.
+
+we must also know the types of each argument. 
+
+
+ we could, we might model the type of a program that observes three items on the stack and leaves two as `3→2`
+
+
+
+I believe the simplest way to describe this stack effect is a pair of numbers. For example, `3→2` describes a function function that consumes three items from the stack, the
+
+
+
+So, as a starting point, we might say that the total "stack effect" for a computation 
+
+This structure can provide a foundation for static type safety:
+
+
+
+ a little more structure than lambda calculus due to the implicit program 'stack'. There is a clear difference, for example, between `[[A][B]]` vs. `[[A][B][C]]`
+
+ is just a little bit different from lambda calculus because functions may consume or return multiple values - e.g. there is a very clear distincti
+
+But there are at least two observations we can make as a
+
+
+
+ in a context where all data is Church-encoded within a single data type, the block `[A]`
+
+This is possible, even in a context where all data is Church-encoded, if we make some simple static type assumptions. 
+
+The most useful assumption is that conditional behavior should lead to the "same" stack type.
+
+
+Tokens such as `{&nat}`, `{&aff}`, `{&tuple3}`, and `{:s}{.s}` provide a lightweight foundation from which static type inference may proceed. At the AO layer, it is possible to add rich type declarations for words. For example, the word `foo.type` could - by convention - be understood as a type declaration for the word `foo`.
+
+Another useful type assumption is that the program's "stack" should have a stable type despite conditional behavior. We can generally consider the `[A][B][C][D]` structure to the left of a computation as a stack for typing purposes. This assumption would limit dependent type inference, but we could add that back in via type declarations.
+
 
 ## ABC Assumptions and Idioms
 
@@ -252,7 +340,7 @@ We can then model a general copy or drop function that ignores substructure by p
 
 ### Structural Scopes
 
-ABC provides a simple mechanism for controlling scope of a computation. Assume we have Function that takes two inputs and produces three outputs on the stack. A structurally scoped application can be represented as:
+ABC provides a simple mechanism for controlling scope of a computation. Assume we have Function that takes two inputs and produces three outputs. A structurally scoped application can be represented as:
 
         [A][B][Function]bb{&tuple3}i
 
@@ -329,10 +417,4 @@ ABC can support ad-hoc loops via a fixpoint combinator. However, for many use ca
 
 As a general rule, ABC assumes correct computations will terminate. ABC has no use for an infinite computation. Effects require returning with a request for an effect and a continuation. If a static analysis can prove non-termination for a computation, that's certainly an error.
 
-### Type Safety Analysis
 
-ABC evaluation can proceed with type errors, and the worst that happens is nonsense output. Static typing isn't essential. But static analysis and continuous warnings about likely type errors will almost certainly result in a cleaner codebase and better informed programmers.
-
-Tokens such as `{&nat}`, `{&aff}`, `{&tuple3}`, and `{:s}{.s}` provide a lightweight foundation from which static type inference may proceed. At the AO layer, it is possible to add rich type declarations for words. For example, the word `foo.type` could - by convention - be understood as a type declaration for the word `foo`.
-
-Another useful type assumption is that the program's "stack" should have a stable type despite conditional behavior. We can generally consider the `[A][B][C][D]` structure to the left of a computation as a stack for typing purposes. This assumption would limit dependent type inference, but we could add that back in via type declarations.

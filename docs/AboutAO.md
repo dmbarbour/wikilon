@@ -58,6 +58,7 @@ Here `{%resourceId}` is a word whose definition is equivalent to `large value`. 
 
 How resource IDs are named is left to the evaluator and runtime. Stowage doesn't need deterministic naming, though at least having stable names would be convenient for humans, rendering tools, caching, etc. that interact with the results in contexts like incremental computation. Structure sharing could also be useful.
 
+
 ### Incremental Computing and Caching 
 
 Consider two common [application patterns](ApplicationModel.md):
@@ -84,9 +85,45 @@ Explicit caching can be expressed by annotation, i.e. `[computation]{&cache}`. T
 
 Serializing computations has overhead, and caching is wasted if the computation is cheap. Developers can improve cache efficiency first by careful use of stowage to reduce serialization overheads, and second by making suitable 'cache points' more explicit in their data structures. That can generally be achieved by buffering of recent updates into larger batches, such that we cache on the older data and recompute from the buffer.
 
-### Cached AO Evaluation
+### Cached Evaluation Strategy
 
-Caching in AO is complicated by the goal to preserve link structure. This section is a simple proposal that should work pretty well:
+Caching in AO is complicated by:
+
+* preservation of link structure 
+* mutability of word definitions 
+* forked or versioned dictionary
+* application refactoring and GC
+* definition not always observed
+ * outputs like `[{%foo} #42]`
+ * link fails on arity, outputs
+ * redirects like `@foo {%foo.v99}`
+* time vs. space trade for cache
+
+Optimally, I want a cache that supports minimal evaluation on update, and that does not propagate updates any further than necessary, such that irrelevant changes (due to refactoring, added redirects, conditional paths not taken, data plumbing of changed definitions) does not cause recomputation. 
+
+Further, the cache must support multiple versions of code, such that we can continue to use old versions of code after an update.
+
+
+the following features:
+
+* minimal re-evaluation on update
+
+
+must preserve `{%foo}` in output for debugging, AO apps
+* tokens such as `{%foo}` may refer to mutable definitions
+* 
+
+
+. We have tokens such as `{%foo}` in our code whose definition is, in the general case, mutable. We must preserve the token `{%foo}` because it's valuable for comprehension, debugging, and associative data.
+
+ Important points:
+
+* evaluation containing `{%foo}` may observe the *value* of `{%foo}`.
+* it 
+
+ Evaluation of an expression involving `{%foo}` potentially depends on the *value* of `{%foo}`. 
+
+This section is a simple proposal that should work pretty well:
 
 * in runtime `{%foo}` token has hidden data:
  * result of `[foo evaluated def]{&stow}`
@@ -160,29 +197,24 @@ An interesting possibility for filesystem integration is to use a *FUSE* (Filesy
 
 ### Active Debugging
 
-Developers should be able to evaluate a word or subset of an AO dictionary in 'debug' modes using `{@gate}` tokens and a provided configuration. 
+Developers should be able to evaluate at least a single word or expression in 'debug' modes using `{@gate}` tokens and a provided configuration. It would be nice if we can automatically produce 'animated' evaluations for any word, and cache debug outputs review.
+
+### AO Type Safety
+
+The rich structure of AO can greatly improve type safety analysis. We can declare or constraint types using `word.type` attributes. A word linked in many places enables constraint unification. Heuristic techniques like SHErrLoc can effectively wield a multi-use context.
+
 
 ### Sharing and Composing AO
 
-The dictionary is the unit of sharing in AO. This 
+Topics:
+* extraction
+* merging
+* forking
+* security
+* connectivity
+* immutability
 
-If there is need to do so, it is not difficult to extract a minimum useful dictionary for a given application. We take some initial set of words, then compute a transitive closure including attributive metadata (such that for `word` we also include `word.doc` and `word.type`). A copy of a dictionary may be disconnected from any further updates to the origin.
-
-
- it should be sufficient to share a URL or similar.
-
-
-
-
-
-To share an AO program requires sharing a dictionary, or at least part of one. It is not difficult to compute a transitive closure of all the relevant words for a given program, and export just that subset.
-
-. This context will frequently be implicit in the communication medium. For example, in a web service, the dictionary would be held by our server. Composing AO programs encounters challenges when there are name conflicts. In that case, we may need to translate, renaming words with conflicting definitions before integration. A multi-dictionary evaluation context shifts the concern to conflict between dictionary names.
-
-To simplify sharing, one goal is to reduce renaming. This can be achieved by de-facto standardization of names, a centralized name registry (like a code wiki), simple naming schema (e.g. use domain name in dictionary name), secure hashes, random GUIDs, etc..
-
-Another challenge surrounding sharing is update propagation. As much as possible, we'll want to share immutable or monotonic dictionaries that simplify caching. But ultimately a lot of [application models](ApplicationModel.md) rely on mutable dictionaries.
-
+I wonder how much security can be achieved by constraining connectivity, how much by unforgeable capabilities.
 
 
 
