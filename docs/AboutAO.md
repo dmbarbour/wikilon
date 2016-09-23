@@ -166,9 +166,10 @@ For AO layer purposes, the set of named dictionaries is effectively one composit
 
 ### Dictionary Inheritance
 
-A useful technique is to say: "this dictionary is the same as that one, but with the following tweaks". 
+A useful technique is to say: "this dictionary is the same as that one, but with the following tweaks".
 
 
+*Aside:* I think formal semantics should not depend on ad-hoc conventions. I've been tempted to support dictionary inheritance via ad-hoc conventions like defining an `inherit` word to a value with the dictname.
 
 ### AO Import and Export
 
@@ -203,6 +204,19 @@ Developers should be able to evaluate at least a single word or expression in 'd
 
 The rich structure of AO can greatly improve type safety analysis. We can declare or constraint types using `word.type` attributes. A word linked in many places enables constraint unification. Heuristic techniques like SHErrLoc can effectively wield a multi-use context.
 
+Strong, static type safety with a simple algorithm makes a good default. But for the general case of metaprogramming (e.g. turning a text into a program) we will need either dependent types or dynamic types.
+
+As a general rule, we could perform type safety analysis *after* evaluation has the potential to eliminate unnecessary elements. This would allow us
+
+Interestingly, we might defa
+
+Type declarations could tweak this:
+
+ Type declarations can potentially expand this further: 
+
+Words should default to strong static types with a de-facto standard type inference. However, 
+
+, an interesting possibility is to leave some words explicitly dynamic (or dependent) in their effect on program structure to simplify ad-hoc metaprogramming. This intention could readily be declared via attribute. 
 
 ### Sharing and Composing AO
 
@@ -247,3 +261,4 @@ Summary of constraints on words:
 * dictionary names use the same constraints
 
 Words may be further limited in context of a given system or application model, e.g. unicode normalization and case folding to reduce ambiguity, forbid unicode spaces and separators. However, I'd prefer to avoid more sophisticated rules at this layer.
+

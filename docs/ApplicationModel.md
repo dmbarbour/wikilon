@@ -113,7 +113,6 @@ It is not uncommon that we'll want associative metadata for words: documentation
 * `foo.gc` for managed `foo` 
 * `foo.type` for type hints 
 * `foo.proof` for theorem provers
-* `foo.class` to approach OOP
 
 This model of attributes is useful because:
 
@@ -129,6 +128,7 @@ This idiom only requires default bundling:
 * export `foo.*` whenever we export `foo`
 * rename `foo.*` whenever we rename `foo`
 * delete `foo.*` whenever we delete `foo`
+
 
 Similarly, if we 'fork' an object, we might clone all the attributes and rewrite internal structure.
 

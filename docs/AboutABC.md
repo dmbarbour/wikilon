@@ -236,90 +236,51 @@ ABC's behavior does not depend on any type judgements, hence ABC may be evaluate
 
 It is my intention that most ABC codebases be strongly, statically type safe. 
 
-The foundation for ABC's type system is program structure. For example, there is a clear structural difference between `[[A][B]]` vs. `[[A][B][C]]` because, when applied, the first introduces two objects into our program, while the latter introduces three. Similarly, there is an obvious difference between `[dd]` and `[ddd]` because the first removes two items, and the second removes three. 
+The foundation for ABC's type system is program structure. For example, there is a clear structural difference between `[[A][B]]` vs. `[[A][B][C]]` because, when applied, the first introduces two objects into our program, while the latter introduces three. Similarly, there is an obvious difference between `[dd]` and `[ddd]`. 
 
-Our basic assumption for static typing is that: every block-delimited function should have a statically predictable effect when applied to program structure. Thus, we assign types to each block. (Note that we do not necessarily assign types to AO words.)
+Static type safety in ABC is ultimately about statically predictable program structure. Predictable program structure generalizes to rules like ensuring conditional behaviors have the same behavior on both paths, that every command in a sequence must have the same type, that we cannot directly add a number to a text.
 
-ill assume that any delimited function like `[A]` should have  static type safety is that a function, when applied, should have a statically predictable effect on program structure.
+Type analysis can be simplified by annotations and seals. For example:
 
+* `{&nat}` - argument must be a natural number
+* `{&lit}` - argument must be a text literal
+* `{&tuple3}` - argument has form `[[A][B][C]]`
+* `{&aff}` - argument may not be copied
+* `{&rel}` - argument may not be dropped
+* `{:foo}` - anything but `{.foo}` is type error
 
-We might conveniently think about a subprogram as *taking* some inputs of given types, then then *putting* some outputs. We could represent this in take/put order:
-        
-        foo :: A B C → D E
-        [c][b][a] foo => [d][e]
+However, annotations are generally limited to stuff that's also easy to enforce dynamically. In context of [AO](AboutAO.md), we might support more expressive type declarations via words simple conventions like `word.type` describing the type of `word`. 
 
-This allows for convenient composition of type.
+### Type System Details
 
+TODO! This seems like a rather involved decision.
 
+### AO Macro Evaluation
 
-        bar : E → F
-        baz : F D → G H I
+A primary concern is that static types are never expressive enough to cover all the useful programming styles. Consider:
 
-        foo bar : A B C → D F
-        bar baz : E D → G H I
-        foo bar baz : A B C → G H I
+        "abcx → ax^2 + bx + c" runPoly
 
+This constructs a program that takes four arguments from our program - a, b, c, x - then computes the specified polynomial. The number of arguments we take depends on polynomial's text value. Similar cases exist for printf-style text formatting and a great many other possible DSLs.
 
+Type checking the `runPoly` subprogram is impossible in many static type systems. Even where possible, for example with dependent types, the expression is frequently sophisticated and involved, requiring careful attention for every little DSL.
 
+Fortunately, we do not need sophisticated types in this case and many like it.
 
+Recall, our goal is statically predictable program structure. The polynomial text is right there. Statically! Thus, it is not difficult to construct our polynomial *before* running the unsophisticated static type analysis algorithms. We only need some way to tell our system to defer type analysis until after certain evaluations have completed. This is the province of *macros* in many other languages. 
 
-        [c][b][a] foo => [d][e]
-        [d][e] bar => [d][f]
-        [d][f] baz => [g][h][i]
+For ABC, I propose introducing a `{&macro}` annotation. Usage:
 
+        "abcx → ax^2 + bx + c" runPoly =>
+            "abcx → ax^2 + bx + c" compilePoly {&macro} i =>
+            [polynomial behavior]{&macro} i =>
+            [polynomial behavior]i
 
+At this point, we can stop evaluation and pass the program to our static type checker. Macro evaluation is considered *complete* the moment any value exists to its left, i.e. `[A]{&macro} => [A]`.
 
-These
+Intriguingly, a `{&macro}` annotation could remain in an evaluated program. We might consider a program containing `{&macro}` after evaluation to *be* a macro. Potential exists for first-class macros, composable macros, etc.. In AO, we might consider presence of `{&macro}` after evaluation to be a type error unless we also indicate via `word.type` that the word may be a macro. This would ensure effective detection of accidental macros.
 
-
-
-
-, we move beyond merely counting objects. We must know the structural type for each argument.
-
-we must also know the types of each argument. 
-
-
- we could, we might model the type of a program that observes three items on the stack and leaves two as `3→2`
-
-
-
-I believe the simplest way to describe this stack effect is a pair of numbers. For example, `3→2` describes a function function that consumes three items from the stack, the
-
-
-
-So, as a starting point, we might say that the total "stack effect" for a computation 
-
-This structure can provide a foundation for static type safety:
-
-
-
- a little more structure than lambda calculus due to the implicit program 'stack'. There is a clear difference, for example, between `[[A][B]]` vs. `[[A][B][C]]`
-
- is just a little bit different from lambda calculus because functions may consume or return multiple values - e.g. there is a very clear distincti
-
-But there are at least two observations we can make as a
-
-
-
- in a context where all data is Church-encoded within a single data type, the block `[A]`
-
-This is possible, even in a context where all data is Church-encoded, if we make some simple static type assumptions. 
-
-The most useful assumption is that conditional behavior should lead to the "same" stack type.
-
-
-Tokens such as `{&nat}`, `{&aff}`, `{&tuple3}`, and `{:s}{.s}` provide a lightweight foundation from which static type inference may proceed. At the AO layer, it is possible to add rich type declarations for words. For example, the word `foo.type` could - by convention - be understood as a type declaration for the word `foo`.
-
-Another useful type assumption is that the program's "stack" should have a stable type despite conditional behavior. We can generally consider the `[A][B][C][D]` structure to the left of a computation as a stack for typing purposes. This assumption would limit dependent type inference, but we could add that back in via type declarations.
-
-
-## ABC Assumptions and Idioms
-
-### Annotations
-
-Annotations are tokens with prefix `&` as in `{&seq}`, `{&lazy}`, or `{&cache}`. Annotations affect the ABC evaluator, tuning evaluation to improve performance or debugging. In general, annotations should not be used for anything that cannot be easily handled by an interpreter at runtime. Annotations not recognized by the runtime will be deleted during evaluation.
-
-For debugging purposes, annotations tend to cause a program to fail fast, e.g. `{&nat}` provides a runtime type assertion that our argument is a natural number, or `{&error}` enables runtimes and developers both to record errors in the output. In some cases, these can be leveraged by static type analysis.
+Sophisticated type checkers might eventually be developed that can type check macros. But, meanwhile, dynamic partial evaluation before static typechecking can support useful metaprogramming.
 
 ### Weak Substructural Types
 
@@ -337,6 +298,16 @@ However, I'm not convinced I won't want an escape for substructure, e.g. to mode
 * block compositions preserve substructure
 
 We can then model a general copy or drop function that ignores substructure by prefixing with `[] cons {&nss}` (and unwrapping our copies). But developers will be able to reason about substructure except where they explicitly choose to bypass it, and it will be a lot easier to search and find every relevant bypass by searching for clients of the `{&nss}` within a subprogram.
+
+
+## ABC Assumptions and Idioms
+
+### Annotations
+
+Annotations are tokens with prefix `&` as in `{&seq}`, `{&lazy}`, or `{&cache}`. Annotations affect the ABC evaluator, tuning evaluation to improve performance or debugging. In general, annotations should not be used for anything that cannot be easily handled by an interpreter at runtime. Annotations not recognized by the runtime will be deleted during evaluation.
+
+For debugging purposes, annotations tend to cause a program to fail fast, e.g. `{&nat}` provides a runtime type assertion that our argument is a natural number, or `{&error}` enables runtimes and developers both to record errors in the output. In some cases, these can be leveraged by static type analysis.
+
 
 ### Structural Scopes
 
