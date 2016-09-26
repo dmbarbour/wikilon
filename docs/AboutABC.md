@@ -88,10 +88,10 @@ SP and LF are permitted in ABC. They have identity semantics, equivalent to the 
 
 Tokens have form `{foo}`, a short text wrapped in curly braces. Tokens enable symbolic extensions to ABC. Semantically, tokens are restricted by the normal rules for ABC: it must be possible to reduce every token to a primitive, purely functional `[abcd]` sequence. Tokens in ABC fall primarily into two groups:
 
-* tokens with *identity* semantics for performance, safety, debugging
+* tokens with *identity* semantics for performance, debugging
 * tokens with *linking* semantics for structured development
 
-Tokens with *identity* semantics include seals, gates, and annotations. These are described more thoroughly later in this document. Seals support lightweight types and controlled scope. Gates support active debugging - breakpoints, logging, etc.. Annotations serve ad-hoc purpose but require explicit runtime support. Seals, gates, and annotations are discussed in later sections.
+Tokens with *identity* semantics include seals, gates, and annotations. Seals support lightweight symbolic types. Gates are used for active debugging. Annotations serve ad-hoc performance and safety purposes. These are described later in this document. 
 
 ABC's favored linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. During evaluation, the token is substituted for the word's definition when doing so enables evaluation to proceed. 
 
@@ -118,15 +118,14 @@ The ABC standard dictionary will be carefully curated and vetted, and thus moves
 
 ### Evaluation Strategy
 
-The general evaluation strategy for ABC is:
+A general evaluation strategy for ABC is: 
 
-* evaluate outer program
-* prioritize annotations
-* evaluate final results
+* rewrite outer program
+* evaluate inner values
 
-Effectively, ABC evaluation defaults to call-by-need internally. But when the toplevel evaluation halts, we'll run back through the program and recursively evaluate every contained block (unless marked `{&lazy}`). This gives us ample opportunity to apply annotations or drop actions conditionally.
+By first rewriting the outer program, we get the most opportunity to apply annotations or drop conditional evaluations. When rewriting has fully completed, we'll have a stable structure containing code and blocks. We can go through each block and repeat the evaluation strategy.
 
-[Awelon Object](AboutAO.md) additionally performs staging, implicitly.
+A runtime has discretion to deviate from this strategy. Evaluation order doesn't affect program semantics.
 
 ### Big Step Accelerators
 
@@ -139,11 +138,11 @@ We can evaluate `i` much more efficiently than `[][]baad`.
 
 Big-step rewriting becomes especially valuable when working with Church-encoded data structures. For example, if we know some function `+` is equivalent to addition when applied to numbers, then we can efficiently rewrite `#23 #19 +` to `#42`. The runtime/compiler can stick to *compact* representations rather than expanding the Church encoding. Efficient processing of massive texts, vectors, binaries, matrices, etc. is feasible.
 
-Useful functions like `i` and `+` may eventually become part of the ABC standard dictionary, enabling use like bytecodes. However, the ABC standard dictionary moves very slowly and will have a slow vetting process. 
+Useful functions like `i` and `+` should become part of the ABC standard dictionary, effectively becoming bytecodes. However, the ABC standard dictionary moves very slowly and will have a rigorous vetting process. 
 
-In the mean time, we can achieve similar (albeit less portable) benefits by having a runtime provide a built-in [AO dictionary](AboutAO.md), and perhaps recognize built-ins from other popular runtimes. For example, wikilon runtime might provide `{%i@wikrt}` and `{%+@wikrt}`. This dictionary of built-ins should be subject to normal perusal and export.
+In the mean time, we can achieve similar (albeit less portable) benefits by having a runtime provide a built-in [AO dictionary](AboutAO.md), and perhaps recognize built-ins from other popular runtimes. For example, wikilon runtime could provide `{%i@rt}` and `{%+@rt}`. The dictionary of built-ins should be subject to normal perusal and export.
 
-*Aside:* Use of built-in functions avoids need for sophisticated recognition algorithms. It is possible than an optimizer could recognize `[][]baad` and replace it by `{%i@wikrt}`, but it is unnecessary to do so.
+*Aside:* Use of built-in functions avoids need for sophisticated recognition algorithms. It is possible that an optimizer could recognize `[][]baad` and replace it by `{%i@rt}`, but it is unnecessary to do so.
 
 ### Rewrite Optimizations
 
@@ -159,11 +158,19 @@ Compiling an executable independent of an ABC runtime is feasible as a case of *
 
 Awelon project favors [application models](ApplicationModel.md) that do not rely on program extraction, so local `{&jit}` compilation more appropriate for basic performance concerns. However, I would like to support both techniques.
 
-### Parallelism and Concurrency
+### Parallelism
 
-ABC's purity supports a simple form of parallelism: we can evaluate many subexpressions at the same time. This can be made explicit by `[computation]{&par}`. This form of parallelism is useful for many divide-and-conquer use cases. Unfortunately, it is not very expressive and not suitable for all problem domains.
+#### Annotated Parallelism
 
-To cover parallelism more generally, ABC can leverage big-step accelerators for a deterministic concurrency model. For example, we might model a system based on Kahn process networks or flow-based programming:
+ABC's purity supports a simple form of parallelism: we can evaluate many subexpressions at the same time. However, due to various granularity concerns, I imagine ABC evaluators will tend to be sequential by default and only use parallelism where requested. A simple expression for parallelism is:
+
+        [computation]{&par}
+
+This computation would then run in parallel with other computations in the outer program. A parallel computation may be dropped (operator `d`) which should abort the effort. An attempt to copy a parallel computation will generally wait for it to complete, avoiding issues of shared state.
+
+#### Accelerated Parallelism
+
+Use of `{&par}` is useful for many divide-and-conquer strategies, but is not very expressive. To cover parallelism more generally, ABC can leverage a big-step accelerator for a deterministic concurrency model. For example, we might model a system based on Kahn process networks or flow-based programming:
 
 * monadic processes with named ports
 * declarative wiring of named ports
@@ -183,7 +190,7 @@ We can take this function and *accelerate* it, e.g. using a runtime built-in.
 
 Accelerating the evaluation function would enable a runtime to evaluate the system in a natural manner, using queues to buffer communications between components. Further, we could evaluate some of the reflection actions - e.g. for injecting and extracting messages. By doing so, we would preserve the runtime's internal representation of the system for common update actions, enabling subsequent evaluations to proceed with appropriately reduced overheads.
 
-I believe this approach is very promising in its simplicity and utility. Between `{&par}` and an `evalFBP` accelerator, ABC can support a great deal of useful parallelism at the CPU layer. To further cover GPGPU or SSE parallelism requires additional accelerators, e.g. oriented around linear algebra. 
+To further cover GPGPU or SSE parallelism requires additional accelerators, e.g. oriented around linear algebra. 
 
 ### Stowage and Caching
 
@@ -209,11 +216,9 @@ Laziness may freely be used to model infinite data structures - e.g. infinite st
 
 Many annotations are used for performance:
 
-* `{&seq}` - evaluate subprogram immediately (shallow)
-* `{&seq*}` - as `{&seq}` but evaluates results too
-* `{&par}` - parallelize evaluation of subprogram (shallow)
-* `{&par*}` - as `{&par}` but evaluates results too
-* `{&lazy}` - call by need evaluation for subprogram
+* `{&seq}` - shallow evaluation of subprogram
+* `{&seq*}` - deep evaluation of subprogram
+* `{&par}` - parallelize evaluation of subprogram
 * `{&lit}` - force argument to text literal representation
 * `{&nat}` - force argument to natural number representation
 * `{&stow}` - move value to link layer, away from working memory
@@ -255,19 +260,17 @@ However, annotations are generally limited to stuff that's also easy to enforce 
 
 TODO! This seems like a rather involved decision.
 
-### AO Macro Evaluation
+### Macro Evaluation
 
-A primary concern is that static types are never expressive enough to cover all the useful programming styles. Consider:
+Many useful programming styles are difficult to statically typecheck. Consider:
 
         "abcx → ax^2 + bx + c" runPoly
 
-This constructs a program that takes four arguments from our program - a, b, c, x - then computes the specified polynomial. The number of arguments we take depends on polynomial's text value. Similar cases exist for printf-style text formatting and a great many other possible DSLs.
-
-Type checking the `runPoly` subprogram is impossible in many static type systems. Even where possible, for example with dependent types, the expression is frequently sophisticated and involved, requiring careful attention for every little DSL.
+Assume this constructs a program that takes four arguments - a, b, c, x - then computes the specified polynomial. The number of arguments we take depends on polynomial's text value. Type checking `runPoly` is feasible with sophisticated, dependent type systems. But type inference is frequently difficult, requiring developers to construct a proof. Similar cases exist for printf-style text formatting and many other possible DSLs.
 
 Fortunately, we do not need sophisticated types in this case and many like it.
 
-Recall, our goal is statically predictable program structure. The polynomial text is right there. Statically! Thus, it is not difficult to construct our polynomial *before* running the unsophisticated static type analysis algorithms. We only need some way to tell our system to defer type analysis until after certain evaluations have completed. This is the province of *macros* in many other languages. 
+Our goal is statically predictable program structure. The polynomial text is right there. Statically. Evaluation in ABC is based on local rewriting, so that's all we need: it is not difficult to compute the polynomial program before type checking. We need only some way to tell our system to defer type analysis until after partial evaluation. This is the province of *macros* in many languages. 
 
 For ABC, I propose introducing a `{&macro}` annotation. Usage:
 
@@ -276,29 +279,23 @@ For ABC, I propose introducing a `{&macro}` annotation. Usage:
             [polynomial behavior]{&macro} i =>
             [polynomial behavior]i
 
-At this point, we can stop evaluation and pass the program to our static type checker. Macro evaluation is considered *complete* the moment any value exists to its left, i.e. `[A]{&macro} => [A]`.
+At this point, we may halt evaluation and pass the program to our static type checker. Macro evaluation is effectively considered *complete* the moment any value exists to its left, i.e. `[A]{&macro} => [A]`.
 
-Intriguingly, a `{&macro}` annotation could remain in an evaluated program. We might consider a program containing `{&macro}` after evaluation to *be* a macro. Potential exists for first-class macros, composable macros, etc.. In AO, we might consider presence of `{&macro}` after evaluation to be a type error unless we also indicate via `word.type` that the word may be a macro. This would ensure effective detection of accidental macros.
+In general, we might consider a program containing `{&macro}` after evaluation to *be* a macro. Potential exists for first-class macros, composable macros, linking macros in AO, etc.. In AO, we might complain about static type of macros unless explicitly indicated via `word.type`. So there would be no accidental macros, but we'd have full flexibility of dynamic macro programming when desired.
 
-Sophisticated type checkers might eventually be developed that can type check macros. But, meanwhile, dynamic partial evaluation before static typechecking can support useful metaprogramming.
+### Substructural Types
 
-### Weak Substructural Types
-
-Substructural types are very expressive for structuring application behavior independently of syntax. For example, while the common resource pattern `open use* close` can be enforced by a structured syntax or RAII pattern, we could instead model this by constructing a linear handle (with sealed data) upon `open` and destroying it later, in the `close` action. This would give us a lot more flexibility to use the resource within the program.
-
-However, I'm not convinced I won't want an escape for substructure, e.g. to model lossy networks or backtracking. So my proposal is to enforce these types only weakly. The proposal is as follows:
+Substructural types are very expressive for structuring application behavior independently of syntax. For example, while the common resource pattern `open use* close` can be enforced by a structured syntax or resource pattern, we could instead model this by constructing a linear handle (with sealed data) upon `open` and destroying it later, in the `close` action. This would give us a lot more flexibility to use the resource within the program.
 
         [A]{&rel} == [A]    (mark relevant)
         [A]{&aff} == [A]    (mark affine)
-        [A]{&nss} == [A]    (clear marks)
 
 * a block marked relevant may not be dropped
 * a block marked affine may not be copied
 * a block both affine and relevant is called 'linear'
-* block compositions preserve substructure
+* on 'bind' a block inherits substructure of argument
 
-We can then model a general copy or drop function that ignores substructure by prefixing with `[] cons {&nss}` (and unwrapping our copies). But developers will be able to reason about substructure except where they explicitly choose to bypass it, and it will be a lot easier to search and find every relevant bypass by searching for clients of the `{&nss}` within a subprogram.
-
+A runtime might introduce some means to bypass substructure. Use of the `{&trash}` annotation is convenient if we know a potentially relevant value won't be observed again: it allows us to recycle memory, replacing a value by an error object with the same substructural properties.
 
 ## ABC Assumptions and Idioms
 
@@ -307,7 +304,6 @@ We can then model a general copy or drop function that ignores substructure by p
 Annotations are tokens with prefix `&` as in `{&seq}`, `{&lazy}`, or `{&cache}`. Annotations affect the ABC evaluator, tuning evaluation to improve performance or debugging. In general, annotations should not be used for anything that cannot be easily handled by an interpreter at runtime. Annotations not recognized by the runtime will be deleted during evaluation.
 
 For debugging purposes, annotations tend to cause a program to fail fast, e.g. `{&nat}` provides a runtime type assertion that our argument is a natural number, or `{&error}` enables runtimes and developers both to record errors in the output. In some cases, these can be leveraged by static type analysis.
-
 
 ### Structural Scopes
 
@@ -323,7 +319,7 @@ Like `{&nat}` and `{&lit}`, the `{&tuple3}` annotation is also a simple constrai
 
 ### Value Sealing
 
-Seals come in pairs with a user-defined symbol - `{:foo}` and `{.foo}`. Seals are defined by simple rewrite semantics: `{:foo}{.foo}` will reduce to the empty program. Frequently, seals will be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`. Seals serve useful roles as lightweight dynamic type declarations and useful rendering hints for structured data.
+Seals come in pairs with a user-defined symbol - `{:foo}` and `{.foo}`. Seals are defined by simple rewrite semantics: `{:foo}{.foo}` will reduce to the empty program. In most cases, seals should be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`. However, it is possible to seal arbitrary sequences of values. Seals serve useful roles as lightweight dynamic type declarations and useful rendering hints for structured data.
 
 ### Runtime Error Reporting
 
@@ -342,38 +338,57 @@ Error values can be passed around, copied, and dropped like normal values. Error
 
 ### Gates for Active Debugging
 
-By 'active debugging' I mean breakpoints, logging, and other techniques that give programmers a debug view. For active debugging, ABC uses `{@foo}` tokens. The gate name is a user-defined symbol. The behavior of a gate is configured at the evaluator level. For example:
+Active debugging describes techniques that provide a view of a computation in progress: breakpoints, logging, animation, tracing, profiling.
 
-        [A]{@foo}   =>  [A]                 (if gate open or logging)
-        [A]{@foo}   =>  [A]{@foo:123}       (if closed, 123 unique)
+* **breakpoints:** provide a frozen view of a computation in progress
+* **logging:** provides a local view of a subprogram's dataflow
+* **animation:** global logging via breakpoints, big space overhead
+* **tracing:** backtrack dataflows, mark values with their origin
+* **profiling:** view time/effort spent on specified subcomputations
 
-An open gate passes the value. A logging gate also passes the value, but first copies the value to a configured log. A closed gate acts a like a better breakpoint and stalls computation locally. A useful pattern is `[{@foo}i]b` to shift evaluation stalls from a producer to a consumer. 
+I propose tokens of form `{@gate}` - called 'gates' - for active debugging. The symbol is user-defined. A gate operates on a single argument, e.g. `[A]{@foo}`. The behavior of a gate is configured at the evaluator. For example: 
 
-It is possible to stall on multiple instances of a closed gate `{@foo}`. For example, if you map a function containing `{@foo}` over a list containing a hundred values, you might have a hundred stalled computations. We'll give each stalled gate a unique identifier in the output, such that it's easy to locate all `{@foo:*}` activations or delete just a few of them by name.
+* open gates just pass the argument (not debugging)
+* closed gates do not evaluate further (breakpoint)
+* logging gates record argument to configured log
+* trace gates add some contagious metadata to argument
+* profiling gates aggregate stats for evaluation of arguments
 
-### Program Animation and History Debugging
+It's feasible for a gate to serve a few roles at once. They're effectively user-configured annotations. Gates may have default configurations based on naming conventions. E.g. `{@log:xyzzy}` might print to a log titled `xyzzy`.
 
-When debugging, ideally we want a proper spatial-temporal history. Logs provide a lightweight temporal history, but lose a lot of useful spatial context. Breakpoints provide useful spatial context, but lose valuable temporal contexts. But we can have both!
+An interesting feature is that we can halt on many 'breakpoints' concurrently, different subcomputations stalling at `[A]{@bp}action`. Halting on many breakpoints is convenient for providing a more predictable debug context, and for program animation. 
 
-To get both at the same time, we repeatedly:
+Active debugging can be performed without hand modification of code, e.g. if we assume automatic rewriting of a codebase to inject appropriate gates. This is probably easiest in context of [AO](AboutAO.md) because we can leverage clearly named subprograms and link structure. 
 
-* evaluate with closed gates
-* take a snapshot of program state
-* open some stalled gates
+#### Program Animation
 
-Ultimately, we'll have a series of snapshots representing intermediate evaluation states. Conveniently, these states are *deterministically* structured by the breakpoints, rather than having ad-hoc structure from pausing on a quota. This stable structure should greatly simplify stable rendering.
+Using breakpoints and a systematic animation strategy, we can animate a program's evaluation:
 
-There are many strategies for choosing which gates to open between frames, depending on how we want to focus our animations. E.g. we could always open the rightmost stalled gate, or open the leftmost and rightmost to burn from both ends, or interleave opening all `{@foo:*}` stalled gates with all `{@bar:*}` gates, or hierarchical strategies, and so on.
+* When evaluation stalls on breakpoints, take a snapshot.
+* Delete breakpoints as determined by animation strategy.
+* Repeat until no active breakpoint gates are discovered.
+
+This has a lot of benefits for debugging. We have the whole 'spatial' context of breakpoints, but we also preserve the 'temporal' context of logging. Though, logging and profiling can also be used with program animation, e.g. by recording a set of log messages and profiling statistics per frame.
+
+An animation strategy can be specified many ways:
+
+* always delete rightmost breakpoint (or leftmost)
+* delete all current breakpoints to maximize frame size
+* focus on breakpoints of given names, hierarchically
+* interleave breakpoints of different names
+* pseudo-random selection
+
+Animating on breakpoint is much nicer than animating on quota. Individual frames will be deterministic, modulo profiling data. The structure is much more predictable, which simplifies both compression and stable rendering. The animation strategy enables evaluation to be precisely controlled and focused to just the parts we're interested in observing or rendering.
 
 ### Conditional Behavior
 
 We can Church encode true/false as values:
 
-        [OnFalse][OnTrue] true i  == OnTrue
-        [OnFalse][OnTrue] false i == OnFalse
+        [OnTrue][OnFalse] true i  == OnTrue
+        [OnTrue][OnFalse] false i == OnFalse
 
-        true  = [ad]
-        false = [di]    (= #)
+        true  = [di] (= #)
+        false = [ad]        
 
 Usefully, we don't actually need an 'if' action. Applying true or false does the job. But this is probably *not* the best approach to conditional behavior - it suffers 'boolean blindness'. Instead, it might be better to model a sum type like: `(a + b)` or `Left a | Right b`. Perhaps something like:
 
@@ -384,8 +399,6 @@ We'll need to see how these techniques work in practice. But as a general rule, 
 
 ### Iteration and Termination
 
-ABC can support ad-hoc loops via a fixpoint combinator. However, for many use cases, fixpoint is unnecessary. Numbers, texts, and sequences enable iteration via simple application.
+ABC can support ad-hoc loops via a fixpoint combinator. For many use cases, fixpoint is unnecessary. Numbers, texts, and sequences enable iteration via simple application.
 
-As a general rule, ABC assumes correct computations will terminate. ABC has no use for an infinite computation. Effects require returning with a request for an effect and a continuation. If a static analysis can prove non-termination for a computation, that's certainly an error.
-
-
+As a general rule, ABC assumes correct computations will terminate. Use of annotation `{&lazy}` enables infinite structures to be represented transparently and efficiently, assuming they're only partially observed. 

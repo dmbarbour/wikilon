@@ -74,25 +74,7 @@ I have a toplevel environment that binds a shared database. Then I can have mult
 
 ## Memory Management
 
-### 32-bit vs. 64-bit?
-
-Regarding 'context' size, this is an issue I've returned to many times. In favor of 32-bits, I get vastly more efficient use of memory within a context. For example, a list cell costs only 8 bytes instead of 16 bytes. In favor of 64-bits, we can easily scale beyond a few gigabytes working memory per context. Direct addressing from 64-bit seems to offer slight performance advantages, circa 4%.
-
-I believe that, for my intended use cases, a 50% memory savings will prove more valuable than the CPU savings, and that direct scaling beyond 2GB active memory within a context would have rare value. So 32-bit has a solid advantage here. Further, even with 32-bit addressing limits, indirect scaling is feasible via use of stowage, shared binary objects, and multi-context parallelism.
-
-For now, I'll go with 32-bit by default. But I might enable a compile-time switch.
-
-### Addressing
-
-I can encode the context, memory, and semispace as one contiguous array.
-
-        [context .... (mem) ..... (ssp)........]
-
-For 32-bit systems, addressing is relative to our context as a 'zero' address. In a 64-bit context, addressing would be absolute. Thus, in the 32-bit variant, only one indirection is needed.
-
-### Graduated Memory Use
-
-For very large contexts (e.g. 100MB) and very small computations (e.g. 10kB) it is inefficient to consume the whole 100MB before performing GC. Doing so creates unnecessary memory and cache pressures. Fortunately, it should not be difficult at all to basically use a *soft cap* for how much we allocate before next GC.
+See [ABCRTMem.md](ABCRTMem.md).
 
 ### Parallelism 
 

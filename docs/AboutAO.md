@@ -16,15 +16,15 @@ Evaluation operates on each definition in a dictionary. This may be a lazy proce
 
 ### Preservation of Link Structure
 
-Linking - the mechanical step of substituting a `{%word}` token by its evaluated definition - is performed only insofar as it enables evaluation to proceed. AO will not link if it just results in a trivial inlining of code.
+Linking - the mechanical step of substituting a `{%word}` token by its evaluated definition - is performed only insofar as it enables evaluation to proceed. AO should not link if it just results in a trivial inlining of code.
 
 Preserving link structure ensures human-meaningful symbols remain in our evaluated results. Further, these symbols will frequently have ad-hoc associative structure like `word.doc` and `word.type` useful for both humans and software agents that might render, extract, or otherwise interact with a definition. Preserving link structure is essential for Awelon project's application models.
 
 ### Lightweight Staged Evaluation
 
-AO will link the *evaluated* definition for a given word. If we did link the original definition, we'd end up recomputing that fragment, so there is no semantic impact of this decision. But it does have a number of advantages:
+AO will link the *evaluated* definition for a given word. If we did link the original definition, we'd end up recomputing that fragment, so there is no semantic impact of this decision. But this does have a number of advantages:
 
-* evaluated result is necessary for effective linking decisions
+* evaluated result is necessary for effecient linking decisions
 * evaluations cached for multiple use and incremental computing
 * predictable basis for staged computations; no deep evaluation
 * quota for each word's evaluation; can tune using `word.quota`
@@ -58,7 +58,6 @@ Here `{%resourceId}` is a word whose definition is equivalent to `large value`. 
 
 How resource IDs are named is left to the evaluator and runtime. Stowage doesn't need deterministic naming, though at least having stable names would be convenient for humans, rendering tools, caching, etc. that interact with the results in contexts like incremental computation. Structure sharing could also be useful.
 
-
 ### Incremental Computing and Caching 
 
 Consider two common [application patterns](ApplicationModel.md):
@@ -85,43 +84,44 @@ Explicit caching can be expressed by annotation, i.e. `[computation]{&cache}`. T
 
 Serializing computations has overhead, and caching is wasted if the computation is cheap. Developers can improve cache efficiency first by careful use of stowage to reduce serialization overheads, and second by making suitable 'cache points' more explicit in their data structures. That can generally be achieved by buffering of recent updates into larger batches, such that we cache on the older data and recompute from the buffer.
 
-### Cached Evaluation Strategy
+#### Cached Evaluation Design
 
-Caching in AO is complicated by:
+Consider a cached AO computation:
 
-* preservation of link structure 
-* mutability of word definitions 
-* forked or versioned dictionary
-* application refactoring and GC
-* definition not always observed
- * outputs like `[{%foo} #42]`
- * link fails on arity, outputs
- * redirects like `@foo {%foo.v99}`
-* time vs. space trade for cache
+        [{%foo}{%bar}{%baz}]{&cache}
 
-Optimally, I want a cache that supports minimal evaluation on update, and that does not propagate updates any further than necessary, such that irrelevant changes (due to refactoring, added redirects, conditional paths not taken, data plumbing of changed definitions) does not cause recomputation. 
+For efficient caching, I propose a simple rule: A cache lookup should have a cost proportional to the size of the computation and result. A cache write should have a cost proportional to the result. In this case, our computation is three words, so our cache lookup should have a cost proportional to three words. We might express this as:
 
-Further, the cache must support multiple versions of code, such that we can continue to use old versions of code after an update.
+        cacheID = secure hash of:
+            {%foo}{%bar}{%baz}
+            (cacheID of foo)
+            (cacheID of bar)
+            (cacheID of baz)
+
+This assumes we are keeping a lookup table from words to cache IDs. Such a table would need to be maintained across updates, so we also need a reverse lookup table that tells us whose behavior might change after an update to a definition. Finally, of course, we need a lookup table from cacheID to result. Including the dictionary, this design effectively needs four tables:
+
+* **dictionary**: word → AO code
+* **clients**: word → words
+* **word cache**: word → cacheID
+* **cache**: cacheID → AO code
+
+We can maintain the 'clients' table based on the dictionary definitions. It's a convenient table to keep around for other use cases, e.g. renaming words, reverse lookup. When there is a change to a word's definition, we can use the 'clients' table to invalidate 'wcache'.
+
+Maintenance of 'word cache' is a little more sophisticated. Naively, we could use the word's definition directly. However, that would introduce many irrelevant dependencies, and there would be no way to reuse old cache after an irrelevant update (e.g. minor refactoring, or an update to code on a branch not taken by the client). Optimally, we would minimize unnecessary recomputation. 
+
+A moderate improvement to word cache is to use the *evaluated definitions* of each word to compute the cacheID. But I believe we can do better than this. Consider a simple redirect:
 
 
-the following features:
-
-* minimal re-evaluation on update
+(WORKING)
 
 
-must preserve `{%foo}` in output for debugging, AO apps
-* tokens such as `{%foo}` may refer to mutable definitions
-* 
 
 
-. We have tokens such as `{%foo}` in our code whose definition is, in the general case, mutable. We must preserve the token `{%foo}` because it's valuable for comprehension, debugging, and associative data.
 
- Important points:
+*Aside:* Conveniently, this cache design works unmodified for multiple namespaces. A `{%foo@NS}` token provides the explicit switch between namespaces, while allowing namespaces with shared definitions to reuse the same cache.
 
-* evaluation containing `{%foo}` may observe the *value* of `{%foo}`.
-* it 
 
- Evaluation of an expression involving `{%foo}` potentially depends on the *value* of `{%foo}`. 
+
 
 This section is a simple proposal that should work pretty well:
 
@@ -156,7 +156,10 @@ OTOH, our tokens will frequently bind small definitions directly (since `{&stow}
 
 ## Dictionary Representation
 
-I assume a common pattern during development will involve forking a dictionary, performing a few simple edits, observing how those changes will affect our evaluated results, and occasionally merging updates back. It's convenient if our AO dictionary representation supports this behavior efficiently.
+I assume a common pattern during development will involve forking a dictionary, performing a few simple edits, observing how those changes will affect our evaluated results, and occasionally merging updates back. 
+
+
+ It's convenient if our AO dictionary representation supports this behavior efficiently.
 
 ### Multi-Dictionary Contexts
 

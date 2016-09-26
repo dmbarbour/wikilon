@@ -11,13 +11,16 @@ Each context will have one contiguous block of memory, page-aligned.
 
 Our memory region is divided into a context header and the main memory region. The goal here is to simplify both offset and absolute addressing within context memory. 
 
-I've decided to exclude a built-in semispace. So compacting collection is no longer the default. It will instead be supported indirectly, with responsibility shifted to the runtime API client. Moving a computation into another context will effectively defragment that computation and enable resize. Maintaining a small pool of contexts for defragmentation is a lot more space-efficient than having an empty semi-space for *every* context, especially if defrag proves a rare event.
+There is no built-in semispace. However, there may be a lightweight indirection between what the user sees as the 'context' and what is used internally, so that we can model compacting collections by simply keeping at least one extra context of any given size available for compactions at the *environment* level. 
+
+A small pool of contexts is sufficient for compaction and - assuming use of many concurrent contexts - more efficient for space than use of a semispace per context.
 
 ## Word Sizes
 
 In favor of 64-bit:
 
 * roughly 4% performance boost from direct addressing
+* benefit may vary based on frequency of 'copy' action
 * direct scaling to massive, multi-gigabyte contexts
 
 In favor of 32-bit:
@@ -25,7 +28,7 @@ In favor of 32-bit:
 * requires half as much memory for common structures
 * Wikilon won't be allocating multi-gigabyte contexts
 
-I believe that 32-bit is a better fit for Wikilon's common use case: multiple contexts each with smaller 'working' memories, each servicing separate web client or background computation goals. Scalability to very large computations will be addressed instead by value stowage.
+I believe that 32-bit is likely a better fit for Wikilon's common use case: multiple contexts each with smaller 'working' memories, each servicing separate web client or background computation goals. Scalability to very large computations will be addressed instead by value stowage.
 
 However, I'll aim to ensure this is a simple compiler switch.
 
