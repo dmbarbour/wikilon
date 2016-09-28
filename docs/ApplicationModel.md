@@ -1,5 +1,5 @@
 
-# Wikilon's Application Models
+# Awelon Project Application Models
 
 Wikilon is intended as both a software platform and development environment. 
 
@@ -160,7 +160,21 @@ Immutable objects have potential to greatly improve the efficiency of large AO s
 
 ## Security for Dictionary Applications
 
-*TODO:* Design in context of multi-dictionary evaluations.
+I would like to have a generic security model for AO that is useful for developing applications in the face of mutual distrust. The *granularity* for security should be a full 'dictionary'. However, we may have some static type constraints. 
+
+because dictionaries are the unit for communication in AO systems.
+
+
+Preferably while ensuring dictionaries are used a holistically in the common case (i.
+
+*TODO:* Redesign in context of multi-dictionary evaluations.
+* distributed programming: HMAC or PKI
+* controlling connectivity between dicts
+* eval/read/write access control?
+* 
+
+
+
 
 When multiple agents muck about in a stateful dictionary, it becomes valuable to precisely control who interacts with what. Fortunately, the rich computational structure of our dictionary admits some expressive security models. For example, automatic curation is feasible - rejecting updates that break types or tests. We can also adapt object capability security for a dictionary-level object model.
 

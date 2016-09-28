@@ -1,37 +1,93 @@
 # Awelon Object (AO)
 
-Awelon Object (AO) is a useful set of conventions for [Awelon Bytecode (ABC)](AboutABC.md). AO defines tokens for linking and how they interact with evaluation in context of dictionaries.
+Awelon Object (AO) is a set of conventions for structured use of [Awelon Bytecode (ABC)](AboutABC.md). AO defines tokens for linking and how they interact with evaluation in context of dictionaries.
 
-A dictionary consists of a set of words and a definition for each word. Definitions are encoded in ABC. Linking a `{%word}` token substitutes that word's evaluated definition in place of the token. Dependencies between definitions must form a directed acyclic graph, such that all link tokens could be eliminated in by a finite expansion to inlined code. Use of linking has no effect on ABC's expressiveness.
+A dictionary consists of a set of words and a definition for each word. Definitions are encoded in ABC. Tokens of form `{%word}` token will logically substitute that word's definition in place of the token. Dependencies between definitions must form a directed acyclic graph, such that all link tokens could be eliminated in by a finite expansion of inlined code.
 
-Dictionaries serve as a unit of evaluation, development, linking, and distribution in AO, and as a foundation for Awelon project's various [application models](ApplicationModel.md). In general, if there are meta-level features like security or immutability, they must be specified on a per-dictionary basis.
+Dictionaries serve as a unit of development, evaluation, linking, communication, and distribution. They provide a foundation for Awelon project's [application models](ApplicationModel.md). 
 
-## AO Dictionary Representation
+## AO Representation
 
-A dictionary is an association of words to definitions, but in practice I want many other features: history and versioning, lightweight forks, simple merge, structure sharing, cache sharing, fine grained security, efficient import and export, verifiable provider-independent distribution, history compaction, and human readable and writeable with simple tools.
+A dictionary is an association of words to definitions, and there are many merely adequate ways of representing such a thing. But I want a variety of related features: history and versioning, lightweight forks, simple merge, structure sharing, cache sharing, fine grained security, efficient import and export, communication, distribution, and compaction. Additionally, AO must preserve ABC's properties of being weakly human readable and writeable with a text editor. To achieve these features, AO has received some careful attention to representation.
 
-My general proposal is as follows:
+The general proposal is as follows:
 
-* a dictionary is described by a series of patches
-* most patches are immutable, named by secure hash
-* a user named patch serves as the dictionary head
-* forking a dictionary requires copying head patch
-* forks are named, use `{%word@fork}` to reference
+* dictionary is described by a series of patches
+* history patches are immutable, via secure hash
+* named dictionary references via `{%word@dict}`
 
-As a concerete filesystem format, a patch is a **.ao** file of form:
+Concretely, a patch is a string or file with format:
 
-        secureHashOfHistory
+        secureHashOfOrigin
         @word1 definition1
         @word2 definition2
         ...
 
-Forks use human-level names, and appropriate files - e.g. `math.ao` or `myApp.ao`. Within each file, an undecorated token of form `{%word}` refers to the word as defined within that dictionary. Explicit references to a forks are possible with `{%word@math}`. 
+On our first line, we have the option to specify a secure hash of a prior patch. Naming origin by secure hash effectively gives us a verifiable, deeply immutable, content-addressable linked list history. To keep it simple, each patch is limited to a single origin. 
 
-Histories are named by secure hash. This ensures our history is deeply immutable, verifiable, provider-independent. We can search for history files anywhere then verify the result. However, token references directly to history are not supported because they would hinder compaction of history into fewer patches (e.g. an exponential decay model).
+The body of a patch is simply a sequence of `@word def` actions, each updating a word's definition. Last update wins. To logically delete a word, we may define it as a trivial cycle, `@word {%word}`. Non-trivial cycles should be reported as errors.
 
-Patches operate on the word level. Each `@word` action defines the specified word, overriding the prior definition. Deletion of a word can be modeled by adding a definition, e.g. `@word {%word}`. 
+### Anonymous Dictionaries
 
-The **.ao** format is not intended primarily for use directly by humans with a text editor, though it is designed to can serve in a pinch. See *Developing AO*, below.
+In the general case, dictionaries are anonymous, in the sense that they cannot be referenced via `{%word@dict}`. Secure hashes are *explicitly* considered anonymous in this sense. This ensures we can compact and garbage collect large histories, filter spam or confidential data, etc.. 
+
+### Named Dictionaries
+
+Named dictionaries may be referenced from other dictionaries via `{%word@dict}` and are generally mutable. AO evaluation occurs in *context* of a set of named dictionaries. It is possible for multiple names to refer to the same dictionary. However, which name is used will be preserved during evaluations. 
+
+Depending on [application model](ApplicationModel.md), relationships between dictionaries may be constrained structurally by the update system. For example, dictionary `foo` may be permitted to reference `bar` but not vice versa.
+
+### Secure Hash
+
+I propose use of BLAKE2b 360 bit secure hash, encoded in Crockford's Base32 (favoring lower case). BLAKE2b is a very efficient secure hash. The resulting 72 character hash fits easily within conventional size requirements for text editor lines, URLs, and filesystems.
+
+### Filesystem 
+
+At the filesystem layer, we'll encode a context of named dictionaries as a directory containing `myApp.ao` and the like. The name of the dictionary matches the filename (minus the **.ao** suffix). 
+
+History patch files use `secureHash.ao`, but we move them into an archive or separate directory. Archiving history files together could prove convenient for lightweight indexed access - i.e. we can just `mmap` the entire archive and index it as a whole, and we don't need to mess around unnecessarily with file handles and so on.
+
+(TODO: review `.zip`, `.tar`, and `.dar` archive formats as candidates.)
+
+### Forking and Merging
+
+Forking a named dictionary is trivial: simply copy the file to a new name. A three-way merge is possible by finding a common history between two dictionaries.
+
+### Communication
+
+An intriguing option is use of anonymous dictionaries to model communication.
+
+One option is message-passing. We create a dictionary per message, encoding the message as an object within the dictionary with a standard name. For example, we might reserve `$`, `$.head`. `$.body`, and so on for this use. The message's secure hash origin then encodes a common vocabulary that can be reused for many messages. The origin may also provide useful 'default' attributes - i.e. a prototype object. The remote system can easily download, cache, and compile the standard vocabulary.
+
+A related option is streaming 'updates'. This could be understood as a series `PUT` messages, with each message simply overwriting the prior and thus modeling a time-varying object. A common case would be we want to reference the current dictionary as our 'origin' then provide only the delta. To simplify this, we could permit use of `~` in place of a secure hash to represent a reference to the current dictionary. Conveniently, the result of PUT with `~` doubles as a general append/patch behavior due to AO semantics.
+
+Outside of a streaming context, use of `~` as a stand in for a secure hash would not be permitted.
+
+### Distribution
+
+Anonymous dictionaries are distributed easily by secure hash. 
+
+Given a secure hash for a dictionary we do not possess, we can usually ask whomever provided the secure hash to provide the dictionary. This is the primary distribution model. But content-addressed networking techniques are possible, and may be useful in distributing a network burden. A viable technique for provider independence is to just use a fraction of the secure hash for the lookup (e.g. the first 120 bits) then use the rest as a symmetric encryption key. 
+
+Named dictionaries are generally mutable. It is feasible to distribute development of local dictionaries by use of DVCS techniques (highly recommended!) or to share common names for dictionaries in a global system. 
+
+In the latter case, global names need some strategy to resist conflict (otherwise we'll be forced to rename some word). This might be achieved by deriving from an existing registry (e.g. `{%foo@myApp.awelon.org-2016}` would derive from the ICANN registry), or a more informal registry (e.g. someone maintains a webpage somewhere), or use of large random numbers, or taking a secure hash of a public key (or HMAC secret). Etc.. 
+
+### Caveats
+
+This AO representation has many nice properties, but it is missing a few.
+
+First, there is no support for *rename*. To rename a word, developers must explicitly rewrite every reference to that word. Explicit rename is cheap enough until widely used. But the general case for rename is greatly complicated by potential for external references (like `{%foo@dict}`, human knowledge, bookmarks).
+
+Second, there is no support for modifying part of a definition. Fortunately, there are easy work arounds to this one. To patch a definition, first factor it into small named pieces then update a few specific pieces. To append a definition, consider a command pattern of form:
+
+        @foo.v98 ...
+        @foo.v99 {%foo.v98}(update98)
+        @foo {%foo.v99}
+
+Third, there is no support for *metadata*. There is no place for commit messages, blame, etc.. Developers are instead encouraged to model metadata within the dictionary or an auxiliary. For example, we might create a dictionary named `tracker` for our bug tracking, commit messages, edit sessions, and so on. Making development metadata explicit is necessary for development to become a first-class application.
+
+Finally, while raw AO can be viewed and edited in small doses, it's still a bytecode. It isn't a convenient view for humans. The curly braces grow annoying, and too much file hopping is needed. The expectation is humans will work with AO primarily through editable views like [claw](CommandLine.md) or an [application model](ApplicationModel.md). 
 
 ## AO Evaluation and Linking
 
@@ -161,74 +217,21 @@ Cache and stowage interact in a useful way to help developers control serializat
 
 *Aside:* References of form `{%word@fork}` don't need any special rules for caching. However, to improve sharing of cache between multiple similar forks, we should use the equivalent to `[word def]{&cache}`.
 
-## Development of AO
+## AO Development
 
+AO development is based on ABC development, but the use of words augments this in many ways:
 
-*Note:* While humans can reasonably view and edit this code, AO is not optimized for use with a conventional filesystem and text editor. The expectation is to use a web service, FUSE view, or projectional editor. See *Developing AO*, below.
+* implicit targets for debugging, program animations
+* metadata and declarations, e.g. via `word.type`
+* embed tests and examples for each word in dictionary
 
-*Note:* Development metadata - bug trackers, todo lists, commit messages, edit sessions, etc. - should be modeled within a dictionary, albeit perhaps a different fork. Making development data accessible ensures development itself is a first-class application, subject to the same programmable views and extensible structure as everything else. Thus, 
+More broadly, use of symbolic structure via words provides a convenient platform for both stateful updates and computed views. The [application model](ApplicationModel.md) represents 'applications' within a stateful codebase. This is integrated with the real-world through publish-subscribe models and other RESTful techniques.
 
-
-### Editable Views
-
-Editing dictionary files by hand is feasible. But it's also a chore. Outside of early development (e.g. bootstrapping), I wouldn't recommend it to anyone. Dictionaries are optimally manipulated through projectional editor systems. The Forth-like [claw](CommandLine.md) view is suitable for a minimal text-only input, and is a fair bit more legible than AO. But Awelon project's [application models](ApplicationModel.md) are based on richer development environments. 
-
-An interesting possibility for filesystem integration is to use a *FUSE* (Filesystem in Userspace) view, perhaps operating via the web service. If done properly, this could simplify integration with emacs, vim, and other nice text editors.
-
-### Active Debugging
-
-Developers should be able to evaluate at least a single word or expression in 'debug' modes using `{@gate}` tokens and a provided configuration. It would be nice if we can automatically produce 'animated' evaluations for any word, and cache debug outputs review.
-
-### AO Type Safety
-
-The rich structure of AO can greatly improve type safety analysis. We can declare or constraint types using `word.type` attributes. A word linked in many places enables constraint unification. Heuristic techniques like SHErrLoc can effectively wield a multi-use context.
-
-Strong, static type safety with a simple algorithm makes a good default. But for the general case of metaprogramming (e.g. turning a text into a program) we will need either dependent types or dynamic types.
-
-As a general rule, we could perform type safety analysis *after* evaluation has the potential to eliminate unnecessary elements. This would allow us
-
-Interestingly, we might defa
-
-Type declarations could tweak this:
-
- Type declarations can potentially expand this further: 
-
-Words should default to strong static types with a de-facto standard type inference. However, 
-
-, an interesting possibility is to leave some words explicitly dynamic (or dependent) in their effect on program structure to simplify ad-hoc metaprogramming. This intention could readily be declared via attribute. 
-
-### Sharing and Composing AO
-
-Topics:
-* extraction
-* merging
-* forking
-* security
-* connectivity
-* immutability
-
-I wonder how much security can be achieved by constraining connectivity, how much by unforgeable capabilities.
-
-
-
-### AO Layer Security
-
-Potentially, we might stow to a named dictionary, e.g. `{%resourceId@stowage}`. In this case, we may wish to include an HMAC in our resource IDs.
-
-We might stow to a separate dictionary, e.g. `{%resourceId@stowage}`. For a shared stowage dictionary, we may need to address security concerns (perhaps by including a small HMAC in the resource ID). 
-
-
-## Development Idioms
-
-### Leveraging Undefined Words
-
-Undefined words can serve a useful role in a development context. They serve as 'holes'. An ABC system might help developers discover definitions based on inferred type and usage. Or we might just use the words as undefined symbols for some symbolic partial evaluation.
-
-
+AO does introduce an interesting new 'effect' that could be tracked for type safety: a context of named dictionaries upon which a computation might depend. This is important for understanding mutability. However, this context might be restricted at an AO security layer.
 
 ## Constraints on Words and Definitions
 
-Words are minimally constrained to be relatively friendly in context of URLs, English text delimiters, HTML, [claw code](CommandLine.md), and AO dictionaries/streams. 
+Words are constrained to be friendly in context of URLs, English text delimiters, HTML, [claw code](CommandLine.md), and AO dictionaries/streams. 
 
 Summary of constraints on words:
 
@@ -239,5 +242,5 @@ Summary of constraints on words:
 * no empty or enormous words, 1..30 bytes UTF-8.
 * dictionary names use the same constraints
 
-Words may be further limited in context of a given system or application model, e.g. unicode normalization and case folding to reduce ambiguity, forbid unicode spaces and separators. However, I'd prefer to avoid more sophisticated rules at this layer.
+Words may be further limited in context of a given system, e.g. unicode normalization and case folding to reduce ambiguity, forbid unicode spaces and separators. 
 

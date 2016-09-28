@@ -260,6 +260,17 @@ However, annotations are generally limited to stuff that's also easy to enforce 
 
 TODO! This seems like a rather involved decision.
 
+I would like to support inference for:
+
+* fixpoint types `μX.[... X ...]`
+* polymorphic labeled sums 
+* polymorphic labeled prods
+* existential types 
+...
+
+I also need a simple language for type description - itself a labeled sum.
+
+
 ### Macro Evaluation
 
 Many useful programming styles are difficult to statically typecheck. Consider:
