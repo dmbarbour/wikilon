@@ -8,7 +8,7 @@ Dictionaries serve as a unit of evaluation, development, linking, and distributi
 
 ## AO Dictionary Representation
 
-A dictionary is an association of words to definitions, but in practice I want many other features: history and versioning, lightweight forks, simple merge, structure sharing, cache sharing, fine grained security, efficient import and export, verifiable code, human readable and editable code.
+A dictionary is an association of words to definitions, but in practice I want many other features: history and versioning, lightweight forks, simple merge, structure sharing, cache sharing, fine grained security, efficient import and export, verifiable provider-independent distribution, history compaction, and human readable and writeable with simple tools.
 
 My general proposal is as follows:
 
@@ -25,13 +25,13 @@ As a concerete filesystem format, a patch is a **.ao** file of form:
         @word2 definition2
         ...
 
-Naming histories by secure hash ensures our history is deeply immutable, verifiable, provider-independent. Patches operate on the word level, each action redefining a single word in the current dictionary. Deletion of a word is modeled by cyclic definition, e.g. `@word {%word}`. 
+Forks use human-level names, and appropriate files - e.g. `math.ao` or `myApp.ao`. Within each file, an undecorated token of form `{%word}` refers to the word as defined within that dictionary. Explicit references to a forks are possible with `{%word@math}`. 
 
-In the filesystem itself, history files exist on a search path. Heads will use more conventional names, e.g. `math.ao` or `myApp.ao` and may be referenced locally, e.g. with `{%multiply@math}` or `{%head@myApp}`, and are limited to a single (generally flat) directory. Because each head is a patch, developers have a simple workspace for updating some definitions. It's easy to 'commit' the head by computing a secure hash.
+Histories are named by secure hash. This ensures our history is deeply immutable, verifiable, provider-independent. We can search for history files anywhere then verify the result. However, token references directly to history are not supported because they would hinder compaction of history into fewer patches (e.g. an exponential decay model).
 
-History cannot be directly referenced via token. This simplifies potential for history rewrites like exponential decay or deleting some confidential data or embarrassing mistakes before sharing. 
+Patches operate on the word level. Each `@word` action defines the specified word, overriding the prior definition. Deletion of a word can be modeled by adding a definition, e.g. `@word {%word}`. 
 
-*Note:* Development metadata - bug trackers, todo lists, commit messages, edit sessions, etc. - should be modeled within a dictionary, albeit perhaps a different fork. Making development data accessible ensures development itself is a first-class application, subject to the same programmable views and extensible structure as everything else. Thus, there is no support for patch-level metadata.
+The **.ao** format is not intended primarily for use directly by humans with a text editor, though it is designed to can serve in a pinch. See *Developing AO*, below.
 
 ## AO Evaluation and Linking
 
@@ -162,6 +162,12 @@ Cache and stowage interact in a useful way to help developers control serializat
 *Aside:* References of form `{%word@fork}` don't need any special rules for caching. However, to improve sharing of cache between multiple similar forks, we should use the equivalent to `[word def]{&cache}`.
 
 ## Development of AO
+
+
+*Note:* While humans can reasonably view and edit this code, AO is not optimized for use with a conventional filesystem and text editor. The expectation is to use a web service, FUSE view, or projectional editor. See *Developing AO*, below.
+
+*Note:* Development metadata - bug trackers, todo lists, commit messages, edit sessions, etc. - should be modeled within a dictionary, albeit perhaps a different fork. Making development data accessible ensures development itself is a first-class application, subject to the same programmable views and extensible structure as everything else. Thus, 
+
 
 ### Editable Views
 
