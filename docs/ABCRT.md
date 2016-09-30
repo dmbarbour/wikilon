@@ -1,7 +1,7 @@
 
 # ABC Runtime Design
 
-As per [my performance strategy](Performance.md), I'm currently developing a C runtime: an interpreter with a simple data representation to support LLVM or a hand-written JIT compilation. I'll be using something very like the Lisp/Scheme representation, with data consisting mostly of simple pairs of words.
+As per [my performance strategy](Performance.md), I'm currently developing a C runtime: an interpreter with a simple data representation to support LLVM or a hand-written JIT compilation. I'll be using something very like the Lisp/Scheme representation, with data consisting mostly of simple word pairs.
 
 It could be useful to also develop a command-line interface and computation experience at this layer, for testing and benchmarking, etc., via console. I would like to encode dictionaries in both value stowage. Dictionary import/export is viable. Supporting a Claw syntax is feasible.
 

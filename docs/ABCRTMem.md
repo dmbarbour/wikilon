@@ -22,13 +22,22 @@ In favor of 64-bit:
 * roughly 4% performance boost from direct addressing
 * benefit may vary based on frequency of 'copy' action
 * direct scaling to massive, multi-gigabyte contexts
+* easy to use segmented memory (no global offsets)
 
 In favor of 32-bit:
 
 * requires half as much memory for common structures
 * Wikilon won't be allocating multi-gigabyte contexts
 
-I believe that 32-bit is likely a better fit for Wikilon's common use case: multiple contexts each with smaller 'working' memories, each servicing separate web client or background computation goals. Scalability to very large computations will be addressed instead by value stowage.
+The 4% performance benefit from direct addressing is likely to improve if copying is reduced. So it might be better to stick to 64-bit words if I choose not to use compaction as a primary garbage collector.
+
+At the moment, I'm planning to use multiple threads within a context, and reduce compactions to a relatively rare operation. 
+
+
+
+
+
+That said, 32-bit is likely a better fit for Wikilon's common use case: multiple contexts each with a small working memory, each servicing separate web client or background computation goals. Scalability to very large computations will be addressed instead by value stowage.
 
 However, I'll aim to ensure this is a simple compiler switch.
 

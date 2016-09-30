@@ -23,9 +23,9 @@ Concretely, a patch is a string or file with format:
         @word2 definition2
         ...
 
-On our first line, we have the option to specify a secure hash of a prior patch. Naming origin by secure hash effectively gives us a verifiable, deeply immutable, content-addressable linked list history. To keep it simple, each patch is limited to a single origin. 
+On our first line, we have opportunity to specify a secure hash specifying the prior patch. Naming origin by secure gives us a verifiable, deeply immutable, content-addressable linked list history. To keep it simple, each patch is limited to a single origin, and origin is always immutable. 
 
-The body of a patch is simply a sequence of `@word def` actions, each updating a word's definition. Last update wins. To logically delete a word, we may define it as a trivial cycle, `@word {%word}`. Non-trivial cycles should be reported as errors.
+The body of any patch is a sequence of `@word def` actions, each updating a word's definition. Last update wins. To logically delete a word, we may define it as a trivial cycle, `@word {%word}`. (Non-trivial cycles should be reported as errors.)
 
 ### Anonymous Dictionaries
 
@@ -39,7 +39,7 @@ Depending on [application model](ApplicationModel.md), relationships between dic
 
 ### Secure Hash
 
-I propose use of BLAKE2b 360 bit secure hash, encoded in Crockford's Base32 (favoring lower case). BLAKE2b is a very efficient secure hash. The resulting 72 character hash fits easily within conventional size requirements for text editor lines, URLs, and filesystems.
+I propose use of BLAKE2b 360 bit secure hash, encoded in Crockford's Base32 (favoring lower case). BLAKE2b is a very efficient secure hash, and the limit of 72 characters seems an acceptable balance between goals for global uniqueness and aesthetics.
 
 ### Filesystem 
 
@@ -71,7 +71,7 @@ Given a secure hash for a dictionary we do not possess, we can usually ask whome
 
 Named dictionaries are generally mutable. It is feasible to distribute development of local dictionaries by use of DVCS techniques (highly recommended!) or to share common names for dictionaries in a global system. 
 
-In the latter case, global names need some strategy to resist conflict (otherwise we'll be forced to rename some word). This might be achieved by deriving from an existing registry (e.g. `{%foo@myApp.awelon.org-2016}` would derive from the ICANN registry), or a more informal registry (e.g. someone maintains a webpage somewhere), or use of large random numbers, or taking a secure hash of a public key (or HMAC secret). Etc.. 
+In the latter case, global names need some strategy to resist conflict (otherwise we'll be forced to rename some word). This might be achieved by deriving from an existing registry (e.g. ICANN), or a more informal registry (e.g. someone maintains a webpage), or taking a secure hash of a public key. Etc.. 
 
 ### Caveats
 
@@ -89,6 +89,18 @@ Third, there is no support for *metadata*. There is no place for commit messages
 
 Finally, while raw AO can be viewed and edited in small doses, it's still a bytecode. It isn't a convenient view for humans. The curly braces grow annoying, and too much file hopping is needed. The expectation is humans will work with AO primarily through editable views like [claw](CommandLine.md) or an [application model](ApplicationModel.md). 
 
+## AO Development
+
+AO development is based on ABC development, but the use of words augments this in many ways:
+
+* implicit targets for debugging, program animations
+* metadata and declarations, e.g. via `word.type`
+* embed tests and examples for each word in dictionary
+
+More broadly, use of symbolic structure via words provides a convenient platform for both stateful updates and computed views. The [application model](ApplicationModel.md) represents 'applications' within a stateful codebase. This is integrated with the real-world through publish-subscribe models and other RESTful techniques.
+
+AO does introduce an interesting new 'effect' that could be tracked for type safety: a context of named dictionaries upon which a computation might depend. This is important for understanding mutability. However, this context might be restricted at an AO security layer.
+
 ## AO Evaluation and Linking
 
 Dictionaries are the basic unit of AO evaluation. 
@@ -101,7 +113,7 @@ Evaluation operates on each definition in a dictionary. This may be a lazy proce
 
 Linking - the mechanical step of substituting a `{%word}` token by its evaluated definition - is performed only insofar as it enables evaluation to proceed. AO should not link if it just results in a trivial inlining of code.
 
-When linking a `{%word@fork}`, we additionally rewrite undecorated tokens to add the `@fork` namespace. This rewrite is performed even when `@fork` names the current fork. Explicit link structure is transitively preserved.
+When linking a `{%word@dict}`, we must additionally rewrite undecorated tokens to add the `@dict` namespace. This rewrite is performed even when `@dict` names the dictionary we are currently evaluating. Explicit link structure is transitively preserved.
 
 Preserving link structure ensures human-meaningful symbols remain in our evaluated results. Further, these symbols will frequently have ad-hoc associative structure like `word.doc` and `word.type` useful for both humans and software agents that might render, extract, or otherwise interact with a definition. Preserving link structure is essential for Awelon project's application models.
 
@@ -194,15 +206,15 @@ Explicit caching will be expressed by annotation:
 
 This annotation tells our runtime to try using the cache if/when we later decide to evaluate the object. Caching doesn't force immediate evaluation. Caching may be heuristic, based on observed time/space tradeoffs. 
 
-#### Cache Implementation
+#### Cache Design
 
 Caching can be implemented by taking a *secure hash* of the representation and performing a lookup. In case of `{%word}` tokens, we do not know whether those words would be linked during evaluation or preserved as symbols. So we must conservatively include both the `{%word}` symbol and a reference to the word's linker object. 
 
         [{%foo}{%bar}{%baz}]{&cache}
 
         cacheID = REDUCE {%foo}(foo){%bar}(bar){%baz}(baz)
-            REDUCE heuristically uses inline or secure hash.
-            (X) represents the cacheID for X's linked object.
+            REDUCE uses inline or secure hash.
+            (X) represents X's linked object.
 
 Taking these constraints overall, we might assume four tables of form:
 
@@ -217,17 +229,6 @@ Cache and stowage interact in a useful way to help developers control serializat
 
 *Aside:* References of form `{%word@fork}` don't need any special rules for caching. However, to improve sharing of cache between multiple similar forks, we should use the equivalent to `[word def]{&cache}`.
 
-## AO Development
-
-AO development is based on ABC development, but the use of words augments this in many ways:
-
-* implicit targets for debugging, program animations
-* metadata and declarations, e.g. via `word.type`
-* embed tests and examples for each word in dictionary
-
-More broadly, use of symbolic structure via words provides a convenient platform for both stateful updates and computed views. The [application model](ApplicationModel.md) represents 'applications' within a stateful codebase. This is integrated with the real-world through publish-subscribe models and other RESTful techniques.
-
-AO does introduce an interesting new 'effect' that could be tracked for type safety: a context of named dictionaries upon which a computation might depend. This is important for understanding mutability. However, this context might be restricted at an AO security layer.
 
 ## Constraints on Words and Definitions
 
