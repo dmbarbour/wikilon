@@ -34,22 +34,16 @@ Any set of dictionary objects can be presented and edited as a table:
 
 To that we might add columns each for an object's name and definition. 
 
-A minor difficulty is determining the 'set of objects' we wish to present and edit. This could be achieved by a number of means, e.g. by filtering a dictionary, or just taking the words linked from some evaluated code. An interesting option is to model the table at the object level, with row attributes as redirects:
+The main difficulty is deciding the 'set of objects' we wish to present and edit. There are a lot of ways we could do this. Perhaps too many choices. However, one useful option is to construct a table as a dictionary object by hand, specifying each row as a redirect attribute:
 
         @myTable.1 {%foo}
         @myTable.2 {%bar}
         @myTable.3 {%baz}
         ...
 
-With this option, it becomes possible to model higher dimensional tables:
+This would ensure a stable table definition, unlike techniques that query the dictionary.
 
-        @myTableOfTables.1 {%myTable}
-        @myTableOfTables.2 {%anotherTable}
-        ...
-
-We can potentially go *up* a level, and present a *dictionary* as a row in a table. This could be interesting for representing a dictionary together with its history, or a bunch of otherwise related dictionaries.
-
-Conveniently, these tables may exhibit spreadsheet-like features if we render evaluations within each cell. The ability for ABC/AO to evaluate any subprogram is very convenient for this purpose.
+Conveniently, any tables will exhibit spreadsheet-like characteristics if we render evaluations at each cell. And ABC makes this easy because evaluation is just local rewriting.
 
 ## Command Pattern in AO
 
@@ -88,15 +82,6 @@ This would permit a corresponding set of rewrites:
 * *hidden* definitions may be *deleted* if they have no clients
 
 Each declaration gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. Compression can be achieved by introducing new hidden, frozen words for common substructures - i.e. dictionary compression.
-
-
-## Immutable Objects
-
-Immutable objects will be modeled via the AO link layer. Token `{%foo@source}` will link an object `foo` from another dictionary, `source`. When `source` is identified by secure hash, we can easily validate that we have a specific, immutable `foo` object. 
-
-can validate the secure hash for the immutable dictionary which contains `foo` among other objects. In general, we could reduce each source to the scope of either a single object or a strongly connected component (where multiple objects refer to each other via attributes).
-
-Immutable objects have potential to greatly improve the efficiency of large AO systems. They are easily shared, validated, cached, separately compiled, and linked by secure hash. But they preserve application-level structure and attributes, which simplifies tooling - search, rendering, type checking, and anything else we might support with attributes.
 
 ## Security for Dictionary Applications
 
