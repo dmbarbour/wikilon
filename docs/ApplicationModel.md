@@ -3,7 +3,7 @@
 
 Awelon project will focus on RESTful applications, with the relevant resources being [Awelon Object](AboutAO.md) dictionaries and ad-hoc objects represented within them. Applications are modeled in terms of creating, reading, updating, and deleting words or dictionaries. AO preserves link structure upon evaluation. Together with object attributes (to provide metadata for rendering and updating objects), we can offer a simple and effective basis for hypermedia.
 
-Updates to a dictionary can propagate to ad-hoc views in a spreadsheet style. In addition to implicit word-level caching, stowage together with explicit `[computation]{&cache}` can support efficient recomputation of a compositional view upon a change in a persistent structure. For example, we could update a graph in real-time based on changes deep within a database maintained in another word. Further, we can efficiently cache ad-hoc views that aren't statefully preserved by permanent words in a dictionary.
+Updates to a dictionary can propagate to ad-hoc views. In addition to implicit word-level caching, stowage together with explicit `[computation]{&cache}` can support efficient recomputation of a compositional view upon a change in a persistent structure. For example, we could update a graph in real-time based on changes deep within a database maintained in another word. Further, we can efficiently cache ad-hoc views that aren't statefully preserved by permanent words in a dictionary.
 
 In context of a publish-subscribe protocol (or Comet based view), it is feasible to keep external systems and users up to date on a system in real-time. 
 
@@ -25,25 +25,18 @@ Dictionary objects can be flat, non-hierarchical. That is, if we need `foo.doc` 
 
 *Note:* Attributes can usefully express cyclic relationships between objects. For example `foo.child` could redirect to `bar` and `bar.parent` back to `foo`. Word level cycles aren't permitted by AO, but the ability to express object-level cyclic relationships could very convenient for RESTful views.
 
-## Dictionaries as Tables
+## Dictionary Tables and Spreadsheets
 
-Any set of dictionary objects can be presented and edited as a table:
+A dictionary can easily be viewed as having a sparse, tabular layout. For example, word `foo.doc` may be interpreted as specifying row `foo`, column `doc`. The primary definition of `foo` itself might then be understood as an implicit column. 
 
-* one row per object
-* one column per attribute
+If we don't want to view an entire dictionary, we must either filter for a subset of objects or specify an explicit set. In the latter case, we might use redirects:
 
-To that we might add columns each for an object's name and definition. 
-
-The main difficulty is deciding the 'set of objects' we wish to present and edit. There are a lot of ways we could do this. Perhaps too many choices. However, one useful option is to construct a table as a dictionary object by hand, specifying each row as a redirect attribute:
-
-        @myTable.1 {%foo}
-        @myTable.2 {%bar}
-        @myTable.3 {%baz}
+        @mySheet.1 {%foo}
+        @mySheet.2 {%bar}
+        @mySheet.3 {%baz}
         ...
 
-This would ensure a stable table definition, unlike techniques that query the dictionary.
-
-Conveniently, any tables will exhibit spreadsheet-like characteristics if we render evaluations at each cell. And ABC makes this easy because evaluation is just local rewriting.
+Once we've determined which objects we'll render, we can easily evaluate definitions and render cells in a spreadsheet-like manner, with caching and propagation of updates.
 
 ## Command Pattern in AO
 
@@ -83,7 +76,9 @@ This would permit a corresponding set of rewrites:
 
 Each declaration gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. Compression can be achieved by introducing new hidden, frozen words for common substructures - i.e. dictionary compression.
 
-## Security for Dictionary Applications
+## Application Security
+
+AO supports multiple named dictionaries, which may be referenced by `{%word@dict}`. Security properties will generally focus on a named dictionary.
 
 I would like to have a generic security model for AO that is useful for developing applications in the face of mutual distrust. The *granularity* for security should be a full 'dictionary'. However, we may have some static type constraints. 
 

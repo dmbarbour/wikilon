@@ -25,7 +25,7 @@ Concretely, a patch is a string or file with format:
 
 On our first line, we have opportunity to specify a secure hash specifying the prior patch. Naming origin by secure gives us a verifiable, deeply immutable, content-addressable linked list history. To keep it simple, each patch is limited to a single origin, and origin is always immutable. 
 
-The body of any patch is a sequence of `@word def` actions, each updating a word's definition. Last update wins. To logically delete a word, we may define it as a trivial cycle, `@word {%word}`. (Non-trivial cycles should be reported as errors.)
+The body of any patch is a sequence of `@word def` actions, each updating a word's definition. Last update wins. To logically delete a word, we may define it as a trivial cycle `@word {%word}`. (Non-trivial cycles should be reported as errors.)
 
 ### Anonymous Dictionaries
 
