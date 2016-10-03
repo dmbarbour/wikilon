@@ -231,6 +231,20 @@ Use of annotations to control staging and compilation has potential to be very e
 
 ### Interpretation and Compilation
 
+For fast interpretation, ABC has a few significant weaknesses:
+
+* embedded data can hurt cache locality of code
+* unknown data size for literals and blocks
+* tokens are not statically linked ahead of time
+
+To overcome these weaknesses, we have at least two options. 
+
+One option is to rewrite ABC to use another bytecode internally - one that moves embedded data into its own sections and references it by offset, and that may similarly preserve ensures link structure. This offers the greater performance benefits for direct interpretation, but introduces new costs for maintaining the new representation and translating between representations.
+
+The other option is to preserve ABC's structure and guarantee 
+
+embedded data is a potential weakness of ABC. 
+
 Assume we have a known valid ABC program as a raw, binary string containing link tokens (cf. [AO](AboutAO.md)), and also that we copy the program several times (i.e. within a loop). How shall we process it efficiently? I can think of a few basic options:
 
 * direct processing
@@ -348,7 +362,7 @@ For ABC, I propose introducing a `{&macro}` annotation. Usage:
 
 At this point, we may halt evaluation and pass the program to our static type checker. Macro evaluation is effectively considered *complete* the moment any value exists to its left, i.e. `[A]{&macro} => [A]`.
 
-In general, we might consider a program containing `{&macro}` after evaluation to *be* a macro. Potential exists for first-class macros, composable macros, linking macros in AO, etc.. In AO, we might complain about static type of macros unless explicitly indicated via `word.type`. So there would be no accidental macros, but we'd have full flexibility of dynamic macro programming when desired.
+If after evaluation our program still contains `{&macro}` annotations, we might give that program type 'macro'. Potential thus exists for first-class macros, composable macros, linking macros in AO, etc.. ABC macros are essentially dynamically typed functions, an escape from a rigid static type system where one is needed.
 
 ### Substructural Types
 

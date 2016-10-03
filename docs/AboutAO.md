@@ -23,45 +23,37 @@ Concretely, a patch is a string or file with format:
         @word2 definition2
         ...
 
-On our first line, we have opportunity to specify a secure hash specifying the prior patch. Naming origin by secure gives us a verifiable, deeply immutable, content-addressable linked list history. To keep it simple, each patch is limited to a single origin, and origin is always immutable. 
+Prior to the first word, we may list a single secure hash that identifies a prior patch from which we inherit words. Naming a single origin by secure hash gives us a verifiable, linear, deeply immutable, content-addressable linked list history. The body of the patch is a sequence of `@word def` updates, each overwriting a word's prior definition. In case of multiple updates to a word, the last update wins. A word may be logically deleted by writing a trivial cycle like `@foo {%foo}`. 
 
-The body of any patch is a sequence of `@word def` actions, each updating a word's definition. Last update wins. To logically delete a word, we may define it as a trivial cycle `@word {%word}`. (Non-trivial cycles should be reported as errors.)
+### Anonymous and Named Dictionaries
 
-### Anonymous Dictionaries
+Named dictionaries may be referenced from other dictionaries via `{%word@dict}` and are generally mutable. AO evaluation occurs in context of a set of named dictionaries (frequently an empty context). In the more general case (including patch histories) dictionaries are anonymous, and may only be referenced internally via `{%word}` tokens.
 
-In the general case, dictionaries are anonymous, in the sense that they cannot be referenced via `{%word@dict}`. Secure hashes are *explicitly* considered anonymous in this sense. This ensures we can compact and garbage collect large histories, filter spam or confidential data, etc.. 
-
-### Named Dictionaries
-
-Named dictionaries may be referenced from other dictionaries via `{%word@dict}` and are generally mutable. AO evaluation occurs in *context* of a set of named dictionaries. It is possible for multiple names to refer to the same dictionary. However, which name is used will be preserved during evaluations. 
-
-Depending on [application model](ApplicationModel.md), relationships between dictionaries may be constrained structurally by the update system. For example, dictionary `foo` may be permitted to reference `bar` but not vice versa.
+Internally, words within a dictionary are referenced by `{%word}` without the dictionary name. When we link a word from another dictionary with `{%word@dict}`, the `@dict` decorator must be appended to any undecorated words in the linked code.
 
 ### Secure Hash
 
-I propose use of BLAKE2b 360 bit secure hash, encoded in Crockford's Base32 (favoring lower case). BLAKE2b is a very efficient secure hash, and the limit of 72 characters seems an acceptable balance between goals for global uniqueness and aesthetics.
+I propose use of BLAKE2b 360 bit secure hash, encoded in Crockford's Base32 (favoring lower case). BLAKE2b is a very efficient secure hash. The limit of 72 characters seems an acceptable balance between goals for global uniqueness and aesthetics.
 
-### Filesystem 
+### Filesystem
 
-At the filesystem layer, we'll encode a context of named dictionaries as a directory containing `myApp.ao` and the like. The name of the dictionary matches the filename (minus the **.ao** suffix). 
-
-History patch files use `secureHash.ao`, but we move them into an archive or separate directory. Archiving history files together could prove convenient for lightweight indexed access - i.e. we can just `mmap` the entire archive and index it as a whole, and we don't need to mess around unnecessarily with file handles and so on.
-
-(TODO: review `.zip`, `.tar`, and `.dar` archive formats as candidates.)
+At our filesystem layer, we'll encode a context of named dictionaries as a directory containing `myApp.ao` and the like. The name of the dictionary matches the filename (minus the `.ao` suffix). History patchfiles will use `secureHash.ao`. To avoid clutter, history files might be moved into a composite history archive. (Use of an archive simplifies memory mapping of multiple history objects that won't be mutated.)
 
 ### Forking and Merging
 
-Forking a named dictionary is trivial: simply copy the file to a new name. A three-way merge is possible by finding a common history between two dictionaries.
+Forking a named dictionary is trivial: simply copy the file to a new name. A three-way merge is possible by finding a common history between two dictionaries, but is not explicitly supported. It must be represented by copying updates from one branch into the other.
 
 ### Communication
 
 An intriguing option is use of anonymous dictionaries to model communication.
 
-One option is message-passing. We create a dictionary per message, encoding the message as an object within the dictionary with a standard name. For example, we might reserve `$`, `$.head`. `$.body`, and so on for this use. The message's secure hash origin then encodes a common vocabulary that can be reused for many messages. The origin may also provide useful 'default' attributes - i.e. a prototype object. The remote system can easily download, cache, and compile the standard vocabulary.
+One option is message-passing. We create a *dictionary per message*. The main message content is encoded with standard words, e.g. we might use `$.head` and `$.body`. This secure hash origin can encode the *entire vocabulary* used by each message, but in a cache-friendly manner so we can reuse the vocabulary for many messages and only need to download and compile the vocabulary once. Conveniently, we might also encode defaults, e.g. so `$.head` has a value even if not specified per message. This gives us lightweight prototype or template based communications.
 
-A related option is streaming 'updates'. This could be understood as a series `PUT` messages, with each message simply overwriting the prior and thus modeling a time-varying object. A common case would be we want to reference the current dictionary as our 'origin' then provide only the delta. To simplify this, we could permit use of `~` in place of a secure hash to represent a reference to the current dictionary. Conveniently, the result of PUT with `~` doubles as a general append/patch behavior due to AO semantics.
+A related option is streaming 'updates'. This could be understood as a series `PUT` messages, with each message simply overwriting a contextually implicit or named dictionary. This is a decent fit for publish-subscribe data and views. For streaming updates, a common case is that we want to model just the patch/append/update. This behavior might be represented by use of `~` in place of the secure hash, indicating "whatever was there before". Use of `~` may generally be permitted in contexts where we update an existing dictionary.
 
-Outside of a streaming context, use of `~` as a stand in for a secure hash would not be permitted.
+Outside of streaming contexts, use of `~` as a stand in for a secure hash is not permitted.
+
+*Aside:* Conveniently, AO's patch model is idempotent, and `~` patches are commutative if operating on independent subsets of the dictionary. This might be leveraged to simplify communication properties.
 
 ### Distribution
 
@@ -75,19 +67,12 @@ In the latter case, global names need some strategy to resist conflict (otherwis
 
 ### Caveats
 
-This AO representation has many nice properties, but it is missing a few.
+This AO representation has many nice properties, but it isn't 100% great. Here are some weaknesses:
 
-First, there is no support for *rename*. To rename a word, developers must explicitly rewrite every reference to that word. Explicit rename is cheap enough until widely used. But the general case for rename is greatly complicated by potential for external references (like `{%foo@dict}`, human knowledge, bookmarks).
-
-Second, there is no support for modifying part of a definition. Fortunately, there are easy work arounds to this one. To patch a definition, first factor it into small named pieces then update a few specific pieces. To append a definition, consider a command pattern of form:
-
-        @foo.v98 ...
-        @foo.v99 {%foo.v98}(update98)
-        @foo {%foo.v99}
-
-Third, there is no support for *metadata*. There is no place for commit messages, blame, etc.. Developers are instead encouraged to model metadata within the dictionary or an auxiliary. For example, we might create a dictionary named `tracker` for our bug tracking, commit messages, edit sessions, and so on. Making development metadata explicit is necessary for development to become a first-class application.
-
-Finally, while raw AO can be viewed and edited in small doses, it's still a bytecode. It isn't a convenient view for humans. The curly braces grow annoying, and too much file hopping is needed. The expectation is humans will work with AO primarily through editable views like [claw](CommandLine.md) or an [application model](ApplicationModel.md). 
+1. AO files and ABC aren't very convenient for direct use by humans. They can work in a pinch. But AO is intended to be manipulated primarily through editable views like [claw](CommandLine.md) or an [application model](ApplicationModel.md).
+1. There is no support for *metadata* such as timestamps or commit messages. Developers are instead encouraged to represent metadata within an AO dictionary. This ensures metadata is accessible to Awelon application models or views.
+1. To rename a word, developers must explicitly rewrite every reference to that word. It may be necessary to update external `{%word@dict}` references, or retrain humans, when a word is very widely used.
+1. Updates apply only to whole definitions. Fortunately, it is easy to factor most AO code into smaller parts that can be updated independently, or to model a command pattern for append-only updates (cf. [application model](ApplicationModel.md).
 
 ## AO Development
 
@@ -153,9 +138,9 @@ Thus, AO implies at least three useful representations per word:
 * evaluation, generated by our evaluator, preserves link structure
 * linker object, via context-free static analysis and heuristics
 
-The main heuristics for linking would regard potential inlining of words. Inlining small link objects can offer some performance advantages compared to dynamic linking at runtime. For large objects, these benefits are eventually outweighed by overheads surrounding redundant duplication. We might support extra attributes, e.g. `word.inline`, to guide link behavior.
+Minimally, our linker object should flatten simple redirect chains for purpose of caching. Heuristically, we may also choose to inline words that we know will link in place of their tokens, e.g. based on total size so we don't waste effort linking smaller objects at runtime but also can share structure for large objects. 
 
-We can support evaluation time linking via an `[program]{&link}` annotation. 
+We might support evaluation time linking via `[program]{&link}` annotation. 
 
 ### Lightweight Staging and Compilation
 
@@ -212,8 +197,8 @@ Caching can be implemented by taking a *secure hash* of the representation and p
 
         [{%foo}{%bar}{%baz}]{&cache}
 
-        cacheID = REDUCE {%foo}(foo){%bar}(bar){%baz}(baz)
-            REDUCE uses inline or secure hash.
+        cacheID = REDUCE {%foo}{%bar}{%baz} (foo)(bar)(baz)
+            REDUCE uses inline or secure hash (or shared stowage)
             (X) represents X's linked object.
 
 Taking these constraints overall, we might assume four tables of form:
@@ -223,12 +208,25 @@ Taking these constraints overall, we might assume four tables of form:
 * **word cache:** word → (eval, link, metadata). Computed by evaluator. 
 * **data cache:** secure hash → def. Where we keep cached computations.
 
-We can shove large definitions, evaluations, and linker objects into the data cache to improve structure sharing. The clients table is used to incrementally invalidate the word cache, and also is valuable for reverse lookup, renaming of words. Metadata may generally include other useful properties: inferred types, arity, date and time of evaluation, evaluation resources, debug outputs, and so on.
+Our dictionary has a set of definitions. We maintain an index of immediate clients for each word for reverse lookup, rename, incremental cache invalidation, etc.. Our data cache is updated by the `{&cache}` annotation or a local equivalent.
 
-Cache and stowage interact in a useful way to help developers control serialization overheads when caching, e.g. in cases where a function may be used for many different cached computations. To further control serialization, developers should avoid explicitly requesting frivolous caching of cheap computations, e.g. by batching things predictably and caching computations on full batches.
+The caching challenges primarily surround the **word cache**. 
+
+When we update a set of words in our dictionary, the cache for those words can be marked "stale". An update to a word's definition or dependencies might not affect its final evaluation. So in each case we must re-evaluate the words, and determine whether an actual update has occurred. If so, all clients of that word must also be marked "stale". To avoid wasteful recomputation, we'll want to use some variant of topological sort (e.g. using previously cached 'size' or 'height' of words).
+
+Instead of eagerly updating the word cache, we may heuristically choose to delete parts of it and recompute lazily when need exists.
+
+This background evaluation takes time, even if we also use the *data cache* for each evaluation. While that happens, external clients may be observing our dictionary. If so, nice view properties like eventual or snapshot consistency become desirable. Eventual consistency should occur naturally: after a dictionary stops updating, any computed views reach a stable, consistent condition. Snapshot consistency would most readily be achieved by preventing any observation of the updated dictionary until all updates have propagated.
+
+To avoid wasteful recomputation, we want a topological order when recomputing cache. This might be done by use of a heuristic word height or size, such that each word is greater than its dependencies.
+
+Cached metadata will generally include useful properties like inferred types, arity, date and time of evaluation, quotas and resources used, debug outputs, and so on. Perhaps some prepared web pages. Anything we might wish to look up regularly on a per-word basis.
+
+Frequently we'll want *persistence* such that our old dictionary and word cache remain in play (to support multiple dictionaries sharing a history). Even so, this doesn't really change the invalidation requirements.
+
+*Note:* Cache and stowage interact in a useful way to help developers control serialization overheads when caching. Developers can further use techniques like building probably-stable 'cache points' into their data models.
 
 *Aside:* References of form `{%word@fork}` don't need any special rules for caching. However, to improve sharing of cache between multiple similar forks, we should use the equivalent to `[word def]{&cache}`.
-
 
 ## Constraints on Words and Definitions
 

@@ -27,16 +27,18 @@ Dictionary objects can be flat, non-hierarchical. That is, if we need `foo.doc` 
 
 ## Dictionary Tables and Spreadsheets
 
-A dictionary can easily be viewed as having a sparse, tabular layout. For example, word `foo.doc` may be interpreted as specifying row `foo`, column `doc`. The primary definition of `foo` itself might then be understood as an implicit column. 
+A set of dictionary objects readily be viewed as implicitly having a sparse, tabular layout. For example, word `foo.doc` may be interpreted as specifying row `foo`, column `doc`. The actual definition of `foo` might be represented as another implicit column.
 
-If we don't want to view an entire dictionary, we must either filter for a subset of objects or specify an explicit set. In the latter case, we might use redirects:
+AO readily supports evaluation of words.
 
-        @mySheet.1 {%foo}
-        @mySheet.2 {%bar}
-        @mySheet.3 {%baz}
-        ...
 
-Once we've determined which objects we'll render, we can easily evaluate definitions and render cells in a spreadsheet-like manner, with caching and propagation of updates.
+
+By rendering evaluated words, we also have editable cells and can support spreadsheet-like propagation of updates.
+
+To select a set of objects to view, one option is to select a sequence of words or `[{%word}]` objects. 
+
+
+Once we've selected a set of objects to render, we can evaluate definitions and render cells in a spreadsheet-like manner, with caching and propagation of updates.
 
 ## Command Pattern in AO
 
