@@ -189,7 +189,9 @@ Explicit caching will be expressed by annotation:
 
         [computation]{&cache}
 
-This annotation tells our runtime to try using the cache if/when we later decide to evaluate the object. Caching doesn't force immediate evaluation. Caching may be heuristic, based on observed time/space tradeoffs. 
+Caching doesn't force immediate evaluation. Instead, this annotation tells our runtime to use the cache if/when we later choose to evaluate the object. Caching may be heuristic, based on observed time/space tradeoffs. 
+
+Developers can use simple techniques such as modeling suitable 'cache points' and batches in data structures to mitigate potential efficiency issues of fine-grained caching. Careful use of stowage can also help, by reducing the serialization overhead for stowed fragments of the computation.
 
 #### Cache Design
 
@@ -210,23 +212,13 @@ Taking these constraints overall, we might assume four tables of form:
 
 Our dictionary has a set of definitions. We maintain an index of immediate clients for each word for reverse lookup, rename, incremental cache invalidation, etc.. Our data cache is updated by the `{&cache}` annotation or a local equivalent.
 
-The caching challenges primarily surround the **word cache**. 
+Challenges primarily surround maintenance of the *word cache*. 
 
-When we update a set of words in our dictionary, the cache for those words can be marked "stale". An update to a word's definition or dependencies might not affect its final evaluation. So in each case we must re-evaluate the words, and determine whether an actual update has occurred. If so, all clients of that word must also be marked "stale". To avoid wasteful recomputation, we'll want to use some variant of topological sort (e.g. using previously cached 'size' or 'height' of words).
+When we update a set of words in our dictionary, the cache entries for those words can be marked stale. In each case we must re-evaluate the word, to see if the change to its definition or dependencies effected an actual change to its linker object. If so, all clients of that word must also be marked stale. 
 
-Instead of eagerly updating the word cache, we may heuristically choose to delete parts of it and recompute lazily when need exists.
+Evaluation order must use a topological sort or variant to avoid recomputing the cache entry at a given word more than once update. A fast topological sort is possible if we cache a monotonic 'height' of each word in its metadata, or any similar characteristic.
 
-This background evaluation takes time, even if we also use the *data cache* for each evaluation. While that happens, external clients may be observing our dictionary. If so, nice view properties like eventual or snapshot consistency become desirable. Eventual consistency should occur naturally: after a dictionary stops updating, any computed views reach a stable, consistent condition. Snapshot consistency would most readily be achieved by preventing any observation of the updated dictionary until all updates have propagated.
-
-To avoid wasteful recomputation, we want a topological order when recomputing cache. This might be done by use of a heuristic word height or size, such that each word is greater than its dependencies.
-
-Cached metadata will generally include useful properties like inferred types, arity, date and time of evaluation, quotas and resources used, debug outputs, and so on. Perhaps some prepared web pages. Anything we might wish to look up regularly on a per-word basis.
-
-Frequently we'll want *persistence* such that our old dictionary and word cache remain in play (to support multiple dictionaries sharing a history). Even so, this doesn't really change the invalidation requirements.
-
-*Note:* Cache and stowage interact in a useful way to help developers control serialization overheads when caching. Developers can further use techniques like building probably-stable 'cache points' into their data models.
-
-*Aside:* References of form `{%word@fork}` don't need any special rules for caching. However, to improve sharing of cache between multiple similar forks, we should use the equivalent to `[word def]{&cache}`.
+*Aside:* In case of real-time observers, I favor snapshot consistency for queries on a given dictionary. For queries that involve multiple dictionaries in a distributed system, we might weaken this to eventual consistency. 
 
 ## Constraints on Words and Definitions
 

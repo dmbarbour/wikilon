@@ -233,71 +233,21 @@ Use of annotations to control staging and compilation has potential to be very e
 
 For fast interpretation, ABC has a few significant weaknesses:
 
-* embedded data can hurt cache locality of code
-* unknown data size for literals and blocks
+* embedded data can hurt locality of active code
+* unknown sizes for tokens, literals, and blocks
 * tokens are not statically linked ahead of time
 
-To overcome these weaknesses, we have at least two options. 
+To overcome these weaknesses, we have at least two options.
 
-One option is to rewrite ABC to use another bytecode internally - one that moves embedded data into its own sections and references it by offset, and that may similarly preserve ensures link structure. This offers the greater performance benefits for direct interpretation, but introduces new costs for maintaining the new representation and translating between representations.
+One option is to rewrite ABC to use another representation of bytecode internally, one that embeds data and perhaps integrates link structure and supports a rewrite back into ABC. This could greatly improve performance for direct interpretation, but has complexity overheads of deep translations.
 
-The other option is to preserve ABC's structure and guarantee 
+Another option is to simply add an index to our ABC binary, e.g. a hash table from address (or offset) to sizes, link information, precomputed values, etc.. This wouldn't offer as much potential performance for interpretation, but does avoid the translation overheads.
 
-embedded data is a potential weakness of ABC. 
+I assume I'll eventually develop a JIT compiler, likely LLVM based. 
 
-Assume we have a known valid ABC program as a raw, binary string containing link tokens (cf. [AO](AboutAO.md)), and also that we copy the program several times (i.e. within a loop). How shall we process it efficiently? I can think of a few basic options:
+In presence of compiled representations, a fast interpreter is less essential. A compiled version of a function would only be applied when there are sufficient arguments to compute it fully, so we generally don't need a translation back from the compiled fragments of code.
 
-* direct processing
-* direct processing + cache
-* internal representation
-
-Direct processing can work but would likely prove inefficient because of repeated efforts involving scanning to the end of a block or text. Also importantly, *tokens* would require very frequent lookups.
-
-However, direct processing can be augmented with a cache. Assuming our ABC program has a stable location in memory relative to cache lifespan, we could cache `address → metadata`. If not, we can still support an `offset → metadata` (with a little extra indirection). If a needed value doesn't exist in the cache, we may add it. We could use a separate cache for tokens vs. size info of texts/blocks.
-
-Most remaining options are variants on "use an internal representation", whether that be a parsed AST or translating to another raw, binary string that probably includes stuff we're otherwise treating as metadata.
-
-
-
-
-
-
-The main challenges with direct
-
-has some disadvantages because we don't know the size of a text or block upon encountering it, and tokens lack useful metadata.
-
-* Direct processing 
-
-Parsing the program into a linked list representation might simplify some things, but 
-
-
-
-* Process it directly. 
-
-This will require lookups for tokens as they're encountered, but we'
-
-
- Some options to consider:
-
-One option is to translate the ABC program into an internal runtime representation then process that. Preprocessing our ABC may offer some moderate benefits for 
-
-
- would simplify some things: we could precompute `#1234` numbers, determine the size of each block or text, and bind `{tokens}` to their behavior. When computation on this altered representation finishes, we can recover the original ABC.
-
-Unfortunately, that option doesn't save much: we're 
-
-When done, we can generate the resulting ABC program.
-
-
-
-* take texts as large binaries
-* bind `{tokens}` to appropriate behaviors
-
- might improve performance a little.
-
-
-
-
+So I'd suggest the simple option to start, with a focus on JIT for performance.
 
 ## Static Type Safety for ABC
 
