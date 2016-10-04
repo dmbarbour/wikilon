@@ -195,30 +195,27 @@ Developers can use simple techniques such as modeling suitable 'cache points' an
 
 #### Cache Design
 
-Caching can be implemented by taking a *secure hash* of the representation and performing a lookup. In case of `{%word}` tokens, we do not know whether those words would be linked during evaluation or preserved as symbols. So we must conservatively include both the `{%word}` symbol and a reference to the word's linker object. 
+Caching can be implemented by taking a *secure hash* of the representation and performing a lookup. In case of `{%word}` tokens, we do not know whether those words would be linked during evaluation or preserved as symbols. So we conservatively include both the `{%word}` symbol and a reference to the word's linker object. 
 
         [{%foo}{%bar}{%baz}]{&cache}
 
-        cacheID = REDUCE {%foo}{%bar}{%baz} (foo)(bar)(baz)
-            REDUCE uses inline or secure hash (or shared stowage)
-            (X) represents X's linked object.
+        cacheID = SecureHash {%foo}{%bar}{%baz} (foo)(bar)(baz)
+            where (X) is cacheID of X's linker object
 
 Taking these constraints overall, we might assume four tables of form:
 
 * **dictionary:** word → def. Developed by humans and software agents. 
 * **clients:** word → words. Computed directly from the dictionary. 
-* **word cache:** word → (eval, link, metadata). Computed by evaluator. 
 * **data cache:** secure hash → def. Where we keep cached computations.
+* **word cache:** word → (eval, link, metadata). Computed by evaluator. 
 
-Our dictionary has a set of definitions. We maintain an index of immediate clients for each word for reverse lookup, rename, incremental cache invalidation, etc.. Our data cache is updated by the `{&cache}` annotation or a local equivalent.
+Our dictionary has a set of definitions. We maintain an index of immediate clients for each word for reverse lookup, rename, incremental cache invalidation, etc.. Our data cache is updated by the `{&cache}` annotation or a local equivalent, may be shared by multiple dictionaries, and may be maintained heuristically (e.g. random deletion is okay). 
 
-Challenges primarily surround maintenance of the *word cache*. 
+Challenges surround maintenance of the *word cache*. Upon updating a word's definition, its linker object may be invalid, and transitively any clients of that word. 
 
-When we update a set of words in our dictionary, the cache entries for those words can be marked stale. In each case we must re-evaluate the word, to see if the change to its definition or dependencies effected an actual change to its linker object. If so, all clients of that word must also be marked stale. 
+An easy maintenance technique is perhaps to conservatively clear the word cache then rebuild it lazily. Assuming the *data cache* is used to evaluate words and linker objects, we might avoid the bulk of unnecessary recomputation. However, it might be advantageous to more precisely invalidate the word cache. This requires evaluation *during* invalidation, which has its own challenges. 
 
-Evaluation order must use a topological sort or variant to avoid recomputing the cache entry at a given word more than once update. A fast topological sort is possible if we cache a monotonic 'height' of each word in its metadata, or any similar characteristic.
-
-*Aside:* In case of real-time observers, I favor snapshot consistency for queries on a given dictionary. For queries that involve multiple dictionaries in a distributed system, we might weaken this to eventual consistency. 
+A heuristic balance of precise and lazy cache maintenance may prove effective in the general case, e.g. based on an effort quota upon performing each dictionary update. 
 
 ## Constraints on Words and Definitions
 

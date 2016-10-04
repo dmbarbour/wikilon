@@ -12,7 +12,7 @@ ABC has many unusual features that make it suitable for Awelon project:
 
 * ABC is **easily serialized and rendered**. ABC has a plain-text encoding that directly embeds numbers and literals. Thus, even a simple text editor can provide a useful view for debugging and comprehending code. AO is designed for use with editable views, projectional editors. Sophisticated graphical renderings are feasible.
 
-* ABC **embraces data**. Where most languages shift responsibility for data to an external filesystem or database, ABC prefers to internalize it. Doing so simplifies serialization, persistence, composition, static safety, partial evaluation and staging, transparent procedural generation, and modeling interactive objects. Further, this readily extends to larger-than-memory data via a stowage model and persistent data structures.
+* ABC **embraces data**. Where most languages shift responsibility for data to an external filesystem or database, ABC prefers to internalize it. Doing so simplifies serialization, persistence, composition, static safety, partial evaluation and staging, transparent procedural generation, and modeling interactive objects. Further, this readily extends to larger-than-memory data via stowage and caching.
 
 * ABC is **evaluated by local rewriting**. ABC subprogram may usefully be evaluated with very little context, e.g. no need to provide arguments, no need to reach a subprogram from a main function. The bytecode is effectively an active material: just place it and watch it flow together. Further, partially evaluated results are useful even if our quota times out. Local rewriting simplifies a lot of Awelon project's HCI visions for computation being continuous, omnipresent, easily observed, composed, and tested.
 
@@ -20,11 +20,13 @@ ABC has many unusual features that make it suitable for Awelon project:
 
 * ABC is **concatenative**. Composition of ABC functions is a simple concatenation of their programs. There is no sophisticated binding to perform, no headers or footers to manipulate. Conversely, decomposition is also straightforward, simply cutting programs apart at well defined fragments.
 
-* ABC is **streamable**. Unbounded programs can processed iteratively. Old code is forgotten even as new code is introduced. This supports soft, fluid metaphors involving streams of code gradually modifying objects in a context. Human actions can also be modeled as streams of code.
-
-* ABC is **incremental**. Between purely functional semantics, large value stowage, and serializability, caching is safe, efficient, and easy. Systematic caching and a few software patterns enables incremental computation, which is important for Awelon project's application models. 
+* ABC is **streamable**. There are no pointers or jumps within the bytecode. Unbounded programs can processed iteratively, with code being removed from memory after it has been processed. This supports metaphors of code as a stream, and use of streaming code to model actions over time.
 
 * ABC is amenable to **type checking** and static analysis at the bytecode level. This simplifies safe sharing and linking, and reduces the need for a staged workflows. We can feel confident and secure in widely distributing ABC.
+
+* ABC is **incremental**. Between purity, serializability, and stowage, support for caching is safe and efficient. Systematic caching - together with some simple software patterns involving stowage - enables incremental computation even for massive data structures.
+
+* ABC supports **symbolic structure** with named relationships, resources, and metadata. This is achieved in context of the [Awelon Object (AO)](AboutAO.md) structure-preserving link and evaluation model, and serves as a basis for RESTful [application models](ApplicationModel.md).
 
 ## The Bytecode
 
@@ -47,7 +49,9 @@ The potential reduction to just four primitives makes ABC relatively easy to com
 
 ### Data Embedding
 
-ABC's data embedding simplifies data entry, extraction, and debugging by presenting data in forms that humans can comprehend and tools can easily access. Natural numbers use eleven operators `#1234567890`. These are designed such that `#42` will compute a Church encoded 42. Text literals use an embedded encoding:
+ABC's data embedding simplifies data entry, extraction, and debugging by presenting data in forms that humans can comprehend and tools can easily access. Natural numbers use eleven operators `#1234567890`. These are designed such that `#42` will compute a Church encoded 42. 
+
+Text literals will use a multi-line embedded encoding:
 
         "literals are multi-line UTF-8
          they start with character " (32)
@@ -62,7 +66,7 @@ ABC's data embedding simplifies data entry, extraction, and debugging by present
          no other special characters
         ~
 
-The chosen Church encoding is suitable to unify literals and numbers with more general iterators and coroutines. For example, if I assume `(foo,bar,baz)` represented a general sequence, then the following semantics would apply:
+Literals encode a finite sequence of UTF-8 bytes. The chosen Church encoding is designed to unify literals and numbers with a more  general concept of iterators or coroutines. For example, if I assume `(foo,bar,baz)` represents a general sequence in a [claw](CommandLine.md) view, then it will be possible to define things such that the following unification applies:
 
         #5      == (,,,,)
         #3      == (,,)
@@ -76,9 +80,7 @@ The chosen Church encoding is suitable to unify literals and numbers with more g
 
         [A]i == A;  i = [][]baad
 
-From this, we might derive that `#` is equivalent to `[di]`. Sequences generally have a structure `(foo,bar,baz) = [[foo](bar,baz)s]`, terminating with `[[baz]#s]` for some `s`. (The elements might be flipped if that leads to a cleaner definition. I still need to derive the definition for `s`.)
-
-*Note:* The syntax `(foo,bar,baz)` is not supported at the ABC layer, but a variation is available in the [claw](CommandLine.md) view.
+From this, we might derive that `#` is equivalent to `[di]`. Sequences may generally have a structure `(foo,bar,baz) = [[foo](bar,baz)s]`, terminating with `[[baz]#s]` for some word `s`. 
 
 ### Whitespace
 
@@ -162,7 +164,7 @@ Awelon project favors [application models](ApplicationModel.md) that do not rely
 
 #### Annotated Parallelism
 
-ABC's purity supports a simple form of parallelism: we can evaluate many subexpressions at the same time. However, due to various granularity concerns, I imagine ABC evaluators will tend to be sequential by default and only use parallelism where requested. A simple expression for parallelism is:
+ABC's purity supports a simple form of parallelism: we can evaluate many subexpressions at the same time. However, due to various granularity and cache locality concerns, I imagine ABC evaluators will tend to be sequential by default and only introduce parallelism where requested. A simple expression for parallelism is:
 
         [computation]{&par}
 
@@ -170,7 +172,7 @@ This computation would then run in parallel with other computations in the outer
 
 #### Accelerated Parallelism
 
-Use of `{&par}` is useful for many divide-and-conquer strategies, but is not very expressive. To cover parallelism more generally, ABC can leverage a big-step accelerator for a deterministic concurrency model. For example, we might model a system based on Kahn process networks or flow-based programming:
+Use of `{&par}` is useful for many divide-and-conquer strategies, but is not very expressive. To cover parallelism more generally, ABC can leverage a big-step accelerator for a deterministic concurrency model. For example, we might model a system based on Kahn process networks (KPNs):
 
 * monadic processes with named ports
 * declarative wiring of named ports
@@ -178,19 +180,16 @@ Use of `{&par}` is useful for many divide-and-conquer strategies, but is not ver
 
 This system is deterministic given simple constraints:
 
-* only one process may write to each wire
 * messages pending on wire are FIFO ordered
 * reading a wire implicitly waits for data
 
-*Aside:* Flow-based programming would additionally include a natural number bound for each wire, how many pending messages it can carry before forcing a writer to wait. A bound makes it a lot easier to control memory use and ensure CPU fairness.
+Variants may introduce bounded FIFOs (so our writer waits), or potential support for spawning new processes and wiring them together, or collapsing a process so it wires certain input ports directly to output ports.
 
-A pure function can evaluate the system description to its conclusion, producing a deterministic final state. Our client may then reflect upon this result: extract output messages, inject new input messages, rewire if desired, etc.. The system is easily integrated with external effects models, performing effects in batches based on pending messages. After we modify the system, we can again perform evaluation.
-
-We can take this function and *accelerate* it, e.g. using a runtime built-in. 
-
-Accelerating the evaluation function would enable a runtime to evaluate the system in a natural manner, using queues to buffer communications between components. Further, we could evaluate some of the reflection actions - e.g. for injecting and extracting messages. By doing so, we would preserve the runtime's internal representation of the system for common update actions, enabling subsequent evaluations to proceed with appropriately reduced overheads.
+Regardless, the idea is that we have a pure description of a parallel systems that has a pure, deterministic evaluation to another description of the same system. This could be represented by a pure function. We can take this function and *accelerate* it, e.g. using a runtime built-in that leverages threads and queues under the hood. A limited subset of actions (like injecting inputs or reading pending outputs) can be performed deterministically without waiting for evaluation to complete.
 
 To further cover GPGPU or SSE parallelism requires additional accelerators, e.g. oriented around linear algebra. 
+
+*Aside:* Open KPNs are interesting as a potential [alternative to monads for effectful code](KPN_Effects.md), admitting parallel and concurrent effects and buffering without extra effort.
 
 ### Stowage and Caching
 
@@ -239,15 +238,11 @@ For fast interpretation, ABC has a few significant weaknesses:
 
 To overcome these weaknesses, we have at least two options.
 
-One option is to rewrite ABC to use another representation of bytecode internally, one that embeds data and perhaps integrates link structure and supports a rewrite back into ABC. This could greatly improve performance for direct interpretation, but has complexity overheads of deep translations.
+One option is to rewrite ABC to use another representation of bytecode internally that addresses these weaknesses. This might embed data with an address or offset, and bind linker tokens similarly. Direct interpreted performance may improve, though by how much is difficult to determine without profiling. The cost is greater complexity for translations in both directions, persistence, stowage, and incremental computing.
 
-Another option is to simply add an index to our ABC binary, e.g. a hash table from address (or offset) to sizes, link information, precomputed values, etc.. This wouldn't offer as much potential performance for interpretation, but does avoid the translation overheads.
+Another option is to separately index the metadata needed to efficiently process an ABC string. This might be achieved by a hashtable mapping address or offset to ad-hoc metadata. This won't help with code locality, but it could reduce the issues of scanning to the end of a token or literal within a compact binary, and it would support binding of a token to its interpretation.
 
-I assume I'll eventually develop a JIT compiler, likely LLVM based. 
-
-In presence of compiled representations, a fast interpreter is less essential. A compiled version of a function would only be applied when there are sufficient arguments to compute it fully, so we generally don't need a translation back from the compiled fragments of code.
-
-So I'd suggest the simple option to start, with a focus on JIT for performance.
+In context of a JIT compiler, I suspect a fast interpreter is less important than a simple representation. So the index on raw ABC may be the better option unless something about the other bytecode simplifies compilation.
 
 ## Static Type Safety for ABC
 
@@ -276,20 +271,19 @@ Type analysis can be simplified by annotations and seals. For example:
 
 However, annotations are generally limited to stuff that's also easy to enforce dynamically. In context of [AO](AboutAO.md), we might support more expressive type declarations via words simple conventions like `word.type` describing the type of `word`. 
 
-### Type System Details
+### Substructural Types
 
-TODO! This seems like a rather involved decision.
+Substructural types are very expressive for structuring application behavior independently of syntax. For example, while the common resource pattern `open use* close` can be enforced by a structured syntax or resource pattern, we could instead model this by constructing a linear handle (with sealed data) upon `open` and destroying it later, in the `close` action. This would give us a lot more flexibility to use the resource within the program.
 
-I would like to support inference for:
+        [A]{&rel} == [A]    (mark relevant)
+        [A]{&aff} == [A]    (mark affine)
 
-* fixpoint types `μX.[... X ...]`
-* polymorphic labeled sums 
-* polymorphic labeled prods
-* existential types 
-...
+* a block marked relevant may not be dropped
+* a block marked affine may not be copied
+* a block both affine and relevant is called 'linear'
+* on 'bind' a block inherits substructure of argument
 
-I also need a simple language for type description - itself a labeled sum.
-
+A runtime might introduce some means to bypass substructure. Use of the `{&trash}` annotation is convenient if we know a potentially relevant value won't be observed again: it allows us to recycle memory, replacing a value by an error object with the same substructural properties.
 
 ### Macro Evaluation
 
@@ -314,19 +308,9 @@ At this point, we may halt evaluation and pass the program to our static type ch
 
 If after evaluation our program still contains `{&macro}` annotations, we might give that program type 'macro'. Potential thus exists for first-class macros, composable macros, linking macros in AO, etc.. ABC macros are essentially dynamically typed functions, an escape from a rigid static type system where one is needed.
 
-### Substructural Types
+### Static Type System
 
-Substructural types are very expressive for structuring application behavior independently of syntax. For example, while the common resource pattern `open use* close` can be enforced by a structured syntax or resource pattern, we could instead model this by constructing a linear handle (with sealed data) upon `open` and destroying it later, in the `close` action. This would give us a lot more flexibility to use the resource within the program.
-
-        [A]{&rel} == [A]    (mark relevant)
-        [A]{&aff} == [A]    (mark affine)
-
-* a block marked relevant may not be dropped
-* a block marked affine may not be copied
-* a block both affine and relevant is called 'linear'
-* on 'bind' a block inherits substructure of argument
-
-A runtime might introduce some means to bypass substructure. Use of the `{&trash}` annotation is convenient if we know a potentially relevant value won't be observed again: it allows us to recycle memory, replacing a value by an error object with the same substructural properties.
+I'm still thinking about exactly what I want and need. Check out [ABCTypes.md](ABCTypes.md).
 
 ## ABC Assumptions and Idioms
 

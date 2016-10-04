@@ -29,21 +29,11 @@ In favor of 32-bit:
 * requires half as much memory for common structures
 * Wikilon won't be allocating multi-gigabyte contexts
 
-The 4% performance benefit from direct addressing is likely to improve if copying is reduced. So it might be better to stick to 64-bit words if I choose not to use compaction as a primary garbage collector.
-
-At the moment, I'm planning to use multiple threads within a context, and reduce compactions to a relatively rare operation. 
-
-
-
-
-
-That said, 32-bit is likely a better fit for Wikilon's common use case: multiple contexts each with a small working memory, each servicing separate web client or background computation goals. Scalability to very large computations will be addressed instead by value stowage.
-
-However, I'll aim to ensure this is a simple compiler switch.
+The 4% performance benefit from direct addressing is likely to improve if copying is reduced. So it might be better to stick to 64-bit words if I choose not to use compaction as a primary garbage collector. At the moment, I'm planning to use multiple threads within a context, and reduce compactions to a relatively rare operation. So I'll probably go for 64-bit representations.
 
 ## Bit Representations
 
-I assume allocations in context will be aligned to at least 8 bytes. This gives 3 flag bits per reference to provide a lightweight indicator of data type. 
+I assume allocations will be aligned to at least 8 bytes. This gives 3 flag bits per reference to provide a lightweight indicator of data type. 
 
 This is the primary candidate at this time:
 
@@ -71,7 +61,7 @@ As an additional constraint on data structure, I will require that copy, drop, a
 
 The Morris algorithm could be adapted. However, tree structures have a common `null` value on the RHS to serve in place of the stack, and a relatively simple structure so we don't struggle to navigate *within* nodes (e.g. if a node has 8 children, that might be a bit troublesome).
 
-To achieve this, all list structures shall end in `null`. We might use a smart constructor such that if we would construct a list terminating in a tagged object or small constant, we'll instead allocate it. Further, there will be restrictions on structure of tagged objects. (Though, it is possible for a tagged object to provide its own in-place traversal iterator.)
+To achieve this, all deep structures should end in a `null`. We might use a smart constructor such that if we would construct a list terminating in a tagged object or small constant, we'll instead allocate it. Further, there will be restrictions on structure of tagged objects. (Though, it is possible for a tagged object to provide its own in-place traversal iterator.)
 
 ## Fail-Safe Allocation
 

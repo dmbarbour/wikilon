@@ -19,7 +19,7 @@ The `[abcd]` set is Turing complete and friendly for substructural types. ABC pr
 
 Natural numbers may be embedded using the form `#42` or `#108`. Here `#` introduces a new zero value, while `1234567890` each have a 'multiply by ten, add digit' effect. 
 
-Literals may be embedded as UTF-8 sequences:
+Literals may be embedded as UTF-8 byte sequences:
 
         "start with character `"`
          may have multiple lines
@@ -34,9 +34,7 @@ Literals may be embedded as UTF-8 sequences:
          There are no other special chars.
         ~
 
-*Aside:* While ABC does not support inline literals, some [editable views](CommandLine.md) will do so. For convenience in examples, a subprogram like `"hello"` is to be understood as an inline representation for the obvious literal of five characters, even though it would include a line break in ABC.
-
-The formal semantics of natural numbers and literals is based on Church-encoded command sequences of NOPs or UTF-8 bytes respectively. ABC does not provide a convenient syntax for these sequences. However, assuming a presentation like `(foo,bar,baz)` for a sequence of three commands:
+The formal semantics of natural numbers and literals is based on Church-encoded command sequences of NOPs (for numbers) or UTF-8 bytes (for literals). ABC does not provide a convenient syntax for generic sequences. But some editable views like [claw](CommandLine.md) may do so, and may additionally support inline texts like `"hello"`. Assuming a claw presentation `(foo,bar,baz)` for a sequence of three commands, it should be possible to unify as follows:
 
         #7          ==      (,,,,,,)
         #3          ==      (,,)

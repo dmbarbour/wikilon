@@ -27,18 +27,16 @@ Dictionary objects can be flat, non-hierarchical. That is, if we need `foo.doc` 
 
 ## Dictionary Tables and Spreadsheets
 
-A set of dictionary objects readily be viewed as implicitly having a sparse, tabular layout. For example, word `foo.doc` may be interpreted as specifying row `foo`, column `doc`. The actual definition of `foo` might be represented as another implicit column.
+A set of dictionary objects readily be viewed as implicitly having a sparse, tabular layout. For example, word `foo.doc` may be interpreted as specifying row `foo`, column `doc`. The actual definition of `foo` might be represented as another implicit column. 
 
-AO readily supports evaluation of words.
+To select a set of objects to view, we could filter dictionary words by attributes, types, or values. We could compute a list of `[{%word}]` objects. Or we could represent a table as another, second-class dictionary object. 
 
+        @myTable.row1 {%foo}
+        @myTable.row2 {%bar}
+        @myTable.row3 {%baz}
+        ...
 
-
-By rendering evaluated words, we also have editable cells and can support spreadsheet-like propagation of updates.
-
-To select a set of objects to view, one option is to select a sequence of words or `[{%word}]` objects. 
-
-
-Once we've selected a set of objects to render, we can evaluate definitions and render cells in a spreadsheet-like manner, with caching and propagation of updates.
+Regardless of how we specify our set of objects, AO makes it easy to render both the definitions of each word and their context-free evaluations or linker objects. Thus, we can render evaluated cells in a table while enabling editing of each cell's definitions, and propagating updates to the rendered views. We effectively get spreadsheets without any special effort.
 
 ## Command Pattern in AO
 
