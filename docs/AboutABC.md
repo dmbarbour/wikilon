@@ -246,44 +246,64 @@ In context of a JIT compiler, I suspect a fast interpreter is less important tha
 
 ## Static Type Safety for ABC
 
-ABC's behavior does not depend on any type judgements, hence ABC may be evaluated dynamically. But static analysis of type safety can nonetheless offer significant benefits:
+ABC's behavior does not depend on any type judgements. Hence, ABC may be evaluated without static typing. However, static analysis of type safety can nonetheless offer significant benefits:
 
 * a clean, robust, trustworthy codebase
 * type-sensitive projectional editors
 * verifiable documentation, informed programmers
 * typeful rendering and program extraction
-* JIT compilation without dynamic checks
+* JIT compilation without dynamic type checks
 
-It is my intention that most ABC codebases be strongly, statically type safe. 
+It is my intention that most ABC codebases be strongly, statically type safe as the default. Some bypasses may be permitted, but would be primarily intended for static computation - cf. macro evaluation, below 
 
-The foundation for ABC's type system is program structure. For example, there is a clear structural difference between `[[A][B]]` vs. `[[A][B][C]]` because, when applied, the first introduces two objects into our program, while the latter introduces three. Similarly, there is an obvious difference between `[dd]` and `[ddd]`. 
+### A Simple Static Type System
 
-Static type safety in ABC is ultimately about statically predictable program structure. Predictable program structure generalizes to rules like ensuring conditional behaviors have the same behavior on both paths, that every command in a sequence must have the same type, that we cannot directly add a number to a text.
+ABC programs can be understood as pure functions operating upon a stack value. In a conventional functional language, our stack might be represented as a product type `(A * (B * C))`. In context of ABC, a value is a block - another function. We can assign a suitable type to each of our primitives:
 
-Type analysis can be simplified by annotations and seals. For example:
+        a   : ((E → E') * (A * E)) → (A * E')
+        b   : (((A * S) → S') * (A * E)) → ((S → S') * E)
+        c   : (A * E) → (A * (A * E))
+        d   : (A * E) → E
+        [V] : E → (type(V) * E)
 
-* `{&nat}` - argument must be a natural number
-* `{&lit}` - argument must be a text literal
+From this, a simple static type for a program can be computed, based on predicting the stack. Type unification is implicit with operator `c` because a single value must be usable in multiple contexts. For the most part, our predictions may be context-free (i.e. no dependent types).
+
+### Type Annotations and Declarations
+
+Tokens provide convenient anchors for static type inference. For example:
+
+* `{&nat}` - argument is embeddable as natural number
+* `{&lit}` - argument is embeddable as text literal
 * `{&tuple3}` - argument has form `[[A][B][C]]`
 * `{&aff}` - argument may not be copied
 * `{&rel}` - argument may not be dropped
 * `{:foo}` - anything but `{.foo}` is type error
 
-However, annotations are generally limited to stuff that's also easy to enforce dynamically. In context of [AO](AboutAO.md), we might support more expressive type declarations via words simple conventions like `word.type` describing the type of `word`. 
+However, tokens are not intended for ad-hoc metadata. They are meant for runtime applications.
+
+To support rich, human meaningful type documentation, we might use the [AO layer](AboutAO.md) to attribute type information to subprograms. For example, `word.type` may describe the type of `word` in a manner meaningful both to a type checker and a human. Type descriptions, in this case, would be first-class computable values. 
 
 ### Substructural Types
 
-Substructural types are very expressive for structuring application behavior independently of syntax. For example, while the common resource pattern `open use* close` can be enforced by a structured syntax or resource pattern, we could instead model this by constructing a linear handle (with sealed data) upon `open` and destroying it later, in the `close` action. This would give us a lot more flexibility to use the resource within the program.
+Substructural types are useful for structuring application behavior independently of syntax or concurrency model. In context of a bytecode that lacks much syntactic structure, these types could greatly simplify reasoning about code. ABC can support substructural types both statically and dynamically. Developers will access substructural types via annotations and a few simple rules:
 
-        [A]{&rel} == [A]    (mark relevant)
-        [A]{&aff} == [A]    (mark affine)
+* `{&rel}` - relevant values, forbid drop (operator `d`)
+* `{&aff}` - affine values, forbid copy (operator `c`)
+* inherit substructure of bound values (operator `b`)
+* relevant and affine together result in linear values
+* `{&rel}` and `{&aff}` are commutative and idempotent
 
-* a block marked relevant may not be dropped
-* a block marked affine may not be copied
-* a block both affine and relevant is called 'linear'
-* on 'bind' a block inherits substructure of argument
+Values with substructural types may freely be applied (operator `a`). Substructure is not lifted during partial evaluation, so substructural type does not interact with features like `{&seq}` or `{&par}`.
 
-A runtime might introduce some means to bypass substructure. Use of the `{&trash}` annotation is convenient if we know a potentially relevant value won't be observed again: it allows us to recycle memory, replacing a value by an error object with the same substructural properties.
+Static typing requires precomputing this information, i.e. tracking which values are copied and dropped and which are marked relevant or affine, and detecting any conflict statically. This isn't particularly difficult, though I have yet to think up a way to make the annotions aesthetic or less ad-hoc. Consider:
+
+        c : (A!aff * E) → (A * (A * E))
+        d : (A!rel * E) → E
+
+        {&rel} : (A * E) → (A&rel * E)
+        {&aff} : (A * E) → (A&aff * E)
+
+In this case, we have a conflict if `A&aff` (a value annotated affine) is used where `A!aff` (a value that is not affine, a copyable value) is needed.
 
 ### Macro Evaluation
 
@@ -291,11 +311,11 @@ Many useful programming styles are difficult to statically typecheck. Consider:
 
         "abcx → ax^2 + bx + c" runPoly
 
-Assume this constructs a program that takes four arguments - a, b, c, x - then computes the specified polynomial. The number of arguments we take depends on polynomial's text value. Type checking `runPoly` is feasible with sophisticated, dependent type systems. But type inference is frequently difficult, requiring developers to construct a proof. Similar cases exist for printf-style text formatting and many other possible DSLs.
+Assume this constructs a program that takes four arguments - a, b, c, x - then computes the specified polynomial. The number of arguments we take depends on polynomial's text value. Providing a type judgement for `runPoly` is feasible but non-trivial, requiring sophisticated dependent types and proofs that are inconvenient to embed in a bytecode.
 
-Fortunately, we do not need sophisticated types in this case and many like it.
+Similar scenarios exist for print formatting and DSLs.
 
-Our goal is statically predictable program structure. The polynomial text is right there. Statically. Evaluation in ABC is based on local rewriting, so that's all we need: it is not difficult to compute the polynomial program before type checking. We need only some way to tell our system to defer type analysis until after partial evaluation. This is the province of *macros* in many languages. 
+Fortunately, we do not need sophisticated types in these cases and many others. The polynomial text is right there. Statically. So, even if we cannot provide a type for `runPoly`, we might be able to provide a simple type for the larger program if we partially evaluate `runPoly`. We only need some way to tell our system to defer type analysis until after partial evaluation. This is the province of *macros* in many languages. 
 
 For ABC, I propose introducing a `{&macro}` annotation. Usage:
 
@@ -304,13 +324,7 @@ For ABC, I propose introducing a `{&macro}` annotation. Usage:
             [polynomial behavior]{&macro} i =>
             [polynomial behavior]i
 
-At this point, we may halt evaluation and pass the program to our static type checker. Macro evaluation is effectively considered *complete* the moment any value exists to its left, i.e. `[A]{&macro} => [A]`.
-
-If after evaluation our program still contains `{&macro}` annotations, we might give that program type 'macro'. Potential thus exists for first-class macros, composable macros, linking macros in AO, etc.. ABC macros are essentially dynamically typed functions, an escape from a rigid static type system where one is needed.
-
-### Static Type System
-
-I'm still thinking about exactly what I want and need. Check out [ABCTypes.md](ABCTypes.md).
+At this point, we may halt evaluation and pass the program to our static simple type checker. Macro evaluation is effectively considered *complete* the moment any value exists to its left, i.e. `[A]{&macro} => [A]`. If after evaluation our program still contains `{&macro}` annotations, we might call that program a macro. In the general case, macros are dynamically typed functions, offering a lightweight escape from the rigid static type system whenever an escape is needed.
 
 ## ABC Assumptions and Idioms
 

@@ -84,6 +84,8 @@ AO development is based on ABC development, but the use of words augments this i
 
 More broadly, use of symbolic structure via words provides a convenient platform for both stateful updates and computed views. The [application model](ApplicationModel.md) represents 'applications' within a stateful codebase. This is integrated with the real-world through publish-subscribe models and other RESTful techniques.
 
+Type declarations are something that must still be considered carefully with AO. Potential to support named types or human-level documentation for types could be very useful, as is potential to integrate additional type constraints with static type checking.
+
 AO does introduce an interesting new 'effect' that could be tracked for type safety: a context of named dictionaries upon which a computation might depend. This is important for understanding mutability. However, this context might be restricted at an AO security layer.
 
 ## AO Evaluation and Linking
