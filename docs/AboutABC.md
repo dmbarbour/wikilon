@@ -75,12 +75,13 @@ Literals encode a finite sequence of UTF-8 bytes. The chosen Church encoding is 
         "hello" == (#104, #101, #108, #108, #111)
         ""      == #
 
-        [B][A](foo,bar,baz)i == foo [[B][A](bar,baz)i] A
-        [B][A]#i             == B
+        [A][B](foo,bar,baz)i == foo [[A][B](bar,baz)i] A
+        [A][B]#i             == B
 
         [A]i == A;  i = [][]baad
+        
 
-From this, we might derive that `#` is equivalent to `[di]`. Sequences may generally have a structure `(foo,bar,baz) = [[foo](bar,baz)s]`, terminating with `[[baz]#s]` for some word `s`. 
+From this, we might derive that `#` is equivalent to `[ad]`. Sequences may generally have a structure `(foo,bar,baz) = [[foo](bar,baz)s]`, terminating with `[[baz]#s]` for some word `s`. 
 
 ### Whitespace
 
@@ -146,11 +147,27 @@ In the mean time, we can achieve similar (albeit less portable) benefits by havi
 
 *Aside:* Use of built-in functions avoids need for sophisticated recognition algorithms. It is possible that an optimizer could recognize `[][]baad` and replace it by `{%i@rt}`, but it is unnecessary to do so.
 
-### Rewrite Optimizations
+### Fork/Join Parallelism
 
-The basic rewrite rules admit some rewrites for performance. For example, `[]a` - applying identity - can be rewritten to the empty program. We get more useful rewrites when we start working at higher levels. For example, we can also eliminate `[i]b` or rewrite `bi => i`. Loop fusions for collections processing like `[F] map [G] map => [F G] compose map` are viable, assuming the `map` function is sufficiently restricted.
+ABC's purity supports a simple form of parallelism: we can evaluate many subexpressions at the same time. However, due to various granularity and cache locality concerns, I imagine ABC evaluators will tend to be sequential by default and only introduce parallelism where requested. A simple expression for parallelism is:
 
-I intend that developers can propose rewrite rules, preferably together with a proof of correctness. Meanwhile, rewrite optimizations are at least available for built-in functions and perhaps a trusted subset of the dictionary.
+        [computation]{&par}
+
+This computation would then run in parallel with other computations in the outer program. A parallel computation may be dropped (operator `d`) which should abort the effort. An attempt to copy (operator `c`) a parallel computation must generally *wait for it to complete*, to avoid issues of duplicating an incomplete computation in a program that halts on quota. 
+
+### Accelerated Process Networks
+
+While use of `{&par}` is useful for simple divide-and-conquer strategies on large data structures, it is not very expressive. For example, it cannot express communicating processes or pipelines. To support more expressive parallelism, I propose that ABC runtimes should *accelerate* evaluation of a bounded-buffer variant of [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks).
+
+A description of a KPN (processes, wires, messages on wires) can be deterministically evaluated into a new description of the same KPN. This evaluation can be naively represented as a pure function. 
+
+A runtime accelerated evaluator can use more conventional queues and threads internally. Further, it is feasible for an external system to interact with a KPN that is still undergoing evaluation - i.e. inject input, extract output, adding a process or wire. These actions need only wait just long enough to resolve deterministically while allowing parallel evaluation to continue. In each case, we would only be forced to wait *just long enough* to resolve deterministically.
+
+*Aside:* Open KPNs are interesting as a potential [alternative to monads for effectful code](KPN_Effects.md), admitting parallel and concurrent effects, and flexible buffering.
+
+### Accelerated Linear Algebra
+
+While KPNs are great for most parallel processing, we'll additionally need to accelerate matrix and vector math to take full advantage of GPGPU or SSE based parallelism.
 
 ### Compilation
 
@@ -160,36 +177,21 @@ Compiling an executable independent of an ABC runtime is feasible as a case of *
 
 Awelon project favors [application models](ApplicationModel.md) that do not rely on program extraction, so local `{&jit}` compilation more appropriate for basic performance concerns. However, I would like to support both techniques.
 
-### Parallelism
+### Rewrite Optimizations
 
-#### Annotated Parallelism
+ABC's semantics admit rewrites for performance. For example:
 
-ABC's purity supports a simple form of parallelism: we can evaluate many subexpressions at the same time. However, due to various granularity and cache locality concerns, I imagine ABC evaluators will tend to be sequential by default and only introduce parallelism where requested. A simple expression for parallelism is:
+        []a     =>
+        [i]b    =>
+        bi      =>  i
+        cd      =>
+        cad     =>  i
 
-        [computation]{&par}
+Introducing accelerators like `i = [][]baad` can simplify recognition of rewrite optimizations. 
 
-This computation would then run in parallel with other computations in the outer program. A parallel computation may be dropped (operator `d`) which should abort the effort. An attempt to copy a parallel computation will generally wait for it to complete, avoiding issues of shared state.
+Rewrite optimizations are unfortunately ad-hoc and fragile. They rely heavily on ad-hoc detection, and even when detected there might be more than one possible rewrite. They can also be difficult to prove correct in the more general case. Thus, while we could use rewrite optimizations for loop fusions like `map [G] map => [G] compose map`, I think it is generally preferable to make the intermediate structure explicit. 
 
-#### Accelerated Parallelism
-
-Use of `{&par}` is useful for many divide-and-conquer strategies, but is not very expressive. To cover parallelism more generally, ABC can leverage a big-step accelerator for a deterministic concurrency model. For example, we might model a system based on Kahn process networks (KPNs):
-
-* monadic processes with named ports
-* declarative wiring of named ports
-* a set of message packets in flight
-
-This system is deterministic given simple constraints:
-
-* messages pending on wire are FIFO ordered
-* reading a wire implicitly waits for data
-
-Variants may introduce bounded FIFOs (so our writer waits), or potential support for spawning new processes and wiring them together, or collapsing a process so it wires certain input ports directly to output ports.
-
-Regardless, the idea is that we have a pure description of a parallel systems that has a pure, deterministic evaluation to another description of the same system. This could be represented by a pure function. We can take this function and *accelerate* it, e.g. using a runtime built-in that leverages threads and queues under the hood. A limited subset of actions (like injecting inputs or reading pending outputs) can be performed deterministically without waiting for evaluation to complete.
-
-To further cover GPGPU or SSE parallelism requires additional accelerators, e.g. oriented around linear algebra. 
-
-*Aside:* Open KPNs are interesting as a potential [alternative to monads for effectful code](KPN_Effects.md), admitting parallel and concurrent effects and buffering without extra effort.
+AO may eventually provide some means to specify rewrite optimizations and prove their safety.
 
 ### Stowage and Caching
 
@@ -207,17 +209,18 @@ The serialization requirement for caching has some overhead, so developers are e
 
 ### Lazy Evaluation
 
-By the general evaluation strategy, call-by-need is the default for inputs to a computation. It can be preserved for outputs, too, via explicit use of a `[computation]{&lazy}` annotation. In AO, lazy evaluations are not implicitly cached, which may be a problem if you copy a lazy computation. If need to cache lazy evaluations, make it explicit with `{&cache}{&lazy}` (or `{&lazy}{&cache}`, order makes no difference).
+By the general evaluation strategy, call-by-need is the default for input to a computation. It can be preserved for outputs, too, via explicit use of a `[computation]{&lazy}` annotation. In AO, lazy evaluations are not implicitly cached, which may be a problem if you might copy a lazy computation. If need to cache lazy evaluations, make it explicit with `{&cache}{&lazy}` (or `{&lazy}{&cache}`, order makes no difference).
 
-Laziness may freely be used to model infinite data structures - e.g. infinite streams, trees, etc.. Evaluation of such structures would not terminate in an ABC evaluator that doesn't the `{&lazy}` annotation, but all relevant ABC evaluators will support laziness.
+Laziness may be used to model infinite data structures - e.g. infinite streams, trees, procedurally generated worlds, etc.. Support for laziness has no semantic impact in ABC, but instead is related to consumption of quotas after the 'toplevel' for a program is evaluated. In practice, I imagine most ABC evaluators shall support laziness.
 
 ### Performance Annotations
 
 Many annotations are used for performance:
 
-* `{&seq}` - shallow evaluation of subprogram
-* `{&seq*}` - deep evaluation of subprogram
+* `{&seq}` - shallow evaluation of subprogram 
+* `{&seq*}` - force deep evaluation of subprogram
 * `{&par}` - parallelize evaluation of subprogram
+* `{&lazy}` - don't evaluate until otherwise requested
 * `{&lit}` - force argument to text literal representation
 * `{&nat}` - force argument to natural number representation
 * `{&stow}` - move value to link layer, away from working memory
@@ -264,9 +267,58 @@ ABC programs can be understood as pure functions operating upon a stack value. I
         b   : (((A * S) → S') * (A * E)) → ((S → S') * E)
         c   : (A * E) → (A * (A * E))
         d   : (A * E) → E
-        [V] : E → (type(V) * E)
+        [F] : E → (type(F) * E)
 
-From this, a simple static type for a program can be computed, based on predicting the stack. Type unification is implicit with operator `c` because a single value must be usable in multiple contexts. For the most part, our predictions may be context-free (i.e. no dependent types).
+Our simple static type system must predict types for much larger programs. These simple primitives provide a basis, together with simple unification of type variables. In addition to simple linear unifications, operator `c` supports unification (and conflict detection) for multiple uses of a value.
+
+### Typing Conditional Behavior
+
+A major concern for any type system is conditional behavior. 
+
+In ABC, we model conditional behavior by a Church encoding. Consider:
+
+        [onTrue][onFalse] true  i => onTrue
+        [onTrue][onFalse] false i => onFalse
+
+In this case, `true` may be modeled as `[di]`, and `false` as `[ad]`. Types:
+
+        true    : (OnF * ((E → E') * E)) → E'
+        false   : ((E → E') * (OnT * E)) → E'
+
+        type bool = true | false 
+        bool    : ((E → E') * ((E → E') * E)) → E'
+
+The type of `bool` is clearly a unification for the types of `true` and `false`. 
+
+This generalizes easily to data carrying sum types. For example:
+
+        [onLeft][onRight] [A] left i  => [A] onLeft
+        [onLeft][onRight] [B] right i => [B] onRight
+
+        left    : (A * E) → ((Left A) * E)
+        right   : (B * E) → ((Right B) * E)
+
+        Left A  : (((A*E)→E') * (R * E)) → E'
+        Right B : (L * (((B*E)→E') * E)) → E'
+
+        type Either A B = Left A | Right B
+        Either A B : (((A*E)→E') * (((B*E)→E') * E) → E'
+
+Sum value types are generally a unification of their component value types. 
+
+A *conditional behavior* is the conditional subprogram hold the condition. In ABC, we might capture a general form for our conditional behavior as:
+
+        [[onTrue][onFalse]]ai
+        [[onLeft][onRight]]ai
+        [[onOpt1][onOpt2]..[onOptK]]ai
+
+Effectively, we have an enumeration of options, one for each value type in our sum. The `ai` suffix will apply this in context of a `(SumType * Env)` program stack. The `SumType` may *presumably* modify the environment (e.g. to inject some data), and select one conditional action to further update the environment. 
+
+Unfortunately, without the `SumType` in scope, it's difficult to validate this presumption. Most programming languages simplify this issue by introducing a dedicated syntax for conditional behavior - e.g. the `if` statement or pattern-matching `case` expression - from which we can clearly infer the sum type.
+
+ABC might leverage annotations for a similar purpose.
+
+
 
 ### Type Annotations and Declarations
 
@@ -283,6 +335,24 @@ However, tokens are not intended for ad-hoc metadata. They are meant for runtime
 
 To support rich, human meaningful type documentation, we might use the [AO layer](AboutAO.md) to attribute type information to subprograms. For example, `word.type` may describe the type of `word` in a manner meaningful both to a type checker and a human. Type descriptions, in this case, would be first-class computable values. 
 
+### Structural Scopes
+
+ABC provides a simple mechanism for controlling scope of a computation. Assume we have a function `foo` that takes two inputs and produces three outputs. A structurally scoped application can be represented as:
+
+        [A][B][foo]bb{&tuple3}i
+
+        [[A][B][C]]{&tuple3}    =>  [[A][B][C]]
+
+What we're doing here is binding two arguments to the function, asserting that there are three outputs, then inlining those outputs into our main code. Dynamically, the `{&tuple3}` annotation requires a simple bit of reflection. 
+
+It's also easy to validate the action statically, in which case we can reduce the `bb{&tuple3}i` to `bbi` which will rewrite to just `i`, inlining `[foo]`. So when we have static validation of scope, the structure is trivally eliminated by simple rewrite rules. Otherwise, we may report the error immediately.
+
+### Value Sealing for Lightweight Types
+
+ABC introduces two tokens `{:foo}` and `{.foo}` to support symbolic value sealing, to resist accidental access to data. This is supported by a simple rewrite rule: `{:foo}{.foo}` will rewrite to the empty program. A program of the form `[A]{.foo}` can fail fast. In most cases, seals will be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`.
+
+During static type analysis, these type wrappers might serve as a useful constraint. Dynamically, in addition to serving as a fail-fast condition, we can leverage these symbols as extra hints to guide rendering or debugging.
+
 ### Substructural Types
 
 Substructural types are useful for structuring application behavior independently of syntax or concurrency model. In context of a bytecode that lacks much syntactic structure, these types could greatly simplify reasoning about code. ABC can support substructural types both statically and dynamically. Developers will access substructural types via annotations and a few simple rules:
@@ -295,7 +365,7 @@ Substructural types are useful for structuring application behavior independentl
 
 Values with substructural types may freely be applied (operator `a`). Substructure is not lifted during partial evaluation, so substructural type does not interact with features like `{&seq}` or `{&par}`.
 
-Static typing requires precomputing this information, i.e. tracking which values are copied and dropped and which are marked relevant or affine, and detecting any conflict statically. This isn't particularly difficult, though I have yet to think up a way to make the annotions aesthetic or less ad-hoc. Consider:
+Static typing requires precomputing this information, i.e. tracking which values are copied and dropped and which are marked relevant or affine, and detecting any conflict statically. This isn't difficult, though I have yet to think up an *aesthetic* set of type annotations that don't make me cringe. Consider:
 
         c : (A!aff * E) → (A * (A * E))
         d : (A!rel * E) → E
@@ -326,6 +396,7 @@ For ABC, I propose introducing a `{&macro}` annotation. Usage:
 
 At this point, we may halt evaluation and pass the program to our static simple type checker. Macro evaluation is effectively considered *complete* the moment any value exists to its left, i.e. `[A]{&macro} => [A]`. If after evaluation our program still contains `{&macro}` annotations, we might call that program a macro. In the general case, macros are dynamically typed functions, offering a lightweight escape from the rigid static type system whenever an escape is needed.
 
+
 ## ABC Assumptions and Idioms
 
 ### Annotations
@@ -334,21 +405,6 @@ Annotations are tokens with prefix `&` as in `{&seq}`, `{&lazy}`, or `{&cache}`.
 
 For debugging purposes, annotations tend to cause a program to fail fast, e.g. `{&nat}` provides a runtime type assertion that our argument is a natural number, or `{&error}` enables runtimes and developers both to record errors in the output. In some cases, these can be leveraged by static type analysis.
 
-### Structural Scopes
-
-ABC provides a simple mechanism for controlling scope of a computation. Assume we have Function that takes two inputs and produces three outputs. A structurally scoped application can be represented as:
-
-        [A][B][Function]bb{&tuple3}i
-
-What we're doing here is binding two arguments to the function, asserting that there are three outputs, then inlining those outputs into our main code. Dynamically, the `{&tuple3}` annotation requires a simple bit of reflection and otherwise we'll turn our result into an error value. 
-
-        [[A][B][C]]{&tuple3}    =>  [[A][B][C]]
-
-Like `{&nat}` and `{&lit}`, the `{&tuple3}` annotation is also a simple constraint that can contribute to static type analysis and may be eliminated from code if we can statically prove the behavior.
-
-### Value Sealing
-
-Seals come in pairs with a user-defined symbol - `{:foo}` and `{.foo}`. Seals are defined by simple rewrite semantics: `{:foo}{.foo}` will reduce to the empty program. In most cases, seals should be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`. However, it is possible to seal arbitrary sequences of values. Seals serve useful roles as lightweight dynamic type declarations and useful rendering hints for structured data.
 
 ### Runtime Error Reporting
 

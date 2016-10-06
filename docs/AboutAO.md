@@ -65,29 +65,6 @@ Named dictionaries are generally mutable. It is feasible to distribute developme
 
 In the latter case, global names need some strategy to resist conflict (otherwise we'll be forced to rename some word). This might be achieved by deriving from an existing registry (e.g. ICANN), or a more informal registry (e.g. someone maintains a webpage), or taking a secure hash of a public key. Etc.. 
 
-### Caveats
-
-This AO representation has many nice properties, but it isn't 100% great. Here are some weaknesses:
-
-1. AO files and ABC aren't very convenient for direct use by humans. They can work in a pinch. But AO is intended to be manipulated primarily through editable views like [claw](CommandLine.md) or an [application model](ApplicationModel.md).
-1. There is no support for *metadata* such as timestamps or commit messages. Developers are instead encouraged to represent metadata within an AO dictionary. This ensures metadata is accessible to Awelon application models or views.
-1. To rename a word, developers must explicitly rewrite every reference to that word. It may be necessary to update external `{%word@dict}` references, or retrain humans, when a word is very widely used.
-1. Updates apply only to whole definitions. Fortunately, it is easy to factor most AO code into smaller parts that can be updated independently, or to model a command pattern for append-only updates (cf. [application model](ApplicationModel.md).
-
-## AO Development
-
-AO development is based on ABC development, but the use of words augments this in many ways:
-
-* implicit targets for debugging, program animations
-* metadata and declarations, e.g. via `word.type`
-* embed tests and examples for each word in dictionary
-
-More broadly, use of symbolic structure via words provides a convenient platform for both stateful updates and computed views. The [application model](ApplicationModel.md) represents 'applications' within a stateful codebase. This is integrated with the real-world through publish-subscribe models and other RESTful techniques.
-
-Type declarations are something that must still be considered carefully with AO. Potential to support named types or human-level documentation for types could be very useful, as is potential to integrate additional type constraints with static type checking.
-
-AO does introduce an interesting new 'effect' that could be tracked for type safety: a context of named dictionaries upon which a computation might depend. This is important for understanding mutability. However, this context might be restricted at an AO security layer.
-
 ## AO Evaluation and Linking
 
 Dictionaries are the basic unit of AO evaluation. 
@@ -100,9 +77,15 @@ Evaluation operates on each definition in a dictionary. This may be a lazy proce
 
 Linking - the mechanical step of substituting a `{%word}` token by its evaluated definition - is performed only insofar as it enables evaluation to proceed. AO should not link if it just results in a trivial inlining of code.
 
-When linking a `{%word@dict}`, we must additionally rewrite undecorated tokens to add the `@dict` namespace. This rewrite is performed even when `@dict` names the dictionary we are currently evaluating. Explicit link structure is transitively preserved.
-
 Preserving link structure ensures human-meaningful symbols remain in our evaluated results. Further, these symbols will frequently have ad-hoc associative structure like `word.doc` and `word.type` useful for both humans and software agents that might render, extract, or otherwise interact with a definition. Preserving link structure is essential for Awelon project's application models.
+
+### Linking Between Dictionaries
+
+AO evaluation may occur in a context of named dictionaries, which may be accessed via `{%word@dict}`. 
+
+When linking `{%word@dict}`, we additionally rewrite undecorated tokens to include the `@dict` namespace. This is the case even when `@dict` names the current dictionary. Explicit link structure always preserves the requested dictionary name, even when multiple names refer to the same dictionary.
+
+Rewriting is not limited to link dependencies like `{%foo} => {%foo@dict}`. We will also rewrite value sealing tokens and active debugging gates - any user defined symbols from that namespace.
 
 ### Arity Annotations
 
@@ -219,7 +202,33 @@ An easy maintenance technique is perhaps to conservatively clear the word cache 
 
 A heuristic balance of precise and lazy cache maintenance may prove effective in the general case, e.g. based on an effort quota upon performing each dictionary update. 
 
-## Constraints on Words and Definitions
+
+## AO Development
+
+AO development is based on ABC development, but the use of words augments this in many ways:
+
+* implicit targets for debugging, program animations
+* metadata and declarations, e.g. via `word.type`
+* embed tests and examples for each word in dictionary
+
+More broadly, use of symbolic structure via words provides a convenient platform for both stateful updates and computed views. The [application model](ApplicationModel.md) represents 'applications' within a stateful codebase. This is integrated with the real-world through publish-subscribe models and other RESTful techniques.
+
+Type declarations are something that must still be considered carefully with AO. Potential to support named types or human-level documentation for types could be very useful, as is potential to integrate additional type constraints with static type checking.
+
+AO does introduce an interesting new 'effect' that could be tracked for type safety: a context of named dictionaries upon which a computation might depend. This is important for understanding mutability. However, this context might be restricted at an AO security layer.
+
+### Caveats
+
+This AO representation has many nice properties, but it isn't 100% great. Here are some weaknesses:
+
+1. AO files and ABC aren't very convenient for direct use by humans. They can work in a pinch. But AO is intended to be manipulated primarily through editable views like [claw](CommandLine.md) or an [application model](ApplicationModel.md).
+1. There is no support for *metadata* such as timestamps or commit messages. Developers are instead encouraged to represent metadata within an AO dictionary. This ensures metadata is accessible to Awelon application models or views.
+1. To rename a word, developers must explicitly rewrite every reference to that word. It may be necessary to update external `{%word@dict}` references, or retrain humans, when a word is very widely used.
+1. Updates apply only to whole definitions. Fortunately, it is easy to factor most AO code into smaller parts that can be updated independently, or to model a command pattern for append-only updates (cf. [application model](ApplicationModel.md).
+
+
+
+## Constraints on Words
 
 Words are constrained to be friendly in context of URLs, English text delimiters, HTML, [claw code](CommandLine.md), and AO dictionaries/streams. 
 
@@ -230,6 +239,8 @@ Summary of constraints on words:
 * must not start with numeral-like regex `[+-.]*[0-9]` 
 * must not start or end with . or : (period or colon)
 * no empty or enormous words, 1..30 bytes UTF-8.
+
+Dictionary names must be valid words. Further, most tokens (annotations, gates, sealers, unsealers) should be valid words modulo the prefix character.
 * dictionary names use the same constraints
 
 Words may be further limited in context of a given system, e.g. unicode normalization and case folding to reduce ambiguity, forbid unicode spaces and separators. 

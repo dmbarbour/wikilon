@@ -3,18 +3,6 @@
 
 This is an issue I've revisited many times, so I've decided to make a list of conclusions and reasons:
 
-## Memory Layout
-
-Each context will have one contiguous block of memory, page-aligned.
-
-        [(context)..(memory).....]
-
-Our memory region is divided into a context header and the main memory region. The goal here is to simplify both offset and absolute addressing within context memory. 
-
-There is no built-in semispace. However, there may be a lightweight indirection between what the user sees as the 'context' and what is used internally, so that we can model compacting collections by simply keeping at least one extra context of any given size available for compactions at the *environment* level. 
-
-A small pool of contexts is sufficient for compaction and - assuming use of many concurrent contexts - more efficient for space than use of a semispace per context.
-
 ## Word Sizes
 
 In favor of 64-bit:
@@ -50,6 +38,9 @@ This is the primary candidate at this time:
         Shallow Copy:   (1 == (x & 1))
         Action Type:    (6 == (6 & x))
         Tagged Item:    (4 == (5 & x))
+
+For minimalist ABC, small constants would frequently be singleton blocks, but small texts or binaries might also be viable. 
+
 
 The current candidate oriented towards [minimalist ABC](ABC_Minimalist.md). In this case, a cons cell is the common representation for a block or stack. An 'object' represents a value that can be bound, moved, or applied. An 'action' cannot be moved, and requires inputs, but is still first-class in context of rewriting as a basis for evaluation. For tagged objects and actions, the first byte (taking a `uint8_t*` pointer) offers more information about type.
 
