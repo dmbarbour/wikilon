@@ -309,16 +309,25 @@ Sum value types are generally a unification of their component value types.
 A *conditional behavior* is the conditional subprogram hold the condition. In ABC, we might capture a general form for our conditional behavior as:
 
         [[onTrue][onFalse]]ai
-        [[onLeft][onRight]]ai
         [[onOpt1][onOpt2]..[onOptK]]ai
 
-Effectively, we have an enumeration of options, one for each value type in our sum. The `ai` suffix will apply this in context of a `(SumType * Env)` program stack. The `SumType` may *presumably* modify the environment (e.g. to inject some data), and select one conditional action to further update the environment. 
+Presumably, this conditional behavior be applied in context of a `(Sum * Env)` environment where `Sum` selects exactly one conditional path and applies it to a (potentially modified) environment, ultimately producing an `Env'`. Unfortunately, it is impossible to infer this assumption from just the conditional behavior. For example, where we expect a boolean `[di]` or `[ad]`, we might instead receive `[[ca]aacai]` and perform `onTrue onFalse onTrue onTrue`. 
 
-Unfortunately, without the `SumType` in scope, it's difficult to validate this presumption. Most programming languages simplify this issue by introducing a dedicated syntax for conditional behavior - e.g. the `if` statement or pattern-matching `case` expression - from which we can clearly infer the sum type.
+Most programming languages simplify challenges surrounding conditional behavior by introducing a dedicated syntax - an `if` statement or a pattern-matching `case` expression - from which we can both infer the sum type and unify the output types. For ABC, we might use an annotations in the same role. Consider:
 
-ABC might leverage annotations for a similar purpose.
+        [[onTrue][onFalse]]{&cond}ai
+        [[onLeft][onRight]]{&cond}ai
+        [[onOpt1][onOpt2]..[onOptK]]{&cond}ai
 
+Here I propose the `{&cond}` annotation, which asserts we have a tuple of possible actions, that exactly one of those actions will be evaluated based on an external decision, and the rest will be dropped. Most importantly, this allows us to infer that the `Env'` output type should unify on all paths.
 
+Alternatively or additionally we can introduce annotations for widely useful, easily tested sum types like `{&bool}` or `{&opt}` or `{&either}`. 
+
+        type Bool       = True   | False
+        type Opt A      = Some A | None
+        type Either A B = Left A | Right B
+
+I do not know if the above options are a best choice of annotations. But it seems to me that use of annotations is at least an effective approach to support static type inference in context of conditional behavior.
 
 ### Type Annotations and Declarations
 
@@ -327,11 +336,12 @@ Tokens provide convenient anchors for static type inference. For example:
 * `{&nat}` - argument is embeddable as natural number
 * `{&lit}` - argument is embeddable as text literal
 * `{&tuple3}` - argument has form `[[A][B][C]]`
+* `{&cond}` - argument is tuple of conditional behaviors
 * `{&aff}` - argument may not be copied
 * `{&rel}` - argument may not be dropped
 * `{:foo}` - anything but `{.foo}` is type error
 
-However, tokens are not intended for ad-hoc metadata. They are meant for runtime applications.
+However, tokens are not intended for ad-hoc metadata.
 
 To support rich, human meaningful type documentation, we might use the [AO layer](AboutAO.md) to attribute type information to subprograms. For example, `word.type` may describe the type of `word` in a manner meaningful both to a type checker and a human. Type descriptions, in this case, would be first-class computable values. 
 
@@ -347,11 +357,13 @@ What we're doing here is binding two arguments to the function, asserting that t
 
 It's also easy to validate the action statically, in which case we can reduce the `bb{&tuple3}i` to `bbi` which will rewrite to just `i`, inlining `[foo]`. So when we have static validation of scope, the structure is trivally eliminated by simple rewrite rules. Otherwise, we may report the error immediately.
 
+*Aside:* Support for `{&tuple1}` is sufficient. However, for convenience, an ABC system might support `{&tuple0}`..`{&tuple9}`, and perhaps a `{&tuple}` that does not specify size.
+
 ### Value Sealing for Lightweight Types
 
 ABC introduces two tokens `{:foo}` and `{.foo}` to support symbolic value sealing, to resist accidental access to data. This is supported by a simple rewrite rule: `{:foo}{.foo}` will rewrite to the empty program. A program of the form `[A]{.foo}` can fail fast. In most cases, seals will be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`.
 
-During static type analysis, these type wrappers might serve as a useful constraint. Dynamically, in addition to serving as a fail-fast condition, we can leverage these symbols as extra hints to guide rendering or debugging.
+During static type analysis, these type wrappers should serve as a useful type constraint. Dynamically, in addition to serving as a fail-fast condition, we might leverage these symbols as hints to guide rendering or debugging.
 
 ### Substructural Types
 
@@ -396,15 +408,11 @@ For ABC, I propose introducing a `{&macro}` annotation. Usage:
 
 At this point, we may halt evaluation and pass the program to our static simple type checker. Macro evaluation is effectively considered *complete* the moment any value exists to its left, i.e. `[A]{&macro} => [A]`. If after evaluation our program still contains `{&macro}` annotations, we might call that program a macro. In the general case, macros are dynamically typed functions, offering a lightweight escape from the rigid static type system whenever an escape is needed.
 
-
 ## ABC Assumptions and Idioms
 
 ### Annotations
 
-Annotations are tokens with prefix `&` as in `{&seq}`, `{&lazy}`, or `{&cache}`. Annotations affect the ABC evaluator, tuning evaluation to improve performance or debugging. In general, annotations should not be used for anything that cannot be easily handled by an interpreter at runtime. Annotations not recognized by the runtime will be deleted during evaluation.
-
-For debugging purposes, annotations tend to cause a program to fail fast, e.g. `{&nat}` provides a runtime type assertion that our argument is a natural number, or `{&error}` enables runtimes and developers both to record errors in the output. In some cases, these can be leveraged by static type analysis.
-
+Annotations are tokens with prefix `&` as in `{&seq}` or `{&cache}`. Annotations are ad-hoc, defined by the runtime, but must have identity semantics. Within the limits of identity semantics, annotations can may used to improve performance, debugging, testing, static analysis and so on.
 
 ### Runtime Error Reporting
 
@@ -465,25 +473,12 @@ An animation strategy can be specified many ways:
 
 Animating on breakpoint is much nicer than animating on quota. Individual frames will be deterministic, modulo profiling data. The structure is much more predictable, which simplifies both compression and stable rendering. The animation strategy enables evaluation to be precisely controlled and focused to just the parts we're interested in observing or rendering.
 
-### Conditional Behavior
+### Testing
 
-We can Church encode true/false as values:
+Besides use of `{&error}` annotations to explicitly fail a test, we might support some simple reflection for testing purposes:
 
-        [OnTrue][OnFalse] true i  == OnTrue
-        [OnTrue][OnFalse] false i == OnFalse
+* `{&eqv}` - assert two values are structurally equivalent
+* `{&beqv}` - assert two values are behaviorally equivalent
 
-        true  = [di] (= #)
-        false = [ad]        
+These 
 
-Usefully, we don't actually need an 'if' action. Applying true or false does the job. But this is probably *not* the best approach to conditional behavior - it suffers 'boolean blindness'. Instead, it might be better to model a sum type like: `(a + b)` or `Left a | Right b`. Perhaps something like:
-
-        [A→C][B→C] [A]Left i  == A A→C
-        [A→C][B→C] [B]Right i == B B→C
-
-We'll need to see how these techniques work in practice. But as a general rule, the 'stack type' after a conditional behavior should be identical on both path. At least until we're ready to start dealing with dependent types.
-
-### Iteration and Termination
-
-ABC can support ad-hoc loops via a fixpoint combinator. For many use cases, fixpoint is unnecessary. Numbers, texts, and sequences enable iteration via simple application.
-
-As a general rule, ABC assumes correct computations will terminate. Use of annotation `{&lazy}` enables infinite structures to be represented transparently and efficiently, assuming they're only partially observed. 
