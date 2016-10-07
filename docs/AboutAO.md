@@ -16,7 +16,7 @@ The general proposal is as follows:
 * history patches are immutable, via secure hash
 * named dictionary references via `{%word@dict}`
 
-Concretely, a patch is a string or file with format:
+Concretely, a patch is a UTF-8 text with format:
 
         secureHashOfOrigin
         @word1 definition1
@@ -25,19 +25,19 @@ Concretely, a patch is a string or file with format:
 
 Prior to the first word, we may list a single secure hash that identifies a prior patch from which we inherit words. Naming a single origin by secure hash gives us a verifiable, linear, deeply immutable, content-addressable linked list history. The body of the patch is a sequence of `@word def` updates, each overwriting a word's prior definition. In case of multiple updates to a word, the last update wins. A word may be logically deleted by writing a trivial cycle like `@foo {%foo}`. 
 
+### Secure Hash
+
+For the specific secure hash, I propose use of BLAKE2b 360 bit secure hash, encoded in Crockford's Base32 (favoring lower case). BLAKE2b is a very efficient secure hash. This results in 72 characters, which seems an acceptable compromise between goals for uniqueness and aesthetics. If this is ever found to be unsuitable, we can change to another secure hash easily enough.
+
 ### Anonymous and Named Dictionaries
 
-Named dictionaries may be referenced from other dictionaries via `{%word@dict}` and are generally mutable. AO evaluation occurs in context of a set of named dictionaries (frequently an empty context). In the more general case (including patch histories) dictionaries are anonymous, and may only be referenced internally via `{%word}` tokens.
+Named dictionaries may be referenced from other dictionaries via `{%word@dict}` and are generally mutable. AO evaluation occurs in context of a set of named dictionaries - frequently an empty context. In the more general case (including patch histories) dictionaries are anonymous, and may only be referenced internally via `{%word}` tokens.
 
 Internally, words within a dictionary are referenced by `{%word}` without the dictionary name. When we link a word from another dictionary with `{%word@dict}`, the `@dict` decorator must be appended to any undecorated words in the linked code.
 
-### Secure Hash
+### Filesystem Layer
 
-I propose use of BLAKE2b 360 bit secure hash, encoded in Crockford's Base32 (favoring lower case). BLAKE2b is a very efficient secure hash. The limit of 72 characters seems an acceptable balance between goals for global uniqueness and aesthetics.
-
-### Filesystem
-
-At our filesystem layer, we'll encode a context of named dictionaries as a directory containing `myApp.ao` and the like. The name of the dictionary matches the filename (minus the `.ao` suffix). History patchfiles will use `secureHash.ao`. To avoid clutter, history files might be moved into a composite history archive. (Use of an archive simplifies memory mapping of multiple history objects that won't be mutated.)
+In a filesystem layer, we'll encode a context of named dictionaries as a directory containing `myApp.ao` and the like, one file per head. The name of the dictionary matches the filename (minus the `.ao` suffix). History patchfiles may additionally use `secureHash.ao`. To avoid clutter, history files might be moved into another directory or a composite history archive. (Use of an archive simplifies memory mapping of multiple history objects that won't be mutated.)
 
 ### Forking and Merging
 
@@ -225,8 +225,6 @@ This AO representation has many nice properties, but it isn't 100% great. Here a
 1. There is no support for *metadata* such as timestamps or commit messages. Developers are instead encouraged to represent metadata within an AO dictionary. This ensures metadata is accessible to Awelon application models or views.
 1. To rename a word, developers must explicitly rewrite every reference to that word. It may be necessary to update external `{%word@dict}` references, or retrain humans, when a word is very widely used.
 1. Updates apply only to whole definitions. Fortunately, it is easy to factor most AO code into smaller parts that can be updated independently, or to model a command pattern for append-only updates (cf. [application model](ApplicationModel.md).
-
-
 
 ## Constraints on Words
 

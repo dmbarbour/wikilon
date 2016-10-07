@@ -75,8 +75,8 @@ Literals encode a finite sequence of UTF-8 bytes. The chosen Church encoding is 
         "hello" == (#104, #101, #108, #108, #111)
         ""      == #
 
-        [A][B](foo,bar,baz)i == foo [[A][B](bar,baz)i] A
-        [A][B]#i             == B
+        [yield][done](foo,bar,baz)i == foo [[yield][done](bar,baz)i] yield
+        [yield][done]#i             == done
 
         [A]i == A;  i = [][]baad
         
@@ -94,7 +94,7 @@ Tokens have form `{foo}`, a short text wrapped in curly braces. Tokens enable sy
 * tokens with *identity* semantics for performance, debugging
 * tokens with *linking* semantics for structured development
 
-Tokens with *identity* semantics include seals, gates, and annotations. Seals support lightweight symbolic types. Gates are used for active debugging. Annotations serve ad-hoc performance and safety purposes. These are described later in this document. 
+Tokens with *identity* semantics include seals `{:db}{.db}`, gates `{@foo}`, and annotations `{&par}`. Seals support lightweight symbolic types. Gates are used for active debugging. Annotations serve ad-hoc performance and safety purposes. These are described later in this document. 
 
 ABC's favored linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. During evaluation, the token is substituted for the word's definition when doing so enables evaluation to proceed. 
 
@@ -147,7 +147,7 @@ Big-step rewriting becomes especially valuable when working with Church-encoded 
 
 Useful functions like `i` and `+` will become part of the ABC standard dictionary, effectively becoming bytecodes. However, the ABC standard dictionary moves very slowly and will have a rigorous vetting process. 
 
-In the mean time, we might achieve similar benefits through the [AO layer](AboutAO.md) by specifying a dictionary of runtime accelerated builtins. For example, we might implement `{%+@rt}`. This dictionary would be accessible for export (though may be read-only).
+In the mean time, we might achieve similar benefits through the [AO layer](AboutAO.md), e.g. by specifying a small, useful dictionary that will be accelerated by our runtime and enabling developers to derive from that.
 
 ### Fork/Join Parallelism
 
@@ -187,7 +187,10 @@ ABC's semantics admit rewrites for performance. For example:
         [i]b    =>
         bi      =>  i
         cd      =>
-        cad     =>  i
+        cw      =>  c
+        ad      =>  wdi         (easier tail calls)
+
+Rewrites can also be used to systematically recognize big step accelerators. For example, we might rewrite `[][]baad` or `[[]]aad` to `i`. 
 
 Unfortunately, rewrite optimizations tend to be ad-hoc and fragile. They are difficult to apply to dynamically constructed code, and are difficult to prove safe in the general case. So I would prefer not to rely on them, just take advantage where it's easy. If developers need to optimize code, they should make explicit a staged, intermediate language.
 
@@ -216,9 +219,9 @@ Laziness may be used to model infinite data structures - e.g. infinite streams, 
 Many annotations are used for performance:
 
 * `{&seq}` - shallow evaluation of subprogram 
-* `{&seq*}` - force deep evaluation of subprogram
 * `{&par}` - parallelize evaluation of subprogram
-* `{&lazy}` - don't evaluate until otherwise requested
+* `{&eval}` - perform full evaluation of subprogram
+* `{&lazy}` - delay evaluation until otherwise requested
 * `{&lit}` - force argument to text literal representation
 * `{&nat}` - force argument to natural number representation
 * `{&stow}` - move value to link layer, away from working memory
@@ -239,15 +242,17 @@ For fast interpretation, ABC has a few significant weaknesses:
 
 To overcome these weaknesses, we have at least two options.
 
-One option is to rewrite ABC to use another representation of bytecode internally that addresses these weaknesses. This might embed data with an address or offset, and bind linker tokens similarly. Direct interpreted performance may improve, though by how much is difficult to determine without profiling. The cost is greater complexity for translations in both directions, persistence, stowage, and incremental computing.
+One option is to rewrite ABC to use an alternative representation of bytecode internally, one that addresses these weaknesses. This might embed data with an address or offset, and bind linker tokens similarly. Direct interpreted performance may improve, though by how much is difficult to determine without profiling. The cost is complexity for translations in both directions, persistence, stowage, and incremental computing.
 
-Another option is to separately index the metadata needed to efficiently process an ABC string. This might be achieved by a hashtable mapping address or offset to ad-hoc metadata. This won't help with code locality, but it could reduce the issues of scanning to the end of a token or literal within a compact binary, and it would support binding of a token to its interpretation.
+Another option is to index and cache metadata to efficiently process an ABC string, separately from it. This could be achieved by a hashtable mapping address or offset to the metadata. This has some advantages - flexibility, easier serialization. 
+
+This won't help with code locality, but it could reduce the issues of scanning to the end of a token or literal within a compact binary, and it would support binding of a token to its interpretation.
 
 In context of a JIT compiler, I suspect a fast interpreter is less important than a simple representation. So the index on raw ABC may be the better option unless something about the other bytecode simplifies compilation.
 
 ## Static Type Safety for ABC
 
-ABC's behavior does not depend on any type judgements. Hence, ABC may be evaluated without static typing. However, static analysis of type safety can nonetheless offer significant benefits:
+ABC's behavior does not depend on any type judgements - no type driven dispatch or overloading. Hence, ABC may be evaluated without static typing. However, static analysis of type safety can nonetheless offer significant benefits:
 
 * a clean, robust, trustworthy codebase
 * type-sensitive projectional editors
@@ -259,60 +264,17 @@ It is my intention that most ABC codebases be strongly, statically type safe as 
 
 ### A Simple Static Type System
 
-ABC programs can be understood as pure functions operating upon a stack value. In a conventional functional language, our stack might be represented as a product type `(A * (B * C))`. In context of ABC, a value is a block - another function. We can assign a suitable type to each of our primitives:
+ABC programs can be understood as pure functions operating upon a stack value. For convenience, we can align type descriptions with program stack structure:
 
-        a   : ((E → E') * (A * E)) → (A * E')
-        b   : (((A * S) → S') * (A * E)) → ((S → S') * E)
-        c   : (A * E) → (A * (A * E))
-        d   : (A * E) → E
-        [F] : E → (type(F) * E)
+        a   : S A (S → S') → S' A
+        b   : S A (E A → E') → S (E → E')
+        c   : S A → S A A
+        d   : S A → S
+        [F] : S → S type(F)
 
-Our simple static type system must predict types for much larger programs. These simple primitives provide a basis, together with simple unification of type variables. In addition to simple linear unifications, operator `c` supports unification (and conflict detection) for multiple uses of a value.
+Each type list `S B A` is left associative, representing a product type `((S * B) * A)` with the 'top' of our stack on the right so we align with a program of form `S [B] [A]`. The leftmost type `S` effectively represents the remainder of the stack. In ABC, all other values are Church encoded and thus have function types. So in `S B A` the types `B` and `A` must be functions.
 
-### Conditional Behavior
-
-A major concern for any programming language and type system is conditional behavior. Most languages introduce a dedicated syntax and semantics - the `if` statement or a pattern matching `case` expression. In ABC, our conditional behaviors will instead be Church encoded. For example:
-
-        [onTrue][onFalse] true  i => onTrue
-        [onTrue][onFalse] false i => onFalse
-
-        true    : (OnF * ((E → E') * E)) → E'
-        true    = [di]   
-
-        false   : ((E → E') * (OnT * E)) → E'
-        false   = [ad]
-
-        type bool = true | false 
-        bool    : ((E → E') * ((E → E') * E)) → E'
-
-The type of `bool` here is simply a unification of the types for `true` and `false`. The approach for booleans can be generalized to generic sum types like `option` or `either`. For example:
-
-        [onLeft][onRight] [A] left i  => [A] onLeft
-        [onLeft][onRight] [B] right i => [B] onRight
-
-        type Left A = (((A*E)→E') * (R * E)) → E'
-        type Right B = (L * (((B*E)→E') * E)) → E'
-
-        left    : (A * E) → ((Left A) * E)
-        left    = [wdwi]b       
-
-        right   : (B * E) → ((Right B) * E)
-        right   = [wbad]b
-
-        type Either A B = Left A | Right B
-        Either A B : (((A*E)→E') * (((B*E)→E') * E) → E'
-
-However, the challenge of type checking conditional behavior is that the representation of conditional paths frequently independent from  generally separate from evaluation of the condition. Taking the conditional paths by themselves, we might have:
-
-        [[onLeft][onRight]]ai
-
-Applied to an `Either` type, this would behave as we expect. Unfortunately, we cannot locally infer that our argument is an `Either` type. For example, we might apply it to `[[ca]aacai]`, in which case our behavior will be `onLeft onRight onLeft onLeft`. And, without outside knowledge that this is intended to be a conditional option, it is unclear that this is an error.
-
-To support static type inference, we may introduce annotations. Example: 
-
-        [onOpt1][onOpt2][onOpt3]..[onOptK]{&condK}
-
-Here `{&condK}` would annotate a tuple of K conditional paths, suggesting that only one path will be taken and that all paths should unify on the output type. This should be adequate for most type inference. This isn't necessarily the best option in terms of dynamic enforcement, performance, editable view syntax, etc.. But I think there are many annotations that would be at least adequate in this role.
+These types for ABC's primitives together with simple techniques like type unification, can be leveraged for inference of much larger programs. However, there isn't much opportunity to detect inconsistencies from ABC primitives.
 
 ### Type Annotations and Declarations
 
@@ -320,15 +282,54 @@ Tokens provide convenient anchors for static type inference. For example:
 
 * `{&nat}` - argument is embeddable as natural number
 * `{&lit}` - argument is embeddable as text literal
+* `{&bool}` - argument is a boolean value
 * `{&tuple3}` - argument has form `[[A][B][C]]`
-* `{&cond}` - argument is tuple of conditional behaviors
 * `{&aff}` - argument may not be copied
 * `{&rel}` - argument may not be dropped
-* `{:foo}` - anything but `{.foo}` is type error
+* `{:foo}` - wrapped types, unwrap with `{.foo}`
 
-However, tokens are not intended for ad-hoc metadata.
+Given these tokens, we can detect many inconsistencies statically or at runtime. For example, it is obvious that `[A]{&aff}c` is an error, as is `[A]{.foo}` or `#42{&lit}` or `[[A][B]]{&tuple3}`. However, tokens tend to be limited in their expressiveness, oriented on things that are easy to check at runtime.
 
-To support rich, human meaningful type documentation, we might use the [AO layer](AboutAO.md) to attribute type information to subprograms. For example, `word.type` may describe the type of `word` in a manner meaningful both to a type checker and a human. Type descriptions, in this case, would be first-class computable values. 
+To support rich, human meaningful type documentation, we should additionally use the [AO layer](AboutAO.md) to attribute type information to subprograms. For example, `word.type` may declare the type of `word` in a manner meaningful both to a type checker and a human. Type descriptions, in this case, would be first-class computable values, and may prove more flexible or extensible 
+
+In any case, the presence of type annotations and declarations can provide a basis for detecting inconsistencies in the ABC program.
+
+### Typing Conditional Behavior
+
+A major concern for any programming language and type system is conditional behavior. In ABC, our conditional behaviors will instead be Church encoded. For example:
+
+        type Bool = True | False
+        [onTrue][onFalse] true  i => onTrue
+        [onTrue][onFalse] false i => onFalse
+        true  = [di]   
+        false = [ad]
+
+In practice, of course, computation of a boolean condition is frequently separated from expression of the `[onTrue][onFalse]` conditional paths. This makes it difficult to locally detect type errors or inconsistencies between `onTrue` or `onFalse` contingent on unification of environment `S` or `S'`. Most languages have dedicated syntax like the `if then else` keywords that make it easy to detect errors. 
+
+For ABC, we can leverage annotations in this role. Consider:
+
+        {&bool}[[onTrue][onFalse]]ai
+
+This subprogram expresses that `[onTrue][onFalse]` will be applied in a context with a boolean at the top of the stack. Our static type checker knows about booleans, and thus can determine the types of `onTrue` and `onFalse` should unify in useful ways, enabling local detection of inconsistent type errors.
+
+I would also like effective support for option and sum values:
+
+        type Opt A = Some A | None
+        [onSome][onNone] [A] some i     => [A] onSome
+        [onSome][onNone]     none i     =>     onNone
+
+        type Sum A B = Left A | Right B
+        [onLeft][onRight] [A] left i    => [A] onLeft
+        [onLeft][onRight] [B] right i   => [B] onRight
+
+        left    = [wdwi]b
+        right   = [wbad]b
+        some    = left
+        none    = false
+
+Support for `{&bool}`, `{&opt}`, and `{&sum}` should be sufficient in practice. Generalizing to more than two paths isn't critical.
+
+*Aside:* Conveniently, `{&bool}[[onTrue][onFalse]]ai` is structurally, semantically, and visually similar to an `if then else` expression. It is feasible to provide specialized presentations for a [claw-like](CommandLine.md) view of conditional expressions in ABC.
 
 ### Structural Scopes
 
@@ -336,17 +337,17 @@ ABC provides a simple mechanism for controlling scope of a computation. Assume w
 
         [A][B][foo]bb{&tuple3}i
 
-        [[A][B][C]]{&tuple3}    =>  [[A][B][C]]
-
 What we're doing here is binding two arguments to the function, asserting that there are three outputs, then inlining those outputs into our main code. Dynamically, the `{&tuple3}` annotation requires a simple bit of reflection. 
 
-It's also easy to validate the action statically, in which case we can reduce the `bb{&tuple3}i` to `bbi` which will rewrite to just `i`, inlining `[foo]`. So when we have static validation of scope, the structure is trivally eliminated by simple rewrite rules. Otherwise, we may report the error immediately.
+        [[A][B][C]]{&tuple3}    =>  [[A][B][C]]
 
-*Aside:* Support for `{&tuple1}` is sufficient. However, for convenience, an ABC system might support `{&tuple0}`..`{&tuple9}`, and perhaps a `{&tuple}` that does not specify size.
+We might expect an ABC system to support `{&tuple0}..{&tuple7}`. Support for `{&tuple1}` is sufficient, but support for a practical range is convenient.
+
+If we determine through static analysis that the `{&tuple3}` annotation is correct, the dynamic check can be bypassed, the annotation potentially removed entirely. So this annotation is suitable for both static and dynamic contexts.
 
 ### Value Sealing for Lightweight Types
 
-ABC introduces two tokens `{:foo}` and `{.foo}` to support symbolic value sealing, to resist accidental access to data. This is supported by a simple rewrite rule: `{:foo}{.foo}` will rewrite to the empty program. A program of the form `[A]{.foo}` can fail fast. In most cases, seals will be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`.
+ABC introduces two tokens `{:foo}` and `{.foo}` to support symbolic value sealing, to resist accidental access to data. This is supported by a simple rewrite rule: `{:foo}{.foo}` will rewrite to the empty program. A program of form `[A]{.foo}` or `{:foo}b` can fail fast. In most cases, seals will be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`.
 
 During static type analysis, these type wrappers should serve as a useful type constraint. Dynamically, in addition to serving as a fail-fast condition, we might leverage these symbols as hints to guide rendering or debugging.
 
@@ -393,19 +394,17 @@ For ABC, I propose introducing a `{&macro}` annotation. Usage:
 
 At this point, we may halt evaluation and pass the program to our static simple type checker. Macro evaluation is effectively considered *complete* the moment any value exists to its left, i.e. `[A]{&macro} => [A]`. If after evaluation our program still contains `{&macro}` annotations, we might call that program a macro. In the general case, macros are dynamically typed functions, offering a lightweight escape from the rigid static type system whenever an escape is needed.
 
-## ABC Assumptions and Idioms
+## Miscellaneous
 
-### Annotations
+### Runtime Type Errors
 
-Annotations are tokens with prefix `&` as in `{&seq}` or `{&cache}`. Annotations are ad-hoc, defined by the runtime, but must have identity semantics. Within the limits of identity semantics, annotations can may used to improve performance, debugging, testing, static analysis and so on.
+While static type checking is optimal, runtime type errors are possible with `{&macro}` or if we do not bother to type check. In addition, developers may perform dynamic assertions, or express partial functions, in ways that a type checker cannot readily handle.
 
-### Runtime Error Reporting
-
-To simplify error reporting and debugging, we'll want to record known errors in the generated program. There are a number of ways to achieve this. To accomplish this, we can use an `{&error}` annotation around a bad subprogram. An evaluator can freely inject the error annotation, delimiting the bad code:
+To simplify error reporting and debugging, we'll want to record known errors in the generated program. To accomplish this, we can use an `{&error}` annotation around a bad subprogram. An evaluator can freely inject the error annotation, delimiting the bad code:
 
         #42{&lit}       =>  [#42{&lit}]{&error}i
         [A]{&aff}c      =>  [[A]{&aff}c]{&error}i
-        [A]{:s}d        =>  [[A]{:s}d]{&error}i
+        {:s}d           =>  [[A]{:s}d]{&error}i
         [[A]]{&tuple2}  =>  [[A]]{&tuple2}{&error}
 
 Developers can freely specify errors, construct ad-hoc error values.
@@ -460,10 +459,11 @@ Animating on breakpoint is much nicer than animating on quota. Individual frames
 
 ### Testing
 
-Besides use of `{&error}` annotations to explicitly fail a test, we might support some simple reflection for testing purposes:
+For testing purposes, it is frequently useful to assert that two values match.
+
+I'd rather avoid this sort of ad-hoc reflection at runtime. But it could be supported at the AO layer, e.g. by specifying test objects with expected and actual results. If necessary, however, we could introduce some annotations for the role:
 
 * `{&eqv}` - assert two values are structurally equivalent
 * `{&beqv}` - assert two values are behaviorally equivalent
 
-These 
-
+Behavioral equivalence might be tested by some ad-hoc combination of static analysis or fuzz testing.
