@@ -41,7 +41,7 @@ ABC has only four primitive combinators `abcd`.
            [A]c == [A][A]       (copy)
            [A]d ==              (drop)
 
-In addition to these four combinators, we have the `[]` block structure. A primitive ABC program consists of a stream of `[abcd]`. The blocks should be properly balanced, i.e. every `[` has a matching `]` and vice versa. 
+In addition to these four combinators, we have the `[]` block structure. A primitive ABC program consists of a stream of `[abcd]`. The blocks must be properly balanced, i.e. every `[` has a matching `]` and vice versa. 
 
 Non-primitive ABC program must be reducible to a primitive ABC program by expanding data representations with their Church encodings, inlining linker tokens, eliminating other tokens. Doing so would hurt performance and hinder debugging, but would not affect the observable results. 
 
@@ -100,20 +100,29 @@ ABC's favored linking model is [Awelon Object (AO)](AboutAO.md), which introduce
 
 ### ABC Dictionary
 
-ABC includes a standard dictionary of opcodes defined in terms of an `[abcd]` string. This dictionary will gradually develop with the motivation to improve:
+ABC includes a standard dictionary of opcodes defined in terms of expansion to a primitive ABC string. This dictionary will gradually develop with the motivation to improve:
 
 * performance and optimization
 * data entry and extraction
 
-The initial standard dictionary consists only of opcodes `#1234567890`. These support both motivations, and were deemed essential for effective data entry. I might also add inline, swap, and compose. Eventually, ABC might include:
+The initial standard dictionary consists only of opcodes `#1234567890`. These support both motivations, and were deemed essential for effective data entry. I might also add inline, swap, and compose. 
+
+        [A]i    == A        (inline)
+        [A][B]w == [B][A]   (swap)
+        [A][B]o == [A B]    (compose)
+
+        i = []wad
+        w = []ba
+        o = [wai]bb
+
+Eventually, ABC's extended dictionary will support:
 
 * natural number arithmetic
 * binary and list processing
 * floating point number models
 * linear algebra, matrix math
+* process network evaluations
 * polymorphic records and variants
-* a Haskell style `runST` monad
-* a futures and promises monad
 
 The ABC standard dictionary will be carefully curated and vetted, and thus moves very slowly. Fortunately, use of [Awelon Object (AO) dictionaries](AboutAO.md) supports similar benefits without rigorous standardization. Use of runtime built-in AO dictionaries can provide an empirical testbed for potential ABC dictionary extensions.
 
@@ -132,20 +141,13 @@ A runtime has discretion to deviate from this strategy. Evaluation order doesn't
 
 ### Big Step Accelerators
 
-ABC performance is achieved primarily by big-step rewriting with known functions. For example, consider the useful inline combinator `i`:
+ABC performance is achieved primarily by big-step rewriting with known functions. For example, a runtime can evaluate `i` much more efficiently than its expanded definition `[][]baad`. Hence, we might call `i` an accelerator. 
 
-        [A]i == A
-        i = [][]baad
+Big-step rewriting becomes especially valuable when working with Church-encoded data structures that might be given a more efficient representation under the hood. For example, natural numbers constructed with `#1234567890` might be encoded as simple machine words. Upon doing so, we may benefit from accelerating `+` so we can directly add compact machine words rather than expand to a Church encoding. Efficient processing of texts, vectors, binaries, matrices, process networks, etc. is feasible.
 
-We can evaluate `i` much more efficiently than `[][]baad`.
+Useful functions like `i` and `+` will become part of the ABC standard dictionary, effectively becoming bytecodes. However, the ABC standard dictionary moves very slowly and will have a rigorous vetting process. 
 
-Big-step rewriting becomes especially valuable when working with Church-encoded data structures. For example, if we know some function `+` is equivalent to addition when applied to numbers, then we can efficiently rewrite `#23 #19 +` to `#42`. The runtime/compiler can stick to *compact* representations rather than expanding the Church encoding. Efficient processing of massive texts, vectors, binaries, matrices, etc. is feasible.
-
-Useful functions like `i` and `+` should become part of the ABC standard dictionary, effectively becoming bytecodes. However, the ABC standard dictionary moves very slowly and will have a rigorous vetting process. 
-
-In the mean time, we can achieve similar (albeit less portable) benefits by having a runtime provide a built-in [AO dictionary](AboutAO.md), and perhaps recognize built-ins from other popular runtimes. For example, wikilon runtime could provide `{%i@rt}` and `{%+@rt}`. The dictionary of built-ins should be subject to normal perusal and export.
-
-*Aside:* Use of built-in functions avoids need for sophisticated recognition algorithms. It is possible that an optimizer could recognize `[][]baad` and replace it by `{%i@rt}`, but it is unnecessary to do so.
+In the mean time, we might achieve similar benefits through the [AO layer](AboutAO.md) by specifying a dictionary of runtime accelerated builtins. For example, we might implement `{%+@rt}`. This dictionary would be accessible for export (though may be read-only).
 
 ### Fork/Join Parallelism
 
@@ -187,11 +189,7 @@ ABC's semantics admit rewrites for performance. For example:
         cd      =>
         cad     =>  i
 
-Introducing accelerators like `i = [][]baad` can simplify recognition of rewrite optimizations. 
-
-Rewrite optimizations are unfortunately ad-hoc and fragile. They rely heavily on ad-hoc detection, and even when detected there might be more than one possible rewrite. They can also be difficult to prove correct in the more general case. Thus, while we could use rewrite optimizations for loop fusions like `map [G] map => [G] compose map`, I think it is generally preferable to make the intermediate structure explicit. 
-
-AO may eventually provide some means to specify rewrite optimizations and prove their safety.
+Unfortunately, rewrite optimizations tend to be ad-hoc and fragile. They are difficult to apply to dynamically constructed code, and are difficult to prove safe in the general case. So I would prefer not to rely on them, just take advantage where it's easy. If developers need to optimize code, they should make explicit a staged, intermediate language.
 
 ### Stowage and Caching
 
@@ -271,63 +269,50 @@ ABC programs can be understood as pure functions operating upon a stack value. I
 
 Our simple static type system must predict types for much larger programs. These simple primitives provide a basis, together with simple unification of type variables. In addition to simple linear unifications, operator `c` supports unification (and conflict detection) for multiple uses of a value.
 
-### Typing Conditional Behavior
+### Conditional Behavior
 
-A major concern for any type system is conditional behavior. 
-
-In ABC, we model conditional behavior by a Church encoding. Consider:
+A major concern for any programming language and type system is conditional behavior. Most languages introduce a dedicated syntax and semantics - the `if` statement or a pattern matching `case` expression. In ABC, our conditional behaviors will instead be Church encoded. For example:
 
         [onTrue][onFalse] true  i => onTrue
         [onTrue][onFalse] false i => onFalse
 
-In this case, `true` may be modeled as `[di]`, and `false` as `[ad]`. Types:
-
         true    : (OnF * ((E → E') * E)) → E'
+        true    = [di]   
+
         false   : ((E → E') * (OnT * E)) → E'
+        false   = [ad]
 
         type bool = true | false 
         bool    : ((E → E') * ((E → E') * E)) → E'
 
-The type of `bool` is clearly a unification for the types of `true` and `false`. 
-
-This generalizes easily to data carrying sum types. For example:
+The type of `bool` here is simply a unification of the types for `true` and `false`. The approach for booleans can be generalized to generic sum types like `option` or `either`. For example:
 
         [onLeft][onRight] [A] left i  => [A] onLeft
         [onLeft][onRight] [B] right i => [B] onRight
 
-        left    : (A * E) → ((Left A) * E)
-        right   : (B * E) → ((Right B) * E)
+        type Left A = (((A*E)→E') * (R * E)) → E'
+        type Right B = (L * (((B*E)→E') * E)) → E'
 
-        Left A  : (((A*E)→E') * (R * E)) → E'
-        Right B : (L * (((B*E)→E') * E)) → E'
+        left    : (A * E) → ((Left A) * E)
+        left    = [wdwi]b       
+
+        right   : (B * E) → ((Right B) * E)
+        right   = [wbad]b
 
         type Either A B = Left A | Right B
         Either A B : (((A*E)→E') * (((B*E)→E') * E) → E'
 
-Sum value types are generally a unification of their component value types. 
+However, the challenge of type checking conditional behavior is that the representation of conditional paths frequently independent from  generally separate from evaluation of the condition. Taking the conditional paths by themselves, we might have:
 
-A *conditional behavior* is the conditional subprogram hold the condition. In ABC, we might capture a general form for our conditional behavior as:
+        [[onLeft][onRight]]ai
 
-        [[onTrue][onFalse]]ai
-        [[onOpt1][onOpt2]..[onOptK]]ai
+Applied to an `Either` type, this would behave as we expect. Unfortunately, we cannot locally infer that our argument is an `Either` type. For example, we might apply it to `[[ca]aacai]`, in which case our behavior will be `onLeft onRight onLeft onLeft`. And, without outside knowledge that this is intended to be a conditional option, it is unclear that this is an error.
 
-Presumably, this conditional behavior be applied in context of a `(Sum * Env)` environment where `Sum` selects exactly one conditional path and applies it to a (potentially modified) environment, ultimately producing an `Env'`. Unfortunately, it is impossible to infer this assumption from just the conditional behavior. For example, where we expect a boolean `[di]` or `[ad]`, we might instead receive `[[ca]aacai]` and perform `onTrue onFalse onTrue onTrue`. 
+To support static type inference, we may introduce annotations. Example: 
 
-Most programming languages simplify challenges surrounding conditional behavior by introducing a dedicated syntax - an `if` statement or a pattern-matching `case` expression - from which we can both infer the sum type and unify the output types. For ABC, we might use an annotations in the same role. Consider:
+        [onOpt1][onOpt2][onOpt3]..[onOptK]{&condK}
 
-        [[onTrue][onFalse]]{&cond}ai
-        [[onLeft][onRight]]{&cond}ai
-        [[onOpt1][onOpt2]..[onOptK]]{&cond}ai
-
-Here I propose the `{&cond}` annotation, which asserts we have a tuple of possible actions, that exactly one of those actions will be evaluated based on an external decision, and the rest will be dropped. Most importantly, this allows us to infer that the `Env'` output type should unify on all paths.
-
-Alternatively or additionally we can introduce annotations for widely useful, easily tested sum types like `{&bool}` or `{&opt}` or `{&either}`. 
-
-        type Bool       = True   | False
-        type Opt A      = Some A | None
-        type Either A B = Left A | Right B
-
-I do not know if the above options are a best choice of annotations. But it seems to me that use of annotations is at least an effective approach to support static type inference in context of conditional behavior.
+Here `{&condK}` would annotate a tuple of K conditional paths, suggesting that only one path will be taken and that all paths should unify on the output type. This should be adequate for most type inference. This isn't necessarily the best option in terms of dynamic enforcement, performance, editable view syntax, etc.. But I think there are many annotations that would be at least adequate in this role.
 
 ### Type Annotations and Declarations
 
