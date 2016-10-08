@@ -260,7 +260,7 @@ ABC's behavior does not depend on any type judgements - no type driven dispatch 
 * typeful rendering and program extraction
 * JIT compilation without dynamic type checks
 
-It is my intention that most ABC codebases be strongly, statically type safe as the default. Some bypasses may be permitted, but would be primarily intended for static computation - cf. macro evaluation, below 
+It is my intention that most ABC codebases be strongly, statically type safe as the default. Explicit bypass of the type system will be supported, cf. dynamic evaluation below.
 
 ### A Simple Static Type System
 
@@ -294,9 +294,9 @@ To support rich, human meaningful type documentation, we should additionally use
 
 In any case, the presence of type annotations and declarations can provide a basis for detecting inconsistencies in the ABC program.
 
-### Typing Conditional Behavior
+### Conditional Behavior
 
-A major concern for any programming language and type system is conditional behavior. In ABC, our conditional behaviors will instead be Church encoded. For example:
+A major concern for any programming language and type system is conditional behavior. Most languages have a dedicated syntax and semantics, e.g. the `if then else` expression. In ABC, our conditional behaviors will instead be Church encoded. For example:
 
         type Bool = True | False
         [onTrue][onFalse] true  i => onTrue
@@ -304,9 +304,7 @@ A major concern for any programming language and type system is conditional beha
         true  = [di]   
         false = [ad]
 
-In practice, of course, computation of a boolean condition is frequently separated from expression of the `[onTrue][onFalse]` conditional paths. This makes it difficult to locally detect type errors or inconsistencies between `onTrue` or `onFalse` contingent on unification of environment `S` or `S'`. Most languages have dedicated syntax like the `if then else` keywords that make it easy to detect errors. 
-
-For ABC, we can leverage annotations in this role. Consider:
+In practice, of course, computation of a boolean condition is frequently separated from expression of the `[onTrue][onFalse]` conditional paths. This makes it difficult to locally detect type errors or inconsistencies between `onTrue` or `onFalse` contingent on unification of environment. To detect type errors early, we need to inform our type system that our conditional paths will be evaluated in context of a boolean. We can leverage annotations in this role. For example:
 
         {&bool}[[onTrue][onFalse]]ai
 
@@ -373,32 +371,35 @@ Static typing requires precomputing this information, i.e. tracking which values
 
 In this case, we have a conflict if `A&aff` (a value annotated affine) is used where `A!aff` (a value that is not affine, a copyable value) is needed.
 
-### Macro Evaluation
+### Dynamic Evaluation
 
-Many useful programming styles are difficult to statically typecheck. Consider:
+Many useful programming styles are difficult to statically typecheck. Example:
 
         "abcx → ax^2 + bx + c" runPoly
 
-Assume this constructs a program that takes four arguments - a, b, c, x - then computes the specified polynomial. The number of arguments we take depends on polynomial's text value. Providing a type judgement for `runPoly` is feasible but non-trivial, requiring sophisticated dependent types and proofs that are inconvenient to embed in a bytecode.
+Assume this constructs a program that takes four arguments - a, b, c, x - then computes the specified polynomial. The number of arguments we take depends on polynomial's text value. Providing a static type judgement for `runPoly` is feasible but non-trivial, generally requiring sophisticated dependent types and proofs.
 
 Similar scenarios exist for print formatting and DSLs.
 
-Fortunately, we do not need sophisticated types in these cases and many others. The polynomial text is right there. Statically. So, even if we cannot provide a type for `runPoly`, we might be able to provide a simple type for the larger program if we partially evaluate `runPoly`. We only need some way to tell our system to defer type analysis until after partial evaluation. This is the province of *macros* in many languages. 
+Fortunately, we do not need sophisticated types. The polynomial text is right there. Statically. So, even if we cannot easily provide a static type for `runPoly`, we might be able to provide a simple type for the larger program after we partially evaluate `runPoly`. We only need some means to defer static type analysis until after some partial evaluation. 
 
-For ABC, I propose introducing a `{&macro}` annotation. Usage:
+For ABC, I propose a `{&dyn}` annotation. Usage:
 
         "abcx → ax^2 + bx + c" runPoly =>
-            "abcx → ax^2 + bx + c" compilePoly {&macro} i =>
-            [polynomial behavior]{&macro} i =>
+            "abcx → ax^2 + bx + c" compilePoly {&dyn} i =>
+            [polynomial behavior]{&dyn} i =>
             [polynomial behavior]i
 
-At this point, we may halt evaluation and pass the program to our static simple type checker. Macro evaluation is effectively considered *complete* the moment any value exists to its left, i.e. `[A]{&macro} => [A]`. If after evaluation our program still contains `{&macro}` annotations, we might call that program a macro. In the general case, macros are dynamically typed functions, offering a lightweight escape from the rigid static type system whenever an escape is needed.
+At this point we may halt evaluation and pass the program to our static type checker. Dynamic evaluation is considered complete after the `{&dyn}` annotations are eliminated (via `[A]{&dyn} => [A]`). 
+
+If a program contains `{&dyn}` annotations even after partial evaluations, we may call that program dynamically typed. Developers are free to construct dynamically typed software. But if dynamic partial evaluation can complete statically, it can readily be used for macro-like metaprogramming. An ABC software system may thus consist of an ad-hoc mix of fluid and rigid software components.
+
 
 ## Miscellaneous
 
 ### Runtime Type Errors
 
-While static type checking is optimal, runtime type errors are possible with `{&macro}` or if we do not bother to type check. In addition, developers may perform dynamic assertions, or express partial functions, in ways that a type checker cannot readily handle.
+While static type checking is optimal, runtime type errors are possible with `{&dyn}` or if we do not bother to type check. In addition, developers may perform dynamic assertions, or express partial functions, in ways that a type checker cannot readily handle.
 
 To simplify error reporting and debugging, we'll want to record known errors in the generated program. To accomplish this, we can use an `{&error}` annotation around a bad subprogram. An evaluator can freely inject the error annotation, delimiting the bad code:
 
@@ -467,3 +468,8 @@ I'd rather avoid this sort of ad-hoc reflection at runtime. But it could be supp
 * `{&beqv}` - assert two values are behaviorally equivalent
 
 Behavioral equivalence might be tested by some ad-hoc combination of static analysis or fuzz testing.
+
+### GADTs
+
+[Generalized Algebraic Data Types](http://en.wikipedia.org/wiki/Generalized_algebraic_data_type) are a powerful and expressive idea from purely functional languages, originating in Haskell. I would like to support them for ABC systems, if feasible.
+
