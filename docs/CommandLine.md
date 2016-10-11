@@ -36,15 +36,15 @@ To express natural numbers directly, rather than naturals wrapped as integers, r
 
 Claw optimizes for inline literals:
 
-        "hello, world"          \"
+        "hello, world"          "
                                  hello, world
                                 ~ lit
 
 Inline literals are restricted to exclude LF (10) or double-quote (34). Ideally, they should be relatively short - larger literals should be represented by separate words. Inline literals desugar into multi-line literals followed by the word `lit` to permit character conversions. 
 
-Multi-line literals are prefixed by `\"` and an initial empty line. Lines with text must be indented by an SP character. (Empty lines don't need to be indented.)
+Multi-line literals are prefixed by `"` and an initial empty line. Lines with text must be indented by an SP character. (Empty lines don't need to be indented.)
 
-        some commands \"
+        some commands "
          This is an example multi-line
          literal with "double quotes".
         ~ more commands
@@ -66,7 +66,7 @@ Note that `eseq` is our empty sequence, and that `()` is a sequence containing a
 
 Tokens are represented directly in Claw, e.g. `{%foo}` in Claw will be represented directly by `{%foo}` in the bytecode. AO words desugar to the appropriate token, so `foo` desugars to `{%foo}` (assuming the empty namespace). Blocks are represented directly but contain claw code rather than raw bytecode. Thus, `[foo] bar` will desugar to `[{%foo}]{%bar}`.
 
-ABC bytecodes are embedded as word-like structures with an escape prefix: `\dcba` expands to the sequence of four ABC operators `dcba`. 
+ABC bytecodes don't need any special effort: the words `a` `b` `c` and `d` simply refer to our four primitive bytecodes. In Claw, these will be expanded into one word per opcode.
 
 Whitespace formatting bytecode (LF or SP) may be preserved by following each LF or SP in claw with an extra SP. Use of whitespace can be used to force a separation between claw views.
 
@@ -84,25 +84,6 @@ Claw could easily support inline C-style comments. A simple pattern of introduci
 The problems with inline comments are multifarious. Inline comments bulk up code that would be better explained, understood, and documented by factoring it into smaller components. Inline comments are second class, difficult to access or abstract. As documentation, they're weak because we cannot integrate graphical or interactive examples or flexible type setting. 
 
 For these reasons, Claw eschews inline comments in favor of separate documentation attributes, e.g. using words like `foo.doc` to document word `foo`. 
-
-### Claw Namespaces (Tentative)
-
-*Aside:* This should be reconsidered in presence of an `{%word@resource}` AO layer linking model. It may be I want claw namespaces to operate with the linking model. But I'm uncertain about this. Until I'm certain one way or the other, I my delay use of claw namespaces.
-
-Namespaces are a mixed feature. On one hand, they may lead to concise, readable code. On the other, namespace management may become boiler-plate, and namespaces themselves are a weak form of context sensitivity that hinders refactoring and local reasoning about code. 
-
-Claw provides very simplistic support for a single namespace per region of code. The namespace is simply added as a prefix to every word in the desugaring.
-
-        #foo: -7 bar
-        [{&_foo:_}]d#7{%foo:int}{%foo:negate}{%foo:bar}
-
-Here the pattern `[{&_foo:_}]d` corresponds to the `#foo:` namespace declaration. It's modeled as a dropped block containing an annotation, to ensure it has no semantics beyond local rendering. The extent of the namespace declaration is the end of the current block or until the next namespace declaration.
-
-Claw will need to test for each word whether it parses as a word in the current namespace. E.g. in namespace `#foo:`, the word `foo:9` would render as simply `9`, which does not parse as a word. Hence, we'd need to use the token `{%foo:9}` instead.
-
-*Aside:* For claw, one motivation for namespaces is to support experimental programming environments where we might favor different sequence or number models.
-
-*Note:* It is feasible to support multiple namespaces, but I'd prefer to avoid doing so unless there is stronger need. A visual claw could perhaps use colorization for rendering multiple namespaces and suffixes, and a smart editor for input of words.
 
 ## Future Extensions
 

@@ -1,45 +1,53 @@
 
 # Wikilon Performance
 
-I don't expect Wikilon to be blazing fast, but I would like to give it the best chance possible. I expect to at least achieve a reasonable level of performance: enough to develop a multiplayer game server, or a robot control system. Developing simple interactive fictions, turtle graphics, or visual novels should be within easy reach. Wikilon shouldn't be a *toy*, but for people to take it seriously we need serious performance.
+I don't expect Wikilon to be blazing fast. But I want it to be reasonably performance competitive before other people start judging it. 
 
-I have multiple strategies to achieve performance, which should stack nicely:
+My proposed performance strategies are as follows:
 
-1. Internal bytecode representation. Quoted values. Text and static value areas. This internal bytecode will have a trivial expansion back into Awelon bytecode, such that we don't need to store our program any other way. It should also have a trivial indexing mechanism, so we can track where we halt in case of failure.
+1. Implement a runtime in a fast low-level language
+1. Index ABC binaries for fast linking and processing
+1. Anonymous, accelerated AO dictionary for common ops
+1. JIT compilation for ABC code for faster evaluation
+1. In-place update for uniquely owned data structures
+1. In-place structure traversals (e.g. Morris algorithm)
+1. Large value stowage for larger than memory data
+1. Shared structures for ABC binaries, stowage, and JIT
+1. Extensive use of caching, explicit and word level
+1. Simple par/seq parallelism independent computations
+1. KPN accelerators for large-scale concurrent parallelism
+1. Linear algebra accelerators for small-scale parallelism
 
-2. Large-value *stowage*. A `{&stow}` annotation tells a runtime to tuck large values into a database, like ABC value resources. Structure sharing is implicit. This allows us to work with larger-than-memory values, e.g. values modeling entire databases. Structure sharing supports Wikilon's application model: we can expect to recompute values many times. Stowage might also find use for discretionary sealers and unsealers, just for structure sharing.
+Because ABC is purely functional, I can focus on throughput rather than latency, and I can allow some recomputation if it doesn't occur too frequently. 
 
-3. Parallelism. Use `{&fork}`, `{&join}`, and asynchronous futures to model multi-process parallelism within a computation. 
+## Partial Evaluations and Quotas
 
-4. Memory and GC per-thread. Dictionary application threads are truly *pure*, so there is very little sharing between them to worry about. It's easy to treat threads as processes with whole-arena GC. This gives us very predictable GC properties. This greatly augments stowage performance: we can perform it latently as part of GC, which saves us from stowing transient values. Further, we can heuristically stow values when memory runs low, instead of increasing the memory arena. Our arenas can be reasonably large (e.g. 10-20MB, plus binaries and texts, perhaps with multiple layers: nursery and generational). 
+ABC uses a rewrite semantics, which has some nice properties. We can continue computations from intermediate results, for example. And most runtime errors can be recorded directly in the program result using `{&error}` annotations. 
 
-5. Simplification and partial-evaluation of bytecode. A lot of useful work can be performed directly on our bytecode representations or other intermediate representations.
+There is at least one source of runtime errors that I cannot record in the output: halting on time/space quota. When I hit any quota limit, computation must halt in a valid state so it can continue later. What I'd like to do is ensure the 'root' structure is always in a valid state, so even if I suddenly halt the most I lose some progress that I may recompute later.
 
-6. Efficient deep copy. It is feasible to delay copy of deep structure by introducing coarse-grained memory-local reference counts when copying a large data structure. It is also feasible to delay analysis of whether a value is copyable (e.g. marking both copies as assumed copyable, and marking only one of them for validation). Analysis of 'copyable' on a proposed stowage target can be delayed until after stowage. Either way, we can limit the amount of work performed by a copy operator. Special values (blocks, vectors, large texts) might automatically use a reference count. Stowed values track their own copyability properties. (Other ideas: consider tracking substructural properties in pointer bits?)
+## Caching and Memoization
 
-7. ABCD-like accelerators. We can recognize specific subprograms and optimize for them. This includes optimized data representations. I especially want ABCD-like accelerations for: vector processing, working with binaries, models of floating point computations. Vectors, binaries, etc. can include their own reference counts, such that we can easily test whether a vector is unique when deciding copy-on-update vs. update-in-place. Affine vectors thus become the default behavior, with O(1) updates. Splits and rejoins on affine vectors can also be made very efficient, i.e. if we 'split' an affine vector, we get two affine vectors. If we later 'rejoin' affine vectors having adjacent storage, we can recombine them into a larger affine vector without copies. This allows very efficient fork-join behaviors.
+ABC will support a generic `[computation]{&cache}` annotation that can be used for ad-hoc caching in the style of memoization. An implicit goal is to ensure caching is preserved across independent forks or versions of a dictionary
 
-8. Compilation of bytecode - AOT, JIT, on request by `{&compile}` annotations on a block. Compiled code might include a model of registers and jumps for use within loopy code. We should support an ad-hoc mix of interpreted and compiled code. Ideally, compiled code is easily cached and persisted (e.g. via stowage). Interpretation will be implemented first, of course, but it should be trivial to introduce compiled code.
+## Static Typing for Performance?
 
-9. Static or gateway typing. I can push type analysis to the edges of the program, make assertions about which values are copyable, which are numbers, force values to their target data structures. Then I can use an optimized interpreter or compiled region that assumes type safety. This is especially valuable for loopy code.
+ABC will be statically typed where feasible, though I've introduced a `{&dyn}` annotation for programs whose structure is relatively difficult to predict. 
 
-10. Caching and memoization. Pure computations of AO should be relatively easy to memoize and cache. Structure sharing simplifies caching for large values. We can represent active or lazy computations in a cache: ABC can easily represent its own complete continuation. Effective caching is essential to the [dictionary applications model](ApplicationModel.md).
+In ABC, all values are ultimately Church encoded. It isn't clear to me that static typing will much improve performance, unless I also isolate *representation* of values - e.g. knowing that my Church encoded natural is represented as a runtime word. In that case, I might benefit from removing representation-checks from JIT compiled code. 
 
-Haskell's high level data structures are difficult to integrate with Haskell's low-level JIT code. Haskell's GC is nice, but it requires expensive interactions (ephemeron tables, etc.) with stowage and VCache.
+OTOH, it may be I can use [basic block versioning](https://pointersgonewild.com/2015/09/24/basic-block-versioning-my-best-result-yet/) for JIT representations independently of static or dynamic types.
 
-My new plan is:
+## Accelerators
 
-* implement performance-critical kernel in C
-* leverage LLVM (or Clang) as a basis for JIT
-* integrate LMDB as the basis for stowage
-* support lightweight threads via `{&fork}`
-* limit number of passive computation threads
-* dictionaries modeled as ABC values with stowage
-* support 'named root' values, similar to VCache
+Acceleration for collections processing will be valuable. Optimally, I can support GPGPUs by accelerating linear algebra, which in turn may require accelerating floating point number representations.
 
-I'm feeling very good about having this viable path forward after months (arguably, over a year, though most of that was refining the Wikilon application models) fighting with Haskell for performance. 
+Accelerating Kahn Process Networks (together with value stowage) will be my primary basis for truly massive scaling of computations to distributed systems. KPNs are effectively purely functional flow-based programming with lightweight composition and communication. One can extract outputs and inject inputs in parallel with processing. First-class KPNs might even serve as a 'better' OOP object.
 
-With high performance evaluation and caching, Wikilon becomes a super-spreadsheet of sorts. Especially if we later support GPU computations for rendering and physics, or remote distributed comptuations.
+
+
+
+
 
 ## Stowage for Large Values
 

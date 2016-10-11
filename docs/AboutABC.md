@@ -47,11 +47,36 @@ Non-primitive ABC program must be reducible to a primitive ABC program by expand
 
 The potential reduction to just four primitives makes ABC relatively easy to comprehend. There aren't any surprises, no corner cases to handle. And these primitives are *useful* even for high level code, easy to understand and to implement efficiently.
 
+### Tokens
+
+Tokens have form `{foo}`, a short text wrapped in curly braces. Tokens enable symbolic extensions to ABC. Semantically, tokens are restricted by the normal rules for ABC: it must be possible to reduce every token to a primitive, purely functional `[abcd]` sequence. Tokens in ABC fall primarily into two groups:
+
+* tokens with *identity* semantics for performance, debugging
+* tokens with *linking* semantics for structured development
+
+Tokens with *identity* semantics include seals `{:db}{.db}`, gates `{@foo}`, and annotations `{&par}`. Seals support lightweight symbolic types. Gates are used for active debugging. Annotations serve ad-hoc performance and safety purposes. These are described later in this document. 
+
+ABC's primary linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. During evaluation, the token is substituted for the word's definition when doing so enables evaluation to proceed. 
+
+### ABC Dictionary
+
+I will enable extension of ABC bytecode via the link layer. Viable opcodes like `x` will generally stand as short hand for the appropriate word `{%x}`. For example, `xyz` is ABC syntactic sugar for `{%x}{%y}{%z}`. By reducing common operations to a single character, ABC programs will become compact.
+
+For example, our dictionary might include the following:
+
+        [B][A]w == [A][B]   (swap);     w = {&arity2}[]ba
+        [A]i    == A        (inline);   i = []wad
+        [B][A]o == [A B]    (compose);  o = {&arity2}w[ai]bb
+
+This idea is intended to be coupled with the performance idea of big-step accelerated dictionaries, where an evaluator has hand-optimized implementations for a common subset of definitions. This would allow developers to get built-in primitive performance for a growing set of common operations, without any centralized standardization process.
+
 ### Data Embedding
 
-ABC's data embedding simplifies data entry, extraction, and debugging by presenting data in forms that humans can comprehend and tools can easily access. Natural numbers use eleven operators `#1234567890`. These are designed such that `#42` will compute a Church encoded 42. 
+Leveraging the ABC dictionary, we can define eleven opcodes `#1234567890` such that `#` introduces a new zero value, and each digit performs the Church encoded equivalent of "multiply by ten, add digit". Thus, `#42` would construct the Church encoded 42. 
 
-Text literals will use a multi-line embedded encoding:
+If we additionally accelerate these operations, our natural number might be represented within a simple machine word under the hood. And we might further accelerate basic arithmetic, and output the data in terms of the same eleven opcodes, such that `#3 #4 +` evaluates to `#7`. 
+
+Text literals need a syntactic sugar:
 
         "literals are multi-line UTF-8
          they start with character " (32)
@@ -66,7 +91,9 @@ Text literals will use a multi-line embedded encoding:
          no other special characters
         ~
 
-Literals encode a finite sequence of UTF-8 bytes. The chosen Church encoding is designed to unify literals and numbers with a more  general concept of iterators or coroutines. For example, if I assume `(foo,bar,baz)` represents a general sequence in a [claw](CommandLine.md) view, then it will be possible to define things such that the following unification applies:
+Literals might be interpreted as encoding a finite sequence of UTF-8 bytes, i.e. such that `"hello"` rewrites to something like `[[#104] "ello" s]`. Rather than attempt to define a standard semantics for ABC literals, I might accelerate an expansion like this with special attention for reconstruction of text on output.
+
+I would like to ensure easy unification of literals and numbers as specializations of [claw](CommandLine.md) command sequences. For example, if I assume `(foo,bar,baz)` represents a general sequence, then it should be possible to define things such that the following unification applies:
 
         #5      == (,,,,)
         #3      == (,,)
@@ -78,53 +105,11 @@ Literals encode a finite sequence of UTF-8 bytes. The chosen Church encoding is 
         [yield][done](foo,bar,baz)i == foo [[yield][done](bar,baz)i] yield
         [yield][done]#i             == done
 
-        [A]i == A;  i = [][]baad
-        
+Text embedding gets this special treatment because it's necessary for compact code. Binaries might be embedded in ABC by use of a text embedding of binary data (e.g. base64) together with some operations to translate that text to a runtime binary representation. More general sequences can be left to claw views, since the space difference is marginal.
 
-From this, we might derive that `#` is equivalent to `[ad]`. Sequences may generally have a structure `(foo,bar,baz) = [[foo](bar,baz)s]`, terminating with `[[baz]#s]` for some word `s`. 
+### Whitespace Formatting
 
-### Whitespace
-
-SP and LF are permitted in ABC. They have identity semantics, equivalent to the empty program. Essentially, this just permits some lightweight formatting of byte code for easier reading.
-
-### Tokens
-
-Tokens have form `{foo}`, a short text wrapped in curly braces. Tokens enable symbolic extensions to ABC. Semantically, tokens are restricted by the normal rules for ABC: it must be possible to reduce every token to a primitive, purely functional `[abcd]` sequence. Tokens in ABC fall primarily into two groups:
-
-* tokens with *identity* semantics for performance, debugging
-* tokens with *linking* semantics for structured development
-
-Tokens with *identity* semantics include seals `{:db}{.db}`, gates `{@foo}`, and annotations `{&par}`. Seals support lightweight symbolic types. Gates are used for active debugging. Annotations serve ad-hoc performance and safety purposes. These are described later in this document. 
-
-ABC's favored linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. During evaluation, the token is substituted for the word's definition when doing so enables evaluation to proceed. 
-
-### ABC Dictionary
-
-ABC includes a standard dictionary of opcodes defined in terms of expansion to a primitive ABC string. This dictionary will gradually develop with the motivation to improve:
-
-* performance and optimization
-* data entry and extraction
-
-The initial standard dictionary consists only of opcodes `#1234567890`. These support both motivations, and were deemed essential for effective data entry. I might also add inline, swap, and compose. 
-
-        [A]i    == A        (inline)
-        [A][B]w == [B][A]   (swap)
-        [A][B]o == [A B]    (compose)
-
-        i = []wad
-        w = []ba
-        o = [wai]bb
-
-Eventually, ABC's extended dictionary will support:
-
-* natural number arithmetic
-* binary and list processing
-* floating point number models
-* linear algebra, matrix math
-* process network evaluations
-* polymorphic records and variants
-
-The ABC standard dictionary will be carefully curated and vetted, and thus moves very slowly. Fortunately, use of [Awelon Object (AO) dictionaries](AboutAO.md) supports similar benefits without rigorous standardization. Use of runtime built-in AO dictionaries can provide an empirical testbed for potential ABC dictionary extensions.
+SP and LF are permitted in ABC. They will have identity semantics, equivalent to the empty program. Essentially, this just permits some lightweight formatting of bytecode for easier reading.
 
 ## ABC Evaluation and Performance
 
@@ -139,15 +124,22 @@ By first rewriting the outer program, we get the most opportunity to apply annot
 
 A runtime has discretion to deviate from this strategy. Evaluation order doesn't affect program semantics.
 
-### Big Step Accelerators
+### Big Step Dictionary
 
-ABC performance is achieved primarily by big-step rewriting with known functions. For example, a runtime can evaluate `i` much more efficiently than its expanded definition `[][]baad`. Hence, we might call `i` an accelerator. 
+A runtime can optimize an anonymous dictionary of common words, i.e. such that the common definition of inline `i` effectively becomes a single operation rather than expanding to `[][]baad` and evaluating in multiple small steps. Developers would be expected and encouraged to derive from this dictionary for performance benefits.
 
-Big-step rewriting becomes especially valuable when working with Church-encoded data structures that might be given a more efficient representation under the hood. For example, natural numbers constructed with `#1234567890` might be encoded as simple machine words. Upon doing so, we may benefit from accelerating `+` so we can directly add compact machine words rather than expand to a Church encoding. Efficient processing of texts, vectors, binaries, matrices, process networks, etc. is feasible.
+Even without compilation, we can recognize a number of useful functions and hand optimize them for an interpreter. It doesn't take many functions to greatly improve performance. And recognizing these definitions also makes it easier to recognize rewrite optimizations.
 
-Useful functions like `i` and `+` will become part of the ABC standard dictionary, effectively becoming bytecodes. However, the ABC standard dictionary moves very slowly and will have a rigorous vetting process. 
+We aren't limited to optimizing the functions. We can also optimize the representations, e.g. using an efficient representation for natural numbers.
 
-In the mean time, we might achieve similar benefits through the [AO layer](AboutAO.md), e.g. by specifying a small, useful dictionary that will be accelerated by our runtime and enabling developers to derive from that.
+Some useful areas to pursue big step acceleration:
+
+* natural number arithmetic
+* binary and list processing
+* floating point number models
+* linear algebra, matrix math
+* process network evaluations
+
 
 ### Fork/Join Parallelism
 
@@ -165,7 +157,7 @@ A description of a KPN (processes, wires, messages on wires) can be deterministi
 
 A runtime accelerated evaluator can use more conventional queues and threads internally. Further, it is feasible for an external system to interact with a KPN that is still undergoing evaluation - i.e. inject input, extract output, adding a process or wire. These actions need only wait just long enough to resolve deterministically while allowing parallel evaluation to continue. In each case, we would only be forced to wait *just long enough* to resolve deterministically.
 
-*Aside:* Open KPNs are interesting as a potential [alternative to monads for effectful code](KPN_Effects.md), admitting parallel and concurrent effects, and flexible buffering.
+*Aside:* Open KPNs are interesting as a potential [alternative to monads for effectful code](KPN_Effects.md), admitting parallel and concurrent effects, and flexible buffering. They're also a potential alternative to OOP-style objects, since we can model invoking a KPN by injecting some data then extracting results, and passing KPNs around as first-class values.
 
 ### Accelerated Linear Algebra
 
@@ -392,7 +384,7 @@ For ABC, I propose a `{&dyn}` annotation. Usage:
 
 At this point we may halt evaluation and pass the program to our static type checker. Dynamic evaluation is considered complete after the `{&dyn}` annotations are eliminated (via `[A]{&dyn} => [A]`). 
 
-If a program contains `{&dyn}` annotations even after partial evaluations, we may call that program dynamically typed. Developers are free to construct dynamically typed software. But if dynamic partial evaluation can complete statically, it can readily be used for macro-like metaprogramming. An ABC software system may thus consist of an ad-hoc mix of fluid and rigid software components.
+If a program contains `{&dyn}` annotations even after partial evaluations, we may call that program dynamically typed. Developers are free to construct dynamically typed software. But where dynamic partial evaluation can complete statically, it can readily be used for macro-like metaprogramming. An ABC software system may thus consist of an ad-hoc mix of fluid and rigid software components.
 
 
 ## Miscellaneous
@@ -408,11 +400,11 @@ To simplify error reporting and debugging, we'll want to record known errors in 
         {:s}d           =>  [[A]{:s}d]{&error}i
         [[A]]{&tuple2}  =>  [[A]]{&tuple2}{&error}
 
-Developers can freely specify errors, construct ad-hoc error values.
+Developers may freely specify their own error values:
 
         "TODO: fix foo yesterday!"{&error}
 
-Error values can be passed around, copied, and dropped like normal values. Error values will not be further evaluated. Evaluation becomes stuck insofar as an attempt is made to observe the error value, e.g. the `{&error}i` pattern. Being stuck on an error does not generate further errors. But the remainder of the computation may still evaluate, so we might report many runtime errors rather than the first one.
+Use of `{&error}` marks a *value* as erroneous. Observing that value, e.g. with `[A]{&error}i`, results in a stuck computation. Being stuck on an error will not generate further errors. A type checker may treat an error value as having any type.
 
 ### Gates for Active Debugging
 
@@ -469,7 +461,11 @@ I'd rather avoid this sort of ad-hoc reflection at runtime. But it could be supp
 
 Behavioral equivalence might be tested by some ad-hoc combination of static analysis or fuzz testing.
 
-### GADTs
+### Fixpoint
 
-[Generalized Algebraic Data Types](http://en.wikipedia.org/wiki/Generalized_algebraic_data_type) are a powerful and expressive idea from purely functional languages, originating in Haskell. I would like to support them for ABC systems, if feasible.
+Fixpoint is an important function for general purpose programming. 
 
+        [A]y    ==  [[A]y A]
+        y = [cb]wocb
+
+The simplest implementation is straightforward. I would like to consider whether I can do better by avoiding the replication of the `A` program until just before it is needed. This might be a bit difficult without a specialized optimization because rewrite rules can easily penetrate blocks - the 'static overhead' techniques I used before might not work.

@@ -77,3 +77,9 @@ With `stepKPN` we can very precisely extract requests, perform effects, and inje
 A third option is viable: associate effects handlers, e.g. of type `request → IO response`, with each effectful channel. Then run the KPN in context of IO. This could maximize parallelism and scalability, albeit at a cost to deterministic ordering of concurrent effects and reproducible system behavior.
 
 That last option would most generically enable KPNs to replace simple imperative IO as the effects model, since it would effectively have the full power of multi-threading but with advantages of inherent batching and reduced complexity.
+
+### Miscellaneous
+
+KPNs are also an interesting alternative to OOP objects. They can receive multiple method calls and prepare many outputs. As values, KPNs can be passed around first class.
+
+Frame-based observation of the KPN is more or less equivalent to a functional reactive model, and can support controlled latency.

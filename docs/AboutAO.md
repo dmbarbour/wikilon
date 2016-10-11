@@ -8,40 +8,35 @@ Dictionaries serve as a unit of development, evaluation, linking, communication,
 
 ## AO Representation
 
-A dictionary is an association of words to definitions, and there are many merely adequate ways of representing such a thing. But I want a variety of related features: history and versioning, lightweight forks, simple merge, structure sharing, cache sharing, fine grained security, efficient import and export, communication, distribution, and compaction. Additionally, AO must preserve ABC's properties of being weakly human readable and writeable with a text editor. To achieve these features, AO has received some careful attention to representation.
+A dictionary is an association of words to definitions, and there are many merely adequate ways of representing such a thing. But I want a variety of related features: history and versioning, lightweight forks, simple merge, structure sharing, efficient communication, distribution, and compaction. Additionally, AO must preserve ABC's properties of being weakly human readable and writeable with a text editor. To achieve these features, AO has received some careful attention to representation.
 
 The general proposal is as follows:
 
-* dictionary is described by a series of patches
-* history patches are immutable, via secure hash
+* dictionary is represented by tree of patches
+* patches logically immutable, via secure hash
 * named dictionary references via `{%word@dict}`
 
 Concretely, a patch is a UTF-8 text with format:
 
-        secureHashOfOrigin
+        secureHashOfPatch1
+        secureHashOfPatch2
         @word1 definition1
         @word2 definition2
         ...
 
-Prior to the first word, we may list a single secure hash that identifies a prior patch from which we inherit words. Naming a single origin by secure hash gives us a verifiable, linear, deeply immutable, content-addressable linked list history. The body of the patch is a sequence of `@word def` updates, each overwriting a word's prior definition. In case of multiple updates to a word, the last update wins. A word may be logically deleted by writing a trivial cycle like `@foo {%foo}`. 
+Each patch consists of a header and a body. The header is a simple sequence of secure hashes, each identifying another patch (hence forming a tree structure). The body is a sequence of `@word def` actions, each overwriting a prior definition for the specifified word. A word may be logically deleted by defining a trivial cycle, `@foo {%foo}`. The last update for a word's definition 'wins', whether that update occurs within the header or body. We might interpret each secure hash as logically inlining the identified patch. 
+
+This representation allows for flexible dictionary structure and merge or update models, with a fair amount of structure sharing. Secure hashes implicitly have a global namespace, so sharing of dictionaries is easy, only requiring transmission of unknown hashes. Sharing of a cache between patches is feasible.
 
 ### Secure Hash
 
-For the specific secure hash, I propose use of BLAKE2b 360 bit secure hash, encoded in Crockford's Base32 (favoring lower case). BLAKE2b is a very efficient secure hash. This results in 72 characters, which seems an acceptable compromise between goals for uniqueness and aesthetics. If this is ever found to be unsuitable, we can change to another secure hash easily enough.
+For the specific secure hash, I propose use of BLAKE2b, 360 bits encoded in Crockford's Base32 (lower case). BLAKE2b is a very efficient secure hash, and the resulting size (72 characters) seems a reasonable compromise between uniqueness and aesthetics. If this is ever found to be unsuitable, we can change to another secure hash easily enough (with a small header if necessary).
 
 ### Anonymous and Named Dictionaries
 
-Named dictionaries may be referenced from other dictionaries via `{%word@dict}` and are generally mutable. AO evaluation occurs in context of a set of named dictionaries - frequently an empty context. In the more general case (including patch histories) dictionaries are anonymous, and may only be referenced internally via `{%word}` tokens.
+AO evaluation may occur in a context of named dictionaries. In that case, each dictionary serves as an implicit namespace, with `{%word}` accessing the word as defined in the current dictionary and `{%word@dict}` indicating a word in an external dictionary. (Even if you name the current dictionary, it is treated as external with the `@dict` modifier.) However, in the general case dictionaries are anonymous. Patches cannot be named directly, i.e. the `@dict` cannot be a secure hash.
 
-Internally, words within a dictionary are referenced by `{%word}` without the dictionary name. When we link a word from another dictionary with `{%word@dict}`, the `@dict` decorator must be appended to any undecorated words in the linked code.
-
-### Filesystem Layer
-
-In a filesystem layer, we'll encode a context of named dictionaries as a directory containing `myApp.ao` and the like, one file per head. The name of the dictionary matches the filename (minus the `.ao` suffix). History patchfiles may additionally use `secureHash.ao`. To avoid clutter, history files might be moved into another directory or a composite history archive. (Use of an archive simplifies memory mapping of multiple history objects that won't be mutated.)
-
-### Forking and Merging
-
-Forking a named dictionary is trivial: simply copy the file to a new name. A three-way merge is possible by finding a common history between two dictionaries, but is not explicitly supported. It must be represented by copying updates from one branch into the other.
+Best practices for named dictionaries have yet to be developed. However, the intention is to use named dictionaries *not* as named libraries or modules (we can always glue those together anonymously), but rather at an [application layer](ApplicationModel.md) where security and access control become concerns.
 
 ### Communication
 
@@ -49,21 +44,23 @@ An intriguing option is use of anonymous dictionaries to model communication.
 
 One option is message-passing. We create a *dictionary per message*. The main message content is encoded with standard words, e.g. we might use `$.head` and `$.body`. This secure hash origin can encode the *entire vocabulary* used by each message, but in a cache-friendly manner so we can reuse the vocabulary for many messages and only need to download and compile the vocabulary once. Conveniently, we might also encode defaults, e.g. so `$.head` has a value even if not specified per message. This gives us lightweight prototype or template based communications.
 
-A related option is streaming 'updates'. This could be understood as a series `PUT` messages, with each message simply overwriting a contextually implicit or named dictionary. This is a decent fit for publish-subscribe data and views. For streaming updates, a common case is that we want to model just the patch/append/update. This behavior might be represented by use of `~` in place of the secure hash, indicating "whatever was there before". Use of `~` may generally be permitted in contexts where we update an existing dictionary.
+A related option is streaming 'updates'. This could be understood as a series `PUT` messages, with each message simply overwriting a contextually implicit or named dictionary. This could be used to model time-varying objects, for example, and is suitable for publish-subscribe data and spreadsheet-like computations. Conveniently, it is possible to transition as needed between rewriting large objects and updating just the essential fragments.
 
-Outside of streaming contexts, use of `~` as a stand in for a secure hash is not permitted.
+### Filesystem Layer
 
-*Aside:* Conveniently, AO's patch model is idempotent, and `~` patches are commutative if operating on independent subsets of the dictionary. This might be leveraged to simplify communication properties.
+In a filesystem, we might encode a context of named dictionaries as a directory containing patch files with suffix **.ao**. For example, `myApp.ao` allowing for `{%word@myApp}`. A named dictionary patch might consist of just the secure hash for an anonymous patch, but the easiest way to hand-update a dictionary in the filesystem is certainly just to addend the primary patch file.
+
+Anonymous patch files will use `secureHash.ao`, but may be held in a separate directory or archive files to control clutter. The exact filesystem structure will depend on the tooling. Internally, patches themselves are independent of the filesystem layer.
+
+### Forking and Merging
+
+Forking a named dictionary is trivial: simply copy the dictionary then begin updating. A two-way merge between dictionaries is always possible, identifying word-level differences. A three-way merge is possible only if there is a readily identified common patch history between two dictionaries, which depends on the update model.
 
 ### Distribution
 
-Anonymous dictionaries are distributed easily by secure hash. 
+Anonymous dictionaries are distributed easily by secure hash. Given a secure hash for a dictionary we do not possess, we can ask whomever provided the secure hash to provide the patch. This is the primary distribution model of AO. But content-addressed networking techniques are possible, and may be useful in distributing a network burden. A viable technique for provider independent transport is to just use a fraction of the secure hash for lookup (e.g. the first 120 bits) then use the rest as a symmetric encryption key. 
 
-Given a secure hash for a dictionary we do not possess, we can usually ask whomever provided the secure hash to provide the dictionary. This is the primary distribution model. But content-addressed networking techniques are possible, and may be useful in distributing a network burden. A viable technique for provider independence is to just use a fraction of the secure hash for the lookup (e.g. the first 120 bits) then use the rest as a symmetric encryption key. 
-
-Named dictionaries are generally mutable. It is feasible to distribute development of local dictionaries by use of DVCS techniques (highly recommended!) or to share common names for dictionaries in a global system. 
-
-In the latter case, global names need some strategy to resist conflict (otherwise we'll be forced to rename some word). This might be achieved by deriving from an existing registry (e.g. ICANN), or a more informal registry (e.g. someone maintains a webpage), or taking a secure hash of a public key. Etc.. 
+Named dictionaries are generally mutable. It is feasible to distribute development of named dictionaries by use of DVCS techniques or to share names for dictionaries globally. In the latter case, global names may need some strategy to resist conflict. This might be achieved by deriving from an existing registry (e.g. ICANN or Namecoin), or a more informal registry (e.g. someone maintains a webpage), or taking a secure hash of a public key. Etc.. 
 
 ## AO Evaluation and Linking
 
@@ -81,11 +78,7 @@ Preserving link structure ensures human-meaningful symbols remain in our evaluat
 
 ### Linking Between Dictionaries
 
-AO evaluation may occur in a context of named dictionaries, which may be accessed via `{%word@dict}`. 
-
-When linking `{%word@dict}`, we additionally rewrite undecorated tokens to include the `@dict` namespace. This is the case even when `@dict` names the current dictionary. Explicit link structure always preserves the requested dictionary name, even when multiple names refer to the same dictionary.
-
-Rewriting is not limited to link dependencies like `{%foo} => {%foo@dict}`. We will also rewrite value sealing tokens and active debugging gates - any user defined symbols from that namespace.
+AO evaluation occurs in a (frequently empty) context of named dictionaries, which may be accessed via `{%word@dict}`. When linking `{%word@dict}`, we will generally rewrite undecorated link tokens to include the `@dict` namespace. The exception is if the local word has the same meaning (same deep link structure), in which case we may use the local word.
 
 ### Arity Annotations
 
@@ -137,16 +130,18 @@ Staged compilation of words is similarly possible, e.g. generating an LLVM repre
 
 ### Large Value Stowage
 
-For big data in a small working memory, it is useful to reverse the linking process: move data to disk, and replace the in-memory representation by a small token that may be used to reload the data from disk. I call this pattern 'stowage'. Stowage is most efficient with log-structured merge trees and similar persistent data structures that buffer and batch writes. Careful use of value stowage can enable entire databases as first-class values, and greatly reduces need for IO effects surrounding storage.
+For big data in a small working memory, it is useful to reverse the linking process: move data to disk, and replace the in-memory representation by a small token that may be used to dynamically link the data. I call this pattern 'stowage'. 
 
 In context of AO, stowage involves creating new word tokens during evaluation.
         
         [large value]{&stow}  == [{%resourceId}]
         [small value]{&stow}  == [small value]
 
-Here `{%resourceId}` is a word whose definition is equivalent to `large value`. Stowage has overhead, so an evaluator should make a heuristic decision about whether to stow depending on the value size.
+Here `{%resourceId}` is a word whose definition is equivalent to `large value`. Stowage has overhead, so an evaluator must make a heuristic decision about whether to stow depending on value size. Thus, smaller values should not be stowed. 
 
-How resource IDs are named is left to the evaluator and runtime. Stowage doesn't need deterministic naming, though at least having stable names would be convenient for humans, rendering tools, caching, etc. that interact with the results in contexts like incremental computation. Structure sharing could also be useful.
+Stowage works best with persistent data structures, where updates to the structure only require updates to a small subset of nodes. Stowage works even better with log-structured merge trees and similar structures where updates are implicitly batched and most updates are shallow.
+
+The naming of stowed resources is left to the runtime, but stable names should be favored to simplify caching and structure sharing.
 
 ### Incremental Computing and Caching 
 
@@ -202,6 +197,11 @@ An easy maintenance technique is perhaps to conservatively clear the word cache 
 
 A heuristic balance of precise and lazy cache maintenance may prove effective in the general case, e.g. based on an effort quota upon performing each dictionary update. 
 
+*Aside:* When computing cacheID of a linker object, we might hide symbols for tokens that we know will be linked (i.e. anything we could have inlined). Doing so might improve reuse of cache independent of names. 
+
+### Accelerated Dictionary
+
+An AO runtime will generally include an anonymous, accelerated dictionary - a set of words with definitions whose implementations may be hand-optimized. Other dictionaries may then derive from the accelerated dictionary. Recognizing accelerated definitions is most readily performed via the word cache, e.g. we can recognize whenever a word's cacheID matches the same from our accelerated dictionary, and if so use the accelerated implementation.
 
 ## AO Development
 
@@ -219,27 +219,23 @@ AO does introduce an interesting new 'effect' that could be tracked for type saf
 
 ### Caveats
 
-This AO representation has many nice properties, but it isn't 100% great. Here are some weaknesses:
+This AO representation has many nice properties, but has some weaknesses:
 
-1. AO files and ABC aren't very convenient for direct use by humans. They can work in a pinch. But AO is intended to be manipulated primarily through editable views like [claw](CommandLine.md) or an [application model](ApplicationModel.md).
-1. There is no support for *metadata* such as timestamps or commit messages. Developers are instead encouraged to represent metadata within an AO dictionary. This ensures metadata is accessible to Awelon application models or views.
-1. To rename a word, developers must explicitly rewrite every reference to that word. It may be necessary to update external `{%word@dict}` references, or retrain humans, when a word is very widely used.
-1. Updates apply only to whole definitions. Fortunately, it is easy to factor most AO code into smaller parts that can be updated independently, or to model a command pattern for append-only updates (cf. [application model](ApplicationModel.md).
+1. AO files and ABC aren't very convenient for direct use by humans. They can work in a pinch, but AO is intended to be manipulated primarily through editable views like [claw](CommandLine.md) or an [application model](ApplicationModel.md).
+1. There is no support for *metadata* such as timestamps, commit messages, or bug tracking. Instead, the intention is that AO development environments should represent such metadata within an AO dictionary (perhaps an auxiliary named dictionary). This ensures metadata is accessible to Awelon application models or views.
+1. To rename a word requires rewriting every reference to that word. This might be performed by a development environment, but is not a first-class feature of the AO representation.
+1. Updates apply only to whole definitions. Fortunately, it is easy to factor large AO code into small words that can be updated independently when need arises. Append only updates can be modeled by a command pattern (cf. [application model](ApplicationModel.md)).
 
 ## Constraints on Words
 
-Words are constrained to be friendly in context of URLs, English text delimiters, HTML, [claw code](CommandLine.md), and AO dictionaries/streams. 
+Words are not heavily constrained at the AO layer. Limits:
 
-Summary of constraints on words:
+* no empty or enormous words; 1..30 bytes UTF-8
+* no curly braces, SP, @ for tokens and AO rep
+* no C0, DEL, C1, surrogates, replacement char
 
-* ASCII if alphabetical, numeral, or in -._~!$'*+:
-* UTF-8 excepting C1, surrogates, replacement char
-* must not start with numeral-like regex `[+-.]*[0-9]` 
-* must not start or end with . or : (period or colon)
-* no empty or enormous words, 1..30 bytes UTF-8.
+However, these constraints do not lead to clean embedding in URLs, English, HTML, [claw code](CommandLine.md), and so on. So there will be other de-facto limitations in context. For example, a claw view will force explicit use of `{%word}` tokens for anything that could be ambiguous when parsed.
 
-Dictionary names must be valid words. Further, most tokens (annotations, gates, sealers, unsealers) should be valid words modulo the prefix character.
-* dictionary names use the same constraints
+Dictionary names must also be valid words. All ABC tokens (annotations, gates, sealers, unsealers) should be valid words modulo the prefix character. The words `a`, `b`, `c`, and `d` are valid but should remain undefined as words corresponding to our primitives. 
 
-Words may be further limited in context of a given system, e.g. unicode normalization and case folding to reduce ambiguity, forbid unicode spaces and separators. 
 
