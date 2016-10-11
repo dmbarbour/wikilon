@@ -1,6 +1,6 @@
 # Awelon Bytecode
 
-This document is a minimal summary of Awelon Bytecode (ABC). See [about ABC](AboutABC.md) for design details. This is a major revision from the prior ABC, towards a [minimalist](ABC_Minimalist.md) solution. 
+This document is a minimal summary of Awelon Bytecode (ABC). See [about ABC](AboutABC.md) for design details. 
 
 ## Primitives
 
@@ -15,17 +15,28 @@ A block is a subprogram delimited by square brackets `[]`.
 
 The `[abcd]` set is Turing complete and friendly for substructural types. ABC programs have a formal semantics as an expansion to a finite sequence of these six characters. ABC values always have a Church-encoding and semantics, though developers aren't forced to use them that way. 
 
+## Tokens
+
+Tokens have the form of short text between curly braces, e.g. `{foo}`. Like accelerators, tokens must have a pure local rewriting semantics. 
+
+Most tokens have *identity semantics*, such that removing them from the code does not impact behavior of a correct program. Tokens with identity semantics can broadly support performance, safety, security, debugging, and rendering. For example, `[A]{&jit}` is formally no different from `[A]`, but would tell a runtime to perform just-in-time compilation.
+
+Other tokens have *linking semantics*, which rewrite to more bytecode. ABC's primary link model is [Awelon Object (AO)](AboutAO.md). A link token `{%foo}` will rewrite to the definition of word `foo` from an implicit dictionary. Link dependencies in ABC must be acyclic, such that we could link everything up front without changing behavior of a program.
+
+## Bytecode Extension
+
+ABC is extensible in context of its link layer. In particular, we will recognize operators like `xyz` as a desugaring to `{%x}{%y}{%z}`. This effectively enables developers to define their own extensions to ABC.
+
 ## Data Embedding
 
-Natural numbers may be embedded using the form `#42` or `#108`. Here `#` introduces a new zero value, while `1234567890` each have a 'multiply by ten, add digit' effect. 
+Natural numbers will be embedded using the form `#42` or `#108`. Here `#` introduces a new zero value, while `1234567890` each have a 'multiply by ten, add digit' effect. These aren't primitives, but rather are eleven operations defined via extension.
 
-Literals may be embedded as UTF-8 byte sequences:
+Text data will be embedded as a valid UTF-8 byte sequence:
 
         "start with character `"`
          may have multiple lines
          simple blacklist:
             C0 (except LF), DEL, C1
-            surrogate codepoints
             replacement character
          LF gets special attention:
             LF SP   keep LF, drop SP
@@ -34,98 +45,26 @@ Literals may be embedded as UTF-8 byte sequences:
          There are no other special chars.
         ~
 
-The formal semantics of natural numbers and literals is based on Church-encoded command sequences of NOPs (for numbers) or UTF-8 bytes (for literals). ABC does not provide a convenient syntax for generic sequences. But some editable views like [claw](CommandLine.md) may do so, and may additionally support inline texts like `"hello"`. Assuming a claw presentation `(foo,bar,baz)` for a sequence of three commands, it should be possible to unify as follows:
+The desugaring semantics for text data has not been decided, but the most likely possibilities is `"hello"` desugaring to `[[#104] "ello" s]`, enabling a user-defined sequencing operator `s`. I would like to unify numbers, texts, and [claw](CommandLine.md) command sequences with a simple model of coroutines or iterators.
 
-        #7          ==      (,,,,,,)
-        #3          ==      (,,)
-        #1          ==      ()
-        #0          ==      #
+## Accelerated Operations and Representations
 
-        "hello"     ==      (#104, #101, #108, #108, #111)
-        "→"         ==      (#226, #134, #146)
-        "h"         ==      (#104)
-        ""          ==      #
+ABC achieves performance via its extension model. An interpreter is expected to optimize for a de-facto standard AO dictionary from which most users will derive new dictionaries. 
 
-These sequences have the following behavioral semantics:
-        
-        [B][A](foo,bar,baz)i    ==      foo [[B][A](bar,baz)i] A
-        [B][A](bar,baz)i        ==      bar [[B][A](baz)i] A
-        [B][A](baz)i            ==      baz [[B][A]#i] A
-        [B][A]#i                ==      B
-        [A]i                    ==      A
+For example, our optimized dictionary might include operators `#1234567890` for representing numbers, and more operators or built-in words for arithmetic. By optimizing for common representations of numbers and arithmetic, a runtime could use a lightweight machine word under the hood for those operations or any code defined in terms thereof. This would only require a quick verification that we're using the accelerated versions.
 
-This is a flexible sequence model, capable of finite iteration, short circuiting, and monadic programming depending on the types of the commands and `A`. It's also directly usable as a conditional behavior, e.g. `#` vs. `()` roughly correspond to `false` vs. `true`. The expansion semantics hasn't been fully worked out yet. 
+The same idea can be applied to accelerating linear algebra and matrix representation to leverage GPGPU, or accelerating Kahn Process Networks to leverage cloud computing. These will be areas to explore.
 
-        #               =   [di]
-        i               =   [][]baad
-        (foo,bar,baz)   =   [[foo](bar,baz)s]
-        (baz)           =   [[baz]#s]
-
-It's the definition of `s` that I haven't implemented quite yet.
-
-## Formatting
-
-ABC is designed to be *weakly legible*, though is intended for use together with editable views like [claw](CommandLine.md). To aide legibility, simple formatting characters - SP (32) and LF (10) - are freely permitted within ABC. These have identity semantics, equivalent to an empty program. 
-
-Further, ABC will *commit to avoiding* certain characters, to simplify embedding of ABC in contexts like documentation, HTML, intelligent editors, editable views, or dictionary exports. In particular, the following characters shall be avoided at the ABC toplevel:
-
-        <>@&:;,.=_`\(|)
-
-These characters may be used within tokens and embedded literals, of course. Additionally, ABC shall never utilize a character that is forbidden from literal text (such as control characters). 
-
-## Standard Accelerators
-
-In addition to `[abcd]` primitives, ABC shall include a standard dictionary of accelerated operations aimed primarily at improving legibility, convenience, and performance. Each accelerator is formally defined by expansion into an `[abcd]` sequence, but in practice we'll tend to use hand-optimized code.
-
-*Note:* The need for standard accelerators is greatly mitigated by use of [Awelon Object (AO)](AboutAO.md), which uses `{%word}` tokens for lightweight linking. A runtime can easily provide a standard dictionary of accelerated functions, e.g. `{%multiply@std2016}`. A consequence is that we may choose
-
-For example, natural numbers are accelerators because embedding number data is important. The bulk of this document will be defining accelerators. Eventually. Choosing accelerators is a slow process with careful vetting. 
-
-        Usage               Behavior            Definition
-        (Natural Numbers)
-        #                                       [di]                   
-        0                                       {#10}*{#0}+
-        1                                       {#10}*{#1}+
-        2                                       {#10}*{#2}+
-        ..
-        9                                       {#10}*{#9}+
-
-
-
-        (Tentative Accelerators)
-        [A]i                A                   []wad
-        [B][A]w             [A][B]              ua
-        [A]u                [[A]]               []b
-        [B][A]o             [B A]               
-        [B][A]w             [A][B]              []ba
-
-        (Intermediate Definitions)
-        {#0}                                    #
-        {#1}                                    #{S}
-        {#2}                                    #{S}{S}
-        ..
-        {#9}                                    #{S}{S}{S}{S}{S}{S}{S}{S}{S}
-        {#10}                                   #{S}{S}{S}{S}{S}{S}{S}{S}{S}{S}
-        {S}                                     []{w}[{s}]bb
-
-
-## Tokens
-
-Tokens have the form of short text between curly braces, e.g. `{foo}`. Like accelerators, tokens must have a pure, formal semantics as a finite `[abcd]` expansion. 
-
-Most tokens have *identity semantics*, i.e. removing them from the code does not impact its formal behavior. Tokens with identity semantics can broadly support performance, safety, security, debugging, and rendering. For example, `[A]{&jit}` is formally no different from `[A]`, but would tell a runtime to force just-in-time compilation.
-
-Remaining tokens have *linking semantics*, inlining a named subprogram. For example, token `{%foo}` will formally inline the definition of word `foo` in place of the token. In a distributed system, linking might use secure hashes. Linking in ABC systems must always be acyclic.
-
-Structurally, tokens are constrained more severely than embedded literals: they're limited to 64 bytes UTF-8 (including the curly braces) and may not contain LF or curly braces internally. 
-
-For more information on tokens and the abundant idioms surrounding them, see the primary [ABC document](AboutABC.md).
-
-*Aside:* Based on experimentation, tokens should not be used to introduce symbolic data types such as variant tags or record fields. Introducing a massive set of symbols creates a need for sophisticated metaprogramming. Instead, accelerators, numbers, and literals should be used for structured data, with some annotations to assert general structure.
+*Aside:* Avoiding global standardization allows for a lot more ad-hoc experimentation and deprecation in the effort to support high performance computing from a language with just four operators.
 
 ## ABC CHANGE LOG
 
+October 2016:
+* reject global standard extensions to ABC
+* extension and acceleration via AO layer
+
 September 2016: 
-* revision to [minimalist ABC](ABC_Minimalist.md)
+* revision to minimalist ABC (`[abcd]`)
 * old content now deprecated and deleted
 * tokens texts limited to 62 bytes UTF-8
+

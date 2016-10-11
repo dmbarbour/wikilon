@@ -26,11 +26,13 @@ ABC has many unusual features that make it suitable for Awelon project:
 
 * ABC is **incremental**. Between purity, serializability, and stowage, support for caching is safe and efficient. Systematic caching - together with some simple software patterns involving stowage - enables incremental computation even for massive data structures.
 
+* ABC is **extensible**, via the link layer. Defining new operators is no more difficult than defining new words. This can be coupled with an ABC runtime optimizing for a common subset of words and definitions to utilize more efficient representations.
+
 * ABC supports **symbolic structure** with named relationships, resources, and metadata. This is achieved in context of the [Awelon Object (AO)](AboutAO.md) structure-preserving link and evaluation model, and serves as a basis for RESTful [application models](ApplicationModel.md).
 
 ## The Bytecode
 
-See also [ABC](ABC.md) and [minimalist ABC](ABC_Minimalist.md). 
+See also [ABC](ABC.md). 
 
 ### Primitives
 
@@ -58,31 +60,28 @@ Tokens with *identity* semantics include seals `{:db}{.db}`, gates `{@foo}`, and
 
 ABC's primary linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. During evaluation, the token is substituted for the word's definition when doing so enables evaluation to proceed. 
 
-### ABC Dictionary
+### Extension
 
-I will enable extension of ABC bytecode via the link layer. Viable opcodes like `x` will generally stand as short hand for the appropriate word `{%x}`. For example, `xyz` is ABC syntactic sugar for `{%x}{%y}{%z}`. By reducing common operations to a single character, ABC programs will become compact.
+ABC is extended through the link layer. In AO, `xyz` is effectively shorthand for `{%x}{%y}{%z}`. Reducing common operations to a single character enables compact representation of programs. An AO dictionary, thus, might define the following:
 
-For example, our dictionary might include the following:
-
-        [B][A]w == [A][B]   (swap);     w = {&arity2}[]ba
+        [B][A]w == [A][B]   (swap);     w = {&a2}[]ba
         [A]i    == A        (inline);   i = []wad
-        [B][A]o == [A B]    (compose);  o = {&arity2}w[ai]bb
+        [B][A]o == [A B]    (compose);  o = [ai]bb
 
-This idea is intended to be coupled with the performance idea of big-step accelerated dictionaries, where an evaluator has hand-optimized implementations for a common subset of definitions. This would allow developers to get built-in primitive performance for a growing set of common operations, without any centralized standardization process.
+This idea is intended to be coupled with the performance idea of accelerated dictionaries, where an evaluator has hand-optimized implementations for a common subset of definitions. This would allow developers to get built-in primitive performance for a growing set of common operations, without a centralized standardization process.
 
-### Data Embedding
+### Data Embedding and Extraction
 
-Leveraging the ABC dictionary, we can define eleven opcodes `#1234567890` such that `#` introduces a new zero value, and each digit performs the Church encoded equivalent of "multiply by ten, add digit". Thus, `#42` would construct the Church encoded 42. 
+Leveraging the ABC dictionary, we can define eleven operators `#1234567890` such that `#` introduces a new zero value, and each digit performs the Church encoded equivalent of "multiply by ten, add digit". Thus, `#42` would construct the Church encoded 42. Relevantly, a runtime can recognize a de-facto standard encoding for numbers then also *output* number results using these operators, i.e. such that `#7 #6 *` may evaluate to `#42`.
 
 If we additionally accelerate these operations, our natural number might be represented within a simple machine word under the hood. And we might further accelerate basic arithmetic, and output the data in terms of the same eleven opcodes, such that `#3 #4 +` evaluates to `#7`. 
 
-Text literals need a syntactic sugar:
+Text embedding will need a syntactic sugar:
 
         "literals are multi-line UTF-8
          they start with character " (32)
          blacklist characters:
             C0 (except LF), DEL, C1
-            surrogate codepoints
             replacement character
          linefeed is special character:
             LF SP   new line, drop SP
@@ -91,21 +90,8 @@ Text literals need a syntactic sugar:
          no other special characters
         ~
 
-Literals might be interpreted as encoding a finite sequence of UTF-8 bytes, i.e. such that `"hello"` rewrites to something like `[[#104] "ello" s]`. Rather than attempt to define a standard semantics for ABC literals, I might accelerate an expansion like this with special attention for reconstruction of text on output.
+I haven't settled on a particular model for literals, though I might favor something like `"hello" => [[#104] "ello" s]`. One general goal is that it should be feasible to unify numbers, texts, and more generic command sequences (cf. [claw](CommandLine.md)) as having a common structure - perhaps an iterator over a sequence. 
 
-I would like to ensure easy unification of literals and numbers as specializations of [claw](CommandLine.md) command sequences. For example, if I assume `(foo,bar,baz)` represents a general sequence, then it should be possible to define things such that the following unification applies:
-
-        #5      == (,,,,)
-        #3      == (,,)
-        #0      == #
-
-        "hello" == (#104, #101, #108, #108, #111)
-        ""      == #
-
-        [yield][done](foo,bar,baz)i == foo [[yield][done](bar,baz)i] yield
-        [yield][done]#i             == done
-
-Text embedding gets this special treatment because it's necessary for compact code. Binaries might be embedded in ABC by use of a text embedding of binary data (e.g. base64) together with some operations to translate that text to a runtime binary representation. More general sequences can be left to claw views, since the space difference is marginal.
 
 ### Whitespace Formatting
 
@@ -113,26 +99,18 @@ SP and LF are permitted in ABC. They will have identity semantics, equivalent to
 
 ## ABC Evaluation and Performance
 
-### Evaluation Strategy
-
-A general evaluation strategy for ABC is: 
+ABC evaluation rewrites an ABC program into a different representation of the same program. A general evaluation strategy for ABC is: 
 
 * rewrite outer program
 * evaluate inner values
 
-By first rewriting the outer program, we get the most opportunity to apply annotations or drop conditional evaluations. When rewriting has fully completed, we'll have a stable structure containing code and blocks. We can go through each block and repeat the evaluation strategy.
+By first rewriting the outer program, we get the most opportunity to apply annotations or drop conditional evaluation. When rewriting has fully completed, we'll have a stable structure containing code and blocks. We can go through each block and repeat the evaluation strategy.
 
 A runtime has discretion to deviate from this strategy. Evaluation order doesn't affect program semantics.
 
-### Big Step Dictionary
+### Accelerated Dictionary
 
-A runtime can optimize an anonymous dictionary of common words, i.e. such that the common definition of inline `i` effectively becomes a single operation rather than expanding to `[][]baad` and evaluating in multiple small steps. Developers would be expected and encouraged to derive from this dictionary for performance benefits.
-
-Even without compilation, we can recognize a number of useful functions and hand optimize them for an interpreter. It doesn't take many functions to greatly improve performance. And recognizing these definitions also makes it easier to recognize rewrite optimizations.
-
-We aren't limited to optimizing the functions. We can also optimize the representations, e.g. using an efficient representation for natural numbers.
-
-Some useful areas to pursue big step acceleration:
+A runtime can optimize an anonymous dictionary of common words, such that they achieve near native performance or use more efficient representations for things like natural numbers. Developers may then derive from this dictionary. Some useful areas to pursue big step acceleration:
 
 * natural number arithmetic
 * binary and list processing
@@ -140,6 +118,7 @@ Some useful areas to pursue big step acceleration:
 * linear algebra, matrix math
 * process network evaluations
 
+Acceleration is achieved in cooperation with the link layer, which we also use to extend the bytecode. Effectively, we just substitute known words with hand-optimized implementations in the interpreter. Acceleration can easily work together with JIT, with acceleration covering the more tricky requirements.
 
 ### Fork/Join Parallelism
 
@@ -275,12 +254,12 @@ Tokens provide convenient anchors for static type inference. For example:
 * `{&nat}` - argument is embeddable as natural number
 * `{&lit}` - argument is embeddable as text literal
 * `{&bool}` - argument is a boolean value
-* `{&tuple3}` - argument has form `[[A][B][C]]`
+* `{&t3}` - argument has form `[[A][B][C]]`
 * `{&aff}` - argument may not be copied
 * `{&rel}` - argument may not be dropped
 * `{:foo}` - wrapped types, unwrap with `{.foo}`
 
-Given these tokens, we can detect many inconsistencies statically or at runtime. For example, it is obvious that `[A]{&aff}c` is an error, as is `[A]{.foo}` or `#42{&lit}` or `[[A][B]]{&tuple3}`. However, tokens tend to be limited in their expressiveness, oriented on things that are easy to check at runtime.
+Given these tokens, we can detect many inconsistencies statically or at runtime. For example, it is obvious that `[A]{&aff}c` is an error, as is `[A]{.foo}` or `#42{&lit}` or `[[A][B]]{&t3}`. However, tokens tend to be limited in their expressiveness, oriented on things that are easy to check at runtime.
 
 To support rich, human meaningful type documentation, we should additionally use the [AO layer](AboutAO.md) to attribute type information to subprograms. For example, `word.type` may declare the type of `word` in a manner meaningful both to a type checker and a human. Type descriptions, in this case, would be first-class computable values, and may prove more flexible or extensible 
 
@@ -325,15 +304,15 @@ Support for `{&bool}`, `{&opt}`, and `{&sum}` should be sufficient in practice. 
 
 ABC provides a simple mechanism for controlling scope of a computation. Assume we have a function `foo` that takes two inputs and produces three outputs. A structurally scoped application can be represented as:
 
-        [A][B][foo]bb{&tuple3}i
+        [A][B][foo]bb{&t3}i
 
-What we're doing here is binding two arguments to the function, asserting that there are three outputs, then inlining those outputs into our main code. Dynamically, the `{&tuple3}` annotation requires a simple bit of reflection. 
+What we're doing here is binding two arguments to the function, asserting that there are three outputs, then inlining those outputs into our main code. Dynamically, the `{&t3}` tuple annotation requires a simple bit of reflection. 
 
-        [[A][B][C]]{&tuple3}    =>  [[A][B][C]]
+        [[A][B][C]]{&t3}    =>  [[A][B][C]]
 
-We might expect an ABC system to support `{&tuple0}..{&tuple7}`. Support for `{&tuple1}` is sufficient, but support for a practical range is convenient.
+We might expect an ABC system to support `{&t0}..{&t7}`. Support for `{&t1}` is sufficient, but support for a practical range is convenient.
 
-If we determine through static analysis that the `{&tuple3}` annotation is correct, the dynamic check can be bypassed, the annotation potentially removed entirely. So this annotation is suitable for both static and dynamic contexts.
+If we determine through static analysis that the `{&t3}` annotation is correct, the dynamic check can be bypassed, the annotation potentially removed entirely. So this annotation is suitable for both static and dynamic contexts.
 
 ### Value Sealing for Lightweight Types
 
@@ -398,13 +377,25 @@ To simplify error reporting and debugging, we'll want to record known errors in 
         #42{&lit}       =>  [#42{&lit}]{&error}i
         [A]{&aff}c      =>  [[A]{&aff}c]{&error}i
         {:s}d           =>  [[A]{:s}d]{&error}i
-        [[A]]{&tuple2}  =>  [[A]]{&tuple2}{&error}
+        [[A]]{&t2}      =>  [[A]]{&t2}{&error}
 
 Developers may freely specify their own error values:
 
         "TODO: fix foo yesterday!"{&error}
 
 Use of `{&error}` marks a *value* as erroneous. Observing that value, e.g. with `[A]{&error}i`, results in a stuck computation. Being stuck on an error will not generate further errors. A type checker may treat an error value as having any type.
+
+### Arity Annotations
+
+Arity annotations are defined by a set of rewrite rules of form:
+
+        [A][B]{&a2}     == [A][B]
+        [A][B][C]{&a3}  == [A][B][C]
+        ...
+
+Each annotation simply has the given arity. Arity annotations don't say anything about the surrounding computation. An AO runtime should support at least the practical range `{&a1}`..`{&a7}`. More than seven is generally impractical without a parameter object.
+
+Arity annotations offer a simple way to control evaluation, e.g. to avoid copying or binding before there is need to do so. This is most important in context of [AO](AboutAO.md) where arity annotations can help control lazy linking, waiting until sufficient arguments are available for evaluation to proceed.
 
 ### Gates for Active Debugging
 
@@ -461,11 +452,55 @@ I'd rather avoid this sort of ad-hoc reflection at runtime. But it could be supp
 
 Behavioral equivalence might be tested by some ad-hoc combination of static analysis or fuzz testing.
 
-### Fixpoint
+### Accelerated Fixpoint
 
-Fixpoint is an important function for general purpose programming. 
+Fixpoint is an important function for general purpose programming. It enables ad-hoc loops. It is not difficult to define fixpoint functions in ABC. One simple option is `[cb]ocb` (with `o = [ai]bb, i = [][]baad`).
 
-        [A]y    ==  [[A]y A]
-        y = [cb]wocb
+        [A]y    ==  [[A]y A]  (fixpoint);   y = [cb]ocb
 
-The simplest implementation is straightforward. I would like to consider whether I can do better by avoiding the replication of the `A` program until just before it is needed. This might be a bit difficult without a specialized optimization because rewrite rules can easily penetrate blocks - the 'static overhead' techniques I used before might not work.
+        [A]y    ==  [A][cb]ocb     (def y)
+                ==  [cb A]cb       (def o)
+                ==  [cb A][cb A]b  (def c)
+                ==  [[cb A]cb A]   (def b)
+                ==  [[A]y A]       (eqv (step 0, step 2))
+
+However, this definition has the unfortunate characteristic of copying `A` both before it is used and without bound thereafter. We might favor a fixpoint combinator that requires an additional argument before copying, e.g. the [Z-combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator). We can achieve this with arity annotations.
+
+        [Arg][A]Z == [Arg][[A]Z]A
+
+        Z = [[c]a[{&a3}ci]bbwi]{&a3}ci
+
+        [Arg][A]Z 
+            == [Arg][A][[c]a[{&a3}ci]bbwi]{&a3}ci                   (def Z)
+            == [Arg][A][[c]a[{&a3}ci]bbwi]ci                        (arity)
+            == [Arg][A][[c]a[{&a3}ci]bbwi][[c]a[{&a3}ci]bbwi]i      (def c)
+            == [Arg][A][[c]a[{&a3}ci]bbwi][c]a[{&a3}ci]bbwi         (def i)
+            == [Arg][A]c[[c]a[{&a3}ci]bbwi][{&a3}ci]bbwi            (def a)
+            == [Arg][A]c[[[c]a[{&a3}ci]bbwi]{&a3}ci]bwi             (def b)
+            == [Arg][A]c[Z]bwi                                      (def Z)
+            == [Arg][A][A][Z]bwi                                    (def c)
+            == [Arg][A][[A]Z]wi                                     (def b)
+            == [Arg][[A]Z][A]i                                      (def w)
+            == [Arg][[A]Z]A                                         (def i)
+
+In context of dictionary acceleration, the specific choice of fixpoint combinator won't make a big difference. In either case, our runtime should attempt to preserve the `y` or the `z` in the output. 
+
+ If our runtime knows `y`, it could lazily translate between `[A]y` and `[[A]y A]` as needed.
+
+A runtime that knows about runtime can just as easily translate from `[[A]y A]` back to `[A]y`
+
+ both cases, we'll want to lazily fixpoint
+
+
+
+        [Arg][A]Z 
+            == [Arg][A][{&arity3}[c]acbbwi]ci                         (def Z)
+            == [Arg][A][{&arity3}[c]acbbwi][{&arity3}[c]acbbwi]i      (def c)
+            == [Arg][A][{&arity3}[c]acbbwi]{&arity3}[c]acbbwi         (def i)
+            == [Arg][A][{&arity3}[c]acbbwi][c]acbbwi                  (arity3)
+            == [Arg][A]c[{&arity3}[c]acbbwi]cbbwi                     (def a)
+            == [Arg][A][A][{&arity3}[c]acbbwi]cbbwi                   (def 
+                
+
+
+I would like to consider whether I can do better by avoiding the replication of the `A` program until just before it is needed. This might be a bit difficult without a specialized optimization because rewrite rules can easily penetrate blocks - the 'static overhead' techniques I used before might not work.

@@ -1,10 +1,10 @@
 # Awelon Object (AO)
 
-Awelon Object (AO) is a set of conventions for structured use of [Awelon Bytecode (ABC)](AboutABC.md). AO defines tokens for linking and how they interact with evaluation in context of dictionaries.
+Awelon Object (AO) extends [Awelon Bytecode (ABC)](AboutABC.md) with a link model and representation for for symbol-structured code. AO defines tokens for linking and how they interact with evaluation in context of dictionaries.
 
-A dictionary consists of a set of words and a definition for each word. Definitions are encoded in ABC. Tokens of form `{%word}` token will logically substitute that word's definition in place of the token. Dependencies between definitions must form a directed acyclic graph, such that all link tokens could be eliminated in by a finite expansion of inlined code.
+A dictionary consists of a set of words with an ABC definition for each word. These definitions are lazily linked via ABC tokens of form `{%word}`. Additionally, AO will treat single character words as effectively extending ABC's bytecode - i.e. `xyz` is implicitly `{%x}{%y}{%z}`. Dependencies between definitions must form a directed acyclic graph, such that all defined link tokens could be eliminated, resulting in a finite (albeit exponential) expansion of code. 
 
-Dictionaries serve as a unit of development, evaluation, linking, communication, and distribution. They provide a foundation for Awelon project's [application models](ApplicationModel.md). 
+AO dictionaries serve as a basis for development, evaluation, modularity, communication, and distribution. They provide a foundation for Awelon project's [application models](ApplicationModel.md). Lazy linking, in particular, is critical for many application models - it enables preservation of link structure which in turn enables AO to serve as hypermedia. 
 
 ## AO Representation
 
@@ -52,6 +52,8 @@ In a filesystem, we might encode a context of named dictionaries as a directory 
 
 Anonymous patch files will use `secureHash.ao`, but may be held in a separate directory or archive files to control clutter. The exact filesystem structure will depend on the tooling. Internally, patches themselves are independent of the filesystem layer.
 
+*Aside:* In addition to **.ao** files, a runtime might treat a subset of the filesystem itself as a named dictionary. For example, `{%foo@fs/bar}` might refer the file `foo` in directory `bar`. This is potentially convenient for processing large binary and text data.
+
 ### Forking and Merging
 
 Forking a named dictionary is trivial: simply copy the dictionary then begin updating. A two-way merge between dictionaries is always possible, identifying word-level differences. A three-way merge is possible only if there is a readily identified common patch history between two dictionaries, which depends on the update model.
@@ -64,11 +66,11 @@ Named dictionaries are generally mutable. It is feasible to distribute developme
 
 ## AO Evaluation and Linking
 
-Dictionaries are the basic unit of AO evaluation. 
+Dictionaries are the basic unit of AO evaluation. AO evaluation rewrites an AO dictionary into a different representation of the same AO dictionary. 
 
         eval :: Dictionary → Dictionary
 
-Evaluation operates on each definition in a dictionary. This may be a lazy process, evaluating and linking only insofar as necessary for a particular observation on the dictionary. It is possible to evaluate an anonymous AO string in context of a dictionary. Doing so is equivalent to adding a new word and observing its evaluation.
+In practice, this evaluation may be lazy, i.e. such that we don't evaluate a subset of a dictionary unless relevant to an external agent, an incoming or anticipated query. Such queries might consist of evaluating an ABC program within the dictionary.
 
 ### Preservation of Link Structure
 
@@ -76,23 +78,17 @@ Linking - the mechanical step of substituting a `{%word}` token by its evaluated
 
 Preserving link structure ensures human-meaningful symbols remain in our evaluated results. Further, these symbols will frequently have ad-hoc associative structure like `word.doc` and `word.type` useful for both humans and software agents that might render, extract, or otherwise interact with a definition. Preserving link structure is essential for Awelon project's application models.
 
-### Linking Between Dictionaries
+### Distributed Linking and Localization
 
-AO evaluation occurs in a (frequently empty) context of named dictionaries, which may be accessed via `{%word@dict}`. When linking `{%word@dict}`, we will generally rewrite undecorated link tokens to include the `@dict` namespace. The exception is if the local word has the same meaning (same deep link structure), in which case we may use the local word.
+AO evaluation may be understood as occurring in a system of 'named' dictionaries, or alternatively in one much larger dictionary with namespaces. Either way, tokens of form `{%word@dict}` effectively resolve to an external definition for a word. 
 
-### Arity Annotations
+Assume we resolve `{%word@dict}` to ABC code `x{%bar@baz}{%foo}`. We must generally rewrite that code to specify its namespace, adding the `@dict` qualifier to every undecorated link token, including implicit link tokens). Logically, we have `{%x@dict}{%bar@baz}{%foo@dict}`. 
 
-Arity annotations are defined by a set of rewrite rules of form:
+Localization is separate from linking.
 
-        [A][B]{&arity2}     == [A][B]
-        [A][B][C]{&arity3}  == [A][B][C]
-        ...
+When a runtime system knows `{%foo@dict}` is defined and equivalent to the local `{%foo}`, it may *localize* by rewriting the former to the latter. Localization sacrifices potentially useful link structure. For example, there is no assurance that `{%foo.doc@dict}` is equivalent to `{%foo.doc}`. But we can assume that, if documentation is necessary for `{%foo}`, we probably have our own. Hence, we localize metadata while preserving semantics. 
 
-Each annotation simply has the given arity. Arity annotations don't say anything about the surrounding computation. An AO runtime should support at least the practical range `{&arity1}`..`{&arity7}`. More than seven is generally impractical without a parameter object.
-
-Arity annotations offer a simple way to control evaluation. In context of AO, use of arity annotations to control evaluation will also control *linking*, by ensuring sufficient arguments are available for computation to complete and thus (modulo type error) avoiding a mess of incomplete evaluations in a rendered result.
-
-An AO runtime can easily track metadata about each word's arity and number of available outputs to simplify fast linking. Thus, in a `{%producer}{%consumer}` scenario, we can quickly determine whether the producer has enough data to evaluate the consumer.
+Localization enables more efficient and aesthetic relationships between AO systems to the extent vocabulary is shared. 
 
 ### Redirects and Linker Objects
 
@@ -226,16 +222,17 @@ This AO representation has many nice properties, but has some weaknesses:
 1. To rename a word requires rewriting every reference to that word. This might be performed by a development environment, but is not a first-class feature of the AO representation.
 1. Updates apply only to whole definitions. Fortunately, it is easy to factor large AO code into small words that can be updated independently when need arises. Append only updates can be modeled by a command pattern (cf. [application model](ApplicationModel.md)).
 
-## Constraints on Words
+## Constraints on Words and Tokens
 
-Words are not heavily constrained at the AO layer. Limits:
+Words are weakly constrained to fit tokens, control size, and support wrappers or extensions.
 
-* no empty or enormous words; 1..30 bytes UTF-8
-* no curly braces, SP, @ for tokens and AO rep
-* no C0, DEL, C1, surrogates, replacement char
+* no empty or enormous words; 1..30 bytes valid UTF-8
+* no C0, SP, `@[]{}<>(|),;"`, DEL, C1, replacement char
 
-However, these constraints do not lead to clean embedding in URLs, English, HTML, [claw code](CommandLine.md), and so on. So there will be other de-facto limitations in context. For example, a claw view will force explicit use of `{%word}` tokens for anything that could be ambiguous when parsed.
+However, these constraints do not ensure a clean embedding in URLs, HTML, English text, and so on. So there may be other limitations in context. For example, a [claw view](CommandLine.md) would require the `{%word}` token wrapper for any word that might be confused with a number when parsed.
 
-Dictionary names must also be valid words. All ABC tokens (annotations, gates, sealers, unsealers) should be valid words modulo the prefix character. The words `a`, `b`, `c`, and `d` are valid but should remain undefined as words corresponding to our primitives. 
+Words `a`, `b`, `c`, and `d` are valid, but are implicitly defined as the four ABC primitives and may not be redefined. That is, `{%a}` is equivalent to `a`.
+
+Dictionary names must also be valid words. And ABC tokens (annotations, gates, sealers, unsealers) should be valid words modulo the prefix character. 
 
 
