@@ -52,7 +52,7 @@ In a filesystem, we might encode a context of named dictionaries as a directory 
 
 Anonymous patch files will use `secureHash.ao`, but may be held in a separate directory or archive files to control clutter. The exact filesystem structure will depend on the tooling. Internally, patches themselves are independent of the filesystem layer.
 
-*Aside:* In addition to **.ao** files, a runtime might treat a subset of the filesystem itself as a named dictionary. For example, `{%foo@fs/bar}` might refer the file `foo` in directory `bar`. This is potentially convenient for processing large binary and text data.
+*Aside:* In addition to **.ao** files, a runtime could be configured for limited access to external resources. File `./foo/bar.txt` might be accessible via `{%bar.txt@/foo}`. If supported, the focus should be binary data, covering for a weakness of ABC.
 
 ### Forking and Merging
 

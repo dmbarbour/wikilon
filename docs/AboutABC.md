@@ -8,79 +8,21 @@ Awelon project has a vision for human-computer interaction that places users wit
 
 Most bytecodes aren't designed with such applications in mind.
 
-What sets ABC apart from other bytecodes:
+What sets ABC apart?
 
-ABC is evaluated by local, confluent rewriting without any unrepresentable terms. Hence, *we may take any ABC subprogram and evaluate it* into another representation of the same program. This is similar to how `2 + 3` evaluates to `5`. 
+ABC is evaluated by pure, local, confluent rewriting. Importantly, ABC does not become entangled with its environment during evaluation. There are no jumps or pointers, no external memory or stack, no FFI, no side-effects. Effects are achieved in multi-agent systems via Awelon's non-conventional [application layer](ApplicationModel.md). An ABC subprogram will simply evaluate into another representation of the same ABC subprogram, much like `6 * 7` evaluates in conventional arithmetic to `42`.
 
-ABC evaluation is pure, without side-effects. Hence we're free to cache, replicate, or replay any computation for reasons of performance or comprehension. Effects and IO must be handled by external software agents, if at all - e.g. via [process networks](KPN_Effects.md) or RESTful [application models](ApplicationModel.md).
+ABC is simple and extensible. There are only four primitive operations `abcd` - apply, bind, copy, drop. ABC programs can be composed by simple concatenation, linked by simple inlining. Extensions are trivial via the [AO link layer](AboutAO.md): a user-defined function whose name is a single UTF-8 codepoint may be used as a bytecode. Extensions will be accelerated for primitive performance by runtimes that recognize them, leading to de-facto standardization of popular ABC extensions.
 
+ABC is serializable and weakly legible. ABC strings are encoded in UTF-8 (mostly the ASCII subset), avoiding control characters, and may be rendered in normal text editors. Through extension, we support compact embeddings of data. For example, `#42` may construct a Church encoded natural number forty-two. Texts are embedded via a lightweight syntactic sugar. Through acceleration, we can also embed numbers and texts in the output from evaluation. Use of editable views, even textual versions like [claw](CommandLine.md), can further improve legibility for ABC.
 
+ABC is easily parallelized, persisted, and cached. This is an emergent consequence of its evaluation model and serializability. We can serialize an ABC computation, ship it to a remote processor for evaluation, look it up in a database to see if the result is known, or store it to disk to resume later. ABC also leverages serializability for its *value stowage* feature, an simple and robust variation on virtual memory to work with larger than memory tree-structured data.
 
+ABC is easily observed, debugged, and manipulated. This is an emergent consequence of its simple composition, locality of evaluation, and legibility: it is easy to take ABC programs, join them together, and watch them flow together or expand during evaluation like an active substance. With the AO link layer and caching, we can further model remote interactions - spreadsheet-like incremental computing with hypermedia objects. This is important to Awelon project's vision of HCI, modeling computation as a continuous and pervasive but accessible part of the user environment.
 
-
-ABC avoids entanglement with its computing environment. It
- We can take any ABC subprogram and evaluate it into another ABC representation of the same subprogram (much like `2 + 3` evaluates to `5`). Further, that representation 
-
-
-
-ABC is purely functional
-
-
-ABC avoids entanglement with its computing environment. There are no pointers, no jumps, no variables, no side-effects. This greatly simplifies problems of serializing, distributing, and persisting computations. The tradeoff is the need for any effects to be carried out by external software agents, e.g. modeling monadic effects or a [process network](KPN_Effects.md) to model input and  IO.
-
-ABC is evaluated by local, confluent, context-free rewriting. 
-
-ABC is concatenative
-
-
-
-
-ABC is concatenative. Composition of functions is easily represented by concatenation of bytecode.
-
-
-
- A 
-
-ABC is serializable as plain UTF-8 text, and hence may be viewed with normal text editors. 
-
-ABC avoids entanglement with its computing environment. 
-
-A first class function or incomplete computation is easily  
-
-ABC is easily serialized, shared, persisted, rendered. Relevantly, ABC avoids entanglement with the environment, and first-class functions within ABC 
-
-
-* Easily serialized, shared, persisted, and rendered. Relevantly, ABC avoids entanglement with the environment
-
-
-
-* ABC is **easily serialized and rendered**. ABC has a plain-text encoding that directly embeds numbers and literals. Thus, even a simple text editor can provide a useful view for debugging and comprehending code. AO is designed for use with editable views, projectional editors. Sophisticated graphical renderings are feasible.
-
-* ABC **embraces data**. Where most languages shift responsibility for data to an external filesystem or database, ABC prefers to internalize it. Doing so simplifies serialization, persistence, composition, static safety, partial evaluation and staging, transparent procedural generation, and modeling interactive objects. Further, this readily extends to larger-than-memory data via stowage and caching.
-
-* ABC is **evaluated by local rewriting**. ABC subprogram may usefully be evaluated with very little context, e.g. no need to provide arguments, no need to reach a subprogram from a main function. The bytecode is effectively an active material: just place it and watch it flow together. Further, partially evaluated results are useful even if our quota times out. Local rewriting simplifies a lot of Awelon project's HCI visions for computation being continuous, omnipresent, easily observed, composed, and tested.
-
-* ABC is **purely functional**. The rewriting semantics are simple, confluent, and context-free. Computations may be freely be cached or replicated. Modulo performance and quotas, ABC computations have deterministic behavior no matter which runtime evaluates them.
-
-* ABC is **simple**
-
-* ABC is **concatenative**. Composition of ABC functions is a simple concatenation of their programs. There is no sophisticated binding to perform, no headers or footers to manipulate. Conversely, decomposition is also straightforward, simply cutting programs apart at well defined fragments.
-
-* ABC is **streamable**. There are no pointers or jumps within the bytecode. Unbounded programs can processed iteratively, with code being removed from memory after it has been processed. This supports metaphors of code as a stream, and use of streaming code to model actions over time.
-
-* ABC is amenable to **type checking** and static analysis at the bytecode level. This simplifies safe sharing and linking, and reduces the need for a staged workflows. We can feel confident and secure in widely distributing ABC.
-
-* ABC is **incremental**. Between purity, serializability, and stowage, support for caching is safe and efficient. Systematic caching - together with some simple software patterns involving stowage - enables incremental computation even for massive data structures.
-
-* ABC supports **symbolic structure** with named relationships, resources, and metadata. This is achieved in context of the [Awelon Object (AO)](AboutAO.md) structure-preserving link and evaluation model, and serves as a basis for RESTful [application models](ApplicationModel.md).
-
-* ABC is **extensible**, via the link layer. Defining new operators is no more difficult than defining new functions. An interpreter or compiler can optimize a common set of functions to get effective performance.
+ABC is amenable to static analysis, type checking. However, evaluation does not depend on types, and is safe for unchecked evaluation. Because we can defer type checking until after evaluation, we have a lot of implicit support for staged metaprogramming. We can also share bytecode without requiring trust between agents.
 
 ## The Bytecode
-
-See also [ABC](ABC.md). 
-
-### Primitives
 
 ABC has only four primitive combinators `abcd`.
 
@@ -106,23 +48,25 @@ Tokens with *identity* semantics include seals `{:db}{.db}`, gates `{@foo}`, and
 
 ABC's primary linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. During evaluation, the token is substituted for the word's definition when doing so enables evaluation to proceed. 
 
-### Extension
+*Note:* Tokens are syntactically limited - at most 62 bytes UTF-8 token text between the curly braces, and the text itself may not contain curly braces, C0, DEL, C1, or the replacement character. Tokens should not include much logic or structure internally.
 
-ABC is extended through the link layer. In AO, `xyz` is effectively shorthand for `{%x}{%y}{%z}`. Reducing common operations to a single character enables compact representation of programs. An AO dictionary, thus, might define the following:
+### Bytecode Extension
+
+ABC is extended through the link layer. In context of AO, `xyz` is effectively shorthand for `{%x}{%y}{%z}`. Reducing common operations to a single character enables compact representation of programs. An AO dictionary, thus, might define the following:
 
         [B][A]w == [A][B]   (swap);     w = {&a2}[]ba
         [A]i    == A        (inline);   i = []wad
-        [B][A]o == [A B]    (compose);  o = [ai]bb
+        [B][A]o == [A B]    (compose);  o = {&a2}[ai]bb
 
-This idea is intended to be coupled with the performance idea of accelerated dictionaries, where an evaluator has hand-optimized implementations for a common subset of definitions. This would allow developers to get built-in primitive performance for a growing set of common operations, without a centralized standardization process.
+For performance, this idea should be coupled with the concept of accelerated dictionaries. An interpreter or compiler can provide optimized representations and implementations to support performance critical computations. Because performance requires cooperation with interpreters, bytecode extensions will tend to have some de-facto standardization.
 
 ### Data Embedding and Extraction
 
-Leveraging the ABC dictionary, we can define eleven operators `#1234567890` such that `#` introduces a new zero value, and each digit performs the Church encoded equivalent of "multiply by ten, add digit". Thus, `#42` would construct the Church encoded 42. Relevantly, a runtime can recognize a de-facto standard encoding for numbers then also *output* number results using these operators, i.e. such that `#7 #6 *` may evaluate to `#42`.
+Leveraging the ABC dictionary, we can define eleven operators `#1234567890` such that `#` introduces a new zero value, and each digit performs the Church encoded equivalent of "multiply by ten, add digit". Thus, `#42` would construct a Church encoded 42. 
 
-If we additionally accelerate these operations, our natural number might be represented within a simple machine word under the hood. And we might further accelerate basic arithmetic, and output the data in terms of the same eleven opcodes, such that `#3 #4 +` evaluates to `#7`. 
+Leveraging the *accelerated dictionary* concept, a runtime might recognize the encoding for numbers, use a machine word to represent them under the hood, and output numeric results in the same form such that `#6 #7 *` evaluates to `#42`. 
 
-Text embedding will need a syntactic sugar:
+Text embedding is a special case and needs a syntactic sugar:
 
         "literals are multi-line UTF-8
          they start with character " (32)
@@ -136,8 +80,12 @@ Text embedding will need a syntactic sugar:
          no other special characters
         ~
 
-I haven't settled on a particular model for literals, though I might favor something like `"hello" => [[#104] "ello" s]`. One general goal is that it should be feasible to unify numbers, texts, and more generic command sequences (cf. [claw](CommandLine.md)) as having a common structure - perhaps an iterator over a sequence. 
+I haven't settled on a specific model for embedded text. Primary candidate:
 
+        "hello" => [[#104] "ello" y]    (y for 'yield')
+        ""      => #
+
+This representation favors structural unification of natural numbers, texts, [claw command sequences](CommandLine.md), and general coroutines. For example, natural number `#5 == (,,,,)` (yield five times, no action) and `"hello" == (#104, #101, #108, #108, #111)` (yield five times, each time placing a number on the stack). 
 
 ### Whitespace Formatting
 
@@ -145,39 +93,106 @@ SP and LF are permitted in ABC. They will have identity semantics, equivalent to
 
 ## ABC Evaluation and Performance
 
-ABC evaluation rewrites an ABC program into a different representation of the same program. A general evaluation strategy for ABC is: 
+### Basic Evaluation Strategy
+
+ABC evaluation rewrites an ABC program into a different representation of the same program. A simple evaluation strategy for ABC is: 
 
 * rewrite outer program
-* evaluate inner values
+* evaluate before copy 
+* evaluate final values
+* prioritize annotations
 
-By first rewriting the outer program, we get the most opportunity to apply annotations or drop conditional evaluation. When rewriting has fully completed, we'll have a stable structure containing code and blocks. We can go through each block and repeat the evaluation strategy.
+By first rewriting the outer program, we get some opportunity to apply annotations (notably `{&lazy}`) or drop conditional evaluation. By evaluating a value before copying it, we avoid creating rework. When rewriting has completed, we can usefully proceed with evaluating the values because they haven't been dropped.
 
-A runtime has discretion to deviate from this strategy. Evaluation order doesn't affect program semantics.
+### Evaluation Control
+
+For performance reasons, developers may wish to guide the evaluation strategy. This may be supported by use of annotations:
+
+* `{&seq}`  - shallow evaluation of argument
+* `{&par}`  - parallel shallow evaluation
+* `{&lazy}` - lazy evaluation, do not evaluate 
+* `{&eval}` - full evaluation of argument
+* `{&a2}..{&a7}` - restrict partial evaluation on arity
+
+Use of `{&seq}` and `{&eval}` would correspond to normal evaluation strategies, with `{&seq}` just evaluating the toplevel (same as you'd evaluate upon `i`) and `{&eval}` performing deep evaluation. 
+
+Use of `{&par}` is an explicitly parallel `{&seq}`. Making this explicit is useful because parallelism may have some non-trivial overhead such that we don't want it for the normal case. Dropping a parallel evaluation should cause it to abort, while copying a parallel evaluation may wait until it completes. More expressive parallelism is feasible with *acceleration of process networks* (see below).
+
+Laziness is an important strategy. Though 'lazy' is misleading - it's actually *call by name* in the sense that copying a lazy value does not use a shared cache. Use `{&lazy}` with `{&cache}` (described later) if you need conventional laziness. Laziness is critical for fixpoints and modeling infinite data structures.
+
+Arity annotations are defined by a series of six rewrite rules:
+
+        [B][A]{&a2} => [B][A]
+        [C][B][A]{&a3} => [C][B][A]
+        ...
+        [G][F][E][D][C][B][A]{&a7} => [G][F][E][D][C][B][A]
+
+Arity annotations are effectively a form of lightweight input buffering, and enable developers to guard against partial evaluations when they aren't useful or interesting. For example, the swap function `[]ba` could be applied to a single argument, resulting in `[[A]]a`. But there isn't much benefit in doing so, so we instead use `{&a2}[]ba` to ask for two arguments before continuing. Arity annotations are especially useful in context of [AO](AboutAO.md) because it can help control lazy linking.
 
 ### Accelerated Dictionary
 
-A runtime can optimize an anonymous dictionary of common words, such that they achieve near native performance or use more efficient representations for things like natural numbers. Developers may then derive from this dictionary. Some useful areas to pursue big step acceleration:
+An ABC runtime system (interpreter, compiler, etc.) should specify an [Awelon Object (AO)](AboutAO.md) dictionary including functions that it specially recognizes. The runtime dictionary should also document recognized annotations, rewrite rules, and related metadata. Developers will construct their own dictionaries using the runtime dictionary as a starting point or reference.
 
-* natural number arithmetic
+Recognized functions are 'accelerated' by substitution of hand-optimized implementations and data representations. Optimization of data representation is the critical feature. That is not something easily achieved by a compiler. Upon recognizing `#1234567890`, an ABC runtime could use machine words to represent construction of natural numbers. By further recognizing arithmetic operations, this representation may be used for calculations.
+
+Other valuable targets for acceleration:
+
+* floating point numbers
 * binary and list processing
-* key-value records or databases
-* floating point number models
-* linear algebra, matrix math
-* process network evaluation
+* key-value records and databases
+* linear algebra and matrix math
+* parallel process networks
 
-Acceleration is achieved in cooperation with the link layer, which we also use to extend the bytecode. Effectively, we just substitute known words with hand-optimized implementations in the interpreter. Acceleration can easily work together with JIT, with acceleration covering the more tricky requirements.
+Recognition of accelerated functions may be fragile, i.e. requiring an exact match of function names and definitions. Ideally, it would be more robust and portable. But efficient recognition of accelerators is also important (especially for an interpreter), and is easiest at the link layer.
 
-### Fork/Join Parallelism
+### Accelerated Fixpoints and Loops
 
-ABC's purity supports a simple form of parallelism: we can evaluate many subexpressions at the same time. However, due to various granularity and cache locality concerns, I imagine ABC evaluators will tend to be sequential by default and only introduce parallelism where requested. A simple expression for parallelism is:
+Fixpoint applies a function with a fixpointed copy in context.
 
-        [computation]{&par}
+        [A]Y == [[A]Y] A
 
-This computation would then run in parallel with other computations in the outer program. A parallel computation may be dropped (operator `d`) which should abort the effort. An attempt to copy (operator `c`) a parallel computation must generally *wait for it to complete*, to avoid issues of duplicating an incomplete computation in a program that halts on quota. 
+Fixpoint is a valuable function for general purpose programming. ABC does not have any built-in loop constructs, nor does it support recursion via the link layer (AO definitions must be acyclic). But use of a fixpoint combinator allows for expression of arbitrary loop constructs. The original `Y` combinator, discovered by Haskell Curry, can easily be translated to ABC:
+
+        (Problematic Fixpoint Candidate)
+
+        Y = [cb]oci
+
+        [A]Y == [A][cb]oci      (def Y)
+             == [cb A]ci        (def o)
+             == [cb A][cb A]i   (def c)
+             == [cb A]cb A      (def i)
+             == [cb A][cb A]b A (def c)
+             == [[cb A]cb A]  A (def b)
+             == [[A]Y] A        (by fourth equality)
+
+However, this fixpoint has two weaknesses. First, the "by fourth equality" step is difficult to perform with normal evaluation and results in *two* copies of `A` that aren't in use. Second, ABC's standard evaluation strategy (which evaluates within functions by default) may result in infinitely more copies if the fixpoint function is part of our output: `[A]Y => [[A]Y]A => [[[A]Y]A]A ...`. To address these weaknesses, I recommend an alternative variation of fixpoint that includes a `{&lazy}` annotation and defers copy:
+
+        (Recommended Fixpoint Candidate)
+
+        [A]Y == [[A]Y]{&lazy} A
+
+        Y = [[c]a[ci]bb{&lazy}wi]ci
+
+        [A]Y == [A][[c]a[ci]bb{&lazy}wi]ci                          (def Y)
+             == [A][[c]a[ci]bb{&lazy}wi][[c]a[ci]bb{&lazy}wi]i      (def c)
+             == [A][[c]a[ci]bb{&lazy}wi] [c]a[ci]bb{&lazy}wi        (def i)
+             == [A]c[[c]a[ci]bb{&lazy}wi]    [ci]bb{&lazy}wi        (def a)
+             == [A]c[[[c]a[ci]bb{&lazy}wi]ci]  b{&lazy}wi           (def b)
+             == [A]c[          Y            ]  b{&lazy}wi           (def Y)
+             == [A][A][Y]b{&lazy}wi                                 (def c)
+             == [A][[A]Y]{&lazy}wi                                  (def b)
+             == [[A]Y]{&lazy}[A]i                                   (def w)
+             == [[A]Y]{&lazy} A                                     (def i)
+
+This requires a few more steps, but avoids an unnecessary copy of `A`, and the definition of `Y` is clearly part of the output. So a simple rewrite step after direct evaluation would recover the fixpoint structure.
+
+Regardless, we'll want to *accelerate* our fixpoint combinator. By recognizing this operation and accelerating it, we can essentially reduce fixpoint to an annotation on a function. A loop becomes a single step operation, and the `Y` is easily preserved in the final output. 
+
+We might also accelerate common loop constructs built with the `Y` combinator, e.g. it is possible to define a useful, pure `while` function over a sum type: `while :: (a + b) → (a → (a + b)) → b`, and this can be augmented with an extra state value (the stack). 
 
 ### Accelerated Process Networks
 
-While use of `{&par}` is useful for simple divide-and-conquer strategies on large data structures, it is not very expressive. For example, it cannot express communicating processes or pipelines. To support more expressive parallelism, I propose that ABC runtimes should *accelerate* evaluation of a bounded-buffer variant of [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks).
+While use of `{&par}` is sufficient for simple divide-and-conquer strategies on large data structures, it is not very expressive. For example, it cannot express communicating processes or pipelines. To support more expressive parallelism, I propose that ABC runtimes should *accelerate* evaluation of a bounded-buffer variant of [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks).
 
 A description of a KPN (processes, wires, messages on wires) can be deterministically evaluated into a new description of the same KPN. This evaluation can be naively represented as a pure function. 
 
@@ -187,7 +202,7 @@ A runtime accelerated evaluator can use more conventional queues and threads int
 
 ### Accelerated Linear Algebra
 
-While KPNs are great for most parallel processing, we'll additionally need to accelerate matrix and vector math to take full advantage of GPGPU or SSE based parallelism.
+While KPNs are great for most parallel processing, we'll additionally need to accelerate matrix and vector math to take full advantage of GPGPU or SSE based parallelism. This will require a lot of care and consideration, but there are good examples to follow like Haskell's 'accelerate' and (for graphics) 'lambda cube'. 
 
 ### Compilation
 
@@ -242,6 +257,7 @@ Many annotations are used for performance:
 * `{&par}` - parallelize evaluation of subprogram
 * `{&eval}` - perform full evaluation of subprogram
 * `{&lazy}` - delay evaluation until otherwise requested
+* `{&a2}..{&a7}` - arity annotations to control batching
 * `{&lit}` - force argument to text literal representation
 * `{&nat}` - force argument to natural number representation
 * `{&stow}` - move value to link layer, away from working memory
@@ -355,13 +371,11 @@ ABC provides a simple mechanism for controlling scope of a computation. Assume w
 
         [A][B][foo]bb{&t3}i
 
-What we're doing here is binding two arguments to the function, asserting that there are three outputs, then inlining those outputs into our main code. Dynamically, the `{&t3}` tuple annotation requires a simple bit of reflection. 
+What we're doing here is binding two arguments to the function, asserting that there are three outputs, then inlining those outputs into our main code. Dynamically, the `{&t3}` annotation, asserting the argument is a tuple of size three, requires a simple bit of reflection. 
 
         [[A][B][C]]{&t3}    =>  [[A][B][C]]
 
-We might expect an ABC system to support `{&t0}..{&t7}`. Support for `{&t1}` is sufficient, but support for a practical range is convenient.
-
-If we determine through static analysis that the `{&t3}` annotation is correct, the dynamic check can be bypassed, the annotation potentially removed entirely. So this annotation is suitable for both static and dynamic contexts.
+I propose that most ABC systems should support `{&t0}`..`{&t7}`, the practical range of tuple sizes. If we determine through static analysis that the `{&t3}` annotation will be valid at runtime, the annotation may be eliminated statically. So this annotation is suitable in both static and dynamic contexts.
 
 ### Value Sealing for Lightweight Types
 
@@ -434,18 +448,6 @@ Developers may freely specify their own error values:
 
 Use of `{&error}` marks a *value* as erroneous. Observing that value, e.g. with `[A]{&error}i`, results in a stuck computation. Being stuck on an error will not generate further errors. A type checker may treat an error value as having any type.
 
-### Arity Annotations
-
-Arity annotations are defined by a set of rewrite rules of form:
-
-        [A][B]{&a2}     == [A][B]
-        [A][B][C]{&a3}  == [A][B][C]
-        ...
-
-Each annotation simply has the given arity. Arity annotations don't say anything about the surrounding computation. An AO runtime should support at least the practical range `{&a1}`..`{&a7}`. More than seven is generally impractical without a parameter object.
-
-Arity annotations offer a simple way to control evaluation, e.g. to avoid copying or binding before there is need to do so. This is most important in context of [AO](AboutAO.md) where arity annotations can help control lazy linking, waiting until sufficient arguments are available for evaluation to proceed.
-
 ### Gates for Active Debugging
 
 Active debugging describes techniques that provide a view of a computation in progress: breakpoints, logging, animation, tracing, profiling.
@@ -500,42 +502,3 @@ I'd rather avoid this sort of ad-hoc reflection at runtime. But it could be supp
 * `{&beqv}` - assert two values are behaviorally equivalent
 
 Behavioral equivalence might be tested by some ad-hoc combination of static analysis or fuzz testing.
-
-### Accelerated Fixpoint
-
-Fixpoint is an important function for general purpose programming. It enables ad-hoc loops. It is not difficult to define fixpoint functions in ABC. One simple option is `[cb]ocb` (with `o = [ai]bb, i = [][]baad`).
-
-        [A]y    ==  [[A]y A]  (fixpoint);   y = [cb]ocb
-
-        [A]y    ==  [A][cb]ocb     (def y)
-                ==  [cb A]cb       (def o)
-                ==  [cb A][cb A]b  (def c)
-                ==  [[cb A]cb A]   (def b)
-                ==  [[A]y A]       (eqv (step 0, step 2))
-
-However, this definition has the unfortunate characteristic of copying `A` prematurely. We can tune a bit for explicit laziness and to avoid unnecessary copies.
-
-
-Whatever our choice, our runtime should aim to accelerate use of fixpoint such that unnecessary copies are not performed, we perform the bare minimum of steps, and we recover the fixpoint operator in the final output. Because this will be a common operation in practice.
-
-
-#### Z combinator - not what I want 
-        [Arg][A]Z == [Arg][[A]Z]A
-
-        Z = [[c]a[{&a3}ci]bbwi]{&a3}ci
-
-        [Arg][A]Z 
-            == [Arg][A][[c]a[{&a3}ci]bbwi]{&a3}ci                   (def Z)
-            == [Arg][A][[c]a[{&a3}ci]bbwi]ci                        (arity)
-            == [Arg][A][[c]a[{&a3}ci]bbwi][[c]a[{&a3}ci]bbwi]i      (def c)
-            == [Arg][A][[c]a[{&a3}ci]bbwi][c]a[{&a3}ci]bbwi         (def i)
-            == [Arg][A]c[[c]a[{&a3}ci]bbwi][{&a3}ci]bbwi            (def a)
-            == [Arg][A]c[[[c]a[{&a3}ci]bbwi]{&a3}ci]bwi             (def b)
-            == [Arg][A]c[Z]bwi                                      (def Z)
-            == [Arg][A][A][Z]bwi                                    (def c)
-            == [Arg][A][[A]Z]wi                                     (def b)
-            == [Arg][[A]Z][A]i                                      (def w)
-            == [Arg][[A]Z]A                                         (def i)
-
-Or we could try to use the `{&lazy}` annotation on the `[[A]Z]` construct.
-
