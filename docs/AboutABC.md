@@ -4,11 +4,55 @@ Awelon Bytecode (ABC) provides a computational medium in which ideas, data, and 
 
 ## Why a New Bytecode?
 
-Awelon project has a vision for human-computer interaction that places users within the environment rather than above or apart from it. This vision includes alternative [application models](ApplicationModel.md) where humans and software agents operate upon a codebase in a shared environment, and a [linked evaluation model](AboutAO.md) that preserves ad-hoc structure meaningful to humans and software agents.
+Awelon project has a vision for human-computer interaction that places users within the environment rather than above or apart from it, where all HCI is modeled as software development and live programming. This vision includes non-conventional [application models](ApplicationModel.md) where humans and software agents operate upon a codebase in a shared environment, and a [linked evaluation model](AboutAO.md) that preserves ad-hoc structure meaningful to humans and software agents.
 
 Most bytecodes aren't designed with such applications in mind.
 
-ABC has many unusual features that make it suitable for Awelon project:
+What sets ABC apart from other bytecodes:
+
+ABC is evaluated by local, confluent rewriting without any unrepresentable terms. Hence, *we may take any ABC subprogram and evaluate it* into another representation of the same program. This is similar to how `2 + 3` evaluates to `5`. 
+
+ABC evaluation is pure, without side-effects. Hence we're free to cache, replicate, or replay any computation for reasons of performance or comprehension. Effects and IO must be handled by external software agents, if at all - e.g. via [process networks](KPN_Effects.md) or RESTful [application models](ApplicationModel.md).
+
+
+
+
+
+ABC avoids entanglement with its computing environment. It
+ We can take any ABC subprogram and evaluate it into another ABC representation of the same subprogram (much like `2 + 3` evaluates to `5`). Further, that representation 
+
+
+
+ABC is purely functional
+
+
+ABC avoids entanglement with its computing environment. There are no pointers, no jumps, no variables, no side-effects. This greatly simplifies problems of serializing, distributing, and persisting computations. The tradeoff is the need for any effects to be carried out by external software agents, e.g. modeling monadic effects or a [process network](KPN_Effects.md) to model input and  IO.
+
+ABC is evaluated by local, confluent, context-free rewriting. 
+
+ABC is concatenative
+
+
+
+
+ABC is concatenative. Composition of functions is easily represented by concatenation of bytecode.
+
+
+
+ A 
+
+ABC is serializable as plain UTF-8 text, and hence may be viewed with normal text editors. 
+
+ABC avoids entanglement with its computing environment. 
+
+A first class function or incomplete computation is easily  
+
+ABC is easily serialized, shared, persisted, rendered. Relevantly, ABC avoids entanglement with the environment, and first-class functions within ABC 
+
+
+* Easily serialized, shared, persisted, and rendered. Relevantly, ABC avoids entanglement with the environment
+
+
 
 * ABC is **easily serialized and rendered**. ABC has a plain-text encoding that directly embeds numbers and literals. Thus, even a simple text editor can provide a useful view for debugging and comprehending code. AO is designed for use with editable views, projectional editors. Sophisticated graphical renderings are feasible.
 
@@ -18,6 +62,8 @@ ABC has many unusual features that make it suitable for Awelon project:
 
 * ABC is **purely functional**. The rewriting semantics are simple, confluent, and context-free. Computations may be freely be cached or replicated. Modulo performance and quotas, ABC computations have deterministic behavior no matter which runtime evaluates them.
 
+* ABC is **simple**
+
 * ABC is **concatenative**. Composition of ABC functions is a simple concatenation of their programs. There is no sophisticated binding to perform, no headers or footers to manipulate. Conversely, decomposition is also straightforward, simply cutting programs apart at well defined fragments.
 
 * ABC is **streamable**. There are no pointers or jumps within the bytecode. Unbounded programs can processed iteratively, with code being removed from memory after it has been processed. This supports metaphors of code as a stream, and use of streaming code to model actions over time.
@@ -26,9 +72,9 @@ ABC has many unusual features that make it suitable for Awelon project:
 
 * ABC is **incremental**. Between purity, serializability, and stowage, support for caching is safe and efficient. Systematic caching - together with some simple software patterns involving stowage - enables incremental computation even for massive data structures.
 
-* ABC is **extensible**, via the link layer. Defining new operators is no more difficult than defining new words. This can be coupled with an ABC runtime optimizing for a common subset of words and definitions to utilize more efficient representations.
-
 * ABC supports **symbolic structure** with named relationships, resources, and metadata. This is achieved in context of the [Awelon Object (AO)](AboutAO.md) structure-preserving link and evaluation model, and serves as a basis for RESTful [application models](ApplicationModel.md).
+
+* ABC is **extensible**, via the link layer. Defining new operators is no more difficult than defining new functions. An interpreter or compiler can optimize a common set of functions to get effective performance.
 
 ## The Bytecode
 
@@ -114,9 +160,10 @@ A runtime can optimize an anonymous dictionary of common words, such that they a
 
 * natural number arithmetic
 * binary and list processing
+* key-value records or databases
 * floating point number models
 * linear algebra, matrix math
-* process network evaluations
+* process network evaluation
 
 Acceleration is achieved in cooperation with the link layer, which we also use to extend the bytecode. Effectively, we just substitute known words with hand-optimized implementations in the interpreter. Acceleration can easily work together with JIT, with acceleration covering the more tricky requirements.
 
@@ -161,9 +208,11 @@ ABC's semantics admit rewrites for performance. For example:
         cw      =>  c
         ad      =>  wdi         (easier tail calls)
 
-Rewrites can also be used to systematically recognize big step accelerators. For example, we might rewrite `[][]baad` or `[[]]aad` to `i`. 
+Rewrites might be used to systematically recognize accelerators like `[][]baad => i`. 
 
-Unfortunately, rewrite optimizations tend to be ad-hoc and fragile. They are difficult to apply to dynamically constructed code, and are difficult to prove safe in the general case. So I would prefer not to rely on them, just take advantage where it's easy. If developers need to optimize code, they should make explicit a staged, intermediate language.
+Rewrites benefit from accelerators. An interesting possibility is recognizing associative actions, like multiplication of matrices or merging of key-value databases or loop fusions, and rewriting them for performance.
+
+Unfortunately, rewrite optimizations tend to be ad-hoc and fragile. They are difficult to apply to dynamically constructed code, and are difficult to prove safe in the general case. I would prefer not to rely on them too much. In most cases, developers should aim to make optimizations explicit, e.g. construct an intermediate object representing a lazy multiplication of matrices then reorder on run.
 
 ### Stowage and Caching
 
@@ -464,8 +513,13 @@ Fixpoint is an important function for general purpose programming. It enables ad
                 ==  [[cb A]cb A]   (def b)
                 ==  [[A]y A]       (eqv (step 0, step 2))
 
-However, this definition has the unfortunate characteristic of copying `A` both before it is used and without bound thereafter. We might favor a fixpoint combinator that requires an additional argument before copying, e.g. the [Z-combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator). We can achieve this with arity annotations.
+However, this definition has the unfortunate characteristic of copying `A` prematurely. We can tune a bit for explicit laziness and to avoid unnecessary copies.
 
+
+Whatever our choice, our runtime should aim to accelerate use of fixpoint such that unnecessary copies are not performed, we perform the bare minimum of steps, and we recover the fixpoint operator in the final output. Because this will be a common operation in practice.
+
+
+#### Z combinator - not what I want 
         [Arg][A]Z == [Arg][[A]Z]A
 
         Z = [[c]a[{&a3}ci]bbwi]{&a3}ci
@@ -483,24 +537,5 @@ However, this definition has the unfortunate characteristic of copying `A` both 
             == [Arg][[A]Z][A]i                                      (def w)
             == [Arg][[A]Z]A                                         (def i)
 
-In context of dictionary acceleration, the specific choice of fixpoint combinator won't make a big difference. In either case, our runtime should attempt to preserve the `y` or the `z` in the output. 
+Or we could try to use the `{&lazy}` annotation on the `[[A]Z]` construct.
 
- If our runtime knows `y`, it could lazily translate between `[A]y` and `[[A]y A]` as needed.
-
-A runtime that knows about runtime can just as easily translate from `[[A]y A]` back to `[A]y`
-
- both cases, we'll want to lazily fixpoint
-
-
-
-        [Arg][A]Z 
-            == [Arg][A][{&arity3}[c]acbbwi]ci                         (def Z)
-            == [Arg][A][{&arity3}[c]acbbwi][{&arity3}[c]acbbwi]i      (def c)
-            == [Arg][A][{&arity3}[c]acbbwi]{&arity3}[c]acbbwi         (def i)
-            == [Arg][A][{&arity3}[c]acbbwi][c]acbbwi                  (arity3)
-            == [Arg][A]c[{&arity3}[c]acbbwi]cbbwi                     (def a)
-            == [Arg][A][A][{&arity3}[c]acbbwi]cbbwi                   (def 
-                
-
-
-I would like to consider whether I can do better by avoiding the replication of the `A` program until just before it is needed. This might be a bit difficult without a specialized optimization because rewrite rules can easily penetrate blocks - the 'static overhead' techniques I used before might not work.

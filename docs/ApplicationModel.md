@@ -1,64 +1,97 @@
 
-# Application Models for Awelon Project
+# Application Model for Awelon Project
 
-Awelon project will focus on RESTful applications, with the relevant resources being [Awelon Object](AboutAO.md) dictionaries and ad-hoc objects represented within them. Applications are modeled in terms of creating, reading, updating, and deleting words or dictionaries. AO preserves link structure upon evaluation. Together with object attributes (to provide metadata for rendering and updating objects), we can offer a simple and effective basis for hypermedia.
+Awelon project will focus on RESTful applications, with the primary resources being [Awelon Object](AboutAO.md) dictionaries and objects modeled within them. Applications are modeled in terms of creating, reading, updating, and deleting definitions of words. Effects are carried out by a multi-agent system. Real-time behavior can be supported via publish-subscribe patterns. 
 
-Updates to a dictionary can propagate to ad-hoc views. In addition to implicit word-level caching, stowage together with explicit `[computation]{&cache}` can support efficient recomputation of a compositional view upon a change in a persistent structure. For example, we could update a graph in real-time based on changes deep within a database maintained in another word. Further, we can efficiently cache ad-hoc views that aren't statefully preserved by permanent words in a dictionary.
+This document will mostly discuss patterns for modeling applications, and why they're useful.
 
-In context of a publish-subscribe protocol (or Comet based view), it is feasible to keep external systems and users up to date on a system in real-time. 
-
-Effects can be supported by the multi-agent layer:
-
-* For one-off effects, we might represent a *request* in a dictionary to perform the external effect, which is later fulfilled by a human or software agent. The agent in question may update information about success/failure/etc.. An observer might see the move from a 'pending' state to a 'success, here's the data' or 'failed, here's why' state. 
-
-* Publish-subscribe options are possible, e.g. continuously updating a dictionary with time-series data or maintaining current or recent information. On the subscribe side, the spreadsheet-style realtime updates would be very useful in combining data from many time-varying resources and we could push that information out into real-world decision making.
-
-However, Awelon project systems will not directly perform side-effects. Though, it is feasible to extract an application that might operate in a more conventional manner with [imperative](NotImperative.md) side-effects.
-
-## Dictionary Objects and Attributes
-
-A dictionary contains a set of defined words. However, it is frequently convenient to imagine these words as representing objects. This can be supported with simple naming conventions. Given a word `foo` we might look into the dictionary and discover attribute words like `foo.doc`, `foo.talk`, `foo.type`, `foo.author`, and so on. We may understand these as being usefully related object `foo`.
-
-Dictionary objects and attributes have an ad-hoc semantics based on the conventions surrounding their use. 
-
-Dictionary objects can be flat, non-hierarchical. That is, if we need `foo.doc` to refer to something with its own attributes, we can a redirect from `foo.doc` to a separate documentation object. This isn't a requirement, but it might prove to be a best practice. AO words remain limited to 30 UTF-8 bytes, so deep hierarchy isn't possible.
-
-*Note:* Attributes can usefully express cyclic relationships between objects. For example `foo.child` could redirect to `bar` and `bar.parent` back to `foo`. Word level cycles aren't permitted by AO, but the ability to express object-level cyclic relationships could very convenient for RESTful views.
-
-## Dictionary Tables and Spreadsheets
-
-A set of dictionary objects readily be viewed as implicitly having a sparse, tabular layout. For example, word `foo.doc` may be interpreted as specifying row `foo`, column `doc`. The actual definition of `foo` might be represented as another implicit column. 
-
-To select a set of objects to view, we could filter dictionary words by attributes, types, or values. We could compute a list of `[{%word}]` objects. Or we could represent a table as another, second-class dictionary object. 
-
-        @myTable.row1 {%foo}
-        @myTable.row2 {%bar}
-        @myTable.row3 {%baz}
-        ...
-
-Regardless of how we specify our set of objects, AO makes it easy to render both the definitions of each word and their context-free evaluations or linker objects. Thus, we can render evaluated cells in a table while enabling editing of each cell's definitions, and propagating updates to the rendered views. We effectively get spreadsheets without any special effort.
-
-## Command Pattern in AO
+## Command Pattern
 
 The command pattern might be represented as:
 
         @foo.v0 (initial state)
+        @foo.u1 (command1)
         @foo.v1 {%foo.v0}{%foo.u1}
+        @foo.u2 (command2)
         @foo.v2 {%foo.v1}{%foo.u2}
         ...
+        @foo.u99 (command99)
         @foo.v99 {%foo.v98}{%foo.u99}
         @foo {%foo.v99}
 
-Preserving history by default is a good thing. It simplifies features like fork, merge, undo, and history debugging. However, large histories for small objects may need to be compacted and garbage collected over time.
+Use of command pattern enables many small updates to construct and modify an object, in this case `{%foo}`.  This particular design records every command as a distinct set of words, simplifying view of historical values and actions on the object, easy forking and undo, etc..
 
-Conveniently, command pattern is readily represented at the dictionary level, e.g. with streaming dictionary updates. We might essentially HTTP PUT a patch on a named dictionary with a structure:
+Command pattern can be used for such things as:
 
-        ~
-        @command99 (...)
-        @foo.v99 {%foo.v98}{%command99}
-        @foo {%foo.v99}
+* addending a time-series database
+* updating a key-value database or other large object
+* editing documents modeled as finger-tree ropes
+* modeling user actions - a button press, HTTP POST
 
-From a human user's perspective, command pattern will frequently be associated with HTTP POST or the pushing of a button. From a software agent's perspective, it might be based on a publish-subscribe model. 
+Effectively, command pattern models a mutable object within a dictionary, albeit only mutable by external agents. 
+
+## Compositional Views
+
+Evaluating and caching words can support spreadsheet-like propagation of updates, but that alone is insufficient to efficiently work with words that contain large objects. In context of command pattern, for example, we'll have small changes to large objects. 
+
+To fully leverage cache, favor compositional views on persistent objects:
+
+        ∃f. ∀x,*,y. view(x * y) = f(view(x),'*',view(y))
+
+That is, the view of a composition is a composition of views. With this, we may explicitly cache `view(x)` and `view(y)`. Our assumption of persistence (i.e. a lot of structure sharing) means it is unlikely both `x` and `y` have changed, so we can reuse at least part of the cache.
+
+Fortunately, a lot of views and data fit these constraints or at least can be adapted by keeping metadata with the view. Thus, we can support spreadsheet-like propagation even in contexts like time-series data and massive key-value databases.
+
+*Aside:* ABC supports explicit caching via `[computation]{&cache}`. Caching does have overhead for serialization and storage. To mitigate this overhead, we might cache only at coarse-grained, stable boundaries. For example, with time-series data, we could batch updates into frames (based on sample count) and only cache full frames.
+
+## Publish Subscribe
+
+AO resources can be observed and updated in real-time by both human and software agents. A human may subscribe to dashboard views and use commands (or direct manipulation) to update policy. An 'internet of things' device might use a command pattern to publish time-series data while subscribing to a schedule of goal states. 
+
+Publish subscribe provides a foundation for continuous effects, live programming of real world systems. It is greatly enhanced by both the ability to subscribe to computed views and to support eventful updates to shared database objects.
+
+## Effectful Orders
+
+A RESTful pattern for effectful systems is to model each request as a first class resource - a [work order](https://en.wikipedia.org/wiki/Work_order) (of sorts) to be fulfilled by agents in a multi-agent system. 
+
+Agents party to this system would search for orders matching some ad-hoc conditions (e.g. unfulfilled, authorized, within the agent's domain). Upon discovering a suitable order, the agent may claim it briefly, perform some work, then update the resource to indicate progress or results. A single order may be fulfilled by multiple agents over time, and in the general case might result in construction of orders for subtasks.
+
+This is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept.
+
+Orders must be coarse grained to amortize the search, dispatch, and update overheads. In practice, orders will frequently include decisions and loops so we can get more work done. A sophisticated order might be represented as a [KPN](KPN_Effects.md) or monadic action. 
+
+Orders can be used for one-off effects. But when orders involve ongoing work, we might record incremental progress, integrate with publish-subscribe and time-varying policies. 
+
+In context of AO, orders may be modeled as objects in a dictionary.
+
+## Dictionary Objects
+
+At the AO layer, the only formal meaning of a word is its definition. However, humans and software agents may treat words as having more meaning and structure. We may associate `foo` with `foo.doc`, `foo.talk`, `foo.type`, `foo.author`, and so on. This association can be realized in our development environment. Tools would delete or rename the `foo` object as a whole. Conventional attributes may guide rendering and editing of objects. 
+
+Redirects can model references between objects, eliminating need for hierarchical structure. And while AO does not permit cyclic definitions, we can easily express cyclic relationships between objects (e.g. from `foo → bar` and `bar.parent → foo`).
+
+## Hypermedia Applications
+
+AO evaluation preserves some link structure. The output of evaluation may be understood as a document containing references to other objects in the dictionary. Those references may be displayed as hyperlinks, frames, or other techniques, perhaps depending on object attributes. Attributes may also indicate tools or forms to update an object, supporting type or application specific operation.
+
+## Tables and Spreadsheets
+
+With AO and ABC, any subprogram can be evaluated. Hence, if we have a table full of subprograms, we can evaluate each of them. When some subprograms depend on others, the evaluation may propagate in the style of a spreadsheet. Awelon can potentially model very expressive spreadsheets by use of stowage and caching, enabling time-series databases and similar to be presented as individual 'cells' in the spreadsheet. 
+
+Of course, we still need the tabular layout. 
+
+One option is to render a set of dictionary objects. We could take `foo.doc` as meaning row `foo` column `doc`. In this sense, a dictionary itself becomes a potential spreadsheet, though we might filter only for objects meeting certain criteria. Alternatively, we could construct an object where each attribute redirects to a row object:
+
+        @myTable.r1 {%foo}
+        @myTable.r2 {%bar}
+        @myTable.r3 {%baz}
+        ...
+
+This would be convenient as a basis to construct a stable spreadsheet by hand.
+
+Modeling spreadsheets in an AO dictionary, together with hypermedia, might be a convenient basis for rapid application development - dashboards, etc..
+
+Regardless of how we specify our set of objects, AO makes it easy to render both the definitions of each word and their context-free evaluations or linker objects. Thus, we can render evaluated cells in a table while enabling editing of each cell's definitions, and propagating updates to the rendered views. We effectively get spreadsheets without any special effort.
 
 ## Managed Dictionaries
 
