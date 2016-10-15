@@ -91,47 +91,44 @@ This representation favors structural unification of natural numbers, texts, [cl
 
 SP and LF are permitted in ABC. They will have identity semantics, equivalent to the empty program. Essentially, this just permits some lightweight formatting of bytecode for easier reading.
 
+
+
+
 ## ABC Evaluation and Performance
 
 ### Basic Evaluation Strategy
 
-ABC evaluation rewrites an ABC program into a different representation of the same program. A simple evaluation strategy for ABC is: 
+ABC evaluation rewrites an ABC program into a different representation of the same program. The goal isn't necessarily reduction to a 'normal' form, but rather to a condition efficient for extracting information, sharing, or usefully performing further evaluations, etc..
+
+The basic evaluation strategy for ABC is: 
 
 * rewrite outer program
-* evaluate before copy 
+* evaluate before copy
+* copy lazily, by need
 * evaluate final values
-* prioritize annotations
 
-By first rewriting the outer program, we get some opportunity to apply annotations (notably `{&lazy}`) or drop conditional evaluation. By evaluating a value before copying it, we avoid creating rework. When rewriting has completed, we can usefully proceed with evaluating the values because they haven't been dropped.
+By first rewriting the outer program, we have some opportunity to apply annotations or drop conditional operations. By evaluating before copying a value, we avoid rework. By copying only if there is demand (e.g. via `a` or `b`), we avoid unnecessarily replicating data in the output. Deep evaluation of final values is useful for data extraction and efficient further evaluation.
 
-### Evaluation Control
+The basic evaluation strategy may be tuned by annotations. 
 
-For performance reasons, developers may wish to guide the evaluation strategy. This may be supported by use of annotations:
+### Arity Annotations
 
-* `{&seq}`  - shallow evaluation of argument
-* `{&par}`  - parallel shallow evaluation
-* `{&lazy}` - lazy evaluation, do not evaluate 
-* `{&eval}` - full evaluation of argument
-* `{&a2}..{&a7}` - restrict partial evaluation on arity
+Arity annotations use rewrite rules for `{&a2}..{&a7}`:
 
-Use of `{&seq}` and `{&eval}` would correspond to normal evaluation strategies, with `{&seq}` just evaluating the toplevel (same as you'd evaluate upon `i`) and `{&eval}` performing deep evaluation. 
-
-Use of `{&par}` is an explicitly parallel `{&seq}`. Making this explicit is useful because parallelism may have some non-trivial overhead such that we don't want it for the normal case. Dropping a parallel evaluation should cause it to abort, while copying a parallel evaluation may wait until it completes. More expressive parallelism is feasible with *acceleration of process networks* (see below).
-
-Laziness is an important strategy. Though 'lazy' is misleading - it's actually *call by name* in the sense that copying a lazy value does not use a shared cache. Use `{&lazy}` with `{&cache}` (described later) if you need conventional laziness. Laziness is critical for fixpoints and modeling infinite data structures.
-
-Arity annotations are defined by a series of six rewrite rules:
-
-        [B][A]{&a2} => [B][A]
-        [C][B][A]{&a3} => [C][B][A]
-        ...
+                       [B][A]{&a2} => [B][A]
+                    [C][B][A]{&a3} => [C][B][A]
+                                   ...
         [G][F][E][D][C][B][A]{&a7} => [G][F][E][D][C][B][A]
 
-Arity annotations are effectively a form of lightweight input buffering, and enable developers to guard against partial evaluations when they aren't useful or interesting. For example, the swap function `[]ba` could be applied to a single argument, resulting in `[[A]]a`. But there isn't much benefit in doing so, so we instead use `{&a2}[]ba` to ask for two arguments before continuing. Arity annotations are especially useful in context of [AO](AboutAO.md) because it can help control lazy linking.
+It's the *annotation* that has the indicated arity. Arity annotations provide a lightweight form of input buffering, controlling partial evaluations where they aren't efficient or interesting. Arity annotations are also essential for lazy data, fixpoints, and ultimately to control [AO linking](AboutAO.md). 
+
+It is possible to model large arity annotations with smaller ones - e.g. `{&a3}` as `[{&a2}]a{&a2}`. However, there are contexts, notably AO linking, in which the two are not equivalent. The arity annotations cover a practical range for parameter lists. 
+
+Arity annotations may be removed by an optimizer at its discretion.
 
 ### Accelerated Dictionary
 
-An ABC runtime system (interpreter, compiler, etc.) should specify an [Awelon Object (AO)](AboutAO.md) dictionary including functions that it specially recognizes. The runtime dictionary should also document recognized annotations, rewrite rules, and related metadata. Developers will construct their own dictionaries using the runtime dictionary as a starting point or reference.
+An ABC runtime system (interpreter, compiler, etc.) should provide at least one [Awelon Object (AO)](AboutAO.md) dictionary describing functions that it specially recognizes. This runtime dictionary should also document recognized annotations, rewrite rules, and related metadata. Developers will construct their own dictionaries using the runtime's dictionary as a starting point or reference.
 
 Recognized functions are 'accelerated' by substitution of hand-optimized implementations and data representations. Optimization of data representation is the critical feature. That is not something easily achieved by a compiler. Upon recognizing `#1234567890`, an ABC runtime could use machine words to represent construction of natural numbers. By further recognizing arithmetic operations, this representation may be used for calculations.
 
@@ -143,62 +140,59 @@ Other valuable targets for acceleration:
 * linear algebra and matrix math
 * parallel process networks
 
-Recognition of accelerated functions may be fragile, i.e. requiring an exact match of function names and definitions. Ideally, it would be more robust and portable. But efficient recognition of accelerators is also important (especially for an interpreter), and is easiest at the link layer.
+Whenever we have accelerated data representations, we should also have an annotation like `{&nat}` for natural numbers to serve as a type assertion or conversion. We might actually want a pair of annotations - one for assertions on representation, and one that will convert representations if necessary.
+
+Recognition of accelerated functions may be fragile, i.e. requiring an exact match of function names and definitions. Ideally, it would be more robust and portable. But efficient recognition of accelerators is also important (especially for an interpreter), and is easiest at the link layer. A runtime might accelerate multiple dictionaries for portability reasons.
 
 ### Accelerated Fixpoints and Loops
 
-Fixpoint applies a function with a fixpointed copy in context.
+Fixpoint applies a function with a fixpointed copy of that function in context. This is a useful function for general purpose programming. It's inconvenient to use directly, but can be used to create arbitrary conditional loop constructs. Because ABC eagerly evaluates deep structure, we'll favor a variation of the strict Z-combinator:
 
-        [A]Y == [[A]Y] A
+        [B][A]z == [B][[A]z] A 
 
-Fixpoint is a valuable function for general purpose programming. ABC does not have any built-in loop constructs, nor does it support recursion via the link layer (AO definitions must be acyclic). But use of a fixpoint combinator allows for expression of arbitrary loop constructs. The original `Y` combinator, discovered by Haskell Curry, can easily be translated to ABC:
+        z = [[c]a[{&a3}ci]bbwi]{&a3}ci
 
-        (Problematic Fixpoint Candidate)
+            where
+            [B][A]w == [A][B];  w = []ba
+            [A]i == A;          i = []wad
 
-        Y = [cb]oci
+        [B][A]z == [B][A][[c]a[{&a3}ci]bbwi]{&a3}ci                 (def z)
+                == [B][A][[c]a[{&a3}ci]bbwi]ci                      (arity)
+                == [B][A][[c]a[{&a3}ci]bbwi][[c]a[{&a3}ci]bbwi]i    (def c)
+                == [B][A][[c]a[{&a3}ci]bbwi][c]a[{&a3}ci]bbwi       (def i)
+                == [B][A]c[[c]a[{&a3}ci]bbwi][{&a3}ci]bbwi          (def a)
+                == [B][A]c[[[c]a[{&a3}ci]bbwi]{&a3}ci]bwi           (def b)
+                == [B][A]c[              z           ]bwi           (def z)
+                == [B][A][A][z]bwi                                  (def c)
+                == [B][A][[A]z]wi                                   (def b)
+                == [B][[A]z][A]i                                    (def w)
+                == [B][[A]z]A                                       (def i)
 
-        [A]Y == [A][cb]oci      (def Y)
-             == [cb A]ci        (def o)
-             == [cb A][cb A]i   (def c)
-             == [cb A]cb A      (def i)
-             == [cb A][cb A]b A (def c)
-             == [[cb A]cb A]  A (def b)
-             == [[A]Y] A        (by fourth equality)
+This will likely become *the* de-facto standard fixpoint combinator. It has many convenient properties like being tail-recursive, not replicating `[A]` more than necessary, and supporting recovery of the `z` identifier as a simple rewrite. In practice, we'll accelerate this, reducing a dozen steps and two copies to a single step and one logical copy of `[A]`. Other loop structures may be defined in terms of `z` and might be independently accelerated. But `z` is the big one.
 
-However, this fixpoint has two weaknesses. First, the "by fourth equality" step is difficult to perform with normal evaluation and results in *two* copies of `A` that aren't in use. Second, ABC's standard evaluation strategy (which evaluates within functions by default) may result in infinitely more copies if the fixpoint function is part of our output: `[A]Y => [[A]Y]A => [[[A]Y]A]A ...`. To address these weaknesses, I recommend an alternative variation of fixpoint that includes a `{&lazy}` annotation and defers copy:
+### Parallel Evaluation
 
-        (Recommended Fixpoint Candidate)
+ABC can easily support parallel rewriting. But parallelism and synchronization has some overhead, so we might favor making it explicit. Use of a `[computation]{&par}` annotation can serve in this role, requesting that a runtime perform the given computation in parallel.
 
-        [A]Y == [[A]Y]{&lazy} A
+We should be able to move the value containing the computation around or drop it without waiting. If we drop a parallel computation, that should efficiently abort the effort. Copying a parallel computation must wait for evaluation to complete, such that even if we halt on quota and seriazlie the program to disk, we will have avoided creation of rework.
 
-        Y = [[c]a[ci]bb{&lazy}wi]ci
-
-        [A]Y == [A][[c]a[ci]bb{&lazy}wi]ci                          (def Y)
-             == [A][[c]a[ci]bb{&lazy}wi][[c]a[ci]bb{&lazy}wi]i      (def c)
-             == [A][[c]a[ci]bb{&lazy}wi] [c]a[ci]bb{&lazy}wi        (def i)
-             == [A]c[[c]a[ci]bb{&lazy}wi]    [ci]bb{&lazy}wi        (def a)
-             == [A]c[[[c]a[ci]bb{&lazy}wi]ci]  b{&lazy}wi           (def b)
-             == [A]c[          Y            ]  b{&lazy}wi           (def Y)
-             == [A][A][Y]b{&lazy}wi                                 (def c)
-             == [A][[A]Y]{&lazy}wi                                  (def b)
-             == [[A]Y]{&lazy}[A]i                                   (def w)
-             == [[A]Y]{&lazy} A                                     (def i)
-
-This requires a few more steps, but avoids an unnecessary copy of `A`, and the definition of `Y` is clearly part of the output. So a simple rewrite step after direct evaluation would recover the fixpoint structure.
-
-Regardless, we'll want to *accelerate* our fixpoint combinator. By recognizing this operation and accelerating it, we can essentially reduce fixpoint to an annotation on a function. A loop becomes a single step operation, and the `Y` is easily preserved in the final output. 
-
-We might also accelerate common loop constructs built with the `Y` combinator, e.g. it is possible to define a useful, pure `while` function over a sum type: `while :: (a + b) → (a → (a + b)) → b`, and this can be augmented with an extra state value (the stack). 
+When a runtime's overheads for parallelism are low, it may parallelize at its own discretion. Convenient targets for parallelism are: final values in the output, and the evaluation performed when lazily copying a value.
 
 ### Accelerated Process Networks
 
-While use of `{&par}` is sufficient for simple divide-and-conquer strategies on large data structures, it is not very expressive. For example, it cannot express communicating processes or pipelines. To support more expressive parallelism, I propose that ABC runtimes should *accelerate* evaluation of a bounded-buffer variant of [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks).
+While use of `{&par}` is useful for simple divide-and-conquer strategies on large data structures, it is not very expressive. For example, it is difficult to model process pipeline parallelism, or scale to 
 
-A description of a KPN (processes, wires, messages on wires) can be deterministically evaluated into a new description of the same KPN. This evaluation can be naively represented as a pure function. 
+We cannot make useful observations on partially evaluated results. We cannot model communications or pipeline parallelism. Efficient distributed parallelism can be difficult because we're forced to send the entire computation rather than just some micro-communications between machines.
 
-A runtime accelerated evaluator can use more conventional queues and threads internally. Further, it is feasible for an external system to interact with a KPN that is still undergoing evaluation - i.e. inject input, extract output, adding a process or wire. These actions need only wait just long enough to resolve deterministically while allowing parallel evaluation to continue. In each case, we would only be forced to wait *just long enough* to resolve deterministically.
+To address these weaknesses, I propose acceleration of a variant of [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks). 
 
-*Aside:* Open KPNs are interesting as a potential [alternative to monads for effectful code](KPN_Effects.md), admitting parallel and concurrent effects, and flexible buffering. They're also a potential alternative to OOP-style objects, since we can model invoking a KPN by injecting some data then extracting results, and passing KPNs around as first-class values.
+A process network can be modeled as a set of named processes that read and write to named ports, wires between ports, and a queue of messages on each wire. Wires might be bounded buffers, though that is not the case for KPNs generally. A constraint is that each port is attached to a single wire, with the same types for input and output. This might be expressed as a DSL of sorts, and may even have a dedicated type safety analysis. 
+
+We can accelerate evaluation of this network. KPNs evaluate deterministically, so we can treat it as rewriting the network description or DSL. However, KPNs evaluate efficiently using processes and queues - even in a distributed system. Our accelerator can leverage that. 
+
+Further, we can accelerate interaction with the KPN while it is still under evaluation - injecting or extracting messages, merging another KPN, etc... Non-monotonic updates may require waiting long enough for the relevant subnetwork to stabilize. Copying a KPN would wait until parallel evaluation completes, but that would be an unusual case.
+
+Intriguingly, modeling KPNs as first class values has much nicer properties than baking KPNs into the programming language. KPNs can be passed around as first-class objects or coroutines, still undergoing parallel evaluation and allowing incremental update. A KPN not only contains processes, it acts as a process. KPNs are also an interesting alternative to monads for an [effects model](KPN_Effects.md).
 
 ### Accelerated Linear Algebra
 
@@ -214,59 +208,33 @@ Awelon project favors [application models](ApplicationModel.md) that do not rely
 
 ### Rewrite Optimizations
 
-ABC's semantics admit rewrites for performance. For example:
+ABC's semantics admit many rewrites for performance that would not be performed during the normal course of evaluation. For example:
 
         []a     =>
         [i]b    =>
         bi      =>  i
         cd      =>
         cw      =>  c
-        ad      =>  wdi         (easier tail calls)
 
-Rewrites might be used to systematically recognize accelerators like `[][]baad => i`. 
+A dictionary can allow more and higher level rewrites, so this feature would generally be achieved in conjunction with [AO](AboutAO.md). Ideally, developers can even suggest their own rewrite rules via the dictionary, which could be checked and applied. But a runtime can at least support rewrites for functions it accelerates.
 
-Rewrites benefit from accelerators. An interesting possibility is recognizing associative actions, like multiplication of matrices or merging of key-value databases or loop fusions, and rewriting them for performance.
+Unfortunately, rewrite optimizations tend to be ad-hoc and fragile. They are difficult to apply outside of an explicit optimizer pass, and are difficult to prove safe. I would prefer not to rely on them too much. In most cases, developers should aim to make these optimizations explicit as part of evaluating an intermediate representation or DSL.
 
-Unfortunately, rewrite optimizations tend to be ad-hoc and fragile. They are difficult to apply to dynamically constructed code, and are difficult to prove safe in the general case. I would prefer not to rely on them too much. In most cases, developers should aim to make optimizations explicit, e.g. construct an intermediate object representing a lazy multiplication of matrices then reorder on run.
+Rewrite optimizations might be available at runtime via an annotation like `{&opt}`.
 
-### Stowage and Caching
+### Stowage and Memoization
 
-Stowage and caching are covered in greater detail in the [Awelon Object (AO)](AboutAO.md) documentation. But the general summary is:
+Stowage and memoization based caching are covered in greater detail in the [Awelon Object (AO)](AboutAO.md) documentation. But the general summary is:
 
         [large value]{&stow}    =>  [{%resource}]
         [small value]{&stow}    =>  [small value]
-        [computation]{&cache}   =>  [cache value]
+        [computation]{&memo}    =>  [cache value]
 
 Use of stowage supports larger than memory values and computations, offloading bulky data to disk. It might be understood as a more precise, explicit model of virtual memory.
 
-Cache uses a serialized computation as a representation for a value. We'll look up the computation in a table. If found, we replace the computation by its result without performing all the intermediate steps. Otherwise, we perform the computation and heuristically decide whether to add it to the table (based on time/space tradeoff). 
+A memo cache uses a serialized computation as a representation for a value. We'll look up the computation in a table. If found, we replace the computation by its result without performing all the intermediate steps. Otherwise, we perform the computation and heuristically decide whether to add it to the table (based on time/space tradeoff, maybe some probabilistic factor). 
 
 The serialization requirement for caching has some overhead, so developers are encouraged to make suitable 'cache-points' explicit such that the time/space tradeoff is probably a good one. Use of stowage can help ameliorate cache overheads by controlling synchronization costs.
-
-### Lazy Evaluation
-
-By the general evaluation strategy, call-by-need is the default for input to a computation. It can be preserved for outputs, too, via explicit use of a `[computation]{&lazy}` annotation. In AO, lazy evaluations are not implicitly cached, which may be a problem if you might copy a lazy computation. If need to cache lazy evaluations, make it explicit with `{&cache}{&lazy}` (or `{&lazy}{&cache}`, order makes no difference).
-
-Laziness may be used to model infinite data structures - e.g. infinite streams, trees, procedurally generated worlds, etc.. Support for laziness has no semantic impact in ABC, but instead is related to consumption of quotas after the 'toplevel' for a program is evaluated. In practice, I imagine most ABC evaluators shall support laziness.
-
-### Performance Annotations
-
-Many annotations are used for performance:
-
-* `{&seq}` - shallow evaluation of subprogram 
-* `{&par}` - parallelize evaluation of subprogram
-* `{&eval}` - perform full evaluation of subprogram
-* `{&lazy}` - delay evaluation until otherwise requested
-* `{&a2}..{&a7}` - arity annotations to control batching
-* `{&lit}` - force argument to text literal representation
-* `{&nat}` - force argument to natural number representation
-* `{&stow}` - move value to link layer, away from working memory
-* `{&trash}` - drop data but keep placeholder, substructure
-* `{&cache}` - use cached result or add result to cache
-* `{&opt}` - simplify and optimize a subprogram 
-* `{&jit}` - compile a function for runtime internal use
-
-Use of annotations to control staging and compilation has potential to be very effective in giving developers control of the performance of their code. In general, annotations on representation also support type checking and may be effectively used together with accelerators to squeeze the most performance from a representation.
 
 ### Interpretation and Compilation
 
@@ -285,6 +253,9 @@ Another option is to index and cache metadata to efficiently process an ABC stri
 This won't help with code locality, but it could reduce the issues of scanning to the end of a token or literal within a compact binary, and it would support binding of a token to its interpretation.
 
 In context of a JIT compiler, I suspect a fast interpreter is less important than a simple representation. So the index on raw ABC may be the better option unless something about the other bytecode simplifies compilation.
+
+
+
 
 ## Static Type Safety for ABC
 
@@ -403,7 +374,7 @@ Static typing requires precomputing this information, i.e. tracking which values
         {&rel} : (A * E) → (A&rel * E)
         {&aff} : (A * E) → (A&aff * E)
 
-In this case, we have a conflict if `A&aff` (a value annotated affine) is used where `A!aff` (a value that is not affine, a copyable value) is needed.
+In this case, we have a conflict if `A+aff` (a value annotated affine) is used where `A-aff` (a value that is not affine, a copyable value) is needed.
 
 ### Dynamic Evaluation
 
@@ -429,7 +400,11 @@ At this point we may halt evaluation and pass the program to our static type che
 If a program contains `{&dyn}` annotations even after partial evaluations, we may call that program dynamically typed. Developers are free to construct dynamically typed software. But where dynamic partial evaluation can complete statically, it can readily be used for macro-like metaprogramming. An ABC software system may thus consist of an ad-hoc mix of fluid and rigid software components.
 
 
+
+
+
 ## Miscellaneous
+
 
 ### Runtime Type Errors
 
@@ -502,3 +477,24 @@ I'd rather avoid this sort of ad-hoc reflection at runtime. But it could be supp
 * `{&beqv}` - assert two values are behaviorally equivalent
 
 Behavioral equivalence might be tested by some ad-hoc combination of static analysis or fuzz testing.
+
+### Coinductive Data Structures
+
+Coinductive data types are useful for modeling unbounded streams, procedurally generated worlds, and other very large objects that we don't want to represent in their expanded form. They can also help avoid expensive evaluations that we probably don't need to perform. In ABC, we can leverage arity annotations to defer computation. Consider a combinator `$` for lazy bind:
+
+        $ = [{&a3}i]bb
+        [C][B][A]$$     ==  [C][[B][A]{&a3}i]$
+                        ==  [[C][[B][A]{&a3}i]{&a3}i]
+
+This combinator acts as a constructor of deferred computations - thunks. Importantly, `[C][B][A]$$` is equivalent to `[[C][B]A]` for static typing purposes (modulo termination analysis), but doesn't evaluate into a potentially infinite data structure. To perform evaluation, just bind an argument normally, or apply with the argument in context. In general, this should result in some observation on the codata together with some codata outputs.
+
+What's missing is any implicit memoization. If developers need memoization, they are asked instead to model it explicitly, e.g. via `{&memo}` or a `{&memo-thunk}` variant that pretends to supply one extra argument for arity purposes.
+
+*Note:* Lazy bind is highly sensitive to intermediate structure. Normal techniques for partial application won't work. However, developers should always know the arities for codata constructors, and thus it's always possible to use something like `[$$$$i]b` to control evaluation up front.
+
+*Aside:* ABC cannot support a direct `[A]{&lazy}` annotation because doing so is inconsistent with parallelism in context of intermediate output, as when halting on breakpoint or quota. For example, `[[A]{&par}]{&lazy}` could originate from `[A]{&par}[]b{&lazy}` or `[A][{&par}]b{&lazy}`, but we should be able to continue evaluation correctly without knowing the origin. Use of arity annotations doesn't have this problem.
+
+
+### Garbage Data
+
+Similar to the `{&error}` annotation for error values, developers might want to recycle memory early while keeping the placeholder (especially if that placeholder might have substructural types or associated debug traces). This could be done by use of `{&trash}` which would replace the data with an error value but preserve substructure and debug data. 

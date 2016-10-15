@@ -111,64 +111,7 @@ Each declaration gives our software agent a more opportunity to safely rewrite, 
 
 ## Application Security
 
-AO supports multiple named dictionaries, which may be referenced by `{%word@dict}`. Security properties will generally focus on a named dictionary.
+(TODO!)
 
-I would like to have a generic security model for AO that is useful for developing applications in the face of mutual distrust. The *granularity* for security should be a full 'dictionary'. However, we may have some static type constraints. 
+Security models for AO dictionaries will likely be at the dictionary granularity. At the moment, we'll just borrow REST security models.
 
-because dictionaries are the unit for communication in AO systems.
-
-
-Preferably while ensuring dictionaries are used a holistically in the common case (i.
-
-*TODO:* Redesign in context of multi-dictionary evaluations.
-* distributed programming: HMAC or PKI
-* controlling connectivity between dicts
-* eval/read/write access control?
-* 
-
-
-
-
-When multiple agents muck about in a stateful dictionary, it becomes valuable to precisely control who interacts with what. Fortunately, the rich computational structure of our dictionary admits some expressive security models. For example, automatic curation is feasible - rejecting updates that break types or tests. We can also adapt object capability security for a dictionary-level object model.
-
-Consider two authorities:
-
-* query *object* via *interface* 
-* update *object* via *interface*
-
-In context of a dictionary, words are the smallest unit that we observe and control. Our interface and object name words. Authorities can generally be represented and shared via cryptographic bearer-tokens of the form `update:object/interface/HMAC`. User logins might be modeled as a bag of bearer tokens together with relevant view states (active edits, color schemes, alerts, etc..).
-
-Query and update permissions specify an interface:
-
-        query interface:    Params → Object → Result
-        update interface:   Params → Object → Object
-
-These interfaces constrain our agents. We're only permitted to observe the result of our query, which allows for flexible information hiding. Similarly, update interfaces constrain which updates may be expressed for our object. There is a most powerful interface: `apply :: (o → a) → o → a`, which can be used to construct any other interface. 
-
-At the dictionary level, updates could be implemented by command pattern:
-
-        @alice.foo.update (alice's foo update interface)
-        @bob.foo.update (bob's foo update interface)
-
-        @foo.v0 (init foo)
-        @foo.v1 [{%foo.v0}][Parameters1]{%alice.foo.update}
-        @foo.v2 [{%foo.v1}][Parameters2]{%alice.foo.update}
-        @foo.v3 [{%foo.v2}][Parameters3]{%bob.foo.update}
-        @foo    {%foo.v3}
-
-Queries might be reified in the dictionary:
-
-        @alice.foo.query (alice's foo interface)
-        @alice.foo.q0 [{%foo}][Params]{%alice.foo.query}
-
-For the update case, we may be limited to constant parameters. It may require a separate authority for retroactive update.
-
-*Aside:* Agent specific interfaces give us a lot of precision. If modeling a multi-user dungeon, for example, players might each have interfaces specific their avatar. This also enables precise management and revocation of authority.
-
-The above model is insufficient, and could probably be improved. In addition to query and update, we need authorities regarding source-level reads, writes, delete, rename, fork, history, search and discovery, and other such features. In general, I imagine it would be *frustrating* to use a dictionary through a limited interface, and it would certainly undermine some advantages of dictionary applications. 
-
-Nonetheless, it seems dictionaries could be used as an effective foundation for mutually distrustful multi-agent systems with a relatively generic security layer.
-
-## Extraction of Applications
-
-Extracting and compiling an 'application' for external use is certainly feasible, especially for certain kinds of applications (e.g. those with monadic effects models). Ideally, this extraction process should be very simple and cacheable, expressed as a simple HTTP GET.

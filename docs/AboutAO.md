@@ -161,19 +161,19 @@ A question, then, is how do we know what to cache? I propose the following:
 
 Cached evaluation over words is a natural fit for AO. We evaluate before linking anyway, we use a word many times within a dictionary. And in contexts like Wikilon, we'll frequently look up evaluations of words based on external HTTP requests. Incremental computing is one more reason among many. 
 
-Explicit caching will be expressed by annotation:
+Explicit caching will be expressed by memoization annotation:
 
-        [computation]{&cache}
+        [computation]{&memo}
 
-Caching doesn't force immediate evaluation. Instead, this annotation tells our runtime to use the cache if/when we later choose to evaluate the object. Caching may be heuristic, based on observed time/space tradeoffs. 
+Memoization doesn't force immediate evaluation. Instead, this annotation tells our runtime to use a memoization cache if we later evaluate. Caching may be heuristic, based on observed time/space tradeoffs. 
 
-Developers can use simple techniques such as modeling suitable 'cache points' and batches in data structures to mitigate potential efficiency issues of fine-grained caching. Careful use of stowage can also help, by reducing the serialization overhead for stowed fragments of the computation.
+Developers can use simple techniques such as modeling suitable memoization points and batches in data structures to mitigate potential efficiency issues of fine-grained caching. Careful use of stowage can also help, by reducing the serialization overhead for stowed fragments of the computation.
 
 #### Cache Design
 
 Caching can be implemented by taking a *secure hash* of the representation and performing a lookup. In case of `{%word}` tokens, we do not know whether those words would be linked during evaluation or preserved as symbols. So we conservatively include both the `{%word}` symbol and a reference to the word's linker object. 
 
-        [{%foo}{%bar}{%baz}]{&cache}
+        [{%foo}{%bar}{%baz}]{&memo}
 
         cacheID = SecureHash {%foo}{%bar}{%baz} (foo)(bar)(baz)
             where (X) is cacheID of X's linker object
@@ -185,7 +185,7 @@ Taking these constraints overall, we might assume four tables of form:
 * **data cache:** secure hash → def. Where we keep cached computations.
 * **word cache:** word → (eval, link, metadata). Computed by evaluator. 
 
-Our dictionary has a set of definitions. We maintain an index of immediate clients for each word for reverse lookup, rename, incremental cache invalidation, etc.. Our data cache is updated by the `{&cache}` annotation or a local equivalent, may be shared by multiple dictionaries, and may be maintained heuristically (e.g. random deletion is okay). 
+Our dictionary has a set of definitions. We maintain an index of immediate clients for each word for reverse lookup, rename, incremental cache invalidation, etc.. Our data cache is updated by the `{&memo}` annotation or a local equivalent, may be shared by multiple dictionaries, and may be maintained heuristically (e.g. random deletion is okay). 
 
 Challenges surround maintenance of the *word cache*. Upon updating a word's definition, its linker object may be invalid, and transitively any clients of that word. 
 
