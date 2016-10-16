@@ -17,7 +17,7 @@ Performance is the primary goal. But some others:
 * suspend, checkpoint, persist, reload, resume, copy computations
 * easy to resize, reflect, render, compact suspended computations
 * monadic effects: return control of program environment to caller
-* easily integrate effects models with [claw command sequences](CommandLine.md)
+* easily integrate effects models with [claw command sequences](CommandLang.md)
 * on errors or unrecognized tokens, suspend and return to caller
 * no callbacks or handlers, no external dependencies for progress
 

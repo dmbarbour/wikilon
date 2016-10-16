@@ -5,7 +5,7 @@ I have a lot of ideas about some [applications](ApplicationModel.md) to develop.
 
 ## REPL
 
-A [Claw-based](CommandLine.md) REPL is an obvious option. It's also a very direct fit for our command pattern dictionary objects. 
+A [claw-based](EditingAO.md) REPL is an obvious option. It's also a very direct fit for our command pattern dictionary objects. 
 
 ## Functional Forums
 

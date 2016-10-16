@@ -45,7 +45,7 @@ Text data will be embedded as a valid UTF-8 byte sequence:
          There are no other special chars.
         ~
 
-The desugaring semantics for text data has not been decided, but the most likely possibilities is `"hello"` desugaring to `[[#104] "ello" s]`, enabling a user-defined sequencing operator `s`. I would like to unify numbers, texts, and [claw](CommandLine.md) command sequences with a simple model of coroutines or iterators.
+The desugaring semantics for text data has not been decided, but will likely be some variation of `"hello"` desugaring to `[[#104] "ello" s]`, allowing user-defined constructor `s` and wrapping the `[#104]` to generalize sequencing of arbitrary commands.
 
 ## Accelerated Operations and Representations
 

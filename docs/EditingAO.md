@@ -1,4 +1,26 @@
 
+# Editable Views for AO
+
+[Awelon Object (AO)](AboutAO.md) code can be edited by humans, but is not optimized for that use. AO is still a bytecode, designed to be unambiguous and easy to process. Instead, the expectation is that humans will manipulate AO through an editable view - an efficient and aesthetic presentation of code that may be edited in place, where the edits can be translated back into bytecode. 
+
+This idea is close in nature to [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html), with an AO dictionary as the storage representation. Ideally, the same dictionary would support user-defined projections and editing utilities.
+
+I'll start with a concrete editable view - claw - and generalize from there. 
+
+## Command Language for Awelon (Claw)
+
+Claw is a Forth-like editable view of AO optimized for short one-liner programs or REPL-like scenarios. Claw focuses on lightweight support for numbers and small texts. Like Forth, Claw doesn't scale nicely beyond a dozen tokens (words, atoms, numbers, small texts). But we can construct larger applications from smaller words.
+
+Claw optimizes for:
+
+* AO dictionary words `foo swap bar`
+* number data `42 -7 2/3 3.141 2.998e8`
+* inline texts `"hello, world!"`
+
+Additionally, claw supports `[blocks]`, `{tokens}`, and command sequences `(foo,bar,baz)`. 
+
+Claw is universal in the sense that *any* ABC code may be viewed and edited through Claw. Words that would be ambiguous with Claw features are simply presented as tokens - e.g. `{%42}`. However, Claw is most useful for editing code developed through the Claw view because it injects some extra words to deal with construction of numbers and text postprocessing.
+
 # Command Language for Awelon (claw)
 
 Claw is a lightweight, editable view for [Awelon Object (AO) code](AboutAO.md), which in turn uses a subset of [Awelon Bytecode (ABC)](ABC.md). The main purpose of Claw is to support easy use of [dictionary based REPLs and shells](ApplicationModel.md) - expression of 'one line' programs that still do something useful. However, Claw will also double as a primary program format until visual variants are available.

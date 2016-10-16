@@ -3,7 +3,7 @@
 
 Awelon project will focus on RESTful applications, with the primary resources being [Awelon Object](AboutAO.md) dictionaries and objects modeled within them. Applications are modeled in terms of creating, reading, updating, and deleting definitions of words. Effects are carried out by a multi-agent system. Real-time behavior can be supported via publish-subscribe patterns. 
 
-This document will mostly discuss patterns for modeling applications, and why they're useful.
+This document will mostly discuss patterns for modeling applications, and why they're useful. 
 
 ## Command Pattern
 
@@ -89,7 +89,7 @@ One option is to render a set of dictionary objects. We could take `foo.doc` as 
 
 This would be convenient as a basis to construct a stable spreadsheet by hand.
 
-Modeling spreadsheets in an AO dictionary, together with hypermedia, might be a convenient basis for rapid application development - dashboards, etc..
+Together with [editable views](EditingAO.md) and rendering output as hypermedia, spreadsheets could serve as a convenient basis for rapid application development. 
 
 Regardless of how we specify our set of objects, AO makes it easy to render both the definitions of each word and their context-free evaluations or linker objects. Thus, we can render evaluated cells in a table while enabling editing of each cell's definitions, and propagating updates to the rendered views. We effectively get spreadsheets without any special effort.
 

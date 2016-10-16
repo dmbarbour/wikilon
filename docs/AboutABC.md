@@ -14,7 +14,9 @@ ABC is evaluated by pure, local, confluent rewriting. Importantly, ABC does not 
 
 ABC is simple and extensible. There are only four primitive operations `abcd` - apply, bind, copy, drop. ABC programs can be composed by simple concatenation, linked by simple inlining. Extensions are trivial via the [AO link layer](AboutAO.md): a user-defined function whose name is a single UTF-8 codepoint may be used as a bytecode. Extensions will be accelerated for primitive performance by runtimes that recognize them, leading to de-facto standardization of popular ABC extensions.
 
-ABC is serializable and weakly legible. ABC strings are encoded in UTF-8 (mostly the ASCII subset), avoiding control characters, and may be rendered in normal text editors. Through extension, we support compact embeddings of data. For example, `#42` may construct a Church encoded natural number forty-two. Texts are embedded via a lightweight syntactic sugar. Through acceleration, we can also embed numbers and texts in the output from evaluation. Use of editable views, even textual versions like [claw](CommandLine.md), can further improve legibility for ABC.
+ABC is serializable and weakly legible. ABC strings are encoded in UTF-8 (mostly the ASCII subset), avoiding control characters, and may be rendered in normal text editors. Data can be embedded within ABC via extensions like `#42` to construct natural numbers plus a little syntactic sugar for texts, and these can also be used in evaluation output when known to a runtime. 
+
+ABC is also designed for use with editable views
 
 ABC is easily parallelized, persisted, and cached. This is an emergent consequence of its evaluation model and serializability. We can serialize an ABC computation, ship it to a remote processor for evaluation, look it up in a database to see if the result is known, or store it to disk to resume later. ABC also leverages serializability for its *value stowage* feature, an simple and robust variation on virtual memory to work with larger than memory tree-structured data.
 
@@ -60,6 +62,10 @@ ABC is extended through the link layer. In context of AO, `xyz` is effectively s
 
 For performance, this idea should be coupled with the concept of accelerated dictionaries. An interpreter or compiler can provide optimized representations and implementations to support performance critical computations. Because performance requires cooperation with interpreters, bytecode extensions will tend to have some de-facto standardization.
 
+### Whitespace Formatting
+
+The whitespace characters SP and LF are given identity semantics, equivalent to the empty program. They will have identity semantics, equivalent to the empty program. Essentially, this just permits some lightweight formatting of bytecode for easier reading in a text editor.
+
 ### Data Embedding and Extraction
 
 Leveraging the ABC dictionary, we can define eleven operators `#1234567890` such that `#` introduces a new zero value, and each digit performs the Church encoded equivalent of "multiply by ten, add digit". Thus, `#42` would construct a Church encoded 42. 
@@ -85,11 +91,7 @@ I haven't settled on a specific model for embedded text. Primary candidate:
         "hello" => [[#104] "ello" y]    (y for 'yield')
         ""      => #
 
-This representation favors structural unification of natural numbers, texts, [claw command sequences](CommandLine.md), and general coroutines. For example, natural number `#5 == (,,,,)` (yield five times, no action) and `"hello" == (#104, #101, #108, #108, #111)` (yield five times, each time placing a number on the stack). 
-
-### Whitespace Formatting
-
-SP and LF are permitted in ABC. They will have identity semantics, equivalent to the empty program. Essentially, this just permits some lightweight formatting of bytecode for easier reading.
+This representation favors structural unification of natural numbers, texts, monadic command sequences, and general coroutines. For example, natural number `#5 == (,,,,)` (yield five times, no action) and `"hello" == (#104, #101, #108, #108, #111)` (yield five times, each time placing a number on the stack). 
 
 
 
@@ -120,11 +122,7 @@ Arity annotations use rewrite rules for `{&a2}..{&a7}`:
                                    ...
         [G][F][E][D][C][B][A]{&a7} => [G][F][E][D][C][B][A]
 
-It's the *annotation* that has the indicated arity. Arity annotations provide a lightweight form of input buffering, controlling partial evaluations where they aren't efficient or interesting. Arity annotations are also essential for lazy data, fixpoints, and ultimately to control [AO linking](AboutAO.md). 
-
-It is possible to model large arity annotations with smaller ones - e.g. `{&a3}` as `[{&a2}]a{&a2}`. However, there are contexts, notably AO linking, in which the two are not equivalent. The arity annotations cover a practical range for parameter lists. 
-
-Arity annotations may be removed by an optimizer at its discretion.
+It's the *annotation* that has the indicated arity. Arity annotations provide a lightweight form of input buffering, controlling partial evaluations where they aren't efficient or interesting. Arity annotations are a foundation for lazy evaluation, fixpoints, and ultimately to control [AO linking](AboutAO.md).
 
 ### Accelerated Dictionary
 
@@ -334,7 +332,7 @@ I would also like effective support for option and sum values:
 
 Support for `{&bool}`, `{&opt}`, and `{&sum}` should be sufficient in practice. Generalizing to more than two paths isn't critical.
 
-*Aside:* Conveniently, `{&bool}[[onTrue][onFalse]]ai` is structurally, semantically, and visually similar to an `if then else` expression. It is feasible to provide specialized presentations for a [claw-like](CommandLine.md) view of conditional expressions in ABC.
+*Aside:* Conveniently, `{&bool}[[onTrue][onFalse]]ai` is structurally, semantically, and visually similar to an `if then else` expression. It is feasible to provide a more conventional if-then-else view through an editor.
 
 ### Structural Scopes
 
@@ -478,23 +476,16 @@ I'd rather avoid this sort of ad-hoc reflection at runtime. But it could be supp
 
 Behavioral equivalence might be tested by some ad-hoc combination of static analysis or fuzz testing.
 
-### Coinductive Data Structures
-
-Coinductive data types are useful for modeling unbounded streams, procedurally generated worlds, and other very large objects that we don't want to represent in their expanded form. They can also help avoid expensive evaluations that we probably don't need to perform. In ABC, we can leverage arity annotations to defer computation. Consider a combinator `$` for lazy bind:
-
-        $ = [{&a3}i]bb
-        [C][B][A]$$     ==  [C][[B][A]{&a3}i]$
-                        ==  [[C][[B][A]{&a3}i]{&a3}i]
-
-This combinator acts as a constructor of deferred computations - thunks. Importantly, `[C][B][A]$$` is equivalent to `[[C][B]A]` for static typing purposes (modulo termination analysis), but doesn't evaluate into a potentially infinite data structure. To perform evaluation, just bind an argument normally, or apply with the argument in context. In general, this should result in some observation on the codata together with some codata outputs.
-
-What's missing is any implicit memoization. If developers need memoization, they are asked instead to model it explicitly, e.g. via `{&memo}` or a `{&memo-thunk}` variant that pretends to supply one extra argument for arity purposes.
-
-*Note:* Lazy bind is highly sensitive to intermediate structure. Normal techniques for partial application won't work. However, developers should always know the arities for codata constructors, and thus it's always possible to use something like `[$$$$i]b` to control evaluation up front.
-
-*Aside:* ABC cannot support a direct `[A]{&lazy}` annotation because doing so is inconsistent with parallelism in context of intermediate output, as when halting on breakpoint or quota. For example, `[[A]{&par}]{&lazy}` could originate from `[A]{&par}[]b{&lazy}` or `[A][{&par}]b{&lazy}`, but we should be able to continue evaluation correctly without knowing the origin. Use of arity annotations doesn't have this problem.
-
-
 ### Garbage Data
 
-Similar to the `{&error}` annotation for error values, developers might want to recycle memory early while keeping the placeholder (especially if that placeholder might have substructural types or associated debug traces). This could be done by use of `{&trash}` which would replace the data with an error value but preserve substructure and debug data. 
+Similar to the `{&error}` annotation for error values, developers might want to recycle memory early while keeping the placeholder (especially if that placeholder might have substructural types or associated debug traces). This could be done by introducing annotation `{&trash}` which would replace the data with an error value but preserve substructure and debug data. 
+
+### Lazy Evaluation and Coinductive Data
+
+To defer computation, we leverage arity annotations to construct a form like `[[B]{&a2}A]`. This has the same type and semantics as `[[B]A]` but does not expand beyond the independent evaluation of `B` and `A`. This is useful for representing coinductive data types such as potentially infinite data streams or procedurally generated environments. 
+
+We additionally introduce a `[A]{&force}` annotation to cause evaluation of a potentially deferred computation. Use of `{&force}` will evaluate as though in context of an infinite stack of input, collapsing any arity annotations that are merely awaiting extra arguments.
+
+Use of `{&memo}` can support heuristic memoization of forced evaluations in case they are expensive, such that we don't recompute unnecessarily. However, ABC does not promise memoization is cheap. Hence, memoization is best used explicitly, when computations are probably expensive. In many cases, like processing an infinite data stream without backtracking, there is little or no benefit for memoization.
+
+*Aside:* ABC cannot support a direct `[A]{&lazy}` annotation because doing so is inconsistent with parallelism in context of intermediate output, as when halting on breakpoint or quota. For example, `[[A]{&par}]{&lazy}` could originate from `[A]{&par}[]b{&lazy}` or `[A][{&par}]b{&lazy}`, but we should be able to continue evaluation correctly without knowing the origin. Use of arity annotations doesn't have this problem.

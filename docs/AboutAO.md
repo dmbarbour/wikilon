@@ -217,7 +217,7 @@ AO does introduce an interesting new 'effect' that could be tracked for type saf
 
 This AO representation has many nice properties, but has some weaknesses:
 
-1. AO files and ABC aren't very convenient for direct use by humans. They can work in a pinch, but AO is intended to be manipulated primarily through editable views like [claw](CommandLine.md) or an [application model](ApplicationModel.md).
+1. AO files and ABC aren't very convenient for direct use by humans. They can work in a pinch, but AO is intended to be manipulated primarily through [editable views](EditingAO.md) or an [application model](ApplicationModel.md).
 1. There is no support for *metadata* such as timestamps, commit messages, or bug tracking. Instead, the intention is that AO development environments should represent such metadata within an AO dictionary (perhaps an auxiliary named dictionary). This ensures metadata is accessible to Awelon application models or views.
 1. To rename a word requires rewriting every reference to that word. This might be performed by a development environment, but is not a first-class feature of the AO representation.
 1. Updates apply only to whole definitions. Fortunately, it is easy to factor large AO code into small words that can be updated independently when need arises. Append only updates can be modeled by a command pattern (cf. [application model](ApplicationModel.md)).
@@ -229,10 +229,8 @@ Words are weakly constrained to fit tokens, control size, and support wrappers o
 * no empty or enormous words; 1..30 bytes valid UTF-8
 * no C0, SP, `@[]{}<>(|),;"`, DEL, C1, replacement char
 
-However, these constraints do not ensure a clean embedding in URLs, HTML, English text, and so on. So there may be other limitations in context. For example, a [claw view](CommandLine.md) would require the `{%word}` token wrapper for any word that might be confused with a number when parsed.
+However, these constraints do not ensure a clean embedding in URLs, HTML, English text, and so on. So there may be other limitations in context. For example, a [editable view](EditingAO.md) may require escaping use of problematic words.
 
-Words `a`, `b`, `c`, and `d` are valid, but are implicitly defined as the four ABC primitives and may not be redefined. That is, `{%a}` is equivalent to `a`.
+Words `a`, `b`, `c`, and `d` are valid, but are implicitly defined as the four ABC primitives and may not be redefined. These are effectively the four 'keywords' of AO.
 
 Dictionary names must also be valid words. And ABC tokens (annotations, gates, sealers, unsealers) should be valid words modulo the prefix character. 
-
-
