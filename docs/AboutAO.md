@@ -2,9 +2,9 @@
 
 Awelon Object (AO) extends [Awelon Bytecode (ABC)](AboutABC.md) with a link model and representation for for symbol-structured code. AO defines tokens for linking and how they interact with evaluation in context of dictionaries.
 
-A dictionary consists of a set of words with an ABC definition for each word. These definitions are lazily linked via ABC tokens of form `{%word}`. Additionally, AO will treat single character words as effectively extending ABC's bytecode - i.e. `xyz` is implicitly `{%x}{%y}{%z}`. Dependencies between definitions must form a directed acyclic graph, such that all defined link tokens could be eliminated, resulting in a finite (albeit exponential) expansion of code. 
+A dictionary consists of a set of words with an ABC definition for each word. These definitions are lazily linked via ABC tokens of form `{%word}`. Additionally, AO treats bytecodes as single character words - i.e. `xyz` is implicitly `{%x}{%y}{%z}`. The four ABC primitives - `abcd` - are effectively keywords for AO and may not be defined. Dependencies between definitions must form a directed acyclic graph, such that all defined link tokens could be inlined, resulting in a finite (albeit exponential) expansion into raw ABC.
 
-AO dictionaries serve as a basis for development, evaluation, modularity, communication, and distribution. They provide a foundation for Awelon project's [application models](ApplicationModel.md). Lazy linking, in particular, is critical for many application models - it enables preservation of link structure which in turn enables AO to serve as hypermedia. 
+AO dictionaries serve as a basis for development, evaluation, modularity, communication, and distribution. They provide a foundation for Awelon project's [application models](ApplicationModel.md). Lazy linking, in particular, is critical for many application models. It enables preservation of link structure which, in addition to being important for performance of large scale computing, enables AO to serve a foundation for hypermedia. 
 
 ## AO Representation
 
@@ -63,6 +63,22 @@ Forking a named dictionary is trivial: simply copy the dictionary then begin upd
 Anonymous dictionaries are distributed easily by secure hash. Given a secure hash for a dictionary we do not possess, we can ask whomever provided the secure hash to provide the patch. This is the primary distribution model of AO. But content-addressed networking techniques are possible, and may be useful in distributing a network burden. A viable technique for provider independent transport is to just use a fraction of the secure hash for lookup (e.g. the first 120 bits) then use the rest as a symmetric encryption key. 
 
 Named dictionaries are generally mutable. It is feasible to distribute development of named dictionaries by use of DVCS techniques or to share names for dictionaries globally. In the latter case, global names may need some strategy to resist conflict. This might be achieved by deriving from an existing registry (e.g. ICANN or Namecoin), or a more informal registry (e.g. someone maintains a webpage), or taking a secure hash of a public key. Etc.. 
+
+### Caveats
+
+There is no support in the AO representation for development metadata (commit messages, timestamps). This metadata should instead be explicit in the dictionary or an auxiliary named dictionary. That way, it is accessible to normal [AO applications](ApplicationModel.md).
+
+There is no support to update only part of a definition. This isn't a big problem because it's easy at the AO layer to factor a large definition into smaller parts that can be updated independently. Even a definition can be represented using a simple command pattern:
+
+        ...
+        @word.v99 {%word.v98}(update)
+        @word {%word.v99}
+
+There is no support for renaming words or objects. Despite 'rename' being perhaps the most common example in proposals for language-specific semantic patch models, renaming introduces a lot of problems like not being idempotent, having a non-local effect, being rather ad-hoc in a distributed development scenario, and complicating patch-level indices. Developers are asked to perform renaming the old fashioned way - by explicitly redefining every relevant word in the dictionary, and avoiding rename for established words.
+
+
+
+
 
 ## AO Evaluation and Linking
 
@@ -133,9 +149,9 @@ In context of AO, stowage involves creating new word tokens during evaluation.
         [large value]{&stow}  == [{%resourceId}]
         [small value]{&stow}  == [small value]
 
-Here `{%resourceId}` is a word whose definition is equivalent to `large value`. Stowage has overhead, so an evaluator must make a heuristic decision about whether to stow depending on value size. Thus, smaller values should not be stowed. 
+Here `{%resourceId}` is a word whose definition is equivalent to `large value`. Stowage has overhead, so an evaluator must make a heuristic decision about whether to stow depending on value size. Smaller values should not be stowed. 
 
-Stowage works best with persistent data structures, where updates to the structure only require updates to a small subset of nodes. Stowage works even better with log-structured merge trees and similar structures where updates are implicitly batched and most updates are shallow.
+Stowage works best with persistent data structures, where updates to the structure require updates only to a small subset of nodes. Stowage works even better with log-structured merge trees and similar structures where updates are implicitly batched and most updates are shallow. Stowage can also be used optimize caching, even if the stowage is not itself optimal.
 
 The naming of stowed resources is left to the runtime, but stable names should be favored to simplify caching and structure sharing.
 
@@ -171,7 +187,7 @@ Developers can use simple techniques such as modeling suitable memoization point
 
 #### Cache Design
 
-Caching can be implemented by taking a *secure hash* of the representation and performing a lookup. In case of `{%word}` tokens, we do not know whether those words would be linked during evaluation or preserved as symbols. So we conservatively include both the `{%word}` symbol and a reference to the word's linker object. 
+Caching can be implemented by taking a *secure hash* of the representation and performing a lookup. In case of `{%word}` tokens, we do not know whether those words would be linked during evaluation or preserved as symbols. So conservatively we might include both the `{%word}` symbol and a reference to the word's linker object. 
 
         [{%foo}{%bar}{%baz}]{&memo}
 
@@ -193,34 +209,26 @@ An easy maintenance technique is perhaps to conservatively clear the word cache 
 
 A heuristic balance of precise and lazy cache maintenance may prove effective in the general case, e.g. based on an effort quota upon performing each dictionary update. 
 
-*Aside:* When computing cacheID of a linker object, we might hide symbols for tokens that we know will be linked (i.e. anything we could have inlined). Doing so might improve reuse of cache independent of names. 
+*Aside:* We can potentially improve cache precision further by use of an inline analysis to determine which symbols would not be part of our output. Use of the [VerSum SeqHash](https://people.csail.mit.edu/nickolai/papers/vandenhooff-versum.pdf) concept might be useful for logically inlining subprograms for purpose of hashing and caching.
 
 ### Accelerated Dictionary
 
-An AO runtime will generally include an anonymous, accelerated dictionary - a set of words with definitions whose implementations may be hand-optimized. Other dictionaries may then derive from the accelerated dictionary. Recognizing accelerated definitions is most readily performed via the word cache, e.g. we can recognize whenever a word's cacheID matches the same from our accelerated dictionary, and if so use the accelerated implementation.
+An AO runtime will generally specify one or more anonymous, accelerated dictionaries - words with definitions whose implementations may be hand-optimized. Other dictionaries may then derive from the accelerated dictionary. Recognizing accelerated definitions is most readily performed via the word cache, e.g. we can recognize whenever a word's cacheID matches the same from our accelerated dictionary, and if so use the accelerated implementation.
+
+This is discussed more under [ABC](AboutABC.md). 
+
+
+
 
 ## AO Development
 
-AO development is based on ABC development, but the use of words augments this in many ways:
+AO development is based on ABC development, but use of words augments this.
 
-* implicit targets for debugging, program animations
-* metadata and declarations, e.g. via `word.type`
-* embed tests and examples for each word in dictionary
+At the human layer, words can be used to generate human-meaningful [editable views](EditingAO.md) that are readable and comprehensible without a heroic effort. A development environment can help isolate errors by naming the words where they appear, and focusing on word-specific computations. Words serve implicitly as both tests and type checks. Associative words can provide extra metadata and context - e.g. `word.doc` and `word.type`. 
 
-More broadly, use of symbolic structure via words provides a convenient platform for both stateful updates and computed views. The [application model](ApplicationModel.md) represents 'applications' within a stateful codebase. This is integrated with the real-world through publish-subscribe models and other RESTful techniques.
+AO developers are encouraged to construct very 'wide' dictionaries. This is unlike conventional languages where each "library" covers a specific problem and "applications" compose multiple libraries. Instead, developers derive from a popular, curated dictionary that includes an abundance of integrated examples and documentation. As necessary, they may patch or merge DVCS-style to push or integrate external changes. 
 
-Type declarations are something that must still be considered carefully with AO. Potential to support named types or human-level documentation for types could be very useful, as is potential to integrate additional type constraints with static type checking.
-
-AO does introduce an interesting new 'effect' that could be tracked for type safety: a context of named dictionaries upon which a computation might depend. This is important for understanding mutability. However, this context might be restricted at an AO security layer.
-
-### Caveats
-
-This AO representation has many nice properties, but has some weaknesses:
-
-1. AO files and ABC aren't very convenient for direct use by humans. They can work in a pinch, but AO is intended to be manipulated primarily through [editable views](EditingAO.md) or an [application model](ApplicationModel.md).
-1. There is no support for *metadata* such as timestamps, commit messages, or bug tracking. Instead, the intention is that AO development environments should represent such metadata within an AO dictionary (perhaps an auxiliary named dictionary). This ensures metadata is accessible to Awelon application models or views.
-1. To rename a word requires rewriting every reference to that word. This might be performed by a development environment, but is not a first-class feature of the AO representation.
-1. Updates apply only to whole definitions. Fortunately, it is easy to factor large AO code into small words that can be updated independently when need arises. Append only updates can be modeled by a command pattern (cf. [application model](ApplicationModel.md)).
+The Awelon [application model](ApplicationModel.md) allows for a hosted dictionary to contain applications including data elements and databases and so on. And even support dictionary-level garbage collection. It's ultimately a very RESTful style, able to integrate with real-time systems via publish-subscribe and other multi-agent system idioms. 
 
 ## Constraints on Words and Tokens
 
@@ -229,8 +237,8 @@ Words are weakly constrained to fit tokens, control size, and support wrappers o
 * no empty or enormous words; 1..30 bytes valid UTF-8
 * no C0, SP, `@[]{}<>(|),;"`, DEL, C1, replacement char
 
-However, these constraints do not ensure a clean embedding in URLs, HTML, English text, and so on. So there may be other limitations in context. For example, a [editable view](EditingAO.md) may require escaping use of problematic words.
+However, these constraints do not ensure a clean embedding in URLs, HTML, English text, and so on. So there may be other limitations in context. An [editable view](EditingAO.md) may require escaping use of problematic words.
 
-Words `a`, `b`, `c`, and `d` are valid, but are implicitly defined as the four ABC primitives and may not be redefined. These are effectively the four 'keywords' of AO.
+Words `a`, `b`, `c`, and `d` are valid, but are implicitly defined as the four corresponding ABC primitives. They may not be redefined. These are effectively the four 'keywords' of AO.
 
 Dictionary names must also be valid words. And ABC tokens (annotations, gates, sealers, unsealers) should be valid words modulo the prefix character. 

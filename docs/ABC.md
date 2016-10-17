@@ -25,13 +25,17 @@ Other tokens have *linking semantics*, which rewrite to more bytecode. ABC's pri
 
 ## Bytecode Extension
 
-ABC is extensible in context of its link layer. In particular, we will recognize operators like `xyz` as a desugaring to `{%x}{%y}{%z}`. This effectively enables developers to define their own extensions to ABC.
+ABC is extensible in via the link layer. In context of AO, we will recognize operators like `xyz` as desugaring to `{%x}{%y}{%z}`. This effectively enables users to define their own extensions to ABC.
+
+ABC achieves performance via its extension model. An interpreter is expected to specify one or more AO dictionaries for which it specializes data representations and accelerates functions. At the very least, this should include the common data embeddings - natural numbers and texts. But the idea can extend to evaluating linear algebra on a GPGPU or Kahn Process Networks on a cloud.
+
+There is no centralized standardization of extensions. Just a collaborative evolution between runtime developers and users.
 
 ## Data Embedding
 
-Natural numbers will be embedded using the form `#42` or `#108`. Here `#` introduces a new zero value, while `1234567890` each have a 'multiply by ten, add digit' effect. These aren't primitives, but rather are eleven operations defined via extension.
+All data in ABC is Church encoded, but compact embedding is viable via the link layer extensions. For example, natural numbers might be embedded using `#42` or `#108`. Here `#` introduces a value representing the number zero, while `1234567890` each have a 'multiply by ten, add digit' effect.
 
-Text data will be embedded as a valid UTF-8 byte sequence:
+Text embedding requires special attention:
 
         "start with character `"`
          may have multiple lines
@@ -45,23 +49,19 @@ Text data will be embedded as a valid UTF-8 byte sequence:
          There are no other special chars.
         ~
 
-The desugaring semantics for text data has not been decided, but will likely be some variation of `"hello"` desugaring to `[[#104] "ello" s]`, allowing user-defined constructor `s` and wrapping the `[#104]` to generalize sequencing of arbitrary commands.
+Text will have a simple desugaring via user-defined extension:
 
-## Accelerated Operations and Representations
+        "hello" => [[#104] "ello" y]    (y for 'yield')
+        ""      => ~
 
-ABC achieves performance via its extension model. An interpreter is expected to optimize for a de-facto standard AO dictionary from which most users will derive new dictionaries. 
-
-For example, our optimized dictionary might include operators `#1234567890` for representing numbers, and more operators or built-in words for arithmetic. By optimizing for common representations of numbers and arithmetic, a runtime could use a lightweight machine word under the hood for those operations or any code defined in terms thereof. This would only require a quick verification that we're using the accelerated versions.
-
-The same idea can be applied to accelerating linear algebra and matrix representation to leverage GPGPU, or accelerating Kahn Process Networks to leverage cloud computing. These will be areas to explore.
-
-*Aside:* Avoiding global standardization allows for a lot more ad-hoc experimentation and deprecation in the effort to support high performance computing from a language with just four operators.
+The definitions of `y` and `~` must be provided through the AO dictionary. Text desugars as a UTF-8 binary, so a character like `→` (U+2192) will yield three bytes (226, 134, 146). *Aside:* It is possible to unify texts, natural numbers, and more generic sequences, in which case `~` and `#` will have the same meaning.
 
 ## ABC CHANGE LOG
 
 October 2016:
 * reject global standard extensions to ABC
 * extension and acceleration via AO layer
+* leverage extensions model for text data
 
 September 2016: 
 * revision to minimalist ABC (`[abcd]`)

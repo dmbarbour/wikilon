@@ -12,7 +12,7 @@ What sets ABC apart?
 
 ABC is evaluated by pure, local, confluent rewriting. Importantly, ABC does not become entangled with its environment during evaluation. There are no jumps or pointers, no external memory or stack, no FFI, no side-effects. Effects are achieved in multi-agent systems via Awelon's non-conventional [application layer](ApplicationModel.md). An ABC subprogram will simply evaluate into another representation of the same ABC subprogram, much like `6 * 7` evaluates in conventional arithmetic to `42`.
 
-ABC is simple and extensible. There are only four primitive operations `abcd` - apply, bind, copy, drop. ABC programs can be composed by simple concatenation, linked by simple inlining. Extensions are trivial via the [AO link layer](AboutAO.md): a user-defined function whose name is a single UTF-8 codepoint may be used as a bytecode. Extensions will be accelerated for primitive performance by runtimes that recognize them, leading to de-facto standardization of popular ABC extensions.
+ABC is simple and extensible. There are only four primitive operations `abcd` - apply, bind, copy, drop. ABC programs can be composed by simple concatenation, linked by simple inlining. Extensions are trivial via the [AO link layer](AboutAO.md): any user-defined function whose name is a single UTF-8 codepoint may be used as a bytecode. Extensions will be accelerated for primitive performance by runtimes that recognize them, leading to de-facto standardization of popular ABC extensions.
 
 ABC is serializable and weakly legible. ABC strings are encoded in UTF-8 (mostly the ASCII subset), avoiding control characters, and may be rendered in normal text editors. Data can be embedded within ABC via extensions like `#42` to construct natural numbers plus a little syntactic sugar for texts, and these can also be used in evaluation output when known to a runtime. 
 
@@ -50,17 +50,17 @@ Tokens with *identity* semantics include seals `{:db}{.db}`, gates `{@foo}`, and
 
 ABC's primary linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. During evaluation, the token is substituted for the word's definition when doing so enables evaluation to proceed. 
 
-*Note:* Tokens are syntactically limited - at most 62 bytes UTF-8 token text between the curly braces, and the text itself may not contain curly braces, C0, DEL, C1, or the replacement character. Tokens should not include much logic or structure internally.
+*Note:* Tokens are structurally limited - at most 62 bytes UTF-8 token text between the curly braces, and the text itself may not contain curly braces, C0, DEL, C1, or the replacement character. Tokens should not include much logic or structure internally.
 
 ### Bytecode Extension
 
-ABC is extended through the link layer. In context of AO, `xyz` is effectively shorthand for `{%x}{%y}{%z}`. Reducing common operations to a single character enables compact representation of programs. An AO dictionary, thus, might define the following:
+ABC is extended through the link layer. In context of AO, bytecode sequence `xyz` is effectively shorthand for `{%x}{%y}{%z}`. Reducing common operations to a single character enables compact representation of programs. An AO dictionary, thus, might define the following:
 
         [B][A]w == [A][B]   (swap);     w = {&a2}[]ba
         [A]i    == A        (inline);   i = []wad
         [B][A]o == [A B]    (compose);  o = {&a2}[ai]bb
 
-For performance, this idea should be coupled with the concept of accelerated dictionaries. An interpreter or compiler can provide optimized representations and implementations to support performance critical computations. Because performance requires cooperation with interpreters, bytecode extensions will tend to have some de-facto standardization.
+For performance, this concept must be paired with runtime-accelerated dictionaries. That is, an interpreter or compiler will provide optimized representations and implementations for common, performance critical computations (natural number arithmetic, linear algebra, process networks, etc.), effectively extending the set of ABC primitives for performance purposes. Runtime acceleration forms a de-facto extension to the bytecode, so extension of ABC becomes a collaborative effort between runtime developers and clients.
 
 ### Whitespace Formatting
 
@@ -72,11 +72,11 @@ Leveraging the ABC dictionary, we can define eleven operators `#1234567890` such
 
 Leveraging the *accelerated dictionary* concept, a runtime might recognize the encoding for numbers, use a machine word to represent them under the hood, and output numeric results in the same form such that `#6 #7 *` evaluates to `#42`. 
 
-Text embedding is a special case and needs a syntactic sugar:
+Text embedding is a special case for efficient UTF-8 embedding:
 
-        "literals are multi-line UTF-8
+        "text literals are multi-line UTF-8
          they start with character " (32)
-         blacklist characters:
+         blacklist codepoints:
             C0 (except LF), DEL, C1
             replacement character
          linefeed is special character:
@@ -86,12 +86,17 @@ Text embedding is a special case and needs a syntactic sugar:
          no other special characters
         ~
 
-I haven't settled on a specific model for embedded text. Primary candidate:
+For simplicity, ABC only supports the general purpose multi-line texts rather than attempting to support multiple kinds of text. However, [editable views](EditingAO.md) may support inline texts such as `"hello, world!"`. 
+
+Text has a simple desugaring semantics via bytecode extension:
 
         "hello" => [[#104] "ello" y]    (y for 'yield')
-        ""      => #
+        ""      => ~
 
-This representation favors structural unification of natural numbers, texts, monadic command sequences, and general coroutines. For example, natural number `#5 == (,,,,)` (yield five times, no action) and `"hello" == (#104, #101, #108, #108, #111)` (yield five times, each time placing a number on the stack). 
+Text desugars as UTF-8 bytes, so a character like `→` (U+2192) will desugar into three bytes (226, 134, 146). Desugaring as a binary is efficient for common use cases (e.g. using texts as keys in a data structure), and encourages developers treat individual characters as substrings (which is the only correct option with unicode).
+
+It is possible to unify semantic structure of natural numbers, texts, [claw command sequences](EditingAO.md), and general coroutines. For example, natural number `#5 == (,,,,)` (yield five times, then return) and `"hello" == (#104, #101, #108, #108, #111)` (yield five times, each time placing a number on the stack, then return) could effectively have the same structure. However, unification is not required. In case of unification, `~` and `#` should have the same behavior of representing a final action (cf. *conditional behavior*, below). 
+
 
 
 
@@ -109,9 +114,9 @@ The basic evaluation strategy for ABC is:
 * copy lazily, by need
 * evaluate final values
 
-By first rewriting the outer program, we have some opportunity to apply annotations or drop conditional operations. By evaluating before copying a value, we avoid rework. By copying only if there is demand (e.g. via `a` or `b`), we avoid unnecessarily replicating data in the output. Deep evaluation of final values is useful for data extraction and efficient further evaluation.
+By first rewriting the outer program, we have some opportunity to apply annotations or drop values representing conditional paths. By evaluating before copying, we avoid creating rework (it's easy for a runtime to track whether an object is already evaluated). By copying only if there is demand (e.g. via `a` or `b`), we avoid unnecessarily replicating data in the output. Deep evaluation of final values is useful for data extraction and efficient further evaluation.
 
-The basic evaluation strategy may be tuned by annotations. 
+The basic evaluation strategy may be tuned by annotations.
 
 ### Arity Annotations
 
@@ -122,7 +127,9 @@ Arity annotations use rewrite rules for `{&a2}..{&a7}`:
                                    ...
         [G][F][E][D][C][B][A]{&a7} => [G][F][E][D][C][B][A]
 
-It's the *annotation* that has the indicated arity. Arity annotations provide a lightweight form of input buffering, controlling partial evaluations where they aren't efficient or interesting. Arity annotations are a foundation for lazy evaluation, fixpoints, and ultimately to control [AO linking](AboutAO.md).
+It's the *annotation* that has the indicated arity. Arity annotations provide a lightweight form of input buffering, controlling partial evaluations where they aren't efficient or interesting. Arity annotations serve as a foundation for lazy evaluation, fixpoints, and ultimately to control [AO linking](AboutAO.md).
+
+*Aside:* The six arity annotations cover the common range for parameter lists. If a function needs more than five arguments, developers should seriously consider factoring parameter objects. 
 
 ### Accelerated Dictionary
 
@@ -135,6 +142,7 @@ Other valuable targets for acceleration:
 * floating point numbers
 * binary and list processing
 * key-value records and databases
+* key-based variants or sum types
 * linear algebra and matrix math
 * parallel process networks
 
@@ -166,7 +174,7 @@ Fixpoint applies a function with a fixpointed copy of that function in context. 
                 == [B][[A]z][A]i                                    (def w)
                 == [B][[A]z]A                                       (def i)
 
-This will likely become *the* de-facto standard fixpoint combinator. It has many convenient properties like being tail-recursive, not replicating `[A]` more than necessary, and supporting recovery of the `z` identifier as a simple rewrite. In practice, we'll accelerate this, reducing a dozen steps and two copies to a single step and one logical copy of `[A]`. Other loop structures may be defined in terms of `z` and might be independently accelerated. But `z` is the big one.
+This will likely become *the* de-facto standard fixpoint combinator. It has many convenient properties like being tail-recursive, not replicating `[A]` more than necessary, and supporting recovery of the `z` identifier as a simple rewrite. In practice, we'll *accelerate* this, reducing a dozen steps and two copies to a single step with one logical copy of `[A]`. Other loop structures may be defined in terms of `z` and might be independently accelerated. But `z` is the big one.
 
 ### Parallel Evaluation
 
@@ -184,7 +192,7 @@ We cannot make useful observations on partially evaluated results. We cannot mod
 
 To address these weaknesses, I propose acceleration of a variant of [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks). 
 
-A process network can be modeled as a set of named processes that read and write to named ports, wires between ports, and a queue of messages on each wire. Wires might be bounded buffers, though that is not the case for KPNs generally. A constraint is that each port is attached to a single wire, with the same types for input and output. This might be expressed as a DSL of sorts, and may even have a dedicated type safety analysis. 
+A process network can be modeled as a set of named processes that read and write to named ports, wires between ports, and a queue of messages on each wire. While it is not the case for KPNs generally, we might permit wires to be bounded buffers with pushback. A constraint is that each port is attached to a single wire, with the same types for input and output. This might be expressed as a DSL of sorts, and may even have a dedicated type safety analysis. 
 
 We can accelerate evaluation of this network. KPNs evaluate deterministically, so we can treat it as rewriting the network description or DSL. However, KPNs evaluate efficiently using processes and queues - even in a distributed system. Our accelerator can leverage that. 
 
@@ -196,13 +204,17 @@ Intriguingly, modeling KPNs as first class values has much nicer properties than
 
 While KPNs are great for most parallel processing, we'll additionally need to accelerate matrix and vector math to take full advantage of GPGPU or SSE based parallelism. This will require a lot of care and consideration, but there are good examples to follow like Haskell's 'accelerate' and (for graphics) 'lambda cube'. 
 
+### Efficient Interpretation
+
+To efficiently interpret an ABC binary, we must leverage an index/cache on the bytecode such that, upon observing the start of a block, token, or text, we skip to the end and potentially bind any interesting information. For tokens, we might also use the index to efficiently link without reading the token. 
+
+Efficient interpretation should be a major focus of an ABC runtime, enough to permit user-controlled compilation. The use of accelerators will likely be critical to efficient interpretation.
+
 ### Compilation
 
-A runtime can provide a `[function]{&jit}` annotation such that we construct a more efficient representation for evaluation of the function. Taken together with [AO dictionaries](AboutAO.md) and a little caching, we can effectively achieve staged compilation for important words. Effective use of JIT may be limited to cases where it's easy to determine static types.
+Compilation of code is essential if ABC is ever to be performance competitive with more conventional languages. A runtime should support compilation. I tend to prefer predictable performance, so I would like a runtime to provide compilation as an explicit action - i.e. something like `[function]{&jit}`. In a staged evaluation context like [AO](AboutAO.md), or via use of memoization, we can effectively get staged compilation.
 
-Compiling an executable independent of an ABC runtime is feasible as a case of *program extraction*. Generally, program extraction might translate an ABC program to a Haskell module, JavaScript object, C function, and so on. Extraction requires a well understood program type to integrate with the context. In case of independent executables, the program type will likely be some variant on monadic IO.
-
-Awelon project favors [application models](ApplicationModel.md) that do not rely on program extraction, so local `{&jit}` compilation more appropriate for basic performance concerns. However, I would like to support both techniques.
+*Aside:* Extracting an independent executable is something different from compilation for performance. This might also be worth pursuing, but more so at the [application layer](ApplicationModel.md), and might involve compiling to an intermediate language like C or JavaScript.
 
 ### Rewrite Optimizations
 
@@ -225,34 +237,13 @@ Rewrite optimizations might be available at runtime via an annotation like `{&op
 Stowage and memoization based caching are covered in greater detail in the [Awelon Object (AO)](AboutAO.md) documentation. But the general summary is:
 
         [large value]{&stow}    =>  [{%resource}]
-        [small value]{&stow}    =>  [small value]
         [computation]{&memo}    =>  [cache value]
 
-Use of stowage supports larger than memory values and computations, offloading bulky data to disk. It might be understood as a more precise, explicit model of virtual memory.
+Use of stowage supports larger than memory values and computations, offloading bulky data to disk. It might be understood as a more precise, explicit model of virtual memory. Values smaller than a heuristic threshold will not be moved by stowage.
 
-A memo cache uses a serialized computation as a representation for a value. We'll look up the computation in a table. If found, we replace the computation by its result without performing all the intermediate steps. Otherwise, we perform the computation and heuristically decide whether to add it to the table (based on time/space tradeoff, maybe some probabilistic factor). 
+A memo cache uses a serialized computation (potentially via secure hash) as key into a lookup table. If found, we can replace the computation by the value. Otherwise, we can compute and add it to the table. There may be some heuristic and probabilistic decisions about which keys make it into the table, e.g. based on time/space tradeoffs. Developers are encouraged to batch and buffer computations such that the time/space tradeoff for memoization is probably a good one.
 
-The serialization requirement for caching has some overhead, so developers are encouraged to make suitable 'cache-points' explicit such that the time/space tradeoff is probably a good one. Use of stowage can help ameliorate cache overheads by controlling synchronization costs.
-
-### Interpretation and Compilation
-
-For fast interpretation, ABC has a few significant weaknesses:
-
-* embedded data can hurt locality of active code
-* unknown sizes for tokens, literals, and blocks
-* tokens are not statically linked ahead of time
-
-To overcome these weaknesses, we have at least two options.
-
-One option is to rewrite ABC to use an alternative representation of bytecode internally, one that addresses these weaknesses. This might embed data with an address or offset, and bind linker tokens similarly. Direct interpreted performance may improve, though by how much is difficult to determine without profiling. The cost is complexity for translations in both directions, persistence, stowage, and incremental computing.
-
-Another option is to index and cache metadata to efficiently process an ABC string, separately from it. This could be achieved by a hashtable mapping address or offset to the metadata. This has some advantages - flexibility, easier serialization. 
-
-This won't help with code locality, but it could reduce the issues of scanning to the end of a token or literal within a compact binary, and it would support binding of a token to its interpretation.
-
-In context of a JIT compiler, I suspect a fast interpreter is less important than a simple representation. So the index on raw ABC may be the better option unless something about the other bytecode simplifies compilation.
-
-
+Stowage and memoization work together nicely. Use of stowage can allow efficient serialization of computations involving large data structures or user-defined functions. Use of memoization can reference and share stowed resources without reconstructing them.
 
 
 ## Static Type Safety for ABC
@@ -374,6 +365,10 @@ Static typing requires precomputing this information, i.e. tracking which values
 
 In this case, we have a conflict if `A+aff` (a value annotated affine) is used where `A-aff` (a value that is not affine, a copyable value) is needed.
 
+### Accelerator Type Checking
+
+Specialized type checking for accelerators can be effective without becoming overly complicated. For example, we could support specialized type models for accelerated process networks, key-value records, and key-based variants.
+
 ### Dynamic Evaluation
 
 Many useful programming styles are difficult to statically typecheck. Example:
@@ -398,13 +393,9 @@ At this point we may halt evaluation and pass the program to our static type che
 If a program contains `{&dyn}` annotations even after partial evaluations, we may call that program dynamically typed. Developers are free to construct dynamically typed software. But where dynamic partial evaluation can complete statically, it can readily be used for macro-like metaprogramming. An ABC software system may thus consist of an ad-hoc mix of fluid and rigid software components.
 
 
-
-
-
 ## Miscellaneous
 
-
-### Runtime Type Errors
+### Runtime Errors
 
 While static type checking is optimal, runtime type errors are possible with `{&dyn}` or if we do not bother to type check. In addition, developers may perform dynamic assertions, or express partial functions, in ways that a type checker cannot readily handle.
 
@@ -482,10 +473,10 @@ Similar to the `{&error}` annotation for error values, developers might want to 
 
 ### Lazy Evaluation and Coinductive Data
 
-To defer computation, we leverage arity annotations to construct a form like `[[B]{&a2}A]`. This has the same type and semantics as `[[B]A]` but does not expand beyond the independent evaluation of `B` and `A`. This is useful for representing coinductive data types such as potentially infinite data streams or procedurally generated environments. 
+We can leverage arity annotations to defer computations by constructing a value like `[[B]{&a2}A]`. This has the same type and semantics as `[[B]A]`, but the arity annotation prevents further evaluation. These properties are convenient for representing coinductive data types such as infinite data streams or procedurally generated worlds that otherwise might expand to fill available memory.
 
-We additionally introduce a `[A]{&force}` annotation to cause evaluation of a potentially deferred computation. Use of `{&force}` will evaluate as though in context of an infinite stack of input, collapsing any arity annotations that are merely awaiting extra arguments.
+Actually binding that extra argument to force computation isn't always convenient or optimal. So we introduce an annotation to `{&force}` partial evaluation of a deferred computation. Subsequent evaluation would proceed as if sufficient inputs were available to eliminate arity annotations.
 
-Use of `{&memo}` can support heuristic memoization of forced evaluations in case they are expensive, such that we don't recompute unnecessarily. However, ABC does not promise memoization is cheap. Hence, memoization is best used explicitly, when computations are probably expensive. In many cases, like processing an infinite data stream without backtracking, there is little or no benefit for memoization.
+A weakness of deferred computation is that we create rework upon copy. Developers can use `{&memo}` to memoize and share expensive computations. But memoization has its own costs and doesn't always pay for itself. Sometimes recomputing is cheap enough. I will leave use of memoization to the developer.
 
-*Aside:* ABC cannot support a direct `[A]{&lazy}` annotation because doing so is inconsistent with parallelism in context of intermediate output, as when halting on breakpoint or quota. For example, `[[A]{&par}]{&lazy}` could originate from `[A]{&par}[]b{&lazy}` or `[A][{&par}]b{&lazy}`, but we should be able to continue evaluation correctly without knowing the origin. Use of arity annotations doesn't have this problem.
+*Aside:* There is no `[A]{&lazy}` annotation operating on the evaluation strategy because it would be inconsistent in context of intermediate output or transparent persistence. For example, given `[[B]{&par}]{&lazy}` we cannot distinguish the origin as `[B]{&par}[]b{&lazy}` vs. `[B][{&par}]b{&lazy}`. Use of arity annotations doesn't have this problem.

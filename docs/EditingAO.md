@@ -17,102 +17,42 @@ Claw optimizes for:
 * number data `42 -7 2/3 3.141 2.998e8`
 * inline texts `"hello, world!"`
 
-Additionally, claw supports `[blocks]`, `{tokens}`, and command sequences `(foo,bar,baz)`. 
+Numbers in claw receive the bulk of attention:
 
-Claw is universal in the sense that *any* ABC code may be viewed and edited through Claw. Words that would be ambiguous with Claw features are simply presented as tokens - e.g. `{%42}`. However, Claw is most useful for editing code developed through the Claw view because it injects some extra words to deal with construction of numbers and text postprocessing.
+        42      →   #42 int
+        -7      →   #7 int negate
+        2/3     →   2 #3 ratio
+        3.141   →   3141 #3 decimal
+        -2.7    →   -27 #1 decimal
+        0.001   →   1 #3 decimal
+        2.998e8 →   2.998 8 exp10
 
-# Command Language for Awelon (claw)
+Natural numbers can be expressed with prefix `#` as in `#42`, and are simply inlined into the final ABC.
 
-Claw is a lightweight, editable view for [Awelon Object (AO) code](AboutAO.md), which in turn uses a subset of [Awelon Bytecode (ABC)](ABC.md). The main purpose of Claw is to support easy use of [dictionary based REPLs and shells](ApplicationModel.md) - expression of 'one line' programs that still do something useful. However, Claw will also double as a primary program format until visual variants are available.
+Inline texts have simple constraints. They may not contain double quote or LF, and we'll follow them with `lit`. Multi-line texts are the same as in ABC but require an additional blank line at the start to both simplify alignment and indicate they are not inline texts. As such, `"hello, world!"` shall desugar as:
 
-The desiderata for claw is efficient, concise, aesthetic entry of:
+        "
+         hello, world!
+        ~ lit
 
-* dictionary words `swap inc mul`
-* number data `42 -7 2/3 3.141`
-* short inline texts `"hello, world!"`
-* structured programs and data
+Words are trivially expanded to their token forms, i.e. `foo` to `{%foo}`. However, words that might be ambiguous with other Claw features are presented in their compact forms. A word `{%42}` will 
 
-To optimize in these areas, claw requires escapes for multi-line texts, bytecode, and arbitrary tokens. Additionally, while claw can be used to edit and view arbitrary ABC, anything other than code desugared from claw will be a mess of escapes.
+Additionally, Claw supports `[blocks]`, `{tokens}`, and command sequences `(foo,bar,baz)`. The latter uses a desugaring unified with embedded texts:
 
-## Words
+        (foo,bar,baz) → [[foo] (bar,baz) y]
+        (baz)         → [[baz]     ~     y]
 
-A word is the default parse. For example, `swap` will be understood as `{%swap}`. Avoiding the `{%}` for every word does a surprising amount to make claw code more legible and easier to use than raw AO.
+Command sequences are potentially useful for embedding DSLs where each step is handled by an external interpreter. 
 
-## Claw Numbers
+## Improving on Claw
 
-Awelon Bytecode has built in support for *natural* numbers, e.g. `#42`. But I assume we'll want to model (and accelerate, eventually) a variety of numbers: negative integers, decimal numbers, ratios. Toward this end, I use the following rules:
+Claw as defined is useful. I've used it and found it aesthetic and convenient. Numbers, short texts, and common words are enough to write out quick one-liners and tests. Like Forth, Claw doesn't scale nicely beyond about fifteen tokens for a definition because developers start losing track of context. But, also like Forth, it's easy to factor large functions into smaller definitions.
 
-        42          \#42 int
-        -27         27 negate
-        2/3         2 3 ratio
-        -4/5        4 5 ratio 
-        3.141       3141 3 decimal
-        -2.7        -27 1 decimal
-        3.0e6       3.0 6 exp10
+Claw also has its weaknesses:
 
-To express natural numbers directly, rather than naturals wrapped as integers, requires the escaped form `\#42`.
+* Lack of namespaces or dialects or DSLs. Claw words desugar in a context-independent manner, which is nice for refactoring and unambiguous entry but a problem for *ease* of reading and program entry. 
 
-*Aside:* If there is sufficient demand, I may introduce specialized rendering options, like `0x3f` → `\#63 hex`.
+* Claw doesn't apply nicely after evaluation of code. Words like `int` and `decimal` may be eliminated by the evaluator and not be reintroduced by an accelerator. Ideally, we could tune Claw based on accelerators available to a dictionary and also view the evaluation output.
 
-## Claw Literals 
+To improve on Claw, we might need to define our editable views within our dictionary. With AO, it's easy to specify a dictionary around (via secure hash) in order to provide an unambiguous dialect in which we might view code. 
 
-Claw optimizes for inline literals:
-
-        "hello, world"          "
-                                 hello, world
-                                ~ lit
-
-Inline literals are restricted to exclude LF (10) or double-quote (34). Ideally, they should be relatively short - larger literals should be represented by separate words. Inline literals desugar into multi-line literals followed by the word `lit` to permit character conversions. 
-
-Multi-line literals are prefixed by `"` and an initial empty line. Lines with text must be indented by an SP character. (Empty lines don't need to be indented.)
-
-        some commands "
-         This is an example multi-line
-         literal with "double quotes".
-        ~ more commands
-
-Other than the slight tweak to the prefix, Claw multi-line literals have the same structure as ABC literals.
-
-### Claw Command Sequences
-
-A lightweight syntax for sequences provides an effective basis for structured programs and data. They might be used for monadic code, DSLs, streams, effects models. Or just to construct a list. Claw will use a general sugar that can be used with any sequence semantics:
-
-        (foo,bar,baz)       [[foo] (bar,baz) seq]
-        (baz)               [[baz] eseq seq]
-
-Note that `eseq` is our empty sequence, and that `()` is a sequence containing a single identity command. 
-
-*Notes:* An alternative I've contemplated is `[foo,bar,baz]` as a representation of `[[bar,baz] after foo]`, in a continuation passing style. However, this locks us into a specific semantics. And use of 
-
-## Embedding Bytecode
-
-Tokens are represented directly in Claw, e.g. `{%foo}` in Claw will be represented directly by `{%foo}` in the bytecode. AO words desugar to the appropriate token, so `foo` desugars to `{%foo}` (assuming the empty namespace). Blocks are represented directly but contain claw code rather than raw bytecode. Thus, `[foo] bar` will desugar to `[{%foo}]{%bar}`.
-
-ABC bytecodes don't need any special effort: the words `a` `b` `c` and `d` simply refer to our four primitive bytecodes. In Claw, these will be expanded into one word per opcode.
-
-Whitespace formatting bytecode (LF or SP) may be preserved by following each LF or SP in claw with an extra SP. Use of whitespace can be used to force a separation between claw views.
-
-### Claw Comments - Rejected
-
-Claw could easily support inline C-style comments. A simple pattern of introducing a text then dropping it would be sufficient. However, it isn't clear to me that we *should* do so. 
-
-        // this is a line comment
-
-            could (but does not) desugar to
-            
-        "this is a line comment
-        ~d
-
-The problems with inline comments are multifarious. Inline comments bulk up code that would be better explained, understood, and documented by factoring it into smaller components. Inline comments are second class, difficult to access or abstract. As documentation, they're weak because we cannot integrate graphical or interactive examples or flexible type setting. 
-
-For these reasons, Claw eschews inline comments in favor of separate documentation attributes, e.g. using words like `foo.doc` to document word `foo`. 
-
-## Future Extensions
-
-### Visual Claw?
-
-Assuming an appropriate editor, I would be interested in recognizing *form*-based presentation and widgets. For example, perhaps `30/100 slider` is recognized and rendered as a slider widget. Graphs, diagrams, canvases, tables, trees, checkboxes, selection lists, radio buttons, and a multitude of other stateful widgets could feasibly be integrated and rendered.
-
-However, it might be wiser to shift this up to the [dictionary level](ApplicationModel.md), e.g. rendering and direct manipulation of dictionary 'objects'. This would enable shared state and structure, flexible integration of eventful widgets via command patterns, and richer rendering attributes.
-
-In either case, techniques such as 'cloning' a subprogram and editing it could provide a basis for form input, and structured editing would provide a basis for structured programming. 
