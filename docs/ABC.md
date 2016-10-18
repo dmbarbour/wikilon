@@ -17,12 +17,11 @@ The `[abcd]` set is Turing complete and friendly for substructural types. ABC pr
 
 ## Tokens
 
-Tokens have the form `{foo}` - a short text between curly braces. Syntactically, tokens cannot 
-, e.g. `{foo}`. Like accelerators, tokens must have a pure local rewriting semantics. 
+Tokens have the form `{foo}` - a short text between curly braces, and support symbolic extension of bytecode.
 
-Most tokens have *identity semantics*, such that removing them from the code does not impact behavior of a correct program. Tokens with identity semantics can broadly support performance, safety, security, debugging, and rendering. For example, `[A]{&jit}` is formally no different from `[A]`, but would tell a runtime to perform just-in-time compilation.
+Many tokens have *identity semantics*, such that adding or removing them does not impact observable behavior within a correct program. Tokens with identity semantics can broadly support performance, safety, security, debugging, and rendering. For example, `[function]{&jit}` is formally no different from `[function]`, but might tell a runtime to perform just-in-time compilation of the function.
 
-Other tokens have *linking semantics*, which rewrite to more bytecode. ABC's primary link model is [Awelon Object (AO)](AboutAO.md). A link token `{%foo}` will rewrite to the definition of word `foo` from an implicit dictionary. Link dependencies in ABC must be acyclic, such that we could link everything up front without changing behavior of a program.
+Other tokens have *linking semantics*, which rewrite to more bytecode. ABC's primary link model is [Awelon Object (AO)](AboutAO.md). A link token `{%foo}` will rewrite to the definition of word `foo` from a dictionary in the evaluation context. Link dependencies in ABC must be acyclic, such that we *could* link everything up front without changing behavior of a program. But AO links lazily to preserve link structure when linking won't contribute to a rewrite.
 
 ## Bytecode Extension
 
