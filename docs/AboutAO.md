@@ -2,9 +2,17 @@
 
 Awelon Object (AO) extends [Awelon Bytecode (ABC)](AboutABC.md) with a link model and representation for for symbol-structured code. AO defines tokens for linking and how they interact with evaluation in context of dictionaries.
 
-A dictionary consists of a set of words with an ABC definition for each word. These definitions are lazily linked via ABC tokens of form `{%word}`. Additionally, AO treats bytecodes as single character words - i.e. `xyz` is implicitly `{%x}{%y}{%z}`. The four ABC primitives - `abcd` - are effectively keywords for AO and may not be defined. Dependencies between definitions must form a directed acyclic graph, such that all defined link tokens could be inlined, resulting in a finite (albeit exponential) expansion into raw ABC.
+A dictionary consists of a set of words with an ABC definition for each word. These definitions are lazily linked via ABC tokens of form `{%word}`. Additionally, AO treats bytecodes as single character words - i.e. `xyz` is implicitly `{%x}{%y}{%z}`. Dependencies between definitions must form a directed acyclic graph, such that all defined link tokens could be inlined, resulting in a finite (albeit exponential) expansion into raw ABC.
 
 AO dictionaries serve as a basis for development, evaluation, modularity, communication, and distribution. They provide a foundation for Awelon project's [application models](ApplicationModel.md). Lazy linking, in particular, is critical for many application models. It enables preservation of link structure which, in addition to being important for performance of large scale computing, enables AO to serve a foundation for hypermedia. 
+
+## AO Words
+
+Words are weakly constrained to avoid ambiguity with ABC or AO wrappers. In addition to the normal limits on tokens (no curly braces, control characters, or replacement character), words prohibit characters SP, `@[]<>(),;|"`. Also, the empty word is prohibited.
+
+Words `a`, `b`, `c`, and `d` are valid, but refer to the four corresponding ABC primitives and may not be redefined. These are effectively the four 'keywords' of AO.
+
+Developers are encouraged to further limit themselves to relatively short words that have convenient embeddings in URLs, natural language documentation, [editable views](EditingAO.md), and so on.
 
 ## AO Representation
 
@@ -229,16 +237,3 @@ At the human layer, words can be used to generate human-meaningful [editable vie
 AO developers are encouraged to construct very 'wide' dictionaries. This is unlike conventional languages where each "library" covers a specific problem and "applications" compose multiple libraries. Instead, developers derive from a popular, curated dictionary that includes an abundance of integrated examples and documentation. As necessary, they may patch or merge DVCS-style to push or integrate external changes. 
 
 The Awelon [application model](ApplicationModel.md) allows for a hosted dictionary to contain applications including data elements and databases and so on. And even support dictionary-level garbage collection. It's ultimately a very RESTful style, able to integrate with real-time systems via publish-subscribe and other multi-agent system idioms. 
-
-## Constraints on Words and Tokens
-
-Words are weakly constrained to fit tokens, control size, and support wrappers or extensions.
-
-* no empty or enormous words; 1..30 bytes valid UTF-8
-* no C0, SP, `@[]{}<>(|),;"`, DEL, C1, replacement char
-
-However, these constraints do not ensure a clean embedding in URLs, HTML, English text, and so on. So there may be other limitations in context. An [editable view](EditingAO.md) may require escaping use of problematic words.
-
-Words `a`, `b`, `c`, and `d` are valid, but are implicitly defined as the four corresponding ABC primitives. They may not be redefined. These are effectively the four 'keywords' of AO.
-
-Dictionary names must also be valid words. And ABC tokens (annotations, gates, sealers, unsealers) should be valid words modulo the prefix character. 

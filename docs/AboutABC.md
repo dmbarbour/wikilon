@@ -12,7 +12,7 @@ What sets ABC apart?
 
 ABC is evaluated by pure, local, confluent rewriting. Importantly, ABC does not become entangled with its environment during evaluation. There are no jumps or pointers, no external memory or stack, no FFI, no side-effects. Effects are achieved in multi-agent systems via Awelon's non-conventional [application layer](ApplicationModel.md). An ABC subprogram will simply evaluate into another representation of the same ABC subprogram, much like `6 * 7` evaluates in conventional arithmetic to `42`.
 
-ABC is simple and extensible. There are only four primitive operations `abcd` - apply, bind, copy, drop. ABC programs can be composed by simple concatenation, linked by simple inlining. Extensions are trivial via the [AO link layer](AboutAO.md): any user-defined function whose name is a single UTF-8 codepoint may be used as a bytecode. Extensions will be accelerated for primitive performance by runtimes that recognize them, leading to de-facto standardization of popular ABC extensions.
+ABC is simple and extensible. There are only four primitive operations `abcd` - apply, bind, copy, drop. ABC programs can be composed by simple concatenation, linked by simple inlining. Extensions are primarily via the [AO link layer](AboutAO.md): any user-defined function whose name is a single UTF-8 codepoint may be used as a bytecode. Extensions will be accelerated for primitive performance by runtimes that recognize them, leading to de-facto standardization of popular ABC extensions.
 
 ABC is serializable and weakly legible. ABC strings are encoded in UTF-8 (mostly the ASCII subset), avoiding control characters, and may be rendered in normal text editors. Data can be embedded within ABC via extensions like `#42` to construct natural numbers plus a little syntactic sugar for texts, and these can also be used in evaluation output when known to a runtime. 
 
@@ -41,26 +41,24 @@ The potential reduction to just four primitives makes ABC relatively easy to com
 
 ### Tokens
 
-Tokens have form `{foo}`, a short text wrapped in curly braces. Tokens enable symbolic extensions to ABC. Semantically, tokens are restricted by the normal rules for ABC: it must be possible to reduce every token to a primitive, purely functional `[abcd]` sequence. Tokens in ABC fall primarily into two groups:
+Tokens have form `{foo}`, a short text wrapped in curly braces that support symbolic extension of ABC. Syntactically, token texts must be valid UTF-8 excluding curly braces, control characters (C0, DEL, C1), and the replacement character. Semantically, tokens are limited to purely functional behavior via local rewriting. Use of tokens falls primarily in two classes:
 
 * tokens with *identity* semantics for performance, debugging
-* tokens with *linking* semantics for structured development
+* tokens with *linking* semantics for structured software
 
-Tokens with *identity* semantics include seals `{:db}{.db}`, gates `{@foo}`, and annotations `{&par}`. Seals support lightweight symbolic types. Gates are used for active debugging. Annotations serve ad-hoc performance and safety purposes. These are described later in this document. 
+Tokens with identity semantics include seals `{:db}{.db}`, gates `{@foo}`, and annotations `{&par}`. Seals provide lightweight symbolic type wrappers, which is convenient for fail-fast behavior and potentially for debugger rendering. Gates are used for active debugging like breakpoints, logging, or profiling and are configured at the runtime. Annotations serve ad-hoc performance and safety purposes as documented by a runtime. Seals, gates, and examples of annotations are described in this document.
 
-ABC's primary linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}` binding to an implicit dictionary. During evaluation, the token is substituted for the word's definition when doing so enables evaluation to proceed. 
-
-*Note:* Tokens are structurally limited - at most 62 bytes UTF-8 token text between the curly braces, and the text itself may not contain curly braces, C0, DEL, C1, or the replacement character. Tokens should not include much logic or structure internally.
+Linking replaces a token by more bytecode, acyclically. ABC's primary linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}`, and must be evaluated in context of an AO dictionary that defines the words. AO has a lazy linking model to preserve link structure whenever inlining code linking would not contribute to rewrites beyond mere inlining of definitions.
 
 ### Bytecode Extension
 
-ABC is extended through the link layer. In context of AO, bytecode sequence `xyz` is effectively shorthand for `{%x}{%y}{%z}`. Reducing common operations to a single character enables compact representation of programs. An AO dictionary, thus, might define the following:
+Bytecodes may be extended through the link layer. In context of AO, a bytecode sequence `xyz` is effectively shorthand for `{%x}{%y}{%z}`. Reducing common operations to a single character enables a compact representation of programs and data. An AO dictionary might define:
 
         [B][A]w == [A][B]   (swap);     w = {&a2}[]ba
         [A]i    == A        (inline);   i = []wad
         [B][A]o == [A B]    (compose);  o = {&a2}[ai]bb
 
-For performance, this concept must be paired with runtime-accelerated dictionaries. That is, an interpreter or compiler will provide optimized representations and implementations for common, performance critical computations (natural number arithmetic, linear algebra, process networks, etc.), effectively extending the set of ABC primitives for performance purposes. Runtime acceleration forms a de-facto extension to the bytecode, so extension of ABC becomes a collaborative effort between runtime developers and clients.
+Performance of bytecode extension may be supported through runtime-accelerated dictionaries. A consequence is that bytecode extension in practice isn't entirely user-defined, but rather is a collaborative between users and runtime developers.
 
 ### Whitespace Formatting
 

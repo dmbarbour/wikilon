@@ -17,7 +17,8 @@ The `[abcd]` set is Turing complete and friendly for substructural types. ABC pr
 
 ## Tokens
 
-Tokens have the form of short text between curly braces, e.g. `{foo}`. Like accelerators, tokens must have a pure local rewriting semantics. 
+Tokens have the form `{foo}` - a short text between curly braces. Syntactically, tokens cannot 
+, e.g. `{foo}`. Like accelerators, tokens must have a pure local rewriting semantics. 
 
 Most tokens have *identity semantics*, such that removing them from the code does not impact behavior of a correct program. Tokens with identity semantics can broadly support performance, safety, security, debugging, and rendering. For example, `[A]{&jit}` is formally no different from `[A]`, but would tell a runtime to perform just-in-time compilation.
 
