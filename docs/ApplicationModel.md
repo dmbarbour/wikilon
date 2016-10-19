@@ -3,7 +3,7 @@
 
 Awelon project will focus on RESTful applications, with the primary resources being [Awelon Object](AboutAO.md) dictionaries and objects modeled within them. Applications are modeled in terms of creating, reading, updating, and deleting definitions of words. Effects are carried out by a multi-agent system. Real-time behavior can be supported via publish-subscribe patterns. 
 
-This document will mostly discuss patterns for modeling applications, and why they're useful. 
+This document will discuss useful patterns for modeling applications.
 
 ## Command Pattern
 
@@ -30,6 +30,22 @@ Command pattern can be used for such things as:
 
 Effectively, command pattern models a mutable object within a dictionary, albeit only mutable by external agents. 
 
+## Dictionary Objects
+
+At the AO layer, the only formal meaning of a word is its definition. However, humans and software agents may treat words as having meaning and structure. We may associate `foo` with `foo.doc`, `foo.talk`, `foo.type`, `foo.author`, and so on. This association can be realized in our development environment. For example, tools that would copy, drop, or rename `foo` might include every `foo.field` word by default.
+
+Dictionary objects can always be flat, non-hierarchical, via use of redirects (i.e. instead of `foo.bar.baz` we have `foo.bar → object` and `object.baz`). However, use of hierarchy can be convenient to help control default behavior - e.g. copy would not follow redirects, instead sharing the object referenced.
+
+While AO does not permit cyclic dependencies between definitions, it is trivial to express cyclic relationships at the level of 'dictionary objects'. For example, `foo.author` references `users.dave` and `users.dave.appA` references `foo`. Cyclic relationships can be useful for modeling and navigating hypermedia applications.
+
+## Hypermedia Applications
+
+AO has a rich link structure. Definitions, dictionary objects, and entire dictionaries can be viewed as hypermedia. With dictionary objects, we get a lot of associative metadata for each word that can be linked together or provide hints for rendering. Thus, we can have cyclic graphs, or render some objects with sound or video. Potential presentation of AO as hypermedia is discussed under [editing AO](EditingAO.md). 
+
+Intriguingly, *AO evaluates to AO*, preserving both behavior and a great deal of link structure. Hence, we can view this as *hypermedia evaluates to hypermedia*. We can potentially model texts that evaluate to canvases and tables. We can model canvases and tables that evaluate to text. With *program animation* (described in [About ABC](AboutABC.md)), we might graphically render intermediate hypermedia views.
+
+In context of RESTful applications, treating AO as hypermedia could be useful both for viewing AO code and results, and for updating it. Depending on context, we could model updating forms/data in place or command-pattern updates where each 'command' is represented by a copy of a templated form. Forms could generally be evaluated independent of context, providing a basis lightweight applications and local input validation.
+
 ## Compositional Views
 
 Evaluating and caching words can support spreadsheet-like propagation of updates, but that alone is insufficient to efficiently work with words that contain large objects. In context of command pattern, for example, we'll have small changes to large objects. 
@@ -38,41 +54,31 @@ To fully leverage cache, favor compositional views on persistent objects:
 
         ∃f. ∀x,*,y. view(x * y) = f(view(x),'*',view(y))
 
-That is, the view of a composition is a composition of views. With this, we may explicitly cache `view(x)` and `view(y)`. Our assumption of persistence (i.e. a lot of structure sharing) means it is unlikely both `x` and `y` have changed, so we can reuse at least part of the cache.
+That is, the view of a composition is a composition of views. With this, we may explicitly memoize `view(x)` and `view(y)`. Our assumption of persistence (i.e. a lot of structure sharing) means it is unlikely both `x` and `y` have changed, so we can reuse at least part of the cache. In ABC, we would express this memoization as something like `[[X]view]{&memo}`. 
 
 Fortunately, a lot of views and data fit these constraints or at least can be adapted by keeping metadata with the view. Thus, we can support spreadsheet-like propagation even in contexts like time-series data and massive key-value databases.
 
-*Aside:* ABC supports explicit caching via `[computation]{&cache}`. Caching does have overhead for serialization and storage. To mitigate this overhead, we might cache only at coarse-grained, stable boundaries. For example, with time-series data, we could batch updates into frames (based on sample count) and only cache full frames.
+*Aside:* Memoization does have overhead for serialization and storage. To mitigate this overhead, we should memoize only at coarse, stable boundaries. This isn't difficult. For an LSM tree, with natural batching, we might simply cache everything but the root node. For time-series data, we might batch sample counts into frames, and cache only on the first frame.
 
 ## Publish Subscribe
 
-AO resources can be observed and updated in real-time by both human and software agents. A human may subscribe to dashboard views and use commands (or direct manipulation) to update policy. An 'internet of things' device might use a command pattern to publish time-series data while subscribing to a schedule of goal states. 
+Publish subscribe is a model for continuous, live programming of real world systems.
 
-Publish subscribe provides a foundation for continuous effects, live programming of real world systems. It is greatly enhanced by both the ability to subscribe to computed views and to support eventful updates to shared database objects.
+Command pattern provides a basis for small updates to large objects. Compositional views provide a basis for efficient ad-hoc subscriptions including large objects. Between these, large AO resources can be observed and updated in real-time by both human and software agents. A human may subscribe to dashboard views and use commands (or direct manipulation) to update policy. An 'internet of things' device might use a command pattern to publish time-series data while subscribing to a schedule of goal states.
+
+The ability to share flexible views of large objects without requiring each endpoint to manage fine-grained update events makes AO a lot more expressive and easier to use than many state-of-the-art publish subscribe systems.
 
 ## Effectful Orders
 
 A RESTful pattern for effectful systems is to model each request as a first class resource - a [work order](https://en.wikipedia.org/wiki/Work_order) (of sorts) to be fulfilled by agents in a multi-agent system. 
 
-Agents party to this system would search for orders matching some ad-hoc conditions (e.g. unfulfilled, authorized, within the agent's domain). Upon discovering a suitable order, the agent may claim it briefly, perform some work, then update the resource to indicate progress or results. A single order may be fulfilled by multiple agents over time, and in the general case might result in construction of orders for subtasks.
+Agents party to this system would search for orders matching some ad-hoc conditions (e.g. unfulfilled, unclaimed, authorized, within the agent's domain). Upon discovering a suitable order, the agent may claim it briefly, perform some work, then update the resource to indicate progress or results. A single order may be fulfilled by multiple agents over time, and in the general case might result in construction of orders for subtasks.
 
-This is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept.
+This is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept. Unlike a tuple space, I do not propose we remove objects from the dictionary. But claiming the order briefly would serve a similar role. 
 
-Orders must be coarse grained to amortize the search, dispatch, and update overheads. In practice, orders will frequently include decisions and loops so we can get more work done. A sophisticated order might be represented as a [KPN](KPN_Effects.md) or monadic action. 
+Orders must be coarse grained to amortize the search, dispatch, and update overheads. In practice, orders will expressess conditional behavior and loops so a single agent can make more than one step of progress, and perhaps return more than one result. A sophisticated order might be represented as a free monad or (more expressively) a [KPN](KPN_Effects.md). 
 
-Orders can be used for one-off effects. But when orders involve ongoing work, we might record incremental progress, integrate with publish-subscribe and time-varying policies. 
-
-In context of AO, orders may be modeled as objects in a dictionary.
-
-## Dictionary Objects
-
-At the AO layer, the only formal meaning of a word is its definition. However, humans and software agents may treat words as having more meaning and structure. We may associate `foo` with `foo.doc`, `foo.talk`, `foo.type`, `foo.author`, and so on. This association can be realized in our development environment. Tools would delete or rename the `foo` object as a whole. Conventional attributes may guide rendering and editing of objects. 
-
-Redirects can model references between objects, eliminating need for hierarchical structure. And while AO does not permit cyclic definitions, we can easily express cyclic relationships between objects (e.g. from `foo → bar` and `bar.parent → foo`).
-
-## Hypermedia Applications
-
-AO evaluation preserves some link structure. The output of evaluation may be understood as a document containing references to other objects in the dictionary. Those references may be displayed as hyperlinks, frames, or other techniques, perhaps depending on object attributes. Attributes may also indicate tools or forms to update an object, supporting type or application specific operation.
+While some effectful orders might be used for one-off commands or effects, others may involve long-running work. In the latter case, we'll record iterative progress, perhaps using the command pattern. Subscribers might observe progress in real-time.
 
 ## Tables and Spreadsheets
 
@@ -108,10 +114,4 @@ This would permit a corresponding set of rewrites:
 * *hidden* definitions may be *deleted* if they have no clients
 
 Each declaration gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. Compression can be achieved by introducing new hidden, frozen words for common substructures - i.e. dictionary compression.
-
-## Application Security
-
-(TODO!)
-
-Security models for AO dictionaries will likely be at the dictionary granularity. At the moment, we'll just borrow REST security models.
 

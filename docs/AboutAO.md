@@ -14,6 +14,16 @@ Words `a`, `b`, `c`, and `d` are valid, but refer to the four corresponding ABC 
 
 Developers are encouraged to further limit themselves to relatively short words that have convenient embeddings in URLs, natural language documentation, [editable views](EditingAO.md), and so on.
 
+## AO Development
+
+AO development consists of dictionary construction, sharing, and maintenance. 
+
+Working with bytecode and dictionary patches directly is painful. Humans will work instead through [editable views](EditingAO.md) of AO, which may be provided through an intermediate service - e.g. a web service, or potentially a [filesystem in userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) adapter (to leverage emacs, vim, or whatever). This is essentially a [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html) pattern with the AO dictionary as our storage layer.
+
+The Awelon project [application model](ApplicationModel.md) is oriented around software agents (bots) working together with humans in development of AO dictionaries. Named dictionaries form the natural unit of scalability and security. We can model databases, work orders, and publish-subscribe patterns as a basis for real-time systems with real-world effects. Curated dictionaries seed transparently persistent applications and rich communicating systems.
+
+See documents on editable views and the application model for details. 
+
 ## AO Representation
 
 A dictionary is an association of words to definitions, and there are many merely adequate ways of representing such a thing. But I want a variety of related features: history and versioning, lightweight forks, simple merge, structure sharing, efficient communication, distribution, and compaction. Additionally, AO must preserve ABC's properties of being weakly human readable and writeable with a text editor. To achieve these features, AO has received some careful attention to representation.
@@ -66,7 +76,7 @@ Anonymous patch files will use `secureHash.ao`, but may be held in a separate di
 
 Forking a named dictionary is trivial: simply copy the dictionary then begin updating. A two-way merge between dictionaries is always possible, identifying word-level differences. A three-way merge is possible only if there is a readily identified common patch history between two dictionaries, which depends on the update model.
 
-### Distribution
+### Provider Independent Distribution
 
 Anonymous dictionaries are distributed easily by secure hash. Given a secure hash for a dictionary we do not possess, we can ask whomever provided the secure hash to provide the patch. This is the primary distribution model of AO. But content-addressed networking techniques are possible, and may be useful in distributing a network burden. A viable technique for provider independent transport is to just use a fraction of the secure hash for lookup (e.g. the first 120 bits) then use the rest as a symmetric encryption key. 
 
@@ -84,10 +94,6 @@ There is no support to update only part of a definition. This isn't a big proble
 
 There is no support for renaming words or objects. Despite 'rename' being perhaps the most common example in proposals for language-specific semantic patch models, renaming introduces a lot of problems like not being idempotent, having a non-local effect, being rather ad-hoc in a distributed development scenario, and complicating patch-level indices. Developers are asked to perform renaming the old fashioned way - by explicitly redefining every relevant word in the dictionary, and avoiding rename for established words.
 
-
-
-
-
 ## AO Evaluation and Linking
 
 Dictionaries are the basic unit of AO evaluation. AO evaluation rewrites an AO dictionary into a different representation of the same AO dictionary. 
@@ -101,6 +107,8 @@ In practice, this evaluation may be lazy, i.e. such that we don't evaluate a sub
 Linking - the mechanical step of substituting a `{%word}` token by its evaluated definition - is performed only insofar as it enables evaluation to proceed. AO should not link if it just results in a trivial inlining of code.
 
 Preserving link structure ensures human-meaningful symbols remain in our evaluated results. Further, these symbols will frequently have ad-hoc associative structure like `word.doc` and `word.type` useful for both humans and software agents that might render, extract, or otherwise interact with a definition. Preserving link structure is essential for Awelon project's application models.
+
+Developers may freely leverage *arity annotations* to control preservation of link structure.
 
 ### Distributed Linking and Localization
 
@@ -226,14 +234,57 @@ An AO runtime will generally specify one or more anonymous, accelerated dictiona
 This is discussed more under [ABC](AboutABC.md). 
 
 
+## AO Scalability and Security
+
+For open distributed systems, the *named dictionary* is our fundamental unit for independent development, asynchronous update, and security. Each named dictionary has its own head - patch, hash, writer thread. Each writer may operate on its own authority.
+
+To be clear, we don't need multiple dictionaries for 'normal' scalability. A single dictionary can sustain surprisingly large volumes of writes by coalescing non-conflicting updates into buffered writes. There are key-value databases - mostly [LSM-tree based](https://en.wikipedia.org/wiki/Log-structured_merge-tree) - that can sustain 100k writes per second. We could directly model LSM trees with AO patches and some clever indexing. A single dictionary can host a hundred applications with moderate update frequencies.
+
+But at the large scale, we will need multiple writers, multiple dictionaries.
+
+At large scale, AO can support nice consistency properties:
+
+* *local snapshot consistency* - references to a named dictionary update together
+* *eventual consistency* - updates to a named dictionary are eventually received
+
+Consider a dependency graph:
+
+        foo ←--- bar
+           ↖_baz_↙
+
+What local snapshot consistency means is that, if dictionary `foo` depends on `{%word1@bar}` and `{%word2@bar}`, then those updates must arrive together, as an atomic batch, such that `foo` has a snapshot-consistent view of `bar`. But this doesn't imply global snapshot consistency - e.g. if `foo` also depends on `baz` and `baz` depends on `bar` it is possible that `foo` receives updates to `bar` before `baz` does. Hence, we may 'glitch' at a global scale. But most problematic glitches are resisted by local snapshot consistency. 
 
 
-## AO Development
 
-AO development is based on ABC development, but use of words augments this.
 
-At the human layer, words can be used to generate human-meaningful [editable views](EditingAO.md) that are readable and comprehensible without a heroic effort. A development environment can help isolate errors by naming the words where they appear, and focusing on word-specific computations. Words serve implicitly as both tests and type checks. Associative words can provide extra metadata and context - e.g. `word.doc` and `word.type`. 
 
-AO developers are encouraged to construct very 'wide' dictionaries. This is unlike conventional languages where each "library" covers a specific problem and "applications" compose multiple libraries. Instead, developers derive from a popular, curated dictionary that includes an abundance of integrated examples and documentation. As necessary, they may patch or merge DVCS-style to push or integrate external changes. 
 
-The Awelon [application model](ApplicationModel.md) allows for a hosted dictionary to contain applications including data elements and databases and so on. And even support dictionary-level garbage collection. It's ultimately a very RESTful style, able to integrate with real-time systems via publish-subscribe and other multi-agent system idioms. 
+
+
+
+
+
+
+
+It is not difficult to coalesce updates from multiple agents into a single dictionary. We can support lightweight transactions and DVCS-style merges. There is no risk of conflict, for example, if two transactions observe and update independent dictionary objects. However, ultimately we have a single patch, a single secure hash representing a dictionary. All updates funnel into a single thread.
+
+For large scale systems, the *named* dictionary becomes our unit.
+
+Each named dictionary is essentially a separate 'head' in the AO representation. Each head has its own secure hash, and hence we may have as many writers as we have head dictionaries. The cost is that we lose some consistency properties for our views of the system. Updates to a named dictionary may have some ad-hoc propagation latency. 
+
+
+Globally, we may still have 'glitches'. For example, if dictionary `foo` includes references to dictionaries `bar` and `baz`, but `bar` also depends on `baz`, then  `foo` might see the update to `bar` before it sees the update to `baz`. Hence, we may experience *glitches* at the very, very large scale.
+
+Updates between dictionaries will be *eventually consistent*, in the sense that updates to a named dictionary will eventually propagate to clients of that named dictionary. Fur, updates may be *pairwise snapshot consistent*, such that every reference to a word at a specific named dictionary will always be consistent with a specific  `*@dict`
+
+ to a named dictionary may propagate with different latencies through a network.
+
+            foo
+            |  ↘
+            |   bar
+            ↓  ↙
+            baz
+
+
+
+
