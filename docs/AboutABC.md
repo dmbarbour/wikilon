@@ -46,7 +46,7 @@ Tokens have form `{foo}`, a short text wrapped in curly braces that support symb
 * tokens with *identity* semantics for performance, debugging
 * tokens with *linking* semantics for structured software
 
-Tokens with identity semantics include seals `{:db}{.db}`, gates `{@foo}`, and annotations `{&par}`. Seals provide lightweight symbolic type wrappers, which is convenient for fail-fast behavior and potentially for debugger rendering. Gates are used for active debugging like breakpoints, logging, or profiling and are configured at the runtime. Annotations serve ad-hoc performance and safety purposes as documented by a runtime. Seals, gates, and examples of annotations are described in this document.
+Tokens with identity semantics include seals `{:db}{.db}`, labels `{~lang}`, gates `{@foo}`, and annotations `{&par}`. Seals provide lightweight symbolic type wrappers, which is convenient for fail-fast behavior and potentially for debugger rendering. Labels follow a value around and are useful for tracing or rendering hints. Gates are used for active debugging like breakpoints, logging, or profiling and are configured at the runtime. Annotations serve ad-hoc performance and safety purposes as documented by a runtime. Seals, gates, and examples of annotations are described in this document.
 
 Linking replaces a token by more bytecode, acyclically. ABC's primary linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}`, and must be evaluated in context of an AO dictionary that defines the words. AO has a lazy linking model to preserve link structure whenever inlining code linking would not contribute to rewrites beyond mere inlining of definitions.
 
@@ -337,9 +337,7 @@ I propose that most ABC systems should support `{&t0}`..`{&t7}`, the practical r
 
 ### Value Sealing for Lightweight Types
 
-ABC introduces two tokens `{:foo}` and `{.foo}` to support symbolic value sealing, to resist accidental access to data. This is supported by a simple rewrite rule: `{:foo}{.foo}` will rewrite to the empty program. A program of form `[A]{.foo}` or `{:foo}b` can fail fast. In most cases, seals will be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`.
-
-During static type analysis, these type wrappers should serve as a useful type constraint. Dynamically, in addition to serving as a fail-fast condition, we might leverage these symbols as hints to guide rendering or debugging.
+ABC introduces two tokens `{:foo}` and `{.foo}` to support symbolic value sealing, to resist accidental access to data. This is supported by a simple rewrite rule: `{:foo}{.foo}` will rewrite to the empty program. The main goal is to force programs to fail fast if they aren't expected to access a particular data structure. In most cases, seals will be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`. During static type analysis, these type wrappers should serve as a useful type constraint.
 
 ### Substructural Types
 
@@ -417,7 +415,7 @@ Active debugging describes techniques that provide a view of a computation in pr
 * **breakpoints:** provide a frozen view of a computation in progress
 * **logging:** provides a local view of a subprogram's dataflow
 * **animation:** global logging via breakpoints, big space overhead
-* **tracing:** backtrack dataflows, mark values with their origin
+* **tracing:** label values so we can backtrack data flows 
 * **profiling:** view time/effort spent on specified subcomputations
 
 I propose tokens of form `{@gate}` - called 'gates' - for active debugging. The symbol is user-defined. A gate operates on a single argument, e.g. `[A]{@foo}`. The behavior of a gate is configured at the evaluator. For example: 
@@ -425,7 +423,7 @@ I propose tokens of form `{@gate}` - called 'gates' - for active debugging. The 
 * open gates just pass the argument (not debugging)
 * closed gates do not evaluate further (breakpoint)
 * logging gates record argument to configured log
-* trace gates add some contagious metadata to argument
+* trace gates add a label to their argument 
 * profiling gates aggregate stats for evaluation of arguments
 
 It's feasible for a gate to serve a few roles at once. They're effectively user-configured annotations. Gates may have default configurations based on naming conventions. E.g. `{@log:xyzzy}` might print to a log titled `xyzzy`.
@@ -453,6 +451,14 @@ An animation strategy can be specified many ways:
 * pseudo-random selection
 
 Animating on breakpoint is much nicer than animating on quota. Individual frames will be deterministic, modulo profiling data. The structure is much more predictable, which simplifies both compression and stable rendering. The animation strategy enables evaluation to be precisely controlled and focused to just the parts we're interested in observing or rendering.
+
+### Labels
+
+Labels are tokens of form `{~foo}` that attach to a value then follow it around for basic data plumbing and copies. A value may have many labels, or even many of the same label - e.g. `[A]{~foo}{~bar}{~foo}{~baz}` - and will preserve the order in which labels were applied.
+
+Labels have no semantics. They cannot be observed from within an ABC evaluation. Rather, their role is for external observation - to help developers trace values or render.
+
+Externally, labels may be given ad-hoc interpretations, e.g. tracing values during debugging, or indicating a language with which some value should be rendered. 
 
 ### Testing
 
