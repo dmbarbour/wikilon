@@ -46,7 +46,7 @@ Tokens have form `{foo}`, a short text wrapped in curly braces that support symb
 * tokens with *identity* semantics for performance, debugging
 * tokens with *linking* semantics for structured software
 
-Tokens with identity semantics include seals `{:db}{.db}`, labels `{~lang}`, gates `{@foo}`, and annotations `{&par}`. Seals provide lightweight symbolic type wrappers, which is convenient for fail-fast behavior and potentially for debugger rendering. Labels follow a value around and are useful for tracing or rendering hints. Gates are used for active debugging like breakpoints, logging, or profiling and are configured at the runtime. Annotations serve ad-hoc performance and safety purposes as documented by a runtime. Seals, gates, and examples of annotations are described in this document.
+Tokens with identity semantics include seals `{:db}{.db}`, gates `{@foo}`, and annotations `{&par}`. Seals provide lightweight symbolic type wrappers, which is convenient for fail-fast behavior and potentially for debugger rendering. Gates are used for active debugging like breakpoints, logging, or profiling and are configured at the runtime. Annotations serve ad-hoc performance and safety purposes as documented by a runtime. Seals, gates, and examples of annotations are described in this document.
 
 Linking replaces a token by more bytecode, acyclically. ABC's primary linking model is [Awelon Object (AO)](AboutAO.md), which introduces tokens of the form `{%word}`, and must be evaluated in context of an AO dictionary that defines the words. AO has a lazy linking model to preserve link structure whenever inlining code linking would not contribute to rewrites beyond mere inlining of definitions.
 
@@ -408,6 +408,15 @@ Developers may freely specify their own error values:
 
 Use of `{&error}` marks a *value* as erroneous. Observing that value, e.g. with `[A]{&error}i`, results in a stuck computation. Being stuck on an error will not generate further errors. A type checker may treat an error value as having any type.
 
+### Comments
+
+It is not difficult to model comments in ABC. For example:
+
+        "this is my boomstick!
+        ~{&a2}{@rem}d
+
+I generally prefer documentation be pushed to associative structure at the AO layer, into words like `foo.doc`, `foo.talk`, `foo.about`, `foo.author`, or `foo.example`. But if we're going to model comments, the `{&a2}` arity annotation and `{@rem}` gate make them more useful and accessible than comments are in most programming languages. The gate enables logging, conditional breakpoints, etc.. The arity annotation resists premature destruction of the comment and enables construction of commented values or programs.
+
 ### Gates for Active Debugging
 
 Active debugging describes techniques that provide a view of a computation in progress: breakpoints, logging, animation, tracing, profiling.
@@ -415,7 +424,7 @@ Active debugging describes techniques that provide a view of a computation in pr
 * **breakpoints:** provide a frozen view of a computation in progress
 * **logging:** provides a local view of a subprogram's dataflow
 * **animation:** global logging via breakpoints, big space overhead
-* **tracing:** label values so we can backtrack data flows 
+* **tracing:** prefix argument with comment to help trace data flows 
 * **profiling:** view time/effort spent on specified subcomputations
 
 I propose tokens of form `{@gate}` - called 'gates' - for active debugging. The symbol is user-defined. A gate operates on a single argument, e.g. `[A]{@foo}`. The behavior of a gate is configured at the evaluator. For example: 
@@ -423,8 +432,8 @@ I propose tokens of form `{@gate}` - called 'gates' - for active debugging. The 
 * open gates just pass the argument (not debugging)
 * closed gates do not evaluate further (breakpoint)
 * logging gates record argument to configured log
-* trace gates add a label to their argument 
-* profiling gates aggregate stats for evaluation of arguments
+* trace gates inject a comment into their argument
+* profiling gates aggregate performance statistics
 
 It's feasible for a gate to serve a few roles at once. They're effectively user-configured annotations. Gates may have default configurations based on naming conventions. E.g. `{@log:xyzzy}` might print to a log titled `xyzzy`.
 
@@ -452,14 +461,6 @@ An animation strategy can be specified many ways:
 
 Animating on breakpoint is much nicer than animating on quota. Individual frames will be deterministic, modulo profiling data. The structure is much more predictable, which simplifies both compression and stable rendering. The animation strategy enables evaluation to be precisely controlled and focused to just the parts we're interested in observing or rendering.
 
-### Labels
-
-Labels are tokens of form `{~foo}` that attach to a value then follow it around for basic data plumbing and copies. A value may have many labels, or even many of the same label - e.g. `[A]{~foo}{~bar}{~foo}{~baz}` - and will preserve the order in which labels were applied.
-
-Labels have no semantics. They cannot be observed from within an ABC evaluation. Rather, their role is for external observation - to help developers trace values or render.
-
-Externally, labels may be given ad-hoc interpretations, e.g. tracing values during debugging, or indicating a language with which some value should be rendered. 
-
 ### Testing
 
 For testing purposes, it is frequently useful to assert that two values match.
@@ -479,7 +480,7 @@ Similar to the `{&error}` annotation for error values, developers might want to 
 
 We can leverage arity annotations to defer computations by constructing a value like `[[B]{&a2}A]`. This has the same type and semantics as `[[B]A]`, but the arity annotation prevents further evaluation. These properties are convenient for representing coinductive data types such as infinite data streams or procedurally generated worlds that otherwise might expand to fill available memory.
 
-Actually binding that extra argument to force computation isn't always convenient or optimal. So we introduce an annotation to `{&force}` partial evaluation of a deferred computation. Subsequent evaluation would proceed as if sufficient inputs were available to eliminate arity annotations.
+Binding extra arguments to force deferred computation isn't always convenient or optimal. So we introduce an annotation to `{&force}` partial evaluation of a deferred computation. Evaluation would proceed though sufficient input is available to clear arity annotations, without actually providing any input.
 
 A weakness of deferred computation is that we create rework upon copy. Developers can use `{&memo}` to memoize and share expensive computations. But memoization has its own costs and doesn't always pay for itself. Sometimes recomputing is cheap enough. I will leave use of memoization to the developer.
 
