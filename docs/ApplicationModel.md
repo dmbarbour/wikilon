@@ -70,15 +70,15 @@ The ability to share flexible views of large objects without requiring each endp
 
 ## Effectful Orders
 
-A RESTful pattern for effectful systems is to model each request as a first class resource - a [work order](https://en.wikipedia.org/wiki/Work_order) (of sorts) to be fulfilled by agents in a multi-agent system. 
+A RESTful pattern for effectful systems is to model each request as a first class resource - a [work order](https://en.wikipedia.org/wiki/Work_order) (of sorts) to be fulfilled by agents in a multi-agent system. Mostly software agents, but humans might also participate in fulfilling orders.
 
-Agents party to this system would search for orders matching some ad-hoc conditions (e.g. unfulfilled, unclaimed, authorized, within the agent's domain). Upon discovering a suitable order, the agent may claim it briefly, perform some work, then update the resource to indicate progress or results. A single order may be fulfilled by multiple agents over time, and in the general case might result in construction of orders for subtasks.
+Agents party to this system would search for orders matching some ad-hoc conditions (e.g. unclaimed, unfulfilled, authorized, and within the agent's domain). Upon discovering suitable orders, the agent may claim it temporarily, perform some work, then update the order to indicate progress. A single order may be fulfilled by multiple agents over time. In the general case, subordinate orders may be constructed for subtasks.
 
-This is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept. Unlike a tuple space, I do not propose we remove objects from the dictionary. But claiming the order briefly would serve a similar role. 
+In practice, orders will express conditional behavior and loops so a single agent can make more than one small step of progress. This helps amortize the search, claim, and update overheads. Consequently, we might model orders using monads or [process networks](KPN_Effects.md).
 
-Orders must be coarse grained to amortize the search, dispatch, and update overheads. In practice, orders will expressess conditional behavior and loops so a single agent can make more than one step of progress, and perhaps return more than one result. A sophisticated order might be represented as a free monad or (more expressively) a [KPN](KPN_Effects.md). 
+When orders are used for long-running labor, we gain opportunity to view progress for the work over time, and to interrupt, pause, prioritize, or guide the work in various ways.
 
-While some effectful orders might be used for one-off commands or effects, others may involve long-running work. In the latter case, we'll record iterative progress, perhaps using the command pattern. Subscribers might observe progress in real-time.
+*Aside:* Modeling orders is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept. The main difference is the proposed method for mutual exclusion: stake a 'claim' on an object rather than remove it. I believe this will be more robust, accessible, and extensible - e.g. expire claims on agent failure, support subscribed views of progress, adding schedules to work orders or partial claims for collaborative work.
 
 ## Tables and Spreadsheets
 
@@ -115,3 +115,16 @@ This would permit a corresponding set of rewrites:
 
 Each declaration gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. Compression can be achieved by introducing new hidden, frozen words for common substructures - i.e. dictionary compression.
 
+### Dictionary Based Communications
+
+Dictionaries are a flexible and efficient representation for message-passing.
+
+A dictionary naturally represents a collection of named dictionary objects. So we'll want two components for our message: the dictionary, and a word naming the message object. The dictionary will be represented as an AO patch. The bulk of the message - standard vocabulary, recommended [views](EditingAO.md), default fields, and so on - would be indicated via secure hash in the AO patch header. In practice, the word would frequently name a templated message object in the secure hash dictionary, or even a standard *view* on another object that translates between how we input data and how it is viewed.
+
+This is flexible both because our messages can contain behavioral information, procedurally generated data, translations and views, etc.. and efficient because of structure sharing with the secure hash reused between messages and potential for provider-independent content distribution networks.
+
+Conveniently, a document is essentially a message that we maintain over time. And many applications can be understood as documents that interact with humans and external software systems (via command pattern, work orders, publish subscribe, etc..)
+
+## Multi-Dictionary Applications
+
+In open systems, applications must interact with multiple dictionaries. While AO dictionaries don't support direct linking, indirect references are possible and other dictionaries might be accessed through software agents, work orders, explicit replication of a dictionary object, etc..
