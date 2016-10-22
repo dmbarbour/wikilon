@@ -26,7 +26,7 @@ ABC is amenable to static analysis, type checking. However, evaluation does not 
 
 ## The Bytecode
 
-ABC has only four primitive combinators `abcd`.
+ABC has four primitive combinators `abcd`.
 
         [B][A]a == A[B]         (apply)
         [B][A]b == [[B]A]       (bind)
@@ -94,8 +94,6 @@ Text has a simple desugaring semantics via bytecode extension:
 Text desugars as UTF-8 bytes, so a character like `→` (U+2192) will desugar into three bytes (226, 134, 146). Desugaring as a binary is efficient for common use cases (e.g. using texts as keys in a data structure), and encourages developers treat individual characters as substrings (which is the only correct option with unicode).
 
 It is possible to unify semantic structure of natural numbers, texts, [claw command sequences](EditingAO.md), and general coroutines. For example, natural number `#5 == (,,,,)` (yield five times, then return) and `"hello" == (#104, #101, #108, #108, #111)` (yield five times, each time placing a number on the stack, then return) could effectively have the same structure. However, unification is not required. In case of unification, `~` and `#` should have the same behavior of representing a final action (cf. *conditional behavior*, below). 
-
-
 
 
 
@@ -485,3 +483,4 @@ Binding extra arguments to force deferred computation isn't always convenient or
 A weakness of deferred computation is that we create rework upon copy. Developers can use `{&memo}` to memoize and share expensive computations. But memoization has its own costs and doesn't always pay for itself. Sometimes recomputing is cheap enough. I will leave use of memoization to the developer.
 
 *Aside:* There is no `[A]{&lazy}` annotation operating on the evaluation strategy because it would be inconsistent in context of intermediate output or transparent persistence. For example, given `[[B]{&par}]{&lazy}` we cannot distinguish the origin as `[B]{&par}[]b{&lazy}` vs. `[B][{&par}]b{&lazy}`. Use of arity annotations doesn't have this problem.
+

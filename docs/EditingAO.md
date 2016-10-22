@@ -1,13 +1,11 @@
 
 # Human Editable Views for AO
 
-[Awelon Object (AO)](AboutAO.md) code can be directly read and manipulated by humans, but is not optimized for direct human use. 
+[Awelon Object (AO)](AboutAO.md) code can be directly read and manipulated by humans, but is not optimized for direct human use. Humans should instead manipulate AO through an editable view - an efficient and aesthetic representation of code that may be edited in place then converted back to bytecode for storage. 
 
-Humans should instead manipulate AO through an editable view - an efficient and aesthetic representation of code that may be edited in place then converted back to bytecode for storage. This idea essentially an instance of [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). The AO dictionary is our storage representation. I'm initially focusing on plain-text editable views. But more structured or graphical views (with tables, radio buttons, canvases, progressive disclosure, hypermedia, etc.) are certainly viable.
+This idea is essentially an instance of [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). The AO dictionary is our storage representation. The editable view of code would be provided by a service - e.g. a web service or a [filesystem in userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) adapter.
 
-An editable view of code may be provided by a service - e.g. a wiki-inspired web service, or a [filesystem in userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) adapter.
-
-This document starts with a concrete example of a useful editable view named Claw. Claw provides a convenient base from which we can motivate further enhancements. This document will conclude with a robust, portable, expressive, and extensible foundation for editable views.
+This document starts with a concrete example of a useful, purely textual, editable view named Claw. From there I generalize to more robust, expressive, portable, optionally graphical, user-defined views.
 
 ## Command Language for Awelon (Claw)
 
@@ -29,7 +27,7 @@ Numbers in Claw receive the bulk of attention:
         95/100  ==   95 #100 ratio
         3.141   ==   3141 #3 decimal
         -2.7    ==   -27 #1 decimal
-        0.001   ==   1 #3 decimal
+        0.0010  ==   10 #4 decimal
         2.998e8 ==   2.998 8 exp10
 
 Natural numbers can also be expressed easily, just use prefix `#` as in `#42`. This will result in code `#42` inlined into the output bytecode.
@@ -53,17 +51,17 @@ As an editable view, all Claw translations are *bidirectional*. We rewrite towar
 
 Claw also ensures that a round-trip conversion starting from AO code is lossless. This is achieved by escaping AO whitespace by adding extra whitespace in Claw, i.e. `SP` in AO becomes `SP SP` in Claw. This can be useful for isolating Claw rewrites. 
 
-## Evaluable Views
+## Feature Request: Evaluable Views
 
 Claw was designed for an earlier version of AO and ABC, before rewriting semantics and preservation of link structure. AO now has a nice property where we can evaluate from `AO → AO`, with the same dictionary. Optimally, we should also view the evaluated AO code as Claw and treat output equally as `Claw → Claw`.
 
 Unfortunately, use of words like `ratio` and `decimal` will not reliably be generated in program output. That depends very heavily on runtime accelerators. 
 
-A dictionary should know about runtime accelerators. Presumably, users will derive from an accelerated dictionary. A reasonable conclusion is that *we should shove our definition of Claw into our dictionary*, such that it may be tuned for dictionary-specific conventions.
+Claw must be tuned to provided runtime accelerators. Runtime accelerators are most directly expressed by an accelerated dictionary. Hence, *Claw should be tuned to the dictionary*. The easiest way to achieve this is to define Claw within the dictionary, which has a bunch of extra benefits besides - like portable views.
 
 ## Comments
 
-I did not include comments in Claw because I favored the path of least resistance to be external documentation resources, such that developers define `foo.doc` and a few examples. However, representing comments is not difficult. Consider:
+I did not include comments in Claw because I favor the path of least resistance to be external documentation resources, such that developers define `foo.doc` and a few examples. However, representing comments is not difficult and may be useful. Consider:
 
         /* this is a comment */   
             
@@ -73,147 +71,27 @@ I did not include comments in Claw because I favored the path of least resistanc
          this is a comment
         ~ {&a2} {@rem} d
 
-This is a sufficient model of comments. Importantly, by deferring destruction of the comment with arity annotation `{&a2}`, we gain the ability to construct and preserve comments in context of *Evaluable Views*. Further, by including a `{@rem}` gate and configuring the runtime, we might even do something useful with our comments (logging, profiling, ad-hoc progress indicators, conditional breakpoints, etc..).
+This model of comments is compatible with the *Evaluable Views* goal because we can construct comments at runtime, comment values, etc.. and can leverage comments for active debugging (e.g. conditional breakpoints or logging). 
 
-Comments have greater merit in context of evaluable views and debugger gates. 
+## Ambiguity and Resolution
 
-I would still encourage developers to focus primarily on dictionary-layer documentation resources. But it doesn't hurt to support conventional definition-layer source-level comments. We need only to add words starting with `/*` to the filter of words our view must escape.
+It grates to use `trie:insert` versus `avl:insert` when the choice is clear in context. At least to humans, the `trie:` prefix just makes the code more verbose, more difficult both to read and write. Our editable views should allow some controlled introduction of local ambiguity, at least insofar as we can resolve that ambiguity in the greater context. 
+
+It is feasible to support some ambiguity resolutions via lightweight reflection on the dictionary to support namespaces or peeking at declared types. It is also feasible to make ambiguity externally visible for resolution. But that complicates use of editable views, so I'd prefer to focus on use of lightweight reflection.
+
+To guard against ambiguity in generated views, we can assert that a round-trip (AO → View → AO) is not just unambiguous, it must also be lossless - an identity behavior preserving even whitespace. 
 
 ## Editing With Errors
 
-Humans will provide erroneous inputs. It's only a matter of when, how frequently, and how early do we catch the errors. In context of AO editable views, we can detect errors at many layers without too much effort:
+Humans will provide erroneous input. Not just at the parser layer, either - we can have code that fails to evaluate or typecheck, or causes tests to fail. So a question is how to handle edit-time errors. One option is to reject the code at edit time, forcing immediate resolution. Another is to allow the erroneous code, perhaps recording it as an error object, something like:
 
-* code that fails to parse
-* code that fails to evaluate
-* code that fails to typecheck
-* code that causes clients to fail evaluation
-* code that causes clients to fail typechecking
+                ["[foo" {%viewToAO}]{&error}i
 
-AO allows evaluation to occur before typechecking, which is potentially useful for macro-like staged static evaluations. And 'clients' here may include examples, tests, and what are essentially type assertions (i.e. that a word should be valid in a given context). 
-
-Given erroneous input, we have an option: we can reject the input and ask the human to fix it *now*, or we can record the input and ask the human to fix it *later*. When I originally developed Claw, I favored the 'fix it now' option, so I didn't address the question of how to model erroneous inputs. 
-
-
-When humans provide erroneous input - e.g. in the sense of code that fails to parse or type check - we have an option. We can reject the input and ask the human to correct it now. Or we can accept the input and ask the human to correct it later.
-
-When I originally designed Claw, I was assuming the former. I would easily guarantee  However, accepting erroneous input and flagging 
-
-
-
-
-
-
-
-
-
-While I did not attempt this with Claw, an interesting question is how we should handle *erroneous* human inputs. For example, assume an attempt to store `[foo`, leaving off the block terminator. We could translate this to AO code like:
-
-        ["[foo"{~lang:claw}]{&error}i
-
-If we later attempt to recover this back into Claw, we could recognize the error construct and replace it by `[foo` as we originally input. Thus, we've preserved our round-trip identity properties, but the resulting AO code is also clearly erroneous in a manner that is readily detected on evaluation, and readily flagged for human attention. 
-
-Intriguingly, evaluation with partial errors is feasible. For example, we might instead capture this as:
-
-        [{%foo} "missing-]"{&error}i]
-
-Whether this is a 'good idea' is a separate question. But 
-
-
-
-
-
-
-(and the `{&error}i`, but not in a way that resists partial evaluations.
-
-
-
-- e.g. if someone attempts to store `[foo` leaving off the block terminal. 
-
-A simple possibility is to present this as an AO-level *error object* - i.e. leveraging an `{&error}` annotation and enough context such that we can preserve and edit erroneous subprograms. This allows a useful separation of concerns, e.g. supporting editors that interactively help developers fix errors is separated from the storage concern.
-
-
-
-## Word Fuzzing and Resolution
-
-Unambiguous reference is very convenient for linking AO code, but is not so convenient for human use. We end up with bulky words that repeat information already available in their context of use - e.g `trie:insert` vs. `avl:insert`. A consequence is that the program is not nearly so concise as it could be. 
-
-It is feasible to permit *local* ambiguity within an expression of a program so long as that information is recoverable in context. For example, we can replace `trie:insert` by `insert`, but only if we can later recover the `trie:` prefix.
-
-To guard against ambiguous code, we can insist that, like Claw, a round-trip conversion (AO to View back to AO) must be lossless, an identity behavior. Even whitespace in the original AO input must be exactly preserved. Humans must never read an ambiguous view of the AO dictionary.
-
-Humans may attempt to *write* ambiguous code. However, humans may attempt to write erroneous code in any number of ways. The specific possibility of ambiguous interpretation could easily be handled as an error that includes multiple possible interpretations (each of which might recursively have its own errors).
-
-
-
-However, allowing an ambiguous view does introduce the possibility that humans will attempt to *write* ambiguous code into the dictionary, e.g. by failing to provide sufficient context. This might be guarded against 
-
-Allowing ambiguity does introduce a possibility that the view will become ambiguous after some edits. In that case, we should be able to tell the human that the code is ambiguous, and present possible interpretations. This could be achieved as follows:
-
-
-
-
-Designers of the view can partially guard against this, e.g. by including some medatadata in the view. 
-
-
-
-
- only one possible resolution, and that *must* be lossless identity behavior. Or put another way, humans should never *read* an ambiguous view from our dictionary.
-
- we may assert that translating from AO code to editable view back to AO is an identity behavior, preserving even whitespace. This 
-
-
-
-We might insist on a fixpoint view, that reading the AO then writing it out again produces the exact same AO code. When writing Claw code in the first place, we might 
-
-This might be recovered if we add some namespace information to our view. Or perhaps some type information. 
-
-In context of editable views, we can heuristically introduce local ambiguities
-
-In context of editable views, we should at least ensure our initial and final views a
-
-
-
-For a more concise and human palatable programming environment, we may need to heuristically introduce some *local* ambiguity, so long as the overall meaning of our program i - e.g. replacing `trie:insert` by `insert` in a context where we know we can recover the `trie:`.
-
-More broadly, we could potentially support concise expressions like `tins` for `trie:insert` if there is no other word in the dictionary for which `tins` could 'match' 
-
- This fuzzing could take many possible forms: namespaces, 
-
-
-
-* including some type-based metadata in our view
-* 
-
-For editable views, 
-
-we can permit a small amount of *local* ambiguity so long as it resolves
-
-But we might need to *introduce* 
-
-ambiguity at the human layer in favor of conciseness
-
-However, at the human layer, we may benefit from allowing ambiguous use of words
-
-
-At the AO layer, unambiguous name resolution is a good thing. 
-
-
-## Patch Level Programming
-
-Claw was defined at the level of AO strings, but could easily be applied to AO level updates, e.g. by use of:
-
-        @word1 definition in Claw
-        @word2 another word1
-        ...
-
-This is achieved by simply reserving use of the `@` on a new line for defining a new word. But in the general case - in context of word fuzzing, for example - this might not be the most efficient expression
-
-
-
+When we view this again, we might recognize the error construct and replace it by `[foo` as we originally input. This option seems useful, and potentially permits parsing and evaluation with only partial errors. More importantly, it unifies error handling. Parse errors are handled the same as other errors.
 
 ## Adaptive Language
 
-Further, while a Forth-like notation is broadly useful, it isn't optimal for all problems. For example, simple polynomial math becomes a mess of copies, adds, and multiplies.
+Further, while a Forth-like notation is broadly useful, it isn't optimal for all problems. For example, simple polynomial math becomes a mess of copies, adds, and multiplies. 
 
 Optimally, developers can adapt their language or view to each problem.
 

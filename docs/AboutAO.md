@@ -8,7 +8,7 @@ AO dictionaries serve as a basis for development, evaluation, modularity, commun
 
 ## AO Words
 
-Words are weakly constrained (to support AO wrappers, present and future). In addition to the normal limits on tokens (valid UTF-8, no curly braces, control characters, or replacement character), AO forbids characters SP, `@[]<>(),;|"` within words. Also, the empty word is prohbited.
+Words are weakly constrained to support AO/ABC wrappers. In addition to the normal limits on tokens (valid UTF-8, no curly braces, control characters, or replacement character), AO forbids characters SP, `@[]<>(),;|"` within words. Also, the empty word is prohbited.
 
 Words `a`, `b`, `c`, and `d` are valid, but refer always to the four corresponding ABC primitives and may not be redefined. These are effectively the four 'keywords' of AO.
 
@@ -43,7 +43,7 @@ Concretely, a patch is a UTF-8 text with format:
 
 Each patch consists of a header and a body. The header is a simple sequence of secure hashes, each identifying another patch (hence forming a tree structure). The body is a sequence of `@word def` actions, each overwriting a prior definition for the indicated word. A word may be logically deleted by defining a trivial cycle, `@foo {%foo}`. The last update for a word's definition 'wins', whether that update occurs within the header or body. We might interpret each secure hash as logically inlining the identified patch. 
 
-This representation allows for flexible dictionary structure and merge or update models, with a fair amount of structure sharing, and potential index sharing (depending on the nature of the updates). Secure hashes implicitly have a global namespace, so sharing of dictionaries is easy, only requiring transmission of unknown hashes. 
+This representation allows for flexible dictionary structure - e.g. an append-only log, or an LSM tree. It can be indexed externally, and the immutability of secure hashes simplify indexing. Applying patches is conveniently idempotent. It's easy to fork, and three-way merge is feasible. It is not difficult to replicate the dictionary and to maintain it incrementally over time - to download and cache unrecognized secure hashes while preserving the rest for structure sharing.
 
 ### Secure Hash
 
@@ -71,13 +71,13 @@ With a content distribution network, privacy and security becomes a concern. A u
 
 ### Limitations and Workarounds
 
-There is no support built in to the AO representation for development metadata like commit messages or timestamps. This metadata, if desired at all, should instead be made explicit in the dictionary by some recognizable convention. The intention is that this metadata should be accessible to the [Awelon application model](ApplicationModel.md).
-
 There is no support to update only part of a definition. This limitation is easy to address by factoring fragments that change independently into separate words. ABC's concatenative structure makes this easy. In case of regularly appending a definition, the application model command pattern is applicable.
 
-There is no support for external references. All `{%word}` tokens must be part of the same dictionary. Communicating with the outside world, including other dictionaries, must be performed indirectly via the application model effects layer. *Aside:* I originally pursued `{%word@dict}` for binding external resources, but it's ugly, complicated, and doesn't generalize nicely.
+There is no special support to rename words. Renaming can be represented indirectly by updating the target word and every direct reference to it. Fortunately, this process is easily automated. Rejecting a rename feature at the AO patch layer simplifies indexing, idempotence, and the patch representation.
 
-There is no special support to rename words. Renaming can be expressed by explicitly updating every relevant word. Fortunately, this process is easily automated. *Aside:* Avoiding rename simplifies indexing and idempotence of AO patches.
+There is no support built in to the AO representation for development metadata like commit messages or timestamps. This metadata, if desired at all, should instead be made explicit in the dictionary by some recognizable convention. The intention is that this metadata should be accessible to the [Awelon application model](ApplicationModel.md).
+
+There is no support for foreign functions. All `{%word}` tokens must be defined within the same dictionary. Communicating with the outside world must be performed via the application model effects layer (work orders, publish subscribe, etc.).
 
 ## AO Evaluation and Linking
 
@@ -95,31 +95,17 @@ Preserving link structure ensures human-meaningful symbols remain in our evaluat
 
 Developers may freely leverage *arity annotations* to control preservation of link structure.
 
-### Redirects and Linker Objects
+### Redirects and Static Linking
 
 A redirect is a word that simply indicates another word. Consider:
 
-        @foo {%foo.v99}
+        @foo {%bar}
 
-By the goal to preserve link structure, we'll not evaluate further. A `{%foo.v99}` result is useful for both human observers and software agents because of associative metadata. And, in the general case, our redirect might be the computed result of a conditional decision. 
+By the goal to preserve link structure, we'll not evaluate further. A `{%bar}` result is useful for both human observers and software agents because of associative metadata like `{%bar.doc}`. In the general case, our redirect might be the computed result of a conditional decision.
 
-However, for any context in which we link `{%foo}` we'll also want to link `{%foo.v99}`, and so on down the redirect chain. Thus, working directly with the evaluated definition is *inefficient*. It wastes our evaluator's runtime effort. Instead, we optimally want to jump straight from `{%foo}` to a directly useful result.
+However, when we link `{%foo}`, we'll certainly link `{%bar}`. It would be wasteful to follow these chains at runtime. So we might benefit from flattening this link chain statically, computing a context free static link object per word in addition to each word's evaluated definition.
 
-This concept can be generalized beyond redirects. Consider:
-
-        @bar {&arity3} {%baz}{%qux} {&arity2}
-
-Independent of context in which `{%bar}` is linked, we can determine that *at least three* inputs will be available to `{%baz}`. With a little static analysis, this might propagate this further to `{%qux}`. We can make some useful link decisions statically, so we aren't looking at arities at runtime. Further, we might be able to usefully inline `{%baz}` or `{%qux}` into a cached representation - a linked object used by the evaluator.
-
-Thus, AO implies at least three useful representations per word:
-
-* definition, provided by the programmer or external software agent
-* evaluation, generated by our evaluator, preserves link structure
-* linker object, via context-free static analysis and heuristics
-
-Minimally, our linker object should flatten simple redirect chains for purpose of caching. Heuristically, we may also choose to inline words that we know will link in place of their tokens, e.g. based on total size so we don't waste effort linking smaller objects at runtime but also can share structure for large objects. 
-
-We might support evaluation time linking via `[program]{&link}` annotation. 
+The idea generalizes beyond redirects. With static analysis, and especially in context of arity annotations, we might be able to inline many words into static link objects. Inlining in the general case would need to be heuristic, based on tradeoffs.
 
 ### Lightweight Staging and Compilation
 
@@ -138,7 +124,7 @@ In context of AO, stowage involves creating new word tokens during evaluation.
         [large value]{&stow}  == [{%resourceId}]
         [small value]{&stow}  == [small value]
 
-Here `{%resourceId}` is a word whose definition is equivalent to `large value`. Stowage has overhead, so an evaluator must make a heuristic decision about whether to stow depending on value size. Smaller values should not be stowed. 
+Here `{%resourceId}` is a new word in the output dictionary whose definition is equivalent to `large value`. Stowage has overhead, so an evaluator must make a heuristic decision about whether to stow depending on value size. Smaller values should not be stowed. 
 
 Stowage works best with persistent data structures, where updates to the structure require updates only to a small subset of nodes. Stowage works even better with log-structured merge trees and similar structures where updates are implicitly batched and most updates are shallow. Stowage can also be used optimize caching, even if the stowage is not itself optimal.
 
@@ -176,12 +162,12 @@ Developers can use simple techniques such as modeling suitable memoization point
 
 #### Cache Design
 
-Caching can be implemented by taking a *secure hash* of the representation and performing a lookup. In case of `{%word}` tokens, we do not know whether those words would be linked during evaluation or preserved as symbols. So conservatively we might include both the `{%word}` symbol and a reference to the word's linker object. 
+Caching can be implemented by taking a *secure hash* of the representation and performing a lookup. In case of `{%word}` tokens, we do not know whether those words would be linked during evaluation or preserved as symbols. So conservatively we might include both the `{%word}` symbol and a reference to the word's static link object. 
 
         [{%foo}{%bar}{%baz}]{&memo}
 
         cacheID = SecureHash {%foo}{%bar}{%baz} (foo)(bar)(baz)
-            where (X) is cacheID of X's linker object
+            where (X) is cacheID of X's static link object
 
 Taking these constraints overall, we might assume four tables of form:
 
@@ -192,16 +178,16 @@ Taking these constraints overall, we might assume four tables of form:
 
 Our dictionary has a set of definitions. We maintain an index of immediate clients for each word for reverse lookup, rename, incremental cache invalidation, etc.. Our data cache is updated by the `{&memo}` annotation or a local equivalent, may be shared by multiple dictionaries, and may be maintained heuristically (e.g. random deletion is okay). 
 
-Challenges surround maintenance of the *word cache*. Upon updating a word's definition, its linker object may be invalid, and transitively any clients of that word. 
+Challenges surround maintenance of the *word cache*. Upon updating a word's definition, its static link object may be invalid, and transitively any clients of that word. 
 
-An easy maintenance technique is perhaps to conservatively clear the word cache then rebuild it lazily. Assuming the *data cache* is used to evaluate words and linker objects, we might avoid the bulk of unnecessary recomputation. However, it might be advantageous to more precisely invalidate the word cache. This requires evaluation *during* invalidation, which has its own challenges. 
+An easy maintenance technique is perhaps to conservatively clear the word cache then rebuild it lazily. Assuming the *data cache* is used to evaluate words and static link objects, we might avoid the bulk of unnecessary recomputation. However, it might be advantageous to more precisely invalidate the word cache. This requires evaluation *during* invalidation, which has its own challenges. 
 
 A heuristic balance of precise and lazy cache maintenance may prove effective in the general case, e.g. based on an effort quota upon performing each dictionary update. 
 
-*Aside:* We can potentially improve cache precision further by use of an inline analysis to determine which symbols would not be part of our output. Use of the [VerSum SeqHash](https://people.csail.mit.edu/nickolai/papers/vandenhooff-versum.pdf) concept might be useful for logically inlining subprograms for purpose of hashing and caching.
+*Aside:* We can potentially improve cache precision for words by removing symbols we know will be inlined. Use of the [VerSum SeqHash](https://people.csail.mit.edu/nickolai/papers/vandenhooff-versum.pdf) concept could even logically inline subprograms for purpose of hashing and caching. It seems worth looking into.
 
 ### Accelerated Dictionary
 
-An AO runtime will generally specify one or more anonymous, accelerated dictionaries - words with definitions whose implementations may be hand-optimized. Other dictionaries may then derive from the accelerated dictionary. Recognizing accelerated definitions is most readily performed via the word cache, e.g. we can recognize whenever a word's cacheID matches the same from our accelerated dictionary, and if so use the accelerated implementation.
+Acceleration is a primary approach to achieving performance in ABC systems. An AO/ABC runtime will specify accelerated dictionaries, e.g. with definitions like `@i [][]baad` (inline) that it recognizes and hand-optimizes. More broadly, accelerators can also leverage specialized representations like for natural number construction and arithmetic, or accelerating evaluation of process networks to leverage multiple CPUs.
 
 This is discussed more under [ABC](AboutABC.md). 

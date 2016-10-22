@@ -127,4 +127,6 @@ Conveniently, a document is essentially a message that we maintain over time. An
 
 ## Multi-Dictionary Applications
 
-In open systems, applications must interact with multiple dictionaries. While AO dictionaries don't support direct linking, indirect references are possible and other dictionaries might be accessed through software agents, work orders, explicit replication of a dictionary object, etc..
+AO does not support foreign functions, not even linking between AO dictionaries. Interaction with external AO resources must be modeled effectfully like any other external resource - via work orders, publish subscribe patterns, etc.. At most, we have an advantage of simpler translations.
+
+*Aside:* I have considered special support for binding dictionaries with `{%word@dict}`. However, it does not generalize nicely in context of application layer hypermedia, command patterns, etc.. and meanwhile it complicates the evaluator, entangles the environment, and has awkward security semantics. Externalizing connectivity as an effect is the wiser option.
