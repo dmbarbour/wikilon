@@ -14,9 +14,7 @@ ABC is evaluated by pure, local, confluent rewriting. Importantly, ABC does not 
 
 ABC is simple and extensible. There are only four primitive operations `abcd` - apply, bind, copy, drop. ABC programs can be composed by simple concatenation, linked by simple inlining. Extensions are primarily via the [AO link layer](AboutAO.md): any user-defined function whose name is a single UTF-8 codepoint may be used as a bytecode. Extensions will be accelerated for primitive performance by runtimes that recognize them, leading to de-facto standardization of popular ABC extensions.
 
-ABC is serializable and weakly legible. ABC strings are encoded in UTF-8 (mostly the ASCII subset), avoiding control characters, and may be rendered in normal text editors. Data can be embedded within ABC via extensions like `#42` to construct natural numbers plus a little syntactic sugar for texts, and these can also be used in evaluation output when known to a runtime. 
-
-ABC is also designed for use with editable views
+ABC is serializable and weakly legible. ABC strings are encoded in UTF-8 (mostly the ASCII subset), avoiding control characters, and may be rendered in normal text editors. Data can be embedded within ABC via extensions like `#42` to construct natural numbers plus a little syntactic sugar for texts, and these can also be used in evaluation output when known to a runtime. ABC is also designed for use with [editable views](EditingAO.md). 
 
 ABC is easily parallelized, persisted, and cached. This is an emergent consequence of its evaluation model and serializability. We can serialize an ABC computation, ship it to a remote processor for evaluation, look it up in a database to see if the result is known, or store it to disk to resume later. ABC also leverages serializability for its *value stowage* feature, an simple and robust variation on virtual memory to work with larger than memory tree-structured data.
 
@@ -148,9 +146,9 @@ Recognition of accelerated functions may be fragile, i.e. requiring an exact mat
 
 ### Accelerated Fixpoints and Loops
 
-Fixpoint applies a function with a fixpointed copy of that function in context. This is a useful function for general purpose programming. It's inconvenient to use directly, but can be used to create arbitrary conditional loop constructs. Because ABC eagerly evaluates deep structure, we'll favor a variation of the strict Z-combinator:
+Fixpoint applies a function with a fixpointed copy of that function in context. Fixpoint is a useful function for general purpose programming. Due to the basic ABC evaluation strategy being eager in results, we'll leverage arity annotations to defer computation, representing a strict Z-combinator.
 
-        [B][A]z == [B][[A]z] A 
+        [B][A]z == [B][[A]z]A 
 
         z = [[c]a[{&a3}ci]bbwi]{&a3}ci
 
@@ -170,7 +168,9 @@ Fixpoint applies a function with a fixpointed copy of that function in context. 
                 == [B][[A]z][A]i                                    (def w)
                 == [B][[A]z]A                                       (def i)
 
-This will likely become *the* de-facto standard fixpoint combinator. It has many convenient properties like being tail-recursive, not replicating `[A]` more than necessary, and supporting recovery of the `z` identifier as a simple rewrite. In practice, we'll *accelerate* this, reducing a dozen steps and two copies to a single step with one logical copy of `[A]`. Other loop structures may be defined in terms of `z` and might be independently accelerated. But `z` is the big one.
+This will likely become the de-facto standard fixpoint combinator. It has many convenient properties: tail-recursive, does not replicate `[A]` before use, the `z` definition is clearly visible. In practice, we'll further *accelerate* this definition, reducing a dozen steps to one.
+
+In my experience, it's painful to use fixpoint directly. But fixpoint is easily used to define more convenient loop combinators, such as variations on `while : (a+b) → (a→(a+b)) → b` or something specific to streams. An interesting point is that fixpoint is not necessary for all loops, only for ad-hoc conditional loops like `while`. Loops over finite structures can be modeled using Church encodings.
 
 ### Parallel Evaluation
 
@@ -382,10 +382,9 @@ For ABC, I propose a `{&dyn}` annotation. Usage:
             [polynomial behavior]{&dyn} i =>
             [polynomial behavior]i
 
-At this point we may halt evaluation and pass the program to our static type checker. Dynamic evaluation is considered complete after the `{&dyn}` annotations are eliminated (via `[A]{&dyn} => [A]`). 
+At this point we may halt evaluation and pass the program to our static type checker. Dynamic evaluation is considered complete after the `{&dyn}` annotations are eliminated (via `[A]{&dyn} => [A]`).
 
-If a program contains `{&dyn}` annotations even after partial evaluations, we may call that program dynamically typed. Developers are free to construct dynamically typed software. But where dynamic partial evaluation can complete statically, it can readily be used for macro-like metaprogramming. An ABC software system may thus consist of an ad-hoc mix of fluid and rigid software components.
-
+If a program contains `{&dyn}` annotations, we might call that program "dynamic". Developers are free to construct dynamic software. Where dynamic partial evaluation can complete statically, it can readily be used for macro-like metaprogramming. An ABC software system may consist of an ad-hoc mix of dynamic and static - fluid and rigid - software components.
 
 ## Miscellaneous
 
@@ -408,12 +407,12 @@ Use of `{&error}` marks a *value* as erroneous. Observing that value, e.g. with 
 
 ### Comments
 
-It is not difficult to model comments in ABC. For example:
+I generally recommend documentation be pushed represented as associative metadata at the AO layer via words like `foo.doc`, `foo.talk`, `foo.about`, `foo.author`, or `foo.example`. But it is not difficult to model comments in ABC. For example:
 
         "this is my boomstick!
         ~{&a2}{@rem}d
 
-I generally prefer documentation be pushed to associative structure at the AO layer, into words like `foo.doc`, `foo.talk`, `foo.about`, `foo.author`, or `foo.example`. But if we're going to model comments, the `{&a2}` arity annotation and `{@rem}` gate make them more useful and accessible than comments are in most programming languages. The gate enables logging, conditional breakpoints, etc.. The arity annotation resists premature destruction of the comment and enables construction of commented values or programs.
+The arity annotation `{&a2}` and gate `{@rem}` make this ABC comment more useful and accessible compared to comments are in most programming languages. The gate enables logging of comments, conditional breakpoints on comments, etc.. The arity annotation resists premature processing and elimination of the comment, and enables runtime construction of commented values or programs.
 
 ### Gates for Active Debugging
 
@@ -433,11 +432,7 @@ I propose tokens of form `{@gate}` - called 'gates' - for active debugging. The 
 * trace gates inject a comment into their argument
 * profiling gates aggregate performance statistics
 
-It's feasible for a gate to serve a few roles at once. They're effectively user-configured annotations. Gates may have default configurations based on naming conventions. E.g. `{@log:xyzzy}` might print to a log titled `xyzzy`.
-
-An interesting feature is that we can halt on many 'breakpoints' concurrently, different subcomputations stalling at `[A]{@bp}action`. Halting on many breakpoints is convenient for providing a more predictable debug context, and for program animation. 
-
-Active debugging can be performed without hand modification of code, e.g. if we assume automatic rewriting of a codebase to inject appropriate gates. This is probably easiest in context of [AO](AboutAO.md) because we can leverage clearly named subprograms and link structure. 
+Gates may have de-facto standard configurations, e.g. with `{@log:xyzzy}` defaulting to log behavior. It is possible that a system could automatically inject gates for debugging purposes. 
 
 #### Program Animation
 
@@ -484,3 +479,20 @@ A weakness of deferred computation is that we create rework upon copy. Developer
 
 *Aside:* There is no `[A]{&lazy}` annotation operating on the evaluation strategy because it would be inconsistent in context of intermediate output or transparent persistence. For example, given `[[B]{&par}]{&lazy}` we cannot distinguish the origin as `[B]{&par}[]b{&lazy}` vs. `[B][{&par}]b{&lazy}`. Use of arity annotations doesn't have this problem.
 
+### Comparison: SKI Combinators
+
+The SKI combinator calculus defines three combinators:
+
+        (S x y z) == (x z (y z))
+        (K x y) == x
+        (I x) == x
+
+We can represent these in ABC as follows:
+
+        [Z][Y][X]s == [[Z]Y][Z]X        s = [[c]ab[]ba]ai
+           [Y][X]k == X                 k = ad
+              [X]i == X                 i = [][]bak
+
+SKI combinators are Turing complete, and hence so is ABC. 
+
+I believe ABC's primitive combinators are more convenient than the SKI primitives. Apply and bind (`a` and `b`) allow effective control of scope, respectively hiding or capturing part of the environment. Non-linear copy and drop operators (`c` and `d`) are separate, which allows precise control of substructure (checkable via `{&aff}` and `{&rel}`). ABC has multi-valued output, which supports flexible factoring and structural types. Apply immediately returns one value, which is useful for partial evaluations.

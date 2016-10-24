@@ -8,7 +8,7 @@ AO dictionaries serve as a basis for development, evaluation, modularity, commun
 
 ## AO Words
 
-Words are weakly constrained to support AO/ABC wrappers. In addition to the normal limits on tokens (valid UTF-8, no curly braces, control characters, or replacement character), AO forbids characters SP, `@[]<>(),;|"` within words. Also, the empty word is prohbited.
+Words are weakly constrained to support AO/ABC wrappers. In addition to the normal limits on tokens (valid UTF-8, no curly braces, control characters, or replacement character), AO forbids characters SP, `@[]<>(),;|="` within words. Also, the empty word is prohbited.
 
 Words `a`, `b`, `c`, and `d` are valid, but refer always to the four corresponding ABC primitives and may not be redefined. These are effectively the four 'keywords' of AO.
 
