@@ -1,11 +1,54 @@
 
 # ABC Runtime Design
 
+A goal is high performance [applications](ApplicationModel.md). 
+
+Awelon's application model shifts the burden of *state* to the AO dictionary, using the command pattern for eventful updates. Further, the burden of *effects* is shifted to external human and software agents. Ultimately, the application model depends heavily on caching, incremental computing, and discovery of available work. A runtime must simultaneously support efficient search, update, and evaluation.
+
+## Consistency Model
+
+With multiple agents viewing and updating a dictionary and performing external effects, I need a consistency model to guard against conflicting updates. It should be possible for our agents to update multiple definitions, and perhaps also assert that certain dependencies are not modified or remain constant during updates.
+
+To preserve the RESTful nature of Awelon project applications, and to support multiple actions from external agents, it seems reasonable to model a suitable variant of transactions as first class REST resources in their own right. Each transaction might fork a dictionary, and we can merge transactions or attempt to commit them.
+
+Naively, a transaction consists of simple AO-layer updates. We'll also want to support read-write conflicts, to record an agent's assumptions of stability. And we may want to optimize for command pattern updates and other application-layer patterns. We might also want cheap rename without explicitly scanning the dictionary. We might generalize to a model of application-layer transactions that may be merged or applied to construct an updated dictionary.
+
+At the root level, a runtime might support multiple named dictionaries that are essentially defined by a stream of transactions.
+
+## Fast Evaluation
+
+Strategies to support performance:
+
+1. Implement a runtime in a fast low-level language (C)
+1. Index ABC binaries for fast linking and processing
+1. Memoize computations, avoid recomputing link objects
+1. Leverage accelerated AO dictionary for common ops 
+1. JIT compilation for ABC code for faster evaluation
+1. In-place update for uniquely owned data structures
+1. In-place structure traversals (e.g. Morris algorithm)
+1. Large value stowage for larger than memory data
+1. Shared structures for ABC binaries, stowage, and JIT
+1. Extensive use of caching, explicit and word level
+1. Simple par/seq parallelism independent computations
+1. KPN accelerators for large-scale concurrent parallelism
+1. Linear algebra accelerators for small-scale parallelism
+
+Some items such as *accelerated dictionaries* have become a lot simpler because I no longer require a centralized standard. A runtime will instead recognize and accelerate a set of AO functions.
+
+
+
+
 As per [my performance strategy](Performance.md), I'm currently developing a C runtime: an interpreter with a simple data representation to support LLVM or a hand-written JIT compilation. I'll be using something very like the Lisp/Scheme representation, with data consisting mostly of simple word pairs.
 
 It could be useful to also develop a command-line interface and computation experience at this layer, for testing and benchmarking, etc., via console. I would like to encode dictionaries in both value stowage. Dictionary import/export is viable. Supporting a Claw syntax is feasible.
 
 NOTE: In retrospect, it may have been wiser to focus entirely on a Haskell+LLVM implementation, skipping the interpreter entirely. It could still operate on a memory-mapped region for data representation purposes. Essentially, I'd be developing a process model wherby I fill a volume with simply formatted data then prepare high performance code to operate upon it. At this point, however, backtracking is more expensive than I'd prefer. The JIT remains viable.
+
+
+
+## Fast Evaluation
+
+
 
 ## Design Goals
 

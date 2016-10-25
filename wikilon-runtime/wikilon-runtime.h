@@ -5,24 +5,42 @@
  *
  *	@section intro_sec Introduction
  *
- *  Wikilon is part of Awelon project, which explores a new model for
- *  software development. Awelon Bytecode (ABC) is a primary component 
- *  of Awelon project. ABC is simple, streamable, serializable, purely
- *  functional, and is evaluated by local rewriting. This is a bytecode
- *  that can be understood, shared, composed, evaluated, and debugged 
- *  with almost no context or setup.
+ *  Awelon project's application model is unusual. Application state is
+ *  represented within a codebase using various patterns and maintained
+ *  by multiple human and software agents. The publish-subscribe pattern
+ *  and modeling work orders are the primary effects models. Applications
+ *  rely heavily on caching, incremental computing, and very large data.
+ *  Garbage collection at the codebase level is feasible.
  *
- *  Wikilon runtime consists of an interpreter for ABC together with 
- *  persistence, stowage, caching, parallelism, and linking support for
- *  large scale computations. The intention is to add JIT compilation, 
- *  such that Wikilon becomes performance competitive with other systems.
+ *  The codebase in question is an Awelon Object (AO) dictionary, which
+ *  defines a set of words in terms of Awelon Bytecode (ABC) with links.
+ *  AO and ABC both have concrete representations - ABC strings and AO
+ *  patches.
+ *  
+ *  The goal of Wikilon Runtime is high performance applications. This
+ *  requires a gamut of features: multi-agent updates, dictionary search
+ *  for work orders and tasks, and efficient evaluation. Solving any of
+ *  these problems alone is insufficient - i.e. fast evaluation does no
+ *  good if processing updates or cache invalidation is too slow.
+ *
+ *  Wikilon Runtime will support persistent dictionaries, indices, large
+ *  data stowage, caching, parallelism, and JIT compilations.
+ *
+ *  Wikilon runtime consists of an interpreter with persistence, indices,
+ *  accelerators, stowage, caching, and parallelism. Long term goals are
+ *  JIT compilation, KPN-based distributed parallelism, and GPGPU based
+ *  acceleration of linear algebra.
  *
  *  @section usage_sec Usage
  *
- *  Create an environment. Create a context within that environment. Enter
- *  an ABC program (including data) into the context. Check entry errors.
- *  Evaluate in small steps. Check for runtime errors. Extract evaluated
- *  program or information.
+ *  Create environments, dictionaries, and evaluation contexts. Evaluate
+ *  words or AO expressions. Errors, for the most part, are represented
+ *  within the evaluated result. (The main exception to this is quota 
+ *  limitations.)
+ *  
+ *   and contexts. Evaluate words or
+ *  expressions. For the most part, errors would be in the evaluation
+ *  output.
  *
  *  @section license_sec License & Copyright
  *
@@ -38,12 +56,13 @@
 
 /** @brief Opaque structure for overall Wikilon environment.
  * 
- * An environment specifies the filesystem location for large values and
- * persistence via a key-value store (currently via LMDB). An environment
- * may also be configured with a shared pool of worker threads for light
- * weight parallelism and similar machine-model resources.
+ * An environment is associated with persistent dictionaries and
+ * cache resources via the filesystem. The environment may also
+ * be associated with other global resources, such as parallel
+ * threads.
  */
 typedef struct wikrt_env wikrt_env;
+
 
 /** @brief Opaque structure representing a context for computation.
  *

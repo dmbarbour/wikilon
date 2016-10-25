@@ -89,15 +89,6 @@ With accelerators, it is feasible to support SIMD and massively parallel GPU com
 
 In context of a dictionary application, every form of parallelism could kick in for every evaluation. This includes partial evaluations and cache maintenance. I imagine a mature, active, and popular AO dictionary full of apps could productively leverage as many CPUs, GPUs, and other computing devices as you're willing to throw at them.
 
-## Linear Cached Computations
-
-A very cache-friendly pattern for dictionary applications is where each word begins with another word. Conveniently, this also fits the *command pattern* common to many dictionary applications.
-
-        @foo.v1 {%foo.v0}(a command)
-        @foo.v2 {%foo.v1}(another command)
-        @foo.v3 {%foo.v2}(yet another command)
-
-A very simple technique in context is to cache evaluation results for each step, and allow them to decay normally (e.g. via exponential decay models). 
 
 ## Explicit Caching
 
@@ -112,23 +103,6 @@ As a development platform, Wikilon will host a lot of long-running and non-termi
 
 Caching an 'ongoing' computation with a PVar could be implicit for computations that fail to complete within the quota, enabling background computations or allowing users to poke at a computation until it finishes (202 Accepted). If lazy computations are supported, it is similarly feasible to place those in a PVar if not computed before we cache.
 
-## ABCD-like Accelerators
-
-I can feasibly gain a lot of performance by recognizing subprograms and replacing them with pre-compiled, optimized implementations (and dedicated opcodes). With the right accelerators, it is feasible to have high-performance interpretation.
-
-The difficulty is finding and developing "the right accelerators". My intuition is that these will include:
-
-* vectors, matrices, collections-oriented processing
-* mutable vectors via the 'affine' type
-* floating point models and operations
-* supporting heterogeneous computation (GPGPU, FPGA).
-
-Vectors could be a highly optimized 'view' for lists. For floating point operations, we will need to *model* the floating point numbers and operations, likely with their many flaws and foibles, such that we can replace the model with hardware floating point numbers. Floating point support is essential if we want to effectively leverage GPGPUs. Effective support for GPGPU computing could greatly improve the utility of ABC, e.g. enabling scientific computation.
-
-Accelerators are wasted in cases where a simple compilation could do the job. Accelerators are best used in cases that JITs alone would have difficulty recognizing or optimizing, especially cases that imply use of specialized datatypes. Applying accelerators before compilation should allow a simple compiler to do a better job.
-
-*Aside:* It might be useful to indicate accelerators via annotations, such that we don't need to search for them arbitrarily. But it might not matter too much, unless accelerators look too similar.
-
 ## Compilation
 
 Awelon Bytecode is designed assuming compilation. Without it, ABC has no chance of competing with more machine-oriented bytecodes like CLR or JVM. The amount of allocation performed by an ABC evaluation is significant. Compiling helps in case of loopy and mathy code: the Z-combinator becomes a simple jump, internal data plumbing can be shifted to register allocations, computations can be optimized. 
@@ -138,15 +112,4 @@ With accelerators, it becomes feasible to recognize subprograms that can be easi
 Targeting LLVM has worked for many people. Seems worth trying. Haskell has decent support for LLVM.
 
 If I have a hand-rolled interpreter, I'll probably want to access those functions from LLVM. A potential techniq
-
-## Optimized Sums
-
-With sum types, we have some `LRLLRLR` sequence to reach them. I wonder if we can reduce this to a bitfield, maybe even track a few sum flags in value pointers? With even just `L` and `R` in pointers, we could model lists without an extra node. To support *trees* and a fast `Z` operator, we might additionally want `RL` and `RRL`.
-
-We might similarly track affine and relevance properties in value pointers? I'm not sure that will work out. It might simplify copy and drop, or it might interfere with parallelism.
-
-
-# ABC Runtime Design
-
-See [ABCRT.md](ABCRT.md)
 
