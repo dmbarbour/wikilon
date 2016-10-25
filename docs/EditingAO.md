@@ -3,15 +3,11 @@
 
 [Awelon Object (AO)](AboutAO.md) code can be directly read and manipulated by humans, but is not optimized for direct human use. Humans should instead manipulate AO through an editable view - an efficient and aesthetic representation of code that may be edited in place then converted back to bytecode for storage. 
 
-This idea is essentially an instance of [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). The AO dictionary is our storage representation. The editable view of code would be provided by a service - e.g. a web service or a [filesystem in userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) adapter.
-
-This document starts with a concrete example of a useful, purely textual, editable view named Claw. From there I generalize to more robust, expressive, portable, optionally graphical, user-defined views.
+This is essentially an instance of [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). The AO dictionary serves as the storage representation. The editable view of code would be provided through a service - likely a web service or a [filesystem in userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) adapter. FUSE would simplify integration with conventional text editors.
 
 ## Command Language for Awelon (Claw)
 
-Claw is a Forth-like editable view of AO designed for plain text input in a REPL-like or command line scenario. 
-
-Like Forth, Claw doesn't scale nicely beyond about fifteen tokens for a definition, at least without an IDE that can print inferred types or examples in a connected pane (it's otherwise too easy to lose track of context). But, also like Forth, it's easy to factor large functions into small definitions.
+I present Claw as a useful example of an editable view - a concrete, Forth-like view designed for plain-text input in a REPL or command line scenario. I've used variants of Claw in practice to define a few thousand words. Claw shares a lot of strengths and weaknesses with Forth. For example, Claw becomes unreadable between ten and twenty tokens, but it's easy to factor large definitions into smaller ones.
 
 Claw optimizes for:
 
@@ -30,13 +26,13 @@ Numbers in Claw receive the bulk of attention:
         0.0010  ==   10 #4 decimal
         2.998e8 ==   2.998 8 exp10
 
-Natural numbers can also be expressed easily, just use prefix `#` as in `#42`. This will result in code `#42` inlined into the output bytecode.
+Natural numbers use prefix `#` as in `#42`, and generate identical bytecode.
 
-Inline texts have simple constraints. They may not contain double quote or LF, and we'll follow them with `lit`. Multi-line texts are the same as in ABC but require an additional blank line at the start to both simplify alignment and indicate they are not inline texts. As such, `"hello, world!"` shall desugar as:
+Inline texts have a simple constraint: they may not contain double quote or LF. Multi-line texts are almost the same as in ABC but include an extra LF just after the quote to distinguish them from inline texts. As such, `"hello, world!"` would desugar as:
 
         "
          hello, world!
-        ~ lit
+        ~
 
 Words are trivially expanded into their token forms, i.e. `foo` to `{%foo}`. If a word would be ambiguous, it must be expressed in token form, e.g. `{%42}`. 
 
@@ -49,23 +45,17 @@ Command sequences are potentially useful in a variety of scenarios, effectively 
 
 As an editable view, all Claw translations are *bidirectional*. We rewrite towards Claw representations on render, and rewrite to AO on store. A consequence is that Claw code is not always preserved exactly, e.g. if you input `2 #3 ratio` we'll store that as `#2{%int}#3{%ratio}` and later read that as `2/3`. 
 
-Claw also ensures that a round-trip conversion starting from AO code is lossless. This is achieved by escaping AO whitespace by adding extra whitespace in Claw, i.e. `SP` in AO becomes `SP SP` in Claw. This can be useful for isolating Claw rewrites. 
-
-## Desired Features
-
-Features that humans deserve, and that Claw lacks. 
+Claw ensures a round-trip from AO to Claw to AO is lossless. This is achieved by escaping AO whitespace by adding extra whitespace in Claw, i.e. `SP` in AO becomes `SP SP` in Claw. This can be useful for isolating Claw rewrites. 
 
 ### Evaluable Views
 
-Claw was designed for an earlier version of AO and ABC, before rewriting semantics and preservation of link structure. AO now has a nice property where we can evaluate from `AO → AO`, with the same dictionary. Optimally, we should also view the evaluated AO code as Claw and treat output equally as `Claw → Claw`.
+With the rewrite semantics and preservation of link structure, `AO → AO` is our basic evaluation. Ideally, we also want a corresponding `Claw → Claw` evaluation. Ensuring an evaluable view is sensitive to features such as accelerators and rewrite optimizations. To account for these, our Claw view should really be defined within the dictionary. For example, we might adjust use of `ratio` and `decimal` based on external features.
 
-Unfortunately, use of words like `ratio` and `decimal` will not reliably be generated by our evaluator. 
+Not all views will be usefully evaluable. It can be difficult to ensure data inputs are effectively in normal form. But we can make a reasonable effort to ensure we can usefully view code after evaluation.
 
-To make our Claw useful even for evaluated results, we must adapt it to the accelerated representations, which depends on our accelerated dictionary. The easiest approach is to define Claw within our dictionary, rather than leave it to the local runtime.
+### Source Comments
 
-### Comments
-
-I did not originally include comments in Claw because I favor the path of least resistance to be external documentation resources, such that developers define `foo.doc` and a few examples. However, representing comments is not difficult, and they may serve a useful role for large values. Consider:
+I did not originally include comments in Claw because I favor external documentation like `foo.doc` plus a few examples. However, representing comments is not difficult, and they may serve a useful role for large values. Consider:
 
         /* this is a comment */   
             
@@ -75,33 +65,45 @@ I did not originally include comments in Claw because I favor the path of least 
           this is a comment 
         ~ {&a2} {@rem} d
 
-A model of comments including arity annotations model of comments is compatible with the *Evaluable Views* goal because we can construct comments at runtime, comment values, etc.. and can leverage comments for active debugging (e.g. conditional breakpoints or logging). 
+A model of comments including arity annotations model of comments is compatible with the *Evaluable Views* goal because we can construct comments at runtime, comment values, etc.. and can leverage comments for active debugging (e.g. conditional breakpoints or logging).
 
-### Local Namespaces?
+## Editable View Functions
 
-Claw requires developers explicitly distinguish `trie:insert` vs. `avl:insert`. Unfortunately, this results in verbose code. It hinders both reading and writing of code when the `trie:` prefix *should* be obvious in context.
+An editable view will be modeled as a pair of functions:
 
-Conventionally, this problem might be addressed by namespaces. Within a namespace, words use local definitions unless there isn't one, in which case it may move to a list of 'using' imports.
+        view  : AO → View
+        store : View → AO
 
-Unfortunately, conventional namespaces are problematic. Import lists easily become a form of boiler-plate. Words must be resolved through non-local reflection on the codebase (which violates a bunch of locality principles). Ambiguities can be introduced asynchronously, as words are introduced. An editable view could avoid that last problem (viewing against a snapshot of the dictionary), but I'd prefer to also avoid boiler-plate and general reflection.
+Here AO is actually the UTF-8 text representation of the bytecode. The View might be purely textual like Claw, or may be structured in some ad-hoc manner. A round trip from AO to View to AO (`view store`) should be lossless, an identity function - an invariant that is easy to enforce dynamically. There is no guarantee for a round trip from View to AO to View. For example, it is possible that if a human writes `2 3 ratio` we'll see it as `2/3` when next we render.
 
-Namespaces without ambiguity are possible with qualified words. For example, `trie:insert` might be reduced to `t/insert` in a local scope. This isn't ideal. But it's simple to express (e.g. with a specialization on comments) and it could be a win for larger context names. If some data can be taken from a non-local scope (e.g. edit session or user data) we might also support namespaces without boiler-plate lists.
+Modeling views as a pair of functions helps keep it simple. In context of an AO, a view might be specified by a word that constructs a first-class `[[view] [store]]` pair.
 
-This problem might be addressed more generally via *Adaptive Syntax* mechanisms. 
+*Note:* Reflection on the dictionary has been explicitly rejected. It's a complicating factor that hinders sharing, testing, versioning, and caching of views. However, restricting reflection has consequences. For example, we cannot resolve an ambiguous name by peeking at the dictionary.
 
-### Adaptive Syntax
+*Aside:* It is possible to model lens-like focused structured when a render of the view may partially hidden from the human - e.g. leveraging `input type="hidden"` in HTML.
 
-While a Forth-like notation is broadly useful, it isn't optimal for all problems. For example, simple polynomial math becomes a mess of copies, adds, and multiplies.
+## Domain Specific Views (DSVs)
 
-### Visual or Graphical 
+It is possible for views to leverage little languages specific to a problem, e.g. for representing mathematical formula or a table. All of these little languages must be already included within the `view` function. However, views may derive from a registry where we provide a list of DSVs.
 
-### Error Handling
+Integrating domain specific views can be achieved by introducing a 'language' comment for a delimited subprogram, e.g. something like `["foo"{@lang}{&a2}d subprogram]` at the AO layer. Importantly, a comment-like mechanism remains accessible in context of *Evaluable Views* so DSVs could also be used in the output. In turn, this view might be presented to a user as `<foo>subprogram</foo>` or `[foo> subprogram]` or whatever the view developer deems appropriate.
 
-Humans will provide erroneous input. Not just at the parser layer, either - we can have code that fails to evaluate or typecheck, or causes tests to fail. So a question is how to handle edit-time errors. One option is to reject the code at edit time, forcing immediate resolution. Another is to allow the erroneous code, perhaps recording it as an error object, something like:
+Domain-specific views serve similar roles as domain-specific languages, and may serve as an alternative to macros. Unlike DSLs, we can retroactively add or deprecate features from a DSV. 
 
-                ["[foo" {%viewToAO}]{&error}i
+## Qualified Namespaces
 
-When we view this again, we might recognize the error construct and replace it by `[foo` as we originally input. This option seems useful, and potentially permits parsing and evaluation with only partial errors. More importantly, it unifies error handling. Parse errors are handled the same as other errors.
+It is feasible for a view to support qualified namespaces, i.e. such that `t/insert` expands to a larger word `trie:insert`. In a projectional editor, we have even more freedom - e.g. a word `insert` might include a hidden reference to the `trie:` prefix, and words might be given colors or iconography.
 
+Namespaces might be understood as a specialized form of DSV. Handling namespaces in a similar manner to DSVs may help with namespace management boiler-plate, i.e. so we don't have a bunch of namespace declarations for a small function.
 
+## Graphical Views
 
+I'd very much like to pursue graphical views, where code includes such things as radio buttons, drop down lists, text areas. Enabling form-like presentation is useful for hypermedia, both editing code in place and treating the form as a template for a new command.
+
+## Latent Error Handling
+
+Humans will provide erroneous input. Not just at the parser layer, either - we can have code that fails to evaluate, fails to typecheck, or causes clients or tests to fail. Rather than treat edit-time errors as special, I propose that we store AO code that makes the errors explicit. Something like:
+
+                "[foo" {:parse-error} 
+
+Ideally, parse errors should be obvious at edit time, and should result in corresponding errors at runtime. The idea is that we should be able to handle parse errors through an external policy for handling erroneous code in general, whether that means rejecting erroneous code from entering a dictionary or allowing it in and flagging it for later correction. Separating error handling also simplifies the view and store functions, which do not need a conditional output for errors.
