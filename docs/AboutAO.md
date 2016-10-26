@@ -10,7 +10,7 @@ AO dictionaries serve as a basis for development, evaluation, modularity, commun
 
 Words are weakly constrained to support AO/ABC wrappers. In addition to the normal limits on tokens (valid UTF-8, no curly braces, control characters, or replacement character), AO forbids characters SP, `@[]<>(),;|="` within words. Also, the empty word is prohbited.
 
-Words `a`, `b`, `c`, and `d` are valid, but refer always to the four corresponding ABC primitives and may not be redefined. These are effectively the four 'keywords' of AO.
+Words `a`, `b`, `c`, and `d` are valid, but refer always to the four corresponding ABC primitives and may not be redefined. These are effectively the four 'keywords' of AO. Other words may be reserved by the runtime, e.g. to support large value stowage.
 
 Developers are encouraged to favor words that are convenient in external contexts like URLs, natural language documentation, [editable views](EditingAO.md), and so on.
 
@@ -73,19 +73,19 @@ With a content distribution network, privacy and security becomes a concern. A u
 
 There is no support to update only part of a definition. This limitation is easy to address by factoring fragments that change independently into separate words. ABC's concatenative structure makes this easy. In case of regularly appending a definition, the application model command pattern is applicable.
 
-There is no special support to rename words. Renaming can be represented indirectly by updating the target word and every direct reference to it. Fortunately, this process is easily automated. Rejecting a rename feature at the AO patch layer simplifies indexing, idempotence, and the patch representation.
-
 There is no support built in to the AO representation for development metadata like commit messages or timestamps. This metadata, if desired at all, should instead be made explicit in the dictionary by some recognizable convention. The intention is that this metadata should be accessible to the [Awelon application model](ApplicationModel.md).
 
-There is no support for foreign functions. All `{%word}` tokens must be defined within the same dictionary. Communicating with the outside world must be performed via the application model effects layer (work orders, publish subscribe, etc.).
+Patches are not transactions. While patches can be merged in DVCS style, they offer no ability to detect read-write conflicts, perform application-layer updates like command pattern, or rename dictionary objects. We could feasibly extend AO patches for multi-agent transactions by supporting `@@COMMAND` actions. But the basic AO patches should be favored for simple structure sharing and transport of dictionaries.
+
+AO rejects the concept of foreign functions. All `{%word}` tokens must be defined within the same dictionary. Communicating with the outside world must be performed via the application model effects layer (work orders, publish subscribe, etc.).
 
 ## AO Evaluation and Linking
 
-Dictionaries are the basic unit of AO evaluation. AO evaluation rewrites an AO dictionary into a different representation of the same AO dictionary. 
+Dictionaries are the basic unit of AO evaluation. AO evaluation logically rewrites an AO dictionary into a different representation of the same AO dictionary. 
 
         eval :: Dictionary → Dictionary
 
-In practice, this evaluation may be lazy, i.e. such that we don't evaluate a subset of a dictionary unless relevant to an external agent, an incoming or anticipated query. Such queries might consist of evaluating an ABC program within the dictionary.
+In practice, this evaluation will frequently be lazy. Instead, we evaluate only a subset of the dictionary sufficient a particular observation - i.e. to evaluate a word's definition or a specific AO query string.
 
 ### Preservation of Link Structure
 
@@ -124,11 +124,11 @@ In context of AO, stowage involves creating new word tokens during evaluation.
         [large value]{&stow}  == [{%resourceId}]
         [small value]{&stow}  == [small value]
 
-Here `{%resourceId}` is a new word in the output dictionary whose definition is equivalent to `large value`. Stowage has overhead, so an evaluator must make a heuristic decision about whether to stow depending on value size. Smaller values should not be stowed. 
+Here `{%resourceId}` is a new word in the output dictionary whose definition is equivalent to `large value`. Stowage has overheads so a simple heuristic decision must be made. Small values, for example, should not be stowed.
 
-Stowage works best with persistent data structures, where updates to the structure require updates only to a small subset of nodes. Stowage works even better with log-structured merge trees and similar structures where updates are implicitly batched and most updates are shallow. Stowage can also be used optimize caching, even if the stowage is not itself optimal.
+Stowage works most efficiently with persistent, tree-based data structures where there is much implicit structure sharing after updates. Even better are trees like LSM that implicitly batch updates so deep modifications are only performed when there are sufficient changes to warrant the effort.
 
-The naming of stowed resources is left to the runtime, but stable names should be favored to simplify caching and structure sharing.
+The naming of stowed values is at discretion of the runtime. Use of `{%_secureHashOfBytecode}` is a good option - stable for caching and structure sharing, and reproducible unlike allocated names. A runtime may raise an error when a user-defined word might conflict with stowage.
 
 ### Incremental Computing and Caching 
 

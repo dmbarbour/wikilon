@@ -3,98 +3,70 @@
 
 A goal is high performance [applications](ApplicationModel.md). 
 
-Awelon's application model shifts the burden of *state* to the AO dictionary, using the command pattern for eventful updates. Further, the burden of *effects* is shifted to external human and software agents. Ultimately, the application model depends heavily on caching, incremental computing, and discovery of available work. A runtime must simultaneously support efficient search, update, and evaluation.
+Awelon's application model shifts the burden of *state* to the AO dictionary, using the command pattern for eventful updates. Further, the burden of *effects* is shifted to human and software agents. Ultimately, the application model depends heavily on caching, incremental computing, and discovery of available work. A runtime must simultaneously support efficient search, update, and evaluation.
 
-## Consistency Model
-
-With multiple agents viewing and updating a dictionary and performing external effects, I need a consistency model to guard against conflicting updates. It should be possible for our agents to update multiple definitions, and perhaps also assert that certain dependencies are not modified or remain constant during updates.
-
-To preserve the RESTful nature of Awelon project applications, and to support multiple actions from external agents, it seems reasonable to model a suitable variant of transactions as first class REST resources in their own right. Each transaction might fork a dictionary, and we can merge transactions or attempt to commit them.
-
-Naively, a transaction consists of simple AO-layer updates. We'll also want to support read-write conflicts, to record an agent's assumptions of stability. And we may want to optimize for command pattern updates and other application-layer patterns. We might also want cheap rename without explicitly scanning the dictionary. We might generalize to a model of application-layer transactions that may be merged or applied to construct an updated dictionary.
-
-At the root level, a runtime might support multiple named dictionaries that are essentially defined by a stream of transactions.
+I assume operations will be performed via a central service (likely a web service, possibly with a FUSE adapter). A runtime should have exclusive control over its data directories. I might develop command line utilities, but those might also operate through TCP.
 
 ## Fast Evaluation
 
 Strategies to support performance:
 
-1. Implement a runtime in a fast low-level language (C)
-1. Index ABC binaries for fast linking and processing
-1. Memoize computations, avoid recomputing link objects
+1. Incremental index models for fast linking and updates
+1. Memoize computation on words and by explicit `{&memo}`
+1. Large value stowage layer for larger than memory data
 1. Leverage accelerated AO dictionary for common ops 
 1. JIT compilation for ABC code for faster evaluation
 1. In-place update for uniquely owned data structures
 1. In-place structure traversals (e.g. Morris algorithm)
-1. Large value stowage for larger than memory data
 1. Shared structures for ABC binaries, stowage, and JIT
 1. Extensive use of caching, explicit and word level
 1. Simple par/seq parallelism independent computations
 1. KPN accelerators for large-scale concurrent parallelism
 1. Linear algebra accelerators for small-scale parallelism
 
-Some items such as *accelerated dictionaries* have become a lot simpler because I no longer require a centralized standard. A runtime will instead recognize and accelerate a set of AO functions.
+The redesign of AO will make some performance goals simpler. The preservation of link structure and decentralization of accelerated dictionary design allows me to experiment easily with hand-optimized representations and functions. Structure sharing is simplified with the AO patch model.
 
+Support for large binary data remains a potential weakness of ABC, even allowing for acceleration of base16 or base64 text. This weakness might later be mitigated as part of JIT compilation or similar techniques.
 
+## Persistent Storage Model
 
+The basic option is to use the filesystem directly for storage, e.g. with AO patch files named by secure hash. This would have many advantages, such as allowing external review and processing. I foresee many difficulties with this route: kernel limitations on open or memory-mapped files, and maintenance of indices and cache. I would prefer to limit use of the filesystem to import/export tasks. 
 
-As per [my performance strategy](Performance.md), I'm currently developing a C runtime: an interpreter with a simple data representation to support LLVM or a hand-written JIT compilation. I'll be using something very like the Lisp/Scheme representation, with data consisting mostly of simple word pairs.
+Leveraging archive files might mitigate open file limitations. But incremental indices with structure sharing may prove relatively fine grained. I would need many such files, which themselves would need to be indexed. 
 
-It could be useful to also develop a command-line interface and computation experience at this layer, for testing and benchmarking, etc., via console. I would like to encode dictionaries in both value stowage. Dictionary import/export is viable. Supporting a Claw syntax is feasible.
+Alternatives include: use an embedded key-value database to avoid filesystem limits, or to essentially model a persistent heap - a large, memory-mapped file with a few roots. Between these, I favor the key-value database because it would help solve various data consistency challenges. 
 
-NOTE: In retrospect, it may have been wiser to focus entirely on a Haskell+LLVM implementation, skipping the interpreter entirely. It could still operate on a memory-mapped region for data representation purposes. Essentially, I'd be developing a process model wherby I fill a volume with simply formatted data then prepare high performance code to operate upon it. At this point, however, backtracking is more expensive than I'd prefer. The JIT remains viable.
+### Storage GC
 
+Regardless of storage layer, I need storage-level GC. I assumption most persistent objects will survive GC, and I *do not* want to deep-scan persistent data, so reference-counted GC seems appropriate in context. Further, I might favor latent reference counting (i.e. tracking 'new' objects since last GC). And I might not RC the roots, instead scanning roots then using a bloom filter to guard against GC of some zero-refct objects.
 
+### Stowage Refs
 
-## Fast Evaluation
+I have two realistic options for stowage refs. One, I can use large references based on secure hashes, pretend name conflicts are impossible, and get structure sharing by default. Two, I can allocate small references, use a lookup table for structure sharing, and resolve name conflicts by ad-hoc means. 
+
+Small references offer some benefits for storage and lookup overheads, but the reduced complexity of secure hashes may offer the better option overall. I do favor the deterministic naming via secure hashes, ensuring remote evaluation is reproducible. 
+
+## Consistency Model
+
+With multiple agents viewing and updating the dictionary, and performing external effects, I need a consistency model to guard against conflicting updates. It should be possible for our agents to update multiple definitions, and perhaps also assert that certain dependencies are not modified or remain constant during updates.
+
+Minimally, AO-layer patches can be merged in a DVCS style. That would give me atomic updates without isolation. However, I might also wish to detect read-write conflicts, application-layer command pattern updates, renaming of dictionary objects. It is feasible to recognize command pattern and rename at the level of AO patches, but it is simpler and more extensible to model transactions as a log of higher level actions.
+
+To preserve the RESTful nature of dictionary applications, transactions should be RESTful resources in their own right - nameable, serializable. With that in mind, I need a representation for transactions. I might derive representation of transactions from AO patches by adding `@@COMMAND` actions, which simplify conflict detection then rewrite into a (potentially empty) sequence of updates.
 
 
 
 ## Design Goals
 
-Performance is the primary goal. But some others:
+Performance in context of multi-agent updates and observations is the primary goal. But some others:
 
-* precise memory control: model machine's memory in one arena
-* hard real-time capable: predictable timing properties
-* computation effort control: easily abort infinite loops
-* suspend, checkpoint, persist, reload, resume, copy computations
-* easy to resize, reflect, render, compact suspended computations
-* monadic effects: return control of program environment to caller
-* easily integrate effects models with [claw command sequences](CommandLang.md)
-* on errors or unrecognized tokens, suspend and return to caller
-* no callbacks or handlers, no external dependencies for progress
+* control computation effort via space and time quotas
+* real-time capable (if external factors controlled)
+* suspend, checkpoint, debug, and continue computation
+* easy to parallelize computation and external effects
+* no callbacks, no external dependencies for evaluation
 
-Also, it might be useful to support a second evaluation mode for type inference.
-
-I'll avoid using tokens or callbacks for side-effects at this time. I'd prefer to encourage effects models that can be easily simulated and tested in a purely functional ABC environment.
-
-NOTE: I must finish a 'fast' implementation before worrying about detailed performance issues.
-
-## Extra Utilities
-
-I'll actually include a copy of these directly, no shared libs.
-
-* Murmur3 - fast, collision-resistant hash 
-* LMDB - embedded key value database
- * considering LevelDB and similar
-
-### Multi-Process Access? No.
-
-With LMDB, I have an opportunity to support multi-process access to the associated database. This could be very convenient, as it would enable shells, CLIs, and so on to coexist without querying a web service. The primary difficulty would be be tracking ephemeral stowage references between processes - i.e. so we don't GC any important, stowed data.
-
-However, I'll probably reject this for now. I don't need multi-process access to build a web service. And I can always model multi-process access in terms if *interaction* with the web service. Doing so would simplify precise control over the database layer, and switching to a different backing store.
-
-### LMDB vs. LevelDB?
-
-LMDB and LevelDB both are mature and efficient implementations of key-value databases backed by a filesystem. Both keep recently accessed or updated objects in memory. Both are effectively single-writer and multi-reader at any given time. 
-
-LMDB uses the OS as its background process (via `mmap`). No additional threads or caching are needed. LevelDB has a significant disadvantage of being very sophisticated internally - background threads, data copies, etc.. OTOH, LevelDB does support shrinking the database files (via file compaction phases). And LevelDB can compress multiple keys and records together.
-
-LevelDB doesn't truly fit Wikilon's use cases. For *any* wiki, the natural tendency is monotonic growth. This is even more so if we effectively track page histories. Thus, shrinking a database file isn't essential during normal use cases. If necessary, our file can be manually compacted by copying contained data. 
-
-Compression might improve performance by a fair margin, but must be weighted against zero-copy for our data.
-
-*Misc. Thoughts:* Lazy reference counting should greatly improve performance for stowage, by eliminating many unnecessary RC updates and cleanly separating GC tasks from the normal stowage tasks. Persistent roots should *not* be reference counted, instead using a shallow scan as part of a GC task. If I do multi-process persistence, then each process will contribute to our persistent root set.
+For active debugging, I will support `{@gate}` tokens, which may be configured for logging, breakpoints, etc.. For parallel computations and effects, I'd like to focus on [KPN-based effects](KPN_Effects.md) models and some form of background computation. I will need an API that enables ongoing evaluations with observations.
 
 ## API Concepts
 

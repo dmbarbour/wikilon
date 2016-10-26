@@ -127,6 +127,6 @@ Conveniently, a document is essentially a message that we maintain over time. An
 
 ## Multi-Dictionary Applications
 
-AO does not support foreign functions, not even linking between AO dictionaries. Interaction with external AO resources must be modeled effectfully like any other external resource - via work orders, publish subscribe patterns, etc.. At most, we have an advantage of simpler translations.
+AO does not support foreign functions, not even linking between AO dictionaries. Interaction with external AO resources must be modeled effectfully, via work orders or publish subscribe, just like interaction with any other external resource. At most, we have an advantage of simple translations and REST-layer compatibility. 
 
-*Aside:* I have considered special support for binding dictionaries with `{%word@dict}`. However, it does not generalize nicely in context of application layer hypermedia, command patterns, etc.. and meanwhile it complicates the evaluator, entangles the environment, and has awkward security semantics. Externalizing connectivity as an effect is the wiser option.
+*Aside:* I have many times considered support for linking dictionaries with `{%word@dict}`. Unfortunately, this entangles code with an implicit environment of named dictionaries, has awkward security semantics, and does not generalize nicely in context of application views, hypermedia, updates. In retrospect, I believe handling connectivity as an effect (via the multi-agent layer) will prove a wiser option.
