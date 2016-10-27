@@ -128,7 +128,32 @@ Ideally, I want an efficient, high performance deep-copy with O(1) space.
 
 The Morris algorithm could be adapted. This requires that all lists/stacks are predictably terminated by the same value, i.e. the equivalent of a `null`, such that I don't need to remember any value in particular. This seems viable, even if I optimize singleton lists, by having a smarter `cons` action. Granted, this ultimately amounts to providing extra space within the tree to perform the copy. But it should work for other traversals too - e.g. rendering/printing 
 
+
+## Bit Representations
+
+I assume allocations will be aligned to at least 8 bytes. This gives 3 flag bits per reference to provide a lightweight indicator of data type. 
+
+This is the primary candidate at this time:
+
+        x01     small natural numbers
+        011     other small constants 
+        111     common action codes
+
+        000     cons cell (2 words)
+        010     (unused, reserved)
+        100     tagged objects
+        110     tagged actions
+
+        (Fast Bit Tests)
+        Shallow Copy:   (1 == (x & 1))
+        Action Type:    (6 == (6 & x))
+        Tagged Item:    (4 == (5 & x))
+
+For minimalist ABC, small constants would frequently be singleton blocks, but small texts or binaries might also be viable. 
+
+
 ## Representations
+
 
 I'm giving a try to 64-bit representations. Absolute pointers. Bit flags. No special address checks.
 
