@@ -8,7 +8,7 @@ AO dictionaries serve as a basis for development, evaluation, modularity, commun
 
 ## AO Words
 
-Words are weakly constrained to support AO/ABC wrappers. In addition to the normal limits on tokens (valid UTF-8, no curly braces, control characters, or replacement character), AO forbids characters SP, `@[]<>(),;|="` within words. Also, the empty word is prohbited.
+Words are weakly constrained to support AO/ABC wrappers. In addition to the normal limits on tokens (valid UTF-8, no curly braces, control characters, or replacement character), AO forbids characters SP, `@[]<>(),;|="` within words. Also, the empty word is prohibited.
 
 Words `a`, `b`, `c`, and `d` are valid, but refer always to the four corresponding ABC primitives and may not be redefined. These are effectively the four 'keywords' of AO. Other words may be reserved by the runtime, e.g. to support large value stowage.
 
@@ -94,6 +94,8 @@ Linking - the mechanical step of substituting a `{%word}` token by its evaluated
 Preserving link structure ensures human-meaningful symbols remain in our evaluated results. Further, these symbols will frequently have ad-hoc associative structure like `word.doc` and `word.type` useful for both humans and software agents that might render, extract, or otherwise interact with a definition. Preserving link structure is essential for Awelon project's application models.
 
 Developers may freely leverage *arity annotations* to control preservation of link structure.
+
+### Value Words
 
 ### Redirects and Static Linking
 
