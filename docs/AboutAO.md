@@ -41,6 +41,14 @@ Concretely, a patch is a UTF-8 text with format:
         @word2 definition2
         ...
 
+        secureHashOfPatch1
+        secureHashOfPatch2
+        @word1 definition1
+        @word2 definition2
+        ...
+
+        
+
 Each patch consists of a header and a body. The header is a simple sequence of secure hashes, each identifying another patch (hence forming a tree structure). The body is a sequence of `@word def` actions, each overwriting a prior definition for the indicated word. A word may be logically deleted by defining a trivial cycle, `@foo {%foo}`. The last update for a word's definition 'wins', whether that update occurs within the header or body. We might interpret each secure hash as logically inlining the identified patch. 
 
 This representation allows for flexible dictionary structure - e.g. an append-only log, or an LSM tree. It can be indexed externally, and the immutability of secure hashes simplify indexing. Applying patches is conveniently idempotent. It's easy to fork, and three-way merge is feasible. It is not difficult to replicate the dictionary and to maintain it incrementally over time - to download and cache unrecognized secure hashes while preserving the rest for structure sharing.

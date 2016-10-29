@@ -25,7 +25,7 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 ## Words
 
-Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `[]<>(){},;|\"`, SP, C0, and DEL. Developers are encouraged to further limit symbols to those convenient in external contexts, such as URLs, natural language, or projectional editor views.
+Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `@[]<>(){},;|\"`, SP, C0, and DEL. Developers are encouraged to further limit symbols to those convenient in external contexts, such as URLs, natural language, or projectional editor views.
 
 Words are not defined by the evaluator. Instead, words are defined in an external dictionary, described later. There are some limitations on which words may be user-defined. Valid definitions are acyclic. The four primitives `a`, `b`, `c`, and `d` may not be redefined.
 
@@ -51,7 +51,7 @@ Annotations, by nature, must have no observable effect on a correct computation.
 
 ## Data
 
-Awelon language optimizes representations for natural numbers and texts. Natural numbers use pseudo-words described by regex: `0 | [1-9][0-9]*`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
+Awelon language optimizes representations for numbers and texts. Numbers effectively use predefined words. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
 
         "
          multi-line texts starts with `" LF` (34, 10)
@@ -59,9 +59,9 @@ Awelon language optimizes representations for natural numbers and texts. Natural
          terminate the text with `LF ~` (10, 126) 
         ~
 
-Texts must be valid UTF-8, forbidding C0 (except LF) and DEL. LF is the only special case. There are no character escapes. For multi-line texts, the extra space at the start of each line, and the initial and final LF, are not considered part of the text.
+Texts must be valid UTF-8, forbidding C0 (except LF) and DEL. LF is the only special case, requiring the extra space at the start of the new line. There are no character escapes. The indent spaces are not considered part of the text, nor are the extra LF characters at the start and end.
 
-Awelon language has exactly one primitive value type - the `[]` block of code, representing a function. Data is instead [Church encoded](https://en.wikipedia.org/wiki/Church_encoding) or uses alternatives like [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding), representing values as functions. The support for natural numbers and texts is close in nature to [syntactic sugar](https://en.wikipedia.org/wiki/Syntactic_sugar) for an encoding.
+Awelon language has exactly one primitive value type - the `[]` block of code, representing a function. Data is instead [Church encoded](https://en.wikipedia.org/wiki/Church_encoding) or favors alternatives like [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding), representing values as functions. The support for numbers and texts is close in nature to [syntactic sugar](https://en.wikipedia.org/wiki/Syntactic_sugar) for an encoding.
 
 Before I jump to the encoding of numbers and texts, let us examine encodings for other useful data types. Booleans select from a pair of functions:
 
@@ -108,33 +108,42 @@ This is essentially the Church encoding of natural numbers, adjusted for Awelon 
 
 However, specifying a deep fold over structure is awkward in the general case. With lists, we want both right folds and left folds. With tree structured data, we'll generally want multiple [tree traversals](https://en.wikipedia.org/wiki/Tree_traversal). For linear typed programming, it is most convenient if we can operate upon or [unzip](https://en.wikipedia.org/wiki/Zipper_%28data_structure%29) part of a structure without processing the whole thing. The algebraic representation may prove more convenient.
 
-Return attention to natural numbers and texts in Awelon.
+Other than natural numbers, there are also Church encodings for signed integers - a pair of numbers, normalizing with one as zero. It is possible to also encode rationals and decimals as pairs of numbers. A rational is a numerator-denominator pair (with a possibly signed numerator) - `2/3` becomes `2 3 (rational)`. A decimal is a number followed by an natural saying how many decimal places, e.g. `3.141` becomes `3141 3 (decimal)`. 
 
-It is my intention that Awelon developers be given relatively free reign over the choice of encoding and tradeoffs. This is achieved as follows:
+Return attention to numbers and texts in Awelon.
 
-        0 is user definable (zero)
-        S is user definable (succ)
-        1 = [0 S]
-        2 = [1 S]
-        ...
+It is my intention that Awelon developers be given relatively free reign over the choice of encoding and corresponding tradeoffs. This is achieved by allowing developers to partially define the encoding. For texts, we end up with something like the following:
 
         ~ is user definable (nil)
         : is user definable (cons)
         "" = ~
-        "hello" = [104 "ello" :]
-        "→" = [8594 ~ :]
+        "hello" = [#104 "ello" :]
+        "→" = [#8594 ~ :]
 
-In practice, the definitions will be influenced by runtime accelerators, as discussed later. But the formal representation of data is reasonably well separated from the syntactic layer.
+Numbers are a bit more sophisticated because there are several number types to handle effectively. For Awelon, I'm not sure whether I should focus on *just* natural numbers or also aim to support signed numbers, ratios, decimals, scientific notations, etc.. But to leave potential room for the other number types, *natural* numbers will use the prefix `#` as in `#0` or `#123`. 
 
-## Coinductive Data
+        #0 is user definable (zero)
+        S# is user definable (succ)
+        #1 = [#0 S#]
+        #2 = [#1 S#]
+        ...
+
+I'll get back to the other number models once I'm confident I have something that works. But a potential approach is that `3.141` means something like `[3141 #3 decimal]` and `3141` means something like `[#3141 #0 integer]` (with negative numbers being `-7 = [#0 #7 integer]`). In that case our `#3` is the number decimal places, so `0.00010` would be `[10 #5 decimal]`.  And `2/6` might mean `[2 #6 ratio]`. All of this is subject to tuning based on practice.
+
+Conceptually, we might treat number types as part of our dictionary model. It might be possible later to provide user-defined language extensions via the dictionary.
+
+## Coinductive Data and Deferred Computations
 
 ## Fixpoint
 
 Fixpoint is a useful function for modeling loops. 
 
         [B][A]z == [B][[A]z]A 
+        z = [[c] a [(/3) c i] b b w i](/3) c i
 
-        z = [[c]a[(/3)ci]bbwi](/3)ci
+        Related Definitions:
+           [A] i == A                           i = [] w a d 
+        [B][A] w == [A][B]                      w = [] b a   
 
 
 
