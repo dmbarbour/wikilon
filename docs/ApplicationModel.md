@@ -19,7 +19,7 @@ The command pattern might be represented as:
         @foo.v99 {%foo.v98}{%foo.u99}
         @foo {%foo.v99}
 
-Use of command pattern enables many small updates to construct and modify an object, in this case `{%foo}`.  This particular design records every command as a distinct set of words, simplifying view of historical values and actions on the object, easy forking and undo, etc..
+Use of command pattern enables many small updates to construct and modify a large object, in this case `{%foo}`.  This particular design records every command as a distinct set of words, simplifying view of historical values and actions on the object, easy forking and undo, etc..
 
 Command pattern can be used for such things as:
 
@@ -79,25 +79,6 @@ In practice, orders will express conditional behavior and loops so a single agen
 When orders are used for long-running labor, we gain opportunity to view progress for the work over time, and to interrupt, pause, prioritize, or guide the work in various ways.
 
 *Aside:* Modeling orders is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept. The main difference is the proposed method for mutual exclusion: stake a 'claim' on an object rather than remove it. I believe this will be more robust, accessible, and extensible - e.g. expire claims on agent failure, support subscribed views of progress, adding schedules to work orders or partial claims for collaborative work.
-
-## Tables and Spreadsheets
-
-With AO and ABC, any subprogram can be evaluated. Hence, if we have a table full of subprograms, we can evaluate each of them. When some subprograms depend on others, the evaluation may propagate in the style of a spreadsheet. Awelon can potentially model very expressive spreadsheets by use of stowage and caching, enabling time-series databases and similar to be presented as individual 'cells' in the spreadsheet. 
-
-Of course, we still need the tabular layout. 
-
-One option is to render a set of dictionary objects. We could take `foo.doc` as meaning row `foo` column `doc`. In this sense, a dictionary itself becomes a potential spreadsheet, though we might filter only for objects meeting certain criteria. Alternatively, we could construct an object where each attribute redirects to a row object:
-
-        @myTable.r1 {%foo}
-        @myTable.r2 {%bar}
-        @myTable.r3 {%baz}
-        ...
-
-This would be convenient as a basis to construct a stable spreadsheet by hand.
-
-Together with [editable views](EditingAO.md) and rendering output as hypermedia, spreadsheets could serve as a convenient basis for rapid application development. 
-
-Regardless of how we specify our set of objects, AO makes it easy to render both the definitions of each word and their context-free evaluations or linker objects. Thus, we can render evaluated cells in a table while enabling editing of each cell's definitions, and propagating updates to the rendered views. We effectively get spreadsheets without any special effort.
 
 ## Managed Dictionaries
 

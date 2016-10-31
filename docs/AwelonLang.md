@@ -3,7 +3,7 @@
 
 Awelon is a purely functional language based on concatenative combinators. Awelon is designed for an [RESTful application model](ApplicationModel.md) that maintains application state within a codebase and handles effects in context of a multi-agent system (for example, via [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern) and [tuple space](https://en.wikipedia.org/wiki/Tuple_space) patterns). Awelon systems support [incremental computing](https://en.wikipedia.org/wiki/Incremental_computing) with [hypermedia](https://en.wikipedia.org/wiki/Hypermedia) at a large scale.
 
-Syntactically, Awelon is simple and minimalist (similar to Forth). Where more sophisticated or domain specific syntax is appropriate, Awelon systems shall leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) rather than risk complicating parsers. These editable views will be defined within the Awelon system itself.
+Syntactically, Awelon is simple and minimalist, similar to Forth. Where more sophisticated or domain specific syntax is appropriate, Awelon systems are expected to leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) to avoid complicating parsers. These editable views will be defined within the Awelon system itself.
 
 ## Primitives
 
@@ -25,33 +25,13 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 ## Words
 
-Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `@[]<>(){},;|\"`, SP, C0, and DEL. Developers are encouraged to further limit symbols to those convenient in external contexts, such as URLs, natural language, or projectional editor views.
+Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `@[]<>(){},;|&=\"`, SP, C0, and DEL. Developers are encouraged to further limit words to symbols that will not need escaped in external contexts, such as URLs, natural language, or editable views.
 
-Words are not defined by the evaluator. Instead, words are defined in an external dictionary, described later. There are some limitations on which words may be user-defined. Valid definitions are acyclic. The four primitives `a`, `b`, `c`, and `d` may not be redefined.
-
-## Annotations
-
-Annotations help developers control, optimize, and debug computations. Annotations are represented as parenthetical words like `(par)` or `(/3)`. Some useful examples of annotations include:
-
-* `(/2)..(/9)` - arity annotations to defer computations
-* `(0)..(9)` - tuple type assertions for scope control
-* `(aff) (rel)` - support substructural type safety
-* `(:foo) (.foo)` - lightweight type tag and assertions
-* `(par)` - request parallel evaluation of computation
-* `(jit)` - compile a function for use in future evaluations
-* `(stow)` - move large values to disk, load on demand
-* `(memo)` - memoize a computation for incremental computing
-* `(error)` - mark a value as an error object
-* `(@foo)` - gates for active debugging (logging, breakpoints)
-* `(force)` - evaluate previously deferred computations
-
-Any Awelon runtime may support arbitrary new annotations, or may freely drop and ignore unrecognized annotations. Support for popular annotations will propagate among runtimes, and hopefully we'll approach a global consensus on useful annotations. The annotations listed above are just a starting point, and are documented later.
-
-Annotations, by nature, must have no observable effect on a correct computation. However, annotations may cause an incorrect computation to fail fast (perhaps even detect failure statically), and there may be external observations such as debug logs or different halting states.
+Words are not defined by the evaluator. Instead, words are defined in an external dictionary, described later. There are some limitations on which words may be user-defined. For example, the four primitives `a`, `b`, `c`, and `d` may not be redefined. Words such as `42` are reserved for defining the associated number.
 
 ## Data
 
-Awelon language optimizes representations for numbers and texts. Numbers effectively use predefined words. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
+Awelon language optimizes representations for numbers and texts. Numbers effectively use predefined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
 
         "
          multi-line texts starts with `" LF` (34, 10)
@@ -65,62 +45,54 @@ Awelon language has exactly one primitive value type - the `[]` block of code, r
 
 Before I jump to the encoding of numbers and texts, let us examine encodings for other useful data types. Booleans select from a pair of functions:
 
-        [onT][onF] [T] i == onT                 T = d i
-        [onT][onF] [F] i == onF                 F = a d
+        [onF][onT] false i == onF               false = [d i]
+        [onF][onT] true i  == onT               true = [a d]
 
-        Related Definitions:
+        Using Definitions:
            [A] i == A                           i = [] w a d 
         [B][A] w == [A][B]                      w = [] b a   
 
 Booleans can be generalized to algebraic sum type `(A + B)`.
 
-        [onL][onR] [[A]L] i  == [A] onL         L = w d w i
-        [onL][onR] [[B]R] i  == [B] onR         R = w b a d
+        [onL][onR] [[A] inL] i  == [A] onL      inL = w d w i
+        [onL][onR] [[B] inL] i  == [B] onR      inR = w b a d
 
-Constructors for left and right values are trivial, e.g. if `[B] mkR == [[B] R]` then `mkR = [R] b`. Constructors can always be modeled this way: simply use `b` to bind however many components into a partially constructed value. Functions with no constructors are trivial, e.g. `true = [T]`. 
+Construction of the `[[A] inL]` construct is trivial. Use `[A] [inL] b`, with `b` binding the argument. This might be abstracted as `mkL`.  This is generally the case for value constructors. In practice, we may also wish to defer computation of partial constructions (see *Deferred Computations and Coinductive Data*). 
 
-Pairs, algebraic `(A * B)` product types, may also be Church encoded:
+Pairs - algebraic `(A * B)` product types - may also be Church encoded:
 
-        [onP] [[B][A]P] i == [B][A]onP            P = [] b b a i
-        [B][A]mkP == [[B][A]P]                  mkP = [P] b b
+        [onP] [[B][A] inP] i == [B][A]onP       inP = [] b b a i
 
-In context of Awelon language, it's convenient to encode a pair as `[[B][A]]`.
+However, in context of Awelon language, it's simpler and more convenient to encode a pair as `[[B][A]]` and simply use `a i` to apply it. 
 
-Between algebraic sums and products, we represent pretty much any data we might wish to model. The option type `(1 + A)` might be modeled as `[false]` or `[[A] R]`. Natural numbers can be encoded as `μNat.(1 + Nat)` - i.e. zero or successor. A list can be modeled as `μList.(1 + (A * List))`. Text can be encoded as a list of natural numbers. In that case, a list cons operation might be as simple as `Cons = mkP mkR`
+Between algebraic sums and products, we can represent any conventional data structure. The option type `(1 + A)` may be modeled as a choice of `false` or `[[A] R]`. Natural numbers can be encoded as `μNat.(1 + Nat)` - i.e. zero or successor. A list can be modeled as `μList.(1 + (A * List))`. Text can be encoded as a list of natural numbers. Algebraic encodings are generally simple, e.g. `Succ = mkR` for natural numbers, or `Cons = mkP mkR`. 
 
-An alternative is to model data as folding over its structure.
-
-        Church Numbers:
+An alternative is to model data as folding over its structure. The Church encoding of natural numbers is an example of this. Consider: 
 
         [X][F] 0 i == [X]
         [X][F] 1 i == [X] F         == [[X][F] 0 i] F
         [X][F] 2 i == [[X] F] F     == [[X][F] 1 i] F
 
-        0 = [d i]
+        0 = false
         1 = [0 Succ]
         2 = [1 Succ]
         Succ = [c] a [b b] b a i
 
-This is essentially the Church encoding of natural numbers, adjusted for Awelon language. In this case we're folding over the recursive `μN.(1+N)` structure, so there is no other interesting data made available to `F`. But we can generalize easily to folds over list structures:
+Folding over a recursive structure that carries no additional data isn't particularly interesting. But we can generalize easily to folds over list structures:
 
-        [X][F] [[L][A]Cons] i == [[X][F]L] [A]  F
-            Cons = [[c] a b [b] b a] a w i
+        [X][F] Nil i == X
+        [X][F] [[L][A] Cons] i == [[X][F]L] [A]  F
 
-However, specifying a deep fold over structure is awkward in the general case. With lists, we want both right folds and left folds. With tree structured data, we'll generally want multiple [tree traversals](https://en.wikipedia.org/wiki/Tree_traversal). For linear typed programming, it is most convenient if we can operate upon or [unzip](https://en.wikipedia.org/wiki/Zipper_%28data_structure%29) part of a structure without processing the whole thing. The algebraic representation may prove more convenient.
+        Nil = false
+        Cons = [[c] a b [b] b a] a w i
 
-Other than natural numbers, there are also Church encodings for signed integers - a pair of numbers, normalizing with one as zero. It is possible to also encode rationals and decimals as pairs of numbers. A rational is a numerator-denominator pair (with a possibly signed numerator) - `2/3` becomes `2 3 (rational)`. A decimal is a number followed by an natural saying how many decimal places, e.g. `3.141` becomes `3141 3 (decimal)`. 
+However, with data structures more sophisticated than natural numbers, choosing a specific fold seems awkward and arbitrary. With lists, we have both left folds and right folds. With trees, we have both folds and a variety of [tree traversals](https://en.wikipedia.org/wiki/Tree_traversal). Further, in context of linear typed structure, it is convenient if we can operate upon or [unzip](https://en.wikipedia.org/wiki/Zipper_%28data_structure%29) just part of a structure without observing the whole thing. I believe the algebraic type encodings are generally superior.
 
 Return attention to numbers and texts in Awelon.
 
-It is my intention that Awelon developers be given relatively free reign over the choice of encoding and corresponding tradeoffs. This is achieved by allowing developers to partially define the encoding. For texts, we end up with something like the following:
+It is my intention that Awelon developers be given relatively free reign over the choice of encoding and corresponding tradeoffs. In practice, this control may be limited by runtime performance support (see *Acceleration*). But the encoding is at least separate from the syntactic embedding.
 
-        ~ is user definable (nil)
-        : is user definable (cons)
-        "" = ~
-        "hello" = [#104 "ello" :]
-        "→" = [#8594 ~ :]
-
-Numbers are a bit more sophisticated because there are several number types to handle effectively. For Awelon, I'm not sure whether I should focus on *just* natural numbers or also aim to support signed numbers, ratios, decimals, scientific notations, etc.. But to leave potential room for the other number types, *natural* numbers will use the prefix `#` as in `#0` or `#123`. 
+This is achieved by allowing developers to partially define the encoding. For natural numbers and texts, we end up with something like the following:
 
         #0 is user definable (zero)
         S# is user definable (succ)
@@ -128,96 +100,140 @@ Numbers are a bit more sophisticated because there are several number types to h
         #2 = [#1 S#]
         ...
 
-I'll get back to the other number models once I'm confident I have something that works. But a potential approach is that `3.141` means something like `[3141 #3 decimal]` and `3141` means something like `[#3141 #0 integer]` (with negative numbers being `-7 = [#0 #7 integer]`). In that case our `#3` is the number decimal places, so `0.00010` would be `[10 #5 decimal]`.  And `2/6` might mean `[2 #6 ratio]`. All of this is subject to tuning based on practice.
+        ~ is user definable (nil)
+        : is user definable (cons)
+        "" = ~
+        "hello" = [#104 "ello" :]
+        "→" = [#8594 ~ :]
 
-Conceptually, we might treat number types as part of our dictionary model. It might be possible later to provide user-defined language extensions via the dictionary.
+Natural numbers use the `#` prefix to allow Awelon language to later aesthetically support signed integers and other number types without the prefix. Other number types will probably derive from naturals. For example, the normal Church encoding for signed numbers is a pair of natural numbers where (in normal form) one of the pair is zero. We might similarly support rational (a numerator and denominator pair) or decimal numbers (a significand and exponent pair). Awelon language conservatively reserves words with prefix `[+-~.#]?[0-9]` for purpose of representing numbers.
 
-## Coinductive Data and Deferred Computations
+*Aside:* Beyond numbers and texts, users might be interested in more structured data with human-meaningful symbolic labels. Awelon language does not optimize for those cases, but support for *Editable Views* may present structured data to humans.
 
-## Fixpoint
+## Acceleration
 
-Fixpoint is a useful function for modeling loops. 
+Acceleration is a performance assumption for Awelon language. A runtime should recognize and accelerate common functions. The accelerated function may use a hand-optimized or built-in implementation to achieve performance similar to a primitive. For example, most runtimes will accelerate the following functions:
 
-        [B][A]z == [B][[A]z]A 
-        z = [[c] a [(/3) c i] b b w i](/3) c i
+           [A]i == A            (inline)         i = [] w a d
+        [B][A]w == [A][B]       (swap)           w = [] b a
 
-        Related Definitions:
-           [A] i == A                           i = [] w a d 
-        [B][A] w == [A][B]                      w = [] b a   
+Accelerated functions serve a role similar to 'built in' functions in other languages. However, accelerated functions *must* be given an explicit definition in the Awelon language as part of the user's dictionary. Users should be able to review and interact with this definition like any other. However, modifying or renaming an accelerated function may generally have a severe and negative impact on performance.
 
+More critically, acceleration of a function allows for *compact representations*, which is important because all *Data* is encoded within functions. Natural numbers, for example, might be represented during computation by normal machine words. Accelerated functions may be optimized for operation directly on compact representations. Hence, if we accelerate both natural numbers and *arithmetic* upon them, we can effectively treat natural numbers as language primitives for performance.
 
-
-
-## Dictionary
-
-A set of defined symbols forms an Awelon 'dictionary', and forms the codebase of an Awelon system. 
-
-Awelon has two major requirements for a dictionary:
-
-* definitions are acyclic and complete
-* primitives `a b c d` remain undefined
-
-Definitions of symbols form a 'dictionary'. 
-
-
-## Evaluation Strategy
-
+The long term intention is for Awelon language to accelerate not just arithmetic, but also collections processing, linear algebra, and parallel [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks). Acceleration of linear algebra, for example, could permit semi-transparent GPGPU acceleration. And acceleration of process networks could enable Awelon computations to semi-transparently leverage cloud computing. 
 
 ## Annotations
 
-While Awelon only defines four primitive *computing* combinators, Awelon also introduces multiple symbols to help control computation. Th
+Annotations help developers control, optimize, and debug computations. Annotations are represented as parenthetical words like `(par)` or `(/3)`. Some useful examples of annotations include:
 
-Unlike most languages with first-class functions, Awelon supports serialization of those blocks, which represent functions. 
+* `(/2)..(/9)` - arity annotations to defer computations
+* `(0)..(9)` - tuple type assertions for scope control
+* `(aff) (rel)` - support substructural type safety
+* `(:foo) (.foo)` - lightweight type tag and assertions
+* `(nat)` - use accelerated representation for natural number
+* `(par)` - request parallel evaluation of computation
+* `(jit)` - compile a function for use in future evaluations
+* `(stow)` - move large values to disk, load on demand
+* `(memo)` - memoize a computation for incremental computing
+* `(error)` - mark a value as an error object
+* `(@foo)` - gates for active debugging (logging, breakpoints)
+* `(force)` - evaluate previously deferred computations
+
+Annotations, by nature, must have no internally observable effect on computation. Nonetheless, annotations may cause an incorrect computation to fail fast, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states. 
+
+Annotations may be introduced and documented on a runtime basis. In case of porting code, runtimes that do not recognize an annotation may ignore it. Long term, we should reach some de-facto standardization on useful annotations.
+
+## Deferred Computations and Coinductive Data
+
+The *arity annotations* `(/2)` to `(/9)` have the following rewrite rules:
+
+                             [B][A](/2) == [B][A]
+                          [C][B][A](/3) == [C][B][A]
+                                        ..
+        [I][H][G][F][E][D][C][B][A](/9) == [I][H][G][F][E][D][C][B][A]
+
+These annotations serve a critical role in controlling computation. Consider construction of `[[A](/2)F]`. This has the same semantics and static type as `[[A]F]`, but the arity annotation prevents partial evaluation with the argument. Arity annotations are convenient for guarding against 'pointless' partial evaluations. For example, we might define `w = (/2) [] b a` because a partial swap isn't useful or interesting.
+
+Arity annotations can be leveraged to represent 'infinite' [coinductive data structures](https://en.wikipedia.org/wiki/Coinduction), such as procedurally generated streams or scene graphs. The structure is computed only insofar as it is observed.
+
+To simplify work with deferred compuations, I will introduce two more annotations: 
+
+        [computation](force)
+        [computation](memo)
+
+Use of `(force)` eliminates arity annotations waiting on extra arguments to the computation. This forces partial evaluation without actually providing the additional arguments. Use of `(memo)` enables caching of a computation to avoid rework. Memoization is more broadly relevant for incremental computing, and is discussed later.
+
+## Fixpoint
+
+Fixpoint is a function useful for modeling loop behaviors. For Awelon language, I recommend the following variant of the [strict Z fixpoint combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator):
+
+        [X][F]z == [X][[F]z]F 
+        z = [[c] a [(/3) c i] b b w i](/3) c i
+
+        Using Definitions:
+           [A]i == A            (inline)         i = [] w a d
+        [B][A]w == [A][B]       (swap)           w = (/2) [] b a
+
+The arity annotation `(/3)` defers further expansion of the `[[F]z]` result. This variation of the Z combinator has the advantage that the definition of `z` can be found in the naive evaluation, and that `[F]` is not replicated unnecessarily. I recommend that readers unfamiliar with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior.
+
+Fixpoint is notoriously difficult for humans to grok and sometimes awkward to use. Instead of directly using fixpoint, we'll want to build more comfortable loop abstractions above it like [generators](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) and folds. We would benefit from accelerating at least fixpoint, and possibly some of the more popular loop abstractions.
+
+## Stowage
+
+Stowage is a simple idea, summarized by rewrite rules:
+
+        [large value](stow) => [%secureHash]
+        [small value](stow) => [small value]
+
+Effectively, stowage is a form of [virtual memory](https://en.wikipedia.org/wiki/Virtual_memory), but is performed at a language-aware link layer. The large value is pushed to disk and replaced in memory by a word that will load that value if it is later observed. In practice, the word will include a secure hash of the value. Use of a secure hash simplifies many contextual challenges: reproducible results, structure sharing, stable names for memoization, transparent persistence, etc..
+
+Values not much larger than the secure hash will not be stowed. The threshold is heuristic (e.g. 3x secure hash size). But at the very least, stowage should be idempotent.
+
+Stowage performs an essential role for purely functional programming where access to external storage (file system, database, etc.) is indirect and effectful. Stowage is optimal for cases like [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree) that are designed to batch writes out to disk. 
+
+For a specific secure hash, I favor BLAKE2b 360 bits encoded as 72 characters in Crockford's Base32, albeit favoring lower case characters on encode.
+
+## Dictionary
+
+The Awelon dictionary is a set of defined words, and doubles as both a codebase and a substrate for [application state](ApplicationModel.md). We can expect frequent updates, history and versioning, forks and merges, need for efficient distribution, shared objects, and reusable cached compilation. To support these features, Awelon favors a DVCS-inspired patch-based dictionary model. 
+
+        secureHashOfPatch1
+        secureHashOfPatch2
+        @word1 definition1
+        @word2 definition2
+        ...
+
+A dictionary consists of a root patch - a UTF-8 string. Each patch has a header consisting of a sequence of secure hashes, and a body consisting of a sequence of definitions. The secure hashes identify immutable patches that are logically inlined into the current dictionary. If a word is defined more than once, the last update always wins. A word is logically deleted by defining the trivial cycle, `@foo foo`.
+
+This representation is independent of the filesystem, supports lightweight updates and shared strucure, and can support many useful dictionary structures such as the append-only log or LSM tree. However, it has no built-in indexing. To take full advantage will require external, incremental index models.
+
+*Note:* Not every word is defined this way. Awelon number words are implicitly defined. The four primitives `a b c d` may not be defined. Stowage words `%secureHash` may only be given a definition that is valid based on the secure hash.
+
+*Aside:* This should probably use the same secure hash as Stowage. 
+
+## Evaluation
+
+An Awelon string evaluates into an equivalent Awelon string, much like `(3 + 4)` evaluates to `7` under base ten arithmetic. Evaluation of Awelon code proceeds in small steps based on local rewriting, starting with the four primitives:
+
+            [B][A] a => A[B]    (apply)
+            [B][A] b => [[B]A]  (bind)
+               [A] c => [A][A]  (copy)
+               [A] d =>         (drop)
+
+Awelon's evaluation model is 
 
 
 
+A string of Awelon code evaluates to an equivalent string of code, but generally 
 
-Unlike most languages, Awelon ensures that blocks can be serialized and rendered.
-
-Awelon does not have any primitive data types other than the block. 
-
+ rules. The primitives are evaluated as t
 
 
+## Safety
 
-I believe ABC's primitive combinators are more convenient than the SKI primitives. Apply and bind (`a` and `b`) allow effective control of scope, respectively hiding or capturing part of the environment. Non-linear copy and drop operators (`c` and `d`) are separate, which allows precise control of substructure (checkable via `{&aff}` and `{&rel}`). ABC has multi-valued output, which supports flexible factoring and structural types. Apply immediately returns one value, which is useful for partial evaluations.
+## Incremental Computing
 
- some advantages over SKI. A
+If users define a word that conflicts with the stowage naming conventions, an error may be raised at the dictionary layer. Also, while developers cannot directly compare stowage IDs for equivalence, use of *memoization* can leverage stowage for efficient incremental computing.
 
-Symbols in Awelon do not need to be a single character, though that is a convention for common operations. Larger words are readily defined
-
-Further, data may be [Church encoded](https://en.wikipedia.org/wiki/Church_encoding). 
-
-
-
-
-
-
-Awelon defines additional symbols to improve performance, control computation, or support fail-fast static analysis or debugging. But all computation and even *data* is defined in terms of these four primitives.
-
-
-
-Awelon also defines other symbols that do not compute but instead serve a role as annotations to improve performance, control evaluation, or support fail-fast static analysis or debugging. 
-
-Data in Awelon language must be [Church encoded](https://en.wikipedia.org/wiki/Church_encoding) (or perhaps [Mogensen-Scott encoded](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding), or other ). However, Awelon language does provide some shorthand to simplify encoding of texts and natural numbers.
-
-Beyond these, Awelon defines symbols that do not compute but instead serve a role as annotations to improve performance or simplify static analysis or debugging.
-
-Beyond these, we have a series of non-computing combinators called annotations.
-
-
-The square brackets `[]` wrap first-class functions, which simply contain more Awelon code. 
-
-
-
-Awelon is extremely simple enough
-
- 
-
- There are four primitive combinators:
-
- a simple language designed for incremental computing and sharing at a large scale. 
-
-Awelon is a very simple language designed for incremental computing at a large scale. Word
-
- consisting primarily of words and `[]` blocks representing first class functions. 
 

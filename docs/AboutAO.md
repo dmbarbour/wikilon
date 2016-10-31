@@ -1,18 +1,9 @@
 # Awelon Object (AO)
 
-Awelon Object (AO) extends [Awelon Bytecode (ABC)](AboutABC.md) with a link model and representation for for symbol-structured code. AO defines tokens for linking and how they interact with evaluation in context of dictionaries.
-
 A dictionary consists of a set of words with an ABC definition for each word. These definitions are lazily linked via ABC tokens of form `{%word}`. Additionally, AO treats bytecodes as single character words - i.e. `xyz` is implicitly `{%x}{%y}{%z}`. Dependencies between definitions must form a directed acyclic graph, such that all defined link tokens could be inlined, resulting in a finite (albeit exponential) expansion into raw ABC.
 
 AO dictionaries serve as a basis for development, evaluation, modularity, communication, and distribution. They provide a foundation for Awelon project's [application models](ApplicationModel.md). Lazy linking, in particular, is critical for many application models. It enables preservation of link structure which, in addition to being important for performance of large scale computing, enables AO to serve a foundation for hypermedia. 
 
-## AO Words
-
-Words are weakly constrained to support AO/ABC wrappers. In addition to the normal limits on tokens (valid UTF-8, no curly braces, control characters, or replacement character), AO forbids characters SP, `@[]<>(),;|="` within words. Also, the empty word is prohibited.
-
-Words `a`, `b`, `c`, and `d` are valid, but refer always to the four corresponding ABC primitives and may not be redefined. These are effectively the four 'keywords' of AO. Other words may be reserved by the runtime, e.g. to support large value stowage.
-
-Developers are encouraged to favor words that are convenient in external contexts like URLs, natural language documentation, [editable views](EditingAO.md), and so on.
 
 ## AO Development
 
@@ -40,14 +31,7 @@ Concretely, a patch is a UTF-8 text with format:
         @word1 definition1
         @word2 definition2
         ...
-
-        secureHashOfPatch1
-        secureHashOfPatch2
-        @word1 definition1
-        @word2 definition2
-        ...
-
-        
+      
 
 Each patch consists of a header and a body. The header is a simple sequence of secure hashes, each identifying another patch (hence forming a tree structure). The body is a sequence of `@word def` actions, each overwriting a prior definition for the indicated word. A word may be logically deleted by defining a trivial cycle, `@foo {%foo}`. The last update for a word's definition 'wins', whether that update occurs within the header or body. We might interpret each secure hash as logically inlining the identified patch. 
 

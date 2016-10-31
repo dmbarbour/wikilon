@@ -196,16 +196,6 @@ Further, we can accelerate interaction with the KPN while it is still under eval
 
 Intriguingly, modeling KPNs as first class values has much nicer properties than baking KPNs into the programming language. KPNs can be passed around as first-class objects or coroutines, still undergoing parallel evaluation and allowing incremental update. A KPN not only contains processes, it acts as a process. KPNs are also an interesting alternative to monads for an [effects model](KPN_Effects.md).
 
-### Accelerated Linear Algebra
-
-While KPNs are great for most parallel processing, we'll additionally need to accelerate matrix and vector math to take full advantage of GPGPU or SSE based parallelism. This will require a lot of care and consideration, but there are good examples to follow like Haskell's 'accelerate' and (for graphics) 'lambda cube'. 
-
-### Efficient Interpretation
-
-To efficiently interpret an ABC binary, we must leverage an index/cache on the bytecode such that, upon observing the start of a block, token, or text, we skip to the end and potentially bind any interesting information. For tokens, we might also use the index to efficiently link without reading the token. 
-
-Efficient interpretation should be a major focus of an ABC runtime, enough to permit user-controlled compilation. The use of accelerators will likely be critical to efficient interpretation.
-
 ### Compilation
 
 Compilation of code is essential if ABC is ever to be performance competitive with more conventional languages. A runtime should support compilation. I tend to prefer predictable performance, so I would like a runtime to provide compilation as an explicit action - i.e. something like `[function]{&jit}`. In a staged evaluation context like [AO](AboutAO.md), or via use of memoization, we can effectively get staged compilation.
@@ -359,10 +349,6 @@ Static typing requires precomputing this information, i.e. tracking which values
 
 In this case, we have a conflict if `A+aff` (a value annotated affine) is used where `A-aff` (a value that is not affine, a copyable value) is needed.
 
-### Accelerator Type Checking
-
-Specialized type checking for accelerators can be effective without becoming overly complicated. For example, we could support specialized type models for accelerated process networks, key-value records, and key-based variants.
-
 ### Dynamic Evaluation
 
 Many useful programming styles are difficult to statically typecheck. Example:
@@ -469,30 +455,6 @@ Behavioral equivalence might be tested by some ad-hoc combination of static anal
 
 Similar to the `{&error}` annotation for error values, developers might want to recycle memory early while keeping the placeholder (especially if that placeholder might have substructural types or associated debug traces). This could be done by introducing annotation `{&trash}` which would replace the data with an error value but preserve substructure and debug data. 
 
-### Lazy Evaluation and Coinductive Data
+### Logical Assertions?
 
-We can leverage arity annotations to defer computations by constructing a value like `[[B]{&a2}A]`. This has the same type and semantics as `[[B]A]`, but the arity annotation prevents further evaluation. These properties are convenient for representing coinductive data types such as infinite data streams or procedurally generated worlds that otherwise might expand to fill available memory.
-
-Binding extra arguments to force deferred computation isn't always convenient or optimal. So we introduce an annotation to `{&force}` partial evaluation of a deferred computation. Evaluation would proceed though sufficient input is available to clear arity annotations, without actually providing any input.
-
-A weakness of deferred computation is that we create rework upon copy. Developers can use `{&memo}` to memoize and share expensive computations. But memoization has its own costs and doesn't always pay for itself. Sometimes recomputing is cheap enough. I will leave use of memoization to the developer.
-
-*Aside:* There is no `[A]{&lazy}` annotation operating on the evaluation strategy because it would be inconsistent in context of intermediate output or transparent persistence. For example, given `[[B]{&par}]{&lazy}` we cannot distinguish the origin as `[B]{&par}[]b{&lazy}` vs. `[B][{&par}]b{&lazy}`. Use of arity annotations doesn't have this problem.
-
-### Comparison: SKI Combinators
-
-The SKI combinator calculus defines three combinators:
-
-        (S x y z) == (x z (y z))
-        (K x y) == x
-        (I x) == x
-
-We can represent these in ABC as follows:
-
-        [Z][Y][X]s == [[Z]Y][Z]X        s = [[c]ab[]ba]ai
-           [Y][X]k == X                 k = ad
-              [X]i == X                 i = [][]bak
-
-SKI combinators are Turing complete, and hence so is ABC. 
-
-I believe ABC's primitive combinators are more convenient than the SKI primitives. Apply and bind (`a` and `b`) allow effective control of scope, respectively hiding or capturing part of the environment. Non-linear copy and drop operators (`c` and `d`) are separate, which allows precise control of substructure (checkable via `{&aff}` and `{&rel}`). ABC has multi-valued output, which supports flexible factoring and structural types. Apply immediately returns one value, which is useful for partial evaluations.
+Weaker than behavioral equivalence. Some way to say `∀X. F(X) → G(X)`. Some way to say `∃X. F(X)`. The quantification logics used by Alonzo Church seem relevant. `[F][G]{&imply}`, for example? 
