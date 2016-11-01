@@ -9,17 +9,14 @@ This document will discuss useful patterns for modeling applications.
 
 The command pattern might be represented as:
 
-        @foo.v0 (initial state)
-        @foo.u1 (command1)
-        @foo.v1 {%foo.v0}{%foo.u1}
-        @foo.u2 (command2)
-        @foo.v2 {%foo.v1}{%foo.u2}
+        @foo.v0 initial state constructor
+        @foo.v1 foo.v0 command1
+        @foo.v2 foo.v1 command2
         ...
-        @foo.u99 (command99)
-        @foo.v99 {%foo.v98}{%foo.u99}
-        @foo {%foo.v99}
+        @foo.v99 foo.v98 command99
+        @foo foo.v99
 
-Use of command pattern enables many small updates to construct and modify a large object, in this case `{%foo}`.  This particular design records every command as a distinct set of words, simplifying view of historical values and actions on the object, easy forking and undo, etc..
+Use of command pattern enables many small updates to construct and modify a large object. This particular design records every command as a distinct set of words, simplifying view of historical values and actions on the object, easy forking and undo, etc..
 
 Command pattern can be used for such things as:
 
@@ -29,6 +26,14 @@ Command pattern can be used for such things as:
 * modeling user actions - a button press, HTTP POST
 
 Effectively, command pattern models a mutable object within a dictionary, albeit only mutable by external agents. 
+
+## Futures and Promises
+
+Awelon can easily evaluate in context of undefined words. A convenient idea is to treat undefined words as having a 'future' definition, to be fulfilled by human or software agents. Evaluation may usefully proceed in context of futures, enabling many observations that do not depend on the definition of the given future.
+
+Unlike command pattern, applications leveraging futures and promises can be *monotonic*. That is, we never need to destructively update a 'head' definition. We might allow a mixed mode, e.g. by including an auxiliary word for "is this future defined yet", but this could still be mostly monotonic - updating once from 'false' to 'true'. Monotonicity is a significant benefit for many use cases, for example it greatly simplifies reasoning about security and non-repudiation.
+
+Futures and promises are useful in many cases where command pattern is useful, and enable most of the benefits of mutability without actually requiring mutability. Futures should probably be favored over command pattern whenever they're a reasonable fit.
 
 ## Dictionary Objects
 
@@ -72,13 +77,19 @@ The ability to share flexible views of large objects without requiring each endp
 
 A RESTful pattern for effectful systems is to model each request as a first class resource - a [work order](https://en.wikipedia.org/wiki/Work_order) (of sorts) to be fulfilled by agents in a multi-agent system. Mostly software agents, but humans might also participate in fulfilling orders.
 
-Agents party to this system would search for orders matching some ad-hoc conditions (e.g. unclaimed, unfulfilled, authorized, and within the agent's domain). Upon discovering suitable orders, the agent may claim it temporarily, perform some work, then update the order to indicate progress. A single order may be fulfilled by multiple agents over time. In the general case, subordinate orders may be constructed for subtasks.
+Agents party to this system would search for orders matching some ad-hoc conditions (e.g. unclaimed, unfulfilled, authorized, and within the agent's domain). Upon discovering suitable orders, the agent may claim it temporarily, perform some work, then update the order to indicate progress. A single order may be fulfilled by multiple agents over time. In the general case, subordinate orders may be constructed to handle subtasks.
 
-In practice, orders will express conditional behavior and loops so a single agent can make more than one small step of progress. This helps amortize the search, claim, and update overheads. Consequently, we might model orders using monads or [process networks](KPN_Effects.md).
+In practice, orders include conditional behavior and loops so a single agent can perform more than one small step of progress. This amortizes the search, claim, and update overheads. Consequently, we might model orders using monads or [process networks](KPN_Effects.md).
 
-When orders are used for long-running labor, we gain opportunity to view progress for the work over time, and to interrupt, pause, prioritize, or guide the work in various ways.
+When orders are used for long-running labor, we gain opportunity to subscribe, to view progress for the work over time, and to interrupt, pause, prioritize, or guide the work in various ways. When orders are used for singular events, we may effectively leverage futures and promises.
 
 *Aside:* Modeling orders is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept. The main difference is the proposed method for mutual exclusion: stake a 'claim' on an object rather than remove it. I believe this will be more robust, accessible, and extensible - e.g. expire claims on agent failure, support subscribed views of progress, adding schedules to work orders or partial claims for collaborative work.
+
+## Tables and Databases
+
+Modeling databases within a dictionary involves maintaining tables or collections (perhaps via the command pattern) then querying and composing these data resources into views. The main challenge isn't the representation of data (a simple append-only log of records will do) but rather features like indexing, query optimization, and incremental computing. 
+
+Indexes will need to be compositional views, such that indices themselves may be incrementally updated. Column-structured databases would likely be preferable, such that we can efficiently eliminate updates to irrelevant columns.
 
 ## Managed Dictionaries
 
