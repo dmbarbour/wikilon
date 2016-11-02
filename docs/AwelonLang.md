@@ -1,9 +1,19 @@
 
 # Awelon Language
 
-Awelon is a purely functional language based on concatenative combinators. Awelon is designed for an [RESTful application model](ApplicationModel.md) that maintains application state within a codebase and handles effects in context of a multi-agent system (for example, via [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern) and [tuple space](https://en.wikipedia.org/wiki/Tuple_space) patterns). Awelon systems support [incremental computing](https://en.wikipedia.org/wiki/Incremental_computing) with [hypermedia](https://en.wikipedia.org/wiki/Hypermedia) at a large scale.
+Awelon is a purely functional language based on concatenative combinators. 
 
-Syntactically, Awelon is simple, minimalist, and very similar to Forth. Where more sophisticated or domain specific syntax is appropriate, Awelon systems are expected to leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) to avoid complicating parsers.
+## Why Another Language?
+
+Awelon differs from other languages in its adherence to simplicity and its choice of evaluation model. There are only four simple computational primitives, one data primitive, and a minimal syntax. Evaluation is by local rewriting and preserves human-meaningful symbols and link structure, which is convenient for persistence, distribution, debugging, and hypermedia.
+
+Like any pure language, evaluation is separate from effects. Awelon explores a [RESTful application model](ApplicationModel.md) where application state is represented within a codebase, and effects are performed in context of a multi-agent system. Relevant effects patterns include [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern) and a variation on the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) oriented around [work orders](https://en.wikipedia.org/wiki/Work_order). More conventional effects models are possible within orders.
+
+Awelon systems will leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) to model domain-specific syntax, namespaces, and edit sessions. Editable views will likely be provided through web services, but it is feasible to utilize editable views through conventional text editors via [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) adapters. Ultimately, the human interface to Awelon's application models generalizes to an editable view.
+
+Awelon's simplicity, purity, and evaluation model each contribute to its utility for the proposed application model. I am not aware of any other language that is similarly appropriate in the same role.
+
+*Note:* Unlike minimalist 'esoteric' languages, Awelon takes performance seriously. A runtime will recognize and accelerate a set of common functions, effectively extending the set of primitives for purpose of performance. Acceleration of linear algebra could support GPGPU computing, and acceleration of Kahn process networks could support efficient distributed computing. JIT computation is quite feasible and can leverage accelerators. Incremental computing is important for the application model.
 
 ## Primitives
 
@@ -31,7 +41,7 @@ User defined words are represented in a dictionary, described later. Some words 
 
 ## Data
 
-Awelon language optimizes representations for numbers and texts. Numbers effectively use predefined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
+Awelon language optimizes embedded representations for numbers and texts. Numbers leverage predefined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
 
         "
          multi-line texts starts with `" LF` (34, 10)
@@ -106,7 +116,9 @@ This is achieved by allowing developers to partially define the encoding. For na
         "hello" = [#104 "ello" :]
         "→" = [#8594 ~ :]
 
-At the moment, only natural numbers are supported. Long term, Awelon will likely support signed integers, rationals, decimal numbers. The normal Church encoding for signed numbers is a pair of natural numbers where one of the pair is zero. We might similarly support rationals (a numerator and denominator pair) or decimal numbers (a significand and exponent pair). Awelon language conservatively reserves words with prefix `[+-~.#]?[0-9]` for purpose of representing and efficiently recognizing numbers. 
+At the moment, only natural numbers are supported. 
+
+Long term, Awelon will likely support signed integers, rationals, decimal numbers. The normal Church encoding for signed numbers is a pair of natural numbers where one of the pair is zero. We might similarly support rationals (a numerator and denominator pair) or decimal numbers (a significand and exponent pair). Awelon language conservatively reserves words with prefix `[+-~.#]?[0-9]` for purpose of representing and efficiently recognizing numbers.
 
 *Aside:* Beyond numbers and texts, users might be interested in more structured data with human-meaningful symbolic labels. Awelon language does not optimize for those cases, but support for *Editable Views* may present structured data to humans.
 
@@ -119,7 +131,7 @@ Acceleration is a performance assumption for Awelon language. A runtime should r
 
 Accelerated functions serve a role similar to 'built in' functions in other languages. However, accelerated functions *must* be given an explicit definition in the Awelon language as part of the user's dictionary. Users should be able to review and interact with this definition like any other. However, modifying or renaming an accelerated function may generally have a severe and negative impact on performance.
 
-More critically, acceleration of a function allows for *compact representations*, which is important because all *Data* is encoded within functions. Natural numbers, for example, might be represented during computation by normal machine words. Accelerated functions may be optimized for operation directly on compact representations. Hence, if we accelerate both natural numbers and *arithmetic* upon them, we can effectively treat natural numbers as language primitives for performance.
+Critically, acceleration of functions extends to *data*, and compact representation thereof. Natural numbers, for example, might be represented during computation by normal machine words. Accelerated functions may be optimized for operation directly on compact representations. Hence, if we accelerate both natural numbers and *arithmetic* upon them, we can effectively treat natural numbers as language primitives for performance.
 
 The long term intention is for Awelon language to accelerate not just arithmetic, but also compact binaries, collections processing, linear algebra, and parallel [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks). Acceleration of linear algebra, for example, could permit semi-transparent GPGPU parallelism. And acceleration of process networks could enable Awelon computations to semi-transparently leverage cloud computing. 
 
@@ -166,21 +178,6 @@ To simplify work with deferred compuations, I will introduce two more annotation
 
 Use of `(force)` eliminates arity annotations waiting on extra arguments to the computation. This forces partial evaluation without actually providing the additional arguments. Use of `(memo)` enables caching of a computation to avoid rework. Memoization is more broadly relevant for incremental computing, and is discussed later.
 
-## Fixpoint
-
-Fixpoint is a function useful for modeling loop behaviors. For Awelon language, I recommend the following variant of the [strict Z fixpoint combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator):
-
-        [X][F]z == [X][[F]z]F 
-        z = [[c] a [(/3) c i] b b w i](/3) c i
-
-        Using Definitions:
-           [A]i == A            (inline)         i = [] w a d
-        [B][A]w == [A][B]       (swap)           w = (/2) [] b a
-
-The arity annotation `(/3)` defers further expansion of the `[[F]z]` result. This variation of the Z combinator has the advantage that the definition of `z` can be found in the naive evaluation, and that `[F]` is not replicated unnecessarily. I recommend that readers unfamiliar with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior.
-
-Fixpoint is notoriously difficult for humans to grok and sometimes awkward to use. Instead of directly using fixpoint, we'll want to build more comfortable loop abstractions above it like [generators](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) and folds. We would benefit from accelerating at least fixpoint, and possibly some of the more popular loop abstractions.
-
 ## Stowage
 
 Stowage is a simple idea, summarized by rewrite rules:
@@ -192,23 +189,21 @@ Effectively, stowage is a form of [virtual memory](https://en.wikipedia.org/wiki
 
 Use of a secure hash has many nice properties. It is deterministic, reproducible by parallel computations, stable for memoization and caching. Structure sharing is implicit. Each definition is verifiable. It's easy to conceptualize stowage as discovery of an already defined word rather than allocation of a word. We effectively have a global stowage namespace. Provider-independent secure distribution is feasible, using part of the hash for lookup and the rest as an decryption key.
 
-Of course, stowage has storage, lookup, and GC overheads. Values with small representations should not be stowed. What exactly 'small' means is heuristic, but a reasonable threshold would be 6x the size of the secure hash (i.e. 384 bytes).
+Of course, stowage has storage, lookup, and GC overheads. Values with small representations should not be stowed. The threshold for 'small' is heuristic, but should at least be larger than the secure hash. A reasonable threshold is six times the size of the secure hash.
 
 *Aside:* Conventional programming uses *effects* to interact with external storage services like a file system, database, or block device. However, use of effects to simply work with large data is awkward in contexts that may involve incremental computing, backtracking and partial replay, or explicit control over effects. Stowage separates the concerns of large data and effects.
 
 *Note:* Stowage is most efficient when used to model persistent structures with built-in write batching like [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree) or the recently developed [hitchhiker tree](https://github.com/datacrypt-project/hitchhiker-tree). [Finger trees](https://en.wikipedia.org/wiki/Finger_tree), to model queues or deques mostly modified at the ends, are also an excellent structure. 
 
-## Memoization
+## Binary Data
 
-The primary basis for incremental computing in Awelon is [memoization](https://en.wikipedia.org/wiki/Memoization). Evaluation of word definitions will tend to be implicitly memoized. But programmers may also request memoized evaluation explicitly:
+Awelon language can reference external binary data via `%secureHash`.
 
-        [computation](memo)
+Binaries may also be embedded within Awelon code, for example with base64 text and a conversion word. Embedding binaries may be convenient for relatively small binary data. However, external binaries are more efficient at large scales, and are easier to integrate with external systems. 
 
-Memoization is conceptually performed by by seeking the computation in a runtime lookup table. If the computation is found in the table, our runtime will replace the computation by the result from the table. If the computation is not found, we evaluate then heuristically store the computation into the table based on observed and estimated future time and space tradeoffs.
+Binaries will share sequence structure with embedded texts (that is, the `:` cons and `~` nil). The only difference is that binaries will use a sequence of bytes in the range `#0 .. #255` instead of Unicode codepoints.
 
-Use of a lookup table can be coarse grained, resulting in unnecessary recomputation when dependencies are not observed during evaluation. To address this, we might aim to instrument a memoized evaluation to track observations with fine granularity. There has been research in this area, cf. adaptive memoization, dynamic trace memoization. At the very least, we can track which words are linked during evaluation.
-
-*Note:* Memoization must be used in context of cache-friendly application patterns - such as command pattern and compositional views on persistent data structures - to effectively support incremental computing.
+*Notes:* Stowing a large binary may generate an external binary reference, but dedicated annotations might be necessary for precise control. If small parts of a binary are updated frequently, developers should consider use of [rope-like](https://en.wikipedia.org/wiki/Rope_%28data_structure%29) structures to simplify incremental computing.
 
 ## Dictionary
 
@@ -220,21 +215,23 @@ The Awelon dictionary is a set of defined words, and doubles as both a codebase 
         @word2 definition2
         ...
 
-A dictionary is represented by a root patch. A patch is a UTF-8 string with a head and a body. The head is a series of secure hashes, one per line, each specifying another patch to be logically inlined in place of the secure hash. The body is a series of word definitions, each starting a new line, overriding the prior definition for a word. The whitespace (SP, LF) surrounding each definition is implicitly trimmed.
+A dictionary is represented by a root patch. A patch is a UTF-8 string with a head and a body. The head is a series of secure hashes, one per line, each a binary data reference to a patch to logically include in place of the secure hash. The body is a series of word definitions, each starting a new line, overriding the prior definition for a word. Use of `@` at the start of a line is not valid within Awelon language, so it's easy to partition definitions without parsing them. The whitespace (SP, LF) surrounding a definition is implicitly trimmed.
 
-The patch-based representation gives a lot of freedom for how dictionaries are constructed and shared. For example, a dictionary might be an append-only log, or (with clever external indexing) an LSM-tree. A large dictionary with a small head patch can cheaply be forked. Three-way merges are possible if we can efficiently identify a common origin. Use of secure hashes to name patches simplifies caching, distribution, structure sharing, incremental indexing, and separate compilation of dictionaries. 
+This patch-based representation gives a lot of freedom for how dictionaries are constructed and shared. For example, a dictionary might be an append-only log, or (with clever external indexing) an LSM-tree. A large dictionary with a small head patch can cheaply be forked. Three-way merges are possible if we can efficiently identify a common origin. Use of secure hashes to name patches simplifies caching, distribution, structure sharing, incremental indexing, and separate compilation of dictionaries. 
 
-This is ultimately a *machine oriented* representation. Secure hashes generally aren't human-meaningful organizations of code. Awelon language is intended for use at a larger scale through editable views.
+*Note:* This is ultimately a *machine oriented* representation. Secure hashes generally aren't human-meaningful organizations of code. Awelon language is intended for use at a larger scale through editable views.
 
-Words may be logically deleted from a dictionary by defining the trivial cycle `@foo foo`. Some words are automatically defined like numbers or stowage. Users may represent such words within the dictionary, but their definitions should match the automatic definition. Otherwise an error will be raised. The four primitive words `a b c d` may not be defined, but may be represented within the dictionary as logically deleted words `@a a` and so on. 
+Words may be logically deleted from a dictionary by defining trivial cycles like `@foo foo`. Some words are automatically defined like numbers, stowage, or external binaries. Users may represent such words within the dictionary, but their definitions should be obviously equivalent the automatic definition (otherwise an error may be raised). The four primitive words `a b c d` may not be defined, but may be represented within the dictionary as logically deleted words `@a a` and so on. 
 
 *Note:* Non-trivial cycles are errors. Loop behavior must be modeled via *Fixpoint*, not at the link layer. It is always possible to inline valid definitions to produce a finite program with the same behavioral semantics. Of course, this expansion might be exponential, so is not performed by default.
 
 *Note:* Specifying a dictionary is a decent way to document annotations, accelerators, etc.. A runtime might specify multiple accelerated dictionaries for versioning and portability.
 
-## Secure Hashes
+## Secure Hash Data
 
-The secure hash of choice for both stowage and dictionary patches is BLAKE2b, 384 bits, encoded as 64 characters of base64url. This is small enough for aesthetic purposes, large enough to resist collisions, suitable for use in URLs, and BLAKE2b is a fast secure software hash with a streaming evaluation mode.
+Awelon language uses secure hashes for dictionary patches, binary resources, and stowage. Data referenced via secure hash may be held in an implicit global system, separate from any specific dictionary or runtime.
+
+The secure hash of choice is BLAKE2b, 384 bits, encoded as 64 characters of base64url. This is small enough for aesthetic purposes (less than one line of text), large enough to resist collisions, and suitable for use in URLs. BLAKE2b is a very efficient secure hash.
 
 ## Evaluation
 
@@ -260,6 +257,33 @@ This strategy isn't lazy or eager in the conventional sense. Rewriting the outer
 Annotations can tune the basic strategy a little. In particular, use of `[computation](par)` will begin parallel evaluation of the computation, and might be understood as "will probably need" advice. There are no strictness or laziness annotations, but see *Deferred Computations and Coinductive Data*.
 
 *Aside:* Undefined words do not rewrite further. In practice, evaluation with undefined words is useful for some application patterns, e.g. involving monotonic futures and promises. And also for initial development and debugging.
+
+## Fixpoint
+
+Fixpoint is a function useful for modeling loop behaviors. For Awelon language, I recommend the following variant of the [strict Z fixpoint combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator):
+
+        [X][F]z == [X][[F]z]F 
+        z = [[c] a [(/3) c i] b b w i](/3) c i
+
+        Using Definitions:
+           [A]i == A            (inline)         i = [] w a d
+        [B][A]w == [A][B]       (swap)           w = (/2) [] b a
+
+The arity annotation `(/3)` defers further expansion of the `[[F]z]` result. This variation of the Z combinator has the advantage that the definition of `z` can be found in the naive evaluation, and that `[F]` is not replicated unnecessarily. I recommend that readers unfamiliar with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior.
+
+Fixpoint is notoriously difficult for humans to grok and sometimes awkward to use. Instead of directly using fixpoint, we'll want to build more comfortable loop abstractions above it like [generators](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) and folds. We would benefit from accelerating at least fixpoint, and possibly some of the more popular loop abstractions.
+
+## Memoization
+
+The primary basis for incremental computing in Awelon is [memoization](https://en.wikipedia.org/wiki/Memoization). Evaluation of word definitions will tend to be implicitly memoized. But programmers may also request memoized evaluation explicitly:
+
+        [computation](memo)
+
+Memoization is conceptually performed by by seeking the computation in a runtime lookup table. This lookup must account for words having different meanings in context of different dictionaries. Assuming the computation is found in the table, the runtime will replace the computation by the evaluated result. If the computation is not found, we evaluate then heuristically store the computation into the table based on observed and estimated future time and space tradeoffs.
+
+Naive use of a lookup table can work, but is not the most optimal approach to memoization. For example, ideally we want to control recomputing if there is a change to a word we do not link. To address this memoization would require instrumented evaluation that tracks linking, and only checks the relevant subset of dependencies. One might look into research on adaptive memorization, trace reuse, etc..
+
+*Note:* To effectively support incremental computing, memoization must be used in context of cache-friendly application patterns such as command pattern, and compositional views on persistent data structures.
 
 ## Static Linking
 
@@ -290,9 +314,9 @@ Awelon's semantics allow for some rewrites that aren't performed by the basic ev
         c d     =>
         c w     =>  c
 
-As we define more words, valid rewrites will cover a broader spectrum. A typical example is `map [G] map => [G] compose map` where `map` applies a function to every value in a collection. And a very useful example would be writing some constructs back to accelerated words, such as `[[c] a [(/3) c i] b b w i](/3) c i => z`.
+As we define more words, valid rewrites will cover a broader spectrum. A typical example is `map [G] map => [G] compose map` where `map` applies a function to every value in a collection. And a very useful example would be writing some constructs back to accelerated words. Translating `[#0 S#]` to `#1` would be considered a rewrite optimization, as is recovering the `z` symbol after evaluation of the fixpoint combinator.
 
-A runtime is free to support rewrite optimizations insofar as they can be proven valid. At the moment I do not have a good way for users to document rewrites and proofs through a dictionary. But a runtime can at least support rewrite optimizations for accelerated functions.
+A runtime is free to support rewrite optimizations insofar as they can be proven valid. Unfortunately, I do not currently have a good way for users to recommend rewrites and demonstrate proofs. But a runtime can at least support rewrite optimizations for accelerated functions.
 
 *Aside:* Rewrite optimizations tend to be ad-hoc and fragile, sensitive to staging, best used for small gains or aesthetic benefits. A runtime could support a `[function](opt)` annotation to perform rewrite optimizations and others. 
 
@@ -324,3 +348,4 @@ Acceleration of linear algebra enables us to take greater advantage of low-level
 ## Type Safety
 
 ## Editable Views
+

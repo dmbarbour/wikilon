@@ -29,11 +29,11 @@ Effectively, command pattern models a mutable object within a dictionary, albeit
 
 ## Futures and Promises
 
-Awelon can easily evaluate in context of undefined words. A convenient idea is to treat undefined words as having a 'future' definition, to be fulfilled by human or software agents. Evaluation may usefully proceed in context of futures, enabling many observations that do not depend on the definition of the given future.
+Awelon can easily evaluate in context of undefined words. A convenient idea is to treat undefined words as having a 'future' definition, to be fulfilled by human or software agents. Evaluation then usefully proceeds in context of multiple futures, enabling intermediate observations that do not depend on the definition of the future.
 
-Unlike command pattern, applications leveraging futures and promises can be *monotonic*. That is, we never need to destructively update a 'head' definition. We might allow a mixed mode, e.g. by including an auxiliary word for "is this future defined yet", but this could still be mostly monotonic - updating once from 'false' to 'true'. Monotonicity is a significant benefit for many use cases, for example it greatly simplifies reasoning about security and non-repudiation.
+Unlike command pattern, futures and promises can be *monotonic*. That is, we never need to destructively update the dictionary, or monotonically increment an auxiliary `future.fulfilled` boolean from `false` to `true`. Monotonicity is a very useful feature for many use cases. For example, it greatly simplifies reasoning about security and non-repudiation.
 
-Futures and promises are useful in many cases where command pattern is useful, and enable most of the benefits of mutability without actually requiring mutability. Futures should probably be favored over command pattern whenever they're a reasonable fit.
+While I haven't hammered out the details for futures and promises, I think they should be favored in cases where their use will not significantly harm performance. A nice property of futures is that they can be *frozen* at some point after being fulfilled, which may permit optimizations and compactions.
 
 ## Dictionary Objects
 
@@ -45,7 +45,9 @@ While AO does not permit cyclic dependencies between definitions, it is trivial 
 
 ## Hypermedia Applications
 
-AO has a rich link structure. Definitions, dictionary objects, and entire dictionaries can be viewed as hypermedia. With dictionary objects, we get a lot of associative metadata for each word that can be linked together or provide hints for rendering. Thus, we can have cyclic graphs, or render some objects with sound or video. Potential presentation of AO as hypermedia is discussed under [editing AO](EditingAO.md). 
+Awelon has a rich link structure, and preserves it during evaluation. Definitions reference each other, and dictionary objects 
+
+Definitions and dictionary objects, and entire dictionaries can be viewed as hypermedia. With dictionary objects, we get a lot of associative metadata for each word that can be linked together or provide hints for rendering. Thus, we can have cyclic graphs, or render some objects with sound or video. Potential presentation of AO as hypermedia is discussed under [editing AO](EditingAO.md). 
 
 Intriguingly, *AO evaluates to AO*, preserving both behavior and a great deal of link structure. Hence, we can view this as *hypermedia evaluates to hypermedia*. We can potentially model texts that evaluate to canvases and tables. We can model canvases and tables that evaluate to text. With *program animation* (described in [About ABC](AboutABC.md)), we might graphically render intermediate hypermedia views.
 
@@ -73,21 +75,28 @@ Command pattern provides a basis for small updates to large objects. Composition
 
 The ability to share flexible views of large objects without requiring each endpoint to manage fine-grained update events makes AO a lot more expressive and easier to use than many state-of-the-art publish subscribe systems.
 
-## Effectful Orders
+## Effectful Orders (Tuple Space variant)
 
-A RESTful pattern for effectful systems is to model each request as a first class resource - a [work order](https://en.wikipedia.org/wiki/Work_order) (of sorts) to be fulfilled by agents in a multi-agent system. Mostly software agents, but humans might also participate in fulfilling orders.
+A RESTful pattern for effectful systems is to model each request as a first class resource - a [work order](https://en.wikipedia.org/wiki/Work_order) (of sorts) to be fulfilled by agents in a multi-agent system. 
 
-Agents party to this system would search for orders matching some ad-hoc conditions (e.g. unclaimed, unfulfilled, authorized, and within the agent's domain). Upon discovering suitable orders, the agent may claim it temporarily, perform some work, then update the order to indicate progress. A single order may be fulfilled by multiple agents over time. In the general case, subordinate orders may be constructed to handle subtasks.
+Agents party to this system would search for orders matching some ad-hoc conditions (e.g. unclaimed, unfulfilled, authorized, and within the agent's domain). Upon discovering suitable orders, the agent may staje a claim, perform some work, then update the order to indicate progress or completion. A single order may be fulfilled by multiple agents over time. In the general case, subordinate orders may be constructed to handle subtasks.
 
-In practice, orders include conditional behavior and loops so a single agent can perform more than one small step of progress. This amortizes the search, claim, and update overheads. Consequently, we might model orders using monads or [process networks](KPN_Effects.md).
+Both human and software agents may participate.
 
-When orders are used for long-running labor, we gain opportunity to subscribe, to view progress for the work over time, and to interrupt, pause, prioritize, or guide the work in various ways. When orders are used for singular events, we may effectively leverage futures and promises.
+Modeling orders in a codebase or database is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept. The main difference is the proposed method for mutual exclusion: instead of *removing* a tuple, we might stake a 'claim' on an order. Use of claims is more expressive for long-running tasks with publish-subscribe views, scheduling or expiration of claims, and concurrent interactions (interrupts, collaborative claims, etc.). 
 
-*Aside:* Modeling orders is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept. The main difference is the proposed method for mutual exclusion: stake a 'claim' on an object rather than remove it. I believe this will be more robust, accessible, and extensible - e.g. expire claims on agent failure, support subscribed views of progress, adding schedules to work orders or partial claims for collaborative work.
+Large orders amortize the search, claim, and update overheads over multiple operations. In practice, orders will include lists, conditional decisions, loops. Sophisticated orders might be modeled as a monadic task or a [process networks](KPN_Effects.md). Conveniently, Awelon's rewrite-based evaluation enables arbitrary incomplete tasks to be stored to the codebase, which allows checkpointing, scheduling, or collaborative work with other agents.
 
 ## Tables and Databases
 
-Modeling databases within a dictionary involves maintaining tables or collections (perhaps via the command pattern) then querying and composing these data resources into views. The main challenge isn't the representation of data (a simple append-only log of records will do) but rather features like indexing, query optimization, and incremental computing. 
+Modeling tables or databases within the dictionary is straightforward. For example, a command pattern might represent an append-only log for a table, or collection thereof. The challenge is everything else - indexing, queries and query optimization, incremental computing.
+
+Fortunately, indexes can frequently be modeled as compositional views. This allows indexing to be incremental using the same techniques described earlier, and the storage overhead isn't necessarily too bad.
+
+
+
+
+Modeling databases within a dictionary requires maintaining tables or collections (perhaps via the command pattern) then querying and composing these data resources into views. The main challenge isn't the representation of data (a simple append-only log of records will do) but rather features like indexing, query optimization, and incremental computing. 
 
 Indexes will need to be compositional views, such that indices themselves may be incrementally updated. Column-structured databases would likely be preferable, such that we can efficiently eliminate updates to irrelevant columns.
 
