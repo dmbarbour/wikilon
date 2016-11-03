@@ -78,43 +78,10 @@ Support for `{&bool}`, `{&opt}`, and `{&sum}` should be sufficient in practice. 
 
 *Aside:* Conveniently, `{&bool}[[onTrue][onFalse]]ai` is structurally, semantically, and visually similar to an `if then else` expression. It is feasible to provide a more conventional if-then-else view through an editor.
 
-### Structural Scopes
-
-ABC provides a simple mechanism for controlling scope of a computation. Assume we have a function `foo` that takes two inputs and produces three outputs. A structurally scoped application can be represented as:
-
-        [A][B][foo]bb{&t3}i
-
-What we're doing here is binding two arguments to the function, asserting that there are three outputs, then inlining those outputs into our main code. Dynamically, the `{&t3}` annotation, asserting the argument is a tuple of size three, requires a simple bit of reflection. 
-
-        [[A][B][C]]{&t3}    =>  [[A][B][C]]
-
-I propose that most ABC systems should support `{&t0}`..`{&t7}`, the practical range of tuple sizes. If we determine through static analysis that the `{&t3}` annotation will be valid at runtime, the annotation may be eliminated statically. So this annotation is suitable in both static and dynamic contexts.
 
 ### Value Sealing for Lightweight Types
 
 ABC introduces two tokens `{:foo}` and `{.foo}` to support symbolic value sealing, to resist accidental access to data. This is supported by a simple rewrite rule: `{:foo}{.foo}` will rewrite to the empty program. The main goal is to force programs to fail fast if they aren't expected to access a particular data structure. In most cases, seals will be used as symbolic wrappers for individual values, e.g. using `[{:foo}]b`. During static type analysis, these type wrappers should serve as a useful type constraint.
-
-### Substructural Types
-
-Substructural types are useful for structuring application behavior independently of syntax or concurrency model. In context of a bytecode that lacks much syntactic structure, these types could greatly simplify reasoning about code. ABC can support substructural types both statically and dynamically. Developers will access substructural types via annotations and a few simple rules:
-
-* `{&rel}` - relevant values, forbid drop (operator `d`)
-* `{&aff}` - affine values, forbid copy (operator `c`)
-* inherit substructure of bound values (operator `b`)
-* relevant and affine together result in linear values
-* `{&rel}` and `{&aff}` are commutative and idempotent
-
-Values with substructural types may freely be applied (operator `a`). Substructure is not lifted during partial evaluation, so substructural type does not interact with features like `{&seq}` or `{&par}`.
-
-Static typing requires precomputing this information, i.e. tracking which values are copied and dropped and which are marked relevant or affine, and detecting any conflict statically. This isn't difficult, though I have yet to think up an *aesthetic* set of type annotations that don't make me cringe. Consider:
-
-        c : (A!aff * E) → (A * (A * E))
-        d : (A!rel * E) → E
-
-        {&rel} : (A * E) → (A&rel * E)
-        {&aff} : (A * E) → (A&aff * E)
-
-In this case, we have a conflict if `A+aff` (a value annotated affine) is used where `A-aff` (a value that is not affine, a copyable value) is needed.
 
 ### Dynamic Evaluation
 

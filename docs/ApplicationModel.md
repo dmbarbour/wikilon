@@ -31,9 +31,9 @@ Effectively, command pattern models a mutable object within a dictionary, albeit
 
 Awelon can easily evaluate in context of undefined words. A convenient idea is to treat undefined words as having a 'future' definition, to be fulfilled by human or software agents. Evaluation then usefully proceeds in context of multiple futures, enabling intermediate observations that do not depend on the definition of the future.
 
-Unlike command pattern, futures and promises can be *monotonic*. That is, we never need to destructively update the dictionary, or monotonically increment an auxiliary `future.fulfilled` boolean from `false` to `true`. Monotonicity is a very useful feature for many use cases. For example, it greatly simplifies reasoning about security and non-repudiation.
+Unlike command pattern, futures and promises can be *monotonic*. That is, we never need to destructively update the dictionary, or monotonically increment an auxiliary `future.fulfilled` boolean from `false` to `true`. Monotonicity is a very useful feature. For example, it greatly simplifies reasoning about security and non-repudiation, and enables partial evaluation and compaction of the dictionary.
 
-While I haven't hammered out the details for futures and promises, I think they should be favored in cases where their use will not significantly harm performance. A nice property of futures is that they can be *frozen* at some point after being fulfilled, which may permit optimizations and compactions.
+Futures should be favored over command pattern in cases where their use will not significantly hurt performance or confuse agents. 
 
 ## Dictionary Objects
 

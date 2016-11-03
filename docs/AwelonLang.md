@@ -35,7 +35,7 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 ## Words
 
-Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `@[]<>(){},;|&=\"`, SP, C0, and DEL. Developers are encouraged to further limit words to symbols that will not need escaped in external contexts, such as URLs, natural language, or editable views. While there is no hard restriction on word sizes, I would also encourage developers to keep words relatively short.
+Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `@[]<>(){},;|&=\"`, SP, C0, and DEL. Developers are encouraged to further favor words that will not escapes in external contexts such as URLs, natural language, or editable views. There is no hard restriction on word sizes, but words should be kept reasonably short.
 
 User defined words are represented in a dictionary, described later. Some words are automatically defined, including the four primitives `a`, `b`, `c`, `d` and number words such as `42`. 
 
@@ -122,6 +122,16 @@ Long term, Awelon will likely support signed integers, rationals, decimal number
 
 *Aside:* Beyond numbers and texts, users might be interested in more structured data with human-meaningful symbolic labels. Awelon language does not optimize for those cases, but support for *Editable Views* may present structured data to humans.
 
+## Binary Data
+
+Binaries can be embedded with base64 text. But support for external binaries avoids space and conversion overheads of embedding binary data within the Awelon syntax, and is generally more convenient in context of integration with external systems and hypermedia. 
+
+Awelon language supports reference to external binary data via `%secureHash`. 
+
+A runtime will have implicit access to resources named by secure hash, perhaps through the filesystem or network. The binary in question is easily loaded into memory, easily verified. Any change in the binary must be reflected in the Awelon code, which is convenient for partial evaluations or caching. Binary data is treated like embedded text, except our values are in the range `#0 .. #255` instead of codepoints.
+
+*Note:* Developers are encouraged to model [rope-like](https://en.wikipedia.org/wiki/Rope_%28data_structure%29) structures if partial structure sharing could offer significant benefits.
+
 ## Acceleration
 
 Acceleration is a performance assumption for Awelon language. A runtime should recognize and accelerate common functions. The accelerated function may use a hand-optimized or built-in implementation to achieve performance similar to a primitive. For example, most runtimes will accelerate the following functions:
@@ -133,16 +143,16 @@ Accelerated functions serve a role similar to 'built in' functions in other lang
 
 Critically, acceleration of functions extends to *data*, and compact representation thereof. Natural numbers, for example, might be represented during computation by normal machine words. Accelerated functions may be optimized for operation directly on compact representations. Hence, if we accelerate both natural numbers and *arithmetic* upon them, we can effectively treat natural numbers as language primitives for performance.
 
-The long term intention is for Awelon language to accelerate not just arithmetic, but also compact binaries, collections processing, linear algebra, and parallel [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks). Acceleration of linear algebra, for example, could permit semi-transparent GPGPU parallelism. And acceleration of process networks could enable Awelon computations to semi-transparently leverage cloud computing. 
+The long term intention is for Awelon language to accelerate not just arithmetic, but also binary and collections processing, conversion of texts to binary and vice versa, linear algebra, and parallel [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks). Acceleration of linear algebra, for example, could permit semi-transparent GPGPU parallelism. And acceleration of process networks could enable Awelon computations to semi-transparently leverage cloud computing. 
 
-I believe a few well targeted accelerators can achieve excellent performance.
+A few carefully targeted accelerators can achieve excellent performance in a broad array of problem domains.
 
 ## Annotations
 
 Annotations help developers control, optimize, and debug computations. Annotations are represented as parenthetical words like `(par)` or `(/3)`. Some useful examples of annotations include:
 
 * `(/2)..(/9)` - arity annotations to defer computations
-* `(0)..(9)` - tuple type assertions for scope control
+* `(0)..(9)` - tuple assertions for scope control
 * `(aff) (rel)` - support substructural type safety
 * `(:foo) (.foo)` - lightweight type tag and assertions
 * `(nat)` - use accelerated representation for natural number
@@ -160,23 +170,28 @@ Annotations may be introduced and documented on a runtime basis. In case of port
 
 ## Deferred Computations and Coinductive Data
 
-The *arity annotations* `(/2)` to `(/9)` have the following rewrite rules:
+The *arity annotations* `(/2)` to `(/9)` have simple rewrite rules:
 
                              [B][A](/2) == [B][A]
                           [C][B][A](/3) == [C][B][A]
                                         ..
         [I][H][G][F][E][D][C][B][A](/9) == [I][H][G][F][E][D][C][B][A]
 
-These annotations serve a critical role in controlling computation. Consider construction of `[[A](/2)F]`. This has the same semantics and static type as `[[A]F]`, but the arity annotation prevents partial evaluation with the argument. Arity annotations are convenient for guarding against 'pointless' partial evaluations. For example, we might define `w = (/2) [] b a` because a partial swap isn't useful or interesting.
+To clarify, it is the *annotation* that has the given arity. Arity annotations specify nothing of their context.
 
-Arity annotations can be leveraged to represent 'infinite' [coinductive data structures](https://en.wikipedia.org/wiki/Coinduction), such as procedurally generated streams or scene graphs. The structure is computed only insofar as it is observed.
+Arity annotations serve a critical role in controlling computation. For example, the program `[[A](/2)F]` has the same type and semantics as `[[A]F]`, but the former prevents partial evaluation of `F` from observing `[A]`. Arity annotations can be used to guard against useless partial evaluations. For example, if we define swap as `w = (/2) [] b a` then we can avoid observing the useless intermediate structure `[A] w => [[A]] a`. 
 
-To simplify work with deferred compuations, I will introduce two more annotations: 
+Arity annotations serve a very useful role in modeling [thunks](https://en.wikipedia.org/wiki/Thunk) and [coinductive data](https://en.wikipedia.org/wiki/Coinduction). It is sometimes useful to model 'infinite' data structures to be computed as we observe them - procedurally generated streams or scene graphs.
+
+As a related utility, I introduce a `(force)` annotation. 
 
         [computation](force)
-        [computation](memo)
 
-Use of `(force)` eliminates arity annotations waiting on extra arguments to the computation. This forces partial evaluation without actually providing the additional arguments. Use of `(memo)` enables caching of a computation to avoid rework. Memoization is more broadly relevant for incremental computing, and is discussed later.
+This introduces a 'forced' evaluation mode for the given block. A forced evaluation operates as if there were sufficient arguments to the left of `computation` for purpose of deleting arity annotations without actually providing those arguments. The computation may still get stuck and prevent further evaluation, but it at least won't be stuck on an arity annotation.
+
+*Note:* Awelon language does not implicitly memoize computations to avoid rework. However, programmers can explicitly use `(memo)` to share work, and it is feasible for a runtime to optimize lightweight memoization of deferred computations. See *Memoization*.
+
+*Aside:* Arities should rarely stray above `(/5)`. Beyond a handful of parameters, programmers should refactor for simplicity or introduce parameter objects.
 
 ## Stowage
 
@@ -185,29 +200,15 @@ Stowage is a simple idea, summarized by rewrite rules:
         [large value](stow) => [$secureHash]
         [small value](stow) => [small value]
 
-Effectively, stowage is a form of [virtual memory](https://en.wikipedia.org/wiki/Virtual_memory), but is performed at a language-aware link layer. The large value is pushed to disk and replaced by a word containing a secure hash of the value. If that word is later required during evaluation, we'll load it back from memory.
+The resulting `$secureHash` resource is similar to external binary resources, excepting we interpret the binary as Awelon code. Use of `(stow)` will wait for evaluation. Use of `(stow)` on large binary data will instead produce a `%secureHash` external binary.
 
-Use of a secure hash has many nice properties. It is deterministic, reproducible by parallel computations, stable for memoization and caching. Structure sharing is implicit. Each definition is verifiable. It's easy to conceptualize stowage as discovery of an already defined word rather than allocation of a word. We effectively have a global stowage namespace. Provider-independent secure distribution is feasible, using part of the hash for lookup and the rest as an decryption key.
+Stowage enables programmers to work semi-transparently with computations that are much larger than working memory. Unlike conventional virtual memory or effectful storage, stowage is friendly for parallelism and distribution, structure sharing, incremental computing, and backtracking. However, the most effective use of stowage is more limited to [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), optimally those that implicitly batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
 
-Of course, stowage has storage, lookup, and GC overheads. Values with small representations should not be stowed. The threshold for 'small' is heuristic, but should at least be larger than the secure hash. A reasonable threshold is six times the size of the secure hash.
-
-*Aside:* Conventional programming uses *effects* to interact with external storage services like a file system, database, or block device. However, use of effects to simply work with large data is awkward in contexts that may involve incremental computing, backtracking and partial replay, or explicit control over effects. Stowage separates the concerns of large data and effects.
-
-*Note:* Stowage is most efficient when used to model persistent structures with built-in write batching like [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree) or the recently developed [hitchhiker tree](https://github.com/datacrypt-project/hitchhiker-tree). [Finger trees](https://en.wikipedia.org/wiki/Finger_tree), to model queues or deques mostly modified at the ends, are also an excellent structure. 
-
-## Binary Data
-
-Awelon language can reference external binary data via `%secureHash`.
-
-Binaries may also be embedded within Awelon code, for example with base64 text and a conversion word. Embedding binaries may be convenient for relatively small binary data. However, external binaries are more efficient at large scales, and are easier to integrate with external systems. 
-
-Binaries will share sequence structure with embedded texts (that is, the `:` cons and `~` nil). The only difference is that binaries will use a sequence of bytes in the range `#0 .. #255` instead of Unicode codepoints.
-
-*Notes:* Stowing a large binary may generate an external binary reference, but dedicated annotations might be necessary for precise control. If small parts of a binary are updated frequently, developers should consider use of [rope-like](https://en.wikipedia.org/wiki/Rope_%28data_structure%29) structures to simplify incremental computing.
+Stowage has significant lookup and GC overheads. Values with small representations should not be stowed. The threshold for 'small' is heuristic, but must at least be larger than the encoded secure hash and be deterministically reproducible. A reasonable threshold is six times the size of the secure hash. 
 
 ## Dictionary
 
-The Awelon dictionary is a set of defined words, and doubles as both a codebase and a substrate for [application state](ApplicationModel.md). We can expect frequent updates, history and versioning, forks and merges, need for efficient distribution, shared objects, and reusable cached compilation. To support these features, Awelon uses a DVCS-inspired patch-based dictionary representation: 
+An Awelon dictionary doubles as a codebase and a substrate for multi-agent application state. The dictionary representation must support efficient lookup in context of high frequency concurrent updates. I propose a DVCS-inspired patch based representation:
 
         secureHashOfPatch1
         secureHashOfPatch2
@@ -215,23 +216,21 @@ The Awelon dictionary is a set of defined words, and doubles as both a codebase 
         @word2 definition2
         ...
 
-A dictionary is represented by a root patch. A patch is a UTF-8 string with a head and a body. The head is a series of secure hashes, one per line, each a binary data reference to a patch to logically include in place of the secure hash. The body is a series of word definitions, each starting a new line, overriding the prior definition for a word. Use of `@` at the start of a line is not valid within Awelon language, so it's easy to partition definitions without parsing them. The whitespace (SP, LF) surrounding a definition is implicitly trimmed.
+Each patch contains a list of patches to logically include (via secure hash) followed by a list of definitions overriding specific words. A word may be logically deleted by defining a trivial cycle like `@foo foo`. The last definition of a word wins. Whitespace (SP, LF) surrounding each definition is implicitly trimmed. A dictionary is represented by a 'root' patch.
 
-This patch-based representation gives a lot of freedom for how dictionaries are constructed and shared. For example, a dictionary might be an append-only log, or (with clever external indexing) an LSM-tree. A large dictionary with a small head patch can cheaply be forked. Three-way merges are possible if we can efficiently identify a common origin. Use of secure hashes to name patches simplifies caching, distribution, structure sharing, incremental indexing, and separate compilation of dictionaries. 
+As a dictionary shared with software agents, this is not optimal for humans. The intention is that human programmers should be operating on a dictionary through editable views or edit sessions, browsing the dictionary as hypermedia and bringing relevant definitions into scope as needed.
 
-*Note:* This is ultimately a *machine oriented* representation. Secure hashes generally aren't human-meaningful organizations of code. Awelon language is intended for use at a larger scale through editable views.
+A runtime might usefully document recognized accelerators, annotations, and other features by specifying seed dictionary, or a set of seeds (to account for portability, versioning). 
 
-Words may be logically deleted from a dictionary by defining trivial cycles like `@foo foo`. Some words are automatically defined like numbers, stowage, or external binaries. Users may represent such words within the dictionary, but their definitions should be obviously equivalent the automatic definition (otherwise an error may be raised). The four primitive words `a b c d` may not be defined, but may be represented within the dictionary as logically deleted words `@a a` and so on. 
+*Note:* Non-trivial cycles are errors - loop behavior must be modeled via *fixpoint*, not link layer recursion. But the trivial cycle conceptually matches the behavior of an undefined word, so we'll take advantage.
 
-*Note:* Non-trivial cycles are errors. Loop behavior must be modeled via *Fixpoint*, not at the link layer. It is always possible to inline valid definitions to produce a finite program with the same behavioral semantics. Of course, this expansion might be exponential, so is not performed by default.
+*Note:* Some words are implicitly defined including the four primitives `a b c d`, most number words, and secure hash resources. These should not be represented within the dictionary, or if represented should be equivalent to the implicit definition.
 
-*Note:* Specifying a dictionary is a decent way to document annotations, accelerators, etc.. A runtime might specify multiple accelerated dictionaries for versioning and portability.
+## Secure Hash Resources 
 
-## Secure Hash Data
+Binaries, stowage, and dictionaries will use the same secure hash: 384 bits of [BLAKE2b](https://blake2.net/) encoded as 64 characters in [base64url](https://en.wikipedia.org/wiki/Base64). BLAKE2b is an efficient, high quality hash function. I feel that 64 characters offers a reasonable balance between collision resistance and aesthetics.
 
-Awelon language uses secure hashes for dictionary patches, binary resources, and stowage. Data referenced via secure hash may be held in an implicit global system, separate from any specific dictionary or runtime.
-
-The secure hash of choice is BLAKE2b, 384 bits, encoded as 64 characters of base64url. This is small enough for aesthetic purposes (less than one line of text), large enough to resist collisions, and suitable for use in URLs. BLAKE2b is a very efficient secure hash.
+Secure hash resources are not defined within a dictionary. Instead, they are defined in an implicit global namespace and may be shared among many dictionaries and runtimes. These resources are very easy to cache and distribute through [content delivery networks (CDNs)](https://en.wikipedia.org/wiki/Content_delivery_network). For an untrusted CDN we could compress and encrypt the content, using 128 bits of the secure hash for a lookup key and the rest for AES decryption.
 
 ## Evaluation
 
@@ -336,16 +335,47 @@ Acceleration of process networks would enable distributed evaluation using proce
 
 Acceleration of linear algebra enables us to take greater advantage of low-level parallelism: SSE, GPGPUs, etc.. This could provide an effective basis for real-time graphics, sound, physics simulations, and so on.
 
-
 ## Structural Scoping
+
+Blocks naturally delimit the input scope for a computation. For example, we know that in `[B][[A]foo]`, `foo` can access `[A]` but not `[B]`. And we can trivially leverage this with the bind operation `b`. But Awelon also supports multiple outputs, and so scoping output is a relevant concern. To address this, Awelon introduces *tuple assertions* to annotate output scope:
+
+                                   [](0) == []
+                                [[A]](1) == [[A]]
+                             [[B][A]](2) == [[B][A]]
+                                         ..
+        [[I][H][G][F][E][D][C][B][A]](9) == [[I][H][G][F][E][D][C][B][A]]
+
+Tuple assertions can be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection may be necessary. Similar to arity annotations, tuples larger than `(5)` should be rare in practice.
 
 ## Substructural Scoping
 
-## Runtime Errors
+[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) are useful for modeling finite resources or ensuring that certain functions are used. Awelon can provide lightweight support for substructural types via annotations:
+
+* `(aff)` - mark a value affine, non-copyable (op `c`)
+* `(rel)` - mark a value relevant, non-droppable (op `d`)
+* inherit substructure of bound values (op `b`).
+* `(aff)` and `(rel)` are commutative, idempotent
+
+Primitive operator `a` ignores substructure. It is not too difficult to validate substructural properties dynamically, or to represent them within static types. 
+
+## Data Type Tags
+
+
+
+## Error Annotations
+
+We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy the value like normal. In addition to user-specified errors, a runtime may use error annotations to highlight places where a program gets stuck, for example:
+
+        [A](aff)c   =>  [[A](aff)c](error)i
+        [[A][B][C]](2) => [[A][B][C]](2)(error)
+
+Errors presented in this manner are relatively easy to detect. 
 
 ## Active Debugging
 
 ## Type Safety
 
 ## Editable Views
+
+## Comments
 
