@@ -5,11 +5,26 @@ Awelon is a purely functional language based on concatenative combinators.
 
 ## Why Another Language?
 
-Awelon differs from other languages in its adherence to simplicity and its choice of evaluation model. There are only four simple computational primitives, one data primitive, and a minimal syntax. Evaluation is by local rewriting and preserves human-meaningful symbols and link structure, which is convenient for persistence, distribution, debugging, and hypermedia.
+Awelon differs from other languages in its adherence to simplicity and its choice of evaluation model. There are only four simple computational primitives, one data primitive, and a simple Forth-like syntax. Evaluation is by local rewriting with lazy linking.
 
-Like any pure language, evaluation is separate from effects. Awelon explores a [RESTful application model](ApplicationModel.md) where application state is represented within a codebase, and effects are performed in context of a multi-agent system. Relevant effects patterns include [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern) and a variation on the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) oriented around [work orders](https://en.wikipedia.org/wiki/Work_order). More conventional effects models are possible within orders.
+Like any pure language, Awelon's evaluation is separate from its effects model. Awelon explores a [RESTful application model](ApplicationModel.md) where application state is represented within a codebase, and effects are performed in context of a multi-agent system. Relevant effects patterns include [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern) and a variation on the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) oriented around [work orders](https://en.wikipedia.org/wiki/Work_order). More conventional effects models are possible within orders.
 
-Awelon systems will leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) to model domain-specific syntax, namespaces, and edit sessions. Editable views will likely be provided through web services, but it is feasible to utilize editable views through conventional text editors via [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) adapters. Ultimately, the human interface to Awelon's application models generalizes to an editable view.
+Awelon's simple syntax lowers barriers for software agents, editable views, and program rewriting as a viable evaluation model. Rewrite based evaluation ensures the output of evaluation, at every step, is a program that may be serialized for debugging, distribution, or persistence. Lazy linking preserves human-meaningful words and link structure, allowing both the program and evaluated results to be uniformly viewed and understood. Favoring combinators instead of 
+
+ human meaningful words and link structure to be preserved in evaluation output, which is convenient when interpreting b
+
+ interpretating a result and for treating Awelon programs and values as hypermedia.
+
+[Editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) build upon Awelon's simple structure to support human-computer interactions. This applies to both direct editing of code and applications. A program could be presented as an editable GUI form or a hypermedia object.
+
+Awelon's simplistic syntax is valuable for software agents and for generating rewritten programs as the output of evaluation. Preserving link structure in the output enables
+, which is convenient for persistence, distribution, debugging, and hypermedia
+
+Awelon's simple syntax and structure is convenient for software agents.
+
+Support for software agents
+
+Awelon systems leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) to model domain-specific syntax, namespaces, and edit sessions. Editable views will likely be provided through web services, but it is feasible to utilize editable views through conventional text editors via [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) adapters. Ultimately, the human interface to Awelon's application models generalizes to an editable view.
 
 Awelon's simplicity, purity, and evaluation model each contribute to its utility for the proposed application model. I am not aware of any other language that is similarly appropriate in the same role.
 
@@ -41,7 +56,7 @@ User defined words are represented in a dictionary, described later. Some words 
 
 ## Data
 
-Awelon language optimizes embedded representations for numbers and texts. Numbers leverage predefined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
+Awelon language optimizes embedded representations for numbers and texts. Numbers are simply implicitly defined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
 
         "
          multi-line texts starts with `" LF` (34, 10)
@@ -155,7 +170,7 @@ Annotations help developers control, optimize, and debug computations. Annotatio
 * `(0)..(9)` - tuple assertions for scope control
 * `(aff) (rel)` - support substructural type safety
 * `(:foo) (.foo)` - lightweight type tag and assertions
-* `(nat)` - use accelerated representation for natural number
+* `(nat)` - assert argument should be a natural number
 * `(par)` - request parallel evaluation of computation
 * `(jit)` - compile a function for use in future evaluations
 * `(stow)` - move large values to disk, load on demand
@@ -224,13 +239,13 @@ A runtime might usefully document recognized accelerators, annotations, and othe
 
 *Note:* Non-trivial cycles are errors - loop behavior must be modeled via *fixpoint*, not link layer recursion. But the trivial cycle conceptually matches the behavior of an undefined word, so we'll take advantage.
 
-*Note:* Some words are implicitly defined including the four primitives `a b c d`, most number words, and secure hash resources. These should not be represented within the dictionary, or if represented should be equivalent to the implicit definition.
+*Note:* Some words are implicitly defined. This includes the four primitives `a b c d`, most number words, and secure hash resources. These should not be represented within the dictionary, or if represented should be equivalent to the implicit definition.
 
 ## Secure Hash Resources 
 
 Binaries, stowage, and dictionaries will use the same secure hash: 384 bits of [BLAKE2b](https://blake2.net/) encoded as 64 characters in [base64url](https://en.wikipedia.org/wiki/Base64). BLAKE2b is an efficient, high quality hash function. I feel that 64 characters offers a reasonable balance between collision resistance and aesthetics.
 
-Secure hash resources are not defined within a dictionary. Instead, they are defined in an implicit global namespace and may be shared among many dictionaries and runtimes. These resources are very easy to cache and distribute through [content delivery networks (CDNs)](https://en.wikipedia.org/wiki/Content_delivery_network). For an untrusted CDN we could compress and encrypt the content, using 128 bits of the secure hash for a lookup key and the rest for AES decryption.
+Secure hash resources are generally not defined within the normal dictionary representation. Instead, they are defined in an implicit global space and may be shared among many dictionaries and runtimes. These resources are very easy to cache and distribute through [content delivery networks (CDNs)](https://en.wikipedia.org/wiki/Content_delivery_network). For an untrusted CDN we could compress and encrypt the content, using 128 bits of the secure hash for a lookup key and the rest for AES decryption.
 
 ## Evaluation
 
@@ -251,9 +266,9 @@ Awelon's evaluation strategy is simple:
 * evaluate before copy
 * evaluate final values
 
-This strategy isn't lazy or eager in the conventional sense. Rewriting the outer program first provides opportunity to apply annotations or drop values that won't be part of our outputs. Evaluation before copy guards against introduction of unnecessary rework. Evaluation of final values (blocks) brings us to a normal form that cannot be further evaluated.
+This strategy isn't lazy or eager in the conventional sense. Rewriting the outer program first provides opportunity to apply annotations or drop values that won't be part of our outputs. Evaluation before copy guards against introduction of unnecessary rework. Evaluation of final values (blocks) brings us to a normal form that cannot be further evaluated. 
 
-Annotations can tune the basic strategy a little. In particular, use of `[computation](par)` will begin parallel evaluation of the computation, and might be understood as "will probably need" advice. There are no strictness or laziness annotations, but see *Deferred Computations and Coinductive Data*.
+Annotations don't much affect this evaluation strategy. The exception is `[computation](par)` to advise early, parallel evaluation of a result we'll probably need.
 
 *Aside:* Undefined words do not rewrite further. In practice, evaluation with undefined words is useful for some application patterns, e.g. involving monotonic futures and promises. And also for initial development and debugging.
 
@@ -313,11 +328,13 @@ Awelon's semantics allow for some rewrites that aren't performed by the basic ev
         c d     =>
         c w     =>  c
 
-As we define more words, valid rewrites will cover a broader spectrum. A typical example is `map [G] map => [G] compose map` where `map` applies a function to every value in a collection. And a very useful example would be writing some constructs back to accelerated words. Translating `[#0 S#]` to `#1` would be considered a rewrite optimization, as is recovering the `z` symbol after evaluation of the fixpoint combinator.
+A typical example of rewrite optimizations regards mapping a pure function over values in a list or stream. In this case the principle observation is `[G] map [F] map == [G F] map`, and we might recognize this in a rewrite rule as `map [F] map => [F] compose map` (where `[G] [F] compose == [G F]`).
 
-A runtime is free to support rewrite optimizations insofar as they can be proven valid. Unfortunately, I do not currently have a good way for users to recommend rewrites and demonstrate proofs. But a runtime can at least support rewrite optimizations for accelerated functions.
+Rewrite optimizations can also be utilized for compaction purposes, e.g. translationg `[#0 S#]` to `#1` or recovering the `z` symbol after evaluation of the Z fixpoint combinator. An intriguing possibility is to localize some secure hash resources by rewriting to local dictionary words.
 
-*Aside:* Rewrite optimizations tend to be ad-hoc and fragile, sensitive to staging, best used for small gains or aesthetic benefits. A runtime could support a `[function](opt)` annotation to perform rewrite optimizations and others. 
+A runtime is free to support rewrite optimizations insofar as they are proven valid. Unfortunately, I lack at this time effective means for a normal programmer to propose and prove rewrite optimizations through the dictionary. But we can at least get a useful start by runtime rewriting of known, accelerated functions.
+
+*Aside:* Rewrite optimizations in practice are ad-hoc and fragile. Use of a `[function](rw)` to precisely stage rewrite optimizations can help, but relying upon rewrite optimizations for performance critical code is not highly recommended.
 
 ## Compilation
 
@@ -327,13 +344,15 @@ Compilation of functions, especially those containing loops (fixpoints, folds, e
 
 ## Parallel Evaluation
 
-Local rewriting is naturally parallel. A runtime can leverage this by supporting the `(par)` annotation or by implicitly parallelizing computation of final values. For incremental computing, we might also parallelize propagation of updates through a dictionary.
+Programmers may advise parallel evaluation of a block via `[computation](par)`. Essentially, this tells a runtime that we'll probably need the result of that computation, so go ahead and begin evaluation. We can abort the computation by dropping it.
 
-But to truly maximize parallelism, we'll want to accelerate [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks) and [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra). 
+If parallelism is sufficiently lightweight, a runtime is also free to parallelize the basic evaluation strategy, e.g. partitioning large programs into smaller chunks or parallelizing computation of final values.
 
-Acceleration of process networks would enable distributed evaluation using processes and message queues but still result in a pure, deterministic computation. Intriguingly, we can usefully interact with a process network that is still under evaluation, only waiting when a requested result is still being computed. Variations of process networks can optimize for reactive models.
+However, that form of parallelism has severe limits on expressiveness.
 
-Acceleration of linear algebra enables us to take greater advantage of low-level parallelism: SSE, GPGPUs, etc.. This could provide an effective basis for real-time graphics, sound, physics simulations, and so on.
+For more powerful and scalable parallelism, we'll want to accelerate [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks) to support cloud computing, and [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra) to support SSE/GPGPU computing. Intriguingly, we can usefully update and observe a process network that is still undergoing evaluation without waiting for evaluation to complete.
+
+*Aside:* Copying a parallel value should wait for completion. Dropping a parallel value should abort the computation. But basic linear data plumbing with parallel values is acceptable.
 
 ## Structural Scoping
 
@@ -345,26 +364,27 @@ Blocks naturally delimit the input scope for a computation. For example, we know
                                          ..
         [[I][H][G][F][E][D][C][B][A]](9) == [[I][H][G][F][E][D][C][B][A]]
 
-Tuple assertions can be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection may be necessary. Similar to arity annotations, tuples larger than `(5)` should be rare in practice.
+Tuple assertions can be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection may be necessary, and we'll fail fast if the tuple assertion is bad. Similar to arity annotations, tuples larger than `(5)` should be rare in practice.
+
+In addition to controlling output counts, programmers may wish to fail fast based on declared structure. To support this, Awelon supports a structure annotation `(:T)` and assertion `(.T)` with the following rewrite semantics:
+
+        (:foo) (.foo) ==
+
+In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct it with `i (.foo)`. The symbol `foo` or `T` is left to the programmer, but must match between annotation and assertion. These annotations resist *accidental* access to structured data. As with tuple assertions, we can fail fast dynamically or detect an error statically.
 
 ## Substructural Scoping
 
-[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) are useful for modeling finite resources or ensuring that certain functions are used. Awelon can provide lightweight support for substructural types via annotations:
+[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about whether a value is used, or how many times it is used. This is convenient for modeling finite resources, intermediate states in a protocol, or ensuring certain steps are performed by a client computation. Awelon provides simple annotations for lightweight substructural types:
 
 * `(aff)` - mark a value affine, non-copyable (op `c`)
 * `(rel)` - mark a value relevant, non-droppable (op `d`)
 * inherit substructure of bound values (op `b`).
-* `(aff)` and `(rel)` are commutative, idempotent
 
-Primitive operator `a` ignores substructure. It is not too difficult to validate substructural properties dynamically, or to represent them within static types. 
-
-## Data Type Tags
-
-
+We can eliminate substructural annotations by observing a value with `a`. It is not difficult to track and validate substructural properties dynamically, or to represent them within static types. 
 
 ## Error Annotations
 
-We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy the value like normal. In addition to user-specified errors, a runtime may use error annotations to highlight places where a program gets stuck, for example:
+We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy the value like normal. In addition to user-specified errors, a runtime might use error annotations to highlight places where a program gets stuck, for example:
 
         [A](aff)c   =>  [[A](aff)c](error)i
         [[A][B][C]](2) => [[A][B][C]](2)(error)
@@ -373,7 +393,71 @@ Errors presented in this manner are relatively easy to detect.
 
 ## Active Debugging
 
-## Type Safety
+Active debugging broadly includes techniques to observe an evaluation in progress. Common techniques for active debugging include logging, profiling, breakpoints. To support active debugging, Awelon introduces `(@gate)` annotations. The symbol is user-defined, e.g. it could be `(@foo)` or `(@stderr)`. 
+
+The `(@gate)` annotation is considered 'active' when it has a block to its left: 
+
+        [A](@gate)
+
+The behavior of an active gate is configured at the runtime. Outside of debugging, for example, we'll simply delete the active gates and pass the values. Consider a few debug configurations:
+
+* stall - keep `[A](@gate)` for now
+* trace - copy value to debug log
+* profile - record stats for value
+
+Stalls effectively give us breakpoints by preventing the program upstream of the gate from using the value. Unlike conventional breakpoints, Awelon will continue to evaluate other parts of the program as far as they can go despite the stalls. To avoid rework or significant changes in evaluation order, if evaluation of `P` stalls on a gate, copy operation `[P]c` must stall on `P`. 
+
+Tracing gives us standard 'printf' style debugging. Note that copying the value implicitly requires evaluating it first, but is not subject to normal limitations like `(aff)`. The other copy of the value is passed.
+
+Profiling might tweak `[A]` to record performance metadata (e.g. allocations, rewrites, times, use of memoization or stowage) to named statistics objects, then pass it on. This would allow us to accumulate a lot of useful performance information quickly.
+
+These are just example configurations. In general, gates may have conditional configuration based on observation of the value. Also, a runtime should probably have a reasonable default configuration, such that `(@stderr)` traces to a standard debug log or `(@prof:x)` will profile the arguments under name `x`.
+
+## Program Animation and Time Travel Debugging
+
+Program animation and time-travel debugging is an intriguing possibility with Awelon language made feasible by the intersection of local rewrite semantics and stall gate semantics. Instead of returning to a human programmer when we stall, we can systematically:
+
+* evaluate as far as we can go
+* take a snapshot / checkpoint
+* delete all the active gates 
+* repeat until no active gates
+
+The snapshots then become 'frames' for evaluation. The frames will have predictable structure determined by the use of gates, which is convenient for rendering them in sequence. Conveniently, we can get by with preserving every tenth or hundredth frame (or heuristically, based on empirical compute effort) and deterministically recompute intermediate frames as needed. We can also associate trace logs with recorded frames. Putting recorded frames and trace logs on a timeline with a slider effectively gives us time-travel debugging.
+
+I feel this gives Awelon an excellent debugging experience, much better than most languages.
+
+*Aside:* Deleting all the active gates each frame is a convenient default, but other animation strategies can be useful to focus attention. For example, we could always delete the leftmost active gate, or prioritize deletion of gates by name, to better control the animation.
+
+## Static Typing
+
+Awelon can be evaluated without static typing. But if we can detect some errors early by static analysis, that's a good thing. Further, static types are also useful for verifiable documentation, interactive editing (recommending relevant words based on type context), and performance of JIT compiled code. Strong static types makes a nice default.
+
+We can represent our primitive types as:
+
+        a   : S B (S → S') → S' B
+        b   : S B (E B → E') → S (E → E')
+        c   : S A → S A A
+        d   : S A → S
+        [F] : S → S type(F)
+
+In this case the sequence `S C B A` is shorthand for `(((S * C) * B) * A)` where `*` is a product constructor. This aligns with a program structure `S[C][B][A]`. Effectively, `S` is the rest of our stack when we view the program as operating on a stack-like structure. 
+
+It is easiest in Awelon to detect static type errors in context of annotations like `(3)`, `(nat)`, `(bool)`, `(aff)`, `(.foo)` that allow for fail fast dynamic errors. For example, `(bool)` might effectively assert its argument is a function of type: `∀S,S'. S (S → S') (S → S') → S'`. This provides a basis for unification of `S` and `S'` on the conditional paths.
+
+*Aside:* Support for `(bool)`, `(opt)` and `(sum)` to cover the common conditional types `(1+1)`, `(1+A)`, and `(B+A)` would be pretty useful.
+
+## Dynamic Typing
+
+It is sometimes difficult to compute a strong static type - e.g. for print-formatting or processing of DSLs.
+
+For these cases, we might use `(dyn)` to explicitly document that we probably won't be able to statically typecheck a given function. This will a simple rewrite semantics: `[A](dyn) => [A]`. That is, once we've computed a block, we can presumably provide a static type for that block. Example usage:
+
+        "abcx → ax^2 + bx + c" runPoly =>
+            "abcx → ax^2 + bx + c" compilePoly (dyn) i =>
+            [polynomial behavior](dyn) i =>
+            [polynomial behavior]i
+
+Dynamic typed functions can serve a useful role for macro-like partial evaluation.
 
 ## Editable Views
 
