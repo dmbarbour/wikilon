@@ -208,7 +208,7 @@ Stowage has significant lookup and GC overheads. Values with small representatio
 
 ## Dictionary
 
-An Awelon dictionary doubles as a codebase and a substrate for multi-agent application state. The dictionary representation must support efficient lookup in context of high frequency concurrent updates. I propose a DVCS-inspired patch based representation:
+An Awelon dictionary doubles as a codebase and a substrate for multi-agent application state. The dictionary representation must support efficient lookup in context of high frequency concurrent updates. I propose a DVCS-inspired patch based representation of dictionaries:
 
         secureHashOfPatch1
         secureHashOfPatch2
@@ -218,7 +218,7 @@ An Awelon dictionary doubles as a codebase and a substrate for multi-agent appli
 
 Each patch contains a list of patches to logically include (via secure hash) followed by a list of definitions overriding specific words. A word may be logically deleted by defining a trivial cycle like `@foo foo`. The last definition of a word wins. Whitespace (SP, LF) surrounding each definition is implicitly trimmed. A dictionary is represented by a 'root' patch.
 
-As a dictionary shared with software agents, this is not optimal for humans. The intention is that human programmers should be operating on a dictionary through editable views or edit sessions, browsing the dictionary as hypermedia and bringing relevant definitions into scope as needed.
+As a dictionary shared with software agents, this representation is not optimal for humans. The intention is that human programmers should be operating on a dictionary through editable views or edit sessions, browsing the dictionary as hypermedia, loading relevant definitions into scope as needed. See *Editable Views*, later.
 
 A runtime might usefully document recognized accelerators, annotations, and other features by specifying seed dictionary, or a set of seeds (to account for portability, versioning). 
 
@@ -464,6 +464,6 @@ The arity annotation `(/2)` preserves the comment until it interferes with furth
 
 A valuable feature for editable views is that they're still useful after program rewriting evaluation. Hence, design of editable views will be sensitive to features like accelerators and rewrite optimizations. Use of the arity annotation in comments is an example, ensuring that comments can be part of evaluated output.
 
-Editable views are not limited to plain text, of course. We could leverage color for namespaces, or render a boolean value as a checkbox in a GUI form. But plain text views are quite useful, being accessible to popular text editors via something like [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace).
+Editable views are not limited to plain text, of course. Nor are they limited to singular definitions. We could leverage color for namespaces, or render a boolean value as a checkbox in a GUI form, or zoom into other definitions. But plain text views are quite useful, being accessible to popular text editors via something like [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace).
 
 *Note:* Merely viewing code should not edit or evaluate it. A convenient sanity check for editable views is that a round trip from AO to View and back is an identity function.

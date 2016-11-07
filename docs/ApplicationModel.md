@@ -37,11 +37,11 @@ Futures should be favored over command pattern in cases where their use will not
 
 ## Dictionary Objects
 
-At the AO layer, the only formal meaning of a word is its definition. However, humans and software agents may treat words as having meaning and structure. We may associate `foo` with `foo.doc`, `foo.talk`, `foo.type`, `foo.author`, and so on. This association can be realized in our development environment. For example, tools that would copy, drop, or rename `foo` might include every `foo.field` word by default.
+At the Awelon layer, the only formal meaning of a word is its definition. However, humans and software agents may treat words as having meaning and structure. We may associate `foo` with `foo.doc`, `foo.talk`, `foo.type`, `foo.author`, and so on. This association can be realized in our development environment. For example, tools that would copy, drop, or rename `foo` might include every `foo.field` word by default.
 
 Dictionary objects can always be flat, non-hierarchical, via use of redirects (i.e. instead of `foo.bar.baz` we have `foo.bar → object` and `object.baz`). However, use of hierarchy can be convenient to help control default behavior - e.g. copy would not follow redirects, instead sharing the object referenced.
 
-While AO does not permit cyclic dependencies between definitions, it is trivial to express cyclic relationships at the level of 'dictionary objects'. For example, `foo.author` references `users.dave` and `users.dave.appA` references `foo`. Cyclic relationships can be useful for modeling and navigating hypermedia applications.
+While Awelon does not permit cyclic dependencies between definitions, it is trivial to express cyclic relationships at the level of 'dictionary objects'. For example, `foo.author` references `users.dave` and `users.dave.appA` references `foo`. Cyclic relationships can be useful for modeling and navigating hypermedia applications.
 
 ## Hypermedia Applications
 
@@ -49,9 +49,9 @@ Awelon has a rich link structure, and preserves it during evaluation. Definition
 
 Definitions and dictionary objects, and entire dictionaries can be viewed as hypermedia. With dictionary objects, we get a lot of associative metadata for each word that can be linked together or provide hints for rendering. Thus, we can have cyclic graphs, or render some objects with sound or video. 
 
-Intriguingly, *AO evaluates to AO*, preserving both behavior and a great deal of link structure. Hence, we can view this as *hypermedia evaluates to hypermedia*. We can potentially model texts that evaluate to canvases and tables. We can model canvases and tables that evaluate to text. With active debugging via program animation, we might graphically render intermediate hypermedia views.
+Intriguingly, *Awelon evaluates to Awelon*, preserving both behavior and a great deal of link structure. Hence, we can view this as *hypermedia evaluates to hypermedia*. We can potentially model texts that evaluate to canvases and tables. We can model canvases and tables that evaluate to text. With active debugging via program animation, we might graphically render intermediate hypermedia views.
 
-In context of RESTful applications, treating AO as hypermedia could be useful both for viewing AO code and results, and for updating it. Depending on context, we could model updating forms/data in place or command-pattern updates where each 'command' is represented by a copy of a templated form. Forms could generally be evaluated independent of context, providing a basis lightweight applications and local input validation.
+In context of RESTful applications, treating Awelon as hypermedia could be useful both for viewing Awelon code and results, and for updating it. Depending on context, we could model updating forms/data in place or command-pattern updates where each 'command' is represented by a copy of a templated form. Forms could generally be evaluated independent of context, providing a basis lightweight applications and local input validation.
 
 ## Compositional Views
 
@@ -61,7 +61,7 @@ To fully leverage cache, favor compositional views on persistent objects:
 
         ∃f. ∀x,*,y. view(x * y) = f(view(x),'*',view(y))
 
-That is, the view of a composition is a composition of views. With this, we may explicitly memoize `view(x)` and `view(y)`. Our assumption of persistence (i.e. a lot of structure sharing) means it is unlikely both `x` and `y` have changed, so we can reuse at least part of the cache. In ABC, we would express this memoization as something like `[[X]view]{&memo}`. 
+That is, the view of a composition is a composition of views. With this, we may explicitly memoize `view(x)` and `view(y)`. Our assumption of persistence (i.e. a lot of structure sharing) means it is unlikely both `x` and `y` have changed, so we can reuse at least part of the cache. In ABC, we would express this memoization as something like `[[X]view](memo)`. 
 
 Fortunately, a lot of views and data fit these constraints or at least can be adapted by keeping metadata with the view. Thus, we can support spreadsheet-like propagation even in contexts like time-series data and massive key-value databases.
 
@@ -71,9 +71,9 @@ Fortunately, a lot of views and data fit these constraints or at least can be ad
 
 Publish subscribe is a model for continuous, live programming of real world systems.
 
-Command pattern provides a basis for small updates to large objects. Compositional views provide a basis for efficient ad-hoc subscriptions including large objects. Between these, large AO resources can be observed and updated in real-time by both human and software agents. A human may subscribe to dashboard views and use commands (or direct manipulation) to update policy. An 'internet of things' device might use a command pattern to publish time-series data while subscribing to a schedule of goal states.
+Command pattern provides a basis for small updates to large objects. Compositional views provide a basis for efficient ad-hoc subscriptions including large objects. Between these, large Awelon resources can be observed and updated in real-time by both human and software agents. A human may subscribe to dashboard views and use commands (or direct manipulation) to update policy. An 'internet of things' device might use a command pattern to publish time-series data while subscribing to a schedule of goal states.
 
-The ability to share flexible views of large objects without requiring each endpoint to manage fine-grained update events makes AO a lot more expressive and easier to use than many state-of-the-art publish subscribe systems.
+The ability to share flexible views of large objects without requiring each endpoint to manage fine-grained update events makes Awelon a lot more expressive and easier to use than many state-of-the-art publish subscribe systems.
 
 ## Effectful Orders (Tuple Space variant)
 
@@ -85,21 +85,21 @@ Both human and software agents may participate.
 
 Modeling orders in a codebase or database is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept. The main difference is the proposed method for mutual exclusion: instead of *removing* a tuple, we might stake a 'claim' on an order. Use of claims is more expressive for long-running tasks with publish-subscribe views, scheduling or expiration of claims, and concurrent interactions (interrupts, collaborative claims, etc.). 
 
-Large orders amortize the search, claim, and update overheads over multiple operations. In practice, orders will include lists, conditional decisions, loops. Sophisticated orders might be modeled as a monadic task or a [process networks](KPN_Effects.md). Conveniently, Awelon's rewrite-based evaluation enables arbitrary incomplete tasks to be stored to the codebase, which allows checkpointing, scheduling, or collaborative work with other agents.
+Large orders amortize the search, claim, and update overheads over multiple operations. In practice, orders will include lists, conditional decisions, loops. Sophisticated orders might be modeled as monadic tasks or a [process networks](KPN_Effects.md). Conveniently, Awelon's rewrite-based evaluation enables arbitrary incomplete tasks to be stored to the codebase, which allows checkpointing, scheduling, or collaborative work with other agents.
 
 ## Tables and Databases
 
-Modeling tables or databases within the dictionary is straightforward. For example, a command pattern might represent an append-only log for a table, or collection thereof. The challenge is everything else - indexing, queries and query optimization, incremental computing.
-
-Fortunately, indexes can generally be modeled as compositional views. This allows indexing to be incremental using the same techniques described earlier.
+Modeling tables or databases within the dictionary is straightforward. For example, a command pattern might represent an append-only log for a table, or collection thereof. The challenge is everything else - indexing, queries and query optimization, incremental computing. Fortunately, indexes can generally be modeled as compositional views. This allows indexing to be incremental using the same techniques described earlier.
 
 The main challenge, I suspect, is that we'll frequently update fields that are not relevant for computing a given view, or some fields will update more frequently than others. I imagine this will require careful attention to support fine-grained memoizations, separating columns of the database, arranging for stable intermediate views, etc..
+
+*Aside:* I suspect 'spreadsheets' in Awelon would best be modeled as first-class tables, such that we can usefully summarize them into reports and other structures. In context of a spreadsheet, a 'column' could be original data, or computed using relational algebra and so on.
 
 ## Managed Dictionaries
 
 We may need to perform garbage collection at the dictionary level, eliminating words and collapsing command histories that are no longer relevant. This could be performed by a software agent, e.g. assume three attributes:
 
-* *opaque* - definition's structure is irrelevant and may be rewritten
+* *opaque* - definition structure is irrelevant and may be rewritten
 * *frozen* - behavior of this word should never change in the future
 * *hidden* - assume no external references directly access this word
 
@@ -109,20 +109,18 @@ This would permit a corresponding set of rewrites:
 * *frozen* definitions may be *inlined* into *opaque* clients
 * *hidden* definitions may be *deleted* if they have no clients
 
-Each declaration gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. Compression can be achieved by introducing new hidden, frozen words for common substructures - i.e. dictionary compression.
+Awelon language makes it easy to evaluate definitions and replace them inline.
+
+Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. Compression can be achieved by introducing new hidden, frozen words for common substructures - i.e. dictionary compression. 
+
+These attributes could be managed within the dictionary itself, e.g. by defining appropriate fields or some reflective mechanism. 
 
 ### Dictionary Based Communications
 
-Dictionaries are a flexible and efficient representation for message-passing.
+Awelon dictionaries offer an interesting foundation for communication due to the secure hash resources and implicit dictionary compression. 
 
-A dictionary naturally represents a collection of named dictionary objects. So we'll want two components for our message: the dictionary, and a word naming the message object. The dictionary will be represented as an AO patch. The bulk of the message - standard vocabulary, recommended [views](EditingAO.md), default fields, and so on - would be indicated via secure hash in the AO patch header. In practice, the word would frequently name a templated message object in the secure hash dictionary, or even a standard *view* on another object that translates between how we input data and how it is viewed.
-
-This is flexible both because our messages can contain behavioral information, procedurally generated data, translations and views, etc.. and efficient because of structure sharing with the secure hash reused between messages and potential for provider-independent content distribution networks.
-
-Conveniently, a document is essentially a message that we maintain over time. And many applications can be understood as documents that interact with humans and external software systems (via command pattern, work orders, publish subscribe, etc..)
+A message becomes a (root word, dictionary) pair. The root word allows implicit reference to dictionary object fields for hypermedia and documentation purposes. The dictionary is likely a patch deriving from more common dictionaries via secure hash. By reusing secure hashes, we can efficiently cache the vocabulary across many messages. By developing a suitable vocabulary, each message can effectively be templated and highly compressed.
 
 ## Multi-Dictionary Applications
 
-AO does not support foreign functions, not even linking between AO dictionaries. Interaction with external AO resources must be modeled effectfully, via work orders or publish subscribe, just like interaction with any other external resource. At most, we have an advantage of simple translations and REST-layer compatibility. 
-
-*Aside:* I have many times considered support for linking dictionaries with `{%word@dict}`. Unfortunately, this entangles code with an implicit environment of named dictionaries, has awkward security semantics, and does not generalize nicely in context of application views, hypermedia, updates. In retrospect, I believe handling connectivity as an effect (via the multi-agent layer) will prove a wiser option.
+Awelon does not support foreign functions, not even for linking between dictionaries. Interaction with external resources must be modeled effectfully, for example via work orders or publish subscribe. There is no special exception for dictionaries. However, sharing between dictionaries will likely benefit from simplified translations.
