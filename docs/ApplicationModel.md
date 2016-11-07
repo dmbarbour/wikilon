@@ -1,7 +1,7 @@
 
 # Application Model for Awelon Project
 
-Awelon project will focus on RESTful applications, with the primary resources being [Awelon Object](AboutAO.md) dictionaries and objects modeled within them. Applications are modeled in terms of creating, reading, updating, and deleting definitions of words. Effects are carried out by a multi-agent system. Real-time behavior can be supported via publish-subscribe patterns. 
+Awelon project will focus on RESTful applications, with the primary resources being [Awelon](AwelonLang.md) dictionaries and objects modeled within them. Applications are modeled in terms of creating, reading, updating, and deleting definitions of words. Effects are carried out by a multi-agent system. Real-time behavior can be supported via publish-subscribe patterns. 
 
 This document will discuss useful patterns for modeling applications.
 
@@ -47,9 +47,9 @@ While AO does not permit cyclic dependencies between definitions, it is trivial 
 
 Awelon has a rich link structure, and preserves it during evaluation. Definitions reference each other, and dictionary objects 
 
-Definitions and dictionary objects, and entire dictionaries can be viewed as hypermedia. With dictionary objects, we get a lot of associative metadata for each word that can be linked together or provide hints for rendering. Thus, we can have cyclic graphs, or render some objects with sound or video. Potential presentation of AO as hypermedia is discussed under [editing AO](EditingAO.md). 
+Definitions and dictionary objects, and entire dictionaries can be viewed as hypermedia. With dictionary objects, we get a lot of associative metadata for each word that can be linked together or provide hints for rendering. Thus, we can have cyclic graphs, or render some objects with sound or video. 
 
-Intriguingly, *AO evaluates to AO*, preserving both behavior and a great deal of link structure. Hence, we can view this as *hypermedia evaluates to hypermedia*. We can potentially model texts that evaluate to canvases and tables. We can model canvases and tables that evaluate to text. With *program animation* (described in [About ABC](AboutABC.md)), we might graphically render intermediate hypermedia views.
+Intriguingly, *AO evaluates to AO*, preserving both behavior and a great deal of link structure. Hence, we can view this as *hypermedia evaluates to hypermedia*. We can potentially model texts that evaluate to canvases and tables. We can model canvases and tables that evaluate to text. With active debugging via program animation, we might graphically render intermediate hypermedia views.
 
 In context of RESTful applications, treating AO as hypermedia could be useful both for viewing AO code and results, and for updating it. Depending on context, we could model updating forms/data in place or command-pattern updates where each 'command' is represented by a copy of a templated form. Forms could generally be evaluated independent of context, providing a basis lightweight applications and local input validation.
 
@@ -91,14 +91,9 @@ Large orders amortize the search, claim, and update overheads over multiple oper
 
 Modeling tables or databases within the dictionary is straightforward. For example, a command pattern might represent an append-only log for a table, or collection thereof. The challenge is everything else - indexing, queries and query optimization, incremental computing.
 
-Fortunately, indexes can frequently be modeled as compositional views. This allows indexing to be incremental using the same techniques described earlier, and the storage overhead isn't necessarily too bad.
+Fortunately, indexes can generally be modeled as compositional views. This allows indexing to be incremental using the same techniques described earlier.
 
-
-
-
-Modeling databases within a dictionary requires maintaining tables or collections (perhaps via the command pattern) then querying and composing these data resources into views. The main challenge isn't the representation of data (a simple append-only log of records will do) but rather features like indexing, query optimization, and incremental computing. 
-
-Indexes will need to be compositional views, such that indices themselves may be incrementally updated. Column-structured databases would likely be preferable, such that we can efficiently eliminate updates to irrelevant columns.
+The main challenge, I suspect, is that we'll frequently update fields that are not relevant for computing a given view, or some fields will update more frequently than others. I imagine this will require careful attention to support fine-grained memoizations, separating columns of the database, arranging for stable intermediate views, etc..
 
 ## Managed Dictionaries
 

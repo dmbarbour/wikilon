@@ -7,28 +7,13 @@ Awelon is a purely functional language based on concatenative combinators.
 
 Awelon differs from other languages in its adherence to simplicity and its choice of evaluation model. There are only four simple computational primitives, one data primitive, and a simple Forth-like syntax. Evaluation is by local rewriting with lazy linking.
 
+Awelon's simple syntax lowers barriers for program rewriting as an evaluation model, editable views for HCI, and collaboration with software agents. Program rewriting ensures the evaluation is a program that may be serialized for debugging, distribution, or persistence. Lazy linking preserves human-meaningful words and link structure, ensuring results to be viewed the same as source. And software agents support the application layer effects.
+
 Like any pure language, Awelon's evaluation is separate from its effects model. Awelon explores a [RESTful application model](ApplicationModel.md) where application state is represented within a codebase, and effects are performed in context of a multi-agent system. Relevant effects patterns include [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern) and a variation on the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) oriented around [work orders](https://en.wikipedia.org/wiki/Work_order). More conventional effects models are possible within orders.
 
-Awelon's simple syntax lowers barriers for software agents, editable views, and program rewriting as a viable evaluation model. Rewrite based evaluation ensures the output of evaluation, at every step, is a program that may be serialized for debugging, distribution, or persistence. Lazy linking preserves human-meaningful words and link structure, allowing both the program and evaluated results to be uniformly viewed and understood. Favoring combinators instead of 
+Intriguingly, [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) can feasibly present Awelon programs or codebases as [hypermedia](https://en.wikipedia.org/wiki/Hypermedia) objects. GUI forms with live coding properties. Words within a act as hypermedia links. Some relationships may be implicit in word structure (as between `foo`, `foo.doc`, and `foo.author`) to support more flexible hypermedia than is implied by direct word dependencies.
 
- human meaningful words and link structure to be preserved in evaluation output, which is convenient when interpreting b
-
- interpretating a result and for treating Awelon programs and values as hypermedia.
-
-[Editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) build upon Awelon's simple structure to support human-computer interactions. This applies to both direct editing of code and applications. A program could be presented as an editable GUI form or a hypermedia object.
-
-Awelon's simplistic syntax is valuable for software agents and for generating rewritten programs as the output of evaluation. Preserving link structure in the output enables
-, which is convenient for persistence, distribution, debugging, and hypermedia
-
-Awelon's simple syntax and structure is convenient for software agents.
-
-Support for software agents
-
-Awelon systems leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) to model domain-specific syntax, namespaces, and edit sessions. Editable views will likely be provided through web services, but it is feasible to utilize editable views through conventional text editors via [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) adapters. Ultimately, the human interface to Awelon's application models generalizes to an editable view.
-
-Awelon's simplicity, purity, and evaluation model each contribute to its utility for the proposed application model. I am not aware of any other language that is similarly appropriate in the same role.
-
-*Note:* Unlike minimalist 'esoteric' languages, Awelon takes performance seriously. A runtime will recognize and accelerate a set of common functions, effectively extending the set of primitives for purpose of performance. Acceleration of linear algebra could support GPGPU computing, and acceleration of Kahn process networks could support efficient distributed computing. JIT computation is quite feasible and can leverage accelerators. Incremental computing is important for the application model.
+Awelon's simplicity, purity, and evaluation model each contribute greatly to its utility for the envisioned application model. I have not encountered another language that fits as nicely.
 
 ## Primitives
 
@@ -50,7 +35,7 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 ## Words
 
-Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `@[]<>(){},;|&=\"`, SP, C0, and DEL. Developers are encouraged to further favor words that will not escapes in external contexts such as URLs, natural language, or editable views. There is no hard restriction on word sizes, but words should be kept reasonably short.
+Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{},;|&=\"`, SP, C0, and DEL. Developers are encouraged to further favor words that will not escapes in external contexts such as URLs, natural language, or editable views. There is no hard restriction on word sizes, but words should be kept reasonably short.
 
 User defined words are represented in a dictionary, described later. Some words are automatically defined, including the four primitives `a`, `b`, `c`, `d` and number words such as `42`. 
 
@@ -133,7 +118,7 @@ This is achieved by allowing developers to partially define the encoding. For na
 
 At the moment, only natural numbers are supported. 
 
-Long term, Awelon will likely support signed integers, rationals, decimal numbers. The normal Church encoding for signed numbers is a pair of natural numbers where one of the pair is zero. We might similarly support rationals (a numerator and denominator pair) or decimal numbers (a significand and exponent pair). Awelon language conservatively reserves words with prefix `[+-~.#]?[0-9]` for purpose of representing and efficiently recognizing numbers.
+Long term, Awelon will likely support signed integers, rationals, decimal numbers. The normal Church encoding for signed numbers is a pair of natural numbers representing `X - Y` where at least one of the pair is zero. We might similarly support rational (a numerator and denominator pair) and decimal numbers (a significand and exponent pair). I haven't hammered out the details of exactly what I want. In the short term we can experiment with models via editable views. So for now, Awelon language simply reserves number-like words (prefix `[+-~.#]?[0-9]`) for purpose of representing numbers.
 
 *Aside:* Beyond numbers and texts, users might be interested in more structured data with human-meaningful symbolic labels. Awelon language does not optimize for those cases, but support for *Editable Views* may present structured data to humans.
 
@@ -149,18 +134,18 @@ A runtime will have implicit access to resources named by secure hash, perhaps t
 
 ## Acceleration
 
-Acceleration is a performance assumption for Awelon language. A runtime should recognize and accelerate common functions. The accelerated function may use a hand-optimized or built-in implementation to achieve performance similar to a primitive. For example, most runtimes will accelerate the following functions:
+Acceleration is a performance assumption for Awelon. 
+
+A runtime will recognize and accelerate common functions. The accelerated function may use a hand-optimized or built-in implementations to achieve performance similar to a primitive. For example, most runtimes will accelerate the following functions:
 
            [A]i == A            (inline)         i = [] w a d
         [B][A]w == [A][B]       (swap)           w = [] b a
 
-Accelerated functions serve a role similar to 'built in' functions in other languages. However, accelerated functions *must* be given an explicit definition in the Awelon language as part of the user's dictionary. Users should be able to review and interact with this definition like any other. However, modifying or renaming an accelerated function may generally have a severe and negative impact on performance.
+By accelerating these, we can avoid the intermediate introduction and destruction of `[]`. And we can conveniently treat `i` and `w` as primitive combinators. 
 
-Critically, acceleration of functions extends to *data*, and compact representation thereof. Natural numbers, for example, might be represented during computation by normal machine words. Accelerated functions may be optimized for operation directly on compact representations. Hence, if we accelerate both natural numbers and *arithmetic* upon them, we can effectively treat natural numbers as language primitives for performance.
+Critically, acceleration of functions extends to *data*, and compact representation thereof. Natural numbers, for example, may be represented during computation by simple machine words. And accelerated arithmetic functions could then operate directly on the compact natural number representation.
 
-The long term intention is for Awelon language to accelerate not just arithmetic, but also binary and collections processing, conversion of texts to binary and vice versa, linear algebra, and parallel [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks). Acceleration of linear algebra, for example, could permit semi-transparent GPGPU parallelism. And acceleration of process networks could enable Awelon computations to semi-transparently leverage cloud computing. 
-
-A few carefully targeted accelerators can achieve excellent performance in a broad array of problem domains.
+Long term, Awelon runtimes should accelerate not just arithmetic, linear algebra, logical data conversions, but also binary and collections processing, and parallel [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks). Acceleration of linear algebra could support permit semi-transparent GPGPU parallelism. Acceleration of process networks could enable Awelon computations to leverage cloud computing.
 
 ## Annotations
 
@@ -289,7 +274,7 @@ Fixpoint is notoriously difficult for humans to grok and sometimes awkward to us
 
 ## Memoization
 
-The primary basis for incremental computing in Awelon is [memoization](https://en.wikipedia.org/wiki/Memoization). Evaluation of word definitions will tend to be implicitly memoized. But programmers may also request memoized evaluation explicitly:
+The primary basis for incremental computing in Awelon is [memoization](https://en.wikipedia.org/wiki/Memoization). Evaluation of dictionary definitions will tend to be implicitly memoized. But programmers may also request memoized evaluation explicitly:
 
         [computation](memo)
 
@@ -297,7 +282,7 @@ Memoization is conceptually performed by by seeking the computation in a runtime
 
 Naive use of a lookup table can work, but is not the most optimal approach to memoization. For example, ideally we want to control recomputing if there is a change to a word we do not link. To address this memoization would require instrumented evaluation that tracks linking, and only checks the relevant subset of dependencies. One might look into research on adaptive memorization, trace reuse, etc..
 
-*Note:* To effectively support incremental computing, memoization must be used in context of cache-friendly application patterns such as command pattern, and compositional views on persistent data structures.
+*Note:* To effectively support incremental computing, memoization must be used in context of cache-friendly application patterns such as command pattern and compositional views on persistent data structures.
 
 ## Static Linking
 
@@ -386,10 +371,12 @@ We can eliminate substructural annotations by observing a value with `a`. It is 
 
 We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy the value like normal. In addition to user-specified errors, a runtime might use error annotations to highlight places where a program gets stuck, for example:
 
-        [A](aff)c   =>  [[A](aff)c](error)i
-        [[A][B][C]](2) => [[A][B][C]](2)(error)
+        [A](aff)c       => [[A](aff)c](error)i
+        [[A][B][C]](2)  => [[A][B][C]](2)(error)
 
 Errors presented in this manner are relatively easy to detect. 
+
+In context of substructural scoping, we might also want a `(trash)` annotation that replaces a possibly large value with a small error value but preserves substructural attributes. Thus, we can free memory without dropping or stowing data, it just results in an error if we later attempt to observe the trashed data.
 
 ## Active Debugging
 
@@ -401,9 +388,9 @@ The `(@gate)` annotation is considered 'active' when it has a block to its left:
 
 The behavior of an active gate is configured at the runtime. Outside of debugging, for example, we'll simply delete the active gates and pass the values. Consider a few debug configurations:
 
-* stall - keep `[A](@gate)` for now
-* trace - copy value to debug log
-* profile - record stats for value
+* stall - hold `[A](@gate)` for now
+* trace - copy value into debug log
+* profile - record evaluation of `[A]`
 
 Stalls effectively give us breakpoints by preventing the program upstream of the gate from using the value. Unlike conventional breakpoints, Awelon will continue to evaluate other parts of the program as far as they can go despite the stalls. To avoid rework or significant changes in evaluation order, if evaluation of `P` stalls on a gate, copy operation `[P]c` must stall on `P`. 
 
@@ -411,7 +398,7 @@ Tracing gives us standard 'printf' style debugging. Note that copying the value 
 
 Profiling might tweak `[A]` to record performance metadata (e.g. allocations, rewrites, times, use of memoization or stowage) to named statistics objects, then pass it on. This would allow us to accumulate a lot of useful performance information quickly.
 
-These are just example configurations. In general, gates may have conditional configuration based on observation of the value. Also, a runtime should probably have a reasonable default configuration, such that `(@stderr)` traces to a standard debug log or `(@prof:x)` will profile the arguments under name `x`.
+In general, gates may have conditional configuration based on observation of the value. Also, a runtime may provide default configurations with naming conventions like `(@stderr)` defaulting to a trace.
 
 ## Program Animation and Time Travel Debugging
 
@@ -430,7 +417,7 @@ I feel this gives Awelon an excellent debugging experience, much better than mos
 
 ## Static Typing
 
-Awelon can be evaluated without static typing. But if we can detect some errors early by static analysis, that's a good thing. Further, static types are also useful for verifiable documentation, interactive editing (recommending relevant words based on type context), and performance of JIT compiled code. Strong static types makes a nice default.
+Awelon can be evaluated without static typing. There is no type driven dispatch or overloading. But if we can detect errors early by static analysis, that is a good thing. Further, static types are also useful for verifiable documentation, interactive editing (recommending relevant words based on type context), and performance of JIT compiled code. Strong static type analysis makes a nice default.
 
 We can represent our primitive types as:
 
@@ -440,26 +427,43 @@ We can represent our primitive types as:
         d   : S A → S
         [F] : S → S type(F)
 
-In this case the sequence `S C B A` is shorthand for `(((S * C) * B) * A)` where `*` is a product constructor. This aligns with a program structure `S[C][B][A]`. Effectively, `S` is the rest of our stack when we view the program as operating on a stack-like structure. 
+The type sequence `S C B A` aligns with a program structure `S[C][B][A]`. Effectively, `S` is the remainder of our program 'stack' when we view the program as rewriting a stack-like structure. In a more conventional language, this might correspond to a product type `(((S * C) * B) * A)`.
 
-It is easiest in Awelon to detect static type errors in context of annotations like `(3)`, `(nat)`, `(bool)`, `(aff)`, `(.foo)` that allow for fail fast dynamic errors. For example, `(bool)` might effectively assert its argument is a function of type: `∀S,S'. S (S → S') (S → S') → S'`. This provides a basis for unification of `S` and `S'` on the conditional paths.
+Use of annotations can augment static type analysis by providing a validation. Structural and substructural assertions mentioned above can be validated statically. A remaining concern is typing of conditional behavior. As described under *Data* earlier, we can represent conditional data types:
 
-*Aside:* Support for `(bool)`, `(opt)` and `(sum)` to cover the common conditional types `(1+1)`, `(1+A)`, and `(B+A)` would be pretty useful.
+        sum     S (S B → S') (S A → S') → S'
+        opt     S (S   → S') (S A → S') → S'
+        bool    S (S   → S') (S   → S') → S'
 
-## Dynamic Typing
+A runtime could support type assertions `(sum)`, `(opt)`, and `(bool)` to support static type analysis and detection of errors. If necessary, these assertions could be weakly verified dynamically. But with static verification, we can unify the `S` and `S'` types and hence detect inconsistencies between the left vs. right paths. A system may further support annotations for accelerated representations like `(nat)` and `(text)` and `(bin)` and other common data types.
 
-It is sometimes difficult to compute a strong static type - e.g. for print-formatting or processing of DSLs.
+However, annotations are unsuitable for more sophisticated type declarations. There are cases where we would need [dependent types](https://en.wikipedia.org/wiki/Dependent_type) or other sophisticated type analysis and perhaps auxiliary proofs. We might need to assert equivalence of functions, that one function 'implements' another.
 
-For these cases, we might use `(dyn)` to explicitly document that we probably won't be able to statically typecheck a given function. This will a simple rewrite semantics: `[A](dyn) => [A]`. That is, once we've computed a block, we can presumably provide a static type for that block. Example usage:
-
-        "abcx → ax^2 + bx + c" runPoly =>
-            "abcx → ax^2 + bx + c" compilePoly (dyn) i =>
-            [polynomial behavior](dyn) i =>
-            [polynomial behavior]i
-
-Dynamic typed functions can serve a useful role for macro-like partial evaluation.
+Type declarations for functions are feasible at the application layer. For example, we might define `foo.type` as a declaration of type for `foo`. Defining type declarations as words ensures they're subject to abstraction, composition, refactoring, rendering, etc.. like everything else. Further, type analysis may be highly flexible, even reflective with our type checker itself defined within the dictionary.
 
 ## Editable Views
 
-## Comments
+Awelon language has an acceptably aesthetic plain text form.
 
+However, like Forth, Awelon does not scale nicely beyond about ten tokens per definition, and is awkward for some problem domains like expression of algebraic formula. Further, Awelon lacks *namespaces*, which results in redundant expression of context in words such as repeating a `trie:` prefix for `trie:insert` and `trie:fold`.
+
+To ameliorate these weaknesses, Awelon is expected to leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). As an example of editable views, we could support command lists:
+
+        Editable View        Awelon Source Code
+        {foo, bar, baz}  <=> [[foo] [[bar] [[baz] ~ :] :] :]
+
+This might simplify expression of coroutines or continuation passing style. We might also use editable views as an initial basis for integers, rationals, decimal numbers, etc.. until Awelon language settles those things. For example, we might use `3.141 <=> [3141 #3 decimal]`. 
+
+Awelon doesn't have a comments syntax feature, but editable views may:
+
+        /* comment */  <=>  "
+                              comment 
+                            ~ (/2) (@rem) d 
+
+The arity annotation `(/2)` preserves the comment until it interferes with further evaluations. The `(@rem)` gate annotation allows conditional breakpoints or tracing of comments. And the `d` drops the comment, preventing it from having a semantic impact. Variations on comments - perhaps using `(@lang)` or `(@ns)` - might provide rendering hints, specifying use of a namespace or DSL for a given subprogram.
+
+A valuable feature for editable views is that they're still useful after program rewriting evaluation. Hence, design of editable views will be sensitive to features like accelerators and rewrite optimizations. Use of the arity annotation in comments is an example, ensuring that comments can be part of evaluated output.
+
+Editable views are not limited to plain text, of course. We could leverage color for namespaces, or render a boolean value as a checkbox in a GUI form. But plain text views are quite useful, being accessible to popular text editors via something like [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace).
+
+*Note:* Merely viewing code should not edit or evaluate it. A convenient sanity check for editable views is that a round trip from AO to View and back is an identity function.
