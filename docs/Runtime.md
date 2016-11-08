@@ -1,58 +1,41 @@
 
-# ABC Runtime Design
+# Awelon Runtime Design
 
-A goal is high performance [applications](ApplicationModel.md). 
+In context of Awelon [applications](ApplicationModel.md), evaluation occurs is part of high frequency transactions on a dictionary in a multi-agent system. The goal for Awelon runtime is high performance applications, so that must include both evaluation and transactional update, and must support incremental computing.
 
-Awelon's application model shifts the burden of *state* to the AO dictionary, using the command pattern for eventful updates. Further, the burden of *effects* is shifted to human and software agents. Ultimately, the application model depends heavily on caching, incremental computing, and discovery of available work. A runtime must simultaneously support efficient search, update, and evaluation.
+## General Performance Notes
 
-I assume operations will be performed via a central service (likely a web service, possibly with a FUSE adapter). A runtime should have exclusive control over its data directories. I might develop command line utilities, but those might also operate through TCP.
+I will implement Awelon runtime in low level code with simple representations. The motivation is both for performance of simple interpretation and potential integration of JIT. I can implement many accelerators in the low-level language. 
 
-## Fast Evaluation
+Acceleration of definitions will be prominent in the design. The Z fixpoint combinator will certainly be accelerated to optimize loops. Common data plumbing operations will be accelerated. Arithmetic will be accelerated. Hopefully I'll reach a point where linear algebra is GPGPU accelerated and KPNs are cloud accelerated, because I believe that much would place Awelon near state of the art for performance. 
 
-Strategies to support performance:
+To avoid unnecessary copies during evaluation, I'll try to assume linear structures with ownership. However, I'll explicitly support some shared structure in contexts like accelerated fixpoints or shared references to words.
 
-1. Incremental index models for fast linking and updates
-1. Memoize computation on words and by explicit `{&memo}`
-1. Large value stowage layer for larger than memory data
-1. Leverage accelerated AO dictionary for common ops 
-1. JIT compilation for ABC code for faster evaluation
-1. In-place update for uniquely owned data structures
-1. In-place structure traversals (e.g. Morris algorithm)
-1. Shared structures for ABC binaries, stowage, and JIT
-1. Extensive use of caching, explicit and word level
-1. Simple par/seq parallelism independent computations
-1. KPN accelerators for large-scale concurrent parallelism
-1. Linear algebra accelerators for small-scale parallelism
+Evaluation will have quotas for both space and effort. If evaluation aborts on quota, it will halt in a valid intermediate state that may be continued later. I'll achieve this by limiting updates memory updates to prevent any invalid intermediate states and using a long jump or exception to escape upon quota failure. I'll design memory structures to support constant space traversals (e.g. via the Morris algorithm), such GC and extraction of large data structures are not failure points, and copy requires only as much extra memory as necessary for the object to be copied.
 
-The redesign of AO will make some performance goals simpler. The preservation of link structure and decentralization of accelerated dictionary design allows me to experiment easily with hand-optimized representations and functions. Structure sharing is simplified with the AO patch model.
+Other than quota failures, evaluation will not halt on error. Instead, errors are represented within a partially evaluated program. We can continue evaluation as far as it can go despite some errors. Breakpoints operate similarly, resulting in a checkpointable computation that is 'stalled' on one or more active gates.
 
-Support for large binary data remains a potential weakness of ABC, even allowing for acceleration of base16 or base64 text. This weakness might later be mitigated as part of JIT compilation or similar techniques.
+Parallelism will get attention early. Worker threads can support background evaluations, and we might tune evaluation strategies to prioritize observation of a few partial outputs. Evaluation strategy may be tunable to support background parallel evaluation even while we work with partially computed results. For example, optimally it should be feasible to leverage background KPN evaluations while we leverage [KPN to express effects](KPN_Effects.md).
 
-## Persistent Storage Model
+Concurrency must also receive attention. Multiple human and software agents need multiple transactions on a dictionary resource. In practice, most transactions should be mergeable, especially if we track dependencies precisely.
 
-The basic option is to use the filesystem directly for storage, e.g. with AO patch files named by secure hash. This would have many advantages, such as allowing external review and processing. I foresee many difficulties with this route: kernel limitations on open or memory-mapped files, and maintenance of indices and cache. I would prefer to limit use of the filesystem to import/export tasks. 
+Integration of secure hash resources may need special attention. We should be able to efficiently determine which secure hash resources we need, or provide those we know on request by name. GC for secure hash resources should probably leverage lazy reference counting, which is effective in a context where resources tend to survive multiple collections and reference count updates are expensive. To help accommodate GC, inputting secure hash resources might be part of a first-class transaction.
 
-Leveraging archive files might mitigate open file limitations. But incremental indices with structure sharing may prove relatively fine grained. I would need many such files, which themselves would need to be indexed. 
+## Persistent Storage
 
-Alternatives include: use an embedded key-value database to avoid filesystem limits, or to essentially model a persistent heap - a large, memory-mapped file with a few roots. Between these, I favor the key-value database because it would help solve various data consistency challenges. 
+I'm leaning towards use of LMDB as the primary storage system, instead of using a filesystem directly. LMDB gives transactions and avoids the problem of managing open file handles. LMDB is primarily read optimized, but can efficiently support batch writes. Holding a read transaction can support zero-copy access to a resource. 
 
-### Storage GC
+We might export patch files and similar when exporting a dictionary. But dealing with the filesystem handles, representing transactional update in the filesystem, and so on seems a hassle I'd prefer to avoid.
 
-Regardless of storage layer, I need storage-level GC. I assumption most persistent objects will survive GC, and I *do not* want to deep-scan persistent data, so reference-counted GC seems appropriate in context. Further, I might favor latent reference counting (i.e. tracking 'new' objects since last GC). And I might not RC the roots, instead scanning roots then using a bloom filter to guard against GC of some zero-refct objects.
-
-### Stowage Refs
-
-I have two realistic options for stowage refs. One, I can use large references based on secure hashes, pretend name conflicts are impossible, and get structure sharing by default. Two, I can allocate small references, use a lookup table for structure sharing, and resolve name conflicts by ad-hoc means. 
-
-Small references offer some benefits for storage and lookup overheads, but the reduced complexity of secure hashes may offer the better option overall. I do favor the deterministic naming via secure hashes, ensuring remote evaluation is reproducible. 
+A consequence of controlling storage via LMDB is that we might need a FUSE adapter to effectively leverage conventional text editors. But that was going to happen regardless.
 
 ## Consistency Model
 
 With multiple agents viewing and updating the dictionary, and performing external effects, I need a consistency model to guard against conflicting updates. It should be possible for our agents to update multiple definitions, and perhaps also assert that certain dependencies are not modified or remain constant during updates.
 
-Minimally, AO-layer patches can be merged in a DVCS style. That would give me atomic updates without isolation. However, I might also wish to detect read-write conflicts, application-layer command pattern updates, renaming of dictionary objects. It is feasible to recognize command pattern and rename at the level of AO patches, but it is simpler and more extensible to model transactions as a log of higher level actions.
+Minimally, dictionary patches can be merged in a DVCS style. That would give me atomic updates without isolation. However, I might also wish to detect read-write conflicts, application-layer command pattern updates, renaming of dictionary objects. It is feasible to recognize command pattern and rename at the level of patches, but it is simpler and more extensible to model transactions as a log of higher level actions.
 
-To preserve the RESTful nature of dictionary applications, transactions should be RESTful resources in their own right - nameable, serializable. With that in mind, I need a representation for transactions. I might derive representation of transactions from AO patches by adding `@@COMMAND` actions, which simplify conflict detection then rewrite into a (potentially empty) sequence of updates.
+To preserve the RESTful nature of dictionary applications, transactions should be RESTful resources in their own right - nameable, serializable. With that in mind, I need a representation for transactions. I might derive representation of transactions from patches by adding `@@COMMAND` actions, which simplify conflict detection then rewrite into a (potentially empty) sequence of updates.
 
 
 
@@ -66,7 +49,7 @@ Performance in context of multi-agent updates and observations is the primary go
 * easy to parallelize computation and external effects
 * no callbacks, no external dependencies for evaluation
 
-For active debugging, I will support `{@gate}` tokens, which may be configured for logging, breakpoints, etc.. For parallel computations and effects, I'd like to focus on [KPN-based effects](KPN_Effects.md) models and some form of background computation. I will need an API that enables ongoing evaluations with observations.
+For active debugging, I will support `(@gate)` annotations, which may be configured for logging, breakpoints, etc.. For parallel computations and effects, I'd like to focus on [KPN-based effects](KPN_Effects.md) models and some form of background computation. I will need an API that enables ongoing evaluations with observations.
 
 ## API Concepts
 
@@ -149,8 +132,7 @@ This is the primary candidate at this time:
         Action Type:    (6 == (6 & x))
         Tagged Item:    (4 == (5 & x))
 
-For minimalist ABC, small constants would frequently be singleton blocks, but small texts or binaries might also be viable. 
-
+Small constants would frequently be singleton blocks, but small texts or binaries might also be viable. 
 
 ## Representations
 
@@ -196,7 +178,7 @@ To support lazy computation of substructural attributes, a flag is used for quot
 
 #### Performance for Tight Loops
 
-Loops in ABC are performed by a fixpoint operation, which repeatedly:
+Loops are performed by a fixpoint operation, which repeatedly:
 
 * copies a block
 * fixpoints one copy
@@ -216,7 +198,9 @@ For now, I'm using text as an intermediate structure for parsing blocks. It migh
 
 ### Value Sealers
 
-ABC's discretionary value sealers. I'll optimize for short discretionary sealers like `{:map}` or `{:foo}`, which may be encoded within tag bits of a single cell. At the moment, this means up to six or seven bytes, which covers many sealers. I'm not going to 'intern' token strings, mostly to avoid synchronization overheads and to discourage use of large seals.
+        (:foo) (.foo)
+
+Awelon's discretionary value sealers. I can probably optimize for short, discretionary sealers, compacting them into a single 64-bit word. But it might not be necessary, depending on how objects are shared or interned normally.
 
 ### Value Stowage
 
@@ -300,15 +284,6 @@ A non-copying representation for binaries would need to have something like:
 
 The `head` would need to include information to prevent GC. And the `buffer` would be for fast access, it might be recomputed from the `head` and `offset` after copying. A `size` would potentially allow an underlying shared binary to be divided into multiple chunks, i.e. a binary of 10kB could be divided into 10 1kB chunks. 
 
-#### Texts - Wrap a Binary
-
-Originally I modeled texts as a *specialization* on binaries. With hindsight, it might be better to treat texts as a simple wrapper for a shared binary, e.g. `(text, binary)`, requiring termination with a normal list finisher.
-
-* reuse alternative binary data representations - shared binaries, too
-* texts strictly valid for embedding in ABC, simplifies conversion code
-* leave structuring large texts to client code (e.g. finger tree ropes)
-
-Accelerators on texts are limited without an index, requiring a linear scan of the binary. However, this could be mitigated by encouraging programmers to model large texts using a finger-tree or other rope model.
 
 ### Trashed Data and Memory Recycling
 
@@ -334,37 +309,4 @@ Anyhow, I need a representation for bytecode that is suitable for this compact u
 
 ## Debugging, Profiling, Feedback
 
-Debugging, profiling, etc.. 
-
-While Wikilon runtime is focused on 'pure' computations, profiling and debugging outputs don't really count against this assuming they don't affect the observable behavior of the program or mainline IO models.
-
-### Printf Style Debugging (High Priority)
-
-Haskell's `Debug.Trace` (i.e. debug by printf) is convenient as a short term debugging technique. This allows output of warnings, todos, ad-hoc traces, etc.. This is feasible by annotation. Proposed:
-
-        {&trace} :: ∀v,e.(v * e)→((trashed v) * e)
-
-For predictable performance, I keep trace messages in a separate buffer from the normal evaluation. This could be a buffer of structured values, or a buffer of pre-serialized values. (At the moment, I'm using pre-serialized.)
-
-Trashing an argument additionally enables destructive read of text without implicit copies. Despite risk of losing some messages on overflow, this should cover the 99% use case easily enough. Even dumping 64kB should be sufficient for generating a useful debug-view of what's happening within a computation.
-
-The decision to trace arbitrary values is... questionable. It does improve flexibility of expression, enabling structured data subject to ad-hoc external rendering techniques. OTOH, it might hinder legibility of a plain text rendering a bit. Fortunately, plain text embedded in ABC should be reasonably legible.
-
-### Stack Traces (Mid Priority)
-
-Stack traces are convenient for profiling and debugging both. A 'stack' is really a representation for a 'continuation'. So what I'd want for stack traces is to scan through a continuation and obtain a human-meaningful description for the current state of the computation.
-
-This seems to be a bit of a challenge. It might be best to require explicit tracking of sources, e.g. something like `[foo] {&@location} inline`. Such stack trace annotations be introduced by a linker, not just by hand.
-
-### Profiling (Mid Priority)
-
-For profiling, the best idea I have so far is to leverage periodic stack traces (e.g. upon GC), especially if I can make those efficient. With each stack trace, I can record some metadata (time, memory stats, etc.). It might also be feasible to add a `{&prof}` annotation to a stack trace for a given block/location, i.e. for more precise profiling.
-
-I had an interesting idea to use [opaque timer values](https://awelonblue.wordpress.com/2016/08/02/profiling-pure-code/). But in context of value stowage (and possible caching of computations), I think it wouldn't work out very nicely. 
-
-
-## Miscellaneous Ideas
-
-### Accelerators via DSLs
-
-It might be worthwhile to pursue the 'accelerator via DSL' approach for performance at some point. If we want C language for a given subprogram, for example, we could model a C interpreter then accelerate its operation. C is perhaps not an optimal target to fit into a purely functional program, but there may be other low level languages for which this is a useful idea. (Especially anything that will fit casually into a GPGPU.)
+The debugging story is greatly simplified by Awelon's program rewrite semantics. We can simply freeze a computation and inspect it. Use of `(@gate)` annotations can configurably support tracing, breakpoint-like behaviors, program animations, and profiling.

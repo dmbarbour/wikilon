@@ -255,7 +255,7 @@ This strategy isn't lazy or eager in the conventional sense. Rewriting the outer
 
 Annotations don't much affect this evaluation strategy. The exception is `[computation](par)` to advise early, parallel evaluation of a result we'll probably need.
 
-*Aside:* Undefined words do not rewrite further. In practice, evaluation with undefined words is useful for some application patterns, e.g. involving monotonic futures and promises. And also for initial development and debugging.
+*Aside:* Undefined words do not rewrite further. If there are errors when evaluating a word's definition, that word must be treated as undefined. Partial evaluations with undefined words can be useful in context of development, debugging, and the monotonic futures and promises application pattern.
 
 ## Fixpoint
 
