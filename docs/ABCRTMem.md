@@ -3,21 +3,6 @@
 
 This is an issue I've revisited many times, so I've decided to make a list of conclusions and reasons:
 
-## Word Sizes
-
-In favor of 64-bit:
-
-* roughly 4% performance boost from direct addressing
-* benefit may vary based on frequency of 'copy' action
-* direct scaling to massive, multi-gigabyte contexts
-* easy to use segmented memory (no global offsets)
-
-In favor of 32-bit:
-
-* requires half as much memory for common structures
-* Wikilon won't be allocating multi-gigabyte contexts
-
-The 4% performance benefit from direct addressing is likely to improve if copying is reduced. So it might be better to stick to 64-bit words if I choose not to use compaction as a primary garbage collector. At the moment, I'm planning to use multiple threads within a context, and reduce compactions to a relatively rare operation. So I'll probably go for 64-bit representations.
 
 ## Bit Representations
 

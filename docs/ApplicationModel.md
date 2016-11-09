@@ -87,6 +87,12 @@ Modeling orders in a codebase or database is similar in nature to the [tuple spa
 
 Large orders amortize the search, claim, and update overheads over multiple operations. In practice, orders will include lists, conditional decisions, loops. Sophisticated orders might be modeled as monadic tasks or a [process networks](KPN_Effects.md). Conveniently, Awelon's rewrite-based evaluation enables arbitrary incomplete tasks to be stored to the codebase, which allows checkpointing, scheduling, or collaborative work with other agents.
 
+## Behavioral Programming Variant
+
+[Behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html) is a paradigm for multi-agent collaboration. Agents will repeatedly push some events and allow or suppress others. This could be adapted to a RESTful system, where every event is a state update, and suppression might freeze or constrain a definition. 
+
+This collaboration might be better modeled outside the dictionary proper, keeping the pressures volatile.
+
 ## Tables and Databases
 
 Modeling tables or databases within the dictionary is straightforward. For example, a command pattern might represent an append-only log for a table, or collection thereof. The challenge is everything else - indexing, queries and query optimization, incremental computing. Fortunately, indexes can generally be modeled as compositional views. This allows indexing to be incremental using the same techniques described earlier.
@@ -113,7 +119,7 @@ Awelon language makes it easy to evaluate definitions and replace them inline.
 
 Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. Compression can be achieved by introducing new hidden, frozen words for common substructures - i.e. dictionary compression. 
 
-These attributes could be managed within the dictionary itself, e.g. by defining appropriate fields or some reflective mechanism. 
+*Note:* Metadata that should be accessible to software agents or application patterns should be modeled as part of the dictionary proper, accessible for import and export and so on. This includes dictionary management metadata. However, it might be summarized e.g. under `META.GC` or similar.
 
 ### Dictionary Based Communications
 
@@ -124,3 +130,4 @@ A message becomes a (root word, dictionary) pair. The root word allows implicit 
 ## Multi-Dictionary Applications
 
 Awelon does not support foreign functions, not even for linking between dictionaries. Interaction with external resources must be modeled effectfully, for example via work orders or publish subscribe. There is no special exception for dictionaries. However, sharing between dictionaries will likely benefit from simplified translations.
+

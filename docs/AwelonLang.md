@@ -464,6 +464,7 @@ The arity annotation `(/2)` preserves the comment until it interferes with furth
 
 A valuable feature for editable views is that they're still useful after program rewriting evaluation. Hence, design of editable views will be sensitive to features like accelerators and rewrite optimizations. Use of the arity annotation in comments is an example, ensuring that comments can be part of evaluated output.
 
-Editable views are not limited to plain text, of course. Nor are they limited to singular definitions. We could leverage color for namespaces, or render a boolean value as a checkbox in a GUI form, or zoom into other definitions. But plain text views are quite useful, being accessible to popular text editors via something like [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace).
+Editable views are not limited to plain text, of course. Nor are they limited to singular definitions. We could leverage color for namespaces, or render a boolean value as a checkbox in a GUI form, or zoom into other definitions. But plain text views are quite useful. We can potentially leverage [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to support development of Awelon through plain text editors.
 
-*Note:* Merely viewing code should not edit or evaluate it. A convenient sanity check for editable views is that a round trip from AO to View and back is an identity function.
+*Note:* A useful sanity check for editable views is that a round trip (Awelon code to View and back) is an identity function, preserving the original source.
+

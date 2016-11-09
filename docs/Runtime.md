@@ -1,73 +1,112 @@
 
-# Awelon Runtime Design
+# Runtime Design
 
-In context of Awelon [applications](ApplicationModel.md), evaluation occurs is part of high frequency transactions on a dictionary in a multi-agent system. The goal for Awelon runtime is high performance applications, so that must include both evaluation and transactional update, and must support incremental computing.
+A primary goal for runtime is performance of *applications*. Awelon's application model involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Evaluation, concurrent update, incremental computing, and even the security model each contribute to overall performance.
 
-## General Performance Notes
+Besides efficiency and scalability, I'm also interested in predictable performance. Awelon runtime will aim to keep unpredictable performance features under client control via annotations and similar. I intend for Awelon runtime to be suitable at least for soft real-time systems to the extent that programmers control the nature and frequency of transactions on the dictionary.
 
-I will implement Awelon runtime in low level code with simple representations. The motivation is both for performance of simple interpretation and potential integration of JIT. I can implement many accelerators in the low-level language. 
+## Performance Strategy
 
-Acceleration of definitions will be prominent in the design. The Z fixpoint combinator will certainly be accelerated to optimize loops. Common data plumbing operations will be accelerated. Arithmetic will be accelerated. Hopefully I'll reach a point where linear algebra is GPGPU accelerated and KPNs are cloud accelerated, because I believe that much would place Awelon near state of the art for performance. 
+* simple memory model
+ * linear ownership of program structure
+ * memory usage reflects program size
+ * constant space traversal (Morris algorithm)
+ * structure sharing is via unlinked words
+ * use both free-list and compaction GC
 
-To avoid unnecessary copies during evaluation, I'll try to assume linear structures with ownership. However, I'll explicitly support some shared structure in contexts like accelerated fixpoints or shared references to words.
+* accelerated functions
+ * Data plumbing, fixpoint loops
+ * Numbers and arithmetic. 
+ * Linear algebras for GPGPU
+ * KPNs for cloud computing. 
 
-Evaluation will have quotas for both space and effort. If evaluation aborts on quota, it will halt in a valid intermediate state that may be continued later. I'll achieve this by limiting updates memory updates to prevent any invalid intermediate states and using a long jump or exception to escape upon quota failure. I'll design memory structures to support constant space traversals (e.g. via the Morris algorithm), such GC and extraction of large data structures are not failure points, and copy requires only as much extra memory as necessary for the object to be copied.
+* JIT compilation
+ * leverage LLVM for effective JIT compilations
+ * interpreter with expectation of fragmented JIT
+ * early focus on JIT as performance representation
+ * support memoization and component reuse of JIT
 
-Other than quota failures, evaluation will not halt on error. Instead, errors are represented within a partially evaluated program. We can continue evaluation as far as it can go despite some errors. Breakpoints operate similarly, resulting in a checkpointable computation that is 'stalled' on one or more active gates.
+* lightweight parallelism
+ * parallelize evaluations within program
+ * background evaluations of the program
+ * prioritize partial evaluations for latency
+ * accelerate bounded-buffer KPNs, eventually
+ * stop the world only for compaction GC
 
-Parallelism will get attention early. Worker threads can support background evaluations, and we might tune evaluation strategies to prioritize observation of a few partial outputs. Evaluation strategy may be tunable to support background parallel evaluation even while we work with partially computed results. For example, optimally it should be feasible to leverage background KPN evaluations while we leverage [KPN to express effects](KPN_Effects.md).
+* lightweight failure model
+ * evaluation errors represented in code
+ * quota failures by aborting computation
+ * may lose work to checkpoint on failure
 
-Concurrency must also receive attention. Multiple human and software agents need multiple transactions on a dictionary resource. In practice, most transactions should be mergeable, especially if we track dependencies precisely.
+* lightweight debugging model
+ * leverage `(@gate)` annotations
+ * support trace logs or profiling
+ * breakpoints and program animation
+ * record intermittent frames on effort
+ * stream compression of eval history
 
-Integration of secure hash resources may need special attention. We should be able to efficiently determine which secure hash resources we need, or provide those we know on request by name. GC for secure hash resources should probably leverage lazy reference counting, which is effective in a context where resources tend to survive multiple collections and reference count updates are expensive. To help accommodate GC, inputting secure hash resources might be part of a first-class transaction.
+* incremental computing
+ * implicit memoization of definitions
+ * explicit memoization via `(memo)`
+ * pattern based support from programmer
+ * precisely track which words are linked
+ * stage memoization for update frequency
 
-## Persistent Storage
+* multi-agent concurrent codebase
+ * LMDB for lightweight transactional data persistence
+ * RESTful long-running transactions or sessions
+ * reactive computing: callbacks, rate-limited quotas
+ * recovery from transaction conflicts, not just abort
+ * higher level actions to support semantic merging
+ * discretionary collaborative transactions (locks)
+ * prioritize transactions upon concurrent conflict
 
-I'm leaning towards use of LMDB as the primary storage system, instead of using a filesystem directly. LMDB gives transactions and avoids the problem of managing open file handles. LMDB is primarily read optimized, but can efficiently support batch writes. Holding a read transaction can support zero-copy access to a resource. 
+Long term, we might also support distributed transactions (via 2PC or 3PC, or X/Open XA). This could be useful for certain application models, and for integrating with external resources. However, it is low priority.
 
-We might export patch files and similar when exporting a dictionary. But dealing with the filesystem handles, representing transactional update in the filesystem, and so on seems a hassle I'd prefer to avoid.
+## API Concepts
 
-A consequence of controlling storage via LMDB is that we might need a FUSE adapter to effectively leverage conventional text editors. But that was going to happen regardless.
+The C runtime API will be oriented around an agent's view of the system. 
 
-## Consistency Model
+Agents operate on a dictionary through the window of RESTful, hierarchical transactions. Multiple agents can share a transaction, in which case they are essentially sharing the underlying dictionary. A transaction can modify a dictionary but must additionally supports semantic updates, view tracking, quotas and accounting, debug modes, and so on. The dictionary and transaction may be conflated in some contexts.
 
-With multiple agents viewing and updating the dictionary, and performing external effects, I need a consistency model to guard against conflicting updates. It should be possible for our agents to update multiple definitions, and perhaps also assert that certain dependencies are not modified or remain constant during updates.
+Because concurrent agents update the dictionary, I will need to support callbacks for low-latency observation of changes committed by another agent (or possibly committed upstream). I might also leverage callbacks for low-latency views of parallel computations - background parallelism, lazy or streaming extraction. I will probably want to unify all asynchronous API features (e.g. as futures with callbacks, and value-level references into a runtime).
 
-Minimally, dictionary patches can be merged in a DVCS style. That would give me atomic updates without isolation. However, I might also wish to detect read-write conflicts, application-layer command pattern updates, renaming of dictionary objects. It is feasible to recognize command pattern and rename at the level of patches, but it is simpler and more extensible to model transactions as a log of higher level actions.
+Multi-agent collaborative development is a related possibility. Concurrent agents should be able to avoid conflict by communicating their needs, perhaps in terms of invariants and intentions. We might leverage a notion of discretionary locks or adapt [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/) to guide update events.
 
-To preserve the RESTful nature of dictionary applications, transactions should be RESTful resources in their own right - nameable, serializable. With that in mind, I need a representation for transactions. I might derive representation of transactions from patches by adding `@@COMMAND` actions, which simplify conflict detection then rewrite into a (potentially empty) sequence of updates.
+The API will be dominated by the viewing and updating of a dictionary. But it will include a few other elements, such as loading and configuring of the runtime 'virtual machine' (worker threads, persistent storage, etc..). Evaluation of anonymous code is also feasible, albeit effectively the same as referencing code by secure hash.
+
+*Note:* Security will NOT be handled at the C runtime API. That concern must be handled in a separate layer, e.g. via HTTP authentication or HMAC bearer tokens.
+
+## Memory Model
+
+A transaction will host multiple evaluations or views, and will have some space in which to handle its varied labors. 
+
+The runtime will use pointer-width words, direct addressing. 
+
+Because of parallelism, I don't want to move data around frequently. Compaction may be a rare stop-the-world operation. To support compaction, however, we might ensure we have at least one floating arena in 'reserve' to match those we have allocated. We might also allow growing or shrinking the arena for a computation as part of the compaction process.
 
 
 
-## Design Goals
 
-Performance in context of multi-agent updates and observations is the primary goal. But some others:
+Memory usage must reflect program size. For quota purposes, I should track the logical program size even if I share some resources under the hood.
 
-* control computation effort via space and time quotas
-* real-time capable (if external factors controlled)
-* suspend, checkpoint, debug, and continue computation
-* easy to parallelize computation and external effects
-* no callbacks, no external dependencies for evaluation
+Because I assume JIT compilation, I'll not be optimizing heavily for fast evaluations.
 
-For active debugging, I will support `(@gate)` annotations, which may be configured for logging, breakpoints, etc.. For parallel computations and effects, I'd like to focus on [KPN-based effects](KPN_Effects.md) models and some form of background computation. I will need an API that enables ongoing evaluations with observations.
+
+
+I plan to use pointer-width words, direct addressing. Multiple threads may involve themselves in evaluations. 
+
+* roughly 4% performance boost from direct addressing
+* benefit may vary based on frequency of 'copy' action
+* direct scaling to massive, multi-gigabyte contexts
+* easy to use segmented memory (no global offsets)
+
 
 ## API Concepts
 
 A context will hold a single, implicit object. The API will directly manipulate this object: injection of input or code, stepwise evaluation with quota-based limits, flexible extraction or use of results. This API should more or less reflect how the program itself operates on code, albeit with somewhat more freedom.
 
 I'd like to have 'errors' be an okay thing, like the worst that happens is we don't make any progress during evaluation, unless the problem was expressing an over sized program. If a program is too large, we might have options to divide it into smaller pieces automatically, or to resize our context to fit.
-
-## Structure
-
-        wikrt_env   - - -   database
-            |          (stow, persist)
-          (1:N)
-            |
-        wikrt_cx    - - -  mem & ssp
-                         (data) (scratch)
-                          (swap on GC)
-
-I have a toplevel environment that binds a shared database. Then I can have multiple contexts, each with their own memory. I am currently using a semispace for simplified GC. A context doesn't need very much space, so I am contemplating use of a relative 32-bit representation within context local space.
 
 
 ## Memory Management
