@@ -87,12 +87,6 @@ Modeling orders in a codebase or database is similar in nature to the [tuple spa
 
 Large orders amortize the search, claim, and update overheads over multiple operations. In practice, orders will include lists, conditional decisions, loops. Sophisticated orders might be modeled as monadic tasks or a [process networks](KPN_Effects.md). Conveniently, Awelon's rewrite-based evaluation enables arbitrary incomplete tasks to be stored to the codebase, which allows checkpointing, scheduling, or collaborative work with other agents.
 
-## Behavioral Programming Variant
-
-[Behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html) is a paradigm for multi-agent collaboration. Agents will repeatedly push some events and allow or suppress others. This could be adapted to a RESTful system, where every event is a state update, and suppression might freeze or constrain a definition. 
-
-This collaboration might be better modeled outside the dictionary proper, keeping the pressures volatile.
-
 ## Tables and Databases
 
 Modeling tables or databases within the dictionary is straightforward. For example, a command pattern might represent an append-only log for a table, or collection thereof. The challenge is everything else - indexing, queries and query optimization, incremental computing. Fortunately, indexes can generally be modeled as compositional views. This allows indexing to be incremental using the same techniques described earlier.

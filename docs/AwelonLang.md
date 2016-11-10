@@ -19,10 +19,10 @@ Awelon's simplicity, purity, and evaluation model each contribute greatly to its
 
 There are four primitive combinators:
 
-            [B][A] a == A[B]    (apply)
-            [B][A] b == [[B]A]  (bind)
-               [A] c == [A][A]  (copy)
-               [A] d ==         (drop)
+            [B][A]a == A[B]    (apply)
+            [B][A]b == [[B]A]  (bind)
+               [A]c == [A][A]  (copy)
+               [A]d ==         (drop)
 
 Those square brackets `[]` enclose a 'block' of Awelon code, representing a function. With just this much, all computable functions can be defined. As a lightweight proof, I'll define the Curry-Schönfinkel SKI [combinators](https://en.wikipedia.org/wiki/Combinatory_logic).
 
@@ -35,13 +35,13 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 ## Words
 
-Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{},;|&=\"`, SP, C0, and DEL. Developers are encouraged to further favor words that will not escapes in external contexts such as URLs, natural language, or editable views. There is no hard restriction on word sizes, but words should be kept reasonably short.
+Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{},;|&=\"`, SP, C0, and DEL. Of those, only four characters - SP, LF, and `[]` - are valid *word separators* in Awelon code. Developers are encouraged to favor words that won't need escapes in external contexts (such as URLs, natural language text, or editable views), and that aren't too large.
 
 User defined words are represented in a dictionary, described later. Some words are automatically defined, including the four primitives `a`, `b`, `c`, `d` and number words such as `42`. 
 
 ## Data
 
-Awelon language optimizes embedded representations for numbers and texts. Numbers are simply implicitly defined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
+Awelon language optimizes embedded representations for numbers and texts. Numbers are simply implicitly defined words like `#42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
 
         "
          multi-line texts starts with `" LF` (34, 10)
@@ -49,11 +49,14 @@ Awelon language optimizes embedded representations for numbers and texts. Number
          terminate the text with `LF ~` (10, 126) 
         ~
 
-Texts must be valid UTF-8, forbidding C0 (except LF) and DEL. LF is the only special case, requiring the extra space at the start of the new line. There are no character escapes. The indent spaces are not considered part of the text, nor are the extra LF characters at the start and end.
+Texts may be placed only where a word is valid. Texts must be valid UTF-8, forbidding C0 (except LF) and DEL. Inline texts additionally forbid the double quote and LF. There are no character escapes, but the extra whitespace in the representation of multi-line text is not considered part of the text. Texts in Awelon are [syntactic sugar](https://en.wikipedia.org/wiki/Syntactic_sugar) for an expanded representation. 
 
-Awelon language has exactly one primitive value type - the `[]` block of code, representing a function. Data is instead [Church encoded](https://en.wikipedia.org/wiki/Church_encoding) or favors alternatives like [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding), representing values as functions. The support for numbers and texts is close in nature to [syntactic sugar](https://en.wikipedia.org/wiki/Syntactic_sugar) for an encoding.
+        "hello" == [#104 "ello" :]
+        ""      == ~
 
-Before I jump to the encoding of numbers and texts, let us examine encodings for other useful data types. Booleans select from a pair of functions:
+Awelon language has exactly one primitive data type - the `[]` block of code, representing a function. Data is instead [Church encoded](https://en.wikipedia.org/wiki/Church_encoding) or use similar variants such as the [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding). Values are thus represented by functions. 
+
+Before I explain encoding of numbers and texts, let us examine encodings for other useful data types. Booleans are perhaps the simplest data. We might encode booleans as follows:
 
         [onF][onT] false i == onF               false = [d i]
         [onF][onT] true  i == onT               true  = [a d]
@@ -67,13 +70,13 @@ Booleans can be generalized to algebraic sum type `(A + B)`.
         [onL][onR] [[A] inL] i  == [A] onL      inL = w d w i
         [onL][onR] [[B] inL] i  == [B] onR      inR = w b a d
 
-Construction of the `[[A] inL]` construct is trivial. Use `[A] [inL] b`, with `b` binding the argument. This might be abstracted as `mkL`.  This is generally the case for value constructors. In practice, we may also wish to defer computation of partial constructions (see *Deferred Computations and Coinductive Data*). 
+Construction of the `[[A] inL]` construct is trivial - simply `[A] [inL] b`. This is generally the case for value constructors. In practice, we may also wish to defer computation of partial constructions (see *Deferred Computations and Coinductive Data*). 
 
 Pairs - algebraic `(A * B)` product types - may also be Church encoded:
 
         [onP] [[B][A] inP] i == [B][A]onP       inP = [] b b a i
 
-However, in context of Awelon language, it's simpler and more convenient to encode a pair as `[[B][A]]` and simply use `a i` to apply it. 
+However, in context of Awelon language, I find it more convenient to encode a pair as `[[B][A]]`. 
 
 Between algebraic sums and products, we can represent any conventional data structure. The option type `(1 + A)` may be modeled as a choice of `false` or `[[A] R]`. Natural numbers can be encoded as `μNat.(1 + Nat)` - i.e. zero or successor. A list can be modeled as `μList.(1 + (A * List))`. Text can be encoded as a list of natural numbers. Algebraic encodings are generally simple, e.g. `Succ = mkR` for natural numbers, or `Cons = mkP mkR`. 
 
@@ -100,7 +103,7 @@ However, with data structures more sophisticated than natural numbers, choosing 
 
 Return attention to numbers and texts in Awelon.
 
-It is my intention that Awelon developers be given relatively free reign over the choice of encoding and corresponding tradeoffs. In practice, this control may be limited by runtime performance support (see *Acceleration*). But the encoding is at least separate from the syntactic embedding.
+It is my intention that Awelon developers be given relatively free reign over the choice of encoding and corresponding tradeoffs. In practice, this control may be limited by what the runtime accelerates. But the encoding is at least separate from the syntactic embedding.
 
 This is achieved by allowing developers to partially define the encoding. For natural numbers and texts, we end up with something like the following:
 
@@ -116,9 +119,7 @@ This is achieved by allowing developers to partially define the encoding. For na
         "hello" = [#104 "ello" :]
         "→" = [#8594 ~ :]
 
-At the moment, only natural numbers are supported. 
-
-Long term, Awelon will likely support signed integers, rationals, decimal numbers. The normal Church encoding for signed numbers is a pair of natural numbers representing `X - Y` where at least one of the pair is zero. We might similarly support rational (a numerator and denominator pair) and decimal numbers (a significand and exponent pair). I haven't hammered out the details of exactly what I want. In the short term we can experiment with models via editable views. So for now, Awelon language simply reserves number-like words (prefix `[+-~.#]?[0-9]`) for purpose of representing numbers.
+At the moment, only natural numbers are supported. Long term, Awelon will likely support signed integers, rationals, decimal numbers. The normal Church encoding for signed numbers is a pair of natural numbers representing `X - Y` where at least one of the pair is zero. We might similarly support rational (a numerator and denominator pair) and decimal numbers (a significand and exponent pair). I haven't hammered out the details of exactly what I want. In the short term we can experiment with models via editable views. So for now, Awelon language simply reserves number-like words (prefix `[+-~.#]?[0-9]`) for purpose of representing numbers.
 
 *Aside:* Beyond numbers and texts, users might be interested in more structured data with human-meaningful symbolic labels. Awelon language does not optimize for those cases, but support for *Editable Views* may present structured data to humans.
 
@@ -136,16 +137,18 @@ A runtime will have implicit access to resources named by secure hash, perhaps t
 
 Acceleration is a performance assumption for Awelon. 
 
-A runtime will recognize and accelerate common functions. The accelerated function may use a hand-optimized or built-in implementations to achieve performance similar to a primitive. For example, most runtimes will accelerate the following functions:
+A runtime will recognize and accelerate common functions. The accelerated implementation may be hand optimized and built into the runtime to achieve performance similar to a primitive. For example, many runtimes will accelerate the following functions:
 
            [A]i == A            (inline)         i = [] w a d
         [B][A]w == [A][B]       (swap)           w = [] b a
 
-By accelerating these, we can avoid the intermediate introduction and destruction of `[]`. And we can conveniently treat `i` and `w` as primitive combinators. 
+The runtime must look at the given definitions. Upon recognizing `[] b a`, the runtime may link `w` to the acclerated swap implementation. Same for `i`. In general, recognition of accelerators will be fragile, in the sense that `[] w a d` might be recognized where the equivalent definitions `[] [] b a a d` or `[[]] a a d` are not recognized. To mitigate this fragility, runtimes should carefully document recognized accelerators, e.g. by defining a seed dictionary. But, assuming it works out, `i` and `w` will effectively have the performance of primitive functions.
 
-Critically, acceleration of functions extends to *data*, and compact representation thereof. Natural numbers, for example, may be represented during computation by simple machine words. And accelerated arithmetic functions could then operate directly on the compact natural number representation.
+Critically, acceleration of functions extends also to *Data*, and efficient representations thereof. Natural numbers, for example, may be represented by simple machine words. Accelerated arithmetic functions could then operate directly on the compact natural number representation.
 
-Long term, Awelon runtimes should accelerate not just arithmetic, linear algebra, logical data conversions, but also binary and collections processing, and parallel [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks). Acceleration of linear algebra could support permit semi-transparent GPGPU parallelism. Acceleration of process networks could enable Awelon computations to leverage cloud computing.
+Long term, Awelon runtimes could accelerate evaluation of linear algebra for semi-transparent GPGPU parallelism, [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks) for distributed cloud computing, and potentially interpretation of a register machine or C-- to more efficiently leverage the conventional CPU.
+
+*Note:* Acceleration replaces intrinsics and performance applications of FFI.
 
 ## Annotations
 
@@ -164,7 +167,7 @@ Annotations help developers control, optimize, and debug computations. Annotatio
 * `(@foo)` - gates for active debugging (logging, breakpoints)
 * `(force)` - evaluate previously deferred computations
 
-Annotations, by nature, must have no internally observable effect on computation. Nonetheless, annotations may cause an incorrect computation to fail fast, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states. 
+Annotations must have no internally observable effect on computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states.
 
 Annotations may be introduced and documented on a runtime basis. In case of porting code, runtimes that do not recognize an annotation may ignore it. Long term, we should reach some de-facto standardization on useful annotations.
 
@@ -200,11 +203,11 @@ Stowage is a simple idea, summarized by rewrite rules:
         [large value](stow) => [$secureHash]
         [small value](stow) => [small value]
 
-The resulting `$secureHash` resource is similar to external binary resources, excepting we interpret the binary as Awelon code. Use of `(stow)` will wait for evaluation. Use of `(stow)` on large binary data will instead produce a `%secureHash` external binary.
+That is, we replace a large value with a word `$secureHash` whose definition is `large value`. What exactly "large" means is heuristic, based on time-space tradeoffs. But in the interest of deterministically reproducible computation, I recommend a default stowage threshold of 256 bytes. The unique nature of the secure hash allows us to conceptualize this as a rewrite optimization to an existing word that already had the definition `large value`. However, in practice, our runtime must store the definition in a lookup table for future linking. 
 
-Stowage enables programmers to work semi-transparently with computations that are much larger than working memory. Unlike conventional virtual memory or effectful storage, stowage is friendly for parallelism and distribution, structure sharing, incremental computing, and backtracking. However, the most effective use of stowage is more limited to [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), optimally those that implicitly batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
+Stowage enables programmers to work semi-transparently with data or computations much larger than working memory. Unlike effectful storage or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, incremental computing, and backtracking. However, effective use of stowage is limited to [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), optimally those that implicitly batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
 
-Stowage has significant lookup and GC overheads. Values with small representations should not be stowed. The threshold for 'small' is heuristic, but must at least be larger than the encoded secure hash and be deterministically reproducible. A reasonable threshold is six times the size of the secure hash. 
+*Note:* Stowage leverages the same implicit secure hash resources as external binary data. If our large value happens to encode flat binary data, may stow to `%secureHash` instead. Also, programmers may freely use `$secureHash` to name programs (not just values) from a normal dictionary.
 
 ## Dictionary
 
@@ -228,9 +231,9 @@ A runtime might usefully document recognized accelerators, annotations, and othe
 
 ## Secure Hash Resources 
 
-Binaries, stowage, and dictionaries will use the same secure hash: 384 bits of [BLAKE2b](https://blake2.net/) encoded as 64 characters in [base64url](https://en.wikipedia.org/wiki/Base64). BLAKE2b is an efficient, high quality hash function. I feel that 64 characters offers a reasonable balance between collision resistance and aesthetics.
+Binaries, stowage, and dictionaries will use the same secure hash: 384 bits of [BLAKE2b](https://blake2.net/) encoded as 64 characters in [base64url](https://en.wikipedia.org/wiki/Base64). BLAKE2b is an efficient, high quality hash function. And the size offers an acceptable balance between collision resistance, aesthetics, and other size overheads.
 
-Secure hash resources are generally not defined within the normal dictionary representation. Instead, they are defined in an implicit global space and may be shared among many dictionaries and runtimes. These resources are very easy to cache and distribute through [content delivery networks (CDNs)](https://en.wikipedia.org/wiki/Content_delivery_network). For an untrusted CDN we could compress and encrypt the content, using 128 bits of the secure hash for a lookup key and the rest for AES decryption.
+Secure hash resources are generally not defined within the normal dictionary representation. Instead, they are defined in an implicit global space and may easily be shared among many dictionaries and runtimes. These resources are easy to cache and distribute through [content delivery networks (CDNs)](https://en.wikipedia.org/wiki/Content_delivery_network). In case of untrusted CDNs, we might compress and encrypt the content using 128 bits of the secure hash for lookup and the rest for decryption.
 
 ## Evaluation
 

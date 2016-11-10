@@ -1,9 +1,11 @@
 
 # Runtime Design
 
-A primary goal for runtime is performance of *applications*. Awelon's application model involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Evaluation, concurrent update, incremental computing, and even the security model each contribute to overall performance.
+A primary goal for runtime is performance of *applications*. Awelon's application model involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Evaluation, concurrent update, incremental computing, and so on must each contribute to overall performance.
 
-Besides efficiency and scalability, I'm also interested in predictable performance. Awelon runtime will aim to keep unpredictable performance features under client control via annotations and similar. I intend for Awelon runtime to be suitable at least for soft real-time systems to the extent that programmers control the nature and frequency of transactions on the dictionary.
+Besides efficiency and scalability, I'm also interested in predictable performance. The runtime will aim to keep unpredictable performance features under client control via annotations and similar. I intend for Awelon runtime to be suitable at least for soft real-time systems to the extent that programmers control the nature and frequency of transactions on the dictionary.
+
+*Aside:* For naming, I'm likely to call this 'Wikilon Runtime' or `wikrt`. 
 
 ## Performance Strategy
 
@@ -16,9 +18,10 @@ Besides efficiency and scalability, I'm also interested in predictable performan
 
 * accelerated functions
  * Data plumbing, fixpoint loops
- * Numbers and arithmetic. 
+ * Numbers and arithmetic 
  * Linear algebras for GPGPU
- * KPNs for cloud computing. 
+ * KPNs for cloud computing
+ * pure register machine variant
 
 * JIT compilation
  * leverage LLVM for effective JIT compilations
@@ -58,28 +61,34 @@ Besides efficiency and scalability, I'm also interested in predictable performan
  * reactive computing: callbacks, rate-limited quotas
  * recovery from transaction conflicts, not just abort
  * higher level actions to support semantic merging
- * discretionary collaborative transactions (locks)
  * prioritize transactions upon concurrent conflict
 
 Long term, we might also support distributed transactions (via 2PC or 3PC, or X/Open XA). This could be useful for certain application models, and for integrating with external resources. However, it is low priority.
 
 ## API Concepts
 
-The C runtime API will be oriented around an agent's view of the system. 
+The C runtime API will be oriented around an agent's view of the system.
 
-Agents operate on a dictionary through the window of RESTful, hierarchical transactions. Multiple agents can share a transaction, in which case they are essentially sharing the underlying dictionary. A transaction can modify a dictionary but must additionally supports semantic updates, view tracking, quotas and accounting, debug modes, and so on. The dictionary and transaction may be conflated in some contexts.
+An agent will view and update a dictionary through the window of RESTful, hierarchical, long-running *transactions*. Transactions may have names, URLs, and serializable representation. Transactions generally track reads to support detection of read-write conflicts. Transactions may a few support structured updates that are merge-friendly, such as renaming a word or command pattern. Named dictionaries are effectively just 'rooted' transactions.
 
-Because concurrent agents update the dictionary, I will need to support callbacks for low-latency observation of changes committed by another agent (or possibly committed upstream). I might also leverage callbacks for low-latency views of parallel computations - background parallelism, lazy or streaming extraction. I will probably want to unify all asynchronous API features (e.g. as futures with callbacks, and value-level references into a runtime).
+Views on a dictionary will generally involve reading a word's definition or evaluating it. Evaluation of anonymous computations can be represented in terms of evaluating the definition of a corresponding `$secureHash` word. Word-level tracking is convenient for RESTful reference, caching, sharing, and further composition. Evaluations may need a variety of related attributes to control compute resources (space, effort) and active debugging. These will likely be configured at the transaction layer.
 
-Multi-agent collaborative development is a related possibility. Concurrent agents should be able to avoid conflict by communicating their needs, perhaps in terms of invariants and intentions. We might leverage a notion of discretionary locks or adapt [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/) to guide update events.
+There may also be some configuration of the virtual machine - LMDB storage, worker threads, etc.. But the API will be dominated by transaction management. 
 
-The API will be dominated by the viewing and updating of a dictionary. But it will include a few other elements, such as loading and configuring of the runtime 'virtual machine' (worker threads, persistent storage, etc..). Evaluation of anonymous code is also feasible, albeit effectively the same as referencing code by secure hash.
-
-*Note:* Security will NOT be handled at the C runtime API. That concern must be handled in a separate layer, e.g. via HTTP authentication or HMAC bearer tokens.
+*Note:* Security models (HTTP authentication, HMAC bearer tokens, etc.) and collaborative conflict avoidance patterns (discretionary locks, [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html)) are not part of this C runtime API but can be implemented in a separate layer.
 
 ## Memory Model
 
-A transaction will host multiple evaluations or views, and will have some space in which to handle its varied labors. 
+
+
+In 'normal' form, Awelon code will be represented by simple UTF-8 strings, albeit using size parameters instead of the NUL terminator (such that we can reference directly into a transaction or subprogram).
+
+
+Conveniently, agents don't need fine-grained manipulation of computations, at least not to an extent of optimizing for that use case. Further, coarse-grained manipulations - simple compositions - are trivial with Awelon language, and don't need much attention. 
+
+Awelon code will mostly be represented by simple strings - a `char const*` together with a size parameter. 
+
+Memory is managed within a transaction. A primary representation for most things
 
 The runtime will use pointer-width words, direct addressing. 
 
