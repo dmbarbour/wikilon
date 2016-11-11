@@ -301,12 +301,12 @@ Statically computing link structure can support inlining of definitions, flatten
 
 ## Value Words
 
-Words like `true` or `false` or `#42` can be treated as first-class values. Further, doing so is convenient for aesthetics and preservation of hypermedia link structure. 
+Words like `true` or `false` or `42` can be treated as first-class values. Further, doing so is convenient for aesthetics and preservation of hypermedia link structure. 
 
-        #42 true w == true #42
-        #42 [] b   == [#42]
+        42 true w == true 42
+        42 [] b   == [42]
 
-In general, a value word is any word that evaluates to a singleton `[Value]`. In this case, we have `true = [a d]` and `#42 = [#41 S#]`. A runtime should recognize value words and treat them as values until their internal structure is observed.
+In general, a value word is any word that evaluates to a singleton `[Value]`. In this case, we have `true = [a d]` and `42 = [41 #]`. A runtime should recognize value words and treat them as values until their internal structure is observed.
 
 ## Rewrite Optimization
 
@@ -356,7 +356,7 @@ Blocks naturally delimit the input scope for a computation. For example, we know
 
 Tuple assertions can be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection may be necessary, and we'll fail fast if the tuple assertion is bad. Similar to arity annotations, tuples larger than `(5)` should be rare in practice.
 
-In addition to controlling output counts, programmers may wish to fail fast based on declared structure. To support this, Awelon supports a structure annotation `(:T)` and corresponding assertion `(.T)` with the following rewrite semantics:
+In addition to controlling output counts, programmers may wish to fail fast based on declared structure. To support this, Awelon supports a structure annotation `(:T)` and paired assertion `(.T)` with the following rewrite semantics:
 
         (:foo) (.foo) ==
 
