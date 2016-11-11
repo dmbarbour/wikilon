@@ -63,7 +63,7 @@ This representation is not optimal for direct use by humans. Rather, it is inten
 
 ## Data
 
-Awelon language has embedded representations for natural numbers and texts. Numbers are simply implicitly defined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
+Awelon language has specialized representations for natural numbers and texts. Numbers are simply implicitly defined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
 
         "
          multi-line texts starts with `" LF` (34, 10)
@@ -143,7 +143,7 @@ This is achieved by allowing developers to partially define the encoding:
         "→" = [8594 "" :]
         "hello" = [104 "ello" :]
 
-For reasons of simplicity, Awelon language only provides built in support for encoding natural numbers and text data. This is sufficient for compact embeddings of most data. Higher number types are left to *Editable Views* (see below). 
+For reasons of simplicity, Awelon language only provides built in support for encoding natural numbers and text data. This is sufficient for compact embeddings of most data. More sophisticated number types are left to editable views. 
 
 ## Binary Data
 
@@ -448,39 +448,14 @@ Type declarations can also be represented at the dictionary and application laye
 
 *Aside:* Awelon systems are free to consider non-terminating evaluation to be an *error*, and perform static termination analysis by default. This analysis must be sensitive to arity annotations so we can support coinductive data types.
 
-## Labeled Data - Records and Variants 
-
-Many programming languages heavily leverage *labeled* data. 
-
-Labeled sum types (aka variants) allow us to discriminate on the label. Labeled product types (aka records) allow us to maintain a collection of labeled data. Primitive sum `(A + B)` and product `(A * B)` values are simple and sufficient for many use cases. But labeled data is self-documenting (the label informs the human) and extensible (easy to introduce new labels).
-
-Labeled data can be encoded using 'deep' primitive sum types. 
-
-Consider constructors `mkL = [inL] b` and `mkR = [inR] b` for primitive sum types, as described under *Data*, above. We can construct 'deep' sums using sequences like `mkL mkL mkR mkR mkR mkL mkR mkR`. Since that's verbose, let's shorthand it as `LLRRRLRR`. We can encode arbitrary information within this left-right-left sequence. Consider one possible encoding:
-
-        type N v = (v + N v)
-        type T v = (v + N (T v))
-
-Here, `N` labels a value `v` with a unary-encoded natural number. For example, `LRRR` would encode a label `3` Then `T` encodes a sequence of natural numbers. For example, `LLRRRLRRLRRRR` encodes a sequence `2 1 3`. Of course, we'll view this in reverse order upon deconstruction, so we might say instead that we have encoded the sequence `3 1 2`. If we encode a sequence of character codepoints like `102 111 111`, we can encode a text labels like `foo`. Expansion to an `LLRRR...` string is over 300 characters long in this case, so I won't bother. But it could be abstracted to something like `"foo" label`. 
-
-*Aside:* We could leverage [entropy coding](https://en.wikipedia.org/wiki/Entropy_encoding) or related techniques. The encoding needs only to be deterministic and unique.
-
-A singular labeled value is essentially an element from a variant type. A *collection* of labeled values, with at most one instance of each label, would then serve as our 'record' structure. Records might double as as a dispatch layer: given a variant and a record, we can find a label within the record matching the variant's label and use that to determine how to process the variant's value. In context of deep sum labels, we might represent records as a [radix tree](https://en.wikipedia.org/wiki/Radix_tree) on the `LLRRRLRRLRRRR...` path.
-
-This encoding of labeled data with deep sums has some nice properties.
-
-The simple `(sum)` type remains applicable. The other major option for encoding labeled data is label-value pairs, but that requires dependent types because the value type depends on the label. Also, we can extend the prefix of a label, to represent data namespaces or routing. And we can encode flexible merging of records, extraction of a subrecord with a common prefix, and similar features. 
-
-*Note:* Awelon language does not provide special support for labeled data. This is left to *Editable Views* and *Acceleration*.
-
-## Deferred Typing and Macro Evaluation
+## Gradual Typing and Macro Evaluation
 
 In context of metaprogramming, it is frequently useful to work with intermediate structures for which we do not know the type. For example, consider:
 
         1 2 3 4             "abcx → ax^2 + bx + c"  runPoly
         "Red Warrior" 42    "%s takes %d damage!"   printf
 
-In scenarios like these, computing the type of `runPoly` or `printf` independent of context may require sophisticated dependent types. On the other hand, computing a type for `"abcx → ax^2 + bx + c" computePoly` or `"%s takes %d damage!" printf` might only require some partial evaluation before type checking.
+In scenarios like these, computing the type of `runPoly` or `printf` independent of context may require sophisticated dependent types. But computing a type for `"abcx → ax^2 + bx + c" computePoly` or `"%s takes %d damage!" printf` might only require some partial evaluation before static type checking. This implies staging similar to macro evaluation.
 
 To make this intention explicit, I propose annotation `(dyn)`. Example usage:
 
@@ -489,9 +464,36 @@ To make this intention explicit, I propose annotation `(dyn)`. Example usage:
             == [polynomial behavior](dyn) i
             == [polynomial behavior] i
 
-The presence of a `(dyn)` annotation signals a static type analysis that the code to its left might be difficult to statically validate. If we cannot make a static type judgement but `(dyn)` is in relevant scope, we can suppress warnings. However, dynamic partial evaluation is considered *complete* if a value is produced, that is `[A](dyn) == [A]`. Hence we may attempt partial evaluation to eliminate `(dyn)` annotations prior to static type checking.
+The presence of a `(dyn)` annotation informs a static type analysis that a volume of code might be difficult to statically validate, to try partial evaluation if possible, and perhaps to suppress warnings when no safety judgement can be made. Obvious type errors can still be raised. 
 
-Partial evaluation prior to type checking supports convenient macro-like behavior. The ability to hold onto `(dyn)` annotations in first class functions at runtime further enables gradual typing between static and dynamic.
+Dynamic evaluation is considered *complete* when a value is produced, that is `[A](dyn) == [A]`. However, many functions will remain dynamic even after evaluation. Careful use of `(dyn)` provides a simple basis for gradual typing in a system that defaults to static types.
+
+## Labeled Data - Records and Variants 
+
+Many programming languages heavily leverage *labeled* data. 
+
+Labeled sum types (aka variants) allow us to conditionally discriminate on the label. Labeled product types (aka records) allow us to access a heterogeneous collection of data by label. Primitive sum `(A + B)` and product `(A * B)` values are simple and sufficient for many use cases. But labeled data is frequently self-documenting (the label informs the human) and extensible (easy to introduce new labels).
+
+Labeled data can be encoded using 'deep' primitive sum types. 
+
+Consider constructors `mkL = [inL] b` and `mkR = [inR] b` for primitive sum types, as described under *Data*. We can construct 'deep' sums using sequences like `mkL mkL mkR mkR mkR mkL mkR mkR`. I'll shorthand that as `LLRRRLRR`. We can encode labels (or other information) within this left-right-left sequence. Consider one possible encoding:
+
+        type N v = (v + N v)
+        type T v = (v + N (T v))
+
+Here, `N` labels a value `v` with a unary-encoded natural number. For example, `LRRR` would encode a label `3` Then `T` encodes a sequence of natural numbers. For example, `LLRRRLRRLRRRR` encodes a sequence `2 1 3`. Of course, we'll view this in reverse order upon deconstruction, so we might say instead that we have encoded the sequence `3 1 2`. A text label like `foo` can be encoded as a series of code points such as `102 111 111`. With the aforementioned encoding, this would expand to an `LLRRRR...` string of over 300 characters, so I won't bother. But it could be abstracted as something like `L.0 L.o L.o L.f` or possibly `"foo" label`. 
+
+*Aside:* More efficient encodings are certainly feasible. For example, we could leverage an [entropy coding](https://en.wikipedia.org/wiki/Entropy_encoding) over a more constrained alphabet.
+
+A single labeled value represents an element of a variant type. 
+
+A collection of labeled values can model a record. A record can double as a switch, allowing conditional selection of an action based on the label of a value. A collection based on a [radix tree](https://en.wikipedia.org/wiki/Radix_tree) could be especially efficient, avoiding redundant storage and computation on shared prefixes. 
+
+Intriguingly, we might extend or extract label prefixes to model namespace and routing like behaviors. Also, we can model first-class label generators, e.g. a stream of labels each distinct from all prior labels.
+
+*Note:* It is feasible to model labels as `(label, value)` pairs. Unfortunately, this requires dependent types: the type of the value depends on the label's value. A deep sum encoding is much simpler in context of static typing.
+
+*Note:* Awelon's support for labeled data is left to editable views and acceleration. At this time, there is no syntax-layer support for labeled data. 
 
 ## Editable Views
 
@@ -512,15 +514,16 @@ Rich number types are useful target for editable views. Consider:
         -7                  [0 7 Integer]
         3.141               [[3141 0 Integer] 3 Decimal]
         -0.0070             [[0 70 Integer] 4 Decimal]
+        2/3                 [[2 0 Integer] 3 Rational]
 
 Also, Awelon doesn't have a comments syntax feature, but editable views may:
 
         /* comment */  <=>  " comment " (/2) (@rem) d 
 
-The arity annotation `(/2)` preserves the comment until it interferes with further evaluations. The `(@rem)` gate annotation allows conditional breakpoints or tracing of comments. And the `d` drops the comment, preventing it from having a semantic impact. Variations on comments - perhaps using `(@lang)` or `(@ns)` - might provide rendering hints, specifying use of a namespace or DSL for a given subprogram.
+The arity annotation preserves the comment, the gate allows conditional breakpoints or tracing with comments, and the `d` finally drops the comment so it has no semantic effect. Variations on this comment idea might be used to provide rendering or namespace hints.
 
-A valuable feature for editable views is that they're still useful after program rewriting evaluation. Hence, design of editable views will be sensitive to features like accelerators and rewrite optimizations. Use of the arity annotation in comments is an example, ensuring that comments can be part of evaluated output.
+Awelon code evaluates into Awelon code, via program rewriting. Ideally, editable views should also be preserved. That is, our evaluated output should include comments and decimal numbers, or at least have potential to do so. Development of editable views may be sensitive to the dictionary and accelerators.
 
-Editable views are not limited to plain text, of course. Nor are they limited to singular definitions. We could leverage color for namespaces, or render a boolean value as a checkbox in a GUI form, or zoom into other definitions. But plain text views are quite useful. We can potentially leverage [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to support development of Awelon through plain text editors.
+Editable views are not limited to plain text representations. I do encourage attention to plain text views, because those are easy to integrate with existing development environments or even text editors via [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace). But exploring views based on hypermedia representations, sliders and checkboxes, canvases and graphs, music notations, etc.. could provide a very powerful environment and a foundation for live coding applications.
 
-*Note:* A useful sanity check for editable views is that a round trip (Awelon code to View and back) is an identity function, preserving the original source.
+*Note:* A useful sanity check: a round-trip from Awelon code to view and back should be the identity function.
