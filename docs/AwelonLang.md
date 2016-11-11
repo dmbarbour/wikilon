@@ -35,13 +35,35 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 ## Words
 
-Words are identified by a sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{},;|&=\"`, SP, C0, and DEL. Of those, only four characters - SP, LF, and `[]` - are valid *word separators* in Awelon code. Developers are encouraged to favor words that won't need escapes in external contexts (such as URLs, natural language text, or editable views), and that aren't too large.
+Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{},;|&=\"`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in external contexts (such as URLs, natural language text, or editable views), and that aren't too large.
 
-User defined words are represented in a dictionary, described later. Some words are automatically defined, including the four primitives `a`, `b`, `c`, `d` and number words such as `42`. 
+A useful subset of words is automatically defined:
+
+* the four Awelon primitive words `a`, `b`, `c`, `d`
+* words to encode natural numbers, regex `[1-9][0-9]*`
+* secure hash resources - `$secureHash` or `%secureHash`
+
+Other words are user defined, through a dictionary. 
+
+## Dictionary
+
+Awelon has a standard, DVCS-inspired patch based dictionary representation:
+
+        secureHashOfPatch1
+        secureHashOfPatch2
+        @word1 definition1
+        @word2 definition2
+        ...
+
+A patch contains a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions override those from earlier patches. A word may be logically deleted by defining a trivial cycle like `@foo foo`.
+
+This representation is not optimal for direct use by humans. Rather, it is intended for efficient import/export and maintenance in context of Awelon applications which must share the dictionary between human and software agents. Humans should ultimately browse and update the dictionary through an *editable view*, perhaps as hypermedia. 
+
+*Note:* Non-trivial cycles are errors. Loop behavior must be modeled via *fixpoint*, not link layer recursion. But an undefined word does not evaluate further, which is the same as rewriting to itself. So the trivial cycle is suitable for representing deletion.
 
 ## Data
 
-Awelon language optimizes embedded representations for numbers and texts. Numbers are simply implicitly defined words like `#42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
+Awelon language has embedded representations for natural numbers and texts. Numbers are simply implicitly defined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
 
         "
          multi-line texts starts with `" LF` (34, 10)
@@ -51,7 +73,7 @@ Awelon language optimizes embedded representations for numbers and texts. Number
 
 Texts may be placed only where a word is valid. Texts must be valid UTF-8, forbidding C0 (except LF) and DEL. Inline texts additionally forbid the double quote and LF. There are no character escapes, but the extra whitespace in the representation of multi-line text is not considered part of the text. Texts in Awelon are [syntactic sugar](https://en.wikipedia.org/wiki/Syntactic_sugar) for an expanded representation. 
 
-        "hello" == [#104 "ello" :]
+        "hello" == [104 "ello" :]
         ""      == ~
 
 Awelon language has exactly one primitive data type - the `[]` block of code, representing a function. Data is instead [Church encoded](https://en.wikipedia.org/wiki/Church_encoding) or use similar variants such as the [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding). Values are thus represented by functions. 
@@ -70,7 +92,7 @@ Booleans can be generalized to algebraic sum type `(A + B)`.
         [onL][onR] [[A] inL] i  == [A] onL      inL = w d w i
         [onL][onR] [[B] inL] i  == [B] onR      inR = w b a d
 
-Construction of the `[[A] inL]` construct is trivial - simply `[A] [inL] b`. This is generally the case for value constructors. In practice, we may also wish to defer computation of partial constructions (see *Deferred Computations and Coinductive Data*). 
+Construction of `[[A] inL]` is trivial - `[A] mkL` where `mkL = [inL] b`. This is generally the case for value constructors. In practice, we may also wish to defer computation of partial constructions (see *Deferred Computations and Coinductive Data*). 
 
 Pairs - algebraic `(A * B)` product types - may also be Church encoded:
 
@@ -78,9 +100,11 @@ Pairs - algebraic `(A * B)` product types - may also be Church encoded:
 
 However, in context of Awelon language, I find it more convenient to encode a pair as `[[B][A]]`. 
 
-Between algebraic sums and products, we can represent any conventional data structure. The option type `(1 + A)` may be modeled as a choice of `false` or `[[A] R]`. Natural numbers can be encoded as `μNat.(1 + Nat)` - i.e. zero or successor. A list can be modeled as `μList.(1 + (A * List))`. Text can be encoded as a list of natural numbers. Algebraic encodings are generally simple, e.g. `Succ = mkR` for natural numbers, or `Cons = mkP mkR`. 
+Between algebraic sums and products, we can represent any conventional data structure. 
 
-An alternative is to model data as folding over its structure. The Church encoding of natural numbers is an example of this. Consider: 
+The option type `(1 + A)` may be modeled as a choice of `false` or `[[A] R]`. Natural numbers can be encoded as `μNat.(1 + Nat)` - that is, Nat is recursively zero or successor of a Nat. Given natural numbers, integers can be represented by a pair representing `X - Y`.  We can encode rational numbers as a numerator-denominator pair. We can encode decimal numbers with a significand and exponent. A list can be modeled as `μList.(1 + (A * List))`. Text can be encoded as a list of natural numbers. Algebraic encodings are generally simple, e.g. `Succ = mkR` for natural numbers, or `Cons = mkP mkR`. 
+
+An alternative is to model data as implicitly folding over its structure. The Church encoding of natural numbers is an example of this. Consider: 
 
         [X][F] 0 i == [X]
         [X][F] 1 i == [X] F         == [[X][F] 0 i] F
@@ -105,33 +129,31 @@ Return attention to numbers and texts in Awelon.
 
 It is my intention that Awelon developers be given relatively free reign over the choice of encoding and corresponding tradeoffs. In practice, this control may be limited by what the runtime accelerates. But the encoding is at least separate from the syntactic embedding.
 
-This is achieved by allowing developers to partially define the encoding. For natural numbers and texts, we end up with something like the following:
+This is achieved by allowing developers to partially define the encoding: 
 
-        #0 is user definable (zero)
-        S# is user definable (succ)
-        #1 = [#0 S#]
-        #2 = [#1 S#]
+        0 (zero) is user definable 
+        S (succ) is user definable
+        1 = [0 S]
+        2 = [1 S]
         ...
 
-        ~ is user definable (nil)
-        : is user definable (cons)
+        ~ (nil)  is user definable
+        : (cons) is user definable
         "" = ~
-        "hello" = [#104 "ello" :]
-        "→" = [#8594 ~ :]
+        "→" = [8594 "" :]
+        "hello" = [104 "ello" :]
 
-At the moment, only natural numbers are supported. Long term, Awelon will likely support signed integers, rationals, decimal numbers. The normal Church encoding for signed numbers is a pair of natural numbers representing `X - Y` where at least one of the pair is zero. We might similarly support rational (a numerator and denominator pair) and decimal numbers (a significand and exponent pair). I haven't hammered out the details of exactly what I want. In the short term we can experiment with models via editable views. So for now, Awelon language simply reserves number-like words (prefix `[+-~.#]?[0-9]`) for purpose of representing numbers.
-
-*Aside:* Beyond numbers and texts, users might be interested in more structured data with human-meaningful symbolic labels. Awelon language does not optimize for those cases, but support for *Editable Views* may present structured data to humans.
+For reasons of simplicity, Awelon language only provides built in support for encoding natural numbers and text data. This is sufficient for compact embeddings of most data. Higher number types are left to *Editable Views* (see below). 
 
 ## Binary Data
 
-Binaries can be embedded with base64 text. But support for external binaries avoids space and conversion overheads of embedding binary data within the Awelon syntax, and is generally more convenient in context of integration with external systems and hypermedia. 
-
 Awelon language supports reference to external binary data via `%secureHash`. 
 
-A runtime will have implicit access to resources named by secure hash, perhaps through the filesystem or network. The binary in question is easily loaded into memory, easily verified. Any change in the binary must be reflected in the Awelon code, which is convenient for partial evaluations or caching. Binary data is treated like embedded text, except our values are in the range `#0 .. #255` instead of codepoints.
+A runtime will have implicit access to resources named by secure hash, perhaps through the filesystem or network. The binary in question is easily loaded into memory, easily verified. Any change in the binary must be reflected in the Awelon code, which is convenient for partial evaluations or caching. Binary data is treated like embedded text, except our values are in the range `0 .. 255` instead of codepoints.
 
-*Note:* Developers are encouraged to model [rope-like](https://en.wikipedia.org/wiki/Rope_%28data_structure%29) structures if partial structure sharing could offer significant benefits.
+Binaries can also be embedded via base64 text. But external binaries avoid some conversions and are relatively convenient in context of Awelon's application model (working with hypermedia, etc..).
+
+*Note:* Developers are encouraged to leverage [rope-like](https://en.wikipedia.org/wiki/Rope_%28data_structure%29) structures if modeling edits on large binary data. 
 
 ## Acceleration
 
@@ -146,7 +168,7 @@ The runtime must look at the given definitions. Upon recognizing `[] b a`, the r
 
 Critically, acceleration of functions extends also to *Data*, and efficient representations thereof. Natural numbers, for example, may be represented by simple machine words. Accelerated arithmetic functions could then operate directly on the compact natural number representation.
 
-Long term, Awelon runtimes could accelerate evaluation of linear algebra for semi-transparent GPGPU parallelism, [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks) for distributed cloud computing, and potentially interpretation of a register machine or C-- to more efficiently leverage the conventional CPU.
+Long term, Awelon runtimes could accelerate labeled records and variants for convenient data embedding, evaluation of linear algebra for semi-transparent GPGPU parallelism, [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks) for distributed cloud computing, and potentially interpretation of a register machine or C-- to more efficiently leverage the conventional CPU. 
 
 *Note:* Acceleration replaces intrinsics and performance applications of FFI.
 
@@ -208,26 +230,6 @@ That is, we replace a large value with a word `$secureHash` whose definition is 
 Stowage enables programmers to work semi-transparently with data or computations much larger than working memory. Unlike effectful storage or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, incremental computing, and backtracking. However, effective use of stowage is limited to [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), optimally those that implicitly batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
 
 *Note:* Stowage leverages the same implicit secure hash resources as external binary data. If our large value happens to encode flat binary data, may stow to `%secureHash` instead. Also, programmers may freely use `$secureHash` to name programs (not just values) from a normal dictionary.
-
-## Dictionary
-
-An Awelon dictionary doubles as a codebase and a substrate for multi-agent application state. The dictionary representation must support efficient lookup in context of high frequency concurrent updates. I propose a DVCS-inspired patch based representation of dictionaries:
-
-        secureHashOfPatch1
-        secureHashOfPatch2
-        @word1 definition1
-        @word2 definition2
-        ...
-
-Each patch contains a list of patches to logically include (via secure hash) followed by a list of definitions overriding specific words. A word may be logically deleted by defining a trivial cycle like `@foo foo`. The last definition of a word wins. Whitespace (SP, LF) surrounding each definition is implicitly trimmed. A dictionary is represented by a 'root' patch.
-
-As a dictionary shared with software agents, this representation is not optimal for humans. The intention is that human programmers should be operating on a dictionary through editable views or edit sessions, browsing the dictionary as hypermedia, loading relevant definitions into scope as needed. See *Editable Views*, later.
-
-A runtime might usefully document recognized accelerators, annotations, and other features by specifying seed dictionary, or a set of seeds (to account for portability, versioning). 
-
-*Note:* Non-trivial cycles are errors - loop behavior must be modeled via *fixpoint*, not link layer recursion. But the trivial cycle conceptually matches the behavior of an undefined word, so we'll take advantage.
-
-*Note:* Some words are implicitly defined. This includes the four primitives `a b c d`, most number words, and secure hash resources. These should not be represented within the dictionary, or if represented should be equivalent to the implicit definition.
 
 ## Secure Hash Resources 
 
@@ -318,7 +320,7 @@ Awelon's semantics allow for some rewrites that aren't performed by the basic ev
 
 A typical example of rewrite optimizations regards mapping a pure function over values in a list or stream. In this case the principle observation is `[G] map [F] map == [G F] map`, and we might recognize this in a rewrite rule as `map [F] map => [F] compose map` (where `[G] [F] compose == [G F]`).
 
-Rewrite optimizations can also be utilized for compaction purposes, e.g. translationg `[#0 S#]` to `#1` or recovering the `z` symbol after evaluation of the Z fixpoint combinator. An intriguing possibility is to localize some secure hash resources by rewriting to local dictionary words.
+Rewrite optimizations can also be utilized for compaction purposes, e.g. translationg `[0 S]` to `1` or recovering the `z` symbol after evaluation of the Z fixpoint combinator. An intriguing possibility is to localize some secure hash resources by rewriting to local dictionary words.
 
 A runtime is free to support rewrite optimizations insofar as they are proven valid. Unfortunately, I lack at this time effective means for a normal programmer to propose and prove rewrite optimizations through the dictionary. But we can at least get a useful start by runtime rewriting of known, accelerated functions.
 
@@ -354,11 +356,11 @@ Blocks naturally delimit the input scope for a computation. For example, we know
 
 Tuple assertions can be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection may be necessary, and we'll fail fast if the tuple assertion is bad. Similar to arity annotations, tuples larger than `(5)` should be rare in practice.
 
-In addition to controlling output counts, programmers may wish to fail fast based on declared structure. To support this, Awelon supports a structure annotation `(:T)` and assertion `(.T)` with the following rewrite semantics:
+In addition to controlling output counts, programmers may wish to fail fast based on declared structure. To support this, Awelon supports a structure annotation `(:T)` and corresponding assertion `(.T)` with the following rewrite semantics:
 
         (:foo) (.foo) ==
 
-In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct it with `i (.foo)`. The symbol `foo` or `T` is left to the programmer, but must match between annotation and assertion. These annotations resist *accidental* access to structured data. As with tuple assertions, we can fail fast dynamically or detect an error statically.
+In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct it with `i (.foo)`. The symbol `foo` or `T` is left to the programmer, but must match between annotation and assertion. These annotations are not labels (i.e. you cannot discriminate on them), but they do resist *accidental* access to structured data. As with tuple assertions, we can fail fast dynamically or detect an error statically.
 
 ## Substructural Scoping
 
@@ -420,7 +422,7 @@ I feel this gives Awelon an excellent debugging experience, much better than mos
 
 ## Static Typing
 
-Awelon can be evaluated without static typing. There is no type driven dispatch or overloading. But if we can detect errors early by static analysis, that is a good thing. Further, static types are also useful for verifiable documentation, interactive editing (recommending relevant words based on type context), and performance of JIT compiled code. Strong static type analysis makes a nice default.
+Awelon can be evaluated without static typing. There is no type driven dispatch or overloading. But if we can detect errors early by static analysis, that is a good thing. Further, static types are also useful for verifiable documentation, interactive editing (recommending relevant words based on type context), and performance of JIT compiled code. Strong static type analysis makes a *very* nice default.
 
 We can represent our primitive types as:
 
@@ -438,11 +440,58 @@ Use of annotations can augment static type analysis by providing a validation. S
         opt     S (S   → S') (S A → S') → S'
         bool    S (S   → S') (S   → S') → S'
 
-A runtime could support type assertions `(sum)`, `(opt)`, and `(bool)` to support static type analysis and detection of errors. If necessary, these assertions could be weakly verified dynamically. But with static verification, we can unify the `S` and `S'` types and hence detect inconsistencies between the left vs. right paths. A system may further support annotations for accelerated representations like `(nat)` and `(text)` and `(bin)` and other common data types.
+A runtime could support type assertions `(sum)`, `(opt)`, and `(bool)` to support static type analysis and detection of errors. If necessary, these assertions could be weakly verified dynamically. But with static verification, we can unify the `S` and `S'` types and hence detect inconsistencies between the left vs. right paths. 
 
-However, annotations are unsuitable for more sophisticated type declarations. There are cases where we would need [dependent types](https://en.wikipedia.org/wiki/Dependent_type) or other sophisticated type analysis and perhaps auxiliary proofs. We might need to assert equivalence of functions, that one function 'implements' another.
+Recursive types can potentially be recognized by use in context of fixpoint functions. However, annotations for common types like `(nat)`, `(list)`, `(text)`, `(binary)` certainly would not hurt. 
 
-Type declarations for functions are feasible at the application layer. For example, we might define `foo.type` as a declaration of type for `foo`. Defining type declarations as words ensures they're subject to abstraction, composition, refactoring, rendering, etc.. like everything else. Further, type analysis may be highly flexible, even reflective with our type checker itself defined within the dictionary.
+Type declarations can also be represented at the dictionary and application layers, using simple conventions like `foo.type` to declare a type for `foo`. Declared types are accessible for refactoring, rendering, and reflection. And they can potentially be more expressive than simple annotations can readily support. For example, a system might support [dependent types](https://en.wikipedia.org/wiki/Dependent_type) and auxiliary proofs with sufficient reflection on the dictionary.
+
+*Aside:* Awelon systems are free to consider non-terminating evaluation to be an *error*, and perform static termination analysis by default. This analysis must be sensitive to arity annotations so we can support coinductive data types.
+
+## Labeled Data - Records and Variants 
+
+Many programming languages heavily leverage *labeled* data. 
+
+Labeled sum types (aka variants) allow us to discriminate on the label. Labeled product types (aka records) allow us to maintain a collection of labeled data. Primitive sum `(A + B)` and product `(A * B)` values are simple and sufficient for many use cases. But labeled data is self-documenting (the label informs the human) and extensible (easy to introduce new labels).
+
+Labeled data can be encoded using 'deep' primitive sum types. 
+
+Consider constructors `mkL = [inL] b` and `mkR = [inR] b` for primitive sum types, as described under *Data*, above. We can construct 'deep' sums using sequences like `mkL mkL mkR mkR mkR mkL mkR mkR`. Since that's verbose, let's shorthand it as `LLRRRLRR`. We can encode arbitrary information within this left-right-left sequence. Consider one possible encoding:
+
+        type N v = (v + N v)
+        type T v = (v + N (T v))
+
+Here, `N` labels a value `v` with a unary-encoded natural number. For example, `LRRR` would encode a label `3` Then `T` encodes a sequence of natural numbers. For example, `LLRRRLRRLRRRR` encodes a sequence `2 1 3`. Of course, we'll view this in reverse order upon deconstruction, so we might say instead that we have encoded the sequence `3 1 2`. If we encode a sequence of character codepoints like `102 111 111`, we can encode a text labels like `foo`. Expansion to an `LLRRR...` string is over 300 characters long in this case, so I won't bother. But it could be abstracted to something like `"foo" label`. 
+
+*Aside:* We could leverage [entropy coding](https://en.wikipedia.org/wiki/Entropy_encoding) or related techniques. The encoding needs only to be deterministic and unique.
+
+A singular labeled value is essentially an element from a variant type. A *collection* of labeled values, with at most one instance of each label, would then serve as our 'record' structure. Records might double as as a dispatch layer: given a variant and a record, we can find a label within the record matching the variant's label and use that to determine how to process the variant's value. In context of deep sum labels, we might represent records as a [radix tree](https://en.wikipedia.org/wiki/Radix_tree) on the `LLRRRLRRLRRRR...` path.
+
+This encoding of labeled data with deep sums has some nice properties.
+
+The simple `(sum)` type remains applicable. The other major option for encoding labeled data is label-value pairs, but that requires dependent types because the value type depends on the label. Also, we can extend the prefix of a label, to represent data namespaces or routing. And we can encode flexible merging of records, extraction of a subrecord with a common prefix, and similar features. 
+
+*Note:* Awelon language does not provide special support for labeled data. This is left to *Editable Views* and *Acceleration*.
+
+## Deferred Typing and Macro Evaluation
+
+In context of metaprogramming, it is frequently useful to work with intermediate structures for which we do not know the type. For example, consider:
+
+        1 2 3 4             "abcx → ax^2 + bx + c"  runPoly
+        "Red Warrior" 42    "%s takes %d damage!"   printf
+
+In scenarios like these, computing the type of `runPoly` or `printf` independent of context may require sophisticated dependent types. On the other hand, computing a type for `"abcx → ax^2 + bx + c" computePoly` or `"%s takes %d damage!" printf` might only require some partial evaluation before type checking.
+
+To make this intention explicit, I propose annotation `(dyn)`. Example usage:
+
+        "abcx → ax^2 + bx + c"  runPoly
+            == "abcx → ax^2 + bx + c" compilePoly (dyn) i
+            == [polynomial behavior](dyn) i
+            == [polynomial behavior] i
+
+The presence of a `(dyn)` annotation signals a static type analysis that the code to its left might be difficult to statically validate. If we cannot make a static type judgement but `(dyn)` is in relevant scope, we can suppress warnings. However, dynamic partial evaluation is considered *complete* if a value is produced, that is `[A](dyn) == [A]`. Hence we may attempt partial evaluation to eliminate `(dyn)` annotations prior to static type checking.
+
+Partial evaluation prior to type checking supports convenient macro-like behavior. The ability to hold onto `(dyn)` annotations in first class functions at runtime further enables gradual typing between static and dynamic.
 
 ## Editable Views
 
@@ -452,16 +501,21 @@ However, like Forth, Awelon does not scale nicely beyond about ten tokens per de
 
 To ameliorate these weaknesses, Awelon is expected to leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). As an example of editable views, we could support command lists:
 
-        Editable View        Awelon Source Code
-        {foo, bar, baz}  <=> [[foo] [[bar] [[baz] ~ :] :] :]
+        Editable View       Awelon Source Code
+        {foo, bar, baz}     [[foo] [[bar] [[baz] ~ :] :] :]
 
-This might simplify expression of coroutines or continuation passing style. We might also use editable views as an initial basis for integers, rationals, decimal numbers, etc.. until Awelon language settles those things. For example, we might use `3.141 <=> [3141 #3 decimal]`. 
+Rich number types are useful target for editable views. Consider:
 
-Awelon doesn't have a comments syntax feature, but editable views may:
+        Editable View       Awelon Source Code
+        #42                 42
+        42                  [42 0 Integer]
+        -7                  [0 7 Integer]
+        3.141               [[3141 0 Integer] 3 Decimal]
+        -0.0070             [[0 70 Integer] 4 Decimal]
 
-        /* comment */  <=>  "
-                              comment 
-                            ~ (/2) (@rem) d 
+Also, Awelon doesn't have a comments syntax feature, but editable views may:
+
+        /* comment */  <=>  " comment " (/2) (@rem) d 
 
 The arity annotation `(/2)` preserves the comment until it interferes with further evaluations. The `(@rem)` gate annotation allows conditional breakpoints or tracing of comments. And the `d` drops the comment, preventing it from having a semantic impact. Variations on comments - perhaps using `(@lang)` or `(@ns)` - might provide rendering hints, specifying use of a namespace or DSL for a given subprogram.
 
@@ -470,4 +524,3 @@ A valuable feature for editable views is that they're still useful after program
 Editable views are not limited to plain text, of course. Nor are they limited to singular definitions. We could leverage color for namespaces, or render a boolean value as a checkbox in a GUI form, or zoom into other definitions. But plain text views are quite useful. We can potentially leverage [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to support development of Awelon through plain text editors.
 
 *Note:* A useful sanity check for editable views is that a round trip (Awelon code to View and back) is an identity function, preserving the original source.
-
