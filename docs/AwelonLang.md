@@ -43,7 +43,7 @@ A useful subset of words is automatically defined:
 * words to encode natural numbers, regex `[1-9][0-9]*`
 * secure hash resources - `$secureHash` or `%secureHash`
 
-Other words are user defined, through a dictionary. 
+Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small.
 
 ## Dictionary
 
@@ -399,7 +399,7 @@ The behavior of an active gate is configured at the runtime. Outside of debuggin
 
 Stalls effectively give us breakpoints by preventing the program upstream of the gate from using the value. Unlike conventional breakpoints, Awelon will continue to evaluate other parts of the program as far as they can go despite the stalls. To avoid rework or significant changes in evaluation order, if evaluation of `P` stalls on a gate, copy operation `[P]c` must stall on `P`. 
 
-Tracing gives us standard 'printf' style debugging. Note that copying the value implicitly requires evaluating it first, but is not subject to normal limitations like `(aff)`. The other copy of the value is passed.
+Tracing gives us standard 'printf' style debugging. Note that copying the value implicitly requires evaluating it first, but is not subject to normal limitations like `(aff)`. The other copy of the value is passed. We can render trace logs as part of the program output, appending a comment-like structure `[[MsgN] ... [Msg3] [Msg2] [Msg1]] (@stderr/log) d`. 
 
 Profiling might tweak `[A]` to record performance metadata (e.g. allocations, rewrites, times, use of memoization or stowage) to named statistics objects, then pass it on. This would allow us to accumulate a lot of useful performance information quickly.
 
