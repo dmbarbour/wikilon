@@ -19,10 +19,10 @@ Awelon's simplicity, purity, and evaluation model each contribute greatly to its
 
 There are four primitive combinators:
 
-            [B][A]a == A[B]    (apply)
-            [B][A]b == [[B]A]  (bind)
-               [A]c == [A][A]  (copy)
-               [A]d ==         (drop)
+            [B][A]a == A[B]         (apply)
+            [B][A]b == [[B]A]       (bind)
+               [A]c == [A][A]       (copy)
+               [A]d ==              (drop)
 
 Those square brackets `[]` enclose a 'block' of Awelon code, representing a function. With just this much, all computable functions can be defined. As a lightweight proof, I'll define the Curry-Schönfinkel SKI [combinators](https://en.wikipedia.org/wiki/Combinatory_logic).
 
@@ -55,11 +55,25 @@ Awelon has a standard, DVCS-inspired patch based dictionary representation:
         @word2 definition2
         ...
 
-A patch contains a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions override those from earlier patches. A word may be logically deleted by defining a trivial cycle like `@foo foo`.
+A patch contains a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions override those from earlier patches. 
 
-This representation is not optimal for direct use by humans. Rather, it is intended for efficient import/export and maintenance in context of Awelon applications which must share the dictionary between human and software agents. Humans should ultimately browse and update the dictionary through an *editable view*, perhaps as hypermedia. 
+Cyclic definitions are erroneous. Loop behavior must be modeled via fixpoint combinator. However, trivially defining a word to itself as `@foo foo` will be accepted as meaning 'delete the word' rather than raising an error. Undefined words essentially evaluate to themselves.
 
-*Note:* Non-trivial cycles are errors. Loop behavior must be modeled via *fixpoint*, not link layer recursion. But an undefined word does not evaluate further, which is the same as rewriting to itself. So the trivial cycle is suitable for representing deletion.
+Awelon's dictionary representation is not optimal for direct use by humans. It can be tolerated in small doses. But it is intended more as an import/export format, and for efficient sharing between humans and software agents. Humans will generally observe and influence a dictionary through an editable view, perhaps as hypermedia. 
+
+## Secure Hash Resources
+
+Awelon has built-in support for identifying resources via secure hash. 
+
+* arbitrary definitions may be referenced as `$secureHash`
+* external binary data may be referenced via `%secureHash`
+* secure hashes are used to identify dictionary patches
+
+Secure hashes implicitly name immutable structure outside the dictionary, which might be available on the local system or downloaded. If you hear about a secure hash resource from a remote server, you should be able to HTTP request it from that server (with potential redirects). Content-delivery networks are also viable. The resource is readily verified against the secure hash, and easily cached after download. 
+
+In all cases, we use the same secure hash: 384 bits of [BLAKE2b](https://blake2.net/) encoded as 64 characters in [base64url](https://en.wikipedia.org/wiki/Base64).
+
+*Note:* Secure hash resources may reference dictionary words, so have mutable semantics. Only their structure is immutable.
 
 ## Data
 
@@ -147,11 +161,9 @@ For reasons of simplicity, Awelon language only provides built in support for en
 
 ## Binary Data
 
-Awelon language supports reference to external binary data via `%secureHash`. 
+Awelon language supports reference to external binary data via `%secureHash`. We'll basically use the same text representation, but using values in range `0 .. 255` instead of Unicode codepoints.
 
-A runtime will have implicit access to resources named by secure hash, perhaps through the filesystem or network. The binary in question is easily loaded into memory, easily verified. Any change in the binary must be reflected in the Awelon code, which is convenient for partial evaluations or caching. Binary data is treated like embedded text, except our values are in the range `0 .. 255` instead of codepoints.
-
-Binaries can also be embedded via base64 text. But external binaries avoid some conversions and are relatively convenient in context of Awelon's application model (working with hypermedia, etc..).
+For small binaries, we might instead choose to embed the binary within base16 or base64 text, and accelerate conversions between text to the binary. However, in context of Awelon's application model and hypermedia, referencing external binary data can be very convenient.
 
 *Note:* Developers are encouraged to leverage [rope-like](https://en.wikipedia.org/wiki/Rope_%28data_structure%29) structures if modeling edits on large binary data. 
 
@@ -193,6 +205,17 @@ Annotations must have no internally observable effect on computation. Nonetheles
 
 Annotations may be introduced and documented on a runtime basis. In case of porting code, runtimes that do not recognize an annotation may ignore it. Long term, we should reach some de-facto standardization on useful annotations.
 
+## Stowage
+
+Stowage is a simple idea, summarized by rewrite rules:
+
+        [large value](stow) => [$secureHash]
+        [small value](stow) => [small value]
+
+Stowage enables programmers to work semi-transparently with data or computations much larger than working memory. Unlike effectful storage or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, incremental computing, and backtracking. However, effective use of stowage is limited to [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), optimally those that implicitly batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
+
+What 'large value' means is heuristic, based on time-space tradeoffs. But it should be deterministic, reproducible, and simple. A good default is that the value be moved to stowage if it is at least 256 bytes. Also, if our value is simple binary data, we might stow to a `%secureHash` external binary instead.
+
 ## Deferred Computations and Coinductive Data
 
 The *arity annotations* `(/2)` to `(/9)` have simple rewrite rules:
@@ -208,7 +231,7 @@ Arity annotations serve a critical role in controlling computation. For example,
 
 Arity annotations serve a very useful role in modeling [thunks](https://en.wikipedia.org/wiki/Thunk) and [coinductive data](https://en.wikipedia.org/wiki/Coinduction). It is sometimes useful to model 'infinite' data structures to be computed as we observe them - procedurally generated streams or scene graphs.
 
-As a related utility, I introduce a `(force)` annotation. 
+We may want to 'force' a thunk. To do so, consider a `(force)` annotation.
 
         [computation](force)
 
@@ -218,35 +241,16 @@ This introduces a 'forced' evaluation mode for the given block. A forced evaluat
 
 *Aside:* Arities should rarely stray above `(/5)`. Beyond a handful of parameters, programmers should refactor for simplicity or introduce parameter objects.
 
-## Stowage
-
-Stowage is a simple idea, summarized by rewrite rules:
-
-        [large value](stow) => [$secureHash]
-        [small value](stow) => [small value]
-
-That is, we replace a large value with a word `$secureHash` whose definition is `large value`. What exactly "large" means is heuristic, based on time-space tradeoffs. But in the interest of deterministically reproducible computation, I recommend a default stowage threshold of 256 bytes. The unique nature of the secure hash allows us to conceptualize this as a rewrite optimization to an existing word that already had the definition `large value`. However, in practice, our runtime must store the definition in a lookup table for future linking. 
-
-Stowage enables programmers to work semi-transparently with data or computations much larger than working memory. Unlike effectful storage or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, incremental computing, and backtracking. However, effective use of stowage is limited to [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), optimally those that implicitly batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
-
-*Note:* Stowage leverages the same implicit secure hash resources as external binary data. If our large value happens to encode flat binary data, may stow to `%secureHash` instead. Also, programmers may freely use `$secureHash` to name programs (not just values) from a normal dictionary.
-
-## Secure Hash Resources 
-
-Binaries, stowage, and dictionaries will use the same secure hash: 384 bits of [BLAKE2b](https://blake2.net/) encoded as 64 characters in [base64url](https://en.wikipedia.org/wiki/Base64). BLAKE2b is an efficient, high quality hash function. And the size offers an acceptable balance between collision resistance, aesthetics, and other size overheads.
-
-Secure hash resources are generally not defined within the normal dictionary representation. Instead, they are defined in an implicit global space and may easily be shared among many dictionaries and runtimes. These resources are easy to cache and distribute through [content delivery networks (CDNs)](https://en.wikipedia.org/wiki/Content_delivery_network). In case of untrusted CDNs, we might compress and encrypt the content using 128 bits of the secure hash for lookup and the rest for decryption.
-
 ## Evaluation
 
-Evaluation of an Awelon program results in an equivalent Awelon program, hopefully one from which it is easier to extract information or use efficiently in further evaluations. Evaluation proceeds by pure, local rewriting. The four primitives rewrite based on simple pattern matching:
+Evaluation of an Awelon program results in an equivalent Awelon program, hopefully one from which it is easier to extract information or efficiently perform further evaluations. Evaluation proceeds by pure, local rewriting. The four primitives rewrite based on simple pattern matching:
 
-            [B][A] a => A[B]    (apply)
-            [B][A] b => [[B]A]  (bind)
-               [A] c => [A][A]  (copy)
-               [A] d =>         (drop)
+            [B][A]a => A[B]         (apply)
+            [B][A]b => [[B]A]       (bind)
+               [A]c => [A][A]       (copy)
+               [A]d =>              (drop)
 
-Annotations may have special rewrite rules. For example, arity annotations remove themselves if sufficient arguments are available. Stowage rewrites large definitions to smaller secure hashes.
+Annotations may have special rewrite rules. For example, arity annotations remove themselves if sufficient arguments are available. Stowage evaluates the given program then rewrites to a small secure hash.
 
 Words rewrite to their evaluated definitions - this is called linking. However, words link *lazily* to preserve human-meaningful hypermedia link structure in the evaluated output where feasible. Words do not link unless doing so leads to additional rewrites of primitives or annotations, something more interesting than simple inlining of the word's evaluated definition. Consequently, arity annotations are useful to control linking of words.
 
@@ -256,11 +260,9 @@ Awelon's evaluation strategy is simple:
 * evaluate before copy
 * evaluate final values
 
-This strategy isn't lazy or eager in the conventional sense. Rewriting the outer program first provides opportunity to apply annotations or drop values that won't be part of our outputs. Evaluation before copy guards against introduction of unnecessary rework. Evaluation of final values (blocks) brings us to a normal form that cannot be further evaluated. 
+This strategy isn't lazy or eager in the conventional sense. Rewriting the outer program first provides opportunity to apply annotations or drop values that won't be part of our output. Evaluation before copy guards against introduction of unnecessary rework. Evaluation of final values (blocks) brings us to a normal form that cannot be further evaluated.
 
-Annotations don't much affect this evaluation strategy. The exception is `[computation](par)` to advise early, parallel evaluation of a result we'll probably need.
-
-*Aside:* Undefined words do not rewrite further. If there are errors when evaluating a word's definition, that word must be treated as undefined. Partial evaluations with undefined words can be useful in context of development, debugging, and the monotonic futures and promises application pattern.
+*Note:* Undefined words do not rewrite further. If there any errors when parsing or evaluating a word's definition, or a cycle in the definition, that word should be treated as undefined. Partial evaluations with undefined words can be useful in context of development, debugging, staged computing, and the monotonic futures and promises application pattern.
 
 ## Fixpoint
 
@@ -273,9 +275,9 @@ Fixpoint is a function useful for modeling loop behaviors. For Awelon language, 
            [A]i == A            (inline)         i = [] w a d
         [B][A]w == [A][B]       (swap)           w = (/2) [] b a
 
-The arity annotation `(/3)` defers further expansion of the `[[F]z]` result. This variation of the Z combinator has the advantage that the definition of `z` can be found in the naive evaluation, and that `[F]` is not replicated unnecessarily. I recommend that readers unfamiliar with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior.
+The arity annotation `(/3)` defers expansion within the `[[F]z]` result. This variation of the Z combinator has the advantage that the definition of `z` can be found in the naive evaluation, and that `[F]` is not replicated unnecessarily. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior.
 
-Fixpoint is notoriously difficult for humans to grok and sometimes awkward to use. Instead of directly using fixpoint, we'll want to build more comfortable loop abstractions above it like [generators](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) and folds. We would benefit from accelerating at least fixpoint, and possibly some of the more popular loop abstractions.
+Fixpoint is notoriously difficult for humans to grok and frequently awkward to use. Instead of directly using fixpoint, we'll want to build more comfortable loop abstractions above it like list fold, foreach, while, and [generators](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29). We would benefit from accelerating at least fixpoint, and possibly some of the more popular loop abstractions.
 
 ## Memoization
 
@@ -310,21 +312,46 @@ In general, a value word is any word that evaluates to a singleton `[Value]`. In
 
 ## Rewrite Optimization
 
-Awelon's semantics allow for some rewrites that aren't performed by the basic evaluation strategy. Consider:
+Awelon's semantics allow for safe rewrites that aren't performed by evaluation. Consider:
 
-        [] a    =>
-        [i] b   =>
-        b i     =>  i
-        c d     =>
-        c w     =>  c
+        [] a    =>              apply identity is a NOP
+        [i] b   =>              because ∀A. [[A]i] == [A]
+        b i     =>  i           ∀A,F. [A][F]b i == [[A]F]i == [A]F == [A][F]i
+        c d     =>              modulo substructural constraints
+        c w     =>  c           no need to swap, both copies are equivalent
 
-A typical example of rewrite optimizations regards mapping a pure function over values in a list or stream. In this case the principle observation is `[G] map [F] map == [G F] map`, and we might recognize this in a rewrite rule as `map [F] map => [F] compose map` (where `[G] [F] compose == [G F]`).
+A typical example of rewrite optimizations regards mapping a pure function over values in a list or stream. In this case the principle observation is `[G] map [F] map == [G F] map`, and we might recognize this in a rewrite rule as `map [F] map => [F] compose map` (where `[G][F] compose == [G F]`).
 
 Rewrite optimizations can also be utilized for compaction purposes, e.g. translationg `[0 S]` to `1` or recovering the `z` symbol after evaluation of the Z fixpoint combinator. An intriguing possibility is to localize some secure hash resources by rewriting to local dictionary words.
 
 A runtime is free to support rewrite optimizations insofar as they are proven valid. Unfortunately, I lack at this time effective means for a normal programmer to propose and prove rewrite optimizations through the dictionary. But we can at least get a useful start by runtime rewriting of known, accelerated functions.
 
-*Aside:* Rewrite optimizations in practice are ad-hoc and fragile. Use of a `[function](rw)` to precisely stage rewrite optimizations can help, but relying upon rewrite optimizations for performance critical code is not highly recommended.
+*Aside:* Rewrite optimizations in practice are ad-hoc and fragile. Use of a `[function](rewrite)` to precisely stage rewrite optimizations can help, but relying upon rewrite optimizations for performance critical code is not highly recommended.
+
+## Staged Computing
+
+Staged computing is a form of partial evaluation in discrete phases or 'stages'. Staged computing is useful to optimize loops and eliminate irrelevant conditional options based on information available early on. It is a form of partial evaluation. Unfortunately, Awelon's local rewriting with concatenative combinators is unsuitable for staged computing because Awelon cannot represent partial values except with undefined words.
+
+However, consider `[F](stage/3)` with an alternative evaluation mode:
+
+* rewrite to `[[Z][Y][X]F]` with `X`, `Y`, `Z` undefined
+* evaluate to `[E]` containing free variables `X`, `Y`, `Z`
+* rewrite program to eliminate those three free variables
+
+These 'free variables' enable us to construct partially defined values like `[2 [X] 3]` or `[[Y] X]` during computation. Granted, the presence of free variables may also limit use of stowage and memoization and related techniques. The third step can be performed by a simple reflective rewrite. Here's a simple algorithm to eliminate free variable `X` assuming argument `[X]`:
+
+        T(E) | E does not contain X     =>      d E
+        T([X])                          =>
+        T([E])                          =>      [T(E)] b
+        T(X)                            =>      i
+        T(E1 E2)
+            | only E1 contains X        =>      T(E1) E2
+            | only E2 contains X        =>      [E1] a T(E2)
+            | E1 and E2 contain X       =>      c T([E1]) a T(E2)
+
+The aforementioned algorithm does miss opportunities for structure-aware partial evaluations. For example, if we know `X` is a pair we could assume `[[X1][X2]]` and continue partial evaluation with the component elements independently. So we introduce add a few features to our algorithm. We can also generalize the arity, so we simply use `(stage)`, because unused free variables won't contribute to our final output (that is, `T([X] E) => E` when `E` doesn't use `X`). But even without fancy features, it seems we can get usable ad-hoc staging easily enough.
+
+Of course, if developers need truly robust staging, they should model it explicitly with an intermediate representation. But even that could potentially take advantage of simple `(stage)` annotations to simplify the data plumbing aspect.
 
 ## Compilation
 
@@ -470,11 +497,9 @@ Dynamic evaluation is considered *complete* when a value is produced, that is `[
 
 ## Labeled Data - Records and Variants 
 
-Many programming languages heavily leverage *labeled* data. 
-
 Labeled sum types (aka variants) allow us to conditionally discriminate on the label. Labeled product types (aka records) allow us to access a heterogeneous collection of data by label. Primitive sum `(A + B)` and product `(A * B)` values are simple and sufficient for many use cases. But labeled data is frequently self-documenting (the label informs the human) and extensible (easy to introduce new labels).
 
-Labeled data can be encoded using 'deep' primitive sum types. 
+Labeled data can be encoded using 'deep' primitive sum types. Use of sums instead of `(label,value)` pairs avoids need for dependent types. Editable views can potentially support labeled data at the syntax layer.
 
 Consider constructors `mkL = [inL] b` and `mkR = [inR] b` for primitive sum types, as described under *Data*. We can construct 'deep' sums using sequences like `mkL mkL mkR mkR mkR mkL mkR mkR`. I'll shorthand that as `LLRRRLRR`. We can encode labels (or other information) within this left-right-left sequence. Consider one possible encoding:
 
@@ -483,17 +508,11 @@ Consider constructors `mkL = [inL] b` and `mkR = [inR] b` for primitive sum type
 
 Here, `N` labels a value `v` with a unary-encoded natural number. For example, `LRRR` would encode a label `3` Then `T` encodes a sequence of natural numbers. For example, `LLRRRLRRLRRRR` encodes a sequence `2 1 3`. Of course, we'll view this in reverse order upon deconstruction, so we might say instead that we have encoded the sequence `3 1 2`. A text label like `foo` can be encoded as a series of code points such as `102 111 111`. With the aforementioned encoding, this would expand to an `LLRRRR...` string of over 300 characters, so I won't bother. But it could be abstracted as something like `L.0 L.o L.o L.f` or possibly `"foo" label`. 
 
-*Aside:* More efficient encodings are certainly feasible. For example, we could leverage an [entropy coding](https://en.wikipedia.org/wiki/Entropy_encoding) over a more constrained alphabet.
+More efficient encodings are certainly feasible. For example, we could leverage an [entropy coding](https://en.wikipedia.org/wiki/Entropy_encoding) over a more constrained alphabet.
 
-A single labeled value represents an element of a variant type. 
+A single labeled value represents an element of a variant type. A collection of labeled values can model a record. A record can double as a switch, allowing conditional selection of an action based on the label of a variant. A collection based on a [radix tree](https://en.wikipedia.org/wiki/Radix_tree) could be efficient, avoiding redundant storage and computation on shared prefixes. 
 
-A collection of labeled values can model a record. A record can double as a switch, allowing conditional selection of an action based on the label of a value. A collection based on a [radix tree](https://en.wikipedia.org/wiki/Radix_tree) could be especially efficient, avoiding redundant storage and computation on shared prefixes. 
-
-Intriguingly, we might extend or extract label prefixes to model namespace and routing like behaviors. Also, we can model first-class label generators, e.g. a stream of labels each distinct from all prior labels.
-
-*Note:* It is feasible to model labels as `(label, value)` pairs. Unfortunately, this requires dependent types: the type of the value depends on the label's value. A deep sum encoding is much simpler in context of static typing.
-
-*Note:* Awelon's support for labeled data is left to editable views and acceleration. At this time, there is no syntax-layer support for labeled data. 
+Modeling labels as first-class structures allows for potentially generating new labels in infinite streams, or extending and extracting label prefixes to model routing-like behaviors.
 
 ## Editable Views
 
@@ -501,7 +520,7 @@ Awelon language has an acceptably aesthetic plain text form.
 
 However, like Forth, Awelon does not scale nicely beyond about ten tokens per definition, and is awkward for some problem domains like expression of algebraic formula. Further, Awelon lacks *namespaces*, which results in redundant expression of context in words such as repeating a `trie:` prefix for `trie:insert` and `trie:fold`.
 
-To ameliorate these weaknesses, Awelon is expected to leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). As an example of editable views, we could support command lists:
+To ameliorate these weaknesses, Awelon is expected to leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). As an example of editable views, we might support command lists:
 
         Editable View       Awelon Source Code
         {foo, bar, baz}     [[foo] [[bar] [[baz] ~ :] :] :]
@@ -516,14 +535,16 @@ Rich number types are useful target for editable views. Consider:
         -0.0070             [[0 70 Integer] 4 Decimal]
         2/3                 [[2 0 Integer] 3 Rational]
 
-Also, Awelon doesn't have a comments syntax feature, but editable views may:
+This `[data lang]` pattern can generally be applied to support arbitrary DSLs in a context-free manner, with `lang` potentially being a named identity function if we don't have need to process the data. No static analysis is performed or required.
+
+Editable views could also provide a 'comments' syntax, for example:
 
         /* comment */  <=>  " comment " (/2) (@rem) d 
 
-The arity annotation preserves the comment, the gate allows conditional breakpoints or tracing with comments, and the `d` finally drops the comment so it has no semantic effect. Variations on this comment idea might be used to provide rendering or namespace hints.
+The arity annotation would preserve the comment, or allow comments to be injected after evaluations. The gate would allow conditional breakpoints or tracing with comments, and the `d` finally drops the comment so it has no semantic effect. Variations on this comment idea might be used to provide rendering or namespace hints.
 
 Awelon code evaluates into Awelon code, via program rewriting. Ideally, editable views should also be preserved. That is, our evaluated output should include comments and decimal numbers, or at least have potential to do so. Development of editable views may be sensitive to the dictionary and accelerators.
 
 Editable views are not limited to plain text representations. I do encourage attention to plain text views, because those are easy to integrate with existing development environments or even text editors via [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace). But exploring views based on hypermedia representations, sliders and checkboxes, canvases and graphs, music notations, etc.. could provide a very powerful environment and a foundation for live coding applications.
 
-*Note:* A useful sanity check: a round-trip from Awelon code to view and back should be the identity function.
+A useful sanity check: a round-trip from Awelon code to view and back should be the identity function.
