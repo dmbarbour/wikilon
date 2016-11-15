@@ -11,7 +11,7 @@ Awelon's simple syntax lowers barriers for program rewriting as an evaluation mo
 
 Like any pure language, Awelon's evaluation is separate from its effects model. Awelon explores a [RESTful application model](ApplicationModel.md) where application state is represented within a codebase, and effects are performed in context of a multi-agent system. Relevant effects patterns include [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern) and a variation on the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) oriented around [work orders](https://en.wikipedia.org/wiki/Work_order). More conventional effects models are possible within orders.
 
-Intriguingly, [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) can feasibly present Awelon programs or codebases as [hypermedia](https://en.wikipedia.org/wiki/Hypermedia) objects. GUI forms with live coding properties. Words within a act as hypermedia links. Some relationships may be implicit in word structure (as between `foo`, `foo.doc`, and `foo.author`) to support more flexible hypermedia than is implied by direct word dependencies.
+Intriguingly, [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) can feasibly present Awelon programs or codebases as [hypermedia](https://en.wikipedia.org/wiki/Hypermedia) objects. GUI forms with live coding properties. Words within a act as hypermedia links. Some relationships may be implicit in word structure (as between `foo`, `foo.doc`, and `foo.author`) to support more flexible hypermedia than is implied by direct word dependencies. Editable views can also support numbers, comments, lambdas and let expressions for cases where tacit programming is annoying, and so on. 
 
 Awelon's simplicity, purity, and evaluation model each contribute greatly to its utility for the envisioned application model. I have not encountered another language that fits as nicely.
 
@@ -312,34 +312,34 @@ In general, a value word is any word that evaluates to a singleton `[Value]`. In
 
 ## Rewrite Optimization
 
-Awelon's semantics allow for safe rewrites that aren't performed by evaluation. Consider:
+Awelon's semantics allow many rewrites not performed by evaluation. Consider:
 
         [] a    =>              apply identity is a NOP
-        [i] b   =>              because ∀A. [[A]i] == [A]
-        b i     =>  i           ∀A,F. [A][F]b i == [[A]F]i == [A]F == [A][F]i
+        [B] a [A] a => [B A] a  application composes
+        [i] b   =>              because [A][i]b == [[A]i] == [A]
+        b i     =>  i           expansion of [X][F]b i == [X][F]i
         c d     =>              modulo substructural constraints
         c w     =>  c           no need to swap, both copies are equivalent
-        [] b a  =>  w           definition of w
+        [] b a  =>  w           by definition of w
+        [0 S]   =>  1           by definition of 1
 
-A typical example of rewrite optimizations regards mapping a pure function over values in a list or stream. In this case the principle observation is `[G] map [F] map == [G F] map`, and we might recognize this in a rewrite rule as `map [F] map => [F] compose map` (where `[G][F] compose == [G F]`).
+Performing such rewrites can improve performance and aesthetics. For example, logically rewriting the `z` symbol after fixpoint so we don't ever see the expanded `[[c] a [(/3) c i] b b w i](/3) c i` in the output is convenient for both the machine and for humans observing the evaluation.
 
-Rewrite optimizations can also be utilized for compaction purposes, e.g. translationg `[0 S]` to `1` or recovering the `z` symbol after evaluation of the Z fixpoint combinator. An intriguing possibility is to localize some secure hash resources by rewriting to local dictionary words.
-
-A runtime is free to support rewrite optimizations insofar as they are proven valid. Unfortunately, I lack at this time effective means for a normal programmer to propose and prove rewrite optimizations through the dictionary. But we can at least get a useful start by runtime rewriting of known, accelerated functions.
-
-*Aside:* Rewrite optimizations in practice are ad-hoc and fragile. Use of annotation `[function](rwopt)` to indicate use of rewrite optimizations may help. Nonetheless, relying on rewrite optimizations for performance critical code is not highly recommended.
+A runtime may perform rewrite optimizations at its own discretion if they are provably valid. But it seems wiser to accept rewrite rules from a dictionary by some simple convention then shift burden of proof to dictionary development. Also, while rewrites tend in practice to be ad-hoc and fragile, annotation `[F](rwopt)` may help by providing explicit control of staging and enabling application of rewrites to programs constructed at runtime.
 
 ## Staged Evaluation
 
-Staged programs are designed to process information in multiple distinct phases or stages. The goal is to improve performance through *deep* partial evaluations with available information. For robust staged computing, we must model stages explicitly. But as a convenient optimizer pass, we might express an intention for staged evaluation with `[function](stage)`. This might operate as follows:
+Staged programs are designed to process information in multiple distinct phases or stages. The goal is to improve performance through *deep* partial evaluations with available information. For robust staged computing, we must model stages explicitly. But as simple optimizer pass, we might express an intention for staged evaluation with `[function](stage)`. A viable implementation:
 
 * assuming words `A B C ..` are undefined and unused
 * evaluate `..[C][B][A]function` as much as possible
 * rewrite expression to extract `A B C ..` arguments
 
-Evaluation with undefined 'future' values enables ad-hoc data plumbing and propagation of partial values. We propagate these futures as far as they will go, then systematically extract them as arguments. The evaluator may need to delay stowage, memoization, and other reflective annotations. The bulk of complexity is in the extraction step, but even that can be performed by a simple algorithm.
+That is, we perform evaluation with undefined 'future' values. This enables ad-hoc data plumbing to proceed, and supports construction and propagation of 'partial' values like `[[A] foo]`. Essentially, this gives us a lambda-calculus like ability to evaluate with free variables. The burden of complexity is shifted to the 'extract argument' step, but that can be performed by a simple reflective algorithm:
 
-        Extract Argument: ∀X,E. [X] T(X,E) == E
+        Extract Argument
+            ∀X,E. [X] T(X,E) == E
+            T(X,E) does not contain X
 
         T(X, E) | E does not contain X      => d E
         T(X, X)                             => i
@@ -350,27 +350,27 @@ Evaluation with undefined 'future' values enables ad-hoc data plumbing and propa
             | only E2 contains X            => [E1] a T(X,E2)
             | otherwise                     => c T(X,[E1]) a T(X,E2)
 
-In this case, we systematically extract `A` then `B` then `C` and however many arguments we provided. The cost is proportional to the arity and the size of our expression. This extract argument pattern has other cases, such as automatic refactoring, translation from lambda calculus, or even lambda based editable views.
+After staged evaluation, we systematically extract the arguments we provided for staging. This is essentially a whole-program rewrite, and it has a cost proportional to the size, depth, and arity of our expression. Conveniently, this simple algorithm is also useful for converting lambda calculus terms, supporting lambda based editable views, and automatic refactoring.
 
-Staged evaluation might be enhanced further. For example, sensitivity to type might support independent propagation of elements in a pair `B = [B2] [B1]`. But partial evaluation with futures followed by extract argument should be effective for many use cases, especially in context of programs designed to leverage staged evaluation.
+Staged evaluation could be enhanced further by recognizing simple type annotations, such as tuples. For example, if we know argument `[B]` is a pair `[[B2] [B1]]`, we could proceed to propagate those components independently. However, even without such enhancements, staged evaluation based on simple futures should be effective for many use cases. Especially assuming programs designed to leverage this evaluation mode.
 
 ## Compilation
 
 Compilation of functions, especially those containing loops (fixpoints, folds, etc.), can offer significant performance benefits. This might be requested explicitly via `[function](jit)`. Compilation is subject to a lot of low level interactions with acceleration, quotas, GC, parallelism, and so on. I won't detail it here. But I don't have any particular reason to believe compiling Awelon will be difficult.
 
-*Aside:* Extraction of Awelon functions for use without a runtime is also a form of compilation. For performance with Awelon project's application model, the focus should be JIT.
+Compilation of a function for use in external systems is also viable. I generally call this 'extraction'. However, for Awelon's application model, the focus should be JIT.
 
 ## Parallel Evaluation
 
-Programmers may advise parallel evaluation of a block via `[computation](par)`. Essentially, this tells a runtime that we'll probably need the result of that computation, so go ahead and begin evaluation. We can abort the computation by dropping it.
+Programmers may advise parallel evaluation of a block via `[computation](par)`. Essentially, this tells a runtime that we'll probably need the result of that computation, so go ahead and begin evaluation. We can proceed to move the block with linear data plumbing. However, copying a parallel computation must wait for complete evaluation, and dropping it should efficiently abort the computation. 
 
-If parallelism is sufficiently lightweight, a runtime is also free to parallelize the basic evaluation strategy, e.g. partitioning large programs into smaller chunks or parallelizing computation of final values.
+However, parallel evaluation of opaque values has severe limitations on expressiveness. For example, `(par)` cannot effectively represent communicating processes or pipeline parallelism. 
 
-However, that form of parallelism has severe limits on expressiveness.
+To cover these weaknesses, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks). Kahn process network descriptions have a deterministic evaluation, but can be evaluated using processes and channels in a distributed system. A sufficiently large process network might be efficiently evaluated in a distributed cloud for high performance computing. With KPNs as first-class values, we can model parallel interactions between dynamic networks.
 
-For more powerful and scalable parallelism, we'll want to accelerate [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks) to support cloud computing, and [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra) to support SSE/GPGPU computing. Intriguingly, we can usefully update and observe a process network that is still undergoing evaluation without waiting for evaluation to complete.
+Additionally, acceleration of [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra) can support fine-grained parallelism that can feasibly leverage SIMD, SSE, or GPGPU. This would be extremely valuable for programming physics simulations, machine learning, signal processing, and so on.
 
-*Aside:* Copying a parallel value should wait for completion. Dropping a parallel value should abort the computation. But basic linear data plumbing with parallel values is acceptable.
+*Aside:* Accelerated KPNs offer an [interesting alternative](KPN_Effects.md) to monadic effects, especially in context of concurrent or multi-agent programs.
 
 ## Structural Scoping
 
@@ -517,37 +517,49 @@ Modeling labels as first-class structures allows for potentially generating new 
 
 ## Editable Views
 
-Awelon language has an acceptably aesthetic plain text form.
+Awelon language has an acceptably aesthetic plain text syntax. However, like Forth, Awelon does not scale nicely beyond about ten tokens per definition. Expression of sophisticated data plumbing can be awkward. The lack of namespaces or DSLs can easily result in redundant reference to the problem domain.
 
-However, like Forth, Awelon does not scale nicely beyond about ten tokens per definition, and is awkward for some problem domains like expression of algebraic formula. Further, Awelon lacks *namespaces*, which results in redundant expression of context in words such as repeating a `trie:` prefix for `trie:insert` and `trie:fold`.
+Instead of solving these problems at the syntax layer, Awelon shifts the burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
 
-To ameliorate these weaknesses, Awelon is expected to leverage [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). As an example of editable views, we might support command lists:
+I put some emphasis on *plain text* editable views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary via plain text and CLI. However, graphical views could potentially include checkboxes, sliders, drop-down lists, graphs and canvases, and may offer an interesting foundation for graphical user interfaces within Awelon's application model. 
 
-        Editable View       Awelon Source Code
-        {foo, bar, baz}     [[foo] [[bar] [[baz] ~ :] :] :]
+Numbers will certainly be a target for editable views. A viable sketch:
 
-Rich number types are useful target for editable views. Consider:
+        #42         == AWELON(42)
+        -7          == [#0 #7 integer]
+        42          == [#42 #0 integer]
+        3.141       == [3141 #3 decimal]
+        -0.0070     == [-70 #4 decimal]
+        2/3         == [2 #3 rational]
+        -4/6        == [-4 #6 rational]
+        2.998e6     == [2.998 6 exp10]
 
-        Editable View       Awelon Source Code
-        #42                 42
-        42                  [42 0 Integer]
-        -7                  [0 7 Integer]
-        3.141               [[3141 0 Integer] 3 Decimal]
-        -0.0070             [[0 70 Integer] 4 Decimal]
-        2/3                 [[2 0 Integer] 3 Rational]
+Here I use bidirectional rewrites, an obvious escape for raw Awelon code, and I build views primarily upon existing views. Patterns of form `[program lang]` are a simple basis to indicate DSLs, with the set of recognized language words being view-dependent. I've used this general design with great success in practice. It is simple, efficient, extensible. 
 
-This `[data lang]` pattern can generally be applied to support arbitrary DSLs in a context-free manner, with `lang` potentially being a named identity function if we don't have need to process the data. No static analysis is performed or required.
+We can use editable views to represent command lists:
 
-Editable views could also provide a 'comments' syntax, for example:
+        {foo, bar, baz} == [[foo] {bar, baz} :]
+        {baz}           == [[baz] ~ :]
 
-        /* comment */  <=>  " comment " (/2) (@rem) d 
+Command lists are potentially convenient for lightweight abstraction of generators, coroutines, or modeling effects in a continuation-passing style. 
 
-The arity annotation would preserve the comment, or allow comments to be injected after evaluations. The gate would allow conditional breakpoints or tracing with comments, and the `d` finally drops the comment so it has no semantic effect. Variations on this comment idea might be used to provide rendering or namespace hints.
+We can support source comments as an editable view:
 
-Editable views should be evaluable. Awelon code evaluates into Awelon code via program rewriting, and this should correspond to editable views evaluating into editable views. This means view features like comments, decimal numbers, lambdas, and so on should be something we construct at runtime, and perhaps even accelerate.
+        /* comment */  == " comment " (/2) (@rem) d
 
-An intriguing possibility is to recognize the fingerprint of an 'extract-argument' pattern (described under *Staged Evaluation*), with a comment to name variables, supporting lambda and let expressions within editable views.
+Including the arity annotation and gate enables us to trace progress through comments, conditionally breakpoint on comments, potentially indicate different kinds of comments, and so on. And also to inject comments into computed values.
 
-Editable views are not limited to plain text representations. I encourage attention to plain text views because those are easy to integrate with existing development environments and editors, potentially via [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace). However, views based on hypermedia representations, sliders and checkboxes, canvases and graphs, music notations, etc.. will provide a simple and powerful environment and a foundation for live coding applications.
+Qualified namespaces can be supported locally and unambiguously as views with phrases like `using large_prefix as x` (a specialized comment) such that `x.foo` is subsequently replaced by `large_prefix.foo` and `x` is replaced by `large_prefix`. We'd need to escape references to the original `x`. To ameliorate the problems of namespace boiler-plate, we might build some namespaces directly into the view, and simply develop a view per user or per edit session.
 
-A useful sanity check: a round-trip from Awelon code to view and back should be the identity function.
+An intriguing opportunity is support for lambdas and let-expressions. Tacit programming is inconvenient for use cases involving lots of replication and data plumbing of data. Lambda expressions can help out, handling the expressions on your behalf. An example syntax inspired from [Kitten language](http://kittenlang.org/):
+
+        -> X Y Z ; X foo [Y] bar    == "X Y Z" (/2) (@lambda) d d [i foo] a bar
+        let X = code in prog        == [code] -> X; prog
+
+This would operate in a similar manner to *Staged Evaluation*. We introduce free variables `[X][Y][Z]` then reverse the 'extract argument' rewrite rules to produce `X`, `Y`, and `Z` within the program view. When we're done editing, we apply the "extract argument" algorithm to eliminate the free variables. 
+
+*Note:* Editable views are ideally *evaluable*. Awelon code evaluates to Awelon code, and it is most convenient if we can aesthetically view and edit the evaluated result. Including an arity annotation comments is part of this. Evaluable views also imply that, for example, `[-70 #4 decimal]` should be a viable result from adding or multiplying two decimal numbers. Design of evaluable editable views must be sensitive to the dictionary and accelerators. 
+
+*Note:* Editable views should be implemented at the dictionary layer. Developers should have effective control over their views, and this also enables views to adapt to application state or edit sessions (e.g. so we can use a common namespace without boiler-plate). Integrating with structure editors may require targeting a shared intermediate language.
+
+*Aside:* A useful sanity check is that a round-trip from Awelon code to view and back should be the identity function. If this check fails, we might provide multiple views and representations then ask the human for advice. Or we might simply reject the edit.
