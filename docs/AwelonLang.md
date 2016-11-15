@@ -31,7 +31,7 @@ Those square brackets `[]` enclose a 'block' of Awelon code, representing a func
          [C][B][A]s == [[C]B][C]A   (S combinator)   s = [[c] a b w] a i
             [B][A]k == A            (K combinator)   k = a d
 
-Awelon's primitive combinators are more convenient than SKI. Apply and bind provide structural control over scope, respectively hiding or capturing one value. Separation of 'copy' and 'drop' is convenient both for performance and [substructural type](https://en.wikipedia.org/wiki/Substructural_type_system) analysis. The value ignored by apply is accessible for further partial evaluations.
+Awelon's primitive combinators are more convenient than SKI. Apply and bind provide structural control over scope, respectively hiding or capturing one value. Partial results are available from apply. Separation of 'copy' and 'drop' is convenient both for performance and [substructural type](https://en.wikipedia.org/wiki/Substructural_type_system) analysis. 
 
 ## Words
 
@@ -237,20 +237,20 @@ We may want to 'force' a thunk. To do so, consider a `(force)` annotation.
 
 This introduces a 'forced' evaluation mode for the given block. A forced evaluation operates as if there were sufficient arguments to the left of `computation` for purpose of deleting arity annotations without actually providing those arguments. The computation may still get stuck and prevent further evaluation, but it at least won't be stuck on an arity annotation.
 
-*Note:* Awelon language does not implicitly memoize computations to avoid rework. However, programmers can explicitly use `(memo)` to share work, and it is feasible for a runtime to optimize lightweight memoization of deferred computations. See *Memoization*.
+Awelon language does not implicitly memoize computations to avoid rework. However, programmers can explicitly use `(memo)` to share work, and it is feasible for a runtime to optimize lightweight memoization of deferred computations. See *Memoization*.
 
-*Aside:* Arities should rarely stray above `(/5)`. Beyond a handful of parameters, programmers should refactor for simplicity or introduce parameter objects.
+*Aside:* I originally tried a `[F](lazy)` annotation to defer computation. However, the interaction with quotas, breakpoints, and parallelism are confusing. For example, given `[[A](par)F](lazy)` it is unclear whether this started as `[A](par)[F]b(lazy)` or `[A][(par)F]b(lazy)`. Arity annotations are simpler and more precise.
 
 ## Evaluation
 
-Evaluation of an Awelon program results in an equivalent Awelon program, hopefully one from which it is easier to extract information or efficiently perform further evaluations. Evaluation proceeds by pure, local rewriting. The four primitives rewrite based on simple pattern matching:
+Evaluation of an Awelon program results in an equivalent Awelon program, hopefully one from which it is easier to extract information or efficiently perform further evaluations. Awelon's primary evaluation mode proceeds by pure, local rewriting. The four primitives rewrite based on simple pattern matching:
 
             [B][A]a => A[B]         (apply)
             [B][A]b => [[B]A]       (bind)
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Annotations may have special rewrite rules. For example, arity annotations remove themselves if sufficient arguments are available. Stowage evaluates the given program then rewrites to a small secure hash.
+Annotations may introduce special rewrite rules. For example, arity annotations remove themselves if sufficient arguments are available. Stowage evaluates the given program then rewrites to a small secure hash. Rewrite optimizations and staged computing modes are possible with annotations.
 
 Words rewrite to their evaluated definitions - this is called linking. However, words link *lazily* to preserve human-meaningful hypermedia link structure in the evaluated output where feasible. Words do not link unless doing so leads to additional rewrites of primitives or annotations, something more interesting than simple inlining of the word's evaluated definition. Consequently, arity annotations are useful to control linking of words.
 
@@ -319,6 +319,7 @@ Awelon's semantics allow for safe rewrites that aren't performed by evaluation. 
         b i     =>  i           ∀A,F. [A][F]b i == [[A]F]i == [A]F == [A][F]i
         c d     =>              modulo substructural constraints
         c w     =>  c           no need to swap, both copies are equivalent
+        [] b a  =>  w           definition of w
 
 A typical example of rewrite optimizations regards mapping a pure function over values in a list or stream. In this case the principle observation is `[G] map [F] map == [G F] map`, and we might recognize this in a rewrite rule as `map [F] map => [F] compose map` (where `[G][F] compose == [G F]`).
 
@@ -326,32 +327,32 @@ Rewrite optimizations can also be utilized for compaction purposes, e.g. transla
 
 A runtime is free to support rewrite optimizations insofar as they are proven valid. Unfortunately, I lack at this time effective means for a normal programmer to propose and prove rewrite optimizations through the dictionary. But we can at least get a useful start by runtime rewriting of known, accelerated functions.
 
-*Aside:* Rewrite optimizations in practice are ad-hoc and fragile. Use of a `[function](rewrite)` to precisely stage rewrite optimizations can help, but relying upon rewrite optimizations for performance critical code is not highly recommended.
+*Aside:* Rewrite optimizations in practice are ad-hoc and fragile. Use of annotation `[function](rwopt)` to indicate use of rewrite optimizations may help. Nonetheless, relying on rewrite optimizations for performance critical code is not highly recommended.
 
-## Staged Computing
+## Staged Evaluation
 
-Staged computing is a form of partial evaluation in discrete phases or 'stages'. Staged computing is useful to optimize loops and eliminate irrelevant conditional options based on information available early on. It is a form of partial evaluation. Unfortunately, Awelon's local rewriting with concatenative combinators is unsuitable for staged computing because Awelon cannot represent partial values except with undefined words.
+Staged programs are designed to process information in multiple distinct phases or stages. The goal is to improve performance through *deep* partial evaluations with available information. For robust staged computing, we must model stages explicitly. But as a convenient optimizer pass, we might express an intention for staged evaluation with `[function](stage)`. This might operate as follows:
 
-However, consider `[F](stage/3)` with an alternative evaluation mode:
+* assuming words `A B C ..` are undefined and unused
+* evaluate `..[C][B][A]function` as much as possible
+* rewrite expression to extract `A B C ..` arguments
 
-* rewrite to `[[Z][Y][X]F]` with `X`, `Y`, `Z` undefined
-* evaluate to `[E]` containing free variables `X`, `Y`, `Z`
-* rewrite program to eliminate those three free variables
+Evaluation with undefined 'future' values enables ad-hoc data plumbing and propagation of partial values. We propagate these futures as far as they will go, then systematically extract them as arguments. The evaluator may need to delay stowage, memoization, and other reflective annotations. The bulk of complexity is in the extraction step, but even that can be performed by a simple algorithm.
 
-These 'free variables' enable us to construct partially defined values like `[2 [X] 3]` or `[[Y] X]` during computation. Granted, the presence of free variables may also limit use of stowage and memoization and related techniques. The third step can be performed by a simple reflective rewrite. Here's a simple algorithm to eliminate free variable `X` assuming argument `[X]`:
+        Extract Argument: ∀X,E. [X] T(X,E) == E
 
-        T(E) | E does not contain X     =>      d E
-        T([X])                          =>
-        T([E])                          =>      [T(E)] b
-        T(X)                            =>      i
-        T(E1 E2)
-            | only E1 contains X        =>      T(E1) E2
-            | only E2 contains X        =>      [E1] a T(E2)
-            | E1 and E2 contain X       =>      c T([E1]) a T(E2)
+        T(X, E) | E does not contain X      => d E
+        T(X, X)                             => i
+        T(X, [X])                           => 
+        T(X, [E])                           => [T(X,E)] b
+        T(X, E1 E2)
+            | only E1 contains X            => T(X,E1) E2
+            | only E2 contains X            => [E1] a T(X,E2)
+            | otherwise                     => c T(X,[E1]) a T(X,E2)
 
-The aforementioned algorithm does miss opportunities for structure-aware partial evaluations. For example, if we know `X` is a pair we could assume `[[X1][X2]]` and continue partial evaluation with the component elements independently. So we introduce add a few features to our algorithm. We can also generalize the arity, so we simply use `(stage)`, because unused free variables won't contribute to our final output (that is, `T([X] E) => E` when `E` doesn't use `X`). But even without fancy features, it seems we can get usable ad-hoc staging easily enough.
+In this case, we systematically extract `A` then `B` then `C` and however many arguments we provided. The cost is proportional to the arity and the size of our expression. This extract argument pattern has other cases, such as automatic refactoring, translation from lambda calculus, or even lambda based editable views.
 
-Of course, if developers need truly robust staging, they should model it explicitly with an intermediate representation. But even that could potentially take advantage of simple `(stage)` annotations to simplify the data plumbing aspect.
+Staged evaluation might be enhanced further. For example, sensitivity to type might support independent propagation of elements in a pair `B = [B2] [B1]`. But partial evaluation with futures followed by extract argument should be effective for many use cases, especially in context of programs designed to leverage staged evaluation.
 
 ## Compilation
 
@@ -543,8 +544,10 @@ Editable views could also provide a 'comments' syntax, for example:
 
 The arity annotation would preserve the comment, or allow comments to be injected after evaluations. The gate would allow conditional breakpoints or tracing with comments, and the `d` finally drops the comment so it has no semantic effect. Variations on this comment idea might be used to provide rendering or namespace hints.
 
-Awelon code evaluates into Awelon code, via program rewriting. Ideally, editable views should also be preserved. That is, our evaluated output should include comments and decimal numbers, or at least have potential to do so. Development of editable views may be sensitive to the dictionary and accelerators.
+Editable views should be evaluable. Awelon code evaluates into Awelon code via program rewriting, and this should correspond to editable views evaluating into editable views. This means view features like comments, decimal numbers, lambdas, and so on should be something we construct at runtime, and perhaps even accelerate.
 
-Editable views are not limited to plain text representations. I do encourage attention to plain text views, because those are easy to integrate with existing development environments or even text editors via [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace). But exploring views based on hypermedia representations, sliders and checkboxes, canvases and graphs, music notations, etc.. could provide a very powerful environment and a foundation for live coding applications.
+An intriguing possibility is to recognize the fingerprint of an 'extract-argument' pattern (described under *Staged Evaluation*), with a comment to name variables, supporting lambda and let expressions within editable views.
+
+Editable views are not limited to plain text representations. I encourage attention to plain text views because those are easy to integrate with existing development environments and editors, potentially via [Filesystem in Userspace](https://en.wikipedia.org/wiki/Filesystem_in_Userspace). However, views based on hypermedia representations, sliders and checkboxes, canvases and graphs, music notations, etc.. will provide a simple and powerful environment and a foundation for live coding applications.
 
 A useful sanity check: a round-trip from Awelon code to view and back should be the identity function.
