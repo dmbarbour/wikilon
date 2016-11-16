@@ -186,7 +186,7 @@ Long term, Awelon runtimes could accelerate labeled records and variants for con
 
 ## Annotations
 
-Annotations help developers control, optimize, and debug computations. Annotations are represented as parenthetical words like `(par)` or `(/3)`. Some useful examples of annotations include:
+Annotations help developers control, optimize, view, and debug computations. Annotations are represented as parenthetical words like `(par)` or `(/3)`. Some useful examples of annotations include:
 
 * `(/2)..(/9)` - arity annotations to defer computations
 * `(0)..(9)` - tuple assertions for scope control
@@ -200,6 +200,7 @@ Annotations help developers control, optimize, and debug computations. Annotatio
 * `(error)` - mark a value as an error object
 * `(@foo)` - gates for active debugging (logging, breakpoints)
 * `(force)` - evaluate previously deferred computations
+* `(λX)` - view subsequent code as lambda `[X]` as lambda
 
 Annotations must have no internally observable effect on computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states.
 
@@ -521,9 +522,9 @@ Awelon language has an acceptably aesthetic plain text syntax. However, like For
 
 Instead of solving these problems at the syntax layer, Awelon shifts the burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
 
-I put some emphasis on *plain text* editable views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary via plain text and CLI. However, graphical views could potentially include checkboxes, sliders, drop-down lists, graphs and canvases, and may offer an interesting foundation for graphical user interfaces within Awelon's application model. 
+I put some emphasis on *plain text* editable views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate easily on a serviced dictionary through filesystems and CLI. However, graphical views could potentially include checkboxes, sliders, drop-down lists, graphs and canvases, and may offer an interesting foundation for graphical user interfaces within Awelon's application model. 
 
-Numbers will certainly be a target for editable views. A viable sketch:
+Numbers are an important target for editable views. A viable sketch:
 
         #42         == AWELON(42)
         -7          == [#0 #7 integer]
@@ -553,10 +554,10 @@ Qualified namespaces can be supported locally and unambiguously as views with ph
 
 An intriguing opportunity is support for lambdas and let-expressions. Tacit programming is inconvenient for use cases involving lots of replication and data plumbing of data. Lambda expressions can help out, handling the expressions on your behalf. An example syntax inspired from [Kitten language](http://kittenlang.org/):
 
-        -> X Y Z ; X foo [Y] bar    == "X Y Z" (/2) (@lambda) d d [i foo] a bar
+        -> X Y Z ; X foo [Y] bar    == "X Y Z" (/2) (@λ) d d [i foo] a bar
         let X = code in prog        == [code] -> X; prog
 
-This would operate in a similar manner to *Staged Evaluation*. We introduce free variables `[X][Y][Z]` then reverse the 'extract argument' rewrite rules to produce `X`, `Y`, and `Z` within the program view. When we're done editing, we apply the "extract argument" algorithm to eliminate the free variables. 
+This would operate in a similar manner to *Staged Evaluation*. At each lambda annotation, we can introduce free variables `[X][Y][Z]` then reverse the 'extract argument' rewrite rules to produce `X`, `Y`, and `Z` within the program view. When we're done editing, we apply the "extract argument" algorithm to eliminate the free variables. 
 
 *Note:* Editable views are ideally *evaluable*. Awelon code evaluates to Awelon code, and it is most convenient if we can aesthetically view and edit the evaluated result. Including an arity annotation comments is part of this. Evaluable views also imply that, for example, `[-70 #4 decimal]` should be a viable result from adding or multiplying two decimal numbers. Design of evaluable editable views must be sensitive to the dictionary and accelerators. 
 
