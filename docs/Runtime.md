@@ -93,8 +93,8 @@ I assume 8-byte alignment, and 3 tag bits.
         011     value words and interned data
         111     action words and annotations
 
-        000     block cons cell (2 words)
-        010     compact rep for [[A] inR]
+        000     cons cell (2 words)
+        010     (reserved)
         100     tagged values
         110     tagged actions
 
@@ -105,9 +105,9 @@ I assume 8-byte alignment, and 3 tag bits.
 
 Words will be interned, and hence do not need deep-copy. Linked lists are used for blocks, and are deep-copied such that we can destructively manipulate them and also to guarantee memory requirements are proportional to serialized program size (a convenient property for safe checkpoints). Small natural numbers are represented within the pointer. Tagged items can cover anything we miss, providing type information in the first byte(s) of the referenced memory.
 
-This leaves me an open value slot `010`. I propose to use this to save a few words when representing the common `[[A] inR]` structure for sums and options.
+An important consideration is constant-space traversals, which is important for efficient copy, drop, and serialization of a program, and for memory usage guarantees. I plan to use the Morris algorithm. This places a constraint on our representations: lists must end in a predictable NULL value, and any object with more than two children must also contain an iterator.
 
-To support Morris traversals, lists must predictably terminate in predictable NULL values. This allows us to use the space held by these NULLs to copy, drop, and serialize deep structures without extra allocations or a stack. I believe non-allocating traversals will prove a performance critical feature, and convenient for controlling memory use.
+I'm left with one open value slot with bit pattern `010`. This might later optimize a common structure. 
 
 ## Memory Management
 

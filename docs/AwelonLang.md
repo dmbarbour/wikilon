@@ -35,7 +35,7 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 ## Words
 
-Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{},;|&=\"`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in external contexts (such as URLs, natural language text, or editable views), and that aren't too large.
+Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{},;|&=\"`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large.
 
 A useful subset of words is automatically defined:
 
@@ -112,7 +112,7 @@ Pairs - algebraic `(A * B)` product types - may also be Church encoded:
 
         [onP] [[B][A] inP] i == [B][A]onP       inP = [] b b a i
 
-However, in Awelon language, we can simply encode a pair as `[[B][A]]`. 
+However, in Awelon language, we can encode a pair as `[[B][A]]`. 
 
 Between algebraic sums and products, we can represent any conventional data. 
 
@@ -198,8 +198,9 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(0)..(9)` - tuple assertions for output scope control
 * `(aff) (rel)` - support substructural type safety
 * `(:foo) (.foo)` - lightweight type tag and assertions
-* `(nat)` - assert argument should be a natural number
 * `(par)` - request parallel evaluation of computation
+* `(seq)` - request immediate evaluation of computation
+* `(nat)` - assert argument should be a natural number
 * `(jit)` - compile a function for use in future evaluations
 * `(stow)` - move large values to disk, load on demand
 * `(memo)` - memoize a computation for incremental computing
@@ -221,7 +222,7 @@ Stowage is a simple idea, summarized by rewrite rules:
 
 Stowage enables programmers to work semi-transparently with data or computations much larger than working memory. Unlike effectful storage or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, incremental computing, and backtracking. However, effective use of stowage is limited to [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), optimally those that implicitly batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
 
-What 'large value' means is heuristic, based on time-space tradeoffs. But it should be deterministic, reproducible, and simple. A good default is that the value be moved to stowage if it is at least 256 bytes. Also, if our value is simple binary data, we might stow to a `%secureHash` external binary instead.
+What 'large value' means is heuristic, based on time-space tradeoffs. But it should be deterministic, reproducible, and simple. A good default is that a value be moved to stowage only if its encoding in Awelon is at least 256 bytes. Also, if our value is simple binary data, we might stow to a `%secureHash` external binary instead.
 
 ## Deferred Computations and Coinductive Data
 
@@ -257,9 +258,9 @@ Evaluation of an Awelon program results in an equivalent Awelon program, hopeful
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Annotations may introduce special rewrite rules. For example, arity annotations remove themselves if sufficient arguments are available. Stowage evaluates the given program then rewrites to a small secure hash. Rewrite optimizations and staged computing modes are possible with annotations.
+Words rewrite to their evaluated definitions - this is called linking. However, words link *lazily* to preserve human-meaningful hypermedia link structure in the evaluated output where feasible. Words do not link unless doing so leads to additional rewrites of primitives or annotations, something more interesting than a simple inlining of the word's evaluated definition. 
 
-Words rewrite to their evaluated definitions - this is called linking. However, words link *lazily* to preserve human-meaningful hypermedia link structure in the evaluated output where feasible. Words do not link unless doing so leads to additional rewrites of primitives or annotations, something more interesting than simple inlining of the word's evaluated definition. Consequently, arity annotations are useful to control linking of words.
+Arity annotations are very useful to control linking of words.
 
 Awelon's evaluation strategy is simple:
 
@@ -269,9 +270,13 @@ Awelon's evaluation strategy is simple:
 
 This strategy isn't lazy or eager in the conventional sense. Rewriting the outer program first provides opportunity to apply annotations or drop values that won't be part of our output. Evaluation before copy guards against introduction of unnecessary rework. Evaluation of final values (blocks) brings us to a normal form that cannot be further evaluated.
 
+Annotations may introduce special rewrite rules for evaluation, limited to identity semantics. For example, arity annotations wait for sufficient arguments then rewrite to the empty program. Stowage replaces a large value with a secure hash reference. Memoization, staging, and rewrite optimizations use alternative evaluation modes. 
+
+*Note:* The `[A](seq)` annotation will cause evaluation of `[A]` as if it were about to be copied. This is mostly useful for precise profiling and fail-fast detection of stalled computations.
+
 ## Value Words
 
-Words that represent values - such as `true`, `false`, or `42` - are treated as first-class values. Doing so is convenient for both aesthetics and preservation of hypermedia link structure. Value words are weakly implied by the lazy link rule: do not link a unless doing so results in something more interesting than a simple inlining of the word's evaluated definition. But I'll this extra explicit here.
+A 'value word' is any word whose evaluated definition is a singleton block. An Awelon runtime must treat value words as values with respect to binding, data plumbing, etc..
 
         true = [a d]
         false = [d i]
@@ -280,17 +285,17 @@ Words that represent values - such as `true`, `false`, or `42` - are treated as 
         42 true w == true 42
         42 [] b   == [42]
 
-A 'value word' is any word whose evaluated definition is a singleton block. An Awelon runtime must treat value words as values with respect to binding, data plumbing, etc..
+Support for value words is implied by the lazy link rules. I'm just making it explicit. Value words are essential for preserving human-meaningful structure and hypermedia resource references.
 
 ## Stalled Computation
 
-A 'stalled' computation is incomplete and unable to progress. In Awelon, the main cause of stalled computation is undefined words. Specifically, a computation that *might* link a word depending on its arity, etc. should stall. Stalls are mostly relevant in context of the *evaluate before copy*. Evaluation of a stalled computation is not complete, therefore we do not copy. That is, if `P` stalls, `[P]c` stalls.
+A 'stalled' computation is incomplete and unable to progress. In Awelon, the main cause of stalled computation is undefined words. Specifically, a computation that *might* link a word depending on its arity, etc. should stall. Stalls are mostly relevant in context of the *evaluate before copy*. Evaluation of a stalled computation is not complete, therefore we do not copy. That is, if `P` stalls, `[P]c` stalls (and thus `[P](seq)` stalls). 
 
-Stalls are usually a bad thing, and a development environment should ensure programmers are aware of potential issues. However, stalling may be performed on purpose, as part of future-based application patterns or active debugging. For that reason, stalls are not generally considered an error.
+Accidental stalls are a bad thing. A development environment should ensure programmers are aware of potential issues. However, stalling may be performed on purpose, as part of future-based application patterns or active debugging. For that reason, stalls are not considered an error.
 
 *Note:* Awelon will evaluate as much as possible even in context of some stalls.
 
-## Fixpoint
+## Fixpoint and Loops
 
 Fixpoint is a function useful for modeling loop behaviors. For Awelon language, I recommend the following variant of the [strict Z fixpoint combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator):
 
@@ -336,13 +341,13 @@ Awelon's semantics allow many rewrites not performed by evaluation. Consider:
         [i] b   =>              because [A][i]b == [[A]i] == [A]
         b i     =>  i           expansion of [X][F]b i == [X][F]i
         c d     =>              modulo substructural constraints
-        c w     =>  c           no need to swap, both copies are equivalent
         [] b a  =>  w           by definition of w
+        c w     =>  c           no need to swap, both copies are equivalent
         [0 S]   =>  1           by definition of 1
 
-Performing such rewrites can improve performance and aesthetics. For example, logically rewriting the `z` symbol after fixpoint so we don't ever see the expanded `[[c] a [(/3) c i] b b w i](/3) c i` in the output is convenient for both the machine and for humans observing the evaluation.
+Performing such rewrites can improve performance and aesthetics. For example, logically rewriting the `z` symbol after fixpoint so we don't see the expanded `[[c] a [(/3) c i] b b w i](/3) c i` is convenient for both machine performance and for human observers.
 
-A runtime may perform rewrite optimizations at its own discretion if they are provably valid. But it seems wiser to accept rewrite rules from a dictionary by some simple convention then shift burden of proof to dictionary development. Also, while rewrites tend in practice to be ad-hoc and fragile, annotation `[F](rwopt)` may help by providing explicit control of staging and enabling application of rewrites to programs constructed at runtime.
+A runtime may perform rewrite optimizations at its own discretion if they are provably valid. We may also accept rewrite rules, via some convention, from a dictionary. In that case, burden of proof is shifted to the dictionary developers. Also, while rewrites tend in practice to be ad-hoc and fragile, annotation `[F](rwopt)` may help by providing explicit control of staging and enabling application of rewrites to programs constructed at runtime.
 
 ## Staged Evaluation
 
@@ -354,28 +359,32 @@ Staged programs are designed to process information in multiple distinct phases 
 
 That is, we perform evaluation with undefined 'future' values. This enables ad-hoc data plumbing to proceed, and supports construction and propagation of 'partial' values like `[[A] foo]`. Essentially, this gives us a lambda-calculus like ability to evaluate with free variables. The burden of complexity is shifted to the 'extract argument' step, but that can be performed by a simple reflective algorithm:
 
-        Extract Argument
-            ∀X,E. [X] T(X,E) == E
+        T(X,E) - extract X from E such that:
             T(X,E) does not contain X
+            [X] T(X,E) == E
 
         T(X, E) | E does not contain X      => d E
         T(X, X)                             => i
         T(X, [X])                           => 
         T(X, [E])                           => [T(X,E)] b
-        T(X, E1 E2)
-            | only E1 contains X            => T(X,E1) E2
-            | only E2 contains X            => [E1] a T(X,E2)
-            | otherwise                     => c T(X,[E1]) a T(X,E2)
+        T(X, F G)
+            | only F contains X             => T(X,F) G
+            | only G contains X             => [F] a T(X,G)
+            | otherwise                     => c [T(X,F)] a T(X,G)
 
-After staged evaluation, we systematically extract the arguments we provided for staging. This is essentially a whole-program rewrite, and it has a cost proportional to the size, depth, and arity of our expression. Conveniently, this simple algorithm is also useful for converting lambda calculus terms, supporting lambda based editable views, and automatic refactoring.
+After staged evaluation, we systematically extract the arguments provided for staging. This is a whole-program rewrite, and has a cost proportional to the size, depth, and arity of our expression. Conveniently, this simple algorithm is also useful for converting lambda calculus terms, supporting lambda based editable views, and automatic refactoring.
 
-Staged evaluation could be enhanced further by recognizing simple type annotations, such as tuples. For example, if we know argument `[B]` is a pair `[[B2] [B1]]`, we could proceed to propagate those components independently. However, even without such enhancements, staged evaluation based on simple futures should be effective for many use cases. Especially assuming programs designed to leverage this evaluation mode.
+Staged evaluation can be enhanced further by recognizing simple type annotations, such as tuples. For example, if we know argument `[B]` is a pair `[[B2] [B1]]`, we could proceed to propagate those components independently. If we know an argument is a sum or boolean, we might be able to lift the conditional behavior and stage the separate options independently.
+
+While I haven't hammered out the details, specializing for common algebraic data types seems a worthy pursuit for performance benefits. However, even without such enhancements, the simple algorithm proposed above should be effective for many use cases. Especially assuming programs designed to leverage this evaluation mode.
 
 ## Compilation
 
-Compilation of functions, especially those containing loops (fixpoints, folds, etc.), can offer significant performance benefits. This might be requested explicitly via `[function](jit)`. Compilation is subject to a lot of low level interactions with acceleration, quotas, GC, parallelism, and so on. I won't detail it here. But I don't have any particular reason to believe compiling Awelon will be difficult.
+Compilation of functions, especially those containing loops (fixpoints, folds, etc.), can offer significant performance benefits. I expect compilation to be a normal thing for Awelon code, performed at important word boundaries or upon explicit request via `[function](jit)`. JIT compilation is runtime dependent, and I imagine there will be a lot of low-level interactions with accelerators, quotas, GC, parallelism, and so on. I won't detail it here. 
 
-Compilation of a function for use in external systems is also viable. I generally call this 'extraction'. However, for Awelon's application model, the focus should be JIT.
+Before compiling to JIT layer code, we should perform several optimization passes at the Awelon layer - static linking, staged evaluation based on arity (and type sensitive, ideally), rewrite optimizations, and so on. Only after all that has been performed should we compile to LLVM for machine-layer optimization passes and native code generation.
+
+Compilation of a function for use in external systems like JavaScript - aka 'extraction' - is also viable, and will generally share the intermediate work of optimizing at the Awelon layer before compiling to a remote target.
 
 ## Parallel Evaluation
 
@@ -417,17 +426,6 @@ In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct
 
 We can eliminate substructural annotations by observing a value with `a`. It is not difficult to track and validate substructural properties dynamically, or to represent them within static types. 
 
-## Garbage Data
-
-For relevant data, we always have an option to drop data into a logical bit bucket then never look at it again. If we *promise* we will never look at it again, we can also recover memory resources associated with that data. We can represent this pattern by use of a `(trash)` annotation:
-
-        [A](trash) => [](trash)
-        [B][](trash)b => [[B]](trash) => [](trash)
-        [A](rel)[](trash)b => [[A](rel)](rel)(trash) => [](rel)(trash)
-        ...
-
-Trash preserves substructure, but destroys data. Observing trash is an error.
-
 ## Error Annotations
 
 We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy an error value like normal. In addition to user-specified errors, a runtime might use error annotations to highlight places where a program gets stuck, for example:
@@ -435,28 +433,40 @@ We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)
         [A](aff)c       => [[A](aff)c](error)i
         [[A][B][C]](2)  => [[A][B][C]](2)(error)
 
-Errors are not a stalling condition. However, we can also introduce annotation `[P](stall)` to simulate a stalled or non-terminating computation. This would enable programmers to more precisely control their debugging experience. In this case, we'd simply treat `[P]` as a stalling computation.
+Error values may bind further arguments as `[B][A](error)b == [[B]A](error)`. Error values will evaluate like any other value, and will collapse normally from `[[A](error)i]` to `[A](error)`. The error annotation is idempotent and commutative with other annotations on a block.
+
+Errors are not a stalling condition. Rather, indicate 'complete' but with errors. However, we can also introduce annotation `[P](stall)` to simulate a stalled or non-terminating computation. This would enable programmers to more precisely control their debugging experience. In this case, we'd simply treat `[P]` as a stalling computation.
+
+## Garbage Data
+
+For relevant data, we always have an option to drop data into a logical bit bucket then never look at it again. If we tell our runtime that we will never look at it again, we can also recover memory resources associated with that data. We can represent this pattern by use of a `(trash)` annotation:
+
+        [A](trash) => [](error)
+        [A](rel)(trash) => [](rel)(error)
+
+We destroy the data but preserve substructure. Because the data has been destroyed, the resulting value is marked erroneous.
 
 ## Active Debugging
 
 Active debugging is an umbrella term for techniques to observe a computation in-progress. These techniques include logging, profiling, breakpoints. In Awelon, active debugging may occur via instrumentation of words. That is, a runtime can be configured to log arguments to a word, profile evaluation of a word, or stall evaluation of a word. Usefully, words can be instrumented without intrusive modification of a program. 
 
-In some cases, we may wish to introduce words strictly for active debugging purposes. For that use case, I introduce `(@gate)` annotations, such as `(@foo)` or `(@trace)`. These annotations are called 'gates', and have identity behavior - `[A](@gate) => [A]`. Like words, gates are configurable for active debugging. Use of gates is convenient for local reasoning, and helps make the intention of active debugging more obvious.
+* stall - prevent or delay linking of word 
+* trace - record argument(s) into debug log
+* profile - record evaluation statistics
 
-Breakpoints are modeled by stalling evaluation on a word or gate. That is, we get to some point with `[A](@gate)` and we simply don't progress past that. However, a stalled evaluation is distinct from halting on "undefined" word.
+These configurations could generally be composed or conditional.
 
+There are use cases for pseudo-words just for debugging purposes. For this role, I introduce a class of `(@gate)` annotations, such as `(@foo)` or `(@trace)`. I call these annotations 'gates'. Gates have a trivial identity behavior - `[A](@gate) => [A]`. The ability to know at a glance that gates are semantically irrelevant could be convenient for local reasoning about correctness. Gates can serve other useful roles such as rendering hints.
 
-* stall - hold `[A](@gate)` for now
-* trace - copy value into debug log
-* profile - record evaluation of a word
+Stalled computations provide implicit 'breakpoints'. However, stalling is more precise and predictable than breakpoints in conventional development environments. Continuing breakpoints will generally be specified declaratively, using phrases such as 'leftmost `(@foo)` breakpoint' or 'all `bar, baz, qux` breakpoints'. 
 
-Stalls effectively give us breakpoints by preventing the program upstream of the gate from using the value. Unlike conventional breakpoints, Awelon will continue to evaluate other parts of the program as far as they can go despite the stalls. To avoid rework or significant changes in evaluation order, if evaluation of `P` stalls on a gate, copy operation `[P]c` must stall on `P`. 
+Tracing gives us standard 'printf' style debugging. This will copy the traced values, bypassing `(aff)` constraints. Intriguingly, because Awelon code evaluates to Awelon code, we can easily record a trace as a comment in the program output. For example:
 
-Tracing gives us standard 'printf' style debugging. Note that copying the value implicitly requires evaluating it first, but is not subject to normal limitations like `(aff)`. The other copy of the value is passed. We can render trace logs as part of the program output, appending a comment-like structure `[[MsgN] ... [Msg3] [Msg2] [Msg1]] (@stderr/log) d`. 
+        [[Msg1] [Msg2] .. [MsgN]] (@trace.log) d
 
-Profiling might tweak `[A]` to record performance metadata (e.g. allocations, rewrites, times, use of memoization or stowage) to named statistics objects, then pass it on. This would allow us to accumulate a lot of useful performance information quickly.
+But we can use more conventional mechanisms like an external console or log, depending on the configuration.
 
-In general, gates may have conditional configuration based on observation of the value. Also, a runtime may provide default configurations with naming conventions like `(@stderr)` defaulting to a trace.
+Profiling would aggregate performance statistics over multiple uses of a word. We could potentially profile with gates, too, by configuring the gate to also perform a `(seq)` operation.
 
 ## Program Animation and Time Travel Debugging
 
@@ -464,14 +474,12 @@ Program animation and time-travel debugging is an intriguing possibility with Aw
 
 * evaluate as far as we can go
 * take a snapshot / checkpoint
-* delete all the active gates 
+* select, continue breakpoints
 * repeat until no active gates
 
-The snapshots then become 'frames' for evaluation. The frames will have predictable structure determined by the use of gates, which is convenient for rendering them in sequence. Conveniently, we can get by with preserving every tenth or hundredth frame (or heuristically, based on empirical compute effort) and deterministically recompute intermediate frames as needed. We can also associate trace logs with recorded frames. Putting recorded frames and trace logs on a timeline with a slider effectively gives us time-travel debugging.
+The resulting animation will be deterministic up to the strategy by which we select breakpoints. Different strategies, like 'continue leftmost' vs. 'prioritize xyzzy breakpoints') will result in different animations, different focus of attention, but the same final result. Conveniently, deterministic evaluation means we can save a lot of space by recording a tiny fraction of checkpoints into a time-index and recomputing the remainder as needed. 
 
-I feel this gives Awelon an excellent debugging experience, much better than most languages.
-
-*Aside:* Deleting all the active gates each frame is a convenient default, but other animation strategies can be useful to focus attention. For example, we could always delete the leftmost active gate, or prioritize deletion of gates by name, to better control the animation.
+Trace logs can be associated with each frame to place them on the timeline.
 
 ## Static Typing
 
@@ -564,61 +572,49 @@ Awelon's natural numbers are given the `#` prefix in favor of an aesthetic view 
 
 Ideally, editable views should be *evaluable*. That is, program evaluation should generate the same structures we use to input and view programs. If we add 3.141 and -0.007, we may wish to see 3.134 in the program output. That is, `[3134 -3 decimal]` should be a viable result from a computation. The design of evaluable editable views is sensitive to arity annotations, accelerators, and other features. 
 
-Consider, for example, the introduction of comments into our views:
+With evaluable views in mind, we might represent comments as:
 
-        /* comment */  ==  " comment " d            (first option)
-                       OR  " comment " (/2) d       (second option)
-                       OR  " comment " NB           (third option)
-                             with NB = (/2) d
+        /* comment */  ==  " comment " (/2) (@rem) d
 
-In context of evaluable views, the second option is superior to the first because it enables us to 
+The arity annotation allows embedding of comments into computed values. The `(@rem)` gate serves as a lightweight indicator of the comment's 'type' (so we can add other comment types) and additionally permits integration with active debugging - for example, tracing comments to see progress, or conditionally stalling on certain comments.
 
-In context of evaluable views, the first option is not ideal because we cannot generate comments in the program output. The second option enables comments to be embedded in program results, and thus is suitable. The third option 
-
-
-
-
-
-
-
-
-
-Patterns of form `[program lang]` are a simple basis to indicate DSLs, with the set of recognized language words being view-dependent. I've used this general design with great success in practice. It is simple, efficient, extensible. 
-
-
-Awelon code evaluates to Awelon code, and it is most convenient if we can aesthetically view and edit the evaluated result. Including an arity annotation comments is part of this. Evaluable views also imply that, for example, `[-70 #4 decimal]` should be a viable result from adding or multiplying two decimal numbers. Design of evaluable editable views must be sensitive to the dictionary and accelerators. 
-
-
-We can use editable views to represent command lists:
+Besides the numeric tower, command lists are another critical feature:
 
         {foo, bar, baz} == [[foo] {bar, baz} :]
         {baz}           == [[baz] ~ :]
 
-Command lists are potentially convenient for lightweight abstraction of generators, coroutines, or modeling effects in a continuation-passing style. 
+Command lists are useful for just about everything. We can use them to embed structured data - e.g. `{{1,2,3},{4,5,6},{7,8,9}}` might represent a matrix. We can use them for construction of continuation-passing code and effects models. And so on.
 
+## Namespaces
 
+Qualified namespaces are readily supported with editable views. In the basic form, we might support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` and `x.foo` in place of `large_prefix.foo`. 
 
-We could support source comments as an editable view:
+Namespaces can also be built into the editable view. We can maintain a view per user or edit session within a dictionary, and remember which namespaces we're using. This would help control the problem of namespace boiler-plate. Conveniently, this would also provide an effective foundation for humans to nickname `$secureHash` resources, which is essential to work effectively with them.
 
-        /* comment */  == " comment " NB
-        NB = (/2) d
+## Named Locals
 
-Essentially, a comment is a program that accepts text then drops it. Including the arity annotation
+An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where tacit programming is pointlessly onerous. I consider adopting the syntax from [Kitten language](http://kittenlang.org/), which serves for both let and lambdas:
 
+        -> X Y Z; CODE   ==  (λ X Y Z) CODE'
 
-Including the arity annotation and gate enables us to trace progress through comments, conditionally breakpoint on comments, potentially indicate different kinds of comments, and so on. And also to inject comments into computed values.
+Here the `(λ X Y Z)` is some form of lambda comment. We might represent this as `"X Y Z" (/2) (@lambda) d`. And `CODE'` is obtained via the 'extract argument' method as discussed for staged evaluation, albeit constrained to value words:
 
-Qualified namespaces can be supported locally and unambiguously as views with phrases like `using large_prefix as x` (a specialized comment) such that `x.foo` is subsequently replaced by `large_prefix.foo` and `x` is replaced by `large_prefix`. We'd need to escape references to the original `x`. To ameliorate the problems of namespace boiler-plate, we might build some namespaces directly into the view, and simply develop a view per user or per edit session.
+        Extract Value Argument
 
-An intriguing opportunity is support for lambdas and let-expressions. Tacit programming is inconvenient for use cases involving lots of replication and data plumbing of data. Lambda expressions can help out, handling the expressions on your behalf. An example syntax inspired from [Kitten language](http://kittenlang.org/):
+        T(X,E) - extract *value* X from E such that:
+            T(X,E) does not contain X
+            X T(X,E) == E
 
-        -> X Y Z ; X foo [Y] bar    == "X Y Z" (/2) (@λ) d d [i foo] a bar
-        let X = code in prog        == [code] -> X; prog
+        T(X, E) | E does not contain X      => d E
+        T(X, X)                             => 
+        T(X, [E])                           => [T(X,E)] b
+        T(X, F G)
+            | only F contains X             => T(X,F) G
+            | only G contains X             => [F] a T(X,G)
+            | otherwise                     => c [T(X,F)] a T(X,G)
 
-This would operate in a similar manner to *Staged Evaluation*. At each lambda annotation, we can introduce free variables `[X][Y][Z]` then reverse the 'extract argument' rewrite rules to produce `X`, `Y`, and `Z` within the program view. When we're done editing, we apply the "extract argument" algorithm to eliminate the free variables. 
+With this constraint, we're down to Awelon primitives, no need for the `i` combinator. That's convenient for local reasoning about correctness of the conversion. In case of `-> X Y Z; CODE` we'll convert using `CODE' = T(Z, T(Y, T(X, CODE)))`. We can recover our code by reversing this conversion, or by partially evaluating `X Y Z CODE'` with value words `X Y Z`.
 
-*Note:* 
+Named locals as described above have a weakness in context of conditional expressions: we copy our environment into both branches, then we drop one branch. This might be something we can optimize, similar to staged evaluation, given some annotations for types.
 
-*Note:* Editable views should be implemented at the dictionary layer. Developers should have effective control over their views, and this also enables views to adapt to application state or edit sessions (e.g. so we can use a common namespace without boiler-plate). Integrating with structure editors may require targeting a shared intermediate language.
-
-*Aside:* A useful sanity check is that a round-trip from Awelon code to view and back should be the identity function. If this check fails, we might provide multiple views and representations then ask the human for advice. Or we might simply reject the edit.
+In any case, l
