@@ -93,9 +93,9 @@ I assume 8-byte alignment, and 3 tag bits.
         011     value words and interned data
         111     action words and annotations
 
-        000     cons cell (2 words)
-        010     (unused, reserved)
-        100     tagged objects
+        000     block cons cell (2 words)
+        010     compact rep for [[A] inR]
+        100     tagged values
         110     tagged actions
 
         (Fast Bit Tests)
@@ -103,11 +103,11 @@ I assume 8-byte alignment, and 3 tag bits.
         Action Type:    (6 == (6 & x))
         Tagged Item:    (4 == (5 & x))
 
-Under the hood, I'll represent a basic program as a linked list of cons cells. Words will be interned. Small natural numbers will be represented within the pointer. Linked lists will be deep-copied and uniquely owned. Tagged items cover everything else, providing extra type information in the first byte referenced from the pointer.
+Words will be interned, and hence do not need deep-copy. Linked lists are used for blocks, and are deep-copied such that we can destructively manipulate them and also to guarantee memory requirements are proportional to serialized program size (a convenient property for safe checkpoints). Small natural numbers are represented within the pointer. Tagged items can cover anything we miss, providing type information in the first byte(s) of the referenced memory.
 
-A simple block can be directly represented by another linked list. However, blocks will frequently be tagged objects to support parallelism, memoization, evaluation status, substructural attributes, tuple assertions, and so on.
+This leaves me an open value slot `010`. I propose to use this to save a few words when representing the common `[[A] inR]` structure for sums and options.
 
-Linked lists will terminate in a common NULL value, a small constant representing `[]`. The space held by this NULL is important for later constant space traversal (via Morris algorithm), ensuring we won't need stack allocation for a lot of generic processing (copy, drop, serialization, etc..) 
+To support Morris traversals, lists must predictably terminate in predictable NULL values. This allows us to use the space held by these NULLs to copy, drop, and serialize deep structures without extra allocations or a stack. I believe non-allocating traversals will prove a performance critical feature, and convenient for controlling memory use.
 
 ## Memory Management
 

@@ -104,19 +104,26 @@ Before I explain encoding of numbers and texts, let us examine encodings for oth
 Booleans can be generalized to algebraic sum type `(A + B)`.
 
         [onL][onR] [[A] inL] i  == [A] onL      inL = w d w i
-        [onL][onR] [[B] inL] i  == [B] onR      inR = w b a d
+        [onL][onR] [[B] inR] i  == [B] onR      inR = w b a d
 
-Construction of `[[A] inL]` is trivial - `[A] mkL` where `mkL = [inL] b`. This is generally the case for value constructors. In practice, we may also wish to defer computation of partial constructions (see *Deferred Computations and Coinductive Data*). 
+Construction of `[[B] inR]` is trivial - `[B] mkR` where `mkR = [inR] b`. This is generally the case for value constructors. In practice, we may also wish to defer computation of partial constructions (see *Deferred Computations and Coinductive Data*). 
 
 Pairs - algebraic `(A * B)` product types - may also be Church encoded:
 
         [onP] [[B][A] inP] i == [B][A]onP       inP = [] b b a i
 
-However, in context of Awelon language, I find it more convenient to encode a pair as `[[B][A]]`. 
+However, in Awelon language, we can simply encode a pair as `[[B][A]]`. 
 
-Between algebraic sums and products, we can represent any conventional data structure. 
+Between algebraic sums and products, we can represent any conventional data. 
 
-The option type `(1 + A)` may be modeled as a choice of `false` or `[[A] R]`. Natural numbers can be encoded as `μNat.(1 + Nat)` - that is, Nat is recursively zero or successor of a Nat. Given natural numbers, integers can be represented by a pair representing `X - Y`.  We can encode rational numbers as a numerator-denominator pair. We can encode decimal numbers with a significand and exponent. A list can be modeled as `μList.(1 + (A * List))`. Text can be encoded as a list of natural numbers. Algebraic encodings are generally simple, e.g. `Succ = mkR` for natural numbers, or `Cons = mkP mkR`. 
+The option type `(1 + A)` may be modeled as a choice of `false` or `[[A] R]`. Natural numbers can be encoded as `μNat.(1 + Nat)` - that is, Nat is recursively zero or successor of a Nat. Given natural numbers, integers can be represented by a pair representing `X - Y`.  We can encode rational numbers as a numerator-denominator pair. We can encode decimal numbers with a significand and exponent. A list can be modeled as `μList.(1 + (A * List))`. Text can be encoded as a list of natural numbers. Algebraic encodings are often simple:
+
+        0 = false       (zero)
+        1 = [0 S], 2 = [1 S], ...
+        S = inR         (successor)
+
+        ~ = false       (nil)
+        : = mkP inR     (cons)
 
 An alternative is to model data as implicitly folding over its structure. The Church encoding of natural numbers is an example of this. Consider: 
 
@@ -125,17 +132,16 @@ An alternative is to model data as implicitly folding over its structure. The Ch
         [X][F] 2 i == [[X] F] F     == [[X][F] 1 i] F
 
         0 = false
-        1 = [0 Succ]
-        2 = [1 Succ]
-        Succ = [c] a [b b] b a i
+        1 = [0 S], 2 = [1 S], ...
+        S = [c] a [b b] b a i
 
 Folding over a recursive structure that carries no additional data isn't particularly interesting. But we can generalize easily to folds over list structures:
 
-        [X][F] Nil i == X
-        [X][F] [[L][A] Cons] i == [[X][F]L] [A]  F
+        [X][F] ~ i == X
+        [X][F] [[A] [L] :] i == [[X][F]L] [A]  F
 
-        Nil = false
-        Cons = [[c] a b [b] b a] a w i
+        ~ = false
+        : = w [[c] a b [b] b a] a w i
 
 However, with data structures more sophisticated than natural numbers, choosing a specific fold seems awkward and arbitrary. With lists, we have both left folds and right folds. With trees, we have both folds and a variety of [tree traversals](https://en.wikipedia.org/wiki/Tree_traversal). Further, in context of linear typed structure, it is convenient if we can operate upon or [unzip](https://en.wikipedia.org/wiki/Zipper_%28data_structure%29) just part of a structure without observing the whole thing. I believe the algebraic type encodings are generally superior.
 
@@ -189,7 +195,7 @@ Long term, Awelon runtimes could accelerate labeled records and variants for con
 Annotations help developers control, optimize, view, and debug computations. Annotations are represented as parenthetical words like `(par)` or `(/3)`. Some useful examples of annotations include:
 
 * `(/2)..(/9)` - arity annotations to defer computations
-* `(0)..(9)` - tuple assertions for scope control
+* `(0)..(9)` - tuple assertions for output scope control
 * `(aff) (rel)` - support substructural type safety
 * `(:foo) (.foo)` - lightweight type tag and assertions
 * `(nat)` - assert argument should be a natural number
@@ -197,10 +203,10 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(jit)` - compile a function for use in future evaluations
 * `(stow)` - move large values to disk, load on demand
 * `(memo)` - memoize a computation for incremental computing
+* `(stage)` - evaluation mode for deep partial evaluation
 * `(error)` - mark a value as an error object
-* `(@foo)` - gates for active debugging (logging, breakpoints)
 * `(force)` - evaluate previously deferred computations
-* `(λX)` - view subsequent code as lambda `[X]` as lambda
+* `(@gate)` - extra symbols just for active debugging
 
 Annotations must have no internally observable effect on computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states.
 
@@ -263,7 +269,26 @@ Awelon's evaluation strategy is simple:
 
 This strategy isn't lazy or eager in the conventional sense. Rewriting the outer program first provides opportunity to apply annotations or drop values that won't be part of our output. Evaluation before copy guards against introduction of unnecessary rework. Evaluation of final values (blocks) brings us to a normal form that cannot be further evaluated.
 
-*Note:* Undefined words do not rewrite further. If there any errors when parsing or evaluating a word's definition, or a cycle in the definition, that word should be treated as undefined. Partial evaluations with undefined words can be useful in context of development, debugging, staged computing, and the monotonic futures and promises application pattern.
+## Value Words
+
+Words that represent values - such as `true`, `false`, or `42` - are treated as first-class values. Doing so is convenient for both aesthetics and preservation of hypermedia link structure. Value words are weakly implied by the lazy link rule: do not link a unless doing so results in something more interesting than a simple inlining of the word's evaluated definition. But I'll this extra explicit here.
+
+        true = [a d]
+        false = [d i]
+        42 = [41 S]
+
+        42 true w == true 42
+        42 [] b   == [42]
+
+A 'value word' is any word whose evaluated definition is a singleton block. An Awelon runtime must treat value words as values with respect to binding, data plumbing, etc..
+
+## Stalled Computation
+
+A 'stalled' computation is incomplete and unable to progress. In Awelon, the main cause of stalled computation is undefined words. Specifically, a computation that *might* link a word depending on its arity, etc. should stall. Stalls are mostly relevant in context of the *evaluate before copy*. Evaluation of a stalled computation is not complete, therefore we do not copy. That is, if `P` stalls, `[P]c` stalls.
+
+Stalls are usually a bad thing, and a development environment should ensure programmers are aware of potential issues. However, stalling may be performed on purpose, as part of future-based application patterns or active debugging. For that reason, stalls are not generally considered an error.
+
+*Note:* Awelon will evaluate as much as possible even in context of some stalls.
 
 ## Fixpoint
 
@@ -301,15 +326,6 @@ It is possible to perform static analysis on a word's evaluated definition, arit
 Here, word `foo` will not evaluate any further because there is no cause to link `bar`. However, when we do eventually link `foo`, we'll immediately be asked to link `bar`. We can determine this by static analysis. For performance reasons, we may wish to skip the intermediate step rewriting `foo` to `bar` and jump straight to linking the definition of `bar`. 
 
 Statically computing link structure can support inlining of definitions, flattening of redirect chains, and avoid rework for link decisions. It is a recommended as a performance optimization. However, this should not be observable 
-
-## Value Words
-
-Words like `true` or `false` or `42` can be treated as first-class values. Further, doing so is convenient for aesthetics and preservation of hypermedia link structure. 
-
-        42 true w == true 42
-        42 [] b   == [42]
-
-In general, a value word is any word that evaluates to a singleton `[Value]`. In this case, we have `true = [a d]` and `42 = [41 #]`. A runtime should recognize value words and treat them as values until their internal structure is observed.
 
 ## Rewrite Optimization
 
@@ -401,30 +417,38 @@ In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct
 
 We can eliminate substructural annotations by observing a value with `a`. It is not difficult to track and validate substructural properties dynamically, or to represent them within static types. 
 
+## Garbage Data
+
+For relevant data, we always have an option to drop data into a logical bit bucket then never look at it again. If we *promise* we will never look at it again, we can also recover memory resources associated with that data. We can represent this pattern by use of a `(trash)` annotation:
+
+        [A](trash) => [](trash)
+        [B][](trash)b => [[B]](trash) => [](trash)
+        [A](rel)[](trash)b => [[A](rel)](rel)(trash) => [](rel)(trash)
+        ...
+
+Trash preserves substructure, but destroys data. Observing trash is an error.
+
 ## Error Annotations
 
-We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy the value like normal. In addition to user-specified errors, a runtime might use error annotations to highlight places where a program gets stuck, for example:
+We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy an error value like normal. In addition to user-specified errors, a runtime might use error annotations to highlight places where a program gets stuck, for example:
 
         [A](aff)c       => [[A](aff)c](error)i
         [[A][B][C]](2)  => [[A][B][C]](2)(error)
 
-Errors presented in this manner are relatively easy to detect. 
-
-In context of substructural scoping, we might also want a `(trash)` annotation that replaces a possibly large value with a small error value but preserves substructural attributes. Thus, we can free memory without dropping or stowing data, it just results in an error if we later attempt to observe the trashed data.
+Errors are not a stalling condition. However, we can also introduce annotation `[P](stall)` to simulate a stalled or non-terminating computation. This would enable programmers to more precisely control their debugging experience. In this case, we'd simply treat `[P]` as a stalling computation.
 
 ## Active Debugging
 
-Active debugging broadly includes techniques to observe an evaluation in progress. Common techniques for active debugging include logging, profiling, breakpoints. To support active debugging, Awelon introduces `(@gate)` annotations. The symbol is user-defined, e.g. it could be `(@foo)` or `(@stderr)`. 
+Active debugging is an umbrella term for techniques to observe a computation in-progress. These techniques include logging, profiling, breakpoints. In Awelon, active debugging may occur via instrumentation of words. That is, a runtime can be configured to log arguments to a word, profile evaluation of a word, or stall evaluation of a word. Usefully, words can be instrumented without intrusive modification of a program. 
 
-The `(@gate)` annotation is considered 'active' when it has a block to its left: 
+In some cases, we may wish to introduce words strictly for active debugging purposes. For that use case, I introduce `(@gate)` annotations, such as `(@foo)` or `(@trace)`. These annotations are called 'gates', and have identity behavior - `[A](@gate) => [A]`. Like words, gates are configurable for active debugging. Use of gates is convenient for local reasoning, and helps make the intention of active debugging more obvious.
 
-        [A](@gate)
+Breakpoints are modeled by stalling evaluation on a word or gate. That is, we get to some point with `[A](@gate)` and we simply don't progress past that. However, a stalled evaluation is distinct from halting on "undefined" word.
 
-The behavior of an active gate is configured at the runtime. Outside of debugging, for example, we'll simply delete the active gates and pass the values. Consider a few debug configurations:
 
 * stall - hold `[A](@gate)` for now
 * trace - copy value into debug log
-* profile - record evaluation of `[A]`
+* profile - record evaluation of a word
 
 Stalls effectively give us breakpoints by preventing the program upstream of the gate from using the value. Unlike conventional breakpoints, Awelon will continue to evaluate other parts of the program as far as they can go despite the stalls. To avoid rework or significant changes in evaluation order, if evaluation of `P` stalls on a gate, copy operation `[P]c` must stall on `P`. 
 
@@ -486,14 +510,16 @@ In context of metaprogramming, it is frequently useful to work with intermediate
 
 In scenarios like these, computing the type of `runPoly` or `printf` independent of context may require sophisticated dependent types. But computing a type for `"abcx → ax^2 + bx + c" computePoly` or `"%s takes %d damage!" printf` might only require some partial evaluation before static type checking. This implies staging similar to macro evaluation.
 
-To make this intention explicit, I propose annotation `(dyn)`. Example usage:
+To make this intention explicit, we could introduce a `(dyn)` annotation:
 
         "abcx → ax^2 + bx + c"  runPoly
             == "abcx → ax^2 + bx + c" compilePoly (dyn) i
             == [polynomial behavior](dyn) i
             == [polynomial behavior] i
 
-The presence of a `(dyn)` annotation informs a static type analysis that a volume of code might be difficult to statically validate, to try partial evaluation if possible, and perhaps to suppress warnings when no safety judgement can be made. Obvious type errors can still be raised. 
+The presence of `(dyn)` then informs a static analysis that some code might be difficult to validate. It also introduces a mode for partial evaluations: we could easily target elimination of `(dyn)` annotations. 
+
+informs a static type analysis some a volume of code might be difficult to statically validate, to try partial evaluation if possible, and perhaps to suppress warnings when no safety judgement can be made. Obvious type errors can still be raised. 
 
 Dynamic evaluation is considered *complete* when a value is produced, that is `[A](dyn) == [A]`. However, many functions will remain dynamic even after evaluation. Careful use of `(dyn)` provides a simple basis for gradual typing in a system that defaults to static types.
 
@@ -522,20 +548,46 @@ Awelon language has an acceptably aesthetic plain text syntax. However, like For
 
 Instead of solving these problems at the syntax layer, Awelon shifts the burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
 
-I put some emphasis on *plain text* editable views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate easily on a serviced dictionary through filesystems and CLI. However, graphical views could potentially include checkboxes, sliders, drop-down lists, graphs and canvases, and may offer an interesting foundation for graphical user interfaces within Awelon's application model. 
+I put some emphasis on *plain text* editable views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary through filesystem and CLI. However, graphical views could potentially include checkboxes, sliders, drop-down lists, graphs and canvases, and may offer an interesting foundation for graphical user interfaces within Awelon's application model. 
 
-Numbers are an important target for editable views. A viable sketch:
+Numbers are a useful target for editable views. A viable sketch:
 
-        #42         == AWELON(42)
-        -7          == [#0 #7 integer]
+        #42         == (AWELON 42)
         42          == [#42 #0 integer]
-        3.141       == [3141 #3 decimal]
-        -0.0070     == [-70 #4 decimal]
-        2/3         == [2 #3 rational]
+        -7          == [#0 #7 integer]
+        3.141       == [3141 -3 decimal]
+        -0.0070     == [-70 -4 decimal]
+        2.998e6     == [2998 3 decimal]
         -4/6        == [-4 #6 rational]
-        2.998e6     == [2.998 6 exp10]
 
-Here I use bidirectional rewrites, an obvious escape for raw Awelon code, and I build views primarily upon existing views. Patterns of form `[program lang]` are a simple basis to indicate DSLs, with the set of recognized language words being view-dependent. I've used this general design with great success in practice. It is simple, efficient, extensible. 
+Awelon's natural numbers are given the `#` prefix in favor of an aesthetic view for Church-encoded signed integers. The original natural numbers are escaped - every editable view should provide a simple, unambiguous escape to raw Awelon code. Most views build upon existing views rather than raw code. Building views incrementally upon views is portable and extensible. For example, if a programmer sees `[-4 #6 rational]` because their view doesn't support rational numbers, the intention is obvious, and the programmer could easily install support for rationals into their view.
+
+Ideally, editable views should be *evaluable*. That is, program evaluation should generate the same structures we use to input and view programs. If we add 3.141 and -0.007, we may wish to see 3.134 in the program output. That is, `[3134 -3 decimal]` should be a viable result from a computation. The design of evaluable editable views is sensitive to arity annotations, accelerators, and other features. 
+
+Consider, for example, the introduction of comments into our views:
+
+        /* comment */  ==  " comment " d            (first option)
+                       OR  " comment " (/2) d       (second option)
+                       OR  " comment " NB           (third option)
+                             with NB = (/2) d
+
+In context of evaluable views, the second option is superior to the first because it enables us to 
+
+In context of evaluable views, the first option is not ideal because we cannot generate comments in the program output. The second option enables comments to be embedded in program results, and thus is suitable. The third option 
+
+
+
+
+
+
+
+
+
+Patterns of form `[program lang]` are a simple basis to indicate DSLs, with the set of recognized language words being view-dependent. I've used this general design with great success in practice. It is simple, efficient, extensible. 
+
+
+Awelon code evaluates to Awelon code, and it is most convenient if we can aesthetically view and edit the evaluated result. Including an arity annotation comments is part of this. Evaluable views also imply that, for example, `[-70 #4 decimal]` should be a viable result from adding or multiplying two decimal numbers. Design of evaluable editable views must be sensitive to the dictionary and accelerators. 
+
 
 We can use editable views to represent command lists:
 
@@ -544,9 +596,15 @@ We can use editable views to represent command lists:
 
 Command lists are potentially convenient for lightweight abstraction of generators, coroutines, or modeling effects in a continuation-passing style. 
 
-We can support source comments as an editable view:
 
-        /* comment */  == " comment " (/2) (@rem) d
+
+We could support source comments as an editable view:
+
+        /* comment */  == " comment " NB
+        NB = (/2) d
+
+Essentially, a comment is a program that accepts text then drops it. Including the arity annotation
+
 
 Including the arity annotation and gate enables us to trace progress through comments, conditionally breakpoint on comments, potentially indicate different kinds of comments, and so on. And also to inject comments into computed values.
 
@@ -559,7 +617,7 @@ An intriguing opportunity is support for lambdas and let-expressions. Tacit prog
 
 This would operate in a similar manner to *Staged Evaluation*. At each lambda annotation, we can introduce free variables `[X][Y][Z]` then reverse the 'extract argument' rewrite rules to produce `X`, `Y`, and `Z` within the program view. When we're done editing, we apply the "extract argument" algorithm to eliminate the free variables. 
 
-*Note:* Editable views are ideally *evaluable*. Awelon code evaluates to Awelon code, and it is most convenient if we can aesthetically view and edit the evaluated result. Including an arity annotation comments is part of this. Evaluable views also imply that, for example, `[-70 #4 decimal]` should be a viable result from adding or multiplying two decimal numbers. Design of evaluable editable views must be sensitive to the dictionary and accelerators. 
+*Note:* 
 
 *Note:* Editable views should be implemented at the dictionary layer. Developers should have effective control over their views, and this also enables views to adapt to application state or edit sessions (e.g. so we can use a common namespace without boiler-plate). Integrating with structure editors may require targeting a shared intermediate language.
 
