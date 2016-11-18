@@ -79,22 +79,124 @@ Between these, I imagine at least three handle types: a machine has multiple tra
 
 *Note:* Security models (HTTP authentication, HMAC bearer tokens, etc.) and collaborative conflict avoidance patterns (discretionary locks, [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html)) are not part of this C runtime API but can be implemented in a separate layer.
 
-## Entry and Extraction
+## API Program Entry and Extraction
 
-Entry of a program as text, and extraction of results as the same, is the simplest option. I may need to accommodate large inputs or results regardless, and (potentially) streaming input or processing. While it might be convenient to support AST-level manipulations, I won't be doing so at the C runtime API. 
+Entry of a program as text, and extraction of results as the same, is the simplest option. I may need to accommodate large inputs or results regardless, and (potentially) streaming text input and processing. While it might be convenient to support AST-level manipulations, I won't be doing so at the C runtime API. 
 
 Defining a word would involve entering a program without evaluating it. Not that there's anything wrong with evaluating before setting a definition (i.e. storing a checkpoint). 
 
+## Evaluation 
+
+Evaluation will use a logical cursor within Awelon code:
+
+        [C][B][A] \ a X =>  [C] \ A [B] X
+
+Here the character `\` indicates our current focus. Alternatively, I could move my focus to `[C] A [B] \ X`, then backtrack. But a left-to-right translation without backtracking is simple, efficient, and generally sufficient.
+
+The only other interesting primitive is copy:
+
+        [A] \ c X       =>  [A][A] \ X
+                        OR  [A](par)c \ X
+
+I can potentially parallelize evaluation and copy of `[A]` with progress in `X`. However, I'm not certain this will do much good in practice. Depending on how I approach representation of parallel copies, it might offer some benefits.
+
+Anyhow, I currently plan to limit evaluation within a block to a single focus - a single thread. Parallelism is thus delimited by block values.
+
 ## Memory Representations
 
-I assume 8-byte alignment, and 3 tag bits. 
+Decisions made so far:
+
+* intern words. Maybe other small constants and subprograms.
+* efficient distinction of value words vs action words
+* small natural numbers should have compact encoding
+* deep copy block structure exposed on serialization
+ * keep memory usage proportional to serialization
+ * simplifies reasoning about program memory usage
+* constant extra-space traversal of program structure
+ * copy, drop, serialize without allocation
+ * contiguous allocations on copy or read
+ * evaluate without recursion on C stack
+* support for tagged data
+ * basis for accelerated representations
+* don't do "logical inlining" at element level
+ * logical inlining complicates evaluations, traversals
+ * inline program list representations naturally
+
+The [Ouroboros algorithm](http://math-porn.tumblr.com/post/98314044394/the-ouroboros-algorithm-a-constant-space-tree) or Morris algorithm should be good for constant space traversals. 
+
+Things not decided:
+
+* linked lists or chunks
+* pointer tag bits
+
+## Linked Lists or Linked Buffers
+
+Linked lists seem less than optimal for my evaluator case. The fine-grained allocations, copies, pointer-chasing. High space overheads. Uni-directional structure that hinders moving the program 'focus' around as needed. But linked lists do have and advantage of uniform structure, simplicity, simple inlining.
+
+Linking array-like buffers is an interesting alternative, especially if I can develop an efficient representation. They're inefficient for small blocks of just a few elements. But perhaps that's an acceptable tradeoff.
+
+I can doubly-link the buffers to support the evaluation focus without a separate 'zipper' concept. The overhead for this is amortized by the buffer size. Buffers may have free space that we can write easily. It seems feasible to logically inline one buffer into another without moving too much memory around.
+
+An important design consideration for linked buffers is that we cannot encode buffer headers within the data without losing the ability to inline one buffer into another, unless we use a 'logical inline' reference which adds complexity I'd prefer to avoid.
+
+## Memory Representations
+An interesting option for large blocks is to use buffered array-lists. 
+
+        (array-list-hdr next elementN .. element2 element1 element0)
+
+        where
+            array-list-hdr includes:
+                array-list tag  (tagged values)
+                buffer size     (grow without allocations)
+                reverse-order   (logical reverse)
+                an iterator     (for Morris traversal)
+                element-count   (offset to element0)
+            'next' is a continuing list, array-list, or NULL
+            elements - one per word...
+            
+Buffered array lists are naturally encoded as tagged values. We can squeeze all the header information into a single word, with just a few bits to encode common buffer sizes. To support fly-weight allocations, we might also encode a reference to the 'next' buffered array list
+
+Instead of linked lists, computing with buffered array lists is an interesting and very efficient alternative.
+
+ It would eliminate allocations for small 'stacks'. 
+
+
+could even be treated as distinct array list types.
+
+. Relevantly, array lists aren't especially critical
+
+Allowing for a 32-bit header, we might permit buffer sizes up to 1024 elements (in 8 common sizes - like 
+
+Buffer size might be encoded as just a few bits, a small choice of common sizes. So we can probably encode the remaining count and iterator within the 
+
+        
+
+ Buffer size could be encoded in just a few bits, assuming if we assume powers-of-two or a fibonacci allocator. 
+
+
+If buffer size is a power of two in a limited range (e.g. 16, 64, 256, 
+
+The buffer size, iterator, and element count could easily be encoded within a 64-bit word, or even within a 32-bit word if we limit buffer sizes to about 256 elements. 
+
+
+I could avoid the buffer size if I allocate a fixed buffer, perhaps 64 or 256 words.
+
+In this case, we'd have one word per element. And the `
+
+
+
+
+
+## Memory Representations
+
+I assume 8-byte alignment, and 3 tag bits. A viable encoding:
 
         x01     smallish natural numbers
         011     value words and interned data
         111     action words and annotations
 
         000     cons cell (2 words)
-        010     (reserved)
+        010     buffered array list
         100     tagged values
         110     tagged actions
 
@@ -103,11 +205,17 @@ I assume 8-byte alignment, and 3 tag bits.
         Action Type:    (6 == (6 & x))
         Tagged Item:    (4 == (5 & x))
 
-Words will be interned, and hence do not need deep-copy. Linked lists are used for blocks, and are deep-copied such that we can destructively manipulate them and also to guarantee memory requirements are proportional to serialized program size (a convenient property for safe checkpoints). Small natural numbers are represented within the pointer. Tagged items can cover anything we miss, providing type information in the first byte(s) of the referenced memory.
+I might sacrifice some natural numbers to support `[word]` singletons as a special value word.
 
-An important consideration is constant-space traversals, which is important for efficient copy, drop, and serialization of a program, and for memory usage guarantees. I plan to use the Morris algorithm. This places a constraint on our representations: lists must end in a predictable NULL value, and any object with more than two children must also contain an iterator.
+Linked lists may be used for blocks, deep-copied such that we can destructively manipulate them and also to guarantee memory requirements are proportional to serialized program size (a convenient property for safe checkpoints). Small natural numbers are represented within the pointer. Words and common constants or source fragments may be interned, and hence do not need deep-copy. Tagged items can cover anything we miss, providing type information in the first byte(s) of the referenced memory.
 
-I'm left with one open value slot with bit pattern `010`. This might later optimize a common structure. 
+An important consideration is constant-space traversals, which is critical for efficient copy, drop, serialization of a program, and for memory usage guarantees. 
+
+I plan to use the Morris algorithm, which uses NULL slots in the tree structure to avoid stack allocations. Thus, lists must terminate in predictable NULL values. (*Note:* I can wrap `[A]` as `[[A] i]` if necessary to ensure NULL terminals.) The Morris algorithm can be adapted to more than two children per node, for example to represent arrays, at the cost of an extra 'iterator' slot internally to the array.
+
+
+
+*Note:* A value slot remains available at bit pattern `010`. I'm reserving this in case opportunity arises for major performance benefits... something not adequately supported by tagged values.
 
 ## Memory Management
 
@@ -116,18 +224,6 @@ Memory will mostly be managed via free lists.
 Awelon doesn't need conventional GC because copy/drop are explicit, and forgetting to drop something is rather obvious in the program output. However, free lists can fragment, and I might favor an occasional defragmenting copy collection. This might be supported by explicit user action.
 
 A related point is to ensure that, if computation halts for any reason, we always have a useful state that we can process.
-
-## Evaluation Approach
-
-Evaluation will primarily involve processing a linked list using a Huet zipper like structure to focus evaluation. 
-
-It is possible to use idioms that will distribute evaluation reasonably well, e.g. parallelize evaluation on copy and delay the copy until we need the result, or in `[B][A]a => A [B]`, find out what happens to `[B]` before returning to `A`. But focusing on throughout and cache coherency, evaluating left to right, is probably okay, too.
-
-To keep it simple, evaluation within a given block will likely be sequential by default. Parallelism will be kept to block values and specific accelerators like KPN, linear algebra.
-
-My goal is a rasonably fast interpreter and early integration of JIT, switching to a naive compiler. I'll need to experiment with JIT early on, to avoid getting trapped by interpreter development. Awelon should be very efficient between JIT compilation and some well chosen accelerators. 
-
-*Note:* Blocks will copy normally even in context of a fixpoint accelerator. However, JIT might bypass copying within loops based on an escape analysis.
 
 ## Computations
 

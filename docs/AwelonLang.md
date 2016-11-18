@@ -340,9 +340,10 @@ Awelon's semantics allow many rewrites not performed by evaluation. Consider:
         [B] a [A] a => [B A] a  application composes
         [i] b   =>              because [A][i]b == [[A]i] == [A]
         b i     =>  i           expansion of [X][F]b i == [X][F]i
-        c d     =>              modulo substructural constraints
+        c d     =>              drop the copy
+        c [d] a =>              drop the other copy
         [] b a  =>  w           by definition of w
-        c w     =>  c           no need to swap, both copies are equivalent
+        c w     =>  c           copies are equivalent
         [0 S]   =>  1           by definition of 1
 
 Performing such rewrites can improve performance and aesthetics. For example, logically rewriting the `z` symbol after fixpoint so we don't see the expanded `[[c] a [(/3) c i] b b w i](/3) c i` is convenient for both machine performance and for human observers.
@@ -552,9 +553,9 @@ Modeling labels as first-class structures allows for potentially generating new 
 
 ## Editable Views
 
-Awelon language has an acceptably aesthetic plain text syntax. However, like Forth, Awelon does not scale nicely beyond about ten tokens per definition. Expression of sophisticated data plumbing can be awkward. The lack of namespaces or DSLs can easily result in redundant reference to the problem domain.
+Awelon language has an acceptably aesthetic plain text syntax. However, like Forth, Awelon does not scale nicely beyond about ten tokens per definition because humans lose track of context. Expression of sophisticated data plumbing can be awkward. 
 
-Instead of solving these problems at the syntax layer, Awelon shifts the burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
+To preserve its simple structure and syntax, Awelon shifts the burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
 
 I put some emphasis on *plain text* editable views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary through filesystem and CLI. However, graphical views could potentially include checkboxes, sliders, drop-down lists, graphs and canvases, and may offer an interesting foundation for graphical user interfaces within Awelon's application model. 
 
@@ -570,7 +571,14 @@ Numbers are a useful target for editable views. A viable sketch:
 
 Awelon's natural numbers are given the `#` prefix in favor of an aesthetic view for Church-encoded signed integers. The original natural numbers are escaped - every editable view should provide a simple, unambiguous escape to raw Awelon code. Most views build upon existing views rather than raw code. Building views incrementally upon views is portable and extensible. For example, if a programmer sees `[-4 #6 rational]` because their view doesn't support rational numbers, the intention is obvious, and the programmer could easily install support for rationals into their view.
 
-Ideally, editable views should be *evaluable*. That is, program evaluation should generate the same structures we use to input and view programs. If we add 3.141 and -0.007, we may wish to see 3.134 in the program output. That is, `[3134 -3 decimal]` should be a viable result from a computation. The design of evaluable editable views is sensitive to arity annotations, accelerators, and other features. 
+Besides the numeric tower, command lists are another critical feature:
+
+        {foo, bar, baz} == [[foo] {bar, baz} :]
+        {baz}           == [[baz] ~ :]
+
+Command lists are useful for just about everything. We can use them to embed structured data - e.g. `{{1,2,3},{4,5,6},{7,8,9}}` might represent a matrix. We can use them for construction of continuation-passing code and effects models. And so on. 
+
+Ideally, all editable views should also be *evaluable*. That is, program evaluation should generate the same structures we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` - or whatever we use to represent decimal numbers - should be a viable result from a computation. Design of evaluable editable views is sensitive to arity annotations, accelerators, and other features. 
 
 With evaluable views in mind, we might represent comments as:
 
@@ -578,26 +586,15 @@ With evaluable views in mind, we might represent comments as:
 
 The arity annotation allows embedding of comments into computed values. The `(@rem)` gate serves as a lightweight indicator of the comment's 'type' (so we can add other comment types) and additionally permits integration with active debugging - for example, tracing comments to see progress, or conditionally stalling on certain comments.
 
-Besides the numeric tower, command lists are another critical feature:
-
-        {foo, bar, baz} == [[foo] {bar, baz} :]
-        {baz}           == [[baz] ~ :]
-
-Command lists are useful for just about everything. We can use them to embed structured data - e.g. `{{1,2,3},{4,5,6},{7,8,9}}` might represent a matrix. We can use them for construction of continuation-passing code and effects models. And so on.
-
-## Namespaces
-
-Qualified namespaces are readily supported with editable views. In the basic form, we might support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` and `x.foo` in place of `large_prefix.foo`. 
-
-Namespaces can also be built into the editable view. We can maintain a view per user or edit session within a dictionary, and remember which namespaces we're using. This would help control the problem of namespace boiler-plate. Conveniently, this would also provide an effective foundation for humans to nickname `$secureHash` resources, which is essential to work effectively with them.
+*Aside:* Between command lists and numbers, word definitions can easily scale to a thousand tokens. If we start considering graphical views with drop down lists, SVG canvases, and similar features we might scale another order of magnitude. Of course, we'll eventually want to divide large program expressions into hypermedia structures composed of many words that we view and edit together.
 
 ## Named Locals
 
-An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where tacit programming is pointlessly onerous. I consider adopting the syntax from [Kitten language](http://kittenlang.org/), which serves for both let and lambdas:
+An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where point-free programming is pointlessly onerous. Consider adapting the locals syntax used in [Kitten language](http://kittenlang.org/):
 
-        -> X Y Z; CODE   ==  (λ X Y Z) CODE'
+        -> X Y Z; CODE   ==  "X Y Z"(/2)(@λ)d CODE'
 
-Here the `(λ X Y Z)` is some form of lambda comment. We might represent this as `"X Y Z" (/2) (@lambda) d`. And `CODE'` is obtained via the 'extract argument' method as discussed for staged evaluation, albeit constrained to value words:
+The `"X Y Z"(/2)(@λ)d` fragment is our lambda comment. It allows us to later render the program using the same variable names. I'll be treating `X Y Z` as *value words* for this purpose. Translation from `CODE => CODE'` is possible by `CODE' = T(Z, T(Y, T(X, CODE)))` with the following algorithm:
 
         Extract Value Argument
 
@@ -613,8 +610,19 @@ Here the `(λ X Y Z)` is some form of lambda comment. We might represent this as
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-With this constraint, we're down to Awelon primitives, no need for the `i` combinator. That's convenient for local reasoning about correctness of the conversion. In case of `-> X Y Z; CODE` we'll convert using `CODE' = T(Z, T(Y, T(X, CODE)))`. We can recover our code by reversing this conversion, or by partially evaluating `X Y Z CODE'` with value words `X Y Z`.
+Conveniently, the four Awelon primitive combinators are exactly sufficient. So this transform is entirely independent of the dictionary. 
 
-Named locals as described above have a weakness in context of conditional expressions: we copy our environment into both branches, then we drop one branch. This might be something we can optimize, similar to staged evaluation, given some annotations for types.
+A remaining challenge regards conditional behaviors. Consider:
 
-In any case, l
+        -> X Y Z; [onF] [onT]
+        [-> X Y Z; onF] [-> X Y Z; onT]
+
+The first program will copy `X Y Z` into the `onF` and `onT` paths, of which we'll later drop one. The second program doesn't perform any extra copies, but requires redundant expression of the `-> X Y Z;` stack description. I would like the convenience of the former and the zero-copy property of the latter. This will require a more specialized translation for conditional behaviors, bordering on compilation.
+
+Even so, this approach to named locals is simple and useful.
+
+## Namespaces
+
+Qualified namespaces are readily supported with editable views. In the basic form, we might support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` and `x.foo` in place of `large_prefix.foo`. 
+
+Namespaces can also be built into the view function and provided by default or nickname, or even abstracted. We can maintain a view per user or edit session within a dictionary, and remember which namespaces we're using. This would help control the problem of namespace boiler-plate. Conveniently, this would also provide an effective foundation for humans to nickname `$secureHash` resources, which is essential to work effectively with them.
