@@ -199,7 +199,7 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 
 * `(/2)..(/9)` - arity annotations to defer computations
 * `(0)..(9)` - tuple assertions for output scope control
-* `(aff) (rel)` - support substructural type safety
+* `(nc) (nd)` - support substructural type safety
 * `(:foo) (.foo)` - lightweight type tag and assertions
 * `(par)` - request parallel evaluation of computation
 * `(seq)` - request immediate evaluation of computation
@@ -424,22 +424,22 @@ In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct
 
 [Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about whether a value is used, or how many times it is used. This is convenient for modeling finite resources, intermediate states in a protocol, or ensuring certain steps are performed by a client computation. Awelon provides simple annotations for lightweight substructural types:
 
-* `(aff)` - mark a value affine, non-copyable (op `c`)
-* `(rel)` - mark a value relevant, non-droppable (op `d`)
+* `(nc)` - mark a value non-copyable, aka 'affine'
+* `(nd)` - mark a value non-droppable, aka 'relevant'
 * inherit substructure of bound values (op `b`).
 
-We can eliminate substructural annotations by observing a value with `a`. It is not difficult to track and validate substructural properties dynamically, or to represent them within static types. 
+We can eliminate substructural annotations by observing a value with `a`. It is not difficult to track and validate substructural properties dynamically, or to represent them in static types. For fail-fast debugging, we can also introduce annotations `(c)` and `(d)` that respectively assert a value is copyable and droppable (without actually copying or dropping it). 
 
 ## Error Annotations
 
 We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy an error value like normal. In addition to user-specified errors, a runtime might use error annotations to highlight places where a program gets stuck, for example:
 
-        [A](aff)c       => [[A](aff)c](error)i
+        [A](nc)c       => [[A](nc)c](error)i
         [[A][B][C]](2)  => [[A][B][C]](2)(error)
 
 Error values may bind further arguments as `[B][A](error)b == [[B]A](error)`. Error values will evaluate like any other value, and will collapse normally from `[[A](error)i]` to `[A](error)`. The error annotation is idempotent and commutative with other annotations on a block.
 
-Errors are not a stalling condition. Rather, indicate 'complete' but with errors. However, we can also introduce annotation `[P](stall)` to simulate a stalled or non-terminating computation. This would enable programmers to more precisely control their debugging experience. In this case, we'd simply treat `[P]` as a stalling computation.
+*Note:* Errors are not a stalling condition. Rather, indicate 'complete' but with errors. However, we can also introduce annotation `[P](stall)` to simulate a stalled or non-terminating computation. This would enable programmers to more precisely control their debugging experience.
 
 ## Garbage Data
 
@@ -464,7 +464,7 @@ There are use cases for pseudo-words just for debugging purposes. For this role,
 
 Stalled computations provide implicit 'breakpoints'. However, stalling is more precise and predictable than breakpoints in conventional development environments. Continuing breakpoints will generally be specified declaratively, using phrases such as 'leftmost `(@foo)` breakpoint' or 'all `bar, baz, qux` breakpoints'. 
 
-Tracing gives us standard 'printf' style debugging. This will copy the traced values, bypassing `(aff)` constraints. Intriguingly, because Awelon code evaluates to Awelon code, we can easily record a trace as a comment in the program output. For example:
+Tracing gives us standard 'printf' style debugging. This will copy the traced values, bypassing `(nc)` constraints. Intriguingly, because Awelon code evaluates to Awelon code, we can easily record a trace as a comment in the program output. For example:
 
         [[Msg1] [Msg2] .. [MsgN]] (@trace.log) d
 
