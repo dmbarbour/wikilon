@@ -610,15 +610,7 @@ With evaluable views in mind, we might represent comments as:
 
 The arity annotation allows embedding of comments into computed values. The `(@rem)` gate serves as a lightweight indicator of the comment's 'type' (so we can add other comment types) and additionally permits integration with active debugging - for example, tracing comments to see progress, or conditionally stalling on certain comments.
 
-*Aside:* Between command lists and numbers, word definitions can easily scale to a thousand tokens. If we start considering graphical views with drop down lists, SVG canvases, and similar features we might scale another order of magnitude. Of course, we'll eventually want to divide large program expressions into hypermedia structures composed of many words that we view and edit together.
-
-## Namespaces
-
-Qualified namespaces are readily supported by editable views. Trivially, we could support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` (and perhaps `x.foo` in place of `large_prefix.foo`). 
-
-More intriguingly, namespaces can be built into an editable view. 
-
-If we ever want humans to work effectively with `$secureHash` resources, the built in namespace would be essential. If we create a view for a particular edit session, we could statefully manipulate our name space to optimize for whichever edits we're performing. We can also give a large block of namespace terms a nickname, such that the phrase `using nickname; ...` gives an appropriate view. By packaging namespaces and other view-tweaks, we can avoid or ameliorate the common problem of namespace boiler-plate.
+*Aside:* Between command lists and numbers, word definitions can easily scale to a thousand tokens. If we start representing graphical programs with tables, graphs, canvases, radio buttons, drop-down options lists, and similar features we might scale another order of magnitude. Of course, we'll also divide larger programs into small words that can be viewed and edited together. 
 
 ## Named Locals
 
@@ -653,4 +645,12 @@ The first program will copy `X Y Z` into the `onF` and `onT` paths. In a conditi
 
 I want the convenience of the first and the zero-copy property of the second. This may require specializing the translation of `CODE` so it recognizes and optimizes conditional expressions.
 
-Even so, this approach to named locals is simple and useful.
+Even so, this approach to named locals is simple and immediately useful.
+
+## Namespaces
+
+Qualified namespaces are readily supported by editable views. Trivially, we could support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` (and perhaps `x.foo` in place of `large_prefix.foo`). 
+
+More intriguingly, namespaces can be built into an editable view. 
+
+If ever we want humans to work effectively with `$secureHash` resources, a built in namespace would be essential. If we model a view per edit session, we could tune our namespace to optimize based on whichever edits we're performing. We could also package a set of namespace declarations and give it a nickname within the view function. We might still include a `using named,view,tweaks;` hint to specialize a generic view for a program, but we can avoid the common problem of namespace boiler-plate.
