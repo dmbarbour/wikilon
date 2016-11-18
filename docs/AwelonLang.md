@@ -13,7 +13,9 @@ Like any pure language, Awelon's evaluation is separate from its effects model. 
 
 Intriguingly, [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) can feasibly present Awelon programs or codebases as [hypermedia](https://en.wikipedia.org/wiki/Hypermedia) objects. GUI forms with live coding properties. Words within a act as hypermedia links. Some relationships may be implicit in word structure (as between `foo`, `foo.doc`, and `foo.author`) to support more flexible hypermedia than is implied by direct word dependencies. Editable views can also support numbers, comments, lambdas and let expressions for cases where tacit programming is annoying, and so on. 
 
-Awelon's simplicity, purity, and evaluation model each contribute greatly to its utility for the envisioned application model. I have not encountered another language that fits as nicely.
+Universal serializability and purity also lowers barriers for high-performance and large-scale computing. We can semi-transparently accelerate evaluation of linear algebra to use GPGPU computing. We can distribute evaluation of process networks across multiple virtual machines. We can use checkpoints and replay computations if part of the system fails. Big data or computations can be stowed away and referenced by secure hash. It will take time to build Awelon up to its full potential, but I believe Awelon has excellent long term prospects for performance.
+
+Awelon's simplicity, purity, scalability, and evaluation model each contribute greatly to its utility for the envisioned application model. I have not encountered another language that would work as well.
 
 ## Primitives
 
@@ -85,10 +87,11 @@ Awelon language has specialized representations for natural numbers and texts. N
          terminate the text with `LF ~` (10, 126) 
         ~
 
-Texts may be placed only where a word is valid. Texts must be valid UTF-8, forbidding C0 (except LF) and DEL. Inline texts additionally forbid the double quote and LF. There are no character escapes, but the extra whitespace in the representation of multi-line text is not considered part of the text. Texts in Awelon are [syntactic sugar](https://en.wikipedia.org/wiki/Syntactic_sugar) for an expanded representation. 
+Texts must be valid UTF-8, forbidding C0 (except LF) and DEL. Inline texts additionally forbid the double quote and LF. There are no character escapes, but the extra whitespace in the representation of multi-line text is not considered part of the text. Texts in Awelon are [syntactic sugar](https://en.wikipedia.org/wiki/Syntactic_sugar) for a simple list of codepoints: 
 
-        "hello" == [104 "ello" :]
-        ""      == ~
+        "hello" == [104 "ello" :]       (cons)
+        ""      == ~                    (nil)
+        "→"     == [8594 ~     :]
 
 Awelon language has exactly one primitive data type - the `[]` block of code, representing a function. Data is instead [Church encoded](https://en.wikipedia.org/wiki/Church_encoding) or use similar variants such as the [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding). Values are thus represented by functions. 
 
@@ -391,13 +394,13 @@ Compilation of a function for use in external systems like JavaScript - aka 'ext
 
 Programmers may advise parallel evaluation of a block via `[computation](par)`. Essentially, this tells a runtime that we'll probably need the result of that computation, so go ahead and begin evaluation. We can proceed to move the block with linear data plumbing. However, copying a parallel computation must wait for complete evaluation, and dropping it should efficiently abort the computation. 
 
-However, parallel evaluation of opaque values has severe limitations on expressiveness. For example, `(par)` cannot effectively represent communicating processes or pipeline parallelism. 
+Unfortunately, `(par)` has severe limitations on expressiveness. It is not expressive enough to represent pipeline parallelism or distributed communicating processes. It is too expressive to leverage low-level vector processing (e.g. SIMD, SSE, GPGPU) parallelism. 
 
-To cover these weaknesses, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks). Kahn process network descriptions have a deterministic evaluation, but can be evaluated using processes and channels in a distributed system. A sufficiently large process network might be efficiently evaluated in a distributed cloud for high performance computing. With KPNs as first-class values, we can model parallel interactions between dynamic networks.
+For low level parallelism, we might accelerate [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra) or evaluation of a DSL for GPGPU computing (I'm sure there is a suitable subset of OpenCL or WebCL). A solution here could help Awelon get into machine learning, physics simulations, graphics and audio, etc..
 
-Additionally, acceleration of [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra) can support fine-grained parallelism that can feasibly leverage SIMD, SSE, or GPGPU. This would be extremely valuable for programming physics simulations, machine learning, signal processing, and so on.
+For high level parallelism, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), or more precisely the *Reactive Process Network* variant detailed later. The state of a process network is described by a value. The process description might involve named processes with ports and wires between them, pending messages on wires. Evaluation of the network description results deterministically in another network description. Accelerated evaluation might use distributed processes and queues to precisely simulate the network, resulting in the evaluated description.
 
-*Aside:* Accelerated KPNs offer an [interesting alternative](KPN_Effects.md) to monadic effects, especially in context of concurrent or multi-agent programs.
+Usefully, process networks are *monotonic*. We can interact with them - inject messages, extract results - without waiting for evaluation to fully complete. Process networks can effectively represent first-class services within a purely functional computation.
 
 ## Structural Scoping
 
@@ -504,7 +507,7 @@ Use of annotations can augment static type analysis by providing a validation. S
 
 A runtime could support type assertions `(sum)`, `(opt)`, and `(bool)` to support static type analysis and detection of errors. If necessary, these assertions could be weakly verified dynamically. But with static verification, we can unify the `S` and `S'` types and hence detect inconsistencies between the left vs. right paths. 
 
-Recursive types can potentially be recognized by use in context of fixpoint functions. However, annotations for common types like `(nat)`, `(list)`, `(text)`, `(binary)` certainly would not hurt. 
+Recursive types can potentially be recognized by use in context of fixpoint functions. However, annotations for common types like `(nat)`, `(list)`, `(text)`, `(binary)` certainly would not hurt. Also, we might benefit from specialized static safety analysis for accelerated structures like KPNs.
 
 Type declarations can also be represented at the dictionary and application layers, using simple conventions like `foo.type` to declare a type for `foo`. Declared types are accessible for refactoring, rendering, and reflection. And they can potentially be more expressive than simple annotations can readily support. For example, a system might support [dependent types](https://en.wikipedia.org/wiki/Dependent_type) and auxiliary proofs with sufficient reflection on the dictionary.
 
@@ -526,11 +529,11 @@ To make this intention explicit, we could introduce a `(dyn)` annotation:
             == [polynomial behavior](dyn) i
             == [polynomial behavior] i
 
-The presence of `(dyn)` then informs a static analysis that some code might be difficult to validate. It also introduces a mode for partial evaluations: we could easily target elimination of `(dyn)` annotations. 
-
-informs a static type analysis some a volume of code might be difficult to statically validate, to try partial evaluation if possible, and perhaps to suppress warnings when no safety judgement can be made. Obvious type errors can still be raised. 
+The presence of `(dyn)` then informs a static analysis that some code might be difficult to validate. It also introduces a mode for partial evaluations: we could easily target elimination of `(dyn)` annotations. In presence of `(dyn)` we might suppress warnings when no static safety judgement can be made, but still raise obvious type errors. 
 
 Dynamic evaluation is considered *complete* when a value is produced, that is `[A](dyn) == [A]`. However, many functions will remain dynamic even after evaluation. Careful use of `(dyn)` provides a simple basis for gradual typing in a system that defaults to static types.
+
+*Note:* While `(dyn)` can be useful for otherwise problematic DSLs
 
 ## Labeled Data - Records and Variants 
 
@@ -550,6 +553,25 @@ More efficient encodings are certainly feasible. For example, we could leverage 
 A single labeled value represents an element of a variant type. A collection of labeled values can model a record. A record can double as a switch, allowing conditional selection of an action based on the label of a variant. A collection based on a [radix tree](https://en.wikipedia.org/wiki/Radix_tree) could be efficient, avoiding redundant storage and computation on shared prefixes. 
 
 Modeling labels as first-class structures allows for potentially generating new labels in infinite streams, or extending and extracting label prefixes to model routing-like behaviors.
+
+## Reactive Process Networks
+
+A weakness of conventional Kahn Process Networks (KPNs) is that they cannot merge asynchronous data from multiple channels. There is no record for when messages on one channel arrive relative to messages on other channels. This weakness makes it difficult to efficiently integrate KPNs with real-world events. Fortunately, this weakness can be solved by adding time to KPNs, while preserving other nice features (determinism, monotonicity). Here's how:
+
+* Every process has an automatic time value. 
+* Every message is stamped with the process time.
+* Wires have logical latency, e.g. add 10 to time.
+* Process can only read messages up to its time.
+* Reading returns nothing if no messages at time.
+* Process can explicitly wait on a set of ports.
+* Waiting advances time to next message in set.
+* We can explicitly advance times at input ports. 
+
+The advance of time is driven externally at open input ports, internally via latencies. Advancing time at the input port essentially says, "the next message will have *at least* this future time". Cyclic wiring with latency permits precise expression of ad-hoc clock-like behaviors. Conventional KPN behavior is preserved if we never advance time and use zero latency wiring. That is, reads wait until either a message is available OR the upstream process advances past the reader's time, which ever happens first.
+
+Time stamps and latencies can easily be represented by natural numbers. We can usefully normalize times by subtracting the minimum time stamp from all time stamps, such that at least one time stamp in the network description is 0.
+
+Reactive process networks fill out the remaining expressive gap of KPNs, enabling us to work with asynchronous inputs, merge streams as needed. Further, we can now control evaluation 'up to' a given logical time. This is very useful for interacting with the real world, and in real-time.
 
 ## Editable Views
 
@@ -578,7 +600,9 @@ Besides the numeric tower, command lists are another critical feature:
 
 Command lists are useful for just about everything. We can use them to embed structured data - e.g. `{{1,2,3},{4,5,6},{7,8,9}}` might represent a matrix. We can use them for construction of continuation-passing code and effects models. And so on. 
 
-Ideally, all editable views should also be *evaluable*. That is, program evaluation should generate the same structures we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` - or whatever we use to represent decimal numbers - should be a viable result from a computation. Design of evaluable editable views is sensitive to arity annotations, accelerators, and other features. 
+Ideally, all editable views should also be *evaluable*. That is, program evaluation should generate the same structures we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` - or whatever we use to represent decimal numbers - should be a viable result from a computation. 
+
+Design of evaluable editable views is very sensitive to arity annotations and accelerators. A consequence is that editable views should be *defined* in the same dictionary they're used to view, for example with a word defining a `[[view→code][code→view]]` pair where `code` and `view` are represented as text. Representing views within the dictionary is convenient for testing and caching of views, and for updating views based on application or edit session state (e.g. so we can separate namespace from code). 
 
 With evaluable views in mind, we might represent comments as:
 
@@ -588,13 +612,21 @@ The arity annotation allows embedding of comments into computed values. The `(@r
 
 *Aside:* Between command lists and numbers, word definitions can easily scale to a thousand tokens. If we start considering graphical views with drop down lists, SVG canvases, and similar features we might scale another order of magnitude. Of course, we'll eventually want to divide large program expressions into hypermedia structures composed of many words that we view and edit together.
 
+## Namespaces
+
+Qualified namespaces are readily supported by editable views. Trivially, we could support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` (and perhaps `x.foo` in place of `large_prefix.foo`). 
+
+More intriguingly, namespaces can be built into an editable view. 
+
+If we ever want humans to work effectively with `$secureHash` resources, the built in namespace would be essential. If we create a view for a particular edit session, we could statefully manipulate our name space to optimize for whichever edits we're performing. We can also give a large block of namespace terms a nickname, such that the phrase `using nickname; ...` gives an appropriate view. By packaging namespaces and other view-tweaks, we can avoid or ameliorate the common problem of namespace boiler-plate.
+
 ## Named Locals
 
 An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where point-free programming is pointlessly onerous. Consider adapting the locals syntax used in [Kitten language](http://kittenlang.org/):
 
         -> X Y Z; CODE   ==  "X Y Z"(/2)(@λ)d CODE'
 
-The `"X Y Z"(/2)(@λ)d` fragment is our lambda comment. It allows us to later render the program using the same variable names. I'll be treating `X Y Z` as *value words* for this purpose. Translation from `CODE => CODE'` is possible by `CODE' = T(Z, T(Y, T(X, CODE)))` with the following algorithm:
+The `"X Y Z"(/2)(@λ)d` fragment is a lambda comment. It allows us to later render the program using the same variable names. We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with the following algorithm:
 
         Extract Value Argument
 
@@ -610,19 +642,15 @@ The `"X Y Z"(/2)(@λ)d` fragment is our lambda comment. It allows us to later re
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-Conveniently, the four Awelon primitive combinators are exactly sufficient. So this transform is entirely independent of the dictionary. 
+This is the extract argument algorithm adjusted for value words. Conveniently, we only use the four Awelon primitive combinators, and the result is about as concise as we can reasonably expect. These rewrites can be reversed, or we could just partially compute `X Y Z CODE'`, to recover the original `CODE`. 
 
 A remaining challenge regards conditional behaviors. Consider:
 
         -> X Y Z; [onF] [onT]
         [-> X Y Z; onF] [-> X Y Z; onT]
 
-The first program will copy `X Y Z` into the `onF` and `onT` paths, of which we'll later drop one. The second program doesn't perform any extra copies, but requires redundant expression of the `-> X Y Z;` stack description. I would like the convenience of the former and the zero-copy property of the latter. This will require a more specialized translation for conditional behaviors, bordering on compilation.
+The first program will copy `X Y Z` into the `onF` and `onT` paths. In a conditional behavior, we'll drop one of these paths, so the copy effort is wasted, and this is unsuitable for potential affine types. The second program is superior from that perspective, but the expression of `-> X Y Z;` is redundant. 
+
+I want the convenience of the first and the zero-copy property of the second. This may require specializing the translation of `CODE` so it recognizes and optimizes conditional expressions.
 
 Even so, this approach to named locals is simple and useful.
-
-## Namespaces
-
-Qualified namespaces are readily supported with editable views. In the basic form, we might support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` and `x.foo` in place of `large_prefix.foo`. 
-
-Namespaces can also be built into the view function and provided by default or nickname, or even abstracted. We can maintain a view per user or edit session within a dictionary, and remember which namespaces we're using. This would help control the problem of namespace boiler-plate. Conveniently, this would also provide an effective foundation for humans to nickname `$secureHash` resources, which is essential to work effectively with them.
