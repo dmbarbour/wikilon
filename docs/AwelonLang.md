@@ -89,11 +89,9 @@ Awelon language has specialized representations for natural numbers and texts. N
 
 Texts must be valid UTF-8, forbidding C0 (except LF) and DEL. Inline texts additionally forbid the double quote and LF. There are no character escapes, but the extra whitespace in the representation of multi-line text is not considered part of the text. Texts in Awelon are [syntactic sugar](https://en.wikipedia.org/wiki/Syntactic_sugar) for a simple list of codepoints: 
 
-        "hello" == [104 "ello" :]       (cons)
-        ""      == ~                    (nil)
-        "→"     == [8594 ~     :]
+        "hello" == [104 "ello" :]
 
-Awelon language has exactly one primitive data type - the `[]` block of code, representing a function. Data is instead [Church encoded](https://en.wikipedia.org/wiki/Church_encoding) or use similar variants such as the [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding). Values are thus represented by functions. 
+Awelon language has exactly one primitive data type - the `[]` block of code, representing a function. Data is instead [Church encoded](https://en.wikipedia.org/wiki/Church_encoding) or use similar variants such as the [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding). Values are thus represented by functions.
 
 Before I explain encoding of numbers and texts, let us examine encodings for other useful data types. Booleans are perhaps the simplest data. We might encode booleans as follows:
 
@@ -125,7 +123,7 @@ The option type `(1 + A)` may be modeled as a choice of `false` or `[[A] R]`. Na
         1 = [0 S], 2 = [1 S], ...
         S = inR         (successor)
 
-        ~ = false       (nil)
+        ~ = false       (null)
         : = mkP inR     (cons)
 
 An alternative is to model data as implicitly folding over its structure. The Church encoding of natural numbers is an example of this. Consider: 
@@ -140,33 +138,30 @@ An alternative is to model data as implicitly folding over its structure. The Ch
 
 Folding over a recursive structure that carries no additional data isn't particularly interesting. But we can generalize easily to folds over list structures:
 
-        [X][F] ~ i == X
-        [X][F] [[A] [L] :] i == [[X][F]L] [A]  F
+        [X][F] 0 i == X
+        [X][F] [[A] [L] cons] i == [[X][F]L] [A]  F
 
         ~ = false
         : = w [[c] a b [b] b a] a w i
 
-However, with data structures more sophisticated than natural numbers, choosing a specific fold seems awkward and arbitrary. With lists, we have both left folds and right folds. With trees, we have both folds and a variety of [tree traversals](https://en.wikipedia.org/wiki/Tree_traversal). Further, in context of linear typed structure, it is convenient if we can operate upon or [unzip](https://en.wikipedia.org/wiki/Zipper_%28data_structure%29) just part of a structure without observing the whole thing. I believe the algebraic type encodings are generally superior.
+However, with data structures more sophisticated than natural numbers, choosing a specific fold seems awkward and arbitrary. With lists, we have both left folds and right folds. With trees, we have a variety of [tree traversals](https://en.wikipedia.org/wiki/Tree_traversal). Further, in context of linear typed structure, it is convenient if we can operate upon or [unzip](https://en.wikipedia.org/wiki/Zipper_%28data_structure%29) just part of a structure without observing the whole thing. 
 
-Return attention to numbers and texts in Awelon.
-
-It is my intention that Awelon developers be given relatively free reign over the choice of encoding and corresponding tradeoffs. In practice, this control may be limited by what the runtime accelerates. But the encoding is at least separate from the syntactic embedding.
-
-This is achieved by allowing developers to partially define the encoding: 
+I believe the algebraic data encodings are generally superior. Regardless, it is my intention that Awelon developers be given reasonably free reign over the choice of encoding and corresponding tradeoffs, that the relevant policy shouldn't be built into what is essentially a syntactic sugar. This is achieved by allowing developers to partially define the encoding: 
 
         0 (zero) is user definable 
         S (succ) is user definable
+        : (cons) is user definable
+        ~ (null) is user definable
+
         1 = [0 S]
         2 = [1 S]
         ...
 
-        ~ (nil)  is user definable
-        : (cons) is user definable
-        "" = ~
-        "→" = [8594 "" :]
         "hello" = [104 "ello" :]
+        "→" = [8594 "" :]
+        "" = ~
 
-For reasons of simplicity, Awelon language only provides built in support for encoding natural numbers and text data. This is sufficient for compact embeddings of most data. More sophisticated number types are left to editable views. 
+Awelon doesn't bother with anything beyond natural numbers and texts - just barely enough to efficiently embed data. The rest is left to *editable views* discussed toward the end of this document. Well, that and a special feature to reference external binaries.
 
 ## Binary Data
 
@@ -537,22 +532,36 @@ Dynamic evaluation is considered *complete* when a value is produced, that is `[
 
 ## Labeled Data - Records and Variants 
 
-Labeled sum types (aka variants) allow us to conditionally discriminate on the label. Labeled product types (aka records) allow us to access a heterogeneous collection of data by label. Primitive sum `(A + B)` and product `(A * B)` values are simple and sufficient for many use cases. But labeled data is frequently self-documenting (the label informs the human) and extensible (easy to introduce new labels).
+Labeled sum types (aka variants) allow conditional discrimination on a label. Labeled product types (aka records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data has some convenient properties: self-documenting (label informs human) and highly extensible (add more labels).
 
-Labeled data can be encoded using 'deep' primitive sum types. Use of sums instead of `(label,value)` pairs avoids need for dependent types. Editable views can potentially support labeled data at the syntax layer.
+A good way to encode labeled sums is by a *deep* primitive sum structure. That is, we use a `[[[value] inL] inR] inL]` structure where the left-right-left path encodes our label. Unlike label-value pairs, deep sums can be statically checked without dependent types. Labeled products are then be encoded as a radix tree (aka trie) of variants, with each valid label path terminating in a value.
 
-Consider constructors `mkL = [inL] b` and `mkR = [inR] b` for primitive sum types, as described under *Data*. We can construct 'deep' sums using sequences like `mkL mkL mkR mkR mkR mkL mkR mkR`. I'll shorthand that as `LLRRRLRR`. We can encode labels (or other information) within this left-right-left sequence. Consider one possible encoding:
+For example, say we have two values:
 
-        type N v = (v + N v)
-        type T v = (v + N (T v))
+        [[[A] inL] inR]
+        [[[B] inL] inR] inL]
 
-Here, `N` labels a value `v` with a unary-encoded natural number. For example, `LRRR` would encode a label `3` Then `T` encodes a sequence of natural numbers. For example, `LLRRRLRRLRRRR` encodes a sequence `2 1 3`. Of course, we'll view this in reverse order upon deconstruction, so we might say instead that we have encoded the sequence `3 1 2`. A text label like `foo` can be encoded as a series of code points such as `102 111 111`. With the aforementioned encoding, this would expand to an `LLRRRR...` string of over 300 characters, so I won't bother. But it could be abstracted as something like `L.0 L.o L.o L.f` or possibly `"foo" label`. 
+We might join these in a radix tree list as:
 
-More efficient encodings are certainly feasible. For example, we could leverage an [entropy coding](https://en.wikipedia.org/wiki/Entropy_encoding) over a more constrained alphabet.
+         _____L_________   
+          _ __R______    __R______ 
+             _L_ _        _L_ _
+        [[~ [[B] ~ :] :] [[A] ~ :] :]
 
-A single labeled value represents an element of a variant type. A collection of labeled values can model a record. A record can double as a switch, allowing conditional selection of an action based on the label of a variant. A collection based on a [radix tree](https://en.wikipedia.org/wiki/Radix_tree) could be efficient, avoiding redundant storage and computation on shared prefixes. 
+The resulting radix tree can double as both a data container and as an ad-hoc 'switch' expression for conditional dispatch on a label. 
 
-Modeling labels as first-class structures allows for potentially generating new labels in infinite streams, or extending and extracting label prefixes to model routing-like behaviors.
+Careful attention must be given to the label encoding. To support generic operations like composing labeled values into a trie or dispatching, we must *know* where that label stops and the value starts. 
+
+In the example given above, we terminate with an `RL` pattern, and presumably we encode labeled data with a sequence of `L` and `RR` options. This... really isn't a great encoding. `RL` could appear as part of `RRL` if we aren't careful.  A *self-synchronizing* code would be a nice property. For example:
+
+        LL - encode END
+        RL - encode 0
+        RR - encode 1
+
+        label 'foo' = 011001100110111101101111
+            (encoded in reverse order)
+
+But this isn't necessarily the most efficient option. I'll leave coding decisions to users.
 
 ## Reactive Process Networks
 

@@ -123,27 +123,33 @@ Small natural numbers should also receive compact representation.
 
 Programs and blocks, at least during evaluation, will primarily be represented by simple linked lists. The primary motivation for this is *simplicity*. I've considered representations involving lists of array fragments with logical split/inline actions. But they add a lot of complexity for marginal benefits. Linked lists can get us up and running quickly, and are simple enough for JIT code to work with easily. Performance will be the job of JIT. 
 
+Constant space traversal requires all the linked lists terminate in 
+
 ## Bit Level Representations
 
 I assume 8-byte alignment, and 3 tag bits. A viable encoding:
 
-        x01     smallish natural numbers
-        011     value words and interned data
-        111     action words and annotations
+        x00     smallish natural numbers
+        010     value words and interned data
+        110     action words and annotations
 
-        000     cons cell (2 words)
-        010     (reserved, unused)
-        100     tagged values
-        110     tagged actions
+        001     block cons cell
+        011     list cons cell 
+        101     tagged values
+        111     tagged actions
 
         (Fast Bit Tests)
-        Shallow Copy:   (1 == (x & 1))
+        Shallow Copy:   (0 == (x & 1))
         Action Type:    (6 == (6 & x))
         Tagged Item:    (4 == (5 & x))
 
-I might sacrifice some natural numbers to support `[word]` singletons, since they're very common. 
+This encoding ensures zeroed memory is filled with shallow-copy structures. 
 
-*Note:* A value slot remains available at bit pattern `010`. I'm reserving this in case opportunity arises for major performance benefits... something not adequately supported by tagged values. 
+List cons cells refer to an `[[A] [B] :]` structure, generally terminating in a nil. 
+
+List cons cells refer to a `[[A] [[B] ~ :] :]` structure.
+
+*Note:* A value slot remains available at bit pattern `010`. I'm tempted to use this for *data list* cons cells* terminating in a `nil`. That is, structures of general shape `[[A] [[B] ~ :] :]`. 
 
 ## Memory Management
 
