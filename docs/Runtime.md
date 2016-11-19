@@ -69,7 +69,35 @@ Long term, we might also support distributed transactions (via 2PC or 3PC, or X/
 
 The runtime API will be oriented around an agent's view of the system.
 
-An agent will view and update a dictionary through the window of RESTful, hierarchical, long-running *transactions*. Transactions may have names, URLs, and serializable representation. Transactions generally track reads to support detection of read-write conflicts. Transactions may a few support structured updates that are merge-friendly, such as renaming a word or command pattern. Named dictionaries are effectively just 'rooted' transactions.
+An agent will view and update a dictionary through the window of RESTful, hierarchical, long-running *transactions*. Transactions will have plain-text names (if you ask for one) and serializable representation.
+
+Transactions wrap a dictionary to add useful features:
+
+* track reads and detect read-write conflict
+* support merge-friendly structured edits (rename, command pattern)
+* support naming conventions and dictionary objects
+* discretionary cooperation - locks, behavioral programming
+
+Dictionaries remain anonymous and immutable, named by secure hash. We'll use a transaction to name a mutable dictionary.
+
+Some operations we might want to perform:
+
+* read or update a word's definition
+* input a program, binary, or dictionary
+* evaluate a program, compile a program
+* rename a word or dictionary object
+* create new anon word with prefix
+* command pattern updates
+
+A 'compiled' program means whatever we have after evaluation, staging, static linking, and rewrite optimizations. It's still Awelon code at that point. It might be useful to go further, e.g. to view generated LLVM JIT code. 
+
+For an evaluated program, it might be useful to extract some outputs. 
+
+
+
+
+
+We might understand the former as a simple means of inputting a program. 
 
 Views on a dictionary will generally involve reading a word's definition or evaluating some code. Evaluation of anonymous computations can generally be represented in terms of evaluating the definition of a corresponding `$secureHash` word. Word-level tracking is convenient for RESTful reference, caching, sharing, and further composition. Computations may need related attributes to control resources (space, effort), support active debugging and background parallelism, partial evaluation hiding some words, callbacks upon invalidation, etc..
 
@@ -91,7 +119,7 @@ Evaluation will use a logical cursor within Awelon code:
 
         [C][B][A] \ a X =>  [C] \ A [B] X
 
-Here the character `\` indicates our current focus. Alternatively, I could move my focus to `[C] A [B] \ X`, then backtrack. But a left-to-right translation without backtracking is simple, efficient, and generally sufficient.
+Here the character `\` indicates our current focus. Alternatively, I could move my focus to `[C] A [B] \ X`, then eventually backtrack. But I think a left-to-right translation without backtracking is simple, efficient, and generally sufficient.
 
 The only other interesting primitive is copy:
 
@@ -100,7 +128,14 @@ The only other interesting primitive is copy:
 
 I can potentially parallelize evaluation and copy of `[A]` with progress in `X`. However, I'm not certain this will do much good in practice. Depending on how I approach representation of parallel copies, it might offer some benefits.
 
-Anyhow, I currently plan to limit evaluation within a block to a single focus - a single thread. Parallelism is thus delimited by block values.
+Anyhow, I currently plan to limit evaluation within a block to a single focus - a single thread. Parallelism is thus delimited by block values. 
+
+I need an efficient representation that supports:
+
+* bi-directional movement of the logical cursor
+* efficient inlining of one program into another
+* lightweight copy, growth of buffer, or blank spaces 
+* lightweight drop, shrink buffer at arbitrary location or logically delete
 
 ## Memory Representations
 
@@ -135,7 +170,7 @@ Linked lists seem less than optimal for my evaluator case. The fine-grained allo
 
 Linking array-like buffers is an interesting alternative, especially if I can develop an efficient representation. They're inefficient for small blocks of just a few elements. But perhaps that's an acceptable tradeoff.
 
-I can doubly-link the buffers to support the evaluation focus without a separate 'zipper' concept. The overhead for this is amortized by the buffer size. Buffers may have free space that we can write easily. It seems feasible to logically inline one buffer into another without moving too much memory around.
+I can doubly-link the buffers to support the evaluation focus without a separate 'zipper' concept. The overhead for this is amortized by the buffer size. Buffers may have free space that we can write easily - we might have a value for 'unused slot' (like SP but without the space?)
 
 An important design consideration for linked buffers is that we cannot encode buffer headers within the data without losing the ability to inline one buffer into another, unless we use a 'logical inline' reference which adds complexity I'd prefer to avoid.
 
