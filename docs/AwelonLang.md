@@ -266,9 +266,9 @@ Awelon's evaluation strategy is simple:
 
 This strategy isn't lazy or eager in the conventional sense. Rewriting the outer program first provides opportunity to apply annotations or drop values that won't be part of our output. Evaluation before copy guards against introduction of unnecessary rework. Evaluation of final values (blocks) brings us to a normal form that cannot be further evaluated.
 
-Annotations may introduce special rewrite rules for evaluation, limited to identity semantics. For example, arity annotations wait for sufficient arguments then rewrite to the empty program. Stowage replaces a large value with a secure hash reference. Memoization, staging, and rewrite optimizations use alternative evaluation modes. 
+Annotations may introduce special rewrite rules for evaluation, limited to identity semantics. For example, arity annotations wait for sufficient arguments then rewrite to the empty program. Stowage replaces a large value with a secure hash reference. Memoization, staging, and rewrite optimizations use alternative evaluation modes. The `[A](seq)` annotation is provided for profiling and fail-fast reasons, and simply evaluates `[A]` as if it were about to be copied.
 
-*Note:* The `[A](seq)` annotation will cause evaluation of `[A]` as if it were about to be copied. This is mostly useful for precise profiling and fail-fast detection of stalled computations.
+An Awelon dictionary could be evaluated by simply evaluating every definition.
 
 ## Named Values
 
@@ -304,7 +304,7 @@ Fixpoint is a function useful for modeling loop behaviors. For Awelon language, 
 
 The arity annotation `(/3)` defers expansion within the `[[F]z]` result. This variation of the Z combinator has the advantage that the definition of `z` can be found in the naive evaluation, and that `[F]` is not replicated unnecessarily. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior.
 
-Fixpoint is notoriously difficult for humans to grok and frequently awkward to use. Instead of directly using fixpoint, we'll want to build more comfortable loop abstractions above it like list fold, foreach, while, and [generators](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29). We would benefit from accelerating at least fixpoint, and possibly some of the more popular loop abstractions.
+Fixpoint is notoriously difficult for humans to grok and frequently awkward to use. Instead of directly using fixpoint, we'll want to build more comfortable loop abstractions above it like list fold, foreach, while, and [generators](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29). Performance could benefit greatly from accelerating fixpoint and the more popular loop abstractions.
 
 ## Memoization
 
@@ -342,7 +342,7 @@ Awelon's semantics allow many rewrites not performed by evaluation. Consider:
         c w     =>  c           copies are equivalent
         [0 S]   =>  1           by definition of 1
 
-Performing such rewrites can improve performance and aesthetics. For example, logically rewriting the `z` symbol after fixpoint so we don't see the expanded `[[c] a [(/3) c i] b b w i](/3) c i` is convenient for both machine performance and for human observers.
+Performing such rewrites can improve performance and aesthetics. For example, logically rewriting the `z` symbol after fixpoint so we don't ever see the expanded `[[c] a [(/3) c i] b b w i](/3) c i` is convenient for both machine performance and for human observers.
 
 A runtime may perform rewrite optimizations at its own discretion if they are provably valid. We may also accept rewrite rules, via some convention, from a dictionary. In that case, burden of proof is shifted to the dictionary developers. Also, while rewrites tend in practice to be ad-hoc and fragile, annotation `[F](rwopt)` may help by providing explicit control of staging and enabling application of rewrites to programs constructed at runtime.
 
@@ -562,7 +562,7 @@ A weakness of conventional [Kahn Process Networks (KPNs)](https://en.wikipedia.o
 * Waiting advances time to next message in set.
 * We can explicitly advance times at input ports. 
 
-The advance of time is driven externally at open input ports, internally via latencies. Advancing time at the input port essentially says, "the next message will have *at least* this future time". Cyclic wiring with latency permits precise expression of ad-hoc clock-like behaviors. Conventional KPN behavior is preserved if we never advance time and use zero latency wiring. That is, reads wait until either a message is available OR the upstream process advances past the reader's time, which ever happens first.
+The advance of time is driven externally at open input ports, internally via latencies. Advancing time at the input port essentially says, "the next message will have *at least* this future time". Cyclic wiring with latency permits precise expression of ad-hoc clock-like behaviors. Conventional KPN behavior is preserved if we never advance time and use zero latency wiring. That is, reads wait until either a message is available OR the upstream process advances past the reader's time, which ever happens first. 
 
 Time stamps and latencies can easily be represented by natural numbers. We can usefully normalize times by subtracting the minimum time stamp from all time stamps, such that at least one time stamp in the network description is 0.
 
@@ -607,7 +607,7 @@ The arity annotation allows embedding of comments into computed values. The `(@r
 
 *Aside:* Between command lists and numbers, word definitions can easily scale to a thousand tokens. If we start representing graphical programs with tables, graphs, canvases, radio buttons, drop-down options lists, and similar features we might scale another order of magnitude. Of course, we'll also divide larger programs into small words that can be viewed and edited together. 
 
-## Named Local Values
+## Named Locals
 
 An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where point-free programming is pointlessly onerous. Consider adapting the locals syntax used in [Kitten language](http://kittenlang.org/):
 
@@ -629,16 +629,16 @@ The `"X Y Z"(/2)(@λ)d` fragment is a lambda comment. It allows us to later rend
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-This is the extract argument algorithm adjusted for named values. Conveniently, we only use the four Awelon primitive combinators, and the result is about as concise as we can reasonably expect. These rewrites can be reversed, or we could just partially compute `X Y Z CODE'`, to recover the original `CODE`. 
+This is the extract argument algorithm adjusted for named values. Conveniently, we only use the four Awelon primitive combinators, and the result is about as concise as we can reasonably expect. These rewrites can be reversed, or we could just partially compute `X Y Z CODE'`, to recover the original `CODE` for rendering.
 
 A remaining challenge regards conditional behaviors. Consider:
 
         -> X Y Z; [onF] [onT]
         [-> X Y Z; onF] [-> X Y Z; onT]
 
-The first program will copy `X Y Z` into the `onF` and `onT` paths. In a conditional behavior, we'll drop one of these paths, so the copy effort is wasted, and this is unsuitable for potential affine types. The second program is superior from that perspective, but the expression of `-> X Y Z;` seems redundant. I want the convenience of the first and the zero-copy property of the second. This may require specializing the translation of `CODE` so it recognizes and optimizes conditional expressions. Or it might use a separate pass.
+The first program will copy `X Y Z` into the `onF` and `onT` paths, of which we expect to drop one path. The copy effort is wasted, and this is unsuitable for affine types. The second program is superior from that perspective, but expression of `-> X Y Z;` is redundant. I would like the convenience of the first and the zero-copy property of the second. I believe this is possible, but it may require a view with specialized support for conditional behavior. I have not worked out the details.
 
-Even so, this approach to named local values is simple and immediately useful.
+Even so, named locals are simple and immediately useful.
 
 ## Namespaces
 

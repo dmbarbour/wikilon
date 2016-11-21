@@ -31,27 +31,23 @@ Effectively, command pattern models a mutable object within a dictionary, albeit
 
 Awelon can easily evaluate in context of undefined words. A convenient idea is to treat undefined words as having a 'future' definition, to be fulfilled by human or software agents. Evaluation then usefully proceeds in context of multiple futures, enabling intermediate observations that do not depend on the definition of the future.
 
-Unlike command pattern, futures and promises can be *monotonic*. That is, we never need to destructively update the dictionary, or monotonically increment an auxiliary `future.fulfilled` boolean from `false` to `true`. Monotonicity is a very useful feature. For example, it greatly simplifies reasoning about security and non-repudiation, and enables partial evaluation and compaction of the dictionary.
-
-Futures should be favored over command pattern in cases where their use will not significantly hurt performance or confuse agents. 
+Unlike command pattern, futures and promises can be fully monotonic. This is a very valuable feature. It means we do not need to recompute our views after an update. Instead, we can checkpoint and continue our computations as needed, without backtracking.
 
 ## Dictionary Objects
 
-At the Awelon layer, the only formal meaning of a word is its definition. However, humans and software agents may treat words as having meaning and structure. We may associate `foo` with `foo.doc`, `foo.talk`, `foo.type`, `foo.author`, and so on. This association can be realized in our development environment. For example, tools that would copy, drop, or rename `foo` might include every `foo.field` word by default.
+At the Awelon layer, the only formal meaning of a word is its definition. However, humans and software agents may treat words as having meaning and structure. We may associate `foo` with `foo.doc`, `foo.talk`, `foo.type`, `foo.author`, and so on. Informally, `foo.doc` is a field in object `foo`. Numbered fields can represent informal sequences or collections - commands in the command pattern, lines in a REPL or notebook application, rows in a spreadsheet, etc.. Fields can serve as metadata 'tags' on an object, to support efficient search or extra rendering hints.
 
-Dictionary objects can always be flat, non-hierarchical, via use of redirects (i.e. instead of `foo.bar.baz` we have `foo.bar → object` and `object.baz`). However, use of hierarchy can be convenient to help control default behavior - e.g. copy would not follow redirects, instead sharing the object referenced.
+Tools to copy, drop, or rename `foo` should by default copy, drop, and rename the contained fields. When working with code, we might edit and view objects rather than individual definitions.
 
-While Awelon does not permit cyclic dependencies between definitions, it is trivial to express cyclic relationships at the level of 'dictionary objects'. For example, `foo.author` references `users.dave` and `users.dave.appA` references `foo`. Cyclic relationships can be useful for modeling and navigating hypermedia applications.
+Depending on use case, developers may choose to represent ad-hoc hierarchical structures like `foo.bar.baz.qux`. But it is feasible to keep structures relatively flat by use of redirects - a word whose definition is simply another word - as references. It really depends on what the application should copy, drop, rename, view, and edit collectively.
 
 ## Hypermedia Applications
 
-Awelon has a rich link structure, and preserves it during evaluation. Definitions reference each other, and dictionary objects 
+Awelon has a deep link structure and supports rich editable views. Further, Awelon has implicit structure in form of dictionary objects, a reverse link index, and static type analysis. Awelon forbids cyclic dependencies between definitions, but no such constraint exists on the implicit relationships. We can view Awelon dictionary objects as hypermedia resources.
 
-Definitions and dictionary objects, and entire dictionaries can be viewed as hypermedia. With dictionary objects, we get a lot of associative metadata for each word that can be linked together or provide hints for rendering. Thus, we can have cyclic graphs, or render some objects with sound or video. 
+Intriguingly, *Awelon evaluates to Awelon*, preserving its link structure and meaning. Hence, we can view this as *hypermedia evaluates to hypermedia*. We could model texts that evaluate to canvases and tables, and vice versa. With program animation, we could render interesting intermediate results during evaluation. The equivalent of HTTP POST forms might be represented in terms of cloning a template object - the initial 'form' - for each action, then editing it. 
 
-Intriguingly, *Awelon evaluates to Awelon*, preserving both behavior and a great deal of link structure. Hence, we can view this as *hypermedia evaluates to hypermedia*. We can potentially model texts that evaluate to canvases and tables. We can model canvases and tables that evaluate to text. With active debugging via program animation, we might graphically render intermediate hypermedia views.
-
-In context of RESTful applications, treating Awelon as hypermedia could be useful both for viewing Awelon code and results, and for updating it. Depending on context, we could model updating forms/data in place or command-pattern updates where each 'command' is represented by a copy of a templated form. Forms could generally be evaluated independent of context, providing a basis lightweight applications and local input validation.
+We can also recognize URL values as we might present them in a work order, and render those values appropriately. Thus, integration of hypermedia with the rest of the world can be performed in the view layer.
 
 ## Compositional Views
 
@@ -75,7 +71,7 @@ Command pattern provides a basis for small updates to large objects. Composition
 
 The ability to share flexible views of large objects without requiring each endpoint to manage fine-grained update events makes Awelon a lot more expressive and easier to use than many state-of-the-art publish subscribe systems.
 
-## Effectful Orders (Tuple Space variant)
+## Effectful Work Orders
 
 A RESTful pattern for effectful systems is to model each request as a first class resource - a [work order](https://en.wikipedia.org/wiki/Work_order) (of sorts) to be fulfilled by agents in a multi-agent system. 
 
@@ -85,7 +81,7 @@ Both human and software agents may participate.
 
 Modeling orders in a codebase or database is similar in nature to the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) concept. The main difference is the proposed method for mutual exclusion: instead of *removing* a tuple, we might stake a 'claim' on an order. Use of claims is more expressive for long-running tasks with publish-subscribe views, scheduling or expiration of claims, and concurrent interactions (interrupts, collaborative claims, etc.). 
 
-Large orders amortize the search, claim, and update overheads over multiple operations. In practice, orders will include lists, conditional decisions, loops. Sophisticated orders might be modeled as monadic tasks or a [process networks](KPN_Effects.md). Conveniently, Awelon's rewrite-based evaluation enables arbitrary incomplete tasks to be stored to the codebase, which allows checkpointing, scheduling, or collaborative work with other agents.
+Large orders amortize the search, claim, and update overheads over multiple operations. In practice, orders will include lists, conditional decisions, loops. Sophisticated orders might be modeled as monadic tasks or a reactive process networks. Conveniently, Awelon's rewrite-based evaluation enables arbitrary incomplete tasks to be stored to the codebase, which allows checkpointing, scheduling, or collaborative work with other agents.
 
 ## Tables and Databases
 
@@ -103,17 +99,15 @@ We may need to perform garbage collection at the dictionary level, eliminating w
 * *frozen* - behavior of this word should never change in the future
 * *hidden* - assume no external references directly access this word
 
-This would permit a corresponding set of rewrites:
+This would admit a corresponding set of rewrites:
 
 * *opaque* definitions may be simplified, evaluated, compressed
 * *frozen* definitions may be *inlined* into *opaque* clients
 * *hidden* definitions may be *deleted* if they have no clients
 
-Awelon language makes it easy to evaluate definitions and replace them inline.
+Hence, we can evaluate and optimize opaque words, link frozen words, and GC the hidden words. Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. We can assume secure-hash resources are frozen and hidden, but not opaque. Future values might be assumed opaque and frozen, but not always hidden.
 
-Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. Compression can be achieved by introducing new hidden, frozen words for common substructures - i.e. dictionary compression. 
-
-*Note:* Metadata that should be accessible to software agents or application patterns should be modeled as part of the dictionary proper, accessible for import and export and so on. This includes dictionary management metadata. However, it might be summarized e.g. under `META.GC` or similar.
+Representation of these attributes is ad-hoc, subject to de-facto standardization. We could add tag fields on a dictionary object. Or we might model general policies under `META.GC`... which might be sensitive to tag fields. Whatever.
 
 ### Dictionary Based Communications
 
