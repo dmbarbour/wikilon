@@ -184,9 +184,7 @@ The runtime must look at the given definitions. Upon recognizing `[] b a`, the r
 
 Critically, acceleration of functions extends also to *Data*, and efficient representations thereof. Natural numbers, for example, may be represented by simple machine words. Accelerated arithmetic functions could then operate directly on the compact natural number representation.
 
-Long term, Awelon runtimes could accelerate labeled records and variants for convenient data embedding, evaluation of linear algebra for semi-transparent GPGPU parallelism, [process networks](https://en.wikipedia.org/wiki/Kahn_process_networks) for distributed cloud computing, and potentially interpretation of a register machine or C-- to more efficiently leverage the conventional CPU. 
-
-*Note:* Acceleration replaces intrinsics and performance applications of FFI.
+Long term, Awelon runtimes should accelerate labeled data (for efficient data structures), linear algebra (for GPGPU computing), process networks (for large scale cloud computing), and interpretation of a simple register machine (to efficiently leverage the conventional CPU), among other tasks. Acceleration replaces use of intrinsics and FFI.
 
 ## Annotations
 
@@ -272,9 +270,9 @@ Annotations may introduce special rewrite rules for evaluation, limited to ident
 
 *Note:* The `[A](seq)` annotation will cause evaluation of `[A]` as if it were about to be copied. This is mostly useful for precise profiling and fail-fast detection of stalled computations.
 
-## Value Words
+## Named Values
 
-A 'value word' is any word whose evaluated definition is a singleton block. An Awelon runtime must treat value words as values with respect to binding, data plumbing, etc..
+A 'named value' is a word whose evaluated definition is a singleton block. An Awelon runtime must treat named values as values with respect to binding, data plumbing, etc..
 
         true = [a d]
         false = [d i]
@@ -283,7 +281,7 @@ A 'value word' is any word whose evaluated definition is a singleton block. An A
         42 true w == true 42
         42 [] b   == [42]
 
-Support for value words is implied by the lazy link rules. I'm just making it explicit. Value words are essential for preserving human-meaningful structure and hypermedia resource references.
+Support for named values is implicit with the lazy link rules. I'm just making it explicit. Named values are essential for preserving human-meaningful structure and broad support for hypermedia resource references.
 
 ## Stalled Computation
 
@@ -532,40 +530,28 @@ Dynamic evaluation is considered *complete* when a value is produced, that is `[
 
 ## Labeled Data - Records and Variants 
 
-Labeled sum types (aka variants) allow conditional discrimination on a label. Labeled product types (aka records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data has some convenient properties: self-documenting (label informs human) and highly extensible (add more labels).
+Labeled sum types (aka variants) allow conditional discrimination on a label. Labeled product types (aka records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data is self-documenting (label informs human) and extensible (add more labels).
 
-A good way to encode labeled sums is by a *deep* primitive sum structure. That is, we use a `[[[value] inL] inR] inL]` structure where the left-right-left path encodes our label. Unlike label-value pairs, deep sums can be statically checked without dependent types. Labeled products are then be encoded as a radix tree (aka trie) of variants, with each valid label path terminating in a value.
+A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] inL] inR] inL]` structure where the left-right-left path encodes the label. Unlike label-value pairs, deep sums do not require dependent types. A labeled product can then be modeled as a trie on the label. Consider:
 
-For example, say we have two values:
+        (Deep Sums)
+        [[[A] inL] inL]
+        [[[[[B] inL] inL] inR] inR]
 
-        [[[A] inL] inR]
-        [[[B] inL] inR] inL]
+        (Singleton Tries)
+        [[[A] ~ :] ~ :]
+        [~ [~ [[[B] ~ :] ~ :] :] :]
 
-We might join these in a radix tree list as:
+        (Merged Trie)
+        [[[A] ~ :] [~ [[[B] ~ :] ~ :] :] :]
 
-         _____L_________   
-          _ __R______    __R______ 
-             _L_ _        _L_ _
-        [[~ [[B] ~ :] :] [[A] ~ :] :]
+Here the label is encoded as `(RL | RR)* LL`, where `RL` corresponds to constructor `[inL] b [inR] b`. The `(RL | RR)*` structure represents a finite `(0 | 1)*` bitfield, within which we might encode texts or numbers. The final `LL` terminates the label. This encoding has several nice properties. It is a simple regular language and a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot in the trie could be used for name shadowing.
 
-The resulting radix tree can double as both a data container and as an ad-hoc 'switch' expression for conditional dispatch on a label. 
-
-Careful attention must be given to the label encoding. To support generic operations like composing labeled values into a trie or dispatching, we must *know* where that label stops and the value starts. 
-
-In the example given above, we terminate with an `RL` pattern, and presumably we encode labeled data with a sequence of `L` and `RR` options. This... really isn't a great encoding. `RL` could appear as part of `RRL` if we aren't careful.  A *self-synchronizing* code would be a nice property. For example:
-
-        LL - encode END
-        RL - encode 0
-        RR - encode 1
-
-        label 'foo' = 011001100110111101101111
-            (encoded in reverse order)
-
-But this isn't necessarily the most efficient option. I'll leave coding decisions to users.
+Ideally, a runtime should accelerate labeled data. Deep sums could be represented as compact bit fields, and sparse tries as radix trees. Better, we could optimize to use more conventional variant and record types under the hood. Effective support for labeled data could make Awelon a lot more accessible for a variety of use cases.
 
 ## Reactive Process Networks
 
-A weakness of conventional Kahn Process Networks (KPNs) is that they cannot merge asynchronous data from multiple channels. There is no record for when messages on one channel arrive relative to messages on other channels. This weakness makes it difficult to efficiently integrate KPNs with real-world events. Fortunately, this weakness can be solved by adding time to KPNs, while preserving other nice features (determinism, monotonicity). Here's how:
+A weakness of conventional [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) is that they cannot merge asynchronous data from multiple channels. There is no record for when messages on one channel arrive relative to messages on other channels. This weakness makes it difficult to efficiently integrate KPNs with real-world events. Fortunately, this weakness can be solved by adding a temporal dimension to KPNs, while preserving other nice features (determinism, monotonicity). Here's how:
 
 * Every process has an automatic time value. 
 * Every message is stamped with the process time.
@@ -607,11 +593,11 @@ Besides the numeric tower, command lists are another critical feature:
         {foo, bar, baz} == [[foo] {bar, baz} :]
         {baz}           == [[baz] ~ :]
 
-Command lists are useful for just about everything. We can use them to embed structured data - e.g. `{{1,2,3},{4,5,6},{7,8,9}}` might represent a matrix. We can use them for construction of continuation-passing code and effects models. And so on. 
+Command lists are useful for many purposes. We can use them to embed structured data - e.g. `{{1,2,3},{4,5,6},{7,8,9}}` might represent a matrix. We can use them to construct continuation-passing code and effects models. And so on. 
 
 Ideally, all editable views should also be *evaluable*. That is, program evaluation should generate the same structures we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` - or whatever we use to represent decimal numbers - should be a viable result from a computation. 
 
-Design of evaluable editable views is very sensitive to arity annotations and accelerators. A consequence is that editable views should be *defined* in the same dictionary they're used to view, for example with a word defining a `[[view→code][code→view]]` pair where `code` and `view` are represented as text. Representing views within the dictionary is convenient for testing and caching of views, and for updating views based on application or edit session state (e.g. so we can separate namespace from code). 
+Design of evaluable editable views is very sensitive to arity annotations and accelerators. A consequence is that editable views should be *defined* within the same dictionary they're used to view by some simple convention. Perhaps a word defining a `[[view→code][code→view]]` pair where `code` and `view` are represented as text. Representing views within the dictionary is convenient for testing and caching of views, and for updating views based on application or edit session state (e.g. so we can separate namespace from code). 
 
 With evaluable views in mind, we might represent comments as:
 
@@ -621,7 +607,7 @@ The arity annotation allows embedding of comments into computed values. The `(@r
 
 *Aside:* Between command lists and numbers, word definitions can easily scale to a thousand tokens. If we start representing graphical programs with tables, graphs, canvases, radio buttons, drop-down options lists, and similar features we might scale another order of magnitude. Of course, we'll also divide larger programs into small words that can be viewed and edited together. 
 
-## Named Locals
+## Named Local Values
 
 An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where point-free programming is pointlessly onerous. Consider adapting the locals syntax used in [Kitten language](http://kittenlang.org/):
 
@@ -643,18 +629,16 @@ The `"X Y Z"(/2)(@λ)d` fragment is a lambda comment. It allows us to later rend
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-This is the extract argument algorithm adjusted for value words. Conveniently, we only use the four Awelon primitive combinators, and the result is about as concise as we can reasonably expect. These rewrites can be reversed, or we could just partially compute `X Y Z CODE'`, to recover the original `CODE`. 
+This is the extract argument algorithm adjusted for named values. Conveniently, we only use the four Awelon primitive combinators, and the result is about as concise as we can reasonably expect. These rewrites can be reversed, or we could just partially compute `X Y Z CODE'`, to recover the original `CODE`. 
 
 A remaining challenge regards conditional behaviors. Consider:
 
         -> X Y Z; [onF] [onT]
         [-> X Y Z; onF] [-> X Y Z; onT]
 
-The first program will copy `X Y Z` into the `onF` and `onT` paths. In a conditional behavior, we'll drop one of these paths, so the copy effort is wasted, and this is unsuitable for potential affine types. The second program is superior from that perspective, but the expression of `-> X Y Z;` is redundant. 
+The first program will copy `X Y Z` into the `onF` and `onT` paths. In a conditional behavior, we'll drop one of these paths, so the copy effort is wasted, and this is unsuitable for potential affine types. The second program is superior from that perspective, but the expression of `-> X Y Z;` seems redundant. I want the convenience of the first and the zero-copy property of the second. This may require specializing the translation of `CODE` so it recognizes and optimizes conditional expressions. Or it might use a separate pass.
 
-I want the convenience of the first and the zero-copy property of the second. This may require specializing the translation of `CODE` so it recognizes and optimizes conditional expressions.
-
-Even so, this approach to named locals is simple and immediately useful.
+Even so, this approach to named local values is simple and immediately useful.
 
 ## Namespaces
 
@@ -662,4 +646,4 @@ Qualified namespaces are readily supported by editable views. Trivially, we coul
 
 More intriguingly, namespaces can be built into an editable view. 
 
-If ever we want humans to work effectively with `$secureHash` resources, a built in namespace would be essential. If we model a view per edit session, we could tune our namespace to optimize based on whichever edits we're performing. We could also package a set of namespace declarations and give it a nickname within the view function. We might still include a `using named,view,tweaks;` hint to specialize a generic view for a program, but we can avoid the common problem of namespace boiler-plate.
+If ever we want humans to work effectively with `$secureHash` resources, a built in namespace would be essential. If we model a view per edit session, we could tune our namespace to optimize based on whichever edits we're performing. We could also package a set of namespace declarations and give it a nickname within the view function. We might still include a `using view tweaks;` hint to specialize a generic view for a program, but we can avoid the common problem of namespace boiler-plate.
