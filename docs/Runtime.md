@@ -3,7 +3,7 @@
 
 A primary goal for runtime is performance of *applications*. Awelon's application model involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Evaluation, concurrent update, incremental computing, and so on must each contribute to overall performance.
 
-Besides efficiency and scalability, I'm also interested in predictable performance. The runtime will aim to keep unpredictable performance features under client control via annotations and similar. I intend for Awelon runtime to be suitable at least for soft real-time systems to the extent that programmers control the nature and frequency of transactions on the dictionary.
+Besides efficiency and scalability, I'm also interested in predictable performance, and precise cost accounting so heavy users can be charged appropriately. The runtime will aim to keep unpredictable performance features under client control via annotations and similar. I intend for Awelon runtime to be suitable at least for soft real-time systems to the extent that programmers control the nature and frequency of transactions on the dictionary.
 
 *Aside:* For naming, I'm likely to call this 'Wikilon Runtime' or `wikrt`. 
 
@@ -67,36 +67,32 @@ Long term, we might also support distributed transactions (via 2PC or 3PC, or X/
 
 ## API Concepts
 
-The runtime API will be oriented around an agent's view of the system.
-
-An agent will view and update a dictionary through the window of RESTful, hierarchical, long-running *transactions*. Transactions will have plain-text names (if you ask for one) and serializable representation.
-
-Transactions wrap a dictionary to add useful features:
-
-* track reads and detect read-write conflict
-* support merge-friendly structured edits (rename, command pattern)
-* support naming conventions and dictionary objects
-
-Dictionaries remain anonymous and immutable, named by secure hash. We'll use a transaction to name a mutable dictionary.
+The runtime API should be oriented around an agent's view of the system.
 
 Some operations we might want to perform:
 
 * read or update a word's definition
+* perform a set of updates atomically
 * input a program, binary, or dictionary
 * output a program, binary, or dictionary
-* evaluate, optimize, compile a program
-* subscribe, receive alerts upon change
-* rename a word or dictionary object
-* create new anon word with prefix
-* command pattern updates
+* partial program output, background parallel
+* process program as text (for editable views)
+* evaluate, type, optimize, compile a program
+* profile computation; line item accounting
+* subscribe, alerts upon change (callbacks?)
+* rename dictionary object, special edits
+* find clients of a word, reverse lookup
+* find words with a common prefix or suffix
 
-In context of a multi-agent REST system with caching and subscription concerns, we might need to ensure every program we interact with has an name for future lookups. Or at least that we're only able to subscribe to named computations. For subscriptions, I may need to support callbacks. 
+To support atomic updates, I have at least two options. One is the DVCS approach: an agent operates in a 'workspace' with its own logical copy of the dictionary, then we 'merge' updates from multiple agents with an ad-hoc best effort to resolve conflicts. Another approach is long-running hierarchical transactions, which is basically the same thing but we also track reads, evaluations, assumptions or assertions, and thus we can detect read-write conflicts and push them back to the agent. With transactions we might provide merge-friendly structured edits, such as renaming an object or constructing a new work order or command operation without concern about how things are named.
 
-Conveniently, I don't need sophisticated fine-grained input or output. That is, I don't need to input individual words, open and close blocks. I can push that sort of trivial work up to Haskell easily enough. Simple binary streams is sufficient, such that I can work from lazy byte strings in Haskell. I might need to indicate which secure hash dependencies we're missing, but that's about it.
+I think the 'transaction' oriented dictionary is generally better.
 
-An optimized program may involve applying partial evaluation, staging, static linking, rewrite optimizations, etc.. The output is still an Awelon program. JIT compilation might involve conversion to LLVM or C for Clang. It would be... convenient to readily study output from JIT compilations. (*Aside:* C would be more widely useful if I can avoid too many dependencies.)
+It seems to me that most input and output can occur as binary streams or chunked lists. Fine grained program input (e.g. at the level of open/close block and add word) seems unnecessary. Whether it's worth introducing depends on how much it complicates the runtime API. I may need to track down missing secure hash resources, however. 
 
-*Note:* Security models (HTTP authentication, HMAC bearer tokens, etc.) and collaborative conflict avoidance patterns (discretionary locks, [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html)) are not part of this C runtime API. I believe they can be implemented more or less independently, and I don't want to commit to any particular model.
+*Aside:* By 'optimized' output, I want *Awelon* code after all the rewrite optimizations, static linking, staging, etc.. By 'compiled' output, I would like relocatable JIT code (Clang or LLVM?) or similar.
+
+*Note:* Security models (HTTP authentication, HMAC bearer tokens, etc.), collaborative conflict avoidance patterns (discretionary locks, [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html)), and accounting (quotas, policy for costs shared via memoization or stowage), are not part of this C runtime API. I believe they can be implemented more or less independently, and I don't want to commit to any particular model.
 
 ## Evaluation 
 
@@ -111,19 +107,15 @@ Evaluation will use a logical cursor into an Awelon program:
         \ word          =>      word \      (if not linked)
                         =>      \ word-def  (if linked)
 
-The cursor here is indicated by the `\` character. It moves left to right through the program, leaving evaluated code in its wake. It moves left for application. After we finish evaluation, we'll go back and evaluate any functions that have not been hit. It would be useful to track some metadata indicating which values have been evaluated already.
+The cursor here is indicated by the `\` character. It moves left to right through the program, leaving evaluated code in its wake. Specializations may exist, e.g. for `i` or `a d` or `z` to support tail-calls. After we finish evaluation, we'll go back and evaluate blocks remaining in the output. It would be useful to track some metadata indicating which values have been evaluated already.
 
-The runtime representation of this cursor might use a Huet zipper or gap buffer of some sort. We'll only have one cursor per program, modulo parallel evaluation of values or words.
+The runtime representation of this cursor could use a Huet zipper or a gap buffer of some sort. I imagine I'll only have one cursor by default, modulo parallel evaluation. Parallelism will be focused on the block values - I likely won't use parallelism by default, excepting potentially for final output values.
 
 ## Program Representation
 
-Words should be interned. The interned reference will include associative data: link metadata (arity, available outputs), link data (static link code if needed), possible JIT or accelerator references (with alternative for static type safe operation). Interning of words supports a lot of memoization and caching at that layer.
+Words, small constants, etc. will be interned. Programs will be represented as a linked list of words and programs. For now, I'll keep it simple and make it work.
 
-Small natural numbers should also receive compact representation.
-
-Programs and blocks, at least during evaluation, will primarily be represented by simple linked lists. The primary motivation for this is *simplicity*. I've considered representations involving lists of array fragments with logical split/inline actions. But they add a lot of complexity for marginal benefits. Linked lists can get us up and running quickly, and are simple enough for JIT code to work with easily. Performance will be the job of JIT. 
-
-Constant space traversal requires all the linked lists terminate in 
+A viable alternative to linked lists is a chunked array list with logical inlining and blank spaces to logically shrink. Logical inlining and blanks complicate interpreter logic, but improve memory locality, copy, and memory management. This might be worth pursuing once the basic link list approach is implemented.
 
 ## Bit Level Representations
 
@@ -139,17 +131,11 @@ I assume 8-byte alignment, and 3 tag bits. A viable encoding:
         111     tagged actions
 
         (Fast Bit Tests)
-        Shallow Copy:   (0 == (x & 1))
+        Shallow Copy:   (0 == (1 & x))
         Action Type:    (6 == (6 & x))
-        Tagged Item:    (4 == (5 & x))
+        Tagged Item:    (5 == (5 & x))
 
-This encoding ensures zeroed memory is filled with shallow-copy structures. 
-
-List cons cells refer to an `[[A] [B] :]` structure, generally terminating in a nil. 
-
-List cons cells refer to a `[[A] [[B] ~ :] :]` structure.
-
-*Note:* A value slot remains available at bit pattern `010`. I'm tempted to use this for *data list* cons cells* terminating in a `nil`. That is, structures of general shape `[[A] [[B] ~ :] :]`. 
+A cons cell has two words. Tagged values or actions may have more. List cons cells represent a `[[A][B]:]` structure, which must end in List nil or a normal block.
 
 ## Memory Management
 
