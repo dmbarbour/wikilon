@@ -11,9 +11,9 @@ Besides efficiency and scalability, I'm also interested in predictable performan
 
 * simple memory model
  * linear ownership of program structure
- * memory usage reflects program size
+ * memory use reflects serialized program size
  * constant space traversal (Morris algorithm)
- * structure sharing is via unlinked words
+ * structure sharing via words only
  * use both free-list and compaction GC
 
 * accelerated functions
@@ -39,7 +39,8 @@ Besides efficiency and scalability, I'm also interested in predictable performan
 * lightweight failure model
  * evaluation errors represented in code
  * quota failures by aborting computation
- * may lose work to checkpoint on failure
+ * failures leave program in valid state
+ * may lose partial work upon failure
 
 * lightweight debugging model
  * leverage `(@gate)` annotations
@@ -107,55 +108,89 @@ Evaluation will use a logical cursor into an Awelon program:
         \ word          =>      word \      (if not linked)
                         =>      \ word-def  (if linked)
 
-The cursor here is indicated by the `\` character. It moves left to right through the program, leaving evaluated code in its wake. Specializations may exist, e.g. for `i` or `a d` or `z` to support tail-calls. After we finish evaluation, we'll go back and evaluate blocks remaining in the output. It would be useful to track some metadata indicating which values have been evaluated already.
-
-The runtime representation of this cursor could use a Huet zipper or a gap buffer of some sort. I imagine I'll only have one cursor by default, modulo parallel evaluation. Parallelism will be focused on the block values - I likely won't use parallelism by default, excepting potentially for final output values.
+The cursor here is indicated by the `\` character. It moves left to right through the program, leaving evaluated code in its wake. Specializations for `a d`, `i`, and `z` will support tail-call optimizations.
 
 ## Program Representation
 
-Words, small constants, etc. will be interned. Programs will be represented as a linked list of words and programs. For now, I'll keep it simple and make it work.
+Words, small constants, accelerated subprograms, etc. may be interned. This allows me to share a lot of work (memoization, static linking, linker metadata, etc.) for multiple instances of a word, or avoid allocations to work with natural numbers.
 
-A viable alternative to linked lists is a chunked array list with logical inlining and blank spaces to logically shrink. Logical inlining and blanks complicate interpreter logic, but improve memory locality, copy, and memory management. This might be worth pursuing once the basic link list approach is implemented.
+Other content - blocks, texts, binaries, etc. - is deep-copied and uniquely owned. A general rule is that the cost of memory representation should directly reflect the cost of our serialized representation in a simple, predictable way. However, long term we might explore accelerated access to 'shared' objects via stowage and even logical trim/addend/etc..
+
+Program structure will use a linked list of buffers. Viable representation:
+
+        (header next ... elements ...)
+
+The header must contain at least a buffer size and internal iterator. 
+
+Buffer sizes include the header and may use a small set. Only a few bits are necessary. Conveniently, we can link buffers of 1024 and 512 together to support 1500 elements if we need to limit internal fragmentation. 
+
+The iterator is necessary for constant-space deep copy, drop, etc.. It can be represented by a simple offset from the header into the elements. A buffer may have unused space at each end. Rather than try to track these within the header, I can represent special stop and skip actions within the buffer if there is sufficient space.
+
+Remaining header bits can record useful metadata - substructural type, evaluation status. Maybe a tuple/sum/bool assertion. We may limit ourselves to a 32-bit header even on a 64-bit system. 
+
+Evaluation uses at least two buffers: the 'stack' buffer to the left of the cursor and a 'program' buffer to the right. During evaluation, the stack buffer is reversed such that `next` is `prev`.
+
+This simplifies the problem of logical inlining. Our cursor remains always at a border between two buffers, so we can simply use the `next` field to inline. This structure DOES mean we may need to allocate a buffer upon bind with `b`, if the receiving block does not have space. However, we can reserve a few slots in our blocks in anticipation of binding, and we need allocate at most once per several bind actions (e.g. allocate a block of size 8 to handle binding up to five more items). 
+
+This program representation should give me stack-like performance, efficient deep-copy, minimal pointer chasing etc.. I expect a significant performance benefit over cons-cell linked lists. Meanwhile, the representation seems simple enough to work with JIT as needed.
 
 ## Bit Level Representations
 
 I assume 8-byte alignment, and 3 tag bits. A viable encoding:
 
-        x00     smallish natural numbers
-        010     value words and interned data
-        110     action words and annotations
+        x00     small natural numbers
+        010     value words (interned)
+        110     actions words (interned)
 
-        001     block cons cell
-        011     list cons cell 
-        101     tagged values
+        001     normal block
+        101     unused, reserved
+        011     tagged values
         111     tagged actions
 
         (Fast Bit Tests)
-        Shallow Copy:   (0 == (1 & x))
+        Deep Copy:      (1 == (1 & x))
+        Tagged Item:    (3 == (3 & x))
         Action Type:    (6 == (6 & x))
-        Tagged Item:    (5 == (5 & x))
 
-A cons cell has two words. Tagged values or actions may have more. List cons cells represent a `[[A][B]:]` structure, which must end in List nil or a normal block.
+Tagged items can have ad-hoc structure and keep extra type information in a header. Originally, the distinction between tagged values and normal blocks was more critical because I was using naive linked lists for blocks. I do not know whether it remains worth preserving this separation. But I can always tweak the representations later.
+
+An interesting option for the reserved slot is representing linked-list structures - i.e. `[[hd][tl]:]` where `tl` is another list. Instead of a bunch of individual cons cells, our linked list could be modeled within a linked list of buffers. This would simplify a lot of collections-oriented operations, and even efficient representation for tries.
 
 ## Memory Management
 
-Memory will be managed via free lists, primarily. I might also ensure sufficient memory is reserved for occasional compacting collections.
+Memory will be managed during normal computation by free lists. The explicit copy/drop actions of Awelon effectively gives us manual memory management.
 
-Awelon doesn't need conventional GC because copy/drop are explicit, and forgetting to drop something is rather obvious in the program output. However, free lists can fragment, and I might favor an occasional defragmenting copy collection. This might be supported by explicit user action.
+A simple buddy-list allocator should be sufficient. In normal PLs, buddy lists introduce a lot of internal fragmentation. But with the linked-list-of-buffers as a primary data structure, that issue is mitigated because I can transparently compose small buffers to represent a larger one, and thus keep internal fragmentation under predictable control.
 
-A related point is to ensure that, if computation halts for any reason, we always have a useful state that we can process.
+Memory compaction and defragmentation are also important, but I don't want to do unpredictable-cost things implicitly. Also, fragmentation won't be a problem for all programs, just those that have highly dynamic memory behaviors. So I'll leave this to an external API call, perhaps coupled to a notion of taking a program snapshot and opportunity to resize memory.
+
+If allocation fails because we've hit a memory quota during evaluation, we must guarantee that we have a useful state. If we run out of memory on program *input*, that will need a distinct error type because we cannot guarantee a complete program. 
 
 ## Computations
 
-A computation should be snapshot consistent. We should also be able to determine when our computation invalidates, but instrumenting this might require a flag for the computation. We might track invalidation for transaction merges, too, which also requires configuration.
+A computation should be snapshot consistent, at least. Like a lightweight transaction. 
 
-### Value Sealers
+Ideally, we should be able to take any computation and set callbacks recording invalidation with whatever precision we can afford.
 
-        (:foo) (.foo)
+## Memoization, Stowage, and Accounting
 
-I can record in `(.foo)` the interned reference to `(:foo)` for efficient sealing/unsealing. 
+Memoization and stowage accounting should support potential sharing not just within a transaction, but between many dictionaries or many forks of a dictionary. 
 
-### Value Stowage
+Line item accounting should makes this feasible. We might track on a global scale that 'yup, that computation was also performed by Alice and Bob today' and appropriately divide compute and storage costs. This gives us 'economies of scale' for sharing objects.
+
+## Value Sealers
+
+Sealers have a trivial definition:
+
+        (:foo) (.foo)   ==
+
+The normal usage pattern is only a little more sophisticated:
+
+        [(:foo)]b ...  i(.foo)
+
+It doesn't seem these really need any special support, other than to associate `(.foo)` to `(:foo)` when initially interning so it's a symbol-level pointer test. 
+
+## Value Stowage
 
         (stow)
 
@@ -163,3 +198,30 @@ I might want latent stowage, performed based on memory pressure. This isn't too 
 
 I can potentially compute the size, hash, and serialization of a subprogram by use of Morris traversals instead of allocating and resizing a binary. If so, this will be a lot simpler and more efficient than my earlier efforts.
 
+## Numbers and Arrays
+
+Other than small naturals, scalar numbers use tagged values, a boxed representation.
+
+I intend to eventually support 'unboxed' fixed-width numbers in context of typed arrays and matrices. This is necessary to accelerate linear algebras, leverage the GPGPU, or enter a domain of high performance computing in general. But I won't bother trying to optimize basic numeric processing for most Awelon code.
+
+## Optimizations
+
+For visible optimizations, we can at least perform:
+
+* staged partial evaluation up to arity
+* static linking for words
+* rewrite optimization
+
+Some invisible performance enhancers:
+
+* precompute copy size for fixpoint loop
+* accelerate multi-word actions
+* JIT compilation of code
+
+For s
+
+## JIT Compilation
+
+I must review literature on JIT for gradually typed languages, basic block versioning, etc.. Once I have my interpreter and basic accelerators up to speed, I should aim to get JIT working very early.
+
+JIT will essentially be performed 

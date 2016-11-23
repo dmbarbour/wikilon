@@ -39,7 +39,7 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{},;|&=\"`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large.
 
-A useful subset of words is automatically defined:
+A useful subset of words is implicitly defined:
 
 * the four Awelon primitive words `a`, `b`, `c`, `d`
 * words to encode natural numbers, regex `[1-9][0-9]*`
@@ -180,11 +180,13 @@ A runtime will recognize and accelerate common functions. The accelerated implem
            [A]i == A            (inline)         i = [] w a d
         [B][A]w == [A][B]       (swap)           w = [] b a
 
-The runtime must look at the given definitions. Upon recognizing `[] b a`, the runtime may link `w` to the acclerated swap implementation. Same for `i`. In general, recognition of accelerators will be fragile, in the sense that `[] w a d` might be recognized where the equivalent definitions `[] [] b a a d` or `[[]] a a d` are not recognized. To mitigate this fragility, runtimes should carefully document recognized accelerators, e.g. by defining a seed dictionary. But, assuming it works out, `i` and `w` will effectively have the performance of primitive functions.
+The runtime will look at the given definitions. Upon recognizing `[] b a`, the runtime may link `w` to an acclerated swap implementation. Same for `i`.
 
-Critically, acceleration of functions extends also to *Data*, and efficient representations thereof. Natural numbers, for example, may be represented by simple machine words. Accelerated arithmetic functions could then operate directly on the compact natural number representation.
+In general, recognition of accelerators may be fragile. It may be that `i = [] w a d` is recognized where the logically equivalent `i = [] [] b a a d` or `i = [[]] a a d` are not recognized. We might not even recognize `j = [] w a d` because we changed the function name. This is ultimately up to the runtime. Every runtime should carefully document sufficient criteria for achieving acceleration. One robust approach is to define a 'seed' dictionary containing and documenting accelerated programs, from which users may derive their own dictionaries.
 
-Long term, Awelon runtimes should accelerate labeled data (for efficient data structures), linear algebra (for GPGPU computing), process networks (for large scale cloud computing), and interpretation of a simple register machine (to efficiently leverage the conventional CPU), among other tasks. Acceleration replaces use of intrinsics and FFI.
+Critically, acceleration of functions extends also to *data* and even further to *organization* of code, and efficient representation thereof. A natural number, for example, might be represented by simple machine words. An accelerator for linear algebra might support arrays or matrices of unboxed floating point numbers, which might be represented on a GPGPU. Accelerated evaluation of process networks might use physically distributed processes and shared queues.
+
+Acceleration replaces conventional use of intrinsics and FFI while ensuring every program is formally specified all the way down.
 
 ## Annotations
 
@@ -195,7 +197,7 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(nc) (nd)` - support substructural type safety
 * `(:foo) (.foo)` - lightweight type tag and assertions
 * `(par)` - request parallel evaluation of computation
-* `(seq)` - request immediate evaluation of computation
+* `(eval)` - request immediate evaluation of computation
 * `(nat)` - assert argument should be a natural number
 * `(jit)` - compile a function for use in future evaluations
 * `(stow)` - move large values to disk, load on demand
@@ -256,17 +258,15 @@ Evaluation of an Awelon program results in an equivalent Awelon program, hopeful
 
 Words rewrite to their evaluated definitions - this is called linking. However, words link *lazily* to preserve human-meaningful hypermedia link structure in the evaluated output where feasible. Words do not link unless doing so leads to additional rewrites of primitives or annotations, something more interesting than a simple inlining of the word's evaluated definition. 
 
-Arity annotations are very useful to control linking of words.
-
 Awelon's evaluation strategy is simple:
 
 * rewrite outer program
-* evaluate before copy
+* evaluate before copy 
 * evaluate final values
 
-This strategy isn't lazy or eager in the conventional sense. Rewriting the outer program first provides opportunity to apply annotations or drop values that won't be part of our output. Evaluation before copy guards against introduction of unnecessary rework. Evaluation of final values (blocks) brings us to a normal form that cannot be further evaluated.
+This strategy is effectively call-by-need with a caveat that we assume we need anything you copy and anything in the final program output. The motivation of those caveats is to avoid introducing rework in context of copied data or multiple references to a word.
 
-Annotations may introduce special rewrite rules for evaluation, limited to identity semantics. For example, arity annotations wait for sufficient arguments then rewrite to the empty program. Stowage replaces a large value with a secure hash reference. Memoization, staging, and rewrite optimizations use alternative evaluation modes. The `[A](seq)` annotation is provided for profiling and fail-fast reasons, and simply evaluates `[A]` as if it were about to be copied.
+Annotations can tune evaluation with parallelism, memoization, staging, stowage, arity, fail-fast errors, etc.. The `[A](eval)` annotation will force deep evaluation of `A` as if the block were about to be copied. This may be useful in context of profiling, controlling where a stall is observed during debugging, and to control memory resources in context of a loop constructing a large object.
 
 An Awelon dictionary could be evaluated by simply evaluating every definition.
 
@@ -285,7 +285,7 @@ Support for named values is implicit with the lazy link rules. I'm just making i
 
 ## Stalled Computation
 
-A 'stalled' computation is incomplete and unable to progress. In Awelon, the main cause of stalled computation is undefined words. Specifically, a computation that *might* link a word depending on its arity, etc. should stall. Stalls are mostly relevant in context of the *evaluate before copy*. Evaluation of a stalled computation is not complete, therefore we do not copy. That is, if `P` stalls, `[P]c` stalls (and thus `[P](seq)` stalls). 
+A 'stalled' computation is incomplete and unable to progress. In Awelon, the main cause of stalled computation is undefined words. Specifically, a computation that *might* link a word depending on its arity, etc. should stall. Stalls are mostly relevant in context of the *evaluate before copy*. Evaluation of a stalled computation is not complete, therefore we do not copy. That is, if `P` stalls, `[P]c` stalls (and thus `[P](eval)` stalls). 
 
 Accidental stalls are a bad thing. A development environment should ensure programmers are aware of potential issues. However, stalling may be performed on purpose, as part of future-based application patterns or active debugging. For that reason, stalls are not considered an error.
 
@@ -371,9 +371,19 @@ That is, we perform evaluation with undefined 'future' values. This enables ad-h
 
 After staged evaluation, we systematically extract the arguments provided for staging. This is a whole-program rewrite, and has a cost proportional to the size, depth, and arity of our expression. Conveniently, this simple algorithm is also useful for converting lambda calculus terms, supporting lambda based editable views, and automatic refactoring.
 
-Staged evaluation can be enhanced further by recognizing simple type annotations, such as tuples. For example, if we know argument `[B]` is a pair `[[B2] [B1]]`, we could proceed to propagate those components independently. If we know an argument is a sum or boolean, we might be able to lift the conditional behavior and stage the separate options independently.
+We can go a lot further with staging. For example, given a context `T(Z, T(Y, T(X, E)))` it might be useful to perform some data shuffling to find a more efficient program. Something like:
 
-While I haven't hammered out the details, specializing for common algebraic data types seems a worthy pursuit for performance benefits. However, even without such enhancements, the simple algorithm proposed above should be effective for many use cases. Especially assuming programs designed to leverage this evaluation mode.
+        Given       T(Y, T(X, E))
+        Try         w T(X, T(Y, E))
+        Select      simpler option
+
+Also, if we know the *type* of `X`, we might leverage that. For example, if we know by anntoation `(2)` that we have a pair `[[X2][X1]]`, we can propagate the components independently. Also, we can easily shift the type assertion closer to the program start. If it's a conditional type, we might try instead to partially evaluate `E` under each option. 
+
+I'm haven't worked through all the details, but consider:
+
+        T(X, (sum)[[A][B]] a i) => (sum)[[T(X,A)][T(X,B)]] a i
+
+Here `(sum)` could be replaced by `(bool)` or any other conditional with similar behavior of selecting one case and operating on a stack. This could essentially give us `if` expressions. There is *much* we can do with staged evaluation as a simple basis for optimizations.
 
 ## Compilation
 
@@ -411,7 +421,7 @@ In addition to controlling output counts, programmers may wish to fail fast base
 
         (:foo) (.foo) ==
 
-In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct it with `i (.foo)`. The symbol `foo` or `T` is left to the programmer, but must match between annotation and assertion. These annotations are not labels (i.e. you cannot discriminate on them), but they do resist *accidental* access to structured data. As with tuple assertions, we can fail fast dynamically or detect an error statically.
+In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct it with `i(.foo)`. The symbol `foo` or `T` is left to the programmer, but must match between annotation and assertion. These annotations are not labels (i.e. you cannot discriminate on them), but they do resist *accidental* access to structured data. As with tuple assertions, we can fail fast dynamically or detect an error statically.
 
 ## Substructural Scoping
 
@@ -422,6 +432,16 @@ In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct
 * inherit substructure of bound values (op `b`).
 
 We can eliminate substructural annotations by observing a value with `a`. It is not difficult to track and validate substructural properties dynamically, or to represent them in static types. For fail-fast debugging, we can also introduce annotations `(c)` and `(d)` that respectively assert a value is copyable and droppable (without actually copying or dropping it). 
+
+## Case Assertions
+
+Informally, we might support an assertion of the form:
+
+        [[A][B]](case)
+
+This would mostly be useful for 
+
+
 
 ## Error Annotations
 
@@ -463,7 +483,7 @@ Tracing gives us standard 'printf' style debugging. This will copy the traced va
 
 But we can use more conventional mechanisms like an external console or log, depending on the configuration.
 
-Profiling would aggregate performance statistics over multiple uses of a word. We could potentially profile with gates, too, by configuring the gate to also perform a `(seq)` operation.
+Profiling would aggregate performance statistics over multiple uses of a word. We could potentially profile with gates, too, which might implicitly configure the gate to also perform an `(eval)` operation.
 
 ## Program Animation and Time Travel Debugging
 
@@ -499,6 +519,9 @@ Use of annotations can augment static type analysis by providing a validation. S
         bool    S (S   → S') (S   → S') → S'
 
 A runtime could support type assertions `(sum)`, `(opt)`, and `(bool)` to support static type analysis and detection of errors. If necessary, these assertions could be weakly verified dynamically. But with static verification, we can unify the `S` and `S'` types and hence detect inconsistencies between the left vs. right paths. 
+
+In context of staging, it seems useful to shift some annotations to 'case' expressions. expressions independently of the boolean value.
+
 
 Recursive types can potentially be recognized by use in context of fixpoint functions. However, annotations for common types like `(nat)`, `(list)`, `(text)`, `(binary)` certainly would not hurt. Also, we might benefit from specialized static safety analysis for accelerated structures like KPNs.
 
@@ -631,14 +654,9 @@ The `"X Y Z"(/2)(@λ)d` fragment is a lambda comment. It allows us to later rend
 
 This is the extract argument algorithm adjusted for named values. Conveniently, we only use the four Awelon primitive combinators, and the result is about as concise as we can reasonably expect. These rewrites can be reversed, or we could just partially compute `X Y Z CODE'`, to recover the original `CODE` for rendering.
 
-A remaining challenge regards conditional behaviors. Consider:
+*Note:* Optimizing conditional behavior (so we don't copy data into each branch) might require special handling, e.g. of `[Cases] a i` patterns. 
 
-        -> X Y Z; [onF] [onT]
-        [-> X Y Z; onF] [-> X Y Z; onT]
-
-The first program will copy `X Y Z` into the `onF` and `onT` paths, of which we expect to drop one path. The copy effort is wasted, and this is unsuitable for affine types. The second program is superior from that perspective, but expression of `-> X Y Z;` is redundant. I would like the convenience of the first and the zero-copy property of the second. I believe this is possible, but it may require a view with specialized support for conditional behavior. I have not worked out the details.
-
-Even so, named locals are simple and immediately useful.
+recognition of `(case)` annotations and other staged evaluation techniques to avoid unnecessary copy of the value between branches. We might further optimize for stuff like automatically deconstructing tuple values. But even without such extensions, named locals are simple and useful.
 
 ## Namespaces
 
