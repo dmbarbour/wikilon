@@ -138,19 +138,20 @@ This program representation should give me stack-like performance, efficient dee
 
 I assume 8-byte alignment, and 3 tag bits. A viable encoding:
 
-        x00     small natural numbers
+        000     small natural numbers
         010     value words (interned)
+        100     static link action words
         110     actions words (interned)
 
         001     normal block
-        101     unused, reserved
         011     tagged values
+        101     (unused action)
         111     tagged actions
 
         (Fast Bit Tests)
         Deep Copy:      (1 == (1 & x))
         Tagged Item:    (3 == (3 & x))
-        Action Type:    (6 == (6 & x))
+        Action Type:    (4 == (4 & x))
 
 Tagged items can have ad-hoc structure and keep extra type information in a header. Originally, the distinction between tagged values and normal blocks was more critical because I was using naive linked lists for blocks. I do not know whether it remains worth preserving this separation. But I can always tweak the representations later.
 

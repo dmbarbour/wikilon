@@ -318,22 +318,13 @@ Naive use of a lookup table can work, but is not the most optimal approach to me
 
 *Note:* To effectively support incremental computing, memoization must be used in context of cache-friendly application patterns such as command pattern and compositional views on persistent data structures.
 
-## Static Linking
+## Program Optimization
 
-It is possible to perform static analysis on a word's evaluated definition, arities and types, etc. to determine context-free link structure. The most trivial example of this is redirects. Consider:
-
-        @foo bar
-
-Here, word `foo` will not evaluate any further because there is no cause to link `bar`. However, when we do eventually link `foo`, we'll immediately be asked to link `bar`. We can determine this by static analysis. For performance reasons, we may wish to skip the intermediate step rewriting `foo` to `bar` and jump straight to linking the definition of `bar`. 
-
-Statically computing link structure can support inlining of definitions, flattening of redirect chains, and avoid rework for link decisions. It is a recommended as a performance optimization. However, this should not be observable 
-
-## Rewrite Optimization
-
-Awelon's semantics allow many rewrites not performed by evaluation. Consider:
+Optimization in Awelon generally refers to a program rewrite where the output is Awelon code, presumably more efficient. There are many valid rewrites that Awelon's normal evaluator does not perform. For example:
 
         [] a    =>              apply identity is a NOP
         [B] a [A] a => [B A] a  application composes
+        [E] a d =>  d E         a tail call optimization
         [i] b   =>              because [A][i]b == [[A]i] == [A]
         b i     =>  i           expansion of [X][F]b i == [X][F]i
         c d     =>              drop the copy
@@ -342,19 +333,15 @@ Awelon's semantics allow many rewrites not performed by evaluation. Consider:
         c w     =>  c           copies are equivalent
         [0 S]   =>  1           by definition of 1
 
-Performing such rewrites can improve performance and aesthetics. For example, logically rewriting the `z` symbol after fixpoint so we don't ever see the expanded `[[c] a [(/3) c i] b b w i](/3) c i` is convenient for both machine performance and for human observers.
+Performing such rewrites can improve performance and aesthetics. For example, logically rewriting the `z` symbol after fixpoint so we don't ever see the expanded `[[c] a [(/3) c i] b b w i](/3) c i` is convenient for both machine performance and for human observers. 
 
-A runtime may perform rewrite optimizations at its own discretion if they are provably valid. We may also accept rewrite rules, via some convention, from a dictionary. In that case, burden of proof is shifted to the dictionary developers. Also, while rewrites tend in practice to be ad-hoc and fragile, annotation `[F](rwopt)` may help by providing explicit control of staging and enabling application of rewrites to programs constructed at runtime.
+We aren't limited to local pattern-matching rewrites, however. There are robust techniques that usually have good results. For example, partial evaluation in Awelon is usually limited by the inability to represent partial values. But evaluating with 'free' variables like in lambda calculus can do the job:
 
-## Staged Evaluation
+* assuming words `A B C` are undefined and unused
+* evaluate `[C][B][A]function` as far as possible
+* rewrite expression to extract `A B C` arguments
 
-Staged programs are designed to process information in multiple distinct phases or stages. The goal is to improve performance through *deep* partial evaluations with available information. For robust staged computing, we must model stages explicitly. But as simple optimizer pass, we might express an intention for staged evaluation with `[function](stage)`. A viable implementation:
-
-* assuming words `A B C ..` are undefined and unused
-* evaluate `..[C][B][A]function` as much as possible
-* rewrite expression to extract `A B C ..` arguments
-
-That is, we perform evaluation with undefined 'future' values. This enables ad-hoc data plumbing to proceed, and supports construction and propagation of 'partial' values like `[[A] foo]`. Essentially, this gives us a lambda-calculus like ability to evaluate with free variables. The burden of complexity is shifted to the 'extract argument' step, but that can be performed by a simple reflective algorithm:
+These free variables accumulate information as they propagate through a program. By representing free variables with undefined words, we essentially get behavior equivalent to partial evaluation of a lambda-calculus term. The argument extraction logic is a simple reflective rewrite:
 
         T(X,E) - extract X from E such that:
             T(X,E) does not contain X
@@ -369,33 +356,51 @@ That is, we perform evaluation with undefined 'future' values. This enables ad-h
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-After staged evaluation, we systematically extract the arguments provided for staging. This is a whole-program rewrite, and has a cost proportional to the size, depth, and arity of our expression. Conveniently, this simple algorithm is also useful for converting lambda calculus terms, supporting lambda based editable views, and automatic refactoring.
+*Aside:* I later adapt this algorithm to support *Named Locals*. 
 
-We can go a lot further with staging. For example, given a context `T(Z, T(Y, T(X, E)))` it might be useful to perform some data shuffling to find a more efficient program. Something like:
+So this optimization simply computes `T(C, T(B, T(A, EVAL([C][B][A]function)))`.
 
-        Given       T(Y, T(X, E))
-        Try         w T(X, T(Y, E))
-        Select      simpler option
+With type information, we can take partial evaluation further. For example, if we know our argument is a pair, we might propagate the elements independently:
 
-Also, if we know the *type* of `X`, we might leverage that. For example, if we know by anntoation `(2)` that we have a pair `[[X2][X1]]`, we can propagate the components independently. Also, we can easily shift the type assertion closer to the program start. If it's a conditional type, we might try instead to partially evaluate `E` under each option. 
+        type (A * B) = ∀E. E → E B A
+        for E : S (A * B) → S'
+            E => i T(A, T(B, EVAL([[B][A]] E)))
 
-I'm haven't worked through all the details, but consider:
+For sum types, the analog is to precompute programs for different arguments:
 
-        T(X, (sum)[[A][B]] a i) => (sum)[[T(X,A)][T(X,B)]] a i
+        type Bool = ∀S,S'. S (S → S') (S → S') → S'
+        for E : S Bool → S'
+            E => [[false E] [true E]] a i
 
-Here `(sum)` could be replaced by `(bool)` or any other conditional with similar behavior of selecting one case and operating on a stack. This could essentially give us `if` expressions. There is *much* we can do with staged evaluation as a simple basis for optimizations.
+        type (A + B) = ∀S,S'. S (S A → S') (S B → S') → S'
+        for E : S (A + B) → S'
+            E => [[[inL] b E] [[inR] b E]] a i
+
+Unfortunately, these type-based techniques are not likely to give us great results. Expanding conditionals has a potentially exponential size cost! But we can experiment with a lot of possible expansions and heuristically select some good ones - a technique called 'equality saturation'. 
+
+To support staged programming with DSLs and similar, programmers might be given access to `[function](optimize)`, or possibly a few variants for different optimization levels.
+
+## Static Linking
+
+It is possible to perform static analysis on a word's evaluated definition, arities and types, etc. to determine context-free link structure. The most trivial example of this is redirects. Consider:
+
+        @foo bar
+
+Here, word `foo` will not evaluate any further because there is no cause to link `bar`. However, when we do eventually link `foo`, we'll immediately be asked to link `bar`. We can determine this by static analysis. For performance reasons, we may wish to skip the intermediate step rewriting `foo` to `bar` and jump straight to linking the definition of `bar`. 
+
+However, static linking is not constrained to trivial redirects. Statically computing link structure can further inline definitions, flatten redirect chains. Computing a static-link definition for each word provides an excellent location to perform other optimizations.
 
 ## Compilation
 
 Compilation of functions, especially those containing loops (fixpoints, folds, etc.), can offer significant performance benefits. I expect compilation to be a normal thing for Awelon code, performed at important word boundaries or upon explicit request via `[function](jit)`. JIT compilation is runtime dependent, and I imagine there will be a lot of low-level interactions with accelerators, quotas, GC, parallelism, and so on. I won't detail it here. 
 
-Before compiling to JIT layer code, we should perform several optimization passes at the Awelon layer - static linking, staged evaluation based on arity (and type sensitive, ideally), rewrite optimizations, and so on. Only after all that has been performed should we compile to LLVM for machine-layer optimization passes and native code generation.
+Before compiling to JIT layer code, we should perform several optimization passes at the Awelon layer - static linking, partial evaluation based on arity (and type sensitive, ideally), rewrite optimizations, and so on. Only after all that has been performed should we compile to LLVM for machine-layer optimization passes and native code generation.
 
 Compilation of a function for use in external systems like JavaScript - aka 'extraction' - is also viable, and will generally share the intermediate work of optimizing at the Awelon layer before compiling to a remote target.
 
 ## Parallel Evaluation
 
-Programmers may advise parallel evaluation of a block via `[computation](par)`. Essentially, this tells a runtime that we'll probably need the result of that computation, so go ahead and begin evaluation. We can proceed to move the block with linear data plumbing. However, copying a parallel computation must wait for complete evaluation, and dropping it should efficiently abort the computation. 
+Programmers may request parallel evaluation of a block via `[computation](par)`. The computation block can be moved around linearly while computing. Dropping the block must abort the parallel computation. Copying must wait for evaluation to complete, like normal.
 
 Unfortunately, `(par)` has severe limitations on expressiveness. It is not expressive enough to represent pipeline parallelism or distributed communicating processes. It is too expressive to leverage low-level vector processing (e.g. SIMD, SSE, GPGPU) parallelism. 
 
@@ -432,16 +437,6 @@ In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct
 * inherit substructure of bound values (op `b`).
 
 We can eliminate substructural annotations by observing a value with `a`. It is not difficult to track and validate substructural properties dynamically, or to represent them in static types. For fail-fast debugging, we can also introduce annotations `(c)` and `(d)` that respectively assert a value is copyable and droppable (without actually copying or dropping it). 
-
-## Case Assertions
-
-Informally, we might support an assertion of the form:
-
-        [[A][B]](case)
-
-This would mostly be useful for 
-
-
 
 ## Error Annotations
 
@@ -632,31 +627,27 @@ The arity annotation allows embedding of comments into computed values. The `(@r
 
 ## Named Locals
 
-An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where point-free programming is pointlessly onerous. Consider adapting the locals syntax used in [Kitten language](http://kittenlang.org/):
+An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, and support a more conventional programming style if desired. Consider the locals syntax used in [Kitten language](http://kittenlang.org/):
 
         -> X Y Z; CODE   ==  "X Y Z"(/2)(@λ)d CODE'
 
-The `"X Y Z"(/2)(@λ)d` fragment is a lambda comment. It allows us to later render the program using the same variable names. We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with the following algorithm:
+When used at the head of a program, the arrow effectively creates a lambda. This syntax also supports let expressions as in `6 7 * -> X; CODE`. On the right hand side, the `"X Y Z"(/2)(@λ)d` fragment is a lambda comment. It allows us to later render the program using the same variable names. 
 
-        Extract Value Argument
-
-        T(X,E) - extract *value* X from E such that:
-            T(X,E) does not contain X
-            X T(X,E) == E
+We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with a simple algorithm:
 
         T(X, E) | E does not contain X      => d E
         T(X, X)                             => 
+        T(X, [onF][onT] if)                 => [T(X, onF)][T(X, onT)] if
+            (... and other conditional expressions ...)
         T(X, [E])                           => [T(X,E)] b
         T(X, F G)
             | only F contains X             => T(X,F) G
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-This is the extract argument algorithm adjusted for named values. Conveniently, we only use the four Awelon primitive combinators, and the result is about as concise as we can reasonably expect. These rewrites can be reversed, or we could just partially compute `X Y Z CODE'`, to recover the original `CODE` for rendering.
+This algorithm is adapted from the optimization using free variables. The main difference is that we know our variables are named values and we need special handling for conditional behaviors. 
 
-*Note:* Optimizing conditional behavior (so we don't copy data into each branch) might require special handling, e.g. of `[Cases] a i` patterns. 
-
-recognition of `(case)` annotations and other staged evaluation techniques to avoid unnecessary copy of the value between branches. We might further optimize for stuff like automatically deconstructing tuple values. But even without such extensions, named locals are simple and useful.
+For conditional behavior, we do not want to copy data into each branch then select one. Doing so would be inefficient and a potential violation of substructural properties. Instead, we leave the value on the stack then rewrite each branch to access or drop that variable. The editable view must specialize for conditional expressions. Fortunately, the simple rule for `if` above would also work for sums, optional values, lists, etc..
 
 ## Namespaces
 
