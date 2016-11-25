@@ -3,6 +3,8 @@
 
 Awelon is a purely functional language based on concatenative combinators. 
 
+*Note:* I *might* rename this to `abcd` (ab-sih-dee).
+
 ## Why Another Language?
 
 Awelon differs from other languages in its adherence to simplicity and its choice of evaluation model. There are only four simple computational primitives, one data primitive, and a simple Forth-like syntax. Evaluation is by local rewriting with lazy linking.
@@ -45,7 +47,7 @@ A useful subset of words is implicitly defined:
 * words to encode natural numbers, regex `[1-9][0-9]*`
 * secure hash resources - `$secureHash` or `%secureHash`
 
-Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small.
+Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small or have a simple structure for external systems reasons.
 
 ## Dictionary
 
@@ -67,15 +69,13 @@ Awelon's dictionary representation is not optimal for direct use by humans. It c
 
 Awelon has built-in support for identifying resources via secure hash. 
 
-* arbitrary definitions may be referenced as `$secureHash`
+* arbitrary programs may be referenced as `$secureHash`
 * external binary data may be referenced via `%secureHash`
 * secure hashes are used to identify dictionary patches
 
-Secure hashes implicitly name immutable structure outside the dictionary, which might be available on the local system or downloaded. If you hear about a secure hash resource from a remote server, you should be able to HTTP request it from that server (with potential redirects). Content-delivery networks are also viable. The resource is readily verified against the secure hash, and easily cached after download. 
+Secure hashes implicitly name immutable structure outside the dictionary, which might be available on the local system or downloaded. If you hear about a secure hash resource from a remote source, you should be able to perform an HTTP request to obtain it either directly or with an appropriate redirect. Content-delivery networks are viable. The resource is readily verified against the secure hash, and easily cached after download. 
 
 In all cases, we use the same secure hash: 384 bits of [BLAKE2b](https://blake2.net/) encoded as 64 characters in [base64url](https://en.wikipedia.org/wiki/Base64).
-
-*Note:* Secure hash resources may reference dictionary words, so have mutable semantics. Only their structure is immutable.
 
 ## Data
 
@@ -199,7 +199,8 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(par)` - request parallel evaluation of computation
 * `(eval)` - request immediate evaluation of computation
 * `(nat)` - assert argument should be a natural number
-* `(jit)` - compile a function for use in future evaluations
+* `(optimize)` - rewrite a function for efficient evaluation
+* `(jit)` - compile a function for efficient evaluation
 * `(stow)` - move large values to disk, load on demand
 * `(memo)` - memoize a computation for incremental computing
 * `(stage)` - evaluation mode for deep partial evaluation
@@ -207,7 +208,7 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(force)` - evaluate previously deferred computations
 * `(@gate)` - extra symbols just for active debugging
 
-Annotations must have no internally observable effect on computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states.
+Annotations must have no internally observable effect on a computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states or a change in how an evaluated result is represented or organized.
 
 Annotations may be introduced and documented on a runtime basis. In case of porting code, runtimes that do not recognize an annotation may ignore it. Long term, we should reach some de-facto standardization on useful annotations.
 
@@ -266,7 +267,7 @@ Awelon's evaluation strategy is simple:
 
 This strategy is effectively call-by-need with a caveat that we assume we need anything you copy and anything in the final program output. The motivation of those caveats is to avoid introducing rework in context of copied data or multiple references to a word.
 
-Annotations can tune evaluation with parallelism, memoization, staging, stowage, arity, fail-fast errors, etc.. The `[A](eval)` annotation will force deep evaluation of `A` as if the block were about to be copied. This may be useful in context of profiling, controlling where a stall is observed during debugging, and to control memory resources in context of a loop constructing a large object.
+Annotations can tune evaluation with parallelism, memoization, staging, stowage, arity, fail-fast errors, etc.. The `[A](eval)` annotation will force evaluation of `A` as if the block were about to be copied. This may be useful in context of profiling or to control memory resources in context of a loop constructing a large object.
 
 An Awelon dictionary could be evaluated by simply evaluating every definition.
 
@@ -283,28 +284,24 @@ A 'named value' is a word whose evaluated definition is a singleton block. An Aw
 
 Support for named values is implicit with the lazy link rules. I'm just making it explicit. Named values are essential for preserving human-meaningful structure and broad support for hypermedia resource references.
 
-## Stalled Computation
-
-A 'stalled' computation is incomplete and unable to progress. In Awelon, the main cause of stalled computation is undefined words. Specifically, a computation that *might* link a word depending on its arity, etc. should stall. Stalls are mostly relevant in context of the *evaluate before copy*. Evaluation of a stalled computation is not complete, therefore we do not copy. That is, if `P` stalls, `[P]c` stalls (and thus `[P](eval)` stalls). 
-
-Accidental stalls are a bad thing. A development environment should ensure programmers are aware of potential issues. However, stalling may be performed on purpose, as part of future-based application patterns or active debugging. For that reason, stalls are not considered an error.
-
-*Note:* Awelon will evaluate as much as possible even in context of some stalls.
-
 ## Fixpoint and Loops
 
-Fixpoint is a function useful for modeling loop behaviors. For Awelon language, I recommend the following variant of the [strict Z fixpoint combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator):
+Fixpoint is a function useful for modeling loop behaviors. For Awelon language, I favor the following variant of the [strict Z fixpoint combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator):
 
         [X][F]z == [X][[F]z]F 
-        z = [[c] a [(/3) c i] b b w i](/3) c i
+        z = [[(/3) c i] b (z) [c] a b w i](/3) c i
 
         Using Definitions:
-           [A]i == A            (inline)         i = [] w a d
-        [B][A]w == [A][B]       (swap)           w = (/2) [] b a
+               [A]i == A            (inline)         i = [] w a d
+            [B][A]w == [A][B]       (swap)           w = (/2) [] b a
 
-The arity annotation `(/3)` defers expansion within the `[[F]z]` result. This variation of the Z combinator has the advantage that the definition of `z` can be found in the naive evaluation, and that `[F]` is not replicated unnecessarily. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior.
+        Assuming Annotation:
+            [(def of z)](z) => [z]
+            and arity annotations
 
-Fixpoint is notoriously difficult for humans to grok and frequently awkward to use. Instead of directly using fixpoint, we'll want to build more comfortable loop abstractions above it like list fold, foreach, while, and [generators](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29). Performance could benefit greatly from accelerating fixpoint and the more popular loop abstractions.
+The arity annotation `(/3)` defers further expansion of the `[[F]z]` result. The `(z)` annotation supports both aesthetic presentation and accelerated performance. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior. 
+
+*Note:* Fixpoint is notoriously difficult for humans to grok. It is also awkward to use, with tacit style doing no favors here. Use of *named locals* does help (see below), but we'll want to build useful loop and [generator](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) abstractions above fixpoint - folds, sorts, collections oriented functions, etc..
 
 ## Memoization
 
@@ -318,9 +315,19 @@ Naive use of a lookup table can work, but is not the most optimal approach to me
 
 *Note:* To effectively support incremental computing, memoization must be used in context of cache-friendly application patterns such as command pattern and compositional views on persistent data structures.
 
-## Program Optimization
+## Static Linking
 
-Optimization in Awelon generally refers to a program rewrite where the output is Awelon code, presumably more efficient. There are many valid rewrites that Awelon's normal evaluator does not perform. For example:
+It is possible to perform static analysis on a word's evaluated definition, arities and types, etc. to determine context-free link structure. The most trivial example of this is redirects. Consider:
+
+        @foo bar
+
+Here, word `foo` will not evaluate any further because there is no cause to link `bar`. However, when we do eventually link `foo`, we'll immediately be asked to link `bar`. We can determine this by static analysis. For performance reasons, we may wish to skip the intermediate step rewriting `foo` to `bar` and jump straight to linking the definition of `bar`. 
+
+However, static linking is not constrained to trivial redirects. Statically computing link structure can further inline definitions, flatten redirect chains. Computing a static-link object provides an excellent opportunity to perform transparent optimizations.
+
+## Optimization
+
+There are many semantically valid rewrites that Awelon's evaluator does not perform. For example:
 
         [] a    =>              apply identity is a NOP
         [B] a [A] a => [B A] a  application composes
@@ -331,17 +338,22 @@ Optimization in Awelon generally refers to a program rewrite where the output is
         c [d] a =>              drop the other copy
         [] b a  =>  w           by definition of w
         c w     =>  c           copies are equivalent
+        [E] w d =>  d [E]       why swap first?
         [0 S]   =>  1           by definition of 1
 
-Performing such rewrites can improve performance and aesthetics. For example, logically rewriting the `z` symbol after fixpoint so we don't ever see the expanded `[[c] a [(/3) c i] b b w i](/3) c i` is convenient for both machine performance and for human observers. 
+Optimization of Awelon code involves using rewrites to compute a more efficient Awelon code with the same behavior. In general, an Awelon system has discretion to perform optimizations insofar as they do not affect program output. For example, a runtime can optimize a static link object within the limits of an escape analysis. Visible optimizations must be requested explicitly by annotation. For example, the use of `(z)` in the definition of fixpoint. 
 
-We aren't limited to local pattern-matching rewrites, however. There are robust techniques that usually have good results. For example, partial evaluation in Awelon is usually limited by the inability to represent partial values. But evaluating with 'free' variables like in lambda calculus can do the job:
+I imagine a general `[function](optimize)` annotation allowing a programmer to say, "Make `function` fast, please! I don't care how." But there may be annotations to control optimizations.
 
-* assuming words `A B C` are undefined and unused
-* evaluate `[C][B][A]function` as far as possible
-* rewrite expression to extract `A B C` arguments
+We aren't limited to local pattern-matching rewrites, which tend to be fragile and difficult to prove correct. There exist robust techniques with good results. For example, partial evaluation in Awelon is usually limited by inability to represent partial values. Evaluating with 'free variables' can help:
 
-These free variables accumulate information as they propagate through a program. By representing free variables with undefined words, we essentially get behavior equivalent to partial evaluation of a lambda-calculus term. The argument extraction logic is a simple reflective rewrite:
+* assume `A B C` words unused and undefined 
+* evaluate `[C][B][A]function` to completion
+* rewrite to extract `A B C` free variables
+
+The evaluator does not rewrite the `A` annotation. But its presence can push partial information through the program like `[4 A 1]` where `A` might later be `3 2` but we don't know. 
+
+Argument extraction logic is a simple reflective rewrite:
 
         T(X,E) - extract X from E such that:
             T(X,E) does not contain X
@@ -356,11 +368,9 @@ These free variables accumulate information as they propagate through a program.
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-*Aside:* I later adapt this algorithm to support *Named Locals*. 
+So this optimization looks like: `T(A, T(B, T(C, Eval([C][B][A]function))))`. But before we extract, we might want to perform some other useful optimizations on the evaluated structure, such as a topological sort on dependencies so we can minimize data shuffling and program fragmentation.
 
-So this optimization simply computes `T(C, T(B, T(A, EVAL([C][B][A]function)))`.
-
-With type information, we can take partial evaluation further. For example, if we know our argument is a pair, we might propagate the elements independently:
+Static type information can also support optimizations. For example, if we know our argument is a pair, we might try to propagate the elements as independent variables:
 
         type (A * B) = ∀E. E → E B A
         for E : S (A * B) → S'
@@ -376,27 +386,13 @@ For sum types, the analog is to precompute programs for different arguments:
         for E : S (A + B) → S'
             E => [[[inL] b E] [[inR] b E]] a i
 
-Unfortunately, these type-based techniques are not likely to give us great results. Expanding conditionals has a potentially exponential size cost! But we can experiment with a lot of possible expansions and heuristically select some good ones - a technique called 'equality saturation'. 
-
-To support staged programming with DSLs and similar, programmers might be given access to `[function](optimize)`, or possibly a few variants for different optimization levels.
-
-## Static Linking
-
-It is possible to perform static analysis on a word's evaluated definition, arities and types, etc. to determine context-free link structure. The most trivial example of this is redirects. Consider:
-
-        @foo bar
-
-Here, word `foo` will not evaluate any further because there is no cause to link `bar`. However, when we do eventually link `foo`, we'll immediately be asked to link `bar`. We can determine this by static analysis. For performance reasons, we may wish to skip the intermediate step rewriting `foo` to `bar` and jump straight to linking the definition of `bar`. 
-
-However, static linking is not constrained to trivial redirects. Statically computing link structure can further inline definitions, flatten redirect chains. Computing a static-link definition for each word provides an excellent location to perform other optimizations.
+Of course, the latter risks exponential size increase of our program, so must be applied with some heuristic discretion. 
 
 ## Compilation
 
-Compilation of functions, especially those containing loops (fixpoints, folds, etc.), can offer significant performance benefits. I expect compilation to be a normal thing for Awelon code, performed at important word boundaries or upon explicit request via `[function](jit)`. JIT compilation is runtime dependent, and I imagine there will be a lot of low-level interactions with accelerators, quotas, GC, parallelism, and so on. I won't detail it here. 
+Compilation rewrites Awelon code to machine code or an intermediate form (like LLVM) that might perform its own optimizations before reducing to machine code. A runtime is generally free to compile whatever it wants or support ad-hoc configuration, so long as it's predictable and consistent about it. Just-in-time (JIT) compilation might be explicitly requested as an `[function](jit)` annotation.
 
-Before compiling to JIT layer code, we should perform several optimization passes at the Awelon layer - static linking, partial evaluation based on arity (and type sensitive, ideally), rewrite optimizations, and so on. Only after all that has been performed should we compile to LLVM for machine-layer optimization passes and native code generation.
-
-Compilation of a function for use in external systems like JavaScript - aka 'extraction' - is also viable, and will generally share the intermediate work of optimizing at the Awelon layer before compiling to a remote target.
+*Note:* Accelerators can also do 'compilation'. For example, a runtime might implement accelerated evaluation for a subset of OpenCL by shoving the program to an OpenCL compiler.
 
 ## Parallel Evaluation
 
@@ -447,8 +443,6 @@ We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)
 
 Error values may bind further arguments as `[B][A](error)b == [[B]A](error)`. Error values will evaluate like any other value, and will collapse normally from `[[A](error)i]` to `[A](error)`. The error annotation is idempotent and commutative with other annotations on a block.
 
-*Note:* Errors are not a stalling condition. Rather, indicate 'complete' but with errors. However, we can also introduce annotation `[P](stall)` to simulate a stalled or non-terminating computation. This would enable programmers to more precisely control their debugging experience.
-
 ## Garbage Data
 
 For relevant data, we always have an option to drop data into a logical bit bucket then never look at it again. If we tell our runtime that we will never look at it again, we can also recover memory resources associated with that data. We can represent this pattern by use of a `(trash)` annotation:
@@ -462,7 +456,7 @@ We destroy the data but preserve substructure. Because the data has been destroy
 
 Active debugging is an umbrella term for techniques to observe a computation in-progress. These techniques include logging, profiling, breakpoints. In Awelon, active debugging may occur via instrumentation of words. That is, a runtime can be configured to log arguments to a word, profile evaluation of a word, or stall evaluation of a word. Usefully, words can be instrumented without intrusive modification of a program. 
 
-* stall - prevent or delay linking of word 
+* stall - prevent further rewrites here
 * trace - record argument(s) into debug log
 * profile - record evaluation statistics
 
@@ -470,7 +464,7 @@ These configurations could generally be composed or conditional.
 
 There are use cases for pseudo-words just for debugging purposes. For this role, I introduce a class of `(@gate)` annotations, such as `(@foo)` or `(@trace)`. I call these annotations 'gates'. Gates have a trivial identity behavior - `[A](@gate) => [A]`. The ability to know at a glance that gates are semantically irrelevant could be convenient for local reasoning about correctness. Gates can serve other useful roles such as rendering hints.
 
-Stalled computations provide implicit 'breakpoints'. However, stalling is more precise and predictable than breakpoints in conventional development environments. Continuing breakpoints will generally be specified declaratively, using phrases such as 'leftmost `(@foo)` breakpoint' or 'all `bar, baz, qux` breakpoints'. 
+Stalled computations provide implicit 'breakpoints', and stalling may be contagious such that if `P` stalls then `[P]c` or `[P](eval)` stalls. However, stalling is more precise and predictable than breakpoints in conventional development environments. Continuing breakpoints will generally be specified declaratively, using phrases such as 'leftmost `(@foo)` breakpoint' or 'all `bar, baz, qux` breakpoints'. 
 
 Tracing gives us standard 'printf' style debugging. This will copy the traced values, bypassing `(nc)` constraints. Intriguingly, because Awelon code evaluates to Awelon code, we can easily record a trace as a comment in the program output. For example:
 
@@ -509,20 +503,15 @@ The type sequence `S C B A` aligns with a program structure `S[C][B][A]`. Effect
 
 Use of annotations can augment static type analysis by providing a validation. Structural and substructural assertions mentioned above can be validated statically. A remaining concern is typing of conditional behavior. As described under *Data* earlier, we can represent conditional data types:
 
-        sum     S (S B → S') (S A → S') → S'
-        opt     S (S   → S') (S A → S') → S'
-        bool    S (S   → S') (S   → S') → S'
+        (sum)   S (S B → S') (S A → S') → S'
+        (opt)   S (S   → S') (S A → S') → S'
+        (bool)  S (S   → S') (S   → S') → S'
 
-A runtime could support type assertions `(sum)`, `(opt)`, and `(bool)` to support static type analysis and detection of errors. If necessary, these assertions could be weakly verified dynamically. But with static verification, we can unify the `S` and `S'` types and hence detect inconsistencies between the left vs. right paths. 
+A runtime could support type annotations `(sum)`, `(opt)`, and `(bool)` to support static type analysis and detection of errors. With static verification, we can unify the `S` and `S'` types and hence detect inconsistencies between the left vs. right paths. Recursive types can potentially be recognized by use in context of evaluation with fixpoint functions, but support for `(nat)` and `(text)` and `(binary)` and so on could also be useful. 
 
-In context of staging, it seems useful to shift some annotations to 'case' expressions. expressions independently of the boolean value.
+Sophisticated type declarations might be represented at the dictionary and application layers, using simple conventions like `foo.type` to declare a type for `foo`. Declared types are accessible for refactoring, rendering, and reflection. And they can potentially be more expressive than annotations readily support. A sophisticated system might support [dependent types](https://en.wikipedia.org/wiki/Dependent_type) and auxiliary proofs with sufficient reflection on the dictionary.
 
-
-Recursive types can potentially be recognized by use in context of fixpoint functions. However, annotations for common types like `(nat)`, `(list)`, `(text)`, `(binary)` certainly would not hurt. Also, we might benefit from specialized static safety analysis for accelerated structures like KPNs.
-
-Type declarations can also be represented at the dictionary and application layers, using simple conventions like `foo.type` to declare a type for `foo`. Declared types are accessible for refactoring, rendering, and reflection. And they can potentially be more expressive than simple annotations can readily support. For example, a system might support [dependent types](https://en.wikipedia.org/wiki/Dependent_type) and auxiliary proofs with sufficient reflection on the dictionary.
-
-*Aside:* Awelon systems are free to consider non-terminating evaluation to be an *error*, and perform static termination analysis by default. This analysis must be sensitive to arity annotations so we can support coinductive data types.
+*Aside:* Awelon systems are free to consider non-terminating evaluation to be an *error*, and perform static termination analysis by default. Termination analysis, of course, should be sensitive to arity annotations so we can support coinductive data types.
 
 ## Gradual Typing and Macro Evaluation
 
@@ -647,7 +636,7 @@ We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with a simple algorithm:
 
 This algorithm is adapted from the optimization using free variables. The main difference is that we know our variables are named values and we need special handling for conditional behaviors. 
 
-For conditional behavior, we do not want to copy data into each branch then select one. Doing so would be inefficient and a potential violation of substructural properties. Instead, we leave the value on the stack then rewrite each branch to access or drop that variable. The editable view must specialize for conditional expressions. Fortunately, the simple rule for `if` above would also work for sums, optional values, lists, etc..
+Conditional behavior is specialized because we do not want to copy data into each branch before selecting one. Doing so would be inefficient and a potential violation of substructural properties. Instead, we leave our value on the stack then rewrite each branch to access or drop that variable. The editable view must specialize for conditional expressions. Fortunately, the simple rule for `if` above would also work for sums, optional values, lists, etc..
 
 ## Namespaces
 
