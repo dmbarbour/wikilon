@@ -250,14 +250,14 @@ Awelon language does not implicitly memoize computations to avoid rework. Howeve
 
 ## Evaluation
 
-Evaluation of an Awelon program results in an equivalent Awelon program, hopefully one from which it is easier to extract information or efficiently perform further evaluations. Awelon's primary evaluation mode proceeds by pure, local rewriting. The four primitives rewrite based on simple pattern matching:
+Evaluation of an Awelon program results in an equivalent Awelon program, hopefully one from which it is easier to extract information or efficiently perform further evaluations. Awelon's primary evaluation mode proceeds by pure, local rewriting. The four primitives rewrite by simple pattern matching:
 
             [B][A]a => A[B]         (apply)
             [B][A]b => [[B]A]       (bind)
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Words rewrite to their evaluated definitions - this is called linking. However, words link *lazily* to preserve human-meaningful hypermedia link structure in the evaluated output where feasible. Words do not link unless doing so leads to additional rewrites of primitives or annotations, something more interesting than a simple inlining of the word's evaluated definition. 
+Words rewrite to their evaluated definitions. However, words do not rewrite unless doing so leads to additional rewrites of primitives or annotations - a result other than trivial inlining of the word's evaluated definition. This constraint can be called 'lazy linking', and it supports various performance and aesthetic goals. An undefined word represents an unknown and does not evaluate further. 
 
 Awelon's evaluation strategy is simple:
 
@@ -265,7 +265,9 @@ Awelon's evaluation strategy is simple:
 * evaluate before copy 
 * evaluate final values
 
-This strategy is effectively call-by-need with a caveat that we assume we need anything you copy and anything in the final program output. The motivation of those caveats is to avoid introducing rework in context of copied data or multiple references to a word.
+This strategy is effectively call-by-need with a caveat that we assume we need anything you copy and anything in the final program output. Evaluation before copy resists introduction of rework.
+
+The motivation of those caveats is to avoid introducing rework in context of copied data or multiple references to a word.
 
 Annotations can tune evaluation with parallelism, memoization, staging, stowage, arity, fail-fast errors, etc.. The `[A](eval)` annotation will force evaluation of `A` as if the block were about to be copied. This may be useful in context of profiling or to control memory resources in context of a loop constructing a large object.
 
@@ -368,7 +370,9 @@ Argument extraction logic is a simple reflective rewrite:
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-So this optimization looks like: `T(A, T(B, T(C, Eval([C][B][A]function))))`. But before we extract, we might want to perform some other useful optimizations on the evaluated structure, such as a topological sort on dependencies so we can minimize data shuffling and program fragmentation.
+So this optimization looks like: `T(A, T(B, T(C, Eval([C][B][A]function))))`. But before we extract the variables, we might want to perform other useful optimizations on the evaluated structure. 
+
+Transform `T` preserves program order but introduces program fragmentation with those `[F]a` blocks. Program fragmentation can hurt performance and aesthetics, and hinder other optimizations. It seems feasible to perform a topological sort on program dependencies then reorder things to minimize fragmentation. At the least, we can compare `w T(Y, T(X, E))` as a potential alternative result for `T(X, T(Y, E))` and search for an optimal stack ordering.
 
 Static type information can also support optimizations. For example, if we know our argument is a pair, we might try to propagate the elements as independent variables:
 
@@ -392,7 +396,7 @@ Of course, the latter risks exponential size increase of our program, so must be
 
 Compilation rewrites Awelon code to machine code or an intermediate form (like LLVM) that might perform its own optimizations before reducing to machine code. A runtime is generally free to compile whatever it wants or support ad-hoc configuration, so long as it's predictable and consistent about it. Just-in-time (JIT) compilation might be explicitly requested as an `[function](jit)` annotation.
 
-*Note:* Accelerators can also do 'compilation'. For example, a runtime might implement accelerated evaluation for a subset of OpenCL by shoving the program to an OpenCL compiler.
+*Note:* Accelerators can also do 'compilation'. For example, a runtime might implement accelerated evaluation for a safe subset of OpenCL by shoving the program to an external OpenCL compiler.
 
 ## Parallel Evaluation
 
@@ -400,11 +404,9 @@ Programmers may request parallel evaluation of a block via `[computation](par)`.
 
 Unfortunately, `(par)` has severe limitations on expressiveness. It is not expressive enough to represent pipeline parallelism or distributed communicating processes. It is too expressive to leverage low-level vector processing (e.g. SIMD, SSE, GPGPU) parallelism. 
 
-For low level parallelism, we might accelerate [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra) or evaluation of a DSL for GPGPU computing (I'm sure there is a suitable subset of OpenCL or WebCL). A solution here could help Awelon get into machine learning, physics simulations, graphics and audio, etc..
+For low level parallelism, we might accelerate [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra). Or potentially, we accelerate evaluation for a safe subset of OpenCL or WebCL, with which we could accelerate linear algebra. Either approach here could help Awelon get into machine learning, physics simulations, graphics and audio, etc.. 
 
-For high level parallelism, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), or more precisely the *Reactive Process Network* variant detailed later. The state of a process network is described by a value. The process description might involve named processes with ports and wires between them, pending messages on wires. Evaluation of the network description results deterministically in another network description. Accelerated evaluation might use distributed processes and queues to precisely simulate the network, resulting in the evaluated description.
-
-Usefully, process networks are *monotonic*. We can interact with them - inject messages, extract results - without waiting for evaluation to fully complete. Process networks can effectively represent first-class services within a purely functional computation.
+For high level parallelism, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), or more precisely the *Reactive Process Network* variant detailed later. The state of a process network is described by a value. This state may involve named processes with ports and wires between them, messages pending on wires. Evaluation results deterministically in another state. Accelerated evaluation can use physically distributed processors and queues to simulate the network. Usefully, process networks are *monotonic*. A client program can inject messages and extract results without waiting for a final network state.
 
 ## Structural Scoping
 
@@ -546,15 +548,15 @@ A useful way to encode labeled sums is by deep primitive sum structures. That is
         [[[[[B] inL] inL] inR] inR]
 
         (Singleton Tries)
-        [[[A] ~ :] ~ :]
-        [~ [~ [[[B] ~ :] ~ :] :] :]
+        [[[A] ~ :] ~                     :]
+        [~         [~ [[[B] ~ :] ~ :] :] :]
 
         (Merged Trie)
         [[[A] ~ :] [~ [[[B] ~ :] ~ :] :] :]
 
-Here the label is encoded as `(RL | RR)* LL`, where `RL` corresponds to constructor `[inL] b [inR] b`. The `(RL | RR)*` structure represents a finite `(0 | 1)*` bitfield, within which we might encode texts or numbers. The final `LL` terminates the label. This encoding has several nice properties. It is a simple regular language and a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot in the trie could be used for name shadowing.
+Here the label is encoded as `(RL | RR)* LL`, where `RL` corresponds to constructor `[inL] b [inR] b`. The `(RL | RR)*` structure represents a finite `(0 | 1)*` bitfield, within which we might encode texts or numbers. The final `LL` terminates the label. This encoding has several nice properties. It is a simple regular language and a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list.
 
-Ideally, a runtime should accelerate labeled data. Deep sums could be represented as compact bit fields, and sparse tries as radix trees. Better, we could optimize to use more conventional variant and record types under the hood. Effective support for labeled data could make Awelon a lot more accessible for a variety of use cases.
+Ideally, a runtime should accelerate labeled data. Deep sums could be represented as compact bit fields, sparse tries as radix trees. We could optimize to use more conventional variant and record types under the hood. Effective support for labeled data could make Awelon a lot more accessible for a variety of use cases.
 
 ## Reactive Process Networks
 
@@ -583,14 +585,14 @@ To preserve its simple structure and syntax, Awelon shifts the burden to [editab
 
 I put some emphasis on *plain text* editable views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary through filesystem and CLI. However, graphical views could potentially include checkboxes, sliders, drop-down lists, graphs and canvases, and may offer an interesting foundation for graphical user interfaces within Awelon's application model. 
 
-Numbers are a useful target for editable views. A viable sketch:
+Numbers are a useful example for editable views. A viable sketch:
 
         #42         == (AWELON 42)
         42          == [#42 #0 integer]
         -7          == [#0 #7 integer]
         3.141       == [3141 -3 decimal]
         -0.0070     == [-70 -4 decimal]
-        2.998e6     == [2998 3 decimal]
+        2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
 Awelon's natural numbers are given the `#` prefix in favor of an aesthetic view for Church-encoded signed integers. The original natural numbers are escaped - every editable view should provide a simple, unambiguous escape to raw Awelon code. Most views build upon existing views rather than raw code. Building views incrementally upon views is portable and extensible. For example, if a programmer sees `[-4 #6 rational]` because their view doesn't support rational numbers, the intention is obvious, and the programmer could easily install support for rationals into their view.
