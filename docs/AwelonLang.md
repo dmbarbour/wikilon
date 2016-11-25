@@ -503,17 +503,21 @@ We can represent our primitive types as:
 
 The type sequence `S C B A` aligns with a program structure `S[C][B][A]`. Effectively, `S` is the remainder of our program 'stack' when we view the program as rewriting a stack-like structure. In a more conventional language, this might correspond to a product type `(((S * C) * B) * A)`.
 
-Use of annotations can augment static type analysis by providing a validation. Structural and substructural assertions mentioned above can be validated statically. A remaining concern is typing of conditional behavior. As described under *Data* earlier, we can represent conditional data types:
+Use of annotations can augment static type analysis by providing a validation. Structural and substructural assertions mentioned above can be validated statically. A remaining concern is static typing of conditional behavior. We can certainly represent various conditional data types:
 
-        (sum)   S (S B → S') (S A → S') → S'
-        (opt)   S (S   → S') (S A → S') → S'
         (bool)  S (S   → S') (S   → S') → S'
+        (opt)   S (S   → S') (S A → S') → S'
+        (sum)   S (S B → S') (S A → S') → S'
+        ..
+        (cond)  S (A   → S') (B   → S') → S'
 
-A runtime could support type annotations `(sum)`, `(opt)`, and `(bool)` to support static type analysis and detection of errors. With static verification, we can unify the `S` and `S'` types and hence detect inconsistencies between the left vs. right paths. Recursive types can potentially be recognized by use in context of evaluation with fixpoint functions, but support for `(nat)` and `(text)` and `(binary)` and so on could also be useful. 
+We can use knowledge of conditional data to check for inconsistencies between branches. But inferring these types is difficult. Annotations can provide a much needed hint. I imagine programmers will want annotations for many specific common conditional types - naturals, texts, binaries, lists, labels, tries, etc.. Anything we accelerate or use frequently enough for a runtime to recognize. 
 
-Sophisticated type declarations might be represented at the dictionary and application layers, using simple conventions like `foo.type` to declare a type for `foo`. Declared types are accessible for refactoring, rendering, and reflection. And they can potentially be more expressive than annotations readily support. A sophisticated system might support [dependent types](https://en.wikipedia.org/wiki/Dependent_type) and auxiliary proofs with sufficient reflection on the dictionary.
+Sophisticated type declarations cannot effectively be provided within the Awelon code. But we can support a convention of defining `foo.type` to describe the type of `foo`. This would provide an extra point for validation, and would potentially support expression of powerful types - dependent types, behavioral equivalencies, invariants, contracts, etc.. - with auxiliary proofs as needed.
 
-*Aside:* Awelon systems are free to consider non-terminating evaluation to be an *error*, and perform static termination analysis by default. Termination analysis, of course, should be sensitive to arity annotations so we can support coinductive data types.
+Non-terminating evaluation in Awelon is always an error. Awelon evaluation is pure, so there is no utility in divergence. As part of static typing, a light static termination analysis should be performed. Any obvious divergence should be reported as an error.
+
+*Aside:* A list, in Awelon, is usually heterogeneous. Homogeneous lists may be expressed by annotation, or by use in context of certain fold functions.
 
 ## Gradual Typing and Macro Evaluation
 
@@ -597,12 +601,12 @@ Numbers are a useful example for editable views. A viable sketch:
 
 Awelon's natural numbers are given the `#` prefix in favor of an aesthetic view for Church-encoded signed integers. The original natural numbers are escaped - every editable view should provide a simple, unambiguous escape to raw Awelon code. Most views build upon existing views rather than raw code. Building views incrementally upon views is portable and extensible. For example, if a programmer sees `[-4 #6 rational]` because their view doesn't support rational numbers, the intention is obvious, and the programmer could easily install support for rationals into their view.
 
-Besides the numeric tower, command lists are another critical feature:
+Besides the numeric tower, command lists are another valuable view feature:
 
-        {foo, bar, baz} == [[foo] {bar, baz} :]
-        {baz}           == [[baz] ~ :]
+        {foo, bar, baz} == [[foo] {bar, baz} !]
+        {baz}           == [[baz] ~ !]
 
-Command lists are useful for many purposes. We can use them to embed structured data - e.g. `{{1,2,3},{4,5,6},{7,8,9}}` might represent a matrix. We can use them to construct continuation-passing code and effects models. And so on. 
+Here I use `!` to permit an alternative representation from normal lists. But that's up to the view. Regardless, command lists are useful for many purposes. We can use them to embed structured data - e.g. `{{1,2,3},{4,5,6},{7,8,9}}` might represent a matrix. We can use them to construct continuation-passing code and effects models. And so on.
 
 Ideally, all editable views should also be *evaluable*. That is, program evaluation should generate the same structures we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` - or whatever we use to represent decimal numbers - should be a viable result from a computation. 
 
