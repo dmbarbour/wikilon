@@ -190,10 +190,10 @@ Acceleration replaces conventional use of intrinsics and FFI while ensuring ever
 
 ## Annotations
 
-Annotations help developers control, optimize, view, and debug computations. Annotations are represented as parenthetical words like `(par)` or `(/3)`. Some useful examples of annotations include:
+Annotations help developers control, optimize, view, and debug computations. Annotations are represented as parenthetical words like `(par)` or `(a3)`. Some useful examples of annotations include:
 
-* `(/2)..(/9)` - arity annotations to defer computations
-* `(0)..(9)` - tuple assertions for output scope control
+* `(a2)..(a9)` - arity annotations to defer computations
+* `(b0)..(b9)` - tuple assertions for output scope control
 * `(nc) (nd)` - support substructural type safety
 * `(:foo) (.foo)` - lightweight type tag and assertions
 * `(par)` - request parallel evaluation of computation
@@ -225,16 +225,16 @@ What 'large value' means is heuristic, based on time-space tradeoffs. But it sho
 
 ## Deferred Computations and Coinductive Data
 
-The *arity annotations* `(/2)` to `(/9)` have simple rewrite rules:
+The *arity annotations* `(a2)` to `(a9)` have simple rewrite rules:
 
-                             [B][A](/2) == [B][A]
-                          [C][B][A](/3) == [C][B][A]
+                             [B][A](a2) == [B][A]
+                          [C][B][A](a3) == [C][B][A]
                                         ..
-        [I][H][G][F][E][D][C][B][A](/9) == [I][H][G][F][E][D][C][B][A]
+        [I][H][G][F][E][D][C][B][A](a9) == [I][H][G][F][E][D][C][B][A]
 
 To clarify, it is the *annotation* that has the given arity. Arity annotations specify nothing of their context.
 
-Arity annotations serve a critical role in controlling computation. For example, the program `[[A](/2)F]` has the same type and semantics as `[[A]F]`, but the former prevents partial evaluation of `F` from observing `[A]`. Arity annotations can be used to guard against useless partial evaluations. For example, if we define swap as `w = (/2) [] b a` then we can avoid observing the useless intermediate structure `[A] w => [[A]] a`. 
+Arity annotations serve a critical role in controlling computation. For example, the program `[[A](a2)F]` has the same type and semantics as `[[A]F]`, but the former prevents partial evaluation of `F` from observing `[A]`. Arity annotations can be used to guard against useless partial evaluations. For example, if we define swap as `w = (a2) [] b a` then we can avoid observing the useless intermediate structure `[A] w => [[A]] a`. 
 
 Arity annotations serve a very useful role in modeling [thunks](https://en.wikipedia.org/wiki/Thunk) and [coinductive data](https://en.wikipedia.org/wiki/Coinduction). It is sometimes useful to model 'infinite' data structures to be computed as we observe them - procedurally generated streams or scene graphs.
 
@@ -291,17 +291,17 @@ Support for named values is implicit with the lazy link rules. I'm just making i
 Fixpoint is a function useful for modeling loop behaviors. For Awelon language, I favor the following variant of the [strict Z fixpoint combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator):
 
         [X][F]z == [X][[F]z]F 
-        z = [[(/3) c i] b (z) [c] a b w i](/3) c i
+        z = [[(a3) c i] b (z) [c] a b w i](a3) c i
 
         Using Definitions:
                [A]i == A            (inline)         i = [] w a d
-            [B][A]w == [A][B]       (swap)           w = (/2) [] b a
+            [B][A]w == [A][B]       (swap)           w = (a2) [] b a
 
         Assuming Annotation:
             [(def of z)](z) => [z]
             and arity annotations
 
-The arity annotation `(/3)` defers further expansion of the `[[F]z]` result. The `(z)` annotation supports both aesthetic presentation and accelerated performance. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior. 
+The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The `(z)` annotation supports both aesthetic presentation and accelerated performance. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior. 
 
 *Note:* Fixpoint is notoriously difficult for humans to grok. It is also awkward to use, with tacit style doing no favors here. Use of *named locals* does help (see below), but we'll want to build useful loop and [generator](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) abstractions above fixpoint - folds, sorts, collections oriented functions, etc..
 
@@ -355,7 +355,7 @@ We aren't limited to local pattern-matching rewrites, which tend to be fragile a
 
 The evaluator does not rewrite the `A` annotation. But its presence can push partial information through the program like `[4 A 1]` where `A` might later be `3 2` but we don't know. 
 
-Argument extraction logic is a simple reflective rewrite:
+Argument extraction logic is a simple, reflective rewrite:
 
         T(X,E) - extract X from E such that:
             T(X,E) does not contain X
@@ -392,9 +392,24 @@ For sum types, the analog is to precompute programs for different arguments:
 
 Of course, the latter risks exponential size increase of our program, so must be applied with some heuristic discretion. 
 
+## Interpretation
+
+Awelon can be efficiently interpreted. Let's make some assumptions:
+
+A program is represented as an array of words, with an appropriate terminal at the end. In case of static link objects, our terminal is probaly `\return` or a tail-call variant (e.g. for programs ending in `i` or `a d`). The evaluator uses an auxiliary stack for call-return and temporary data hiding. And we may do some internal rewrites to optimize interpretation, so long as we can serialize appropriate Awelon code.
+
+On the latter point, example uses include:
+
+        [A]a                 =>     \put A \take
+        [L][R]if             =>     \begin-if L \skip R \end-if
+
+These rewrites are reversible for serialization and checkpointing purposes. For example, if we encounter `\put`, we can write `[` and push a word to our auxiliary stack representing `]a`. On `\take` we pop and render the value from the top of the auxiliary stack. The conditional case is a little bit more involved, but similar.
+
+Avoiding the allocation overheads for volatile static blocks can be a major performance gain during evaluation. And these rewrite rules are easily added in context of other optimizations and static linking.
+
 ## Compilation
 
-Compilation rewrites Awelon code to machine code or an intermediate form (like LLVM) that might perform its own optimizations before reducing to machine code. A runtime is generally free to compile whatever it wants or support ad-hoc configuration, so long as it's predictable and consistent about it. Just-in-time (JIT) compilation might be explicitly requested as an `[function](jit)` annotation.
+Awelon can be compiled to evaluate efficiently on stock hardware. We can start with the ideas for fast interpretation. We can leverage the 'free variables' techniques from optimizations to support register-based data plumbing. We can compile to a low level machine code competitive with many modern languages. But we may be limited what we can compile - i.e. based on escape analysis, static type safety.
 
 *Note:* Accelerators can also do 'compilation'. For example, a runtime might implement accelerated evaluation for a safe subset of OpenCL by shoving the program to an external OpenCL compiler.
 
@@ -412,13 +427,13 @@ For high level parallelism, I propose acceleration of [Kahn process networks (KP
 
 Blocks naturally delimit the input scope for a computation. For example, we know that in `[B][[A]foo]`, `foo` can access `[A]` but not `[B]`. And we can trivially leverage this with the bind operation `b`. But Awelon also supports multiple outputs, and so scoping output is a relevant concern. To address this, Awelon introduces *tuple assertions* to annotate output scope:
 
-                                   [](0) == []
-                                [[A]](1) == [[A]]
-                             [[B][A]](2) == [[B][A]]
+                                   [](b0) == []
+                                [[A]](b1) == [[A]]
+                             [[B][A]](b2) == [[B][A]]
                                          ..
-        [[I][H][G][F][E][D][C][B][A]](9) == [[I][H][G][F][E][D][C][B][A]]
+        [[I][H][G][F][E][D][C][B][A]](b9) == [[I][H][G][F][E][D][C][B][A]]
 
-Tuple assertions can be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection may be necessary, and we'll fail fast if the tuple assertion is bad. Similar to arity annotations, tuples larger than `(5)` should be rare in practice.
+Tuple assertions can be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection may be necessary, and we'll fail fast if the tuple assertion is bad. Similar to arity annotations, tuples larger than `(t5)` should be rare in practice.
 
 In addition to controlling output counts, programmers may wish to fail fast based on declared structure. To support this, Awelon supports a structure annotation `(:T)` and paired assertion `(.T)` with the following rewrite semantics:
 
@@ -440,8 +455,8 @@ We can eliminate substructural annotations by observing a value with `a`. It is 
 
 We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy an error value like normal. In addition to user-specified errors, a runtime might use error annotations to highlight places where a program gets stuck, for example:
 
-        [A](nc)c       => [[A](nc)c](error)i
-        [[A][B][C]](2)  => [[A][B][C]](2)(error)
+        [A](nc)c        => [[A](nc)c](error)i
+        [[A][B][C]](b2) => [[A][B][C]](b2)(error)
 
 Error values may bind further arguments as `[B][A](error)b == [[B]A](error)`. Error values will evaluate like any other value, and will collapse normally from `[[A](error)i]` to `[A](error)`. The error annotation is idempotent and commutative with other annotations on a block.
 
@@ -524,9 +539,9 @@ Non-terminating evaluation in Awelon is always an error. Awelon evaluation is pu
 In context of metaprogramming, it is frequently useful to work with intermediate structures for which we do not know the type. For example, consider:
 
         1 2 3 4             "abcx → ax^2 + bx + c"  runPoly
-        "Red Warrior" 42    "%s takes %d damage!"   printf
+        "Red Warrior" 42    "%s takes %u damage!"   printf
 
-In scenarios like these, computing the type of `runPoly` or `printf` independent of context may require sophisticated dependent types. But computing a type for `"abcx → ax^2 + bx + c" computePoly` or `"%s takes %d damage!" printf` might only require some partial evaluation before static type checking. This implies staging similar to macro evaluation.
+In scenarios like these, computing the type of `runPoly` or `printf` independent of context may require sophisticated dependent types. But computing a type for `"abcx → ax^2 + bx + c" computePoly` or `"%s takes %u damage!" printf` might only require some partial evaluation before static type checking. This implies staging similar to macro evaluation.
 
 To make this intention explicit, we could introduce a `(dyn)` annotation:
 
@@ -614,7 +629,7 @@ Design of evaluable editable views is very sensitive to arity annotations and ac
 
 With evaluable views in mind, we might represent comments as:
 
-        /* comment */  ==  " comment " (/2) (@rem) d
+        /* comment */  ==  " comment " (a2) (@rem) d
 
 The arity annotation allows embedding of comments into computed values. The `(@rem)` gate serves as a lightweight indicator of the comment's 'type' (so we can add other comment types) and additionally permits integration with active debugging - for example, tracing comments to see progress, or conditionally stalling on certain comments.
 
@@ -624,9 +639,9 @@ The arity annotation allows embedding of comments into computed values. The `(@r
 
 An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, and support a more conventional programming style if desired. Consider the locals syntax used in [Kitten language](http://kittenlang.org/):
 
-        -> X Y Z; CODE   ==  "X Y Z"(/2)(@λ)d CODE'
+        -> X Y Z; CODE   ==  "X Y Z"(a2)(@λ)d CODE'
 
-When used at the head of a program, the arrow effectively creates a lambda. This syntax also supports let expressions as in `6 7 * -> X; CODE`. On the right hand side, the `"X Y Z"(/2)(@λ)d` fragment is a lambda comment. It allows us to later render the program using the same variable names. 
+When used at the head of a program, the arrow effectively creates a lambda. This syntax also supports let expressions as in `6 7 * -> X; CODE`. On the right hand side, the `"X Y Z"(a2)(@λ)d` fragment is a lambda comment. It allows us to later render the program using the same variable names. 
 
 We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with a simple algorithm:
 
