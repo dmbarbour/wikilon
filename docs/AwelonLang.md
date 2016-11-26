@@ -193,7 +193,7 @@ Acceleration replaces conventional use of intrinsics and FFI while ensuring ever
 Annotations help developers control, optimize, view, and debug computations. Annotations are represented as parenthetical words like `(par)` or `(a3)`. Some useful examples of annotations include:
 
 * `(a2)..(a9)` - arity annotations to defer computations
-* `(b0)..(b9)` - tuple assertions for output scope control
+* `(t0)..(t9)` - tuple assertions for output scope control
 * `(nc) (nd)` - support substructural type safety
 * `(:foo) (.foo)` - lightweight type tag and assertions
 * `(par)` - request parallel evaluation of computation
@@ -207,6 +207,7 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(error)` - mark a value as an error object
 * `(force)` - evaluate previously deferred computations
 * `(@gate)` - extra symbols just for active debugging
+* `(=foo)` - reduce code to a known name (quines, loops)
 
 Annotations must have no internally observable effect on a computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states or a change in how an evaluated result is represented or organized.
 
@@ -286,24 +287,26 @@ A 'named value' is a word whose evaluated definition is a singleton block. An Aw
 
 Support for named values is implicit with the lazy link rules. I'm just making it explicit. Named values are essential for preserving human-meaningful structure and broad support for hypermedia resource references.
 
-## Fixpoint and Loops
+## Fixpoints and Loops
 
 Fixpoint is a function useful for modeling loop behaviors. For Awelon language, I favor the following variant of the [strict Z fixpoint combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator):
 
         [X][F]z == [X][[F]z]F 
-        z = [[(a3) c i] b (z) [c] a b w i](a3) c i
+        z = [[(a3) c i] b (=z) [c] a b w i](a3) c i
 
         Using Definitions:
                [A]i == A            (inline)         i = [] w a d
             [B][A]w == [A][B]       (swap)           w = (a2) [] b a
 
         Assuming Annotation:
-            [(def of z)](z) => [z]
+            [(def of foo)](=foo) => [foo]
             and arity annotations
 
-The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The `(z)` annotation supports both aesthetic presentation and accelerated performance. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior. 
+The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The `(=z)` annotation supports both aesthetic presentation and accelerated performance. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior. 
 
-*Note:* Fixpoint is notoriously difficult for humans to grok. It is also awkward to use, with tacit style doing no favors here. Use of *named locals* does help (see below), but we'll want to build useful loop and [generator](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) abstractions above fixpoint - folds, sorts, collections oriented functions, etc..
+*Note:* Fixpoint is notoriously difficult for humans to grok. It is also awkward to use, with tacit style doing no favors here. Use of *named locals* does help (see below), but we'll want to build useful loop and [generator](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) abstractions above fixpoint - folds, sorts, collections oriented functions, etc.. 
+
+*Aside:* The `(=foo)` annotation is also useful as an assertion. It becomes an error if not equal.
 
 ## Memoization
 
@@ -329,7 +332,7 @@ However, static linking is not constrained to trivial redirects. Statically comp
 
 ## Optimization
 
-There are many semantically valid rewrites that Awelon's evaluator does not perform. For example:
+There are many semantically valid rewrites that Awelon's basic evaluator does not perform. For example:
 
         [] a    =>              apply identity is a NOP
         [B] a [A] a => [B A] a  application composes
@@ -341,21 +344,16 @@ There are many semantically valid rewrites that Awelon's evaluator does not perf
         [] b a  =>  w           by definition of w
         c w     =>  c           copies are equivalent
         [E] w d =>  d [E]       why swap first?
-        [0 S]   =>  1           by definition of 1
 
-Optimization of Awelon code involves using rewrites to compute a more efficient Awelon code with the same behavior. In general, an Awelon system has discretion to perform optimizations insofar as they do not affect program output. For example, a runtime can optimize a static link object within the limits of an escape analysis. Visible optimizations must be requested explicitly by annotation. For example, the use of `(z)` in the definition of fixpoint. 
+In general, an Awelon system has discretion to perform such rewrites insofar as they do not affect program output, e.g. optimize the static link object. A runtime may support extended evaluation modes that automatically perform simplifying rewrites for performance or aesthetics. Finally, annotations may explicitly request certain optimizations for a block of code. 
 
-I imagine a general `[function](optimize)` annotation allowing a programmer to say, "Make `function` fast, please! I don't care how." But there may be annotations to control optimizations.
-
-We aren't limited to local pattern-matching rewrites, which tend to be fragile and difficult to prove correct. There exist robust techniques with good results. For example, partial evaluation in Awelon is usually limited by inability to represent partial values. Evaluating with 'free variables' can help:
+We aren't limited to local pattern-matching rewrites, which tend to be fragile because they depend on transitory structure. There are more robust optimization techniques with good results. For example, partial evaluation in Awelon is usually limited by inability to represent partial values. Evaluating with 'free variables' in the form of undefined words can help:
 
 * assume `A B C` words unused and undefined 
 * evaluate `[C][B][A]function` to completion
 * rewrite to extract `A B C` free variables
 
-The evaluator does not rewrite the `A` annotation. But its presence can push partial information through the program like `[4 A 1]` where `A` might later be `3 2` but we don't know. 
-
-Argument extraction logic is a simple, reflective rewrite:
+The evaluator does not rewrite the `A` annotation. But its presence can push partial information through the program like `[4 A 1]` where `A` might later be `3 2` but we don't know. Argument extraction logic is a simple, reflective rewrite:
 
         T(X,E) - extract X from E such that:
             T(X,E) does not contain X
@@ -370,48 +368,57 @@ Argument extraction logic is a simple, reflective rewrite:
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-So this optimization looks like: `T(A, T(B, T(C, Eval([C][B][A]function))))`. But before we extract the variables, we might want to perform other useful optimizations on the evaluated structure. 
+So this optimization looks like: `T(A, T(B, T(C, Eval([C][B][A]function))))`. But before we extract the variables, we might perform other optimizations. We can heuristically compare `T(X,T(Y,E))` and `w T(Y, T(X, E))` to optimize stack order. It seems feasible to disassemble a program into fragments with dependency relationships, perform a topological sort, then reassemble to minimize data shuffling. Common subexpression elimination can be performed at the same time. 
 
-Transform `T` preserves program order but introduces program fragmentation with those `[F]a` blocks. Program fragmentation can hurt performance and aesthetics, and hinder other optimizations. It seems feasible to perform a topological sort on program dependencies then reorder things to minimize fragmentation. At the least, we can compare `w T(Y, T(X, E))` as a potential alternative result for `T(X, T(Y, E))` and search for an optimal stack ordering.
+Static type information can also support optimizations. For example, if we know our argument is a pair, we might further propagate the elements as independent variables:
 
-Static type information can also support optimizations. For example, if we know our argument is a pair, we might try to propagate the elements as independent variables:
-
-        type (A * B) = ∀E. E → E B A
+        type (A * B) = ∀E. E → E A B
         for E : S (A * B) → S'
-            E => i T(A, T(B, EVAL([[B][A]] E)))
+            E => i T(B, T(A, EVAL([[A][B]] E)))
 
 For sum types, the analog is to precompute programs for different arguments:
 
+        Generic 'if' for all binary conditions:
+        if = (a3) [] b b a (cond) i
+
         type Bool = ∀S,S'. S (S → S') (S → S') → S'
-        for E : S Bool → S'
-            E => [[false E] [true E]] a i
+        for E : S Bool → S', where E observes argument
+            E => [false E] [true E] if
 
         type (A + B) = ∀S,S'. S (S A → S') (S B → S') → S'
-        for E : S (A + B) → S'
-            E => [[[inL] b E] [[inR] b E]] a i
+        for E : S (A + B) → S', where E observes argument
+            E => [[inL] b E] [[inR] b E] if
 
-Of course, the latter risks exponential size increase of our program, so must be applied with some heuristic discretion. 
+Optimization with conditional types does risk exponentially expanding the program, so we might cancel cases where the resulting program doesn't seem to help. But optimizing for booleans/sums/etc. in this manner can potentially simplify code, especially if the condition is observed more than once. Loop unrolling by this means is also viable.
 
 ## Interpretation
 
 Awelon can be efficiently interpreted. Let's make some assumptions:
 
-A program is represented as an array of words, with an appropriate terminal at the end. In case of static link objects, our terminal is probaly `\return` or a tail-call variant (e.g. for programs ending in `i` or `a d`). The evaluator uses an auxiliary stack for call-return and temporary data hiding. And we may do some internal rewrites to optimize interpretation, so long as we can serialize appropriate Awelon code.
+A program is represented as an array of words, with an appropriate terminal at the end. In case of static link objects, our terminal is probaly `\return` or a tail-call variant (e.g. for programs ending in `i` or `a d`). The evaluator uses an auxiliary stack for call-return and temporary data hiding. We may also perform hidden rewrites to reduce program fragmentation or construction of volatile blocks.
 
 On the latter point, example uses include:
 
         [A]a                 =>     \put A \take
-        [L][R]if             =>     \begin-if L \skip R \end-if
+        [L][R]if             =>     \if L \return R \return
 
-These rewrites are reversible for serialization and checkpointing purposes. For example, if we encounter `\put`, we can write `[` and push a word to our auxiliary stack representing `]a`. On `\take` we pop and render the value from the top of the auxiliary stack. The conditional case is a little bit more involved, but similar.
+These transforms are reversible. To serialize `\put` we'd logically add an `]a` element to our auxiliary stack, then print `[`. To serialize `\take`, we then print the top value on the auxiliary stack. The serialization case for `\if` is more sophisticated, but uses the same idea: `\if` prints `[` and adds four returns: to `][ \return` then to `R \return` then to `]if \return` and finally to whatever follows.
 
-Avoiding the allocation overheads for volatile static blocks can be a major performance gain during evaluation. And these rewrite rules are easily added in context of other optimizations and static linking.
+Avoiding allocation overheads for volatile static blocks can be a major performance gain during evaluation. And use of the auxiliary stack for temporary data hiding supports reasonably efficient data plumbing, especially if we've performed optimizations to reduce program fragmentation.
 
 ## Compilation
 
-Awelon can be compiled to evaluate efficiently on stock hardware. We can start with the ideas for fast interpretation. We can leverage the 'free variables' techniques from optimizations to support register-based data plumbing. We can compile to a low level machine code competitive with many modern languages. But we may be limited what we can compile - i.e. based on escape analysis, static type safety.
+Awelon can be compiled efficient for stock hardware.
 
-*Note:* Accelerators can also do 'compilation'. For example, a runtime might implement accelerated evaluation for a safe subset of OpenCL by shoving the program to an external OpenCL compiler.
+Start with the tweaks for efficient interpretation. Those are still useful.
+
+To utilize a register machine, we can model active data elements as being stored in registers. Then operations like `w` would logically swap, or `\take` would logically move a stack element to the auxiliary. Logical data shuffling should be represented in a code-map that enables us to serialize our current program from a machine state. We can potentially compile multiple versions of a program to optimize register allocation in different contexts, avoiding save/restore actions on the stack. 
+
+If targeting C or LLVM or another intermediate language, we might use variables as an alternative to registers, but the basic idea applies.
+
+We can compile accelerated arithmetic to operate on the appropriate registers or variables directly. With some static type information, we could shove floating point numbers into floating point registers. So we can get reasonable data plumbing.
+
+*Note:* Accelerators can also perform compilation. For example, a runtime might implement accelerated evaluation for a safe subset of OpenCL by using an external OpenCL compiler. 
 
 ## Parallel Evaluation
 
@@ -427,11 +434,11 @@ For high level parallelism, I propose acceleration of [Kahn process networks (KP
 
 Blocks naturally delimit the input scope for a computation. For example, we know that in `[B][[A]foo]`, `foo` can access `[A]` but not `[B]`. And we can trivially leverage this with the bind operation `b`. But Awelon also supports multiple outputs, and so scoping output is a relevant concern. To address this, Awelon introduces *tuple assertions* to annotate output scope:
 
-                                   [](b0) == []
-                                [[A]](b1) == [[A]]
-                             [[B][A]](b2) == [[B][A]]
+                                   [](t0) == []
+                                [[A]](t1) == [[A]]
+                             [[B][A]](t2) == [[B][A]]
                                          ..
-        [[I][H][G][F][E][D][C][B][A]](b9) == [[I][H][G][F][E][D][C][B][A]]
+        [[I][H][G][F][E][D][C][B][A]](t9) == [[I][H][G][F][E][D][C][B][A]]
 
 Tuple assertions can be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection may be necessary, and we'll fail fast if the tuple assertion is bad. Similar to arity annotations, tuples larger than `(t5)` should be rare in practice.
 
@@ -456,7 +463,7 @@ We can eliminate substructural annotations by observing a value with `a`. It is 
 We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy an error value like normal. In addition to user-specified errors, a runtime might use error annotations to highlight places where a program gets stuck, for example:
 
         [A](nc)c        => [[A](nc)c](error)i
-        [[A][B][C]](b2) => [[A][B][C]](b2)(error)
+        [[A][B][C]](t2) => [[A][B][C]](t2)(error)
 
 Error values may bind further arguments as `[B][A](error)b == [[B]A](error)`. Error values will evaluate like any other value, and will collapse normally from `[[A](error)i]` to `[A](error)`. The error annotation is idempotent and commutative with other annotations on a block.
 
