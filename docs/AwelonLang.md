@@ -7,9 +7,9 @@ Awelon is a purely functional language based on concatenative combinators.
 
 ## Why Another Language?
 
-Awelon differs from other languages in its adherence to simplicity and its choice of evaluation model. There are only four simple computational primitives, one data primitive, and a simple Forth-like syntax. Evaluation is by local rewriting with lazy linking.
+Awelon differs from other languages in its adherence to simplicity and its choice of evaluation model. There are only four simple computational primitives, one data primitive, and a simple Forth-like syntax. Evaluation is by local confluent rewriting with lazy linking.
 
-Awelon's simple syntax lowers barriers for program rewriting as an evaluation model, editable views for HCI, and collaboration with software agents. Program rewriting ensures the evaluation is a program that may be serialized for debugging, distribution, or persistence. Lazy linking preserves human-meaningful words and link structure, ensuring results to be viewed the same as source. And software agents support the application layer effects.
+Awelon's simple syntax lowers barriers for program rewriting as an evaluation model, editable views for HCI, and collaboration with software agents. Program rewriting ensures the evaluated result is a program that may be serialized for debugging, distribution, or persistence. Lazy linking preserves human-meaningful words and link structure, ensuring results to be viewed the same as source. And software agents support the application layer effects.
 
 Like any pure language, Awelon's evaluation is separate from its effects model. Awelon explores a [RESTful application model](ApplicationModel.md) where application state is represented within a codebase, and effects are performed in context of a multi-agent system. Relevant effects patterns include [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern) and a variation on the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) oriented around [work orders](https://en.wikipedia.org/wiki/Work_order). More conventional effects models are possible within orders.
 
@@ -47,7 +47,7 @@ A useful subset of words is implicitly defined:
 * words to encode natural numbers, regex `[1-9][0-9]*`
 * secure hash resources - `$secureHash` or `%secureHash`
 
-Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small or have a simple structure for external systems reasons.
+Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small. In many cases, words may have simple, informal structure - e.g. `foo.doc` to represent documentation for `foo`. 
 
 ## Dictionary
 
@@ -167,7 +167,7 @@ Awelon doesn't bother with anything beyond natural numbers and texts - just bare
 
 Awelon language supports reference to external binary data via `%secureHash`. We'll basically use the same text representation, but using values in range `0 .. 255` instead of Unicode codepoints.
 
-For small binaries, we might instead choose to embed the binary within base16 or base64 text, and accelerate conversions between text to the binary. However, in context of Awelon's application model and hypermedia, referencing external binary data can be very convenient.
+For small binaries, we might instead choose to embed the binary within base64 or base85 text, and accelerate conversions between text to the binary. Or just use a list of byte values. However, in context of Awelon's application model and hypermedia, referencing external binary data can be very convenient.
 
 *Note:* Developers are encouraged to leverage [rope-like](https://en.wikipedia.org/wiki/Rope_%28data_structure%29) structures if modeling edits on large binary data. 
 
@@ -203,9 +203,7 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(jit)` - compile a function for efficient evaluation
 * `(stow)` - move large values to disk, load on demand
 * `(memo)` - memoize a computation for incremental computing
-* `(stage)` - evaluation mode for deep partial evaluation
 * `(error)` - mark a value as an error object
-* `(force)` - evaluate previously deferred computations
 * `(@gate)` - extra symbols just for active debugging
 * `(=foo)` - reduce code to a known name (quines, loops)
 
@@ -222,7 +220,7 @@ Stowage is a simple idea, summarized by rewrite rules:
 
 Stowage enables programmers to work semi-transparently with data or computations much larger than working memory. Unlike effectful storage or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, incremental computing, and backtracking. However, effective use of stowage is limited to [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), optimally those that implicitly batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
 
-What 'large value' means is heuristic, based on time-space tradeoffs. But it should be deterministic, reproducible, and simple. A good default is that a value be moved to stowage only if its encoding in Awelon is at least 256 bytes. Also, if our value is simple binary data, we might stow to a `%secureHash` external binary instead.
+What 'large value' means is heuristic, based on time-space tradeoffs. But it should be deterministic, reproducible, and simple. A good default is that a value be moved to stowage only if its encoding in Awelon is at least 256 bytes. Also, if our value is simple binary data, we will stow to a `%secureHash` external binary instead.
 
 ## Deferred Computations and Coinductive Data
 
@@ -239,15 +237,7 @@ Arity annotations serve a critical role in controlling computation. For example,
 
 Arity annotations serve a very useful role in modeling [thunks](https://en.wikipedia.org/wiki/Thunk) and [coinductive data](https://en.wikipedia.org/wiki/Coinduction). It is sometimes useful to model 'infinite' data structures to be computed as we observe them - procedurally generated streams or scene graphs.
 
-We may want to 'force' a thunk. To do so, consider a `(force)` annotation.
-
-        [computation](force)
-
-This introduces a 'forced' evaluation mode for the given block. A forced evaluation operates as if there were sufficient arguments to the left of `computation` for purpose of deleting arity annotations without actually providing those arguments. The computation may still get stuck and prevent further evaluation, but it at least won't be stuck on an arity annotation.
-
-Awelon language does not implicitly memoize computations to avoid rework. However, programmers can explicitly use `(memo)` to share work, and it is feasible for a runtime to optimize lightweight memoization of deferred computations. See *Memoization*.
-
-*Aside:* I originally tried a `[F](lazy)` annotation to defer computation. However, the interaction with quotas, breakpoints, and parallelism are confusing. For example, given `[[A](par)F](lazy)` it is unclear whether this started as `[A](par)[F]b(lazy)` or `[A][(par)F]b(lazy)`. Arity annotations are simpler and more precise.
+Awelon does not implicitly memoize computations to avoid rework. Programmers can explicitly use `(memo)` to share work, and it is feasible for a runtime to optimize lightweight memoization for deferred computations. See *Memoization*.
 
 ## Evaluation
 
@@ -258,7 +248,12 @@ Evaluation of an Awelon program results in an equivalent Awelon program, hopeful
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Words rewrite to their evaluated definitions. However, words do not rewrite unless doing so leads to additional rewrites of primitives or annotations - a result other than trivial inlining of the word's evaluated definition. This constraint can be called 'lazy linking', and it supports various performance and aesthetic goals. An undefined word represents an unknown and does not evaluate further. 
+Additionally, we'll perform two simplifications:
+
+           [A]a[B]a => [A B]a       (apply composes)
+             [A]a d => d A          (tail call optimization)
+
+Words rewrite to their evaluated definitions. However, words do not rewrite unless doing so leads a result other than a trivial inlining of the word's evaluated definition. This constraint is called lazy linking, and it supports various performance and aesthetic goals. An undefined word represents an unknown and does not evaluate further. 
 
 Awelon's evaluation strategy is simple:
 
@@ -266,13 +261,9 @@ Awelon's evaluation strategy is simple:
 * evaluate before copy 
 * evaluate final values
 
-This strategy is effectively call-by-need with a caveat that we assume we need anything you copy and anything in the final program output. Evaluation before copy resists introduction of rework.
+Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case.
 
-The motivation of those caveats is to avoid introducing rework in context of copied data or multiple references to a word.
-
-Annotations can tune evaluation with parallelism, memoization, staging, stowage, arity, fail-fast errors, etc.. The `[A](eval)` annotation will force evaluation of `A` as if the block were about to be copied. This may be useful in context of profiling or to control memory resources in context of a loop constructing a large object.
-
-An Awelon dictionary could be evaluated by simply evaluating every definition.
+Annotations can tune evaluation, enabling developers to leverage parallelism, memoization, stowage, deferred computation, fail-fast errors, etc.. The `[A](eval)` annotation will force 'immediate' evaluation of `A` as if the value were about to be copied.
 
 ## Named Values
 
@@ -285,7 +276,7 @@ A 'named value' is a word whose evaluated definition is a singleton block. An Aw
         42 true w == true 42
         42 [] b   == [42]
 
-Support for named values is implicit with the lazy link rules. I'm just making it explicit. Named values are essential for preserving human-meaningful structure and broad support for hypermedia resource references.
+Support for named values is implicit with the lazy link constraint. I'm just making it explicit. Named values are essential for preserving human-meaningful structure and broad support for hypermedia resources.
 
 ## Fixpoints and Loops
 
@@ -335,8 +326,7 @@ However, static linking is not constrained to trivial redirects. Statically comp
 There are many semantically valid rewrites that Awelon's basic evaluator does not perform. For example:
 
         [] a    =>              apply identity is a NOP
-        [B] a [A] a => [B A] a  application composes
-        [E] a d =>  d E         a tail call optimization
+        b d     => d d          either way we drop two values
         [i] b   =>              because [A][i]b == [[A]i] == [A]
         b i     =>  i           expansion of [X][F]b i == [X][F]i
         c d     =>              drop the copy
@@ -345,9 +335,11 @@ There are many semantically valid rewrites that Awelon's basic evaluator does no
         c w     =>  c           copies are equivalent
         [E] w d =>  d [E]       why swap first?
 
-In general, an Awelon system has discretion to perform such rewrites insofar as they do not affect program output, e.g. optimize the static link object. A runtime may support extended evaluation modes that automatically perform simplifying rewrites for performance or aesthetics. Finally, annotations may explicitly request certain optimizations for a block of code. 
+A runtime has discretion to perform optimizations that are not visible in the evaluated result, such as optimizing the toplevel of a static link object, and performing escape analysis to optimize the contained blocks. Visible optimizations are accessible through annotations or via support for extended evaluation flags for the runtime.
 
-We aren't limited to local pattern-matching rewrites, which tend to be fragile because they depend on transitory structure. There are more robust optimization techniques with good results. For example, partial evaluation in Awelon is usually limited by inability to represent partial values. Evaluating with 'free variables' in the form of undefined words can help:
+Pattern-matching rewrites tend to be fragile because they reference transitory structure. There are more robust optimization techniques with good results. For example, partial evaluation in Awelon is usually limited by inability to represent partial values. 
+
+Evaluating with 'free variables' in the form of undefined words can help:
 
 * assume `A B C` words unused and undefined 
 * evaluate `[C][B][A]function` to completion
@@ -378,7 +370,7 @@ Static type information can also support optimizations. For example, if we know 
 
 For sum types, the analog is to precompute programs for different arguments:
 
-        Generic 'if' for all binary conditions:
+        Generic 'if' for binary conditions:
         if = (a3) [] b b a (cond) i
 
         type Bool = ∀S,S'. S (S → S') (S → S') → S'
@@ -389,34 +381,40 @@ For sum types, the analog is to precompute programs for different arguments:
         for E : S (A + B) → S', where E observes argument
             E => [[inL] b E] [[inR] b E] if
 
-Optimization with conditional types does risk exponentially expanding the program, so we might cancel cases where the resulting program doesn't seem to help. But optimizing for booleans/sums/etc. in this manner can potentially simplify code, especially if the condition is observed more than once. Loop unrolling by this means is also viable.
+Whether this is a worthy transform must be determined heuristically, based on whether it results in useful simplifications and avoids the problem of exponential expansion. It may be that several condition values must be partially evaluated before we encounter useful reductions, each one doubling the amount of code until reductions begin.
+
+Loop unrolling optimizations are viable using the same principle as sum types. They may benefit from specialization.
 
 ## Interpretation
 
-Awelon can be efficiently interpreted. Let's make some assumptions:
+Naive interpretation of Awelon can be reasonably efficient, but involves a lot of pointer-chasing. We can do very well with a few minor tweaks on the representation. Consider Awelon extended with the following features:
 
-A program is represented as an array of words, with an appropriate terminal at the end. In case of static link objects, our terminal is probaly `\return` or a tail-call variant (e.g. for programs ending in `i` or `a d`). The evaluator uses an auxiliary stack for call-return and temporary data hiding. We may also perform hidden rewrites to reduce program fragmentation or construction of volatile blocks.
+* program pointers
+* auxiliary stack 
 
-On the latter point, example uses include:
+A program will be represented by an array of words and values, terminated by a special `\return` word. The `\return` word will pop a program pointer from the auxiliary and jump to it. To 'call' a word, we will generally push a 'next' program pointer onto our return stack, then jump. Or we'll just jump if it is a tail call. Our `\return` action might need a few special variants for tail calls in general (a program terminating in `a d` or `i`). 
 
-        [A]a                 =>     \put A \take
-        [L][R]if             =>     \if L \return R \return
+The auxiliary stack can also optimize some data hiding:
 
-These transforms are reversible. To serialize `\put` we'd logically add an `]a` element to our auxiliary stack, then print `[`. To serialize `\take`, we then print the top value on the auxiliary stack. The serialization case for `\if` is more sophisticated, but uses the same idea: `\if` prints `[` and adds four returns: to `][ \return` then to `R \return` then to `]if \return` and finally to whatever follows.
+        [A]a    =>  \push A \pop
+        [A]b a  =>  \push2nd A \pop
+        ...
 
-Avoiding allocation overheads for volatile static blocks can be a major performance gain during evaluation. And use of the auxiliary stack for temporary data hiding supports reasonably efficient data plumbing, especially if we've performed optimizations to reduce program fragmentation.
+This allows us to avoid an intermediate return action. This particular transform doesn't help in every scenario. But we can optimize temporary data hiding for known common cases such as working with `T(A, T(B, ,,E))` up to a limited arity.
+
+An important feature is that we can serialize the original Awelon code. We start with a logical copy of the auxiliary stack. On `\return`, we can pop a return address and continue serializing from the destination. For `\push` we could write `[` and add a special `]a` term to the auxiliary stack. For `\pop`, we pop a term from the auxiliary then serialize it.
+
+This slightly modified Awelon is a good fit for a threaded interpreter. We can go a step further by performing a partial compilation to a register machine, then interpreting the resulting code.
 
 ## Compilation
 
-Awelon can be compiled efficient for stock hardware.
+Awelon can be compiled for efficient evaluation on stock hardware.
 
-Start with the tweaks for efficient interpretation. Those are still useful.
+We can starting with extensions for efficient interpretation, and perform a register-allocation pass. Registers are allocated to active values in the program representation or auxiliary stack. There are several motivations for this. The immediate benefit is logical data shuffling; `\push` or `w` can be modeled as manipulating a static code map rather than performing runtime data manipulation.
 
-To utilize a register machine, we can model active data elements as being stored in registers. Then operations like `w` would logically swap, or `\take` would logically move a stack element to the auxiliary. Logical data shuffling should be represented in a code-map that enables us to serialize our current program from a machine state. We can potentially compile multiple versions of a program to optimize register allocation in different contexts, avoiding save/restore actions on the stack. 
+In context of acceleration for common functions and types, a secondary benefit is that we can perform low level CPU arithmetic operations directly on our registers. Also, floating point registers would effectively be unboxed, which could support efficient math computation.
 
-If targeting C or LLVM or another intermediate language, we might use variables as an alternative to registers, but the basic idea applies.
-
-We can compile accelerated arithmetic to operate on the appropriate registers or variables directly. With some static type information, we could shove floating point numbers into floating point registers. So we can get reasonable data plumbing.
+Even if we're targeting a higher level language like C or LLVM, the same idea of registers applies. We'll just use variables or fields instead. 
 
 *Note:* Accelerators can also perform compilation. For example, a runtime might implement accelerated evaluation for a safe subset of OpenCL by using an external OpenCL compiler. 
 
@@ -625,12 +623,12 @@ Awelon's natural numbers are given the `#` prefix in favor of an aesthetic view 
 
 Besides the numeric tower, command lists are another valuable view feature:
 
-        {foo, bar, baz} == [[foo] {bar, baz} !]
-        {baz}           == [[baz] ~ !]
+        {foo, bar, baz} == [[foo] {bar, baz} :]
+        {baz}           == [[baz] ~ :]
 
-Here I use `!` to permit an alternative representation from normal lists. But that's up to the view. Regardless, command lists are useful for many purposes. We can use them to embed structured data - e.g. `{{1,2,3},{4,5,6},{7,8,9}}` might represent a matrix. We can use them to construct continuation-passing code and effects models. And so on.
+Command lists are useful for various purposes, supporting continuation-passing style or a concise embedding of code. While I use a normal `~ :` list structure here, a view could use something more specialized in this role.
 
-Ideally, all editable views should also be *evaluable*. That is, program evaluation should generate the same structures we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` - or whatever we use to represent decimal numbers - should be a viable result from a computation. 
+Ideally, all editable views should be *evaluable*. That is, program evaluation should generate the same structures we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` - or whatever we use to represent decimal numbers - should be a viable result from a computation. 
 
 Design of evaluable editable views is very sensitive to arity annotations and accelerators. A consequence is that editable views should be *defined* within the same dictionary they're used to view by some simple convention. Perhaps a word defining a `[[view→code][code→view]]` pair where `code` and `view` are represented as text. Representing views within the dictionary is convenient for testing and caching of views, and for updating views based on application or edit session state (e.g. so we can separate namespace from code). 
 
@@ -665,6 +663,8 @@ We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with a simple algorithm:
 This algorithm is adapted from the optimization using free variables. The main difference is that we know our variables are named values and we need special handling for conditional behaviors. 
 
 Conditional behavior is specialized because we do not want to copy data into each branch before selecting one. Doing so would be inefficient and a potential violation of substructural properties. Instead, we leave our value on the stack then rewrite each branch to access or drop that variable. The editable view must specialize for conditional expressions. Fortunately, the simple rule for `if` above would also work for sums, optional values, lists, etc..
+
+Once we have named locals, we might also benefit from supporting infix math expressions.
 
 ## Namespaces
 

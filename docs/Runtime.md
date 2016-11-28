@@ -1,70 +1,27 @@
 
 # Runtime Design
 
-A primary goal for runtime is performance of *applications*. Awelon's application model involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Evaluation, concurrent update, incremental computing, and so on must each contribute to overall performance.
+A primary goal for runtime is performance of *applications*. Awelon's application model involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Evaluation, concurrent update, incremental computing, and so on each contribute to overall performance.
 
 Besides efficiency and scalability, I'm also interested in predictable performance, and precise cost accounting so heavy users can be charged appropriately. The runtime will aim to keep unpredictable performance features under client control via annotations and similar. I intend for Awelon runtime to be suitable at least for soft real-time systems to the extent that programmers control the nature and frequency of transactions on the dictionary.
 
 *Aside:* For naming, I'm likely to call this 'Wikilon Runtime' or `wikrt`. 
 
-## Performance Strategy
+## Evaluation 
 
-* simple memory model
- * linear ownership of program structure
- * memory use reflects serialized program size
- * constant space traversal (Morris algorithm)
- * structure sharing via words only
- * use both free-list and compaction GC
+Evaluation will essentially proceed as a Forth-like stack machine.
 
-* accelerated functions
- * Data plumbing, fixpoint loops
- * Numbers and arithmetic 
- * Linear algebras for GPGPU
- * KPNs for cloud computing
- * pure register machine variant
+* output program is data stack
+* auxiliary call-return stack
+* conventional program pointer
+* add special `\return` words
+* track available stack size
 
-* JIT compilation
- * leverage LLVM or Clang API for JIT compilations
- * interpreter with expectation of fragmented JIT
- * early focus on JIT as performance representation
- * support memoization and component reuse of JIT
+The main difference from Forth is that our 'output program' may contain some unlinked words.
 
-* lightweight parallelism
- * parallelize evaluations within program
- * background evaluations of the program
- * prioritize partial evaluations for latency
- * accelerate bounded-buffer KPNs, eventually
- * stop the world only for compaction GC
+In any case, we'll use a simple program pointer to represent what we're evaluating. 
 
-* lightweight failure model
- * evaluation errors represented in code
- * quota failures by aborting computation
- * failures leave program in valid state
- * may lose partial work upon failure
-
-* lightweight debugging model
- * leverage `(@gate)` annotations
- * support trace logs or profiling
- * breakpoints and program animation
- * record intermittent frames on effort
- * stream compression of eval history
-
-* incremental computing
- * implicit memoization of definitions
- * explicit memoization via `(memo)`
- * pattern based support from programmer
- * precisely track which words are linked
- * stage memoization for update frequency
-
-* multi-agent concurrent codebase
- * LMDB for lightweight transactional data persistence
- * RESTful long-running transactions or sessions
- * reactive computing: callbacks, rate-limited quotas
- * recovery from transaction conflicts, not just abort
- * higher level actions to support semantic merging
- * prioritize transactions upon concurrent conflict
-
-Long term, we might also support distributed transactions (via 2PC or 3PC, or X/Open XA). This could be useful for certain application models, and for integrating with external resources. However, it is low priority.
+I'm tempted to try a register machine, but I'd rather avoid the complications at this layer.
 
 ## API Concepts
 
@@ -95,44 +52,13 @@ It seems to me that most input and output can occur as binary streams or chunked
 
 *Note:* Security models (HTTP authentication, HMAC bearer tokens, etc.), collaborative conflict avoidance patterns (discretionary locks, [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html)), and accounting (quotas, policy for costs shared via memoization or stowage), are not part of this C runtime API. I believe they can be implemented more or less independently, and I don't want to commit to any particular model.
 
-## Evaluation 
+## Memory Model
 
-Evaluation will use a logical cursor into an Awelon program:
+In memory, a program will be represented by a contiguous array of words terminating in a special `\return` word, or a variant for tail-call optimizations. We will also try to optimize for `[A]a` patterns, which become `\push A \pop`. 
 
-         \ [A]          =>      [A] \
-        [B][A] \ a      =>      \ A [B]
-        [B][A] \ b      =>      [[B]A] \
-           [A] \ c      =>      [A][A] \
-           [A] \ d      =>      \
+Memory management is a big concern. I could deep-copy with some interned structure for words. This would have a nice property of supporting 'shared objects' only at word boundaries, but makes for expensive loops. A viable alternative is deferred reference counting. Deferred RC requires a mutex, but that cost is amortized over many updates. 
 
-        \ word          =>      word \      (if not linked)
-                        =>      \ word-def  (if linked)
-
-The cursor here is indicated by the `\` character. It moves left to right through the program, leaving evaluated code in its wake. Specializations for `a d`, `i`, and `z` will support tail-call optimizations.
-
-## Program Representation
-
-Words, small constants, accelerated subprograms, etc. may be interned. This allows me to share a lot of work (memoization, static linking, linker metadata, etc.) for multiple instances of a word, or avoid allocations to work with natural numbers.
-
-Other content - blocks, texts, binaries, etc. - is deep-copied and uniquely owned. A general rule is that the cost of memory representation should directly reflect the cost of our serialized representation in a simple, predictable way. However, long term we might explore accelerated access to 'shared' objects via stowage and even logical trim/addend/etc..
-
-Program structure will use a linked list of buffers. Viable representation:
-
-        (header next ... elements ...)
-
-The header must contain at least a buffer size and internal iterator. 
-
-Buffer sizes include the header and may use a small set. Only a few bits are necessary. Conveniently, we can link buffers of 1024 and 512 together to support 1500 elements if we need to limit internal fragmentation. 
-
-The iterator is necessary for constant-space deep copy, drop, etc.. It can be represented by a simple offset from the header into the elements. A buffer may have unused space at each end. Rather than try to track these within the header, I can represent special stop and skip actions within the buffer if there is sufficient space.
-
-Remaining header bits can record useful metadata - substructural type, evaluation status. Maybe a tuple/sum/bool assertion. We may limit ourselves to a 32-bit header even on a 64-bit system. 
-
-Evaluation uses at least two buffers: the 'stack' buffer to the left of the cursor and a 'program' buffer to the right. During evaluation, the stack buffer is reversed such that `next` is `prev`.
-
-This simplifies the problem of logical inlining. Our cursor remains always at a border between two buffers, so we can simply use the `next` field to inline. This structure DOES mean we may need to allocate a buffer upon bind with `b`, if the receiving block does not have space. However, we can reserve a few slots in our blocks in anticipation of binding, and we need allocate at most once per several bind actions (e.g. allocate a block of size 8 to handle binding up to five more items). 
-
-This program representation should give me stack-like performance, efficient deep-copy, minimal pointer chasing etc.. I expect a significant performance benefit over cons-cell linked lists. Meanwhile, the representation seems simple enough to work with JIT as needed.
+Deferred RC with some interning might offer a very efficient option.
 
 ## Bit Level Representations
 
@@ -158,8 +84,6 @@ Tagged items can have ad-hoc structure and keep extra type information in a head
 An interesting option for the reserved slot is representing linked-list structures - i.e. `[[hd][tl]:]` where `tl` is another list. Instead of a bunch of individual cons cells, our linked list could be modeled within a linked list of buffers. This would simplify a lot of collections-oriented operations, and even efficient representation for tries.
 
 ## Memory Management
-
-Memory will be managed during normal computation by free lists. The explicit copy/drop actions of Awelon effectively gives us manual memory management.
 
 A simple buddy-list allocator should be sufficient. In normal PLs, buddy lists introduce a lot of internal fragmentation. But with the linked-list-of-buffers as a primary data structure, that issue is mitigated because I can transparently compose small buffers to represent a larger one, and thus keep internal fragmentation under predictable control.
 
@@ -215,6 +139,7 @@ For visible optimizations, we can at least perform:
 
 Some invisible performance enhancers:
 
+* determine up-fun-arg vs. down-fun-arg types
 * precompute copy size for fixpoint loop
 * accelerate multi-word actions
 * JIT compilation of code
