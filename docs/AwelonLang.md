@@ -241,17 +241,12 @@ Awelon does not implicitly memoize computations to avoid rework. Programmers can
 
 ## Evaluation
 
-Evaluation of an Awelon program results in an equivalent Awelon program, hopefully one from which it is easier to extract information or efficiently perform further evaluations. Awelon's primary evaluation mode proceeds by pure, local rewriting. The four primitives rewrite by simple pattern matching:
+Evaluation of an Awelon program results in an equivalent Awelon program, hopefully one from which it is easier to extract information or efficiently perform further evaluations. Awelon's primary evaluation mode proceeds by local rewriting. The four primitives rewrite by simple pattern matching:
 
             [B][A]a => A[B]         (apply)
             [B][A]b => [[B]A]       (bind)
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
-
-Additionally, we'll perform two simplifications:
-
-           [A]a[B]a => [A B]a       (apply composes)
-             [A]a d => d A          (tail call optimization)
 
 Words rewrite to their evaluated definitions. However, words do not rewrite unless doing so leads a result other than a trivial inlining of the word's evaluated definition. This constraint is called lazy linking, and it supports various performance and aesthetic goals. An undefined word represents an unknown and does not evaluate further. 
 
@@ -325,21 +320,21 @@ However, static linking is not constrained to trivial redirects. Statically comp
 
 There are many semantically valid rewrites that Awelon's basic evaluator does not perform. For example:
 
-        [] a    =>              apply identity is a NOP
-        b d     => d d          either way we drop two values
-        [i] b   =>              because [A][i]b == [[A]i] == [A]
-        b i     =>  i           expansion of [X][F]b i == [X][F]i
-        c d     =>              drop the copy
-        c [d] a =>              drop the other copy
-        [] b a  =>  w           by definition of w
-        c w     =>  c           copies are equivalent
-        [E] w d =>  d [E]       why swap first?
+        [A]a[B]a    => [A B]a       apply composes
+        [A]a d      => d A          tail call optimization
+        [] a        =>              apply identity is a NOP
+        b d         => d d          either way we drop two values
+        c d         =>              drop the copy
+        c [d] a     =>              drop the other copy
+        [i] b       =>              because [A][i]b == [[A]i] == [A]
+        b i         =>  i           expansion of [X][F]b i == [X][F]i
+        [] b a      =>  w           by definition of w
+        c w         =>  c           copies are equivalent
+        [E] w d     =>  d [E]       why swap first?
 
-A runtime has discretion to perform optimizations that are not visible in the evaluated result, such as optimizing the toplevel of a static link object, and performing escape analysis to optimize the contained blocks. Visible optimizations are accessible through annotations or via support for extended evaluation flags for the runtime.
+A runtime has discretion to perform optimizations that are not visible in the evaluated result, based on escape analysis. The static link object is a good target for such efforts. Visible optimizations may be accessed through annotations or controlled by runtime flags. 
 
-Pattern-matching rewrites tend to be fragile because they reference transitory structure. There are more robust optimization techniques with good results. For example, partial evaluation in Awelon is usually limited by inability to represent partial values. 
-
-Evaluating with 'free variables' in the form of undefined words can help:
+Pattern-matching rewrites tend to be fragile, affected by abstraction and order of evaluation. There are more robust optimization techniques with good results. For example, partial evaluation in Awelon is usually limited by inability to represent partial values. Evaluating with 'free variables' in the form of undefined words can help:
 
 * assume `A B C` words unused and undefined 
 * evaluate `[C][B][A]function` to completion
@@ -364,7 +359,7 @@ So this optimization looks like: `T(A, T(B, T(C, Eval([C][B][A]function))))`. Bu
 
 Static type information can also support optimizations. For example, if we know our argument is a pair, we might further propagate the elements as independent variables:
 
-        type (A * B) = ∀E. E → E A B
+        type (A * B) = ∀S. S → S A B
         for E : S (A * B) → S'
             E => i T(B, T(A, EVAL([[A][B]] E)))
 
@@ -381,9 +376,7 @@ For sum types, the analog is to precompute programs for different arguments:
         for E : S (A + B) → S', where E observes argument
             E => [[inL] b E] [[inR] b E] if
 
-Whether this is a worthy transform must be determined heuristically, based on whether it results in useful simplifications and avoids the problem of exponential expansion. It may be that several condition values must be partially evaluated before we encounter useful reductions, each one doubling the amount of code until reductions begin.
-
-Loop unrolling optimizations are viable using the same principle as sum types. They may benefit from specialization.
+Whether this is a worthy transform must be determined heuristically, based on whether it results in useful simplifications and avoids the problem of exponential expansion. It may be that several condition values must be partially evaluated before we encounter useful reductions, each one doubling the amount of code until reductions begin. Loop unrolling optimizations are viable using the same principle.
 
 ## Interpretation
 
@@ -392,7 +385,7 @@ Naive interpretation of Awelon can be reasonably efficient, but involves a lot o
 * program pointers
 * auxiliary stack 
 
-A program will be represented by an array of words and values, terminated by a special `\return` word. The `\return` word will pop a program pointer from the auxiliary and jump to it. To 'call' a word, we will generally push a 'next' program pointer onto our return stack, then jump. Or we'll just jump if it is a tail call. Our `\return` action might need a few special variants for tail calls in general (a program terminating in `a d` or `i`). 
+A program will be represented by an array of words and values, terminated by a special `\return` word. The `\return` word will pop a program pointer from the auxiliary and jump to it. To 'call' a word, we will generally push a 'next' program pointer onto our return stack, then jump. Or we'll just jump if it is a tail call. Our `\return` action might need a few special variants for tail calls in general, specializing for a program terminating in `a d` or `i`. 
 
 The auxiliary stack can also optimize some data hiding:
 
@@ -400,7 +393,7 @@ The auxiliary stack can also optimize some data hiding:
         [A]b a  =>  \push2nd A \pop
         ...
 
-This allows us to avoid an intermediate return action. This particular transform doesn't help in every scenario. But we can optimize temporary data hiding for known common cases such as working with `T(A, T(B, ,,E))` up to a limited arity.
+This allows us to avoid an intermediate return action. This particular transform doesn't help in every scenario. But we can optimize temporary data hiding for known common cases, such as working with `T(A, T(B, ..E))` up to a limited arity.
 
 An important feature is that we can serialize the original Awelon code. We start with a logical copy of the auxiliary stack. On `\return`, we can pop a return address and continue serializing from the destination. For `\push` we could write `[` and add a special `]a` term to the auxiliary stack. For `\pop`, we pop a term from the auxiliary then serialize it.
 
@@ -408,15 +401,15 @@ This slightly modified Awelon is a good fit for a threaded interpreter. We can g
 
 ## Compilation
 
-Awelon can be compiled for efficient evaluation on stock hardware.
+Awelon can be compiled for efficient evaluation on stock hardware. Starting with extensions for efficient interpretation, we can perform register allocation and perform representation-level operations.
 
-We can starting with extensions for efficient interpretation, and perform a register-allocation pass. Registers are allocated to active values in the program representation or auxiliary stack. There are several motivations for this. The immediate benefit is logical data shuffling; `\push` or `w` can be modeled as manipulating a static code map rather than performing runtime data manipulation.
+Registers are allocated to active structure in the program representation or auxiliary stack. The immediate benefit is logical data shuffling: `\push` or `w` can be modeled as manipulating a static code map rather than performing runtime data manipulation. 
 
-In context of acceleration for common functions and types, a secondary benefit is that we can perform low level CPU arithmetic operations directly on our registers. Also, floating point registers would effectively be unboxed, which could support efficient math computation.
+Use of registers could be recorded explicitly in an intermediate code, e.g. by adding words of the form `\putA`, `\getA`, and similar variants. When compiling something like `\getA \getB + \putA`, we might be able to reduce this to accelerated CPU-level addition. Registers might also support a certain level of unboxing, such that floating points can be held directly by a register.
 
-Even if we're targeting a higher level language like C or LLVM, the same idea of registers applies. We'll just use variables or fields instead. 
+These techniques also apply if targeting a higher level intermediate language like LLVM or C. 
 
-*Note:* Accelerators can also perform compilation. For example, a runtime might implement accelerated evaluation for a safe subset of OpenCL by using an external OpenCL compiler. 
+*Note:* Accelerators can also perform implicit compilation. For example, a runtime might implement accelerated evaluation for a safe subset of OpenCL by using an external OpenCL compiler. This technique is viable even from an interpreter.
 
 ## Parallel Evaluation
 

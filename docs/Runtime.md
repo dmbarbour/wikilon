@@ -17,48 +17,36 @@ Evaluation will essentially proceed as a Forth-like stack machine.
 * add special `\return` words
 * track available stack size
 
-The main difference from Forth is that our 'output program' may contain some unlinked words.
+Evaluation proceeds left-to-right through the program without backtracking. The main difference from Forth is that our 'output program' may contain some words. We'll use a simple program pointer to represent what we're evaluating. 
 
-In any case, we'll use a simple program pointer to represent what we're evaluating. 
+I'll focus initially on an interpreter. But we could later compile to use a register machine, to handle allocation and writes of in-memory representations, etc..
 
-I'm tempted to try a register machine, but I'd rather avoid the complications at this layer.
+## Memory Management
 
-## API Concepts
+On copy with `c`, one option is to deep-copy structure. This trivializes memory management, at the cost of constructing many volatile copies. I would prefer something vastly more efficient. Deep copy on fixpoint loops is not efficient or optimal, for example. 
 
-The runtime API should be oriented around an agent's view of the system.
+But logical copies require automatic memory management.
 
-Some operations we might want to perform:
+Awelon, fortunately, has some nice properties for memory management. Awelon never produces memory cycles, so plain old reference counting should work effectively. Awelon lacks stateful aliasing, so we can potentially avoid the whole issue of write barriers in a generational GC.
 
-* read or update a word's definition
-* perform a set of updates atomically
-* input a program, binary, or dictionary
-* output a program, binary, or dictionary
-* partial program output, background parallel
-* process program as text (for editable views)
-* evaluate, type, optimize, compile a program
-* profile computation; line item accounting
-* subscribe, alerts upon change (callbacks?)
-* rename dictionary object, special edits
-* find clients of a word, reverse lookup
-* find words with a common prefix or suffix
+Naive reference counting is inefficient, especially in parallel code where RC updates must be atomic. A mitigating technique: defer RC for roots to discrete steps. At each step, incref the new roots then decref the old ones. This requires holding a snapshot of the old roots. The actual RC updates can be batch processed, guarded by a mutex, so those costs are amortized.
 
-To support atomic updates, I have at least two options. One is the DVCS approach: an agent operates in a 'workspace' with its own logical copy of the dictionary, then we 'merge' updates from multiple agents with an ad-hoc best effort to resolve conflicts. Another approach is long-running hierarchical transactions, which is basically the same thing but we also track reads, evaluations, assumptions or assertions, and thus we can detect read-write conflicts and push them back to the agent. With transactions we might provide merge-friendly structured edits, such as renaming an object or constructing a new work order or command operation without concern about how things are named.
+Ideally, I would also defer RC for volatile objects.
 
-I think the 'transaction' oriented dictionary is generally better.
+A viable option is support a per-thread 'nursery' where small, volatile objects are allocated and dropped without book keeping. We then require a copy-collector and bump-pointer allocator. When the nursery is out of space, we update reference counts then compact objects into a fresh nursery. 
 
-It seems to me that most input and output can occur as binary streams or chunked lists. Fine grained program input (e.g. at the level of open/close block and add word) seems unnecessary. Whether it's worth introducing depends on how much it complicates the runtime API. I may need to track down missing secure hash resources, however. 
+We could augment the nursery with a survivor space - an extended life span for volatile objects. An intriguing possibility is to only perform the RC pass when we compact the survivor space. We might then have a dozen nursery first-gen nursery collections per RC pass, at the cost of always keeping the prior snapshot in the survivor space.
 
-*Aside:* By 'optimized' output, I want *Awelon* code after all the rewrite optimizations, static linking, staging, etc.. By 'compiled' output, I would like relocatable JIT code (Clang or LLVM?) or similar.
+So... we'd have RC only for long-lived objects shared by multiple threads. 
 
-*Note:* Security models (HTTP authentication, HMAC bearer tokens, etc.), collaborative conflict avoidance patterns (discretionary locks, [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html)), and accounting (quotas, policy for costs shared via memoization or stowage), are not part of this C runtime API. I believe they can be implemented more or less independently, and I don't want to commit to any particular model.
+An interesting option is to combine the RC heap with structure sharing or interning - implicit stowage. Doing so is certainly viable, and would guarantee a convenient structural property on representations. But it is not critical.
 
-## Memory Model
 
-In memory, a program will be represented by a contiguous array of words terminating in a special `\return` word, or a variant for tail-call optimizations. We will also try to optimize for `[A]a` patterns, which become `\push A \pop`. 
 
-Memory management is a big concern. I could deep-copy with some interned structure for words. This would have a nice property of supporting 'shared objects' only at word boundaries, but makes for expensive loops. A viable alternative is deferred reference counting. Deferred RC requires a mutex, but that cost is amortized over many updates. 
 
-Deferred RC with some interning might offer a very efficient option.
+In memory, a program will be represented by a contiguous array of words terminating in a special `\return` word, or a variant for tail-call optimizations. A call-return auxiliary stack is used. We will also try to optimize for `[A]a` patterns, which become `\push A \pop`. This generalizes to a pattern `[A] b b b a` which we might process by moving the third item.
+
+
 
 ## Bit Level Representations
 
@@ -83,13 +71,35 @@ Tagged items can have ad-hoc structure and keep extra type information in a head
 
 An interesting option for the reserved slot is representing linked-list structures - i.e. `[[hd][tl]:]` where `tl` is another list. Instead of a bunch of individual cons cells, our linked list could be modeled within a linked list of buffers. This would simplify a lot of collections-oriented operations, and even efficient representation for tries.
 
-## Memory Management
 
-A simple buddy-list allocator should be sufficient. In normal PLs, buddy lists introduce a lot of internal fragmentation. But with the linked-list-of-buffers as a primary data structure, that issue is mitigated because I can transparently compose small buffers to represent a larger one, and thus keep internal fragmentation under predictable control.
+## API Concepts
 
-Memory compaction and defragmentation are also important, but I don't want to do unpredictable-cost things implicitly. Also, fragmentation won't be a problem for all programs, just those that have highly dynamic memory behaviors. So I'll leave this to an external API call, perhaps coupled to a notion of taking a program snapshot and opportunity to resize memory.
+The runtime API should be oriented around an agent's view of the system.
 
-If allocation fails because we've hit a memory quota during evaluation, we must guarantee that we have a useful state. If we run out of memory on program *input*, that will need a distinct error type because we cannot guarantee a complete program. 
+Some operations we might want to perform:
+
+* read or update a word's definition
+* perform a set of updates atomically
+* input a program, binary, or dictionary
+* output a program, binary, or dictionary
+* partial program output, background parallel
+* process program as text (for editable views)
+* evaluate, type, optimize, compile a program
+* profile computation; line item accounting
+* subscribe, alerts upon change (callbacks?)
+* rename dictionary object, special edits
+* find clients of a word, reverse lookup
+* find words with a common prefix or suffix
+
+To support atomic updates, I have at least two options. One is the DVCS approach: an agent operates in a 'workspace' with its own logical copy of the dictionary, then we 'merge' updates from multiple agents with an ad-hoc best effort to resolve conflicts. Another approach is long-running hierarchical transactions, which is basically the same thing but we also track reads, evaluations, assumptions or assertions, and thus we can detect read-write conflicts and push them back to the agent. With transactions we might provide merge-friendly structured edits, such as renaming an object or constructing a new work order or command operation without concern about how things are named.
+
+I think the 'transaction' oriented dictionary is generally better. 
+
+It seems to me that most input and output can occur as binary streams or chunked lists. Fine grained program input (e.g. at the level of open/close block and add word) seems unnecessary. Whether it's worth introducing depends on how much it complicates the runtime API. I may need to track down missing secure hash resources, however. 
+
+*Aside:* By 'optimized' output, I want *Awelon* code after all the rewrite optimizations, static linking, staging, etc.. By 'compiled' output, I would like relocatable JIT code (Clang or LLVM?) or similar.
+
+*Note:* Security models (HTTP authentication, HMAC bearer tokens, etc.), collaborative conflict avoidance patterns (discretionary locks, [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html)), and accounting (quotas, policy for costs shared via memoization or stowage), are not part of this C runtime API. I believe they can be implemented more or less independently, and I don't want to commit to any particular model.
 
 ## Computations
 
