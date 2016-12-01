@@ -27,7 +27,121 @@ On copy with `c`, one option is to deep-copy structure. This trivializes memory 
 
 But logical copies require automatic memory management.
 
-Awelon, fortunately, has some nice properties for memory management. Awelon never produces memory cycles, so plain old reference counting should work effectively. Awelon lacks stateful aliasing, so we can potentially avoid the whole issue of write barriers in a generational GC.
+Awelon, fortunately, has some nice properties for memory management:
+
+* Awelon never produces memory cycles. 
+* Awelon does not mutate shared objects.
+
+Both of these points can reduce complexity in GC, avoiding write barriers and any special cycle handling. RC is feasible, but I'm not certain that RC is a good option. An interesting possibility is to simply use a hierarchical compacting collectors model:
+
+
+        [survivors|.... nursery ....]
+
+A heap is divided into a survivors area and two-space nursery. We guarantee that the nursery is never more than half full. When we move content from nursery RHS to the LHS, we grow the survivors pool. Eventually, the survivors pool is too large for effective computation to continue. At that point, we must shift the whole nursery into another two-space, and compact the survivors.
+
+        [survivors|.... nursery ....]
+            ||
+            \/
+        [s'|........nursery.........]
+
+Memory utilization may still be high due to reusing the free space between parallel threads. For example, if we have 20 threads and a pool of 21 heaps, we can guarantee progress and only have 5% space overhead for toplevel GC. Internally, we might allow a nursery to grow until the survivors arena is a fair portion of the total memory. (We could also use less than the total nursery, initially, sort of 'grow' into it in reasonable chunks.)
+
+Hierarchical nurseries could use the same properties, except with an interesting feature: we could allocate the 'twin' of a child nursery on the opposite nursery arena. Then we only need to guarantee that a child nursery is located properly before the thread returns. This gives us better utilization for lightweight parallelism.
+
+
+*Aside:* It is feasible to promote toplevel survivors into a reference-counted structure... an ultimate 'deferred' reference count of sorts. OTOH, we might limit that toplevel to stowage, memoized dictionary computations, and other persistent structures.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Each thread will use a lightweight nursery with a survivor arena for its computation efforts. This enables a lot of computations without performing any RC updates. 
+
+We can feasibly model *hierarchical* nurseries, where we model one nursery within another and we await all child computations nurseries before we can collect the parent. This would be suitable for lightweight parallelism. In addition, multiple *sibling* nurseries may share the same RC heap with minimal collusion. 
+
+Interestingly, we could just use hierarchical nurseries 'all the way down' starting with a top-level computation. This would be much simpler than a hybrid model.
+
+Efficient reference counting means not updating the RC with every pointer manipulation. I propose a variant of deferred, ulterior RC. A bounded nursery with a survivor arena enables a lot of computation with volatile objects between rare RC updates. 
+
+For parallelism, I have a choice. Either I attempt to share parts of the nursery between multiple threads, or I must promote objects out of the nursery before I support parallelism. If I want coarse-grained RC *and* fine-grained parallelism, this really isn't much of a choice: I need a shared nursery. 
+
+Of course, the moment I share my nursery, I'll want sub-nurseries to help delay synchronization of threads. So the problem is somewhat regressive. A nursery is what exists to give a single thread some coarse-grained 'work', so perhaps I should promote anything else to the RC arena early on. 
+
+Or alternatively, I should get rid of the 'threads' idea and instead model each heap as a process with limited message passing. In this 
+
+Objects are promoted to a 'survivor space' that may be shared between threads. When we eventually compact the heap, we'll have objects that survive the survivor spaces. Those will be promoted into the RC space, shrinking the effective nursery.
+
+
+
+
+
+So we might do something like a shared survivor space for multiple nurseries. 
+
+
+
+
+
+
+
+Idea: a big nursery, with small fixed-size segments. Some segments are 'survivors' and are shared among multiple threads in the nursery. 
+
+Multiple threads share the nursery, each one taking ownership of specific segments but *sharing* the survivor spaces. 
+
+
+
+* a small nursery per thread
+* large, shared survivor arenas
+* can promote nursery chunks into arena
+
+* can promote multiple small nurseries to arenas
+* 
+
+ We might collect the nursery ten or a hundred times per RC step, depending on how much long-lived information survives and nursery size.
+
+Deferral could use buffered decrefs, or a simple snapshot of the program in the nursery. This would happen quite naturally with nursery allocation anyway. We incref the next snapshot then decref the old one, with special additions for 'large' objects, and special 'fast' promotions for parallel computation. A snapshot could potentially serve as a failure fallback, too.
+
+This structure does have some challenges. For parallelism, I probably want a nursery per thread rather than a shared nursery for many threads. Though, I suppose I could go either way with that, if I simply allocate chunks out of the nursery per thread or have a limited number of threads per nursery.
+
+
+I could use a multi-generational nursery, i.e. with an intermediate survivor space to delay interaction with the RC heap. This would add moderate complexity, but could reduce checkpoint frequency by up to a couple orders of magnitude, and would certainly enable a great deal more tuning. I'm a bit hesitant about this, mostly because it will interact with parallelism. 
+
+A simpler RC-per-nursery step, promoting references that survive twice, should be sufficient. And I can apply parallelism the moment it is promoted 
+
+Interestingly, the 'decref old snapshot' goal only needs the information used to incref the prior snapshot. I could record this precisely. 
+
+Use of program snapshots is interesting because it would also support a general failure fallback. 
+
+The idea here is that most of our pointer manipulations will occur in the nursery, and we don't need to track any of those, perhaps with a special exception when we allocate a larger object than our nursery supports. For that, we might need to track special RC objects allocated by the nursery to 'decref' after we're finished.
+
+
+
+Our initial program snapshot could be an empty program, easily enough. 
+
+ unless we construct
+
+This design has a nice feature: we always have a snapshot of our program. We could easily use this for simple failure handling, roll back. 
+
+
+That would be useful for other reasons, anyway - backtracking each computation. 
+
+
 
 Naive reference counting is inefficient, especially in parallel code where RC updates must be atomic. A mitigating technique: defer RC for roots to discrete steps. At each step, incref the new roots then decref the old ones. This requires holding a snapshot of the old roots. The actual RC updates can be batch processed, guarded by a mutex, so those costs are amortized.
 
@@ -35,7 +149,12 @@ Ideally, I would also defer RC for volatile objects.
 
 A viable option is support a per-thread 'nursery' where small, volatile objects are allocated and dropped without book keeping. We then require a copy-collector and bump-pointer allocator. When the nursery is out of space, we update reference counts then compact objects into a fresh nursery. 
 
-We could augment the nursery with a survivor space - an extended life span for volatile objects. An intriguing possibility is to only perform the RC pass when we compact the survivor space. We might then have a dozen nursery first-gen nursery collections per RC pass, at the cost of always keeping the prior snapshot in the survivor space.
+We could augment the nursery with a survivor space. The idea would be to promote only survivors of multiple nursery passes: nursery, nursery first pass survivor, second-gen nursery, second-gen survivor, reference-count. This would limit us to four copies of an object, with the primary nursery being processed multiple times for each second-gen nursery step. 
+
+This way, small volatile objects are eliminated by the time we reach the mature space, and we can make some useful guarantees about exactly how much effort we expend on copies. The RC update pass would be deferred until we handle survivor-level copies, so would be a rare event (at cost of holding onto older checkpoints). 
+
+
+An intriguing possibility is to only perform the RC pass when we compact the survivor space. We might then have a dozen nursery first-gen nursery collections per RC pass, at the cost of always keeping the prior snapshot in the survivor space.
 
 So... we'd have RC only for long-lived objects shared by multiple threads. 
 
