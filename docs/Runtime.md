@@ -1,9 +1,9 @@
 
 # Runtime Design
 
-A primary goal for runtime is performance of *applications*. Awelon's application model involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Evaluation, concurrent update, incremental computing, and so on each contribute to overall performance.
+A primary goal for runtime is performance of *applications*. Awelon's application model involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Evaluation, concurrent update, incremental computing, and so on each contribute to application performance.
 
-Besides efficiency and scalability, I'm also interested in predictable performance, and precise cost accounting so heavy users can be charged appropriately. The runtime will aim to keep unpredictable performance features under client control via annotations and similar. I intend for Awelon runtime to be suitable at least for soft real-time systems to the extent that programmers control the nature and frequency of transactions on the dictionary.
+I'm also interested in predictable performance, and precise cost accounting so heavy users can be charged appropriately. The runtime will aim to keep unpredictable performance features under client control via annotations and similar. I intend for Awelon runtime to be suitable at least for soft real-time systems to the extent that programmers control the nature and frequency of transactions on the dictionary.
 
 *Aside:* For naming, I'm likely to call this 'Wikilon Runtime' or `wikrt`. 
 
@@ -12,156 +12,49 @@ Besides efficiency and scalability, I'm also interested in predictable performan
 Evaluation will essentially proceed as a Forth-like stack machine.
 
 * output program is data stack
-* auxiliary call-return stack
+* auxiliary continuation stack
 * conventional program pointer
 * add special `\return` words
 * track available stack size
 
-Evaluation proceeds left-to-right through the program without backtracking. The main difference from Forth is that our 'output program' may contain some words. We'll use a simple program pointer to represent what we're evaluating. 
+Evaluation proceeds left-to-right through the program, then evaluates remaining block values either right-to-left or in parallel. The main difference from Forth is that our final 'output program' may contain words that do not evaluate further, due either to a trivial link context or lack of definition.
 
-I'll focus initially on an interpreter. But we could later compile to use a register machine, to handle allocation and writes of in-memory representations, etc..
+Use of an auxiliary continuation stack and `\return` words enables a near-conventional approach of a program counter and threaded interpreter. 
+
+It is feasible to further compile programs into a register machine, essentially by allocating top stack elements into registers. I would like to pursue this technique further, albeit perhaps only for JIT code.
 
 ## Memory Management
 
-On copy with `c`, one option is to deep-copy structure. This trivializes memory management, at the cost of constructing many volatile copies. I would prefer something vastly more efficient. Deep copy on fixpoint loops is not efficient or optimal, for example. 
+For efficient use of memory and CPU, I will want to logically copy most objects on `c`. Consequently, we cannot recycle memory on `d` unless we somehow know that it's the final logical copy. 
 
-But logical copies require automatic memory management.
+Automatic memory management in Awelon is simpler than in most languages. Awelon is acyclic, so could support reference counting. Awelon does not support ad-hoc mutation, reducing need for write barriers. Awelon is pure, which reduces concerns about observable latency for side-effects. (Granted, we still want predictable computation performance for external effects models.)
 
-Awelon, fortunately, has some nice properties for memory management:
+I am concerned about memory fragmentation as caused by free lists. Memory fragmentation results in degrading performance for long computations. I feel compacting collectors are simpler and more trustworthy.
 
-* Awelon never produces memory cycles. 
-* Awelon does not mutate shared objects.
+Compacting collectors are notorious for poor memory utilization. A certain amount of space must be kept free to perform compaction. For example, with a two-space collector, up to 50% of memory is kept free. Fortunately, this issue is mitigated by parallelism in a multi-agent environment. For example, if we have a hundred computations allocated 10MB each, and less than 1% of our time is spent on compaction, then we could make do with just one blank 10MB heap and 1% memory overhead. In practice we would want extra blanks to support parallel compaction, but the overhead can be controlled.
 
-Both of these points can reduce complexity in GC, avoiding write barriers and any special cycle handling. RC is feasible, but I'm not certain that RC is a good option. An interesting possibility is to simply use a hierarchical compacting collectors model:
+Another important concern is lightweight parallelism. Compaction with active mutators is not simple, so we'll want to stop work before performing compaction. But synchronization isn't cheap, so we'll want to amortize it by delaying compaction as much as feasible (using only simple techniques). 
 
+To delay compaction, we *must* recycle memory before compaction.
 
-        [survivors|.... nursery ....]
+We can recycle memory by explicit use of free-lists internally to a heap. While we cannot free arbitrary objects, we can recognize a useful subset of objects that have 'linear' in structure, such as temporary tuples or compositions. We can recycle the memory, return it to the appropriate heap for reallocation. Whether this is worth the effort would really depend on a lot of factors - e.g. returning data to a parent heap would require synchronization on every free-list access, which is not a good thing. Fortunately, with free-lists as a secondary technique, we are free to heuristically leak some memory and focus free lists only on flyweight patterns and related techniques that are efficient, avoid synchronization, and have nice locality properties.
 
-A heap is divided into a survivors area and two-space nursery. We guarantee that the nursery is never more than half full. When we move content from nursery RHS to the LHS, we grow the survivors pool. Eventually, the survivors pool is too large for effective computation to continue. At that point, we must shift the whole nursery into another two-space, and compact the survivors.
+An intriguing possibility is *hierarchial* compaction, managing child heaps by free list.
 
-        [survivors|.... nursery ....]
-            ||
-            \/
-        [s'|........nursery.........]
+Hierarchical structure gives us an implicit survivor space via the parent. Objects that survive one or two compactions of the child heap can be promoted into the parent's space, reducing need for future copy-compactions of those objects. Short-lived objects are not promoted. The main constraint is that promoted objects cannot contain back-references into our child heap. Otherwise we'd need to track back references, which is not simple. We would want to guarantee that, when an object is promoted, its dependencies are also promoted.
 
-Memory utilization may still be high due to reusing the free space between parallel threads. For example, if we have 20 threads and a pool of 21 heaps, we can guarantee progress and only have 5% space overhead for toplevel GC. Internally, we might allow a nursery to grow until the survivors arena is a fair portion of the total memory. (We could also use less than the total nursery, initially, sort of 'grow' into it in reasonable chunks.)
+An important consideration is that we can promote child heaps when their dependencies are promoted. Long-lived parallel computations are thus implicitly flattened, reducing hierarchy and providing access to the larger parent heap in case growth is necessary to proceed. So there is implicit balancing of the hierarchy. If our quota allows for growing a heap, we can also add a survivor space to the parent heap.
 
-Hierarchical nurseries could use the same properties, except with an interesting feature: we could allocate the 'twin' of a child nursery on the opposite nursery arena. Then we only need to guarantee that a child nursery is located properly before the thread returns. This gives us better utilization for lightweight parallelism.
+*Aside:* Since we compute "is this pointer in my heap" for compaction, we can also support external object references - for stowage, memoization, static link objects, shared binary data, etc..
 
+Anyhow, I plan to pursue this option:
 
-*Aside:* It is feasible to promote toplevel survivors into a reference-counted structure... an ultimate 'deferred' reference count of sorts. OTOH, we might limit that toplevel to stowage, memoized dictionary computations, and other persistent structures.
+* hierarchical compacting heaps
+* free-lists for flyweight objects
 
+I believe this will offer a superior option to most conventional GCs.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Each thread will use a lightweight nursery with a survivor arena for its computation efforts. This enables a lot of computations without performing any RC updates. 
-
-We can feasibly model *hierarchical* nurseries, where we model one nursery within another and we await all child computations nurseries before we can collect the parent. This would be suitable for lightweight parallelism. In addition, multiple *sibling* nurseries may share the same RC heap with minimal collusion. 
-
-Interestingly, we could just use hierarchical nurseries 'all the way down' starting with a top-level computation. This would be much simpler than a hybrid model.
-
-Efficient reference counting means not updating the RC with every pointer manipulation. I propose a variant of deferred, ulterior RC. A bounded nursery with a survivor arena enables a lot of computation with volatile objects between rare RC updates. 
-
-For parallelism, I have a choice. Either I attempt to share parts of the nursery between multiple threads, or I must promote objects out of the nursery before I support parallelism. If I want coarse-grained RC *and* fine-grained parallelism, this really isn't much of a choice: I need a shared nursery. 
-
-Of course, the moment I share my nursery, I'll want sub-nurseries to help delay synchronization of threads. So the problem is somewhat regressive. A nursery is what exists to give a single thread some coarse-grained 'work', so perhaps I should promote anything else to the RC arena early on. 
-
-Or alternatively, I should get rid of the 'threads' idea and instead model each heap as a process with limited message passing. In this 
-
-Objects are promoted to a 'survivor space' that may be shared between threads. When we eventually compact the heap, we'll have objects that survive the survivor spaces. Those will be promoted into the RC space, shrinking the effective nursery.
-
-
-
-
-
-So we might do something like a shared survivor space for multiple nurseries. 
-
-
-
-
-
-
-
-Idea: a big nursery, with small fixed-size segments. Some segments are 'survivors' and are shared among multiple threads in the nursery. 
-
-Multiple threads share the nursery, each one taking ownership of specific segments but *sharing* the survivor spaces. 
-
-
-
-* a small nursery per thread
-* large, shared survivor arenas
-* can promote nursery chunks into arena
-
-* can promote multiple small nurseries to arenas
-* 
-
- We might collect the nursery ten or a hundred times per RC step, depending on how much long-lived information survives and nursery size.
-
-Deferral could use buffered decrefs, or a simple snapshot of the program in the nursery. This would happen quite naturally with nursery allocation anyway. We incref the next snapshot then decref the old one, with special additions for 'large' objects, and special 'fast' promotions for parallel computation. A snapshot could potentially serve as a failure fallback, too.
-
-This structure does have some challenges. For parallelism, I probably want a nursery per thread rather than a shared nursery for many threads. Though, I suppose I could go either way with that, if I simply allocate chunks out of the nursery per thread or have a limited number of threads per nursery.
-
-
-I could use a multi-generational nursery, i.e. with an intermediate survivor space to delay interaction with the RC heap. This would add moderate complexity, but could reduce checkpoint frequency by up to a couple orders of magnitude, and would certainly enable a great deal more tuning. I'm a bit hesitant about this, mostly because it will interact with parallelism. 
-
-A simpler RC-per-nursery step, promoting references that survive twice, should be sufficient. And I can apply parallelism the moment it is promoted 
-
-Interestingly, the 'decref old snapshot' goal only needs the information used to incref the prior snapshot. I could record this precisely. 
-
-Use of program snapshots is interesting because it would also support a general failure fallback. 
-
-The idea here is that most of our pointer manipulations will occur in the nursery, and we don't need to track any of those, perhaps with a special exception when we allocate a larger object than our nursery supports. For that, we might need to track special RC objects allocated by the nursery to 'decref' after we're finished.
-
-
-
-Our initial program snapshot could be an empty program, easily enough. 
-
- unless we construct
-
-This design has a nice feature: we always have a snapshot of our program. We could easily use this for simple failure handling, roll back. 
-
-
-That would be useful for other reasons, anyway - backtracking each computation. 
-
-
-
-Naive reference counting is inefficient, especially in parallel code where RC updates must be atomic. A mitigating technique: defer RC for roots to discrete steps. At each step, incref the new roots then decref the old ones. This requires holding a snapshot of the old roots. The actual RC updates can be batch processed, guarded by a mutex, so those costs are amortized.
-
-Ideally, I would also defer RC for volatile objects.
-
-A viable option is support a per-thread 'nursery' where small, volatile objects are allocated and dropped without book keeping. We then require a copy-collector and bump-pointer allocator. When the nursery is out of space, we update reference counts then compact objects into a fresh nursery. 
-
-We could augment the nursery with a survivor space. The idea would be to promote only survivors of multiple nursery passes: nursery, nursery first pass survivor, second-gen nursery, second-gen survivor, reference-count. This would limit us to four copies of an object, with the primary nursery being processed multiple times for each second-gen nursery step. 
-
-This way, small volatile objects are eliminated by the time we reach the mature space, and we can make some useful guarantees about exactly how much effort we expend on copies. The RC update pass would be deferred until we handle survivor-level copies, so would be a rare event (at cost of holding onto older checkpoints). 
-
-
-An intriguing possibility is to only perform the RC pass when we compact the survivor space. We might then have a dozen nursery first-gen nursery collections per RC pass, at the cost of always keeping the prior snapshot in the survivor space.
-
-So... we'd have RC only for long-lived objects shared by multiple threads. 
-
-An interesting option is to combine the RC heap with structure sharing or interning - implicit stowage. Doing so is certainly viable, and would guarantee a convenient structural property on representations. But it is not critical.
-
-
-
+## Memory Representations
 
 In memory, a program will be represented by a contiguous array of words terminating in a special `\return` word, or a variant for tail-call optimizations. A call-return auxiliary stack is used. We will also try to optimize for `[A]a` patterns, which become `\push A \pop`. This generalizes to a pattern `[A] b b b a` which we might process by moving the third item.
 
