@@ -25,34 +25,25 @@ It is feasible to further compile programs into a register machine, essentially 
 
 ## Memory Management
 
-For efficient use of memory and CPU, I will want to logically copy most objects on `c`. Consequently, we cannot recycle memory on `d` unless we somehow know that it's the final logical copy. 
+For efficient use of memory and CPU, I want to logically copy objects on `c`. Consequently, I cannot recycle memory on `d` unless I know that it's the final logical copy. I will need automatic memory management.
 
-Automatic memory management in Awelon is simpler than in most languages. Awelon is acyclic, so could support reference counting. Awelon does not support ad-hoc mutation, reducing need for write barriers. Awelon is pure, which reduces concerns about observable latency for side-effects. (Granted, we still want predictable computation performance for external effects models.)
+Automatic memory management in Awelon is simpler than in most languages. Awelon is acyclic, so could support reference counting. Awelon does not support ad-hoc mutation, reducing need for write barriers. Awelon is pure, which reduces concerns about observable latency for side-effects. (Granted, I still want predictable computation performance for external effects models, and the ability to compute in the background in parallel.)
 
 I am concerned about memory fragmentation as caused by free lists. Memory fragmentation results in degrading performance for long computations. I feel compacting collectors are simpler and more trustworthy.
 
-Compacting collectors are notorious for poor memory utilization. A certain amount of space must be kept free to perform compaction. For example, with a two-space collector, up to 50% of memory is kept free. Fortunately, this issue is mitigated by parallelism in a multi-agent environment. For example, if we have a hundred computations allocated 10MB each, and less than 1% of our time is spent on compaction, then we could make do with just one blank 10MB heap and 1% memory overhead. In practice we would want extra blanks to support parallel compaction, but the overhead can be controlled.
+Compacting collectors are notorious for poor memory utilization. A certain amount of space must be kept free to perform compaction. For example, with a two-space collector, 50% of memory is kept free. Fortunately, this issue is mitigated by parallelism in a multi-agent environment. For example, if I have a hundred computations allocated 10MB each, and less than 1% of my time is spent on compaction, then I could make do with just one blank 10MB heap and 1% memory overhead for GC. In practice I would want extra blanks to support parallel compaction, but the overhead can be well under the 50% case.
 
 Another important concern is lightweight parallelism. Compaction with active mutators is not simple, so we'll want to stop work before performing compaction. But synchronization isn't cheap, so we'll want to amortize it by delaying compaction as much as feasible (using only simple techniques). 
 
 To delay compaction, we *must* recycle memory before compaction.
 
-We can recycle memory by explicit use of free-lists internally to a heap. While we cannot free arbitrary objects, we can recognize a useful subset of objects that have 'linear' in structure, such as temporary tuples or compositions. We can recycle the memory, return it to the appropriate heap for reallocation. Whether this is worth the effort would really depend on a lot of factors - e.g. returning data to a parent heap would require synchronization on every free-list access, which is not a good thing. Fortunately, with free-lists as a secondary technique, we are free to heuristically leak some memory and focus free lists only on flyweight patterns and related techniques that are efficient, avoid synchronization, and have nice locality properties.
+An intriguing option is hierarchical compaction. We model evaluation as occurring within a 'child' heap. The parent heap can provide a survivor space. We promote objects that survive two collections in the child to a survivor space so they are not copied by further compactions. (We can also promote child heaps that survive.) This delays compaction of the full 'parent' heap until it is out of space. We can explicitly model survivor spaces *within* the parent that can be compacted together with their origin. This would further delay compaction of the parent, and would offer considerable benefits even if performed only out to a few generations.
 
-An intriguing possibility is *hierarchial* compaction, managing child heaps by free list.
+So we can have a parent heap host a bunch of child heaps that are each compacted independently, growing up to multiple generations with minimum synchronization to allocate survivor and compaction spaces in the parent heap. When a thread reduces to a final value, we recover the extra heap space when the parent computation performs its next compaction. 
 
-Hierarchical structure gives us an implicit survivor space via the parent. Objects that survive one or two compactions of the child heap can be promoted into the parent's space, reducing need for future copy-compactions of those objects. Short-lived objects are not promoted. The main constraint is that promoted objects cannot contain back-references into our child heap. Otherwise we'd need to track back references, which is not simple. We would want to guarantee that, when an object is promoted, its dependencies are also promoted.
+This gives us some relatively lightweight *confined* parallelism, like `(par)` where we don't share intermediate results with other threads before evaluation completes. For accelerated KPNs, we might need to process subnet inputs in confined batches, enabling intermediate results between batches and relatively coarse-grained threading.
 
-An important consideration is that we can promote child heaps when their dependencies are promoted. Long-lived parallel computations are thus implicitly flattened, reducing hierarchy and providing access to the larger parent heap in case growth is necessary to proceed. So there is implicit balancing of the hierarchy. If our quota allows for growing a heap, we can also add a survivor space to the parent heap.
-
-*Aside:* Since we compute "is this pointer in my heap" for compaction, we can also support external object references - for stowage, memoization, static link objects, shared binary data, etc..
-
-Anyhow, I plan to pursue this option:
-
-* hierarchical compacting heaps
-* free-lists for flyweight objects
-
-I believe this will offer a superior option to most conventional GCs.
+Besides hierarchical structure, we might also try to use free-lists for certain flyweight pattern objects, like intermediate tuples. 
 
 ## Memory Representations
 
