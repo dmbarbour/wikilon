@@ -248,9 +248,9 @@ Evaluation of an Awelon program results in an equivalent Awelon program, hopeful
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Words rewrite to their evaluated definitions. However, words do not rewrite unless doing so leads a result other than a trivial inlining of the word's evaluated definition. This constraint is called lazy linking, and it supports various performance and aesthetic goals. An undefined word represents an unknown and does not evaluate further. 
+Words rewrite to their evaluated definitions. However, words do not rewrite unless doing so leads a result other than a trivial inlining of the word's evaluated definition. This constraint is called lazy linking, and it supports various performance and aesthetic goals. An undefined word represents an unknown and does not evaluate further.
 
-Awelon's evaluation strategy is simple:
+Awelon's basic evaluation strategy is simple:
 
 * rewrite outer program
 * evaluate before copy 
@@ -258,7 +258,7 @@ Awelon's evaluation strategy is simple:
 
 Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case.
 
-Annotations can tune evaluation, enabling developers to leverage parallelism, memoization, stowage, deferred computation, fail-fast errors, etc.. The `[A](eval)` annotation will force 'immediate' evaluation of `A` as if the value were about to be copied.
+A runtime is not constrained by this basic strategy. For example, a runtime could perform logical copies without immediate evaluating at its own discretion and support sharing internally. Evaluation could be tuned by annotations or runtime evaluation options. Parallelism, memoization, stowage, deferred computation, fail-fast errors, optimizations, etc.. are accessible via annotations. See also *Optimization*, below.
 
 ## Named Values
 
@@ -320,21 +320,21 @@ However, static linking is not constrained to trivial redirects. Statically comp
 
 There are many semantically valid rewrites that Awelon's basic evaluator does not perform. For example:
 
-        [A]a[B]a    => [A B]a       apply composes
-        [A]a d      => d A          tail call optimization
+        [A] a [B] a => [A B] a      apply composes
+        [A] a d     => d A          tail call optimization
         [] a        =>              apply identity is a NOP
         b d         => d d          either way we drop two values
         c d         =>              drop the copy
         c [d] a     =>              drop the other copy
         [i] b       =>              because [A][i]b == [[A]i] == [A]
-        b i         =>  i           expansion of [X][F]b i == [X][F]i
-        [] b a      =>  w           by definition of w
-        c w         =>  c           copies are equivalent
-        [E] w d     =>  d [E]       why swap first?
+        b i         => i            expansion of [X][F]b i == [X][F]i
+        [] b a      => w            by definition of w
+        c w         => c            copies are equivalent
+        [E] w d     => d [E]        why swap first?
 
-A runtime has discretion to perform optimizations that are not visible in the evaluated result, based on escape analysis. The static link object is a good target for such efforts. Visible optimizations may be accessed through annotations or controlled by runtime flags. 
+A runtime has discretion to perform optimizations that are not visible in the evaluated result, based on escape analysis. The static link object is a good target for such efforts. Any visible optimizations or simplifications should be explicitly controlled by annotations or evaluator options.
 
-Pattern-matching rewrites tend to be fragile, affected by abstraction and order of evaluation. There are more robust optimization techniques with good results. For example, partial evaluation in Awelon is usually limited by inability to represent partial values. Evaluating with 'free variables' in the form of undefined words can help:
+Pattern-matching rewrite optimizations tend in general to be fragile, affected by abstraction and order of evaluation. There are more robust optimization techniques with good results. For example, partial evaluation in Awelon is usually limited by inability to represent partial values. Evaluating with 'free variables' in the form of undefined words can help:
 
 * assume `A B C` words unused and undefined 
 * evaluate `[C][B][A]function` to completion
@@ -365,7 +365,8 @@ Static type information can also support optimizations. For example, if we know 
 
 For sum types, the analog is to precompute programs for different arguments:
 
-        Generic 'if' for binary conditions:
+        a generic binary 'if'
+        if : S (S → (A | B)) (A → S') (B → S') → S'
         if = (a3) [] b b a (cond) i
 
         type Bool = ∀S,S'. S (S → S') (S → S') → S'
@@ -506,7 +507,7 @@ Trace logs can be associated with each frame to place them on the timeline.
 
 Awelon can be evaluated without static typing. There is no type driven dispatch or overloading. But if we can detect errors early by static analysis, that is a good thing. Further, static types are also useful for verifiable documentation, interactive editing (recommending relevant words based on type context), and performance of JIT compiled code. Strong static type analysis makes a *very* nice default.
 
-We can represent our primitive types as:
+We might represent our primitive types as:
 
         a   : S B (S → S') → S' B
         b   : S B (E B → E') → S (E → E')
@@ -514,23 +515,23 @@ We can represent our primitive types as:
         d   : S A → S
         [F] : S → S type(F)
 
-The type sequence `S C B A` aligns with a program structure `S[C][B][A]`. Effectively, `S` is the remainder of our program 'stack' when we view the program as rewriting a stack-like structure. In a more conventional language, this might correspond to a product type `(((S * C) * B) * A)`.
+The type sequence `S C B A` aligns with a program structure `S[C][B][A]`. Effectively, `S` is the remainder of our program 'stack' when we view the program as rewriting a stack-like structure. In context of Awelon, we know that value types `C B A` must be first class functions, which potentially encode data.
 
-Use of annotations can augment static type analysis by providing a validation. Structural and substructural assertions mentioned above can be validated statically. A remaining concern is static typing of conditional behavior. We can certainly represent various conditional data types:
+Annotations can augment static type analysis by providing an assertion against which we can validate an inference. Structural and substructural assertions mentioned above can be validated statically. A remaining concern is static typing of conditional behavior. We can represent various conditional data types:
 
-        (bool)  S (S   → S') (S   → S') → S'
-        (opt)   S (S   → S') (S A → S') → S'
-        (sum)   S (S B → S') (S A → S') → S'
-        ..
-        (cond)  S (A   → S') (B   → S') → S'
+        (bool)      S (S   → S') (S     → S')   → S'
+        (opt)       S (S   → S') (S A   → S')   → S'
+        (sum)       S (S B → S') (S A   → S')   → S'
+        (list)      S (S   → S') (S A B → S')   → S'
+        (cond)      S (A   → S') (B     → S')   → S'
 
-We can use knowledge of conditional data to check for inconsistencies between branches. But inferring these types is difficult. Annotations can provide a much needed hint. I imagine programmers will want annotations for many specific common conditional types - naturals, texts, binaries, lists, labels, tries, etc.. Anything we accelerate or use frequently enough for a runtime to recognize. 
+Knowing these types, we can also check for consistency between conditional branches. Unfortunately, inferring these types is difficult. Annotations can provide a much needed hint. I imagine programmers will want annotations for many common types - naturals, texts, binaries, lists, labels, records, and so on. Anything we accelerate or use frequently enough for a runtime to recognize. 
 
-Sophisticated type declarations cannot effectively be provided within the Awelon code. But we can support a convention of defining `foo.type` to describe the type of `foo`. This would provide an extra point for validation, and would potentially support expression of powerful types - dependent types, behavioral equivalencies, invariants, contracts, etc.. - with auxiliary proofs as needed.
+Sophisticated type declarations cannot be represented effectively within the program. But we can support a convention of defining `foo.type` to describe the type of `foo`. This would provide an extra point for validation, and would potentially support expression of powerful types - dependent types, behavioral equivalencies, invariants, contracts, etc.. - with abstraction and auxiliary proofs as needed.
 
 Non-terminating evaluation in Awelon is always an error. Awelon evaluation is pure, so there is no utility in divergence. As part of static typing, a light static termination analysis should be performed. Any obvious divergence should be reported as an error.
 
-*Aside:* A list, in Awelon, is usually heterogeneous. Homogeneous lists may be expressed by annotation, or by use in context of certain fold functions.
+*Note:* Heterogeneous lists are easily represented in Awelon. List cons cells don't necessarily need to be used for lists. However, a typical 'fold' or 'map' operation may constrain all elements to a common type. Users might benefit from distinct annotations for homogeneous vs. heterogeneous lists.
 
 ## Gradual Typing and Macro Evaluation
 
@@ -573,7 +574,7 @@ A useful way to encode labeled sums is by deep primitive sum structures. That is
 
 Here the label is encoded as `(RL | RR)* LL`, where `RL` corresponds to constructor `[inL] b [inR] b`. The `(RL | RR)*` structure represents a finite `(0 | 1)*` bitfield, within which we might encode texts or numbers. The final `LL` terminates the label. This encoding has several nice properties. It is a simple regular language and a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list.
 
-Ideally, a runtime should accelerate labeled data. Deep sums could be represented as compact bit fields, sparse tries as radix trees. We could optimize to use more conventional variant and record types under the hood. Effective support for labeled data could make Awelon a lot more accessible for a variety of use cases.
+Ideally, a runtime should accelerate labeled data. Deep sums could be represented as compact bit fields, sparse tries as radix trees. We could optimize to use more conventional variant and record types under the hood. Effective support for labeled data could make Awelon a lot more accessible and extensible for a variety of use cases.
 
 ## Reactive Process Networks
 
