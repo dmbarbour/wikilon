@@ -25,35 +25,65 @@ It is feasible to further compile programs to use a register machine, essentiall
 
 ## Memory Management
 
-For efficient use of memory and CPU, I want to logically copy objects. Consequently, I cannot recycle memory on drop, unless I somehow know it's a final logical copy. I will need automatic memory management. Even so, Awelon's acyclic structure (or directed-acyclic structure, with logical copies) and purity (which reduces latency concerns) can potentially simplify memory management in Awelon relative to other languages. Also, I can potentially optimize temporary structures that are not copied.
+I'll logical copy on `c`. Logical copies reduce overheads for common patterns.
 
-I am concerned about memory fragmentation caused by free lists. Memory fragmentation results in degrading performance for long computations. Compacting collectors as a basis seem simpler and more trustworthy.
+Awelon is a simpler target than most. Pure computations cannot directly observe internal evaluation latencies, so pause times aren't critical. Since we don't have ad-hoc mutation, we don't need write barriers in a generational collector. Pure `(par)` style parallelism can be isolated via hierarchical heaps. Awelon doesn't produce memory cycles. We can design such that heaps are 'unidirectional', no references up the heap.
 
-Compacting collectors are notorious for poor memory utilization. A certain amount of space must be kept free to perform compaction. For example, with a two-space collector, 50% of memory is kept free. Fortunately, this issue is mitigated by parallelism in a multi-agent environment. For example, if I have a hundred computations allocated 10MB each, and less than 1% of my time is spent on compaction, then I could make do with just one blank 10MB heap and 1% memory overhead for GC. In practice I would want extra blanks to support parallel compaction, but the overhead can easily be well under the 50% case.
+Memory fragmentation hurts locality, performance, and predictability of performance. Copy collectors are a good alternative, except that they reorder the heap which also hurts predictability for cache behavior and can hinder lightweight tracking for multiple generations. I favor mark-compact algorithms that preserve heap order.
 
-Another concern is lightweight parallelism. Compaction with active mutators is not simple, so we'll want to pause work before compaction. But synchronization isn't cheap, so we'll want to amortize synchronization by delaying compaction as much as feasible using simple techniques. 
+I'll probably use generational GC to reduce frequency of copying for long-lived objects. Also, hierarchical GC to support lightweight threads with coarse-grained synchronization. It seems feasible to simply copy a hierarchical heap without compacting it, assuming there are no external references directly into a hierarchical heap (i.e. such that all references are via thread-control-block).
 
-To delay compaction, we *must* recycle memory before compaction.
+Which mark-compact algorithm should I use?
 
-An intriguing option is hierarchical compaction. We model evaluation as occurring within a 'child' heap. The parent heap can then provide a survivor space. We promote objects that survive two collections in the child to a survivor space so they are not copied by further compactions. This both controls frequency of copies and prevents the parent from filling too quickly because we only promote relatively long-lived objects. 
+I want constant space overhead for GC, such that we conceptually could have allocated all the space needed for GC up front. This means GC mustn't require a stack. I also want to use Lisp-like cons cells (simple word pairs) for a few cases like binding operator `b` and potentially for list data. Anything that requires an extra word per object seems relatively steep.
 
-We can explicitly model the survivor spaces within the parent, too. Thus, we can model an entire compaction heap hierarchically, with multiple generations of survivors. No information is shared between heaps, we only observe the final result of an evaluation. This works great for lightweight `(par)` style parallelism. For KPNs, we might need to evaluate in batches to move intermediate results between subnets and processes.
+Boortz and Sahlin developed an algorithm specifically to leverage unidirectional heaps that avoids space overheads and is a fair bit simpler than conventional compaction algorithms. This algorithm does have disadvantages. First, it moves each surviving object twice per compaction (up a heap, then back down). Second, it reads dead objects, which means it has a cost proportional to total heap size instead of just the survivor set. Each of these disadvantages can be mitigated by a generational collector.
 
-Besides hierarchical compaction, we might benefit from flyweight free-lists for short-lived objects for tuples or binding like `[A] b b b`. However, it isn't clear this will offer sufficient benefits to outweigh the extra costs of managing a free list and complexity of tracking sharing.
+Conventional algorithms need bits for marking objects. We use a separate bitmap per heap to track GC bits. For tri-color marking, this would require about 2 bits per object. If I assume each object is at least two words, the space overhead is reduced to 1/32 or 1/64 (depending on word size). This seems feasible. A marking algorithm could then use a fixed-size stack together with incremental marking techniques. For example, we mark an object 'grey' if we reach the stack limit, then scan for remaining grey objects before compacting. Compaction can use an offset table approach.
 
-*Aside:* An unfortunate consequence of shared objects in a DAG is that I cannot perform constant-space traversals, since I don't know how many times I'll traverse an object. I need a stack to serialize values, or even to compute the size of a value.
+I find the Boortz and Sahlin algorithm more appealing, despite its disadvantages. I'll try it first.
+
+*Aside:* An unfortunate consequence of shared objects in a DAG is that I cannot perform constant-space traversals, since I don't know how many times I'll traverse an object. I need a stack to serialize a value.
 
 ## Memory Representations
 
-A program will generally be represented by a header followed by a contiguous array of words terminating in a special `\return` word, or a variant for tail-call optimizations. An optimizer may rewrite certain patterns under the hood like `[A]b a` to `\push2nd A \pop`, but nothing that hinders serialization of the original Awelon code.
+Probably common object types, now and later:
 
-An evaluation 'thread' generally consists of a program under construction, the program under evaluation (a block offset pair), a call-return continuation stack, preallocated space and a heap for further allocations, etc.. For efficient compaction, our call-return stack will contain only plain old data objects. Thus, for `\return` we'll use a block offset pair instead of a direct reference into a block.
+* programs, sequences of words and values
+* small natural numbers
+* `[[B]A]` partial binding of programs
+* `[[Hd][Tl]:]` list and tree structures
+* `[[A] inR]` optional values, potentially
+* texts, binaries, arrays (logically lists)
+* labels and labeled data (records, variants)
+* unboxed vectors and matrices for math
 
-The block header would include size, substructural attributes, annotation flags, evaluation status, etc.. We might want to include a slot for extended metadata.
+I can use a few tag bits per pointer to help with discriminating values. This is mostly important for *small* objects, such as two-word cons cells where adding an extra word header would constitute 50% overhead. Larger objects can afford the header word, and most need them anyway to discriminate more types of objects. 
 
-Within a block, we will reference Awelon words, annotations, and other blocks. 
+Another area to use a tag bit is to distinguish actions (words, or logical inline blocks) from values, such that I can test bindings and arities with a simple pointer check. For words, it would be useful to distinguish the 'static inline' variant (perhaps via logical inlining of the word's program) vs. lazy link judgement.
 
-We could use tag bits to distinguish some things. However, doing so is useful only for small values where the header is a significant burden. Small natural numbers would be a classic example. Ideas where tag bits might help:
+Optimizing bind to use a cons cell seems useful as a frequent action for construction of closures and data objects. In general, binding might extend also to `[B A]` composition if we support logically inlined blocks, which might be useful for various accelerators. 
+
+Optimizing data lists to use Lisp-like cons cells could be useful as a basis for many lightweight data structures, especially given that the cons cells are easily heterogeneous. Lists would be used to model trees in terms of a `(node-value, list-of-children)` pair, for example. 
+
+Optimizing for the common `[[A] inR]` case of binding, e.g. reducing it to a single tag bit, could potentially save allocations for activities that repeatedly wrap and unwrap optional values - e.g. the Maybe monad. But I'm not sure I have sufficient bits for this use case. The benefits would be marginal if I later perform allocations for operations on a stack. 
+
+*Aside:* I wonder if optional/maybe values costing the same as singleton lists would encourage a preference for relational/logic programming, streamable outputs, backtracking, etc. via list monad. If so, I'm willing to call that a win.
+
+Labels and labeled data need some careful consideration. I must still work out how they might interact with editable views and so on - ideally without direct language support. The partial binding could work for labeled values. Labeled records, in general, might benefit from memoizing a 'perfect hash' for each set of labels. Also, we might not model records directly, but rather record *construct
+
+ Optimizing lists to use cons cells could simplify efficient representation for many list or tree data structures. Large lists might be compacted into arrays, but only by explicit action.
+
+Programs can be represented by contiguous arrays of actions terminating in `\return` or one of a few variants for tail-call optimization. We might also have some means to represent that one block is logically 'inlined' into another.
+
+
+A program will be represented by a header followed by an array of words terminating in a special `\return` word, or a variant for tail-call optimizations. The evaluator will rewrite certain patterns under the hood like `[A]b a` to `\push2nd A \pop` to use the auxiliary stack, but only for stuff we can serialize back to the original code without global rewrites.
+
+Our evaluation thread will have its heap, a program under construction, and the call-return stack. For call-return, in context of compaction, we might need a pointer to the start of each block and our offset. OTOH, the Boortz algorithm mentions correct handling for overlapping objects. If that works out, call-return could be a simple pointer movement even when we compact code, and we might need a 'header' for our blocks only in context of tracking substructural attributes and so on.
+
+
+
+We use tag bits to distinguish some things. However, doing so is useful only for small values where the header is a significant burden. Small natural numbers would be a classic example. Ideas where tag bits might help:
 
 * small natural numbers
 * list cons cells - `[hd tl :]`
@@ -63,6 +93,14 @@ We could use tag bits to distinguish some things. However, doing so is useful on
 * support logical inline blocks
 
 Distinguishing values vs. actions could improve performance for binding and data shuffling, as does an optimized representation for tuples and bindings. List cons cells are heterogeneous and provide an adequate basis for representing a wide variety of structured data (lists, trees, etc.). 
+
+An interesting opportunity is to represent lists via array-like constructs, perhaps with a terminal, to reduce pointer-chasing. 
+
+ This could work especially well with an order-preserving, compacting GC because I could collect just part of a list. 
+
+, especially if we can support overlapping objects. If we can support lists as arrays (and logical flatmaps of lists) that would cover a lot of basic data structures *very* efficiently.
+
+
 
 Optimizing list cons cells could offer adequate efficiency for representing many data structures (trees, lists). Optional or sum type values offer more modest benefits, potentially saving allocation of a word for sum wrappers. Optimizing tuples and bindings is useful because it's a common intermediate structure.
 
@@ -74,9 +112,15 @@ Consider one concrete bit-level representation:
         101     tagged objects 
         111     tagged actions
 
-Words would be tagged actions, likely interned for the evaluation.
 
-I could reduce the range for small numbers a little to make room for more data. But I'd still have four value types. With three tag bits and four value types, I simply don't have bits to spare for 'optional' values. I could introduce a fourth tag bit for values in the right, and force 16-byte alignment for allocations (which isn't a problem for a 64-bit machine). Whether this would offer significant benefits depends on usage, e.g. if we use the Haskell style `Maybe` monad it could offer moderate benefits to avoid wrapping and unwrapping the state in each step.
+Words would be tagged actions, but might be managed in an external space separately from the evaluation heap.
+
+
+An interesting possibility regards list representations. It seems feasible to model lists with array-like structures, such that we can split or recombine lists 
+
+I could reduce the range for small numbers a little to make room for more data. But I'd still have four value types. With three tag bits and four value types, I simply don't have spare bits for 'optional' values. I could introduce a fourth tag bit for values in the right, and force 16-byte alignment for allocations (which isn't a problem for a 64-bit machine). Whether this would offer significant benefits depends on usage, e.g. if we frequently use the Haskell style `Maybe` or `Error` monad it could offer significant benefits to avoid wrapping and unwrapping the state in each step.
+
+
 
 I'll need to experiment with representations a bit to get it right. Fortunately, nothing depends on a stable bit-level representation in the evaluator, so I have freedom to experiment.
 

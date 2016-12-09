@@ -527,39 +527,21 @@ Annotations can augment static type analysis by providing an assertion against w
 
 Knowing these types, we can also check for consistency between conditional branches. Unfortunately, inferring these types is difficult. Annotations can provide a much needed hint. I imagine programmers will want annotations for many common types - naturals, texts, binaries, lists, labels, records, and so on. Anything we accelerate or use frequently enough for a runtime to recognize. 
 
-Sophisticated type declarations cannot be represented effectively within the program. But we can support a convention of defining `foo.type` to describe the type of `foo`. This would provide an extra point for validation, and would potentially support expression of powerful types - dependent types, behavioral equivalencies, invariants, contracts, etc.. - with abstraction and auxiliary proofs as needed.
+Unfortunately, simple static types are frequently inexpressive. Sometimes they constrain more than they help.
 
-Non-terminating evaluation in Awelon is always an error. Awelon evaluation is pure, so there is no utility in divergence. As part of static typing, a light static termination analysis should be performed. Any obvious divergence should be reported as an error.
+We can introduce a simple escape. Consider a `(dyn)` annotation used as `[F] b b (dyn)` with formal behavior `[A](dyn) => [A]`. The presence of `(dyn)` does not suppress obvious static type errors, but could generally suppress errors that result from being *unable* to infer static types that might be too sophisticated for our simple checker - especially dependent types. Intriguingly, the ability to eliminate `(dyn)` via partial evaluations could mean we can improve static types as we provide more static information and usage context.
 
-*Note:* Heterogeneous lists are easily represented in Awelon. List cons cells don't necessarily need to be used for lists. However, a typical 'fold' or 'map' operation may constrain all elements to a common type. Users might benefit from distinct annotations for homogeneous vs. heterogeneous lists.
+More generally, we can introduce a simple convention of defining `foo.type` to declare a type for `foo`. This enables flexible abstraction and composition of type descriptions, expression of sophisticated types (contracts, Hoare logic, etc.), and provision of auxiliary hints or proofs. If we want to properly support dependent, existential, higher order, GADT, etc. types, we'll probably need to do so at this layer. Optimally, the type checker operating at this layer would itself be defined as a dictionary function.
 
-## Gradual Typing and Macro Evaluation
+Related to static typing, non-terminating evaluation in Awelon is always an error. There is no utility in unbounded divergence for a pure computation, though we might use arity annotations to defer computations and represent coinductive structure. In any case, static type analysis should attempt a limited termination analysis. While solving the halting problem isn't possible in general, obvious errors can always be reported.
 
-In context of metaprogramming, it is frequently useful to work with intermediate structures for which we do not know the type. For example, consider:
-
-        1 2 3 4             "abcx → ax^2 + bx + c"  runPoly
-        "Red Warrior" 42    "%s takes %u damage!"   printf
-
-In scenarios like these, computing the type of `runPoly` or `printf` independent of context may require sophisticated dependent types. But computing a type for `"abcx → ax^2 + bx + c" computePoly` or `"%s takes %u damage!" printf` might only require some partial evaluation before static type checking. This implies staging similar to macro evaluation.
-
-To make this intention explicit, we could introduce a `(dyn)` annotation:
-
-        "abcx → ax^2 + bx + c"  runPoly
-            == "abcx → ax^2 + bx + c" compilePoly (dyn) i
-            == [polynomial behavior](dyn) i
-            == [polynomial behavior] i
-
-The presence of `(dyn)` then informs a static analysis that some code might be difficult to validate. It also introduces a mode for partial evaluations: we could easily target elimination of `(dyn)` annotations. In presence of `(dyn)` we might suppress warnings when no static safety judgement can be made, but still raise obvious type errors. 
-
-Dynamic evaluation is considered *complete* when a value is produced, that is `[A](dyn) == [A]`. However, many functions will remain dynamic even after evaluation. Careful use of `(dyn)` provides a simple basis for gradual typing in a system that defaults to static types.
-
-*Note:* While `(dyn)` can be useful for otherwise problematic DSLs
+*Note:* Heterogeneous lists are easily represented and useful in Awelon. A typical 'fold' or 'map' operation might not apply, but many other operations like zip-map, indexing, or sequencing operations are still applicable. Users might benefit from distinct annotations for homogeneous vs. heterogeneous lists, and for structured intermediate forms like command lists.
 
 ## Labeled Data - Records and Variants 
 
 Labeled sum types (aka variants) allow conditional discrimination on a label. Labeled product types (aka records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data is self-documenting (label informs human) and extensible (add more labels).
 
-A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] inL] inR] inL]` structure where the left-right-left path encodes the label. Unlike label-value pairs, deep sums do not require dependent types. A labeled product can then be modeled as a trie on the label. Consider:
+A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] inL] inR] inL]` structure where the left-right-left path encodes the label. Unlike label-value pairs, deep sums do not require dependent types. A labeled product could feasibly be modeled as a heterogeneous trie on the label. Consider:
 
         (Deep Sums)
         [[[A] inL] inL]
@@ -572,9 +554,15 @@ A useful way to encode labeled sums is by deep primitive sum structures. That is
         (Merged Trie)
         [[[A] ~ :] [~ [[[B] ~ :] ~ :] :] :]
 
-Here the label is encoded as `(RL | RR)* LL`, where `RL` corresponds to constructor `[inL] b [inR] b`. The `(RL | RR)*` structure represents a finite `(0 | 1)*` bitfield, within which we might encode texts or numbers. The final `LL` terminates the label. This encoding has several nice properties. It is a simple regular language and a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list.
+Here the label is encoded as `(RL | RR)* LL`, where `RL` corresponds to constructor `[inL] b [inR] b`. The `(RL | RR)*` structure represents a finite `(0 | 1)*` bitfield, within which we might encode texts or numbers. The final `LL` terminates the label. This encoding has several nice properties. It is a simple regular language and a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list. 
 
-Ideally, a runtime should accelerate labeled data. Deep sums could be represented as compact bit fields, sparse tries as radix trees. We could optimize to use more conventional variant and record types under the hood. Effective support for labeled data could make Awelon a lot more accessible and extensible for a variety of use cases.
+Unfortunately, while tries are an excellent data structure, they are awkward to work with. Rigid ordering of labels within a trie is inconvenient for human use. Human meaningful labels are very sparse in the above encoding, which does not result in space-efficient representatins. (Use of a radix tree might help, but has a significant complexity cost.) For acceleration, exposing the record's in-memory representation to normal user functions is not optimal.
+
+Instead of working with the trie directly, we should represent a function that writes a trie by injecting a series of label-value pairs. For example, a function `[[A] "foo" KV [B] "bar" KV]` might write labels `foo` and `bar` into a record with the associated values (or `label 'o 'o 'f write`  to avoid dependent types). An editable view could provide a more aesthetic presentation like `[[A] :foo [B] :bar]`. The resulting function is composable, commutative for different labels, and has a much better signal-to-noise ratio and HCI story than the trie structure.
+
+An accelerated runtime could use a hashmap or other conventional structure to represent a record. Each accelerated operation on a record could perform the full construct-manipulate-extract sequence, such that the trie is not visible to normal user code and might never be represented in memory. The logical existence of the trie is only necessary to understand the record model, to reason about its formal type, commutativity, or correctness. We might similarly defer construction of labeled variants to simplify acceleration and HCI for them, too.
+
+By accelerating labeled data, Awelon can support parameter objects, flexible variants, labeled case expressions, and a more conventional programming style with events and routing on human labels.
 
 ## Reactive Process Networks
 
@@ -595,13 +583,11 @@ Time stamps and latencies can easily be represented by natural numbers. We can u
 
 Reactive process networks fill out the remaining expressive gap of KPNs, enabling us to work with asynchronous inputs, merge streams as needed. Further, we can now control evaluation 'up to' a given logical time. This is very useful for interacting with the real world, and in real-time.
 
-## Editable Views
+## Editable Views and Metaprogramming
 
-Awelon language has an acceptably aesthetic plain text syntax. However, like Forth, Awelon does not scale nicely beyond about ten tokens per definition because humans lose track of context. Expression of sophisticated data plumbing can be awkward. 
+Awelon language has an acceptably aesthetic plain text syntax. However, like Forth, Awelon does not scale nicely beyond perhaps twelve tokens per definition because humans too easily lose track of context. This could be mitigated by better type feedback or live examples. But Awelon is designed for another simple technique to support more conventional programming styles, DSLs, and program scale. Awelon shifts the burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
 
-To preserve its simple structure and syntax, Awelon shifts the burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
-
-I put some emphasis on *plain text* editable views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary through filesystem and CLI. However, graphical views could potentially include checkboxes, sliders, drop-down lists, graphs and canvases, and may offer an interesting foundation for graphical user interfaces within Awelon's application model. 
+I put some emphasis on *plain text* editable views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary through a conventional filesystem. However, graphical views could potentially include checkboxes, sliders, drop-down lists, graphs and canvases, and may offer an interesting foundation for graphical user interfaces within Awelon's application model. 
 
 Numbers are a useful example for editable views. A viable sketch:
 
@@ -613,16 +599,18 @@ Numbers are a useful example for editable views. A viable sketch:
         2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
-Awelon's natural numbers are given the `#` prefix in favor of an aesthetic view for Church-encoded signed integers. The original natural numbers are escaped - every editable view should provide a simple, unambiguous escape to raw Awelon code. Most views build upon existing views rather than raw code. Building views incrementally upon views is portable and extensible. For example, if a programmer sees `[-4 #6 rational]` because their view doesn't support rational numbers, the intention is obvious, and the programmer could easily install support for rationals into their view.
+Awelon's natural numbers are given the `#` prefix in favor of a more aesthetic representation of signed numbers. From there, we build a tower of numbers. The basic approach of building views upon views is convenient because it makes views more extensible. For example, if we have no support for rational numbers, we'd still see `[-4 #6 rational]` which is still sensible to a human reader. And support for viewing rational numbers could be added quickly.
 
-Besides the numeric tower, command lists are another valuable view feature:
+Every editable view should have an unambiguous escape to raw Awelon code. While I use `(AWELON 42)` above to make it obvious, it could just as easily have been `'(42)` or `\42` or `<code type="awelon">42</code>` or whatever users find acceptable. The nature of editable views does make it easy to experiment for aesthetics. Use of escapes permits an editable view to support key-words, if desired.
+
+Command lists are another valuable view feature:
 
         {foo, bar, baz} == [[foo] {bar, baz} :]
         {baz}           == [[baz] ~ :]
 
-Command lists are useful for various purposes, supporting continuation-passing style or a concise embedding of code. While I use a normal `~ :` list structure here, a view could use something more specialized in this role.
+Command lists are useful for various purposes, supporting continuation-passing style or a concise embedding of interruptable code. While I use a normal `~ :` list structure here, a view could try something more specialized.
 
-Ideally, all editable views should be *evaluable*. That is, program evaluation should generate the same structures we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` - or whatever we use to represent decimal numbers - should be a viable result from a computation. 
+Ideally, all editable views should be *evaluable*. That is, program evaluation should generate the same structures we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` (or whatever we use to represent decimal numbers) should be a viable result from a computation. 
 
 Design of evaluable editable views is very sensitive to arity annotations and accelerators. A consequence is that editable views should be *defined* within the same dictionary they're used to view by some simple convention. Perhaps a word defining a `[[view→code][code→view]]` pair where `code` and `view` are represented as text. Representing views within the dictionary is convenient for testing and caching of views, and for updating views based on application or edit session state (e.g. so we can separate namespace from code). 
 
@@ -634,7 +622,7 @@ The arity annotation allows embedding of comments into computed values. The `(@r
 
 *Aside:* Between command lists and numbers, word definitions can easily scale to a thousand tokens. If we start representing graphical programs with tables, graphs, canvases, radio buttons, drop-down options lists, and similar features we might scale another order of magnitude. Of course, we'll also divide larger programs into small words that can be viewed and edited together. 
 
-## Named Locals
+## Named Local Variables
 
 An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, and support a more conventional programming style if desired. Consider the locals syntax used in [Kitten language](http://kittenlang.org/):
 
@@ -647,7 +635,6 @@ We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with a simple algorithm:
         T(X, E) | E does not contain X      => d E
         T(X, X)                             => 
         T(X, [onF][onT] if)                 => [T(X, onF)][T(X, onT)] if
-            (... and other conditional expressions ...)
         T(X, [E])                           => [T(X,E)] b
         T(X, F G)
             | only F contains X             => T(X,F) G
@@ -656,14 +643,14 @@ We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with a simple algorithm:
 
 This algorithm is adapted from the optimization using free variables. The main difference is that we know our variables are named values and we need special handling for conditional behaviors. 
 
-Conditional behavior is specialized because we do not want to copy data into each branch before selecting one. Doing so would be inefficient and a potential violation of substructural properties. Instead, we leave our value on the stack then rewrite each branch to access or drop that variable. The editable view must specialize for conditional expressions. Fortunately, the simple rule for `if` above would also work for sums, optional values, lists, etc..
+Conditional behavior like `if` should be specialized because we do not want to copy data into each branch before selecting one. Instead, we leave the value on the stack then select one branch to handle it. The simple rule for `if` above would also work well for sums, optional values, lists, etc.. (indeed, we could define a generic `if = [] b b a (cond) i` for all binary conditions). However, we might need an additional rule for working with *labeled data* and switching on labels.
 
-Once we have named locals, we might also benefit from supporting infix math expressions.
+Assuming named locals, we might also benefit from infix expressions of code, e.g. `((X + Y) * Z)`. Of course, use of parentheses in this role might mean we need to escape or tune expression of Awelon-level annotations.
 
 ## Namespaces
 
-Qualified namespaces are readily supported by editable views. Trivially, we could support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` (and perhaps `x.foo` in place of `large_prefix.foo`). 
+Qualified namespaces are readily supported by editable views. Trivially, we could support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` (and `x.foo` in place of `large_prefix.foo`). 
 
 More intriguingly, namespaces can be built into an editable view. 
 
-If ever we want humans to work effectively with `$secureHash` resources, a built in namespace would be essential. If we model a view per edit session, we could tune our namespace to optimize based on whichever edits we're performing. We could also package a set of namespace declarations and give it a nickname within the view function. We might still include a `using view tweaks;` hint to specialize a generic view for a program, but we can avoid the common problem of namespace boiler-plate.
+If ever we want humans to work effectively with `$secureHash` resources, having a built-in namespace at the view layer would be essential. We might need to model a stateful view per user or edit session, and tune it for the use case. This might also ameliorate namespace boiler-plate. 
