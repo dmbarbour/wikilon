@@ -41,13 +41,15 @@ Tools to copy, drop, or rename `foo` should by default copy, drop, and rename th
 
 Depending on use case, developers may choose to represent ad-hoc hierarchical structures like `foo.bar.baz.qux`. But it is feasible to keep structures relatively flat by use of redirects - a word whose definition is simply another word - as references. It really depends on what the application should copy, drop, rename, view, and edit collectively.
 
+*Note:* It is also feasible to use mounted dictionaries to model dictionary objects, i.e. so we have `doc@foo` instead of `foo.doc`. This restricts connectivity because a mount cannot reference its parent. But that restriction isn't necessarily a bad one, and would be mitigated by use of localization. 
+
 ## Hypermedia Applications
 
 Awelon has a deep link structure and supports rich editable views. Further, Awelon has implicit structure in form of dictionary objects, a reverse link index, and static type analysis. Awelon forbids cyclic dependencies between definitions, but no such constraint exists on the implicit relationships. We can view Awelon dictionary objects as hypermedia resources.
 
 Intriguingly, *Awelon evaluates to Awelon*, preserving its link structure and meaning. Hence, we can view this as *hypermedia evaluates to hypermedia*. We could model texts that evaluate to canvases and tables, and vice versa. With program animation, we could render interesting intermediate results during evaluation. The equivalent of HTTP POST forms might be represented in terms of cloning a template object - the initial 'form' - for each action, then editing it. 
 
-We can also recognize URL values as we might present them in a work order, and render those values appropriately. Thus, integration of hypermedia with the rest of the world can be performed in the view layer.
+If URLs are used in work orders, those might provide a simple means to integrate the wider world with Awelon applications.
 
 ## Compositional Views
 
@@ -109,13 +111,18 @@ Hence, we can evaluate and optimize opaque words, link frozen words, and GC the 
 
 Representation of these attributes is ad-hoc, subject to de-facto standardization. We could add tag fields on a dictionary object. Or we might model general policies under `META.GC`... which might be sensitive to tag fields. Whatever.
 
-### Dictionary Based Communications
+## Dictionary Communication
 
-Awelon dictionaries offer an interesting foundation for communication due to the secure hash resources and implicit dictionary compression. 
+The Awelon dictionary makes a powerful communication primitive. 
 
-A message becomes a (root word, dictionary) pair. The root word allows implicit reference to dictionary object fields for hypermedia and documentation purposes. The dictionary is likely a patch deriving from more common dictionaries via secure hash. By reusing secure hashes, we can efficiently cache the vocabulary across many messages. By developing a suitable vocabulary, each message can effectively be templated and highly compressed.
+Consider a dictionary-passing message model. We'd send a `(message, dictionary)` pair, where our message is a short snippet of code (potentially a single word) and our dictionary contains the entire vocabulary to interpret and use that message. 
 
-## Multi-Dictionary Applications
+This is feasible because we don't need to send the full dictionary with every message. Awelon's already set up using secure hash patching to represent dictionaries. Thus, sending a secure hash is sufficient. The dictionary would be downloaded once and cached by the recipient. The cost of download could be amortized across many messages. It is possible the dictionary, or the bulk of it, is some de-facto standard used by many services and agents, and may thus be amortized across hundreds or thousands of users.
 
-Awelon does not support foreign functions, not even for linking between dictionaries. Interaction with external resources must be modeled effectfully, for example via work orders or publish subscribe. There is no special exception for dictionaries. However, sharing between dictionaries will likely benefit from simplified translations.
+Besides message passing, dictionaries can be used with the publish-subscribe pattern. A subscriber would continuously synchronize a dictionary and maintain views upon it (perhaps according to a work order) while a publisher might continuously provide a dictionary. Our publisher should aim to incrementally reuse most of the dictionary, such that subscribers rarely need to download more than than recent changes.
 
+Awelon supports these patterns via the *Mounted Dictionaries* feature. That is, we can directly and efficiently use these patterns via mount per message or a subscription implemented by updating a mount. These patterns may also be used externally to a dictionary. 
+
+## Application Security
+
+In an open system, we generally want to control the authority of our agents in terms of which parts of the system they may observe or directly influence. Awelon doesn't tackle this problem explicitly, instead leaving it to the effects models - e.g. a work order would need to include relevant authorizations (bearer tokens, signatures, etc.). But I think use of mounted dictionaries is likely to play an important role here, providing a natural boundary for updates and observations.

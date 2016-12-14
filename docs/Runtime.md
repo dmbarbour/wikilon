@@ -5,8 +5,6 @@ A primary goal for runtime is performance of *applications*. Awelon's applicatio
 
 I'm also interested in predictable performance, and precise cost accounting so heavy users can be charged appropriately. The runtime will aim to keep unpredictable performance features under client control via annotations and similar. I intend for Awelon runtime to be suitable at least for soft real-time systems to the extent that programmers control the nature and frequency of transactions on the dictionary.
 
-*Aside:* For naming, I'm likely to call this 'Wikilon Runtime' or `wikrt`. 
-
 ## Evaluation 
 
 Evaluation will essentially proceed as a Forth-like stack machine.
@@ -45,6 +43,22 @@ I find the Boortz and Sahlin algorithm more appealing, despite its disadvantages
 
 *Aside:* An unfortunate consequence of shared objects in a DAG is that I cannot perform constant-space traversals, since I don't know how many times I'll traverse an object. I need a stack to serialize a value.
 
+## Stack Representations
+
+Modeling two stacks and a heap in a single address space needs some attention. 
+
+I don't want anything complicated here.
+
+One option that appeals to me is to track the top of each stack in a fixed-size mutable region. When about to overflow or underflow the stack head region, we shunt part to or from the heap. We do so in large chunks, so we have sufficient buffer space to continue. The stack buffer determines the maximum 'bounce' of a function before we start thrashing, but even when thrashing we can guarantee some productive motion.
+
+## Linear Space?
+
+Linear objects could be used for high performance array processing, i.e. so we can edit a linear array without copying it. However, support for linear objects may be difficult for a unidirectional heap. 
+
+Between mutation of an array to point at a new array, and construction of an array to point at an old array, we would tend to break directional invariants. I don't see a simple, obviously correct route forward for linear objects without an alternative GC algorithm. At least not for the general case.
+
+For now, I won't bother optimizing for linear objects case. I suspect that most uses of linear space could be effectively supported by a few specialized list-processing or array-processing accelerators.
+
 ## Memory Representations
 
 Probably common object types, now and later:
@@ -58,11 +72,13 @@ Probably common object types, now and later:
 * labels and labeled data (records, variants)
 * unboxed vectors and matrices for math
 
-I can use a few tag bits per pointer to help with discriminating values. This is mostly important for *small* objects, such as two-word cons cells where adding an extra word header would constitute 50% overhead. Larger objects can afford the header word, and most need them anyway to discriminate more types of objects. 
+I can use a few tag bits per pointer to discriminate a useful subset of values. This is mostly important for *small* objects, such as two-word cons cells where an extra word for the header would constitute 50% overhead. Larger objects can afford a header word, and need one anyway to distinguish types.
 
-Another area to use a tag bit is to distinguish actions (words, or logical inline blocks) from values, such that I can test bindings and arities with a simple pointer check. For words, it would be useful to distinguish the 'static inline' variant (perhaps via logical inlining of the word's program) vs. lazy link judgement.
+Distinguishing actions from blocks could be useful for fast bind, static linking, and arity checking for lazy link. Optimizing bind and linked lists via basic 'cons' cells should be very effective for lightweight code and data types. 
 
-Optimizing bind to use a cons cell seems useful as a frequent action for construction of closures and data objects. In general, binding might extend also to `[B A]` composition if we support logically inlined blocks, which might be useful for various accelerators. 
+Intriguingly, I could probably keep bind-based cons cells in the 'linear' space to ensure . But list-based cons cells would probably be held in the shared space.
+
+Support for 'linear' objects would be useful, but (excepting binaries) would likely violate the unidirectional heap structure. So I should probably encourage use of persistent data structures instead, even for linear objects. This does raise an issue that I cannot accelerate computations
 
 Optimizing data lists to use Lisp-like cons cells could be useful as a basis for many lightweight data structures, especially given that the cons cells are easily heterogeneous. Lists would be used to model trees in terms of a `(node-value, list-of-children)` pair, for example. 
 

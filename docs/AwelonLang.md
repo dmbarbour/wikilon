@@ -51,7 +51,7 @@ Other words are user defined, through a dictionary. There is no hard limit on wo
 
 ## Dictionary
 
-Awelon has a standard, DVCS-inspired patch based dictionary representation:
+Awelon has a simple, DVCS-inspired patch based dictionary representation:
 
         secureHashOfPatch1
         secureHashOfPatch2
@@ -59,11 +59,13 @@ Awelon has a standard, DVCS-inspired patch based dictionary representation:
         @word2 definition2
         ...
 
-A patch contains a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions override those from earlier patches. 
+A patch contains a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions override those from earlier patches.
 
 Cyclic definitions are erroneous. Loop behavior must be modeled via fixpoint combinator. However, trivially defining a word to itself as `@foo foo` will be accepted as meaning 'delete the word' rather than raising an error. Undefined words essentially evaluate to themselves.
 
-Awelon's dictionary representation is not optimal for direct use by humans. It can be tolerated in small doses. But it is intended more as an import/export format, and for efficient sharing between humans and software agents. Humans will generally observe and influence a dictionary through an editable view, perhaps as hypermedia. 
+Awelon's dictionary representation is not optimal for direct use by humans. It can be tolerated in small doses. But it is intended more as an import/export format, and for efficient sharing between humans and software agents. Humans will generally observe and influence a dictionary through an editable view, perhaps as a hypermedia web service or mounted into a filesystem.
+
+*Note:* This basic dictionary is extended in *Mounted Dictionaries*, below.
 
 ## Secure Hash Resources
 
@@ -402,7 +404,7 @@ This slightly modified Awelon is a good fit for a threaded interpreter. We can g
 
 ## Compilation
 
-Awelon can be compiled for efficient evaluation on stock hardware. Starting with extensions for efficient interpretation, we can perform register allocation and perform representation-level operations.
+Awelon can be compiled for efficient evaluation on stock hardware. In addition to extensions for efficient interpretation, we can perform register allocation and perform representation-level operations.
 
 Registers are allocated to active structure in the program representation or auxiliary stack. The immediate benefit is logical data shuffling: `\push` or `w` can be modeled as manipulating a static code map rather than performing runtime data manipulation. 
 
@@ -537,53 +539,7 @@ Related to static typing, non-terminating evaluation in Awelon is always an erro
 
 *Note:* Heterogeneous lists are easily represented and useful in Awelon. A typical 'fold' or 'map' operation might not apply, but many other operations like zip-map, indexing, or sequencing operations are still applicable. Users might benefit from distinct annotations for homogeneous vs. heterogeneous lists, and for structured intermediate forms like command lists.
 
-## Labeled Data - Records and Variants 
-
-Labeled sum types (aka variants) allow conditional discrimination on a label. Labeled product types (aka records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data is self-documenting (label informs human) and extensible (add more labels).
-
-A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] inL] inR] inL]` structure where the left-right-left path encodes the label. Unlike label-value pairs, deep sums do not require dependent types. A labeled product could feasibly be modeled as a heterogeneous trie on the label. Consider:
-
-        (Deep Sums)
-        [[[A] inL] inL]
-        [[[[[B] inL] inL] inR] inR]
-
-        (Singleton Tries)
-        [[[A] ~ :] ~                     :]
-        [~         [~ [[[B] ~ :] ~ :] :] :]
-
-        (Merged Trie)
-        [[[A] ~ :] [~ [[[B] ~ :] ~ :] :] :]
-
-Here the label is encoded as `(RL | RR)* LL`, where `RL` corresponds to constructor `[inL] b [inR] b`. The `(RL | RR)*` structure represents a finite `(0 | 1)*` bitfield, within which we might encode texts or numbers. The final `LL` terminates the label. This encoding has several nice properties. It is a simple regular language and a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list. 
-
-Unfortunately, while tries are an excellent data structure, they are awkward to work with. Rigid ordering of labels within a trie is inconvenient for human use. Human meaningful labels are very sparse in the above encoding, which does not result in space-efficient representatins. (Use of a radix tree might help, but has a significant complexity cost.) For acceleration, exposing the record's in-memory representation to normal user functions is not optimal.
-
-Instead of working with the trie directly, we should represent a function that writes a trie by injecting a series of label-value pairs. For example, a function `[[A] "foo" KV [B] "bar" KV]` might write labels `foo` and `bar` into a record with the associated values (or `label 'o 'o 'f write`  to avoid dependent types). An editable view could provide a more aesthetic presentation like `[[A] :foo [B] :bar]`. The resulting function is composable, commutative for different labels, and has a much better signal-to-noise ratio and HCI story than the trie structure.
-
-An accelerated runtime could use a hashmap or other conventional structure to represent a record. Each accelerated operation on a record could perform the full construct-manipulate-extract sequence, such that the trie is not visible to normal user code and might never be represented in memory. The logical existence of the trie is only necessary to understand the record model, to reason about its formal type, commutativity, or correctness. We might similarly defer construction of labeled variants to simplify acceleration and HCI for them, too.
-
-By accelerating labeled data, Awelon can support parameter objects, flexible variants, labeled case expressions, and a more conventional programming style with events and routing on human labels.
-
-## Reactive Process Networks
-
-A weakness of conventional [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) is that they cannot merge asynchronous data from multiple channels. There is no record for when messages on one channel arrive relative to messages on other channels. This weakness makes it difficult to efficiently integrate KPNs with real-world events. Fortunately, this weakness can be solved by adding a temporal dimension to KPNs, while preserving other nice features (determinism, monotonicity). Here's how:
-
-* Every process has an automatic time value. 
-* Every message is stamped with the process time.
-* Wires have logical latency, e.g. add 10 to time.
-* Process can only read messages up to its time.
-* Reading returns nothing if no messages at time.
-* Process can explicitly wait on a set of ports.
-* Waiting advances time to next message in set.
-* We can explicitly advance times at input ports. 
-
-The advance of time is driven externally at open input ports, internally via latencies. Advancing time at the input port essentially says, "the next message will have *at least* this future time". Cyclic wiring with latency permits precise expression of ad-hoc clock-like behaviors. Conventional KPN behavior is preserved if we never advance time and use zero latency wiring. That is, reads wait until either a message is available OR the upstream process advances past the reader's time, which ever happens first. 
-
-Time stamps and latencies can easily be represented by natural numbers. We can usefully normalize times by subtracting the minimum time stamp from all time stamps, such that at least one time stamp in the network description is 0.
-
-Reactive process networks fill out the remaining expressive gap of KPNs, enabling us to work with asynchronous inputs, merge streams as needed. Further, we can now control evaluation 'up to' a given logical time. This is very useful for interacting with the real world, and in real-time.
-
-## Editable Views and Metaprogramming
+## Editable Views
 
 Awelon language has an acceptably aesthetic plain text syntax. However, like Forth, Awelon does not scale nicely beyond perhaps twelve tokens per definition because humans too easily lose track of context. This could be mitigated by better type feedback or live examples. But Awelon is designed for another simple technique to support more conventional programming styles, DSLs, and program scale. Awelon shifts the burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
 
@@ -649,8 +605,78 @@ Assuming named locals, we might also benefit from infix expressions of code, e.g
 
 ## Namespaces
 
-Qualified namespaces are readily supported by editable views. Trivially, we could support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` (and `x.foo` in place of `large_prefix.foo`). 
+Qualified namespaces are readily supported by editable views. Trivially, we could support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` (and `x.foo` in place of `large_prefix.foo`). Suffixes can also be supported. And in contexts where our view is not limited to pure text, we could leverage color or other indicators for namespace.
 
-More intriguingly, namespaces can be built into an editable view. 
+More intriguingly, namespaces can be built into an editable view, such that we can skip the boiler-plate namespace comment and just start using `x`. We can fully separate namespaces from source code through views. If ever we want humans to work effectively with `$secureHash` resources, having a built-in namespace at the view layer would be essential. Namespaces could instead be shifted to 'views' at the edit session or user layer, that can be maintained statefully for edits to many definitions.
 
-If ever we want humans to work effectively with `$secureHash` resources, having a built-in namespace at the view layer would be essential. We might need to model a stateful view per user or edit session, and tune it for the use case. This might also ameliorate namespace boiler-plate. 
+## Labeled Data - Records and Variants 
+
+Labeled sum types (aka variants) allow conditional discrimination on a label. Labeled product types (aka records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data is self-documenting (label informs human) and extensible (add more labels).
+
+A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] inL] inR] inL]` structure where the left-right-left path encodes the label. Unlike label-value pairs, deep sums do not require dependent types. A labeled product could feasibly be modeled as a heterogeneous trie on the label. Consider:
+
+        (Deep Sums)
+        [[[A] inL] inL]
+        [[[[[B] inL] inL] inR] inR]
+
+        (Singleton Tries)
+        [[[A] ~ :] ~                     :]
+        [~         [~ [[[B] ~ :] ~ :] :] :]
+
+        (Merged Trie)
+        [[[A] ~ :] [~ [[[B] ~ :] ~ :] :] :]
+
+Here the label is encoded as `(RL | RR)* LL`, where `RL` corresponds to constructor `[inL] b [inR] b`. The `(RL | RR)*` structure represents a finite `(0 | 1)*` bitfield, within which we might encode texts or numbers. The final `LL` terminates the label. This encoding has several nice properties. It is a simple regular language and a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list. 
+
+Unfortunately, while tries are an excellent data structure, they are awkward to work with. Rigid ordering of labels within a trie is inconvenient for human use. Human meaningful labels are very sparse in the above encoding, which does not result in space-efficient representatins. (Use of a radix tree might help, but has a significant complexity cost.) For acceleration, exposing the record's in-memory representation to normal user functions is not optimal.
+
+Instead of working with the trie directly, we should represent a function that writes a trie by injecting a series of label-value pairs. For example, a function `[[A] "foo" KV [B] "bar" KV]` might write labels `foo` and `bar` into a record with the associated values (or perhaps `label 'o 'o 'f`  to simplify types). An editable view could provide a more aesthetic presentation like `[[A] :foo [B] :bar]`. The resulting function is composable, commutative for different labels, and has a much better signal-to-noise ratio and HCI story than the trie structure.
+
+An accelerated runtime could use a hashmap or other conventional structure to represent a record. Each accelerated operation on a record could perform the full construct-manipulate-extract sequence, such that the trie is not visible to normal user code and might never be represented in memory. The logical existence of the trie is only necessary to understand the record model, to reason about its formal type, commutativity, or correctness. We might similarly defer construction of labeled variants to simplify acceleration and HCI for them, too.
+
+By accelerating labeled data, Awelon can support parameter objects, flexible variants, labeled case expressions, and a more conventional programming style with events and routing on human labels.
+
+## Reactive Process Networks
+
+A weakness of conventional [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) is that they cannot merge asynchronous data from multiple channels. There is no record for when messages on one channel arrive relative to messages on other channels. This weakness makes it difficult to efficiently integrate KPNs with real-world events. Fortunately, this weakness can be solved by adding a temporal dimension to KPNs, while preserving other nice features (determinism, monotonicity). Here's how:
+
+* Every process has an implicit time value. 
+* Outgoing message is stamped with the process time.
+* Incoming messages are bounded by process time.
+* Wires have logical latency, e.g. add 10 to time.
+* Reading returns Nothing if no messages at time.
+* Process can explicitly wait on a set of ports.
+* Waiting advances time to next message in set.
+* We explicitly advance time for open input ports.
+
+The advance of time is driven externally at open input ports, internally via latencies. Advancing time at an open input port essentially says, "the next message will have *at least* this future time". Cyclic wiring with latency permit precise expression of ad-hoc clock-like behaviors. Conventional KPN behavior is preserved if we never advance time and use zero latency wiring. That is, reads wait until either a message is available OR the upstream process advances past the reader's time, which ever happens first. 
+
+Time stamps and latencies can easily be represented by natural numbers. We can usefully normalize times by subtracting the minimum time stamp from all time stamps, such that at least one time stamp in the network description is 0.
+
+Reactive process networks fill out the remaining expressive gap of KPNs, enabling us to work with asynchronous inputs, merge streams as needed. Further, we can now control evaluation 'up to' a given logical time. This is very useful for interacting with the real world, and in real-time.
+
+## Mounted Dictionaries
+
+This is a proposed feature for [mounting](http://wikipedia.org/wiki/Mount_%28computing%29) dictionaries in Awelon. Logically, mounting a dictionary copies every function from that dictionary, adding a suffix to prevent name conflicts. Words of form `foo@dict` refer to the definition of `foo` as provided via the mounted `dict`. 
+
+Mounts are represented with a simple extension to dictionary patches:
+
+        secureHashOfPatch1
+        secureHashOfPatch2
+        @word1 definition1
+        @word2 definition2
+        ...
+        @@dict secureHashOfDict
+        ...
+
+A mount is declared or updated by defining a word with special prefix `@`. However, unlike normal words, the mount is described as a secure hash of the root patch representing the mounted dictionary, or a blank line to unmount. Mounted words such as `foo@dict` must be updated indirectly, by updating the `dict` mount.
+
+Mounts represent hierarchical composition of dictionaries. Deep hierarchical references are possible, e.g. `foo@bar@baz` would have us look for `foo@bar` under mount `baz`. Direct use of deep references is not recommended (cf. [Law of Demeter](http://wikipedia.org/wiki/Law_of_Demeter)). But it is a potential result from evaluation.
+
+During evaluation, we must track origin. If `foo` evaluates to `bar "hello" 42 qux`, then `foo@dict` evaluates to `bar@dict "hello"@dict 42@dict qux@dict`. Mounted texts are necessary to preserve semantics (for cons, nil, natural numbers) during evaluation, and mounts similarly apply to secure hash resources. Here `"hello"@dict` would desugar to `[104@dict "ello"@dict :@dict]`. 
+
+*Localization* is a useful default optimization for mounted dictionaries. 
+
+In many cases, we will have significant overlap between dictionaries. Natural numbers, texts, utility functions like `i` or `z`, and so on will tend to possess de-facto standard definitions. When we know `foo@dict` has the same meaning as `foo`, we can 'localize' to use `foo` directly. We do not guarantee preservation of associated metadata, for example `foo.doc@dict` may be different from `foo.doc`. But implicit localization of metadata may be useful for some applications.
+
+Localization can improve both aesthetics and performance. For performance, dropping unnecessary origin information can improve sharing for stowage or memoization. Aesthetics are improved by reducing the noise of adding `@dict` to everything, and focusing human attention instead on relevant differences between dictionaries.
