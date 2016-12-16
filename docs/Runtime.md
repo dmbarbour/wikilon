@@ -7,19 +7,19 @@ I'm also interested in predictable performance, and precise cost accounting so h
 
 ## Evaluation 
 
-Evaluation will essentially proceed as a Forth-like stack machine.
+Viable evaluation strategies:
 
-* output program is data stack
-* auxiliary continuation stack
-* conventional program pointer
-* add special `\return` words
-* track available stack size
+* interpret program (with call-return auxiliary stack)
+* compile to abstract register machine, interpret that
+* JIT compile to machine code before evaluation proceeds
 
-Evaluation proceeds left-to-right through the program, then evaluates remaining block values either right-to-left or in parallel. The main difference from Forth is that our final 'output program' may contain words that do not evaluate further, due either to a trivial link context or lack of definition.
+There is a tradeoff. Compilation increases complexity and spinup time, but can significantly improve performance for long-running loops. I do know that I'll eventually want JIT compilation support. I favor interpretation as the basic option for getting started quickly. 
 
-Use of an auxiliary continuation stack and `\return` words enables a near-conventional approach of a program counter and threaded interpreter. Relatedly, we can support `\push A \pop` actions in place of `[A]a`, hiding data temporarily on the auxiliary stack. This is a common practice in Forth, Factor, and similar languages but in Awelon is strictly disciplined by program structure. Users cannot directly perform `\push` or `\pop` or `\return`.
+The program under evaluation is volatile, so might also mostly be represented as a data stack. Special handling is needed because not everything is 'data' - a computed program may contain words that have not been linked, and lazy linking might expand a word into data based on demand. 
 
-It is feasible to further compile programs to use a register machine, essentially by allocating top stack elements into registers. I would like to pursue this technique further, albeit perhaps only for JIT code.
+Evaluation can proceed left-to-right through our program then evaluates remaining block values either right-to-left or in parallel. The result of this evaluation would be held on the program data stack.
+
+I like the idea of a "checkpointing" evaluation, such that we can always interrupt evaluation and have a valid program, at most losing some intermediate work. Intermediate work nonetheless needs to allocate in the heap, so we might supply registers as GC roots. The same volume of registers for intermediate work may support both accelerators and JIT. In some cases, we can preserve work even after an error, but that can always be represented by a last instant checkpoint.
 
 ## Memory Management
 
@@ -45,11 +45,11 @@ I find the Boortz and Sahlin algorithm more appealing, despite its disadvantages
 
 ## Stack Representations
 
-Modeling two stacks and a heap in a single address space needs some attention. 
+Modeling multiple stacks in a single address space needs some attention. 
 
 I don't want anything complicated here.
 
-One option that appeals to me is to track the top of each stack in a fixed-size mutable region. When about to overflow or underflow the stack head region, we shunt part to or from the heap. We do so in large chunks, so we have sufficient buffer space to continue. The stack buffer determines the maximum 'bounce' of a function before we start thrashing, but even when thrashing we can guarantee some productive motion.
+One option that appeals to me is paging. The top couple pages of each stack are considered 'volatile' and are tracked together with registers. When the stack is about to overflow, we move the older page into the heap. We go the opposite direction on underflow. Even worst case paging behavior can guarantee productivity if stack pages are large compared to maximum arity `(a9)`. Further, old stack pages are readily subject to generational GC.
 
 ## Linear Space?
 
@@ -64,17 +64,19 @@ For now, I won't bother optimizing for linear objects case. I suspect that most 
 Probably common object types, now and later:
 
 * programs, sequences of words and values
-* small natural numbers
+* small natural numbers, maybe small ints
 * `[[B]A]` partial binding of programs
 * `[[Hd][Tl]:]` list and tree structures
 * `[[A] inR]` optional values, potentially
 * texts, binaries, arrays (logically lists)
-* labels and labeled data (records, variants)
+* short texts or labels, labeled data
 * unboxed vectors and matrices for math
 
 I can use a few tag bits per pointer to discriminate a useful subset of values. This is mostly important for *small* objects, such as two-word cons cells where an extra word for the header would constitute 50% overhead. Larger objects can afford a header word, and need one anyway to distinguish types.
 
-Distinguishing actions from blocks could be useful for fast bind, static linking, and arity checking for lazy link. Optimizing bind and linked lists via basic 'cons' cells should be very effective for lightweight code and data types. 
+Distinguishing actions from blocks could be useful for fast bind, static linking, and arity checking for lazy link. Optimizing bind and linked lists via basic 'cons' cells should be very effective for lightweight code and certain data types (trees, maps). Optimizing bind is less important for compiled code, but still useful.
+
+My original ideas called for use of 'linear' objects, for example so we can update an array in place. 
 
 Intriguingly, I could probably keep bind-based cons cells in the 'linear' space to ensure . But list-based cons cells would probably be held in the shared space.
 

@@ -186,9 +186,11 @@ The runtime will look at the given definitions. Upon recognizing `[] b a`, the r
 
 In general, recognition of accelerators may be fragile. It may be that `i = [] w a d` is recognized where the logically equivalent `i = [] [] b a a d` or `i = [[]] a a d` are not recognized. We might not even recognize `j = [] w a d` because we changed the function name. This is ultimately up to the runtime. Every runtime should carefully document sufficient criteria for achieving acceleration. One robust approach is to define a 'seed' dictionary containing and documenting accelerated programs, from which users may derive their own dictionaries.
 
-Critically, acceleration of functions extends also to *data* and even further to *organization* of code, and efficient representation thereof. A natural number, for example, might be represented by simple machine words. An accelerator for linear algebra might support arrays or matrices of unboxed floating point numbers, which might be represented on a GPGPU. Accelerated evaluation of process networks might use physically distributed processes and shared queues.
+Critically, acceleration of functions extends also to *data* and even further to *organization* of code, and efficient representation thereof. A natural number, for example, might be represented by simple machine words. An accelerator for linear algebra might support arrays or matrices of unboxed floating point numbers, which might be represented and computed on a GPGPU. Accelerated evaluation of process networks might use physically distributed processes and shared queues.
 
-Acceleration replaces conventional use of intrinsics and FFI while ensuring every program is formally specified all the way down.
+In general, accelerators may be compilers. For example, we might represent a computation in terms of interpreting a safe subset of OpenCL. Acceleration of that interpreter might involve compiling that code for performance on a CPU or GPGPU. 
+
+Acceleration replaces conventional use of intrinsics and FFI.
 
 ## Annotations
 
@@ -201,6 +203,7 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(par)` - request parallel evaluation of computation
 * `(eval)` - request immediate evaluation of computation
 * `(nat)` - assert argument should be a natural number
+* `(bool)` - assert argument is a boolean typed value
 * `(optimize)` - rewrite a function for efficient evaluation
 * `(jit)` - compile a function for efficient evaluation
 * `(stow)` - move large values to disk, load on demand
@@ -357,9 +360,9 @@ The evaluator does not rewrite the `A` annotation. But its presence can push par
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-So this optimization looks like: `T(A, T(B, T(C, Eval([C][B][A]function))))`. But before we extract the variables, we might perform other optimizations. We can heuristically compare `T(X,T(Y,E))` and `w T(Y, T(X, E))` to optimize stack order. It seems feasible to disassemble a program into fragments with dependency relationships, perform a topological sort, then reassemble to minimize data shuffling. Common subexpression elimination can be performed at the same time. 
+So this optimization looks like: `T(A, T(B, T(C, Eval([C][B][A]function))))`. But before we extract the variables, we might perform other optimizations. We can search for common subexpressions, variables included, and extract those first. We can heuristically search equivalencies like `T(A, T(B, E)) == w T(B, T(A, E))`, or we might attempt a topological sort on subexpressions to minimize and simplify data shuffling within the program. 
 
-Static type information can also support optimizations. For example, if we know our argument is a pair, we might further propagate the elements as independent variables:
+Static type information may also support optimizations. For example, if we know our argument is a pair, we might further propagate the elements as independent variables:
 
         type (A * B) = ∀S. S → S A B
         for E : S (A * B) → S'
@@ -379,7 +382,11 @@ For sum types, the analog is to precompute programs for different arguments:
         for E : S (A + B) → S', where E observes argument
             E => [[inL] b E] [[inR] b E] if
 
-Whether this is a worthy transform must be determined heuristically, based on whether it results in useful simplifications and avoids the problem of exponential expansion. It may be that several condition values must be partially evaluated before we encounter useful reductions, each one doubling the amount of code until reductions begin. Loop unrolling optimizations are viable using the same principle.
+In this case, we must weigh program expansion versus gains from static partial evaluations. Achieving a good result here may require a heuristic search - e.g. when `E == F G` we might be better off just expanding `F`, and when we have multiple boolean values we might need to expand several to see benefits. 
+
+For sums, we must weigh program expansion versus the gains from static partial evaluation. But for at least some cases, the idea could work very well.
+
+There are likely many more optimizations that can be performed directly at the Awelon layer. For example, we could try to move `(eval)` up front if we know it will happen regardless. The simple semantics of purely functional combinators, and the ability to inject or extract 'variables' as needed, make this safe and easy.
 
 ## Interpretation
 
@@ -388,7 +395,7 @@ Naive interpretation of Awelon can be reasonably efficient, but involves a lot o
 * program pointers
 * auxiliary stack 
 
-A program will be represented by an array of words and values, terminated by a special `\return` word. The `\return` word will pop a program pointer from the auxiliary and jump to it. To 'call' a word, we will generally push a 'next' program pointer onto our return stack, then jump. Or we'll just jump if it is a tail call. Our `\return` action might need a few special variants for tail calls in general, specializing for a program terminating in `a d` or `i`. 
+A program will be represented by an array of words and values, terminated by a special `\return` word. The `\return` word will pop a program pointer from the auxiliary and jump to it. To 'call' a word, we will generally push a 'next' program pointer onto our return stack, then jump. We can also perform tail-call optimizations (e.g. for `... a d]` or `... i]`) such that we avoid returning to a finished subprogram.
 
 The auxiliary stack can also optimize some data hiding:
 
@@ -396,23 +403,21 @@ The auxiliary stack can also optimize some data hiding:
         [A]b a  =>  \push2nd A \pop
         ...
 
-This allows us to avoid an intermediate return action. This particular transform doesn't help in every scenario. But we can optimize temporary data hiding for known common cases, such as working with `T(A, T(B, ..E))` up to a limited arity.
+This allows us to avoid some indirection, construction, and return actions. This particular transform doesn't help for every use case. But we can optimize temporary data hiding for known common cases, such as working with `T(A, T(B, ..E))` up to a limited arity.
 
-An important feature is that we can serialize the original Awelon code. We start with a logical copy of the auxiliary stack. On `\return`, we can pop a return address and continue serializing from the destination. For `\push` we could write `[` and add a special `]a` term to the auxiliary stack. For `\pop`, we pop a term from the auxiliary then serialize it.
+A valuable feature is that we can trivially 'decompile' these call-return and push-pop patterns. We start with a logical copy of the auxiliary stack. On `\return`, we pop a return address and continue serializing from the new location. For `\push` we write `[` and add a special `]a` term to the auxiliary stack. For `\pop`, we pop a term from the auxiliary then serialize it. And so on. This interpreted representation can be used as our primary representation under the hood without any decompilation overhead to recover the computed program.
 
-This slightly modified Awelon is a good fit for a threaded interpreter. We can go a step further by performing a partial compilation to a register machine, then interpreting the resulting code.
+This slightly modified Awelon is a good fit for a threaded interpreter. But we can also compile Awelon to make it faster, and either interpret the partially compiled code
 
 ## Compilation
 
-Awelon can be compiled for efficient evaluation on stock hardware. In addition to extensions for efficient interpretation, we can perform register allocation and perform representation-level operations.
+Even with an auxiliary stack and call-return patterns and optimizations, interpretation of Awelon code involves a lot of runtime data shuffling and volatile allocations. Fortunately, Awelon can be compiled to use a conventional register machine. 
 
-Registers are allocated to active structure in the program representation or auxiliary stack. The immediate benefit is logical data shuffling: `\push` or `w` can be modeled as manipulating a static code map rather than performing runtime data manipulation. 
+This is achieved by mapping active values from our program into registers, and logically tracking binding and data shuffling. Typed registers - such as a bank of floating point registers - could further improve performance by eliminating need to repeatedly box and unbox computations within a compiled loop. Constant registers might be optimized to skip indirection through the register.
 
-Use of registers could be recorded explicitly in an intermediate code, e.g. by adding words of the form `\putA`, `\getA`, and similar variants. When compiling something like `\getA \getB + \putA`, we might be able to reduce this to accelerated CPU-level addition. Registers might also support a certain level of unboxing, such that floating points can be held directly by a register.
+Some code requires special attention when compiled, for example to reduce floating point arithmetic to CPU instructions or optimize fixpoint tail-call loops to a local goto. We may need to recognize common conditional behaviors or data types so we can ensure consistent register allocations for branches. Recognizing these special cases is a form of acceleration, and is a source of complexity for effective compilation.
 
-These techniques also apply if targeting a higher level intermediate language like LLVM or C. 
-
-*Note:* Accelerators can also perform implicit compilation. For example, a runtime might implement accelerated evaluation for a safe subset of OpenCL by using an external OpenCL compiler. This technique is viable even from an interpreter.
+An important consideration for compiled code is how we recover Awelon code, potentially after hitting a quota limit or breakpoint or runtime error. A checkpointing evaluation strategy would be simple and robust, but is not optimal. 
 
 ## Parallel Evaluation
 

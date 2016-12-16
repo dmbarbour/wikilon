@@ -125,4 +125,4 @@ Awelon supports these patterns via the *Mounted Dictionaries* feature. That is, 
 
 ## Application Security
 
-In an open system, we generally want to control the authority of our agents in terms of which parts of the system they may observe or directly influence. Awelon doesn't tackle this problem explicitly, instead leaving it to the effects models - e.g. a work order would need to include relevant authorizations (bearer tokens, signatures, etc.). But I think use of mounted dictionaries is likely to play an important role here, providing a natural boundary for updates and observations.
+In an open system, we generally want to control the authority of our agents in terms of which parts of the system they may observe or directly influence. Awelon doesn't tackle this problem explicitly, instead leaving it to the effects models - e.g. a work order would need to include relevant authorizations (bearer tokens, signatures, etc.). Use of mounted dictionaries is likely to play an important role here, providing a natural boundary for updates and observations and atomic synchronizations.
