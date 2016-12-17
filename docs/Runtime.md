@@ -13,7 +13,7 @@ Viable evaluation strategies:
 * compile to abstract register machine, interpret that
 * JIT compile to machine code before evaluation proceeds
 
-There is a tradeoff. Compilation increases complexity and spinup time, but can significantly improve performance for long-running loops. I do know that I'll eventually want JIT compilation support. I favor interpretation as the basic option for getting started quickly. 
+There is a tradeoff. Compilation increases complexity and spinup time, but can significantly improve performance for long-running loops. I do know that I'll eventually want JIT compilation support. I favor interpretation as the basic option for getting started quickly. JIT can be performed for a subset of performance critical code, or eventually for full programs.
 
 The program under evaluation is volatile, so might also mostly be represented as a data stack. Special handling is needed because not everything is 'data' - a computed program may contain words that have not been linked, and lazy linking might expand a word into data based on demand. 
 
@@ -23,11 +23,19 @@ I like the idea of a "checkpointing" evaluation, such that we can always interru
 
 ## Memory Management
 
-I'll logical copy on `c`. Logical copies reduce overheads for common patterns.
+I'll logical copy on `c`. Logical copies reduce overheads for common patterns. I also want to leverage unique references, linear objects with in-place updates for efficient updates to array-lists or records.
 
-Awelon is a simpler target than most. Pure computations cannot directly observe internal evaluation latencies, so pause times aren't critical. Since we don't have ad-hoc mutation, we don't need write barriers in a generational collector. Pure `(par)` style parallelism can be isolated via hierarchical heaps. Awelon doesn't produce memory cycles. We can design such that heaps are 'unidirectional', no references up the heap.
+Awelon is a simpler GC target than most. Pure computations cannot observe internal evaluation latencies, so GC pause times are somewhat less relevant. Cycles cannot be constructed. Parallelism can readily be isolated via hierarchical heaps.
 
-Memory fragmentation hurts locality, performance, and predictability of performance. Copy collectors are a good alternative, except that they reorder the heap which also hurts predictability for cache behavior and can hinder lightweight tracking for multiple generations. I favor mark-compact algorithms that preserve heap order.
+In-place update for linear objects is a potential challenge for generational GC because it can create references from old linear objects to young objects. We must somehow track linear objects we update and treat them as 'young' until we GC again. (This might be achieved by a simple header bit, since any young object must be referenced from another young object.)
+
+A compacting or copying GC can reduce memory fragmentation. I'll probably favor copying because it's a lot simpler (modulo the Boortz and Sahlin algorithm for unidirectional heaps, which doesn't apply here) - it isn't ideal for big heaps, but for Wikilon's expected use case of servicing web pages I imagine I'll generally have a lot of small heaps (we can rotate just a few blanks as needed).
+
+
+
+
+
+Generational copying GC is possible by modeling a two-space collector within the heap and a growing survivor space. In each pass, we grow the survivor space and shrink the nursery until the nursery is too small for productivity. Then we performing a full heap compaction, possibly growing the heap in the process.
 
 I'll probably use generational GC to reduce frequency of copying for long-lived objects. Also, hierarchical GC to support lightweight threads with coarse-grained synchronization. It seems feasible to simply copy a hierarchical heap without compacting it, assuming there are no external references directly into a hierarchical heap (i.e. such that all references are via thread-control-block).
 
@@ -51,7 +59,9 @@ I don't want anything complicated here.
 
 One option that appeals to me is paging. The top couple pages of each stack are considered 'volatile' and are tracked together with registers. When the stack is about to overflow, we move the older page into the heap. We go the opposite direction on underflow. Even worst case paging behavior can guarantee productivity if stack pages are large compared to maximum arity `(a9)`. Further, old stack pages are readily subject to generational GC.
 
-## Linear Space?
+## Linear Space? No.
+
+I originally had the idea to use linear objects for lots of data structures, e.g. so I can support in-place update on a vector *without* accelerating some variant on an ST monad.
 
 Linear objects could be used for high performance array processing, i.e. so we can edit a linear array without copying it. However, support for linear objects may be difficult for a unidirectional heap. 
 
@@ -172,6 +182,10 @@ It seems to me that most input and output can occur as binary streams or chunked
 *Aside:* By 'optimized' output, I want *Awelon* code after all the rewrite optimizations, static linking, staging, etc.. By 'compiled' output, I would like relocatable JIT code (Clang or LLVM?) or similar.
 
 *Note:* Security models (HTTP authentication, HMAC bearer tokens, etc.), collaborative conflict avoidance patterns (discretionary locks, [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html)), and accounting (quotas, policy for costs shared via memoization or stowage), are not part of this C runtime API. I believe they can be implemented more or less independently, and I don't want to commit to any particular model.
+
+## Extraction
+
+Compilation of Awelon code for an external system is an interesting option, but is only feasible if we limit the IO types at that layer (e.g. to integers, rationals, decimals, texts, labels, lists). 
 
 ## Computations
 

@@ -1,9 +1,7 @@
 
 # Awelon Language
 
-Awelon is a purely functional language based on concatenative combinators. 
-
-*Note:* I *might* rename this to `abcd` (ab-sih-dee).
+Awelon is a purely functional language based on concatenative combinators. This document describes Awelon as a list of talking points, very roughly organized.
 
 ## Why Another Language?
 
@@ -186,7 +184,7 @@ The runtime will look at the given definitions. Upon recognizing `[] b a`, the r
 
 In general, recognition of accelerators may be fragile. It may be that `i = [] w a d` is recognized where the logically equivalent `i = [] [] b a a d` or `i = [[]] a a d` are not recognized. We might not even recognize `j = [] w a d` because we changed the function name. This is ultimately up to the runtime. Every runtime should carefully document sufficient criteria for achieving acceleration. One robust approach is to define a 'seed' dictionary containing and documenting accelerated programs, from which users may derive their own dictionaries.
 
-Critically, acceleration of functions extends also to *data* and even further to *organization* of code, and efficient representation thereof. A natural number, for example, might be represented by simple machine words. An accelerator for linear algebra might support arrays or matrices of unboxed floating point numbers, which might be represented and computed on a GPGPU. Accelerated evaluation of process networks might use physically distributed processes and shared queues.
+Critically, acceleration of functions extends also to *data* and even further to *organization* of code, and efficient representation thereof. A natural number, for example, might be represented by simple machine words. Arrays are possible via acceleration of list representation together with indexed update and access functions. An accelerator for linear algebra might support vectors and matrices of unboxed floating point numbers, which might be represented and computed on a GPGPU. Accelerated evaluation of process networks might use physically distributed processes and shared queues.
 
 In general, accelerators may be compilers. For example, we might represent a computation in terms of interpreting a safe subset of OpenCL. Acceleration of that interpreter might involve compiling that code for performance on a CPU or GPGPU. 
 
@@ -411,13 +409,13 @@ This slightly modified Awelon is a good fit for a threaded interpreter. But we c
 
 ## Compilation
 
-Even with an auxiliary stack and call-return patterns and optimizations, interpretation of Awelon code involves a lot of runtime data shuffling and volatile allocations. Fortunately, Awelon can be compiled to use a conventional register machine. 
+Awelon can be compiled to more effectively use stock hardware.
 
-This is achieved by mapping active values from our program into registers, and logically tracking binding and data shuffling. Typed registers - such as a bank of floating point registers - could further improve performance by eliminating need to repeatedly box and unbox computations within a compiled loop. Constant registers might be optimized to skip indirection through the register.
+The most important step is register allocation, mapping active values from a program into memory or CPU registers. This enables us to eliminate intermediate data shuffling and volatile binding, especially within a program loop. Compilation can leverage acceleration, for example by specializing floating point arithmetic, translating common `if` conditional behavior into local branching, and reducing tail-call fixpoint functions to a local jump. A small bank for floating point registers could reduce need for boxing/unboxing and further improve loop performance when accumulating a small set of results.
 
-Some code requires special attention when compiled, for example to reduce floating point arithmetic to CPU instructions or optimize fixpoint tail-call loops to a local goto. We may need to recognize common conditional behaviors or data types so we can ensure consistent register allocations for branches. Recognizing these special cases is a form of acceleration, and is a source of complexity for effective compilation.
+Compilation can also extract a function for efficient use in another language, such as JavaScript to target the browser. Registers would in this case might translate to variables or fields in an object, or a mutable array.
 
-An important consideration for compiled code is how we recover Awelon code, potentially after hitting a quota limit or breakpoint or runtime error. A checkpointing evaluation strategy would be simple and robust, but is not optimal. 
+Awelon's program rewriting semantics generally means we should be able to decompile back to the Awelon program after evaluation. This ability for programs to self-decompile is convenient for persistence, checkpointing, distribution, sharing, and debugging code. An Awelon compiler can feasibly preserve metadata such as an associative index from program counters to source and a register-to-stack map to eliminate CPU overheads during evaluation.
 
 ## Parallel Evaluation
 
@@ -616,7 +614,7 @@ More intriguingly, namespaces can be built into an editable view, such that we c
 
 ## Labeled Data - Records and Variants 
 
-Labeled sum types (aka variants) allow conditional discrimination on a label. Labeled product types (aka records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data is self-documenting (label informs human) and extensible (add more labels).
+Labeled sum types (variants) allow conditional discrimination on a label. Labeled product types (records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data is self-documenting (label informs human) and extensible (add more labels).
 
 A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] inL] inR] inL]` structure where the left-right-left path encodes the label. Unlike label-value pairs, deep sums do not require dependent types. A labeled product could feasibly be modeled as a heterogeneous trie on the label. Consider:
 
@@ -640,6 +638,14 @@ Instead of working with the trie directly, we should represent a function that w
 An accelerated runtime could use a hashmap or other conventional structure to represent a record. Each accelerated operation on a record could perform the full construct-manipulate-extract sequence, such that the trie is not visible to normal user code and might never be represented in memory. The logical existence of the trie is only necessary to understand the record model, to reason about its formal type, commutativity, or correctness. We might similarly defer construction of labeled variants to simplify acceleration and HCI for them, too.
 
 By accelerating labeled data, Awelon can support parameter objects, flexible variants, labeled case expressions, and a more conventional programming style with events and routing on human labels.
+
+## Unique References and In-Place Updates
+
+Purely functional languages can support efficient in-place updates and many algorithms based on them, but with an important restriction: we must have a *unique reference* to the data representation. The in-place update to the data representation is thus not externally observable.
+
+Awelon copies data explicitly via operator `c`. This makes it easy to track uniqueness dynamically, essentially by flagging a unique reference as shared upon copy. For contrast, most languages implicitly share references with a lexical environment, and thus require support from the static type system to ensure a unique reference. (Clean's uniqueness types and Haskell's ST monad represent two variations on this idea.) Awelon developers can certainly leverage the `(nc)` annotation to resist accidental violations of uniqueness, but the dynamic approach is generally more opportunistic and convenient.
+
+Awelon can effectively leverage in-place update for acceleration of lists and records with indexed update functions. Accelerating lists effectively gives us mutable arrays. The uniqueness constraint does limit us to single-threaded operations. To safely support limited forms of shared state concurrency (with queues, etc.), we can accelerate process networks.
 
 ## Reactive Process Networks
 
