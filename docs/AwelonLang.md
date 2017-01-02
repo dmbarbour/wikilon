@@ -637,7 +637,7 @@ Instead of working with the trie directly, we should represent a function that w
 
 An accelerated runtime could use a hashmap or other conventional structure to represent a record. Each accelerated operation on a record could perform the full construct-manipulate-extract sequence, such that the trie is not visible to normal user code and might never be represented in memory. The logical existence of the trie is only necessary to understand the record model, to reason about its formal type, commutativity, or correctness. We might similarly defer construction of labeled variants to simplify acceleration and HCI for them, too.
 
-By accelerating labeled data, Awelon can support parameter objects, flexible variants, labeled case expressions, and a more conventional programming style with events and routing on human labels.
+By accelerating labeled data, Awelon can support parameter objects, flexible variants, labeled case expressions, and a more conventional programming style with events and routing on human labels. If *necessary*, I might introduce primitive syntactic sugar for labels like I have for natural numbers and texts. But I feel the need to see how far we can get without that, first.
 
 ## Unique References and In-Place Updates
 
