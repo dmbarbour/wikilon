@@ -94,6 +94,22 @@ Words would generally be represented as tagged objects, enabling direct associat
 
 *Note:* During compaction, forwarding pointers might be represented by a specific header value and the following word pointing to the new destination. This can work for blocks and lists, too, if we ensure our header value is not a valid object. For example, if our header value is the NULL tagged action.
 
+## Persistence
+
+I have some options for persistence. One reasonable option is use of LMDB for various tables. Alternatively, I could use a TAR file to model an ad-hoc database. And another decent option is to simply use the filesystem directly. 
+
+LMDB handles a lot of problems - atomic updates, memory management, no file handle limits. I lean in favor of LMDB at this time. I will need to control cache sizes and so on. But I'd need to do so either way.
+
+## Concurrent Update
+
+A dictionary will be maintained by multiple agents. In practice, most updates will follow simple patterns - command pattern, publish-subscribe, futures/promises. We can explicitly model intermediate structure to help avoid conflict or even to support collaborative update. Our runtime must provide at least effective support that will cover common update patterns without conflict. 
+
+A DVCS inspired approach might model a 'working' dictionary for updates. When another agent updates the shared dictionary before us, we must merge their updates before we can apply our own. This works most easily when the agents in question update independent parts of the dictionary. The main difficulty with the DVCS approach is that 'merge' is relatively ad-hoc, and that we cannot detect read-write merge conflicts. 
+
+Alternatively, we can model dictionary updates more explicitly. With this, we could include flexible metadata per update and help reduce conflicts by merging concurrent updates in some consistent manner. The main cost to modeling dictionaries in this manner is indirection - we aren't working directly with Awelon dictionaries. If we want import/export, we need both the dictionary and a fair bit of metadata. It is feasible to model this metadata within the dictionary, or as part of an external transactions model. 
+
+At the moment I favor the more explicit models.
+
 ## API Concepts
 
 The runtime API should be oriented around an agent's view of the system.
@@ -113,15 +129,17 @@ Some operations we might want to perform:
 * find clients of a word, reverse lookup
 * find words with a common prefix or suffix
 
-To support atomic updates, I have at least two options. One is the DVCS approach: an agent operates in a 'workspace' with its own logical copy of the dictionary, then we 'merge' updates from multiple agents with an ad-hoc best effort to resolve conflicts. Another approach is long-running hierarchical transactions, which is basically the same thing but we also track reads, evaluations, assumptions or assertions, and thus we can detect read-write conflicts and push them back to the agent. With transactions we might provide merge-friendly structured edits, such as renaming an object or constructing a new work order or command operation without concern about how things are named.
-
-I think the 'transaction' oriented dictionary is generally better. 
-
 It seems to me that most input and output can occur as binary streams or chunked lists. Fine grained program input (e.g. at the level of open/close block and add word) seems unnecessary, though I could support it anyway. Whether it's worth introducing depends on how much it complicates the runtime API. I may need to track missing secure hash resources, however. 
+
+For export, we could export dictionaries by secure hash or by named transaction. An interesting point is that we could export ALL dictionaries as a single, hierarchical dictionary. Outputting all dictionaries as a massive .tar file would be an interesting import/export mechanism.
 
 *Aside:* By 'optimized' output, I want *Awelon* code after all the rewrite optimizations, static linking, staging, etc.. By 'compiled' output, I would like relocatable JIT code (Clang or LLVM?) or similar.
 
 *Note:* Security models (HTTP authentication, HMAC bearer tokens, etc.), collaborative conflict avoidance patterns (discretionary locks, [behavioral programming](http://www.wisdom.weizmann.ac.il/~bprogram/more.html)), and accounting (quotas, policy for costs shared via memoization or stowage), are not part of this C runtime API. I believe they can be implemented more or less independently, and I don't want to commit to any particular model.
+
+## Streaming and Futures
+
+I could support single-assignment futures when inputting data into a computation. Is doing so worthwhile?
 
 ## Extraction
 

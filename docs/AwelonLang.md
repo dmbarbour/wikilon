@@ -666,11 +666,9 @@ Time stamps and latencies can easily be represented by natural numbers. We can u
 
 Reactive process networks fill out the remaining expressive gap of KPNs, enabling us to work with asynchronous inputs, merge streams as needed. Further, we can now control evaluation 'up to' a given logical time. This is very useful for interacting with the real world, and in real-time.
 
-## Mounted Dictionaries
+## Hierarchical Dictionaries
 
-This is a proposed feature for [mounting](http://wikipedia.org/wiki/Mount_%28computing%29) dictionaries in Awelon. Logically, mounting a dictionary copies every function from that dictionary, adding a suffix to prevent name conflicts. Words of form `foo@dict` refer to the definition of `foo` as provided via the mounted `dict`. 
-
-Mounts are represented with a simple extension to dictionary patches:
+Awelon supports inclusion of one dictionary within another via secure hash. This is similar to [mounting](http://wikipedia.org/wiki/Mount_%28computing%29) of filesystems. Words of form `foo@dict` refer to the definition of `foo` as provided via the mounted `dict`. Mounts are represented with a simple extension to dictionary patches:
 
         secureHashOfPatch1
         secureHashOfPatch2
@@ -680,14 +678,12 @@ Mounts are represented with a simple extension to dictionary patches:
         @@dict secureHashOfDict
         ...
 
-A mount is declared or updated by defining a word with special prefix `@`. However, unlike normal words, the mount is described as a secure hash of the root patch representing the mounted dictionary, or a blank line to unmount. Mounted words such as `foo@dict` must be updated indirectly, by updating the `dict` mount.
+A mount is declared or updated by defining a word with special prefix `@`. However, unlike normal words, the mount is described as a secure hash of the root patch representing the mounted dictionary (or a blank line if we want to unmount). Mounted words such as `foo@dict` must be updated indirectly, by updating the `dict` mount. Fortunately, it is easy to maintain mounts by periodically synchronizing the root secure hash.
 
 Mounts represent hierarchical composition of dictionaries. Deep hierarchical references are possible, e.g. `foo@bar@baz` would have us look for `foo@bar` under mount `baz`. Direct use of deep references is not recommended (cf. [Law of Demeter](http://wikipedia.org/wiki/Law_of_Demeter)). But it is a potential result from evaluation.
 
 During evaluation, we must track origin. If `foo` evaluates to `bar "hello" 42 qux`, then `foo@dict` evaluates to `bar@dict "hello"@dict 42@dict qux@dict`. Mounted texts are necessary to preserve semantics (for cons, nil, natural numbers) during evaluation, and mounts similarly apply to secure hash resources. Here `"hello"@dict` would desugar to `[104@dict "ello"@dict :@dict]`. 
 
-*Localization* is a useful default optimization for mounted dictionaries. 
-
-In many cases, we will have significant overlap between dictionaries. Natural numbers, texts, utility functions like `i` or `z`, and so on will tend to possess de-facto standard definitions. When we know `foo@dict` has the same meaning as `foo`, we can 'localize' to use `foo` directly. We do not guarantee preservation of associated metadata, for example `foo.doc@dict` may be different from `foo.doc`. But implicit localization of metadata may be useful for some applications.
+*Localization* is a useful optimization for mounted dictionaries. In many cases, we will have significant overlap between dictionaries. Natural numbers, texts, utility functions like `i` or `z`, and so on will tend to possess de-facto standard definitions. Whenever we know `foo@dict` has the same meaning as `foo`, we can 'localize' to use word `foo` directly. We do not guarantee preservation of associated metadata, for example `foo.doc@dict` may be different from `foo.doc`. This implicit localization of metadata may be useful for some applications.
 
 Localization can improve both aesthetics and performance. For performance, dropping unnecessary origin information can improve sharing for stowage or memoization. Aesthetics are improved by reducing the noise of adding `@dict` to everything, and focusing human attention instead on relevant differences between dictionaries.
