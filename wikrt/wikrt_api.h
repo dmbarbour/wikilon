@@ -54,27 +54,50 @@
 
 /** @brief Opaque structure for overall Wikilon environment.
  * 
+ * A wikrt_env may host multiple named, persistent dictionaries. A
+ * named dictionary may be shared by many computation contexts.
  * The environment configures many resources that must be shared by
- * many computation contexts, such as persistent storage and parallel
- * processing. A wikrt_env may host multiple named dictionaries.
+ * computation contexts, such as persistent storage and parallel
+ * processing.
  */
 typedef struct wikrt_env wikrt_env;
 
 /** @brief Opaque structure representing a context for computation.
  *
- * A context is associated with a volume of memory, effort quotas,
- * and a named dictionary. The context will be garbage collected as
- * needed. Given a context, we can evaluate code, search and update
- * the dictionary, or detect concurrent updates by other agents on
- * the same dictionary.
+ * A context is associated with a volume of memory and a dictionary. 
+ * Given a context, we can evaluate code and search or transactionally 
+ * update the dictionary. 
+ *
+ * A context is single-threaded, at least with respect to this API. A
+ * context may be used from multiple threads over its lifespan, but must
+ * be used from at most one at a time. Internal parallelism is configured
+ * at the environment layer (see wikrt_set_threadpool).
  */
 typedef struct wikrt_cx wikrt_cx;
+
+/** Binary Data
+ *
+ * Wikilon runtime uses binaries as a primary input and output type, in 
+ * many cases with a restriction such as utf-8 encoding or valid Awelon
+ * definitions. 
+ *
+ * Contiguous binaries are simple to use, but not always efficient to 
+ * provide - potentially requiring large allocations and copies. Wikilon
+ * runtime uses arrays of binary chunks, a compromise between simplicity 
+ * and flexibility.
+ *
+ * Note: Binary outputs from a context is valid only until the next
+ * operation that garbage collects the context, which you should assume
+ * of any operation that doesn't specify otherwise.
+ */
+typedef struct { uint8_t const* bytes; size_t count; } wikrt_binary_c;
+typedef struct { wikrt_binary_c const* chunks; size_t count; } wikrt_binary;
 
 /** Support a simple consistency check for dynamic library.
  *
  * Compare WIKRT_API_VER to wikrt_api_ver(). If they aren't the same,
  * then your app was compiled against a different interface than the
- * linked object implements. This is a good sanity check.
+ * linked object implements. This is a sensible sanity check.
  */
 uint32_t wikrt_api_ver();
 #define WIKRT_API_VER 20170103
@@ -87,27 +110,38 @@ uint32_t wikrt_api_ver();
  */
 wikrt_env* wikrt_env_create();
 
-/** Release environment memory. 
- *
- * Don't do this without first destroying associated contexts.
- */
+/** Release environment resources. Perform after destroying contexts. */
 void wikrt_env_destroy(wikrt_env*);
 
-/** Create a context for computation.
- * 
- * The wikrt_api assumes single-threaded access to a context. No thread
- * local storage is used, so it's okay to share wikrt_cx between threads
- * with a mutex or similar.
- *
- * In some cases, we may generate a reference into the context - to access
- * a binary resource, for example. Such references remain valid only until
- * subsequent action on the context, at which time they may be garbage 
- * collected.
- */
-wikrt_cx* wikrt_cx_create(wikrt_env*, char const* dict, uint32_t cxSizeMB);
+/** Create a context for computation. */
+wikrt_cx* wikrt_cx_create(wikrt_env*, char const* dict, size_t);
 
-/** Reset context to a freshly created condition. */
-void wikrt_cx_reset(wikrt_cx*);
+/** Clear a context for lightweight reuse. */
+void wikrt_cx_reset(wikrt_cx*, char const* dict);
+
+/** Copy one context into another. 
+ *
+ * Copying a context is the primary means of resizing a context that
+ * is too small or too large. Additionally, it may prove useful for 
+ * snapshots or templated computation. Copy may fail (and return false)
+ * if the destination is too small or belongs to the wrong environment.
+ *
+ * The destination is automatically reset prior to a successful copy.
+ */
+bool wikrt_cx_copy(wikrt_cx* src, wikrt_cx* dst);
+
+/** Freeze context for copy on write. (Experimental!)
+ * 
+ * A frozen context may be used in only two ways: source of copy, or
+ * destroyed. On copy, we'll logically incref and perform shallow copy
+ * of mutable registers and so on. On destroy, we forbid further direct
+ * copies, but memory is recovered only if no clients remain. 
+ * 
+ * This should improve performance for cases where a context contains
+ * useful resources (cached definitions, JIT code) that we expect to
+ * reuse across many future computations.
+ */
+void wikrt_cx_freeze(wikrt_cx*);
 
 /** Destroy a context, recover memory. */
 void wikrt_cx_destroy(wikrt_cx*);
@@ -120,117 +154,86 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * Awelon leverages a concept of secure hash resources for a variety
  * of purposes: binary data, anonymous functions, data stowage, and
  * inheritance or hierarchical composition of dictionaries. These 
- * binary resources are uniquely and globally identified by a 384 
- * bit BLAKE2b secure hash encoded as base64url. 
- *
- * Importantly, secure hashes are easily shared, especially among
- * multiple derived versions of a dictionary, and hence support a
- * high level of structure sharing. 
+ * binary resources are uniquely (in practice, if not theory) and
+ * globally identified by a 384 bit BLAKE2b secure hash encoded as
+ * 64 characters of base64url.
+ * 
+ * Secure hash resources support a high level of structure sharing.
+ * And large resources can be divided into smaller resources to both
+ * improve structure sharing and reduce memory burdens.
  *
  * What can we do with secure hash resources?
  *
- * - input resources to local storage
+ * - input resources for local storage
  * - extract resources by secure hash
  * - list undefined, referenced resources
  * 
- * Wikilon runtime will periodically and incrementally garbage collect
- * resources that are not in use. Thus, input or extraction must be
- * part of a transaction.
+ * Wikilon runtime may gradually garbage collect resources that are
+ * not rooted by a persistent dictionary or context. 
  */
 
-/* A hash string, encoded as NUL-terminated base64url. */ 
-typedef struct { char s[65]; } wikrt_rsc_id;
+/** 384 bits of base64url is exactly 64 bytes. */
+#define WIKRT_HASH_SIZE 64
 
-/* A binary resource.
+/** Hash a potential resource.
  *
- * Resources are represented as contiguous memory to keep the API
- * simple. Very large resources should be divided into smaller 
- * components to promote reuse and reduce memory burdens.
- */
-typedef struct { uint8_t const* bytes; uint64_t count; } wikrt_binary;
-
-/* Hash a potential resource without storing it. */
-wikrt_rsc_id wikrt_hash(wikrt_binary);
-
-/* Add a resource to the computation context. 
- *
- * A resource becomes a persistent part of the environment, shared among
- * many dictionaries. But it may later be garbage collected if not part
- * of a dictionary. One may optionally obtain the resource ID (NULL here
- * will simply drop the output). 
- *
- * This may fail if the context is full.
- */
-bool wikrt_add_resource(wikrt_cx*, wikrt_binary, wikrt_rsc_id*);
-
-/* Extract a resource from the computation context.
- *
- * We can extract any resource known to the context or its environment.
- * 
- * This may fail, returning false and a zero size binary, if the resource
- * is not recognized or cannot be loaded into context memory. If it does
- * succeed, the returned binary is valid until at least the next action on
- * the context (precisely, the next action that might cause GC). 
-
-If it does succeed, the returned binary resource
- * remains valid until at least the next action on the context.
- *
- * NOTE: Timing attacks could discover defined secure hashes. Because
- * resources may contain sensitive information, this presents a valid
- * security concern. I recommend additional authentication at the web
- * service layer to limit lookup by secure hash, such as an HMAC. Or
- * at least add a large random delay to add noise when a lookup fails.
+ * The 384-bit BLAKE2b secure hash algorithm is used. Data returned is
+ * WIKRT_HASH_SIZE bytes of base64url in 'hash', which we assume to be
+ * of sufficient size. No NUL terminal is added.
  */ 
+void wikrt_hash(wikrt_binary, char* hash);
 
-
-
-/** Obtain the secure hash for any binary. 
- *
+/** Add resource to context.
  * 
- */
-wikrt_rsc_id wikrt_secure_hash(uint8_t const*, size_t);
-
-
-
-/** PROGRAM AND DATA ENTRY 
+ * A resource is moved to the underlying environment heuristically or
+ * if necessary because due to persistent dependencies. Otherwise, it
+ * may be stored within the context.
  *
- * Bulk
+ * Once a resource is added to a context, it will remain available in
+ * the context until that context is destroyed or reset.
+
+if used by persistent
+ * data and not currently defined. 
+Resources only used within by this
+ * current context, however, 
+ * a missing. The
+ * context prevents garbage collection of the resource while we're
+ * still deciding what to do with it. Added resources can only be
+ * collected after this context is reset or destroyed.
+ *
+ * The 'hash' result, if not NULL, just returns wikrt_hash to avoid
+ * redundant computation in cases where the combined operation is
+ * easy. However, BLAKE2b is fast enough that redundant computation
+ * is not a big deal.
  */
+bool wikrt_add_resource(wikrt_cx*, wikrt_binary, char* hash);
 
+/** Extract resource data.
+ *
+ * On success, returns the binary pointer. Failure is possible either
+ * because the resource is not defined (ENOENT) or there was no space
+ * to allocate the binary (ENOMEM). On failure, we return NULL and set
+ * errno appropriately.
+ *
+ * The resource is not necessarily copied into the context, depending
+ * on the underlying database. Under the current implementation, this
+ * is a zero-copy operation.
+ *
+ * NOTE: Timing attacks can discover defined secure hashes. Resources
+ * can also contain sensitive information. So this should be prevented
+ * at the web service layer, e.g. by HMAC on secure hash URLs, or just
+ * not responding to an ENOENT request for the secure hash resource. 
+ */
+wikrt_binary* wikrt_get_resource(wikrt_cx*, wikrt_rsc_id const*);
 
-
-typedef enum wikrt_rsc_type
-{ WIKRT_RSC_DICT
-, WIKRT_RSC_CODE
-, WIKRT_RSC_BINARY
-} wikrt_rsc_type;
-
-/** Shallow reflection over values. */
-typedef enum wikrt_val_type
-{ WIKRT_TYPE_UNDEF      // an undefined type
-, WIKRT_TYPE_INT        // any integer
-, WIKRT_TYPE_PROD       // a pair of values
-, WIKRT_TYPE_UNIT       // the unit value
-, WIKRT_TYPE_SUM        // value in left or right
-, WIKRT_TYPE_BLOCK      // block of code, a function
-, WIKRT_TYPE_SEAL       // discretionary sealed value
-, WIKRT_TYPE_STOW       // stowed value reference
-, WIKRT_TYPE_TRASH      // placeholder for discarded value
-, WIKRT_TYPE_FUTURE     // a lazy or asynchronous future value
-} wikrt_val_type;
-
-
+////////////////////
+// PROGRAM ENTRY //
+//////////////////
 
 
 
 /** Is the argument a valid Awelon word? */
 bool wikrt_valid_word(char const*, size_t);
-
-
-
-
-/** @brief Test for a valid token string. */
-bool wikrt_valid_word(char const*);
 
   ////////////////////////////
  // PROGRAM AND DATA ENTRY //

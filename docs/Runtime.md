@@ -67,32 +67,21 @@ An advantage of modeling a stack as a unique array is that it becomes feasible (
 
 Let's say our allocations are two-word aligned, and our words are either 4 bytes or 8 bytes depending on machine. This gives us 3 reliable pointer tag bits. Use of pointer tag bits can discriminate a few 'small' values to reduce allocation costs. 
 
-Proposal:
+A modest proposal:
 
-        00i     small constants, actions
-        01i     pair cons (B, A) => [B A]
-        11i     list cons (H, T) => [H T :]
-        10i     tagged objects (size/type in header)
+        i00     small constants, actions, tags
+        i01     tagged objects (type in header)
+        i10     pair cons (B, A) => [B A]
+        i11     list cons (H, T) => [H T :]
 
-The `i` bit enables all values to be logically inlined as functions. In Awelon, all values are functions. This is mostly useful in context of operations like bind or compose, enabling uniform treatment of pair cons to support pairs, bindings, compositions, etc.. It also reduces overhead for arity checks, since we don't need to peek beyond the pointer to determine how an object behaves under bind, swap, etc..
+The `i` bit enables any value to be logically inlined as a function. This is mostly useful in context of operations like bind or compose, enabling uniform treatment of pair cons to support pairs, bindings, compositions, etc.. It also reduces overhead for arity checks, since we don't need to peek beyond the pointer to determine how an object behaves under bind, swap, etc..
 
-Small constants would be things we can represent within the space of a pointer - natural numbers are the most critical, but other potentially valuable targets include: small integers, texts, labels, etc.. Since we lose three bits even before discriminating value types, we'll probably be limited (with 4-byte words) to about 256 million natural numbers before we must switch to a tagged representation. With 8-byte words, this limitation is much less significant.
+Small constants would be values we can represent within a word. Small natural numbers and tags are perhaps the most critical, but it would be tempting to also support small integers, small texts or labels, etc.. Covering accelerated functions might also be convenient. On a 32-bit system, we don't have a lot of room for innovation here. But on a 64-bit system, 'small constants' can adequately cover a lot.
 
-Optimizing pair cons gives us efficient `[[B]A]` block bind, `[B A]` composition, and `[[B][A]]` pairs. Simple tuples, too - `[[C][B][A]]` can be represented as binding `[C]` to `[[B][A]]`. We can also represent `[[B]]` as a pair cons, i.e. `[B] [] b`, but recognizing pair constructions specifically is convenient. Labeled values, etc. can be represented this way. This seems very widely useful, convenient for rapid construction of ad-hoc computations and data.
+Tagged objects can cover any larger object, though the added header overhead may be significant. Modeling tags uniformly as small constants should also simplify the 'compact' phase of mark-compact algorithms. Programs, arrays, records, record-of-arrays vs. array-of-records, etc.. might be handled via tagged objects.
 
-Optimizing list cons is perhaps less generally useful. We can always represent `[[H] [T] :]` as two pair cons cells (`([H], [[T]:]i)` or `([[H][T]]i, :)`). But lists can adequately cover a lot of data structures, especially heterogeneous lists, including trees and streams. Halving the representation cost seems worthwhile.
-
-While cons cells are reasonably compact, very useful for lightweight construction, they aren't optimal for large structures. Large tuples and lists could instead be accelerated to use tagged object array structures to again halve the representation costs and reduce pointer chasing. With uniqueness and acceleration, we can also support copy-on-write and efficient in-place updates. Between these, we could achieve very significant performance benefits - e.g. supporting many algorithms that use mutable arrays in a single threaded mode. *Aside:* Something like shared arrays are feasible if we use logical linear slices, rejoins, and combine this with KPN-style accelerated message passing.
-
-Labeled data - variants, records - need some consideration. Labels (structured left-right sum paths) can be tagged objects or perhaps small constants. Records could be represented with hashmaps or similar (perhaps a perfect hashmap). Compiled record structures are viable, but might need be translated to and from a hashmap outside of type-safe code. Or we might want to logically translate the record to a tuple within compiled code, then back to a record at the end, enabling a record to be logically divided among different subprograms. In-place mutation of unique records could also be convenient.
-
-Programs can be fully represented using pair cons cells, but large programs can be optimized to an array-like representation, terminating with a `\return` action or tail-call variant. This reduces pointer chasing and indirection.  We might specialize some computations, e.g. `[A] b a` to `\push2nd A \pop`, to help improve locality of computation. For interpretation, I'll focus on optimizations that can be serialized back to the original code without global rewrites.
-
-An evaluation thread must have a heap, a program under construction, the call-return stack, and some general purpose registers. Our stacks and program will be represented within the heap, so could be understood as specialized registers.
-
-Words would generally be represented as tagged objects, enabling direct association of code.
-
-*Note:* During compaction, forwarding pointers might be represented by a specific header value and the following word pointing to the new destination. This can work for blocks and lists, too, if we ensure our header value is not a valid object. For example, if our header value is the NULL tagged action.
+Optimizing the basic cons cell allows us to avoid headers for many lightweight constructions.
+Optimizing basic cons cells for pairs (generalizing to `[[B]A]` block bind, `[[B][A]]` pairs, and `[B A]` composition) and list cons cells (to cover common list and tree structured data) seems highly convenient. Larger lists or tuples might later be represented using tagged arrays.
 
 ## Persistence
 
@@ -100,15 +89,23 @@ I have some options for persistence. One reasonable option is use of LMDB for va
 
 LMDB handles a lot of problems - atomic updates, memory management, no file handle limits. I lean in favor of LMDB at this time. I will need to control cache sizes and so on. But I'd need to do so either way.
 
-## Concurrent Update
+## Concurrent Update?
 
 A dictionary will be maintained by multiple agents. In practice, most updates will follow simple patterns - command pattern, publish-subscribe, futures/promises. We can explicitly model intermediate structure to help avoid conflict or even to support collaborative update. Our runtime must provide at least effective support that will cover common update patterns without conflict. 
 
-A DVCS inspired approach might model a 'working' dictionary for updates. When another agent updates the shared dictionary before us, we must merge their updates before we can apply our own. This works most easily when the agents in question update independent parts of the dictionary. The main difficulty with the DVCS approach is that 'merge' is relatively ad-hoc, and that we cannot detect read-write merge conflicts. 
+A DVCS inspired approach might model a 'working' dictionary for updates. When another agent updates the shared dictionary before us, we must merge their updates before we can apply our own. This works most easily when the agents in question update independent parts of the dictionary. 
 
-Alternatively, we can model dictionary updates more explicitly. With this, we could include flexible metadata per update and help reduce conflicts by merging concurrent updates in some consistent manner. The main cost to modeling dictionaries in this manner is indirection - we aren't working directly with Awelon dictionaries. If we want import/export, we need both the dictionary and a fair bit of metadata. It is feasible to model this metadata within the dictionary, or as part of an external transactions model. 
+The main difficulties with a DVCS approach is that 'merge' is relatively ad-hoc. A lesser issue is that we cannot detect read-write merge conflicts. I could try to keep some extra metadata within the dictionary to help prevent merge conflicts, e.g. by tracking within a dictionary that a word was recently renamed or that a command-pattern update occurs after another but not necessarily immediately after.
 
-At the moment I favor the more explicit models.
+A transactional model would keep more meta-data and gradually construct a new dictionary. 
+
+
+
+Alternatively, we can model dictionary updates more explicitly. With this, we could include flexible metadata per update and help reduce conflicts by merging concurrent updates in some consistent manner. The main cost to modeling dictionaries in this manner is indirection - we aren't working directly with Awelon dictionaries. If we want import/export, we need both the dictionary and a fair bit of metadata. It is feasible to model this metadata within the dictionary, or as part of an external transactions model.
+
+With the alternative, I have an option of tracking transactional information *internally* to a dictionary (e.g. as a special dictionary object), or externally (as a transaction). The external option seems both more broadly useful
+
+At the moment I favor the more explicit model, even if it requires more information to track concurrent transactions. 
 
 ## API Concepts
 
@@ -139,7 +136,11 @@ For export, we could export dictionaries by secure hash or by named transaction.
 
 ## Streaming and Futures
 
-I could support single-assignment futures when inputting data into a computation. Is doing so worthwhile?
+I could support single-assignment futures when inputting data into a computation. This would be trivial, in terms of undefined words. But is doing so worthwhile? Without streaming IO, the C API is a lot simpler.
+
+## Evaluations
+
+
 
 ## Extraction
 
