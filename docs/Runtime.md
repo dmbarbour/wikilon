@@ -80,14 +80,38 @@ Small constants would be values we can represent within a word. Small natural nu
 
 Tagged objects can cover any larger object, though the added header overhead may be significant. Modeling tags uniformly as small constants should also simplify the 'compact' phase of mark-compact algorithms. Programs, arrays, records, record-of-arrays vs. array-of-records, etc.. might be handled via tagged objects.
 
-Optimizing the basic cons cell allows us to avoid headers for many lightweight constructions.
-Optimizing basic cons cells for pairs (generalizing to `[[B]A]` block bind, `[[B][A]]` pairs, and `[B A]` composition) and list cons cells (to cover common list and tree structured data) seems highly convenient. Larger lists or tuples might later be represented using tagged arrays.
+Optimizing the basic cons cell allows lightweight common constructions - the `[[B]A]` block bind, `[[B][A]]` pairs, and `[B A]` composition. List cons cells cover common list and tree structured data. Larger lists or tuples might later be represented using tagged arrays.
 
-## Persistence
+## Persistence and Resources
 
-I have some options for persistence. One reasonable option is use of LMDB for various tables. Alternatively, I could use a TAR file to model an ad-hoc database. And another decent option is to simply use the filesystem directly. 
+A challenge I must still consider is how to model persistence and secure hash resources.
 
-LMDB handles a lot of problems - atomic updates, memory management, no file handle limits. I lean in favor of LMDB at this time. I will need to control cache sizes and so on. But I'd need to do so either way.
+Some basic options:
+
+* persistent compacting "heap" per environment, relative offsets
+* LMDB persistence, with tables and transactions
+* Filesystem persistence, directory or tar file layout
+
+The LMDB option currently seems like a Goldilocks solution, trading some flexibility and control but handling various problems including atomic update, zero-copy access, and resource management.
+
+Some thoughts:
+
+* resist timing attacks - secure hashes as capabilities, must not be guessable by timing "no entity" responses and incrementally modifying the hash. Proposed solution: use first 60 bits for fast table lookups, then compare the remaining hash bits via constant-time algorithm. This constrains timing attacks to revealing up to 60 bits of an unknown resource name, and 60 bits reduces collisions to one in a billion or so (via birthday paradox).
+
+* global addressing locally - I can map global addresses to, for example, 64-bit local addresses. Doing so could save me a lot of space and lookup overheads, but only if I use the local address in most cases. For secure hash resources, this would never be the case. I suppose I could use local addressing for transactions, but even those I might later wish to share. So I'll stick to global addressing, use of full secure hashes.
+
+* plain text internally - I can rewrite 64 bytes base64url to 48 byte keys. The performance benefits would be very minor, but the binaries would be much less convenient and self explaining in context of external tooling (`mdb_dump` and similar). Similarly, we might benefit from tracking associative metadata (reference counts, mostly) using plain text.
+
+* multiple reference counts - since a resource is just a binary representation, I may (on rare occasios) need to interpret it in multiple ways. So reference counts on an object might include metadata regarding how a resource is interpreted through a reference. We might use `3b 11d` to encode a reference count that an object is referenced as type `b` (binary) and eleven times as type `d` (dictionary patch). 
+
+* lazy reference counting - we can temporarily allow a `0d`, indicating that we need to parse the dictionary patch and decref its dependencies. A zero reference count table may help incremental GC quickly return to objects that must be collected. We could add expiration indicators to zero reference count objects, to keep them available for an extra while.
+
+* ephemeral resources - a context can hold onto a resource that has a zero persistent reference count. I don't want to scan contexts when it's time to GC, so my best idea at the moment is: 
+ * use shared *counting bloom filters* at the environment layer
+ * from each context, maintain reference counts in bloom filters
+ * active contexts may rotate to fresh bloom filters if nearly
+
+
 
 ## Concurrent Update?
 
