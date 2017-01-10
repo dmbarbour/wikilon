@@ -5,8 +5,10 @@
  * An Awelon codebase serves as both codebase and database. Applications
  * are modeled in terms of continuous observation and maintenance of the
  * codebase by multiple software and human agents, using patterns such as
- * publish-subscribe or a variant of tuple spaces. Data is represented in
- * and views are computed through the simple, pure Awelon language. 
+ * publish-subscribe or a variant of tuple spaces. Imperative code can be
+ * represented as a work order for an external software agent. But most
+ * data is stored in the codebase directly, views computed incrementally
+ * like a spreadsheet.
  *
  * Awelon syntax and semantics is very simple, reminiscent of Forth. But
  * rich structure can be presented through editable views. For example,
@@ -35,7 +37,7 @@
  *
  * Wikilon runtime aims to support core performance requirements for 
  * Wikilon. These include efficient evaluation, incremental computing, 
- * common update patterns, debugging, and resource control.
+ * common update patterns, debugging, and resource control. 
  * 
  * USAGE
  *
@@ -52,7 +54,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/** @brief Opaque structure for overall Wikilon environment.
+/** Opaque structure for overall Wikilon environment.
  * 
  * A wikrt_env may host multiple named, persistent dictionaries. A
  * named dictionary may be shared by many computation contexts.
@@ -66,7 +68,7 @@
  */
 typedef struct wikrt_env wikrt_env;
 
-/** @brief Opaque structure representing a context for computation.
+/** Opaque structure representing a context for computation.
  *
  * A context is associated with a volume of memory and a dictionary. 
  * Given a context, we can evaluate code and search or transactionally 
@@ -78,24 +80,6 @@ typedef struct wikrt_env wikrt_env;
  * at the environment layer (see wikrt_set_threadpool).
  */
 typedef struct wikrt_cx wikrt_cx;
-
-/** Binary Data
- *
- * Wikilon runtime uses binaries as a primary input and output type, in 
- * many cases with a restriction such as utf-8 encoding or valid Awelon
- * definitions. 
- *
- * Contiguous binaries are simple to use, but not always efficient to 
- * provide - potentially requiring large allocations and copies. Wikilon
- * runtime uses arrays of binary chunks, a compromise between simplicity 
- * and flexibility.
- *
- * Note: Binary outputs from a context is valid only until the next
- * operation that garbage collects the context, which you should assume
- * of any operation that doesn't specify otherwise.
- */
-typedef struct { uint8_t const* bytes; size_t count; } wikrt_binary_c;
-typedef struct { wikrt_binary_c const* chunks; size_t count; } wikrt_binary;
 
 /** Support a simple consistency check for dynamic library.
  *
@@ -119,8 +103,9 @@ void wikrt_env_destroy(wikrt_env*);
 
 /** Create a context for computation. 
  *
- * If the given dict name is NULL, we use a new volatile dictionary. 
- * Otherwise, we bind a persistent dictionary with the given name.
+ * If the given dict name is NULL, we use a volatile dictionary
+ * and update commits will fail. Otherwise, we bind a persistent
+ * dictionary with the given name.
  */
 wikrt_cx* wikrt_cx_create(wikrt_env*, char const* dict, size_t);
 
@@ -137,21 +122,18 @@ void wikrt_cx_reset(wikrt_cx*, char const* dict);
  */
 bool wikrt_cx_copy(wikrt_cx* src, wikrt_cx* dst);
 
-/** Freeze context for copy on write. (Experimental!)
+/** Freeze a context for copy on write. (Experimental!)
  * 
  * A frozen context may be used only as the source of copy or destroyed.
- * On copy, we'll share frozen context resources with the destination
- * without a deep copy, using a hidden reference count. On destroy, the
- * memory resources will still be held by the logical copies until all
- * references are destroyed or dropped.
- *
- * In theory, this can offer performance benefits assuming suitable
- * functions have been deep-linked and compiled prior to the freeze.
- * It isn't clear whether this will prove useful in practice. But it
- * is a simple idea and API, worth an experiment.
- *
- * Without frozen contexts, the only other sharing we have is through
- * persistent wikrt_env resources, such as stowage and memoization. 
+ * Instead of a deep copy, frozen context resources are reference counted
+ * and shared with each copy. Destruction of this frozen context forbids
+ * further direct copies, but resources remain in memory until the last
+ * copy is reset or destroyed.
+ * 
+ * If the frozen context contains compiled, cached functions relevant to
+ * operations in the destination, this may offer significant performance
+ * benefits similarly to copy-on-write shared library objects. In theory.
+ * I'll need to test whether this helps in practice.
  */
 void wikrt_cx_freeze(wikrt_cx*);
 
@@ -178,16 +160,14 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  *
  * - input resources for local storage
  * - extract resources by secure hash
- * - configure network access to resources
  * - list undefined, referenced resources
  * 
  * Wikilon runtime may gradually garbage collect resources that are
- * not rooted by a persistent dictionary or context. 
+ * not rooted by a persistent dictionary or context. A context will
+ * preserve added resources against GC until cleared, reset, or 
+ * destroyed.
  *
- * I might also want to support searching for resources by prefix, so I
- * can share resources using the first 128 bits or so, using the latter
- * 256 secure hash bits as an AES encryption key. This would be useful 
- * for integrating Wikilon with a content delivery network, for example.
+ * It is feasible to eventually configure network access to resources.
  */
 
 /** 384 bits of base64url is exactly 64 bytes. */
@@ -199,146 +179,114 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * exactly WIKRT_HASH_SIZE bytes of base64url. We assume the buffer is
  * of sufficient size. No NUL terminal is appended.
  */ 
-void wikrt_hash(wikrt_binary, char* hash);
+void wikrt_hash(char* rscID, uint8_t const*, size_t);
 
 /** Provide a resource.
  * 
- * At this time, Wikilon runtime only has access to resources that
- * are explicitly provided. In the future, it may be possible to 
- * configure access to content delivery networks or HTTP hosting
- * services.  
+ * At this time, Wikilon runtime only has access to resources that are
+ * explicitly provided. In the future, it may be possible to configure
+ * access to content delivery networks or HTTP hosting services.  
  * 
- * Resources are automatically named by wikrt_hash, so providing a 
- * resource consists simply of providing a binary. The hash name is
- * an optional output, if not NULL, to help avoid redundant hash
- * computations. (Though, BLAKE2b is fast enough that redundant
- * computation isn't a big deal.)
+ * Resources are named automatically by wikrt_hash. Thus, providing a 
+ * resource requires only providing the binary. However, the hash is
+ * an optional output (if not NULL) to control redundant computation.
+ * Resources may be garbage collected
  *
- * Wikilon runtime may also garbage collect resources. A resource will
- * be preserved if referenced from a persistent dictionary or a volatile
- * context. Resources added or loaded will be protected until the context
- * is reset or destroyed.
+ * Failure occurs if there isn't enough space on disk (ENOSPC) or in
+ * context memory (ENOMEM) or if the resource is oversized (EFBIG). On
+ * failure, we'll return false and set errno appropriately. Otherwise,
+ * we return true and record the provided resource.
  *
- * If this fails, we'll return false and set errno appropriately: EFBIG
- * (resource too large), ENOSPC (out of persistent storage), or ENOMEM
- * (out of context memory).
+ * NOTE: Ideally, resources should be kept small. Instead of a massive
+ * binary, consider modeling a binary with fixed-size pages as a rope 
+ * based data structure. Instead of a massive dictionary patch, break
+ * it into smaller, reusable patches of a few hundred kilobytes each.
  */
-bool wikrt_add_resource(wikrt_cx*, wikrt_binary, char* hash);
+bool wikrt_add_resource(wikrt_cx*, char* rscID, uint8_t const*, size_t);
 
 /** Extract resource data.
  *
- * It is possible to access any resource known to the runtime, not
- * limited to those referenced from the current dictionary. 
+ * This copies a resource into provided client memory. 
+ *
+ * Failure occurs if the resource is larger than the buffer (EFBIG)
+ * or the resource identity is unknown (ENOENT) or insufficient context
+ * memory to complete the query (ENOMEM). On failure, we return false
+ * and set errno appropriately. 
+ *
+ * On success, we return true and the resource is copied into the buffer,
+ * and the size field is set to the resource size. If NULL is used for the
+ * buffer, this is interpreted as a request for resource size only.
+ *
+ * NOTE: This function is designed to resist timing attacks, exposing at
+ * most the first 60 bits of known resource IDs through latency. This is
+ * important because resources are not subject to normal access control
+ * yet may contain sensitive information. Resource IDs are bearer tokens.
+ */
+bool wikrt_get_resource(wikrt_cx*, char const* rscID, uint8_t* buffer, size_t* size);
+
+// Idea: get resource with offset would support streaming output. But I
+// don't much want streaming output unless I also have streaming inputs.
+
+/** Scan for required resources.
+ *
+ * This will search for resources referenced from the current dictionary
+ * and context that have not been defined. This result is returned as an
+ * LF separated sequence of resource IDs in arbitrary order. Only as many
+ * results as fit in the result buffer will be returned. (The expectation
+ * is to batch and handle a few hundred missing resources at a time.)
+ */
+void wikrt_report_required_resources(wikrt_cx*, uint8_t* buffer, size_t* size);
+
+/** Computation 
+ *
+ * One of the most important things we'll do is evaluate a program in
+ * context of 
+ */
+
+/** Codebase Access and Update
  * 
- * On success we'll return true and update the binary to point into
- * context memory. On failure, we'll return false and set errno to
- * either ENOENT (resource not found) or ENOMEM (cannot allocate 
- * memory to return resource data). A returned binary is only valid
- * until the next operation on the same context.
+ * An Awelon codebase is called a dictionary and defines a set words.
+ * For Wikilon, I want to operate on a dictionary in several ways.
  *
- * If the binary output pointer is NULL, we instead return whether
- * or not the resource is known without returning any binary data.
- *
- * Note: This function is resistant to timing attacks. It may reveal up
- * to 60 initial bits as lookup latency, but 324 remaining bits will be
- * protected. This is important because resources may contain sensitive
- * information yet are not subject to conventional access control. Each
- * resource hash acts as a bearer token, authorizing access to data.
- */
-bool wikrt_get_resource(wikrt_cx*, wikrt_binary*, char const*);
-
-/** Program Entry
+ * - read or update a word definition
+ * - reverse lookup clients of a word
+ * - dictionary layer import or export
  * 
- * Each Wikilon runtime context is associated with a dictionary and
- * a program. 
+ * More requirements may be introduced as needed. But I'll attempt to
+ * align this Wikilon runtime API with known requirements.
+ *
+ * A context provides an implicit transaction. Updating a definition or
+ * dictionary won't become persistent until this transaction commits.
+ * However, computations may be performed in context of the proposed
+ * update.
+ */
 
-Changing the dictionary requires a full reset,
- * but the computation may be updated 
- * A Wikilon runtime context may host one active computation at a
- * time. 
+/** Set or clear an entire dictionary.
  * 
- * 
- */
-
-////////////////////
-// PROGRAM ENTRY //
-//////////////////
-
-
-
-/** Is the argument a valid Awelon word? */
-bool wikrt_valid_word(char const*, size_t);
-
-  ////////////////////////////
- // PROGRAM AND DATA ENTRY //
-////////////////////////////
-
-/** @brief Open a block. 
+ * In this case we may use rscID to specify a dictionary patch. Use NULL
+ * or an empty string to indicate an empty dictionary. This overwrites a
+ * prior dictionary.
  *
- * This effectively enters a `[` into a program stream and enables
- * further program entry to operate within a block
+ * The value of 'd' would typically be an empty string or NULL to refer
+ * to the root dictionary. But Awelon does have simplistic support for
+ * hierarchical dictionaries. By specifying dictionary "bar", you can
+ * update just words of the form "foo@bar".
  */
-void wikrt_block_open(wikrt_cx*);
+bool wikrt_set_dict(wikrt_cx*, char const* d, char const* rscID);
 
-/** @brief Close a block.
+/** Access a dictionary resource.
  *
- * This effectively enters a `]` into the program stream, balancing a
- * prior wikrt_block_open(). This may result in a negative balance, 
- * resulting in a poorly structured program fragment. Don't do that.
+ * This captures the current dictionary as a resource suitable for 
+ * efficient import, export, snapshot, or hierarchical structure.
  */
-void wikrt_block_close(wikrt_cx*);
-
-/** @brief Apply a block. ABC `a`. [B][A]a == A[B]. */
-void wikrt_apply(wikrt_cx*);
-
-/** @brief Bind a value to a block. ABC `b`. [B][A]b == [[B]A]. */
-void wikrt_bind(wikrt_cx*);
-
-/** @brief Copy a value. ABC `c`. [A]c == [A][A]. */
-void wikrt_copy(wikrt_cx*);
-
-/** @brief Drop a value. ABC `d`. [A]d ==    . */
-void wikrt_drop(wikrt_cx*);
-
-/** @brief Inject arbitrary token. {foo}.
- *
- * Note: It is recommended that most tokens go through dedicated
- * APIs, if only to better document the intention. 
- */
-void wikrt_token(wikrt_cx*, char const*);
-void wikrt_token_l(wikrt_cx*, char const*, size_t);
-
-/** @brief Embed text literal data. */
-void wikrt_text(wikrt_cx*, char const*);
-void wikrt_text_l(wikrt_cx*, char const*, size_t);
-
-/** @brief Embed numeric data. 
- *
- * Until more accelerators are developed, only natural numbers are
- * well supported. But I'd like to support floating point numbers at 
- * some point.
- */
-void wikrt_nat(wikrt_cx*, uint64_t);
-
-/** @brief Extend program via ABC text fragment. 
- *
- * This is a convenient way to inject a code fragment if you have the
- * serialized bytecode representation. The code fragment must be valid
- * in a minimal sense that texts and tokens are complete. Blocks don't
- * need to be complete and balanced, but it is recommended. 
- */
-void wikrt_abc(wikrt_cx*, char const* abc);
-void wikrt_abc_l(wikrt_cx*, char const* abc, size_t);
+bool wikrt_get_dict(wikrt_cx*, char const* d, char* rscID);
 
 
+/** Load a word's definition as context program. */
+bool wikrt_load_def(wikrt_cx*, char const* word);
 
-
-/** @brief Swap two values. [B][A]w == [A][B]; w = []ba. */
-void wikrt_swap(wikrt_cx*);
-
-/** @brief Inline a value. [A]i == A; i = []wad. */
-void wikrt_inline(wikrt_cx*);
-
+/** Save context program to a word's definition. */
+bool wikrt_save_def(wikrt_cx*, char const* word);
 
 /** @brief Extend current program via ABC text.
  * 
@@ -382,99 +330,9 @@ SIZE_MAX). The return value indicates
 void wikrt_abc_str(wikrt_cx*, char const* abc, size_t);
 
 
-/** @brief Inject an ABC string directly. 
- *
- * This a
- * This is an easy way to enter a subprogra easiest way to enter a program.
- *
- */
-size_t wikrt_abcstr(wikrt_cx*, char const* abc);
-size_t wikrt_abcstr_len(wikrt_cx*, char const* abc, size_t);
-
-
-/** @brief ABC primitive `a` - apply. [B][A]a == A[B]. */ 
-void wikrt_apply(wikrt_cx*);
-
-/** @brief ABC primitive `b` - bind. [B][A]b == [[B]A]. */
-void wikrt_bind(wikrt_cx*);
-
-/** @brief ABC primitive `c` - copy. [A]c == [A][A]. */
-void wikrt_tok(wikrt_cx* cx);
-
-/** 
-void wikrt_nat(wikrt_cx* cx, uint64_t);
-
-
-
-
-
-// NOTE: I'll eventually want to export recognized accelerators and annotations.
-// I'm not sure how to best go about this, though. Maybe as a simple AO dictionary
-// string, to provide a compact representation.
-
   /////////////////////////
  // BASIC DATA PLUMBING //
 /////////////////////////
-
-/** @brief (a*e) → (a*(a*e)). ABC op `^`. 
- *
- * Note: Some values are logically non-copyable. Among these are affine
- * blocks and pending computations. Copy is also likely to fail due to
- * lack of space, if the context is close to full.
- */
-void wikrt_copy(wikrt_cx*);
-
-/** @brief (a*e) → e. ABC op `%`.
- *
- * You may drop a value from the context. The value must be droppable, i.e.
- * neither linear nor relevant. If you're dealing with values that might not
- * be droppable, but you want to drop them anyway, use wikrt_trash.
- */
-void wikrt_drop(wikrt_cx*);
-
-/** (a*(b*c))→(b*(a*c)). ABC op `w`. */
-void wikrt_wswap(wikrt_cx*);
-
-/** (a*(b*(c*d)))→(a*(c*(b*d))). ABC op `z`. */
-void wikrt_zswap(wikrt_cx*);
-
-/** (a*(b*c))→((a*b)*c). ABC op `l`. */
-void wikrt_assocl(wikrt_cx*);
-
-/** ((a*b)*c)→(a*(b*c)). ABC op `r`. */
-void wikrt_assocr(wikrt_cx*);
-
-/** ((a+(b+c))*e)→((b+(a+c))*e). ABC op `W`. */
-void wikrt_sum_wswap(wikrt_cx*);
-
-/** ((a+(b+(c+d)))*e)→((a+(c+(b+d)))*e). ABC op `Z`. */
-void wikrt_sum_zswap(wikrt_cx*);
-
-/** ((a+(b+c))*e)→(((a+b)+c)*e). ABC op `L`. */
-void wikrt_sum_assocl(wikrt_cx*);
-
-/** (((a+b)+c)*e)→((a+(b+c))*e). ABC op `R`. */
-void wikrt_sum_assocr(wikrt_cx*);
-
-/** (a*((b+c)*e))→(((a*b)+(a*c))*e). ABC op `D`. */
-void wikrt_sum_distrib(wikrt_cx*);
-
-/** (((a*b)+(c*d))*e)→((a+c)*((b+d)*e)). ABC op `F`. */
-void wikrt_sum_factor(wikrt_cx*);
-
-// ACCELERATED DATA PLUMBING
-
-/** (a*b)→(b*a). ABC ops `vrwlc`. Non-allocating. Fail-safe. */
-void wikrt_accel_swap(wikrt_cx*);
-
-/** ((a+b)*e)→((b+a)*e). ABC ops `VRWLC`. */
-void wikrt_accel_sum_swap(wikrt_cx*);
-
-/** (a * ((b * c) * d)) → (a * (b * (c * d))). ABC ops `wrzw`. */
-void wikrt_accel_wrzw(wikrt_cx* cx);
-
-/** (a * (b * (c * d))) → (a * ((b * c) * d)). ABC ops `wzlw`. */
-void wikrt_accel_wzlw(wikrt_cx* cx);
 
 /* I'll introduce accelerators as they're developed. */
 
@@ -482,33 +340,6 @@ void wikrt_accel_wzlw(wikrt_cx* cx);
  // DATA INPUT AND OUTPUT //
 ///////////////////////////
 
-/** @brief Allocate and eliminate unit values.
- *
- *   wikrt_intro_unit:      (a)→(1*a)       vvrwlc
- *   wikrt_elim_unit:       (1*a)→(a)       vrwlcc
- *   wikrt_intro_unit_r:    (a)→(a*1)       v
- *   wikrt_elim_unit_r:     (a*1)→(a)       c
- */
-void wikrt_intro_unit(wikrt_cx*);
-void wikrt_elim_unit(wikrt_cx*);
-void wikrt_intro_unit_r(wikrt_cx*);
-void wikrt_elim_unit_r(wikrt_cx*);
-
-/** @brief Introduce and extract 'sum' values.
- *
- * Wrap:    (a * e) → ((a+0) * e)  (if WIKRT_INL)
- *                  → ((0+a) * e)  (if WIKRT_INR)
- * Unwrap:  ((a+_) * e) → (a * e)  with WIKRT_INL
- *          ((_+a) * e) → (a * e)  with WIKRT_INR
- *
- * Note: Wikilon runtime optimizes for shallow sums on pairs or the
- * unit value. Representation for lists, booleans, and simple trees
- * of ((data*(left*right))+1) is reasonably efficient.
- */
-
-typedef enum wikrt_sum_tag { WIKRT_INL = 0, WIKRT_INR = 1 } wikrt_sum_tag;
-void wikrt_wrap_sum(wikrt_cx*, wikrt_sum_tag);
-void wikrt_unwrap_sum(wikrt_cx*, wikrt_sum_tag*);
 
 /** @brief Allocation of integers. (e)→(Int*e).
  *

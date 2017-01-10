@@ -35,11 +35,13 @@ Some desiderata:
 * generational GC to avoid copying of stable objects
 * hierarchical GC to limit synchronization frequency
 
-I think my best bet for GC is to use copying for a younger generation, gradually build a set of survivors at one side of the heap. Then, when we reach some thresholds, we apply a *mark-compact* algorithm on the full heap to clear survivors. This is a well proven, general design. It does risk large GC pauses for mark-compact on a large heap with many survivors. But GC pauses are a lesser issue with pure computations. 
+I think my best bet for GC is to use fast copying for a young generation of small objects, gradually build a set of survivors at one side of the heap. Then, when we reach some thresholds, apply a *mark-compact* algorithm on the full heap to promote survivors. This is a well proven, general design. It does risk large GC pauses for mark-compact on a large heap with many survivors. But GC pauses are a lesser issue with pure computations. 
+
+There are some good compacting algorithms that are linear in heap size. But an offset table is also a pretty good option.
 
 Due to in-place updates on some linear objects potentially updating objects in the survivor set, I may need a simple write barrier to track which objects have been written recently to provide additional GC roots. Depending on use of registers and stacks and in-place updates and unboxed arrays, we might be able to avoid a lot of intermediate allocations for common patterns in Awelon. 
 
-I would like to avoid full compactions in the common case. So I might need an extra, intermediate generation that performs either copy or compaction. This complicates write barriers a bit insofar as I need to maintain lists of potential roots between generations. There are diminishing returns for having many generations, but even one or two generations would cover most common cases.
+I would like to avoid full compactions in the common case. So I might need another intermediate generation that performs either copy or compaction. This complicates write barriers a little insofar as I need to track roots for multiple generations. There are diminishing returns for having many generations, but even one or two generations would cover most common cases.
 
 *Note:* be sure to use *two* bitfields for mark-compact bits. One for grey, one for black. This enables us to test at a word level whether a grey word matches a black word (do we need to scan more?), and to easily mask or test both bitfields using the same offsets. I'd also need to ensure space is available for marking in the worst case, so this would be an upper constraint on the surviving set. Fortunately, I only need mark bits during mark and compaction.
 
@@ -71,8 +73,8 @@ A modest proposal:
 
         i00     small constants, actions, tags
         i01     tagged objects (type in header)
-        i10     pair cons (B, A) => [B A]
-        i11     list cons (H, T) => [H T :]
+        i10     composition cell (B, A) => [B A]
+        i11     constructor cell (H, T) => [H T :]
 
 The `i` bit enables any value to be logically inlined as a function. This is mostly useful in context of operations like bind or compose, enabling uniform treatment of pair cons to support pairs, bindings, compositions, etc.. It also reduces overhead for arity checks, since we don't need to peek beyond the pointer to determine how an object behaves under bind, swap, etc..
 
@@ -80,7 +82,17 @@ Small constants would be values we can represent within a word. Small natural nu
 
 Tagged objects can cover any larger object, though the added header overhead may be significant. Modeling tags uniformly as small constants should also simplify the 'compact' phase of mark-compact algorithms. Programs, arrays, records, record-of-arrays vs. array-of-records, etc.. might be handled via tagged objects.
 
-Optimizing the basic cons cell allows lightweight common constructions - the `[[B]A]` block bind, `[[B][A]]` pairs, and `[B A]` composition. List cons cells cover common list and tree structured data. Larger lists or tuples might later be represented using tagged arrays.
+Optimizing basic composition gives us lightweight common constructions - the `[[B]A]` block bind, `[[B][A]]` pairs, and `[B A]` composition. List constructor cells then efficiently cover list and tree structured data. Larger lists or tuples should be accelerated and represented using tagged arrays.
+
+## Mutable Objects
+
+A purely functional language can have in-place mutable data so long as it is not shared, a unique reference. For this runtime, I intend to support copy-on-write using dynamic information about sharing. Use of `(nc)` types can help enforce uniqueness (modulo debug or persistence snapshots).
+
+I need some bits in the object header to indicate a unique object. Additionally, in-place update may interact with a generational GC: when we update an object from an older generation in place, we must also track it as a "root" for purpose of GC on younger generations. I need a second bit for this write barrier.
+
+Evaluation doesn't necessarily eliminate uniqueness, e.g. because `(eval)` or `(par)` should preserve uniqueness of contained data. This is essential if we're to use patterns like dividing an array computation across multiple parallel threads then stitch the results back together. 
+
+List and composition cells might be a special case for mutable objects. We cannot update such objects in place because we lack header bits to track uniqueness, and we lack generational write barriers. But copies also need attention, since they might reference unique objects. We may need to wrap copied lists with a header. I might convert large lists to a shared array upon copy.
 
 ## Persistence and Resources
 
