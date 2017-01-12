@@ -37,7 +37,7 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 ## Words
 
-Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{},;|&=\"`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large.
+Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{}\/,;|&="`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large. 
 
 A useful subset of words is implicitly defined:
 
@@ -666,27 +666,23 @@ Reactive process networks fill out the remaining expressive gap of KPNs, enablin
 
 ## Hierarchical Dictionaries
 
-To support dictionary-passing application models, Awelon will support hierarchical inclusion of one dictionary within another via secure hash:
+Awelon supports a simple model for hierarchical structure. The motivation is to support dictionary passing or synchronizing application patterns and corresponding security models that are otherwise difficult to represent. Awelon dictionaries are most readily referenced and shared via secure hash, so we leverage that here:
 
         secureHashOfPatch1
         secureHashOfPatch2
         @word1 definition1
+        ...
         @@dict secureHashOfDict
-        @word2 definition2
+        ...
+        @wordN definitionN
 
-The `@@dict` line defines a named dictionary `dict`. A word of form `foo@dict` refers to the definition of `foo` within `dict`. Named dictionaries are not first-class in Awelon and must be referenced indirectly. A dictionary may otherwise be updated anywhere a word may be updated, as exemplified by placing it between definitions of `word1` and `word2`. To indicate an empty dictionary, a blank line will suffice and also serves as the implicit default.
+We update the definition of special symbol `@dict` to define a child dictionary. By default, all hierarchical dictionaries are empty. Use of a blank line in place of the secure hash is treated as a synonym for the empty dictionary. As with words, only the final definition of a dictionary symbol applies.
 
-We may add the `@dict` suffix to any word or text or block to indicate context.
+Child dictionaries are referenced indirectly. A word of the form `foo@dict` refers to the meaning of `foo` within `dict`. When linked, if the definition of `foo` in `dict` is `x y z` then `foo@dict` will link as `x@dict y@dict z@dict`. Similarly, we may annotate a block for evaluation in context of a child dictionary, `[x y z]@dict == [x@dict y@dict z@dict]`. Since text is sugar for blocks, we also support `"hello"@dict == [104 "ello" :]@dict`. No space is permitted between a word, block, or text and the `@dict` annotation.
 
-        [a b c]@dict == [a@dict b@dict c@dict]
-        "hello"@dict == [104 "ello" :]@dict 
-        42@dict      == [41 S]@dict
+Deep hierarchical references such as `foo@bar@baz` are possible. These are left-associative, that is `foo@bar` under `baz`. I recommend against such references in source code (cf. Law of Demeter), but such references may be the result of an evaluation. 
 
-When we link `foo@dict`, we must similarly preserve the `@dict` context for all dependencies of `foo`.
+A child cannot reference the parent. But parent and child frequently share structure and meaning - a consistent interpretation of numbers, texts, math and utility functions. 
 
-Deep hierarchy is possible and left associative, e.g. `foo@bar@baz` refers to `foo@bar` under `baz`. However, as a best practice, deep hierarchy should be avoided in source, appearing only during evaluation.
-
-*Localization* is an optimization to 'flatten' hierarchical references. In many cases, there will be significant overlap between parent and child dictionaries. Natural numbers, texts, utility functions like inline `i`, and so on will tend to possess de-facto standard definitions. Whenever we know `foo@dict` has the same evaluation behavior as `foo`, we can 'localize' to use the parent's word `foo` directly. We do not guarantee preservation of metadata associated by naming conventions, for example `foo.doc@dict` may be different from `foo.doc`. This implicit localization of metadata may be useful for some applications.
-
-Localization can improve both aesthetics and performance. For performance, dropping unnecessary origin information can improve sharing for stowage or memoization. Aesthetics are improved by reducing the noise of adding `@dict` to everything, and focusing human attention instead on relevant differences between dictionaries.
+*Localization* is an optimization that takes advantage of this sharing. Whenever `foo@bar` has the same meaning as `foo`, a localizing evaluator may forget the origin and simply replace `foo@bar` by `foo`. Localization can improve performance in context of stowage or memoization. More importantly, localization improves aesthetics and comprehension: we avoid noise like `42@bar` when it just means `42`, and applications will implicitly link localized metadata such as `foo.doc` instead of `foo.doc@bar`. Intriguingly, it is feasible for `foo@bar@baz` to localize to `foo` or `foo@bar`.
 

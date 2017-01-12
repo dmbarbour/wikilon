@@ -146,16 +146,37 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** Codebase Access and Update
- * 
- * This is the basic database API. We operate on a named dictionary,
- * and can get or set values associated with that dictionary. Each
- * resource is named, such  
 
-Because
- * dictionaries are also patch values, we may get or set the dictionary
- * as
+
+/** Codebase Access
+ *
+ * Wikilon dictionaries are relatively simple key-value systems. Both
+ * keys and values are plain text or simple binaries. 
+ *
+ * Most keys refer to Awelon words. Keys starting with `@` refer to 
+ * hierarchical child dictionaries. The empty string refers to the
+ * overall dictionary patch, and may update the dictionary as a value.
+ *
+ * Set may fail if the argument fails to parse (ENOMSG) or not enough 
+ * context memory is available (ENOMEM) or not enough persistent storage
+ * (ENOSPC). The 'get' op may similarly fail based on context memory 
+ * (ENOMEM), or limited buffer space (ENOSPC), or if the key's value
+ * is undefined (ENOENT). On failure, we'll return false and set errno.
+ *
+ * On success we return true and either record the write locally or 
+ * return the requested data. (On get, a NULL in the data field will
+ * just return the size.)
+ *
+ * But these set and get operations are not instantly promoted to the
+ * persistent dictionary. They operate on an implicit transaction.
  */
+bool wikrt_set_var(wikrt_cx*, char const* k, uint8_t const*, size_t);
+bool wikrt_get_var(wikrt_cx*, char const* k, uint8_t*, size_t*);
+
+/** Resource Access 
+ *
+ * Immutable, global, secure hash resources are shared among all the
+ * dictionaries.
 
 /** Set a dictionary value.
  *

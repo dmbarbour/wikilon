@@ -131,16 +131,22 @@ I must efficiently index a dictionary to:
 
 * find definition, given a word
 * find references to a word or annotation
-* find words with common suffix or prefix
+* find words with common suffix (or prefix)
 
-For efficient import/export, I want want to preserve dictionary resources. But it is feasible to operate mostly off the indexes, or even to produce new dictionary resources that represent the same dictionary more efficiently. Importantly, these indices must be incremental and composable, such that a composition of patches can be indexed by a function composing their indices. Structure sharing, so updates aren't scattered throughout the dictionary, may also be valuable.
+For efficient import/export of dictionaries, I want want to preserve structure of dictionary resources.
 
-All of this suggests use of trees or tries to me. Tries, unlike most search trees, have a nice property of fully deterministic structure based on the *elements* they contain rather than the update ordering. So I lean in favor of tries to improve structure sharing between independently developed dictionaries.
+But it is feasible to operate mostly off the indexes, and to generate a new dictionary resource that represents the same dictionaries more efficiently. Importantly, such indices must be incremental and composable, such that a composition of patches can be indexed by a function composing their indices. Structure sharing, so updates aren't scattered throughout the dictionary, may also be valuable.
+
+All of this suggests use of trees or tries to me. Tries, unlike most search trees, have a nice property of fully deterministic structure based on the *elements* they contain rather than their update order. I lean in favor of tries to improve structure sharing between independently developed dictionaries.
 
 * to find a definition, use trie from word to definition
 * to find clients, use trie from word to a set of words
 * one trie encodes words backwards for suffix lookups
 * set of words is encoded as a trie, using keys only
+
+During evaluation, I'll probably need to maintain another index for cached evaluations, localization of words, etc. - again, having a lot of structure sharing would be convenient.
+
+Tries require a lot of references between tree nodes, which seems a problem given 60-byte resource IDs. Use of stowage size heuristics - e.g. don't stow anything smaller than 256 or 512 bytes - might help by collapsing smaller nodes.
 
 All of this involves a lot of references between index nodes. Of course, when references are large secure hashes, having lots of small nodes is problematic. This can be mitigated using stowage style heuristics, deciding whether to collapse a node based on its apparent size. 
 
@@ -148,23 +154,24 @@ Definitions could be included directly, again via stowage, instead of a `(resour
 
 Anyhow, the runtime will need to be relatively good at working with tries and stowage.
 
-## Concurrent Update?
+## Concurrent Update
 
-A dictionary will be maintained by multiple agents, including humans. 
+Our runtime will support simplistic concurrency primitives - volatile read-update transactions. Anything more sophisticated must be built above this, such as explicitly tracking reads for older long-running transactions, or constructing transactional update procedures in a reflection monad, or twiddling state in the dictionary (or an auxiliary dictionary) to represent locks.
 
-In practice, most updates will follow simple patterns - command pattern, publish-subscribe, futures/promises. Updates from different agents will tend to occur on different parts of the codebase. We can model voluntary exclusive control using some metadata regions of the dictionary. 
+At the Wikilon layer, we might try to track higher level transactions.
+
+
+
+In practice, most updates follow simple patterns - command pattern, publish-subscribe, futures/promises. Updates from different agents tend to occur on different fragments of the codebase. We can model voluntary exclusive control using some metadata regions of the dictionary. 
 
 A DVCS inspired approach might model a 'working' dictionary for updates. When another agent updates the shared dictionary before us, we must merge their updates before we can apply our own. This works most easily when the agents in question update independent parts of the dictionary. 
 
-The main difficulties with a DVCS approach is that 'merge' is relatively ad-hoc. A lesser issue is that we cannot detect read-write merge conflicts. I could try to keep some extra metadata within the dictionary to help prevent merge conflicts, e.g. by tracking within a dictionary that a word was recently renamed or that a command-pattern update occurs after another but not necessarily immediately after.
+The main difficulties with a DVCS approach is that 'merge' is relatively ad-hoc. A lesser issue is that we cannot detect read-write merge conflicts. That said, we could add some metadata to the dictionary itself to help with particular merge conflict resolutions.
 
-A transactional model would keep more meta-data and gradually construct a new dictionary. 
+A transactional model would keep more meta-data and gradually construct a new dictionary, but also requires a place for this meta-data. I can't think of anything that isn't (ultimately) rather volatile, except to keep conflict resolution metadata either in the dictionary or an auxiliary dictionary for conflict resolution.
 
+For now, let's just support some bare minimum *volatile* transactions.  and see later what we can build atop that.
 
-
-Alternatively, we can model dictionary updates more explicitly. With this, we could include flexible metadata per update and help reduce conflicts by merging concurrent updates in some consistent manner. The main cost to modeling dictionaries in this manner is indirection - we aren't working directly with Awelon dictionaries. If we want import/export, we need both the dictionary and a fair bit of metadata. It is feasible to model this metadata within the dictionary, or as part of an external transactions model.
-
-With the alternative, I have an option of tracking transactional information *internally* to a dictionary (e.g. as a special dictionary object), or externally (as a transaction). The external option seems both more broadly useful
 
 At the moment I favor the more explicit model, even if it requires more information to track concurrent transactions. 
 

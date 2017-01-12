@@ -78,6 +78,20 @@ A third option is viable: associate effects handlers, e.g. of type `request → 
 
 That last option would most generically enable KPNs to replace simple imperative IO as the effects model, since it would effectively have the full power of multi-threading but with advantages of inherent batching and reduced complexity.
 
+### Reactive Process Networks
+
+Process networks can easily be extended with temporal features to support merging messages from multiple streams, model bus routing, etc.. This is convenient in context of working with effects or real-time, reactive systems. I've detailed this in a second blog article and now under [Awelon Language](AwelonLang.md).
+
+### Dynamic Process Networks
+
+A nice property of pi-calculus or Occam is the ability to change process and connectivity structure over time. This is possible because of the process 'sequence' composition, which requires a standard notion of process completion, or at least a clear moment or period of transition. 
+
+It isn't clear to me how to best model process completion in a general sense. We might want to signal our process network that it won't receive more input on a given port so we can perform any final outputs. Or we could just blindly halt and transition at a specific time. 
+
+With KPN values, I can develop a process that wraps a KPN value, pushing messages into the KPN or pulling them out to pass them onwards. A viable option is to accelerate such a wrapper, together with some signals to aid transitions. With acceleration, this could feasibly offer me an approach to simple dynamic process networks.
+
+I'll need to explore this idea further.
+
 ### Miscellaneous
 
 KPNs are also an interesting alternative to OOP objects. They can receive multiple method calls and prepare many outputs. As values, KPNs can be passed around first class.

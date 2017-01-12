@@ -111,18 +111,17 @@ Hence, we can evaluate and optimize opaque words, link frozen words, and GC the 
 
 Representation of these attributes is ad-hoc, subject to de-facto standardization. We could add tag fields on a dictionary object. Or we might model general policies under `META.GC`... which might be sensitive to tag fields. Whatever.
 
-## Dictionary Communication
+## Dictionary Passing or Synchronization
 
-The Awelon dictionary makes a powerful communication primitive. 
+The Awelon dictionary makes a powerful communication primitive. Consider a dictionary-passing message model. We'd send a `(message, dictionary)` pair, where our message is a short snippet of code (potentially a single word) and our dictionary contains the necessary vocabulary to interpret and use that message. 
 
-Consider a dictionary-passing message model. We'd send a `(message, dictionary)` pair, where our message is a short snippet of code (potentially a single word) and our dictionary contains the entire vocabulary to interpret and use that message. 
+This is feasible because we don't need to deliver the *full* dictionary with every message. A secure hash will do the job. Further, it's easy to compile, cache, and reuse the dictionary for many messages. Even if some tweaks are needed over time, the provider can ensure that *most* of the dictionary can still be reused. Even further, de-facto standardization will result agents sharing most of their patched together vocabularies. A newcomer to the sytem will tend to inherit from existing agents. Costs are amortized across both messages and agents.
 
-This is feasible because we don't need to send the full dictionary with every message. Awelon's already set up using secure hash patching to represent dictionaries. Thus, sending a secure hash is sufficient. The dictionary would be downloaded once and cached by the recipient. The cost of download could be amortized across many messages. It is possible the dictionary, or the bulk of it, is some de-facto standard used by many services and agents, and may thus be amortized across hundreds or thousands of users.
+Besides one-off immutable messages, documents are essentially messages that we maintain over time, and dictionaries can also serve as an effective foundation for publish-subscribe distributions - a publisher providing a whole dictionary, a subscriber synchronizing.
 
-Besides message passing, dictionaries can be used with the publish-subscribe pattern. A subscriber would continuously synchronize a dictionary and maintain views upon it (perhaps according to a work order) while a publisher might continuously provide a dictionary. Our publisher should aim to incrementally reuse most of the dictionary, such that subscribers rarely need to download more than than recent changes.
-
-Awelon supports these patterns via the *Mounted Dictionaries* feature. That is, we can directly and efficiently use these patterns via mount per message or a subscription implemented by updating a mount. These patterns may also be used externally to a dictionary. 
+Awelon supports these patterns via the *Hierarchical Dictionaries* feature.
 
 ## Application Security
 
-In an open system, we generally want to control the authority of our agents in terms of which parts of the system they may observe or directly influence. Awelon doesn't tackle this problem explicitly, instead leaving it to the effects models - e.g. a work order would need to include relevant authorizations (bearer tokens, signatures, etc.). Use of mounted dictionaries is likely to play an important role here, providing a natural boundary for updates and observations and atomic synchronizations.
+In an open system, we generally want to control the authority of our agents in terms of which parts of the system they may observe or directly influence. Awelon doesn't provide much help here, beyond support for *Hierarchical Dictionaries*, which provide a natural barrier for communication that must be explicitly bridged, and a narrow interface for synchronization. Between that and internal purity, we can push most security concerns to the RESTful application models and effects layers. 
+
