@@ -43,7 +43,7 @@ A useful subset of words is implicitly defined:
 
 * the four Awelon primitive words `a`, `b`, `c`, `d`
 * words to encode natural numbers, regex `[1-9][0-9]*`
-* secure hash resources - `$secureHash` or `%secureHash`
+* secure hash resources `$secureHash` or `%secureHash`
 
 Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small. In many cases, words may have simple, informal structure - e.g. `foo.doc` to represent documentation for `foo`. 
 
@@ -63,19 +63,17 @@ Cyclic definitions are erroneous. Loop behavior must be modeled via fixpoint com
 
 Awelon's dictionary representation is not optimal for direct use by humans. It can be tolerated in small doses. But it is intended more as an import/export format, and for efficient sharing between humans and software agents. Humans will generally observe and influence a dictionary through an editable view, perhaps as a hypermedia web service or mounted into a filesystem.
 
-*Note:* This basic dictionary is extended in *Mounted Dictionaries*, below.
+*Note:* See *Hierarchical Dictionaries* for more information.
 
 ## Secure Hash Resources
 
 Awelon has built-in support for identifying resources via secure hash. 
 
-* arbitrary programs may be referenced as `$secureHash`
+* external code or stowage is referenced via `$secureHash`
 * external binary data may be referenced via `%secureHash`
-* secure hashes are used to identify dictionary patches
+* dictionary patches are always referenced by secure hash
 
-Secure hashes implicitly name immutable structure outside the dictionary, which might be available on the local system or downloaded. If you hear about a secure hash resource from a remote source, you should be able to perform an HTTP request to obtain it either directly or with an appropriate redirect. Content-delivery networks are viable. The resource is readily verified against the secure hash, and easily cached after download. 
-
-In all cases, we use the same secure hash: 384 bits of [BLAKE2b](https://blake2.net/) encoded as 64 characters in [base64url](https://en.wikipedia.org/wiki/Base64).
+Awelon will use a 360-bit [BLAKE2b](https://blake2.net/) algorithm, and will encode the resulting 384-bit string as 60 characters [base64url](https://en.wikipedia.org/wiki/Base64). In a network context, it should be possible to request resources given their secure hashes, and perhaps form a content distribution network. (We might use only a fragment of the resource ID for lookup, and the rest for encryption.)
 
 ## Data
 
@@ -668,22 +666,27 @@ Reactive process networks fill out the remaining expressive gap of KPNs, enablin
 
 ## Hierarchical Dictionaries
 
-Awelon supports inclusion of one dictionary within another via secure hash. This is similar to [mounting](http://wikipedia.org/wiki/Mount_%28computing%29) of filesystems. Words of form `foo@dict` refer to the definition of `foo` as provided via the mounted `dict`. Mounts are represented with a simple extension to dictionary patches:
+To support dictionary-passing application models, Awelon will support hierarchical inclusion of one dictionary within another via secure hash:
 
         secureHashOfPatch1
         secureHashOfPatch2
         @word1 definition1
-        @word2 definition2
-        ...
         @@dict secureHashOfDict
-        ...
+        @word2 definition2
 
-A mount is declared or updated by defining a word with special prefix `@`. However, unlike normal words, the mount is described as a secure hash of the root patch representing the mounted dictionary (or a blank line if we want to unmount). Mounted words such as `foo@dict` must be updated indirectly, by updating the `dict` mount. Fortunately, it is easy to maintain mounts by periodically synchronizing the root secure hash.
+The `@@dict` line defines a named dictionary `dict`. A word of form `foo@dict` refers to the definition of `foo` within `dict`. Named dictionaries are not first-class in Awelon and must be referenced indirectly. A dictionary may otherwise be updated anywhere a word may be updated, as exemplified by placing it between definitions of `word1` and `word2`. To indicate an empty dictionary, a blank line will suffice and also serves as the implicit default.
 
-Mounts represent hierarchical composition of dictionaries. Deep hierarchical references are possible, e.g. `foo@bar@baz` would have us look for `foo@bar` under mount `baz`. Direct use of deep references is not recommended (cf. [Law of Demeter](http://wikipedia.org/wiki/Law_of_Demeter)). But it is a potential result from evaluation.
+We may add the `@dict` suffix to any word or text or block to indicate context.
 
-During evaluation, we must track origin. If `foo` evaluates to `bar "hello" 42 qux`, then `foo@dict` evaluates to `bar@dict "hello"@dict 42@dict qux@dict`. Mounted texts are necessary to preserve semantics (for cons, nil, natural numbers) during evaluation, and mounts similarly apply to secure hash resources. Here `"hello"@dict` would desugar to `[104@dict "ello"@dict :@dict]`. 
+        [a b c]@dict == [a@dict b@dict c@dict]
+        "hello"@dict == [104 "ello" :]@dict 
+        42@dict      == [41 S]@dict
 
-*Localization* is a useful optimization for mounted dictionaries. In many cases, we will have significant overlap between dictionaries. Natural numbers, texts, utility functions like `i` or `z`, and so on will tend to possess de-facto standard definitions. Whenever we know `foo@dict` has the same meaning as `foo`, we can 'localize' to use word `foo` directly. We do not guarantee preservation of associated metadata, for example `foo.doc@dict` may be different from `foo.doc`. This implicit localization of metadata may be useful for some applications.
+When we link `foo@dict`, we must similarly preserve the `@dict` context for all dependencies of `foo`.
+
+Deep hierarchy is possible and left associative, e.g. `foo@bar@baz` refers to `foo@bar` under `baz`. However, as a best practice, deep hierarchy should be avoided in source, appearing only during evaluation.
+
+*Localization* is an optimization to 'flatten' hierarchical references. In many cases, there will be significant overlap between parent and child dictionaries. Natural numbers, texts, utility functions like inline `i`, and so on will tend to possess de-facto standard definitions. Whenever we know `foo@dict` has the same evaluation behavior as `foo`, we can 'localize' to use the parent's word `foo` directly. We do not guarantee preservation of metadata associated by naming conventions, for example `foo.doc@dict` may be different from `foo.doc`. This implicit localization of metadata may be useful for some applications.
 
 Localization can improve both aesthetics and performance. For performance, dropping unnecessary origin information can improve sharing for stowage or memoization. Aesthetics are improved by reducing the noise of adding `@dict` to everything, and focusing human attention instead on relevant differences between dictionaries.
+

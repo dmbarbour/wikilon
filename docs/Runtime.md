@@ -110,24 +110,49 @@ Some thoughts:
 
 * resist timing attacks - secure hashes as capabilities, must not be guessable by timing "no entity" responses and incrementally modifying the hash. Proposed solution: use first 60 bits for fast table lookups, then compare the remaining hash bits via constant-time algorithm. This constrains timing attacks to revealing up to 60 bits of an unknown resource name, and 60 bits reduces collisions to one in a billion or so (via birthday paradox).
 
-* global addressing locally - I can map global addresses to, for example, 64-bit local addresses. Doing so could save me a lot of space and lookup overheads, but only if I use the local address in most cases. For secure hash resources, this would never be the case. I suppose I could use local addressing for transactions, but even those I might later wish to share. So I'll stick to global addressing, use of full secure hashes.
+* global addressing locally - I can map global addresses to, for example, 64-bit local addresses. Doing so could save me a lot of space and lookup overheads, but only if I use the local address much more frequently than global addressing. Between stowage and dictionary patches, I doubt this will be the case. So I'll stick to global addressing until there is good reason to do otherwise.
 
-* plain text internally - I can rewrite 64 bytes base64url to 48 byte keys. The performance benefits would be very minor, but the binaries would be much less convenient and self explaining in context of external tooling (`mdb_dump` and similar). Similarly, we might benefit from tracking associative metadata (reference counts, mostly) using plain text.
+* plain text internally - I can rewrite 60 bytes base64url to 45 byte binary keys, but the savings would be minor and would not extend to secure hash resources. The plain text format seems more convenient and self explaining in context of external tooling or debugging (`mdb_dump` and similar). So I'll stick to plain text for now.
 
-* multiple reference counts - since a resource is just a binary representation, I may (on rare occasios) need to interpret it in multiple ways. So reference counts on an object might include metadata regarding how a resource is interpreted through a reference. We might use `3b 11d` to encode a reference count that an object is referenced as type `b` (binary) and eleven times as type `d` (dictionary patch). 
+* reference counting - a good algorithm for long-lived, persistent resources. A precise reference count needs type information that GC understands, such as `3b+11d` meaning "referenced three times as a binary, eleven times as a dictionary", so we know how to interpret a resource. Conservative GC might essentially involve a one-size-fits-all parse algorithm, but should also work well in practice.
 
-* lazy reference counting - we can temporarily allow a `0d`, indicating that we need to parse the dictionary patch and decref its dependencies. A zero reference count table may help incremental GC quickly return to objects that must be collected. We could add expiration indicators to zero reference count objects, to keep them available for an extra while.
+* lazy reference counting - we could temporarily have a `3b+0d` reference count, indicating that we need to parse the resource as a dictionary and decref its dependencies. A zero reference count table may help incremental GC quickly return to objects that must be collected. We could add expiration indicators to zero reference count objects, to keep them available for an extra while.
 
 * ephemeral resources - a context can hold onto a resource that has a zero persistent reference count. I don't want to scan contexts when it's time to GC, so my best idea at the moment is: 
  * use shared *counting bloom filters* at the environment layer
  * from each context, maintain reference counts in bloom filters
  * active contexts may rotate to fresh bloom filters if nearly
 
+Reference counts could be conservative based on resource strings, or precise based on type information. 
 
+## Dictionary Indexing
+
+I must efficiently index a dictionary to:
+
+* find definition, given a word
+* find references to a word or annotation
+* find words with common suffix or prefix
+
+For efficient import/export, I want want to preserve dictionary resources. But it is feasible to operate mostly off the indexes, or even to produce new dictionary resources that represent the same dictionary more efficiently. Importantly, these indices must be incremental and composable, such that a composition of patches can be indexed by a function composing their indices. Structure sharing, so updates aren't scattered throughout the dictionary, may also be valuable.
+
+All of this suggests use of trees or tries to me. Tries, unlike most search trees, have a nice property of fully deterministic structure based on the *elements* they contain rather than the update ordering. So I lean in favor of tries to improve structure sharing between independently developed dictionaries.
+
+* to find a definition, use trie from word to definition
+* to find clients, use trie from word to a set of words
+* one trie encodes words backwards for suffix lookups
+* set of words is encoded as a trie, using keys only
+
+All of this involves a lot of references between index nodes. Of course, when references are large secure hashes, having lots of small nodes is problematic. This can be mitigated using stowage style heuristics, deciding whether to collapse a node based on its apparent size. 
+
+Definitions could be included directly, again via stowage, instead of a `(resource, offset)` indirection. This would be important if we wish to share structure of indices independtly of dictionary update order or patch structure. 
+
+Anyhow, the runtime will need to be relatively good at working with tries and stowage.
 
 ## Concurrent Update?
 
-A dictionary will be maintained by multiple agents. In practice, most updates will follow simple patterns - command pattern, publish-subscribe, futures/promises. We can explicitly model intermediate structure to help avoid conflict or even to support collaborative update. Our runtime must provide at least effective support that will cover common update patterns without conflict. 
+A dictionary will be maintained by multiple agents, including humans. 
+
+In practice, most updates will follow simple patterns - command pattern, publish-subscribe, futures/promises. Updates from different agents will tend to occur on different parts of the codebase. We can model voluntary exclusive control using some metadata regions of the dictionary. 
 
 A DVCS inspired approach might model a 'working' dictionary for updates. When another agent updates the shared dictionary before us, we must merge their updates before we can apply our own. This works most easily when the agents in question update independent parts of the dictionary. 
 

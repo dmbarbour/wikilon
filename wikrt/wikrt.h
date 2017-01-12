@@ -98,7 +98,10 @@ uint32_t wikrt_api_ver();
  */
 wikrt_env* wikrt_env_create();
 
-/** Release environment resources. Perform after destroying contexts. */
+/** Release environment resources. 
+ *
+ * Perform only after destroying contexts. 
+ */
 void wikrt_env_destroy(wikrt_env*);
 
 /** Create a context for computation. 
@@ -143,14 +146,59 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
+/** Codebase Access and Update
+ * 
+ * This is the basic database API. We operate on a named dictionary,
+ * and can get or set values associated with that dictionary. Each
+ * resource is named, such  
+
+Because
+ * dictionaries are also patch values, we may get or set the dictionary
+ * as
+ */
+
+/** Set a dictionary value.
+ *
+ * Each value has a name. By default, most names are simple words.
+ * But
+
+/** Set or clear an entire dictionary.
+ * 
+ * In this case we may use rscID to specify a dictionary patch. Use NULL
+ * or an empty string to indicate an empty dictionary. This overwrites a
+ * prior dictionary.
+ *
+ * The value of 'd' would typically be an empty string or NULL to refer
+ * to the root dictionary. But Awelon does have simplistic support for
+ * hierarchical dictionaries. By specifying dictionary "bar", you can
+ * update the dictionary "foo@bar".
+ */
+bool wikrt_set_dict(wikrt_cx*, char const* d, char const* rscID);
+
+/** Access a dictionary resource.
+ *
+ * This captures the current dictionary as a resource suitable for 
+ * efficient import, export, snapshot, or hierarchical structure.
+ */
+bool wikrt_get_dict(wikrt_cx*, char const* d, char* rscID);
+
+
+/** Load a word's definition as context program. */
+bool wikrt_load_def(wikrt_cx*, char const* word);
+
+/** Save context program to a word's definition. */
+bool wikrt_save_def(wikrt_cx*, char const* word);
+
+
+
 /** Secure Hash Resources
  *
  * Awelon leverages a concept of secure hash resources for a variety
  * of purposes: binary data, anonymous functions, data stowage, and
- * inheritance or hierarchical composition of dictionaries. These 
- * binary resources are uniquely (in practice, if not theory) and
- * globally identified by a 384 bit BLAKE2b secure hash encoded as
- * 64 characters of base64url.
+ * inheritance or hierarchical composition of dictionaries. 
+ *
+ * These binary resources are uniquely (in practice, if not theory)
+ * and globally identified by a string encoding a 360-bit secure hash.
  * 
  * Secure hash resources support a high level of structure sharing.
  * And large resources can be divided into smaller resources to both
@@ -170,15 +218,10 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * It is feasible to eventually configure network access to resources.
  */
 
-/** 384 bits of base64url is exactly 64 bytes. */
-#define WIKRT_HASH_SIZE 64
+/** 360 bits base64url is exactly 60 bytes. */
+#define WIKRT_HASH_SIZE 60
 
-/** Hash a binary. 
- *
- * The 384-bit BLAKE2b secure hash algorithm is used. Data returned is
- * exactly WIKRT_HASH_SIZE bytes of base64url. We assume the buffer is
- * of sufficient size. No NUL terminal is appended.
- */ 
+/** Hash a binary. */ 
 void wikrt_hash(char* rscID, uint8_t const*, size_t);
 
 /** Provide a resource.
@@ -224,8 +267,9 @@ bool wikrt_add_resource(wikrt_cx*, char* rscID, uint8_t const*, size_t);
  */
 bool wikrt_get_resource(wikrt_cx*, char const* rscID, uint8_t* buffer, size_t* size);
 
-// Idea: get resource with offset would support streaming output. But I
-// don't much want streaming output unless I also have streaming inputs.
+// Alternative APIs: Return a reference into context memory (but how do
+// we safely manage it?). Provide offset into binary (but what is the
+// symmetric insert op?).
 
 /** Scan for required resources.
  *
@@ -243,50 +287,10 @@ void wikrt_report_required_resources(wikrt_cx*, uint8_t* buffer, size_t* size);
  * context of 
  */
 
-/** Codebase Access and Update
- * 
- * An Awelon codebase is called a dictionary and defines a set words.
- * For Wikilon, I want to operate on a dictionary in several ways.
- *
- * - read or update a word definition
- * - reverse lookup clients of a word
- * - dictionary layer import or export
- * 
- * More requirements may be introduced as needed. But I'll attempt to
- * align this Wikilon runtime API with known requirements.
- *
- * A context provides an implicit transaction. Updating a definition or
- * dictionary won't become persistent until this transaction commits.
- * However, computations may be performed in context of the proposed
- * update.
- */
-
-/** Set or clear an entire dictionary.
- * 
- * In this case we may use rscID to specify a dictionary patch. Use NULL
- * or an empty string to indicate an empty dictionary. This overwrites a
- * prior dictionary.
- *
- * The value of 'd' would typically be an empty string or NULL to refer
- * to the root dictionary. But Awelon does have simplistic support for
- * hierarchical dictionaries. By specifying dictionary "bar", you can
- * update just words of the form "foo@bar".
- */
-bool wikrt_set_dict(wikrt_cx*, char const* d, char const* rscID);
-
-/** Access a dictionary resource.
- *
- * This captures the current dictionary as a resource suitable for 
- * efficient import, export, snapshot, or hierarchical structure.
- */
-bool wikrt_get_dict(wikrt_cx*, char const* d, char* rscID);
 
 
-/** Load a word's definition as context program. */
-bool wikrt_load_def(wikrt_cx*, char const* word);
 
-/** Save context program to a word's definition. */
-bool wikrt_save_def(wikrt_cx*, char const* word);
+
 
 /** @brief Extend current program via ABC text.
  * 
