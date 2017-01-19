@@ -37,12 +37,7 @@
  *
  * Wikilon runtime aims to support core performance requirements for 
  * Wikilon. These include efficient evaluation, incremental computing, 
- * common update patterns, debugging, and resource control. 
- * 
- * USAGE
- *
- * Create and configure wikrt_env persistence environment. Create a 
- * wikrt_cx context for evaluation.
+ * common update patterns, debugging, and resource control.
  * 
  *  (c) 2015-2017 David Barbour
  *  LICENSE: BSD 3-clause <https://opensource.org/licenses/BSD-3-Clause>
@@ -78,6 +73,10 @@ typedef struct wikrt_env wikrt_env;
  * context may be used from multiple threads over its lifespan, but must
  * be used from at most one at a time. Internal parallelism is configured
  * at the environment layer (see wikrt_set_threadpool).
+ *
+ * In addition to the context, Wikilon runtime does use 'errno' to 
+ * provide some extra information about some errors, adapting common
+ * errors with a local interpretation.
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -92,9 +91,9 @@ uint32_t wikrt_api_ver();
 
 /** Create a Wikilon environment. 
  *
- * After creation, the environment should be further configured. At
- * the very least, one should configure the persistence layer with
- * wikrt_db_open. Creation may return NULL if allocation fails.
+ * After creation, the environment should be further configured with
+ * wikrt_db_open and other parameters. Creation may return NULL if
+ * allocation fails.
  */
 wikrt_env* wikrt_env_create();
 
@@ -104,11 +103,18 @@ wikrt_env* wikrt_env_create();
  */
 void wikrt_env_destroy(wikrt_env*);
 
-/** Create a context for computation. 
+/** Construct a context for computation. 
  *
- * If the given dict name is NULL, we use a volatile dictionary
- * and update commits will fail. Otherwise, we bind a persistent
- * dictionary with the given name.
+ * Minimally, a context should be at least a megabyte. Value stowage
+ * provides a variation of read-only virtual memory within a context, 
+ * thus a small context memory can work with relatively large data if
+ * there is sufficient memory for objects under active computation.
+ *
+ * A named dictionary is part of the context. This dictionary is used
+ * when linking definitions or persistent updates. A web service can
+ * provide some access control at this named dictionary level.
+ *
+ * This operation may fail and return NULL, most likely with ENOMEM.
  */
 wikrt_cx* wikrt_cx_create(wikrt_env*, char const* dict, size_t);
 
@@ -121,22 +127,17 @@ void wikrt_cx_reset(wikrt_cx*, char const* dict);
  * is too small or too large. Additionally, it may prove useful for 
  * snapshots or templated computation. Copy may fail (and return false)
  * if the destination is too small or belongs to the wrong environment.
- * The destination is reset prior to copy.
+ *
+ * Note: The destination context is implicitly reset before copy. 
  */
 bool wikrt_cx_copy(wikrt_cx* src, wikrt_cx* dst);
 
-/** Freeze a context for copy on write. (Experimental!)
+/** Freeze a context for copy on write
  * 
- * A frozen context may be used only as the source of copy or destroyed.
- * Instead of a deep copy, frozen context resources are reference counted
- * and shared with each copy. Destruction of this frozen context forbids
- * further direct copies, but resources remain in memory until the last
- * copy is reset or destroyed.
- * 
- * If the frozen context contains compiled, cached functions relevant to
- * operations in the destination, this may offer significant performance
- * benefits similarly to copy-on-write shared library objects. In theory.
- * I'll need to test whether this helps in practice.
+ * Usage is freeze copy* destroy, with the frozen context as the source
+ * in the copy. No other actions after freeze are valid. In return, the
+ * frozen context supports lightweight logical copies. This offers some
+ * advantage in cases where we might copy many times.
  */
 void wikrt_cx_freeze(wikrt_cx*);
 
@@ -147,76 +148,77 @@ void wikrt_cx_destroy(wikrt_cx*);
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
 /** Codebase Access and Update
- * 
- * Once a context is loaded with a named dictionary, clients can get or
- * set definitions for words like "fibonacci" or hierarchical structure
- * such as "@math". For import and export, a context dictionary can be
- * accessed or updated as a singular secure hash resource via NULL key.
  *
- * On failure, we'll return false and set errno appropriately.
- *
- * - EKEYREJECTED - invalid key string (set or get)
- * - ENOMEM - not enough context memory (set or get)
- * - ENOENT - requested resource undefined (get)
- * - ENOBUFS - not enough space in buffer (get)
- * - EBADMSG - data does not parse correctly (set)
+ * Wikilon runtime provides a simple set/get access to the codebase, as
+ * a key-value database. Naming conventions are based a standard import
+ * and export representation, so most keys are Awelon words but symbols
+ * of the form "@math" can refer to hierarchical substructure. The root
+ * codebase may be accessed as a value using the NULL key. Dictionaries
+ * are represented by secure hash reference to the export resource, and
+ * words are defined using valid Awelon code.
  * 
- * Otherwise we'll return true and get or set data. On get, we copy data
- * into the provided buffer (buffer size is provided on input, data size
- * on output; if NULL buffer will report only the data size). On set, we
- * record our update in the local context, but we must later commit the
- * update to make it last.
+ * On success, we return true and get or set data (as a binary) at the 
+ * specified key. On get, the size_t* field should point to a maximum
+ * size (usually the buffer size) and returns the actual data size. 
+ * If the uint8_t* data buffer is NULL, only size is returned. 
+ *
+ * Failure may occur for various reasons. A bad key (EKEYREJECTED),
+ * an undefined (ENOENT), context or database out of memory (ENOMEM,
+ * ENOSPC), limited buffer space (ENOBUFS), etc.
+ *
+ * Note: see wikrt_commit to make these updates shared and persistent.
  */
-bool wikrt_set_def(wikrt_cx*, char const* key, uint8_t const*, size_t);
 bool wikrt_get_def(wikrt_cx*, char const* key, uint8_t*, size_t*);
+bool wikrt_set_def(wikrt_cx*, char const* key, uint8_t const*, size_t);
 
 /** Transactional Persistence
  * 
- * Wikilon runtime supports an optimistic concurrency model. A context
- * has an implicit transaction, with a record of reads and writes. On
- * commit, we validate there are no conflicts from a concurrent update
- * at the granularity of symbols read and written. If no conflicts are
- * detected, we preserve the updates and return true. Conflict detection
- * may be conservative, with rare false positives.
+ * Wikilon runtime uses a simple, optimistic concurrency model with
+ * transactional update. Reads operate on a snapshot of the database,
+ * and reads are recorded (perhaps conservatively). Writes are local
+ * to the context until wikrt_commit. Optimistic concurrency is not
+ * ideal for all use cases, but more conservative models are readily
+ * constructed at higher layers.
  *
- * A transaction may fail for mundane reasons like context memory limits
- * (ENOMEM), but the main is conflicting concurrent update (ESTALE). On
- * failure, we return false and set errno appropriately. 
- *
- * Durability is not guaranteed unless 'durable' is specified on commit.
- * Updates from a non-durable transaction may be lost if the process is
- * halted suddenly, for example by signal or power failure. But see 
- * wikrt_sync, too.
- *
- * If optimistic concurrency is not suitable for your use case, it's up
- * to you to provide external controls. For example, single threaded 
- * writes from a queue will avoid all read-write conflicts.
- *
- * Note: Wikilon runtime also ensures snapshot consistency for reads.
- * A write-only or read-only transaction won't fail due to conflict.
+ * On success we return true and update the underlying database, but 
+ * the read log is preserved until the context is destroyed or reset.
+ * On failure, we return false and set errno appropriately - conflict
+ * is reported as ESTALE, but running out of space or memory is quite
+ * possible.
  */
-bool wikrt_commit(wikrt_cx*, bool durable);
+bool wikrt_commit(wikrt_cx*);
 
-// ideas:
-//  merge concurrent updates (inverse transaction?)
-//  declare read-only transaction (no need for read log, no commit)
-//  wikrt_sync
+/** Transction Durability
+ *
+ * Transactions are atomic and serializable by default, but are not
+ * guaranteed to be durable. If you set wikrt_durable on a context,
+ * the current transaction must wait for data to be acknowledged as
+ * synchronized to disk before committing successfully. Otherwise,
+ * consider periodic use of wikrt_sync to explicitly flush recent
+ * updates to disk.
+ *
+ * Durability is ultimately limited by the underlying filesystem and
+ * hardware. Robust data requires distributed replication. A RAID 
+ * system would be wise, but managing explicit backups via the 
+ * resource model is viable.
+ */
+void wikrt_durable(wikrt_cx*);
+void wikrt_sync(wikrt_env*);
 
 /** Resource Provision and Access
  *
- * Resources are immutable binaries referenced by secure hash. Awelon
- * uses resources for representation of dictionaries, for large data
- * stowage (a precise alternative to virtual memory), and for access
- * to binary data from the programming language.
- * 
- * Resources are garbage collected unless held by context or reference.
- * Adding a resource to a context will prevent GC until that context is
- * destroyed or reset.
+ * Awelon references binary data by secure hash. This idea is widely
+ * used for large data stowage (an alternative to virtual memory), 
+ * for lightweight sharing of dictionary import/export structure, and
+ * for simple reference to binary data from within the language.
  *
  * The hash of choice is 360 bit BLAKE2b encoded as 60 characters in
  * base64url. Developers can access this via wikrt_hash or as optional
- * output from wikrt_add_rsc. I assume a buffer of WIKRT_HASH_SIZE.
- *
+ * output from wikrt_add_rsc, assuming a buffer of WIKRT_HASH_SIZE.
+ * 
+ * Note: Resources might not be shared with other context unless they
+ * are referenced from a committed definition.
+ * 
  * Note: resource storage may be shared among independent computations,
  * with the secure hash acting as a bearer token authorizing access. So
  * it is important for wikrt_get_rsc to resist timing attacks. Wikilon
@@ -228,12 +230,18 @@ void wikrt_hash(char* h, uint8_t const*, size_t);
 bool wikrt_add_rsc(wikrt_cx*, char* h, uint8_t const*, size_t);
 bool wikrt_get_rsc(wikrt_cx*, char const* h, uint8_t*, size_t*);
 
-/** Computation 
+/** Computation
+ * 
+ * The Wikilon runtime has one primary computation - a program under
+ * evaluation. The evaluator will incrementally rewrite this into an
+ * equivalent program, in normal form (if there is one) or otherwise
+ * until reaching an effort quota (to guard against divergent loops).
  *
- * Since I don't want the complexities of
- * One of the most important things we'll do is evaluate a program in
- * context of 
- */
+ * Besides the primary output, debug output may be available if the
+ * context has been configured suitably. 
+ */ 
+
+
 
 // I might want easy access to computed binary, text, and number data,
 // and maybe just to the AST of Awelon code. But for now, my focus is
