@@ -38,6 +38,13 @@
  * Wikilon runtime aims to support core performance requirements for 
  * Wikilon. These include efficient evaluation, incremental computing, 
  * common update patterns, debugging, and resource control.
+ *
+ * USAGE
+ *
+ * - Create and configure the environment, persistence, parallelism, etc..
+ * - Create a context bound to a named dictionary for computation, transaction.
+ * - Maintain a named codebase with basic key-value updates
+ * - Evaluate code
  * 
  *  (c) 2015-2017 David Barbour
  *  LICENSE: BSD 3-clause <https://opensource.org/licenses/BSD-3-Clause>
@@ -74,9 +81,8 @@ typedef struct wikrt_env wikrt_env;
  * be used from at most one at a time. Internal parallelism is configured
  * at the environment layer (see wikrt_set_threadpool).
  *
- * In addition to the context, Wikilon runtime does use 'errno' to 
- * provide some extra information about some errors, adapting common
- * errors with a local interpretation.
+ * In addition to the context, Wikilon runtime uses 'errno' to provide
+ * extra information about API-layer errors. 
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -105,16 +111,16 @@ void wikrt_env_destroy(wikrt_env*);
 
 /** Construct a context for computation. 
  *
- * Minimally, a context should be at least a megabyte. Value stowage
- * provides a variation of read-only virtual memory within a context, 
- * thus a small context memory can work with relatively large data if
- * there is sufficient memory for objects under active computation.
- *
  * A named dictionary is part of the context. This dictionary is used
  * when linking definitions or persistent updates. A web service can
- * provide some access control at this named dictionary level.
+ * provide some access control at this named dictionary level. If the
+ * dictionary argument is NULL, a temporary dictionary specific to 
+ * the context is used.
  *
- * This operation may fail and return NULL, most likely with ENOMEM.
+ * This operation may fail and return NULL, most likely because the
+ * context cannot be allocated at the requested size. It is highly
+ * recommended that a context be at least a few megabytes, and no
+ * more than physical memory (favor stowage over swap).
  */
 wikrt_cx* wikrt_cx_create(wikrt_env*, char const* dict, size_t);
 
@@ -149,24 +155,22 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
 
 /** Codebase Access and Update
  *
- * Wikilon runtime provides a simple set/get access to the codebase, as
- * a key-value database. Naming conventions are based a standard import
+ * Wikilon runtime provides a simple set/get access to the codebase as
+ * a key-value database. Naming conventions are based on standard import
  * and export representation, so most keys are Awelon words but symbols
- * of the form "@math" can refer to hierarchical substructure. The root
- * codebase may be accessed as a value using the NULL key. Dictionaries
+ * of the form "@math" can refer to hierarchical substructure. 
+ *
+ * The codebase as a whole be referenced using the NULL key. Dictionaries
  * are represented by secure hash reference to the export resource, and
  * words are defined using valid Awelon code.
  * 
- * On success, we return true and get or set data (as a binary) at the 
- * specified key. On get, the size_t* field should point to a maximum
- * size (usually the buffer size) and returns the actual data size. 
- * If the uint8_t* data buffer is NULL, only size is returned. 
+ * On get, the size_t* field should point to buffer size and we'll update
+ * it to the data size. If the data buffer is NULL, we'll just return the 
+ * size. On set, the NULL data means reset to the default. 
  *
  * Failure may occur for various reasons. A bad key (EKEYREJECTED),
  * an undefined (ENOENT), context or database out of memory (ENOMEM,
  * ENOSPC), limited buffer space (ENOBUFS), etc.
- *
- * Note: see wikrt_commit to make these updates shared and persistent.
  */
 bool wikrt_get_def(wikrt_cx*, char const* key, uint8_t*, size_t*);
 bool wikrt_set_def(wikrt_cx*, char const* key, uint8_t const*, size_t);
@@ -188,19 +192,17 @@ bool wikrt_set_def(wikrt_cx*, char const* key, uint8_t const*, size_t);
  */
 bool wikrt_commit(wikrt_cx*);
 
-/** Transction Durability
+/** Transaction Durability
  *
  * Transactions are atomic and serializable by default, but are not
  * guaranteed to be durable. If you set wikrt_durable on a context,
- * the current transaction must wait for data to be acknowledged as
+ * the current transaction will wait for data to be acknowledged as
  * synchronized to disk before committing successfully. Otherwise,
- * consider periodic use of wikrt_sync to explicitly flush recent
- * updates to disk.
+ * consider periodic wikrt_sync to push recent updates.
  *
  * Durability is ultimately limited by the underlying filesystem and
- * hardware. Robust data requires distributed replication. A RAID 
- * system would be wise, but managing explicit backups via the 
- * resource model is viable.
+ * hardware. Truly robust data requires distributed replication, but
+ * that may increase synchronization costs.
  */
 void wikrt_durable(wikrt_cx*);
 void wikrt_sync(wikrt_env*);
@@ -216,31 +218,60 @@ void wikrt_sync(wikrt_env*);
  * base64url. Developers can access this via wikrt_hash or as optional
  * output from wikrt_add_rsc, assuming a buffer of WIKRT_HASH_SIZE.
  * 
- * Note: Resources might not be shared with other context unless they
- * are referenced from a committed definition.
- * 
- * Note: resource storage may be shared among independent computations,
+ * Note: Resource storage may be shared among independent computations,
  * with the secure hash acting as a bearer token authorizing access. So
  * it is important for wikrt_get_rsc to resist timing attacks. Wikilon
  * ensures no more than the first 60 bits are exposed to timing attack.
  */
-
 #define WIKRT_HASH_SIZE 60
 void wikrt_hash(char* h, uint8_t const*, size_t);
 bool wikrt_add_rsc(wikrt_cx*, char* h, uint8_t const*, size_t);
 bool wikrt_get_rsc(wikrt_cx*, char const* h, uint8_t*, size_t*);
 
-/** Computation
- * 
- * The Wikilon runtime has one primary computation - a program under
- * evaluation. The evaluator will incrementally rewrite this into an
- * equivalent program, in normal form (if there is one) or otherwise
- * until reaching an effort quota (to guard against divergent loops).
+/** Stream Processing of Programs
  *
- * Besides the primary output, debug output may be available if the
- * context has been configured suitably. 
- */ 
+ * Computation in Awelon involves confluent rewriting of a program to
+ * an equivalent program. A well formed program will converge, but we
+ * may otherwise halt on a configured quota (ETIMEDOUT) and produce a
+ * useful intermediate result.
+ *
+ * Awelon is amenable to command stream processing. We monotonically
+ * append the right hand side of a program, and monotonically read 
+ * generated commands from the left. To leverage this requires one
+ * arrange for a process to have general structure:
+ *
+ *      [proc] commandA => commandB* [proc']
+ * 
+ * The Wikilon runtime API will support stream processing. But if a
+ * program isn't designed for streaming, one simply won't see output 
+ * before the full program is available, thus very little harm done.
+ */
 
+/** Addend code to the current program. 
+ *
+ * The code in question should parse as a valid subprogram or this
+ * will fail with EBADMSG.
+ */
+bool wikrt_write_code(wikrt_cx*, uint8_t const*, size_t);
+
+/** Record end of input stream.
+ *
+ * Until you mark the end of stream, reads will return only normal
+ * form results that aren't necessary for evaluation to continue.
+ * Afterwards, everything can be read but further evaluation may
+ * still be necessary to get stuff to normal form.
+ * 
+ * Note: It is possible to write past the stop. But the stop is an
+ * invisible barrier: code written before the stop will not interact
+ * with code written after the stop. The expected use case is to 
+ * write only one stop at the end of the program.
+ */
+void wikrt_write_stop(wikrt_cx*);
+
+/** Clear current program. */
+void wikrt_clear(wikrt_cx*);
+
+// TODO: reads, debug outputs
 
 
 // I might want easy access to computed binary, text, and number data,

@@ -7,6 +7,8 @@ This document will discuss useful patterns for modeling applications.
 
 ## Command Pattern
 
+Appending commands
+
 The command pattern might be represented as:
 
         @foo.v0 initial state constructor
@@ -32,6 +34,7 @@ Effectively, command pattern models a mutable object within a dictionary, albeit
 Awelon can easily evaluate in context of undefined words. A convenient idea is to treat undefined words as having a 'future' definition, to be fulfilled by human or software agents. Evaluation then usefully proceeds in context of multiple futures, enabling intermediate observations that do not depend on the definition of the future.
 
 Unlike command pattern, futures and promises can be fully monotonic. This is a very valuable feature. It means we do not need to recompute our views after an update. Instead, we can checkpoint and continue our computations as needed, without backtracking.
+
 
 ## Dictionary Objects
 
@@ -124,4 +127,24 @@ Awelon supports these patterns via the *Hierarchical Dictionaries* feature.
 ## Application Security
 
 In an open system, we generally want to control the authority of our agents in terms of which parts of the system they may observe or directly influence. Awelon doesn't provide much help here, beyond support for *Hierarchical Dictionaries*, which provide a natural barrier for communication that must be explicitly bridged, and a narrow interface for synchronization. Between that and internal purity, we can push most security concerns to the RESTful application models and effects layers. 
+
+# More Conventional Models
+
+These might be useful in context of effectful work orders.
+
+## Command Stream Processing
+
+Awelon is amenable to command stream processing. The general form is:
+
+        [proc] commandA  => commandB* [proc']
+
+This simplistic stream processing model conveniently supports composition:
+
+        [procF] [procG] commandA => [procF] commandB* [procG']
+                                 ...
+                                 => commandC* [procF'] [procG']
+
+We can monotonically input commands to the right hand side of our program, and incrementally output commands from the left hand side. Output commands might represent requested effects. The process object is our state. A weakness of this model is that it doesn't support feedback loops in a general sense, but we might build upon it by assuming `[proc]` to be a process network or similar.
+
+In any case, this could be used as a basis for conventional effects, with commands representing the inputs and outputs of a process, and outputs including observable effects. At the source code layer, we might drop the final commands that are processed as IO.
 
