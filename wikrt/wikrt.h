@@ -159,22 +159,25 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * We can write or load a binary, read or save one, or evaluate the
  * binary by interpreting it as Awelon code and rewriting it.
  *
- * Streams are given stable identity via small integer. Implicitly
- * every stream is pre-allocated and starts empty, so you may just
- * start writing to streams and perform your own allocation schema.
- * The zero stream is a special case - all writes to that stream 
- * fail, but it may be used as a /dev/null.
+ * Streams are given stable identity via small integer. Logically,
+ * every stream starts empty and you can just start writing to any
+ * stream (no need to allocate). The null stream (value 0) is the
+ * special case: all writes to it fail.
+ *
+ * On read, size information is both input and output - buffer size
+ * on input, bytes read on output.
  */
 typedef uint32_t wikrt_s;
 bool wikrt_write(wikrt_cx*, wikrt_s, uint8_t const*, size_t);
-size_t wikrt_read(wikrt_cx*, wikrt_s, uint8_t*, size_t);
+bool wikrt_read(wikrt_cx*, wikrt_s, uint8_t*, size_t*);
 void wikrt_clear(wikrt_cx*, wikrt_s);
 
 /** Stream Composition
  *
  * Move or copy the source stream to addend the destination stream.
  * This could be useful for snapshots and similar. The move variant
- * will implicitly clear the source, assuming it succeeds.
+ * will implicitly clear the source, but avoids the extra resource
+ * burdens of copying data.
  */
 bool wikrt_concat_move(wikrt_cx*, wikrt_s src, wikrt_s dst);
 bool wikrt_concat_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
@@ -306,15 +309,14 @@ bool wikrt_eval(wikrt_cx*, wikrt_s);
  *
  *      [proc] commandA => commandB [proc']
  * 
- * Wikilon supports command stream processing by moving command data
- * from the left side to another stream. The commands are not fully
- * evaluated, only far enough to recognize them, thus `[args] word`
- * would not fully evaluate `[args]` before moving it to the command
- * stream. The `[proc']` fragment would not be moved or evaluated
- * further, but would provide a location to continue adding input to
- * the right hand side of the stream.
+ * Wikilon supports command stream processing by evaluating just far
+ * enough to recognize the command outputs then moving them to another
+ * stream. Hence, we split the stream between `commandB` and `[proc']`.
+ * In case of `[args] word` the args would be moved, not evaluated. 
+ * And the resulting process would not be moved or evaluated, instead
+ * remaining available for processing as we addend the source stream.
  *
- * This function returns `true` if no further rewrites are possible.
+ * This returns 'true' when nothing more can be moved.
  */
 bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s cmd_dst);
 
@@ -322,11 +324,10 @@ bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s cmd_dst);
  * 
  * To control infinite loops, each context has a finite effort quota
  * for evaluations. When exhausted, evaluation fails with ETIMEDOUT.
- * Effort is specified in CPU microseconds. Accuracy is likely closer
- * to milliseconds. Parallel computations exhaust the quota faster
- * than a single CPU.
+ * Effort is specified in CPU microseconds, though is not accurate.
+ * Parallel computations may exhaust the effort quota very quickly.
  */
-void wikrt_set_effort(wikrt_cx*, uint32_t);
+void wikrt_set_effort(wikrt_cx*, uint32_t cpu_usec);
 
 // TODO: evaluator options - rewrite optimizations, localization, etc..
 //   options: shallow evaluation (don't evaluate blocks)
@@ -396,6 +397,22 @@ void wikrt_env_threadpool(wikrt_env*, uint32_t pool_size);
 // TODO:
 // low level parallelism: configure GPGPU or OpenCL cloud service
 // high level parallelism: configure cloud distribution for KPNs
+
+/** Accelerated Prelude
+ *
+ * AO is a simple language with a tiny core of primitives. To achieve
+ * performance, an AO runtime is expected to *accelerate* a useful set
+ * of functions and data types, replacing the naive implementation by
+ * optimized forms under the hood. For example, unary natural numbers 
+ * are represented by machine words, and natural number arithmetic is
+ * implemented using fast CPU arithmetic.
+ *
+ * This runtime will expose its accelerators by simply writing out a
+ * suitable dictionary to the specified stream. This is less complete
+ * than a standard library, but might be used as a seed for a larger
+ * dictionary.
+ */
+bool wikrt_write_accel(wikrt_cx*, wikrt_s);
 
 /** Configure filesystem-local database and cache (using LMDB). */
 bool wikrt_db_open(wikrt_env*, char const* dirPath, size_t dbMaxSize);
