@@ -114,8 +114,8 @@ void wikrt_env_destroy(wikrt_env*);
  * A named dictionary is part of the context. This dictionary is used
  * when linking definitions or persistent updates. A web service can
  * provide some access control at this named dictionary level. If the
- * dictionary argument is NULL, a temporary dictionary specific to 
- * the context is used.
+ * dictionary argument is NULL or empty, a temporary dictionary is
+ * used and all commits will fail. 
  *
  * This operation may fail and return NULL, most likely because the
  * context cannot be allocated at the requested size. It is highly
@@ -153,27 +153,66 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
+/** Binary Stream Objects
+ *
+ * This Wikilon API uses binaries as the primary input and output
+ * structure. Many functions operate on the current binary stream.
+ * Multi-tasking is possible by naming streams. (The default stream
+ * is aliased from NULL and "".) 
+ *
+ * The main reason for a 'write' to fail is that we've run out of
+ * memory (ENOMEM). Reads won't fail, by design, and return number
+ * of bytes read.
+ */
+void wikrt_current_stream(wikrt_cx*, char const* s);
+bool wikrt_write(wikrt_cx*, uint8_t const*, size_t);
+size_t wikrt_read(wikrt_cx*, uint8_t*, size_t);
+void wikrt_clear(wikrt_cx*);
+
+/** Secure Hash Resources
+ *
+ * Awelon leverages secure hashes to identify binary data resources. 
+ * This concept is used for codebase structure sharing, large value
+ * stowage (an alternative to virtual memory), and to access external
+ * binary data from Awelon code.
+ * 
+ * Awelon's hash of choice is 360 bit BLAKE2b encoded as 60 characters
+ * in base64url. Developers can access this via wikrt_hash or operating
+ * on a stream.
+ *
+ * Wikilon runtime can save and load binary resources by secure hash.
+ * Saving a stream returns a secure hash if it succeeds. Loading will
+ * retrieve the resource if it is known. Wikilon will garbage collect
+ * resources that don't have a reference from codebase or context.
+ *
+ * Note: Secure hashes are bearer tokens, authorizing access to binary
+ * data. Systems should resist timing attacks to discover known hashes.
+ * Wikilon will expose only the initial 60 bits of each hash to timing,
+ * but clients must take similar care to guard resource IDs.
+ */
+#define WIKRT_HASH_SIZE 60
+void wikrt_hash(char* h, uint8_t const*, size_t);
+bool wikrt_load_rsc(wikrt_cx*, char const* h);
+bool wikrt_save_rsc(wikrt_cx*, char* h); 
+
 /** Codebase Access and Update
  *
- * Wikilon runtime provides a simple set/get access to the codebase as
- * a key-value database. Naming conventions are based on standard import
- * and export representation, so most keys are Awelon words but symbols
- * of the form "@math" can refer to hierarchical substructure. 
+ * An Awelon codebase is effectively a key-value database, albeit with
+ * characteristics that permit treating an entire codebase as a value.
+ * The normal use case is to operate on Awelon words and definitions.
+ * But symbols of form "@dict" refer to a hierarchical dictionary via
+ * secure hash. Symbol "@" similarly refers to codebase as a whole.
  *
- * The codebase as a whole be referenced using the NULL key. Dictionaries
- * are represented by secure hash reference to the export resource, and
- * words are defined using valid Awelon code.
- * 
- * On get, the size_t* field should point to buffer size and we'll update
- * it to the data size. If the data buffer is NULL, we'll just return the 
- * size. On set, the NULL data means reset to the default.
+ * Data saved through this API are not immediately persistent. Instead,
+ * one must further 'commit' the update. However, updated definitions
+ * will immediately influence further evaluation.
  *
- * Failure may occur for various reasons. A bad key (EKEYREJECTED),
- * an undefined (ENOENT), context or database out of memory (ENOMEM,
- * ENOSPC), limited buffer space (ENOBUFS), etc.
+ * These operations may fail and return false for a variety of reasons
+ * like bad key (EKEYREJECTED) or an undefined value (ENOENT) or badly
+ * formed data (EBADMSG), or context memory (ENOMEM).
  */
-bool wikrt_get_def(wikrt_cx*, char const* key, uint8_t*, size_t*);
-bool wikrt_set_def(wikrt_cx*, char const* key, uint8_t const*, size_t);
+bool wikrt_load_def(wikrt_cx*, char const* k);
+bool wikrt_save_def(wikrt_cx*, char const* k); 
 
 /** Transactional Persistence
  * 
@@ -188,7 +227,7 @@ bool wikrt_set_def(wikrt_cx*, char const* key, uint8_t const*, size_t);
  * the read log is preserved until the context is destroyed or reset.
  * On failure, we return false and set errno appropriately - conflict
  * is reported as ESTALE, but running out of space or memory is quite
- * possible.
+ * possible, and EROFS is returned if writes are blocked in general.
  */
 bool wikrt_commit(wikrt_cx*);
 
@@ -207,27 +246,6 @@ bool wikrt_commit(wikrt_cx*);
 void wikrt_durable(wikrt_cx*);
 void wikrt_sync(wikrt_env*);
 
-/** Resource Provision and Access
- *
- * Awelon references binary data by secure hash. This idea is widely
- * used for large data stowage (an alternative to virtual memory), 
- * for lightweight sharing of dictionary import/export structure, and
- * for simple reference to binary data from within the language.
- *
- * The hash of choice is 360 bit BLAKE2b encoded as 60 characters in
- * base64url. Developers can access this via wikrt_hash or as optional
- * output from wikrt_add_rsc, assuming a buffer of WIKRT_HASH_SIZE.
- * 
- * Note: Resource storage may be shared among independent computations,
- * with the secure hash acting as a bearer token authorizing access. So
- * it is important for wikrt_get_rsc to resist timing attacks. Wikilon
- * ensures no more than the first 60 bits are exposed to timing attack.
- */
-#define WIKRT_HASH_SIZE 60
-void wikrt_hash(char* h, uint8_t const*, size_t);
-bool wikrt_add_rsc(wikrt_cx*, char* h, uint8_t const*, size_t);
-bool wikrt_get_rsc(wikrt_cx*, char const* h, uint8_t*, size_t*);
-
 /** Scan Code for Parse Errors
  * 
  * Awelon language is syntactically very simple. A quick scan can 
@@ -242,114 +260,63 @@ bool wikrt_get_rsc(wikrt_cx*, char const* h, uint8_t*, size_t*);
 typedef struct wikrt_parse_data { 
     size_t accepted; // valid program prefix
     size_t parsed;   // accepted modulo balance
-    size_t balance;  // block balance (unmatched '[')
+    size_t balance;  // count of unmatched '['
     size_t scanned;  // where is error noticed?
 } wikrt_parse_data;
 bool wikrt_parse_code(uint8_t const*, size_t, wikrt_parse_data*);
 
-/** Program Input, Eval, Output 
- *
- * Awelon is amenable to command stream processing. We can output
- * an evaluated stream of `[args]action` commands where the action
- * has arity greater than the number of arguments. Similarly, we can
- * input commands on the input stream, incrementally, representing
- * incoming data and other requests.
- *
- *      [proc] commandA => commandB* [proc']
+/** Evaluation
  * 
- * Command stream processing is convenient for integrating free monadic
- * or process network effects models. We can incrementally handle output
- * requests and incrementally add input commands or update messages. So
- * Wikilon runtime supports this style. Programs that don't fit this 
- * pattern simply won't produce useful output before end of input.
+ * Awelon evaluation involves rewriting a program to an equivalent
+ * program that is closer to normal form, much like `6 * 7` can be
+ * rewritten as `42`. In Wikilon, we interpret the current stream 
+ * as a program and evaluate as much as possible. We succeed if we
+ * reach a normal form, where further evaluation will not cause 
+ * further rewrites.
+ *
+ * Of course, not all programs have normal forms (because infinite
+ * loops) and even when they do we cannot always reach them (because
+ * time or space limits). Evaluation may fail, returning false and
+ * setting errno to ENOMEM or ETIMEDOUT. See wikrt_set_effort below
+ * to control the timeout. 
+ *
+ * Most other errors are represented within the code itself. Modulo
+ * imbalanced blocks, code that fails to parse will not be rewritten.
  */
+bool wikrt_eval(wikrt_cx*);
 
-/** Addend Program
+/** Stream Processing
+ *
+ * Awelon is amenable to processing a stream of commands. A command
+ * is a subprogram that cannot be further rewritten by addending the
+ * current program, such as `[args] word` where the word has arity
+ * two. Commands are a natural boundary for incremental computation.
+ *
+ *      [proc] commandA => commandB [proc']
  * 
- * A context initially has an empty program, but we may addend multiple
- * subprograms to this. Each write must be independently valid, having
- * complete texts and blocks and so on. 
+ * Wikilon supports command stream processing by evaluating commands to
+ * normal form and returning a size: available bytes of fully evaluated
+ * command data. New commands can easily be written to the right hand
+ * side even as we process and read the stream's left hand side.
+ *
+ * Like wikrt_eval, this returns 'true' when further evaluation will 
+ * not make any more progress. But that only corresponds to a fully
+ * evaluated command, rather than a fully evaluated program.
  */
-bool wikrt_write(wikrt_cx*, uint8_t const*, size_t);
-
-/** Evaluate Program
- *
- * Computation in Awelon involves confluent rewriting of a program to
- * an equivalent program. A well formed program will converge, but is
- * not guaranteed to do so in a timely manner. Evaluation may fail to
- * complete due to resource constraints: context memory (ENOMEM) or 
- * effort quota (ETIMEDOUT). 
- *
- * Note: Recognized type errors are recorded with (error) annotations
- * in the evaluated program, and are thus visible in program output.
- * Undefined or badly defined words simply won't be linked.
- *
- * evaluated program. Undefined or badly defined words simply won't be
- * linked. So outside resource constraints, evaluation doesn't fail...
- * it simply returns a program with errors made explicit and obvious.
- */
-void wikrt_eval(wikrt_cx*);
-
-/** Read Program
- *
- * Reads will destructively extract valid subprograms into the given
- * data buffer. Concatenation of multiple small reads is equivalent 
- * to a single larger read. 
- */
-bool wikrt_read(wikrt_cx*, uint8_t*, size_t*);
-
-/** Evaluate or Read Next Command
- *
- * A "command" is a subprogram of positive arity. Evaluation and reads
- * at the granularity of individual commands are convenient for stream
- * processing. They permit lower latency feedback than full evaluation,
- * and better alignment for effects models based on matching command
- * words or similar.
- *
- * Read and evaluate are separated to help handle some corner cases (like
- * a recognized command with a divergent argument). But one must usually
- * evaluate some to recognize a command.
- */
-bool wikrt_eval_cmd(wikrt_cx*);
-bool wikrt_read_cmd(wikrt_cx*, uint8_t*, size_t*);
-
-/** Clear Program. Equivalent to reading until empty. */
-void wikrt_clear(wikrt_cx*);
-
-
-/** Select Program Stream
- *
- * A context can work with multiple named program streams, albeit one
- * at a time by switching between them. All write/eval/read operations
- * are applied to the current program. (But note that definitions apply 
- * default stream is aliased from both the empty string and NULL. 
- *
- * This feature supports both multi-tasking and debug configuration.
- */
-void wikrt_current_program(wikrt_cx*, char const*);
+bool wikrt_eval_cmd(wikrt_cx*, size_t*);
 
 /** Effort Quota
  * 
- * To control infinite loops, each context has an effort quota. If
- * this quota is exhausted, evaluation will fail with ETIMEDOUT. 
- * Effort is measured in terms of CPU microseconds, but is only
- * checked infrequently so is not very precise.
- *
- * The default quota is 100ms.
+ * To control infinite loops, each context has a finite effort quota
+ * for evaluations. When exhausted, evaluation fails with ETIMEDOUT.
+ * Effort is specified in CPU microseconds. Accuracy is likely closer
+ * to milliseconds. Parallel computations exhaust the quota faster
+ * than a single CPU.
  */
 void wikrt_set_effort(wikrt_cx*, uint32_t);
 
-// thoughts: I keep wondering whether effort in terms of rewrites
-// would be a better choice. But it makes sense to keep efforts
-// in terms of something externally meaningful, like CPU time. 
-//
-// Debug snapshots shouldn't be based on time quotas anyway.
-
-
 // TODO: configure evaluation options, optimization flags
-
-// TODO: debug outputs
-
+// TODO: debug outputs - snapshots, trace logs, profiles, etc.
 
 // I might want easy access to computed binary, text, and number data,
 // and maybe just to the AST of Awelon code. But for now, my focus is
