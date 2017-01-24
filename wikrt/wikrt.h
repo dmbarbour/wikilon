@@ -153,21 +153,31 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** Binary Stream Objects
+/** Binary Streams
  *
- * This Wikilon API uses binaries as the primary input and output
- * structure. Many functions operate on the current binary stream.
- * Multi-tasking is possible by naming streams. (The default stream
- * is aliased from NULL and "".) 
+ * Wikilon uses binaries as the primary input and output structure.
+ * We can write or load a binary, read or save one, or evaluate the
+ * binary by interpreting it as Awelon code and rewriting it.
  *
- * The main reason for a 'write' to fail is that we've run out of
- * memory (ENOMEM). Reads won't fail, by design, and return number
- * of bytes read.
+ * Streams are given stable identity via small integer. Implicitly
+ * every stream is pre-allocated and starts empty, so you may just
+ * start writing to streams and perform your own allocation schema.
+ * The zero stream is a special case - all writes to that stream 
+ * fail, but it may be used as a /dev/null.
  */
-void wikrt_current_stream(wikrt_cx*, char const* s);
-bool wikrt_write(wikrt_cx*, uint8_t const*, size_t);
-size_t wikrt_read(wikrt_cx*, uint8_t*, size_t);
-void wikrt_clear(wikrt_cx*);
+typedef uint32_t wikrt_s;
+bool wikrt_write(wikrt_cx*, wikrt_s, uint8_t const*, size_t);
+size_t wikrt_read(wikrt_cx*, wikrt_s, uint8_t*, size_t);
+void wikrt_clear(wikrt_cx*, wikrt_s);
+
+/** Stream Composition
+ *
+ * Move or copy the source stream to addend the destination stream.
+ * This could be useful for snapshots and similar. The move variant
+ * will implicitly clear the source, assuming it succeeds.
+ */
+bool wikrt_concat_move(wikrt_cx*, wikrt_s src, wikrt_s dst);
+bool wikrt_concat_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
 
 /** Secure Hash Resources
  *
@@ -182,8 +192,9 @@ void wikrt_clear(wikrt_cx*);
  *
  * Wikilon runtime can save and load binary resources by secure hash.
  * Saving a stream returns a secure hash if it succeeds. Loading will
- * retrieve the resource if it is known. Wikilon will garbage collect
- * resources that don't have a reference from codebase or context.
+ * retrieve the resource if it is known, overwriting the target stream. 
+ * Wikilon may garbage collect resources that don't have a reference
+ * from codebase or context.
  *
  * Note: Secure hashes are bearer tokens, authorizing access to binary
  * data. Systems should resist timing attacks to discover known hashes.
@@ -192,8 +203,8 @@ void wikrt_clear(wikrt_cx*);
  */
 #define WIKRT_HASH_SIZE 60
 void wikrt_hash(char* h, uint8_t const*, size_t);
-bool wikrt_load_rsc(wikrt_cx*, char const* h);
-bool wikrt_save_rsc(wikrt_cx*, char* h); 
+bool wikrt_load_rsc(wikrt_cx*, wikrt_s, char const* h);
+bool wikrt_save_rsc(wikrt_cx*, wikrt_s, char* h); 
 
 /** Codebase Access and Update
  *
@@ -211,8 +222,8 @@ bool wikrt_save_rsc(wikrt_cx*, char* h);
  * like bad key (EKEYREJECTED) or an undefined value (ENOENT) or badly
  * formed data (EBADMSG), or context memory (ENOMEM).
  */
-bool wikrt_load_def(wikrt_cx*, char const* k);
-bool wikrt_save_def(wikrt_cx*, char const* k); 
+bool wikrt_load_def(wikrt_cx*, wikrt_s, char const* k);
+bool wikrt_save_def(wikrt_cx*, wikrt_s, char const* k); 
 
 /** Transactional Persistence
  * 
@@ -244,7 +255,6 @@ bool wikrt_commit(wikrt_cx*);
  * that may increase synchronization costs.
  */
 void wikrt_durable(wikrt_cx*);
-void wikrt_sync(wikrt_env*);
 
 /** Scan Code for Parse Errors
  * 
@@ -283,27 +293,30 @@ bool wikrt_parse_code(uint8_t const*, size_t, wikrt_parse_data*);
  * Most other errors are represented within the code itself. Modulo
  * imbalanced blocks, code that fails to parse will not be rewritten.
  */
-bool wikrt_eval(wikrt_cx*);
+bool wikrt_eval(wikrt_cx*, wikrt_s);
 
 /** Stream Processing
  *
  * Awelon is amenable to processing a stream of commands. A command
  * is a subprogram that cannot be further rewritten by addending the
- * current program, such as `[args] word` where the word has arity
- * two. Commands are a natural boundary for incremental computation.
+ * right hand side of a program, for example of form `[args] word` 
+ * where the word has arity two. Commands provide a natural boundary
+ * for incremental computation, allowing output before evaluation is
+ * fully completed.
  *
  *      [proc] commandA => commandB [proc']
  * 
- * Wikilon supports command stream processing by evaluating commands to
- * normal form and returning a size: available bytes of fully evaluated
- * command data. New commands can easily be written to the right hand
- * side even as we process and read the stream's left hand side.
+ * Wikilon supports command stream processing by moving command data
+ * from the left side to another stream. The commands are not fully
+ * evaluated, only far enough to recognize them, thus `[args] word`
+ * would not fully evaluate `[args]` before moving it to the command
+ * stream. The `[proc']` fragment would not be moved or evaluated
+ * further, but would provide a location to continue adding input to
+ * the right hand side of the stream.
  *
- * Like wikrt_eval, this returns 'true' when further evaluation will 
- * not make any more progress. But that only corresponds to a fully
- * evaluated command, rather than a fully evaluated program.
+ * This function returns `true` if no further rewrites are possible.
  */
-bool wikrt_eval_cmd(wikrt_cx*, size_t*);
+bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s cmd_dst);
 
 /** Effort Quota
  * 
@@ -315,18 +328,13 @@ bool wikrt_eval_cmd(wikrt_cx*, size_t*);
  */
 void wikrt_set_effort(wikrt_cx*, uint32_t);
 
-// TODO: configure evaluation options, optimization flags
-// TODO: debug outputs - snapshots, trace logs, profiles, etc.
-
-// I might want easy access to computed binary, text, and number data,
-// and maybe just to the AST of Awelon code. But for now, my focus is
-// upon basic computations, Awelon code as whole input and output.
-
-  ////////////////////
- // MEMORY CONTROL //
-////////////////////
-
-// gc, mem stats, etc.
+// TODO: evaluator options - rewrite optimizations, localization, etc..
+//   options: shallow evaluation (don't evaluate blocks)
+//            localization (rewrite hierarchical words shared by parent)
+//            rewrite optimizations (provided by dictionary?)
+//            data plumbing optimizations
+//   for now let's just focus on getting it working
+// TODO: debugger outputs - snapshots, trace logs, profiling, etc.
 
 /** @brief Force a full garbage collection of context.
  *
@@ -335,137 +343,72 @@ void wikrt_set_effort(wikrt_cx*, uint32_t);
  */
 void wikrt_cx_gc(wikrt_cx*);
 
-/** Overview of a context's memory usage.
- *
- */
+/** Overview of a context's memory usage. */
 typedef struct wikrt_mem_stats { 
-    uint64_t  gc_cycle_count;     // how many GC cycles?
-    uint64_t  gc_bytes_processed; // ~ total GC effort 
-    uint64_t  gc_bytes_collected; // ~ useful GC effort
-    size_t    memory_lastgc;      // memory in use just after prior GC
-    size_t    memory_current;     // memory currently in use
-    size_t    memory_nextgc;      // soft maximum (next GC threshold)
-    size_t    memory_maximum;     // hard maximum (CXFULL error)
+    uint64_t    gc_bytes_processed; // ~ total GC effort 
+    uint64_t    gc_bytes_collected; // ~ useful GC effort
+    size_t      memory_last_gc;     // memory after last GC
+    size_t      memory_in_use;      // memory usage currently
+    size_t      memory_maximum;     // maximum memory usage
 } wikrt_mem_stats;
 
-/** @brief Diagnostic peek at context memory usage.
- *
- * This isn't really sufficient for interesting profiles. But it can
- * at least help diagnose a thrashing computation.
- */
-void wikrt_peek_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
+/** Memory Usage Metrics */
+void wikrt_cx_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
 
-  ///////////////
- // DEBUGGING //
-///////////////
+// maybe get some effort stats, too?
+//  CPU cycles, etc.
+
+
+/** Debugging 
+ *
+ * At the moment, I only support log-based debugging via (@trace). Any
+ * argument to (@trace) will simply be written to the stream specified
+ * here, which defaults to the zero stream. This can serve a role like
+ * printf-style debugging in C.
+ *
+ * Awelon is amenable to richer forms of debugging that involve keeping
+ * snapshots, visualizing and animating  program state. But I need to
+ * think about debugging APIs to make this work nicely, perhaps model
+ * the configuration within Awelon code.
+ */
+void wikrt_debug_trace(wikrt_cx*, wikrt_s); // set (@trace) debug output
+
 // Debugging, Profiling, Etc..
 // 
 // - set up tracing for words or (@gate) annotations
 // - breakpoints and eventually animations on the same
 // - statistics or profiling on words or gates
+// 
+// What should the profiling API look like?
 
-/** @brief Enable tracing for flexible debugging.
+/** Parallel Evaluation
  *
- * Wikilon runtime recognizes a `{&trace}` annotation, which supports
- * lightweight printf/stderr style debugging. This is appropriate more
- * for tracing, TODOs, etc. than for errors (cf. wikrt_trace_write).
- * By default, trace is disabled (i.e. size zero buffer). The buffer may
- * be resized when empty (cf. wikrt_trace_read).
+ * A context is single-threaded at this API, but worker threads from
+ * the environment layer may join in to help compute a result based
+ * on (par) annotations or accelerators.
  *
- * For most use cases, a small buffer will be sufficient for debugging.
- * Stable, complete code shouldn't be very noisy.
- */
-bool wikrt_trace_enable(wikrt_cx*, size_t trace_buffer_size);
-
-/** @brief Equivalent to invoking the {&trace} annotation.
- *
- *    {&trace} :: ∀v,e. (v * e) → ((trashed v) * e)
- *
- * Tracing will serialize arbitrary values to a special trace buffer.
- * Values that would overflow this buffer are simply dropped. 
- *
- * Arbitrary values may be traced. It's important that developers favor
- * trace messages that are render easily in the development environment,
- * and preferably aren't too large. But Wikilon runtime doesn't enforce 
- * any opinions on the structure of trace messages.
- *
- * As an annotation, tracing is a logical identity. For efficiency,
- * it trashes the argument to avoid need for implicit copies. See 
- * wikrt_trash and the {&trash} annotation.
- */
-void wikrt_trace_write(wikrt_cx*);
-
-/** @brief Iterate and process trace messages.
- *
- * Each call returns a C string pointer to the next traced message in
- * the buffer, then returns NULL when the buffer is empty. Each string
- * should be considered invalid upon reading the next message. The 
- * buffer will accept new messages after being fully emptied.
- *
- * Trace messages contain ABC that would simply regenerate the traced
- * value. In most cases, this should just be a plain text.
- *
- * Expected use cases: Streaming output - empty the buffer after each
- * call to wikrt_step_eval. Aggregated output - read the buffer only  
- * after the computation completes. 
- *
- * Trace messages are preserved by wikrt_cx_reset and wikrt_set_error.
- */
-char const* wikrt_trace_read(wikrt_cx*);
-
-  ///////////////////////
- // PEFORMANCE TUNING //
-///////////////////////
-/** @brief Configure environment level thread pool.
- *
- * Parallel computation is performed by a pool of worker threads at
- * the environment level. These threads only operate on contexts
- * that are actively being evaluated from the API-layer, and only
- * where parallelism is explicitly annotated.
- *
- * The default pool size is zero. Increasing the thread pool will
- * perform immediate allocation of the worker threads. Shrinking it
- * is asynchronous, but eventually extra workers will be dropped.
+ * You may configure a thread pool size, which will be shared by all
+ * contexts. You should not configure this to more than the number of
+ * CPUs on the current machine.
  */
 void wikrt_env_threadpool(wikrt_env*, uint32_t pool_size);
 
-  /////////////////////////////////////
- // DATABASE AND PERSISTENCE ENGINE //
-/////////////////////////////////////
+// TODO:
+// low level parallelism: configure GPGPU or OpenCL cloud service
+// high level parallelism: configure cloud distribution for KPNs
 
-/** @brief Associate environment with persistence resources.
- * 
- * At the moment, this may only be set once, prior to context creation.
- * An LMDB database is created in the designated directory. Multiple
- * processes should not share the database. A simple `flock()` is applied
- * to resist accidental reuse.
- */
-bool wikrt_db_open(wikrt_env*, char const* dirPath, uint32_t dbMaxMB);
+/** Configure filesystem-local database and cache (using LMDB). */
+bool wikrt_db_open(wikrt_env*, char const* dirPath, size_t dbMaxSize);
 
-/** @brief Flush pending writes to disk. 
- *
- * Wikilon runtime database does not guarantee 'durability' of writes
- * by default. Use of wikrt_db_sync will push pending writes to disk.
- */
+/** Flush pending writes. Ensures durability of prior transactions. */
 void wikrt_db_sync(wikrt_env*);
 
-/** @brief Force garbage collection on stowage and persistence layer.
- *
- * Wikilon runtime does not frequently garbage collect the database
- * layer, and may favor incremental or imprecise collection in most
- * cases. Explicitly requesting GC, however, will force deep, precise
- * analysis. 
- */
+/** Force GC of secure hash resources (stowage, binaries, etc.). */
 void wikrt_db_gc(wikrt_env*);
 
-/** @brief Deep copy an environment's database.
- *
- * This is useful for backup, and potentially for compaction if a 
- * database has many empty pages. Returns false if it fails for any
- * reason, and `errno` may be set appropriately. Note that this does
- * not imply GC, and you probably want to force GC before copy.
- */
+/** Compacting copy and backup of a database. */
 bool wikrt_db_clone(wikrt_env*, char const* copyPath);
 
 #define WIKILON_RUNTIME_H
 #endif
+

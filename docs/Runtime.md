@@ -208,7 +208,7 @@ I could support single-assignment futures when inputting data into a computation
 
 ## Evaluations
 
-
+We have at least a few evaluation statuses: evaluated, stalled, unevaluated. I might want an additional option for profiling evaluations on a block, i.e. so I can allocate a unique counter to track the evaluation.
 
 ## Extraction
 

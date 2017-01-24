@@ -205,7 +205,7 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(stow)` - move large values to disk, load on demand
 * `(memo)` - memoize a computation for incremental computing
 * `(error)` - mark a value as an error object
-* `(@gate)` - extra symbols just for active debugging
+* `(@gate)` - symbol configurable for active debugging
 * `(=foo)` - reduce code to a known name (quines, loops)
 
 Annotations must have no internally observable effect on a computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states or a change in how an evaluated result is represented or organized.
@@ -558,7 +558,7 @@ Numbers are a useful example for editable views. A viable sketch:
 
 Awelon's natural numbers are given the `#` prefix in favor of a more aesthetic representation of signed numbers. From there, we build a tower of numbers. The basic approach of building views upon views is convenient because it makes views more extensible. For example, if we have no support for rational numbers, we'd still see `[-4 #6 rational]` which is still sensible to a human reader. And support for viewing rational numbers could be added quickly.
 
-Every editable view should have an unambiguous escape to raw Awelon code. While I use `(AWELON 42)` above to make it obvious, it could just as easily have been `'(42)` or `\42` or `<code type="awelon">42</code>` or whatever users find acceptable. The nature of editable views does make it easy to experiment for aesthetics. Use of escapes permits an editable view to support key-words, if desired.
+Every editable view should have an unambiguous escape to raw Awelon code. While I use `(AWELON 42)` above to make it obvious, I could just as easily use `#` as the primary escape, or `'(42)` or `\42`, etc.. Whatever users find acceptable. The nature of editable views does make it easy to experiment for aesthetics. Use of escapes permits an editable view to support key-words, if desired.
 
 Command lists are another valuable view feature:
 
