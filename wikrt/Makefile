@@ -42,11 +42,11 @@ uninstall:
 runtests: testSuite
 	LD_LIBRARY_PATH=. ./testSuite
 
-testSuite: testSuite.c testAO.h wikilon-runtime.h libwikilon-runtime.so 
-	$(CC) -o $@ $< -L. -lwikilon-runtime
+testSuite: testSuite.c wikrt.h libwikrt.so 
+	$(CC) -o $@ $< -L. -lwikrt
 
-runABC: runABC.c wikilon-runtime.h libwikilon-runtime.so 
-	$(CC) -o $@ $< -L. -lwikilon-runtime
+#runABC: runABC.c wikilon-runtime.h libwikilon-runtime.so 
+#	$(CC) -o $@ $< -L. -lwikilon-runtime
 
 linkAO: $(LINKAO_OBJECTS)
 	$(CC) -o $@ $(LINKAO_OBJECTS)

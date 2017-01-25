@@ -37,7 +37,7 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 ## Words
 
-Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@[]()<>{}\/,;|&="`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large. 
+Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@#[]()<>{}\/,;|&="`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large. 
 
 A useful subset of words is implicitly defined:
 
@@ -80,9 +80,9 @@ Awelon will use a 360-bit [BLAKE2b](https://blake2.net/) algorithm, and will enc
 Awelon language has specialized representations for natural numbers and texts. Numbers are simply implicitly defined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
 
         "
-         multi-line texts starts with `" LF` (34, 10)
+         multi-line texts starts with `" LF` (34 10)
          each line is indented by one space (32)
-         terminate the text with `LF ~` (10, 126) 
+         terminate the text with `LF ~` (10 126) 
         ~
 
 Texts must be valid UTF-8, forbidding C0 (except LF) and DEL. Inline texts additionally forbid the double quote and LF. There are no character escapes, but the extra whitespace in the representation of multi-line text is not considered part of the text. Texts in Awelon are [syntactic sugar](https://en.wikipedia.org/wiki/Syntactic_sugar) for a simple list of codepoints: 

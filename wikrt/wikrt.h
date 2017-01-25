@@ -155,9 +155,9 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
 
 /** Binary Streams
  *
- * Wikilon uses binaries as the primary input and output structure.
- * We can write or load a binary, read or save one, or evaluate the
- * binary by interpreting it as Awelon code and rewriting it.
+ * Wikilon uses binaries as the primary input and output structure at
+ * the API layer - used for updating or accessing the dictionary and
+ * also for constructing programs for evaluation.
  *
  * Streams are given stable identity via small integer. Logically,
  * every stream starts empty and you can just start writing to any
@@ -182,33 +182,6 @@ void wikrt_clear(wikrt_cx*, wikrt_s);
 bool wikrt_concat_move(wikrt_cx*, wikrt_s src, wikrt_s dst);
 bool wikrt_concat_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
 
-/** Secure Hash Resources
- *
- * Awelon leverages secure hashes to identify binary data resources. 
- * This concept is used for codebase structure sharing, large value
- * stowage (an alternative to virtual memory), and to access external
- * binary data from Awelon code.
- * 
- * Awelon's hash of choice is 360 bit BLAKE2b encoded as 60 characters
- * in base64url. Developers can access this via wikrt_hash or operating
- * on a stream.
- *
- * Wikilon runtime can save and load binary resources by secure hash.
- * Saving a stream returns a secure hash if it succeeds. Loading will
- * retrieve the resource if it is known, overwriting the target stream. 
- * Wikilon may garbage collect resources that don't have a reference
- * from codebase or context.
- *
- * Note: Secure hashes are bearer tokens, authorizing access to binary
- * data. Systems should resist timing attacks to discover known hashes.
- * Wikilon will expose only the initial 60 bits of each hash to timing,
- * but clients must take similar care to guard resource IDs.
- */
-#define WIKRT_HASH_SIZE 60
-void wikrt_hash(char* h, uint8_t const*, size_t);
-bool wikrt_load_rsc(wikrt_cx*, wikrt_s, char const* h);
-bool wikrt_save_rsc(wikrt_cx*, wikrt_s, char* h); 
-
 /** Codebase Access and Update
  *
  * An Awelon codebase is effectively a key-value database, albeit with
@@ -223,10 +196,38 @@ bool wikrt_save_rsc(wikrt_cx*, wikrt_s, char* h);
  *
  * These operations may fail and return false for a variety of reasons
  * like bad key (EKEYREJECTED) or an undefined value (ENOENT) or badly
- * formed data (EBADMSG), or context memory (ENOMEM).
+ * formed data (EBADMSG), or context memory (ENOMEM). Load also fails 
+ * if the stream is not empty (EADDRINUSE).
  */
 bool wikrt_load_def(wikrt_cx*, wikrt_s, char const* k);
 bool wikrt_save_def(wikrt_cx*, wikrt_s, char const* k); 
+
+/** Secure Hash Resources
+ *
+ * Awelon leverages secure hashes to identify binary data resources. 
+ * This concept is used for codebase structure sharing, large value
+ * stowage (an alternative to virtual memory), and to access external
+ * binary data from Awelon code.
+ * 
+ * Awelon's hash of choice is 360 bit BLAKE2b encoded as 60 characters
+ * in base64url. Developers can access this via wikrt_hash or operating
+ * on a stream.
+ *
+ * Wikilon runtime can save and load binary resources by secure hash.
+ * Saving a stream returns a secure hash if it succeeds. Loading will
+ * retrieve the resource if it is known. Wikilon may garbage collect 
+ * resources that don't have a reference from codebase or context.
+ *
+ * Note: Secure hashes are bearer tokens, authorizing access to binary
+ * data. Systems should resist timing attacks to discover known hashes.
+ * Wikilon will expose only the initial 60 bits of each hash to timing,
+ * but clients must take similar care to guard resource IDs.
+ */
+#define WIKRT_HASH_SIZE 60
+void wikrt_hash(char* h, uint8_t const*, size_t);
+bool wikrt_load_rsc(wikrt_cx*, wikrt_s, char const* h);
+bool wikrt_save_rsc(wikrt_cx*, wikrt_s, char* h); 
+
 
 /** Transactional Persistence
  * 
@@ -282,19 +283,19 @@ bool wikrt_parse_code(uint8_t const*, size_t, wikrt_parse_data*);
  * 
  * Awelon evaluation involves rewriting a program to an equivalent
  * program that is closer to normal form, much like `6 * 7` can be
- * rewritten as `42`. In Wikilon, we interpret the current stream 
- * as a program and evaluate as much as possible. We succeed if we
- * reach a normal form, where further evaluation will not cause 
- * further rewrites.
+ * rewritten to `42` in arithmetic. Wikilon interprets the binary
+ * stream as a program and rewrites it as Awelon code. (Under the
+ * hood, a more suitable representation is used.)
+ * 
+ * Evaluation may halt on resource limits, failing with ETIMEDOUT or
+ * ENOMEM. But we'll have a valid partial evaluation in these cases.
+ * Most other errors, such as divide by zero or a type error, will be
+ * represented within the code using (error) annotations and are not
+ * considered evaluation errors.
  *
- * Of course, not all programs have normal forms (because infinite
- * loops) and even when they do we cannot always reach them (because
- * time or space limits). Evaluation may fail, returning false and
- * setting errno to ENOMEM or ETIMEDOUT. See wikrt_set_effort below
- * to control the timeout. 
- *
- * Most other errors are represented within the code itself. Modulo
- * imbalanced blocks, code that fails to parse will not be rewritten.
+ * Caution: Evaluation of partial programs is possible, but you must
+ * be careful to avoid splitting a word. For partial results, favor
+ * the dedicated function wikrt_eval_cmd which supports alignment.
  */
 bool wikrt_eval(wikrt_cx*, wikrt_s);
 
@@ -310,13 +311,10 @@ bool wikrt_eval(wikrt_cx*, wikrt_s);
  *      [proc] commandA => commandB [proc']
  * 
  * Wikilon supports command stream processing by evaluating just far
- * enough to recognize the command outputs then moving them to another
- * stream. Hence, we split the stream between `commandB` and `[proc']`.
- * In case of `[args] word` the args would be moved, not evaluated. 
- * And the resulting process would not be moved or evaluated, instead
- * remaining available for processing as we addend the source stream.
- *
- * This returns 'true' when nothing more can be moved.
+ * enough to recognize the command outputs then moving commands to a
+ * separate stream where they may be read or further evaluated. For
+ * example, an `[args] word` command would be moved without rewriting 
+ * the `[args]` to normal form.
  */
 bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s cmd_dst);
 
@@ -324,7 +322,10 @@ bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s cmd_dst);
  * 
  * To control infinite loops, each context has a finite effort quota
  * for evaluations. When exhausted, evaluation fails with ETIMEDOUT.
- * Effort is specified in CPU microseconds, though is not accurate.
+ * However, the rewritten program will have a valid state after this
+ * failure. You can easily reset the effort quota and continue.
+ * 
+ * Effort is specified in CPU microseconds, but is not very accurate.
  * Parallel computations may exhaust the effort quota very quickly.
  */
 void wikrt_set_effort(wikrt_cx*, uint32_t cpu_usec);
@@ -420,7 +421,13 @@ bool wikrt_db_open(wikrt_env*, char const* dirPath, size_t dbMaxSize);
 /** Flush pending writes. Ensures durability of prior transactions. */
 void wikrt_db_sync(wikrt_env*);
 
-/** Force GC of secure hash resources (stowage, binaries, etc.). */
+/** Force GC of secure hash resources (stowage, binaries, etc.). 
+ *
+ * Wikilon favors an incremental, reference counting GC of resources.
+ * Resources referenced from contexts are protected by a shared table.
+ * If a program crashes, this table will not properly be cleared.  
+ * Resources referenced from contexts are protected by a shared table will not be collected.
+ */
 void wikrt_db_gc(wikrt_env*);
 
 /** Compacting copy and backup of a database. */

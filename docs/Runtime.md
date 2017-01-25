@@ -7,6 +7,8 @@ I'm also interested in predictable performance, and precise cost accounting so h
 
 Awelon is designed to afford efficient update patterns via secure hashes to name dictionaries from which another dictionary might inherit or contain.
 
+A feature I'd like, but only if it comes easily, is simple multi-process support such that we can directly link to the runtime database from multiple background processes rather than operate through services.
+
 ## Evaluation 
 
 Viable evaluation strategies:
@@ -116,14 +118,16 @@ Some thoughts:
 
 * reference counting - a good algorithm for long-lived, persistent resources. A precise reference count needs type information that GC understands, such as `3b+11d` meaning "referenced three times as a binary, eleven times as a dictionary", so we know how to interpret a resource. Conservative GC might essentially involve a one-size-fits-all parse algorithm, but should also work well in practice.
 
-* lazy reference counting - we could temporarily have a `3b+0d` reference count, indicating that we need to parse the resource as a dictionary and decref its dependencies. A zero reference count table may help incremental GC quickly return to objects that must be collected. We could add expiration indicators to zero reference count objects, to keep them available for an extra while.
+* lazy reference counting - reference counts can lag behind updates to root objects. We could model this by tracking an RC deltas table separately from the main RC table, to support incremental GC of resources and perhaps avoid the initial parse and processing of resources that are only briefly referenced. NOTE: since we might actually *receive* resources out-of-order, an RC deltas table could usefully delay positive increfs until a parse can be run.
 
 * ephemeral resources - a context can hold onto a resource that has a zero persistent reference count. I don't want to scan contexts when it's time to GC, so my best idea at the moment is: 
  * use shared *counting bloom filters* at the environment layer
  * from each context, maintain reference counts in bloom filters
- * active contexts may rotate to fresh bloom filters if nearly
+ * if bloom filter reference count full, move context to new one
 
-Reference counts could be conservative based on resource strings, or precise based on type information. 
+* multi-process access - bloom filter could be a shared mmap. Maybe use some form of file locking to determine when to reset the filter if our process is the first to access it.
+
+NOTE: If I want to support multi-process access to the database, e.g. so we can use command line utilities together with a running system, the main challenge regards GC of resources. Sharing 
 
 ## Dictionary Indexing
 
