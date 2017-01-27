@@ -120,17 +120,10 @@ Some thoughts:
 
 * lazy reference counting - reference counts can lag behind updates to root objects. We could model this by tracking an RC deltas table separately from the main RC table, to support incremental GC of resources and perhaps avoid the initial parse and processing of resources that are only briefly referenced. NOTE: since we might actually *receive* resources out-of-order, an RC deltas table could usefully delay positive increfs until a parse can be run.
 
-* ephemeral resources - a context can hold onto a resource that has a zero persistent reference count. I don't want to scan contexts when it's time to GC, so my best idea at the moment is: 
- * use shared *counting bloom filters* at the environment layer
- * from each context, maintain reference counts in bloom filters
- * if bloom filter reference count full, move context to new one
+* ephemeral resources - a context can hold onto a resource that has a zero persistent reference count. I don't want to scan contexts when it's time to GC. I'll want to track this outside the persistent database, but still in a shared memory-mapped file for multi-processing. A bloom filter or hash table should work well.
 
-* multi-process GC - an ephemeron table (counting bloom filter) could be a memory mapped file, shared between processes. We could reset the filter whenever the first process opens it (perhaps via file locks) as a lightweight crash recovery protocol.
+GC for secure hash resources, and a shared ephemeron table between processes, is perhaps the main requirement for multi-process access.
 
-I think this would be sufficient for Wikilon runtime to support multi-process access and many command line utilities without much overhead. The primay risk would be losing some GC opportunities after a process crash. 
-
-
-NOTE: If I want to support multi-process access to the database, e.g. so we can use command line utilities together with a running system, the main challenge regards GC of resources. Sharing 
 
 ## Dictionary Indexing
 

@@ -5,15 +5,18 @@ This directory contains the C runtime for Wikilon. I might add some command line
 
 ## Installation
 
-External dependencies:
+Development is currently on Ubuntu 16.04. However, I'm aiming to keep things reasonably portable. Here are the current dependencies and packages used during development where relevant:
 
-* gcc
+* gcc (developed with 5.4.0)
 * libpthread
 * libc
 * make
-* liblmdb (liblmdb-dev on my Ubuntu 16.04 install)
+* Lightning MDB - memory mapped database
+ * liblmdb (liblmdb-dev 0.9.17-3)
+* BLAKE2b Secure Hash
+ * libb2 (libb2-dev 0.97-2)
 
-We could probably make this work with Clang, but it isn't a priority for me at the moment.
+Actual version constraints aren't known. 
 
 ## Outputs
 
@@ -22,7 +25,7 @@ Primary Objects:
 * `wikrt.h` - header
 * `libwikrt.so` - primary source code
 
-I might later add some command line utilities to:
+I intend to eventually provide some command-line utilities, too.
 
 * access and update the codebase
 * import and export resources 
@@ -35,19 +38,11 @@ But this isn't a critical area, and could be constructed separately.
 
 Something like the following
 
-        sudo apt-get install liblmdb-dev
+        sudo apt-get install liblmdb-dev libb2-dev
         make && sudo make install
 
-Content is installed under `/usr/local`. And `sudo make uninstall` will remove the installed objects.
+Content is installed under `/usr/local`. 
 
-External dependencies include:
-
-* gcc
-* libpthread
-* libc
-* make
-
-Version constraints aren't known. The gcc used during development is 5.4.0
+Use of `sudo make uninstall` will remove the installed objects.
 
 
- 

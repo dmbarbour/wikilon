@@ -259,22 +259,11 @@ bool wikrt_save_rsc(wikrt_cx*, wikrt_s, char* h);
  * On failure, we return false and set errno appropriately - conflict
  * is reported as ESTALE, but running out of space or memory is quite
  * possible, and EROFS is returned if writes are blocked in general.
- */
-bool wikrt_commit(wikrt_cx*);
-
-/** Transaction Durability
  *
- * Transactions are atomic and serializable by default, but are not
- * guaranteed to be durable. If you set wikrt_durable on a context,
- * the current transaction will wait for data to be acknowledged as
- * synchronized to disk before committing successfully. Otherwise,
- * consider periodic wikrt_sync to push recent updates.
- *
- * Durability is ultimately limited by the underlying filesystem and
- * hardware. Truly robust data requires distributed replication, but
- * that may increase synchronization costs.
+ * Durability is optional, and causes commit to also sync updates
+ * to disk and await acknowledgements from the OS.
  */
-void wikrt_durable(wikrt_cx*);
+bool wikrt_commit(wikrt_cx*, bool durable);
 
 /** Scan Code for Parse Errors
  * 
@@ -333,60 +322,74 @@ bool wikrt_eval(wikrt_cx*, wikrt_s);
  *
  * This operation returns successfully if it moves any command data,
  * and subsequent operations may move more command data. If there is
- * no command data available, this instead returns false with ENOENT.
- * And we may fail for resource reasons like wikrt_eval.
+ * no command data available, this returns false with ENODATA. Also,
+ * this can fail to evaluation resource limits (ENOMEM, ETIMEDOUT). 
  */
 bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s dst);
 
 /** Data Stack Evaluation
  *
- * Awelon is amenable to REPL evaluations or monadic effects loops.
- * An external agent observes the evaluation context - the data stack
- * (the rightmost data elements of a program) - and makes decisions
- * before proceeding.
+ * A common application pattern involves an external agent that reads
+ * data from the program, makes decisions, then extends the program by
+ * injecting new data and commands. This pattern fits REPLs, monadic
+ * effects models, and even some GUI apps. In context of Awelon, the
+ * observations will generally be performed on the "stack", meaning
+ * the rightmost data elements of a program.
  *
- * Wikilon supports this pattern by providing a function to move one
- * data element (a block or value word) from the right hand side of
- * the source program to the destination, evaluating just enough to
- * recognize the datum. This offers some symmetry to the eval_cmd
- * option.
+ * Wikilon supports this pattern by providing a function to separate
+ * a few of those data elements from a source program to be further
+ * evaluated, copied, observed, or returned by wikrt_move to source
+ * if necessary. This function partially evaluates code, just enough
+ * to move the data as a given count of blocks and value words. 
  *
- * In this case, the destination must be empty or we will fail with
- * EADDRINUSE. If there is no rightmost data element (that is, if we
- * just have commands or an empty program), we'll fail instead with
- * ENOENT. Evaluation resource failures are possible, too.
+ * On failure, nothing is moved but partial evaluation may modify the
+ * source. This fails if the destination is not empty (EADDRINUSE) or
+ * if there is insufficient data (ENODATA). It may also fail because
+ * of evaluation resource limits (ENOMEM, ETIMEDOUT).
  */
-bool wikrt_eval_datum(wikrt_cx*, wikrt_s src, wikrt_s dst); 
+bool wikrt_eval_data(wikrt_cx*, wikrt_s src, uint32_t amt, wikrt_s dst); 
 
-/** Optimized Binary Data Input
+/** Binary Data Input
  * 
  * A binary in Awelon is represented as a list of natural numbers 0..255.
  *
  *      [12 [0 [1 [32 ~ :]:]:]:](binary)
  *
+ * This is a naive and inefficient representation, without any support
+ * for syntactic sugar. Though, there is special support to reference
+ * external binary structures via secure hash resource as `%secureHash`.
+ *
  * Any reasonable implementation of Awelon will support an accelerated
- * representation for binary data, using arrays of bytes under the hood.
- * Wikilon is no exception, using the `(binary)` annotation to specify
- * the efficient representation should be favored.
+ * representation for binary data under the hood, using arrays of bytes.
+ * Wikilon is no exception. Wikilon recognizes the `(binary)` annotation
+ * to indicate that a list structure should be formatted as binary data.
  *
- * Converting a binary to a value will logically rewrite the binary to
- * the expanded form described above, but will shift to the optimized
- * representation under the hood. You could then use `wikrt_move` to 
- * make this data accessible to another computation.
- *
- * Note: Further conversions on the binary value, such as text, should
- * use normal accelerated functions. It isn't supported directly at the
- * API. 
+ * At this API layer, Wikilon can logically convert a binary stream to 
+ * the Awelon list of byte values as described above, but without the
+ * inefficient intermediate structure of a naive Awelon representation.
+ * Use of wikrt_move can make the data available to other computations.
+ * 
+ * Further conversions, as from binary to texts or vice versa, are left
+ * to basic accelerated functions, e.g. an accelerated `utf8-to-text`.
  */
 bool wikrt_stream_to_binary(wikrt_cx*, wikrt_s);
 
-/** Optimized Binary Data Output
+/** Streaming Binary Data Output
  *
- * Efficient binary output has many use cases, such as emitting a web
- * page or streaming computed music. In this case, we want to move data
- * directly from a binary value to an output stream. However, this does
- * require evaluation in the general case because the binary data might
- * not be fully evaluated... and may even be infinite.
+ * Awelon can represent binaries as simple lists of byte values, and
+ * Awelon can also represent lazily evaluated lists using a few arity
+ * annotations to delay computation. Lazy lists support streaming, 
+ * computing elements shortly before we observe them. 
+ * 
+ * 
+ * 
+ *  
+ * Efficient support for streaming binary output has many use cases,
+ * enabling massive objects to be represented logically and computed
+ * as needed. Such objects could represent web pages, database query
+ * results, or streaming music or video. 
+ * 
+ * 
  *
  * The following function will target the rightmost data element, top
  * of the program stack, assuming it to be a binary list. It extracts
@@ -498,7 +501,7 @@ void wikrt_env_threadpool(wikrt_env*, uint32_t pool_size);
  * than a standard library, but might be used as a seed for a larger
  * dictionary.
  */
-bool wikrt_write_accel(wikrt_cx*, wikrt_s);
+bool wikrt_write_prelude(wikrt_cx*, wikrt_s);
 
 /** Filesystem-local Persistence
  *
@@ -518,7 +521,11 @@ void wikrt_db_sync(wikrt_env*);
  *
  * Resources referenced by a context or from a persistent dictionary
  * are protected. Anything else will normally be garbage collected
- * incrementally, but you may force the issue here.
+ * incrementally, but you can force a full GC with this function 
+ * which may take some time to return.
+ *
+ * Note: GC is not fully precise. References held by contexts are
+ * recorded using counting bloom filters or a similar technique.
  */
 void wikrt_db_gc(wikrt_env*);
 
