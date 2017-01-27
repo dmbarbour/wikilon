@@ -50,7 +50,7 @@ Depending on use case, developers may choose to represent ad-hoc hierarchical st
 
 Awelon has a deep link structure and supports rich editable views. Further, Awelon has implicit structure in form of dictionary objects, a reverse link index, and static type analysis. Awelon forbids cyclic dependencies between definitions, but no such constraint exists on the implicit relationships. We can view Awelon dictionary objects as hypermedia resources.
 
-Intriguingly, *Awelon evaluates to Awelon*, preserving its link structure and meaning. Hence, we can view this as *hypermedia evaluates to hypermedia*. We could model texts that evaluate to canvases and tables, and vice versa. With program animation, we could render interesting intermediate results during evaluation. The equivalent of HTTP POST forms might be represented in terms of cloning a template object - the initial 'form' - for each action, then editing it. 
+Intriguingly, *Awelon evaluates to Awelon*, preserving its link structure and meaning. Hence, we can view this as *hypermedia evaluates to hypermedia*. We could model texts that evaluate to canvases and tables, and vice versa. Editable views can also support drop-down lists and radio buttons, blank forms representing templated commands for a user to fill, stateful forms representing control interfaces subject to repeated edits.
 
 If URLs are used in work orders, those might provide a simple means to integrate the wider world with Awelon applications.
 
@@ -128,23 +128,27 @@ Awelon supports these patterns via the *Hierarchical Dictionaries* feature.
 
 In an open system, we generally want to control the authority of our agents in terms of which parts of the system they may observe or directly influence. Awelon doesn't provide much help here, beyond support for *Hierarchical Dictionaries*, which provide a natural barrier for communication that must be explicitly bridged, and a narrow interface for synchronization. Between that and internal purity, we can push most security concerns to the RESTful application models and effects layers. 
 
-# More Conventional Models
 
-These might be useful in context of effectful work orders.
+# Programs as Processes
+
+While Awelon is designed for non-conventional apps, we can certainly model a more conventional application structure where a program directly interacts with the real world as part of a computation.
+
+## Interactive Evaluations
+
+An agent can evaluate a program, make observations about the top of the stack, then add some input and continue. This design is somewhat semantically awkward because it isn't clear where the agent is represented except 'outside' or 'above' the program. But it fits a REPL or monadic effects (or [KPN-based effects](KPN_Effects.md)). 
 
 ## Command Stream Processing
 
 Awelon is amenable to command stream processing. The general form is:
 
-        [proc] commandA  => commandB* [proc']
+        [proc] commandA  => commandB [proc']
 
 This simplistic stream processing model conveniently supports composition:
 
-        [procF] [procG] commandA => [procF] commandB* [procG']
+        [procF] [procG] commandA => [procF] commandB [procG']
                                  ...
-                                 => commandC* [procF'] [procG']
+                                 => commandC [procF'] [procG']
 
 We can monotonically input commands to the right hand side of our program, and incrementally output commands from the left hand side. Output commands might represent requested effects. The process object is our state. A weakness of this model is that it doesn't support feedback loops in a general sense, but we might build upon it by assuming `[proc]` to be a process network or similar.
 
-In any case, this could be used as a basis for conventional effects, with commands representing the inputs and outputs of a process, and outputs including observable effects. At the source code layer, we might drop the final commands that are processed as IO.
 

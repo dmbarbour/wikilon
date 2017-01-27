@@ -7,7 +7,7 @@ I'm also interested in predictable performance, and precise cost accounting so h
 
 Awelon is designed to afford efficient update patterns via secure hashes to name dictionaries from which another dictionary might inherit or contain.
 
-A feature I'd like, but only if it comes easily, is simple multi-process support such that we can directly link to the runtime database from multiple background processes rather than operate through services.
+If it comes without too much overhead, I want multi-process support so I can develop command line utility processes, hot backups, FUSE adapters, etc. without running through the web service. And also add new web services as separate processes if appropriate. 
 
 ## Evaluation 
 
@@ -125,7 +125,10 @@ Some thoughts:
  * from each context, maintain reference counts in bloom filters
  * if bloom filter reference count full, move context to new one
 
-* multi-process access - bloom filter could be a shared mmap. Maybe use some form of file locking to determine when to reset the filter if our process is the first to access it.
+* multi-process GC - an ephemeron table (counting bloom filter) could be a memory mapped file, shared between processes. We could reset the filter whenever the first process opens it (perhaps via file locks) as a lightweight crash recovery protocol.
+
+I think this would be sufficient for Wikilon runtime to support multi-process access and many command line utilities without much overhead. The primay risk would be losing some GC opportunities after a process crash. 
+
 
 NOTE: If I want to support multi-process access to the database, e.g. so we can use command line utilities together with a running system, the main challenge regards GC of resources. Sharing 
 

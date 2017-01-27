@@ -45,6 +45,9 @@
  * - Create a context bound to a named dictionary for computation, transaction.
  * - Maintain a named codebase with basic key-value updates
  * - Evaluate code
+ *
+ * Most operations in this API also use `errno` for additional details
+ * about the cause of error, adapting common error names. 
  * 
  *  (c) 2015-2017 David Barbour
  *  LICENSE: BSD 3-clause <https://opensource.org/licenses/BSD-3-Clause>
@@ -76,13 +79,13 @@ typedef struct wikrt_env wikrt_env;
  * Given a context, we can evaluate code and search or transactionally 
  * update the dictionary. 
  *
- * A context is single-threaded, at least with respect to this API. A
- * context may be used from multiple threads over its lifespan, but must
- * be used from at most one at a time. Internal parallelism is configured
- * at the environment layer (see wikrt_set_threadpool).
+ * A context is single-threaded at this API, but supports multi-tasking
+ * via multiple streams, and background parallel evaluations via `(par)`
+ * annotations. No thread-local storage is used, so you're free to use
+ * the context from multiple threads - just exclusively one at a time.
  *
- * In addition to the context, Wikilon runtime uses 'errno' to provide
- * extra information about API-layer errors. 
+ * Wikilon uses `errno` to return extra error information when returning
+ * `false` in success/fail cases.
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -131,8 +134,9 @@ void wikrt_cx_reset(wikrt_cx*, char const* dict);
  *
  * Copying a context is the primary means of resizing a context that
  * is too small or too large. Additionally, it may prove useful for 
- * snapshots or templated computation. Copy may fail (and return false)
- * if the destination is too small or belongs to the wrong environment.
+ * snapshots, forks, or templated computations. Copy may fail (and
+ * return false) if the destination is too small (ENOMEM) or was 
+ * created for a different environment (EINVAL).
  *
  * Note: The destination context is implicitly reset before copy. 
  */
@@ -159,28 +163,41 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * the API layer - used for updating or accessing the dictionary and
  * also for constructing programs for evaluation.
  *
- * Streams are given stable identity via small integer. Logically,
- * every stream starts empty and you can just start writing to any
- * stream (no need to allocate). The null stream (value 0) is the
- * special case: all writes to it fail.
+ * Streams are given stable identity via small integers. Logically, a
+ * stream starts empty and you may write to any stream. Reading data
+ * from the stream until empty or clearing it will recover associated
+ * memory resources. The null stream (value zero) is a special case
+ * and may not be read or written (failing with EINVAL).
  *
- * On read, size information is both input and output - buffer size
- * on input, bytes read on output.
+ * We might think of streams as registers or variables of a context. 
+ *
+ * Writes may fail with ENOMEM if the context is close to full.
  */
 typedef uint32_t wikrt_s;
 bool wikrt_write(wikrt_cx*, wikrt_s, uint8_t const*, size_t);
-bool wikrt_read(wikrt_cx*, wikrt_s, uint8_t*, size_t*);
+size_t wikrt_read(wikrt_cx*, wikrt_s, uint8_t*, size_t);
+bool wikrt_is_empty(wikrt_cx*, wikrt_s);
 void wikrt_clear(wikrt_cx*, wikrt_s);
 
 /** Stream Composition
  *
- * Move or copy the source stream to addend the destination stream.
+ * Move or copy the source stream, addending the destination stream.
  * This could be useful for snapshots and similar. The move variant
- * will implicitly clear the source, but avoids the extra resource
- * burdens of copying data.
+ * will implicitly clear the source, but may have reduced resource
+ * overheads. (That said, copies are logical and reasonably cheap.)
  */
-bool wikrt_concat_move(wikrt_cx*, wikrt_s src, wikrt_s dst);
-bool wikrt_concat_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
+bool wikrt_move(wikrt_cx*, wikrt_s src, wikrt_s dst);
+bool wikrt_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
+
+/** Stream Iteration
+ *
+ * This function enumerates non-empty streams, returning the next
+ * non-empty stream after the specified stream, or returning zero if
+ * there are no further non-empty streams. The initial use case is to 
+ * clear streams modulo a whitelist after wikrt_cx_copy. But this is
+ * potentially useful for debugging, saving a session, etc..
+ */
+wikrt_s wikrt_stream_iter(wikrt_cx*, wikrt_s);
 
 /** Codebase Access and Update
  *
@@ -227,7 +244,6 @@ bool wikrt_save_def(wikrt_cx*, wikrt_s, char const* k);
 void wikrt_hash(char* h, uint8_t const*, size_t);
 bool wikrt_load_rsc(wikrt_cx*, wikrt_s, char const* h);
 bool wikrt_save_rsc(wikrt_cx*, wikrt_s, char* h); 
-
 
 /** Transactional Persistence
  * 
@@ -279,27 +295,27 @@ typedef struct wikrt_parse_data {
 } wikrt_parse_data;
 bool wikrt_parse_code(uint8_t const*, size_t, wikrt_parse_data*);
 
-/** Evaluation
+/** Full Program Evaluation
  * 
  * Awelon evaluation involves rewriting a program to an equivalent
  * program that is closer to normal form, much like `6 * 7` can be
  * rewritten to `42` in arithmetic. Wikilon interprets the binary
- * stream as a program and rewrites it as Awelon code. (Under the
- * hood, a more suitable representation is used.)
+ * stream as a program and rewrites it as Awelon code. Under the
+ * hood a more suitable representation is used, but this API will
+ * present programs as binaries.
  * 
  * Evaluation may halt on resource limits, failing with ETIMEDOUT or
- * ENOMEM. But we'll have a valid partial evaluation in these cases.
- * Most other errors, such as divide by zero or a type error, will be
- * represented within the code using (error) annotations and are not
- * considered evaluation errors.
+ * ENOMEM. See wikrt_set_effort to control timeouts. But we'll have a
+ * valid partial evaluation even if we halt on resource limits. Other
+ * errors, such as divide by zero or type errors, are represented in
+ * the evaluated code via `(error)` annotations.
  *
  * Caution: Evaluation of partial programs is possible, but you must
- * be careful to avoid splitting a word. For partial results, favor
- * the dedicated function wikrt_eval_cmd which supports alignment.
+ * be careful to avoid splitting words like from `foobar` to `foo`.
  */
 bool wikrt_eval(wikrt_cx*, wikrt_s);
 
-/** Stream Processing
+/** Command Stream Processing
  *
  * Awelon is amenable to processing a stream of commands. A command
  * is a subprogram that cannot be further rewritten by addending the
@@ -311,12 +327,81 @@ bool wikrt_eval(wikrt_cx*, wikrt_s);
  *      [proc] commandA => commandB [proc']
  * 
  * Wikilon supports command stream processing by evaluating just far
- * enough to recognize the command outputs then moving commands to a
- * separate stream where they may be read or further evaluated. For
- * example, an `[args] word` command would be moved without rewriting 
- * the `[args]` to normal form.
+ * enough to recognize the command outputs then moving commands to
+ * addend a separate stream to be read or evaluated further. For the
+ * `[args] word` example, `[args]` would generally still be lazy.
+ *
+ * This operation returns successfully if it moves any command data,
+ * and subsequent operations may move more command data. If there is
+ * no command data available, this instead returns false with ENOENT.
+ * And we may fail for resource reasons like wikrt_eval.
  */
-bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s cmd_dst);
+bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s dst);
+
+/** Data Stack Evaluation
+ *
+ * Awelon is amenable to REPL evaluations or monadic effects loops.
+ * An external agent observes the evaluation context - the data stack
+ * (the rightmost data elements of a program) - and makes decisions
+ * before proceeding.
+ *
+ * Wikilon supports this pattern by providing a function to move one
+ * data element (a block or value word) from the right hand side of
+ * the source program to the destination, evaluating just enough to
+ * recognize the datum. This offers some symmetry to the eval_cmd
+ * option.
+ *
+ * In this case, the destination must be empty or we will fail with
+ * EADDRINUSE. If there is no rightmost data element (that is, if we
+ * just have commands or an empty program), we'll fail instead with
+ * ENOENT. Evaluation resource failures are possible, too.
+ */
+bool wikrt_eval_datum(wikrt_cx*, wikrt_s src, wikrt_s dst); 
+
+/** Optimized Binary Data Input
+ * 
+ * A binary in Awelon is represented as a list of natural numbers 0..255.
+ *
+ *      [12 [0 [1 [32 ~ :]:]:]:](binary)
+ *
+ * Any reasonable implementation of Awelon will support an accelerated
+ * representation for binary data, using arrays of bytes under the hood.
+ * Wikilon is no exception, using the `(binary)` annotation to specify
+ * the efficient representation should be favored.
+ *
+ * Converting a binary to a value will logically rewrite the binary to
+ * the expanded form described above, but will shift to the optimized
+ * representation under the hood. You could then use `wikrt_move` to 
+ * make this data accessible to another computation.
+ *
+ * Note: Further conversions on the binary value, such as text, should
+ * use normal accelerated functions. It isn't supported directly at the
+ * API. 
+ */
+bool wikrt_stream_to_binary(wikrt_cx*, wikrt_s);
+
+/** Optimized Binary Data Output
+ *
+ * Efficient binary output has many use cases, such as emitting a web
+ * page or streaming computed music. In this case, we want to move data
+ * directly from a binary value to an output stream. However, this does
+ * require evaluation in the general case because the binary data might
+ * not be fully evaluated... and may even be infinite.
+ *
+ * The following function will target the rightmost data element, top
+ * of the program stack, assuming it to be a binary list. It extracts
+ * up to a given quota of bytes from this list, moving them to another
+ * stream to be read normally. Whatever remains of the list is left
+ * on the stack. Subsequent extractions can process more binary data.
+ *
+ * This function returns the number of bytes moved. This is considered
+ * a "failure" if it doesn't match the number of bytes requested, so
+ * you can check errno: the binary list does not exist (ENOENT) or is
+ * empty (ENODATA) or is not a binary list (EDOM), or basic evaluation 
+ * resource failures (ENOMEM, ETIMEDOUT).
+ */
+size_t wikrt_extract_binary(wikrt_cx*, wikrt_s src, size_t amt, wikrt_s dst);
+
 
 /** Effort Quota
  * 
@@ -363,15 +448,15 @@ void wikrt_cx_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
 
 /** Debugging 
  *
- * At the moment, I only support log-based debugging via (@trace). Any
- * argument to (@trace) will simply be written to the stream specified
- * here, which defaults to the zero stream. This can serve a role like
- * printf-style debugging in C.
+ * Awelon is amenable to rich forms of debugging that involve keeping
+ * snapshots, visualizing and animating program state. But I have yet
+ * to develop a suitable API.
  *
- * Awelon is amenable to richer forms of debugging that involve keeping
- * snapshots, visualizing and animating  program state. But I need to
- * think about debugging APIs to make this work nicely, perhaps model
- * the configuration within Awelon code.
+ * At the moment, I only support log-based debugging via (@trace). An
+ * argument to (@trace) will be written to the stream specified here.
+ * The null stream (0) will simply drop the trace value, and is the
+ * default. Tracing supports a simple form of printf-style debugging,
+ * which is convenient and adequate for a lot of use cases.
  */
 void wikrt_debug_trace(wikrt_cx*, wikrt_s); // set (@trace) debug output
 
@@ -415,7 +500,15 @@ void wikrt_env_threadpool(wikrt_env*, uint32_t pool_size);
  */
 bool wikrt_write_accel(wikrt_cx*, wikrt_s);
 
-/** Configure filesystem-local database and cache (using LMDB). */
+/** Filesystem-local Persistence
+ *
+ * Multiple processes may share a database, albeit limited to the
+ * same OS kernel because shared memory mutexes and file locks are
+ * used. This supports command line utilities and background tasks.
+ *
+ * If a process crashes or is killed, it may be necessary to halt
+ * all processes sharing a database to ensure locks are reset.
+ */
 bool wikrt_db_open(wikrt_env*, char const* dirPath, size_t dbMaxSize);
 
 /** Flush pending writes. Ensures durability of prior transactions. */
@@ -423,15 +516,14 @@ void wikrt_db_sync(wikrt_env*);
 
 /** Force GC of secure hash resources (stowage, binaries, etc.). 
  *
- * Wikilon favors an incremental, reference counting GC of resources.
- * Resources referenced from contexts are protected by a shared table.
- * If a program crashes, this table will not properly be cleared.  
- * Resources referenced from contexts are protected by a shared table will not be collected.
+ * Resources referenced by a context or from a persistent dictionary
+ * are protected. Anything else will normally be garbage collected
+ * incrementally, but you may force the issue here.
  */
 void wikrt_db_gc(wikrt_env*);
 
 /** Compacting copy and backup of a database. */
-bool wikrt_db_clone(wikrt_env*, char const* copyPath);
+bool wikrt_db_copy(wikrt_env*, char const* copyPath);
 
 #define WIKILON_RUNTIME_H
 #endif
