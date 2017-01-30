@@ -122,8 +122,7 @@ Some thoughts:
 
 * ephemeral resources - a context can hold onto a resource that has a zero persistent reference count. I don't want to scan contexts when it's time to GC. I'll want to track this outside the persistent database, but still in a shared memory-mapped file for multi-processing. A bloom filter or hash table should work well.
 
-GC for secure hash resources, and a shared ephemeron table between processes, is perhaps the main requirement for multi-process access.
-
+GC for secure hash resources, and a shared ephemeron table between processes, is perhaps the main requirement for multi-process access. I could (and probably should) use shm_open for the ephemeron table.
 
 ## Dictionary Indexing
 
