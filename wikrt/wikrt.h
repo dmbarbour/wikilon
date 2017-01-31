@@ -376,32 +376,22 @@ bool wikrt_stream_to_binary(wikrt_cx*, wikrt_s);
 
 /** Streaming Binary Data Output
  *
- * Awelon can represent binaries as simple lists of byte values, and
- * Awelon can also represent lazily evaluated lists using a few arity
- * annotations to delay computation. Lazy lists support streaming, 
- * computing elements shortly before we observe them. 
- * 
- * 
- * 
- *  
- * Efficient support for streaming binary output has many use cases,
- * enabling massive objects to be represented logically and computed
- * as needed. Such objects could represent web pages, database query
- * results, or streaming music or video. 
- * 
- * 
+ * Awelon represents binary data as a simple list of byte values, that
+ * is natural numbers in the range 0 to 255. However, lists in Awelon
+ * may represent unbounded streams via lazy evaluation. The idea here
+ * is to extract binary data from a source program, moving available
+ * bytes into an output stream and performing evaluation as needed.
  *
- * The following function will target the rightmost data element, top
- * of the program stack, assuming it to be a binary list. It extracts
- * up to a given quota of bytes from this list, moving them to another
- * stream to be read normally. Whatever remains of the list is left
- * on the stack. Subsequent extractions can process more binary data.
+ * The source must contain a single datum (you can use wikrt_eval_data
+ * to separate it from another program). Data extracted is appended to
+ * the destination stream and removed from the source.
  *
- * This function returns the number of bytes moved. This is considered
- * a "failure" if it doesn't match the number of bytes requested, so
- * you can check errno: the binary list does not exist (ENOENT) or is
- * empty (ENODATA) or is not a binary list (EDOM), or basic evaluation 
- * resource failures (ENOMEM, ETIMEDOUT).
+ * In each step, we can specify a maximum number of bytes to extract,
+ * and we'll return how many were successfully extracted. If these 
+ * values differ, we have a failure. Failure may occur if there is no
+ * source program (ENOENT) or if the program doesn't evaluate to the
+ * binary list (EDOM) or if all available data has been extracted 
+ * (ENODATA), or due to resource limits (ENOMEM, ETIMEDOUT).
  */
 size_t wikrt_extract_binary(wikrt_cx*, wikrt_s src, size_t amt, wikrt_s dst);
 
@@ -455,13 +445,19 @@ void wikrt_cx_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
  * snapshots, visualizing and animating program state. But I have yet
  * to develop a suitable API.
  *
- * At the moment, I only support log-based debugging via (@trace). An
- * argument to (@trace) will be written to the stream specified here.
- * The null stream (0) will simply drop the trace value, and is the
- * default. Tracing supports a simple form of printf-style debugging,
- * which is convenient and adequate for a lot of use cases.
+ * For the short term, you can use (error) to mark erroneous values 
+ * that will remain in the output but not be evaluated further such
+ * as "to do: fix foo!"(error). Or you can use (trace) for printf
+ * style debugging, printing each value as a comment to the trace
+ * log configured below.
+ *
+ * For `[V](trace)` in source, we'll produce `[V](a2)d` in the log,
+ * where `(a2)d` effectively marks the value as a comment with no
+ * semantic behavior. The only way to "use" this log is to have a
+ * human or another agent read it and extract information. The trace
+ * annotation is removed from source at the same time.
  */
-void wikrt_debug_trace(wikrt_cx*, wikrt_s); // set (@trace) debug output
+void wikrt_debug_trace(wikrt_cx*, wikrt_s); 
 
 // Debugging, Profiling, Etc..
 // 

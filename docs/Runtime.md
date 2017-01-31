@@ -45,7 +45,7 @@ Due to in-place updates on some linear objects potentially updating objects in t
 
 I would like to avoid full compactions in the common case. So I might need another intermediate generation that performs either copy or compaction. This complicates write barriers a little insofar as I need to track roots for multiple generations. There are diminishing returns for having many generations, but even one or two generations would cover most common cases.
 
-*Note:* be sure to use *two* bitfields for mark-compact bits. One for grey, one for black. This enables us to test at a word level whether a grey word matches a black word (do we need to scan more?), and to easily mask or test both bitfields using the same offsets. I'd also need to ensure space is available for marking in the worst case, so this would be an upper constraint on the surviving set. Fortunately, I only need mark bits during mark and compaction.
+*Note:* be sure to use *three* bitfields for mark-compact bits. One for grey, one for black, one for pointer object type (tagged object vs. word pair). This enables us to test at a word level whether a grey word matches a black word (do we need to scan more?), and to easily mask or test both bitfields using the same offsets. The last bitfield simplifies the compaction algorithm and allows resumption of the mark algorithm from any grey object.
 
 ## Parallelism and Threads
 
@@ -78,13 +78,48 @@ A modest proposal:
         i10     composition cell (B, A) => [B A]
         i11     constructor cell (H, T) => [H T :]
 
-The `i` bit enables any value to be logically inlined as a function. This is mostly useful in context of operations like bind or compose, enabling uniform treatment of pair cons to support pairs, bindings, compositions, etc.. It also reduces overhead for arity checks, since we don't need to peek beyond the pointer to determine how an object behaves under bind, swap, etc..
+The `i` bit is 0 for inline, 1 for values. This enables any value to be logically inlined as a function. This is mostly useful in context of operations like bind or compose, enabling uniform treatment of pair cons to support pairs, bindings, compositions, etc.. It also reduces overhead for arity checks, since we don't need to peek beyond the pointer to determine how an object behaves under bind, swap, etc..
 
 Small constants would be values we can represent within a word. Small natural numbers and tags are perhaps the most critical, but it would be tempting to also support small integers, small texts or labels, etc.. Covering accelerated functions might also be convenient. On a 32-bit system, we don't have a lot of room for innovation here. But on a 64-bit system, 'small constants' can adequately cover a lot.
 
 Tagged objects can cover any larger object, though the added header overhead may be significant. Modeling tags uniformly as small constants should also simplify the 'compact' phase of mark-compact algorithms. Programs, arrays, records, record-of-arrays vs. array-of-records, etc.. might be handled via tagged objects.
 
 Optimizing basic composition gives us lightweight common constructions - the `[[B]A]` block bind, `[[B][A]]` pairs, and `[B A]` composition. List constructor cells then efficiently cover list and tree structured data. Larger lists or tuples should be accelerated and represented using tagged arrays.
+
+### Small Constants
+
+I desire several small constant "types", so let's say three to four bits of type data. A viable list of types to support:
+
+* built-in operations
+* natural numbers
+* integers
+* rational numbers (two small nats)
+* small decimal numbers (small exponent, large mantissa)
+* labels for sums and variants
+* short texts
+* short binaries
+
+I'd like to ensure that the zero word is equivalent to a built-in NOP action. Natural numbers should cover a reasonably large volume, and integers should ideally cover the same volume of naturals (plus and minus). So focusing on just these at the moment:
+
+         00     extended
+         10     naturals
+         x1     integers
+
+This is in addition to our `i00` for the small constants, so extended types are `...00i00` and naturals are `...10i00`. This means our small naturals on a 32-bit system cover at least 27 bits, which is sufficient to cover a volume roughly from zero to 128 million. On a 64-bit system (which is the expected case) the effective range is much larger. Integers encode a similar volume but in both positive and negative directions. 
+
+The extended types would then cover everything else, consuming a few more bits to distinguish the data types. We don't need very many built-in operations.
+
+### Sliceable Arrays and Ropes?
+
+I would like easy support to reference and logically recompose array fragments. We might treat array-slice as an alternative representation of array. Maybe something like:
+
+        (slice array-ref offset count)
+
+This seems quite feasible, but would require additional support to represent composition of arrays. Rather than a linked list of chunks, perhaps logically appended slices and arrays.
+
+        (append array array size)
+
+Here the `size` field is just the sum of the sizes of the component arrays, as a natural number. This is important for efficient indexing of the array. We can move append slices around until a target offset is near the root, and we can cut an array into smaller slices if we want to focus on multiple locations (then append them later).
 
 ## Mutable Objects
 
