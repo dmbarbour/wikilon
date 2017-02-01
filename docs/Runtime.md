@@ -37,15 +37,17 @@ Some desiderata:
 * generational GC to avoid copying of stable objects
 * hierarchical GC to limit synchronization frequency
 
-I think my best bet for GC is to use fast copying for a young generation of small objects, gradually build a set of survivors at one side of the heap. Then, when we reach some thresholds, apply a *mark-compact* algorithm on the full heap to promote survivors. This is a well proven, general design. It does risk large GC pauses for mark-compact on a large heap with many survivors. But GC pauses are a lesser issue with pure computations. 
+I think my best bet for GC is a generational mark-compact GC.
 
-There are some good compacting algorithms that are linear in heap size. But an offset table is also a pretty good option.
+I could also use a copy collection for the youngest generation. However, I'm not certain that doing so is worth the added algorithmic complexity or the related concern of cache coherence. Mark-compact can keep everything ordered the way it was during initial allocation, which is a nice property for reasoning about performance.
 
-Due to in-place updates on some linear objects potentially updating objects in the survivor set, I may need a simple write barrier to track which objects have been written recently to provide additional GC roots. Depending on use of registers and stacks and in-place updates and unboxed arrays, we might be able to avoid a lot of intermediate allocations for common patterns in Awelon. 
+My intention for now is to focus on generational mark-compact and add copy later if it seems worthwhile.
 
-I would like to avoid full compactions in the common case. So I might need another intermediate generation that performs either copy or compaction. This complicates write barriers a little insofar as I need to track roots for multiple generations. There are diminishing returns for having many generations, but even one or two generations would cover most common cases.
+I currently expect type information in the *pointer* regarding the size of objects - two word cell vs. tagged object where size is based on the header. For mark-compact, I'll need to track this type information during mark so I can compute sizes upon compact. So I need about 3 bits per allocation, which is about 5% memory overhead on a 32-bit system (assuming allocations are two word aligned) or 3% on a 64-bit system. This seems an acceptable overhead. 
 
-*Note:* be sure to use *three* bitfields for mark-compact bits. One for grey, one for black, one for pointer object type (tagged object vs. word pair). This enables us to test at a word level whether a grey word matches a black word (do we need to scan more?), and to easily mask or test both bitfields using the same offsets. The last bitfield simplifies the compaction algorithm and allows resumption of the mark algorithm from any grey object.
+If I do introduce copy collection, the mark space would be available for copying the youngest generation. I don't need concurrent marking. 
+
+Due to in-place update for uniquely referenced arrays and other objects, I need to track updates so we can scan for references from older objects to younger ones. This means a simple write barrier, one I'd need anyway due to copy-on-write for shared arrays, and a list of references from the older generation acting as extra roots. This is a small overhead for a significant reduction in allocation.
 
 ## Parallelism and Threads
 
@@ -73,18 +75,20 @@ Let's say our allocations are two-word aligned, and our words are either 4 bytes
 
 A modest proposal:
 
-        i00     small constants, actions, tags
-        i01     tagged objects (type in header)
-        i10     composition cell (B, A) => [B A]
-        i11     constructor cell (H, T) => [H T :]
+        b00     small constants, built-in operations
+        b01     tagged objects (type in header)
+        b10     composition cell (B, A) => [B A]
+        b11     constructor cell (H, T) => [H T :]
 
-The `i` bit is 0 for inline, 1 for values. This enables any value to be logically inlined as a function. This is mostly useful in context of operations like bind or compose, enabling uniform treatment of pair cons to support pairs, bindings, compositions, etc.. It also reduces overhead for arity checks, since we don't need to peek beyond the pointer to determine how an object behaves under bind, swap, etc..
+Small constants would be values we can represent within a word. Small natural numbers and tags are perhaps the most critical, but it would be tempting to also support small integers, many decimals, small texts or labels, etc.. Covering accelerated functions might also be convenient. On a 32-bit system, we don't have a lot of room for innovation here. On a 64-bit system (which is the expected case) a 'small' constant can cover a lot of common values without allocations.
 
-Small constants would be values we can represent within a word. Small natural numbers and tags are perhaps the most critical, but it would be tempting to also support small integers, small texts or labels, etc.. Covering accelerated functions might also be convenient. On a 32-bit system, we don't have a lot of room for innovation here. But on a 64-bit system, 'small constants' can adequately cover a lot.
+Cells cover list and composition constructures, which I imagine will be used very frequently based on my experience with Haskell. Both cells should be the same size to reduce GC mark-compact overheads.
 
-Tagged objects can cover any larger object, though the added header overhead may be significant. Modeling tags uniformly as small constants should also simplify the 'compact' phase of mark-compact algorithms. Programs, arrays, records, record-of-arrays vs. array-of-records, etc.. might be handled via tagged objects.
+The `b` bit indicates that the item represents a block or value word, something that can be bound with the `b` operator or moved by data shuffling operations. This extends the expressiveness of composition cells to support bind, compose, pairs, sums, etc.
 
-Optimizing basic composition gives us lightweight common constructions - the `[[B]A]` block bind, `[[B][A]]` pairs, and `[B A]` composition. List constructor cells then efficiently cover list and tree structured data. Larger lists or tuples should be accelerated and represented using tagged arrays.
+Tagged objects cover everything else, at the cost of a little extra memory. I'll track an extra bit during mark-compact GC to distinguish double word cells vs. tagged objects. Uniquely referenced, writable memory will always be a tagged object.
+
+Note: I might want to model buffered arrays, where we can push or pop elements efficiently. Logical reversal of lists and arrays could be useful here.
 
 ### Small Constants
 

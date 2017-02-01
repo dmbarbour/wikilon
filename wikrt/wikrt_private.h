@@ -58,14 +58,23 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
 
 /** Bit Representations
  *
- *      i00     small constants, actions, tags
- *      i01     tagged objects or actions (header ..data..)
- *      i10     composition cell (B, A) => [B A]
- *      i11     constructor cell (H, T) => [H T :]
- * 
- * The `i` bit is 0 when inlined, 1 for blocks and value words. Any
- * value may thus be inlined by tweaking a reference bit. This helps
- * with further composition.
+ *      b00     small constants, actions, tags
+ *      b01     tagged objects or actions (header ..data..)
+ *      b10     composition cell (B, A) => [B A]
+ *      b11     constructor cell (H, T) => [H T :]
+ *      `b` bit is 1 for blocks or value words, 0 for inline actions
+ *
+ * Small Constants
+ *
+ *      00      extended
+ *      10      naturals
+ *      x1      integers
+ *
+ * Extended Small Constants
+ *
+ *      000     primitives, accelerators, etc.
+ *      (small rationals, decimals, labels, texts, etc.) 
+ *
  */
 #define WIKRT_VALREF            0
 #define WIKRT_OBJECT            1
@@ -86,54 +95,35 @@ static inline wikrt_val* wikrt_addr_to_ptr(wikrt_addr a) { return (wikrt_val*)a;
 static inline wikrt_val* wikrt_val_to_ptr(wikrt_val v) { return wikrt_addr_to_ptr(wikrt_addr(v)); }
 static inline bool wikrt_is_ptr(wikrt_val v) { return (WIKRT_REF_MASK_TYPE & v); }
 
+/** Tagged Objects
+ *
+ * The bytes of a tagged object will give a basic type, and common
+ * metadata: substructure (nc, nd); copy-on-write options (unique
+ * vs sharable, unwritten vs written).
+ *
+ * Some object types we need:
+ *
+ * - block
+ *   - array of actions ending in special return action
+ *     a basic sequence of actions to perform
+ *     may have a fixpoint, represent [[F]z].
+ * - arrays; a compact list representation
+ *   - binary, text, values
+ *   - copy on write if shared
+ *   - logical reversal of array fragments
+ *   - array slices (slice array offset count)
+ *   - array logical append (append array array size)
+ *   - potential buffers (add/remove to one end)
+ * - word
+ *     words will likely be organized in a lookup map or hashtable
+ *     with cached, evaluated definitions. I don't necessarily need
+ *     to track reverse dependencies locally, since that could be
+ *     part of the persistent dictionary.
+ *
 
 
-
-
-/** Small Constants
- * 
- * Need a few more bits to discriminate type.
- *
- *      00      extended
- *      10      naturals
- *      x1      integers
- *
- * This ensures integers cover the same range as naturals, and that
- * within this constraint our naturals cover the maximum range, and
- * that the zero word can still represent a NOP action.
- *
- * Our extended small constants further discriminate type.
- *
- *      000     built-in functions (primitives, accelerators, annotations)
- *      ...     (todo: specify more as needed)
- *
- * It is feasible to support a few more number types like decimals
- * and rational numbers. Short labels and texts are also feasible
- * assuming a 64-bit system.
- *
- * While working with complex encodings is somewhat expensive, the
- * hope is that we'll make up for it in reduced allocation and GC
- * overheads. And interpretation of built-ins will gradually be
- * replaced by JIT code.
- */
 
 /** Large Memory Objects
- *
- * We reference a memory object using a pointer tagged WIKRT_OBJECT. 
- *
- * Headers always have low bits `00` like small constants to simplify
- * the garbage collection. I'll want to track more.
- *
- * - substructure (nc) and (nd), two bits
- * - uniqueness of reference for in-place updates
- * - a write barrier "updated" bit for generational GC
- * - whether the value is copyable (evaluated, deeply immutable)
- *
- * The latter three elements could be squeezed into two bits because
- * they are not independent. So we've dedicated six bits per header.
- * Beyond that, it would be convenient for GC if these objects have
- * a simple and uniform size computation from a header, using a table
- * of allocation sizes.
  *
  * GC seems to be a big issue here. When I run a mark-compact algorithm,
  * I need to know which cells are moved when I compact, which requires
@@ -174,6 +164,13 @@ typedef enum wikrt_op
 , OP_c          // copy;  [A]c == [A][A]
 , OP_d          // drop;  [A]d ==
 
+// Extensions for Compiled code
+, OP_EXT_RETURN // /return, represents end of block
+ , OP_EXT_RETURN_i  // return with tail call via `... i]`
+ , OP_EXT_RETURN_ad // return with tail call via `... a d]`
+, OP_EXT_RPUSH // push data to return stack
+, OP_EXT_RPOP // /pop data from return stack
+
 // Arity Annotations
 , OP_ANNO_a2    // [B][A](a2) == [B][A]
 , OP_ANNO_a3    // [C][B][A](a3) == [C][B][A]
@@ -189,14 +186,17 @@ typedef enum wikrt_op
 , OP_ANNO_nd    // (nd) no-drop, forbid value drop
 
 // Active Debugging (Preliminary)
-, OP_ANNO_error  // (error) marks a value
-, OP_ANNO_trace  // (trace) writes debug output
+, OP_ANNO_error // (error) marks a value
+, OP_ANNO_trace // (trace) writes debug output
 
-// Annotations to control Optimization, Compilation?
-
-// Data Stowage
+// Performance Annotations
+, OP_ANNO_par   // (par) evaluates block in parallel
+, OP_ANNO_eval  // (eval) evaluate before continuing
+, OP_ANNO_memo  // (memo) memoize computation of block
 , OP_ANNO_stow  // [large value](stow) => [$secureHash]
                 // [small value](stow) => [small value]
+
+// Annotations to control Optimization, Compilation?
 
 // Simple Accelerators
  // future: permutations of data plumbing. Common loops.
@@ -205,7 +205,6 @@ typedef enum wikrt_op
 , OP_i          // inline; [A]i == A; i = [] w a d
 , OP_z          // fixpoint Z combinator; [X][F]z == [X][[F]z]F
                 // z = [[(a3) c i] b (=z) [c] a b w i](a3) c i
-
 
 // Conditional Behaviors
 , OP_T          // [B][A]T    == A;    T = a d

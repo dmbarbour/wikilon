@@ -161,19 +161,23 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  *
  * Wikilon uses binaries as the primary input and output structure at
  * the API layer - used for updating or accessing the dictionary and
- * also for constructing programs for evaluation.
+ * also for constructing programs and evaluation. Under the hood, a
+ * program uses a more sensible representation during evaluation. But
+ * Wikilon still presents it as a binary at this API.
  *
- * Streams are given stable identity via small integers. Logically, a
- * stream starts empty and you may write to any stream. Reading data
- * from the stream until empty or clearing it will recover associated
- * memory resources. The null stream (value zero) is a special case
- * and may not be read or written (failing with EINVAL).
+ * Streams are given stable identity via small integers. Effectively,
+ * you might think of these as registers or variables. Every stream in
+ * a context starts empty. There is no special open or allocation step
+ * at this layer. Clearing a stream or reading it until empty will 
+ * release associated memory resources.
  *
- * We might think of streams as registers or variables of a context. 
- *
- * Writes may fail with ENOMEM if the context is close to full.
+ * Writes may fail, likely with ENOMEM if the context is full. Reads
+ * "fail" if the returned byte count does not match the request, and
+ * may fail with ENODATA after exhausting the stream, or with ENOMEM
+ * when converting from an under-the-hood representation (which may
+ * require a stack).
  */
-typedef uint32_t wikrt_s;
+typedef uint64_t wikrt_s;
 bool wikrt_write(wikrt_cx*, wikrt_s, uint8_t const*, size_t);
 size_t wikrt_read(wikrt_cx*, wikrt_s, uint8_t*, size_t);
 bool wikrt_is_empty(wikrt_cx*, wikrt_s);
@@ -184,7 +188,7 @@ void wikrt_clear(wikrt_cx*, wikrt_s);
  * Move or copy the source stream, addending the destination stream.
  * This could be useful for snapshots and similar. The move variant
  * will implicitly clear the source, but may have reduced resource
- * overheads. (That said, copies are logical and reasonably cheap.)
+ * overheads. That said, copies are logical and reasonably cheap.
  */
 bool wikrt_move(wikrt_cx*, wikrt_s src, wikrt_s dst);
 bool wikrt_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
@@ -425,11 +429,12 @@ void wikrt_cx_gc(wikrt_cx*);
 
 /** Overview of a context's memory usage. */
 typedef struct wikrt_mem_stats { 
-    uint64_t    gc_bytes_processed; // ~ total GC effort 
-    uint64_t    gc_bytes_collected; // ~ useful GC effort
+    uint64_t    gc_bytes_processed; // total GC effort 
+    uint64_t    gc_bytes_collected; // useful GC effort
     size_t      memory_last_gc;     // memory after last GC
     size_t      memory_in_use;      // memory usage currently
-    size_t      memory_maximum;     // maximum memory usage
+    size_t      memory_maximum;     // maximum memory_last_gc so far
+    size_t      context_size;       // context allocation size
 } wikrt_mem_stats;
 
 /** Memory Usage Metrics */
