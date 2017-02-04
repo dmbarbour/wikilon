@@ -138,7 +138,7 @@ void wikrt_cx_reset(wikrt_cx*, char const* dict);
  * return false) if the destination is too small (ENOMEM) or was 
  * created for a different environment (EINVAL).
  *
- * Note: The destination context is implicitly reset before copy. 
+ * Notes: The destination context is implicitly reset by the copy.
  */
 bool wikrt_cx_copy(wikrt_cx* src, wikrt_cx* dst);
 
@@ -288,7 +288,7 @@ typedef struct wikrt_parse_data {
 } wikrt_parse_data;
 bool wikrt_parse_code(uint8_t const*, size_t, wikrt_parse_data*);
 
-/** Full Program Evaluation
+/** Batch Program Evaluation
  * 
  * Awelon evaluation involves rewriting a program to an equivalent
  * program that is closer to normal form, much like `6 * 7` can be
@@ -308,29 +308,6 @@ bool wikrt_parse_code(uint8_t const*, size_t, wikrt_parse_data*);
  */
 bool wikrt_eval(wikrt_cx*, wikrt_s);
 
-/** Command Stream Processing
- *
- * Awelon is amenable to processing a stream of commands. A command
- * is a subprogram that cannot be further rewritten by addending the
- * right hand side of a program, for example of form `[args] word` 
- * where the word has arity two. Commands provide a natural boundary
- * for incremental computation, allowing output before evaluation is
- * fully completed.
- *
- *      [proc] commandA => commandB [proc']
- * 
- * Wikilon supports command stream processing by evaluating just far
- * enough to recognize the command outputs then moving commands to
- * addend a separate stream to be read or evaluated further. For the
- * `[args] word` example, `[args]` would generally still be lazy.
- *
- * This operation returns successfully if it moves any command data,
- * and subsequent operations may move more command data. If there is
- * no command data available, this returns false with ENODATA. Also,
- * this can fail to evaluation resource limits (ENOMEM, ETIMEDOUT). 
- */
-bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s dst);
-
 /** Data Stack Evaluation
  *
  * A common application pattern involves an external agent that reads
@@ -341,10 +318,11 @@ bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s dst);
  * the rightmost data elements of a program.
  *
  * Wikilon supports this pattern by providing a function to separate
- * a few of those data elements from a source program to be further
- * evaluated, copied, observed, or returned by wikrt_move to source
- * if necessary. This function partially evaluates code, just enough
- * to move the data as a given count of blocks and value words. 
+ * a few of those data elements from a source program, moving them to
+ * another stream where they can be further evaluated, copied, and so
+ * on. Minimum evaluation is performed to achieve the move, so the 
+ * data itself is not evaluated. Background parallelism is possible 
+ * if some computations are initiated by `(par)`. 
  *
  * On failure, nothing is moved but partial evaluation may modify the
  * source. This fails if the destination is not empty (EADDRINUSE) or
@@ -352,6 +330,31 @@ bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s dst);
  * of evaluation resource limits (ENOMEM, ETIMEDOUT).
  */
 bool wikrt_eval_data(wikrt_cx*, wikrt_s src, uint32_t amt, wikrt_s dst); 
+
+/** Command Stream Processing
+ *
+ * Awelon is amenable to processing a stream of commands. A command
+ * is a subprogram that cannot be further rewritten by addending the
+ * right hand side of a program, for example of form `[args] word` 
+ * where the word has arity two. Commands provide a natural boundary
+ * for incremental computation, allowing output before a program is
+ * fully represented. 
+ *
+ *      [proc] commandA => commandB [proc']
+ *
+ * Wikilon supports command stream processing by evaluating just far
+ * enough to recognize the command output then moves the commands to
+ * a destination stream to be read or evaluated further. Effectively,
+ * this focuses the evaluator on the left hand side of our program
+ * whereas wikrt_eval_data attends the right hand side. 
+ *
+ * This operation returns successfully if it moves any command data,
+ * but subsequent operations may evaluate further and move more data.
+ * If no command data is available, this returns false with ENODATA.
+ * Otherwise it may fail due to evaluation limits (ENOMEM, ETIMEDOUT). 
+ */
+bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s dst);
+
 
 /** Binary Data Input
  * 
@@ -471,6 +474,10 @@ void wikrt_debug_trace(wikrt_cx*, wikrt_s);
 // - statistics or profiling on words or gates
 // 
 // What should the profiling API look like?
+// 
+// - either enable profiling, or perform profiling by default?
+// - profiling requests for words or evaluation on a stream?
+// - or a write-profile option in general
 
 /** Parallel Evaluation
  *

@@ -4,6 +4,8 @@
 
 #include "wikrt.h"
 #include <stdint.h>
+#include <errno.h>
+#include <pthread.h>
 
 /** NOTES
  * 
@@ -35,26 +37,25 @@
  */
 
 // Using native sized words.
-typedef uintptr_t wikrt_val;
+typedef uintptr_t wikrt_v;
 
 // Aliases for internal documentation.
-typedef wikrt_val wikrt_size;       // arbitrary size value
-typedef wikrt_size wikrt_sizeb;     // size aligned to cell (2*sizeof(wikrt_val))
-typedef wikrt_val  wikrt_addr;      // location in memory
-typedef wikrt_val wikrt_ohdr;       // tagged object headers
+typedef wikrt_v  wikrt_n;           // small natural number
+typedef intptr_t wikrt_i;           // small integer number
+typedef wikrt_v  wikrt_z;           // arbitrary size value
+typedef wikrt_v  wikrt_a;           // location in memory
 typedef struct wikrt_db wikrt_db;   // we'll get back to this later
-#define WIKRT_VAL_MAX   UINTPTR_MAX
-#define WIKRT_SIZE_MAX  WIKRT_VAL_MAX
+#define WIKRT_V_MAX  UINTPTR_MAX
+#define WIKRT_Z_MAX  WIKRT_V_MAX
 
 #define WIKRT_LNBUFF(SZ,LN) ((((SZ)+((LN)-1))/(LN))*(LN))
 #define WIKRT_LNBUFF_POW2(SZ,LN) (((SZ) + ((LN) - 1)) & ~((LN) - 1))
-#define WIKRT_CELLSIZE (2 * sizeof(wikrt_val))
+#define WIKRT_CELLSIZE (2 * sizeof(wikrt_v))
 #define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
 #define WIKRT_DIR_MODE (mode_t)(WIKRT_FILE_MODE | S_IXUSR | S_IXGRP)
 
-
-static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n); }
+static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 
 /** Bit Representations
  *
@@ -64,36 +65,72 @@ static inline wikrt_sizeb wikrt_cellbuff(wikrt_size n) { return WIKRT_CELLBUFF(n
  *      b11     constructor cell (H, T) => [H T :]
  *      `b` bit is 1 for blocks or value words, 0 for inline actions
  *
- * Small Constants
+ * Small Constants (2 bits + b00)
  *
  *      00      extended
- *      10      naturals
+ *      10      naturals        
  *      x1      integers
  *
- * Extended Small Constants
+ *   Naturals have a range up to 2^27-1 on a 32-bit system or 2^59-1
+ *   on a 64-bit system before the 'big' tagged object encoding must
+ *   be used. Integers use the same range plus or minus so we can 
+ *   trivially convert between small naturals and small integers.
  *
- *      000     primitives, accelerators, etc.
- *      (small rationals, decimals, labels, texts, etc.) 
+ * Extended Small Constants (3 bits + 00b00)
+ *
+ *      000     built-in primitives, accelerators, etc.
+ *      (small rationals, decimals, labels, texts, etc.)
+ *
+ *   The number of built-ins will be relatively small.
+ *
+ *   Chances are I'll not get far on a 32-bit system. But I'm assuming
+ *   64-bit systems will be the common option, so losing 8 bits for the
+ *   value type can cover a reasonably large set of values.
  *
  */
-#define WIKRT_VALREF            0
-#define WIKRT_OBJECT            1
-#define WIKRT_BIND_CELL         2
-#define WIKRT_CONS_CELL         3
+#define WIKRT_SMV   0
+#define WIKRT_OBJ   1
+#define WIKRT_COMP  2
+#define WIKRT_CONS  3
 
 #define WIKRT_REF_MASK_CBIT     2
 #define WIKRT_REF_MASK_TYPE     3
 #define WIKRT_REF_MASK_IBIT     4
-#define WIKRT_REF_MASK_ADDR     (~((wikrt_val)7))
+#define WIKRT_REF_MASK_ADDR     (~((wikrt_v)7))
 
-static inline wikrt_val wikrt_vtag(wikrt_val v) { return (WIKRT_REF_MASK_TYPE & v); }
-static inline wikrt_addr wikrt_vaddr(wikrt_val v) { return (WIKRT_REF_MASK_ADDR & v); }
-static inline bool wikrt_action(wikrt_val v) { return !(WIKRT_REF_MASK_IBIT & v); }
-static inline bool wikrt_valref(wikrt_val v) { return !wikrt_vtag(v); }
+#define WIKRT_SMALL_INT_OP    8  /* _1000; int behavior */
+#define WIKRT_SMALL_INT_VAL  12  /* _1100; int value */
+#define WIKRT_SMALL_NAT_OP   16  /* 10000; nat behavior */
+#define WIKRT_SMALL_NAT_VAL  20  /* 10100; nat value */
 
-static inline wikrt_val* wikrt_addr_to_ptr(wikrt_addr a) { return (wikrt_val*)a; }
-static inline wikrt_val* wikrt_val_to_ptr(wikrt_val v) { return wikrt_addr_to_ptr(wikrt_addr(v)); }
-static inline bool wikrt_is_ptr(wikrt_val v) { return (WIKRT_REF_MASK_TYPE & v); }
+#define WIKRT_SMALLNAT_MAX (WIKRT_V_MAX >> 5)
+#define WIKRT_SMALLINT_MAX WIKRT_SMALLNAT_MAX
+#define WIKRT_SMALLINT_MIN (- WIKRT_SMALLINT_MAX)
+
+// bit-level utility functions
+static inline wikrt_v wikrt_vtag(wikrt_v v) { return (WIKRT_REF_MASK_TYPE & v); }
+static inline wikrt_a wikrt_v2a(wikrt_v v) { return (WIKRT_REF_MASK_ADDR & v); }
+static inline bool wikrt_action(wikrt_v v) { return !(WIKRT_REF_MASK_IBIT & v); }
+static inline bool wikrt_value(wikrt_v v) { return !wikrt_action(v); }
+
+static inline bool wikrt_val_in_ref(wikrt_v v) { return !wikrt_vtag(v); }
+static inline bool wikrt_is_basic_op(wikrt_v v) { return !(v & 0xFF); }
+static inline wikrt_v* wikrt_a2p(wikrt_a a) { return (wikrt_v*)a; }
+static inline wikrt_v* wikrt_v2p(wikrt_v v) { return wikrt_a2p(wikrt_v2a(v)); }
+static inline bool wikrt_is_ptr(wikrt_v v) { return !wikrt_val_in_ref(v); }
+
+static inline bool wikrt_is_small_nat_op(wikrt_v v)  { return (WIKRT_SMALL_NAT_OP  == (v & 0x1F)); }
+static inline bool wikrt_is_small_nat_val(wikrt_v v) { return (WIKRT_SMALL_NAT_VAL == (v & 0x1F)); }
+static inline bool wikrt_is_small_int_op(wikrt_v v)  { return (WIKRT_SMALL_INT_OP  == (v & 0x0F)); }
+static inline bool wikrt_is_small_int_val(wikrt_v v) { return (WIKRT_SMALL_INT_VAL == (v & 0x0F)); }
+
+static inline wikrt_n wikrt_from_small_nat(wikrt_v v) { return (((wikrt_n)v) >> 5); }
+static inline wikrt_v wikrt_to_small_nat_val(wikrt_n n) { return (((wikrt_v)(n << 5))|WIKRT_SMALL_NAT_VAL); }
+static inline wikrt_v wikrt_to_small_nat_op(wikrt_n n) { return (((wikrt_v)(n << 5))|WIKRT_SMALL_NAT_OP); }
+
+static inline wikrt_i wikrt_from_small_int(wikrt_v v) { return (((wikrt_i)v) >> 4); }
+static inline wikrt_v wikrt_to_small_int_val(wikrt_i i) { return (((wikrt_v)(i << 4))|WIKRT_SMALL_INT_VAL); }
+static inline wikrt_v wikrt_to_small_int_op(wikrt_i i) { return (((wikrt_v)(i << 4))|WIKRT_SMALL_INT_OP); }
 
 /** Tagged Objects
  *
@@ -103,39 +140,51 @@ static inline bool wikrt_is_ptr(wikrt_val v) { return (WIKRT_REF_MASK_TYPE & v);
  *
  * Some object types we need:
  *
- * - block
- *   - array of actions ending in special return action
- *     a basic sequence of actions to perform
- *     may have a fixpoint, represent [[F]z].
+ * - blocks
+ *   - simple array of actions, ending in a return action
+ *   - may later reference a JIT version, too. 
+ *   - fixpoint blocks? maybe by header bit, representing `[[F]z]`.  
+ * - big natural numbers
+ *   - array of 30-bit words (each in 0..999999999), little-endian
  * - arrays; a compact list representation
  *   - binary, text, values
  *   - copy on write if shared
  *   - logical reversal of array fragments
  *   - array slices (slice array offset count)
  *   - array logical append (append array array size)
- *   - potential buffers (add/remove to one end)
- * - word
- *     words will likely be organized in a lookup map or hashtable
- *     with cached, evaluated definitions. I don't necessarily need
- *     to track reverse dependencies locally, since that could be
- *     part of the persistent dictionary.
+ *   - potential buffering (add/remove at one edge?)
+ * - annotations or words
+ *   - might intern all such references
+ *   - slots for link value, word, tree node structure
+ *   - match unseal to seal efficiently
+ *   - words might be updated via transactions
+ *   - words can track arity or have a "linked" variant
+ *   - debugger and profiling options for words
+ * - error values?
  *
-
-
-
-/** Large Memory Objects
+ * Logical append of arrays enables some array fragments to be writable
+ * while others are copy-on-write. 
  *
- * GC seems to be a big issue here. When I run a mark-compact algorithm,
- * I need to know which cells are moved when I compact, which requires
- * knowing the pointer tag from which an object is referenced. The mark
- * phase must perhaps include a third bit per item to indicate HOW it
- * was marked (cell vs. large memory object). 
- * 
-
-, but it isn't necessary if I use a
- * threaded compacting GC (so I can track pointer types).
+ * Object types will simply be encoded in the first byte of the 
+ * tagged object. 
  */
+typedef enum wikrt_otype
+{ WIKRT_OTYPE_ID = 0    // wrap a value, likely to add (nc) or (nd) attributes
+, WIKRT_OTYPE_BLOCK   
+, WIKRT_OTYPE_BIGNAT
+, WIKRT_OTYPE_WORD      // interned, and includes annotations
+, WIKRT_OTYPE_ERROR     // mark value as erroneous
+, WIKRT_OTYPE_BINARY 
+, WIKRT_OTYPE_UTF8      // wrap a binary  
+, WIKRT_OTYPE_ARRAY  
+, WIKRT_OTYPE_SLICE     // array slice with offset, size 
+, WIKRT_OTYPE_APPEND    // array join
+} wikrt_otype;
 
+#define WIKRT_HDR_MASK_OTYPE 0xFF
+
+/** An invalid value or otype. */
+#define WIKRT_INVAL (~((wikrt_v)0))
 
 
 /** Built-ins (Primitives, Accelerators, Annotations)
@@ -164,13 +213,6 @@ typedef enum wikrt_op
 , OP_c          // copy;  [A]c == [A][A]
 , OP_d          // drop;  [A]d ==
 
-// Extensions for Compiled code
-, OP_EXT_RETURN // /return, represents end of block
- , OP_EXT_RETURN_i  // return with tail call via `... i]`
- , OP_EXT_RETURN_ad // return with tail call via `... a d]`
-, OP_EXT_RPUSH // push data to return stack
-, OP_EXT_RPOP // /pop data from return stack
-
 // Arity Annotations
 , OP_ANNO_a2    // [B][A](a2) == [B][A]
 , OP_ANNO_a3    // [C][B][A](a3) == [C][B][A]
@@ -195,11 +237,20 @@ typedef enum wikrt_op
 , OP_ANNO_memo  // (memo) memoize computation of block
 , OP_ANNO_stow  // [large value](stow) => [$secureHash]
                 // [small value](stow) => [small value]
+    // todo: annotations for link, optimize, compile
+
+// Extensions for Compiled code
+, OP_EXT_RETURN // represents end of block
+ , OP_EXT_RETURN_ad // tail call via `... a d]`
+ , OP_EXT_RETURN_i  // tail call via `... i]`
+, OP_EXT_RPUSH // push data to return stack
+, OP_EXT_RPOP // /pop data from return stack
 
 // Annotations to control Optimization, Compilation?
 
 // Simple Accelerators
  // future: permutations of data plumbing. Common loops.
+ // Note: I should probably guide this via actual usage.
 , OP_w          // swap;   [B][A]w == [A][B]; w = (a2) [] b a
 , OP_rot        // [C][B][A]rot == [A][C][B]; rot = (a3) [] b b a
 , OP_i          // inline; [A]i == A; i = [] w a d
@@ -207,10 +258,10 @@ typedef enum wikrt_op
                 // z = [[(a3) c i] b (=z) [c] a b w i](a3) c i
 
 // Conditional Behaviors
-, OP_T          // [B][A]T    == A;    T = a d
-, OP_F          // [B][A]F    == B;    F = d i
-, OP_L          // [B][A][V]L == [V]B; L = (a3) w d w i
-, OP_R          // [B][A][V]R == [V]A; R = (a3) w b a d
+, OP_true       // [B][A]true i     == A;    true = [a d]
+, OP_false      // [B][A]false i    == B;    false = [d i] (= 0)
+, OP_L          // [B][A][[V]L] i   == [V]B; L = (a3) w d w i
+, OP_R          // [B][A][[V]R] i   == [V]A; R = (a3) w b a d
 , OP_ANNO_bool  // (bool) type assertion  [F] or [T]
 , OP_ANNO_opt   // (opt) type assertion   [F] or [[V]R]
 , OP_ANNO_sum   // (sum) type assertion   [[V]L] or [[V]R]
@@ -234,11 +285,67 @@ typedef enum wikrt_op
 , OP_nat_add    
 , OP_nat_mul
 , OP_nat_diff
-, OP_nat_div
+, OP_nat_divmod
+
+// Integer Arithmetic
+//  add, mul, div, sub, abs, neg
 
 // List and Array Operations
-// Integer Arithmetic
-}
+} wikrt_op;
+
+
+struct wikrt_env {
+    wikrt_cx        *cxs;   // circular linked list of contexts
+    wikrt_db        *db;    // persistent data resources
+    pthread_mutex_t mutex;  // mutex for environment
+};
+
+static inline void wikrt_env_lock(wikrt_env* e) {
+    pthread_mutex_lock(&(e->mutex)); }
+static inline void wikrt_env_unlock(wikrt_env* e) {
+    pthread_mutex_unlock(&(e->mutex)); }
+
+/** Multi-Threading
+ *
+ * 
+ *
+ * Each stream may contain multiple threaded computations. Each thread
+ * will generally need its own allocator and garbage collection, and a
+ * stable volume of memory within the context. Obviously if we GC or
+ * compact a context, we must halt all threads within the volume upon
+ * compaction.  
+ */
+
+
+/** A context.
+ *
+ * A context is represented by a contiguous volume of memory with a
+ * short header. A context may host multiple threads, so a challenge
+ * is how to manage the allocator and perform compactions. A thread
+ * can 
+ */
+struct wikrt_cx {
+    wikrt_env   *env;
+    wikrt_cx    *cxn; 
+    wikrt_cx    *cxp; 
+
+    pthread_mutex_t mutex; // to protect local allocator
+
+    // Memory Management
+    wikrt_z     size;           // full size of context
+    wikrt_a     cap_hard;       // maximum allocator (reserving GC region)
+
+    #define WIKRT_GC_GENS 4     // how many GC generations (diminishing returns)
+    wikrt_a     gen[WIKRT_GC_GENS];         
+
+    wikrt_a     alloc;          // current allocator
+    wikrt_a     cap;            // soft maximum allocator for next GC
+    
+
+
+    
+};
+
 
 
 #define WIKRT_H

@@ -37,11 +37,9 @@ Some desiderata:
 * generational GC to avoid copying of stable objects
 * hierarchical GC to limit synchronization frequency
 
-I think my best bet for GC is a generational mark-compact GC.
+I think my best bet for GC is a generational mark-compact GC. 
 
-I could also use a copy collection for the youngest generation. However, I'm not certain that doing so is worth the added algorithmic complexity or the related concern of cache coherence. Mark-compact can keep everything ordered the way it was during initial allocation, which is a nice property for reasoning about performance.
-
-My intention for now is to focus on generational mark-compact and add copy later if it seems worthwhile.
+Performance might also benefit from also using a copy collector for the youngest generation, but I'll hold off on this for now. Mark-compact has a big advantage of preserving stack order, which is convenient for reasoning about cache performance.
 
 I currently expect type information in the *pointer* regarding the size of objects - two word cell vs. tagged object where size is based on the header. For mark-compact, I'll need to track this type information during mark so I can compute sizes upon compact. So I need about 3 bits per allocation, which is about 5% memory overhead on a 32-bit system (assuming allocations are two word aligned) or 3% on a 64-bit system. This seems an acceptable overhead. 
 
@@ -51,15 +49,22 @@ Due to in-place update for uniquely referenced arrays and other objects, I need 
 
 ## Parallelism and Threads
 
-I have an idea to use hierarchical heaps to support confined multi-threaded `(par)` computations. Communicating threads (which require queues, etc.) shall be modeled indirectly, e.g. via accelerated evaluation of KPNs. 
+Assume multiple threads with the following properties.
 
-Each heap would allow allocation and GC independently of sibling thread heaps, though a parent might need to wait on a child thread. When a child heap fills, we can allocate a new one in the parent (and optionally move the most volatile data). When the parent fills, we can perform a parent GC using the normal copy/compact options.
+* threads have an exclusive volume for allocation
+* threads perform their own GC within this volume
+* threads regions can reference only older values
+ * with a special exception for child threads
+* threads may 'grow' by allocating a newer region
+ * existing data is not moved, new region for new data
+* child threads also allocate in the newer region
+ * a logical hierarchy, not physical hierarchy
 
-Write barriers are necessary to track external references from a parent into a child heap. Hierarchy effectively gives us an implicit form of generational collection, and we can probably leverage that by modeling our intermediate GC generations in terms of a few layers of hierarchy. 
+This effectively assumes `(par)` threads that don't communicate (so a thread cannot learn of an object younger than itself). But a child thread can reference data in the parent thread, which might still be active. With compacting GC, we're moving stuff around. So if we moving something our child-thread might reference, we will need to halt said child during GC (at least for compaction). 
 
-We would need to scan not just the current generation, but objects from multiple parent generations, to track references into a child heap. But conveniently, we can guarantee against sharing of objects between child threads. So this can simplify write barriers, since a thread only needs to update its personal list of external roots.
+In general, we'll want to halt all threads referenced from a targeted volume of memory on the basis that we might be moving something to which they refer. Any thread whose result is no longer referenced simply won't be recorded when we compact the memory again.
 
-*Aside:* Hierarchy can safely be lost when we perform the parent compaction, instead allocating new heaps for each thread. OTOH, there might be some advantages to preserving hierarchical structure.
+If I later accelerate KPN parallelism, I can batch `(par)` based on *available* data, which gives me the benefits of asynchronous communication.
 
 ## Stack Representations
 
@@ -159,7 +164,7 @@ Some thoughts:
 
 * lazy reference counting - reference counts can lag behind updates to root objects. We could model this by tracking an RC deltas table separately from the main RC table, to support incremental GC of resources and perhaps avoid the initial parse and processing of resources that are only briefly referenced. NOTE: since we might actually *receive* resources out-of-order, an RC deltas table could usefully delay positive increfs until a parse can be run.
 
-* ephemeral resources - a context can hold onto a resource that has a zero persistent reference count. I don't want to scan contexts when it's time to GC. I'll want to track this outside the persistent database, but still in a shared memory-mapped file for multi-processing. A bloom filter or hash table should work well.
+* ephemeral resources - a context can hold onto a resource that has a zero persistent reference count. I don't want to scan contexts when it's time to GC, especially since they might be spread across many processes. So I'll use a shared memory ephemeron table (likely a simple hash-to-refct table). A shared memory mutex (with the robust option) should be sufficient for performance since I don't expect a lot of contention on this table. It should be sufficient to reference only root values from our contexts.
 
 GC for secure hash resources, and a shared ephemeron table between processes, is perhaps the main requirement for multi-process access. I could (and probably should) use shm_open for the ephemeron table.
 

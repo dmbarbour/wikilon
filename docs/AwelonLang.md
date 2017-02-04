@@ -317,6 +317,8 @@ Here, word `foo` will not evaluate any further because there is no cause to link
 
 However, static linking is not constrained to trivial redirects. Statically computing link structure can further inline definitions, flatten redirect chains. Computing a static-link object provides an excellent opportunity to perform transparent optimizations.
 
+A runtime might provide `(link)` to evaluate further to a static link object.
+
 ## Optimization
 
 There are many semantically valid rewrites that Awelon's basic evaluator does not perform. For example:
@@ -639,7 +641,11 @@ By accelerating labeled data, Awelon can support parameter objects, flexible var
 
 ## Unique References and In-Place Updates
 
-Purely functional languages can support efficient in-place updates and many algorithms based on them, but with an important restriction: we must have a *unique reference* to the data representation. The in-place update to the data representation is thus not externally observable.
+While purely functional languages are best known to favor persistent data structures (e.g. using finger-trees to model sequences), it is possible to support in-place updates when we know we have the only reference to a value. An Awelon runtime can easily track unique reference properties because we perform an explicit copy with operator `c` instead of implicit copy via variables in a lexical environment.
+
+This is most useful for acceleration of lists (represented as arrays) or records (represented as structures or hashmaps). The accelerated array-update function could update the array in place rather than copy the whole array with one change. Further, when we do update a shared array, we can transparently copy it on the first write then subsequent updates can operate on the unique reference. Developers can usually arrange for an array to either be used linearly or updated in batches to leverage this, so we have the performance benefits of in-place mutation while preserving the simple semantics of purely functional rewriting.
+
+Use of the `(nc)` annotation can further 
 
 Awelon copies data explicitly via operator `c`. This makes it easy to track uniqueness dynamically, essentially by flagging a unique reference as shared upon copy. For contrast, most languages implicitly share references with a lexical environment, and thus require support from the static type system to ensure a unique reference. (Clean's uniqueness types and Haskell's ST monad represent two variations on this idea.) Awelon developers can certainly leverage the `(nc)` annotation to resist accidental violations of uniqueness, but the dynamic approach is generally more opportunistic and convenient.
 
