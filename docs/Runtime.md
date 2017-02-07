@@ -39,7 +39,7 @@ Some desiderata:
 
 I think my best bet for GC is a generational mark-compact GC. 
 
-Performance might also benefit from also using a copy collector for the youngest generation, but I'll hold off on this for now. Mark-compact has a big advantage of preserving stack order, which is convenient for reasoning about cache performance.
+Performance might also benefit from also using copy collectors for the younger generations, or mark-sweep and free-lists rather than compacting every cycle. But I'll probably hold off on this for now. Mark-compact has a big advantage of preserving stack order, which is convenient for reasoning about cache performance and generations.
 
 I currently expect type information in the *pointer* regarding the size of objects - two word cell vs. tagged object where size is based on the header. For mark-compact, I'll need to track this type information during mark so I can compute sizes upon compact. So I need about 3 bits per allocation, which is about 5% memory overhead on a 32-bit system (assuming allocations are two word aligned) or 3% on a 64-bit system. This seems an acceptable overhead. 
 
@@ -49,32 +49,33 @@ Due to in-place update for uniquely referenced arrays and other objects, I need 
 
 ## Parallelism and Threads
 
-I want parallelism without much synchronization.
+I want parallelism with minimal (and very simple) synchronization.
 
-Within a context, a thread should have a volume of memory that it controls exclusively and hence may garbage collect. This might start as, say, 64kB or 192kB and exclude larger allocations. Importantly, each thread should be able to assume that only references *within* its own nursery region are 'unstable', and everything outside that it references is 'stable'.
+Within a context, each thread should have a nursery - a volume of memory that it controls exclusively and hence may garbage collect *without* synchronization. This might start as, for example, 64kB or 192kB or even a full megabyte, perhaps depending on available memory. Large allocations might automatically use the shared space. When full of cruft, a thread is relocated with a fresh nursery. As the context fills, we can gradually GC old data.
 
-So we'll have two levels of collector: within the threads, and outside the threads. The external collector could be a full-heap compaction, so any other generations are within each thread. Large allocations could use the context directly, including for any new child threads.
+Importantly, a thread must never reference into another thread's nursery.
 
-When a parent thread creates a child thread as via `(par)`, the child will usually have references to values held within the parent arena. So we'll need to stabilize that data before allocating the child thread, perhaps by delaying a GC cycle or two (perhaps heuristically, based on level of external parallelism) before we decide that referenced memory isn't going to change much.
+Between in-place update of unique objects and child `(par)` tasks, objects easily reference memory younger than themselves. The heap is not unidirectional. So the safest way to promote objects from a thread is to simply promote all of a thread's memory in use to the shared context. This can be performed after garbage collection so the thread can continue in the remaining volume. To mitigate latency before shared work is available, we might more aggressively promote if are no pending tasks available to the shared context (at cost of an occasional extra context-level GC cycle). 
 
-Thus each thread and context has:
+The linearity of mutable objects prevents sharing references between threads via mutability in most cases. 
 
-* a stable volume of exclusive memory (modulo full context GC)
-* a minimum communication context, e.g. to halt threads on GC
-* a set of local `(par)` tasks that can be handled by threads
-* the main task for the current thread
+The `(par)` tasks need special attention. They're explicitly referenced in one thread but evaluated from another. Signals between threads would be bad for synchronization so I won't keep a local 'queue' of tasks to continue after the current one completes. But we can maintain a set of waiting tasks, and poll it rarely (as needed). 
 
-After a full context GC, we can easily reallocate every thread. So there is little need to preserve thread structure between full context collections. So I might want to think of this in terms of a thread 'attaching' to a context to perform some work, instead of threads as values represented within the context. Any `(par)` tasks, OTOH, would certainly be values - and readily GC'd as such. 
+So each thread must:
 
-Usefully, a thread could work on new `(par)` tasks for a while as a stack or queue while waiting for tasks and values to stabilize.
+* have a nursery volume of memory
+* track cross-generation writes
+* track current `(par)` task
+* queue pending `(par)` tasks
+* queue waiting `(par)` tasks
 
-So I'll track no hierarchy of threads nor even of `(par)` tasks. This is simple. A single thread must process many `(par)` tasks without allocating more memory, depending on the nature of the computations. So allocating more memory (modulo large object allocations, big arrays) would be a common opportunity for a thread to consider moving into another context.
+We could combine the pending/waiting sets, likely, using a single queue. We need only to track for each task which other task (if any) on which it might be waiting, and return it to the end of the queue as needed. But the separation should make it easier to track how much work is readily available, and easier to make progress without rescanning the same nodes too frequently. 
 
-Communication between threads, as for KPN acceleration, would only be possible when messages are in stable memory. Fortunately, we could leverage this in some ways by tracking pending communications between processes. This can wait until I fully support KPNs, of course.
+We could also track completed tasks, but that might be rolled into the local write barrier feature.
 
-Anyhow, effectively I get a per-thread nursery and local small-values heap with some minimum appropriate size. 
+Each thread could support a couple GC generations. This could be replicated at the context layer. Thread structure would be eliminated by context-level GC and reallocated as needed. When threads are halted for context-level GC, we simply halt just before they'd normally perform a thread-local GC to avoid rework.
 
-Thoughts: I might benefit from tracking a free-list only for large objects at the context level, and perhaps allowing mark-sweep at this layer too. I'll look into this later. For now, just getting a single collector working with concurrency is more important.
+KPN acceleration is a special case, and may require explicit tracking of 'messages' between 'processes' so we can communicate asynchronously by moving either the message or the process into shared memory. This will likely require a threads extension to maximize utilization.
 
 ## Stack Representations
 

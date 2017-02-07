@@ -293,9 +293,11 @@ bool wikrt_parse_code(uint8_t const*, size_t, wikrt_parse_data*);
  * Awelon evaluation involves rewriting a program to an equivalent
  * program that is closer to normal form, much like `6 * 7` can be
  * rewritten to `42` in arithmetic. Wikilon interprets the binary
- * stream as a program and rewrites it as Awelon code. Under the
- * hood a more suitable representation is used, but this API will
- * present programs as binaries.
+ * stream as a program and rewrites it as Awelon code. This is a 
+ * deep rewrite, including final blocks (which process in parallel).
+ *
+ * Under the hood a more suitable representation is used, but this
+ * API presents programs, even those under evaluation, as binaries.
  * 
  * Evaluation may halt on resource limits, failing with ETIMEDOUT or
  * ENOMEM. See wikrt_set_effort to control timeouts. But we'll have a
@@ -304,7 +306,8 @@ bool wikrt_parse_code(uint8_t const*, size_t, wikrt_parse_data*);
  * the evaluated code via `(error)` annotations.
  *
  * Caution: Evaluation of partial programs is possible, but you must
- * be careful to avoid splitting words like from `foobar` to `foo`.
+ * be relatively careful to avoid truncating a word, and it's best
+ * to use wikrt_eval_cmd to extract partial results.
  */
 bool wikrt_eval(wikrt_cx*, wikrt_s);
 
@@ -321,8 +324,7 @@ bool wikrt_eval(wikrt_cx*, wikrt_s);
  * a few of those data elements from a source program, moving them to
  * another stream where they can be further evaluated, copied, and so
  * on. Minimum evaluation is performed to achieve the move, so the 
- * data itself is not evaluated. Background parallelism is possible 
- * if some computations are initiated by `(par)`. 
+ * data itself is not evaluated. 
  *
  * On failure, nothing is moved but partial evaluation may modify the
  * source. This fails if the destination is not empty (EADDRINUSE) or
@@ -481,18 +483,19 @@ void wikrt_debug_trace(wikrt_cx*, wikrt_s);
  *
  * A context is single-threaded at this API, but worker threads can
  * help evaluate in parallel, and may even operate in the background
- * in case of wikrt_eval_cmd or wikrt_eval_data. Program parallelism
- * is controlled by `(par)` annotations and some accelerators.
- * 
- * You can configure a thread pool size here, which is shared by all
- * contexts, representing CPUs on the physical machine. Threads will
- * consume a context's effort quota quickly, and may migrate between 
- * contexts based on available work and resources.
+ * until the effort quota is exhausted. Parallelism is controlled by
+ * `(par)` annotations and parallel accelerators.
+ *
+ * Note: while (par) tasks are very lightweight, OS worker threads do
+ * require working memory within each context. A megabyte per worker
+ * should be sufficient, plus whatever you need for a single-threaded
+ * evaluation. The effort quota is also shared by worker threads and
+ * must be sufficient to get useful work done.
  */
 void wikrt_env_threadpool(wikrt_env*, uint32_t pool_size);
 
 // TODO:
-// low level parallelism: configure GPGPU or OpenCL cloud service
+// low level parallelism: configure GPGPU or OpenCL cloud services
 // high level parallelism: configure cloud distribution for KPNs
 
 /** Accelerated Prelude

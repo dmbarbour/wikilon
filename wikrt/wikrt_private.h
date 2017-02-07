@@ -295,7 +295,8 @@ typedef enum wikrt_op
 
 
 struct wikrt_env {
-    wikrt_cx        *cxs;   // circular linked list of contexts
+    wikrt_cx        *cx0;   // contexts without work available
+    wikrt_cx        *cxw;   // contexts with work available
     wikrt_db        *db;    // persistent data resources
     pthread_mutex_t mutex;  // mutex for environment
 };
