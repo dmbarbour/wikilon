@@ -402,7 +402,6 @@ bool wikrt_stream_to_binary(wikrt_cx*, wikrt_s);
  */
 size_t wikrt_extract_binary(wikrt_cx*, wikrt_s src, size_t amt, wikrt_s dst);
 
-
 /** Effort Quota
  * 
  * To control infinite loops, each context has a finite effort quota
@@ -426,7 +425,8 @@ void wikrt_set_effort(wikrt_cx*, uint32_t cpu_usec);
 /** @brief Force a full garbage collection of context.
  *
  * This generally isn't necessary, but it's useful if you need more
- * precise memory and fragmentation stats. 
+ * precise memory and fragmentation stats or want to ensure stable
+ * performance.
  */
 void wikrt_cx_gc(wikrt_cx*);
 
@@ -434,9 +434,6 @@ void wikrt_cx_gc(wikrt_cx*);
 typedef struct wikrt_mem_stats { 
     uint64_t    gc_bytes_processed; // total GC effort 
     uint64_t    gc_bytes_collected; // useful GC effort
-    size_t      memory_last_gc;     // memory after last GC
-    size_t      memory_in_use;      // memory usage currently
-    size_t      memory_maximum;     // maximum memory_last_gc so far
     size_t      context_size;       // context allocation size
 } wikrt_mem_stats;
 
@@ -474,20 +471,23 @@ void wikrt_debug_trace(wikrt_cx*, wikrt_s);
 // - statistics or profiling on words or gates
 // 
 // What should the profiling API look like?
-// 
-// - either enable profiling, or perform profiling by default?
-// - profiling requests for words or evaluation on a stream?
-// - or a write-profile option in general
+//
+// - enable profiling, if not by default
+// - a write-profile option in general
+// - a clear-profile option, potentially 
+//
 
 /** Parallel Evaluation
  *
- * A context is single-threaded at this API, but worker threads from
- * the environment layer may join in to help compute a result based
- * on (par) annotations or accelerators.
- *
- * You may configure a thread pool size, which will be shared by all
- * contexts. You should not configure this to more than the number of
- * CPUs on the current machine.
+ * A context is single-threaded at this API, but worker threads can
+ * help evaluate in parallel, and may even operate in the background
+ * in case of wikrt_eval_cmd or wikrt_eval_data. Program parallelism
+ * is controlled by `(par)` annotations and some accelerators.
+ * 
+ * You can configure a thread pool size here, which is shared by all
+ * contexts, representing CPUs on the physical machine. Threads will
+ * consume a context's effort quota quickly, and may migrate between 
+ * contexts based on available work and resources.
  */
 void wikrt_env_threadpool(wikrt_env*, uint32_t pool_size);
 

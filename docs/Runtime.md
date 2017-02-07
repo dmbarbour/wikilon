@@ -49,22 +49,32 @@ Due to in-place update for uniquely referenced arrays and other objects, I need 
 
 ## Parallelism and Threads
 
-Assume multiple threads with the following properties.
+I want parallelism without much synchronization.
 
-* threads have an exclusive volume for allocation
-* threads perform their own GC within this volume
-* threads regions can reference only older values
- * with a special exception for child threads
-* threads may 'grow' by allocating a newer region
- * existing data is not moved, new region for new data
-* child threads also allocate in the newer region
- * a logical hierarchy, not physical hierarchy
+Within a context, a thread should have a volume of memory that it controls exclusively and hence may garbage collect. This might start as, say, 64kB or 192kB and exclude larger allocations. Importantly, each thread should be able to assume that only references *within* its own nursery region are 'unstable', and everything outside that it references is 'stable'.
 
-This effectively assumes `(par)` threads that don't communicate (so a thread cannot learn of an object younger than itself). But a child thread can reference data in the parent thread, which might still be active. With compacting GC, we're moving stuff around. So if we moving something our child-thread might reference, we will need to halt said child during GC (at least for compaction). 
+So we'll have two levels of collector: within the threads, and outside the threads. The external collector could be a full-heap compaction, so any other generations are within each thread. Large allocations could use the context directly, including for any new child threads.
 
-In general, we'll want to halt all threads referenced from a targeted volume of memory on the basis that we might be moving something to which they refer. Any thread whose result is no longer referenced simply won't be recorded when we compact the memory again.
+When a parent thread creates a child thread as via `(par)`, the child will usually have references to values held within the parent arena. So we'll need to stabilize that data before allocating the child thread, perhaps by delaying a GC cycle or two (perhaps heuristically, based on level of external parallelism) before we decide that referenced memory isn't going to change much.
 
-If I later accelerate KPN parallelism, I can batch `(par)` based on *available* data, which gives me the benefits of asynchronous communication.
+Thus each thread and context has:
+
+* a stable volume of exclusive memory (modulo full context GC)
+* a minimum communication context, e.g. to halt threads on GC
+* a set of local `(par)` tasks that can be handled by threads
+* the main task for the current thread
+
+After a full context GC, we can easily reallocate every thread. So there is little need to preserve thread structure between full context collections. So I might want to think of this in terms of a thread 'attaching' to a context to perform some work, instead of threads as values represented within the context. Any `(par)` tasks, OTOH, would certainly be values - and readily GC'd as such. 
+
+Usefully, a thread could work on new `(par)` tasks for a while as a stack or queue while waiting for tasks and values to stabilize.
+
+So I'll track no hierarchy of threads nor even of `(par)` tasks. This is simple. A single thread must process many `(par)` tasks without allocating more memory, depending on the nature of the computations. So allocating more memory (modulo large object allocations, big arrays) would be a common opportunity for a thread to consider moving into another context.
+
+Communication between threads, as for KPN acceleration, would only be possible when messages are in stable memory. Fortunately, we could leverage this in some ways by tracking pending communications between processes. This can wait until I fully support KPNs, of course.
+
+Anyhow, effectively I get a per-thread nursery and local small-values heap with some minimum appropriate size. 
+
+Thoughts: I might benefit from tracking a free-list only for large objects at the context level, and perhaps allowing mark-sweep at this layer too. I'll look into this later. For now, just getting a single collector working with concurrency is more important.
 
 ## Stack Representations
 
