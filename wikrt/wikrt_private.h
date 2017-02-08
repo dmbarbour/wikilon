@@ -9,8 +9,8 @@
 
 /** NOTES
  * 
- * Bits: We'll use native pointers internally, to simplify copy-on-write
- * reuse when we freeze and copy a context and to avoid offset overheads.
+ * Bits: We'll use native pointers internally. This performs well, and is
+ * necessary instead of offsets for wikrt_cx_freeze.
  * 
  * Dictionary Names: valid Awelon words up to so many bytes are accepted.
  * Anything else is rewritten via secure hash. Outside of low level 
@@ -135,8 +135,7 @@ static inline wikrt_v wikrt_to_small_int_op(wikrt_i i) { return (((wikrt_v)(i <<
 /** Tagged Objects
  *
  * The bytes of a tagged object will give a basic type, and common
- * metadata: substructure (nc, nd); copy-on-write options (unique
- * vs sharable, unwritten vs written).
+ * metadata: substructure (nc, nd); unique vs sharable. And so on.
  *
  * Some object types we need:
  *
@@ -170,22 +169,17 @@ static inline wikrt_v wikrt_to_small_int_op(wikrt_i i) { return (((wikrt_v)(i <<
  */
 typedef enum wikrt_otype
 { WIKRT_OTYPE_ID = 0    // wrap a value, likely to add (nc) or (nd) attributes
+, WIKRT_OTYPE_TASK      // a fragment of code under evaluation
 , WIKRT_OTYPE_BLOCK   
 , WIKRT_OTYPE_BIGNAT
 , WIKRT_OTYPE_WORD      // interned, and includes annotations
 , WIKRT_OTYPE_ERROR     // mark value as erroneous
 , WIKRT_OTYPE_BINARY 
-, WIKRT_OTYPE_UTF8      // wrap a binary  
+, WIKRT_OTYPE_UTF8      // wraps a binary  
 , WIKRT_OTYPE_ARRAY  
 , WIKRT_OTYPE_SLICE     // array slice with offset, size 
 , WIKRT_OTYPE_APPEND    // array join
 } wikrt_otype;
-
-#define WIKRT_HDR_MASK_OTYPE 0xFF
-
-/** An invalid value or otype. */
-#define WIKRT_INVAL (~((wikrt_v)0))
-
 
 /** Built-ins (Primitives, Accelerators, Annotations)
  *
@@ -295,10 +289,11 @@ typedef enum wikrt_op
 
 
 struct wikrt_env {
-    wikrt_cx        *cx0;   // contexts without work available
-    wikrt_cx        *cxw;   // contexts with work available
+    wikrt_cx        *cx;   // contexts without work available
+//    wikrt_cx        *cxw;   // contexts with work available
     wikrt_db        *db;    // persistent data resources
     pthread_mutex_t mutex;  // mutex for environment
+    // todo: add workers thread pool, synchronization elements
 };
 
 static inline void wikrt_env_lock(wikrt_env* e) {
@@ -306,16 +301,71 @@ static inline void wikrt_env_lock(wikrt_env* e) {
 static inline void wikrt_env_unlock(wikrt_env* e) {
     pthread_mutex_unlock(&(e->mutex)); }
 
-/** Multi-Threading
+/** Write Log for Generational GC
  *
- * 
+ * Generational GC requires tracking updates to objects or fields in the
+ * older generations as potential roots to the younger. My current plan
+ * is to simply maintain a hash table or tree, perhaps in the style of an
+ * LSM-tree or hitchhiker tree - merging repeated writes. 
  *
- * Each stream may contain multiple threaded computations. Each thread
- * will generally need its own allocator and garbage collection, and a
- * stable volume of memory within the context. Obviously if we GC or
- * compact a context, we must halt all threads within the volume upon
- * compaction.  
+ * Each thread will track its own external dependencies, and we may merge
+ * trees from many threads for context-level generational GC. So this log
+ * will support constant-space merging. Writes must fail when they cannot
+ * be logged, e.g. because we reach memory limits, but repeated writes 
+ * should be reasonably efficient.
  */
+typedef struct wikrt_wl wikrt_wl;
+
+/** Multi-Threading and Garbage Collection
+ * 
+ * Threads operate within a context, evaluating parallel tasks. To minimize
+ * synchronization, each thread has its own 'nursery' - a volume of memory
+ * for lightweight allocations that is independently garbage collected. An
+ * important invariant is that a thread never references another's nursery.
+ *
+ * Communication between threads requires memory be 'promoted' from nursery
+ * to shared context, much like promoting to a higher generation during GC.
+ * The latency of waiting on GC can be mitigated by heuristics to aggressively
+ * promote memory when available shared work dwindles.
+ *
+ * In some cases, one task may end up waiting on results from another, not
+ * just for evaluation to complete but also stable via promotion. Each task
+ * must record its readiness status such that we can casually test whether
+ * the result is available. 
+ *
+ * In any case, all this means each thread needs to track:
+ *
+ *   - memory and local generations
+ *   - write log for generational GC
+ *   - parallel tasks - pending, waiting
+ * 
+ * I'm also interested in support for focusing on parallel computations
+ * specific to a stream. But I don't consider that to be critical at 
+ * this time, not compared to potential background parallelism.
+ */
+typedef struct wikrt_thread { 
+    wikrt_cx* cx;   // associated context
+
+    // Memory Management
+    wikrt_a start;  // first reserved address
+    wikrt_a end;    // last reserved address
+    wikrt_a gen;    // end of survivor generation
+    wikrt_a end;    // last reserved address
+
+    wikrt_a stop;   // allocation cap (for GC, reserves space for marking)
+    wikrt_a alloc;  // current allocator
+
+    // Write Log for Generational GC.
+    wikrt_wl* wl;
+
+    // Tasks to Perform.
+    wikrt_v ready;    // tasks we can work on now
+    wikrt_v waiting;  // tasks with dependencies
+ 
+    // Local Memory Statistics
+    uint64_t gc_bytes_processed;
+    uint64_t gc_bytes_collected;
+} wikrt_thread;
 
 
 /** A context.
@@ -330,21 +380,10 @@ struct wikrt_cx {
     wikrt_cx    *cxn; 
     wikrt_cx    *cxp; 
 
-    pthread_mutex_t mutex; // to protect local allocator
-
-    // Memory Management
-    wikrt_z     size;           // full size of context
-    wikrt_a     cap_hard;       // maximum allocator (reserving GC region)
-
-    #define WIKRT_GC_GENS 4     // how many GC generations (diminishing returns)
-    wikrt_a     gen[WIKRT_GC_GENS];         
-
-    wikrt_a     alloc;          // current allocator
-    wikrt_a     cap;            // soft maximum allocator for next GC
-    
-
-
-    
+    pthread_rwlock_t gclock;    // to wait on worker threads
+    pthread_mutex_t mutex;      // to protect local allocator
+    wikrt_thread    cx_mem;     // shared context memory
+    wikrt_thread    cx_main;    // resources for API main thread
 };
 
 

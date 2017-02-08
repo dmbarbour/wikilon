@@ -43,6 +43,8 @@ Performance might also benefit from also using copy collectors for the younger g
 
 I currently expect type information in the *pointer* regarding the size of objects - two word cell vs. tagged object where size is based on the header. For mark-compact, I'll need to track this type information during mark so I can compute sizes upon compact. So I need about 3 bits per allocation, which is about 5% memory overhead on a 32-bit system (assuming allocations are two word aligned) or 3% on a 64-bit system. This seems an acceptable overhead. 
 
+Generational GC requires tracking references from the older generation to the younger one such that we can treat the older generation as a root set until it is GC'd. With parallelism, this might need to be tracked by each thread at a minor risk of redundancy (when an object is written by many threads over its life span).
+
 If I do introduce copy collection, the mark space would be available for copying the youngest generation. I don't need concurrent marking. 
 
 Due to in-place update for uniquely referenced arrays and other objects, I need to track updates so we can scan for references from older objects to younger ones. This means a simple write barrier, one I'd need anyway due to copy-on-write for shared arrays, and a list of references from the older generation acting as extra roots. This is a small overhead for a significant reduction in allocation.
@@ -55,7 +57,7 @@ Within a context, each thread should have a nursery - a volume of memory that it
 
 Importantly, a thread must never reference into another thread's nursery.
 
-Between in-place update of unique objects and child `(par)` tasks, objects easily reference memory younger than themselves. The heap is not unidirectional. So the safest way to promote objects from a thread is to simply promote all of a thread's memory in use to the shared context. This can be performed after garbage collection so the thread can continue in the remaining volume. To mitigate latency before shared work is available, we might more aggressively promote if are no pending tasks available to the shared context (at cost of an occasional extra context-level GC cycle). 
+This requires waiting until memory is 'promoted' by GC before we share results. To mitigate latency, we can aggressively promote when a thread has ready tasks but the shared context does not. 
 
 The linearity of mutable objects prevents sharing references between threads via mutability in most cases. 
 

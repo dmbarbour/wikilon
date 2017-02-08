@@ -292,9 +292,9 @@ bool wikrt_parse_code(uint8_t const*, size_t, wikrt_parse_data*);
  * 
  * Awelon evaluation involves rewriting a program to an equivalent
  * program that is closer to normal form, much like `6 * 7` can be
- * rewritten to `42` in arithmetic. Wikilon interprets the binary
- * stream as a program and rewrites it as Awelon code. This is a 
- * deep rewrite, including final blocks (which process in parallel).
+ * rewritten to `42` in arithmetic. Wikilon interprets the binary as 
+ * a program and rewrites it as Awelon code. After evalauting the
+ * toplevel program, contained blocks are processed in parallel.
  *
  * Under the hood a more suitable representation is used, but this
  * API presents programs, even those under evaluation, as binaries.
