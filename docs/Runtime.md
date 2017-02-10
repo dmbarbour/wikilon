@@ -43,9 +43,7 @@ Performance might also benefit from also using copy collectors for the younger g
 
 I currently expect type information in the *pointer* regarding the size of objects - two word cell vs. tagged object where size is based on the header. For mark-compact, I'll need to track this type information during mark so I can compute sizes upon compact. So I need about 3 bits per allocation, which is about 5% memory overhead on a 32-bit system (assuming allocations are two word aligned) or 3% on a 64-bit system. This seems an acceptable overhead. 
 
-Generational GC requires tracking references from the older generation to the younger one such that we can treat the older generation as a root set until it is GC'd. With parallelism, this might need to be tracked by each thread at a minor risk of redundancy (when an object is written by many threads over its life span).
-
-If I do introduce copy collection, the mark space would be available for copying the youngest generation. I don't need concurrent marking. 
+Generational GC requires tracking references from the old generation to the younger. I can try this at a level of objects or fields. To support large linear arrays and logical slicing (so I can divide an array among many threads then stitch it back together), it seems field-level tracking might be the better option. Unfortunately, I cannot think of a great way to do this.
 
 Due to in-place update for uniquely referenced arrays and other objects, I need to track updates so we can scan for references from older objects to younger ones. This means a simple write barrier, one I'd need anyway due to copy-on-write for shared arrays, and a list of references from the older generation acting as extra roots. This is a small overhead for a significant reduction in allocation.
 

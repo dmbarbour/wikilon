@@ -257,9 +257,9 @@ Awelon's basic evaluation strategy is simple:
 * evaluate before copy 
 * evaluate final values
 
-Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case.
+Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
 
-A runtime is not constrained by this basic strategy. For example, a runtime could perform logical copies without immediate evaluating at its own discretion and support sharing internally. Evaluation could be tuned by annotations or runtime evaluation options. Parallelism, memoization, stowage, deferred computation, fail-fast errors, optimizations, etc.. are accessible via annotations. See also *Optimization*, below.
+A runtime is not constrained by this basic strategy. For example, a runtime could perform logical copies without immediate evaluation at its own discretion, perhaps using implicit memoization. Evaluation could be tuned by annotations or runtime evaluation options. Parallelism, memoization, stowage, deferred computation, fail-fast errors, optimizations, etc.. are accessible via annotations. See also *Optimization*, below.
 
 ## Named Values
 

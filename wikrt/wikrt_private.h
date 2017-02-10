@@ -169,6 +169,7 @@ static inline wikrt_v wikrt_to_small_int_op(wikrt_i i) { return (((wikrt_v)(i <<
  */
 typedef enum wikrt_otype
 { WIKRT_OTYPE_ID = 0    // wrap a value, likely to add (nc) or (nd) attributes
+, WIKRT_OTYPE_WSET      // write set used for generational GC
 , WIKRT_OTYPE_TASK      // a fragment of code under evaluation
 , WIKRT_OTYPE_BLOCK   
 , WIKRT_OTYPE_BIGNAT
@@ -301,20 +302,24 @@ static inline void wikrt_env_lock(wikrt_env* e) {
 static inline void wikrt_env_unlock(wikrt_env* e) {
     pthread_mutex_unlock(&(e->mutex)); }
 
-/** Write Log for Generational GC
+/** Write Set for Generational GC
  *
- * Generational GC requires tracking updates to objects or fields in the
- * older generations as potential roots to the younger. My current plan
- * is to simply maintain a hash table or tree, perhaps in the style of an
- * LSM-tree or hitchhiker tree - merging repeated writes. 
+ * Generational GC requires tracking references from the old generation
+ * to the young generation. I plan to track this at the field level, as
+ * it is both simple and avoids challenges related to scanning big arrays
+ * or logical array slicing we might face with object-level tracking.
  *
- * Each thread will track its own external dependencies, and we may merge
- * trees from many threads for context-level generational GC. So this log
- * will support constant-space merging. Writes must fail when they cannot
- * be logged, e.g. because we reach memory limits, but repeated writes 
- * should be reasonably efficient.
+ * A viable option is to reuse the context-level 'mark' space to track
+ * fields written in the old generation. This should work but requires
+ * a cost proportional to the size of the old generation. I'd prefer to
+ * have a precise write set per thread - a linear cost relative to the
+ * work performed by our mutator.
+ *
+ * To improve cache coherence, I'll actually hash the upper part of the
+ * address and use a small bitfield to track writes within a tiny page.
  */
-typedef struct wikrt_wl wikrt_wl;
+typedef wikrt_v wikrt_ws; // for now, using an object in context.
+
 
 /** Multi-Threading and Garbage Collection
  * 
@@ -344,9 +349,10 @@ typedef struct wikrt_wl wikrt_wl;
  * this time, not compared to potential background parallelism.
  */
 typedef struct wikrt_thread { 
-    wikrt_cx* cx;   // associated context
+    // Context for Shared Memory and Large Allocations
+    wikrt_cx* cx;
 
-    // Memory Management
+    // Thread Exclusive Memory
     wikrt_a start;  // first reserved address
     wikrt_a end;    // last reserved address
     wikrt_a gen;    // end of survivor generation
@@ -355,8 +361,8 @@ typedef struct wikrt_thread {
     wikrt_a stop;   // allocation cap (for GC, reserves space for marking)
     wikrt_a alloc;  // current allocator
 
-    // Write Log for Generational GC.
-    wikrt_wl* wl;
+    // Write Set for Generational GC.
+    wikrt_ws writes;
 
     // Tasks to Perform.
     wikrt_v ready;    // tasks we can work on now
