@@ -409,7 +409,9 @@ size_t wikrt_extract_binary(wikrt_cx*, wikrt_s src, size_t amt, wikrt_s dst);
  * To control infinite loops, each context has a finite effort quota
  * for evaluations. When exhausted, evaluation fails with ETIMEDOUT.
  * However, the rewritten program will have a valid state after this
- * failure. You can easily reset the effort quota and continue.
+ * failure. You can easily reset the effort quota and continue. If 
+ * you set the effort to zero, this will wait for background parallel
+ * computations to halt.
  * 
  * Effort is specified in CPU microseconds, but is not very accurate.
  * Parallel computations may exhaust the effort quota very quickly.

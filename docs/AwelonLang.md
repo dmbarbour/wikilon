@@ -204,8 +204,10 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(jit)` - compile a function for efficient evaluation
 * `(stow)` - move large values to disk, load on demand
 * `(memo)` - memoize a computation for incremental computing
+* `(trace)` - record value to a debug output log
+* `(trash)` - erase data you won't observe, leave placeholder
 * `(error)` - mark a value as an error object
-* `(@gate)` - symbol configurable for active debugging
+* `(@gate)` - symbols for editable views or active debugging 
 * `(=foo)` - reduce code to a known name (quines, loops)
 
 Annotations must have no internally observable effect on a computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states or a change in how an evaluated result is represented or organized.
@@ -475,7 +477,11 @@ We destroy the data but preserve substructure. Because the data has been destroy
 
 ## Active Debugging
 
-Active debugging is an umbrella term for techniques to observe a computation in-progress. These techniques include logging, profiling, breakpoints. In Awelon, active debugging may occur via instrumentation of words. That is, a runtime can be configured to log arguments to a word, profile evaluation of a word, or stall evaluation of a word. Usefully, words can be instrumented without intrusive modification of a program. 
+Active debugging is an umbrella term for techniques to observe a computation in-progress. These techniques include logging, profiling, breakpoints, and animation of the program. Ideally, active debugging should both be non-invasive and require minimal external configuration.
+
+In Awelon, active debugging may occur via instrumentation of words, or of `(@gate)` annotations which essentially act as identity words.
+
+. That is, a runtime can be configured to log arguments to a word, profile evaluation of a word, or stall evaluation of a word. Usefully, words can be instrumented without intrusive modification of a program. 
 
 * stall - prevent further rewrites here
 * trace - record argument(s) into debug log
@@ -530,17 +536,23 @@ Annotations can augment static type analysis by providing an assertion against w
         (list)      S (S   → S') (S A B → S')   → S'
         (cond)      S (A   → S') (B     → S')   → S'
 
-Knowing these types, we can also check for consistency between conditional branches. Unfortunately, inferring these types is difficult. Annotations can provide a much needed hint. I imagine programmers will want annotations for many common types - naturals, texts, binaries, lists, labels, records, and so on. Anything we accelerate or use frequently enough for a runtime to recognize. 
+Knowing these types, we can also check for consistency between conditional branches. Unfortunately, inferring these types is difficult. Annotations can provide a much needed hint. I imagine programmers will want annotations for many common types - naturals, texts, binaries, lists, labels, records, and so on. Anything we accelerate or use frequently enough for a runtime to recognize.
 
-Unfortunately, simple static types are frequently inexpressive. Sometimes they constrain more than they help.
+*Note:* Heterogeneous lists are easily represented and useful in Awelon. A typical 'fold' or 'map' operation might not apply, but many other operations like zip-map, indexing, or sequencing operations are still applicable. Users might benefit from distinct annotations for homogeneous vs. heterogeneous lists, and for structured intermediate forms like command lists.
+
+*Aside:* Many languages have a 'unit' type, a type with only one value. In Awelon, the best representation of the unit type is `[]` - the identity function. There is only one value of type `∀x.(x→x)`. 
+
+### Delayed Typing
+
+Simple static types are frequently inexpressive, constraining more than helping.
 
 We can introduce a simple escape. Consider a `(dyn)` annotation used as `[F] b b (dyn)` with formal behavior `[A](dyn) => [A]`. The presence of `(dyn)` does not suppress obvious static type errors, but could generally suppress errors that result from being *unable* to infer static types that might be too sophisticated for our simple checker - especially dependent types. Intriguingly, the ability to eliminate `(dyn)` via partial evaluations could mean we can improve static types as we provide more static information and usage context.
+
+### Sophisticated Types
 
 More generally, we can introduce a simple convention of defining `foo.type` to declare a type for `foo`. This enables flexible abstraction and composition of type descriptions, expression of sophisticated types (contracts, Hoare logic, etc.), and provision of auxiliary hints or proofs. If we want to properly support dependent, existential, higher order, GADT, etc. types, we'll probably need to do so at this layer. Optimally, the type checker operating at this layer would itself be defined as a dictionary function.
 
 Related to static typing, non-terminating evaluation in Awelon is always an error. There is no utility in unbounded divergence for a pure computation, though we might use arity annotations to defer computations and represent coinductive structure. In any case, static type analysis should attempt a limited termination analysis. While solving the halting problem isn't possible in general, obvious errors can always be reported.
-
-*Note:* Heterogeneous lists are easily represented and useful in Awelon. A typical 'fold' or 'map' operation might not apply, but many other operations like zip-map, indexing, or sequencing operations are still applicable. Users might benefit from distinct annotations for homogeneous vs. heterogeneous lists, and for structured intermediate forms like command lists.
 
 ## Editable Views
 
@@ -575,7 +587,7 @@ Design of evaluable editable views is very sensitive to arity annotations and ac
 
 With evaluable views in mind, we might represent comments as:
 
-        /* comment */  ==  " comment " (a2) (@rem) d
+        /* comment */  ==  " comment "(a2)(@rem)d
 
 The arity annotation allows embedding of comments into computed values. The `(@rem)` gate serves as a lightweight indicator of the comment's 'type' (so we can add other comment types) and additionally permits integration with active debugging - for example, tracing comments to see progress, or conditionally stalling on certain comments.
 
@@ -641,15 +653,15 @@ By accelerating labeled data, Awelon can support parameter objects, flexible var
 
 ## Unique References and In-Place Updates
 
-While purely functional languages are best known to favor persistent data structures (e.g. using finger-trees to model sequences), it is possible to support in-place updates when we know we have the only reference to a value. An Awelon runtime can easily track unique reference properties because we perform an explicit copy with operator `c` instead of implicit copy via variables in a lexical environment.
+Persistent structures are great and should be used frequently. But in-place update has some performance advantages that are reasonably difficult to give up. 
 
-This is most useful for acceleration of lists (represented as arrays) or records (represented as structures or hashmaps). The accelerated array-update function could update the array in place rather than copy the whole array with one change. Further, when we do update a shared array, we can transparently copy it on the first write then subsequent updates can operate on the unique reference. Developers can usually arrange for an array to either be used linearly or updated in batches to leverage this, so we have the performance benefits of in-place mutation while preserving the simple semantics of purely functional rewriting.
+Fortunately, purely functional languages can support in-place update whenever we have a unique reference. We can model copy-on-write shared arrays, where subsequent writes are applied to the unique array without further copying. Lambda calculus makes this feature difficult to achieve (because the lexical environment is implicitly 'shared'). But Awelon makes copying explicit with operator `c`, so it's very easy to dynamically track uniqueness of a reference.
 
-Use of the `(nc)` annotation can further 
+Arrays and records are the most useful targets for this treatment.
 
-Awelon copies data explicitly via operator `c`. This makes it easy to track uniqueness dynamically, essentially by flagging a unique reference as shared upon copy. For contrast, most languages implicitly share references with a lexical environment, and thus require support from the static type system to ensure a unique reference. (Clean's uniqueness types and Haskell's ST monad represent two variations on this idea.) Awelon developers can certainly leverage the `(nc)` annotation to resist accidental violations of uniqueness, but the dynamic approach is generally more opportunistic and convenient.
+We can represent a list as an array (guided by `(array)` annotations). We can accelerate functions to access and update lists at indexed offsets. When the update function is applied to a unique array, it can update it in place. If applied to a shared array, it must copy the array first to get a unique array, but then all subsequent updates are in-place until the array is shared by logical copying via operator `c`. Records would receive similar treatment, albeit using a hashmap in place of the array.
 
-Awelon can effectively leverage in-place update for acceleration of lists and records with indexed update functions. Accelerating lists effectively gives us mutable arrays. The uniqueness constraint does limit us to single-threaded operations. To safely support limited forms of shared state concurrency (with queues, etc.), we can accelerate process networks.
+*Note:* The `(nc)` annotation restricts copying of the marked value. Use of this can help enforce preservation of uniqueness, or at least help fail-fast debug cases where we want to restrict copying.
 
 ## Reactive Process Networks
 

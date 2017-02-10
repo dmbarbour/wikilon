@@ -37,13 +37,13 @@ Some desiderata:
 * generational GC to avoid copying of stable objects
 * hierarchical GC to limit synchronization frequency
 
-I think my best bet for GC is a generational mark-compact GC. 
+I think my best bet for GC is a generational mark-compact GC. Mark-compact has a big advantage of preserving stack order, which is convenient for reasoning about cache performance and generations.
 
-Performance might also benefit from also using copy collectors for the younger generations, or mark-sweep and free-lists rather than compacting every cycle. But I'll probably hold off on this for now. Mark-compact has a big advantage of preserving stack order, which is convenient for reasoning about cache performance and generations.
+I expect type information in the pointer regarding the size of objects - two word cell vs. tagged object where size is based on the header. For mark-compact, I must record this type information during mark so I can robustly compute size upon compact. So I expect I'll need 3 bits per marked object - two for tri-color marking (white/grey/black) and one for object-vs-cell. This corresponds to about 3 bits per allocation: ~5% memory on a 32-bit system, ~3% on a 64-bit system memory that cannot be allocated to normal objects. This isn't ideal, but it is acceptable.
 
-I currently expect type information in the *pointer* regarding the size of objects - two word cell vs. tagged object where size is based on the header. For mark-compact, I'll need to track this type information during mark so I can compute sizes upon compact. So I need about 3 bits per allocation, which is about 5% memory overhead on a 32-bit system (assuming allocations are two word aligned) or 3% on a 64-bit system. This seems an acceptable overhead. 
+Generational GC requires we track mutations within the old generation. I would like to do this at the field granularity, which allows working with large arrays (mutating parts of the array, scanning just the parts we mutate, logically splitting arrays among multiple threads). My current plan is to use a hashtable of page→bitfield in the word size. Bitfields allow adjacent fields to be represented and scanned together, and reduce memory overhead. Assuming larger hashtables are at least half full, this results in at worst 12.5% overhead on a 32-bit system (or 6.25% on a 64-bit system) as a percentage of the old gen size. In practice, worst case behavior should be rare outside of working with massive mutable arrays.
 
-Generational GC requires tracking references from the old generation to the younger. I can try this at a level of objects or fields. To support large linear arrays and logical slicing (so I can divide an array among many threads then stitch it back together), it seems field-level tracking might be the better option. Unfortunately, I cannot think of a great way to do this.
+I can try this at a level of objects or fields. To support large linear arrays and logical slicing (so I can divide an array among many threads then stitch it back together), it seems field-level tracking might be the better option. Unfortunately, I cannot think of a great way to do this.
 
 Due to in-place update for uniquely referenced arrays and other objects, I need to track updates so we can scan for references from older objects to younger ones. This means a simple write barrier, one I'd need anyway due to copy-on-write for shared arrays, and a list of references from the older generation acting as extra roots. This is a small overhead for a significant reduction in allocation.
 
@@ -51,15 +51,13 @@ Due to in-place update for uniquely referenced arrays and other objects, I need 
 
 I want parallelism with minimal (and very simple) synchronization.
 
-Within a context, each thread should have a nursery - a volume of memory that it controls exclusively and hence may garbage collect *without* synchronization. This might start as, for example, 64kB or 192kB or even a full megabyte, perhaps depending on available memory. Large allocations might automatically use the shared space. When full of cruft, a thread is relocated with a fresh nursery. As the context fills, we can gradually GC old data.
+Within a context, each thread should have a nursery - a volume of memory that it controls exclusively and hence may garbage collect *without* synchronization. This might start as, for example, 256kB. Overly large allocations might automatically operate in the shared context memory. When full of cruft, the thread is relocated with a fresh nursery. As the context fills, we can gradually GC old data.
 
 Importantly, a thread must never reference into another thread's nursery.
 
-This requires waiting until memory is 'promoted' by GC before we share results. To mitigate latency, we can aggressively promote when a thread has ready tasks but the shared context does not. 
+This requires waiting until memory is 'promoted' from the thread nursery to the shared pace before we share any results. Unfortunately, given in-place updates on arrays and so on, it can be difficult to ensure old objects don't reference younger memory without performing a deep promotion of thread memory (that is, promote all data within the nursery). There is reason to delay this promotion, for GC efficiency. Fortunately, we can mitigate latencies by aggressively promoting thread memory if the context has no ready tasks.
 
-The linearity of mutable objects prevents sharing references between threads via mutability in most cases. 
-
-The `(par)` tasks need special attention. They're explicitly referenced in one thread but evaluated from another. Signals between threads would be bad for synchronization so I won't keep a local 'queue' of tasks to continue after the current one completes. But we can maintain a set of waiting tasks, and poll it rarely (as needed). 
+Parallel tasks need special attention. They're referenced from one thread but evaluated wholly or partially from another. We must delay evaluations that require a values from other threads.
 
 So each thread must:
 

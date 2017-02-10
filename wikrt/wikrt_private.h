@@ -40,6 +40,7 @@
 typedef uintptr_t wikrt_v;
 
 // Aliases for internal documentation.
+typedef wikrt_v  wikrt_o;           // tagged object header
 typedef wikrt_v  wikrt_n;           // small natural number
 typedef intptr_t wikrt_i;           // small integer number
 typedef wikrt_v  wikrt_z;           // arbitrary size value
@@ -169,15 +170,16 @@ static inline wikrt_v wikrt_to_small_int_op(wikrt_i i) { return (((wikrt_v)(i <<
  */
 typedef enum wikrt_otype
 { WIKRT_OTYPE_ID = 0    // wrap a value, likely to add (nc) or (nd) attributes
-, WIKRT_OTYPE_WSET      // write set used for generational GC
+, WIKRT_OTYPE_STREAM    // a stream object, referenced from context toplevel
+, WIKRT_OTYPE_WS        // write set used for generational GC
 , WIKRT_OTYPE_TASK      // a fragment of code under evaluation
 , WIKRT_OTYPE_BLOCK   
 , WIKRT_OTYPE_BIGNAT
 , WIKRT_OTYPE_WORD      // interned, and includes annotations
 , WIKRT_OTYPE_ERROR     // mark value as erroneous
+, WIKRT_OTYPE_ARRAY     // compact list of arbitrary values
 , WIKRT_OTYPE_BINARY 
 , WIKRT_OTYPE_UTF8      // wraps a binary  
-, WIKRT_OTYPE_ARRAY  
 , WIKRT_OTYPE_SLICE     // array slice with offset, size 
 , WIKRT_OTYPE_APPEND    // array join
 } wikrt_otype;
@@ -232,6 +234,7 @@ typedef enum wikrt_op
 , OP_ANNO_memo  // (memo) memoize computation of block
 , OP_ANNO_stow  // [large value](stow) => [$secureHash]
                 // [small value](stow) => [small value]
+, OP_ANNO_trash // (trash) replace block with error value
     // todo: annotations for link, optimize, compile
 
 // Extensions for Compiled code
@@ -305,20 +308,30 @@ static inline void wikrt_env_unlock(wikrt_env* e) {
 /** Write Set for Generational GC
  *
  * Generational GC requires tracking references from the old generation
- * to the young generation. I plan to track this at the field level, as
- * it is both simple and avoids challenges related to scanning big arrays
- * or logical array slicing we might face with object-level tracking.
+ * to the young generation. I intend to track this at the field level so
+ * we can work with parts of a large array. My current plan is to use a
+ * hashtable indexing small 'pages' of fields to a bitfield. 
  *
- * A viable option is to reuse the context-level 'mark' space to track
- * fields written in the old generation. This should work but requires
- * a cost proportional to the size of the old generation. I'd prefer to
- * have a precise write set per thread - a linear cost relative to the
- * work performed by our mutator.
+ * Assuming the table is half-filled, this has worst case 12.5% overhead
+ * on a 32-bit system or 6.25% overhead on a 64-bit system. The normal 
+ * case is considerably better because we expect most old objects to be
+ * relatively stable. Scanning the small 'pages' should also improve 
+ * cache coherence during the GC phase.
  *
- * To improve cache coherence, I'll actually hash the upper part of the
- * address and use a small bitfield to track writes within a tiny page.
+ * This table is considered a binary for GC purposes, excepting the
+ * `next` field which must also be marked.
  */
-typedef wikrt_v wikrt_ws; // for now, using an object in context.
+typedef struct wikrt_wsd {
+    wikrt_n page;
+    wikrt_n bits;
+} wikrt_wsd;
+typedef struct wikrt_ws {
+    wikrt_o     otype_ws;   // == WIKRT_OTYPE_WS, no compact data
+    wikrt_v     next;       // for cheap merges upon promotion
+    wikrt_z     size;       // buffer size
+    wikrt_z     fill;       // element count
+    wikrt_wsd   data[];     // data, adjacent to the header.
+} wikrt_ws;
 
 
 /** Multi-Threading and Garbage Collection
@@ -356,30 +369,44 @@ typedef struct wikrt_thread {
     wikrt_a start;  // first reserved address
     wikrt_a end;    // last reserved address
     wikrt_a gen;    // end of survivor generation
-    wikrt_a end;    // last reserved address
-
     wikrt_a stop;   // allocation cap (for GC, reserves space for marking)
     wikrt_a alloc;  // current allocator
 
     // Write Set for Generational GC.
-    wikrt_ws writes;
+    wikrt_ws* writes;
 
     // Tasks to Perform.
-    wikrt_v ready;    // tasks we can work on now
-    wikrt_v waiting;  // tasks with dependencies
+    wikrt_v ready;      // tasks we can work on now
+    wikrt_v pending;    // tasks recently allocated
+    wikrt_v waiting;    // tasks awaiting promotion
  
     // Local Memory Statistics
     uint64_t gc_bytes_processed;
     uint64_t gc_bytes_collected;
+
+    // Effort Tracking
+    uint64_t time;   // 
+    int64_t  effort; // may underflow
 } wikrt_thread;
 
+uint64_t wikrt_thread_time(); // microseconds
+    
+/** Streams.
+ * 
+ * A context hosts a collection of binary streams identified by
+ * simple integers (wikrt_s). The set of streams in a context 
+ * essentially form the 'root set' of the context, modulo the
+ * dictionary representation.
+ * 
+ */
 
 /** A context.
  *
- * A context is represented by a contiguous volume of memory with a
- * short header. A context may host multiple threads, so a challenge
- * is how to manage the allocator and perform compactions. A thread
- * can 
+ * A context is represented by a contiguous volume of memory. The
+ * context may host many threads, but the API represents a 'main'
+ * thread. Additionally, a context may host many 'streams', values
+ * representing programs or data to be processed that are logically
+ * binaries but may require extra data under the hood.
  */
 struct wikrt_cx {
     wikrt_env   *env;
@@ -390,9 +417,12 @@ struct wikrt_cx {
     pthread_mutex_t mutex;      // to protect local allocator
     wikrt_thread    cx_mem;     // shared context memory
     wikrt_thread    cx_main;    // resources for API main thread
+
+    // todo:
+    // Streams
+    // Dictionary (i.e. Loaded Definitions)
+    // Stowage tracking
 };
-
-
 
 #define WIKRT_H
 #endif
