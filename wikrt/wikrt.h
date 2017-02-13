@@ -1,43 +1,16 @@
 /** Wikilon Runtime
  *
- * BACKGROUND
+ * This is a runtime for Awelon language code, implemented for Wikilon,
+ * a programmable wiki-inspired development environment. Besides running 
+ * code, Wikilon runtime manages persistent codebases. Applications in
+ * Awelon and Wikilon are leverage RESTful patterns.
  *
- * An Awelon codebase serves as both codebase and database. Applications
- * are modeled in terms of continuous observation and maintenance of the
- * codebase by multiple software and human agents, using patterns such as
- * publish-subscribe or a variant of tuple spaces. Imperative code can be
- * represented as a work order for an external software agent. But most
- * data is stored in the codebase directly, views computed incrementally
- * like a spreadsheet.
+ * The Wikilon Runtime API focuses on binary processing. Structured
+ * representations and indices may be used under the hood, especially 
+ * during evaluation. But the API presents all input and output as 
+ * binary data.
  *
- * Awelon syntax and semantics is very simple, reminiscent of Forth. But
- * rich structure can be presented through editable views. For example,
- * `[38 100 ratio]` might be presented to a user as `38/100`, and editing
- * this to `40/100` would update the source to `[40 100 ratio]`. Editable
- * views can support comments, variables, keywords, conventional loops,
- * list comprehensions, infix notations, and namespaces. Views may expand
- * beyond plain text, to support graphical user interfaces or hypermedia.
- * 
- * We might think of views as distinct languages built upon Awelon, albeit
- * with a restriction that every language have a robust decompiler.
- *
- * Importantly, Awelon evaluates via simple, confluent rewriting to Awelon
- * code. Lazy linking and arity annotations ensure human-meaningful words 
- * such as `ratio` may be present in evaluated results. Hence, carefully
- * designed views may be directly evaluated and results presented in the
- * same form. Code becomes more directly accessible to users than it in
- * more conventional application models.
- *
- * Wikilon is a wiki-inspired interface to Awelon. Access through a web
- * service simplifies a lot of challenges surrounding editable views,
- * multi-agent maintenance, indexing, and continuous observation. That
- * said, Wikilon does support import/export of file resources, and it is
- * feasible to develop a Filesystem in Userspace (FUSE) adapter to view
- * and edit code through more conventional tools.
- *
- * Wikilon runtime aims to support core performance requirements for 
- * Wikilon. These include efficient evaluation, incremental computing, 
- * common update patterns, debugging, and resource control.
+ * This runtime is currently implemented only for Linux systems.
  *
  * USAGE
  *
@@ -165,11 +138,11 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * program uses a more sensible representation during evaluation. But
  * Wikilon still presents it as a binary at this API.
  *
- * Streams are given stable identity via small integers. Effectively,
- * you might think of these as registers or variables. Every stream in
- * a context starts empty. There is no special open or allocation step
- * at this layer. Clearing a stream or reading it until empty will 
- * release associated memory resources.
+ * Streams are identified by small natural numbers. Streams have two
+ * primary states: they're either empty or they have some data. You
+ * can simply addend data to any stream except the NULL (0) stream, 
+ * which remains always empty. Clients can use streams similarly to
+ * named registers. 
  *
  * Writes may fail, likely with ENOMEM if the context is full. Reads
  * "fail" if the returned byte count does not match the request, and
@@ -180,8 +153,8 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
 typedef uint64_t wikrt_s;
 bool wikrt_write(wikrt_cx*, wikrt_s, uint8_t const*, size_t);
 size_t wikrt_read(wikrt_cx*, wikrt_s, uint8_t*, size_t);
-bool wikrt_is_empty(wikrt_cx*, wikrt_s);
-void wikrt_clear(wikrt_cx*, wikrt_s);
+bool wikrt_is_empty(wikrt_cx*, wikrt_s); // test if stream is empty
+void wikrt_clear(wikrt_cx*, wikrt_s); // stream is empty after clear
 
 /** Stream Composition
  *

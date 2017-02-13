@@ -477,42 +477,13 @@ We destroy the data but preserve substructure. Because the data has been destroy
 
 ## Active Debugging
 
-Active debugging is an umbrella term for techniques to observe a computation in-progress. These techniques include logging, profiling, breakpoints, and animation of the program. Ideally, active debugging should both be non-invasive and require minimal external configuration.
+Awelon's program rewrite semantics make it relatively easy to observe a computation in progress. Data is visible in the program representation, rather than hidden behind variables that must be queried via debugger. It is feasible to predictably animate evaluation by pausing evaluation and taking snapshots just before linking of specific words, recording a series of 'frames' to render.
 
-In Awelon, active debugging may occur via instrumentation of words, or of `(@gate)` annotations which essentially act as identity words.
+Conventional debugging techniques also apply. 
 
-. That is, a runtime can be configured to log arguments to a word, profile evaluation of a word, or stall evaluation of a word. Usefully, words can be instrumented without intrusive modification of a program. 
+I propose `(trace)` annotation to serve as a basis for conventional printf style debugging. For example, `[message](trace)` would evaluate to simply `[Msg]` but would implicitly copy the message to a second stream. Traced outputs could easily be rendered within the same program by prepending a comment like `[message](a2)d` to the evaluated program.
 
-* stall - prevent further rewrites here
-* trace - record argument(s) into debug log
-* profile - record evaluation statistics
-
-These configurations could generally be composed or conditional.
-
-There are use cases for pseudo-words just for debugging purposes. For this role, I introduce a class of `(@gate)` annotations, such as `(@foo)` or `(@trace)`. I call these annotations 'gates'. Gates have a trivial identity behavior - `[A](@gate) => [A]`. The ability to know at a glance that gates are semantically irrelevant could be convenient for local reasoning about correctness. Gates can serve other useful roles such as rendering hints.
-
-Stalled computations provide implicit 'breakpoints', and stalling may be contagious such that if `P` stalls then `[P]c` or `[P](eval)` stalls. However, stalling is more precise and predictable than breakpoints in conventional development environments. Continuing breakpoints will generally be specified declaratively, using phrases such as 'leftmost `(@foo)` breakpoint' or 'all `bar, baz, qux` breakpoints'. 
-
-Tracing gives us standard 'printf' style debugging. This will copy the traced values, bypassing `(nc)` constraints. Intriguingly, because Awelon code evaluates to Awelon code, we can easily record a trace as a comment in the program output. For example:
-
-        [[Msg1] [Msg2] .. [MsgN]] (@trace.log) d
-
-But we can use more conventional mechanisms like an external console or log, depending on the configuration.
-
-Profiling would aggregate performance statistics over multiple uses of a word. We could potentially profile with gates, too, which might implicitly configure the gate to also perform an `(eval)` operation.
-
-## Program Animation and Time Travel Debugging
-
-Program animation and time-travel debugging is an intriguing possibility with Awelon language made feasible by the intersection of local rewrite semantics and stall gate semantics. Instead of returning to a human programmer when we stall, we can systematically:
-
-* evaluate as far as we can go
-* take a snapshot / checkpoint
-* select, continue breakpoints
-* repeat until no active gates
-
-The resulting animation will be deterministic up to the strategy by which we select breakpoints. Different strategies, like 'continue leftmost' vs. 'prioritize xyzzy breakpoints') will result in different animations, different focus of attention, but the same final result. Conveniently, deterministic evaluation means we can save a lot of space by recording a tiny fraction of checkpoints into a time-index and recomputing the remainder as needed. 
-
-Trace logs can be associated with each frame to place them on the timeline.
+Of course, tracing is invasive and is not ideal for debugging in general. Configuring words or `(@gate)` annotations to operate as breakpoints or frame separators, or even just profiling their use, is much less invasive, but pays for that in management of the debug configuration.
 
 ## Static Typing
 
@@ -599,7 +570,7 @@ An intriguing opportunity for editable views is support for lambdas and let-expr
 
         -> X Y Z; CODE   ==  "X Y Z"(a2)(@λ)d CODE'
 
-When used at the head of a program, the arrow effectively creates a lambda. This syntax also supports let expressions as in `6 7 * -> X; CODE`. On the right hand side, the `"X Y Z"(a2)(@λ)d` fragment is a lambda comment. It allows us to later render the program using the same variable names. 
+When used leftmost in a subprogram the arrow effectively forms a lambda. This syntax also supports local variable expressions as in `6 7 * -> X; CODE`. On the right hand side, the `"X Y Z"(a2)(@λ)d` fragment is a lambda comment. It allows us to later render the program using the same variable names. 
 
 We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with a simple algorithm:
 

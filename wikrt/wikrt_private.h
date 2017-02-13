@@ -31,9 +31,9 @@
  * GC of Secure Hash Resources: I'll need some environment-level counting
  * bloom filters. For now, I could probably just use a fixed size filter.
  *
- * Multi-Process Utilities: use shm_open to manage the ephemeron table.
- * I might need a large random number to name the resource, or perhaps
- * hash the canonical directory name. 
+ * Multi-Process Utilities: use shm_open to create and manage the ephemeron
+ * table. Ephemerons will be tracked via simple counting hashtable. We'll
+ * need to assign a unique ID to each runtime database for this to work.
  */
 
 // Using native sized words.
@@ -132,6 +132,14 @@ static inline wikrt_v wikrt_to_small_nat_op(wikrt_n n) { return (((wikrt_v)(n <<
 static inline wikrt_i wikrt_from_small_int(wikrt_v v) { return (((wikrt_i)v) >> 4); }
 static inline wikrt_v wikrt_to_small_int_val(wikrt_i i) { return (((wikrt_v)(i << 4))|WIKRT_SMALL_INT_VAL); }
 static inline wikrt_v wikrt_to_small_int_op(wikrt_i i) { return (((wikrt_v)(i << 4))|WIKRT_SMALL_INT_OP); }
+
+/** Secure Random Data
+ *
+ * Wikilon Runtime doesn't need entropy for much. But one place it
+ * does need some random data is allocation of the shared memory
+ * ephemeron tables.
+ */
+void wikrt_get_entropy(size_t amt, uint8_t* out);
 
 /** Tagged Objects
  *
@@ -291,13 +299,21 @@ typedef enum wikrt_op
 // List and Array Operations
 } wikrt_op;
 
-
+/** The Environment
+ *
+ * This models the physical machine resources shared by contexts,
+ * including the persistence layer and virtual 'CPUs' in the form
+ * of worker threads.
+ *
+ * 
+ *
+ */
 struct wikrt_env {
-    wikrt_cx        *cx;   // contexts without work available
-//    wikrt_cx        *cxw;   // contexts with work available
-    wikrt_db        *db;    // persistent data resources
+    wikrt_cx        *cx;    // contexts without work available
+    wikrt_cx        *cxw;   // contexts with work available
+    // todo: database and shared memory ephemeron table
+    // todo: add workers thread pool, signaling semaphores
     pthread_mutex_t mutex;  // mutex for environment
-    // todo: add workers thread pool, synchronization elements
 };
 
 static inline void wikrt_env_lock(wikrt_env* e) {
@@ -357,9 +373,9 @@ typedef struct wikrt_ws {
  *   - write log for generational GC
  *   - parallel tasks - pending, waiting
  * 
- * I'm also interested in support for focusing on parallel computations
- * specific to a stream. But I don't consider that to be critical at 
- * this time, not compared to potential background parallelism.
+ * I'm also interested in support for fine-grained control of parallelism
+ * within a context, but it isn't a critical feature at this time. For now,
+ * each thread will simply track a local effort quota.
  */
 typedef struct wikrt_thread { 
     // Context for Shared Memory and Large Allocations
@@ -379,16 +395,17 @@ typedef struct wikrt_thread {
     wikrt_v ready;      // tasks we can work on now
     wikrt_v pending;    // tasks recently allocated
     wikrt_v waiting;    // tasks awaiting promotion
- 
+
     // Local Memory Statistics
     uint64_t gc_bytes_processed;
     uint64_t gc_bytes_collected;
 
-    // Effort Tracking
-    uint64_t time;   // 
-    int64_t  effort; // may underflow
+    // Effort tracking?
+    int64_t  effort_avail;
+    uint64_t time_last;
 } wikrt_thread;
 
+/** current timestamp in microseconds */
 uint64_t wikrt_thread_time(); // microseconds
     
 /** Streams.
@@ -396,13 +413,23 @@ uint64_t wikrt_thread_time(); // microseconds
  * A context hosts a collection of binary streams identified by
  * simple integers (wikrt_s). The set of streams in a context 
  * essentially form the 'root set' of the context, modulo the
- * dictionary representation.
+ * dictionary representation. 
+ *
+ * I would like to guarantee sufficient space to read from the
+ * stream even after the context is full. However, it is not
+ * entirely clear how to go about achieving this efficiently.
  * 
  */
 
 /** A context.
  *
- * A context is represented by a contiguous volume of memory. The
+ * A context is represented by a contiguous volume of memory, and has
+ * a corresponding dictionary.
+ *
+ *  - track 'stream' roots
+ *  - track current dictionary
+ *  - track ephemeron table entries (so we can remove them)
+ *  - 
  * context may host many threads, but the API represents a 'main'
  * thread. Additionally, a context may host many 'streams', values
  * representing programs or data to be processed that are logically
@@ -417,6 +444,8 @@ struct wikrt_cx {
     pthread_mutex_t mutex;      // to protect local allocator
     wikrt_thread    cx_mem;     // shared context memory
     wikrt_thread    cx_main;    // resources for API main thread
+
+    wikrt_s debug_trace;        // stream ID for (trace)
 
     // todo:
     // Streams
