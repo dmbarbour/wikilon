@@ -2,10 +2,12 @@
 #pragma once
 #ifndef WIKRT_H
 
-#include "wikrt.h"
 #include <stdint.h>
 #include <errno.h>
 #include <pthread.h>
+#include <semaphore.h>
+#include <lmdb.h>
+#include "wikrt.h"
 
 /** NOTES
  * 
@@ -45,7 +47,6 @@ typedef wikrt_v  wikrt_n;           // small natural number
 typedef intptr_t wikrt_i;           // small integer number
 typedef wikrt_v  wikrt_z;           // arbitrary size value
 typedef wikrt_v  wikrt_a;           // location in memory
-typedef struct wikrt_db wikrt_db;   // we'll get back to this later
 #define WIKRT_V_MAX  UINTPTR_MAX
 #define WIKRT_Z_MAX  WIKRT_V_MAX
 
@@ -299,18 +300,79 @@ typedef enum wikrt_op
 // List and Array Operations
 } wikrt_op;
 
+/** The Ephemeron Table
+ *
+ * The purpose of the ephemeron table is to prevent GC from touching
+ * resources that are referenced from a context. This is represented
+ * by a fixed size counting bloom filter, accepting a small risk of
+ * false positives that prevent GC of resources not in use. 
+ *
+ * Compared to a conventional counting bloom filter, we expect a lot
+ * of repeat values yet relatively few unique values to be reserved.
+ * So this table is optimized by having relatively few entries with
+ * larger max counts. In the worst case, we just end up designating
+ * a value as uncollectable when we reach the maximum count.
+ *
+ * If we ever scale to more than 10k contexts sharing one database, 
+ * we might need to tweak these sizes. But I doubt we'll scale in
+ * that direction anyway - short-lived computations and flyweight 
+ * context patterns are more likely.
+ */
+typedef struct wikrt_eph {
+    uint16_t        table[(1<<16)];     
+    pthread_mutex_t mutex;              // must be 'robust'
+} wikrt_eph;
+
+/** The Database
+ * 
+ * We mostly use the secure hashes as keys. Lookups for hashes use
+ * the form `hash (60 bits) → hash (300 bits) | data` and using a
+ * constant-time comparison for the latter 300 bits to resist timing
+ * attacks. The hashes are still encoded in base64url form, and the
+ * full hash is used (which is moderate overhead, but acceptable).
+ *
+ * Reference counts have form `11b+3d` to mean referenced eleven times
+ * as a binary (via %secureHash) and three times as a dictionary. The
+ * pending updates and negations may also be tracked to support lazy
+ * and incremental reference counting.
+ *
+ * The 'roots' table is just arbitrary data and updates to it need to
+ * be manually reference counted.
+ *
+ * Additionally, we'll track an ephemeron table using shared memory.
+ */ 
+typedef struct wikrt_db {
+    // LMDB layer resources
+    MDB_env            *env;
+    MDB_dbi             roots;  // name → binary data
+    MDB_dbi             memory; // hash → binary data
+    MDB_dbi             refcts; // hash → reference counts and deltas
+    MDB_dbi             refupd; // partial hashes for pending deltas
+    // to add: persistent memo caches
+
+    // Ephemeron Resources
+    char                eph_shm_id[32]; // for shm_unlink
+    wikrt_eph          *eph;    // memory mapped
+} wikrt_db;
+
+void wikrt_db_eph_lock(wikrt_db*);
+void wikrt_db_eph_unlock(wikrt_db*);
+void wikrt_db_close(wikrt_env*);
+
 /** The Environment
  *
  * This models the physical machine resources shared by contexts,
  * including the persistence layer and virtual 'CPUs' in the form
  * of worker threads.
  *
- * 
- *
+ * I might also want a separate thread to manage GC of the database,
+ * and to periodically re-scan contexts and expire older ephemeron
+ * tables.
  */
 struct wikrt_env {
     wikrt_cx        *cx;    // contexts without work available
     wikrt_cx        *cxw;   // contexts with work available
+    wikrt_db        *db;
     // todo: database and shared memory ephemeron table
     // todo: add workers thread pool, signaling semaphores
     pthread_mutex_t mutex;  // mutex for environment

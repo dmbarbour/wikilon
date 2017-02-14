@@ -169,13 +169,15 @@ Some thoughts:
 
 * plain text internally - I can rewrite 60 bytes base64url to 45 byte binary keys, but the savings would be minor and would not extend to secure hash resources. The plain text format seems more convenient and self explaining in context of external tooling or debugging (`mdb_dump` and similar). So I'll stick to plain text for now.
 
-* reference counting - a good algorithm for long-lived, persistent resources. A precise reference count needs type information that GC understands, such as `3b+11d` meaning "referenced three times as a binary, eleven times as a dictionary", so we know how to interpret a resource. Conservative GC might essentially involve a one-size-fits-all parse algorithm, but should also work well in practice.
+* reference counting - a good algorithm for long-lived, persistent resources. A precise reference count needs type information that GC understands, such as `3b+11d` meaning "referenced three times as a binary, eleven times as a dictionary", so we know how to interpret a resource. Conservative GC would essentially involve a one-size-fits-all parse algorithm (require hashes encode as 60 base64url bytes with a separator) but should also work reasonably well in practice.
 
 * lazy reference counting - reference counts can lag behind updates to root objects. We could model this by tracking an RC deltas table separately from the main RC table, to support incremental GC of resources and perhaps avoid the initial parse and processing of resources that are only briefly referenced. NOTE: since we might actually *receive* resources out-of-order, an RC deltas table could usefully delay positive increfs until a parse can be run.
 
 * ephemeral resources - a context can hold onto a resource that has a zero persistent reference count. I don't want to scan contexts when it's time to GC, especially since they might be spread across many processes. So I'll use a shared memory ephemeron table (likely a simple hash-to-refct table). A shared memory mutex (with the robust option) should be sufficient for performance since I don't expect a lot of contention on this table. It should be sufficient to reference only root values from our contexts.
 
 GC for secure hash resources, and a shared ephemeron table between processes, is perhaps the main requirement for multi-process access. I could (and probably should) use shm_open for the ephemeron table.
+
+I'm concerned that a crashed process might hold indefinitely onto resources. I could try an expiration model, with processes periodically scanning the contexts to maintain the ephemeron tables. But this seems like a problem to solve when it becomes an actual problem.
 
 ## Dictionary Indexing
 

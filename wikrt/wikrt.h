@@ -194,23 +194,26 @@ wikrt_s wikrt_stream_iter(wikrt_cx*, wikrt_s);
  * if the stream is not empty (EADDRINUSE).
  */
 bool wikrt_load_def(wikrt_cx*, wikrt_s, char const* k);
-bool wikrt_save_def(wikrt_cx*, wikrt_s, char const* k); 
+bool wikrt_save_def(wikrt_cx*, wikrt_s, char const* k);
 
 /** Secure Hash Resources
  *
- * Awelon leverages secure hashes to identify binary data resources. 
- * This concept is used for codebase structure sharing, large value
- * stowage (an alternative to virtual memory), and to access external
- * binary data from Awelon code.
- * 
- * Awelon's hash of choice is 360 bit BLAKE2b encoded as 60 characters
- * in base64url. Developers can access this via wikrt_hash or operating
- * on a stream.
+ * Awelon leverages secure hashes to uniquely and globally identify
+ * binary values. This concept is useful for network distributions,
+ * large value stowage (a virtual memory alternative), versioning 
+ * and sharing of entire codebases, and reference to large binary
+ * data from Awelon source code (via %secureHash).
+ *
+ * Awelon uses a 360 bit BLAKE2b secure hash encoded as 60 characters
+ * in base64url. A hash in this form can be computed via wikrt_hash.
  *
  * Wikilon runtime can save and load binary resources by secure hash.
  * Saving a stream returns a secure hash if it succeeds. Loading will
- * retrieve the resource if it is known. Wikilon may garbage collect 
- * resources that don't have a reference from codebase or context.
+ * retrieve the resource only if it is known. However, resources that
+ * are not referenced from the persistent dictionary may be garbage
+ * collected. The wikrt_test_rsc will check to see whether a 'load' 
+ * would work modulo context memory limits to help scan for missing
+ * resources.
  *
  * Note: Secure hashes are bearer tokens, authorizing access to binary
  * data. Systems should resist timing attacks to discover known hashes.
@@ -491,12 +494,14 @@ bool wikrt_write_prelude(wikrt_cx*, wikrt_s);
 
 /** Filesystem-local Persistence
  *
- * Multiple processes may share a database, albeit limited to the
- * same OS kernel because shared memory mutexes and file locks are
- * used. This supports command line utilities and background tasks.
+ * The specified location is used for codebase management, stowage, 
+ * and cached computations. The current implementation uses LMDB for
+ * storage as one large file, and shared memory to track secure hash
+ * resources held by contexts. The same database may be opened from
+ * many environments and processes from a shared Linux kernel.
  *
- * If a process crashes or is killed, it may be necessary to halt
- * all processes sharing a database to ensure locks are reset.
+ * Note: While the runtime attempts to be robust, a crashed process 
+ * may hinder GC of held resources until system reboot.
  */
 bool wikrt_db_open(wikrt_env*, char const* dirPath, size_t dbMaxSize);
 

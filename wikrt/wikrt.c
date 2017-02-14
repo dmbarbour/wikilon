@@ -36,7 +36,7 @@ uint64_t wikrt_thread_time()
     return (usec_sec + usec_nsec);
 }
 
-void wikrt_get_entropy(size_t const amt_req, uint8_t* const out)
+void wikrt_get_entropy(size_t const amt, uint8_t* const out)
 {
     // Obtaining entropy is not efficient, but Wikilon doesn't do
     // this frequently, usually just to initialize a unique ID for
@@ -47,12 +47,12 @@ void wikrt_get_entropy(size_t const amt_req, uint8_t* const out)
         fprintf(stderr, "%s could not open %s for reason %s\n"
             , __FUNCTION__, random_source, strerror(errno));
         abort();
-    }
-    size_t const amt_read = fread(out, 1, amt_req, f);
+    } 
+    size_t const rd = fread(out, 1, amt, f);
     fclose(f);
-    if(amt_read != amt_req) {
-        fprintf(stderr, "%s could only read %d bytes from %s\n"
-            , __FUNCTION__, (int)amt_read, random_source);
+    if(amt != rd) {
+        fprintf(stderr, "%s could only read %d (of %d) bytes from %s\n"
+            , __FUNCTION__, (int)rd, (int)amt, random_source);
         abort();
     }
 }
@@ -94,9 +94,8 @@ void wikrt_env_destroy(wikrt_env* const e)
         abort();
     }
 
-    // todo: flush and close the database
-    // wikrt_db_sync(env);
-
+    wikrt_db_sync(e);
+    wikrt_db_close(e);
     pthread_mutex_destroy(&(e->mutex));
     free(e);
 }

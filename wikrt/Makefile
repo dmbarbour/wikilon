@@ -5,7 +5,7 @@ THREADS := -pthread
 OPT := -O2 -flto
 CFLAGS := $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
-RUNTIME_OBJECTS := wikrt.o futil.o b64.o
+RUNTIME_OBJECTS := wikrt.o futil.o b64.o 
 INSTALL_PREFIX := /usr/local
 
 .PHONY: all lib utils clean install uninstall
@@ -44,14 +44,12 @@ testSuite: testSuite.c wikrt.h libwikrt.so
 	$(CC) -o $@ $< -L. -lwikrt
 
 libwikrt.so: $(RUNTIME_OBJECTS) wikrt.lds
-	$(CC) -o $@ -shared -llmdb -lb2 -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@  $(RUNTIME_OBJECTS)
+	$(CC) -o $@ -shared -llmdb -lb2 -pthread \
+          -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@ \
+          $(RUNTIME_OBJECTS)
 
 # I'll add more files as I need them.
 wikrt.o: wikrt.c wikrt.h wikrt_private.h b64.h
-	$(CC) -o $@ -c $<
-
-# secure random bytes as needed
-entropy.o: entropy.c entropy.h
 	$(CC) -o $@ -c $<
 
 # filesystem utilities
