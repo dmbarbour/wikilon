@@ -41,7 +41,7 @@
     wikrt_set_effort;
 
     wikrt_debug_trace;
-    wikrt_write_prelude;
+    wikrt_load_prelude;
 
     wikrt_db_open;
     wikrt_db_sync;

@@ -3,6 +3,8 @@
 #ifndef WIKRT_H
 
 #include <stdint.h>
+#include <stdbool.h>
+#include <limits.h>
 #include <errno.h>
 #include <pthread.h>
 #include <semaphore.h>
@@ -56,6 +58,9 @@ typedef wikrt_v  wikrt_a;           // location in memory
 #define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
 #define WIKRT_DIR_MODE (mode_t)(WIKRT_FILE_MODE | S_IXUSR | S_IXGRP)
+
+#define WIKRT_WORKER_STACK_MIN (64 * 1024)
+#define WIKRT_WORKER_STACK_SIZE WIKRT_LNBUFF(WIKRT_WORKER_STACK_MIN, PTHREAD_STACK_MIN)
 
 static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 
@@ -310,17 +315,18 @@ typedef enum wikrt_op
  * Compared to a conventional counting bloom filter, we expect a lot
  * of repeat values yet relatively few unique values to be reserved.
  * So this table is optimized by having relatively few entries with
- * larger max counts. In the worst case, we just end up designating
- * a value as uncollectable when we reach the maximum count.
+ * large max counts. In the worst case, we just end up designating
+ * popular values as unforgettable when we reach the maximum count.
  *
- * If we ever scale to more than 10k contexts sharing one database, 
- * we might need to tweak these sizes. But I doubt we'll scale in
- * that direction anyway - short-lived computations and flyweight 
- * context patterns are more likely.
+ * The size chosen below should be adequate for most work loads. It's
+ * a little over a half megabyte of shared memory. We'll deallocate
+ * the shared memory if we properly destroy the context.
  */
+#define WIKRT_EPH_TBL_SIZE (1<<18)
 typedef struct wikrt_eph {
-    uint16_t        table[(1<<16)];     
-    pthread_mutex_t mutex;              // must be 'robust'
+    uint16_t        table[WIKRT_EPH_TBL_SIZE];
+    pthread_mutex_t mutex; // must be 'robust'
+    uint32_t        refct; // process count to support unlink
 } wikrt_eph;
 
 /** The Database
@@ -331,19 +337,19 @@ typedef struct wikrt_eph {
  * attacks. The hashes are still encoded in base64url form, and the
  * full hash is used (which is moderate overhead, but acceptable).
  *
- * Reference counts have form `11b+3d` to mean referenced eleven times
- * as a binary (via %secureHash) and three times as a dictionary. The
- * pending updates and negations may also be tracked to support lazy
- * and incremental reference counting.
+ * Reference counts must track which counts have been processed and
+ * which are latent to support lazy reference counting and loading
+ * of resources top-down rather than bottom-up. They'll also be
+ * formatted using simple text. 
  *
- * The 'roots' table is just arbitrary data and updates to it need to
- * be manually reference counted.
+ * The 'roots' table is just arbitrary data and updates to it must
+ * be manually counted.
  *
  * Additionally, we'll track an ephemeron table using shared memory.
  */ 
 typedef struct wikrt_db {
     // LMDB layer resources
-    MDB_env            *env;
+    MDB_env            *mdb;
     MDB_dbi             roots;  // name → binary data
     MDB_dbi             memory; // hash → binary data
     MDB_dbi             refcts; // hash → reference counts and deltas
@@ -351,12 +357,10 @@ typedef struct wikrt_db {
     // to add: persistent memo caches
 
     // Ephemeron Resources
-    char                eph_shm_id[32]; // for shm_unlink
-    wikrt_eph          *eph;    // memory mapped
+    char                ephid[32]; // identifier for shm_open, shm_unlink
+    wikrt_eph          *eph;       // a shared memory map
 } wikrt_db;
 
-void wikrt_db_eph_lock(wikrt_db*);
-void wikrt_db_eph_unlock(wikrt_db*);
 void wikrt_db_close(wikrt_env*);
 
 /** The Environment
@@ -374,9 +378,17 @@ struct wikrt_env {
     wikrt_cx        *cxw;   // contexts with work available
     wikrt_db        *db;
     // todo: database and shared memory ephemeron table
-    // todo: add workers thread pool, signaling semaphores
-    pthread_mutex_t mutex;  // mutex for environment
+    pthread_mutex_t mutex;  // mutex for environment manipulations
+
+    // workers thread pool and work signaling
+    uint32_t        workers_alloc;  // for increasing thread count
+    uint32_t        workers_max;    // for reducing thread count
+    pthread_cond_t  work_available; // work in cxw or if max<alloc
+    pthread_cond_t  workers_halted; // for safe shutdown
 };
+
+void* wikrt_worker_behavior(void* e); 
+void wikrt_halt_threads(wikrt_env* e);
 
 static inline void wikrt_env_lock(wikrt_env* e) {
     pthread_mutex_lock(&(e->mutex)); }
@@ -390,14 +402,14 @@ static inline void wikrt_env_unlock(wikrt_env* e) {
  * we can work with parts of a large array. My current plan is to use a
  * hashtable indexing small 'pages' of fields to a bitfield. 
  *
- * Assuming the table is half-filled, this has worst case 12.5% overhead
+ * Assuming the table is half filled, this has worst case 12.5% overhead
  * on a 32-bit system or 6.25% overhead on a 64-bit system. The normal 
  * case is considerably better because we expect most old objects to be
- * relatively stable. Scanning the small 'pages' should also improve 
- * cache coherence during the GC phase.
+ * unmodified. All of these tables can be cleared every time we perform
+ * a full context GC, so this also is recoverable space.
  *
- * This table is considered a binary for GC purposes, excepting the
- * `next` field which must also be marked.
+ * It is not difficult to merge write sets to avoid visiting memory more
+ * than once. 
  */
 typedef struct wikrt_wsd {
     wikrt_n page;

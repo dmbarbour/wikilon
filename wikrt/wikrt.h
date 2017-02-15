@@ -115,12 +115,13 @@ void wikrt_cx_reset(wikrt_cx*, char const* dict);
  */
 bool wikrt_cx_copy(wikrt_cx* src, wikrt_cx* dst);
 
-/** Freeze a context for copy on write
+/** Freeze a context for fast logical copy.
  * 
- * Usage is freeze copy* destroy, with the frozen context as the source
- * in the copy. No other actions after freeze are valid. In return, the
- * frozen context supports lightweight logical copies. This offers some
- * advantage in cases where we might copy many times.
+ * A frozen context may be copied or destroyed. Copies of a frozen
+ * context are logical, referencing frozen context memory instead
+ * of replicating it. This makes copies cheap, with copy-on-write
+ * performance properties. Destruction of the frozen context will
+ * be deferred until all references are reset or destroyed.
  */
 void wikrt_cx_freeze(wikrt_cx*);
 
@@ -461,36 +462,33 @@ void wikrt_debug_trace(wikrt_cx*, wikrt_s);
  *
  * A context is single-threaded at this API, but worker threads can
  * help evaluate in parallel, and may even operate in the background
- * until the effort quota is exhausted. Parallelism is controlled by
- * `(par)` annotations and parallel accelerators.
+ * until the effort quota is exhausted. Parallelism is guided by (par)
+ * annotations or some accelerated functions. 
  *
  * Note: while (par) tasks are very lightweight, OS worker threads do
- * require working memory within each context. A megabyte per worker
- * should be sufficient, plus whatever you need for a single-threaded
- * evaluation. The effort quota is also shared by worker threads and
- * must be sufficient to get useful work done.
+ * require independent working memory within a context. Half a megabyte
+ * per worker should be a sufficient baseline, plus whatever space you
+ * would require for a single threaded evaluation.
  */
 void wikrt_env_threadpool(wikrt_env*, uint32_t pool_size);
 
 // TODO:
+// a thread pool supports only local, CPU-layer parallelism
 // low level parallelism: configure GPGPU or OpenCL cloud services
-// high level parallelism: configure cloud distribution for KPNs
+// high level parallelism: configure cloud/mesh networks, KPN acceleration
 
 /** Accelerated Prelude
  *
- * AO is a simple language with a tiny core of primitives. To achieve
- * performance, an AO runtime is expected to *accelerate* a useful set
- * of functions and data types, replacing the naive implementation by
- * optimized forms under the hood. For example, unary natural numbers 
- * are represented by machine words, and natural number arithmetic is
- * implemented using fast CPU arithmetic.
+ * Awelon is a simple language with a very small set of primitives. To
+ * achieve performance, an evaluator must accelerate a set of functions
+ * that are defined in terms of those primitives. Awelon requires that
+ * even simple arithmetic be accelerated in this manner.
  *
- * This runtime will expose its accelerators by simply writing out a
- * suitable dictionary to the specified stream. This is less complete
- * than a standard library, but might be used as a seed for a larger
- * dictionary.
+ * To effectively document this information, we present all accelerated
+ * definitions as a 'prelude' - a small dictionary and viable seed for
+ * user defined dictionaries. 
  */
-bool wikrt_write_prelude(wikrt_cx*, wikrt_s);
+bool wikrt_load_prelude(wikrt_cx*, wikrt_s);
 
 /** Filesystem-local Persistence
  *
@@ -501,7 +499,8 @@ bool wikrt_write_prelude(wikrt_cx*, wikrt_s);
  * many environments and processes from a shared Linux kernel.
  *
  * Note: While the runtime attempts to be robust, a crashed process 
- * may hinder GC of held resources until system reboot.
+ * will not release ephemeral stowage references from shared memory.
+ * This hinders GC of old secure hash resources until system reboot.
  */
 bool wikrt_db_open(wikrt_env*, char const* dirPath, size_t dbMaxSize);
 

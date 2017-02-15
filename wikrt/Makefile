@@ -41,12 +41,12 @@ test: testSuite
 	LD_LIBRARY_PATH=. ./testSuite
 
 testSuite: testSuite.c wikrt.h libwikrt.so 
-	$(CC) -o $@ $< -L. -lwikrt
+	$(CC) -o $@ $< -L. -lwikrt 
 
 libwikrt.so: $(RUNTIME_OBJECTS) wikrt.lds
-	$(CC) -o $@ -shared -llmdb -lb2 -pthread \
-          -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@ \
-          $(RUNTIME_OBJECTS)
+	$(CC) -o $@ $(RUNTIME_OBJECTS) -shared \
+          -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@,--as-needed \
+          -llmdb -lb2 -pthread  
 
 # I'll add more files as I need them.
 wikrt.o: wikrt.c wikrt.h wikrt_private.h b64.h
