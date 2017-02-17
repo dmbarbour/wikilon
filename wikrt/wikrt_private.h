@@ -17,8 +17,8 @@
  * necessary instead of offsets for wikrt_cx_freeze.
  * 
  * Dictionary Names: valid Awelon words up to so many bytes are accepted.
- * Anything else is rewritten via secure hash. Outside of low level 
- * import/export or timing, this should be invisible to our API clients. 
+ * Anything else is aliased via secure hash. This should be invisible to 
+ * our API clients. 
  *
  * Timing Attacks: Secure hashes must resist timing attacks. Expose only
  * first 60 bits or so to timing, compare rest using constant-time method
@@ -70,7 +70,7 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *      b01     tagged objects or actions (header ..data..)
  *      b10     composition cell (B, A) => [B A]
  *      b11     constructor cell (H, T) => [H T :]
- *      `b` bit is 1 for blocks or value words, 0 for inline actions
+ *      `b` bit is 1 for blocks or values words, 0 for inline actions
  *
  * Small Constants (2 bits + b00)
  *
@@ -197,6 +197,18 @@ typedef enum wikrt_otype
 , WIKRT_OTYPE_SLICE     // array slice with offset, size 
 , WIKRT_OTYPE_APPEND    // array join
 } wikrt_otype;
+
+/** Basic Array Structure
+ *
+ * A sized, contiguous list of values. 
+ *
+ * Potentially a unique reference to support in-place update.
+ */
+typedef struct wikrt_array {
+    wikrt_o otype_array;    // WIKRT_ARRAY
+    wikrt_z size;           // element count
+    wikrt_v data[];     
+} wikrt_array;
 
 /** Built-ins (Primitives, Accelerators, Annotations)
  *
@@ -374,7 +386,7 @@ void wikrt_db_close(wikrt_env*);
  * tables.
  */
 struct wikrt_env {
-    wikrt_cx        *cx;    // contexts without work available
+    wikrt_cx        *cxs;   // contexts without work available
     wikrt_cx        *cxw;   // contexts with work available
     wikrt_db        *db;
     // todo: database and shared memory ephemeron table
@@ -389,6 +401,10 @@ struct wikrt_env {
 
 void* wikrt_worker_behavior(void* e); 
 void wikrt_halt_threads(wikrt_env* e);
+
+void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
+void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
+
 
 static inline void wikrt_env_lock(wikrt_env* e) {
     pthread_mutex_lock(&(e->mutex)); }
@@ -407,13 +423,10 @@ static inline void wikrt_env_unlock(wikrt_env* e) {
  * case is considerably better because we expect most old objects to be
  * unmodified. All of these tables can be cleared every time we perform
  * a full context GC, so this also is recoverable space.
- *
- * It is not difficult to merge write sets to avoid visiting memory more
- * than once. 
  */
 typedef struct wikrt_wsd {
-    wikrt_n page;
-    wikrt_n bits;
+    wikrt_n     page;
+    wikrt_n     bits;
 } wikrt_wsd;
 typedef struct wikrt_ws {
     wikrt_o     otype_ws;   // == WIKRT_OTYPE_WS, no compact data
@@ -484,48 +497,82 @@ uint64_t wikrt_thread_time(); // microseconds
     
 /** Streams.
  * 
- * A context hosts a collection of binary streams identified by
- * simple integers (wikrt_s). The set of streams in a context 
- * essentially form the 'root set' of the context, modulo the
- * dictionary representation. 
+ * A context hosts a set of binary streams. A stream is identified by
+ * a simple integer (wikrt_s). A set of streams essentially forms the
+ * root set for a context.
  *
- * I would like to guarantee sufficient space to read from the
- * stream even after the context is full. However, it is not
- * entirely clear how to go about achieving this efficiently.
- * 
+ * Streams are currently indexed in a hash table, but also use a sorted
+ * doubly linked list to support reasonably efficient iteration.
+ *
+ * I'll probably need to add a bunch of fields to track reader state,
+ * e.g. for partial reads of a large word, or pending repetitions of
+ * `:]` at the end of a list. It might also be useful to track content
+ * that cannot be further evaluated.
+ *
  */
+typedef struct wikrt_stream {
+    wikrt_o otype_stream; // stream type, always linear
+    wikrt_s stream_id;    // external ID for the stream
+
+    // sorted, doubly linked list for iteration
+    wikrt_v iter_next;
+    wikrt_v iter_prev;
+
+    // data and evaluation tasks?
+    wikrt_v data;
+} wikrt_stream;
 
 /** A context.
  *
  * A context is represented by a contiguous volume of memory, and has
- * a corresponding dictionary.
+ * a corresponding dictionary. Memory is filled via 'streams', which
+ * represent externally accessible binary data. 
  *
- *  - track 'stream' roots
- *  - track current dictionary
- *  - track ephemeron table entries (so we can remove them)
- *  - 
- * context may host many threads, but the API represents a 'main'
- * thread. Additionally, a context may host many 'streams', values
- * representing programs or data to be processed that are logically
- * binaries but may require extra data under the hood.
+ * A context is associated with a dictionary in persistent storage.
+ * If a dictionary name is an invalid word or is larger than its
+ * secure hash, we'll rewrite it to the secure hash of the name.
+ *
+ * Streams for now are indexed in a hash table, but also use a doubly
+ * linked list to support 
  */
 struct wikrt_cx {
     wikrt_env   *env;
-    wikrt_cx    *cxn; 
-    wikrt_cx    *cxp; 
+    
+    // to attach circular list of contexts in environment
+    wikrt_cx    *cxn;
+    wikrt_cx    *cxp;
 
+    // to attach frozen context
+    wikrt_n      cx_freeze_refct;
+    wikrt_cx*    cx_freeze_parent;
+    bool         cx_frozen;     // prevents GC, writes, etc.
+    
+
+    // parallel computations in shared memory
     pthread_rwlock_t gclock;    // to wait on worker threads
     pthread_mutex_t mutex;      // to protect local allocator
-    wikrt_thread    cx_mem;     // shared context memory
-    wikrt_thread    cx_main;    // resources for API main thread
+    wikrt_thread    memory;     // shared context memory
 
-    wikrt_s debug_trace;        // stream ID for (trace)
+    // Dictionary Data (doubles as a cache line separator)
+    size_t      dict_name_len;  // 0..WIKRT_HASH_SIZE
+    uint8_t     dict_name[WIKRT_HASH_SIZE]; // unique name of dictionary 
+    uint8_t     dict_ver[WIKRT_HASH_SIZE];  // an import/export hash val
+    wikrt_v     words_table;    // cached words in memory
+    wikrt_v     writes_list;    // transactional writes
+
+    // Stream Roots
+    wikrt_s     trace;          // stream ID for (trace)
+    wikrt_v     stream_list;    // for efficient iteration
+    wikrt_v     stream_table;   // for O(1) lookup
+
+    wikrt_thread    main;       // resources for API main thread
 
     // todo:
-    // Streams
-    // Dictionary (i.e. Loaded Definitions)
     // Stowage tracking
 };
+#define WIKRT_SMALL_PAGE_SIZE (1<<9)
+#define WIKRT_LARGE_PAGE_SIZE (1<<15)
+#define WIKRT_CX_HDR_SIZE WIKRT_LNBUFF_POW2(sizeof(wikrt_cx), WIKRT_SMALL_PAGE_SIZE)
 
 #define WIKRT_H
 #endif

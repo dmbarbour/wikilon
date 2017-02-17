@@ -149,6 +149,14 @@ Evaluation doesn't necessarily eliminate uniqueness, e.g. because `(eval)` or `(
 
 List and composition cells might be a special case for mutable objects. We cannot update such objects in place because we lack header bits to track uniqueness, and we lack generational write barriers. But copies also need attention, since they might reference unique objects. We may need to wrap copied lists with a header. I might convert large lists to a shared array upon copy.
 
+### Arrays
+
+Arrays are the most important mutable objects. Given effective acceleration of arrays, we can model many low level algorithms, mostly excepting those that require multi-threaded access to the same array.
+
+I've considered support for 'array buffers' - arrays with some extra space to push/pop data - but I've decided they're better modeled explicitly at the language layer so they have a more robust structure across composition or serialization. Developers could simply fill an array with `0` or `~` or `[]` values then modify it in place.
+
+Array slices are an interesting option, too, enabling lightweight sharing of array data.
+
 ## Persistence and Resources
 
 A challenge I must still consider is how to model persistence and secure hash resources.

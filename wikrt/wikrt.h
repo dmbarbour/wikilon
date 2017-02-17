@@ -55,7 +55,7 @@ typedef struct wikrt_env wikrt_env;
  * A context is single-threaded at this API, but supports multi-tasking
  * via multiple streams, and background parallel evaluations via `(par)`
  * annotations. No thread-local storage is used, so you're free to use
- * the context from multiple threads - just exclusively one at a time.
+ * the context from multiple threads - just exclusively, one at a time.
  *
  * Wikilon uses `errno` to return extra error information when returning
  * `false` in success/fail cases.
@@ -90,13 +90,16 @@ void wikrt_env_destroy(wikrt_env*);
  * A named dictionary is part of the context. This dictionary is used
  * when linking definitions or persistent updates. A web service can
  * provide some access control at this named dictionary level. If the
- * dictionary argument is NULL or empty, a temporary dictionary is
- * used and all commits will fail. 
+ * dictionary argument is NULL or empty, a fresh volatile dictionary 
+ * is used and commits will fail. 
  *
  * This operation may fail and return NULL, most likely because the
  * context cannot be allocated at the requested size. It is highly
- * recommended that a context be at least a few megabytes, and no
- * more than physical memory (favor stowage over swap).
+ * recommended that a context be at least a few megabytes, and never
+ * more than physical memory (favor stowage over disk swap space).
+ *
+ * The client of this API is responsible for access control to the
+ * named dictionary.
  */
 wikrt_cx* wikrt_cx_create(wikrt_env*, char const* dict, size_t);
 
@@ -169,11 +172,15 @@ bool wikrt_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
 
 /** Stream Iteration
  *
- * This function enumerates non-empty streams, returning the next
- * non-empty stream after the specified stream, or returning zero if
- * there are no further non-empty streams. The initial use case is to 
- * clear streams modulo a whitelist after wikrt_cx_copy. But this is
- * potentially useful for debugging, saving a session, etc..
+ * This function enumerates non-empty streams by returning the next
+ * non-empty stream after a given stream identifier, or returning
+ * zero if no further such stream exists. Since the 0 stream is 
+ * always empty, you can start iteration at 0 to progress through
+ * all the streams.
+ *
+ * Stream iteration is potentially useful for saving or debugging
+ * a context, or for clearing space by clearing everything outside
+ * of a whitelist, and so on. 
  */
 wikrt_s wikrt_stream_iter(wikrt_cx*, wikrt_s);
 

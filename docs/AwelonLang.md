@@ -210,7 +210,7 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(@gate)` - symbols for editable views or active debugging 
 * `(=foo)` - reduce code to a known name (quines, loops)
 
-Annotations must have no internally observable effect on a computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, or support useful external observations like debug logs or breakpoint states or a change in how an evaluated result is represented or organized.
+Annotations must have no observable effect within a computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, support useful external observations like debug logs or breakpoint states or a change in how an evaluated result is represented or organized.
 
 Annotations may be introduced and documented on a runtime basis. In case of porting code, runtimes that do not recognize an annotation may ignore it. Long term, we should reach some de-facto standardization on useful annotations.
 
@@ -570,7 +570,7 @@ An intriguing opportunity for editable views is support for lambdas and let-expr
 
         -> X Y Z; CODE   ==  "X Y Z"(a2)(@λ)d CODE'
 
-When used leftmost in a subprogram the arrow effectively forms a lambda. This syntax also supports local variable expressions as in `6 7 * -> X; CODE`. On the right hand side, the `"X Y Z"(a2)(@λ)d` fragment is a lambda comment. It allows us to later render the program using the same variable names. 
+When used leftmost in a subprogram the arrow effectively forms a lambda. This syntax also supports local variable expressions as in `6 7 * -> X; CODE`. On the right hand side, the `"X Y Z"(a2)(@λ)d` fragment is a lambda comment. We need the comment to recover the variable names when later rendering and editing the code, but the specific form is arbitrary.
 
 We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with a simple algorithm:
 
