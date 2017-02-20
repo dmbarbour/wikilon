@@ -153,6 +153,9 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * may fail with ENODATA after exhausting the stream, or with ENOMEM
  * when converting from an under-the-hood representation (which may
  * require a stack).
+ *
+ * It's up to the client to track stream identifiers in use. This API
+ * does not provide any iterators over active stream IDs.
  */
 typedef uint64_t wikrt_s;
 bool wikrt_write(wikrt_cx*, wikrt_s, uint8_t const*, size_t);
@@ -169,20 +172,6 @@ void wikrt_clear(wikrt_cx*, wikrt_s); // stream is empty after clear
  */
 bool wikrt_move(wikrt_cx*, wikrt_s src, wikrt_s dst);
 bool wikrt_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
-
-/** Stream Iteration
- *
- * This function enumerates non-empty streams by returning the next
- * non-empty stream after a given stream identifier, or returning
- * zero if no further such stream exists. Since the 0 stream is 
- * always empty, you can start iteration at 0 to progress through
- * all the streams.
- *
- * Stream iteration is potentially useful for saving or debugging
- * a context, or for clearing space by clearing everything outside
- * of a whitelist, and so on. 
- */
-wikrt_s wikrt_stream_iter(wikrt_cx*, wikrt_s);
 
 /** Codebase Access and Update
  *

@@ -134,20 +134,19 @@ void wikrt_worker_loop(wikrt_env* const e)
     pthread_mutex_lock(&(e->mutex));
     while(e->workers_max >= e->workers_alloc) {
         // perform available work continuously, rotating through contexts
-        fprintf(stderr, "%s todo: perform work\n", __FUNCTION__);
+        fprintf(stderr, "%s todo: perform work!\n", __FUNCTION__);
 
         // wait for more work to become available        
         pthread_cond_wait(&(e->work_available), &(e->mutex));
     }
 
     // halt the worker
+    assert(0 < e->workers_alloc);
     --(e->workers_alloc);
     if(0 == e->workers_alloc) {
         pthread_cond_signal(&(e->workers_halted));
     } 
     pthread_mutex_unlock(&(e->mutex));
-    pthread_cond_signal(&(e->work_available)); 
-        // in case another thread needs to halt
 }
 
 void* wikrt_worker_behavior(void* e)
@@ -156,17 +155,19 @@ void* wikrt_worker_behavior(void* e)
     return NULL;
 }
 
+void wikrt_report_work_available(wikrt_cx* cx)
+{
+    pthread_mutex_lock(&(cx->env->mutex));
+}
+
 void wikrt_halt_threads(wikrt_env* e)
 {
     pthread_mutex_lock(&(e->mutex));
     e->workers_max = 0;
+    pthread_cond_broadcast(&(e->work_available));
     if(0 != e->workers_alloc) {
-        pthread_cond_signal(&(e->work_available));
-        int const st = pthread_cond_wait(&(e->workers_halted), &(e->mutex));
-        if(0 != st) {
-            fprintf(stderr, "%s failed to safely halt worker threads\n", __FUNCTION__);
-            abort();
-        }
+        pthread_cond_wait(&(e->workers_halted), &(e->mutex));
+        assert(0 == e->workers_alloc);
     }
     pthread_mutex_unlock(&(e->mutex));
 }
@@ -222,31 +223,83 @@ void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx)
     // addend to a circular linked list
     // assumes exclusive access to *plist
     if(NULL == *plist) {
-        *plist = cx;
-        cx->cxn = cx;
         cx->cxp = cx;
+        cx->cxn = cx;
     } else {
         cx->cxp = (*plist)->cxp;
         cx->cxn = (*plist);
-        (*plist)->cxp->cxn = cx;
-        (*plist)->cxp = cx;
     }
+    cx->cxp->cxn = cx;
+    cx->cxn->cxp = cx;
+    (*plist) = cx;
 }
 void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* const cx)
 {
     // extract from circular linked list
     if(cx == cx->cxn) {
-        assert((*plist) == cx);
+        assert(cx == (*plist));
         (*plist) = NULL;
     } else {
-        cx->cxn->cxp = cx->cxp;
         cx->cxp->cxn = cx->cxn;
+        cx->cxn->cxp = cx->cxp;
         if(cx == (*plist)) {
             (*plist) = (*plist)->cxn;
         }
+        assert(cx != (*plist));
     }
+    cx->cxp = cx;
+    cx->cxn = cx;
 }
 
+void wikrt_cx_signal_work_available(wikrt_cx* cx)
+{
+    // TODO: try to reduce synchronization involved here
+    pthread_mutex_lock(&(cx->env->mutex));
+    if(!(cx->in_env_worklist)) {
+        wikrt_rem_cx(&(cx->env->cxs), cx);
+        wikrt_add_cx(&(cx->env->cxw), cx);
+        cx->in_env_worklist = true;
+    } 
+    pthread_mutex_unlock(&(cx->env->mutex));
+    pthread_cond_broadcast(&(cx->env->work_available));
+}
+
+void wikrt_cx_abort_work(wikrt_cx* cx)
+{
+    // must not be called from a worker thread
+    // waits on all active workers to finish
+    pthread_mutex_lock(&(cx->env->mutex));
+    cx->workers_halt = true;
+    if(0 != cx->worker_count) {
+        pthread_cond_wait(&(cx->workers_done), &(cx->env->mutex));
+        assert(0 == cx->worker_count);
+    }
+    if(cx->in_env_worklist) {
+        wikrt_rem_cx(&(cx->env->cxw), cx);
+        wikrt_add_cx(&(cx->env->cxs), cx);
+        cx->in_env_worklist = false; 
+    }
+    cx->workers_halt = false;
+    pthread_mutex_unlock(&(cx->env->mutex));
+}
+
+static void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name)
+{
+    // Use dict a stable name for the dictionary.
+    size_t const name_len = (NULL == dict_name) ? 0 : strlen(dict_name);
+    size_t const valid_name_len = valid_word_len((uint8_t const*) dict_name, name_len);
+    bool const name_ok = (name_len == valid_name_len) && (name_len <= WIKRT_HASH_SIZE);
+    if(name_ok) {
+        // preserve given name, potentially empty name
+        cx->dict_name_len = name_len;
+        memcpy(cx->dict_name, dict_name, name_len);
+    } else {
+        // alias secure hash to given name
+        cx->dict_name_len = WIKRT_HASH_SIZE;
+        wikrt_hash((char*)(cx->dict_name), (uint8_t const*)dict_name, name_len);
+    }
+    fprintf(stderr, "context with dictionary `%s`\n", (char const*) cx->dict_name); 
+}
 
 
 wikrt_cx* wikrt_cx_create(wikrt_env* const e, char const* const dict_name, size_t const proposed_size)
@@ -259,31 +312,12 @@ wikrt_cx* wikrt_cx_create(wikrt_env* const e, char const* const dict_name, size_
 
     cx->env = e;
     cx->mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-    cx->gclock = (pthread_rwlock_t)PTHREAD_RWLOCK_INITIALIZER;
-
-    // determine a stable name for the dictionary.
-    size_t const name_len = (NULL == dict_name) ? 0 : strlen(dict_name);
-    size_t const valid_name_len = valid_word_len((uint8_t const*) dict_name, name_len);
-    bool const name_ok = (name_len == valid_name_len) && (name_len <= WIKRT_HASH_SIZE);
-    if(0 == name_len) {
-        // volatile, no attached dictionary
-        cx->dict_name_len = 0;
-        cx->dict_name[0] = 0;
-    } else if(name_ok) {
-        // preserve given name
-        cx->dict_name_len = name_len;
-        memcpy(cx->dict_name, dict_name, name_len);
-    } else {
-        // alias secure hash to given name
-        cx->dict_name_len = WIKRT_HASH_SIZE;
-        wikrt_hash((char*)(cx->dict_name), (uint8_t const*)dict_name, name_len);
-    }
-
-    // we'll load the dictionary lazily
-    cx->dict_ver[0] = 0;
+    cx->workers_done = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+    wikrt_cx_set_dict_name(cx, dict_name);
 
     pthread_mutex_lock(&(e->mutex));
     wikrt_add_cx(&(e->cxs), cx);
+    cx->in_env_worklist = false;
     pthread_mutex_unlock(&(e->mutex));
 
     return cx;

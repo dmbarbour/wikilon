@@ -22,7 +22,6 @@
     wikrt_clear;
     wikrt_move;
     wikrt_copy;
-    wikrt_stream_iter;
 
     wikrt_load_def;
     wikrt_save_def;

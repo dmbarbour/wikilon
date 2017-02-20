@@ -330,15 +330,17 @@ typedef enum wikrt_op
  * large max counts. In the worst case, we just end up designating
  * popular values as unforgettable when we reach the maximum count.
  *
- * The size chosen below should be adequate for most work loads. It's
- * a little over a half megabyte of shared memory. We'll deallocate
- * the shared memory if we properly destroy the context.
+ * The size chosen below should be adequate well beyond practical work
+ * loads. It's a little over a half megabyte of shared memory. We'll
+ * deallocate the shared memory via refct when we destroy the context,
+ * but any crashed process will prevent this deallocation.
  */
 #define WIKRT_EPH_TBL_SIZE (1<<18)
 typedef struct wikrt_eph {
     uint16_t        table[WIKRT_EPH_TBL_SIZE];
     pthread_mutex_t mutex; // must be 'robust'
     uint32_t        refct; // process count to support unlink
+    uint32_t        wikrt_api_ver;  
 } wikrt_eph;
 
 /** The Database
@@ -384,13 +386,18 @@ void wikrt_db_close(wikrt_env*);
  * I might also want a separate thread to manage GC of the database,
  * and to periodically re-scan contexts and expire older ephemeron
  * tables.
+ *
+ * Worker threads will cycle through available contexts, those marked
+ * as having work available.
  */
 struct wikrt_env {
-    wikrt_cx        *cxs;   // contexts without work available
-    wikrt_cx        *cxw;   // contexts with work available
-    wikrt_db        *db;
-    // todo: database and shared memory ephemeron table
+    // every context is either in `cxs` or `cxw`
+    wikrt_cx        *cxs;   // contexts attached, passive
+    wikrt_cx        *cxw;   // contexts with obvious work available
     pthread_mutex_t mutex;  // mutex for environment manipulations
+
+    // database and shared memory ephemeron table
+    wikrt_db        *db;
 
     // workers thread pool and work signaling
     uint32_t        workers_alloc;  // for increasing thread count
@@ -401,15 +408,6 @@ struct wikrt_env {
 
 void* wikrt_worker_behavior(void* e); 
 void wikrt_halt_threads(wikrt_env* e);
-
-void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
-void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
-
-
-static inline void wikrt_env_lock(wikrt_env* e) {
-    pthread_mutex_lock(&(e->mutex)); }
-static inline void wikrt_env_unlock(wikrt_env* e) {
-    pthread_mutex_unlock(&(e->mutex)); }
 
 /** Write Set for Generational GC
  *
@@ -501,9 +499,6 @@ uint64_t wikrt_thread_time(); // microseconds
  * a simple integer (wikrt_s). A set of streams essentially forms the
  * root set for a context.
  *
- * Streams are currently indexed in a hash table, but also use a sorted
- * doubly linked list to support reasonably efficient iteration.
- *
  * I'll probably need to add a bunch of fields to track reader state,
  * e.g. for partial reads of a large word, or pending repetitions of
  * `:]` at the end of a list. It might also be useful to track content
@@ -511,12 +506,8 @@ uint64_t wikrt_thread_time(); // microseconds
  *
  */
 typedef struct wikrt_stream {
-    wikrt_o otype_stream; // stream type, always linear
-    wikrt_s stream_id;    // external ID for the stream
-
-    // sorted, doubly linked list for iteration
-    wikrt_v iter_next;
-    wikrt_v iter_prev;
+    wikrt_o otype_stream;   // stream type, always linear
+    wikrt_s stream_id;      // external ID of stream
 
     // data and evaluation tasks?
     wikrt_v data;
@@ -532,33 +523,37 @@ typedef struct wikrt_stream {
  * If a dictionary name is an invalid word or is larger than its
  * secure hash, we'll rewrite it to the secure hash of the name.
  *
- * Streams for now are indexed in a hash table, but also use a doubly
- * linked list to support 
+ * Worker threads will operate in a context until either no work is
+ * available or they've explicitly been requested to stop 
+ * (via workers_halt).
  */
 struct wikrt_cx {
-    wikrt_env   *env;
+    wikrt_env  *env;
     
     // to attach circular list of contexts in environment
-    wikrt_cx    *cxn;
-    wikrt_cx    *cxp;
+    // note: following fields are protected by env->mutex
+    wikrt_cx       *cxn;
+    wikrt_cx       *cxp;
+    bool            in_env_worklist;    // in cxw (opposed to cxs)
+    uint32_t        worker_count;       // count of workers in this thread
+    bool            workers_halt;       // request active workers to halt
+    pthread_cond_t  workers_done;       // signal when (0 == worker_count)
 
-    // to attach frozen context
+    // attach a frozen context
     wikrt_n      cx_freeze_refct;
     wikrt_cx*    cx_freeze_parent;
     bool         cx_frozen;     // prevents GC, writes, etc.
     
-
     // parallel computations in shared memory
-    pthread_rwlock_t gclock;    // to wait on worker threads
-    pthread_mutex_t mutex;      // to protect local allocator
     wikrt_thread    memory;     // shared context memory
+    pthread_mutex_t mutex;      // to protect local allocator
 
-    // Dictionary Data (doubles as a cache line separator)
-    size_t      dict_name_len;  // 0..WIKRT_HASH_SIZE
-    uint8_t     dict_name[WIKRT_HASH_SIZE]; // unique name of dictionary 
-    uint8_t     dict_ver[WIKRT_HASH_SIZE];  // an import/export hash val
+    // Dictionary Data
     wikrt_v     words_table;    // cached words in memory
     wikrt_v     writes_list;    // transactional writes
+    size_t      dict_name_len;  // 0..WIKRT_HASH_SIZE
+    uint8_t     dict_name[WIKRT_HASH_SIZE + 4]; // unique name of dictionary (NUL terminated) 
+    uint8_t     dict_ver[WIKRT_HASH_SIZE + 4];  // an import/export hash val (NUL terminated)
 
     // Stream Roots
     wikrt_s     trace;          // stream ID for (trace)
@@ -568,11 +563,16 @@ struct wikrt_cx {
     wikrt_thread    main;       // resources for API main thread
 
     // todo:
-    // Stowage tracking
+    // Stowage tracking? Or would that be a task, too?
 };
 #define WIKRT_SMALL_PAGE_SIZE (1<<9)
 #define WIKRT_LARGE_PAGE_SIZE (1<<15)
 #define WIKRT_CX_HDR_SIZE WIKRT_LNBUFF_POW2(sizeof(wikrt_cx), WIKRT_SMALL_PAGE_SIZE)
+
+void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
+void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
+void wikrt_cx_signal_work_available(wikrt_cx*);
+void wikrt_cx_abort_work(wikrt_cx*);
 
 #define WIKRT_H
 #endif
