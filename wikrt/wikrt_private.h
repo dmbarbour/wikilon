@@ -469,6 +469,11 @@ typedef struct wikrt_ws {
  * I'm also interested in support for fine-grained control of parallelism
  * within a context, but it isn't a critical feature at this time. For now,
  * each thread will simply track a local effort quota.
+ *
+ * Effort tracking: I'd like to generally preallocate the effort for a few
+ * GC cycles. We can likely estimate based on a previous cycle time, and
+ * prepay for a few GC cycles. The 'cycle' in question might be a survivor
+ * GC cycle rather than the youngest generation.
  */
 typedef struct wikrt_thread { 
     // Context for Shared Memory and Large Allocations
@@ -493,8 +498,9 @@ typedef struct wikrt_thread {
     uint64_t gc_bytes_processed;
     uint64_t gc_bytes_collected;
 
-    // to support effort tracking
-    uint64_t time_last;
+    // effort tracking
+    uint64_t time_last;  // wikrt_thread_time at last allocation
+    uint32_t effort;     // pre-allocated effort for this cycle
 } wikrt_thread;
 
 /** current timestamp in microseconds */

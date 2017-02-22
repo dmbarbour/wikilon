@@ -399,26 +399,17 @@ wikrt_z wikrt_gc_bitfield_size(wikrt_z alloc_space)
 wikrt_z wikrt_compute_alloc_space(wikrt_z const space_total)
 {
     // We must reserve space in our context for three GC bitfields.
-    //
-    // The GC reserve should be about 3 / (128 + 3) of the given space total
-    // on a 64-bit system, or 3 / (64 + 3) on a 32-bit system. But we can 
-    // generally converge on a precise answer dynamically.
-    int effort = 8;
-    wikrt_z gc_reserve = 0;
-    do {
-        wikrt_z const gc_reserve_min = 3 * wikrt_gc_bitfield_size(space_total - gc_reserve);
-        if(gc_reserve == gc_reserve_min) { break; }
-        gc_reserve = gc_reserve_min;
-    } while((effort--) > 0);
+    // 
+    // The GC reserve space is about 3/(128+3) of the total space on a 64 bit
+    // system, or 3/(64+3) on a 32 bit system. But we actually need to round
+    // up a bit to ensure each individual buffer is aligned to the cell size.
+    wikrt_z const denom = (8 * WIKRT_CELLSIZE) + 3;
+    wikrt_z const field = wikrt_cellbuff((space_total + (denom - 1)) / denom);
+    wikrt_z const alloc = (space_total - (3 * field));
 
-    if(0 == effort) {
-        fprintf(stderr, "%s failed to converge on GC reserve for space %llu, best %llu\n"
-            , __FUNCTION__, (unsigned long long) space_total, (unsigned long long) gc_reserve);
-        gc_reserve += 3 * WIKRT_CELLSIZE; // conservatively, extra cell per buffer
-    }
-    wikrt_z const space_alloc = space_total - gc_reserve;
-    assert(space_total >= (space_alloc + 3 * wikrt_gc_bitfield_size(space_alloc)));
-    return space_alloc;
+    // safety and sanity check
+    assert(space_total >= (alloc + (3 * wikrt_gc_bitfield_size(alloc))));
+    return alloc;
 }
 
 void wikrt_cx_alloc_reset(wikrt_cx* cx)
@@ -435,7 +426,8 @@ void wikrt_cx_alloc_reset(wikrt_cx* cx)
         // limit memory use (.stop) based on GC requirements
     wikrt_z const max_cell_count = (cx->memory.end - cx->memory.start) / WIKRT_CELLSIZE;
     wikrt_z const max_usable_space = max_cell_count * WIKRT_CELLSIZE;
-    cx->memory.stop  = cx->memory.start + wikrt_compute_alloc_space(max_usable_space);
+    wikrt_z const alloc_space = wikrt_compute_alloc_space(max_usable_space);
+    cx->memory.stop = cx->memory.start + alloc_space;
 
     // allocation of cx->main from cx->memory will apply lazily
 }
@@ -444,7 +436,7 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 {
     wikrt_cx_interrupt_work(cx);
     if(cx->frozen) {
-        fprintf(stderr, "%s: cannot reset a frozen context\n", __FUNCTION__);
+        fprintf(stderr, "%s: a frozen context cannot be reset\n", __FUNCTION__);
         abort();
     }
 
@@ -469,9 +461,10 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 
 void wikrt_set_effort(wikrt_cx* cx, uint32_t cpu_usec)
 {
-    // I still need to work out how to best track efforts.
-    // For now, just record the available effort and we'll
-    // subtract from it incrementally.
+    // I still need to work out how to best track effort.
+    // Maybe in terms of rewrites, instead of CPU time?
+    //
+    // For now, just record the available effort.
     pthread_mutex_lock(&(cx->mutex));
     cx->effort = cpu_usec;
     pthread_mutex_unlock(&(cx->mutex));
