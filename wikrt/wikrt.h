@@ -155,7 +155,7 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * require a stack).
  *
  * It's up to the client to track stream identifiers in use. This API
- * does not provide any iterators over active stream IDs.
+ * does not provide iteration over active stream IDs.
  */
 typedef uint64_t wikrt_s;
 bool wikrt_write(wikrt_cx*, wikrt_s, uint8_t const*, size_t);
@@ -388,6 +388,8 @@ size_t wikrt_extract_binary(wikrt_cx*, wikrt_s src, size_t amt, wikrt_s dst);
  * 
  * Effort is specified in CPU microseconds, but is not very accurate.
  * Parallel computations may exhaust the effort quota very quickly.
+ *
+ * The default effort is currently 100ms, for a small computation.
  */
 void wikrt_set_effort(wikrt_cx*, uint32_t cpu_usec);
 

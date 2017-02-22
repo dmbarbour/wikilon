@@ -18,8 +18,12 @@ _Static_assert((sizeof(uint8_t) == sizeof(char)),
     "expecting uint8_t* aligns with char*");
 _Static_assert(sizeof(wikrt_ws) == (4*sizeof(wikrt_v)),
     "flexible array members don't work the way I think they should");
-_Static_assert(WIKRT_CX_HDR_SIZE <= WIKRT_LARGE_PAGE_SIZE, 
-    "context header is much too large");
+
+void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
+void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
+void wikrt_cx_signal_work_available(wikrt_cx*);
+void wikrt_cx_interrupt_work(wikrt_cx*);
+void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name);
 
 uint32_t wikrt_api_ver() 
 { 
@@ -77,15 +81,24 @@ void wikrt_hash(char* const h, uint8_t const* const data, size_t const data_size
     b64_encode(hbytes, WIKRT_HASH_BYTES, (uint8_t*) h);
 };
 
-// blacklist is @#[]()<>{}\/,;|&=", SP, C0 (0-31), and DEL
-// BLOCK                                                VALUE
-//  0-31:   forbid everything                           0
-//  32-63:  forbid 34 38 40 41 44 47 59 60 61 62        ~(0x78009344)
-//  64-95:  forbid 64 91 92 93                          ~(0x38000001)
-//  96-127: forbid 123 124 125 127                      ~(0xb8000000)
-//  128+:   forbid everything                           0 0 0 0
+// blacklist is @#[]()<>{}\/,;|&='", SP, C0 (0-31), and DEL
+// and any bytes not permitted in UTF-8 (192, 193, 245-255)
+//
+// BLOCK                                                    VALUE
+//  0-31:   forbid everything                               0
+//  32-63:  forbid 32 34 35 38 39 40 41 44 47 59 60 61 62   ~(0x780093cd)
+//  64-95:  forbid 64 91 92 93                              ~(0x38000001)
+//  96-127: forbid 123 124 125 127                          ~(0xb8000000)
+//  128-159: allow everything                               ~0
+//  160-191: allow everything                               ~0
+//  192-223: forbid 192 193                                 ~3
+//  224-255: forbid 245-255                                 ~(0xffe00000)
+//
+// Scanning for valid word bytes does not ensure we have valid
+// UTF-8, but does ensure we recognize any word stop characters.
 uint32_t const valid_word_char_bits[8] = 
-    { 0, ~(0x78009344), ~(0x38000001), ~(0xb8000000), 0, 0, 0, 0 };
+    {  0, ~(0x780093cd), ~(0x38000001), ~(0xb8000000)
+    , ~0, ~0,            ~3,            ~(0xffe00000) };
 static inline bool is_valid_word_byte(uint8_t u) 
 {
     return (0 != (valid_word_char_bits[ (u >> 5) ] & (1 << (u & 0x1F))));
@@ -97,9 +110,6 @@ static inline size_t valid_word_len(uint8_t const* const src, size_t maxlen)
     while((iter < end) && is_valid_word_byte(*iter)) { ++iter; }
     return (iter - src);
 }
-
-
-
 
 wikrt_env* wikrt_env_create()
 {
@@ -128,6 +138,8 @@ void wikrt_env_destroy(wikrt_env* e)
     pthread_mutex_destroy(&(e->mutex));
     free(e);
 }
+
+wikrt_env* wikrt_cx_env(wikrt_cx* cx) { return cx->env; }
 
 void wikrt_worker_loop(wikrt_env* const e)
 {
@@ -202,11 +214,10 @@ void wikrt_env_threadpool(wikrt_env* e, uint32_t ct)
 
 void wikrt_db_sync(wikrt_env* e)
 {
-    // tell LMDB to tell the OS to
-    // flush pending writes to disk.
+    // tell LMDB to tell the OS to flush pending writes to disk.
     if(NULL != e->db) {
-        int const synchronous_flush = 1;
-        mdb_env_sync(e->db->mdb, synchronous_flush);
+        int const synchronous = 1;
+        mdb_env_sync(e->db->mdb, synchronous);
     }
 }
 
@@ -218,7 +229,7 @@ void wikrt_db_close(wikrt_env* e)
     }
 }
 
-void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx) 
+void wikrt_add_cx_list(wikrt_cx** plist, wikrt_cx* cx) 
 {
     // addend to a circular linked list
     // assumes exclusive access to *plist
@@ -233,7 +244,7 @@ void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx)
     cx->cxn->cxp = cx;
     (*plist) = cx;
 }
-void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* const cx)
+void wikrt_rem_cx_list(wikrt_cx** plist, wikrt_cx* const cx)
 {
     // extract from circular linked list
     if(cx == cx->cxn) {
@@ -251,40 +262,116 @@ void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* const cx)
     cx->cxn = cx;
 }
 
+void wikrt_cx_move_to_env_worklist(wikrt_cx* cx)
+{
+    _Static_assert(WIKRT_ENV_HAS_TWO_CONTEXT_LISTS, "expecting in cxs or cxw");
+    if(!(cx->in_env_worklist)) {
+        wikrt_rem_cx_list(&(cx->env->cxs), cx);
+        wikrt_add_cx_list(&(cx->env->cxw), cx);
+        cx->in_env_worklist = true;
+    } 
+}
+
 void wikrt_cx_signal_work_available(wikrt_cx* cx)
 {
     // TODO: try to reduce synchronization involved here
     pthread_mutex_lock(&(cx->env->mutex));
-    if(!(cx->in_env_worklist)) {
-        wikrt_rem_cx(&(cx->env->cxs), cx);
-        wikrt_add_cx(&(cx->env->cxw), cx);
-        cx->in_env_worklist = true;
-    } 
+    wikrt_cx_move_to_env_worklist(cx);
     pthread_mutex_unlock(&(cx->env->mutex));
     pthread_cond_broadcast(&(cx->env->work_available));
 }
 
-void wikrt_cx_abort_work(wikrt_cx* cx)
+void wikrt_cx_remove_from_env_worklist(wikrt_cx* cx)
+{
+    _Static_assert(WIKRT_ENV_HAS_TWO_CONTEXT_LISTS, "expecting in cxs or cxw");
+    if(cx->in_env_worklist) {
+        wikrt_rem_cx_list(&(cx->env->cxw), cx);
+        wikrt_add_cx_list(&(cx->env->cxs), cx);
+        cx->in_env_worklist = false; 
+    }
+}
+
+void wikrt_cx_interrupt_work(wikrt_cx* cx)
 {
     // must not be called from a worker thread
-    // waits on all active workers to finish
     pthread_mutex_lock(&(cx->env->mutex));
-    cx->workers_halt = true;
+    // signal worker threads to halt (checked on GC)
+    cx->workers_halt = true;        
     if(0 != cx->worker_count) {
+        // wait for worker threads to leave this thread
         pthread_cond_wait(&(cx->workers_done), &(cx->env->mutex));
         assert(0 == cx->worker_count);
     }
-    if(cx->in_env_worklist) {
-        wikrt_rem_cx(&(cx->env->cxw), cx);
-        wikrt_add_cx(&(cx->env->cxs), cx);
-        cx->in_env_worklist = false; 
-    }
+    // clear the signal
     cx->workers_halt = false;
+    wikrt_cx_remove_from_env_worklist(cx);
     pthread_mutex_unlock(&(cx->env->mutex));
 }
 
-static void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name)
+
+wikrt_cx* wikrt_cx_create(wikrt_env* const env, char const* dict_name, size_t size)
 {
+    _Static_assert( ((9 * sizeof(wikrt_cx)) < WIKRT_CX_MIN_SIZE),
+        "insufficient minimum context size");
+
+    bool const ok_args = (NULL != env) 
+                      && (size >= WIKRT_CX_MIN_SIZE);
+    if(!ok_args) { 
+        errno = EINVAL; 
+        return NULL; 
+    }
+    wikrt_cx* const cx = malloc(size);
+    if(!cx) { return NULL; }
+
+    // minimally initialize context header
+    (*cx) = (wikrt_cx){0};
+    cx->env = env;
+    cx->size = size;
+    cx->mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    cx->workers_done = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+
+    // add context to environment
+    pthread_mutex_lock(&(cx->env->mutex));
+    wikrt_add_cx_list(&(cx->env->cxs), cx);
+    pthread_mutex_unlock(&(cx->env->mutex));
+
+    // use wikrt_cx_reset to initialize allocators, etc.
+    wikrt_cx_reset(cx, dict_name);
+
+    return cx;
+}
+
+void wikrt_cx_destroy(wikrt_cx* cx)
+{
+    // may survive destruction if frozen
+    pthread_mutex_lock(&(cx->mutex));
+    if(cx->refct > 0) {
+        assert(cx->frozen);
+        --(cx->refct);
+        pthread_mutex_unlock(&(cx->mutex));
+        return; 
+    }
+    pthread_mutex_unlock(&(cx->mutex));
+
+    // clear data, halting activity if any
+    cx->frozen = false; // unfreeze to destroy
+    wikrt_cx_reset(cx, NULL); 
+
+    // remove context from environment
+    pthread_mutex_lock(&(cx->env->mutex));
+    wikrt_rem_cx_list(&(cx->env->cxs), cx);
+    pthread_mutex_unlock(&(cx->env->mutex));
+
+    // recycle allocated context memory
+    free(cx);
+}
+
+
+void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name)
+{
+    _Static_assert((sizeof(cx->dict_name) > WIKRT_HASH_SIZE), 
+        "insufficient dictionary name size");
+
     // Use dict a stable name for the dictionary.
     size_t const name_len = (NULL == dict_name) ? 0 : strlen(dict_name);
     size_t const valid_name_len = valid_word_len((uint8_t const*) dict_name, name_len);
@@ -294,34 +381,104 @@ static void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name)
         cx->dict_name_len = name_len;
         memcpy(cx->dict_name, dict_name, name_len);
     } else {
-        // alias secure hash to given name
+        // alias requested name to a secure hash
         cx->dict_name_len = WIKRT_HASH_SIZE;
         wikrt_hash((char*)(cx->dict_name), (uint8_t const*)dict_name, name_len);
     }
-    fprintf(stderr, "context with dictionary `%s`\n", (char const*) cx->dict_name); 
+    cx->dict_name[cx->dict_name_len] = 0;
+    //fprintf(stderr, "context with dictionary `%s`\n", (char const*) cx->dict_name); 
 }
 
-
-wikrt_cx* wikrt_cx_create(wikrt_env* const e, char const* const dict_name, size_t const proposed_size)
+wikrt_z wikrt_gc_bitfield_size(wikrt_z alloc_space) 
 {
-    size_t const aligned_size = WIKRT_LNBUFF_POW2(proposed_size, WIKRT_LARGE_PAGE_SIZE);
-    bool const size_ok = (WIKRT_CX_HDR_SIZE < proposed_size) && (proposed_size <= aligned_size);
-    if(!size_ok) { errno = ERANGE; return NULL; }
-    wikrt_cx* const cx = aligned_alloc(WIKRT_LARGE_PAGE_SIZE, aligned_size);
-    if(!cx) { return NULL; }
+    wikrt_z const bits = alloc_space / WIKRT_CELLSIZE;      // one bit per cell we mark
+    wikrt_z const bytes = WIKRT_LNBUFF_POW2(bits, 8) / 8;   // round up to bytes
+    return wikrt_cellbuff(bytes);                           // round up to cells
+}
 
-    cx->env = e;
-    cx->mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-    cx->workers_done = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+wikrt_z wikrt_compute_alloc_space(wikrt_z const space_total)
+{
+    // We must reserve space in our context for three GC bitfields.
+    //
+    // The GC reserve should be about 3 / (128 + 3) of the given space total
+    // on a 64-bit system, or 3 / (64 + 3) on a 32-bit system. But we can 
+    // generally converge on a precise answer dynamically.
+    int effort = 8;
+    wikrt_z gc_reserve = 0;
+    do {
+        wikrt_z const gc_reserve_min = 3 * wikrt_gc_bitfield_size(space_total - gc_reserve);
+        if(gc_reserve == gc_reserve_min) { break; }
+        gc_reserve = gc_reserve_min;
+    } while((effort--) > 0);
+
+    if(0 == effort) {
+        fprintf(stderr, "%s failed to converge on GC reserve for space %llu, best %llu\n"
+            , __FUNCTION__, (unsigned long long) space_total, (unsigned long long) gc_reserve);
+        gc_reserve += 3 * WIKRT_CELLSIZE; // conservatively, extra cell per buffer
+    }
+    wikrt_z const space_alloc = space_total - gc_reserve;
+    assert(space_total >= (space_alloc + 3 * wikrt_gc_bitfield_size(space_alloc)));
+    return space_alloc;
+}
+
+void wikrt_cx_alloc_reset(wikrt_cx* cx)
+{
+    cx->main = cx->memory = (wikrt_thread){0};
+    cx->main.cx = cx->memory.cx = cx;
+
+        // allocations must be aligned to a cell buffer  
+    cx->memory.start = wikrt_cellbuff( ((wikrt_a)cx) + sizeof(wikrt_cx) );  
+    cx->memory.end   = ((wikrt_a)cx) + cx->size; // exact
+    cx->memory.gen   = cx->memory.start; // no elder survivors yet
+    cx->memory.alloc = cx->memory.start; // bump pointer allocation
+
+        // limit memory use (.stop) based on GC requirements
+    wikrt_z const max_cell_count = (cx->memory.end - cx->memory.start) / WIKRT_CELLSIZE;
+    wikrt_z const max_usable_space = max_cell_count * WIKRT_CELLSIZE;
+    cx->memory.stop  = cx->memory.start + wikrt_compute_alloc_space(max_usable_space);
+
+    // allocation of cx->main from cx->memory will apply lazily
+}
+
+void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
+{
+    wikrt_cx_interrupt_work(cx);
+    if(cx->frozen) {
+        fprintf(stderr, "%s: cannot reset a frozen context\n", __FUNCTION__);
+        abort();
+    }
+
+    // clear prototype from freeze-copy
+    if(NULL != cx->proto) {
+        wikrt_cx_destroy(cx->proto);
+        cx->proto = NULL;
+    }
+
+    // reset the root values
+    cx->dict_ver[0] = 0;   
+    cx->words_table = 0;
+    cx->writes_list = 0;
+    cx->trace       = 0;
+    cx->streams     = 0;
+    wikrt_cx_alloc_reset(cx);
     wikrt_cx_set_dict_name(cx, dict_name);
 
-    pthread_mutex_lock(&(e->mutex));
-    wikrt_add_cx(&(e->cxs), cx);
-    cx->in_env_worklist = false;
-    pthread_mutex_unlock(&(e->mutex));
-
-    return cx;
+    // set an initial effort quota
+    wikrt_set_effort(cx, WIKRT_CX_DEFAULT_EFFORT);
 }
+
+void wikrt_set_effort(wikrt_cx* cx, uint32_t cpu_usec)
+{
+    // I still need to work out how to best track efforts.
+    // For now, just record the available effort and we'll
+    // subtract from it incrementally.
+    pthread_mutex_lock(&(cx->mutex));
+    cx->effort = cpu_usec;
+    pthread_mutex_unlock(&(cx->mutex));
+}
+
+
+
 
 
 

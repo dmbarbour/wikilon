@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <time.h>
+#include <assert.h>
 #include "wikrt.h"
 
 int tests_performed;
@@ -27,6 +28,12 @@ int main(int argc, char const* const* args)
         return -1;
     }
     wikrt_env_threadpool(e, 2);
+
+    wikrt_cx* const cx = wikrt_cx_create(e, "'test", 4 * 1024 * 1024);
+    assert(e == wikrt_cx_env(cx));
+    wikrt_cx_reset(cx,"test");
+
+    wikrt_cx_destroy(cx);
     wikrt_env_destroy(e);
     
     printf("tests passed: %d of %d\n"

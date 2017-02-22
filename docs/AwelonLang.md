@@ -37,7 +37,7 @@ Awelon's primitive combinators are more convenient than SKI. Apply and bind prov
 
 ## Words
 
-Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@#[]()<>{}\/,;|&="`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large. 
+Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@#[]()<>{}\/,;|&='"`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large. 
 
 A useful subset of words is implicitly defined:
 

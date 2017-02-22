@@ -382,17 +382,23 @@ void wikrt_db_close(wikrt_env*);
  * This models the physical machine resources shared by contexts,
  * including the persistence layer and virtual 'CPUs' in the form
  * of worker threads.
- *
- * I might also want a separate thread to manage GC of the database,
- * and to periodically re-scan contexts and expire older ephemeron
- * tables.
+ * 
+ * All contexts are tracked. I use two circular linked lists, with
+ * one being the list with 'work available' so worker threads don't
+ * need to repeatedly scan passive contexts when searching for work.
+ * The other is essentially a list of passive or single-threaded
+ * contexts. A context may also abort work, forcing it back to the
+ * 
+ * I might need an additional, separate thread to manage GC of the
+ * database. Or I could keep some heuristics and perform this from
+ * whichever threads are working with the database at the time.
  *
  * Worker threads will cycle through available contexts, those marked
  * as having work available.
  */
 struct wikrt_env {
-    // every context is either in `cxs` or `cxw`
-    wikrt_cx        *cxs;   // contexts attached, passive
+    // every context is exclusively in one list
+    wikrt_cx        *cxs;   // single-threaded or passive contexts
     wikrt_cx        *cxw;   // contexts with obvious work available
     pthread_mutex_t mutex;  // mutex for environment manipulations
 
@@ -405,6 +411,8 @@ struct wikrt_env {
     pthread_cond_t  work_available; // work in cxw or if max<alloc
     pthread_cond_t  workers_halted; // for safe shutdown
 };
+// for static assertions, if we break this assumption remove the def
+#define WIKRT_ENV_HAS_TWO_CONTEXT_LISTS 1
 
 void* wikrt_worker_behavior(void* e); 
 void wikrt_halt_threads(wikrt_env* e);
@@ -485,8 +493,7 @@ typedef struct wikrt_thread {
     uint64_t gc_bytes_processed;
     uint64_t gc_bytes_collected;
 
-    // Effort tracking?
-    int64_t  effort_avail;
+    // to support effort tracking
     uint64_t time_last;
 } wikrt_thread;
 
@@ -524,55 +531,60 @@ typedef struct wikrt_stream {
  * secure hash, we'll rewrite it to the secure hash of the name.
  *
  * Worker threads will operate in a context until either no work is
- * available or they've explicitly been requested to stop 
- * (via workers_halt).
+ * available or until interrupted via workers_halt. Each thread has 
+ * its own wikrt_thread, with shared allocations from cx->memory
+ * synchronized via cx->mutex. The main thread is preserved so it
+ * can be used across many API calls.
  */
 struct wikrt_cx {
-    wikrt_env  *env;
+    wikrt_env      *env;
     
-    // to attach circular list of contexts in environment
     // note: following fields are protected by env->mutex
-    wikrt_cx       *cxn;
+    // to support worker threads, etc.
+    wikrt_cx       *cxn;                // circular list of contexts
     wikrt_cx       *cxp;
-    bool            in_env_worklist;    // in cxw (opposed to cxs)
+    bool            in_env_worklist;    // in env->cxw (as opposed to cxs)
     uint32_t        worker_count;       // count of workers in this thread
     bool            workers_halt;       // request active workers to halt
     pthread_cond_t  workers_done;       // signal when (0 == worker_count)
 
-    // attach a frozen context
-    wikrt_n      cx_freeze_refct;
-    wikrt_cx*    cx_freeze_parent;
-    bool         cx_frozen;     // prevents GC, writes, etc.
+    // mutex for content within context
+    pthread_mutex_t mutex;              // to protect local allocator
+
+    // to support frozen contexts
+    wikrt_n         refct;              // references as a frozen context 
+    wikrt_cx*       proto;              // a frozen prototype context 
+    bool            frozen;             // whether this context is frozen
     
     // parallel computations in shared memory
-    wikrt_thread    memory;     // shared context memory
-    pthread_mutex_t mutex;      // to protect local allocator
+    size_t          size;               // initial allocation
+    wikrt_thread    memory;             // shared context memory
+    int64_t         effort;             // available compute effort
 
     // Dictionary Data
-    wikrt_v     words_table;    // cached words in memory
-    wikrt_v     writes_list;    // transactional writes
-    size_t      dict_name_len;  // 0..WIKRT_HASH_SIZE
-    uint8_t     dict_name[WIKRT_HASH_SIZE + 4]; // unique name of dictionary (NUL terminated) 
-    uint8_t     dict_ver[WIKRT_HASH_SIZE + 4];  // an import/export hash val (NUL terminated)
+    size_t          dict_name_len;      // 0..WIKRT_HASH_SIZE
+    uint8_t         dict_name[WIKRT_HASH_SIZE + 4]; // unique name of dictionary (NUL terminated) 
+    uint8_t         dict_ver[WIKRT_HASH_SIZE + 4];  // an import/export hash val (NUL terminated)
+    wikrt_v         words_table;        // cached words in memory
+    wikrt_v         writes_list;        // writes since last commit
 
     // Stream Roots
-    wikrt_s     trace;          // stream ID for (trace)
-    wikrt_v     stream_list;    // for efficient iteration
-    wikrt_v     stream_table;   // for O(1) lookup
-
-    wikrt_thread    main;       // resources for API main thread
+    wikrt_s         trace;              // stream ID for (trace)
+    wikrt_v         streams;            // for O(1) lookup
+    wikrt_thread    main;               // resources for API main thread
 
     // todo:
     // Stowage tracking? Or would that be a task, too?
 };
-#define WIKRT_SMALL_PAGE_SIZE (1<<9)
-#define WIKRT_LARGE_PAGE_SIZE (1<<15)
-#define WIKRT_CX_HDR_SIZE WIKRT_LNBUFF_POW2(sizeof(wikrt_cx), WIKRT_SMALL_PAGE_SIZE)
 
-void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
-void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
-void wikrt_cx_signal_work_available(wikrt_cx*);
-void wikrt_cx_abort_work(wikrt_cx*);
+wikrt_z wikrt_gc_bitfield_size(wikrt_z alloc_space);
+wikrt_z wikrt_compute_alloc_space(wikrt_z space_total); // include GC reserve space
+
+// a sufficient minimum size that we won't have too many problems
+#define WIKRT_CX_MIN_SIZE (1<<14)
+
+// default effort is about 100ms labor
+#define WIKRT_CX_DEFAULT_EFFORT (100 * 1000)
 
 #define WIKRT_H
 #endif
