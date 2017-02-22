@@ -442,6 +442,9 @@ typedef struct wikrt_ws {
     wikrt_wsd   data[];     // data, adjacent to the header.
 } wikrt_ws;
 
+/** Work Pools, Effort Quotas, and Background Parallelism
+ *
+ */
 
 /** Multi-Threading and Garbage Collection
  * 
@@ -532,6 +535,10 @@ typedef struct wikrt_stream {
  * a corresponding dictionary. Memory is filled via 'streams', which
  * represent externally accessible binary data. 
  *
+ * Additionally, each context tracks words loaded from the dictionary.
+ * This supports the transaction modela nd allows for compilation of 
+ * words, and partial GC as the context fills.
+ *
  * A context is associated with a dictionary in persistent storage.
  * If a dictionary name is an invalid word or is larger than its
  * secure hash, we'll rewrite it to the secure hash of the name.
@@ -563,15 +570,15 @@ struct wikrt_cx {
     bool            frozen;             // whether this context is frozen
     
     // parallel computations in shared memory
+    uint32_t        effort;             // available compute effort
     size_t          size;               // initial allocation
     wikrt_thread    memory;             // shared context memory
-    int64_t         effort;             // available compute effort
 
     // Dictionary Data
     size_t          dict_name_len;      // 0..WIKRT_HASH_SIZE
     uint8_t         dict_name[WIKRT_HASH_SIZE + 4]; // unique name of dictionary (NUL terminated) 
     uint8_t         dict_ver[WIKRT_HASH_SIZE + 4];  // an import/export hash val (NUL terminated)
-    wikrt_v         words_table;        // cached words in memory
+    wikrt_v         words_table;        // intern words read in memory
     wikrt_v         writes_list;        // writes since last commit
 
     // Stream Roots
@@ -583,14 +590,22 @@ struct wikrt_cx {
     // Stowage tracking? Or would that be a task, too?
 };
 
-wikrt_z wikrt_gc_bitfield_size(wikrt_z alloc_space);
-wikrt_z wikrt_compute_alloc_space(wikrt_z space_total); // include GC reserve space
-
 // a sufficient minimum size that we won't have too many problems
 #define WIKRT_CX_MIN_SIZE (1<<14)
 
 // default effort is about 100ms labor
 #define WIKRT_CX_DEFAULT_EFFORT (100 * 1000)
+
+wikrt_z wikrt_gc_bitfield_size(wikrt_z alloc_space);
+wikrt_z wikrt_compute_alloc_space(wikrt_z space_total); // include GC reserve space
+
+void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
+void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
+void wikrt_cx_signal_work_available(wikrt_cx*);
+void wikrt_cx_interrupt_work(wikrt_cx*);
+void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name);
+bool wikrt_cx_has_work(wikrt_cx*);
+
 
 #define WIKRT_H
 #endif

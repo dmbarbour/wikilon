@@ -63,6 +63,8 @@ Cyclic definitions are erroneous. Loop behavior must be modeled via fixpoint com
 
 Awelon's dictionary representation is not optimal for direct use by humans. It can be tolerated in small doses. But it is intended more as an import/export format, and for efficient sharing between humans and software agents. Humans will generally observe and influence a dictionary through an editable view, perhaps as a hypermedia web service or mounted into a filesystem.
 
+While a filesystem is not a primary intended medium for dictionaries, an Awelon dictionary file in the file system should use the suffix **.ao** (for 'Awelon Object'). 
+
 *Note:* See *Hierarchical Dictionaries* for more information.
 
 ## Secure Hash Resources
@@ -82,6 +84,7 @@ Awelon language has specialized representations for natural numbers and texts. N
         "
          multi-line texts starts with `" LF` (34 10)
          each line is indented by one space (32)
+         excepting if line is empty `LF LF` (10 10) 
          terminate the text with `LF ~` (10 126) 
         ~
 

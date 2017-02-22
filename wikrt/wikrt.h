@@ -71,6 +71,21 @@ typedef struct wikrt_cx wikrt_cx;
 uint32_t wikrt_api_ver();
 #define WIKRT_API_VER 20170103
 
+/** Accelerated Prelude
+ *
+ * Awelon is a simple language with a very small set of primitives. To
+ * achieve performance, a runtime uses accelerators and annotations. To 
+ * communicate the available annotations and accelerators, this runtime
+ * provides a 'prelude' - a small dictionary in the Awelon import/export
+ * format that may be used to seed other dictionaries or perused by an
+ * interested human. Definitions and documentation included.
+ * 
+ * This is provided as a simple C string, compiled into the runtime.
+ * It shouldn't be larger than a few dozen kilobytes.
+ */
+char const* wikrt_prelude();
+
+
 /** Create a Wikilon environment. 
  *
  * After creation, the environment should be further configured with
@@ -109,7 +124,7 @@ void wikrt_cx_reset(wikrt_cx*, char const* dict);
 /** Copy one context into another. 
  *
  * Copying a context is the primary means of resizing a context that
- * is too small or too large. Additionally, it may prove useful for 
+ * is small or oversized. Additionally, it may prove useful for some 
  * snapshots, forks, or templated computations. Copy may fail (and
  * return false) if the destination is too small (ENOMEM) or was 
  * created for a different environment (EINVAL).
@@ -134,7 +149,7 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** Binary Streams
+/** Binary IO Model
  *
  * Wikilon uses binaries as the primary input and output structure at
  * the API layer - used for updating or accessing the dictionary and
@@ -187,8 +202,8 @@ bool wikrt_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
  *
  * These operations may fail and return false for a variety of reasons
  * like bad key (EKEYREJECTED) or an undefined value (ENOENT) or badly
- * formed data (EBADMSG), or context memory (ENOMEM). Load also fails 
- * if the stream is not empty (EADDRINUSE).
+ * formed data (EBADMSG), or lack of context memory (ENOMEM). Loads 
+ * also fail if the stream is not initially empty (EADDRINUSE).
  */
 bool wikrt_load_def(wikrt_cx*, wikrt_s, char const* k);
 bool wikrt_save_def(wikrt_cx*, wikrt_s, char const* k);
@@ -211,6 +226,8 @@ bool wikrt_save_def(wikrt_cx*, wikrt_s, char const* k);
  * collected. The wikrt_test_rsc will check to see whether a 'load' 
  * would work modulo context memory limits to help scan for missing
  * resources.
+ *
+ * Failure behavior matches load_def, save_def operations.
  *
  * Note: Secure hashes are bearer tokens, authorizing access to binary
  * data. Systems should resist timing attacks to discover known hashes.
@@ -237,17 +254,17 @@ bool wikrt_save_rsc(wikrt_cx*, wikrt_s, char* h);
  * is reported as ESTALE, but running out of space or memory is quite
  * possible, and EROFS is returned if writes are blocked in general.
  *
- * Durability is optional, and causes commit to also sync updates
- * to disk and await acknowledgements from the OS.
+ * Durability is optional, and waits for a successful commit to flush
+ * updates to disk before returning.
  */
 bool wikrt_commit(wikrt_cx*, bool durable);
 
 /** Scan Code for Parse Errors
  * 
- * Awelon language is syntactically very simple. A quick scan can 
+ * Awelon language is syntactically very simple. A linear scan can 
  * reliably determine where and whether a parse error will occur.
  * Given program text, the followng function returns a pass/fail
- * boolean and some data points to help diagnose the error.
+ * boolean and enough data points to quickly diagnose most errors.
  *
  * This is probably sufficient for most use cases, especially since
  * we expect projectional editing techniques so Awelon code is oft
@@ -261,16 +278,13 @@ typedef struct wikrt_parse_data {
 } wikrt_parse_data;
 bool wikrt_parse_code(uint8_t const*, size_t, wikrt_parse_data*);
 
-/** Batch Program Evaluation
+/** Program Evaluation
  * 
- * Awelon evaluation involves rewriting a program to an equivalent
- * program that is closer to normal form, much like `6 * 7` can be
- * rewritten to `42` in arithmetic. Wikilon interprets the binary as 
- * a program and rewrites it as Awelon code. After evalauting the
- * toplevel program, contained blocks are processed in parallel.
- *
- * Under the hood a more suitable representation is used, but this
- * API presents programs, even those under evaluation, as binaries.
+ * Evaluation of Awelon code rewrites a program to an equivalent that
+ * is closer to normal form, like `(6 * 7)` can be rewritten to `42`
+ * in arithmetic. Wikilon interprets the binary stream as containing
+ * a program to evaluate. This function performs a deep, in-place 
+ * evaluation on the program and values represented within it.
  * 
  * Evaluation may halt on resource limits, failing with ETIMEDOUT or
  * ENOMEM. See wikrt_set_effort to control timeouts. But we'll have a
@@ -286,21 +300,20 @@ bool wikrt_eval(wikrt_cx*, wikrt_s);
 
 /** Data Stack Evaluation
  *
- * A common application pattern involves an external agent that reads
- * data from the program, makes decisions, then extends the program by
- * injecting new data and commands. This pattern fits REPLs, monadic
- * effects models, and even some GUI apps. In context of Awelon, the
+ * A common application pattern involves interaction with an external 
+ * agent that reads data computed by a program, makes decisions, then
+ * extends the program by injecting new data and operations. This fits
+ * REPLs, monadic effects models, even some GUI apps. In Awelon, these
  * observations will generally be performed on the "stack", meaning
  * the rightmost data elements of a program.
  *
- * Wikilon supports this pattern by providing a function to separate
- * a few of those data elements from a source program, moving them to
- * another stream where they can be further evaluated, copied, and so
- * on. Minimum evaluation is performed to achieve the move, so the 
- * data itself is not evaluated. 
+ * To support this pattern, Wikilon provides evaluator that moves top 
+ * stack elements from the remainder of the program, enabling the stack
+ * to be evaluated, copied, and viewed independently. This evaluation
+ * is minimal to move the data, so resulting blocks are not evaluated.
  *
- * On failure, nothing is moved but partial evaluation may modify the
- * source. This fails if the destination is not empty (EADDRINUSE) or
+ * On failure, nothing is moved, but partial evaluation may modify the
+ * source. This fails when the destination is not empty (EADDRINUSE) or
  * if there is insufficient data (ENODATA). It may also fail because
  * of evaluation resource limits (ENOMEM, ETIMEDOUT).
  */
@@ -312,7 +325,7 @@ bool wikrt_eval_data(wikrt_cx*, wikrt_s src, uint32_t amt, wikrt_s dst);
  * is a subprogram that cannot be further rewritten by addending the
  * right hand side of a program, for example of form `[args] word` 
  * where the word has arity two. Commands provide a natural boundary
- * for incremental computation, allowing output before a program is
+ * for streaming computation, allowing output before a program is
  * fully represented. 
  *
  *      [proc] commandA => commandB [proc']
@@ -330,66 +343,83 @@ bool wikrt_eval_data(wikrt_cx*, wikrt_s src, uint32_t amt, wikrt_s dst);
  */
 bool wikrt_eval_cmd(wikrt_cx*, wikrt_s src, wikrt_s dst);
 
-
 /** Binary Data Input
  * 
  * A binary in Awelon is represented as a list of natural numbers 0..255.
  *
- *      [12 [0 [1 [32 ~ :]:]:]:](binary)
+ *      [127 [0 [1 [32 ~ :] :] :] :](binary)
  *
- * This is a naive and inefficient representation, without any support
- * for syntactic sugar. Though, there is special support to reference
- * external binary structures via secure hash resource as `%secureHash`.
+ * This is a naive and terribly inefficient representation, of course,
+ * taking roughly eight times as much space as raw binary data. Awelon
+ * doesn't have syntactic sugar for binaries, though it may reference
+ * external binary objects as secure hash resource - `%secureHash`.
  *
- * Any reasonable implementation of Awelon will support an accelerated
+ * However, an implementation of Awelon should support an accelerated
  * representation for binary data under the hood, using arrays of bytes.
- * Wikilon is no exception. Wikilon recognizes the `(binary)` annotation
- * to indicate that a list structure should be formatted as binary data.
- *
- * At this API layer, Wikilon can logically convert a binary stream to 
- * the Awelon list of byte values as described above, but without the
- * inefficient intermediate structure of a naive Awelon representation.
- * Use of wikrt_move can make the data available to other computations.
+ * This allows efficient operations on binary resources and IO. Wikilon
+ * uses the `(binary)` annotation on a list to indicate it should be
+ * encoded using an array of bytes under the hood.
  * 
- * Further conversions, as from binary to texts or vice versa, are left
- * to basic accelerated functions, e.g. an accelerated `utf8-to-text`.
+ * The operation wikrt_reify_binary logically rewrites the binary data
+ * within a stream to the binary value format (an ~8x expansion), but
+ * actually uses a compact representation under the hood. Inputting a
+ * large text might be represented by reifying a binary then applying
+ * another accelerated function (like a utf8-to-text conversion). 
  */
-bool wikrt_stream_to_binary(wikrt_cx*, wikrt_s);
+bool wikrt_reify_binary(wikrt_cx*, wikrt_s);
 
-/** Streaming Binary Data Output
+/** Evaluation of Streaming Binary Data Output
  *
  * Awelon represents binary data as a simple list of byte values, that
  * is natural numbers in the range 0 to 255. However, lists in Awelon
- * may represent unbounded streams via lazy evaluation. The idea here
- * is to extract binary data from a source program, moving available
- * bytes into an output stream and performing evaluation as needed.
+ * may represent unbounded streams via lazy evaluation. The goal here
+ * is to extract binary data from such a list, moving it to the output
+ * stream in small steps as needed.
  *
- * The source must contain a single datum (you can use wikrt_eval_data
- * to separate it from another program). Data extracted is appended to
- * the destination stream and removed from the source.
+ * The input stream must consist of a single Awelon binary list value.
+ * This can be achieved via wikrt_eval_data, assuming binary data type.
+ * Data is incrementally evaluated, extracted, and moved, up to the 
+ * requested amount, translating from the Awelon binary value to the
+ * stream-level binary for efficient output.
  *
- * In each step, we can specify a maximum number of bytes to extract,
- * and we'll return how many were successfully extracted. If these 
- * values differ, we have a failure. Failure may occur if there is no
- * source program (ENOENT) or if the program doesn't evaluate to the
- * binary list (EDOM) or if all available data has been extracted 
- * (ENODATA), or due to resource limits (ENOMEM, ETIMEDOUT).
+ * The return value is how many bytes were actually moved. If this is
+ * less than the request, errno will contain some extra information 
+ * about why we stopped: there is no source binary (ENOENT) or the
+ * type seems wrong (EDOM) or the binary is empty (ENODATA), or due
+ * to evaluation resource limits (ENOMEM, ETIMEDOUT).
  */
-size_t wikrt_extract_binary(wikrt_cx*, wikrt_s src, size_t amt, wikrt_s dst);
+size_t wikrt_eval_binary(wikrt_cx*, wikrt_s src, size_t amt, wikrt_s dst);
+
+/** Parallel Evaluations
+ * 
+ * Background parallelism is possible when partial evaluation functions
+ * (eval_data, eval_cmd, eval_binary) use `(par)` to initiate parallel
+ * computation but the result is not immediately necessary. Background
+ * evaluations will continue until completed or collected or they hit
+ * a quota limit. They may force a wait (limited by quota) if you try
+ * to serialize data.
+ *
+ * The function wikrt_eval_par behaves as wikrt_eval, except it returns
+ * successfully only when all parallel computations complete. It will
+ * perform work in the current thread as needed, so even if parallelism
+ * is not enabled we can evaluate scheduled parallel tasks.
+ *
+ * Note: You can use wikrt_env_threadpool to enable parallelism.
+ */
+bool wikrt_eval_par(wikrt_cx*);
 
 /** Effort Quota
  * 
- * To control infinite loops, each context has a finite effort quota
- * for evaluations. When exhausted, evaluation fails with ETIMEDOUT.
- * However, the rewritten program will have a valid state after this
- * failure. You can easily reset the effort quota and continue. If 
- * you set the effort to zero, this will wait for background parallel
- * computations to halt.
- * 
- * Effort is specified in CPU microseconds, but is not very accurate.
- * Parallel computations may exhaust the effort quota very quickly.
+ * To control infinite loops, a context has a finite effort quota. Like
+ * memory, this quota is shared by many computations within the context.
+ * Unlike memory, it's trivial to allocate more effort and continue. 
  *
- * The default effort is currently 100ms, for a small computation.
+ * Setting effort to zero will immediately halt labor within a thread,
+ * while setting a non-zero value may continue background parallelism.
+ * Effort is shared by worker threads, so a parallel computation may
+ * burn through the effort more quickly.
+ *
+ * The effort is currently measured in CPU microseconds.
  */
 void wikrt_set_effort(wikrt_cx*, uint32_t cpu_usec);
 
@@ -456,37 +486,27 @@ void wikrt_debug_trace(wikrt_cx*, wikrt_s);
 // - a clear-profile option, potentially 
 //
 
-/** Parallel Evaluation
+/** Enable Parallel Evaluation
  *
- * A context is single-threaded at this API, but worker threads can
- * help evaluate in parallel, and may even operate in the background
- * until the effort quota is exhausted. Parallelism is guided by (par)
- * annotations or some accelerated functions. 
+ * A context is single-threaded at this API, but worker threads can act
+ * as virtual CPUs to perform parallel computations in the background.
+ * Parallelism is guided by (par) annotations and accelerated functions.
  *
- * Note: while (par) tasks are very lightweight, OS worker threads do
- * require independent working memory within a context. Half a megabyte
- * per worker should be a sufficient baseline, plus whatever space you
- * would require for a single threaded evaluation.
+ * Within a context, parallel tasks are lightweight, and a worker thread
+ * can easily operate on hundreds of tasks. But the the worker itself 
+ * will allocate a little space and perform its own GC where possible,
+ * so you should provide at least half a megabyte per thread beyond what
+ * the single-threaded evaluation requires.
+ *
+ * Adjusting worker counts may be asynchronous, with the actual count
+ * lagging the configured value.
  */
-void wikrt_env_threadpool(wikrt_env*, uint32_t pool_size);
+void wikrt_env_threadpool(wikrt_env*, uint32_t worker_count);
 
 // TODO:
 // a thread pool supports only local, CPU-layer parallelism
 // low level parallelism: configure GPGPU or OpenCL cloud services
 // high level parallelism: configure cloud/mesh networks, KPN acceleration
-
-/** Accelerated Prelude
- *
- * Awelon is a simple language with a very small set of primitives. To
- * achieve performance, an evaluator must accelerate a set of functions
- * that are defined in terms of those primitives. Awelon requires that
- * even simple arithmetic be accelerated in this manner.
- *
- * To effectively document this information, we present all accelerated
- * definitions as a 'prelude' - a small dictionary and viable seed for
- * user defined dictionaries. 
- */
-bool wikrt_load_prelude(wikrt_cx*, wikrt_s);
 
 /** Filesystem-local Persistence
  *

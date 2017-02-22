@@ -5,12 +5,12 @@ THREADS := -pthread
 OPT := -O2 -flto
 CFLAGS := $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
-RUNTIME_OBJECTS := wikrt.o futil.o b64.o 
+RUNTIME_OBJECTS := wikrt.o wikrt_prelude.o futil.o b64.o 
 INSTALL_PREFIX := /usr/local
 
-.PHONY: all lib utils clean install uninstall
+.PHONY: all lib utils clean install uninstall test
 
-all: lib utils test
+all: lib utils prelude.ao test 
 
 lib: libwikrt.so
 
@@ -37,8 +37,17 @@ uninstall:
 	#rm -f $(INSTALL_PREFIX)/bin/linkAO
 	#rm -f $(INSTALL_PREFIX)/bin/runABC
 
-test: testSuite
+test: testSuite 
 	LD_LIBRARY_PATH=. ./testSuite
+
+prelude.ao: printPrelude
+	LD_LIBRARY_PATH=. ./printPrelude > prelude.ao
+
+prelude: printPrelude
+	LD_LIBRARY_PATH=. ./printPrelude
+
+printPrelude: printPrelude.c wikrt.h libwikrt.so
+	$(CC) -o $@ $< -L. -lwikrt 
 
 testSuite: testSuite.c wikrt.h libwikrt.so 
 	$(CC) -o $@ $< -L. -lwikrt 
@@ -50,6 +59,9 @@ libwikrt.so: $(RUNTIME_OBJECTS) wikrt.lds
 
 # I'll add more files as I need them.
 wikrt.o: wikrt.c wikrt.h wikrt_private.h b64.h
+	$(CC) -o $@ -c $<
+
+wikrt_prelude.o: wikrt_prelude.c wikrt.h
 	$(CC) -o $@ -c $<
 
 # filesystem utilities

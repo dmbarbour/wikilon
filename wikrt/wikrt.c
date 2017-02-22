@@ -19,12 +19,6 @@ _Static_assert((sizeof(uint8_t) == sizeof(char)),
 _Static_assert(sizeof(wikrt_ws) == (4*sizeof(wikrt_v)),
     "flexible array members don't work the way I think they should");
 
-void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
-void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
-void wikrt_cx_signal_work_available(wikrt_cx*);
-void wikrt_cx_interrupt_work(wikrt_cx*);
-void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name);
-
 uint32_t wikrt_api_ver() 
 { 
     _Static_assert(WIKRT_API_VER < UINT32_MAX, "bad value for WIKRT_API_VER");
@@ -143,14 +137,22 @@ wikrt_env* wikrt_cx_env(wikrt_cx* cx) { return cx->env; }
 
 void wikrt_worker_loop(wikrt_env* const e)
 {
+
     pthread_mutex_lock(&(e->mutex));
-    while(e->workers_max >= e->workers_alloc) {
+    do {
         // perform available work continuously, rotating through contexts
         fprintf(stderr, "%s todo: perform work!\n", __FUNCTION__);
 
-        // wait for more work to become available        
-        pthread_cond_wait(&(e->work_available), &(e->mutex));
-    }
+        // Note: when work is available, only a single worker is signaled.
+        // So we'll need that worker to signal yet another if yet more work
+        // is available in the context (perhaps heuristically limited based
+        // on available effort and space).
+
+
+        // when we're done, either halt or wait for more work
+        if(e->workers_max < e->workers_alloc) { break; }
+        else { pthread_cond_wait(&(e->work_available), &(e->mutex)); }
+    } while(1);
 
     // halt the worker
     assert(0 < e->workers_alloc);
@@ -274,11 +276,12 @@ void wikrt_cx_move_to_env_worklist(wikrt_cx* cx)
 
 void wikrt_cx_signal_work_available(wikrt_cx* cx)
 {
-    // TODO: try to reduce synchronization involved here
+    // Note: we'll signal one thread only, but each worker may
+    // signal another and so on based on heuristic decisions.    
     pthread_mutex_lock(&(cx->env->mutex));
     wikrt_cx_move_to_env_worklist(cx);
     pthread_mutex_unlock(&(cx->env->mutex));
-    pthread_cond_broadcast(&(cx->env->work_available));
+    pthread_cond_signal(&(cx->env->work_available));
 }
 
 void wikrt_cx_remove_from_env_worklist(wikrt_cx* cx)
@@ -459,15 +462,21 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
     wikrt_set_effort(cx, WIKRT_CX_DEFAULT_EFFORT);
 }
 
-void wikrt_set_effort(wikrt_cx* cx, uint32_t cpu_usec)
+void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
 {
-    // I still need to work out how to best track effort.
-    // Maybe in terms of rewrites, instead of CPU time?
-    //
-    // For now, just record the available effort.
-    pthread_mutex_lock(&(cx->mutex));
-    cx->effort = cpu_usec;
-    pthread_mutex_unlock(&(cx->mutex));
+    if(0 == effort) {
+        wikrt_cx_interrupt_work(cx);
+        cx->effort = 0;
+    } else {
+        // otherwise, adjust the effort and potentially continue
+        pthread_mutex_lock(&(cx->mutex));
+        cx->effort = effort;
+        bool const par_work_available = (0 != cx->memory.ready);
+        pthread_mutex_unlock(&(cx->mutex));
+        if(par_work_available) {
+            wikrt_cx_signal_work_available(cx);
+        }
+    }
 }
 
 

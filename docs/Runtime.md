@@ -53,9 +53,13 @@ I want parallelism with minimal (and very simple) synchronization.
 
 Within a context, each thread should have a nursery - a volume of memory that it controls exclusively and hence may garbage collect *without* synchronization. This might start as, for example, 256kB. Overly large allocations might automatically operate in the shared context memory. When full of cruft, the thread is relocated with a fresh nursery. As the context fills, we can gradually GC old data.
 
-Importantly, a thread must never reference into another thread's nursery.
+Importantly, a thread must never reference into another thread's nursery. Given in-place mutations, tasks computed within a thread cannot robustly be shared until said thread promotes its nursery into the shared memory region. Conversely, a thread cannot consume the 'result' of an evaluation until said result is promoted into shared memory. So each nursery needs to track recently pending tasks and results.
 
-This requires waiting until memory is 'promoted' from the thread nursery to the shared pace before we share any results. Unfortunately, given in-place updates on arrays and so on, it can be difficult to ensure old objects don't reference younger memory without performing a deep promotion of thread memory (that is, promote all data within the nursery). There is reason to delay this promotion, for GC efficiency. Fortunately, we can mitigate latencies by aggressively promoting thread memory if the context has no ready tasks.
+Promotion of a nursery would reduce efficiency of a per-thread survivor space. OTOH, we can heuristically delay promotions based on pending tasks, whether the shared context is already busy, etc. to form a reasonable batch of tasks.
+
+Effort quotas also require some attention. Do I associate efforts with a stream? a task? a context? For now, I'll use the context granularity because it's simple to implement. I might try to work out something more precise, later, if I feel a strong need to do so.
+
+Each task should probably also track its dependencies - new tasks produced - such that we don't need to deep-scan a result to complete the evaluation.
 
 Parallel tasks need special attention. They're referenced from one thread but evaluated wholly or partially from another. We must delay evaluations that require a values from other threads.
 
@@ -67,7 +71,7 @@ So each thread must:
 * queue pending `(par)` tasks
 * queue waiting `(par)` tasks
 
-We could combine the pending/waiting sets, likely, using a single queue. We need only to track for each task which other task (if any) on which it might be waiting, and return it to the end of the queue as needed. But the separation should make it easier to track how much work is readily available, and easier to make progress without rescanning the same nodes too frequently. 
+We can combine the pending/waiting sets, likely, using a single queue. We need only to track for each task which other task (if any) on which it might be waiting, and return it to the end of the queue as needed. But the separation should make it easier to track how much work is readily available, and easier to make progress without rescanning the same nodes too frequently. 
 
 We could also track completed tasks, but that might be rolled into the local write barrier feature.
 

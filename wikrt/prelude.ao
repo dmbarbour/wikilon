@@ -1,0 +1,45 @@
+@language "Awelon"
+@prim: "describing Awelon primitives"
+@prim:a "[B][A]a == A[B]   (apply)"
+@prim:b "[B][A]b == [[B]A] (bind)"
+@prim:c "   [A]c == [A][A] (copy)"
+@prim:d "   [A]d ==        (drop)"
+@prim:nat "
+ 42 == [41 S]
+
+ Awelon defines all natural number words except 0.
+ But 0 and S should usually match the accelerated
+ versions, or performance will suffer.
+~
+@prim:text "
+ "hello" == [104 "ello" :]
+ "" == ~
+
+ "
+  multi-line texts starts with `" LF` (34 10)
+  each line is indented by one space (32)
+  excepting if line is empty `LF LF` (10 10)
+  terminate the text with `LF ~` (10 126)
+ ~
+
+ Awelon supports embedded texts, both inline and
+ multi-line for convenience. The definitions of
+ : (cons) and ~ (nil) are left to the dictionary,
+ but should probably match accelerated versions
+ for performance.
+~
+@anno: "describing supported annotations"
+@anno:nc "(nc) marks value non-copyable (affine type)"
+@anno:nd "(nd) marks value non-droppable (relevant type)"
+@anno:arity "
+ Arity annotations (a2)..(a9)
+ These resist evaluation up to specified arity.
+ For example:
+
+        [B][A](a2) == [B][A]
+     [C][B][A](a3) == [C][B][A]
+
+ Arity annotations control evaluation and linking.
+~
+@prelude.runtime "Wikilon"
+@prelude.version "2017 Feb 22"

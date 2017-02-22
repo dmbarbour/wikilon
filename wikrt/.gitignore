@@ -1,5 +1,6 @@
 *.o
 *.so
 testSuite
+printPrelude
 testdir/
 

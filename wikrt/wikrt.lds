@@ -2,6 +2,7 @@
   global: 
 
     wikrt_api_ver;
+    wikrt_prelude;
 
     wikrt_env_create;
     wikrt_env_destroy;
@@ -33,14 +34,14 @@
     
     wikrt_parse_code;
     wikrt_eval;
+    wikrt_eval_par;
     wikrt_eval_cmd;
     wikrt_eval_data;
-    wikrt_stream_to_binary;
-    wikrt_extract_binary;
+    wikrt_eval_binary;
+    wikrt_reify_binary;
     wikrt_set_effort;
 
     wikrt_debug_trace;
-    wikrt_load_prelude;
 
     wikrt_db_open;
     wikrt_db_sync;
