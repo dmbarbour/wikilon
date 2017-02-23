@@ -81,9 +81,9 @@ uint32_t wikrt_api_ver();
  * interested human. 
  *
  * Definitions and documentation included. Ideally, the prelude should
- * provide enough information to a human to re-implement Awelon. This
- * is provided as a simple C string, compiled into the runtime. It will
- * not be larger than a few dozen kilobytes.
+ * provide enough information to a human to get started with Awelon or
+ * even reimplement it. This is presented as a simple C string, compiled
+ * into the runtime. This should be no larger than a few dozen kilobytes.
  */
 char const* wikrt_prelude();
 

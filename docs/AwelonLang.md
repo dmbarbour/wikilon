@@ -63,7 +63,7 @@ Cyclic definitions are erroneous. Loop behavior must be modeled via fixpoint com
 
 Awelon's dictionary representation is not optimal for direct use by humans. It can be tolerated in small doses. But it is intended more as an import/export format, and for efficient sharing between humans and software agents. Humans will generally observe and influence a dictionary through an editable view, perhaps as a hypermedia web service or mounted into a filesystem.
 
-While a filesystem is not a primary intended medium for dictionaries, an Awelon dictionary file in the file system should use the suffix **.ao** (for 'Awelon Object'). 
+Use suffix **.ao** (Awelon Object) for Awelon dictionary file names.
 
 *Note:* See *Hierarchical Dictionaries* for more information.
 
@@ -202,7 +202,6 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(par)` - request parallel evaluation of computation
 * `(eval)` - request immediate evaluation of computation
 * `(nat)` - assert argument should be a natural number
-* `(bool)` - assert argument is a boolean typed value
 * `(optimize)` - rewrite a function for efficient evaluation
 * `(jit)` - compile a function for efficient evaluation
 * `(stow)` - move large values to disk, load on demand
