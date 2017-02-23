@@ -5,28 +5,31 @@
 @prim:c "   [A]c == [A][A] (copy)"
 @prim:d "   [A]d ==        (drop)"
 @prim:nat "
- 42 == [41 S]
+ Natural Numbers
+
+     42 == [41 S]
 
  Awelon defines all natural number words except 0.
- But 0 and S should usually match the accelerated
- versions, or performance will suffer.
+ Definitions of 0 and S are left to the dictionary.
+ Use accelerated definitions for performance.
 ~
 @prim:text "
- "hello" == [104 "ello" :]
- "" == ~
+ Embedded Texts
 
- "
-  multi-line texts starts with `" LF` (34 10)
-  each line is indented by one space (32)
-  excepting if line is empty `LF LF` (10 10)
-  terminate the text with `LF ~` (10 126)
- ~
+     "hello" == [104 "ello" :]
+     "" == ~
 
- Awelon supports embedded texts, both inline and
- multi-line for convenience. The definitions of
- : (cons) and ~ (nil) are left to the dictionary,
- but should probably match accelerated versions
- for performance.
+     "
+      multi-line texts starts with `" LF` (34 10)
+      each line is indented by one space (32)
+      excepting if line is empty `LF LF` (10 10)
+      terminate the text with `LF ~` (10 126)
+     ~
+
+ Awelon supports embedded texts, both multi-line and
+ inline for convenience. Definitions of : (cons) and
+ ~ (nil) are left to the dictionary. Use accelerated
+ definitions for performance.
 ~
 @anno: "describing supported annotations"
 @anno:nc "(nc) marks value non-copyable (affine type)"

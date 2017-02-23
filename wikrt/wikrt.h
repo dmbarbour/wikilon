@@ -78,10 +78,12 @@ uint32_t wikrt_api_ver();
  * communicate the available annotations and accelerators, this runtime
  * provides a 'prelude' - a small dictionary in the Awelon import/export
  * format that may be used to seed other dictionaries or perused by an
- * interested human. Definitions and documentation included.
- * 
- * This is provided as a simple C string, compiled into the runtime.
- * It shouldn't be larger than a few dozen kilobytes.
+ * interested human. 
+ *
+ * Definitions and documentation included. Ideally, the prelude should
+ * provide enough information to a human to re-implement Awelon. This
+ * is provided as a simple C string, compiled into the runtime. It will
+ * not be larger than a few dozen kilobytes.
  */
 char const* wikrt_prelude();
 
