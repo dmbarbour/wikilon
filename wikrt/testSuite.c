@@ -1,19 +1,12 @@
 
 #include <stdio.h>
-#include <time.h>
 #include <assert.h>
 #include "wikrt.h"
 
+#define MEGABYTES (1000 * 1000)
+
 int tests_performed;
 int tests_passed;
-
-void microsleep(uint32_t time) 
-{
-    struct timespec tm;
-    tm.tv_sec = (time / 1000000);
-    tm.tv_nsec = ((time % 1000000) * 1000);
-    nanosleep(&tm, NULL);
-}
 
 int main(int argc, char const* const* args) 
 {
@@ -28,10 +21,15 @@ int main(int argc, char const* const* args)
         return -1;
     }
     wikrt_env_threadpool(e, 2);
-
-    wikrt_cx* const cx = wikrt_cx_create(e, "'test", 4 * 1024 * 1024);
+    wikrt_db_open(e, "./testdir" , (32 * MEGABYTES));
+    
+    wikrt_cx* const cx = wikrt_cx_create(e, "t/e/s/t", (4 * MEGABYTES));
     assert(e == wikrt_cx_env(cx));
-    wikrt_cx_reset(cx,"test");
+
+    // todo: 
+    //  parses
+    //  write and read binaries
+    //  simple evaluations
 
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(e);

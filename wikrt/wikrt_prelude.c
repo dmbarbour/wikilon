@@ -1,4 +1,7 @@
-
+/* The prelude documents both Awelon and the runtime. I want
+ * information embedded as plain text both within the runtime 
+ * library and most dictionaries. It's only a few kilobytes.
+ */
 #include "wikrt.h"
 
 #define DEF(X,Y) "@" X " " Y "\n"
@@ -30,7 +33,7 @@ DEF("prim:blocks", TEXT(
     B
     L("    [code goes here]")
     B
-    L("Blocks are the values of Awelon, and represent first class")
+    L("Blocks are the values of Awelon. They represent first class")
     L("functions. Semantically, all values in Awelon blocks, even")
     L("natural numbers and texts.")
     B
@@ -136,8 +139,7 @@ DEF("prim:hierarchy", TEXT(
     B
     L("Hierarchical dictionaries are represented by defining symbol")
     L("`@dict` with a secure hash referencing a dictionary patch.")
-    L("Like any word, this symbol may be freely redefined by later")
-    L("patches.")
+    L("Like a word, this symbol may be redefined by later patches.")
     B
     L("Words in a hierarchical dictionary can be referenced using")
     L("a hierarchical namespace qualifier, like `bar@dict`. A full")
@@ -166,14 +168,15 @@ DEF("prim:annotations", TEXT(
     L("    (jit)    request runtime to compile code")
     L("    (=z)     replace [definition of z] by [z]")
     L("    (stow)   [large value] => [$secureHash]")
-    L("    ...")
     B
-    L("Annotations are represented by parenthetical symbols.")
+    L("Annotations are represented by parenthetical symbols and adjust")
+    L("how Awelon code is processed. Annotations can impact performance,")
+    L("support debugging, cause incorrect programs to fail fast, affect")
+    L("aesthetics, and provide rendering hints for editable views.")
     B
-    L("Semantically, annotations have identity behavior. But they may")
-    L("impact performance, support debugging, cause incorrect programs")
-    L("to fail fast, affect aesthetics. In context of editable views,")
-    L("annotations also may provide rendering hints.")
+    L("Annotations must have identity semantics in a formal sense, such")
+    L("that erasing them doesn't modify meaning or observable behavior")
+    L("within a computation. They extend Awelon within that limit.")
     B
     L("Supported annotations are documented under prefix `anno:`.")
     ))
@@ -198,15 +201,44 @@ DEF("prim:acceleration", TEXT(
     L("Accelerated models effectively become performance primitives,")
     L("even if not semantic ones. Awelon relies on this technique.")
     B
-    L("Supported accelerators are documented under prefix `accel:`.")
+    L("Effective use of accelerated models requires they are stable,")
+    L("predictable, reliable. As a convention, we define `foo.accel`")
+    L("to document that `foo` should be accelerated. Awelon systems")
+    L("can robustly verify these documented assumptions.")
     ))
 DEF("prim:secureHash", TEXT(
-
+    L("Secure Hash Resources")
+    B
+    L("    secureHashOfPatch")
+    L("    @b %secureHashOfBinary")
+    L("    @c $secureHashOfCode")
+    L("    @@d secureHashOfDict")
+    B
+    L("Awelon leverages secure hashes to reference immutable binary")
+    L("resources. At the dictionary layer, Awelon uses secure hashes")
+    L("for patches and hierarchical structure. Within code, binary")
+    L("and function values may be referenced via secure hash.")
+    B
+    L("Stowage - [large value](stow) => [$secureHash] - saves data")
+    L("and lazily links it via secure hashes. This enables Awelon")
+    L("to model larger than memory data, effect-free LSM-trees.")
+    B
+    L("A more obvious use case is BLOBs - injecting sound files or")
+    L("textures or similar structures into an Awelon computation.")
+    L("Secure hashes are more convenient and efficient than base64.")
+    B
+    L("An Awelon system essentially operates in a larger environment")
+    L("where secure hashes are defined, shared among dictionaries.")
+    L("The hash is a secure capability, authorizing read access.")
+    B
+    L("The secure hash chosen: 360-bit BLAKE2b encoded in base64url.")
     ))
-// Todo: describe secure hash resources
+// consider potentials docs for:
+//  type safety (foo.type, annotations)
+//  application patterns?
 
 // document annotations
-DEF("anno:", STR("describing annotations"))
+DEF("anno:", STR("assumed annotations"))
 DEF("anno:arity", TEXT(
     L("Arity Annotations (a2)..(a9)")
     B
@@ -245,10 +277,8 @@ DEF("anno:substructure", TEXT(
 // tuples
 // bool, opt, sum, cond.
 // gates
-
-
         
-// document and implement accelerators
+// accelerators
 
 
 

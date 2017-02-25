@@ -334,14 +334,18 @@ typedef enum wikrt_op
  * loads. It's a little over a half megabyte of shared memory. We'll
  * deallocate the shared memory via refct when we destroy the context,
  * but any crashed process will prevent this deallocation.
+ *
+ * Note: currently refct is protected by an external file lock rather
+ * than by the internal mutex. The mutex only protects values within
+ * the shared memory.
  */
 #define WIKRT_EPH_TBL_SIZE (1<<18)
 typedef struct wikrt_eph {
     uint16_t        table[WIKRT_EPH_TBL_SIZE];
     pthread_mutex_t mutex; // must be 'robust'
     uint32_t        refct; // process count to support unlink
-    uint32_t        wikrt_api_ver;  
 } wikrt_eph;
+
 
 /** The Database
  * 
@@ -371,8 +375,9 @@ typedef struct wikrt_db {
     // to add: persistent memo caches
 
     // Ephemeron Resources
-    char                ephid[32]; // identifier for shm_open, shm_unlink
-    wikrt_eph          *eph;       // a shared memory map
+    #define WIKRT_EPH_ID_LEN 32
+    char                ephid[WIKRT_EPH_ID_LEN]; // for shm_open, shm_unlink
+    wikrt_eph          *eph;    // shared memory counting bloom filter
 } wikrt_db;
 
 void wikrt_db_close(wikrt_env*);
@@ -605,6 +610,12 @@ void wikrt_cx_signal_work_available(wikrt_cx*);
 void wikrt_cx_interrupt_work(wikrt_cx*);
 void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name);
 bool wikrt_cx_has_work(wikrt_cx*);
+
+static inline bool wikrt_cx_unshared(wikrt_cx* cx) 
+{
+    return (0 == cx->worker_count) 
+        && !(cx->in_env_worklist);
+}
 
 
 #define WIKRT_H

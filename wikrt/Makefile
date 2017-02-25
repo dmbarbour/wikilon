@@ -5,7 +5,7 @@ THREADS := -pthread
 OPT := -O2 -flto
 CFLAGS := $(THREADS) $(OPT) $(W) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
-RUNTIME_OBJECTS := wikrt.o wikrt_prelude.o futil.o b64.o 
+RUNTIME_OBJECTS := wikrt.o wikrt_db.o wikrt_prelude.o futil.o b64.o utf8.o
 INSTALL_PREFIX := /usr/local
 
 .PHONY: all lib utils clean install uninstall test
@@ -58,10 +58,13 @@ libwikrt.so: $(RUNTIME_OBJECTS) wikrt.lds
           -llmdb -lb2 -pthread  
 
 # I'll add more files as I need them.
-wikrt.o: wikrt.c wikrt.h wikrt_private.h b64.h
+wikrt.o: wikrt.c wikrt.h wikrt_private.h b64.h utf8.h
 	$(CC) -o $@ -c $<
 
 wikrt_prelude.o: wikrt_prelude.c wikrt.h
+	$(CC) -o $@ -c $<
+
+wikrt_db.o: wikrt_db.c wikrt_private.h futil.h
 	$(CC) -o $@ -c $<
 
 # filesystem utilities
@@ -72,4 +75,6 @@ futil.o: futil.c futil.h
 b64.o: b64.c b64.h
 	$(CC) -o $@ -c $<
 
+utf8.o: utf8.c utf8.h
+	$(CC) -o $@ -c $<
 

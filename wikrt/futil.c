@@ -4,31 +4,25 @@
 #include <stdio.h>
 #include "futil.h"
 
-// lockfile to prevent multi-process collisions
-bool lockfile(int* pfd, char const* fn, mode_t mode) 
-{
-    errno = 0;
-    int const fd = open(fn, O_CREAT | O_RDONLY, mode);
-    if ((-1) == fd) {
-        return false;
-    }  
-    if(0 != flock(fd, LOCK_EX|LOCK_NB)) {
-        close(fd);
-        return false;
-    }
-    (*pfd) = fd;
-    return true;
-}
-
 bool mkdirpath(char const* dirPath, mode_t mode)
 {
     errno = 0;
-    if(0 == mkdir(dirPath, mode)) return true;
+    if(0 == mkdir(dirPath, mode)) { 
+        // Directory created!
+        return true;
+    }
 
     int const e = errno; 
-    if(EEXIST == e) return true;  // directory exists already
-    if(ENOENT != e) return false; // directory parent doesn't exist
+    if(EEXIST == e) {
+        // Directory already exists. This is okay, too.
+        return true;  
+    }
+    if(ENOENT != e) { 
+        // Unrecoverable error, e.g. EPERM or ENOTDIR
+        return false;
+    }
 
+    // the parent directory doesn't exist
     // compute parent directory name
     size_t const dplen = strlen(dirPath) + 1;
     char parentDir[dplen];
@@ -36,12 +30,18 @@ bool mkdirpath(char const* dirPath, mode_t mode)
     char *psep = parentDir;
     char *p = parentDir;
     while(*p) {
+        // this is probably less portable than ideal
         if('/' == *p) { psep = p; }
         ++p;
     }
     (*psep) = 0;
 
-    if(!mkdirpath(parentDir, mode)) return false; // parent construction failure
+    if(!mkdirpath(parentDir, mode)) { 
+        // failed to create parent directory.
+        return false; 
+    }
+    
+    // final attempt to create directory 
     return (0 == mkdir(dirPath, mode));
 }
 

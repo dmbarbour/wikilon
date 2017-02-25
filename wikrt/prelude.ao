@@ -16,7 +16,7 @@
 
      [code goes here]
 
- Blocks are the values of Awelon, and represent first class
+ Blocks are the values of Awelon. They represent first class
  functions. Semantically, all values in Awelon blocks, even
  natural numbers and texts.
 
@@ -122,8 +122,7 @@
 
  Hierarchical dictionaries are represented by defining symbol
  `@dict` with a secure hash referencing a dictionary patch.
- Like any word, this symbol may be freely redefined by later
- patches.
+ Like a word, this symbol may be redefined by later patches.
 
  Words in a hierarchical dictionary can be referenced using
  a hierarchical namespace qualifier, like `bar@dict`. A full
@@ -152,14 +151,15 @@
      (jit)    request runtime to compile code
      (=z)     replace [definition of z] by [z]
      (stow)   [large value] => [$secureHash]
-     ...
 
- Annotations are represented by parenthetical symbols.
+ Annotations are represented by parenthetical symbols and adjust
+ how Awelon code is processed. Annotations can impact performance,
+ support debugging, cause incorrect programs to fail fast, affect
+ aesthetics, and provide rendering hints for editable views.
 
- Semantically, annotations have identity behavior. But they may
- impact performance, support debugging, cause incorrect programs
- to fail fast, affect aesthetics. In context of editable views,
- annotations also may provide rendering hints.
+ Annotations must have identity semantics in a formal sense, such
+ that erasing them doesn't modify meaning or observable behavior
+ within a computation. They extend Awelon within that limit.
 
  Supported annotations are documented under prefix `anno:`.
 ~
@@ -184,11 +184,39 @@
  Accelerated models effectively become performance primitives,
  even if not semantic ones. Awelon relies on this technique.
 
- Supported accelerators are documented under prefix `accel:`.
+ Effective use of accelerated models requires they are stable,
+ predictable, reliable. As a convention, we define `foo.accel`
+ to document that `foo` should be accelerated. Awelon systems
+ can robustly verify these documented assumptions.
 ~
 @prim:secureHash "
+ Secure Hash Resources
+
+     secureHashOfPatch
+     @b %secureHashOfBinary
+     @c $secureHashOfCode
+     @@d secureHashOfDict
+
+ Awelon leverages secure hashes to reference immutable binary
+ resources. At the dictionary layer, Awelon uses secure hashes
+ for patches and hierarchical structure. Within code, binary
+ and function values may be referenced via secure hash.
+
+ Stowage - [large value](stow) => [$secureHash] - saves data
+ and lazily links it via secure hashes. This enables Awelon
+ to model larger than memory data, effect-free LSM-trees.
+
+ A more obvious use case is BLOBs - injecting sound files or
+ textures or similar structures into an Awelon computation.
+ Secure hashes are more convenient and efficient than base64.
+
+ An Awelon system essentially operates in a larger environment
+ where secure hashes are defined, shared among dictionaries.
+ The hash is a secure capability, authorizing read access.
+
+ The secure hash chosen: 360-bit BLAKE2b encoded in base64url.
 ~
-@anno: "describing annotations"
+@anno: "assumed annotations"
 @anno:arity "
  Arity Annotations (a2)..(a9)
 

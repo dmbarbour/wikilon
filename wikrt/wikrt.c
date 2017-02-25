@@ -8,6 +8,7 @@
 #include <assert.h>
 
 #include "b64.h"
+#include "utf8.h"
 #include "wikrt_private.h"
 
 _Static_assert((sizeof(wikrt_v) == 4) || (sizeof(wikrt_v) == 8), 
@@ -38,27 +39,6 @@ uint64_t wikrt_thread_time()
     return (usec_sec + usec_nsec);
 }
 
-void wikrt_get_entropy(size_t const amt, uint8_t* const out)
-{
-    // Obtaining entropy is not efficient, but Wikilon doesn't do
-    // this frequently, usually just to initialize a unique ID for
-    // the runtime database.
-    char const* const random_source = "/dev/random";
-    FILE* const f = fopen(random_source, "rb");
-    if(NULL == f) {
-        fprintf(stderr, "%s could not open %s for reason %s\n"
-            , __FUNCTION__, random_source, strerror(errno));
-        abort();
-    } 
-    size_t const rd = fread(out, 1, amt, f);
-    fclose(f);
-    if(amt != rd) {
-        fprintf(stderr, "%s could only read %d (of %d) bytes from %s\n"
-            , __FUNCTION__, (int)rd, (int)amt, random_source);
-        abort();
-    }
-}
-
 void wikrt_hash(char* const h, uint8_t const* const data, size_t const data_size)
 {
     #define WIKRT_HASH_BYTES ((WIKRT_HASH_SIZE * 3) / 4)
@@ -75,8 +55,12 @@ void wikrt_hash(char* const h, uint8_t const* const data, size_t const data_size
     b64_encode(hbytes, WIKRT_HASH_BYTES, (uint8_t*) h);
 };
 
-// blacklist is @#[]()<>{}\/,;|&='", SP, C0 (0-31), and DEL
-// and any bytes not permitted in UTF-8 (192, 193, 245-255)
+// Awelon forbids some ASCII range characters from words.
+// Blacklist: @#[]()<>{}\/,;|&='", SP, C0 (0-31), and DEL.
+//
+// We can also blacklist bytes not permitted in UTF-8 more
+// generally: 192, 193, 245-255. But properly, a separate
+// scan is required for a valid UTF-8 encoding.
 //
 // BLOCK                                                    VALUE
 //  0-31:   forbid everything                               0
@@ -88,17 +72,19 @@ void wikrt_hash(char* const h, uint8_t const* const data, size_t const data_size
 //  192-223: forbid 192 193                                 ~3
 //  224-255: forbid 245-255                                 ~(0xffe00000)
 //
-// Scanning for valid word bytes does not ensure we have valid
-// UTF-8, but does ensure we recognize any word stop characters.
-uint32_t const valid_word_char_bits[8] = 
+// I'm encoding this as a bitfield.
+static uint32_t const valid_word_char_bits[8] = 
     {  0, ~(0x780093cd), ~(0x38000001), ~(0xb8000000)
     , ~0, ~0,            ~3,            ~(0xffe00000) };
 static inline bool is_valid_word_byte(uint8_t u) 
 {
     return (0 != (valid_word_char_bits[ (u >> 5) ] & (1 << (u & 0x1F))));
 }
+
+/* number of valid word characters (assuming valid UTF-8) */
 static inline size_t valid_word_len(uint8_t const* const src, size_t maxlen)
 {
+    // just looking at valid word bytes, not valid utf-8
     uint8_t const* const end = src + maxlen;
     uint8_t const* iter = src;
     while((iter < end) && is_valid_word_byte(*iter)) { ++iter; }
@@ -141,7 +127,7 @@ void wikrt_worker_loop(wikrt_env* const e)
     pthread_mutex_lock(&(e->mutex));
     do {
         // perform available work continuously, rotating through contexts
-        fprintf(stderr, "%s todo: perform work!\n", __FUNCTION__);
+        //fprintf(stderr, "%s todo: perform work!\n", __FUNCTION__);
 
         // Note: when work is available, only a single worker is signaled.
         // So we'll need that worker to signal yet another if yet more work
@@ -212,23 +198,6 @@ void wikrt_env_threadpool(wikrt_env* e, uint32_t ct)
         pthread_cond_signal(&(e->work_available));
     }
     pthread_mutex_unlock(&(e->mutex));
-}
-
-void wikrt_db_sync(wikrt_env* e)
-{
-    // tell LMDB to tell the OS to flush pending writes to disk.
-    if(NULL != e->db) {
-        int const synchronous = 1;
-        mdb_env_sync(e->db->mdb, synchronous);
-    }
-}
-
-void wikrt_db_close(wikrt_env* e)
-{
-    wikrt_db_sync(e);
-    if(NULL != e->db) {
-        fprintf(stderr, "%s todo: close database\n", __FUNCTION__);
-    }
 }
 
 void wikrt_add_cx_list(wikrt_cx** plist, wikrt_cx* cx) 
@@ -377,7 +346,8 @@ void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name)
 
     // Use dict a stable name for the dictionary.
     size_t const name_len = (NULL == dict_name) ? 0 : strlen(dict_name);
-    size_t const valid_name_len = valid_word_len((uint8_t const*) dict_name, name_len);
+    size_t const valid_utf8_len = utf8_strlen((uint8_t const*) dict_name, name_len);
+    size_t const valid_name_len = valid_word_len((uint8_t const*) dict_name, valid_utf8_len);
     bool const name_ok = (name_len == valid_name_len) && (name_len <= WIKRT_HASH_SIZE);
     if(name_ok) {
         // preserve given name, potentially empty name
@@ -389,7 +359,7 @@ void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name)
         wikrt_hash((char*)(cx->dict_name), (uint8_t const*)dict_name, name_len);
     }
     cx->dict_name[cx->dict_name_len] = 0;
-    //fprintf(stderr, "context with dictionary `%s`\n", (char const*) cx->dict_name); 
+    fprintf(stderr, "context with dictionary `%s`\n", (char const*) cx->dict_name); 
 }
 
 wikrt_z wikrt_gc_bitfield_size(wikrt_z alloc_space) 
@@ -415,24 +385,24 @@ wikrt_z wikrt_compute_alloc_space(wikrt_z const space_total)
     return alloc;
 }
 
+
 void wikrt_cx_alloc_reset(wikrt_cx* cx)
 {
+    assert(wikrt_cx_unshared(cx));
     cx->main = cx->memory = (wikrt_thread){0};
     cx->main.cx = cx->memory.cx = cx;
 
-        // allocations must be aligned to a cell buffer  
     cx->memory.start = wikrt_cellbuff( ((wikrt_a)cx) + sizeof(wikrt_cx) );  
     cx->memory.end   = ((wikrt_a)cx) + cx->size; // exact
     cx->memory.gen   = cx->memory.start; // no elder survivors yet
     cx->memory.alloc = cx->memory.start; // bump pointer allocation
 
-        // limit memory use (.stop) based on GC requirements
     wikrt_z const max_cell_count = (cx->memory.end - cx->memory.start) / WIKRT_CELLSIZE;
     wikrt_z const max_usable_space = max_cell_count * WIKRT_CELLSIZE;
     wikrt_z const alloc_space = wikrt_compute_alloc_space(max_usable_space);
     cx->memory.stop = cx->memory.start + alloc_space;
 
-    // allocation of cx->main from cx->memory will apply lazily
+    // allocation of cx->main is performed lazily.
 }
 
 void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
@@ -465,6 +435,7 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
 {
     if(0 == effort) {
+        // forcibly halt background labor for zero effort
         wikrt_cx_interrupt_work(cx);
         cx->effort = 0;
     } else {
@@ -478,9 +449,6 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
         }
     }
 }
-
-
-
 
 
 

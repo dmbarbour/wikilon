@@ -669,9 +669,9 @@ Awelon supports a simple model for hierarchical structure. The motivation is to 
 
 We update the definition of special symbol `@dict` to define a child dictionary. By default, all hierarchical dictionaries are empty. Use of a blank line in place of the secure hash is treated as a synonym for the empty dictionary. As with words, only the final definition of a dictionary symbol applies.
 
-Child dictionaries are referenced indirectly. A word of the form `foo@dict` refers to the meaning of `foo` within `dict`. When linked, if the definition of `foo` in `dict` is `x y z` then `foo@dict` will link as `x@dict y@dict z@dict`. Similarly, we may annotate a block for evaluation in context of a child dictionary, `[x y z]@dict == [x@dict y@dict z@dict]`. Since text is sugar for blocks, we also support `"hello"@dict == [104 "ello" :]@dict`. No space is permitted between a word, block, or text and the `@dict` annotation.
+Child dictionaries are referenced indirectly. A word of the form `foo@dict` refers to the meaning of `foo` within `dict`. When linked, if the definition of `foo` in `dict` is `x y z` then `foo@dict` will link as `x@dict y@dict z@dict`. Similarly, we may annotate a block for evaluation in context of a child dictionary, `[x y z]@dict == [x@dict y@dict z@dict]`. Since text is sugar for blocks, we also support `"hello"@dict == [104 "ello" :]@dict`. 
 
-Deep hierarchical references such as `foo@bar@baz` are possible. These are left-associative, that is `foo@bar` under `baz`. I recommend against such references in source code (cf. Law of Demeter), but such references may be the result of an evaluation. 
+This namespace qualification is second class. No space is permitted between a word, block, or text and the `@dict` annotation. Deep hierarchical references such as `foo@bar@baz` are possible. These are left-associative, that is `foo@bar` under `baz`. I recommend against such references in source code (cf. Law of Demeter), but such references may arise naturally during evaluation. 
 
 A child cannot reference the parent. But parent and child frequently share structure and meaning - a consistent interpretation of numbers, texts, math and utility functions. 
 
