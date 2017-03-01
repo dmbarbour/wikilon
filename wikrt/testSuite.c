@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <assert.h>
+#include <time.h>
 #include "wikrt.h"
 
 #define MEGABYTES (1000 * 1000)
@@ -25,6 +26,9 @@ int main(int argc, char const* const* args)
     
     wikrt_cx* const cx = wikrt_cx_create(e, "t/e/s/t", (4 * MEGABYTES));
     assert(e == wikrt_cx_env(cx));
+
+    struct timespec tm = { .tv_sec = 30, .tv_nsec = 0 };
+    nanosleep(&tm, NULL);
 
     // todo: 
     //  parses

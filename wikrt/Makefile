@@ -55,7 +55,7 @@ testSuite: testSuite.c wikrt.h libwikrt.so
 libwikrt.so: $(RUNTIME_OBJECTS) wikrt.lds
 	$(CC) -o $@ $(RUNTIME_OBJECTS) -shared \
           -Wl,--version-script=wikrt.lds,--strip-all,-soname=$@,--as-needed \
-          -llmdb -lb2 -pthread  
+          -llmdb -lb2 -lrt -pthread 
 
 # I'll add more files as I need them.
 wikrt.o: wikrt.c wikrt.h wikrt_private.h b64.h utf8.h

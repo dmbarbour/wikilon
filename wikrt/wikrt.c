@@ -408,6 +408,7 @@ void wikrt_cx_alloc_reset(wikrt_cx* cx)
 void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 {
     wikrt_cx_interrupt_work(cx);
+
     if(cx->frozen) {
         fprintf(stderr, "%s: a frozen context cannot be reset\n", __FUNCTION__);
         abort();

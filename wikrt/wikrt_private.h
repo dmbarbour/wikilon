@@ -21,8 +21,8 @@
  * our API clients. 
  *
  * Timing Attacks: Secure hashes must resist timing attacks. Expose only
- * first 60 bits or so to timing, compare rest using constant-time method
- * when searching the database.
+ * first 60 bits or so to timing. This might be achieved by performing a
+ * partial key search using comparisons, and comparing the rest via scan.
  *
  * Copy on Write: I can introduce wikrt_cx_freeze action to the API such that
  * subsequent copies of a frozen context are logical, shallow, copy-on-write
@@ -320,62 +320,59 @@ typedef enum wikrt_op
 /** The Ephemeron Table
  *
  * The purpose of the ephemeron table is to prevent GC from touching
- * resources that are referenced from a context. This is represented
- * by a fixed size counting bloom filter, accepting a small risk of
- * false positives that prevent GC of resources not in use. 
+ * resources that are referenced from contexts. This must use shared
+ * memory to support multiple processes sharing one database.
+ * 
+ * An ephemeron table can be adequately represented as a simple hash
+ * table or via a counting bloom filter. The hash table option would
+ * offer excellent precision, but the counting filter simplifies the
+ * management overheads by eliminating need to ever resize the table,
+ * degrading instead towards more false positives.
  *
- * Compared to a conventional counting bloom filter, we expect a lot
- * of repeat values yet relatively few unique values to be reserved.
- * So this table is optimized by having relatively few entries with
- * large max counts. In the worst case, we just end up designating
- * popular values as unforgettable when we reach the maximum count.
- *
- * The size chosen below should be adequate well beyond practical work
- * loads. It's a little over a half megabyte of shared memory. We'll
- * deallocate the shared memory via refct when we destroy the context,
- * but any crashed process will prevent this deallocation.
- *
- * Note: currently refct is protected by an external file lock rather
- * than by the internal mutex. The mutex only protects values within
- * the shared memory.
+ * At the moment I'll use the counting bloom filter. I might change
+ * this later, if need arises. The current configuration is good up
+ * to about 30k unique refs, but quickly degrades above that.
  */
 #define WIKRT_EPH_TBL_SIZE (1<<18)
+#define WIKRT_EPH_HASH_CT  6
 typedef struct wikrt_eph {
     uint16_t        table[WIKRT_EPH_TBL_SIZE];
     pthread_mutex_t mutex; // must be 'robust'
     uint32_t        refct; // process count to support unlink
 } wikrt_eph;
 
-
 /** The Database
  * 
- * We mostly use the secure hashes as keys. Lookups for hashes use
- * the form `hash (60 bits) → hash (300 bits) | data` and using a
- * constant-time comparison for the latter 300 bits to resist timing
- * attacks. The hashes are still encoded in base64url form, and the
- * full hash is used (which is moderate overhead, but acceptable).
+ * Other than named roots, Wikilon uses secure hashes to reference
+ * binary values. Thus most keys are 60 byte secure hashes encoded
+ * in base64url. This has non-trivial storage and lookup overheads.
+ * But it simplifies several problems related to structure sharing
+ * and stability of identifiers for import/export. 
  *
- * Reference counts must track which counts have been processed and
- * which are latent to support lazy reference counting and loading
- * of resources top-down rather than bottom-up. They'll also be
- * formatted using simple text. 
+ * For security reasons, lookups with a secure hash (db->memory etc.)
+ * will limit exposure for timing attacks to at most 60 bits. 
+ *
+ * Lazy reference counting GC is used for secure hash resources. The
+ * laziness is achieved by separating stable reference counts from
+ * pending updates. Objects with zero references are tracked via the
+ * shared memory wikrt_eph ephemeron table.
  *
  * The 'roots' table is just arbitrary data and updates to it must
- * be manually counted.
- *
- * Additionally, we'll track an ephemeron table using shared memory.
+ * be manually reference counted as part of a transactional update.
+ * Roots are not themselves reference counted.
  */ 
 typedef struct wikrt_db {
     // LMDB layer resources
     MDB_env            *mdb;
     MDB_dbi             roots;  // name → binary data
     MDB_dbi             memory; // hash → binary data
-    MDB_dbi             refcts; // hash → reference counts and deltas
-    MDB_dbi             refupd; // partial hashes for pending deltas
+    MDB_dbi             refcts; // hash → reference counts and pending deltas
+    MDB_dbi             refupd; // list of partial hashes with pending deltas
     // to add: persistent memo caches
 
     // Ephemeron Resources
     #define WIKRT_EPH_ID_LEN 32
+    int                 ephid_fd;
     char                ephid[WIKRT_EPH_ID_LEN]; // for shm_open, shm_unlink
     wikrt_eph          *eph;    // shared memory counting bloom filter
 } wikrt_db;
@@ -509,11 +506,15 @@ typedef struct wikrt_thread {
     // effort tracking
     uint64_t time_last;  // wikrt_thread_time at last allocation
     uint32_t effort;     // pre-allocated effort for this cycle
+
+    // Idea: I could add an mdb_txn here via mdb_txn_reset and
+    //  mdb_txn_renew to reduce malloc/free overheads within a
+    //  thread.
 } wikrt_thread;
 
 /** current timestamp in microseconds */
 uint64_t wikrt_thread_time(); // microseconds
-    
+ 
 /** Streams.
  * 
  * A context hosts a set of binary streams. A stream is identified by
@@ -592,7 +593,8 @@ struct wikrt_cx {
     wikrt_thread    main;               // resources for API main thread
 
     // todo:
-    // Stowage tracking? Or would that be a task, too?
+    // Stowage tracking: need to know all stowage roots
+    // Dictionary indexing?
 };
 
 // a sufficient minimum size that we won't have too many problems
