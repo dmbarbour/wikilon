@@ -85,7 +85,7 @@
  Syntactically, words consist of a sequence of characters
  excluding a short blacklist:
 
-     @#()<>{}/,;|&='", SP, C0, and DEL (0-32 and 127)
+     @#()<>{}\/,;|&='", SP, C0, and DEL (0-32 and 127)
 
  See `prim:hierarchy` for namespaces.
 ~

@@ -10,6 +10,7 @@
 #include <semaphore.h>
 #include <lmdb.h>
 #include "wikrt.h"
+#include "wikrt_eph.h"
 
 /** NOTES
  * 
@@ -317,29 +318,6 @@ typedef enum wikrt_op
 // List and Array Operations
 } wikrt_op;
 
-/** The Ephemeron Table
- *
- * The purpose of the ephemeron table is to prevent GC from touching
- * resources that are referenced from contexts. This must use shared
- * memory to support multiple processes sharing one database.
- * 
- * An ephemeron table can be adequately represented as a simple hash
- * table or via a counting bloom filter. The hash table option would
- * offer excellent precision, but the counting filter simplifies the
- * management overheads by eliminating need to ever resize the table,
- * degrading instead towards more false positives.
- *
- * At the moment I'll use the counting bloom filter. I might change
- * this later, if need arises. The current configuration is good up
- * to about 30k unique refs, but quickly degrades above that.
- */
-#define WIKRT_EPH_TBL_SIZE (1<<18)
-#define WIKRT_EPH_HASH_CT  6
-typedef struct wikrt_eph {
-    uint16_t        table[WIKRT_EPH_TBL_SIZE];
-    pthread_mutex_t mutex; // must be 'robust'
-    uint32_t        refct; // process count to support unlink
-} wikrt_eph;
 
 /** The Database
  * 
@@ -368,13 +346,6 @@ typedef struct wikrt_db {
     MDB_dbi             memory; // hash → binary data
     MDB_dbi             refcts; // hash → reference counts and pending deltas
     MDB_dbi             refupd; // list of partial hashes with pending deltas
-    // to add: persistent memo caches
-
-    // Ephemeron Resources
-    #define WIKRT_EPH_ID_LEN 32
-    int                 ephid_fd;
-    char                ephid[WIKRT_EPH_ID_LEN]; // for shm_open, shm_unlink
-    wikrt_eph          *eph;    // shared memory counting bloom filter
 } wikrt_db;
 
 void wikrt_db_close(wikrt_env*);
@@ -405,7 +376,9 @@ struct wikrt_env {
     pthread_mutex_t mutex;  // mutex for environment manipulations
 
     // database and shared memory ephemeron table
-    wikrt_db        *db;
+    wikrt_db        *db;    // persistent storage
+    wikrt_eph       *eph;   // ephemeral reference tracking
+
 
     // workers thread pool and work signaling
     uint32_t        workers_alloc;  // for increasing thread count

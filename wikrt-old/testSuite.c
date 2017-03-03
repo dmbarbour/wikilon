@@ -1335,6 +1335,7 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
 
     #define TCX(TEST)                               \
     do {                                            \
+        wikrt_cx_reset(cx);                         \
         char const* name = #TEST ;                  \
         ++(*runct);                                 \
         TEST(cx);                                   \
@@ -1342,7 +1343,6 @@ void run_tests(wikrt_cx* cx, int* runct, int* passct) {
         else {                                      \
             fprintf(stderr, errFmt, *runct, name);  \
         }                                           \
-        wikrt_cx_reset(cx);                         \
     } while(0)
 
     TCX(test_unit);

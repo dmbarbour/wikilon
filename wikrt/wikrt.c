@@ -20,6 +20,45 @@ _Static_assert((sizeof(uint8_t) == sizeof(char)),
 _Static_assert(sizeof(wikrt_ws) == (4*sizeof(wikrt_v)),
     "flexible array members don't work the way I think they should");
 
+// Awelon forbids some ASCII range characters from words.
+// Blacklist: @#[]()<>{}\/,;|&='", SP, C0 (0-31), and DEL.
+//
+// We can also blacklist bytes not permitted in UTF-8 more
+// generally: 192, 193, 245-255. But properly, a separate
+// scan is required for a valid UTF-8 encoding.
+//
+// BLOCK                                                    VALUE
+//  0-31:   forbid everything                               0
+//  32-63:  forbid 32 34 35 38 39 40 41 44 47 59 60 61 62   ~(0x780093cd)
+//  64-95:  forbid 64 91 92 93                              ~(0x38000001)
+//  96-127: forbid 123 124 125 127                          ~(0xb8000000)
+//  128-159: allow everything                               ~0
+//  160-191: allow everything                               ~0
+//  192-223: forbid 192 193                                 ~3
+//  224-255: forbid 245-255                                 ~(0xffe00000)
+//
+// I'm encoding this as a bitfield.
+static uint32_t const valid_word_char_bits[8] = 
+    {  0, ~(0x780093cd), ~(0x38000001), ~(0xb8000000)
+    , ~0, ~0,            ~3,            ~(0xffe00000) };
+static inline bool is_valid_word_byte(uint8_t u) 
+{
+    return (0 != (valid_word_char_bits[ (u >> 5) ] & (1 << (u & 0x1F))));
+}
+static inline uint8_t const* scan_valid_word(uint8_t const* iter, uint8_t const* const end)
+{
+    while((iter < end) && is_valid_word_byte(*iter)) { ++iter; }
+    return iter;
+}
+
+/* number of valid word characters (assuming valid UTF-8) */
+static inline size_t valid_word_len(uint8_t const* const src, uint8_t maxlen)
+{
+    // just looking at valid word bytes, not valid utf-8
+    return scan_valid_word(src, src+maxlen) - src; 
+}
+
+
 uint32_t wikrt_api_ver() 
 { 
     _Static_assert(WIKRT_API_VER < UINT32_MAX, "bad value for WIKRT_API_VER");
@@ -55,41 +94,6 @@ void wikrt_hash(char* const h, uint8_t const* const data, size_t const data_size
     b64_encode(hbytes, WIKRT_HASH_BYTES, (uint8_t*) h);
 };
 
-// Awelon forbids some ASCII range characters from words.
-// Blacklist: @#[]()<>{}\/,;|&='", SP, C0 (0-31), and DEL.
-//
-// We can also blacklist bytes not permitted in UTF-8 more
-// generally: 192, 193, 245-255. But properly, a separate
-// scan is required for a valid UTF-8 encoding.
-//
-// BLOCK                                                    VALUE
-//  0-31:   forbid everything                               0
-//  32-63:  forbid 32 34 35 38 39 40 41 44 47 59 60 61 62   ~(0x780093cd)
-//  64-95:  forbid 64 91 92 93                              ~(0x38000001)
-//  96-127: forbid 123 124 125 127                          ~(0xb8000000)
-//  128-159: allow everything                               ~0
-//  160-191: allow everything                               ~0
-//  192-223: forbid 192 193                                 ~3
-//  224-255: forbid 245-255                                 ~(0xffe00000)
-//
-// I'm encoding this as a bitfield.
-static uint32_t const valid_word_char_bits[8] = 
-    {  0, ~(0x780093cd), ~(0x38000001), ~(0xb8000000)
-    , ~0, ~0,            ~3,            ~(0xffe00000) };
-static inline bool is_valid_word_byte(uint8_t u) 
-{
-    return (0 != (valid_word_char_bits[ (u >> 5) ] & (1 << (u & 0x1F))));
-}
-
-/* number of valid word characters (assuming valid UTF-8) */
-static inline size_t valid_word_len(uint8_t const* const src, size_t maxlen)
-{
-    // just looking at valid word bytes, not valid utf-8
-    uint8_t const* const end = src + maxlen;
-    uint8_t const* iter = src;
-    while((iter < end) && is_valid_word_byte(*iter)) { ++iter; }
-    return (iter - src);
-}
 
 wikrt_env* wikrt_env_create()
 {
@@ -119,7 +123,10 @@ void wikrt_env_destroy(wikrt_env* e)
     free(e);
 }
 
-wikrt_env* wikrt_cx_env(wikrt_cx* cx) { return cx->env; }
+wikrt_env* wikrt_cx_env(wikrt_cx* cx) 
+{ 
+    return cx->env; 
+}
 
 void wikrt_worker_loop(wikrt_env* const e)
 {
@@ -137,7 +144,7 @@ void wikrt_worker_loop(wikrt_env* const e)
 
         // when we're done, either halt or wait for more work
         if(e->workers_max < e->workers_alloc) { break; }
-        else { pthread_cond_wait(&(e->work_available), &(e->mutex)); }
+        pthread_cond_wait(&(e->work_available), &(e->mutex)); 
     } while(1);
 
     // halt the worker
@@ -153,11 +160,6 @@ void* wikrt_worker_behavior(void* e)
 {
     wikrt_worker_loop((wikrt_env*)e);
     return NULL;
-}
-
-void wikrt_report_work_available(wikrt_cx* cx)
-{
-    pthread_mutex_lock(&(cx->env->mutex));
 }
 
 void wikrt_halt_threads(wikrt_env* e)
@@ -326,13 +328,17 @@ void wikrt_cx_destroy(wikrt_cx* cx)
     pthread_mutex_unlock(&(cx->mutex));
 
     // clear data, halting activity if any
-    cx->frozen = false; // unfreeze to destroy
+    cx->frozen = false; // can't reset a frozen context
     wikrt_cx_reset(cx, NULL); 
 
     // remove context from environment
     pthread_mutex_lock(&(cx->env->mutex));
     wikrt_rem_cx_list(&(cx->env->cxs), cx);
     pthread_mutex_unlock(&(cx->env->mutex));
+
+    // release POSIX resources as needed
+    pthread_cond_destroy(&(cx->workers_done));
+    pthread_mutex_destroy(&(cx->mutex));
 
     // recycle allocated context memory
     free(cx);
@@ -359,7 +365,7 @@ void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name)
         wikrt_hash((char*)(cx->dict_name), (uint8_t const*)dict_name, name_len);
     }
     cx->dict_name[cx->dict_name_len] = 0;
-    fprintf(stderr, "context with dictionary `%s`\n", (char const*) cx->dict_name); 
+    //fprintf(stderr, "context with dictionary `%s`\n", (char const*) cx->dict_name); 
 }
 
 wikrt_z wikrt_gc_bitfield_size(wikrt_z alloc_space) 
@@ -390,7 +396,7 @@ void wikrt_cx_alloc_reset(wikrt_cx* cx)
 {
     assert(wikrt_cx_unshared(cx));
     cx->main = cx->memory = (wikrt_thread){0};
-    cx->main.cx = cx->memory.cx = cx;
+    cx->main.cx = cx; // main API thread
 
     cx->memory.start = wikrt_cellbuff( ((wikrt_a)cx) + sizeof(wikrt_cx) );  
     cx->memory.end   = ((wikrt_a)cx) + cx->size; // exact
@@ -451,6 +457,89 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
     }
 }
 
+
+
+/** LIGHTWEIGHT PARSER
+ * 
+ * A simple linear scan over the input. The primary intention here
+ * is to support lightweight detection of invalid input, and easy
+ * error reporting for the same.
+ */
+static inline uint8_t const* scan_ns_qualifier(uint8_t const* src, uint8_t const* const end)
+{
+    // word@ns, or [block]@ns, or even a "text"@ns
+    // potentially hierarchical, e.g. `foo@ns1@ns2`
+    do {
+        bool const qualified = 
+            ((end - src) >= 2) &&
+            ('@' == src[0]) &&
+            is_valid_word_byte(src[1]);
+        if(!qualified) { return src; }
+        src = scan_valid_word(src+2, end);
+    } while(1);
+}
+uint8_t const* scan_inline_text(uint8_t const* src, uint8_t const* const end);
+uint8_t const* scan_multi_line_text(uint8_t const* src, uint8_t const* const end);
+
+bool wikrt_parse_code(uint8_t const* const start, size_t const input_size, wikrt_parse_data* data)
+{
+    wikrt_parse_data r = { 0 };
+    size_t const utf8_size = utf8_strlen(start, input_size);
+    assert(input_size >= utf8_size);
+    uint8_t const* const end = start + utf8_size;
+    uint8_t const* scan = start;
+    bool need_ws = false; // do we need a word separator?
+        // valid word separators are: SP LF [ ]
+
+    do {
+        r.parsed = scan - start;
+        if(end == scan) { goto parse_halt; }
+        uint8_t const c = *(scan++);
+        if(is_valid_word_byte(c)) {
+            // WORDS
+            if(need_ws) { goto parse_halt; }
+            scan = scan_valid_word(scan, end);
+            scan = scan_ns_qualifier(scan, end);
+            need_ws = true;
+        } else if('[' == c) { 
+            // BLOCK START
+            ++(r.balance);
+            need_ws = false; 
+        } else if(']' == c) {
+            // BLOCK END
+            if(0 == r.balance) { goto parse_halt; }
+            --(r.balance);
+            if(0 == r.balance) { r.accepted = r.parsed; }
+            scan = scan_ns_qualifier(scan, end);
+            // word sep unnecessary for unqualified blocks
+            need_ws = (']' != *(scan-1));
+        } else if((' ' == c) || ('\n' == c)) {
+            // WHITESPACE
+            need_ws = false;
+        } else if('"' == c) {
+            // TEXTS
+            if(need_ws || (end == scan)) { goto parse_halt; }
+            else if('\n' == (*scan)) {
+                scan = scan_multi_line_text(1+scan, end);
+                if((end == scan) || ('~' != *scan)) { goto parse_halt; }
+            } else {
+                scan = scan_inline_text(scan, end);
+                if((end == scan) || ('"' != *scan)) { goto parse_halt; }
+            }
+            scan = scan_ns_qualifier(1+scan, end);
+            need_ws = true;
+        }
+
+    } while(1);
+
+parse_halt:
+
+    // accept data after final block
+    if(0 == r.balance) { r.accepted = r.parsed; }
+    r.scanned = scan - start;
+    if(NULL != data) { (*data) = r; } 
+    return (input_size == r.accepted);
+}
 
 
 

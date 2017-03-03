@@ -2,12 +2,20 @@
 #include <stdio.h>
 #include <assert.h>
 #include <time.h>
+#include <string.h>
 #include "wikrt.h"
 
 #define MEGABYTES (1000 * 1000)
+#define TESTDIR "./testdir"
 
-int tests_performed;
-int tests_passed;
+int tests_run = 0;
+int tests_pass = 0;
+
+// runTCX is intended for single-context tests.
+void runTCX(char const* testName, wikrt_cx* cx, bool (*test)(wikrt_cx*));
+#define TCX(T,CX) runTCX( #T , cx, &(T) )
+
+bool test_hash(wikrt_cx*);
 
 int main(int argc, char const* const* args) 
 {
@@ -22,23 +30,73 @@ int main(int argc, char const* const* args)
         return -1;
     }
     wikrt_env_threadpool(e, 2);
-    wikrt_db_open(e, "./testdir" , (32 * MEGABYTES));
+    wikrt_db_open(e, TESTDIR , (32 * MEGABYTES));
     
-    wikrt_cx* const cx = wikrt_cx_create(e, "t/e/s/t", (4 * MEGABYTES));
+    wikrt_cx* const cx = wikrt_cx_create(e, NULL, (4 * MEGABYTES));
     assert(e == wikrt_cx_env(cx));
 
-    struct timespec tm = { .tv_sec = 30, .tv_nsec = 0 };
-    nanosleep(&tm, NULL);
+    TCX(test_hash, cx);
 
     // todo: 
-    //  parses
+    //  test fast parsing
+    //  primitive evaluations
+    //   primitive loops
+    //  definitions and lazy linking
     //  write and read binaries
-    //  simple evaluations
+    //  incremental evaluations
+    //  update of definition during evaluation
 
     wikrt_cx_destroy(cx);
     wikrt_env_destroy(e);
+
+    // todo:
+    //   persistence tests
+    //   shared environments
+    //   transaction conflict tests
     
-    printf("tests passed: %d of %d\n"
-        , tests_passed, tests_performed ); 
-    return (tests_performed - tests_passed);
+    printf("tests passed: %d of %d\n", tests_pass, tests_run); 
+    return (tests_pass - tests_run);
 }
+
+void runTCX(char const* testName, wikrt_cx* cx, bool (*test)(wikrt_cx*))
+{
+    wikrt_cx_reset(cx, NULL); // clear context, empty dictionary
+    ++tests_run;
+    if(test(cx)) { 
+        ++tests_pass; 
+    } else {
+        fprintf(stderr, "test #%d failed: %s\n", tests_run, testName);
+    }
+}
+
+
+bool match_hash(char const* s, char const* h_expected)
+{
+    char h[WIKRT_HASH_SIZE + 1];
+    wikrt_hash(h, (uint8_t const*)s, strlen(s));
+    h[WIKRT_HASH_SIZE] = 0;
+    bool const ok = (0 == strcmp(h, h_expected));
+    if(!ok) {    
+        fprintf(stderr, "hash of `%s` is `%s` not `%s`\n", s, h, h_expected);
+    }
+    return ok;
+}
+
+// six point test for the BLAKE2b hash (45 bytes) and base64 encoding.
+bool test_hash(wikrt_cx* _unused) 
+{
+    return match_hash("t/e/s/t",    "QgZDyYYGYV57hLkAEqUMVM6qESxuN6QpM1ekCHv9Yi59SirYaXcH0FdSNN9T")
+        && match_hash("t/e/s/t\n",  "dbNAGEG-F9ElYjNw4T4qI1A7o9clXiDRSs1hAEYJdu3BWAd5W3NDUHmki60s")
+        && match_hash("test",       "J7URBffnfK_NVVcQNQ6D21k5A7J8Zhhwb2Ry3WLYfFc7Vy1TiE01Q4H7duKE")
+        && match_hash("test\n",     "FNn9bEhfDqPpswCc36-GcJn42xZ5Bc-qaaylGefS2ystQ0ksVU9bpDqypG46")
+        && match_hash("",           "-p2eN9b-CeuBFlEPrbnGHMWeMy1GzEo2XnLtxzMYjwi-nAiUttuwYCP_MSUG")
+        && match_hash("\n",         "-vnxnuU93oPpZ1al_J_Gj9GkrLyLM0l7vAmVyIHcA5yH7UL77ukXKcq8fpG8");
+}
+
+// basic tests
+bool test_parse(wikrt_cx* _unused)
+{
+    return false;
+}
+
+

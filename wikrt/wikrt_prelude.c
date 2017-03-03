@@ -102,7 +102,7 @@ DEF("prim:words", TEXT(
     L("Syntactically, words consist of a sequence of characters")
     L("excluding a short blacklist:")
     B
-    L("    @#()<>{}\/,;|&='\", SP, C0, and DEL (0-32 and 127)")
+    L("    @#()<>{}\\/,;|&='\", SP, C0, and DEL (0-32 and 127)")
     B
     L("See `prim:hierarchy` for namespaces.")
     ))
