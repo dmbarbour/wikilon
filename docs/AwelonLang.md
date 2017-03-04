@@ -47,6 +47,8 @@ A useful subset of words is implicitly defined:
 
 Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small. In many cases, words may have simple, informal structure - e.g. `foo.doc` to represent documentation for `foo`. 
 
+*Syntax Note:* In `word [block]` the space is required. A word is always followed by SP or LF unless it's at end of input or end of the current block.
+
 ## Dictionary
 
 Awelon has a simple, DVCS-inspired patch based dictionary representation:

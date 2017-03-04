@@ -25,9 +25,9 @@ _Static_assert(sizeof(wikrt_ws) == (4*sizeof(wikrt_v)),
 //
 // We can also blacklist bytes not permitted in UTF-8 more
 // generally: 192, 193, 245-255. But properly, a separate
-// scan is required for a valid UTF-8 encoding.
+// scan is required to check for a valid UTF-8 encoding.
 //
-// BLOCK                                                    VALUE
+// BLOCK                                                    BITFIELD
 //  0-31:   forbid everything                               0
 //  32-63:  forbid 32 34 35 38 39 40 41 44 47 59 60 61 62   ~(0x780093cd)
 //  64-95:  forbid 64 91 92 93                              ~(0x38000001)
@@ -38,12 +38,12 @@ _Static_assert(sizeof(wikrt_ws) == (4*sizeof(wikrt_v)),
 //  224-255: forbid 245-255                                 ~(0xffe00000)
 //
 // I'm encoding this as a bitfield.
-static uint32_t const valid_word_char_bits[8] = 
+static uint32_t const valid_word_char_bitfield[8] = 
     {  0, ~(0x780093cd), ~(0x38000001), ~(0xb8000000)
     , ~0, ~0,            ~3,            ~(0xffe00000) };
 static inline bool is_valid_word_byte(uint8_t u) 
 {
-    return (0 != (valid_word_char_bits[ (u >> 5) ] & (1 << (u & 0x1F))));
+    return (0 != (valid_word_char_bitfield[ (u >> 5) ] & (1 << (u & 0x1F))));
 }
 static inline uint8_t const* scan_valid_word(uint8_t const* iter, uint8_t const* const end)
 {
@@ -457,13 +457,12 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
     }
 }
 
-
-
 /** LIGHTWEIGHT PARSER
  * 
  * A simple linear scan over the input. The primary intention here
  * is to support lightweight detection of invalid input, and easy
- * error reporting for the same.
+ * error reporting for the same. We scan first for valid UTF-8 
+ * input.
  */
 static inline uint8_t const* scan_ns_qualifier(uint8_t const* src, uint8_t const* const end)
 {
@@ -489,10 +488,13 @@ bool wikrt_parse_code(uint8_t const* const start, size_t const input_size, wikrt
     uint8_t const* const end = start + utf8_size;
     uint8_t const* scan = start;
     bool need_ws = false; // do we need a word separator?
-        // valid word separators are: SP LF [ ]
+        // acceptable word separators are: SP LF [ ]
+        // word separators are necessary after a word, text,
+        // or a namespace qualified block.
 
     do {
         r.parsed = scan - start;
+        if(0 == r.balance) { r.accepted = r.parsed; }
         if(end == scan) { goto parse_halt; }
         uint8_t const c = *(scan++);
         if(is_valid_word_byte(c)) {
@@ -501,23 +503,22 @@ bool wikrt_parse_code(uint8_t const* const start, size_t const input_size, wikrt
             scan = scan_valid_word(scan, end);
             scan = scan_ns_qualifier(scan, end);
             need_ws = true;
+        } else if((' ' == c) || ('\n' == c)) {
+            // WHITESPACE
+            need_ws = false;
         } else if('[' == c) { 
             // BLOCK START
+            if(need_ws) { goto parse_halt; } // word [block]
             ++(r.balance);
             need_ws = false; 
         } else if(']' == c) {
             // BLOCK END
             if(0 == r.balance) { goto parse_halt; }
             --(r.balance);
-            if(0 == r.balance) { r.accepted = r.parsed; }
             scan = scan_ns_qualifier(scan, end);
-            // word sep unnecessary for unqualified blocks
-            need_ws = (']' != *(scan-1));
-        } else if((' ' == c) || ('\n' == c)) {
-            // WHITESPACE
-            need_ws = false;
+            need_ws = (']' != *(scan-1)); // need_ws if qualified
         } else if('"' == c) {
-            // TEXTS
+            // EMBEDDED TEXTS
             if(need_ws || (end == scan)) { goto parse_halt; }
             else if('\n' == (*scan)) {
                 scan = scan_multi_line_text(1+scan, end);
@@ -533,9 +534,7 @@ bool wikrt_parse_code(uint8_t const* const start, size_t const input_size, wikrt
     } while(1);
 
 parse_halt:
-
     // accept data after final block
-    if(0 == r.balance) { r.accepted = r.parsed; }
     r.scanned = scan - start;
     if(NULL != data) { (*data) = r; } 
     return (input_size == r.accepted);
