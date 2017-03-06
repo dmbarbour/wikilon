@@ -147,8 +147,7 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(trace)` - record value to a debug output log
 * `(trash)` - erase data you won't observe, leave placeholder
 * `(error)` - mark a value as an error object
-* `(@gate)` - symbols for editable views or active debugging 
-* `(=foo)` - reduce code to a known name (quines, loops)
+* `(~foo)` - reduce code to a known name (quines, loops)
 
 Annotations must have no observable effect within a computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, support useful external observations like debug logs or breakpoint states or a change in how an evaluated result is represented or organized.
 
@@ -221,21 +220,19 @@ Support for named values is implicit with the lazy link constraint. I'm just mak
 Fixpoint is a function useful for modeling loop behaviors. For Awelon language, I favor the following variant of the [strict Z fixpoint combinator](https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator):
 
         [X][F]z == [X][[F]z]F 
-        z = [[(a3) c i] b (=z) [c] a b w i](a3) c i
+        z = [[(a3) c i] b (~z) [c] a b w i](a3) c i
 
         Using Definitions:
                [A]i == A            (inline)         i = [] w a d
             [B][A]w == [A][B]       (swap)           w = (a2) [] b a
 
         Assuming Annotation:
-            [(def of foo)](=foo) => [foo]
+            [(def of foo)](~foo) => [foo]
             and arity annotations
 
-The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The `(=z)` annotation supports both aesthetic presentation and accelerated performance. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior. 
+The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The `(~z)` annotation supports both aesthetic presentation and accelerated performance. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior. 
 
 *Note:* Fixpoint is notoriously difficult for humans to grok. It is also awkward to use, with tacit style doing no favors here. Use of *named locals* does help (see below), but we'll want to build useful loop and [generator](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) abstractions above fixpoint - folds, sorts, collections oriented functions, etc.. 
-
-*Aside:* The `(=foo)` annotation is also useful as an assertion. It becomes an error if not equal.
 
 ## Memoization
 
@@ -423,7 +420,7 @@ Conventional debugging techniques also apply.
 
 I propose `(trace)` annotation to serve as a basis for conventional printf style debugging. For example, `[message](trace)` would evaluate to simply `[Msg]` but would implicitly copy the message to a second stream. Traced outputs could easily be rendered within the same program by prepending a comment like `[message](a2)d` to the evaluated program.
 
-Of course, tracing is invasive and is not ideal for debugging in general. Configuring words or `(@gate)` annotations to operate as breakpoints or frame separators, or even just profiling their use, is much less invasive, but pays for that in management of the debug configuration.
+Of course, tracing is invasive and is not ideal for debugging in general. Configuring words or certain annotations to operate as breakpoints or frame separators, or even just profile their use, is much less invasive but requires a more sophisticated configuration.
 
 ## Static Typing
 
@@ -498,9 +495,9 @@ Design of evaluable editable views is very sensitive to arity annotations and ac
 
 With evaluable views in mind, we might represent comments as:
 
-        /* comment */  ==  " comment "(a2)(@rem)d
+        /* comment */  ==  [" comment " (:rem)](a2)d
 
-The arity annotation allows embedding of comments into computed values. The `(@rem)` gate serves as a lightweight indicator of the comment's 'type' (so we can add other comment types) and additionally permits integration with active debugging - for example, tracing comments to see progress, or conditionally stalling on certain comments.
+The arity annotation allows embedding of comments into computed values. The `(~rem)` annotation serves as a lightweight indicator of the comment's 'type' (so we can add other comment types) and additionally permits integration with active debugging - for example, tracing comments to see progress, or conditionally stalling on certain comments.
 
 *Aside:* Between command lists and numbers, word definitions can easily scale to a thousand tokens. If we start representing graphical programs with tables, graphs, canvases, radio buttons, drop-down options lists, and similar features we might scale another order of magnitude. Of course, we'll also divide larger programs into small words that can be viewed and edited together. 
 
@@ -508,11 +505,11 @@ The arity annotation allows embedding of comments into computed values. The `(@r
 
 An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, and support a more conventional programming style if desired. Consider the locals syntax used in [Kitten language](http://kittenlang.org/):
 
-        -> X Y Z; CODE   ==  "X Y Z"(a2)(@λ)d CODE'
+        -> X Y Z; CODE   ==  ["X Y Z"(:λ)](a2)d CODE'
 
-When used leftmost in a subprogram the arrow effectively forms a lambda. This syntax also supports local variable expressions as in `6 7 * -> X; CODE`. On the right hand side, the `"X Y Z"(a2)(@λ)d` fragment is a lambda comment. We need the comment to recover the variable names when later rendering and editing the code, but the specific form is arbitrary.
+This syntax can be used for lambdas but also works adequately for local variable expressions as in `6 7 * -> X; CODE`. On the right hand side, the `["X Y Z"(:λ)](a2)d` comment preserves variable names and lambda structure for a future render, while `CODE'` does not contain the `X Y Z` variables. 
 
-We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with a simple algorithm:
+We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` using a simple algorithm:
 
         T(X, E) | E does not contain X      => d E
         T(X, X)                             => 
@@ -523,17 +520,13 @@ We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` with a simple algorithm:
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-This algorithm is adapted from the optimization using free variables. The main difference is that we know our variables are named values and we need special handling for conditional behaviors. 
+This algorithm is adapted from the partial evaluation optimization leveraging free variables. The main difference is that we know our variables are named values and we may desire special handling for conditional behaviors to avoid copying data into each branch. Similarly, we want to specialize switch expressions for labeled data. Essentially, the editable view acts as a lightweight compiler and disassembler to work with human meaningful variable names.
 
-Conditional behavior like `if` should be specialized because we do not want to copy data into each branch before selecting one. Instead, we leave the value on the stack then select one branch to handle it. The simple rule for `if` above would also work well for sums, optional values, lists, etc.. (indeed, we could define a generic `if = [] b b a (cond) i` for all binary conditions). However, we might need an additional rule for working with *labeled data* and switching on labels.
-
-Assuming named locals, we might also benefit from infix expressions of code, e.g. `((X + Y) * Z)`. Of course, use of parentheses in this role might mean we need to escape or tune expression of Awelon-level annotations.
+After we have named locals, we might also support infix expressions, e.g. `((X + Y) * Z)` could be made to work as we'd expect, and the editable view could even know about precedence. We'd need to escape annotations if we overload parentheses in this manner, of course.
 
 ## Namespaces
 
-Qualified namespaces are readily supported by editable views. Trivially, we could support a comment like `using large_prefix as x; ...` such that subsequent code may use `x` in place of `large_prefix` (and `x.foo` in place of `large_prefix.foo`). Suffixes can also be supported. And in contexts where our view is not limited to pure text, we could leverage color or other indicators for namespace.
-
-More intriguingly, namespaces can be built into an editable view, such that we can skip the boiler-plate namespace comment and just start using `x`. We can fully separate namespaces from source code through views. If ever we want humans to work effectively with `$secureHash` resources, having a built-in namespace at the view layer would be essential. Namespaces could instead be shifted to 'views' at the edit session or user layer, that can be maintained statefully for edits to many definitions.
+Awelon has limited support for namespaces via hierarchical dictionaries (see below). But it falls to editable views to provide the equivalent of a `using repetitive_prefix_or_suffix as x; code...` shorthand. Editable views can support local qualified names, but a more intriguing option is to model common 'packages' of names within the editable view, for different use cases. A related opportunity is to leverage editable views to assign human-meaningful names to secure hash resources. 
 
 ## Labeled Data - Records and Variants 
 
@@ -611,9 +604,9 @@ A child dictionary is represented within a dictionary patch via secure hash:
 
 Essentially, we define a symbol of form `@dict` like we would an Awelon word. The definition of this child dictionary is always centralized to a single secure hash. Only the final definition of the symbol is relevant. By default, every symbol of form `@dict` references an empty dictionary.
 
-There is no means for a child dictionary to reference its parent. Each child dictionary is entirely self-contained. This is a useful constraint for application security models, providing an structural restriction on dataflow when we communicate databases, documents, messages, or other application objects as dictionaries. However, it does result in a lot of logical replication between parent and child - for example, replicated definitions for natural numbers, arithmetic, texts, and list processing. Fortunately, structure sharing between parent and child is possible by deriving from common secure hashes. Ugly aesthetics like `42@dict` can be further mitigated via localization. 
+There is no means for a child dictionary to reference its parent. Each child dictionary is entirely self-contained. This is a useful constraint for application security models, providing an structural restriction on dataflow when we model databases, documents, messages, or other application objects as dictionaries. However, it does result in a lot of logical replication between parent and child - for example, replicated definitions for natural numbers, arithmetic, texts, and list processing. Fortunately, structure sharing between parent and child is possible by deriving from common secure hashes. 
 
-Localization is a special optimization for evaluation with hierarchical dictionaries. Whenever `foo@bar` has the same meaning as `foo` within a given context, the runtime is free to replace the former with the latter. Localization can improve both performance (in context of stowage or memoization) and aesthetics. Further, it can lead to localization of associated metadata, for example we end up using `foo.doc` instead of `foo.doc@bar`.
+Ugly aesthetics like `42@dict` can be further ameliorated via localization. Localization is a special optimization for evaluation with hierarchical dictionaries. Whenever `foo@bar` has the same meaning as `foo` within a given context, the runtime is free to replace the former with the latter. Localization can improve both performance (in context of stowage or memoization) and aesthetics. Further, it enables localization of associated metadata, for example we end up referencing `foo.doc` instead of `foo.doc@bar`.
 
 *Note:* Namespace qualifiers may be hierarchical, and are right associative. For example, `foo@bar@baz` means we use the meaning of `foo@bar` under dictionary `baz`. Direct use of hierarchical qualifiers is discouraged, but they may arise naturally during evaluation.
 

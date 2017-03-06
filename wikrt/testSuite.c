@@ -40,7 +40,7 @@ int main(int argc, char const* const* args)
     TCX(test_parse_check, cx);
 
     // todo: 
-    //  test fast parsing
+    //  trivial binary IO
     //  primitive evaluations
     //   primitive loops
     //  definitions and lazy linking

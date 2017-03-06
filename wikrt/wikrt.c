@@ -477,9 +477,10 @@ static uint8_t const* scan_ns_qualifier(uint8_t const* iter, uint8_t const* cons
         iter = scan_valid_word(iter+2, end);
     } while(1);
 }
+static inline bool basic_text_byte(uint8_t c) { return (c > 31); }
 static uint8_t const* scan_inline_text(uint8_t const* iter, uint8_t const* const end)
 {
-    while((end != iter) && (*iter > 31) && ('"' != *iter)) { ++iter; }
+    while((end != iter) && basic_text_byte(*iter) && ('"' != *iter)) { ++iter; }
     return iter;
 }
 static uint8_t const* scan_multi_line_text(uint8_t const* iter, uint8_t const* const end)
@@ -488,7 +489,7 @@ static uint8_t const* scan_multi_line_text(uint8_t const* iter, uint8_t const* c
         if('\n' == *iter) { ++iter; } 
         else if(' ' == *iter) { 
             // skip to end of line
-            do { ++iter; } while((end != iter) && (*iter > 31));
+            do { ++iter; } while((end != iter) && basic_text_byte(*iter));
         } else { return iter; }
     } 
     return end;
@@ -518,8 +519,8 @@ bool wikrt_parse_check(uint8_t const* const start, size_t const input_size, wikr
             --(r.balance);
             scan = scan_ns_qualifier(scan, end);
         } else if('(' == c) { // annotations
-            if((end == scan) || !is_valid_word_byte(*scan)) { goto parse_halt; }
-            scan = scan_valid_word(1+scan, end);
+            if((end == scan) || !is_valid_word_byte(*(++scan))) { goto parse_halt; }
+            scan = scan_valid_word(scan, end);
             if((end == scan) || (')' != *scan)) { goto parse_halt; }
             ++scan;
         } else if('"' == c) { // embedded texts
