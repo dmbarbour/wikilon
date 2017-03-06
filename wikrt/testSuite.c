@@ -16,6 +16,7 @@ void runTCX(char const* testName, wikrt_cx* cx, bool (*test)(wikrt_cx*));
 #define TCX(T,CX) runTCX( #T , cx, &(T) )
 
 bool test_hash(wikrt_cx*);
+bool test_parse_check(wikrt_cx*);
 
 int main(int argc, char const* const* args) 
 {
@@ -36,6 +37,7 @@ int main(int argc, char const* const* args)
     assert(e == wikrt_cx_env(cx));
 
     TCX(test_hash, cx);
+    TCX(test_parse_check, cx);
 
     // todo: 
     //  test fast parsing
@@ -92,6 +94,46 @@ bool test_hash(wikrt_cx* _unused)
         && match_hash("",           "-p2eN9b-CeuBFlEPrbnGHMWeMy1GzEo2XnLtxzMYjwi-nAiUttuwYCP_MSUG")
         && match_hash("\n",         "-vnxnuU93oPpZ1al_J_Gj9GkrLyLM0l7vAmVyIHcA5yH7UL77ukXKcq8fpG8");
 }
+
+static inline bool check_parse(char const* s, bool const e) {
+    bool const r = wikrt_parse_check((uint8_t const*)s, strlen(s), NULL);
+    if(e != r) {
+        fprintf(stderr, "expected parse of `%s` to %s\n"
+            , s, (e ? "pass" : "fail"));
+    }
+    return (e == r);
+}
+static inline bool accept_parse(char const* s) { return check_parse(s, true); }
+static inline bool reject_parse(char const* s) { return check_parse(s, false); }
+
+// lightweight parse checks
+bool test_parse_check(wikrt_cx* _unused)
+{
+    return accept_parse("")
+        && accept_parse("hello")
+        && accept_parse("  hello  ")
+        && accept_parse("[12345   ~\n\n\n :]\n")
+        && accept_parse("[foo](a2)(par)i")
+        && accept_parse("[ 42@baz@qux foo@dict ]@xy@zzy")
+        && accept_parse("[\"hello\"]")
+        && accept_parse("\"hello\"@d")
+        && accept_parse("[\"\n hello\n multi-line text\n~]")
+        && accept_parse("\"\n hello\n multi-line text\n~@d")
+        && accept_parse("\"\n\n\n hello\n\n\n~")
+        && reject_parse("[0 ~")
+        && reject_parse("~  ]  ")
+        && reject_parse("(a2")
+        && reject_parse("a2)")
+        && reject_parse("()")
+        && reject_parse("\"hello ")
+        && reject_parse("\"\n hello ")
+        && reject_parse("\"\nhello\n~")
+        && reject_parse("hello\"")
+        && reject_parse("\t")
+        && reject_parse("foo @dict")
+        && reject_parse("0 1 2 3 [ 4 5 6");
+}
+
 
 // basic tests
 bool test_parse(wikrt_cx* _unused)

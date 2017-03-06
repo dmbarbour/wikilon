@@ -45,9 +45,7 @@ A useful subset of words is implicitly defined:
 * words to encode natural numbers, regex `[1-9][0-9]*`
 * secure hash resources `$secureHash` or `%secureHash`
 
-Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small. In many cases, words may have simple, informal structure - e.g. `foo.doc` to represent documentation for `foo`. 
-
-*Syntax Note:* In `word [block]` the space is required. A word is always followed by SP or LF unless it's at end of input or end of the current block.
+Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small. In many cases, words may have simple, informal structure - e.g. `foo.doc` to represent documentation for `foo`.
 
 ## Dictionary
 
@@ -61,7 +59,7 @@ Awelon has a simple, DVCS-inspired patch based dictionary representation:
 
 A patch contains a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions override those from earlier patches.
 
-Cyclic definitions are erroneous. Loop behavior must be modeled via fixpoint combinator. However, trivially defining a word to itself as `@foo foo` will be accepted as meaning 'delete the word' rather than raising an error. Undefined words essentially evaluate to themselves.
+Definitions of words must be acyclic, and cyclic definitions are generally considered errors. However, trivially defining a word to itself as `@foo foo` will be accepted as meaning 'delete the word' rather than raising an error. Undefined words essentially evaluate to themselves. Loop behaviors can be modeled by defining a fixpoint combinator (discussed below).
 
 Awelon's dictionary representation is not optimal for direct use by humans. It can be tolerated in small doses. But it is intended more as an import/export format, and for efficient sharing between humans and software agents. Humans will generally observe and influence a dictionary through an editable view, perhaps as a hypermedia web service or mounted into a filesystem.
 
@@ -69,110 +67,50 @@ Use suffix **.ao** (Awelon Object) for Awelon dictionary file names.
 
 *Note:* See *Hierarchical Dictionaries* for more information.
 
+## Data
+
+Awelon language has exactly one primitive data type - the `[block of code]`, representing a first class function. However, Awelon does provide automatic definition for natural numbers like `42` and a syntactic sugar for embedded texts like `"hello, world!"`. Multi-line texts are also possible:
+
+        "
+         multi-line texts starts with `" LF` (34 10)
+         non-empty lines are indented one space (32)
+         text terminates with final `LF ~` (10 126)
+        ~
+
+Semantically, a natural number is implicitly defined as a unary structure: 
+
+        1 = [0 S]
+        2 = [1 S]
+        3 = [2 S]
+        ..
+        42 = [41 S]
+        ... ad infinitum
+
+Definitions of `0` and `S` (zero and successor) are left to the programmer, allowing for a choice of semantics. Similarly, texts essentially act as special words with built-in definition as a list-like structure with `~` and `:` (nil and cons) being user defined:
+
+        "hello" = [104 "ello" :]
+        "→"    = [8594 "" :]
+        ""      = ~
+
+Texts must be valid UTF-8, forbidding C0 (except LF, in multi-line texts). Inline texts additionally forbid the double quote. There are no character escapes excepting indentation after LF in multi-line text.
+
+Awelon is designed to work with acceleration and editable views to provide a complete programming experience. Acceleration supports efficient arithmetic with natural numbers and other common models, while editable views can effectively extend Awelon's syntax to support decimal numbers, lambdas, records, and so on. These are discussed in detail, below.
+
+## Binary Data
+
+Awelon provides no syntax for binaries. It is feasible to encode relatively small binaries via base16 or base64 text like `["bdf13a76c2" hex-to-bin]`, or even a direct list of byte values - e.g. `[23 [148 [247 ~ :] :] :]`. However, such representations are inefficient and inconvenient for larger binary values. The recommendation for large binary data is to leverage secure hash resources, via `%secureHash`.
+
+By referencing binary resources directly via secure hash, we can essentially include large multimedia data (music, textures, etc.) directly within an Awelon codebase. The secure hashes provide a robust versioning mechanism.
+
 ## Secure Hash Resources
 
-Awelon has built-in support for identifying resources via secure hash. 
+Awelon code is evaluated in an implicit environment consisting both of a dictionary and a larger, shared environment where binaries may be referenced by secure hash. The dictionary structure itself relies on this environment to reference patches. But we also use secure hashes within Awelon code for binary data and large value stowage.
 
 * external code or stowage is referenced via `$secureHash`
 * external binary data may be referenced via `%secureHash`
 * dictionary patches are always referenced by secure hash
 
-Awelon will use a 360-bit [BLAKE2b](https://blake2.net/) algorithm, and will encode the resulting 384-bit string as 60 characters [base64url](https://en.wikipedia.org/wiki/Base64). In a network context, it should be possible to request resources given their secure hashes, and perhaps form a content distribution network. (We might use only a fragment of the resource ID for lookup, and the rest for encryption.)
-
-## Data
-
-Awelon language has specialized representations for natural numbers and texts. Numbers are simply implicitly defined words like `42`. Texts have two embeddings, inline like `"hello, world!"` or multi-line:
-
-        "
-         multi-line texts starts with `" LF` (34 10)
-         each line is indented by one space (32)
-         excepting if line is empty `LF LF` (10 10) 
-         terminate the text with `LF ~` (10 126) 
-        ~
-
-Texts must be valid UTF-8, forbidding C0 (except LF) and DEL. Inline texts additionally forbid the double quote and LF. There are no character escapes, but the extra whitespace in the representation of multi-line text is not considered part of the text. Texts in Awelon are [syntactic sugar](https://en.wikipedia.org/wiki/Syntactic_sugar) for a simple list of codepoints: 
-
-        "hello" == [104 "ello" :]
-
-Awelon language has exactly one primitive data type - the `[]` block of code, representing a function. Data is instead [Church encoded](https://en.wikipedia.org/wiki/Church_encoding) or use similar variants such as the [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding). Values are thus represented by functions.
-
-Before I explain encoding of numbers and texts, let us examine encodings for other useful data types. Booleans are perhaps the simplest data. We might encode booleans as follows:
-
-        [onF][onT] false i == onF               false = [d i]
-        [onF][onT] true  i == onT               true  = [a d]
-
-        Using Definitions:
-           [A] i == A                           i = [] w a d 
-        [B][A] w == [A][B]                      w = [] b a   
-
-Booleans can be generalized to algebraic sum type `(A + B)`.
-
-        [onL][onR] [[A] inL] i  == [A] onL      inL = w d w i
-        [onL][onR] [[B] inR] i  == [B] onR      inR = w b a d
-
-Construction of `[[B] inR]` is trivial - `[B] mkR` where `mkR = [inR] b`. This is generally the case for value constructors. In practice, we may also wish to defer computation of partial constructions (see *Deferred Computations and Coinductive Data*). 
-
-Pairs - algebraic `(A * B)` product types - may also be Church encoded:
-
-        [onP] [[B][A] inP] i == [B][A]onP       inP = [] b b a i
-
-However, in Awelon language, we can encode a pair as `[[B][A]]`. 
-
-Between algebraic sums and products, we can represent any conventional data. 
-
-The option type `(1 + A)` may be modeled as a choice of `false` or `[[A] R]`. Natural numbers can be encoded as `μNat.(1 + Nat)` - that is, Nat is recursively zero or successor of a Nat. Given natural numbers, integers can be represented by a pair representing `X - Y`.  We can encode rational numbers as a numerator-denominator pair. We can encode decimal numbers with a significand and exponent. A list can be modeled as `μList.(1 + (A * List))`. Text can be encoded as a list of natural numbers. Algebraic encodings are often simple:
-
-        0 = false       (zero)
-        1 = [0 S], 2 = [1 S], ...
-        S = inR         (successor)
-
-        ~ = false       (null)
-        : = mkP inR     (cons)
-
-An alternative is to model data as implicitly folding over its structure. The Church encoding of natural numbers is an example of this. Consider: 
-
-        [X][F] 0 i == [X]
-        [X][F] 1 i == [X] F         == [[X][F] 0 i] F
-        [X][F] 2 i == [[X] F] F     == [[X][F] 1 i] F
-
-        0 = false
-        1 = [0 S], 2 = [1 S], ...
-        S = [c] a [b b] b a i
-
-Folding over a recursive structure that carries no additional data isn't particularly interesting. But we can generalize easily to folds over list structures:
-
-        [X][F] 0 i == X
-        [X][F] [[A] [L] cons] i == [[X][F]L] [A]  F
-
-        ~ = false
-        : = w [[c] a b [b] b a] a w i
-
-However, with data structures more sophisticated than natural numbers, choosing a specific fold seems awkward and arbitrary. With lists, we have both left folds and right folds. With trees, we have a variety of [tree traversals](https://en.wikipedia.org/wiki/Tree_traversal). Further, in context of linear typed structure, it is convenient if we can operate upon or [unzip](https://en.wikipedia.org/wiki/Zipper_%28data_structure%29) just part of a structure without observing the whole thing. 
-
-I believe the algebraic data encodings are generally superior. Regardless, it is my intention that Awelon developers be given reasonably free reign over the choice of encoding and corresponding tradeoffs, that the relevant policy shouldn't be built into what is essentially a syntactic sugar. This is achieved by allowing developers to partially define the encoding: 
-
-        0 (zero) is user definable 
-        S (succ) is user definable
-        : (cons) is user definable
-        ~ (null) is user definable
-
-        1 = [0 S]
-        2 = [1 S]
-        ...
-
-        "hello" = [104 "ello" :]
-        "→" = [8594 "" :]
-        "" = ~
-
-Awelon doesn't bother with anything beyond natural numbers and texts - just barely enough to efficiently embed data. The rest is left to *editable views* discussed toward the end of this document. Well, that and a special feature to reference external binaries.
-
-## Binary Data
-
-Awelon language supports reference to external binary data via `%secureHash`. We'll basically use the same text representation, but using values in range `0 .. 255` instead of Unicode codepoints.
-
-For small binaries, we might instead choose to embed the binary within base64 or base85 text, and accelerate conversions between text to the binary. Or just use a list of byte values. However, in context of Awelon's application model and hypermedia, referencing external binary data can be very convenient.
-
-*Note:* Developers are encouraged to leverage [rope-like](https://en.wikipedia.org/wiki/Rope_%28data_structure%29) structures if modeling edits on large binary data. 
+Awelon uses a 360-bit [BLAKE2b](https://blake2.net/) algorithm, and encodes the result as 60 characters [base64url](https://en.wikipedia.org/wiki/Base64). In a network context, it should be possible to request resources given their secure hashes, and perhaps form a content distribution network. (We might use only a fragment of the resource ID for lookup, and the rest for encryption.)
 
 ## Acceleration
 
@@ -185,13 +123,11 @@ A runtime will recognize and accelerate common functions. The accelerated implem
 
 The runtime will look at the given definitions. Upon recognizing `[] b a`, the runtime may link `w` to an acclerated swap implementation. Same for `i`.
 
-In general, recognition of accelerators may be fragile. It may be that `i = [] w a d` is recognized where the logically equivalent `i = [] [] b a a d` or `i = [[]] a a d` are not recognized. We might not even recognize `j = [] w a d` because we changed the function name. This is ultimately up to the runtime. Every runtime should carefully document sufficient criteria for achieving acceleration. One robust approach is to define a 'seed' dictionary containing and documenting accelerated programs, from which users may derive their own dictionaries.
+In general, recognition of accelerators may be fragile. It may be that `i = [] w a d` is recognized where the logically equivalent `i = [] [] b a a d` or `i = [[]] a a d` are not recognized. Even changing function names might break accelerators. This is ultimately up to the runtime. Due to this fragility, a runtime should carefully document recognized accelerators. A useful convention is to define a 'prelude' dictionary including the recognized accelerators. Another useful convention is to recognize definition of `foo.accel` as a flag that definition of `foo` should raise a warning if not accelerated, such that performance assumptions are recorded in the dictionary.
 
-Critically, acceleration of functions extends also to *data* and even further to *organization* of code, and efficient representation thereof. A natural number, for example, might be represented by simple machine words. Arrays are possible via acceleration of list representation together with indexed update and access functions. An accelerator for linear algebra might support vectors and matrices of unboxed floating point numbers, which might be represented and computed on a GPGPU. Accelerated evaluation of process networks might use physically distributed processes and shared queues.
+Critically, acceleration of functions extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 S]`. But under the hood they can be represented by simple machine words, and arithmetic on natural numbers could be reduced to a machine operation. We could accelerate lists to use arrays under the hood, and even support in-place updates for unique references with copy-on-write techniques. We can feasibly accelerate linear algebra to leverage a GPGPU, or accelerate Kahn process networks to leverage distributed memory and CPUs.
 
-In general, accelerators may be compilers. For example, we might represent a computation in terms of interpreting a safe subset of OpenCL. Acceleration of that interpreter might involve compiling that code for performance on a CPU or GPGPU. 
-
-Acceleration replaces conventional use of intrinsics and FFI.
+Acceleration replaces performance applications of intrinsic functions or FFI.
 
 ## Annotations
 
@@ -659,7 +595,11 @@ Reactive process networks fill out the remaining expressive gap of KPNs, enablin
 
 ## Hierarchical Dictionaries
 
-Awelon supports a simple model for hierarchical structure. The motivation is to support dictionary passing or synchronizing application patterns and corresponding security models that are otherwise difficult to represent. Awelon dictionaries are most readily referenced and shared via secure hash, so we leverage that here:
+Awelon supports a simple model for hierarchical structure. 
+
+Words of qualified form `foo@dict` reference the meaning of `foo` as defined in child dictionary `dict`. We can also express ad-hoc computations within a child dictionary: `[42 foo]@d == [42@d foo@d]`. This naturally extends to texts like `"hello"@d == [104 "ello" :]@d`, but annotations cannot be qualified. This namespace qualifier is second-class, and no space is permitted between the word or block and its qualifier.
+
+A child dictionary is represented within a dictionary patch via secure hash:
 
         secureHashOfPatch1
         secureHashOfPatch2
@@ -669,13 +609,11 @@ Awelon supports a simple model for hierarchical structure. The motivation is to 
         ...
         @wordN definitionN
 
-We update the definition of special symbol `@dict` to define a child dictionary. By default, all hierarchical dictionaries are empty. Use of a blank line in place of the secure hash is treated as a synonym for the empty dictionary. As with words, only the final definition of a dictionary symbol applies.
+Essentially, we define a symbol of form `@dict` like we would an Awelon word. The definition of this child dictionary is always centralized to a single secure hash. Only the final definition of the symbol is relevant. By default, every symbol of form `@dict` references an empty dictionary.
 
-Child dictionaries are referenced indirectly. A word of the form `foo@dict` refers to the meaning of `foo` within `dict`. When linked, if the definition of `foo` in `dict` is `x y z` then `foo@dict` will link as `x@dict y@dict z@dict`. Similarly, we may annotate a block for evaluation in context of a child dictionary, `[x y z]@dict == [x@dict y@dict z@dict]`. Since text is sugar for blocks, we also support `"hello"@dict == [104 "ello" :]@dict`. 
+There is no means for a child dictionary to reference its parent. Each child dictionary is entirely self-contained. This is a useful constraint for application security models, providing an structural restriction on dataflow when we communicate databases, documents, messages, or other application objects as dictionaries. However, it does result in a lot of logical replication between parent and child - for example, replicated definitions for natural numbers, arithmetic, texts, and list processing. Fortunately, structure sharing between parent and child is possible by deriving from common secure hashes. Ugly aesthetics like `42@dict` can be further mitigated via localization. 
 
-This namespace qualification is second class. No space is permitted between a word, block, or text and the `@dict` annotation. Deep hierarchical references such as `foo@bar@baz` are possible. These are left-associative, that is `foo@bar` under `baz`. I recommend against such references in source code (cf. Law of Demeter), but such references may arise naturally during evaluation. 
+Localization is a special optimization for evaluation with hierarchical dictionaries. Whenever `foo@bar` has the same meaning as `foo` within a given context, the runtime is free to replace the former with the latter. Localization can improve both performance (in context of stowage or memoization) and aesthetics. Further, it can lead to localization of associated metadata, for example we end up using `foo.doc` instead of `foo.doc@bar`.
 
-A child cannot reference the parent. But parent and child frequently share structure and meaning - a consistent interpretation of numbers, texts, math and utility functions. 
-
-*Localization* is an optimization that takes advantage of this sharing. Whenever `foo@bar` has the same meaning as `foo`, a localizing evaluator may forget the origin and simply replace `foo@bar` by `foo`. Localization can improve performance in context of stowage or memoization. More importantly, localization improves aesthetics and comprehension: we avoid noise like `42@bar` when it just means `42`, and applications will implicitly link localized metadata such as `foo.doc` instead of `foo.doc@bar`. Intriguingly, it is feasible for `foo@bar@baz` to localize to `foo` or `foo@bar`.
+*Note:* Namespace qualifiers may be hierarchical, and are right associative. For example, `foo@bar@baz` means we use the meaning of `foo@bar` under dictionary `baz`. Direct use of hierarchical qualifiers is discouraged, but they may arise naturally during evaluation.
 

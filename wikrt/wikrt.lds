@@ -32,10 +32,11 @@
 
     wikrt_commit;
     
-    wikrt_parse_code;
+    wikrt_parse_check;
+    wikrt_parse;
     wikrt_eval;
-    wikrt_eval_par;
-    wikrt_eval_cmd;
+    wikrt_eval_parallel;
+    wikrt_eval_stream;
     wikrt_eval_data;
     wikrt_eval_binary;
     wikrt_reify_binary;

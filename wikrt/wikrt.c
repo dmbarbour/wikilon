@@ -457,69 +457,73 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
     }
 }
 
-/** LIGHTWEIGHT PARSER
+/** Quick Parse Check
  * 
  * A simple linear scan over the input. The primary intention here
  * is to support lightweight detection of invalid input, and easy
  * error reporting for the same. We scan first for valid UTF-8 
  * input.
  */
-static inline uint8_t const* scan_ns_qualifier(uint8_t const* src, uint8_t const* const end)
+static uint8_t const* scan_ns_qualifier(uint8_t const* iter, uint8_t const* const end)
 {
     // word@ns, or [block]@ns, or even a "text"@ns
     // potentially hierarchical, e.g. `foo@ns1@ns2`
     do {
         bool const qualified = 
-            ((end - src) >= 2) &&
-            ('@' == src[0]) &&
-            is_valid_word_byte(src[1]);
-        if(!qualified) { return src; }
-        src = scan_valid_word(src+2, end);
+            ((end - iter) >= 2) &&
+            ('@' == iter[0]) &&
+            is_valid_word_byte(iter[1]);
+        if(!qualified) { return iter; }
+        iter = scan_valid_word(iter+2, end);
     } while(1);
 }
-uint8_t const* scan_inline_text(uint8_t const* src, uint8_t const* const end);
-uint8_t const* scan_multi_line_text(uint8_t const* src, uint8_t const* const end);
+static uint8_t const* scan_inline_text(uint8_t const* iter, uint8_t const* const end)
+{
+    while((end != iter) && (*iter > 31) && ('"' != *iter)) { ++iter; }
+    return iter;
+}
+static uint8_t const* scan_multi_line_text(uint8_t const* iter, uint8_t const* const end)
+{
+    while(end != iter) {
+        if('\n' == *iter) { ++iter; } 
+        else if(' ' == *iter) { 
+            // skip to end of line
+            do { ++iter; } while((end != iter) && (*iter > 31));
+        } else { return iter; }
+    } 
+    return end;
+}
 
-bool wikrt_parse_code(uint8_t const* const start, size_t const input_size, wikrt_parse_data* data)
+bool wikrt_parse_check(uint8_t const* const start, size_t const input_size, wikrt_parse_data* data)
 {
     wikrt_parse_data r = { 0 };
     size_t const utf8_size = utf8_strlen(start, input_size);
     assert(input_size >= utf8_size);
     uint8_t const* const end = start + utf8_size;
     uint8_t const* scan = start;
-    bool need_ws = false; // do we need a word separator?
-        // acceptable word separators are: SP LF [ ]
-        // word separators are necessary after a word, text,
-        // or a namespace qualified block.
 
     do {
         r.parsed = scan - start;
         if(0 == r.balance) { r.accepted = r.parsed; }
         if(end == scan) { goto parse_halt; }
         uint8_t const c = *(scan++);
-        if(is_valid_word_byte(c)) {
-            // WORDS
-            if(need_ws) { goto parse_halt; }
+        if(is_valid_word_byte(c)) { // word
             scan = scan_valid_word(scan, end);
             scan = scan_ns_qualifier(scan, end);
-            need_ws = true;
-        } else if((' ' == c) || ('\n' == c)) {
-            // WHITESPACE
-            need_ws = false;
-        } else if('[' == c) { 
-            // BLOCK START
-            if(need_ws) { goto parse_halt; } // word [block]
+        } else if((' ' == c) || ('\n' == c)) { // whitespace
+            // NOP
+        } else if('[' == c) { // block start
             ++(r.balance);
-            need_ws = false; 
-        } else if(']' == c) {
-            // BLOCK END
-            if(0 == r.balance) { goto parse_halt; }
+        } else if((']' == c) && (r.balance > 0)) { // block end
             --(r.balance);
             scan = scan_ns_qualifier(scan, end);
-            need_ws = (']' != *(scan-1)); // need_ws if qualified
-        } else if('"' == c) {
-            // EMBEDDED TEXTS
-            if(need_ws || (end == scan)) { goto parse_halt; }
+        } else if('(' == c) { // annotations
+            if((end == scan) || !is_valid_word_byte(*scan)) { goto parse_halt; }
+            scan = scan_valid_word(1+scan, end);
+            if((end == scan) || (')' != *scan)) { goto parse_halt; }
+            ++scan;
+        } else if('"' == c) { // embedded texts
+            if(end == scan) { goto parse_halt; }
             else if('\n' == (*scan)) {
                 scan = scan_multi_line_text(1+scan, end);
                 if((end == scan) || ('~' != *scan)) { goto parse_halt; }
@@ -528,9 +532,9 @@ bool wikrt_parse_code(uint8_t const* const start, size_t const input_size, wikrt
                 if((end == scan) || ('"' != *scan)) { goto parse_halt; }
             }
             scan = scan_ns_qualifier(1+scan, end);
-            need_ws = true;
+        } else { // cannot parse input
+            goto parse_halt; 
         }
-
     } while(1);
 
 parse_halt:
