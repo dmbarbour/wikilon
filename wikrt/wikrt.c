@@ -527,11 +527,10 @@ bool wikrt_parse_check(uint8_t const* const start, size_t const input_size, wikr
             if(end == scan) { goto parse_halt; }
             else if('\n' == (*scan)) {
                 scan = scan_multi_line_text(1+scan, end);
-                if((end == scan) || ('~' != *scan)) { goto parse_halt; }
             } else {
                 scan = scan_inline_text(scan, end);
-                if((end == scan) || ('"' != *scan)) { goto parse_halt; }
             }
+            if((end == scan) || ('"' != *scan)) { goto parse_halt; }
             scan = scan_ns_qualifier(1+scan, end);
         } else { // cannot parse input
             goto parse_halt; 

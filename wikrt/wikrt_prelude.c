@@ -9,7 +9,7 @@
 
 // multi-line - TEXT(L(...) B L(...))
 //  L for line, B for blank
-#define TEXT(X) "\"\n" X "~"
+#define TEXT(X) "\"\n" X "\""
 #define L(X) " " X "\n"
 #define B "\n"
 
@@ -67,10 +67,10 @@ DEF("prim:texts", TEXT(
     L("    \"\"      = ~")
     B
     L("    \"")
-    L("     multi-line texts starts with `\" LF` (34 10)")
-    L("     each non-empty line is indented one space (32)")
-    L("     terminate multi-line text with `LF ~` (10 126)")
-    L("    ~")
+    L("     multi-line texts start with `\" LF` (34 10)")
+    L("     non-empty lines are indented one space (32)")
+    L("     text terminates with final `LF \"` (10 34)")
+    L("    \"")
     B
     L("Texts must be encoded in valid UTF-8 excluding C0 (0-31) and")
     L("DEL (127), excepting LF (10). Inline texts cannot contain LF")
@@ -223,8 +223,8 @@ DEF("prim:secureHash", TEXT(
     L("and lazily links it via secure hashes. This enables Awelon")
     L("to model larger than memory data, effect-free LSM-trees.")
     B
-    L("A more obvious use case is BLOBs - injecting sound files or")
-    L("textures or similar structures into an Awelon computation.")
+    L("A more obvious use case is binaries - injecting sound files,")
+    L("textures, or similar structures into an Awelon computation.")
     L("Secure hashes are more convenient and efficient than base64.")
     B
     L("An Awelon system essentially operates in a larger environment")

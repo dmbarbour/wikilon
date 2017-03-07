@@ -1,21 +1,27 @@
 
 # Awelon Language
 
-Awelon is a purely functional language based on concatenative combinators. This document describes Awelon as a list of talking points, very roughly organized.
+Awelon is a purely functional language based on concatenative combinators.
 
 ## Why Another Language?
 
-Awelon differs from other languages in its adherence to simplicity and its choice of evaluation model. There are only four simple computational primitives, one data primitive, and a simple Forth-like syntax. Evaluation is by local confluent rewriting with lazy linking.
+Modern programming languages can produce useful artifacts - applications, games, and so on. But they do not permit flexible composition and decomposition of these artifacts. There are a lot of complicating factors here - hidden runtime structure, entanglement of effects and environment, separation of programmer and user interfaces, scalability to benefit from network effects.
 
-Awelon's simple syntax lowers barriers for program rewriting as an evaluation model, editable views for HCI, and collaboration with software agents. Program rewriting ensures the evaluated result is a program that may be serialized for debugging, distribution, or persistence. Lazy linking preserves human-meaningful words and link structure, ensuring results to be viewed the same as source. And software agents support the application layer effects.
+Awelon language aims to address those complications. Important design points:
 
-Like any pure language, Awelon's evaluation is separate from its effects model. Awelon explores a [RESTful application model](ApplicationModel.md) where application state is represented within a codebase, and effects are performed in context of a multi-agent system. Relevant effects patterns include [publish-subscribe](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern) and a variation on the [tuple space](https://en.wikipedia.org/wiki/Tuple_space) oriented around [work orders](https://en.wikipedia.org/wiki/Work_order). More conventional effects models are possible within orders.
+* Awelon evaluates by local confluent rewriting, much like expression `(6 * 7)` evaluates to `42` in arithmetic. Every evaluation step has representation within Awelon language and may thus be serialized or rendered. Rewrite based evaluation simplifies debugging, distribution, integration of the program with HCI, and further use of program results.
 
-Intriguingly, [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html) can feasibly present Awelon programs or codebases as [hypermedia](https://en.wikipedia.org/wiki/Hypermedia) objects. GUI forms with live coding properties. Words within a act as hypermedia links. Some relationships may be implicit in word structure (as between `foo`, `foo.doc`, and `foo.author`) to support more flexible hypermedia than is implied by direct word dependencies. Editable views can also support numbers, comments, lambdas and let expressions for cases where tacit programming is annoying, and so on. 
+* Awelon specifies 'lazy linking' of words by the evaluator. That is, a word is not rewritten to its definition unless doing so would result in further rewrites. This allows for a more compact representation of results and ensures human-meaningful link structure and symbols are preserved by the evaluator.
 
-Universal serializability and purity also lowers barriers for high-performance and large-scale computing. We can semi-transparently accelerate evaluation of linear algebra to use GPGPU computing. We can distribute evaluation of process networks across multiple virtual machines. We can use checkpoints and replay computations if part of the system fails. Big data or computations can be stowed away and referenced by secure hash. It will take time to build Awelon up to its full potential, but I believe Awelon has excellent long term prospects for performance.
+* Awelon has a simple, Forth-like syntax. This lowers barriers for [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). Editable views can support domain-specific notations or allow interactive editing of Awelon via forms or graphs. This feature combines nicely with rewriting and lazy linking, enabling the same views to apply to results. 
 
-Awelon's simplicity, purity, scalability, and evaluation model each contribute greatly to its utility for the envisioned application model. I have not encountered another language that would work as well.
+* Awelon has a simple, pure, and portable semantics. There are only four primitive computation combinators. Scope is easy to control, so security risks are minimal when sharing code within a community. Programs are concatenative, to simplify composition and decomposition. Performance is achieved via annotations and acceleration of useful models, as opposed to ad-hoc integration of primitive types or FFI.
+
+* Awelon scales easily, leveraging uniform serializability with other features. Lazy linking enables larger than memory structures. This extends dynamically with stowage annotations to move large objects to disk and reference them by secure hash word. Pure evaluation allows memoization for spreadsheet-like incremental computations, and this extends readily to stowed objects. Acceleration of Kahn process networks would extend Awelon to long-running distributed systems computations.
+
+Awelon also experiments with [application models](ApplicationModel.md). There is a preference for RESTful approaches - documents, publish subscribe, tuple spaces, etc. - where application state is integrated with the codebase.
+
+In any case, Awelon diverges significantly from conventional language design. It isn't just a new language, it's a new way of thinking about programming that unites ideas from spreadsheets and functional programming and web services. Awelon does not attempt to integrate directly with existing systems - there is no FFI, for example. But indirect systems integration is feasible through web services, software agents, and compilation between languages.
 
 ## Primitives
 
@@ -72,10 +78,10 @@ Use suffix **.ao** (Awelon Object) for Awelon dictionary file names.
 Awelon language has exactly one primitive data type - the `[block of code]`, representing a first class function. However, Awelon does provide automatic definition for natural numbers like `42` and a syntactic sugar for embedded texts like `"hello, world!"`. Multi-line texts are also possible:
 
         "
-         multi-line texts starts with `" LF` (34 10)
+         multi-line texts start with `" LF` (34 10)
          non-empty lines are indented one space (32)
-         text terminates with final `LF ~` (10 126)
-        ~
+         text terminates with final `LF "` (10 34)
+        "
 
 Semantically, a natural number is implicitly defined as a unary structure: 
 
@@ -98,9 +104,9 @@ Awelon is designed to work with acceleration and editable views to provide a com
 
 ## Binary Data
 
-Awelon provides no syntax for binaries. It is feasible to encode relatively small binaries via base16 or base64 text like `["bdf13a76c2" hex-to-bin]`, or even a direct list of byte values - e.g. `[23 [148 [247 ~ :] :] :]`. However, such representations are inefficient and inconvenient for larger binary values. The recommendation for large binary data is to leverage secure hash resources, via `%secureHash`.
+Awelon provides no syntax for binaries. It is feasible to encode relatively small binaries via base16 or base64 text like `["bdf13a76c2" hex-to-bin]`, or even directly encode a list of byte values - e.g. `[23 [148 [247 ~ :] :] :]`. However, such representations are inconvenient and inefficient. 
 
-By referencing binary resources directly via secure hash, we can essentially include large multimedia data (music, textures, etc.) directly within an Awelon codebase. The secure hashes provide a robust versioning mechanism.
+The recommendation for large binary data is to leverage secure hash resources, via `%secureHash`. Logically, the referenced binary would expand to the list of byte values in `0..255`. Awelon runtimes should accelerate this model, using a byte array under the hood. By referencing binary resources in this manner, we can effectively include large multimedia objects (music, textures, etc.) directly in an Awelon codebase, without translation overheads.
 
 ## Secure Hash Resources
 

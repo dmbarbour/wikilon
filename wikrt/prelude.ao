@@ -5,7 +5,7 @@
  This is an Awelon dictionary that attempts to document Awelon
  well enough for a human to reimplement it if necessary, and
  serve as a seed for a larger dictionary.
-~
+"
 @prim: "Awelon language primitives"
 @prim:a "[B][A]a == A[B]   (apply)"
 @prim:b "[B][A]b == [[B]A] (bind)"
@@ -28,7 +28,7 @@
  Awelon syntax via editable views, for example `4/10` may
  expand to `[4 10 ratio]` in source. Even local variables
  and lambdas be supported this way.
-~
+"
 @prim:numbers "
  Natural Numbers
 
@@ -42,7 +42,7 @@
  Awelon does not directly support other number types, but use
  of editable views can provide syntax for integers, rationals,
  decimals, and even vectors or matrices.
-~
+"
 @prim:texts "
  Embedded Texts
 
@@ -50,10 +50,10 @@
      ""      = ~
 
      "
-      multi-line texts starts with `" LF` (34 10)
-      each non-empty line is indented one space (32)
-      terminate multi-line text with `LF ~` (10 126)
-     ~
+      multi-line texts start with `" LF` (34 10)
+      non-empty lines are indented one space (32)
+      text terminates with final `LF "` (10 34)
+     "
 
  Texts must be encoded in valid UTF-8 excluding C0 (0-31) and
  DEL (127), excepting LF (10). Inline texts cannot contain LF
@@ -63,7 +63,7 @@
  element per Unicode codepoint. Definitions of `:` (cons) and
  `~` (nil) are left to the user, but accelerated definitions are
  recommended for performance.
-~
+"
 @prim:words "
  Awelon Words
 
@@ -88,7 +88,7 @@
      @#()<>{}\/,;|&='", SP, C0, and DEL (0-32 and 127)
 
  See `prim:hierarchy` for namespaces.
-~
+"
 @prim:dictionary "
  Awelon Dictionary
 
@@ -110,7 +110,7 @@
  error. Awelon code uses explicit fixpoints for cyclic behavior.
 
  See `prim:hierarchy` for hierarchical structure.
-~
+"
 @prim:hierarchy "
  Hierarchical Dictionaries, Namespaces, and Localization
 
@@ -139,7 +139,7 @@
  does not affect meaning, we may drop the qualifer. If `42@d`
  behaves as `42`, we should favor `42`. Localization is good
  for both performance and aesthetics.
-~
+"
 @prim:annotations "
  Annotations in Awelon
 
@@ -162,7 +162,7 @@
  within a computation. They extend Awelon within that limit.
 
  Supported annotations are documented under prefix `anno:`.
-~
+"
 @prim:acceleration "
  Acceleration of Awelon
 
@@ -188,7 +188,7 @@
  predictable, reliable. As a convention, we define `foo.accel`
  to document that `foo` should be accelerated. Awelon systems
  can robustly verify these documented assumptions.
-~
+"
 @prim:secureHash "
  Secure Hash Resources
 
@@ -206,8 +206,8 @@
  and lazily links it via secure hashes. This enables Awelon
  to model larger than memory data, effect-free LSM-trees.
 
- A more obvious use case is BLOBs - injecting sound files or
- textures or similar structures into an Awelon computation.
+ A more obvious use case is binaries - injecting sound files,
+ textures, or similar structures into an Awelon computation.
  Secure hashes are more convenient and efficient than base64.
 
  An Awelon system essentially operates in a larger environment
@@ -215,7 +215,7 @@
  The hash is a secure capability, authorizing read access.
 
  The secure hash chosen: 360-bit BLAKE2b encoded in base64url.
-~
+"
 @anno: "assumed annotations"
 @anno:arity "
  Arity Annotations (a2)..(a9)
@@ -230,7 +230,7 @@
  Arity annotations support lazy evaluations, inline comments of
  form `[comment](a2)d`, and help control lazy linking of words.
  They are among the most versatile and useful of annotations.
-~
+"
 @anno:substructure "
  Substructural Type Annotations (nc) and (nd)
 
@@ -241,6 +241,6 @@
  Annotation (nc) marks a value no-copy, (nd) no-drop. This offers
  a simple basis for affine (nc), relevant (nd), and linear (both)
  data types, readily verified statically or dynamically.
-~
+"
 @prelude.runtime "Wikilon"
 @prelude.version "2017 Feb 22"
