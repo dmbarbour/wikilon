@@ -5,7 +5,7 @@ Awelon is a purely functional language based on concatenative combinators.
 
 ## Why Another Language?
 
-Modern programming languages can produce useful artifacts - applications, games, and so on. But they do not permit flexible composition and decomposition of these artifacts. There are a lot of complicating factors here - hidden runtime structure, entanglement of effects and environment, separation of programmer and user interfaces, scalability to benefit from network effects.
+Modern programming languages can produce useful artifacts - applications, games, and so on. But they do not permit flexible composition and decomposition of these artifacts. There are a lot of complicating factors - hidden runtime structure, entanglement of effects and environment, separation of programmer and user interfaces, scalability to benefit from network effects, even how software is shared in a community.
 
 Awelon language aims to address those complications. Important design points:
 
@@ -15,13 +15,15 @@ Awelon language aims to address those complications. Important design points:
 
 * Awelon has a simple, Forth-like syntax. This lowers barriers for [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). Editable views can support domain-specific notations or allow interactive editing of Awelon via forms or graphs. This feature combines nicely with rewriting and lazy linking, enabling the same views to apply to results. 
 
-* Awelon has a simple, pure, and portable semantics. There are only four primitive computation combinators. Scope is easy to control, so security risks are minimal when sharing code within a community. Programs are concatenative, to simplify composition and decomposition. Performance is achieved via annotations and acceleration of useful models, as opposed to ad-hoc integration of primitive types or FFI.
+* Awelon has a simple, pure, and portable semantics. Programs are concatenative, which simplifies composition and decomposition. Scope is easy to control, which simplifies sharing of code and integration of untrusted code. Performance is achieved via annotations and acceleration of useful models, as opposed to ad-hoc language extension with primitive types or FFI.
+
+* Awelon is structured in terms of hierarchical, self-contained dictionaries instead of packages and libraries. The self-contained dictionary ensures control and versioning of deep dependencies, while hierarchy enables robust integration and maintenance of independently developed resources. This structure encourages community curation instead of individual ownership.
 
 * Awelon scales easily, leveraging uniform serializability with other features. Lazy linking enables larger than memory structures. This extends dynamically with stowage annotations to move large objects to disk and reference them by secure hash word. Pure evaluation allows memoization for spreadsheet-like incremental computations, and this extends readily to stowed objects. Acceleration of Kahn process networks would extend Awelon to long-running distributed systems computations.
 
-Awelon also experiments with [application models](ApplicationModel.md). There is a preference for RESTful approaches - documents, publish subscribe, tuple spaces, etc. - where application state is integrated with the codebase.
+Awelon also experiments with alternative [application models](ApplicationModel.md). There is a preference for RESTful approaches - documents, publish subscribe, tuple spaces, etc. - where application state is integrated with a codebase and maintained by a community of human and software agents.
 
-In any case, Awelon diverges significantly from conventional language design. It isn't just a new language, it's a new way of thinking about programming that unites ideas from spreadsheets and functional programming and web services. Awelon does not attempt to integrate directly with existing systems - there is no FFI, for example. But indirect systems integration is feasible through web services, software agents, and compilation between languages.
+In any case, Awelon diverges significantly from conventional language design. This isn't just a new language, it's a new way of thinking about programming that uses ideas from spreadsheets, functional programming, and web services. Awelon does not attempt to integrate directly with existing systems - there is no FFI, for example. But indirect systems integration is feasible through web services, software agents, and compilation between languages.
 
 ## Primitives
 
@@ -122,18 +124,16 @@ Awelon uses a 360-bit [BLAKE2b](https://blake2.net/) algorithm, and encodes the 
 
 Acceleration is a performance assumption for Awelon. 
 
-A runtime will recognize and accelerate common functions. The accelerated implementation may be hand optimized and built into the runtime to achieve performance similar to a primitive. For example, many runtimes will accelerate the following functions:
+A runtime will recognize and accelerate common functions. The accelerated implementation may be hand optimized and built into the runtime to achieve performance similar to a primitive. For example, runtimes might accelerate the following functions:
 
            [A]i == A            (inline)         i = [] w a d
         [B][A]w == [A][B]       (swap)           w = [] b a
 
-The runtime will look at the given definitions. Upon recognizing `[] b a`, the runtime may link `w` to an acclerated swap implementation. Same for `i`.
+The runtime will look at the given definitions. Upon recognizing `[] b a`, the runtime may link `w` to an acclerated swap implementation. Whenever `i` appears at the end of a subprogram, we might leverage the tail-call optimization.
 
-In general, recognition of accelerators may be fragile. It may be that `i = [] w a d` is recognized where the logically equivalent `i = [] [] b a a d` or `i = [[]] a a d` are not recognized. Even changing function names might break accelerators. This is ultimately up to the runtime. Due to this fragility, a runtime should carefully document recognized accelerators. A useful convention is to define a 'prelude' dictionary including the recognized accelerators. Another useful convention is to recognize definition of `foo.accel` as a flag that definition of `foo` should raise a warning if not accelerated, such that performance assumptions are recorded in the dictionary.
+In general, recognition of accelerators may be fragile. It may be that `i = [] w a d` is recognized where the logically equivalent `i = [[]] a a d` is not recognized. Even changing function names could break accelerators. This is ultimately up to the runtime. Due to this fragility, a runtime should carefully document recognized accelerators, and provide some means to warn developers in case of bad assumptions. A useful convention is to define a prelude dictionary including the recognized accelerators, and to flag assumed accelerators by defining `foo.accel` if we expect `foo` to be accelerated.
 
-Critically, acceleration of functions extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 S]`. But under the hood they can be represented by simple machine words, and arithmetic on natural numbers could be reduced to a machine operation. We could accelerate lists to use arrays under the hood, and even support in-place updates for unique references with copy-on-write techniques. We can feasibly accelerate linear algebra to leverage a GPGPU, or accelerate Kahn process networks to leverage distributed memory and CPUs.
-
-Acceleration replaces performance applications of intrinsic functions or FFI.
+Critically, acceleration of functions extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 S]`. But under the hood they could be represented by simple machine words, and arithmetic on natural numbers could be reduced to a machine operation. We can accelerate lists to use array representations and in-place indexed updates for unique references. We can feasibly accelerate linear algebra to leverage a GPGPU, or accelerate Kahn process networks to leverage distributed CPUs and memory.
 
 ## Annotations
 
@@ -368,9 +368,9 @@ The simplest parallelism that clients might request is parallel evaluation of a 
 
 Unfortunately, `(par)` has severe limitations on expressiveness. It is at once too expressive to leverage low-level parallelism (vector processing, SIMD, SSE, GPGPU) and insufficiently expressive for flexible communication channels between parallel components.
 
-For low level parallelism, we might accelerate [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra). Alternatively, we accelerate evaluation for a safe subset of OpenCL or WebCL or some Khronos group spec, with which we might later accelerate linear algebra. Either approach can get Awelon into machine learning, physics simulations, graphics and audio, and other high performance number crunching systems.
+For low level parallelism, we could accelerate [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra). Alternatively, we could accelerate evaluation for a safe subset of OpenCL or similar, above which we might later accelerate linear algebra. Either approach can help Awelon in the domains of machine learning, physics simulations, graphics and audio, and other high performance number crunching computations.
 
-For high level parallelism, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), or more precisely the *Reactive Process Network* variant detailed later. The state of a process network is described by a value. This state may involve named processes with ports and wires between them, messages pending on wires. Evaluation results deterministically in another state. Accelerated evaluation can use physically distributed processors and queues to simulate the network. Usefully, process networks are *monotonic*. A client program can inject messages and extract results without waiting for a final network state.
+For high level parallelism, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), more specifically a variant with temporal extensions (see *Reactive Process Networks*, below). Essentially, we would describe a process network as a first-class value, and accelerate an 'evaluation' function (of type `KPN → KPN`) such that it splits the process network among distributed memory and CPUs to run the computation. The *monotonic* nature of KPNs allows distributed computation to continue in the background even as we inject and extract messages. 
 
 ## Structural Scoping
 
@@ -458,9 +458,9 @@ Knowing these types, we can also check for consistency between conditional branc
 
 ### Delayed Typing
 
-Simple static types are frequently inexpressive, constraining more than helping.
+Simple static types are oft inexpressive, constraining more than helping.
 
-We can introduce a simple escape. Consider a `(dyn)` annotation used as `[F] b b (dyn)` with formal behavior `[A](dyn) => [A]`. The presence of `(dyn)` does not suppress obvious static type errors, but could generally suppress errors that result from being *unable* to infer static types that might be too sophisticated for our simple checker - especially dependent types. Intriguingly, the ability to eliminate `(dyn)` via partial evaluations could mean we can improve static types as we provide more static information and usage context.
+We can introduce an explicit escape. Consider a `(dyn)` annotation used as `[F] b b (dyn)` with formal behavior `[A](dyn) => [A]`. The presence of `(dyn)` does not suppress obvious static type errors, but may suppress warnings or errors that result from being *unable* to infer static types for a given subprogram, types too sophisticated for our simple type checker. Dependent types are an example where types are likely too sophisticated for a simple checker. Conveniently, the ability to eliminate `(dyn)` via partial evaluations at compile time would enable us to leverage dynamically typed macro-like behaviors while still supporting a statically typed system. 
 
 ### Sophisticated Types
 
@@ -470,11 +470,9 @@ Related to static typing, non-terminating evaluation in Awelon is always an erro
 
 ## Editable Views
 
-Awelon language has an acceptably aesthetic plain text syntax. However, like Forth, Awelon does not scale nicely beyond perhaps twelve tokens per definition because humans too easily lose track of context. This could be mitigated by better type feedback or live examples. But Awelon is designed for another simple technique to support more conventional programming styles, DSLs, and program scale. Awelon shifts the burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
+Awelon language has an acceptably aesthetic plain text syntax. But, like Forth, Awelon does not scale nicely beyond twelve tokens per definition because humans easily lose track of context. This could be mitigated by live feedback on types and examples. But Awelon is designed to use another simple technique to support more conventional programming styles, DSLs, and program scale: Awelon shifts the rich syntax burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
 
-I put some emphasis on *plain text* editable views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary through a conventional filesystem. However, graphical views could potentially include checkboxes, sliders, drop-down lists, graphs and canvases, and may offer an interesting foundation for graphical user interfaces within Awelon's application model. 
-
-Numbers are a useful example for editable views. A viable sketch:
+My initial emphasis is textual views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary through a conventional filesystem. Numbers are a useful example for textual editable views. A viable sketch:
 
         #42         == (AWELON 42)
         42          == [#42 #0 integer]
@@ -493,29 +491,31 @@ Command lists are another valuable view feature:
         {foo, bar, baz} == [[foo] {bar, baz} :]
         {baz}           == [[baz] ~ :]
 
-Command lists are useful for various purposes, supporting continuation-passing style or a concise embedding of interruptable code. While I use a normal `~ :` list structure here, a view could try something more specialized.
+Command lists are useful for various purposes, supporting continuation-passing style or a concise embedding of interruptable code. While I use a normal nil/cons list structure here, a view could favor something more specialized like the Haskell `do` notation.
 
-Ideally, all editable views should be *evaluable*. That is, program evaluation should generate the same structures we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` (or whatever we use to represent decimal numbers) should be a viable result from a computation. 
+Ideally, all editable views should be computable, in the sense of having a normal form. That is, program evaluation should be able to generate the same structure we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` (or whatever we use to represent decimal numbers) should be a viable result from a computation. 
 
-Design of evaluable editable views is very sensitive to arity annotations and accelerators. A consequence is that editable views should be *defined* within the same dictionary they're used to view by some simple convention. Perhaps a word defining a `[[view→code][code→view]]` pair where `code` and `view` are represented as text. Representing views within the dictionary is convenient for testing and caching of views, and for updating views based on application or edit session state (e.g. so we can separate namespace from code). 
+Design of computable, editable views is very sensitive to arity annotations and accelerators. A consequence is that editable views should be *defined* within the same dictionary they're used to view by some simple convention. Perhaps a word defining a `[[view→code][code→view]]` pair where `code` and `view` are represented as text. Representing views within the dictionary is convenient for testing and caching of views, and for updating views based on application or edit session state (e.g. so we can separate namespace from code). 
 
-With evaluable views in mind, we might represent comments as:
+With computable views in mind, we might represent comments as:
 
-        /* comment */  ==  [" comment " (:rem)](a2)d
+        /* comment */  ==  " comment "(a2)d
 
-The arity annotation allows embedding of comments into computed values. The `(~rem)` annotation serves as a lightweight indicator of the comment's 'type' (so we can add other comment types) and additionally permits integration with active debugging - for example, tracing comments to see progress, or conditionally stalling on certain comments.
+The arity annotation ensures the comment is not deleted until it might prevent progress from the left side, and hence we can always inject comments into values. A relevant point is that we aren't limited to one 'type' of comment, and comments of other types can easily inject flexible rendering hints into Awelon code. The discussion on *Named Local Variables* offers one very useful example.
 
-*Aside:* Between command lists and numbers, word definitions can easily scale to a thousand tokens. If we start representing graphical programs with tables, graphs, canvases, radio buttons, drop-down options lists, and similar features we might scale another order of magnitude. Of course, we'll also divide larger programs into small words that can be viewed and edited together. 
+Editable views essentially form a compiler/decompiler that treats Awelon language as a functional macro-assembly. The main difference from conventional languages above a bytecode is that the Awelon code is treated as the canonical source, and we're forced to 'decompile' said code into our language of editing. The indirection provided by the decompiler simplifies issues like whitespace formatting and forwards/backwards compatibility.
+
+With editable views, individual definitions can scale many orders of magnitude. It is even possible to represent conventional 'modules' in terms of expressions that construct first-class records of functions, though I'd encourage one word per independently useful function as the normal case.
+
+Although initial emphasis is textual views, it is feasible to model richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined into the current view. 
 
 ## Named Local Variables
 
-An intriguing opportunity for editable views is support for lambdas and let-expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, and support a more conventional programming style if desired. Consider the locals syntax used in [Kitten language](http://kittenlang.org/):
+An intriguing opportunity for editable views is support for local variables, like lambdas and let expressions. This would ameliorate use cases where point-free programming is pointlessly onerous (like working with fixpoints or algebraic expressions). It also supports a more conventional programming style where desired. Consider a lambda syntax of form:
 
-        -> X Y Z; CODE   ==  ["X Y Z"(:λ)](a2)d CODE'
+        \ X Y Z -> CODE ==  ["X Y Z"(:λ)](a2)d CODE'
 
-This syntax can be used for lambdas but also works adequately for local variable expressions as in `6 7 * -> X; CODE`. On the right hand side, the `["X Y Z"(:λ)](a2)d` comment preserves variable names and lambda structure for a future render, while `CODE'` does not contain the `X Y Z` variables. 
-
-We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` using a simple algorithm:
+This plucks three items off the stack, giving them local names within `CODE`. On the right hand side, the lambda comment - `["X Y Z"(:λ)](a2)d` - enables us to later recover the variable names and lambda structure when we decompile for future edits. We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` using a simple algorithm:
 
         T(X, E) | E does not contain X      => d E
         T(X, X)                             => 
@@ -526,9 +526,9 @@ We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` using a simple algorithm:
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-This algorithm is adapted from the partial evaluation optimization leveraging free variables. The main difference is that we know our variables are named values and we may desire special handling for conditional behaviors to avoid copying data into each branch. Similarly, we want to specialize switch expressions for labeled data. Essentially, the editable view acts as a lightweight compiler and disassembler to work with human meaningful variable names.
+This algorithm is adapted from the partial evaluation optimization leveraging free variables. The main difference from the optimization is that we know our variables are named values and we may desire special handling for conditional behaviors like `if` to avoid copying data into each branch.
 
-After we have named locals, we might also support infix expressions, e.g. `((X + Y) * Z)` could be made to work as we'd expect, and the editable view could even know about precedence. We'd need to escape annotations if we overload parentheses in this manner, of course.
+Lambdas can be leveraged into let expressions (like `let var = expr in CODE` or `CODE where var = expr`) or the Haskell-like `do` notation. Also, given named local variables, it is feasible to support infix expressions like `((X + Y) * Z) => X Y + Z *` for assumed binary operators. I leave these developments as an exercise for the reader. :D
 
 ## Namespaces
 
@@ -538,7 +538,7 @@ Awelon has limited support for namespaces via hierarchical dictionaries (see bel
 
 Labeled sum types (variants) allow conditional discrimination on a label. Labeled product types (records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data is self-documenting (label informs human) and extensible (add more labels).
 
-A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] inL] inR] inL]` structure where the left-right-left path encodes the label. Unlike label-value pairs, deep sums do not require dependent types. A labeled product could feasibly be modeled as a heterogeneous trie on the label. Consider:
+A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] inL] inR] inL]` structure where the left-right-left path is extended to multiple bytes encoding a human-meaningful label. Unlike label-value pairs, deep sums do not require dependent types. A labeled product can similarly be modeled as a heterogeneous trie on the label. Consider:
 
         (Deep Sums)
         [[[A] inL] inL]
@@ -551,16 +551,14 @@ A useful way to encode labeled sums is by deep primitive sum structures. That is
         (Merged Trie)
         [[[A] ~ :] [~ [[[B] ~ :] ~ :] :] :]
 
-Here the label is encoded as `(RL | RR)* LL`, where `RL` corresponds to constructor `[inL] b [inR] b`. The `(RL | RR)*` structure represents a finite `(0 | 1)*` bitfield, within which we might encode texts or numbers. The final `LL` terminates the label. This encoding has several nice properties. It is a simple regular language and a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list. 
+A useful label encoding is `(RL|RR)*LL`, where `RL` corresponds to constructor `[inL] b [inR] b`. The `(RL|RR)*` structure represents a finite `(0|1)*` bitfield, within which we encode texts or numbers. The final `LL` terminates the label. This encoding has the nice properties of being a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list. 
 
-Unfortunately, while tries are an excellent data structure, they are awkward to work with. Rigid ordering of labels within a trie is inconvenient for human use. Human meaningful labels are very sparse in the above encoding, which does not result in space-efficient representatins. (Use of a radix tree might help, but has a significant complexity cost.) For acceleration, exposing the record's in-memory representation to normal user functions is not optimal.
+Unfortunately, the trie is awkward and inefficient to work with directly. A better alternative is instead to work with a trie *constructor* - a function that, given an initial record object, loads it with data. In Awelon text, this might look something like `[[A] "foo" :: [B] "bar" :: ...]`. Relevantly, the ordering of labels in this representation is not relevant, composition of record functions would essentially represent update of a record, and the encoding is not sparse. I'm assuming the type of `::` is dependent on the text argument, but we could use an expanded label structure if necessary. An editable view could feasibly reduce either to a more aesthetic `[[A] :foo [B] :bar ...]`. 
 
-Instead of working with the trie directly, we should represent a function that writes a trie by injecting a series of label-value pairs. For example, a function `[[A] "foo" KV [B] "bar" KV]` might write labels `foo` and `bar` into a record with the associated values (or perhaps `label 'o 'o 'f`  to simplify types). An editable view could provide a more aesthetic presentation like `[[A] :foo [B] :bar]`. The resulting function is composable, commutative for different labels, and has a much better signal-to-noise ratio and HCI story than the trie structure.
+Acceleration of records would logically construct a trie and extract an updated new record function with every operation but really just using an optimized representation like a hashmap under the hood. Acceleration of functions related to labeled variants could serve a similar role of improving performance and aesthetics.
 
-An accelerated runtime could use a hashmap or other conventional structure to represent a record. Each accelerated operation on a record could perform the full construct-manipulate-extract sequence, such that the trie is not visible to normal user code and might never be represented in memory. The logical existence of the trie is only necessary to understand the record model, to reason about its formal type, commutativity, or correctness. We might similarly defer construction of labeled variants to simplify acceleration and HCI for them, too.
-
-By accelerating labeled data, Awelon can support parameter objects, flexible variants, labeled case expressions, and a more conventional programming style with events and routing on human labels. If *necessary*, I might introduce primitive syntactic sugar for labels like I have for natural numbers and texts. But I feel the need to see how far we can get without that, first.
-
+Assuming aesthetic, accelerated, labeled data, Awelon can support parameter objects, extensible event types, labeled case expressions, and a more conventional programming style with events and routing on human labels. 
+ 
 ## Unique References and In-Place Updates
 
 Persistent structures are great and should be used frequently. But in-place update has some performance advantages that are reasonably difficult to give up. 
@@ -586,17 +584,21 @@ A weakness of conventional [Kahn Process Networks (KPNs)](https://en.wikipedia.o
 * Waiting advances time to next message in set.
 * We explicitly advance time for open input ports.
 
-The advance of time is driven externally at open input ports, internally via latencies. Advancing time at an open input port essentially says, "the next message will have *at least* this future time". Cyclic wiring with latency permit precise expression of ad-hoc clock-like behaviors. Conventional KPN behavior is preserved if we never advance time and use zero latency wiring. That is, reads wait until either a message is available OR the upstream process advances past the reader's time, which ever happens first. 
+Reactive process networks could be modeled explicitly in KPNs by simply adding 'time advances by X units' messages to every port, and being careful to explicitly propagate this information to every output port. But it's more convenient to treat this as an alternative effects model at the process model, dividing 'wait' from 'read' within a process. Of course, reads will still implicitly wait until either a message arrives or time explicitly advances on the input port beyond the reader's current time. 
 
-Time stamps and latencies can easily be represented by natural numbers. We can usefully normalize times by subtracting the minimum time stamp from all time stamps, such that at least one time stamp in the network description is 0.
+Reactive process networks permit interesting expressions. We can interpret input ports as stateful memory, maintaining a value of type `S` and receiving messages of type `S→S`. We can model clock-like behaviors that periodically send messages via cyclic wiring with latency. Ultimately, a reactive network's advance of time is driven externally by advancing time on open input ports and internally via clock-like behavior. Conventional KPN behavior is preserved if we never advance time and use zero latency wiring. 
 
-Reactive process networks fill out the remaining expressive gap of KPNs, enabling us to work with asynchronous inputs, merge streams as needed. Further, we can now control evaluation 'up to' a given logical time. This is very useful for interacting with the real world, and in real-time.
+This simple temporal extension completes the KPN model for systems programming. 
+
+Accelerated evaluation of the reactive process network can readily operate across distributed memory and CPUs. If compiled as an effects model we can also attach open input-output ports to real-world IO sources (keyboard, mouse, cameras, video, sound, etc.) without a central IO bottleneck. My intention is for Awelon systems to leverage reactive process networks as a scalable, composable alternative to monadic effects, in addition to a convenient model for network scale parallel stream processing.
+
+*Note:* The model of time, and the current time, is not explicitly visible within the processes. We can use natural numbers to represent time. We can easily normalize times by subtracting the minimum time stamp from all time stamps. We can freely assign times an external meaning, e.g. logical 'microseconds' or 'nanoseconds' or similar.
 
 ## Hierarchical Dictionaries
 
 Awelon supports a simple model for hierarchical structure. 
 
-Words of qualified form `foo@dict` reference the meaning of `foo` as defined in child dictionary `dict`. We can also express ad-hoc computations within a child dictionary: `[42 foo]@d == [42@d foo@d]`. This naturally extends to texts like `"hello"@d == [104 "ello" :]@d`, but annotations cannot be qualified. This namespace qualifier is second-class, and no space is permitted between the word or block and its qualifier.
+Words of qualified form `foo@dict` reference the meaning of `foo` as defined within child dictionary `dict`. We can also express ad-hoc computations within a child dictionary: `[42 foo]@d == [42@d foo@d]`. This also extends to texts like `"hello"@d == [104 "ello" :]@d`. The namespace qualifier is second-class, and no separation is permitted between a word or block or text and its qualifier.
 
 A child dictionary is represented within a dictionary patch via secure hash:
 
@@ -612,7 +614,7 @@ Essentially, we define a symbol of form `@dict` like we would an Awelon word. Th
 
 There is no means for a child dictionary to reference its parent. Each child dictionary is entirely self-contained. This is a useful constraint for application security models, providing an structural restriction on dataflow when we model databases, documents, messages, or other application objects as dictionaries. However, it does result in a lot of logical replication between parent and child - for example, replicated definitions for natural numbers, arithmetic, texts, and list processing. Fortunately, structure sharing between parent and child is possible by deriving from common secure hashes. 
 
-Ugly aesthetics like `42@dict` can be further ameliorated via localization. Localization is a special optimization for evaluation with hierarchical dictionaries. Whenever `foo@bar` has the same meaning as `foo` within a given context, the runtime is free to replace the former with the latter. Localization can improve both performance (in context of stowage or memoization) and aesthetics. Further, it enables localization of associated metadata, for example we end up referencing `foo.doc` instead of `foo.doc@bar`.
+Ugly aesthetics like `42@dict` are further ameliorated via localization. Localization is a special optimization for evaluation with hierarchical dictionaries. Whenever `foo@bar` has the same meaning as `foo` within a given context, the runtime is free to replace the former with the latter. In addition to aesthetics, localization does improve performance in context of memoization, stowage, structure sharing. Further, it enables localization of associated metadata, for example we end up referencing `foo.doc` instead of `foo.doc@bar`.
 
 *Note:* Namespace qualifiers may be hierarchical, and are right associative. For example, `foo@bar@baz` means we use the meaning of `foo@bar` under dictionary `baz`. Direct use of hierarchical qualifiers is discouraged, but they may arise naturally during evaluation.
 

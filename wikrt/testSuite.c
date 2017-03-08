@@ -12,11 +12,13 @@ int tests_run = 0;
 int tests_pass = 0;
 
 // runTCX is intended for single-context tests.
-void runTCX(char const* testName, wikrt_cx* cx, bool (*test)(wikrt_cx*));
-#define TCX(T,CX) runTCX( #T , cx, &(T) )
+void runTCX(char const* testName, bool (*test)(wikrt_cx*), wikrt_cx* cx);
+#define TCX(T) runTCX( #T , &(T) , cx )
 
 bool test_hash(wikrt_cx*);
 bool test_parse_check(wikrt_cx*);
+bool test_write_read_id(wikrt_cx*);
+bool test_parse(wikrt_cx*);
 
 int main(int argc, char const* const* args) 
 {
@@ -36,8 +38,11 @@ int main(int argc, char const* const* args)
     wikrt_cx* const cx = wikrt_cx_create(e, NULL, (4 * MEGABYTES));
     assert(e == wikrt_cx_env(cx));
 
-    TCX(test_hash, cx);
-    TCX(test_parse_check, cx);
+    TCX(test_hash);
+    TCX(test_parse_check);
+    TCX(test_write_read_id);
+    TCX(test_parse);
+    
 
     // todo: 
     //  trivial binary IO
@@ -60,7 +65,7 @@ int main(int argc, char const* const* args)
     return (tests_pass - tests_run);
 }
 
-void runTCX(char const* testName, wikrt_cx* cx, bool (*test)(wikrt_cx*))
+void runTCX(char const* testName, bool (*test)(wikrt_cx*), wikrt_cx* cx)
 {
     wikrt_cx_reset(cx, NULL); // clear context, empty dictionary
     ++tests_run;
@@ -120,6 +125,10 @@ bool test_parse_check(wikrt_cx* _unused)
         && accept_parse("[\"\n hello\n multi-line text\n\"]")
         && accept_parse("\"\n hello\n multi-line text\n\"@d")
         && accept_parse("\"\n\n\n hello\n\n\n\"")
+        && accept_parse("[]")
+        && reject_parse("][")
+        && reject_parse("]")
+        && reject_parse("[")
         && reject_parse("[0 ~")
         && reject_parse("~  ]  ")
         && reject_parse("(a2")
@@ -132,6 +141,64 @@ bool test_parse_check(wikrt_cx* _unused)
         && reject_parse("\t")
         && reject_parse("foo @dict")
         && reject_parse("0 1 2 3 [ 4 5 6");
+}
+
+bool test_rw(wikrt_cx* cx, char const* s)
+{
+    _Static_assert((sizeof(uint8_t) == sizeof(char)), 
+        "cast between char* and uint8_t*");
+ 
+    wikrt_s const fd = 1;
+    size_t const len = strlen(s);
+
+    if(!wikrt_is_empty(cx, fd)) { 
+        fprintf(stderr, "%s: expecting empty stream\n", __FUNCTION__);
+        return false;
+    }
+
+    // split the writes to better stress context write buffering
+    size_t const split = len / 3;
+    wikrt_write(cx, fd, (uint8_t const*)s, split);
+    wikrt_write(cx, fd, (uint8_t const*)s + split, len - split);
+
+    if(wikrt_is_empty(cx, fd) && (0 != len)) { 
+        fprintf(stderr, "%s: write failed\n", __FUNCTION__);
+        return false;
+    }
+    
+    char buff[len+1]; buff[len] = 0;
+
+    // split reads to better stress context read buffering
+    size_t const rd1 = wikrt_read(cx, fd, (uint8_t*)buff, (len-split));
+    size_t const rd2 = wikrt_read(cx, fd, (uint8_t*)(buff + (len - split)), (split + 1));
+    if(len != (rd1 + rd2)) { 
+        fprintf(stderr, "%s: read failed\n", __FUNCTION__);
+        return false;
+    }
+
+    if(0 != strcmp(s, buff)) {
+        fprintf(stderr, "%s: read and write not equal (`%s` != `%s`)\n"
+            , __FUNCTION__, s, buff);
+        return false;
+    }
+
+    wikrt_clear(cx, fd);
+    if(!wikrt_is_empty(cx, fd)) {
+        fprintf(stderr, "%s: clear failed\n", __FUNCTION__);
+        return false;
+    }
+
+    return true;
+}
+
+bool test_write_read_id(wikrt_cx* cx)
+{
+    return test_rw(cx,"")
+        && test_rw(cx,"hello")
+        && test_rw(cx,"hello, world! this is a test!")
+        // test at least one very big input
+        && test_rw(cx,wikrt_prelude()) 
+        ;
 }
 
 
