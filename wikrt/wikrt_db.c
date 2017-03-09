@@ -134,7 +134,7 @@ bool wikrt_db_open(wikrt_env* e, char const* _dirPath, size_t dbMaxSize)
     }
 
     // initialize ephemeron table via file in target directory
-    e->eph = wikrt_eph_open(ephid);
+    e->eph = wikrt_eph_open(ephid, WIKRT_FILE_MODE);
     if(NULL == e->eph) { goto onError; }
 
     if(!wikrt_load_lmdb(e->db, dirPath, dbMaxSize)) {

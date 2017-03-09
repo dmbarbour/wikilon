@@ -189,7 +189,7 @@ Awelon does not implicitly memoize computations to avoid rework. Programmers can
 
 ## Evaluation
 
-Evaluation of an Awelon program results in an equivalent Awelon program, hopefully one from which it is easier to extract information or efficiently perform further evaluations. Awelon's primary evaluation mode proceeds by local rewriting. The four primitives rewrite by simple pattern matching:
+Evaluation of an Awelon program results in an equivalent Awelon program, one from which it is hopefully easier to extract information or more efficiently perform further evaluations. Awelon's primary evaluation mode proceeds by local rewriting. The four primitives rewrite by simple pattern matching:
 
             [B][A]a => A[B]         (apply)
             [B][A]b => [[B]A]       (bind)
@@ -206,20 +206,16 @@ Awelon's basic evaluation strategy is simple:
 
 Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
 
-A runtime is not constrained by this basic strategy. For example, a runtime could perform logical copies without immediate evaluation at its own discretion, perhaps using implicit memoization. Evaluation could be tuned by annotations or runtime evaluation options. Parallelism, memoization, stowage, deferred computation, fail-fast errors, optimizations, etc.. are accessible via annotations. See also *Optimization*, below.
+This is just a recommended strategy. A runtime could at its own discretion ignore the 'evaluate before copy' strategy in favor of memoizing lazy evaluations, or support shallow evaluation modes. Evaluation strategies may be tuned via annotations to leverage parallelism, memoization, stowage, deferred computation, fail-fast errors, explicit optimizations, and so on. See also *Optimization*, below.
 
-## Named Values
+## Value Words
 
-A 'named value' is a word whose evaluated definition is a singleton block. An Awelon runtime must treat named values as values with respect to binding, data plumbing, etc..
-
-        true = [a d]
-        false = [d i]
-        42 = [41 S]
+A 'value word' is a word whose evaluated definition is a singleton block. Value words have a nice interaction with lazy linking: data plumbing with natural numbers, `true` and `false` booleans, named module or data resources, and so on will effectively treat value words as blocks values.
 
         42 true w == true 42
         42 [] b   == [42]
 
-Support for named values is implicit with the lazy link constraint. I'm just making it explicit. Named values are essential for preserving human-meaningful structure and broad support for hypermedia resources.
+Value words are effectively the 'nouns' of Awelon language. They are convenient for preserving human-meaningful structure and support for hypermedia resources.
 
 ## Fixpoints and Loops
 
@@ -331,7 +327,7 @@ For sums, we must weigh program expansion versus the gains from static partial e
 
 There are likely many more optimizations that can be performed directly at the Awelon layer. For example, we could try to move `(eval)` up front if we know it will happen regardless. The simple semantics of purely functional combinators, and the ability to inject or extract 'variables' as needed, make this safe and easy.
 
-## Interpretation
+## Fast Interpretation
 
 Naive interpretation of Awelon can be reasonably efficient, but involves a lot of pointer-chasing. We can do very well with a few minor tweaks on the representation. Consider Awelon extended with the following features:
 
@@ -384,11 +380,11 @@ Blocks naturally delimit the input scope for a computation. For example, we know
 
 Tuple assertions can be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection may be necessary, and we'll fail fast if the tuple assertion is bad. Similar to arity annotations, tuples larger than `(t5)` should be rare in practice.
 
-In addition to controlling output counts, programmers may wish to fail fast based on declared structure. To support this, Awelon supports a structure annotation `(:T)` and paired assertion `(.T)` with the following rewrite semantics:
+In addition to controlling output counts, programmers may wish to fail fast based on declared structure. To support this, Awelon supports a structure annotation `(:T)` and paired structure assertion `(.T)` with the following rewrite semantics:
 
         (:foo) (.foo) ==
 
-In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct it with `i(.foo)`. The symbol `foo` or `T` is left to the programmer, but must match between annotation and assertion. These annotations are not labels (i.e. you cannot discriminate on them), but they do resist *accidental* access to structured data. As with tuple assertions, we can fail fast dynamically or detect an error statically.
+These might also be called 'sealer' and 'unsealer' respectively. In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct it with `i(.foo)`. The symbol `foo` or `T` is left to the programmer, but must match between annotation and assertion. These annotations are not labels (i.e. you cannot discriminate on them), but they do resist *accidental* access to structured data. As with tuple assertions, we can fail fast dynamically or detect an error statically.
 
 ## Substructural Scoping
 
@@ -398,25 +394,23 @@ In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct
 * `(nd)` - mark a value non-droppable, aka 'relevant'
 * inherit substructure of bound values (op `b`).
 
-We can eliminate substructural annotations by observing a value with `a`. It is not difficult to track and validate substructural properties dynamically, or to represent them in static types. For fail-fast debugging, we can also introduce annotations `(c)` and `(d)` that respectively assert a value is copyable and droppable (without actually copying or dropping it). 
+Applying a value with `a` will ignore its substructural type. Because copy and drop are explicit, it is relatively easy to enforce substructural attributes dynamically in Awelon language. 
 
 ## Error Annotations
 
-We can mark known erroneous values with `(error)` as in `"todo: fix foo!"(error)`. If we later attempt to observe this value (with `i` or `a`), we will simply halt on the error. However, we may drop or copy an error value like normal. In addition to user-specified errors, a runtime might use error annotations to highlight places where a program gets stuck, for example:
+An `(error)` annotation marks a value erroneous and logically divergent. This means we cannot observe it with operator `a`. For example, on division by zero, a function could return a result like `"div-by-zero"(error)`, but this would only become a problem if we attempt later to observe this divide-by-zero result. A runtime may also wrap recognized errors to highlight them in the output.
 
-        [A](nc)c        => [[A](nc)c](error)i
+        [A](nc)c        => [][[A](nc)c](error)a d
         [[A][B][C]](t2) => [[A][B][C]](t2)(error)
-
-Error values may bind further arguments as `[B][A](error)b == [[B]A](error)`. Error values will evaluate like any other value, and will collapse normally from `[[A](error)i]` to `[A](error)`. The error annotation is idempotent and commutative with other annotations on a block.
 
 ## Garbage Data
 
-For relevant data, we always have an option to drop data into a logical bit bucket then never look at it again. If we tell our runtime that we will never look at it again, we can also recover memory resources associated with that data. We can represent this pattern by use of a `(trash)` annotation:
+For potentially relevant `(nd)` data, we often have an option to drop data into a logical bit bucket then never look at it again. If we inform our runtime that we plan to never look at it again, we can also recover memory resources associated with that data. We can represent this pattern by use of a `(trash)` annotation:
 
-        [A](trash) => [](error)
-        [A](rel)(trash) => [](rel)(error)
+        [A](trash)      => [](error)
+        [A](nd)(trash)  => [](nd)(error)
 
-We destroy the data but preserve substructure. Because the data has been destroyed, the resulting value is marked erroneous.
+We drop data but preserve substructure. Because the data has been lost, the resulting value is marked erroneous. Memory required for `A` may then be recycled. This is essentially a form of manual memory management.
 
 ## Active Debugging
 
@@ -424,7 +418,7 @@ Awelon's program rewrite semantics make it relatively easy to observe a computat
 
 Conventional debugging techniques also apply. 
 
-I propose `(trace)` annotation to serve as a basis for conventional printf style debugging. For example, `[message](trace)` would evaluate to simply `[Msg]` but would implicitly copy the message to a second stream. Traced outputs could easily be rendered within the same program by prepending a comment like `[message](a2)d` to the evaluated program.
+I propose `(trace)` annotation to serve as a basis for conventional printf style debugging. For example, `[message](trace)` would evaluate to simply `[Msg]` but would implicitly copy the message to a second stream. Traced outputs could easily be rendered within the same program by essentially injecting a trace comments in the output (perhaps of form `[[message1](trace)[message2](trace)..[messageN](trace)](eval)(a2)d`
 
 Of course, tracing is invasive and is not ideal for debugging in general. Configuring words or certain annotations to operate as breakpoints or frame separators, or even just profile their use, is much less invasive but requires a more sophisticated configuration.
 
@@ -456,7 +450,7 @@ Knowing these types, we can also check for consistency between conditional branc
 
 *Aside:* Many languages have a 'unit' type, a type with only one value. In Awelon, the best representation of the unit type is `[]` - the identity function. There is only one value of type `∀x.(x→x)`. 
 
-### Delayed Typing
+### Deferred Typing
 
 Simple static types are oft inexpressive, constraining more than helping.
 
@@ -464,7 +458,7 @@ We can introduce an explicit escape. Consider a `(dyn)` annotation used as `[F] 
 
 ### Sophisticated Types
 
-More generally, we can introduce a simple convention of defining `foo.type` to declare a type for `foo`. This enables flexible abstraction and composition of type descriptions, expression of sophisticated types (contracts, Hoare logic, etc.), and provision of auxiliary hints or proofs. If we want to properly support dependent, existential, higher order, GADT, etc. types, we'll probably need to do so at this layer. Optimally, the type checker operating at this layer would itself be defined as a dictionary function.
+I propose a convention of defining `foo.type` to declare a type metadata for `foo`. This enables flexible abstraction and composition of type descriptions, expression of sophisticated types (contracts, Hoare logic, etc.), and provision of auxiliary hints or proofs. If we want to properly support dependent, existential, higher order, GADT, etc. types, we'll probably need to do so at this layer. By also providing the type check algorithms via the same dictionary, we might also simplify portable consistency checks.
 
 Related to static typing, non-terminating evaluation in Awelon is always an error. There is no utility in unbounded divergence for a pure computation, though we might use arity annotations to defer computations and represent coinductive structure. In any case, static type analysis should attempt a limited termination analysis. While solving the halting problem isn't possible in general, obvious errors can always be reported.
 
@@ -501,7 +495,7 @@ With computable views in mind, we might represent comments as:
 
         /* comment */  ==  " comment "(a2)d
 
-The arity annotation ensures the comment is not deleted until it might prevent progress from the left side, and hence we can always inject comments into values. A relevant point is that we aren't limited to one 'type' of comment, and comments of other types can easily inject flexible rendering hints into Awelon code. The discussion on *Named Local Variables* offers one very useful example.
+The arity annotation ensures the comment is not deleted until it might prevent progress from the left side, and hence we can always inject comments into values. A relevant point is that we aren't limited to one 'type' of comment, and comments of other types can easily inject flexible rendering hints into Awelon code. The discussion on *Named Local Variables* offers one very useful example, or a comment might include trace output for active debugging.
 
 Editable views essentially form a compiler/decompiler that treats Awelon language as a functional macro-assembly. The main difference from conventional languages above a bytecode is that the Awelon code is treated as the canonical source, and we're forced to 'decompile' said code into our language of editing. The indirection provided by the decompiler simplifies issues like whitespace formatting and forwards/backwards compatibility.
 
@@ -526,7 +520,7 @@ This plucks three items off the stack, giving them local names within `CODE`. On
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-This algorithm is adapted from the partial evaluation optimization leveraging free variables. The main difference from the optimization is that we know our variables are named values and we may desire special handling for conditional behaviors like `if` to avoid copying data into each branch.
+This algorithm is adapted from the partial evaluation optimization leveraging free variables. The main difference from the optimization is that we know our variables are value words and we may desire special handling for conditional behaviors like `if` to avoid copying data into each branch.
 
 Lambdas can be leveraged into let expressions (like `let var = expr in CODE` or `CODE where var = expr`) or the Haskell-like `do` notation. Also, given named local variables, it is feasible to support infix expressions like `((X + Y) * Z) => X Y + Z *` for assumed binary operators. I leave these developments as an exercise for the reader. :D
 

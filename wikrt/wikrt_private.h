@@ -93,7 +93,9 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *
  *   Chances are I'll not get far on a 32-bit system. But I'm assuming
  *   64-bit systems will be the common option, so losing 8 bits for the
- *   value type can cover a reasonably large set of values.
+ *   value type could cover a usefully large set of values. I'm most 
+ *   interested in small texts, binaries, and labels (up to 6 bytes).
+ *   And the built-in operators, of course.
  *
  */
 #define WIKRT_SMV   0
@@ -198,6 +200,7 @@ typedef enum wikrt_otype
 , WIKRT_OTYPE_SLICE     // array slice with offset, size 
 , WIKRT_OTYPE_APPEND    // array join
 } wikrt_otype;
+
 
 /** Basic Array Structure
  *
@@ -417,10 +420,6 @@ typedef struct wikrt_ws {
     wikrt_wsd   data[];     // data, adjacent to the header.
 } wikrt_ws;
 
-/** Work Pools, Effort Quotas, and Background Parallelism
- *
- */
-
 /** Multi-Threading and Garbage Collection
  * 
  * Threads operate within a context, evaluating parallel tasks. To minimize
@@ -469,8 +468,10 @@ typedef struct wikrt_thread {
 
     // Tasks to Perform.
     wikrt_v ready;      // tasks we can work on now
-    wikrt_v pending;    // tasks recently allocated
+    wikrt_v ready_r;    // tasks recently allocated
     wikrt_v waiting;    // tasks awaiting promotion
+
+    wikrt_v trace; // 
 
     // Local Memory Statistics
     uint64_t gc_bytes_processed;
@@ -561,13 +562,15 @@ struct wikrt_cx {
     wikrt_v         writes_list;        // writes since last commit
 
     // Stream Roots
-    wikrt_s         trace;              // stream ID for (trace)
-    wikrt_v         streams;            // for O(1) lookup
+    wikrt_s         trace_stream;       // stream ID for (trace)
+    wikrt_n         stream_count;       // 
+    wikrt_v         stream_table;       // the hashtable array
     wikrt_thread    main;               // resources for API main thread
 
     // todo:
     // Stowage tracking: need to know all stowage roots
     // Dictionary indexing?
+
 };
 
 // a sufficient minimum size that we won't have too many problems
@@ -581,16 +584,45 @@ wikrt_z wikrt_compute_alloc_space(wikrt_z space_total); // include GC reserve sp
 
 void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
 void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
+bool wikrt_cx_has_work(wikrt_cx*);
 void wikrt_cx_signal_work_available(wikrt_cx*);
 void wikrt_cx_interrupt_work(wikrt_cx*);
 void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name);
 bool wikrt_cx_has_work(wikrt_cx*);
+size_t wikrt_word_len(uint8_t const* const src, size_t maxlen);
 
 static inline bool wikrt_cx_unshared(wikrt_cx* cx) 
 {
     return (0 == cx->worker_count) 
         && !(cx->in_env_worklist);
 }
+
+// test availability of thread-local memory 
+static inline bool wikrt_thread_mem_available(wikrt_thread const* t, wikrt_z amt)
+{
+    return ((t->stop - t->alloc) >= amt);
+}
+bool wikrt_thread_mem_gc_then_reserve(wikrt_thread* t, wikrt_z amt);
+
+// attempt to reserve some thread-local memory
+static inline bool wikrt_thread_mem_reserve(wikrt_thread* const t, wikrt_z amt)
+{
+    return wikrt_thread_mem_available(t, amt) ? true 
+         : wikrt_thread_mem_gc_then_reserve(t, amt);
+}
+
+// Allocate from thread memory. Assumes `amt` is buffered to wikrt_cellbuff,
+// and that our thread has sufficient space. 
+static inline wikrt_a wikrt_thread_alloc(wikrt_thread* const t, wikrt_z amt)
+{
+    wikrt_a const r = t->alloc;
+    t->alloc += amt;
+    return r;
+}
+
+// This function is for variable-sized allocations like binaries or arrays,
+// where we might wish to 
+
 
 
 #define WIKRT_H

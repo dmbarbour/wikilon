@@ -79,6 +79,12 @@ Each thread could support a couple GC generations. This could be replicated at t
 
 KPN acceleration is a special case, and may require explicit tracking of 'messages' between 'processes' so we can communicate asynchronously by moving either the message or the process into shared memory. This will likely require a threads extension to maximize utilization.
 
+## Lazy Copies?
+
+While Awelon's evaluation model is a little lazy by default, the basic exception to this is operator `c` that is usually strict in its argument to control need for memoization. However, I could support lazy evaluation of copied values. Mostly, this offers an advantage when neither copy is used, but it can also support a bit more parallelism in the background.
+
+I'd like to try for this, I think. 
+
 ## Stack Representations
 
 Evaluation has both the program/data stack and the auxiliary. Modeling multiple stacks and a heap within a single address space needs some attention. 

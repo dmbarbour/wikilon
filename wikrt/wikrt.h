@@ -163,16 +163,16 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * primary states: they're either empty or they have some data. You
  * can simply addend data to any stream except the NULL (0) stream, 
  * which remains always empty. Clients can use streams similarly to
- * named registers. 
+ * named registers, or allocate them like memory addresses. It is up
+ * to the client to track and manage streams in use.
  *
  * Writes may fail, likely with ENOMEM if the context is full. Reads
- * "fail" if the returned byte count does not match the request, and
+ * fail when the returned byte count does not match the request, and
  * may fail with ENODATA after exhausting the stream, or with ENOMEM
  * when converting from an under-the-hood representation (which may
- * require a stack).
- *
- * It's up to the client to track stream identifiers in use. This API
- * does not provide iteration over active stream IDs.
+ * require a stack). In some cases, reading from a stream may wait
+ * for lazy or parallel computations to complete or exhaust the quota,
+ * whichever happens first.
  */
 typedef uint64_t wikrt_s;
 bool wikrt_write(wikrt_cx*, wikrt_s, uint8_t const*, size_t);
@@ -469,21 +469,18 @@ void wikrt_cx_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
 
 /** Debugging 
  *
- * Awelon is amenable to rich forms of debugging that involve keeping
- * snapshots, visualizing and animating program state. But I have yet
- * to develop a suitable API.
+ * Awelon supports rich forms of debugging. Use of `(error)` annotations
+ * allow errors to be presented as part of a partially evaluated result.
+ * We can take snapshots of partial results between evaluation steps and
+ * essentially 'animate' evaluation. But it will take a while to figure
+ * out suitable API extensions for animated evaluations.
  *
- * For the short term, you can use (error) to mark erroneous values 
- * that will remain in the output but not be evaluated further such
- * as "to do: fix foo!"(error). Or you can use (trace) for printf
- * style debugging, printing each value as a comment to the trace
- * log configured below.
+ * The `(trace)` annotation supports conventional log-based debugging.
+ * When `[message](trace)` is evaluated in the program, the `[message]`
+ * is implicitly copied and appended to the trace log for perusal by a
+ * human. With parallelism, the order of messages is non-deterministic.
  *
- * For `[V](trace)` in source, we'll produce `[V](a2)d` in the log,
- * where `(a2)d` effectively marks the value as a comment with no
- * semantic behavior. The only way to "use" this log is to have a
- * human or another agent read it and extract information. The trace
- * annotation is removed from source at the same time.
+ * By default, trace is disabled - configured to the null stream.
  */
 void wikrt_debug_trace(wikrt_cx*, wikrt_s); 
 

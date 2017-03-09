@@ -28,7 +28,7 @@ typedef struct wikrt_eph wikrt_eph;
  * random address provided. File locking is used as the outermost
  * lock to guard creation or destruction of the shared memory.
  */
-wikrt_eph* wikrt_eph_open(char const* ephid);
+wikrt_eph* wikrt_eph_open(char const* ephid, int mode);
 
 /** Release the Ephemeron Table
  *

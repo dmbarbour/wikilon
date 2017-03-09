@@ -20,45 +20,6 @@ _Static_assert((sizeof(uint8_t) == sizeof(char)),
 _Static_assert(sizeof(wikrt_ws) == (4*sizeof(wikrt_v)),
     "flexible array members don't work the way I think they should");
 
-// Awelon forbids some ASCII range characters from words.
-// Blacklist: @#[]()<>{}\/,;|&='", SP, C0 (0-31), and DEL.
-//
-// We can also blacklist bytes not permitted in UTF-8 more
-// generally: 192, 193, 245-255. But properly, a separate
-// scan is required to check for a valid UTF-8 encoding.
-//
-// BLOCK                                                    BITFIELD
-//  0-31:   forbid everything                               0
-//  32-63:  forbid 32 34 35 38 39 40 41 44 47 59 60 61 62   ~(0x780093cd)
-//  64-95:  forbid 64 91 92 93                              ~(0x38000001)
-//  96-127: forbid 123 124 125 127                          ~(0xb8000000)
-//  128-159: allow everything                               ~0
-//  160-191: allow everything                               ~0
-//  192-223: forbid 192 193                                 ~3
-//  224-255: forbid 245-255                                 ~(0xffe00000)
-//
-// I'm encoding this as a bitfield.
-static uint32_t const valid_word_char_bitfield[8] = 
-    {  0, ~(0x780093cd), ~(0x38000001), ~(0xb8000000)
-    , ~0, ~0,            ~3,            ~(0xffe00000) };
-static inline bool is_valid_word_byte(uint8_t u) 
-{
-    return (0 != (valid_word_char_bitfield[ (u >> 5) ] & (1 << (u & 0x1F))));
-}
-static inline uint8_t const* scan_valid_word(uint8_t const* iter, uint8_t const* const end)
-{
-    while((iter < end) && is_valid_word_byte(*iter)) { ++iter; }
-    return iter;
-}
-
-/* number of valid word characters (assuming valid UTF-8) */
-static inline size_t valid_word_len(uint8_t const* const src, uint8_t maxlen)
-{
-    // just looking at valid word bytes, not valid utf-8
-    return scan_valid_word(src, src+maxlen) - src; 
-}
-
-
 uint32_t wikrt_api_ver() 
 { 
     _Static_assert(WIKRT_API_VER < UINT32_MAX, "bad value for WIKRT_API_VER");
@@ -110,9 +71,10 @@ void wikrt_env_destroy(wikrt_env* e)
     wikrt_halt_threads(e);
 
     // We require that no contexts exist when this is called.
-    bool const env_inactive = (NULL == e->cxs) && (NULL == e->cxw);
+    bool const env_inactive = (NULL == e->cxs) 
+                           && (NULL == e->cxw);
     if(!env_inactive) {
-        fprintf(stderr, "%s environment in use\n", __FUNCTION__);
+        fprintf(stderr, "%s environment destroyed still has contexts\n", __FUNCTION__);
         abort();
     }
 
@@ -197,13 +159,17 @@ void wikrt_env_threadpool(wikrt_env* e, uint32_t ct)
         pthread_attr_destroy(&a);
     } else if(e->workers_alloc > e->workers_max) {
         // Otherwise signal workers to die asynchronously
-        pthread_cond_signal(&(e->work_available));
+        pthread_cond_broadcast(&(e->work_available));
     }
     pthread_mutex_unlock(&(e->mutex));
 }
 
 void wikrt_add_cx_list(wikrt_cx** plist, wikrt_cx* cx) 
 {
+    // may not already be part of any list
+    assert((NULL == cx->cxp) 
+        && (NULL == cx->cxn));
+
     // addend to a circular linked list
     // assumes exclusive access to *plist
     if(NULL == *plist) {
@@ -224,15 +190,16 @@ void wikrt_rem_cx_list(wikrt_cx** plist, wikrt_cx* const cx)
         assert(cx == (*plist));
         (*plist) = NULL;
     } else {
+        if(cx == (*plist)) {
+            (*plist) = cx->cxn;
+        }
         cx->cxp->cxn = cx->cxn;
         cx->cxn->cxp = cx->cxp;
-        if(cx == (*plist)) {
-            (*plist) = (*plist)->cxn;
-        }
-        assert(cx != (*plist));
     }
-    cx->cxp = cx;
-    cx->cxn = cx;
+
+    // indicate not part of any list
+    cx->cxp = NULL;
+    cx->cxn = NULL;
 }
 
 void wikrt_cx_move_to_env_worklist(wikrt_cx* cx)
@@ -350,10 +317,13 @@ void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name)
     _Static_assert((sizeof(cx->dict_name) > WIKRT_HASH_SIZE), 
         "insufficient dictionary name size");
 
-    // Use dict a stable name for the dictionary.
+    // Compute a stable name for the dictionary, given arbitrary text.
+    // If the text corresponds to a valid Awelon word no larger than a
+    // secure hash, we will use that directly. Otherwise, I'll replace
+    // the dictionary name by its secure hash.
     size_t const name_len = (NULL == dict_name) ? 0 : strlen(dict_name);
-    size_t const valid_utf8_len = utf8_strlen((uint8_t const*) dict_name, name_len);
-    size_t const valid_name_len = valid_word_len((uint8_t const*) dict_name, valid_utf8_len);
+    size_t const valid_name_len = wikrt_word_len((uint8_t const*) dict_name, 
+        utf8_strlen((uint8_t const*) dict_name, name_len));
     bool const name_ok = (name_len == valid_name_len) && (name_len <= WIKRT_HASH_SIZE);
     if(name_ok) {
         // preserve given name, potentially empty name
@@ -426,18 +396,26 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
         cx->proto = NULL;
     }
 
-    // reset the root values
-    cx->dict_ver[0] = 0;   
-    cx->words_table = 0;
-    cx->writes_list = 0;
-    cx->trace       = 0;
-    cx->streams     = 0;
+    // reset roots
+    cx->dict_ver[0]     = 0;   
+    cx->words_table     = 0;
+    cx->writes_list     = 0;
+    cx->trace_stream    = 0;
+    cx->stream_count    = 0;
+    cx->stream_table    = 0;
     wikrt_cx_alloc_reset(cx);
     wikrt_cx_set_dict_name(cx, dict_name);
 
     // set an initial effort quota
     wikrt_set_effort(cx, WIKRT_CX_DEFAULT_EFFORT);
 }
+
+bool wikrt_cx_has_work(wikrt_cx* cx) 
+{
+    // assume we have cx->mutex
+    return (0 != cx->memory.ready);
+}
+
 
 void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
 {
@@ -449,100 +427,63 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
         // otherwise, adjust the effort and potentially continue
         pthread_mutex_lock(&(cx->mutex));
         cx->effort = effort;
-        bool const par_work_available = (0 != cx->memory.ready);
+        bool const cx_has_work = wikrt_cx_has_work(cx); 
         pthread_mutex_unlock(&(cx->mutex));
-        if(par_work_available) {
+        if(cx_has_work) {
             wikrt_cx_signal_work_available(cx);
         }
     }
 }
 
-/** Quick Parse Check
- * 
- * A simple linear scan over the input. The primary intention here
- * is to support lightweight detection of invalid input, and easy
- * error reporting for the same. We scan first for valid UTF-8 
- * input.
- */
-static uint8_t const* scan_ns_qualifier(uint8_t const* iter, uint8_t const* const end)
+void wikrt_debug_trace(wikrt_cx* cx, wikrt_s sfd)
 {
-    // word@ns, or [block]@ns, or even a "text"@ns
-    // potentially hierarchical, e.g. `foo@ns1@ns2`
-    do {
-        bool const qualified = 
-            ((end - iter) >= 2) &&
-            ('@' == iter[0]) &&
-            is_valid_word_byte(iter[1]);
-        if(!qualified) { return iter; }
-        iter = scan_valid_word(iter+2, end);
-    } while(1);
-}
-static inline bool basic_text_byte(uint8_t c) { return (c > 31); }
-static uint8_t const* scan_inline_text(uint8_t const* iter, uint8_t const* const end)
-{
-    while((end != iter) && basic_text_byte(*iter) && ('"' != *iter)) { ++iter; }
-    return iter;
-}
-static uint8_t const* scan_multi_line_text(uint8_t const* iter, uint8_t const* const end)
-{
-    while(end != iter) {
-        if('\n' == *iter) { ++iter; } 
-        else if(' ' == *iter) { 
-            // skip to end of line
-            do { ++iter; } while((end != iter) && basic_text_byte(*iter));
-        } else { return iter; }
-    } 
-    return end;
+    // set the trace log atomically
+    // in case of background parallelism, this may split the stream in
+    // a non-deterministic manner. 
+    //   promotion is non-deterministic
+    pthread_mutex_lock(&(cx->mutex));
+    cx->trace_stream = sfd;
+    pthread_mutex_unlock(&(cx->mutex));
 }
 
-bool wikrt_parse_check(uint8_t const* const start, size_t const input_size, wikrt_parse_data* data)
+//typedef uint64_t wikrt_s;
+bool wikrt_write(wikrt_cx* cx, wikrt_s fd, uint8_t const* data, size_t amt) 
 {
-    wikrt_parse_data r = { 0 };
-    size_t const utf8_size = utf8_strlen(start, input_size);
-    assert(input_size >= utf8_size);
-    uint8_t const* const end = start + utf8_size;
-    uint8_t const* scan = start;
+    if(0 == amt) { return true; }
+    // allocate stream index 
+    // reserve space to allocate stream and data as needed
 
-    do {
-        r.parsed = scan - start;
-        if(0 == r.balance) { r.accepted = r.parsed; }
-        if(end == scan) { goto parse_halt; }
-        uint8_t const c = *(scan++);
-        if(is_valid_word_byte(c)) { // word
-            scan = scan_valid_word(scan, end);
-            scan = scan_ns_qualifier(scan, end);
-        } else if((' ' == c) || ('\n' == c)) { // whitespace
-            // NOP
-        } else if('[' == c) { // block start
-            ++(r.balance);
-        } else if((']' == c) && (r.balance > 0)) { // block end
-            --(r.balance);
-            scan = scan_ns_qualifier(scan, end);
-        } else if('(' == c) { // annotations
-            if((end == scan) || !is_valid_word_byte(*(++scan))) { goto parse_halt; }
-            scan = scan_valid_word(scan, end);
-            if((end == scan) || (')' != *scan)) { goto parse_halt; }
-            ++scan;
-        } else if('"' == c) { // embedded texts
-            if(end == scan) { goto parse_halt; }
-            else if('\n' == (*scan)) {
-                scan = scan_multi_line_text(1+scan, end);
-            } else {
-                scan = scan_inline_text(scan, end);
-            }
-            if((end == scan) || ('"' != *scan)) { goto parse_halt; }
-            scan = scan_ns_qualifier(1+scan, end);
-        } else { // cannot parse input
-            goto parse_halt; 
-        }
-    } while(1);
+    // allocate the stream if necessary, get an index
+    // allocate the data, this may require a GC 
+    
 
-parse_halt:
-    // accept data after final block
-    r.scanned = scan - start;
-    if(NULL != data) { (*data) = r; } 
-    return (input_size == r.accepted);
+    return false;
 }
+size_t wikrt_read(wikrt_cx* cx, wikrt_s fd, uint8_t* const buff, size_t const max)
+{
+    return 0;
+}
+
+bool wikrt_is_empty(wikrt_cx* cx, wikrt_s fd)
+{
+    // test if stream is empty
+    return true;
+}
+
+void wikrt_clear(wikrt_cx* cx, wikrt_s fd)
+{
+    
+}
+
+
+
+
+
+
+
+
+
+
 
 
 

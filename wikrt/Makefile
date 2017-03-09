@@ -4,7 +4,8 @@ W := -Wall -Wextra -Wno-unused-parameter
 OPT := -O2 -flto
 CFLAGS := $(W) $(OPT) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
-RUNTIME_OBJECTS := wikrt.o wikrt_db.o wikrt_eph.o wikrt_prelude.o futil.o b64.o utf8.o
+RUNTIME_OBJECTS := wikrt.o wikrt_db.o wikrt_eph.o wikrt_prelude.o \
+    wikrt_parse_check.o futil.o b64.o utf8.o
 INSTALL_PREFIX := /usr/local
 
 .PHONY: all lib utils clean install uninstall test
@@ -76,6 +77,8 @@ wikrt_db.o: wikrt_db.c wikrt_private.h wikrt_eph.h futil.h
 
 wikrt_eph.o: wikrt_eph.c wikrt_eph.h futil.h
 	$(CC) -o $@ -c $<
+
+wikrt_parse_check.o: wikrt_parse_check.c wikrt_private.h wikrt.h 
 
 # filesystem utilities
 futil.o: futil.c futil.h

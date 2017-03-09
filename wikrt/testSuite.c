@@ -162,7 +162,7 @@ bool test_rw(wikrt_cx* cx, char const* s)
     wikrt_write(cx, fd, (uint8_t const*)s + split, len - split);
 
     if(wikrt_is_empty(cx, fd) && (0 != len)) { 
-        fprintf(stderr, "%s: write failed\n", __FUNCTION__);
+        fprintf(stderr, "%s: write failed for `%s`\n", __FUNCTION__, s);
         return false;
     }
     
@@ -194,6 +194,7 @@ bool test_rw(wikrt_cx* cx, char const* s)
 bool test_write_read_id(wikrt_cx* cx)
 {
     return test_rw(cx,"")
+        && test_rw(cx,"h")
         && test_rw(cx,"hello")
         && test_rw(cx,"hello, world! this is a test!")
         // test at least one very big input

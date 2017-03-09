@@ -9,7 +9,7 @@
 
 #include "b64.h"
 #include "futil.h"
-#include "wikrt_private.h"
+#include "wikrt_eph.h"
 
 
 // data elements are simply a uint64_t:
@@ -61,15 +61,15 @@ struct wikrt_eph {
 
 void wikrt_get_entropy(size_t const amt, uint8_t* const out);
 void wikrt_new_ephid(char* ephid);
-bool wikrt_eph_open_file(wikrt_eph* eph, char const* file);
-bool wikrt_eph_open_shm(wikrt_eph* eph);
+bool wikrt_eph_open_file(wikrt_eph* eph, char const* file, int mode);
+bool wikrt_eph_open_shm(wikrt_eph* eph, int mode);
 
-wikrt_eph* wikrt_eph_open(char const* file)
+wikrt_eph* wikrt_eph_open(char const* file, int mode)
 {
     wikrt_eph* const eph = calloc(1,sizeof(wikrt_eph));
     if(NULL == eph) { return NULL; }
 
-    if(!wikrt_eph_open_file(eph, file)) {
+    if(!wikrt_eph_open_file(eph, file, mode)) {
         free(eph);
         return NULL;
     }
@@ -78,7 +78,7 @@ wikrt_eph* wikrt_eph_open(char const* file)
     flock(eph->file, LOCK_EX);
 
     // create the shared memory
-    if(!wikrt_eph_open_shm(eph)) {
+    if(!wikrt_eph_open_shm(eph, mode)) {
         fprintf(stderr, "%s: failed to open shm `%s`\n"
             , __FUNCTION__, eph->name);
         close(eph->file);
@@ -92,9 +92,9 @@ wikrt_eph* wikrt_eph_open(char const* file)
 }
 
 // updates eph->file, eph->name.
-bool wikrt_eph_open_file(wikrt_eph* eph, char const* file) 
+bool wikrt_eph_open_file(wikrt_eph* eph, char const* file, int mode) 
 {
-    eph->file = open(file, O_CREAT|O_RDWR, WIKRT_FILE_MODE);
+    eph->file = open(file, O_CREAT|O_RDWR, mode);
     if((-1) == eph->file) {
         fprintf(stderr, "%s: failed to open file `%s` (%s)\n"
             , __FUNCTION__, file, strerror(errno));
@@ -134,9 +134,9 @@ bool wikrt_eph_open_file(wikrt_eph* eph, char const* file)
 }
 
 // load eph->head, initialize if needed
-bool wikrt_eph_open_shm(wikrt_eph* eph)
+bool wikrt_eph_open_shm(wikrt_eph* eph, int mode)
 {
-    eph->shm = shm_open(eph->name, O_CREAT | O_RDWR, WIKRT_FILE_MODE);
+    eph->shm = shm_open(eph->name, O_CREAT | O_RDWR, mode);
     if((-1) == eph->shm) {
         fprintf(stderr, "%s: could not open shared memory (%s)\n"
             , __FUNCTION__, strerror(errno));
