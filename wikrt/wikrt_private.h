@@ -395,6 +395,11 @@ struct wikrt_env {
 void* wikrt_worker_behavior(void* e); 
 void wikrt_halt_threads(wikrt_env* e);
 
+// Words:
+//  need slots for breakpoints
+//  may need support for stack profiling
+//  may need slots for heap profiling
+
 /** Write Set for Generational GC
  *
  * Generational GC requires tracking references from the old generation
@@ -456,6 +461,10 @@ typedef struct wikrt_thread {
     // Context for Shared Memory and Large Allocations
     wikrt_cx* cx;
 
+    // Profile Management?
+    wikrt_n tid;    // selected on entry
+    //   but may want other trace profile resources
+
     // Thread Exclusive Memory
     wikrt_a start;  // first reserved address
     wikrt_a end;    // last reserved address
@@ -492,7 +501,7 @@ uint64_t wikrt_thread_time(); // microseconds
 /** Streams.
  * 
  * A context hosts a set of binary streams. A stream is identified by
- * a simple integer (wikrt_s). A set of streams essentially forms the
+ * a simple integer (wikrt_r). A set of streams essentially forms the
  * root set for a context.
  *
  * I'll probably need to add a bunch of fields to track reader state,
@@ -503,7 +512,7 @@ uint64_t wikrt_thread_time(); // microseconds
  */
 typedef struct wikrt_stream {
     wikrt_o otype_stream;   // stream type, always linear
-    wikrt_s stream_id;      // external ID of stream
+    wikrt_r stream_id;      // external ID of stream
 
     // data and evaluation tasks?
     wikrt_v data;
@@ -562,7 +571,7 @@ struct wikrt_cx {
     wikrt_v         writes_list;        // writes since last commit
 
     // Stream Roots
-    wikrt_s         trace_stream;       // stream ID for (trace)
+    wikrt_r         trace_stream;       // stream ID for (trace)
     wikrt_n         stream_count;       // 
     wikrt_v         stream_table;       // the hashtable array
     wikrt_thread    main;               // resources for API main thread
@@ -590,6 +599,8 @@ void wikrt_cx_interrupt_work(wikrt_cx*);
 void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name);
 bool wikrt_cx_has_work(wikrt_cx*);
 size_t wikrt_word_len(uint8_t const* const src, size_t maxlen);
+
+bool wikrt_alloc_stream_index(wikrt_cx* cx, wikrt_r fd, wikrt_n* ix);
 
 static inline bool wikrt_cx_unshared(wikrt_cx* cx) 
 {

@@ -79,11 +79,11 @@ Each thread could support a couple GC generations. This could be replicated at t
 
 KPN acceleration is a special case, and may require explicit tracking of 'messages' between 'processes' so we can communicate asynchronously by moving either the message or the process into shared memory. This will likely require a threads extension to maximize utilization.
 
-## Lazy Copies?
+## Lazy Evaluation and Copies
 
-While Awelon's evaluation model is a little lazy by default, the basic exception to this is operator `c` that is usually strict in its argument to control need for memoization. However, I could support lazy evaluation of copied values. Mostly, this offers an advantage when neither copy is used, but it can also support a bit more parallelism in the background.
+Awelon's basic evaluation strategy is lazy modulo copy. But with explicit laziness, we could also be lazy across copies, sharing the result of deferred computation based on knowing the logical copy structure of data. The main concern I have with this is how it interacts with serialization or distribution. I lose track of the copy origin when a program is wholly or partially serialized. 
 
-I'd like to try for this, I think. 
+This could be mitigated by somehow rejoining common substructure upon parse. But it might be better to stick with the basic strategy of strict copies, for now.
 
 ## Stack Representations
 
@@ -335,6 +335,14 @@ Some invisible performance enhancers:
 * determine up-fun-arg vs. down-fun-arg types
 * acceleration for common multi-word actions
 * JIT compilation of code
+
+## Memory Profiling
+
+How can I gain a good insight about where memory is being consumed? Ideally, non-invasively?
+
+Well, every value in Awelon is a block, a closure. A reasonable option is to track each block to its syntactic origin (modulo binding). 
+
+
 
 ## JIT Compilation
 

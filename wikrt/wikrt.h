@@ -151,44 +151,47 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** Binary IO Model
+/** Wikilon IO Model
  *
  * Wikilon uses binaries as the primary input and output structure at
  * the API layer - used for updating or accessing the dictionary and
  * also for constructing programs and evaluation. Under the hood, a
- * program uses a more sensible representation during evaluation. But
- * Wikilon still presents it as a binary at this API.
+ * program under evaluation uses a more efficient representation. But
+ * we present results as a binary, usually UTF-8 text, to the client.
  *
- * Streams are identified by small natural numbers. Streams have two
- * primary states: they're either empty or they have some data. You
- * can simply addend data to any stream except the NULL (0) stream, 
- * which remains always empty. Clients can use streams similarly to
- * named registers, or allocate them like memory addresses. It is up
- * to the client to track and manage streams in use.
+ * Binary IO registers are given stable identity as simple integers.
+ * Logically, every register has an associated binary, defaulting to
+ * empty. Writes addends the right hand side of a binary. Reads take
+ * data from the left, destructively. To model non-destructive read,
+ * copy the register first. The zero register (0) cannot be written.
+ * It's left to the client to allocate registers to different tasks.
  *
- * Writes may fail, likely with ENOMEM if the context is full. Reads
- * fail when the returned byte count does not match the request, and
- * may fail with ENODATA after exhausting the stream, or with ENOMEM
- * when converting from an under-the-hood representation (which may
- * require a stack). In some cases, reading from a stream may wait
- * for lazy or parallel computations to complete or exhaust the quota,
- * whichever happens first.
+ * Writes may fail if the context is full. Reads may return less data
+ * than requested if the input is exhausted. Wikilon will ensure that
+ * reads will not fail due to exhausting context memory, leveraging a
+ * constant space algorithm for reads.
  */
-typedef uint64_t wikrt_s;
-bool wikrt_write(wikrt_cx*, wikrt_s, uint8_t const*, size_t);
-size_t wikrt_read(wikrt_cx*, wikrt_s, uint8_t*, size_t);
-bool wikrt_is_empty(wikrt_cx*, wikrt_s); // test if stream is empty
-void wikrt_clear(wikrt_cx*, wikrt_s); // stream is empty after clear
+typedef uint64_t wikrt_r;
+bool wikrt_write(wikrt_cx*, wikrt_r, uint8_t const*, size_t);
+size_t wikrt_read(wikrt_cx*, wikrt_r, uint8_t*, size_t);
+bool wikrt_is_empty(wikrt_cx*, wikrt_r); // test if stream is empty
+void wikrt_clear(wikrt_cx*, wikrt_r); // stream is empty after clear
 
 /** Stream Composition
  *
- * Move or copy the source stream, addending the destination stream.
+ * Move or copy data from the source register to the destination,
+ * addending the latter. The 'move' option implicitly clears the
+ * source, and is more efficient when potentially working with 
+ * unique references (such as arrays with in-place updates) or 
+ * background parallelism.
+
+, addending the destination stream.
  * This could be useful for snapshots and similar. The move variant
  * will implicitly clear the source, but may have reduced resource
  * overheads. That said, copies are logical and reasonably cheap.
  */
-bool wikrt_move(wikrt_cx*, wikrt_s src, wikrt_s dst);
-bool wikrt_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
+bool wikrt_move(wikrt_cx*, wikrt_r src, wikrt_r dst);
+bool wikrt_copy(wikrt_cx*, wikrt_r src, wikrt_r dst);
 
 /** Codebase Access and Update
  *
@@ -207,8 +210,8 @@ bool wikrt_copy(wikrt_cx*, wikrt_s src, wikrt_s dst);
  * formed data (EBADMSG), or lack of context memory (ENOMEM). Loads 
  * also fail if the stream is not initially empty (EADDRINUSE).
  */
-bool wikrt_load_def(wikrt_cx*, wikrt_s, char const* k);
-bool wikrt_save_def(wikrt_cx*, wikrt_s, char const* k);
+bool wikrt_load_def(wikrt_cx*, wikrt_r, char const* k);
+bool wikrt_save_def(wikrt_cx*, wikrt_r, char const* k);
 
 /** Secure Hash Resources
  *
@@ -238,8 +241,8 @@ bool wikrt_save_def(wikrt_cx*, wikrt_s, char const* k);
  */
 #define WIKRT_HASH_SIZE 60
 void wikrt_hash(char* h, uint8_t const*, size_t);
-bool wikrt_load_rsc(wikrt_cx*, wikrt_s, char const* h);
-bool wikrt_save_rsc(wikrt_cx*, wikrt_s, char* h); 
+bool wikrt_load_rsc(wikrt_cx*, wikrt_r, char const* h);
+bool wikrt_save_rsc(wikrt_cx*, wikrt_r, char* h); 
 
 /** Transactional Persistence
  * 
@@ -288,7 +291,7 @@ bool wikrt_parse_check(uint8_t const*, size_t, wikrt_parse_data*);
  * Note: If you plan to parse a partial program, be careful to avoid
  * splitting a words from the input stream. 
  */
-bool wikrt_parse(wikrt_cx*, wikrt_s src, wikrt_s dst);
+bool wikrt_parse(wikrt_cx*, wikrt_r src, wikrt_r dst);
 
 /** Program Evaluation
  * 
@@ -308,7 +311,7 @@ bool wikrt_parse(wikrt_cx*, wikrt_s src, wikrt_s dst);
  * be relatively careful to avoid truncating a word, and it's best
  * to use wikrt_eval_cmd to extract partial results.
  */
-bool wikrt_eval(wikrt_cx*, wikrt_s);
+bool wikrt_eval(wikrt_cx*, wikrt_r);
 
 /** Data Stack Evaluation
  *
@@ -329,7 +332,7 @@ bool wikrt_eval(wikrt_cx*, wikrt_s);
  * if there is insufficient data (ENODATA). It may also fail because
  * of evaluation resource limits (ENOMEM, ETIMEDOUT).
  */
-bool wikrt_eval_data(wikrt_cx*, wikrt_s src, uint32_t amt, wikrt_s dst); 
+bool wikrt_eval_data(wikrt_cx*, wikrt_r src, uint32_t amt, wikrt_r dst); 
 
 /** Command Stream Processing
  *
@@ -353,7 +356,7 @@ bool wikrt_eval_data(wikrt_cx*, wikrt_s src, uint32_t amt, wikrt_s dst);
  * If no command data is available, this returns false with ENODATA.
  * Otherwise it may fail due to evaluation limits (ENOMEM, ETIMEDOUT). 
  */
-bool wikrt_eval_stream(wikrt_cx*, wikrt_s src, wikrt_s dst);
+bool wikrt_eval_stream(wikrt_cx*, wikrt_r src, wikrt_r dst);
 
 
 
@@ -380,7 +383,7 @@ bool wikrt_eval_stream(wikrt_cx*, wikrt_s src, wikrt_s dst);
  * large text might be represented by reifying a binary then applying
  * another accelerated function (like a utf8-to-text conversion). 
  */
-bool wikrt_reify_binary(wikrt_cx*, wikrt_s);
+bool wikrt_reify_binary(wikrt_cx*, wikrt_r);
 
 /** Evaluation of Streaming Binary Data Output
  *
@@ -402,7 +405,7 @@ bool wikrt_reify_binary(wikrt_cx*, wikrt_s);
  * type seems wrong (EDOM) or the binary is empty (ENODATA), or due
  * to evaluation resource limits (ENOMEM, ETIMEDOUT).
  */
-size_t wikrt_eval_binary(wikrt_cx*, wikrt_s src, size_t, wikrt_s dst);
+size_t wikrt_eval_binary(wikrt_cx*, wikrt_r src, size_t, wikrt_r dst);
 
 /** Parallel Evaluations
  * 
@@ -438,64 +441,112 @@ bool wikrt_eval_parallel(wikrt_cx*);
 void wikrt_set_effort(wikrt_cx*, uint32_t cpu_usec);
 
 // TODO: evaluator options - rewrite optimizations, localization, etc..
-//   options: shallow evaluation (don't evaluate blocks)
-//            localization (rewrite hierarchical words shared by parent)
+//   options: localization (rewrite hierarchical words shared by parent)
 //            rewrite optimizations (provided by dictionary?)
 //            data plumbing optimizations
+//   better to make visible optimizations explicit via annotations
+//   except localization, which should probably be the default
 //   for now let's just focus on getting it working
-// TODO: debugger outputs - snapshots, trace logs, profiling, etc.
 
 /** @brief Force a full garbage collection of context.
  *
  * This generally isn't necessary, but it's useful if you need more
- * precise memory and fragmentation stats or want to ensure stable
- * performance.
+ * precise memory profiles. This temporarily interrupts any background
+ * parallel computations, so it should be applied with caution.
  */
 void wikrt_cx_gc(wikrt_cx*);
+
+/** Trace Log Debugging
+ *
+ * Log and console based debugging is supported via `(trace)` annotations.
+ * Messages of form `[M](trace)` are copied to a stream configured using
+ * wikrt_debug_trace, or disabled (the default) using the zero register.
+ *
+ * Trace messages are recorded in a causal but non-deterministic order,
+ * dependent on parallelism and optimizations. They should be designed
+ * for human perusal, since they cannot reliably be procoessed otherwise.
+ */
+void wikrt_debug_trace(wikrt_cx*, wikrt_r); 
+
+/** Breakpoint Debugging
+ *
+ * Breakpoints may be set for specific words, preventing linking of
+ * that word until unset or an appropriate debug_eval_step action.
+ * Debug steps will link where a computation halted on a breakpoint.
+ *
+ * One may either link all instances of a breakpoint within a register
+ * or use special step descriptors like WIKRT_DEBUG_STEP_LEFTMOST. We
+ * return true if at least one link is performed by the step operation.
+ *
+ * Awelon's rewrite semantics make breakpoint debugging especially 
+ * nice, since they capture the entire context of computation and
+ * the state is easily serialized to support animation or time travel
+ * debugging.
+ */
+bool wikrt_debug_breakpoint(wikrt_cx*, char const* word, bool set);
+bool wikrt_debug_eval_step(wikrt_cx*, wikrt_r, char const* target);
+#define WIKRT_DEBUG_STEP_LEFTMOST  "(l)"
+#define WIKRT_DEBUG_STEP_RIGHTMOST "(r)"
+#define WIKRT_DEBUG_STEP_UNIVERSAL "(*)"
+
+/** Stack Profiling
+ * 
+ * Like conventional language runtimes, Wikilon uses a call-return
+ * stack to efficiently represent the current continuation. Tracing
+ * this stack periodically offers an imprecise statistical profile
+ * of where our program resources are expended. This can help debug
+ * performance issues.
+ *
+ * Wikilon provides limited support for stack profiling. This can be
+ * configured by specifying a non-zero output register. Trace entries
+ * are written to this register, one per line, in plain text.
+ *
+ *     0 12345 1000 /foo/bar/baz
+ *     1 987 100000 /blub/glub
+ *     0 13456 1200 /foo/bar/qux
+ *     ...
+ *
+ * The three numbers are the thread identifier, CPU microseconds,
+ * and bytes allocated. The last entry is a URL-like stack of words
+ * representing the call stack traced. Wikilon leaves to the client
+ * the challenge of summarizing this list into a coherent profile.
+ *
+ * Once configured, threads will continue writing to the profile
+ * until disabled.
+ */
+void wikrt_prof_stack(wikrt_cx*, wikrt_r);
 
 /** Overview of a context's memory usage. */
 typedef struct wikrt_mem_stats { 
     uint64_t    gc_bytes_processed; // total GC effort 
     uint64_t    gc_bytes_collected; // useful GC effort
     size_t      context_size;       // context allocation size
+    size_t      heap_size;          // portion of heap profiled
 } wikrt_mem_stats;
 
-/** Memory Usage Metrics */
-void wikrt_cx_mem_stats(wikrt_cx* cx, wikrt_mem_stats* s);
-
-// maybe get some effort stats, too?
-//  CPU cycles, etc.
-
-
-/** Debugging 
+/** Heap Profiling
  *
- * Awelon supports rich forms of debugging. Use of `(error)` annotations
- * allow errors to be presented as part of a partially evaluated result.
- * We can take snapshots of partial results between evaluation steps and
- * essentially 'animate' evaluation. But it will take a while to figure
- * out suitable API extensions for animated evaluations.
+ * Where a stack profile tells us where effort costs apply, a heap
+ * profile tells us about long-lived objects and where memory is 
+ * used persistently. Wikilon supports a simple heap profile model.
  *
- * The `(trace)` annotation supports conventional log-based debugging.
- * When `[message](trace)` is evaluated in the program, the `[message]`
- * is implicitly copied and appended to the trace log for perusal by a
- * human. With parallelism, the order of messages is non-deterministic.
+ * Blocks are tagged with syntactic origin. If `foo = [A][B][C]`,
+ * the three blocks are tagged as originating from `foo`, this is
+ * preserved across bind and evaluation of the blocks, giving us
+ * something to blame for every closure.
  *
- * By default, trace is disabled - configured to the null stream.
- */
-void wikrt_debug_trace(wikrt_cx*, wikrt_s); 
-
-// Debugging, Profiling, Etc..
-// 
-// - set up tracing for words or (@gate) annotations
-// - breakpoints and eventually animations on the same
-// - statistics or profiling on words or gates
-// 
-// What should the profiling API look like?
-//
-// - enable profiling, if not by default
-// - a write-profile option in general
-// - a clear-profile option, potentially 
-//
+ * Heap profiling, when requested, scans the stable heap (excluding
+ * recent allocations by active threads) then records a profile of 
+ * top memory consumers to the requested register as a sequence of 
+ * `word value` lines, where the value is a byte count. If you need
+ * an up-to-date profile, use wikrt_cx_gc before profiling.
+ *
+ * Note: stack profiling continuous after configured, but the heap
+ * profile is a one off action. Also, you may use register 0 if you
+ * want only the memory stats, or NULL mem stats if you need only
+ * the profile, but requesting them together ensures atomicity.
+ */ 
+bool wikrt_prof_heap(wikrt_cx*, wikrt_r, wikrt_mem_stats*);
 
 /** Enable Parallel Evaluation
  *

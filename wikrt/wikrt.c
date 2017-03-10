@@ -435,7 +435,7 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
     }
 }
 
-void wikrt_debug_trace(wikrt_cx* cx, wikrt_s sfd)
+void wikrt_debug_trace(wikrt_cx* cx, wikrt_r sfd)
 {
     // set the trace log atomically
     // in case of background parallelism, this may split the stream in
@@ -446,31 +446,36 @@ void wikrt_debug_trace(wikrt_cx* cx, wikrt_s sfd)
     pthread_mutex_unlock(&(cx->mutex));
 }
 
-//typedef uint64_t wikrt_s;
-bool wikrt_write(wikrt_cx* cx, wikrt_s fd, uint8_t const* data, size_t amt) 
-{
-    if(0 == amt) { return true; }
-    // allocate stream index 
-    // reserve space to allocate stream and data as needed
 
-    // allocate the stream if necessary, get an index
-    // allocate the data, this may require a GC 
-    
+
+//typedef uint64_t wikrt_r;
+bool wikrt_write(wikrt_cx* cx, wikrt_r fd, uint8_t const* data, size_t amt) 
+{
+    if(0 == amt) { return true; } // irrelevant write
+    if(0 == fd) { errno = EBADF; return false; } // cannot write NULL stream
+
+    wikrt_n 
+
+bool wikrt_alloc_stream_index(wikrt_cx* cx, wikrt_r fd, wikrt_n* ix);
+
+    // allocate stream index and report whether stream object known
+    // reserve space to allocate stream and data as needed
+    // allocate data and stream
 
     return false;
 }
-size_t wikrt_read(wikrt_cx* cx, wikrt_s fd, uint8_t* const buff, size_t const max)
+size_t wikrt_read(wikrt_cx* cx, wikrt_r fd, uint8_t* const buff, size_t const max)
 {
     return 0;
 }
 
-bool wikrt_is_empty(wikrt_cx* cx, wikrt_s fd)
+bool wikrt_is_empty(wikrt_cx* cx, wikrt_r fd)
 {
     // test if stream is empty
     return true;
 }
 
-void wikrt_clear(wikrt_cx* cx, wikrt_s fd)
+void wikrt_clear(wikrt_cx* cx, wikrt_r fd)
 {
     
 }

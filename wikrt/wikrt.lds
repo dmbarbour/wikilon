@@ -15,7 +15,6 @@
     wikrt_cx_destroy;
     wikrt_cx_env;
     wikrt_cx_gc;
-    wikrt_cx_mem_stats;
 
     wikrt_write;
     wikrt_read;
@@ -43,6 +42,10 @@
     wikrt_set_effort;
 
     wikrt_debug_trace;
+    wikrt_debug_breakpoint;
+    wikrt_debug_eval_step;
+    wikrt_prof_stack;
+    wikrt_prof_heap;
 
     wikrt_db_open;
     wikrt_db_sync;
