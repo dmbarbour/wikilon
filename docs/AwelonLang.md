@@ -153,7 +153,7 @@ Annotations help developers control, optimize, view, and debug computations. Ann
 * `(trace)` - record value to a debug output log
 * `(trash)` - erase data you won't observe, leave placeholder
 * `(error)` - mark a value as an error object
-* `(~foo)` - reduce code to a known name (quines, loops)
+* `(~foo)` - reduce code to known name (quines, loops)
 
 Annotations must have no observable effect within a computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, support useful external observations like debug logs or breakpoint states or a change in how an evaluated result is represented or organized.
 

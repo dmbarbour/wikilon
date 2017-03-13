@@ -510,9 +510,6 @@ bool wikrt_debug_eval_step(wikrt_cx*, wikrt_r, char const* target);
  * and bytes allocated. The last entry is a URL-like stack of words
  * representing the call stack traced. Wikilon leaves to the client
  * the challenge of summarizing this list into a coherent profile.
- *
- * Once configured, threads will continue writing to the profile
- * until disabled.
  */
 void wikrt_prof_stack(wikrt_cx*, wikrt_r);
 
@@ -526,25 +523,21 @@ typedef struct wikrt_mem_stats {
 
 /** Heap Profiling
  *
- * Where a stack profile tells us where effort costs apply, a heap
- * profile tells us about long-lived objects and where memory is 
- * used persistently. Wikilon supports a simple heap profile model.
+ * Heap profiling describes long-lived objects in memory. This can be
+ * useful for debugging memory usage issues. Wikilon has support for
+ * a low precision but reasonably efficient heap profile, associating
+ * a word of with each closure based on the syntactic origin of the 
+ * outermost block.
+ * 
+ * On request, we'll scan the heap, or at least the stable portion as
+ * of the last full context GC (see also wikrt_cx_gc). A profile will
+ * be written as `word number number` triples, one per line, where the
+ * numbers are bytes associated with each word in the old and young GC
+ * generations. (Generation data simplifies debugging of dataflow.)
  *
- * Blocks are tagged with syntactic origin. If `foo = [A][B][C]`,
- * the three blocks are tagged as originating from `foo`, this is
- * preserved across bind and evaluation of the blocks, giving us
- * something to blame for every closure.
- *
- * Heap profiling, when requested, scans the stable heap (excluding
- * recent allocations by active threads) then records a profile of 
- * top memory consumers to the requested register as a sequence of 
- * `word value` lines, where the value is a byte count. If you need
- * an up-to-date profile, use wikrt_cx_gc before profiling.
- *
- * Note: stack profiling continuous after configured, but the heap
- * profile is a one off action. Also, you may use register 0 if you
- * want only the memory stats, or NULL mem stats if you need only
- * the profile, but requesting them together ensures atomicity.
+ * We'll return additional statistics if wikrt_mem_stats* is not NULL.
+ * This can help situate the heap profile. If you just want the stats,
+ * set the profile output register to zero.
  */ 
 bool wikrt_prof_heap(wikrt_cx*, wikrt_r, wikrt_mem_stats*);
 
