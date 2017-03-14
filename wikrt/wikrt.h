@@ -107,7 +107,7 @@ void wikrt_env_destroy(wikrt_env*);
  * A named dictionary is part of the context. This dictionary is used
  * when linking definitions or persistent updates. A web service can
  * provide some access control at this named dictionary level. If the
- * dictionary argument is NULL or empty, a fresh volatile dictionary 
+ * dictionary argument is empty (or NULL), a fresh volatile dictionary 
  * is used and commits will fail. 
  *
  * This operation may fail and return NULL, most likely because the
@@ -151,7 +151,7 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** Wikilon IO Model
+/** Wikilon IO with Binary Registers
  *
  * Wikilon uses binaries as the primary input and output structure at
  * the API layer - used for updating or accessing the dictionary and
@@ -161,15 +161,12 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  *
  * Binary IO registers are given stable identity as simple integers.
  * Logically, every register has an associated binary, defaulting to
- * empty. Writes addends the right hand side of a binary. Reads take
- * data from the left, destructively. To model non-destructive read,
- * copy the register first. The zero register (0) cannot be written.
- * It's left to the client to allocate registers to different tasks.
+ * empty. Writes addend the right hand side of a binary. Reads take
+ * data from the left, destructively. If a non-destructive read is
+ * needed, first call wikrt_copy then read the copy.
  *
- * Writes may fail if the context is full. Reads may return less data
- * than requested if the input is exhausted. Wikilon will ensure that
- * reads will not fail due to exhausting context memory, leveraging a
- * constant space algorithm for reads.
+ * Writes may fail with ENOMEM. Reads may fail (return less data than
+ * requested) with ENOMEM or ENODATA. 
  */
 typedef uint64_t wikrt_r;
 bool wikrt_write(wikrt_cx*, wikrt_r, uint8_t const*, size_t);
@@ -181,14 +178,10 @@ void wikrt_clear(wikrt_cx*, wikrt_r); // stream is empty after clear
  *
  * Move or copy data from the source register to the destination,
  * addending the latter. The 'move' option implicitly clears the
- * source, and is more efficient when potentially working with 
- * unique references (such as arrays with in-place updates) or 
- * background parallelism.
-
-, addending the destination stream.
- * This could be useful for snapshots and similar. The move variant
- * will implicitly clear the source, but may have reduced resource
- * overheads. That said, copies are logical and reasonably cheap.
+ * source, and is more efficient working with unique references 
+ * such as arrays with in-place updates. However, wikrt_copy is
+ * relatively cheap, performing a logical copy rather than a deep
+ * copy.
  */
 bool wikrt_move(wikrt_cx*, wikrt_r src, wikrt_r dst);
 bool wikrt_copy(wikrt_cx*, wikrt_r src, wikrt_r dst);
@@ -458,30 +451,33 @@ void wikrt_cx_gc(wikrt_cx*);
 
 /** Trace Log Debugging
  *
- * Log and console based debugging is supported via `(trace)` annotations.
- * Messages of form `[M](trace)` are copied to a stream configured using
- * wikrt_debug_trace, or disabled (the default) using the zero register.
- *
- * Trace messages are recorded in a causal but non-deterministic order,
- * dependent on parallelism and optimizations. They should be designed
- * for human perusal, since they cannot reliably be procoessed otherwise.
+ * Log-based debugging, like printing to stderr, is conventional and
+ * convenient. Awelon supports this via `(trace)` annotations. Code 
+ * of form `[M](trace)` rewrites to `[M]` and if tracing is enabled
+ * it also addends subprogram `M` to the trace log.
+ * 
+ * The trace log uses an implicit register within each context, which
+ * may be written by background threads. One must move log data to a
+ * normal register to read or further process it.
  */
-void wikrt_debug_trace(wikrt_cx*, wikrt_r); 
+void wikrt_debug_trace(wikrt_cx*, bool enable);
+bool wikrt_debug_trace_move(wikrt_cx*, wikrt_r);
 
 /** Breakpoint Debugging
  *
- * Breakpoints may be set for specific words, preventing linking of
- * that word until unset or an appropriate debug_eval_step action.
- * Debug steps will link where a computation halted on a breakpoint.
+ * Breakpoints may be set or unset for specific words. When set, that
+ * word will no longer link during normal evaluation. Linking with
+ * breakpoints is instead controlled by debug_eval_step, which simply
+ * causes linking where it was prevented by a breakpoint.
  *
- * One may either link all instances of a breakpoint within a register
- * or use special step descriptors like WIKRT_DEBUG_STEP_LEFTMOST. We
- * return true if at least one link is performed by the step operation.
+ * Stepping an evaluation will link all instances of a specific word,
+ * or may use special targets like WIKRT_DEBUG_STEP_LEFTMOST to model
+ * focused evaluation of the program.
  *
- * Awelon's rewrite semantics make breakpoint debugging especially 
- * nice, since they capture the entire context of computation and
- * the state is easily serialized to support animation or time travel
- * debugging.
+ * Awelon's rewrite semantics work nicely with breakpoint debugging,
+ * enabling animation of evaluation 'frames'. While it costs memory,
+ * this can readily subsume tracing and provide better context. This
+ * can similarly support time-travel debugging.
  */
 bool wikrt_debug_breakpoint(wikrt_cx*, char const* word, bool set);
 bool wikrt_debug_eval_step(wikrt_cx*, wikrt_r, char const* target);
@@ -492,33 +488,36 @@ bool wikrt_debug_eval_step(wikrt_cx*, wikrt_r, char const* target);
 /** Stack Profiling
  * 
  * Like conventional language runtimes, Wikilon uses a call-return
- * stack to efficiently represent the current continuation. Tracing
+ * stack to efficiently represent the current continuation. Probing
  * this stack periodically offers an imprecise statistical profile
- * of where our program resources are expended. This can help debug
- * performance issues.
+ * of where our program resources are expended. This helps debug
+ * performance problems.
+ * 
+ * The profile is recorded as a list of triples, one per line, with
+ * the current call stack, elapsed microseconds, and bytes allocated.
  *
- * Wikilon provides limited support for stack profiling. This can be
- * configured by specifying a non-zero output register. Trace entries
- * are written to this register, one per line, in plain text.
+ *     /foo/bar/baz 400 1000
+ *     /blub/glub   100 8000
+ *     /foo/bar/qux 300 1200
  *
- *     0 12345 1000 /foo/bar/baz
- *     1 987 100000 /blub/glub
- *     0 13456 1200 /foo/bar/qux
- *     ...
+ * This record is imprecise. For example, we might reach the current  
+ * call stack at the very end of the elapsed time. But enough entries
+ * can provide useful estimates of where evaluation effort is spent.
  *
- * The three numbers are the thread identifier, CPU microseconds,
- * and bytes allocated. The last entry is a URL-like stack of words
- * representing the call stack traced. Wikilon leaves to the client
- * the challenge of summarizing this list into a coherent profile.
+ * While enabled, a stack profile is written to an implicit register,
+ * in general by multiple threads. The data must be moved to a normal
+ * register for processing. 
  */
-void wikrt_prof_stack(wikrt_cx*, wikrt_r);
+void wikrt_prof_stack(wikrt_cx*, bool enable);
+void wikrt_prof_stack_move(wikrt_cx*, wikrt_r);
 
-/** Overview of a context's memory usage. */
+/** Overview of a context memory usage. */
 typedef struct wikrt_mem_stats { 
     uint64_t    gc_bytes_processed; // total GC effort 
     uint64_t    gc_bytes_collected; // useful GC effort
-    size_t      context_size;       // context allocation size
-    size_t      heap_size;          // portion of heap profiled
+    size_t      elder_gen_size;     // total elder heap
+    size_t      young_gen_size;     // total young heap
+    size_t      heap_available;     // free alloc space
 } wikrt_mem_stats;
 
 /** Heap Profiling
@@ -529,15 +528,22 @@ typedef struct wikrt_mem_stats {
  * a word of with each closure based on the syntactic origin of the 
  * outermost block.
  * 
- * On request, we'll scan the heap, or at least the stable portion as
- * of the last full context GC (see also wikrt_cx_gc). A profile will
- * be written as `word number number` triples, one per line, where the
- * numbers are bytes associated with each word in the old and young GC
- * generations. (Generation data simplifies debugging of dataflow.)
+ * Calling wikrt_prof_heap will scan the stable portion of the heap,
+ * excluding recent allocations so as to minimize interference with
+ * background parallelism. (Call wikrt_cx_gc for up-to-date profile.) 
+ * The profile is recorded as lines of `word number number` triples:
  *
- * We'll return additional statistics if wikrt_mem_stats* is not NULL.
- * This can help situate the heap profile. If you just want the stats,
- * set the profile output register to zero.
+ *      foo 1234 5678
+ *      bar 9876 5432
+ *      ...
+ *
+ * The two numbers represent byte costs associated with the word, in
+ * the old and young GC generations to simplify analysis of dataflow.
+ * Besides the profile, which is written to a register, we can also
+ * output statistics to situate the profile or detect GC thrashing.
+ *
+ * Note: this does not profile the copy-on-write frozen context when
+ * using wikrt_cx_copy after wikrt_cx_freeze.
  */ 
 bool wikrt_prof_heap(wikrt_cx*, wikrt_r, wikrt_mem_stats*);
 

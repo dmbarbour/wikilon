@@ -42,9 +42,11 @@
     wikrt_set_effort;
 
     wikrt_debug_trace;
+    wikrt_debug_trace_move;
     wikrt_debug_breakpoint;
     wikrt_debug_eval_step;
     wikrt_prof_stack;
+    wikrt_prof_stack_move;
     wikrt_prof_heap;
 
     wikrt_db_open;

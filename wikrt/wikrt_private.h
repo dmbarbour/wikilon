@@ -98,20 +98,22 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *   And the built-in operators, of course.
  *
  */
-#define WIKRT_SMV   0
+#define WIKRT_SMALL 0
 #define WIKRT_OBJ   1
 #define WIKRT_COMP  2
 #define WIKRT_CONS  3
+#define WIKRT_VAL   4
 
-#define WIKRT_REF_MASK_CBIT     2
+#define WIKRT_SMV   (WIKRT_VAL | WIKRT_SMALL)
+#define WIKRT_VOBJ  (WIKRT_VAL | WIKRT_OBJ)
+
 #define WIKRT_REF_MASK_TYPE     3
-#define WIKRT_REF_MASK_IBIT     4
 #define WIKRT_REF_MASK_ADDR     (~((wikrt_v)7))
 
 #define WIKRT_SMALL_INT_OP    8  /* _1000; int behavior */
-#define WIKRT_SMALL_INT_VAL  12  /* _1100; int value */
+#define WIKRT_SMALL_INT_VAL  (WIKRT_SMALL_INT_OP | WIKRT_VAL)
 #define WIKRT_SMALL_NAT_OP   16  /* 10000; nat behavior */
-#define WIKRT_SMALL_NAT_VAL  20  /* 10100; nat value */
+#define WIKRT_SMALL_NAT_VAL  (WIKRT_SMALL_NAT_OP | WIKRT_VAL)
 
 #define WIKRT_SMALLNAT_MAX (WIKRT_V_MAX >> 5)
 #define WIKRT_SMALLINT_MAX WIKRT_SMALLNAT_MAX
@@ -120,7 +122,7 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 // bit-level utility functions
 static inline wikrt_v wikrt_vtag(wikrt_v v) { return (WIKRT_REF_MASK_TYPE & v); }
 static inline wikrt_a wikrt_v2a(wikrt_v v) { return (WIKRT_REF_MASK_ADDR & v); }
-static inline bool wikrt_action(wikrt_v v) { return !(WIKRT_REF_MASK_IBIT & v); }
+static inline bool wikrt_action(wikrt_v v) { return !(WIKRT_VAL & v); }
 static inline bool wikrt_value(wikrt_v v) { return !wikrt_action(v); }
 
 static inline bool wikrt_val_in_ref(wikrt_v v) { return !wikrt_vtag(v); }
@@ -153,7 +155,7 @@ void wikrt_get_entropy(size_t amt, uint8_t* out);
 /** Tagged Objects
  *
  * The bytes of a tagged object will give a basic type, and common
- * metadata: substructure (nc, nd); unique vs sharable. And so on.
+ * metadata: substructure (nc, nd); a 'shared object' bit, etc..
  *
  * Some object types we need:
  *
@@ -164,12 +166,9 @@ void wikrt_get_entropy(size_t amt, uint8_t* out);
  * - big natural numbers
  *   - array of 30-bit words (each in 0..999999999), little-endian
  * - arrays; a compact list representation
- *   - binary, text, values
+ *   - binary, values
  *   - copy on write if shared
- *   - logical reversal of array fragments
- *   - array slices (slice array offset count)
- *   - array logical append (append array array size)
- *   - potential buffering (add/remove at one edge?)
+ *   - logical reversal, slice, append
  * - annotations or words
  *   - might intern all such references
  *   - slots for link value, word, tree node structure
@@ -179,40 +178,66 @@ void wikrt_get_entropy(size_t amt, uint8_t* out);
  *   - debugger and profiling options for words
  * - error values?
  *
- * Logical append of arrays enables some array fragments to be writable
- * while others are copy-on-write. 
+ * Logical append, reversal, and slices on arrays might need to be 
+ * wrappers to support shared structure. So the basic array fragment
+ * needs to be very simple. No buffering will be used. Developers can
+ * model array-buffers explicitly via allocation from a list of zero
+ * values or similar.
  *
- * Object types will simply be encoded in the first byte of the 
- * tagged object. 
+ * Object types will simply be encoded in the first word for the tagged
+ * object. 
  */
 typedef enum wikrt_otype
 { WIKRT_OTYPE_ID = 0    // wrap a value, likely to add (nc) or (nd) attributes
-, WIKRT_OTYPE_STREAM    // a stream object, referenced from context toplevel
+, WIKRT_OTYPE_UNPARSED  // raw binary input or output, must be parsed
 , WIKRT_OTYPE_WS        // write set used for generational GC
 , WIKRT_OTYPE_TASK      // a fragment of code under evaluation
 , WIKRT_OTYPE_BLOCK   
-, WIKRT_OTYPE_BIGNAT
+, WIKRT_OTYPE_BIGNAT    
 , WIKRT_OTYPE_WORD      // interned, and includes annotations
-, WIKRT_OTYPE_ERROR     // mark value as erroneous
+, WIKRT_OTYPE_ERROR     // wrap a value as erroneous
 , WIKRT_OTYPE_ARRAY     // compact list of arbitrary values
 , WIKRT_OTYPE_BINARY 
-, WIKRT_OTYPE_UTF8      // wraps a binary  
-, WIKRT_OTYPE_SLICE     // array slice with offset, size 
-, WIKRT_OTYPE_APPEND    // array join
+, WIKRT_OTYPE_ARRAY_SLICE     // logical array slice (offset, size) 
+, WIKRT_OTYPE_ARRAY_APPEND    // logical array append (left, right, size)
+, WIKRT_OTYPE_ARRAY_REVERSE   // logical array reversal 
+, WIKRT_OTYPE_TEXT     // may wrap a binary  
 } wikrt_otype;
 
+#define WIKRT_OTYPE_SHARED (1<<8)
+#define WIKRT_OTYPE_NC (1<<9)
+#define WIKRT_OTYPE_ND (1<<10)
 
 /** Basic Array Structure
  *
- * A sized, contiguous list of values. 
+ * WIKRT_OTYPE_ARRAY represents a list of arbitrary values. Awelon
+ * arrays aren't required to have homogeneous type, in general.
  *
- * Potentially a unique reference to support in-place update.
+ * WIKRT_OTYPE_BLOCK uses the array structure to represent a large
+ * block - a sequence of operations subject to interpretation.
  */
 typedef struct wikrt_array {
-    wikrt_o otype_array;    // WIKRT_ARRAY
-    wikrt_z size;           // element count
+    wikrt_o otype;    // block or array
+    wikrt_z size;     // element count
     wikrt_v data[];     
 } wikrt_array;
+
+/** Simple binary data objects.
+ * 
+ * WIKRT_OTYPE_BINARY represents the list of naturals in 0..255.
+ * This is usually a Wikilon value, though a list may be applied.
+ * A list is like `[0 [42 [255 ~ :] :] :]`. Removing elements 
+ * would require logical slices.
+ *
+ * WIKRT_OTYPE_UNPARSED is a special case, unparsed code or raw
+ * binary data input, and is treated as an operation. A block of
+ * unparsed code is invalid.
+ */
+typedef struct wikrt_binary {
+    wikrt_o otype;   // binary or unparsed
+    wikrt_z size;
+    uint8_t data[];
+} wikrt_binary;
 
 /** Built-ins (Primitives, Accelerators, Annotations)
  *
@@ -320,7 +345,6 @@ typedef enum wikrt_op
 
 // List and Array Operations
 } wikrt_op;
-
 
 /** The Database
  * 
@@ -462,25 +486,27 @@ typedef struct wikrt_thread {
     wikrt_cx* cx;
 
     // Profile Management?
-    wikrt_n tid;    // selected on entry
     //   but may want other trace profile resources
 
-    // Thread Exclusive Memory
+    // Memory Management (no free lists)
     wikrt_a start;  // first reserved address
     wikrt_a end;    // last reserved address
-    wikrt_a gen;    // end of survivor generation
+    wikrt_a elder;  // end of prior young generation
+    wikrt_a young;  // end of young generation (alloc start)
     wikrt_a stop;   // allocation cap (for GC, reserves space for marking)
     wikrt_a alloc;  // current allocator
 
     // Write Set for Generational GC.
-    wikrt_ws* writes;
+    wikrt_v write_set;
 
     // Tasks to Perform.
     wikrt_v ready;      // tasks we can work on now
     wikrt_v ready_r;    // tasks recently allocated
     wikrt_v waiting;    // tasks awaiting promotion
 
-    wikrt_v trace; // 
+    // Debug Logs - thread local; moved to cx->memory when stable
+    wikrt_v trace_log;  // (trace) messages 
+    wikrt_v prof_log;   // stack profile
 
     // Local Memory Statistics
     uint64_t gc_bytes_processed;
@@ -497,27 +523,29 @@ typedef struct wikrt_thread {
 
 /** current timestamp in microseconds */
 uint64_t wikrt_thread_time(); // microseconds
- 
-/** Streams.
+
+/** Register Table
+ *
+ * Register IDs are separated from register data to simplify GC.
+ * Otherwise, this is a pretty simple structure of arrays hashtable.
+ *
+ * The 'data' in each register is interpreted as a block of code.
+ * We leverage that "inline binary as op" is treated as unparsed code.
+ *
+ * Moving data between registers needs some special attention because
+ * we don't 
  * 
- * A context hosts a set of binary streams. A stream is identified by
- * a simple integer (wikrt_r). A set of streams essentially forms the
- * root set for a context.
- *
- * I'll probably need to add a bunch of fields to track reader state,
- * e.g. for partial reads of a large word, or pending repetitions of
- * `:]` at the end of a list. It might also be useful to track content
- * that cannot be further evaluated.
- *
  */
-typedef struct wikrt_stream {
-    wikrt_o otype_stream;   // stream type, always linear
-    wikrt_r stream_id;      // external ID of stream
-
-    // data and evaluation tasks?
+typedef struct wikrt_reg_table { 
+    wikrt_n size;
+    wikrt_n fill;
+    wikrt_v ids;
     wikrt_v data;
-} wikrt_stream;
+} wikrt_reg_table;
 
+bool wikrt_register_addend_temp(wikrt_cx*, wikrt_r);
+
+ 
 /** A context.
  *
  * A context is represented by a contiguous volume of memory, and has
@@ -546,7 +574,7 @@ struct wikrt_cx {
     wikrt_cx       *cxn;                // circular list of contexts
     wikrt_cx       *cxp;
     bool            in_env_worklist;    // in env->cxw (as opposed to cxs)
-    uint32_t        worker_count;       // count of workers in this thread
+    uint32_t        worker_count;       // count of workers in context
     bool            workers_halt;       // request active workers to halt
     pthread_cond_t  workers_done;       // signal when (0 == worker_count)
 
@@ -557,9 +585,12 @@ struct wikrt_cx {
     wikrt_n         refct;              // references as a frozen context 
     wikrt_cx*       proto;              // a frozen prototype context 
     bool            frozen;             // whether this context is frozen
+
+    // Debugging
+    bool            trace_enable;
+    bool            prof_enable;
     
     // parallel computations in shared memory
-    uint32_t        effort;             // available compute effort
     size_t          size;               // initial allocation
     wikrt_thread    memory;             // shared context memory
 
@@ -567,14 +598,11 @@ struct wikrt_cx {
     size_t          dict_name_len;      // 0..WIKRT_HASH_SIZE
     uint8_t         dict_name[WIKRT_HASH_SIZE + 4]; // unique name of dictionary (NUL terminated) 
     uint8_t         dict_ver[WIKRT_HASH_SIZE + 4];  // an import/export hash val (NUL terminated)
-    wikrt_v         words_table;        // intern words read in memory
-    wikrt_v         writes_list;        // writes since last commit
+    wikrt_v         words;              // words table in context memory
 
-    // Stream Roots
-    wikrt_r         trace_stream;       // stream ID for (trace)
-    wikrt_n         stream_count;       // 
-    wikrt_v         stream_table;       // the hashtable array
-    wikrt_thread    main;               // resources for API main thread
+    // Registers
+    wikrt_v         temp;               // temporary data register
+    wikrt_rtb       registers;          // primary registers table
 
     // todo:
     // Stowage tracking: need to know all stowage roots
@@ -599,8 +627,6 @@ void wikrt_cx_interrupt_work(wikrt_cx*);
 void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name);
 bool wikrt_cx_has_work(wikrt_cx*);
 size_t wikrt_word_len(uint8_t const* const src, size_t maxlen);
-
-bool wikrt_alloc_stream_index(wikrt_cx* cx, wikrt_r fd, wikrt_n* ix);
 
 static inline bool wikrt_cx_unshared(wikrt_cx* cx) 
 {
@@ -631,9 +657,8 @@ static inline wikrt_a wikrt_thread_alloc(wikrt_thread* const t, wikrt_z amt)
     return r;
 }
 
-// This function is for variable-sized allocations like binaries or arrays,
-// where we might wish to 
-
+// Function for large allocations outside the current thread.
+bool wikrt_alloc(wikrt_cx*, wikrt_addr*, wikrt_z amt);
 
 
 #define WIKRT_H

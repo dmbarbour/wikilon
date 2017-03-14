@@ -365,12 +365,11 @@ wikrt_z wikrt_compute_alloc_space(wikrt_z const space_total)
 void wikrt_cx_alloc_reset(wikrt_cx* cx)
 {
     assert(wikrt_cx_unshared(cx));
-    cx->main = cx->memory = (wikrt_thread){0};
-    cx->main.cx = cx; // main API thread
-
+    cx->memory = (wikrt_thread){0};
     cx->memory.start = wikrt_cellbuff( ((wikrt_a)cx) + sizeof(wikrt_cx) );  
     cx->memory.end   = ((wikrt_a)cx) + cx->size; // exact
-    cx->memory.gen   = cx->memory.start; // no elder survivors yet
+    cx->memory.elder = cx->memory.start; // no elder survivors yet
+    cx->memory.young = cx->memory.start; // no young survivors yet
     cx->memory.alloc = cx->memory.start; // bump pointer allocation
 
     wikrt_z const max_cell_count = (cx->memory.end - cx->memory.start) / WIKRT_CELLSIZE;
@@ -398,11 +397,10 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 
     // reset roots
     cx->dict_ver[0]     = 0;   
-    cx->words_table     = 0;
-    cx->writes_list     = 0;
-    cx->trace_stream    = 0;
-    cx->stream_count    = 0;
-    cx->stream_table    = 0;
+    cx->words           = 0;
+    cx->trace           = 0;
+    cx->temp            = 0;
+    cx->registers       = (wikrt_register_table){0};
     wikrt_cx_alloc_reset(cx);
     wikrt_cx_set_dict_name(cx, dict_name);
 
@@ -422,11 +420,11 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
     if(0 == effort) {
         // forcibly halt background labor for zero effort
         wikrt_cx_interrupt_work(cx);
-        cx->effort = 0;
+        cx->memory.effort = 0;
     } else {
         // otherwise, adjust the effort and potentially continue
         pthread_mutex_lock(&(cx->mutex));
-        cx->effort = effort;
+        cx->memory.effort = effort;
         bool const cx_has_work = wikrt_cx_has_work(cx); 
         pthread_mutex_unlock(&(cx->mutex));
         if(cx_has_work) {
@@ -435,35 +433,63 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
     }
 }
 
-void wikrt_debug_trace(wikrt_cx* cx, wikrt_r sfd)
+void wikrt_debug_trace(wikrt_cx* cx, wikrt_r r)
 {
-    // set the trace log atomically
-    // in case of background parallelism, this may split the stream in
-    // a non-deterministic manner. 
-    //   promotion is non-deterministic
-    pthread_mutex_lock(&(cx->mutex));
-    cx->trace_stream = sfd;
-    pthread_mutex_unlock(&(cx->mutex));
+    cx->trace = r;
+}
+
+// obtain an index where we would write to a register.
+bool wikrt_get_register_index(wikrt_cx* cx, wikrt_r r, wikrt_n* ix)
+{
+    // non-destructively obtain register index
+    if(0 == cx->registers.ids) { 
+        return false;
+    }
+    wikrt_n const* const ixs = (wikrt_n const*) (1 + wikrt_v2p(cx->registers.
+
+bool wikrt_get_register_index(wikrt_cx* cx, wikrt_r r, wikrt_n* ix) 
+    
+    
+}
+
+bool wikrt_grow_registers(wikrt_cx* cx)
+{
+    // grow register table monotonically, as needed.
+    //   
+}
+
+// allocate index where we would write to a register
+bool wikrt_alloc_register_index(wikrt_cx* cx, wikrt_r r, wikrt_n* ix)
+{
+    if(wikrt_get_register_index(cx, r, ix)) { return true; }
+    if(!wikrt_grow_registers(cx)) { return false; }
+    return wikrt_get_register_index(cx, r, ix);   
+}
+
+bool wikrt_alloc_binary_temp(wikrt_cx* cx, uint8_t const* data, size_t amt)
+{
+    // Allocate and copy the binary (via temp register)
+    wikrt_a addr;
+    if(!wikrt_alloc(cx, &addr, (WIKRT_CELLSIZE + amt))) { return false; }
+    cx->temp = WIKRT_VOBJ | addr;
+
+    wikrt_binary* const b = (wikrt_binary*)addr;
+    b->otype_binary = WIKRT_OTYPE_BINARY;
+    b->size = amt;
+    memcpy(b->data, data, amt);
+    return true;
 }
 
 
-
-//typedef uint64_t wikrt_r;
-bool wikrt_write(wikrt_cx* cx, wikrt_r fd, uint8_t const* data, size_t amt) 
+bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt) 
 {
-    if(0 == amt) { return true; } // irrelevant write
-    if(0 == fd) { errno = EBADF; return false; } // cannot write NULL stream
+    if(0 == total_amt) { return true; } // irrelevant write
+    if(0 == r) { errno = EBADF; return false; } // cannot write NULL stream
 
-    wikrt_n 
-
-bool wikrt_alloc_stream_index(wikrt_cx* cx, wikrt_r fd, wikrt_n* ix);
-
-    // allocate stream index and report whether stream object known
-    // reserve space to allocate stream and data as needed
-    // allocate data and stream
-
-    return false;
+    if(!wikrt_alloc_binary_temp(cx, data, amt)) { return false; }
+    return wikrt_reg_write_temp(cx, r);
 }
+
 size_t wikrt_read(wikrt_cx* cx, wikrt_r fd, uint8_t* const buff, size_t const max)
 {
     return 0;
