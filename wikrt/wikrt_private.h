@@ -14,8 +14,9 @@
 
 /** NOTES
  * 
- * Bits: We'll use native pointers internally. This performs well, and is
- * necessary instead of offsets for wikrt_cx_freeze.
+ * Pointers: We'll use native pointers internally. This performs well, and 
+ * is necessary for wikrt_cx_freeze to support references into the parent
+ * context.
  * 
  * Dictionary Names: valid Awelon words up to so many bytes are accepted.
  * Anything else is aliased via secure hash. This should be invisible to 
@@ -73,7 +74,7 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *      b11     constructor cell (H, T) => [H T :]
  *      `b` bit is 1 for blocks or values words, 0 for inline actions
  *
- * Small Constants (2 bits + b00)
+ * Common Small Constants (2 bits + b00)
  *
  *      00      extended
  *      10      naturals        
@@ -89,14 +90,18 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *      000     built-in primitives, accelerators, etc.
  *      (small rationals, decimals, labels, texts, etc.)
  *
- *   The number of built-ins will be relatively small.
+ *   I'm assuming 64-bit systems will be the common option. Decimals 
+ *   with an 8 bit exponent (base 10) and 48-bit mantissa would cover
+ *   a lot of practical values. On a 32-bit system, extended small
+ *   constants won't cover nearly as much but are still useful.
  *
- *   Chances are I'll not get far on a 32-bit system. But I'm assuming
- *   64-bit systems will be the common option, so losing 8 bits for the
- *   value type could cover a usefully large set of values. I'm most 
- *   interested in small texts, binaries, and labels (up to 6 bytes).
- *   And the built-in operators, of course.
+ * Note: one reason for constants to be arranged the way they are is
+ * to ensure a zero-filled memory corresponds to a sequence of OP_NOP
+ * inaction.
  *
+ * Aside: Awelon and Wikilon are unlikely to support floating point
+ * data, excepting very careful acceleration of linear algebras. CPUs
+ * may vary in how much internal precision they provide, etc..
  */
 #define WIKRT_SMALL 0
 #define WIKRT_OBJ   1
@@ -154,92 +159,120 @@ void wikrt_get_entropy(size_t amt, uint8_t* out);
 
 /** Tagged Objects
  *
- * The bytes of a tagged object will give a basic type, and common
- * metadata: substructure (nc, nd); a 'shared object' bit, etc..
+ * Wikilon runtime shouldn't need more than 32 common object types,
+ * especially if I consolidate common pairs and quadruples. Beyond
+ * the structural type, each object tracks a little substructure.
  *
- * Some object types we need:
- *
- * - blocks
- *   - simple array of actions, ending in a return action
- *   - may later reference a JIT version, too. 
- *   - fixpoint blocks? maybe by header bit, representing `[[F]z]`.  
- * - big natural numbers
- *   - array of 30-bit words (each in 0..999999999), little-endian
- * - arrays; a compact list representation
- *   - binary, values
- *   - copy on write if shared
- *   - logical reversal, slice, append
- * - annotations or words
- *   - might intern all such references
- *   - slots for link value, word, tree node structure
- *   - match unseal to seal efficiently
- *   - words might be updated via transactions
- *   - words can track arity or have a "linked" variant
- *   - debugger and profiling options for words
- * - error values?
- *
- * Logical append, reversal, and slices on arrays might need to be 
- * wrappers to support shared structure. So the basic array fragment
- * needs to be very simple. No buffering will be used. Developers can
- * model array-buffers explicitly via allocation from a list of zero
- * values or similar.
- *
- * Object types will simply be encoded in the first word for the tagged
- * object. 
+ *   - shared:  reference shared, must copy on write
+ *   - no-copy: the (nc) annotation has been applied
+ *   - no-drop: the (nd) annotation has been applied
+ * 
+ * Objects are unique by default, enabling in-place update. But
+ * in-place update is only possible with specific accelerators,
+ * such as fast, indexed update of a list (via an array).
  */
 typedef enum wikrt_otype
-{ WIKRT_OTYPE_ID = 0    // wrap a value, likely to add (nc) or (nd) attributes
-, WIKRT_OTYPE_UNPARSED  // raw binary input or output, must be parsed
-, WIKRT_OTYPE_WS        // write set used for generational GC
+{ WIKRT_OTYPE_PAIR = 0  // trivial (header, value) pairs
+, WIKRT_OTYPE_QUAD      // (header, value, value, value) quadruples
+
+, WIKRT_OTYPE_RAW       // raw binary IO data
+, WIKRT_OTYPE_BINARY    // array of byte values
+, WIKRT_OTYPE_BLOCK     // flat sequence of code
+, WIKRT_OTYPE_ARRAY     // compact list value
+
+, WIKRT_OTYPE_BIGNUM    // natural numbers
 , WIKRT_OTYPE_TASK      // a fragment of code under evaluation
-, WIKRT_OTYPE_BLOCK   
-, WIKRT_OTYPE_BIGNAT    
 , WIKRT_OTYPE_WORD      // interned, and includes annotations
-, WIKRT_OTYPE_ERROR     // wrap a value as erroneous
-, WIKRT_OTYPE_ARRAY     // compact list of arbitrary values
-, WIKRT_OTYPE_BINARY 
-, WIKRT_OTYPE_ARRAY_SLICE     // logical array slice (offset, size) 
-, WIKRT_OTYPE_ARRAY_APPEND    // logical array append (left, right, size)
-, WIKRT_OTYPE_ARRAY_REVERSE   // logical array reversal 
-, WIKRT_OTYPE_TEXT     // may wrap a binary  
 } wikrt_otype;
 
-#define WIKRT_OTYPE_SHARED (1<<8)
-#define WIKRT_OTYPE_NC (1<<9)
-#define WIKRT_OTYPE_ND (1<<10)
+#define WIKRT_O_TYPE  (0x1f)
+#define WIKRT_O_SHARE (1<<5)
+#define WIKRT_O_NC    (1<<6)
+#define WIKRT_O_ND    (1<<7)
+#define WIKRT_O_DATA_OFF  8
+#define WIKRT_O_DATA_MAX (WIKRT_Z_MAX >> WIKRT_O_DATA_OFF)
 
-/** Basic Array Structure
+/** Array and Block Structure
  *
- * WIKRT_OTYPE_ARRAY represents a list of arbitrary values. Awelon
- * arrays aren't required to have homogeneous type, in general.
- *
- * WIKRT_OTYPE_BLOCK uses the array structure to represent a large
- * block - a sequence of operations subject to interpretation.
- */
-typedef struct wikrt_array {
-    wikrt_o otype;    // block or array
-    wikrt_z size;     // element count
-    wikrt_v data[];     
-} wikrt_array;
-
-/** Simple binary data objects.
+ * Arrays are simple (header, val, val, val, ...) where the number of
+ * values is in the header. The interpretation might be for a block of
+ * code or a list of values. This gives array fragments a maximum size
+ * in Awelon, but we can logically append two fragments.
  * 
- * WIKRT_OTYPE_BINARY represents the list of naturals in 0..255.
- * This is usually a Wikilon value, though a list may be applied.
- * A list is like `[0 [42 [255 ~ :] :] :]`. Removing elements 
- * would require logical slices.
+ * It is also feasible to support logical slices and logical reversal
+ * of array data. If we append two slices adjacent in memory, we can
+ * combine them into one large slice to optimize divide-and-conquer
+ * tactics on large arrays. 
  *
- * WIKRT_OTYPE_UNPARSED is a special case, unparsed code or raw
- * binary data input, and is treated as an operation. A block of
- * unparsed code is invalid.
+ * Array buffers aren't supported implicitly, but one can explicitly
+ * allocate a large buffer then model allocations and growth and ring
+ * buffers and so on within that buffer, using zeroes to fill unused
+ * data slots. This technique is used within tasks to model data and
+ * call stacks.
+ *
+ * Lists in Awelon are heterogeneous. Thus, so are arrays.
+ *
  */
-typedef struct wikrt_binary {
-    wikrt_o otype;   // binary or unparsed
-    wikrt_z size;
-    uint8_t data[];
-} wikrt_binary;
+typedef struct wikrt_array { wikrt_o o; wikrt_v d[]; } wikrt_array;
+typedef wikrt_array wikrt_block;
 
-/** Built-ins (Primitives, Accelerators, Annotations)
+/** Binary and Raw Data
+ *
+ * Binaries are just arrays of bytes, while raw data models unparsed
+ * code or other IO resources. All initial input to a Wikilon context
+ * is treated as raw data until parsed, and we'll generally translate
+ * back to raw data upon output.
+ */
+typedef struct wikrt_binary { wikrt_o o; uint8_t b[]; } wikrt_binary;
+typedef wikrt_binary wikrt_raw;
+
+/** Big Numbers
+ *
+ * Awelon primarily supports natural numbers, and works with them
+ * always in base 10. Under the hood, we'll use a variation on the
+ * binary coded decimals: a big number is represented by sequence
+ * of 32-bit words, each ranging 0..999999999, little-endian (low
+ * words first). This representation shall be used at parse time 
+ * for number words.
+ *
+ * Big integers, decimals, or rationals will be modeled explicitly
+ * above big natural numbers, whereas small integers and useful
+ * decimals (on a 64-bit system) can be modeled via small values.
+ */
+typedef struct wikrt_bignum { wikrt_o o; uint32_t w[]; } wikrt_bignum;
+
+/* Pairs and Quads
+ *
+ * logical list reversal: pair
+ * logical list append: quad (size if known, left, right)
+ * logical array slice: quad (offset, count, data)
+ *
+ * fixpoint wrapper: composition or pair
+ *   Using composition would require an allocation per loop.
+ *   But that isn't bad for guaranteeing GC-driven actions.
+ * (error) values: a pair
+ * text values: pair, wrap a binary
+ * JIT code: quad wrapping a block?
+ *
+ * Maybe seal/unseal actions. 
+ */
+
+/** Words table.
+ *
+ * Excepting numbers, words are interned and kept in a hashtable.
+ * Each word will need some metadata.
+ *
+ *     word's definition (JIT, block, task, unread)
+ *     word's input-output arity if known (0-1 for value words)
+ *     track update of a word since most recent commit
+ *     read/write status since last commit
+ *     breakpoint status
+ *
+ * Almost any access to our word table will be synchronized, but
+ * ideally the words themselves may be used with minimal synch.
+ */
+
+/** Built-in Operations (Primitives, Accelerators, Annotations)
  *
  * Awelon relies on accelerators as a primary performance technique,
  * both for functions and data. The "built ins" are just the set of
@@ -251,12 +284,9 @@ typedef struct wikrt_binary {
  * in general, but that can be mitigated with wikrt_write_prelude
  * and de-facto standardization.
  * 
- * Annotations are included in this list, excepting debug gates or
- * value sealers that use the annotation symbol.
- * 
- * New built-ins can be added at any location in the enumeration. 
- * But OP_NOP should be the zero value to ensure a freshly zeroed
- * memory has no behavior.
+ * Annotations are included in this list, excepting sealers and other
+ * annotations that have a partially user-defined symbol. Unrecognized
+ * annotations will be dropped upon parsing.
  */
 typedef enum wikrt_op 
 { OP_NOP = 0    // empty program (identity behavior)
@@ -419,11 +449,6 @@ struct wikrt_env {
 void* wikrt_worker_behavior(void* e); 
 void wikrt_halt_threads(wikrt_env* e);
 
-// Words:
-//  need slots for breakpoints
-//  may need support for stack profiling
-//  may need slots for heap profiling
-
 /** Write Set for Generational GC
  *
  * Generational GC requires tracking references from the old generation
@@ -436,14 +461,15 @@ void wikrt_halt_threads(wikrt_env* e);
  * case is considerably better because we expect most old objects to be
  * unmodified. All of these tables can be cleared every time we perform
  * a full context GC, so this also is recoverable space.
+ *
+ * A write set is represented within a WIKRT_OTYPE_BINARY object, and
+ * may further be wrapped as a composable list of write sets. 
  */
 typedef struct wikrt_wsd {
     wikrt_n     page;
     wikrt_n     bits;
 } wikrt_wsd;
 typedef struct wikrt_ws {
-    wikrt_o     otype_ws;   // == WIKRT_OTYPE_WS, no compact data
-    wikrt_v     next;       // for cheap merges upon promotion
     wikrt_z     size;       // buffer size
     wikrt_z     fill;       // element count
     wikrt_wsd   data[];     // data, adjacent to the header.
@@ -453,24 +479,20 @@ typedef struct wikrt_ws {
  * 
  * Threads operate within a context, evaluating parallel tasks. To minimize
  * synchronization, each thread has its own 'nursery' - a volume of memory
- * for lightweight allocations that is independently garbage collected. An
- * important invariant is that a thread never references another's nursery.
+ * for lightweight allocations that is independently garbage collected. Due
+ * to compaction of objects within a nursery, it's important that a thread
+ * never directly references another thread's nursery.
  *
- * Communication between threads requires memory be 'promoted' from nursery
- * to shared context, much like promoting to a higher generation during GC.
- * The latency of waiting on GC can be mitigated by heuristics to aggressively
- * promote memory when available shared work dwindles.
+ * Communication between threads requires 'stable' memory - objects that are
+ * promoted from the nursery to the shared survivor space. This includes both
+ * receiving tasks and results from a parallel operation. This adds latency
+ * to parallelism, and requires careful attention to task 'state'.
  *
- * In some cases, one task may end up waiting on results from another, not
- * just for evaluation to complete but also stable via promotion. Each task
- * must record its readiness status such that we can casually test whether
- * the result is available. 
- *
- * In any case, all this means each thread needs to track:
+ * In any case, each thread must track
  *
  *   - memory and local generations
- *   - write log for generational GC
- *   - parallel tasks - pending, waiting
+ *   - trace and profile logging
+ *   - ownership of tasks, task status
  * 
  * I'm also interested in support for fine-grained control of parallelism
  * within a context, but it isn't a critical feature at this time. For now,
@@ -482,11 +504,7 @@ typedef struct wikrt_ws {
  * GC cycle rather than the youngest generation.
  */
 typedef struct wikrt_thread { 
-    // Context for Shared Memory and Large Allocations
-    wikrt_cx* cx;
-
-    // Profile Management?
-    //   but may want other trace profile resources
+    wikrt_cx* cx;   // for large allocations, coordination
 
     // Memory Management (no free lists)
     wikrt_a start;  // first reserved address
@@ -505,8 +523,8 @@ typedef struct wikrt_thread {
     wikrt_v waiting;    // tasks awaiting promotion
 
     // Debug Logs - thread local; moved to cx->memory when stable
-    wikrt_v trace_log;  // (trace) messages 
-    wikrt_v prof_log;   // stack profile
+    wikrt_v trace;      // (trace) messages 
+    wikrt_v prof;       // stack profile
 
     // Local Memory Statistics
     uint64_t gc_bytes_processed;
@@ -524,24 +542,26 @@ typedef struct wikrt_thread {
 /** current timestamp in microseconds */
 uint64_t wikrt_thread_time(); // microseconds
 
-/** Register Table
+/** Registers Table
  *
- * Register IDs are separated from register data to simplify GC.
- * Otherwise, this is a pretty simple structure of arrays hashtable.
- *
- * The 'data' in each register is interpreted as a block of code.
- * We leverage that "inline binary as op" is treated as unparsed code.
- *
- * Moving data between registers needs some special attention because
- * we don't 
+ * Registers are kept in a simple hashtable, using a binary for the
+ * register names and an array for register data. Register data is
+ * simply interpreted as a toplevel program, leveraging OTYPE_RAW
+ * to represent intermediate outputs. 
+
+
+ * The table is written only via API-level actions.
+ * 
+ * 
+ * 
  * 
  */
-typedef struct wikrt_reg_table { 
+typedef struct wikrt_rtb { 
     wikrt_n size;
     wikrt_n fill;
     wikrt_v ids;
     wikrt_v data;
-} wikrt_reg_table;
+} wikrt_rtb;
 
 bool wikrt_register_addend_temp(wikrt_cx*, wikrt_r);
 
@@ -586,9 +606,9 @@ struct wikrt_cx {
     wikrt_cx*       proto;              // a frozen prototype context 
     bool            frozen;             // whether this context is frozen
 
-    // Debugging
-    bool            trace_enable;
-    bool            prof_enable;
+    // Debug Flags
+    bool            trace_enable;       // (trace) messages
+    bool            prof_enable;        // stack profiling
     
     // parallel computations in shared memory
     size_t          size;               // initial allocation
@@ -602,7 +622,7 @@ struct wikrt_cx {
 
     // Registers
     wikrt_v         temp;               // temporary data register
-    wikrt_rtb       registers;          // primary registers table
+    wikrt_rtb       reg;                // primary registers table
 
     // todo:
     // Stowage tracking: need to know all stowage roots

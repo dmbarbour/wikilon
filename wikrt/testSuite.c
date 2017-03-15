@@ -197,7 +197,8 @@ bool test_write_read_id(wikrt_cx* cx)
         && test_rw(cx,"h")
         && test_rw(cx,"hello")
         && test_rw(cx,"hello, world! this is a test!")
-        // test at least one very big input
+        && test_rw(cx,"    \n\n\n\n    \n\n\n\n    ")
+        // test at least one large input
         && test_rw(cx,wikrt_prelude()) 
         ;
 }

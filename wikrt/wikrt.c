@@ -433,10 +433,35 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
     }
 }
 
-void wikrt_debug_trace(wikrt_cx* cx, wikrt_r r)
+void wikrt_debug_trace(wikrt_cx* cx, bool enable)
 {
-    cx->trace = r;
+    pthread_mutex_lock(&(cx->mutex));
+    cx->trace_enable = enable;
+    if(!enable) { cx->memory.trace = 0; }
+    pthread_mutex_unlock(&(cx->mutex));
 }
+
+bool wikrt_debug_trace_move(wikrt_cx* cx, wikrt_r dst)
+{
+    // TODO
+    return false;
+}
+
+void wikrt_prof_stack(wikrt_cx* cx, bool enable)
+{
+    pthread_mutex_lock(&(cx->mutex));
+    cx->prof_enable = enable;
+    if(!enable) { cx->memory.prof = 0; }
+    pthread_mutex_unlock(&(cx->mutex));
+}
+
+bool wikrt_prof_stack_move(wikrt_cx* cx, wikrt_r dst)
+{
+    // TODO
+    return false;
+}
+
+
 
 // obtain an index where we would write to a register.
 bool wikrt_get_register_index(wikrt_cx* cx, wikrt_r r, wikrt_n* ix)

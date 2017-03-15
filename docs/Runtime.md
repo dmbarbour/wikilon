@@ -228,24 +228,9 @@ Anyhow, the runtime will need to be relatively good at working with tries and st
 
 ## Concurrent Update
 
-Our runtime will support simplistic concurrency primitives - volatile read-update transactions. Anything more sophisticated must be built above this, such as explicitly tracking reads for older long-running transactions, or constructing transactional update procedures in a reflection monad, or twiddling state in the dictionary (or an auxiliary dictionary) to represent locks.
+The runtime supports short-lived transactions. 
 
-At the Wikilon layer, we might try to track higher level transactions.
-
-
-
-In practice, most updates follow simple patterns - command pattern, publish-subscribe, futures/promises. Updates from different agents tend to occur on different fragments of the codebase. We can model voluntary exclusive control using some metadata regions of the dictionary. 
-
-A DVCS inspired approach might model a 'working' dictionary for updates. When another agent updates the shared dictionary before us, we must merge their updates before we can apply our own. This works most easily when the agents in question update independent parts of the dictionary. 
-
-The main difficulties with a DVCS approach is that 'merge' is relatively ad-hoc. A lesser issue is that we cannot detect read-write merge conflicts. That said, we could add some metadata to the dictionary itself to help with particular merge conflict resolutions.
-
-A transactional model would keep more meta-data and gradually construct a new dictionary, but also requires a place for this meta-data. I can't think of anything that isn't (ultimately) rather volatile, except to keep conflict resolution metadata either in the dictionary or an auxiliary dictionary for conflict resolution.
-
-For now, let's just support some bare minimum *volatile* transactions.  and see later what we can build atop that.
-
-
-At the moment I favor the more explicit model, even if it requires more information to track concurrent transactions. 
+It seems feasible to model discretionary locks within a dictionary. Or to keep some form of write journal, to support DVCS-style workspaces with fork and ad-hoc merge. But such features won't be supported by the runtime.
 
 ## API Concepts
 

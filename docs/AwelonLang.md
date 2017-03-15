@@ -476,7 +476,7 @@ My initial emphasis is textual views, such that we can readily integrate favored
         2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
-Awelon's natural numbers are given the `#` prefix in favor of a more aesthetic representation of signed numbers. From there, we build a tower of numbers. The basic approach of building views upon views is convenient because it makes views more extensible. For example, if we have no support for rational numbers, we'd still see `[-4 #6 rational]` which is still sensible to a human reader. And support for viewing rational numbers could be added quickly.
+Awelon's natural numbers are given the `#` prefix in favor of a more aesthetic representation of signed numbers. From there, we build a tower of numbers. The basic approach of building views upon views is convenient because it makes views more extensible. For example, if we have no support for rational numbers, we'd still see `[-4 #6 rational]` which is still sensible to a human reader. Support for rational numbers or hexadecimal or similar can be added if missing.
 
 Every editable view should have an unambiguous escape to raw Awelon code. While I use `(AWELON 42)` above to make it obvious, I could just as easily use `#` as the primary escape, or `'(42)` or `\42`, etc.. Whatever users find acceptable. The nature of editable views does make it easy to experiment for aesthetics. Use of escapes permits an editable view to support key-words, if desired.
 

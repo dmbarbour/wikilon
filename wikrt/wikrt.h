@@ -69,7 +69,7 @@ typedef struct wikrt_cx wikrt_cx;
  * linked object implements. This is a sensible sanity check.
  */
 uint32_t wikrt_api_ver();
-#define WIKRT_API_VER 20170103
+#define WIKRT_API_VER 20170314
 
 /** Accelerated Prelude
  *
@@ -86,7 +86,6 @@ uint32_t wikrt_api_ver();
  * into the runtime. This should be no larger than a few dozen kilobytes.
  */
 char const* wikrt_prelude();
-
 
 /** Create a Wikilon environment. 
  *
@@ -272,19 +271,33 @@ typedef struct wikrt_parse_data {
 } wikrt_parse_data;
 bool wikrt_parse_check(uint8_t const*, size_t, wikrt_parse_data*);
 
-/** Parse a Stream
+/** Parsing Code
  * 
- * This parses the given stream, moving the successfully parsed portion
- * of input to the destination stream while leaving any unprocessed data
- * in the source stream. This returns 'true' if the source stream is 
- * empty because everything parsed successfully. On failure, this returns
- * 'false' and sets errno to ENOMEM or EBADMSG depending on the cause for
- * failure.
+ * Parse code in context, moving the successfully parsed fragment to
+ * another register while preserving the remainder of code in source.
+ * Parsing will normalize whitespace formatting but otherwise doesn't
+ * modify code. 
  *
- * Note: If you plan to parse a partial program, be careful to avoid
- * splitting a words from the input stream. 
+ * Parse is configurable by a few options, combined bitwise.
+ *
+ * - WIKRT_PARSE_STREAM: Don't assume end of input. Require final
+ *     word separator (e.g. SP or LF) to fully parse the source.
+ *
+ * - WIKRT_PARSE_FRAG: Allow parse of imbalanced blocks, incomplete
+ *     program fragments. Wikilon will readily evaluate such code.
+ *
+ * By default, Wikilon parses code with just WIKRT_PARSE_FRAG before
+ * any of the wikrt_eval variations. 
+ *
+ * On success, parse returns true. On failure, it returns false and
+ * sets errno appropriately to EAGAIN, EBADMSG, or ENOMEM. EAGAIN is 
+ * returned if writing more to source might cause parse to succeed.
  */
-bool wikrt_parse(wikrt_cx*, wikrt_r src, wikrt_r dst);
+typedef enum wikrt_parse_opts 
+{ WIKRT_PARSE_STREAM = (1<<0)
+, WIKRT_PARSE_FRAG   = (1<<1)
+} wikrt_parse_opts;
+bool wikrt_parse(wikrt_cx*, wikrt_r src, wikrt_parse_opts, wikrt_r dst);
 
 /** Program Evaluation
  * 
@@ -294,15 +307,8 @@ bool wikrt_parse(wikrt_cx*, wikrt_r src, wikrt_r dst);
  * a program to evaluate. This function performs a deep, in-place 
  * evaluation on the program and values represented within it.
  * 
- * Evaluation may halt on resource limits, failing with ETIMEDOUT or
- * ENOMEM. See wikrt_set_effort to control timeouts. But we'll have a
- * valid partial evaluation even if we halt on resource limits. Other
- * errors, such as divide by zero or type errors, are represented in
- * the evaluated code.
- *
- * Caution: Evaluation of partial programs is possible, but you must
- * be relatively careful to avoid truncating a word, and it's best
- * to use wikrt_eval_cmd to extract partial results.
+ * Evaluation may fail due to resource limits (ETIMEDOUT, ENOMEM) or
+ * due to failed parse. See also wikrt_set_effort, wikrt_parse.
  */
 bool wikrt_eval(wikrt_cx*, wikrt_r);
 
@@ -350,8 +356,6 @@ bool wikrt_eval_data(wikrt_cx*, wikrt_r src, uint32_t amt, wikrt_r dst);
  * Otherwise it may fail due to evaluation limits (ENOMEM, ETIMEDOUT). 
  */
 bool wikrt_eval_stream(wikrt_cx*, wikrt_r src, wikrt_r dst);
-
-
 
 /** Binary Data Input
  * 
@@ -456,9 +460,9 @@ void wikrt_cx_gc(wikrt_cx*);
  * of form `[M](trace)` rewrites to `[M]` and if tracing is enabled
  * it also addends subprogram `M` to the trace log.
  * 
- * The trace log uses an implicit register within each context, which
- * may be written by background threads. One must move log data to a
- * normal register to read or further process it.
+ * The trace log must be moved to a client register for reading or
+ * further processing, to simplify interactions with any background
+ * threads. Disabling will clear the log. Defaults to disabled.
  */
 void wikrt_debug_trace(wikrt_cx*, bool enable);
 bool wikrt_debug_trace_move(wikrt_cx*, wikrt_r);
@@ -493,23 +497,22 @@ bool wikrt_debug_eval_step(wikrt_cx*, wikrt_r, char const* target);
  * of where our program resources are expended. This helps debug
  * performance problems.
  * 
- * The profile is recorded as a list of triples, one per line, with
- * the current call stack, elapsed microseconds, and bytes allocated.
+ * The profile is recorded as a log of triples, one per line, with
+ * a current call stack, elapsed microseconds, and bytes allocated.
  *
  *     /foo/bar/baz 400 1000
  *     /blub/glub   100 8000
  *     /foo/bar/qux 300 1200
  *
- * This record is imprecise. For example, we might reach the current  
- * call stack at the very end of the elapsed time. But enough entries
- * can provide useful estimates of where evaluation effort is spent.
+ * This record is imprecise, but enough entries can still provide a
+ * useful estimate of where evaluation efforts are expended.
  *
- * While enabled, a stack profile is written to an implicit register,
- * in general by multiple threads. The data must be moved to a normal
- * register for processing. 
+ * The profile log must be moved to a client register for reading or
+ * further processing, to simplify interactions with any background
+ * threads. Disabling will clear the log. Defaults to disabled.
  */
 void wikrt_prof_stack(wikrt_cx*, bool enable);
-void wikrt_prof_stack_move(wikrt_cx*, wikrt_r);
+bool wikrt_prof_stack_move(wikrt_cx*, wikrt_r);
 
 /** Overview of a context memory usage. */
 typedef struct wikrt_mem_stats { 
@@ -518,6 +521,7 @@ typedef struct wikrt_mem_stats {
     size_t      elder_gen_size;     // total elder heap
     size_t      young_gen_size;     // total young heap
     size_t      heap_available;     // free alloc space
+    size_t      context_size;       // total context size
 } wikrt_mem_stats;
 
 /** Heap Profiling
