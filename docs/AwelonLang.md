@@ -120,6 +120,14 @@ Awelon code is evaluated in an implicit environment consisting both of a diction
 
 Awelon uses a 360-bit [BLAKE2b](https://blake2.net/) algorithm, and encodes the result as 60 characters [base64url](https://en.wikipedia.org/wiki/Base64). In a network context, it should be possible to request resources given their secure hashes, and perhaps form a content distribution network. (We might use only a fragment of the resource ID for lookup, and the rest for encryption.)
 
+Example hashes, starting with `hash("test")` then hashing the result twice:
+
+        J7URBffnfK_NVVcQNQ6D21k5A7J8Zhhwb2Ry3WLYfFc7Vy1TiE01Q4H7duKE
+        Kve-Zbz23Zz28x0tTsmnuJv8dj0YGvwEVVWCbxLkAM7S6FLp6gCA0M2n_Nee
+        MnrYTJyeGxLz5OSGwTwW7WAiC9alwYaOBFuu2_flmK1LGCCMqEDjkzPDL-Rl
+
+The base64 encoding does risk hashes containing naughty words, and they're clearly too large for convenient use. However, secure hash resources are not primarily intended for direct use by humans. When humans do use hashes, I would hope for indirection via editable views or projectional editors that provide human meaningful nicknames. Editable views are discussed later.
+
 ## Acceleration
 
 Acceleration is a performance assumption for Awelon. 
@@ -166,9 +174,9 @@ Stowage is a simple idea, summarized by rewrite rules:
         [large value](stow) => [$secureHash]
         [small value](stow) => [small value]
 
-Stowage enables programmers to work semi-transparently with data or computations much larger than working memory. Unlike effectful storage or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, incremental computing, and backtracking. However, effective use of stowage is limited to [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), optimally those that implicitly batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
+Stowage enables programmers to work semi-transparently with data larger than working memory. Unlike effectful storage or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, incremental computing, and backtracking. Stowage works nicely with [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), especially structures that batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree). 
 
-What 'large value' means is heuristic, based on time-space tradeoffs. But it should be deterministic, reproducible, and simple. A good default is that a value be moved to stowage only if its encoding in Awelon is at least 256 bytes. Also, if our value is simple binary data, we will stow to a `%secureHash` external binary instead.
+What 'large value' means is heuristic, based on time-space tradeoffs. But it ideally is simple, predictable, and reproducible for effective use with caching and structure sharing. The recommendation is that "large value" mean "at least 256 bytes" when serialized. Binary values might stow using the `%secureHash` encoding.
 
 ## Deferred Computations and Coinductive Data
 
@@ -524,9 +532,9 @@ This algorithm is adapted from the partial evaluation optimization leveraging fr
 
 Lambdas can be leveraged into let expressions (like `let var = expr in CODE` or `CODE where var = expr`) or the Haskell-like `do` notation. Also, given named local variables, it is feasible to support infix expressions like `((X + Y) * Z) => X Y + Z *` for assumed binary operators. I leave these developments as an exercise for the reader. :D
 
-## Namespaces
+## Qualified Namespaces
 
-Awelon has limited support for namespaces via hierarchical dictionaries (see below). But it falls to editable views to provide the equivalent of a `using repetitive_prefix_or_suffix as x; code...` shorthand. Editable views can support local qualified names, but a more intriguing option is to model common 'packages' of names within the editable view, for different use cases. A related opportunity is to leverage editable views to assign human-meaningful names to secure hash resources. 
+Awelon's hierarchical dictionaries support a simple form of namespacing. But it falls to editable views to support local shorthand, e.g. some form of `using large_prefix as x` or `using package_of_nicknames`. If we assume editable views are maintained within the dictionary, it is feasible to use comments to help control the view, tweaking the language as needed. An intriguing possibility is to integrate a database of nicknames for secure hash resources into the view, where said database is represented within the dictionary.
 
 ## Labeled Data - Records and Variants 
 
@@ -592,9 +600,9 @@ Accelerated evaluation of the reactive process network can readily operate acros
 
 Awelon supports a simple model for hierarchical structure. 
 
-Words of qualified form `foo@dict` reference the meaning of `foo` as defined within child dictionary `dict`. We can also express ad-hoc computations within a child dictionary: `[42 foo]@d == [42@d foo@d]`. This also extends to texts like `"hello"@d == [104 "ello" :]@d`. The namespace qualifier is second-class, and no separation is permitted between a word or block or text and its qualifier.
+Words of qualified form `foo@dict` reference the meaning of `foo` as defined within child dictionary `dict`. We can also express ad-hoc computations within a child dictionary: `[42 foo]@d == [42@d foo@d]`. Texts can be qualified: `"hello"@d == [104 "ello" :]@d`. Even annotations may be qualified, e.g. `(~z)@d`, though most annotations may be immediately localized (see below). The qualifier is second-class, with no separation permitted between code and qualifier. 
 
-A child dictionary is represented within a dictionary patch via secure hash:
+The child dictionary is specified by secure hash:
 
         secureHashOfPatch1
         secureHashOfPatch2
@@ -604,9 +612,9 @@ A child dictionary is represented within a dictionary patch via secure hash:
         ...
         @wordN definitionN
 
-Essentially, we define a symbol of form `@dict` like we would an Awelon word. The definition of this child dictionary is always centralized to a single secure hash. Only the final definition of the symbol is relevant. By default, every symbol of form `@dict` references an empty dictionary.
+Essentially, we define a symbol of form `@dict` like we would an Awelon word, using the alst definition of the symbol. The secure hash is the same we might use for a patch, but an empty string (the default) may be used in place of the secure hash for an empty dictionary. Reducing the child dictionary to a single secure hash simplifies structure sharing.
 
-There is no means for a child dictionary to reference its parent. Each child dictionary is entirely self-contained. This is a useful constraint for application security models, providing an structural restriction on dataflow when we model databases, documents, messages, or other application objects as dictionaries. However, it does result in a lot of logical replication between parent and child - for example, replicated definitions for natural numbers, arithmetic, texts, and list processing. Fortunately, structure sharing between parent and child is possible by deriving from common secure hashes. 
+Dictionaries are fully self-contained, having no external dependencies. There is no mechanism for a child dictionary to reference its parent, no equivalent to `..` paths in the filesystem. This is a valuable constraint for reasoning about dataflow and security in [dictionary-based application models](ApplicationModel.md), when modeling messages, documents, or databases as dictionaries. This does mean de-facto standard models (for natural numbers, arithmetic, list processing, and so on) must be replicated across many dictionaries. Fortunately, this redundancy can be mitigated by leveraging secure hashes for structure sharing.
 
 Ugly aesthetics like `42@dict` are further ameliorated via localization. Localization is a special optimization for evaluation with hierarchical dictionaries. Whenever `foo@bar` has the same meaning as `foo` within a given context, the runtime is free to replace the former with the latter. In addition to aesthetics, localization does improve performance in context of memoization, stowage, structure sharing. Further, it enables localization of associated metadata, for example we end up referencing `foo.doc` instead of `foo.doc@bar`.
 

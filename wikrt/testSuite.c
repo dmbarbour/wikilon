@@ -94,7 +94,12 @@ bool test_hash(wikrt_cx* _unused)
 {
     return match_hash("t/e/s/t",    "QgZDyYYGYV57hLkAEqUMVM6qESxuN6QpM1ekCHv9Yi59SirYaXcH0FdSNN9T")
         && match_hash("t/e/s/t\n",  "dbNAGEG-F9ElYjNw4T4qI1A7o9clXiDRSs1hAEYJdu3BWAd5W3NDUHmki60s")
-        && match_hash("test",       "J7URBffnfK_NVVcQNQ6D21k5A7J8Zhhwb2Ry3WLYfFc7Vy1TiE01Q4H7duKE")
+        && match_hash("test",       
+                      "J7URBffnfK_NVVcQNQ6D21k5A7J8Zhhwb2Ry3WLYfFc7Vy1TiE01Q4H7duKE")
+        && match_hash("J7URBffnfK_NVVcQNQ6D21k5A7J8Zhhwb2Ry3WLYfFc7Vy1TiE01Q4H7duKE",
+                     ,"Kve-Zbz23Zz28x0tTsmnuJv8dj0YGvwEVVWCbxLkAM7S6FLp6gCA0M2n_Nee")
+        && match_hash("Kve-Zbz23Zz28x0tTsmnuJv8dj0YGvwEVVWCbxLkAM7S6FLp6gCA0M2n_Nee"
+                     ,"MnrYTJyeGxLz5OSGwTwW7WAiC9alwYaOBFuu2_flmK1LGCCMqEDjkzPDL-Rl")
         && match_hash("test\n",     "FNn9bEhfDqPpswCc36-GcJn42xZ5Bc-qaaylGefS2ystQ0ksVU9bpDqypG46")
         && match_hash("",           "-p2eN9b-CeuBFlEPrbnGHMWeMy1GzEo2XnLtxzMYjwi-nAiUttuwYCP_MSUG")
         && match_hash("\n",         "-vnxnuU93oPpZ1al_J_Gj9GkrLyLM0l7vAmVyIHcA5yH7UL77ukXKcq8fpG8");
@@ -114,33 +119,63 @@ static inline bool reject_parse(char const* s) { return check_parse(s, false); }
 // lightweight parse checks
 bool test_parse_check(wikrt_cx* _unused)
 {
-    return accept_parse("")
-        && accept_parse("hello")
-        && accept_parse("  hello  ")
-        && accept_parse("[12345   ~\n\n\n :]\n")
-        && accept_parse("[foo](a2)(par)i")
-        && accept_parse("[ 42@baz@qux foo@dict ]@xy@zzy")
-        && accept_parse("[\"hello\"]")
-        && accept_parse("\"hello\"@d")
+    return accept_parse("") // empty program is okay
+        // accept SP and LF, reject tabs
+        && accept_parse(" ") 
+        && accept_parse("\n") 
+        && reject_parse("\t")
+        // Require non-empty program ends in whitespace 
+        // to simplify streaming and concatenative composition
+        && reject_parse("h e l l o") 
+        && accept_parse("h e l l o ") 
+        && accept_parse("h e l l o\n")
+        && reject_parse("[  \n\nhello]") 
+        && accept_parse("[  \n\nhello]\n")
+        && reject_parse(" \"hello\"")
+        && accept_parse(" \"hello\" ")
+        // block balance
+        && accept_parse("[] ")
+        && accept_parse("[[][][[]]] ")
+        && reject_parse("][ ")
+        && reject_parse("[][ ")
+        // inline texts
+        && accept_parse(" \"hello, world!\" ")
+        && reject_parse(" \"hello,\n world!\" ")
+        && reject_parse(" \"hello,\" world!\" ")
+        && reject_parse(" \"hello ")
+        // multi-line texts
+        && accept_parse(" \"\n\" ") // empty text
+        && accept_parse(" \"\n\n\n\" ") // text with blank lines
+        && accept_parse(" \"\n hello\n\" ") // single line of text
+        && reject_parse(" \"\nhello\n\" ")  // missing SP indent
+        && reject_parse(" \"\n hello\n ")   // missing text terminal
+        && accept_parse("\"\n hello\n multi-line\n text\n\" ")
+        && accept_parse("[\"\n hello\n multi-line\n text\n\"] ")
         && accept_parse("[\"\n hello\n multi-line text\n\"]")
         && accept_parse("\"\n hello\n multi-line text\n\"@d")
-        && accept_parse("\"\n\n\n hello\n\n\n\"")
-        && accept_parse("[]")
-        && reject_parse("][")
-        && reject_parse("]")
-        && reject_parse("[")
-        && reject_parse("[0 ~")
-        && reject_parse("~  ]  ")
-        && reject_parse("(a2")
-        && reject_parse("a2)")
-        && reject_parse("()")
-        && reject_parse("\"hello ")
-        && reject_parse("\"\n hello ")
-        && reject_parse("\"\nhello\n\"")
-        && reject_parse("hello\"")
-        && reject_parse("\t")
-        && reject_parse("foo @dict")
-        && reject_parse("0 1 2 3 [ 4 5 6");
+        && accept_parse("\"\n\n\n hello\n\n\n\" ")
+        // hierarchical namespace qualifiers
+        && accept_parse(" 42@baz ")
+        && accept_parse(" 42@baz@qux ")
+        && reject_parse(" 42@baz @qux ")
+        && accept_parse("[ 42@baz@qux foo@dict ]@xy@zzy ")
+        && accept_parse("  \"hello\"@x@y@z  ")
+        && accept_parse("\"\n hello,\n multi-line\n world!\n\"@foo ")
+        // annotations
+        && accept_parse("(a2) ")
+        && accept_parse("(foo)@d ")
+        && reject_parse("() ")
+        && reject_parse("( ) ")
+        && reject_parse("([]) ")
+        && reject_parse("(@d) ")
+        && reject_parse("(foo@d) ")
+        && accept_parse("[foo](a2)(par)i ")
+        && accept_parse("[foo]@d(a2)(par)i ")
+        && accept_parse(" (~z)@d(par)@y(foo)x ")
+        && reject_parse("(a2 ")
+        && reject_parse("a2) ")
+        ;
+
 }
 
 bool test_rw(wikrt_cx* cx, char const* s)

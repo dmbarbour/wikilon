@@ -266,10 +266,21 @@ typedef struct wikrt_bignum { wikrt_o o; uint32_t w[]; } wikrt_bignum;
  *     word's input-output arity if known (0-1 for value words)
  *     track update of a word since most recent commit
  *     read/write status since last commit
- *     breakpoint status
+ *     breakpoint state
  *
  * Almost any access to our word table will be synchronized, but
  * ideally the words themselves may be used with minimal synch.
+ * 
+ * Since words are mostly present as a cache, it's okay to GC words
+ * that aren't used and reload them from dictionary as needed. To
+ * track caching, we might want to model a `recently used` field in
+ * each word, clearing it when we perform full GC then setting it
+ * when first link a word after GC. This would simplify decisions
+ * to GC data that isn't used much (including stowage resources).
+ *
+ * The exception is written definitions, which cannot be collected
+ * until we commit. So we must auto-mark words whose definitions 
+ * have yet to be written. 
  */
 
 /** Built-in Operations (Primitives, Accelerators, Annotations)
@@ -594,8 +605,8 @@ struct wikrt_cx {
     wikrt_cx       *cxn;                // circular list of contexts
     wikrt_cx       *cxp;
     bool            in_env_worklist;    // in env->cxw (as opposed to cxs)
-    uint32_t        worker_count;       // count of workers in context
     bool            workers_halt;       // request active workers to halt
+    uint32_t        worker_count;       // count of workers in context
     pthread_cond_t  workers_done;       // signal when (0 == worker_count)
 
     // mutex for content within context
@@ -644,7 +655,6 @@ void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
 bool wikrt_cx_has_work(wikrt_cx*);
 void wikrt_cx_signal_work_available(wikrt_cx*);
 void wikrt_cx_interrupt_work(wikrt_cx*);
-void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name);
 bool wikrt_cx_has_work(wikrt_cx*);
 size_t wikrt_word_len(uint8_t const* const src, size_t maxlen);
 
@@ -678,7 +688,7 @@ static inline wikrt_a wikrt_thread_alloc(wikrt_thread* const t, wikrt_z amt)
 }
 
 // Function for large allocations outside the current thread.
-bool wikrt_alloc(wikrt_cx*, wikrt_addr*, wikrt_z amt);
+bool wikrt_alloc(wikrt_cx*, wikrt_a*, wikrt_z amt);
 
 
 #define WIKRT_H

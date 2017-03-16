@@ -41,8 +41,6 @@ size_t wikrt_word_len(uint8_t const* const src, size_t maxlen)
     return scan_valid_word(src, src+maxlen) - src; 
 }
 
-
-
 static uint8_t const* scan_ns_qualifier(uint8_t const* iter, uint8_t const* const end)
 {
     // word@ns, or [block]@ns, or even a "text"@ns
@@ -59,11 +57,13 @@ static uint8_t const* scan_ns_qualifier(uint8_t const* iter, uint8_t const* cons
 static inline bool basic_text_byte(uint8_t c) { return (c > 31); }
 static uint8_t const* scan_inline_text(uint8_t const* iter, uint8_t const* const end)
 {
+    _Static_assert((34 == '"'), "assuming ASCII encodings");
     while((end != iter) && basic_text_byte(*iter) && ('"' != *iter)) { ++iter; }
     return iter;
 }
 static uint8_t const* scan_multi_line_text(uint8_t const* iter, uint8_t const* const end)
 {
+    _Static_assert((10 == '\n') && (32 == ' '), "assuming ASCII encodings");
     while(end != iter) {
         if('\n' == *iter) { ++iter; } 
         else if(' ' == *iter) { 
@@ -76,22 +76,24 @@ static uint8_t const* scan_multi_line_text(uint8_t const* iter, uint8_t const* c
 
 bool wikrt_parse_check(uint8_t const* const start, size_t const input_size, wikrt_parse_data* data)
 {
+    _Static_assert((91 == '[') && (93 == ']') && (40 == '(') && (41 == ')') &&
+                   (10 == '\n') && (32 == ' ') && (34 == '"')
+        , "assuming ASCII encodings");
+        
     wikrt_parse_data r = { 0 };
     size_t const utf8_size = utf8_strlen(start, input_size);
     assert(input_size >= utf8_size);
     uint8_t const* const end = start + utf8_size;
     uint8_t const* scan = start;
-
     do {
-        r.parsed = scan - start;
-        if(0 == r.balance) { r.accepted = r.parsed; }
         if(end == scan) { goto parse_halt; }
         uint8_t const c = *(scan++);
         if(is_valid_word_byte(c)) { // word
             scan = scan_valid_word(scan, end);
             scan = scan_ns_qualifier(scan, end);
         } else if((' ' == c) || ('\n' == c)) { // whitespace
-            // NOP
+            r.parsed = scan - start;
+            if(0 == r.balance) { r.accepted = r.parsed; }
         } else if('[' == c) { // block start
             ++(r.balance);
         } else if((']' == c) && (r.balance > 0)) { // block end
@@ -101,7 +103,7 @@ bool wikrt_parse_check(uint8_t const* const start, size_t const input_size, wikr
             if((end == scan) || !is_valid_word_byte(*(++scan))) { goto parse_halt; }
             scan = scan_valid_word(scan, end);
             if((end == scan) || (')' != *scan)) { goto parse_halt; }
-            ++scan;
+            scan = scan_ns_qualifier(1+scan, end);
         } else if('"' == c) { // embedded texts
             if(end == scan) { goto parse_halt; }
             else if('\n' == (*scan)) {

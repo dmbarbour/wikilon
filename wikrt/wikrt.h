@@ -150,38 +150,27 @@ void wikrt_cx_destroy(wikrt_cx*);
 /** A context knows its parent environment. */
 wikrt_env* wikrt_cx_env(wikrt_cx*);
 
-/** Wikilon IO with Binary Registers
+/** IO with Binary Registers
  *
- * Wikilon uses binaries as the primary input and output structure at
- * the API layer - used for updating or accessing the dictionary and
- * also for constructing programs and evaluation. Under the hood, a
- * program under evaluation uses a more efficient representation. But
- * we present results as a binary, usually UTF-8 text, to the client.
+ * Binaries are the primary input and output structure at the API 
+ * layer - used for updating or accessing the dictionary and also
+ * for constructing programs for evaluation. We use an efficient
+ * representation during evaluation, but present any result as a
+ * binary.
  *
- * Binary IO registers are given stable identity as simple integers.
- * Logically, every register has an associated binary, defaulting to
- * empty. Writes addend the right hand side of a binary. Reads take
- * data from the left, destructively. If a non-destructive read is
- * needed, first call wikrt_copy then read the copy.
+ * At this API, multiple binaries may be managed using registers.
+ * By default, every register is empty. Writes addend the right 
+ * while reads process the left, allowing for simple streaming
+ * models. A binary can be copied or moved to another register.
  *
- * Writes may fail with ENOMEM. Reads may fail (return less data than
- * requested) with ENOMEM or ENODATA. 
+ * Writes can fail with ENOMEM. Reads can fail with ENOMEM or 
+ * ENODATA if the returned size is less than the requested size.
  */
 typedef uint64_t wikrt_r;
 bool wikrt_write(wikrt_cx*, wikrt_r, uint8_t const*, size_t);
 size_t wikrt_read(wikrt_cx*, wikrt_r, uint8_t*, size_t);
 bool wikrt_is_empty(wikrt_cx*, wikrt_r); // test if stream is empty
 void wikrt_clear(wikrt_cx*, wikrt_r); // stream is empty after clear
-
-/** Stream Composition
- *
- * Move or copy data from the source register to the destination,
- * addending the latter. The 'move' option implicitly clears the
- * source, and is more efficient working with unique references 
- * such as arrays with in-place updates. However, wikrt_copy is
- * relatively cheap, performing a logical copy rather than a deep
- * copy.
- */
 bool wikrt_move(wikrt_cx*, wikrt_r src, wikrt_r dst);
 bool wikrt_copy(wikrt_cx*, wikrt_r src, wikrt_r dst);
 
@@ -198,9 +187,18 @@ bool wikrt_copy(wikrt_cx*, wikrt_r src, wikrt_r dst);
  * will immediately influence further evaluation.
  *
  * These operations may fail and return false for a variety of reasons
- * like bad key (EKEYREJECTED) or an undefined value (ENOENT) or badly
- * formed data (EBADMSG), or lack of context memory (ENOMEM). Loads 
- * also fail if the stream is not initially empty (EADDRINUSE).
+ * like bad key (EKEYREJECTED) or badly formed data (EBADMSG), or lack
+ * of context memory (ENOMEM). Loads fail if the target register is not
+ * initially empty (EADDRINUSE).
+ *
+ * There is no failure for 'undefined' symbols. Every symbol has a 
+ * default definition: words default as defined to themselves, and
+ * the empty string is used for empty dictionaries. 
+ * 
+ * Note: Updating a definition is atomic but semantically awkward in
+ * context of background parallel computation. It is recommended you
+ * wait until wikrt_eval_parallel succeed before saving, unless the
+ * update is monotonic (previously undefined).
  */
 bool wikrt_load_def(wikrt_cx*, wikrt_r, char const* k);
 bool wikrt_save_def(wikrt_cx*, wikrt_r, char const* k);
@@ -256,12 +254,17 @@ bool wikrt_save_rsc(wikrt_cx*, wikrt_r, char* h);
  */
 bool wikrt_commit(wikrt_cx*, bool durable);
 
-/** Fast Check for Parse Errors
+/** Fast Scan for Parse Errors
  * 
  * Awelon language is syntactically simple, and a quick scan can easily
  * determine where and whether a parse error will occur. The parse_check
  * function provides this service, returning a pass/fail boolean and an
- * optional data output to indicate where the first error occurs.
+ * optional data output to indicate where the first error occurs. This
+ * function performs no allocations.
+ * 
+ * Note: This matches behavior of wikrt_parse which assumes streaming,
+ * so objects at end of input are only accepted after a clear separator
+ * (SP or LF). This simplifies streaming and concatenative composition.
  */
 typedef struct wikrt_parse_data { 
     size_t accepted; // valid program prefix
@@ -271,33 +274,22 @@ typedef struct wikrt_parse_data {
 } wikrt_parse_data;
 bool wikrt_parse_check(uint8_t const*, size_t, wikrt_parse_data*);
 
-/** Parsing Code
+/** Streaming Parse of Code
  * 
- * Parse code in context, moving the successfully parsed fragment to
- * another register while preserving the remainder of code in source.
- * Parsing will normalize whitespace formatting but otherwise doesn't
- * modify code. 
+ * Parse code in source, moving it to destination such that whatever
+ * remains in source was not parsed. Parsing will normalize whitespace  
+ * but otherwise doesn't modify the code. Parse succeeds if everything
+ * from the input is moved, otherwise it fails, returning false and
+ * setting errno to EAGAIN, EBADMSG, or ENOMEM.  
  *
- * Parse is configurable by a few options, combined bitwise.
- *
- * - WIKRT_PARSE_STREAM: Don't assume end of input. Require final
- *     word separator (e.g. SP or LF) to fully parse the source.
- *
- * - WIKRT_PARSE_FRAG: Allow parse of imbalanced blocks, incomplete
- *     program fragments. Wikilon will readily evaluate such code.
- *
- * By default, Wikilon parses code with just WIKRT_PARSE_FRAG before
- * any of the wikrt_eval variations. 
- *
- * On success, parse returns true. On failure, it returns false and
- * sets errno appropriately to EAGAIN, EBADMSG, or ENOMEM. EAGAIN is 
- * returned if writing more to source might cause parse to succeed.
+ * This is a stream parser: it assumes we may write more to source.
+ * Thus, when source ends in `foo` we don't immediately accept that
+ * because further writes may extend source to `foobar`. Likewise, 
+ * `[code]` to `[code]@dict`. The EAGAIN error is used when writing
+ * more to source might cause the parse to succeed. Adding a final
+ * SP or LF at the end of input may be necessary.
  */
-typedef enum wikrt_parse_opts 
-{ WIKRT_PARSE_STREAM = (1<<0)
-, WIKRT_PARSE_FRAG   = (1<<1)
-} wikrt_parse_opts;
-bool wikrt_parse(wikrt_cx*, wikrt_r src, wikrt_parse_opts, wikrt_r dst);
+bool wikrt_parse(wikrt_cx*, wikrt_r src, wikrt_r dst);
 
 /** Program Evaluation
  * 
@@ -306,30 +298,33 @@ bool wikrt_parse(wikrt_cx*, wikrt_r src, wikrt_parse_opts, wikrt_r dst);
  * in arithmetic. Wikilon interprets the binary stream as containing
  * a program to evaluate. This function performs a deep, in-place 
  * evaluation on the program and values represented within it.
- * 
- * Evaluation may fail due to resource limits (ETIMEDOUT, ENOMEM) or
- * due to failed parse. See also wikrt_set_effort, wikrt_parse.
+ *
+ * Evaluation assumes valid input, and will simply fail with EBADMSG
+ * if the input doesn't fully parse (see wikrt_parse). Evaluation 
+ * may also fail due to resource limits (ETIMEDOUT or ENOMEM). Use
+ * of wikrt_set_effort can help control timeouts. 
  */
 bool wikrt_eval(wikrt_cx*, wikrt_r);
 
-/** Data Stack Evaluation
+/** Interactive Data Stack Evaluation
  *
  * A common application pattern involves interaction with an external 
  * agent that reads data computed by a program, makes decisions, then
  * extends the program by injecting new data and operations. This fits
  * REPLs, monadic effects models, even some GUI apps. In Awelon, these
- * observations will generally be performed on the "stack", meaning
- * the rightmost data elements of a program.
+ * observations will generally be performed on the "stack", referring
+ * to the rightmost data elements of a program.
  *
- * To support this pattern, Wikilon provides evaluator that moves top 
- * stack elements from the remainder of the program, enabling the stack
- * to be evaluated, copied, and viewed independently. This evaluation
- * is minimal to move the data, so resulting blocks are not evaluated.
+ * To support this pattern, Wikilon provides this partial evaluator to
+ * move these stack elements. This enables agents to isolate, observe,
+ * and manipulate just parts of a stack or data structure, preserving 
+ * background parallel computation for unobserved program fragments.
+ * Evaluation will also be minimal, focused on a data goal.
  *
  * On failure, nothing is moved, but partial evaluation may modify the
  * source. This fails when the destination is not empty (EADDRINUSE) or
- * if there is insufficient data (ENODATA). It may also fail because
- * of evaluation resource limits (ENOMEM, ETIMEDOUT).
+ * if there are insufficient data elements (ENODATA), or due to failure
+ * of evaluation (see wikrt_eval).
  */
 bool wikrt_eval_data(wikrt_cx*, wikrt_r src, uint32_t amt, wikrt_r dst); 
 
@@ -350,10 +345,12 @@ bool wikrt_eval_data(wikrt_cx*, wikrt_r src, uint32_t amt, wikrt_r dst);
  * this focuses the evaluator on the left hand side of our program
  * whereas wikrt_eval_data attends the right hand side. 
  *
- * This operation returns successfully if it moves any command data,
- * but subsequent operations may evaluate further and move more data.
- * If no command data is available, this returns false with ENODATA.
- * Otherwise it may fail due to evaluation limits (ENOMEM, ETIMEDOUT). 
+ * This operation returns successfully if it moves any command, but
+ * does not guarantee it returns all the commands. That is, further
+ * calls to wikrt_eval_stream may move more from src to dst. If no
+ * further output commands can be computed, we'll return false with
+ * EAGAIN, indicating more must be written to source. Otherwise, we
+ * may fail at the evaluation layer (see wikrt_eval).
  */
 bool wikrt_eval_stream(wikrt_cx*, wikrt_r src, wikrt_r dst);
 
@@ -376,9 +373,8 @@ bool wikrt_eval_stream(wikrt_cx*, wikrt_r src, wikrt_r dst);
  * 
  * The operation wikrt_reify_binary logically rewrites the binary data
  * within a stream to the binary value format (an ~8x expansion), but
- * actually uses a compact representation under the hood. Inputting a
- * large text might be represented by reifying a binary then applying
- * another accelerated function (like a utf8-to-text conversion). 
+ * uses a compact chunked array representation under the hood. Further
+ * processing of the binary can use normal Awelon layer functions.
  */
 bool wikrt_reify_binary(wikrt_cx*, wikrt_r);
 
@@ -388,7 +384,7 @@ bool wikrt_reify_binary(wikrt_cx*, wikrt_r);
  * is natural numbers in the range 0 to 255. However, lists in Awelon
  * may represent unbounded streams via lazy evaluation. The goal here
  * is to extract binary data from such a list, moving it to the output
- * stream in small steps as needed.
+ * stream, incrementally as needed.
  *
  * The input stream must consist of a single Awelon binary list value.
  * This can be achieved via wikrt_eval_data, assuming binary data type.
@@ -397,10 +393,9 @@ bool wikrt_reify_binary(wikrt_cx*, wikrt_r);
  * stream-level binary for efficient output.
  *
  * The return value is how many bytes were actually moved. If this is
- * less than the request, errno will contain some extra information 
- * about why we stopped: there is no source binary (ENOENT) or the
- * type seems wrong (EDOM) or the binary is empty (ENODATA), or due
- * to evaluation resource limits (ENOMEM, ETIMEDOUT).
+ * less than requested, we'll also set errno appropriately: ENOENT if
+ * the source is not a value, EDOM if the value is not binary, ENODATA
+ * on the empty list. Evaluation errors also apply (see wikrt_eval).
  */
 size_t wikrt_eval_binary(wikrt_cx*, wikrt_r src, size_t, wikrt_r dst);
 
@@ -408,17 +403,15 @@ size_t wikrt_eval_binary(wikrt_cx*, wikrt_r src, size_t, wikrt_r dst);
  * 
  * Background parallelism is possible when partial evaluation functions
  * (eval of data, stream, or binary) use `(par)` to initiate parallel
- * computation but the result is not immediately necessary. Background
- * evaluations will continue until completed or collected or they hit
- * a quota limit. They may force a wait (limited by quota) if you try
- * to serialize data.
+ * computation but the result is unnecessary for partial evaluation to
+ * return successfully. These computations continue until they complete,
+ * prove unnecessary (via garbage collection), or quotas are exhausted.
  *
- * The function wikrt_eval_par behaves as wikrt_eval, except it returns
- * successfully only when all parallel computations complete. It will
- * perform work in the current thread as needed, so even if parallelism
- * is not enabled we can evaluate scheduled parallel tasks.
- *
- * Note: You can use wikrt_env_threadpool to enable parallelism.
+ * Use of wikrt_eval_parallel will wait for all background computations
+ * finish, one way or the other. This returns 'true' if evaluation halts
+ * successfully, otherwise returns false with ENOMEM or ETIMEDOUT. There
+ * is no risk of a parse error here, given `(par)` tasks can only be
+ * constructed after a successful parse.
  */
 bool wikrt_eval_parallel(wikrt_cx*);
 
@@ -470,18 +463,21 @@ bool wikrt_debug_trace_move(wikrt_cx*, wikrt_r);
 /** Breakpoint Debugging
  *
  * Breakpoints may be set or unset for specific words. When set, that
- * word will no longer link during normal evaluation. Linking with
- * breakpoints is instead controlled by debug_eval_step, which simply
- * causes linking where it was prevented by a breakpoint.
- *
- * Stepping an evaluation will link all instances of a specific word,
- * or may use special targets like WIKRT_DEBUG_STEP_LEFTMOST to model
- * focused evaluation of the program.
+ * word will behave as if undefined during normal evaluation. The only
+ * exception is wikrt_debug_eval_step, which may bypass a breakpoint.
+ * 
+ * Stepping an evaluation will forcibly link a word, albeit within the
+ * limits of lazy linking. Some targets like WIKRT_DEBUG_STEP_LEFTMOST
+ * will focus on the program spatially instead of targeting a word.
  *
  * Awelon's rewrite semantics work nicely with breakpoint debugging,
  * enabling animation of evaluation 'frames'. While it costs memory,
  * this can readily subsume tracing and provide better context. This
  * can similarly support time-travel debugging.
+ *
+ * Note: Breakpoints and parallelism together can be awkward. It is
+ * recommended we wait for wikrt_eval_parallel to succeed between
+ * breakpoint debug operations, as we should for wikrt_save_def.
  */
 bool wikrt_debug_breakpoint(wikrt_cx*, char const* word, bool set);
 bool wikrt_debug_eval_step(wikrt_cx*, wikrt_r, char const* target);

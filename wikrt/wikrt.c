@@ -17,8 +17,6 @@ _Static_assert((sizeof(wikrt_v) >= sizeof(size_t)),
     "expecting to store sizes in a single word");
 _Static_assert((sizeof(uint8_t) == sizeof(char)), 
     "expecting uint8_t* aligns with char*");
-_Static_assert(sizeof(wikrt_ws) == (4*sizeof(wikrt_v)),
-    "flexible array members don't work the way I think they should");
 
 uint32_t wikrt_api_ver() 
 { 
@@ -312,7 +310,7 @@ void wikrt_cx_destroy(wikrt_cx* cx)
 }
 
 
-void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name)
+static void wikrt_cx_reset_dict(wikrt_cx* cx, char const* const dict_name)
 {
     _Static_assert((sizeof(cx->dict_name) > WIKRT_HASH_SIZE), 
         "insufficient dictionary name size");
@@ -335,6 +333,7 @@ void wikrt_cx_set_dict_name(wikrt_cx* cx, char const* const dict_name)
         wikrt_hash((char*)(cx->dict_name), (uint8_t const*)dict_name, name_len);
     }
     cx->dict_name[cx->dict_name_len] = 0;
+
     //fprintf(stderr, "context with dictionary `%s`\n", (char const*) cx->dict_name); 
 }
 
@@ -395,10 +394,15 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
         cx->proto = NULL;
     }
 
-    // reset roots
-    cx->dict_ver[0]     = 0;   
+    // TODO: remove secure hash ephemeron references
+    //  this requires wikrt_eph_rem. It might also involve scanning
+    //  through the words table.
+
+    // reset data and roots
+    cx->trace_enable    = false;
+    cx->prof_enable     = false;
     cx->words           = 0;
-    cx->trace           = 0;
+    cx->dict_ver[0]     = 0;
     cx->temp            = 0;
     cx->registers       = (wikrt_register_table){0};
     wikrt_cx_alloc_reset(cx);
