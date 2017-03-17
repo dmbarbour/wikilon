@@ -159,6 +159,8 @@ Evaluation doesn't necessarily eliminate uniqueness, e.g. because `(eval)` or `(
 
 List and composition cells might be a special case for mutable objects. We cannot update such objects in place because we lack header bits to track uniqueness, and we lack generational write barriers. But copies also need attention, since they might reference unique objects. We may need to wrap copied lists with a header. I might convert large lists to a shared array upon copy.
 
+Note: an intriguing option would be to allow the GC to track whether a reference is still shared, e.g. by clearing the shared bit and marking it again on second reference. But this seems unpredictable in its utility, and adds overhead for the GC, so I won't pursue it.
+
 ### Arrays
 
 Arrays are the most important mutable objects. Given effective acceleration of arrays, we can model many low level algorithms, mostly excepting those that require multi-threaded access to the same array.

@@ -172,15 +172,16 @@ void wikrt_get_entropy(size_t amt, uint8_t* out);
  * such as fast, indexed update of a list (via an array).
  */
 typedef enum wikrt_otype
-{ WIKRT_OTYPE_PAIR = 0  // trivial (header, value) pairs
+{ WIKRT_OTYPE_PAIR = 0  // (header, value) pairs
 , WIKRT_OTYPE_QUAD      // (header, value, value, value) quadruples
 
-, WIKRT_OTYPE_RAW       // raw binary IO data
-, WIKRT_OTYPE_BINARY    // array of byte values
+    // DATA is size field
 , WIKRT_OTYPE_BLOCK     // flat sequence of code
 , WIKRT_OTYPE_ARRAY     // compact list value
-
+, WIKRT_OTYPE_BINARY    // array of byte values
 , WIKRT_OTYPE_BIGNUM    // natural numbers
+
+    // Other
 , WIKRT_OTYPE_TASK      // a fragment of code under evaluation
 , WIKRT_OTYPE_WORD      // interned, and includes annotations
 } wikrt_otype;
@@ -192,39 +193,51 @@ typedef enum wikrt_otype
 #define WIKRT_O_DATA_OFF  8
 #define WIKRT_O_DATA_MAX (WIKRT_Z_MAX >> WIKRT_O_DATA_OFF)
 
+/** PTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_PAIR */
+typedef enum wikrt_ptype 
+{ WIKRT_PTYPE_BINARY_RAW    // wrap a binary object
+, WIKRT_PTYPE_UTF8_TEXT     // wrap a binary as text
+, WIKRT_PTYPE_ARRAY_REVERSE // reverse array or binary
+, WIKRT_PTYPE_ERROR         // [value](error)
+// maybe a fixpoint block wrapper?
+} wikrt_ptype;
+
+/** QTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_QUAD */
+typedef enum wikrt_qtype
+{ WIKRT_QTYPE_ARRAY_APPEND  // size, left, right. (Size may be blank.)
+, WIKRT_QTYPE_ARRAY_SLICE   // offset, size, array.
+// maybe a JIT block wrapper?
+} wikrt_qtype;
+
 /** Array and Block Structure
  *
- * Arrays are simple (header, val, val, val, ...) where the number of
- * values is in the header. The interpretation might be for a block of
- * code or a list of values. This gives array fragments a maximum size
- * in Awelon, but we can logically append two fragments.
- * 
- * It is also feasible to support logical slices and logical reversal
- * of array data. If we append two slices adjacent in memory, we can
- * combine them into one large slice to optimize divide-and-conquer
- * tactics on large arrays. 
+ * Arrays are simple (header, val, val, val, ...) with size in header.
+ * Blocks use the same basic structure but with operations in general
+ * instead of values.
  *
- * Array buffers aren't supported implicitly, but one can explicitly
- * allocate a large buffer then model allocations and growth and ring
- * buffers and so on within that buffer, using zeroes to fill unused
- * data slots. This technique is used within tasks to model data and
- * call stacks.
+ * Arrays model lists, but with nicer asymptotic performance for indexed
+ * operations. Logical appends, slices, and reversals are used to cover
+ * a variety of tasks. Arrays can be used as buffers or memory if the
+ * programmer ensures the array is only rarely copied between updates.
  *
- * Lists in Awelon are heterogeneous. Thus, so are arrays.
- *
+ * Lists and arrays in Awelon are heterogeneous normally, since there
+ * is no implicit constraint to support homogeneous folds.
  */
 typedef struct wikrt_array { wikrt_o o; wikrt_v d[]; } wikrt_array;
 typedef wikrt_array wikrt_block;
 
-/** Binary and Raw Data
+/** Binary Data
  *
  * Binaries are just arrays of bytes, while raw data models unparsed
  * code or other IO resources. All initial input to a Wikilon context
  * is treated as raw data until parsed, and we'll generally translate
  * back to raw data upon output.
+ * 
+ * We use a WIKRT_PTYPE_BINARY_RAW wrapper for binary data embedded
+ * within a larger program. This uses a quad so we can easily slice
+ * the binary.
  */
 typedef struct wikrt_binary { wikrt_o o; uint8_t b[]; } wikrt_binary;
-typedef wikrt_binary wikrt_raw;
 
 /** Big Numbers
  *
@@ -241,27 +254,13 @@ typedef wikrt_binary wikrt_raw;
  */
 typedef struct wikrt_bignum { wikrt_o o; uint32_t w[]; } wikrt_bignum;
 
-/* Pairs and Quads
- *
- * logical list reversal: pair
- * logical list append: quad (size if known, left, right)
- * logical array slice: quad (offset, count, data)
- *
- * fixpoint wrapper: composition or pair
- *   Using composition would require an allocation per loop.
- *   But that isn't bad for guaranteeing GC-driven actions.
- * (error) values: a pair
- * text values: pair, wrap a binary
- * JIT code: quad wrapping a block?
- *
- * Maybe seal/unseal actions. 
- */
-
 /** Words table.
  *
  * Excepting numbers, words are interned and kept in a hashtable.
- * Each word will need some metadata.
+ * Each word will need a bunch of metadata.
  *
+ *     representation (binary)
+ *     namespace qualifier, potentially
  *     word's definition (JIT, block, task, unread)
  *     word's input-output arity if known (0-1 for value words)
  *     track update of a word since most recent commit
@@ -503,11 +502,13 @@ typedef struct wikrt_ws {
  *
  *   - memory and local generations
  *   - trace and profile logging
- *   - ownership of tasks, task status
+ *   - set of ready and waiting tasks
+ *
+ * Each thread will have a local effort quota, which it preallocates. If a
+ * thread terminates and sufficient quota remains it may return some, but
+ * it won't subtract again from the parent upon termination.
  * 
- * I'm also interested in support for fine-grained control of parallelism
- * within a context, but it isn't a critical feature at this time. For now,
- * each thread will simply track a local effort quota.
+ * The thread structure is reused for the shared
  *
  * Effort tracking: I'd like to generally preallocate the effort for a few
  * GC cycles. We can likely estimate based on a previous cycle time, and
@@ -552,20 +553,17 @@ typedef struct wikrt_thread {
 
 /** current timestamp in microseconds */
 uint64_t wikrt_thread_time(); // microseconds
+bool wikrt_thread_poll(wikrt_thread*); // test for ready work
 
 /** Registers Table
  *
- * Registers are kept in a simple hashtable, using a binary for the
- * register names and an array for register data. Register data is
- * simply interpreted as a toplevel program, leveraging OTYPE_RAW
- * to represent intermediate outputs. 
-
-
- * The table is written only via API-level actions.
- * 
- * 
- * 
- * 
+ * Registers are managed as a simple hashtable in structure-of-arrays
+ * stype, using a binary array for register names and a data array for
+ * register components.
+ *
+ * The data within a register is simpe Awelon code. I leverage OTYPE_RAW
+ * to represent unparsed binary data within code, at input, or upon read 
+ * for output. I'll aim to translate all code for output.
  */
 typedef struct wikrt_rtb { 
     wikrt_n size;
@@ -641,9 +639,6 @@ struct wikrt_cx {
 
 };
 
-// a sufficient minimum size that we won't have too many problems
-#define WIKRT_CX_MIN_SIZE (1<<14)
-
 // default effort is about 100ms labor
 #define WIKRT_CX_DEFAULT_EFFORT (100 * 1000)
 
@@ -652,10 +647,9 @@ wikrt_z wikrt_compute_alloc_space(wikrt_z space_total); // include GC reserve sp
 
 void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
 void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
-bool wikrt_cx_has_work(wikrt_cx*);
-void wikrt_cx_signal_work_available(wikrt_cx*);
-void wikrt_cx_interrupt_work(wikrt_cx*);
-bool wikrt_cx_has_work(wikrt_cx*);
+void wikrt_cx_interrupt_work(wikrt_cx*);    
+void wikrt_cx_signal_work(wikrt_cx*);       // invites a worker thread
+bool wikrt_cx_work_available(wikrt_cx*);    // assumes mutex held
 size_t wikrt_word_len(uint8_t const* const src, size_t maxlen);
 
 static inline bool wikrt_cx_unshared(wikrt_cx* cx) 

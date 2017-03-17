@@ -20,7 +20,7 @@
  * - Evaluate code
  *
  * Most operations in this API also use `errno` for additional details
- * about the cause of error, adapting common error names. 
+ * about the cause of error, adapting standard error codes. 
  * 
  *  (c) 2015-2017 David Barbour
  *  LICENSE: BSD 3-clause <https://opensource.org/licenses/BSD-3-Clause>
@@ -53,12 +53,10 @@ typedef struct wikrt_env wikrt_env;
  * update the dictionary. 
  *
  * A context is single-threaded at this API, but supports multi-tasking
- * via multiple streams, and background parallel evaluations via `(par)`
- * annotations. No thread-local storage is used, so you're free to use
- * the context from multiple threads - just exclusively, one at a time.
- *
- * Wikilon uses `errno` to return extra error information when returning
- * `false` in success/fail cases.
+ * via a logical register set, and background parallel evaluation via
+ * `(par)` annotations and partial evaluators (like wikrt_eval_data).
+ * No thread-local storage is used, so you're free to use a context from
+ * different threads over its lifespan, just limited to one at a time.
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -103,21 +101,17 @@ void wikrt_env_destroy(wikrt_env*);
 
 /** Construct a context for computation. 
  *
- * A named dictionary is part of the context. This dictionary is used
- * when linking definitions or persistent updates. A web service can
- * provide some access control at this named dictionary level. If the
- * dictionary argument is empty (or NULL), a fresh volatile dictionary 
- * is used and commits will fail. 
+ * A named dictionary may be associated with the context to support
+ * saving, loading, and linking of definitions during evaluation. The
+ * empty string specifies a fresh, volatile dictionary and any commit
+ * operations will fail. Access control for named dictionaries is left
+ * to the API client.
  *
- * This operation may fail and return NULL, most likely because the
- * context cannot be allocated at the requested size. It is highly
- * recommended that a context be at least a few megabytes, and never
- * more than physical memory (favor stowage over disk swap space).
- *
- * The client of this API is responsible for access control to the
- * named dictionary.
+ * This operation may fail and return NULL if the context cannot be
+ * allocated at the requested size, at least WIKRT_CX_MINSIZE. 
  */
 wikrt_cx* wikrt_cx_create(wikrt_env*, char const* dict, size_t);
+#define WIKRT_CX_MINSIZE (1000 * 1000)
 
 /** Clear a context for lightweight reuse. */
 void wikrt_cx_reset(wikrt_cx*, char const* dict);
@@ -152,19 +146,20 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
 
 /** IO with Binary Registers
  *
- * Binaries are the primary input and output structure at the API 
- * layer - used for updating or accessing the dictionary and also
- * for constructing programs for evaluation. We use an efficient
- * representation during evaluation, but present any result as a
- * binary.
+ * Binaries are the primary input and output representation at this 
+ * API layer, and also leveraged for persistence. During evaluation
+ * we'll use an efficient intermediate representation, but on read
+ * the program must be serialized back to a binary.
+ * 
+ * To support multi-tasking and partial evaluation within a context,
+ * multiple 'registers' are used, each containing a binary value and
+ * named by integers. Allocation and management of registers is left
+ * to the API client. Initially, every register has an empty binary.
  *
- * At this API, multiple binaries may be managed using registers.
- * By default, every register is empty. Writes addend the right 
- * while reads process the left, allowing for simple streaming
- * models. A binary can be copied or moved to another register.
- *
- * Writes can fail with ENOMEM. Reads can fail with ENOMEM or 
- * ENODATA if the returned size is less than the requested size.
+ * Writes may fail atomically with ENOMEM. If a write fails, nothing
+ * was written. Reads may return fewer bytes than requested and set
+ * errno to ENODATA (register is empty) or ENOMEM (if serialization
+ * stack hits memory limits).
  */
 typedef uint64_t wikrt_r;
 bool wikrt_write(wikrt_cx*, wikrt_r, uint8_t const*, size_t);
@@ -295,14 +290,15 @@ bool wikrt_parse(wikrt_cx*, wikrt_r src, wikrt_r dst);
  * 
  * Evaluation of Awelon code rewrites a program to an equivalent that
  * is closer to normal form, like `(6 * 7)` can be rewritten to `42`
- * in arithmetic. Wikilon interprets the binary stream as containing
- * a program to evaluate. This function performs a deep, in-place 
- * evaluation on the program and values represented within it.
+ * in arithmetic. Wikilon interprets a binary register as containing
+ * a program to evaluate. This function performs the full, in-place 
+ * evaluation on the program and values represented within it. (This
+ * is also the only API function that evaluates final blocks.)
  *
  * Evaluation assumes valid input, and will simply fail with EBADMSG
  * if the input doesn't fully parse (see wikrt_parse). Evaluation 
- * may also fail due to resource limits (ETIMEDOUT or ENOMEM). Use
- * of wikrt_set_effort can help control timeouts. 
+ * may also fail due to resource quotas (ETIMEDOUT or ENOMEM). Use
+ * of wikrt_set_effort can help control timeouts.
  */
 bool wikrt_eval(wikrt_cx*, wikrt_r);
 
@@ -365,16 +361,18 @@ bool wikrt_eval_stream(wikrt_cx*, wikrt_r src, wikrt_r dst);
  * doesn't have syntactic sugar for binaries, though it may reference
  * external binary objects as secure hash resource - `%secureHash`.
  *
- * However, an implementation of Awelon should support an accelerated
+ * However, a decent implementation of Awelon should support a compact
  * representation for binary data under the hood, using arrays of bytes.
  * This allows efficient operations on binary resources and IO. Wikilon
- * uses the `(binary)` annotation on a list to indicate it should be
- * encoded using an array of bytes under the hood.
+ * applies the `(binary)` annotation to a list to indicate it should be
+ * encoded using large binary array fragments under the hood.
  * 
- * The operation wikrt_reify_binary logically rewrites the binary data
- * within a stream to the binary value format (an ~8x expansion), but
- * uses a compact chunked array representation under the hood. Further
- * processing of the binary can use normal Awelon layer functions.
+ * An operation wikrt_reify_binary logically rewrites the binary data
+ * within a register to a binary value. Under the hood, an efficient,
+ * compact representation is favored. However, if you read the binary,
+ * it will serialize as the naive list expansion described above.
+ *
+ * You can translate back via wikrt_eval_binary.
  */
 bool wikrt_reify_binary(wikrt_cx*, wikrt_r);
 
@@ -386,32 +384,31 @@ bool wikrt_reify_binary(wikrt_cx*, wikrt_r);
  * is to extract binary data from such a list, moving it to the output
  * stream, incrementally as needed.
  *
- * The input stream must consist of a single Awelon binary list value.
- * This can be achieved via wikrt_eval_data, assuming binary data type.
- * Data is incrementally evaluated, extracted, and moved, up to the 
- * requested amount, translating from the Awelon binary value to the
- * stream-level binary for efficient output.
+ * The source register must consist of a single Awelon binary value. Use
+ * wikrt_eval_data to isolate the value, if necessary. The binary data
+ * will be incrementally evaluated and extracted as needed, no more than
+ * the requested amount. If the compact binary representation is already
+ * used at source, this should be quite efficient.
  *
- * The return value is how many bytes were actually moved. If this is
- * less than requested, we'll also set errno appropriately: ENOENT if
- * the source is not a value, EDOM if the value is not binary, ENODATA
- * on the empty list. Evaluation errors also apply (see wikrt_eval).
+ * The return value is how many bytes were successfully moved. If this 
+ * is less than requested, we'll set errno appropriately: EDOM if source
+ * is not a binary value, ENODATA if value is an empty list, or an error 
+ * during evaluation (see wikrt_eval). Thus, if you're reading a binary 
+ * of unknown size, a zero return with ENODATA is a success condition.
  */
-size_t wikrt_eval_binary(wikrt_cx*, wikrt_r src, size_t, wikrt_r dst);
+size_t wikrt_eval_binary(wikrt_cx*, wikrt_r src, size_t amt, wikrt_r dst);
 
 /** Parallel Evaluations
  * 
  * Background parallelism is possible when partial evaluation functions
- * (eval of data, stream, or binary) use `(par)` to initiate parallel
- * computation but the result is unnecessary for partial evaluation to
- * return successfully. These computations continue until they complete,
- * prove unnecessary (via garbage collection), or quotas are exhausted.
+ * (eval data, stream, or binary) initiate parallel computation but do
+ * not require the result to return successfully. These computations 
+ * continue in the background until they complete, or effort quota is
+ * exhausted, or prove unnecessary during garbage collection.
  *
  * Use of wikrt_eval_parallel will wait for all background computations
- * finish, one way or the other. This returns 'true' if evaluation halts
- * successfully, otherwise returns false with ENOMEM or ETIMEDOUT. There
- * is no risk of a parse error here, given `(par)` tasks can only be
- * constructed after a successful parse.
+ * finish, one way or the other. Uses same return values as wikrt_eval,
+ * except there is no risk of parse errors at this stage.
  */
 bool wikrt_eval_parallel(wikrt_cx*);
 
@@ -475,9 +472,8 @@ bool wikrt_debug_trace_move(wikrt_cx*, wikrt_r);
  * this can readily subsume tracing and provide better context. This
  * can similarly support time-travel debugging.
  *
- * Note: Breakpoints and parallelism together can be awkward. It is
- * recommended we wait for wikrt_eval_parallel to succeed between
- * breakpoint debug operations, as we should for wikrt_save_def.
+ * Note: Manipulating breakpoints with background parallelism is not
+ * deterministic. Consider wikrt_eval_parallel to wait for threads.
  */
 bool wikrt_debug_breakpoint(wikrt_cx*, char const* word, bool set);
 bool wikrt_debug_eval_step(wikrt_cx*, wikrt_r, char const* target);
@@ -549,18 +545,15 @@ bool wikrt_prof_heap(wikrt_cx*, wikrt_r, wikrt_mem_stats*);
 
 /** Enable Parallel Evaluation
  *
- * A context is single-threaded at this API, but worker threads can act
+ * A context is single-threaded at this API, but OS-level threads act
  * as virtual CPUs to perform parallel computations in the background.
- * Parallelism is guided by (par) annotations and accelerated functions.
- *
- * Within a context, parallel tasks are lightweight, and a worker thread
- * can easily operate on hundreds of tasks. But the the worker itself 
- * will allocate a little space and perform its own GC where possible,
- * so you should provide at least half a megabyte per thread beyond what
- * the single-threaded evaluation requires.
- *
- * Adjusting worker counts may be asynchronous, with the actual count
- * lagging the configured value.
+ * Parallelism is guided mostly by `[computation](par)` annotations.
+ * A single OS thread might handle hundreds of tasks, but the load is
+ * readily divided among available threads.
+ * 
+ * A thread will allocate a local workspace upon entering a context,
+ * so to leverage parallelism you must ensure sufficient space. Half 
+ * a megabyte is reasonable per OS thread in the context.
  */
 void wikrt_env_threadpool(wikrt_env*, uint32_t worker_count);
 

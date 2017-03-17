@@ -210,7 +210,7 @@ void wikrt_cx_move_to_env_worklist(wikrt_cx* cx)
     } 
 }
 
-void wikrt_cx_signal_work_available(wikrt_cx* cx)
+void wikrt_cx_signal_work(wikrt_cx* cx)
 {
     // Note: we'll signal one thread only, but each worker may
     // signal another and so on based on heuristic decisions.    
@@ -250,15 +250,12 @@ void wikrt_cx_interrupt_work(wikrt_cx* cx)
 
 wikrt_cx* wikrt_cx_create(wikrt_env* const env, char const* dict_name, size_t size)
 {
-    _Static_assert( ((9 * sizeof(wikrt_cx)) < WIKRT_CX_MIN_SIZE),
-        "insufficient minimum context size");
+    _Static_assert( ((50 * sizeof(wikrt_cx)) < WIKRT_CX_MINSIZE),
+        "assuming context header is small relative to smallest context");
 
-    bool const ok_args = (NULL != env) 
-                      && (size >= WIKRT_CX_MIN_SIZE);
-    if(!ok_args) { 
-        errno = EINVAL; 
-        return NULL; 
-    }
+    bool const ok_args = (NULL != env) && (size >= WIKRT_CX_MINSIZE);
+    if(!ok_args) { errno = EINVAL; return NULL; }
+
     wikrt_cx* const cx = malloc(size);
     if(!cx) { return NULL; }
 
@@ -365,6 +362,7 @@ void wikrt_cx_alloc_reset(wikrt_cx* cx)
 {
     assert(wikrt_cx_unshared(cx));
     cx->memory = (wikrt_thread){0};
+    cx->memory.cx    = cx;
     cx->memory.start = wikrt_cellbuff( ((wikrt_a)cx) + sizeof(wikrt_cx) );  
     cx->memory.end   = ((wikrt_a)cx) + cx->size; // exact
     cx->memory.elder = cx->memory.start; // no elder survivors yet
@@ -375,8 +373,6 @@ void wikrt_cx_alloc_reset(wikrt_cx* cx)
     wikrt_z const max_usable_space = max_cell_count * WIKRT_CELLSIZE;
     wikrt_z const alloc_space = wikrt_compute_alloc_space(max_usable_space);
     cx->memory.stop = cx->memory.start + alloc_space;
-
-    // allocation of cx->main is performed lazily.
 }
 
 void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
@@ -387,52 +383,57 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
         fprintf(stderr, "%s: a frozen context cannot be reset\n", __FUNCTION__);
         abort();
     }
+    assert(0 == cx->refct);
 
-    // clear prototype from freeze-copy
+    // clear frozen prototype
     if(NULL != cx->proto) {
         wikrt_cx_destroy(cx->proto);
         cx->proto = NULL;
     }
 
-    // TODO: remove secure hash ephemeron references
-    //  this requires wikrt_eph_rem. It might also involve scanning
-    //  through the words table.
+    // TODO
+    // Clear ephemeron references (via wikrt_eph_rem).
 
     // reset data and roots
     cx->trace_enable    = false;
     cx->prof_enable     = false;
     cx->words           = 0;
-    cx->dict_ver[0]     = 0;
     cx->temp            = 0;
-    cx->registers       = (wikrt_register_table){0};
+    cx->reg             = (wikrt_rtb){0};
+    cx->dict_ver[0]     = 0;
+    wikrt_cx_reset_dict(cx, dict_name);
     wikrt_cx_alloc_reset(cx);
-    wikrt_cx_set_dict_name(cx, dict_name);
 
     // set an initial effort quota
     wikrt_set_effort(cx, WIKRT_CX_DEFAULT_EFFORT);
 }
 
-bool wikrt_cx_has_work(wikrt_cx* cx) 
+bool wikrt_thread_poll(wikrt_thread* t)
 {
-    // assume we have cx->mutex
-    return (0 != cx->memory.ready);
-}
+    // fast exits
+    if(0 == t->effort) { return false; }
+    if(0 != t->ready)  { return true;  }
 
+    // TODO: move previously waiting tasks to ready_r
+    // then all ready_r tasks to ready. 
+
+    return (0 != t->ready);
+}
 
 void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
 {
     if(0 == effort) {
-        // forcibly halt background labor for zero effort
         wikrt_cx_interrupt_work(cx);
+        assert(0 == cx->worker_count);
         cx->memory.effort = 0;
     } else {
-        // otherwise, adjust the effort and potentially continue
         pthread_mutex_lock(&(cx->mutex));
         cx->memory.effort = effort;
-        bool const cx_has_work = wikrt_cx_has_work(cx); 
+        bool const work_ready = wikrt_thread_poll(&(cx->memory));
         pthread_mutex_unlock(&(cx->mutex));
-        if(cx_has_work) {
-            wikrt_cx_signal_work_available(cx);
+
+        if(work_ready) {
+            wikrt_cx_signal_work(cx);
         }
     }
 }
