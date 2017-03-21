@@ -130,6 +130,11 @@ static inline wikrt_a wikrt_v2a(wikrt_v v) { return (WIKRT_REF_MASK_ADDR & v); }
 static inline bool wikrt_action(wikrt_v v) { return !(WIKRT_VAL & v); }
 static inline bool wikrt_value(wikrt_v v) { return !wikrt_action(v); }
 
+static inline bool wikrt_is_obj(wikrt_v v) { return (WIKRT_OBJ == wikrt_vtag(v)); }
+static inline bool wikrt_is_small(wikrt_v v) { return (WIKRT_SMALL == wikrt_vtag(v)); }
+static inline bool wikrt_is_comp(wikrt_v v) { return (WIKRT_COMP == wikrt_vtag(v)); }
+static inline bool wikrt_is_cons(wikrt_v v) { return (WIKRT_CONS == wikrt_vtag(v)); }
+
 static inline bool wikrt_val_in_ref(wikrt_v v) { return !wikrt_vtag(v); }
 static inline bool wikrt_is_basic_op(wikrt_v v) { return !(v & 0xFF); }
 static inline wikrt_v* wikrt_a2p(wikrt_a a) { return (wikrt_v*)a; }
@@ -174,6 +179,7 @@ void wikrt_get_entropy(size_t amt, uint8_t* out);
 typedef enum wikrt_otype
 { WIKRT_OTYPE_PAIR = 0  // (header, value) pairs
 , WIKRT_OTYPE_QUAD      // (header, value, value, value) quadruples
+    // ... more as needed
 
     // DATA is size field
 , WIKRT_OTYPE_BLOCK     // flat sequence of code
@@ -193,6 +199,8 @@ typedef enum wikrt_otype
 #define WIKRT_O_DATA_OFF  8
 #define WIKRT_O_DATA_MAX (WIKRT_Z_MAX >> WIKRT_O_DATA_OFF)
 
+static inline wikrt_otype wikrt_get_otype(wikrt_v v) { return (WIKRT_O_TYPE & *(wikrt_v2p(v))); }
+
 /** PTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_PAIR */
 typedef enum wikrt_ptype 
 { WIKRT_PTYPE_BINARY_RAW    // wrap a binary object
@@ -206,24 +214,40 @@ typedef enum wikrt_ptype
 typedef enum wikrt_qtype
 { WIKRT_QTYPE_ARRAY_APPEND  // size, left, right. (Size may be blank.)
 , WIKRT_QTYPE_ARRAY_SLICE   // offset, size, array.
+, WIKRT_QTYPE_QUALIFIER     // e.g. [foo], @y, unused
 // maybe a JIT block wrapper?
 } wikrt_qtype;
 
-/** Array and Block Structure
+/** Arrays
  *
  * Arrays are simple (header, val, val, val, ...) with size in header.
- * Blocks use the same basic structure but with operations in general
- * instead of values.
- *
- * Arrays model lists, but with nicer asymptotic performance for indexed
- * operations. Logical appends, slices, and reversals are used to cover
- * a variety of tasks. Arrays can be used as buffers or memory if the
- * programmer ensures the array is only rarely copied between updates.
+ * Arrays model lists, but with less overhead and pointer chasing and
+ * nicer asymptotic performance for indexed operations. Arrays require
+ * accelerated operations for most benefits.
  *
  * Lists and arrays in Awelon are heterogeneous normally, since there
  * is no implicit constraint to support homogeneous folds.
  */
 typedef struct wikrt_array { wikrt_o o; wikrt_v d[]; } wikrt_array;
+
+/** Blocks
+ *
+ * A block of code is a simple sequence of operations. However, we must
+ * consider interactions with performance optimizations and profiling.
+ * 
+ * Profiling: For heap profiling, we might track syntactic origin for
+ * every block. This might be achieved by adding invisible operators
+ * equivalent to `(in:word)`. Stack profiling requires similar data. 
+ *
+ * Optimization: while a block should contain evaluated code, we could
+ * also track arity and compute the link-optimized code (with partial
+ * evaluation and logical inlining). JIT code acts similarly to this
+ * link optimized code, and would frequently use the same field.
+ *
+ * My current inclination is to inject code for profiling, and to wrap
+ * code for link optimization and JIT. Meanwhile, the basic sequence 
+ * of ops can reuse the array structure.
+ */
 typedef wikrt_array wikrt_block;
 
 /** Binary Data
@@ -245,8 +269,8 @@ typedef struct wikrt_binary { wikrt_o o; uint8_t b[]; } wikrt_binary;
  * always in base 10. Under the hood, we'll use a variation on the
  * binary coded decimals: a big number is represented by sequence
  * of 32-bit words, each ranging 0..999999999, little-endian (low
- * words first). This representation shall be used at parse time 
- * for number words.
+ * words first). This representation may be used at parse time for
+ * number words.
  *
  * Big integers, decimals, or rationals will be modeled explicitly
  * above big natural numbers, whereas small integers and useful
@@ -254,17 +278,17 @@ typedef struct wikrt_binary { wikrt_o o; uint8_t b[]; } wikrt_binary;
  */
 typedef struct wikrt_bignum { wikrt_o o; uint32_t w[]; } wikrt_bignum;
 
-/** Words table.
+/** Words
  *
  * Excepting numbers, words are interned and kept in a hashtable.
  * Each word will need a bunch of metadata.
  *
- *     representation (binary)
- *     namespace qualifier, potentially
- *     word's definition (JIT, block, task, unread)
- *     word's input-output arity if known (0-1 for value words)
- *     track update of a word since most recent commit
- *     read/write status since last commit
+ *     the word itself, maybe namespace qualifiers
+ *     block having word's link-optimized definition
+ *      - potentially wrapped by JIT-compiled definition
+ *     computed link arity (e.g. 0-1 for value words)
+ *     track update to word definition since commit
+ *      - track dependencies? maybe via persistent index?
  *     breakpoint state
  *
  * Almost any access to our word table will be synchronized, but
@@ -281,6 +305,43 @@ typedef struct wikrt_bignum { wikrt_o o; uint32_t w[]; } wikrt_bignum;
  * until we commit. So we must auto-mark words whose definitions 
  * have yet to be written. 
  */
+
+/** Tasks
+ *
+ * A 'task' describes a computation in progress and provides a 
+ * barrier against accessing results for parallel evaluations. 
+ * Tasks have some registers for ongoing computation and slots
+ * for managing task queues.
+ * 
+ * Relevant attributes: complete, waiting, stability
+ *
+ * The last attribute regards memory stability in context of
+ * parallelism and GC. I must track when a task cannot be 
+ * accessed because it is under evaluation or its result
+ * might reference another thread's nursery arena.
+ *
+ * We might also have attributes to specify evaluation mode.
+ */
+typedef struct wikrt_task {
+    wikrt_o o;      // WIKRT_OTYPE_TASK + bitfield
+    wikrt_v next;   // next task (linked list, 0 terminated)
+    wikrt_v wait;   // waiting on referenced task, if any
+
+    // evaluation registers (uniquely referenced)
+    wikrt_v lhs;    // data stack, left hand side of cursor
+    wikrt_v rhs;    // call stack, right hand side of cursor
+    size_t  data;   // arity available in lhs
+} wikrt_task;
+
+#define WIKRT_TASK_ATTR(N) (1<<((N)+WIKRT_O_DATA_OFF))
+#define WIKRT_TASK_UNSTABLE WIKRT_TASK_ATTR(0)
+#define WIKRT_TASK_COMPLETE WIKRT_TASK_ATTR(1)
+#define WIKRT_OTYPE_TASK_COMPLETE (WIKRT_OTYPE_TASK | WIKRT_TASK_COMPLETE)
+
+static inline bool wikrt_is_task(wikrt_v t) { 
+    // mostly for assertions, since I generally know where tasks are
+    return wikrt_is_otype(t) && (WIKRT_OTYPE_TASK == wikrt_get_otype(t)); 
+}
 
 /** Built-in Operations (Primitives, Accelerators, Annotations)
  *
@@ -507,8 +568,23 @@ typedef struct wikrt_ws {
  * Each thread will have a local effort quota, which it preallocates. If a
  * thread terminates and sufficient quota remains it may return some, but
  * it won't subtract again from the parent upon termination.
- * 
- * The thread structure is reused for the shared
+ *
+ * Worker threads will generally operate in a context until they hit the
+ * quota or run out of local memory, unless signaled via cx->workers_halt`.
+ * Whenever a worker runs out of memory, it will rotate to another context
+ * (potentially back to the same one), and may attempt full GC on entering
+ * the context if necessary (only if it is the first thread). The main
+ * thread may act a lot like a worker thread during evaluation tasks, but
+ * with some extra tactics for prioritizing work.
+ *
+ * Note: worker threads will only operate on one task at a time, performing
+ * as many allocated '(par)' tasks as feasible and promoting anything else
+ * to the context. There are a few motivations for this. A task is not
+ * likely to share memory with other tasks, so promotion avoids unnecessary
+ * copying of a prior task's memory. Processing new tasks in order of their
+ * construction will minimize waits within a thread. 
+ *
+ * I haven't decided on any particular order of evaluation for par tasks.
  *
  * Effort tracking: I'd like to generally preallocate the effort for a few
  * GC cycles. We can likely estimate based on a previous cycle time, and
@@ -531,8 +607,7 @@ typedef struct wikrt_thread {
 
     // Tasks to Perform.
     wikrt_v ready;      // tasks we can work on now
-    wikrt_v ready_r;    // tasks recently allocated
-    wikrt_v waiting;    // tasks awaiting promotion
+    wikrt_v waiting;    // tasks waiting on promotions
 
     // Debug Logs - thread local; moved to cx->memory when stable
     wikrt_v trace;      // (trace) messages 
@@ -553,17 +628,27 @@ typedef struct wikrt_thread {
 
 /** current timestamp in microseconds */
 uint64_t wikrt_thread_time(); // microseconds
-bool wikrt_thread_poll(wikrt_thread*); // test for ready work
+void wikrt_thread_poll_waiting(wikrt_thread*);
+void wikrt_thread_move_ready_r(wikrt_thread*);
 
 /** Registers Table
  *
  * Registers are managed as a simple hashtable in structure-of-arrays
  * stype, using a binary array for register names and a data array for
- * register components.
+ * register components. 
  *
- * The data within a register is simpe Awelon code. I leverage OTYPE_RAW
+ * The registers table is only modified by API-layer functions, but the
+ * table might be moved by full GC. Between these, we can have a stable
+ * index upon allocation without holding a lock, should this simplify
+ * working with parallel threads. OTOH, it also shouldn't be a big deal
+ * just to hold a lock as needed, perhaps use a specialized allocator
+ * for the toplevel API.
+ *
+ * Data within a register is simple Awelon code. I leverage BINARY_RAW
  * to represent unparsed binary data within code, at input, or upon read 
- * for output. I'll aim to translate all code for output.
+ * for output. I'll similarly translate code for output.
+ *
+ * A register may only be modified while holding a lock on cx->mutex.
  */
 typedef struct wikrt_rtb { 
     wikrt_n size;
@@ -572,28 +657,32 @@ typedef struct wikrt_rtb {
     wikrt_v data;
 } wikrt_rtb;
 
-bool wikrt_register_addend_temp(wikrt_cx*, wikrt_r);
 
  
 /** A context.
  *
  * A context is represented by a contiguous volume of memory, and has
- * a corresponding dictionary. Memory is filled via 'streams', which
- * represent externally accessible binary data. 
+ * a corresponding dictionary. A context has a set of binary registers
+ * for external access, only manipulated via the main API thread.
  *
  * Additionally, each context tracks words loaded from the dictionary.
- * This supports the transaction modela nd allows for compilation of 
+ * This supports the transaction model and allows for compilation of 
  * words, and partial GC as the context fills.
  *
  * A context is associated with a dictionary in persistent storage.
  * If a dictionary name is an invalid word or is larger than its
  * secure hash, we'll rewrite it to the secure hash of the name.
  *
- * Worker threads will operate in a context until either no work is
- * available or until interrupted via workers_halt. Each thread has 
- * its own wikrt_thread, with shared allocations from cx->memory
- * synchronized via cx->mutex. The main thread is preserved so it
- * can be used across many API calls.
+ * A challenge: I need full GC of the context by worker threads for
+ * background parallelism, and I also need stable memory for API ops.
+ * So the question is how to prevent full context GC from background
+ * threads while the main API is active. My current idea is to just
+ * accept the parallelism hit - use cx->mutex to lock memory for API
+ * operations that need it, but try to keep these critical sections
+ * small. (Since worker threads require very little synchronization,
+ * modulo large allocations, this should work well.) When the main 
+ * thread performs long running evaluation, it may act as an extra,
+ * local worker thread.
  */
 struct wikrt_cx {
     wikrt_env      *env;
@@ -630,7 +719,7 @@ struct wikrt_cx {
     wikrt_v         words;              // words table in context memory
 
     // Registers
-    wikrt_v         temp;               // temporary data register
+    wikrt_v         tmp;                // temporary data register
     wikrt_rtb       reg;                // primary registers table
 
     // todo:

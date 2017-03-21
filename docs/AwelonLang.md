@@ -178,23 +178,6 @@ Stowage enables programmers to work semi-transparently with data larger than wor
 
 What 'large value' means is heuristic, based on time-space tradeoffs. But it ideally is simple, predictable, and reproducible for effective use with caching and structure sharing. The recommendation is that "large value" mean "at least 256 bytes" when serialized. Binary values might stow using the `%secureHash` encoding.
 
-## Deferred Computations and Coinductive Data
-
-The *arity annotations* `(a2)` to `(a9)` have simple rewrite rules:
-
-                             [B][A](a2) == [B][A]
-                          [C][B][A](a3) == [C][B][A]
-                                        ..
-        [I][H][G][F][E][D][C][B][A](a9) == [I][H][G][F][E][D][C][B][A]
-
-To clarify, it is the *annotation* that has the given arity. Arity annotations specify nothing of their context.
-
-Arity annotations serve a critical role in controlling computation. For example, the program `[[A](a2)F]` has the same type and semantics as `[[A]F]`, but the former prevents partial evaluation of `F` from observing `[A]`. Arity annotations can be used to guard against useless partial evaluations. For example, if we define swap as `w = (a2) [] b a` then we can avoid observing the useless intermediate structure `[A] w => [[A]] a`. 
-
-Arity annotations serve a very useful role in modeling [thunks](https://en.wikipedia.org/wiki/Thunk) and [coinductive data](https://en.wikipedia.org/wiki/Coinduction). It is sometimes useful to model 'infinite' data structures to be computed as we observe them - procedurally generated streams or scene graphs.
-
-Awelon does not implicitly memoize computations to avoid rework. Programmers can explicitly use `(memo)` to share work, and it is feasible for a runtime to optimize lightweight memoization for deferred computations. See *Memoization*.
-
 ## Evaluation
 
 Evaluation of an Awelon program results in an equivalent Awelon program, one from which it is hopefully easier to extract information or more efficiently perform further evaluations. Awelon's primary evaluation mode proceeds by local rewriting. The four primitives rewrite by simple pattern matching:
@@ -214,16 +197,31 @@ Awelon's basic evaluation strategy is simple:
 
 Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
 
-This is just a recommended strategy. A runtime could at its own discretion ignore the 'evaluate before copy' strategy in favor of memoizing lazy evaluations, or support shallow evaluation modes. Evaluation strategies may be tuned via annotations to leverage parallelism, memoization, stowage, deferred computation, fail-fast errors, explicit optimizations, and so on. See also *Optimization*, below.
+This is just a recommended default strategy. A runtime can adjust this at its own discretion for performance, or enable tuning via annotations. With annotations we can precisely defer computations, control linking, leverage parallelism, memoize results for incremental computing, stow large data to work with limited memory, fail-fast in case of obvious errors, enable visible optimizations, request JIT compilation. And so on. See also *Optimization*, below.
 
 ## Value Words
 
-A 'value word' is a word whose evaluated definition is a singleton block. Value words have a nice interaction with lazy linking: data plumbing with natural numbers, `true` and `false` booleans, named module or data resources, and so on will effectively treat value words as blocks values.
+A 'value word' is a word whose evaluated definition is a single block. Value words have a nice interaction with lazy linking: data plumbing with natural numbers, `true` and `false` booleans, named module or data resources, and so on will effectively treat value words as blocks values.
 
         42 true w == true 42
         42 [] b   == [42]
 
 Value words are effectively the 'nouns' of Awelon language. They are convenient for preserving human-meaningful structure and support for hypermedia resources.
+
+## Deferred Computations and Coinductive Data
+
+The *arity annotations* `(a2)` to `(a9)` have simple rewrite rules:
+
+                             [B][A](a2) == [B][A]
+                          [C][B][A](a3) == [C][B][A]
+                                        ..
+        [I][H][G][F][E][D][C][B][A](a9) == [I][H][G][F][E][D][C][B][A]
+
+To clarify, it is the *annotation* that has the given arity. Arity annotations specify nothing of their context.
+
+Arity annotations serve a critical role in controlling computation. For example, the program `[[A](a2)F]` has the same type and semantics as `[[A]F]`, but the former prevents partial evaluation of `F` from observing `[A]`. Arity annotations can be used to guard against useless partial evaluations. For example, if we define swap as `w = (a2) [] b a` then we can avoid observing the useless intermediate structure `[A] w => [[A]] a`. 
+
+Arity annotations serve a very useful role in modeling [thunks](https://en.wikipedia.org/wiki/Thunk) and [coinductive data](https://en.wikipedia.org/wiki/Coinduction). It is sometimes useful to model 'infinite' data structures to be computed as we observe them - procedurally generated streams or scene graphs.
 
 ## Fixpoints and Loops
 
@@ -250,11 +248,9 @@ The primary basis for incremental computing in Awelon is [memoization](https://e
 
         [computation](memo)
 
-Memoization is conceptually performed by by seeking the computation in a runtime lookup table. This lookup must account for words having different meanings in context of different dictionaries. Assuming the computation is found in the table, the runtime will replace the computation by the evaluated result. If the computation is not found, we evaluate then heuristically store the computation into the table based on observed and estimated future time and space tradeoffs.
+Memoization is conceptually performed by by seeking the computation in a runtime lookup table. This lookup must account for words having different meanings in context of different dictionaries. If the computation is found in the table, the runtime will simply replace the computation with the evaluated result. If the computation is not found, we evaluate then heuristically store the computation into the table based on observed and estimated future time and space tradeoffs.
 
-Naive use of a lookup table can work, but is not the most optimal approach to memoization. For example, ideally we want to control recomputing if there is a change to a word we do not link. To address this memoization would require instrumented evaluation that tracks linking, and only checks the relevant subset of dependencies. One might look into research on adaptive memorization, trace reuse, etc..
-
-*Note:* To effectively support incremental computing, memoization must be used in context of cache-friendly application patterns such as command pattern and compositional views on persistent data structures.
+To effectively support incremental computing, memoization must be used with cache-friendly patterns, persistent data structures, and large-value stowage. So some careful design is required to leverage this feature.
 
 ## Static Linking
 
@@ -375,6 +371,8 @@ Unfortunately, `(par)` has severe limitations on expressiveness. It is at once t
 For low level parallelism, we could accelerate [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra). Alternatively, we could accelerate evaluation for a safe subset of OpenCL or similar, above which we might later accelerate linear algebra. Either approach can help Awelon in the domains of machine learning, physics simulations, graphics and audio, and other high performance number crunching computations.
 
 For high level parallelism, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), more specifically a variant with temporal extensions (see *Reactive Process Networks*, below). Essentially, we would describe a process network as a first-class value, and accelerate an 'evaluation' function (of type `KPN → KPN`) such that it splits the process network among distributed memory and CPUs to run the computation. The *monotonic* nature of KPNs allows distributed computation to continue in the background even as we inject and extract messages. 
+
+*Note:* `(par)` does not imply `(lazy)`. That is, on copy we might wait for a result with `(par)`, but would just logically copy the result with `(lazy)`.
 
 ## Structural Scoping
 

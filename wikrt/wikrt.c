@@ -408,16 +408,24 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
     wikrt_set_effort(cx, WIKRT_CX_DEFAULT_EFFORT);
 }
 
-bool wikrt_thread_poll(wikrt_thread* t)
+void wikrt_thread_poll_waiting(wikrt_thread* thread)
 {
-    // fast exits
-    if(0 == t->effort) { return false; }
-    if(0 != t->ready)  { return true;  }
-
-    // TODO: move previously waiting tasks to ready_r
-    // then all ready_r tasks to ready. 
-
-    return (0 != t->ready);
+    wikrt_v* waitlist = &(thread->waiting);
+    while(0 != *waitlist) 
+    {
+        wikrt_v const tv = *waitlist;
+        wikrt_task* const t = (wikrt_task*)wikrt_v2a(tv);
+        assert(wikrt_is_task(tv) && wikrt_is_task(t->wait));
+        wikrt_task const* const w = (wikrt_task const*)wikrt_v2a(t->wait);
+        if(WIKRT_OTYPE_TASK_COMPLETE == w->o) {
+            t->wait = 0; // this task is no longer waiting
+            (*waitlist) = t->next; // remove from waitlist
+            t->next = thread->ready; // add to ready list
+            thread->ready = tv;
+        } else {
+            waitlist = &(t->next);  // poll next item
+        }
+    }
 }
 
 void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
@@ -429,10 +437,14 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
     } else {
         pthread_mutex_lock(&(cx->mutex));
         cx->memory.effort = effort;
-        bool const work_ready = wikrt_thread_poll(&(cx->memory));
+        wikrt_thread_poll_waiting(&(cx->memory));
+        bool const try_work = (0 != cx->memory.ready);
         pthread_mutex_unlock(&(cx->mutex));
 
-        if(work_ready) {
+        // signal work available to continue background
+        // parallelism if effort is set positive and at
+        // least a little work is available.
+        if(try_work) {
             wikrt_cx_signal_work(cx);
         }
     }
@@ -449,6 +461,7 @@ void wikrt_debug_trace(wikrt_cx* cx, bool enable)
 bool wikrt_debug_trace_move(wikrt_cx* cx, wikrt_r dst)
 {
     // TODO
+    //  probably move memory.trace to temp then write temp.
     return false;
 }
 

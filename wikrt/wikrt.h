@@ -521,8 +521,7 @@ typedef struct wikrt_mem_stats {
  * Heap profiling describes long-lived objects in memory. This can be
  * useful for debugging memory usage issues. Wikilon has support for
  * a low precision but reasonably efficient heap profile, associating
- * a word of with each closure based on the syntactic origin of the 
- * outermost block.
+ * memory with closures based on the origin of the outer block. 
  * 
  * Calling wikrt_prof_heap will scan the stable portion of the heap,
  * excluding recent allocations so as to minimize interference with
@@ -538,8 +537,7 @@ typedef struct wikrt_mem_stats {
  * Besides the profile, which is written to a register, we can also
  * output statistics to situate the profile or detect GC thrashing.
  *
- * Note: this does not profile the copy-on-write frozen context when
- * using wikrt_cx_copy after wikrt_cx_freeze.
+ * Note: excludes data from frozen copy-on-write origin context
  */ 
 bool wikrt_prof_heap(wikrt_cx*, wikrt_r, wikrt_mem_stats*);
 
