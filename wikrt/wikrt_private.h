@@ -330,7 +330,7 @@ typedef struct wikrt_task {
     // evaluation registers (uniquely referenced)
     wikrt_v lhs;    // data stack, left hand side of cursor
     wikrt_v rhs;    // call stack, right hand side of cursor
-    size_t  data;   // arity available in lhs
+    wikrt_n amt;    // arity available in lhs
 } wikrt_task;
 
 #define WIKRT_TASK_ATTR(N) (1<<((N)+WIKRT_O_DATA_OFF))
@@ -720,7 +720,7 @@ struct wikrt_cx {
 
     // Registers
     wikrt_v         tmp;                // temporary data register
-    wikrt_rtb       reg;                // primary registers table
+    wikrt_rtb       rtb;                // primary registers table
 
     // todo:
     // Stowage tracking: need to know all stowage roots

@@ -241,9 +241,8 @@ void wikrt_cx_interrupt_work(wikrt_cx* cx)
         pthread_cond_wait(&(cx->workers_done), &(cx->env->mutex));
         assert(0 == cx->worker_count);
     }
-    // clear the signal
-    cx->workers_halt = false;
     wikrt_cx_remove_from_env_worklist(cx);
+    cx->workers_halt = false; 
     pthread_mutex_unlock(&(cx->env->mutex));
 }
 
@@ -399,7 +398,7 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
     cx->prof_enable     = false;
     cx->words           = 0;
     cx->temp            = 0;
-    cx->reg             = (wikrt_rtb){0};
+    cx->rtb             = (wikrt_rtb){0};
     cx->dict_ver[0]     = 0;
     wikrt_cx_reset_dict(cx, dict_name);
     wikrt_cx_alloc_reset(cx);
@@ -461,7 +460,6 @@ void wikrt_debug_trace(wikrt_cx* cx, bool enable)
 bool wikrt_debug_trace_move(wikrt_cx* cx, wikrt_r dst)
 {
     // TODO
-    //  probably move memory.trace to temp then write temp.
     return false;
 }
 
@@ -479,26 +477,77 @@ bool wikrt_prof_stack_move(wikrt_cx* cx, wikrt_r dst)
     return false;
 }
 
-
-
-// obtain an index where we would write to a register.
-bool wikrt_get_register_index(wikrt_cx* cx, wikrt_r r, wikrt_n* ix)
-{
-    // non-destructively obtain register index
-    if(0 == cx->registers.ids) { 
-        return false;
-    }
-    wikrt_n const* const ixs = (wikrt_n const*) (1 + wikrt_v2p(cx->registers.
-
-bool wikrt_get_register_index(wikrt_cx* cx, wikrt_r r, wikrt_n* ix) 
-    
-    
+static inline wikrt_r* wikrt_rtb_ids_ptr(wikrt_v ids) { 
+    // ids are offset by a cell to simplify alignment
+    _Static_assert((WIKRT_CELLSIZE >= sizeof(wikrt_r)),
+        "assuming cell offset is sufficient for alignment");
+    return (wikrt_r*)(2 + wikrt_v2p(r->ids)); 
 }
 
+// obtain an index for writing to register
+wikrt_n wikrt_get_register_index(wikrt_rtb const* rtb, wikrt_r const r)
+{
+    // To keep it simple: slot 0 is reserved for register 0
+    if(0 == r) { return 0; }
+
+    // otherwise regard ID field of 0 as an unused slot
+    wikrt_r const* ids = wikrt_rtb_ids_ptr(rtb->ids);
+    wikrt_n const s_max = (rtb->size - 1);
+    wikrt_n s = (r * 77977) % s_max;
+    do {
+        wikrt_n const ix = (s + 1);
+        if((r == ids[ix]) || (0 == ids[ix])) { return ix; }
+        s = ix % s_max;
+    } while(1);
+}
+
+// reallocate registers
+// assumes we've locked cx->mutex
 bool wikrt_grow_registers(wikrt_cx* cx)
 {
-    // grow register table monotonically, as needed.
-    //   
+    wikrt_n const new_size = (15 + (2 * cx->rtb.size));
+    wikrt_z const id_bytes = WIKRT_CELLSIZE + wikrt_cellbuff(new_size * sizeof(wikrt_r));
+    wikrt_z const data_bytes = wikrt_cellbuff((1 + new_size) * sizeof(wikrt_v));
+    wikrt_z const total_bytes = id_bytes + data_bytes;
+
+    if(!wikrt_thread_mem_available(&(cx->memory), bytes_needed)) { 
+        // if we don't have enough memory, try again later.
+        return false; 
+    }
+
+    // allocate and clear the registers table
+    wikrt_a const a_ids = wikrt_thread_alloc(&(cx->memory), id_bytes);
+    wikrt_a const a_data = wikrt_thread_alloc(&(cx->memory), data_bytes);
+    memset(wikrt_a2p(a_ids), 0, id_bytes);
+    memset(wikrt_a2p(a_data), 0, data_bytes);
+
+    rtb r = { 0 };
+    r.size = new_size;
+    r.ids  = WIKRT_VOBJ | a_ids;
+    r.data = WIKRT_VOBJ | a_data;
+
+    wikrt_z const ids_size = id_bytes - sizeof(wikrt_v);
+    wikrt_v2p(r.ids)[0] = WIKRT_OTYPE_BINARY | (ids_size << WIKRT_O_DATA_OFF);
+    wikrt_v2p(r.data)[0] = WIKRT_OTYPE_ARRAY | (new_size << WIKRT_O_DATA_OFF);
+
+    // move old data to new registers
+    wikrt_r const* old_ids = wikrt_rtb_ids_ptr(cx->rtb.ids);
+    wikrt_v const* old_data = 1 + wikrt_v2p(cx->rtb.data);
+    wikrt_n const old_size = cx->rtb.size;
+    wikrt_r* new_ids  = wikrt_rtb_ids_ptr(r.ids);
+    wikrt_v* new_data = 1 + wikrt_v2p(r.data);
+          
+    for(wikrt_n ix = 0; ix < old_size; ++ix) {
+        if(0 == old_data[ix]) { continue; }
+        wikrt_n const dst = wikrt_get_register_index(&r, old_ids[ix]);
+        new_ids[dst] = old_ids[ix];
+        new_data[dst] = old_data[ix];
+        ++(r.fill);
+    }
+ 
+    // replace the register set.
+    cx->rtb = r;
+    return true;
 }
 
 // allocate index where we would write to a register
