@@ -41,11 +41,11 @@ Those square brackets `[]` enclose a 'block' of Awelon code, representing a func
          [C][B][A]s == [[C]B][C]A   (S combinator)   s = [[c] a b w] a i
             [B][A]k == A            (K combinator)   k = a d
 
-Awelon's primitive combinators are more convenient than SKI. Apply and bind provide structural control over scope, respectively hiding or capturing one value. Partial results are available from apply. Separation of 'copy' and 'drop' is convenient both for performance and [substructural type](https://en.wikipedia.org/wiki/Substructural_type_system) analysis. 
+Awelon's primitive combinators are significantly more convenient than SKI: Apply and bind provide structural control over scope, respectively hiding or capturing one value. It is possible to abstract and refactor patterns involving multiple arguments or results. Explicit copy and drop simplify [substructural](https://en.wikipedia.org/wiki/Substructural_type_system) analysis and uniqueness tracking of type and value references.
 
 ## Words
 
-Words are identified by a non-empty sequence of UTF-8 characters with a few limitations. The blacklist is `@#[]()<>{}\/,;|&='"`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large. 
+Words are identified by a non-empty sequence of UTF-8 codepoints with a few limitations. The blacklist is `@#[]()<>{}\/,;|&='"`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large. 
 
 A useful subset of words is implicitly defined:
 
@@ -53,7 +53,9 @@ A useful subset of words is implicitly defined:
 * words to encode natural numbers, regex `[1-9][0-9]*`
 * secure hash resources `$secureHash` or `%secureHash`
 
-Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small. In many cases, words may have simple, informal structure - e.g. `foo.doc` to represent documentation for `foo`.
+Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small. Words in Awelon are specific to their UTF-8 encoding - for example, use of a combining diaeresis is distinct from use of a precombined codepoint, and Awelon is case sensitive. In many cases, words may have simple, informal structure that integrates with tooling - such as defining `foo.doc` to represent documentation for `foo` or `foo.type` to provide hints for static type analysis.
+
+Standardization of encoding and naming conventions is left to developers.
 
 ## Dictionary
 
@@ -197,7 +199,7 @@ Awelon's basic evaluation strategy is simple:
 
 Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
 
-This is just a recommended default strategy. A runtime can adjust this at its own discretion for performance, or enable tuning via annotations. With annotations we can precisely defer computations, control linking, leverage parallelism, memoize results for incremental computing, stow large data to work with limited memory, fail-fast in case of obvious errors, enable visible optimizations, request JIT compilation. And so on. See also *Optimization*, below.
+This is just a recommended default strategy. A runtime can adjust this at its own discretion (so long as it preserves semantics) and support annotations to adjust evaluation. With annotations we can precisely defer computations, control linking, leverage parallelism, memoize results for incremental computing, stow large but infrequently referenced data to disk, fail-fast in case of obvious errors, enable visible optimizations, request JIT compilation. And so on. See also *Optimization*, below.
 
 ## Value Words
 
@@ -208,7 +210,7 @@ A 'value word' is a word whose evaluated definition is a single block. Value wor
 
 Value words are effectively the 'nouns' of Awelon language. They are convenient for preserving human-meaningful structure and support for hypermedia resources.
 
-## Deferred Computations and Coinductive Data
+## Deferred Computations, Link Control, and Coinductive Data
 
 The *arity annotations* `(a2)` to `(a9)` have simple rewrite rules:
 
@@ -219,7 +221,7 @@ The *arity annotations* `(a2)` to `(a9)` have simple rewrite rules:
 
 To clarify, it is the *annotation* that has the given arity. Arity annotations specify nothing of their context.
 
-Arity annotations serve a critical role in controlling computation. For example, the program `[[A](a2)F]` has the same type and semantics as `[[A]F]`, but the former prevents partial evaluation of `F` from observing `[A]`. Arity annotations can be used to guard against useless partial evaluations. For example, if we define swap as `w = (a2) [] b a` then we can avoid observing the useless intermediate structure `[A] w => [[A]] a`. 
+Arity annotations serve a critical role in controlling computation. For example, the program `[[A](a2)F]` has the same type and semantics as `[[A]F]`, but the former prevents partial evaluation of `F` from observing `[A]`. Arity annotations can be used to guard against useless partial evaluations and control linking. For example, if we define swap as `w = (a2) [] b a` then we can avoid observing the useless intermediate structure `[A] w => [[A]] a`. An evaluator must wait for two arguments to `w` before linking.
 
 Arity annotations serve a very useful role in modeling [thunks](https://en.wikipedia.org/wiki/Thunk) and [coinductive data](https://en.wikipedia.org/wiki/Coinduction). It is sometimes useful to model 'infinite' data structures to be computed as we observe them - procedurally generated streams or scene graphs.
 
@@ -371,8 +373,6 @@ Unfortunately, `(par)` has severe limitations on expressiveness. It is at once t
 For low level parallelism, we could accelerate [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra). Alternatively, we could accelerate evaluation for a safe subset of OpenCL or similar, above which we might later accelerate linear algebra. Either approach can help Awelon in the domains of machine learning, physics simulations, graphics and audio, and other high performance number crunching computations.
 
 For high level parallelism, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), more specifically a variant with temporal extensions (see *Reactive Process Networks*, below). Essentially, we would describe a process network as a first-class value, and accelerate an 'evaluation' function (of type `KPN → KPN`) such that it splits the process network among distributed memory and CPUs to run the computation. The *monotonic* nature of KPNs allows distributed computation to continue in the background even as we inject and extract messages. 
-
-*Note:* `(par)` does not imply `(lazy)`. That is, on copy we might wait for a result with `(par)`, but would just logically copy the result with `(lazy)`.
 
 ## Structural Scoping
 
