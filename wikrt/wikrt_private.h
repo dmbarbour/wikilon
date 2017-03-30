@@ -340,7 +340,7 @@ typedef struct wikrt_task {
 
 static inline bool wikrt_is_task(wikrt_v t) { 
     // mostly for assertions, since I generally know where tasks are
-    return wikrt_is_otype(t) && (WIKRT_OTYPE_TASK == wikrt_get_otype(t)); 
+    return wikrt_is_obj(t) && (WIKRT_OTYPE_TASK == wikrt_get_otype(t)); 
 }
 
 /** Built-in Operations (Primitives, Accelerators, Annotations)
@@ -633,22 +633,16 @@ void wikrt_thread_move_ready_r(wikrt_thread*);
 
 /** Registers Table
  *
- * Registers are managed as a simple hashtable in structure-of-arrays
- * stype, using a binary array for register names and a data array for
- * register components. 
+ * Registers are managed as a linear collision hashtable, as a structure 
+ * of arrays. Registers are modified only by API-layer functions, and thus
+ * are single-threaded. However, operations that directly modify registers
+ * do require preventing full GC that might move register data or table.
  *
- * The registers table is only modified by API-layer functions, but the
- * table might be moved by full GC. Between these, we can have a stable
- * index upon allocation without holding a lock, should this simplify
- * working with parallel threads. OTOH, it also shouldn't be a big deal
- * just to hold a lock as needed, perhaps use a specialized allocator
- * for the toplevel API.
+ * Data within a register is simple Awelon code, but leverages BINARY_RAW
+ * to represent unstructured content for initial input and final output.
  *
- * Data within a register is simple Awelon code. I leverage BINARY_RAW
- * to represent unparsed binary data within code, at input, or upon read 
- * for output. I'll similarly translate code for output.
- *
- * A register may only be modified while holding a lock on cx->mutex.
+ * The user of the registers table is responsible for preventing concurrent
+ * GC, e.g. by locking the context during the update.
  */
 typedef struct wikrt_rtb { 
     wikrt_n size;
@@ -657,7 +651,12 @@ typedef struct wikrt_rtb {
     wikrt_v data;
 } wikrt_rtb;
 
+wikrt_v wikrt_get_reg_val(wikrt_rtb const*, wikrt_r); // always succeeds
+void wikrt_set_reg_val(wikrt_rtb* rtb, wikrt_r, wikrt_v); // assumes sufficient space
 
+// ensure sufficient space for writes to `amt` fresh registers.
+// This will exit fast if no extra space is required.
+bool wikrt_rtb_prealloc(wikrt_cx* cx, wikrt_rtb* rtb, wikrt_n amt); 
  
 /** A context.
  *
