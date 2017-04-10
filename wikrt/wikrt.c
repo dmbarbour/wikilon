@@ -69,6 +69,8 @@ void wikrt_env_destroy(wikrt_env* e)
     wikrt_halt_threads(e);
 
     // We require that no contexts exist when this is called.
+    _Static_assert(WIKRT_ENV_HAS_TWO_CONTEXT_LISTS,
+        "expecting context has only cxs and cxw context lists");
     bool const env_inactive = (NULL == e->cxs) 
                            && (NULL == e->cxw);
     if(!env_inactive) {
@@ -98,8 +100,8 @@ void wikrt_worker_loop(wikrt_env* const e)
 
         // Note: when work is available, only a single worker is signaled.
         // So we'll need that worker to signal yet another if yet more work
-        // is available in the context (perhaps heuristically limited based
-        // on available effort and space).
+        // is available in the context, perhaps heuristically limited based
+        // on available effort and space.
 
 
         // when we're done, either halt or wait for more work
@@ -139,8 +141,8 @@ void wikrt_env_threadpool(wikrt_env* e, uint32_t ct)
     pthread_mutex_lock(&(e->mutex));
     e->workers_max = ct;
 
-    // Allocate workers only if we're done.
     if(e->workers_alloc < e->workers_max) {
+        // allocate workers 
         pthread_attr_t a;
         pthread_attr_init(&a);
         pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
@@ -234,18 +236,17 @@ void wikrt_cx_interrupt_work(wikrt_cx* cx)
 {
     // must not be called from a worker thread
     pthread_mutex_lock(&(cx->env->mutex));
-    // signal worker threads to halt (checked on GC)
-    cx->workers_halt = true;        
+    wikrt_cx_remove_from_env_worklist(cx); 
+    cx->workers_halt = true;
     if(0 != cx->worker_count) {
         // wait for worker threads to leave this thread
         pthread_cond_wait(&(cx->workers_done), &(cx->env->mutex));
-        assert(0 == cx->worker_count);
     }
-    wikrt_cx_remove_from_env_worklist(cx);
+    assert(0 == cx->worker_count);
+    assert(!(cx->in_env_worklist));
     cx->workers_halt = false; 
     pthread_mutex_unlock(&(cx->env->mutex));
 }
-
 
 wikrt_cx* wikrt_cx_create(wikrt_env* const env, char const* dict_name, size_t size)
 {
@@ -392,17 +393,16 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 
     // TODO
     // Clear ephemeron references (via wikrt_eph_rem).
+    // This should include cx->dict_ver (once determined).
 
     // reset data and roots
     cx->trace_enable    = false;
     cx->prof_enable     = false;
     cx->words           = 0;
-    cx->temp            = 0;
-    cx->rtb             = (wikrt_rtb){0};
+    cx->rtb             = 0;
     cx->dict_ver[0]     = 0;
     wikrt_cx_reset_dict(cx, dict_name);
     wikrt_cx_alloc_reset(cx);
-    wikrt_rtb_prealloc(cx, &(cx->rtb), 15);
 
     // set an initial effort quota
     wikrt_set_effort(cx, WIKRT_CX_DEFAULT_EFFORT);
@@ -416,7 +416,7 @@ void wikrt_thread_poll_waiting(wikrt_thread* thread)
         wikrt_v const tv = *waitlist;
         wikrt_task* const t = (wikrt_task*)wikrt_v2a(tv);
         assert(wikrt_is_task(tv) && wikrt_is_task(t->wait));
-        wikrt_task const* const w = (wikrt_task const*)wikrt_v2a(t->wait);
+        wikrt_task const* const w = (wikrt_task*)wikrt_v2a(t->wait);
         if(WIKRT_OTYPE_TASK_COMPLETE == w->o) {
             t->wait = 0; // this task is no longer waiting
             (*waitlist) = t->next; // remove from waitlist
@@ -458,11 +458,33 @@ void wikrt_debug_trace(wikrt_cx* cx, bool enable)
     pthread_mutex_unlock(&(cx->mutex));
 }
 
-bool wikrt_debug_trace_move(wikrt_cx* cx, wikrt_r dst)
+bool wikrt_cx_api_prealloc(wikrt_cx* cx, wikrt_z amt)
 {
-    // TODO
-    return false;
+    if(wikrt_thread_mem_available(&(cx->memory), amt)) {
+        return true;
+    }
+    wikrt_cx_gc_with_lock(cx);
+    return wikrt_thread_mem_available(&(cx->memory), amt);
 }
+
+bool wikrt_debug_trace_move(wikrt_cx* cx, wikrt_r dst)
+{   
+    pthread_mutex_lock(&(cx->mutex));
+    if(0 == cx->memory.trace) { return true; }
+
+    if(!wikrt_cx_api_prealloc(cx, WIKRT_REG_WRITE_PREALLOC)) {
+        pthread_mutex_unlock(&(cx->mutex));
+        errno = ENOMEM;
+        return false;
+    }
+
+    // addend trace to existing register
+    wikrt_reg_write(cx, dst, cx->memory.trace);
+    cx->memory.trace = 0;
+    pthread_mutex_unlock(&(cx->mutex));
+    return true;
+}
+   
 
 void wikrt_prof_stack(wikrt_cx* cx, bool enable)
 {
@@ -474,10 +496,21 @@ void wikrt_prof_stack(wikrt_cx* cx, bool enable)
 
 bool wikrt_prof_stack_move(wikrt_cx* cx, wikrt_r dst)
 {
-    // TODO
-    return false;
+    pthread_mutex_lock(&(cx->mutex));
+    if(0 == cx->memory.prof) { return true; }
+
+    if(!wikrt_cx_api_prealloc(cx, WIKRT_REG_WRITE_PREALLOC)) {
+        pthread_mutex_unlock(&(cx->mutex));
+        errno = ENOMEM;
+        return false;
+    }
+    wikrt_reg_write(cx, dst, cx->memory.prof);
+    cx->memory.prof = 0;
+    pthread_mutex_unlock(&(cx->mutex));
+    return true;
 }
 
+#if 0
 bool wikrt_alloc_binary_temp(wikrt_cx* cx, uint8_t const* data, size_t amt)
 {
     // Allocate and copy the binary (via temp register)
@@ -491,31 +524,37 @@ bool wikrt_alloc_binary_temp(wikrt_cx* cx, uint8_t const* data, size_t amt)
     memcpy(b->data, data, amt);
     return true;
 }
-
+#endif
 
 bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt) 
 {
-    if(0 == total_amt) { return true; } // irrelevant write
-    if(0 == r) { errno = EBADF; return false; } // cannot write NULL stream
-
-    if(!wikrt_alloc_binary_temp(cx, data, amt)) { return false; }
-    return wikrt_reg_write_temp(cx, r);
+    if(0 == amt) { return true; } // irrelevant write
+    errno = ENOSYS;
+    return false;
 }
 
-size_t wikrt_read(wikrt_cx* cx, wikrt_r fd, uint8_t* const buff, size_t const max)
+size_t wikrt_read(wikrt_cx* cx, wikrt_r r, uint8_t* const buff, size_t const max)
 {
     return 0;
 }
 
-bool wikrt_is_empty(wikrt_cx* cx, wikrt_r fd)
+bool wikrt_is_empty(wikrt_cx* cx, wikrt_r r)
 {
-    // test if stream is empty
-    return true;
+    pthread_mutex_lock(&(cx->mutex));
+    wikrt_v const v = wikrt_reg_get(cx, r);
+    pthread_mutex_unlock(&(cx->mutex));
+    return (0 == v);
 }
 
-void wikrt_clear(wikrt_cx* cx, wikrt_r fd)
+void wikrt_clear(wikrt_cx* cx, wikrt_r r)
 {
-    
+    if(cx->frozen) {
+        fprintf(stderr, "cannot clear a frozen context's register\n");
+        abort();
+    }
+    pthread_mutex_lock(&(cx->mutex));
+    wikrt_reg_set(cx, r, 0);
+    pthread_mutex_unlock(&(cx->mutex));
 }
 
 

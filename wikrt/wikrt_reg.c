@@ -2,128 +2,77 @@
 #include <string.h>
 #include "wikrt_private.h"
 
-static wikrt_n rtb_idx(wikrt_rtb const*, wikrt_r);
-static void rtb_clear(wikrt_rtb*, wikrt_r);
-
-static inline wikrt_r* rtb_ids(wikrt_rtb const* rtb) { 
-    // WIKRT_OTYPE_BINARY, with light offset to ensure alignment
-    _Static_assert((0 == (WIKRT_CELLSIZE % sizeof(wikrt_r))),
-        "assuming safe alignment of register ID into cell");
-    return (wikrt_r*)(WIKRT_CELLSIZE + wikrt_v2a(rtb->ids)); 
-}
-static inline wikrt_v* rtb_data(wikrt_rtb const* rtb) {
-    // offset one word for the WIKRT_OTYPE_ARRAY header
-    return (1 + wikrt_v2p(rtb->data));
-}
-
-// getting a register value always succeeds
-wikrt_v wikrt_get_reg_val(wikrt_rtb const* rtb, wikrt_r const r) 
+void wikrt_reg_set(wikrt_cx* cx, wikrt_r const r, wikrt_v const v)
 {
-    if(0 == rtb->size) { return 0; } 
-    wikrt_n const idx = rtb_idx(rtb, r);
-    return rtb_data(rtb)[idx];
-}
-
-// assumes sufficent space has been preallocated
-void wikrt_set_reg_val(wikrt_rtb* rtb, wikrt_r r, wikrt_v v)
-{
-    if(0 == v) { rtb_clear(rtb, r); return; } 
-    wikrt_n const idx = rtb_idx(rtb, r);
-    wikrt_v* const pdata = idx + rtb_data(rtb);
-    if(0 == *pdata) {
-        rtb_ids(rtb)[idx] = r;
-        ++(rtb->fill);
+    // assumptions: 
+    //   wikrt_reg_get moves target node to root if non-zero
+    //   cx->memory has enough space for a node (WIKRT_REG_WRITE_PREALLOC)
+    //   context is locked, operation is within mutex
+    wikrt_v const v0 = wikrt_reg_get(cx,r);
+    if(v0 == v) { /* no change */ return; }  
+    else if(0 == v0) {
+        // need new register table node
+        assert(wikrt_thread_mem_available(&(cx->memory), WIKRT_REG_WRITE_PREALLOC));
+        wikrt_a const a = wikrt_thread_alloc(&(cx->memory), WIKRT_REG_WRITE_PREALLOC);
+        wikrt_rtb_node* const node = (wikrt_rtb_node*)a;
+        node->otype = WIKRT_OTYPE_RTB_NODE;
+        node->regid = r;
+        node->data  = v;
+        node->next  = cx->rtb;
+        cx->rtb     = WIKRT_VOBJ | a;
+    } else if(0 == v) {
+        // clear old register value
+        wikrt_rtb_node* const node = (wikrt_rtb_node*)wikrt_v2a(cx->rtb);
+        assert(r == node->regid);
+        cx->rtb = node->next;
+    } else {
+        // update existing register value
+        wikrt_rtb_node* const node = (wikrt_rtb_node*)wikrt_v2a(cx->rtb);
+        assert(r == node->regid);
+        node->data = v;
     }
-    (*pdata) = v;
 }
 
-static wikrt_n rtb_idx(wikrt_rtb const* rtb, wikrt_r r)
+// obtaining a register will also move the node to the head of the
+// register table, such that multiple operations on a small subset
+// of registers should be relatively efficient.
+wikrt_v wikrt_reg_get(wikrt_cx* cx, wikrt_r const r)
 {
-    // assumes non-empty table
-    assert(0 != rtb->size);
-    // simple linear collision hash option.
-    wikrt_n idx = (r * 77977) % (rtb->size);
-    do {
-        bool const match = (r == rtb_ids(rtb)[idx])     // match ID
-                        || (0 == rtb_data(rtb)[idx]);   // stop on empty slot
-        if(match) { return idx; }
-        idx = (idx + 1) % (rtb->size);
-    } while(1);
-}
+    // assumes lock on context
+    wikrt_v* pn = &(cx->rtb);
+    while(0 != *pn) {
+        wikrt_v const n = *pn;
+        wikrt_rtb_node* const node = (wikrt_rtb_node*)wikrt_v2a(n);
+        if(r == node->regid) {
+            // shift node to head
+            (*pn) = node->next;
+            node->next = cx->rtb;
+            cx->rtb = n;
 
-// clearing a register always succeeds.
-//
-// Potential linear collision entries are relocated to preserve the
-// hashtable structure without need for 'marked deleted' slots.
-static void rtb_clear(wikrt_rtb* rtb, wikrt_r r)
-{
-    if(0 == rtb->size) { return; }
-    wikrt_n idx = rtb_idx(rtb, r);
-    if(0 == rtb_data(rtb)[idx]) { return; }
-
-    assert(rtb->fill > 0);
-    --(rtb->fill);
-    rtb_data(rtb)[idx] = 0;
-
-    // relocate all potential linear collision indices
-    // (i.e. everything up to the first empty slot)
-    do {
-        idx = (idx + 1) % rtb->size;
-        if(0 == rtb_data(rtb)[idx]) { return; }
-        wikrt_n const dst = rtb_idx(rtb, rtb_ids(rtb)[idx]);
-        if(dst != idx) {
-            rtb_ids(rtb)[dst]  = rtb_ids(rtb)[idx];
-            rtb_data(rtb)[dst] = rtb_data(rtb)[idx];
-            rtb_data(rtb)[idx] = 0;
-        }
-    } while(1);
-}
-
-bool wikrt_grow_registers(wikrt_cx* cx, wikrt_rtb* rtb, wikrt_n new_size)
-{
-    assert(new_size > rtb->fill);
-    wikrt_z const size_ids = WIKRT_CELLSIZE + wikrt_cellbuff(new_size * sizeof(wikrt_r));
-    wikrt_z const size_data = wikrt_cellbuff((1 + new_size) * sizeof(wikrt_v));
-    wikrt_z const size_total = size_ids + size_data;
-
-    if(!wikrt_thread_mem_available(&(cx->memory), size_total)) {
-        // out of context memory (might need to GC first).
-        return false; 
+            // return non-zero register data 
+            assert(0 != node->data);
+            return node->data;
+        } 
+        pn = &(node->next);
     }
-
-    // allocate and clear registers
-    wikrt_a const a_ids = wikrt_thread_alloc(&(cx->memory), size_ids);
-    wikrt_a const a_data = wikrt_thread_alloc(&(cx->memory), size_data);
-    memset((void*)a_ids, 0, size_ids);
-    memset((void*)a_data, 0, size_data);
-
-    // set object headers
-    *wikrt_a2p(a_ids) = ((size_ids - sizeof(wikrt_v)) << WIKRT_O_DATA_OFF) | WIKRT_OTYPE_BINARY;
-    *wikrt_a2p(a_data) = (new_size << WIKRT_O_DATA_OFF) | WIKRT_OTYPE_ARRAY;
-
-    // move old data into new table
-    wikrt_rtb new_rtb = { 0 };
-    new_rtb.size = new_size;
-    new_rtb.ids  = WIKRT_VOBJ | a_ids;
-    new_rtb.data = WIKRT_VOBJ | a_data;
-    for(wikrt_n ix = 0; ix < rtb->size; ++ix) {
-        if(0 != rtb_data(rtb)[ix]) {
-            wikrt_set_reg_val(&new_rtb, rtb_ids(rtb)[ix], rtb_data(rtb)[ix]);
-        }
-    }
-    assert(new_rtb.fill == rtb->fill);
-    (*rtb) = new_rtb;
-    return true;
+    return 0;
 }
 
-bool wikrt_rtb_prealloc(wikrt_cx* cx, wikrt_rtb* rtb, wikrt_n amt)
+void wikrt_reg_write(wikrt_cx* cx, wikrt_r const r, wikrt_v const vw)
 {
-    // conservatively, we'll permit up to a 2/3 fill on the hashtable.
-    wikrt_n const new_fill = rtb->fill + amt;
-    bool const space_ok = (rtb->size * 2) >= (new_fill * 3);
-    if(space_ok) { return true; }
-    // when we do grow the table, aim for just under a 50% fill ratio.
-    wikrt_n const new_size = (new_fill * 2) + 1;
-    return wikrt_grow_registers(cx, rtb, new_size);
+    // write a (v0, vw) logical composition cell. This addends the written
+    // value vw to the current value v0. 
+    assert(wikrt_thread_mem_available(&(cx->memory), WIKRT_REG_WRITE_PREALLOC));
+    wikrt_v const v0 = wikrt_reg_get(cx, r);
+    if(0 == v0) { 
+        wikrt_reg_set(cx, r, vw); 
+    } else {
+        wikrt_a const a = wikrt_thread_alloc(&(cx->memory), WIKRT_CELLSIZE);
+        wikrt_v* const p = (wikrt_v*)a;
+        p[0] = v0;
+        p[1] = vw;
+        wikrt_reg_set(cx, r, (WIKRT_COMP | a));
+    }
 }
-    
+
+

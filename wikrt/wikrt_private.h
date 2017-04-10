@@ -68,11 +68,11 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 
 /** Bit Representations
  *
- *      b00     small constants, actions, tags
- *      b01     tagged objects or actions (header ..data..)
- *      b10     composition cell (B, A) => [B A]
- *      b11     constructor cell (H, T) => [H T :]
- *      `b` bit is 1 for blocks or values words, 0 for inline actions
+ *      v00     small constants, actions, tags
+ *      v01     tagged objects or actions (header ..data..)
+ *      v10     composition cell (B, A) => [B A]
+ *      v11     constructor cell (H, T) => [H T :]
+ *      `v` bit is 1 for blocks or value words, 0 for inline actions
  *
  * Common Small Constants (2 bits + b00)
  *
@@ -127,7 +127,7 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 // bit-level utility functions
 static inline wikrt_v wikrt_vtag(wikrt_v v) { return (WIKRT_REF_MASK_TYPE & v); }
 static inline wikrt_a wikrt_v2a(wikrt_v v) { return (WIKRT_REF_MASK_ADDR & v); }
-static inline bool wikrt_action(wikrt_v v) { return !(WIKRT_VAL & v); }
+static inline bool wikrt_action(wikrt_v v) { return (0 == (WIKRT_VAL & v)); }
 static inline bool wikrt_value(wikrt_v v) { return !wikrt_action(v); }
 
 static inline bool wikrt_is_obj(wikrt_v v) { return (WIKRT_OBJ == wikrt_vtag(v)); }
@@ -181,14 +181,15 @@ typedef enum wikrt_otype
 , WIKRT_OTYPE_QUAD      // (header, value, value, value) quadruples
     // ... more as needed
 
-    // DATA is size field
+    // data has a size field
 , WIKRT_OTYPE_BLOCK     // flat sequence of code
 , WIKRT_OTYPE_ARRAY     // compact list value
 , WIKRT_OTYPE_BINARY    // array of byte values
 , WIKRT_OTYPE_BIGNUM    // natural numbers
 
-    // Other
+    // Special Cases
 , WIKRT_OTYPE_TASK      // a fragment of code under evaluation
+, WIKRT_OTYPE_RTB_NODE  // register table binary tree node
 , WIKRT_OTYPE_WORD      // interned, and includes annotations
 } wikrt_otype;
 
@@ -270,7 +271,7 @@ typedef struct wikrt_binary { wikrt_o o; uint8_t b[]; } wikrt_binary;
  * binary coded decimals: a big number is represented by sequence
  * of 32-bit words, each ranging 0..999999999, little-endian (low
  * words first). This representation may be used at parse time for
- * number words.
+ * large number words.
  *
  * Big integers, decimals, or rationals will be modeled explicitly
  * above big natural numbers, whereas small integers and useful
@@ -633,31 +634,25 @@ void wikrt_thread_move_ready_r(wikrt_thread*);
 
 /** Registers Table
  *
- * Registers are managed as a linear collision hashtable, as a structure 
- * of arrays. Registers are modified only by API-layer functions, and thus
- * are single-threaded. However, operations that directly modify registers
- * do require preventing full GC that might move register data or table.
- *
- * Data within a register is simple Awelon code, but leverages BINARY_RAW
- * to represent unstructured content for initial input and final output.
- *
- * The user of the registers table is responsible for preventing concurrent
- * GC, e.g. by locking the context during the update.
+ * Currently the registers table is a linear linked list. In the
+ * future, I might favor a binary search tree. The linked list will
+ * move recently accessed nodes to the head.
  */
-typedef struct wikrt_rtb { 
-    wikrt_n size;
-    wikrt_n fill;
-    wikrt_v ids;
+typedef struct wikrt_rtb_node {
+    wikrt_o otype;
+    wikrt_r regid;
     wikrt_v data;
-} wikrt_rtb;
+    wikrt_v next;
+} wikrt_rtb_node;
 
-wikrt_v wikrt_get_reg_val(wikrt_rtb const*, wikrt_r); // always succeeds
-void wikrt_set_reg_val(wikrt_rtb* rtb, wikrt_r, wikrt_v); // assumes sufficient space
+#define WIKRT_REG_SET_PREALLOC WIKRT_CELLBUFF(sizeof(wikrt_rtb_node))
+void wikrt_reg_set(wikrt_cx*, wikrt_r, wikrt_v); // assumes lock, prealloc
+wikrt_v wikrt_reg_get(wikrt_cx*, wikrt_r); // assumes lock, always succeeds
 
-// ensure sufficient space for writes to `amt` fresh registers.
-// This will exit fast if no extra space is required.
-bool wikrt_rtb_prealloc(wikrt_cx* cx, wikrt_rtb* rtb, wikrt_n amt); 
- 
+// write will addend register binary
+#define WIKRT_REG_WRITE_PREALLOC (WIKRT_CELLSIZE + WIKRT_REG_SET_PREALLOC)
+void wikrt_reg_write(wikrt_cx*, wikrt_r, wikrt_v);
+
 /** A context.
  *
  * A context is represented by a contiguous volume of memory, and has
@@ -717,14 +712,12 @@ struct wikrt_cx {
     uint8_t         dict_ver[WIKRT_HASH_SIZE + 4];  // an import/export hash val (NUL terminated)
     wikrt_v         words;              // words table in context memory
 
-    // Registers
-    wikrt_v         tmp;                // temporary data register
-    wikrt_rtb       rtb;                // primary registers table
+    // Register Table Root (a binary tree)
+    wikrt_v         rtb;
 
     // todo:
     // Stowage tracking: need to know all stowage roots
     // Dictionary indexing?
-
 };
 
 // default effort is about 100ms labor
@@ -769,9 +762,12 @@ static inline wikrt_a wikrt_thread_alloc(wikrt_thread* const t, wikrt_z amt)
     return r;
 }
 
-// Function for large allocations outside the current thread.
-bool wikrt_alloc(wikrt_cx*, wikrt_a*, wikrt_z amt);
 
+// Like wikrt_cx_gc, but assumes lock on cx->mutex and preserves
+// lock after returning (so client retains exclusive control of
+// memory).
+void wikrt_cx_gc_with_lock(wikrt_cx*);
+bool wikrt_cx_api_prealloc(wikrt_cx*, wikrt_z amt);
 
 #define WIKRT_H
 #endif

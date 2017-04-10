@@ -152,9 +152,10 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * the program must be serialized back to a binary.
  * 
  * To support multi-tasking and partial evaluation within a context,
- * multiple 'registers' are used, each containing a binary value and
- * named by integers. Allocation and management of registers is left
- * to the API client. Initially, every register has an empty binary.
+ * multiple binary registers are supported, each containing a binary
+ * value. Registers are named by integers. Allocation and management
+ * of registers is left to clients. (Note: At this time, using many
+ * registers has significant overheads.)
  *
  * Writes may fail atomically with ENOMEM. If a write fails, nothing
  * was written. Reads may return fewer bytes than requested and set
@@ -222,7 +223,7 @@ bool wikrt_save_def(wikrt_cx*, wikrt_r, char const* k);
  * Note: Secure hashes are bearer tokens, authorizing access to binary
  * data. Systems should resist timing attacks to discover known hashes.
  * Wikilon will expose only the initial 60 bits of each hash to timing,
- * but clients must take similar care to guard resource IDs.
+ * but clients should take similar care to guard resource IDs.
  */
 #define WIKRT_HASH_SIZE 60
 void wikrt_hash(char* h, uint8_t const*, size_t);
@@ -277,12 +278,14 @@ bool wikrt_parse_check(uint8_t const*, size_t, wikrt_parse_data*);
  * from the input is moved, otherwise it fails, returning false and
  * setting errno to EAGAIN, EBADMSG, or ENOMEM.  
  *
- * This is a stream parser: it assumes we may write more to source.
- * Thus, when source ends in `foo` we don't immediately accept that
- * because further writes may extend source to `foobar`. Likewise, 
- * `[code]` to `[code]@dict`. The EAGAIN error is used when writing
- * more to source might cause the parse to succeed. Adding a final
- * SP or LF at the end of input may be necessary.
+ * This is a stream parser: it assumes we may write more to source
+ * then parse further. To fully parse source generally requires it
+ * terminate in an SP or LF. Code ending in `foo` would not fully
+ * parse because further writes may extend it to `foobar`. Likewise,
+ * `[code]` may extend to `[code]@dict`.
+ *
+ * The EAGAIN error is used to indicate that parse might succeed if
+ * more code (perhaps an SP or LF separator) is written to source.
  */
 bool wikrt_parse(wikrt_cx*, wikrt_r src, wikrt_r dst);
 
@@ -359,7 +362,7 @@ bool wikrt_eval_stream(wikrt_cx*, wikrt_r src, wikrt_r dst);
  * This is a naive and terribly inefficient representation, of course,
  * taking roughly eight times as much space as raw binary data. Awelon
  * doesn't have syntactic sugar for binaries, though it may reference
- * external binary objects as secure hash resource - `%secureHash`.
+ * external binary objects as secure hash resources - `%secureHash`.
  *
  * However, a decent implementation of Awelon should support a compact
  * representation for binary data under the hood, using arrays of bytes.
@@ -451,8 +454,7 @@ void wikrt_cx_gc(wikrt_cx*);
  * it also addends subprogram `M` to the trace log.
  * 
  * The trace log must be moved to a client register for reading or
- * further processing, to simplify interactions with any background
- * threads. Disabling will clear the log. Defaults to disabled.
+ * further processing. Disabling clears the log. Defaults disabled.
  */
 void wikrt_debug_trace(wikrt_cx*, bool enable);
 bool wikrt_debug_trace_move(wikrt_cx*, wikrt_r);
@@ -490,18 +492,18 @@ bool wikrt_debug_eval_step(wikrt_cx*, wikrt_r, char const* target);
  * performance problems.
  * 
  * The profile is recorded as a log of triples, one per line, with
- * a current call stack, elapsed microseconds, and bytes allocated.
+ * a current call stack, elapsed microseconds, and bytes allocated. 
  *
  *     /foo/bar/baz 400 1000
  *     /blub/glub   100 8000
  *     /foo/bar/qux 300 1200
  *
  * This record is imprecise, but enough entries can still provide a
- * useful estimate of where evaluation efforts are expended.
+ * useful estimate of where evaluation efforts are expended. This
+ * profiling doesn't use interrupts, being driven instead by GC.
  *
  * The profile log must be moved to a client register for reading or
- * further processing, to simplify interactions with any background
- * threads. Disabling will clear the log. Defaults to disabled.
+ * further processing. Disabling clears the log. Defaults disabled.
  */
 void wikrt_prof_stack(wikrt_cx*, bool enable);
 bool wikrt_prof_stack_move(wikrt_cx*, wikrt_r);
@@ -550,7 +552,7 @@ bool wikrt_prof_heap(wikrt_cx*, wikrt_r, wikrt_mem_stats*);
  * readily divided among available threads.
  * 
  * A thread will allocate a local workspace upon entering a context,
- * so to leverage parallelism you must ensure sufficient space. Half 
+ * so to leverage parallelism you must ensure sufficient space. Half
  * a megabyte is reasonable per OS thread in the context.
  */
 void wikrt_env_threadpool(wikrt_env*, uint32_t worker_count);

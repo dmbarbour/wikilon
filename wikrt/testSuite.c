@@ -93,16 +93,14 @@ bool match_hash(char const* s, char const* h_expected)
 bool test_hash(wikrt_cx* _unused) 
 {
     return match_hash("t/e/s/t",    "QgZDyYYGYV57hLkAEqUMVM6qESxuN6QpM1ekCHv9Yi59SirYaXcH0FdSNN9T")
-        && match_hash("t/e/s/t\n",  "dbNAGEG-F9ElYjNw4T4qI1A7o9clXiDRSs1hAEYJdu3BWAd5W3NDUHmki60s")
         && match_hash("test",       
                       "J7URBffnfK_NVVcQNQ6D21k5A7J8Zhhwb2Ry3WLYfFc7Vy1TiE01Q4H7duKE")
-        && match_hash("J7URBffnfK_NVVcQNQ6D21k5A7J8Zhhwb2Ry3WLYfFc7Vy1TiE01Q4H7duKE",
+        && match_hash("J7URBffnfK_NVVcQNQ6D21k5A7J8Zhhwb2Ry3WLYfFc7Vy1TiE01Q4H7duKE"
                      ,"Kve-Zbz23Zz28x0tTsmnuJv8dj0YGvwEVVWCbxLkAM7S6FLp6gCA0M2n_Nee")
         && match_hash("Kve-Zbz23Zz28x0tTsmnuJv8dj0YGvwEVVWCbxLkAM7S6FLp6gCA0M2n_Nee"
                      ,"MnrYTJyeGxLz5OSGwTwW7WAiC9alwYaOBFuu2_flmK1LGCCMqEDjkzPDL-Rl")
-        && match_hash("test\n",     "FNn9bEhfDqPpswCc36-GcJn42xZ5Bc-qaaylGefS2ystQ0ksVU9bpDqypG46")
         && match_hash("",           "-p2eN9b-CeuBFlEPrbnGHMWeMy1GzEo2XnLtxzMYjwi-nAiUttuwYCP_MSUG")
-        && match_hash("\n",         "-vnxnuU93oPpZ1al_J_Gj9GkrLyLM0l7vAmVyIHcA5yH7UL77ukXKcq8fpG8");
+        ;
 }
 
 static inline bool check_parse(char const* s, bool const e) {
@@ -183,20 +181,20 @@ bool test_rw(wikrt_cx* cx, char const* s)
     _Static_assert((sizeof(uint8_t) == sizeof(char)), 
         "cast between char* and uint8_t*");
  
-    wikrt_s const fd = 1;
+    wikrt_r const r = 1;
     size_t const len = strlen(s);
 
-    if(!wikrt_is_empty(cx, fd)) { 
+    if(!wikrt_is_empty(cx, r)) { 
         fprintf(stderr, "%s: expecting empty stream\n", __FUNCTION__);
         return false;
     }
 
     // split the writes to better stress context write buffering
     size_t const split = len / 3;
-    wikrt_write(cx, fd, (uint8_t const*)s, split);
-    wikrt_write(cx, fd, (uint8_t const*)s + split, len - split);
+    wikrt_write(cx, r, (uint8_t const*)s, split);
+    wikrt_write(cx, r, (uint8_t const*)s + split, len - split);
 
-    if(wikrt_is_empty(cx, fd) && (0 != len)) { 
+    if(wikrt_is_empty(cx, r) && (0 != len)) { 
         fprintf(stderr, "%s: write failed for `%s`\n", __FUNCTION__, s);
         return false;
     }
@@ -204,8 +202,8 @@ bool test_rw(wikrt_cx* cx, char const* s)
     char buff[len+1]; buff[len] = 0;
 
     // split reads to better stress context read buffering
-    size_t const rd1 = wikrt_read(cx, fd, (uint8_t*)buff, (len-split));
-    size_t const rd2 = wikrt_read(cx, fd, (uint8_t*)(buff + (len - split)), (split + 1));
+    size_t const rd1 = wikrt_read(cx, r, (uint8_t*)buff, (len-split));
+    size_t const rd2 = wikrt_read(cx, r, (uint8_t*)(buff + (len - split)), (split + 1));
     if(len != (rd1 + rd2)) { 
         fprintf(stderr, "%s: read failed\n", __FUNCTION__);
         return false;
@@ -217,8 +215,8 @@ bool test_rw(wikrt_cx* cx, char const* s)
         return false;
     }
 
-    wikrt_clear(cx, fd);
-    if(!wikrt_is_empty(cx, fd)) {
+    wikrt_clear(cx, r);
+    if(!wikrt_is_empty(cx, r)) {
         fprintf(stderr, "%s: clear failed\n", __FUNCTION__);
         return false;
     }
