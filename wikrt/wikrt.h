@@ -50,13 +50,13 @@ typedef struct wikrt_env wikrt_env;
  *
  * A context is associated with a volume of memory and a dictionary. 
  * Given a context, we can evaluate code and search or transactionally 
- * update the dictionary. 
+ * update the dictionary.
  *
- * A context is single-threaded at this API, but supports multi-tasking
- * via a logical register set, and background parallel evaluation via
- * `(par)` annotations and partial evaluators (like wikrt_eval_data).
- * No thread-local storage is used, so you're free to use a context from
- * different threads over its lifespan, just limited to one at a time.
+ * The context should be considered single-threaded at this API. Any
+ * parallelism is achieved using `(par)` annotations and background 
+ * threads, not via concurrent calls on a context API. Only a single
+ * transaction is supported. Limited multi-tasking is possible using
+ * registers for multiple inputs and outputs.
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -198,6 +198,14 @@ bool wikrt_copy(wikrt_cx*, wikrt_r src, wikrt_r dst);
  */
 bool wikrt_load_def(wikrt_cx*, wikrt_r, char const* k);
 bool wikrt_save_def(wikrt_cx*, wikrt_r, char const* k);
+
+// TODO: 
+//   I need functions to search the codebase, e.g. to find all words
+//   given a prefix or suffix, full text search, reverse word lookup,
+//   etc.. It might also be useful to obtain static type information.
+//
+//   Support for auto-completion would be convenient, especially if
+//   it were type sensitive.
 
 /** Secure Hash Resources
  *

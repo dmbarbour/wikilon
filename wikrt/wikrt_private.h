@@ -74,6 +74,9 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *      v11     constructor cell (H, T) => [H T :]
  *      `v` bit is 1 for blocks or value words, 0 for inline actions
  *
+ *    Composition can be used for concatenation, and if the `v` bit
+ *    is not set we essentially get `B A` without the wrapping block.
+ *
  * Common Small Constants (2 bits + b00)
  *
  *      00      extended
@@ -482,41 +485,34 @@ void wikrt_db_close(wikrt_env*);
 /** The Environment
  *
  * This models the physical machine resources shared by contexts,
- * including the persistence layer and virtual 'CPUs' in the form
- * of worker threads.
+ * primarily a persistence layer (database) and virtual CPUs via
+ * worker threads.
  * 
- * All contexts are tracked. I use two circular linked lists, with
- * one being the list with 'work available' so worker threads don't
- * need to repeatedly scan passive contexts when searching for work.
- * The other is essentially a list of passive or single-threaded
- * contexts. A context may also abort work, forcing it back to the
+ * Contexts may invite one worker at a time via a queue mechanism.
+ * If more than one worker is needed, a worker may invite another.
+ * It's generally safe to invite a worker, even when no work is
+ * available. At most, we'll waste a little bit of time waking
+ * a worker thread.
  * 
  * I might need an additional, separate thread to manage GC of the
- * database. Or I could keep some heuristics and perform this from
- * whichever threads are working with the database at the time.
- *
- * Worker threads will cycle through available contexts, those marked
- * as having work available.
+ * database. But I'd prefer to perform GC incrementally with normal
+ * updates. 
  */
 struct wikrt_env {
-    // every context is exclusively in one list
-    wikrt_cx        *cxs;   // single-threaded or passive contexts
-    wikrt_cx        *cxw;   // contexts with obvious work available
-    pthread_mutex_t mutex;  // mutex for environment manipulations
+    pthread_mutex_t mutex;  // for thread safety, cond vars
+    wikrt_z         cxct;   // count of associated contexts
 
     // database and shared memory ephemeron table
     wikrt_db        *db;    // persistent storage
     wikrt_eph       *eph;   // ephemeral reference tracking
 
-
-    // workers thread pool and work signaling
+    // worker thread management
     uint32_t        workers_alloc;  // for increasing thread count
     uint32_t        workers_max;    // for reducing thread count
     pthread_cond_t  work_available; // work in cxw or if max<alloc
     pthread_cond_t  workers_halted; // for safe shutdown
+    wikrt_cx        *wq;            // circular worker queue
 };
-// for static assertions, if we break this assumption remove the def
-#define WIKRT_ENV_HAS_TWO_CONTEXT_LISTS 1
 
 void* wikrt_worker_behavior(void* e); 
 void wikrt_halt_threads(wikrt_env* e);
@@ -634,9 +630,9 @@ void wikrt_thread_move_ready_r(wikrt_thread*);
 
 /** Registers Table
  *
- * Currently the registers table is a linear linked list. In the
- * future, I might favor a binary search tree. The linked list will
- * move recently accessed nodes to the head.
+ * Currently the registers table is a linear linked list in order of
+ * most recent use. In the future, I might favor a binary search tree.
+ * But for now, keeping it simple is more valuable than performance.
  */
 typedef struct wikrt_rtb_node {
     wikrt_o otype;
@@ -667,6 +663,10 @@ void wikrt_reg_write(wikrt_cx*, wikrt_r, wikrt_v);
  * If a dictionary name is an invalid word or is larger than its
  * secure hash, we'll rewrite it to the secure hash of the name.
  *
+ * For parallelism, a context may be placed in a linked list where
+ * a worker thread can find it. The context will always be removed
+ * from this list by said context
+ *
  * A challenge: I need full GC of the context by worker threads for
  * background parallelism, and I also need stable memory for API ops.
  * So the question is how to prevent full context GC from background
@@ -680,18 +680,15 @@ void wikrt_reg_write(wikrt_cx*, wikrt_r, wikrt_v);
  */
 struct wikrt_cx {
     wikrt_env      *env;
-    
-    // note: following fields are protected by env->mutex
-    // to support worker threads, etc.
-    wikrt_cx       *cxn;                // circular list of contexts
-    wikrt_cx       *cxp;
-    bool            in_env_worklist;    // in env->cxw (as opposed to cxs)
-    bool            workers_halt;       // request active workers to halt
+
+    // protected by cx->env->mutex
+    wikrt_cx       *wqn, *wqp;          // used for worker queue
     uint32_t        worker_count;       // count of workers in context
     pthread_cond_t  workers_done;       // signal when (0 == worker_count)
 
     // mutex for content within context
     pthread_mutex_t mutex;              // to protect local allocator
+    bool            interrupt;          // signal workers to abandon context
 
     // to support frozen contexts
     wikrt_n         refct;              // references as a frozen context 
@@ -733,12 +730,6 @@ void wikrt_cx_signal_work(wikrt_cx*);       // invites a worker thread
 bool wikrt_cx_work_available(wikrt_cx*);    // assumes mutex held
 size_t wikrt_word_len(uint8_t const* const src, size_t maxlen);
 
-static inline bool wikrt_cx_unshared(wikrt_cx* cx) 
-{
-    return (0 == cx->worker_count) 
-        && !(cx->in_env_worklist);
-}
-
 // test availability of thread-local memory 
 static inline bool wikrt_thread_mem_available(wikrt_thread const* t, wikrt_z amt)
 {
@@ -763,11 +754,23 @@ static inline wikrt_a wikrt_thread_alloc(wikrt_thread* const t, wikrt_z amt)
 }
 
 
-// Like wikrt_cx_gc, but assumes lock on cx->mutex and preserves
-// lock after returning (so client retains exclusive control of
-// memory).
-void wikrt_cx_gc_with_lock(wikrt_cx*);
-bool wikrt_cx_api_prealloc(wikrt_cx*, wikrt_z amt);
+/** API Entry, Exit, and Memory Management
+ *
+ * Most API functions (those that may need to allocate) will call 
+ * wikrt_api_enter upon entry, and wikrt_api_exit as they leave.
+ *
+ * The motive for this is to simplify interaction with background
+ * parallelism. Ideally, API calls won't interfere with parallel
+ * processing. But full-context GC is an exception, given we will
+ * move objects to compact context memory. So during GC, we'll 
+ * interrupt worker threads. The test to invite workers back will
+ * be delayed until wikrt_api_exit, to avoid the scenario where a
+ * worker thread is waiting on an API operation.
+ */
+void wikrt_api_enter(wikrt_cx*);
+void wikrt_api_exit(wikrt_cx*);
+void wikrt_api_gc(wikrt_cx*);
+bool wikrt_api_prealloc(wikrt_cx*, wikrt_z amt);
 
 #define WIKRT_H
 #endif

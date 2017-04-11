@@ -60,13 +60,15 @@ wikrt_v wikrt_reg_get(wikrt_cx* cx, wikrt_r const r)
 
 void wikrt_reg_write(wikrt_cx* cx, wikrt_r const r, wikrt_v const vw)
 {
-    // write a (v0, vw) logical composition cell. This addends the written
-    // value vw to the current value v0. 
+    if(0 == vw) { return; } // nothing to write
+
     assert(wikrt_thread_mem_available(&(cx->memory), WIKRT_REG_WRITE_PREALLOC));
     wikrt_v const v0 = wikrt_reg_get(cx, r);
     if(0 == v0) { 
+        // sufficient to set the value.
         wikrt_reg_set(cx, r, vw); 
     } else {
+        // use logical composition / concatenation 
         wikrt_a const a = wikrt_thread_alloc(&(cx->memory), WIKRT_CELLSIZE);
         wikrt_v* const p = (wikrt_v*)a;
         p[0] = v0;

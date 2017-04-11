@@ -33,8 +33,8 @@ uint64_t wikrt_thread_time()
         abort();
     }
     uint64_t const usec_sec = ((uint64_t)tm.tv_sec) * (1000 * 1000);
-    uint64_t const usec_nsec = ((uint64_t)tm.tv_nsec) / 1000;
-    return (usec_sec + usec_nsec);
+    uint64_t const usec_usec = ((uint64_t)tm.tv_nsec) / 1000;
+    return (usec_sec + usec_usec);
 }
 
 void wikrt_hash(char* const h, uint8_t const* const data, size_t const data_size)
@@ -69,12 +69,10 @@ void wikrt_env_destroy(wikrt_env* e)
     wikrt_halt_threads(e);
 
     // We require that no contexts exist when this is called.
-    _Static_assert(WIKRT_ENV_HAS_TWO_CONTEXT_LISTS,
-        "expecting context has only cxs and cxw context lists");
-    bool const env_inactive = (NULL == e->cxs) 
-                           && (NULL == e->cxw);
-    if(!env_inactive) {
-        fprintf(stderr, "%s environment destroyed still has contexts\n", __FUNCTION__);
+    bool const inactive = (0 == e->cxct);
+    if(!inactive) {
+        fprintf(stderr, "%s environment destroyed still has %d contexts\n"
+            , __FUNCTION__, (int) e->cxct);
         abort();
     }
 
@@ -164,72 +162,53 @@ void wikrt_env_threadpool(wikrt_env* e, uint32_t ct)
     pthread_mutex_unlock(&(e->mutex));
 }
 
-void wikrt_add_cx_list(wikrt_cx** plist, wikrt_cx* cx) 
+void wikrt_cx_work_enqueue(wikrt_cx* cx) 
 {
-    // may not already be part of any list
-    assert((NULL == cx->cxp) 
-        && (NULL == cx->cxn));
-
-    // addend to a circular linked list
-    // assumes exclusive access to *plist
-    if(NULL == *plist) {
-        cx->cxp = cx;
-        cx->cxn = cx;
+    if(NULL != cx->wqp) { 
+        // already in queue (NOP)
+        assert(NULL != cx->wqn);
+    } else if(NULL == cx->env->wq) {
+        // first in queue
+        cx->wqn = cx;
+        cx->wqp = cx;
+        cx->env->wq = cx;
     } else {
-        cx->cxp = (*plist)->cxp;
-        cx->cxn = (*plist);
+        // addend to queue
+        cx->wqn = cx->env->wq;
+        cx->wqp = cx->wqn->wqp;
+        cx->wqp->wqn = cx;
+        cx->wqn->wqp = cx;
     }
-    cx->cxp->cxn = cx;
-    cx->cxn->cxp = cx;
-    (*plist) = cx;
 }
-void wikrt_rem_cx_list(wikrt_cx** plist, wikrt_cx* const cx)
+void wikrt_cx_work_queue_remove(wikrt_cx* const cx)
 {
-    // extract from circular linked list
-    if(cx == cx->cxn) {
-        assert(cx == (*plist));
-        (*plist) = NULL;
+    if(NULL == cx->wqp) {
+        // not in queue (NOP)
+        assert(NULL == cx->wqn);
+    } else if(cx == cx->wqn) {
+        assert((cx == cx->wqp) && (cx == cx->env->wq));
+        cx->env->wq = NULL;
     } else {
-        if(cx == (*plist)) {
-            (*plist) = cx->cxn;
+        assert((cx != cx->wqn) && (cx != cx->wqp));
+        assert((cx == cx->wqn->wqp) && (cx == cx->wqp->wqn));
+        cx->wqn->wqp = cx->wqp;
+        cx->wqp->wqn = cx->wqn;
+        if(cx == cx->env->wq) {
+            cx->env->wq = cx->wqn;
         }
-        cx->cxp->cxn = cx->cxn;
-        cx->cxn->cxp = cx->cxp;
     }
-
-    // indicate not part of any list
-    cx->cxp = NULL;
-    cx->cxn = NULL;
-}
-
-void wikrt_cx_move_to_env_worklist(wikrt_cx* cx)
-{
-    _Static_assert(WIKRT_ENV_HAS_TWO_CONTEXT_LISTS, "expecting in cxs or cxw");
-    if(!(cx->in_env_worklist)) {
-        wikrt_rem_cx_list(&(cx->env->cxs), cx);
-        wikrt_add_cx_list(&(cx->env->cxw), cx);
-        cx->in_env_worklist = true;
-    } 
+    cx->wqp = NULL;
+    cx->wqn = NULL;
 }
 
 void wikrt_cx_signal_work(wikrt_cx* cx)
 {
-    // Note: we'll signal one thread only, but each worker may
-    // signal another and so on based on heuristic decisions.    
+    // Note: we'll signal one thread only, but a worker may
+    // signal another based on heuristic decisions.
     pthread_mutex_lock(&(cx->env->mutex));
     wikrt_cx_move_to_env_worklist(cx);
     pthread_mutex_unlock(&(cx->env->mutex));
     pthread_cond_signal(&(cx->env->work_available));
-}
-
-void wikrt_cx_remove_from_env_worklist(wikrt_cx* cx)
-{
-    _Static_assert(WIKRT_ENV_HAS_TWO_CONTEXT_LISTS, "expecting in cxs or cxw");
-    if(cx->in_env_worklist) {
-        wikrt_rem_cx_list(&(cx->env->cxw), cx);
-        wikrt_add_cx_list(&(cx->env->cxs), cx);
-        cx->in_env_worklist = false; 
-    }
 }
 
 void wikrt_cx_interrupt_work(wikrt_cx* cx)
@@ -237,14 +216,12 @@ void wikrt_cx_interrupt_work(wikrt_cx* cx)
     // must not be called from a worker thread
     pthread_mutex_lock(&(cx->env->mutex));
     wikrt_cx_remove_from_env_worklist(cx); 
-    cx->workers_halt = true;
     if(0 != cx->worker_count) {
         // wait for worker threads to leave this thread
         pthread_cond_wait(&(cx->workers_done), &(cx->env->mutex));
     }
     assert(0 == cx->worker_count);
     assert(!(cx->in_env_worklist));
-    cx->workers_halt = false; 
     pthread_mutex_unlock(&(cx->env->mutex));
 }
 
@@ -266,9 +243,10 @@ wikrt_cx* wikrt_cx_create(wikrt_env* const env, char const* dict_name, size_t si
     cx->mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     cx->workers_done = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
 
-    // add context to environment
+    // add context to environment. At the moment, this is just a
+    // context count to help detect errors.
     pthread_mutex_lock(&(cx->env->mutex));
-    wikrt_add_cx_list(&(cx->env->cxs), cx);
+    ++(cx->env->cxct);
     pthread_mutex_unlock(&(cx->env->mutex));
 
     // use wikrt_cx_reset to initialize allocators, etc.
@@ -295,7 +273,8 @@ void wikrt_cx_destroy(wikrt_cx* cx)
 
     // remove context from environment
     pthread_mutex_lock(&(cx->env->mutex));
-    wikrt_rem_cx_list(&(cx->env->cxs), cx);
+    assert(cx->env->cxct > 0);
+    --(cx->env->cxct);
     pthread_mutex_unlock(&(cx->env->mutex));
 
     // release POSIX resources as needed
@@ -360,8 +339,7 @@ wikrt_z wikrt_compute_alloc_space(wikrt_z const space_total)
 
 void wikrt_cx_alloc_reset(wikrt_cx* cx)
 {
-    assert(wikrt_cx_unshared(cx));
-    cx->memory = (wikrt_thread){0};
+    cx->memory       = (wikrt_thread){0};
     cx->memory.cx    = cx;
     cx->memory.start = wikrt_cellbuff( ((wikrt_a)cx) + sizeof(wikrt_cx) );  
     cx->memory.end   = ((wikrt_a)cx) + cx->size; // exact
@@ -408,6 +386,39 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
     wikrt_set_effort(cx, WIKRT_CX_DEFAULT_EFFORT);
 }
 
+void wikrt_cx_gc(wikrt_cx* cx)
+{
+    wikrt_api_enter(cx);
+    wikrt_api_gc(cx);
+    wikrt_api_exit(cx);
+}
+
+
+bool wikrt_api_prealloc(wikrt_cx* cx, wikrt_z amt)
+{
+    // assumes we've already done wikrt_api_enter.
+    if(wikrt_thread_mem_available(&(cx->memory), amt)) {
+        return true;
+    }
+    wikrt_api_gc(cx);
+    return wikrt_thread_mem_available(&(cx->memory), amt);
+}
+
+void wikrt_api_gc(wikrt_cx* cx)
+{
+    // in this case we have cx->mutex on entry. 
+    cx->memory.alloc = cx->memory.stop;
+    cx->interrupt = true;
+    pthread_mutex_unlock(&(cx->mutex));
+
+    wikrt_cx_interrupt_work(cx);
+
+    pthread_mutex_lock(&(cx->mutex));
+
+    
+}
+
+
 void wikrt_thread_poll_waiting(wikrt_thread* thread)
 {
     wikrt_v* waitlist = &(thread->waiting);
@@ -435,18 +446,9 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
         assert(0 == cx->worker_count);
         cx->memory.effort = 0;
     } else {
-        pthread_mutex_lock(&(cx->mutex));
+        wikrt_api_enter(cx);
         cx->memory.effort = effort;
-        wikrt_thread_poll_waiting(&(cx->memory));
-        bool const try_work = (0 != cx->memory.ready);
-        pthread_mutex_unlock(&(cx->mutex));
-
-        // signal work available to continue background
-        // parallelism if effort is set positive and at
-        // least a little work is available.
-        if(try_work) {
-            wikrt_cx_signal_work(cx);
-        }
+        wikrt_api_exit(cx);
     }
 }
 
@@ -458,22 +460,12 @@ void wikrt_debug_trace(wikrt_cx* cx, bool enable)
     pthread_mutex_unlock(&(cx->mutex));
 }
 
-bool wikrt_cx_api_prealloc(wikrt_cx* cx, wikrt_z amt)
-{
-    if(wikrt_thread_mem_available(&(cx->memory), amt)) {
-        return true;
-    }
-    wikrt_cx_gc_with_lock(cx);
-    return wikrt_thread_mem_available(&(cx->memory), amt);
-}
 
 bool wikrt_debug_trace_move(wikrt_cx* cx, wikrt_r dst)
 {   
-    pthread_mutex_lock(&(cx->mutex));
-    if(0 == cx->memory.trace) { return true; }
-
-    if(!wikrt_cx_api_prealloc(cx, WIKRT_REG_WRITE_PREALLOC)) {
-        pthread_mutex_unlock(&(cx->mutex));
+    wikrt_api_enter(cx);
+    if(!wikrt_api_prealloc(cx, WIKRT_REG_WRITE_PREALLOC)) {
+        wikrt_api_exit(cx);
         errno = ENOMEM;
         return false;
     }
@@ -481,7 +473,7 @@ bool wikrt_debug_trace_move(wikrt_cx* cx, wikrt_r dst)
     // addend trace to existing register
     wikrt_reg_write(cx, dst, cx->memory.trace);
     cx->memory.trace = 0;
-    pthread_mutex_unlock(&(cx->mutex));
+    wikrt_api_exit(cx);
     return true;
 }
    
@@ -496,19 +488,18 @@ void wikrt_prof_stack(wikrt_cx* cx, bool enable)
 
 bool wikrt_prof_stack_move(wikrt_cx* cx, wikrt_r dst)
 {
-    pthread_mutex_lock(&(cx->mutex));
-    if(0 == cx->memory.prof) { return true; }
-
-    if(!wikrt_cx_api_prealloc(cx, WIKRT_REG_WRITE_PREALLOC)) {
-        pthread_mutex_unlock(&(cx->mutex));
+    wikrt_api_enter(cx);
+    if(!wikrt_api_prealloc(cx, WIKRT_REG_WRITE_PREALLOC)) {
+        wikrt_api_exit(cx);
         errno = ENOMEM;
         return false;
     }
     wikrt_reg_write(cx, dst, cx->memory.prof);
     cx->memory.prof = 0;
-    pthread_mutex_unlock(&(cx->mutex));
+    wikrt_api_exit(cx);
     return true;
 }
+
 
 #if 0
 bool wikrt_alloc_binary_temp(wikrt_cx* cx, uint8_t const* data, size_t amt)
@@ -535,6 +526,11 @@ bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt)
 
 size_t wikrt_read(wikrt_cx* cx, wikrt_r r, uint8_t* const buff, size_t const max)
 {
+    // todo: 
+    //   rewrite specified register to binary fragment stream
+    //   process output stream in chunks.
+    //
+    // for now, I can make this a single operation.
     return 0;
 }
 
