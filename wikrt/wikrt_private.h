@@ -316,6 +316,11 @@ typedef struct wikrt_bignum { wikrt_o o; uint32_t w[]; } wikrt_bignum;
  * barrier against accessing results for parallel evaluations. 
  * Tasks have some registers for ongoing computation and slots
  * for managing task queues.
+ *
+ * In some cases, a task will wait upon another. Ideally, we
+ * can directly track these waits such that the client task
+ * may continue immediately. However, this doesn't work well
+ * with the current GC model.
  * 
  * Relevant attributes: complete, waiting, stability
  *
@@ -604,7 +609,7 @@ typedef struct wikrt_thread {
 
     // Tasks to Perform.
     wikrt_v ready;      // tasks we can work on now
-    wikrt_v waiting;    // tasks waiting on promotions
+    wikrt_v waiting;    // tasks waiting on others
 
     // Debug Logs - thread local; moved to cx->memory when stable
     wikrt_v trace;      // (trace) messages 
@@ -663,9 +668,9 @@ void wikrt_reg_write(wikrt_cx*, wikrt_r, wikrt_v);
  * If a dictionary name is an invalid word or is larger than its
  * secure hash, we'll rewrite it to the secure hash of the name.
  *
- * For parallelism, a context may be placed in a linked list where
- * a worker thread can find it. The context will always be removed
- * from this list by said context
+ * For parallelism, a context may be placed in a work queue. For MT
+ * safety involving exclusive control of a context, it is permitted
+ * to lock cx->mutex while holding cx->env->mutex.
  *
  * A challenge: I need full GC of the context by worker threads for
  * background parallelism, and I also need stable memory for API ops.
@@ -725,7 +730,6 @@ wikrt_z wikrt_compute_alloc_space(wikrt_z space_total); // include GC reserve sp
 
 void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
 void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
-void wikrt_cx_interrupt_work(wikrt_cx*);    
 void wikrt_cx_signal_work(wikrt_cx*);       // invites a worker thread
 bool wikrt_cx_work_available(wikrt_cx*);    // assumes mutex held
 size_t wikrt_word_len(uint8_t const* const src, size_t maxlen);
@@ -767,10 +771,20 @@ static inline wikrt_a wikrt_thread_alloc(wikrt_thread* const t, wikrt_z amt)
  * be delayed until wikrt_api_exit, to avoid the scenario where a
  * worker thread is waiting on an API operation.
  */
-void wikrt_api_enter(wikrt_cx*);
+static inline void wikrt_api_enter(wikrt_cx* cx) {
+    pthread_mutex_lock(&(cx->mutex));
+}
 void wikrt_api_exit(wikrt_cx*);
 void wikrt_api_gc(wikrt_cx*);
-bool wikrt_api_prealloc(wikrt_cx*, wikrt_z amt);
+void wikrt_api_interrupt(wikrt_cx*);    
+static inline bool wikrt_api_prealloc(wikrt_cx* cx, wikrt_z amt) {
+    if(wikrt_thread_mem_available(&(cx->memory),amt)) { return true; }
+    wikrt_api_gc(cx);
+    return wikrt_thread_mem_available(&(cx->memory), amt);
+}
+static inline wikrt_a wikrt_api_alloc(wikrt_cx* cx, wikrt_z amt) {
+    return wikrt_thread_alloc(&(cx->memory), amt);
+}
 
 #define WIKRT_H
 #endif

@@ -162,7 +162,7 @@ void wikrt_env_threadpool(wikrt_env* e, uint32_t ct)
     pthread_mutex_unlock(&(e->mutex));
 }
 
-void wikrt_cx_work_enqueue(wikrt_cx* cx) 
+static void wikrt_wq_add(wikrt_cx* cx) 
 {
     if(NULL != cx->wqp) { 
         // already in queue (NOP)
@@ -180,7 +180,17 @@ void wikrt_cx_work_enqueue(wikrt_cx* cx)
         cx->wqn->wqp = cx;
     }
 }
-void wikrt_cx_work_queue_remove(wikrt_cx* const cx)
+
+void wikrt_cx_signal_work(wikrt_cx* cx)
+{
+    // add context to work queue, then signal workers.
+    pthread_mutex_lock(&(cx->env->mutex));
+    wikrt_wq_add(cx);
+    pthread_mutex_unlock(&(cx->env->mutex));
+    pthread_cond_signal(&(cx->env->work_available));
+}
+
+static void wikrt_wq_rem(wikrt_cx* const cx)
 {
     if(NULL == cx->wqp) {
         // not in queue (NOP)
@@ -201,28 +211,23 @@ void wikrt_cx_work_queue_remove(wikrt_cx* const cx)
     cx->wqn = NULL;
 }
 
-void wikrt_cx_signal_work(wikrt_cx* cx)
+void wikrt_api_interrupt(wikrt_cx* cx)
 {
-    // Note: we'll signal one thread only, but a worker may
-    // signal another based on heuristic decisions.
-    pthread_mutex_lock(&(cx->env->mutex));
-    wikrt_cx_move_to_env_worklist(cx);
-    pthread_mutex_unlock(&(cx->env->mutex));
-    pthread_cond_signal(&(cx->env->work_available));
-}
+    // tell all worker threads to leave ASAP.
+    cx->interrupt = true;
+    pthread_mutex_unlock(&(cx->mutex));
 
-void wikrt_cx_interrupt_work(wikrt_cx* cx)
-{
-    // must not be called from a worker thread
     pthread_mutex_lock(&(cx->env->mutex));
-    wikrt_cx_remove_from_env_worklist(cx); 
+    // wait until all worker threads have left.
     if(0 != cx->worker_count) {
-        // wait for worker threads to leave this thread
         pthread_cond_wait(&(cx->workers_done), &(cx->env->mutex));
     }
-    assert(0 == cx->worker_count);
-    assert(!(cx->in_env_worklist));
+    wikrt_wq_rem(cx);
+
+    // ensure exclusive control for the caller.
+    pthread_mutex_lock(&(cx->mutex));
     pthread_mutex_unlock(&(cx->env->mutex));
+    cx->interrupt = false;
 }
 
 wikrt_cx* wikrt_cx_create(wikrt_env* const env, char const* dict_name, size_t size)
@@ -243,8 +248,8 @@ wikrt_cx* wikrt_cx_create(wikrt_env* const env, char const* dict_name, size_t si
     cx->mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     cx->workers_done = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
 
-    // add context to environment. At the moment, this is just a
-    // context count to help detect errors.
+    // add record of context to environment. 
+    // At the moment, just a context count.
     pthread_mutex_lock(&(cx->env->mutex));
     ++(cx->env->cxct);
     pthread_mutex_unlock(&(cx->env->mutex));
@@ -268,10 +273,11 @@ void wikrt_cx_destroy(wikrt_cx* cx)
     pthread_mutex_unlock(&(cx->mutex));
 
     // clear data, halting activity if any
+    // most logic here is in wikrt_cx_reset.
     cx->frozen = false; // can't reset a frozen context
     wikrt_cx_reset(cx, NULL); 
 
-    // remove context from environment
+    // remove record of context from environment
     pthread_mutex_lock(&(cx->env->mutex));
     assert(cx->env->cxct > 0);
     --(cx->env->cxct);
@@ -355,7 +361,8 @@ void wikrt_cx_alloc_reset(wikrt_cx* cx)
 
 void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 {
-    wikrt_cx_interrupt_work(cx);
+    // halt existing operations ASAP
+    wikrt_set_effort(cx,0);
 
     if(cx->frozen) {
         fprintf(stderr, "%s: a frozen context cannot be reset\n", __FUNCTION__);
@@ -393,29 +400,27 @@ void wikrt_cx_gc(wikrt_cx* cx)
     wikrt_api_exit(cx);
 }
 
-
-bool wikrt_api_prealloc(wikrt_cx* cx, wikrt_z amt)
-{
-    // assumes we've already done wikrt_api_enter.
-    if(wikrt_thread_mem_available(&(cx->memory), amt)) {
-        return true;
-    }
-    wikrt_api_gc(cx);
-    return wikrt_thread_mem_available(&(cx->memory), amt);
-}
-
 void wikrt_api_gc(wikrt_cx* cx)
 {
-    // in this case we have cx->mutex on entry. 
-    cx->memory.alloc = cx->memory.stop;
-    cx->interrupt = true;
+    wikrt_api_interrupt(cx); // stop worker threads
+    // todo: perform a full context GC.
+    // (not much point bothering with minor GC yet.)
+}
+
+bool wikrt_cx_should_invite_workers(wikrt_cx* cx)
+{
+    // 
+    return (0 != cx->memory.ready) && (0 != cx->memory.effort);
+}
+
+void wikrt_api_exit(wikrt_cx* cx)
+{
+    bool const invite = wikrt_cx_should_invite_workers(cx);
     pthread_mutex_unlock(&(cx->mutex));
 
-    wikrt_cx_interrupt_work(cx);
-
-    pthread_mutex_lock(&(cx->mutex));
-
-    
+    // signal work after every API operation, if potentially useful.
+    // It doesn't hurt much if the work we can perform is limited.
+    if(invite) { wikrt_cx_signal_work(cx); }
 }
 
 
@@ -441,15 +446,10 @@ void wikrt_thread_poll_waiting(wikrt_thread* thread)
 
 void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
 {
-    if(0 == effort) {
-        wikrt_cx_interrupt_work(cx);
-        assert(0 == cx->worker_count);
-        cx->memory.effort = 0;
-    } else {
-        wikrt_api_enter(cx);
-        cx->memory.effort = effort;
-        wikrt_api_exit(cx);
-    }
+    wikrt_api_enter(cx);
+    if(0 == effort) { wikrt_api_interrupt(cx); }
+    cx->memory.effort = effort;
+    wikrt_api_exit(cx);
 }
 
 void wikrt_debug_trace(wikrt_cx* cx, bool enable)

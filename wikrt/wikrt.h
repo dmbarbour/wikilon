@@ -52,11 +52,7 @@ typedef struct wikrt_env wikrt_env;
  * Given a context, we can evaluate code and search or transactionally 
  * update the dictionary.
  *
- * The context should be considered single-threaded at this API. Any
- * parallelism is achieved using `(par)` annotations and background 
- * threads, not via concurrent calls on a context API. Only a single
- * transaction is supported. Limited multi-tasking is possible using
- * registers for multiple inputs and outputs.
+ * A context is not generally multi-thread safe
  */
 typedef struct wikrt_cx wikrt_cx;
 
