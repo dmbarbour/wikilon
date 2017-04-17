@@ -67,6 +67,7 @@ int main(int argc, char const* const* args)
 
 void runTCX(char const* testName, bool (*test)(wikrt_cx*), wikrt_cx* cx)
 {
+    fprintf(stderr, "in test %s\n", testName);
     wikrt_cx_reset(cx, NULL); // clear context, empty dictionary
     ++tests_run;
     if(test(cx)) { 
@@ -148,9 +149,8 @@ bool test_parse_check(wikrt_cx* _unused)
         && reject_parse(" \"\nhello\n\" ")  // missing SP indent
         && reject_parse(" \"\n hello\n ")   // missing text terminal
         && accept_parse("\"\n hello\n multi-line\n text\n\" ")
-        && accept_parse("[\"\n hello\n multi-line\n text\n\"] ")
-        && accept_parse("[\"\n hello\n multi-line text\n\"]")
-        && accept_parse("\"\n hello\n multi-line text\n\"@d")
+        && accept_parse("[\"\n hello\n multi-line text\n\"] ")
+        && accept_parse("\"\n hello\n multi-line text\n\"@d\n")
         && accept_parse("\"\n\n\n hello\n\n\n\" ")
         // hierarchical namespace qualifiers
         && accept_parse(" 42@baz ")
@@ -165,8 +165,9 @@ bool test_parse_check(wikrt_cx* _unused)
         && reject_parse("() ")
         && reject_parse("( ) ")
         && reject_parse("([]) ")
-        && reject_parse("(@d) ")
+        && reject_parse("(x@y) ")
         && reject_parse("(foo@d) ")
+        && reject_parse("(@d) ")
         && accept_parse("[foo](a2)(par)i ")
         && accept_parse("[foo]@d(a2)(par)i ")
         && accept_parse(" (~z)@d(par)@y(foo)x ")

@@ -188,7 +188,6 @@ typedef enum wikrt_otype
 , WIKRT_OTYPE_BLOCK     // flat sequence of code
 , WIKRT_OTYPE_ARRAY     // compact list value
 , WIKRT_OTYPE_BINARY    // array of byte values
-, WIKRT_OTYPE_BIGNUM    // natural numbers
 
     // Special Cases
 , WIKRT_OTYPE_TASK      // a fragment of code under evaluation
@@ -205,16 +204,25 @@ typedef enum wikrt_otype
 
 static inline wikrt_otype wikrt_get_otype(wikrt_v v) { return (WIKRT_O_TYPE & *(wikrt_v2p(v))); }
 
-/** PTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_PAIR */
+/** PTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_PAIR 
+ *
+ * This allows interpretation of a representation. Binaries could
+ * represent objects, texts, or large natural numbers. We can also
+ * represent a logically reversed array, list, or binary.
+ */
 typedef enum wikrt_ptype 
 { WIKRT_PTYPE_BINARY_RAW    // wrap a binary object
 , WIKRT_PTYPE_UTF8_TEXT     // wrap a binary as text
+, WIKRT_PTYPE_BIGNUM        // wrap a binary as bignum
 , WIKRT_PTYPE_ARRAY_REVERSE // reverse array or binary
 , WIKRT_PTYPE_ERROR         // [value](error)
 // maybe a fixpoint block wrapper?
 } wikrt_ptype;
 
-/** QTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_QUAD */
+/** QTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_QUAD 
+ *
+ * This gives us three fields after the header.
+ */
 typedef enum wikrt_qtype
 { WIKRT_QTYPE_ARRAY_APPEND  // size, left, right. (Size may be blank.)
 , WIKRT_QTYPE_ARRAY_SLICE   // offset, size, array.
@@ -280,7 +288,6 @@ typedef struct wikrt_binary { wikrt_o o; uint8_t b[]; } wikrt_binary;
  * above big natural numbers, whereas small integers and useful
  * decimals (on a 64-bit system) can be modeled via small values.
  */
-typedef struct wikrt_bignum { wikrt_o o; uint32_t w[]; } wikrt_bignum;
 
 /** Words
  *
@@ -634,25 +641,31 @@ void wikrt_thread_poll_waiting(wikrt_thread*);
 void wikrt_thread_move_ready_r(wikrt_thread*);
 
 /** Registers Table
+ * 
+ * Registers are recorded in a simple linear collision hash table, a pair
+ * for IDs and values that permits about a 2/3 fill. This ensures a O(1)
+ * cost for register operations, though degenerate cases are possible.
  *
- * Currently the registers table is a linear linked list in order of
- * most recent use. In the future, I might favor a binary search tree.
- * But for now, keeping it simple is more valuable than performance.
+ * At the moment, the registers table grows monotonically, based on maximum
+ * number in use during a context's history.  
  */
-typedef struct wikrt_rtb_node {
-    wikrt_o otype;
-    wikrt_r regid;
+typedef struct wikrt_rtb {
+    wikrt_v ids;
     wikrt_v data;
-    wikrt_v next;
-} wikrt_rtb_node;
+    wikrt_z fill;
+    wikrt_z size;
+} wikrt_rtb;
 
-#define WIKRT_REG_SET_PREALLOC WIKRT_CELLBUFF(sizeof(wikrt_rtb_node))
-void wikrt_reg_set(wikrt_cx*, wikrt_r, wikrt_v); // assumes lock, prealloc
-wikrt_v wikrt_reg_get(wikrt_cx*, wikrt_r); // assumes lock, always succeeds
+// rtb_prealloc assumes api_enter. 
+// reg_set assumes rtb_prealloc for target register
+bool wikrt_rtb_resize(wikrt_cx*, wikrt_z);
+bool wikrt_rtb_prealloc(wikrt_cx* cx, wikrt_z amt);
+void wikrt_reg_set(wikrt_cx*, wikrt_r, wikrt_v);
+wikrt_v wikrt_reg_get(wikrt_cx*, wikrt_r);
 
-// write will addend register binary
-#define WIKRT_REG_WRITE_PREALLOC (WIKRT_CELLSIZE + WIKRT_REG_SET_PREALLOC)
+// addend to existing value
 void wikrt_reg_write(wikrt_cx*, wikrt_r, wikrt_v);
+#define WIKRT_REG_WRITE_PREALLOC WIKRT_CELLSIZE
 
 /** A context.
  *
@@ -714,8 +727,8 @@ struct wikrt_cx {
     uint8_t         dict_ver[WIKRT_HASH_SIZE + 4];  // an import/export hash val (NUL terminated)
     wikrt_v         words;              // words table in context memory
 
-    // Register Table Root (a binary tree)
-    wikrt_v         rtb;
+    // Registers Table
+    wikrt_rtb       rtb;
 
     // todo:
     // Stowage tracking: need to know all stowage roots
@@ -777,7 +790,7 @@ static inline void wikrt_api_enter(wikrt_cx* cx) {
 void wikrt_api_exit(wikrt_cx*);
 void wikrt_api_gc(wikrt_cx*);
 void wikrt_api_interrupt(wikrt_cx*);    
-static inline bool wikrt_api_prealloc(wikrt_cx* cx, wikrt_z amt) {
+static inline bool wikrt_api_mem_prealloc(wikrt_cx* cx, wikrt_z amt) {
     if(wikrt_thread_mem_available(&(cx->memory),amt)) { return true; }
     wikrt_api_gc(cx);
     return wikrt_thread_mem_available(&(cx->memory), amt);
@@ -785,6 +798,11 @@ static inline bool wikrt_api_prealloc(wikrt_cx* cx, wikrt_z amt) {
 static inline wikrt_a wikrt_api_alloc(wikrt_cx* cx, wikrt_z amt) {
     return wikrt_thread_alloc(&(cx->memory), amt);
 }
+static inline bool wikrt_api_prealloc(wikrt_cx* cx, wikrt_z nRegisters, wikrt_z nBytes) {
+    return wikrt_rtb_prealloc(cx, nRegisters)
+        && wikrt_api_mem_prealloc(cx, nBytes);
+}
+
 
 #define WIKRT_H
 #endif

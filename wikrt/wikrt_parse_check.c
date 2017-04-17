@@ -100,8 +100,8 @@ bool wikrt_parse_check(uint8_t const* const start, size_t const input_size, wikr
             --(r.balance);
             scan = scan_ns_qualifier(scan, end);
         } else if('(' == c) { // annotations
-            if((end == scan) || !is_valid_word_byte(*(++scan))) { goto parse_halt; }
-            scan = scan_valid_word(scan, end);
+            if((end == scan) || !is_valid_word_byte(*scan)) { goto parse_halt; }
+            scan = scan_valid_word(1+scan, end);
             if((end == scan) || (')' != *scan)) { goto parse_halt; }
             scan = scan_ns_qualifier(1+scan, end);
         } else if('"' == c) { // embedded texts

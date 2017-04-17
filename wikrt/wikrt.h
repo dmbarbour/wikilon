@@ -147,16 +147,15 @@ wikrt_env* wikrt_cx_env(wikrt_cx*);
  * we'll use an efficient intermediate representation, but on read
  * the program must be serialized back to a binary.
  * 
- * To support multi-tasking and partial evaluation within a context,
- * multiple binary registers are supported, each containing a binary
- * value. Registers are named by integers. Allocation and management
- * of registers is left to clients. (Note: At this time, using many
- * registers has significant overheads.)
+ * For multi-tasking, debugging, profiling, and partial evaluation in
+ * a context, multiple registers are used. Registers are named using
+ * simple integers, and default to the empty binary. Allocation and
+ * management of registers is left to the client.
  *
  * Writes may fail atomically with ENOMEM. If a write fails, nothing
  * was written. Reads may return fewer bytes than requested and set
  * errno to ENODATA (register is empty) or ENOMEM (if serialization
- * stack hits memory limits).
+ * hits memory limits).
  */
 typedef uint64_t wikrt_r;
 bool wikrt_write(wikrt_cx*, wikrt_r, uint8_t const*, size_t);

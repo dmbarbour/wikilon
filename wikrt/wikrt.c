@@ -384,10 +384,11 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
     cx->trace_enable    = false;
     cx->prof_enable     = false;
     cx->words           = 0;
-    cx->rtb             = 0;
+    cx->rtb             = (wikrt_rtb){0};
     cx->dict_ver[0]     = 0;
     wikrt_cx_reset_dict(cx, dict_name);
     wikrt_cx_alloc_reset(cx);
+    wikrt_rtb_prealloc(cx, 16);
 
     // set an initial effort quota
     wikrt_set_effort(cx, WIKRT_CX_DEFAULT_EFFORT);
@@ -409,18 +410,17 @@ void wikrt_api_gc(wikrt_cx* cx)
 
 bool wikrt_cx_should_invite_workers(wikrt_cx* cx)
 {
-    // 
     return (0 != cx->memory.ready) && (0 != cx->memory.effort);
 }
 
 void wikrt_api_exit(wikrt_cx* cx)
 {
-    bool const invite = wikrt_cx_should_invite_workers(cx);
+    bool const have_work = (0 != cx->memory.ready) && (0 != cx->memory.effort);
     pthread_mutex_unlock(&(cx->mutex));
 
     // signal work after every API operation, if potentially useful.
     // It doesn't hurt much if the work we can perform is limited.
-    if(invite) { wikrt_cx_signal_work(cx); }
+    if(have_work) { wikrt_cx_signal_work(cx); }
 }
 
 
@@ -464,13 +464,13 @@ void wikrt_debug_trace(wikrt_cx* cx, bool enable)
 bool wikrt_debug_trace_move(wikrt_cx* cx, wikrt_r dst)
 {   
     wikrt_api_enter(cx);
-    if(!wikrt_api_prealloc(cx, WIKRT_REG_WRITE_PREALLOC)) {
+    if(!wikrt_api_prealloc(cx, 1, WIKRT_REG_WRITE_PREALLOC)) {
         wikrt_api_exit(cx);
         errno = ENOMEM;
         return false;
     }
 
-    // addend trace to existing register
+    // addend trace log to specified register
     wikrt_reg_write(cx, dst, cx->memory.trace);
     cx->memory.trace = 0;
     wikrt_api_exit(cx);
@@ -489,48 +489,86 @@ void wikrt_prof_stack(wikrt_cx* cx, bool enable)
 bool wikrt_prof_stack_move(wikrt_cx* cx, wikrt_r dst)
 {
     wikrt_api_enter(cx);
-    if(!wikrt_api_prealloc(cx, WIKRT_REG_WRITE_PREALLOC)) {
+    if(!wikrt_api_prealloc(cx, 1, WIKRT_REG_WRITE_PREALLOC)) {
         wikrt_api_exit(cx);
         errno = ENOMEM;
         return false;
-    }
+    } 
     wikrt_reg_write(cx, dst, cx->memory.prof);
     cx->memory.prof = 0;
     wikrt_api_exit(cx);
     return true;
 }
 
-
-#if 0
-bool wikrt_alloc_binary_temp(wikrt_cx* cx, uint8_t const* data, size_t amt)
+static inline wikrt_z wikrt_write_frag_prealloc(wikrt_z const amt) 
 {
-    // Allocate and copy the binary (via temp register)
-    wikrt_a addr;
-    if(!wikrt_alloc(cx, &addr, (WIKRT_CELLSIZE + amt))) { return false; }
-    cx->temp = WIKRT_VOBJ | addr;
-
-    wikrt_binary* const b = (wikrt_binary*)addr;
-    b->otype_binary = WIKRT_OTYPE_BINARY;
-    b->size = amt;
-    memcpy(b->data, data, amt);
-    return true;
+    // binary + ptype wrapper + reg write
+    return wikrt_cellbuff(sizeof(wikrt_o) + amt)
+         + (WIKRT_CELLSIZE + WIKRT_REG_WRITE_PREALLOC);
 }
-#endif
+
+static inline wikrt_z wikrt_write_bytes_needed(size_t amt) 
+{
+    // total cost for write
+    wikrt_z needed = 0;
+    while(amt > 0) {
+        wikrt_z const frag_size = (amt > WIKRT_O_DATA_MAX) ? WIKRT_O_DATA_MAX : amt;
+        // max overhead for binary fragment, PTYPE, and register write 
+        needed += wikrt_write_frag_prealloc(frag_size);
+        amt    -= frag_size;
+    }
+    return needed;
+}
+
+static inline void wikrt_write_frag(wikrt_cx* cx, wikrt_r r, uint8_t const* const data, wikrt_z const amt)
+{
+    // write a single binary fragment into context memory 
+    assert(WIKRT_O_DATA_MAX >= amt);
+
+    wikrt_a const bin_a = wikrt_api_alloc(cx, wikrt_cellbuff(sizeof(wikrt_o) + amt));
+    *((wikrt_o*)bin_a) = (amt << WIKRT_O_DATA_OFF) | WIKRT_OTYPE_BINARY;
+    memcpy((void*)(bin_a + sizeof(wikrt_o)), data, amt);
+
+    wikrt_a const ptype_a = wikrt_api_alloc(cx, WIKRT_CELLSIZE);
+    ((wikrt_o*)ptype_a)[0] = (WIKRT_PTYPE_BINARY_RAW << WIKRT_O_DATA_OFF) | WIKRT_OTYPE_PAIR;
+    ((wikrt_v*)ptype_a)[1] = (bin_a | WIKRT_OBJ);
+
+    wikrt_reg_write(cx, r, (ptype_a | WIKRT_OBJ)); 
+}
 
 bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt) 
 {
-    if(0 == amt) { return true; } // irrelevant write
-    errno = ENOSYS;
-    return false;
+    // if write is size zero, then it's irrelevant.
+    if(0 == amt) { return true; } 
+
+    // to avoid overflow cases, don't bother if the binary is very large.
+    if(amt > (WIKRT_Z_MAX / 2)) { errno = ENOMEM; return false; }
+    wikrt_z const bytes_needed = wikrt_write_bytes_needed(amt);
+
+    wikrt_api_enter(cx);
+    if(!wikrt_api_prealloc(cx, 1, bytes_needed)) {
+        wikrt_api_exit(cx);
+        errno = ENOMEM;
+        return false;
+    }
+
+    while(amt > 0) {
+        wikrt_z const frag_size = (amt > WIKRT_O_DATA_MAX) ? WIKRT_O_DATA_MAX : amt;
+        wikrt_write_frag(cx, r, data, frag_size);
+        data += frag_size;
+        amt  -= frag_size;
+    }
+
+    return true;
 }
 
 size_t wikrt_read(wikrt_cx* cx, wikrt_r r, uint8_t* const buff, size_t const max)
 {
-    // todo: 
-    //   rewrite specified register to binary fragment stream
-    //   process output stream in chunks.
+    // todo:
+    //  convert register argument to binary
+    //  extract binary output stream
     //
-    // for now, I can make this a single operation.
+    // Ideally, reading is incremental. But 
     return 0;
 }
 
