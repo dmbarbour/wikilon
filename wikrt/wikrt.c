@@ -397,25 +397,20 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 void wikrt_cx_gc(wikrt_cx* cx)
 {
     wikrt_api_enter(cx);
-    wikrt_api_gc(cx);
+    wikrt_api_gc(cx, WIKRT_Z_MAX);
     wikrt_api_exit(cx);
 }
 
-void wikrt_api_gc(wikrt_cx* cx)
+void wikrt_api_gc(wikrt_cx* cx, wikrt_z _amt)
 {
     wikrt_api_interrupt(cx); // stop worker threads
-    // todo: perform a full context GC.
-    // (not much point bothering with minor GC yet.)
-}
-
-bool wikrt_cx_should_invite_workers(wikrt_cx* cx)
-{
-    return (0 != cx->memory.ready) && (0 != cx->memory.effort);
+    // perform GC, use _amt as an optional GC hint for major vs. minor
+    // for now, perhaps perform major GC every time
 }
 
 void wikrt_api_exit(wikrt_cx* cx)
 {
-    bool const have_work = (0 != cx->memory.ready) && (0 != cx->memory.effort);
+    bool const have_work = (0 != cx->memory.ready);
     pthread_mutex_unlock(&(cx->mutex));
 
     // signal work after every API operation, if potentially useful.
@@ -503,7 +498,7 @@ bool wikrt_prof_stack_move(wikrt_cx* cx, wikrt_r dst)
 static inline wikrt_z wikrt_write_frag_prealloc(wikrt_z const amt) 
 {
     // binary + ptype wrapper + reg write
-    return wikrt_cellbuff(sizeof(wikrt_o) + amt)
+    return wikrt_binary_size(amt)
          + (WIKRT_CELLSIZE + WIKRT_REG_WRITE_PREALLOC);
 }
 
@@ -520,20 +515,22 @@ static inline wikrt_z wikrt_write_bytes_needed(size_t amt)
     return needed;
 }
 
+wikrt_v wikrt_alloc_binary(wikrt_thread* t, uint8_t const* const data, wikrt_z const amt)
+{
+    wikrt_a const a = wikrt_thread_alloc(t, wikrt_cellbuff(sizeof(wikrt_o) + amt));
+    *((wikrt_o*)a) = (amt << WIKRT_O_DATA_OFF) | WIKRT_OTYPE_BINARY;
+    memcpy((void*)(a + sizeof(wikrt_o)), data, amt);
+    return (WIKRT_VOBJ | a);
+}
+
 static inline void wikrt_write_frag(wikrt_cx* cx, wikrt_r r, uint8_t const* const data, wikrt_z const amt)
 {
     // write a single binary fragment into context memory 
     assert(WIKRT_O_DATA_MAX >= amt);
-
-    wikrt_a const bin_a = wikrt_api_alloc(cx, wikrt_cellbuff(sizeof(wikrt_o) + amt));
-    *((wikrt_o*)bin_a) = (amt << WIKRT_O_DATA_OFF) | WIKRT_OTYPE_BINARY;
-    memcpy((void*)(bin_a + sizeof(wikrt_o)), data, amt);
-
-    wikrt_a const ptype_a = wikrt_api_alloc(cx, WIKRT_CELLSIZE);
-    ((wikrt_o*)ptype_a)[0] = (WIKRT_PTYPE_BINARY_RAW << WIKRT_O_DATA_OFF) | WIKRT_OTYPE_PAIR;
-    ((wikrt_v*)ptype_a)[1] = (bin_a | WIKRT_OBJ);
-
-    wikrt_reg_write(cx, r, (ptype_a | WIKRT_OBJ)); 
+    wikrt_v const binary  = wikrt_alloc_binary(&(cx->memory), data, amt);
+    wikrt_v const raw = WIKRT_OBJ | wikrt_thread_alloc_cell(&(cx->memory), 
+        wikrt_new_ptype_hdr(WIKRT_PTYPE_BINARY_RAW), binary);
+    wikrt_reg_write(cx, r, raw);
 }
 
 bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt) 
@@ -543,10 +540,10 @@ bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt)
 
     // to avoid overflow cases, don't bother if the binary is very large.
     if(amt > (WIKRT_Z_MAX / 2)) { errno = ENOMEM; return false; }
-    wikrt_z const bytes_needed = wikrt_write_bytes_needed(amt);
+    wikrt_z const space_needed = wikrt_write_bytes_needed(amt);
 
     wikrt_api_enter(cx);
-    if(!wikrt_api_prealloc(cx, 1, bytes_needed)) {
+    if(!wikrt_api_prealloc(cx, 1, space_needed)) {
         wikrt_api_exit(cx);
         errno = ENOMEM;
         return false;
@@ -558,19 +555,12 @@ bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt)
         data += frag_size;
         amt  -= frag_size;
     }
+    wikrt_api_exit(cx);
 
     return true;
 }
 
-size_t wikrt_read(wikrt_cx* cx, wikrt_r r, uint8_t* const buff, size_t const max)
-{
-    // todo:
-    //  convert register argument to binary
-    //  extract binary output stream
-    //
-    // Ideally, reading is incremental. But 
-    return 0;
-}
+// read is in wikrt_read.c
 
 bool wikrt_is_empty(wikrt_cx* cx, wikrt_r r)
 {
@@ -594,9 +584,27 @@ void wikrt_clear(wikrt_cx* cx, wikrt_r r)
 
 
 
+void wikrt_cx_freeze(wikrt_cx* cx)
+{
+    // final cleanup
+    wikrt_debug_trace(cx, false);
+    wikrt_prof_stack(cx, false);
+    wikrt_eval_parallel(cx);
+    wikrt_set_effort(cx, 0);
+    wikrt_cx_gc(cx);
 
+    // perform a full GC to compact memory
+    wikrt_api_enter(cx);
+    cx->memory.alloc = cx->memory.end; // prevent further allocation
+    cx->frozen = true;                 // prevent further GC
+    wikrt_api_exit(cx);
+}
 
-
+bool wikrt_eval_parallel(wikrt_cx* cx)
+{
+    errno = ENOSYS;
+    return false;
+}
 
 
 

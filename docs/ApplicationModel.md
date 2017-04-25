@@ -33,8 +33,7 @@ Effectively, command pattern models a mutable object within a dictionary, albeit
 
 Awelon can easily evaluate in context of undefined words. A convenient idea is to treat undefined words as having a 'future' definition, to be fulfilled by human or software agents. Evaluation then usefully proceeds in context of multiple futures, enabling intermediate observations that do not depend on the definition of the future.
 
-Unlike command pattern, futures and promises can be fully monotonic. This is a very valuable feature. It means we do not need to recompute our views after an update. Instead, we can checkpoint and continue our computations as needed, without backtracking.
-
+Unlike command pattern, futures and promises can be fully monotonic. This is a very valuable feature. It means we do not need to recompute our views after an update. If the entire dictionary is monotonic, we can simply checkpoint and continue our computations as needed, without backtracking.
 
 ## Dictionary Objects
 
@@ -128,20 +127,21 @@ Awelon supports these patterns via the *Hierarchical Dictionaries* feature.
 
 In an open system, we generally want to control the authority of our agents in terms of which parts of the system they may observe or directly influence. Awelon doesn't provide much help here, beyond support for *Hierarchical Dictionaries*, which provide a natural barrier for communication that must be explicitly bridged, and a narrow interface for synchronization. Between that and internal purity, we can push most security concerns to the RESTful application models and effects layers. 
 
-
 # Programs as Processes
 
 While Awelon is designed for non-conventional apps, we can certainly model a more conventional application structure where a program directly interacts with the real world as part of a computation.
 
 ## Interactive Evaluations
 
-An agent can evaluate a program, make observations about the top of the stack, then add some input and continue. This design is somewhat semantically awkward because it isn't clear where the agent is represented except 'outside' or 'above' the program. But it fits a REPL or monadic effects (or [KPN-based effects](KPN_Effects.md)). 
+An agent can evaluate a program, render or make observations about it, then inject some input or modify code and continue evaluation. This design most clearly fits REPLs and variants (like interactive fictions). But it can also fit some GUIs, e.g. if we represent button pressing as a form of modifying code (by inlining a block or selecting a case from a record of options). More generally, monadic or [KPN based](KPN_Effects.md) IO also fits interactive evaluation: evaluation halts with some set of outputs and requests for input, and we continue evaluation after providing more inputs.
+
+Interactive evaluation at the larger dictionary level is feasible with futures/promises and a monotonic codebase, or sufficient use of memoization with the command pattern. So the main difference with interactive evaluation of programs is doing so at the anonymous program layer.
 
 ## Command Stream Processing
 
 Awelon is amenable to command stream processing. The general form is:
 
-        [proc] commandA  => commandB [proc']
+        [process] commandA  => commandB [process']
 
 This simplistic stream processing model conveniently supports composition:
 
@@ -149,6 +149,5 @@ This simplistic stream processing model conveniently supports composition:
                                  ...
                                  => commandC [procF'] [procG']
 
-We can monotonically input commands to the right hand side of our program, and incrementally output commands from the left hand side. Output commands might represent requested effects. The process object is our state. A weakness of this model is that it doesn't support feedback loops in a general sense, but we might build upon it by assuming `[proc]` to be a process network or similar.
-
+We can monotonically input commands to the right hand side of our program, and incrementally output commands from the left hand side. The process object contains any state and may have some background parallelism. This model isn't a great fit for 'interactive' evaluation, but it may work nicely with Unix-like pipelines and has an advantage of not needing an external agent to explain.
 

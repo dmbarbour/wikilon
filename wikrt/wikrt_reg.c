@@ -62,9 +62,9 @@ static void rtb_write(wikrt_rtb* const rtb, wikrt_r const r, wikrt_v const v)
 bool wikrt_rtb_resize(wikrt_cx* cx, wikrt_z new_size)
 {
     // don't permit shrinking too much
-    if((cx->rtb.fill / 2) > (new_size / 3)) { return false; }
+    if(((cx->rtb.fill + 1) / 2) > (new_size / 3)) { return false; }
 
-    wikrt_z const data_bytes = wikrt_cellbuff(sizeof(wikrt_v) * (1 + new_size));
+    wikrt_z const data_bytes = wikrt_array_size(new_size);
     wikrt_z const id_bytes = wikrt_cellbuff(WIKRT_CELLSIZE + (sizeof(wikrt_r) * new_size));
     if(!wikrt_api_mem_prealloc(cx, (data_bytes + id_bytes))) { return false; }
 
@@ -72,8 +72,8 @@ bool wikrt_rtb_resize(wikrt_cx* cx, wikrt_z new_size)
     wikrt_a const ids_addr  = wikrt_api_alloc(cx, id_bytes);
     memset((void*)data_addr, 0, data_bytes);
     memset((void*)ids_addr, 0, id_bytes);
-    *((wikrt_o*)ids_addr) = ((id_bytes - sizeof(wikrt_o)) << WIKRT_O_DATA_OFF) | WIKRT_OTYPE_BINARY;
-    *((wikrt_o*)data_addr) = (new_size << WIKRT_O_DATA_OFF) | WIKRT_OTYPE_ARRAY; 
+    *((wikrt_o*)ids_addr) = wikrt_new_obj_hdr(WIKRT_OTYPE_BINARY, id_bytes - sizeof(wikrt_o));
+    *((wikrt_o*)data_addr) = wikrt_new_obj_hdr(WIKRT_OTYPE_ARRAY, new_size);
 
     wikrt_rtb new_rtb = { 0 };
     new_rtb.ids  = ids_addr | WIKRT_VOBJ;
@@ -112,7 +112,7 @@ void wikrt_reg_set(wikrt_cx* cx, wikrt_r r, wikrt_v v)
     else { rtb_write(&(cx->rtb), r, v); }
 }
 
-wikrt_v wikrt_reg_get(wikrt_cx* cx, wikrt_r r)
+wikrt_v wikrt_reg_get(wikrt_cx const* cx, wikrt_r r)
 {
     wikrt_rtb const* rtb = &(cx->rtb);
     wikrt_z const ix = rtb_index(rtb,r);
@@ -121,96 +121,13 @@ wikrt_v wikrt_reg_get(wikrt_cx* cx, wikrt_r r)
 
 void wikrt_reg_write(wikrt_cx* cx, wikrt_r r, wikrt_v v) 
 {
-    if(0 == v) { return; }
-
-    wikrt_v const v0 = wikrt_reg_get(cx, r);
-    if(0 == v0) { wikrt_reg_set(cx, r, v); }
-    else {
-        _Static_assert(WIKRT_REG_WRITE_PREALLOC >= WIKRT_CELLSIZE, 
-            "inconsistent reg write prealloc");
-        assert(wikrt_thread_mem_available(&(cx->memory), WIKRT_CELLSIZE));
-        wikrt_a const a = wikrt_thread_alloc(&(cx->memory), WIKRT_CELLSIZE);
-        wikrt_v* const pa = (wikrt_v*)a;
-        pa[0] = v0;
-        pa[1] = v;
-        wikrt_reg_set(cx, r, (a | WIKRT_COMP)); 
-    }
-}
-
-#if 0
-void wikrt_reg_set(wikrt_cx* cx, wikrt_r const r, wikrt_v const v)
-{
-    // assumptions: 
-    //   wikrt_reg_get moves target node to root if non-zero
-    //   cx->memory has enough space for a node (WIKRT_REG_WRITE_PREALLOC)
-    //   context is locked, operation is within mutex
+    _Static_assert((WIKRT_REG_WRITE_PREALLOC == WIKRT_CELLSIZE),
+        "reg write needs only one cell at most");
     wikrt_v const v0 = wikrt_reg_get(cx,r);
-    if(v0 == v) { /* no change */ return; }  
-    else if(0 == v0) {
-        // need new register table node
-        assert(wikrt_thread_mem_available(&(cx->memory), WIKRT_REG_WRITE_PREALLOC));
-        wikrt_a const a = wikrt_thread_alloc(&(cx->memory), WIKRT_REG_WRITE_PREALLOC);
-        wikrt_rtb_node* const node = (wikrt_rtb_node*)a;
-        node->otype = WIKRT_OTYPE_RTB_NODE;
-        node->regid = r;
-        node->data  = v;
-        node->next  = cx->rtb;
-        cx->rtb     = WIKRT_VOBJ | a;
-    } else if(0 == v) {
-        // clear old register value
-        wikrt_rtb_node* const node = (wikrt_rtb_node*)wikrt_v2a(cx->rtb);
-        assert(r == node->regid);
-        cx->rtb = node->next;
-    } else {
-        // update existing register value
-        wikrt_rtb_node* const node = (wikrt_rtb_node*)wikrt_v2a(cx->rtb);
-        assert(r == node->regid);
-        node->data = v;
-    }
+    wikrt_v const vf = (0 == v0) ? v
+                     : (0 == v)  ? v0 
+                     : (WIKRT_COMP | wikrt_thread_alloc_cell(&(cx->memory), v0, v));
+    wikrt_reg_set(cx, r, vf);
 }
 
-// obtaining a register will also move the node to the head of the
-// register table, such that multiple operations on a small subset
-// of registers should be relatively efficient.
-wikrt_v wikrt_reg_get(wikrt_cx* cx, wikrt_r const r)
-{
-    // assumes lock on context
-    wikrt_v* pn = &(cx->rtb);
-    while(0 != *pn) {
-        wikrt_v const n = *pn;
-        wikrt_rtb_node* const node = (wikrt_rtb_node*)wikrt_v2a(n);
-        if(r == node->regid) {
-            // shift node to head
-            (*pn) = node->next;
-            node->next = cx->rtb;
-            cx->rtb = n;
 
-            // return non-zero register data 
-            assert(0 != node->data);
-            return node->data;
-        } 
-        pn = &(node->next);
-    }
-    return 0;
-}
-
-void wikrt_reg_write(wikrt_cx* cx, wikrt_r const r, wikrt_v const vw)
-{
-    if(0 == vw) { return; } // nothing to write
-
-    assert(wikrt_thread_mem_available(&(cx->memory), WIKRT_REG_WRITE_PREALLOC));
-    wikrt_v const v0 = wikrt_reg_get(cx, r);
-    if(0 == v0) { 
-        // sufficient to set the value.
-        wikrt_reg_set(cx, r, vw); 
-    } else {
-        // use logical composition / concatenation 
-        wikrt_a const a = wikrt_thread_alloc(&(cx->memory), WIKRT_CELLSIZE);
-        wikrt_v* const p = (wikrt_v*)a;
-        p[0] = v0;
-        p[1] = vw;
-        wikrt_reg_set(cx, r, (WIKRT_COMP | a));
-    }
-}
-
-#endif

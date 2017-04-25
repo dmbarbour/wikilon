@@ -51,6 +51,7 @@ typedef wikrt_v  wikrt_n;           // small natural number
 typedef intptr_t wikrt_i;           // small integer number
 typedef wikrt_v  wikrt_z;           // arbitrary size value
 typedef wikrt_v  wikrt_a;           // location in memory
+typedef struct wikrt_thread wikrt_thread;
 #define WIKRT_V_MAX  UINTPTR_MAX
 #define WIKRT_Z_MAX  WIKRT_V_MAX
 
@@ -58,9 +59,11 @@ typedef wikrt_v  wikrt_a;           // location in memory
 #define WIKRT_LNBUFF_POW2(SZ,LN) (((SZ) + ((LN) - 1)) & ~((LN) - 1))
 #define WIKRT_CELLSIZE (2 * sizeof(wikrt_v))
 #define WIKRT_CELLBUFF(sz) WIKRT_LNBUFF_POW2(sz, WIKRT_CELLSIZE)
+#define WIKRT_QUADSIZE (2 * WIKRT_CELLSIZE)
 #define WIKRT_FILE_MODE (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
 #define WIKRT_DIR_MODE (mode_t)(WIKRT_FILE_MODE | S_IXUSR | S_IXGRP)
 
+// worker threads don't need a lot of stack space
 #define WIKRT_WORKER_STACK_MIN (64 * 1024)
 #define WIKRT_WORKER_STACK_SIZE WIKRT_LNBUFF(WIKRT_WORKER_STACK_MIN, PTHREAD_STACK_MIN)
 
@@ -91,7 +94,8 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  * Extended Small Constants (3 bits + 00b00)
  *
  *      000     built-in primitives, accelerators, etc.
- *      (small rationals, decimals, labels, texts, etc.)
+ *      001     single raw binary bytes in stream
+ *      (small decimals, labels, texts)
  *
  *   I'm assuming 64-bit systems will be the common option. Decimals 
  *   with an 8 bit exponent (base 10) and 48-bit mantissa would cover
@@ -157,11 +161,11 @@ static inline wikrt_i wikrt_from_small_int(wikrt_v v) { return (((wikrt_i)v) >> 
 static inline wikrt_v wikrt_to_small_int_val(wikrt_i i) { return (((wikrt_v)(i << 4))|WIKRT_SMALL_INT_VAL); }
 static inline wikrt_v wikrt_to_small_int_op(wikrt_i i) { return (((wikrt_v)(i << 4))|WIKRT_SMALL_INT_OP); }
 
-/** Secure Random Data
+/** Random Data
  *
  * Wikilon Runtime doesn't need entropy for much. But one place it
  * does need some random data is allocation of the shared memory
- * ephemeron tables.
+ * ephemeron table.
  */
 void wikrt_get_entropy(size_t amt, uint8_t* out);
 
@@ -201,8 +205,11 @@ typedef enum wikrt_otype
 #define WIKRT_O_ND    (1<<7)
 #define WIKRT_O_DATA_OFF  8
 #define WIKRT_O_DATA_MAX (WIKRT_Z_MAX >> WIKRT_O_DATA_OFF)
+#define WIKRT_O_DATA_BIT(N) (1 << (N + WIKRT_O_DATA_OFF))
 
-static inline wikrt_otype wikrt_get_otype(wikrt_v v) { return (WIKRT_O_TYPE & *(wikrt_v2p(v))); }
+static inline wikrt_o     wikrt_new_obj_hdr(wikrt_otype o, wikrt_n d) { return (o | (d << WIKRT_O_DATA_OFF)); }
+static inline wikrt_otype wikrt_o_type(wikrt_v v) { return (WIKRT_O_TYPE & *(wikrt_v2p(v))); }
+static inline wikrt_n     wikrt_o_data(wikrt_o o) { return (o >> WIKRT_O_DATA_OFF); }
 
 /** PTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_PAIR 
  *
@@ -219,16 +226,22 @@ typedef enum wikrt_ptype
 // maybe a fixpoint block wrapper?
 } wikrt_ptype;
 
+static inline wikrt_o wikrt_new_ptype_hdr(wikrt_ptype p) { 
+    return wikrt_new_obj_hdr(WIKRT_OTYPE_PAIR, p); } 
+
 /** QTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_QUAD 
  *
  * This gives us three fields after the header.
  */
 typedef enum wikrt_qtype
-{ WIKRT_QTYPE_ARRAY_APPEND  // size, left, right. (Size may be blank.)
+{ WIKRT_QTYPE_ARRAY_APPEND  // size, left, right. (Size 0 is a blank.)
 , WIKRT_QTYPE_ARRAY_SLICE   // offset, size, array.
 , WIKRT_QTYPE_QUALIFIER     // e.g. [foo], @y, unused
 // maybe a JIT block wrapper?
 } wikrt_qtype;
+
+static inline wikrt_o wikrt_new_qtype_hdr(wikrt_qtype q) {
+    return wikrt_new_obj_hdr(WIKRT_OTYPE_QUAD, q); }
 
 /** Arrays
  *
@@ -241,15 +254,18 @@ typedef enum wikrt_qtype
  * is no implicit constraint to support homogeneous folds.
  */
 typedef struct wikrt_array { wikrt_o o; wikrt_v d[]; } wikrt_array;
+static inline wikrt_z wikrt_array_size(wikrt_z elems) {
+    return wikrt_cellbuff(sizeof(wikrt_v) * (1 + elems));
+}
 
 /** Blocks
  *
  * A block of code is a simple sequence of operations. However, we must
- * consider interactions with performance optimizations and profiling.
+ * consider interaction with performance optimizations and profiling.
  * 
  * Profiling: For heap profiling, we might track syntactic origin for
- * every block. This might be achieved by adding invisible operators
- * equivalent to `(in:word)`. Stack profiling requires similar data. 
+ * every block. This might be achieved by adding invisible annotations
+ * or comments to the block, representing parse origin of that block.
  *
  * Optimization: while a block should contain evaluated code, we could
  * also track arity and compute the link-optimized code (with partial
@@ -262,18 +278,12 @@ typedef struct wikrt_array { wikrt_o o; wikrt_v d[]; } wikrt_array;
  */
 typedef wikrt_array wikrt_block;
 
-/** Binary Data
- *
- * Binaries are just arrays of bytes, while raw data models unparsed
- * code or other IO resources. All initial input to a Wikilon context
- * is treated as raw data until parsed, and we'll generally translate
- * back to raw data upon output.
- * 
- * We use a WIKRT_PTYPE_BINARY_RAW wrapper for binary data embedded
- * within a larger program. This uses a quad so we can easily slice
- * the binary.
- */
+/** Binary Data - (header, bytes) with header data = size. */
 typedef struct wikrt_binary { wikrt_o o; uint8_t b[]; } wikrt_binary;
+static inline wikrt_z wikrt_binary_size(wikrt_z bytes) {
+    return wikrt_cellbuff(sizeof(wikrt_o) + bytes);
+}
+wikrt_v wikrt_alloc_binary(wikrt_thread* t, uint8_t const*, wikrt_z);
 
 /** Big Numbers
  *
@@ -349,14 +359,12 @@ typedef struct wikrt_task {
     wikrt_n amt;    // arity available in lhs
 } wikrt_task;
 
-#define WIKRT_TASK_ATTR(N) (1<<((N)+WIKRT_O_DATA_OFF))
-#define WIKRT_TASK_UNSTABLE WIKRT_TASK_ATTR(0)
-#define WIKRT_TASK_COMPLETE WIKRT_TASK_ATTR(1)
+#define WIKRT_TASK_UNSTABLE WIKRT_O_DATA_BIT(0)
+#define WIKRT_TASK_COMPLETE WIKRT_O_DATA_BIT(1)
 #define WIKRT_OTYPE_TASK_COMPLETE (WIKRT_OTYPE_TASK | WIKRT_TASK_COMPLETE)
 
 static inline bool wikrt_is_task(wikrt_v t) { 
-    // mostly for assertions, since I generally know where tasks are
-    return wikrt_is_obj(t) && (WIKRT_OTYPE_TASK == wikrt_get_otype(t)); 
+    return wikrt_is_obj(t) && (WIKRT_OTYPE_TASK == wikrt_o_type(t)); 
 }
 
 /** Built-in Operations (Primitives, Accelerators, Annotations)
@@ -557,22 +565,18 @@ typedef struct wikrt_ws {
 
 /** Multi-Threading and Garbage Collection
  * 
- * Threads operate within a context, evaluating parallel tasks. To minimize
- * synchronization, each thread has its own 'nursery' - a volume of memory
- * for lightweight allocations that is independently garbage collected. Due
- * to compaction of objects within a nursery, it's important that a thread
- * never directly references another thread's nursery.
+ * Threads will operate in a context, using a small region of dedicated
+ * memory - the 'nursery' - for most allocations and independent GC. 
  *
- * Communication between threads requires 'stable' memory - objects that are
- * promoted from the nursery to the shared survivor space. This includes both
- * receiving tasks and results from a parallel operation. This adds latency
- * to parallelism, and requires careful attention to task 'state'.
+ * A constraint is that no other thread may directly reference a nursery.
+ * Full context GC will need to interrupt existing threads. Communication
+ * between threads requires promoting the object out of the nursery. This
+ * promotion can be modeled conservatively by promoting the entire nursery.
  *
- * In any case, each thread must track
+ * Each thread thus tracks a local 'nursery', and the thread structure is
+ * also used for any full-context GC.
  *
- *   - memory and local generations
- *   - trace and profile logging
- *   - set of ready and waiting tasks
+ * Each thread shall have an effort quota (pre-allocated) and a 
  *
  * Each thread will have a local effort quota, which it preallocates. If a
  * thread terminates and sufficient quota remains it may return some, but
@@ -661,9 +665,9 @@ typedef struct wikrt_rtb {
 bool wikrt_rtb_resize(wikrt_cx*, wikrt_z);
 bool wikrt_rtb_prealloc(wikrt_cx* cx, wikrt_z amt);
 void wikrt_reg_set(wikrt_cx*, wikrt_r, wikrt_v);
-wikrt_v wikrt_reg_get(wikrt_cx*, wikrt_r);
+wikrt_v wikrt_reg_get(wikrt_cx const*, wikrt_r);
 
-// addend to existing value
+// addend to an existing value in register
 void wikrt_reg_write(wikrt_cx*, wikrt_r, wikrt_v);
 #define WIKRT_REG_WRITE_PREALLOC WIKRT_CELLSIZE
 
@@ -745,7 +749,7 @@ void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
 void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
 void wikrt_cx_signal_work(wikrt_cx*);       // invites a worker thread
 bool wikrt_cx_work_available(wikrt_cx*);    // assumes mutex held
-size_t wikrt_word_len(uint8_t const* const src, size_t maxlen);
+size_t wikrt_word_len(uint8_t const* src, size_t maxlen);
 
 // test availability of thread-local memory 
 static inline bool wikrt_thread_mem_available(wikrt_thread const* t, wikrt_z amt)
@@ -755,7 +759,7 @@ static inline bool wikrt_thread_mem_available(wikrt_thread const* t, wikrt_z amt
 bool wikrt_thread_mem_gc_then_reserve(wikrt_thread* t, wikrt_z amt);
 
 // attempt to reserve some thread-local memory
-static inline bool wikrt_thread_mem_reserve(wikrt_thread* const t, wikrt_z amt)
+static inline bool wikrt_thread_mem_reserve(wikrt_thread* t, wikrt_z amt)
 {
     return wikrt_thread_mem_available(t, amt) ? true 
          : wikrt_thread_mem_gc_then_reserve(t, amt);
@@ -763,46 +767,57 @@ static inline bool wikrt_thread_mem_reserve(wikrt_thread* const t, wikrt_z amt)
 
 // Allocate from thread memory. Assumes `amt` is buffered to wikrt_cellbuff,
 // and that our thread has sufficient space. 
-static inline wikrt_a wikrt_thread_alloc(wikrt_thread* const t, wikrt_z amt)
+static inline wikrt_a wikrt_thread_alloc(wikrt_thread* t, wikrt_z amt)
 {
     wikrt_a const r = t->alloc;
     t->alloc += amt;
     return r;
 }
 
+static inline wikrt_a wikrt_thread_alloc_cell(wikrt_thread* t, wikrt_v fst, wikrt_v snd) 
+{
+    wikrt_a const a = wikrt_thread_alloc(t, WIKRT_CELLSIZE);
+    wikrt_v* const pv = wikrt_a2p(a);
+    pv[0] = fst;
+    pv[1] = snd;
+    return a;
+}
+static inline wikrt_a wikrt_thread_alloc_quad(wikrt_thread* t, wikrt_v v0, wikrt_v v1, wikrt_v v2, wikrt_v v3)
+{
+    wikrt_a const a = wikrt_thread_alloc(t, WIKRT_QUADSIZE);
+    wikrt_v* const pv = wikrt_a2p(a);
+    pv[0] = v0;
+    pv[1] = v1;
+    pv[2] = v2;
+    pv[3] = v3;
+    return a;
+}
+
 
 /** API Entry, Exit, and Memory Management
  *
- * Most API functions (those that may need to allocate) will call 
- * wikrt_api_enter upon entry, and wikrt_api_exit as they leave.
- *
- * The motive for this is to simplify interaction with background
- * parallelism. Ideally, API calls won't interfere with parallel
- * processing. But full-context GC is an exception, given we will
- * move objects to compact context memory. So during GC, we'll 
- * interrupt worker threads. The test to invite workers back will
- * be delayed until wikrt_api_exit, to avoid the scenario where a
- * worker thread is waiting on an API operation.
+ * Operations on main memory and registers must lock the context to
+ * prevent background GC. Long-running computations from the API 
+ * should operate as a special worker thread.
  */
 static inline void wikrt_api_enter(wikrt_cx* cx) {
+    // not much to do here.
     pthread_mutex_lock(&(cx->mutex));
 }
 void wikrt_api_exit(wikrt_cx*);
-void wikrt_api_gc(wikrt_cx*);
+void wikrt_api_gc(wikrt_cx*, wikrt_z amt);
 void wikrt_api_interrupt(wikrt_cx*);    
 static inline bool wikrt_api_mem_prealloc(wikrt_cx* cx, wikrt_z amt) {
     if(wikrt_thread_mem_available(&(cx->memory),amt)) { return true; }
-    wikrt_api_gc(cx);
+    wikrt_api_gc(cx, amt);
     return wikrt_thread_mem_available(&(cx->memory), amt);
 }
 static inline wikrt_a wikrt_api_alloc(wikrt_cx* cx, wikrt_z amt) {
     return wikrt_thread_alloc(&(cx->memory), amt);
 }
-static inline bool wikrt_api_prealloc(wikrt_cx* cx, wikrt_z nRegisters, wikrt_z nBytes) {
-    return wikrt_rtb_prealloc(cx, nRegisters)
-        && wikrt_api_mem_prealloc(cx, nBytes);
+static inline bool wikrt_api_prealloc(wikrt_cx* cx, wikrt_z nReg, wikrt_z nBytes) {
+    return wikrt_rtb_prealloc(cx, nReg) && wikrt_api_mem_prealloc(cx, nBytes);
 }
-
 
 #define WIKRT_H
 #endif

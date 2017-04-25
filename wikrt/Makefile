@@ -6,6 +6,7 @@ CFLAGS := $(W) $(OPT) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
 RUNTIME_OBJECTS := \
   wikrt_reg.o wikrt_parse_check.o         \
+  wikrt_read.o                            \
   wikrt_db.o wikrt_eph.o wikrt_prelude.o  \
   wikrt.o  \
   futil.o b64.o utf8.o
@@ -70,6 +71,9 @@ libwikrt.so: $(RUNTIME_OBJECTS) wikrt.lds
 
 # I'll add more files as I need them.
 wikrt.o: wikrt.c wikrt.h wikrt_private.h b64.h utf8.h
+	$(CC) -o $@ -c $<
+
+wikrt_read.o: wikrt_read.c wikrt_private.h
 	$(CC) -o $@ -c $<
 
 wikrt_prelude.o: wikrt_prelude.c wikrt.h

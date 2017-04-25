@@ -42,10 +42,9 @@ int main(int argc, char const* const* args)
     TCX(test_parse_check);
     TCX(test_write_read_id);
     TCX(test_parse);
-    
 
     // todo: 
-    //  trivial binary IO
+    //  parse+read
     //  primitive evaluations
     //   primitive loops
     //  definitions and lazy linking
@@ -156,6 +155,7 @@ bool test_parse_check(wikrt_cx* _unused)
         && accept_parse(" 42@baz ")
         && accept_parse(" 42@baz@qux ")
         && reject_parse(" 42@baz @qux ")
+        && reject_parse(" 42@ baz ")
         && accept_parse("[ 42@baz@qux foo@dict ]@xy@zzy ")
         && accept_parse("  \"hello\"@x@y@z  ")
         && accept_parse("\"\n hello,\n multi-line\n world!\n\"@foo ")
@@ -191,24 +191,39 @@ bool test_rw(wikrt_cx* cx, char const* s)
     }
 
     // split the writes to better stress context write buffering
-    size_t const split = len / 3;
-    wikrt_write(cx, r, (uint8_t const*)s, split);
-    wikrt_write(cx, r, (uint8_t const*)s + split, len - split);
+    fprintf(stderr, "%s writing\n", __FUNCTION__);
+
+    // write in several small chunks    
+    size_t const wchunk = 1 + (len / 7);
+    size_t offset = 0;
+    do {
+        size_t const amt = ((len - offset) > wchunk) ? wchunk : len - offset;
+        wikrt_write(cx, r, offset + (uint8_t const*)s, amt);
+        offset += amt;
+    } while(len != offset);
 
     if(wikrt_is_empty(cx, r) && (0 != len)) { 
         fprintf(stderr, "%s: write failed for `%s`\n", __FUNCTION__, s);
         return false;
     }
-    
-    char buff[len+1]; buff[len] = 0;
 
-    // split reads to better stress context read buffering
-    size_t const rd1 = wikrt_read(cx, r, (uint8_t*)buff, (len-split));
-    size_t const rd2 = wikrt_read(cx, r, (uint8_t*)(buff + (len - split)), (split + 1));
-    if(len != (rd1 + rd2)) { 
+    // buffer to read the stream    
+    char buff[len+8]; 
+
+    fprintf(stderr, "%s reading\n", __FUNCTION__);
+
+    // read in a few large chunks
+    size_t const rchunk = 2 + (len / 3);
+    size_t amt_read = 0;
+    amt_read += wikrt_read(cx, r, amt_read + (uint8_t*)buff, rchunk);
+    amt_read += wikrt_read(cx, r, amt_read + (uint8_t*)buff, rchunk);
+    amt_read += wikrt_read(cx, r, amt_read + (uint8_t*)buff, rchunk);
+
+    if(len != amt_read) {
         fprintf(stderr, "%s: read failed\n", __FUNCTION__);
         return false;
     }
+    buff[len] = 0;
 
     if(0 != strcmp(s, buff)) {
         fprintf(stderr, "%s: read and write not equal (`%s` != `%s`)\n"
@@ -231,8 +246,9 @@ bool test_write_read_id(wikrt_cx* cx)
         && test_rw(cx,"h")
         && test_rw(cx,"hello")
         && test_rw(cx,"hello, world! this is a test!")
-        && test_rw(cx,"    \n\n\n\n    \n\n\n\n    ")
-        // test at least one large input
+        && test_rw(cx,"    \n\n\n\n  [[]@foo  \n\n\n\n    ")
+        && test_rw(cx,"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy")
+        // test at least one very large input
         && test_rw(cx,wikrt_prelude()) 
         ;
 }

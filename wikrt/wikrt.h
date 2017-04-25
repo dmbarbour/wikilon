@@ -52,7 +52,10 @@ typedef struct wikrt_env wikrt_env;
  * Given a context, we can evaluate code and search or transactionally 
  * update the dictionary.
  *
- * A context is not generally multi-thread safe
+ * From this API, a context should be used from one thread at a time.
+ * It doesn't use thread-local storage, so moving between threads is
+ * safe. But parallelism should be achieved via `(par)` annotations 
+ * or parallel accelerated functions (cf. wikrt_prelude).
  */
 typedef struct wikrt_cx wikrt_cx;
 
@@ -495,18 +498,18 @@ bool wikrt_debug_eval_step(wikrt_cx*, wikrt_r, char const* target);
  * performance problems.
  * 
  * The profile is recorded as a log of triples, one per line, with
- * a current call stack, elapsed microseconds, and bytes allocated. 
+ * elapsed microseconds, bytes allocated, and current call stack. 
  *
- *     /foo/bar/baz 400 1000
- *     /blub/glub   100 8000
- *     /foo/bar/qux 300 1200
+ *     400 1000 /foo/bar/baz
+ *     100 8000 /blub/glub
+ *     300 1200 /foo/bar/qux
  *
- * This record is imprecise, but enough entries can still provide a
- * useful estimate of where evaluation efforts are expended. This
- * profiling doesn't use interrupts, being driven instead by GC.
- *
- * The profile log must be moved to a client register for reading or
- * further processing. Disabling clears the log. Defaults disabled.
+ * Each record is independent, with the time elapsed and bytes
+ * allocated being reset to zero within the thread upon printing
+ * to the log. The top level program is indicated by `/`. Inline
+ * optimizations may eliminate some intermediate words from the
+ * stack. But, despite lack of precision, this is sufficient for
+ * estimating use of computation resources, especially in loops.
  */
 void wikrt_prof_stack(wikrt_cx*, bool enable);
 bool wikrt_prof_stack_move(wikrt_cx*, wikrt_r);
@@ -523,10 +526,9 @@ typedef struct wikrt_mem_stats {
 
 /** Heap Profiling
  *
- * Heap profiling describes long-lived objects in memory. This can be
- * useful for debugging memory usage issues. Wikilon has support for
- * a low precision but reasonably efficient heap profile, associating
- * memory with closures based on the origin of the outer block. 
+ * Heap profiling associates closures in memory with an origin word
+ * and estimates a total size. This could be useful to debug memory 
+ * issues. 
  * 
  * Calling wikrt_prof_heap will scan the stable portion of the heap,
  * excluding recent allocations so as to minimize interference with
@@ -537,10 +539,9 @@ typedef struct wikrt_mem_stats {
  *      bar 9876 5432
  *      ...
  *
- * The two numbers represent byte costs associated with the word, in
- * the old and young GC generations to simplify analysis of dataflow.
- * Besides the profile, which is written to a register, we can also
- * output statistics to situate the profile or detect GC thrashing.
+ * The two numbers represent byte costs associated with the word for
+ * two GC generations. This simplifies analysis of dataflow. We can
+ * also output statistics to situate the profile or detect GC thrashing.
  *
  * Note: excludes data from frozen copy-on-write origin context
  */ 
