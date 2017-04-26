@@ -19,8 +19,8 @@
  * - Maintain a named codebase with basic key-value updates
  * - Evaluate code
  *
- * Most operations in this API also use `errno` for additional details
- * about the cause of error, adapting standard error codes. 
+ * Most operations in this API also use an `errno` like technique to return 
+ * additional details about a cause of error, adapting standard error codes.
  * 
  *  (c) 2015-2017 David Barbour
  *  LICENSE: BSD 3-clause <https://opensource.org/licenses/BSD-3-Clause>

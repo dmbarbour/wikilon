@@ -528,7 +528,7 @@ static inline void wikrt_write_frag(wikrt_cx* cx, wikrt_r r, uint8_t const* cons
     // write a single binary fragment into context memory 
     assert(WIKRT_O_DATA_MAX >= amt);
     wikrt_v const binary  = wikrt_alloc_binary(&(cx->memory), data, amt);
-    wikrt_v const raw = WIKRT_OBJ | wikrt_thread_alloc_cell(&(cx->memory), 
+    wikrt_v const raw = WIKRT_OBJ | wikrt_alloc_cell(&(cx->memory), 
         wikrt_new_ptype_hdr(WIKRT_PTYPE_BINARY_RAW), binary);
     wikrt_reg_write(cx, r, raw);
 }
@@ -587,16 +587,17 @@ void wikrt_clear(wikrt_cx* cx, wikrt_r r)
 void wikrt_cx_freeze(wikrt_cx* cx)
 {
     // final cleanup
-    wikrt_debug_trace(cx, false);
-    wikrt_prof_stack(cx, false);
     wikrt_eval_parallel(cx);
-    wikrt_set_effort(cx, 0);
     wikrt_cx_gc(cx);
 
     // perform a full GC to compact memory
     wikrt_api_enter(cx);
     cx->memory.alloc = cx->memory.end; // prevent further allocation
     cx->frozen = true;                 // prevent further GC
+
+    // TODO: mark all objects in context as shared
+    //  (this might be similar to a GC pass?)
+
     wikrt_api_exit(cx);
 }
 

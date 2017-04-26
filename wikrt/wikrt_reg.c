@@ -62,7 +62,7 @@ static void rtb_write(wikrt_rtb* const rtb, wikrt_r const r, wikrt_v const v)
 bool wikrt_rtb_resize(wikrt_cx* cx, wikrt_z new_size)
 {
     // don't permit shrinking too much
-    if(((cx->rtb.fill + 1) / 2) > (new_size / 3)) { return false; }
+    if((3 * cx->rtb.fill) > (2 * new_size)) { return false; }
 
     wikrt_z const data_bytes = wikrt_array_size(new_size);
     wikrt_z const id_bytes = wikrt_cellbuff(WIKRT_CELLSIZE + (sizeof(wikrt_r) * new_size));
@@ -99,7 +99,7 @@ bool wikrt_rtb_prealloc(wikrt_cx* cx, wikrt_z amt)
 {
     // permit maximum 2/3 fill 
     wikrt_z const new_fill = amt + cx->rtb.fill;
-    bool const overfilled = (new_fill / 2) > (cx->rtb.size / 3);
+    bool const overfilled = (3 * new_fill) > (2 * cx->rtb.size);
     if(!overfilled) { return true; }
 
     // resize to under 50% fill

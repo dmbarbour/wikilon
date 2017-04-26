@@ -40,6 +40,9 @@
  * Multi-Process Utilities: use shm_open to create and manage the ephemeron
  * table. Ephemerons will be tracked via simple counting hashtable. We'll
  * need to assign a unique ID to each runtime database for this to work.
+ *
+ * Parallelism: While it's important, get it working single-threaded first
+ * if doing so is easier.
  */
 
 // Using native sized words.
@@ -88,14 +91,17 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *
  *   Naturals have a range up to 2^27-1 on a 32-bit system or 2^59-1
  *   on a 64-bit system before the 'big' tagged object encoding must
- *   be used. Integers use the same range plus or minus so we can 
- *   trivially convert between small naturals and small integers.
+ *   be used.
+ * 
+ *   Integers currently aren't supported. I'm just leaving a space
+ *   for them sufficient for coercion to or from natural numbers.
  *
  * Extended Small Constants (3 bits + 00b00)
  *
  *      000     built-in primitives, accelerators, etc.
  *      001     single raw binary bytes in stream
  *      (small decimals, labels, texts)
+ *      111     unused or hidden temporary use
  *
  *   I'm assuming 64-bit systems will be the common option. Decimals 
  *   with an 8 bit exponent (base 10) and 48-bit mantissa would cover
@@ -131,6 +137,9 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 #define WIKRT_SMALLINT_MAX WIKRT_SMALLNAT_MAX
 #define WIKRT_SMALLINT_MIN (- WIKRT_SMALLINT_MAX)
 
+#define WIKRT_RAW_BYTE_TYPE (0x20)
+#define WIKRT_RAW_BYTE(N) ((N << 8) | WIKRT_RAW_BYTE_TYPE)
+
 // bit-level utility functions
 static inline wikrt_v wikrt_vtag(wikrt_v v) { return (WIKRT_REF_MASK_TYPE & v); }
 static inline wikrt_a wikrt_v2a(wikrt_v v) { return (WIKRT_REF_MASK_ADDR & v); }
@@ -144,6 +153,9 @@ static inline bool wikrt_is_cons(wikrt_v v) { return (WIKRT_CONS == wikrt_vtag(v
 
 static inline bool wikrt_val_in_ref(wikrt_v v) { return !wikrt_vtag(v); }
 static inline bool wikrt_is_basic_op(wikrt_v v) { return !(v & 0xFF); }
+static inline bool wikrt_is_raw_byte(wikrt_v v) { return ((0xFF & v) == WIKRT_RAW_BYTE_TYPE); }
+static inline wikrt_v wikrt_from_raw_byte(uint8_t n) { return WIKRT_RAW_BYTE(n); }
+static inline uint8_t wikrt_get_raw_byte(wikrt_v v) { return (uint8_t)(v >> 8); }
 static inline wikrt_v* wikrt_a2p(wikrt_a a) { return (wikrt_v*)a; }
 static inline wikrt_v* wikrt_v2p(wikrt_v v) { return wikrt_a2p(wikrt_v2a(v)); }
 static inline bool wikrt_is_ptr(wikrt_v v) { return !wikrt_val_in_ref(v); }
@@ -216,6 +228,9 @@ static inline wikrt_n     wikrt_o_data(wikrt_o o) { return (o >> WIKRT_O_DATA_OF
  * This allows interpretation of a representation. Binaries could
  * represent objects, texts, or large natural numbers. We can also
  * represent a logically reversed array, list, or binary.
+ *
+ * A text wraps a binary value. In this case, the binary value does
+ * not include any extra spaces to escape newlines.
  */
 typedef enum wikrt_ptype 
 { WIKRT_PTYPE_BINARY_RAW    // wrap a binary object
@@ -470,6 +485,8 @@ typedef enum wikrt_op
 
 // List and Array Operations
 } wikrt_op;
+
+static inline wikrt_op wikrt_opval_to_op(wikrt_v v) { return (wikrt_op)(v >> 8); }
 
 /** The Database
  * 
@@ -774,7 +791,7 @@ static inline wikrt_a wikrt_thread_alloc(wikrt_thread* t, wikrt_z amt)
     return r;
 }
 
-static inline wikrt_a wikrt_thread_alloc_cell(wikrt_thread* t, wikrt_v fst, wikrt_v snd) 
+static inline wikrt_a wikrt_alloc_cell(wikrt_thread* t, wikrt_v fst, wikrt_v snd) 
 {
     wikrt_a const a = wikrt_thread_alloc(t, WIKRT_CELLSIZE);
     wikrt_v* const pv = wikrt_a2p(a);
@@ -782,7 +799,8 @@ static inline wikrt_a wikrt_thread_alloc_cell(wikrt_thread* t, wikrt_v fst, wikr
     pv[1] = snd;
     return a;
 }
-static inline wikrt_a wikrt_thread_alloc_quad(wikrt_thread* t, wikrt_v v0, wikrt_v v1, wikrt_v v2, wikrt_v v3)
+
+static inline wikrt_a wikrt_alloc_quad(wikrt_thread* t, wikrt_v v0, wikrt_v v1, wikrt_v v2, wikrt_v v3)
 {
     wikrt_a const a = wikrt_thread_alloc(t, WIKRT_QUADSIZE);
     wikrt_v* const pv = wikrt_a2p(a);
@@ -791,6 +809,10 @@ static inline wikrt_a wikrt_thread_alloc_quad(wikrt_thread* t, wikrt_v v0, wikrt
     pv[2] = v2;
     pv[3] = v3;
     return a;
+}
+
+static inline wikrt_v wikrt_alloc_comp(wikrt_thread* t, wikrt_v hd, wikrt_v tl) {
+    return WIKRT_COMP | wikrt_alloc_cell(t, hd, tl); 
 }
 
 
