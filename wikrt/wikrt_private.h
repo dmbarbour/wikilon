@@ -101,7 +101,6 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *      000     built-in primitives, accelerators, etc.
  *      001     single raw binary bytes in stream
  *      (small decimals, labels, texts)
- *      111     unused or hidden temporary use
  *
  *   I'm assuming 64-bit systems will be the common option. Decimals 
  *   with an 8 bit exponent (base 10) and 48-bit mantissa would cover
@@ -143,13 +142,17 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 // bit-level utility functions
 static inline wikrt_v wikrt_vtag(wikrt_v v) { return (WIKRT_REF_MASK_TYPE & v); }
 static inline wikrt_a wikrt_v2a(wikrt_v v) { return (WIKRT_REF_MASK_ADDR & v); }
-static inline bool wikrt_action(wikrt_v v) { return (0 == (WIKRT_VAL & v)); }
-static inline bool wikrt_value(wikrt_v v) { return !wikrt_action(v); }
 
+static inline bool wikrt_is_action(wikrt_v v) { return (0 == (WIKRT_VAL & v)); }
+static inline bool wikrt_is_value(wikrt_v v) { return !wikrt_is_action(v); }
 static inline bool wikrt_is_obj(wikrt_v v) { return (WIKRT_OBJ == wikrt_vtag(v)); }
 static inline bool wikrt_is_small(wikrt_v v) { return (WIKRT_SMALL == wikrt_vtag(v)); }
 static inline bool wikrt_is_comp(wikrt_v v) { return (WIKRT_COMP == wikrt_vtag(v)); }
 static inline bool wikrt_is_cons(wikrt_v v) { return (WIKRT_CONS == wikrt_vtag(v)); }
+
+static inline wikrt_v wikrt_value_to_action(wikrt_v v) { return ((~((wikrt_v)WIKRT_VAL)) & v); }
+static inline wikrt_v wikrt_action_to_value(wikrt_v v) { return (WIKRT_VAL | v); }
+
 
 static inline bool wikrt_val_in_ref(wikrt_v v) { return !wikrt_vtag(v); }
 static inline bool wikrt_is_basic_op(wikrt_v v) { return !(v & 0xFF); }
@@ -234,11 +237,15 @@ static inline wikrt_n     wikrt_o_data(wikrt_o o) { return (o >> WIKRT_O_DATA_OF
  */
 typedef enum wikrt_ptype 
 { WIKRT_PTYPE_BINARY_RAW    // wrap a binary object
-, WIKRT_PTYPE_UTF8_TEXT     // wrap a binary as text
+, WIKRT_PTYPE_TEXT          // wrap a binary as text
 , WIKRT_PTYPE_BIGNUM        // wrap a binary as bignum
 , WIKRT_PTYPE_ARRAY_REVERSE // reverse array or binary
 , WIKRT_PTYPE_ERROR         // [value](error)
 // maybe a fixpoint block wrapper?
+
+// special cases for incremental serialization in wikrt_read
+, WIKRT_PTYPE_TEXT_RAW      // for serializing text
+, WIKRT_PTYPE_TEXT_RAW_LF   // serialization of text with LF escape
 } wikrt_ptype;
 
 static inline wikrt_o wikrt_new_ptype_hdr(wikrt_ptype p) { 
