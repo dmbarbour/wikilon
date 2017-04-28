@@ -98,8 +98,8 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *
  * Extended Small Constants (3 bits + 00b00)
  *
- *      000     built-in primitives, accelerators, etc.
- *      001     single raw binary bytes in stream
+ *      000     primitives, accelerators, annotations
+ *      001     single raw binary bytes in stream (ops only)
  *      (small decimals, labels, texts)
  *
  *   I'm assuming 64-bit systems will be the common option. Decimals 
@@ -133,7 +133,7 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 #define WIKRT_SMALL_NAT_VAL  (WIKRT_SMALL_NAT_OP | WIKRT_VAL)
 
 #define WIKRT_SMALLNAT_MAX (WIKRT_V_MAX >> 5)
-#define WIKRT_SMALLINT_MAX WIKRT_SMALLNAT_MAX
+#define WIKRT_SMALLINT_MAX ((wikrt_i)WIKRT_SMALLNAT_MAX)
 #define WIKRT_SMALLINT_MIN (- WIKRT_SMALLINT_MAX)
 
 #define WIKRT_RAW_BYTE_TYPE (0x20)
@@ -210,7 +210,6 @@ typedef enum wikrt_otype
 
     // Special Cases
 , WIKRT_OTYPE_TASK      // a fragment of code under evaluation
-, WIKRT_OTYPE_RTB_NODE  // register table binary tree node
 , WIKRT_OTYPE_WORD      // interned, and includes annotations
 } wikrt_otype;
 
@@ -392,14 +391,12 @@ static inline bool wikrt_is_task(wikrt_v t) {
 /** Built-in Operations (Primitives, Accelerators, Annotations)
  *
  * Awelon relies on accelerators as a primary performance technique,
- * both for functions and data. The "built ins" are just the set of
- * basic or accelerated fixed-form functions.
+ * both for functions and data.
  *
- * Accelerators cannot be referenced directly by user code, instead
- * being accessed indirectly by matching. Define function "w" to the
- * program "(a2) [] b a" and you'll use OP_w. This method is fragile
- * in general, but that can be mitigated with wikrt_write_prelude
- * and de-facto standardization.
+ * Accelerators are referenced from user code by defining specific
+ * words in a specific manner. These definitions are validated by
+ * the runtime before acceleration is applied. This is a fragile 
+ * approach, but a simple one.
  * 
  * Annotations are included in this list, excepting sealers and other
  * annotations that have a partially user-defined symbol. Unrecognized
@@ -439,61 +436,47 @@ typedef enum wikrt_op
 , OP_ANNO_trash // (trash) replace block with error value
     // todo: annotations for link, optimize, compile
 
-// Extensions for Compiled code
+// Type and Representation Annotations
+, OP_ANNO_nat   // (nat) type assertion   42 == [41 S]
+, OP_ANNO_int   // (int) type assertion   [Nat Nat int] - [0 42 int] is -42
+, OP_ANNO_dec   // (dec) type assertion   [Int Int dec] - [3141 -3 dec] is 3.141
+, OP_ANNO_text  // (text) type assertion
+, OP_ANNO_binary // (binary) type assertion
+, OP_ANNO_array // (array) type assertion
+, OP_ANNO_bool  // (bool) type assertion  [F] or [T]
+, OP_ANNO_opt   // (opt) type assertion   [F] or [[V]R]
+, OP_ANNO_sum   // (sum) type assertion   [[V]L] or [[V]R]
+, OP_ANNO_cond  // (cond) type assertion  (sum or boolean)
+
+// Simple Accelerators
+ // future: permutations of data plumbing. Common loops.
+ // Note: I should probably guide this via actual usage.
+, OP_w          // swap;   [B][A]w == [A][B]; w = (a2) [] b a
+, OP_i          // inline; [A]i == A; i = [] w a d
+, OP_z          // fixpoint Z combinator; [X][F]z == [X][[F]z]F
+                // z = [[(a3) c i] b (~z) [c] a b w i](a3) c i
+, OP_if         // if = (a3) [] b b a (cond) i
+
+// TODO:
+// Arithmetic
+// List and Array Processing
+
+, OP_int        
+
+
+// Special Extensions for Compiled code
 , OP_EXT_RETURN // represents end of block
  , OP_EXT_RETURN_ad // tail call via `... a d]`
  , OP_EXT_RETURN_i  // tail call via `... i]`
 , OP_EXT_RPUSH // push data to return stack
 , OP_EXT_RPOP // /pop data from return stack
 
-// Annotations to control Optimization, Compilation?
-
-// Simple Accelerators
- // future: permutations of data plumbing. Common loops.
- // Note: I should probably guide this via actual usage.
-, OP_w          // swap;   [B][A]w == [A][B]; w = (a2) [] b a
-, OP_rot        // [C][B][A]rot == [A][C][B]; rot = (a3) [] b b a
-, OP_i          // inline; [A]i == A; i = [] w a d
-, OP_z          // fixpoint Z combinator; [X][F]z == [X][[F]z]F
-                // z = [[(a3) c i] b (=z) [c] a b w i](a3) c i
-
-// Conditional Behaviors
-, OP_true       // [B][A]true i     == A;    true = [a d]
-, OP_false      // [B][A]false i    == B;    false = [d i] (= 0)
-, OP_L          // [B][A][[V]L] i   == [V]B; L = (a3) w d w i
-, OP_R          // [B][A][[V]R] i   == [V]A; R = (a3) w b a d
-, OP_ANNO_bool  // (bool) type assertion  [F] or [T]
-, OP_ANNO_opt   // (opt) type assertion   [F] or [[V]R]
-, OP_ANNO_sum   // (sum) type assertion   [[V]L] or [[V]R]
-, OP_ANNO_cond  // (cond) type assertion  (sum or boolean)
-, OP_if         // if = rot (cond) i
-
-// Natural Number Arithmetic
-//  I need at least add, multiply, difference, and division.
-//  Diff and div should be lossless. Like 7 11 diff might be 0 4
-//  to record the latter was larger, and division has remainder.
-//  An accelerated GCD might also be nice.
-//
-//  These operations are only accelerated if our 0 and S are
-//  defined appropriately, along with the specific operations.
-//
-//  Conveniently, I don't need any divide-by-zero errors at the
-//  API layer. That would become a "divide-by-zero"(error) and
-//  freeze the relevant portion of the evaluation.
-, OP_ANNO_nat   // (nat) type assertion
-, OP_S          // essentially `[(nat)R]b`
-, OP_nat_add    
-, OP_nat_mul
-, OP_nat_diff
-, OP_nat_divmod
-
-// Integer Arithmetic
-//  add, mul, div, sub, abs, neg
-
-// List and Array Operations
+// auto-define op count
+, WIKRT_OP_COUNT
 } wikrt_op;
 
 static inline wikrt_op wikrt_opval_to_op(wikrt_v v) { return (wikrt_op)(v >> 8); }
+static inline wikrt_v  wikrt_op_to_opval(wikrt_op op) { return (((wikrt_v)op) << 8); }
 
 /** The Database
  * 

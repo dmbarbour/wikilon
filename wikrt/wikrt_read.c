@@ -1,23 +1,26 @@
 /** Reading Binaries
  *
  * Ideally, reading large binaries is incremental and efficient, but it
- * is difficult to achieve both features. For now, it's just incremental.
+ * is difficult to achieve both features. For now, it's just incremental
+ * and has a relatively high allocation overhead per byte read.
  *
  * A viable option for reading a large binary incrementally is to rewrite
  * it to a (raw byte, more data) pair and read one byte at a time. 
  * 
  * This does introduce some challenges for tracking serialization context.
- * I currently just peek to avoid adding spaces just before `]` in program 
- * output. For texts, I use dedicated object types during serialization,
- * treating a partially serialized text as a raw binary variant.
+ * I'll use a little reflection - peek ahead - to avoid extra spaces within
+ * a block. Text processing or ensuring only one `(array)` or `(binary)` 
+ * annotation per element may require special object types. 
  */
 #include "wikrt_private.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <assert.h>
 
-// rewrite register to (small byte, val') compositon list, or NULL
-// may fail only if it runs out of context memory
+// rewrite register to (small byte, val') compositon list, or NULL.
+// returns true on success, false if it runs out of memory, aborts
+// for any other failure case (like unhandled types).
 static bool wikrt_reader_step(wikrt_cx*, wikrt_r);
 
 size_t wikrt_read(wikrt_cx* cx, wikrt_r r, uint8_t* const buff, size_t const max)
@@ -30,14 +33,14 @@ size_t wikrt_read(wikrt_cx* cx, wikrt_r r, uint8_t* const buff, size_t const max
     wikrt_api_enter(cx); 
     wikrt_api_interrupt(cx);
 
-    // allocate the register for read/write
-    if(!wikrt_api_prealloc(cx, 1, WIKRT_CELLSIZE * 1024)) {
+    // allocate register if necessary
+    if(!wikrt_rtb_prealloc(cx, 1)) {
         wikrt_api_exit(cx);
         errno = ENOMEM;
         return 0;
     }
 
-    // read one byte at a time
+    // read one byte at a time (for now)
     do {
         if(!wikrt_reader_step(cx, r)) { e = ENOMEM; break; }
         wikrt_v const v = wikrt_reg_get(cx, r);
@@ -65,7 +68,7 @@ static inline wikrt_v wikrt_reader_push_bytes(wikrt_thread* t, uint8_t const* da
     return cc;
 }
 
-static inline wikrt_v wikrt_push_cstring(wikrt_thread* t, char const* s, wikrt_v cc)
+static inline wikrt_v wikrt_reader_push_cstring(wikrt_thread* t, char const* s, wikrt_v cc)
 {
     _Static_assert((sizeof(char) == sizeof(uint8_t)), "casting char* to uint8*");
     return wikrt_reader_push_bytes(t, (uint8_t const*)s, strlen(s), cc);
@@ -104,13 +107,71 @@ static wikrt_v wikrt_reader_wrap_block_v(wikrt_thread* t, wikrt_v v, wikrt_v cc)
     return cc;
 }
 
+static char const* const wikrt_op_str[WIKRT_OP_COUNT] =
+{ [OP_NOP] = ""
+
+// primitives
+, [OP_a] = "a", [OP_b] = "b", [OP_c] = "c", [OP_d] = "d"
+
+// arity annotations
+, [OP_ANNO_a2] = "(a2)", [OP_ANNO_a3] = "(a3)", [OP_ANNO_a4] = "(a4)"
+, [OP_ANNO_a5] = "(a5)", [OP_ANNO_a6] = "(a6)", [OP_ANNO_a7] = "(a7)"
+, [OP_ANNO_a8] = "(a8)", [OP_ANNO_a9] = "(a9)"
+
+// substructural annotations
+, [OP_ANNO_nc] = "(nc)", [OP_ANNO_nd] = "(na)"
+
+// evaluation annotations
+, [OP_ANNO_error] = "(error)"
+, [OP_ANNO_trace] = "(trace)"
+, [OP_ANNO_par] = "(par)"
+, [OP_ANNO_eval] = "(eval)"
+, [OP_ANNO_memo] = "(memo)"
+, [OP_ANNO_stow] = "(stow)"
+, [OP_ANNO_trash] = "(trash)"
+
+// type and representation annotations
+, [OP_ANNO_nat] = "(nat)"
+, [OP_ANNO_int] = "(int)"
+, [OP_ANNO_dec] = "(dec)"
+, [OP_ANNO_text] = "(text)"
+, [OP_ANNO_binary] = "(binary)"
+, [OP_ANNO_array] = "(array)"
+, [OP_ANNO_bool] = "(bool)"
+, [OP_ANNO_opt] = "(opt)"
+, [OP_ANNO_sum] = "(sum)"
+, [OP_ANNO_cond] = "(cond)"
+
+// accelerators
+, [OP_w] = "w"
+, [OP_i] = "i"
+, [OP_z] = "z"
+, [OP_if] = "if"
+
+, [OP_int] = "int"
+
+// EXT ops are for optimized intermediate code
+// character '/' isn't allowed in Awelon words
+, [OP_EXT_RETURN] = "/return"
+, [OP_EXT_RETURN_ad] = "/return-ad"
+, [OP_EXT_RETURN_i] = "/return-i"
+, [OP_EXT_RPUSH] = "/push"
+, [OP_EXT_RPOP] = "/pop"
+
+};
+// check hand count of above items
+_Static_assert((42 == WIKRT_OP_COUNT), "missing some operators");
+
 static inline wikrt_v wikrt_reader_push_op(wikrt_thread* t, wikrt_op op, wikrt_v cc)
 {
-    if(0 == op) { return cc; }
+    if(OP_NOP == op) { return cc; }
+
+    // cost: op size + 1 cells at most (about 16 cells)
+    char const* const opstr = wikrt_op_str[op];
+    assert(NULL != opstr);
     cc = wikrt_reader_push_space(t, cc);
-
-    // todo: push operator
-
+    cc = wikrt_reader_push_cstring(t, opstr, cc);
+    return cc;
 }
 
 static inline wikrt_v wikrt_reader_push_nat(wikrt_thread* t, wikrt_n n, wikrt_v cc)
@@ -125,17 +186,37 @@ static inline wikrt_v wikrt_reader_push_nat(wikrt_thread* t, wikrt_n n, wikrt_v 
     return cc;
 }
 
+static inline wikrt_v wikrt_reader_push_int_op(wikrt_thread* t, wikrt_i i, wikrt_v cc)
+{
+    // e.g. `-3` => `0 3 int`
+    assert((WIKRT_SMALLINT_MIN <= i) && (i <= WIKRT_SMALLINT_MAX));
+    wikrt_n const pos = (i > 0) ? (wikrt_n)i : 0;
+    wikrt_n const neg = (i < 0) ? (wikrt_n)(-i) : 0;
+    cc = wikrt_alloc_comp(t, wikrt_op_to_opval(OP_int), cc);
+    cc = wikrt_alloc_comp(t, wikrt_to_small_nat_val(neg), cc);
+    cc = wikrt_alloc_comp(t, wikrt_to_small_nat_val(pos), cc);
+    return cc;
+}
+
 static wikrt_v wikrt_reader_push_small(wikrt_thread* t, wikrt_v v, wikrt_v cc)
 {
     // ASSUMES sufficient space (~32 cells at most)
-    if(wikrt_is_basic_op(v)) {
-        return wikrt_reader_serialize_op(t, wikrt_opval_to_op(v), cc);
-    } else if(wikrt_is_basic_op(wikrt_value_to_action(v))) {
-        return wikrt_reader_wrap_block_v(t, wikrt_value_to_action(v), cc);
-    } else if(wikrt_is_small_nat_val(v)) {
-        return wikrt_reader_push_nat(t, wikrt_from_small_nat(v), cc);
+    // NOTES:
+    //  - excepting naturals, most 'small' items are actions (operators, etc.)
+    //  - an applied natural becomes inlined - `[] nat a d` - for simplicity.
+    //  - integers are written in expanded form `[42 0 int]`, at least for now. 
+    if(wikrt_is_value(v)) {
+        if(wikrt_is_small_nat_val(v)) { 
+            return wikrt_reader_push_nat(t, wikrt_from_small_nat(v), cc);
+        } else { // write value as block
+            return wikrt_reader_wrap_block_v(t, wikrt_value_to_action(v), cc);
+        }
+    } else if(wikrt_is_basic_op(v)) {
+        return wikrt_reader_push_op(t, wikrt_opval_to_op(v), cc);
     } else if(wikrt_is_small_nat_op(v)) {
         return wikrt_reader_inline_v(t, wikrt_action_to_value(v), cc);
+    } else if(wikrt_is_small_int_op(v)) {
+        return wikrt_reader_push_int_op(t, wikrt_from_small_int(v), cc);
     } else {
         fprintf(stderr, "%s: unhandled small value type (%d)\n"
             , __FUNCTION__, (int)(0xFF & v));
@@ -147,27 +228,46 @@ static wikrt_v wikrt_reader_push_comp(wikrt_thread* t, wikrt_v v, wikrt_v cc)
 {
     if(wikrt_is_value(v)) {
         return wikrt_reader_wrap_block_v(t, wikrt_value_to_action(v), cc);
-    } else {
-        // ((a b) c) => (a (b c))
-        cc = wikrt_alloc_comp(t, wikrt_v2p(v)[1], cc);
-        cc = wikrt_alloc_comp(t, wikrt_v2p(v)[0], cc);
-        return cc;
-    }
+    } 
+    // ((a b) c) => (a (b c))
+    cc = wikrt_alloc_comp(t, wikrt_v2p(v)[1], cc);
+    cc = wikrt_alloc_comp(t, wikrt_v2p(v)[0], cc);
+    return cc;
 }
 
 static wikrt_v wikrt_reader_push_cons(wikrt_thread* t, wikrt_v v, wikrt_v cc)
 {
     if(wikrt_is_value(v)) {
         return wikrt_reader_wrap_block_v(t, wikrt_value_to_action(v), cc);
-    } else {
-        // (hd tl) => hd tl :
-        cc = wikrt_reader_push_space(t, cc);
-        cc = wikrt_reader_push_byte(t, ':', cc);
-        cc = wikrt_alloc_comp(t, wikrt_v2p(v)[1], cc);
-        cc = wikrt_alloc_comp(t, wikrt_v2p(v)[0], cc);
-        return cc;
-    }
+    } 
+    // (hd tl) => hd tl :
+    cc = wikrt_reader_push_space(t, cc);
+    cc = wikrt_reader_push_byte(t, ':', cc);
+    cc = wikrt_alloc_comp(t, wikrt_v2p(v)[1], cc);
+    cc = wikrt_alloc_comp(t, wikrt_v2p(v)[0], cc);
+    return cc;
 }
+
+static wikrt_v wikrt_reader_push_obj(wikrt_thread* t, wikrt_v obj, wikrt_v cc)
+{ switch(wikrt_o_type(obj)) {
+    case WIKRT_OTYPE_PAIR: {
+    } break;
+    case WIKRT_OTYPE_QUAD: {
+    } break;
+    case WIKRT_OTYPE_BLOCK: {
+    } break;
+    case WIKRT_OTYPE_ARRAY: {
+    } break;
+    case WIKRT_OTYPE_BINARY: {
+    } break;
+    case WIKRT_OTYPE_WORD: {
+    } break;
+    default: {
+        fprintf(stderr, "%s: unrecognized object type (%d)\n"
+            , __FUNCTION__, (int)wikrt_o_type(obj));
+        abort();
+    }
+}}
 
 static bool wikrt_reader_step(wikrt_cx* cx, wikrt_r r)
 { 
@@ -175,9 +275,10 @@ static bool wikrt_reader_step(wikrt_cx* cx, wikrt_r r)
     wikrt_thread* t  = &(cx->memory);
 
   tailcall: {
-    if(!wikrt_api_mem_prealloc(cx, step_prealloc) { return false; }
+    // prior to each step, ensure sufficient space
+    if(!wikrt_api_mem_prealloc(cx, step_prealloc)) { return false; }
 
-    wikrt_v const v = wikrt_get_reg(cx, r);
+    wikrt_v const v = wikrt_reg_get(cx, r);
     if(0 == v) { return true; }
 
     // normalize input to a composition

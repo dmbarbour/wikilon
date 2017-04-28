@@ -23,17 +23,19 @@ static wikrt_z rtb_index(wikrt_rtb const* rtb, wikrt_r const r)
 
 static void rtb_clear(wikrt_rtb* const rtb, wikrt_r const r)
 {
-    assert(0 != rtb->size);
+    if(0 == rtb->size) { return; }
+
     wikrt_v* const data = rtb_data(rtb);
     wikrt_r* const ids  = rtb_ids(rtb);
     wikrt_z ix = rtb_index(rtb, r);
 
     // clear the target register
     if(0 == data[ix]) { return; }
+    assert(rtb->fill > 0);
     data[ix] = 0;
     --(rtb->fill);
 
-    // shift potential collision registers into emptied slot
+    // shift linear collision registers into emptied slots
     do {
         ix = (ix + 1) % (rtb->size);
         if(0 == data[ix]) { return; }
@@ -123,10 +125,8 @@ void wikrt_reg_write(wikrt_cx* cx, wikrt_r r, wikrt_v v)
 {
     _Static_assert((WIKRT_REG_WRITE_PREALLOC == WIKRT_CELLSIZE),
         "reg write needs only one cell at most");
-    wikrt_v const v0 = wikrt_reg_get(cx,r);
-    wikrt_v const vf = (0 == v0) ? v
-                     : (0 == v)  ? v0 
-                     : (WIKRT_COMP | wikrt_thread_alloc_cell(&(cx->memory), v0, v));
+    wikrt_v const v0 = wikrt_reg_get(cx, r);
+    wikrt_v const vf = wikrt_alloc_comp(&(cx->memory), v0, v);
     wikrt_reg_set(cx, r, vf);
 }
 
