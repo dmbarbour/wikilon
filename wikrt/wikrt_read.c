@@ -1,11 +1,15 @@
 /** Reading Binaries
  *
- * Ideally, reading large binaries is incremental and efficient, but it
- * is difficult to achieve both features. For now, it's just incremental
- * and has a relatively high allocation overhead per byte read.
+ * Ideally, reading large binaries is incremental and efficient.
+ * But in the interest of making it work before making it fast,
+ * it's currently just incremental. In each step, I'll allocate
+ * a (raw byte, value') composition then take the raw byte.
  *
- * A viable option for reading a large binary incrementally is to rewrite
- * it to a (raw byte, more data) pair and read one byte at a time. 
+ * Feasible efficiency improvements 
+ * - allocate temporary 'registers' to avoid common allocations
+ *  - e.g. raw byte, focus value, list slice, list addend, next
+ *  - this should eliminate about 80% of dynamic allocations
+ * - temporary 'thread' structure to further localize memory
  * 
  * This does introduce some challenges for tracking serialization context.
  * I'll use a little reflection - peek ahead - to avoid extra spaces within
@@ -17,6 +21,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+
+// Enough space to guarantee a reader step succeeds.
+// (this will overestimate most of the time, but that's okay)
+#define WIKRT_READER_STEP_PREALLOC (64 * WIKRT_CELLSIZE)
 
 // rewrite register to (small byte, val') compositon list, or NULL.
 // returns true on success, false if it runs out of memory, aborts
@@ -33,8 +41,8 @@ size_t wikrt_read(wikrt_cx* cx, wikrt_r r, uint8_t* const buff, size_t const max
     wikrt_api_enter(cx); 
     wikrt_api_interrupt(cx);
 
-    // allocate register if necessary
-    if(!wikrt_rtb_prealloc(cx, 1)) {
+    // allocate register and a lightweight thread 
+    if(!wikrt_api_prealloc(cx, 1, 32 * WIKRT_READER_STEP_PREALLOC)) {
         wikrt_api_exit(cx);
         errno = ENOMEM;
         return 0;
@@ -270,13 +278,10 @@ static wikrt_v wikrt_reader_push_obj(wikrt_thread* t, wikrt_v obj, wikrt_v cc)
 }}
 
 static bool wikrt_reader_step(wikrt_cx* cx, wikrt_r r)
-{ 
-    wikrt_z const step_prealloc = 64 * WIKRT_CELLSIZE;
-    wikrt_thread* t  = &(cx->memory);
-
+{ wikrt_thread* const t = &(cx->memory);
   tailcall: {
     // prior to each step, ensure sufficient space
-    if(!wikrt_api_mem_prealloc(cx, step_prealloc)) { return false; }
+    if(!wikrt_api_mem_prealloc(cx, WIKRT_READER_STEP_PREALLOC)) { return false; }
 
     wikrt_v const v = wikrt_reg_get(cx, r);
     if(0 == v) { return true; }

@@ -40,9 +40,6 @@
  * Multi-Process Utilities: use shm_open to create and manage the ephemeron
  * table. Ephemerons will be tracked via simple counting hashtable. We'll
  * need to assign a unique ID to each runtime database for this to work.
- *
- * Parallelism: While it's important, get it working single-threaded first
- * if doing so is easier.
  */
 
 // Using native sized words.
@@ -514,34 +511,28 @@ void wikrt_db_close(wikrt_env*);
  * This models the physical machine resources shared by contexts,
  * primarily a persistence layer (database) and virtual CPUs via
  * worker threads.
- * 
- * Contexts may invite one worker at a time via a queue mechanism.
- * If more than one worker is needed, a worker may invite another.
- * It's generally safe to invite a worker, even when no work is
- * available. At most, we'll waste a little bit of time waking
- * a worker thread.
- * 
- * I might need an additional, separate thread to manage GC of the
- * database. But I'd prefer to perform GC incrementally with normal
- * updates. 
+ *
+ * For parallelism, I've struggled between precise signaling of the
+ * workers versus simple reasoning about system state. At this time,
+ * I err in favor of simplicity. Workers scan all contexts for work.
+ * Overhead cost is proportional to inactive contexts. But overhead
+ * should be acceptable for my intended use case.
  */
 struct wikrt_env {
     pthread_mutex_t mutex;  // for thread safety, cond vars
-    wikrt_z         cxct;   // count of associated contexts
+    wikrt_cx       *cxs;    // circular list of env contexts
 
-    // database and shared memory ephemeron table
-    wikrt_db        *db;    // persistent storage
-    wikrt_eph       *eph;   // ephemeral reference tracking
-
-    // worker thread management
+    // worker threads management
     uint32_t        workers_alloc;  // for increasing thread count
     uint32_t        workers_max;    // for reducing thread count
     pthread_cond_t  work_available; // work in cxw or if max<alloc
     pthread_cond_t  workers_halted; // for safe shutdown
-    wikrt_cx        *wq;            // circular worker queue
+
+    // database and shared memory ephemeron table
+    wikrt_db        *db;    // persistent storage
+    wikrt_eph       *eph;   // ephemeral reference tracking
 };
 
-void* wikrt_worker_behavior(void* e); 
 void wikrt_halt_threads(wikrt_env* e);
 
 /** Write Set for Generational GC
@@ -622,16 +613,16 @@ typedef struct wikrt_thread {
     wikrt_a stop;   // allocation cap (for GC, reserves space for marking)
     wikrt_a alloc;  // current allocator
 
-    // Write Set for Generational GC.
-    wikrt_v write_set;
+    // To support GC, we must track thread roots.
+    wikrt_v write_set; 
+
+    // Debug Logs.
+    wikrt_v trace;      // (trace) messages 
+    wikrt_v prof;       // stack profile
 
     // Tasks to Perform.
     wikrt_v ready;      // tasks we can work on now
     wikrt_v waiting;    // tasks waiting on others
-
-    // Debug Logs - thread local; moved to cx->memory when stable
-    wikrt_v trace;      // (trace) messages 
-    wikrt_v prof;       // stack profile
 
     // Local Memory Statistics
     uint64_t gc_bytes_processed;
@@ -671,12 +662,16 @@ typedef struct wikrt_rtb {
 // reg_set assumes rtb_prealloc for target register
 bool wikrt_rtb_resize(wikrt_cx*, wikrt_z);
 bool wikrt_rtb_prealloc(wikrt_cx* cx, wikrt_z amt);
+
 void wikrt_reg_set(wikrt_cx*, wikrt_r, wikrt_v);
 wikrt_v wikrt_reg_get(wikrt_cx const*, wikrt_r);
 
 // addend to an existing value in register
 void wikrt_reg_write(wikrt_cx*, wikrt_r, wikrt_v);
 #define WIKRT_REG_WRITE_PREALLOC WIKRT_CELLSIZE
+
+// for direct register field manipulation, must prevent GC
+wikrt_a wikrt_reg_addr(wikrt_cx*, wikrt_r);
 
 /** A context.
  *
@@ -708,15 +703,13 @@ void wikrt_reg_write(wikrt_cx*, wikrt_r, wikrt_v);
  * local worker thread.
  */
 struct wikrt_cx {
-    wikrt_env      *env;
-
-    // protected by cx->env->mutex
-    wikrt_cx       *wqn, *wqp;          // used for worker queue
-    uint32_t        worker_count;       // count of workers in context
-    pthread_cond_t  workers_done;       // signal when (0 == worker_count)
+    wikrt_cx       *cxn, *cxp;          // list contexts in environment
+    wikrt_env      *env;                // the environment
 
     // mutex for content within context
     pthread_mutex_t mutex;              // to protect local allocator
+    pthread_cond_t  workers_done;       // signal when (0 == worker_count)
+    uint32_t        worker_count;       // count of workers in context
     bool            interrupt;          // signal workers to abandon context
 
     // to support frozen contexts
@@ -746,16 +739,12 @@ struct wikrt_cx {
     // Dictionary indexing?
 };
 
-// default effort is about 100ms labor
-#define WIKRT_CX_DEFAULT_EFFORT (100 * 1000)
+// default effort is about 200ms labor
+#define WIKRT_CX_DEFAULT_EFFORT (200 * 1000)
 
 wikrt_z wikrt_gc_bitfield_size(wikrt_z alloc_space);
 wikrt_z wikrt_compute_alloc_space(wikrt_z space_total); // include GC reserve space
-
-void wikrt_add_cx(wikrt_cx** plist, wikrt_cx* cx);
-void wikrt_rem_cx(wikrt_cx** plist, wikrt_cx* cx);
-void wikrt_cx_signal_work(wikrt_cx*);       // invites a worker thread
-bool wikrt_cx_work_available(wikrt_cx*);    // assumes mutex held
+void wikrt_cx_signal_work(wikrt_cx*);  // invite a worker thread
 size_t wikrt_word_len(uint8_t const* src, size_t maxlen);
 
 // test availability of thread-local memory 
@@ -808,15 +797,12 @@ static inline wikrt_v wikrt_alloc_comp(wikrt_thread* t, wikrt_v hd, wikrt_v tl) 
 
 /** API Entry, Exit, and Memory Management
  *
- * Operations on main memory and registers must lock the context to
- * prevent background GC. Long-running computations from the API 
- * should operate as a special worker thread.
+ * At the moment, API entry simply locks the context, and API exit will
+ * unlock the context. If I change how worker threads are handled, however,
+ * some additional actions may be required.
  */
-static inline void wikrt_api_enter(wikrt_cx* cx) {
-    // not much to do here.
-    pthread_mutex_lock(&(cx->mutex));
-}
-void wikrt_api_exit(wikrt_cx*);
+static inline void wikrt_api_enter(wikrt_cx* cx) { pthread_mutex_lock(&(cx->mutex)); }
+static inline void wikrt_api_exit(wikrt_cx* cx) { pthread_mutex_unlock(&(cx->mutex)); }
 void wikrt_api_gc(wikrt_cx*, wikrt_z amt);
 void wikrt_api_interrupt(wikrt_cx*);    
 static inline bool wikrt_api_mem_prealloc(wikrt_cx* cx, wikrt_z amt) {

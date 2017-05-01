@@ -121,6 +121,12 @@ wikrt_v wikrt_reg_get(wikrt_cx const* cx, wikrt_r r)
     return rtb_data(rtb)[ix];
 }
 
+wikrt_a wikrt_reg_addr(wikrt_cx* cx, wikrt_r r)
+{
+    wikrt_rtb const* rtb = &(cx->rtb);
+    return (wikrt_a)(rtb_data(rtb) + rtb_index(rtb,r));
+}
+
 void wikrt_reg_write(wikrt_cx* cx, wikrt_r r, wikrt_v v) 
 {
     _Static_assert((WIKRT_REG_WRITE_PREALLOC == WIKRT_CELLSIZE),

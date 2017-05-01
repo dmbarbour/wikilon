@@ -69,10 +69,10 @@ void wikrt_env_destroy(wikrt_env* e)
     wikrt_halt_threads(e);
 
     // We require that no contexts exist when this is called.
-    bool const inactive = (0 == e->cxct);
+    bool const inactive = (NULL == e->cxs);
     if(!inactive) {
-        fprintf(stderr, "%s environment destroyed still has %d contexts\n"
-            , __FUNCTION__, (int) e->cxct);
+        fprintf(stderr, "%s environment destroyed still has undestroyed contexts\n"
+            , __FUNCTION__);
         abort();
     }
 
@@ -116,7 +116,7 @@ void wikrt_worker_loop(wikrt_env* const e)
     pthread_mutex_unlock(&(e->mutex));
 }
 
-void* wikrt_worker_behavior(void* e)
+static void* wikrt_worker_behavior(void* e)
 {
     wikrt_worker_loop((wikrt_env*)e);
     return NULL;
@@ -162,71 +162,65 @@ void wikrt_env_threadpool(wikrt_env* e, uint32_t ct)
     pthread_mutex_unlock(&(e->mutex));
 }
 
-static void wikrt_wq_add(wikrt_cx* cx) 
+static void wikrt_cx_env_add(wikrt_cx* cx) 
 {
-    if(NULL != cx->wqp) { 
-        // already in queue (NOP)
-        assert(NULL != cx->wqn);
-    } else if(NULL == cx->env->wq) {
-        // first in queue
-        cx->wqn = cx;
-        cx->wqp = cx;
-        cx->env->wq = cx;
+    pthread_mutex_lock(&(cx->env->mutex));
+    if(NULL == cx->env->cxs) {
+        // first in list
+        cx->cxn = cx;
+        cx->cxp = cx;
+        cx->env->cxs = cx;
     } else {
-        // addend to queue
-        cx->wqn = cx->env->wq;
-        cx->wqp = cx->wqn->wqp;
-        cx->wqp->wqn = cx;
-        cx->wqn->wqp = cx;
+        // add to end of list
+        cx->cxn = cx->env->cxs;
+        cx->cxp = cx->cxn->cxp;
+        cx->cxn->cxp = cx;
+        cx->cxp->cxn = cx;
     }
+    pthread_mutex_unlock(&(cx->env->mutex));
+}
+
+static void wikrt_cx_env_del(wikrt_cx* cx)
+{
+    pthread_mutex_lock(&(cx->env->mutex));
+    if(cx == cx->cxp) {
+        assert(cx == cx->env->cxs);
+        cx->env->cxs = NULL;
+    } else {
+        cx->cxn->cxp = cx->cxp;
+        cx->cxp->cxn = cx->cxn;
+        if(cx == cx->env->cxs) {
+            cx->env->cxs = cx->cxn;
+        }
+    }
+    cx->cxn = NULL;
+    cx->cxp = NULL;
+    pthread_mutex_unlock(&(cx->env->mutex));
 }
 
 void wikrt_cx_signal_work(wikrt_cx* cx)
 {
-    // add context to work queue, then signal workers.
-    pthread_mutex_lock(&(cx->env->mutex));
-    wikrt_wq_add(cx);
-    pthread_mutex_unlock(&(cx->env->mutex));
+    // Note: No work queue. Workers that are awake scan all contexts
+    // for work, and return to sleep only if no work was available. 
+    // This has a moderate overhead for scanning inactive contexts.
+    // OTOH, it simplifies shared state and synchronization. 
+    //
+    // When a worker cannot find any work, it sleeps on a condvar. We
+    // may signal that condvar in case all workers are sleeping, to
+    // get a worker back on task ASAP.
     pthread_cond_signal(&(cx->env->work_available));
 }
 
-static void wikrt_wq_rem(wikrt_cx* const cx)
-{
-    if(NULL == cx->wqp) {
-        // not in queue (NOP)
-        assert(NULL == cx->wqn);
-    } else if(cx == cx->wqn) {
-        assert((cx == cx->wqp) && (cx == cx->env->wq));
-        cx->env->wq = NULL;
-    } else {
-        assert((cx != cx->wqn) && (cx != cx->wqp));
-        assert((cx == cx->wqn->wqp) && (cx == cx->wqp->wqn));
-        cx->wqn->wqp = cx->wqp;
-        cx->wqp->wqn = cx->wqn;
-        if(cx == cx->env->wq) {
-            cx->env->wq = cx->wqn;
-        }
-    }
-    cx->wqp = NULL;
-    cx->wqn = NULL;
-}
 
 void wikrt_api_interrupt(wikrt_cx* cx)
 {
-    // tell all worker threads to leave ASAP.
+    // Tell worker threads to leave, then wait. This need to interrupt
+    // is the main complication that discourages use of work queues.
     cx->interrupt = true;
-    pthread_mutex_unlock(&(cx->mutex));
-
-    pthread_mutex_lock(&(cx->env->mutex));
-    // wait until all worker threads have left.
     if(0 != cx->worker_count) {
-        pthread_cond_wait(&(cx->workers_done), &(cx->env->mutex));
+        pthread_cond_wait(&(cx->workers_done), &(cx->mutex));
     }
-    wikrt_wq_rem(cx);
-
-    // ensure exclusive control for the caller.
-    pthread_mutex_lock(&(cx->mutex));
-    pthread_mutex_unlock(&(cx->env->mutex));
+    assert(0 == cx->worker_count);
     cx->interrupt = false;
 }
 
@@ -247,16 +241,8 @@ wikrt_cx* wikrt_cx_create(wikrt_env* const env, char const* dict_name, size_t si
     cx->size = size;
     cx->mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     cx->workers_done = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
-
-    // add record of context to environment. 
-    // At the moment, just a context count.
-    pthread_mutex_lock(&(cx->env->mutex));
-    ++(cx->env->cxct);
-    pthread_mutex_unlock(&(cx->env->mutex));
-
-    // use wikrt_cx_reset to initialize allocators, etc.
-    wikrt_cx_reset(cx, dict_name);
-
+    wikrt_cx_reset(cx, dict_name);  // initialize context state
+    wikrt_cx_env_add(cx);           // make visible to workers
     return cx;
 }
 
@@ -272,16 +258,10 @@ void wikrt_cx_destroy(wikrt_cx* cx)
     }
     pthread_mutex_unlock(&(cx->mutex));
 
-    // clear data, halting activity if any
-    // most logic here is in wikrt_cx_reset.
-    cx->frozen = false; // can't reset a frozen context
+    // clear the context, hide it from workers
+    wikrt_cx_env_del(cx);
+    cx->frozen = false; 
     wikrt_cx_reset(cx, NULL); 
-
-    // remove record of context from environment
-    pthread_mutex_lock(&(cx->env->mutex));
-    assert(cx->env->cxct > 0);
-    --(cx->env->cxct);
-    pthread_mutex_unlock(&(cx->env->mutex));
 
     // release POSIX resources as needed
     pthread_cond_destroy(&(cx->workers_done));
@@ -296,34 +276,36 @@ static void wikrt_cx_reset_dict(wikrt_cx* cx, char const* const dict_name)
 {
     _Static_assert((sizeof(cx->dict_name) > WIKRT_HASH_SIZE), 
         "insufficient dictionary name size");
+    _Static_assert((sizeof(char) == sizeof(uint8_t)),
+        "unsafe casts between uint8_t* and char*");
 
-    // Compute a stable name for the dictionary, given arbitrary text.
-    // If the text corresponds to a valid Awelon word no larger than a
-    // secure hash, we will use that directly. Otherwise, I'll replace
-    // the dictionary name by its secure hash.
+    // Compute a stable name for the dictionary. A secure hash for the
+    // dictionary name is used unless it's a short, valid Awelon word.
+    // Aliasing is resisted for access control security reasons.
     size_t const name_len = (NULL == dict_name) ? 0 : strlen(dict_name);
     size_t const valid_name_len = wikrt_word_len((uint8_t const*) dict_name, 
         utf8_strlen((uint8_t const*) dict_name, name_len));
-    bool const name_ok = (name_len == valid_name_len) && (name_len <= WIKRT_HASH_SIZE);
+    bool const name_ok = (name_len == valid_name_len) && (name_len < WIKRT_HASH_SIZE);
     if(name_ok) {
         // preserve given name, potentially empty name
         cx->dict_name_len = name_len;
         memcpy(cx->dict_name, dict_name, name_len);
     } else {
-        // alias requested name to a secure hash
+        // reference requested name indirectly, via secure hash
         cx->dict_name_len = WIKRT_HASH_SIZE;
         wikrt_hash((char*)(cx->dict_name), (uint8_t const*)dict_name, name_len);
     }
     cx->dict_name[cx->dict_name_len] = 0;
+    cx->dict_ver[0] = 0; // clear version information
 
     //fprintf(stderr, "context with dictionary `%s`\n", (char const*) cx->dict_name); 
 }
 
 wikrt_z wikrt_gc_bitfield_size(wikrt_z alloc_space) 
 {
-    wikrt_z const bits = alloc_space / WIKRT_CELLSIZE;      // one bit per cell we mark
-    wikrt_z const bytes = WIKRT_LNBUFF_POW2(bits, 8) / 8;   // round up to bytes
-    return wikrt_cellbuff(bytes);                           // round up to cells
+    wikrt_z const bits = alloc_space / WIKRT_CELLSIZE;      // one bit per full cell
+    wikrt_z const bytes = WIKRT_LNBUFF_POW2(bits, 8) / 8;   // round up to full bytes
+    return wikrt_cellbuff(bytes);                           // round up to full cells
 }
 
 wikrt_z wikrt_compute_alloc_space(wikrt_z const space_total)
@@ -336,9 +318,7 @@ wikrt_z wikrt_compute_alloc_space(wikrt_z const space_total)
     wikrt_z const denom = (8 * WIKRT_CELLSIZE) + 3;
     wikrt_z const field = wikrt_cellbuff((space_total + (denom - 1)) / denom);
     wikrt_z const alloc = (space_total - (3 * field));
-
-    // safety and sanity check
-    assert(space_total >= (alloc + (3 * wikrt_gc_bitfield_size(alloc))));
+    assert(field >= wikrt_gc_bitfield_size(alloc)); // safety and sanity check
     return alloc;
 }
 
@@ -361,8 +341,10 @@ void wikrt_cx_alloc_reset(wikrt_cx* cx)
 
 void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 {
-    // halt existing operations ASAP
-    wikrt_set_effort(cx,0);
+    wikrt_cx* old_proto; // for latent destruction
+
+    wikrt_api_enter(cx);
+    wikrt_api_interrupt(cx);
 
     if(cx->frozen) {
         fprintf(stderr, "%s: a frozen context cannot be reset\n", __FUNCTION__);
@@ -370,28 +352,31 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
     }
     assert(0 == cx->refct);
 
-    // clear frozen prototype
-    if(NULL != cx->proto) {
-        wikrt_cx_destroy(cx->proto);
-        cx->proto = NULL;
-    }
+    // latent destruction on prototype (to simplify thread safety)
+    old_proto = cx->proto;
+    cx->proto = NULL;
 
     // TODO
     // Clear ephemeron references (via wikrt_eph_rem).
-    // This should include cx->dict_ver (once determined).
+    // This should include cx->dict_ver (if determined).
 
-    // reset data and roots
+    // reset memory and registers 
     cx->trace_enable    = false;
     cx->prof_enable     = false;
     cx->words           = 0;
     cx->rtb             = (wikrt_rtb){0};
-    cx->dict_ver[0]     = 0;
-    wikrt_cx_reset_dict(cx, dict_name);
     wikrt_cx_alloc_reset(cx);
+    cx->memory.effort   = WIKRT_CX_DEFAULT_EFFORT;
     wikrt_rtb_prealloc(cx, 16);
+    wikrt_cx_reset_dict(cx, dict_name);
 
-    // set an initial effort quota
-    wikrt_set_effort(cx, WIKRT_CX_DEFAULT_EFFORT);
+    wikrt_api_exit(cx);
+
+    // delayed destruction of prototype (after api_exit to avoid lock conflicts)
+    if(NULL != old_proto) { 
+        wikrt_cx_destroy(old_proto); 
+    }
+
 }
 
 void wikrt_cx_gc(wikrt_cx* cx)
@@ -407,17 +392,6 @@ void wikrt_api_gc(wikrt_cx* cx, wikrt_z _amt)
     // perform GC, use _amt as an optional GC hint for major vs. minor
     // for now, perhaps perform major GC every time
 }
-
-void wikrt_api_exit(wikrt_cx* cx)
-{
-    bool const have_work = (0 != cx->memory.ready);
-    pthread_mutex_unlock(&(cx->mutex));
-
-    // signal work after every API operation, if potentially useful.
-    // It doesn't hurt much if the work we can perform is limited.
-    if(have_work) { wikrt_cx_signal_work(cx); }
-}
-
 
 void wikrt_thread_poll_waiting(wikrt_thread* thread)
 {
@@ -442,6 +416,7 @@ void wikrt_thread_poll_waiting(wikrt_thread* thread)
 void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
 {
     wikrt_api_enter(cx);
+    // forcibly halt evaluation if effort is 0. 
     if(0 == effort) { wikrt_api_interrupt(cx); }
     cx->memory.effort = effort;
     wikrt_api_exit(cx);
@@ -449,10 +424,10 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
 
 void wikrt_debug_trace(wikrt_cx* cx, bool enable)
 {
-    pthread_mutex_lock(&(cx->mutex));
+    wikrt_api_enter(cx);
     cx->trace_enable = enable;
     if(!enable) { cx->memory.trace = 0; }
-    pthread_mutex_unlock(&(cx->mutex));
+    wikrt_api_exit(cx);
 }
 
 
@@ -475,10 +450,10 @@ bool wikrt_debug_trace_move(wikrt_cx* cx, wikrt_r dst)
 
 void wikrt_prof_stack(wikrt_cx* cx, bool enable)
 {
-    pthread_mutex_lock(&(cx->mutex));
+    wikrt_api_enter(cx);
     cx->prof_enable = enable;
     if(!enable) { cx->memory.prof = 0; }
-    pthread_mutex_unlock(&(cx->mutex));
+    wikrt_api_exit(cx);
 }
 
 bool wikrt_prof_stack_move(wikrt_cx* cx, wikrt_r dst)
