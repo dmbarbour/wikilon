@@ -322,23 +322,6 @@ wikrt_z wikrt_compute_alloc_space(wikrt_z const space_total)
     return alloc;
 }
 
-
-void wikrt_cx_alloc_reset(wikrt_cx* cx)
-{
-    cx->memory       = (wikrt_thread){0};
-    cx->memory.cx    = cx;
-    cx->memory.start = wikrt_cellbuff( ((wikrt_a)cx) + sizeof(wikrt_cx) );  
-    cx->memory.end   = ((wikrt_a)cx) + cx->size; // exact
-    cx->memory.elder = cx->memory.start; // no elder survivors yet
-    cx->memory.young = cx->memory.start; // no young survivors yet
-    cx->memory.alloc = cx->memory.start; // bump pointer allocation
-
-    wikrt_z const max_cell_count = (cx->memory.end - cx->memory.start) / WIKRT_CELLSIZE;
-    wikrt_z const max_usable_space = max_cell_count * WIKRT_CELLSIZE;
-    wikrt_z const alloc_space = wikrt_compute_alloc_space(max_usable_space);
-    cx->memory.stop = cx->memory.start + alloc_space;
-}
-
 void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 {
     wikrt_cx* old_proto; // for latent destruction
@@ -352,7 +335,7 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
     }
     assert(0 == cx->refct);
 
-    // latent destruction on prototype (to simplify thread safety)
+    // latent destruction of prototype (to simplify thread safety)
     old_proto = cx->proto;
     cx->proto = NULL;
 
@@ -364,19 +347,26 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
     cx->trace_enable    = false;
     cx->prof_enable     = false;
     cx->words           = 0;
+    cx->effort          = WIKRT_CX_DEFAULT_EFFORT;
     cx->rtb             = (wikrt_rtb){0};
-    wikrt_cx_alloc_reset(cx);
-    cx->memory.effort   = WIKRT_CX_DEFAULT_EFFORT;
+    cx->memory          = (wikrt_thread){0};
+    cx->memory.cx       = cx;
+    cx->memory.start    = wikrt_cellbuff( ((wikrt_a)cx) + sizeof(wikrt_cx) );  
+    cx->memory.alloc    = cx->memory.start; // bump pointer allocation
+    cx->memory.end      = ((wikrt_a)cx) + cx->size; // exact
+    wikrt_z const max_cell_count = (cx->memory.end - cx->memory.start) / WIKRT_CELLSIZE;
+    wikrt_z const max_usable_space = max_cell_count * WIKRT_CELLSIZE;
+    wikrt_z const alloc_space = wikrt_compute_alloc_space(max_usable_space);
+    cx->memory.stop = cx->memory.start + alloc_space;
+
     wikrt_rtb_prealloc(cx, 16);
     wikrt_cx_reset_dict(cx, dict_name);
 
     wikrt_api_exit(cx);
 
-    // delayed destruction of prototype (after api_exit to avoid lock conflicts)
     if(NULL != old_proto) { 
         wikrt_cx_destroy(old_proto); 
     }
-
 }
 
 void wikrt_cx_gc(wikrt_cx* cx)
@@ -418,7 +408,7 @@ void wikrt_set_effort(wikrt_cx* cx, uint32_t effort)
     wikrt_api_enter(cx);
     // forcibly halt evaluation if effort is 0. 
     if(0 == effort) { wikrt_api_interrupt(cx); }
-    cx->memory.effort = effort;
+    cx->effort = effort;
     wikrt_api_exit(cx);
 }
 

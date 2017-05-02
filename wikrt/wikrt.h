@@ -52,6 +52,10 @@ typedef struct wikrt_env wikrt_env;
  * Given a context, we can evaluate code and search or transactionally 
  * update the dictionary.
  *
+ * The context API is not multi-thread safe. Any parallelism must be
+ * achieved via `(par)` annotations or accelerated parallel functions.
+ * 
+ *
  * From this API, a context should be used from one thread at a time.
  * It doesn't use thread-local storage, so moving between threads is
  * safe. But parallelism should be achieved via `(par)` annotations 
@@ -100,14 +104,14 @@ void wikrt_env_destroy(wikrt_env*);
 
 /** Construct a context for computation. 
  *
- * A named dictionary may be associated with the context to support
- * saving, loading, and linking of definitions during evaluation. The
- * empty string specifies a fresh, volatile dictionary and any commit
- * operations will fail. Access control for named dictionaries is left
- * to the API client.
+ * Each context may be bound to a persistent, named dictionary. This
+ * dictionary becomes the source of definitions and a default target
+ * for transactionally commited updates. An exception is an empty or
+ * NULL dictionary name, which specifies a new ephemeral dictionary.
+ * Access control is left to the client of this API.
  *
- * This operation may fail and return NULL if the context cannot be
- * allocated at the requested size, at least WIKRT_CX_MINSIZE. 
+ * This operation returns NULL if the context cannot be allocated at
+ * the requested size, which must be at least WIKRT_CX_MINSIZE. 
  */
 wikrt_cx* wikrt_cx_create(wikrt_env*, char const* dict, size_t);
 #define WIKRT_CX_MINSIZE (1000 * 1000)
@@ -427,12 +431,9 @@ bool wikrt_eval_parallel(wikrt_cx*);
  * memory, this quota is shared by many computations within the context.
  * Unlike memory, it's trivial to allocate more effort and continue. 
  *
- * Setting effort to zero will immediately halt labor within a thread,
- * while setting a non-zero value may continue background parallelism.
- * Effort is shared by worker threads, so a parallel computation may
- * burn through the effort more quickly.
- *
- * The effort is currently measured in CPU microseconds.
+ * Effort isn't precise, but it roughly corresponds to CPU microseconds.
+ * This is distinct from wall-clock microseconds. With parallelism, the
+ * allocated effort may be consumed quickly by several threads.
  */
 void wikrt_set_effort(wikrt_cx*, uint32_t cpu_usec);
 

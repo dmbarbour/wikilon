@@ -6,10 +6,8 @@
  * a (raw byte, value') composition then take the raw byte.
  *
  * Feasible efficiency improvements 
- * - allocate temporary 'registers' to avoid common allocations
- *  - e.g. raw byte, focus value, list slice, list addend, next
- *  - this should eliminate about 80% of dynamic allocations
  * - temporary 'thread' structure to further localize memory
+ * - a few 'registers' to eliminate allocations within thread
  * 
  * This does introduce some challenges for tracking serialization context.
  * I'll use a little reflection - peek ahead - to avoid extra spaces within
@@ -25,6 +23,7 @@
 // Enough space to guarantee a reader step succeeds.
 // (this will overestimate most of the time, but that's okay)
 #define WIKRT_READER_STEP_PREALLOC (64 * WIKRT_CELLSIZE)
+
 
 // rewrite register to (small byte, val') compositon list, or NULL.
 // returns true on success, false if it runs out of memory, aborts

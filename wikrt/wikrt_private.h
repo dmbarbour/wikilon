@@ -535,72 +535,53 @@ struct wikrt_env {
 
 void wikrt_halt_threads(wikrt_env* e);
 
-/** Write Set for Generational GC
+/** Write Set for GC
  *
- * Generational GC requires tracking references from the old generation
- * to the young generation. I intend to track this at the field level so
- * we can work with parts of a large array. My current plan is to use a
- * hashtable indexing small 'pages' of fields to a bitfield. 
+ * Awelon is purely functional, but writes are possible when working
+ * with linear or unique objects, especially arrays. A write set can
+ * record writes to support subsequent GC, essentially operating as
+ * a root set for a thread.
  *
- * Assuming the table is half filled, this has worst case 12.5% overhead
- * on a 32-bit system or 6.25% overhead on a 64-bit system. The normal 
- * case is considerably better because we expect most old objects to be
- * unmodified. All of these tables can be cleared every time we perform
- * a full context GC, so this also is recoverable space.
- *
- * A write set is represented within a WIKRT_OTYPE_BINARY object, and
- * may further be wrapped as a composable list of write sets. 
+ * The write set design optimizes for writing to arrays. Fields that
+ * are in the same 'page' are recorded in the same bitfield. Fields
+ * randomly scattered in memory will cost a lot more to write. OTOH,
+ * most algorithms that write will be sensitive to memory locality.
+ * 
+ * If a thread lacks space to record a write, that should be treated
+ * like any other out of memory error. We may grow a thread's write 
+ * set to adapt to the current computation, and we may clear the set
+ * when promoting memory yet continue using the allocation. 
  */
 typedef struct wikrt_wsd {
-    wikrt_n     page;
+    wikrt_a     page;
     wikrt_n     bits;
 } wikrt_wsd;
 typedef struct wikrt_ws {
-    wikrt_z     size;       // buffer size
-    wikrt_z     fill;       // element count
-    wikrt_wsd   data[];     // data, adjacent to the header.
+    wikrt_z     size;       // buffer size   (wikrt_wsd fields)
+    wikrt_z     fill;       // element count (loaded fields)
+    wikrt_v     data;       // binary array
 } wikrt_ws;
 
-/** Multi-Threading and Garbage Collection
+void wikrt_ws_record(wikrt_ws*, wikrt_a field);
+void wikrt_ws_clear(wikrt_ws*);
+bool wikrt_thread_write_prealloc(wikrt_thread*, wikrt_n nPages);
+void wikrt_thread_write(wikrt_thread*, wikrt_v* field, wikrt_v val);
+
+/** Thread Heap
  * 
- * Threads will operate in a context, using a small region of dedicated
- * memory - the 'nursery' - for most allocations and independent GC. 
+ * Each thread operates in its own "heap" within a context. The heap
+ * is not shared, but threads share other objects in context memory.
+ * Each thread may independently garbage collect its own heap, without
+ * coordination. The thread heap thus serves as an implicit generation
+ * for generational GC, as the heap might be collected dozens of times
+ * per context-level collection. (There are no explicit generations.)
+ * 
+ * Results from a thread may be promoted into the parent context. This
+ * is the basis for communication between threads. Promotion shrinks a
+ * thread's heap, shaving space off the left hand side, but ensures the
+ * results will no longer be moved around in memory by the thread GC.
  *
- * A constraint is that no other thread may directly reference a nursery.
- * Full context GC will need to interrupt existing threads. Communication
- * between threads requires promoting the object out of the nursery. This
- * promotion can be modeled conservatively by promoting the entire nursery.
- *
- * Each thread thus tracks a local 'nursery', and the thread structure is
- * also used for any full-context GC.
- *
- * Each thread shall have an effort quota (pre-allocated) and a 
- *
- * Each thread will have a local effort quota, which it preallocates. If a
- * thread terminates and sufficient quota remains it may return some, but
- * it won't subtract again from the parent upon termination.
- *
- * Worker threads will generally operate in a context until they hit the
- * quota or run out of local memory, unless signaled via cx->workers_halt`.
- * Whenever a worker runs out of memory, it will rotate to another context
- * (potentially back to the same one), and may attempt full GC on entering
- * the context if necessary (only if it is the first thread). The main
- * thread may act a lot like a worker thread during evaluation tasks, but
- * with some extra tactics for prioritizing work.
- *
- * Note: worker threads will only operate on one task at a time, performing
- * as many allocated '(par)' tasks as feasible and promoting anything else
- * to the context. There are a few motivations for this. A task is not
- * likely to share memory with other tasks, so promotion avoids unnecessary
- * copying of a prior task's memory. Processing new tasks in order of their
- * construction will minimize waits within a thread. 
- *
- * I haven't decided on any particular order of evaluation for par tasks.
- *
- * Effort tracking: I'd like to generally preallocate the effort for a few
- * GC cycles. We can likely estimate based on a previous cycle time, and
- * prepay for a few GC cycles. The 'cycle' in question might be a survivor
- * GC cycle rather than the youngest generation.
+ * Note: Effort tracking is currently separate from the thread object.
  */
 typedef struct wikrt_thread { 
     wikrt_cx* cx;   // for large allocations, coordination
@@ -608,13 +589,11 @@ typedef struct wikrt_thread {
     // Memory Management (no free lists)
     wikrt_a start;  // first reserved address
     wikrt_a end;    // last reserved address
-    wikrt_a elder;  // end of prior young generation
-    wikrt_a young;  // end of young generation (alloc start)
     wikrt_a stop;   // allocation cap (for GC, reserves space for marking)
     wikrt_a alloc;  // current allocator
 
     // To support GC, we must track thread roots.
-    wikrt_v write_set; 
+    wikrt_ws ws; 
 
     // Debug Logs.
     wikrt_v trace;      // (trace) messages 
@@ -623,24 +602,16 @@ typedef struct wikrt_thread {
     // Tasks to Perform.
     wikrt_v ready;      // tasks we can work on now
     wikrt_v waiting;    // tasks waiting on others
+    wikrt_v done;       // tasks awaiting promotion
 
-    // Local Memory Statistics
+    // Some Memory Statistics
     uint64_t gc_bytes_processed;
     uint64_t gc_bytes_collected;
-
-    // effort tracking
-    uint64_t time_last;  // wikrt_thread_time at last allocation
-    uint32_t effort;     // pre-allocated effort for this cycle
-
-    // Idea: I could add an mdb_txn here via mdb_txn_reset and
-    //  mdb_txn_renew to reduce malloc/free overheads within a
-    //  thread.
 } wikrt_thread;
 
-/** current timestamp in microseconds */
-uint64_t wikrt_thread_time(); // microseconds
 void wikrt_thread_poll_waiting(wikrt_thread*);
-void wikrt_thread_move_ready_r(wikrt_thread*);
+
+uint64_t wikrt_thread_time(); // timestamp in microseconds
 
 /** Registers Table
  * 
@@ -670,37 +641,19 @@ wikrt_v wikrt_reg_get(wikrt_cx const*, wikrt_r);
 void wikrt_reg_write(wikrt_cx*, wikrt_r, wikrt_v);
 #define WIKRT_REG_WRITE_PREALLOC WIKRT_CELLSIZE
 
-// for direct register field manipulation, must prevent GC
-wikrt_a wikrt_reg_addr(wikrt_cx*, wikrt_r);
-
-/** A context.
+/** Context structure.
  *
- * A context is represented by a contiguous volume of memory, and has
- * a corresponding dictionary. A context has a set of binary registers
- * for external access, only manipulated via the main API thread.
+ * A context has a contiguous volume of memory, is bound to a named
+ * dictionary, a transaction with read and written word definitions,
+ * and an arbitrary set of integer-named binary registers (for IO).
  *
- * Additionally, each context tracks words loaded from the dictionary.
- * This supports the transaction model and allows for compilation of 
- * words, and partial GC as the context fills.
+ * Contexts are held in a circular list within an environment, such
+ * that worker threads may occasionally visit and perform labor.
  *
- * A context is associated with a dictionary in persistent storage.
- * If a dictionary name is an invalid word or is larger than its
- * secure hash, we'll rewrite it to the secure hash of the name.
- *
- * For parallelism, a context may be placed in a work queue. For MT
- * safety involving exclusive control of a context, it is permitted
- * to lock cx->mutex while holding cx->env->mutex.
- *
- * A challenge: I need full GC of the context by worker threads for
- * background parallelism, and I also need stable memory for API ops.
- * So the question is how to prevent full context GC from background
- * threads while the main API is active. My current idea is to just
- * accept the parallelism hit - use cx->mutex to lock memory for API
- * operations that need it, but try to keep these critical sections
- * small. (Since worker threads require very little synchronization,
- * modulo large allocations, this should work well.) When the main 
- * thread performs long running evaluation, it may act as an extra,
- * local worker thread.
+ * A context may be garbage collected when its memory is full. A worker
+ * can perform this GC opportunistically, e.g. if it's the first worker
+ * and holds the mutex. API calls may forcibly interrupt computation to
+ * recover space.
  */
 struct wikrt_cx {
     wikrt_cx       *cxn, *cxp;          // list contexts in environment
@@ -724,6 +677,7 @@ struct wikrt_cx {
     // parallel computations in shared memory
     size_t          size;               // initial allocation
     wikrt_thread    memory;             // shared context memory
+    uint32_t        effort;             // quota (CPU microseconds)
 
     // Dictionary Data
     size_t          dict_name_len;      // 0..WIKRT_HASH_SIZE
@@ -798,8 +752,8 @@ static inline wikrt_v wikrt_alloc_comp(wikrt_thread* t, wikrt_v hd, wikrt_v tl) 
 /** API Entry, Exit, and Memory Management
  *
  * At the moment, API entry simply locks the context, and API exit will
- * unlock the context. If I change how worker threads are handled, however,
- * some additional actions may be required.
+ * unlock the context. But this might need to change if we later change
+ * how worker threads interact with the context.
  */
 static inline void wikrt_api_enter(wikrt_cx* cx) { pthread_mutex_lock(&(cx->mutex)); }
 static inline void wikrt_api_exit(wikrt_cx* cx) { pthread_mutex_unlock(&(cx->mutex)); }

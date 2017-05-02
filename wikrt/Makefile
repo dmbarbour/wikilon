@@ -6,6 +6,7 @@ CFLAGS := $(W) $(OPT) -fPIC -g -std=gnu11
 CC := gcc $(CFLAGS)
 RUNTIME_OBJECTS := \
   wikrt_reg.o wikrt_parse_check.o         \
+  wikrt_wset.o                            \
   wikrt_read.o                            \
   wikrt_db.o wikrt_eph.o wikrt_prelude.o  \
   wikrt.o  \
@@ -86,6 +87,9 @@ wikrt_db.o: wikrt_db.c wikrt_private.h wikrt_eph.h futil.h
 	$(CC) -o $@ -c $<
 
 wikrt_eph.o: wikrt_eph.c wikrt_eph.h futil.h
+	$(CC) -o $@ -c $<
+
+wikrt_wset.o: wikrt_wset.c wikrt_private.h
 	$(CC) -o $@ -c $<
 
 wikrt_parse_check.o: wikrt_parse_check.c wikrt_private.h wikrt.h 
