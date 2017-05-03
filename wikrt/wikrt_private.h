@@ -97,7 +97,7 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *
  *      000     primitives, accelerators, annotations
  *      001     single raw binary bytes in stream (ops only)
- *      (small decimals, labels, texts)
+ *      (todo: small decimals, sum labels, texts)
  *
  *   I'm assuming 64-bit systems will be the common option. Decimals 
  *   with an 8 bit exponent (base 10) and 48-bit mantissa would cover
