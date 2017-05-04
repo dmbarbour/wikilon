@@ -355,22 +355,21 @@ void wikrt_eph_add(wikrt_eph* eph, uint64_t elem)
 
 static void wikrt_eph_delete(wikrt_eph* eph, size_t ix)
 {
-    if(0 == eph->data[ix]) { return; }
+    wikrt_eph_d* const d = eph->data;
+    if(0 == d[ix]) { return; }
     assert(0 < eph->head->fill);
     --(eph->head->fill);
-    eph->data[ix] = 0;
+    d[ix] = 0;
     size_t const sz = eph->head->size;
 
     // local repair for collisions.
     do {
         ix = (ix + 1) % sz;
-        wikrt_eph_d const d = eph->data[ix];
-        if(0 == d) { return; }
-
-        size_t const new_ix = wikrt_eph_index(eph, WIKRT_EPH_H(d));
+        if(0 == d[ix]) { return; }
+        size_t const new_ix = wikrt_eph_index(eph, WIKRT_EPH_H(d[ix]));
         if(new_ix != ix) {
-            eph->data[new_ix] = d;
-            eph->data[ix] = 0;
+            d[new_ix] = d[ix];
+            d[ix] = 0;
         }
     } while(1);
 }

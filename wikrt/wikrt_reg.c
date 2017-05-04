@@ -48,9 +48,9 @@ static void rtb_clear(wikrt_rtb* const rtb, wikrt_r const r)
     } while(1);
 }
 
-static void rtb_write(wikrt_rtb* const rtb, wikrt_r const r, wikrt_v const v) 
+static void rtb_put(wikrt_rtb* rtb, wikrt_r r, wikrt_v v) 
 {
-    assert(rtb->size > rtb->fill);
+    assert((rtb->size > rtb->fill) && (0 != v));
     wikrt_z const ix = rtb_index(rtb, r);
     wikrt_v* const data = rtb_data(rtb);
     if(0 == data[ix]) {
@@ -61,10 +61,9 @@ static void rtb_write(wikrt_rtb* const rtb, wikrt_r const r, wikrt_v const v)
 }
 
 
-bool wikrt_rtb_resize(wikrt_cx* cx, wikrt_z new_size)
+static bool wikrt_rtb_resize(wikrt_cx* cx, wikrt_z new_size)
 {
-    // don't permit shrinking too much
-    if((3 * cx->rtb.fill) > (2 * new_size)) { return false; }
+    assert(cx->rtb.fill < new_size); // reject data loss
 
     wikrt_z const data_bytes = wikrt_array_size(new_size);
     wikrt_z const id_bytes = wikrt_cellbuff(WIKRT_CELLSIZE + (sizeof(wikrt_r) * new_size));
@@ -74,7 +73,7 @@ bool wikrt_rtb_resize(wikrt_cx* cx, wikrt_z new_size)
     wikrt_a const ids_addr  = wikrt_api_alloc(cx, id_bytes);
     memset((void*)data_addr, 0, data_bytes);
     memset((void*)ids_addr, 0, id_bytes);
-    *((wikrt_o*)ids_addr) = wikrt_new_obj_hdr(WIKRT_OTYPE_BINARY, id_bytes - sizeof(wikrt_o));
+    *((wikrt_o*)ids_addr)  = wikrt_new_obj_hdr(WIKRT_OTYPE_BINARY, id_bytes - sizeof(wikrt_o));
     *((wikrt_o*)data_addr) = wikrt_new_obj_hdr(WIKRT_OTYPE_ARRAY, new_size);
 
     wikrt_rtb new_rtb = { 0 };
@@ -89,7 +88,7 @@ bool wikrt_rtb_resize(wikrt_cx* cx, wikrt_z new_size)
     for(wikrt_z ix = 0; ix < cx->rtb.size; ++ix) 
     {
         if(0 != old_data[ix]) {
-            rtb_write(&new_rtb, old_ids[ix], old_data[ix]);
+            rtb_put(&new_rtb, old_ids[ix], old_data[ix]);
         }
     }
     assert(cx->rtb.fill == new_rtb.fill);
@@ -108,26 +107,29 @@ bool wikrt_rtb_prealloc(wikrt_cx* cx, wikrt_z amt)
     return wikrt_rtb_resize(cx, 1 + (2 * new_fill));
 }
 
-void wikrt_reg_set(wikrt_cx* cx, wikrt_r r, wikrt_v v)
+void wikrt_reg_set(wikrt_cx* cx, wikrt_r r, wikrt_v v) 
 {
     if(0 == v) { rtb_clear(&(cx->rtb), r); }
-    else { rtb_write(&(cx->rtb), r, v); }
+    else { rtb_put(&(cx->rtb), r, v); }
 }
 
 wikrt_v wikrt_reg_get(wikrt_cx const* cx, wikrt_r r)
 {
-    wikrt_rtb const* rtb = &(cx->rtb);
-    wikrt_z const ix = rtb_index(rtb,r);
-    return rtb_data(rtb)[ix];
+    wikrt_z const ix = rtb_index(&(cx->rtb), r);
+    return rtb_data(&(cx->rtb))[ix];
 }
 
-void wikrt_reg_write(wikrt_cx* cx, wikrt_r r, wikrt_v v) 
+void wikrt_reg_addend(wikrt_cx* cx, wikrt_r r, wikrt_v v) 
 {
-    _Static_assert((WIKRT_REG_WRITE_PREALLOC == WIKRT_CELLSIZE),
-        "reg write needs only one cell at most");
-    wikrt_v const v0 = wikrt_reg_get(cx, r);
-    wikrt_v const vf = wikrt_alloc_comp(&(cx->memory), v0, v);
-    wikrt_reg_set(cx, r, vf);
-}
+    if(0 == v) { return; }
 
+    wikrt_v const v0 = wikrt_reg_get(cx, r);
+    if(0 == v0) { wikrt_reg_set(cx, r, v); }
+    else { 
+        _Static_assert(WIKRT_REG_ADDEND_PREALLOC == WIKRT_CELLSIZE,
+            "difference in prealloc and requirement");
+        assert(wikrt_mem_avail(&(cx->memory), WIKRT_CELLSIZE));
+        wikrt_reg_set(cx, r, wikrt_alloc_comp(&(cx->memory), v0, v));
+    }
+}
 

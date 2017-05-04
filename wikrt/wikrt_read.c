@@ -1,13 +1,8 @@
 /** Reading Binaries
- *
- * Ideally, reading large binaries is incremental and efficient.
- * But in the interest of making it work before making it fast,
- * it's currently just incremental. In each step, I'll allocate
- * a (raw byte, value') composition then take the raw byte.
- *
- * Feasible efficiency improvements 
- * - temporary 'thread' structure to further localize memory
- * - a few 'registers' to eliminate allocations within thread
+ * 
+ * Binaries must be produced from code for both reads and stowage.
+ * Reads shall be performed incrementally in either case, so some
+ * of the argument value might be left over after reading.
  * 
  * This does introduce some challenges for tracking serialization context.
  * I'll use a little reflection - peek ahead - to avoid extra spaces within

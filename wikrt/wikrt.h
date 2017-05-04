@@ -420,8 +420,7 @@ size_t wikrt_eval_binary(wikrt_cx*, wikrt_r src, size_t amt, wikrt_r dst);
  * exhausted, or prove unnecessary during garbage collection.
  *
  * Use of wikrt_eval_parallel will wait for all background computations
- * finish, one way or the other. Uses same return values as wikrt_eval,
- * except there is no risk of parse errors at this stage.
+ * finish (by quota or termination), and will perform work as needed.
  */
 bool wikrt_eval_parallel(wikrt_cx*);
 
@@ -561,6 +560,10 @@ bool wikrt_prof_heap(wikrt_cx*, wikrt_r, wikrt_mem_stats*);
  * a megabyte is reasonable per OS thread in the context.
  */
 void wikrt_env_threadpool(wikrt_env*, uint32_t worker_count);
+
+// Thoughts: It might be convenient to have `wikrt_eval_parallel` work
+// in a multi-threaded manner, adding workers to a specific context.
+// (Not relevant for my intended use case, however.)
 
 // TODO:
 // a thread pool supports only local, CPU-layer parallelism

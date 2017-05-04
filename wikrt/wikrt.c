@@ -146,15 +146,21 @@ void wikrt_env_threadpool(wikrt_env* e, uint32_t ct)
         pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
         pthread_attr_setstacksize(&a, WIKRT_WORKER_STACK_SIZE);
         
-        uint32_t alloc = (e->workers_max - e->workers_alloc);
+        uint32_t try_alloc = (e->workers_max - e->workers_alloc);
         do {
             pthread_t tid; // dropped; threads are not signaled directly.
             int const st = pthread_create(&tid, &a, &wikrt_worker_behavior, e);
             if(0 == st) { ++(e->workers_alloc); }
-            --alloc;
-        } while(alloc > 0);
-
+            --try_alloc;
+        } while(try_alloc > 0);
         pthread_attr_destroy(&a);
+    
+        if(e->workers_alloc < e->workers_max) {
+            // don't fail silently here
+            fprintf(stderr, "%s: could not allocate all workers (%d of %d allocated)\n"
+                , __FUNCTION__, (int) e->workers_alloc, (int) e->workers_max);
+        }
+
     } else if(e->workers_alloc > e->workers_max) {
         // Otherwise signal workers to die asynchronously
         pthread_cond_broadcast(&(e->work_available));
@@ -322,6 +328,21 @@ wikrt_z wikrt_compute_alloc_space(wikrt_z const space_total)
     return alloc;
 }
 
+wikrt_heap wikrt_heap_init(wikrt_a const start, size_t const size)
+{
+    wikrt_heap r = {0};
+    if(size < (48 * WIKRT_CELLSIZE)) { return r; }
+
+    r.start = wikrt_cellbuff(start); // align with cell size
+    r.end   = start + size; // exact
+    r.alloc = r.start;
+    
+    wikrt_z const cellct = (r.end - r.start) / WIKRT_CELLSIZE; // full cell count
+    wikrt_z const usable = wikrt_compute_alloc_space(cellct * WIKRT_CELLSIZE);
+    r.stop  = r.alloc + usable;
+    return r;
+}
+
 void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 {
     wikrt_cx* old_proto; // for latent destruction
@@ -346,18 +367,14 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
     // reset memory and registers 
     cx->trace_enable    = false;
     cx->prof_enable     = false;
+    cx->trace           = 0;
+    cx->prof            = 0;
+    cx->ready           = 0;
+    cx->waiting         = 0;
     cx->words           = 0;
-    cx->effort          = WIKRT_CX_DEFAULT_EFFORT;
     cx->rtb             = (wikrt_rtb){0};
-    cx->memory          = (wikrt_thread){0};
-    cx->memory.cx       = cx;
-    cx->memory.start    = wikrt_cellbuff( ((wikrt_a)cx) + sizeof(wikrt_cx) );  
-    cx->memory.alloc    = cx->memory.start; // bump pointer allocation
-    cx->memory.end      = ((wikrt_a)cx) + cx->size; // exact
-    wikrt_z const max_cell_count = (cx->memory.end - cx->memory.start) / WIKRT_CELLSIZE;
-    wikrt_z const max_usable_space = max_cell_count * WIKRT_CELLSIZE;
-    wikrt_z const alloc_space = wikrt_compute_alloc_space(max_usable_space);
-    cx->memory.stop = cx->memory.start + alloc_space;
+    cx->memory          = wikrt_heap_init(sizeof(wikrt_cx) + (wikrt_a)cx, cx->size);
+    cx->effort          = WIKRT_CX_DEFAULT_EFFORT;
 
     wikrt_rtb_prealloc(cx, 16);
     wikrt_cx_reset_dict(cx, dict_name);
@@ -416,7 +433,7 @@ void wikrt_debug_trace(wikrt_cx* cx, bool enable)
 {
     wikrt_api_enter(cx);
     cx->trace_enable = enable;
-    if(!enable) { cx->memory.trace = 0; }
+    if(!enable) { cx->trace = 0; }
     wikrt_api_exit(cx);
 }
 
@@ -424,15 +441,15 @@ void wikrt_debug_trace(wikrt_cx* cx, bool enable)
 bool wikrt_debug_trace_move(wikrt_cx* cx, wikrt_r dst)
 {   
     wikrt_api_enter(cx);
-    if(!wikrt_api_prealloc(cx, 1, WIKRT_REG_WRITE_PREALLOC)) {
+    if(!wikrt_api_prealloc(cx, 1, WIKRT_REG_ADDEND_PREALLOC)) {
         wikrt_api_exit(cx);
         errno = ENOMEM;
         return false;
     }
 
     // addend trace log to specified register
-    wikrt_reg_write(cx, dst, cx->memory.trace);
-    cx->memory.trace = 0;
+    wikrt_reg_addend(cx, dst, cx->trace);
+    cx->trace = 0;
     wikrt_api_exit(cx);
     return true;
 }
@@ -449,13 +466,13 @@ void wikrt_prof_stack(wikrt_cx* cx, bool enable)
 bool wikrt_prof_stack_move(wikrt_cx* cx, wikrt_r dst)
 {
     wikrt_api_enter(cx);
-    if(!wikrt_api_prealloc(cx, 1, WIKRT_REG_WRITE_PREALLOC)) {
+    if(!wikrt_api_prealloc(cx, 1, WIKRT_REG_ADDEND_PREALLOC)) {
         wikrt_api_exit(cx);
         errno = ENOMEM;
         return false;
     } 
-    wikrt_reg_write(cx, dst, cx->memory.prof);
-    cx->memory.prof = 0;
+    wikrt_reg_addend(cx, dst, cx->prof);
+    cx->prof = 0;
     wikrt_api_exit(cx);
     return true;
 }
@@ -464,7 +481,7 @@ static inline wikrt_z wikrt_write_frag_prealloc(wikrt_z const amt)
 {
     // binary + ptype wrapper + reg write
     return wikrt_binary_size(amt)
-         + (WIKRT_CELLSIZE + WIKRT_REG_WRITE_PREALLOC);
+         + (WIKRT_CELLSIZE + WIKRT_REG_ADDEND_PREALLOC);
 }
 
 static inline wikrt_z wikrt_write_bytes_needed(size_t amt) 
@@ -495,7 +512,7 @@ static inline void wikrt_write_frag(wikrt_cx* cx, wikrt_r r, uint8_t const* cons
     wikrt_v const binary  = wikrt_alloc_binary(&(cx->memory), data, amt);
     wikrt_v const raw = WIKRT_OBJ | wikrt_alloc_cell(&(cx->memory), 
         wikrt_new_ptype_hdr(WIKRT_PTYPE_BINARY_RAW), binary);
-    wikrt_reg_write(cx, r, raw);
+    wikrt_reg_addend(cx, r, raw);
 }
 
 bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt) 
