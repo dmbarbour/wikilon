@@ -1,9 +1,15 @@
+
+#define _GNU_SOURCE
+    // (feature macro for mremap)
+
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <pthread.h>
 #include <errno.h>
 #include <string.h>
 #include <assert.h>
+
 #include <sys/mman.h>
 #include <sys/file.h>
 
@@ -28,7 +34,7 @@ typedef uint64_t wikrt_eph_d;
 #define WIKRT_EPH_RC_MAX (( ((wikrt_eph_d)1) << WIKRT_EPH_RC_BITS ) - 1)
 #define WIKRT_EPH_HASH_MAX  (UINT64_MAX >> WIKRT_EPH_RC_BITS)
 #define WIKRT_EPH_HASH_PRIME 1235789
-#define WIKRT_EPH_SIZE_INIT 4000
+#define WIKRT_EPH_SIZE_INIT 3000
 
 #define WIKRT_EPH_H(D) (D >> WIKRT_EPH_RC_BITS)
 #define WIKRT_EPH_RC(D) (D & WIKRT_EPH_RC_MAX)
@@ -36,6 +42,8 @@ typedef uint64_t wikrt_eph_d;
 
 #define WIKRT_EPH_VER 20170302 
 #define WIKRT_EPH_NAME_LEN 32
+
+
 
 static inline uint64_t wikrt_eph_hash(uint64_t id) { 
     // distribute adjacent identifiers
@@ -381,66 +389,93 @@ void wikrt_eph_rem(wikrt_eph* eph, uint64_t elem)
     else { wikrt_eph_delete(eph, ix); }
 }
 
-static inline size_t wikrt_eph_data_size(wikrt_eph const* eph) 
-{
-    size_t const sz = (size_t) eph->head->size;
-    size_t const rsz = (size_t) eph->head->resize;
-    return (sz > rsz) ? sz : rsz;
-}
-
 static bool wikrt_eph_resize_shm(wikrt_eph* eph)
 {
-    size_t const mmsz = sizeof(wikrt_eph_h) + (wikrt_eph_data_size(eph) * sizeof(wikrt_eph_d));
-    if(eph->mmsz >= mmsz) { return true; }
+    assert(!(eph->error));
 
-    // to keep it simple, always clear the old map. 
-    if(0 != eph->mmsz) { munmap(eph->mmd, eph->mmsz); }
-    eph->mmd  = 0;
-    eph->mmsz = 0;
-    eph->data = 0;
+    // Our table might have been resized by another process, so we
+    // always need to check and potentially reallocate memory. Also,
+    // we need enough space to potentially resize the table, so we
+    // use the larger of size and resize.
+    size_t const sz = (size_t) eph->head->size;
+    size_t const rsz = (size_t) eph->head->resize;
+    size_t const dsz = (sz > rsz) ? sz : rsz;
+    size_t const mmsz = sizeof(wikrt_eph_h) + (dsz * sizeof(wikrt_eph_d));
+
+    // In most calls, we should be able to preserve the old size.
+    if(eph->mmsz == mmsz) { return true; }
 
     // ensure the shared memory 'file' is sized as we expect
     int const st = ftruncate(eph->shm, (off_t)mmsz);
-    if(0 != st) { return false; }
+    if(0 != st) { 
+        fprintf(stderr, "%s: could not resize SHM in kernel. (%s)\n"
+            , __FUNCTION__, strerror(errno));
+        return false;
+    }
 
-    // remap the file
-    void* const mmd = mmap(0, mmsz, PROT_READ|PROT_WRITE, MAP_SHARED, eph->shm, 0);
-    if(MAP_FAILED == mmd) { return false; }
+    // map shared memory into process. remap after the first time
+    void* const mmd = (0 == eph->mmsz)
+                    ? mmap(0, mmsz, PROT_READ|PROT_WRITE, MAP_SHARED, eph->shm, 0)
+                    : mremap(eph->mmd, eph->mmsz, mmsz, MREMAP_MAYMOVE);
+    if(MAP_FAILED == mmd) {
+        fprintf(stderr, "%s: could not map SHM into process. (%s)\n"
+            , __FUNCTION__, strerror(errno));
+        return false;
+    }
 
-    eph->mmsz = mmsz;
     eph->mmd  = mmd;
-    eph->data = (wikrt_eph_d*)((uintptr_t)mmd + sizeof(wikrt_eph_h));
+    eph->mmsz = mmsz;
+    eph->data = (wikrt_eph_d*)(sizeof(wikrt_eph_h) + (uintptr_t)(eph->mmd));
     return true;
 }
 
 static void wikrt_eph_repair(wikrt_eph* eph)
 {
-    assert(!(eph->error));
-
     // try to resize the SHM or memory mapping
     if(!wikrt_eph_resize_shm(eph)) {
-        // This is the primary condition for eph->error.
-        // We also must unlock upon error.
         eph->error = true;
         pthread_mutex_unlock(&(eph->head->mutex));
         return;
     }
 
-    // resort data if needed. 
+    // resort data for any size change to the table.
     size_t const sz = eph->head->size;
-    if(sz == eph->head->resize) { return; }
-    assert(eph->head->fill < eph->head->resize);
+    bool const size_ok = (sz == eph->head->resize);
+    if(size_ok) { return; }
 
+    assert(eph->head->fill < eph->head->resize);
+    wikrt_eph_d* const d = eph->data;
+
+    // O(N) sort from left to right. This might touch an entry more
+    // than once, moving it rightwards but colliding, then back to 
+    // the left after reaching the updated index.
     for(size_t ix = 0; ix < sz; ++ix) {
-        wikrt_eph_d* const pd = ix + eph->data;
-        if(0 == *pd) { continue; }
-        size_t const new_ix = wikrt_eph_index(eph, WIKRT_EPH_H(*pd));
-        if(new_ix == ix) { continue; }
-        eph->data[new_ix] = (*pd);
-        (*pd) = 0;
+        if(0 != d[ix]) { 
+            size_t const new_ix = wikrt_eph_index(eph, WIKRT_EPH_H(d[ix]));
+            if(new_ix != ix) {
+                eph->data[new_ix] = d[ix];
+                d[ix] = 0;
+            }
+        }
     } 
 
-    // resort succeeded (no crash, kill, etc.) 
+    // The above sort is mostly 'sorted on left, unsorted on right'
+    // at each step. An exception exists for elements that collide
+    // on the right and wrap to the left. So we need one small pass
+    // to reprocess elements aggregated at the left edge.
+    for(size_t ix = 0; 0 != d[ix]; ++ix) {
+        size_t const new_ix = wikrt_eph_index(eph, WIKRT_EPH_H(d[ix]));
+        if(new_ix != ix) {
+            eph->data[new_ix] = d[ix];
+            d[ix] = 0;
+        }
+    }
+
+    // Sort succeeded. Not that there's much risk of failure, but
+    // if our process is killed in the mean time, another process 
+    // might need to finish the sort. So we indicate completion 
+    // after we finish sorting. Memory fence protects 'after'.
+    atomic_signal_fence(memory_order_acq_rel);
     eph->head->size = eph->head->resize;
 }
 

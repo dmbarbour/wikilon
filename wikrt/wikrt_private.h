@@ -173,14 +173,6 @@ static inline wikrt_i wikrt_from_small_int(wikrt_v v) { return (((wikrt_i)v) >> 
 static inline wikrt_v wikrt_to_small_int_val(wikrt_i i) { return (((wikrt_v)(i << 4))|WIKRT_SMALL_INT_VAL); }
 static inline wikrt_v wikrt_to_small_int_op(wikrt_i i) { return (((wikrt_v)(i << 4))|WIKRT_SMALL_INT_OP); }
 
-/** Random Data
- *
- * Wikilon Runtime doesn't need entropy for much. But one place it
- * does need some random data is allocation of the shared memory
- * ephemeron table.
- */
-void wikrt_get_entropy(size_t amt, uint8_t* out);
-
 /** Tagged Objects
  *
  * Wikilon runtime shouldn't need more than 32 common object types,
