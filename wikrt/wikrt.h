@@ -547,6 +547,8 @@ typedef struct wikrt_mem_stats {
  */ 
 bool wikrt_prof_heap(wikrt_cx*, wikrt_r, wikrt_mem_stats*);
 
+// memoization, allow disable for debugging?
+
 /** Enable Parallel Evaluation
  *
  * A context is single-threaded at this API, but OS-level threads act

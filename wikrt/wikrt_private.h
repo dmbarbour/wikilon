@@ -727,6 +727,7 @@ struct wikrt_cx {
     // todo:
     // Stowage tracking: need to know all stowage roots
     // Dictionary indexing?
+    // Memoization.
 };
 
 // default effort is about 200ms labor

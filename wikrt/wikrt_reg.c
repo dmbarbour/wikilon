@@ -104,7 +104,7 @@ bool wikrt_rtb_prealloc(wikrt_cx* cx, wikrt_z amt)
     if(!overfilled) { return true; }
 
     // resize to under 50% fill
-    return wikrt_rtb_resize(cx, 1 + (2 * new_fill));
+    return wikrt_rtb_resize(cx, 3 + (2 * new_fill));
 }
 
 void wikrt_reg_set(wikrt_cx* cx, wikrt_r r, wikrt_v v) 
@@ -121,7 +121,7 @@ wikrt_v wikrt_reg_get(wikrt_cx const* cx, wikrt_r r)
 
 void wikrt_reg_addend(wikrt_cx* cx, wikrt_r r, wikrt_v v) 
 {
-    if(0 == v) { return; }
+    if(0 == v) { return; } // NOP
 
     wikrt_v const v0 = wikrt_reg_get(cx, r);
     if(0 == v0) { wikrt_reg_set(cx, r, v); }

@@ -477,26 +477,6 @@ bool wikrt_prof_stack_move(wikrt_cx* cx, wikrt_r dst)
     return true;
 }
 
-static inline wikrt_z wikrt_write_frag_prealloc(wikrt_z const amt) 
-{
-    // binary + ptype wrapper + reg write
-    return wikrt_binary_size(amt)
-         + (WIKRT_CELLSIZE + WIKRT_REG_ADDEND_PREALLOC);
-}
-
-static inline wikrt_z wikrt_write_bytes_needed(size_t amt) 
-{
-    // total cost for write
-    wikrt_z needed = 0;
-    while(amt > 0) {
-        wikrt_z const frag_size = (amt > WIKRT_O_DATA_MAX) ? WIKRT_O_DATA_MAX : amt;
-        // max overhead for binary fragment, PTYPE, and register write 
-        needed += wikrt_write_frag_prealloc(frag_size);
-        amt    -= frag_size;
-    }
-    return needed;
-}
-
 wikrt_v wikrt_alloc_binary(wikrt_thread* t, uint8_t const* const data, wikrt_z const amt)
 {
     wikrt_a const a = wikrt_thread_alloc(t, wikrt_cellbuff(sizeof(wikrt_o) + amt));
@@ -505,14 +485,12 @@ wikrt_v wikrt_alloc_binary(wikrt_thread* t, uint8_t const* const data, wikrt_z c
     return (WIKRT_VOBJ | a);
 }
 
-static inline void wikrt_write_frag(wikrt_cx* cx, wikrt_r r, uint8_t const* const data, wikrt_z const amt)
+static wikrt_v wikrt_alloc_binraw(wikrt_thread* t, uint8_t const* const data, wikrt_z const amt)
 {
-    // write a single binary fragment into context memory 
     assert(WIKRT_O_DATA_MAX >= amt);
-    wikrt_v const binary  = wikrt_alloc_binary(&(cx->memory), data, amt);
-    wikrt_v const raw = WIKRT_OBJ | wikrt_alloc_cell(&(cx->memory), 
-        wikrt_new_ptype_hdr(WIKRT_PTYPE_BINARY_RAW), binary);
-    wikrt_reg_addend(cx, r, raw);
+    return WIKRT_OBJ | wikrt_alloc_cell(t, 
+        wikrt_new_ptype_hdr(WIKRT_PTYPE_BINARY_RAW),
+        wikrt_alloc_binary(t, data, amt));
 }
 
 bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt) 
@@ -522,10 +500,11 @@ bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt)
 
     // to avoid overflow cases, don't bother if the binary is very large.
     if(amt > (WIKRT_Z_MAX / 2)) { errno = ENOMEM; return false; }
-    wikrt_z const space_needed = wikrt_write_bytes_needed(amt);
+    wikrt_z const frag_count = 1 + ((amt - 1) / WIKRT_O_DATA_MAX);
+    wikrt_z const overhead = frag_count * (WIKRT_CELLSIZE + WIKRT_REG_ADDEND_PREALLOC);
 
     wikrt_api_enter(cx);
-    if(!wikrt_api_prealloc(cx, 1, space_needed)) {
+    if(!wikrt_api_prealloc(cx, 1, (amt + overhead))) {
         wikrt_api_exit(cx);
         errno = ENOMEM;
         return false;
@@ -533,7 +512,7 @@ bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt)
 
     while(amt > 0) {
         wikrt_z const frag_size = (amt > WIKRT_O_DATA_MAX) ? WIKRT_O_DATA_MAX : amt;
-        wikrt_write_frag(cx, r, data, frag_size);
+        wikrt_reg_addend(cx, r, wikrt_alloc_binraw(&(cx->memory), data, frag_size));
         data += frag_size;
         amt  -= frag_size;
     }
