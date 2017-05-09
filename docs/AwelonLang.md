@@ -178,7 +178,7 @@ Stowage is a simple idea, summarized by rewrite rules:
 
 Stowage enables programmers to work semi-transparently with data larger than working memory. Unlike effectful storage or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, incremental computing, and backtracking. Stowage works nicely with [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), especially structures that batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree). 
 
-What 'large value' means is heuristic, based on time-space tradeoffs. But it ideally is simple, predictable, and reproducible for effective use with caching and structure sharing. The recommendation is that "large value" mean "at least 256 bytes" when serialized. Binary values might stow using the `%secureHash` encoding.
+What 'large value' means is heuristic, based on time-space tradeoffs. A runtime is in charge of what annotations mean, so it can vary by runtime. But ideally, stowage should be simple, predictable, reproducible, easily shared across systems for caching and structure sharing. My recommendation is that "large value" mean "at least 256 bytes" as serialized, sufficient for a few hashes and some structure.
 
 ## Evaluation
 
@@ -199,7 +199,7 @@ Awelon's basic evaluation strategy is simple:
 
 Evaluating the outer program before values gives us the greatest opportunity to drop values or annotate them with memoization or other features. Evaluation before copy resists introduction of rework without introducing need for memoization, and covers the common case. Final values are reduced because we assume the program as a whole might be copied for use in many locations.
 
-This is just a recommended default strategy. A runtime can adjust this at its own discretion (so long as it preserves semantics) and support annotations to adjust evaluation. With annotations we can precisely defer computations, control linking, leverage parallelism, memoize results for incremental computing, stow large but infrequently referenced data to disk, fail-fast in case of obvious errors, enable visible optimizations, request JIT compilation. And so on. See also *Optimization*, below.
+This is really just a recommended default strategy. A runtime may adjust this at its own discretion, so long as it preserves semantics. Annotations will also affect evaluation strategy. With annotations we could precisely defer computations, control linking, leverage parallelism, memoize results for incremental computing, stow large but infrequently referenced data to disk, fail-fast in case of obvious errors, enable visible optimizations, request JIT compilation. And so on. See also *Optimization*, below.
 
 ## Value Words
 

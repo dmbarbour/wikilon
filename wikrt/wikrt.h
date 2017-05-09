@@ -514,40 +514,13 @@ bool wikrt_debug_eval_step(wikrt_cx*, wikrt_r, char const* target);
 void wikrt_prof_stack(wikrt_cx*, bool enable);
 bool wikrt_prof_stack_move(wikrt_cx*, wikrt_r);
 
-/** Overview of a context memory usage. */
-typedef struct wikrt_mem_stats { 
-    uint64_t    gc_bytes_processed; // total GC effort 
-    uint64_t    gc_bytes_collected; // useful GC effort
-    size_t      elder_gen_size;     // total elder heap
-    size_t      young_gen_size;     // total young heap
-    size_t      heap_available;     // free alloc space
-    size_t      context_size;       // total context size
-} wikrt_mem_stats;
+/** GC metadata. Also a reasonable 'effort' estimate. */
+typedef struct wikrt_gc_stats {
+    uint64_t    gc_bytes_processed;
+    uint64_t    gc_bytes_collected;
+} wikrt_gc_stats;
+void wikrt_prof_gc(wikrt_cx*, wikrt_gc_stats*);
 
-/** Heap Profiling
- *
- * Heap profiling associates closures in memory with an origin word
- * and estimates a total size. This could be useful to debug memory 
- * issues. 
- * 
- * Calling wikrt_prof_heap will scan the stable portion of the heap,
- * excluding recent allocations so as to minimize interference with
- * background parallelism. (Call wikrt_cx_gc for up-to-date profile.) 
- * The profile is recorded as lines of `word number number` triples:
- *
- *      foo 1234 5678
- *      bar 9876 5432
- *      ...
- *
- * The two numbers represent byte costs associated with the word for
- * two GC generations. This simplifies analysis of dataflow. We can
- * also output statistics to situate the profile or detect GC thrashing.
- *
- * Note: excludes data from frozen copy-on-write origin context
- */ 
-bool wikrt_prof_heap(wikrt_cx*, wikrt_r, wikrt_mem_stats*);
-
-// memoization, allow disable for debugging?
 
 /** Enable Parallel Evaluation
  *

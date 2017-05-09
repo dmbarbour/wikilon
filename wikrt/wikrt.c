@@ -389,11 +389,11 @@ void wikrt_cx_reset(wikrt_cx* cx, char const* const dict_name)
 void wikrt_cx_gc(wikrt_cx* cx)
 {
     wikrt_api_enter(cx);
-    wikrt_api_gc(cx, WIKRT_Z_MAX);
+    wikrt_api_gc(cx);
     wikrt_api_exit(cx);
 }
 
-void wikrt_api_gc(wikrt_cx* cx, wikrt_z _amt)
+void wikrt_api_gc(wikrt_cx* cx)
 {
     wikrt_api_interrupt(cx); // stop worker threads
     // perform GC, use _amt as an optional GC hint for major vs. minor

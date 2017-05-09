@@ -34,6 +34,8 @@ static bool wikrt_ws_resize(wikrt_thread* t, wikrt_z new_size)
 
     // determine if we have enough space. We'll not perform any GC here.
     wikrt_z const alloc_size = wikrt_cellbuff((1 + new_size) * sizeof(wikrt_wsd));
+    bool const prealloc = 
+
     bool const size_ok = (alloc_size < WIKRT_O_DATA_MAX) 
                        && wikrt_thread_mem_available(t, alloc_size);
     if(!size_ok) { return false; }

@@ -31,15 +31,22 @@ Evaluation can proceed left-to-right through our program then evaluates remainin
 
 Some desiderata:
 
-* logical copy on `c` for evaluated objects and data
-* unique arrays with in-place updates, copy on write
-* copying or compacting GC to resist fragmentation
-* generational GC to avoid copying of stable objects
-* hierarchical GC to limit synchronization frequency
+* resist fragmentation - copying or compacting GC
+* lightweight allocation - bump pointer
+* lightweight threading - working heap per thread
+* logical copy, sharing objects and data
+* in-place updates, via uniqueness tracking
+* lightweight common small objects (cons cells)
+* infrequent GC of old objects (generational?)
 
-I think my best bet for GC is a generational mark-compact GC. Mark-compact has a big advantage of preserving stack order, which is convenient for reasoning about cache performance and generations.
+Combining 'generational' and 'lightweight threading', we could treat the thread heaps as the nursery generation and the larger context as the space for survivors and shared data. A thread might GC a few or hundred times per GC of the context (depending on the computation), and stable data can be promoted incrementally from thread to context. Larger allocations might also directly use the context.
 
-I expect type information in the pointer regarding the size of objects - two word cell vs. tagged object where size is based on the header. For mark-compact, I must record this type information during mark so I can robustly compute size upon compact. So I expect I'll need 3 bits per marked object - two for tri-color marking (white/grey/black) and one for object-vs-cell. This corresponds to about 3 bits per allocation: ~5% memory on a 32-bit system, ~3% on a 64-bit system memory that cannot be allocated to normal objects. This isn't ideal, but it is acceptable.
+The GC pass itself can be mark-compact, which preserves allocation order and allows for full use of the heap. Marking can potentially be achieved in O(1) space using a retry-on-failure and ensuring some mark progress on each retry. This does trade space for speed, but with a reasonably deep 'stack' it should be feasible to progress most of the way in each pass. 
+
+        add unmarked dependencies to stack
+        if no such dependencies, mark object and pop from stack
+
+Best case, every object is scanned twice for dependencies. Worst case, object overflows the stack many times (e.g. large array) and we scan it a number of times proportional to its size. But arrays could maybe receive special treatment to help out, or we maybe just use a 'most recent array index' to guess at an array location without assuming all prior indices are marked. 
 
 Generational GC requires we track mutations within the old generation. I would like to do this at the field granularity, which allows working with large arrays (mutating parts of the array, scanning just the parts we mutate, logically splitting arrays among multiple threads). My current plan is to use a hashtable of page→bitfield in the word size. Bitfields allow adjacent fields to be represented and scanned together, and reduce memory overhead. Assuming larger hashtables are at least half full, this results in at worst 12.5% overhead on a 32-bit system (or 6.25% on a 64-bit system) as a percentage of the old gen size. In practice, worst case behavior should be rare outside of working with massive mutable arrays.
 
@@ -95,30 +102,34 @@ An advantage of modeling a stack as a unique array is that it becomes feasible (
 
 ## Memory Representations
 
-Let's say our allocations are two-word aligned, and our words are either 4 bytes or 8 bytes depending on machine. This gives us 3 reliable pointer tag bits. Use of pointer tag bits can discriminate a few 'small' values to reduce allocation costs. 
+Say our allocations are two-word aligned, and our words are either 4 bytes or 8 bytes depending on machine. This gives us 3 reliable pointer tag bits. Use of pointer tag bits can discriminate a few 'small' values to reduce allocation costs. 
 
-A modest proposal:
+Proposed Representations:
+
+        Proposal A
 
         b00     small constants, built-in operations
         b01     tagged objects (type in header)
         b10     composition cell (B, A) => [B A]
         b11     constructor cell (H, T) => [H T :]
 
-Small constants would be values we can represent within a word. Small natural numbers and tags are perhaps the most critical, but it would be tempting to also support small integers, many decimals, small texts or labels, etc.. Covering accelerated functions might also be convenient. On a 32-bit system, we don't have a lot of room for innovation here. On a 64-bit system (which is the expected case) a 'small' constant can cover a lot of common values without allocations.
+        Proposal B
 
-Cells cover list and composition constructures, which I imagine will be used very frequently based on my experience with Haskell. Both cells should be the same size to reduce GC mark-compact overheads.
+        _b0     small constants, operators, etc.
+        sb1     objects, type in header
 
-The `b` bit indicates that the item represents a block or value word, something that can be bound with the `b` operator or moved by data shuffling operations. This extends the expressiveness of composition cells to support bind, compose, pairs, sums, etc.
+Small constants would include primitive operators or annotations, small numbers, perhaps small texts and labels. The `b` field indicates whether our reference may be treated as a block value for purpose of data plumbing and efficient evaluation. In proposal A, I use the third bit for extra type information, to support a few 'small object' types. In proposal B, I use the third bit to track sharing uniformly. I can still support two-cell composition by distinguishing the 'object header' as a subset of small constants.
 
-Tagged objects cover everything else, at the cost of a little extra memory. I'll track an extra bit during mark-compact GC to distinguish double word cells vs. tagged objects. Uniquely referenced, writable memory will always be a tagged object.
+The latter proposal ultimately seems simpler for normal processing - i.e. fewer layers of 'switch' expressions on data type. And while I cannot distinguish cons and composition directly, it should be feasible to use a list header wrapper to reinterpret a subset of compositions as cons cells, or to use an array structure. Further, uniform sharing information should offer some benefits for evaluation performance.
 
-Note: I might want to model buffered arrays, where we can push or pop elements efficiently. Logical reversal of lists and arrays could be useful here.
+At this time, I moderately favor Proposal B.
 
 ### Small Constants
 
 I desire several small constant "types", so let's say three to four bits of type data. A viable list of types to support:
 
 * built-in operations
+* object type tags
 * natural numbers
 * integers
 * rational numbers (two small nats)
@@ -133,9 +144,9 @@ I'd like to ensure that the zero word is equivalent to a built-in NOP action. Na
          10     naturals
          x1     integers
 
-This is in addition to our `i00` for the small constants, so extended types are `...00i00` and naturals are `...10i00`. This means our small naturals on a 32-bit system cover at least 27 bits, which is sufficient to cover a volume roughly from zero to 128 million. On a 64-bit system (which is the expected case) the effective range is much larger. Integers encode a similar volume but in both positive and negative directions. 
+This adds to the left side of the `b0` suffix, so we end up with `1010` as our full suffix for natural number values. This leaves about 28 bits for the number itself (~ 256 million on a 32-bit system, and a bigger number than we need for 64-bit systems). 
 
-The extended types would then cover everything else, consuming a few more bits to distinguish the data types. We don't need very many built-in operations.
+The extended set would then be `00b0` suffix and might use four more bits (adding to a full byte) for the extended type. Operators will use the `0000` suffix, while type headers might use `0001`. 
 
 ### Sliceable Arrays and Ropes?
 
