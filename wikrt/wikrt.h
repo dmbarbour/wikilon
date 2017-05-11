@@ -521,6 +521,13 @@ typedef struct wikrt_gc_stats {
 } wikrt_gc_stats;
 void wikrt_prof_gc(wikrt_cx*, wikrt_gc_stats*);
 
+// Regarding Heap profiling
+//  
+//   At the moment, just take snapshots and process them somehow. This
+//   doesn't say much about origins or about logical sharing, but it
+//   can still help a developer see where memory is being used and where
+//   a naive implementation (deep copies only) would consume memory.
+//
 
 /** Enable Parallel Evaluation
  *

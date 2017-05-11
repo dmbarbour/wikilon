@@ -13,60 +13,35 @@ If it comes without too much overhead, I want multi-process support so I can dev
 
 Viable evaluation strategies:
 
-* interpret program (with call-return auxiliary stack)
-* compile to abstract register machine, interpret that
+* interpret program directly, perhaps with optimizations
+* compile to an abstract register machine, interpret that
 * JIT compile to machine code before evaluation proceeds
 
-There is a tradeoff. Compilation increases complexity and spinup time, but can significantly improve performance for long-running loops. I do know that I'll eventually want JIT compilation support. I favor interpretation as the basic option for getting started quickly. JIT can be performed for a subset of performance critical code, or eventually for full programs.
+Direct interpretation is the simplest and easiest to get started. If we optimize by rewriting normal code, that can also be directly interpreted with some performance gains. JIT can probably be applied to normal blocks to help optimize loops.
 
-There isn't any fundamental reason I cannot support all three, eventually.
+I think I'll skip the interpretation of intermediate register machine code. Registers add complexity to the interpreter and its interaction with GC. But we might compile to an intermediate register machine code as part of JIT.
 
-The program under evaluation is volatile, so might also mostly be represented as a data stack. Special handling is needed because not everything is 'data' - a computed program may contain words that have not been linked, and lazy linking might expand a word into data based on demand. 
-
-Evaluation can proceed left-to-right through our program then evaluates remaining block values either right-to-left or in parallel. The result of this evaluation would be held on the program data stack.
-
-*Note:* I like the idea of a "checkpointing" evaluation, such that we can always interrupt evaluation and have a valid program, at most losing some intermediate work. However, checkpointing evaluation requires some careful attention if I also want to support in-place update for unique array objects. An intermediate option is to support 'safe interrupt' points, but I also don't want expensive atomic ops on those actions. So my best option is perhaps to limit interrupts to some periodic event that would perform synchronization anyway such as GC. In any case, to support checkpointing evaluation, I need a small volume of volatile roots - registers - per thread.
+*Note:* Ideally, I can evaluate in such a way that an interruption at worst loses some intermediate work. But this might not be feasible if I want to leverage in-place updates of unique arrays, since I cannot expect to redo that work. Potentially, I could record logical writes then compact them on GC. But it might be better just to ensure evaluation always progresses to a usable state, even when an error occurs.
 
 ## Memory Management
 
-Some desiderata:
+My assumption is that contexts will generally see single-threaded use. A web service will use multiple contexts to serve multiple pages. But supporting lightweight parallel operations, e.g. with `(par)`, is valuable for reducing latency.
 
-* resist fragmentation - copying or compacting GC
-* lightweight allocation - bump pointer
-* lightweight threading - working heap per thread
-* logical copy, sharing objects and data
-* in-place updates, via uniqueness tracking
-* lightweight common small objects (cons cells)
-* infrequent GC of old objects (generational?)
+Each evaluation thread shall allocate a heap within a context. Using a bump-pointer allocation, this can serve also as a stack space or something like it. The thread heap serves as a basis for generational GC, since a thread can GC its heap many times for each GC of the shared context, and may gradually promote older objects into the context. This offers a good GC for lightweight parallelism: worker threads won't interfere or synchronize with each other, though we might need to interrupt on occasion for a context-level GC. Context memory serves as a shared memory region, enabling data and code to be shared among threads.
 
-Combining 'generational' and 'lightweight threading', we could treat the thread heaps as the nursery generation and the larger context as the space for survivors and shared data. A thread might GC a few or hundred times per GC of the context (depending on the computation), and stable data can be promoted incrementally from thread to context. Larger allocations might also directly use the context.
+Allocation shall use an efficient bump-pointer mechanism. No free lists are used. A mark-compact algorithm will recover memory for further allocations. The mark algorithm can use one extra array of mark-bits to avoid interfering with object representations. With cell-aligned allocations, this would be about 0.78% memory on a 64-bit system. Marking can be achieved in O(1) space by using a fixed-size stack and ensuring progress even on stack overflow (so we can revisit until marked). I have ideas for an exponential decay approach that should be good in most cases: use stack of 'fields' in objects, use previous field address as hint to find next field (iteration), and use exponential decay to trim data: cut 66% in half (losing hints), move last 33% back, free up 33% of stack.
 
-The GC pass itself can be mark-compact, which preserves allocation order and allows for full use of the heap. Marking can potentially be achieved in O(1) space using a retry-on-failure and ensuring some mark progress on each retry. This does trade space for speed, but with a reasonably deep 'stack' it should be feasible to progress most of the way in each pass. 
+Objects can be shared, with efficient logical copying. But I also want to track sharing, such that I can accelerate update functions for linear arrays to perform in-place manipulations.
 
-        add unmarked dependencies to stack
-        if no such dependencies, mark object and pop from stack
-
-Best case, every object is scanned twice for dependencies. Worst case, object overflows the stack many times (e.g. large array) and we scan it a number of times proportional to its size. But arrays could maybe receive special treatment to help out, or we maybe just use a 'most recent array index' to guess at an array location without assuming all prior indices are marked. 
-
-Generational GC requires we track mutations within the old generation. I would like to do this at the field granularity, which allows working with large arrays (mutating parts of the array, scanning just the parts we mutate, logically splitting arrays among multiple threads). My current plan is to use a hashtable of page→bitfield in the word size. Bitfields allow adjacent fields to be represented and scanned together, and reduce memory overhead. Assuming larger hashtables are at least half full, this results in at worst 12.5% overhead on a 32-bit system (or 6.25% on a 64-bit system) as a percentage of the old gen size. In practice, worst case behavior should be rare outside of working with massive mutable arrays.
-
-I can try this at a level of objects or fields. To support large linear arrays and logical slicing (so I can divide an array among many threads then stitch it back together), it seems field-level tracking might be the better option. Unfortunately, I cannot think of a great way to do this.
-
-Due to in-place update for uniquely referenced arrays and other objects, I need to track updates so we can scan for references from older objects to younger ones. This means a simple write barrier, one I'd need anyway due to copy-on-write for shared arrays, and a list of references from the older generation acting as extra roots. This is a small overhead for a significant reduction in allocation.
+I'll use write barriers and track a write set for each thread. A simple table of fields written would be sufficient, but I could represent this as `page->bitfield` table to reduce write barrier overheads when operating upon adjacent fields (e.g. for modifying an array structure). I think write barriers will still be expensive enough that I'll want to avoid them except where most useful - arrays, task updates, etc..
 
 ## Parallelism and Threads
 
-I want parallelism with minimal (and very simple) synchronization.
+Each thread will have its own small heap within the context and thus may achieve progress without coordinating with other threads. A thread can promote data from that heap into the context to either share results with other threads or just reduce GC burden (treating context as a survivor arena). A thread must never peek into another thread's heap because that heap might move data around without warning.
 
-Within a context, each thread should have a nursery - a volume of memory that it controls exclusively and hence may garbage collect *without* synchronization. This might start as, for example, 256kB. Overly large allocations might automatically operate in the shared context memory. When full of cruft, the thread is relocated with a fresh nursery. As the context fills, we can gradually GC old data.
+There is some need to track when data is "promoted" from a thread to the shared context, and thus may be observed from another thread. Especially for parallel tasks. To simplify management of the write set and other requirements, promotion shall be all-or-nothing within a thread. Promotion may also push `(trace)` logs and similar debug outputs.
 
-Importantly, a thread must never reference into another thread's nursery. Given in-place mutations, tasks computed within a thread cannot robustly be shared until said thread promotes its nursery into the shared memory region. Conversely, a thread cannot consume the 'result' of an evaluation until said result is promoted into shared memory. So each nursery needs to track recently pending tasks and results.
-
-Promotion of a nursery would reduce efficiency of a per-thread survivor space. OTOH, we can heuristically delay promotions based on pending tasks, whether the shared context is already busy, etc. to form a reasonable batch of tasks.
-
-Effort quotas also require some attention. Do I associate efforts with a stream? a task? a context? For now, I'll use the context granularity because it's simple to implement. I might try to work out something more precise, later, if I feel a strong need to do so.
-
-Each task should probably also track its dependencies - new tasks produced - such that we don't need to deep-scan a result to complete the evaluation.
+Threads will operate within a context's effort quota. This doesn't feel very precise, but it is analogous to all tasks sharing a context's memory. And it should be precise enough, assuming I use multiple contexts to serve web clients.
 
 Parallel tasks need special attention. They're referenced from one thread but evaluated wholly or partially from another. We must delay evaluations that require a values from other threads.
 
@@ -86,91 +61,59 @@ Each thread could support a couple GC generations. This could be replicated at t
 
 KPN acceleration is a special case, and may require explicit tracking of 'messages' between 'processes' so we can communicate asynchronously by moving either the message or the process into shared memory. This will likely require a threads extension to maximize utilization.
 
-## Lazy Evaluation and Copies
+## Lazy Copy?
 
-Awelon's basic evaluation strategy is lazy modulo copy. But with explicit laziness, we could also be lazy across copies, sharing the result of deferred computation based on knowing the logical copy structure of data. The main concern I have with this is how it interacts with serialization or distribution. I lose track of the copy origin when a program is wholly or partially serialized. 
+Awelon's basic evaluation strategy is lazy modulo copy, hence avoiding need for shared memory memoization. Yet lazy copies are feasible within a runtime, automatically sharing the result via shared memory. I'm curious whether doing so is worthwhile. Lazy copies only help if the result is used in neither copy, and they require evaluation at more ad-hoc locations in memory.
 
-This could be mitigated by somehow rejoining common substructure upon parse. But it might be better to stick with the basic strategy of strict copies, for now.
+For now, I'll probably skip this feature.
 
 ## Stack Representations
 
-Evaluation has both the program/data stack and the auxiliary. Modeling multiple stacks and a heap within a single address space needs some attention. 
-
-I will probably aim to model the stack as a normal heap object - a unique array, or linked list of array fragments, or similar. The latter option is especially nice because the 'top' pages of the stack would tend to be a newer object, and stack pages would generally align with locality and generation.
-
-An advantage of modeling a stack as a unique array is that it becomes feasible (with appropriate accelerators) to represent the entire evaluation and GC techniques *within* Awelon code.
+The simplest stack representation is probably a linked list, representing composition cells. But this requires a lot of allocations. An array-based stack would likely serve more efficiently. I'll need to figure out how to represent these easily.
 
 ## Memory Representations
 
-Say our allocations are two-word aligned, and our words are either 4 bytes or 8 bytes depending on machine. This gives us 3 reliable pointer tag bits. Use of pointer tag bits can discriminate a few 'small' values to reduce allocation costs. 
-
-Proposed Representations:
-
-        Proposal A
-
-        b00     small constants, built-in operations
-        b01     tagged objects (type in header)
-        b10     composition cell (B, A) => [B A]
-        b11     constructor cell (H, T) => [H T :]
-
-        Proposal B
+Say our allocations are two-word aligned, and our words are either 4 bytes or 8 bytes depending on machine. This gives us 3 reliable pointer tag bits. Use of pointer tag bits can discriminate a few 'small' values to reduce allocation costs. Proposed Representation:
 
         _b0     small constants, operators, etc.
-        sb1     objects, type in header
+            x1    integers
+            10    naturals
+           000    extended
+           100    object headers
+        sb1     object reference, upper bits are address
+            tagged object: first field is type header
+            small object: first field is any other value
 
-Small constants would include primitive operators or annotations, small numbers, perhaps small texts and labels. The `b` field indicates whether our reference may be treated as a block value for purpose of data plumbing and efficient evaluation. In proposal A, I use the third bit for extra type information, to support a few 'small object' types. In proposal B, I use the third bit to track sharing uniformly. I can still support two-cell composition by distinguishing the 'object header' as a subset of small constants.
+Small constants include small numbers, operators, and object type headers. Small texts, labels, and binaries are also feasible, especially in a 64 bit system. Objects will be discriminated by their first field. If the first field is a type header (a special small constant) it will indicate object size and how to interpret the remainder of the object. Other small objects will be simple cells with two values, representing composition in most contexts, but potentially representing list cons cells or similar in context of a suitable object header.
 
-The latter proposal ultimately seems simpler for normal processing - i.e. fewer layers of 'switch' expressions on data type. And while I cannot distinguish cons and composition directly, it should be feasible to use a list header wrapper to reinterpret a subset of compositions as cons cells, or to use an array structure. Further, uniform sharing information should offer some benefits for evaluation performance.
+An important feature to simplify GC is that we can determine the size and internal fields of an object given just its address. This allows us to mark addresses only.
 
-At this time, I moderately favor Proposal B.
+The `b` pointer field indicates that an object may be treated as a block value (e.g. with respect to binding, data plumbing) while the `s` field for objects indicates that there is more than one reference to an object. A newly allocated object always has `s=0` while a logically copied object has `s=1` on both copies.
+
+*Note:* Ideally, `(nc)` and `(nd)` would be represented as pointer bits due to how they're inherited upon bind. However, I'm all out of pointer bits. I'll need instead to attach these properties to an object wrapper that receives special attention upon bind, copy, drop, and read/serialization. Other annotations that attatch to a value, such as `(error)`, might be coupled into this.
 
 ### Small Constants
 
-I desire several small constant "types", so let's say three to four bits of type data. A viable list of types to support:
+The essentials are: small naturals, operators, and object headers.  Support for 'raw bytes' - unparsed data in the program stream - may also prove valuable during serialization. Small integers would be a convenient addition. Small decimal values or labels for structured sums would also be relatively convenient. Small texts or binaries are feasible, but certainly non-essential.
 
-* built-in operations
-* object type tags
-* natural numbers
-* integers
-* rational numbers (two small nats)
-* small decimal numbers (small exponent, large mantissa)
-* labels for sums and variants
-* short texts
-* short binaries
+Natural numbers will run up to at least 2^28 (over 250 million) on a 32-bit system, and much higher on a 64-bit system. 
 
-I'd like to ensure that the zero word is equivalent to a built-in NOP action. Natural numbers should cover a reasonably large volume, and integers should ideally cover the same volume of naturals (plus and minus). So focusing on just these at the moment:
+*Note:* Operators shall use the zero suffix for small constants, to ensure the NOP operation is represented by the `0` constant value.
 
-         00     extended
-         10     naturals
-         x1     integers
+### Arrays and Binaries Format?
 
-This adds to the left side of the `b0` suffix, so we end up with `1010` as our full suffix for natural number values. This leaves about 28 bits for the number itself (~ 256 million on a 32-bit system, and a bigger number than we need for 64-bit systems). 
+I have an option for arrays and binaries: either the size field is part of the object header, or separate from it. Keeping it in the header is more convenient in some ways, but does limit the size to about 2^24 elements on a 32-bit system. In turn, we might need to divide very large arrays into small fragments. But maybe we should do this anyway? If I limit array fragments to even 2^16 elements, that should be sufficient to achieve most benefits from large arrays, and would likely simplify GC.
 
-The extended set would then be `00b0` suffix and might use four more bits (adding to a full byte) for the extended type. Operators will use the `0000` suffix, while type headers might use `0001`. 
+It seems feasible to support logical append, and array slices or reversals. This would allow working with very large logical arrays and lists with some efficiency.
 
-### Sliceable Arrays and Ropes?
-
-I would like easy support to reference and logically recompose array fragments. We might treat array-slice as an alternative representation of array. Maybe something like:
-
-        (slice array-ref offset count)
-
-This seems quite feasible, but would require additional support to represent composition of arrays. Rather than a linked list of chunks, perhaps logically appended slices and arrays.
-
-        (append array array size)
-
-Here the `size` field is just the sum of the sizes of the component arrays, as a natural number. This is important for efficient indexing of the array. We can move append slices around until a target offset is near the root, and we can cut an array into smaller slices if we want to focus on multiple locations (then append them later).
 
 ## Mutable Objects
 
-A purely functional language can have in-place mutable data so long as it is not shared, a unique reference. For this runtime, I intend to support copy-on-write using dynamic information about sharing. Use of `(nc)` types can help enforce uniqueness (modulo debug or persistence snapshots).
+A purely functional language can support in-place mutable data for unique references, e.g. if we have the only reference to an array then the array-update function may freely modify the object in-place. I currently track uniqueness in the object pointer (the `s` bit).
 
-I need some bits in the object header to indicate a unique object. Additionally, in-place update may interact with a generational GC: when we update an object from an older generation in place, we must also track it as a "root" for purpose of GC on younger generations. I need a second bit for this write barrier.
+For generational GC, writes to fields that point into a nursery heap must be recorded in the write-set. It probably won't be worth modifying small objects in most cases, only things that would involve a large copy.
 
-Evaluation doesn't necessarily eliminate uniqueness, e.g. because `(eval)` or `(par)` should preserve uniqueness of contained data. This is essential if we're to use patterns like dividing an array computation across multiple parallel threads then stitch the results back together. 
-
-List and composition cells might be a special case for mutable objects. We cannot update such objects in place because we lack header bits to track uniqueness, and we lack generational write barriers. But copies also need attention, since they might reference unique objects. We may need to wrap copied lists with a header. I might convert large lists to a shared array upon copy.
-
-Note: an intriguing option would be to allow the GC to track whether a reference is still shared, e.g. by clearing the shared bit and marking it again on second reference. But this seems unpredictable in its utility, and adds overhead for the GC, so I won't pursue it.
+List and composition cells might be a special case for mutable objects. We cannot update such objects in place because we lack header bits to track uniqueness, and we lack generational write barriers. But copies also need attention, since they might reference unique objects. We may need to wrap copied lists with a header. I might convert a large list into a shared array upon copy.
 
 ### Arrays
 
@@ -179,6 +122,8 @@ Arrays are the most important mutable objects. Given effective acceleration of a
 I've considered support for 'array buffers' - arrays with some extra space to push/pop data - but I've decided they're better modeled explicitly at the language layer so they have a more robust structure across composition or serialization. Developers could simply fill an array with `0` or `~` or `[]` values then modify it in place.
 
 Array slices are an interesting option, too, enabling lightweight sharing of array data.
+
+To work with large arrays, we might convert from a list or create an array of zero number values or `[]` or similar to get started.
 
 ## Persistence and Resources
 
@@ -208,7 +153,9 @@ Some thoughts:
 
 GC for secure hash resources, and a shared ephemeron table between processes, is perhaps the main requirement for multi-process access. I could (and probably should) use shm_open for the ephemeron table.
 
-I'm concerned that a crashed process might hold indefinitely onto resources. I could try an expiration model, with processes periodically scanning the contexts to maintain the ephemeron tables. But this seems like a problem to solve when it becomes an actual problem.
+I'm concerned that a crashed process might hold indefinitely onto resources. I could try an expiration model, with processes periodically scanning the contexts to maintain the ephemeron tables. But this seems like a problem to solve if it becomes an actual problem. Worst case, I just need to reset the machine.
+
+*Thoughts:* I might benefit from reducing sizes of secure hash resources to limit the burden when loading a resource into context memory or persisting the object. I'll need to think about this. Limiting the size of words and definitions may similarly help.
 
 ## Dictionary Indexing
 
@@ -241,7 +188,7 @@ Anyhow, the runtime will need to be relatively good at working with tries and st
 
 ## Concurrent Update
 
-The runtime supports short-lived transactions. 
+A context shall represent a transaction on the dictionary, in the sense that it may conflict with updates from other contexts on the same dictionary. 
 
 It seems feasible to model discretionary locks within a dictionary. Or to keep some form of write journal, to support DVCS-style workspaces with fork and ad-hoc merge. But such features won't be supported by the runtime.
 
@@ -336,11 +283,19 @@ Some invisible performance enhancers:
 
 ## Memory Profiling
 
-How can I gain a good insight about where memory is being consumed? Ideally, non-invasively?
+I don't currently propose to directly support memory profiling. 
 
-Well, every value in Awelon is a block, a closure. A reasonable option is to track each block to its syntactic origin (modulo binding). 
+Developers can at least take intermediate snapshots during evaluation, e.g. at breakpoints or stopping on effort quota. This would give developers a reasonable view of where memory would be consumed in an implementation of Awelon code without logical copies.
 
+It would be feasible to count heap references to individual words and types of data (numbers, etc.), however.
 
+How should I offer insight about where memory is being consumed? Ideally, non-invasively?
+
+It seems feasible to track each block/closure to a syntactic origin. But it also seems expensive to record this information in memory, to add metadata about origin to each block or closure and to trace down the object while profiling. 
+
+Alternatively, I could count references to words or annotations in the current program. This would offer an efficient (albeit imprecise) metric of memory usage. Small values (naturals, etc.) could also be grouped by type, as could be texts and binary arrays. This wouldn't give a good view of where memory was allocated.
+
+A third option is to simply record intermediate evaluation states and report on them. This wouldn't provide much information about shared values via logical copies, but applying a compression algorithm might help highlight where most of our memory is used.
 
 ## JIT Compilation
 

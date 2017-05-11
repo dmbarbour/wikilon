@@ -374,7 +374,7 @@ For low level parallelism, we could accelerate [linear algebra](https://en.wikip
 
 For high level parallelism, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), more specifically a variant with temporal extensions (see *Reactive Process Networks*, below). Essentially, we would describe a process network as a first-class value, and accelerate an 'evaluation' function (of type `KPN → KPN`) such that it splits the process network among distributed memory and CPUs to run the computation. The *monotonic* nature of KPNs allows distributed computation to continue in the background even as we inject and extract messages. 
 
-## Structural Scoping
+## Structural Scope
 
 Blocks naturally delimit the input scope for a computation. For example, we know that in `[B][[A]foo]`, `foo` can access `[A]` but not `[B]`. And we can trivially leverage this with the bind operation `b`. But Awelon also supports multiple outputs, and so scoping output is a relevant concern. To address this, Awelon introduces *tuple assertions* to annotate output scope:
 
@@ -390,21 +390,29 @@ In addition to controlling output counts, programmers may wish to fail fast base
 
         (:foo) (.foo) ==
 
-These might also be called 'sealer' and 'unsealer' respectively. In practice, we might construct a tagged value with `[(:foo)] b` and deconstruct it with `i(.foo)`. The symbol `foo` or `T` is left to the programmer, but must match between annotation and assertion. These annotations are not labels (i.e. you cannot discriminate on them), but they do resist *accidental* access to structured data. As with tuple assertions, we can fail fast dynamically or detect an error statically.
+These might also be called 'sealer' and 'unsealer' respectively. In practice, we might construct a tagged value with `[(:foo)] b` and later access it with `i(.foo)`. The symbol `foo` or `T` is left to the programmer, but must match between annotation and assertion. These annotations are not labels (i.e. you cannot discriminate on them), but they do resist *accidental* access to structured data. As with tuple assertions, we can fail fast dynamically or detect an error statically.
 
-## Substructural Scoping
+## Substructural Scope
 
-[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about whether a value is used, or how many times it is used. This is convenient for modeling finite resources, intermediate states in a protocol, or ensuring certain steps are performed by a client computation. Awelon provides simple annotations for lightweight substructural types:
+[Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about whether a value is used, or limit how many times a value is used. This can be convenient for modeling finite resources, intermediate states in a protocol, or ensuring certain steps are performed by a client computation. Awelon lacks primitive support for substructural types, but annotations can be leveraged:
 
 * `(nc)` - mark a value non-copyable, aka 'affine'
 * `(nd)` - mark a value non-droppable, aka 'relevant'
 * inherit substructure of bound values (op `b`).
 
-Applying a value with `a` will ignore its substructural type. Because copy and drop are explicit, it is relatively easy to enforce substructural attributes dynamically in Awelon language. 
+        [A](nc) [B] b == [[A](nc) B](nc)
+
+Substructural attributes do not prevent application of a value with `a`. Copy and drop are explicit in Awelon, so dynamically enforcing these attributes is feasible, a lot easier than it would be in a variable substitution based language. But ideally, they would be enforced statically. 
 
 ## Error Annotations
 
-An `(error)` annotation marks a value erroneous and logically divergent. This means we cannot observe it with operator `a`. For example, on division by zero, a function could return a result like `"div-by-zero"(error)`, but this would only become a problem if we attempt later to observe this divide-by-zero result. A runtime may also wrap recognized errors to highlight them in the output.
+An `(error)` annotation marks a value erroneous and non-applicable. We cannot observe an error value with operator `a`. 
+
+        [B][E](error)a == [][E](error)a d [B]
+
+That is, we simply halt rewriting wherever we attempt to apply the error value. But an erroneous value can otherwise be bound, copied, dropped like normal. 
+
+ would only become a problem if we attempt later to observe this divide-by-zero result. A runtime may also wrap recognized errors to highlight them in the output.
 
         [A](nc)c        => [][[A](nc)c](error)a d
         [[A][B][C]](t2) => [[A][B][C]](t2)(error)

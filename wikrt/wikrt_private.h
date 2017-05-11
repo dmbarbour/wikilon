@@ -79,11 +79,9 @@ typedef enum wikrt_op wikrt_op;
 #define WIKRT_WORKER_STACK_MIN (64 * 1024)
 #define WIKRT_WORKER_STACK_SIZE WIKRT_LNBUFF(WIKRT_WORKER_STACK_MIN, PTHREAD_STACK_MIN)
 
-// To avoid sharing cache lines between worker threads, threads may
-// align initial allocations with a cache line. Since I don't want
-// to bother looking this up, I'll just overestimate a bit from the
-// common value of 64 bytes.
-#define WIKRT_CACHE_LINE_SIZE 256
+// To avoid sharing memory between worker threads at the hardware
+// layer or abstraction layers, I align heap allocations to pages. 
+#define WIKRT_THREAD_HEAP_PAGE 4096
 
 
 static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
@@ -93,7 +91,7 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  * Pointer Bits
  *
  *      (data)v0    small constant in field
- *      (addr)sv1   pointer to object in memory
+ *      (addr)sv1   ref to object in memory
  *
  *   Small constants generally use a few more bits for type, but the
  *   data is entirely local to the reference. For memory objects, the
@@ -103,43 +101,57 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *
  * Objects (header, data ...)
  * 
- *   Objects always use the first field to indicate object type. If 
- *   our first field is a special 'object header' constant (low byte
- *   0x10), then the type is determined from this header. Otherwise
- *   the object is a composition pair. (Object header constants are
- *   not used as normal values.)
- * 
- * Small Constants (1-2 bits + v0)
+ *   Objects reference allocated memory. If the first element is an
+ *   object header (a special kind of small constant) then we will
+ *   use the header to understand the object size and structure. Any
+ *   other value is simply treated as a cell pair, a composition in
+ *   most contexts (but might mean 'list cons' in some contexts.)
  *
- *      00(v0)  extended small constants
- *      x1(10)  small signed integers
- *      10(10)  small natural numbers
+ *   A goal with this representation is to keep it simple for GC. 
+ *   Also, avoiding type information in the pointer should simplify
+ *   the conditional behaviors working with objects.
+ *
+ * Small Constants (a few bits + v0)
+ *
+ *        1     small signed integers
+ *       10     small natural numbers
+ *      000     extended small constants
+ *      100     object type headers (v=0)
  *
  *   Small integers have the same positive range as natural numbers,
  *   and may go negative as far as they go positive. The bulk of our
  *   small constants are thus designated for naturals or integers. 
+ *  
+ *   Limiting object headers to five bits gives me a few more bits in
+ *   the header for primary object header type.
  *   
- * Extended Small Constants (4 bit type + 00v0)
+ * Extended Small Constants  (three bits + 000v0)
  *
- *      0000    operators and accelerators 
- *      0001    object headers (low byte == 0x10)
+ *   Currently just using the remainder of the byte for type, and the
+ *   rest of the field for contained data. 
  *
- *   Small decimal values, labels, short texts, small binaries, etc. might
- *   fit into extended small constants, especially on a 64-bit system. On
- *   a 32-bit system, these are unlikely to see much use outside of special
- *   builtins.
+ *      000     operators (suffix 0, so value 0 = NOP)
+ *      001     raw bytes (for serialization, parsing)
+ *        potentials...
+ *              decimals  (for efficient math)
+ *              labels    (for deep sums and records)
+ *
+ *   Small constants cannot be extended much beyond operators and raw
+ *   bytes on a 32-bit system, but on a 64-bit system it seems feasible
+ *   to shove a variety of useful types into a single field.
  *
  * Awelon doesn't have great support for floating point numbers at this
- * time, but could represent them as boxed objects, ideally in context of
- * a larger binary structure.
+ * time, but could represent them as boxed objects. Ideally in context
+ * of larger binary structures.
  */
-#define WIRKT_SMALL   0
-#define WIKRT_OBJ     1
-#define WIKRT_VAL     2
-#define WIKRT_SHARE   4
-#define WIKRT_INT_OP  4
-#define WIKRT_NAT_OP  8
-#define WIKRT_OBJ_HDR 16
+
+#define WIRKT_SMALL     0
+#define WIKRT_OBJ       1
+#define WIKRT_VAL       2
+#define WIKRT_SHARED    4
+#define WIKRT_INT_OP    4
+#define WIKRT_NAT_OP    8
+#define WIKRT_OHEAD    16
 
 #define WIKRT_SMV  (WIKRT_VAL | WIKRT_SMALL)
 #define WIKRT_VOBJ (WIKRT_VAL | WIKRT_OBJ)
@@ -148,78 +160,48 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 
 #define WIKRT_INT_SHIFT 3
 #define WIKRT_NAT_SHIFT 4
-#define WIKRT_EXT_SHIFT 8
+#define WIKRT_EXT_TYPE_SHIFT 5
+#define WIKRT_EXT_DATA_SHIFT 8
 
-#define WIKRT_SMALL_NAT_MAX (WIKRT_V_MAX >> WIKRT_INT_SHIFT)
+#define WIKRT_SMALL_NAT_MAX (WIKRT_Z_MAX >> WIKRT_INT_SHIFT)
 #define WIKRT_SMALL_INT_MAX ((wikrt_i)(WIKRT_SMALL_NAT_MAX))
-#define WIKRT_SMALL_INT_MIN (-(WIKRT_SMALL_NAT_MAX))
+#define WIKRT_SMALL_INT_MIN (-(WIKRT_SMALL_INT_MAX))
+  // this loses one small integer from the representation.
+  // OTOH, it simplifies negation, absolute values, etc..
+
+#define WIKRT_RAW_BYTE_TYPE 0x20
+#define WIKRT_RAW_BYTE(N) ((((wikrt_v)N) << WIKRT_EXT_DATA_SHIFT) | WIKRT_RAW_BYTE_TYPE)
 
 // bit-level utility functions
-static inline bool wikrt_has_flags(wikrt_v f, wikrt_v v) { return (f == (f & v)); }
-static inline bool wikrt_lacks_flags(wikrt_v f, wikrt_v v) { return (0 == (f & v)); }
-
-static inline bool wikrt_is_small(wikrt_v v) { return wikrt_lacks_flags(WIKRT_OBJ, v); }
+static inline bool wikrt_match_f(wikrt_v req, wikrt_v rej, wikrt_v val) { return (req == ((req|rej) & val)); }
+static inline bool wikrt_is_small(wikrt_v v) { return wikrt_match_f(0, WIKRT_OBJ, v); }
 static inline bool wikrt_is_object(wikrt_v v) { return !wikrt_is_small(v); }
-static inline bool wikrt_is_action(wikrt_v v) { return wikrt_lacks_flags(WIKRT_VAL, v); }
-static inline bool wikrt_is_value(wikrt_v v) { return !wikrt_is_action(v); }
-static inline bool wikrt_is_shared(wikrt_v v) { return wikrt_has_flags((WIKRT_OBJ | WIKRT_SHARE), v); }
+static inline bool wikrt_is_shared(wikrt_v v) { return wikrt_match_f((WIKRT_OBJ | WIKRT_SHARED), 0, v); }
+static inline bool wikrt_is_ohead(wikrt_v v) { return (0x10 == (0x1F & v)); }
 static inline bool wikrt_is_primop(wikrt_v v) { return (0 == (0xFF & v)); }
-static inline wikrt_n wikrt_v2n(wikrt_v v) { return (((wikrt_n)v) >> WIKRT_NAT_SHIFT); }
-static inline wikrt_v wikrt_n2v(wikrt_n n) { return ((((wikrt_v)n) << WIKRT_NAT_SHIFT) | WIKRT_NAT_VAL); }
-static inline wikrt_i wikrt_v2i(wikrt_v v) { return (((wikrt_i)v) >> WIKRT_INT_SHIFT); }
-static inline wikrt_v wikrt_i2v(wikrt_i i) { return ((((wikrt_v)i) << WIKRT_INT_SHIFT) | WIKRT_INT_VAL); }
 
-static inline wikrt_a wikrt_obj_addr(wikrt_v v) { return (v & (~((wikrt_a)7))); }
-static inline bool wikrt_is_obj_hdr(wikrt_v v) { return (WIKRT_OBJ_HDR == (0xFF & v)); }
+static inline bool wikrt_is_small_nat_val(wikrt_v v) { return (WIKRT_NAT_VAL == (0xF & v)); }
+static inline wikrt_n wikrt_val_to_nat(wikrt_v v) { return (((wikrt_n)v) >> WIKRT_NAT_SHIFT); }
+static inline wikrt_v wikrt_nat_to_val(wikrt_n n) { return ((((wikrt_v)n) << WIKRT_NAT_SHIFT) | WIKRT_NAT_VAL); }
 
+static inline bool wikrt_is_small_int_val(wikrt_v v) { return (WIKRT_INT_VAL == (0x7 & v)); }
+static inline wikrt_i wikrt_val_to_int(wikrt_v v) { return (((wikrt_i)v) >> WIKRT_INT_SHIFT); }
+static inline wikrt_v wikrt_int_to_val(wikrt_i i) { return ((((wikrt_v)i) << WIKRT_INT_SHIFT) | WIKRT_INT_VAL); }
 
+static inline bool wikrt_is_action(wikrt_v v) { return wikrt_match_f(0, WIKRT_VAL, v); }
+static inline bool wikrt_is_value(wikrt_v v) { return !wikrt_is_action(v); }
+static inline wikrt_v wikrt_act_to_val(wikrt_v v) { return (v | WIKRT_VAL); }
+static inline wikrt_v wikrt_val_to_act(wikrt_v v) { return (v & ~((wikrt_v)WIKRT_VAL)); }
 
+static inline bool wikrt_is_raw_byte(wikrt_v v) { return (0x20 == (0xFF & v)); }
+static inline wikrt_v wikrt_raw_byte_to_val(uint8_t n) { return WIKRT_RAW_BYTE(n); }
+static inline uint8_t wikrt_val_to_raw_byte(wikrt_v v) { return (uint8_t)(v >> 8); }
 
-static inline wikrt_v wikrt_value_to_action(wikrt_v v) { return ((~((wikrt_v)WIKRT_VAL)) & v); }
-static inline wikrt_v wikrt_action_to_value(wikrt_v v) { return (WIKRT_VAL | v); }
+#define WIKRT_OBJ_ADDR_MASK (~((wikrt_v)7))
 
-
-static inline bool wikrt_val_in_ref(wikrt_v v) { return !wikrt_vtag(v); }
-static inline bool wikrt_is_basic_op(wikrt_v v) { return !(v & 0xFF); }
-static inline bool wikrt_is_raw_byte(wikrt_v v) { return ((0xFF & v) == WIKRT_RAW_BYTE_TYPE); }
-static inline wikrt_v wikrt_from_raw_byte(uint8_t n) { return WIKRT_RAW_BYTE(n); }
-static inline uint8_t wikrt_get_raw_byte(wikrt_v v) { return (uint8_t)(v >> 8); }
+static inline wikrt_a  wikrt_v2a(wikrt_v v) { return (WIKRT_OBJ_ADDR_MASK & v); }
 static inline wikrt_v* wikrt_a2p(wikrt_a a) { return (wikrt_v*)a; }
 static inline wikrt_v* wikrt_v2p(wikrt_v v) { return wikrt_a2p(wikrt_v2a(v)); }
-static inline bool wikrt_is_ptr(wikrt_v v) { return !wikrt_val_in_ref(v); }
-
-static inline bool wikrt_is_small_nat_op(wikrt_v v)  { return (WIKRT_SMALL_NAT_OP  == (v & 0x1F)); }
-static inline bool wikrt_is_small_nat_val(wikrt_v v) { return (WIKRT_SMALL_NAT_VAL == (v & 0x1F)); }
-static inline bool wikrt_is_small_int_op(wikrt_v v)  { return (WIKRT_SMALL_INT_OP  == (v & 0x0F)); }
-static inline bool wikrt_is_small_int_val(wikrt_v v) { return (WIKRT_SMALL_INT_VAL == (v & 0x0F)); }
-
-static inline wikrt_n wikrt_from_small_nat(wikrt_v v) { return (((wikrt_n)v) >> 5); }
-static inline wikrt_v wikrt_to_small_nat_val(wikrt_n n) { return (((wikrt_v)(n << 5))|WIKRT_SMALL_NAT_VAL); }
-static inline wikrt_v wikrt_to_small_nat_op(wikrt_n n) { return (((wikrt_v)(n << 5))|WIKRT_SMALL_NAT_OP); }
-
-static inline wikrt_i wikrt_from_small_int(wikrt_v v) { return (((wikrt_i)v) >> 4); }
-static inline wikrt_v wikrt_to_small_int_val(wikrt_i i) { return (((wikrt_v)(i << 4))|WIKRT_SMALL_INT_VAL); }
-static inline wikrt_v wikrt_to_small_int_op(wikrt_i i) { return (((wikrt_v)(i << 4))|WIKRT_SMALL_INT_OP); }
-
-
-
-
-#define WIKRT_SMALL_INT (
-
-#define WIKRT_
-
-#define WIKRT_REF_MASK_TYPE     3
-#define WIKRT_REF_MASK_ADDR     (~((wikrt_v)7))
-
-#define WIKRT_SMALL_INT_OP    8  /* _1000; int behavior */
-#define WIKRT_SMALL_INT_VAL  (WIKRT_SMALL_INT_OP | WIKRT_VAL)
-#define WIKRT_SMALL_NAT_OP   16  /* 10000; nat behavior */
-#define WIKRT_SMALL_NAT_VAL  (WIKRT_SMALL_NAT_OP | WIKRT_VAL)
-
-
-#define WIKRT_RAW_BYTE_TYPE (0x20)
-#define WIKRT_RAW_BYTE(N) ((N << 8) | WIKRT_RAW_BYTE_TYPE)
-
 
 /** Tagged Objects
  *
@@ -575,31 +557,27 @@ struct wikrt_env {
 void wikrt_halt_threads(wikrt_env* e); // stop worker threads
 
 /** Write Set for Thread GC
+ * 
+ * The write set tracks fields written from a thread into external
+ * contexts. This serves as a 'root set' for thread GC, and may
+ * contain fields within active tasks in addition to writes via
+ * accelerated functions into arrays or objects.
  *
- * When a thread is initially constructed, it is empty. So the only
- * source of GC roots is writes by the thread that create refs back
- * into the thread's heap. Writes occur as part of computing a task
- * and accelerated updates for linear objects or arrays.
- *
- * If a write is possible, we may need to preallocate some space in
- * the write set. The write set is designed to be most efficient if
- * writes are adjacent in memory (about 4 bits per field written).
- * Random writes are more expensive (two fields per field written).
- * But it doesn't hurt to preallocate as if for random writes.
- *
- * When our thread promotes memory, it may clear the write set yet
- * continue using its allocation.
+ * The write set is optimized in favor of writes to fields that are
+ * near each other in memory, e.g. writes to a segment of an array
+ * or within an object or task.
  */
 typedef struct wikrt_ws {
-    wikrt_z     size;       // buffer size   (wikrt_wsd fields)
-    wikrt_z     fill;       // element count (loaded fields)
+    wikrt_z     size;       // slots maximum (wikrt_wsd fields)
+    wikrt_z     fill;       // slots filled  (loaded fields)
     wikrt_v     data;       // binary array
 } wikrt_ws;
 
-void wikrt_ws_add(wikrt_thread*, wikrt_v*); // add a field
-void wikrt_ws_rem(wikrt_thread*, wikrt_v*); // remove a field
-void wikrt_ws_clr(wikrt_thread*); // clear all fields (preserve allocation)
-bool wikrt_ws_prealloc(wikrt_thread*, wikrt_z amt); // grow if needed
+void wikrt_ws_add(wikrt_ws*, wikrt_v*); // add a field
+void wikrt_ws_rem(wikrt_ws*, wikrt_v*); // remove a field
+void wikrt_ws_clr(wikrt_ws*); // clear all fields (preserve allocation)
+bool wikrt_ws_prealloc(wikrt_thread*, wikrt_ws*, wikrt_z nFields); // grow if needed
+wikrt_v* wikrt_ws_iter(wikrt_ws*, wikrt_v*); // start and end at NULL, random order
 
 /** Heap
  * 
@@ -614,9 +592,9 @@ bool wikrt_ws_prealloc(wikrt_thread*, wikrt_z amt); // grow if needed
  */
 struct wikrt_heap {
     wikrt_a start;  // first reserved address
-    wikrt_a stop;   // allocation cap (for GC, reserves space for marking)
+    wikrt_a end;    // last reserved address
+    wikrt_a stop;   // allocation limit and start of mark bits
     wikrt_a alloc;  // current allocator
-    
 };
 wikrt_heap wikrt_heap_init(wikrt_a, size_t);
 static inline bool wikrt_mem_avail(wikrt_heap const* h, wikrt_z amt)
