@@ -59,9 +59,7 @@ typedef struct wikrt_heap wikrt_heap;
 typedef struct wikrt_thread wikrt_thread;
 typedef struct wikrt_ws wikrt_ws;
 typedef struct wikrt_task wikrt_task;
-typedef enum wikrt_otype wikrt_otype;
-typedef enum wikrt_ptype wikrt_ptype;
-typedef enum wikrt_qtype wikrt_qtype;
+typedef enum wikrt_btype wikrt_btype;
 typedef enum wikrt_op wikrt_op;
 #define WIKRT_V_MAX  UINTPTR_MAX
 #define WIKRT_Z_MAX  WIKRT_V_MAX
@@ -82,7 +80,6 @@ typedef enum wikrt_op wikrt_op;
 // To avoid sharing memory between worker threads at the hardware
 // layer or abstraction layers, I align heap allocations to pages. 
 #define WIKRT_THREAD_HEAP_PAGE 4096
-
 
 static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 
@@ -130,8 +127,7 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *   Currently just using the remainder of the byte for type, and the
  *   rest of the field for contained data. 
  *
- *      000     operators (suffix 0, so value 0 = NOP)
- *      001     raw bytes (for serialization, parsing)
+ *      000     operators (low byte zero, value 0 is NOP)
  *        potentials...
  *              decimals  (for efficient math)
  *              labels    (for deep sums and records)
@@ -163,6 +159,7 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 #define WIKRT_EXT_TYPE_SHIFT 5
 #define WIKRT_EXT_DATA_SHIFT 8
 
+
 #define WIKRT_SMALL_NAT_MAX (WIKRT_Z_MAX >> WIKRT_INT_SHIFT)
 #define WIKRT_SMALL_INT_MAX ((wikrt_i)(WIKRT_SMALL_NAT_MAX))
 #define WIKRT_SMALL_INT_MIN (-(WIKRT_SMALL_INT_MAX))
@@ -177,14 +174,16 @@ static inline bool wikrt_match_f(wikrt_v req, wikrt_v rej, wikrt_v val) { return
 static inline bool wikrt_is_small(wikrt_v v) { return wikrt_match_f(0, WIKRT_OBJ, v); }
 static inline bool wikrt_is_object(wikrt_v v) { return !wikrt_is_small(v); }
 static inline bool wikrt_is_shared(wikrt_v v) { return wikrt_match_f((WIKRT_OBJ | WIKRT_SHARED), 0, v); }
-static inline bool wikrt_is_ohead(wikrt_v v) { return (0x10 == (0x1F & v)); }
+static inline bool wikrt_is_ohead(wikrt_v v) { return (WIKRT_OHEAD == (0x1F & v)); }
 static inline bool wikrt_is_primop(wikrt_v v) { return (0 == (0xFF & v)); }
 
 static inline bool wikrt_is_small_nat_val(wikrt_v v) { return (WIKRT_NAT_VAL == (0xF & v)); }
+static inline bool wikrt_is_small_nat_op(wikrt_v v) { return (WIKRT_NAT_OP == (0xF & v)); }
 static inline wikrt_n wikrt_val_to_nat(wikrt_v v) { return (((wikrt_n)v) >> WIKRT_NAT_SHIFT); }
 static inline wikrt_v wikrt_nat_to_val(wikrt_n n) { return ((((wikrt_v)n) << WIKRT_NAT_SHIFT) | WIKRT_NAT_VAL); }
 
 static inline bool wikrt_is_small_int_val(wikrt_v v) { return (WIKRT_INT_VAL == (0x7 & v)); }
+static inline bool wikrt_is_small_int_op(wikrt_v v) { return (WIKRT_INT_OP == (0x7 & v)); }
 static inline wikrt_i wikrt_val_to_int(wikrt_v v) { return (((wikrt_i)v) >> WIKRT_INT_SHIFT); }
 static inline wikrt_v wikrt_int_to_val(wikrt_i i) { return ((((wikrt_v)i) << WIKRT_INT_SHIFT) | WIKRT_INT_VAL); }
 
@@ -193,228 +192,26 @@ static inline bool wikrt_is_value(wikrt_v v) { return !wikrt_is_action(v); }
 static inline wikrt_v wikrt_act_to_val(wikrt_v v) { return (v | WIKRT_VAL); }
 static inline wikrt_v wikrt_val_to_act(wikrt_v v) { return (v & ~((wikrt_v)WIKRT_VAL)); }
 
-static inline bool wikrt_is_raw_byte(wikrt_v v) { return (0x20 == (0xFF & v)); }
+static inline bool wikrt_is_raw_byte(wikrt_v v) { return (WIKRT_RAW_BYTE_TYPE == (0xFF & v)); }
 static inline wikrt_v wikrt_raw_byte_to_val(uint8_t n) { return WIKRT_RAW_BYTE(n); }
 static inline uint8_t wikrt_val_to_raw_byte(wikrt_v v) { return (uint8_t)(v >> 8); }
 
 #define WIKRT_OBJ_ADDR_MASK (~((wikrt_v)7))
-
 static inline wikrt_a  wikrt_v2a(wikrt_v v) { return (WIKRT_OBJ_ADDR_MASK & v); }
 static inline wikrt_v* wikrt_a2p(wikrt_a a) { return (wikrt_v*)a; }
 static inline wikrt_v* wikrt_v2p(wikrt_v v) { return wikrt_a2p(wikrt_v2a(v)); }
 
-/** Tagged Objects
- *
- * Wikilon runtime shouldn't need more than 32 common object types,
- * especially if I consolidate common pairs and quadruples. Beyond
- * the structural type, each object tracks a little substructure.
- *
- *   - no-copy: the (nc) annotation has been applied
- *   - no-drop: the (nd) annotation has been applied
- * 
- * Objects are unique by default, enabling in-place update. But
- * in-place update is only possible with specific accelerators,
- * such as fast, indexed update of a list (via an array).
- */
-enum wikrt_otype
-{ WIKRT_OTYPE_PAIR = 0  // (header, value) pairs
-, WIKRT_OTYPE_QUAD      // (header, value, value, value) quadruples
-    // ... more as needed
+// Deeply mark an object at a given field as 'shared'.
+// This should be a prelude to any logical copy.
+void wikrt_mark_shared(wikrt_v*);
 
-    // data has a size field
-, WIKRT_OTYPE_BLOCK     // flat sequence of code
-, WIKRT_OTYPE_ARRAY     // compact list value
-, WIKRT_OTYPE_BINARY    // array of byte values
 
-    // Special Cases
-, WIKRT_OTYPE_TASK      // a fragment of code under evaluation
-, WIKRT_OTYPE_WORD      // interned, and includes annotations
-};
-
-#define WIKRT_O_TYPE  (0x1f)
-#define WIKRT_O_SHARE (1<<5)
-#define WIKRT_O_NC    (1<<6)
-#define WIKRT_O_ND    (1<<7)
-#define WIKRT_O_DATA_OFF  8
-#define WIKRT_O_DATA_MAX (WIKRT_Z_MAX >> WIKRT_O_DATA_OFF)
-#define WIKRT_O_DATA_BIT(N) (1 << (N + WIKRT_O_DATA_OFF))
-
-static inline wikrt_o     wikrt_new_obj_hdr(wikrt_otype o, wikrt_n d) { return (o | (d << WIKRT_O_DATA_OFF)); }
-static inline wikrt_otype wikrt_o_type(wikrt_v v) { return (WIKRT_O_TYPE & *(wikrt_v2p(v))); }
-static inline wikrt_n     wikrt_o_data(wikrt_o o) { return (o >> WIKRT_O_DATA_OFF); }
-
-/** PTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_PAIR 
- *
- * This allows interpretation of a representation. Binaries could
- * represent objects, texts, or large natural numbers. We can also
- * represent a logically reversed array, list, or binary.
- *
- * A text wraps a binary value. In this case, the binary value does
- * not include any extra spaces to escape newlines.
- */
-enum wikrt_ptype 
-{ WIKRT_PTYPE_BINARY_RAW    // wrap a binary object
-, WIKRT_PTYPE_TEXT          // wrap a binary as text
-, WIKRT_PTYPE_BIGNUM        // wrap a binary as bignum
-, WIKRT_PTYPE_ARRAY_REVERSE // reverse array or binary
-, WIKRT_PTYPE_ERROR         // [value](error)
-// maybe a fixpoint block wrapper?
-
-// special cases for incremental serialization in wikrt_read
-, WIKRT_PTYPE_TEXT_RAW      // for serializing text
-, WIKRT_PTYPE_TEXT_RAW_LF   // serialization of text with LF escape
-};
-
-static inline wikrt_o wikrt_new_ptype_hdr(wikrt_ptype p) { 
-    return wikrt_new_obj_hdr(WIKRT_OTYPE_PAIR, p); } 
-
-/** QTYPE - used in WIKRT_O_DATA field for WIKRT_OTYPE_QUAD 
- *
- * This gives us three fields after the header.
- */
-enum wikrt_qtype
-{ WIKRT_QTYPE_ARRAY_APPEND  // size, left, right. (Size 0 is a blank.)
-, WIKRT_QTYPE_ARRAY_SLICE   // offset, size, array.
-, WIKRT_QTYPE_QUALIFIER     // e.g. [foo], @y, unused
-// maybe a JIT block wrapper?
-};
-
-static inline wikrt_o wikrt_new_qtype_hdr(wikrt_qtype q) {
-    return wikrt_new_obj_hdr(WIKRT_OTYPE_QUAD, q); }
-
-/** Arrays
- *
- * Arrays are simple (header, val, val, val, ...) with size in header.
- * Arrays model lists, but with less overhead and pointer chasing and
- * nicer asymptotic performance for indexed operations. Arrays require
- * accelerated operations for most benefits.
- *
- * Lists and arrays in Awelon are heterogeneous normally, since there
- * is no implicit constraint to support homogeneous folds.
- */
-typedef struct wikrt_array { wikrt_o o; wikrt_v d[]; } wikrt_array;
-static inline wikrt_z wikrt_array_size(wikrt_z elems) {
-    return wikrt_cellbuff(sizeof(wikrt_v) * (1 + elems));
-}
-
-/** Blocks
- *
- * A block of code is a simple sequence of operations. However, we must
- * consider interaction with performance optimizations and profiling.
- * 
- * Profiling: For heap profiling, we might track syntactic origin for
- * every block. This might be achieved by adding invisible annotations
- * or comments to the block, representing parse origin of that block.
- *
- * Optimization: while a block should contain evaluated code, we could
- * also track arity and compute the link-optimized code (with partial
- * evaluation and logical inlining). JIT code acts similarly to this
- * link optimized code, and would frequently use the same field.
- *
- * My current inclination is to inject code for profiling, and to wrap
- * code for link optimization and JIT. Meanwhile, the basic sequence 
- * of ops can reuse the array structure.
- */
-typedef wikrt_array wikrt_block;
-
-/** Binary Data - (header, bytes) with header data = size. */
-typedef struct wikrt_binary { wikrt_o o; uint8_t b[]; } wikrt_binary;
-static inline wikrt_z wikrt_binary_size(wikrt_z bytes) {
-    return wikrt_cellbuff(sizeof(wikrt_o) + bytes);
-}
-wikrt_v wikrt_alloc_binary(wikrt_thread* t, uint8_t const*, wikrt_z);
-
-/** Big Numbers
- *
- * Awelon primarily supports natural numbers, and works with them
- * always in base 10. Under the hood, we'll use a variation on the
- * binary coded decimals: a big number is represented by sequence
- * of 32-bit words, each ranging 0..999999999, little-endian (low
- * words first). This representation may be used at parse time for
- * large number words.
- *
- * Big integers, decimals, or rationals will be modeled explicitly
- * above big natural numbers, whereas small integers and useful
- * decimals (on a 64-bit system) can be modeled via small values.
- */
-
-/** Words
- *
- * Excepting numbers, words are interned and kept in a hashtable.
- * Each word will need a bunch of metadata.
- *
- *     the word itself, maybe namespace qualifiers
- *     block having word's link-optimized definition
- *      - potentially wrapped by JIT-compiled definition
- *     computed link arity (e.g. 0-1 for value words)
- *     track update to word definition since commit
- *      - track dependencies? maybe via persistent index?
- *     breakpoint state
- *
- * Almost any access to our word table will be synchronized, but
- * ideally the words themselves may be used with minimal synch.
- * 
- * Since words are mostly present as a cache, it's okay to GC words
- * that aren't used and reload them from dictionary as needed. To
- * track caching, we might want to model a `recently used` field in
- * each word, clearing it when we perform full GC then setting it
- * when first link a word after GC. This would simplify decisions
- * to GC data that isn't used much (including stowage resources).
- *
- * The exception is written definitions, which cannot be collected
- * until we commit. So we must auto-mark words whose definitions 
- * have yet to be written. 
- */
-
-/** Tasks
- *
- * A 'task' describes a computation in progress and provides a 
- * barrier against accessing results for parallel evaluations. 
- * Tasks have some registers for ongoing computation and slots
- * for managing task queues.
- *
- * In some cases, a task will wait upon another. Ideally, we
- * can directly track these waits such that the client task
- * may continue immediately. However, this doesn't work well
- * with the current GC model.
- * 
- * Relevant attributes: complete, waiting, stability
- *
- * The last attribute regards memory stability in context of
- * parallelism and GC. I must track when a task cannot be 
- * accessed because it is under evaluation or its result
- * might reference another thread's nursery arena.
- *
- * We might also have attributes to specify evaluation mode.
- */
-struct wikrt_task {
-    wikrt_o o;      // WIKRT_OTYPE_TASK + bitfield
-    wikrt_v next;   // next task (linked list, 0 terminated)
-    wikrt_v wait;   // waiting on referenced task, if any
-
-    // evaluation registers (uniquely referenced)
-    wikrt_v lhs;    // data stack, left hand side of cursor
-    wikrt_v rhs;    // call stack, right hand side of cursor
-    wikrt_n amt;    // arity available in lhs
-};
-
-#define WIKRT_TASK_UNSTABLE WIKRT_O_DATA_BIT(0)
-#define WIKRT_TASK_COMPLETE WIKRT_O_DATA_BIT(1)
-#define WIKRT_OTYPE_TASK_COMPLETE (WIKRT_OTYPE_TASK | WIKRT_TASK_COMPLETE)
-
-static inline bool wikrt_is_task(wikrt_v t) { 
-    return wikrt_is_obj(t) && (WIKRT_OTYPE_TASK == wikrt_o_type(t)); 
-}
-
-/** Built-in Operations (Primitives, Accelerators, Annotations)
+/** Operations (Primitives, Accelerators, Annotations)
  *
  * Awelon relies on accelerators as a primary performance technique,
- * both for functions and data.
- *
- * Accelerators are referenced from user code by defining specific
- * words in a specific manner. These definitions are validated by
- * the runtime before acceleration is applied. This is a fragile 
- * approach, but a simple one.
+ * both for functions and data. Accelerators are referenced from user
+ * code by defining words in a specific manner. Expected definitions
+ * can be validated by the runtime.
  * 
  * Annotations are included in this list, excepting sealers and other
  * annotations that have a partially user-defined symbol. Unrecognized
@@ -422,6 +219,8 @@ static inline bool wikrt_is_task(wikrt_v t) {
  */
 enum wikrt_op 
 { OP_NOP = 0    // empty program (identity behavior)
+
+// Primitives
 , OP_a          // apply; [B][A]a == A[B]
 , OP_b          // bind;  [B][A]b == [[B]A]
 , OP_c          // copy;  [A]c == [A][A]
@@ -495,6 +294,137 @@ enum wikrt_op
 
 static inline wikrt_op wikrt_opval_to_op(wikrt_v v) { return (wikrt_op)(v >> 8); }
 static inline wikrt_v  wikrt_op_to_opval(wikrt_op op) { return (((wikrt_v)op) << 8); }
+
+
+/** Object Type Headers (General)
+ *
+ * Object headers allow for flexible size, structure, and semantics.
+ * But it's very important to keep it simple, to avoid complicating
+ * the interpreter with too many conditional behaviors.
+ *
+ * The WIKRT_OHEAD suffix is five bits. I use three bits for primary
+ * object types, to even it up to a byte. For consistency across 32 
+ * and 64 bit systems, 32 header bits are used. The remaining 24 bits
+ * are for header data - size or type information, usually.
+ *
+ * Primary objects include basic, binary, array, and anno. 
+ *
+ * A basic object is encoded with a small array of wikrt_v and wikrt_n
+ * fields (sizes 0..255) plus a type field. Binaries are just an array
+ * of bytes, and 'arrays' are an array of values. Without context, an
+ * array or binary will be inlined into code, but we'll usually wrap it
+ * within a basic object to provide context or perhaps a logical slice.
+ *
+ * The 'anno' type is used to track annotations that attach to values,
+ * especially (nc) and (nd). It records common annotations in header
+ * data bits.
+ */
+#define WIKRT_O_PRIMARY(N) ((((wikrt_v)N) << WIKRT_EXT_TYPE_SHIFT) | WIKRT_OHEAD)
+#define WIKRT_O_BASIC  WIKRT_O_PRIMARY(0)
+#define WIKRT_O_BINARY WIKRT_O_PRIMARY(1)
+#define WIKRT_O_ARRAY  WIKRT_O_PRIMARY(2)
+#define WIKRT_O_ANNO   WIKRT_O_PRIMARY(3)
+
+#define WIKRT_O_BASIC_HD(TYPE,NUMS,VALS) \
+    ((((wikrt_v)TYPE)<<24)|(((wikrt_v)NUMS)<<16)|(((wikrt_v)VALS)<<8)|WIKRT_O_BASIC)
+
+#define WIKRT_O_ANNO_BIT(N) (((wikrt_v)1) << (WIKRT_EXT_DATA_SHIFT + N))
+#define WIKRT_O_ANNO_NC WIKRT_O_ANNO_BIT(0)
+#define WIKRT_O_ANNO_ND WIKRT_O_ANNO_BIT(1)
+#define WIKRT_O_ANNO_ERR WIKRT_O_ANNO_BIT(2)
+
+static inline wikrt_z wikrt_array_size(wikrt_n elemCt) { 
+    return wikrt_cellbuff(sizeof(wikrt_v) * (1 + elemCt)); }
+static inline wikrt_z wikrt_binary_size(wikrt_n byteCt) {
+    return wikrt_cellbuff(sizeof(wikrt_v) + byteCt); }
+
+/* Basic Objects
+ *
+ * I'm not really certain how to best get started here, so I'll just
+ * grow the set organically. Many objects require only a few fields.
+ */
+enum wikrt_btype 
+{ WIKRT_BIGNAT          // wraps a binary
+, WIKRT_WORD
+, WIKRT_TASK
+, WIKRT_READER          
+, WIKRT_PARSER          
+};
+
+/** Big Numbers
+ *
+ * Awelon primarily supports natural numbers, and works with them
+ * always in base 10. Under the hood, we'll use a variation on the
+ * binary coded decimals: a big number is represented by sequence
+ * of 32-bit words, each ranging 0..999999999, little-endian (low
+ * words first). This representation may be used at parse time for
+ * large number words.
+ *
+ * Big integers, decimals, or rationals will be modeled explicitly
+ * above big natural numbers, whereas small integers and useful
+ * decimals (on a 64-bit system) can be modeled via small values.
+ */
+
+/** Words
+ *
+ * Excepting numbers, words are interned and kept in a hashtable.
+ * Each word will need a bunch of metadata.
+ *
+ *     the word itself, maybe namespace qualifiers
+ *     block having word's link-optimized definition
+ *      - potentially wrapped by JIT-compiled definition
+ *     computed link arity (e.g. 0-1 for value words)
+ *     track update to word definition since commit
+ *      - track dependencies? maybe via persistent index?
+ *     breakpoint state
+ *
+ * Almost any access to our word table will be synchronized, but
+ * ideally the words themselves may be used with minimal synch.
+ * 
+ * Since words are mostly present as a cache, it's okay to GC words
+ * that aren't used and reload them from dictionary as needed. To
+ * track caching, we might want to model a `recently used` field in
+ * each word, clearing it when we perform full GC then setting it
+ * when first link a word after GC. This would simplify decisions
+ * to GC data that isn't used much (including stowage resources).
+ *
+ * The exception is written definitions, which cannot be collected
+ * until we commit. So we must auto-mark words whose definitions 
+ * have yet to be written. 
+ */
+
+/** Tasks
+ *
+ * A 'task' describes a computation in progress and provides a 
+ * barrier against accessing results for parallel evaluations. 
+ * Tasks have some registers for ongoing computation and slots
+ * for managing task queues.
+ *
+ * In some cases, a task will wait upon another. Ideally, we
+ * can directly track these waits such that the client task
+ * may continue immediately. However, this doesn't work well
+ * with the current GC model.
+ * 
+ * Relevant attributes: complete, waiting, stability
+ *
+ * The last attribute regards memory stability in context of
+ * parallelism and GC. I must track when a task cannot be 
+ * accessed because it is under evaluation or its result
+ * might reference another thread's nursery arena.
+ *
+ * We might also have attributes to specify evaluation mode.
+ */
+struct wikrt_task {
+    wikrt_v ohd;    // basic type - task (4v, 1n)
+    wikrt_v next;   // next task (linked list, 0 terminated)
+    wikrt_v wait;   // waiting on referenced task, if any
+
+    // evaluation registers (uniquely referenced)
+    wikrt_v lhs;    // data stack, left hand side of cursor
+    wikrt_v rhs;    // call stack, right hand side of cursor
+    wikrt_n avail;  // arity available in lhs
+};
+
 
 /** The Database
  * 
@@ -581,14 +511,17 @@ wikrt_v* wikrt_ws_iter(wikrt_ws*, wikrt_v*); // start and end at NULL, random or
 
 /** Heap
  * 
- * Each thread operates in its own "heap" within a context. Allocation
- * in a heap uses a bump-pointer mechanism.
+ * Allocation in a heap is trivial - a bump pointer allocator, no 
+ * free lists are used at this time. Garbage collection needs some
+ * external context to indicate roots, manage ephemerons, repair
+ * pointers after compaction.
  *
- * Additionally, to support GC, I provide two bitfields - two bits for
- * marking objects, one for tracking whether an address is an object or 
- * a cell during the mark effort.
+ * When a heap is created, a small fraction (about 1%) is reserved
+ * for GC mark bits or some GC metadata as needed.
  *
- * Ideally, we could   
+ * Notes: Heap-level GC doesn't have any special handling to resist
+ * memory thrashing. We can potentially mark a heap full if not 
+ * enough space is cleared upon GC.
  */
 struct wikrt_heap {
     wikrt_a start;  // first reserved address
@@ -596,7 +529,13 @@ struct wikrt_heap {
     wikrt_a stop;   // allocation limit and start of mark bits
     wikrt_a alloc;  // current allocator
 };
-wikrt_heap wikrt_heap_init(wikrt_a, size_t);
+wikrt_heap wikrt_heap_init(wikrt_a start, size_t size); // initialize heap
+void wikrt_gc_init(wikrt_heap*); // prepare to GC
+void wikrt_gc_add_mark(wikrt_heap*, wikrt_v); // add a root
+bool wikrt_gc_is_marked(wikrt_heap const*, wikrt_v); // test ephemerons
+void wikrt_gc_compact(wikrt_heap*); // compact memory internally
+void wikrt_gc_repair(wikrt_heap const*, wikrt_v*); // relocate root or ref
+
 static inline bool wikrt_mem_avail(wikrt_heap const* h, wikrt_z amt)
 {
     return ((h->stop - h->alloc) >= amt);
@@ -616,22 +555,6 @@ static inline wikrt_a wikrt_alloc_cell(wikrt_heap* h, wikrt_v fst, wikrt_v snd)
     pv[0] = fst;
     pv[1] = snd;
     return a;
-}
-
-static inline wikrt_a wikrt_alloc_quad(wikrt_heap* h, wikrt_v v0, wikrt_v v1, wikrt_v v2, wikrt_v v3)
-{
-    wikrt_a const a = wikrt_mem_alloc(h, WIKRT_QUADSIZE);
-    wikrt_v* const pv = wikrt_a2p(a);
-    pv[0] = v0;
-    pv[1] = v1;
-    pv[2] = v2;
-    pv[3] = v3;
-    return a;
-}
-
-static inline wikrt_v wikrt_alloc_comp(wikrt_heap* h, wikrt_v hd, wikrt_v tl) 
-{
-    return WIKRT_COMP | wikrt_alloc_cell(h, hd, tl); 
 }
 
 /** Thread Data
@@ -768,24 +691,28 @@ wikrt_z wikrt_compute_alloc_space(wikrt_z space_total); // include GC reserve sp
 void wikrt_cx_signal_work(wikrt_cx*);  // invite a worker thread
 size_t wikrt_word_len(uint8_t const* src, size_t maxlen);
 
-/** API Entry, Exit, and Memory Management
+/** API Priority Entry, Exit, and Memory Management
  *
  * At the moment, API entry simply locks the context, and API exit will
  * unlock the context. But this might need to change if we later change
  * how worker threads interact with the context.
+ *
+ * Worker threads will be less aggressive than this API.
  */
 static inline void wikrt_api_enter(wikrt_cx* cx) { pthread_mutex_lock(&(cx->mutex)); }
 static inline void wikrt_api_exit(wikrt_cx* cx) { pthread_mutex_unlock(&(cx->mutex)); }
 void wikrt_api_gc(wikrt_cx*);
-void wikrt_api_interrupt(wikrt_cx*);    
+void wikrt_api_interrupt(wikrt_cx*);
 static inline bool wikrt_api_mem_prealloc(wikrt_cx* cx, wikrt_z amt) 
 {
     if(wikrt_mem_avail(&(cx->memory), amt)) { return true; }
     wikrt_api_gc(cx);
     return wikrt_mem_avail(&(cx->memory), amt);
 }
-static inline wikrt_a wikrt_api_alloc(wikrt_cx* cx, wikrt_z amt) {
-    return wikrt_mem_alloc(&(cx->memory), amt); }
+static inline wikrt_a wikrt_api_alloc(wikrt_cx* cx, wikrt_z amt) 
+{ 
+    return wikrt_mem_alloc(&(cx->memory), amt); 
+}
 static inline bool wikrt_api_prealloc(wikrt_cx* cx, wikrt_z nReg, wikrt_z nBytes) 
 {
     return wikrt_rtb_prealloc(cx, nReg) 

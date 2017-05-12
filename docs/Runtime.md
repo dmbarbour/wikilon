@@ -84,7 +84,7 @@ Say our allocations are two-word aligned, and our words are either 4 bytes or 8 
             tagged object: first field is type header
             small object: first field is any other value
 
-Small constants include small numbers, operators, and object type headers. Small texts, labels, and binaries are also feasible, especially in a 64 bit system. Objects will be discriminated by their first field. If the first field is a type header (a special small constant) it will indicate object size and how to interpret the remainder of the object. Other small objects will be simple cells with two values, representing composition in most contexts, but potentially representing list cons cells or similar in context of a suitable object header.
+Small constants include small numbers, operators, and object type headers. Small texts or labels are also feasible, especially for a 64 bit system. Objects will be discriminated by their first field. If the first field is a type header (a special small constant) it will indicate object size and how to interpret the remainder of the object. Other small objects will be simple cells with two values, representing composition in most contexts, but potentially representing list cons cells or similar in context of a suitable object header.
 
 An important feature to simplify GC is that we can determine the size and internal fields of an object given just its address. This allows us to mark addresses only.
 
@@ -145,7 +145,7 @@ Some thoughts:
 
 * plain text internally - I can rewrite 60 bytes base64url to 45 byte binary keys, but the savings would be minor and would not extend to secure hash resources. The plain text format seems more convenient and self explaining in context of external tooling or debugging (`mdb_dump` and similar). So I'll stick to plain text for now.
 
-* reference counting - a good algorithm for long-lived, persistent resources. A precise reference count needs type information that GC understands, such as `3b+11d` meaning "referenced three times as a binary, eleven times as a dictionary", so we know how to interpret a resource. Conservative GC would essentially involve a one-size-fits-all parse algorithm (require hashes encode as 60 base64url bytes with a separator) but should also work reasonably well in practice.
+* reference counting - a good algorithm for long-lived, persistent resources. A precise reference count may require type information that GC understands, such as `3b+11d` meaning "referenced three times as a binary, eleven times as a dictionary", so we know how to interpret a resource. Alternatively, a conservative reference count is feasible and should be reasonably precise.
 
 * lazy reference counting - reference counts can lag behind updates to root objects. We could model this by tracking an RC deltas table separately from the main RC table, to support incremental GC of resources and perhaps avoid the initial parse and processing of resources that are only briefly referenced. NOTE: since we might actually *receive* resources out-of-order, an RC deltas table could usefully delay positive increfs until a parse can be run.
 
