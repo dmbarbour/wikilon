@@ -45,6 +45,8 @@
  * Multi-Process Utilities: use shm_open to create and manage the ephemeron
  * table. Ephemerons will be tracked via simple counting hashtable. We'll
  * need to assign a unique ID to each runtime database for this to work.
+ *
+ * Initial goal: get something working soon. 
  */
 
 // Using native sized words.
@@ -76,6 +78,10 @@ typedef enum wikrt_op wikrt_op;
 // ~2MB default. I'll use tight worker threads.
 #define WIKRT_WORKER_STACK_MIN (64 * 1024)
 #define WIKRT_WORKER_STACK_SIZE WIKRT_LNBUFF(WIKRT_WORKER_STACK_MIN, PTHREAD_STACK_MIN)
+
+// how much volatile space to allocate for GC and mark_shared 
+#define WIKRT_MARK_STACK_SIZE  (WIKRT_WORKER_STACK_SIZE / 2)
+#define WIKRT_MARK_STACK_ELEMS (WIKRT_MARK_STACK_SIZE / sizeof(wikrt_v*))
 
 // To avoid sharing memory between worker threads at the hardware
 // layer or abstraction layers, I align heap allocations to pages. 
@@ -156,8 +162,14 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
 
 #define WIKRT_INT_SHIFT 3
 #define WIKRT_NAT_SHIFT 4
+
+#define WIKRT_HDR_TYPE_SHIFT 5
+#define WIKRT_HDR_DATA_SHIFT 8
+#define WIKRT_HDR_DATA_MAX (UINT32_MAX >> WIKRT_HDR_DATA_SHIFT)
+
 #define WIKRT_EXT_TYPE_SHIFT 5
 #define WIKRT_EXT_DATA_SHIFT 8
+#define WIKRT_EXT_DATA_MAX (WIKRT_V_MAX >> WIKRT_EXT_DATA_SHIFT)
 
 
 #define WIKRT_SMALL_NAT_MAX (WIKRT_Z_MAX >> WIKRT_INT_SHIFT)
@@ -201,8 +213,7 @@ static inline wikrt_a  wikrt_v2a(wikrt_v v) { return (WIKRT_OBJ_ADDR_MASK & v); 
 static inline wikrt_v* wikrt_a2p(wikrt_a a) { return (wikrt_v*)a; }
 static inline wikrt_v* wikrt_v2p(wikrt_v v) { return wikrt_a2p(wikrt_v2a(v)); }
 
-// Deeply mark an object at a given field as 'shared'.
-// This should be a prelude to any logical copy.
+// set `s` bits in object pointers to 1, deeply!
 void wikrt_mark_shared(wikrt_v*);
 
 
@@ -307,13 +318,13 @@ static inline wikrt_v  wikrt_op_to_opval(wikrt_op op) { return (((wikrt_v)op) <<
  * and 64 bit systems, 32 header bits are used. The remaining 24 bits
  * are for header data - size or type information, usually.
  *
- * Primary objects include basic, binary, array, and anno. 
+ * Primary objects include basic, binary, array, and value annotations. 
  *
  * A basic object is encoded with a small array of wikrt_v and wikrt_n
  * fields (sizes 0..255) plus a type field. Binaries are just an array
  * of bytes, and 'arrays' are an array of values. Without context, an
- * array or binary will be inlined into code, but we'll usually wrap it
- * within a basic object to provide context or perhaps a logical slice.
+ * array or binary will be inlined into code. But we'll usually wrap it
+ * within a basic object to provide context, or perhaps a logical slice.
  *
  * The 'anno' type is used to track annotations that attach to values,
  * especially (nc) and (nd). It records common annotations in header
@@ -333,10 +344,14 @@ static inline wikrt_v  wikrt_op_to_opval(wikrt_op op) { return (((wikrt_v)op) <<
 #define WIKRT_O_ANNO_ND WIKRT_O_ANNO_BIT(1)
 #define WIKRT_O_ANNO_ERR WIKRT_O_ANNO_BIT(2)
 
-static inline wikrt_z wikrt_array_size(wikrt_n elemCt) { 
+static inline wikrt_z wikrt_array_size(wikrt_z elemCt) { 
     return wikrt_cellbuff(sizeof(wikrt_v) * (1 + elemCt)); }
-static inline wikrt_z wikrt_binary_size(wikrt_n byteCt) {
+static inline wikrt_v wikrt_array_hdr(wikrt_z elemCt) {
+    return ((elemCt << WIKRT_HDR_DATA_SHIFT) | WIKRT_O_ARRAY); }
+static inline wikrt_z wikrt_binary_size(wikrt_z byteCt) {
     return wikrt_cellbuff(sizeof(wikrt_v) + byteCt); }
+static inline wikrt_v wikrt_binary_hdr(wikrt_z byteCt) {
+    return ((byteCt << WIKRT_HDR_DATA_SHIFT) | WIKRT_O_BINARY); }
 
 /* Basic Objects
  *

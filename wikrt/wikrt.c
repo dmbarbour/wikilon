@@ -547,18 +547,24 @@ void wikrt_clear(wikrt_cx* cx, wikrt_r r)
 
 void wikrt_cx_freeze(wikrt_cx* cx)
 {
-    // final cleanup
+    // finish background evaluations
     wikrt_eval_parallel(cx);
-    wikrt_cx_gc(cx);
 
     // perform a full GC to compact memory
     wikrt_api_enter(cx);
+    wikrt_api_gc(cx);
     cx->memory.alloc = cx->memory.end; // prevent further allocation
     cx->frozen = true;                 // prevent further GC
 
     // TODO: mark all objects in context as shared
-    //  (this might be similar to a GC pass?)
-
+    wikrt_mark_shared(&(cx->rtb.ids));
+    wikrt_mark_shared(&(cx->rtb.data));
+    wikrt_mark_shared(&(cx->trace));
+    wikrt_mark_shared(&(cx->prof));
+    wikrt_mark_shared(&(cx->words));
+    wikrt_mark_shared(&(cx->ready));
+    wikrt_mark_shared(&(cx->waiting));
+    
     wikrt_api_exit(cx);
 }
 
@@ -568,6 +574,20 @@ bool wikrt_eval_parallel(wikrt_cx* cx)
     return false;
 }
 
+static inline bool wikrt_is_unique_obj_ref(wikrt_v v) 
+{ 
+    return wikrt_match_f(WIKRT_OBJ, WIKRT_SHARED, v); 
+}
+
+void wikrt_mark_shared(wikrt_v* v)
+{
+    if(wikrt_is_unique_obj_ref(*v)) { return; }
+
+    _Static_assert(WIKRT_MARK_STACK_ELEMS > 100, "mark stack too small");
+    wikrt_v* mark_stack[WIKRT_MARK_STACK_ELEMS];
+    wikrt_v** const stack_end = mark_stack + WIKRT_MARK_STACK_ELEMS;
+    wikrt_v** stack_top = mark_stack;
+}
 
 
 

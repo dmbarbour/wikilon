@@ -67,14 +67,17 @@ static bool wikrt_rtb_resize(wikrt_cx* cx, wikrt_z new_size)
 
     wikrt_z const data_bytes = wikrt_array_size(new_size);
     wikrt_z const id_bytes = wikrt_cellbuff(WIKRT_CELLSIZE + (sizeof(wikrt_r) * new_size));
-    if(!wikrt_api_mem_prealloc(cx, (data_bytes + id_bytes))) { return false; }
+
+    bool const alloc_ok = (id_bytes < WIKRT_HDR_DATA_MAX) 
+                       && wikrt_api_mem_prealloc(cx, (data_bytes + id_bytes));
+    if(!alloc_ok) { return false; }
 
     wikrt_a const data_addr = wikrt_api_alloc(cx, data_bytes);
     wikrt_a const ids_addr  = wikrt_api_alloc(cx, id_bytes);
     memset((void*)data_addr, 0, data_bytes);
     memset((void*)ids_addr, 0, id_bytes);
-    *((wikrt_o*)ids_addr)  = wikrt_new_obj_hdr(WIKRT_OTYPE_BINARY, id_bytes - sizeof(wikrt_o));
-    *((wikrt_o*)data_addr) = wikrt_new_obj_hdr(WIKRT_OTYPE_ARRAY, new_size);
+    *((wikrt_v*)ids_addr) = wikrt_binary_hdr(id_bytes - sizeof(wikrt_v));
+    *((wikrt_v*)data_addr) = wikrt_array_hdr(new_size);
 
     wikrt_rtb new_rtb = { 0 };
     new_rtb.ids  = ids_addr | WIKRT_VOBJ;
