@@ -114,6 +114,11 @@ static inline wikrt_z wikrt_cellbuff(wikrt_z n) { return WIKRT_CELLBUFF(n); }
  *   Also, avoiding type information in the pointer should simplify
  *   the conditional behaviors working with objects.
  *
+ *   Common objects can be encoded as a pair of wikrt_v* and wikrt_n*
+ *   arrays, neither of which needs to be very large, plus some type
+ *   information. Besides that, we need easy support for binaries and
+ *   arrays, and perhaps for lightweight (nc) and (nd) annotations.
+ *
  * Small Constants (a few bits + v0)
  *
  *        1     small signed integers
@@ -339,15 +344,18 @@ static inline wikrt_v  wikrt_op_to_opval(wikrt_op op) { return (((wikrt_v)op) <<
 #define WIKRT_O_BASIC_HD(TYPE,NUMS,VALS) \
     ((((wikrt_v)TYPE)<<24)|(((wikrt_v)NUMS)<<16)|(((wikrt_v)VALS)<<8)|WIKRT_O_BASIC)
 
+#define WIKRT_O_ARRAY_SIZE_MAX
+
 #define WIKRT_O_ANNO_BIT(N) (((wikrt_v)1) << (WIKRT_EXT_DATA_SHIFT + N))
 #define WIKRT_O_ANNO_NC WIKRT_O_ANNO_BIT(0)
 #define WIKRT_O_ANNO_ND WIKRT_O_ANNO_BIT(1)
 #define WIKRT_O_ANNO_ERR WIKRT_O_ANNO_BIT(2)
 
-static inline wikrt_z wikrt_array_size(wikrt_z elemCt) { 
-    return wikrt_cellbuff(sizeof(wikrt_v) * (1 + elemCt)); }
+static inline wikrt_z wikrt_array_size(wikrt_z elemCt) {
+    return WIKRT_CELLSIZE * (1 + (elemCt / 2)); }
 static inline wikrt_v wikrt_array_hdr(wikrt_z elemCt) {
     return ((elemCt << WIKRT_HDR_DATA_SHIFT) | WIKRT_O_ARRAY); }
+
 static inline wikrt_z wikrt_binary_size(wikrt_z byteCt) {
     return wikrt_cellbuff(sizeof(wikrt_v) + byteCt); }
 static inline wikrt_v wikrt_binary_hdr(wikrt_z byteCt) {
@@ -360,6 +368,7 @@ static inline wikrt_v wikrt_binary_hdr(wikrt_z byteCt) {
  */
 enum wikrt_btype 
 { WIKRT_BIGNAT          // wraps a binary
+, WIKRT_TEXT
 , WIKRT_WORD
 , WIKRT_TASK
 , WIKRT_READER          
@@ -502,15 +511,16 @@ struct wikrt_env {
 void wikrt_halt_threads(wikrt_env* e); // stop worker threads
 
 /** Write Set for Thread GC
- * 
- * The write set tracks fields written from a thread into external
- * contexts. This serves as a 'root set' for thread GC, and may
- * contain fields within active tasks in addition to writes via
- * accelerated functions into arrays or objects.
  *
- * The write set is optimized in favor of writes to fields that are
- * near each other in memory, e.g. writes to a segment of an array
- * or within an object or task.
+ * A write set records external wikrt_v* fields written by a thread,
+ * such that those fields may be correctly managed during thread GC.
+ * A write set serves as a thread's root set, but records writes to
+ * unique arrays or objects via some accelerated functions.
+ * 
+ * This write set is optimized for fields near each other in memory,
+ * e.g. within an array or object. However, rollback isn't supported
+ * at this time. Threads must write only valid states, or manage any
+ * rollback independently.
  */
 typedef struct wikrt_ws {
     wikrt_z     size;       // slots maximum (wikrt_wsd fields)
@@ -521,8 +531,13 @@ typedef struct wikrt_ws {
 void wikrt_ws_add(wikrt_ws*, wikrt_v*); // add a field
 void wikrt_ws_rem(wikrt_ws*, wikrt_v*); // remove a field
 void wikrt_ws_clr(wikrt_ws*); // clear all fields (preserve allocation)
-bool wikrt_ws_prealloc(wikrt_thread*, wikrt_ws*, wikrt_z nFields); // grow if needed
-wikrt_v* wikrt_ws_iter(wikrt_ws*, wikrt_v*); // start and end at NULL, random order
+wikrt_v* wikrt_ws_iter(wikrt_ws const*, wikrt_v*); // rotates through NULL, random order
+
+bool wikrt_thread_write_prealloc(wikrt_thread*, wikrt_z nFields); // grow if needed
+
+// Note: it is tempting to simplify the write set, e.g. just keep a linked
+// list of recently written field addresses then iterate through it during
+// GC. This would be linear overhead with the number of writes. But
 
 /** Heap
  * 
@@ -563,13 +578,13 @@ static inline wikrt_a wikrt_mem_alloc(wikrt_heap* h, wikrt_z amt)
     return a;
 }
 
-static inline wikrt_a wikrt_alloc_cell(wikrt_heap* h, wikrt_v fst, wikrt_v snd) 
+static inline wikrt_v wikrt_alloc_cell(wikrt_heap* h, wikrt_v fst, wikrt_v snd) 
 {
     wikrt_a const a = wikrt_mem_alloc(h, WIKRT_CELLSIZE);
     wikrt_v* const pv = wikrt_a2p(a);
     pv[0] = fst;
     pv[1] = snd;
-    return a;
+    return (WIKRT_OBJ | a);
 }
 
 /** Thread Data

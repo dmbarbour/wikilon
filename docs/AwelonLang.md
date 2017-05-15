@@ -240,7 +240,7 @@ Fixpoint is a function useful for modeling loop behaviors. For Awelon language, 
             [(def of foo)](~foo) => [foo]
             and arity annotations
 
-The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The `(~z)` annotation supports both aesthetic presentation and accelerated performance. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior. 
+The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The `(~z)` annotation supports aesthetic presentation and preserves accelerated performance across serialization. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior.
 
 *Note:* Fixpoint is notoriously difficult for humans to grok. It is also awkward to use, with tacit style doing no favors here. Use of *named locals* does help (see below), but we'll want to build useful loop and [generator](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) abstractions above fixpoint - folds, sorts, collections oriented functions, etc.. 
 

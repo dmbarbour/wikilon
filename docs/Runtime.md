@@ -21,8 +21,6 @@ Direct interpretation is the simplest and easiest to get started. If we optimize
 
 I think I'll skip the interpretation of intermediate register machine code. Registers add complexity to the interpreter and its interaction with GC. But we might compile to an intermediate register machine code as part of JIT.
 
-*Note:* Ideally, I can evaluate in such a way that an interruption at worst loses some intermediate work. But this might not be feasible if I want to leverage in-place updates of unique arrays, since I cannot expect to redo that work. Potentially, I could record logical writes then compact them on GC. But it might be better just to ensure evaluation always progresses to a usable state, even when an error occurs.
-
 ## Memory Management
 
 My assumption is that contexts will generally see single-threaded use. A web service will use multiple contexts to serve multiple pages. But supporting lightweight parallel operations, e.g. with `(par)`, is valuable for reducing latency.
@@ -33,7 +31,7 @@ Allocation shall use an efficient bump-pointer mechanism. No free lists are used
 
 Objects can be shared, with efficient logical copying. But I also want to track sharing, such that I can accelerate update functions for linear arrays to perform in-place manipulations.
 
-I'll use write barriers and track a write set for each thread. A simple table of fields written would be sufficient, but I could represent this as `page->bitfield` table to reduce write barrier overheads when operating upon adjacent fields (e.g. for modifying an array structure). I think write barriers will still be expensive enough that I'll want to avoid them except where most useful - arrays, task updates, etc..
+I'll use write barriers and track a write set for each thread. Minimally, I could keep track of just the field addresses written. If I want to support lightweight rollback/transaction based error handling, it might be better to keep a little information about a written field's prior value.
 
 ## Parallelism and Threads
 
@@ -73,7 +71,7 @@ The simplest stack representation is probably a linked list, representing compos
 
 ## Memory Representations
 
-Say our allocations are two-word aligned, and our words are either 4 bytes or 8 bytes depending on machine. This gives us 3 reliable pointer tag bits. Use of pointer tag bits can discriminate a few 'small' values to reduce allocation costs. Proposed Representation:
+Say our allocations are two-word aligned, and our words are either 4 bytes or 8 bytes depending on machine. This gives us 3 reliable pointer tag bits. Use of pointer tag bits can discriminate a few 'small' values to reduce allocation costs. Proposed representation:
 
         _b0     small constants, operators, etc.
             x1    integers
@@ -100,13 +98,6 @@ Natural numbers will run up to at least 2^28 (over 250 million) on a 32-bit syst
 
 *Note:* Operators shall use the zero suffix for small constants, to ensure the NOP operation is represented by the `0` constant value.
 
-### Arrays and Binaries Format?
-
-I have an option for arrays and binaries: either the size field is part of the object header, or separate from it. Keeping it in the header is more convenient in some ways, but does limit the size to about 2^24 elements on a 32-bit system. In turn, we might need to divide very large arrays into small fragments. But maybe we should do this anyway? If I limit array fragments to even 2^16 elements, that should be sufficient to achieve most benefits from large arrays, and would likely simplify GC.
-
-It seems feasible to support logical append, and array slices or reversals. This would allow working with very large logical arrays and lists with some efficiency.
-
-
 ## Mutable Objects
 
 A purely functional language can support in-place mutable data for unique references, e.g. if we have the only reference to an array then the array-update function may freely modify the object in-place. I currently track uniqueness in the object pointer (the `s` bit).
@@ -115,15 +106,13 @@ For generational GC, writes to fields that point into a nursery heap must be rec
 
 List and composition cells might be a special case for mutable objects. We cannot update such objects in place because we lack header bits to track uniqueness, and we lack generational write barriers. But copies also need attention, since they might reference unique objects. We may need to wrap copied lists with a header. I might convert a large list into a shared array upon copy.
 
-### Arrays
+### Arrays or Binaries
 
-Arrays are the most important mutable objects. Given effective acceleration of arrays, we can model many low level algorithms, mostly excepting those that require multi-threaded access to the same array.
+Arrays would be the most important mutable objects. Given effective acceleration of arrays, we can model many low level algorithms, mostly excepting those that require multi-threaded access to the same array.
 
-I've considered support for 'array buffers' - arrays with some extra space to push/pop data - but I've decided they're better modeled explicitly at the language layer so they have a more robust structure across composition or serialization. Developers could simply fill an array with `0` or `~` or `[]` values then modify it in place.
+It's tempting to support efficient logical composition and push/pop on arrays. But working implicitly with large logical arrays seems problematic if we later serialize or read the program, e.g. for stowage or debugging. It may be better to optimize for small array fragments then encourage developers to explicitly model finger-tree ropes for larger objects. Similarly, ring buffers, push/pop stacks, etc. may be explicitly modeled using indexes into structures with linear mutable arrays.
 
-Array slices are an interesting option, too, enabling lightweight sharing of array data.
 
-To work with large arrays, we might convert from a list or create an array of zero number values or `[]` or similar to get started.
 
 ## Persistence and Resources
 
@@ -156,6 +145,7 @@ GC for secure hash resources, and a shared ephemeron table between processes, is
 I'm concerned that a crashed process might hold indefinitely onto resources. I could try an expiration model, with processes periodically scanning the contexts to maintain the ephemeron tables. But this seems like a problem to solve if it becomes an actual problem. Worst case, I just need to reset the machine.
 
 *Thoughts:* I might benefit from reducing sizes of secure hash resources to limit the burden when loading a resource into context memory or persisting the object. I'll need to think about this. Limiting the size of words and definitions may similarly help.
+
 
 ## Dictionary Indexing
 

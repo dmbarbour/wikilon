@@ -479,28 +479,21 @@ bool wikrt_prof_stack_move(wikrt_cx* cx, wikrt_r dst)
 
 wikrt_v wikrt_alloc_binary(wikrt_thread* t, uint8_t const* const data, wikrt_z const amt)
 {
-    wikrt_a const a = wikrt_thread_alloc(t, wikrt_cellbuff(sizeof(wikrt_o) + amt));
+    wikrt_a const a = wikrt_thread_alloc(t, wikrt_binary_size(amt));
     *((wikrt_o*)a) = (amt << WIKRT_O_DATA_OFF) | WIKRT_OTYPE_BINARY;
     memcpy((void*)(a + sizeof(wikrt_o)), data, amt);
-    return (WIKRT_VOBJ | a);
-}
-
-static wikrt_v wikrt_alloc_binraw(wikrt_thread* t, uint8_t const* const data, wikrt_z const amt)
-{
-    assert(WIKRT_O_DATA_MAX >= amt);
-    return WIKRT_OBJ | wikrt_alloc_cell(t, 
-        wikrt_new_ptype_hdr(WIKRT_PTYPE_BINARY_RAW),
-        wikrt_alloc_binary(t, data, amt));
+    return (WIKRT_OBJ | a);
 }
 
 bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt) 
 {
-    // if write is size zero, then it's irrelevant.
+    // if write is size zero, we can return immediately.
     if(0 == amt) { return true; } 
 
     // to avoid overflow cases, don't bother if the binary is very large.
     if(amt > (WIKRT_Z_MAX / 2)) { errno = ENOMEM; return false; }
-    wikrt_z const frag_count = 1 + ((amt - 1) / WIKRT_O_DATA_MAX);
+
+    wikrt_z const frag_count = 1 + ((amt - 1) / WIKRT_HDR_DATA_MAX);
     wikrt_z const overhead = frag_count * (WIKRT_CELLSIZE + WIKRT_REG_ADDEND_PREALLOC);
 
     wikrt_api_enter(cx);
@@ -509,10 +502,9 @@ bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt)
         errno = ENOMEM;
         return false;
     }
-
     while(amt > 0) {
         wikrt_z const frag_size = (amt > WIKRT_O_DATA_MAX) ? WIKRT_O_DATA_MAX : amt;
-        wikrt_reg_addend(cx, r, wikrt_alloc_binraw(&(cx->memory), data, frag_size));
+        wikrt_reg_addend(cx, r, wikrt_alloc_binary(&(cx->memory), data, frag_size));
         data += frag_size;
         amt  -= frag_size;
     }
@@ -522,7 +514,6 @@ bool wikrt_write(wikrt_cx* cx, wikrt_r r, uint8_t const* data, size_t amt)
 }
 
 // read is in wikrt_read.c
-
 bool wikrt_is_empty(wikrt_cx* cx, wikrt_r r)
 {
     pthread_mutex_lock(&(cx->mutex));
