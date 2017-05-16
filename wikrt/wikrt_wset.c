@@ -139,9 +139,8 @@ wikrt_v* wikrt_ws_iter(wikrt_ws const* ws, wikrt_v* last)
 }
 
 
-static bool wikrt_thread_ws_resize(wikrt_thread* t, wikrt_z new_size)
+static bool wikrt_thread_ws_resize(wikrt_thread* t, wikrt_ws*, wikrt_z new_size)
 {
-    wikrt_ws* const ws = &(t->ws);
     assert(new_size > ws->fill);
 
     // determine if we have enough space. We'll not perform any GC here.
@@ -173,7 +172,7 @@ static bool wikrt_thread_ws_resize(wikrt_thread* t, wikrt_z new_size)
     return true;
 }
 
-bool wikrt_thread_write_prealloc(wikrt_thread* t, wikrt_z amt)
+bool wikrt_thread_ws_prealloc(wikrt_thread* t, wikrt_z amt)
 {
     wikrt_z const new_fill = amt + t->ws.fill;
     bool const overfilled = (3 * new_fill) > (2 * t->ws.size);

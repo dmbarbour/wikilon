@@ -9,3 +9,5 @@ cabal-dev/
 cabal.config
 cabal.sandbox.config
 target/
+.stack-work/
+

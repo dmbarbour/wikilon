@@ -513,31 +513,28 @@ void wikrt_halt_threads(wikrt_env* e); // stop worker threads
 /** Write Set for Thread GC
  *
  * A write set records external wikrt_v* fields written by a thread,
- * such that those fields may be correctly managed during thread GC.
- * A write set serves as a thread's root set, but records writes to
- * unique arrays or objects via some accelerated functions.
- * 
- * This write set is optimized for fields near each other in memory,
- * e.g. within an array or object. However, rollback isn't supported
- * at this time. Threads must write only valid states, or manage any
- * rollback independently.
+ * such that those fields may be correctly processed during garbage
+ * collection. Those fields essentially operate as additional roots
+ * for the thread.
+ *
+ * The write set records fields near to each other in memory. Prior
+ * values are not recorded here, so any rollback must be supported
+ * by another mechanism.
  */
 typedef struct wikrt_ws {
-    wikrt_z     size;       // slots maximum (wikrt_wsd fields)
-    wikrt_z     fill;       // slots filled  (loaded fields)
+    wikrt_z     size;       // slots maximum 
+    wikrt_z     fill;       // slots filled  
     wikrt_v     data;       // binary array
 } wikrt_ws;
 
-void wikrt_ws_add(wikrt_ws*, wikrt_v*); // add a field
+void wikrt_ws_add(wikrt_ws*, wikrt_v*); // add a field (assumes prealloc)
 void wikrt_ws_rem(wikrt_ws*, wikrt_v*); // remove a field
 void wikrt_ws_clr(wikrt_ws*); // clear all fields (preserve allocation)
-wikrt_v* wikrt_ws_iter(wikrt_ws const*, wikrt_v*); // rotates through NULL, random order
+wikrt_v* wikrt_ws_iter(wikrt_ws const*, wikrt_v*); // rotate through fields and NULL
 
-bool wikrt_thread_write_prealloc(wikrt_thread*, wikrt_z nFields); // grow if needed
-
-// Note: it is tempting to simplify the write set, e.g. just keep a linked
-// list of recently written field addresses then iterate through it during
-// GC. This would be linear overhead with the number of writes. But
+// Growing a write set requires the thread to provide an allocation context.
+// If it succeeds, we guarantee a number of random fields may be added.
+bool wikrt_thread_ws_prealloc(wikrt_thread*, wikrt_z nFields);
 
 /** Heap
  * 

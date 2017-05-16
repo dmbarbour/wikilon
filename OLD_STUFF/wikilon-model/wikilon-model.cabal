@@ -1,24 +1,20 @@
 Name: wikilon-model
-Version: 0.1
-Synopsis: Wikilon interface and database
+Version: 0.2
+Synopsis: Wikilon Library
 Category: Awelon
 Description:
-  Wikilon is a wiki-inspired development environment for Awelon project.
-  Wikilon hosts Awelon Object dictionaries, closed sets of words with
-  staged, acyclic, purely functional definitions. AO dictionaries will
-  host ad-hoc content such as wikis, forums, spreadsheets, databases,
-  and documents. 
-  .
-  This wikilon-model module focuses on providing the interface and 
-  backend database for Wikilon. For now, there are no plans for any
-  backend other than VCache.
+  Wikilon is a wiki-inspired runtime and development environment for 
+  Awelon project. It includes not just evaluators, but also models a
+  database for persistent dictionaries. Awelon language has a simple
+  Forth-like syntax and acyclic definitions, but projectional editing
+  can offer a rich user interface to the program.
   
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com
 Homepage: http://github.com/dmbarbour/wikilon
 
 Package-Url: 
-Copyright: (c) 2015 by David Barbour
+Copyright: (c) 2015-2017 by David Barbour
 License: BSD3
 license-file: LICENSE.txt
 Stability: experimental

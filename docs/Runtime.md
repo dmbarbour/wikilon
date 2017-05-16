@@ -1,9 +1,11 @@
 
-# Runtime Design
+**NOTE (May 2017):** I feel I've gotten tangled in the weeds when re-implementing the runtime for the simplified Awelon language developed circa November 2017. It's the GC and such that are causing much heartache. So I'm tabling the C runtime for now. I'll return after I have a version working reasonably well in Haskell. 
 
-A primary goal for runtime is performance of *applications*. Awelon's [application model](ApplicationModel.md) involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Evaluation, concurrent update, incremental computing, and so on each contribute to application performance.
+# C Runtime Design
 
-I'm also interested in predictable performance, and precise cost accounting so heavy users can (eventually) be charged appropriately. The runtime will aim to keep unpredictable performance features under client control via annotations and similar. I intend for Awelon runtime to be suitable at least for soft real-time systems to the extent that programmers control the nature and frequency of transactions on the dictionary.
+A primary goal for runtime is performance of *applications*. Awelon's [application model](ApplicationModel.md) involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Thus, performance of processing these updates must be considered part of application performance, not just final evaluation costs.
+
+A related goal is predictable performance. Space and effort used by the runtime will be under client control. The costs of evaluation shouldn't vary widely from one run to another. Ideally, the runtime model should be suitable for soft real-time systems. 
 
 Awelon is designed to afford efficient update patterns via secure hashes to name dictionaries from which another dictionary might inherit or contain.
 
