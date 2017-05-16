@@ -1,6 +1,6 @@
 module Main where
 
-import Lib
+import Wikilon
 
 main :: IO ()
 main = someFunc

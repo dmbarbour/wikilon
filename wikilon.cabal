@@ -15,9 +15,19 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Lib
+  exposed-modules:     
+    Wikilon
+    Wikilon.Lang
+    -- Wikilon.Eval
+    Wikilon.CX
+    -- Wikilon.Env
   build-depends:       base >= 4.7 && < 5
+                     , containers (>= 0.5)
+                     , bytestring
+                     , array
+                     , stm
                      , blake2
+                     , lmdb
   default-language:    Haskell2010
 
 executable wikilon-exe
@@ -40,3 +50,5 @@ test-suite wikilon-test
 source-repository head
   type:     git
   location: https://github.com/dmbarbour/wikilon
+
+

@@ -1,4 +1,5 @@
-module Lib
+
+module Wikilon
     ( someFunc
     ) where
 
