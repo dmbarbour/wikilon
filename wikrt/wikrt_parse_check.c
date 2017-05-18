@@ -4,7 +4,8 @@
 #include "wikrt.h"
 
 // Awelon forbids some ASCII range characters from words.
-// Blacklist: @#[]()<>{}\/,;|&='", SP, C0 (0-31), and DEL.
+// Blacklist: @#[]()<>{}\/,;|&='", SP (32), C0 (0-31), 
+// grave (96) and DEL (127).
 //
 // We can also blacklist bytes not permitted in UTF-8 more
 // generally: 192, 193, 245-255. But properly, a separate
@@ -14,7 +15,7 @@
 //  0-31:   forbid everything                               0
 //  32-63:  forbid 32 34 35 38 39 40 41 44 47 59 60 61 62   ~(0x780093cd)
 //  64-95:  forbid 64 91 92 93                              ~(0x38000001)
-//  96-127: forbid 123 124 125 127                          ~(0xb8000000)
+//  96-127: forbid 96 123 124 125 127                       ~(0xb8000001)
 //  128-159: allow everything                               ~0
 //  160-191: allow everything                               ~0
 //  192-223: forbid 192 193                                 ~3
@@ -22,7 +23,7 @@
 //
 // I'm encoding this as a bitfield.
 static uint32_t const valid_word_char_bitfield[8] = 
-    {  0, ~(0x780093cd), ~(0x38000001), ~(0xb8000000)
+    {  0, ~(0x780093cd), ~(0x38000001), ~(0xb8000001)
     , ~0, ~0,            ~3,            ~(0xffe00000) };
 static inline bool is_valid_word_byte(uint8_t u) 
 {

@@ -45,21 +45,21 @@ Awelon's primitive combinators are significantly more convenient than SKI: Apply
 
 ## Words
 
-Words are identified by a non-empty sequence of UTF-8 codepoints with a few limitations. The blacklist is `@#[]()<>{}\/,;|&='"`, SP, C0 (0-31), and DEL. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large. 
+Words are identified by a non-empty sequence of UTF-8 codepoints with a few limitations. The blacklist is `@#[]()<>{}\/,;|&='"`, C0 (0-31), SP (32), grave (96), DEL (127), or the replacement character. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large. 
 
-A useful subset of words is implicitly defined:
+A useful subset of words is automatically and implicitly defined:
 
 * the four Awelon primitive words `a`, `b`, `c`, `d`
 * words to encode natural numbers, regex `[1-9][0-9]*`
 * secure hash resources `$secureHash` or `%secureHash`
 
-Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small. Words in Awelon are specific to their UTF-8 encoding - for example, use of a combining diaeresis is distinct from use of a precombined codepoint, and Awelon is case sensitive. In many cases, words may have simple, informal structure that integrates with tooling - such as defining `foo.doc` to represent documentation for `foo` or `foo.type` to provide hints for static type analysis.
+Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small. Words in Awelon are specific to their UTF-8 encoding - for example, use of a combining diaeresis is distinct from use of a precombined codepoint, and Awelon is case sensitive.
 
-Standardization of encoding and naming conventions is left to developers.
+*Note:* Words may have extrinsic meaning and structural conventions understood by external agents and services, such as `foo.doc` to represent documentation, or `foo.type` to provide hints and assertions for static type analysis. This meaning is independent of Awelon language semantics, yet is relevant in context of [application models](ApplicationModel.md) and integration with real world systems.
 
 ## Dictionary
 
-Awelon has a simple, DVCS-inspired patch based dictionary representation:
+Awelon has a simple, DVCS-inspired patch-based dictionary representation:
 
         secureHashOfPatch1
         secureHashOfPatch2
@@ -67,13 +67,11 @@ Awelon has a simple, DVCS-inspired patch based dictionary representation:
         @word2 definition2
         ...
 
-A patch contains a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions override those from earlier patches.
+Each patch consists of a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions may override those from earlier patches, representing a trivial update model. The dictionary as a whole is a large patch updating the initially empty dictionary.
 
-Definitions of words must be acyclic, and cyclic definitions are generally considered errors. However, trivially defining a word to itself as `@foo foo` will be accepted as meaning 'delete the word' rather than raising an error. Undefined words essentially evaluate to themselves. Loop behaviors can be modeled by defining a fixpoint combinator (discussed below).
+Definitions of words must be acyclic, and cyclic definitions are generally considered errors. Loop behavior in Awelon uses fixpoint combinators, not recursion (though clever application of *Editable Views* can hide a local fixpoint). However, undefined words essentially evaluate to themselves. As a special case, we may represent deletion or explicitly undefined words via trivial cyclic definition `@foo foo`.
 
-Awelon's dictionary representation is not optimal for direct use by humans. It can be tolerated in small doses. But it is intended more as an import/export format, and for efficient sharing between humans and software agents. Humans will generally observe and influence a dictionary through an editable view, perhaps as a hypermedia web service or mounted into a filesystem.
-
-Use suffix **.ao** (Awelon Object) for Awelon dictionary file names.
+Humans will usually observe and edit a dictionary through a level of indirection, such as a web service. Direct text editing of dictionary binaries doesn't scale nicely (I speak from experience). Also, a service has freedom to reorganize dictionaries for convenience to maintain history, improve structure sharing, optimize indexing or caching. Awelon does not specify how dictionaries and secure hash resources should be organized within a filesystem because that is not the expected use case.
 
 *Note:* See *Hierarchical Dictionaries* for more information.
 
@@ -102,19 +100,19 @@ Definitions of `0` and `S` (zero and successor) are left to the programmer, allo
         "→"    = [8594 "" :]
         ""      = ~
 
-Texts must be valid UTF-8, forbidding C0 (except LF, in multi-line texts). Inline texts additionally forbid the double quote. There are no character escapes excepting indentation after LF in multi-line text.
+Texts must be valid UTF-8, forbidding C0 and DEL (except LF, in multi-line texts). Inline texts additionally forbid the double quote. There are no character escapes excepting indentation after LF for multi-line text.
 
 Awelon is designed to work with acceleration and editable views to provide a complete programming experience. Acceleration supports efficient arithmetic with natural numbers and other common models, while editable views can effectively extend Awelon's syntax to support decimal numbers, lambdas, records, and so on. These are discussed in detail, below.
 
 ## Binary Data
 
-Awelon provides no syntax for binaries. It is feasible to encode relatively small binaries via base16 or base64 text like `["bdf13a76c2" hex-to-bin]`, or even directly encode a list of byte values - e.g. `[23 [148 [247 ~ :] :] :]`. However, such representations are inconvenient and inefficient. 
+Awelon provides no syntax for embedding binaries. It is feasible to encode relatively small binaries as base16 or base64 text like `["bdf13a76c2" hex-to-bin]`, or even directly encode a list of byte values - e.g. `[23 [148 [247 ~ :] :] :]`. However, such representations are inconvenient and inefficient. 
 
 The recommendation for large binary data is to leverage secure hash resources, via `%secureHash`. Logically, the referenced binary would expand to the list of byte values in `0..255`. Awelon runtimes should accelerate this model, using a byte array under the hood. By referencing binary resources in this manner, we can effectively include large multimedia objects (music, textures, etc.) directly in an Awelon codebase, without translation overheads.
 
 ## Secure Hash Resources
 
-Awelon code is evaluated in an implicit environment consisting both of a dictionary and a larger, shared environment where binaries may be referenced by secure hash. The dictionary structure itself relies on this environment to reference patches. But we also use secure hashes within Awelon code for binary data and large value stowage.
+Awelon code is evaluated in an implicit environment consisting both of a dictionary and a larger, shared environment where binaries may be referenced by secure hash. Awelon dictionaries rely on this environment to reference dictionary patches and hierarchical dictionaries. But we can also embed secure hashes within Awelon code to reference binary data and large value stowage.
 
 * external code or stowage is referenced via `$secureHash`
 * external binary data may be referenced via `%secureHash`
@@ -240,9 +238,9 @@ Fixpoint is a function useful for modeling loop behaviors. For Awelon language, 
             [(def of foo)](~foo) => [foo]
             and arity annotations
 
-The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The `(~z)` annotation supports aesthetic presentation and preserves accelerated performance across serialization. I recommend that readers unfamiliar or uncomfortable with fixpoint step through evaluation of `[X][F]z` by hand a few times to grasp its behavior.
+The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The `(~z)` annotation supports aesthetic presentation and preserves accelerated performance across serialization. Readers unfamiliar or uncomfortable with fixpoint may benefit from evaluating `[X][F]z` by hand a few times to grasp its behavior.
 
-*Note:* Fixpoint is notoriously difficult for humans to grok. It is also awkward to use, with tacit style doing no favors here. Use of *named locals* does help (see below), but we'll want to build useful loop and [generator](https://en.wikipedia.org/wiki/Generator_%28computer_programming%29) abstractions above fixpoint - folds, sorts, collections oriented functions, etc.. 
+*Note:* Fixpoint is notoriously difficult for humans to grok and awkward to use by hand. Use of *Editable Views* and especially *named locals* can help, potentially hiding the fixpoint. Even better is to hide most loops behind various collections or stream processing abstractions.
 
 ## Memoization
 
@@ -602,27 +600,19 @@ Accelerated evaluation of the reactive process network can readily operate acros
 
 *Note:* The model of time, and the current time, is not explicitly visible within the processes. We can use natural numbers to represent time. We can easily normalize times by subtracting the minimum time stamp from all time stamps. We can freely assign times an external meaning, e.g. logical 'microseconds' or 'nanoseconds' or similar.
 
-## Hierarchical Dictionaries
+## Hierarchical Dictionaries and Namespaces
 
-Awelon supports a simple model for hierarchical structure. 
+Awelon supports a simple model for hierarchical structure. Words of qualified form `foo@dict` reference the meaning of `foo` as defined within dictionary `dict`. Named dictionaries are specified by defining symbol `@dict` to a secure hash of the dictionary root.
 
-Words of qualified form `foo@dict` reference the meaning of `foo` as defined within child dictionary `dict`. We can also express ad-hoc computations within a child dictionary: `[42 foo]@d == [42@d foo@d]`. Texts can be qualified: `"hello"@d == [104 "ello" :]@d`. Even annotations may be qualified, e.g. `(~z)@d`, though most annotations may be immediately localized (see below). The qualifier is second-class, with no separation permitted between code and qualifier. 
-
-The child dictionary is specified by secure hash:
-
-        secureHashOfPatch1
-        secureHashOfPatch2
-        @word1 definition1
-        ...
         @@dict secureHashOfDict
-        ...
-        @wordN definitionN
 
-Essentially, we define a symbol of form `@dict` like we would an Awelon word, using the alst definition of the symbol. The secure hash is the same we might use for a patch, but an empty string (the default) may be used in place of the secure hash for an empty dictionary. Reducing the child dictionary to a single secure hash simplifies structure sharing.
+As with normal words, the last definition wins. It is possible to update `foo@dict` by updating the definition of `@dict` to reference a dictionary that's almost the same but with a slightly different `foo`. That's also the only means of update: `foo@dict` cannot be defined directly, and a dictionary cannot reference its parent.
 
-Dictionaries are fully self-contained, having no external dependencies. There is no mechanism for a child dictionary to reference its parent, no equivalent to `..` paths in the filesystem. This is a valuable constraint for reasoning about dataflow and security in [dictionary-based application models](ApplicationModel.md), when modeling messages, documents, or databases as dictionaries. This does mean de-facto standard models (for natural numbers, arithmetic, list processing, and so on) must be replicated across many dictionaries. Fortunately, this redundancy can be mitigated by leveraging secure hashes for structure sharing.
+The namespace qualifier can be attached to any Awelon operation, not just words. If attached to a block, the semantics is essentially that every element of the block is qualified: `[42 foo]@d == [42@d foo@d]`. If attached to a text, it's the same as attaching to an equivalent block: `"hello"@d == [104 "ello" :]@d`. Even annotations may be qualified, although this is relevant only for annotations that somehow reflect upon the dictionary, such as `(~z)@d` (where `[def of foo](~foo) => [foo]`). But like the dictionary hashes, these qualifiers are second-class: no space is permitted between the operation and its qualifier.
 
-Ugly aesthetics like `42@dict` are further ameliorated via localization. Localization is a special optimization for evaluation with hierarchical dictionaries. Whenever `foo@bar` has the same meaning as `foo` within a given context, the runtime is free to replace the former with the latter. In addition to aesthetics, localization does improve performance in context of memoization, stowage, structure sharing. Further, it enables localization of associated metadata, for example we end up referencing `foo.doc` instead of `foo.doc@bar`.
+Namespace qualifiers may be hierarchical. For example, `foo@xy@zzy` would refer to the definition of `foo@xy` within dictionary `zzy`. Explicit use of hierarhical namespaces is discouraged by the Law of Demeter. But they may appear naturally during evaluation or optimization.
 
-*Note:* Namespace qualifiers may be hierarchical, and are right associative. For example, `foo@bar@baz` means we use the meaning of `foo@bar` under dictionary `baz`. Direct use of hierarchical qualifiers is discouraged, but they may arise naturally during evaluation.
+Namespace qualifiers may be eliminated when doing so does not affect observable behavior. For example, `42@d` may be rewritten to `42` when we know that natural numbers have the same meaning (based on definitions of `0` and `S`). This optimization is called *localization*. Localization may have a non-trivial effect on external associations such as documentation and rendering hints. For example, when we rewrite `foo@d` to `foo`, we implicitly re-associate documentation from `foo.doc@d` to `foo.doc`. 
+
+*Aside:* Hierarchical dictionaries are primarily useful at the meta-level for [application models and agents](ApplicationModel.md). They enable dictionaries to represent databases, documents, ontologies, or other objects. Inability to reference the parent dictionary simplifies reasoning about information flow and security. Centralization to a secure hash simplifies structure sharing and integration with publish-subscribe. 
 

@@ -1,5 +1,9 @@
 
-**NOTE (May 2017):** I feel I've gotten tangled in the weeds when re-implementing the runtime for the simplified Awelon language developed circa November 2017. It's the GC and such that are causing much heartache. So I'm tabling the C runtime for now. I'll return after I have a version working reasonably well in Haskell. 
+**NOTE (May 2017):** I feel I've gotten tangled in the weeds when re-implementing the runtime for the simplified Awelon language developed circa November 2017. It's the GC and such that are causing much heartache. So I'm tabling the C runtime for now. I'll return to C after I have a version working reasonably well in Haskell. And even then, only if I cannot achieve sufficient performance from Haskell or perhaps an LLVM compiler.
+
+# Haskell Runtime Design
+
+The persistence/database requirements for a Haskell runtime don't really change, but perhaps I can simplify them in the short term to better leverage an existing Haskell solution. But a lot of things become easier: modeling evaluators, leave GC to Haskell, etc.. I can support accelerators easily enough. I can work on optimizations and linking and perhaps compilation. I can still model "contexts" to help control heap usage.
 
 # C Runtime Design
 

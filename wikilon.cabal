@@ -17,6 +17,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     
     Wikilon
+    Wikilon.Hash
     Wikilon.Lang
     -- Wikilon.Eval
     Wikilon.CX
@@ -24,6 +25,8 @@ library
   build-depends:       base >= 4.7 && < 5
                      , containers (>= 0.5)
                      , bytestring
+                     , utf8-string
+                     , base64-bytestring
                      , array
                      , stm
                      , blake2
