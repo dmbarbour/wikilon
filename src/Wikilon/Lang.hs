@@ -1,45 +1,54 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, BangPatterns, GeneralizedNewtypeDeriving #-}
 -- | The Awelon language, as used by Wikilon.
 --
 -- Awelon is semantically and syntactically simple. This module will
--- provide concrete parsers and a reference interpreter, and other
--- basic utilities. The reference interpreter is slow, but Wikilon
--- will develop several more with growing levels of sophistication.
+-- provide concrete parsers and serialization. Interpretation is left
+-- to another module.
 --
 -- Note: for performance, Wikilon assumes a valid UTF-8 encoding and
 -- all validation and parsing functions operate at the byte level.
 -- But do validate UTF-8 at another layer, as needed.
 module Wikilon.Lang
-    ( W(..), Anno(..), NS(..), Text(..)
+    ( Word(..), Anno(..), NS(..), Text(..)
     , Prog(..), Op(..)
-    , validWord, validAnno, validNS
+    , encode, encodeBB
+    -- , parseProg, decode, decodeP
+    , validWord, validAnno, validNS, validText
+    , inlinableText
     ) where
 
-
+import Prelude hiding (Word)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Builder as BB
+import qualified Data.ByteString.Builder.Extra as BB
 import qualified Data.ByteString.UTF8 as U8
 import qualified Data.ByteString.Lazy.UTF8 as LU8
 import qualified Data.List as L
 import qualified Data.Array.Unboxed as A
 import Data.String
 import Data.Word (Word8)
+import Data.Monoid
 
--- | Words are the primary user-definable unit of Awelon.
-newtype W = W { wordBytes :: BS.ByteString } deriving (Ord, Eq)
+-- | Words are the primary user-definable unit of Awelon. A word is
+-- identified by an ideally small UTF-8 bytestring.
+newtype Word = Word { wordBytes :: BS.ByteString } 
+    deriving (Ord, Eq)
 
 -- | Annotations are generally runtime or interpreter defined. They
 -- are essentially words wrapped within parentheses, such as (par)
 -- to request a parallel evaluation. At this point, the parentheses
 -- have been stripped.
-newtype Anno = Anno { annoWord :: W } deriving (Ord, Eq)
+newtype Anno = Anno { annoWord :: Word } 
+    deriving (Ord, Eq)
 
 -- | Awelon supports namespaces for hierarchical dictionaries. The
 -- form `foo@dict` would mean we're using the word `foo` as defined
 -- in a child dictionary `dict`. Any operation may be qualified with
 -- a namespace - words, blocks, texts, and even namespace themselves
 -- may be hierarchical. The namespace must be a valid word.
-newtype NS = NS { nsWord :: W } deriving (Ord, Eq)
+newtype NS = NS { nsWord :: Word } 
+    deriving (Ord, Eq)
 
 -- | Awelon supports embedded texts, both inline and multi-line.
 --
@@ -49,23 +58,23 @@ newtype NS = NS { nsWord :: W } deriving (Ord, Eq)
 -- escapes are supported. Multi-line texts start with `" LF` while
 -- inline texts start with just `"` and run to the final `"`. 
 --
--- When rendering, we use a heuristic: if a text is large, or it
--- contains double quote or LF, we'll render using the multi-line
--- format.
---
 -- The `Text` type should only contain the data, not the escapes
 -- or initial or final quotes.
-newtype Text = Text { textData :: LBS.ByteString } deriving (Ord, Eq) 
+newtype Text = Text { textData :: LBS.ByteString } 
+    deriving (Ord, Eq, Monoid) 
 
 -- | A basic operation is a word, annotation, text, or block. In
 -- addition, any operation may be modified with a namespace, which
 -- is potentially hierarchical.
 --
--- Note that this is a rather naive representation. It doesn't offer
--- support for natural numbers. It doesn't support linking a word's
--- definition or precomputing arity. It doesn't enable easy tracking
--- of substructural metadata during evaluation. Etc..
-data Op = OpWord  W     -- ^ just a word
+-- While this representation is acceptable for parsing, it is not
+-- good for efficient interpretation. We still need to bind each
+-- word to its definition (or at least support efficient lookup),
+-- evaluate definitions and analyze arity, recognize accelerators,
+-- track reference attributes (unique, (nc), (nd)), and accelerate
+-- numeric, array, sum, and record data types.
+--
+data Op = OpWord  Word  -- ^ just a word
         | OpAnno  Anno  -- ^ (annotation)
         | OpBlock Prog  -- ^ [block of code]
         | OpText  Text  -- ^ "embedded text"
@@ -76,44 +85,53 @@ data Op = OpWord  W     -- ^ just a word
 -- operations can be understood as manipulating an implicit stack,
 -- similar to Forth. However, Awelon evaluates by rewriting and the
 -- output will be another program.
-newtype Prog = Prog [Op] deriving (Ord, Eq)
+newtype Prog = Prog { progOps :: [Op] } deriving (Ord, Eq, Monoid)
+
+-- | This serializes a program into modest sized chunks.
+--
+-- This encoder doesn't do anything fancy with word separators. It
+-- simply adds a little whitespace between each operation, which is
+-- aesthetically acceptable even if not optimal.
+encode :: Prog -> LBS.ByteString
+encode = toLBS . encodeBB where
+    toLBS = BB.toLazyByteStringWith strat LBS.empty
+    strat = BB.untrimmedStrategy 240 BB.smallChunkSize
+
+-- | Access the bytestring builder to integrate serialization.
+encodeBB :: Prog -> BB.Builder
+encodeBB = mconcat . L.intersperse ws . fmap opBB . progOps where
+    ws = BB.word8 32
+
+opBB :: Op -> BB.Builder
+opBB (OpWord w) = BB.byteString (wordBytes w)
+opBB (OpAnno a) = BB.word8 40 <> BB.byteString (wordBytes (annoWord a)) <> BB.word8 41
+opBB (OpBlock p) = BB.word8 91 <> encodeBB p <> BB.word8 93
+opBB (OpText t) 
+    | inlinableText t = BB.word8 34 <> BB.lazyByteString (textData t) <> BB.word8 34
+    | otherwise = BB.word8 34 <> BB.word8 10 
+                    <> mlTextBB (textData t) 
+                    <> BB.word8 10 <> BB.word8 34
+opBB (OpNS op ns) = opBB op <> BB.word8 64 <> BB.byteString (wordBytes (nsWord ns))
+
+-- | We cannot inline a text that contains double quote (34) or a
+-- linefeed (10).
+inlinableText :: Text -> Bool
+inlinableText (Text s) = not (LBS.elem 10 s || LBS.elem 34 s)
+
+-- | Render a multi-line text, starting on a new line. We'll add a
+-- space at the start of each non-empty line. Empty lines won't use
+-- an extra escape.
+mlTextBB :: LBS.ByteString -> BB.Builder
+mlTextBB s = case LBS.elemIndex 10 s of
+    Nothing -> BB.lazyByteString s
+    Just 0  -> BB.word8 10 <> mlTextBB (LBS.drop 1 s)
+    Just ix -> let (line,s') = LBS.splitAt (ix+1) s in
+               BB.word8 32 <> BB.lazyByteString line <> mlTextBB s'
+
+-- | 
 
 
 #if 0
-
--- | An operation in Awelon is a token, text, or block.
---
--- Tokens include annotations with parentheses, e.g. (par), and all
--- words including natural numbers or primitives. Texts include only
--- the contained data, i.e. excluding linefeed escapes. Blocks are
--- simply first-class subprograms.
---
--- Any operation can be qualified with a namespace, to reference a
--- subordinate dictionary. E.g. `foo@xy@zzy` would be represented as
--- `foo@xy` under NS `zzy`
-
--- Additionally, any operation may be attributed with a namespace.
---
--- Tokens include words and annotations.
-data Op = OpTok BS.ByteString 
-        | OpTxt LBS.ByteString
-        | OpBlk [Op]
-        | OpNS Op BS.ByteString 
-
--- | An Awelon program consists of a seq
-
--- | An Awelon operation consists of a word, annotation, 
--- Additionally, an operation may be wrapped into a qualified namespace.
-data Op = Tok | A Anno | T Text | B [Op] | NS 
-
-okTextByte :: Word8 -> Bool    
-okTextByte = (A.!) textBytesArray
-
-binaryName :: LBS.ByteString -> BS.ByteString
-
-
--- parseSuffix :: LBS.ByteString -> LBS.ByteString
-
 
 -- | Scan for Parse Errors (assuming valid UTF-8)
 --
@@ -229,16 +247,21 @@ scanF = undefined
 -- errors occur. A viable option is to report 
 #endif
 
-instance IsString W where fromString = W . U8.fromString
 
-validWord :: W -> Bool
+
+instance Show Prog where 
+    showsPrec _ = showString . LU8.toString . encode 
+
+--instance IsString Prog where
+--    fromString = decodeP . LU8.fromString
+
+instance IsString Word where fromString = Word . U8.fromString
+
+validWord :: Word -> Bool
 validWord = validWordToken . wordBytes
 
 validWordToken :: BS.ByteString -> Bool
 validWordToken s = not (BS.null s) && BS.all validWordByte s
-
-c0 :: [Word8]
-c0 = [0..31]
 
 invalidUTF8Bytes :: [Word8]
 invalidUTF8Bytes = [192,193] ++ [245..255]
@@ -250,7 +273,7 @@ wordBytesArray = A.listArray (0,255) $ fmap accept [0..255] where
     accept = flip L.notElem blacklist
     blacklist = [32,34,35,38,39,40,41,44,47,59,60,61,62
                ,64,91,92,93,96,123,124,125,127] 
-            ++ (c0 ++ invalidUTF8Bytes)
+            ++ [0..31] ++ invalidUTF8Bytes
 
 validWordByte :: Word8 -> Bool
 validWordByte = (A.!) wordBytesArray
@@ -273,12 +296,13 @@ instance IsString Text where fromString = Text . LU8.fromString
 textBytesArray :: A.UArray Word8 Bool
 textBytesArray = A.listArray (0,255) $ fmap accept [0..255] where
     accept = flip L.notElem blacklist
-    blacklist = c0 ++ invalidUTF8Bytes
+    blacklist = [0..9] ++ [11..31] ++ [127] ++ invalidUTF8Bytes
 
 validTextByte :: Word8 -> Bool
 validTextByte = (A.!) textBytesArray
 
--- | This only tests for obvious byte-level errors.
+-- | This only tests for forbidden characters (C0 except LF, DEL).
+-- The assumption is the text has a valid UTF-8 encoding.
 validText :: Text -> Bool
 validText = LBS.all validTextByte . textData
 

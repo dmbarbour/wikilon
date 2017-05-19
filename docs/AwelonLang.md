@@ -77,7 +77,7 @@ Humans will usually observe and edit a dictionary through a level of indirection
 
 ## Data
 
-Awelon language has exactly one primitive data type - the `[block of code]`, representing a first class function. However, Awelon does provide automatic definition for natural numbers like `42` and a syntactic sugar for embedded texts like `"hello, world!"`. Multi-line texts are also possible:
+Awelon language has exactly one primitive data type - the `[block of code]`, representing a first class function. However, Awelon does provide automatic definition for natural numbers like `42` and a syntactic sugar for embedded texts like `"hello, world!"`. Multi-line texts are also supported:
 
         "
          multi-line texts start with `" LF` (34 10)
