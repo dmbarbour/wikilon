@@ -3,11 +3,17 @@
 
 # Haskell Runtime Design
 
-The persistence/database requirements for a Haskell runtime don't really change, but perhaps I can simplify them in the short term to better leverage an existing Haskell solution. But a lot of things become easier: modeling evaluators, leave GC to Haskell, etc.. I can support accelerators easily enough. I can work on optimizations and linking and perhaps compilation. I can still model "contexts" to help control heap usage.
+The persistence/database requirements for a Haskell runtime don't really change, but perhaps I can simplify them in the short term to better leverage an existing Haskell solution. 
+
+A lot of things become easier: modeling evaluators, leaving GC to Haskell, etc.. I can support accelerators easily enough. I can work on optimizations and linking and perhaps compilation. I can still model "contexts" to help control heap usage. 
+
+Some things are more difficult: modeling unique mutable values/vectors, for example. I could potentially evaluate within an ST monad, but I'll need to think about how (and whether) to accelerate vector processing functions. In-place mutation of vectors could still be useful for some applications.
+
+Ideally, I can use the Haskell runtime for interpretation, then use a C runtime only for JIT compiled code. This should simplify implementation.
 
 # C Runtime Design
 
-A primary goal for runtime is performance of *applications*. Awelon's [application model](ApplicationModel.md) involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Thus, performance of processing these updates must be considered part of application performance, not just final evaluation costs.
+A primary goal for runtime is performance of *applications*. Awelon's non-conventional [application model](ApplicationModel.md) involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Thus, performance of processing these updates must be considered part of application performance, not just final evaluation costs.
 
 A related goal is predictable performance. Space and effort used by the runtime will be under client control. The costs of evaluation shouldn't vary widely from one run to another. Ideally, the runtime model should be suitable for soft real-time systems. 
 

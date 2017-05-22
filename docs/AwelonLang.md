@@ -102,7 +102,7 @@ Definitions of `0` and `S` (zero and successor) are left to the programmer, allo
 
 Texts must be valid UTF-8, forbidding C0 and DEL (except LF, in multi-line texts). Inline texts additionally forbid the double quote. There are no character escapes excepting indentation after LF for multi-line text.
 
-Awelon is designed to work with acceleration and editable views to provide a complete programming experience. Acceleration supports efficient arithmetic with natural numbers and other common models, while editable views can effectively extend Awelon's syntax to support decimal numbers, lambdas, records, and so on. These are discussed in detail, below.
+Awelon is designed to work with *Editable Views* to provide a complete data entry and extraction experience, such as input of integer or decimal values or labeled records. Additionally, *Acceleration* is essential to achieve performance from natural numbers and other common data models. The use of editable views and acceleration is discussed below.
 
 ## Binary Data
 
@@ -145,7 +145,7 @@ Critically, acceleration of functions extends to data representation. Natural nu
 
 ## Annotations
 
-Annotations help developers control, optimize, view, and debug computations. Annotations are represented as parenthetical words like `(par)` or `(a3)`. Some useful examples of annotations include:
+Annotations help developers control, optimize, view, and debug computations. Unlike words, which are mostly user-defined, annotations are given meaning by the runtime or compiler. Annotations are represented as parenthetical words like `(par)` or `(a3)`. Potential useful annotations:
 
 * `(a2)..(a9)` - arity annotations to defer computations
 * `(t0)..(t9)` - tuple assertions for output scope control
@@ -370,7 +370,7 @@ Unfortunately, `(par)` has severe limitations on expressiveness. It is at once t
 
 For low level parallelism, we could accelerate [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra). Alternatively, we could accelerate evaluation for a safe subset of OpenCL or similar, above which we might later accelerate linear algebra. Either approach can help Awelon in the domains of machine learning, physics simulations, graphics and audio, and other high performance number crunching computations.
 
-For high level parallelism, I propose acceleration of [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), more specifically a variant with temporal extensions (see *Reactive Process Networks*, below). Essentially, we would describe a process network as a first-class value, and accelerate an 'evaluation' function (of type `KPN → KPN`) such that it splits the process network among distributed memory and CPUs to run the computation. The *monotonic* nature of KPNs allows distributed computation to continue in the background even as we inject and extract messages. 
+For high level parallelism, I propose we accelerate [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), or specifically a variant with lightweight temporal extensions (see *Reactive Kahn Process Networks*, below) so we can model asynchronous message streams. Essentially, we would describe a process network as a first-class value, and accelerate an 'evaluation' function (of type `KPN → KPN`) such that it distributes the process network across physically distributed memory and CPUs to perform the computation. The *monotonic* nature of KPNs allows distributed computation to continue in the background even as we inject and extract messages. KPNs can also be used to model effects, binding some IO ports to the real world.
 
 ## Structural Scope
 
@@ -517,7 +517,7 @@ Although initial emphasis is textual views, it is feasible to model richly inter
 
 ## Named Local Variables
 
-An intriguing opportunity for editable views is support for local variables, like lambdas and let expressions. This would ameliorate use cases where point-free programming is pointlessly onerous (like working with fixpoints or algebraic expressions). It also supports a more conventional programming style where desired. Consider a lambda syntax of form:
+An intriguing opportunity for editable views is support for local variables, like lambdas and let expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, such as working with fixpoints or algebraic math expressions. It also supports a more conventional programming style where desired. Consider a lambda syntax of form:
 
         \ X Y Z -> CODE ==  ["X Y Z"(:λ)](a2)d CODE'
 
@@ -532,9 +532,9 @@ This plucks three items off the stack, giving them local names within `CODE`. On
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-This algorithm is adapted from the partial evaluation optimization leveraging free variables. The main difference from the optimization is that we know our variables are value words and we may desire special handling for conditional behaviors like `if` to avoid copying data into each branch.
+This algorithm is adapted from the partial evaluation optimization leveraging free variables. The main difference from the optimization is that we know our variables are value words and we may desire special handling for conditional behaviors like `if` to avoid copying data into each branch. 
 
-Lambdas can be leveraged into let expressions (like `let var = expr in CODE` or `CODE where var = expr`) or the Haskell-like `do` notation. Also, given named local variables, it is feasible to support infix expressions like `((X + Y) * Z) => X Y + Z *` for assumed binary operators. I leave these developments as an exercise for the reader. :D
+Lambdas can be leveraged into let expressions (like `let var = expr in CODE` or `CODE where var = expr`) or the Haskell `do` notation. Local recursion is possible if a view automatically introduces a fixpoint. Further, with variables we can feasibly introduce infix expressions like `((X + Y) * X)`, though our view may need to embed assumptions about arity and preferred associativity of the chosen operators.
 
 ## Qualified Namespaces
 
@@ -577,7 +577,7 @@ We can represent a list as an array (guided by `(array)` annotations). We can ac
 
 *Note:* The `(nc)` annotation restricts copying of the marked value. Use of this can help enforce preservation of uniqueness, or at least help fail-fast debug cases where we want to restrict copying.
 
-## Reactive Process Networks
+## Reactive Kahn Process Networks
 
 A weakness of conventional [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) is that they cannot merge asynchronous data from multiple channels. There is no record for when messages on one channel arrive relative to messages on other channels. This weakness makes it difficult to efficiently integrate KPNs with real-world events. Fortunately, this weakness can be solved by adding a temporal dimension to KPNs, while preserving other nice features (determinism, monotonicity). Here's how:
 
