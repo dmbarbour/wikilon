@@ -21,9 +21,9 @@ Awelon language aims to address those complications. Important design points:
 
 * Awelon scales easily, leveraging uniform serializability with other features. Lazy linking enables larger than memory structures. This extends dynamically with stowage annotations to move large objects to disk and reference them by secure hash word. Pure evaluation allows memoization for spreadsheet-like incremental computations, and this extends readily to stowed objects. Acceleration of Kahn process networks would extend Awelon to long-running distributed systems computations.
 
-Awelon also experiments with alternative [application models](ApplicationModel.md). There is a preference for RESTful approaches - documents, publish subscribe, tuple spaces, etc. - where application state is integrated with a codebase and maintained by a community of human and software agents.
+Awelon experiments with alternative [application models](ApplicationModel.md). The most promising models are RESTful - documents, publish subscribe, tuple spaces, etc. - but where application state is integrated with the codebase instead of an external filesystem or database. The codebase then becomes a 'smart' filesystem or database, with more deeply integrated linking and computational structure similar to a spreadsheet. The codebase is maintained by a community of human and software agents, exactly as we'd maintain a database or filesystem.
 
-In any case, Awelon diverges significantly from conventional language design. This isn't just a new language, it's a new way of thinking about programming that uses ideas from spreadsheets, functional programming, and web services. Awelon does not attempt to integrate directly with existing systems - there is no FFI, for example. But indirect systems integration is feasible through web services, software agents, and compilation between languages.
+Awelon diverges significantly from conventional systems and programming language design. This isn't just a new language, it's a new way of thinking about programming that integrates ideas from spreadsheets, functional programming, and RESTful web services. Awelon does not *directly* interact with existing systems - there is no FFI, for example. But indirect integration is feasible through bots and web services and cross compilation for some application models.
 
 ## Primitives
 
@@ -43,19 +43,23 @@ Those square brackets `[]` enclose a 'block' of Awelon code, representing a func
 
 Awelon's primitive combinators are significantly more convenient than SKI: Apply and bind provide structural control over scope, respectively hiding or capturing one value. It is possible to abstract and refactor patterns involving multiple arguments or results. Explicit copy and drop simplify [substructural](https://en.wikipedia.org/wiki/Substructural_type_system) analysis and uniqueness tracking of type and value references.
 
+## Encoding
+
+Valid Awelon code must also be valid UTF-8 text, excluding C0 (except LF) and DEL. However, Awelon is designed such that it may be processed as a binary. This document hence only mentions codepoints in the ASCII subset of UTF-8. Awelon also recognizes only two characters as whitespace: SP (32) and LF (10). I wish to avoid the mess that is text line endings across various operating systems.
+
 ## Words
 
-Words are identified by a non-empty sequence of UTF-8 codepoints with a few limitations. The blacklist is `@#[]()<>{}\/,;|&='"`, C0 (0-31), SP (32), grave (96), DEL (127), or the replacement character. Developers are encouraged to favor words that won't need escapes in most external contexts (such as URLs, HTML, Markdown, natural language text, or editable views), and that aren't too large. 
+Words are the basic user-definable unit in Awelon. Words are identified by a non-empty sequence of characters excluding `@#[]()<>{}\/,;|&='"`, SP (32), grave (96), or DEL (127). Although words don't have a hard upper size limit, developers are encouraged to keep them relatively small, and also to ensure most words are readily embedded in external contexts (URLs, HTML, natural language, etc.).
 
-A useful subset of words is automatically and implicitly defined:
+A small, useful subset of words is implicitly defined:
 
 * the four Awelon primitive words `a`, `b`, `c`, `d`
 * words to encode natural numbers, regex `[1-9][0-9]*`
 * secure hash resources `$secureHash` or `%secureHash`
 
-Other words are user defined, through a dictionary. There is no hard limit on word size, but words should ideally be kept small. Words in Awelon are specific to their UTF-8 encoding - for example, use of a combining diaeresis is distinct from use of a precombined codepoint, and Awelon is case sensitive.
+Other words are defined in a *Dictionary*. 
 
-*Note:* Words may have extrinsic meaning and structural conventions understood by external agents and services, such as `foo.doc` to represent documentation, or `foo.type` to provide hints and assertions for static type analysis. This meaning is independent of Awelon language semantics, yet is relevant in context of [application models](ApplicationModel.md) and integration with real world systems.
+Excepting the four primitives, which have primitive rewrite rules, the formal semantics for any word is to rewrite the word to its definition when doing so allows for computation to usefully progress (see *Evaluation*). However, words may also have informal semantics based on extrinsic meaning and structural conventions. For example, `foo.doc` might be automatically presented as documentation for word `foo`. A static analysis tool may peek at `foo.type` for hints or assertions. Awelon's [application models](ApplicationModel.md) freely leverage structural conventions for words where appropriate.
 
 ## Dictionary
 
@@ -69,21 +73,15 @@ Awelon has a simple, DVCS-inspired patch-based dictionary representation:
 
 Each patch consists of a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions may override those from earlier patches, representing a trivial update model. The dictionary as a whole is a large patch updating the initially empty dictionary.
 
-Definitions of words must be acyclic, and cyclic definitions are generally considered errors. Loop behavior in Awelon uses fixpoint combinators, not recursion (though clever application of *Editable Views* can hide a local fixpoint). However, undefined words essentially evaluate to themselves. As a special case, we may represent deletion or explicitly undefined words via trivial cyclic definition `@foo foo`.
+The blank program is valid, representing the identity function. However, deletion of words may be represented using a trivial cycle such as `@foo foo`. In general, cyclic definitions are considered errors (and cyclic behaviors use *Fixpoint and Loop* combinators). But Awelon systems may recognize the trivial cyclic definition and avoid raising a warning.
 
-Humans will usually observe and edit a dictionary through a level of indirection, such as a web service. Direct text editing of dictionary binaries doesn't scale nicely (I speak from experience). Also, a service has freedom to reorganize dictionaries for convenience to maintain history, improve structure sharing, optimize indexing or caching. Awelon does not specify how dictionaries and secure hash resources should be organized within a filesystem because that is not the expected use case.
+Humans should usually observe and edit a dictionary through a level of indirection, such as a web service. Direct text editing of dictionary binaries does not scale nicely (I speak from experience). A service has freedom to reorganize dictionaries to simplify histories, improve structure sharing, optimize indexing or caching, and so on.
 
-*Note:* See *Hierarchical Dictionaries* for more information.
+*Note:* See *Hierarchical Dictionaries* and *Secure Hash Resources* for more.
 
-## Data
+## Embedded Data
 
-Awelon language has exactly one primitive data type - the `[block of code]`, representing a first class function. However, Awelon does provide automatic definition for natural numbers like `42` and a syntactic sugar for embedded texts like `"hello, world!"`. Multi-line texts are also supported:
-
-        "
-         multi-line texts start with `" LF` (34 10)
-         non-empty lines are indented one space (32)
-         text terminates with final `LF "` (10 34)
-        "
+Awelon language has exactly one primitive data type - the `[block of code]`, representing a first class function. All data in Awelon is ultimately encoded in terms of blocks. However, Awelon does provide implicit definition for natural numbers like `42` and texts such as `"hello, world!"` to simplify embeddings of data within code.
 
 Semantically, a natural number is implicitly defined as a unary structure: 
 
@@ -94,39 +92,37 @@ Semantically, a natural number is implicitly defined as a unary structure:
         42 = [41 S]
         ... ad infinitum
 
-Definitions of `0` and `S` (zero and successor) are left to the programmer, allowing for a choice of semantics. Similarly, texts essentially act as special words with built-in definition as a list-like structure with `~` and `:` (nil and cons) being user defined:
+Embedded texts may be understood as specialized words. Texts should contain valid UTF-8 characters excluding C0 (0-31), DEL (127), and the double quote `"` (34). Texts have a simple semantics, expanding as a binary list:
 
         "hello" = [104 "ello" :]
-        "→"    = [8594 "" :]
+        "→"    = [226 [134 [146 "" :] :] :]
         ""      = ~
 
-Texts must be valid UTF-8, forbidding C0 and DEL (except LF, in multi-line texts). Inline texts additionally forbid the double quote. There are no character escapes excepting indentation after LF for multi-line text.
+Definitions of `0` and `S`, `~` and `:` - zero and successor, nil and cons - are left to developers. This permits some choice of encoding, such as a Church encoding versus a Mogensen-Scott encoding. In practice, however, this choice belongs to runtime or compiler developers, who must determine which models are subject to *Acceleration*.
 
-Awelon is designed to work with *Editable Views* to provide a complete data entry and extraction experience, such as input of integer or decimal values or labeled records. Additionally, *Acceleration* is essential to achieve performance from natural numbers and other common data models. The use of editable views and acceleration is discussed below.
+Natural numbers and embedded texts are only barely sufficient for embedding of data in code. The intention is to use these as the foundation for *Editable Views* that can support decimal numbers, structured data, EDSLs, a richer syntax, even graphical programming if we assume a suitable editor. Additionally, programmers may leverage *Secure Hash Resources* to reference external texts and binaries.
 
-## Binary Data
-
-Awelon provides no syntax for embedding binaries. It is feasible to encode relatively small binaries as base16 or base64 text like `["bdf13a76c2" hex-to-bin]`, or even directly encode a list of byte values - e.g. `[23 [148 [247 ~ :] :] :]`. However, such representations are inconvenient and inefficient. 
-
-The recommendation for large binary data is to leverage secure hash resources, via `%secureHash`. Logically, the referenced binary would expand to the list of byte values in `0..255`. Awelon runtimes should accelerate this model, using a byte array under the hood. By referencing binary resources in this manner, we can effectively include large multimedia objects (music, textures, etc.) directly in an Awelon codebase, without translation overheads.
+*Note 2017 May:* Support for multi-line embedded texts was removed from Awelon.
 
 ## Secure Hash Resources
 
-Awelon code is evaluated in an implicit environment consisting both of a dictionary and a larger, shared environment where binaries may be referenced by secure hash. Awelon dictionaries rely on this environment to reference dictionary patches and hierarchical dictionaries. But we can also embed secure hashes within Awelon code to reference binary data and large value stowage.
+Most words are defined using Awelon's patch-based dictionary representation. But Awelon also permits direct reference to an implicit global namespace, where binaries are referenced by secure hash.
 
-* external code or stowage is referenced via `$secureHash`
 * external binary data may be referenced via `%secureHash`
-* dictionary patches are always referenced by secure hash
+* code and structured data is referenced via `$secureHash`
+* secure hash resources also used for dictionary patches
 
-Awelon uses a 360-bit [BLAKE2b](https://blake2.net/) algorithm, and encodes the result as 60 characters [base64url](https://en.wikipedia.org/wiki/Base64). In a network context, it should be possible to request resources given their secure hashes, and perhaps form a content distribution network. (We might use only a fragment of the resource ID for lookup, and the rest for encryption.)
-
-Example hashes, starting with `hash("test")` then hashing the result twice:
+Awelon uses the 360-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the result as 60 characters in [base64url](https://en.wikipedia.org/wiki/Base64). Example hashes, starting from `"test"`:
 
         J7URBffnfK_NVVcQNQ6D21k5A7J8Zhhwb2Ry3WLYfFc7Vy1TiE01Q4H7duKE
         Kve-Zbz23Zz28x0tTsmnuJv8dj0YGvwEVVWCbxLkAM7S6FLp6gCA0M2n_Nee
         MnrYTJyeGxLz5OSGwTwW7WAiC9alwYaOBFuu2_flmK1LGCCMqEDjkzPDL-Rl
 
-The base64 encoding does risk hashes containing naughty words, and they're clearly too large for convenient use. However, secure hash resources are not primarily intended for direct use by humans. When humans do use hashes, I would hope for indirection via editable views or projectional editors that provide human meaningful nicknames. Editable views are discussed later.
+In theory, hash collisons may exist. But in practice collisions are unlikely to be a problem, and it would be trivial to rewrite an entire Awelon codebase to use a larger, more robust hash if ever need arises. I won't belabor the possibility. Awelon runtimes need only know where to look for secure hash resources, whether it be a filesystem or database or an HTTP query. *Aside:* In context of an untrusted content distribution network, it is feasible to leverage the hash also as an encryption key.
+
+While inputting large texts or data is one obvious use case for secure hash resources, there are others. *Stowage* enables programmers to process and memoize computations for data that is larger than working memory, moving the large object into a slow store and replacing the object with the secure hash. Efficient binary *output* is another option, e.g. a ray-traced image or PDF file. Computing secure hashes at runtime can be achieved via *Annotations*.
+
+Of course, secure hashes are terribly unsuitable for direct human use. To work with them efficiently requires a projectional editor or service to mediate between the human and the Awelon codebase. See *Editable Views*.
 
 ## Acceleration
 
@@ -174,9 +170,7 @@ Stowage is a simple idea, summarized by rewrite rules:
         [large value](stow) => [$secureHash]
         [small value](stow) => [small value]
 
-Stowage enables programmers to work semi-transparently with data larger than working memory. Unlike effectful storage or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, incremental computing, and backtracking. Stowage works nicely with [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), especially structures that batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree). 
-
-What 'large value' means is heuristic, based on time-space tradeoffs. A runtime is in charge of what annotations mean, so it can vary by runtime. But ideally, stowage should be simple, predictable, reproducible, easily shared across systems for caching and structure sharing. My recommendation is that "large value" mean "at least 256 bytes" as serialized, sufficient for a few hashes and some structure.
+Stowage enables programmers to work semi-transparently with data larger than working memory. Unlike effectful persistence or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, memoized computation, and backtracking. Stowage works nicely with [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), especially structures that batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
 
 ## Evaluation
 
@@ -187,7 +181,7 @@ Evaluation of an Awelon program results in an equivalent Awelon program, one fro
                [A]c => [A][A]       (copy)
                [A]d =>              (drop)
 
-Words rewrite to their evaluated definitions. However, words do not rewrite unless doing so leads a result other than a trivial inlining of the word's evaluated definition. This constraint is called lazy linking, and it supports various performance and aesthetic goals. An undefined word represents an unknown and does not evaluate further.
+Words rewrite to their evaluated definitions. However, words do not rewrite unless doing so leads to a result other than a trivial inlining of the word's evaluated definition. This constraint is called lazy linking, and it supports various performance and aesthetic goals. An undefined word represents an unknown and does not evaluate further.
 
 Awelon's basic evaluation strategy is simple:
 
@@ -201,12 +195,14 @@ This is really just a recommended default strategy. A runtime may adjust this at
 
 ## Value Words
 
-A 'value word' is a word whose evaluated definition is a single block. Value words have a nice interaction with lazy linking: data plumbing with natural numbers, `true` and `false` booleans, named module or data resources, and so on will effectively treat value words as blocks values.
+A 'value word' is any word whose evaluated definition is a single block. Natural numbers would be a common example, but we might also include booleans like `true` or `false`, or references such as `MyStory.Chapter32`. Lazy linking should ensure that value words are not linked before necessary. Thus, data plumbing can operate on value words directly:
 
         42 true w == true 42
         42 [] b   == [42]
 
-Value words are effectively the 'nouns' of Awelon language. They are convenient for preserving human-meaningful structure and support for hypermedia resources.
+Value words are convenient for preserving human-meaningful structure and support for hypermedia resources. 
+
+*Aside:* Value words might be considered the 'nouns' of Awelon language, whereas most words are verbs. However, an analogy to natural language quickly breaks down. Awelon lacks an equivalent to adjectives, adverbs, or anaphora, at least without a lot of development work involving staged programming and *Editable Views*.
 
 ## Deferred Computations, Link Control, and Coinductive Data
 

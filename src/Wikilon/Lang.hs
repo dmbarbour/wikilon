@@ -13,9 +13,8 @@ module Wikilon.Lang
     , Prog(..), Op(..)
     , encode, encodeBB
     , decode, DecoderStack, DecoderStuck
-    , validWord, validWordByte
-    , validAnno, validNS, validText
-    , inlinableText
+    , validWord, validWordByte, validAnno, validNS
+    , validText, validTextByte
     ) where
 
 import Prelude hiding (Word)
@@ -51,17 +50,18 @@ newtype Anno = Anno { annoWord :: Word }
 newtype NS = NS { nsWord :: Word } 
     deriving (Ord, Eq)
 
--- | Awelon supports embedded texts, both inline and multi-line.
+-- | Awelon supports inline embedded texts like "hello, world!".
+-- Since these texts are inline and relatively small, I'll just
+-- encode them as a bytestring.
 --
--- For multi-line case, we use `LF SP` to escape a linefeed if the
--- next line is non-empty. `LF LF` is okay for an empty line. And 
--- `LF "` terminates a text. LF is the only special case, no other
--- escapes are supported. Multi-line texts start with `" LF` while
--- inline texts start with just `"` and run to the final `"`. 
+-- Embedded texts may not contain C0, DEL, or " (34). Semantically,
+-- we treat a text as a binary list. But it should be valid UTF-8.
 --
--- The `Text` type should only contain the data, not the escapes
--- or initial or final quotes.
-newtype Text = Text { textData :: LBS.ByteString } 
+-- Note: Earlier versions of Awelon did support multi-line texts.
+-- But they lack a strong use case to justify the complexity, so 
+-- were removed. At this time, multi-line texts are only possible
+-- as an editable view or via secure hash resources.
+newtype Text = Text { textData :: BS.ByteString } 
     deriving (Ord, Eq, Monoid) 
 
 -- | A basic operation is a word, annotation, text, or block. In
@@ -109,38 +109,15 @@ opBB :: Op -> BB.Builder
 opBB (OpWord w) = BB.byteString (wordBytes w)
 opBB (OpAnno a) = BB.word8 40 <> BB.byteString (wordBytes (annoWord a)) <> BB.word8 41
 opBB (OpBlock p) = BB.word8 91 <> encodeBB p <> BB.word8 93
-opBB (OpText t) 
-    | inlinableText t = BB.word8 34 <> BB.lazyByteString (textData t) <> BB.word8 34
-    | otherwise = BB.word8 34 <> BB.word8 10 
-                    <> mlTextBB (textData t) 
-                    <> BB.word8 10 <> BB.word8 34
+opBB (OpText t) = BB.word8 34 <> BB.byteString (textData t) <> BB.word8 34
 opBB (OpNS op ns) = opBB op <> BB.word8 64 <> BB.byteString (wordBytes (nsWord ns))
 
--- | We cannot inline a text that contains double quote (34) or a
--- linefeed (10).
-inlinableText :: Text -> Bool
-inlinableText (Text s) = not (LBS.elem 10 s || LBS.elem 34 s)
-
--- | Render a multi-line text, starting on a new line. We'll add a
--- space at the start of each non-empty line. Empty lines won't use
--- an extra escape.
-mlTextBB :: LBS.ByteString -> BB.Builder
-mlTextBB s = case LBS.uncons s of
-    Nothing -> mempty
-    Just (10, s') -> BB.word8 10 <> mlTextBB s'
-    Just _ -> let (ln, s') = spanLine s in
-        BB.word8 32 <> BB.lazyByteString ln <> mlTextBB s'
-
-spanLine :: LBS.ByteString -> (LBS.ByteString, LBS.ByteString)
-spanLine s = case LBS.elemIndex 10 s of
-    Nothing -> (s, LBS.empty)
-    Just ix -> LBS.splitAt ix s
-
--- | Parse serialized Awelon program.
+-- | Parse a serialized Awelon program.
 -- 
--- This decoder aims for simplicity at the cost of inability to
--- stream the input. If the parse fails, the parser's state is
--- returned (DecoderStuck). 
+-- Awelon has a simple syntax, like the Forth stream of words plus
+-- first class [blocks of code] akin to Lisp S-expressions. But it
+-- is possible to have syntax errors, in which case we'll return the
+-- final parser state in the left.
 decode :: LBS.ByteString -> Either DecoderStuck Prog
 decode = dstep [] []
 
@@ -163,13 +140,13 @@ dstep cc r s =
             [] -> Right (Prog (L.reverse r)) -- program fully parsed!
             _ -> decoderStuck -- imbalanced blocks (missing ']')
         Just (c, s') -> case c of
+            32 -> dstep cc r s' -- skip spaces
+            10 -> dstep cc r s' -- skip newlines
             91 {- [ -} -> dstep (r:cc) [] s' -- start of block
             93 {- ] -} -> case cc of         -- end of block
                 (ops:cc') -> dstepNS cc' ops block s' where
                     block = OpBlock (Prog (L.reverse r))
                 _ -> decoderStuck -- imbalanced blocks (extra ']')
-            32 -> dstep cc r s' -- skip spaces
-            10 -> dstep cc r s' -- skip newlines
             40 {- ( -} ->  -- annotations
                 let mkOp = OpAnno . Anno . Word . LBS.toStrict in
                 let (a, eoa) = LBS.span validWordByte s' in
@@ -178,12 +155,12 @@ dstep cc r s =
                     Just (41, eoa') -> dstepNS cc r (mkOp a) eoa'
                     _ -> decoderStuck -- could not find close parens
             34 {- " -} -> -- embedded texts
-                let mkOp = OpText . Text in
-                let (t, eot) = takeText s' in
+                let mkOp = OpText . Text . LBS.toStrict in
+                let (t, eot) = LBS.span validTextByte s' in
                 case LBS.uncons eot of
                     Just (34, eot') -> dstepNS cc r (mkOp t) eot'
-                    _ -> decoderStuck -- could not reach close quote
-            _ -> -- should be a normal word
+                    _ -> decoderStuck
+            _ -> -- otherwise should be a normal word
                 let mkOp = OpWord . Word . LBS.toStrict in
                 let (w, eow) = LBS.span validWordByte s in
                 if LBS.null w then decoderStuck else
@@ -245,7 +222,7 @@ instance Show Op where
 instance IsString Op where
     fromString s = case fromString s of {- using `IsString Prog` -}
             (Prog [op]) -> op
-            _    -> error $ "expecting single Awelon operator, received: " ++ s
+            _    -> error $ "expecting one Awelon operation, received: " ++ s
 
 -- we'll assume a valid word for efficient display
 instance Show Word where 
@@ -255,7 +232,7 @@ instance Show Word where
 instance IsString Word where 
     fromString s = case fromString s of {- using `IsString Op` -}
         OpWord w -> w
-        _ -> error $ "expecting single Awelon word, received: " ++ s
+        _ -> error $ "expecting Awelon word, received: " ++ s
 
 validWord :: Word -> Bool
 validWord = validWordToken . wordBytes
@@ -263,7 +240,8 @@ validWord = validWordToken . wordBytes
 validWordToken :: BS.ByteString -> Bool
 validWordToken s = not (BS.null s) && BS.all validWordByte s
 
-invalidUTF8Bytes :: [Word8]
+c0del, invalidUTF8Bytes :: [Word8]
+c0del = [0..31] ++ [127]
 invalidUTF8Bytes = [192,193] ++ [245..255]
 
 -- Word blacklist is: @#[]()<>{}\/,;|&='"`, SP, C0 (0-31), and DEL.
@@ -272,8 +250,8 @@ wordBytesArray :: A.UArray Word8 Bool
 wordBytesArray = A.listArray (0,255) $ fmap accept [0..255] where
     accept = flip L.notElem blacklist
     blacklist = [32,34,35,38,39,40,41,44,47,59,60,61,62
-               ,64,91,92,93,96,123,124,125,127] 
-            ++ [0..31] ++ invalidUTF8Bytes
+               ,64,91,92,93,96,123,124,125] 
+            ++ c0del ++ invalidUTF8Bytes
 
 validWordByte :: Word8 -> Bool
 validWordByte = (A.!) wordBytesArray
@@ -290,29 +268,34 @@ validAnno :: Anno -> Bool
 validAnno = validWord . annoWord
 
 -- namespaces in Awelon are second class, so don't appear by
--- themselves. But we can simply add the `@` prefix to a word.
+-- themselves. But we may simply add the `@` prefix to a word.
 instance Show NS where 
     showsPrec _ ns = showChar '@' . shows (nsWord ns)
 
 -- require `@word` format
 instance IsString NS where 
-    fromString ('@':s) = NS (fromString s)
+    fromString s = case fromString ('_':s) of
+        OpNS _ ns -> ns
+        _ -> error $ "expecting valid Awelon namespace, received: " ++ s
 
 validNS :: NS -> Bool
 validNS = validWord . nsWord
 
 -- texts are converted directly, 
 instance Show Text where
-    showsPrec _ = shows . LU8.toString . textData
+    showsPrec _ = shows . U8.toString . textData
 
 instance IsString Text where 
-    fromString = Text . LU8.fromString
+    fromString s =
+        let t = Text (U8.fromString s) in
+        if validText t then t else
+        error $ "invalid Awelon text: " ++ s
 
 -- blacklist for normal characters in a text.
 textBytesArray :: A.UArray Word8 Bool
 textBytesArray = A.listArray (0,255) $ fmap accept [0..255] where
     accept = flip L.notElem blacklist
-    blacklist = [0..9] ++ [11..31] ++ [127] ++ invalidUTF8Bytes
+    blacklist = [34] ++ c0del ++ invalidUTF8Bytes
 
 validTextByte :: Word8 -> Bool
 validTextByte = (A.!) textBytesArray
@@ -320,6 +303,6 @@ validTextByte = (A.!) textBytesArray
 -- | This only tests for forbidden characters (C0 except LF, DEL).
 -- The assumption is the text has a valid UTF-8 encoding.
 validText :: Text -> Bool
-validText = LBS.all validTextByte . textData
+validText = BS.all validTextByte . textData
 
 
