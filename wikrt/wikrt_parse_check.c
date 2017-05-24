@@ -62,18 +62,6 @@ static uint8_t const* scan_inline_text(uint8_t const* iter, uint8_t const* const
     while((end != iter) && basic_text_byte(*iter) && ('"' != *iter)) { ++iter; }
     return iter;
 }
-static uint8_t const* scan_multi_line_text(uint8_t const* iter, uint8_t const* const end)
-{
-    _Static_assert((10 == '\n') && (32 == ' '), "assuming ASCII encodings");
-    while(end != iter) {
-        if('\n' == *iter) { ++iter; } 
-        else if(' ' == *iter) { 
-            // skip to end of line
-            do { ++iter; } while((end != iter) && basic_text_byte(*iter));
-        } else { return iter; }
-    } 
-    return end;
-}
 
 bool wikrt_parse_check(uint8_t const* const start, size_t const input_size, wikrt_parse_data* data)
 {
@@ -107,11 +95,7 @@ bool wikrt_parse_check(uint8_t const* const start, size_t const input_size, wikr
             scan = scan_ns_qualifier(1+scan, end);
         } else if('"' == c) { // embedded texts
             if(end == scan) { goto parse_halt; }
-            else if('\n' == (*scan)) {
-                scan = scan_multi_line_text(1+scan, end);
-            } else {
-                scan = scan_inline_text(scan, end);
-            }
+            scan = scan_inline_text(scan, end);
             if((end == scan) || ('"' != *scan)) { goto parse_halt; }
             scan = scan_ns_qualifier(1+scan, end);
         } else { // illegal input

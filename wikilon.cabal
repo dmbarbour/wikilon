@@ -16,12 +16,14 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     
+    Awelon
+    Awelon.Syntax
+    Awelon.Hash
+    Awelon.Dict
+    Awelon.Dict.Format
+
     Wikilon
-    Wikilon.Hash
-    Wikilon.Lang
-    -- Wikilon.Eval
-    Wikilon.CX
-    -- Wikilon.Env
+    Wikilon.DB.HashDeps
   build-depends:       base >= 4.7 && < 5
                      , containers (>= 0.5)
                      , bytestring
@@ -30,7 +32,7 @@ library
                      , array
                      , stm
                      , blake2
-                     , lmdb
+                     , lmdb, filelock
   default-language:    Haskell2010
 
 executable wikilon-exe

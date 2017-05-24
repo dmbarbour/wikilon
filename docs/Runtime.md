@@ -1,15 +1,13 @@
 
-**NOTE (May 2017):** I feel I've gotten tangled in the weeds when re-implementing the runtime for the simplified Awelon language developed circa November 2017. It's the GC and such that are causing much heartache. So I'm tabling the C runtime for now. I'll return to C after I have a version working reasonably well in Haskell. And even then, only if I cannot achieve sufficient performance from Haskell or perhaps an LLVM compiler.
+**NOTE (May 2017):** I feel I've gotten tangled in the weeds when re-implementing the runtime for the simplified Awelon language developed circa November 2016. It's partially GC and such that are causing much heartache, and partially the challenges surrounding database integration with size bounded contexts. So I'm tabling the C runtime for now. I'll return to C after I have a version working reasonably well in Haskell. And even then, only if I cannot achieve sufficient performance from Haskell or perhaps an LLVM compiler.
 
 # Haskell Runtime Design
 
-The persistence/database requirements for a Haskell runtime don't really change, but perhaps I can simplify them in the short term to better leverage an existing Haskell solution. 
+Haskell simplifies some things like compacting GC and parallelism, and complicates others such as linear references or in-place mutation of arrays. I should at least be able to proceed more directly with an implementation.
 
-A lot of things become easier: modeling evaluators, leaving GC to Haskell, etc.. I can support accelerators easily enough. I can work on optimizations and linking and perhaps compilation. I can still model "contexts" to help control heap usage. 
+A major advantage of moving more into Haskell is that I can add a lot of utility code for direct use by the web service, e.g. tools to auto-generate patches that rename words.
 
-Some things are more difficult: modeling unique mutable values/vectors, for example. I could potentially evaluate within an ST monad, but I'll need to think about how (and whether) to accelerate vector processing functions. In-place mutation of vectors could still be useful for some applications.
-
-Ideally, I can use the Haskell runtime for interpretation, then use a C runtime only for JIT compiled code. This should simplify implementation.
+Note: I wonder if the `ghc-compact` (or user facing `compact`) package might be useful for something here. It seems feasible that I could support some large data structures in memory for efficient lookups and reduced GC burdens.
 
 # C Runtime Design
 

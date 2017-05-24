@@ -1,0 +1,10 @@
+
+-- | Renaming words is a common refactoring that is relatively easy
+-- to automate, assuming we can perform lookups and reverse lookups
+-- in context of the dictionary.
+data Awelon.Dict.Rename 
+   -- ( renameWord, renameWords
+   -- , renameDict, renameDicts
+   -- ) where
+
+

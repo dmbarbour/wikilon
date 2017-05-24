@@ -1,14 +1,15 @@
 {-# LANGUAGE BangPatterns, GeneralizedNewtypeDeriving #-}
--- | The Awelon language, as used by Wikilon.
+-- | Awelon Program Syntax
 --
--- Awelon is semantically and syntactically simple. This module will
--- provide concrete parsers and serialization. Interpretation is left
--- to another module.
+-- Awelon syntax is essentially a stream of words and hierarchical
+-- [blocks of code], albeit with annotations and texts as special 
+-- classes of words. There is also a bit of namespace support, so
+-- we can work with hierarchical dictionaries.
 --
--- Note: for performance, Wikilon assumes a valid UTF-8 encoding and
--- all validation and parsing functions operate at the byte level.
--- But do validate UTF-8 at another layer, as needed.
-module Wikilon.Lang
+-- This module focuses on simple parsing and serialization of Awelon
+-- code. The intermediate program representation is not optimal for
+-- direct interpretation. 
+module Awelon.Syntax
     ( Word(..), Anno(..), NS(..), Text(..)
     , Prog(..), Op(..)
     , encode, encodeBB

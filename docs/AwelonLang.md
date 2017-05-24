@@ -45,11 +45,11 @@ Awelon's primitive combinators are significantly more convenient than SKI: Apply
 
 ## Encoding
 
-Valid Awelon code must also be valid UTF-8 text, excluding C0 (except LF) and DEL. However, Awelon is designed such that it may be processed as a binary. This document hence only mentions codepoints in the ASCII subset of UTF-8. Awelon also recognizes only two characters as whitespace: SP (32) and LF (10). I wish to avoid the mess that is text line endings across various operating systems.
+Valid Awelon code must also be valid UTF-8 text, excluding C0 (except LF) and DEL. However, Awelon is designed such that it may be processed as a binary. This document hence only mentions codepoints in the ASCII subset of UTF-8. Awelon recognizes only two characters as whitespace: SP (32) and LF (10). I wish to avoid the mess that is text line endings across various operating systems.
 
 ## Words
 
-Words are the basic user-definable unit in Awelon. Words are identified by a non-empty sequence of characters excluding `@#[]()<>{}\/,;|&='"`, SP (32), grave (96), or DEL (127). Although words don't have a hard upper size limit, developers are encouraged to keep them relatively small, and also to ensure most words are readily embedded in external contexts (URLs, HTML, natural language, etc.).
+Words are the basic user-definable unit in Awelon. Words are identified by a non-empty sequence of characters excluding `@#[]()<>{}\/,;|&='"`, C0, DEL, SP (32), grave (96). Adjacent words in code must be separated by whitespace (SP or LF). Words don't have a hard upper size limit, but developers are encouraged to keep them relatively small and also to ensure words are readily embedded in external contexts (URLs, HTML, natural language, etc.).
 
 A small, useful subset of words is implicitly defined:
 
