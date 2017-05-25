@@ -112,22 +112,24 @@ Most words are defined using Awelon's patch-based dictionary representation. But
 * code and structured data is referenced via `$secureHash`
 * secure hash resources also used for dictionary patches
 
-Awelon will use a 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash using 56 characters of a specialized [base32](https://en.wikipedia.org/wiki/Base32) alphabet. 
+Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters of a specialized [base32](https://en.wikipedia.org/wiki/Base32) alphabet. 
 
         Base32 Alphabet: bcdfghjkmnpqrstxBCDFGHJKMNPQRSTX
             encoding 0..31 respectively
 
-This alphabet is selected to resist conflicts with numbers and human meaningful words. Some sequential hashes, starting from `"test"`:
+This alphabet is selected to resist conflicts with numbers and human meaningful words. Some example hashes, starting iteratively from the word `test`:
         
         HTjFPGSprHqFFbQhmXhnrCbrknDTHCBmJPpnDQpDxpCqKHrxPgrhSNJG
         gSbHfGkPKNmTkTNTMNBxGcSKhDMnDrbqgkMrnttHdFRSqSXXkmqrGtfB
         jQXTRPHNbgXmbXtBXnMmcMdDtjqKNKmnRdGSNcRghSPqFrPFMcxxdcxP
 
-Secure hash collisons are theoretically possible, but in practice are far less a concern than physical corruption of a computation. However, in the unlikely event it does becomes an issue in the future, we can easily rewrite entire Awelon codebases to simply use a larger, more robust hash. I won't further belabor that concern.
+Secure hash collisons are possible in theory, but in practice they are much less a concern than physical corruption of information. However, in the unlikely event this hash does becomes an issue in some distant future, we can always rewrite an entire Awelon codebase to use a larger, more robust hash. I won't further belabor this concern.
 
-Awelon runtime systems must know where to search for secure hash resources, whether that be a search path in a filesystem, database, web server, or content distribution network. With *Stowage*, Awelon systems may also construct secure hash resources during evaluation, effectively using the space as a virtual memory extension. It is also feasible to use resources for outputs in some contexts, e.g. if a program evaluates to `[%secureHash (:jpeg)]` it is feasible we could recognize and render this directly, or for `$secureHash` to be rendered as a collapsable tree with progressive disclosure. See also *Editable Views*.
+Awelon runtime systems must know where to search for secure hash resources, whether that be a search path in a filesystem, database, web server, or content distribution network. With *Stowage*, Awelon systems may also generate secure hash resources during evaluation, essentially leveraging the external space as a virtual memory extension. It is also feasible to use resources for outputs in some contexts, e.g. if a program evaluates to `[%secureHash (:jpeg)]` it is feasible we could recognize and render this element directly (see *Editable Views*).
 
-Secure hash resources are generally subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29), especially in conjunction with *Stowage* and *Memoization*. Conservative reference counting GC is very effective. Reference counting doesn't touch live objects, which is essential when those objects may constitute stable terabytes of high-latency storage. Reference cycles may safely be neglected, as they would require constructing a secure hash collision. Conservative GC also avoids need for parsing data, a simple zero-copy scan of the binary can discover potential references.
+Secure hash resources are generally subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29), especially in conjunction with *Stowage* and *Memoization*. Conservative reference counting GC is very effective. Reference counting doesn't touch live objects, which is essential when those objects may constitute stable terabytes of high-latency storage. Reference cycles may safely be neglected, as they would require constructing a secure hash collision. Conservative GC also avoids need for parsing data, and is compatible with imprecise counting models (such as counting Bloom filters).
+
+*Security Note:* Secure hash resources may embed sensitive information yet are not subject to conventional access control. Awelon systems must instead treat each secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) token that grants read authority. Relevantly, an Awelon service should prevent non-root users from browsing the resource database and resist leaking of secure hash tokens through timing attacks. For a content distribution network with untrusted servers, we might double-hash tokens to provide a robust lookup key, and use the original hash as a symmetric encryption/decryption key.
 
 ## Acceleration
 

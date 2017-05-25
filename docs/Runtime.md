@@ -9,7 +9,7 @@ A major advantage of moving more into Haskell is that I can add a lot of utility
 
 Note: I wonder if the `ghc-compact` (or user facing `compact`) package might be useful for something here. It seems feasible that I could support some large data structures in memory for efficient lookups and reduced GC burdens.
 
-Thought: It might be worthwhile to support a filesystem search path for secure hash resources, adding to those in the database. Maybe include tar or zip files, too.
+Thought: It seems worthwhile to support a simple configuration of a search path for secure hash resources in the database, e.g. via environment variable. This would simplify getting started, at the very least.
 
 # C Runtime Design
 
