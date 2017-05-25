@@ -112,17 +112,22 @@ Most words are defined using Awelon's patch-based dictionary representation. But
 * code and structured data is referenced via `$secureHash`
 * secure hash resources also used for dictionary patches
 
-Awelon uses the 360-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the result as 60 characters in [base64url](https://en.wikipedia.org/wiki/Base64). Example hashes, starting from `"test"`:
+Awelon will use a 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash using 56 characters of a specialized [base32](https://en.wikipedia.org/wiki/Base32) alphabet. 
 
-        J7URBffnfK_NVVcQNQ6D21k5A7J8Zhhwb2Ry3WLYfFc7Vy1TiE01Q4H7duKE
-        Kve-Zbz23Zz28x0tTsmnuJv8dj0YGvwEVVWCbxLkAM7S6FLp6gCA0M2n_Nee
-        MnrYTJyeGxLz5OSGwTwW7WAiC9alwYaOBFuu2_flmK1LGCCMqEDjkzPDL-Rl
+        Base32 Alphabet: bcdfghjkmnpqrstxBCDFGHJKMNPQRSTX
+            encoding 0..31 respectively
 
-In theory, hash collisons may exist. But in practice collisions are unlikely to be a problem, and it would be trivial to rewrite an entire Awelon codebase to use a larger, more robust hash if ever need arises. I won't belabor the possibility. Awelon runtimes need only know where to look for secure hash resources, whether it be a filesystem or database or an HTTP query. *Aside:* In context of an untrusted content distribution network, it is feasible to leverage the hash also as an encryption key.
+This alphabet is selected to resist conflicts with numbers and human meaningful words. Some sequential hashes, starting from `"test"`:
+        
+        HTjFPGSprHqFFbQhmXhnrCbrknDTHCBmJPpnDQpDxpCqKHrxPgrhSNJG
+        gSbHfGkPKNmTkTNTMNBxGcSKhDMnDrbqgkMrnttHdFRSqSXXkmqrGtfB
+        jQXTRPHNbgXmbXtBXnMmcMdDtjqKNKmnRdGSNcRghSPqFrPFMcxxdcxP
 
-While inputting large texts or data is one obvious use case for secure hash resources, there are others. *Stowage* enables programmers to process and memoize computations for data that is larger than working memory, moving the large object into a slow store and replacing the object with the secure hash. Efficient binary *output* is another option, e.g. a ray-traced image or PDF file. Computing secure hashes at runtime can be achieved via *Annotations*.
+Secure hash collisons are theoretically possible, but in practice are far less a concern than physical corruption of a computation. However, in the unlikely event it does becomes an issue in the future, we can easily rewrite entire Awelon codebases to simply use a larger, more robust hash. I won't further belabor that concern.
 
-Of course, secure hashes are terribly unsuitable for direct human use. To work with them efficiently requires a projectional editor or service to mediate between the human and the Awelon codebase. See *Editable Views*.
+Awelon runtime systems must know where to search for secure hash resources, whether that be a search path in a filesystem, database, web server, or content distribution network. With *Stowage*, Awelon systems may also construct secure hash resources during evaluation, effectively using the space as a virtual memory extension. It is also feasible to use resources for outputs in some contexts, e.g. if a program evaluates to `[%secureHash (:jpeg)]` it is feasible we could recognize and render this directly, or for `$secureHash` to be rendered as a collapsable tree with progressive disclosure. See also *Editable Views*.
+
+Secure hash resources are generally subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29), especially in conjunction with *Stowage* and *Memoization*. Conservative reference counting GC is very effective. Reference counting doesn't touch live objects, which is essential when those objects may constitute stable terabytes of high-latency storage. Reference cycles may safely be neglected, as they would require constructing a secure hash collision. Conservative GC also avoids need for parsing data, a simple zero-copy scan of the binary can discover potential references.
 
 ## Acceleration
 

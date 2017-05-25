@@ -23,12 +23,10 @@ library
     Awelon.Dict.Format
 
     Wikilon
-    Wikilon.DB.HashDeps
   build-depends:       base >= 4.7 && < 5
                      , containers (>= 0.5)
                      , bytestring
                      , utf8-string
-                     , base64-bytestring
                      , array
                      , stm
                      , blake2

@@ -3,11 +3,13 @@
 
 # Haskell Runtime Design
 
-Haskell simplifies some things like compacting GC and parallelism, and complicates others such as linear references or in-place mutation of arrays. I should at least be able to proceed more directly with an implementation.
+Haskell simplifies some things like compacting GC and parallelism, and complicates others such as linear references or in-place mutation of arrays. And it isn't clear how to perform JIT compilation, though I can at least model acceleration for a reasonably large subset of dictionaries. I should at least be able to proceed more directly with an implementation.
 
 A major advantage of moving more into Haskell is that I can add a lot of utility code for direct use by the web service, e.g. tools to auto-generate patches that rename words.
 
 Note: I wonder if the `ghc-compact` (or user facing `compact`) package might be useful for something here. It seems feasible that I could support some large data structures in memory for efficient lookups and reduced GC burdens.
+
+Thought: It might be worthwhile to support a filesystem search path for secure hash resources, adding to those in the database. Maybe include tar or zip files, too.
 
 # C Runtime Design
 
