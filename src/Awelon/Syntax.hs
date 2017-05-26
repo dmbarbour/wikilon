@@ -8,7 +8,7 @@
 --
 -- This module focuses on simple parsing and serialization of Awelon
 -- code. The intermediate program representation is not optimal for
--- direct interpretation. 
+-- direct interpretation.
 module Awelon.Syntax
     ( Word(..), Anno(..), NS(..), Text(..)
     , Prog(..), Op(..)
@@ -17,6 +17,13 @@ module Awelon.Syntax
     , validWord, validWordByte, validAnno, validNS
     , validText, validTextByte
     ) where
+
+-- NOTE: In the future, it might be useful to develop a zero-copy
+-- option for parsing (just reference raw pointers and sizes), and
+-- a zero-allocation option for serialization (write to a buffer).
+--
+-- For now, however, I just need to get stuff working before making
+-- it faster.
 
 import Prelude hiding (Word)
 import qualified Data.ByteString as BS

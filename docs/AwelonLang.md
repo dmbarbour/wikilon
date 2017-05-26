@@ -619,3 +619,11 @@ Namespace qualifiers may be eliminated when doing so does not affect observable 
 
 *Aside:* Hierarchical dictionaries are primarily useful at the meta-level for [application models and agents](ApplicationModel.md). They enable dictionaries to represent databases, documents, ontologies, or other objects. Inability to reference the parent dictionary simplifies reasoning about information flow and security. Centralization to a secure hash simplifies structure sharing and integration with publish-subscribe. 
 
+
+## Staged and Generic Programming
+
+Staged programming is a form of constant propagation. Awelon does not support this explicitly, but can model it. However, for staging to work in practice usually requires some syntactic support to clearly distinguish which computations are in which stage, and ensure uniform propagation of the staged constants. I am interested in use of editable views to extend Awelon with staging.
+
+I'm especially interested in staging for generic programming - e.g. working with functions overloaded on data types or traits. In this case, our earlier stage would propagate information about the future program context, the types that will be on the stack. Multiple stage passes may be required, depending on how sophisticated the static type inference algorithms. A suitable *Editable View* can act as an extension to Awelon to make this feasible, and dictionaries can be developed that almost uniformly use generic programming.
+
+

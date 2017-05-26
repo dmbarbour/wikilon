@@ -1,23 +1,32 @@
 module Awelon.Hash 
-    ( hash, hashL
-    , hashAlphabet, validHashByte
-    , validHash, validHashLen
+    ( Hash
+    , hash, hashL
+    , hashAlphabet
+    , validHashByte, validHashLen, validHash
     , hashDeps
     ) where
 
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BS
+import qualified Data.ByteString.UTF8 as U8
 import qualified Crypto.Hash.BLAKE2.BLAKE2b as B2b
 import qualified Data.List as L
 import qualified Data.Array.Unboxed as A
 import Data.Word (Word8, Word32)
 import Data.Char (chr, ord)
 import Data.Bits
+import Data.String
 import Foreign.ForeignPtr (withForeignPtr)
 import Foreign.Ptr
 import Foreign.Storable
 import System.IO.Unsafe (unsafeDupablePerformIO) 
+
+-- | A Hash is just a bytestring, for now. But it should be valid.
+--
+-- Note: In context of lookups for secure hash resources, we may
+-- need to ensure constant-time comparisons.
+type Hash = BS.ByteString
 
 -- | Awelon language makes widespread use of secure hashes to name
 -- various resources. In particular, we use a 280-bit Blake2b hash
@@ -27,10 +36,10 @@ import System.IO.Unsafe (unsafeDupablePerformIO)
 -- > hash "test"
 -- "HTjFPGSprHqFFbQhmXhnrCbrknDTHCBmJPpnDQpDxpCqKHrxPgrhSNJG"
 --
-hash :: BS.ByteString -> BS.ByteString
+hash :: BS.ByteString -> Hash
 hash = hashL . LBS.fromStrict
 
-hashL :: LBS.ByteString -> BS.ByteString
+hashL :: LBS.ByteString -> Hash
 hashL = encodeHash . b2b_digest 35
 
 b2b_digest :: Int -> LBS.ByteString -> BS.ByteString
@@ -58,12 +67,9 @@ hashBytesArray = A.listArray (0,255) $ fmap accept [0..255] where
 validHashByte :: Word8 -> Bool
 validHashByte = (A.!) hashBytesArray
 
--- | Tests whether a bytestring matches the structure expected
--- from a hash output (60 characters, each a validHashByte)
 validHash :: BS.ByteString -> Bool
 validHash s = (validHashLen == BS.length s) 
             && (BS.all validHashByte s)
-
 
 -- encoding
 type Word5 = Word8
@@ -126,7 +132,7 @@ packHash s d = p280 where
 -- 
 -- This is essentially the action one might perform for conservative GC.
 -- Though, the implementation in practice would ideally be zero-copy.
-hashDeps :: LBS.ByteString -> [BS.ByteString]
+hashDeps :: LBS.ByteString -> [Hash]
 hashDeps s = 
     if LBS.null s then [] else
     let hs' = LBS.dropWhile (not . validHashByte) s in

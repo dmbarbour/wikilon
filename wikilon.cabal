@@ -19,9 +19,9 @@ library
     Awelon
     Awelon.Syntax
     Awelon.Hash
+    Awelon.CX
     Awelon.Dict
     Awelon.Dict.Format
-    Awelon.Context
 
     Wikilon
   build-depends:       base >= 4.7 && < 5
