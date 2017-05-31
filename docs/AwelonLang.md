@@ -112,18 +112,16 @@ Most words are defined using Awelon's patch-based dictionary representation. But
 * code and structured data is referenced via `$secureHash`
 * secure hash resources also used for dictionary patches
 
-Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters of a specialized [base32](https://en.wikipedia.org/wiki/Base32) alphabet. 
-
-        Base32 Alphabet: bcdfghjkmnpqrstxBCDFGHJKMNPQRSTX
-            encoding 0..31 respectively
-
-This alphabet is selected to resist conflicts with numbers and human meaningful words. Some example hashes, starting iteratively from the word `test`:
+Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet adjusted to resist conflicts with numbers or human meaningful words. Some example hashes, starting iteratively from the word `test`:
         
         HTjFPGSprHqFFbQhmXhnrCbrknDTHCBmJPpnDQpDxpCqKHrxPgrhSNJG
         gSbHfGkPKNmTkTNTMNBxGcSKhDMnDrbqgkMrnttHdFRSqSXXkmqrGtfB
         jQXTRPHNbgXmbXtBXnMmcMdDtjqKNKmnRdGSNcRghSPqFrPFMcxxdcxP
 
-Secure hash collisons are possible in theory, but in practice they are much less a concern than physical corruption of information. However, in the unlikely event this hash does becomes an issue in some distant future, we can always rewrite an entire Awelon codebase to use a larger, more robust hash. I won't further belabor this concern.
+        Base32 Alphabet: bcdfghjkmnpqrstxBCDFGHJKMNPQRSTX
+            encoding 0..31 respectively
+
+Awelon neglects the theoretical concern of secure hash collisions. Physical corruption of computation is of greater concern in practice. And it's trivial to rewrite entire Awelon codebases to use a larger, more robust hash if ever it becomes necessary. I won't further belabor the issue.
 
 Awelon runtime systems must know where to search for secure hash resources, whether that be a search path in a filesystem, database, web server, or content distribution network. With *Stowage*, Awelon systems may also generate secure hash resources during evaluation, essentially leveraging the external space as a virtual memory extension. It is also feasible to use resources for outputs in some contexts, e.g. if a program evaluates to `[%secureHash (:jpeg)]` it is feasible we could recognize and render this element directly (see *Editable Views*).
 

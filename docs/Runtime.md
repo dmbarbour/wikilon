@@ -3,15 +3,15 @@
 
 # Haskell Runtime Design
 
-Haskell simplifies some things like compacting GC and parallelism, and complicates others such as linear references or in-place mutation of arrays. And it isn't clear how to perform JIT compilation, though I can at least model acceleration for a reasonably large subset of dictionaries. I should at least be able to proceed more directly with an implementation.
+Haskell simplifies some problems like compacting GC and parallelism, ad-hoc use of stowage for indexing and histories, etc.. Other features are made more complicated, such as linear references and in-place mutations of arrays. It isn't clear how to perform JIT compilation, especially not at a large scale. GHC's plugins don't really offer what I want here.
 
-A viable option for performance is to:
+Short-term, it seems feasible to hand develop many accelerators by hand. Further, I can feasibly compile one or more 'standard library' dictionaries directly into the Wikilon codebase, leveraging template Haskell or a staged cabal `Setup.hs`. Both the hand accelerators and compiler could be developed for ongoing improvement.
 
-A major advantage of moving more into Haskell is that I can add a lot of utility code for direct use by the web service, e.g. tools to auto-generate patches that rename words.
+This short-term solution can be extended to mid-term via "hot swap" features that let normal users update an accelerated dictionary and recompile it into the Haskell runtime. This could be achieved by exporting reference dictionaries into a DVCS repository (e.g. `git`), then automatically building and re-deploying from DVCS. I can potentially develop space-optimizing passes to work with large dictionaries, as needed.
 
-Note: I wonder if the `ghc-compact` (or user facing `compact`) package might be useful for something here. It seems feasible that I could support some large data structures in memory for efficient lookups and reduced GC burdens.
+Long term, I'd like to properly bootstrap Awelon, and have it self-compile with its own compiler and runtime. Hopefully, the short and mid term solutions can provide a scaffolding here.
 
-Thought: It seems worthwhile to support a simple configuration of a search path for secure hash resources in the database, e.g. via environment variable. This would simplify getting started, at the very least.
+*Notes:* It seems feasible to leverage `plugins` as a lightweight approach for hot swapping the reference dictionaries. We might also use `compact` to reduce GC overheads for static indexes.
 
 # C Runtime Design
 

@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeFamilies, ExistentialQuantification #-}
+
 -- | Abstract Runtime Context for Awelon
 --
 -- Awelon is purely functional. But use of annotations, accelerators,
@@ -7,7 +9,9 @@
 -- also.
 --
 module Awelon.CX 
-    ( CX(..)
+    ( Par(..)
+    , Async(..), F_(..)
+    , CX(..)
     , ByteString
     , module Awelon.Hash
     ) where
@@ -15,33 +19,41 @@ module Awelon.CX
 import Data.ByteString.Lazy (ByteString)
 import Awelon.Hash
 
+-- | A context that supports simple fork-join parallelism.
+class Par m where
+    data F m :: * -> *          -- ^ a future value
+    fork :: m a -> m (F m a)    -- ^ parallel future
+    join :: F m a -> m a        -- ^ wait for result
+    
+-- | A context that supports race conditions and concurrency.
+--
+-- In Awelon, use of Async can accelerate Kahn Process Networks.
+-- It's okay so long as the end result of evaluation is the same.
+class (Par m) => Async m where
+    peek :: F m a -> m Bool     -- ^ is join immediate?
+    wait :: [F_ m] -> m ()      -- ^ wait for available result
+
+-- | Trivial wrapper to satisfy Haskell's existential types.
+data F_ m = forall a . F_ (F m a)
+
+-- | CX is logically pure, but exposes some "effects" for performance
+-- or debugging as needed to support useful Awelon annotations. 
 class (Monad m) => CX m where
-    -- | Awelon supports a (trace) annotation that serves a similar
-    -- role as Debug.Trace or fprintf(stderr,...).
+    -- | Awelon permits a (trace) annotation to serve a similar
+    -- role as Haskell's Debug.Trace or C's fprintf(stderr,...).
     --
-    --      [message](trace) => [message]       formally
+    --      [message](trace) => [message]       
     --       ... and adds "[message]" to our trace log
     --
-    -- If a context doesn't support trace logs, this might just drop
+    -- If a context doesn't support trace logs, this may just drop
     -- the input. But it's a very convenient feature for debugging.
     trace :: ByteString -> m ()
     trace _ = return ()
 
-    -- | Awelon supports fork-join parallelism via (par) annotations.
-    -- The parallel computation needs equal access to our context.
-    -- In this case, the join is implicit to the monadic wrapper.
-    fork :: m a -> m (m a)
-    fork = return
-
-    -- | Awelon is deterministic, but we may leverage race conditions
-    -- to reduce latency for some hidden forms of non-determinism. An
-    -- acceleration of Kahn Process Networks would rely on this.
-    race :: m a -> m b -> m (Either (a, m b) (m a, b))
-    race l r = do
-        l' <- fork l
-        b <- r
-        return (Right (l', b))
-
+    -- | For a sort of lazy memoized computation, we can request that
+    -- a computation be performed only once and the result shared.
+    once :: m a -> m (m a)
+    once = return
 
     -- | Awelon assumes a context of binaries named by secure hashes,
     -- and uses secure hashes as pointers between binaries. Binaries 
@@ -52,40 +64,41 @@ class (Monad m) => CX m where
     -- ensure all references can be scanned using a simple `hashDeps`
     -- search of the stowed value.
     load :: Hash -> m (Maybe ByteString)
+    load _ = return Nothing
+
     stow :: ByteString -> m Hash 
+    stow = return . hashL
 
     -- | Awelon systems rely upon memoization and caching as the basis
     -- for incremental computations.
     --
-    -- Operations on the cache resemble a simple key-value database, but
-    -- the key must fully describe the computation, and the value may be
-    -- deleted at any time to recover space and must be regenerable.
-    -- 
-    -- To maximize sharing and reuse of the cache, it's important that the
-    -- key *precisely* describe a computation, e.g. versioning individual
-    -- words instead of including a root secure hash of the dictionary.
-    -- Achieving this precision is the primary challenge for effective use
-    -- of the cache.
+    -- Operations on the cache resemble a simple key-value database. But
+    -- the key in this case must fully describe the value, and the value
+    -- may be deleted at any time and require recomputation. Ideally, the
+    -- key is also precise, so it excludes irrelevant differences between
+    -- two codebases.
     cacheGet :: ByteString -> m (Maybe ByteString)
     cacheGet _key = return Nothing
     
     cachePut :: ByteString -> ByteString -> m ()
     cachePut _key _val = return ()
-
     
 
--- What's Missing?
 --
--- So far I have basic parallelism, concurrency, debug output, 
--- dynamic linking, virtual memory via stowage, and caching.
+-- So far I have basic parallelism, debug output, dynamic linking,
+-- virtual memory via stowage, and caching.
+--
+-- A missing feature is efficient concurrency, e.g. what I need to
+-- optimize Kahn Process Networks. Some support for race conditions
+-- or explicit asynchronous 'futures' may be necessary, and the
+-- ability to wait on multiple futures.
+--
+-- I might wish to remodel concurrency around asynchronous futures.
 --
 -- It isn't clear whether I should handle quotas here, nor how.
 --
--- I could maybe add a `once` or `lazy` operation to memoize a result.
--- But I don't have a strong use case for this yet.
---
 -- I don't have an idea in-place list-as-vector manipulations.
--- Not yet, at least. Though I could just use persistent-vector
--- or Data.Sequence for that use case.
+-- Not yet, at least. Though I could just try persistent-vector
+-- or Data.Sequence for this use case.
  
 
