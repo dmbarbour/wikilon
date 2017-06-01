@@ -18,12 +18,14 @@ module Awelon.Syntax
     , validText, validTextByte
     ) where
 
--- NOTE: In the future, it might be useful to develop a zero-copy
--- option for parsing (just reference raw pointers and sizes), and
--- a zero-allocation option for serialization (write to a buffer).
+-- NOTES:
 --
--- For now, however, I just need to get stuff working before making
--- it faster.
+-- I'd like to support a zero-copy option for parsing and zero allocation
+-- for serializations.
+--
+-- It might also be useful to support a rewrite optimization to intern the
+-- tokens, albeit only if I'll be holding onto a program for a long while 
+-- during normal usage.
 
 import Prelude hiding (Word)
 import qualified Data.ByteString as BS

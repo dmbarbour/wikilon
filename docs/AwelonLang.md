@@ -429,11 +429,9 @@ We drop data but preserve substructure. Because the data has been lost, the resu
 
 Awelon's program rewrite semantics make it relatively easy to observe a computation in progress. Data is visible in the program representation, rather than hidden behind variables that must be queried via debugger. It is feasible to predictably animate evaluation by pausing evaluation and taking snapshots just before linking of specific words, recording a series of 'frames' to render.
 
-Conventional debugging techniques also apply. 
+I propose `(trace)` annotation to serve as a basis for conventional printf style debugging. For example, `[message](trace)` would print `[message]` to an implicit trace log, then simply pass the message onwards within the program. It would be up to developers to ensure trace messages follow useful conventions (e.g. to support status messages).
 
-I propose `(trace)` annotation to serve as a basis for conventional printf style debugging. For example, `[message](trace)` would evaluate to simply `[Msg]` but would implicitly copy the message to a second stream. Traced outputs could easily be rendered within the same program by essentially injecting a trace comments in the output (perhaps of form `[[message1](trace)[message2](trace)..[messageN](trace)](eval)(a2)d`
-
-Of course, tracing is invasive and is not ideal for debugging in general. Configuring words or certain annotations to operate as breakpoints or frame separators, or even just profile their use, is much less invasive but requires a more sophisticated configuration.
+Of course, tracing with an explicit annotation is invasive and is not ideal for debugging. But we could also configure a runtime to trace specific functions by capturing the arguments (up to arity) whenever the word is linked. Similarly, we could configure a runtime to breakpoint on certain words, treating them temporarily as undefined rather than immediately linking them.
 
 ## Static Typing
 

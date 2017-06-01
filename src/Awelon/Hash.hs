@@ -125,13 +125,9 @@ packHash s d = p280 where
 
 -- | Find substrings that look like hashes.
 --
--- This function assumes hashes have word separators or similar, that is
--- we don't have multiple adjacent hashes or a hash prefix that could be
--- confused with the hash. This is a valid assumption for Awelon code and
--- dictionaries, and is easy to enforce for other objects.
--- 
--- This is essentially the action one might perform for conservative GC.
--- Though, the implementation in practice would ideally be zero-copy.
+-- This function assumes hashes have word separators or similar, such 
+-- that each hash value is exactly 56 contiguous validHashBytes (no 
+-- more and no less). This function could be used for conservative GC.
 hashDeps :: LBS.ByteString -> [Hash]
 hashDeps s = 
     if LBS.null s then [] else
