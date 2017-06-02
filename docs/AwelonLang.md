@@ -63,7 +63,7 @@ Excepting the four primitives, which have primitive rewrite rules, the formal se
 
 ## Dictionary
 
-Awelon has a simple, DVCS-inspired patch-based dictionary representation:
+Awelon specifies a simple, scalable, patch-based dictionary representation:
 
         secureHashOfPatch1
         secureHashOfPatch2
@@ -71,11 +71,11 @@ Awelon has a simple, DVCS-inspired patch-based dictionary representation:
         @word2 definition2
         ...
 
-Each patch consists of a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions may override those from earlier patches, representing a trivial update model. The dictionary as a whole is a large patch updating the initially empty dictionary.
+Each patch consists of a list of patches to logically include (often just one) followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions may override those from earlier patches, providing a trivial update model. A dictionary as a whole is essentially represented by a patch on the empty dictionary.
 
-The blank program is valid, representing the identity function. However, deletion of words may be represented using a trivial cycle such as `@foo foo`. In general, cyclic definitions are considered errors (and cyclic behaviors use *Fixpoint and Loop* combinators). But Awelon systems may recognize the trivial cyclic definition and avoid raising a warning.
+Deletion of words may be represented using a trivial cycle such as `@foo foo`. In general, cyclic definitions are considered errors (recursive functions must use fixpoint combinators, see below). But Awelon systems should recognize the trivial cyclic definition and raise warnings appropriate for undefined words rather than cyclic definitions.
 
-Humans should usually observe and edit a dictionary through a level of indirection, such as a web service. Direct text editing of dictionary binaries does not scale nicely (I speak from experience). A service has freedom to reorganize dictionaries to simplify histories, improve structure sharing, optimize indexing or caching, and so on.
+Direct text editing of dictionary binaries does not scale nicely. This format is primarily intended for import and export, sharing of code between Awelon systems. Humans should usually observe and edit a dictionary through a level of indirection, such as a web service. A service may frequently use structured or indexed representations under the hood.
 
 *Note:* See *Hierarchical Dictionaries* and *Secure Hash Resources* for more.
 
@@ -176,6 +176,8 @@ Stowage is a simple idea, summarized by rewrite rules:
         [small value](stow) => [small value]
 
 Stowage enables programmers to work semi-transparently with data larger than working memory. Unlike effectful persistence or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, memoized computation, and backtracking. Stowage works nicely with [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), especially structures that batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
+
+*Note:* A variant of stowage may be used for binary data.
 
 ## Evaluation
 

@@ -43,16 +43,8 @@
 --
 -- Wikilon aims to support Awelon with reasonable performance.
 -- 
-module Awelon
-    ( module Awelon.Syntax
-    , module Awelon.Hash
-    , module Awelon.Dict
-    , module Awelon.Dict.Format
-    ) where
+module Awelon () where
 
-import Awelon.Syntax
-import Awelon.Hash
-import Awelon.Dict
-import Awelon.Dict.Format
+
 
 
