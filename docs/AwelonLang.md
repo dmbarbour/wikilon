@@ -71,7 +71,7 @@ Awelon specifies a simple, scalable, patch-based dictionary representation:
         @word2 definition2
         ...
 
-Each patch consists of a list of patches to logically include (often just one) followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions may override those from earlier patches, providing a trivial update model. A dictionary as a whole is essentially represented by a patch on the empty dictionary.
+Each patch consists of a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions may override those from earlier patches, supporting a trivial update model. A dictionary as a whole is essentially represented by a patch on the empty dictionary.
 
 Deletion of words may be represented using a trivial cycle such as `@foo foo`. In general, cyclic definitions are considered errors (recursive functions must use fixpoint combinators, see below). But Awelon systems should recognize the trivial cyclic definition and raise warnings appropriate for undefined words rather than cyclic definitions.
 
@@ -106,13 +106,13 @@ Natural numbers and embedded texts are only barely sufficient for embedding of d
 
 ## Secure Hash Resources
 
-Most words are defined using Awelon's patch-based dictionary representation. But Awelon also permits direct reference to an implicit global namespace, where binaries are referenced by secure hash.
+Awelon supports references to an implicit global namespace, where binaries may be referenced by secure hash.
 
 * external binary data may be referenced via `%secureHash`
 * code and structured data is referenced via `$secureHash`
 * secure hash resources also used for dictionary patches
 
-Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet adjusted to resist conflicts with numbers or human meaningful words. Some example hashes, starting iteratively from the word `test`:
+Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet adjusted to resist conflicts with numbers or human meaningful words. Some example hashes, iteratively from the word `test`:
         
         HTjFPGSprHqFFbQhmXhnrCbrknDTHCBmJPpnDQpDxpCqKHrxPgrhSNJG
         gSbHfGkPKNmTkTNTMNBxGcSKhDMnDrbqgkMrnttHdFRSqSXXkmqrGtfB

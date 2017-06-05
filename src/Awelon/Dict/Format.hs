@@ -145,7 +145,8 @@ encode :: Dict -> LBS.ByteString
 encode = BB.toLazyByteString . encodeBB
 
 -- | Encode with a flexible output strategy. This uses a very
--- simple and consistent space formatting.
+-- simple and consistent space formatting: one SP after each
+-- word or namespace, one LF at the end.
 encodeBB :: Dict -> BB.Builder
 encodeBB (Dict inc ns defs) = bbInc <> bbNS <> bbDefs where
     bbInc   = mconcat $ fmap bbIncElem inc
@@ -161,82 +162,6 @@ encodeBB (Dict inc ns defs) = bbInc <> bbNS <> bbDefs where
 
 instance Show Dict where
     showsPrec _ = showString . LU8.toString . encode
-
-{-
-    let mkE = Right . Right in
-    case LBS.uncons s of
-        Just (64, s') ->
-            let (w,d) = LBS.span validWordByte s' in
-            if LBS.null w then mkE (BadEnt s) else
-
-            let ns = P.NS (P.Word (LBS.toStrict w)) in
-            let (h,r) = LBS.span validHashByte (skipWS d) in
-            let okHash = LBS.null h || isHash h in
-            let okRem = LBS.null (skipWS r) in
-            if not (okHash && okRem) then mkE (BadNS ns d) else
-
-            let h' = if LBS.null h then Nothing else Just (LBS.toStrict h) in
-            Right (Left (ns, h'))
-        _ -> 
-            let (w, d) = LBS.span validWordByte s in
-            if LBS.null w then mkE (BadEnt s) else
-            
-            let w' = P.Word (LBS.toStrict w) in
-            case P.decode d of
-                Right def -> Left (w', def)
-                _ -> mkE (BadDef w' d)
-            
-
-            let (
-            let okDef = (LBS.null h || isHash h) && LBS.null (skipWS r) in
-             
-            let okH = (LBS.null h) || (isHash h) in
-            let okW = not (LBS.null w) in
-            let okRem = LBS.null (skipWS rem) in
-            
-
-            let ok = 
-            let ns = P.NS (P.Word (LBS.toStrict w)) in
-            if LBS.null w then mkE (BadEnt s) else
-            if (not (LBS.null rem)) then mk
-            if (LBS.null h
-
-            let (h,rem) = LBS.span validHashByte (skipWS d) in
-            
-            let okDef = isHash h && LBS.null (skipWS rem) in
-            if not okDef then mkE (BadNS ns d) else
-            Right (Left (ns, LBS.toStrict h))
-        
-
-case LBS.uncons s of
-        Just (64, s') -> decodeNS s'
-        _ -> decodeWord s
-  where 
-    decodeNS
-
-            let (nsBytes, nsDefBytes) = LBS.span validWordByte s' in
-            let nsOK = not (LBS.null nsBytes) in
-            if not nsOK then mkE (BadEnt s) else
-            let nsVal = P.NS (P.Word (LBS.toStrict)) in
-            let (hash, rem) = LBS.span validHashByte (skipWS nsDefBytes) in
-            let defOK = isHash hash && LBS.null (skipWS rem) in
-            if not defOK then mkE (BadNS nsVal nsDefBytes) else
-            Right (Left (nsVal, LBS.toStrict hash))
-        _ -> 
-            let (wordBytes, wordDef) = LBS.span validWordByte s in
-
-
-        
-            
-            let (h, rem) = LBS.span validHashByte (skipWS nsDef) in
-            let nsOK = not (LBS.null ns) && isHash h && LBS.null (skipWS rem) in
-            if not nsO
-    Nothing -> mkE (BadEnt s)
-    Just (c, s) -> case c of
-        64
-    Just (64, s') -> let (ns, def) = LBS.span 
-          
--}
 
 -- | An Awelon dictionary separates logical lines with the `LF @`
 -- sequence. This function returns the index to the next `LF @`
