@@ -27,6 +27,7 @@ library
     Wikilon.CX
     Wikilon.DB
   build-depends:       base >= 4.7 && < 5
+                     , mtl, deepseq
                      , containers (>= 0.5)
                      , bytestring, utf8-string, array, blake2
                      , lmdb
