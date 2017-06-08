@@ -16,7 +16,7 @@ module Wikilon.DB
     , newTX, txDB
     , readKey, writeKeyVal
     , loadRsc, stowRsc, dropRsc
-    , commitTX
+    , commitTX, commitTX_asynch
     
     , FilePath
     , ByteString
@@ -29,11 +29,13 @@ import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.MVar
 import Control.DeepSeq (force)
+import Foreign
 import Data.Function (on)
 import Data.ByteString.Lazy (ByteString)
-import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BS
+import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Lazy.Internal as LBS
 import qualified System.IO (FilePath)
 import qualified System.IO.Error as E
 import qualified System.Directory as FS 
@@ -44,7 +46,6 @@ import qualified Data.Map as M
 import Data.Word (Word8)
 import Data.Monoid
 import Database.LMDB.Raw
-import System.IO.Unsafe (unsafeInterleaveIO)
 import Awelon.Syntax (validWordByte)
 import Awelon.Hash
 import Debug.Trace
@@ -141,33 +142,38 @@ dbAddEph db update =
 
 -- | Perform an operation while holding a read lock.
 -- 
--- LMDB with MDB_NOLOCK essentially uses a double-buffering model.
--- Between writes, we have two safe frames: the recently committed
--- frame, and one frame prior. During writes, we have only one safe
--- frame, since the prior frame may be concurrently dismantled.
+-- LMDB is essentially a frame-buffered database. With MDB_NOLOCK, 
+-- only the two most recently committed frames are protected, any
+-- older frames may be dismantled while a new one is written.
 --
--- Thus, we can simply have our writer wait for the readers of the
--- prior frame before we risk dismantling it. Readers never wait on
--- the writer, and our writer waits only on long lived readers. By
--- design, this API will resist long-lived readers since each read
--- only grabs a small number of elements.
+-- We take advantage of this by waiting only on potential readers
+-- of the older frames before writing. We have two reader frames:
 --
--- We'll model two reader frames - (R,R) - such that we guarantee
--- all readers of the prior frame are in the second R. (There may
--- be some overlap, where some readers of the current frame also
--- are in the second R. But that's still safe.)
+--   (R2, R1)
+--   R2 has readers of frames F2 and F1
+--   R1 has readers of frames F1 and F0
+--
+-- When our writer wants to create a new frame F3, it will protect
+-- F2 and F1 but begin to dismantle F0. So we must wait on all the
+-- old readers in R1, and we can allocate a new reader frame so we
+-- keep (R3, R2) in our memory.
+--
+-- Each R has potential readers of two frames because allocation of
+-- R3 isn't synchronized with committing F3 in LMDB. But all that
+-- matters for safety is we wait on F0 before we construct F3. 
+--
+-- For performance, this approach to locking ensures that readers
+-- never wait on the writer, and the writer waits only upon old
+-- readers. Short-lived readers don't cause the writer to wait. 
 withReadLock :: DB -> IO a -> IO a
 withReadLock db = bracket acq relR . const where
-    acq = readIORef (db_rdlock db) >>= \ (r,_) -> acqR r >> return r
+    acq = readIORef (db_rdlock db) >>= \ (r2,_) -> acqR r2 >> return r2
 
 advanceReadFrame :: DB -> IO R
 advanceReadFrame db = 
-    newR >>= \ rN' ->
-    atomicModifyIORef (db_rdlock db) $ \ (rN, rO) -> 
-        ((rN',rN), rO)
-
-writerWaitOnReaders :: DB -> IO ()
-writerWaitOnReaders db = advanceReadFrame db >>= waitR
+    newR >>= \ r3 ->
+    atomicModifyIORef (db_rdlock db) $ \ (r2,r1) -> 
+        ((r3,r2),r1)
     
 -- | type R is a simple count (of readers), together with a signaling
 -- MVar that is active (full) iff the current count is zero.
@@ -324,11 +330,14 @@ finiTX (TX db st) = modifyMVarMasked_ st $ \ s -> do
 -- 
 -- To simplify debugging with mdb_dump keys are kept intact up to a
 -- limited size. OTOH, beyond some point, it's just wasted memory.
--- I've decided to limit preserved key sizes to 255 bytes.
+-- I've decided to limit preserved key sizes to 255 bytes. I feel
+-- this is still a bit high, but it's a reasonable cutoff.
 maxKeyLen :: Integral a => a
 maxKeyLen = 255
 
 -- | To prevent aliasing, we distinguish safe keys from normal keys.
+-- A safe key starts with a `#`. Any key that starts with `#` will
+-- be rewritten to a safe key... just to be safe.
 safeKeyPrefix :: Word8
 safeKeyPrefix = 35
 
@@ -342,17 +351,39 @@ validKey s = case LBS.uncons s of
                     (maxKeyLen > LBS.length s')
 
 -- | Rewrite problematic keys if necessary.
-safeKey :: ByteString -> ByteString
-safeKey s = if validKey s then s else 
+toSafeKey :: ByteString -> ByteString
+toSafeKey s = if validKey s then s else 
     LBS.singleton safeKeyPrefix <>
     LBS.fromStrict (BS.drop 1 (hashL s))
 
--- | withKey: access key for use in MDB
+-- | withKey: access key for use in MDB.
+-- 
+-- If our key has a single part, will use that directly. Otherwise,
+-- we copy the key into a stack-local allocation (via allocaBytes). 
 withKey :: ByteString -> (MDB_val -> IO a) -> IO a
-withKey = withSafeKey . safeKey where
-    withSafeKey k action = do
-        let len = LBS.length k 
-        undefined
+withKey = wsk . toSafeKey where
+    wsk (LBS.Chunk (BS.PS fp off len) LBS.Empty) action =
+        withForeignPtr fp $ \ p ->
+            action (MDB_val (fromIntegral len) (p `plusPtr` off))
+    wsk k action = 
+        let len = LBS.length k in
+        allocaBytes (fromIntegral len) $ \ p -> do
+            copyLBS p k
+            action (MDB_val (fromIntegral len) p)
+
+-- | copy a lazy bytestring to pointer destination.
+--
+-- Assumes sufficient space in destination for the full length.
+-- I'm surprised that I couldn't find an equivalent function in 
+-- Data.ByteString.Lazy.Internal. 
+copyLBS :: Ptr Word8 -> LBS.ByteString -> IO ()
+copyLBS !dst s = case s of
+    LBS.Empty -> return ()
+    (LBS.Chunk (BS.PS fp off len) more) ->
+        withForeignPtr fp $ \ src -> do
+            BS.memcpy dst (src `plusPtr` off) len
+            copyLBS (dst `plusPtr` len) more
+    
 
 -- | Retrieve value associated with given key.
 --
@@ -394,9 +425,9 @@ writeKeyVal (TX _ st) (force -> !k) (force -> !v) =
 -- is managed in terms of these stowage resources, as it results in
 -- lighter weight transactions.
 loadRsc :: TX -> Hash -> IO (Maybe ByteString)
-loadRsc tx (force -> !h) = undefined
+loadRsc tx !h = undefined
 
--- | Move resource to database, returning secure hash (Awelon.Hash).
+-- | Moves resource to database, returns secure hash (Awelon.Hash).
 --
 -- Stowage resources are automatically named by secure hash, which
 -- is also used to look up the resource later as needed. The data
@@ -405,13 +436,13 @@ loadRsc tx (force -> !h) = undefined
 -- hold onto stowed resources via an ephemeron table. (This only 
 -- affects resources stowed through that specific TX.)
 --
--- Note: It's important to avoid stowing short-lived, intermediate
--- resources. E.g. for constructing a trie one key at a time, we
--- could naively stow a new root node and a few more at each step.
--- But 99% of those nodes would later be GC'd. Try to use batching
--- or latent stowage or similar.
+-- Note: Construction and GC of persistent resources more expensive
+-- than RAM, so try to avoid constructing short-lived stowage. Use
+-- batching or staging or intermediate representations as needed.
 stowRsc :: TX -> ByteString -> IO Hash
-stowRsc tx (force -> !v) = undefined
+stowRsc tx v = do
+    h <- evaluate (hashL v)
+    undefined
 
 -- | Release ephemeral root produced by stowRsc.
 --
@@ -423,26 +454,42 @@ stowRsc tx (force -> !v) = undefined
 -- an explicit cache manager, but normally you should just wait for
 -- GC and allow the to finalizer clear ephemeral references.
 dropRsc :: TX -> Hash -> IO ()
-dropRsc (TX db st) (force -> !h) = modifyMVarMasked_ st $ \ s ->
-    case M.lookup h (tx_hold s) of
-        Nothing -> return s
-        Just n  -> do
-            dbClearEph db (M.singleton h n)
-            let hold' = M.delete h (tx_hold s)
-            return $! s { tx_hold = hold' }
+dropRsc (TX db st) !h = 
+    modifyMVarMasked_ st $ \ s ->
+        case M.lookup h (tx_hold s) of
+            Nothing -> return s
+            Just n  -> do
+                dbClearEph db (M.singleton h n)
+                let hold' = M.delete h (tx_hold s)
+                return $! s { tx_hold = hold' }
 
 -- | Commit transaction to database.
 --
 -- Commit will returns True if commit succeeds, False otherwise.
--- The actual write is asynchronous, but we'll validate our 
--- This uses a lazy, asynchronous, boolean result so you won't wait
--- for commit to succeed until you must know whether it succeeded.
--- (Use `commitTX >>= evaluate` for synchronous commit.)
+-- This operation is synchronous, so it waits for success or failure
+-- before returning to fit the common assumptions of a thread, that
+-- a subsequent transaction should be able to read what was written.
 --
--- While commi
+-- If there are concurrent operations on the TX, whether those make
+-- it into the commit will not be deterministic. A transaction may 
+-- be committed more than once over its lifespan.
 commitTX :: TX -> IO Bool
-commitTX tx@(TX db _) = do
+commitTX tx = commitTX_asynch tx >>= id
+
+-- | Asynchronous commit. 
+--
+-- This simply pushes the transaction object to the DB writer thread 
+-- then returns immediately a join operation to wait for the success
+-- or failure result. Use `unsafeInterleaveIO` to translate this to 
+-- Haskell's lazy evaluation layer.
+-- 
+-- Working with asynchronous commit is rather awkward because further
+-- transactions by the same thread can read old values, and further 
+-- operations on a TX object can modify our transaction before it is
+-- processed by the writer thread. Caveat emptor.
+commitTX_asynch :: TX -> IO (IO Bool)
+commitTX_asynch tx@(TX db _) = do
     v <- newEmptyMVar
     dbPushCommit db (tx,v)
-    unsafeInterleaveIO (readMVar v)
+    return (readMVar v)
 
