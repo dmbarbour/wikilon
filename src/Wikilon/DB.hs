@@ -18,9 +18,8 @@ module Wikilon.DB
     , readKey, readKeyDB
     , readKeys, readKeysDB
     , writeKey
-    , loadRsc, loadRsc'
-    , stowRsc
-    , dropRsc
+    , loadRsc, loadRscDB
+    , stowRsc, dropRsc
     , commitTX
     , commitTX_asynch
     
@@ -51,7 +50,7 @@ import Data.IORef
 import qualified Data.Map as M
 import qualified Data.List as L
 import Data.Word (Word8)
-import Data.Bits ((.|.),(.^.))
+import Data.Bits ((.|.), xor)
 import Data.Monoid
 import Data.Maybe
 import Database.LMDB.Raw
@@ -495,145 +494,123 @@ writeKey (TX _ st) (force -> !k) (force -> !v) =
         let w' = M.insert k v (tx_write s) in
         return $! s { tx_write = w' }
 
-
--- | Stowage Key Size
+-- | Key Length for Stowage
 --
--- Naively, I could directly use hashes as keys for the LMDB tables.
--- But there are some issues with this. To resist timing attacks, I
--- must be careful to not expose the full hash through the LMDB look
--- up. I could use LMDB cursors to look up only part of a key, but
--- that introduces a lot of overhead and complexity per lookup.
---
--- A compromise is to use only part of the hash for lookups. In this
--- case, it must be a sufficiently large fragment to resist collision,
--- yet it must have sufficient bits left over to resist forgery.
---
--- Given 280 bit hashes (56 characters in base32) that should be more
--- than enough that this compromise is quite safe. I'll just split it
--- evenly, 28 characters for lookup and 28 more for security.
+-- Wikilon DB uses only half of the hash for LMDB layer lookups,
+-- and uses the remaining half for a constant-time comparison.
+-- This helps resist timing attacks. 
 stowKeyLen :: Integral a => a
 stowKeyLen = validHashLen `div` 2
 
 -- | Access a stowed resource by secure hash.
 --
--- This will search for a resource identified by secure hash within 
--- the Wikilon database. If not found, this returns Nothing. Due to
--- the nature of secure hash resources, you may search elsewhere for
--- the resource - a network service or filesystem.
+-- This searches for a resource identified by secure hash within 
+-- the Wikilon database or transaction. If not found, this returns
+-- Nothing, in which case you might search elsewhere like the file
+-- system or network. (These resources are provider independent.)
 --
--- Security Note: it doesn't make sense to secure hashes with access
--- control, but hashes themselves can serve as secure capabilities.
--- For security, we must avoid revealing available capabilities to
--- timing attacks. The loadRsc function here does so.
+-- In the current implementation, this is equivalent to loadRscDB.
+-- But I've experimented with variations where newly stowed data is
+-- initially buffered in the transaction. As an API, this is more
+-- robust for handling newly stowed data.
+--
+-- Loading stowed data doesn't prevent GC. But if the stowed data
+-- discovered through keys is still rooted, it will remain in the
+-- database. Or if not, the transaction should fail upon commit.
+--
+-- Security Note: secure hashes are essentially object capabilities,
+-- and leaking capabilities is a valid concern. Timing attacks are
+-- a likely vector for such leaks. This function exposes only half
+-- of any hash (the first half) to timing attacks. The remaining bits
+-- are sufficient to protect the capability, but be careful to not
+-- expose them at another layer.
 loadRsc :: TX -> Hash -> IO (Maybe ByteString)
 loadRsc (TX db _) = loadRscDB db
 
--- | constant-time comparison on two arrays via pointers
-ctCmp :: Ptr Word8 -> Ptr Word8 -> Int ->  IO Bool
-ctCmp !l !r = go 0 where
+-- | Load resource directly from database.
+loadRscDB :: DB -> Hash -> IO (Maybe ByteString)
+loadRscDB db !h = 
+    assert (validHashLen > stowKeyLen) $
+    if (BS.length h /= validHashLen) then return Nothing else
+    readIORef (db_newrsc db) >>= \ newRscTbl ->
+    withReadLock db $ 
+    withBSKey h $ \ hMDB -> do
+    let hKey = MDB_val stowKeyLen (mv_data hMDB)                       -- normal LMDB lookup
+    let hRem = MDB_val (mv_size hMDB - stowKeyLen) 
+                       (mv_data hMDB `plusPtr` stowKeyLen)             -- prefix for value
+    txn <- mdb_txn_begin (db_env db) Nothing True
+    v <- tryRscVal hRem =<< mdb_get' txn (db_stow db) hKey
+    mdb_txn_commit txn
+    return (v <|> lookupRsc h newRscTbl)
+
+-- | constant-time equality comparison for memory pointers.
+ctEqMem :: Ptr Word8 -> Ptr Word8 -> Int -> IO Bool
+ctEqMem !l !r = go 0 where
     go !b !sz = 
         if (0 == sz) then return $! (0 == b) else do
         let ix = (sz - 1)
         lB <- peekElemOff l ix
         rB <- peekElemOff r ix
-        go (b .|. (lB .^. rB)) ix
+        go (b .|. (lB `xor` rB)) ix
 
--- this is a surprisingly finicky function to write for something
--- that should be simple, but here we go...
-toRscVal :: MDB_val -> Maybe MDB_val -> IO (Maybe ByteString)
-toRscVal _ Nothing = return Nothing
-toRscVal h (Just c) =
-    let stowHashRem = validHashLen - stowKeyLen in
-    assert (stowHashRem >= 24) $ -- sanity check
-    let okHashSize = (mv_size h == validHashLen) in
-    let okDataSize = (mv_size c >= fromIntegral stowHashRem) in
-    if not (okHashSize && okDataSize) then return Nothing else
+-- | timing attack resistant prefix matching
+ctMatchPrefix :: MDB_val -> MDB_val -> IO Bool
+ctMatchPrefix p d =
+    if (mv_size p > mv_size d) then return False else
+    ctEqMem (mv_data p) (mv_data d) (fromIntegral (mv_size p))
 
-    let hRem = mv_data h `plusPtr` stowKeyLen in
-    ctCmp hRem (mv_data c) stowHashRem >>= \ bMatchHashRem ->
-    if not bMatchHashRem then return Nothing else
-    let pData = mv_data c `plusPtr` stowHashRem in
-    let dataLen = mv_size c - fromIntegral stowHashRem in
-    copyMDB_to_BS (MDB_val dataLen pData) >>= \ bs ->
+-- | Accept a resource value after stripping a given prefix.
+tryRscVal :: MDB_val -> Maybe MDB_val -> IO (Maybe ByteString)
+tryRscVal _ Nothing = return Nothing
+tryRscVal p (Just c) =
+    ctMatchPrefix p c >>= \ bHasPrefix ->
+    if not bHasPrefix then return Nothing else
+    let dLen = mv_size c - mv_size p in
+    let dPtr = mv_data c `plusPtr` (fromIntegral (mv_size p)) in
+    copyMDB_to_BS (MDB_val dLen dPtr) >>= \ bs ->
     return (Just (LBS.fromStrict bs))
 
-loadRscDB :: DB -> Hash -> IO (Maybe ByteString)
-loadRscDB db !hBS = 
-    if (BS.length hBS /= validHashLen) then return Nothing else 
-    withReadLock db $ 
-    withBSKey hBS $ \ h -> do
-    let hSKB = h { mv_size = stowKeyBytes }
-    txn <- mdb_txn_begin (db_env db) Nothing False
-    v <- toRscVal h =<< mdb_get' txn (db_stow db) hSKB
+-- | Timing-attack resistant lookup for the new resource table.
+--
+-- I'm not particularly concerned about timing attacks on new resources.
+-- If the writer is doing its job, the table shouldn't stick around long
+-- enough for a timing attack. However, this is easy to implement and 
+-- efficient, and won't hurt. And maybe our writer isn't doing its job.
+lookupRsc :: Hash -> Stowage -> Maybe ByteString
+lookupRsc h m = 
+    case M.lookupGT (BS.take stowKeyLen h) m of
+        Just (k,v) | ctEqBS h k -> Just v
+        _ -> Nothing
 
-
-
-
-
-    v <- case mbv of
-            Just vC | (mv_size vC >= stowKeyBytes) -> do
-                matchHash <-
-                ctCmp ((mv_data h) `plusPtr` stowKeyBytes)
-                 
-            _ -> return Nothing
-            
-    let getV = case mbv of
-                Just v | (mv_size v >= stowKeyBytes) ->
-                    
-                Nothing -> return Nothing
-
-    v <-
-
-    case mbv of
-        Nothing -> mdb_txn_commit txn >> return Nothing
-        Just v -> do
-
-            bMatch <- ctCmp 
-
-
-
-    bs <- toBS =<< mdb_get' txn (db_data db) mdbKey
-
-            
-            
-
-            
-            
-            
- 
-
-
-    let nCmp = validHashlen `div` 4
-    poke pKey $ h { mv_
-    let tst 
-    
-    
-    
-    newRsc <- readIORef (db_newrsc db)
-    txn <- mdb_txn_begin (db_env db) Nothing True
-    crs <- mdb_cursor_open' txn (db_stow db)
-    bPos <- 
-    mdb_set
-    
-    
+-- | constant time equality comparison for bytestrings.
+ctEqBS :: BS.ByteString -> BS.ByteString -> Bool
+ctEqBS a b = 
+    (BS.length a == BS.length b) &&
+    (0 == (L.foldl' (.|.) 0 (BS.zipWith xor a b)))
 
 
 -- | Moves resource to database, returns secure hash (Awelon.Hash).
 --
 -- Stowage resources are automatically named by secure hash, which
--- is also used to look up the resource later as needed. The data
--- is immediately moved to the database. Normally objects without
--- persistent references may be garbage collected, but the TX will
--- hold onto stowed resources via an ephemeron table. (This only 
--- affects resources stowed through that specific TX.)
+-- is also used to load the resource from the database as needed.
+-- The data is pushed quickly to the database, enabling stowage to
+-- also double as a virtual memory system.
 --
 -- Note: Construction and GC of persistent resources more expensive
 -- than RAM, so try to avoid constructing short-lived stowage. Use
 -- batching or staging or intermediate representations as needed.
 stowRsc :: TX -> ByteString -> IO Hash
-stowRsc tx v = do
-    h <- evaluate (hashL v)
-    undefined
+stowRsc (TX db st) (force -> !v) = 
+    evaluate (hashL v) >>= \ h ->
+    modifyMVarMasked st $ \ s ->
+        case M.lookup h (tx_hold s) of
+            Just _  -> return (s,h) -- already stowed!
+            Nothing -> do
+                dbAddEph db (M.singleton h 1)
+                dbPushStow db (M.singleton h v)
+                let hold' = M.insert h 1 (tx_hold s)
+                let s' = s { tx_hold = hold' }
+                return (s, h)
 
 -- | Release ephemeral root produced by stowRsc.
 --
