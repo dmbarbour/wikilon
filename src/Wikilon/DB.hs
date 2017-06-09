@@ -11,12 +11,18 @@
 --
 module Wikilon.DB
     ( DB, TX
-    , open, close
+    , open
+    , close
 
-    , newTX, txDB
-    , readKey, writeKeyVal
-    , loadRsc, stowRsc, dropRsc
-    , commitTX, commitTX_asynch
+    , newTX, dupTX, txDB
+    , readKey, readKeyDB
+    , readKeys, readKeysDB
+    , writeKey
+    , loadRsc, loadRsc'
+    , stowRsc
+    , dropRsc
+    , commitTX
+    , commitTX_asynch
     
     , FilePath
     , ByteString
@@ -43,8 +49,11 @@ import System.FilePath ((</>))
 import qualified System.FileLock as FL 
 import Data.IORef
 import qualified Data.Map as M
+import qualified Data.List as L
 import Data.Word (Word8)
+import Data.Bits ((.|.),(.^.))
 import Data.Monoid
+import Data.Maybe
 import Database.LMDB.Raw
 import Awelon.Syntax (validWordByte)
 import Awelon.Hash
@@ -54,15 +63,16 @@ import Debug.Trace
 dbError :: String -> a
 dbError = error . (++) "Wikilon.DB: "
 
--- | Database Resource
+-- | Wikilon Database Object
 --
--- The database supports both key-value binaries and stowage where we
--- reference binaries via secure hashes. Much logic is related to GC
--- of secure hash resources. 
+-- All data is rooted using a simple key-value registry, which can
+-- serve as a lightweight filesystem. But Wikilon DB can support 
+-- rich tree-structured values via the stowage model, using secure
+-- hashes to reference between binaries.
 --
--- Wikilon DB assumes that most data is managed via stowage, that keys
--- are relatively small and transactions rarely interact with more than
--- a few distinct keys. 
+-- Wikilon DB assumes that most data is managed via stowage. And
+-- stowed data can be shared between keys or garbage collected as
+-- needed.
 data DB = DB 
   { db_fp       :: !FilePath -- location in filesystem
   , db_fl       :: !FL.FileLock -- resist multi-process access
@@ -75,7 +85,7 @@ data DB = DB
   , db_zero     :: {-# UNPACK #-} !MDB_dbi' -- secureHash set with rfct=0
 
     -- Reader Locking (frame based)
-  , db_rdlock   :: !(IORef (R,R))
+  , db_rdlock   :: !(IORef R)
 
     -- Asynch Write Layer
   , db_signal   :: !(MVar ())               -- work available?
@@ -92,7 +102,7 @@ data DB = DB
 -- rooted.
 --
 -- If I later need multi-process access, I might need to move the
--- ephemeron table to shared memory, and use a shared write mutex.
+-- ephemeron table to shared memory, and use a shared writer mutex.
 
 instance Eq DB where
     (==) = (==) `on` db_signal
@@ -142,38 +152,26 @@ dbAddEph db update =
 
 -- | Perform an operation while holding a read lock.
 -- 
--- LMDB is essentially a frame-buffered database. With MDB_NOLOCK, 
--- only the two most recently committed frames are protected, any
--- older frames may be dismantled while a new one is written.
+-- LMDB is essentially a frame-buffered database. Readers don't wait,
+-- they immediately read the most recent valid frame. LMDB with NOLOCK
+-- has two valid frames between commits. Commit destroys the old frame
+-- header and replaces it. Thus, a writer needs only to wait on readers
+-- of the elder frame immediately before commit. If readers are short
+-- lived (compared to the time it takes to write), our writer shouldn't
+-- ever need to wait on readers.
 --
--- We take advantage of this by waiting only on potential readers
--- of the older frames before writing. We have two reader frames:
---
---   (R2, R1)
---   R2 has readers of frames F2 and F1
---   R1 has readers of frames F1 and F0
---
--- When our writer wants to create a new frame F3, it will protect
--- F2 and F1 but begin to dismantle F0. So we must wait on all the
--- old readers in R1, and we can allocate a new reader frame so we
--- keep (R3, R2) in our memory.
---
--- Each R has potential readers of two frames because allocation of
--- R3 isn't synchronized with committing F3 in LMDB. But all that
--- matters for safety is we wait on F0 before we construct F3. 
---
--- For performance, this approach to locking ensures that readers
--- never wait on the writer, and the writer waits only upon old
--- readers. Short-lived readers don't cause the writer to wait. 
+-- Anyhow, readers will grab a read lock, but the read lock will be
+-- advanced after each commit so our writer only needs to wait on a
+-- few long-lived readers (if any).
 withReadLock :: DB -> IO a -> IO a
 withReadLock db = bracket acq relR . const where
-    acq = readIORef (db_rdlock db) >>= \ (r2,_) -> acqR r2 >> return r2
+    acq = readIORef (db_rdlock db) >>= \ r -> acqR r >> return r
 
+-- | advance reader frame (separate from waiting)
 advanceReadFrame :: DB -> IO R
 advanceReadFrame db = 
-    newR >>= \ r3 ->
-    atomicModifyIORef (db_rdlock db) $ \ (r2,r1) -> 
-        ((r3,r2),r1)
+    newR >>= \ rN -> 
+    atomicModifyIORef (db_rdlock db) $ \ rO -> (rN, rO)
     
 -- | type R is a simple count (of readers), together with a signaling
 -- MVar that is active (full) iff the current count is zero.
@@ -196,39 +194,51 @@ relR (R ct sig) = modifyMVarMasked_ ct $ \ n -> do
 waitR :: R -> IO ()
 waitR (R _ sig) = readMVar sig
 
+-- | environment flags and reasons for them
+--
+-- - MDB_NOLOCK: avoid reader lock limits, simplify lightweight thread
+--    issues, and optimize for very short-lived readers.
+-- - MDB_NOSYNC: advance reader frame between commit and explicit sync.
+-- - MDB_WRITEMAP: reduces mallocs and data copies during writes a lot.
+lmdbEnvF :: [MDB_EnvFlag]
+lmdbEnvF = [MDB_NOLOCK, MDB_WRITEMAP, MDB_NOSYNC]
 
 -- | Open or Create the Database. 
 --
 -- The argument is simply a directory where we expect to open the
 -- database, and a maximum database size in megabytes.
 --
--- The current implementation uses LMDB with the MDB_NOLOCK option,
--- and also uses process-local ephemeron tables to prevent GC of 
--- recently stowed resources. Thus, it is not safe to open the 
--- database from multiple processes. To resist accidents, a lockfile
--- is used.
+-- The implementation uses LMDB without locks and writable memory.
+-- Concurrency and the ephemeron table are managed within this 
+-- process, so the database mustn't be used concurrently by other
+-- processes. A lockfile is used to resist accidents.
 open :: FilePath -> Int -> IO (Either SomeException DB)
 open fp nMB = try $ do
     FS.createDirectoryIfMissing True fp
     lock <- tryLockE (fp </> "lockfile")
     flip onException (FL.unlockFile lock) $ do
         env <- mdb_env_create
-        mdb_env_set_mapsize env (nMB * (1024 * 1024))
+
+        let oneMB = (1024 * 1024)
+        unless ((maxBound `div` oneMB) > nMB) (fail "database size overflow")
+        mdb_env_set_mapsize env (nMB * oneMB)
+        
+        mkl <- mdb_env_get_maxkeysize env
+        unless (mkl >= maxKeyLen) (fail "expecting LMDB to support larger keys!")
+
         mdb_env_set_maxdbs env 4
-        mdb_env_open env fp [MDB_NOLOCK]
+        mdb_env_open env fp lmdbEnvF
         flip onException (mdb_env_close env) $ do
             -- initial transaction to open databases. No special DB flags.
             txIni <- mdb_txn_begin env Nothing False
             let openDB s = mdb_dbi_open' txIni (Just s) [MDB_CREATE]
-            dbData <- openDB "@"    -- named data
+            dbData <- openDB "@"    -- named key-value data
             dbStow <- openDB "$"    -- stowed data
             dbRfct <- openDB "#"    -- non-zero persistent reference counts
             dbZero <- openDB "0"    -- hashes with only volatile references
             mdb_txn_commit txIni
 
-            rN <- newR
-            rO <- newR
-            dbRdLock <- newIORef (rN,rO) -- readers tracking
+            dbRdLock <- newIORef =<< newR -- readers tracking
             dbSignal <- newMVar () -- initial signal to try GC
             dbCommit <- newIORef mempty
             dbNewRsc <- newIORef mempty
@@ -326,12 +336,24 @@ finiTX (TX db st) = modifyMVarMasked_ st $ \ s -> do
     dbClearEph db (tx_hold s)
     return emptyTXS
 
+-- | Duplicate a transaction.
+-- 
+-- Fork will deep-copy a transaction object, including its relationship
+-- to ephemeral stowage. This may be useful to model partial backtracking
+-- for a computation.
+dupTX :: TX -> IO TX
+dupTX (TX db st) = do
+    s <- readMVar st
+    st' <- newMVar s
+    let tx' = TX db st'
+    mkWeakMVar st' (finiTX tx')
+    dbAddEph db (tx_hold s)
+    return tx'
+
 -- | Max accepted key length.
 -- 
 -- To simplify debugging with mdb_dump keys are kept intact up to a
 -- limited size. OTOH, beyond some point, it's just wasted memory.
--- I've decided to limit preserved key sizes to 255 bytes. I feel
--- this is still a bit high, but it's a reasonable cutoff.
 maxKeyLen :: Integral a => a
 maxKeyLen = 255
 
@@ -343,33 +365,33 @@ safeKeyPrefix = 35
 
 -- | Ideally, keys are short and human meaningful. But I'll leave that
 -- to the client. Here, I just test for okay size and that we won't 
--- alias with keys rewritten for safety.
+-- alias with keys rewritten for safety based on prefix.
 validKey :: ByteString -> Bool
 validKey s = case LBS.uncons s of
-    Nothing -> False -- empty key isn't okay for LMDB
+    Nothing -> False -- reject the empty key
     Just (c, s') -> (safeKeyPrefix /= c) && 
                     (maxKeyLen > LBS.length s')
 
--- | Rewrite problematic keys if necessary.
+-- | Rewrite problematic keys if necessary. 
 toSafeKey :: ByteString -> ByteString
 toSafeKey s = if validKey s then s else 
     LBS.singleton safeKeyPrefix <>
     LBS.fromStrict (BS.drop 1 (hashL s))
 
--- | withKey: access key for use in MDB.
--- 
--- If our key has a single part, will use that directly. Otherwise,
--- we copy the key into a stack-local allocation (via allocaBytes). 
-withKey :: ByteString -> (MDB_val -> IO a) -> IO a
-withKey = wsk . toSafeKey where
-    wsk (LBS.Chunk (BS.PS fp off len) LBS.Empty) action =
-        withForeignPtr fp $ \ p ->
-            action (MDB_val (fromIntegral len) (p `plusPtr` off))
-    wsk k action = 
-        let len = LBS.length k in
-        allocaBytes (fromIntegral len) $ \ p -> do
-            copyLBS p k
-            action (MDB_val (fromIntegral len) p)
+-- | read strict bytestring key as MDB_val
+withBSKey :: BS.ByteString -> (MDB_val -> IO a) -> IO a
+withBSKey (BS.PS fp off len) action = 
+    withForeignPtr fp $ \ p ->
+        action $ MDB_val (fromIntegral len) (p `plusPtr` off)
+
+-- | read lazy bytestring key as MDB_val.
+withLBSKey :: ByteString -> (MDB_val -> IO a) -> IO a
+withLBSKey (LBS.Chunk bs LBS.Empty) action = withBSKey bs action
+withLBSKey k action =
+    let len = LBS.length k in
+    allocaBytes (fromIntegral len) $ \ p -> do
+        copyLBS p k
+        action (MDB_val (fromIntegral len) p)
 
 -- | copy a lazy bytestring to pointer destination.
 --
@@ -383,49 +405,218 @@ copyLBS !dst s = case s of
         withForeignPtr fp $ \ src -> do
             BS.memcpy dst (src `plusPtr` off) len
             copyLBS (dst `plusPtr` len) more
-    
+
+-- | copy an MDB for use as a Haskell bytestring.
+copyMDB_to_BS :: MDB_val -> IO BS.ByteString
+copyMDB_to_BS (MDB_val len src) =
+    BS.create (fromIntegral len) $ \ dst ->
+        BS.memcpy dst src (fromIntegral len)
 
 -- | Retrieve value associated with given key.
 --
--- If the key has already been read or written, this will retrieve
--- the current value. Otherwise, it will copy the data from the DB.
--- Unfortunately, this means we do not ensure snapshot consistency
--- within a transaction (you might see inconsistent data). Only on
--- commit will consistency be verified. 
+-- If the key has already been read or written within a transaction,
+-- this returns a value specific to the transaction. Otherwise, it 
+-- will read the current value from the database. Snapshot isolation
+-- for separate reads is not guaranteed, but all reads are verified
+-- to be consistent upon commit. 
 readKey :: TX -> ByteString -> IO ByteString
-readKey (TX db st) (force -> !k) =  modifyMVarMasked st $ \ s -> do
-    let keyInTX = M.lookup k (tx_write s) <|>   -- prior write of key
-                  M.lookup k (tx_read s)        -- prior read of key
-    case keyInTX of
-        Just val -> return (s, val)
-        Nothing  -> withKey k $ \ mdbKey -> withReadLock db $ do
-                txn <- mdb_txn_begin (db_env db) Nothing True
-                undefined
+readKey (TX db st) !k =  modifyMVarMasked st $ \ s ->
+    case readKeyTXS s k of
+        Just v  -> return (s, v)
+        Nothing -> do
+            v <- readKeyDB db k
+            let r' = M.insert k v (tx_read s) 
+            let s' = s { tx_read = r' }
+            return (s', v)
 
+-- | Read key from transaction state if it has been read or written prior. 
+readKeyTXS :: TXS -> ByteString -> Maybe ByteString
+readKeyTXS s k = M.lookup k (tx_write s) <|> M.lookup k (tx_read s)
+
+-- | Read key directly from database.
+--
+-- This retrieves the most recently committed value for a key. This is
+-- equivalent to readKey with a freshly created transaction.
+readKeyDB :: DB -> ByteString -> IO ByteString
+readKeyDB db = readSafeKeyDB db . toSafeKey
+
+readSafeKeyDB :: DB -> ByteString -> IO ByteString
+readSafeKeyDB db !key = withReadLock db $ do 
+    txn <- mdb_txn_begin (db_env db) Nothing True
+    val <- dbReadKey db txn key
+    mdb_txn_commit txn
+    return val
+
+-- | Obtain a value after we have our transaction. Assumes safe key.
+dbReadKey :: DB -> MDB_txn -> ByteString -> IO ByteString
+dbReadKey db txn k = withLBSKey k $ \ mdbKey -> do
+    let toBS = maybe (return BS.empty) copyMDB_to_BS
+    bs <- toBS =<< mdb_get' txn (db_data db) mdbKey
+    return $! LBS.fromStrict bs
+
+-- | Read values for multiple keys.
+--
+-- This reads multiple keys with a single LMDB-layer transaction. The 
+-- main benefit with readKeys is snapshot isolation for keys initially
+-- read together. 
+readKeys :: TX -> [ByteString] -> IO [ByteString]
+readKeys (TX db st) (force -> !allKeys) = modifyMVarMasked st $ \ s -> do
+    let newKeys = L.filter (isNothing . readKeyTXS s) allKeys 
+    newVals <- readKeysDB db newKeys
+    let r' = M.union (tx_read s) (M.fromList (L.zip newKeys newVals))
+    let s' = s { tx_read = r' }
+    let allVals = fmap (fromJust . readKeyTXS s') allKeys 
+    return (s', allVals)
+
+-- | Read multiple keys directly from database.
+--
+-- This obtains a snapshot for a few values from the database. This
+-- is equivalent to readKeys using a freshly created transaction.
+readKeysDB :: DB -> [ByteString] -> IO [ByteString]
+readKeysDB db = readSafeKeysDB db . fmap toSafeKey
+
+readSafeKeysDB :: DB -> [ByteString] -> IO [ByteString]
+readSafeKeysDB db (force -> !keys) = 
+    if L.null keys then return [] else 
+    withReadLock db $ do 
+        txn <- mdb_txn_begin (db_env db) Nothing True
+        vals <- mapM (dbReadKey db txn) keys
+        mdb_txn_commit txn
+        return vals
+  
 -- | Write a key-value pair.
 --
--- Writes are simply recorded into the transaction until commit,
--- so this becomes a relatively lightweight operation. 
-writeKeyVal :: TX -> ByteString -> ByteString -> IO ()
-writeKeyVal (TX _ st) (force -> !k) (force -> !v) = 
+-- Writes are trivially recorded into the transaction until commit.
+-- There is no risk of write-write conflicts. Subsequent reads will
+-- observe the value written.
+writeKey :: TX -> ByteString -> ByteString -> IO ()
+writeKey (TX _ st) (force -> !k) (force -> !v) = 
     modifyMVarMasked_ st $ \ s ->
         let w' = M.insert k v (tx_write s) in
         return $! s { tx_write = w' }
-        
+
+
+-- | Stowage Key Size
+--
+-- Naively, I could directly use hashes as keys for the LMDB tables.
+-- But there are some issues with this. To resist timing attacks, I
+-- must be careful to not expose the full hash through the LMDB look
+-- up. I could use LMDB cursors to look up only part of a key, but
+-- that introduces a lot of overhead and complexity per lookup.
+--
+-- A compromise is to use only part of the hash for lookups. In this
+-- case, it must be a sufficiently large fragment to resist collision,
+-- yet it must have sufficient bits left over to resist forgery.
+--
+-- Given 280 bit hashes (56 characters in base32) that should be more
+-- than enough that this compromise is quite safe. I'll just split it
+-- evenly, 28 characters for lookup and 28 more for security.
+stowKeyLen :: Integral a => a
+stowKeyLen = validHashLen `div` 2
 
 -- | Access a stowed resource by secure hash.
 --
--- If the resource is not in the DB or TX, we return Nothing. In that
--- case, you might search outside the DB - the file system or network.
--- Any means of locating a binary with the given hash is essentially
--- the same.
+-- This will search for a resource identified by secure hash within 
+-- the Wikilon database. If not found, this returns Nothing. Due to
+-- the nature of secure hash resources, you may search elsewhere for
+-- the resource - a network service or filesystem.
 --
--- Unlike keys, resources are immutable and needn't be validated when
--- we commit the transaction. It's best if most data in a Wikilon DB
--- is managed in terms of these stowage resources, as it results in
--- lighter weight transactions.
+-- Security Note: it doesn't make sense to secure hashes with access
+-- control, but hashes themselves can serve as secure capabilities.
+-- For security, we must avoid revealing available capabilities to
+-- timing attacks. The loadRsc function here does so.
 loadRsc :: TX -> Hash -> IO (Maybe ByteString)
-loadRsc tx !h = undefined
+loadRsc (TX db _) = loadRscDB db
+
+-- | constant-time comparison on two arrays via pointers
+ctCmp :: Ptr Word8 -> Ptr Word8 -> Int ->  IO Bool
+ctCmp !l !r = go 0 where
+    go !b !sz = 
+        if (0 == sz) then return $! (0 == b) else do
+        let ix = (sz - 1)
+        lB <- peekElemOff l ix
+        rB <- peekElemOff r ix
+        go (b .|. (lB .^. rB)) ix
+
+-- this is a surprisingly finicky function to write for something
+-- that should be simple, but here we go...
+toRscVal :: MDB_val -> Maybe MDB_val -> IO (Maybe ByteString)
+toRscVal _ Nothing = return Nothing
+toRscVal h (Just c) =
+    let stowHashRem = validHashLen - stowKeyLen in
+    assert (stowHashRem >= 24) $ -- sanity check
+    let okHashSize = (mv_size h == validHashLen) in
+    let okDataSize = (mv_size c >= fromIntegral stowHashRem) in
+    if not (okHashSize && okDataSize) then return Nothing else
+
+    let hRem = mv_data h `plusPtr` stowKeyLen in
+    ctCmp hRem (mv_data c) stowHashRem >>= \ bMatchHashRem ->
+    if not bMatchHashRem then return Nothing else
+    let pData = mv_data c `plusPtr` stowHashRem in
+    let dataLen = mv_size c - fromIntegral stowHashRem in
+    copyMDB_to_BS (MDB_val dataLen pData) >>= \ bs ->
+    return (Just (LBS.fromStrict bs))
+
+loadRscDB :: DB -> Hash -> IO (Maybe ByteString)
+loadRscDB db !hBS = 
+    if (BS.length hBS /= validHashLen) then return Nothing else 
+    withReadLock db $ 
+    withBSKey hBS $ \ h -> do
+    let hSKB = h { mv_size = stowKeyBytes }
+    txn <- mdb_txn_begin (db_env db) Nothing False
+    v <- toRscVal h =<< mdb_get' txn (db_stow db) hSKB
+
+
+
+
+
+    v <- case mbv of
+            Just vC | (mv_size vC >= stowKeyBytes) -> do
+                matchHash <-
+                ctCmp ((mv_data h) `plusPtr` stowKeyBytes)
+                 
+            _ -> return Nothing
+            
+    let getV = case mbv of
+                Just v | (mv_size v >= stowKeyBytes) ->
+                    
+                Nothing -> return Nothing
+
+    v <-
+
+    case mbv of
+        Nothing -> mdb_txn_commit txn >> return Nothing
+        Just v -> do
+
+            bMatch <- ctCmp 
+
+
+
+    bs <- toBS =<< mdb_get' txn (db_data db) mdbKey
+
+            
+            
+
+            
+            
+            
+ 
+
+
+    let nCmp = validHashlen `div` 4
+    poke pKey $ h { mv_
+    let tst 
+    
+    
+    
+    newRsc <- readIORef (db_newrsc db)
+    txn <- mdb_txn_begin (db_env db) Nothing True
+    crs <- mdb_cursor_open' txn (db_stow db)
+    bPos <- 
+    mdb_set
+    
+    
+
 
 -- | Moves resource to database, returns secure hash (Awelon.Hash).
 --
@@ -479,17 +670,16 @@ commitTX tx = commitTX_asynch tx >>= id
 -- | Asynchronous commit. 
 --
 -- This simply pushes the transaction object to the DB writer thread 
--- then returns immediately a join operation to wait for the success
--- or failure result. Use `unsafeInterleaveIO` to translate this to 
--- Haskell's lazy evaluation layer.
+-- and returns a join operation to wait for future success or failure.
 -- 
 -- Working with asynchronous commit is rather awkward because further
--- transactions by the same thread can read old values, and further 
--- operations on a TX object can modify our transaction before it is
--- processed by the writer thread. Caveat emptor.
+-- transactions by the same thread may read old values, and further 
+-- operations in the TX object can modify our transaction before it 
+-- is processed. So caveat emptor. 
 commitTX_asynch :: TX -> IO (IO Bool)
 commitTX_asynch tx@(TX db _) = do
     v <- newEmptyMVar
     dbPushCommit db (tx,v)
     return (readMVar v)
+
 
