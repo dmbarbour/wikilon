@@ -21,6 +21,7 @@ import Foreign.ForeignPtr (withForeignPtr)
 import Foreign.Ptr
 import Foreign.Storable
 import System.IO.Unsafe (unsafeDupablePerformIO) 
+import Control.Exception (assert)
 
 -- | A Hash is just a bytestring, for now. But it should be valid.
 --
@@ -34,7 +35,7 @@ type Hash = BS.ByteString
 --
 -- > :set -XOverloadedStrings
 -- > hash "test"
--- "HTjFPGSprHqFFbQhmXhnrCbrknDTHCBmJPpnDQpDxpCqKHrxPgrhSNJG"
+-- "HSjFNGRnqHpFFbPhlThmqCbqkmDSHCBlJNnmDPnDtnCpKHqtNgqhRMJG"
 --
 hash :: BS.ByteString -> Hash
 hash = hashL . LBS.fromStrict
@@ -53,7 +54,8 @@ b2b_digest z = B2b.finalize z
 -- numbers, nor structural conventions that use punctuation. And it
 -- is unlikely to appear by accident in context of conservative GC.
 hashAlphabet :: String
-hashAlphabet = "bcdfghjkmnpqrstxBCDFGHJKMNPQRSTX"
+hashAlphabet = assert (32 == L.length alphabet) $ alphabet where
+    alphabet = "bcdfghjklmnpqrstBCDFGHJKLMNPQRST"
 
 -- | The length (in characters) of a valid hash string.
 validHashLen :: (Num a) => a

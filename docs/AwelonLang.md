@@ -112,13 +112,13 @@ Awelon supports references to an implicit global namespace, where binaries may b
 * code and structured data is referenced via `$secureHash`
 * secure hash resources also used for dictionary patches
 
-Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet adjusted to resist conflicts with numbers or human meaningful words. Some example hashes, iteratively from the word `test`:
+Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. Some example hashes, iteratively from the word `test`:
         
-        HTjFPGSprHqFFbQhmXhnrCbrknDTHCBmJPpnDQpDxpCqKHrxPgrhSNJG
-        gSbHfGkPKNmTkTNTMNBxGcSKhDMnDrbqgkMrnttHdFRSqSXXkmqrGtfB
-        jQXTRPHNbgXmbXtBXnMmcMdDtjqKNKmnRdGSNcRghSPqFrPFMcxxdcxP
+        HSjFNGRnqHpFFbPhlThmqCbqkmDSHCBlJNnmDPnDtnCpKHqtNgqhRMJG
+        BRqMkFknGGncjKTdrTGMjFFHlGlFmmGGNmcFGPSmGbstsLtpdJnhLNKS
+        NLsTsGdQrtFLfDtHJcmqDSmMsDRjnMpCFlkqGfLdgSRhFtTsGqhJrfNN
 
-        Base32 Alphabet: bcdfghjkmnpqrstxBCDFGHJKMNPQRSTX
+        Base32 Alphabet: bcdfghjklmnpqrstBCDFGHJKLMNPQRST
             encoding 0..31 respectively
 
 Awelon neglects the theoretical concern of secure hash collisions. Physical corruption of computation is of greater concern in practice. And it's trivial to rewrite entire Awelon codebases to use a larger, more robust hash if ever it becomes necessary. I won't further belabor the issue.

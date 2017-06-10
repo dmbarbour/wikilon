@@ -12,16 +12,13 @@
 module Wikilon.DB
     ( DB, TX
     , open
-    , close
-
     , newTX, dupTX, txDB
     , readKey, readKeyDB
     , readKeys, readKeysDB
     , writeKey
     , loadRsc, loadRscDB
-    , stowRsc, dropRsc
+    , stowRsc
     , commitTX
-    , commitTX_asynch
     
     , FilePath
     , ByteString
@@ -45,9 +42,13 @@ import qualified System.IO (FilePath)
 import qualified System.IO.Error as E
 import qualified System.Directory as FS 
 import System.FilePath ((</>))
+import qualified System.IO as Sys
+import qualified System.Exit as Sys
 import qualified System.FileLock as FL 
+import System.IO.Unsafe (unsafeDupablePerformIO)
 import Data.IORef
 import qualified Data.Map as M
+import qualified Data.IntMap as Mi
 import qualified Data.List as L
 import Data.Word (Word8)
 import Data.Bits ((.|.), xor)
@@ -61,6 +62,15 @@ import Debug.Trace
 -- these errors shouldn't appear regardless of user input
 dbError :: String -> a
 dbError = error . (++) "Wikilon.DB: "
+
+-- Thoughts: I like having the thin layer to access the stowage,
+-- and the robust security and distribution properties for using
+-- secure hashes as capabilities. But for performance, there may
+-- be some benefits to use of VCache PVars or similar, so we can
+-- detect conflicts early and avoid serializing anything but the
+-- final value for each variable.
+--
+-- In any case, if I model these, it will be in another module.
 
 -- | Wikilon Database Object
 --
@@ -89,7 +99,7 @@ data DB = DB
     -- Asynch Write Layer
   , db_signal   :: !(MVar ())               -- work available?
   , db_newrsc   :: !(IORef Stowage)         -- pending stowage
-  , db_commit   :: !(IORef [TXCommit])      -- commit requests
+  , db_commit   :: !(IORef [Commit])        -- commit requests
 
     -- Stowage GC Layer
   , db_gc_last  :: !(IORef (Maybe Hash)) -- for incremental GC
@@ -109,15 +119,45 @@ instance Eq DB where
 instance Show DB where
     showsPrec _ db = showString "DB@" . showString (db_fp db)
 
-type EphTbl = M.Map Hash Int            -- ^ precise but expensive
-type Stowage = M.Map Hash ByteString    -- ^ latent batch for DB
-type TXCommit = (TX, MVar Bool)         -- ^ MVar for future result
-data R = R !(MVar Int) !(MVar ())       -- ^ simple reader count
+type Stowage = M.Map Hash ByteString        -- ^ latent batch for DB
+type KVMap = M.Map ByteString ByteString    -- ^ safe keys and values.
+type Commit = ((KVMap,KVMap), MVar Bool)    -- ^ ((reads,writes),returns)
+data R = R !(MVar Int) !(MVar ())           -- ^ simple reader count
+type EphTbl = Mi.IntMap Int                 -- ^ table of (hash,count)
+
+-- | My ephemeron table is a simple (hash,count) collection.
+-- 
+-- False positives are possible, but should be rare and aren't a
+-- huge problem when they happen (they delay GC of some resources).
+-- The hash is extracted from a base32 secure hash, so entropy is
+-- not a problem. I've arbitrarily chosen FNV-1a as the hash here,
+-- and at most 14 characters for ~70 bits entropy.
+ephHashP :: Ptr Word8 -> Int -> IO Int
+ephHashP !p = fmap fromIntegral . go basis . min rd where
+    rd = min 14 stowKeyLen -- 70 bits entropy or available MDB key
+    basis = 14695981039346656037
+    prime = 1099511628211
+    go :: Word64 -> Int -> IO Word64
+    go !r !n = 
+        if (0 == n) then return r else
+        let ix = (n - 1) in
+        peekElemOff p ix >>= \ c ->
+        let r' = (r `xor` (fromIntegral c)) * prime in
+        go r' ix
+
+ephHashMDB :: MDB_val -> IO Int
+ephHashMDB h = ephHashP (mv_data h) (fromIntegral (mv_size h))
+
+ephHash :: Hash -> Int
+ephHash = unsafeDupablePerformIO . flip withBSKey ephHashMDB
+
+-- Note: I probably need a simpler ephemeron table, one that I can
+-- check quickly without allocations. 
 
 dbSignal :: DB -> IO ()
 dbSignal db = tryPutMVar (db_signal db) () >> return ()
 
-dbPushCommit :: DB -> TXCommit -> IO ()
+dbPushCommit :: DB -> Commit -> IO ()
 dbPushCommit db !task = do
     atomicModifyIORef (db_commit db) $ \ lst -> ((task:lst), ())
     dbSignal db
@@ -134,19 +174,19 @@ nonZero n = Just n
 -- | release ephemeral stowage references.
 dbClearEph :: DB -> EphTbl -> IO ()
 dbClearEph db drop = 
-    traceM ("TX releasing " ++ show (M.size drop) ++ " resources") >>
-    if M.null drop then return () else
+    traceM ("TX releasing " ++ show (Mi.size drop) ++ " resources") >>
+    if Mi.null drop then return () else
     atomicModifyIORef' (db_gc_hold db) $ \ tbl ->
         let diff = \ l r -> nonZero (l - r) in
-        let tbl' = M.differenceWith diff tbl drop in
+        let tbl' = Mi.differenceWith diff tbl drop in
         (tbl', ())
 
 -- | Add ephemeral stowage references. 
 dbAddEph :: DB -> EphTbl -> IO ()
 dbAddEph db update = 
-    if M.null update then return () else
+    if Mi.null update then return () else
     atomicModifyIORef' (db_gc_hold db) $ \ tbl ->
-        let tbl' = M.unionWith (+) tbl update in 
+        let tbl' = Mi.unionWith (+) tbl update in 
         (tbl', ())
 
 -- | Perform an operation while holding a read lock.
@@ -211,6 +251,10 @@ lmdbEnvF = [MDB_NOLOCK, MDB_WRITEMAP, MDB_NOSYNC]
 -- Concurrency and the ephemeron table are managed within this 
 -- process, so the database mustn't be used concurrently by other
 -- processes. A lockfile is used to resist accidents.
+--
+-- Note: at the moment, there is no clear way to 'close' this
+-- database, except for allowing it to leave scope. 
+--
 open :: FilePath -> Int -> IO (Either SomeException DB)
 open fp nMB = try $ do
     FS.createDirectoryIfMissing True fp
@@ -258,11 +302,16 @@ open fp nMB = try $ do
                         , db_gc_last = dbGCLast
                         , db_gc_hold = dbGCHold
                         }
+
             forkIO (dbWriter db)
             return db
 
-dbWriter :: DB -> IO ()
-dbWriter _ = return ()
+-- close is only performed upon full GC
+close :: DB -> IO ()
+close db = do
+    mdb_env_sync_flush (db_env db)
+    mdb_env_close (db_env db)
+    FL.unlockFile (db_fl db)
 
 -- try lock with a simple IOError
 tryLockE :: FilePath -> IO FL.FileLock
@@ -273,18 +322,6 @@ tryLockE fp =
         Nothing -> E.ioError $ E.mkIOError 
             E.alreadyInUseErrorType "exclusive file lock failed" 
             Nothing (Just fp)
-
--- | Close the Database.
---
--- The caller must ensure the database is not used during or after the
--- close operation. So this is only useful for a graceful shutdown. In
--- normal usage, Wikilon DB expects to close by crashing, e.g. process
--- killed or sudden power failure.
-close :: DB -> IO ()
-close db = do
-    mdb_env_sync_flush (db_env db)
-    mdb_env_close (db_env db)
-    FL.unlockFile (db_fl db)
 
 -- | Transactional Database API
 --
@@ -298,13 +335,12 @@ close db = do
 -- improve throughput and amortize the overheads of synchronization. When
 -- conflicts occur, progress is guaranteed: at least one transaction will
 -- succeed. But the remainder might need to be retried. It isn't difficult
--- to use queues to avoid or control conflicts.
+-- to use queues or add an STM layer to resist conflicts.
 --
 -- The TX is thread safe and may be committed more than once to represent
 -- ongoing progress. TX doesn't need to be aborted explicitly: just don't
 -- commit. 
 data TX = TX !DB !(MVar TXS)
-type KVMap = M.Map ByteString ByteString
 
 instance Eq TX where (==) (TX _ l) (TX _ r) = (==) l r
 
@@ -356,26 +392,27 @@ dupTX (TX db st) = do
 maxKeyLen :: Integral a => a
 maxKeyLen = 255
 
--- | To prevent aliasing, we distinguish safe keys from normal keys.
--- A safe key starts with a `#`. Any key that starts with `#` will
--- be rewritten to a safe key... just to be safe.
-safeKeyPrefix :: Word8
-safeKeyPrefix = 35
-
--- | Ideally, keys are short and human meaningful. But I'll leave that
--- to the client. Here, I just test for okay size and that we won't 
--- alias with keys rewritten for safety based on prefix.
+-- | Test for problematic key.
+--
+-- Anything oversized, the empty string, or keys that start with SUB (26)
+-- will be rewritten to the secure hash. 
 validKey :: ByteString -> Bool
 validKey s = case LBS.uncons s of
-    Nothing -> False -- reject the empty key
-    Just (c, s') -> (safeKeyPrefix /= c) && 
+    Nothing -> False -- reject empty key
+    Just (c, s') -> (26 /= c) && 
                     (maxKeyLen > LBS.length s')
 
--- | Rewrite problematic keys if necessary. 
+-- | Substitute problematic keys with a collision resistant secure hash.
+--
+-- Safe keys will start with SUB, and any key starting with SUB will be
+-- rewritten to a safe key to prevent aliasing. This won't affect normal
+-- operations, but safe keys can hinder debugging with mdb_dump.
+--
+-- Safe keys will be used starting within the TX read and write KVMaps.
 toSafeKey :: ByteString -> ByteString
 toSafeKey s = if validKey s then s else 
-    LBS.singleton safeKeyPrefix <>
-    LBS.fromStrict (BS.drop 1 (hashL s))
+    LBS.singleton 26 <> -- start with SUB (26)
+    LBS.fromStrict (BS.take stowKeyLen (hashL s))
 
 -- | read strict bytestring key as MDB_val
 withBSKey :: BS.ByteString -> (MDB_val -> IO a) -> IO a
@@ -418,19 +455,25 @@ copyMDB_to_BS (MDB_val len src) =
 -- will read the current value from the database. Snapshot isolation
 -- for separate reads is not guaranteed, but all reads are verified
 -- to be consistent upon commit. 
+--
+-- Security Note: It's up to the client to provide access control for
+-- keys. This may be done by partitioning access to keys by prefix,
+-- similar to directories in a filesystem. Or the client could use
+-- HMACs to share and validate key strings. Whatever. Wikilon DB does
+-- not secure normal keys.
 readKey :: TX -> ByteString -> IO ByteString
-readKey (TX db st) !k =  modifyMVarMasked st $ \ s ->
-    case readKeyTXS s k of
+readKey (TX db st) (toSafeKey -> !k) = modifyMVarMasked st $ \ s ->
+    case readSafeKeyTXS s k of
         Just v  -> return (s, v)
         Nothing -> do
-            v <- readKeyDB db k
+            v <- readSafeKeyDB db k
             let r' = M.insert k v (tx_read s) 
             let s' = s { tx_read = r' }
             return (s', v)
 
 -- | Read key from transaction state if it has been read or written prior. 
-readKeyTXS :: TXS -> ByteString -> Maybe ByteString
-readKeyTXS s k = M.lookup k (tx_write s) <|> M.lookup k (tx_read s)
+readSafeKeyTXS :: TXS -> ByteString -> Maybe ByteString
+readSafeKeyTXS s k = M.lookup k (tx_write s) <|> M.lookup k (tx_read s)
 
 -- | Read key directly from database.
 --
@@ -453,18 +496,21 @@ dbReadKey db txn k = withLBSKey k $ \ mdbKey -> do
     bs <- toBS =<< mdb_get' txn (db_data db) mdbKey
     return $! LBS.fromStrict bs
 
+toSafeKeys :: [ByteString] -> [ByteString]
+toSafeKeys = force . fmap toSafeKey
+
 -- | Read values for multiple keys.
 --
 -- This reads multiple keys with a single LMDB-layer transaction. The 
 -- main benefit with readKeys is snapshot isolation for keys initially
 -- read together. 
 readKeys :: TX -> [ByteString] -> IO [ByteString]
-readKeys (TX db st) (force -> !allKeys) = modifyMVarMasked st $ \ s -> do
-    let newKeys = L.filter (isNothing . readKeyTXS s) allKeys 
-    newVals <- readKeysDB db newKeys
+readKeys (TX db st) (toSafeKeys -> !allKeys) = modifyMVarMasked st $ \ s -> do
+    let newKeys = L.filter (isNothing . readSafeKeyTXS s) allKeys 
+    newVals <- readSafeKeysDB db newKeys
     let r' = M.union (tx_read s) (M.fromList (L.zip newKeys newVals))
     let s' = s { tx_read = r' }
-    let allVals = fmap (fromJust . readKeyTXS s') allKeys 
+    let allVals = fmap (fromJust . readSafeKeyTXS s') allKeys 
     return (s', allVals)
 
 -- | Read multiple keys directly from database.
@@ -472,10 +518,10 @@ readKeys (TX db st) (force -> !allKeys) = modifyMVarMasked st $ \ s -> do
 -- This obtains a snapshot for a few values from the database. This
 -- is equivalent to readKeys using a freshly created transaction.
 readKeysDB :: DB -> [ByteString] -> IO [ByteString]
-readKeysDB db = readSafeKeysDB db . fmap toSafeKey
+readKeysDB db = readSafeKeysDB db . toSafeKeys
 
 readSafeKeysDB :: DB -> [ByteString] -> IO [ByteString]
-readSafeKeysDB db (force -> !keys) = 
+readSafeKeysDB db keys = 
     if L.null keys then return [] else 
     withReadLock db $ do 
         txn <- mdb_txn_begin (db_env db) Nothing True
@@ -488,8 +534,12 @@ readSafeKeysDB db (force -> !keys) =
 -- Writes are trivially recorded into the transaction until commit.
 -- There is no risk of write-write conflicts. Subsequent reads will
 -- observe the value written.
+--
+-- Note: Wikilon DB may rewrite problematic keys using a secure hash.
+-- This can affect debugging via mdb_dump and LMDB layer tools. Favor
+-- keys that are short and sensible as words, URLs, or filenames.
 writeKey :: TX -> ByteString -> ByteString -> IO ()
-writeKey (TX _ st) (force -> !k) (force -> !v) = 
+writeKey (TX _ st) (toSafeKey -> !k) (force -> !v) = 
     modifyMVarMasked_ st $ \ s ->
         let w' = M.insert k v (tx_write s) in
         return $! s { tx_write = w' }
@@ -509,21 +559,17 @@ stowKeyLen = validHashLen `div` 2
 -- Nothing, in which case you might search elsewhere like the file
 -- system or network. (These resources are provider independent.)
 --
--- In the current implementation, this is equivalent to loadRscDB.
--- But I've experimented with variations where newly stowed data is
--- initially buffered in the transaction. As an API, this is more
--- robust for handling newly stowed data.
---
--- Loading stowed data doesn't prevent GC. But if the stowed data
--- discovered through keys is still rooted, it will remain in the
--- database. Or if not, the transaction should fail upon commit.
+-- Note: Loading stowed data doesn't prevent GC of the resource. But
+-- for a successful transaction, keys read won't change before commit.
+-- So failure to load a resource might indicate transaction failure,
+-- or that the resource was never known to the database.
 --
 -- Security Note: secure hashes are essentially object capabilities,
 -- and leaking capabilities is a valid concern. Timing attacks are
--- a likely vector for such leaks. This function exposes only half
--- of any hash (the first half) to timing attacks. The remaining bits
--- are sufficient to protect the capability, but be careful to not
--- expose them at another layer.
+-- a likely vector for such leaks. This function exposes the first
+-- half of a hash to timing attacks. That leaves plenty of bits for
+-- security, but clients should be careful to not expose them at 
+-- any other layer.
 loadRsc :: TX -> Hash -> IO (Maybe ByteString)
 loadRsc (TX db _) = loadRscDB db
 
@@ -588,75 +634,114 @@ ctEqBS a b =
     (BS.length a == BS.length b) &&
     (0 == (L.foldl' (.|.) 0 (BS.zipWith xor a b)))
 
-
--- | Moves resource to database, returns secure hash (Awelon.Hash).
+-- | Move resource to database, returns secure hash (Awelon.Hash).
 --
 -- Stowage resources are automatically named by secure hash, which
 -- is also used to load the resource from the database as needed.
 -- The data is pushed quickly to the database, enabling stowage to
 -- also double as a virtual memory system.
 --
--- Note: Construction and GC of persistent resources more expensive
--- than RAM, so try to avoid constructing short-lived stowage. Use
--- batching or staging or intermediate representations as needed.
+-- Wikilon DB will garbage collect resources that are not rooted by
+-- a key, so a transaction that stows a resource should also try to
+-- root it. Meanwhile, there are ephemeral roots associated with
+-- the transaction object (via System.Mem.Weak) to prevent loss of
+-- data that might later be rooted.
+--
+-- An obvious caveat:
+-- 
+-- Stowage resources are slow and expensive compared to memory, so
+-- we can't afford to create too much garbage at the stowage layer.
+-- Try to use batching, staging, or intermediate representations to
+-- avoid short-lived stowage resources. Study data structures such
+-- as the LSM tree that are designed for use in slower media.
+--
 stowRsc :: TX -> ByteString -> IO Hash
 stowRsc (TX db st) (force -> !v) = 
     evaluate (hashL v) >>= \ h ->
-    modifyMVarMasked st $ \ s ->
-        case M.lookup h (tx_hold s) of
-            Just _  -> return (s,h) -- already stowed!
-            Nothing -> do
-                dbAddEph db (M.singleton h 1)
-                dbPushStow db (M.singleton h v)
-                let hold' = M.insert h 1 (tx_hold s)
-                let s' = s { tx_hold = hold' }
-                return (s, h)
-
--- | Release ephemeral root produced by stowRsc.
---
--- If you determine that you no longer need a resource, you can drop
--- it. This allows GC of the resource, assuming there are no other
--- references than from this transaction.
---
--- This operation might be useful for long-running computations or
--- an explicit cache manager, but normally you should just wait for
--- GC and allow the to finalizer clear ephemeral references.
-dropRsc :: TX -> Hash -> IO ()
-dropRsc (TX db st) !h = 
-    modifyMVarMasked_ st $ \ s ->
-        case M.lookup h (tx_hold s) of
-            Nothing -> return s
-            Just n  -> do
-                dbClearEph db (M.singleton h n)
-                let hold' = M.delete h (tx_hold s)
-                return $! s { tx_hold = hold' }
+    modifyMVarMasked st $ \ s -> do
+        let ephUpd = Mi.singleton (ephHash h) 1 
+        let hold' = Mi.unionWith (+) (tx_hold s) ephUpd
+        let s' = s { tx_hold = hold' }
+        dbAddEph db ephUpd
+        dbPushStow db (M.singleton h v)
+        return (s', h)
 
 -- | Commit transaction to database.
 --
 -- Commit will returns True if commit succeeds, False otherwise.
--- This operation is synchronous, so it waits for success or failure
--- before returning to fit the common assumptions of a thread, that
--- a subsequent transaction should be able to read what was written.
+-- During commit, the TX object is unusable and we'll wait for the
+-- success or failure result.
 --
--- If there are concurrent operations on the TX, whether those make
--- it into the commit will not be deterministic. A transaction may 
--- be committed more than once over its lifespan.
+-- Transactions may be committed more than once. Each commit acts as
+-- a checkpoint, so a future failure won't affect prior checkpoints.
+-- Conflicts are still determined relative to transaction creation.
 commitTX :: TX -> IO Bool
-commitTX tx = commitTX_asynch tx >>= id
-
--- | Asynchronous commit. 
---
--- This simply pushes the transaction object to the DB writer thread 
--- and returns a join operation to wait for future success or failure.
--- 
--- Working with asynchronous commit is rather awkward because further
--- transactions by the same thread may read old values, and further 
--- operations in the TX object can modify our transaction before it 
--- is processed. So caveat emptor. 
-commitTX_asynch :: TX -> IO (IO Bool)
-commitTX_asynch tx@(TX db _) = do
+commitTX (TX db st) = modifyMVar st $ \ s -> do
     v <- newEmptyMVar
-    dbPushCommit db (tx,v)
-    return (readMVar v)
+    dbPushCommit db ((tx_read s, tx_write s), v)
+    b <- readMVar v
+    let s' = if not b then s else
+             -- checkpoint transaction state
+             let r' = M.union (tx_write s) (tx_read s) in
+             s { tx_read = r', tx_write = mempty }
+    return (s', b)
 
+
+-- | The database writer thread.
+--
+-- All writes in Wikilon DB are centralized to a single thread. And
+-- garbage collection, too. With LMDB under the hood, we're limited
+-- to at most one writer in any case. 
+--
+-- This is mitigated by write batching. Multiple threads contribute
+-- transactions, thus a single writer can get a wide variety of work
+-- done per commit, and overheads are amortized across many writers.
+--
+-- If developers can avoid conflicts, that's even better. 
+dbWriter :: DB -> IO ()
+dbWriter db = initLoop `catches` handlers where
+    handlers = [Handler onGC, Handler onError]
+    onGC :: BlockedIndefinitelyOnMVar -> IO ()
+    onGC _ = close db -- no external references to DB
+    onError :: SomeException -> IO ()
+    onError e = do
+        -- What to do when the database fails? For now, just stop.
+        -- Maybe we could make this more configurable, later.
+        putErrLn $ "Wikilon Database (" ++ show db ++ ") writer FAILED"
+        putErrLn $ indent "    " (show e)
+        putErrLn $ "Aborting Program!"
+        Sys.exitFailure
+
+    -- In each loop, the writer will try available transactions,
+    -- write incoming stowage, do some GC. We will wait on old
+    -- readers before commit, advance the reader frame after.
+    -- If no work is available, we'll sleep on an MVar.
+    loop :: R -> IO ()
+    loop !oldReaders = do
+        takeMVar (db_signal db) 
+
+        txList <- atomicModifyIORef (db_commit db) (\ lst -> ([],lst))
+        newRsc <- readIORef (db_newrsc db)
+
+        undefined
+
+    -- get started by treating any current readers as old readers.
+    initLoop = advanceReadFrame db >>= loop
+
+
+
+
+
+
+-- indent all lines by w
+indent :: String -> String -> String
+indent w = (w ++) . indent' where
+    indent' ('\n':s) = '\n' : indent w s
+    indent' (c:s) = c : indent' s
+    indent' [] = []
+
+-- print to stderr
+putErrLn :: String -> IO ()
+putErrLn = Sys.hPutStrLn Sys.stderr
+        
 
