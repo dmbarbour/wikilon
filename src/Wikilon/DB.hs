@@ -19,7 +19,7 @@ module Wikilon.DB
     , loadRsc, loadRscDB
     , stowRsc
     , commitTX
-    
+    , checkTX
     , FilePath
     , ByteString
     , module Awelon.Hash
@@ -74,14 +74,13 @@ dbError = error . (++) "Wikilon.DB: "
 
 -- | Wikilon Database Object
 --
--- All data is rooted using a simple key-value registry, which can
--- serve as a lightweight filesystem. But Wikilon DB can support 
--- rich tree-structured values via the stowage model, using secure
--- hashes to reference between binaries.
---
--- Wikilon DB assumes that most data is managed via stowage. And
--- stowed data can be shared between keys or garbage collected as
--- needed.
+-- Wikilon uses a key-value database with a special feature: values
+-- may contain binary references in the form of secure hashes. These
+-- secure hashes are conservatively GC'd (cf. Awelon.Hash.hashDeps).
+-- This supports scalable representation of tree-structured data with
+-- implicit structure sharing. Further, this fits nicely with purely
+-- functional programming. We treat this binary "stowage" layer as a
+-- persistence, sharing, and virtual memory model for large values.
 data DB = DB 
   { db_fp       :: !FilePath -- location in filesystem
   , db_fl       :: !FL.FileLock -- resist multi-process access
@@ -261,14 +260,7 @@ open fp nMB = try $ do
     lock <- tryLockE (fp </> "lockfile")
     flip onException (FL.unlockFile lock) $ do
         env <- mdb_env_create
-
-        let oneMB = (1024 * 1024)
-        unless ((maxBound `div` oneMB) > nMB) (fail "database size overflow")
-        mdb_env_set_mapsize env (nMB * oneMB)
-        
-        mkl <- mdb_env_get_maxkeysize env
-        unless (mkl >= maxKeyLen) (fail "expecting LMDB to support larger keys!")
-
+        mdb_env_set_mapsize env (nMB * (1024 * 1024))
         mdb_env_set_maxdbs env 4
         mdb_env_open env fp lmdbEnvF
         flip onException (mdb_env_close env) $ do
@@ -385,34 +377,18 @@ dupTX (TX db st) = do
     dbAddEph db (tx_hold s)
     return tx'
 
--- | Max accepted key length.
--- 
--- To simplify debugging with mdb_dump keys are kept intact up to a
--- limited size. OTOH, beyond some point, it's just wasted memory.
-maxKeyLen :: Integral a => a
-maxKeyLen = 255
-
--- | Test for problematic key.
---
--- Anything oversized, the empty string, or keys that start with SUB (26)
--- will be rewritten to the secure hash. 
-validKey :: ByteString -> Bool
-validKey s = case LBS.uncons s of
-    Nothing -> False -- reject empty key
-    Just (c, s') -> (26 /= c) && 
-                    (maxKeyLen > LBS.length s')
-
--- | Substitute problematic keys with a collision resistant secure hash.
---
--- Safe keys will start with SUB, and any key starting with SUB will be
--- rewritten to a safe key to prevent aliasing. This won't affect normal
--- operations, but safe keys can hinder debugging with mdb_dump.
---
--- Safe keys will be used starting within the TX read and write KVMaps.
+-- rewrite problematic keys to a collision resistant secure hash.
 toSafeKey :: ByteString -> ByteString
-toSafeKey s = if validKey s then s else 
-    LBS.singleton 26 <> -- start with SUB (26)
-    LBS.fromStrict (BS.take stowKeyLen (hashL s))
+toSafeKey s = if safe s then s else mkSafe s 
+    where
+    safeKeyPrefix = 26
+    maxKeyLen = 255     
+    safe s = case LBS.uncons s of
+        Nothing -> False
+        Just (c,s') -> (safeKeyPrefix /= c) && 
+                       (LBS.length s' < maxKeyLen) 
+    mkSafe s = LBS.singleton safeKeyPrefix <> 
+               LBS.fromStrict (BS.take stowKeyLen (hashL s))
 
 -- | read strict bytestring key as MDB_val
 withBSKey :: BS.ByteString -> (MDB_val -> IO a) -> IO a
@@ -456,48 +432,39 @@ copyMDB_to_BS (MDB_val len src) =
 -- for separate reads is not guaranteed, but all reads are verified
 -- to be consistent upon commit. 
 --
--- Security Note: It's up to the client to provide access control for
--- keys. This may be done by partitioning access to keys by prefix,
--- similar to directories in a filesystem. Or the client could use
--- HMACs to share and validate key strings. Whatever. Wikilon DB does
--- not secure normal keys.
+-- Security Note: keys are not guarded against timing attacks. The
+-- client should provide access control or capability security.
 readKey :: TX -> ByteString -> IO ByteString
-readKey (TX db st) (toSafeKey -> !k) = modifyMVarMasked st $ \ s ->
-    case readSafeKeyTXS s k of
+readKey (TX db st) k = modifyMVarMasked st $ \ s ->
+    case readKeyTXS s k of
         Just v  -> return (s, v)
         Nothing -> do
-            v <- readSafeKeyDB db k
+            v <- readKeyDB db k
             let r' = M.insert k v (tx_read s) 
             let s' = s { tx_read = r' }
             return (s', v)
 
--- | Read key from transaction state if it has been read or written prior. 
-readSafeKeyTXS :: TXS -> ByteString -> Maybe ByteString
-readSafeKeyTXS s k = M.lookup k (tx_write s) <|> M.lookup k (tx_read s)
+-- Read key previously read or written by the transaction. 
+readKeyTXS :: TXS -> ByteString -> Maybe ByteString
+readKeyTXS s k = M.lookup k (tx_write s) <|> M.lookup k (tx_read s)
 
 -- | Read key directly from database.
 --
 -- This retrieves the most recently committed value for a key. This is
 -- equivalent to readKey with a freshly created transaction.
 readKeyDB :: DB -> ByteString -> IO ByteString
-readKeyDB db = readSafeKeyDB db . toSafeKey
-
-readSafeKeyDB :: DB -> ByteString -> IO ByteString
-readSafeKeyDB db !key = withReadLock db $ do 
+readKeyDB db (force -> !key) = withReadLock db $ do 
     txn <- mdb_txn_begin (db_env db) Nothing True
     val <- dbReadKey db txn key
     mdb_txn_commit txn
     return val
 
--- | Obtain a value after we have our transaction. Assumes safe key.
+-- obtain a value after we have our transaction
 dbReadKey :: DB -> MDB_txn -> ByteString -> IO ByteString
-dbReadKey db txn k = withLBSKey k $ \ mdbKey -> do
+dbReadKey db txn k = withLBSKey (toSafeKey k) $ \ mdbKey -> do
     let toBS = maybe (return BS.empty) copyMDB_to_BS
     bs <- toBS =<< mdb_get' txn (db_data db) mdbKey
     return $! LBS.fromStrict bs
-
-toSafeKeys :: [ByteString] -> [ByteString]
-toSafeKeys = force . fmap toSafeKey
 
 -- | Read values for multiple keys.
 --
@@ -505,12 +472,12 @@ toSafeKeys = force . fmap toSafeKey
 -- main benefit with readKeys is snapshot isolation for keys initially
 -- read together. 
 readKeys :: TX -> [ByteString] -> IO [ByteString]
-readKeys (TX db st) (toSafeKeys -> !allKeys) = modifyMVarMasked st $ \ s -> do
-    let newKeys = L.filter (isNothing . readSafeKeyTXS s) allKeys 
-    newVals <- readSafeKeysDB db newKeys
+readKeys (TX db st) allKeys = modifyMVarMasked st $ \ s -> do
+    let newKeys = L.filter (isNothing . readKeyTXS s) allKeys 
+    newVals <- readKeysDB db newKeys
     let r' = M.union (tx_read s) (M.fromList (L.zip newKeys newVals))
     let s' = s { tx_read = r' }
-    let allVals = fmap (fromJust . readSafeKeyTXS s') allKeys 
+    let allVals = fmap (fromJust . readKeyTXS s') allKeys 
     return (s', allVals)
 
 -- | Read multiple keys directly from database.
@@ -518,10 +485,7 @@ readKeys (TX db st) (toSafeKeys -> !allKeys) = modifyMVarMasked st $ \ s -> do
 -- This obtains a snapshot for a few values from the database. This
 -- is equivalent to readKeys using a freshly created transaction.
 readKeysDB :: DB -> [ByteString] -> IO [ByteString]
-readKeysDB db = readSafeKeysDB db . toSafeKeys
-
-readSafeKeysDB :: DB -> [ByteString] -> IO [ByteString]
-readSafeKeysDB db keys = 
+readKeysDB db (force -> !keys) =
     if L.null keys then return [] else 
     withReadLock db $ do 
         txn <- mdb_txn_begin (db_env db) Nothing True
@@ -535,20 +499,23 @@ readSafeKeysDB db keys =
 -- There is no risk of write-write conflicts. Subsequent reads will
 -- observe the value written.
 --
--- Note: Wikilon DB may rewrite problematic keys using a secure hash.
--- This can affect debugging via mdb_dump and LMDB layer tools. Favor
--- keys that are short and sensible as words, URLs, or filenames.
+-- Wikilon DB may rewrite problematic keys using a secure hash. Favor
+-- short keys (< 256 bytes) that make valid Awelon words, file names,
+-- or URLs to avoid this overhead. Relatedly, Wikilon doesn't provide
+-- a means to search keys. The client may need to index directories
+-- explicitly if they're needed.
+--
 writeKey :: TX -> ByteString -> ByteString -> IO ()
-writeKey (TX _ st) (toSafeKey -> !k) (force -> !v) = 
+writeKey (TX _ st) (force -> !k) (force -> !v) =
     modifyMVarMasked_ st $ \ s ->
         let w' = M.insert k v (tx_write s) in
         return $! s { tx_write = w' }
 
--- | Key Length for Stowage
+-- Key Length for Stowage
 --
--- Wikilon DB uses only half of the hash for LMDB layer lookups,
--- and uses the remaining half for a constant-time comparison.
--- This helps resist timing attacks. 
+-- Wikilon DB uses only half of the hash for LMDB layer lookups, and
+-- uses the remaining half for a constant-time comparison to resist
+-- timing attacks that might otherwise leak capabilities.
 stowKeyLen :: Integral a => a
 stowKeyLen = validHashLen `div` 2
 
@@ -559,24 +526,24 @@ stowKeyLen = validHashLen `div` 2
 -- Nothing, in which case you might search elsewhere like the file
 -- system or network. (These resources are provider independent.)
 --
--- Note: Loading stowed data doesn't prevent GC of the resource. But
--- for a successful transaction, keys read won't change before commit.
--- So failure to load a resource might indicate transaction failure,
--- or that the resource was never known to the database.
+-- Loading data does not prevent GC of the data. To prevent GC, the
+-- only means is to ensure it remains rooted at the persistence layer.
+-- Perhaps model a history of values if it's essential.
 --
 -- Security Note: secure hashes are essentially object capabilities,
--- and leaking capabilities is a valid concern. Timing attacks are
--- a likely vector for such leaks. This function exposes the first
--- half of a hash to timing attacks. That leaves plenty of bits for
--- security, but clients should be careful to not expose them at 
--- any other layer.
+-- and leaking capabilities is a valid concern. Timing attacks are a
+-- potential vector for leaks. This function resists timing attacks
+-- by using only the first half of a hash for lookup, comparing the
+-- remainder in constant time. Clients should be careful to reveal
+-- no more than this.
 loadRsc :: TX -> Hash -> IO (Maybe ByteString)
 loadRsc (TX db _) = loadRscDB db
+    -- At the moment, we don't store pending stowage in the TX.
+    -- This might change later.
 
 -- | Load resource directly from database.
 loadRscDB :: DB -> Hash -> IO (Maybe ByteString)
 loadRscDB db !h = 
-    assert (validHashLen > stowKeyLen) $
     if (BS.length h /= validHashLen) then return Nothing else
     readIORef (db_newrsc db) >>= \ newRscTbl ->
     withReadLock db $ 
@@ -589,7 +556,26 @@ loadRscDB db !h =
     mdb_txn_commit txn
     return (v <|> lookupRsc h newRscTbl)
 
--- | constant-time equality comparison for memory pointers.
+-- Accept a resource value after stripping a given prefix.
+--
+-- Uses constant-time comparison on prefix to resist timing attacks.
+tryRscVal :: MDB_val -> Maybe MDB_val -> IO (Maybe ByteString)
+tryRscVal p = maybe (return Nothing) $ \ c ->
+    ctMatchPrefix p c >>= \ bHasPrefix ->
+    if not bHasPrefix then return Nothing else
+    let dLen = mv_size c - mv_size p in
+    let dPtr = mv_data c `plusPtr` (fromIntegral (mv_size p)) in
+    copyMDB_to_BS (MDB_val dLen dPtr) >>= \ bs ->
+    return (Just (LBS.fromStrict bs))
+
+
+-- timing attack resistant prefix matching
+ctMatchPrefix :: MDB_val -> MDB_val -> IO Bool
+ctMatchPrefix p d =
+    if (mv_size p > mv_size d) then return False else
+    ctEqMem (mv_data p) (mv_data d) (fromIntegral (mv_size p))
+
+-- constant-time equality comparison for memory pointers.
 ctEqMem :: Ptr Word8 -> Ptr Word8 -> Int -> IO Bool
 ctEqMem !l !r = go 0 where
     go !b !sz = 
@@ -598,23 +584,6 @@ ctEqMem !l !r = go 0 where
         lB <- peekElemOff l ix
         rB <- peekElemOff r ix
         go (b .|. (lB `xor` rB)) ix
-
--- | timing attack resistant prefix matching
-ctMatchPrefix :: MDB_val -> MDB_val -> IO Bool
-ctMatchPrefix p d =
-    if (mv_size p > mv_size d) then return False else
-    ctEqMem (mv_data p) (mv_data d) (fromIntegral (mv_size p))
-
--- | Accept a resource value after stripping a given prefix.
-tryRscVal :: MDB_val -> Maybe MDB_val -> IO (Maybe ByteString)
-tryRscVal _ Nothing = return Nothing
-tryRscVal p (Just c) =
-    ctMatchPrefix p c >>= \ bHasPrefix ->
-    if not bHasPrefix then return Nothing else
-    let dLen = mv_size c - mv_size p in
-    let dPtr = mv_data c `plusPtr` (fromIntegral (mv_size p)) in
-    copyMDB_to_BS (MDB_val dLen dPtr) >>= \ bs ->
-    return (Just (LBS.fromStrict bs))
 
 -- | Timing-attack resistant lookup for the new resource table.
 --
@@ -637,29 +606,21 @@ ctEqBS a b =
 -- | Move resource to database, returns secure hash (Awelon.Hash).
 --
 -- Stowage resources are automatically named by secure hash, which
--- is also used to load the resource from the database as needed.
--- The data is pushed quickly to the database, enabling stowage to
--- also double as a virtual memory system.
+-- is later used to load the resource from the database as needed.
+-- By moving data to the database, stowage can double as a virtual
+-- memory system.
 --
 -- Wikilon DB will garbage collect resources that are not rooted by
--- a key, so a transaction that stows a resource should also try to
--- root it. Meanwhile, there are ephemeral roots associated with
--- the transaction object (via System.Mem.Weak) to prevent loss of
--- data that might later be rooted.
---
--- An obvious caveat:
--- 
--- Stowage resources are slow and expensive compared to memory, so
--- we can't afford to create too much garbage at the stowage layer.
--- Try to use batching, staging, or intermediate representations to
--- avoid short-lived stowage resources. Study data structures such
--- as the LSM tree that are designed for use in slower media.
+-- a key or TX. A transaction that stows resources should root that
+-- data. Stowage is too expensive to be creating lots of nodes that
+-- will shortly be GC'd, at least without a lot of consideration.
 --
 stowRsc :: TX -> ByteString -> IO Hash
 stowRsc (TX db st) (force -> !v) = 
     evaluate (hashL v) >>= \ h ->
+    evaluate (ephHash h) >>= \ eh -> 
     modifyMVarMasked st $ \ s -> do
-        let ephUpd = Mi.singleton (ephHash h) 1 
+        let ephUpd = Mi.singleton eh 1 
         let hold' = Mi.unionWith (+) (tx_hold s) ephUpd
         let s' = s { tx_hold = hold' }
         dbAddEph db ephUpd
@@ -672,9 +633,9 @@ stowRsc (TX db st) (force -> !v) =
 -- During commit, the TX object is unusable and we'll wait for the
 -- success or failure result.
 --
--- Transactions may be committed more than once. Each commit acts as
--- a checkpoint, so a future failure won't affect prior checkpoints.
--- Conflicts are still determined relative to transaction creation.
+-- Transactions may be committed more than once. This may be used
+-- as a simple checkpoint model, so we don't lose all the work if
+-- a long transaction later fails due to concurrent writers.
 commitTX :: TX -> IO Bool
 commitTX (TX db st) = modifyMVar st $ \ s -> do
     v <- newEmptyMVar
@@ -686,6 +647,24 @@ commitTX (TX db st) = modifyMVar st $ \ s -> do
              s { tx_read = r', tx_write = mempty }
     return (s', b)
 
+-- | Diagnose a transaction.
+--
+-- This function returns a list of keys whose transactional values
+-- conflict with database values. This check is expensive, and is
+-- intended mostly to diagnose contention or concurrency issues. The
+-- result is subject to invalidation by concurrent writes.
+--
+-- There may be limited utility for long-running transactions, but
+-- you're probably better off modeling those explicitly as persistent
+-- objects with RESTful identity of their own.
+checkTX :: TX -> IO [ByteString]
+checkTX (TX db st) = do
+    rd <- tx_read <$> readMVar st
+    let keys = M.keys rd  
+    newVals <- readKeysDB db keys
+    let rd' = M.fromList (L.zip keys newVals)
+    let dv a b = if (a == b) then Nothing else Just b
+    return (M.keys (M.differenceWith dv rd rd'))
 
 -- | The database writer thread.
 --
@@ -720,7 +699,7 @@ dbWriter db = initLoop `catches` handlers where
     loop !oldReaders = do
         takeMVar (db_signal db) 
 
-        txList <- atomicModifyIORef (db_commit db) (\ lst -> ([],lst))
+        txList <- L.reverse <$> atomicModifyIORef (db_commit db) (\ lst -> ([],lst))
         newRsc <- readIORef (db_newrsc db)
 
         undefined
@@ -729,7 +708,7 @@ dbWriter db = initLoop `catches` handlers where
     initLoop = advanceReadFrame db >>= loop
 
 
-
+-- For now, I'll treat transactions one at a time. 
 
 
 
