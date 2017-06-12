@@ -660,13 +660,13 @@ commitTX (TX db st) = modifyMVar st $ \ s -> do
 -- you're probably better off modeling those explicitly as persistent
 -- objects with RESTful identity of their own.
 checkTX :: TX -> IO [ByteString]
-checkTX (TX db st) = do
-    rd <- tx_read <$> readMVar st
-    let keys = M.keys rd  
-    newVals <- readKeysDB db keys
-    let rd' = M.fromList (L.zip keys newVals)
-    let dv a b = if (a == b) then Nothing else Just b
-    return (M.keys (M.differenceWith dv rd rd'))
+checkTX (TX db st) =
+    readMVar st >>= \ s ->
+    withReadLock db $ do
+    txn <- mdb_txn_begin (db_env db) Nothing True
+    invalidReads <- filterM (fmap not . validRead db txn) (M.toList (tx_read s))
+    mdb_txn_commit txn
+    return (fmap fst invalidReads)
 
 -- | The database writer thread.
 --
@@ -795,11 +795,11 @@ validRead :: DB -> MDB_txn -> (ByteString,ByteString) -> IO Bool
 validRead db txn (k,vTX) = withLBSKey (toSafeKey k) $ \ mdbKey ->
     mdb_get' txn (db_data db) mdbKey >>= \ mbv ->
     case mbv of
-        Nothing -> return (LBS.null vTX)
         Just val -> 
             let sizeMatch = (LBS.length vTX == fromIntegral (mv_size val)) in
             if not sizeMatch then return False else
             matchLBS (mv_data val) vTX
+        Nothing -> return (LBS.null vTX)
 
 -- match lazy bytestring without copying. assumes size match.
 matchLBS :: Ptr Word8 -> LBS.ByteString -> IO Bool
