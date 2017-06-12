@@ -413,10 +413,9 @@ withLBSKey k action =
 copyLBS :: Ptr Word8 -> LBS.ByteString -> IO ()
 copyLBS !dst s = case s of
     LBS.Empty -> return ()
-    (LBS.Chunk (BS.PS fp off len) more) ->
-        withForeignPtr fp $ \ src -> do
-            BS.memcpy dst (src `plusPtr` off) len
-            copyLBS (dst `plusPtr` len) more
+    (LBS.Chunk (BS.PS fp off len) more) -> do
+        withForeignPtr fp $ \ src -> BS.memcpy dst (src `plusPtr` off) len
+        copyLBS (dst `plusPtr` len) more
 
 -- | copy an MDB for use as a Haskell bytestring.
 copyMDB_to_BS :: MDB_val -> IO BS.ByteString
@@ -738,7 +737,7 @@ clearStowed :: DB -> Stowage -> IO ()
 clearStowed db w = atomicModifyIORef' (db_newrsc db) $ \ m -> 
     let m' = M.difference m w in (m', ())
 
--- | Reference count tracking.
+-- Reference count tracking.
 -- 
 -- For now, all reference counts are written into a simple map, using
 -- only the stowKeyLen fragment of the hash string to resist possible
@@ -750,7 +749,7 @@ addRCU :: Int -> [Hash] -> RCU -> RCU
 addRCU !n = flip (L.foldl' (M.unionWith (+))) . fmap toM where
     toM h = M.singleton (BS.take stowKeyLen h) n
 
--- | Write a single resource into stowage.
+-- Write a single resource into stowage.
 --
 -- This will first check if the hash already exists. Otherwise
 -- we'll perform a write immediately and update the RCU with at
@@ -772,7 +771,7 @@ doStow !db !txn !rcu (!h, !v) =
         copyLBS (mv_data dst) v' >>
         return rcu'
 
--- | Perform a read-write transaction.
+-- Perform a read-write transaction.
 --
 -- If commit fails, we'll report failure immediately. Otherwise,
 -- we write to the database but reporting success on the MVar is
@@ -791,10 +790,25 @@ allM :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
 allM fn (x:xs) = fn x >>= \ b -> if not b then return False else allM fn xs
 allM _ [] = return True
 
+-- Check whether a proposed read is valid. Does not copy the binary. 
 validRead :: DB -> MDB_txn -> (ByteString,ByteString) -> IO Bool
-validRead db txn (k,vTX) = 
-    dbReadKey db txn k >>= \ vNow ->
-    return $! (vTX == vNow)
+validRead db txn (k,vTX) = withLBSKey (toSafeKey k) $ \ mdbKey ->
+    mdb_get' txn (db_data db) mdbKey >>= \ mbv ->
+    case mbv of
+        Nothing -> return (LBS.null vTX)
+        Just val -> 
+            let sizeMatch = (LBS.length vTX == fromIntegral (mv_size val)) in
+            if not sizeMatch then return False else
+            matchLBS (mv_data val) vTX
+
+-- match lazy bytestring without copying. assumes size match.
+matchLBS :: Ptr Word8 -> LBS.ByteString -> IO Bool
+matchLBS !p s = case s of
+    LBS.Empty -> return True
+    (LBS.Chunk (BS.PS fp off len) more) -> do
+        iCmp <- withForeignPtr fp $ \ s -> BS.memcmp p (s `plusPtr` off) len
+        if (0 /= iCmp) then return False
+                       else matchLBS (p `plusPtr` len) more
 
 -- the main challenge for 
 doRefctGC :: DB -> MDB_txn -> RCU -> IO ()
