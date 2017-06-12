@@ -461,7 +461,10 @@ readKeyDB db (force -> !key) = withReadLock db $ do
 
 -- obtain a value after we have our transaction
 dbReadKey :: DB -> MDB_txn -> ByteString -> IO ByteString
-dbReadKey db txn k = withLBSKey (toSafeKey k) $ \ mdbKey -> do
+dbReadKey db txn = dbReadSafeKey db txn . toSafeKey
+
+dbReadSafeKey :: DB -> MDB_txn -> ByteString -> IO ByteString
+dbReadSafeKey db txn k = withLBSKey k $ \ mdbKey -> do
     let toBS = maybe (return BS.empty) copyMDB_to_BS
     bs <- toBS =<< mdb_get' txn (db_data db) mdbKey
     return $! LBS.fromStrict bs
@@ -678,7 +681,7 @@ checkTX (TX db st) = do
 --
 -- If developers can avoid conflicts, that's even better. 
 dbWriter :: DB -> IO ()
-dbWriter db = initLoop `catches` handlers where
+dbWriter !db = initLoop `catches` handlers where
     handlers = [Handler onGC, Handler onError]
     onGC :: BlockedIndefinitelyOnMVar -> IO ()
     onGC _ = close db -- no external references to DB
@@ -691,26 +694,111 @@ dbWriter db = initLoop `catches` handlers where
         putErrLn $ "Aborting Program!"
         Sys.exitFailure
 
-    -- In each loop, the writer will try available transactions,
-    -- write incoming stowage, do some GC. We will wait on old
-    -- readers before commit, advance the reader frame after.
-    -- If no work is available, we'll sleep on an MVar.
+    -- In each loop, the writer will try available transactions, write
+    -- incoming stowage, do some GC. We will wait on old readers before
+    -- commit, advance the reader frame after. If no work is available,
+    -- we'll just sleep until work becomes available.
+    --
+    -- For now, I'll process updates naively. There are a lot of possible
+    -- performance improvements, e.g. reducing allocations for reference
+    -- counting and elimination of conflicting concurrent transactions in
+    -- volatile memory. But this should work well enough for now.
     loop :: R -> IO ()
-    loop !oldReaders = do
+    loop !r = do
         takeMVar (db_signal db) 
 
+        -- Obtain the transactions and resources. Order is relevant.
         txList <- L.reverse <$> atomicModifyIORef (db_commit db) (\ lst -> ([],lst))
         newRsc <- readIORef (db_newrsc db)
+        txn <- mdb_txn_begin (db_env db) Nothing False
 
-        undefined
+        -- Write resources and transactions, perform refct updates.
+        rcu_stow <- foldM (doStow db txn) mempty (M.toList newRsc)
+        rcu_writes <- foldM (doCommit db txn) mempty txList
+        let rcu = M.unionWith (+) rcu_writes rcu_stow
+        doRefctGC db txn rcu
 
-    -- get started by treating any current readers as old readers.
+        -- Wait on readers of older frame then commit.
+        waitR r                     
+        mdb_txn_commit txn          
+        r' <- advanceReadFrame db   
+        mdb_env_sync_flush (db_env db)
+
+        -- Report successful completion of batch then continue.
+        clearStowed db newRsc
+        mapM_ (flip tryPutMVar True . snd) txList
+        loop r'
+
+    -- start loop with initial read frame
     initLoop = advanceReadFrame db >>= loop
 
 
--- For now, I'll treat transactions one at a time. 
+-- Mark stowage resources written.
+clearStowed :: DB -> Stowage -> IO ()
+clearStowed db w = atomicModifyIORef' (db_newrsc db) $ \ m -> 
+    let m' = M.difference m w in (m', ())
 
+-- | Reference count tracking.
+-- 
+-- For now, all reference counts are written into a simple map, using
+-- only the stowKeyLen fragment of the hash string to resist possible
+-- timing attacks. This is far from optimal for allocations, but it is
+-- simple to use in Haskell. 
+type RCU = M.Map Hash Int
 
+addRCU :: Int -> [Hash] -> RCU -> RCU
+addRCU !n = flip (L.foldl' (M.unionWith (+))) . fmap toM where
+    toM h = M.singleton (BS.take stowKeyLen h) n
+
+-- | Write a single resource into stowage.
+--
+-- This will first check if the hash already exists. Otherwise
+-- we'll perform a write immediately and update the RCU with at
+-- least a zero self-reference.
+doStow :: DB -> MDB_txn -> RCU -> (Hash, ByteString) -> IO RCU
+doStow !db !txn !rcu (!h, !v) = 
+    assert (validHashLen == BS.length h) $
+    let (key,rem) = BS.splitAt stowKeyLen h in
+    withBSKey key $ \ mdbKey ->
+        mdb_get' txn (db_stow db) mdbKey >>= \ vdb -> 
+        let rscIsNewToDB = isNothing vdb in
+        if not rscIsNewToDB then return rcu else
+
+        let rcu' = (addRCU 0 [h] . addRCU 1 (hashDeps v)) rcu in
+        let wf = compileWriteFlags [MDB_NOOVERWRITE] in
+        let v' = LBS.fromStrict rem <> v in
+        let sz = fromIntegral (LBS.length v') in
+        mdb_reserve' wf txn (db_stow db) mdbKey sz >>= \ dst ->
+        copyLBS (mv_data dst) v' >>
+        return rcu'
+
+-- | Perform a read-write transaction.
+--
+-- If commit fails, we'll report failure immediately. Otherwise,
+-- we write to the database but reporting success on the MVar is
+-- delayed until the transaction is fully committed.
+--
+-- At the moment there is no attempt to reuse reads, so this isn't
+-- especially high performance.
+doCommit :: DB -> MDB_txn -> RCU -> Commit -> IO RCU
+doCommit !db !txn !rcu ((!r,!w),!ret) = 
+    allM (validRead db txn) (M.toList r) >>= \ allReadsOK ->
+    if not allReadsOK then tryPutMVar ret False >> return rcu else 
+    -- todo: perform a transaction
+    undefined
+
+allM :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
+allM fn (x:xs) = fn x >>= \ b -> if not b then return False else allM fn xs
+allM _ [] = return True
+
+validRead :: DB -> MDB_txn -> (ByteString,ByteString) -> IO Bool
+validRead db txn (k,vTX) = 
+    dbReadKey db txn k >>= \ vNow ->
+    return $! (vTX == vNow)
+
+-- the main challenge for 
+doRefctGC :: DB -> MDB_txn -> RCU -> IO ()
+doRefctGC = undefined
 
 -- indent all lines by w
 indent :: String -> String -> String
