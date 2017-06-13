@@ -97,12 +97,9 @@ data DB = DB
 
     -- Asynch Write Layer
   , db_signal   :: !(MVar ())               -- work available?
-  , db_newrsc   :: !(IORef Stowage)         -- pending stowage
+  , db_new      :: !(IORef Stowage)         -- pending stowage
   , db_commit   :: !(IORef [Commit])        -- commit requests
-
-    -- Stowage GC Layer
-  , db_gc_last  :: !(IORef (Maybe Hash)) -- for incremental GC
-  , db_gc_hold  :: !(IORef EphTbl) -- ephemeron table
+  , db_hold     :: !(IORef EphTbl)          -- ephemeron table
   } 
 -- notes: Reference counts are partitioned so we can quickly locate
 -- objects with zero references for purpose of incremental GC. The
@@ -122,9 +119,9 @@ type Stowage = M.Map Hash ByteString        -- ^ latent batch for DB
 type KVMap = M.Map ByteString ByteString    -- ^ safe keys and values.
 type Commit = ((KVMap,KVMap), MVar Bool)    -- ^ ((reads,writes),returns)
 data R = R !(MVar Int) !(MVar ())           -- ^ simple reader count
-type EphTbl = Mi.IntMap Int                 -- ^ table of (hash,count)
+type EphTbl = Mi.IntMap Int                 -- ^ resource ref counts
 
--- | My ephemeron table is a simple (hash,count) collection.
+-- ephemeron table is a (hash,count) collection.
 -- 
 -- False positives are possible, but should be rare and aren't a
 -- huge problem when they happen (they delay GC of some resources).
@@ -153,6 +150,9 @@ ephHash = unsafeDupablePerformIO . flip withBSKey ephHashMDB
 -- Note: I probably need a simpler ephemeron table, one that I can
 -- check quickly without allocations. 
 
+-- I assume the ephemeron table won't be my bottleneck, since it has a
+-- cost proportional only to the amount of new stowage by a TX. 
+
 dbSignal :: DB -> IO ()
 dbSignal db = tryPutMVar (db_signal db) () >> return ()
 
@@ -163,7 +163,7 @@ dbPushCommit db !task = do
 
 dbPushStow :: DB -> Stowage -> IO ()
 dbPushStow db s = do
-    atomicModifyIORef' (db_newrsc db) $ \ s0 -> (M.union s0 s, ()) 
+    atomicModifyIORef' (db_new db) $ \ s0 -> (M.union s0 s, ()) 
     dbSignal db
 
 nonZero :: Int -> Maybe Int
@@ -175,7 +175,7 @@ dbClearEph :: DB -> EphTbl -> IO ()
 dbClearEph db drop = 
     traceM ("TX releasing " ++ show (Mi.size drop) ++ " resources") >>
     if Mi.null drop then return () else
-    atomicModifyIORef' (db_gc_hold db) $ \ tbl ->
+    atomicModifyIORef' (db_hold db) $ \ tbl ->
         let diff = \ l r -> nonZero (l - r) in
         let tbl' = Mi.differenceWith diff tbl drop in
         (tbl', ())
@@ -184,7 +184,7 @@ dbClearEph db drop =
 dbAddEph :: DB -> EphTbl -> IO ()
 dbAddEph db update = 
     if Mi.null update then return () else
-    atomicModifyIORef' (db_gc_hold db) $ \ tbl ->
+    atomicModifyIORef' (db_hold db) $ \ tbl ->
         let tbl' = Mi.unionWith (+) tbl update in 
         (tbl', ())
 
@@ -260,9 +260,14 @@ open fp nMB = try $ do
     lock <- tryLockE (fp </> "lockfile")
     flip onException (FL.unlockFile lock) $ do
         env <- mdb_env_create
+
+        mks <- mdb_env_get_maxkeysize env
+        unless (mks >= maxKeyLen) (fail "require LMDB compiled with larger max key size.")
+
         mdb_env_set_mapsize env (nMB * (1024 * 1024))
         mdb_env_set_maxdbs env 4
         mdb_env_open env fp lmdbEnvF
+
         flip onException (mdb_env_close env) $ do
             -- initial transaction to open databases. No special DB flags.
             txIni <- mdb_txn_begin env Nothing False
@@ -276,9 +281,8 @@ open fp nMB = try $ do
             dbRdLock <- newIORef =<< newR -- readers tracking
             dbSignal <- newMVar () -- initial signal to try GC
             dbCommit <- newIORef mempty
-            dbNewRsc <- newIORef mempty
-            dbGCLast <- newIORef mempty
-            dbGCHold <- newIORef mempty
+            dbNew <- newIORef mempty
+            dbHold <- newIORef mempty
 
             let db = DB { db_fp = fp
                         , db_fl = lock
@@ -290,9 +294,8 @@ open fp nMB = try $ do
                         , db_rdlock = dbRdLock
                         , db_signal = dbSignal
                         , db_commit = dbCommit
-                        , db_newrsc = dbNewRsc
-                        , db_gc_last = dbGCLast
-                        , db_gc_hold = dbGCHold
+                        , db_new = dbNew
+                        , db_hold = dbHold
                         }
 
             forkIO (dbWriter db)
@@ -357,7 +360,7 @@ newTX db = do
     mkWeakMVar st (finiTX tx)
     return tx
 
--- | Clear ephemeral stowage.
+-- clear ephemeral stowage.
 finiTX :: TX -> IO ()
 finiTX (TX db st) = modifyMVarMasked_ st $ \ s -> do
     dbClearEph db (tx_hold s)
@@ -377,18 +380,22 @@ dupTX (TX db st) = do
     dbAddEph db (tx_hold s)
     return tx'
 
+-- preserve keys up to a reasonably large maximum size, enough
+-- to model a lightweight filesystem (if desired).
+maxKeyLen :: Integral a => a
+maxKeyLen = 255
+
 -- rewrite problematic keys to a collision resistant secure hash.
+-- I'll look only at the first byte and the key size. Most keys
+-- should be safe in practice, and thus not need any rewrite.
 toSafeKey :: ByteString -> ByteString
 toSafeKey s = if safe s then s else mkSafe s 
     where
-    safeKeyPrefix = 26
-    maxKeyLen = 255     
     safe s = case LBS.uncons s of
-        Nothing -> False
-        Just (c,s') -> (safeKeyPrefix /= c) && 
-                       (LBS.length s' < maxKeyLen) 
-    mkSafe s = LBS.singleton safeKeyPrefix <> 
-               LBS.fromStrict (BS.take stowKeyLen (hashL s))
+        Just (c, s') -> (c > 31) && (LBS.length s' < maxKeyLen) 
+        Nothing -> False -- empty key isn't considered safe
+    mkSafe s = LBS.singleton 26 <> LBS.fromStrict (BS.take stowKeyLen (hashL s))
+        -- using (SUB)hash. Won't alias with natural safe keys.
 
 -- | read strict bytestring key as MDB_val
 withBSKey :: BS.ByteString -> (MDB_val -> IO a) -> IO a
@@ -417,9 +424,9 @@ copyLBS !dst s = case s of
         withForeignPtr fp $ \ src -> BS.memcpy dst (src `plusPtr` off) len
         copyLBS (dst `plusPtr` len) more
 
--- | copy an MDB for use as a Haskell bytestring.
+-- copy an MDB for use as a Haskell bytestring.
 copyMDB_to_BS :: MDB_val -> IO BS.ByteString
-copyMDB_to_BS (MDB_val len src) =
+copyMDB_to_BS (MDB_val len src) = 
     BS.create (fromIntegral len) $ \ dst ->
         BS.memcpy dst src (fromIntegral len)
 
@@ -452,7 +459,7 @@ readKeyTXS s k = M.lookup k (tx_write s) <|> M.lookup k (tx_read s)
 -- This retrieves the most recently committed value for a key. This is
 -- equivalent to readKey with a freshly created transaction.
 readKeyDB :: DB -> ByteString -> IO ByteString
-readKeyDB db (force -> !key) = withReadLock db $ do 
+readKeyDB db (toSafeKey -> !key) = withReadLock db $ do 
     txn <- mdb_txn_begin (db_env db) Nothing True
     val <- dbReadKey db txn key
     mdb_txn_commit txn
@@ -460,12 +467,12 @@ readKeyDB db (force -> !key) = withReadLock db $ do
 
 -- obtain a value after we have our transaction
 dbReadKey :: DB -> MDB_txn -> ByteString -> IO ByteString
-dbReadKey db txn = dbReadSafeKey db txn . toSafeKey
+dbReadKey db txn k = withLBSKey k $ (dbReadKeyMDB db txn)
 
-dbReadSafeKey :: DB -> MDB_txn -> ByteString -> IO ByteString
-dbReadSafeKey db txn k = withLBSKey k $ \ mdbKey -> do
+dbReadKeyMDB :: DB -> MDB_txn -> MDB_val -> IO ByteString
+dbReadKeyMDB db txn k = do
     let toBS = maybe (return BS.empty) copyMDB_to_BS
-    bs <- toBS =<< mdb_get' txn (db_data db) mdbKey
+    bs <- toBS =<< mdb_get' txn (db_data db) k
     return $! LBS.fromStrict bs
 
 -- | Read values for multiple keys.
@@ -487,13 +494,16 @@ readKeys (TX db st) allKeys = modifyMVarMasked st $ \ s -> do
 -- This obtains a snapshot for a few values from the database. This
 -- is equivalent to readKeys using a freshly created transaction.
 readKeysDB :: DB -> [ByteString] -> IO [ByteString]
-readKeysDB db (force -> !keys) =
+readKeysDB db (toSafeKeys -> !keys) =
     if L.null keys then return [] else 
     withReadLock db $ do 
         txn <- mdb_txn_begin (db_env db) Nothing True
         vals <- mapM (dbReadKey db txn) keys
         mdb_txn_commit txn
         return vals
+
+toSafeKeys :: [ByteString] -> [ByteString]
+toSafeKeys = force . fmap toSafeKey
   
 -- | Write a key-value pair.
 --
@@ -501,12 +511,10 @@ readKeysDB db (force -> !keys) =
 -- There is no risk of write-write conflicts. Subsequent reads will
 -- observe the value written.
 --
--- Wikilon DB may rewrite problematic keys using a secure hash. Favor
--- short keys (< 256 bytes) that make valid Awelon words, file names,
--- or URLs to avoid this overhead. Relatedly, Wikilon doesn't provide
--- a means to search keys. The client may need to index directories
--- explicitly if they're needed.
---
+-- Note: Wikilon DB accepts any key, but may rewrite problematic keys
+-- using a secure hash. Doing so has a moderate performance cost and
+-- hinders LMDB-layer debugging (e.g. via the mdb_dump tool). A good
+-- key is short (< 256 bytes) and a valid word, filename, or URL.
 writeKey :: TX -> ByteString -> ByteString -> IO ()
 writeKey (TX _ st) (force -> !k) (force -> !v) =
     modifyMVarMasked_ st $ \ s ->
@@ -517,7 +525,12 @@ writeKey (TX _ st) (force -> !k) (force -> !v) =
 --
 -- Wikilon DB uses only half of the hash for LMDB layer lookups, and
 -- uses the remaining half for a constant-time comparison to resist
--- timing attacks that might otherwise leak capabilities.
+-- timing attacks that could otherwise leak capabilities. I assume
+-- 140 bits is sufficient for practical cryptographic uniqueness, at
+-- least within a single runtime.
+--
+-- This same key fragment is used for reference counting and other
+-- features.
 stowKeyLen :: Integral a => a
 stowKeyLen = validHashLen `div` 2
 
@@ -547,7 +560,7 @@ loadRsc (TX db _) = loadRscDB db
 loadRscDB :: DB -> Hash -> IO (Maybe ByteString)
 loadRscDB db !h = 
     if (BS.length h /= validHashLen) then return Nothing else
-    readIORef (db_newrsc db) >>= \ newRscTbl ->
+    readIORef (db_new db) >>= \ newRscTbl ->
     withReadLock db $ 
     withBSKey h $ \ hMDB -> do
     let hKey = MDB_val stowKeyLen (mv_data hMDB)                       -- normal LMDB lookup
@@ -618,16 +631,15 @@ ctEqBS a b =
 -- will shortly be GC'd, at least without a lot of consideration.
 --
 stowRsc :: TX -> ByteString -> IO Hash
-stowRsc (TX db st) (force -> !v) = 
-    evaluate (hashL v) >>= \ h ->
-    evaluate (ephHash h) >>= \ eh -> 
-    modifyMVarMasked st $ \ s -> do
-        let ephUpd = Mi.singleton eh 1 
-        let hold' = Mi.unionWith (+) (tx_hold s) ephUpd
-        let s' = s { tx_hold = hold' }
-        dbAddEph db ephUpd
-        dbPushStow db (M.singleton h v)
-        return (s', h)
+stowRsc (TX db st) v = modifyMVarMasked st $ \ s -> do
+    h <- evaluate (hashL v)
+    eh <- evaluate (ephHash h)
+    let ephUpd = Mi.singleton eh 1 
+    let hold' = Mi.unionWith (+) (tx_hold s) ephUpd
+    let s' = s { tx_hold = hold' }
+    dbAddEph db ephUpd
+    dbPushStow db (M.singleton h v)
+    return (s', h)
 
 -- | Commit transaction to database.
 --
@@ -652,13 +664,10 @@ commitTX (TX db st) = modifyMVar st $ \ s -> do
 -- | Diagnose a transaction.
 --
 -- This function returns a list of keys whose transactional values
--- conflict with database values. This check is expensive, and is
--- intended mostly to diagnose contention or concurrency issues. The
--- result is subject to invalidation by concurrent writes.
---
--- There may be limited utility for long-running transactions, but
--- you're probably better off modeling those explicitly as persistent
--- objects with RESTful identity of their own.
+-- currently in conflict with database values. This check is intended
+-- to diagnose contention or concurrency issues, and may be checked
+-- after a transaction fails to gain more information. The result is
+-- ephemeral, however, subject to change by concurrent writers.
 checkTX :: TX -> IO [ByteString]
 checkTX (TX db st) =
     readMVar st >>= \ s ->
@@ -700,32 +709,32 @@ dbWriter !db = initLoop `catches` handlers where
     --
     -- For now, I'll process updates naively. There are a lot of possible
     -- performance improvements, e.g. reducing allocations for reference
-    -- counting and elimination of conflicting concurrent transactions in
-    -- volatile memory. But this should work well enough for now.
+    -- counting, elimination of conflicting concurrent transactions before
+    -- they go to LMDB storage, elimination of unnecessary stowage.
     loop :: R -> IO ()
     loop !r = do
         takeMVar (db_signal db) 
 
         -- Obtain the transactions and resources. Order is relevant.
         txList <- L.reverse <$> atomicModifyIORef (db_commit db) (\ lst -> ([],lst))
-        newRsc <- readIORef (db_newrsc db)
+        newRsc <- readIORef (db_new db)
         txn <- mdb_txn_begin (db_env db) Nothing False
 
-        -- Write resources and transactions, perform refct updates.
-        rcu_stow <- foldM (doStow db txn) mempty (M.toList newRsc)
+        -- Write resources, transactions, and update reference counts.
         rcu_writes <- foldM (doCommit db txn) mempty txList
+        rcu_stow <- foldM (doStow db txn) mempty (M.toList newRsc)
         let rcu = M.unionWith (+) rcu_writes rcu_stow
-        doRefctGC db txn rcu
+        doRefctUpd db txn rcu
 
-        -- Wait on readers of older frame then commit.
+        -- Wait for readers of old frame, then commit.
         waitR r                     
         mdb_txn_commit txn          
         r' <- advanceReadFrame db   
         mdb_env_sync_flush (db_env db)
 
-        -- Report successful completion of batch then continue.
-        clearStowed db newRsc
+        -- Mark successful completion of batch, then continue.
         mapM_ (flip tryPutMVar True . snd) txList
+        clearStowed db newRsc
         loop r'
 
     -- start loop with initial read frame
@@ -734,7 +743,7 @@ dbWriter !db = initLoop `catches` handlers where
 
 -- Mark stowage resources written.
 clearStowed :: DB -> Stowage -> IO ()
-clearStowed db w = atomicModifyIORef' (db_newrsc db) $ \ m -> 
+clearStowed db w = atomicModifyIORef' (db_new db) $ \ m -> 
     let m' = M.difference m w in (m', ())
 
 -- Reference count tracking.
@@ -752,8 +761,7 @@ addRCU !n = flip (L.foldl' (M.unionWith (+))) . fmap toM where
 -- Write a single resource into stowage.
 --
 -- This will first check if the hash already exists. Otherwise
--- we'll perform a write immediately and update the RCU with at
--- least a zero self-reference.
+-- we'll perform a write immediately and update the RCU.
 doStow :: DB -> MDB_txn -> RCU -> (Hash, ByteString) -> IO RCU
 doStow !db !txn !rcu (!h, !v) = 
     assert (validHashLen == BS.length h) $
@@ -762,57 +770,135 @@ doStow !db !txn !rcu (!h, !v) =
         mdb_get' txn (db_stow db) mdbKey >>= \ vdb -> 
         let rscIsNewToDB = isNothing vdb in
         if not rscIsNewToDB then return rcu else
-
-        let rcu' = (addRCU 0 [h] . addRCU 1 (hashDeps v)) rcu in
-        let wf = compileWriteFlags [MDB_NOOVERWRITE] in
-        let v' = LBS.fromStrict rem <> v in
-        let sz = fromIntegral (LBS.length v') in
+        let updRCU = addRCU 0 [h] . addRCU 1 (hashDeps v) in
+        let wf = compileWriteFlags [] in
+        let hv = LBS.fromStrict rem <> v in
+        let sz = fromIntegral (LBS.length hv) in
         mdb_reserve' wf txn (db_stow db) mdbKey sz >>= \ dst ->
-        copyLBS (mv_data dst) v' >>
-        return rcu'
+        copyLBS (mv_data dst) hv >>
+        return (updRCU rcu)
 
 -- Perform a read-write transaction.
 --
--- If commit fails, we'll report failure immediately. Otherwise,
--- we write to the database but reporting success on the MVar is
--- delayed until the transaction is fully committed.
---
--- At the moment there is no attempt to reuse reads, so this isn't
--- especially high performance.
+-- If commit fails, we'll report failure immediately. Otherwise, we 
+-- write to our database but the report of success is delayed until
+-- the transaction fully commits.
+-- 
 doCommit :: DB -> MDB_txn -> RCU -> Commit -> IO RCU
 doCommit !db !txn !rcu ((!r,!w),!ret) = 
     allM (validRead db txn) (M.toList r) >>= \ allReadsOK ->
-    if not allReadsOK then tryPutMVar ret False >> return rcu else 
-    -- todo: perform a transaction
-    undefined
+    if not allReadsOK then tryPutMVar ret False >> return rcu else
+    foldM (doWrite db txn) rcu (M.toList w)
+
+-- Write a specific bytestring.
+doWrite :: DB -> MDB_txn -> RCU -> (ByteString, ByteString) -> IO RCU
+doWrite !db !txn !rcu (!k, !v) = 
+    withLBSKey (toSafeKey k) $ \ mdbKey -> do
+        v0 <- dbReadKeyMDB db txn mdbKey
+        let updRCU = addRCU 1 (hashDeps v) . addRCU (-1) (hashDeps v0)
+        let wf = compileWriteFlags []
+        let sz = fromIntegral (LBS.length v)
+        dst <- mdb_reserve' wf txn (db_data db) mdbKey sz
+        copyLBS (mv_data dst) v
+        return (updRCU rcu)
 
 allM :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
 allM fn (x:xs) = fn x >>= \ b -> if not b then return False else allM fn xs
 allM _ [] = return True
 
--- Check whether a proposed read is valid. Does not copy the binary. 
+-- zero-copy memcmp equality comparison for database and TX values.
+-- (Note: empty string is equivalent to undefined in this case.)
 validRead :: DB -> MDB_txn -> (ByteString,ByteString) -> IO Bool
 validRead db txn (k,vTX) = withLBSKey (toSafeKey k) $ \ mdbKey ->
     mdb_get' txn (db_data db) mdbKey >>= \ mbv ->
-    case mbv of
-        Just val -> 
-            let sizeMatch = (LBS.length vTX == fromIntegral (mv_size val)) in
-            if not sizeMatch then return False else
-            matchLBS (mv_data val) vTX
-        Nothing -> return (LBS.null vTX)
+    maybe (return (LBS.null vTX)) (flip matchMDB_LBS k) mbv
 
--- match lazy bytestring without copying. assumes size match.
+matchMDB_LBS :: MDB_val -> LBS.ByteString -> IO Bool
+matchMDB_LBS v s =
+    let szMatch = fromIntegral (mv_size v) == LBS.length s in
+    if not szMatch then return False else matchLBS (mv_data v) s
+
 matchLBS :: Ptr Word8 -> LBS.ByteString -> IO Bool
 matchLBS !p s = case s of
-    LBS.Empty -> return True
     (LBS.Chunk (BS.PS fp off len) more) -> do
         iCmp <- withForeignPtr fp $ \ s -> BS.memcmp p (s `plusPtr` off) len
-        if (0 /= iCmp) then return False
-                       else matchLBS (p `plusPtr` len) more
+        if (0 /= iCmp) then return False else matchLBS (p `plusPtr` len) more
+    LBS.Empty -> return True
 
--- the main challenge for 
-doRefctGC :: DB -> MDB_txn -> RCU -> IO ()
-doRefctGC = undefined
+
+-- Reference counts are recorded in the `db_rfct` table as a simple
+-- string of [1-9][0-9]*. Anything not in the table is assumed to have
+-- zero persistent references.
+dbGetRefct :: DB -> MDB_txn -> Hash -> IO Int
+dbGetRefct db txn h =
+    assert (BS.length h == stowKeyLen) $
+    withBSKey h $ \ hMDB -> 
+        mdb_get' txn (db_rfct db) hMDB >>= \ mbv ->
+        maybe (return 0) readRefct mbv
+
+readRefct :: MDB_val -> IO Int
+readRefct v = go 0 (mv_data v) (mv_size v) where
+    go !n !p !sz =
+        if (0 == sz) then return n else
+        peek p >>= \ c ->
+        assert ((48 <= c) && (c < 58)) $
+        let n' = (10 * n) + fromIntegral (c - 48) in
+        go n' (p `plusPtr` 1) (sz - 1)
+
+
+digitCt :: Int -> Int
+digitCt = go 1 . div10 where
+    go !ct !q = if (0 == q) then ct else go (1 + ct) (div10 q)
+    div10 = flip div 10
+
+-- For incremental GC, we may have GC pending for several resources.
+-- These resources, or at least a subset thereof, must be processed
+-- in addition to the writes performed by the transaction.
+--
+-- This function returns a list of resources pending GC, filtering
+-- for those in our ephemeron table. Thus, the returned hashes will
+-- be collected unless we somehow have a pending incref for them.
+dbGCPend :: DB -> MDB_txn -> Int -> IO [Hash]
+dbGCPend db txn nMax =
+    if (nMax < 1) then return [] else
+    alloca $ \ pHash -> do
+    crs <- mdb_cursor_open' txn (db_zero db)
+    hold <- readIORef (db_hold db)
+    let loop !b !n !r =
+            if ((not b) || (0 == n)) then return r else
+            peek pHash >>= \ hMDB ->
+            ephHashMDB hMDB >>= \ eh ->
+            mdb_cursor_get' MDB_NEXT crs pHash nullPtr >>= \ b' ->
+            if Mi.member eh hold then loop b' n r else
+            copyMDB_to_BS hMDB >>= \ h ->
+            loop b' (n - 1) (h : r)
+    b0 <- mdb_cursor_get' MDB_FIRST crs pHash nullPtr
+    lst <- loop b0 nMax []
+    mdb_cursor_close' crs
+    return lst
+    
+
+-- Challenges for Reference Counting:
+--
+-- - write reference counts only once per object
+-- - limit cascading destruction, incremental GC
+--
+-- To control cascading destruction, my current proposal is this: 
+-- use a soft GC quota and a breadth-first destruction model. If
+-- we surpass the quota, we can simply
+--
+-- A reasonable way to decide the quota is based on the size of our
+-- transaction. This way, GC doesn't fall behind writes and tends to
+-- catch over a few frames, and the time spent on GC is proportional
+-- to time spent on mutations. 
+--
+doRefctUpd :: DB -> MDB_txn -> RCU -> IO ()
+doRefctUpd db txn = undefined
+{-
+            rc <- flip M.traverseWithKey rcu $ \ h u ->
+                dbGetRefct db txn h >>= \ rc0 -> return (rc0 + u)
+-}
+
 
 -- indent all lines by w
 indent :: String -> String -> String
@@ -825,4 +911,7 @@ indent w = (w ++) . indent' where
 putErrLn :: String -> IO ()
 putErrLn = Sys.hPutStrLn Sys.stderr
         
+
+
+
 
