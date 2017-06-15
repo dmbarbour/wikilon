@@ -703,8 +703,8 @@ checkTX (TX db st) =
 -- than I'd prefer, and it potentially writes some resources that are
 -- GC'd in the very same round, which is a waste of effort. So those
 -- are some areas for improvement. But it's only a moderate difference
--- in performance overall: stowage is copied on creation, deletion, and
--- once per read. At best we can remove the 'copied on deletion'.
+-- in performance overall: data is copied on creation, deletion, and
+-- on read. At best we can remove the 'copied on deletion' here.
 dbWriter :: DB -> IO ()
 dbWriter !db = initLoop `catches` handlers where
     handlers = [Handler onGC, Handler onError]
@@ -738,7 +738,7 @@ dbWriter !db = initLoop `catches` handlers where
         let toWriteList = M.toList . M.mapKeys toSafeKey
         writes <- toWriteList <$> foldM joinWrite mempty txList
 
-        -- record data we're overwriting, for refct updates.
+        -- copy data we're overwriting, for refct updates.
         overwrites <- flip mapM writes $ \ (k,_) -> 
             withLBSKey k $ \ kMDB -> 
                 mdb_get' txn (db_data db) kMDB >>=
@@ -765,6 +765,7 @@ dbWriter !db = initLoop `catches` handlers where
         newRsc <- filterM isNewRsc (M.toList stowed)
 
         -- write the newly stowed resources
+        --   (hash is divided between key and value)
         let doStow (h,v) =
                 assert (validHashLen == BS.length h) $
                 let (key,rem) = BS.splitAt stowKeyLen h in
@@ -884,6 +885,8 @@ doRefctUpd db txn = initGCFrame where
 
     gcDone = mapM_ (uncurry (dbSetRefct db txn)) . M.toList
 
+    hashRem = validHashLen - stowKeyLen
+
     -- delete a single resource, unless it's in the db_hold table.
     -- follow references from this resource.
     gcDel :: RCU -> Hash -> IO RCU
@@ -893,10 +896,10 @@ doRefctUpd db txn = initGCFrame where
         if blockDel then dbSetRefct db txn h 0 >> return rcu else
         withBSKey h $ \ mdbKey -> do
 
-        -- copy resource to scan for reference counts
-        let hashRem = validHashLen - stowKeyLen
-        let toLBS = fmap (LBS.fromStrict . BS.drop hashRem) 
-                  . maybe (return BS.empty) copyMDB_to_BS
+        -- copy resource data to scan for reference counts.
+        let toLBS = fmap LBS.fromStrict 
+                  . maybe (return BS.empty) 
+                          (copyMDB_to_BS . mdbSkip hashRem)
         rsc <- toLBS =<< mdb_get' txn (db_stow db) mdbKey
 
         -- remove resource from the database
@@ -905,6 +908,13 @@ doRefctUpd db txn = initGCFrame where
         mdb_del' txn (db_stow db) mdbKey Nothing
 
         return $! addRCU (-1) (hashDeps rsc) rcu
+
+-- skip the first n bytes of an MDB_val
+mdbSkip :: Int -> MDB_val -> MDB_val
+mdbSkip n (MDB_val sz p) = 
+    let cLen = fromIntegral n in
+    assert (sz > cLen) $
+    MDB_val (sz - cLen) (p `plusPtr` n)
 
 
 -- Reference counts are recorded in the `db_rfct` table as a simple
