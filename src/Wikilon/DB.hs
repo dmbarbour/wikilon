@@ -912,9 +912,8 @@ doRefctUpd db txn = initGCFrame where
 -- skip the first n bytes of an MDB_val
 mdbSkip :: Int -> MDB_val -> MDB_val
 mdbSkip n (MDB_val sz p) = 
-    let cLen = fromIntegral n in
-    assert (sz > cLen) $
-    MDB_val (sz - cLen) (p `plusPtr` n)
+    assert (sz > fromIntegral n) $
+    MDB_val (sz - fromIntegral n) (p `plusPtr` n)
 
 
 -- Reference counts are recorded in the `db_rfct` table as a simple
