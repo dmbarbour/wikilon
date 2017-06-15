@@ -50,8 +50,8 @@ import qualified System.Exit as Sys
 import qualified System.FileLock as FL 
 import System.IO.Unsafe (unsafeDupablePerformIO)
 import Data.IORef
-import qualified Data.Map as M
-import qualified Data.IntMap as Mi
+import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as Mi
 import qualified Data.List as L
 import Data.Word (Word8)
 import Data.Bits ((.|.), xor)
@@ -422,10 +422,19 @@ copyLBS !dst s = case s of
 
 -- copy an MDB for use as a Haskell bytestring.
 copyMDB_to_BS :: MDB_val -> IO BS.ByteString
-copyMDB_to_BS (MDB_val clen src) =
-    let len = fromIntegral clen in 
+copyMDB_to_BS (MDB_val cLen src) =
+    let len = fromIntegral cLen in 
     BS.create len $ \ dst -> 
         BS.memcpy dst src len
+
+{-
+-- a zero-copy reference to an MDB val
+-- not valid beyond the transaction.
+unsafeMDB_to_BS :: MDB_val -> IO BS.ByteString
+unsafeMDB_to_BS (MDB_val len p) =
+    newForeignPtr_ p >>= \ fp -> 
+        return (BS.PS fp 0 (fromIntegral len))
+-}
 
 -- | Retrieve value associated with given key.
 --
@@ -690,9 +699,12 @@ checkTX (TX db st) =
 -- prior write frame. Write batching helps amortize a lot of latency
 -- for non-conflicting concurrent or checkpointing transactions.
 --
--- We can potentially get some performance improvements by moving the
--- writer to use mostly zero-copy operations on existing data, but it
--- isn't trivial so I'll leave it for the future.
+-- The current implementation performs more copying from the database
+-- than I'd prefer, and it potentially writes some resources that are
+-- GC'd in the very same round, which is a waste of effort. So those
+-- are some areas for improvement. But it's only a moderate difference
+-- in performance overall: stowage is copied on creation, deletion, and
+-- once per read. At best we can remove the 'copied on deletion'.
 dbWriter :: DB -> IO ()
 dbWriter !db = initLoop `catches` handlers where
     handlers = [Handler onGC, Handler onError]
@@ -767,8 +779,8 @@ dbWriter !db = initLoop `catches` handlers where
         -- compute updated reference counts, then perform GC.
         let rcu = addRCU 1 (L.concatMap (hashDeps . snd) writes)  -- new roots
                 $ addRCU (-1) (L.concatMap (hashDeps . LBS.fromStrict) overwrites)   -- old roots
-                $ addRCU 1 (L.concatMap (hashDeps . snd) newRsc)  -- new internal refs
-                $ addRCU 0 (fmap fst newRsc)                      -- maybe ephemerons
+                $ addRCU 1 (L.concatMap (hashDeps . snd) newRsc)  -- new persistent refs
+                $ addRCU 0 (fmap fst newRsc)                      -- potential ephemerons
                 $ mempty
         doRefctUpd db txn rcu
 
@@ -881,19 +893,18 @@ doRefctUpd db txn = initGCFrame where
         if blockDel then dbSetRefct db txn h 0 >> return rcu else
         withBSKey h $ \ mdbKey -> do
 
-        -- copy resource to follow reference counts.
+        -- copy resource to scan for reference counts
         let hashRem = validHashLen - stowKeyLen
         let toLBS = fmap (LBS.fromStrict . BS.drop hashRem) 
                   . maybe (return BS.empty) copyMDB_to_BS
         rsc <- toLBS =<< mdb_get' txn (db_stow db) mdbKey
-        let rcu' = addRsc (-1) (hashDeps rsc) rcu
 
-        -- fully remove resource from database
-        mdb_del' txn (db_rfct db) mdbKey nullPtr
-        mdb_del' txn (db_zero db) mdbKey nullPtr
-        mdb_del' txn (db_stow db) mdbKey nullPtr
+        -- remove resource from the database
+        mdb_del' txn (db_rfct db) mdbKey Nothing
+        mdb_del' txn (db_zero db) mdbKey Nothing
+        mdb_del' txn (db_stow db) mdbKey Nothing
 
-        return $! rcu'
+        return $! addRCU (-1) (hashDeps rsc) rcu
 
 
 -- Reference counts are recorded in the `db_rfct` table as a simple
@@ -917,15 +928,18 @@ readRefct v = go 0 (mv_data v) (mv_size v) where
 -- reference counts into the `db_zero` table so we can find them again
 -- quickly for incremental GC.
 dbSetRefct :: DB -> MDB_txn -> Hash -> Int -> IO ()
-dbSetRefct db txn h 0 = withBSKey h $ \ hMDB -> do
-    mdb_del' txn (db_rfct db) hMDB nullPtr
-    mdb_put' (compileWriteFlags []) txn (db_zero db) hMDB (MDB_val 0 nullPtr)
+dbSetRefct db txn h 0 = 
+    withBSKey h $ \ hMDB -> do
+        mdb_del' txn (db_rfct db) hMDB Nothing
+        mdb_put' (compileWriteFlags []) txn (db_zero db) hMDB (MDB_val 0 nullPtr)
+        return ()
 dbSetRefct db txn h n = 
     assert (n > 0) $
     withNatVal n $ \ nMDB ->
     withBSKey h $ \ hMDB -> do
-    mdb_del' txn (db_zero db) hMDB nullPtr
-    mdb_put' (compileWriteFlags []) txn (db_rfct db) hMDB nMDB
+        mdb_del' txn (db_zero db) hMDB Nothing
+        mdb_put' (compileWriteFlags []) txn (db_rfct db) hMDB nMDB
+        return ()
 
 withNatVal :: Int -> (MDB_val -> IO a) -> IO a
 withNatVal = withAllocaBytesVal . natDigits
