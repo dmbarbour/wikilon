@@ -912,7 +912,7 @@ doRefctUpd db txn = initGCFrame where
 -- skip the first n bytes of an MDB_val
 mdbSkip :: Int -> MDB_val -> MDB_val
 mdbSkip n (MDB_val sz p) = 
-    assert (sz > fromIntegral n) $
+    assert (sz >= fromIntegral n) $
     MDB_val (sz - fromIntegral n) (p `plusPtr` n)
 
 
