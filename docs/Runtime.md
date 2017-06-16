@@ -15,9 +15,21 @@ Third, compilation from this intermediate language into Haskell, something we ca
 
 Fourth, compilation from the same intermediate language via LibClang, OpenCL, or LLVM. This would provide a basis for JIT compilation. I could compile to use a memory-mapped region for the stack and heap, or compile for external processes or virtual machines to distribute computation. Compiling to binaries for external use could provide integration with conventional systems.
 
-I believe this is a viable, scalable long-term performance path for Awelon. 
+I believe this is a viable, scalable long-term performance path for Awelon.
 
 The first two ideas might be combined, since every accelerated type and function must also be represented in our intermediate language. The intermediate language requires much attention. As will developing a useful set of "primitive" accelerators.
+
+Another option is to avoid Haskell and choose a JIT'd language, like Java or Scala, and "compile" to an intermediate representation that is easy for JIT to specialize, or leverage project lancet (surgical precision JIT tools). But I'd rather avoid this path and move quickly to compilation. I could potentially deal with GHC's plugins package if I immediately need dynamic compilation for a stable subset of the dictionary.
+
+## Indexing of Dictionaries
+
+A related performance concern involves how I should go about indexing dictionaries. 
+
+Wikilon will provide a simple key-value database plus stowage. But the sort of indexing I need for Awelon is: given a specific version of a dictionary, give me the specific version of a type or definition or evaluation or reverse lookup or whatever. So I need a LOT of indices, ideally with a lot of structure sharing too.
+
+To optimize structure sharing, it's best to ensure indices are deterministic, or at least confluent. Determinism is possible either based on the elements of the data being indexed (so the same codebase has the same index, no matter how the codebase is constructed), or based on the origin of the data being indexed. The latter makes it obvious and easy for users to control: you get structure sharing of indexed data insofar as you have structure sharing of the dictionary source on import/export.
+
+Fortunately, it isn't critical that I have great indices up front. Having a merely decent set of indices should do the job for the immediate future. I can introduce new indices later, as needed. So, for now, I'll probably just pursue a trie or prioritized critical-bit tree for everything.
 
 ## Accelerators and Intermediate Language
 
@@ -34,7 +46,9 @@ Desiderata:
 * well behaved failure model
 * labeled jumps, conditions, branching
 
-A special challenge with Awelon is that code can have variable input-output arities. This might be mitigated by specializing code for different arities in use, e.g. using various definitions for application `a` based on the known static arity of the argument, and only falling back to an `a/dyn` where needed.
+A special challenge with Awelon is that code can have variable input-output arities. This might be mitigated by specializing the code for the different arities in use, e.g. replace `a` by `a/dyn` then wherever possible replace `a/dyn` by a specific aritied `a`. 
+
+Requiring our code is statically typed before compilation shouldn't be a problem in practice.
 
 Most internal functions should use unboxed static types without any dynamic checks. But it should also be feasible to "box" a value where needed with just enough type information for gatekeepers and conversion work.
 

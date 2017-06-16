@@ -17,9 +17,9 @@ module Wikilon.DB
     , newTX, txDB, dupTX
     , readKey, readKeyDB
     , readKeys, readKeysDB
-    , writeKey
+    , writeKey, assumeKey
     , loadRsc, loadRscDB
-    , stowRsc
+    , stowRsc, clearRsc
     , commitTX, commitTX_async
     , checkTX
     , FilePath
@@ -51,7 +51,6 @@ import qualified System.FileLock as FL
 import System.IO.Unsafe (unsafeDupablePerformIO)
 import Data.IORef
 import qualified Data.Map.Strict as M
-import qualified Data.IntMap.Strict as Mi
 import qualified Data.List as L
 import Data.Word (Word8)
 import Data.Bits ((.|.), xor)
@@ -70,12 +69,25 @@ dbError = error . (++) "Wikilon.DB: "
 -- and the robust security and distribution properties from using
 -- secure hashes as capabilities. 
 --
--- But for performance, there may be some benefits to mixing in
+-- I've pulled a lot from my older `vcache` package. One thing I did
+-- not bring in is support for persistent variables (PVars) together
+-- with the STM model. Those had some nice properties, handling the
+-- parse, caching, conflict resolution before it reached the database.
+-- It might be worth modeling these again, above this DB, via another
+-- module.
+--
+-- For performance, there may be great benefits for mixing in the
+-- use of STM to support persistent variables, and move conflict
+-- resolution into normal memory.
+--
+-- 
 -- the use of STM for persistent 'variables' and moving conflict
 -- resolution mostly into normal memory (so we only commit the
 -- successful transactions).
 --
 -- In any case, if I model PVars, it will be from another module.
+--
+-- I should also consider adding a 
 
 -- | Wikilon Database Object
 --
@@ -104,7 +116,7 @@ data DB = DB
   , db_signal   :: !(MVar ())               -- work available?
   , db_new      :: !(IORef Stowage)         -- pending stowage
   , db_commit   :: !(IORef [Commit])        -- commit requests
-  , db_hold     :: !(IORef EphTbl)          -- ephemeron table
+  , db_hold     :: !(IORef RCU)             -- ephemeron table
   } 
 -- notes: Reference counts are partitioned so we can quickly locate
 -- objects with zero references for purpose of incremental GC. The
@@ -127,31 +139,35 @@ type Stowage = M.Map Hash ByteString        -- ^ latent batch for DB
 type KVMap = M.Map ByteString ByteString    -- ^ safe keys and values.
 type Commit = ((KVMap,KVMap), MVar Bool)    -- ^ ((reads,writes),returns)
 data R = R !(MVar Int) !(MVar ())           -- ^ simple reader count
-type EphTbl = Mi.IntMap Int                 -- ^ resource ref counts
+type EphTbl = RCU                           -- ^ prevent GC of resources
 
+-- Key Length for Stowage
+--
+-- Wikilon DB uses only half of the hash for LMDB layer lookups, and
+-- uses the remaining half for a constant-time comparison to resist
+-- timing attacks that could otherwise leak capabilities. I assume
+-- 140 bits is sufficient for practical cryptographic uniqueness, at
+-- least within a single runtime.
+--
+-- This same key fragment is used for reference counting and other
+-- features.
+stowKeyLen :: Integral a => a
+stowKeyLen = validHashLen `div` 2
 
--- ephemeron table is a (hash,count) collection with potential for
--- false positives. The hash is an FNV-1a on the first 14 bytes of
--- our base32 secure hash.
-ephHashP :: Ptr Word8 -> Int -> IO Int
-ephHashP !p = fmap fromIntegral . go basis . min rd where
-    rd = min 14 stowKeyLen -- 70 bits entropy or available MDB key
-    basis = 14695981039346656037
-    prime = 1099511628211
-    go :: Word64 -> Int -> IO Word64
-    go !r !n = 
-        if (0 == n) then return r else
-        let ix = (n - 1) in
-        peekElemOff p ix >>= \ c ->
-        let r' = (r `xor` (fromIntegral c)) * prime in
-        go r' ix
+-- Reference count tracking.
+-- 
+-- For now, all reference counts are written into a simple map, using
+-- only the stowKeyLen fragment of the hash string to resist possible
+-- timing attacks. This is far from optimal for allocations, but it is
+-- simple to use in Haskell. 
+type RCU = M.Map Hash Int                   -- ^ rsc ref counts (shortHash!)
 
-ephHashMDB :: MDB_val -> IO Int
-ephHashMDB h = ephHashP (mv_data h) (fromIntegral (mv_size h))
+shortHash :: Hash -> Hash
+shortHash = BS.take stowKeyLen
 
-ephHash :: Hash -> Int
-ephHash = unsafeDupablePerformIO . flip withBSKey ephHashMDB
-
+addRCU :: Int -> [Hash] -> RCU -> RCU 
+addRCU !n = flip (L.foldl' accum) where
+    accum m h = M.insertWith (+) (shortHash h) n m
 
 -- functions to push work to our writer and signal it.
 dbSignal :: DB -> IO ()
@@ -168,24 +184,24 @@ dbPushStow db s = do
     dbSignal db
 
 ephDiff :: EphTbl -> EphTbl -> EphTbl
-ephDiff = Mi.differenceWith $ \ l r -> nz (l - r) where
+ephDiff = M.differenceWith $ \ l r -> nz (l - r) where
     nz 0 = Nothing
     nz n = Just n
 
 -- release ephemeral stowage references.
 dbClearEph :: DB -> EphTbl -> IO ()
 dbClearEph db drop = 
-    traceM ("TX releasing " ++ show (Mi.size drop) ++ " resources") >>
-    if Mi.null drop then return () else
+    traceM ("TX releasing " ++ show (M.size drop) ++ " resources") >>
+    if M.null drop then return () else
     atomicModifyIORef' (db_hold db) $ \ tbl ->
         (ephDiff tbl drop, ())
 
 -- add ephemeral stowage references. 
 dbAddEph :: DB -> EphTbl -> IO ()
-dbAddEph db update = 
-    if Mi.null update then return () else
+dbAddEph db added = 
+    if M.null added then return () else
     atomicModifyIORef' (db_hold db) $ \ tbl ->
-        let tbl' = Mi.unionWith (+) tbl update in 
+        let tbl' = M.unionWith (+) tbl added in 
         (tbl', ())
 
 -- Perform operation while holding a read lock.
@@ -256,7 +272,7 @@ lmdbEnvF = [MDB_NOLOCK, MDB_WRITEMAP, MDB_NOSYNC]
 open :: FilePath -> Int -> IO (Either SomeException DB)
 open fp nMB = try $ do
     FS.createDirectoryIfMissing True fp
-    lock <- tryLockE (fp </> "lockfile")
+    lock <- tryFileLockE (fp </> "lockfile")
     flip onException (FL.unlockFile lock) $ do
         env <- mdb_env_create
 
@@ -305,8 +321,8 @@ open fp nMB = try $ do
 
 
 -- try lock with a simple IOError
-tryLockE :: FilePath -> IO FL.FileLock
-tryLockE fp =
+tryFileLockE :: FilePath -> IO FL.FileLock
+tryFileLockE fp =
     FL.tryLockFile fp FL.Exclusive >>= \ mbLocked ->
     case mbLocked of
         Just fl -> return fl
@@ -338,11 +354,12 @@ instance Eq TX where (==) (TX _ l) (TX _ r) = (==) l r
 data TXS = TXS 
     { tx_read   :: !KVMap   -- reads or assumptions
     , tx_write  :: !KVMap   -- data written since create or commit
-    , tx_hold   :: !EphTbl  -- ephemeral stowage GC roots
+    -- , tx_stow   :: !Stowage -- batched stowage resources 
+    , tx_hold   :: !EphTbl  -- rooted stowage resources
     }
 
 emptyTXS :: TXS
-emptyTXS = TXS mempty mempty mempty 
+emptyTXS = TXS mempty mempty mempty
 
 -- | A transaction is associated with a database.
 txDB :: TX -> DB
@@ -358,15 +375,16 @@ newTX db = do
 
 -- clear ephemeral stowage.
 finiTX :: TX -> IO ()
-finiTX (TX db st) = modifyMVarMasked_ st $ \ s -> do
+finiTX (TX db st) = do
+    s <- swapMVar st emptyTXS
     dbClearEph db (tx_hold s)
-    return emptyTXS
 
 -- | Duplicate a transaction.
 -- 
 -- Fork will deep-copy a transaction object, including its relationship
--- to ephemeral stowage. This may be useful to model partial backtracking
--- for a computation.
+-- with ephemeral stowage resources. This may be useful to model partial
+-- backtracking for a computation, or together with 'clearRsc' to model
+-- large values and temporary filesystems via copy-and-modify of the TX.
 dupTX :: TX -> IO TX
 dupTX (TX db st) = do
     s <- readMVar st
@@ -390,7 +408,7 @@ toSafeKey s = if safe s then s else mkSafe s
     safe s = case LBS.uncons s of
         Just (c, s') -> (c > 31) && (LBS.length s' < maxKeyLen) 
         Nothing -> False -- empty key isn't considered safe
-    mkSafe s = LBS.singleton 26 <> LBS.fromStrict (BS.take stowKeyLen (hashL s))
+    mkSafe s = LBS.singleton 26 <> LBS.fromStrict (shortHash (hashL s))
         -- using (SUB)hash. Won't alias with natural safe keys.
 
 -- use strict bytestring key as MDB_val
@@ -520,18 +538,21 @@ writeKey (TX _ st) (force -> !k) (force -> !v) =
         let w' = M.insert k v (tx_write s) in
         return $! s { tx_write = w' }
 
--- Key Length for Stowage
+-- | Adjust the read assumption for a key.
 --
--- Wikilon DB uses only half of the hash for LMDB layer lookups, and
--- uses the remaining half for a constant-time comparison to resist
--- timing attacks that could otherwise leak capabilities. I assume
--- 140 bits is sufficient for practical cryptographic uniqueness, at
--- least within a single runtime.
+-- This sets or clears the read assumption for a key within a TX,
+-- the value we'll test against when we later commit. This will
+-- overwrite a prior read assumption for the same key, and if set
+-- the read assumption will be validated upon commit as if it was
+-- the value read.
 --
--- This same key fragment is used for reference counting and other
--- features.
-stowKeyLen :: Integral a => a
-stowKeyLen = validHashLen `div` 2
+-- This is useful for testing or to reduce isolation levels for a
+-- long-running transaction.
+assumeKey :: TX -> ByteString -> Maybe ByteString -> IO ()
+assumeKey (TX _ st) (force -> !k) (force -> !mbv) =
+    modifyMVarMasked_ st $ \ s ->
+        let r' = M.alter (const mbv) k (tx_read s) in
+        return $! s { tx_read = r' }
 
 -- | Access a stowed resource by secure hash.
 --
@@ -556,8 +577,6 @@ loadRsc (TX db _) = loadRscDB db
     -- But this might change later.
 
 -- | Load resource directly from database.
---
--- This may miss resources associated with a specific transaction.
 loadRscDB :: DB -> Hash -> IO (Maybe ByteString)
 loadRscDB db !h = 
     if (BS.length h /= validHashLen) then return Nothing else
@@ -601,7 +620,7 @@ ctEqMem !l !r = go 0 where
         rB <- peekElemOff r ix
         go (b .|. (lB `xor` rB)) ix
 
--- | Timing-attack resistant lookup for the new resource table.
+-- Timing-attack resistant lookup for newly allocated resources.
 --
 -- I'm not particularly concerned about timing attacks on new resources.
 -- If the writer is doing its job, the table shouldn't stick around long
@@ -609,7 +628,7 @@ ctEqMem !l !r = go 0 where
 -- efficient, and won't hurt. And maybe our writer isn't doing its job.
 lookupRsc :: Hash -> Stowage -> Maybe ByteString
 lookupRsc h m = 
-    case M.lookupGT (BS.take stowKeyLen h) m of
+    case M.lookupGT (shortHash h) m of
         Just (k,v) | ctEqBS h k -> Just v
         _ -> Nothing
 
@@ -619,28 +638,63 @@ ctEqBS a b =
     (BS.length a == BS.length b) &&
     (0 == (L.foldl' (.|.) 0 (BS.zipWith xor a b)))
 
+-- | Hold a resource within the TX.
+-- 
+-- Multiple resources may be h
+
+
 -- | Move resource to database, returns secure hash (Awelon.Hash).
 --
--- Stowage resources are automatically named by secure hash, which
--- is later used to load the resource from the database as needed.
--- By moving data to the database, stowage can double as a virtual
--- memory system.
+-- Stowed resources are moved to the database immediately, returning
+-- a secure hash that may later be used to identify and access the 
+-- resource. 
 --
--- Wikilon DB will garbage collect resources that are not rooted by
--- a key or TX. A transaction that stows resources should root that
--- data. Stowage is too expensive to be creating lots of nodes that
--- will shortly be GC'd, at least without a lot of consideration.
+-- See 'clearRsc'. 
 --
 stowRsc :: TX -> ByteString -> IO Hash
 stowRsc (TX db st) v = modifyMVarMasked st $ \ s -> do
     h <- evaluate (hashL v)
-    eh <- evaluate (ephHash h)
-    let ephUpd = Mi.singleton eh 1 
-    let hold' = Mi.unionWith (+) (tx_hold s) ephUpd
+    let ephUpd = addRCU 1 [h] mempty 
+    let hold' = M.unionWith (+) (tx_hold s) ephUpd
     let s' = s { tx_hold = hold' }
     dbAddEph db ephUpd
     dbPushStow db (M.singleton h v)
     return (s', h)
+
+-- Note: I might introduce a later `batchRsc` and `pushRscBatch` to
+-- support intermediate stowage within the TX.
+
+-- In the future, I might introduce intermediate 'stow' to just the TX,
+-- together with a 'push' that moves a full batch of resources without
+-- a full commit. The existing `stowRsc` shall still combine stow and
+-- push in this case, albeit just 
+-- for the specific resource stowed.
+
+-- | Release stale ephemeral resources.
+--
+-- Stowed resources are garbage collected, using conservative GC to
+-- recognize hashes, ultimately rooted by keyed data. However, upon
+-- `stowRsc` we'll also create an ephemeral root to protect the data
+-- from premature GC while we're still building our data.
+--
+-- This operation clears stale ephemeral roots from the TX, where all
+-- roots are considered stale unless they're represented in a current
+-- write set (via writeKey). Note: committing a transaction clears the
+-- write set but does not clear ephemeral roots, so you might choose
+-- to clear roots just before or after commit depending on use case.
+-- 
+-- It is feasible use a TX as a temporary file system, never committing
+-- but clearing stale roots where appropriate, to build objects larger 
+-- than memory. With careful use of dupTX similar how bytestrings are
+-- updated by copy-modify, it's even feasible to model big pure values.
+clearRsc :: TX -> IO ()
+clearRsc (TX db st) = dbClearEph db =<< clearEphTX where
+    clearEphTX = modifyMVarMasked st $ \ s -> do
+        let wsDeps = L.concatMap hashDeps (M.elems (tx_write s))
+        let hold' = M.intersection (tx_hold s) (addRCU 1 wsDeps mempty)
+        let s' = s { tx_hold = hold' }
+        hDiff <- evaluate $ M.difference (tx_hold s) hold'
+        return $! s' `seq` (s', hDiff)
 
 -- | Commit transaction to database. Synchronous.
 --
@@ -658,14 +712,15 @@ commitTX tx = commitTX_async tx >>= id
 -- or failure. This is mostly useful for asynchronous checkpoints.
 -- Commits from a single transaction are always applied in order, 
 -- and multiple commits in a short period of time may coalesce into
--- a single write batch. 
+-- a single write batch (modulo concurrent interference).
+--  
 commitTX_async :: TX -> IO (IO Bool)
 commitTX_async (TX db st) = modifyMVarMasked st $ \ s -> do
     ret <- newEmptyMVar 
     dbPushCommit db ((tx_read s, tx_write s), ret)
     let rd' = M.union (tx_write s) (tx_read s)
-    let s' = s { tx_read = rd', tx_write = mempty }
-    return (s', readMVar ret)
+    let s' = s { tx_read = rd', tx_write = mempty, tx_hold = mempty }
+    return $! s' `seq` (s', readMVar ret)
 
 -- | Diagnose a transaction.
 --
@@ -740,7 +795,7 @@ dbWriter !db = initLoop `catches` handlers where
         txList <- L.reverse <$> atomicModifyIORef (db_commit db) (\ lst -> ([],lst))
         stowed <- atomicModifyIORef (db_new db) (\x -> (x,x)) -- atomic to prevent reordering
         hold <- readIORef (db_hold db)
-        let blockDel = flip Mi.member hold . ephHash 
+        let blockDel = flip M.member hold . shortHash 
 
 
         -- collapse writes to single batch
@@ -751,6 +806,7 @@ dbWriter !db = initLoop `catches` handlers where
         let wRCU = addRCU 1 (L.concatMap hashDeps (M.elems writes))
                  $ addRCU (-1) (L.concatMap hashDeps (M.elems overwrites))
                  $ mempty
+        let peek_wRCU = fromMaybe 0 . flip M.lookup wRCU . shortHash
 
         -- filter stowage to new rooted resources.
         --   roots may be persistent or ephemeral
@@ -758,8 +814,8 @@ dbWriter !db = initLoop `catches` handlers where
             newRsc <- filterKeysM (isNewRsc db txn) stowed
             let isShallowRoot h = 
                     if blockDel h then return True else
-                    let u = fromMaybe 0 (M.lookup (BS.take stowKeyLen h) wRCU) in
-                    dbGetRefct db txn h >>= \ ct -> return ((ct + u) /= 0)
+                    dbGetRefct db txn h >>= \ ct -> 
+                    return $! ((ct + peek_wRCU h) /= 0)
             let f = maybe [] hashDeps . flip M.lookup newRsc
             rooted <- rootSet f <$> filterM isShallowRoot (M.keys newRsc)
             return $! (newRsc `M.intersection` rooted) -- new AND rooted resources
@@ -769,7 +825,7 @@ dbWriter !db = initLoop `catches` handlers where
         --   incremental: use quota, search for pending GC candidates
         let txSize = M.size writes + M.size writeRsc
         let qc = 50 + (2 * txSize) -- max pending GC candidates
-        let qgc = 5 * qc           -- soft max items to delete at once
+        let qgc = 5 * qc           -- soft max for items deleted
 
         gcCand <- dbGCPend db txn hold qc -- pending GC candidates
         let rcu = addRCU 0 (M.keys writeRsc)    -- new ephemerons
@@ -857,24 +913,20 @@ dbGCPend db txn hold quota = alloca $ \ pHash -> do
     let loop !b !n !r =
             if ((not b) || (0 == n)) then return r else
             peek pHash >>= \ hMDB ->
-            assert (mv_size hMDB == stowKeyLen) $
-            ephHashMDB hMDB >>= \ eh ->
-            mdb_cursor_get' MDB_NEXT crs pHash nullPtr >>= \ b' ->
-            if Mi.member eh hold then loop b' n r else
             unsafeMDB_to_BS hMDB >>= \ h ->
-            loop b' (n - 1) (h : r)
+            mdb_cursor_get' MDB_NEXT crs pHash nullPtr >>= \ b' ->
+            assert (mv_size hMDB == stowKeyLen) $
+            let skip = M.member h hold in
+            if skip then loop b' n r
+                    else loop b' (n - 1) (h : r)
     b0 <- mdb_cursor_get' MDB_FIRST crs pHash nullPtr
     lst <- loop b0 quota []
     mdb_cursor_close' crs
     return lst
 
-
-
-
-
 -- test whether a resource is new to the LMDB layer
 isNewRsc :: DB -> MDB_txn -> Hash -> IO Bool
-isNewRsc db txn h = withBSKey (BS.take stowKeyLen h) $ \ mdbKey ->
+isNewRsc db txn h = withBSKey (shortHash h) $ \ mdbKey ->
     isNothing <$> mdb_get' txn (db_stow db) mdbKey
 
 -- skip the first n bytes of an MDB_val
@@ -900,18 +952,6 @@ rootSet :: (Ord k) => (k -> [k]) -> [k] -> RootSet k
 rootSet f = addTo mempty where
     addTo = L.foldl' $ \ r k -> if M.member k r then r else addTo r (f k) 
 
-
--- Reference count tracking.
--- 
--- For now, all reference counts are written into a simple map, using
--- only the stowKeyLen fragment of the hash string to resist possible
--- timing attacks. This is far from optimal for allocations, but it is
--- simple to use in Haskell. 
-type RCU = M.Map Hash Int
-
-addRCU :: Int -> [Hash] -> RCU -> RCU 
-addRCU !n = flip (L.foldl' accum) where
-    accum m h = M.insertWith (+) (BS.take stowKeyLen h) n m
 
 allM :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
 allM fn (x:xs) = fn x >>= \ b -> if not b then return False else allM fn xs
