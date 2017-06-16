@@ -1,6 +1,0 @@
-*.o
-*.so
-testSuite
-runABC
-linkAO
-testdir/

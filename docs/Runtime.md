@@ -1,9 +1,76 @@
 
-**NOTE (May 2017):** I feel I've gotten tangled in the weeds when re-implementing the runtime for the simplified Awelon language developed circa November 2016. It's partially GC and such that are causing much heartache, and partially the challenges surrounding database integration with size bounded contexts. So I'm tabling the C runtime for now. I'll return to C after I have a version working reasonably well in Haskell. And even then, only if I cannot achieve sufficient performance from Haskell or perhaps an LLVM compiler.
+**NOTE (May 2017):** I feel I've been tangled in the weeds when re-implementing the runtime for the simplified Awelon language developed circa November 2016. It's GC, linking, stowage, and such that are causing much heartache. So I'm moving to a Haskell runtime for now, and might move some parts to C (or LLVM?) later.
 
-# Haskell Runtime Design
+# Awelon Runtime Design
 
-Haskell simplifies some problems like compacting GC and parallelism, ad-hoc use of stowage for indexing and histories, etc.. Other features are made more complicated, such as linear references and in-place mutations of arrays. It isn't clear how to perform JIT compilation, especially not at a large scale. GHC's plugins don't really offer what I want here.
+Haskell simplifies many problems surrounding GC, parallelism, parsing, serialization, stowage, linking, and indexing. OTOH, my Haskell interpreters for prior Awelon definitions have consistently been about 10x worse than C interpreters, even when I'm relatively careful about it. And I really want to do about 10x better than my prior C interpreters. 
+
+So what is my performance path?
+
+First, accelerators. I can and should get started much earlier on a widely useful "standard library" of accelerated functions and types. If every time I see a significant performance bottleneck, I accelerate, I can consistently ratchet up performance and parallelism both.
+
+Second, compilation from Awelon to an intermediate language *designed* for fast interpretation or further JIT. I've already discussed under [Awelon Language](AwelonLang.md) how it isn't too difficult to rewrite a lot of Awelon code to an intermediate language where we have call-return, labeled jumps, more conventional loops and branching, perhaps even a few registers for data plumbing. Hand crafted accelerators and types would become primitives at this layer. 
+
+Third, compilation from this intermediate language into Haskell, something we can link directly into our runtimes. We can leverage Template Haskell to represent a "standard library" Awelon dictionary in a subdirectory of the Wikilon project, and compile everything fully to well-typed Haskell, with an option for gate-keeper code where appropriate. This would make it a lot easier to extend the set of accelerators. And I believe I can achieve excellent performance this way.
+
+Fourth, compilation from the same intermediate language via LibClang, OpenCL, or LLVM. This would provide a basis for JIT compilation. I could compile to use a memory-mapped region for the stack and heap, or compile for external processes or virtual machines to distribute computation. Compiling to binaries for external use could provide integration with conventional systems.
+
+I believe this is a viable, scalable long-term performance path for Awelon. 
+
+The first two ideas might be combined, since every accelerated type and function must also be represented in our intermediate language. The intermediate language requires much attention. As will developing a useful set of "primitive" accelerators.
+
+## Accelerators and Intermediate Language
+
+Desiderata:
+
+* unboxed static types where feasible
+* numbers, tuples, vectors, records
+* lightweight uniqueness tracking
+ * statically typed uniqueness
+ * static in-place mutation
+ * dynamic uniqueness tracking
+* fine-grained parallelism
+* lightweight data plumbing
+* well behaved failure model
+* labeled jumps, conditions, branching
+
+A special challenge with Awelon is that code can have variable input-output arities. This might be mitigated by specializing code for different arities in use, e.g. using various definitions for application `a` based on the known static arity of the argument, and only falling back to an `a/dyn` where needed.
+
+Most internal functions should use unboxed static types without any dynamic checks. But it should also be feasible to "box" a value where needed with just enough type information for gatekeepers and conversion work.
+
+Ideally, we can easily track uniqueness where needed. Static typing of uniqueness would mean we don't need to check dynamically. We might benefit from dynamic uniqueness tracking in some cases, however, so we can 
+
+
+
+unboxed, statically typed code
+
+For uniqueness, 99% of the time we should be able to assume uniqueness. But 
+
+I think most code can be compiled to use unboxed data types, meaning that our compiler should *know* when it is looking at a natural number, tuple, vector, record, or whatever. But it should also be possible to work with dynamic types at the edges of our system, to model the gatekeepers at the edges of compiled functions. We should know statically where we have a dynamic type.
+
+
+
+
+The intermediate language should support a lightweight f with conversions back into Awelon language. 
+
+
+
+
+For static types, I want the compiler to *know* when it's looking at a natural number or vector or whatever, 
+
+ to *know* what type I'm looking at
+
+
+It might be I'll want multiple layers of intermediate languages during compilation. 
+
+One idea is that I could borrow Haskell's STG machine for my intermediate language, but I don't feel it is optimally suitable for Awelon.
+
+
+
+
+Some features are made more complicated, such as linear references and in-place mutations of arrays. It isn't clear how to perform JIT compilation, especially not at a large scale. GHC's plugins don't seem to offer what I want here.
+
+
 
 Short-term, it seems feasible to hand develop many accelerators by hand. Further, I can feasibly compile one or more 'standard library' dictionaries directly into the Wikilon codebase, leveraging template Haskell or a staged cabal `Setup.hs`. Both the hand accelerators and compiler could be developed for ongoing improvement.
 
@@ -14,6 +81,16 @@ Long term, I'd like to properly bootstrap Awelon, and have it self-compile with 
 *Notes:* It seems feasible to leverage `plugins` as a lightweight approach for hot swapping the reference dictionaries. We might also use `compact` to reduce GC overheads for static indexes.
 
 # C Runtime Design
+
+Originally I intended to model most of the runtime at the C layer. 
+
+Unfortunately, this introduces a lot of undesirable challenges surrounding the indexing, link, and stowage layers. At this point, I'd like to move most these challenging aspects out to the Haskell layer, and focus on a highly 
+
+
+ challenging in context of
+
+  but with the change to Awelon's definition this seems to be more difficult to achieve.
+
 
 A primary goal for runtime is performance of *applications*. Awelon's non-conventional [application model](ApplicationModel.md) involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Thus, performance of processing these updates must be considered part of application performance, not just final evaluation costs.
 
