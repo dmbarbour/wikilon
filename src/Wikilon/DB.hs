@@ -20,8 +20,8 @@ module Wikilon.DB
     , writeKey, assumeKey
     , loadRsc, loadRscDB
     , stowRsc, clearRsc
-    , commitTX, commitTX_async
-    , checkTX
+    , commit, commit_async
+    , check
     , FilePath
     , ByteString
     , module Awelon.Hash
@@ -59,7 +59,7 @@ import Data.Maybe
 import Database.LMDB.Raw
 import Awelon.Syntax (validWordByte)
 import Awelon.Hash
-import Debug.Trace
+-- import Debug.Trace
 
 -- these errors shouldn't appear regardless of user input
 dbError :: String -> a
@@ -76,18 +76,14 @@ dbError = error . (++) "Wikilon.DB: "
 -- It might be worth modeling these again, above this DB, via another
 -- module.
 --
--- For performance, there may be great benefits for mixing in the
--- use of STM to support persistent variables, and move conflict
--- resolution into normal memory.
+-- Another potential performance improvement would be switching from
+-- the current use of the Data.Map balanced tree to a critical-bits
+-- tree or another optimal structure.
 --
--- 
--- the use of STM for persistent 'variables' and moving conflict
--- resolution mostly into normal memory (so we only commit the
--- successful transactions).
---
--- In any case, if I model PVars, it will be from another module.
---
--- I should also consider adding a 
+-- And I might consider adding a set of `withData` zero-copy models,
+-- at least if the need arises. This could improve efficiency when
+-- parsing or working with indexed data structures, at the cost of
+-- delaying our writer while our read lock is held.
 
 -- | Wikilon Database Object
 --
@@ -191,7 +187,7 @@ ephDiff = M.differenceWith $ \ l r -> nz (l - r) where
 -- release ephemeral stowage references.
 dbClearEph :: DB -> EphTbl -> IO ()
 dbClearEph db drop = 
-    traceM ("TX releasing " ++ show (M.size drop) ++ " resources") >>
+    --traceIO ("TX releasing resources " ++ show (M.keys drop)) >>
     if M.null drop then return () else
     atomicModifyIORef' (db_hold db) $ \ tbl ->
         (ephDiff tbl drop, ())
@@ -638,11 +634,6 @@ ctEqBS a b =
     (BS.length a == BS.length b) &&
     (0 == (L.foldl' (.|.) 0 (BS.zipWith xor a b)))
 
--- | Hold a resource within the TX.
--- 
--- Multiple resources may be h
-
-
 -- | Move resource to database, returns secure hash (Awelon.Hash).
 --
 -- Stowed resources are moved to the database immediately, returning
@@ -663,12 +654,6 @@ stowRsc (TX db st) v = modifyMVarMasked st $ \ s -> do
 
 -- Note: I might introduce a later `batchRsc` and `pushRscBatch` to
 -- support intermediate stowage within the TX.
-
--- In the future, I might introduce intermediate 'stow' to just the TX,
--- together with a 'push' that moves a full batch of resources without
--- a full commit. The existing `stowRsc` shall still combine stow and
--- push in this case, albeit just 
--- for the specific resource stowed.
 
 -- | Release stale ephemeral resources.
 --
@@ -703,8 +688,10 @@ clearRsc (TX db st) = dbClearEph db =<< clearEphTX where
 -- Transactions may be committed more than once. In that case, each
 -- commit essentially checkpoints the overall transaction, limiting
 -- how much work is lost upon a future commit failure.
-commitTX :: TX -> IO Bool
-commitTX tx = commitTX_async tx >>= id
+--
+-- Committing a transaction does not implicitly clear resources. 
+commit :: TX -> IO Bool
+commit tx = commit_async tx >>= id
 
 -- | Asynchronous Commit.
 --
@@ -714,12 +701,12 @@ commitTX tx = commitTX_async tx >>= id
 -- and multiple commits in a short period of time may coalesce into
 -- a single write batch (modulo concurrent interference).
 --  
-commitTX_async :: TX -> IO (IO Bool)
-commitTX_async (TX db st) = modifyMVarMasked st $ \ s -> do
+commit_async :: TX -> IO (IO Bool)
+commit_async (TX db st) = modifyMVarMasked st $ \ s -> do
     ret <- newEmptyMVar 
     dbPushCommit db ((tx_read s, tx_write s), ret)
     let rd' = M.union (tx_write s) (tx_read s)
-    let s' = s { tx_read = rd', tx_write = mempty, tx_hold = mempty }
+    let s' = s { tx_read = rd', tx_write = mempty }
     return $! s' `seq` (s', readMVar ret)
 
 -- | Diagnose a transaction.
@@ -729,8 +716,8 @@ commitTX_async (TX db st) = modifyMVarMasked st $ \ s -> do
 -- to diagnose contention or concurrency issues, and may be checked
 -- after a transaction fails to gain more information. The result is
 -- ephemeral, however, subject to change by concurrent writes.
-checkTX :: TX -> IO [ByteString]
-checkTX (TX db st) =
+check :: TX -> IO [ByteString]
+check (TX db st) =
     readMVar st >>= \ s ->
     withReadLock db $ do
     txn <- mdb_txn_begin (db_env db) Nothing True
@@ -806,7 +793,6 @@ dbWriter !db = initLoop `catches` handlers where
         let wRCU = addRCU 1 (L.concatMap hashDeps (M.elems writes))
                  $ addRCU (-1) (L.concatMap hashDeps (M.elems overwrites))
                  $ mempty
-        let peek_wRCU = fromMaybe 0 . flip M.lookup wRCU . shortHash
 
         -- filter stowage to new rooted resources.
         --   roots may be persistent or ephemeral
@@ -814,11 +800,14 @@ dbWriter !db = initLoop `catches` handlers where
             newRsc <- filterKeysM (isNewRsc db txn) stowed
             let isShallowRoot h = 
                     if blockDel h then return True else
-                    dbGetRefct db txn h >>= \ ct -> 
-                    return $! ((ct + peek_wRCU h) /= 0)
+                    let u = fromMaybe 0 (M.lookup (shortHash h) wRCU) in do
+                    ct <- dbGetRefct db txn h
+                    return $! ((ct + u) /= 0)
+            newRoots <- filterM isShallowRoot (M.keys newRsc)
             let f = maybe [] hashDeps . flip M.lookup newRsc
-            rooted <- rootSet f <$> filterM isShallowRoot (M.keys newRsc)
+            let rooted = rootSet f newRoots
             return $! (newRsc `M.intersection` rooted) -- new AND rooted resources
+
 
         -- determine which elements must be GC'd.
         --   cascading: follow tree-structured data, delete children
@@ -950,7 +939,9 @@ mapKeysM op = M.traverseWithKey $ \ k _ -> op k
 type RootSet k = M.Map k ()
 rootSet :: (Ord k) => (k -> [k]) -> [k] -> RootSet k
 rootSet f = addTo mempty where
-    addTo = L.foldl' $ \ r k -> if M.member k r then r else addTo r (f k) 
+    addTo = L.foldl' $ \ r k -> 
+        if M.member k r then r 
+                        else addTo (M.insert k () r) (f k) 
 
 
 allM :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
