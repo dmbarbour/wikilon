@@ -26,12 +26,20 @@ library
     Wikilon
     Wikilon.CX
     Wikilon.DB
+    Wikilon.RT
+    Wikilon.Trie
   build-depends:       base >= 4.7 && < 5
-                     , mtl, deepseq
+                     , transformers
+                     , deepseq
+                     , array
                      , containers (>= 0.5.8)
-                     , bytestring, utf8-string, array, blake2
+                     , bytestring
+                     , utf8-string
+                     , blake2
                      , lmdb
-                     , filelock, filepath, directory
+                     , filelock
+                     , filepath
+                     , directory
   default-language:    Haskell2010
 
 executable wikilon-exe

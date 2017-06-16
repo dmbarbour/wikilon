@@ -50,6 +50,8 @@ class (Par m) => Async m where
     peek :: F m a -> m Bool     -- ^ will `join` be immediate?
     wait :: [F_ m] -> m ()      -- ^ wait for available result
 
+-- note: I might also need to lift operations into the future.
+
 -- | Note on Acceleration of Kahn Process Networks
 --
 -- Use of Async peek and wait can support KPN accelerators via the
@@ -78,7 +80,7 @@ class (Par m) => Async m where
 -- dependencies, CSE optimization, etc.. Some accelerators might also
 -- use laziness.
 class Lazy m where 
-    lazy :: m a -> m a      -- ^ wrap computation for memoization
+    lazy :: m a -> m a     -- ^ wrap computation for memoization
 
 -- | Trace Message Debugging
 --
@@ -91,24 +93,26 @@ class Trace m where
 -- | Data Stowage
 --
 -- Awelon heavily utilizes a notion of 'secure hash resources', which
--- are essentially just binary resources that are uniformly identified
--- by secure hash. (Specifically, Awelon.Hash.) I call this "stowage"
--- to distinguish from conventional data storage (which requires more
--- concepts: state, effects, time, identity). 
+-- are essentially just binary resources that are globally identified
+-- by secure hash. (Specifically, Awelon.Hash.) I call this "stowage".
+-- Stowage doesn't quite need an effects model, modulo the potential 
+-- that we might fail to load a resource.
+-- 
+-- Stowed resources are garbage collected. In general, the resource 
+-- must be rooted for it to be protected, but we must ensure recently
+-- stowed resources are guarded against GC until we have time to put
+-- them into our databases.
 --
--- Stowage is compatible with purely functional computations, and it
--- greatly simplifies working with larger than memory data. It can act
--- as a virtual memory extension, or be leveraged to construct massive
--- databases as first class values. Stowed resources can be garbage
--- collected, generally using conservative techniques (cf. hashDeps).
---
--- It is possible a resource identifier is unknown, unrecognized, or
--- cannot be downloaded at the current time. Thus, `load` may return
--- Nothing.
+-- This current API is conservative, everything stowed is guarded up
+-- to the implicit transaction. If more precision is required, I may
+-- need to integrate this with a checkpointing model or similar so we
+-- can determine which resources are rooted.
 -- 
 class Stowage m where
     load :: Hash -> m (Maybe ByteString)
     stow :: ByteString -> m Hash
+
+-- question: how do 
 
 -- | Cached Computations
 --
