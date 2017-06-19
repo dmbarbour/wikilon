@@ -11,6 +11,9 @@
 -- My expectation is that we'll have many reads per write. But if I'm
 -- wrong about that, I can move data to LevelDB.
 --
+-- The module Wikilon.Trie provides first-class database values above
+-- the stowage layer.
+--
 module Wikilon.DB
     ( DB, TX
     , open
@@ -84,6 +87,12 @@ dbError = error . (++) "Wikilon.DB: "
 -- at least if the need arises. This could improve efficiency when
 -- parsing or working with indexed data structures, at the cost of
 -- delaying our writer while our read lock is held.
+--
+-- Another potential feature: browsing resources. But this would be
+-- a feature that is insecure except for use by administrators, so
+-- I'm not too keen on starting with it. Secure browsing of resource
+-- IDs (and size info) is feasible if we present only the `stowKeyLen`
+-- partial hash.
 
 -- | Wikilon Database Object
 --

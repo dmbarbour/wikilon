@@ -99,14 +99,13 @@ class Trace m where
 -- that we might fail to load a resource.
 -- 
 -- Stowed resources are garbage collected. In general, the resource 
--- must be rooted for it to be protected, but we must ensure recently
+-- must be rooted for it to be protected, but we also ensure recently
 -- stowed resources are guarded against GC until we have time to put
--- them into our databases.
+-- them into our database or checkpoint.
 --
--- This current API is conservative, everything stowed is guarded up
--- to the implicit transaction. If more precision is required, I may
--- need to integrate this with a checkpointing model or similar so we
--- can determine which resources are rooted.
+-- This API assumes newly stowed resources will be preserved for the
+-- full computation. But checkpointing computations may release any
+-- resources that are no longer rooted at instant of checkpoint.
 -- 
 class Stowage m where
     load :: Hash -> m (Maybe ByteString)

@@ -22,6 +22,7 @@ data RTE = RTE
     }
 newtype RT a = RT (ReaderT RTE IO a)
 
--- Adding some form of checkpoint model to our RTE seems useful.
+-- Adding some form of checkpoint model to our RTE seems potentially
+-- useful.
 
 

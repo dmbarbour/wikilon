@@ -75,7 +75,7 @@ Each patch consists of a list of patches to logically include followed by a list
 
 Deletion of words may be represented using a trivial cycle such as `@foo foo`. In general, cyclic definitions are considered errors (recursive functions must use fixpoint combinators, see below). But Awelon systems should recognize the trivial cyclic definition and raise warnings appropriate for undefined words rather than cyclic definitions.
 
-Direct text editing of dictionary binaries does not scale nicely. This format is primarily intended for import and export, sharing of code between Awelon systems. Humans should usually observe and edit a dictionary through a level of indirection, such as a web service. A service may frequently use structured or indexed representations under the hood.
+Direct text editing of dictionary binaries does not scale nicely. This format is primarily intended for import and export, sharing of code between Awelon systems. Humans should usually observe and edit a dictionary through a level of indirection, such as a web service. A service may frequently use structured or indexed representations under the hood. 
 
 *Note:* See *Hierarchical Dictionaries* and *Secure Hash Resources* for more.
 
@@ -98,11 +98,11 @@ Embedded texts may be understood as specialized words. Texts should contain vali
         "→"    = [226 [134 [146 "" :] :] :]
         ""      = ~
 
-Definitions of `0` and `S`, `~` and `:` - zero and successor, nil and cons - are left to developers. This permits some choice of encoding, such as a Church encoding versus a Mogensen-Scott encoding. In practice, however, this choice belongs to runtime or compiler developers, who must determine which models are subject to *Acceleration*.
+Definitions of `0` and `S`, `~` and `:` - zero and successor, nil and cons - are left to developers. This permits a flexible choice of encoding, such as a Church encoding versus a Mogensen-Scott encoding. In practice, however, this choice belongs to runtime and compiler developers, who must determine which models are subject to *Acceleration*.
 
 Natural numbers and embedded texts are only barely sufficient for embedding of data in code. The intention is to use these as the foundation for *Editable Views* that can support decimal numbers, structured data, EDSLs, a richer syntax, even graphical programming if we assume a suitable editor. Additionally, programmers may leverage *Secure Hash Resources* to reference external texts and binaries.
 
-*Note 2017 May:* Support for multi-line embedded texts was removed from Awelon.
+*Note 2017 May:* Support for multi-line embedded texts was removed from Awelon, and semantics of texts were switched from codepoint to binary representation. Binary secure hash resources should be used for large texts.
 
 ## Secure Hash Resources
 
@@ -175,9 +175,9 @@ Stowage is a simple idea, summarized by rewrite rules:
         [large value](stow) => [$secureHash]
         [small value](stow) => [small value]
 
-Stowage enables programmers to work semi-transparently with data larger than working memory. Unlike effectful persistence or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, memoized computation, and backtracking. Stowage works nicely with [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), especially structures that batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
+Stowage allows secure hash resources to be constructed or discovered at runtime, and lazily linked. This enables programmers to work semi-transparently with data larger than working memory. Unlike effectful persistence or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, memoized computation, and backtracking. Stowage works nicely with [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), especially structures that batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
 
-*Note:* A variant of stowage may be used for binary data.
+Stowage for binaries may automatically produce binary secure hash resources.
 
 ## Evaluation
 

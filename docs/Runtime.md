@@ -7,9 +7,9 @@ Haskell simplifies many problems surrounding GC, parallelism, parsing, serializa
 
 So what is my performance path?
 
-First, accelerators. I can and should get started much earlier on a widely useful "standard library" of accelerated functions and types. If every time I see a significant performance bottleneck, I accelerate, I can consistently ratchet up performance and parallelism both.
+First, accelerators. I can and should get started much earlier on a widely useful "standard library" of accelerated functions and data types. If every time I see a significant performance bottleneck, I accelerate, I can consistently ratchet up performance and parallelism both, even if I'm assuming simple interpreters.
 
-Second, compilation from Awelon to an intermediate language *designed* for fast interpretation or further JIT. I've already discussed under [Awelon Language](AwelonLang.md) how it isn't too difficult to rewrite a lot of Awelon code to an intermediate language where we have call-return, labeled jumps, more conventional loops and branching, perhaps even a few registers for data plumbing. Hand crafted accelerators and types would become primitives at this layer. 
+Second, compilation from Awelon to an intermediate language designed for fast naive interpretation or further JIT. I've already discussed under [Awelon Language](AwelonLang.md) how it isn't too difficult to rewrite a lot of Awelon code to an intermediate language where we have call-return, labeled jumps, more conventional loops and branching, perhaps even a few registers for data plumbing. Hand crafted accelerators and types would become primitives at this layer. 
 
 Third, compilation from this intermediate language into Haskell, something we can link directly into our runtimes. We can leverage Template Haskell to represent a "standard library" Awelon dictionary in a subdirectory of the Wikilon project, and compile everything fully to well-typed Haskell, with an option for gate-keeper code where appropriate. This would make it a lot easier to extend the set of accelerators. And I believe I can achieve excellent performance this way.
 
@@ -21,15 +21,49 @@ The first two ideas might be combined, since every accelerated type and function
 
 Another option is to avoid Haskell and choose a JIT'd language, like Java or Scala, and "compile" to an intermediate representation that is easy for JIT to specialize, or leverage project lancet (surgical precision JIT tools). But I'd rather avoid this path and move quickly to compilation. I could potentially deal with GHC's plugins package if I immediately need dynamic compilation for a stable subset of the dictionary.
 
-## Indexing of Dictionaries
+## Spike Solution
 
-A related performance concern involves how I should go about indexing dictionaries. 
+I need to get something running quickly (again!), even if it isn't ideal for performance immediately. This will consist of a web server and basic APIs mostly (initially) for human use.
 
-Wikilon will provide a simple key-value database plus stowage. But the sort of indexing I need for Awelon is: given a specific version of a dictionary, give me the specific version of a type or definition or evaluation or reverse lookup or whatever. So I need a LOT of indices, ideally with a lot of structure sharing too.
+Last time around I used Wai directly, but that doesn't scale nicely. I'm inclined to try out Snap or Yesod at this point, or even MFlow (though I'm not happy with MFlow's use of TCache). But for now, I may get started by just using Scotty or raw Wai/Warp again.
 
-To optimize structure sharing, it's best to ensure indices are deterministic, or at least confluent. Determinism is possible either based on the elements of the data being indexed (so the same codebase has the same index, no matter how the codebase is constructed), or based on the origin of the data being indexed. The latter makes it obvious and easy for users to control: you get structure sharing of indexed data insofar as you have structure sharing of the dictionary source on import/export.
+I'm inclined to just use the Scotty web service to get started quickly. I might switch to a more mature and complete web server framework in the future, assuming there is need to do so. What I want long term is reactive widgets that update in near real-time when the underlying data changes, and that enable collusion by multiple agents (e.g. by reporting partial updates and read assumptions by other agents).
 
-Fortunately, it isn't critical that I have great indices up front. Having a merely decent set of indices should do the job for the immediate future. I can introduce new indices later, as needed. So, for now, I'll probably just pursue a trie or prioritized critical-bit tree for everything.
+Initial requirements:
+
+* data and resource input, access, export
+* dictionary lookups, evaluations
+* editable views
+* command line interface or widget app
+* simplified server-side application model (with simple effects, state)
+* simplified client-side application model (compile Awelon to web app?)
+
+I'd like to support some flexible binary resources, such that I can render JPEG or GIF images or produce some music or movies via computations. 
+
+An interesting point with Awelon's current definition is that I don't really need more than one dictionary, as I may implicitly use hierarchical dictionaries. That said, I might want to separate synchronization of these implicit dictionaries from synchronization of the root.
+
+For uploads, it might be best to immediately root every upload by binding it to a word or dictionary.
+
+I'm not going to worry about security or user tracking quite yet.
+
+## Indexing of Dictionaries?
+
+A related performance concern regards how I should go about indexing of dictionaries and the various related structures. 
+
+Desiderata:
+
+* index multiple versions of dictionaries
+* structure sharing between indices
+* composable indices (monoid class)
+* integrated data stowage, batch updates 
+
+The simplest index that guarantees structure sharing regardless of construction history is the trie. A critical-bit tree is also a potential basis, though it may prove difficult to integrate with stowage. It's essentially a bit-level trie. 
+
+An interesting idea from the Unison Web project is the [prioritized crit-bit tree (PCBT)](http://unisonweb.org/2015-12-22/data-api-implementation.html), which would correspond to a trie where we're not forced to discriminate on the *first* character difference. Instead we can discriminate over the Nth bit or character in the path, selected to optimize information with each branch. The PCBT has some nice properties, but we can't readily model composition of indices or insertion of new data.
+
+For now, a simple bytestring trie should do the job well enough, especially with a little support for batched input and composition at the stowage layers. Importantly, trie's are a simple, predictable, composable, and comprehensible data structure. 
+
+Later, new index structures may be introduced on an as-needed basis. Indexing, fortunately, is a feature that doesn't need to be perfect up front.
 
 ## Accelerators and Intermediate Language
 
