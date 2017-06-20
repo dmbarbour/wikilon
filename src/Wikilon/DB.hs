@@ -11,8 +11,9 @@
 -- My expectation is that we'll have many reads per write. But if I'm
 -- wrong about that, I can move data to LevelDB.
 --
--- The module Wikilon.Trie provides first-class database values above
--- the stowage layer.
+-- LMDB does offer zero-copy access to data. Here, that's supported only
+-- for stowage resources, since it's most useful in context of modeling
+-- indexed data structures.
 --
 module Wikilon.DB
     ( DB, TX
@@ -22,6 +23,7 @@ module Wikilon.DB
     , readKeys, readKeysDB
     , writeKey, assumeKey
     , loadRsc, loadRscDB
+    , withRsc, withRscDB
     , stowRsc, clearRsc
     , commit, commit_async
     , check
@@ -36,7 +38,7 @@ import Control.Monad
 import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.MVar
-import Control.DeepSeq (force)
+import Control.DeepSeq (force, ($!!))
 import Foreign
 import Data.Function (on)
 import Data.ByteString.Lazy (ByteString)
@@ -52,7 +54,6 @@ import qualified System.IO as Sys
 import qualified System.Exit as Sys
 import qualified System.FileLock as FL 
 import System.IO.Unsafe (unsafeDupablePerformIO)
-import Data.IORef
 import qualified Data.Map.Strict as M
 import qualified Data.List as L
 import Data.Word (Word8)
@@ -67,32 +68,6 @@ import Awelon.Hash
 -- these errors shouldn't appear regardless of user input
 dbError :: String -> a
 dbError = error . (++) "Wikilon.DB: "
-
--- Thoughts: I like having this thin layer to access the stowage,
--- and the robust security and distribution properties from using
--- secure hashes as capabilities. 
---
--- I've pulled a lot from my older `vcache` package. One thing I did
--- not bring in is support for persistent variables (PVars) together
--- with the STM model. Those had some nice properties, handling the
--- parse, caching, conflict resolution before it reached the database.
--- It might be worth modeling these again, above this DB, via another
--- module.
---
--- Another potential performance improvement would be switching from
--- the current use of the Data.Map balanced tree to a critical-bits
--- tree or another optimal structure.
---
--- And I might consider adding a set of `withData` zero-copy models,
--- at least if the need arises. This could improve efficiency when
--- parsing or working with indexed data structures, at the cost of
--- delaying our writer while our read lock is held.
---
--- Another potential feature: browsing resources. But this would be
--- a feature that is insecure except for use by administrators, so
--- I'm not too keen on starting with it. Secure browsing of resource
--- IDs (and size info) is feasible if we present only the `stowKeyLen`
--- partial hash.
 
 -- | Wikilon Database Object
 --
@@ -115,13 +90,13 @@ data DB = DB
   , db_zero     :: {-# UNPACK #-} !MDB_dbi' -- secureHash set with rfct=0
 
     -- Reader Locking (frame based)
-  , db_rdlock   :: !(IORef R)
+  , db_rdlock   :: !(MVar R)
 
     -- Asynch Write Layer
-  , db_signal   :: !(MVar ())               -- work available?
-  , db_new      :: !(IORef Stowage)         -- pending stowage
-  , db_commit   :: !(IORef [Commit])        -- commit requests
-  , db_hold     :: !(IORef RCU)             -- ephemeron table
+  , db_signal   :: !(MVar ())              -- work available?
+  , db_new      :: !(MVar Stowage)         -- pending stowage
+  , db_commit   :: !(MVar [Commit])        -- commit requests
+  , db_hold     :: !(MVar RCU)             -- ephemeron table
   } 
 -- notes: Reference counts are partitioned so we can quickly locate
 -- objects with zero references for purpose of incremental GC. The
@@ -180,12 +155,12 @@ dbSignal db = tryPutMVar (db_signal db) () >> return ()
 
 dbPushCommit :: DB -> Commit -> IO ()
 dbPushCommit db !task = do
-    atomicModifyIORef (db_commit db) $ \ lst -> ((task:lst), ())
+    modifyMVarMasked_ (db_commit db) $ \ lst -> return (task:lst)
     dbSignal db
 
 dbPushStow :: DB -> Stowage -> IO ()
-dbPushStow db s = do
-    atomicModifyIORef (db_new db) $ \ s0 -> (M.union s0 s, ()) 
+dbPushStow db !s = do
+    modifyMVarMasked_ (db_new db) $ \ s0 -> return $! (M.union s0 s)
     dbSignal db
 
 ephDiff :: EphTbl -> EphTbl -> EphTbl
@@ -198,16 +173,15 @@ dbClearEph :: DB -> EphTbl -> IO ()
 dbClearEph db drop = 
     --traceIO ("TX releasing resources " ++ show (M.keys drop)) >>
     if M.null drop then return () else
-    atomicModifyIORef' (db_hold db) $ \ tbl ->
-        (ephDiff tbl drop, ())
+    modifyMVarMasked_ (db_hold db) $ \ hold ->
+        return $! (ephDiff hold drop)
 
 -- add ephemeral stowage references. 
 dbAddEph :: DB -> EphTbl -> IO ()
 dbAddEph db added = 
     if M.null added then return () else
-    atomicModifyIORef' (db_hold db) $ \ tbl ->
-        let tbl' = M.unionWith (+) tbl added in 
-        (tbl', ())
+    modifyMVarMasked_ (db_hold db) $ \ hold ->
+        return $! (M.unionWith (+) hold added)
 
 -- Perform operation while holding a read lock.
 -- 
@@ -221,15 +195,26 @@ dbAddEph db added =
 --
 -- Anyhow, readers immediately grab a read lock, and the writer will
 -- only wait for readers that are absurdly long-lived.
-withReadLock :: DB -> IO a -> IO a
-withReadLock db = bracket acq relR . const where
-    acq = readIORef (db_rdlock db) >>= \ r -> acqR r >> return r
+withReadLock :: DB -> (MDB_txn -> IO a) -> IO a
+withReadLock db action = bracket acq rel (action . snd) where
+    acq = do
+        r <- dbAcqR db -- note: r must be acquired before txn begins
+        txn <- mdb_txn_begin (db_env db) Nothing True
+        return (r,txn)
+    rel (r, txn) = do
+        mdb_txn_commit txn
+        relR r
 
 -- advance reader frame (separate from waiting)
 advanceReadFrame :: DB -> IO R
 advanceReadFrame db = 
-    newR >>= \ rN -> 
-    atomicModifyIORef (db_rdlock db) $ \ rO -> (rN, rO)
+    newR >>= \ rNew -> 
+    modifyMVarMasked (db_rdlock db) $ \ rOld -> return (rNew, rOld)
+
+-- acquire current read-lock, ensured current by holding db_rdlock
+-- so the writer cannot advance reader frame while acquiring.
+dbAcqR :: DB -> IO R
+dbAcqR db = withMVarMasked (db_rdlock db) $ \ r -> acqR r >> return r
     
 -- type R is a simple count (of readers), together with a signaling
 -- MVar that is active (full) iff the current count is zero.
@@ -301,11 +286,11 @@ open fp nMB = try $ do
             dbZero <- openDB "0"    -- resources with ephemeral references
             mdb_txn_commit txIni
 
-            dbRdLock <- newIORef =<< newR -- readers tracking
+            dbRdLock <- newMVar =<< newR -- readers tracking
             dbSignal <- newMVar () -- initial signal to try GC
-            dbCommit <- newIORef mempty
-            dbNew <- newIORef mempty
-            dbHold <- newIORef mempty
+            dbCommit <- newMVar mempty
+            dbNew <- newMVar mempty
+            dbHold <- newMVar mempty
 
             let db = DB { db_fp = fp
                         , db_fl = lock
@@ -479,11 +464,9 @@ readKeyTXS s k = M.lookup k (tx_write s) <|> M.lookup k (tx_read s)
 -- This retrieves the most recently committed value for a key. This is
 -- equivalent to readKey with a freshly created transaction.
 readKeyDB :: DB -> ByteString -> IO ByteString
-readKeyDB db (toSafeKey -> !key) = withReadLock db $ do 
-    txn <- mdb_txn_begin (db_env db) Nothing True
-    val <- dbReadKey db txn key
-    mdb_txn_commit txn
-    return val
+readKeyDB db (toSafeKey -> !key) = 
+    withReadLock db $ \ txn -> 
+        dbReadKey db txn key
 
 -- obtain a value after we have our transaction
 dbReadKey :: DB -> MDB_txn -> ByteString -> IO ByteString
@@ -516,11 +499,8 @@ readKeys (TX db st) allKeys = modifyMVarMasked st $ \ s -> do
 readKeysDB :: DB -> [ByteString] -> IO [ByteString]
 readKeysDB db (toSafeKeys -> !keys) =
     if L.null keys then return [] else 
-    withReadLock db $ do 
-        txn <- mdb_txn_begin (db_env db) Nothing True
-        vals <- mapM (dbReadKey db txn) keys
-        mdb_txn_commit txn
-        return vals
+    withReadLock db $ \ txn -> 
+        mapM (dbReadKey db txn) keys
 
 toSafeKeys :: [ByteString] -> [ByteString]
 toSafeKeys = force . fmap toSafeKey
@@ -583,31 +563,52 @@ loadRsc (TX db _) = loadRscDB db
 
 -- | Load resource directly from database.
 loadRscDB :: DB -> Hash -> IO (Maybe ByteString)
-loadRscDB db !h = 
+loadRscDB db h = 
+    -- peeking at recently stowed resources first. This should be
+    -- a negligible overhead.
+    readMVar (db_new db) >>= \ nrsc -> case lookupRsc h nrsc of
+        Nothing -> withRscMDB db h (fmap LBS.fromStrict . copyMDB_to_BS)
+        Just v -> return (Just v)
+
+withRscMDB :: DB -> Hash -> (MDB_val -> IO a) -> IO (Maybe a)
+withRscMDB db !h !action = 
     if (BS.length h /= validHashLen) then return Nothing else
-    readIORef (db_new db) >>= \ newRscTbl ->
-    withReadLock db $ 
-    withBSKey h $ \ hMDB -> do
-    let hKey = MDB_val stowKeyLen (mv_data hMDB)                       -- normal LMDB lookup
-    let hRem = MDB_val (mv_size hMDB - stowKeyLen) 
-                       (mv_data hMDB `plusPtr` stowKeyLen)             -- prefix for value
-    txn <- mdb_txn_begin (db_env db) Nothing True
-    v <- tryRscVal hRem =<< mdb_get' txn (db_stow db) hKey
-    mdb_txn_commit txn
-    return (v <|> lookupRsc h newRscTbl)
+    withBSKey h $ \ hMDB -> 
+    withReadLock db $ \ txn -> do 
+    let hKey = MDB_val stowKeyLen (mv_data hMDB)
+    let hRem = mdbSkip stowKeyLen hMDB
+    mbv <- mdb_get' txn (db_stow db) hKey
+    case mbv of
+        Nothing -> return Nothing
+        Just val -> 
+            ctMatchPrefix hRem val >>= \ bPrefixOK ->
+            if not bPrefixOK then return Nothing else
+            let rscData = mdbSkip (validHashLen - stowKeyLen) val in
+            Just <$> action rscData
 
--- Accept a resource value after stripping a given prefix.
+-- | Min-copy access to resource.
 --
--- Uses constant-time comparison on prefix to resist timing attacks.
-tryRscVal :: MDB_val -> Maybe MDB_val -> IO (Maybe ByteString)
-tryRscVal p = maybe (return Nothing) $ \ c ->
-    ctMatchPrefix p c >>= \ bHasPrefix ->
-    if not bHasPrefix then return Nothing else
-    let dLen = mv_size c - mv_size p in
-    let dPtr = mv_data c `plusPtr` (fromIntegral (mv_size p)) in
-    copyMDB_to_BS (MDB_val dLen dPtr) >>= \ bs ->
-    return (Just (LBS.fromStrict bs))
+-- With the LMDB implementation layer, we can avoid a lot of copying
+-- when accessing data. Other implementations might similarly use a 
+-- local cache.
+--
+-- This operation may block background processes of the database, such
+-- as the writer thread. So it's important to ensure any `withRsc` action
+-- is relatively short-lived.
+--
+-- If the resource isn't available, this returns immediately with Nothing.
+--
+withRsc :: TX -> Hash -> (ByteString -> IO a) -> IO (Maybe a)
+withRsc (TX db _) = withRscDB db
 
+-- | Ephemeral access to resource in DB, see withRsc.
+withRscDB :: DB -> Hash -> (ByteString -> IO a) -> IO (Maybe a)
+withRscDB db h action =
+    readMVar (db_new db) >>= \ mbv -> case lookupRsc h mbv of
+        Just v -> Just <$> action v
+        Nothing -> withRscMDB db h $ \ mdb ->
+            unsafeMDB_to_BS mdb >>= \ bs ->
+            action (LBS.fromStrict bs)
 
 -- timing attack resistant prefix matching
 ctMatchPrefix :: MDB_val -> MDB_val -> IO Bool
@@ -627,10 +628,9 @@ ctEqMem !l !r = go 0 where
 
 -- Timing-attack resistant lookup for newly allocated resources.
 --
--- I'm not particularly concerned about timing attacks on new resources.
--- If the writer is doing its job, the table shouldn't stick around long
--- enough for a timing attack. However, this is easy to implement and 
--- efficient, and won't hurt. And maybe our writer isn't doing its job.
+-- I'm not particularly concerned about timing attacks on new resources,
+-- since they should be moved to the database quickly enough to resist
+-- the attack. But it's also easy to make this resistant.
 lookupRsc :: Hash -> Stowage -> Maybe ByteString
 lookupRsc h m = 
     case M.lookupGT (shortHash h) m of
@@ -728,11 +728,8 @@ commit_async (TX db st) = modifyMVarMasked st $ \ s -> do
 check :: TX -> IO [ByteString]
 check (TX db st) =
     readMVar st >>= \ s ->
-    withReadLock db $ do
-    txn <- mdb_txn_begin (db_env db) Nothing True
-    invalidReads <- filterM (fmap not . validRead db txn) (M.toList (tx_read s))
-    mdb_txn_commit txn
-    return (fmap fst invalidReads)
+    withReadLock db $ \ txn -> do
+    fmap fst <$> filterM (fmap not . validRead db txn) (M.toList (tx_read s))
 
 -- The database writer thread.
 --
@@ -785,13 +782,12 @@ dbWriter !db = initLoop `catches` handlers where
         takeMVar (db_signal db) 
         
         -- BEGIN TRANSACTION
-        --  Order for reading txList, stowed, hold does matter.
-        --  So atomicModifyIORef is used as a barrier.
-        txn <- mdb_txn_begin (db_env db) Nothing False
-        txList <- L.reverse <$> atomicModifyIORef (db_commit db) (\ lst -> ([],lst))
-        stowed <- atomicModifyIORef (db_new db) (\x -> (x,x)) -- atomic to prevent reordering
-        hold <- readIORef (db_hold db)
+        --  Read requests, order does matter here
+        txList <- L.reverse <$> swapMVar (db_commit db) [] -- arrival order commits
+        stowed <- readMVar (db_new db)                     -- all recent stowage
+        hold <- readMVar (db_hold db)                      -- ephemeron table holds
         let blockDel = flip M.member hold . shortHash 
+        txn <- mdb_txn_begin (db_env db) Nothing False
 
 
         -- collapse writes to single batch
@@ -873,10 +869,9 @@ dbWriter !db = initLoop `catches` handlers where
         r' <- advanceReadFrame db           -- acquire readers from prior LMDB frame
         mdb_env_sync_flush (db_env db)      -- commit write to disk
 
-        -- report success then continue
+        -- report success, release completed stowage, continue
         mapM_ (flip tryPutMVar True . snd) txList
-        atomicModifyIORef' (db_new db) $ \ m -> 
-            let m' = M.difference m stowed in (m',())
+        modifyMVarMasked_ (db_new db) $ \ m -> return $! (M.difference m stowed)
         writeLoop r'
 
 
