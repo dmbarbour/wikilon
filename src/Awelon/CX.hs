@@ -9,48 +9,53 @@
 -- some purely functional implementations.
 --
 module Awelon.CX 
-    ( Par(..), Async(..)
+    ( Par(..), Async(..), race'
     , Lazy(..), Trace(..)
-    , Stowage(..), Cache(..)
+    , Stowage(..), load
+    , Cache(..)
     , CX(..)
-    , F, F_(..), eraseF
     , ByteString
     , module Awelon.Hash
     ) where
 
+import Control.Applicative
 import Data.ByteString.Lazy (ByteString)
 import Awelon.Hash
 
--- | A single-assignment, asynchronous future value.
---
--- This value is used to represent data that will become available in
--- the future (modulo divergence), usually from another thread. But a
--- future is also a monad. We may logically compose future results. 
-data family F (m :: * -> *) :: * -> *
-
--- | A future that hides the value type, for use with Async wait.
-data F_ m = forall a . F_ (F m a)
-
-eraseF :: F m a -> F_ m
-eraseF = F_
-
 -- | Fork-join parallelism via composable futures.
 class (Monad (F m), Monad m) => Par m where
+    data F m :: * -> *          -- ^ a future value
     fork :: m a -> m (F m a)    -- ^ parallel future
     join :: F m a -> m a        -- ^ wait for result
- 
--- | Concurrency with arrival-order race conditions.
---
--- Leveraging arrival-order indeterminism can improve latency and 
--- utilization within a computation. For Awelon, this is necessary
--- for acceleration of Kahn Process Networks. However, this does
--- leave the challenge of ensuring confluence to the accelerator.
--- 
-class (Par m) => Async m where
-    peek :: F m a -> m Bool     -- ^ will `join` be immediate?
-    wait :: [F_ m] -> m ()      -- ^ wait for available result
 
--- note: I might also need to lift operations into the future.
+-- Might need some means to extend monadic operations.
+-- Something like the following: 
+--
+--  andThen :: F m a -> (a -> m b) -> m (F m b) -- ^ extend parallel task
+--   might be able to provide a default impl with fork and join
+--
+-- Or perhaps:
+--
+--  liftF :: m a -> F m a
+--
+-- Not really sure what's best here, nor how much expressiveness
+-- we need. 
+ 
+-- | Concurrency via arrival-order indeterminism.
+--
+-- The `race` operation enables clients to process results based on
+-- the order in which they become available. This introduces a form
+-- of non-determinism, which is generally impure. But indeterminism
+-- can be leveraged to accelerate confluent computations. So this is
+-- a feature to use, albeit with some care.
+class (Par m) => Async m where
+    race  :: F m a -> F m b -> F m (Either a b)
+
+-- | Data-preserving race, for linearity.
+race' :: Async m => F m a -> F m b -> F m (Either (a, F m b) (F m a, b))
+race' fa fb = k <$> race fa fb where
+    k (Left a) = Left (a,fb)
+    k (Right b) = Right (fa,b)
 
 -- | Note on Acceleration of Kahn Process Networks
 --
@@ -94,22 +99,23 @@ class Trace m where
 --
 -- Awelon heavily utilizes a notion of 'secure hash resources', which
 -- are essentially just binary resources that are globally identified
--- by secure hash. (Specifically, Awelon.Hash.) I call this "stowage".
--- Stowage doesn't quite need an effects model, modulo the potential 
--- that we might fail to load a resource.
--- 
--- Stowed resources are garbage collected. In general, the resource 
--- must be rooted for it to be protected, but we also ensure recently
--- stowed resources are guarded against GC until we have time to put
--- them into our database or checkpoint.
+-- by secure hash, specifically Awelon.Hash.
 --
--- This API assumes newly stowed resources will be preserved for the
--- full computation. But checkpointing computations may release any
--- resources that are no longer rooted at instant of checkpoint.
+-- This API for stowage is simple. Load errors require raising an
+-- exception within the monad. The monad should ensure that stowed
+-- resources are not garbage collected before we can assume they
+-- have been rooted, such as a transaction commit or checkpoint.
+--
+-- This API does support potential for asynchronous load in case
+-- we're using some sort of distributed database, and to support
+-- reporting more than one missing resource at a time.
 -- 
 class Stowage m where
-    load :: Hash -> m (Maybe ByteString)
     stow :: ByteString -> m Hash
+    load_async :: Hash -> m (m ByteString)
+
+load :: (Stowage m, Monad m) => Hash -> m ByteString
+load h = load_async h >>= id
 
 -- question: how do 
 

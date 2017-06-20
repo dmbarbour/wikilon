@@ -11,19 +11,16 @@ module Wikilon.CX
 import Data.ByteString.Lazy (ByteString)
 import Awelon.CX
 
--- | Access to a trivial key-value persistent storage.
+-- | Access to a key-value registry (usually persistent)
 --
--- These operations may be implicitly transactional, and likely
--- should be in most use cases. Keys might be rewritten a little,
--- e.g. to model subdirectories or to secure hash oversized keys.
+-- Storage operates on a simple key-value registry, representing a
+-- persistent store such as a filesystem or database. In Wikilon,
+-- this is probably Wikilon.DB. 
 class Storage m where
-    kvGet :: ByteString -> m ByteString
-    kvPut :: ByteString -> ByteString -> m ()
+    regGet :: ByteString -> m ByteString
+    regPut :: ByteString -> ByteString -> m ()
 
--- TODO:
---
--- ASAP, I need to implement the concrete context, even if the
--- implementation is not optimal it should reach a useful working
--- condition.
---
+
+-- NOTE: other potential features to consider are checkpointing or
+-- backtracking. But I'd prefer to wait for a real requirement.
 

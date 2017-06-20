@@ -25,9 +25,7 @@ Another option is to avoid Haskell and choose a JIT'd language, like Java or Sca
 
 I need to get something running quickly (again!), even if it isn't ideal for performance immediately. This will consist of a web server and basic APIs mostly (initially) for human use.
 
-Last time around I used Wai directly, but that doesn't scale nicely. I'm inclined to try out Snap or Yesod at this point, or even MFlow (though I'm not happy with MFlow's use of TCache). But for now, I may get started by just using Scotty or raw Wai/Warp again.
-
-I'm inclined to just use the Scotty web service to get started quickly. I might switch to a more mature and complete web server framework in the future, assuming there is need to do so. What I want long term is reactive widgets that update in near real-time when the underlying data changes, and that enable collusion by multiple agents (e.g. by reporting partial updates and read assumptions by other agents).
+Last time around I used Wai directly, but that creates a pretty big burden for any sort of lightweight composition of widgets. I'm inclined to try Snap or Yesod at this point. If I can model composition of multiple interactive widgets within a page, that would be reasonably convenient.
 
 Initial requirements:
 
@@ -48,6 +46,66 @@ I'm not going to worry about security or user tracking quite yet.
 
 ## Indexing of Dictionaries?
 
+I need a simple data structure suitable for a few different operations:
+
+* efficient insertion and deletion, obviously
+* efficient diff and merge for database-level ops
+* efficient search with common suffix is convenient
+* structure sharing: data determines representation
+* easy batching of updates, avoid temporary stowage
+
+Tries and crit-bit trees are the most promising options here. 
+
+With crit-bit trees, however, we do must occasionally peek at a sample key when performing diffs and merges so we can detect differences *prior* to the first crit-bit. It is feasible to shift the key from one of the two child nodes upwards into the parent, e.g. such that the least key is always represented in the parent node. This results in a structure akin to:
+
+        data CBT  = CBT (Maybe Root)
+        data Root = Root Eph Key Node   -- 'Eph' resists GC of stowage
+        data Node = Inner Int Node Key Node
+                  | Leaf Data
+
+This ensures we always have immediate access to the least key in the tree. The Inner node includes the least key from the right-hand tree, assuming we have received our least key for the child key from the parent.
+
+An intriguing property of crit-bit trees is that we could easily reorder visitation of bits based on priority for flattening the tree. This is the [prioritized crit-bit trees (PCBT)](http://unisonweb.org/2015-12-22/data-api-implementation.html) developed by Paul Chiusano for the Unison project. Such trees are not readily merged, but they could offer superior read-only performance.
+
+
+It may be we can modify a crit-bit tree a little, i.e. such that we record a range of keys in each node.
+
+I'm looking mostly at tries and crit-bit trees as my options.
+
+Crit-bit trees have a lot of simplicity advantages. I guess my main concern is efficient 'diff' on trees, convenient for comparing full databases. Can we efficiently `diff` 
+
+
+Crit-bit trees
+
+I can use crit-bit key-value trees, adapted for stowage, for most of my data. 
+
+The root of a CBT is maybe a node, otherwise empty. It may need to hold some ephemeron roots, so we'll also keep a root ephemeron holster. A node is either inner or a leaf. A leaf has a key-value pair, while a node has an integer then left and right children. With *stowage*, our key and value may be represented inline or using an external reference.
+
+
+
+When serializing these nodes, we must be careful to avoid hindering recognition of secure hash resources within our key-value data. We may also benefit from supporting lightweight inlining of nodes, such that an Inner node may be inlined or not. It seems feasible to combine the Leaf and Inner types in their serialized forms, simply using 0 for our Int value within the leaf-node.
+
+If we do this carefully, it should also be feasible to process the index with minimal parsing of it, e.g. just skip the first node to read the second, or skip the key to read the data. This would require one extra size field in the serialized form.
+
+index our data using binary representations directly, without parsing. This would enable a quick search without copying.
+
+Intriguingly, it is feasible to reuse crit-bit tree representation with very little alteration for a , reordering visit bits to ensure .
+
+ as a batch process. Doing so would provide a more optimal index, but would hinder dynamism since we cannot easily add, remove, or update elements from a PCBT.
+
+
+
+The real trick here will be ensuring our node sizes inline enough to be worthwhile. 
+
+It is feasible to use a fixed-width node size to represent several branches. But it might be wiser to simply 
+
+
+
+
+ node in a CBT is either inner or leaf
+
+assuming we don't need to merge our trees.
+
 A related performance concern regards how I should go about indexing of dictionaries and the various related structures. 
 
 Desiderata:
@@ -59,7 +117,7 @@ Desiderata:
 
 The simplest index that guarantees structure sharing regardless of construction history is the trie. A critical-bit tree is also a potential basis, though it may prove difficult to integrate with stowage. It's essentially a bit-level trie. 
 
-An interesting idea from the Unison Web project is the [prioritized crit-bit tree (PCBT)](http://unisonweb.org/2015-12-22/data-api-implementation.html), which would correspond to a trie where we're not forced to discriminate on the *first* character difference. Instead we can discriminate over the Nth bit or character in the path, selected to optimize information with each branch. The PCBT has some nice properties, but we can't readily model composition of indices or insertion of new data.
+An interesting idea from the Unison Web project is the , which would correspond to a trie where we're not forced to discriminate on the *first* character difference. Instead we can discriminate over the Nth bit or character in the path, selected to optimize information with each branch. The PCBT has some nice properties, but we can't readily model composition of indices or insertion of new data.
 
 For now, a simple bytestring trie should do the job well enough, especially with a little support for batched input and composition at the stowage layers. Importantly, trie's are a simple, predictable, composable, and comprehensible data structure. 
 

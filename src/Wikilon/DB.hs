@@ -9,11 +9,10 @@
 -- Persistence is implemented above LMDB, but the LMDB layer is mostly
 -- hidden below a lightweight optimistic concurrency transaction API.
 -- My expectation is that we'll have many reads per write. But if I'm
--- wrong about that, I can move data to LevelDB.
+-- wrong about that, I can export and import with alternative backends.
 --
--- LMDB does offer zero-copy access to data. Here, that's supported only
--- for stowage resources, since it's most useful in context of modeling
--- indexed data structures.
+-- Due to memory mapping, LMDB does offer zero-copy access to data. At
+-- the moment, this is only supported for stowage resources.
 --
 module Wikilon.DB
     ( DB, TX

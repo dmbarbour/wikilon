@@ -121,7 +121,7 @@ Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the h
         Base32 Alphabet: bcdfghjklmnpqrstBCDFGHJKLMNPQRST
             encoding 0..31 respectively
 
-Awelon neglects the theoretical concern of secure hash collisions. Physical corruption of computation is of greater concern in practice. And it's trivial to rewrite entire Awelon codebases to use a larger, more robust hash if ever it becomes necessary. I won't further belabor the issue.
+Awelon neglects the theoretical concern of secure hash collisions. Physical corruption of computation is of greater concern in practice. And if collision does become a concern in the future, it will not be difficult to rewrite entire Awelon codebases to use larger, more robust hashes. I won't further belabor the issue.
 
 Awelon runtime systems must know where to search for secure hash resources, whether that be a search path in a filesystem, database, web server, or content distribution network. With *Stowage*, Awelon systems may also generate secure hash resources during evaluation, essentially leveraging the external space as a virtual memory extension. It is also feasible to use resources for outputs in some contexts, e.g. if a program evaluates to `[%secureHash (:jpeg)]` it is feasible we could recognize and render this element directly (see *Editable Views*).
 
@@ -178,6 +178,8 @@ Stowage is a simple idea, summarized by rewrite rules:
 Stowage allows secure hash resources to be constructed or discovered at runtime, and lazily linked. This enables programmers to work semi-transparently with data larger than working memory. Unlike effectful persistence or virtual memory, stowage is friendly in context of parallelism and distribution, structure sharing, memoized computation, and backtracking. Stowage works nicely with [persistent data structures](https://en.wikipedia.org/wiki/Persistent_data_structure), especially structures that batch writes such as [LSM trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree).
 
 Stowage for binaries may automatically produce binary secure hash resources.
+
+*Aside:* What "large value" means is heuristic, but should be simple, predictable to maximize structure sharing. A simple option is that anything smaller than some fixed size should be inlined, while anything larger is referenced indirectly.
 
 ## Evaluation
 
