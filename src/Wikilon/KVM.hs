@@ -3,39 +3,36 @@
 --
 -- Wikilon.DB offers a mutable key-value database with stowage and GC.
 -- This KVM models a key-value database model above stowage, enabling
--- database values to potentially be larger than memory.
+-- first class database values to potentially be larger than memory.
 -- 
--- The tree structure used here is a variant of the crit-bit tree. The
--- main differences from conventional crit-bit tree:
+-- The tree structure used here is a variant of the crit-bit tree (CBT).
+-- Differences from conventional crit-bit tree:
 --
 -- - least key is held by parent, to support full tree diffs and merges
--- - each key is associated with a single value (which may be empty)
--- - keys, values, nodes may be stowed rather than referenced in memory
+-- - each key is associated with a binary value (which may be empty)
+-- - keys, values, nodes may be stowed outside of volatile memory
 --
--- In context of stowage, keys and values in the KVM may freely reference
--- other stowage resources. But there is a potential challenge: operations
--- on a KVM may fail if a resource is unrecognized, and this failure is 
--- impure.
+-- Keys and values within the KVM are free to reference other stowage 
+-- resources. But keys mustn't have any trailing null bytes.
 --
--- Tries with stowage can model entire databases as first-class values,
--- using the secure hash stowage references to load data as needed. But
--- they also introduce some performance challenges: construction and GC
--- of stowage resources has a high cost that we cannot afford to ignore.
+-- Batched updates are important: it's inefficient to allocate lots of
+-- short-lived nodes at the stowage layers. This module will aim to make
+-- batching and buffering relatively simple and easy.
 --
--- Aside: LSM trees offer batching more naturally, but have difficulties
--- for other nice features like structure sharing and quick diffs. That
--- isn't a problem for second-class databases, but once databases become
--- first-class values, it's highly convenient to have efficient diffs and
--- and similar properties.
---
--- In any case, this module provides a bytes-to-bytes trie, essentially
--- a first-class key-value database that doesn't parse the data. Values
--- may root other stowage resources, but keys must not. Large values are
--- implicitly stowed to ensure predictable node sizes.
+-- First-class database values offer a lot of benefits over conventional
+-- key-value databases: histories, forking, diffs, composition. Wikilon
+-- relies on KVM for most data indexing and processing. 
 --
 module Wikilon.KVM
     (
     ) where
+
+import qualified Data.ByteString.Lazy as LBS
+
+-- keys mustn't have trailing nulls.
+validKey :: LBS.ByteString -> Bool
+validKey s = LBS.null s || (0 /= LBS.last s)
+
 
 -- | A simple trie with bytestring data. 
 

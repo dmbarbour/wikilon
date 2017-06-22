@@ -84,20 +84,17 @@ testDB db = do
     hs <- mapM (DB.stowRsc tx3 . utf8) ns
     DB.writeKey tx3 "p" (utf8 (sel hs))
     DB.commit tx3
-
     DB.clearRsc tx3
-    DB.commit tx3
-    DB.commit tx3
-    DB.commit tx3
+    DB.gcDB_async db
+    --DB.gcDB db
+    -- traceIO ("hs: " ++ show hs)
+    ns2 <- mapM (DB.loadRscDB db) hs 
+    traceIO ("ns2 : " ++ show ns2)
 
 
     hs' <- DB.readKeyDB db "p"
     unless (utf8 (sel hs) == hs') $
         fail ("failure to read expected hashes")
-
-    ns' <- mapM (DB.loadRscDB db) hs 
-    traceIO ("ns' : " ++ show ns')
-
 
 
 

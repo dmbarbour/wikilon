@@ -23,9 +23,11 @@ module Wikilon.DB
     , writeKey, assumeKey
     , loadRsc, loadRscDB
     , withRsc, withRscDB
-    , stowRsc, clearRsc
+    , stowRsc
+    , clearRsc, clearRsc'
     , commit, commit_async
     , check
+    , gcDB, gcDB_async
     , FilePath
     , ByteString
     , module Awelon.Hash
@@ -62,21 +64,49 @@ import Data.Maybe
 import Database.LMDB.Raw
 import Awelon.Syntax (validWordByte)
 import Awelon.Hash
--- import Debug.Trace
+import Debug.Trace
 
 -- these errors shouldn't appear regardless of user input
 dbError :: String -> a
 dbError = error . (++) "Wikilon.DB: "
 
+-- Thoughts: It would be convenient to ensure reads are also protected
+-- by the ephemeron tables. This would require delay of GC for resources
+-- potentially viewed through a reader lock.
+--
+-- A viable option is to delay new candidates for GC by a few write frames,
+-- enough that our highest latency readers still have time to add ephemeral
+-- roots, and also to track ephemerons added on every new read.
+--
+-- Obviously this would raise the cost of reads by a small amount. But this
+-- is probably acceptable: the whole premise of Wikilon DB is to push most
+-- read-write costs to the stowage layer. In practice, we should only be
+-- reading a few roots.
+--
+-- More importantly, it would give me much of peace-of-mind to know that
+-- all stowage references I've read are 'safe' for duration of a transaction,
+-- modulo only those referenced from external sources.
+
 -- | Wikilon Database Object
 --
--- Wikilon uses a key-value database with a special feature: values
--- may contain binary references in the form of secure hashes. These
--- secure hashes are conservatively GC'd (cf. Awelon.Hash.hashDeps).
--- This supports scalable representation of tree-structured data with
--- implicit structure sharing. Further, this fits nicely with purely
--- functional programming. We treat this binary "stowage" layer as a
--- persistence, sharing, and virtual memory model for large values.
+-- Wikilon uses a key-value database with a special feature: binaries
+-- may reference other binaries using secure hashes (via Awelon.Hash).
+-- Further, un-rooted binary resources will be garbage collected. This
+-- enables representation of persistent, immutable data structures that
+-- may be larger than active memory. Further, these resources support
+-- simplified structure sharing, and are friendly in context of durable
+-- data or network lookups.
+--
+-- Wikilon Database uses an optimistic concurrency model. Writes are
+-- performed via transactions, which are verified to be serializable
+-- upon commit. Concurrent transactions may conflict and be rejected,
+-- but progress is guaranteed: at least one transaction must succeed
+-- for conflict to exist. Transactions also serve as volatile roots
+-- to resist garbage collection of secure hash resources.
+--
+-- The Wikilon database makes a performance assumption that most data
+-- is represented at the secure hash resources (aka stowage) layer.
+--
 data DB = DB 
   { db_fp       :: !FilePath -- location in filesystem
   , db_fl       :: !FL.FileLock -- resist multi-process access
@@ -144,8 +174,8 @@ type RCU = M.Map Hash Int                   -- ^ rsc ref counts (shortHash!)
 shortHash :: Hash -> Hash
 shortHash = BS.take stowKeyLen
 
-addRCU :: Int -> [Hash] -> RCU -> RCU 
-addRCU !n = flip (L.foldl' accum) where
+mkRCU :: Int -> [Hash] -> RCU 
+mkRCU !n = L.foldl' accum mempty where
     accum m h = M.insertWith (+) (shortHash h) n m
 
 -- functions to push work to our writer and signal it.
@@ -169,7 +199,7 @@ ephDiff = M.differenceWith $ \ l r -> nz (l - r) where
 
 -- release ephemeral stowage references.
 dbClearEph :: DB -> EphTbl -> IO ()
-dbClearEph db drop = 
+dbClearEph db !drop = 
     --traceIO ("TX releasing resources " ++ show (M.keys drop)) >>
     if M.null drop then return () else
     modifyMVarMasked_ (db_hold db) $ \ hold ->
@@ -177,7 +207,7 @@ dbClearEph db drop =
 
 -- add ephemeral stowage references. 
 dbAddEph :: DB -> EphTbl -> IO ()
-dbAddEph db added = 
+dbAddEph db !added = 
     if M.null added then return () else
     modifyMVarMasked_ (db_hold db) $ \ hold ->
         return $! (M.unionWith (+) hold added)
@@ -371,16 +401,14 @@ finiTX (TX db st) = do
 -- | Duplicate a transaction.
 -- 
 -- Fork will deep-copy a transaction object, including its relationship
--- with ephemeral stowage resources. This may be useful to model partial
--- backtracking for a computation, or together with 'clearRsc' to model
--- large values and temporary filesystems via copy-and-modify of the TX.
+-- with ephemeral stowage resources.
 dupTX :: TX -> IO TX
 dupTX (TX db st) = do
     s <- readMVar st
     st' <- newMVar s
     let tx' = TX db st'
-    mkWeakMVar st' (finiTX tx')
     dbAddEph db (tx_hold s)
+    mkWeakMVar st' (finiTX tx')
     return tx'
 
 -- preserve keys up to a reasonably large maximum size, enough
@@ -436,22 +464,26 @@ copyMDB_to_BS (MDB_val cLen src) =
 
 -- | Retrieve value associated with given key.
 --
--- If the key has already been read or written within a transaction,
--- this returns a value specific to the transaction. Otherwise, it 
--- will read the current value from the database. Snapshot isolation
--- for separate reads is not guaranteed, but all reads are verified
--- to be consistent upon commit. 
+-- If a key is already known to a TX because it has been read or written,
+-- the appropriate value will be returned. Otherwise, we'll look up a
+-- recent value from the DB. A weakness of this model is a lack of snapshot
+-- consistency. That is, we do not guarantee all readKeys reference the same
+-- database snapshot. But see readKeys.
 --
--- Security Note: keys are not guarded against timing attacks. The
--- client should provide access control or capability security.
+-- The TX does guard secure hash resources discovered through reads against
+-- GC even if the value is later overwritten by a concurrent transaction.
+--
 readKey :: TX -> ByteString -> IO ByteString
-readKey (TX db st) k = modifyMVarMasked st $ \ s ->
+readKey (TX db st) (force -> !k) = modifyMVarMasked st $ \ s ->
     case readKeyTXS s k of
         Just v  -> return (s, v)
-        Nothing -> do
-            v <- readKeyDB db k
-            let r' = M.insert k v (tx_read s) 
-            let s' = s { tx_read = r' }
+        Nothing -> withReadLock db $ \ txn -> do
+            v <- dbReadKey db txn k
+            let ephUpd = mkRCU 1 (hashDeps v) 
+            dbAddEph db ephUpd
+            let r' = M.insert k v (tx_read s)
+            let h' = M.unionWith (+) (tx_hold s) ephUpd
+            let s' = s { tx_read = r', tx_hold = h' }
             return (s', v)
 
 -- Read key previously read or written by the transaction. 
@@ -463,13 +495,13 @@ readKeyTXS s k = M.lookup k (tx_write s) <|> M.lookup k (tx_read s)
 -- This retrieves the most recently committed value for a key. This is
 -- equivalent to readKey with a freshly created transaction.
 readKeyDB :: DB -> ByteString -> IO ByteString
-readKeyDB db (toSafeKey -> !key) = 
+readKeyDB db (force -> !key) = 
     withReadLock db $ \ txn -> 
         dbReadKey db txn key
 
 -- obtain a value after we have our transaction
 dbReadKey :: DB -> MDB_txn -> ByteString -> IO ByteString
-dbReadKey db txn k = withLBSKey k $ (dbReadKeyMDB db txn)
+dbReadKey db txn k = withLBSKey (toSafeKey k) (dbReadKeyMDB db txn)
 
 dbReadKeyMDB :: DB -> MDB_txn -> MDB_val -> IO ByteString
 dbReadKeyMDB db txn k = do
@@ -481,14 +513,22 @@ dbReadKeyMDB db txn k = do
 --
 -- This reads multiple keys with a single LMDB-layer transaction. The 
 -- main benefit with readKeys is snapshot isolation for keys initially
--- read together.
+-- read together. This is weaker than full snapshot isolation, but can
+-- be leveraged to prevent specific problems, especially for smaller
+-- transactions.
 readKeys :: TX -> [ByteString] -> IO [ByteString]
-readKeys (TX db st) allKeys = modifyMVarMasked st $ \ s -> do
-    let newKeys = L.filter (isNothing . readKeyTXS s) allKeys 
-    newVals <- readKeysDB db newKeys
-    let r' = M.union (tx_read s) (M.fromList (L.zip newKeys newVals))
-    let s' = s { tx_read = r' }
-    let allVals = fmap (fromJust . readKeyTXS s') allKeys 
+readKeys (TX db st) (force -> !allKeys) = modifyMVarMasked st $ \ s -> do
+    s' <- let newKeys = L.filter (isNothing . readKeyTXS s) allKeys in
+          if L.null newKeys then return s else
+          withReadLock db $ \ txn -> do
+            newVals <- mapM (dbReadKey db txn) newKeys
+            let ephUpd = mkRCU 1 (L.concatMap hashDeps newVals)
+            dbAddEph db ephUpd
+            let r' = M.union (tx_read s) (M.fromList (L.zip newKeys newVals))
+            let h' = M.unionWith (+) (tx_hold s) ephUpd
+            let s' = s { tx_read = r', tx_hold = h' }
+            return $! s'
+    let allVals = fmap (fromJust . readKeyTXS s') allKeys
     return (s', allVals)
 
 -- | Read multiple keys directly from database.
@@ -496,26 +536,21 @@ readKeys (TX db st) allKeys = modifyMVarMasked st $ \ s -> do
 -- This obtains a snapshot for a few values from the database. This
 -- is equivalent to readKeys using a freshly created transaction.
 readKeysDB :: DB -> [ByteString] -> IO [ByteString]
-readKeysDB db (toSafeKeys -> !keys) =
+readKeysDB db (force -> !keys) =
     if L.null keys then return [] else 
     withReadLock db $ \ txn -> 
         mapM (dbReadKey db txn) keys
-
-toSafeKeys :: [ByteString] -> [ByteString]
-toSafeKeys = force . fmap toSafeKey
   
 -- | Write a key-value pair.
 --
 -- Writes are trivially recorded into the transaction until commit.
---
--- For a one-off transaction, blind writes won't cause conflicts. But
--- checkpointing transactions (multiple commits) can have write-write
--- conflicts with other transactions.
---
--- Note: While Wikilon DB accepts any key, problematic keys will be
--- rewritten to a secure hash. This has some overhead and can hinder
--- LMDB-layer debugging (mdb_dump), so developers are encouraged to
--- keep keys short (< 256 bytes) and readable as filenames or URLs.
+-- Our assumption is that individual transactions should be relatively
+-- small, modulo stowage resources.
+-- 
+-- Wikilon database may rewrite some problematic keys under the hood
+-- using a secure hash. This may hinder LMDB-layer debugging and hurt
+-- performance for the problem keys. To avoid this, favor keys that
+-- make short (< 256 bytes), sensible filenames, URLs, Awelon words.
 writeKey :: TX -> ByteString -> ByteString -> IO ()
 writeKey (TX _ st) (force -> !k) (force -> !v) =
     modifyMVarMasked_ st $ \ s ->
@@ -524,14 +559,15 @@ writeKey (TX _ st) (force -> !k) (force -> !v) =
 
 -- | Adjust the read assumption for a key.
 --
--- This sets or clears the read assumption for a key within a TX,
--- the value we'll test against when we later commit. This will
--- overwrite a prior read assumption for the same key, and if set
--- the read assumption will be validated upon commit as if it was
--- the value read.
+-- This sets or clears the read assumption for a key within a TX.
+-- A read assumption will be verified upon a subsequent commit or
+-- check, and also determines the value `readKey` will return if
+-- the key has not also been written. If cleared (assume Nothing),
+-- the key is not checked.
 --
--- This is useful for testing or to reduce isolation levels for a
--- long-running transaction.
+-- Explicit assumption is convenient for testing and can reduce the
+-- isolation levels or help resolve conflicts for any long-running
+-- transactions.
 assumeKey :: TX -> ByteString -> Maybe ByteString -> IO ()
 assumeKey (TX _ st) (force -> !k) (force -> !mbv) =
     modifyMVarMasked_ st $ \ s ->
@@ -545,16 +581,16 @@ assumeKey (TX _ st) (force -> !k) (force -> !mbv) =
 -- Nothing, in which case you might search elsewhere like the file
 -- system or network. (These resources are provider independent.)
 --
--- Loading data does not prevent GC of the data. To prevent GC, the
--- only means is to ensure it remains rooted at the persistence layer.
--- Perhaps model a history of values if it's essential.
+-- Transactions do not root loaded data. The assumption is that all
+-- secure hashes loaded by a transaction were either discovered via
+-- readKey or written via stowRsc. If this is not the case, loading
+-- may fail due to concurrent GC. See also `clearRsc`.
 --
--- Security Note: secure hashes are essentially object capabilities,
--- and leaking capabilities is a valid concern. Timing attacks are a
--- potential vector for leaks. This function resists timing attacks
--- by using only the first half of a hash for lookup, comparing the
--- remainder in constant time. Clients should be careful to reveal
--- no more than this.
+-- Security Note: secure hashes serve as capabilities and must be
+-- guarded against leaks such as timing attacks. The Wikilon database
+-- promises to leak no more than the first half of a hash via timing
+-- attacks, which leaves a sufficient 140 bits for security. But the
+-- client should take care to leak no more than the database does. 
 loadRsc :: TX -> Hash -> IO (Maybe ByteString)
 loadRsc (TX db _) = loadRscDB db
     -- At the moment, we don't store pending stowage in the TX.
@@ -653,7 +689,7 @@ ctEqBS a b =
 stowRsc :: TX -> ByteString -> IO Hash
 stowRsc (TX db st) v = modifyMVarMasked st $ \ s -> do
     h <- evaluate (hashL v)
-    let ephUpd = addRCU 1 [h] mempty 
+    let ephUpd = mkRCU 1 [h] 
     let hold' = M.unionWith (+) (tx_hold s) ephUpd
     let s' = s { tx_hold = hold' }
     dbAddEph db ephUpd
@@ -665,57 +701,95 @@ stowRsc (TX db st) v = modifyMVarMasked st $ \ s -> do
 
 -- | Release stale ephemeral resources.
 --
--- Stowed resources are garbage collected, using conservative GC to
--- recognize hashes, ultimately rooted by keyed data. However, upon
--- `stowRsc` we'll also create an ephemeral root to protect the data
--- from premature GC while we're still building our data.
+-- A TX uses System.Mem.Weak to guard a set of stowage resources from
+-- garbage collection. In particular, the following resources will be
+-- preserved:
 --
--- This operation clears stale ephemeral roots from the TX, where all
--- roots are considered stale unless they're represented in a current
--- write set (via writeKey). Note: committing a transaction clears the
--- write set but does not clear ephemeral roots, so you might choose
--- to clear roots just before or after commit depending on use case.
--- 
--- It is feasible use a TX as a temporary file system, never committing
--- but clearing stale roots where appropriate, to build objects larger 
--- than memory. With careful use of dupTX similar how bytestrings are
--- updated by copy-modify, it's even feasible to model big pure values.
+-- * resources referenced through readKey(s)
+-- * new resources allocated through stowRsc
+--
+-- We assume hashes written were either discovered through prior reads
+-- or allocated via stowRsc, and hence remain rooted by one of the above
+-- cases.
+--
+-- Preserving resources monotonically simplifies reasoning, but it easily
+-- overestimates what we really need to keep available. For a short-lived
+-- TX, this is a non-issue. But for a long-lived TX, it might become a 
+-- concern. In that context, `clearRsc` can help explicitly manage the
+-- ephemeron table, clearing anything that is not rooted by the TX keys.
 clearRsc :: TX -> IO ()
-clearRsc (TX db st) = dbClearEph db =<< clearEphTX where
-    clearEphTX = modifyMVarMasked st $ \ s -> do
-        let wsDeps = L.concatMap hashDeps (M.elems (tx_write s))
-        let hold' = M.intersection (tx_hold s) (addRCU 1 wsDeps mempty)
-        let s' = s { tx_hold = hold' }
-        hDiff <- evaluate $ M.difference (tx_hold s) hold'
-        return $! s' `seq` (s', hDiff)
+clearRsc = flip clearRsc' []
+
+-- | As clearRsc, but also accepting a short list of extra roots.
+--
+-- These roots aren't checked, and may come from another TX.
+clearRsc' :: TX -> [Hash] -> IO ()
+clearRsc' (TX db st) (force -> !hs) = do
+    (h,h') <- modifyMVarMasked st $ \ s -> do
+        let roots = M.union (tx_write s) (tx_read s) -- favor writes over reads
+        let deps = hs ++ L.concatMap hashDeps (M.elems roots) -- all the hashes
+        let h' = mkRCU 1 deps
+        let h = tx_hold s
+        let s' = s { tx_hold = h' }
+        return (s', (h, h'))
+    -- order matters: add before removing
+    dbAddEph db h'      -- add new ephemerons 
+    dbClearEph db h     -- clear old ephemerons
 
 -- | Commit transaction to database. Synchronous.
 --
--- Returns True on success, False otherwise. 
+-- A read-only transaction will only verify that the all reads are
+-- consistent with the current database (see also, `check`). But a
+-- writer transaction may coalesce its updates in a batch with all
+-- concurrent writes.
 --
--- Transactions may be committed more than once. In that case, each
--- commit essentially checkpoints the overall transaction, limiting
--- how much work is lost upon a future commit failure.
---
--- Committing a transaction does not implicitly clear resources. 
+-- A transaction may be committed more than once. In that case, each
+-- commit essentially checkpoints the transaction, limiting how much
+-- will be lost if a future commit fails. If you do use checkpointing
+-- transactions, you should also consider use of `clearRsc`.
 commit :: TX -> IO Bool
 commit tx = commit_async tx >>= id
 
 -- | Asynchronous Commit.
 --
--- This immediately starts a commit, but does not wait for success
--- or failure. This is mostly useful for asynchronous checkpoints.
--- Commits from a single transaction are always applied in order, 
--- and multiple commits in a short period of time may coalesce into
--- a single write batch (modulo concurrent interference).
+-- This immediately submits transaction to the writer for commit, but
+-- does not wait for completion. This is most useful in context of a
+-- checkpointing transaction. Multiple commits from a single transaction
+-- may potentially coalesce into a single write batch.
 --  
 commit_async :: TX -> IO (IO Bool)
-commit_async (TX db st) = modifyMVarMasked st $ \ s -> do
-    ret <- newEmptyMVar 
-    dbPushCommit db ((tx_read s, tx_write s), ret)
-    let rd' = M.union (tx_write s) (tx_read s)
-    let s' = s { tx_read = rd', tx_write = mempty }
-    return $! s' `seq` (s', readMVar ret)
+commit_async (TX db st) = modifyMVarMasked st $ \ s ->
+    if M.null (tx_write s) 
+        -- handle read-only transactions immediately
+      then do ok <- verifyReadsDB db (M.toList (tx_read s))
+              return (s, return ok)
+        -- asynchronous read-write transactions
+      else do ret <- newEmptyMVar
+              dbPushCommit db ((tx_read s, tx_write s), ret)
+              let r' = M.union (tx_write s) (tx_read s)
+              let s' = s { tx_read = r', tx_write = mempty }
+              return (s', readMVar ret)
+
+verifyReadsDB :: DB -> [(ByteString,ByteString)] -> IO Bool
+verifyReadsDB db rd = 
+    if L.null rd then return True else
+    withReadLock db $ \ txn -> allM (validRead db txn) rd
+
+-- | Force GC of the database.
+--
+-- At the moment, GC is performed as part of the normal write duties,
+-- so this forces GC by committing an faux transaction. Committing an
+-- empty transaction doesn't do the same because read-only transactions 
+-- are optimized.
+gcDB :: DB -> IO ()
+gcDB db = gcDB_async db >>= id
+
+-- | asynchronous variant of gcDB
+gcDB_async :: DB -> IO (IO ())
+gcDB_async db = do
+    ret <- newEmptyMVar
+    dbPushCommit db ((mempty,mempty),ret)
+    return (readMVar ret >> return ())
 
 -- | Diagnose a transaction.
 --
@@ -739,9 +813,20 @@ check (TX db st) =
 --
 -- The current implementation leverages LMDB's property of being a
 -- memory-mapped database to avoid copying data that is about to
--- be deleted or overwritten (via unsafeMDB_to_BS). We also try to
--- avoids writing stowed data that should be immediately GC'd, or
--- writing any object more than once.
+-- be deleted or overwritten (via unsafeMDB_to_BS).
+-- 
+-- There is also a two frame latency between decref of any resource 
+-- and subsequent GC. This ensures we don't eliminate any reference
+-- that an active reader (such as readKey) might be observing. The
+-- reader may add a reference to db_hold to hold it for longer. This
+-- latency is mitigated by potentially running multiple GC frames 
+-- while progress is steady.
+-- 
+-- All new resources are written. Due to db_hold of new stowage, it's
+-- almost never the case that we can filter new resources based on a
+-- root set, and the attempt adds complications I'd rather avoid. So 
+-- it's up to the client to avoid `stowRsc` for volatile data.
+--
 dbWriter :: DB -> IO ()
 dbWriter !db = initLoop `catches` handlers where
     handlers = [Handler onGC, Handler onError]
@@ -758,7 +843,7 @@ dbWriter !db = initLoop `catches` handlers where
         Sys.exitFailure
 
     -- start loop with initial read frame
-    initLoop = advanceReadFrame db >>= writeLoop
+    initLoop = advanceReadFrame db >>= writeLoop mempty
 
     -- verify a read against accepted write set or LMDB
     checkRead :: MDB_txn -> KVMap -> (ByteString, ByteString) -> IO Bool
@@ -775,8 +860,8 @@ dbWriter !db = initLoop `catches` handlers where
         tryPutMVar ret False >> return ws
 
         
-    writeLoop :: R -> IO ()
-    writeLoop !r = do
+    writeLoop :: EphTbl -> R -> IO ()
+    writeLoop !rHold !r = do
         -- wait for work
         takeMVar (db_signal db) 
         
@@ -784,79 +869,64 @@ dbWriter !db = initLoop `catches` handlers where
         --  Read requests, order does matter here
         txList <- L.reverse <$> swapMVar (db_commit db) [] -- arrival order commits
         stowed <- readMVar (db_new db)                     -- all recent stowage
-        hold <- readMVar (db_hold db)                      -- ephemeron table holds
-        let blockDel = flip M.member hold . shortHash 
+        hold <- readMVar (db_hold db)                      -- volatile roots
         txn <- mdb_txn_begin (db_env db) Nothing False
 
+        writes <- foldM (joinWrite txn) mempty txList       -- the full write batch
+        overwrites <- mapKeysM (peekData db txn) writes     -- all overwritten data
+        writeRsc <- filterKeysM (isNewRsc db txn) stowed    -- write the new stowage
 
-        -- collapse writes to single batch
-        writes <- foldM (joinWrite txn) mempty txList
+        let wRCU = mkRCU 1 (L.concatMap hashDeps (M.elems writes))
+        let owRCU = mkRCU (-1) (L.concatMap hashDeps (M.elems overwrites))
+        let rscRCU = M.unionWith (+) (mkRCU 0 (M.keys writeRsc)) -- potential new db_zero
+                                     (mkRCU 1 (L.concatMap hashDeps (M.elems writeRsc)))
+        let rcu0 = M.unionsWith (+) [owRCU, wRCU, rscRCU]
 
-        -- compute reference count updates from the writes
-        overwrites <- mapKeysM (peekData db txn) writes
-        let wRCU = addRCU 1 (L.concatMap hashDeps (M.elems writes))
-                 $ addRCU (-1) (L.concatMap hashDeps (M.elems overwrites))
-                 $ mempty
-
-        -- filter stowage to new rooted resources.
-        --   roots may be persistent or ephemeral
-        writeRsc <- do
-            newRsc <- filterKeysM (isNewRsc db txn) stowed
-            let isShallowRoot h = 
-                    if blockDel h then return True else
-                    let u = fromMaybe 0 (M.lookup (shortHash h) wRCU) in do
-                    ct <- dbGetRefct db txn h
-                    return $! ((ct + u) /= 0)
-            newRoots <- filterM isShallowRoot (M.keys newRsc)
-            let f = maybe [] hashDeps . flip M.lookup newRsc
-            let rooted = rootSet f newRoots
-            return $! (newRsc `M.intersection` rooted) -- new AND rooted resources
-
-
-        -- determine which elements must be GC'd.
-        --   cascading: follow tree-structured data, delete children
-        --   incremental: use quota, search for pending GC candidates
-        let txSize = M.size writes + M.size writeRsc
-        let qc = 50 + (2 * txSize) -- max pending GC candidates
-        let qgc = 5 * qc           -- soft max for items deleted
-
-        gcCand <- dbGCPend db txn hold qc -- pending GC candidates
-        let rcu = addRCU 0 (M.keys writeRsc)    -- new ephemerons
-                $ addRCU 0 gcCand               -- old ephemerons
-                $ addRCU 1 (L.concatMap hashDeps (M.elems writeRsc)) -- internal refs
-                $ wRCU                          -- rooted refs
-
-        let initRC = mapKeysM (dbGetRefct db txn) 
-        let gcLoop !gc !rc = 
-                let mayGC h n = (0 == n) && not (blockDel h) in
-                let (ngc,rcP) = M.partitionWithKey mayGC rc in
+        -- Garbage Collection and Refct Management
+        --   cleanup must be proportional to write effort (to keep up)
+        --   compute reference counts in volatile memory before writing
+        let writeEffort = M.size writes + M.size rcu0
+        let qc = 50 + (2 * writeEffort) -- initial GC candidates
+        let qgc = 5 * qc                -- soft limit for cascading GC
+        let blockDel h = -- not everything may be GC'd.
+                let memb = M.member (shortHash h) in
+                memb rcu0 || memb hold || memb rHold
+        let initRC = mapKeysM (dbGetRefct db txn)
+        let gcLoop !gc !rc ngc = 
                 let done = (qgc < M.size gc) || (M.null ngc) in
                 if done then return (gc, rc) else
-                mapM (peekRsc db txn) (M.keys ngc) >>= \ dd ->
-                let rcu = addRCU (-1) (L.concatMap (maybe [] hashDeps) dd) mempty in
-                initRC (M.difference rcu rc) >>= \ rcINI -> 
+                mapM (peekRsc db txn) (M.keys ngc) >>= \ dd -> -- dropped deps
+                let rcu = mkRCU (-1) (L.concatMap (maybe [] hashDeps) dd) in
+                initRC (M.difference rcu rc) >>= \ nrc -> -- new reference counts
+                let rc' = M.unionsWith (+) [(M.difference rc ngc), rcu, nrc] in
                 let gc' = M.union gc ngc in
-                let rc' = M.unionWith (+) rcu $ M.union rcP rcINI in
-                assert (M.size gc' == (M.size ngc + M.size gc)) $
-                assert (M.size rc' == (M.size rcP + M.size rcINI)) $
-                gcLoop gc' rc'
-        rc0 <- M.unionWith (+) rcu <$> initRC rcu
-        (gc,rc) <- gcLoop mempty rc0
+                assert (M.size gc' == (M.size gc + M.size ngc)) $
+                let mayGC h = case M.lookup h rc' of
+                        Nothing -> False
+                        Just ct -> (0 == ct) && not (blockDel h)
+                in
+                let ngc' = filterKeys mayGC rcu in -- next GC is subset of rcu
+                gcLoop gc' rc' ngc'
+        
+        rc0 <- M.unionWith (+) rcu0 <$> initRC rcu0
+        ngc0 <- mkRCU 0 <$> dbGCPend db txn (not . blockDel) qc
+        (gc,rc) <- gcLoop mempty rc0 ngc0
 
-        -- more sanity checks
-        assert (M.null (M.intersection writeRsc gc)) (return ())
+        assert (M.null (M.intersection gc rc)) $ return () -- sanity check
+        when (M.size gc >= qc) $ dbSignal db -- heuristically signal more GC
+        -- traceIO ("GC: " ++ show (M.keys gc))
 
         -- Reads are complete!
-        --
+        -- 
         -- Read before write ensures we only write each elements once,
         -- and helps isolate the complexity to the purely functional 
-        -- code. It also ensures safety of zero-copy reads (whereas
-        -- mixed read-write may recycle pages in the transaction).
+        -- code. It also ensures safety for the zero-copy reads without
+        -- needing to know about LMDB page recycling within a write. 
         --
         -- The main disadvantage is that it takes a lot of memory to
         -- build the write sets. But that's mitigated by zero-copy.
 
-        -- update all the data at the DB layer
+        -- Write all the Updates to LMDB
         mapM_ (dbDelRscAndRefct db txn) (M.keys gc)             -- delete GC'd resources
         mapM_ (uncurry (dbSetRefct db txn)) (M.toList rc)       -- update other refcts
         mapM_ (uncurry (dbPutRsc db txn)) (M.toList writeRsc)   -- write new resources
@@ -866,12 +936,13 @@ dbWriter !db = initLoop `catches` handlers where
         waitR r                             -- wait on readers of the old LMDB frame
         mdb_txn_commit txn                  -- commit write data to the memory map
         r' <- advanceReadFrame db           -- acquire readers from prior LMDB frame
+        let rHold' = owRCU                  -- hold decref'd resources one more frame
         mdb_env_sync_flush (db_env db)      -- commit write to disk
 
         -- report success, release completed stowage, continue
         mapM_ (flip tryPutMVar True . snd) txList
         modifyMVarMasked_ (db_new db) $ \ m -> return $! (M.difference m stowed)
-        writeLoop r'
+        writeLoop rHold' r' 
 
 
 -- zero-copy reference to an LMDB layer bytestring. This result is
@@ -890,7 +961,7 @@ peekData db txn k = withLBSKey (toSafeKey k) $ \ mdbKey ->
 
 -- access a resource, given a key. Only valid within transaction.
 peekRsc :: DB -> MDB_txn -> Hash -> IO (Maybe ByteString)
-peekRsc db txn h = withBSKey (BS.take stowKeyLen h) $ \ mdbKey ->
+peekRsc db txn h = withBSKey (shortHash h) $ \ mdbKey ->
     let hashRem = validHashLen - stowKeyLen in
     mdb_get' txn (db_stow db) mdbKey >>= \ mbv -> case mbv of
         Nothing -> return Nothing
@@ -899,8 +970,8 @@ peekRsc db txn h = withBSKey (BS.take stowKeyLen h) $ \ mdbKey ->
 
 -- scan database for a set of objects to be collected.
 -- result is invalid outside the transaction.
-dbGCPend :: DB -> MDB_txn -> EphTbl -> Int -> IO [Hash]
-dbGCPend db txn hold quota = alloca $ \ pHash -> do
+dbGCPend :: DB -> MDB_txn -> (Hash -> Bool) -> Int -> IO [Hash]
+dbGCPend db txn accept quota = alloca $ \ pHash -> do
     crs <- mdb_cursor_open' txn (db_zero db)
     let loop !b !n !r =
             if ((not b) || (0 == n)) then return r else
@@ -908,9 +979,8 @@ dbGCPend db txn hold quota = alloca $ \ pHash -> do
             unsafeMDB_to_BS hMDB >>= \ h ->
             mdb_cursor_get' MDB_NEXT crs pHash nullPtr >>= \ b' ->
             assert (mv_size hMDB == stowKeyLen) $
-            let skip = M.member h hold in
-            if skip then loop b' n r
-                    else loop b' (n - 1) (h : r)
+            if accept h then loop b' (n - 1) (h : r)
+                        else loop b' n r
     b0 <- mdb_cursor_get' MDB_FIRST crs pHash nullPtr
     lst <- loop b0 quota []
     mdb_cursor_close' crs
@@ -927,25 +997,15 @@ mdbSkip n (MDB_val sz p) =
     assert (sz >= fromIntegral n) $
     MDB_val (sz - fromIntegral n) (p `plusPtr` n)
 
-sel :: a -> a -> Bool -> a
-sel t f b = if b then t else f
+filterKeys :: (k -> Bool) -> M.Map k a -> M.Map k a
+filterKeys fn = M.filterWithKey $ \ k _ -> fn k
 
 filterKeysM :: (Applicative m) => (k -> m Bool) -> M.Map k a -> m (M.Map k a)
-filterKeysM op = M.traverseMaybeWithKey $ \ k v ->
-    sel (Just v) Nothing <$> op k
+filterKeysM op = M.traverseMaybeWithKey $ \ k v -> sel (Just v) Nothing <$> op k
+    where sel t f b = if b then t else f
 
 mapKeysM :: (Applicative m) => (k -> m b) -> M.Map k a -> m (M.Map k b)
 mapKeysM op = M.traverseWithKey $ \ k _ -> op k
-
-
--- compute lightweight root set
-type RootSet k = M.Map k ()
-rootSet :: (Ord k) => (k -> [k]) -> [k] -> RootSet k
-rootSet f = addTo mempty where
-    addTo = L.foldl' $ \ r k -> 
-        if M.member k r then r 
-                        else addTo (M.insert k () r) (f k) 
-
 
 allM :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
 allM fn (x:xs) = fn x >>= \ b -> if not b then return False else allM fn xs

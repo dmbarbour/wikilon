@@ -101,20 +101,21 @@ class Trace m where
 -- are essentially just binary resources that are globally identified
 -- by secure hash, specifically Awelon.Hash.
 --
--- This API for stowage is simple. Load errors require raising an
--- exception within the monad. The monad should ensure that stowed
--- resources are not garbage collected before we can assume they
--- have been rooted, such as a transaction commit or checkpoint.
+-- This API supports asynchronous loads, useful if stowage is backed
+-- by a networked service. However, failure is not handled directly.
+-- If any resource cannot be loaded, that should be represented as an
+-- exception at the the monad layer.
 --
--- This API does support potential for asynchronous load in case
--- we're using some sort of distributed database, and to support
--- reporting more than one missing resource at a time.
--- 
-class Stowage m where
+-- Resources may generally be garbage collected. It's up to the monad
+-- to provide sensible GC that mitigates common sources of failure, 
+-- e.g. to avoid GC of newly stowed resources except at transaction
+-- or checkpoint boundaries (provided through a persistence API).
+--
+class (Monad m) => Stowage m where
     stow :: ByteString -> m Hash
     load_async :: Hash -> m (m ByteString)
 
-load :: (Stowage m, Monad m) => Hash -> m ByteString
+load :: (Stowage m) => Hash -> m ByteString
 load h = load_async h >>= id
 
 -- question: how do 

@@ -33,8 +33,9 @@ Initial requirements:
 * dictionary lookups, evaluations
 * editable views
 * command line interface or widget app
-* simplified server-side application model (with simple effects, state)
-* simplified client-side application model (compile Awelon to web app?)
+* simple application models, server and client side
+* cross-compilation of programs from Awelon to JavaScript
+ * accelerated, too
 
 I'd like to support some flexible binary resources, such that I can render JPEG or GIF images or produce some music or movies via computations. 
 
