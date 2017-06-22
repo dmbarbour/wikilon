@@ -25,7 +25,9 @@ Another option is to avoid Haskell and choose a JIT'd language, like Java or Sca
 
 I need to get something running quickly (again!), even if it isn't ideal for performance immediately. This will consist of a web server and basic APIs mostly (initially) for human use.
 
-Last time around I used Wai directly, but that creates a pretty big burden for any sort of lightweight composition of widgets. I'm inclined to try Snap or Yesod at this point. If I can model composition of multiple interactive widgets within a page, that would be reasonably convenient.
+Last time around I used Wai directly, but that creates a pretty big burden for any sort of lightweight composition of widgets. I'm inclined to try Snap or Yesod at this point. Note: the 'servant' model also looks very nice. 
+
+In any case, I probably do need to model composition of multiple interactive widgets within a page, corresponding to different components. And I probably need good support for sessions.
 
 Initial requirements:
 

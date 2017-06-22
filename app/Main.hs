@@ -3,6 +3,7 @@
 module Main (main) where
 
 import Control.Monad
+import Control.Monad.Loops (anyM)
 import Control.Exception
 import qualified System.IO as Sys
 import qualified System.Exit as Sys
@@ -30,22 +31,27 @@ helpMsg =
   \\n\
   \    For TLS and HTTPS:\n\
   \      add 'wiki.key' and 'wiki.crt' files to WIKILON_HOME\n\
-  \      when TLS is enabled, insecure connections are disabled\n\
+  \      if TLS is enabled, insecure connections are denied\n\
   \\n\
   \Once initialized, the wikilon web server can be accessed through a\n\
   \normal browser, and documentation will be provided online.\n\
   \"
 
+-- TLS files
+crt, key :: FS.FilePath
+crt h = "wiki.crt"
+key h = "wiki.key"
+
 data Args = Args
  { args_port :: Int
- , args_db   :: Int
+ , args_dbsz :: Int
  , args_help :: Bool
  , args_bad  :: [String]
  }
 defaultArgs :: Args 
 defaultArgs = Args
  { args_port = 3000
- , args_db   = 40 * 1000 * 1000
+ , args_dbsz = 40 * 1000 * 1000
  , args_help = False
  , args_bad  = []
  }
@@ -59,38 +65,41 @@ procArgs :: [String] -> Args
 procArgs = L.foldr (flip pa) defaultArgs where
     pa a "-?" = a { args_help = True }
     pa a ('-': 'p' : (tryRead -> Just p)) = a { args_port = p }
-    pa a ('-': 'd' : 'b': (tryRead -> Just mb)) = a { args_db = mb }
+    pa a ('-': 'd' : 'b': (tryRead -> Just mb)) = a { args_dbsz = mb }
     pa a s = let bad' = s : args_bad a in a { args_bad = bad' }
 
-wiki_crt, wiki_key :: FS.FilePath -> FS.FilePath
-wiki_crt h = h FS.</> "wiki.crt"
-wiki_key h = h FS.</> "wiki.key"
+useWikilonHome :: IO ()
+useWikilonHome = do
+    e <- Env.getEnvironment
+    home <- case L.lookup "WIKILON_HOME" e of
+        Just h -> return h
+        Nothing -> FS.getAppUserDataDirectory "wikilon"
+    FS.createDirectoryIfMissing True home
+    FS.setCurrentDirectory home
 
 putErrLn :: String -> IO ()
 putErrLn = Sys.hPutStrLn Sys.stderr
 
+-- run Warp using TLS if avaialable, otherwise insecure
+runWarp :: Int -> Wai.Application -> IO ()
+runWarp port app =
+    bUseTLS <- anyM FS.doesFileExist [crt, key]
+    let tlsOpts = Warp.tlsSettings crt key
+    let warpOpts = Warp.setPort port
+                 $ Warp.setTimeout 600
+                 $ Warp.defaultSettings
+    if bUseTLS then Warp.runTLS tlsOpts warpOpts app
+               else Warp.runSettings warpOpts app
+
 -- defaulting to a hello world app for now.
--- 
 mkDummyApp :: IO Wai.Application
 mkDummyApp = Scotty.scottyApp $ do
     Scotty.get "/:word" $ do
         name <- Scotty.param "word"
         Scotty.html $ mconcat ["<h1>Hello, ", name, "!</h1>"]
 
-getAppDir =
-    Env.getEnvironment >>= \ env ->
-    case L.lookup "WIKILON_HOME" env of 
-        Just h -> return h
-        Nothing -> FS.getAppUserDataDirectory "wikilon"
-
-createAppDir =
-    getAppDir >>= \ fp ->
-    FS.createDirectoryIfMissing True fp >>
-    FS.canonicalizePath fp
-
-
-runWikilonInstance :: Args -> IO ()
-runWikilonInstance args = body `catches` handlers where
+runWikilon :: IO ()
+runWikilon = body `catches` handlers where
     handlers = [Handler onError]
     onError :: SomeException -> IO ()
     onError e = do
@@ -98,39 +107,31 @@ runWikilonInstance args = body `catches` handlers where
         putErrLn (show e)
         putErrLn "Aborting."
         Sys.exitFailure
-
-    shouldUseTLS home = do
-        hasKey <- FS.doesFileExist $ wiki_key home
-        hasCRT <- FS.doesFileExist $ wiki_crt home
-        return (hasKey || hasCRT)
-    
-    serve home app = do
-        hasKey <- FS.doesFileExist $ wiki_key home
-        hasCRT <- FS.doesFileExist $ wiki_crt home
-        let bUseTLS = (hasKey || hasCRT)
-        let tlsOpts = WarpTLS.tlsSettings (wiki_crt home) (wiki_key home)
-        let warpOpts = Warp.setPort (args_port args) 
-                     $ Warp.setTimeout 600 
-                     $ Warp.defaultSettings
-        let serve = if bUseTLS then WarpTLS.runTLS tlsOpts warpOpts
-                               else Warp.runSettings warpOpts
-        serve app
-
     body = 
+        fmap procArgs Env.getArgs >>= \ args ->
         if args_help args then Sys.putStrLn helpMsg else
-        if not (L.null (args_bad args)) then failWithBadArgs else
+        if not (L.null (args_bad args)) then failWithBadArgs args else
+        useWikilonHome >>
+        DB.open "db" (args_dbsz args) >>= \ db ->
+        mkWikilonApp db >>= \ app ->
+        runWarp (args_port args) app
+        
+
         createAppDir >>= \ home ->
         mkDummyApp >>= \ app ->
         serve home app
         
-    failWithBadArgs = do
+    failWithBadArgs args = do
         putErrLn $ "Unrecognized arguments (try `-?` for help): "
         mapM_ (putErrLn . ((++) "  ")) (args_bad args)
         Sys.exitFailure
         
 
 main :: IO ()
-main = Env.getArgs >>= runWikilonInstance . procArgs 
+main = runWikilon
+
+
+Env.getArgs >>= runWikilonInstance . procArgs 
     
 
 

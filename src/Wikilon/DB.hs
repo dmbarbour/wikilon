@@ -789,7 +789,7 @@ gcDB_async :: DB -> IO (IO ())
 gcDB_async db = do
     ret <- newEmptyMVar
     dbPushCommit db ((mempty,mempty),ret)
-    return (readMVar ret >> return ())
+    return (readMVar ret >>= \ b -> assert b $ return ())
 
 -- | Diagnose a transaction.
 --

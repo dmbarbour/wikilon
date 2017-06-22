@@ -27,6 +27,7 @@ library
     Wikilon.CX
     Wikilon.DB
     Wikilon.KVM
+    Wikilon.CBT
     Wikilon.RT
   build-depends:       base >= 4.7 && < 5
                      , transformers

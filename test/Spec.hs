@@ -16,6 +16,7 @@ main :: IO ()
 main = withTmpDir "wikilon-test" $ do
     (Right db) <- DB.open "test-db" 1000
     testDB db
+    return ()
 
 
 
@@ -85,7 +86,7 @@ testDB db = do
     DB.writeKey tx3 "p" (utf8 (sel hs))
     DB.commit tx3
     DB.clearRsc tx3
-    DB.gcDB_async db
+    DB.gcDB db
     --DB.gcDB db
     -- traceIO ("hs: " ++ show hs)
     ns2 <- mapM (DB.loadRscDB db) hs 
