@@ -1,7 +1,7 @@
 name:                wikilon
 version:             0.1.0.0
--- synopsis:
--- description:
+synopsis: a wiki-inspired development environment for Awelon Language
+-- description: 
 homepage:            https://github.com/dmbarbour/wikilon#readme
 license:             BSD3
 license-file:        LICENSE
@@ -29,19 +29,28 @@ library
     Wikilon.KVM
     Wikilon.CBT
     Wikilon.RT
+
   build-depends:       base >= 4.7 && < 5
+                -- CONTROL
                      , transformers
-                     , deepseq
                      , monad-loops
+                -- VOLATILE DATA
+                     , deepseq
                      , array
                      , containers (>= 0.5.8)
                      , bytestring
                      , utf8-string
                      , blake2
+                -- PERSISTENT DATA
                      , lmdb
                      , filelock
-                     , filepath
-                     , directory
+                     , easy-file
+                -- WEB SERVICES
+                     , servant
+                     , wai
+                     , wai-websockets
+                     , websockets
+                     , yesod-form
   default-language:    Haskell2010
 
 executable wikilon-exe
@@ -50,8 +59,12 @@ executable wikilon-exe
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , wikilon
+                     , bytestring
+                     , monad-loops
                      , wai
-                     , warp, warp-tls, scotty
+                     , warp
+                     , warp-tls
+                     , entropy
                      , easy-file
   default-language:    Haskell2010
 
@@ -61,7 +74,8 @@ test-suite wikilon-test
   main-is:             Spec.hs
   build-depends:       base
                      , wikilon
-                     , bytestring, utf8-string
+                     , bytestring
+                     , utf8-string
                      , easy-file
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010

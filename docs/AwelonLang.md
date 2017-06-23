@@ -179,7 +179,7 @@ Stowage allows secure hash resources to be constructed or discovered at runtime,
 
 Stowage for binaries may automatically produce binary secure hash resources.
 
-*Aside:* What "large value" means is heuristic, but should be simple, predictable to maximize structure sharing. A simple option is that anything smaller than some fixed size should be inlined, while anything larger is referenced indirectly.
+*Aside:* What "large value" means is heuristic, but should be simple, predictable to maximize structure sharing. A simple option is that anything smaller than 256 bytes should be inlined, while anything larger is referenced indirectly. Runtimes may also have a practical upper limit for stowage sizes.
 
 ## Evaluation
 

@@ -37,7 +37,7 @@ type Hash = BS.ByteString
 -- "HSjFNGRnqHpFFbPhlThmqCbqkmDSHCBlJNnmDPnDtnCpKHqtNgqhRMJG"
 --
 hash :: BS.ByteString -> Hash
-hash = hashL . LBS.fromStrict
+hash = encodeHash . B2b.hash 35 mempty
 
 hashL :: LBS.ByteString -> Hash
 hashL = encodeHash . b2b_digest 35
@@ -56,7 +56,7 @@ hashAlphabet :: String
 hashAlphabet = assert (32 == L.length alphabet) $ alphabet where
     alphabet = "bcdfghjklmnpqrstBCDFGHJKLMNPQRST"
 
--- | The length (in characters) of a valid hash string.
+-- | The length of a valid hash string.
 validHashLen :: (Num a) => a
 validHashLen = 56
 

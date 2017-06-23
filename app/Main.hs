@@ -5,15 +5,17 @@ module Main (main) where
 import Control.Monad
 import Control.Monad.Loops (anyM)
 import Control.Exception
+import qualified Data.ByteString as BS 
 import qualified System.IO as Sys
 import qualified System.Exit as Sys
 import qualified System.Environment as Env
 import qualified Data.List as L
 import qualified System.EasyFile as FS
-import qualified Network.Wai.Handler.Warp as Warp
-import qualified Network.Wai.Handler.WarpTLS as WarpTLS
+import qualified System.Entropy as Sys
+import qualified Network.Wai.Handler.Warp as WS
+import qualified Network.Wai.Handler.WarpTLS as WS
 import qualified Network.Wai as Wai
-import qualified Web.Scotty as Scotty
+import Awelon.Hash (hash)
 import qualified Wikilon.DB as DB
 import qualified Wikilon
 
@@ -21,9 +23,10 @@ helpMsg :: String
 helpMsg =
   "Expected Usage:\n\
   \\n\
-  \    wikilon [-pPORT] [-dbMB] \n\
+  \    wikilon [-pPORT] [-dbMB] [-admin] \n\
   \     -pPORT listen for HTTP requests on given port (default 3000) \n\
   \     -dbMB  configure maximum database file size (default 40TB) \n\
+  \     -admin print admin password (valid until process restart)\n\
   \\n\
   \    Environment variables:\n\
   \      WIKILON_HOME: directory for persistent data.\n\
@@ -33,27 +36,35 @@ helpMsg =
   \      add 'wiki.key' and 'wiki.crt' files to WIKILON_HOME\n\
   \      if TLS is enabled, insecure connections are denied\n\
   \\n\
-  \Once initialized, the wikilon web server can be accessed through a\n\
-  \normal browser, and documentation will be provided online.\n\
+  \The wikilon web server is primarily accessed and configured through a\n\
+  \normal browser. Documentation online. Initial configuration requires\n\
+  \an -admin password, but persistent administrators may be configured.\n\
   \"
+
+-- should I allow users to *provide* an admin password? Probably not.
+-- It would likely be a dreadful source of insecurity, with passwords
+-- ending up within scripts.
+
 
 -- TLS files
 crt, key :: FS.FilePath
-crt h = "wiki.crt"
-key h = "wiki.key"
+crt = "wiki.crt"
+key = "wiki.key"
 
 data Args = Args
- { args_port :: Int
- , args_dbsz :: Int
- , args_help :: Bool
- , args_bad  :: [String]
+ { a_port :: Int
+ , a_dbsz :: Int
+ , a_admin :: Bool
+ , a_help :: Bool
+ , a_bad  :: [String]
  }
 defaultArgs :: Args 
 defaultArgs = Args
- { args_port = 3000
- , args_dbsz = 40 * 1000 * 1000
- , args_help = False
- , args_bad  = []
+ { a_port = 3000
+ , a_dbsz = 40 * 1000 * 1000
+ , a_admin = False
+ , a_help = False
+ , a_bad  = []
  }
 
 tryRead :: (Read a) => String -> Maybe a
@@ -63,10 +74,11 @@ tryRead s = case reads s of
 
 procArgs :: [String] -> Args
 procArgs = L.foldr (flip pa) defaultArgs where
-    pa a "-?" = a { args_help = True }
-    pa a ('-': 'p' : (tryRead -> Just p)) = a { args_port = p }
-    pa a ('-': 'd' : 'b': (tryRead -> Just mb)) = a { args_dbsz = mb }
-    pa a s = let bad' = s : args_bad a in a { args_bad = bad' }
+    pa a ('-': 'p' : (tryRead -> Just p)) = a { a_port = p }
+    pa a ('-': 'd' : 'b': (tryRead -> Just mb)) = a { a_dbsz = mb }
+    pa a "-admin" = a { a_admin = True }
+    pa a "-?" = a { a_help = True }
+    pa a s = let bad' = s : a_bad a in a { a_bad = bad' }
 
 useWikilonHome :: IO ()
 useWikilonHome = do
@@ -77,61 +89,55 @@ useWikilonHome = do
     FS.createDirectoryIfMissing True home
     FS.setCurrentDirectory home
 
+-- create fresh admin password, as needed
+mkAdminPass :: IO BS.ByteString
+mkAdminPass = BS.take 24 . hash <$> Sys.getEntropy 48
+
 putErrLn :: String -> IO ()
 putErrLn = Sys.hPutStrLn Sys.stderr
 
 -- run Warp using TLS if avaialable, otherwise insecure
 runWarp :: Int -> Wai.Application -> IO ()
-runWarp port app =
+runWarp port app = do
     bUseTLS <- anyM FS.doesFileExist [crt, key]
-    let tlsOpts = Warp.tlsSettings crt key
-    let warpOpts = Warp.setPort port
-                 $ Warp.setTimeout 600
-                 $ Warp.defaultSettings
-    if bUseTLS then Warp.runTLS tlsOpts warpOpts app
-               else Warp.runSettings warpOpts app
+    let tlsOpt = WS.tlsSettings crt key
+    let warpOpt = WS.setPort port
+                $ WS.setTimeout 120 -- allow longer heartbeats
+                $ WS.defaultSettings
+    if bUseTLS then WS.runTLS tlsOpt warpOpt app
+               else WS.runSettings warpOpt app
 
--- defaulting to a hello world app for now.
-mkDummyApp :: IO Wai.Application
-mkDummyApp = Scotty.scottyApp $ do
-    Scotty.get "/:word" $ do
-        name <- Scotty.param "word"
-        Scotty.html $ mconcat ["<h1>Hello, ", name, "!</h1>"]
+haltOnError :: SomeException -> IO a
+haltOnError e = do
+    putErrLn "Wikilon halted with exception:"
+    putErrLn (show e)
+    putErrLn "Aborting."
+    Sys.exitFailure
 
-runWikilon :: IO ()
-runWikilon = body `catches` handlers where
-    handlers = [Handler onError]
-    onError :: SomeException -> IO ()
-    onError e = do
-        putErrLn "Wikilon halted with exception:"
-        putErrLn (show e)
-        putErrLn "Aborting."
-        Sys.exitFailure
+-- | This essentially just passes the buck to Wikilon.
+main :: IO ()
+main = body `catch` haltOnError where
+    getArgs = procArgs <$> Env.getArgs
     body = 
-        fmap procArgs Env.getArgs >>= \ args ->
-        if args_help args then Sys.putStrLn helpMsg else
-        if not (L.null (args_bad args)) then failWithBadArgs args else
-        useWikilonHome >>
-        DB.open "db" (args_dbsz args) >>= \ db ->
-        mkWikilonApp db >>= \ app ->
-        runWarp (args_port args) app
-        
-
-        createAppDir >>= \ home ->
-        mkDummyApp >>= \ app ->
-        serve home app
-        
+        getArgs >>= \ args ->
+        if a_help args then Sys.putStrLn helpMsg else
+        let badArgs = not (L.null (a_bad args)) in
+        if badArgs then failWithBadArgs args else do
+        admin <- if not (a_admin args) then return Nothing else do
+                 pass <- mkAdminPass
+                 Sys.putStrLn ("admin:" ++ show pass)
+                 return (Just pass)
+        runServer args admin
+    runServer args admin = do
+        useWikilonHome
+        db <- DB.open "db" (a_dbsz args)
+        app <- mkWikilonApp "wiki/" db admin
+        runWarp (a_port args) app
     failWithBadArgs args = do
         putErrLn $ "Unrecognized arguments (try `-?` for help): "
-        mapM_ (putErrLn . ((++) "  ")) (args_bad args)
+        putErrLn $ show (a_bad args)
         Sys.exitFailure
         
-
-main :: IO ()
-main = runWikilon
-
-
-Env.getArgs >>= runWikilonInstance . procArgs 
     
 
 

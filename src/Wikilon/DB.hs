@@ -50,8 +50,7 @@ import qualified Data.ByteString.Unsafe as BS
 import qualified Data.ByteString.Internal as BS
 import qualified System.IO (FilePath)
 import qualified System.IO.Error as E
-import qualified System.Directory as FS 
-import System.FilePath ((</>))
+import qualified System.EasyFile as FS 
 import qualified System.IO as Sys
 import qualified System.Exit as Sys
 import qualified System.FileLock as FL 
@@ -305,20 +304,19 @@ lmdbEnvF = [MDB_NOLOCK, MDB_WRITEMAP, MDB_NOSYNC]
 -- | Open or Create the Database. 
 --
 -- The argument is simply a directory where we expect to open the
--- database, and a maximum database size in megabytes.
+-- database, and a maximum database size in megabytes. If the DB
+-- cannot be opened or created, this operation may fail with an 
+-- exception.
 --
--- The implementation uses LMDB without locks and writable memory.
--- Concurrency and the ephemeron table are managed within this 
--- process, so the database mustn't be used concurrently by other
--- processes. A lockfile is used to resist accidents.
---
--- Note: at the moment, there is no operation way to 'close' the DB.
--- The normal use case is to open one DB and keep it around until the
--- process fails. But resources will be released upon GC.
-open :: FilePath -> Int -> IO (Either SomeException DB)
-open fp nMB = try $ do
+-- Notes: A DB must be opened on a filesystem that supports mmap and
+-- file locking. Most networked file systems should be avoided. A DB
+-- must not be used concurrently. A lockfile helps resist accidents.
+-- There is no corresponding `close` operation. Once opened, a DB is
+-- closed only after the process halts or crashes.
+open :: FilePath -> Int -> IO DB
+open fp nMB = do
     FS.createDirectoryIfMissing True fp
-    lock <- tryFileLockE (fp </> "lockfile")
+    lock <- tryFileLockE (fp FS.</> "lockfile")
     flip onException (FL.unlockFile lock) $ do
         env <- mdb_env_create
 
