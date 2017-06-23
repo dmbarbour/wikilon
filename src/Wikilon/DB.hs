@@ -28,25 +28,26 @@ module Wikilon.DB
     , commit, commit_async
     , check
     , gcDB, gcDB_async
+    , hashDeps
     , FilePath
     , ByteString
-    , module Awelon.Hash
+    , Hash
     ) where
 
 import Control.Applicative
 import Control.Arrow (first)
 import Control.Monad
+import Control.Monad.Loops (allM)
 import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.MVar
 import Control.DeepSeq (force, ($!!))
 import Foreign
 import Data.Function (on)
-import Data.ByteString.Lazy (ByteString)
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Unsafe as BS
 import qualified Data.ByteString.Internal as BS
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Lazy.Internal as LBS
 import qualified System.IO (FilePath)
 import qualified System.IO.Error as E
 import qualified System.Directory as FS 
@@ -177,6 +178,32 @@ shortHash = BS.take stowKeyLen
 mkRCU :: Int -> [Hash] -> RCU 
 mkRCU !n = L.foldl' accum mempty where
     accum m h = M.insertWith (+) (shortHash h) n m
+
+-- | Scan for substrings that look like hashes.
+--
+-- This is the function Wikilon.DB uses for conservative GC of database
+-- resources. It simply recognizes sequences of validHashLen in the base32
+-- alphabet used by Awelon.Hash. Importantly, hashes should be separate 
+-- from each other and other bytes in the base32 alphabet. When writing 
+-- hashes into a value, consider use of {hash} if you aren't ensured clean
+-- separators by other means.
+--
+-- False positives are possible, of course, but are both unlikely to occur
+-- by accident and only add minor performance overhead where they do occur.
+--
+-- Note: Wikilon DB does not look for hashes in database keys. Only values
+-- and other stowage resources may resist GC of a resource, at this layer.
+hashDeps :: ByteString -> [Hash]
+hashDeps s = 
+    if BS.null s then [] else
+    let hs' = BS.dropWhile (not . validHashByte) s in
+    let (h, s') = BS.span validHashByte hs' in
+    let rem = hashDeps s' in
+    if validHashLen == BS.length h 
+        then h : rem
+        else rem
+
+
 
 -- functions to push work to our writer and signal it.
 dbSignal :: DB -> IO ()
@@ -416,51 +443,37 @@ dupTX (TX db st) = do
 maxKeyLen :: Integral a => a
 maxKeyLen = 255
 
--- rewrite problematic keys to a collision resistant secure hash.
--- I'll look only at the first byte and the key size. Most keys
--- should be safe in practice, and thus not need any rewrite.
+safeKey :: ByteString -> Bool
+safeKey s = not ((BS.null s) ||
+                 (BS.unsafeHead s < 32) ||
+                 (BS.length s > maxKeyLen))
+
+-- rewrite problem keys into safe keys. This shouldn't happen in
+-- practice, so I don't bother optimizing the conversion.
 toSafeKey :: ByteString -> ByteString
-toSafeKey s = if safe s then s else mkSafe s 
-    where
-    safe s = case LBS.uncons s of
-        Just (c, s') -> (c > 31) && (LBS.length s' < maxKeyLen) 
-        Nothing -> False -- empty key isn't considered safe
-    mkSafe s = LBS.singleton 26 <> LBS.fromStrict (shortHash (hashL s))
-        -- using (SUB)hash. Won't alias with natural safe keys.
+toSafeKey s 
+    | safeKey s = s
+    | otherwise = BS.cons 26 (hash s)
 
 -- use strict bytestring key as MDB_val
-withBSKey :: BS.ByteString -> (MDB_val -> IO a) -> IO a
-withBSKey (BS.PS fp off len) action = 
+withBS_as_MDB :: ByteString -> (MDB_val -> IO a) -> IO a
+withBS_as_MDB s action = withBS s $ \ p len -> 
+    action (MDB_val (fromIntegral len) p)
+{-# INLINE withBS_as_MDB #-}
+
+withBS :: ByteString -> (Ptr Word8 -> Int -> IO a) -> IO a
+withBS (BS.PS fp off len) action =
     withForeignPtr fp $ \ p ->
-        action $ MDB_val (fromIntegral len) (p `plusPtr` off)
-
--- use a short, lazy bytestring key as MDB_val.
-withLBSKey :: ByteString -> (MDB_val -> IO a) -> IO a
-withLBSKey (LBS.Chunk bs LBS.Empty) action = withBSKey bs action
-withLBSKey k action =
-    let len = LBS.length k in
-    allocaBytes (fromIntegral len) $ \ p -> do
-        copyLBS p k
-        action (MDB_val (fromIntegral len) p)
-
--- copy a lazy bytestring to pointer destination.
---
--- Assumes sufficient space in destination for the full length.
--- I'm surprised that I couldn't find an equivalent function in 
--- Data.ByteString.Lazy.Internal. 
-copyLBS :: Ptr Word8 -> LBS.ByteString -> IO ()
-copyLBS !dst s = case s of
-    LBS.Empty -> return ()
-    (LBS.Chunk (BS.PS fp off len) more) -> do
-        withForeignPtr fp $ \ src -> BS.memcpy dst (src `plusPtr` off) len
-        copyLBS (dst `plusPtr` len) more
+        action (p `plusPtr` off) len
+{-# INLINE withBS #-}
 
 -- copy an MDB for use as a Haskell bytestring.
 copyMDB_to_BS :: MDB_val -> IO BS.ByteString
 copyMDB_to_BS (MDB_val cLen src) =
+    if (0 == cLen) then return BS.empty else
     let len = fromIntegral cLen in 
-    BS.create len $ \ dst -> 
-        BS.memcpy dst src len
+    BS.create len $ \ dst -> BS.memcpy dst src len
+{-# INLINE copyMDB_to_BS #-}
 
 -- | Retrieve value associated with given key.
 --
@@ -501,13 +514,12 @@ readKeyDB db (force -> !key) =
 
 -- obtain a value after we have our transaction
 dbReadKey :: DB -> MDB_txn -> ByteString -> IO ByteString
-dbReadKey db txn k = withLBSKey (toSafeKey k) (dbReadKeyMDB db txn)
+dbReadKey db txn k = withBS_as_MDB (toSafeKey k) (dbReadKeyMDB db txn)
 
 dbReadKeyMDB :: DB -> MDB_txn -> MDB_val -> IO ByteString
 dbReadKeyMDB db txn k = do
     let toBS = maybe (return BS.empty) copyMDB_to_BS
-    bs <- toBS =<< mdb_get' txn (db_data db) k
-    return $! LBS.fromStrict bs
+    toBS =<< mdb_get' txn (db_data db) k
 
 -- | Read values for multiple keys.
 --
@@ -579,7 +591,7 @@ assumeKey (TX _ st) (force -> !k) (force -> !mbv) =
 -- This searches for a resource identified by secure hash within 
 -- the Wikilon database or transaction. If not found, this returns
 -- Nothing, in which case you might search elsewhere like the file
--- system or network. (These resources are provider independent.)
+-- system or network for a binary with the same secure hash.
 --
 -- Transactions do not root loaded data. The assumption is that all
 -- secure hashes loaded by a transaction were either discovered via
@@ -596,54 +608,55 @@ loadRsc (TX db _) = loadRscDB db
     -- At the moment, we don't store pending stowage in the TX.
     -- But this might change later.
 
--- | Load resource directly from database.
+-- | Load resource from database.
 loadRscDB :: DB -> Hash -> IO (Maybe ByteString)
 loadRscDB db h = 
-    -- peeking at recently stowed resources first. This should be
-    -- a negligible overhead.
-    readMVar (db_new db) >>= \ nrsc -> case lookupRsc h nrsc of
-        Nothing -> withRscMDB db h (fmap LBS.fromStrict . copyMDB_to_BS)
-        Just v -> return (Just v)
+    readMVar (db_new db) >>= \ nrsc -> 
+    case lookupRsc h nrsc of 
+        Just v -> return (Just v) -- recently stowed
+        Nothing -> withRscMDB db h copyMDB_to_BS
 
+-- lookup with partial hash, verify the remainder in constant 
+-- time to guard against timing attacks. If everything checks 
+-- out, act on the data. 
 withRscMDB :: DB -> Hash -> (MDB_val -> IO a) -> IO (Maybe a)
-withRscMDB db !h !action = 
-    if (BS.length h /= validHashLen) then return Nothing else
-    withBSKey h $ \ hMDB -> 
-    withReadLock db $ \ txn -> do 
-    let hKey = MDB_val stowKeyLen (mv_data hMDB)
-    let hRem = mdbSkip stowKeyLen hMDB
-    mbv <- mdb_get' txn (db_stow db) hKey
-    case mbv of
-        Nothing -> return Nothing
-        Just val -> 
-            ctMatchPrefix hRem val >>= \ bPrefixOK ->
-            if not bPrefixOK then return Nothing else
-            let rscData = mdbSkip (validHashLen - stowKeyLen) val in
-            Just <$> action rscData
+withRscMDB db !h !action =
+    withReadLock db $ \ txn -> 
+    withRscMDB' db txn h action
 
--- | Min-copy access to resource.
+withRscMDB' :: DB -> MDB_txn -> Hash -> (MDB_val -> IO a) -> IO (Maybe a)
+withRscMDB' db txn h action = withBS_as_MDB h $ \ mdbH ->
+    if (mv_size mdbH /= validHashLen) then return Nothing else 
+    let mdbK = MDB_val stowKeyLen (mv_data mdbH) in
+    mdb_get' txn (db_stow db) mdbK >>= \ mbv ->
+    case mbv of
+        Just rv ->
+            let mdbR = mdbSkip stowKeyLen mdbH in
+            ctMatchPrefix mdbR rv >>= \ okPrefix ->
+            if not okPrefix then return Nothing else
+            let v = mdbSkip (fromIntegral (mv_size mdbR)) rv in
+            Just <$> action v
+        Nothing -> return Nothing
+
+-- | Zero-copy access to resource.
 --
--- With the LMDB implementation layer, we can avoid a lot of copying
--- when accessing data. Other implementations might similarly use a 
--- local cache.
+-- This operation leverages LMDB's properties to provide access to a
+-- resource without copying it. However, some caution is warranted: a
+-- long-lived reader may interfere with the writer. Thus, if you need
+-- the data for more than a short period, copy it instead.
 --
--- This operation may block background processes of the database, such
--- as the writer thread. So it's important to ensure any `withRsc` action
--- is relatively short-lived.
---
--- If the resource isn't available, this returns immediately with Nothing.
+-- The bytestring provided here is unsafe outside the `withRsc` call.
 --
 withRsc :: TX -> Hash -> (ByteString -> IO a) -> IO (Maybe a)
 withRsc (TX db _) = withRscDB db
 
--- | Ephemeral access to resource in DB, see withRsc.
 withRscDB :: DB -> Hash -> (ByteString -> IO a) -> IO (Maybe a)
 withRscDB db h action =
-    readMVar (db_new db) >>= \ mbv -> case lookupRsc h mbv of
+    readMVar (db_new db) >>= \ mbv -> 
+    case lookupRsc h mbv of
         Just v -> Just <$> action v
         Nothing -> withRscMDB db h $ \ mdb ->
-            unsafeMDB_to_BS mdb >>= \ bs ->
-            action (LBS.fromStrict bs)
+            unsafeMDB_to_BS mdb >>= action
 
 -- timing attack resistant prefix matching
 ctMatchPrefix :: MDB_val -> MDB_val -> IO Bool
@@ -688,7 +701,7 @@ ctEqBS a b =
 --
 stowRsc :: TX -> ByteString -> IO Hash
 stowRsc (TX db st) v = modifyMVarMasked st $ \ s -> do
-    h <- evaluate (hashL v)
+    h <- evaluate (hash v)
     let ephUpd = mkRCU 1 [h] 
     let hold' = M.unionWith (+) (tx_hold s) ephUpd
     let s' = s { tx_hold = hold' }
@@ -761,7 +774,7 @@ commit_async :: TX -> IO (IO Bool)
 commit_async (TX db st) = modifyMVarMasked st $ \ s ->
     if M.null (tx_write s) 
         -- handle read-only transactions immediately
-      then do ok <- verifyReadsDB db (M.toList (tx_read s))
+      then do ok <- verifyReadsDB db (tx_read s)
               return (s, return ok)
         -- asynchronous read-write transactions
       else do ret <- newEmptyMVar
@@ -770,10 +783,11 @@ commit_async (TX db st) = modifyMVarMasked st $ \ s ->
               let s' = s { tx_read = r', tx_write = mempty }
               return (s', readMVar ret)
 
-verifyReadsDB :: DB -> [(ByteString,ByteString)] -> IO Bool
-verifyReadsDB db rd = 
-    if L.null rd then return True else
-    withReadLock db $ \ txn -> allM (validRead db txn) rd
+verifyReadsDB :: DB -> KVMap -> IO Bool
+verifyReadsDB db r = 
+    if M.null r then return True else
+    withReadLock db $ \ txn -> 
+        allM (uncurry (validRead db txn)) (M.toList r)
 
 -- | Force GC of the database.
 --
@@ -802,7 +816,8 @@ check :: TX -> IO [ByteString]
 check (TX db st) =
     readMVar st >>= \ s ->
     withReadLock db $ \ txn -> do
-    fmap fst <$> filterM (fmap not . validRead db txn) (M.toList (tx_read s))
+        let invalid (k,v) = not <$> validRead db txn k v
+        fmap fst <$> filterM invalid (M.toList (tx_read s))
 
 -- The database writer thread.
 --
@@ -848,7 +863,7 @@ dbWriter !db = initLoop `catches` handlers where
     -- verify a read against accepted write set or LMDB
     checkRead :: MDB_txn -> KVMap -> (ByteString, ByteString) -> IO Bool
     checkRead txn ws rd@(k,vTX) = case M.lookup k ws of
-        Nothing -> validRead db txn rd
+        Nothing -> validRead db txn k vTX
         Just vW -> return (vW == vTX)
 
     -- aggregate proposed commits into a write set if possible
@@ -952,21 +967,22 @@ unsafeMDB_to_BS (MDB_val n p) =
     newForeignPtr_ p >>= \ fp -> 
         return (BS.PS fp 0 (fromIntegral n))
 
--- access data, given a key. Only valid within transaction.
+-- zero-copy access to data, only valid within transaction.
 peekData :: DB -> MDB_txn -> ByteString -> IO ByteString
-peekData db txn k = withLBSKey (toSafeKey k) $ \ mdbKey ->
+peekData db txn k = withBS_as_MDB (toSafeKey k) $ \ mdbKey ->
     let mkBS = maybe (return BS.empty) unsafeMDB_to_BS in
-    let mkLBS = fmap LBS.fromStrict . mkBS in
-    mkLBS =<< mdb_get' txn (db_data db) mdbKey
+    mkBS =<< mdb_get' txn (db_data db) mdbKey
 
--- access a resource, given a key. Only valid within transaction.
+-- zero-copy access to resource, only valid within transaction.
+-- this also assumes shortHash for lookup, and does not verify
+-- the full hash.
 peekRsc :: DB -> MDB_txn -> Hash -> IO (Maybe ByteString)
-peekRsc db txn h = withBSKey (shortHash h) $ \ mdbKey ->
+peekRsc db txn h = withBS_as_MDB h $ \ mdbKey ->
+    assert (stowKeyLen == mv_size mdbKey) $
     let hashRem = validHashLen - stowKeyLen in
     mdb_get' txn (db_stow db) mdbKey >>= \ mbv -> case mbv of
         Nothing -> return Nothing
-        Just v -> unsafeMDB_to_BS (mdbSkip hashRem v) >>= \ bs ->
-                  return (Just (LBS.fromStrict bs))
+        Just v -> Just <$> unsafeMDB_to_BS (mdbSkip hashRem v)
 
 -- scan database for a set of objects to be collected.
 -- result is invalid outside the transaction.
@@ -988,7 +1004,7 @@ dbGCPend db txn accept quota = alloca $ \ pHash -> do
 
 -- test whether a resource is new to the LMDB layer
 isNewRsc :: DB -> MDB_txn -> Hash -> IO Bool
-isNewRsc db txn h = withBSKey (shortHash h) $ \ mdbKey ->
+isNewRsc db txn h = withBS_as_MDB (shortHash h) $ \ mdbKey ->
     isNothing <$> mdb_get' txn (db_stow db) mdbKey
 
 -- skip the first n bytes of an MDB_val
@@ -1001,35 +1017,25 @@ filterKeys :: (k -> Bool) -> M.Map k a -> M.Map k a
 filterKeys fn = M.filterWithKey $ \ k _ -> fn k
 
 filterKeysM :: (Applicative m) => (k -> m Bool) -> M.Map k a -> m (M.Map k a)
-filterKeysM op = M.traverseMaybeWithKey $ \ k v -> sel (Just v) Nothing <$> op k
+filterKeysM op = M.traverseMaybeWithKey $ \ k v -> 
+    sel (Just v) Nothing <$> op k
     where sel t f b = if b then t else f
 
 mapKeysM :: (Applicative m) => (k -> m b) -> M.Map k a -> m (M.Map k b)
 mapKeysM op = M.traverseWithKey $ \ k _ -> op k
 
-allM :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
-allM fn (x:xs) = fn x >>= \ b -> if not b then return False else allM fn xs
-allM _ [] = return True
-
--- zero-copy memcmp equality comparison for database and TX values.
+-- zero-copy memcmp equality comparison for DB and TX values.
 -- (Note: empty string is equivalent to undefined in this case.)
-validRead :: DB -> MDB_txn -> (ByteString,ByteString) -> IO Bool
-validRead db txn (k,vTX) = withLBSKey (toSafeKey k) $ \ mdbKey ->
-    mdb_get' txn (db_data db) mdbKey >>= \ mbv ->
-    maybe (return (LBS.null vTX)) (flip matchMDB_LBS k) mbv
+validRead :: DB -> MDB_txn -> ByteString -> ByteString -> IO Bool
+validRead db txn k vTX = withBS_as_MDB (toSafeKey k) $ \ mdbKey ->
+    mdb_get' txn (db_data db) mdbKey >>= \ mbv -> case mbv of
+        Nothing  -> return (BS.null vTX) -- undefined is empty
+        Just vDB -> matchMDB_BS vDB vTX  -- exact match required
 
-matchMDB_LBS :: MDB_val -> LBS.ByteString -> IO Bool
-matchMDB_LBS v s =
-    let szMatch = fromIntegral (mv_size v) == LBS.length s in
-    if not szMatch then return False else matchLBS (mv_data v) s
-
-matchLBS :: Ptr Word8 -> LBS.ByteString -> IO Bool
-matchLBS !p s = case s of
-    (LBS.Chunk (BS.PS fp off len) more) -> do
-        iCmp <- withForeignPtr fp $ \ s -> BS.memcmp p (s `plusPtr` off) len
-        if (0 /= iCmp) then return False else matchLBS (p `plusPtr` len) more
-    LBS.Empty -> return True
-
+matchMDB_BS :: MDB_val -> ByteString -> IO Bool
+matchMDB_BS v s = withBS s $ \ p len ->
+    if (mv_size v /= fromIntegral len) then return False else
+    (== 0) <$> BS.memcmp (mv_data v) p len
 
 -- Reference counts are recorded in the `db_rfct` table as a simple
 -- string of [1-9][0-9]*. Anything not in the table is assumed to have
@@ -1037,7 +1043,7 @@ matchLBS !p s = case s of
 dbGetRefct :: DB -> MDB_txn -> Hash -> IO Int
 dbGetRefct db txn h = 
     assert (BS.length h == stowKeyLen) $ 
-    withBSKey h $ \ hMDB -> 
+    withBS_as_MDB h $ \ hMDB -> 
         mdb_get' txn (db_rfct db) hMDB >>= \ mbv ->
         maybe (return 0) readRefct mbv
 
@@ -1056,7 +1062,7 @@ readRefct v = go 0 (mv_data v) (mv_size v) where
 dbSetRefct :: DB -> MDB_txn -> Hash -> Int -> IO ()
 dbSetRefct db txn h 0 = 
     assert (BS.length h == stowKeyLen) $
-    withBSKey h $ \ hMDB -> do
+    withBS_as_MDB h $ \ hMDB -> do
         let wf = compileWriteFlags []
         mdb_put' wf txn (db_zero db) hMDB (MDB_val 0 nullPtr)
         mdb_del' txn (db_rfct db) hMDB Nothing
@@ -1064,7 +1070,7 @@ dbSetRefct db txn h 0 =
 dbSetRefct db txn h n = 
     assert ((n > 0) && (BS.length h == stowKeyLen)) $
     withNatVal n $ \ nMDB ->
-    withBSKey h $ \ hMDB -> do
+    withBS_as_MDB h $ \ hMDB -> do
         let wf = compileWriteFlags []
         mdb_del' txn (db_zero db) hMDB Nothing
         mdb_put' wf txn (db_rfct db) hMDB nMDB
@@ -1095,38 +1101,43 @@ putBytes _ [] = return ()
 dbDelRscAndRefct :: DB -> MDB_txn -> Hash -> IO ()
 dbDelRscAndRefct db txn h = 
     assert (BS.length h == stowKeyLen) $
-    withBSKey h $ \ hMDB -> do
+    withBS_as_MDB h $ \ hMDB -> do
         mdb_del' txn (db_stow db) hMDB Nothing
         mdb_del' txn (db_rfct db) hMDB Nothing
         mdb_del' txn (db_zero db) hMDB Nothing
         return ()
 
+-- write resource data
+-- this splits hash between key and data (at stowKeyLen) 
+-- fails on attempt to overwrite existing resources
 dbPutRsc :: DB -> MDB_txn -> Hash -> ByteString -> IO ()
 dbPutRsc db txn h v =
-    assert (BS.length h == validHashLen) $
-    withBSKey (BS.take stowKeyLen h) $ \ hMDB -> do
-        let hv = LBS.fromStrict (BS.drop stowKeyLen h) <> v 
-        let sz = fromIntegral (LBS.length hv)
+    withBS h $ \ pH hLen ->
+    assert (hLen == validHashLen) $
+    withBS v $ \ pV vLen -> do
+        let key = MDB_val stowKeyLen pH
+        let hRem = validHashLen - stowKeyLen
+        let sz = fromIntegral (hRem + vLen)
         let wf = compileWriteFlags [MDB_NOOVERWRITE]
-        dst <- mdb_reserve' wf txn (db_stow db) hMDB sz
-        copyLBS (mv_data dst) hv
-
--- empty string is equivalent to deletion from API
-dbDelData :: DB -> MDB_txn -> ByteString -> IO ()
-dbDelData db txn k =
-    withLBSKey (toSafeKey k) $ \ mdbKey -> do
-        mdb_del' txn (db_data db) mdbKey Nothing
-        return ()
+        dst <- mv_data <$> mdb_reserve' wf txn (db_stow db) key sz
+        BS.memcpy dst (pH `plusPtr` stowKeyLen) hRem
+        BS.memcpy (dst `plusPtr` hRem) pV vLen
 
 dbPutData :: DB -> MDB_txn -> ByteString -> ByteString -> IO ()
 dbPutData db txn k v = 
-    if LBS.null v then dbDelData db txn k else
-    withLBSKey (toSafeKey k) $ \ mdbKey -> do 
+    if (BS.null v) then dbDelData db txn k else
+    withBS_as_MDB (toSafeKey k) $ \ mdbKey ->
+    withBS_as_MDB v $ \ mdbVal -> do
         let wf = compileWriteFlags []
-        let sz = fromIntegral (LBS.length v)
-        dst <- mdb_reserve' wf txn (db_data db) mdbKey sz
-        copyLBS (mv_data dst) v
+        mdb_put' wf txn (db_data db) mdbKey mdbVal
+        return ()
 
+-- empty value is equivalent to key deletion.
+dbDelData :: DB -> MDB_txn -> ByteString -> IO ()
+dbDelData db txn k =
+    withBS_as_MDB (toSafeKey k) $ \ mdbKey -> do
+        mdb_del' txn (db_data db) mdbKey Nothing
+        return ()
 
 -- indent all lines by w
 indent :: String -> String -> String

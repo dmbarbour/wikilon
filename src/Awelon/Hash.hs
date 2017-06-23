@@ -3,7 +3,6 @@ module Awelon.Hash
     , hash, hashL
     , hashAlphabet
     , validHashByte, validHashLen, validHash
-    , hashDeps
     ) where
 
 import qualified Data.ByteString.Lazy as LBS
@@ -124,21 +123,4 @@ packHash s d = p280 where
         w 6 $ ((i3 .&. 0x03) `unsafeShiftL` 3) .|.
               ((i4 .&. 0xE0) `unsafeShiftR` 5)
         w 7 $ ((i4 .&. 0x1F)                 )
-
--- | Find substrings that look like hashes.
---
--- This function assumes hashes have word separators or similar, such 
--- that each hash value is exactly 56 contiguous validHashBytes (no 
--- more and no less). This function could be used for conservative GC.
-hashDeps :: LBS.ByteString -> [Hash]
-hashDeps s = 
-    if LBS.null s then [] else
-    let hs' = LBS.dropWhile (not . validHashByte) s in
-    let (h, s') = LBS.span validHashByte hs' in
-    let consHash = if (validHashLen == LBS.length h) 
-                    then (:) (LBS.toStrict h) 
-                    else id {- not a valid hash -} 
-    in
-    consHash $ hashDeps s'
-
 

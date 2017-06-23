@@ -32,6 +32,7 @@ library
   build-depends:       base >= 4.7 && < 5
                      , transformers
                      , deepseq
+                     , monad-loops
                      , array
                      , containers (>= 0.5.8)
                      , bytestring

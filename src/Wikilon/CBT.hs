@@ -18,10 +18,12 @@ module Wikilon.CBT
     , fromList, toList
     ) where
 
+import Prelude hiding (lookup, null)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Internal as LBS
+import qualified Data.List as L
 import Data.Maybe
 import Data.Word 
 import Data.Bits
@@ -31,6 +33,10 @@ import Data.Bits
 -- least key for a node. 
 
 -- | Requirements for a crit-bit key.
+--
+-- thoughts: it might be better to change this to a `getByte` and a
+-- `length`, or perhaps a `getWord` where a word has a finite number
+-- of bytes. As is, too much crit-bit logic is embedded in this class.
 class (Eq k) => CBK k where
     -- | Determine bit at specified offset within key.  
     getBit  :: Int -> k -> Bool
@@ -74,41 +80,6 @@ critBitFB n a b =
     Just $! (n + (countLeadingZeros x))
 {-# INLINE critBitFB #-}
 
-instance CBK LBS.ByteString where
-    getBit n s =
-        let (q,r) = n `divMod` 8 in
-        let s' = LBS.drop q s in
-        if LBS.null s' then False else
-        getBit r (LBS.head s')
-    {-# INLINE getBit #-}
-
-    critBit = begin where
-        -- special handling for first byte
-        begin n a b =
-            let (q,r) = n `divMod` 8 in
-            let a' = LBS.drop q a in
-            let b' = LBS.drop q b in
-            let hd s = if LBS.null s then 0 else LBS.head s in
-            case critBit r (hd a') (hd b') of
-                Just off -> Just $! ((8 * q) + off)
-                Nothing -> go2 (q + 1) (LBS.drop 1 a') (LBS.drop 1 b')
-
-        -- compare bytes for two strings
-        go2 !q !a !b =
-            if LBS.null a then go1 q b else
-            if LBS.null b then go1 q a else
-            let ca = LBS.head a in
-            let cb = LBS.head b in
-            if (ca == cb) 
-                then go2 (q+1) (LBS.tail a) (LBS.tail b) 
-                else Just $! (8 * q) + countLeadingZeros (ca `xor` cb)
-
-        -- search for non-zero byte in single string
-        go1 !q !s = case LBS.uncons s of
-            Just (c, s') 
-                | (0 == c)  -> go1 (q + 1) s'
-                | otherwise -> Just $! (8 * q) + countLeadingZeros c
-            Nothing -> Nothing
 
 instance CBK BS.ByteString where
     getBit n s =
@@ -146,7 +117,7 @@ instance CBK BS.ByteString where
                 | otherwise -> Just $! (8 * q) + countLeadingZeros c
             Nothing -> Nothing
             
-newtype CBT k v 
+data CBT k v 
     = Empty
     | Root k (Node k v)
     deriving (Eq, Ord)
@@ -157,7 +128,7 @@ data Node k v
     deriving (Eq, Ord)
 
 instance (Show k, Show v) => Show (CBT k v) where
-    showsPrec _ = showString "fromList " . show . toList
+    showsPrec _ m = showString "fromList " . shows (toList m)
 
 instance (CBK k) => Monoid (CBT k v) where
     mempty = Empty
@@ -173,8 +144,8 @@ instance Functor (Node k) where
 
 -- | Convert CBT to list. 
 toList :: CBT k v -> [(k,v)]
-toList (CBT Nothing) = []
-toList (CBT (Just (k,n))) = go [] k n where
+toList Empty = []
+toList (Root k n) = go [] k n where
     go p k (Inner _ l k' r) = go ((k',r):p) k l
     go p k (Leaf v) = (k,v) : more p
     more ((k',r):p) = go p k' r
@@ -185,8 +156,9 @@ fromList :: (CBK k) => [(k,v)] -> CBT k v
 fromList = L.foldl' ins mempty where
     ins m (k,v) = insert k v m
 
-null :: CBT k v -> Boll
-null (CBT root) = isNothing root
+null :: CBT k v -> Bool
+null Empty = True
+null _ = False
 
 member :: (CBK k) => k -> CBT k v -> Bool
 member k m = not (isNothing (lookup k m))
@@ -227,7 +199,7 @@ insert = insertWith const
 -- note: might be better to model this as a union with a singleton.
 insertWith :: CBK k => (v -> v -> v) -> k -> v -> CBT k v -> CBT k v
 insertWith fn kIns vIns = ini where
-    ini Empty = Root k (Leaf v)
+    ini Empty = Root kIns (Leaf vIns)
     ini (Root k n) = uncurry Root (ins 0 k n)
 
     ins cb k n = case critBit cb kIns k of
@@ -249,8 +221,7 @@ delete kDel = ini where
     ini Empty = Empty
     ini (Root k n) = case critBit 0 kDel k of
         Nothing -> Empty
-        Just cb ->
-
+        Just cb -> undefined
 
 -- | left-biased union
 union :: CBK k => CBT k v -> CBT k v -> CBT k v
@@ -263,54 +234,4 @@ union = unionWith const
 unionWith :: CBK k => (v -> v -> v) -> CBT k v -> CBT k v -> CBT k v
 unionWith fn l = L.foldl' ins l . toList where
     ins m (k,v) = insertWith (flip fn) k v m
-
-
-
-
-    , fromList, toList
-    , filterPrefix
-
-
-
-{-
--- | efficient union with a combining function
-unionWith :: CBK k => (v -> v -> v) -> CBT k v -> CBT k v -> CBT k v
-unionWith fn = ini where
-    ini (CBT Nothing) r = r
-    ini l (CBT Nothing) = l
-    ini (CBT (Just (lk,l))) (CBT (Just (rk,r))) = CBT (Just (go 0 lk rk l r))
-    go cb lk rk l r =
-        case critBit cb lk rk of
-            Nothing -> (k, goL cb l r)
-
-
-    goL k (Leaf a) (Leaf b) = 
-(lk, fn lv rv)
-            Just ix -> if getBit ix rk 
-                then (lk, Inner ix l rk r)
-                else (rk, Inner ix r lk l)
-    go cb0 lk rk l@(Leaf lv) r@(Inner rcb rl rrk rr) =
-        let cb = min cb0 rcb in
-        case critBit (min cb0 rcb
-        if cb0 >= rcb then
-
-
-(Leaf lv) (Leaf rv) =
-        case critBit cb0 lk rk of
-            Nothing -> (lk, fn lv rv)
-            Just ix -> 
-                let lcb = getBit ix lk in
-                let lk'
-                (if lcb then rk else lk, 
-                let lk' = if getBit ix lk then rk else lk in
-                
-
-    , null, member, union
-    , insert, delete, lookup
-    , fromList, toList
-    , filterPrefix
-
--}
-
-
 
