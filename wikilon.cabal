@@ -53,13 +53,14 @@ library
                      , yesod-form
   default-language:    Haskell2010
 
-executable wikilon-exe
+executable wikilon
   hs-source-dirs:      app
   main-is:             Main.hs
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , wikilon
                      , bytestring
+                     , utf8-string
                      , monad-loops
                      , wai
                      , warp

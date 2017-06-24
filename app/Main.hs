@@ -17,7 +17,7 @@ import qualified Network.Wai.Handler.WarpTLS as WS
 import qualified Network.Wai as Wai
 import Awelon.Hash (hash)
 import qualified Wikilon.DB as DB
-import qualified Wikilon
+import qualified Wikilon as Wiki
 
 helpMsg :: String
 helpMsg =
@@ -25,7 +25,7 @@ helpMsg =
   \\n\
   \    wikilon [-pPORT] [-dbMB] [-admin] \n\
   \     -pPORT listen for HTTP requests on given port (default 3000) \n\
-  \     -dbMB  configure maximum database file size (default 40TB) \n\
+  \     -dbMB  configure maximum database file size (default 4TB) \n\
   \     -admin print admin password (valid until process restart)\n\
   \\n\
   \    Environment variables:\n\
@@ -61,7 +61,7 @@ data Args = Args
 defaultArgs :: Args 
 defaultArgs = Args
  { a_port = 3000
- , a_dbsz = 40 * 1000 * 1000
+ , a_dbsz = 4 * 1000 * 1000
  , a_admin = False
  , a_help = False
  , a_bad  = []
@@ -130,8 +130,10 @@ main = body `catch` haltOnError where
         runServer args admin
     runServer args admin = do
         useWikilonHome
+        let wikiOpts = Wiki.setAdmin admin
+                     $ Wiki.defaultOpts
         db <- DB.open "db" (a_dbsz args)
-        app <- mkWikilonApp "wiki/" db admin
+        app <- Wiki.mkWaiApp wikiOpts db
         runWarp (a_port args) app
     failWithBadArgs args = do
         putErrLn $ "Unrecognized arguments (try `-?` for help): "

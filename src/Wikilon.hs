@@ -1,53 +1,67 @@
 
--- | Wikilon ultimately provides a WAI web service.
+-- | Wikilon ultimately provides a WAI web service. 
 module Wikilon
-    ( mkWikilonApp
-    , WSOpts
-    , setAdminPass, getAdminPass
-    , setKeyPrefix, getKeyPrefix
+    ( mkWaiApp
+    , WSOpts, defaultOpts
+    , setAdmin, getAdmin
     ) where
 
-import qualified Data.ByteString as BS 
+import Data.Monoid
+import Data.ByteString (ByteString)
 import Wikilon.DB (DB)
+import Network.Wai (Application)
 import qualified Network.Wai as Wai
 
+-- | Extra configuration for the Wikilon service.
+--
+-- Most configuration will be performed at runtime, by users or agents
+-- with administrative authorities. But a few features may need to be
+-- handled up front.
 data WSOpts = WSOpts
-  { ws_admin  :: Maybe BS.ByteString
-  , ws_prefix :: BS.ByteString
-  , ws_db     :: DB
+  { ws_admin  :: Maybe ByteString
   } 
 
-initOpts :: DB -> WSOpts
-initOpts db = WSOpts
-  { ws_admin  = Nothing
-  , ws_prefix = BS.empty
-  , ws_db     = db
+defaultOpts :: WSOpts
+defaultOpts = WSOpts
+  { ws_admin  = mempty
   }
 
 -- | Administration of Wikilon
 --
--- The 'admin' user is a special case in Wikilon, available only if
--- a password is set upon initialization, and having full authority
--- to configure persistent administrative users. If the password here
--- is Nothing, then the user 'admin' cannot log in.
-setAdminPass :: Maybe BS.ByteString -> WSOpts -> WSOpts
-setAdminPass v ws = ws { ws_admin = v }
+-- The 'admin' account is reserved for administrative bootstrapping
+-- and troubleshooting. Enabled by setting a password at startup. This
+-- password is usable only for the process lifetime.
+setAdmin :: Maybe ByteString -> WSOpts -> WSOpts
+setAdmin v ws = ws { ws_admin = v }
 
-getAdminPass :: WSOpts -> Maybe BS.ByteString
-getAdminPass = ws_admin
+getAdmin :: WSOpts -> Maybe ByteString
+getAdmin = ws_admin
 
--- | Setting a key prefix enables a DB to potentially be shared with
--- other tasks, or even other Wikilon instances.
-setKeyPrefix :: BS.ByteString -> WSOpts -> WSOpts
-setKeyPrefix v ws = ws { ws_prefix = v }
-
-getKeyPrefix :: WSOpts -> BS.ByteString
-getKeyPrefix = ws_prefix
+-- other potential options:
+--
+-- support for web service composition (very Low priority)
+--   access to a higher level rep. of application
+--   prefix for keys in the DB
+--   extra prefix for URLs
+--
+-- The following might be better configured at runtime by
+-- administrative agents. 
+--
+-- Integration of external resources:
+--   files, and resources in the filesystem
+--   distributed computation setup, authorities
+--     cooperative Wikilon nodes
+--     creation of VMs
+--     OpenCL clouds
+--   backups
+--   logging
+--
+-- Tab icons, default CSS, etc..
 
 
 -- | The Wikilon web service
-mkWikilonApp :: WSOpts -> IO Wai.Application
-mkWikilonApp opts = undefined
+mkWaiApp :: WSOpts -> DB -> IO Application
+mkWaiApp opts db = undefined
 
 
 

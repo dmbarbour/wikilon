@@ -7,8 +7,6 @@
 -- reference for development of stowage-based KVM, but it may find
 -- use elsewhere. 
 --
--- It seems implementing this variant is non-trivial, at least in the
--- sense that it requires a fair bit of book-keeping.
 module Wikilon.CBT
     ( CBK(..)
     , CBT(..)
@@ -28,9 +26,7 @@ import Data.Maybe
 import Data.Word 
 import Data.Bits
 
--- Note: it might be that a CBT isn't quite what I want for the KVM.
--- An alternative option would be a variant of trie that keeps a
--- least key for a node. 
+
 
 -- | Requirements for a crit-bit key.
 --
@@ -126,6 +122,19 @@ data Node k v
     = Leaf v
     | Inner {-# UNPACK #-} !Int (Node k v) k (Node k v)
     deriving (Eq, Ord)
+
+-- question: should I add size information to nodes?
+--
+-- I'm not sure whether O(1) sizes are useful enough when they aren't
+-- being used to balance trees. But they might prove more useful for
+-- the KVMs, e.g. to keep size information for the stowage nodes so we
+-- can always determine size without high-latency lookups.
+--
+-- More generally, it might be convenient to compute monoidal meta-data
+-- that is a result of composition. Size information would be a simple
+-- monoid, but it seems feasible to compute useful summary data back
+-- up the tree. Still, might be better to focus on the plain old data
+-- type first, and create the variant as another module.
 
 instance (Show k, Show v) => Show (CBT k v) where
     showsPrec _ m = showString "fromList " . shows (toList m)
