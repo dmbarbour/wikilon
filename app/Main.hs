@@ -1,11 +1,12 @@
-{-# LANGUAGE ViewPatterns, OverloadedStrings #-}
+{-# LANGUAGE ViewPatterns, PatternGuards, OverloadedStrings #-}
 
 module Main (main) where
 
 import Control.Monad
 import Control.Monad.Loops (anyM)
 import Control.Exception
-import qualified Data.ByteString as BS 
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.UTF8 as U8 
 import qualified System.IO as Sys
 import qualified System.Exit as Sys
 import qualified System.Environment as Env
@@ -25,7 +26,7 @@ helpMsg =
   \\n\
   \    wikilon [-pPORT] [-dbMB] [-admin] \n\
   \     -pPORT listen for HTTP requests on given port (default 3000) \n\
-  \     -dbMB  configure maximum database file size (default 4TB) \n\
+  \     -dbMB  configure maximum database file size (default 4T) \n\
   \     -admin print admin password (valid until process restart)\n\
   \\n\
   \    Environment variables:\n\
@@ -67,15 +68,30 @@ defaultArgs = Args
  , a_bad  = []
  }
 
-tryRead :: (Read a) => String -> Maybe a
-tryRead s = case reads s of
-    [(a,"")] -> Just a
+readSizeMul :: String -> Maybe (Int -> Int)
+readSizeMul "" = Just id
+readSizeMul "K" = Just $ max 1 . (`div` 1000)
+readSizeMul "M" = Just id
+readSizeMul "G" = Just $ (* (1000))
+readSizeMul "T" = Just $ (* (1000 * 1000))
+readSizeMul _ = Nothing
+
+readSize :: String -> Maybe Int
+readSize s = case reads s of
+    [(a,m)] | (a > 0) -> 
+        readSizeMul m >>= \ f ->
+        return (f a)
+    _ -> Nothing
+
+readPort :: String -> Maybe Int
+readPort s = case reads s of
+    [(a,"")] | (a > 0) -> Just a
     _ -> Nothing
 
 procArgs :: [String] -> Args
 procArgs = L.foldr (flip pa) defaultArgs where
-    pa a ('-': 'p' : (tryRead -> Just p)) = a { a_port = p }
-    pa a ('-': 'd' : 'b': (tryRead -> Just mb)) = a { a_dbsz = mb }
+    pa a ('-': 'p' : (readPort -> Just p)) = a { a_port = p }
+    pa a ('-': 'd' : 'b': (readSize -> Just mb)) = a { a_dbsz = mb }
     pa a "-admin" = a { a_admin = True }
     pa a "-?" = a { a_help = True }
     pa a s = let bad' = s : a_bad a in a { a_bad = bad' }
@@ -125,7 +141,7 @@ main = body `catch` haltOnError where
         if badArgs then failWithBadArgs args else do
         admin <- if not (a_admin args) then return Nothing else do
                  pass <- mkAdminPass
-                 Sys.putStrLn ("admin:" ++ show pass)
+                 Sys.putStrLn ("admin:" ++ U8.toString pass)
                  return (Just pass)
         runServer args admin
     runServer args admin = do
