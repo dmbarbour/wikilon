@@ -42,10 +42,9 @@ helpMsg =
   \an -admin password, but persistent administrators may be configured.\n\
   \"
 
--- should I allow users to *provide* an admin password? Probably not.
--- It would likely be a dreadful source of insecurity, with passwords
--- ending up within scripts.
-
+-- should I allow users to *provide* the admin password? For now, I
+-- think that's probably unwise. Better to just treat admin as the
+-- bootstrap account, discourage unnecessary use in scripts etc.
 
 -- TLS files
 crt, key :: FS.FilePath
@@ -70,7 +69,6 @@ defaultArgs = Args
 
 readSizeMul :: String -> Maybe (Int -> Int)
 readSizeMul "" = Just id
-readSizeMul "K" = Just $ max 1 . (`div` 1000)
 readSizeMul "M" = Just id
 readSizeMul "G" = Just $ (* (1000))
 readSizeMul "T" = Just $ (* (1000 * 1000))

@@ -1,7 +1,0 @@
-*.o
-*.so
-testSuite
-wikrt_hash
-printPrelude
-testdir/
-

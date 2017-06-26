@@ -4,13 +4,13 @@ synopsis: a wiki-inspired development environment for Awelon Language
 -- description: 
 homepage:            https://github.com/dmbarbour/wikilon#readme
 license:             BSD3
-license-file:        LICENSE
+-- license-file:        LICENSE
 author:              David Barbour
 maintainer:          dmbarbour@gmail.com
 copyright:           2017 David Barbour
 category:            Web
 build-type:          Simple
-extra-source-files:  README.md
+extra-source-files:  
 cabal-version:       >=1.10
 
 library

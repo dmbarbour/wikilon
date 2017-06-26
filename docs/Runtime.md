@@ -13,11 +13,29 @@ Second, compilation from Awelon to an intermediate language designed for fast na
 
 Third, compilation from this intermediate language into Haskell, something we can link directly into our runtimes. We can leverage Template Haskell to represent a "standard library" Awelon dictionary in a subdirectory of the Wikilon project, and compile everything fully to well-typed Haskell, with an option for gate-keeper code where appropriate. This would make it a lot easier to extend the set of accelerators. And I believe I can achieve excellent performance this way.
 
-Fourth, compilation from the same intermediate language via LibClang, OpenCL, or LLVM. This would provide a basis for JIT compilation. I could compile to use a memory-mapped region for the stack and heap, or compile for external processes or virtual machines to distribute computation. Compiling to binaries for external use could provide integration with conventional systems.
+Fourth, we can dynamially compile Haskell code at runtime. This is feasible either by use of the GHC `plugins` system or by constructing independent Haskell processes to which we may delegate computations. This can support JIT, if applied carefully, albeit without great latency. But even without JIT, we can probably achieve improvements in performance by targeting relatively stable subsets of code.
 
-I believe this is a viable, scalable long-term performance path for Awelon.
+Fifth, compilation from the same intermediate language via LibClang, OpenCL, or LLVM. This would provide a basis for JIT compilation. I could compile to use a memory-mapped region for the stack and heap, or compile for external processes or virtual machines to distribute computation. Compiling to binaries for external use could provide integration with conventional systems.
+
+I believe this is a viable, scalable, long-term performance path for Awelon.
 
 The first two ideas might be combined, since every accelerated type and function must also be represented in our intermediate language. The intermediate language requires much attention. As will developing a useful set of "primitive" accelerators.
+
+### Maybe the JVM?
+
+It is tempting to leverage the JVM or CLR instead of GHC Haskell.
+
+This would offer significant benefits for dynamic code, without requiring heroic efforts. I can compile to JVM code at runtime to leverage JIT. JIT should also work conveniently for flexible composition of objects.
+
+There are also secondary benefits. If I wish to model flexible application and effects models, JVM would make the server more plug-in extensible. 
+
+Ceylon and Kotlin are both promising languages in this venue.
+
+JVM would still give me garbage collection, access to LMDB, etc.. 
+
+
+
+
 
 Another option is to avoid Haskell and choose a JIT'd language, like Java or Scala, and "compile" to an intermediate representation that is easy for JIT to specialize, or leverage project lancet (surgical precision JIT tools). But I'd rather avoid this path and move quickly to compilation. I could potentially deal with GHC's plugins package if I immediately need dynamic compilation for a stable subset of the dictionary.
 
@@ -30,6 +48,9 @@ Web service:
 * servant - routing and web API
 * yesod - forms, widgets, maybe sessions
 * custom persistence layer (via Wikilon.DB)
+* security: basic authentication for short term
+ * long term, look into single sign-on services
+ * sign on via google or other common systems
 
 My first attempt used Wai directly, but it was difficult to get what I wanted from that. So I'm trying something richer this time around. I'd also like to get started early with web-sockets to support rich and reactive web applications.
 
@@ -198,6 +219,9 @@ This short-term solution can be extended to mid-term via "hot swap" features tha
 Long term, I'd like to properly bootstrap Awelon, and have it self-compile with its own compiler and runtime. Hopefully, the short and mid term solutions can provide a scaffolding here.
 
 *Notes:* It seems feasible to leverage `plugins` as a lightweight approach for hot swapping the reference dictionaries. We might also use `compact` to reduce GC overheads for static indexes.
+
+## 
+
 
 # C Runtime Design
 
