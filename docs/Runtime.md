@@ -3,9 +3,11 @@
 
 # Awelon Runtime Design
 
-Haskell simplifies many problems surrounding GC, parallelism, parsing, serialization, stowage, linking, and indexing. OTOH, my Haskell interpreters for prior Awelon definitions have consistently been about 10x worse than C interpreters, even when I'm relatively careful about it. And I really want to do about 10x better than my prior C interpreters. 
+So what is my performance path? I'd like potential for state of the art performance, without too many difficulties.
 
-So what is my performance path?
+## A viable (but looong) Haskell path
+
+Haskell simplifies many problems surrounding GC, parallelism, parsing, serialization, stowage, linking, and indexing. OTOH, my Haskell interpreters for prior Awelon definitions have consistently been at least 10x worse than C interpreters, sometimes 100x worse.
 
 First, accelerators. I can and should get started much earlier on a widely useful "standard library" of accelerated functions and data types. If every time I see a significant performance bottleneck, I accelerate, I can consistently ratchet up performance and parallelism both, even if I'm assuming simple interpreters.
 
@@ -13,44 +15,33 @@ Second, compilation from Awelon to an intermediate language designed for fast na
 
 Third, compilation from this intermediate language into Haskell, something we can link directly into our runtimes. We can leverage Template Haskell to represent a "standard library" Awelon dictionary in a subdirectory of the Wikilon project, and compile everything fully to well-typed Haskell, with an option for gate-keeper code where appropriate. This would make it a lot easier to extend the set of accelerators. And I believe I can achieve excellent performance this way.
 
-Fourth, we can dynamially compile Haskell code at runtime. This is feasible either by use of the GHC `plugins` system or by constructing independent Haskell processes to which we may delegate computations. This can support JIT, if applied carefully, albeit without great latency. But even without JIT, we can probably achieve improvements in performance by targeting relatively stable subsets of code.
+Fourth, we can dynamially compile Haskell code at runtime. This is feasible either by use of the GHC `plugins` system or by constructing independent Haskell processes to which we may delegate computations. I can feasibly leverage type-indexed products to represent a shared context API without use of imports. I imagine this would make for very high-latency JIT. But it should be sufficient for the more stable of software components.
 
-Fifth, compilation from the same intermediate language via LibClang, OpenCL, or LLVM. This would provide a basis for JIT compilation. I could compile to use a memory-mapped region for the stack and heap, or compile for external processes or virtual machines to distribute computation. Compiling to binaries for external use could provide integration with conventional systems.
+Fifth, compilation from the same intermediate language via LibClang, OpenCL, or LLVM. This would provide a basis for true JIT compilation. I could compile to use a memory-mapped region for the stack and heap, or compile for external processes or virtual machines to distribute computation. Compiling to binaries for external use could provide integration with conventional systems.
 
-I believe this is a viable, scalable, long-term performance path for Awelon.
+I believe this is a viable and scalable long-term performance path for Awelon.
 
 The first two ideas might be combined, since every accelerated type and function must also be represented in our intermediate language. The intermediate language requires much attention. As will developing a useful set of "primitive" accelerators.
 
-### Maybe the JVM?
+## A Shorter Path? Leverage JVM or CLR
 
-It is tempting to leverage the JVM or CLR instead of GHC Haskell.
+With JVM or CLR we can leverage JIT and dynamic code generation. Leveraging this would allow me to take advantage of existing and ongoing optimization efforts. Code generation may also simplify construction or plug-ins for server-side agents to support various application models.
 
-This would offer significant benefits for dynamic code, without requiring heroic efforts. I can compile to JVM code at runtime to leverage JIT. JIT should also work conveniently for flexible composition of objects.
+I'm leaning slightly in favor of F# on CLR based on my research so far. The CodeDOM seems much cleaner in CLR compared to ByteBuddy on JVM. CLR also preserves much type information in a "full abstraction" sense, which appeals to me. Further, mono provides an ahead-of-time compilation mode, which could be leveraged to improve startup times or memory usage. 
 
-There are also secondary benefits. If I wish to model flexible application and effects models, JVM would make the server more plug-in extensible. 
+For web frameworks, F# has Suave or NancyFX as lightweight options. WebSharper is a very interesting possibility, enabling mixed compilation to JavaScript so the client-side and server side may be modeled together.
 
-Ceylon and Kotlin are both promising languages in this venue.
+Something that annoys me terribly about F# (and .Net in general) is the abundant use of templates, scaffolding, magic configuration strings. 
 
-JVM would still give me garbage collection, access to LMDB, etc.. 
+I'll need to remember that pain when I'm designing application models for Awelon. Ensure precise control of views (without sacrificing flexibility). 
 
-
-
-
-
-Another option is to avoid Haskell and choose a JIT'd language, like Java or Scala, and "compile" to an intermediate representation that is easy for JIT to specialize, or leverage project lancet (surgical precision JIT tools). But I'd rather avoid this path and move quickly to compilation. I could potentially deal with GHC's plugins package if I immediately need dynamic compilation for a stable subset of the dictionary.
+I must experiment, get comfortable with a framework and its peculiar set of magic invocations. 
 
 ## Spike Solution
 
-I need to get something running quickly (again!), even if it isn't ideal for performance immediately. This will consist of a web server and basic APIs mostly (initially) for human use.
+First, get a web server running with some basic APIs for data entry and processing. Then the database. At every point, I should be able to interact usefully with my code.
 
-Web service:
 
-* servant - routing and web API
-* yesod - forms, widgets, maybe sessions
-* custom persistence layer (via Wikilon.DB)
-* security: basic authentication for short term
- * long term, look into single sign-on services
- * sign on via google or other common systems
 
 My first attempt used Wai directly, but it was difficult to get what I wanted from that. So I'm trying something richer this time around. I'd also like to get started early with web-sockets to support rich and reactive web applications.
 
@@ -220,167 +211,6 @@ Long term, I'd like to properly bootstrap Awelon, and have it self-compile with 
 
 *Notes:* It seems feasible to leverage `plugins` as a lightweight approach for hot swapping the reference dictionaries. We might also use `compact` to reduce GC overheads for static indexes.
 
-## 
-
-
-# C Runtime Design
-
-Originally I intended to model most of the runtime at the C layer. 
-
-Unfortunately, this introduces a lot of undesirable challenges surrounding the indexing, link, and stowage layers. At this point, I'd like to move most these challenging aspects out to the Haskell layer, and focus on a highly 
-
-
- challenging in context of
-
-  but with the change to Awelon's definition this seems to be more difficult to achieve.
-
-
-A primary goal for runtime is performance of *applications*. Awelon's non-conventional [application model](ApplicationModel.md) involves representing state within the dictionary via RESTful multi-agent patterns (e.g. publish-subscribe, tuple spaces). Thus, performance of processing these updates must be considered part of application performance, not just final evaluation costs.
-
-A related goal is predictable performance. Space and effort used by the runtime will be under client control. The costs of evaluation shouldn't vary widely from one run to another. Ideally, the runtime model should be suitable for soft real-time systems. 
-
-Awelon is designed to afford efficient update patterns via secure hashes to name dictionaries from which another dictionary might inherit or contain.
-
-If it comes without too much overhead, I want multi-process support so I can develop command line utility processes, hot backups, FUSE adapters, etc. without running through the web service. And also add new web services as separate processes if appropriate. 
-
-## Evaluation 
-
-Viable evaluation strategies:
-
-* interpret program directly, perhaps with optimizations
-* compile to an abstract register machine, interpret that
-* JIT compile to machine code before evaluation proceeds
-
-Direct interpretation is the simplest and easiest to get started. If we optimize by rewriting normal code, that can also be directly interpreted with some performance gains. JIT can probably be applied to normal blocks to help optimize loops.
-
-I think I'll skip the interpretation of intermediate register machine code. Registers add complexity to the interpreter and its interaction with GC. But we might compile to an intermediate register machine code as part of JIT.
-
-## Memory Management
-
-My assumption is that contexts will generally see single-threaded use. A web service will use multiple contexts to serve multiple pages. But supporting lightweight parallel operations, e.g. with `(par)`, is valuable for reducing latency.
-
-Each evaluation thread shall allocate a heap within a context. Using a bump-pointer allocation, this can serve also as a stack space or something like it. The thread heap serves as a basis for generational GC, since a thread can GC its heap many times for each GC of the shared context, and may gradually promote older objects into the context. This offers a good GC for lightweight parallelism: worker threads won't interfere or synchronize with each other, though we might need to interrupt on occasion for a context-level GC. Context memory serves as a shared memory region, enabling data and code to be shared among threads.
-
-Allocation shall use an efficient bump-pointer mechanism. No free lists are used. A mark-compact algorithm will recover memory for further allocations. The mark algorithm can use one extra array of mark-bits to avoid interfering with object representations. With cell-aligned allocations, this would be about 0.78% memory on a 64-bit system. Marking can be achieved in O(1) space by using a fixed-size stack and ensuring progress even on stack overflow (so we can revisit until marked). I have ideas for an exponential decay approach that should be good in most cases: use stack of 'fields' in objects, use previous field address as hint to find next field (iteration), and use exponential decay to trim data: cut 66% in half (losing hints), move last 33% back, free up 33% of stack.
-
-Objects can be shared, with efficient logical copying. But I also want to track sharing, such that I can accelerate update functions for linear arrays to perform in-place manipulations.
-
-I'll use write barriers and track a write set for each thread. Minimally, I could keep track of just the field addresses written. If I want to support lightweight rollback/transaction based error handling, it might be better to keep a little information about a written field's prior value.
-
-## Parallelism and Threads
-
-Each thread will have its own small heap within the context and thus may achieve progress without coordinating with other threads. A thread can promote data from that heap into the context to either share results with other threads or just reduce GC burden (treating context as a survivor arena). A thread must never peek into another thread's heap because that heap might move data around without warning.
-
-There is some need to track when data is "promoted" from a thread to the shared context, and thus may be observed from another thread. Especially for parallel tasks. To simplify management of the write set and other requirements, promotion shall be all-or-nothing within a thread. Promotion may also push `(trace)` logs and similar debug outputs.
-
-Threads will operate within a context's effort quota. This doesn't feel very precise, but it is analogous to all tasks sharing a context's memory. And it should be precise enough, assuming I use multiple contexts to serve web clients.
-
-Parallel tasks need special attention. They're referenced from one thread but evaluated wholly or partially from another. We must delay evaluations that require a values from other threads.
-
-So each thread must:
-
-* have a nursery volume of memory
-* track cross-generation writes
-* track current `(par)` task
-* queue pending `(par)` tasks
-* queue waiting `(par)` tasks
-
-We can combine the pending/waiting sets, likely, using a single queue. We need only to track for each task which other task (if any) on which it might be waiting, and return it to the end of the queue as needed. But the separation should make it easier to track how much work is readily available, and easier to make progress without rescanning the same nodes too frequently. 
-
-We could also track completed tasks, but that might be rolled into the local write barrier feature.
-
-Each thread could support a couple GC generations. This could be replicated at the context layer. Thread structure would be eliminated by context-level GC and reallocated as needed. When threads are halted for context-level GC, we simply halt just before they'd normally perform a thread-local GC to avoid rework.
-
-KPN acceleration is a special case, and may require explicit tracking of 'messages' between 'processes' so we can communicate asynchronously by moving either the message or the process into shared memory. This will likely require a threads extension to maximize utilization.
-
-## Lazy Copy?
-
-Awelon's basic evaluation strategy is lazy modulo copy, hence avoiding need for shared memory memoization. Yet lazy copies are feasible within a runtime, automatically sharing the result via shared memory. I'm curious whether doing so is worthwhile. Lazy copies only help if the result is used in neither copy, and they require evaluation at more ad-hoc locations in memory.
-
-For now, I'll probably skip this feature.
-
-## Stack Representations
-
-The simplest stack representation is probably a linked list, representing composition cells. But this requires a lot of allocations. An array-based stack would likely serve more efficiently. I'll need to figure out how to represent these easily.
-
-## Memory Representations
-
-Say our allocations are two-word aligned, and our words are either 4 bytes or 8 bytes depending on machine. This gives us 3 reliable pointer tag bits. Use of pointer tag bits can discriminate a few 'small' values to reduce allocation costs. Proposed representation:
-
-        _b0     small constants, operators, etc.
-            x1    integers
-            10    naturals
-           000    extended
-           100    object headers
-        sb1     object reference, upper bits are address
-            tagged object: first field is type header
-            small object: first field is any other value
-
-Small constants include small numbers, operators, and object type headers. Small texts or labels are also feasible, especially for a 64 bit system. Objects will be discriminated by their first field. If the first field is a type header (a special small constant) it will indicate object size and how to interpret the remainder of the object. Other small objects will be simple cells with two values, representing composition in most contexts, but potentially representing list cons cells or similar in context of a suitable object header.
-
-An important feature to simplify GC is that we can determine the size and internal fields of an object given just its address. This allows us to mark addresses only.
-
-The `b` pointer field indicates that an object may be treated as a block value (e.g. with respect to binding, data plumbing) while the `s` field for objects indicates that there is more than one reference to an object. A newly allocated object always has `s=0` while a logically copied object has `s=1` on both copies.
-
-*Note:* Ideally, `(nc)` and `(nd)` would be represented as pointer bits due to how they're inherited upon bind. However, I'm all out of pointer bits. I'll need instead to attach these properties to an object wrapper that receives special attention upon bind, copy, drop, and read/serialization. Other annotations that attatch to a value, such as `(error)`, might be coupled into this.
-
-### Small Constants
-
-The essentials are: small naturals, operators, and object headers.  Support for 'raw bytes' - unparsed data in the program stream - may also prove valuable during serialization. Small integers would be a convenient addition. Small decimal values or labels for structured sums would also be relatively convenient. Small texts or binaries are feasible, but certainly non-essential.
-
-Natural numbers will run up to at least 2^28 (over 250 million) on a 32-bit system, and much higher on a 64-bit system. 
-
-*Note:* Operators shall use the zero suffix for small constants, to ensure the NOP operation is represented by the `0` constant value.
-
-## Mutable Objects
-
-A purely functional language can support in-place mutable data for unique references, e.g. if we have the only reference to an array then the array-update function may freely modify the object in-place. I currently track uniqueness in the object pointer (the `s` bit).
-
-For generational GC, writes to fields that point into a nursery heap must be recorded in the write-set. It probably won't be worth modifying small objects in most cases, only things that would involve a large copy.
-
-List and composition cells might be a special case for mutable objects. We cannot update such objects in place because we lack header bits to track uniqueness, and we lack generational write barriers. But copies also need attention, since they might reference unique objects. We may need to wrap copied lists with a header. I might convert a large list into a shared array upon copy.
-
-### Arrays or Binaries
-
-Arrays would be the most important mutable objects. Given effective acceleration of arrays, we can model many low level algorithms, mostly excepting those that require multi-threaded access to the same array.
-
-It's tempting to support efficient logical composition and push/pop on arrays. But working implicitly with large logical arrays seems problematic if we later serialize or read the program, e.g. for stowage or debugging. It may be better to optimize for small array fragments then encourage developers to explicitly model finger-tree ropes for larger objects. Similarly, ring buffers, push/pop stacks, etc. may be explicitly modeled using indexes into structures with linear mutable arrays.
-
-
-
-## Persistence and Resources
-
-A challenge I must still consider is how to model persistence and secure hash resources.
-
-Some basic options:
-
-* persistent compacting "heap" per environment, relative offsets
-* LMDB persistence, with tables and transactions
-* Filesystem persistence, directory or tar file layout
-
-The LMDB option currently seems like a Goldilocks solution, trading some flexibility and control but handling various problems including atomic update, zero-copy access, and resource management.
-
-Some thoughts:
-
-* resist timing attacks - secure hashes as capabilities, must not be guessable by timing "no entity" responses and incrementally modifying the hash. Proposed solution: use first 60 bits for fast table lookups, then compare the remaining hash bits via constant-time algorithm. This constrains timing attacks to revealing up to 60 bits of an unknown resource name, and 60 bits reduces collisions to one in a billion or so (via birthday paradox).
-
-* global addressing locally - I can map global addresses to, for example, 64-bit local addresses. Doing so could save me a lot of space and lookup overheads, but only if I use the local address much more frequently than global addressing. Between stowage and dictionary patches, I doubt this will be the case. So I'll stick to global addressing until there is good reason to do otherwise.
-
-* plain text internally - I can rewrite 60 bytes base64url to 45 byte binary keys, but the savings would be minor and would not extend to secure hash resources. The plain text format seems more convenient and self explaining in context of external tooling or debugging (`mdb_dump` and similar). So I'll stick to plain text for now.
-
-* reference counting - a good algorithm for long-lived, persistent resources. A precise reference count may require type information that GC understands, such as `3b+11d` meaning "referenced three times as a binary, eleven times as a dictionary", so we know how to interpret a resource. Alternatively, a conservative reference count is feasible and should be reasonably precise.
-
-* lazy reference counting - reference counts can lag behind updates to root objects. We could model this by tracking an RC deltas table separately from the main RC table, to support incremental GC of resources and perhaps avoid the initial parse and processing of resources that are only briefly referenced. NOTE: since we might actually *receive* resources out-of-order, an RC deltas table could usefully delay positive increfs until a parse can be run.
-
-* ephemeral resources - a context can hold onto a resource that has a zero persistent reference count. I don't want to scan contexts when it's time to GC, especially since they might be spread across many processes. So I'll use a shared memory ephemeron table (likely a simple hash-to-refct table). A shared memory mutex (with the robust option) should be sufficient for performance since I don't expect a lot of contention on this table. It should be sufficient to reference only root values from our contexts.
-
-GC for secure hash resources, and a shared ephemeron table between processes, is perhaps the main requirement for multi-process access. I could (and probably should) use shm_open for the ephemeron table.
-
-I'm concerned that a crashed process might hold indefinitely onto resources. I could try an expiration model, with processes periodically scanning the contexts to maintain the ephemeron tables. But this seems like a problem to solve if it becomes an actual problem. Worst case, I just need to reset the machine.
-
-*Thoughts:* I might benefit from reducing sizes of secure hash resources to limit the burden when loading a resource into context memory or persisting the object. I'll need to think about this. Limiting the size of words and definitions may similarly help.
-
-
 ## Dictionary Indexing
 
 I must efficiently index a dictionary to:
@@ -521,8 +351,3 @@ Alternatively, I could count references to words or annotations in the current p
 
 A third option is to simply record intermediate evaluation states and report on them. This wouldn't provide much information about shared values via logical copies, but applying a compression algorithm might help highlight where most of our memory is used.
 
-## JIT Compilation
-
-I've discussed compilation to a register machine in the main Awelon language document. This seems highly applicable to compiling to a JIT target. A static type analysis might also help. 
-
-It seems valuable to get JIT working early, otherwise it's easy to get caught up in optimizing the interpreter. That said, I do want to focus first on a fast interpreter, so I'm not relying entirely on JIT for performance.
