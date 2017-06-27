@@ -2,4 +2,7 @@
 .stack-work/
 .paket/paket.exe
 packages/
+bin/
+obj/
+*.userprefs
 
