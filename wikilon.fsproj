@@ -1,17 +1,17 @@
 ﻿<Project Sdk="FSharp.NET.Sdk;Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>netcoreapp1.1</TargetFramework>
   </PropertyGroup>
-
   <ItemGroup>
-    <Compile Include="Program.fs" />
+    <Compile Include="src/Stowage/Hash.fs" />
+    <Compile Include="src/Stowage/LMDB.fs" />
+    <Compile Include="src/Stowage/DB.fs" />
+    <Compile Include="src/Program.fs" />
   </ItemGroup>
-
   <ItemGroup>
     <PackageReference Include="FSharp.Core" Version="4.1.*" />
     <PackageReference Include="FSharp.NET.Sdk" Version="1.0.*" PrivateAssets="All" />
+    <PackageReference Include="Konscious.Security.Cryptography.Blake2" Version="1.0.5" />
   </ItemGroup>
-
 </Project>

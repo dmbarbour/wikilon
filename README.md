@@ -15,11 +15,12 @@ Wikilon is implemented using F# on CLR. The code generation and JIT capabilities
 
 Dependencies:
 
-* Linux (I'm using Ubuntu 16.04)
 * [LMDB](http://www.lmdb.tech/doc/) 
  * sudo apt-get install liblmdb-dev
 * [.Net core](https://www.microsoft.com/net/core#linuxubuntu) tools
  * instructions on linked website
 
-Assuming the dependencies and a good Internet connection, you may use `dotnet restore` to download required .Net packages and `dotnet run` to initiate the Wikilon web service. *Aside:* I favor .Net core over mono largely for the streamlined `dotnet` CLI tooling. This does incur some unfortunate opportunity costs, such as WebSharper isn't yet available for .Net core. 
+Assuming the dependencies and a good Internet connection, you may use `dotnet restore` to download required .Net packages. Use `dotnet run -- -h` to view command line options.
+
+*Aside:* I favor .Net core over mono largely for the streamlined `dotnet` CLI tooling. This does incur a few unfortunate opportunity costs, such as WebSharper isn't yet available for .Net core. 
 
