@@ -9,23 +9,17 @@ Awelon computations cannot reference external data. Instead, Awelon codebases ma
 
 Wikilon presents Awelon language through a web service, with wiki inspirations. 
 
-# Dependencies
+# Installation
 
-Wikilon is implemented using F# on CLR. The code generation and JIT capabilities of CLR or JVM are convenient for implementing a lightweight compiler for user created code. CodeDOM, WebSharper, and support for tail calls have me favoring CLR. 
+Wikilon is implemented using F# on CLR. The code generation and JIT capabilities of CLR or JVM are convenient for implementing a lightweight compiler for user created code. CodeDOM and support for tail calls have me favoring CLR.
 
 Dependencies:
 
 * Linux (I'm using Ubuntu 16.04)
 * [LMDB](http://www.lmdb.tech/doc/) 
  * sudo apt-get install liblmdb-dev
-* [mono](http://www.mono-project.com/download/#download-lin-ubuntu) and [fsharp](http://fsharp.org/use/linux/)
- * instructions on websites.
-* [paket](https://fsprojects.github.io/Paket/)
- * `mono .paket/paket.bootstrap.exe`
- * `mono .paket/paket.exe restore`
-* [msbuild](https://github.com/Microsoft/msbuild)
- * sudo apt-get install msbuild
+* [.Net core](https://www.microsoft.com/net/core#linuxubuntu) tools
+ * instructions on linked website
 
-I'm unhappy with the F# ecosystem for build tools. The widespread use of scaffolding and templates is nauseating. The msbuild files are stupidly verbose. However, when in Rome. 
-
+Assuming the dependencies and a good Internet connection, you may use `dotnet restore` to download required .Net packages and `dotnet run` to initiate the Wikilon web service. *Aside:* I favor .Net core over mono largely for the streamlined `dotnet` CLI tooling. This does incur some unfortunate opportunity costs, such as WebSharper isn't yet available for .Net core. 
 

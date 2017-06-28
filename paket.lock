@@ -1,8 +1,0 @@
-RESTRICTION: == net46
-NUGET
-  remote: https://api.nuget.org/v3/index.json
-    Konscious.Security.Cryptography.Blake2 (1.0.5)
-      System.Numerics.Vectors (>= 4.3)
-    NUnit (3.7.1)
-    System.Numerics.Vectors (4.3)
-    WebSharper (3.6.20.6)
