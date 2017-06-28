@@ -11,7 +11,7 @@ Wikilon presents Awelon language through a web service, with wiki inspirations.
 
 # Dependencies
 
-Wikilon is implemented using F# on CLR. The code generation and JIT capabilities of CLR or JVM are convenient for implementing a lightweight compiler for user created code. CodeDOM, WebSharper, and support for tail calls have me favoring CLR. I'll reluctantly abandon Haskell and give F# a try.
+Wikilon is implemented using F# on CLR. The code generation and JIT capabilities of CLR or JVM are convenient for implementing a lightweight compiler for user created code. CodeDOM, WebSharper, and support for tail calls have me favoring CLR. 
 
 Dependencies:
 
@@ -20,12 +20,12 @@ Dependencies:
  * sudo apt-get install liblmdb-dev
 * [mono](http://www.mono-project.com/download/#download-lin-ubuntu) and [fsharp](http://fsharp.org/use/linux/)
  * instructions on websites.
-* [paket](https://fsprojects.github.io/Paket)
- * `mono .paket/paket.boostrap.exe`
+* [paket](https://fsprojects.github.io/Paket/)
+ * `mono .paket/paket.bootstrap.exe`
  * `mono .paket/paket.exe restore`
 * [msbuild](https://github.com/Microsoft/msbuild)
  * sudo apt-get install msbuild
 
-I'll probably abandon msbuild before long, but it can serve for the moment.
+I'm unhappy with the F# ecosystem for build tools. The widespread use of scaffolding and templates is nauseating. The msbuild files are stupidly verbose. However, when in Rome. 
 
 
