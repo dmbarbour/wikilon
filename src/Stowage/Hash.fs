@@ -12,11 +12,13 @@
  * enabling flexible representations. We use conservative GC, so hashes
  * must be separated by non-hash characters. 
  *)
-module Stowage.Hash
-
+namespace Stowage
 open Konscious.Security.Cryptography
 
-let alphabet = "bcdfghjklmnpqrstBCDFGHJKLMNPQRST"
+
+module Hash =
+    // Can I use an immutable vector?
+    let alphabet = "bcdfghjklmnpqrstBCDFGHJKLMNPQRST"
 
 // probably want to hash an arbitrary byte-stream.
 // output is a string

@@ -1,5 +1,5 @@
 
-**NOTE (May 2017):** I feel I've been tangled in the weeds when re-implementing the runtime for the simplified Awelon language developed circa November 2016. It's GC, linking, stowage, and such that are causing much heartache. So I'm moving to a Haskell runtime for now, and might move some parts to C (or LLVM?) later.
+**NOTE (May 2017):** I feel I've been tangled in the weeds when re-implementing the runtime for the simplified Awelon language developed circa November 2016. It's GC, linking, stowage, and such that are causing much heartache. So I'm moving to a dynamic runtime for now, and might move some parts to C (or LLVM?) later.
 
 # Awelon Runtime Design
 
@@ -27,19 +27,15 @@ The first two ideas might be combined, since every accelerated type and function
 
 With JVM or CLR we can leverage JIT and dynamic code generation. Leveraging this would allow me to take advantage of existing and ongoing optimization efforts. Code generation may also simplify construction or plug-ins for server-side agents to support various application models.
 
-I'm leaning slightly in favor of F# on CLR based on my research so far. The CodeDOM seems much cleaner in CLR compared to ByteBuddy on JVM. CLR also preserves much type information in a "full abstraction" sense, which appeals to me. Further, mono provides an ahead-of-time compilation mode, which could be leveraged to improve startup times or memory usage. 
+CLR has a few advantages - a cleaner CodeDOM, full abstraction. OTOH, the .Net ecosystem is a mess with all the different frameworks. The .Net core seems to clean things up a fair bit, but a lot of stuff hasn't been ported to .Net core yet. WebSharper is interesting, too, but is not currently usable from the .Net core. JVM is also usable. But I'll give CLR with F# a fair try first.
 
-For web frameworks, F# has Suave or NancyFX as lightweight options. WebSharper is a very interesting possibility, enabling mixed compilation to JavaScript so the client-side and server side may be modeled together.
-
-Something that annoys me terribly about F# (and .Net in general) is the abundant use of templates, scaffolding, magic configuration strings. 
-
-I'll need to remember that pain when I'm designing application models for Awelon. Ensure precise control of views (without sacrificing flexibility). 
-
-I must experiment, get comfortable with a framework and its peculiar set of magic invocations. 
+Strings are an issue. Awelon uses UTF-8 exclusively, but JVM and CLR strings are UTF-16 by default. I'll just need to translate everything, I suppose.
 
 ## Spike Solution
 
-First, get a web server running with some basic APIs for data entry and processing. Then the database. At every point, I should be able to interact usefully with my code.
+First, get a web server running with some basic APIs for data entry and processing. Then the database. Hopefully I can interact with my code from the start, so I'll want to get started 
+
+ every point, I should be able to interact usefully with my code.
 
 
 
