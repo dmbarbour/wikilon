@@ -14,16 +14,15 @@ starts a local web server, which is mostly configured online. Arguments:
     [-p Port] bind specified port (default 3000)
     [-ip IP]  bind IP or DNS (default 127.0.0.1)
     [-db Dir] where to store data (default wiki)
-    [-admin]  print temporary admin password
+    [-admin]  print a temporary admin password
 
-For initial configuration you'll need the -admin option, but you may configure
-normal user accounts with administrative authorities. The password provided is
-volatile, good until process reset.
+Initial configuration of Wikilon requires the -admin password, but the admin
+can create other users with administrative authorities. The admin password
+is valid only until the process restarts.
+
+Wikilon does not directly support TLS. Use a reverse proxy such as NGINX to
+wrap local Wikilon connections with SSL/TLS/HTTPS.
 """
-
-// TODO: enable configuration of multiple bindings via URL
-//   e.g. "https://example.com:23" and "http://example.org:80"
-// Also, enable configuration of TLS.
 
 type Args = {
   help : bool;
