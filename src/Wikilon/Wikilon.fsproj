@@ -15,7 +15,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Data.ByteString\Data.ByteString.fsproj" />
     <ProjectReference Include="..\Stowage\Stowage.fsproj" />
   </ItemGroup>
 

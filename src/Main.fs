@@ -3,7 +3,6 @@ module Wikilon.Main
 open System
 open System.IO
 open System.Security.Cryptography
-open Stowage
 open Suave
 
 let helpMsg = """
@@ -63,6 +62,8 @@ let getEntropy (n : int) : byte[] =
     do RandomNumberGenerator.Create().GetBytes(mem)
     mem
 
+let hashStr = Stowage.Hash.hash >> System.Text.Encoding.ASCII.GetString
+
 let setAppWorkingDir fp =
     do Directory.CreateDirectory(fp) |> ignore
     Directory.SetCurrentDirectory(fp)
@@ -80,9 +81,14 @@ let main argv =
                             ]
                }
     let admin = if not args.admin then None else
-                let pw = Hash.alphabet // portion of hash (getEntropy 64) 
-                printfn "admin %s" pw  // TODO! should be randomized!
+                let e = getEntropy 64
+                let pw = hashStr(e).Substring(0,24)
+                do printfn "admin:%s" pw
                 Some pw
+
+    // quick test:
+    //let testHash = hashStr <| System.Text.Encoding.UTF8.GetBytes("test")
+    //do printfn "test hash: %s" testHash
 
     let db = "db" // todo: prepare stowage database
     let app = WS.mkApp db admin

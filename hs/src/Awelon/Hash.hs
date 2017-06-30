@@ -35,7 +35,7 @@ type Hash = BS.ByteString
 -- > :set -XOverloadedStrings
 -- > hash "test"
 -- "HSjFNGRnqHpFFbPhlThmqCbqkmDSHCBlJNnmDPnDtnCpKHqtNgqhRMJG"
---
+--    
 hash :: BS.ByteString -> Hash
 hash = encodeHash . B2b.hash 35 mempty
 

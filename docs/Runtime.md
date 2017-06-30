@@ -31,6 +31,7 @@ CLR has a few advantages - a cleaner CodeDOM, full abstraction. OTOH, the .Net e
 
 Strings are an issue. Awelon uses UTF-8 exclusively, but JVM and CLR strings are UTF-16 by default. I'll just need to translate everything, I suppose.
 
+
 ## Spike Solution
 
 First, get a web server running with some basic APIs for data entry and processing. Then the database. Hopefully I can interact with my code from the start, so I'll want to get started 
