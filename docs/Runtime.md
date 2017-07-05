@@ -3,9 +3,9 @@
 
 # Awelon Runtime Design
 
-So what is my performance path? I'd like potential for state of the art performance, without too many difficulties.
+I want state of the art performance without a heroic or long term effort.
 
-## A viable (but looong) Haskell path
+## A viable (but too long) Haskell path
 
 Haskell simplifies many problems surrounding GC, parallelism, parsing, serialization, stowage, linking, and indexing. OTOH, my Haskell interpreters for prior Awelon definitions have consistently been at least 10x worse than C interpreters, sometimes 100x worse.
 
@@ -34,18 +34,13 @@ Strings are an issue. Awelon uses UTF-8 exclusively, but JVM and CLR strings are
 
 ## Spike Solution
 
-First, get a web server running with some basic APIs for data entry and processing. Then the database. Hopefully I can interact with my code from the start, so I'll want to get started 
+I need to get several APIs working ASAP:
 
- every point, I should be able to interact usefully with my code.
+* import and export of codebases
+ * via secure hash resources
+ * via .tar file or similar
 
-
-
-My first attempt used Wai directly, but it was difficult to get what I wanted from that. So I'm trying something richer this time around. I'd also like to get started early with web-sockets to support rich and reactive web applications.
-
-Anyhow, I need to get several APIs working ASAP:
-
-* basic import/export, upload/download of codebases.
-* 
+* dictionary entry, lookup, evaluations
 
 
 Initial requirements:
