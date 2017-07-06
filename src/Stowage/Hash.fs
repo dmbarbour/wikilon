@@ -68,16 +68,16 @@ module Hash =
         let i0 = r 0
         // encode data into eight bytes
         do w 7 (((i4 &&& 0x1Fuy)      ))
-        do w 6 (((i3 &&& 0x03uy) <<< 3) |||
-                ((i4 &&& 0xE0uy) >>> 5))
+        do w 6 (((i4 &&& 0xE0uy) >>> 5) |||
+                ((i3 &&& 0x03uy) <<< 3))
         do w 5 (((i3 &&& 0x7Cuy) >>> 2))
-        do w 4 (((i2 &&& 0x0Fuy) <<< 1) |||
-                ((i3 &&& 0x80uy) >>> 7))
-        do w 3 (((i1 &&& 0x01uy) <<< 4) |||
-                ((i2 &&& 0xF0uy) >>> 4))
+        do w 4 (((i3 &&& 0x80uy) >>> 7) |||
+                ((i2 &&& 0x0Fuy) <<< 1))
+        do w 3 (((i2 &&& 0xF0uy) >>> 4) |||
+                ((i1 &&& 0x01uy) <<< 4))
         do w 2 (((i1 &&& 0x3Euy) >>> 1))
-        do w 1 (((i0 &&& 0x07uy) <<< 2) ||| 
-                ((i1 &&& 0xC0uy) >>> 6))
+        do w 1 (((i1 &&& 0xC0uy) >>> 6) |||
+                ((i0 &&& 0x07uy) <<< 2))
         do w 0 (((i0 &&& 0xF8uy) >>> 3))
 
     // perform a base32 encoding of the Blake2 hash.

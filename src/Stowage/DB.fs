@@ -13,7 +13,8 @@ open System.IO
 ///
 /// Stowage is implemented above LMDB, a memory-mapped B-tree. Stowage
 /// transactions are optimistic and lightweight, held in memory until
-/// commit. The writer operates in a separate Task.
+/// commit, and small concurrent transactions may be batched together
+/// insofar as there are no conflicts.
 module DB =
 
     type DB = 
@@ -32,11 +33,20 @@ module DB =
     // fragment of hash used for stowage keys
     let private stowKeyLen = Hash.validHashLen / 2
 
-    /// Load or create database.
-    let load (path : string) (maxSizeMB : int) : DB =
-        do ignore <| System.IO.Directory.CreateDirectory(path)
+    let inline private withDir (p : string) (op : unit -> 'R) : 'R =
+        do ignore <| System.IO.Directory.CreateDirectory(p) 
+        let p0 = System.IO.Directory.GetCurrentDirectory()
+        try 
+            do ignore <| System.IO.Directory.SetCurrentDirectory(p)
+            op ()
+        finally
+            System.IO.Directory.SetCurrentDirectory(p0)
+
+    let inline private mkDB (maxSizeMB : int) () : DB =
         raise (System.NotImplementedException "Stowage DB load")
 
+    let load (path : string) (maxSizeMB : int) : DB =
+            withDir path (mkDB maxSizeMB)
 
 
 (*
