@@ -1,83 +1,68 @@
 namespace Data
 
-open System
-open System.Collections
-open System.Collections.Generic
-
 // The FSharpX ByteString has errors and inefficiencies, and my issue reports
 // have been ignored for over a week, so I've rolled my own. Reluctantly.
 // Hopefully, one of these days, the F# ecosystem will mature a bit more for
 // such basic data structures. 
 
-/// A ByteString represents an immutable slice of a byte array.
-///
-/// Note: The normal constructors are private to ensure any wrapping
-/// of a mutable array uses the searchable word 'unsafe', but you do
-/// have full power to provide or access the underlying byte array. 
-/// It is left to the client to ensure safe use of ByteStrings.
 module ByteString =
 
+    /// A ByteString represents an immutable slice of a byte array.
     [< CustomEquality; CustomComparison; Struct >]
-    type BS private (arr : byte[], off : int, len : int) =
+    type ByteString internal (arr : byte[], off : int, len : int) =
         member x.UnsafeArray = arr
         member x.Offset = off
         member x.Length = len
-
-        private new (arr : byte[]) = BS(arr, 0, arr.Length)
-
-        static member UnsafeCreateA (arr : byte []) = BS arr
-        static member UnsafeCreate (arr : byte []) (off : int) (len : int) : BS =
-            assert ((off >= 0) && (arr.Length >= (off + len)))
-            BS(arr,off,len)
-
-        /// String conversion defaults to UTF-8 in the ByteString
-        new (s : string) = BS (System.Text.Encoding.UTF8.GetBytes(s))
-        override x.ToString() : string =
-            System.Text.Encoding.UTF8.GetString(x.UnsafeArray, x.Offset, x.Length)
-        // todo: consider convenience methods for working with streams. 
 
         member inline x.Item (ix : int) : byte = 
             assert ((0 <= ix) && (ix < x.Length)) // debug mode checks
             x.UnsafeArray.[x.Offset + ix]
 
-        static member inline FoldLeft f r (a:BS) =
-            let mutable r = r
+        member x.GetSlice (iniOpt : int option, finOpt : int option) : ByteString =
+            let ini = defaultArg iniOpt 0
+            let fin = defaultArg finOpt x.Length
+            if ((ini < 0) || (fin > x.Length)) 
+                then raise (System.IndexOutOfRangeException "ByteString slice out of range.") 
+                else if (fin < ini) then ByteString() else
+                ByteString (x.UnsafeArray, ini + x.Offset, 1 + (fin - ini))
+
+        static member inline FoldLeft f r0 (a:ByteString) =
+            let mutable r = r0
             for ix = a.Offset to (a.Offset + a.Length - 1) do
                 r <- f r a.UnsafeArray.[ix]
             r
 
         /// basic FNV-1a hash (32 bits)
-        static member Hash32 (a:BS) : uint32 =
+        static member Hash32 (a:ByteString) : uint32 =
             let fnv_prime = 16777619u
             let offset_basis = 2166136261u
             let accum h b = ((h ^^^ (uint32 b)) * fnv_prime)
-            BS.FoldLeft accum offset_basis a
+            ByteString.FoldLeft accum offset_basis a
 
-        override x.GetHashCode() = int <| BS.Hash32 x
+        override x.GetHashCode() = int <| ByteString.Hash32 x
             
         /// basic FNV-1a hash (64 bits)
-        static member Hash64 (a:BS) : uint64 =
+        static member Hash64 (a:ByteString) : uint64 =
             let fnv_prime = 1099511628211UL
             let offset_basis = 14695981039346656037UL
             let accum h b = ((h ^^^ (uint64 b)) * fnv_prime)
-            BS.FoldLeft accum offset_basis a
+            ByteString.FoldLeft accum offset_basis a
 
-        static member Eq (a:BS) (b:BS) : bool =
+        static member Eq (a:ByteString) (b:ByteString) : bool =
             if (a.Length <> b.Length) then false else
             if ((a.UnsafeArray = b.UnsafeArray) && (a.Offset = b.Offset)) then true else
-            let eof = a.Offset + a.Length
             let rec loop ix =
                 if (a.Length = ix) then true else
                 if (a.[ix] <> b.[ix]) then false else
                 loop (1 + ix)
             loop 0
 
-        override x.Equals (yobj : Object) = 
+        override x.Equals (yobj : System.Object) = 
             match yobj with
-                | :? BS as y -> BS.Eq x y
+                | :? ByteString as y -> ByteString.Eq x y
                 | _ -> false
 
-        static member Compare (a:BS) (b:BS) : int =
+        static member Compare (a:ByteString) (b:ByteString) : int =
             let compareUpToSharedLen =
                     if ((a.UnsafeArray = b.UnsafeArray) && (a.Offset = b.Offset)) then 0 else
                     let sharedLen = min a.Length b.Length
@@ -91,24 +76,153 @@ module ByteString =
             compare a.Length b.Length
 
         interface System.IComparable with
-            member x.CompareTo (yobj : Object) =
+            member x.CompareTo (yobj : System.Object) =
                 match yobj with
-                    | :? BS as y -> BS.Compare x y
+                    | :? ByteString as y -> ByteString.Compare x y
                     | _ -> invalidArg "yobj" "cannot compare values of different types"
-            
-        // more interfaces? 
-        //   efficient array slicing
-        //   enumerable
+
+        member x.GetEnumerator() : System.Collections.Generic.IEnumerator<byte> =
+            let a = x.UnsafeArray
+            let reset = (x.Offset - 1)
+            let limit = (x.Length + reset)
+            let ix = ref reset 
+            { new System.Collections.Generic.IEnumerator<byte> with
+                    member e.Current = a.[!ix]
+                interface System.Collections.IEnumerator with
+                    member e.Current = box a.[!ix]
+                    member e.MoveNext() = 
+                        if(!ix = limit) then false else
+                        ix := (1 + !ix)
+                        true
+                    member e.Reset() = ix := reset
+                interface System.IDisposable with
+                    member e.Dispose() = ()
+            }
+
+        interface System.Collections.Generic.IEnumerable<byte> with
+            member x.GetEnumerator() = x.GetEnumerator()
+
+        interface System.Collections.IEnumerable with
+            member x.GetEnumerator() = 
+                x.GetEnumerator() :> System.Collections.IEnumerator
+
+        // String conversion assumes an ASCII or UTF-8 encoding. 
+        override x.ToString() : string =
+            System.Text.Encoding.UTF8.GetString(x.UnsafeArray, x.Offset, x.Length)
+
+        // other interfaces? 
         
 
-    /// Create by wrapping a mutable array. It's the client's responsibility
-    /// to ensure the array is not mutated after constructing the bytestring.
-    let inline unsafeCreateA arr = BS.UnsafeCreateA arr
-    let inline unsafeCreate arr off len = BS.UnsafeCreate arr off len
+    let empty : ByteString = ByteString()
+    let inline isEmpty (x : ByteString) = (0 = x.Length)
+    let inline length (x : ByteString) = x.Length
 
+    /// When creating a bytestring from an array, the client must ensure
+    /// the array will not further be mutated. In some contexts, a defensive
+    /// copy may be necessary, but that is not automatic.
+    let unsafeCreate (arr : byte []) (off : int) (len : int) : ByteString =
+        assert ((off >= 0) && (arr.Length >= (off + len)))
+        ByteString(arr,off,len)
+    let unsafeCreateA (arr : byte []) = 
+        ByteString(arr, 0, arr.Length)
 
-        
+    let inline singleton (c : byte) = unsafeCreateA (Array.create 1 c)
 
+    let inline ofSeq (s : seq<byte>) : ByteString = unsafeCreateA (Array.ofSeq s)
+    let inline ofList (s : byte list) : ByteString = unsafeCreateA (Array.ofList s)
+
+    let inline toArray (s : ByteString) : byte[] = 
+        if isEmpty s then Array.empty else
+        Array.sub (s.UnsafeArray) (s.Offset) (s.Length)
+    let inline toSeq (s : ByteString) : seq<byte> = s :> seq<byte> // IEnumerable<byte>
+    let inline toList (s : ByteString) : byte list = List.ofSeq (toSeq s)
+
+    /// take and drop are slices that won't raise range errors.
+    let inline take (n : int) (s : ByteString) : ByteString =
+        if (n < 1) then empty else
+        if (n >= s.Length) then s else
+        unsafeCreate s.UnsafeArray s.Offset n
+
+    let inline drop (n : int) (s : ByteString) : ByteString =
+        if (n < 1) then s else
+        if (n >= s.Length) then empty else
+        unsafeCreate s.UnsafeArray (s.Offset + n) (s.Length - n) 
+
+    /// takeLast and dropLast are like take and drop, but index from the end
+    let inline takeLast (n : int) (s : ByteString) : ByteString = drop (s.Length - n) s
+    let inline dropLast (n : int) (s : ByteString) : ByteString = take (s.Length - n) s
+
+    /// unsafe accessors, use only when you know the bytestring is non-empty
+    let inline unsafeHead (x : ByteString) : byte = 
+        x.UnsafeArray.[x.Offset]
+    let inline unsafeTail (x : ByteString) : ByteString = 
+        unsafeCreate (x.UnsafeArray) (x.Offset + 1) (x.Length - 1)
+
+    /// active pattern to access ByteString elements
+    let inline (|BS|) (x:ByteString) = (x.UnsafeArray, x.Offset, x.Length)
     
+    /// basic left-to-right fold function.
+    let inline fold f r0 s = ByteString.FoldLeft f r0 s
+
+
+    /// head is the first byte, tail is all remaining bytes
+    let inline head (x : ByteString) : byte = 
+        if isEmpty x then invalidArg "x" "not enough elements" else unsafeHead x
+    let inline tail (x : ByteString) : ByteString =
+        if isEmpty x then invalidArg "x" "not enough elements" else unsafeTail x
+
+    let inline tryHead (x : ByteString) : byte option =
+        if isEmpty x then None else Some (unsafeHead x)
+    let inline tryTail (x : ByteString) : ByteString option =
+        if isEmpty x then None else Some (unsafeTail x)
+
+    let inline uncons (x : ByteString) : (byte * ByteString) =
+        if isEmpty x then invalidArg "x" "not enough elements" else 
+        (unsafeHead x, unsafeTail x)
+    let inline tryUncons (x : ByteString) : (byte * ByteString) option =
+        if isEmpty x then None else Some (unsafeHead x, unsafeTail x)
+
+    /// Split bytestring with longest sequence matched by provided function.
+    let inline span (f : byte -> bool) (x : ByteString) : (ByteString * ByteString) =
+        let limit = (x.Offset + x.Length)
+        let rec step ix =
+            if ((ix = limit) || not (f (x.UnsafeArray.[ix]))) 
+                then ix 
+                else step (1 + ix)
+        let stop = step x.Offset
+        let l = unsafeCreate (x.UnsafeArray) (x.Offset) (stop - x.Offset)
+        let r = unsafeCreate (x.UnsafeArray) (stop) (x.Length - l.Length)
+        (l,r)
+    let inline takeWhile f x = fst (span f x)
+    let inline dropWhile f x = snd (span f x) 
+
+    /// As 'span', but working right to left
+    let inline spanEnd (f : byte -> bool) (x : ByteString) : (ByteString * ByteString) =
+        let rec step ix =
+            let ix' = ix - 1 
+            if ((ix = x.Offset) || not (f (x.UnsafeArray.[ix'])))
+                then ix
+                else step ix' 
+        let stop = step (x.Offset + x.Length)
+        let l = unsafeCreate (x.UnsafeArray) (x.Offset) (stop - x.Offset)
+        let r = unsafeCreate (x.UnsafeArray) (stop) (x.Length - l.Length)
+        (l,r)
+        
+    /// conversions for other string encodings
+    let inline encodeString (s : string) (e : System.Text.Encoding) = 
+        unsafeCreateA (e.GetBytes(s))
+    let inline decodeString (x : ByteString) (e : System.Text.Encoding) = 
+        e.GetString(x.UnsafeArray, x.Offset, x.Length)
+
+    /// fromString and toString assume UTF-8 encoding
+    let inline fromString s = encodeString s System.Text.Encoding.UTF8
+    let inline toString s = decodeString s System.Text.Encoding.UTF8
+
+
+
+    // TODO: cons, append, concatenation
+
+// Note: An interesting related option is to model *external* byte strings,
+// e.g. via an IntPtr, perhaps with flexible dispose options. 
 
     
