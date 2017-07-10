@@ -13,10 +13,12 @@ let ``empty is length zero`` () =
 [<Fact>]
 let ``empty equals empty`` () =
     Assert.Equal<ByteString>(empty, empty)
+    Assert.NotEqual<ByteString>(empty, singleton 101uy)
 
 [<Fact>]
 let ``isEmpty empty`` () = 
-    Assert.True((isEmpty empty))
+    Assert.True(isEmpty empty)
+    Assert.False(isEmpty (singleton 101uy))
 
 [<Fact>]
 let ``isEmpty emptyString`` () =
@@ -45,26 +47,43 @@ let ``basic structural equality`` () =
 let ``basic string conversions`` () =
     let testStr = "→↑←"
     let a = fromString testStr
+    Assert.Equal<int>(a.Length, 9) // UTF-8 conversions
     Assert.Equal<string>(testStr, a.ToString())
     Assert.Equal<string>(testStr, toString a)
 
-(*
-[<Fact>]
-let ``empty bytestring converts to empty string`` () =
-    Assert.True((e.ToString() = ""))
-
-
 [<Fact>]
 let ``empty slice is empty`` () =
-    let foo = s "hello"
-    let tst = isEmpty (foo.[3..2])
-    Assert.True(tst) 
+    let foo = (fromString "xyzzy").[3..2]
+    Assert.True(isEmpty foo)
 
 [<Fact>]
-let ``slice equality 1`` () =
-    let foo = s "xyzxyz"
-    Assert.True((foo.[0..2] = foo.[3..5]))
-    Assert.False((foo.[0..1] = foo.[1..2]))
+let ``non-empty slices equality`` () =
+    let foo = fromString "xyzxyz"
+    Assert.Equal<ByteString>(foo.[0..2], foo.[3..5])
+    Assert.NotEqual<ByteString>(foo.[0..1], foo.[2..3])
+
+[<Fact>]
+let ``slices share underlying array`` () =
+    let foo = fromString "xyzzy"
+    Assert.Equal<byte[]>(foo.[0..2].UnsafeArray, foo.[2..3].UnsafeArray)
+
+[<Fact>]
+let ``simple cons`` () =
+    Assert.Equal<ByteString>(fromString "test", cons (byte 't') (fromString "est"))
+
+[<Fact>]
+let ``simple append`` () =
+    Assert.Equal<ByteString>(fromString "hello, world",
+        append (fromString "hello,") (fromString " world"))
+
+[<Fact>]
+let ``simple concat`` () =
+    Assert.Equal<ByteString>(fromString "hello, world",
+        ["hello"; ","; " "; "world"] |> Seq.map fromString |> concat)
+
+(*
+
+// TODO: comparisons, concatenations
 
 [<Fact>]
 let ``structural comparisons`` () =
