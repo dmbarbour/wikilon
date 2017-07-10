@@ -10,9 +10,10 @@ module ByteString =
     /// A ByteString represents an immutable slice of a byte array.
     [< CustomEquality; CustomComparison; Struct >]
     type ByteString internal (arr : byte[], off : int, len : int) =
-        member x.UnsafeArray = arr
+        member x.UnsafeArray = arr 
         member x.Offset = off
         member x.Length = len
+        // todo: consider use of int64 or nativeint for Offset and Length
 
         member inline x.Item (ix : int) : byte = 
             assert ((0 <= ix) && (ix < x.Length)) // debug mode checks
@@ -23,7 +24,7 @@ module ByteString =
             let fin = defaultArg finOpt x.Length
             if ((ini < 0) || (fin > x.Length)) 
                 then raise (System.IndexOutOfRangeException "ByteString slice out of range.") 
-                else if (fin < ini) then ByteString() else
+                else if (fin < ini) then ByteString(Array.empty,0,0) else
                 ByteString (x.UnsafeArray, ini + x.Offset, 1 + (fin - ini))
 
         static member inline FoldLeft f r0 (a:ByteString) =
@@ -50,7 +51,6 @@ module ByteString =
 
         static member Eq (a:ByteString) (b:ByteString) : bool =
             if (a.Length <> b.Length) then false else
-            if ((a.UnsafeArray = b.UnsafeArray) && (a.Offset = b.Offset)) then true else
             let rec loop ix =
                 if (a.Length = ix) then true else
                 if (a.[ix] <> b.[ix]) then false else
@@ -63,16 +63,14 @@ module ByteString =
                 | _ -> false
 
         static member Compare (a:ByteString) (b:ByteString) : int =
-            let compareUpToSharedLen =
-                    if ((a.UnsafeArray = b.UnsafeArray) && (a.Offset = b.Offset)) then 0 else
-                    let sharedLen = min a.Length b.Length
-                    let rec loop ix = 
-                        if (sharedLen = ix) then 0 else
-                        let c = compare a.[ix] b.[ix]
-                        if(0 <> c) then c else
-                        loop (1 + ix)
-                    loop 0
-            if (0 <> compareUpToSharedLen) then compareUpToSharedLen else
+            let sharedLen = min a.Length b.Length
+            let rec loop ix =
+                    if (sharedLen = ix) then 0 else
+                    let c = compare a.[ix] b.[ix]
+                    if (0 <> c) then c else
+                    loop (1 + ix)
+            let cmpSharedLen = loop 0 
+            if (0 <> cmpSharedLen) then cmpSharedLen else
             compare a.Length b.Length
 
         interface System.IComparable with
@@ -82,6 +80,7 @@ module ByteString =
                     | _ -> invalidArg "yobj" "cannot compare values of different types"
 
         member x.GetEnumerator() : System.Collections.Generic.IEnumerator<byte> =
+            if (0 = x.Length) then Seq.empty.GetEnumerator() else
             let a = x.UnsafeArray
             let reset = (x.Offset - 1)
             let limit = (x.Length + reset)
@@ -113,7 +112,7 @@ module ByteString =
         // other interfaces? 
         
 
-    let empty : ByteString = ByteString()
+    let empty : ByteString = ByteString(Array.empty, 0, 0)
     let inline isEmpty (x : ByteString) = (0 = x.Length)
     let inline length (x : ByteString) = x.Length
 
@@ -123,7 +122,7 @@ module ByteString =
     let unsafeCreate (arr : byte []) (off : int) (len : int) : ByteString =
         assert ((off >= 0) && (arr.Length >= (off + len)))
         ByteString(arr,off,len)
-    let unsafeCreateA (arr : byte []) = 
+    let unsafeCreateA (arr : byte []) =
         ByteString(arr, 0, arr.Length)
 
     let inline singleton (c : byte) = unsafeCreateA (Array.create 1 c)
@@ -136,6 +135,27 @@ module ByteString =
         Array.sub (s.UnsafeArray) (s.Offset) (s.Length)
     let inline toSeq (s : ByteString) : seq<byte> = s :> seq<byte> // IEnumerable<byte>
     let inline toList (s : ByteString) : byte list = List.ofSeq (toSeq s)
+
+    /// concatenate into one large bytestring
+    let concat (xs : seq<ByteString>) : ByteString =
+        let mem = new System.IO.MemoryStream(4000)
+        for x in xs do
+            mem.Write(x.UnsafeArray, x.Offset, x.Length)
+        unsafeCreateA (mem.ToArray())
+
+    let inline cons (b : byte) (s : ByteString) : ByteString =
+        let mem = Array.zeroCreate (1 + s.Length)
+        do mem.[0] <- b
+        do Array.blit s.UnsafeArray s.Offset mem 1 s.Length
+        unsafeCreateA mem
+
+    let inline append (a : ByteString) (b : ByteString) : ByteString =
+        if isEmpty a then b else
+        if isEmpty b then a else
+        let mem = Array.zeroCreate (a.Length + b.Length)
+        do Array.blit a.UnsafeArray a.Offset mem        0 a.Length
+        do Array.blit b.UnsafeArray b.Offset mem a.Length b.Length
+        unsafeCreateA mem
 
     /// take and drop are slices that won't raise range errors.
     let inline take (n : int) (s : ByteString) : ByteString =
@@ -157,9 +177,6 @@ module ByteString =
         x.UnsafeArray.[x.Offset]
     let inline unsafeTail (x : ByteString) : ByteString = 
         unsafeCreate (x.UnsafeArray) (x.Offset + 1) (x.Length - 1)
-
-    /// active pattern to access ByteString elements
-    let inline (|BS|) (x:ByteString) = (x.UnsafeArray, x.Offset, x.Length)
     
     /// basic left-to-right fold function.
     let inline fold f r0 s = ByteString.FoldLeft f r0 s
