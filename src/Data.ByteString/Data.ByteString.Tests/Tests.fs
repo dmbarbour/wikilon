@@ -81,22 +81,20 @@ let ``simple concat`` () =
     Assert.Equal<ByteString>(fromString "hello, world",
         ["hello"; ","; " "; "world"] |> Seq.map fromString |> concat)
 
-(*
-
-// TODO: comparisons, concatenations
+[<Fact>]
+let ``empty is smallest`` () =
+    Assert.True(empty < unsafeCreateA [| 0uy |])
 
 [<Fact>]
-let ``structural comparisons`` () =
-    Assert.True(ByteString() < s "x")
-    Assert.False(s "x" < s "")
-    Assert.True(s "xx" < s "xy")
-    Assert.True(s "xy" < s "y")
-    let foo = s "xyzxyz"
-    Assert.True(foo.[0..1] < foo.[1..2])
-    Assert.False(foo.[1..2] < foo.[3..5])
+let ``lexicographic order`` () =
+    Assert.True(fromString "x" < fromString "xx")
+    Assert.True(fromString "xx" < fromString "xy")
+    Assert.True(fromString "xy" < fromString "yx")
 
 [<Fact>]
-let ``concatenations`` () =
-    ()
-*)
+let ``ordering on slices`` () =
+    let foo = fromString "xyzxyz"
+    Assert.True(foo.[1..2] > foo.[3..4])
+    Assert.True(foo.[0..1] < foo.[3..5])
+
 
