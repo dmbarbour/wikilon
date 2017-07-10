@@ -21,8 +21,8 @@ module ByteString =
 
         member x.GetSlice (iniOpt : int option, finOpt : int option) : ByteString =
             let ini = defaultArg iniOpt 0
-            let fin = defaultArg finOpt x.Length
-            if ((ini < 0) || (fin > x.Length)) 
+            let fin = defaultArg finOpt (x.Length - 1)
+            if ((ini < 0) || (fin >= x.Length)) 
                 then raise (System.IndexOutOfRangeException "ByteString slice out of range.") 
                 else if (fin < ini) then ByteString(Array.empty,0,0) else
                 ByteString (x.UnsafeArray, ini + x.Offset, 1 + (fin - ini))

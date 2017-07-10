@@ -42,48 +42,49 @@ module LMDB =
     let MDB_FIRST = 0           // first item in table
     let MDB_NEXT  = 8           // next cursor item
 
-    // API native methods
-    //
-    // Note: I'm not happy with .Net's conversion of strings. But I don't 
-    // use anything outside of ASCII within Stowage. 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-    extern int mdb_env_create(MDB_env& env);
+    module Native = 
+        // API native methods
+        //
+        // Note: I'm not happy with .Net's conversion of strings. But I don't 
+        // use anything outside of ASCII within Stowage. 
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_env_create(MDB_env& env);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-    extern int mdb_env_open(MDB_env env, string path, uint32 flags, mdb_mode_t mode);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_env_open(MDB_env env, string path, uint32 flags, mdb_mode_t mode);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-    extern int mdb_env_set_mapsize(MDB_env env, size_t size);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_env_set_mapsize(MDB_env env, size_t size);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-    extern int mdb_env_set_maxdbs(MDB_env env, MDB_dbi dbs);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_env_set_maxdbs(MDB_env env, MDB_dbi dbs);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-    extern int mdb_txn_begin(MDB_env env, MDB_txn parent, uint32 flags, MDB_txn& txn);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_txn_begin(MDB_env env, MDB_txn parent, uint32 flags, MDB_txn& txn);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-    extern int mdb_txn_commit(MDB_txn txn);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_txn_commit(MDB_txn txn);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-    extern int mdb_dbi_open(MDB_txn txn, string name, uint32 flags, MDB_dbi& dbi); 
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_dbi_open(MDB_txn txn, string name, uint32 flags, MDB_dbi& dbi); 
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-    extern int mdb_get(MDB_txn txn, MDB_dbi dbi, MDB_val& key, MDB_val& data);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_get(MDB_txn txn, MDB_dbi dbi, MDB_val& key, MDB_val& data);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-    extern int mdb_put(MDB_txn txn, MDB_dbi dbi, MDB_val& key, MDB_val& data, uint32 flags);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_put(MDB_txn txn, MDB_dbi dbi, MDB_val& key, MDB_val& data, uint32 flags);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-    extern int mdb_del(MDB_txn txn, MDB_dbi dbi, MDB_val& key, MDB_val* data);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_del(MDB_txn txn, MDB_dbi dbi, MDB_val& key, MDB_val* data);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
-    extern int mdb_cursor_open(MDB_txn txn, MDB_dbi dbi, MDB_cursor& cursor);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
+        extern int mdb_cursor_open(MDB_txn txn, MDB_dbi dbi, MDB_cursor& cursor);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
-    extern void mdb_cursor_close(MDB_cursor cursor);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
+        extern void mdb_cursor_close(MDB_cursor cursor);
 
-    [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
-    extern int mdb_cursor_get(MDB_cursor cursor, MDB_val& key, MDB_val& data, MDB_cursor_op op);
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
+        extern int mdb_cursor_get(MDB_cursor cursor, MDB_val& key, MDB_val& data, MDB_cursor_op op);
 
     // I don't need cursor put or del at this time.
 

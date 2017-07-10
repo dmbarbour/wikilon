@@ -97,4 +97,19 @@ let ``ordering on slices`` () =
     Assert.True(foo.[1..2] > foo.[3..4])
     Assert.True(foo.[0..1] < foo.[3..5])
 
+[<Fact>]
+let ``simple enumerator`` () =
+    let x : ByteString = fromString "test==="
+    let mutable sum = 0
+    for c in (x.[..3]) do
+        sum <- (int c) + sum
+    Assert.Equal(448, sum)
+
+[<Fact>]
+let ``simple fold`` () =
+    let x : ByteString = fromString "===test"
+    let accum s c = s + int c
+    let sum = fold accum 0 (x.[3..]) 
+    Assert.Equal(448, sum)
+
 
