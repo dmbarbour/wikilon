@@ -62,6 +62,16 @@ module ByteString =
                 | :? ByteString as y -> ByteString.Eq x y
                 | _ -> false
 
+        /// a constant-time equality comparison on data to control
+        /// time-leaks of data. 
+        static member CTEq (a:ByteString) (b:ByteString) : bool =
+            if (a.Length <> b.Length) then false else
+            let rec loop acc ix =
+                if (a.Length = ix) then (0uy = acc) else
+                let acc' = acc ||| (a.[ix] ^^^ b.[ix])
+                loop acc' (ix + 1)
+            loop 0uy 0
+
         static member Compare (a:ByteString) (b:ByteString) : int =
             let sharedLen = min a.Length b.Length
             let rec loop ix =

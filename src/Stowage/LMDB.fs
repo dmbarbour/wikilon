@@ -13,7 +13,7 @@ module LMDB =
     type MDB_cursor = nativeint
     type MDB_cursor_op = int
     type mdb_mode_t = int
-    type size_t = nativeint
+    type size_t = unativeint
     type pvoid = nativeint
 
     [< StructLayoutAttribute(LayoutKind.Sequential) >]

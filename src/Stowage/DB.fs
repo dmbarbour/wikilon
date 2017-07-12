@@ -42,11 +42,15 @@ module DB =
         finally
             System.IO.Directory.SetCurrentDirectory(p0)
 
+    // assuming we're in the target directory, build the database
     let inline private mkDB (maxSizeMB : int) () : DB =
+        let flock = new System.IO.FileStream(".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)
+        let maxSizeBytes = (1024UL * 1024UL) * uint64 (max 1 maxSizeMB)
         raise (System.NotImplementedException "Stowage DB load")
 
-    let load (path : string) (maxSizeMB : int) : DB =
-            withDir path (mkDB maxSizeMB)
+    let load (path : string) (maxSizeMB : int) : DB = 
+        withDir path (mkDB maxSizeMB)
+                
 
 
 (*

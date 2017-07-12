@@ -13,6 +13,7 @@
  * must be separated by non-hash characters. 
  *)
 namespace Stowage
+open Data.ByteString
 open Konscious.Security.Cryptography
 
 module Hash =
@@ -95,8 +96,14 @@ module Hash =
         assert (hashBitLen = 280)
         dst
 
+    /// basic bytestring hash
+    let hash (s : ByteString) : ByteString =
+        use alg = new HMACBlake2B(hashBitLen)
+        let bytes = alg.ComputeHash(s.UnsafeArray, s.Offset, s.Length)
+        Data.ByteString.unsafeCreateA (b32enc bytes)
+
     /// compute a hash result from binary
-    let hash (src : byte[]) : byte[] = 
+    let hashArray (src : byte[]) : byte[] = 
         use alg = new HMACBlake2B(hashBitLen)
         b32enc (alg.ComputeHash(src))
 
@@ -104,4 +111,18 @@ module Hash =
     let hashStream (src : System.IO.Stream) : byte[] = 
         use alg = new HMACBlake2B(hashBitLen)
         b32enc (alg.ComputeHash(src))
+
+(* todo: figure out how sequence expressions work in F#
+    /// Find hashes within a larger bytestring.
+    let hashDeps (s0 : ByteString) : seq<ByteString> =
+        seq {
+            let rec loop s =
+                let s' = dropWhile (int >> validHashElem >> not) s
+                if isEmpty s' then () else
+                let (hd,tl) = span (int >> validHashElem) s'
+                do if (validHashLen = hd.Length) then yield hd
+                loop tl
+            loop s0
+         }
+*)
 
