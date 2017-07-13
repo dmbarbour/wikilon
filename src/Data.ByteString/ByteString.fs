@@ -13,7 +13,7 @@ module ByteString =
         member x.UnsafeArray = arr 
         member x.Offset = off
         member x.Length = len
-        // todo: consider use of int64 or nativeint for Offset and Length
+        // Note: current .Net VM size limit (2017) is about 2GB.
 
         member inline x.Item (ix : int) : byte = 
             assert ((0 <= ix) && (ix < x.Length)) // debug mode checks

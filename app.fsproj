@@ -14,5 +14,6 @@
   <ItemGroup>
     <ProjectReference Include="src\Stowage\Stowage.fsproj" />
     <ProjectReference Include="src\Wikilon\Wikilon.fsproj" />
+    <ProjectReference Include="src\Data.ByteString\Data.ByteString.fsproj" />
   </ItemGroup>
 </Project>

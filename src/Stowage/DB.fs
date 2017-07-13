@@ -42,11 +42,35 @@ module DB =
         finally
             System.IO.Directory.SetCurrentDirectory(p0)
 
+    let inline lockFile fn =
+        new FileStream(fn, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)
+
     // assuming we're in the target directory, build the database
     let inline private mkDB (maxSizeMB : int) () : DB =
-        let flock = new System.IO.FileStream(".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)
-        let maxSizeBytes = (1024UL * 1024UL) * uint64 (max 1 maxSizeMB)
-        raise (System.NotImplementedException "Stowage DB load")
+        let flock = lockFile ".lock"
+        let env = mdb_env_create ()
+        mdb_env_set_mapsize env maxSizeMB
+        mdb_env_set_maxdbs env 4
+        let envFlags = MDB_NOSYNC ||| MDB_WRITEMAP ||| MDB_NOTLS ||| MDB_NOLOCK
+        mdb_env_open env "." envFlags
+        let txn = mdb_readwrite_txn_begin env
+        let dbData = mdb_dbi_open txn "@" MDB_CREATE // root key-value
+        let dbStow = mdb_dbi_open txn "$" MDB_CREATE // stowed resources
+        let dbRfct = mdb_dbi_open txn "#" MDB_CREATE // positive refcts
+        let dbZero = mdb_dbi_open txn "0" MDB_CREATE // keys with zero refct
+        mdb_txn_commit txn
+
+        { db_lock = flock
+        ; db_env = env
+        ; db_data = dbData
+        ; db_stow = dbStow
+        ; db_rfct = dbRfct
+        ; db_zero = dbZero
+        }
+    // TODO: 
+    //   ephemerons table 
+    //   task queue / batch
+    //   init writer thread
 
     let load (path : string) (maxSizeMB : int) : DB = 
         withDir path (mkDB maxSizeMB)

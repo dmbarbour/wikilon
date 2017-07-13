@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Security.Cryptography
 open Suave
+open Data.ByteString
 
 let helpMsg = """
 Wikilon is a wiki-inspired development environment for Awelon. This program
@@ -20,7 +21,8 @@ can create other users with administrative authorities. The admin password
 is valid only until the process restarts.
 
 Wikilon does not directly support TLS. Use a reverse proxy such as NGINX to
-wrap local Wikilon connections with SSL/TLS/HTTPS.
+wrap local Wikilon connections with SSL/TLS/HTTPS. IP 0.0.0.0 is a wildcard,
+but one should consider security implications.
 """
 
 type Args = {
@@ -57,12 +59,12 @@ let rec procArgs xs (a : Args) : Args =
     | "-admin"::xs' -> procArgs xs' { a with admin = true }
     | x::xs' -> procArgs xs' {a with bad = x :: a.bad }
 
-let getEntropy (n : int) : byte[] = 
+let getEntropy (n : int) : ByteString = 
     let mem = Array.zeroCreate n
     do RandomNumberGenerator.Create().GetBytes(mem)
-    mem
+    Data.ByteString.unsafeCreateA mem
 
-let hashStr = Stowage.Hash.hash >> System.Text.Encoding.ASCII.GetString
+let hashStr = Stowage.Hash.hash >> Data.ByteString.toString
 
 let setAppWorkingDir fp =
     do Directory.CreateDirectory(fp) |> ignore
@@ -85,12 +87,9 @@ let main argv =
                 let pw = hashStr(e).Substring(0,24)
                 do printfn "admin:%s" pw
                 Some pw
+    let dbMaxSize = (4 * 1024 * 1024) // todo: enable configuration
 
-    // quick test:
-    //let testHash = hashStr <| System.Text.Encoding.UTF8.GetBytes("test")
-    //do printfn "test hash: %s" testHash
-
-    let db = "db" // todo: prepare stowage database
+    let db = Stowage.DB.load "db" dbMaxSize
     let app = WS.mkApp db admin
     do startWebServer svc app
     0 // return an integer exit code
