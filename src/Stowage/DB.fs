@@ -1,14 +1,16 @@
 namespace Stowage
-open Stowage.Internal.LMDB
 open System.IO
+open System.Threading
+open Stowage.Internal.LMDB
 
 /// Stowage is a key-value database that features garbage collected
 /// references between binaries via secure hashes. 
 ///
 /// Stowage is implemented above LMDB, a memory-mapped B-tree. Stowage
 /// transactions are optimistic and lightweight, held in memory until
-/// commit. Non-conflicting writes are batched to amortize overheads 
-/// for synchronizing to disk.
+/// commit. Non-conflicting concurrent writes are batched to amortize
+/// overheads for synchronization to disk. Read-only actions never wait.
+/// Blind writes never conflict.
 ///
 /// The ability to reference binaries via secure hashes, together with
 /// garbage collection, enables a stowage database to represent larger 
@@ -17,7 +19,24 @@ open System.IO
 /// easy to shard.
 module DB =
 
+    // fragment of hash used for stowage keys
+    let private stowKeyLen = Hash.validHashLen / 2
+
     module internal Internal =
+
+        // Readlock state is essentially a reader-count with an event
+        // for when we reach zero readers.
+        type ReadLock () = 
+            let mutable rc = 0
+            member this.Acquire () = lock this (fun () -> 
+                rc <- rc + 1)
+            member this.Release () = lock this (fun () ->
+                assert (rc > 0)
+                rc <- rc - 1
+                if(0 = rc) then Monitor.PulseAll(this))
+            member this.Wait () = lock this (fun () -> 
+                while(0 <> rc) do ignore(Monitor.Wait(this)))
+
         type DB =
             { 
                 db_lock : FileStream    
@@ -26,10 +45,39 @@ module DB =
                 db_stow : MDB_dbi     // secure hash -> data
                 db_rfct : MDB_dbi     // hashes with refct > 0
                 db_zero : MDB_dbi     // hashes with zero refct
+
+                // ephemeron tables
+                mutable db_rdlock : ReadLock    // writer changes read lock.
                 // ephemeron table
                 // task queue
                 // concurrency primitives
-            }  
+            }
+        // the DB will have a dedicated writer thread
+
+        // Perform operation while holding read lock.
+        //
+        // LMDB with NOLOCK is essentially a frame-buffered database.
+        // At most times, we have two valid frames. During commit, we
+        // drop the older frame and write the new one. Stowage aligns
+        // its locking with this model, so readers never wait and the
+        // writer waits only on readers that hold the lock for nearly
+        // two full write frames.
+        //
+        // We can assume most readers only hold the lock briefly, and
+        // hence our writer very rarely waits.
+        let withReadLock (db : DB) (operation : unit -> 'x) : 'x =
+                let rdlock = lock db (fun () -> 
+                        // lock prevents advanceReaderFrame during Acquire
+                        db.db_rdlock.Acquire() 
+                        db.db_rdlock)
+                try operation ()
+                finally rdlock.Release()
+
+        let advanceReaderFrame (db : DB) : ReadLock = lock db (fun () ->
+                let oldFrame = db.db_rdlock
+                db.db_rdlock <- new ReadLock()
+                oldFrame)
+
         type TX =
             {   tx_db   : DB
                 // reads
@@ -58,13 +106,9 @@ module DB =
     
     let txDB (tx : TX) : DB = DB (tx.Impl.tx_db)
 
-
     // still needed: Task data and synchronization primitives?
     // or maybe a separate thread with Monitor?
  
-    // fragment of hash used for stowage keys
-    let private stowKeyLen = Hash.validHashLen / 2
-
     let inline private withDir (p : string) (op : unit -> 'R) : 'R =
         do ignore <| System.IO.Directory.CreateDirectory(p) 
         let p0 = System.IO.Directory.GetCurrentDirectory()
@@ -98,12 +142,15 @@ module DB =
         let dbZero = mdb_dbi_open txn "0" MDB_CREATE // keys with zero refct
         mdb_txn_commit txn
 
+        let rdLock = new Internal.ReadLock()
+
         DB { db_lock = lock
              db_env  = env
              db_data = dbData
              db_stow = dbStow
              db_rfct = dbRfct
              db_zero = dbZero
+             db_rdlock = rdLock
            }
     // TODO: 
     //   ephemerons table 
@@ -132,10 +179,6 @@ module DB =
     , check
     , gcDB, gcDB_async
     , hashDeps
-    , FilePath
-    , ByteString
-    , Hash
-    
 *)
   
     
