@@ -42,12 +42,18 @@ module DB =
         finally
             System.IO.Directory.SetCurrentDirectory(p0)
 
-    let inline lockFile fn =
-        new FileStream(fn, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)
+    let inline lockFile (fn : string) : FileStream =
+        new FileStream(
+                fn, 
+                FileMode.OpenOrCreate, 
+                FileAccess.ReadWrite, 
+                FileShare.None,
+                8,
+                FileOptions.DeleteOnClose)
 
     // assuming we're in the target directory, build the database
     let inline private mkDB (maxSizeMB : int) () : DB =
-        let flock = lockFile ".lock"
+        let lock = lockFile ".lock"
         let env = mdb_env_create ()
         mdb_env_set_mapsize env maxSizeMB
         mdb_env_set_maxdbs env 4
@@ -60,7 +66,7 @@ module DB =
         let dbZero = mdb_dbi_open txn "0" MDB_CREATE // keys with zero refct
         mdb_txn_commit txn
 
-        { db_lock = flock
+        { db_lock = lock
         ; db_env = env
         ; db_data = dbData
         ; db_stow = dbStow

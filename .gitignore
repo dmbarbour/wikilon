@@ -5,4 +5,5 @@ packages/
 bin/
 obj/
 *.userprefs
+wiki/
 
