@@ -112,17 +112,5 @@ module Hash =
         use alg = new HMACBlake2B(hashBitLen)
         b32enc (alg.ComputeHash(src))
 
-(* todo: figure out how sequence expressions work in F#
-    /// Find hashes within a larger bytestring.
-    let hashDeps (s0 : ByteString) : seq<ByteString> =
-        seq {
-            let rec loop s =
-                let s' = dropWhile (int >> validHashElem >> not) s
-                if isEmpty s' then () else
-                let (hd,tl) = span (int >> validHashElem) s'
-                do if (validHashLen = hd.Length) then yield hd
-                loop tl
-            loop s0
-         }
-*)
+
 

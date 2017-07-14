@@ -105,7 +105,7 @@ module LMDB =
     // budget on sophisticated error handling. 
     exception LMDBError of int
 
-    let reportError (e : int) : unit =
+    let private reportError (e : int) : unit =
         let msgPtr = Native.mdb_strerror(e)
         let msgStr = 
             if (IntPtr.Zero = msgPtr) then "(null)" else
@@ -113,13 +113,18 @@ module LMDB =
         printf "LMDB Error %d: %s" e msgStr
         raise (LMDBError e)
 
-    let inline check (e : int) : unit =
+    let inline private check (e : int) : unit =
         if (0 <> e) then reportError(e) 
+
+    let inline private mdb_assertions (env : MDB_env) : unit =
+        assert((2 * Marshal.SizeOf<nativeint>()) = Marshal.SizeOf<MDB_val>())
+        
 
     let mdb_env_create () : MDB_env =
         let mutable env = IntPtr.Zero
         check(Native.mdb_env_create(&env))
         assert (IntPtr.Zero <> env)
+        mdb_assertions env
         env
 
     /// note: give size here in megabytes, not bytes
