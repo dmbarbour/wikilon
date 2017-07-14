@@ -21,9 +21,9 @@ Initial configuration of Wikilon requires the -admin password, but the admin
 can create other users with administrative authorities. This admin password
 is valid only until the process restarts.
 
-Wikilon does not directly support TLS. Use a reverse proxy such as NGINX to
-wrap local Wikilon connections with SSL/TLS/HTTPS. IP 0.0.0.0 is a wildcard,
-but one should consider security implications.
+Wikilon does not directly support TLS. Use a reverse proxy to wrap the local
+Wikilon connections with SSL/TLS/HTTPS. IP 0.0.0.0 is a wildcard, but one
+should consider security implications.
 """
 
 type Args = {
