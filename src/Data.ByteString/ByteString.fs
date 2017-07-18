@@ -9,10 +9,11 @@ module ByteString =
 
     /// A ByteString represents an immutable slice of a byte array.
     [< CustomEquality; CustomComparison; Struct >]
-    type ByteString internal (arr : byte[], off : int, len : int) =
-        member x.UnsafeArray = arr 
-        member x.Offset = off
-        member x.Length = len
+    type ByteString =
+        val UnsafeArray : byte []
+        val Offset : int
+        val Length : int
+        internal new (arr,off,len) = { UnsafeArray = arr; Offset = off; Length = len }
         // Note: current .Net VM size limit (2017) is about 2GB.
 
         member inline x.Item (ix : int) : byte = 

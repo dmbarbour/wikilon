@@ -20,9 +20,10 @@ module LMDB =
     type size_t = unativeint    // 
 
     [< Struct; StructLayoutAttribute(LayoutKind.Sequential) >]
-    type MDB_val(size : size_t, pdata : nativeint) =
-        member x.Size = size
-        member x.Data = pdata
+    type MDB_val =
+        val size : size_t
+        val data : nativeint
+        new(s,d) = { size = s; data = d }
 
     let defaultMode : mdb_mode_t = 0o660
 
@@ -62,6 +63,12 @@ module LMDB =
 
         [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
         extern int mdb_env_open(MDB_env env, string path, uint32 flags, mdb_mode_t mode);
+
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern void mdb_env_close(MDB_env env);
+
+        [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
+        extern int mdb_env_sync(MDB_env env, int force); 
 
         [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
         extern int mdb_env_set_mapsize(MDB_env env, size_t size);
@@ -140,6 +147,12 @@ module LMDB =
     let mdb_env_open (env : MDB_env) (path : string) (flags : uint32) =
         check(Native.mdb_env_open(env,path,flags,defaultMode))
 
+    let mdb_env_close (env : MDB_env) : unit =
+        Native.mdb_env_close(env)
+
+    let mdb_env_sync (env : MDB_env) : unit =
+        check(Native.mdb_env_sync(env,1))
+
     let mdb_readwrite_txn_begin (env : MDB_env) : MDB_txn =
         let mutable txn = IntPtr.Zero
         check(Native.mdb_txn_begin(env, IntPtr.Zero, 0u, &txn))
@@ -181,10 +194,10 @@ module LMDB =
 
     // copy an unmanaged MDB_val to a managed byte array
     let copyVal (v : MDB_val) : byte[] =
-        let len = int (v.Size)
-        assert ((0 <= len) && (v.Size = unativeint len))
+        let len = int (v.size)
+        assert ((0 <= len) && (v.size = unativeint len))
         let arr : byte[] = Array.zeroCreate len
-        Marshal.Copy(v.Data, arr, 0, len)
+        Marshal.Copy(v.data, arr, 0, len)
         arr
 
     let inline val2bytes (v : MDB_val) : ByteString =

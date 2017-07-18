@@ -45,15 +45,7 @@ module Hash =
         Array.init 256 memb 
 
     // test whether an element is valid within a UTF8 or ASCII hash.
-    let validHashElem (n : int) : bool = 
-        if ((0 <= n) && (n < alphabool.Length))
-            then alphabool.[n]
-            else false
-
-    /// test whether a byte array currently looks like a hash
-    let validHash (b : byte[]) : bool =
-        if (validHashLen <> b.Length) then false else
-        not (Array.exists (int >> validHashElem >> not) b)
+    let validHashByte (b : byte) : bool = alphabool.[int b] 
 
     // encode forty bits from src to dst.
     let inline private b32e40 (dst : byte[]) (src : byte[]) off =
@@ -83,9 +75,8 @@ module Hash =
 
     // perform a base32 encoding of the Blake2 hash.
     let private b32enc (src : byte[]) : byte[] =
-        assert (hashByteLen = src.Length)
+        assert ((35 = src.Length) && (56 = validHashLen))
         let dst = Array.zeroCreate validHashLen
-        // seven blocks of forty bits = 280 bits
         do b32e40 dst src 6
         do b32e40 dst src 5
         do b32e40 dst src 4
@@ -93,7 +84,6 @@ module Hash =
         do b32e40 dst src 2
         do b32e40 dst src 1
         do b32e40 dst src 0
-        assert (hashBitLen = 280)
         dst
 
     /// basic bytestring hash
