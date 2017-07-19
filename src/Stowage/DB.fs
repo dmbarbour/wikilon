@@ -4,6 +4,9 @@ open System.Threading
 open System.Threading.Tasks
 open Data.ByteString
 open Stowage.Internal.LMDB
+open Microsoft.FSharp.NativeInterop
+
+#nowarn "9" // unsafe use of NativePtr
 
 /// Stowage is a key-value database that features garbage collected
 /// references between binaries via secure hashes. 
@@ -18,7 +21,8 @@ open Stowage.Internal.LMDB
 /// garbage collection, enables a stowage database to represent larger 
 /// than memory persistent data structures in a purely functional style.
 /// It also supports simple structure sharing, and should be relatively
-/// easy to shard.
+/// easy to shard in a distributed system. This doubles as a functional
+/// virtual memory model.
 module DB =
 
     /// A Resource is identified by a secure hash (see Stowage.Hash)
@@ -53,27 +57,41 @@ module DB =
     module internal Internal =
 
         // fragment of hash used for stowage keys
-        let private stowKeyLen = Hash.validHashLen / 2
+        let stowKeyLen = Hash.validHashLen / 2
         type StowKey = ByteString // of stowKeyLen
-
-        let rscHashToStowKey (rsc : RscHash) : StowKey =
-            assert(Hash.validHashLen = rsc.Length)
-            Data.ByteString.take stowKeyLen rsc
 
         // I don't favor use of F# maps, but they're convenient to
         // help get started more swiftly. Later I might replace with
         // a CritBitTree, suitable for larger keys.
-        type Stowage = Map<RscHash,ByteString>      // recent stowage requests
-        type RC = nativeint                         // reference count type
-        type EphTbl = Map<StowKey, RC>              // ephemeral roots
         type KVMap = Map<ByteString, ByteString>    // key-value data (read or write)
+        type Stowage = Map<RscHash,ByteString>      // recent stowage requests
 
-        // A commit operation consists of:
-        //  the set of values read or assumed
-        //  the set of values written 
-        //  a resource for async success/failure
-        type AsyncCommitResult = TaskCompletionSource<bool>
-        type Commit = (KVMap * KVMap * AsyncCommitResult)
+        // An ephemeral roots table tracks a conservative set of elements
+        // that we must preserve even if they lack persistent references.
+        // This is represented by a map of hashes to reference counts.
+        type EphID = uint64                         // via FNV-1a hash
+        type RC = nativeint                         // reference count type
+        type EphRoots = Map<EphID, RC>              // ephemeral roots
+
+        let fnv_prime = 1099511628211UL
+        let fnv_offset_basis = 14695981039346656037UL
+        let fnv_accum h b = ((h ^^^ (uint64 b)) * fnv_prime)
+        let rscEphID (rsc : RscHash) : EphID =
+            assert(Hash.validHashLen = rsc.Length)
+            let stowKey = Data.ByteString.take stowKeyLen rsc
+            Data.ByteString.fold fnv_accum fnv_offset_basis stowKey
+        let ptrEphID (p : nativeptr<byte>) : EphID =
+            let mutable h = fnv_offset_basis
+            for ix = 0 to (stowKeyLen - 1) do
+                let b = NativePtr.get p ix
+                h <- fnv_accum h b
+            h
+
+        // Each commit consists of:
+        //  a set of values read (or assumed) to validate
+        //  a set of values to be written 
+        //  a task completion resource to report success or failure
+        type Commit = (KVMap * KVMap * TaskCompletionSource<bool>)
 
         // Readlock state is essentially a reader-count with an event
         // for when we reach zero readers.
@@ -90,7 +108,6 @@ module DB =
 
         type DB =
             { 
-                db_lock : FileStream    
                 db_env  : MDB_env     
                 db_data : MDB_dbi     // user string -> data
                 db_stow : MDB_dbi     // secure hash -> data
@@ -98,15 +115,12 @@ module DB =
                 db_zero : MDB_dbi     // hashes with zero refct
 
                 mutable db_rdlock : ReadLock        // current read-lock (updated per frame).
-                mutable db_ephtbl : EphTbl          // ephemeral hash roots
+                mutable db_ephtbl : EphRoots          // ephemeral hash roots
                 mutable db_newrsc : Stowage         // pending stowage requests
                 mutable db_commit : Commit list     // pending commit requests
+
+                db_fini : System.Object  // extra finalizer
             }
-            // for graceful shutdown
-            override db.Finalize() =
-                mdb_env_sync db.db_env
-                mdb_env_close db.db_env
-                db.db_lock.Dispose()
 
         // the DB will have a dedicated writer thread.
         // the DB object serves mutex and pulse/wait signal, via Monitor
@@ -123,7 +137,7 @@ module DB =
                 Monitor.PulseAll(db))
 
 
-        // Perform operation while holding read lock.
+        // Perform operation while holding reader TX.
         //
         // LMDB with NOLOCK is essentially a frame-buffered database.
         // At most times, we have two valid frames. During commit, we
@@ -134,81 +148,55 @@ module DB =
         //
         // We can assume most readers only hold the lock briefly, and
         // hence our writer very rarely waits.
-        let inline withReadLock (db : DB) (operation : unit -> 'x) : 'x =
-                let rdlock = lock db (fun () -> 
-                        // lock prevents advanceReaderFrame during Acquire
-                        db.db_rdlock.Acquire() 
-                        db.db_rdlock)
-                try operation ()
-                finally rdlock.Release()
+        let inline withRTX (db : DB) (action : MDB_txn -> 'x) : 'x =
+            let rdlock = lock db (fun () -> 
+                // lock prevents advanceReaderFrame during Acquire
+                db.db_rdlock.Acquire() 
+                db.db_rdlock)
+            try let tx = mdb_rdonly_txn_begin db.db_env
+                try action tx
+                finally mdb_txn_commit tx // release MDB_txn memory
+            finally rdlock.Release()
 
         let advanceReaderFrame (db : DB) : ReadLock = lock db (fun () ->
-                let oldFrame = db.db_rdlock
-                db.db_rdlock <- new ReadLock()
-                oldFrame)
+            let oldFrame = db.db_rdlock
+            db.db_rdlock <- new ReadLock()
+            oldFrame)
 
         // utilities to work with ephemeron tables
-        let ephUpd (etb : EphTbl) (k : StowKey) (rcu : RC) : EphTbl =
-            assert((0n <> rcu) && (stowKeyLen = k.Length))
+        let ephInc (etb : EphRoots) (k : EphID) (rcu : RC) : EphRoots =
             match Map.tryFind k etb with
               | None -> Map.add k rcu etb
-              | Some rc0 -> 
-                    let rc' = (rcu + rc0)
-                    if (0n = rc') then Map.remove k etb else
-                    Map.add k rc' etb
+              | Some rc0 -> Map.add k (rcu + rc0) etb
 
-        let ephMerge (upd : EphTbl) (etb0 : EphTbl) : EphTbl =
-            Map.fold (fun etb k rcu -> ephUpd etb k rcu) etb0 upd
+        let ephDec (etb : EphRoots) (k : EphID) (rcu : RC) : EphRoots =
+            match Map.tryFind k etb with
+              | None -> failwith "negative refct"
+              | Some rc0 ->
+                    assert (rc0 >= rcu)
+                    let rc' = rc0 - rcu
+                    if (0n = rc') then Map.remove k etb
+                                  else Map.add k rc' etb 
 
-        let ephClear (upd : EphTbl) (etb0 : EphTbl) : EphTbl =
-            Map.fold (fun etb k rcu -> ephUpd etb k (-rcu)) etb0 upd
+        let inline ephAdd (upd : EphRoots) (etb0 : EphRoots) : EphRoots =
+            Map.fold ephInc etb0 upd
 
-        let inline dbUpdEphTbl (db : DB) (fn : EphTbl -> EphTbl) : unit =
+        let inline ephRem (upd : EphRoots) (etb0 : EphRoots) : EphRoots =
+            Map.fold ephDec etb0 upd
+
+        let inline dbUpdEphRoots (db : DB) (fn : EphRoots -> EphRoots) : unit =
             lock db (fun () -> (db.db_ephtbl <- fn db.db_ephtbl))
 
-        let inline dbInsEph (db : DB) (k : StowKey) : unit =
-            dbUpdEphTbl db (fun etb -> ephUpd etb k 1n) 
+        let inline dbInsEph (db : DB) (k : EphID) : unit =
+            dbUpdEphRoots db (fun etb -> ephInc etb k 1n) 
 
-        let inline dbMergeEphTbl (db : DB) (upd : EphTbl) : unit =
-            if(not (Map.isEmpty upd)) then dbUpdEphTbl db (ephMerge upd)
+        let inline dbAddEphRoots (db : DB) (upd : EphRoots) : unit =
+            if(not (Map.isEmpty upd)) then dbUpdEphRoots db (ephAdd upd)
 
-        let inline dbClearEphTbl (db : DB) (upd : EphTbl) : unit =
-            if(not (Map.isEmpty upd)) then dbUpdEphTbl db (ephClear upd)
+        let inline dbRemEphRoots (db : DB) (upd : EphRoots) : unit =
+            if(not (Map.isEmpty upd)) then dbUpdEphRoots db (ephRem upd)
 
-        type TX =
-            {   tx_db           : DB
-                mutable tx_rd   : KVMap
-                mutable tx_ws   : KVMap
-                mutable tx_eph  : EphTbl
-            }
-            member private tx.ClearEph() : unit = 
-                dbClearEphTbl (tx.tx_db) (tx.tx_eph)
-                tx.tx_eph <- Map.empty
-            override tx.Finalize() = tx.ClearEph()
-            interface System.IDisposable with
-                member tx.Dispose() = 
-                    tx.ClearEph()
-                    System.GC.SuppressFinalize tx
-
-        let newTX (db : DB) : TX =
-            { tx_db = db 
-              tx_rd = Map.empty
-              tx_ws = Map.empty
-              tx_eph = Map.empty
-            }
-
-        let dupTX (tx : TX) : TX =
-            dbMergeEphTbl (tx.tx_db) (tx.tx_eph)
-            { tx_db = tx.tx_db
-              tx_rd = tx.tx_rd
-              tx_ws = tx.tx_ws
-              tx_eph = tx.tx_eph 
-            }
-
-    /// Stowage database object
-    ///
-    /// Operations on the DB are multi-thread safe, and non-blocking
-    /// unless otherwise stated.
+    /// Stowage database object (abstract)
     [< Struct >]
     type DB =
         val internal Impl : Internal.DB
@@ -216,39 +204,136 @@ module DB =
 
     /// Transaction object
     ///
-    /// A TX uses some mutable state without locking, so is safe only
-    /// if used from one thread at a time. A transaction doubles as an
-    /// ephemeral root for stowage resources.
-    [< Struct >]
-    type TX =
-        val internal Impl : Internal.TX
-        member tx.DB with get () = DB (tx.Impl.tx_db)
-        internal new (txImpl : Internal.TX) = { Impl = txImpl }
-        interface System.IDisposable with
-            member tx.Dispose() = 
-                (tx.Impl :> System.IDisposable).Dispose()
-
-    /// Create a fresh transaction on the database.
-    let newTX (db : DB) : TX = new TX(Internal.newTX db.Impl)
-
-    /// Deep-clone a transaction.
-    ///  Significantly, this copies the ephemeral root set.
-    let dupTX (tx : TX) : TX = new TX (Internal.dupTX tx.Impl)
-
-    /// Initiate background GC on the database (Asynchronous)
+    /// A transaction tracks reads, writes, and ephemeral roots for
+    /// allocated secure hash resources. Reads aren't guaranteed to
+    /// be snapshot consistent (see readKeys), but commit will fail
+    /// if any key has been updated between time of read and commit. 
+    /// Hence, transactions that successfully commit are serializable.
+    /// Isolation may be reduced explicitly (via assumeKey).
     ///
-    /// The writer does incremental GC with every batch, so normally
-    /// this explicit GC is unnecessary. But calling gcDB_init can
-    /// force background GC when the writer is otherwise inactive.
-    let gcDB_init (db : DB) : Task<bool> =
-        let asyncResult = new TaskCompletionSource<bool>()
-        Internal.dbCommit (db.Impl) (Map.empty,Map.empty,asyncResult)
-        asyncResult.Task
+    /// Stowage transactions are optimistic. When conflicts occur,
+    /// progress is guaranteed for at least one transaction. But the
+    /// client should control access to high-contention keys, avoid
+    /// conflict where possible.
+    /// 
+    /// Note: a TX is not thread safe. If used from multiple threads,
+    /// the client must ensure exclusive access.
+    type TX =
+        val         internal db : Internal.DB
+        val mutable internal rd : Internal.KVMap
+        val mutable internal ws : Internal.KVMap
+        val mutable internal eph : Internal.EphRoots
+        new (db : DB) =
+            { db = db.Impl
+              rd = Map.empty
+              ws = Map.empty
+              eph = Map.empty
+            }
+        member tx.DB with get () = DB (tx.db)
+        member private tx.ClearEphRoots() : unit =
+            Internal.dbRemEphRoots (tx.db) (tx.eph)
+            tx.eph <- Map.empty
+        override tx.Finalize() = tx.ClearEphRoots()
+        interface System.IDisposable with
+            member tx.Dispose() =
+                tx.ClearEphRoots()
+                System.GC.SuppressFinalize tx
 
-    /// Synchronous GC. 
+    /// create a new transaction on the database
+    let newTX (db : DB) : TX = new TX(db)
+
+    /// deep-copy an existing transaction on the database
+    let dupTX (tx : TX) : TX =
+        Internal.dbAddEphRoots (tx.db) (tx.eph)
+        let clone = newTX (tx.DB)
+        clone.eph <- tx.eph
+        clone.rd <- tx.rd
+        clone.ws <- tx.ws
+        clone
+    
+    /// Initiate background GC of Resources
+    ///
+    /// The writer thread performs incremental GC with every batch.
+    /// So, normally, you don't need to request GC. But it may be
+    /// convenient in some contexts.
+    let gcDB_async (db : DB) : unit = 
+        lock (db.Impl) (fun () -> Monitor.PulseAll(db.Impl))
     let gcDB (db : DB) : unit =
-        let t = gcDB_init db
-        if not (t.Result) then failwith "Asynchronous Stowage GC failure"
+        let tcs = new TaskCompletionSource<bool>()
+        Internal.dbCommit (db.Impl) (Map.empty,Map.empty,tcs)
+        ignore tcs.Task.Result
+
+    let inline private readKeyDB' (db : Internal.DB) (txn : MDB_txn) (k : Key) : Val =
+        let vopt = mdb_get txn (db.db_data) k
+        defaultArg vopt (Data.ByteString.empty)
+
+    /// Read a Key directly from DB.
+    let readKeyDB (db : DB) (k : Key) : Val =
+        Internal.withRTX db.Impl (fun txn -> 
+            readKeyDB' db.Impl txn k)
+
+    /// Read multiple keys from DB. Guarantees snapshot consistency.
+    let readKeysDB (db : DB) (ks : Key list) : Val list =
+        Internal.withRTX db.Impl (fun txn -> 
+            List.map (readKeyDB' db.Impl txn) ks)
+
+    // todo: read key (or keys) from TX
+
+    /// Write a Key into the TX
+    ///
+    /// This is a trivial operation since it only writes the key into
+    /// the current transaction. Only upon commit is the value written
+    /// to the DB layer. Write the empty bytestring for deletion.
+    ///
+    /// Note: further reads on a written Key return the written value.
+    let writeKey (tx : TX) (k : Key) (v : Val) : unit =
+        assert (isValidKey k)
+        tx.ws <- Map.add k v tx.ws
+
+    /// Set the Read Assumption for a Key
+    ///
+    /// A read assumption is a value we verify has not changed upon
+    /// commit. Normally, this is adjusted upon read and commit. But
+    /// explicit manipulations may be useful to weaken isolation of
+    /// transactions.
+    let assumeKey (tx : TX) (k : Key) (vopt : Val option) : unit =
+        match vopt with
+          | None -> tx.rd <- Map.remove k tx.rd
+          | Some v -> tx.rd <- Map.add k v tx.rd
+
+    /// Diagnose a transaction.
+    ///
+    /// Return a list of Keys for which the read assumption is invalid.
+    let check (tx : TX) : Key list =
+        raise (System.NotImplementedException "todo: checkTX")
+
+    /// Commit (asynchronous)
+    ///
+    /// This initiates commit of a transaction, sending the data to
+    /// a background writer thread and immediately returning a Task
+    /// that will complete concurrently. The Task.Result will be true
+    /// if commit succeeds, false if it fails for any reason. 
+    ///
+    /// Transactions are batched and written together, modulo conflict.
+    /// This amortizes the write overheads, enabling a large number of
+    /// writes so long as they occur on different volumes of keys. It
+    /// is left to clients to avoid conflict, e.g. by use of channels 
+    /// to control access to high-contention keys. Even when conflicts
+    /// occur, progress is guaranteed. 
+    ///
+    /// A transaction may be committed more than once. Doing so will
+    /// essentially model checkpointing, where information committed
+    /// successfully is not lost. With asynchronous commit, multiple
+    /// checkpoints may frequently be batched together.
+    ///
+    /// Read-only transactions will be verified immediately, without
+    /// waiting on the writer.
+    ///    
+    let commitAsync (tx : TX) : Task<bool> =
+        raise (System.NotImplementedException "TODO: commit")
+
+    /// Synchronous commit.
+    let inline commit (tx : TX) : bool = (commitAsync tx).Result
    
 
 
@@ -293,16 +378,25 @@ module DB =
         mdb_env_set_maxdbs env 4
         let envFlags = MDB_NOSYNC ||| MDB_WRITEMAP ||| MDB_NOTLS ||| MDB_NOLOCK
         mdb_env_open env "." envFlags
+
+        // introduce a DB finalizer
+        let dbFini = { new System.Object() with
+                        override x.Finalize() =
+                            mdb_env_sync env
+                            mdb_env_close env
+                            lock.Dispose()
+                     }
+
+        // open named databases
         let txn = mdb_readwrite_txn_begin env
         let dbData = mdb_dbi_open txn "@" MDB_CREATE // root key-value
         let dbStow = mdb_dbi_open txn "$" MDB_CREATE // stowed resources
         let dbRfct = mdb_dbi_open txn "#" MDB_CREATE // positive refcts
-        let dbZero = mdb_dbi_open txn "0" MDB_CREATE // keys with zero refct
+        let dbZero = mdb_dbi_open txn "0" MDB_CREATE // zero refcts
         mdb_txn_commit txn
 
         let db : Internal.DB = 
-            { db_lock = lock
-              db_env  = env
+            { db_env  = env
               db_data = dbData
               db_stow = dbStow
               db_rfct = dbRfct
@@ -311,6 +405,7 @@ module DB =
               db_ephtbl = Map.empty
               db_newrsc = Map.empty
               db_commit = List.empty
+              db_fini = dbFini
             }
         // TODO: init writer thread
         new DB(db)

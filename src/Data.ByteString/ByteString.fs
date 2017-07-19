@@ -154,13 +154,13 @@ module ByteString =
             mem.Write(x.UnsafeArray, x.Offset, x.Length)
         unsafeCreateA (mem.ToArray())
 
-    let inline cons (b : byte) (s : ByteString) : ByteString =
+    let cons (b : byte) (s : ByteString) : ByteString =
         let mem = Array.zeroCreate (1 + s.Length)
         do mem.[0] <- b
         do Array.blit s.UnsafeArray s.Offset mem 1 s.Length
         unsafeCreateA mem
 
-    let inline append (a : ByteString) (b : ByteString) : ByteString =
+    let append (a : ByteString) (b : ByteString) : ByteString =
         if isEmpty a then b else
         if isEmpty b then a else
         let mem = Array.zeroCreate (a.Length + b.Length)
@@ -191,7 +191,6 @@ module ByteString =
     
     /// basic left-to-right fold function.
     let inline fold f r0 s = ByteString.FoldLeft f r0 s
-
 
     /// head is the first byte, tail is all remaining bytes
     let inline head (x : ByteString) : byte = 
@@ -235,6 +234,8 @@ module ByteString =
         let l = unsafeCreate (x.UnsafeArray) (x.Offset) (stop - x.Offset)
         let r = unsafeCreate (x.UnsafeArray) (stop) (x.Length - l.Length)
         (l,r)
+    let inline takeWhileEnd f x = snd (spanEnd f x)
+    let inline dropWhileEnd f x = fst (spanEnd f x)
         
     /// conversions for other string encodings
     let inline encodeString (s : string) (e : System.Text.Encoding) = 
@@ -246,11 +247,17 @@ module ByteString =
     let inline fromString s = encodeString s System.Text.Encoding.UTF8
     let inline toString s = decodeString s System.Text.Encoding.UTF8
 
+    /// Trim excess bytes from bytestring (copy only if excess bytes).
+    /// Trimming bytes can simplify reasoning about memory usage.
+    let inline trimBytes (s : ByteString) : ByteString =
+        if (s.UnsafeArray.Length = s.Length) then s else 
+        unsafeCreateA (toArray s)
+    
 
 
-    // TODO: cons, append, concatenation
 
-// Note: An interesting related option is to model *external* byte strings,
-// e.g. via an IntPtr, perhaps with flexible dispose options. 
+
+
+
 
     
