@@ -1,23 +1,24 @@
 #nowarn "9" // disable warning for StructLayoutAttribute
 
 namespace Stowage.Internal
+open Stowage.Internal.Memory
+
 open System
 open System.Runtime.InteropServices
-open System.Security;
+open System.Security
 open Data.ByteString
 
 
 // slice of LMDB API and FFI used for Stowage
 //  I could use the LightningDB package, but I'd still mostly use
 [< SecuritySafeCriticalAttribute >]
-module LMDB =
+module internal LMDB =
     type MDB_env = nativeint    // opaque MDB_env*
     type MDB_txn = nativeint    // opaque MDB_txn*
     type MDB_dbi = uint32       // database ids are simple ints
     type MDB_cursor = nativeint // opaque MDB_cursor*
     type MDB_cursor_op = int    // an enumeration
     type mdb_mode_t = int       // Unix-style permissions
-    type size_t = unativeint    // 
 
     [< Struct; StructLayoutAttribute(LayoutKind.Sequential) >]
     type MDB_val =
@@ -103,8 +104,6 @@ module LMDB =
         [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
         extern int mdb_cursor_get(MDB_cursor cursor, MDB_val& key, MDB_val& data, MDB_cursor_op op);
 
-        
-
         // I don't need cursor put or cursor del at this time.
         // I also don't currently close or dispose of a DB.
 
@@ -177,12 +176,10 @@ module LMDB =
 
     // zero-copy get (copy neither key nor result)
     let mdb_getZC (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : MDB_val option =
-        let pin = GCHandle.Alloc(key.UnsafeArray, GCHandleType.Pinned)
-        let kAddr = (nativeint key.Offset) + pin.AddrOfPinnedObject()
-        let mutable k = MDB_val(unativeint key.Length, kAddr)
+        use pk = new PinnedByteString(key)
+        let mutable k = MDB_val(unativeint pk.Length, pk.Addr)
         let mutable v = MDB_val()
         let e = Native.mdb_get(txn, db, &k, &v)
-        pin.Free()
         if(MDB_NOTFOUND = e) then None else
         check e
         Some v
@@ -194,8 +191,9 @@ module LMDB =
 
     // copy an unmanaged MDB_val to a managed byte array
     let copyVal (v : MDB_val) : byte[] =
+        if(0un = v.size) then Array.empty else
         let len = int (v.size)
-        assert ((0 <= len) && (v.size = unativeint len))
+        assert ((0 < len) && ((unativeint len) = v.size))
         let arr : byte[] = Array.zeroCreate len
         Marshal.Copy(v.data, arr, 0, len)
         arr

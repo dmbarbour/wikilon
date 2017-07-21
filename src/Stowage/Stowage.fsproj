@@ -3,6 +3,7 @@
     <TargetFramework>netstandard1.6</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="Memory.fs" />
     <Compile Include="Hash.fs" />
     <Compile Include="LMDB.fs" />
     <Compile Include="DB.fs" />

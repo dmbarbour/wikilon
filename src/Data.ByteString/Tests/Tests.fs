@@ -3,8 +3,10 @@ module Data.ByteString.Tests
 #nowarn "988" // suppress warning for empty program
 
 open System
+open System.Runtime.InteropServices
 open Xunit
 open Data.ByteString
+
 
 [<Fact>]
 let ``empty is length zero`` () = 
@@ -111,5 +113,17 @@ let ``simple fold`` () =
     let accum s c = s + int c
     let sum = fold accum 0 (x.[3..]) 
     Assert.Equal(448, sum)
+
+[<Fact>]
+let ``pinned data access`` () =
+    let x : ByteString = (fromString "==test==").[2..5]
+    withPinnedBytes x (fun p ->
+        Assert.Equal(116uy, Marshal.ReadByte(p,0))
+        Assert.Equal(101uy, Marshal.ReadByte(p,1))
+        Assert.Equal(115uy, Marshal.ReadByte(p,2)))
+       
+        
+
+
 
 

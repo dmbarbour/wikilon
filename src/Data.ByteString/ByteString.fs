@@ -1,5 +1,7 @@
 namespace Data
 
+open System.Runtime.InteropServices
+
 // The FSharpX ByteString has errors and inefficiencies, and my issue reports
 // have been ignored for over a week, so I've rolled my own. Reluctantly.
 // Hopefully, one of these days, the F# ecosystem will mature a bit more for
@@ -252,12 +254,29 @@ module ByteString =
     let inline trimBytes (s : ByteString) : ByteString =
         if (s.UnsafeArray.Length = s.Length) then s else 
         unsafeCreateA (toArray s)
+
+    /// Convenient access to pinned bytestring data (for interop).
+    let inline withPinnedBytes (s : ByteString) (action : nativeint -> 'x) : 'x =
+        let pin = GCHandle.Alloc(s.UnsafeArray, GCHandleType.Pinned)
+        try let addr = (nativeint s.Offset) + pin.AddrOfPinnedObject()
+            action addr
+        finally pin.Free()
+
+    /// Disposable access to Pinned bytestring data.
+    ///     use ps = new PinnedByteString(s)
+    ///     ... actions with ps.Addr ...
+    [<Struct>]
+    type PinnedByteString =
+        val private Pin : GCHandle
+        val BS : ByteString
+        val Addr : nativeint
+        new(s : ByteString) =
+            let pin = GCHandle.Alloc(s.UnsafeArray, GCHandleType.Pinned)
+            let addr = (nativeint s.Offset) + pin.AddrOfPinnedObject()
+            { Pin = pin; BS = s; Addr = addr }
+        member x.Length with get() = x.BS.Length
+        interface System.IDisposable with
+            member x.Dispose() = x.Pin.Free() 
+
     
 
-
-
-
-
-
-
-    
