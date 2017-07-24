@@ -40,11 +40,11 @@ module DB =
     /// references to other binaries (see scanHashDeps).
     type Val = ByteString
 
-    /// Scan a value for likely resource hash dependencies. This is 
-    /// conservative, allowing false positives. Hashes within a value
-    /// must be separated by non-hash characters (see Stowage.Hash).
+    /// Scan a value for secure hash resource dependencies.
     ///
-    /// This function is used for conservative reference counting GC.
+    /// This conservatively finds substrings that exactly match the Hash
+    /// size and character set (cf. Stowage.Hash). Separated hashes using
+    /// spaces, braces, punctuation, parentheses, or other characters.
     let scanHashDeps (fn : 's -> RscHash -> 's) : 's -> Val -> 's =
         let rec loop s v = 
             let hv' = Data.ByteString.dropWhile (Hash.validHashByte >> not) v
@@ -122,6 +122,7 @@ module DB =
                 mutable db_ephtbl : EphRoots        // ephemeral resource roots
                 mutable db_newrsc : Stowage         // recent stowage requests
                 mutable db_commit : Commit list     // pending commit requests
+                mutable db_trygc  : bool            // incremental GC available
 
                 db_fini : System.Object  // extra finalizer
             }
@@ -132,14 +133,6 @@ module DB =
             lock db (fun () ->
                 db.db_commit <- (c :: db.db_commit)
                 Monitor.PulseAll(db))
-
-        // add stowage to the newrsc pool.  
-        let dbAddStowage (db : DB) (h : RscHash) (v : Val) : unit =
-            assert (h.Length = Hash.validHashLen)
-            lock db (fun () ->
-                db.db_newrsc <- Map.add h v (db.db_newrsc)
-                Monitor.PulseAll(db))
-
 
         // Perform operation while holding reader TX.
         //
@@ -168,7 +161,7 @@ module DB =
             oldFrame)
 
         let inline getValZC (db : DB) (rtx : MDB_txn) (k : Key) : MDB_val =
-            assert(isValidKey k)
+            if not (isValidKey k) then invalidArg "k" "invalid key" else
             defaultArg (mdb_getZC rtx (db.db_data) k) (MDB_val()) 
 
         let inline readKeyDB (db : DB) (rtx : MDB_txn) (k : Key) : Val =
@@ -220,14 +213,21 @@ module DB =
         let inline dbUpdEphRoots (db : DB) (fn : EphRoots -> EphRoots) : unit =
             lock db (fun () -> (db.db_ephtbl <- fn db.db_ephtbl))
 
-        let dbInsEph (db : DB) (k : EphID) : unit =
-            dbUpdEphRoots db (fun etb -> ephInc etb k 1n) 
-
         let dbAddEphRoots (db : DB) (upd : EphRoots) : unit =
             if(not (Map.isEmpty upd)) then dbUpdEphRoots db (ephAdd upd)
 
         let dbRemEphRoots (db : DB) (upd : EphRoots) : unit =
             if(not (Map.isEmpty upd)) then dbUpdEphRoots db (ephRem upd)
+
+        // add stowage to both the newrsc pool and ephemeral root.
+        let dbAddStowage (db : DB) (h : RscHash) (v : Val) : EphID =
+            assert (h.Length = Hash.validHashLen)
+            let k = rscEphId h
+            lock db (fun () ->
+                db.db_newrsc <- Map.add h v (db.db_newrsc)
+                db.db_ephtbl <- ephInc (db.db_ephtbl) k 1n 
+                Monitor.PulseAll(db))
+            k
 
         let tryFindRscMDB (db:DB) (rtx:MDB_txn) (h:RscHash) : MDB_val option =
             if(h.Length <> Hash.validHashLen) then invalidArg "h" "bad resource ID" else
@@ -247,7 +247,27 @@ module DB =
                     let data' = v.data + nativeint rlen
                     Some(MDB_val(size',data'))
 
+        let dbHasWriterWork (db:DB) : bool =
+                not (List.isEmpty (db.db_commit)) ||
+                not (Map.isEmpty (db.db_newrsc)) ||
+                db.db_trygc // incremental GC effort
 
+        // Our DB thread will continuously process commits and stowage.
+        let rec dbThreadLoop (db:DB) (rlock:ReadLock) : unit = 
+            let (newRsc, commits) = lock db (fun () ->
+                    while(not (dbHasWriterWork db)) do ignore(Monitor.Wait(db))
+                    let result = (db.db_newrsc, db.db_commit)
+                    // newrsc is cleared after commit
+                    // trygc is updated every round
+                    db.db_commit <- List.empty
+                    result)
+
+            let rlock' = advanceReaderFrame db
+            db.db_trygc <- false // should depend on GC progress
+            dbThreadLoop db rlock'
+
+
+        let dbThreadStart (db:DB) : unit = dbThreadLoop db (advanceReaderFrame db)
 
     /// Stowage database object (abstract)
     [< Struct >]
@@ -283,21 +303,26 @@ module DB =
     /// Atomic database update (asynchronous)
     /// 
     /// This delivers read assumptions and writes to a writer thread.
-    /// The writer will verify the reads and perform the writes. Many
-    /// concurrent updates can be processed as a larger batch, which
-    /// amortizes the disk synchronization overheads.
+    /// The writer will verify the reads and, if they are valid, will
+    /// perform the writes. The result is true only if all reads are
+    /// valid and the writes are successfully synchronized to disk.
     ///
-    /// In case of conflict, progress is guaranteed, but not fairness.
-    /// Clients should control conflict by controlling access to keys
-    /// where contention is observed or anticipated.
+    /// The writer will tend to batch updates that are provided around
+    /// the same time, i.e. anything provided while the writer was busy
+    /// with the prior batch. This helps amortize disk synchronization
+    /// overheads among concurrent writers.
     ///
-    /// Note: updates with invalid keys will simply fail.
+    /// In case of conflict, the order of commit determines success.
+    /// Thus, progress is guaranteed, but failed updates may need to
+    /// retry, and fairness is not assured. Clients should control
+    /// access to high-contention keys using an independent locks or
+    /// queues system.
     let atomicUpdateDB_async (db : DB) (reads : KVMap) (writes : KVMap) : Task<bool> =
         let tcs = new TaskCompletionSource<bool>()
         I.dbCommit db.Impl (reads, writes, tcs)
         tcs.Task
 
-    /// Atomic compare and update (synchronous)
+    /// Atomic compare and update (synchronous).
     let inline atomicUpdateDB (db : DB) (reads : KVMap) (writes : KVMap) : bool =
         (atomicUpdateDB_async db reads writes).Result
 
@@ -337,36 +362,31 @@ module DB =
     ///
     /// A Stowage transaction has a set of read assumptions and pending
     /// writes in memory. Upon commit, the `atomicUpdateDB` operation
-    /// is performed. 
-    /// and pending writes, and performs `atomicUpdateDB` upon commit.
-    /// Stowage transactions are optimistic, allowing for failure upon
-    /// commit. Stowage is optimized for transactions with a few small
-    /// reads and writes, with bulky data being shifted to the secure
-    /// hash resources layer.
+    /// is performed. Additionally, each transaction provides ephemeral 
+    /// roots for new secure hash resources, providing opportunity to
+    /// commit and root the new data.
     ///
-    /// Transactions serve another very important role: ephemeral roots
-    /// for secure hash resources. The transaction ensures newly stowed
-    /// resources aren't immediately GC'd, and prevents GC of resources
-    /// discovered via readKey operations until the TX leaves scope (via
-    /// Dispose() or Finalize()). This involves scanHashDeps for every
-    /// key read through a transaction.
+    /// Stowage is designed for small read-write transactions, with the
+    /// bulk of data being managed via the secure hash resource layer.
+    /// Also, transactions should be short-lived because a long-running
+    /// transaction is more likely to conflict and fail. Clients should
+    /// control access to high-contention keys. 
     ///
-    /// An important consideration is that snapshot consistency is not
-    /// guaranteed. A transaction can read inconsistent data, for example:
+    /// An important consideration is that snapshot isolation is not
+    /// guaranteed. Transactions may read inconsistent data. Example:
     ///
     ///         Alice        Bob
     ///         Reads A
     ///                      Updates A,B
     ///         Reads B
     ///
-    /// In this case, Alice will read B inconsistent with A. This will
-    /// be caught upon commit. But until commit, Alice will be working
-    /// with inconsistent data. This can usually be mitigated with the
-    /// atomic `readKeys` or by simply designing so inconsistent data
-    /// within the transaction is not fatal.
-    /// 
-    /// Note: if used from multiple threads, the client must lock the TX
-    /// or otherwise ensure exclusive access.
+    /// In this case, Alice will read B inconsistent with A. Further, any
+    /// secure hash resources rooted by A may be concurrently GC'd, such 
+    /// that loadRsc fails. This will also cause Alice's commit to fail.
+    /// But before commit, we should handle inconsistencies gracefully.
+    ///
+    /// A TX is stateful and assumes exclusive access by a thread, but
+    /// is not specific to any thread.
     type TX =
         val         internal db : I.DB
         val mutable internal rd : KVMap
@@ -381,35 +401,6 @@ module DB =
         member tx.DB with get () = DB (tx.db)
         member tx.Reads with get () = tx.rd
         member tx.Writes with get () = tx.ws
-        member private tx.ReadNewKey (k:Key) : Val =
-            if not (isValidKey k) then invalidArg "k" "invalid key" else
-            I.withRTX (tx.db) (fun rtx ->
-                let v = I.readKeyDB tx.db rtx k
-                tx.rd <- Map.add k v tx.rd
-                let ephup = I.accumValEphs Map.empty v
-                I.dbAddEphRoots (tx.db) (ephup)
-                tx.eph <- I.ephAdd ephup tx.eph
-                v)
-        member tx.Read (k:Key) : Val =
-            match Map.tryFind k tx.ws with
-              | Some v -> v
-              | None -> 
-                    match Map.tryFind k tx.rd with
-                      | Some v -> v
-                      | None -> tx.ReadNewKey k
-        member tx.Write (k:Key) (v:Val) : unit =
-            if not (isValidKey k) then invalidArg "k" "invalid key" else
-            tx.ws <- Map.add k v tx.ws
-        member tx.Item 
-            with get (k:Key) : Val = tx.Read k
-            and  set (k:Key) (v:Val) : unit = tx.Write k v
-        member tx.CommitAsync () : Task<bool> = 
-            let result = atomicUpdateDB_async (tx.DB) (tx.Reads) (tx.Writes)
-            // assume success for checkpointing commits
-            tx.rd <- Map.fold (fun m k v -> Map.add k v m) tx.rd tx.ws
-            tx.ws <- Map.empty
-            result
-        member tx.Commit () : bool = tx.CommitAsync().Result
         member private tx.ClearEphRoots() : unit =
             I.dbRemEphRoots (tx.db) (tx.eph)
             tx.eph <- Map.empty
@@ -431,72 +422,130 @@ module DB =
         clone.ws <- tx.ws
         clone
 
-    /// Read value associated with a key via the TX.
-    ///
-    /// If the TX already assumes an associated value for the key,
-    /// e.g. due to prior read or write, the assumed value will be
-    /// returned. Otherwise, this access the DB. Secure hashes in
-    /// the value will be scanned and preserved against concurrent
-    /// destruction.
-    ///
-    /// Transa
-    ///
-    /// This will reuse a value assumed by the TX if the same Key is
-    /// used multiple times. Otherwise, we'll look up the DB value.
-    /// A consequence of this design: we lack snapshot consistency.
-    /// Keys read at different times may correspond to different DB
-    /// states. We'll ensure the TX is serializable upon commit, but
-    /// if you need snapshot consistency, consider 'readKeys'. 
-    ///
-    /// Every key has a value, defaulting to the empty bytestring.
-    let inline readKey (tx : TX) (k : Key) : Val = tx.Read k
+    /// Commit a transaction (asynchronous).
+    ///   Essentially just calls atomicUpdateDB_async
+    let inline commit_async (tx:TX) : Task<bool> =
+        atomicUpdateDB_async (tx.DB) (tx.Reads) (tx.Writes)
 
-    /// Write a Key into the TX
+    /// Commit a transaction (synchronous).
+    let inline commit (tx:TX) : bool = (commit_async tx).Result
+
+    /// Checkpoint a transaction (asynchronous).
+    ///
+    /// This performs an asynchronous commit, but also modifies the TX
+    /// state to support further updates and checkpoints of the TX. It
+    /// is possible for multiple checkpoints to be batched together, so
+    /// that intermediate states are not written to disk.
+    let checkpoint_async (tx:TX) : Task<bool> =
+        let result = commit_async tx
+        tx.rd <- Map.fold (fun m k v -> Map.add k v m) tx.rd tx.ws
+        tx.ws <- Map.empty
+        result
+
+    /// Checkpoint a transaction (synchronous).
+    let inline checkpoint (tx:TX) : bool = (checkpoint_async tx).Result
+
+    let private readKeyOld (tx:TX) (k:Key) : Val option =
+        let wv = Map.tryFind k tx.ws
+        if Option.isSome wv then wv else
+        Map.tryFind k tx.rd
+
+    let private readKeyNew (tx:TX) (rtx:MDB_txn) (k:Key) : Val =
+        let v = I.readKeyDB tx.db rtx k
+        tx.rd <- Map.add k v tx.rd
+        v
+
+    /// Read value associated with key via TX.
+    ///
+    /// If the TX assumes a value due to prior read or write, that
+    /// value is returned. Otherwise, this will access the DB.
+    let readKey (tx:TX) (k:Key) : Val =
+        match readKeyOld tx k with
+          | Some v -> v
+          | None -> I.withRTX tx.db (fun rtx -> readKeyNew tx rtx k)
+
+    /// Read multiple keys from TX.
+    ///
+    /// Ensures snapshot isolation for keys initially read together.
+    /// This is weaker than full snapshot isolation of a TX, but it
+    /// is sufficient to mitigate problematic inconsistencies within
+    /// a transaction. 
+    let readKeys (tx:TX) (ks:Key list) : Val list =
+        I.withRTX tx.db (fun rtx -> 
+            let read k = 
+                match readKeyOld tx k with
+                  | Some v -> v
+                  | None -> readKeyNew tx rtx k
+            List.map read ks)
+
+    /// Introduce a read assumption.
+    ///
+    /// This modifies the TX as if a value for a specific key were
+    /// read. If the key has already been read and has a different
+    /// value than assumed, this raises InvalidOperationException. 
+    /// Usually, assumptions should be provided before any reads.
+    ///
+    /// Note: read assumptions don't contribute to ephemeral roots.
+    let assumeKey (tx:TX) (k:Key) (v:Val) : unit =
+        if not (isValidKey k) then invalidArg "k" "invalid key" else
+        match Map.tryFind k tx.rd with
+          | None    -> tx.rd <- Map.add k v tx.rd 
+          | Some v0 -> if (v0 <> v) then invalidOp "invalid assumption for key"
+
+    /// Write a key-value into the TX
     ///
     /// This is a trivial operation since it only writes the key into
-    /// the current transaction. Only upon commit is the value written
-    /// to the DB layer. Write the empty bytestring for deletion.
+    /// the local transaction object. Upon successful commit, the value
+    /// will be persisted to disk. Until then, it's held in memory.
     ///
     /// Note: further reads on a written Key return the written value.
-    let inline writeKey (tx : TX) (k : Key) (v : Val) : unit = tx.Write k v
-
-    /// Set the Read Assumption for a Key
-    ///
-    /// A read assumption is a value we verify has not changed upon
-    /// commit. Normally, this is adjusted upon read and commit. But
-    /// explicit manipulations may be useful to weaken isolation of
-    /// transactions.
-    let assumeKey (tx : TX) (k : Key) (vopt : Val option) : unit =
+    let writeKey (tx : TX) (k : Key) (v : Val) : unit = 
         if not (isValidKey k) then invalidArg "k" "invalid key" else
-        match vopt with
-          | None -> tx.rd <- Map.remove k tx.rd
-          | Some v -> tx.rd <- Map.add k v tx.rd
+        tx.ws <- Map.add k v tx.ws
 
-    /// Commit a transaction (asynchronous). 
+    /// load a secure hash resource into memory (see loadRscDB)
+    let inline loadRsc (tx:TX) (h:RscHash) : Val option = loadRscDB tx.DB h
+    
+    /// zero-copy access to secure hash resource (see unsafeWithRscDB)
+    let inline unsafeWithRsc (tx:TX) (h:RscHash) (action : nativeint -> int -> 'x) : 'x option =
+        unsafeWithRscDB tx.DB h action
+
+    /// Stow a value as a secure hash resource.
     ///
-    /// Internally, a transaction will assume success such that 
-    /// multiple commits can have a checkpointing behavior.
+    /// This moves a value to disk, providing a secure hash as a handle
+    /// to later access the resource in memory. The value is not held in
+    /// the TX, it is moved directly to the underlying database. The TX
+    /// maintains an ephemeral root to ensure the resource is not GC'd
+    /// before we have opportunity to commit. (Normally, resources that
+    /// are not rooted by values in the key-value layer will be GC'd.) 
+    let stowRsc (tx:TX) (v:Val) : RscHash =
+        let h = Stowage.Hash.hash v
+        let k = I.dbAddStowage tx.db h v
+        tx.eph <- I.ephInc tx.eph k 1n
+        h
+
+    (* no strong use case yet
+    /// GC ephemeral roots within a TX.
     ///
-    /// See also: atomicUpdateDB_async.
-    let inline commit_async (tx : TX) : Task<bool> = tx.CommitAsync()
-
-    /// Commit a transaction (synchronous). See commit_async.
-    let inline commit (tx : TX) : bool = tx.Commit()
-
-   
-(*
-    , readKey
-    , readKeys
-    , loadRsc, loadRscDB
-    , withRsc, withRscDB
-    , stowRsc
-    , clearRsc, clearRsc'
-    , commit, commit_async
-    , check
-    , gcDB, gcDB_async
-    , hashDeps
-*)
-
+    /// This is mostly useful for checkpointing transactions. It causes
+    /// a TX to release any ephemeral resources that are not rooted by
+    /// the TX's current state or provided as extra roots.
+    let gcEphRsc (tx:TX) (extra:seq<RscHash>) : unit =
+        let ins m h = 
+            if (h.Length <> Hash.validHashLen) then invalidArg "h" "invalid resource ID" else
+            Map.add (I.rscEphId h) 1n m
+        let insV m v = scanHashDeps ins m v
+        let insW m k v = insV m v
+        let insR m k v = if (Map.containsKey k tx.ws) then m else insV m v
+        let newEphRoots = 
+                (Map.fold insW // insert all writes
+                 (Map.fold insR  // insert keys read but not written
+                  (Seq.fold ins Map.empty // insert extra roots
+                   extra) tx.rd) tx.ws)
+        I.dbAddEphRoots tx.db ephRoots
+        I.dbRemEphRoots tx.db tx.eph
+        tx.eph <- ephRoots
+    *)
  
     let inline private withDir (p : string) (op : unit -> 'R) : 'R =
         do ignore <| System.IO.Directory.CreateDirectory(p) 
@@ -540,7 +589,6 @@ module DB =
         let dbRfct = mdb_dbi_open txn "#" MDB_CREATE // positive refcts
         let dbZero = mdb_dbi_open txn "0" MDB_CREATE // zero refcts
         mdb_txn_commit txn
-
         let db : I.DB = 
             { db_env  = env
               db_data = dbData
@@ -551,9 +599,10 @@ module DB =
               db_ephtbl = Map.empty
               db_newrsc = Map.empty
               db_commit = List.empty
+              db_trygc = true
               db_fini = dbFini
             }
-        // TODO: init writer thread
+        (new Thread(fun () -> I.dbThreadStart db)).Start()
         new DB(db)
     // TODO: 
 
