@@ -14,8 +14,8 @@ open System.Runtime.InteropServices
 /// Stowage is implemented above LMDB, a memory-mapped B-tree. Stowage
 /// transactions are optimistic and lightweight, held in memory until
 /// commit. Non-conflicting concurrent writes are batched to amortize
-/// overheads for synchronization to disk. Read-only actions never wait.
-/// Blind writes never conflict.
+/// overheads for synchronization to disk. However, in case of conflict,
+/// inconsistencies may be observed within the failing transactions.
 ///
 /// The ability to reference binaries via secure hashes, together with
 /// garbage collection, enables a stowage database to represent larger 
@@ -247,27 +247,41 @@ module DB =
                     let data' = v.data + nativeint rlen
                     Some(MDB_val(size',data'))
 
-        let dbHasWriterWork (db:DB) : bool =
-                not (List.isEmpty (db.db_commit)) ||
-                not (Map.isEmpty (db.db_newrsc)) ||
-                db.db_trygc // incremental GC effort
 
-        // Our DB thread will continuously process commits and stowage.
-        let rec dbThreadLoop (db:DB) (rlock:ReadLock) : unit = 
-            let (newRsc, commits) = lock db (fun () ->
-                    while(not (dbHasWriterWork db)) do ignore(Monitor.Wait(db))
-                    let result = (db.db_newrsc, db.db_commit)
-                    // newrsc is cleared after commit
-                    // trygc is updated every round
-                    db.db_commit <- List.empty
-                    result)
+        let dbHasWork (db:DB) : bool =
+            (db.db_trygc ||
+             not (List.isEmpty db.db_commit) ||
+             not (Map.isEmpty db.db_newrsc))
 
+        let rec dbWriterLoop (db:DB) (rlock:ReadLock) : unit =
+            let rec waitForWork () = 
+                if dbHasWork db then () else 
+                ignore (Monitor.Wait(db))
+                waitForWork ()
+            let (newRsc,revCommitLst) = lock db (fun () -> 
+                waitForWork()
+                let result = (db.db_newrsc, db.db_commit)
+                db.db_commit <- List.empty
+                db.db_trygc <- false
+                result)
+            let eph = db.db_ephtbl
+            let wtx = mdb_readwrite_txn_begin (db.db_env) 
+            let tryCommit ((rd,ws,tcs) : Commit) wb =
+                if Option.isSome (findInvalidRead db wtx wb rd)
+                    then tcs.TrySetResult(false) |> ignore; wb 
+                    else Map.fold (fun m k v -> Map.add k v m) wb ws
+            let writes = List.foldBack tryCommit revCommitLst Map.empty
+            let overwritten = Map.map (fun k _ -> readKeyDB db wtx k) writes
+            
+            
             let rlock' = advanceReaderFrame db
             db.db_trygc <- false // should depend on GC progress
-            dbThreadLoop db rlock'
+            dbWriterLoop db rlock'
 
 
-        let dbThreadStart (db:DB) : unit = dbThreadLoop db (advanceReaderFrame db)
+        let inline dbThreadStart (db:DB) : unit = 
+            dbWriterLoop db (advanceReaderFrame db)
+            
 
     /// Stowage database object (abstract)
     [< Struct >]
@@ -366,12 +380,6 @@ module DB =
     /// roots for new secure hash resources, providing opportunity to
     /// commit and root the new data.
     ///
-    /// Stowage is designed for small read-write transactions, with the
-    /// bulk of data being managed via the secure hash resource layer.
-    /// Also, transactions should be short-lived because a long-running
-    /// transaction is more likely to conflict and fail. Clients should
-    /// control access to high-contention keys. 
-    ///
     /// An important consideration is that snapshot isolation is not
     /// guaranteed. Transactions may read inconsistent data. Example:
     ///
@@ -381,12 +389,14 @@ module DB =
     ///         Reads B
     ///
     /// In this case, Alice will read B inconsistent with A. Further, any
-    /// secure hash resources rooted by A may be concurrently GC'd, such 
-    /// that loadRsc fails. This will also cause Alice's commit to fail.
-    /// But before commit, we should handle inconsistencies gracefully.
-    ///
-    /// A TX is stateful and assumes exclusive access by a thread, but
-    /// is not specific to any thread.
+    /// secure hash resources previously rooted by A may be concurrently 
+    /// GC'd after Bob's update, causing loadRsc to fail. The state change
+    /// will cause Alice's commit to fail, but before commit Alice must
+    /// handle the potential inconsistency. Alternatively, design the app
+    /// such that the conflict scenario simply does not occur.
+    /// 
+    /// A TX is not thread-safe. The normal use case is single threaded.
+    /// If used from multiple threads, you must ensure exclusive access. 
     type TX =
         val         internal db : I.DB
         val mutable internal rd : KVMap
@@ -524,29 +534,27 @@ module DB =
         tx.eph <- I.ephInc tx.eph k 1n
         h
 
-    (* no strong use case yet
-    /// GC ephemeral roots within a TX.
+    /// GC Ephemeral Roots for Secure Hash Resources
     ///
-    /// This is mostly useful for checkpointing transactions. It causes
-    /// a TX to release any ephemeral resources that are not rooted by
-    /// the TX's current state or provided as extra roots.
-    let gcEphRsc (tx:TX) (extra:seq<RscHash>) : unit =
-        let ins m h = 
-            if (h.Length <> Hash.validHashLen) then invalidArg "h" "invalid resource ID" else
-            Map.add (I.rscEphId h) 1n m
-        let insV m v = scanHashDeps ins m v
-        let insW m k v = insV m v
-        let insR m k v = if (Map.containsKey k tx.ws) then m else insV m v
-        let newEphRoots = 
-                (Map.fold insW // insert all writes
-                 (Map.fold insR  // insert keys read but not written
-                  (Seq.fold ins Map.empty // insert extra roots
-                   extra) tx.rd) tx.ws)
-        I.dbAddEphRoots tx.db ephRoots
+    /// This function assumes you have already written into the TX any
+    /// secure hash references that must be rooted, and releases the
+    /// remainder. Additionally, you may provide extra roots. This is
+    /// intended for use with some long-running transactions or cases
+    /// where you might simply use the TX as an ephemeral root set.
+    ///
+    /// Note: Unless a resource was already rooted, adding an ephemeral
+    /// root does not prevent concurrent GC. 
+    let clearEphRoots (tx:TX) (extraRoots:seq<RscHash>) : unit =
+        let ins m (h : RscHash) = 
+            if (h.Length <> Hash.validHashLen) 
+                then invalidArg "h" "invalid resource hash"
+                else Map.add (I.rscEphId h) 1n m
+        let insM m k v = scanHashDeps ins m v
+        let eph' = Map.fold insM (Seq.fold ins Map.empty extraRoots) tx.ws
+        I.dbAddEphRoots tx.db eph'
         I.dbRemEphRoots tx.db tx.eph
-        tx.eph <- ephRoots
-    *)
- 
+        tx.eph <- eph'
+
     let inline private withDir (p : string) (op : unit -> 'R) : 'R =
         do ignore <| System.IO.Directory.CreateDirectory(p) 
         let p0 = System.IO.Directory.GetCurrentDirectory()
