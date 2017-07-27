@@ -3,10 +3,12 @@
     <TargetFramework>netstandard1.6</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Memory.fs" />
     <Compile Include="Hash.fs" />
     <Compile Include="LMDB.fs" />
-    <Compile Include="DB.fs" />
+    <Compile Include="Memory.fs" />
+    <Compile Include="Types.fs" />
+    <Compile Include="Impl.fs" />
+    <Compile Include="API.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="FSharp.Core" Version="4.1.*" />

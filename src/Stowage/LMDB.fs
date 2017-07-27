@@ -1,7 +1,7 @@
 #nowarn "9" // disable warning for StructLayoutAttribute
 
-namespace Stowage.Internal
-open Stowage.Internal.Memory
+namespace Stowage
+open Stowage.Memory
 
 open System
 open System.Runtime.InteropServices
@@ -39,11 +39,10 @@ module internal LMDB =
 
     // Write Flags
     let MDB_RESERVE = 0x10000u  // reserve space for writing data
-    let MDB_NOOVERWRITE = 0x10u // return error on overwrite
 
     // Cursor Ops
-    let MDB_FIRST = 0           // first item in table
     let MDB_NEXT  = 8           // next cursor item
+    let MDB_SET_RANGE = 17      // next key after request
 
     // Transaction Flags
     let MDB_RDONLY = 0x20000u
@@ -90,10 +89,11 @@ module internal LMDB =
         extern int mdb_get(MDB_txn txn, MDB_dbi dbi, [<In>] MDB_val& key, [<Out>] MDB_val& data);
 
         [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_put(MDB_txn txn, MDB_dbi dbi, [<In>] MDB_val& key, [<In>] MDB_val& data, uint32 flags);
+        extern int mdb_put(MDB_txn txn, MDB_dbi dbi, [<In>] MDB_val& key, MDB_val& data, uint32 flags);
 
         [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >] 
-        extern int mdb_del(MDB_txn txn, MDB_dbi dbi, [<In>] MDB_val& key, [<In>] MDB_val* data);
+        extern int mdb_del(MDB_txn txn, MDB_dbi dbi, [<In>] MDB_val& key, nativeint nullData);
+            // note: not using DUPSORT in Stowage; data argument should be 0n
 
         [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
         extern int mdb_cursor_open(MDB_txn txn, MDB_dbi dbi, MDB_cursor& cursor);
@@ -102,7 +102,8 @@ module internal LMDB =
         extern void mdb_cursor_close(MDB_cursor cursor);
 
         [< DllImport("lmdb", CallingConvention = CallingConvention.Cdecl) >]
-        extern int mdb_cursor_get(MDB_cursor cursor, MDB_val& key, MDB_val& data, MDB_cursor_op op);
+        extern int mdb_cursor_get(MDB_cursor cursor, MDB_val& key, nativeint nullData, MDB_cursor_op op);
+            // currently using cursors only to browse available keys
 
         // I don't need cursor put or cursor del at this time.
         // I also don't currently close or dispose of a DB.
@@ -169,20 +170,20 @@ module internal LMDB =
     let mdb_txn_commit (txn : MDB_txn) : unit =
         check(Native.mdb_txn_commit(txn))
 
-    let mdb_dbi_open (txn : MDB_txn) (db : string) (flags : uint32) : MDB_dbi =
+    let mdb_dbi_open (txn : MDB_txn) (db : string) : MDB_dbi =
         let mutable dbi = 0u
-        check(Native.mdb_dbi_open(txn, db, flags, &dbi))
+        check(Native.mdb_dbi_open(txn, db, MDB_CREATE, &dbi))
         dbi
 
     // zero-copy get (copy neither key nor result)
     let mdb_getZC (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : MDB_val option =
-        use pk = new PinnedByteString(key)
-        let mutable k = MDB_val(unativeint pk.Length, pk.Addr)
-        let mutable v = MDB_val()
-        let e = Native.mdb_get(txn, db, &k, &v)
-        if(MDB_NOTFOUND = e) then None else
-        check e
-        Some v
+        Data.ByteString.withPinnedBytes key (fun kAddr -> 
+            let mutable mdbKey = MDB_val(unativeint key.Length, kAddr)
+            let mutable mdbVal = MDB_val()
+            let e = Native.mdb_get(txn, db, &mdbKey, &mdbVal)
+            if(MDB_NOTFOUND = e) then None else
+            check e
+            Some v)
     
     // check to see if a key already exists in the database
     // (lookup but don't copy!)
@@ -205,6 +206,78 @@ module internal LMDB =
     let inline mdb_get (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : ByteString option =
         mdb_getZC txn db key |> Option.map val2bytes
 
-  
+    // allocate space to write a value
+    let mdb_reserve (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) (len : int) : nativeint =
+        Data.ByteString.withPinnedBytes key (fun keyAddr ->
+            let mutable mdbKey = MDB_val(unativeint key.Length, keyAddr)
+            let mutable mdbVal = MDB_val(unativeint len, IntPtr.Zero)
+            check(Native.mdb_put(txn, db, &mdbKey, &mdbVal, MDB_RESERVE))
+            assert(IntPtr.Zero <> mdbVal.data)
+            mdbVal.data)
+
+    // write or modify a value 
+    let inline mdb_put (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) (v : ByteString) : unit =
+        let dst = mdb_reserve txn db key v.Length
+        Marshal.Copy(v.UnsafeArray, v.Offset, dst, v.Length)
+
+    // delete key-value pair, returns whether item exists.
+    let mdb_del (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : bool =
+        Data.ByteString.withPinnedBytes key (fun keyAddr ->
+            let mutable mdbKey = MDB_val(unativeint key.Length, keyAddr)
+            let e = Native.mdb_del(txn,db,&mdbKey,IntPtr.Zero)
+            if(MDB_NOTFOUND = e) then false else check(e); true)
+
+    // cursors are somewhat challenging to generalize,
+    // but I can provide a few utility functions.
+
+    let mdb_cursor_open (txn : MDB_txn) (dbi : MDB_dbi) : MDB_cursor =
+        let mutable crs = IntPtr.Zero
+        check(Native.mdb_cursor_open(txn, dbi, &crs))
+        assert(IntPtr.Zero <> crs)
+        crs
+
+    let inline mdb_cursor_close (crs : MDB_cursor) : unit =
+        Native.mdb_cursor_close(crs)
+
+    let mdb_enum_keys (txn : MDB_txn) 
+                      (dbi : MDB_dbi) 
+                      (from : ByteString option) 
+                      : System.Collections.Generic.IEnumerator<ByteString> =
+        
+                      
+
+    // seek for key equal or greater than the argument, if any.
+    let mdb_cursor_seek_key_ge (crs : MDB_cursor) (key : ByteString) : (ByteString option) =
+        Data.ByteString.withPinnedBytes key (fun keyAddr ->
+            let mutable mdbKey = MDB_val(unativeint key.Length, keyAddr)
+            let e = Native.mdb_cursor_get(crs, &mdbKey, IntPtr.Zero, MDB_SET_RANGE)
+            if(MDB_NOTFOUND = e) then None else
+            check(e)
+            Some(val2bytes mdbKey)
+
+    // seek to next key in iterator. 
+    let mdb_cursor_next_key (crs : MDB_cursor) : (ByteString option) =
+        let mutable mdbKey = MDB_val()
+        let e = Native.mdb_cursor_get(crs, &mdbKey, IntPtr.Zero, MDB_NEXT)
+        if(MDB_NOTFOUND = e) then None else
+        check(e)
+        Some(val2bytes mdbKey)
+
+    // seek to first key strictly greater than the argument.
+    let mdb_cursor_seek_key_gt (crs : MDB_cursor) (key : ByteString) : (ByteString option) =
+        let kOpt = mdb_cursor_seek_key_ge crs key 
+        match kOpt with
+        | None -> None
+        | Just keyFound ->
+            if keyFound = key 
+                then mdb_cursor_next_key crs
+                else assert(keyFound > key); kOpt
+
+    // find up to a quota of keys strictly greater than given argument.
+    let mdb_browse_keys txn dbi key0 maxResults : ByteString[] =
+        let crs = mdb_cursor_open txn dbi
+        try let dst = new ResizeArray<ByteString>(maxResults)
+                if((
+        finally mdb_cursor_close crs 
 
 

@@ -1,5 +1,5 @@
 
-namespace Stowage.Internal
+namespace Stowage
 
 open System.Security
 open System.Runtime.InteropServices
