@@ -26,6 +26,9 @@ module internal I =
     // constant time to resist leaking of hashes via timing attacks.
     let stowKeyLen = rscHashLen / 2
     type StowKey = ByteString           // of stowKeyLen
+    let inline rscStowKey (h:RscHash) : StowKey =
+        assert(h.Length = rscHashLen)
+        Data.ByteString.take stowKeyLen h
 
     type RC = int64                     // sufficient for RC
     let maxRCLen = 18                   // length in bytes
@@ -34,9 +37,28 @@ module internal I =
 
     type EphID = uint64                 // hash of stowKey
     type EphRoots = Map<EphID,RC>       // ephemeral root set
-    let inline rscStowKey (h:RscHash) : StowKey =
-        assert(h.Length = rscHashLen)
-        Data.ByteString.take stowKeyLen h
+    let inline skEphID(h:StowKey) : EphID =
+        assert(h.Length = stowKeyLen)
+        ByteString.Hash64(h)
+    let inline rscEphID(h:RscHash) : EphID = 
+        skEphID (rscStowKey h)
+
+    // utilities to work with ephemeron tables
+    let ephInc (etb : EphRoots) (k : EphID) (rc : RC) : EphRoots =
+        assert (rc > 0L)
+        match Map.tryFind k etb with
+        | None -> Map.add k rc etb
+        | Some rc0 -> Map.add k (rc + rc0) etb
+
+    let ephDec (etb : EphRoots) (k : EphID) (rc : RC) : EphRoots =
+        assert (rc > 0L)
+        match Map.tryFind k etb with
+        | None -> failwith "negative refct"
+        | Some rc0 ->
+            assert (rc0 >= rc)
+            let rc' = rc0 - rc
+            if (0L = rc') then Map.remove k etb
+                          else Map.add k rc' etb 
 
     // Each commit consists of:
     //  a set of values read (or assumed) to validate
@@ -74,11 +96,38 @@ module internal I =
             db_fini : System.Object  // extra finalizer
         }
 
+    // add commit request to the database
+    let dbCommit (db : DB) (c : Commit) : unit =
+        lock db (fun () ->
+            db.db_commit <- (c :: db.db_commit)
+            Monitor.PulseAll(db))
+
+    // add stowage request and ephemeral root to database, returns root ID
+    let dbStow (db : DB) (h : RscHash) (v : Val) : EphID =
+        let k = rscEphID h
+        lock db (fun () ->
+            db.db_newrsc <- Map.add h v (db.db_newrsc)
+            db.db_ephtbl <- ephInc (db.db_ephtbl) k 1L
+            Monitor.PulseAll(db))
+        k
+
+    // reference count management
+    let inline dbUpdEph (db : DB) (fn : EphRoots -> EphRoots) : unit =
+        lock db (fun () -> (db.db_ephtbl <- fn db.db_ephtbl))
+    let inline dbIncEph (db : DB) (rc : RC) (k : EphID) : unit = dbUpdEph db (fun eph -> ephInc eph k rc)
+    let inline dbDecEph (db : DB) (rc : RC) (k : EphID) : unit = dbUpdEph db (fun eph -> ephDec eph k rc)
+    let inline ephAdd (upd : EphRoots) (etb0 : EphRoots) : EphRoots = Map.fold ephInc etb0 upd
+    let inline ephRem (upd : EphRoots) (etb0 : EphRoots) : EphRoots = Map.fold ephDec etb0 upd
+    let dbAddEphRoots (db : DB) (upd : EphRoots) : unit =
+        if(not (Map.isEmpty upd)) then dbUpdEph db (ephAdd upd)
+    let dbRemEphRoots (db : DB) (upd : EphRoots) : unit =
+        if(not (Map.isEmpty upd)) then dbUpdEph db (ephRem upd)
+
     // Our reference count tables simply have data of type [1-9][0-9]*.
     // Reasonably, reference counts shouldn't be larger than 18 digits.
     let dbGetRefct (db:DB) (rtx:MDB_txn) (k:StowKey) : RC =
         assert(k.Length = stowKeyLen)
-        let vOpt = mdb_getZC rtx (db.db_rfct) k 0
+        let vOpt = mdb_getZC rtx (db.db_rfct) k
         match vOpt with
         | None -> 0L
         | Some v -> 
@@ -91,11 +140,11 @@ module internal I =
                 loop a' (1n + p) (len - 1)
             loop 0L v.data (int v.size)
 
-    let inline refctBytes (rc:RC) : ByteString =
+    let refctBytes (rc:RC) : ByteString =
         assert((maxRC >= rc) && (rc > 0L))
-        let data = Array.zeroCreate maxRClen
+        let data = Array.zeroCreate maxRCLen
         let rec write ix rc =
-            if(0 = rc) 
+            if(0L = rc) 
                 then Data.ByteString.unsafeCreate data ix (data.Length - ix)
                 else data.[ix - 1] <- (byte '0' + byte (rc % 10L))
                      write (ix - 1) (rc / 10L)
@@ -123,7 +172,8 @@ module internal I =
             let rlen = rscHashLen - stowKeyLen
             assert((unativeint (rlen + maxValLen) >= v.size) && 
                    (v.size >= unativeint rlen)                 )
-            let matchRem = withPinnedBytes hRem (fun ra -> memcteq ra v.data rlen)
+            let matchRem = withPinnedBytes hRem (fun ra -> 
+                    Memory.memcteq ra v.data rlen)
             if not matchRem then None else
             let size' = v.size - unativeint rlen
             let data' = v.data + nativeint rlen
@@ -131,8 +181,6 @@ module internal I =
 
     let inline dbGetRsc (db:DB) (rtx:MDB_txn) (h:RscHash) : Val option =
         dbGetRscZC db rtx h |> Option.map Stowage.LMDB.val2bytes
-
-
 
     let dbDelRsc (db:DB) (wtx:MDB_txn) (k:StowKey) : unit =
         if (k.Length <> stowKeyLen) then invalidArg "k" "invalid stowage key" else
@@ -148,6 +196,8 @@ module internal I =
         let dst = mdb_reserve wtx (db.db_stow) hKey (hRem.Length + v.Length)
         Marshal.Copy(hRem.UnsafeArray, hRem.Offset, dst, hRem.Length)
         Marshal.Copy(v.UnsafeArray, v.Offset, (dst + nativeint hRem.Length), v.Length)
+
+
 
     let dbReadKeyZC (db:DB) (rtx:MDB_txn) (k:Key) : MDB_val =
         if(not (isValidKey k)) then invalidArg "k" "invalid key" else
@@ -167,45 +217,42 @@ module internal I =
             then mdb_del wtx (db.db_data) k |> ignore
             else mdb_put wtx (db.db_data) k v
 
-    // the DB will have a dedicated writer thread.
-    // the DB object serves mutex and pulse/wait signal, via Monitor
-    let dbCommit (db : DB) (c : Commit) : unit =
+    let acquireReadLock (db:DB) : ReadLock =
+        // lock to prevent advanceReaderFrame while acquiring
         lock db (fun () ->
-            db.db_commit <- (c :: db.db_commit)
-            Monitor.PulseAll(db))
+            db.db_rdlock.Acquire()
+            db.db_rdlock)
+            
+    let advanceReaderFrame (db : DB) : ReadLock = 
+        lock db (fun () ->
+            let oldFrame = db.db_rdlock
+            db.db_rdlock <- new ReadLock()
+            oldFrame)
 
     // Perform operation while holding reader TX.
     //
     // LMDB with NOLOCK is essentially a frame-buffered database.
     // At most times, we have two valid frames. During commit, we
     // drop the older frame and write the new one. Stowage aligns
-    // its locking with this model, so readers never wait and the
+    // its locking with this model so readers never wait and the
     // writer waits only on readers that hold the lock for nearly
-    // two full write frames.
+    // two full write frames. Short-lived readers won't interfere
+    // with the writer at all.
     //
     // We can assume most readers only hold the lock briefly, and
     // hence our writer very rarely waits.
     let inline withRTX (db : DB) (action : MDB_txn -> 'x) : 'x =
-        let rdlock = lock db (fun () -> 
-            // lock prevents advanceReaderFrame during Acquire
-            db.db_rdlock.Acquire() 
-            db.db_rdlock)
+        let rdlock = acquireReadLock db
         try let tx = mdb_rdonly_txn_begin db.db_env
             try action tx
             finally mdb_txn_commit tx // release MDB_txn memory
         finally rdlock.Release()
 
-    let advanceReaderFrame (db : DB) : ReadLock = lock db (fun () ->
-        let oldFrame = db.db_rdlock
-        db.db_rdlock <- new ReadLock()
-        oldFrame)
-
-
     let matchVal (vtx : Val) (vdb : MDB_val) : bool =
         if (vtx.Length <> int vdb.size) then false else
         if (0 = vtx.Length) then true else
         withPinnedBytes vtx (fun pvtx -> 
-            0 = (memcmp (pvtx) (vdb.data) (vtx.Length)))
+            0 = (Memory.memcmp (pvtx) (vdb.data) (vtx.Length)))
 
     // search for an invalid read assumption
     let findInvalidRead db rtx wb rd =
@@ -213,58 +260,12 @@ module internal I =
             if not (isValidKey k) then false else
             match Map.tryFind k wb with
             | Some vwb -> (v = vwb)
-            | None -> matchVal v (getValZC db rtx k)
+            | None -> matchVal v (dbReadKeyZC db rtx k)
         let invalidAssumption k v = not (validAssumption k v)
         Map.tryFindKey invalidAssumption rd
 
-    // utilities to work with ephemeron tables
-    let ephInc (etb : EphRoots) (k : StowKey) (rcu : RC) : EphRoots =
-        assert (rcu > 0L)
-        match Map.tryFind k etb with
-        | None -> Map.add k rcu etb
-        | Some rc0 -> Map.add k (rcu + rc0) etb
-
-    let ephDec (etb : EphRoots) (k : StowKey) (rcu : RC) : EphRoots =
-        assert (rcu > 0L)
-        match Map.tryFind k etb with
-        | None -> failwith "negative refct"
-        | Some rc0 ->
-            assert (rc0 >= rcu)
-            let rc' = rc0 - rcu
-            if (0L = rc') then Map.remove k etb
-                          else Map.add k rc' etb 
-
-    // compute ephemeral roots from a value
-    let accumValEphs : EphRoots -> Val -> EphRoots =
-        scanHashDeps (fun r h -> ephInc r (rscEphId h) 1L)
-
-    let inline ephAdd (upd : EphRoots) (etb0 : EphRoots) : EphRoots =
-        Map.fold ephInc etb0 upd
-
-    let inline ephRem (upd : EphRoots) (etb0 : EphRoots) : EphRoots =
-        Map.fold ephDec etb0 upd
-
-    let inline dbUpdEphRoots (db : DB) (fn : EphRoots -> EphRoots) : unit =
-        lock db (fun () -> (db.db_ephtbl <- fn db.db_ephtbl))
-
-    let dbAddEphRoots (db : DB) (upd : EphRoots) : unit =
-        if(not (Map.isEmpty upd)) then dbUpdEphRoots db (ephAdd upd)
-
-    let dbRemEphRoots (db : DB) (upd : EphRoots) : unit =
-        if(not (Map.isEmpty upd)) then dbUpdEphRoots db (ephRem upd)
-
-    // add stowage to both the newrsc pool and ephemeral root.
-    let dbAddStowage (db : DB) (rtx:MDB_txn) (h : RscHash) (v : Val) : EphID =
-        assert (h.Length = rscHashLen)
-        let k = rscEphId h
-        lock db (fun () ->
-            db.db_newrsc <- Map.add h v (db.db_newrsc)
-            db.db_ephtbl <- ephInc (db.db_ephtbl) k 1L
-            Monitor.PulseAll(db))
-        k
-
     let inline hasRscMDB (db:DB) (rtx:MDB_txn) (h:RscHash) : bool =
-        mdb_contains rtx (db.db_stow) (rscHashToStowKey h)
+        mdb_contains rtx (db.db_stow) (rscStowKey h)
 
     let dbHasWork (db:DB) : bool =
         (db.db_trygc ||
@@ -272,31 +273,12 @@ module internal I =
          not (Map.isEmpty db.db_newrsc))
 
     // Reference Counts Management
-    type RC = int64                 // type for reference counts or deltas
-    type RCU = Map<StowKey, RC>     // proposed updates to reference counts
-    let updRCU (rc:RC) (u:RCU) (h:RscHash) : RCMap =
-        assert(h.Length = rscHashLen)
-        let sk = Data.ByteString.take stowKeyLen h
-        match Map.tryFind sk u with
-        | None -> Map.add sk rc u
-        | Some rc0 -> Map.add sk (rc0 + rc) u
+    let updRCU (rc:RC) (u:RCU) (k:StowKey) : RCMap =
+        assert(k.Length = stowKeyLen)
+        match Map.tryFind k u with
+        | None -> Map.add k rc u
+        | Some rc0 -> Map.add k (rc0 + rc) u
 
-    // reference counts within the database are simply [1-9][0-9]* texts.
-    // I assume/assert a 64-bit integer is sufficient.
-    let dbGetRefct (db:DB) (rtx:MDB_txn) (sk:StowKey) : RC =
-        assert(stowKeyLen = sk.Length)
-        let vOpt = mdb_getZC rtx (db.db_refct) sk
-        match vOpt with
-        | None -> 0L
-        | Just v -> 
-            assert(18L >= v.size); // 64 bits sufficient?
-            let rec parseNat acc ptr len =
-                if(0 = len) then acc else
-                let b = Marshal.ReadByte(ptr)  
-                assert((byte '9' >= b) && (b >= byte '0'))
-                let acc' = (10L * acc) + (int64 (b - (byte '0'))
-                loop acc' (1n + ptr) (len - 1)
-            parseNat 0L (v.data) (int (v.size))
 
     // utilities
     let valRCU (rc:RC) (u:RCU) (v:Val) : RCU =
@@ -349,27 +331,19 @@ module internal I =
               |> rscRCU writeRsc
               |> Map.map (fun sk delta -> (delta + (dbGetRefct db wtx sk)))
 
-        
-
-
-        
-        
-        // 
-
-        
-
-        
+        // todo: figure out the rest
        
         let rlock' = advanceReaderFrame db
         db.db_trygc <- false // should depend on GC progress
         dbWriterLoop db rlock'
 
 
-    let inline dbThreadStart (db:DB) : unit = 
+    let inline dbThreadStart (db:DB) () : unit = 
         dbWriterLoop db (advanceReaderFrame db)
 
 
-    let inline private withDir (p : string) (op : unit -> 'R) : 'R =
+    // opening the database
+    let withDir (p : string) (op : unit -> 'R) : 'R =
         do ignore <| System.IO.Directory.CreateDirectory(p) 
         let p0 = System.IO.Directory.GetCurrentDirectory()
         try 
@@ -378,7 +352,7 @@ module internal I =
         finally
             System.IO.Directory.SetCurrentDirectory(p0)
 
-    let inline lockFile (fn : string) : FileStream =
+    let lockFile (fn : string) : FileStream =
         new FileStream(
                 fn, 
                 FileMode.OpenOrCreate, 
@@ -388,7 +362,7 @@ module internal I =
                 FileOptions.DeleteOnClose)
 
     // assuming we're in the target directory, build the database
-    let inline private mkDB (maxSizeMB : int) () : DB =
+    let mkDB (maxSizeMB : int) () : DB =
         let lock = lockFile ".lock"
         let env = mdb_env_create ()
         mdb_env_set_mapsize env maxSizeMB
@@ -411,21 +385,21 @@ module internal I =
         let dbRfct = mdb_dbi_open txn "#" // positive refcts
         let dbZero = mdb_dbi_open txn "0" // zero refcts
         mdb_txn_commit txn
-        let db : I.DB = 
+        let db : DB = 
             { db_env  = env
               db_data = dbData
               db_stow = dbStow
               db_rfct = dbRfct
               db_zero = dbZero
-              db_rdlock = new I.ReadLock()
+              db_rdlock = new ReadLock()
               db_ephtbl = Map.empty
               db_newrsc = Map.empty
               db_commit = List.empty
               db_trygc = true
               db_fini = dbFini
             }
-        (new Thread(fun () -> I.dbThreadStart db)).Start()
-        new DB(db)
+        (new Thread(dbThreadStart db)).Start()
+        db
     // TODO: 
 
 

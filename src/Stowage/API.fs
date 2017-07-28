@@ -32,53 +32,9 @@ module API =
         val internal Impl : I.DB
         internal new(dbImpl : I.DB) = { Impl = dbImpl }
 
-    /// Transaction object
-    ///
-    /// A Stowage transaction has a set of read assumptions and pending
-    /// writes in memory. Upon commit, the `atomicUpdateDB` operation
-    /// is performed. Additionally, each transaction provides ephemeral 
-    /// roots for new secure hash resources, providing opportunity to
-    /// commit and root the new data.
-    ///
-    /// An important consideration is that snapshot isolation is not
-    /// guaranteed. Transactions may read inconsistent data. Example:
-    ///
-    ///         Alice        Bob
-    ///         Reads A
-    ///                      Updates A,B
-    ///         Reads B
-    ///
-    /// In this case, Alice will read B inconsistent with A. Further, any
-    /// secure hash resources previously rooted by A may be concurrently 
-    /// GC'd after Bob's update, causing loadRsc to fail. The state change
-    /// will cause Alice's commit to fail, but before commit Alice must
-    /// handle the potential inconsistency. Alternatively, design the app
-    /// such that the conflict scenario simply does not occur.
-    /// 
-    /// A TX is not thread-safe. The normal use case is single threaded.
-    /// If used from multiple threads, you must ensure exclusive access. 
-    type TX =
-        val         internal db : I.DB
-        val mutable internal rd : KVMap
-        val mutable internal ws : KVMap
-        val mutable internal eph : I.EphRoots
-        new (db : DB) =
-            { db = db.Impl
-              rd = Map.empty
-              ws = Map.empty
-              eph = Map.empty
-            }
-        member tx.DB with get () = DB (tx.db)
-        member tx.Reads with get () = tx.rd
-        member tx.Writes with get () = tx.ws
-        member private tx.ClearEphRoots() : unit =
-            I.dbRemEphRoots (tx.db) (tx.eph)
-            tx.eph <- Map.empty
-        override tx.Finalize() = tx.ClearEphRoots()
-        interface System.IDisposable with
-            member tx.Dispose() =
-                tx.ClearEphRoots()
-                System.GC.SuppressFinalize tx
+    let openDB (path : string) (maxSizeMB : int) : DB = 
+        I.withDir path (DB (I.mkDB maxSizeMB))
+
 
     /// Read value associated with a key in the DB.
     ///
@@ -96,6 +52,8 @@ module API =
         I.withRTX db.Impl (fun rtx -> 
             Array.map (I.readKeyDB db.Impl rtx) ks)
 
+
+
     /// Find first key (if any) for which associated value doesn't match.
     /// Note: This doesn't account for concurrent writes.
     let testReadAssumptions (db : DB) (reads : KVMap) : (Key option) =
@@ -106,15 +64,6 @@ module API =
     /// verify that all read assumptions are currently valid
     let inline verifyReadAssumptions (db : DB) (reads : KVMap) : bool =
         Option.isNone (testReadAssumptions db reads)
-
-    /// Iterate through blocks of keys within the DB.
-    ///
-    /// This returns a block of up to a given number of keys following
-    /// the given key lexicographically whose values are defined as 
-    /// non-empty bytestrings. This can be used to browse a database.
-    let iterKeysDB (db : DB) (k : Key) (n : int) : Key[]
-        if(n < 1) then Array.empty else
-        I.withRTX db.Impl (fun rtx -> I.dbIterKeys db.Impl rtx k n)
 
 
     /// Atomic database update (asynchronous)
@@ -135,6 +84,10 @@ module API =
     /// access to high-contention keys using an independent locks or
     /// queues system.
     let atomicUpdateDB_async (db : DB) (reads : KVMap) (writes : KVMap) : Task<bool> =
+        // reads are validated by the writer, but we'll check writes immediately
+        let validKV k v = isValidKey k && isValidVal v
+        let validWS = Map.forall validKV writes
+        if not validWS then invalidArg "writes" "invalid write" else
         let tcs = new TaskCompletionSource<bool>()
         I.dbCommit db.Impl (reads, writes, tcs)
         tcs.Task
@@ -177,6 +130,93 @@ module API =
           | Some v -> withPinnedBytes v (fun vaddr ->
                 Some (action vaddr v.Length))
 
+    /// Add a resource to the DB.
+    /// 
+    /// This pushes a resource to the writer and simultaneously does
+    /// a `increfRscDB` to prevent concurrent GC of the resource. The
+    /// client is responsible for performing a `decrefRscDB` when the
+    /// resource is no longer referenced from memory. Meanwhile, the
+    /// returned secure hash can be used with `loadRscDB` to access 
+    /// the value.
+    let stowRscDB (db : DB) (v : Val) : RscHash =
+        let h = Hash.hash v
+        ignore <| I.dbStow (db.Impl) h v
+        h
+    
+    /// Ephemeral Roots with Reference Counting
+    ///
+    /// Stowage DB's key-value layer provides persistent roots for 
+    /// secure hash resources, a basis for GC. But some resources,
+    /// especially new resources or resources for virtual memory,
+    /// are referenced only from ephemeral memory. The client is
+    /// responsible for GC of such resources via trivial reference
+    /// counting.
+    ///
+    /// It is valid to incref a resource that is unknown to the DB.
+    /// However, attempting to decref a resource below zero references
+    /// will result in an InvalidOperation exception.
+    let increfRscDB (db : DB) (h : RscHash) : unit =
+        I.dbIncEph (db.Impl) 1L (rscEphId h)
+
+    let decrefRscDB (db : DB) (h : RscHash) : unit =
+        I.dbDecEph (db.Impl) 1L (rscEphId h)
+
+
+    /// Iterate through blocks of keys within the DB.
+    ///
+    /// This returns a subset of keys with non-empty values from the DB,
+    /// starting strictly after the given key. The keys are returned in
+    /// lexicographic order in a block of a specified maximum size.
+    let browseKeysDB (db : DB) (kMin : Key) (nMax : int) : Key[] =
+        // slice is inclusive
+        let minKey = Data.ByteString.snoc kMin 0uy // slice is inclusive
+        I.withRTX db.Impl (fun rtx -> 
+            LMDB.mdb_slice_keys rtx (db.Impl.db_data) minKey nMax)
+
+    /// Transaction object
+    ///
+    /// A Stowage transaction is simply a stateful object that tracks
+    /// reads, writes, and stowage of resources to simplify a lot of 
+    /// the surrounding operations. Upon commit, `atomicUpdateDB` is
+    /// performed. Upon disposal (or finalization), ephemeral roots 
+    /// for new secure hash resources will be automatically decref'd. 
+    ///
+    /// An important consideration is that snapshot isolation is not
+    /// guaranteed. Transactions may read inconsistent data. Example:
+    ///
+    ///         Alice        Bob
+    ///         Reads A
+    ///                      Updates A,B
+    ///         Reads B
+    ///
+    /// In this case, Alice will read B inconsistent with A. Further, if
+    /// secure hash resources were previously rooted by A, they might be
+    /// GC'd concurrently with Alice's attempt to read them, causing some
+    /// loadRsc operations to fail non-deterministically. Mitigating such
+    /// issues is left to the client. 
+    type TX =
+        val         internal db : I.DB
+        val mutable internal rd : KVMap
+        val mutable internal ws : KVMap
+        val mutable internal eph : I.EphRoots
+        new (db : DB) =
+            { db = db.Impl
+              rd = Map.empty
+              ws = Map.empty
+              eph = Map.empty
+            }
+        member tx.DB with get () = DB (tx.db)
+        member tx.Reads with get () = tx.rd
+        member tx.Writes with get () = tx.ws
+        member private tx.ClearEphRoots() : unit =
+            I.dbRemEphRoots (tx.db) (tx.eph)
+            tx.eph <- Map.empty
+        override tx.Finalize() = tx.ClearEphRoots()
+        interface System.IDisposable with
+            member tx.Dispose() =
+                tx.ClearEphRoots()
+                System.GC.SuppressFinalize tx
+
 
     /// create a new transaction on the database
     let newTX (db : DB) : TX = new TX(db)
@@ -196,7 +236,8 @@ module API =
         atomicUpdateDB_async (tx.DB) (tx.Reads) (tx.Writes)
 
     /// Commit a transaction (synchronous).
-    let inline commit (tx:TX) : bool = (commit_async tx).Result
+    let inline commit (tx:TX) : bool = 
+        (commit_async tx).Result
 
     /// Checkpoint a transaction (asynchronous).
     ///
@@ -211,7 +252,8 @@ module API =
         result
 
     /// Checkpoint a transaction (synchronous).
-    let inline checkpoint (tx:TX) : bool = (checkpoint_async tx).Result
+    let inline checkpoint (tx:TX) : bool = 
+        (checkpoint_async tx).Result
 
     let private readKeyOld (tx:TX) (k:Key) : Val option =
         let wv = Map.tryFind k tx.ws
@@ -273,7 +315,8 @@ module API =
         tx.ws <- Map.add k v tx.ws
 
     /// load a secure hash resource into memory (see loadRscDB)
-    let inline loadRsc (tx:TX) (h:RscHash) : Val option = loadRscDB tx.DB h
+    let inline loadRsc (tx:TX) (h:RscHash) : Val option = 
+        loadRscDB tx.DB h
     
     /// zero-copy access to secure hash resource (see unsafeWithRscDB)
     let inline unsafeWithRsc (tx:TX) (h:RscHash) (action : nativeint -> int -> 'x) : 'x option =
@@ -281,63 +324,17 @@ module API =
 
     /// Stow a value as a secure hash resource.
     ///
-    /// This moves a value to disk, providing a secure hash as a handle
-    /// to later access the resource in memory. The value is not held in
-    /// the TX, it is moved directly to the underlying database. The TX
-    /// maintains an ephemeral root to ensure the resource is not GC'd
-    /// before we have opportunity to commit. (Normally, resources that
-    /// are not rooted by values in the key-value layer will be GC'd.) 
+    /// This behaves as stowRscDB, except the decref will be handled when
+    /// the TX is later disposed or finalized. The assumption is that any
+    /// newly stowed resources should be rooted by TX commit.
+    ///
+    /// To hold the resource beyond the lifespan of the transaction, call
+    /// `increfRscDB` explicitly on the returned resource hash. Or use the
+    /// `stowRscDB` method instead.
     let stowRsc (tx:TX) (v:Val) : RscHash =
         let h = Stowage.Hash.hash v
-        let k = I.dbAddStowage tx.db h v
-        tx.eph <- I.ephInc tx.eph k 1n
+        let k = I.dbStow tx.db h v
+        tx.eph <- I.ephInc tx.eph k 1L
         h
-
-    /// GC Ephemeral Roots for Secure Hash Resources
-    ///
-    /// This function assumes you have already written into the TX any
-    /// secure hash references that must be rooted, and releases the
-    /// remainder. Additionally, you may provide extra roots. This is
-    /// intended for use with some long-running transactions or cases
-    /// where you might simply use the TX as an ephemeral root set.
-    ///
-    /// Note: Unless a resource was already rooted, adding an ephemeral
-    /// root does not prevent concurrent GC. 
-    let clearEphRoots (tx:TX) (extraRoots:seq<RscHash>) : unit =
-        let ins m (h : RscHash) = 
-            if (h.Length <> Hash.validHashLen) 
-                then invalidArg "h" "invalid resource hash"
-                else Map.add (I.rscEphId h) 1n m
-        let insM m k v = scanHashDeps ins m v
-        let eph' = Map.fold insM (Seq.fold ins Map.empty extraRoots) tx.ws
-        I.dbAddEphRoots tx.db eph'
-        I.dbRemEphRoots tx.db tx.eph
-        tx.eph <- eph'
-
-
-    let load (path : string) (maxSizeMB : int) : DB = 
-        withDir path (mkDB maxSizeMB)
-                
-
-    /// Obtain current reference count for a hash.
-    ///   
-
-
-(*
-
-    , dupTX
-    , readKey, readKeyDB
-    , readKeys, readKeysDB
-    , writeKey, assumeKey
-    , loadRsc, loadRscDB
-    , withRsc, withRscDB
-    , stowRsc
-    , clearRsc, clearRsc'
-    , commit, commit_async
-    , check
-    , gcDB, gcDB_async
-    , hashDeps
-*)
-  
-    
+   
 

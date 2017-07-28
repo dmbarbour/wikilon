@@ -1,7 +1,6 @@
 #nowarn "9" // disable warning for StructLayoutAttribute
 
 namespace Stowage
-open Stowage.Memory
 
 open System
 open System.Runtime.InteropServices
@@ -18,6 +17,7 @@ module internal LMDB =
     type MDB_dbi = uint32       // database ids are simple ints
     type MDB_cursor = nativeint // opaque MDB_cursor*
     type MDB_cursor_op = int    // an enumeration
+    type size_t = unativeint    // C size values
     type mdb_mode_t = int       // Unix-style permissions
 
     [< Struct; StructLayoutAttribute(LayoutKind.Sequential) >]
@@ -41,6 +41,7 @@ module internal LMDB =
     let MDB_RESERVE = 0x10000u  // reserve space for writing data
 
     // Cursor Ops
+    let MDB_FIRST = 0
     let MDB_NEXT  = 8           // next cursor item
     let MDB_SET_RANGE = 17      // next key after request
 
@@ -112,7 +113,7 @@ module internal LMDB =
     // budget on sophisticated error handling. 
     exception LMDBError of int
 
-    let private reportError (e : int) : unit =
+    let reportError (e : int) : unit =
         let msgPtr = Native.mdb_strerror(e)
         let msgStr = 
             if (IntPtr.Zero = msgPtr) then "(null)" else
@@ -120,10 +121,10 @@ module internal LMDB =
         printf "LMDB Error %d: %s" e msgStr
         raise (LMDBError e)
 
-    let inline private check (e : int) : unit =
+    let inline check (e : int) : unit =
         if (0 <> e) then reportError(e) 
 
-    let inline private mdb_assertions (env : MDB_env) : unit =
+    let mdb_assertions (env : MDB_env) : unit =
         assert((2 * Marshal.SizeOf<nativeint>()) = Marshal.SizeOf<MDB_val>())
         
 
@@ -183,7 +184,7 @@ module internal LMDB =
             let e = Native.mdb_get(txn, db, &mdbKey, &mdbVal)
             if(MDB_NOTFOUND = e) then None else
             check e
-            Some v)
+            Some mdbVal)
     
     // check to see if a key already exists in the database
     // (lookup but don't copy!)
@@ -227,9 +228,9 @@ module internal LMDB =
             let e = Native.mdb_del(txn,db,&mdbKey,IntPtr.Zero)
             if(MDB_NOTFOUND = e) then false else check(e); true)
 
-    // cursors are somewhat challenging to generalize,
-    // but I can provide a few utility functions.
 
+    // I find LMDB cursors to be rather awkward. They don't translate
+    // cleanly to F# sequences. 
     let mdb_cursor_open (txn : MDB_txn) (dbi : MDB_dbi) : MDB_cursor =
         let mutable crs = IntPtr.Zero
         check(Native.mdb_cursor_open(txn, dbi, &crs))
@@ -239,21 +240,22 @@ module internal LMDB =
     let inline mdb_cursor_close (crs : MDB_cursor) : unit =
         Native.mdb_cursor_close(crs)
 
-    let mdb_enum_keys (txn : MDB_txn) 
-                      (dbi : MDB_dbi) 
-                      (from : ByteString option) 
-                      : System.Collections.Generic.IEnumerator<ByteString> =
-        
-                      
+    let mdb_cursor_seek_key_first (crs : MDB_cursor) : ByteString option =
+        let mutable mdbKey = MDB_val()
+        let e = Native.mdb_cursor_get(crs, &mdbKey, IntPtr.Zero, MDB_FIRST)
+        if(MDB_NOTFOUND = e) then None else
+        check(e)
+        Some(val2bytes mdbKey)
 
     // seek for key equal or greater than the argument, if any.
     let mdb_cursor_seek_key_ge (crs : MDB_cursor) (key : ByteString) : (ByteString option) =
+        if Data.ByteString.isEmpty key then mdb_cursor_seek_key_first crs else
         Data.ByteString.withPinnedBytes key (fun keyAddr ->
             let mutable mdbKey = MDB_val(unativeint key.Length, keyAddr)
             let e = Native.mdb_cursor_get(crs, &mdbKey, IntPtr.Zero, MDB_SET_RANGE)
             if(MDB_NOTFOUND = e) then None else
             check(e)
-            Some(val2bytes mdbKey)
+            Some(val2bytes mdbKey))
 
     // seek to next key in iterator. 
     let mdb_cursor_next_key (crs : MDB_cursor) : (ByteString option) =
@@ -263,21 +265,67 @@ module internal LMDB =
         check(e)
         Some(val2bytes mdbKey)
 
-    // seek to first key strictly greater than the argument.
-    let mdb_cursor_seek_key_gt (crs : MDB_cursor) (key : ByteString) : (ByteString option) =
-        let kOpt = mdb_cursor_seek_key_ge crs key 
-        match kOpt with
-        | None -> None
-        | Just keyFound ->
-            if keyFound = key 
-                then mdb_cursor_next_key crs
-                else assert(keyFound > key); kOpt
+    type private MDBKeyEnumerator =
+        val         private crs  : MDB_cursor
+        val         private seek : ByteString
+        val mutable private ini  : bool
+        val mutable private fin  : bool
+        val mutable private cur  : ByteString
 
-    // find up to a quota of keys strictly greater than given argument.
-    let mdb_browse_keys txn dbi key0 maxResults : ByteString[] =
-        let crs = mdb_cursor_open txn dbi
-        try let dst = new ResizeArray<ByteString>(maxResults)
-                if((
-        finally mdb_cursor_close crs 
+        new (txn : MDB_txn, dbi : MDB_dbi, from : ByteString) =
+            { crs = mdb_cursor_open txn dbi
+              seek = from
+              ini = true
+              fin = true
+              cur = Data.ByteString.empty
+            }
+
+        member private e.Init() : unit =
+            e.ini <- false
+            let firstKey = mdb_cursor_seek_key_ge (e.crs) (e.seek)
+            e.cur <- defaultArg firstKey (Data.ByteString.empty)
+            e.fin <- Option.isNone firstKey
+
+        member private e.Step() : unit =
+            if(e.ini) then e.Init() else
+            if(e.fin) then () else
+            let nextKey = mdb_cursor_next_key (e.crs)
+            e.cur <- defaultArg nextKey (Data.ByteString.empty)
+            e.fin <- Option.isNone nextKey
+
+        member private e.Close() : unit =
+            mdb_cursor_close (e.crs)
+            
+        interface System.Collections.Generic.IEnumerator<ByteString> with
+            member e.Current with get() = e.cur
+        interface System.Collections.IEnumerator with
+            member e.Current with get() = box e.cur
+            member e.MoveNext() = e.Step(); not e.fin
+            member e.Reset() = e.ini <- true
+        interface System.IDisposable with
+            member e.Dispose() = e.Close()
+
+    /// Construct a sequence that returns keys lexicographically starting
+    /// at the given key. It's important that this sequence does not survive
+    /// longer than the transaction argument.
+    let mdb_keys_from (txn : MDB_txn) (dbi : MDB_dbi) (from : ByteString) : seq<ByteString> =
+        let mkEnum() = new MDBKeyEnumerator(txn,dbi,from)
+        { new seq<ByteString> with
+            member x.GetEnumerator() =
+                mkEnum() :> System.Collections.Generic.IEnumerator<ByteString> 
+            member x.GetEnumerator() =
+                mkEnum() :> System.Collections.IEnumerator
+        }
+
+    /// Enumerate all the keys from a database. See also: mdb_keys_from.
+    let inline mdb_keys (txn : MDB_txn) (dbi : MDB_dbi) : seq<ByteString> =
+        mdb_keys_from txn dbi (Data.ByteString.empty)
+
+    /// Capture a slice of up to nMax keys as an array.
+    let mdb_slice_keys txn dbi keyMin nMax : ByteString[] =
+        mdb_keys_from txn dbi keyMin 
+            |> Seq.truncate nMax 
+            |> Seq.toArray
+
 
 

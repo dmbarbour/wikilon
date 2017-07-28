@@ -99,9 +99,9 @@ module ByteString =
             let limit = (x.Length + reset)
             let ix = ref reset 
             { new System.Collections.Generic.IEnumerator<byte> with
-                    member e.Current = a.[!ix]
+                    member e.Current with get() = a.[!ix]
                 interface System.Collections.IEnumerator with
-                    member e.Current = box a.[!ix]
+                    member e.Current with get() = box a.[!ix]
                     member e.MoveNext() = 
                         if(!ix = limit) then false else
                         ix := (1 + !ix)
@@ -160,6 +160,12 @@ module ByteString =
         let mem = Array.zeroCreate (1 + s.Length)
         do mem.[0] <- b
         do Array.blit s.UnsafeArray s.Offset mem 1 s.Length
+        unsafeCreateA mem
+
+    let snoc (s : ByteString) (b : byte) : ByteString =
+        let mem = Array.zeroCreate(s.Length + 1)
+        do Array.blit s.UnsafeArray s.Offset mem 0 s.Length
+        do mem.[s.Length] <- b
         unsafeCreateA mem
 
     let append (a : ByteString) (b : ByteString) : ByteString =
