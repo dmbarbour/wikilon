@@ -90,7 +90,7 @@ let main argv =
                 let pw = hashStr(getEntropy 64).Substring(0,24)
                 do printfn "admin:%s" pw
                 Some pw
-    let db = Stowage.DB.load "db" (1024 * args.size)
+    let db = Stowage.DB.openDB (1024 * args.size)
     let app = WS.mkApp db admin
     do startWebServer svc app
     0 // return an integer exit code

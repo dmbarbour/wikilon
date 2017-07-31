@@ -265,6 +265,12 @@ module internal LMDB =
         check(e)
         Some(val2bytes mdbKey)
 
+    let mdb_cursor_seek_key_gt (crs : MDB_cursor) (key : ByteString) : (ByteString option) =
+        let kGE = mdb_cursor_seek_key_ge crs key
+        match kGE with
+        | Some kEQ when (kEQ = key) -> mdb_cursor_next_key crs
+        | _ -> kGE
+
     type private MDBKeyEnumerator =
         val         private crs  : MDB_cursor
         val         private seek : ByteString
@@ -282,7 +288,7 @@ module internal LMDB =
 
         member private e.Init() : unit =
             e.ini <- false
-            let firstKey = mdb_cursor_seek_key_ge (e.crs) (e.seek)
+            let firstKey = mdb_cursor_seek_key_gt (e.crs) (e.seek)
             e.cur <- defaultArg firstKey (Data.ByteString.empty)
             e.fin <- Option.isNone firstKey
 
@@ -306,8 +312,8 @@ module internal LMDB =
             member e.Dispose() = e.Close()
 
     /// Construct a sequence that returns keys lexicographically starting
-    /// at the given key. It's important that this sequence does not survive
-    /// longer than the transaction argument.
+    /// after the given key (not including said key). It's important that
+    /// this sequence does not survive longer than the transaction argument.
     let mdb_keys_from (txn : MDB_txn) (dbi : MDB_dbi) (from : ByteString) : seq<ByteString> =
         let mkEnum() = new MDBKeyEnumerator(txn,dbi,from)
         { new seq<ByteString> with

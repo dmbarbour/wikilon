@@ -4,8 +4,6 @@ open System.Threading
 open System.Threading.Tasks
 open System.Security
 open Data.ByteString
-open Stowage.Internal.Memory
-open Stowage.Internal.LMDB
 open System.Runtime.InteropServices
 
 /// Stowage is a key-value database that features garbage collected
@@ -32,9 +30,8 @@ module API =
         val internal Impl : I.DB
         internal new(dbImpl : I.DB) = { Impl = dbImpl }
 
-    let openDB (path : string) (maxSizeMB : int) : DB = 
-        I.withDir path (DB (I.mkDB maxSizeMB))
-
+    /// Open or Create database 'stowage' in current directory.
+    let openDB (maxSizeMB : int) : DB = DB (I.openDB maxSizeMB)
 
     /// Read value associated with a key in the DB.
     ///
@@ -42,7 +39,7 @@ module API =
     /// are always atomic, i.e. you'll never read a partial value.
     let readKeyDB (db : DB) (k : Key) : Val =
         I.withRTX db.Impl (fun rtx -> 
-            I.readKeyDB db.Impl rtx k)
+            I.dbReadKey db.Impl rtx k)
 
     /// Read multiple keyed values from DB. 
     ///
@@ -50,9 +47,7 @@ module API =
     /// That is, it's atomic for the full array of keys. 
     let readKeysDB (db : DB) (ks : Key[]) : Val[] =
         I.withRTX db.Impl (fun rtx -> 
-            Array.map (I.readKeyDB db.Impl rtx) ks)
-
-
+            Array.map (I.dbReadKey db.Impl rtx) ks)
 
     /// Find first key (if any) for which associated value doesn't match.
     /// Note: This doesn't account for concurrent writes.
@@ -99,10 +94,11 @@ module API =
     /// Access a secure hash resource from the Database
     ///
     /// A Stowage database contains a set of binary values that are
-    /// referenced by secure hash. These values are garbage collected
-    /// if not rooted by the key-value persistence layer or ephemeral
-    /// transaction. However, it's safe to look up resources even if
-    /// they aren't rooted.
+    /// referenced by secure hash. If the resource is not known, the
+    /// database returns None. Secure hash resources will be garbage
+    /// collected if not rooted by the key-value layer or ephemeral
+    /// reference count, so developers cannot assume availability of
+    /// the resource without careful management of roots. 
     let loadRscDB (db : DB) (h : RscHash) : Val option =
         // note: I'm relying on atomic reads for reference variables.
         // This was asserted for C#, so I assume it's valid for .Net.
@@ -131,35 +127,37 @@ module API =
                 Some (action vaddr v.Length))
 
     /// Add a resource to the DB.
-    /// 
-    /// This pushes a resource to the writer and simultaneously does
-    /// a `increfRscDB` to prevent concurrent GC of the resource. The
-    /// client is responsible for performing a `decrefRscDB` when the
-    /// resource is no longer referenced from memory. Meanwhile, the
-    /// returned secure hash can be used with `loadRscDB` to access 
-    /// the value.
+    ///
+    /// Stowed resources are moved to disk, referenced by the returned
+    /// secure hash, and accessed using loadRscDB. Using stowage can be
+    /// a flexible basis for working with larger than memory data.
+    ///
+    /// Resources are garbage collected. To prevent immediate GC of the
+    /// stowed resource, this performs an implicit, atomic increfRscDB.
+    /// The client is responsible for a subsequent decrefRscDB.
     let stowRscDB (db : DB) (v : Val) : RscHash =
+        if not (isValidVal v) then invalidArg "v" "value too big" else
         let h = Hash.hash v
         ignore <| I.dbStow (db.Impl) h v
         h
     
-    /// Ephemeral Roots with Reference Counting
+    /// Ephemeral Roots via Reference Counting
     ///
-    /// Stowage DB's key-value layer provides persistent roots for 
-    /// secure hash resources, a basis for GC. But some resources,
-    /// especially new resources or resources for virtual memory,
-    /// are referenced only from ephemeral memory. The client is
-    /// responsible for GC of such resources via trivial reference
-    /// counting.
+    /// The stowage DB's key-value layer provides a simple basis for
+    /// persistent roots, but that leaves a requirement to track hashes
+    /// in ephemeral process memory. Stowage provides a simple reference 
+    /// counting model to the client, such that a decrefRscDB may be run
+    /// upon a Finalize() or Dispose().
     ///
-    /// It is valid to incref a resource that is unknown to the DB.
-    /// However, attempting to decref a resource below zero references
-    /// will result in an InvalidOperation exception.
+    /// The current implementation is not precise. Resources may share a
+    /// reference counter, resulting in false positives without risk of
+    /// false negatives. But this does mean you cannot ask for the count
+    /// for a specific resource.
     let increfRscDB (db : DB) (h : RscHash) : unit =
-        I.dbIncEph (db.Impl) 1L (rscEphId h)
+        I.dbIncEph (db.Impl) 1L (I.rscEphID h)
 
     let decrefRscDB (db : DB) (h : RscHash) : unit =
-        I.dbDecEph (db.Impl) 1L (rscEphId h)
+        I.dbDecEph (db.Impl) 1L (I.rscEphID h)
 
 
     /// Iterate through blocks of keys within the DB.
@@ -168,10 +166,16 @@ module API =
     /// starting strictly after the given key. The keys are returned in
     /// lexicographic order in a block of a specified maximum size.
     let browseKeysDB (db : DB) (kMin : Key) (nMax : int) : Key[] =
-        // slice is inclusive
-        let minKey = Data.ByteString.snoc kMin 0uy // slice is inclusive
+        if not (isValidKey kMin) then invalidArg "kMin" "invalid key" else
         I.withRTX db.Impl (fun rtx -> 
-            LMDB.mdb_slice_keys rtx (db.Impl.db_data) minKey nMax)
+            Stowage.LMDB.mdb_slice_keys rtx (db.Impl.db_data) kMin nMax)
+
+    /// Non-copying test for presence of a key in the database. A key is
+    /// present if the associated value is not the empty bytestring.
+    let containsKeyDB (db : DB) (k : Key) : bool =
+        I.withRTX db.Impl (fun rtx ->
+            let v = I.dbReadKeyZC (db.Impl) rtx k
+            (0un <> v.size))
 
     /// Transaction object
     ///
@@ -260,8 +264,8 @@ module API =
         if Option.isSome wv then wv else
         Map.tryFind k tx.rd
 
-    let private readKeyNew (tx:TX) (rtx:MDB_txn) (k:Key) : Val =
-        let v = I.readKeyDB tx.db rtx k
+    let private readKeyNew (tx:TX) rtx (k:Key) : Val =
+        let v = I.dbReadKey tx.db rtx k
         tx.rd <- Map.add k v tx.rd
         v
 
