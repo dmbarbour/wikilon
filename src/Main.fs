@@ -90,9 +90,12 @@ let main argv =
                 let pw = hashStr(getEntropy 64).Substring(0,24)
                 do printfn "admin:%s" pw
                 Some pw
-    let db = Stowage.DB.openDB (1024 * args.size)
+    let db = Stowage.API.openDB "data" (1024 * args.size)
     let app = WS.mkApp db admin
-    do startWebServer svc app
+    try startWebServer svc app
+    finally 
+        syncDB db
+        closeDB db
     0 // return an integer exit code
 
 

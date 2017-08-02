@@ -14,6 +14,7 @@
     <PackageReference Include="FSharp.Core" Version="4.1.*" />
     <PackageReference Include="FSharp.NET.Sdk" Version="1.0.*" PrivateAssets="All" />
     <PackageReference Include="Konscious.Security.Cryptography.Blake2" Version="1.0.5" />
+    <PackageReference Include="System.ValueTuple" Version="4.3.1" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Data.ByteString\Data.ByteString.fsproj" />

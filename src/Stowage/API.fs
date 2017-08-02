@@ -6,32 +6,101 @@ open System.Security
 open Data.ByteString
 open System.Runtime.InteropServices
 
+/// Stowage Database (abstract)
+///
 /// Stowage is a key-value database that features garbage collected
-/// references between binaries via secure hashes. 
+/// references between binaries via secure hashes. That is, a binary
+/// value may contain secure hashes (cf. Stowage.Hash), and we can 
+/// look up binaries by secure hashes, and binaries that aren't rooted
+/// will eventually be removed from the database.
 ///
-/// Stowage is implemented above LMDB, a memory-mapped B-tree. Stowage
-/// transactions are optimistic and lightweight, held in memory until
-/// commit. Non-conflicting concurrent writes are batched to amortize
-/// overheads for synchronization to disk. However, in case of conflict,
-/// inconsistencies may be observed within the failing transactions.
+/// A stowage database is convenient for working with larger than memory
+/// data, especially in functional systems or where data persistence is
+/// desired. Structure sharing (deduplication) is implicit for binaries.
+/// Stowage is implemented above memory-mapped embedded database LMDB.
 ///
-/// The ability to reference binaries via secure hashes, together with
-/// garbage collection, enables a stowage database to represent larger 
-/// than memory persistent data structures in a purely functional style.
-/// It also supports simple structure sharing, and should be relatively
-/// easy to shard in a distributed system. This doubles as a functional
-/// virtual memory model.
+/// Security Notes: Resource secure hashes should be treated as secure
+/// read capabilities - i.e. don't leak them, but also don't hesitate to
+/// provide the data to anyone who can provide the hash. Stowage DB is
+/// designed to resist timing attacks that leak resource hashes. Keys
+/// are not protected, and should not embed sensitive information. Any
+/// security for key-value lookups should be provided by the client.
+/// 
+/// Other Notes: Disposing of the database will simply halt the writer
+/// thread. The database isn't fully closed unless Finalize'd().
+[< Struct >]
+type DB =
+    val internal Impl : I.DB
+    internal new(dbImpl : I.DB) = { Impl = dbImpl }
+
+/// Transaction object
+///
+/// A Stowage transaction is simply a stateful object that tracks
+/// reads, writes, and stowage of resources to simplify a lot of 
+/// the surrounding operations. Upon commit, `atomicUpdateDB` is
+/// performed. Upon disposal (or finalization), ephemeral roots 
+/// for new secure hash resources will be automatically decref'd. 
+///
+/// An important consideration is that snapshot isolation is not
+/// guaranteed. Transactions may read inconsistent data. Example:
+///
+///         Alice        Bob
+///         Reads A
+///                      Updates A,B
+///         Reads B
+///
+/// In this case, Alice will read B inconsistent with A. Further, if
+/// secure hash resources were previously rooted by A, they might be
+/// GC'd concurrently with Alice's attempt to read them, causing some
+/// loadRsc operations to fail non-deterministically.
+///
+/// This issue can be mitigated by reading multiple keys together or
+/// by providing external concurrency control for contended keys. If
+/// clients can avoid conflicts naturally, that would perform best.
+type TX =
+    val         internal db : I.DB
+    val mutable internal rd : KVMap
+    val mutable internal ws : KVMap
+    val mutable internal eph : I.EphRoots
+    new (db : DB) =
+        { db = db.Impl
+          rd = Map.empty
+          ws = Map.empty
+          eph = Map.empty
+        }
+    member tx.DB with get () = DB (tx.db)
+    member tx.Reads with get () = tx.rd
+    member tx.Writes with get () = tx.ws
+    member private tx.ClearEphRoots() : unit =
+        I.dbRemEphRoots (tx.db) (tx.eph)
+        tx.eph <- Map.empty
+    override tx.Finalize() = tx.ClearEphRoots()
+    interface System.IDisposable with
+        member tx.Dispose() =
+            tx.ClearEphRoots()
+            System.GC.SuppressFinalize tx
+
+
+
 [< AutoOpen >]
 module API =
 
-    /// Stowage database object (abstract)
-    [< Struct >]
-    type DB =
-        val internal Impl : I.DB
-        internal new(dbImpl : I.DB) = { Impl = dbImpl }
+    /// Open or Create database in current directory.
+    ///
+    /// Note: Stowage DB assumes exclusive control by single process.
+    /// A simple .lock file is used to help resist accidents. Client
+    /// should avoid using Stowage with networked filesystems.
+    let openDB (path : string) (maxSizeMB : int) : DB = 
+        Directory.CreateDirectory(path) |> ignore
+        DB (I.openDB path maxSizeMB)
 
-    /// Open or Create database 'stowage' in current directory.
-    let openDB (maxSizeMB : int) : DB = DB (I.openDB maxSizeMB)
+    /// Close database for graceful shutdown.
+    ///
+    /// The normal use case for Stowage DB is to run until crash. But
+    /// graceful shutdown is an option. The caller must ensure there
+    /// are no concurrent operations involving the DB. This will wait
+    /// for a final write and sync then properly shutdown.
+    let closeDB (db : DB) : unit = I.closeDB db.Impl
 
     /// Read value associated with a key in the DB.
     ///
@@ -60,7 +129,6 @@ module API =
     let inline verifyReadAssumptions (db : DB) (reads : KVMap) : bool =
         Option.isNone (testReadAssumptions db reads)
 
-
     /// Atomic database update (asynchronous)
     /// 
     /// This delivers read assumptions and writes to a writer thread.
@@ -71,15 +139,16 @@ module API =
     /// The writer will tend to batch updates that are provided around
     /// the same time, i.e. anything provided while the writer was busy
     /// with the prior batch. This helps amortize disk synchronization
-    /// overheads among concurrent writers.
+    /// overheads among concurrent writers. Individual writes are thus
+    /// relatively lightweight.
     ///
-    /// In case of conflict, the order of commit determines success.
-    /// Thus, progress is guaranteed, but failed updates may need to
-    /// retry, and fairness is not assured. Clients should control
-    /// access to high-contention keys using an independent locks or
-    /// queues system.
+    /// In case of conflict, the earliest commit within the batch will
+    /// succeed. Thus, progress is guaranteed. But fairness is not: it
+    /// is possible to compute an update many times without success if
+    /// a key is under heavy contention. Clients should control access
+    /// to high-contention keys, e.g. using locks or channels.
     let atomicUpdateDB_async (db : DB) (reads : KVMap) (writes : KVMap) : Task<bool> =
-        // reads are validated by the writer, but we'll check writes immediately
+        // reads are validated by the writer, but sanitize writes immediately
         let validKV k v = isValidKey k && isValidVal v
         let validWS = Map.forall validKV writes
         if not validWS then invalidArg "writes" "invalid write" else
@@ -91,6 +160,41 @@ module API =
     let inline atomicUpdateDB (db : DB) (reads : KVMap) (writes : KVMap) : bool =
         (atomicUpdateDB_async db reads writes).Result
 
+    /// Blind Writes.
+    /// 
+    /// Blind writes won't conflict with any other update, but it's left
+    /// to client layers to provide some form of concurrency control. 
+    /// These writes are thin wrappers around atomicUpdateDB. 
+    let inline writeKeyDB_async (db : DB) (k : Key) (v : Val) : Task<bool> =
+        atomicUpdateDB_async db Map.empty (Map.add k v Map.empty)
+
+    let inline writeKeyDB (db : DB) (k : Key) (v : Val) : unit =
+        ignore <| atomicUpdateDB db Map.empty (Map.add k v Map.empty)
+
+    let inline writeKeysDB_async (db : DB) (writes : KVMap) : Task<bool> =
+        atomicUpdateDB_async db Map.empty writes
+
+    let inline writeKeysDB (db : DB) (writes : KVMap) : unit =
+        ignore <| atomicUpdateDB db Map.empty writes
+
+    /// Synchronize the Database.
+    /// 
+    /// This simply waits for all prior writes and updates to complete.
+    /// This is a convenient operation for graceful shutdown, or as a
+    /// memory barrier of sorts in context of asynchronous writes. 
+    let inline syncDB (db : DB) : unit = 
+        let r = atomicUpdateDB db (Map.empty) (Map.empty)
+        assert(r)
+        ()
+
+    // lookup new resource in DB
+    let inline private findNewRsc (db : DB) (h : RscHash) : Val option =
+        // note: I'm assuming atomic reads for reference variables. This
+        // was part of the C# language spec but it should hold for F#.
+        match Map.tryFind (I.rscStowKey h) (db.Impl.db_newrsc) with
+        | Some(struct(_,v)) -> Some v
+        | None -> None
+
     /// Access a secure hash resource from the Database
     ///
     /// A Stowage database contains a set of binary values that are
@@ -100,9 +204,7 @@ module API =
     /// reference count, so developers cannot assume availability of
     /// the resource without careful management of roots. 
     let loadRscDB (db : DB) (h : RscHash) : Val option =
-        // note: I'm relying on atomic reads for reference variables.
-        // This was asserted for C#, so I assume it's valid for .Net.
-        let newRsc = Map.tryFind h (db.Impl.db_newrsc)
+        let newRsc = findNewRsc db h
         if Option.isSome newRsc then newRsc else
         I.withRTX db.Impl (fun rtx -> I.dbGetRsc db.Impl rtx h) 
 
@@ -118,13 +220,13 @@ module API =
     let unsafeWithRscDB (db : DB) (h : RscHash) (action : nativeint -> int -> 'x) : 'x option =
         // note: I'm relying on atomic reads for reference variables.
         // This was asserted for C#, so I assume it's valid for .Net.
-        match Map.tryFind h (db.Impl.db_newrsc) with
-          | None -> I.withRTX db.Impl (fun rtx ->
-                match I.dbGetRscZC db.Impl rtx h with
-                  | None -> None
-                  | Some v -> Some (action v.data (int v.size)))
-          | Some v -> withPinnedBytes v (fun vaddr ->
-                Some (action vaddr v.Length))
+        match findNewRsc db h with
+        | None -> I.withRTX db.Impl (fun rtx ->
+            match I.dbGetRscZC db.Impl rtx h with
+            | None -> None
+            | Some v -> Some (action v.data (int v.size)))
+        | Some v -> withPinnedBytes v (fun vaddr ->
+            Some (action vaddr v.Length))
 
     /// Add a resource to the DB.
     ///
@@ -133,8 +235,12 @@ module API =
     /// a flexible basis for working with larger than memory data.
     ///
     /// Resources are garbage collected. To prevent immediate GC of the
-    /// stowed resource, this performs an implicit, atomic increfRscDB.
-    /// The client is responsible for a subsequent decrefRscDB.
+    /// newly stowed resource, stowRscDB performs an implicit, atomic 
+    /// increfRscDB. The client is responsible for later decrefRscDB.
+    ///
+    /// Note: The current implementation writes all new resources to
+    /// disk, even if they'll soon be GC'd. For efficiency, clients 
+    /// should avoid stowage of resources that would soon be GC'd.
     let stowRscDB (db : DB) (v : Val) : RscHash =
         if not (isValidVal v) then invalidArg "v" "value too big" else
         let h = Hash.hash v
@@ -159,67 +265,29 @@ module API =
     let decrefRscDB (db : DB) (h : RscHash) : unit =
         I.dbDecEph (db.Impl) 1L (I.rscEphID h)
 
+    // idea: I could potentially introduce a notion of `Stowed<T>` nodes
+    // that may hold a cached representation of the type or eventually be
+    // moved into the DB after some timeout, perhaps leveraging weak refs.
 
     /// Iterate through blocks of keys within the DB.
     ///
-    /// This returns a subset of keys with non-empty values from the DB,
-    /// starting strictly after the given key. The keys are returned in
-    /// lexicographic order in a block of a specified maximum size.
-    let browseKeysDB (db : DB) (kMin : Key) (nMax : int) : Key[] =
-        if not (isValidKey kMin) then invalidArg "kMin" "invalid key" else
+    /// This returns a subset of keys with non-empty values from the DB
+    /// lexicographically following a given key, or from the first key 
+    /// if the previous key is None. 
+    let discoverKeysDB (db : DB) (kPrev : Key option) (nMax : int) : Key[] =
+        let (kMin,validKey) =
+            match kPrev with
+            | None -> (Data.ByteString.empty, true)
+            | Some k -> (k, isValidKey k)
+        if not validKey then invalidArg "kPrev" "invalid key" else
         I.withRTX db.Impl (fun rtx -> 
             Stowage.LMDB.mdb_slice_keys rtx (db.Impl.db_data) kMin nMax)
 
-    /// Non-copying test for presence of a key in the database. A key is
-    /// present if the associated value is not the empty bytestring.
+    /// Check if the value associated with a key is non-empty.
     let containsKeyDB (db : DB) (k : Key) : bool =
         I.withRTX db.Impl (fun rtx ->
             let v = I.dbReadKeyZC (db.Impl) rtx k
             (0un <> v.size))
-
-    /// Transaction object
-    ///
-    /// A Stowage transaction is simply a stateful object that tracks
-    /// reads, writes, and stowage of resources to simplify a lot of 
-    /// the surrounding operations. Upon commit, `atomicUpdateDB` is
-    /// performed. Upon disposal (or finalization), ephemeral roots 
-    /// for new secure hash resources will be automatically decref'd. 
-    ///
-    /// An important consideration is that snapshot isolation is not
-    /// guaranteed. Transactions may read inconsistent data. Example:
-    ///
-    ///         Alice        Bob
-    ///         Reads A
-    ///                      Updates A,B
-    ///         Reads B
-    ///
-    /// In this case, Alice will read B inconsistent with A. Further, if
-    /// secure hash resources were previously rooted by A, they might be
-    /// GC'd concurrently with Alice's attempt to read them, causing some
-    /// loadRsc operations to fail non-deterministically. Mitigating such
-    /// issues is left to the client. 
-    type TX =
-        val         internal db : I.DB
-        val mutable internal rd : KVMap
-        val mutable internal ws : KVMap
-        val mutable internal eph : I.EphRoots
-        new (db : DB) =
-            { db = db.Impl
-              rd = Map.empty
-              ws = Map.empty
-              eph = Map.empty
-            }
-        member tx.DB with get () = DB (tx.db)
-        member tx.Reads with get () = tx.rd
-        member tx.Writes with get () = tx.ws
-        member private tx.ClearEphRoots() : unit =
-            I.dbRemEphRoots (tx.db) (tx.eph)
-            tx.eph <- Map.empty
-        override tx.Finalize() = tx.ClearEphRoots()
-        interface System.IDisposable with
-            member tx.Dispose() =
-                tx.ClearEphRoots()
-                System.GC.SuppressFinalize tx
 
 
     /// create a new transaction on the database

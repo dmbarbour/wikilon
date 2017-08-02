@@ -1,6 +1,7 @@
 
 namespace Stowage
 
+open System
 open System.IO
 open System.Threading
 open System.Threading.Tasks
@@ -8,7 +9,6 @@ open System.Security
 open System.Runtime.InteropServices
 open Data.ByteString
 
-open Stowage.Types
 open Stowage.Hash
 open Stowage.Memory
 open Stowage.LMDB
@@ -17,9 +17,6 @@ open Stowage.LMDB
 
 [< SecuritySafeCriticalAttribute >]
 module internal I =
-
-    // the db_stow table uses a half key
-    type Stowage = Map<RscHash,Val>     // recent stowage requests
 
     // The underlying database tables uses only half RscHash for lookup
     // or reference count management. The latter half is verified in 
@@ -35,6 +32,9 @@ module internal I =
     let inline rscStowKey (h:RscHash) : StowKey =
         assert(h.Length = rscHashLen)
         StowKey(Data.ByteString.take stowKeyLen h)
+
+    // the db_stow table uses a half key
+    type Stowage = Map<StowKey, struct(RscHash * Val)>     // recent stowage requests
 
     type RC = int64                     // sufficient for RC
     let maxRCLen = 18                   // length in bytes
@@ -71,16 +71,18 @@ module internal I =
 
     // Readlock state is essentially a reader-count with an event
     // for when we reach zero readers.
-    type ReadLock () = 
-        let mutable rc = 0
+    type ReadLock = 
+        val mutable private rc : RC
+        new () = { rc = 0L }
         member this.Acquire () = lock this (fun () -> 
-            rc <- rc + 1)
+            this.rc <- this.rc + 1L)
         member this.Release () = lock this (fun () ->
-            assert (rc > 0)
-            rc <- rc - 1
-            if(0 = rc) then Monitor.PulseAll(this))
+            assert (this.rc > 0L)
+            this.rc <- this.rc - 1L
+            if(0L = this.rc) then Monitor.PulseAll(this))
         member this.Wait () = lock this (fun () -> 
-            while(0 <> rc) do ignore(Monitor.Wait(this)))
+            while(0L <> this.rc) do 
+                ignore(Monitor.Wait(this)))
 
     type DB =
         { 
@@ -89,14 +91,13 @@ module internal I =
             db_stow : MDB_dbi     // resource ID -> value
             db_rfct : MDB_dbi     // resources with refct > 0
             db_zero : MDB_dbi     // resources with zero refct
+            db_flock : FileStream
 
             mutable db_rdlock : ReadLock        // current read-lock (updated per frame).
             mutable db_ephtbl : EphRoots        // ephemeral resource roots
             mutable db_newrsc : Stowage         // recent stowage requests
             mutable db_commit : Commit list     // pending commit requests
-            mutable db_incgc  : ByteString      // continue incremental GC
-
-            db_fini : System.Object  // extra finalizer
+            mutable db_halt   : bool            // halt the writer
         }
 
     // add commit request to the database
@@ -114,7 +115,7 @@ module internal I =
     let dbStow (db : DB) (h : RscHash) (v : Val) : EphID =
         let k = rscEphID h
         lock db (fun () ->
-            db.db_newrsc <- Map.add h v (db.db_newrsc)
+            db.db_newrsc <- Map.add (rscStowKey h) (struct(h,v)) (db.db_newrsc)
             db.db_ephtbl <- ephInc (db.db_ephtbl) k 1L
             Monitor.PulseAll(db))
         k
@@ -166,7 +167,6 @@ module internal I =
             else mdb_del wtx (db.db_zero) (k.v) |> ignore
                  mdb_put wtx (db.db_rfct) (k.v) (refctBytes rc)
 
-
     let dbGetRscZC (db:DB) (rtx:MDB_txn) (h:RscHash) : MDB_val option =
         if(h.Length <> rscHashLen) then invalidArg "h" "bad resource ID" else
         let hKey = Data.ByteString.take stowKeyLen h
@@ -188,10 +188,18 @@ module internal I =
     let inline dbGetRsc (db:DB) (rtx:MDB_txn) (h:RscHash) : Val option =
         dbGetRscZC db rtx h |> Option.map Stowage.LMDB.val2bytes
 
-    let dbDelRsc (db:DB) (wtx:MDB_txn) (k:StowKey) : unit =
+    // deletes resource, returns bytestring removed for refct GC
+    let dbDelRsc (db:DB) (wtx:MDB_txn) (k:StowKey) : Val =
+        let vOpt = mdb_get wtx (db.db_stow) (k.v)
         mdb_del wtx (db.db_stow) (k.v) |> ignore
         mdb_del wtx (db.db_zero) (k.v) |> ignore
-        mdb_del wtx (db.db_rfct) (k.v) |> ignore                
+        mdb_del wtx (db.db_rfct) (k.v) |> ignore
+        match vOpt with
+        | None -> Data.ByteString.empty
+        | Some v -> 
+            let rlen = rscHashLen - stowKeyLen
+            assert(v.Length >= rlen)
+            Data.ByteString.drop rlen v
 
     let dbPutRsc (db:DB) (wtx:MDB_txn) (h:RscHash) (v:Val) : unit =
         if(h.Length <> rscHashLen) then invalidArg "h" "invalid resource ID" else
@@ -267,8 +275,8 @@ module internal I =
         let invalidAssumption k v = not (validAssumption k v)
         Map.tryFindKey invalidAssumption rd
 
-    let inline hasRscMDB (db:DB) (rtx:MDB_txn) (h:RscHash) : bool =
-        mdb_contains rtx (db.db_stow) ((rscStowKey h).v)
+    let inline dbHasRsc (db:DB) (rtx:MDB_txn) (k:StowKey) : bool =
+        mdb_contains rtx (db.db_stow) (k.v)
 
     let dbHasWork (db:DB) : bool =
         (not (List.isEmpty db.db_commit) ||
@@ -286,27 +294,34 @@ module internal I =
     let kvmRCU (rc:RC) (m:KVMap) (u0:RCU) : RCU =
         Map.fold (fun u _ v -> valRCU rc u v) u0 m
     let rscRCU (m:Stowage) (u0:RCU) : RCU =
-        Map.fold (fun u k v -> updRCU 0L (valRCU 1L u v) (rscStowKey k)) u0 m
+        Map.fold (fun u sk (struct(h,v)) -> updRCU 0L (valRCU 1L u v) sk) u0 m
 
-    // seek a set of keys for which pending GC may continue
-    let dbGCPend (db:DB) (rtx:MDB_txn) (hold:EphRoots) (quota:int) : RCU =
-        raise (System.NotImplementedException())
+
+
+    // approach to GC...
+    //
+    // I need to do incremental GC, and I don't want it to degrade much based
+    // on whether we GC long lists vs. balanced tree structures. So I'll try 
+    // to compute a deep reference count update with each frame. Additionally, 
+    // I'll take a few candidates for GC from the db_zero pool to continue GC.
+    // And I'll add to the db_zero pool after I have enough candidates.
+    
+    // candidates for GC from the db_zero table. This might touch a number of
+    // elements proportional to the quota plus the db_ephtbl size.
+    let dbContinueGC (db:DB) (rtx:MDB_txn) (eph : EphRoots) (quota : int) : RCU =
+        LMDB.mdb_keys_from rtx (db.db_zero) (Data.ByteString.empty) 
+            |> Seq.filter (fun k -> not (Map.containsKey (skEphID (StowKey(k))) eph))
+            |> Seq.truncate quota 
+            |> Seq.fold (fun m k -> Map.add (StowKey(k)) 0L m) Map.empty
 
     let rec dbWriterLoop (db:DB) (rlock:ReadLock) : unit =
-        let rec waitForWork () = 
-            if dbHasWork db then () else 
-            ignore (Monitor.Wait(db))
-            waitForWork ()
-        let (stowedRsc,commitList) = lock db (fun () -> 
-            waitForWork()
-            let result = (db.db_newrsc, db.db_commit)
+        // wait for writer tasks
+        let (stowedRsc,ephRoots,commitList,halt) = lock db (fun () ->
+            if not (dbHasWork db) 
+                then ignore(Monitor.Wait(db))
+            let r = (db.db_newrsc, db.db_ephtbl, db.db_commit, db.db_halt)
             db.db_commit <- List.empty
-            result)
-
-        // delay GC for both db_ephtbl and newly stowed resources.
-        let ephRoots : EphRoots = 
-            let addKey e k _ = Map.add (rscEphID k) 1L e
-            Map.fold addKey (db.db_ephtbl) stowedRsc
+            r)
 
         let wtx = mdb_readwrite_txn_begin (db.db_env) 
 
@@ -316,30 +331,66 @@ module internal I =
                 then tcs.TrySetResult(false) |> ignore; wb 
                 else Map.fold (fun m k v -> Map.add k v m) wb ws
         let writes = List.foldBack tryCommit commitList Map.empty 
-        let overwrites = Map.map (fun k _ -> dbReadKey db wtx k) writes 
-        let writeRsc = Map.filter (fun k _ -> not (hasRscMDB db wtx k)) stowedRsc 
+        let overwrites = Map.map (fun k _ -> dbReadKey db wtx k) writes
+        let writeRsc = Map.filter (fun sk _ -> not (dbHasRsc db wtx sk)) stowedRsc 
 
-        // compute initial reference count updates!
-        let initRC = 
-            Map.empty 
+        // Write keys and resources.
+        Map.iter (dbWriteKey db wtx) writes
+        Map.iter (fun _ struct(h,v) -> dbPutRsc db wtx h v) writeRsc
+
+        // compute refct updates and perform incremental GC.
+        // GC is the most complicated part of the writer loop.
+        let (gcLo,gcHi) = (100,1000) // effort quotas for incremental GC
+        let updRefct (struct(nGC,rcTbl,rcu)) sk n = 
+            let rc0 = 
+                match Map.tryFind sk rcTbl with
+                | None -> dbGetRefct db wtx sk
+                | Some rc -> rc
+            let rc' = (rc0 + n)
+            assert(rc' >= 0L) // sanity check
+            let doGC = (0L = rc') && (nGC < gcHi) &&
+                       not (Map.containsKey (skEphID sk) ephRoots)
+            if not doGC then struct(nGC, (Map.add sk rc' rcTbl), rcu) else
+            let vDel = dbDelRsc db wtx sk // we GC as we go
+            let rcu' = valRCU (-1L) rcu vDel
+            struct((1+nGC), (Map.remove sk rcTbl), rcu') 
+        let rec gcLoop nGC rcTbl rcu =
+                if(Map.isEmpty rcu) then (nGC,rcTbl) else
+                let struct(nGC',rcTbl',rcu') = 
+                    Map.fold updRefct (struct(nGC,rcTbl,Map.empty)) rcu
+                gcLoop nGC' rcTbl' rcu'
+        let rcu0 = // initial refct updates
+            dbContinueGC db wtx ephRoots gcLo
               |> kvmRCU 1L writes 
-              |> rscRCU writeRsc
-              |> Map.map (fun sk delta -> (delta + (dbGetRefct db wtx sk)))
-        let negRC = 
-            Map.empty 
               |> kvmRCU (-1L) overwrites
+              |> rscRCU writeRsc
+        let (nGC,rcTbl) = gcLoop 0 Map.empty rcu0
 
-        // choose targets for incremental GC
+        Map.iter (dbSetRefct db wtx) rcTbl
+        if(nGC >= gcLo) 
+            then dbSignal db // heuristically continue GC next frame
 
-        // todo: figure out the rest
-       
-        let rlock' = advanceReaderFrame db
-        // if we got a fair bit of GC work done, signal more GC work
-        //  ensures we GC as much as possible across write cycles
-        dbWriterLoop db rlock'
+        // finalize write frame        
+        rlock.Wait() // wait for readers of old frame to finish
+        mdb_txn_commit wtx // overwrite old frame with new frame
+        let rlock' = advanceReaderFrame db // advance readers to new frame(*)
+            // (*) race condition for new readers between commit and advance
+            //     is safe, at worst increases latency for next rlock.Wait().
+        mdb_env_sync (db.db_env) // sync updates to disk
+        
+        // signal completion of updates only after sync to disk
+        let signalSuccess ((_,_,tcs) : Commit) = 
+            tcs.TrySetResult(true) |> ignore 
+        List.iter signalSuccess commitList
 
+        // clear stowage requests processed this write frame
+        lock db (fun () -> 
+            db.db_newrsc <- Map.fold (fun m h _ -> Map.remove h m) db.db_newrsc stowedRsc)
 
-    let inline dbThreadStart (db:DB) () : unit = 
+        // begin next write frame unless we're halted
+        if (halt) then () else dbWriterLoop db rlock'
+
+    let dbThread (db:DB) () : unit = 
         dbSignal db // force initial write step
         dbWriterLoop db (advanceReaderFrame db)
 
@@ -353,21 +404,13 @@ module internal I =
                 FileOptions.DeleteOnClose)
 
     // assuming we're in the target directory, build the database
-    let openDB (maxSizeMB : int) : DB =
-        let lock = lockFile ".lock"
+    let openDB (path : string) (maxSizeMB : int) : DB =
+        let flock = lockFile (Path.Combine(path,".lock"))
         let env = mdb_env_create ()
         mdb_env_set_mapsize env maxSizeMB
         mdb_env_set_maxdbs env 4
         let envFlags = MDB_NOSYNC ||| MDB_WRITEMAP ||| MDB_NOTLS ||| MDB_NOLOCK
-        mdb_env_open env "." envFlags
-
-        // introduce a DB finalizer
-        let dbFini = { new System.Object() with
-                        override x.Finalize() =
-                            mdb_env_sync env
-                            mdb_env_close env
-                            lock.Dispose()
-                     }
+        mdb_env_open env path envFlags
 
         // open named databases
         let txn = mdb_readwrite_txn_begin env
@@ -376,21 +419,33 @@ module internal I =
         let dbRfct = mdb_dbi_open txn "#" // positive refcts
         let dbZero = mdb_dbi_open txn "0" // zero refcts
         mdb_txn_commit txn
+
         let db : DB = 
             { db_env  = env
               db_data = dbData
               db_stow = dbStow
               db_rfct = dbRfct
               db_zero = dbZero
+              db_flock = flock
               db_rdlock = new ReadLock()
               db_ephtbl = Map.empty
               db_newrsc = Map.empty
               db_commit = List.empty
-              db_incgc = Data.ByteString.empty
-              db_fini = dbFini
+              db_halt = false
             }
-        (new Thread(dbThreadStart db)).Start()
+        (new Thread(dbThread db)).Start()
         db
-    // TODO: 
+
+    let closeDB (db : DB) : unit =
+        let tcs = new TaskCompletionSource<bool>()
+        lock db (fun () ->
+            if(db.db_halt) then invalidOp "DB already closed" else
+            db.db_halt <- true
+            db.db_commit <- (Map.empty,Map.empty,tcs)::(db.db_commit)
+            Monitor.PulseAll(db))
+        let ok = tcs.Task.Result  // wait for final write & sync
+        assert(ok)
+        mdb_env_close (db.db_env) // gracefully close the DB
+        db.db_flock.Dispose()     // release the file lock
 
 
