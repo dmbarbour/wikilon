@@ -1,3 +1,3 @@
-*.fs text eol=crlf
-*.fsproj text eol=crlf
+*.fs text eol=lf
+*.fsproj text eol=lf
 
