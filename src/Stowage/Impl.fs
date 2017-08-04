@@ -190,6 +190,7 @@ module internal I =
 
     // deletes resource, returns bytestring removed for refct GC
     let dbDelRsc (db:DB) (wtx:MDB_txn) (k:StowKey) : Val =
+        //printf "Deleting Resource %s...\n" (toString k.v)
         let vOpt = mdb_get wtx (db.db_stow) (k.v)
         mdb_del wtx (db.db_stow) (k.v) |> ignore
         mdb_del wtx (db.db_zero) (k.v) |> ignore
@@ -204,6 +205,7 @@ module internal I =
     let dbPutRsc (db:DB) (wtx:MDB_txn) (h:RscHash) (v:Val) : unit =
         if(h.Length <> rscHashLen) then invalidArg "h" "invalid resource ID" else
         if not (isValidVal v) then invalidArg "v" "invalid resource value" else
+        //printf "Writing Resource %s\n" (toString h)
         let hKey = Data.ByteString.take stowKeyLen h
         let hRem = Data.ByteString.drop stowKeyLen h
         let dst = mdb_reserve wtx (db.db_stow) hKey (hRem.Length + v.Length)
@@ -223,6 +225,7 @@ module internal I =
     let dbWriteKey (db:DB) (wtx:MDB_txn) (k:Key) (v:Val) : unit =
         if(not (isValidKey k)) then invalidArg "k" "invalid key" else
         if(not (isValidVal v)) then invalidArg "v" "invalid value" else
+        //printf "Writing Key %s\n" (toString k)
         if(Data.ByteString.isEmpty v) 
             // empty value corresponds to deletion
             then mdb_del wtx (db.db_data) k |> ignore

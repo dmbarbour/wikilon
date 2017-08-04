@@ -119,7 +119,7 @@ module API =
             Array.map (I.dbReadKey db.Impl rtx) ks)
 
     /// Find first key (if any) for which associated value doesn't match.
-    /// Note: This doesn't account for concurrent writes.
+    /// Note: This doesn't account for concurrent or asynchronous writes.
     let testReadAssumptions (db : DB) (reads : KVMap) : (Key option) =
         if Map.isEmpty reads then None else
         I.withRTX db.Impl (fun rtx -> 
@@ -169,13 +169,15 @@ module API =
         atomicUpdateDB_async db Map.empty (Map.add k v Map.empty)
 
     let inline writeKeyDB (db : DB) (k : Key) (v : Val) : unit =
-        ignore <| atomicUpdateDB db Map.empty (Map.add k v Map.empty)
+        let r = atomicUpdateDB db Map.empty (Map.add k v Map.empty)
+        assert(r)
 
     let inline writeKeysDB_async (db : DB) (writes : KVMap) : Task<bool> =
         atomicUpdateDB_async db Map.empty writes
 
     let inline writeKeysDB (db : DB) (writes : KVMap) : unit =
-        ignore <| atomicUpdateDB db Map.empty writes
+        let r = atomicUpdateDB db Map.empty writes
+        assert(r)
 
     /// Synchronize the Database.
     /// 
