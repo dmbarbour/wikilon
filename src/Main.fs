@@ -17,13 +17,13 @@ starts a local web server, which is mostly configured online. Arguments:
     [-size GB] maximum database size (default 3000)
     [-admin]  print a temporary admin password
 
-Initial configuration of Wikilon requires the -admin password, but the admin
-can create other users with administrative authorities. This admin password
-is valid only until the process restarts.
+Most configuration of Wikilon is managed online, and requires administrative
+authority. Requesting an `-admin` password makes the admin account available
+until process reset. The admin can manage authorities for other accounts.
 
-Wikilon does not directly support TLS. Use a reverse proxy to wrap the local
-Wikilon connections with SSL/TLS/HTTPS. IP 0.0.0.0 is a wildcard, but one
-should consider security implications.
+Wikilon does not support TLS. Instead, use a reverse proxy (like NGINX) to 
+wrap the HTTP service with SSL/TLS/HTTPS. IP 0.0.0.0 is a wildcard, but do
+consider security implications. 
 """
 
 type Args = {
@@ -93,9 +93,7 @@ let main argv =
     let db = Stowage.API.openDB "data" (1024 * args.size)
     let app = WS.mkApp db admin
     try startWebServer svc app
-    finally 
-        syncDB db
-        closeDB db
+    finally closeDB db
     0 // return an integer exit code
 
 
