@@ -11,8 +11,9 @@ open System.Runtime.InteropServices
 /// Stowage is a key-value database that features garbage collected
 /// references between binaries via secure hashes. That is, a binary
 /// value may contain secure hashes (cf. Stowage.Hash), and we can 
-/// look up binaries by secure hashes, and binaries that aren't rooted
-/// will eventually be removed from the database.
+/// look up binaries by secure hashes. Binaries that are not rooted
+/// at the key-value layer or with ephemeral reference counting will
+/// eventually be removed from the database.
 ///
 /// A stowage database is convenient for working with larger than memory
 /// data, especially in functional systems or where data persistence is
@@ -91,7 +92,6 @@ module API =
     /// A simple .lock file is used to help resist accidents. Client
     /// should avoid using Stowage with networked filesystems.
     let openDB (path : string) (maxSizeMB : int) : DB = 
-        Directory.CreateDirectory(path) |> ignore
         DB (I.openDB path maxSizeMB)
 
     /// Close database for graceful shutdown.
@@ -129,12 +129,13 @@ module API =
     let inline verifyReadAssumptions (db : DB) (reads : KVMap) : bool =
         Option.isNone (testReadAssumptions db reads)
 
-    /// Atomic database update (asynchronous)
+    /// Atomic database compare and update (asynchronous)
     /// 
     /// This delivers read assumptions and writes to a writer thread.
-    /// The writer will verify the reads and, if they are valid, will
-    /// perform the writes. The result is true only if all reads are
-    /// valid and the writes are successfully synchronized to disk.
+    /// The writer will compare the read assumptions with the database
+    /// and, if they are valid, will perform the writes. The result is
+    /// true only if all reads match and after writes are successfully 
+    /// synchronized to disk.
     ///
     /// The writer will tend to batch updates that are provided around
     /// the same time, i.e. anything provided while the writer was busy
@@ -142,11 +143,11 @@ module API =
     /// overheads among concurrent writers. Individual writes are thus
     /// relatively lightweight.
     ///
-    /// In case of conflict, the earliest commit within the batch will
-    /// succeed. Thus, progress is guaranteed. But fairness is not: it
-    /// is possible to compute an update many times without success if
-    /// a key is under heavy contention. Clients should control access
-    /// to high-contention keys, e.g. using locks or channels.
+    /// In case of conflict, it's first commit wins within each batch.
+    /// Thus, progress is guaranteed, and it's also possible to write
+    /// multiple updates each assuming success of prior writes (like 
+    /// a checkpointing commit). But fairness is not guaranteed. If a
+    /// key is under contention, try external concurrency control.
     let atomicUpdateDB_async (db : DB) (reads : KVMap) (writes : KVMap) : Task<bool> =
         // reads are validated by the writer, but sanitize writes immediately
         let validKV k v = isValidKey k && isValidVal v
@@ -313,21 +314,27 @@ module API =
     let inline commit (tx:TX) : bool = 
         (commit_async tx).Result
 
-    /// Checkpoint a transaction (asynchronous).
+    /// Assume writes have succeeded.
     ///
-    /// This performs an asynchronous commit, but also modifies the TX
-    /// state to support further updates and checkpoints of the TX. It
-    /// is possible for multiple checkpoints to be batched together, so
-    /// that intermediate states are not written to disk.
-    let checkpoint_async (tx:TX) : Task<bool> =
-        let result = commit_async tx
+    /// Writes are moved to read assumptions. This can be used with
+    /// commit to model checkpointing transactions.
+    let assumeWrites (tx:TX) : unit =
         tx.rd <- Map.fold (fun m k v -> Map.add k v m) tx.rd tx.ws
         tx.ws <- Map.empty
+
+    /// Checkpoint a transaction (asynchronous). 
+    ///  essentially commit_async + assumeWrites
+    let inline checkpoint_async (tx:TX) : Task<bool> =
+        let result = commit_async tx
+        assumeWrites tx
         result
 
     /// Checkpoint a transaction (synchronous).
+    ///  essentially commit + assumeWrites if commit succeeds
     let inline checkpoint (tx:TX) : bool = 
-        (checkpoint_async tx).Result
+        let result = commit tx
+        if result then assumeWrites tx
+        result
 
     let private readKeyOld (tx:TX) (k:Key) : Val option =
         let wv = Map.tryFind k tx.ws

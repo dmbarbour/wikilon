@@ -84,21 +84,62 @@ module internal I =
             while(0L <> this.rc) do 
                 ignore(Monitor.Wait(this)))
 
-    type DB =
-        { 
-            db_env  : MDB_env     
-            db_data : MDB_dbi     // key -> value
-            db_stow : MDB_dbi     // resource ID -> value
-            db_rfct : MDB_dbi     // resources with refct > 0
-            db_zero : MDB_dbi     // resources with zero refct
-            db_flock : FileStream
+    let lockFile (fn : string) : FileStream =
+        new FileStream(
+                fn, 
+                FileMode.OpenOrCreate, 
+                FileAccess.ReadWrite, 
+                FileShare.None,
+                8,
+                FileOptions.DeleteOnClose)
 
-            mutable db_rdlock : ReadLock        // current read-lock (updated per frame).
-            mutable db_ephtbl : EphRoots        // ephemeral resource roots
-            mutable db_newrsc : Stowage         // recent stowage requests
-            mutable db_commit : Commit list     // pending commit requests
-            mutable db_halt   : bool            // halt the writer
-        }
+
+    type DB =
+        val db_env  : MDB_env
+        val db_data : MDB_dbi
+        val db_stow : MDB_dbi
+        val db_rfct : MDB_dbi
+        val db_zero : MDB_dbi
+        val db_flock : FileStream
+
+        val mutable db_rdlock : ReadLock
+        val mutable db_ephtbl : EphRoots
+        val mutable db_newrsc : Stowage
+        val mutable db_commit : Commit list
+        val mutable db_halt   : bool
+
+        new (path:string, maxSizeMB : int) =
+            do Directory.CreateDirectory(path) |> ignore
+            let flock = lockFile (Path.Combine(path,".lock"))
+            let env = mdb_env_create ()
+            do mdb_env_set_mapsize env maxSizeMB
+            do mdb_env_set_maxdbs env 4
+            let envFlags = MDB_NOSYNC ||| MDB_WRITEMAP ||| MDB_NOTLS ||| MDB_NOLOCK
+            do mdb_env_open env path envFlags
+
+            // open named databases
+            let txn = mdb_readwrite_txn_begin env
+            let dbData = mdb_dbi_open txn "@" // root key-value
+            let dbStow = mdb_dbi_open txn "$" // stowed resources
+            let dbRfct = mdb_dbi_open txn "#" // positive refcts
+            let dbZero = mdb_dbi_open txn "0" // zero refcts
+            do mdb_txn_commit txn
+
+            { db_env  = env
+              db_data = dbData
+              db_stow = dbStow
+              db_rfct = dbRfct
+              db_zero = dbZero
+              db_flock = flock
+              db_rdlock = new ReadLock()
+              db_ephtbl = Map.empty
+              db_newrsc = Map.empty
+              db_commit = List.empty
+              db_halt = false
+            }
+
+
+
 
     // add commit request to the database
     let dbCommit (db : DB) (c : Commit) : unit =
@@ -397,45 +438,10 @@ module internal I =
         dbSignal db // force initial write step
         dbWriterLoop db (advanceReaderFrame db)
 
-    let lockFile (fn : string) : FileStream =
-        new FileStream(
-                fn, 
-                FileMode.OpenOrCreate, 
-                FileAccess.ReadWrite, 
-                FileShare.None,
-                8,
-                FileOptions.DeleteOnClose)
 
     // assuming we're in the target directory, build the database
     let openDB (path : string) (maxSizeMB : int) : DB =
-        let flock = lockFile (Path.Combine(path,".lock"))
-        let env = mdb_env_create ()
-        mdb_env_set_mapsize env maxSizeMB
-        mdb_env_set_maxdbs env 4
-        let envFlags = MDB_NOSYNC ||| MDB_WRITEMAP ||| MDB_NOTLS ||| MDB_NOLOCK
-        mdb_env_open env path envFlags
-
-        // open named databases
-        let txn = mdb_readwrite_txn_begin env
-        let dbData = mdb_dbi_open txn "@" // root key-value
-        let dbStow = mdb_dbi_open txn "$" // stowed resources
-        let dbRfct = mdb_dbi_open txn "#" // positive refcts
-        let dbZero = mdb_dbi_open txn "0" // zero refcts
-        mdb_txn_commit txn
-
-        let db : DB = 
-            { db_env  = env
-              db_data = dbData
-              db_stow = dbStow
-              db_rfct = dbRfct
-              db_zero = dbZero
-              db_flock = flock
-              db_rdlock = new ReadLock()
-              db_ephtbl = Map.empty
-              db_newrsc = Map.empty
-              db_commit = List.empty
-              db_halt = false
-            }
+        let db = new DB(path,maxSizeMB)
         (new Thread(dbThread db)).Start()
         db
 
