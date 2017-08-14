@@ -306,25 +306,35 @@ module internal I =
     let rscRCU (m:Stowage) (u0:RCU) : RCU =
         Map.fold (fun u sk (struct(h,v)) -> updRCU 0L (valRCU 1L u v) sk) u0 m
 
-
-
-    // approach to GC...
+    // Write Frame.
     //
-    // I need to do incremental GC, and I don't want it to degrade much based
-    // on whether we GC long lists vs. balanced tree structures. So I'll try 
-    // to compute a deep reference count update with each frame. Additionally, 
-    // I'll take a few candidates for GC from the db_zero pool to continue GC.
-    // And I'll add to the db_zero pool after I have enough candidates.
-    
-    // candidates for GC from the db_zero table. This might touch a number of
-    // elements proportional to the quota plus the db_ephtbl size.
-    let dbContinueGC (db:DB) (rtx:MDB_txn) (eph : EphRoots) (quota : int) : RCU =
-        LMDB.mdb_keys_from rtx (db.db_zero) (Data.ByteString.empty) 
-            |> Seq.filter (fun k -> not (Map.containsKey (skEphID (StowKey(k))) eph))
-            |> Seq.truncate quota 
-            |> Seq.fold (fun m k -> Map.add (StowKey(k)) 0L m) Map.empty
+    // Write Goals:
+    //  - first commit within the batch always succeeds
+    //  - batch multiple updates on same key if possible
+    //  - new resources observable while write incomplete
+    //
+    // Commits are aggregated in a list, and we'll simply process the full
+    // list in each write loop. New resources will be held in the db_newrsc
+    // map until fully written and synchronized to disk.
+    //
+    // GC Goals: 
+    //  - readers can atomically increment ephemeral roots without waiting
+    //  - GC of balanced trees or deep lists should be about the same
+    //  - limit GC effort per write frame, but keep up with busy writer
+    //
+    // The first point means we cannot GC any RscHash that a reader might
+    // be concurrently reading via rooted keys. Conservatively, we can just
+    // delay GC for anything the writer decrefs within the current frame.
+    // 
+    // OTOH, since I want efficient GC for deep lists (less than one write
+    // frame per node), we cannot extend this beyond the rooted values and
+    // we must follow deep structure of values during GC.
+    //
+    // Incremental GC involves limited write effort per frame, but a constant
+    // amount of effort may prove unable to keep up with a very busy writer. 
+    // So our GC effort must also be proportional (roughly) to write effort.
 
-    let rec dbWriterLoop (db:DB) (rlock:ReadLock) : unit =
+    let rec dbWriterLoop (db:DB) : unit =
         // wait for writer tasks
         let (stowedRsc,ephRoots,commitList,halt) = lock db (fun () ->
             if not (dbHasWork db) 
@@ -344,50 +354,67 @@ module internal I =
         let overwrites = Map.map (fun k _ -> dbReadKey db wtx k) writes
         let writeRsc = Map.filter (fun sk _ -> not (dbHasRsc db wtx sk)) stowedRsc 
 
-        // Write keys and resources.
+        // Write keys and new resources.
         Map.iter (dbWriteKey db wtx) writes
         Map.iter (fun _ struct(h,v) -> dbPutRsc db wtx h v) writeRsc
 
-        // compute refct updates and perform incremental GC.
-        // GC is the most complicated part of the writer loop.
-        let (gcLo,gcHi) = (100,1000) // effort quotas for incremental GC
-        let updRefct (struct(nGC,rcTbl,rcu)) sk n = 
+        // Root refcts modified based on recent writes
+        let rcRoots = 
+            Map.empty 
+              |> kvmRCU (-1L) overwrites
+              |> kvmRCU 1L writes
+              |> rscRCU writeRsc
+              |> Map.map (fun sk rc -> rc + dbGetRefct db wtx sk)
+
+        // GC effort must be roughly proportional to write effort
+        // otherwise GC might fall behind when writer is very busy
+        let gcLo = 100 + (2 * (Map.count rcRoots)) 
+        let gcHi = 500 + (5 * gcLo)
+
+        // prevent GC for a subset of resources
+        let blockGC sk = Map.containsKey sk rcRoots // resources touched this frame
+                      || Map.containsKey (skEphID sk) ephRoots // resources held ephemerally
+
+        let updRefct (struct(nGC, rcTbl, rcu)) sk n = 
             let rc0 = 
                 match Map.tryFind sk rcTbl with
                 | None -> dbGetRefct db wtx sk
                 | Some rc -> rc
             let rc' = (rc0 + n)
             assert(rc' >= 0L) // sanity check
-            let doGC = (0L = rc') && (nGC < gcHi) &&
-                       not (Map.containsKey (skEphID sk) ephRoots)
+            let doGC = (0L = rc') && (nGC < gcHi) && not (blockGC sk)
             if not doGC then struct(nGC, (Map.add sk rc' rcTbl), rcu) else
             let vDel = dbDelRsc db wtx sk // we GC as we go
+            let nGC' = nGC + 1 + (vDel.Length / 4096)
             let rcu' = valRCU (-1L) rcu vDel
-            struct((1+nGC), (Map.remove sk rcTbl), rcu') 
-        let rec gcLoop nGC rcTbl rcu =
-                if(Map.isEmpty rcu) then (nGC,rcTbl) else
-                let struct(nGC',rcTbl',rcu') = 
-                    Map.fold updRefct (struct(nGC,rcTbl,Map.empty)) rcu
-                gcLoop nGC' rcTbl' rcu'
-        let rcu0 = // initial refct updates
-            dbContinueGC db wtx ephRoots gcLo
-              |> kvmRCU 1L writes 
-              |> kvmRCU (-1L) overwrites
-              |> rscRCU writeRsc
-        let (nGC,rcTbl) = gcLoop 0 Map.empty rcu0
+            struct(nGC', (Map.remove sk rcTbl), rcu') 
 
-        Map.iter (dbSetRefct db wtx) rcTbl
-        if(nGC >= gcLo) 
-            then dbSignal db // heuristically continue GC next frame
+        let rec gcLoop nGC rcTbl rcu =
+            // breadth-first GC (albeit limited by gcHi)
+            if(Map.isEmpty rcu) then (nGC,rcTbl) else
+            let struct(nGC',rcTbl',rcu') = 
+                Map.fold updRefct (struct(nGC,rcTbl,Map.empty)) rcu
+            gcLoop nGC' rcTbl' rcu'
+
+        // initial GC from db_zero table, filtering protected resources
+        let gcCand = 
+            LMDB.mdb_keys_from wtx (db.db_zero) (Data.ByteString.empty)
+                |> Seq.filter (fun k -> not (blockGC (StowKey k)))
+                |> Seq.truncate gcLo
+                |> Seq.fold (fun m k -> Map.add (StowKey k) 0L m) Map.empty
+
+        let (nGC,rcTbl) = gcLoop 0 rcRoots gcCand
+
+        Map.iter (dbSetRefct db wtx) rcTbl  // write final refcts
+        if(nGC >= gcLo) // heuristically continue incremental GC
+            then dbSignal db 
 
         // finalize write frame        
-        rlock.Wait() // wait for readers of old frame to finish
         mdb_txn_commit wtx // overwrite old frame with new frame
-        let rlock' = advanceReaderFrame db // advance readers to new frame(*)
-            // (*) race condition for new readers between commit and advance
-            //     is safe, at worst increases latency for next rlock.Wait().
+        let oldReaders = advanceReaderFrame db // move new readers to new frame
         mdb_env_sync (db.db_env) // sync updates to disk
-        
+        oldReaders.Wait() // wait on readers of old frame
+       
         // signal completion of updates only after sync to disk
         let signalSuccess ((_,_,tcs) : Commit) = 
             tcs.TrySetResult(true) |> ignore 
@@ -395,14 +422,15 @@ module internal I =
 
         // clear stowage requests processed this write frame
         lock db (fun () -> 
-            db.db_newrsc <- Map.fold (fun m h _ -> Map.remove h m) db.db_newrsc stowedRsc)
+            db.db_newrsc <- Map.fold (fun m sk _ -> Map.remove sk m) 
+                                db.db_newrsc stowedRsc)
 
         // begin next write frame unless we're halted
-        if (halt) then () else dbWriterLoop db rlock'
+        if (halt) then () else dbWriterLoop db
 
     let dbThread (db:DB) () : unit = 
         dbSignal db // force initial write step
-        dbWriterLoop db (advanceReaderFrame db)
+        dbWriterLoop db 
 
     let lockFile (fn : string) : FileStream =
         new FileStream(

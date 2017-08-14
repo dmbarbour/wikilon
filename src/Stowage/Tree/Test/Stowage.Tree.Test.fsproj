@@ -17,7 +17,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Data.CritBitTree.fsproj" />
+    <ProjectReference Include="..\..\Stowage.fsproj" />
+    <ProjectReference Include="..\Stowage.Tree.fsproj" />
   </ItemGroup>
 
 </Project>

@@ -33,6 +33,11 @@ type TestDB =
     interface System.IDisposable with
         member this.Dispose() = closeDB this.db
 
+// Stowage doesn't provide a clean way to wait for GC, but
+// we can sync a few times.
+let gcDB (db:DB) : unit =
+    syncDB db; syncDB db; syncDB db
+
 type DBTests =
     val db : Stowage.DB
     new (fixture : TestDB) = { db = fixture.db }
@@ -58,17 +63,17 @@ type DBTests =
         let (b,rb) = join ra (fromString "z")
         let (c,rc) = join rb rb
         decrefRscDB t.db rb
-        syncDB (t.db) // to force writes, GC
+        gcDB (t.db) // to force writes, GC
         Assert.Equal<ByteString option>(Some a, loadRscDB t.db ra)
         Assert.Equal<ByteString option>(Some b, loadRscDB t.db rb)
         Assert.Equal<ByteString option>(Some c, loadRscDB t.db rc)
         decrefRscDB t.db rc
-        syncDB (t.db) 
+        gcDB (t.db) 
         Assert.Equal<ByteString option>(Some a, loadRscDB t.db ra)
         Assert.Equal<ByteString option>(None, loadRscDB t.db rb)
         Assert.Equal<ByteString option>(None, loadRscDB t.db rc)
         decrefRscDB t.db ra
-        syncDB (t.db)
+        gcDB (t.db)
         Assert.Equal<ByteString option>(None, loadRscDB t.db ra)
         Assert.Equal<ByteString option>(None, loadRscDB t.db rb)
         Assert.Equal<ByteString option>(None, loadRscDB t.db rc)
@@ -134,12 +139,13 @@ type DBTests =
             writeKey tx (fromString "b") b_ref
             Assert.True(commit tx))
 
-        syncDB t.db
+        gcDB t.db
         Assert.True(hasRsc a_val)
         Assert.True(hasRsc b_val)
         Assert.False(hasRsc c_val)
 
         writeKeyDB t.db (fromString "a") empty
+        gcDB t.db
         Assert.False(hasRsc a_val)
         Assert.True(hasRsc b_val)
         Assert.False(hasRsc c_val)

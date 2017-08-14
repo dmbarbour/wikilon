@@ -50,14 +50,14 @@ type DB =
 ///                      Updates A,B
 ///         Reads B
 ///
-/// In this case, Alice will read B inconsistent with A. Further, if
-/// secure hash resources were previously rooted by A, they might be
-/// GC'd concurrently with Alice's attempt to read them, causing some
-/// loadRsc operations to fail non-deterministically.
+/// In this case, Alice will read B inconsistent with A. This will
+/// be caught upon commit, but before then the inconsistency may 
+/// be an issue. This can be mitigated by reading keys together or
+/// by external concurrency control for keys under contention.
 ///
-/// This issue can be mitigated by reading multiple keys together or
-/// by providing external concurrency control for contended keys. If
-/// clients can avoid conflicts naturally, that would perform best.
+/// Note: Transactional reads will scan the value for resources and
+/// protect ephemeral roots. Thus, even if Alice's view of key A is
+/// outdated, Alice can readily process deep values. 
 type TX =
     val         internal db : I.DB
     val mutable internal rd : KVMap
@@ -80,7 +80,6 @@ type TX =
         member tx.Dispose() =
             tx.ClearEphRoots()
             System.GC.SuppressFinalize tx
-
 
 
 [< AutoOpen >]
@@ -106,6 +105,7 @@ module API =
     ///
     /// Every key has a value, defaulting to the empty string. Reads
     /// are always atomic, i.e. you'll never read a partial value.
+    /// This is a shallow read; contrast readKeyDeepDB.
     let readKeyDB (db : DB) (k : Key) : Val =
         I.withRTX db.Impl (fun rtx -> 
             I.dbReadKey db.Impl rtx k)
@@ -113,7 +113,8 @@ module API =
     /// Read multiple keyed values from DB. 
     ///
     /// Guarantees snapshot consistency for reading multiple elements.
-    /// That is, it's atomic for the full array of keys. 
+    /// That is, it's atomic for the full array of keys. Like readKeyDB,
+    /// this is a shallow operation.
     let readKeysDB (db : DB) (ks : Key[]) : Val[] =
         I.withRTX db.Impl (fun rtx -> 
             Array.map (I.dbReadKey db.Impl rtx) ks)
@@ -180,11 +181,7 @@ module API =
         let r = atomicUpdateDB db Map.empty writes
         assert(r)
 
-    /// Synchronize the Database.
-    /// 
-    /// This simply waits for all prior writes and updates to complete.
-    /// This is a convenient operation for graceful shutdown, or as a
-    /// memory barrier of sorts in context of asynchronous writes. 
+    /// Wait for all prior writes to complete.
     let inline syncDB (db : DB) : unit = 
         let r = atomicUpdateDB db (Map.empty) (Map.empty)
         assert(r)
@@ -221,8 +218,6 @@ module API =
     ///
     /// A potential use case is for indexed access to large resources.
     let unsafeWithRscDB (db : DB) (h : RscHash) (action : nativeint -> int -> 'x) : 'x option =
-        // note: I'm relying on atomic reads for reference variables.
-        // This was asserted for C#, so I assume it's valid for .Net.
         match findNewRsc db h with
         | None -> I.withRTX db.Impl (fun rtx ->
             match I.dbGetRscZC db.Impl rtx h with
@@ -230,6 +225,12 @@ module API =
             | Some v -> Some (action v.data (int v.size)))
         | Some v -> withPinnedBytes v (fun vaddr ->
             Some (action vaddr v.Length))
+
+    /// Check whether a resource is known to the DB.
+    let hasRscDB (db : DB) (h : RscHash) : bool =
+        if Option.isSome (findNewRsc db h) then true else
+        I.withRTX db.Impl (fun rtx ->
+            Option.isSome (I.dbGetRscZC db.Impl rtx h))
 
     /// Add a resource to the DB.
     ///
@@ -240,10 +241,11 @@ module API =
     /// Resources are garbage collected. To prevent immediate GC of the
     /// newly stowed resource, stowRscDB performs an implicit, atomic 
     /// increfRscDB. The client is responsible for later decrefRscDB.
+    /// (Consider use of the `Rsc` wrapper.)
     ///
     /// Note: The current implementation writes all new resources to
-    /// disk, even if they'll soon be GC'd. For efficiency, clients 
-    /// should avoid stowage of resources that would soon be GC'd.
+    /// disk, even if they could be immediately GC'd. For efficiency,
+    /// clients should avoid stowage of resources that are soon GC'd.
     let stowRscDB (db : DB) (v : Val) : RscHash =
         if not (isValidVal v) then invalidArg "v" "value too big" else
         let h = Hash.hash v
@@ -268,9 +270,40 @@ module API =
     let decrefRscDB (db : DB) (h : RscHash) : unit =
         I.dbDecEph (db.Impl) 1L (I.rscEphID h)
 
-    // idea: I could potentially introduce a notion of `Stowed<T>` nodes
-    // that may hold a cached representation of the type or eventually be
-    // moved into the DB after some timeout, perhaps leveraging weak refs.
+    // utility
+    let private valEphUpd : I.EphRoots -> Val -> I.EphRoots =
+        scanHashDeps (fun e h -> I.ephInc e (I.rscEphID h) 1L)
+    let private valEphRoots (v : Val) : I.EphRoots = valEphUpd Map.empty v
+
+    /// Ephemeral Roots for full Values
+    /// 
+    /// This essentially performs increfRscDB (or decrefRscDB) for
+    /// every resource hash found in a value (cf scanHashDeps). This
+    /// is mostly intended for use with readKeyDeepDB.
+    let increfValDeps (db : DB) (v : Val) : unit =
+        I.dbAddEphRoots (db.Impl) (valEphRoots v)
+
+    let decrefValDeps (db : DB) (v : Val) : unit =
+        I.dbRemEphRoots (db.Impl) (valEphRoots v)
+
+    /// Atomic Read and Incref.
+    ///
+    /// This efficiently performs readKeyDB and increfValDeps as one
+    /// atomic operation, which can simplify reasoning about concurrent
+    /// GC when performing read-only operations on the DB. In practice,
+    /// it's probably better to use a TX for deep reads.
+    let readKeyDeepDB (db : DB) (k : Key) : Val =
+        I.withRTX db.Impl (fun rtx -> 
+            let v = I.dbReadKey db.Impl rtx k
+            increfValDeps db v
+            v)
+
+    /// Atomic read and incref for multiple keys.
+    let readKeysDeepDB (db : DB) (ks : Key[]) : Val[] =
+        I.withRTX db.Impl (fun rtx -> 
+            let vs = Array.map (I.dbReadKey db.Impl rtx) ks
+            Array.iter (increfValDeps db) vs
+            vs)
 
     /// Iterate through blocks of keys within the DB.
     ///
@@ -314,13 +347,18 @@ module API =
     let inline commit (tx:TX) : bool = 
         (commit_async tx).Result
 
-    /// Assume writes have succeeded.
+    /// Assume writes have completed successfully.
     ///
-    /// Writes are moved to read assumptions. This can be used with
-    /// commit to model checkpointing transactions.
+    /// Writes are moved to read assumptions. Ephemeral stowage roots
+    /// are released excepting resources referenced from the read set.
+    /// Use together with commit to model checkpointing transactions.
     let assumeWrites (tx:TX) : unit =
         tx.rd <- Map.fold (fun m k v -> Map.add k v m) tx.rd tx.ws
         tx.ws <- Map.empty
+        let eph' = Map.fold (fun e _ v -> valEphUpd e v) Map.empty tx.rd
+        I.dbAddEphRoots tx.db eph'
+        I.dbRemEphRoots tx.db tx.eph
+        tx.eph <- eph'
 
     /// Checkpoint a transaction (asynchronous). 
     ///  essentially commit_async + assumeWrites
@@ -341,15 +379,23 @@ module API =
         if Option.isSome wv then wv else
         Map.tryFind k tx.rd
 
+    let private txAddRead (tx:TX) (k:Key) (v:Val) : unit =
+        tx.rd <- Map.add k v tx.rd 
+        let eu = valEphRoots v
+        I.dbAddEphRoots (tx.db) eu
+        tx.eph <- I.ephAdd eu tx.eph
+
     let private readKeyNew (tx:TX) rtx (k:Key) : Val =
         let v = I.dbReadKey tx.db rtx k
-        tx.rd <- Map.add k v tx.rd
+        txAddRead tx k v
         v
 
     /// Read value associated with key via TX.
     ///
     /// If the TX assumes a value due to prior read or write, that
-    /// value is returned. Otherwise, this will access the DB.
+    /// value is returned. Otherwise, this will access the DB. Any
+    /// resources referenced from the value will be protected by
+    /// the transaction (similar to readKeyDeepDB). 
     let readKey (tx:TX) (k:Key) : Val =
         match readKeyOld tx k with
           | Some v -> v
@@ -371,16 +417,14 @@ module API =
 
     /// Introduce a read assumption.
     ///
-    /// This modifies the TX as if a value for a specific key were
+    /// This updates the TX as if a value for a specific key were
     /// read. If the key has already been read and has a different
     /// value than assumed, this raises InvalidOperationException. 
     /// Usually, assumptions should be provided before any reads.
-    ///
-    /// Note: read assumptions don't contribute to ephemeral roots.
     let assumeKey (tx:TX) (k:Key) (v:Val) : unit =
         if not (isValidKey k) then invalidArg "k" "invalid key" else
         match Map.tryFind k tx.rd with
-          | None    -> tx.rd <- Map.add k v tx.rd 
+          | None    -> txAddRead tx k v
           | Some v0 -> if (v0 <> v) then invalidOp "invalid assumption for key"
 
     /// Write a key-value into the TX
@@ -418,4 +462,28 @@ module API =
         tx.eph <- I.ephInc tx.eph k 1L
         h
    
+/// Stowage Resource
+///
+/// This is a trivial wrapper for a RscHash that performs decrefRscDB
+/// upon Finalize() or Dispose(). This can be used in place of RscHash
+/// to simplify interaction between .Net runtime GC and stowage GC.
+///
+/// Rsc assumes corresponding incref is performed before construction.
+type Rsc =
+    val DB : DB
+    val RscHash : RscHash 
+    member rsc.Load() = loadRscDB (rsc.DB) (rsc.RscHash)
+    new(db:DB,h:RscHash) = 
+        assert(h.Length = rscHashLen)
+        { DB = db; RscHash = h }
+
+    member private rsc.Decref() = 
+        decrefRscDB (rsc.DB) (rsc.RscHash)
+    override rsc.Finalize() = rsc.Decref()
+    interface System.IDisposable with
+        member rsc.Dispose() = 
+            rsc.Decref()
+            System.GC.SuppressFinalize rsc
+
+            
 
