@@ -254,14 +254,12 @@ module internal I =
     //
     // LMDB with NOLOCK is essentially a frame-buffered database.
     // At most times, we have two valid frames. During commit, we
-    // drop the older frame and write the new one. Stowage aligns
-    // its locking with this model so readers never wait and the
-    // writer waits only on readers that hold the lock for nearly
-    // two full write frames. Short-lived readers won't interfere
-    // with the writer at all.
+    // drop the older frame and write the new one. 
     //
-    // We can assume most readers only hold the lock briefly, and
-    // hence our writer very rarely waits.
+    // Stowage aligns its locking with this frame-buffer model. The
+    // writer waits for readers to advance to the new frame before it 
+    // computes the next. Readers, OTOH, never need to wait. And if
+    // read transactions are short-lived, the writer won't wait long.
     let inline withRTX (db : DB) (action : MDB_txn -> 'x) : 'x =
         let rdlock = acquireReadLock db
         try let tx = mdb_rdonly_txn_begin db.db_env
@@ -312,10 +310,15 @@ module internal I =
     //  - first commit within the batch always succeeds
     //  - batch multiple updates on same key if possible
     //  - new resources observable while write incomplete
+    //  - minimize writer wait on reader
     //
     // Commits are aggregated in a list, and we'll simply process the full
     // list in each write loop. New resources will be held in the db_newrsc
-    // map until fully written and synchronized to disk.
+    // map until fully written and synchronized to disk. 
+    //
+    // We minimize the writer wait on the reader by advancing the reader frame
+    // after commit but before sync, then waiting on readers after sync. This
+    // ensures we only gain latency from readers that require longer than sync. 
     //
     // GC Goals: 
     //  - readers can atomically increment ephemeral roots without waiting
@@ -412,8 +415,14 @@ module internal I =
         // finalize write frame        
         mdb_txn_commit wtx // overwrite old frame with new frame
         let oldReaders = advanceReaderFrame db // move new readers to new frame
-        mdb_env_sync (db.db_env) // sync updates to disk
+        mdb_env_sync (db.db_env) // sync updates to disk (EXPENSIVE)
         oldReaders.Wait() // wait on readers of old frame
+
+            // note: it is feasible to delay oldReaders.Wait() until just before
+            // the next txn_commit, but the benefits are minor. Sync is the most
+            // expensive step. And it adds complexity, and requires delaying GC 
+            // for another frame (oldReaders have longer to add ephemeral roots).
+            // It's simple and effective to just use two frames. 
        
         // signal completion of updates only after sync to disk
         let signalSuccess ((_,_,tcs) : Commit) = 
@@ -424,6 +433,7 @@ module internal I =
         lock db (fun () -> 
             db.db_newrsc <- Map.fold (fun m sk _ -> Map.remove sk m) 
                                 db.db_newrsc stowedRsc)
+        //printf "Written: %d keys, %d rscs (%d in queue, %d collected)\n" (Map.count writes) (Map.count writeRsc) (Map.count db.db_newrsc) nGC
 
         // begin next write frame unless we're halted
         if (halt) then () else dbWriterLoop db

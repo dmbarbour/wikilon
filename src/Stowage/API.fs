@@ -211,10 +211,11 @@ module API =
     /// Zero-copy access to a secure hash resource from the DB.
     ///
     /// This is possible leveraging the memory-mapped database, LMDB.
-    /// However, this is unsafe except for short-lived, read-only 
-    /// actions on the data. Long-lived readers will eventually block
-    /// the writer thread. Writing to the data at the nativeint will
-    /// generally corrupt the database.
+    /// However, Stowage doesn't use LMDB locking, and any long-lived 
+    /// reader may block the writer. So this should only be used if 
+    /// it can be guaranteed that the read is short-lived. Also, be
+    /// careful to not write to the resource, which could corrupt the
+    /// database.
     ///
     /// A potential use case is for indexed access to large resources.
     let unsafeWithRscDB (db : DB) (h : RscHash) (action : nativeint -> int -> 'x) : 'x option =
