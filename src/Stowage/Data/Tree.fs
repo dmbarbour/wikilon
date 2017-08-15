@@ -3,6 +3,12 @@ open Data.ByteString
 
 /// A key-value tree using Stowage resources.
 ///
+/// A key-value tree modeled above Stowage essentially gives us first
+/// class databases with persistence, structure sharing, and efficient
+/// serialization (sharing even over a network). Tree values may be 
+/// larger than memory, keeping most of the data in the Stowage layer.
+
+
 /// Modeling a key-value tree above Stowage offers a simple basis for
 /// first-class key-value databases as plain old values. These databases
 /// offer logarithmic access and update, ordered keys, structure sharing,

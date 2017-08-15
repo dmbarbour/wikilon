@@ -82,6 +82,10 @@ type TX =
             System.GC.SuppressFinalize tx
 
 
+/// Exception for missing resources.
+exception MissingRsc of DB * RscHash
+
+
 [< AutoOpen >]
 module API =
 
@@ -203,10 +207,15 @@ module API =
     /// collected if not rooted by the key-value layer or ephemeral
     /// reference count, so developers cannot assume availability of
     /// the resource without careful management of roots. 
-    let loadRscDB (db : DB) (h : RscHash) : Val option =
+    let tryLoadRscDB (db : DB) (h : RscHash) : Val option =
         let newRsc = findNewRsc db h
         if Option.isSome newRsc then newRsc else
         I.withRTX db.Impl (fun rtx -> I.dbGetRsc db.Impl rtx h) 
+
+    let inline loadRscDB db h =
+        match tryLoadRscDB db h with
+        | None -> raise (MissingRsc(db,h))
+        | Some v -> v
 
     /// Zero-copy access to a secure hash resource from the DB.
     ///
@@ -256,15 +265,18 @@ module API =
     /// Ephemeral Roots via Reference Counting
     ///
     /// The stowage DB's key-value layer provides a simple basis for
-    /// persistent roots, but that leaves a requirement to track hashes
-    /// in ephemeral process memory. Stowage provides a simple reference 
-    /// counting model to the client, such that a decrefRscDB may be run
-    /// upon a Finalize() or Dispose().
+    /// persistent roots. To control GC for resources referenced only
+    /// in ephemeral process memory, the DB also maintains a table to
+    /// track in-memory reference counts.
     ///
-    /// The current implementation is not precise. Resources may share a
-    /// reference counter, resulting in false positives without risk of
-    /// false negatives. But this does mean you cannot ask for the count
-    /// for a specific resource.
+    /// A client may explicitly incref/decref a resource hash. Also,
+    /// Stowage can atomically incref during a read to prevent GC of
+    /// resources read (cf readKeyDeepDB). TX manages this behavior
+    /// implicitly, accepting a minor overhead per read.
+    ///
+    /// Note: It is acceptable to incref a resource unknown to the DB. Also,
+    /// precision is not guaranteed, e.g. a counting bloom filter might be
+    /// used such that resources have a small probability to share refcts.
     let increfRscDB (db : DB) (h : RscHash) : unit =
         I.dbIncEph (db.Impl) 1L (I.rscEphID h)
 
@@ -280,7 +292,8 @@ module API =
     /// 
     /// This essentially performs increfRscDB (or decrefRscDB) for
     /// every resource hash found in a value (cf scanHashDeps). This
-    /// is mostly intended for use with readKeyDeepDB.
+    /// is mostly intended for use with readKeyDeepDB, which requires
+    /// decrefValDeps after you're done with the value.
     let increfValDeps (db : DB) (v : Val) : unit =
         I.dbAddEphRoots (db.Impl) (valEphRoots v)
 
@@ -292,7 +305,7 @@ module API =
     /// This efficiently performs readKeyDB and increfValDeps as one
     /// atomic operation, which can simplify reasoning about concurrent
     /// GC when performing read-only operations on the DB. In practice,
-    /// it's probably better to use a TX for deep reads.
+    /// it's likely simpler and more convenient to use TX for deep reads.
     let readKeyDeepDB (db : DB) (k : Key) : Val =
         I.withRTX db.Impl (fun rtx -> 
             let v = I.dbReadKey db.Impl rtx k
@@ -441,18 +454,15 @@ module API =
         tx.ws <- Map.add k v tx.ws
 
     /// load a secure hash resource into memory (see loadRscDB)
-    let inline loadRsc (tx:TX) (h:RscHash) : Val option = 
-        loadRscDB tx.DB h
-    
-    /// zero-copy access to secure hash resource (see unsafeWithRscDB)
-    let inline unsafeWithRsc (tx:TX) (h:RscHash) (action : nativeint -> int -> 'x) : 'x option =
-        unsafeWithRscDB tx.DB h action
+    let inline tryLoadRsc (tx:TX) (h:RscHash) : Val option = tryLoadRscDB (tx.DB) h
+    let inline loadRsc (tx:TX) (h:RscHash) : Val = loadRscDB (tx.DB) h
 
     /// Stow a value as a secure hash resource.
     ///
     /// This behaves as stowRscDB, except the decref will be handled when
-    /// the TX is later disposed or finalized. The assumption is that any
-    /// newly stowed resources should be rooted by TX commit.
+    /// the TX is later disposed or finalized (or via assumeWrites, if not
+    /// rooted). The assumption is that any newly stowed resources should
+    /// be rooted by a subsequent write within the same transaction.
     ///
     /// To hold the resource beyond the lifespan of the transaction, call
     /// `increfRscDB` explicitly on the returned resource hash. Or use the
@@ -462,7 +472,8 @@ module API =
         let k = I.dbStow tx.db h v
         tx.eph <- I.ephInc tx.eph k 1L
         h
-   
+
+
 /// Stowage Resource
 ///
 /// This is a trivial wrapper for a RscHash that performs decrefRscDB
@@ -473,7 +484,8 @@ module API =
 type Rsc =
     val DB : DB
     val RscHash : RscHash 
-    member rsc.Load() = loadRscDB (rsc.DB) (rsc.RscHash)
+    member rsc.TryLoad() : Val option = tryLoadRscDB (rsc.DB) (rsc.RscHash)
+    member rsc.Load() : Val = loadRscDB (rsc.DB) (rsc.RscHash)
     new(db:DB,h:RscHash) = 
         assert(h.Length = rscHashLen)
         { DB = db; RscHash = h }

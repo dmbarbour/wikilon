@@ -18,7 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Stowage.fsproj" />
-    <ProjectReference Include="..\Stowage.Tree.fsproj" />
+    <ProjectReference Include="..\Stowage.Data.fsproj" />
   </ItemGroup>
 
 </Project>

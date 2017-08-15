@@ -33,7 +33,7 @@ type TestDB =
     interface System.IDisposable with
         member this.Dispose() = closeDB this.db
 
-// Stowage doesn't provide a clean way to wait for GC, but
+// Stowage doesn't provide a clean way to wait for full GC, but
 // we can sync a few times.
 let gcDB (db:DB) : unit =
     syncDB db; syncDB db; syncDB db
@@ -50,7 +50,7 @@ type DBTests =
         Assert.Equal<ByteString list>(rscs, List.map hash tests)
         syncDB (t.db)
         let loaded = List.map (loadRscDB t.db) rscs
-        Assert.Equal<(ByteString option) list>(loaded, List.map Some tests)
+        Assert.Equal<ByteString list>(loaded, tests)
         List.iter (decrefRscDB t.db) rscs
         syncDB (t.db)
 
@@ -64,19 +64,19 @@ type DBTests =
         let (c,rc) = join rb rb
         decrefRscDB t.db rb
         gcDB (t.db) // to force writes, GC
-        Assert.Equal<ByteString option>(Some a, loadRscDB t.db ra)
-        Assert.Equal<ByteString option>(Some b, loadRscDB t.db rb)
-        Assert.Equal<ByteString option>(Some c, loadRscDB t.db rc)
+        Assert.Equal<ByteString>(a, loadRscDB t.db ra)
+        Assert.Equal<ByteString>(b, loadRscDB t.db rb)
+        Assert.Equal<ByteString>(c, loadRscDB t.db rc)
         decrefRscDB t.db rc
         gcDB (t.db) 
-        Assert.Equal<ByteString option>(Some a, loadRscDB t.db ra)
-        Assert.Equal<ByteString option>(None, loadRscDB t.db rb)
-        Assert.Equal<ByteString option>(None, loadRscDB t.db rc)
+        Assert.Equal<ByteString option>(Some a, tryLoadRscDB t.db ra)
+        Assert.Equal<ByteString option>(None, tryLoadRscDB t.db rb)
+        Assert.Equal<ByteString option>(None, tryLoadRscDB t.db rc)
         decrefRscDB t.db ra
         gcDB (t.db)
-        Assert.Equal<ByteString option>(None, loadRscDB t.db ra)
-        Assert.Equal<ByteString option>(None, loadRscDB t.db rb)
-        Assert.Equal<ByteString option>(None, loadRscDB t.db rc)
+        Assert.Equal<ByteString option>(None, tryLoadRscDB t.db ra)
+        Assert.Equal<ByteString option>(None, tryLoadRscDB t.db rb)
+        Assert.Equal<ByteString option>(None, tryLoadRscDB t.db rc)
 
     [<Fact>]
     member t.``read and write keys`` () = 
@@ -125,7 +125,7 @@ type DBTests =
         let c_val = "ccccccc"
         let hasRsc s = 
             let b = fromString s
-            let rsc = loadRscDB t.db (hash b)
+            let rsc = tryLoadRscDB t.db (hash b)
             //printf "resource %s = %A\n" s (Option.map toString rsc)
             match rsc with
             | None -> false
