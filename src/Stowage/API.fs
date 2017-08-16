@@ -521,4 +521,3 @@ type VRef =
             | :? VRef as y -> VRef.Compare x y
             | _ -> invalidArg "yobj" "cannot compare values of different types"
 
-

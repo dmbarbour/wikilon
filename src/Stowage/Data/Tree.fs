@@ -1,69 +1,51 @@
 namespace Stowage
 open Data.ByteString
 
-module internal I =
+/// A key-value lookup tree above Stowage.
+///
+/// By modeling a key-value tree above Stowage, we essentially get first
+/// class database values with a lot of nice properties: data persistence,
+/// structure sharing, lightweight serialization, efficient diffs, etc..
+///
+/// The KVT module provides a simple history-independent tree, a variant of
+/// a critbit tree. Because its structure is independent of history, it is
+/// easy to reason about structure sharing. On the other hand, updates will
+/// often require writing many new nodes. To mitigate the latter issue, this
+/// tree requires explicit compaction, such that we can update the tree many
+/// times then compact it as one larger batch.
+///
+/// Aside: it may be worthwhile to introduce a history-dependent tree, such
+/// as an LSM-tree, to improve insert/delete performance.
+module KVT =
+    type Key = VRef
+    type Val = VRef
+    type Rsc = VRef
 
-        // potential binary representation in stowage:
-        //  (0)  (nothing, empty bytestring)
-        //  (1)RemoteHash(32)
-        //  (size+1)bytes of size(126)
-        //
-        // Here (size+1) would be encoded as a variable nat:
-        //
-        //   0..127 for high digits
-        //   128..255 for the final digit
-        //
-        // This would avoid interference with conservative GC,
-        // in case the binary contains resource references. Also,
-        // this encoding could be separate from the decision of
-        // how large of local binary we permit.
-
-    let maxBinaryLocal = 1023
-    compactBinary (db:DB) (b:Binary)
+    // ByteString encoding, used for Key/Val/Rsc.
+    //
+    // We need to protect any resource hashes, so we'll use the following
+    // encoding:
+    //   (size)(bytes)~ 
+    //     when size >= rscHashLen and (bytes) ends with rscHashByte
+    //   (size)(bytes) otherwise
+    // (size) is a VarNat
 
     type Node =
-        | NLeaf of VRef
-        | NInner of int * VRef * Node * Node
-        | NRemote of Rsc
+        | Leaf of Val                          // value in leaf
+        | Inner of int * Node * Key * Node     // critbit * key * left * right
+        | Remote of Rsc                        // just a RscHash
 
-    roughNodeMemSize (n:Node) : int64 = 32L +
-        match n with
-        | NLeaf b -> (int64) b.Length
-        | NInner (_,b,n1,n2) -> (int64) b.Length 
-                              + roughNodeMemSize n1
-                              + roughNodeMemSize n2 
-
-    type Root = Option<struct(Binary * Node)>
+    type Root = List<struct(Key * Node)>
+    
 
 
 
+//type KVTree = KVT.Tree
+        
 
-/// A simple key-value tree using Stowage resources.
-///
-/// A key-value tree modeled above Stowage essentially gives us first
-/// class databases with persistence, structure sharing, and efficient
-/// serialization. Because most of the data is in the stowage layer, it
-/// is feasible for such trees to grow much larger than memory.
-///
-/// We use a variant of the crit-bit tree structure, tweaked to simplify
-/// merge of trees (by keeping the least key with the parent node). The
-/// compaction operation is also separate, so adding a bunch of keys will
-/// gradually modify a tree in memory without pushing every intermediate
-/// node to disk.
 
-that keeps the
-/// least key in the parent node (for more efficient merge) and uses an
-/// explicit compaction step.
-/// 
-/// This specific tree happens to be a variant of the crit-bit tree, which
-/// has history-independent structure modulo compaction. This means the
-/// tree structure will be equivalent, after compaction, for a given set of 
-[<Struct>]
-type KVTree =
-    val internal Root : I.Root
-    internal new() = { Root = None }
-    internal new(root:RscHash) = { Root = I.loadRoot root }
-    // TODO: custom equality, custom comparison
+
+
 
 
 
