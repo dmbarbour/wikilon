@@ -274,9 +274,11 @@ module API =
     /// resources read (cf readKeyDeepDB). TX manages this behavior
     /// implicitly, accepting a minor overhead per read.
     ///
-    /// Note: It is acceptable to incref a resource unknown to the DB. Also,
-    /// precision is not guaranteed, e.g. a counting bloom filter might be
-    /// used such that resources have a small probability to share refcts.
+    /// Note: It is safe to incref a resource unknown to the DB or to
+    /// decref after closing the DB. This doesn't touch the LMDB layer.
+    /// However, precision is not guaranteed, e.g. our ephemeral roots
+    /// may be implemented by a counting bloom filter or similar that
+    /// permits false positives when checking if resources are rooted.
     let increfRscDB (db : DB) (h : RscHash) : unit =
         I.dbIncEph (db.Impl) 1L (I.rscEphID h)
 
@@ -299,6 +301,8 @@ module API =
 
     let decrefValDeps (db : DB) (v : Val) : unit =
         I.dbRemEphRoots (db.Impl) (valEphRoots v)
+
+        // TODO: performance optimizations for ephemeral roots
 
     /// Atomic Read and Incref.
     ///
@@ -473,30 +477,48 @@ module API =
         tx.eph <- I.ephInc tx.eph k 1L
         h
 
-
-/// Stowage Resource
+/// Structured Binary Data in Memory
 ///
-/// This is a trivial wrapper for a RscHash that performs decrefRscDB
-/// upon Finalize() or Dispose(). This can be used in place of RscHash
-/// to simplify interaction between .Net runtime GC and stowage GC.
+/// The VRef type represents a binary value that may contain stowage
+/// references and hence represent deeply structured data with sharing.
+/// Mostly, this type exists to simplify interaction between .Net GC
+/// and Stowage GC. Upon Finalize (or Dispose), we'll decrefValDeps.
 ///
-/// Rsc assumes corresponding incref is performed before construction.
-type Rsc =
-    val DB : DB
-    val RscHash : RscHash 
-    member rsc.TryLoad() : Val option = tryLoadRscDB (rsc.DB) (rsc.RscHash)
-    member rsc.Load() : Val = loadRscDB (rsc.DB) (rsc.RscHash)
-    new(db:DB,h:RscHash) = 
-        assert(h.Length = rscHashLen)
-        { DB = db; RscHash = h }
+/// Other than compatibility with scanHashDeps, no interpretation of
+/// the binary is assumed. A VRef may be large or small, or may just
+/// consist of a single RscHash, or might have no references at all.
+///
+/// Notes: Although the Dispose interface is provided, in practice we
+/// usually leave it to .Net GC to Finalize the VRefs because we share
+/// the VRef among multiple objects or values.
+type VRef =
+    val DB    : DB
+    val Bytes : Val
+    new(db:DB, bytes:Val) = { DB = db; Bytes = bytes }
 
-    member private rsc.Decref() = 
-        decrefRscDB (rsc.DB) (rsc.RscHash)
-    override rsc.Finalize() = rsc.Decref()
+    member private ref.Decref() = decrefValDeps (ref.DB) (ref.Bytes)
+    override ref.Finalize() = ref.Decref()
     interface System.IDisposable with
-        member rsc.Dispose() = 
-            rsc.Decref()
-            System.GC.SuppressFinalize rsc
+        member ref.Dispose() =
+            ref.Decref()
+            System.GC.SuppressFinalize ref
 
-            
+    override x.Equals yobj =
+        match yobj with
+        | :? VRef as y -> (x.DB = y.DB) && (x.Bytes = y.Bytes)
+        | _ -> false
+
+    override ref.GetHashCode() = ref.Bytes.GetHashCode()
+
+    static member Compare (a:VRef) (b:VRef) : int =
+        let cdb = compare (a.DB) (b.DB) 
+        if (0 <> cdb) then cdb else
+        compare (a.Bytes) (b.Bytes)
+
+    interface System.IComparable with
+        member x.CompareTo yobj =
+            match yobj with
+            | :? VRef as y -> VRef.Compare x y
+            | _ -> invalidArg "yobj" "cannot compare values of different types"
+
 

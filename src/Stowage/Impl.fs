@@ -84,7 +84,7 @@ module internal I =
             while(0L <> this.rc) do 
                 ignore(Monitor.Wait(this)))
 
-    [<CustomEquality; NoComparison>]
+    [<CustomEquality; CustomComparison>]
     type DB =
         { 
             db_env  : MDB_env     
@@ -100,11 +100,18 @@ module internal I =
             mutable db_commit : Commit list     // pending commit requests
             mutable db_halt   : bool            // halt the writer
         }
+        // reference comparison and equality on the stable MDB_env pointer.
         override x.Equals(yobj) =
             match yobj with
             | :? DB as y -> x.db_env = y.db_env
             | _ -> false
-        override db.GetHashCode() = (int)(db.db_env)
+        override db.GetHashCode() = (int)(db.db_env >>> 4)
+        interface System.IComparable with
+            member x.CompareTo yobj =
+                match yobj with
+                | :? DB as y -> compare (x.db_env) (y.db_env)
+                | _ -> invalidArg "yobj" "cannot compare values of different types"
+
                  
 
     // add commit request to the database

@@ -1,8 +1,6 @@
 # Stowage.Data
 
-This module aims to provide several useful data structures above Stowage. These structures are generally tree-based, persistent structures that permit a high level of structure sharing. Due to use of secure hashes as references, this structure sharing can potentially work even over a network.
-
-Use of Stowage further enables these structures to be larger than memory.
+This module aims to provide several useful data structures above Stowage. These structures are generally tree-based, persistent structures that permit a high level of structure sharing. Due to use of secure hashes as references, this structure sharing and serializability can work efficiently even over a network. And Stowage enables these data structures to be larger than memory, full multi-gigabyte databases.
 
 Which data structures am I interested in supporting?
 
@@ -16,6 +14,9 @@ Which data structures am I interested in supporting?
 
 Of these, the most critical are the critbit tree and the finger tree structures. And possibly a variant finger-tree binary structure for modeling a very large binary value.
 
+## Deep Structured Data
+
+To support structured references to Stowage from Memory, I'll simply use untyped VRefs. I've experimented with development of a VRef<'T> type with a codec. But it seems simpler to separate the interpretation. The VRef type supports both singular RscHash values and potential inlining of structured data.
 
 
 
