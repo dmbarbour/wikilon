@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <Compile Include="VarNat.fs" />
+    <Compile Include="VRefEnc.fs" />
     <Compile Include="Tree.fs" />
   </ItemGroup>
 

@@ -7,7 +7,7 @@ namespace Stowage
 /// The encoding uses (0..127)*(128..255). This ensures there
 /// is no interference between the final byte of the VarNat and
 /// any RscHash dependencies.
-module VarNat =
+module EncVarNat =
 
     /// Size of a VarNat encoding.
     let size (n : uint64) : int =
@@ -39,7 +39,7 @@ module VarNat =
 ///
 /// This simply translates to a VarNat with a ZigZag encoding.
 /// {0 → 0; -1 → 1; 1 → 2; -2 → 3; 2 → 4; ...}
-module VarInt =
+module EncVarInt =
 
     /// zig-zag conversions. 
     let zzEncode (i : int64) : uint64 = 
@@ -53,8 +53,8 @@ module VarInt =
     // manipulations instead of a conditional expression. But
     // it isn't very worthwhile.
 
-    let inline size (i : int64) : int = VarNat.size (zzEncode i)
-    let inline write (o : System.IO.Stream) (i : int64) = VarNat.write o (zzEncode i)
-    let inline read (i : System.IO.Stream) : int64 = zzDecode (VarNat.read i)
+    let inline size (i : int64) : int = EncVarNat.size (zzEncode i)
+    let inline write (o : System.IO.Stream) (i : int64) = EncVarNat.write o (zzEncode i)
+    let inline read (i : System.IO.Stream) : int64 = zzDecode (EncVarNat.read i)
 
         
