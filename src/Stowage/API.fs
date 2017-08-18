@@ -487,6 +487,8 @@ module API =
 /// Other than compatibility with scanHashDeps, no interpretation of
 /// the binary is assumed. A VRef may be large or small, or may just
 /// consist of a single RscHash, or might have no references at all.
+/// But if you know a VRef is always a singular RscHash, consider use
+/// of Rsc type instead to make this assumption explicit in the type.
 ///
 /// Notes: Although the Dispose interface is provided, in practice we
 /// usually leave it to .Net GC to Finalize the VRefs because we share
@@ -520,4 +522,50 @@ type VRef =
             match yobj with
             | :? VRef as y -> VRef.Compare x y
             | _ -> invalidArg "yobj" "cannot compare values of different types"
+
+/// Stowage Resource References
+///
+/// This is essentially a VRef specialized to a singular RscHash.
+/// Upon Finalize() or Dispose(), the resource will be decref'd.
+/// While this offers a minor performance advantage over VRef, the
+/// main motivation is to make assumptions more explicit in types,
+/// and a little more convenience for load and stow operations.
+type Rsc =
+    val DB : DB
+    val ID : RscHash
+    new (db:DB, id:RscHash) = 
+        assert(id.Length = rscHashLen)
+        { DB = db; ID = id }
+
+    static member Stow (db:DB) (v:Val) : Rsc = new Rsc(db, stowRscDB db v)
+    member rsc.TryLoad() : Val option = tryLoadRscDB (rsc.DB) (rsc.ID)
+    member rsc.Load() : Val = loadRscDB (rsc.DB) (rsc.ID)
+
+    member private rsc.Decref() = decrefRscDB (rsc.DB) (rsc.ID)
+    override rsc.Finalize() = rsc.Decref()
+    interface System.IDisposable with
+        member rsc.Dispose() =
+            rsc.Decref()
+            System.GC.SuppressFinalize rsc
+
+    override x.Equals yobj =
+        match yobj with
+        | :? Rsc as y -> (x.DB = y.DB) && (x.ID = y.ID)
+        | _ -> false
+
+    override rsc.GetHashCode() = rsc.ID.GetHashCode()
+
+    static member Compare (a:Rsc) (b:Rsc) : int =
+        let cdb = compare (a.DB) (b.DB) 
+        if (0 <> cdb) then cdb else
+        compare (a.ID) (b.ID)
+
+    interface System.IComparable with
+        member x.CompareTo yobj =
+            match yobj with
+            | :? Rsc as y -> Rsc.Compare x y
+            | _ -> invalidArg "yobj" "cannot compare values of different types"
+    
+
+
 
