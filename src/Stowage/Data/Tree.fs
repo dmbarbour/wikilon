@@ -18,16 +18,21 @@ open Data.ByteString
 /// Aside: it may be worthwhile to introduce a history-dependent tree, such
 /// as an LSM-tree, to improve insert/delete performance.
 module KVT =
-    type Key = VRef
-    type Val = VRef
-    type Rsc = VRef
-
+    type Key = Binary
+    type Val = Binary
     type Node =
         | Leaf of Val                          // value in leaf
         | Inner of int * Node * Key * Node     // critbit * left * keyRight * right
-        | Remote of Rsc                        // node in stowage
-
+        | Remote of Rsc                        // inner node in stowage
     type Tree = Option<struct(Key * Node)>
+
+    //module EncNode =
+        // Node encoding:
+        //   'L'(Val) - Leaf
+        //   'N'(Inner) - Inner node, inline
+        //   'R'(Rsc) - Remote
+
+       // let size (n : Node) =
 
     // encoder/decoder for node and tree
 

@@ -479,40 +479,39 @@ module API =
 
 /// Structured Binary Data in Memory
 ///
-/// The VRef type represents a binary value that may contain stowage
-/// references and hence represent deeply structured data with sharing.
-/// Mostly, this type exists to simplify interaction between .Net GC
-/// and Stowage GC. Upon Finalize (or Dispose), we'll decrefValDeps.
+/// The Stowage Binary represents binary data that references ad-hoc
+/// stowage resources (see scanHashDeps). This type exists mostly to
+/// simplify interaction between GC in the .Net runtime and GC in the
+/// Stowage persistence layer. On Finalize or Dispose, decrefValDeps
+/// is performed to release the binary from memory.
 ///
 /// Other than compatibility with scanHashDeps, no interpretation of
-/// the binary is assumed. A VRef may be large or small, or may just
-/// consist of a single RscHash, or might have no references at all.
-/// But if you know a VRef is always a singular RscHash, consider use
-/// of Rsc type instead to make this assumption explicit in the type.
-///
-/// Notes: Although the Dispose interface is provided, in practice we
-/// usually leave it to .Net GC to Finalize the VRefs because we share
-/// the VRef among multiple objects or values.
-type VRef =
+/// the binary is assumed. In general, the binary must be parsed to 
+/// extract usable data. If you know a binary is just a RscHash, the
+/// Rsc type will be more convenient and explicit.
+type Binary =
     val DB    : DB
     val Bytes : Val
     new(db:DB, bytes:Val) = { DB = db; Bytes = bytes }
+    new(db:DB, bytes:Val, incref:bool) =
+        if incref then increfValDeps db bytes
+        new Binary(db,bytes)
 
-    member private ref.Decref() = decrefValDeps (ref.DB) (ref.Bytes)
-    override ref.Finalize() = ref.Decref()
+    member private b.Decref() = decrefValDeps (b.DB) (b.Bytes)
+    override b.Finalize() = b.Decref()
     interface System.IDisposable with
-        member ref.Dispose() =
-            ref.Decref()
+        member b.Dispose() =
+            b.Decref()
             System.GC.SuppressFinalize ref
 
     override x.Equals yobj =
         match yobj with
-        | :? VRef as y -> (x.DB = y.DB) && (x.Bytes = y.Bytes)
+        | :? Binary as y -> (x.DB = y.DB) && (x.Bytes = y.Bytes)
         | _ -> false
 
-    override ref.GetHashCode() = ref.Bytes.GetHashCode()
+    override b.GetHashCode() = b.Bytes.GetHashCode()
 
-    static member Compare (a:VRef) (b:VRef) : int =
+    static member Compare (a:Binary) (b:Binary) : int =
         let cdb = compare (a.DB) (b.DB) 
         if (0 <> cdb) then cdb else
         compare (a.Bytes) (b.Bytes)
@@ -520,26 +519,39 @@ type VRef =
     interface System.IComparable with
         member x.CompareTo yobj =
             match yobj with
-            | :? VRef as y -> VRef.Compare x y
+            | :? Binary as y -> Binary.Compare x y
             | _ -> invalidArg "yobj" "cannot compare values of different types"
 
+    member inline b.Item (ix : int) : byte = b.Bytes.Item ix
+
+    member b.GetSlice (iniOpt : int option, finOpt : int option) : Binary =
+        let slice = b.Bytes.GetSlice(iniOpt, finOpt)
+        increfValDeps (b.DB) slice
+        new Binary(b.DB, slice)
+
+    override b.ToString() : string = b.Bytes.ToString()
+    
 /// Stowage Resource References
 ///
-/// This is essentially a VRef specialized to a singular RscHash.
-/// Upon Finalize() or Dispose(), the resource will be decref'd.
-/// While this offers a minor performance advantage over VRef, the
-/// main motivation is to make assumptions more explicit in types,
-/// and a little more convenience for load and stow operations.
+/// This is essentially a Binary specialized for a singular RscHash.
+/// Upon Finalize or Dispose, we decrefRscDB. This offers a minor 
+/// performance advantage over Binary. The main benefit, however, is
+/// more explicit assumptions in types, and convenient Load or Stow.
+/// With a Binary, you generally must parse the Bytes into something
+/// useful. This isn't the case for a simple resource reference.
 type Rsc =
     val DB : DB
     val ID : RscHash
     new (db:DB, id:RscHash) = 
         assert(id.Length = rscHashLen)
-        { DB = db; ID = id }
+        { DB = db; ID = (Data.ByteString.trimBytes id) }
+    new (db:DB, id:RscHash, incref:bool) =
+        if incref then increfRscDB db id
+        new Rsc(db,id)
 
-    static member Stow (db:DB) (v:Val) : Rsc = new Rsc(db, stowRscDB db v)
-    member rsc.TryLoad() : Val option = tryLoadRscDB (rsc.DB) (rsc.ID)
-    member rsc.Load() : Val = loadRscDB (rsc.DB) (rsc.ID)
+    static member inline Stow (db:DB) (v:Val) : Rsc = new Rsc(db, stowRscDB db v)
+    member inline rsc.TryLoad() : Val option = tryLoadRscDB (rsc.DB) (rsc.ID)
+    member inline rsc.Load() : Val = loadRscDB (rsc.DB) (rsc.ID)
 
     member private rsc.Decref() = decrefRscDB (rsc.DB) (rsc.ID)
     override rsc.Finalize() = rsc.Decref()
@@ -566,6 +578,7 @@ type Rsc =
             | :? Rsc as y -> Rsc.Compare x y
             | _ -> invalidArg "yobj" "cannot compare values of different types"
     
+    override rsc.ToString() : string = rsc.ID.ToString()
 
 
 

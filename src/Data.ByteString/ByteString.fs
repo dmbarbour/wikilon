@@ -285,4 +285,5 @@ module ByteString =
             member x.Dispose() = x.Pin.Free() 
 
     
+type ByteString = ByteString.ByteString
 

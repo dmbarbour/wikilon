@@ -5,8 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="VarNat.fs" />
-    <Compile Include="VRefEnc.fs" />
+    <Compile Include="CommonEncoders.fs" />
     <Compile Include="Tree.fs" />
   </ItemGroup>
 
