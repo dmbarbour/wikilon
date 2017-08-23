@@ -395,6 +395,8 @@ In addition to controlling output counts, programmers may wish to fail fast base
 
 These might also be called 'sealer' and 'unsealer' respectively. In practice, we might construct a tagged value with `[(:foo)] b` and later access it with `i(.foo)`. The symbol `foo` or `T` is left to the programmer, but must match between annotation and assertion. These annotations are not labels (i.e. you cannot discriminate on them), but they do resist *accidental* access to structured data. As with tuple assertions, we can fail fast dynamically or detect an error statically.
 
+Further, sealers and unsealers have a trivial access control constraint within a codebase: `(:foo)` and `(.foo)` should only be directly used from functions prefixed with `foo.`. This would be enforced by linter. This constraint provides developers a lightweight basis for abstract data types and implementation hiding abstractions.
+
 ## Substructural Scope
 
 [Substructural types](https://en.wikipedia.org/wiki/Substructural_type_system) allow us to reason about whether a value is used, or limit how many times a value is used. This can be convenient for modeling finite resources, intermediate states in a protocol, or ensuring certain steps are performed by a client computation. Awelon lacks primitive support for substructural types, but annotations can be leveraged:
@@ -406,6 +408,8 @@ These might also be called 'sealer' and 'unsealer' respectively. In practice, we
         [A](nc) [B] b == [[A](nc) B](nc)
 
 Substructural attributes do not prevent application of a value with `a`. Copy and drop are explicit in Awelon, so dynamically enforcing these attributes is feasible, a lot easier than it would be in a variable substitution based language. But ideally, they would be enforced statically. 
+
+*Note:* Whether Awelon systems implement substructural types is entirely optional. And it might be more efficiently represented at the type description layer, in which case these annotations would be more to support type inference.
 
 ## Error Annotations
 
@@ -451,7 +455,12 @@ We might represent our primitive types as:
 
 The type sequence `S C B A` aligns with a program structure `S[C][B][A]`. Effectively, `S` is the remainder of our program 'stack' when we view the program as rewriting a stack-like structure. In context of Awelon, we know that value types `C B A` must be first class functions, which potentially encode data.
 
-Annotations can augment static type analysis by providing an assertion against which we can validate an inference. Structural and substructural assertions mentioned above can be validated statically. A remaining concern is static typing of conditional behavior. We can represent various conditional data types:
+Value sealers like `(:foo)` are special types that seal the whole stack.
+
+        (:foo) : S -> S (:foo)
+        (.foo) : S (:foo) -> S
+
+Annotations can augment static type analysis in many ways, providing extra structure and assertions against which we can validate inference. Structural and substructural annotations would ideally be validated statically and have no dynamic behavior. A remaining concern is static typing of conditional behavior. We might represent various conditional data types:
 
         (bool)      S (S   → S') (S     → S')   → S'
         (opt)       S (S   → S') (S A   → S')   → S'
@@ -460,10 +469,6 @@ Annotations can augment static type analysis by providing an assertion against w
         (cond)      S (A   → S') (B     → S')   → S'
 
 Knowing these types, we can also check for consistency between conditional branches. Unfortunately, inferring these types is difficult. Annotations can provide a much needed hint. I imagine programmers will want annotations for many common types - naturals, texts, binaries, lists, labels, records, and so on. Anything we accelerate or use frequently enough for a runtime to recognize.
-
-*Note:* Heterogeneous lists are easily represented and useful in Awelon. A typical 'fold' or 'map' operation might not apply, but many other operations like zip-map, indexing, or sequencing operations are still applicable. Users might benefit from distinct annotations for homogeneous vs. heterogeneous lists, and for structured intermediate forms like command lists.
-
-*Aside:* Many languages have a 'unit' type, a type with only one value. In Awelon, the best representation of the unit type is `[]` - the identity function. There is only one value of type `∀x.(x→x)`. 
 
 ### Deferred Typing
 
@@ -611,7 +616,7 @@ Awelon supports a simple model for hierarchical structure. Words of qualified fo
 
 As with normal words, the last definition wins. It is possible to update `foo@dict` by updating the definition of `@dict` to reference a dictionary that's almost the same but with a slightly different `foo`. That's also the only means of update: `foo@dict` cannot be defined directly, and a dictionary cannot reference its parent.
 
-The namespace qualifier can be attached to any Awelon operation, not just words. If attached to a block, the semantics is essentially that every element of the block is qualified: `[42 foo]@d == [42@d foo@d]`. If attached to a text, it's the same as attaching to an equivalent block: `"hello"@d == [104 "ello" :]@d`. Even annotations may be qualified, although this is mostly relevant for annotations that reflect upon the dictionary, such as `(~z)@d` (where `[def of foo](~foo) => [foo]`). Namespace qualifiers are second-class: no separation, not even whitespace, is permitted between the operation and its qualifier.
+The namespace qualifier can be attached to any Awelon operation, not just words. If attached to a block, the semantics is essentially that every element of the block is qualified: `[42 foo]@d == [42@d foo@d]`. If attached to a text, it's the same as attaching to an equivalent block: `"hello"@d == [104 "ello" :]@d`. Even annotations may be qualified, although this is mostly relevant for annotations that reflect upon or are otherwise specific to the dictionary, such as `(~z)@d` (where `[def of foo](~foo) => [foo]`) or `(:foo)@d` sealers and unsealers. Namespace qualifiers are always second-class: no separation, not even whitespace, is permitted between an operation and its qualifier.
 
 Namespace qualifiers may be hierarchical. For example, `foo@xy@zzy` would refer to the definition of `foo@xy` within dictionary `zzy`. Explicit use of hierarhical namespaces is discouraged by the Law of Demeter. But they may appear naturally during evaluation or optimization.
 
