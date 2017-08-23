@@ -522,8 +522,8 @@ type Binary =
             | :? Binary as y -> Binary.Compare x y
             | _ -> invalidArg "yobj" "cannot compare values of different types"
 
+    member inline b.Length with get() = b.Bytes.Length
     member inline b.Item (ix : int) : byte = b.Bytes.Item ix
-
     member b.GetSlice (iniOpt : int option, finOpt : int option) : Binary =
         let slice = b.Bytes.GetSlice(iniOpt, finOpt)
         increfValDeps (b.DB) slice
