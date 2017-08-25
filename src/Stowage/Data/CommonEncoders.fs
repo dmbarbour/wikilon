@@ -58,6 +58,18 @@ module EncVarInt =
     let inline write (o : System.IO.Stream) (i : int64) = EncVarNat.write o (zzEncode i)
     let inline read (i : System.IO.Stream) : int64 = zzDecode (EncVarNat.read i)
 
+module EncByte =
+    let inline size (b:byte) : int = 1
+    let inline write (o:System.IO.Stream) (b:byte) : unit = o.WriteByte(b)
+    let read (i:System.IO.Stream) : byte =
+        let n = i.ReadByte()
+        if (n < 0) then failwith "insufficient data"
+        assert (n < 256)
+        byte n
+    let expect (i:System.IO.Stream) (b:byte) : unit =
+        let r = read i
+        if(r <> b) then failwith (sprintf "unexpected byte (expect %A got %A)" b r)
+
 /// ByteString encoding:
 ///  (size)(data)
 ///
@@ -86,41 +98,38 @@ module EncBytes =
         if (len > uint64 System.Int32.MaxValue) then failwith "int overflow"
         readLen (int len) i
 
+    let toInputStream (b:ByteString) : System.IO.Stream =
+        (new System.IO.MemoryStream(b.UnsafeArray, b.Offset, b.Length, false)) 
+            :> System.IO.Stream
+
 /// Resource Hash encoding: {Hash}
 module EncRscHash =
 
-    let size : int = 2 + rscHashLen
+    let inline size (h:RscHash) : int = 
+        assert(h.Length = rscHashLen)
+        2 + rscHashLen
+
     let cbL = 123uy
     let cbR = 125uy
 
-    let write (o:System.IO.Stream) (r:RscHash) : unit =
-        assert(r.Length = rscHashLen)
+    let write (o:System.IO.Stream) (h:RscHash) : unit =
+        assert(h.Length = rscHashLen)
         o.WriteByte(cbL)
-        EncBytes.writeRaw o r
+        EncBytes.writeRaw o h
         o.WriteByte(cbR)
 
-    let inline readcbL (i:System.IO.Stream) : unit =
-        let l = i.ReadByte()
-        if (l <> int cbL) then failwith "expecting '{'"
-
-    let inline readcbR (i:System.IO.Stream) : unit =
-        let r = i.ReadByte()
-        if (r <> int cbR) then failwith "expecting '}'"
-
     let read (i:System.IO.Stream) : RscHash =
-        readcbL i
+        EncByte.expect i cbL
         let h = EncBytes.readLen rscHashLen i
-        readcbR i
+        EncByte.expect i cbR
         h
 
 /// Same as RscHash encoding, but incref and wrap Rsc upon read
 module EncRsc =
 
-    let size : int = EncRscHash.size
-
+    let inline size (r:Rsc) : int = EncRscHash.size (r.ID)
     let inline write (o:System.IO.Stream) (r:Rsc) : unit = 
         EncRscHash.write o (r.ID)
-
     let inline read (db:DB) (i:System.IO.Stream) : Rsc = 
         new Rsc(db, EncRscHash.read i, true)
 
@@ -150,13 +159,9 @@ module EncBin =
         EncBytes.write o (b.Bytes)
         if sepReq (b.Bytes) then o.WriteByte(sep)
 
-    let inline readSep (i:System.IO.Stream) : unit =
-        let b = i.ReadByte()
-        if (b <> int sep) then failwith "invalid separator"
-
     let read (db:DB) (i:System.IO.Stream) : Binary =
         let s = EncBytes.read i
-        if sepReq s then readSep i
+        if sepReq s then EncByte.expect i sep
         new Binary(db, s, true)
 
         

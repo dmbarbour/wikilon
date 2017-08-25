@@ -492,7 +492,9 @@ module API =
 type Binary =
     val DB    : DB
     val Bytes : Val
-    new(db:DB, bytes:Val) = { DB = db; Bytes = bytes }
+    new(db:DB, bytes:Val) = 
+        assert(isValidVal bytes)
+        { DB = db; Bytes = bytes }
     new(db:DB, bytes:Val, incref:bool) =
         if incref then increfValDeps db bytes
         new Binary(db,bytes)
