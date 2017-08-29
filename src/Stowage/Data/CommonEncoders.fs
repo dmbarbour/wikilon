@@ -71,14 +71,26 @@ module EncByte =
         if(r <> b) then failwith (sprintf "unexpected byte (expect %A got %A)" b r)
 
 /// ByteString encoding:
-///  (size)(data)
+///  (size)(data)(sep)
 ///
 /// (size) uses EncVarNat - i.e. (0..127)*(128..255)
 /// (data) is encoded raw
+/// (sep) is simply an SP (32), but is conditional:
+///   (sep) is added iff data terminates in rscHashByte.
+///
+/// This construction ensures easy recognition of secure hash resource
+/// references represented within the bytestring. 
 module EncBytes =
 
+    let sepReq (b:ByteString) : bool =
+        (b.Length > 0) && (rscHashByte (b.[b.Length - 1]))
+    
+    let sep : byte = 32uy
+
     let size (b:ByteString) : int =
-        EncVarNat.size (uint64 b.Length) + b.Length
+        EncVarNat.size (uint64 b.Length) 
+            + b.Length 
+            + (if (sepReq b) then 1 else 0)
 
     let inline writeRaw (o:System.IO.Stream) (b:ByteString) : unit =
         o.Write(b.UnsafeArray, b.Offset, b.Length)
@@ -86,6 +98,7 @@ module EncBytes =
     let write (o:System.IO.Stream) (b:ByteString) : unit =
         EncVarNat.write o (uint64 b.Length)
         writeRaw o b
+        if (sepReq b) then EncByte.write o sep
 
     let readLen (len:int) (i:System.IO.Stream) : ByteString =
         let arr = Array.zeroCreate len
@@ -96,7 +109,9 @@ module EncBytes =
     let read (i:System.IO.Stream) : ByteString =
         let len = EncVarNat.read i
         if (len > uint64 System.Int32.MaxValue) then failwith "int overflow"
-        readLen (int len) i
+        let b = readLen (int len) i
+        if (sepReq b) then EncByte.expect i sep
+        b
 
     let toInputStream (b:ByteString) : System.IO.Stream =
         (new System.IO.MemoryStream(b.UnsafeArray, b.Offset, b.Length, false)) 
@@ -133,37 +148,17 @@ module EncRsc =
     let inline read (db:DB) (i:System.IO.Stream) : Rsc = 
         new Rsc(db, EncRscHash.read i, true)
 
-/// Stowage Binary Encoding: (bytes)(sep)
+/// Stowage Binary Encoding: (bytes)
 ///
-/// The (sep) byte helps guard recognition of references in
-/// data, and is added if and only if the final byte is a 
-/// valid rscHashByte. The (sep) byte is simply SP (32).
-///
-/// If it's known that (sep) is unnecessary in context, we
-/// may simply use EncBytes instead of EncBin. OTOH, the 
-/// overhead for one extra separator character is minor.
-/// Due to how (bytes) encodes (size), no prefix separator
-/// is required.
+/// Uses same encoding as bytestrings, such that we may freely
+/// switch encodings from flat bytestrings to binaries.
 module EncBin =
 
-    let sep : byte = 32uy
-
-    let sepReq (b : ByteString) : bool =
-        (b.Length > 0) && (rscHashByte (b.[b.Length - 1]))
-
-    let size (b:Binary) : int = 
-        EncBytes.size b.Bytes
-          + (if sepReq b.Bytes then 1 else 0)
-
-    let write (o:System.IO.Stream) (b:Binary) : unit =
+    let inline size (b:Binary) : int = EncBytes.size (b.Bytes)
+    let inline write (o:System.IO.Stream) (b:Binary) : unit =
         EncBytes.write o (b.Bytes)
-        if sepReq (b.Bytes) then o.WriteByte(sep)
-
-    let read (db:DB) (i:System.IO.Stream) : Binary =
-        let s = EncBytes.read i
-        if sepReq s then EncByte.expect i sep
-        new Binary(db, s, true)
-
+    let inline read (db:DB) (i:System.IO.Stream) : Binary =
+        new Binary(db, EncBytes.read i, true)
         
 
 

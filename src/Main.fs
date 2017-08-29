@@ -93,7 +93,7 @@ let main argv =
     let db = Stowage.API.openDB "data" (1024 * args.size)
     let app = WS.mkApp db admin
     try startWebServer svc app
-    finally closeDB db
+    finally Stowage.API.closeDB db
     0 // return an integer exit code
 
 

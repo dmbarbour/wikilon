@@ -19,15 +19,12 @@ open Data.ByteString
 /// as an LSM-tree, to improve insert/delete performance.
 module KVT =
     
-    /// KVTree keys should be relatively small, flat bytestrings.
-    /// Keys within a tree will be ordered lexicographically. 
-    ///
-    /// Keys larger than a kilobyte cause runtime exceptions. But
-    /// you could easily apply a secure hash to such keys before
-    /// adding them, resulting in a hash lookup tree.
+    /// KVTree keys are flat bytestrings up to a few kilobytes. 
+    /// Ideally, most keys should be much smaller than this. No
+    /// structure sharing is performed for keys.
     type Key = ByteString
-    let maxKeyLen = 1024
-    let inline isValidKey (k:Key) : bool = (maxKeyLen >= k.Length)
+    let maxKeyLen = 4096
+    let isValidKey (k:Key) : bool = (maxKeyLen >= k.Length) 
 
     /// KVTree values are structured binaries, limited only by the
     /// maxValLength of stowage. Larger values will automatically 
@@ -36,20 +33,65 @@ module KVT =
     type Val = Binary
     let maxValInlineLen = 480
 
+    /// A Critbit indicates a bit-level offset into a key. 
+    ///
+    /// To simplify some logic, we logically inject an extra 1 bit
+    /// before each byte within the key. Hence bit 9 indicates if a
+    /// key has two bytes, and bit 10 is the high bit of the second
+    /// byte. 
+    type Critbit = int
 
+    let inline private keyElem (k : Key) (ix : int) : uint16 =
+        if (ix >= k.Length) then 0us else (256us ||| uint16 k.[ix])
+
+    let testCritbit (cb : Critbit) (k : Key) : bool =
+        assert(cb >= 0)
+        let byteOff = cb / 9
+        let bitOff = 8 - (cb % 9)
+        (0us <> (1us &&& ((keyElem k byteOff) >>> bitOff)))
+
+    // returns high bit for a uint16
+    let private highBitIndex (x0:uint16) : int =
+        let r0 = 0
+        let (r1,x1) = if (0us <> (0xFF00us &&& x0)) then (r0+8, x0>>>8) else (r0,x0)
+        let (r2,x2) = if (0us <> (0x00F0us &&& x1)) then (r1+4, x1>>>4) else (r1,x1)
+        let (r3,x3) = if (0us <> (0x000Cus &&& x2)) then (r2+2, x2>>>2) else (r2,x2)
+        if(0us <> (0x02us &&& x3)) then (1+r3) else r3
+
+    /// Find first critbit between keys equal or greater to specified critbit.
+    /// May return None if there are no differences after the specified bit.
+    let findCritbit (cbMin : Critbit) (a:Key) (b:Key) : Critbit option =
+        assert(cbMin >= 0)
+        let len = max a.Length b.Length
+        let off = cbMin / 9
+        if (off >= len) then None else
+        let mask0 = (0x1FFus >>> (cbMin % 9)) // hide high bits in first byte
+        let x0 = mask0 &&& ((keyElem a off) ^^^ (keyElem b off))
+        if (0us <> x0) then Some((9 * off) + (8 - highBitIndex x0)) else
+        let rec loop ix =
+            if(ix = len) then None else
+            let x = ((keyElem a ix) ^^^ (keyElem b ix))
+            if(0us <> x) then Some((9 * ix) + (8 - highBitIndex x)) else
+            loop (1 + ix)
+        loop (1+off)
+
+    /// KVTree nodes are based on a modified critbit tree. The main
+    /// difference is that the least key is held in the parent to
+    /// support efficient tree-level merge actions.
     type Node =
         | ILeaf of Val     // leaf value inline
         | RLeaf of Rsc     // leaf value reference
-        | INode of int * Node * Key * Node  // critbit * left * keyRight * right
+        | INode of Critbit * Node * Key * Node  // critbit * left * keyRight * right
         | RNode of Rsc     // inner node reference
 
+    /// A non-empty tree is simply the least key and the root node.
     type Tree =
         | Empty
         | Root of Key * Node
 
     module EncNode =
-        // note that encoding is separate from compaction
-        // so be careful to compact before writing...
+        // encoding is separated from compaction, and multiple nodes
+        // may freely be inlined into one binary.
 
         //  L(val)   - ILeaf
         //  l(rsc)   - RLeaf
@@ -60,13 +102,12 @@ module KVT =
         let cINode : byte = byte 'N'
         let cRNode : byte = byte 'n'
 
-        let rec size (n : Node) = 
-            match n with 
+        let rec size (node : Node) = 
+            match node with 
             | ILeaf v -> 1 + EncBin.size v
             | RLeaf r -> 1 + EncRsc.size r
             | RNode r -> 1 + EncRsc.size r
             | INode (n,l,k,r) ->
-                assert(n >= 0)
                 1 + EncVarNat.size (uint64 n)
                   + size l
                   + EncBytes.size k
@@ -74,12 +115,12 @@ module KVT =
 
         let rec write (o : System.IO.Stream) (node : Node) : unit =
             match node with
-            | ILeaf v -> o.WriteByte(cILeaf); EncBin.write o v
-            | RLeaf r -> o.WriteByte(cRLeaf); EncRsc.write o r
-            | RNode r -> o.WriteByte(cRNode); EncRsc.write o r
+            | ILeaf v -> EncByte.write o cILeaf; EncBin.write o v
+            | RLeaf r -> EncByte.write o cRLeaf; EncRsc.write o r
+            | RNode r -> EncByte.write o cRNode; EncRsc.write o r
             | INode (n,l,k,r) ->
-                assert(n >= 0)
-                o.WriteByte(cINode)
+                assert(isValidKey k)
+                EncByte.write o cINode
                 EncVarNat.write o (uint64 n)
                 write o l
                 EncBytes.write o k
@@ -96,6 +137,7 @@ module KVT =
                 let l = read db i
                 let k = EncBytes.read i
                 let r = read db i
+                assert(isValidKey k)
                 INode (int n,l,k,r)
 
         // obtain DB associated with a node.
@@ -114,10 +156,11 @@ module KVT =
 
         /// Heuristic threshold for node compaction (approx bytes)
         ///
-        /// A larger compaction threshold results in less sharing
-        /// but should be more efficient for most other use cases.
-        /// Sharing should still be pretty good when the scale is
-        /// much larger than the threshold.
+        /// A large compaction threshold results in less sharing
+        /// of leaf nodes, but should be more efficient in most 
+        /// other use cases. Sharing should still be pretty good
+        /// if the scale is large and most updates are localized
+        /// to a key prefix.
         let compactThreshold = 10000
 
         /// Compact a node, potentially keeping many nodes inline.
@@ -152,6 +195,8 @@ module KVT =
             System.GC.KeepAlive(r)
             result
 
+        // zero-copy access? maybe later.
+
     // E | R(key)(node)
     module EncTree =
         let cEmpty : byte = byte 'E'
@@ -185,9 +230,6 @@ module KVT =
             | Root (k,v) -> Root (k, EncNode.compact v)
 
     
-        
-
-
     let empty : Tree = Empty
     let singleton (k : Key) (v : Val) : Tree = 
         if(not (isValidKey k)) 
@@ -199,11 +241,19 @@ module KVT =
         | Empty -> true
         | _ -> false
 
+
+    /// Lookup value (if any) associated with a key.
+    let tryFind (t : Tree) (k : Key) : Val option =
+        //let rec fn kMin node =
+        //    rais
+        raise (System.NotImplementedException())   
+
     /// assumes non-empty tree
     let leastKey (t : Tree) : Key =
         match t with
         | Empty -> invalidOp "empty tree"
         | Root (k, _) -> k
+
 
 (*
     let greatestKey (t : Tree) : Key =
