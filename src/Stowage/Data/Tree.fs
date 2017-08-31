@@ -19,12 +19,18 @@ open Data.ByteString
 /// as an LSM-tree, to improve insert/delete performance.
 module KVT =
     
+    // thoughts: it might be useful to combine Rsc and Binary such that
+    // we can semi-transparently store a large binary to stowage.
+
     /// KVTree keys are flat bytestrings up to a few kilobytes. 
-    /// Ideally, most keys should be much smaller than this. No
-    /// structure sharing is performed for keys.
+    /// Ideally, keys should be much smaller than this limit.
+    ///
+    /// Structure sharing is not performed for keys. But it is
+    /// possible to model tries with shared key structure in a
+    /// KVTree by storing another KVTree at the value.
     type Key = ByteString
-    let maxKeyLen = 4096
-    let isValidKey (k:Key) : bool = (maxKeyLen >= k.Length) 
+    let maxKeyLen = 8192
+    let isValidKey (k:Key) : bool = (maxKeyLen >= k.Length)
 
     /// KVTree values are structured binaries, limited only by the
     /// maxValLength of stowage. Larger values will automatically 
@@ -42,7 +48,7 @@ module KVT =
     type Critbit = int
 
     let inline private keyElem (k : Key) (ix : int) : uint16 =
-        if (ix >= k.Length) then 0us else (256us ||| uint16 k.[ix])
+        if (ix >= k.Length) then 0us else (0x100us ||| uint16 k.[ix])
 
     let testCritbit (cb : Critbit) (k : Key) : bool =
         assert(cb >= 0)
@@ -105,8 +111,8 @@ module KVT =
         let rec size (node : Node) = 
             match node with 
             | ILeaf v -> 1 + EncBin.size v
-            | RLeaf r -> 1 + EncRsc.size r
-            | RNode r -> 1 + EncRsc.size r
+            | RLeaf r -> 1 + EncRsc.size
+            | RNode r -> 1 + EncRsc.size
             | INode (n,l,k,r) ->
                 1 + EncVarNat.size (uint64 n)
                   + size l
@@ -149,21 +155,18 @@ module KVT =
             | RNode r -> r.DB
 
         let stow (db:DB) (node:Node) : Rsc =
-            let o = new System.IO.MemoryStream()
+            use o = new System.IO.MemoryStream()
             write o node
-            let b = Data.ByteString.unsafeCreateA (o.ToArray())
-            Rsc.Stow db b
+            Rsc.Stow db (Data.ByteString.unsafeCreateA (o.ToArray()))
 
-        /// Heuristic threshold for node compaction (approx bytes)
-        ///
-        /// A large compaction threshold results in less sharing
-        /// of leaf nodes, but should be more efficient in most 
-        /// other use cases. Sharing should still be pretty good
-        /// if the scale is large and most updates are localized
-        /// to a key prefix.
-        let compactThreshold = 10000
+        /// Compaction threshold determines an approximate size above
+        /// which we compact our nodes. A larger threshold has some
+        /// benefits for efficiency, though it's sufficient for larger
+        /// structures.
+        let compactThreshold : int = 10000
 
         /// Compact a node, potentially keeping many nodes inline.
+        /// (This also asserts the node is within one database.)
         let compact (node : Node) : Node =
             let db = nodeDB node
             let rsz = 60
@@ -173,14 +176,14 @@ module KVT =
                     let struct (l',szL) = compact l
                     let struct (r',szR) = compact r
                     let node' = INode (n, l', k, r')
-                    let szApprox = 12 + szL + szR + k.Length  
+                    let szApprox = 12 + szL + szR + k.Length
                     if(szApprox > compactThreshold)
                         then struct (RNode (stow db node'), rsz)
                         else struct (node', szApprox)
                 | ILeaf v ->
                     assert(v.DB = db)
                     if (v.Length > maxValInlineLen)
-                        then struct (RLeaf (Rsc.Stow db v.Bytes), rsz)
+                        then struct (RLeaf (Rsc.StowBin v), rsz)
                         else struct (node, 6 + v.Length) 
                 | RNode r -> assert(r.DB = db); struct (node, rsz)
                 | RLeaf r -> assert(r.DB = db); struct (node, rsz)
@@ -195,42 +198,44 @@ module KVT =
             System.GC.KeepAlive(r)
             result
 
-        // zero-copy access? maybe later.
+        // zero-copy access? maybe later. I could potentially use
+        // an UnmanagedMemoryStream, but the main savings would be
+        // reduced parsing and construction overheads upon lookup.
 
-    // E | R(key)(node)
-    module EncTree =
-        let cEmpty : byte = byte 'E'
-        let cRoot : byte = byte 'R'
+    /// Compact tree in memory. This can be delayed until after many
+    /// tree updates to avoid stowage of intermediate nodes.
+    let compact (t : Tree) : Tree =
+        match t with
+        | Empty -> Empty
+        | Root (k,v) -> Root (k, EncNode.compact v)
 
-        let size (t : Tree) : int = 
-            match t with
-            | Empty -> 1
-            | Root (k, n) -> 1 + EncBytes.size k + EncNode.size n
+    /// Write tree to 'nullable' resource. This only writes to disk
+    /// for non-empty tree. It implicitly compacts the tree to control
+    /// maximum node sizes.
+    let stow (t : Tree) : Rsc option =
+        match compact t with
+        | Empty -> None
+        | Root (k,v) ->
+            use o = new System.IO.MemoryStream()
+            EncBytes.write o k
+            EncNode.write o v
+            let r = Rsc.Stow (EncNode.nodeDB v) (Data.ByteString.unsafeCreateA (o.ToArray()))
+            System.GC.KeepAlive v
+            Some r
 
-        let write (o : System.IO.Stream) (t : Tree) : unit =
-            match t with
-            | Empty -> o.WriteByte(cEmpty)
-            | Root (k,n) -> 
-                o.WriteByte(cRoot)
-                EncBytes.write o k
-                EncNode.write o n
-        
-        let read (db : DB) (i : System.IO.Stream) : Tree =
-            let b0 = EncByte.read i
-            if(b0 = cEmpty) then Empty 
-            elif(b0 <> cRoot) then failwith (sprintf "unrecognized Tree %A" b0)
-            else
-                let k = EncBytes.read i
-                let n = EncNode.read db i
-                Root (k, n)
+    /// Load tree (partially) into memory from a nullable resource.
+    let load (rt : Rsc option) : Tree =
+        match rt with
+        | None -> Empty
+        | Some r ->
+            let i = EncBytes.toInputStream (r.Load())
+            let k = EncBytes.read i
+            let v = EncNode.read (r.DB) i
+            System.GC.KeepAlive r
+            Root (k,v)
 
-        let compact (tree : Tree) : Tree =
-            match tree with
-            | Empty -> Empty
-            | Root (k,v) -> Root (k, EncNode.compact v)
-
-    
     let empty : Tree = Empty
+
     let singleton (k : Key) (v : Val) : Tree = 
         if(not (isValidKey k)) 
             then invalidArg "k" "key too large"
@@ -241,30 +246,151 @@ module KVT =
         | Empty -> true
         | _ -> false
 
+    let rec private tryFindN (kseek : Key) (kleast : Key) (node : Node) : Val option =
+        match node with
+        | INode (cb, l, kright, r) -> 
+            if testCritbit cb kseek 
+                then tryFindN kseek kright r
+                else tryFindN kseek kleast l
+        | ILeaf v when (kseek = kleast) -> Some v
+        | RLeaf r when (kseek = kleast) -> Some (r.LoadBin())
+        | RNode r -> tryFindN kseek kleast (EncNode.expand r)
+        | _ -> None
 
-    /// Lookup value (if any) associated with a key.
+    /// Lookup value (if any) associated with a key. 
+    ///
+    /// This is O(KeyLength) in general, like any trie. But in most
+    /// cases, the number of nodes touched will be O(lg(N)).
     let tryFind (t : Tree) (k : Key) : Val option =
-        //let rec fn kMin node =
-        //    rais
-        raise (System.NotImplementedException())   
+        match t with
+        | Empty -> None
+        | Root (lk,node) -> tryFindN k lk node
 
-    /// assumes non-empty tree
+    /// leastKey (leftmost key) requires non-empty tree, O(1)
     let leastKey (t : Tree) : Key =
         match t with
-        | Empty -> invalidOp "empty tree"
+        | Empty -> invalidArg "t" "empty tree"
         | Root (k, _) -> k
 
+    let rec private greatestKeyN (k : Key) (n : Node) : Key =
+        match n with
+        | INode (_, _, k', r) -> greatestKeyN k' r
+        | RNode rsc -> greatestKeyN k (EncNode.expand rsc)
+        | _ -> k
 
-(*
+    /// greatestKey requires non-empty tree, O(KeyLength)
     let greatestKey (t : Tree) : Key =
-        let rec loop k n = 
-            match n with
-            | Leaf _ -> k
-            | Inner (_,_,k',n') -> loop k' n'
-            | Remote ref -> loop (loadNode ref)
-*)
+        match t with
+        | Empty -> invalidArg "t" "empty tree"
+        | Root (k, n) -> greatestKeyN k n
 
-    // compact trees
+    // Enumeration of Tree Elements
+    module private EnumNode =
+        type Stack = List<(Key * Node)>
+        type Elem = (Key * Val)
+        type EnumState = (Elem * Stack)
+        
+        let rec enterL (s : Stack) (k:Key) (n:Node) : (Elem * Stack) =
+            match n with
+            | INode (_, l, kr, r) -> enterL ((kr,r)::s) k l
+            | RNode rsc -> enterL s k (EncNode.expand rsc)
+            | ILeaf v -> ((k,v),s)
+            | RLeaf rsc -> ((k, rsc.LoadBin()),s)
+            
+        let rec enterR (s : Stack) (k:Key) (n:Node) : (Elem * Stack) =
+            match n with
+            | INode (_, l, kr, r) -> enterR ((k,l)::s) kr r
+            | RNode rsc -> enterR s k (EncNode.expand rsc)
+            | ILeaf v -> ((k,v),s)
+            | RLeaf rsc -> ((k, rsc.LoadBin()),s)
+
+        type EnumeratorL = // enumerates left to right
+            val mutable private st : EnumState
+            member e.Elem with get() = fst e.st
+            member e.Stack with get() = snd e.st
+            new (st0:EnumState) = { st = st0 }
+            interface System.Collections.Generic.IEnumerator<(Key * Val)> with
+                member e.Current with get() = e.Elem
+            interface System.Collections.IEnumerator with
+                member e.Current with get() = upcast e.Elem
+                member e.MoveNext() =
+                    match e.Stack with
+                    | ((kr,r)::sr) ->
+                        e.st <- enterL sr kr r
+                        true
+                    | _ -> false
+                member e.Reset() = raise (System.NotSupportedException())
+            interface System.IDisposable with
+                member e.Dispose() = ()
+
+        type EnumerableL =
+            val private k : Key
+            val private n : Node
+            new(k:Key, n:Node) = { k = k; n = n }
+            member e.GetEnum() = new EnumeratorL(enterL List.empty e.k e.n)
+            interface System.Collections.Generic.IEnumerable<(Key*Val)> with
+                member e.GetEnumerator() = upcast e.GetEnum()
+            interface System.Collections.IEnumerable with
+                member e.GetEnumerator() = upcast e.GetEnum()
+
+        type EnumeratorR = // enumerates right to left
+            val mutable private st : EnumState
+            member e.Elem with get() = fst e.st
+            member e.Stack with get() = snd e.st
+            new (st0:EnumState) = { st = st0 }
+            interface System.Collections.Generic.IEnumerator<(Key * Val)> with
+                member e.Current with get() = e.Elem
+            interface System.Collections.IEnumerator with
+                member e.Current with get() = upcast e.Elem
+                member e.MoveNext() =
+                    match e.Stack with
+                    | ((kl,l)::sl) ->
+                        e.st <- enterR sl kl l
+                        true
+                    | _ -> false
+                member e.Reset() = raise (System.NotSupportedException())
+            interface System.IDisposable with
+                member e.Dispose() = ()
+
+        type EnumerableR =
+            val private k : Key
+            val private n : Node
+            new(k:Key, n:Node) = { k = k; n = n }
+            member e.GetEnum() = new EnumeratorR(enterR List.empty e.k e.n)
+            interface System.Collections.Generic.IEnumerable<(Key*Val)> with
+                member e.GetEnumerator() = upcast e.GetEnum()
+            interface System.Collections.IEnumerable with
+                member e.GetEnumerator() = upcast e.GetEnum()
+
+    /// sequence ordered from least key to greatest key
+    let toSeq (t : Tree) : seq<(Key * Val)> =
+        match t with
+        | Empty -> Seq.empty
+        | Root(k,n) -> upcast EnumNode.EnumerableL(k,n)
+
+    /// reverse-ordered sequence, greatest key to least key
+    let toSeqR (t : Tree) : seq<(Key * Val)> =
+        match t with
+        | Empty -> Seq.empty
+        | Root(k,n) -> upcast EnumNode.EnumerableR(k,n)
+
+    let inline fold (fn : 'St -> Key -> Val -> 'St) (s0 : 'St) (t : Tree) : 'St =
+        Seq.fold (fun s (k,v) -> fn s k v) s0 (toSeq t)
+
+    let inline foldBack (fn : Key -> Val -> 'St -> 'St) (t : Tree) (s0 : 'St) : 'St =
+        Seq.fold (fun s (k,v) -> fn k v s) s0 (toSeqR t)
+
+
+
+    /// Merge of Trees.
+    /// 
+    /// 
+
+
+    // Key range selection
+    //  by key prefix
+    //  by minimum key
+    //  by maximum key
 
     // merge trees
     // diff trees

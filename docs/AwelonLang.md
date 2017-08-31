@@ -435,11 +435,15 @@ We drop data but preserve substructure. Because the data has been lost, the resu
 
 ## Active Debugging
 
-Awelon's program rewrite semantics make it relatively easy to observe a computation in progress. Data is visible in the program representation, rather than hidden behind variables that must be queried via debugger. It is feasible to predictably animate evaluation by pausing evaluation and taking snapshots just before linking of specific words, recording a series of 'frames' to render.
+Awelon's program rewrite semantics make it relatively easy to observe a computation in progress. Data is visible in the program representation, rather than hidden behind variables that must be queried via debugger. And of course, more conventional debugging applies. Some things we can easily do:
 
-I propose `(trace)` annotation to serve as a basis for conventional printf style debugging. For example, `[message](trace)` would print `[message]` to an implicit trace log, then simply pass the message onwards within the program. It would be up to developers to ensure trace messages follow useful conventions (e.g. to support status messages).
+* set breakpoints for linking of specific words
+* animate evaluation via frame capture on breakpoints
+* evaluate in small steps more generally
+* `(trace)` annotation for console/log style debugging
+* log inputs to specific words (specified arity)
 
-Of course, tracing with an explicit annotation is invasive and is not ideal for debugging. But we could also configure a runtime to trace specific functions by capturing the arguments (up to arity) whenever the word is linked. Similarly, we could configure a runtime to breakpoint on certain words, treating them temporarily as undefined rather than immediately linking them.
+Debugging should be configurable through the runtime's interpeter or compiler.
 
 ## Static Typing
 

@@ -47,7 +47,8 @@ module EncVarInt =
         if(i < 0L) then (2UL * uint64 ((-1L)-i)) + 1UL
                    else (2UL * uint64 i)
     let zzDecode (n : uint64) : int64 =
-        if (0UL = (n % 2UL)) then (int64)(n/2UL)
+        let iAbs = int64 (n/2UL)
+        if (0UL = (n % 2UL)) then iAbs
                              else (-1L)-(int64)(n/2UL)
 
     // zig-zag conversions could be optimized using bit-level
@@ -59,7 +60,7 @@ module EncVarInt =
     let inline read (i : System.IO.Stream) : int64 = zzDecode (EncVarNat.read i)
 
 module EncByte =
-    let inline size (b:byte) : int = 1
+    let size : int = 1
     let inline write (o:System.IO.Stream) (b:byte) : unit = o.WriteByte(b)
     let read (i:System.IO.Stream) : byte =
         let n = i.ReadByte()
@@ -120,10 +121,7 @@ module EncBytes =
 /// Resource Hash encoding: {Hash}
 module EncRscHash =
 
-    let inline size (h:RscHash) : int = 
-        assert(h.Length = rscHashLen)
-        2 + rscHashLen
-
+    let size : int = 2 + rscHashLen
     let cbL = 123uy
     let cbR = 125uy
 
@@ -142,23 +140,44 @@ module EncRscHash =
 /// Same as RscHash encoding, but incref and wrap Rsc upon read
 module EncRsc =
 
-    let inline size (r:Rsc) : int = EncRscHash.size (r.ID)
+    let size : int = EncRscHash.size
     let inline write (o:System.IO.Stream) (r:Rsc) : unit = 
         EncRscHash.write o (r.ID)
     let inline read (db:DB) (i:System.IO.Stream) : Rsc = 
         new Rsc(db, EncRscHash.read i, true)
 
-/// Stowage Binary Encoding: (bytes)
-///
-/// Uses same encoding as bytestrings, such that we may freely
-/// switch encodings from flat bytestrings to binaries.
-module EncBin =
+/// a Rsc option is convenient for 'nullable' resource references.
+/// Encoding is '_' for a hole, otherwise overlaps resource encoding.
+/// Consequently, it is easy to transition Rsc to RscOpt (but not the
+/// other direction).
+module EncRscOpt =
+    let cNone = byte '_'
 
+    let size (ro : Rsc option) : int = 
+        match ro with
+        | None -> 1
+        | Some r -> EncRsc.size
+
+    let write (o : System.IO.Stream) (ro : Rsc option) : unit =
+        match ro with
+        | None -> EncByte.write o cNone
+        | Some r -> EncRsc.write o r
+            
+    let read (db:DB) (i:System.IO.Stream) : Rsc option =
+        let b = EncByte.read i
+        if(cNone = b) then None else
+        if(b <> EncRscHash.cbL) then failwith "expecting resource"
+        let rsc = new Rsc(db, EncRscHash.read i, true)
+        EncByte.expect i (EncRscHash.cbR)
+        Some rsc
+
+/// Same as bytestrings, but incref and wrap Binary upon read.
+module EncBin =
     let inline size (b:Binary) : int = EncBytes.size (b.Bytes)
     let inline write (o:System.IO.Stream) (b:Binary) : unit =
         EncBytes.write o (b.Bytes)
     let inline read (db:DB) (i:System.IO.Stream) : Binary =
         new Binary(db, EncBytes.read i, true)
-        
+
 
 
