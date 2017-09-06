@@ -1,7 +1,7 @@
 namespace Stowage
 open Data.ByteString
 
-/// A key-value lookup tree above Stowage.
+/// A key-value critbit tree above Stowage.
 ///
 /// By modeling a key-value tree above Stowage, we essentially get first
 /// class database values with a lot of nice properties: data persistence,
@@ -19,25 +19,13 @@ open Data.ByteString
 /// as an LSM-tree, to improve insert/delete performance.
 module KVT =
     
-    // thoughts: it might be useful to combine Rsc and Binary such that
-    // we can semi-transparently store a large binary to stowage.
-
-    /// KVTree keys are flat bytestrings up to a few kilobytes. 
-    /// Ideally, keys should be much smaller than this limit.
+    /// KVTree keys and values are potentially structured binaries.
     ///
-    /// Structure sharing is not performed for keys. But it is
-    /// possible to model tries with shared key structure in a
-    /// KVTree by storing another KVTree at the value.
-    type Key = ByteString
-    let maxKeyLen = 8192
-    let isValidKey (k:Key) : bool = (maxKeyLen >= k.Length)
-
-    /// KVTree values are structured binaries, limited only by the
-    /// maxValLength of stowage. Larger values will automatically 
-    /// be stowed upon compaction to improve sharing, while smaller
-    /// values will be inlined.
+    /// Note: keys and values mustn't be too large or compaction will
+    /// fail. A few megabytes each is safe but inefficient. Keep keys
+    /// and values under a few kilobytes each for best performance.
+    type Key = Binary
     type Val = Binary
-    let maxValInlineLen = 480
 
     /// A Critbit indicates a bit-level offset into a key. 
     ///
@@ -84,9 +72,12 @@ module KVT =
     /// KVTree nodes are based on a modified critbit tree. The main
     /// difference is that the least key is held in the parent to
     /// support efficient tree-level merge actions.
+    ///
+    /// Although the Node type is exposed, the expectation is that
+    /// clients shouldn't directly construct nodes (otherwise, it is
+    /// possible to create ill-formed trees). 
     type Node =
-        | ILeaf of Val     // leaf value inline
-        | RLeaf of Rsc     // leaf value reference
+        | Leaf of Val     // leaf value inline
         | INode of Critbit * Node * Key * Node  // critbit * left * keyRight * right
         | RNode of Rsc     // inner node reference
 
@@ -99,128 +90,123 @@ module KVT =
         // encoding is separated from compaction, and multiple nodes
         // may freely be inlined into one binary.
 
-        //  L(val)   - ILeaf
-        //  l(rsc)   - RLeaf
+        //  L(val)   - Leaf
         //  N(inode) - INode
-        //  n(rsc)   - RNode
-        let cILeaf : byte = byte 'L'
-        let cRLeaf : byte = byte 'l'
+        //  R(rsc)   - RNode
+        let cLeaf  : byte = byte 'L'
         let cINode : byte = byte 'N'
-        let cRNode : byte = byte 'n'
+        let cRNode : byte = byte 'R'
 
         let rec size (node : Node) = 
             match node with 
-            | ILeaf v -> 1 + EncBin.size v
-            | RLeaf r -> 1 + EncRsc.size
+            | Leaf v -> 1 + EncBin.size v
             | RNode r -> 1 + EncRsc.size
-            | INode (n,l,k,r) ->
-                1 + EncVarNat.size (uint64 n)
+            | INode (cb,l,k,r) ->
+                1 + EncVarNat.size (uint64 cb)
                   + size l
-                  + EncBytes.size k
+                  + EncBin.size k
                   + size r
 
         let rec write (o : System.IO.Stream) (node : Node) : unit =
             match node with
-            | ILeaf v -> EncByte.write o cILeaf; EncBin.write o v
-            | RLeaf r -> EncByte.write o cRLeaf; EncRsc.write o r
+            | Leaf v -> EncByte.write o cLeaf; EncBin.write o v
             | RNode r -> EncByte.write o cRNode; EncRsc.write o r
-            | INode (n,l,k,r) ->
-                assert(isValidKey k)
+            | INode (cb,l,k,r) ->
                 EncByte.write o cINode
-                EncVarNat.write o (uint64 n)
+                EncVarNat.write o (uint64 cb)
                 write o l
-                EncBytes.write o k
+                EncBin.write o k
                 write o r
 
         let rec read (db:DB) (i:System.IO.Stream) : Node =
             let b0 = EncByte.read i
-            if(b0 = cILeaf) then ILeaf (EncBin.read db i)
-            elif (b0 = cRLeaf) then RLeaf (EncRsc.read db i)
+            if(b0 = cLeaf) then Leaf (EncBin.read db i)
             elif (b0 = cRNode) then RNode (EncRsc.read db i)
             elif (b0 <> cINode) then failwith (sprintf "unrecognized Node %A" b0)
             else
-                let n = EncVarNat.read i
+                let cb = EncVarNat.read i
+                if(cb > uint64 System.Int32.MaxValue) then failwith "critbit overflow"
                 let l = read db i
-                let k = EncBytes.read i
+                let k = EncBin.read db i
                 let r = read db i
-                assert(isValidKey k)
-                INode (int n,l,k,r)
-
-        // obtain DB associated with a node.
-        let rec nodeDB (node : Node) : DB =
-            match node with
-            | ILeaf v -> v.DB
-            | RLeaf r -> r.DB
-            | INode (n,l,k,r) -> nodeDB l
-            | RNode r -> r.DB
+                INode (int cb,l,k,r)
 
         let stow (db:DB) (node:Node) : Rsc =
             use o = new System.IO.MemoryStream()
             write o node
             Rsc.Stow db (Data.ByteString.unsafeCreateA (o.ToArray()))
 
-        /// Compaction threshold determines an approximate size above
-        /// which we compact our nodes. A larger threshold has some
-        /// benefits for efficiency, though it's sufficient for larger
-        /// structures.
+        /// Compaction threshold determines a serialization size above
+        /// which we compact our tree nodes. A larger compaction threshold
+        /// reduces sharing for small subtrees, but should be more efficient
+        /// when working with very small keys and values.
         let compactThreshold : int = 10000
 
-        /// Compact a node, potentially keeping many nodes inline.
-        /// (This also asserts the node is within one database.)
-        let compact (node : Node) : Node =
-            let db = nodeDB node
-            let rsz = 60
-            let rec compact (node : Node) : struct (Node * int) = 
-                match node with
-                | INode (n,l,k,r) ->
-                    let struct (l',szL) = compact l
-                    let struct (r',szR) = compact r
-                    let node' = INode (n, l', k, r')
-                    let szApprox = 12 + szL + szR + k.Length
-                    if(szApprox > compactThreshold)
-                        then struct (RNode (stow db node'), rsz)
-                        else struct (node', szApprox)
-                | ILeaf v ->
-                    assert(v.DB = db)
-                    if (v.Length > maxValInlineLen)
-                        then struct (RLeaf (Rsc.StowBin v), rsz)
-                        else struct (node, 6 + v.Length) 
-                | RNode r -> assert(r.DB = db); struct (node, rsz)
-                | RLeaf r -> assert(r.DB = db); struct (node, rsz)
-            let struct (node', szApprox) = compact node
+        let rec compactSz (db:DB) (node:Node) : struct (Node * int) =
+            match node with
+            | RNode rsc -> assert(db = rsc.DB); struct(node, 1 + EncRsc.size)
+            | Leaf v -> assert(db = v.DB); struct(node, 1 + EncBin.size v)
+            | INode (cb, l, kr, r) ->
+                let struct (l', szL) = compactSz db l
+                let struct (r', szR) = compactSz db r
+                let node' = INode (cb, l', kr, r')
+                let szNode' = 1 + EncVarNat.size (uint64 cb) + szL + EncBin.size kr + szR
+                if (szNode' > compactThreshold)
+                    then struct (RNode (stow db node'), 1 + EncRsc.size)
+                    else struct (node', szNode')
+
+        let inline compact (db:DB) (node:Node) : Node =
+            let struct(node', szNode') = compactSz db node
             node'
 
-        let parse (db:DB) (v:Stowage.Val) : Node =
+        let inline parse (db:DB) (v:Stowage.Val) : Node =
             read db (EncBytes.toInputStream v)
 
         let expand (r:Rsc) : Node =
-            let result = parse (r.DB) (r.Load())
+            let result = parse (r.DB) (loadRscDB r.DB r.ID)
             System.GC.KeepAlive(r)
             result
 
         // zero-copy access? maybe later. I could potentially use
-        // an UnmanagedMemoryStream, but the main savings would be
-        // reduced parsing and construction overheads upon lookup.
+        // an UnmanagedMemoryStream, and potential savings would be
+        // reduced parsing and construction overheads on tryFind.
+
+    let rec private validateN (mcb:Critbit) (kl:Key) (node:Node) =
+        match node with
+        | Leaf v -> (kl.DB = v.DB)
+        | RNode rsc -> (kl.DB = rsc.DB) && (validateN mcb kl (EncNode.expand rsc))
+        | INode (cb, l, kr, r) ->
+            (kl.DB = kr.DB) 
+                && ((Some cb) = findCritbit mcb kl kr)
+                && (testCritbit cb kr)
+                && (validateN (1+cb) kl l)
+                && (validateN (1+cb) kr r)
+
+    /// validate structural invariants of tree
+    let validate (t:Tree) : bool =
+        match t with
+        | Empty -> true
+        | Root(kl,n) -> validateN 0 kl n
 
     /// Compact tree in memory. This can be delayed until after many
     /// tree updates to avoid stowage of intermediate nodes.
     let compact (t : Tree) : Tree =
         match t with
         | Empty -> Empty
-        | Root (k,v) -> Root (k, EncNode.compact v)
+        | Root (k,n) -> Root(k, EncNode.compact (k.DB) n)
 
     /// Write tree to 'nullable' resource. This only writes to disk
-    /// for non-empty tree. It implicitly compacts the tree to control
+    /// for non-empty tree. Implicitly compacts the tree to control
     /// maximum node sizes.
     let stow (t : Tree) : Rsc option =
         match compact t with
         | Empty -> None
-        | Root (k,v) ->
+        | Root(kl,node) as tc ->
             use o = new System.IO.MemoryStream()
-            EncBytes.write o k
-            EncNode.write o v
-            let r = Rsc.Stow (EncNode.nodeDB v) (Data.ByteString.unsafeCreateA (o.ToArray()))
-            System.GC.KeepAlive v
+            EncBin.write o kl
+            EncNode.write o node
+            let r = Rsc.Stow (kl.DB) (Data.ByteString.unsafeCreateA (o.ToArray()))
+            System.GC.KeepAlive tc
             Some r
 
     /// Load tree (partially) into memory from a nullable resource.
@@ -228,49 +214,179 @@ module KVT =
         match rt with
         | None -> Empty
         | Some r ->
-            let i = EncBytes.toInputStream (r.Load())
-            let k = EncBytes.read i
+            let i = EncBytes.toInputStream (loadRscDB r.DB r.ID)
+            let k = EncBin.read (r.DB) i
             let v = EncNode.read (r.DB) i
             System.GC.KeepAlive r
             Root (k,v)
 
     let empty : Tree = Empty
-
-    let singleton (k : Key) (v : Val) : Tree = 
-        if(not (isValidKey k)) 
-            then invalidArg "k" "key too large"
-        Root (k, ILeaf v)
-
+    let singleton (k : Key) (v : Val) : Tree = Root (k, Leaf v)
     let isEmpty (t : Tree) : bool =
         match t with
         | Empty -> true
-        | _ -> false
+        | Root _ -> false
 
-    let rec private tryFindN (kseek : Key) (kleast : Key) (node : Node) : Val option =
+    // update existing least-key value
+    let rec private setLKV (v:Val) (node:Node) : Node =
         match node with
-        | INode (cb, l, kright, r) -> 
-            if testCritbit cb kseek 
-                then tryFindN kseek kright r
-                else tryFindN kseek kleast l
-        | ILeaf v when (kseek = kleast) -> Some v
-        | RLeaf r when (kseek = kleast) -> Some (r.LoadBin())
-        | RNode r -> tryFindN kseek kleast (EncNode.expand r)
+        | INode (cb, l, k, r) -> INode (cb, setLKV v l, k, r)
+        | RNode rsc -> setLKV v (EncNode.expand rsc)
+        | Leaf _ -> Leaf v
+
+    // insert a new least-key value, at given critbit
+    let rec private addLKV (ncb:Critbit) (oldLK:Key) (v:Val) (node:Node) : Node =
+        match node with
+        | INode (cb, l, kr, r) when (cb < ncb) ->
+            assert(not (testCritbit cb oldLK))
+            INode (cb, addLKV ncb oldLK v l, kr, r) 
+        | RNode rsc -> addLKV ncb oldLK v (EncNode.expand rsc)
+        | _ -> 
+            assert(testCritbit ncb oldLK) 
+            INode (ncb, Leaf v, oldLK, node) 
+
+    // add or update key-value element somewhere to right of least-key
+    //  uses a critbit relative to least-key for efficient insertion
+    let rec private addRKV (mcb:Critbit) (k:Key) (v:Val) (node:Node) : Node =
+        match node with
+        | INode (cb, l, kr, r) ->
+            if (cb < mcb) then // diff after node
+                assert(not (testCritbit cb k)) 
+                INode (cb, addRKV mcb k v l, kr, r) 
+            elif (cb > mcb) then // diff before node
+                assert(not (testCritbit mcb kr))
+                INode (mcb, node, k, Leaf v)
+            else // diff aligns with kr
+                match findCritbit (1+cb) k kr with
+                | Some ncb ->
+                    if testCritbit ncb k
+                        then INode (cb, l, kr, addRKV ncb k v r)
+                        else INode (cb, l, k, addLKV ncb kr v r)
+                | None -> INode (cb, l, kr, setLKV v r) // update at kr
+        | RNode rsc -> addRKV mcb k v (EncNode.expand rsc)
+        | Leaf _ -> INode (mcb, node, k, Leaf v)
+
+    /// Add key-value to the tree, or update existing value.
+    let add (nk : Key) (nv : Val) (t : Tree) : Tree =
+        match t with
+        | Root (tk, tn) ->
+            match findCritbit 0 nk tk with
+            | Some cb -> 
+                if testCritbit cb nk
+                    then Root (tk, addRKV cb nk nv tn) // add to right of least-key
+                    else Root (nk, addLKV cb tk nv tn) // new least-key
+            | None -> Root (tk, setLKV nv tn) // update least-key
+        | Empty -> Root (nk, Leaf nv)
+
+    // TODO: efficient union of trees
+
+    // remove least-key value for a node, return a tree.
+    let rec private removeLKV (node:Node) : Tree =
+        match node with
+        | INode (cb, l, kr, r) ->
+            match removeLKV l with
+            | Empty -> Root(kr, r)
+            | Root(kl', l') -> Root(kl', INode(cb, l', kr, r))
+        | RNode rsc -> removeLKV (EncNode.expand rsc)
+        | Leaf _  -> Empty // key removed
+
+    // remove a key to right of least-key (if present). 
+    //  Use critbit relative to least-key for efficient deletion.
+    let rec private removeRKV (mcb:Critbit) (k:Key) (node:Node) : Node =
+        match node with
+        | INode (cb, l, kr, r) ->
+            if (cb < mcb) then
+                assert(not (testCritbit cb k))
+                INode(cb, removeRKV mcb k l, kr, r)
+            elif (cb > mcb) then node // key not present
+            else match findCritbit (1+cb) k kr with
+                 | Some ncb -> 
+                    if not (testCritbit ncb k) then node else
+                    INode (cb, l, kr, removeRKV ncb k r)
+                 | None -> // remove leftmost node
+                    match removeLKV r with
+                    | Empty -> l 
+                    | Root(kr',r') -> INode (cb, l, kr', r')
+        | RNode rsc -> removeRKV mcb k (EncNode.expand rsc)
+        | Leaf _ -> node // key not present
+
+    /// Remove key from tree if present. 
+    let remove (k : Key) (t:Tree) : Tree =
+        match t with
+        | Root (kl, node) -> 
+            match findCritbit 0 k kl with
+            | Some cb -> 
+                if not (testCritbit cb k) then t else // less than kl
+                Root (kl, removeRKV cb k node) // greater than kl
+            | None -> removeLKV node // equal to kl, remove least key
+        | Empty -> Empty
+
+    // recursive search for a key
+    let rec private tryFindN (k:Key) (kl:Key) (node:Node) : Val option =
+        match node with
+        | INode (cb, l, kr, r) -> 
+            if testCritbit cb k
+                then tryFindN k kr r
+                else tryFindN k kl l
+        | RNode r when (k >= kl) -> tryFindN k kl (EncNode.expand r)
+        | Leaf v when (k = kl) -> Some v
         | _ -> None
 
-    /// Lookup value (if any) associated with a key. 
-    ///
-    /// This is O(KeyLength) in general, like any trie. But in most
-    /// cases, the number of nodes touched will be O(lg(N)).
-    let tryFind (t : Tree) (k : Key) : Val option =
+    /// Lookup value (if any) associated with a key. This may load
+    /// tree nodes into memory, but doesn't hold onto them. So if
+    /// you need to lookup a value many times, or plan to modify it
+    /// afterwards, consider use of `touch` to pre-load the data.
+    let tryFind (k : Key) (t : Tree) : Val option =
         match t with
+        | Root (kl,node) -> tryFindN k kl node
         | Empty -> None
-        | Root (lk,node) -> tryFindN k lk node
+
+    /// Lookup value associated with key. 
+    /// If no binding, raises System.Collections.Generic.KeyNotFoundException.
+    let find (k : Key) (t : Tree) : Val =
+        match tryFind k t with
+        | Some v -> v
+        | None -> raise (System.Collections.Generic.KeyNotFoundException())
+
+    let rec private touchN (k : Key) (kl : Key) (node : Node) : Node =
+        match node with
+        | INode (cb, l, kr, r) ->
+            if testCritbit cb k
+                then INode(cb, l, kr, (touchN k kr r))
+                else INode(cb, (touchN k kl l), kr, r)
+        | RNode r when (k >= kl) -> touchN k kl (EncNode.expand r)
+        | _ -> node
+
+    /// Touch a key, loading into RAM everything needed for value lookup.
+    let touch (t : Tree) (k : Key) : Tree =
+        match t with
+        | Empty -> Empty
+        | Root (kl,node) -> Root(kl, touchN k kl node)
+
+    let rec private fullyExpandN (node : Node) : Node =
+        match node with
+        | INode (cb, l, k, r) -> INode (cb, fullyExpandN l, k, fullyExpandN r)
+        | RNode r -> fullyExpandN (EncNode.expand r)
+        | Leaf _ -> node
+
+    /// Load entire tree into RAM. 
+    let fullyExpand (t : Tree) : Tree =
+        match t with
+        | Empty -> Empty
+        | Root (k, n) -> Root (k, fullyExpandN n)
 
     /// leastKey (leftmost key) requires non-empty tree, O(1)
     let leastKey (t : Tree) : Key =
         match t with
         | Empty -> invalidArg "t" "empty tree"
         | Root (k, _) -> k
+
+    /// Remove least-key from tree.
+    /// (Slightly more efficient than `remove (leastKey t) t`.)
+    let removeLeastKey (t:Tree) : Tree =
+        match t with
+        | Root (_, node) -> removeLKV node
+        | Empty -> Empty
 
     let rec private greatestKeyN (k : Key) (n : Node) : Key =
         match n with
@@ -284,6 +400,7 @@ module KVT =
         | Empty -> invalidArg "t" "empty tree"
         | Root (k, n) -> greatestKeyN k n
 
+
     // Enumeration of Tree Elements
     module private EnumNode =
         type Stack = List<(Key * Node)>
@@ -294,15 +411,13 @@ module KVT =
             match n with
             | INode (_, l, kr, r) -> enterL ((kr,r)::s) k l
             | RNode rsc -> enterL s k (EncNode.expand rsc)
-            | ILeaf v -> ((k,v),s)
-            | RLeaf rsc -> ((k, rsc.LoadBin()),s)
+            | Leaf v -> ((k,v),s)
             
         let rec enterR (s : Stack) (k:Key) (n:Node) : (Elem * Stack) =
             match n with
             | INode (_, l, kr, r) -> enterR ((k,l)::s) kr r
             | RNode rsc -> enterR s k (EncNode.expand rsc)
-            | ILeaf v -> ((k,v),s)
-            | RLeaf rsc -> ((k, rsc.LoadBin()),s)
+            | Leaf v -> ((k,v),s)
 
         type EnumeratorL = // enumerates left to right
             val mutable private st : EnumState
@@ -380,10 +495,61 @@ module KVT =
     let inline foldBack (fn : Key -> Val -> 'St -> 'St) (t : Tree) (s0 : 'St) : 'St =
         Seq.fold (fun s (k,v) -> fn k v s) s0 (toSeqR t)
 
+    let inline private matchPrefix (prefix : ByteString) (key : Key) =
+        (prefix = (Data.ByteString.take prefix.Length key.Bytes))
+
+    // union after filtering trees, assumes in-order elements, preserves critbit 
+    let private unionF (cb : int) (a:Tree) (b:Tree) : Tree = 
+        match a with
+        | Empty -> b
+        | Root(ak,an) -> 
+            match b with
+            | Empty -> a 
+            | Root(bk, bn) -> Root(ak, INode (cb, an, bk, bn))
+         
+    /// Filter by Prefix.
+    let rec selectPrefix (prefix : ByteString) (t : Tree) : Tree =
+        match t with
+        | Empty -> Empty
+        | Root(kl, node) ->
+            if (prefix < kl.Bytes) then Empty else
+            match node with
+            | INode (cb, l, kr, r) ->
+                let tInPrefix = (cb >= (9 * prefix.Length)) && 
+                                (matchPrefix prefix kl)
+                if tInPrefix then t else
+                let a = selectPrefix prefix (Root(kl,l))
+                let b = selectPrefix prefix (Root(kr,r))
+                unionF cb a b
+            | RNode rsc -> selectPrefix prefix (Root(kl, EncNode.expand rsc))
+            | leaf -> if matchPrefix prefix kl then t else Empty
+    // TODO: I think selectPrefix could be heavily optimized...
+
+    /// Right-biased union of trees. 
+    /// 
+    /// Here the 'right bias' means we'll keep the value from the
+    /// right hand tree whenever both trees have a value for a key.
+    (*
+    let union (a:Tree) (b:Tree) : Tree =
+        match (a,b) with
+        | Empty -> b
+        | Root(ak,an) ->
+            match b with
+            | Empty -> a
+            | Root(bk, bn) ->
+                let cb 
+                unionR 
+    *)          
+
+
+
+    /// Partition tree on key. This returns two trees, such that
+    /// all keys less than the requested key are in the left tree
+    /// and all keys greater are in the right.
 
 
     /// Merge of Trees.
-    /// 
+    ///   goal is flexible merges with deletion
     /// 
 
 
