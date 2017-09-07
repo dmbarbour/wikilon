@@ -49,39 +49,21 @@ Valid Awelon code must also be valid UTF-8 text, excluding C0 (except LF) and DE
 
 ## Words
 
-Words are the basic user-definable unit in Awelon. Words are identified by a non-empty sequence of characters excluding `@#[]()<>{}\/,;|&='"`, C0, DEL, SP (32), grave (96). Adjacent words in code must be separated by whitespace (SP or LF). Words don't have a hard upper size limit, but developers are encouraged to keep them relatively small and also to ensure words are readily embedded in external contexts (URLs, HTML, natural language, etc.).
+Words are the basic user-definable unit in Awelon. Words are identified by a non-empty sequence of characters excluding `@#[]()<>{}\/,;|&='"`, C0, DEL, SP (32), grave (96). Adjacent words in code must be separated by whitespace (SP or LF). Words are size-limited to 63 bytes (in UTF-8 encoding).
 
-A small, useful subset of words is implicitly defined:
+A small but useful subset of words is implicitly defined:
 
 * the four Awelon primitive words `a`, `b`, `c`, `d`
 * words to encode natural numbers, regex `[1-9][0-9]*`
 * secure hash resources `$secureHash` or `%secureHash`
 
-Other words are defined in a *Dictionary*. 
+All other words (including `0`) are defined via *Dictionary*. 
 
 Excepting the four primitives, which have primitive rewrite rules, the formal semantics for any word is to rewrite the word to its definition when doing so allows for computation to usefully progress (see *Evaluation*). However, words may also have informal semantics based on extrinsic meaning and structural conventions. For example, `foo.doc` might be automatically presented as documentation for word `foo`. A static analysis tool may peek at `foo.type` for hints or assertions. Awelon's [application models](ApplicationModel.md) freely leverage structural conventions for words where appropriate.
 
-## Dictionary
-
-Awelon specifies a simple, scalable, patch-based dictionary representation:
-
-        secureHashOfPatch1
-        secureHashOfPatch2
-        @word1 definition1
-        @word2 definition2
-        ...
-
-Each patch consists of a list of patches to logically include followed by a list of definitions. Each definition is indicated by `@word` at the start of a line, followed by Awelon code. The last definition for a word wins, so definitions may override those from earlier patches, supporting a trivial update model. A dictionary as a whole is essentially represented by a patch on the empty dictionary.
-
-Deletion of words may be represented using a trivial cycle such as `@foo foo`. In general, cyclic definitions are considered errors (recursive functions must use fixpoint combinators, see below). But Awelon systems should recognize the trivial cyclic definition and raise warnings appropriate for undefined words rather than cyclic definitions.
-
-Direct text editing of dictionary binaries does not scale nicely. This format is primarily intended for import and export, sharing of code between Awelon systems. Humans should usually observe and edit a dictionary through a level of indirection, such as a web service. A service may frequently use structured or indexed representations under the hood. 
-
-*Note:* See *Hierarchical Dictionaries* and *Secure Hash Resources* for more.
-
 ## Embedded Data
 
-Awelon language has exactly one primitive data type - the `[block of code]`, representing a first class function. All data in Awelon is ultimately encoded in terms of blocks. However, Awelon does provide implicit definition for natural numbers like `42` and texts such as `"hello, world!"` to simplify embeddings of data within code.
+Awelon language has exactly one primitive data type - the `[block of code]`, representing a first class function. All data in Awelon is ultimately encoded in terms of blocks. However, Awelon does provide implicit definition for natural numbers like `42` and embedded texts such as `"hello, world!"` to simplify embeddings of data within code.
 
 Semantically, a natural number is implicitly defined as a unary structure: 
 
@@ -92,7 +74,7 @@ Semantically, a natural number is implicitly defined as a unary structure:
         42 = [41 S]
         ... ad infinitum
 
-Embedded texts may be understood as specialized words. Texts should contain valid UTF-8 characters excluding C0 (0-31), DEL (127), and the double quote `"` (34). Texts have a simple semantics, expanding as a binary list:
+Embedded texts should contain valid UTF-8 characters excluding C0 (0-31), DEL (127), and the double quote `"` (34). Texts have a trivial semantics expanding to a binary list:
 
         "hello" = [104 "ello" :]
         "→"    = [226 [134 [146 "" :] :] :]
@@ -100,9 +82,7 @@ Embedded texts may be understood as specialized words. Texts should contain vali
 
 Definitions of `0` and `S`, `~` and `:` - zero and successor, nil and cons - are left to developers. This permits a flexible choice of encoding, such as a Church encoding versus a Mogensen-Scott encoding. In practice, however, this choice belongs to runtime and compiler developers, who must determine which models are subject to *Acceleration*.
 
-Natural numbers and embedded texts are only barely sufficient for embedding of data in code. The intention is to use these as the foundation for *Editable Views* that can support decimal numbers, structured data, EDSLs, a richer syntax, even graphical programming if we assume a suitable editor. Additionally, programmers may leverage *Secure Hash Resources* to reference external texts and binaries.
-
-*Note 2017 May:* Support for multi-line embedded texts was removed from Awelon, and semantics of texts were switched from codepoint to binary representation. Binary secure hash resources should be used for large texts.
+The intention is to use natural numbers and inline embedded texts as a foundation for richer *Editable Views*, which are detailed later. Editable views can feasibly extend Awelon with syntax for rich number types, EDSLs, multi-line texts, and even graphical programming. For large texts or binaries, we can also leverage *Secure Hash Resources* to reference external file-like objects.
 
 ## Secure Hash Resources
 
@@ -110,9 +90,8 @@ Awelon supports references to an implicit global namespace, where binaries may b
 
 * external binary data may be referenced via `%secureHash`
 * code and structured data is referenced via `$secureHash`
-* secure hash resources also used for dictionary patches
 
-Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. Some example hashes, iteratively from the word `test`:
+Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. Some example hashes, chained from the word `test`:
         
         HSjFNGRnqHpFFbPhlThmqCbqkmDSHCBlJNnmDPnDtnCpKHqtNgqhRMJG
         BRqMkFknGGncjKTdrTGMjFFHlGlFmmGGNmcFGPSmGbstsLtpdJnhLNKS
@@ -121,13 +100,23 @@ Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the h
         Base32 Alphabet: bcdfghjklmnpqrstBCDFGHJKLMNPQRST
             encoding 0..31 respectively
 
-Awelon neglects the theoretical concern of secure hash collisions. Physical corruption of computation is of greater concern in practice. And if collision does become a concern in the future, it will not be difficult to rewrite entire Awelon codebases to use larger, more robust hashes. I won't further belabor the issue.
+Awelon neglects the theoretical concern of secure hash collisions. Physical corruption of computation is of greater concern in practice. If collision ever becomes a serious a concern in the future, it is trivial to rewrite entire Awelon codebases to switch to a larger, more robust hash. I won't further belabor the issue.
 
-Awelon runtime systems must know where to search for secure hash resources, whether that be a search path in a filesystem, database, web server, or content distribution network. With *Stowage*, Awelon systems may also generate secure hash resources during evaluation, essentially leveraging the external space as a virtual memory extension. It is also feasible to use resources for outputs in some contexts, e.g. if a program evaluates to `[%secureHash (:jpeg)]` it is feasible we could recognize and render this element directly (see *Editable Views*).
+Awelon runtime systems must know where to search for secure hash resources, whether that be a search path in a filesystem, database, web server, or content distribution network. Using *Stowage* annotations, Awelon runtime systems may also *generate* secure hash resources during evaluation, essentially leveraging the external space for virtual memory or binary data output. 
 
-Secure hash resources are generally subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29), especially in conjunction with *Stowage* and *Memoization*. Conservative reference counting GC is very effective. Reference counting doesn't touch live objects, which is essential when those objects may constitute stable terabytes of high-latency storage. Reference cycles may safely be neglected, as they would require constructing a secure hash collision. Conservative GC also avoids need for parsing data, and is compatible with imprecise counting models (such as counting Bloom filters).
+Secure hash resources are generally subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29). Conservative reference counting GC is simple and effective in context. With secure hashes, cyclic references can be neglected as a concern (it's equivalent to hash collision). With reference counting, we don't touch live objects, which is important for high-volume high-latencey storage. With Awelon's unusual base32 alphabet and large hashes, we're quite unlikely to confuse data with references by accident.
 
-*Security Note:* Secure hash resources may embed sensitive information yet are not subject to conventional access control. Awelon systems must instead treat each secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) token that grants read authority. Relevantly, an Awelon service should prevent non-root users from browsing the resource database and resist leaking of secure hash tokens through timing attacks. For a content distribution network with untrusted servers, we might double-hash tokens to provide a robust lookup key, and use the original hash as a symmetric encryption/decryption key.
+*Security Note:* Secure hash resources may embed sensitive information yet are not subject to conventional access control. Awelon systems should treat each secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model), a bearer token that grants read authority. Relevantly, Awelon systems mustn't leak secure hashes through timing attacks.
+
+## Dictionary
+
+Awelon words are defined within a dictionary. Evaluation of Awelon code occurs relative to an immutable dictionary - that is, words have consistent and stable meaning during evaluation. However, Awelon language does not specify representation for dictionaries. Any key-value database can probably do the job. However, it is convenient if dictionaries support concurrent update, multi-version concurrency control, structure sharing, efficient diffs and mirroring, etc.. Hence, use of a persistent functional key-value lookup tree is quite suitable, leveraging *Secure Hash Resources* for scaling. An LSM-tree or trie would be an excellent basis. 
+
+Definitions of words within a dictionary must be acyclic. If cyclic definitions are detected, an error should be reported to the developers. See *Fixpoints and Loops* for how Awelon represents recursive behavior.
+
+The expectation is that dictionaries will primarily be modified through services, such as a web application or a [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) filesystem layer. The use of such a layer is also necessary in context of *Editable Views*.
+
+See *Hierarchical Dictionaries* for a useful extension.
 
 ## Acceleration
 
@@ -614,25 +603,19 @@ Accelerated evaluation of the reactive process network can readily operate acros
 
 ## Hierarchical Dictionaries and Namespaces
 
-Awelon supports a simple model for hierarchical structure. Words of qualified form `foo@dict` reference the meaning of `foo` as defined within dictionary `dict`. Named dictionaries are specified by defining symbol `@dict` to a secure hash of the dictionary root.
+Awelon reserves the `@` character to support hierarchical structure. 
 
-        @@dict secureHashOfDict
+Words of form `foo@dict` reference the meaning of `foo` as defined by a subordinate dictionary `@dict`. Similarly, `[42 foo]@d = [42@d foo@d]` and `"hello"@d = [104 "ello" :]@d`. Even annotations may be usefully qualified, e.g. `(~z)@d`. These namespace qualifiers are second-class - no space is permitted between the word or block and the `@` character. Hierarchical structure should be represented by defining symbol `@dict` to a recursive dictionary representation, leveraging *Secure Hash Resources* to support structure sharing between dictionaries.
 
-As with normal words, the last definition wins. It is possible to update `foo@dict` by updating the definition of `@dict` to reference a dictionary that's almost the same but with a slightly different `foo`. That's also the only means of update: `foo@dict` cannot be defined directly, and a dictionary cannot reference its parent.
+There is an important structural constraint on hierarchical structure: there is no way to reference up the hierarchy. There is no equivalent to the relative `../path` of URLs and filesystems. Every dictionary must be independent, fully self-contained. This is important for a lot of Awelon [application models](ApplicationModel.md). Hierarchical dictionaries essentially become first-class values, documents, ontologies, messages.
 
-The namespace qualifier can be attached to any Awelon operation, not just words. If attached to a block, the semantics is essentially that every element of the block is qualified: `[42 foo]@d == [42@d foo@d]`. If attached to a text, it's the same as attaching to an equivalent block: `"hello"@d == [104 "ello" :]@d`. Even annotations may be qualified, although this is mostly relevant for annotations that reflect upon or are otherwise specific to the dictionary, such as `(~z)@d` (where `[def of foo](~foo) => [foo]`) or `(:foo)@d` sealers and unsealers. Namespace qualifiers are always second-class: no separation, not even whitespace, is permitted between an operation and its qualifier.
+In case of multiple qualifiers, we process right to left. E.g. `foo@xy@zzy` uses the definition `foo@xy` within dictionary `@zzy`. This shouldn't normally appear within source code (by Law of Demeter). But it may appear when evaluating code.
 
-Namespace qualifiers may be hierarchical. For example, `foo@xy@zzy` would refer to the definition of `foo@xy` within dictionary `zzy`. Explicit use of hierarhical namespaces is discouraged by the Law of Demeter. But they may appear naturally during evaluation or optimization.
-
-Namespace qualifiers may be eliminated when doing so does not affect observable behavior. For example, `42@d` may be rewritten to `42` when we know that natural numbers have the same meaning (based on definitions of `0` and `S`). This optimization is called *localization*. Localization may have a non-trivial effect on external associations such as documentation and rendering hints. For example, when we rewrite `foo@d` to `foo`, we implicitly re-associate documentation from `foo.doc@d` to `foo.doc`. 
-
-*Aside:* Hierarchical dictionaries are primarily useful at the meta-level for [application models and agents](ApplicationModel.md). They enable dictionaries to represent databases, documents, ontologies, or other objects. Inability to reference the parent dictionary simplifies reasoning about information flow and security. Centralization to a secure hash simplifies structure sharing and integration with publish-subscribe. 
-
+Namespace qualifiers may be eliminated during evaluation whenever doing so does not affect observable behavior. For example, `42@d` may be rewritten to `42` if we know that natural numbers have the same meaning in both dictionaries (based on definitions of `0` and `S`). This is an optimization called *localization*. 
 
 ## Staged and Generic Programming
 
 Staged programming is a form of constant propagation. Awelon does not support this explicitly, but can model it. However, for staging to work in practice usually requires some syntactic support to clearly distinguish which computations are in which stage, and ensure uniform propagation of the staged constants. I am interested in use of editable views to extend Awelon with staging.
 
 I'm especially interested in staging for generic programming - e.g. working with functions overloaded on data types or traits. In this case, our earlier stage would propagate information about the future program context, the types that will be on the stack. Multiple stage passes may be required, depending on how sophisticated the static type inference algorithms. A suitable *Editable View* can act as an extension to Awelon to make this feasible, and dictionaries can be developed that almost uniformly use generic programming.
-
 

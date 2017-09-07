@@ -1,22 +1,13 @@
 # Stowage.Data
 
-This module aims to provide several useful data structures above Stowage. These structures are generally tree-based, persistent structures that permit a high level of structure sharing. Due to use of secure hashes as references, this structure sharing and serializability can work efficiently even over a network. And Stowage enables these data structures to be larger than memory, full multi-gigabyte databases.
+This module aims to provide useful data structures above Stowage.
 
-Which data structures am I interested in supporting?
+Initial goals include:
 
-* Critbit Tree (or Trie) - a history-independent key-value mapping structure with logarithmic update and efficient union. 
+* key-value lookup tree (critbit tree) 
+* finger-trees for sequences of values, queus, or ropes
 
-* finger trees - these are excellent for large scale lists, vectors, stacks, queues, ropes. Finger-trees have O(1) access and update to either end, O(lg(K)) access to the Kth (or N-Kth) element, and O(lg(N+M)) concatenation. 
+I'm also interested in optimizing for structure sharing vs. efficient insert/delete. Thus, a variant of the key-value lookup based on LSM-trees would be good, and a history-independent sequence such as SeqHash could prove useful. But these are much lower priority.
 
-* log-structured merge tree - a history-dependent key-value lookup structure, potentially more efficient for insert/delete when compared to a critbit tree because it doesn't require deep rewrites. 
-
-* SeqHash - a history-independent, rope-like sequence. I don't fully grasp the details of SeqHash yet, but the fact that it's history-independent is useful for structure sharing when compared to a finger-tree, though undoubtedly has some performance overhead.
-
-Of these, the most critical are the critbit tree and the finger tree structures. And possibly a variant finger-tree binary structure for modeling a very large binary value.
-
-## Deep Structured Data
-
-To support structured references to Stowage from Memory, I'll simply use untyped VRefs. I've experimented with development of a VRef<'T> type with a codec. But it seems simpler to separate the interpretation. The VRef type supports both singular RscHash values and potential inlining of structured data.
-
-
+Additionally, the simple `Rsc` and `Binary` types represent structured binaries within normal memory.
 
