@@ -297,10 +297,12 @@ module API =
     /// is mostly intended for use with readKeyDeepDB, which requires
     /// decrefValDeps after you're done with the value.
     let increfValDeps (db : DB) (v : Val) : unit =
-        I.dbAddEphRoots (db.Impl) (valEphRoots v)
+        if(v.Length >= rscHashLen)
+            then I.dbAddEphRoots (db.Impl) (valEphRoots v)
 
     let decrefValDeps (db : DB) (v : Val) : unit =
-        I.dbRemEphRoots (db.Impl) (valEphRoots v)
+        if(v.Length >= rscHashLen)
+            then I.dbRemEphRoots (db.Impl) (valEphRoots v)
 
         // TODO: performance optimizations for ephemeral roots
 
