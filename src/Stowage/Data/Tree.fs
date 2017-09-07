@@ -624,67 +624,100 @@ module KVT =
         | InR of Val        // key only in right tree
         | InB of Val * Val  // key in both trees but values differ
 
-(*
     module private EnumNodeDiff =
-
-        // ideally, I should model the enumerator state as
-        // a simple value type...
-        //  either we're InL with some keys
-        //  or we're InR with some keys
-        //  or we're actively comparing keys
-    
-        
+        type Stack = (Key * Node) list
+        type NodeL = // leftmost edge of Node
+            | LeafL of Val
+            | RNodeL of TreeSize * Rsc
+        type Pos = (Key * NodeL * Stack) option
         type Elem = (Key * VDiff)
-        type State = (Elem option * (Stack * Stack))
+        type State = (Elem option * (Pos * Pos))
 
-        type NotINode =
-            | AtLeaf  of Val
-            | AtRNode of TreeSize * Rsc
-
-        // eliminate intermediate INodes!
-        let rec stepI (s:Stack) (node:Node) : (Stack * NotINode) =
-            match node with
-            | INode (_, l, kr, r) -> stepI ((kr,r)::s) l
-            | RNode (tsz,rsc) -> (s, AtRNode (tsz,rsc))
-            | Leaf v -> (s, AtLeaf v)
-
-        let iniStack (t:Tree) : Stack =
-            match t with
-            | Empty -> List.empty
-            | Root (kl,n) -> 
-                let (s,n') = stepI List.empty n
-                (kl,n')::s
-
-        let iniState (a:Tree) (b:Tree) : State = 
-            (None, (iniStack a, iniStack b))
+        // step to next anything-but-an-INode
+        let rec stepL (s:Stack) (n:Node) : struct(Stack * NodeL) =
+            match n with
+            | INode (_, l, kr, r) -> stepL ((kr,r)::s) l
+            | RNode (tsz, rsc) -> struct(s, RNodeL (tsz, rsc))
+            | Leaf v -> struct(s, LeafL v)
 
         // step to next value
-        let rec stepV (s:Stack) (n:Node) : (Val * Stack) =
+        let rec stepV (s:Stack) (n:Node) : struct(Stack * Val) =
             match n with
             | INode (_, l, kr, r) -> stepV ((kr,r)::s) l
             | RNode (_, rsc) -> stepV s (EncNode.expand rsc)
-            | Leaf v -> (v,s)
+            | Leaf v -> struct(s,v)
 
-        let rec stepDiff (l:Stack) (r:Stack) : State =
-            match (l,r) with
-            | ((kl,nl)::sl, (kr,nr)::sr) ->
-                let c = compare (kl.Bytes) (kr.Bytes)
-                if (c < 0) then // key only in left
-                    let (v,l') = stepV sl nl
-                    (Some (kl, InL v), (l',r))
-                elif (c > 0) then // key only in right
-                    let (v,r') = stepV sr nr
-                    (Some (kr, InR v), (l,r'))
-                else 
-                    // TODO: structural difference match on nodes
-                    raise (System.NotImplementedException())
-            | ((kl,nl)::sl, []) ->
-                let (v, l') = stepV sl nl
-                (Some (kl, InL v), (l', []))
-            | ([], (kr,nr)::sr) ->
-                let (v, r') = stepV sr nr
-                (Some (kr, InR v), ([], r'))
-            | ([],[]) -> (None, ([],[])) // enumerator is done
+        let iniPos (t:Tree) : Pos =
+            match t with
+            | Empty -> None
+            | Root(kl,n) ->
+                let struct(s,ln) = stepL List.empty n
+                Some (kl, ln, s)
+
+        let iniState (a:Tree) (b:Tree) : State = 
+            (None, (iniPos a, iniPos b))
+
+        let nextPos (stack:Stack) : Pos =
+            match stack with
+            | [] -> None
+            | ((k,n)::s) -> 
+                let struct(s', ln) = stepL s n
+                Some (k, ln, s')
+
+        // expand NodeL to leftmost Val
+        let stepLV (s:Stack) (n:NodeL) : struct(Stack * Val) =
+            match n with
+            | LeafL v -> struct(s, v)
+            | RNodeL (_, rsc) -> stepV s (EncNode.expand rsc)
+
+        let inline openRsc (k:Key) (r:Rsc) (s:Stack) : Pos =
+            let struct(s',n') = stepL s (EncNode.expand r)
+            Some (k, n', s')
+
+        // stepDiff is mutually recursive to avoid redundant key comparisons
+        let rec stepDiff (l:Pos) (r:Pos) : State =
+            match (l, r) with
+            | (Some (kl,nl,sl), Some (kr,nr,sr)) ->
+                let cmp = compare (kl.Bytes) (kr.Bytes)
+                if (cmp < 0) then
+                    let struct(sl',v) = stepLV sl nl
+                    (Some (kl,InL v), (nextPos sl', r))
+                elif (cmp > 0) then
+                    let struct(sr',v) = stepLV sr nr
+                    (Some (kr,InR v), (l, nextPos sr'))
+                else stepDiffN kl nl sl nr sr
+            | (Some (kl,nl,sl), None) ->
+                let struct(sl',v) = stepLV sl nl
+                (Some (kl, InL v), (nextPos sl', None))
+            | (None, Some (kr,nr,sr)) ->
+                let struct(sr',v) = stepLV sr nr
+                (Some (kr, InR v), (None, nextPos sr'))
+            | (None, None) -> (None, (None, None))
+        and stepDiffV (k:Key) (vl:Val) (sl:Stack) (vr:Val) (sr:Stack) : State =
+            let l' = nextPos sl
+            let r' = nextPos sr
+            if(vl.Bytes = vr.Bytes)
+                then stepDiff l' r' // skip equal leaf values at same key
+                else (Some (k, InB (vl, vr)), (l', r'))
+        and stepDiffN (k:Key) (nl:NodeL) (sl:Stack) (nr:NodeL) (sr:Stack) : State =
+            match (nl, nr) with
+            | (LeafL vl, LeafL vr) -> stepDiffV k vl sl vr sr
+            | (RNodeL (szl,rscl), RNodeL (szr,rscr)) ->
+                if ((szl = szr) && (rscl.ID = rscr.ID)) then 
+                    // skip equal subtrees
+                    stepDiff (nextPos sl) (nextPos sr) 
+                elif (szl > szr) then // expand larger tree
+                    let struct(sl',nl') = stepL sl (EncNode.expand rscl)
+                    stepDiffN k nl' sl' nr sr
+                else
+                    let struct(sr',nr') = stepL sr (EncNode.expand rscr)
+                    stepDiffN k nl sl nr' sr'
+            | (RNodeL (_,rscl), LeafL vr) ->
+                let struct(sl',vl') = stepV sl (EncNode.expand rscl)
+                stepDiffV k vl' sl' vr sr 
+            | (LeafL vl, RNodeL (_,rscr)) ->
+                let struct(sr',vr') = stepV sr (EncNode.expand rscr)
+                stepDiffV k vl sl vr' sr'
 
         type Enumerator =
             val mutable private st : State
@@ -692,7 +725,7 @@ module KVT =
             member e.Peek() : Elem =
                 match fst e.st with
                 | None -> invalidOp "no element"
-                | Some e -> e
+                | Some elem -> elem
             interface System.Collections.Generic.IEnumerator<Elem> with
                 member e.Current with get() = e.Peek()
             interface System.Collections.IEnumerator with
@@ -718,16 +751,12 @@ module KVT =
 
     /// Efficient difference between trees.
     /// 
-    /// This returns a sequence of keys in ascending order with a ValDiff
-    /// for each key. Relevantly, it avoids loading compact nodes that are
-    /// shared between the two trees. Keys are returned in order from least
-    /// to greatest.
+    /// This returns a sequence of keys in ascending order with a VDiff for
+    /// each key for which a difference between trees is observed. Attempts
+    /// to avoid loading compacted subtrees unnecessarily, so we can perform
+    /// an efficient structural diff on large compacted trees.
     let diff (a:Tree) (b:Tree) : seq<(Key * VDiff)> =
         upcast EnumNodeDiff.Enumerable(a,b)
-                
-    
-*)
-    
 
 
 type KVTree = KVT.Tree
