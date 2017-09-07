@@ -466,13 +466,9 @@ module API =
     /// Stow a value as a secure hash resource.
     ///
     /// This behaves as stowRscDB, except the decref will be handled when
-    /// the TX is later disposed or finalized (or via assumeWrites, if not
-    /// rooted). The assumption is that any newly stowed resources should
-    /// be rooted by a subsequent write within the same transaction.
-    ///
-    /// To hold the resource beyond the lifespan of the transaction, call
-    /// `increfRscDB` explicitly on the returned resource hash. Or use the
-    /// `stowRscDB` method instead.
+    /// the TX is later disposed or finalized, or upon `assumeWrites` if 
+    /// a resource is not rooted in the transaction data. Resources formed
+    /// for a transaction should be committed with it.
     let stowRsc (tx:TX) (v:Val) : RscHash =
         let h = Stowage.Hash.hash v
         let k = I.dbStow tx.db h v
