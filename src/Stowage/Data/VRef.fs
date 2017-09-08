@@ -4,12 +4,14 @@ namespace Stowage
 ///
 /// A stowage reference is identified by a secure hash of a binary,
 /// stored within a Stowage database. The binary is interpreted via
-/// Codec, which may construct further VRefs as needed.
+/// Codec, which may construct further VRefs as needed. The VRef
+/// essentially packages all the elements needed to process Stowage
+/// resource hashes effectively.
 ///
 /// To control certain redundant costs, a VRef includes a mutable
 /// cache that may be explicitly loaded or cleared as needed. Since
 /// the VRef represents immutable data, the cache is never 'invalid'.
-/// (However, there is no built-in expiration feature.)
+/// However, there is no built-in expiration feature.
 ///
 /// Note: all comparisons and hashcodes for VRef assume a stable Codec
 /// for a given type and only peek at the RscHash values.

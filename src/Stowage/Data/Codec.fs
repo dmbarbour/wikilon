@@ -1,4 +1,5 @@
 namespace Stowage
+open Data.ByteString
 
 /// Abstract encoder-decoder type for data in Stowage.
 ///
@@ -15,8 +16,8 @@ namespace Stowage
 /// be loaded, cached, and efficiently serialized via secure hashes.
 /// For heuristic compaction, a size estimate is also returned.
 type Codec<'T> =
-    abstract member Write : 'T -> Data.ByteString.ByteDst -> unit
-    abstract member Read  : DB -> Data.ByteString.ByteSrc -> 'T
+    abstract member Write : 'T -> ByteDst -> unit
+    abstract member Read  : DB -> ByteSrc -> 'T
     abstract member Compact : DB -> 'T -> struct('T * int)
 
 module Codec =
@@ -31,11 +32,11 @@ module Codec =
         let struct(v',_) = compactSz c db v
         v'
 
-    let writeBytes (c:Codec<'T>) (v:'T) : ByteString =
+    let inline writeBytes (c:Codec<'T>) (v:'T) : ByteString =
         ByteStream.write (write c v)
 
     /// Read full bytestring as value, or raise ByteStream.ReadError
-    let readBytes (c:Codec<'T>) (db:DB) (b:ByteString) : 'T =
+    let inline readBytes (c:Codec<'T>) (db:DB) (b:ByteString) : 'T =
         ByteStream.read (read c db) b
 
     /// Read full bytestring as value, or return None.
@@ -49,43 +50,24 @@ module Codec =
         | ByteStream.ReadError -> None
 
     /// Stow a value without compacting it first.
-    ///   Note: you'll have a reference to the resulting RscHash.
-    let inline stow' (c:Codec<'T>) (db:DB) (v:'T) : RscHash =
-        stowRscDB db (writeBytes c v)
-
-    /// Compact and stow 
-
-
-    let stow (c:Codec
-
-
-    /// stow a value without first compacting it
-    let inline stow' (c:Codec<'T>) (db:DB) (v:'T) : Rsc =
-        let result = Rsc.Stow db (writeBytes c v)
-        System.GC.KeepAlive v
+    ///
+    /// Note: You'll have a reference to the resulting RscHash, so
+    /// you'll need to use decrefRscDB later (or wrap into a VRef).
+    let inline stow (c:Codec<'T>) (db:DB) (v:'T) : RscHash =
+        let result = stowRscDB db (writeBytes c v)
+        System.GC.KeepAlive v // prevent GC of value during write
         result
 
-    let inline compactSz (c:Codec<'T>) (db:DB) (v:'T) : struct('T * int) =
-        c.Compact db v
+    /// A frequent composition of compaction and stowage.
+    let inline compactAndStow (c:Codec<'T>) (db:DB) (v:'T) : RscHash =
+        stow c db (compact c db v)
 
-    let inline compact (c:Codec<'T>) (db:DB) (v:'T) : 'T = 
-        let struct(v',sz) = compactSz c db v
-        v'
+    /// Load a stowed value from RscHash.
+    let inline load (c:Codec<'T>) (db:DB) (h:RscHash) : 'T =
+        readBytes c db (loadRscDB db h)
 
-    /// compact and stow together (common use case)
-    let inline stow (c:Codec<'T>) (db:DB) (v:'T) : Rsc = 
-        stow' c db (compact c db v)
-        
-    let inline load (c:Codec<'T>) (r:Rsc) : 'T =
-        let result = readBytes c r.DB (loadRscDB r.DB r.ID)
-        System.GC.KeepAlive r // prevent GC of resource during parse
-        result
-
-    // TODO: consider developing generic combinators:
-    //  codec<V> to codec<V list> or codec<V list>
-    //  codec<A> and codec<B> to codec<(A,B)> or codec<Choice<A,B>>
-
-
-
+    // TODO: develop codec-combinators.
+    //   e.g. combine two codecs into a pair or choice of codecs
+    //   wrap a codec to form a codec for a list or choice of values
 
 

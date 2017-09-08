@@ -17,21 +17,21 @@ module EncVarNat =
         let rec loop ct n = if (0UL = n) then ct else loop (1+ct) (n>>>7)
         loop 1 (n>>>7)
 
-    let rec writeHighBytes (n:uint64) (dst:ByteDst) : unit =
+    let rec private whb (n:uint64) (dst:ByteDst) : unit =
         if (0UL = n) then () else
-        writeHighBytes (n >>> 7) dst
+        whb (n >>> 7) dst
         let lob = byte (n &&& 0x7FUL)
         ByteStream.writeByte lob dst
 
     /// Write a VarNat to an output stream.
     let write (n:uint64) (dst:ByteDst) : unit =
-        writeHighByte (n >>> 7) dst
+        whb (n >>> 7) dst
         let lob = 0x80uy ||| byte (n &&& 0x7FUL)
         ByteStream.writeByte lob dst
 
-    let rec readLoop (acc:uint64) (src:ByteSrc) : uint64 =
+    let rec private readLoop (acc:uint64) (src:ByteSrc) : uint64 =
         let b = ByteStream.readByte src
-        let acc' = (acc <<< 7) + (uint64 (b &&& 0x7F))
+        let acc' = (acc <<< 7) + (uint64 (b &&& 0x7Fuy))
         if (0uy = (0x80uy &&& b)) 
             then acc'
             else readLoop acc' src 
@@ -138,9 +138,8 @@ module EncBytes =
         if (sepReq b) then EncByte.write sep dst
 
     let read (src:ByteSrc) : ByteString =
-        let len = EncVarNat.read i
-        if (len > uint64 System.Int32.MaxValue) then raise ByteStream.ReadError
-        let b = ByteStream.readBytes len src
+        let len = EncVarNat.read src
+        let b = ByteStream.readBytes (int len) src
         if (sepReq b) then EncByte.expect sep src
         b
 
@@ -182,8 +181,11 @@ module EncRscHash =
 module EncRsc =
 
     let size : int = EncRscHash.size
-    let inline write (r:Rsc) (dst:ByteDst) : unit = EncRscHash.write o (r.ID)
-    let inline read (db:DB) (src:ByteSrc) : Rsc = new Rsc(db, EncRscHash.read src, true)
+    let inline write (r:Rsc) (dst:ByteDst) : unit = 
+        EncRscHash.write (r.ID) dst
+    let inline read (db:DB) (src:ByteSrc) : Rsc = 
+        new Rsc(db, EncRscHash.read src, true)
+
     let codec =
         { new Codec<Rsc> with
             member __.Write rsc dst = write rsc dst
@@ -227,7 +229,7 @@ module EncRscOpt =
 module EncBin =
     let inline size (b:Binary) : int = EncBytes.size (b.Bytes)
     let inline write (b:Binary) (dst:ByteDst) : unit =
-        EncBytes.write o (b.Bytes)
+        EncBytes.write (b.Bytes) dst
     let inline read (db:DB) (src:ByteSrc) : Binary =
         new Binary(db, EncBytes.read src, true)
     let codec =
