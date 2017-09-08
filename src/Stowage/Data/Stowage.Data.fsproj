@@ -8,6 +8,7 @@
     <Compile Include="Binary.fs" />
     <Compile Include="CommonEncoders.fs" />
     <Compile Include="Tree.fs" />
+    <Compile Include="Seq.fs" />
   </ItemGroup>
 
   <ItemGroup>

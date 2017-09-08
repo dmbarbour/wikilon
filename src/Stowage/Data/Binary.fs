@@ -19,12 +19,16 @@ namespace Stowage
 type Binary =
     val DB    : DB
     val Bytes : Val
-    new(db:DB, bytes:Val) = 
-        assert(isValidVal bytes)
-        { DB = db; Bytes = bytes }
+    new(db:DB, bytes:Val) = { DB = db; Bytes = bytes }
     new(db:DB, bytes:Val, incref:bool) =
         if incref then increfValDeps db bytes
         new Binary(db,bytes)
+
+    // Clone is useful in some contexts where you might use Dispose(). 
+    member b.Clone() : Binary = 
+        let result = new Binary(b.DB, b.Bytes, true)
+        System.GC.KeepAlive b
+        result
 
     member private b.Decref() = decrefValDeps (b.DB) (b.Bytes)
     override b.Finalize() = b.Decref()
@@ -81,7 +85,15 @@ type Rsc =
         if incref then increfRscDB db id
         new Rsc(db,id)
 
-    static member inline Stow (db:DB) (v:Val) : Rsc = new Rsc(db, stowRscDB db v)
+    // Clone is useful in some contexts where you might use Dispose(). 
+    member rsc.Clone() : Rsc =
+        let result = new Rsc(rsc.DB, rsc.ID, true)
+        System.GC.KeepAlive rsc
+        result
+
+    static member inline Stow (db:DB) (v:Val) : Rsc = 
+        new Rsc(db, stowRscDB db v)
+
     member rsc.Load() : Val = 
         let result = loadRscDB (rsc.DB) (rsc.ID)
         System.GC.KeepAlive (rsc)
@@ -100,8 +112,9 @@ type Rsc =
         result
     member rsc.TryLoadBin() : Binary option =
         let result = 
-              tryLoadRscDB (rsc.DB) (rsc.ID) 
-                |> Option.map (fun v -> new Binary(rsc.DB, v, true))
+            match tryLoadRscDB (rsc.DB) (rsc.ID) with
+            | Some v -> Some (new Binary(rsc.DB, v, true))
+            | None -> None
         System.GC.KeepAlive (rsc)
         result
 

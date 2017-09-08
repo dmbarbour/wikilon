@@ -22,7 +22,7 @@ let clearTestDir path =
     if Directory.Exists(path) 
         then Directory.Delete(path,true)
 
-// a fixture is needed because we cannot
+// a fixture is needed to load the database
 type TestDB =
     val db : Stowage.DB
     new () =

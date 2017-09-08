@@ -1,6 +1,24 @@
 namespace Stowage
 open Data.ByteString
 
+/// Abstract encoder/decoder types for data in Stowage.
+type Codec<'T> =
+    /// Basic encoding is stream-oriented. But the Codec module
+    /// provides convenience functions for working with bytestrings.
+    abstract member Write : System.IO.Stream -> 'T -> unit
+    abstract member Read  : DB -> System.IO.Stream -> 'T
+
+    /// Compaction in context of Stowage involves rewriting a value
+    /// heuristically to replace components with Rsc references. This
+    /// is separate from the Write operation.
+    ///
+    /// We usually want to inline small values rather than uniformly
+    /// compact everything. Compaction also returns approximate size
+    /// (in terms of bytes written) to aid heuristic decisions within
+    /// a typical recursive compaction algorithm.
+    abstract member Compact : DB -> 'T -> struct('T * int)
+        
+
 /// A VarNat is an efficient encoding for a natural number in 
 /// base128, such that we can easily distinguish the end of 
 /// the number. 
@@ -12,8 +30,8 @@ module EncVarNat =
 
     /// Size of a VarNat encoding.
     let size (n : uint64) : int =
-        let rec loop ct n = if (0UL = n) then ct else loop (1+ct) (n/128UL)
-        loop 1 (n/128UL)
+        let rec loop ct n = if (0UL = n) then ct else loop (1+ct) (n>>>7)
+        loop 1 (n>>>7)
 
     /// Write a VarNat to an output stream.
     let write (o : System.IO.Stream) (n : uint64) : unit =
@@ -34,6 +52,13 @@ module EncVarNat =
             let acc' = ((128UL * acc) + (uint64 (b &&& 0x7F)))
             if (b < 128) then readLoop acc' else acc'
         readLoop 0UL
+
+    let codec =
+        { new Codec<uint64> with
+            member __.Write o n = write o n
+            member __.Read db i = read i
+            member __.Compact db n = struct(n, size n)
+        }
 
 
 /// A Variable Integer
@@ -59,6 +84,13 @@ module EncVarInt =
     let inline write (o : System.IO.Stream) (i : int64) = EncVarNat.write o (zzEncode i)
     let inline read (i : System.IO.Stream) : int64 = zzDecode (EncVarNat.read i)
 
+    let codec =
+        { new Codec<int64> with
+            member __.Write o iVal = write o iVal
+            member __.Read db i = read i
+            member __.Compact db iVal = struct(iVal, size iVal)
+        }
+
 module EncByte =
     let size : int = 1
     let inline write (o:System.IO.Stream) (b:byte) : unit = o.WriteByte(b)
@@ -70,6 +102,12 @@ module EncByte =
     let expect (i:System.IO.Stream) (b:byte) : unit =
         let r = read i
         if(r <> b) then failwith (sprintf "unexpected byte (expect %A got %A)" b r)
+    let codec =
+        { new Codec<byte> with
+            member __.Write o b = write o b
+            member __.Read db i = read i
+            member __.Compact db b = struct(b,size)
+        }
 
 /// ByteString encoding:
 ///  (size)(data)(sep)
@@ -115,8 +153,14 @@ module EncBytes =
         b
 
     let toInputStream (b:ByteString) : System.IO.Stream =
-        (new System.IO.MemoryStream(b.UnsafeArray, b.Offset, b.Length, false)) 
-            :> System.IO.Stream
+        upcast (new System.IO.MemoryStream(b.UnsafeArray, b.Offset, b.Length, false)) 
+
+    let codec =
+        { new Codec<ByteString> with
+            member __.Write o b = write o b
+            member __.Read db i = read i
+            member __.Compact db b = struct(b,size b)
+        }
 
 /// Resource Hash encoding: {Hash}
 module EncRscHash =
@@ -137,6 +181,13 @@ module EncRscHash =
         EncByte.expect i cbR
         h
 
+    let codec =
+        { new Codec<RscHash> with
+            member __.Write o h = write o h
+            member __.Read db i = read i
+            member __.Compact db h = struct(h, size)
+        }
+
 /// Same as RscHash encoding, but incref and wrap Rsc upon read
 module EncRsc =
 
@@ -145,6 +196,12 @@ module EncRsc =
         EncRscHash.write o (r.ID)
     let inline read (db:DB) (i:System.IO.Stream) : Rsc = 
         new Rsc(db, EncRscHash.read i, true)
+    let codec =
+        { new Codec<Rsc> with
+            member __.Write o r = write o r
+            member __.Read db i = read db i
+            member __.Compact db r = struct(r, size)
+        }
 
 /// a Rsc option is convenient for 'nullable' resource references.
 /// Encoding is '_' for a hole, otherwise overlaps resource encoding.
@@ -171,6 +228,14 @@ module EncRscOpt =
         EncByte.expect i (EncRscHash.cbR)
         Some rsc
 
+    let codec =
+        { new Codec<Rsc option> with
+            member __.Write o ro = write o ro
+            member __.Read db i = read db i
+            member __.Compact db ro = struct(ro,size ro)
+        } 
+
+
 /// Same as bytestrings, but incref and wrap Binary upon read.
 module EncBin =
     let inline size (b:Binary) : int = EncBytes.size (b.Bytes)
@@ -178,6 +243,63 @@ module EncBin =
         EncBytes.write o (b.Bytes)
     let inline read (db:DB) (i:System.IO.Stream) : Binary =
         new Binary(db, EncBytes.read i, true)
+    let codec =
+        { new Codec<Binary> with
+            member __.Write o b = write o b
+            member __.Read db i = read db i
+            member __.Compact db b = struct(b,size b)
+        }
 
+module Codec =
 
+    let inline write (c:Codec<'T>) (o:System.IO.Stream) (v:'T) : unit = c.Write o v
+    let inline read (c:Codec<'T>) (db:DB) (i:System.IO.Stream) : 'T = c.Read db i
+
+    let inline writeBytes (c:Codec<'T>) (v:'T) : ByteString =
+        use o = new System.IO.MemoryStream()
+        c.Write o v
+        Data.ByteString.unsafeCreateA (o.ToArray())
+
+    let inline writeBinary (c:Codec<'T>) (db:DB) (v:'T) : Binary =
+        let result = new Binary(db, writeBytes c v, true)
+        System.GC.KeepAlive v
+        result
+
+    let readBytes (c:Codec<'T>) (db:DB) (b:ByteString) : 'T =
+        use i = EncBytes.toInputStream b
+        let result = c.Read db i
+        if (i.Position <> i.Length) 
+            then failwith "unread bytes"
+        result
+
+    let inline readBinary (c:Codec<'T>) (b:Binary) : 'T =
+        let result = readBytes c (b.DB) (b.Bytes)
+        System.GC.KeepAlive b
+        result
+
+    /// stow a value without first compacting it
+    let inline stow' (c:Codec<'T>) (db:DB) (v:'T) : Rsc =
+        let result = Rsc.Stow db (writeBytes c v)
+        System.GC.KeepAlive v
+        result
+
+    let inline compactSz (c:Codec<'T>) (db:DB) (v:'T) : struct('T * int) =
+        c.Compact db v
+
+    let inline compact (c:Codec<'T>) (db:DB) (v:'T) : 'T = 
+        let struct(v',sz) = compactSz c db v
+        v'
+
+    /// compact and stow together (common use case)
+    let inline stow (c:Codec<'T>) (db:DB) (v:'T) : Rsc = 
+        stow' c db (compact c db v)
+        
+    let inline load (c:Codec<'T>) (r:Rsc) : 'T =
+        let result = readBytes c r.DB (loadRscDB r.DB r.ID)
+        System.GC.KeepAlive r // prevent GC of resource during parse
+        result
+
+    // TODO: consider developing generic combinators:
+    //  codec<V> to codec<V list> or codec<V list>
+    //  codec<A> and codec<B> to codec<(A,B)> or codec<Choice<A,B>>
 
