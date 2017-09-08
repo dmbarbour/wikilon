@@ -1,4 +1,4 @@
-module Data.ByteString.Tests
+module Tests.Data.ByteString
 
 #nowarn "988" // suppress warning for empty program
 
@@ -10,30 +10,30 @@ open Data.ByteString
 
 [<Fact>]
 let ``empty is length zero`` () = 
-    Assert.Equal<int>(0, empty.Length)
+    Assert.Equal<int>(0, BS.empty.Length)
 
 [<Fact>]
 let ``empty equals empty`` () =
-    Assert.Equal<ByteString>(empty, empty)
-    Assert.NotEqual<ByteString>(empty, singleton 101uy)
+    Assert.Equal<ByteString>(BS.empty, BS.empty)
+    Assert.NotEqual<ByteString>(BS.empty, BS.singleton 101uy)
 
 [<Fact>]
 let ``isEmpty empty`` () = 
-    Assert.True(isEmpty empty)
-    Assert.False(isEmpty (singleton 101uy))
+    Assert.True(BS.isEmpty BS.empty)
+    Assert.False(BS.isEmpty (BS.singleton 101uy))
 
 [<Fact>]
 let ``isEmpty emptyString`` () =
-    Assert.True(isEmpty (fromString ""))
+    Assert.True(BS.isEmpty (BS.fromString ""))
 
 [<Fact>]
 let ``empty string converts to empty bytestring`` () =
-    Assert.Equal<ByteString>(empty, fromString "")
+    Assert.Equal<ByteString>(BS.empty, BS.fromString "")
 
 
 [<Fact>]
 let ``using FNV-1a hash`` () =
-    let arr = unsafeCreateA [| 116uy; 101uy; 115uy; 116uy |] // test
+    let arr = BS.unsafeCreateA [| 116uy; 101uy; 115uy; 116uy |] // test
     let h32 = ByteString.Hash32 arr
     let h64 = ByteString.Hash64 arr
     Assert.True((2949673445u = h32))
@@ -41,67 +41,67 @@ let ``using FNV-1a hash`` () =
 
 [<Fact>]
 let ``basic structural equality`` () =
-    Assert.Equal<ByteString>(fromString "hello", fromString "hello")
-    Assert.NotEqual<ByteString>(fromString "hello", fromString "goodbye")
+    Assert.Equal<ByteString>(BS.fromString "hello", BS.fromString "hello")
+    Assert.NotEqual<ByteString>(BS.fromString "hello", BS.fromString "goodbye")
 
 
 [<Fact>]
 let ``basic string conversions`` () =
     let testStr = "→↑←"
-    let a = fromString testStr
+    let a = BS.fromString testStr
     Assert.Equal<int>(a.Length, 9) // UTF-8 conversions
     Assert.Equal<string>(testStr, a.ToString())
-    Assert.Equal<string>(testStr, toString a)
+    Assert.Equal<string>(testStr, BS.toString a)
 
 [<Fact>]
 let ``empty slice is empty`` () =
-    let foo = (fromString "xyzzy").[3..2]
-    Assert.True(isEmpty foo)
+    let foo = (BS.fromString "xyzzy").[3..2]
+    Assert.True(BS.isEmpty foo)
 
 [<Fact>]
 let ``non-empty slices equality`` () =
-    let foo = fromString "xyzxyz"
+    let foo = BS.fromString "xyzxyz"
     Assert.Equal<ByteString>(foo.[0..2], foo.[3..5])
     Assert.NotEqual<ByteString>(foo.[0..1], foo.[2..3])
 
 [<Fact>]
 let ``slices share underlying array`` () =
-    let foo = fromString "xyzzy"
+    let foo = BS.fromString "xyzzy"
     Assert.Equal<byte[]>(foo.[0..2].UnsafeArray, foo.[2..3].UnsafeArray)
 
 [<Fact>]
 let ``simple cons`` () =
-    Assert.Equal<ByteString>(fromString "test", cons (byte 't') (fromString "est"))
+    Assert.Equal<ByteString>(BS.fromString "test", BS.cons (byte 't') (BS.fromString "est"))
 
 [<Fact>]
 let ``simple append`` () =
-    Assert.Equal<ByteString>(fromString "hello, world",
-        append (fromString "hello,") (fromString " world"))
+    Assert.Equal<ByteString>(BS.fromString "hello, world",
+        BS.append (BS.fromString "hello,") (BS.fromString " world"))
 
 [<Fact>]
 let ``simple concat`` () =
-    Assert.Equal<ByteString>(fromString "hello, world",
-        ["hello"; ","; " "; "world"] |> Seq.map fromString |> concat)
+    Assert.Equal<ByteString>(BS.fromString "hello, world",
+        ["hello"; ","; " "; "world"] |> Seq.map BS.fromString |> BS.concat)
 
 [<Fact>]
 let ``empty is smallest`` () =
-    Assert.True(empty < unsafeCreateA [| 0uy |])
+    Assert.True(BS.empty < BS.unsafeCreateA [| 0uy |])
 
 [<Fact>]
 let ``lexicographic order`` () =
-    Assert.True(fromString "x" < fromString "xx")
-    Assert.True(fromString "xx" < fromString "xy")
-    Assert.True(fromString "xy" < fromString "yx")
+    Assert.True(BS.fromString "x" <  BS.fromString "xx")
+    Assert.True(BS.fromString "xx" < BS.fromString "xy")
+    Assert.True(BS.fromString "xy" < BS.fromString "yx")
 
 [<Fact>]
 let ``ordering on slices`` () =
-    let foo = fromString "xyzxyz"
+    let foo = BS.fromString "xyzxyz"
     Assert.True(foo.[1..2] > foo.[3..4])
     Assert.True(foo.[0..1] < foo.[3..5])
 
 [<Fact>]
 let ``simple enumerator`` () =
-    let x : ByteString = fromString "test==="
+    let x : ByteString = BS.fromString "test==="
     let mutable sum = 0
     for c in (x.[..3]) do
         sum <- (int c) + sum
@@ -109,15 +109,15 @@ let ``simple enumerator`` () =
 
 [<Fact>]
 let ``simple fold`` () =
-    let x : ByteString = fromString "===test"
+    let x : ByteString = BS.fromString "===test"
     let accum s c = s + int c
-    let sum = fold accum 0 (x.[3..]) 
+    let sum = BS.fold accum 0 (x.[3..]) 
     Assert.Equal(448, sum)
 
 [<Fact>]
 let ``pinned data access`` () =
-    let x : ByteString = (fromString "==test==").[2..5]
-    withPinnedBytes x (fun p ->
+    let x : ByteString = (BS.fromString "==test==").[2..5]
+    BS.withPinnedBytes x (fun p ->
         Assert.Equal(116uy, Marshal.ReadByte(p,0))
         Assert.Equal(101uy, Marshal.ReadByte(p,1))
         Assert.Equal(115uy, Marshal.ReadByte(p,2)))

@@ -145,7 +145,7 @@ module KVTree =
         let stow (c:Codec<'T>) (db:DB) (node:Node<'T>) : Rsc =
             use o = new System.IO.MemoryStream()
             write c o node
-            let bytes = Data.ByteString.unsafeCreateA (o.ToArray())
+            let bytes = BS.unsafeCreateA (o.ToArray())
             let result = Rsc.Stow db bytes
             System.GC.KeepAlive node
             result
@@ -234,7 +234,7 @@ module KVTree =
             EncByte.write o (byte 'T') // for potential future versioning
             EncBytes.write o kl
             EncNode.write c o n
-            let bytes = Data.ByteString.unsafeCreateA (o.ToArray())
+            let bytes = BS.unsafeCreateA (o.ToArray())
             let rsc = Rsc.Stow db bytes
             System.GC.KeepAlive t
             Some rsc
@@ -531,7 +531,7 @@ module KVTree =
 
     // find critbit tweaked to return None for any match with full prefix
     let inline private findPrefixCritbit (cb:Critbit) (p:ByteString) (k:Key) =
-        findCritbit cb p (Data.ByteString.take p.Length k)
+        findCritbit cb p (BS.take p.Length k)
 
     // select prefix assuming failed match on least-key
     let rec private selectPrefixR (mcb:Critbit) (p:ByteString) (node:Node<'V>) : Tree<'V> =

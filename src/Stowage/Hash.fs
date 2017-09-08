@@ -90,7 +90,7 @@ module Hash =
     let hash (s : ByteString) : ByteString =
         use alg = new HMACBlake2B(hashBitLen)
         let bytes = alg.ComputeHash(s.UnsafeArray, s.Offset, s.Length)
-        Data.ByteString.unsafeCreateA (b32enc bytes)
+        BS.unsafeCreateA (b32enc bytes)
 
     /// compute a hash result from binary
     let hashArray (src : byte[]) : byte[] = 

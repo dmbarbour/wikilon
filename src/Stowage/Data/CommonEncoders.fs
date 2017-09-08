@@ -1,22 +1,6 @@
 namespace Stowage
 open Data.ByteString
 
-/// Abstract encoder/decoder types for data in Stowage.
-type Codec<'T> =
-    /// Basic encoding is stream-oriented. But the Codec module
-    /// provides convenience functions for working with bytestrings.
-    abstract member Write : System.IO.Stream -> 'T -> unit
-    abstract member Read  : DB -> System.IO.Stream -> 'T
-
-    /// Compaction in context of Stowage involves rewriting a value
-    /// heuristically to replace components with Rsc references. This
-    /// is separate from the Write operation.
-    ///
-    /// We usually want to inline small values rather than uniformly
-    /// compact everything. Compaction also returns approximate size
-    /// (in terms of bytes written) to aid heuristic decisions within
-    /// a typical recursive compaction algorithm.
-    abstract member Compact : DB -> 'T -> struct('T * int)
         
 
 /// A VarNat is an efficient encoding for a natural number in 
@@ -143,7 +127,7 @@ module EncBytes =
         let arr = Array.zeroCreate len
         let rct = i.Read(arr, 0, arr.Length)
         if (rct <> arr.Length) then failwith "insufficient data"
-        Data.ByteString.unsafeCreateA arr
+        BS.unsafeCreateA arr
 
     let read (i:System.IO.Stream) : ByteString =
         let len = EncVarNat.read i
@@ -258,7 +242,7 @@ module Codec =
     let inline writeBytes (c:Codec<'T>) (v:'T) : ByteString =
         use o = new System.IO.MemoryStream()
         c.Write o v
-        Data.ByteString.unsafeCreateA (o.ToArray())
+        BS.unsafeCreateA (o.ToArray())
 
     let inline writeBinary (c:Codec<'T>) (db:DB) (v:'T) : Binary =
         let result = new Binary(db, writeBytes c v, true)

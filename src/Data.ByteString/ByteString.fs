@@ -1,4 +1,4 @@
-namespace Data
+namespace Data.ByteString
 
 open System.Runtime.InteropServices
 
@@ -7,124 +7,124 @@ open System.Runtime.InteropServices
 // Hopefully, one of these days, the F# ecosystem will mature a bit more for
 // such basic data structures. 
 
-module ByteString =
+/// A ByteString represents an immutable slice of a byte array.
+[< CustomEquality; CustomComparison; Struct >]
+type ByteString =
+    val UnsafeArray : byte []
+    val Offset : int
+    val Length : int
+    internal new (arr,off,len) = { UnsafeArray = arr; Offset = off; Length = len }
+    // Note: current .Net VM size limit (2017) is about 2GB.
 
-    /// A ByteString represents an immutable slice of a byte array.
-    [< CustomEquality; CustomComparison; Struct >]
-    type ByteString =
-        val UnsafeArray : byte []
-        val Offset : int
-        val Length : int
-        internal new (arr,off,len) = { UnsafeArray = arr; Offset = off; Length = len }
-        // Note: current .Net VM size limit (2017) is about 2GB.
+    member inline x.Item (ix : int) : byte = 
+        assert ((0 <= ix) && (ix < x.Length)) // debug mode checks
+        x.UnsafeArray.[x.Offset + ix]
 
-        member inline x.Item (ix : int) : byte = 
-            assert ((0 <= ix) && (ix < x.Length)) // debug mode checks
-            x.UnsafeArray.[x.Offset + ix]
+    member x.GetSlice (iniOpt : int option, finOpt : int option) : ByteString =
+        let ini = defaultArg iniOpt 0
+        let fin = defaultArg finOpt (x.Length - 1)
+        if ((ini < 0) || (fin >= x.Length)) 
+            then raise (System.IndexOutOfRangeException "ByteString slice out of range.") 
+            else if (fin < ini) then ByteString(Array.empty,0,0) else
+            ByteString (x.UnsafeArray, ini + x.Offset, 1 + (fin - ini))
 
-        member x.GetSlice (iniOpt : int option, finOpt : int option) : ByteString =
-            let ini = defaultArg iniOpt 0
-            let fin = defaultArg finOpt (x.Length - 1)
-            if ((ini < 0) || (fin >= x.Length)) 
-                then raise (System.IndexOutOfRangeException "ByteString slice out of range.") 
-                else if (fin < ini) then ByteString(Array.empty,0,0) else
-                ByteString (x.UnsafeArray, ini + x.Offset, 1 + (fin - ini))
+    static member inline FoldLeft f r0 (a:ByteString) =
+        let mutable r = r0
+        for ix = a.Offset to (a.Offset + a.Length - 1) do
+            r <- f r a.UnsafeArray.[ix]
+        r
 
-        static member inline FoldLeft f r0 (a:ByteString) =
-            let mutable r = r0
-            for ix = a.Offset to (a.Offset + a.Length - 1) do
-                r <- f r a.UnsafeArray.[ix]
-            r
+    /// basic FNV-1a hash (32 bits)
+    static member Hash32 (a:ByteString) : uint32 =
+        let fnv_prime = 16777619u
+        let offset_basis = 2166136261u
+        let accum h b = ((h ^^^ (uint32 b)) * fnv_prime)
+        ByteString.FoldLeft accum offset_basis a
 
-        /// basic FNV-1a hash (32 bits)
-        static member Hash32 (a:ByteString) : uint32 =
-            let fnv_prime = 16777619u
-            let offset_basis = 2166136261u
-            let accum h b = ((h ^^^ (uint32 b)) * fnv_prime)
-            ByteString.FoldLeft accum offset_basis a
-
-        override x.GetHashCode() = int <| ByteString.Hash32 x
-            
-        /// basic FNV-1a hash (64 bits)
-        static member Hash64 (a:ByteString) : uint64 =
-            let fnv_prime = 1099511628211UL
-            let offset_basis = 14695981039346656037UL
-            let accum h b = ((h ^^^ (uint64 b)) * fnv_prime)
-            ByteString.FoldLeft accum offset_basis a
-
-        static member Eq (a:ByteString) (b:ByteString) : bool =
-            if (a.Length <> b.Length) then false else
-            let rec loop ix =
-                if (a.Length = ix) then true else
-                if (a.[ix] <> b.[ix]) then false else
-                loop (1 + ix)
-            loop 0
-
-        override x.Equals (yobj : System.Object) = 
-            match yobj with
-                | :? ByteString as y -> ByteString.Eq x y
-                | _ -> false
-
-        /// a constant-time equality comparison on data to control
-        /// time-leaks of data. 
-        static member CTEq (a:ByteString) (b:ByteString) : bool =
-            if (a.Length <> b.Length) then false else
-            let rec loop acc ix =
-                if (a.Length = ix) then (0uy = acc) else
-                let acc' = acc ||| (a.[ix] ^^^ b.[ix])
-                loop acc' (ix + 1)
-            loop 0uy 0
-
-        static member Compare (a:ByteString) (b:ByteString) : int =
-            let sharedLen = min a.Length b.Length
-            let rec loop ix =
-                    if (sharedLen = ix) then 0 else
-                    let c = compare a.[ix] b.[ix]
-                    if (0 <> c) then c else
-                    loop (1 + ix)
-            let cmpSharedLen = loop 0 
-            if (0 <> cmpSharedLen) then cmpSharedLen else
-            compare a.Length b.Length
-
-        interface System.IComparable with
-            member x.CompareTo (yobj : System.Object) =
-                match yobj with
-                    | :? ByteString as y -> ByteString.Compare x y
-                    | _ -> invalidArg "yobj" "cannot compare values of different types"
-
-        member x.GetEnumerator() : System.Collections.Generic.IEnumerator<byte> =
-            if (0 = x.Length) then Seq.empty.GetEnumerator() else
-            let a = x.UnsafeArray
-            let reset = (x.Offset - 1)
-            let limit = (x.Length + reset)
-            let ix = ref reset 
-            { new System.Collections.Generic.IEnumerator<byte> with
-                    member e.Current with get() = a.[!ix]
-                interface System.Collections.IEnumerator with
-                    member e.Current with get() = box a.[!ix]
-                    member e.MoveNext() = 
-                        if(!ix = limit) then false else
-                        ix := (1 + !ix)
-                        true
-                    member e.Reset() = ix := reset
-                interface System.IDisposable with
-                    member e.Dispose() = ()
-            }
-
-        interface System.Collections.Generic.IEnumerable<byte> with
-            member x.GetEnumerator() = x.GetEnumerator()
-
-        interface System.Collections.IEnumerable with
-            member x.GetEnumerator() = 
-                x.GetEnumerator() :> System.Collections.IEnumerator
-
-        // String conversion assumes an ASCII or UTF-8 encoding. 
-        override x.ToString() : string =
-            System.Text.Encoding.UTF8.GetString(x.UnsafeArray, x.Offset, x.Length)
-
-        // other interfaces? 
+    override x.GetHashCode() = int <| ByteString.Hash32 x
         
+    /// basic FNV-1a hash (64 bits)
+    static member Hash64 (a:ByteString) : uint64 =
+        let fnv_prime = 1099511628211UL
+        let offset_basis = 14695981039346656037UL
+        let accum h b = ((h ^^^ (uint64 b)) * fnv_prime)
+        ByteString.FoldLeft accum offset_basis a
 
+    static member Eq (a:ByteString) (b:ByteString) : bool =
+        if (a.Length <> b.Length) then false else
+        let rec loop ix =
+            if (a.Length = ix) then true else
+            if (a.[ix] <> b.[ix]) then false else
+            loop (1 + ix)
+        loop 0
+
+    override x.Equals (yobj : System.Object) = 
+        match yobj with
+            | :? ByteString as y -> ByteString.Eq x y
+            | _ -> false
+
+    /// a constant-time equality comparison on data to control
+    /// time-leaks of data. 
+    static member CTEq (a:ByteString) (b:ByteString) : bool =
+        if (a.Length <> b.Length) then false else
+        let rec loop acc ix =
+            if (a.Length = ix) then (0uy = acc) else
+            let acc' = acc ||| (a.[ix] ^^^ b.[ix])
+            loop acc' (ix + 1)
+        loop 0uy 0
+
+    static member Compare (a:ByteString) (b:ByteString) : int =
+        let sharedLen = min a.Length b.Length
+        let rec loop ix =
+                if (sharedLen = ix) then 0 else
+                let c = compare a.[ix] b.[ix]
+                if (0 <> c) then c else
+                loop (1 + ix)
+        let cmpSharedLen = loop 0 
+        if (0 <> cmpSharedLen) then cmpSharedLen else
+        compare a.Length b.Length
+
+    interface System.IComparable with
+        member x.CompareTo (yobj : System.Object) =
+            match yobj with
+                | :? ByteString as y -> ByteString.Compare x y
+                | _ -> invalidArg "yobj" "cannot compare values of different types"
+
+    member x.GetEnumerator() : System.Collections.Generic.IEnumerator<byte> =
+        if (0 = x.Length) then Seq.empty.GetEnumerator() else
+        let a = x.UnsafeArray
+        let reset = (x.Offset - 1)
+        let limit = (x.Length + reset)
+        let ix = ref reset 
+        { new System.Collections.Generic.IEnumerator<byte> with
+                member e.Current with get() = a.[!ix]
+            interface System.Collections.IEnumerator with
+                member e.Current with get() = box a.[!ix]
+                member e.MoveNext() = 
+                    if(!ix = limit) then false else
+                    ix := (1 + !ix)
+                    true
+                member e.Reset() = ix := reset
+            interface System.IDisposable with
+                member e.Dispose() = ()
+        }
+
+    interface System.Collections.Generic.IEnumerable<byte> with
+        member x.GetEnumerator() = x.GetEnumerator()
+
+    interface System.Collections.IEnumerable with
+        member x.GetEnumerator() = 
+            x.GetEnumerator() :> System.Collections.IEnumerator
+
+    // String conversion assumes an ASCII or UTF-8 encoding. 
+    override x.ToString() : string =
+        System.Text.Encoding.UTF8.GetString(x.UnsafeArray, x.Offset, x.Length)
+
+    // other interfaces? 
+
+/// The main API for ByteStrings is called 'BS' for shorthand, e.g. `BS.isEmpty`
+/// assuming you've aleady opened Data.ByteString. 
+module BS =
     let empty : ByteString = ByteString(Array.empty, 0, 0)
     let inline isEmpty (x : ByteString) = (0 = x.Length)
     let inline length (x : ByteString) = x.Length
@@ -255,11 +255,14 @@ module ByteString =
     let inline fromString s = encodeString s System.Text.Encoding.UTF8
     let inline toString s = decodeString s System.Text.Encoding.UTF8
 
-    /// Trim excess bytes from bytestring (copy only if excess bytes).
-    /// Trimming bytes can simplify reasoning about memory usage.
-    let inline trimBytes (s : ByteString) : ByteString =
-        if (s.UnsafeArray.Length = s.Length) then s else 
-        unsafeCreateA (toArray s)
+    /// Trim excess bytes from bytestring, if underlying binary is larger
+    /// than the bytestring by a given threshold.
+    let inline trimBytes' (threshold:int) (s:ByteString) : ByteString =
+        if ((s.Length + threshold) >= s.UnsafeArray.Length) then s else
+        unsafeCreateA (toArray s) 
+
+    /// Trim excess bytes from bytestring (no threshold)
+    let inline trimBytes (s : ByteString) : ByteString = trimBytes' 0 s
 
     /// Convenient access to pinned bytestring data (for interop).
     let inline withPinnedBytes (s : ByteString) (action : nativeint -> 'x) : 'x =
@@ -284,6 +287,4 @@ module ByteString =
         interface System.IDisposable with
             member x.Dispose() = x.Pin.Free() 
 
-    
-type ByteString = ByteString.ByteString
 

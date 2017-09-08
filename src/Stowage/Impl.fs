@@ -31,7 +31,7 @@ module internal I =
 
     let inline rscStowKey (h:RscHash) : StowKey =
         assert(h.Length = rscHashLen)
-        StowKey(Data.ByteString.take stowKeyLen h)
+        StowKey(BS.take stowKeyLen h)
 
     // the db_stow table uses a half key
     type Stowage = Map<StowKey, struct(RscHash * Val)>     // recent stowage requests
@@ -167,7 +167,7 @@ module internal I =
         let data = Array.zeroCreate maxRCLen
         let rec write ix rc =
             if(0L = rc) 
-                then Data.ByteString.unsafeCreate data ix (data.Length - ix)
+                then BS.unsafeCreate data ix (data.Length - ix)
                 else data.[ix - 1] <- (byte '0' + byte (rc % 10L))
                      write (ix - 1) (rc / 10L)
         write data.Length rc
@@ -177,14 +177,14 @@ module internal I =
         if not validRefct then invalidArg "rc" "refct out of range" else
         if (0L = rc)
             then mdb_del wtx (db.db_rfct) (k.v) |> ignore
-                 mdb_put wtx (db.db_zero) (k.v) (Data.ByteString.empty)
+                 mdb_put wtx (db.db_zero) (k.v) (BS.empty)
             else mdb_del wtx (db.db_zero) (k.v) |> ignore
                  mdb_put wtx (db.db_rfct) (k.v) (refctBytes rc)
 
     let dbGetRscZC (db:DB) (rtx:MDB_txn) (h:RscHash) : MDB_val option =
         if(h.Length <> rscHashLen) then invalidArg "h" "bad resource ID" else
-        let hKey = Data.ByteString.take stowKeyLen h
-        let hRem = Data.ByteString.drop stowKeyLen h
+        let hKey = BS.take stowKeyLen h
+        let hRem = BS.drop stowKeyLen h
         let vOpt = mdb_getZC rtx (db.db_stow) hKey 
         match vOpt with
         | None -> None
@@ -192,7 +192,7 @@ module internal I =
             let rlen = rscHashLen - stowKeyLen
             assert((unativeint (rlen + maxValLen) >= v.size) && 
                    (v.size >= unativeint rlen)                 )
-            let matchRem = withPinnedBytes hRem (fun ra -> 
+            let matchRem = BS.withPinnedBytes hRem (fun ra -> 
                     Memory.memcteq ra v.data rlen)
             if not matchRem then None else
             let size' = v.size - unativeint rlen
@@ -210,18 +210,18 @@ module internal I =
         mdb_del wtx (db.db_zero) (k.v) |> ignore
         mdb_del wtx (db.db_rfct) (k.v) |> ignore
         match vOpt with
-        | None -> Data.ByteString.empty
+        | None -> BS.empty
         | Some v -> 
             let rlen = rscHashLen - stowKeyLen
             assert(v.Length >= rlen)
-            Data.ByteString.drop rlen v
+            BS.drop rlen v
 
     let dbPutRsc (db:DB) (wtx:MDB_txn) (h:RscHash) (v:Val) : unit =
         if(h.Length <> rscHashLen) then invalidArg "h" "invalid resource ID" else
         if not (isValidVal v) then invalidArg "v" "invalid resource value" else
         //printf "Writing Resource %s\n" (toString h)
-        let hKey = Data.ByteString.take stowKeyLen h
-        let hRem = Data.ByteString.drop stowKeyLen h
+        let hKey = BS.take stowKeyLen h
+        let hRem = BS.drop stowKeyLen h
         let dst = mdb_reserve wtx (db.db_stow) hKey (hRem.Length + v.Length)
         Marshal.Copy(hRem.UnsafeArray, hRem.Offset, dst, hRem.Length)
         Marshal.Copy(v.UnsafeArray, v.Offset, (dst + nativeint hRem.Length), v.Length)
@@ -240,7 +240,7 @@ module internal I =
         if(not (isValidKey k)) then invalidArg "k" "invalid key" else
         if(not (isValidVal v)) then invalidArg "v" "invalid value" else
         //printf "Writing Key %s\n" (toString k)
-        if(Data.ByteString.isEmpty v) 
+        if(BS.isEmpty v) 
             // empty value corresponds to deletion
             then mdb_del wtx (db.db_data) k |> ignore
             else mdb_put wtx (db.db_data) k v
@@ -277,7 +277,7 @@ module internal I =
     let matchVal (vtx : Val) (vdb : MDB_val) : bool =
         if (vtx.Length <> int vdb.size) then false else
         if (0 = vtx.Length) then true else
-        withPinnedBytes vtx (fun pvtx -> 
+        BS.withPinnedBytes vtx (fun pvtx -> 
             0 = (Memory.memcmp (pvtx) (vdb.data) (vtx.Length)))
 
     // search for an invalid read assumption
@@ -408,7 +408,7 @@ module internal I =
 
         // initial GC from db_zero table, filtering protected resources
         let gcCand = 
-            LMDB.mdb_keys_from wtx (db.db_zero) (Data.ByteString.empty)
+            LMDB.mdb_keys_from wtx (db.db_zero) (BS.empty)
                 |> Seq.filter (fun k -> not (blockGC (StowKey k)))
                 |> Seq.truncate gcLo
                 |> Seq.fold (fun m k -> Map.add (StowKey k) 0L m) Map.empty

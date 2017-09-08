@@ -1,4 +1,5 @@
 namespace Stowage
+open Data.ByteString
 
 /// Structured Binary Data in Memory
 ///
@@ -80,7 +81,7 @@ type Rsc =
     val ID : RscHash
     new (db:DB, id:RscHash) = 
         assert(id.Length = rscHashLen)
-        { DB = db; ID = (Data.ByteString.trimBytes id) }
+        { DB = db; ID = (BS.trimBytes' 200 id) }
     new (db:DB, id:RscHash, incref:bool) =
         if incref then increfRscDB db id
         new Rsc(db,id)

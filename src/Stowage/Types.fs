@@ -58,9 +58,9 @@ module TypeMeta = // types and utilities also used by implementation
     /// scanHashDeps won't recognize it.
     let scanHashDeps (fn : 's -> RscHash -> 's) : 's -> Val -> 's =
         let rec loop s v = 
-            let hv' = Data.ByteString.dropWhile (not << rscHashByte) v
+            let hv' = BS.dropWhile (not << rscHashByte) v
             if ((hv').Length < rscHashLen) then s else
-            let (h,v') = Data.ByteString.span rscHashByte hv'
+            let (h,v') = BS.span rscHashByte hv'
             let s' = if (rscHashLen = h.Length) then (fn s h) else s
             loop s' v'
         loop

@@ -66,9 +66,9 @@ let rec procArgs xs (a : Args) : Args =
 let getEntropy (n : int) : ByteString = 
     let mem = Array.zeroCreate n
     do RandomNumberGenerator.Create().GetBytes(mem)
-    Data.ByteString.unsafeCreateA mem
+    BS.unsafeCreateA mem
 
-let hashStr = Stowage.Hash.hash >> Data.ByteString.toString
+let hashStr = Stowage.Hash.hash >> BS.toString
 
 let setAppWorkingDir fp =
     do Directory.CreateDirectory(fp) |> ignore

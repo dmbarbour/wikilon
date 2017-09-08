@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <Compile Include="ByteString.fs" />
+    <Compile Include="Stream.fs" />
   </ItemGroup>
 
   <ItemGroup>

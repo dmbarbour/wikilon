@@ -233,7 +233,7 @@ module API =
             match I.dbGetRscZC db.Impl rtx h with
             | None -> None
             | Some v -> Some (action v.data (int v.size)))
-        | Some v -> withPinnedBytes v (fun vaddr ->
+        | Some v -> BS.withPinnedBytes v (fun vaddr ->
             Some (action vaddr v.Length))
 
     /// Check whether a resource is known to the DB.
@@ -333,7 +333,7 @@ module API =
     let discoverKeysDB (db : DB) (kPrev : Key option) (nMax : int) : Key[] =
         let (kMin,validKey) =
             match kPrev with
-            | None -> (Data.ByteString.empty, true)
+            | None -> (BS.empty, true)
             | Some k -> (k, isValidKey k)
         if not validKey then invalidArg "kPrev" "invalid key" else
         I.withRTX db.Impl (fun rtx -> 

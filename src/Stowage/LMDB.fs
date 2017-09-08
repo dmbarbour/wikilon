@@ -178,7 +178,7 @@ module internal LMDB =
 
     // zero-copy get (copy neither key nor result)
     let mdb_getZC (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : MDB_val option =
-        Data.ByteString.withPinnedBytes key (fun kAddr -> 
+        BS.withPinnedBytes key (fun kAddr -> 
             let mutable mdbKey = MDB_val(unativeint key.Length, kAddr)
             let mutable mdbVal = MDB_val()
             let e = Native.mdb_get(txn, db, &mdbKey, &mdbVal)
@@ -201,7 +201,7 @@ module internal LMDB =
         arr
 
     let inline val2bytes (v : MDB_val) : ByteString =
-        Data.ByteString.unsafeCreateA (copyVal v) 
+        BS.unsafeCreateA (copyVal v) 
     
     // lookup a value in the database, copies the bytes
     let inline mdb_get (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : ByteString option =
@@ -209,7 +209,7 @@ module internal LMDB =
 
     // allocate space to write a value
     let mdb_reserve (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) (len : int) : nativeint =
-        Data.ByteString.withPinnedBytes key (fun keyAddr ->
+        BS.withPinnedBytes key (fun keyAddr ->
             let mutable mdbKey = MDB_val(unativeint key.Length, keyAddr)
             let mutable mdbVal = MDB_val(unativeint len, IntPtr.Zero)
             check(Native.mdb_put(txn, db, &mdbKey, &mdbVal, MDB_RESERVE))
@@ -223,7 +223,7 @@ module internal LMDB =
 
     // delete key-value pair, returns whether item exists.
     let mdb_del (txn : MDB_txn) (db : MDB_dbi) (key : ByteString) : bool =
-        Data.ByteString.withPinnedBytes key (fun keyAddr ->
+        BS.withPinnedBytes key (fun keyAddr ->
             let mutable mdbKey = MDB_val(unativeint key.Length, keyAddr)
             let e = Native.mdb_del(txn,db,&mdbKey,IntPtr.Zero)
             if(MDB_NOTFOUND = e) then false else check(e); true)
@@ -249,8 +249,8 @@ module internal LMDB =
 
     // seek for key equal or greater than the argument, if any.
     let mdb_cursor_seek_key_ge (crs : MDB_cursor) (key : ByteString) : (ByteString option) =
-        if Data.ByteString.isEmpty key then mdb_cursor_seek_key_first crs else
-        Data.ByteString.withPinnedBytes key (fun keyAddr ->
+        if BS.isEmpty key then mdb_cursor_seek_key_first crs else
+        BS.withPinnedBytes key (fun keyAddr ->
             let mutable mdbKey = MDB_val(unativeint key.Length, keyAddr)
             let e = Native.mdb_cursor_get(crs, &mdbKey, IntPtr.Zero, MDB_SET_RANGE)
             if(MDB_NOTFOUND = e) then None else
@@ -283,20 +283,20 @@ module internal LMDB =
               seek = from
               ini = true
               fin = true
-              cur = Data.ByteString.empty
+              cur = BS.empty
             }
 
         member private e.Init() : unit =
             e.ini <- false
             let firstKey = mdb_cursor_seek_key_gt (e.crs) (e.seek)
-            e.cur <- defaultArg firstKey (Data.ByteString.empty)
+            e.cur <- defaultArg firstKey (BS.empty)
             e.fin <- Option.isNone firstKey
 
         member private e.Step() : unit =
             if(e.ini) then e.Init() else
             if(e.fin) then () else
             let nextKey = mdb_cursor_next_key (e.crs)
-            e.cur <- defaultArg nextKey (Data.ByteString.empty)
+            e.cur <- defaultArg nextKey (BS.empty)
             e.fin <- Option.isNone nextKey
 
         member private e.Close() : unit =
@@ -325,7 +325,7 @@ module internal LMDB =
 
     /// Enumerate all the keys from a database. See also: mdb_keys_from.
     let inline mdb_keys (txn : MDB_txn) (dbi : MDB_dbi) : seq<ByteString> =
-        mdb_keys_from txn dbi (Data.ByteString.empty)
+        mdb_keys_from txn dbi (BS.empty)
 
     /// Capture a slice of up to nMax keys as an array.
     let mdb_slice_keys txn dbi keyMin nMax : ByteString[] =

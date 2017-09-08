@@ -5,7 +5,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="Binary.fs" />
+    <Compile Include="Codec.fs" />
+    <Compile Include="Binary.fs"/>
+    <Compile Include="VRef.fs" />
     <Compile Include="CommonEncoders.fs" />
     <Compile Include="Tree.fs" />
     <Compile Include="Seq.fs" />
