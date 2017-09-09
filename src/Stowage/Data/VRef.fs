@@ -63,23 +63,17 @@ module VRef =
         System.GC.KeepAlive ref
         result
 
-/// BRef indicates the most trivial VRef<ByteString>.
+/// BRef indicates the trivial VRef<ByteString>.
 ///
-/// Whereas most VRefs must parse a byte stream into structured data
-/// which may contain more VRefs, the BRef trivially treats the full
-/// stream as one large ByteString. This is useful when referencing
-/// raw binary or text data.
-[<Struct>]
-type BRef = 
-    // implemented as a struct wrapper to limit type aliasing
-    val internal R : VRef<ByteString>
-    member x.DB with get() : DB = x.R.DB
-    member x.ID with get() : RscHash = x.R.ID
-    internal new(ref) = { R = ref }
+/// Most VRefs have codecs that parse a stowed binary into structured
+/// data (which may recursively contain more VRefs). But the simple
+/// binary VRef - BRef - loads the bytestring without modification.
+type BRef = VRef<ByteString>
 
 module BRef =
-    /// The BRef codec will always read all available data in a byte
-    /// stream, so it's unsuitable for use with structured data.
+    /// This BRef codec will blindly read the entire stream, so it
+    /// is unsuitable for use with codec combinators. Indeed, there
+    /// isn't much use for it outside of BRefs.
     let c : Codec<ByteString> =
         { new Codec<ByteString> with
             member __.Write b dst = ByteStream.writeBytes b dst
@@ -87,9 +81,9 @@ module BRef =
             member __.Compact db b = struct(b,b.Length)
         }
 
-    let wrap' (db:DB) (h:RscHash)    : BRef = BRef(VRef.wrap' c db h)
-    let wrap  (db:DB) (h:RscHash)    : BRef = BRef(VRef.wrap  c db h)
-    let stow  (db:DB) (v:ByteString) : BRef = BRef(VRef.stow  c db v)
-    let load  (ref:BRef) : ByteString = VRef.load ref.R
+    let wrap' (db:DB) (h:RscHash)    : BRef = VRef.wrap' c db h
+    let wrap  (db:DB) (h:RscHash)    : BRef = VRef.wrap  c db h
+    let stow  (db:DB) (v:ByteString) : BRef = VRef.stow  c db v
+    let load  (ref:BRef) : ByteString = VRef.load ref
 
 

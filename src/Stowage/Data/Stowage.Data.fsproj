@@ -7,6 +7,7 @@
   <ItemGroup>
     <Compile Include="Codec.fs" />
     <Compile Include="VRef.fs" />
+    <Compile Include="LVRef.fs" />
     <Compile Include="CommonEncoders.fs" />
     <Compile Include="Tree.fs" />
     <Compile Include="Seq.fs" />

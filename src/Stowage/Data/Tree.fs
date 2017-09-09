@@ -622,18 +622,18 @@ module KVTree =
 
             member x.StepDiffN (k:Key) (nl:Node<'V>) (sl:Stack<'V>) (nr:Node<'V>) (sr:Stack<'V>) : State<'V> =
                 match (nl, nr) with
-                | (INode (_,nl',kr,r), _) -> 
-                    let sl' = ((kr,r)::sl)
-                    x.StepDiffN k nl' sl' nr sr
-                | (_, INode (_,nr',kr,r)) -> 
-                    let sr' = ((kr,r)::sr)
-                    x.StepDiffN k nl sl nr' sr'
                 | (Leaf vl, _) -> 
                     let struct(sr',vr') = stepV sr nr
                     x.StepDiffV k vl sl vr' sr'
                 | (_, Leaf vr) ->
                     let struct(sl',vl') = stepV sl nl
                     x.StepDiffV k vl' sl' vr sr
+                | (INode (_,nl',kr,r), _) -> 
+                    let sl' = ((kr,r)::sl)
+                    x.StepDiffN k nl' sl' nr sr
+                | (_, INode (_,nr',kr,r)) -> 
+                    let sr' = ((kr,r)::sr)
+                    x.StepDiffN k nl sl nr' sr'
                 | (RNode (szl,refl), RNode (szr,refr)) ->
                     if ((szl = szr) && (refl.ID = refr.ID)) then
                         x.StepDiff sl sr // skip equivalent subtrees

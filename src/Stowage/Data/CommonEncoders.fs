@@ -173,9 +173,9 @@ module EncVRef =
 module EncBRef =
     let size : int = EncVRef.size
     let read (db:DB) (src:ByteSrc) : BRef = 
-        BRef(EncVRef.read (BRef.c) db src)
+        EncVRef.read (BRef.c) db src
     let write (ref:BRef) (dst:ByteDst) : unit = 
-        EncVRef.write (ref.R) dst
+        EncVRef.write (ref) dst
     let codec : Codec<BRef> = 
         { new Codec<BRef> with
             member __.Write ref dst = write ref dst
