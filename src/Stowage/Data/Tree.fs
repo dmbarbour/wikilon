@@ -75,14 +75,14 @@ module KVTree =
 
     /// KVTree nodes are based on a modified critbit tree.
     type Node<'V> =
-        | Leaf of 'V                           // leaf value inline
-        | INode of Critbit * Node<'V> * Key * Node<'V>   // critbit * left * keyRight * right
-        | RNode of TreeSize * Codec<'V> * Rsc  // inner node reference
+        | Leaf of 'V                                    // leaf value inline
+        | INode of Critbit * Node<'V> * Key * Node<'V>  // critbit * left * keyRight * right
+        | RNode of TreeSize * VRef<Node<'V>>            // remote node with tree size
 
     let rec private nodeElemCt (node:Node<_>) : TreeSize =
         match node with
         | INode (_, l, _, r) -> nodeElemCt l + nodeElemCt r
-        | RNode (tsz, _, _) -> tsz
+        | RNode (tsz, _) -> tsz
         | Leaf _ -> 1UL
 
     /// The Tree is generic in the value type. 
@@ -105,90 +105,71 @@ module KVTree =
         let cINode : byte = byte 'N'
         let cRNode : byte = byte 'R'
 
-        let inline sizeR (tsz:TreeSize) = 1 + EncVarNat.size tsz + EncRsc.size
+        let inline sizeR (tsz:TreeSize) = 
+            1 + EncVarNat.size tsz + EncVRef.size
 
-        let rec write (c:Codec<'T>) (o:System.IO.Stream) (node:Node<'T>) : unit =
-            match node with
-            | Leaf v -> 
-                EncByte.write o cLeaf
-                Codec.write c o v
-            | RNode (sz,_,r) -> 
-                EncByte.write o cRNode 
-                EncVarNat.write o sz
-                EncRsc.write o r
-            | INode (cb,l,k,r) ->
-                EncByte.write o cINode
-                EncVarNat.write o (uint64 cb)
-                write c o l
-                EncBytes.write o k
-                write c o r
-
-        let rec read (c:Codec<'T>) (db:DB) (i:System.IO.Stream) : Node<'T> =
-            let b0 = EncByte.read i
-            if(b0 = cLeaf) then 
-                Leaf (Codec.read c db i)
-            elif (b0 = cRNode) then
-                let sz = EncVarNat.read i
-                let rsc = EncRsc.read db i
-                RNode (sz, c, rsc) 
-            elif (b0 <> cINode) then 
-                failwith (sprintf "unrecognized node type %A" b0)
-            else
-                let cb = EncVarNat.read i
-                if(cb > uint64 System.Int32.MaxValue) 
-                    then failwith "critbit overflow"
-                let l = read c db i
-                let k = EncBytes.read i
-                let r = read c db i
-                INode (int cb,l,k,r)
-
-        let stow (c:Codec<'T>) (db:DB) (node:Node<'T>) : Rsc =
-            use o = new System.IO.MemoryStream()
-            write c o node
-            let bytes = BS.unsafeCreateA (o.ToArray())
-            let result = Rsc.Stow db bytes
-            System.GC.KeepAlive node
-            result
 
         // heuristic size threshold for compaction of a node.
-        //
-        // in this case, I'm favoring some relatively large nodes.
+        // in this case, I'm favoring relatively large nodes.
         let compactThreshold : int = 10000
 
-        // avoid redundant computation of encoded sizes!
-        let rec compactSz (c:Codec<'V>) (db:DB) (node:Node<'V>) : struct (Node<'V> * int) =
-            match node with
-            | INode (cb, l, kr, r) ->
-                let struct (l', bytesL) = compactSz c db l
-                let struct (r', bytesR) = compactSz c db r
-                let node' = INode (cb, l', kr, r')
-                let byteCt = 
-                    1 + EncVarNat.size (uint64 cb) 
-                      + bytesL + EncBytes.size kr + bytesR
-                if (compactThreshold >= byteCt) then struct(node', byteCt) else
-                let tsz = nodeElemCt node'
-                let rsc = stow c db node'
-                struct(RNode(tsz,c,rsc), sizeR tsz)
-            | RNode (tsz,_,rsc) -> 
-                assert(db = rsc.DB) 
-                struct(node, sizeR tsz)
-            | Leaf v -> 
-                let struct(v', szV) = Codec.compactSz c db v
-                struct(Leaf v', 1 + szV)
-
-        let codec (c:Codec<'V>) : Codec<Node<'V>> =
+        // it's convenient to start with the Codec here.
+        let codec (cV:Codec<'V>) : Codec<Node<'V>> =
             { new Codec<Node<'V>> with
-                member __.Write o node = write c o node
-                member __.Read db i = read c db i
-                member __.Compact db node = compactSz c db node
+                member cN.Write node dst =
+                    match node with
+                    | Leaf v ->
+                        EncByte.write cLeaf dst
+                        Codec.write cV v dst
+                    | RNode (sz, ref) ->
+                        EncByte.write cRNode dst
+                        EncVarNat.write sz dst
+                        EncVRef.write ref dst
+                    | INode (cb, l, k, r) ->
+                        EncByte.write cINode dst
+                        EncVarNat.write (uint64 cb) dst
+                        cN.Write l dst
+                        EncBytes.write k dst
+                        cN.Write r dst
+                member cN.Read db src =
+                    let b0 = EncByte.read src
+                    if (b0 = cLeaf) then
+                        Leaf (Codec.read cV db src)
+                    elif (b0 = cRNode) then
+                        let sz = EncVarNat.read src
+                        let ref = EncVRef.read cN db src
+                        RNode (sz, ref)
+                    elif (b0 <> cINode) then
+                        raise ByteStream.ReadError
+                    else
+                        let cb = int (EncVarNat.read src)
+                        let l = cN.Read db src
+                        let k = EncBytes.read src
+                        let r = cN.Read db src
+                        INode (cb, l, k, r)
+                member cN.Compact db node =
+                    match node with
+                    | Leaf v -> 
+                        let struct(v',sz) = cV.Compact db v
+                        struct(Leaf v',sz)
+                    | RNode (tsz, ref) ->
+                        struct(node, sizeR tsz) 
+                    | INode (cb, l, kr, r) ->
+                        let struct(l', szL) = cN.Compact db l
+                        let struct(r', szR) = cN.Compact db r
+                        let node' = INode (cb, l', kr, r')
+                        let szN = 
+                            1 + EncVarNat.size (uint64 cb)
+                              + szL + EncBytes.size kr + szR
+                        if (szN < compactThreshold) then struct(node',szN) else
+                        let tsz = nodeElemCt node'
+                        let ref = VRef.stow cN db node'
+                        struct(RNode(tsz,ref), sizeR tsz)
             }
 
-        let inline load (c:Codec<'V>) (r:Rsc) : Node<'V> = 
-            Codec.load (codec c) r
-
-        // zero-copy access? maybe later. I could potentially use
-        // an UnmanagedMemoryStream, and potential savings would be
-        // reduced parsing and construction overheads on tryFind.
+    let private rootCodec (cV:Codec<'V>) : Codec<Key * Node<'V>> =
+        Codec.pair (EncBytes.codec) (EncNode.codec cV)
+    type TreeRef<'V> = VRef<Key * Node<'V>> option
 
     /// Compute total tree size - the number of key-value elements.
     /// O(N) in general. O(1) for compacted subtrees. Together, this
@@ -201,8 +182,8 @@ module KVTree =
     let rec private validateN (mcb:Critbit) (kl:Key) (node:Node<_>) =
         match node with
         | Leaf _ -> true
-        | RNode (tsz,c,rsc) ->
-            let x = EncNode.load c rsc
+        | RNode (tsz,ref) ->
+            let x = VRef.load ref
             (tsz = nodeElemCt x) && (validateN mcb kl x)
         | INode (cb, l, kr, r) ->
             ((Some cb) = findCritbit mcb kl kr)
@@ -216,45 +197,33 @@ module KVTree =
         | Empty -> true
         | Root(kl,n) -> validateN 0 kl n
 
-    /// Compact tree in memory. This can be delayed until after many
-    /// tree updates to avoid stowage of intermediate nodes.
+    /// Compact a tree in memory.
+    ///
+    /// This will both clear any cached nodes, and possibly rewrite
+    /// the tree to add more stowed nodes.
     let compact (c:Codec<'V>) (db:DB) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Empty -> Empty
-        | Root (k,n) -> 
-            let struct(n',_) = EncNode.compactSz c db n
-            Root(k,n')
+        | Root (k,n) ->
+            let n' = Codec.compact (EncNode.codec c) db n
+            Root(k, n')
 
     /// stow a tree without performing a compaction pass.
-    let stow' (c:Codec<'V>) (db:DB) (t:Tree<'V>) : Rsc option =
+    let stow' (c:Codec<'V>) (db:DB) (t:Tree<'V>) : TreeRef<'V> =
         match t with
         | Empty -> None
         | Root(kl,n) ->
-            use o = new System.IO.MemoryStream()
-            EncByte.write o (byte 'T') // for potential future versioning
-            EncBytes.write o kl
-            EncNode.write c o n
-            let bytes = BS.unsafeCreateA (o.ToArray())
-            let rsc = Rsc.Stow db bytes
-            System.GC.KeepAlive t
-            Some rsc
+            Some (VRef.stow (rootCodec c) db (kl,n))
     
     /// Compact and stow a tree. (Normal case.)
-    let inline stow (c:Codec<'V>) (db:DB) (t:Tree<'V>) : Rsc option = 
+    let inline stow (c:Codec<'V>) (db:DB) (t:Tree<'V>) : TreeRef<'V> = 
         stow' c db (compact c db t)
 
     /// Load tree partially into memory from a nullable resource.
-    let load (c:Codec<'V>) (rt : Rsc option) : Tree<'V> =
+    let load (rt : TreeRef<'V>) : Tree<'V> =
         match rt with
         | None -> Empty
-        | Some r ->
-            use i = EncBytes.toInputStream (loadRscDB r.DB r.ID)
-            let kl = EncBytes.read i
-            let node = EncNode.read c (r.DB) i
-            if(i.Position <> i.Length)
-                then failwith "unread bytes"
-            System.GC.KeepAlive r
-            Root (kl,node)
+        | Some ref -> Root (VRef.load ref)
 
     let empty : Tree<_> = Empty
     let isEmpty (t : Tree<_>) : bool =
@@ -267,7 +236,7 @@ module KVTree =
     let rec private setLKV (v:'V) (node:Node<'V>) : Node<'V> =
         match node with
         | INode (cb, l, k, r) -> INode (cb, setLKV v l, k, r)
-        | RNode (_, c, rsc) -> setLKV v (EncNode.load c rsc)
+        | RNode (_, ref) -> setLKV v (VRef.load ref)
         | Leaf _ -> Leaf v
 
     // insert a new least-key value, at given critbit
@@ -276,7 +245,7 @@ module KVTree =
         | INode (cb, l, kr, r) when (cb < ncb) ->
             assert(not (testCritbit cb oldLK))
             INode (cb, addLKV ncb oldLK v l, kr, r) 
-        | RNode (_, c, rsc) -> addLKV ncb oldLK v (EncNode.load c rsc)
+        | RNode (_, ref) -> addLKV ncb oldLK v (VRef.load ref)
         | _ -> 
             assert(testCritbit ncb oldLK) 
             INode (ncb, Leaf v, oldLK, node) 
@@ -300,7 +269,7 @@ module KVTree =
                         then INode (cb, l, kr, addRKV ncb k v r)
                         else INode (cb, l, k, addLKV ncb kr v r)
                 | None -> INode (cb, l, kr, setLKV v r) // update at kr
-        | RNode (_, c, rsc) -> addRKV mcb k v (EncNode.load c rsc)
+        | RNode (_, ref) -> addRKV mcb k v (VRef.load ref)
         | Leaf _ -> INode (mcb, node, k, Leaf v)
 
     /// Add key-value to the tree, or update existing value.
@@ -325,7 +294,7 @@ module KVTree =
             match removeLKV l with
             | Empty -> Root(kr, r)
             | Root(kl', l') -> Root(kl', INode(cb, l', kr, r))
-        | RNode (_, c, rsc) -> removeLKV (EncNode.load c rsc)
+        | RNode (_, ref) -> removeLKV (VRef.load ref)
         | Leaf _  -> Empty // key removed
 
     // remove a key strictly greater than the least-key if present. 
@@ -347,7 +316,7 @@ module KVTree =
                     match removeLKV r with
                     | Empty -> l 
                     | Root(kr',r') -> INode (cb, l, kr', r')
-        | RNode (_, c, rsc) -> removeRKV mcb k (EncNode.load c rsc)
+        | RNode (_, ref) -> removeRKV mcb k (VRef.load ref)
         | Leaf _ -> node // key not present
 
 
@@ -362,6 +331,10 @@ module KVTree =
             | None -> removeLKV node // equal to kl, remove least key
         | Empty -> Empty
 
+    // TODO: consider performing lookup before remove, at least when we
+    // reach an RNode. This could improve performance a bit when the
+    // element is not present in the tree.
+
     // recursive search for a key
     let rec private tryFindN (k:Key) (kl:Key) (node:Node<'V>) : 'V option =
         match node with
@@ -369,15 +342,12 @@ module KVTree =
             if testCritbit cb k
                 then tryFindN k kr r
                 else tryFindN k kl l
-        | RNode (_, c, rsc) ->
+        | RNode (_, ref) ->
             if (k < kl) then None else
-            tryFindN k kl (EncNode.load c rsc)
+            tryFindN k kl (VRef.load ref)
         | Leaf v -> if (k = kl) then Some v else None 
 
-    /// Lookup value (if any) associated with a key. This may load
-    /// tree nodes into memory, but doesn't hold onto them. So if
-    /// you need to lookup a value many times, or plan to modify it
-    /// afterwards, consider use of `touch` to pre-load the data.
+    /// Lookup value (if any) associated with a key.
     let tryFind (k:Key) (t:Tree<'V>) : 'V option =
         match t with
         | Root (kl,node) -> tryFindN k kl node
@@ -392,32 +362,32 @@ module KVTree =
 
     let rec private touchN (k:Key) (kl:Key) (node:Node<'V>) : Node<'V> =
         match node with
-        | INode (cb, l, kr, r) ->
+        | INode (cb,l,kr,r) ->
             if testCritbit cb k
-                then INode(cb, l, kr, (touchN k kr r))
-                else INode(cb, (touchN k kl l), kr, r)
-        | RNode (_, c, rsc) -> 
-            if (k < kl) then node else
-            touchN k kl (EncNode.load c rsc)
+                then INode (cb,l,kr,touchN k kr r)
+                else INode (cb,touchN k kl l, kr, r)
+        | RNode (_,ref) -> 
+            if(k < kl) then node else
+            touchN k kl (VRef.load ref)
         | Leaf _ -> node
 
-    /// Load a tree partially into memory based on lookup for a specific key.
+    /// Load a tree along path of a key.
     let touch (k:Key) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Empty -> Empty
-        | Root (kl,node) -> Root(kl, touchN k kl node)
+        | Root(kl,n) -> Root(kl, touchN k kl n)
 
-    let rec private fullyExpandN (node : Node<'V>) : Node<'V> =
+    let rec private expandN (node:Node<'V>) : Node<'V> =
         match node with
-        | INode (cb, l, k, r) -> INode (cb, fullyExpandN l, k, fullyExpandN r)
-        | RNode (_, c, rsc) -> fullyExpandN (EncNode.load c rsc)
+        | INode (cb,l,kr,r) -> INode (cb,expandN l, kr, expandN r)
+        | RNode (_,ref) -> VRef.load ref
         | Leaf _ -> node
 
-    /// Load entire tree into RAM. Essentially opposite to 'compact'.
-    let fullyExpand (t : Tree<'V>) : Tree<'V> =
+    /// Fully load tree structure into memory.
+    let expand (t:Tree<'V>) : Tree<'V> =
         match t with
         | Empty -> Empty
-        | Root (k, n) -> Root (k, fullyExpandN n)
+        | Root(kl,n) -> Root(kl, expandN n)
 
     // Enumeration of Tree Elements
     module private EnumNode =
@@ -428,13 +398,13 @@ module KVTree =
         let rec enterL (s:Stack<'V>) (k:Key) (n:Node<'V>) : State<'V> =
             match n with
             | INode (_, l, kr, r) -> enterL ((kr,r)::s) k l
-            | RNode (_, c, rsc) -> enterL s k (EncNode.load c rsc)
+            | RNode (_, ref) -> enterL s k (VRef.load ref)
             | Leaf v -> ((k,v),s)
             
         let rec enterR (s:Stack<'V>) (k:Key) (n:Node<'V>) : State<'V> =
             match n with
             | INode (_, l, kr, r) -> enterR ((k,l)::s) kr r
-            | RNode (_, c, rsc) -> enterR s k (EncNode.load c rsc)
+            | RNode (_, ref) -> enterR s k (VRef.load ref)
             | Leaf v -> ((k,v),s)
 
         type EnumeratorL<'V> = // enumerates left to right
@@ -526,7 +496,7 @@ module KVTree =
     let rec private selectPrefixCB (mcb:Critbit) (node:Node<'V>) : Node<'V> =
         match node with
         | INode(cb, l, kr, r) -> if(cb >= mcb) then node else selectPrefixCB mcb l
-        | RNode (_, c, rsc) -> selectPrefixCB mcb (EncNode.load c rsc)
+        | RNode (_, ref) -> selectPrefixCB mcb (VRef.load ref)
         | Leaf _ -> node
 
     // find critbit tweaked to return None for any match with full prefix
@@ -546,7 +516,7 @@ module KVTree =
                 | Some ncb ->
                     if not (testCritbit ncb p) then Empty else
                     selectPrefixR ncb p r
-        | RNode (_, c, rsc) -> selectPrefixR mcb p (EncNode.load c rsc)
+        | RNode (_, ref) -> selectPrefixR mcb p (VRef.load ref)
         | Leaf _ -> Empty
 
     /// Filter a tree to just keys matching a specific prefix.
@@ -579,7 +549,7 @@ module KVTree =
                     let struct(rl,rr) = partitionN ncb k r
                     let ll = INode(cb, l, kr, rl)
                     struct(ll,rr)
-        | RNode (_, c, rsc) -> partitionN mcb k (EncNode.load c rsc)
+        | RNode (_, ref) -> partitionN mcb k (VRef.load ref)
         | Leaf _ -> struct(node, Empty)
             
 
@@ -620,7 +590,7 @@ module KVTree =
         let rec stepV (s:Stack<'V>) (n:Node<'V>) : struct(Stack<'V> * 'V) =
             match n with
             | INode (_, l, kr, r) -> stepV ((kr,r)::s) l
-            | RNode (_, c, rsc) -> stepV s (EncNode.load c rsc)
+            | RNode (_, ref) -> stepV s (VRef.load ref)
             | Leaf v -> struct(s,v)
 
         // utility class, mostly for the equality constraint
@@ -664,14 +634,14 @@ module KVTree =
                 | (_, Leaf vr) ->
                     let struct(sl',vl') = stepV sl nl
                     x.StepDiffV k vl' sl' vr sr
-                | (RNode (szl,cl,rscl), RNode (szr,cr,rscr)) ->
-                    if ((szl = szr) && (rscl.ID = rscr.ID)) then
+                | (RNode (szl,refl), RNode (szr,refr)) ->
+                    if ((szl = szr) && (refl.ID = refr.ID)) then
                         x.StepDiff sl sr // skip equivalent subtrees
                     elif (szl > szr) then
-                        let nl' = EncNode.load cl rscl
+                        let nl' = VRef.load refl
                         x.StepDiffN k nl' sl nr sr
                     else
-                        let nr' = EncNode.load cr rscr
+                        let nr' = VRef.load refr
                         x.StepDiffN k nl sl nr' sr
 
         type Enumerator<'V when 'V : equality>(s:State<'V>) =

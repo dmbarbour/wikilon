@@ -1,8 +1,6 @@
 namespace Stowage
 open Data.ByteString
 
-        
-
 /// A VarNat is an efficient encoding for a natural number in 
 /// base128, such that we can easily distinguish the end of 
 /// the number. 
@@ -36,7 +34,7 @@ module EncVarNat =
             then acc'
             else readLoop acc' src 
 
-    let inline read (src:ByteSrc) = readLoop 0UL src
+    let read (src:ByteSrc) = readLoop 0UL src
 
     let codec =
         { new Codec<uint64> with
@@ -92,25 +90,6 @@ module EncByte =
             member __.Compact db b = struct(b,size)
         }
 
-/// Trivial ByteString encoding.
-///
-/// This can only be used as the final writer for a ByteString, 
-/// since it will always read the full stream. Mostly, this is
-/// intended so we can use the codec for raw binary VRefs.
-module EncRawBytes =
-
-    let inline size (b:ByteString) : int = b.Length
-    let inline write (b:ByteString) (dst:ByteDst) : unit =
-        ByteStream.writeBytes b dst
-    let inline read (src:ByteSrc) : ByteString =
-        ByteStream.readRem src
-    let codec : Codec<ByteString> =
-        { new Codec<ByteString> with
-            member __.Write b dst = write b dst
-            member __.Read _ src = read src
-            member __.Compact _ b = struct(b, size b)
-        }
-
 /// ByteString encoding:
 ///  (size)(data)(sep)
 ///
@@ -150,24 +129,25 @@ module EncBytes =
             member __.Compact db b = struct(b,size b)
         }
 
-/// Resource Hash encoding: {Hash}
+
+/// VRef hashes are simply serialized as `{hash}`
 module EncRscHash =
-
     let size : int = 2 + rscHashLen
-    let cbL = 123uy
-    let cbR = 125uy
-
-    let write (h:RscHash) (dst:ByteDst) : unit =
-        if(h.Length <> rscHashLen)
-            then invalidArg "h" "not a resource hash"
-        EncByte.write cbL dst
+    let sepL : byte = byte '{'
+    let sepR : byte = byte '}'
+    
+    let write (h:RscHash) (dst:ByteDst) =
+        assert(rscHashLen = h.Length)
+        ByteStream.writeByte sepL dst
         ByteStream.writeBytes h dst
-        EncByte.write cbR dst
+        ByteStream.writeByte sepR dst
 
     let read (src:ByteSrc) : RscHash =
-        EncByte.expect cbL src
+        let l = ByteStream.readByte src
+        if (sepL <> l) then raise ByteStream.ReadError
         let h = ByteStream.readBytes rscHashLen src
-        EncByte.expect cbR src
+        let r = ByteStream.readByte src
+        if (sepR <> r) then raise ByteStream.ReadError
         h
 
     let codec =
@@ -177,65 +157,29 @@ module EncRscHash =
             member __.Compact db h = struct(h, size)
         }
 
-/// Same as RscHash encoding, but incref and wrap Rsc upon read
-module EncRsc =
-
+module EncVRef =
     let size : int = EncRscHash.size
-    let inline write (r:Rsc) (dst:ByteDst) : unit = 
-        EncRscHash.write (r.ID) dst
-    let inline read (db:DB) (src:ByteSrc) : Rsc = 
-        new Rsc(db, EncRscHash.read src, true)
-
-    let codec =
-        { new Codec<Rsc> with
-            member __.Write rsc dst = write rsc dst
-            member __.Read db src = read db src
-            member __.Compact db rsc = struct(rsc, size)
+    let inline write (ref:VRef<_>) (dst:ByteDst) : unit = 
+        EncRscHash.write (ref.ID) dst
+    let inline read (c:Codec<'V>) (db:DB) (src:ByteSrc) : VRef<'V> =
+        VRef.wrap c db (EncRscHash.read src)
+    let codec (c:Codec<'V>) =
+        { new Codec<VRef<'V>> with
+            member __.Write ref dst = write ref dst
+            member __.Read db src = read c db src
+            member __.Compact _ ref = struct(ref, size)
         }
 
-/// a Rsc option is convenient for 'nullable' resource references.
-/// Encoding is '_' for a hole, otherwise overlaps resource encoding.
-/// Consequently, it is easy to transition Rsc to RscOpt (but not the
-/// other direction).
-module EncRscOpt =
-    let cNone = byte '_'
-
-    let size (ro : Rsc option) : int = 
-        match ro with
-        | None -> 1
-        | Some rsc -> EncRsc.size
-
-    let write (ro : Rsc option) (dst : ByteDst)  : unit =
-        match ro with
-        | None -> EncByte.write cNone dst
-        | Some rsc -> EncRsc.write rsc dst
-            
-    let read (db:DB) (src:ByteSrc) : Rsc option =
-        let b = EncByte.read src
-        if(cNone = b) then None else
-        let rsc = new Rsc(db, EncRscHash.read src, true)
-        EncByte.expect (EncRscHash.cbR) src
-        Some rsc
-
-    let codec =
-        { new Codec<Rsc option> with
-            member __.Write ro dst = write ro dst
+module EncBRef =
+    let size : int = EncVRef.size
+    let read (db:DB) (src:ByteSrc) : BRef = 
+        BRef(EncVRef.read (BRef.c) db src)
+    let write (ref:BRef) (dst:ByteDst) : unit = 
+        EncVRef.write (ref.R) dst
+    let codec : Codec<BRef> = 
+        { new Codec<BRef> with
+            member __.Write ref dst = write ref dst
             member __.Read db src = read db src
-            member __.Compact db ro = struct(ro,size ro)
-        } 
-
-
-/// Same as bytestrings, but incref and wrap Binary upon read.
-module EncBin =
-    let inline size (b:Binary) : int = EncBytes.size (b.Bytes)
-    let inline write (b:Binary) (dst:ByteDst) : unit =
-        EncBytes.write (b.Bytes) dst
-    let inline read (db:DB) (src:ByteSrc) : Binary =
-        new Binary(db, EncBytes.read src, true)
-    let codec =
-        { new Codec<Binary> with
-            member __.Write b dst = write b dst
-            member __.Read db src = read db src
-            member __.Compact db b = struct(b,size b)
+            member __.Compact _ ref = struct(ref, size)
         }
 

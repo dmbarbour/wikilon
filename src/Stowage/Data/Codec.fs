@@ -49,25 +49,53 @@ module Codec =
         with 
         | ByteStream.ReadError -> None
 
-    /// Stow a value without compacting it first.
+    /// Stow a value.
     ///
     /// Note: You'll have a reference to the resulting RscHash, so
-    /// you'll need to use decrefRscDB later (or wrap into a VRef).
+    /// you'll need to use decrefRscDB later, or wrap into VRef.
     let inline stow (c:Codec<'T>) (db:DB) (v:'T) : RscHash =
         let result = stowRscDB db (writeBytes c v)
         System.GC.KeepAlive v // prevent GC of value during write
         result
 
-    /// A frequent composition of compaction and stowage.
-    let inline compactAndStow (c:Codec<'T>) (db:DB) (v:'T) : RscHash =
-        stow c db (compact c db v)
-
     /// Load a stowed value from RscHash.
     let inline load (c:Codec<'T>) (db:DB) (h:RscHash) : 'T =
         readBytes c db (loadRscDB db h)
 
-    // TODO: develop codec-combinators.
-    //   e.g. combine two codecs into a pair or choice of codecs
-    //   wrap a codec to form a codec for a list or choice of values
+    /// Codec combinator for pairs of values.
+    let pair (cA:Codec<'A>) (cB:Codec<'B>) =
+        { new Codec<'A * 'B> with
+            member __.Write ((a,b)) dst =
+                cA.Write a dst
+                cB.Write b dst
+            member __.Read db src =
+                let a = cA.Read db src
+                let b = cB.Read db src
+                (a,b)
+            member __.Compact db ((a,b)) =
+                let struct(a',szA) = cA.Compact db a
+                let struct(b',szB) = cB.Compact db b
+                struct((a',b'),(szA + szB))
+        }
+
+    let triple (cA:Codec<'A>) (cB:Codec<'B>) (cC:Codec<'C>) =
+        { new Codec<'A * 'B * 'C> with
+            member __.Write ((a,b,c)) dst =
+                cA.Write a dst
+                cB.Write b dst
+                cC.Write c dst
+            member __.Read db src =
+                let a = cA.Read db src
+                let b = cB.Read db src
+                let c = cC.Read db src
+                (a,b,c)
+            member __.Compact db ((a,b,c)) =
+                let struct(a',szA) = cA.Compact db a
+                let struct(b',szB) = cB.Compact db b
+                let struct(c',szC) = cC.Compact db c
+                struct((a',b',c'),(szA + szB + szC))
+        }
+
+    // TODO: more codec combinators!
 
 
