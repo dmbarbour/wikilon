@@ -193,10 +193,7 @@ module EncLVRef =
         { new Codec<LVRef<'V>> with
             member __.Write ref dst = write ref dst
             member __.Read db src = read c db src
-            member __.Compact _ ref =
-                LVRef.force ref
-                LVRef.clear ref
-                struct(ref, size)
+            member __.Compact _ ref = struct(ref, size)
         }
 
 

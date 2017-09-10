@@ -44,6 +44,7 @@ module LVRef =
     /// should favor VRefs if you're going to be comparing IDs anyway.
     type Ref<'V> =
         val mutable internal S : State<'V>
+        val mutable internal T : int       // simple touch counter
         member r.Codec 
             with get() : Codec<'V> = 
                 match r.S with
@@ -86,10 +87,7 @@ module LVRef =
                 | :? Ref<'V> as y -> compare (x.ID) (y.ID)
                 | _ -> invalidArg "yobj" "cannot compare values of different types"
 
-
-
-        internal new (s:State<'V>) = { S = s }
-        new(ref:VRef<'V>) = { S = Stowed ref }
+        internal new (s:State<'V>) = { S = s; T = 0 }
 
     // Latency agent via singleton module.
     module private Latency =
@@ -119,8 +117,8 @@ module LVRef =
 
             // run tasks via Task thread-pool; don't wait
             static member private RunTasks (tasks:Frame) : unit =
-                for t in tasks do 
-                    Task.Run(t) |> ignore
+                tasks.ForEach (fun t ->
+                    Task.Run(t) |> ignore)
 
             member private agent.Loop () : unit =
                 let tasks = agent.GetTasks()
@@ -138,34 +136,46 @@ module LVRef =
 
         let agent = new Agent()
 
-    let private onWeakRef (action : Ref<'V> -> unit) (wref:System.WeakReference) () : unit = 
-        match wref.Target with
-        | null -> ()
-        | :? Ref<'V> as ref -> action ref
-        | _ -> failwith "unexpected weak ref type"
+        let inline delay (action:unit -> unit) : unit =
+            agent.Add (action)
 
-    let private viaWeakRef (action : Ref<'V> -> unit) (ref : Ref<'V>) : unit -> unit =
-        let wref = System.WeakReference(ref :> System.Object)
-        onWeakRef action wref
+        let rec private viaWeakRef (action:'V -> unit) (wref:System.WeakReference) () : unit =
+            match wref.Target with
+            | null -> ()
+            | :? 'V as obj -> action obj
+            | _ -> failwith "incorrect weak-ref object type"
+
+        let inline delayWeak (action:'V -> unit) (obj:'V) : unit =
+            let wref = System.WeakReference(obj :> System.Object)
+            delay (viaWeakRef action wref)
+
+    // delay operation on reference, delay another step each time it is
+    // touched concurrently (e.g. by `load`). 
+    let rec private refDelayOnTouch (action:Ref<'V> -> unit) (tc:int) (ref:Ref<'V>) : unit =
+        if (tc = ref.T) then action ref else
+        refCacheDelay action ref
+    and private refCacheDelay (action : Ref<'V> -> unit) (ref:Ref<'V>) : unit =
+        let tc = ref.T
+        Latency.delayWeak (refDelayOnTouch action tc) ref
 
     /// Force immediate stowage (only if still stowing).
     let force (ref:Ref<'V>) : unit = 
         ref.ID |> ignore
 
-    /// Clear cached value (if any). 
+    /// Forcibly clear cached value (if any).
     let clear (ref:Ref<'V>) : unit =
         match ref.S with 
-        | Cached (vref,_) ->
-            ref.S <- Stowed vref
+        | Cached (vref,_) -> ref.S <- Stowed vref
         | _ -> ()
 
     /// Wrap an existing VRef.
-    let wrap (vref:VRef<'V>) : Ref<'V> = new Ref<'V>(vref)
+    let wrap (vref:VRef<'V>) : Ref<'V> =
+        new Ref<'V>(Stowed vref)
 
     /// Stow a value (with latency) to create a LVRef.
     let stow (c:Codec<'V>) (db:DB) (v:'V) : Ref<'V> =
         let ref = new Ref<'V>(Stowing (c,db,v))
-        Latency.agent.Add(viaWeakRef force ref)
+        refCacheDelay force ref
         ref
 
     let private cacheLoad (ref:Ref<'V>) : 'V =
@@ -174,20 +184,25 @@ module LVRef =
             | Stowed vref ->
                 let v = VRef.load vref
                 ref.S <- Cached (vref,v)
-                Latency.agent.Add(viaWeakRef clear ref)
+                refCacheDelay clear ref
                 v 
             | Cached (_,v) -> v // cached concurrently
-            | Stowing (_,_,v) -> v
+            | Stowing (_,_,v) -> assert(false); v // shouldn't happen
             )
+
+    let inline private touch (ref:Ref<_>) : unit =
+        // race conditions are possible for updating touch counter, but
+        // are irrelevant due to the heuristic nature of touch tracking.
+        ref.T <- (1 + ref.T)
 
     /// Load a value, caching it briefly to support further operations.
     let load (ref:Ref<'V>) : 'V =
+        touch ref
         match ref.S with
         | Stowed _ -> cacheLoad ref
         | Cached (_,v) -> v
         | Stowing (_,_,v) -> v
-    
-         
+
 
 type LVRef<'V> = LVRef.Ref<'V>
 
