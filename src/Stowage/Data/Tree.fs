@@ -77,7 +77,7 @@ module KVTree =
     type Node<'V> =
         | Leaf of 'V                                    // leaf value inline
         | INode of Critbit * Node<'V> * Key * Node<'V>  // critbit * left * keyRight * right
-        | RNode of TreeSize * VRef<Node<'V>>            // remote node with tree size
+        | RNode of TreeSize * LVRef<Node<'V>>            // remote node with tree size
 
     let rec private nodeElemCt (node:Node<_>) : TreeSize =
         match node with
@@ -106,7 +106,7 @@ module KVTree =
         let cRNode : byte = byte 'R'
 
         let inline sizeR (tsz:TreeSize) = 
-            1 + EncVarNat.size tsz + EncVRef.size
+            1 + EncVarNat.size tsz + EncLVRef.size
 
 
         // heuristic size threshold for compaction of a node.
@@ -124,7 +124,7 @@ module KVTree =
                     | RNode (sz, ref) ->
                         EncByte.write cRNode dst
                         EncVarNat.write sz dst
-                        EncVRef.write ref dst
+                        EncLVRef.write ref dst
                     | INode (cb, l, k, r) ->
                         EncByte.write cINode dst
                         EncVarNat.write (uint64 cb) dst
@@ -137,7 +137,7 @@ module KVTree =
                         Leaf (Codec.read cV db src)
                     elif (b0 = cRNode) then
                         let sz = EncVarNat.read src
-                        let ref = EncVRef.read cN db src
+                        let ref = EncLVRef.read cN db src
                         RNode (sz, ref)
                     elif (b0 <> cINode) then
                         raise ByteStream.ReadError
@@ -163,13 +163,13 @@ module KVTree =
                               + szL + EncBytes.size kr + szR
                         if (szN < compactThreshold) then struct(node',szN) else
                         let tsz = nodeElemCt node'
-                        let ref = VRef.stow cN db node'
+                        let ref = LVRef.stow cN db node'
                         struct(RNode(tsz,ref), sizeR tsz)
             }
 
     let private rootCodec (cV:Codec<'V>) : Codec<Key * Node<'V>> =
         Codec.pair (EncBytes.codec) (EncNode.codec cV)
-    type TreeRef<'V> = VRef<Key * Node<'V>> option
+    type TreeRef<'V> = LVRef<Key * Node<'V>> option
 
     /// Compute total tree size - the number of key-value elements.
     /// O(N) in general. O(1) for compacted subtrees. Together, this
@@ -183,7 +183,7 @@ module KVTree =
         match node with
         | Leaf _ -> true
         | RNode (tsz,ref) ->
-            let x = VRef.load ref
+            let x = LVRef.load ref
             (tsz = nodeElemCt x) && (validateN mcb kl x)
         | INode (cb, l, kr, r) ->
             ((Some cb) = findCritbit mcb kl kr)
@@ -213,7 +213,7 @@ module KVTree =
         match t with
         | Empty -> None
         | Root(kl,n) ->
-            Some (VRef.stow (rootCodec c) db (kl,n))
+            Some (LVRef.stow (rootCodec c) db (kl,n))
     
     /// Compact and stow a tree. (Normal case.)
     let inline stow (c:Codec<'V>) (db:DB) (t:Tree<'V>) : TreeRef<'V> = 
@@ -223,7 +223,7 @@ module KVTree =
     let load (rt : TreeRef<'V>) : Tree<'V> =
         match rt with
         | None -> Empty
-        | Some ref -> Root (VRef.load ref)
+        | Some ref -> Root (LVRef.load ref)
 
     let empty : Tree<_> = Empty
     let isEmpty (t : Tree<_>) : bool =
@@ -236,7 +236,7 @@ module KVTree =
     let rec private setLKV (v:'V) (node:Node<'V>) : Node<'V> =
         match node with
         | INode (cb, l, k, r) -> INode (cb, setLKV v l, k, r)
-        | RNode (_, ref) -> setLKV v (VRef.load ref)
+        | RNode (_, ref) -> setLKV v (LVRef.load ref)
         | Leaf _ -> Leaf v
 
     // insert a new least-key value, at given critbit
@@ -245,7 +245,7 @@ module KVTree =
         | INode (cb, l, kr, r) when (cb < ncb) ->
             assert(not (testCritbit cb oldLK))
             INode (cb, addLKV ncb oldLK v l, kr, r) 
-        | RNode (_, ref) -> addLKV ncb oldLK v (VRef.load ref)
+        | RNode (_, ref) -> addLKV ncb oldLK v (LVRef.load ref)
         | _ -> 
             assert(testCritbit ncb oldLK) 
             INode (ncb, Leaf v, oldLK, node) 
@@ -269,7 +269,7 @@ module KVTree =
                         then INode (cb, l, kr, addRKV ncb k v r)
                         else INode (cb, l, k, addLKV ncb kr v r)
                 | None -> INode (cb, l, kr, setLKV v r) // update at kr
-        | RNode (_, ref) -> addRKV mcb k v (VRef.load ref)
+        | RNode (_, ref) -> addRKV mcb k v (LVRef.load ref)
         | Leaf _ -> INode (mcb, node, k, Leaf v)
 
     /// Add key-value to the tree, or update existing value.
@@ -294,7 +294,7 @@ module KVTree =
             match removeLKV l with
             | Empty -> Root(kr, r)
             | Root(kl', l') -> Root(kl', INode(cb, l', kr, r))
-        | RNode (_, ref) -> removeLKV (VRef.load ref)
+        | RNode (_, ref) -> removeLKV (LVRef.load ref)
         | Leaf _  -> Empty // key removed
 
     // remove a key strictly greater than the least-key if present. 
@@ -316,7 +316,7 @@ module KVTree =
                     match removeLKV r with
                     | Empty -> l 
                     | Root(kr',r') -> INode (cb, l, kr', r')
-        | RNode (_, ref) -> removeRKV mcb k (VRef.load ref)
+        | RNode (_, ref) -> removeRKV mcb k (LVRef.load ref)
         | Leaf _ -> node // key not present
 
 
@@ -344,7 +344,7 @@ module KVTree =
                 else tryFindN k kl l
         | RNode (_, ref) ->
             if (k < kl) then None else
-            tryFindN k kl (VRef.load ref)
+            tryFindN k kl (LVRef.load ref)
         | Leaf v -> if (k = kl) then Some v else None 
 
     /// Lookup value (if any) associated with a key.
@@ -368,7 +368,7 @@ module KVTree =
                 else INode (cb,touchN k kl l, kr, r)
         | RNode (_,ref) -> 
             if(k < kl) then node else
-            touchN k kl (VRef.load ref)
+            touchN k kl (LVRef.load ref)
         | Leaf _ -> node
 
     /// Load a tree along path of a key.
@@ -380,7 +380,7 @@ module KVTree =
     let rec private expandN (node:Node<'V>) : Node<'V> =
         match node with
         | INode (cb,l,kr,r) -> INode (cb,expandN l, kr, expandN r)
-        | RNode (_,ref) -> VRef.load ref
+        | RNode (_,ref) -> LVRef.load ref
         | Leaf _ -> node
 
     /// Fully load tree structure into memory.
@@ -398,13 +398,13 @@ module KVTree =
         let rec enterL (s:Stack<'V>) (k:Key) (n:Node<'V>) : State<'V> =
             match n with
             | INode (_, l, kr, r) -> enterL ((kr,r)::s) k l
-            | RNode (_, ref) -> enterL s k (VRef.load ref)
+            | RNode (_, ref) -> enterL s k (LVRef.load ref)
             | Leaf v -> ((k,v),s)
             
         let rec enterR (s:Stack<'V>) (k:Key) (n:Node<'V>) : State<'V> =
             match n with
             | INode (_, l, kr, r) -> enterR ((k,l)::s) kr r
-            | RNode (_, ref) -> enterR s k (VRef.load ref)
+            | RNode (_, ref) -> enterR s k (LVRef.load ref)
             | Leaf v -> ((k,v),s)
 
         type EnumeratorL<'V> = // enumerates left to right
@@ -496,7 +496,7 @@ module KVTree =
     let rec private selectPrefixCB (mcb:Critbit) (node:Node<'V>) : Node<'V> =
         match node with
         | INode(cb, l, kr, r) -> if(cb >= mcb) then node else selectPrefixCB mcb l
-        | RNode (_, ref) -> selectPrefixCB mcb (VRef.load ref)
+        | RNode (_, ref) -> selectPrefixCB mcb (LVRef.load ref)
         | Leaf _ -> node
 
     // find critbit tweaked to return None for any match with full prefix
@@ -516,7 +516,7 @@ module KVTree =
                 | Some ncb ->
                     if not (testCritbit ncb p) then Empty else
                     selectPrefixR ncb p r
-        | RNode (_, ref) -> selectPrefixR mcb p (VRef.load ref)
+        | RNode (_, ref) -> selectPrefixR mcb p (LVRef.load ref)
         | Leaf _ -> Empty
 
     /// Filter a tree to just keys matching a specific prefix.
@@ -549,7 +549,7 @@ module KVTree =
                     let struct(rl,rr) = partitionN ncb k r
                     let ll = INode(cb, l, kr, rl)
                     struct(ll,rr)
-        | RNode (_, ref) -> partitionN mcb k (VRef.load ref)
+        | RNode (_, ref) -> partitionN mcb k (LVRef.load ref)
         | Leaf _ -> struct(node, Empty)
             
 
@@ -590,7 +590,7 @@ module KVTree =
         let rec stepV (s:Stack<'V>) (n:Node<'V>) : struct(Stack<'V> * 'V) =
             match n with
             | INode (_, l, kr, r) -> stepV ((kr,r)::s) l
-            | RNode (_, ref) -> stepV s (VRef.load ref)
+            | RNode (_, ref) -> stepV s (LVRef.load ref)
             | Leaf v -> struct(s,v)
 
         // utility class, mostly for the equality constraint
@@ -638,10 +638,10 @@ module KVTree =
                     if ((szl = szr) && (refl.ID = refr.ID)) then
                         x.StepDiff sl sr // skip equivalent subtrees
                     elif (szl > szr) then
-                        let nl' = VRef.load refl
+                        let nl' = LVRef.load refl
                         x.StepDiffN k nl' sl nr sr
                     else
-                        let nr' = VRef.load refr
+                        let nr' = LVRef.load refr
                         x.StepDiffN k nl sl nr' sr
 
         type Enumerator<'V when 'V : equality>(s:State<'V>) =

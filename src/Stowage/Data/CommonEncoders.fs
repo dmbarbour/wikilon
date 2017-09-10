@@ -183,3 +183,20 @@ module EncBRef =
             member __.Compact _ ref = struct(ref, size)
         }
 
+module EncLVRef =
+    let size : int = EncVRef.size
+    let inline write (ref:LVRef<_>) (dst:ByteDst) : unit =
+        EncVRef.write (ref.VRef) dst
+    let inline read (c:Codec<'V>) (db:DB) (src:ByteSrc) : LVRef<'V> =
+        LVRef.wrap (EncVRef.read c db src)
+    let codec (c:Codec<'V>) =
+        { new Codec<LVRef<'V>> with
+            member __.Write ref dst = write ref dst
+            member __.Read db src = read c db src
+            member __.Compact _ ref =
+                LVRef.force ref
+                LVRef.clear ref
+                struct(ref, size)
+        }
+
+

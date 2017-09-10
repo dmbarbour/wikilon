@@ -7,6 +7,7 @@ open Data.ByteString
 /// release the resource when done with it.
 ///
 /// Note: Comparison of VRefs is based on RscHash and type only.
+/// Also, consider use of LVRef for caching and delayed stowage.
 type VRef<'V> =
     val Codec : Codec<'V>
     val DB : DB
