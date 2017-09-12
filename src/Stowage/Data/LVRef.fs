@@ -36,12 +36,11 @@ module LVRef =
     /// A little latency improves VRefs. If we delay serialization for
     /// stowage, we can avoid writing short-lived intermediate structure
     /// to disk. If we cache loads, we simplify logic for lookup-modify
-    /// operations. It doesn't take much. A few tens of milliseconds is
-    /// sufficient for most use cases.
+    /// operations. It doesn't take much latency for significant benefits.
     ///
-    /// Note: use of the VRef or ID properties will force stowage of the
-    /// Ref. Comparisons and serializations tend to use the ID. So you
-    /// should favor VRefs if you're going to be comparing IDs anyway.
+    /// Note: use of the VRef or ID properties will force initial stowage
+    /// of the Ref, but won't hinder further caching. Comparisons and 
+    /// serializations tend to use the ID.
     type Ref<'V> =
         val mutable internal S : State<'V>
         val mutable internal T : int       // simple touch counter
@@ -91,28 +90,25 @@ module LVRef =
 
     // Latency agent via singleton module.
     module private Latency =
-
-        // how long to sleep after receiving each batch.
-        let sleepMillis = 40
-
         type Action = unit -> unit
         type Frame = ResizeArray<Action>
  
         // the agent operates a simple loop but will run 
         type Agent =
-            val mutable private F : Frame
+            val private Period : int
+            val mutable private Frame : Frame
 
             member agent.Add (a:Action) : unit =
                 lock agent (fun () ->
-                    agent.F.Add(a)
+                    agent.Frame.Add(a)
                     Monitor.PulseAll(agent))
                 
             member private agent.GetTasks() : Frame =
                 lock agent (fun () ->
-                    if (0 = agent.F.Count)
+                    if (0 = agent.Frame.Count)
                         then Monitor.Wait(agent) |> ignore
-                    let oldF = agent.F
-                    agent.F <- new Frame()
+                    let oldF = agent.Frame
+                    agent.Frame <- new Frame()
                     oldF)
 
             // run tasks via Task thread-pool; don't wait
@@ -122,7 +118,7 @@ module LVRef =
 
             member private agent.Loop () : unit =
                 let tasks = agent.GetTasks()
-                Thread.Sleep(sleepMillis)
+                Thread.Sleep(agent.Period)
                 Agent.RunTasks tasks
                 agent.Loop()
 
@@ -130,11 +126,11 @@ module LVRef =
                 printfn "Latency agent initialized."
                 (new Thread(agent.Loop)).Start()
                 
-            new() as agent = 
-                { F = new Frame() } 
+            new(p) as agent = 
+                { Frame = new Frame(); Period = p  } 
                 then agent.Begin()
 
-        let agent = new Agent()
+        let agent = new Agent(100)
 
         let inline delay (action:unit -> unit) : unit =
             agent.Add (action)
@@ -200,6 +196,17 @@ module LVRef =
         touch ref
         match ref.S with
         | Stowed _ -> cacheLoad ref
+        | Cached (_,v) -> v
+        | Stowing (_,_,v) -> v
+
+    /// Load a value without caching it. 
+    ///
+    /// Uses cached value opportunistically if present, but if not
+    /// it will switch to VRef.load. This is mostly convenient when
+    /// we know we're loading a value only to modify it.
+    let load' (ref:Ref<'V>) : 'V =
+        match ref.S with
+        | Stowed vref -> VRef.load vref
         | Cached (_,v) -> v
         | Stowing (_,_,v) -> v
 

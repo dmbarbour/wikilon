@@ -10,10 +10,12 @@ open Data.ByteString
 /// any RscHash dependencies.
 module EncVarNat =
 
+    let rec private sizeLoop ct n = 
+        if (0UL = n) then ct else 
+        sizeLoop (1+ct) (n>>>7)
+
     /// Size of a VarNat encoding.
-    let size (n : uint64) : int =
-        let rec loop ct n = if (0UL = n) then ct else loop (1+ct) (n>>>7)
-        loop 1 (n>>>7)
+    let size (n : uint64) : int = sizeLoop 1 (n>>>7)
 
     let rec private whb (n:uint64) (dst:ByteDst) : unit =
         if (0UL = n) then () else
@@ -129,7 +131,6 @@ module EncBytes =
             member __.Compact db b = struct(b,size b)
         }
 
-
 /// VRef hashes are simply serialized as `{hash}`
 module EncRscHash =
     let size : int = 2 + rscHashLen
@@ -194,6 +195,126 @@ module EncLVRef =
             member __.Write ref dst = write ref dst
             member __.Read db src = read c db src
             member __.Compact _ ref = struct(ref, size)
+        }
+
+module EncOption =
+    let cNil : byte  = 128uy // EncVarNat 0
+    let cSome : byte = 129uy // EncVarNat 1
+
+    let write (cV:Codec<'V>) (vOpt : 'V option) (dst:ByteDst) : unit =
+        match vOpt with
+        | None -> EncByte.write cNil dst
+        | Some v ->
+            EncByte.write cSome dst
+            cV.Write v dst
+
+    let read (cV:Codec<'V>) (db:DB) (src:ByteSrc) : 'V option =
+        let b0 = EncByte.read src
+        if(cNil = b0) then None 
+        elif(cSome <> b0) then raise ByteStream.ReadError 
+        else Some (cV.Read db src)
+
+    let compact (cV:Codec<'V>) (db:DB) (vOpt:'V option) : struct('V option * int) =
+        match vOpt with
+        | None -> struct(None, 1)
+        | Some v ->
+            let struct(v',szV) = cV.Compact db v
+            struct(Some v', 1+szV)
+
+    let codec (cV:Codec<'V>) =
+        { new Codec<'V option> with
+            member __.Write vOpt dst = write cV vOpt dst
+            member __.Read db src = read cV db src
+            member __.Compact db vOpt = compact cV db vOpt
+        }
+
+/// Arrays are encoded with size (as varnat) followed by every element
+/// in sequence without separators. It's assumed that the elements are
+/// distinguishable on parse and protect their own RscHash references. 
+module EncArray =
+    let write (cV:Codec<'V>) (a: 'V array) (dst:ByteDst) =
+        EncVarNat.write (uint64 a.Length) dst
+        Array.iter (fun e -> Codec.write cV e dst) a
+
+    let read (cV:Codec<'V>) (db:DB) (src:ByteSrc) : 'V array =
+        let len = int (EncVarNat.read src)
+        let arr = Array.zeroCreate len
+        for ix = 0 to arr.Length - 1 do
+            arr.[ix] <- Codec.read cV db src
+        arr
+
+    /// compact in-place
+    let compact' (cV:Codec<'V>) (db:DB) (arr:'V array) =
+        let mutable szA = EncVarNat.size (uint64 arr.Length)
+        for ix = 0 to (arr.Length - 1) do
+            let struct(v',szV) = cV.Compact db (arr.[ix])
+            arr.[ix] <- v'
+            szA <- (szA + szV)
+        struct(arr, szA)
+
+    /// copying compact
+    let inline compact cV db arr = compact' cV db (Array.copy arr)
+
+    // NOTE: the Compact operation in this case is an in-place update!
+    //   you may need to copy the array if that isn't your intention.
+    let codec (cV:Codec<'V>) =
+        { new Codec<'V array> with
+            member __.Write arr dst = write cV arr dst
+            member __.Read db src = read cV db src
+            member __.Compact db arr = compact cV db arr
+        }
+
+
+/// Encode list via List.toArray. Consider `Codec.list` if you want
+/// list via option.
+module EncList =
+    let inline write (cV:Codec<'V>) (lst: 'V list) (dst:ByteDst) : unit =
+        EncArray.write cV (List.toArray lst) dst
+    let inline read (cV:Codec<'V>) (db:DB) (src:ByteSrc) : 'V list =
+        List.ofArray (EncArray.read cV db src)
+    let inline compact (cV:Codec<'V>) (db:DB) (lst : 'V list) =
+        let struct(arr,szA) = EncArray.compact' cV db (List.toArray lst)
+        struct(List.ofArray arr, szA)
+    let codec (cV:Codec<'V>) =
+        { new Codec<'V list> with
+            member __.Write lst dst = write cV lst dst
+            member __.Read db src = read cV db src
+            member __.Compact db lst = compact cV db lst
+        }
+
+module EncPair =
+    let codec (cA:Codec<'A>) (cB:Codec<'B>) =
+        { new Codec<'A * 'B> with
+            member __.Write ((a,b)) dst =
+                cA.Write a dst
+                cB.Write b dst
+            member __.Read db src =
+                let a = cA.Read db src
+                let b = cB.Read db src
+                (a,b)
+            member __.Compact db ((a,b)) =
+                let struct(a',szA) = cA.Compact db a
+                let struct(b',szB) = cB.Compact db b
+                struct((a',b'),(szA + szB))
+        }
+
+module EncTriple =
+    let codec (cA:Codec<'A>) (cB:Codec<'B>) (cC:Codec<'C>) =
+        { new Codec<'A * 'B * 'C> with
+            member __.Write ((a,b,c)) dst =
+                cA.Write a dst
+                cB.Write b dst
+                cC.Write c dst
+            member __.Read db src =
+                let a = cA.Read db src
+                let b = cB.Read db src
+                let c = cC.Read db src
+                (a,b,c)
+            member __.Compact db ((a,b,c)) =
+                let struct(a',szA) = cA.Compact db a
+                let struct(b',szB) = cB.Compact db b
+                let struct(c',szC) = cC.Compact db c
+                struct((a',b',c'),(szA + szB + szC))
         }
 
 

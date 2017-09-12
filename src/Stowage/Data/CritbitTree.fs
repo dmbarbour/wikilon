@@ -1,7 +1,11 @@
 namespace Stowage
 open Data.ByteString
 
-/// A key-value tree modeled above Stowage.
+/// A critbit tree modeled above Stowage.
+///
+/// A critbit tree is a simple associative key-value structure with many
+/// trie-like properties. This includes a linear lookup cost in key size
+/// and a history-independent structure.
 ///
 /// By modeling a key-value tree above Stowage, we essentially have first
 /// class database values with a lot of nice properties: data persistence,
@@ -9,14 +13,14 @@ open Data.ByteString
 /// The database may be larger than active memory. Keys and values may be
 /// further structured.
 ///
-/// The key-value tree is history-independent after compaction, meaning the
-/// internal structure depends only on the data contained, not on the order
-/// of update. This simplifies reasoning about structure sharing. 
+/// For integration with Stowage, we use an explicit 'compact' step that
+/// shoves larger nodes into the stowage database. Thus we do have history
+/// dependent structure between compactions.
 ///
 /// If compaction is not used, this can serve as a simple critbit tree.
-module KVTree =
+module CBTree =
     
-    /// Keys in our KVTree should be short, simple bytestrings.
+    /// Keys in our CBTree should be short, simple bytestrings.
     /// Keep keys under a few kilobytes for performance.
     ///
     /// Note: Keys use ByteString, not Binary. Avoid using Keys
@@ -67,17 +71,17 @@ module KVTree =
 
     /// Tree size is simply a count of keys or values.
     ///
-    /// The KVTree keeps a little metadata when compacting nodes
+    /// The CBTree keeps a little metadata when compacting nodes
     /// such that it's easy to determine size of a tree without
     /// peeking into the database. This metadata is also necessary
     /// for efficient tree diffs.
     type TreeSize = uint64
 
-    /// KVTree nodes are based on a modified critbit tree.
+    /// CBTree nodes are based on a modified critbit tree.
     type Node<'V> =
         | Leaf of 'V                                    // leaf value inline
         | INode of Critbit * Node<'V> * Key * Node<'V>  // critbit * left * keyRight * right
-        | RNode of TreeSize * LVRef<Node<'V>>            // remote node with tree size
+        | RNode of TreeSize * LVRef<Node<'V>>           // remote node with tree size
 
     let rec private nodeElemCt (node:Node<_>) : TreeSize =
         match node with
@@ -111,7 +115,7 @@ module KVTree =
 
         // heuristic size threshold for compaction of a node.
         // in this case, I'm favoring relatively large nodes.
-        let compactThreshold : int = 10000
+        let compactThreshold : int = 30000
 
         // it's convenient to start with the Codec here.
         let codec (cV:Codec<'V>) : Codec<Node<'V>> =
@@ -168,7 +172,7 @@ module KVTree =
             }
 
     let private rootCodec (cV:Codec<'V>) : Codec<Key * Node<'V>> =
-        Codec.pair (EncBytes.codec) (EncNode.codec cV)
+        EncPair.codec (EncBytes.codec) (EncNode.codec cV)
     type TreeRef<'V> = LVRef<Key * Node<'V>> option
 
     /// Compute total tree size - the number of key-value elements.
@@ -230,7 +234,7 @@ module KVTree =
         match t with
         | Empty -> true
         | Root _ -> false
-    let singleton (k : Key) (v : 'V) : Tree<'V> = Root (k, Leaf v)
+    let inline singleton (k : Key) (v : 'V) : Tree<'V> = Root (k, Leaf v)
 
     // update existing least-key value
     let rec private setLKV (v:'V) (node:Node<'V>) : Node<'V> =
@@ -285,7 +289,7 @@ module KVTree =
                     then Root (tk, addRKV cb k v tn) // add to right of least-key
                     else Root (k, addLKV cb tk v tn) // new least-key
             | None -> Root (tk, setLKV v tn) // update least-key
-        | Empty -> Root (k, Leaf v)
+        | Empty -> singleton k v
 
     // remove least-key value for a node, return a tree.
     let rec private removeLKV (node:Node<'V>) : Tree<'V> =
@@ -482,6 +486,10 @@ module KVTree =
 
     let inline foldBack (fn : Key -> 'V -> 'St -> 'St) (t : Tree<'V>) (s0 : 'St) : 'St =
         Seq.fold (fun s (k,v) -> fn k v s) s0 (toSeqR t)
+
+    let inline toArray (t:Tree<'V>) : (Key * 'V) array = Array.ofSeq (toSeq t)
+    let inline ofArray (a: (Key * 'V) array) : Tree<'V> =
+        Array.fold (fun t (k,v) -> add k v t) empty a
 
     // union assuming in-order elements, preserving critbit 
     let private unionF (cb : int) (a:Tree<'V>) (b:Tree<'V>) : Tree<'V> = 
@@ -688,7 +696,7 @@ module KVTree =
         Seq.isEmpty (diff a b)
 
 
-type KVTree<'V> = KVTree.Tree<'V>
+type CBTree<'V> = CBTree.Tree<'V>
         
 
 
