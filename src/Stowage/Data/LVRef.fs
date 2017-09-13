@@ -130,7 +130,7 @@ module LVRef =
                 { Frame = new Frame(); Period = p  } 
                 then agent.Begin()
 
-        let agent = new Agent(100)
+        let agent = new Agent(60)
 
         let inline delay (action:unit -> unit) : unit =
             agent.Add (action)
@@ -188,10 +188,10 @@ module LVRef =
 
     let inline private touch (ref:Ref<_>) : unit =
         // race conditions are possible for updating touch counter, but
-        // are irrelevant due to the heuristic nature of touch tracking.
+        // are irrelevant due to the already heuristic nature of caching.
         ref.T <- (1 + ref.T)
 
-    /// Load a value, caching it briefly to support further operations.
+    /// Load a value, caching it briefly for further lookups.
     let load (ref:Ref<'V>) : 'V =
         touch ref
         match ref.S with
@@ -199,11 +199,10 @@ module LVRef =
         | Cached (_,v) -> v
         | Stowing (_,_,v) -> v
 
-    /// Load a value without caching it. 
+    /// Load a value without caching it, e.g. for immediate update.
     ///
-    /// Uses cached value opportunistically if present, but if not
-    /// it will switch to VRef.load. This is mostly convenient when
-    /// we know we're loading a value only to modify it.
+    /// This will use an existing cached value opportunistically, but
+    /// will not store loaded data into the LVRef cache.
     let load' (ref:Ref<'V>) : 'V =
         match ref.S with
         | Stowed vref -> VRef.load vref

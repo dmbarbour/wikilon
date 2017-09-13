@@ -7,50 +7,44 @@ open Data.ByteString
 /// local summary of data that is written to disk. 
 type Compacting<'V, 'M when 'V :> IMeasured<'M>> =
     | Local of 'V
-    | Remote of LVRef<'V> * 'M
+    | Remote of 'M * LVRef<'V>
 
 module Compacting =
+    let cLocal = byte 'L'
+    let cRemote = byte 'R'
 
     let codec (cM:Codec<'M>) (cV:Codec<'V>) (threshold:int) = 
         { new Codec<Compacting<'V,'M>> with
             member c.Write elem dst =
                 match elem with
                 | Local v -> 
-                    EncByte.write (byte '[') dst
+                    EncByte.write cLocal dst
                     cV.Write v dst
-                    EncByte.write (byte ']') dst
-                | Remote (ref,m) ->
-                    EncByte.write (byte '{') dst
-                    ByteStream.writeBytes (ref.ID) dst
-                    EncByte.write (byte '}') dst
+                | Remote (m,ref) ->
+                    EncByte.write cRemote dst
                     cM.Write m dst
+                    EncLVRef.write ref dst
             member c.Read db src =
                 let b0 = EncByte.read src
-                if (b0 = (byte '[')) then
-                    let v = cV.Read db src
-                    EncByte.expect (byte ']') src
-                    Local v
-                else if(b0 <> (byte '{')) then
-                    raise ByteStream.ReadError
+                if (cLocal = b0) then
+                    Local (cV.Read db src)
                 else
-                    let h = ByteStream.readBytes rscHashLen src
-                    EncByte.expect (byte '}') src
                     let m = cM.Read db src
-                    let ref = LVRef.wrap (VRef.wrap cV db h)
-                    Remote(ref,m)
+                    let ref = EncLVRef.read cV db src
+                    Remote(m,ref)
             member c.Compact db elem =
                 match elem with
-                | Remote (ref,m) -> 
+                | Remote (m,ref) -> 
                     let struct(m',szM) = cM.Compact db m
-                    struct(Remote (ref,m'), 2 + rscHashLen + szM)
+                    struct(Remote (m',ref), 1 + szM + rscHashLen)
                 | Local v ->
                     let struct(v',szV) = cV.Compact db v
                     if (szV < threshold) then 
-                        struct(Local v', 2 + szV) 
+                        struct(Local v', 1 + szV) 
                     else
-                        let ref = LVRef.stow cV db v'
                         let struct(m,szM) = cM.Compact db (v'.Measure)
-                        struct(Remote (ref,m), 2 + rscHashLen + szM)
+                        let ref = LVRef.stow cV db v'
+                        struct(Remote (m, ref), 1 + rscHashLen + szM)
         }
                     
                     

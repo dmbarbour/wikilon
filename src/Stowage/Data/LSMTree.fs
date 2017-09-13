@@ -43,11 +43,6 @@ module LSMTree =
         | Empty
         | Root of Key * Node<'V>
 
-
-    /// Our LSM tree in this case is based on a conventional critbit
-    /// tree. The "least key" in this context is the least key for 
-    /// which a l
-
     let empty : Tree<_> = Empty
     let inline singleton (k:Key) (v:'V) : Tree<'V> = Root(k, Leaf v)
 

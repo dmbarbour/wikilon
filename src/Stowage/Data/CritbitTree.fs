@@ -22,52 +22,12 @@ module CBTree =
     
     /// Keys in our CBTree should be short, simple bytestrings.
     /// Keep keys under a few kilobytes for performance.
-    ///
-    /// Note: Keys use ByteString, not Binary. Avoid using Keys
-    /// for reference-structured binary data.
     type Key = ByteString
     
     /// A Critbit indicates a bit-level offset into a key.
-    ///
-    /// To simplify working with variable-sized keys, we treat each
-    /// byte as 9 bits with the high bit indicating presence of the
-    /// byte within the key. Hence, critbit 9 indicates whether our
-    /// key has at least two bytes.
-    type Critbit = int
-
-    let inline private keyElem (k:ByteString) (ix:int) : uint16 =
-        if (ix >= k.Length) then 0us else (0x100us ||| uint16 k.[ix])
-
-    let testCritbit (cb:Critbit) (k:ByteString) : bool =
-        assert(cb >= 0)
-        let byteOff = cb / 9
-        let bitOff = 8 - (cb % 9)
-        (0us <> (1us &&& ((keyElem k byteOff) >>> bitOff)))
-
-    // returns high bit for a uint16
-    let private highBitIndex (x0:uint16) : int =
-        let r0 = 0
-        let (r1,x1) = if (0us <> (0xFF00us &&& x0)) then (r0+8, x0>>>8) else (r0,x0)
-        let (r2,x2) = if (0us <> (0x00F0us &&& x1)) then (r1+4, x1>>>4) else (r1,x1)
-        let (r3,x3) = if (0us <> (0x000Cus &&& x2)) then (r2+2, x2>>>2) else (r2,x2)
-        if(0us <> (0x02us &&& x3)) then (1+r3) else r3
-
-    /// Find first critbit between keys equal or greater to specified critbit.
-    /// May return None if there are no differences after the specified bit.
-    let findCritbit (cbMin:Critbit) (a:ByteString) (b:ByteString) : Critbit option =
-        assert(cbMin >= 0)
-        let len = max a.Length b.Length
-        let off = cbMin / 9
-        if (off >= len) then None else
-        let mask0 = (0x1FFus >>> (cbMin % 9)) // hide high bits in first byte
-        let x0 = mask0 &&& ((keyElem a off) ^^^ (keyElem b off))
-        if (0us <> x0) then Some((9 * off) + (8 - highBitIndex x0)) else
-        let rec loop ix =
-            if(ix = len) then None else
-            let x = ((keyElem a ix) ^^^ (keyElem b ix))
-            if(0us <> x) then Some((9 * ix) + (8 - highBitIndex x)) else
-            loop (1 + ix)
-        loop (1+off)
+    type Critbit = Data.ByteString.Tree.Critbit
+    let inline testCritbit cb k = Data.ByteString.Tree.testCritbit cb k
+    let inline findCritbit cbMin a b = Data.ByteString.Tree.findCritbit cbMin a b
 
     /// Tree size is simply a count of keys or values.
     ///
@@ -77,23 +37,25 @@ module CBTree =
     /// for efficient tree diffs.
     type TreeSize = uint64
 
-    /// CBTree nodes are based on a modified critbit tree.
+    /// CBTree nodes are based on a modified critbit tree. The least
+    /// key for any node is kept in the parent (to simplify inserts).
+    /// Remote nodes
     type Node<'V> =
-        | Leaf of 'V                                    // leaf value inline
-        | INode of Critbit * Node<'V> * Key * Node<'V>  // critbit * left * keyRight * right
-        | RNode of TreeSize * LVRef<Node<'V>>           // remote node with tree size
+        | Leaf of 'V                            // leaf value inline
+        | INode of Critbit * Node<'V> * Key * Node<'V>  // inner node
+        | RNode of Critbit * TreeSize * LVRef<Node<'V>> // ref to INode
 
     let rec private nodeElemCt (node:Node<_>) : TreeSize =
         match node with
-        | INode (_, l, _, r) -> nodeElemCt l + nodeElemCt r
-        | RNode (tsz, _) -> tsz
         | Leaf _ -> 1UL
+        | INode (_,l,_,r) -> nodeElemCt l + nodeElemCt r
+        | RNode (_,tsz,_) -> tsz
 
     /// The Tree is generic in the value type. 
     ///
     /// A codec for compacting and serializing values must be provided
-    /// upon compact or stowage operations. Modulo stowage, this can be
-    /// used as a plain old persistent key-value data structure.
+    /// upon compact or stowage operations. If you don't need Stowage,
+    /// consider use of Data.ByteString.Tree instead.
     type Tree<'V> =
         | Empty
         | Root of Key * Node<'V>
@@ -104,14 +66,10 @@ module CBTree =
 
         //  L(val)   - Leaf
         //  N(inode) - INode
-        //  R(rsc)   - RNode
+        //  R(rnode) - RNode
         let cLeaf  : byte = byte 'L'
         let cINode : byte = byte 'N'
         let cRNode : byte = byte 'R'
-
-        let inline sizeR (tsz:TreeSize) = 
-            1 + EncVarNat.size tsz + EncLVRef.size
-
 
         // heuristic size threshold for compaction of a node.
         // in this case, I'm favoring relatively large nodes.
@@ -125,39 +83,45 @@ module CBTree =
                     | Leaf v ->
                         EncByte.write cLeaf dst
                         Codec.write cV v dst
-                    | RNode (sz, ref) ->
+                    | RNode (cb, tsz, ref) ->
                         EncByte.write cRNode dst
-                        EncVarNat.write sz dst
+                        EncVarNat.write (uint64 cb) dst
+                        EncVarNat.write tsz dst
                         EncLVRef.write ref dst
-                    | INode (cb, l, k, r) ->
+                    | INode (cb, l, kr, r) ->
                         EncByte.write cINode dst
                         EncVarNat.write (uint64 cb) dst
                         cN.Write l dst
-                        EncBytes.write k dst
+                        EncBytes.write kr dst
                         cN.Write r dst
                 member cN.Read db src =
                     let b0 = EncByte.read src
                     if (b0 = cLeaf) then
-                        Leaf (Codec.read cV db src)
+                        let v = cV.Read db src
+                        Leaf v
                     elif (b0 = cRNode) then
-                        let sz = EncVarNat.read src
+                        let cb = int (EncVarNat.read src)
+                        let tsz = EncVarNat.read src
                         let ref = EncLVRef.read cN db src
-                        RNode (sz, ref)
+                        RNode (cb, tsz, ref)
                     elif (b0 <> cINode) then
                         raise ByteStream.ReadError
                     else
                         let cb = int (EncVarNat.read src)
                         let l = cN.Read db src
-                        let k = EncBytes.read src
+                        let kr = EncBytes.read src
                         let r = cN.Read db src
-                        INode (cb, l, k, r)
+                        INode (cb, l, kr, r)
                 member cN.Compact db node =
                     match node with
                     | Leaf v -> 
                         let struct(v',sz) = cV.Compact db v
-                        struct(Leaf v',sz)
-                    | RNode (tsz, ref) ->
-                        struct(node, sizeR tsz) 
+                        struct(Leaf v',1 + sz)
+                    | RNode (cb, tsz, ref) ->
+                        let szR = 1 + EncVarNat.size (uint64 cb) 
+                                    + EncVarNat.size tsz 
+                                    + EncLVRef.size
+                        struct(node, szR) 
                     | INode (cb, l, kr, r) ->
                         let struct(l', szL) = cN.Compact db l
                         let struct(r', szR) = cN.Compact db r
@@ -165,10 +129,12 @@ module CBTree =
                         let szN = 
                             1 + EncVarNat.size (uint64 cb)
                               + szL + EncBytes.size kr + szR
-                        if (szN < compactThreshold) then struct(node',szN) else
-                        let tsz = nodeElemCt node'
-                        let ref = LVRef.stow cN db node'
-                        struct(RNode(tsz,ref), sizeR tsz)
+                        if (szN < compactThreshold) then 
+                            struct(node',szN) 
+                        else
+                            let tsz = nodeElemCt node'
+                            let ref = LVRef.stow cN db node'
+                            cN.Compact db (RNode(cb,tsz,ref))
             }
 
     let private rootCodec (cV:Codec<'V>) : Codec<Key * Node<'V>> =
@@ -183,14 +149,17 @@ module CBTree =
         | Empty -> 0UL
         | Root(_,node) -> nodeElemCt node
 
-    let rec private validateN (mcb:Critbit) (kl:Key) (node:Node<_>) =
+    let rec private validateN (mb:Critbit) (kl:Key) (node:Node<_>) =
         match node with
         | Leaf _ -> true
-        | RNode (tsz,ref) ->
+        | RNode (cb, tsz, ref) ->
             let x = LVRef.load ref
-            (tsz = nodeElemCt x) && (validateN mcb kl x)
+            (tsz = nodeElemCt x)
+                && (tsz > 1UL) // no leaf refs!
+                && (cb >= mb) 
+                && (validateN cb kl x)
         | INode (cb, l, kr, r) ->
-            ((Some cb) = findCritbit mcb kl kr)
+            ((Some cb) = findCritbit mb kl kr)
                 && (testCritbit cb kr)
                 && (validateN (1+cb) kl l)
                 && (validateN (1+cb) kr r)
@@ -207,17 +176,14 @@ module CBTree =
     /// the tree to add more stowed nodes.
     let compact (c:Codec<'V>) (db:DB) (t:Tree<'V>) : Tree<'V> =
         match t with
+        | Root (k,n) -> Root(k, Codec.compact (EncNode.codec c) db n)
         | Empty -> Empty
-        | Root (k,n) ->
-            let n' = Codec.compact (EncNode.codec c) db n
-            Root(k, n')
 
     /// stow a tree without performing a compaction pass.
     let stow' (c:Codec<'V>) (db:DB) (t:Tree<'V>) : TreeRef<'V> =
         match t with
+        | Root(kl,n) -> Some (LVRef.stow (rootCodec c) db (kl,n))
         | Empty -> None
-        | Root(kl,n) ->
-            Some (LVRef.stow (rootCodec c) db (kl,n))
     
     /// Compact and stow a tree. (Normal case.)
     let inline stow (c:Codec<'V>) (db:DB) (t:Tree<'V>) : TreeRef<'V> = 
@@ -227,7 +193,11 @@ module CBTree =
     let load (rt : TreeRef<'V>) : Tree<'V> =
         match rt with
         | None -> Empty
-        | Some ref -> Root (LVRef.load ref)
+        | Some ref -> Root (LVRef.load' ref)
+
+    // TODO: consider moving all this encoder stuff to a separate `EncCBTree` module.
+    // And perhaps develop better support for optional references, objects with empty
+    // values in general.
 
     let empty : Tree<_> = Empty
     let isEmpty (t : Tree<_>) : bool =
@@ -236,58 +206,113 @@ module CBTree =
         | Root _ -> false
     let inline singleton (k : Key) (v : 'V) : Tree<'V> = Root (k, Leaf v)
 
+    // here 'mb' is the first potential unmatched critbit;
+    // it is only when comparing partial keys at Leaf or RNode
+    let rec private containsKeyN (mb:Critbit) (k:Key) (kl:Key) (node:Node<_>) : bool =
+        match node with
+        | INode (cb, l, kr, r) ->
+            if testCritbit cb k
+               then containsKeyN mb k kr r
+               else containsKeyN mb k kl l
+        | RNode (cb, _, ref) ->
+            match findCritbit mb k kl with
+            | None -> true // least-key matches, no lookup needed
+            | Some mb' ->
+                if (mb' < cb) then false else
+                containsKeyN mb' k kl (LVRef.load ref)
+        | Leaf _ -> Option.isNone (findCritbit mb k kl)
+
+    /// Test whether a value is contained within a tree.
+    /// This aims to avoid opening RNodes where feasible.
+    let containsKey (k:Key) (t:Tree<_>) : bool = 
+        match t with
+        | Root (kl,n) -> containsKeyN 0 k kl n
+        | Empty -> false
+
+    // obtain value associated with least-key
+    let rec private getLKV (node:Node<'V>) : 'V =
+        match node with
+        | INode (_, l, _, _) -> getLKV l
+        | RNode (_, _, ref) -> getLKV (LVRef.load ref)
+        | Leaf v -> v
+
+    let rec private tryFindN (mb:Critbit) (k:Key) (kl:Key) (node:Node<'V>) : 'V option =
+        match node with
+        | INode (cb, l, kr, r) ->
+            if testCritbit cb k
+               then tryFindN mb k kr r
+               else tryFindN mb k kl l
+        | RNode (cb, _, ref) ->
+            match findCritbit mb k kl with
+            | None -> Some (getLKV (LVRef.load ref))
+            | Some mb' ->
+                if (mb' < cb) then None else
+                tryFindN mb' k kl (LVRef.load ref)
+        | Leaf v ->
+            let keysMatch = Option.isNone (findCritbit mb k kl)
+            if keysMatch then Some v else None
+
+    /// Lookup value (if any) associated with a key.
+    let tryFind (k:Key) (t:Tree<'V>) : 'V option =
+        match t with
+        | Root (kl,node) -> tryFindN 0 k kl node
+        | Empty -> None
+
+
+    /// Find value associated with a key 
+    ///   or raise `System.Collections.Generic.KeyNotFoundException`
+    let find (k:Key) (t:Tree<'V>) : 'V =
+        match tryFind k t with
+        | Some v -> v
+        | None -> raise (System.Collections.Generic.KeyNotFoundException())
+
     // update existing least-key value
     let rec private setLKV (v:'V) (node:Node<'V>) : Node<'V> =
         match node with
         | INode (cb, l, k, r) -> INode (cb, setLKV v l, k, r)
-        | RNode (_, ref) -> setLKV v (LVRef.load ref)
+        | RNode (_, _, ref) -> setLKV v (LVRef.load' ref)
         | Leaf _ -> Leaf v
 
-    // insert a new least-key value, at given critbit
-    let rec private addLKV (ncb:Critbit) (oldLK:Key) (v:'V) (node:Node<'V>) : Node<'V> =
+    // add to left of least-key (new least-key)
+    let rec private addLKV (mb:Critbit) (oldLK:Key) (v:'V) (node:Node<'V>) : Node<'V> =
         match node with
-        | INode (cb, l, kr, r) when (cb < ncb) ->
-            assert(not (testCritbit cb oldLK))
-            INode (cb, addLKV ncb oldLK v l, kr, r) 
-        | RNode (_, ref) -> addLKV ncb oldLK v (LVRef.load ref)
+        | INode (cb, l, kr, r) when (mb >= cb) ->
+            assert(mb > cb) // otherwise not a least-key
+            INode (cb, addLKV mb oldLK v l, kr, r) 
+        | RNode (cb, _, ref) when (mb >= cb) -> 
+            assert(mb > cb) // otherwise not a least-key
+            addLKV mb oldLK v (LVRef.load' ref)
         | _ -> 
-            assert(testCritbit ncb oldLK) 
-            INode (ncb, Leaf v, oldLK, node) 
+            assert(testCritbit mb oldLK) // old key larger at mb?
+            INode (mb, Leaf v, oldLK, node) 
 
-    // add or update key-value element somewhere to right of least-key
-    //  uses a critbit relative to least-key for efficient insertion
-    let rec private addRKV (mcb:Critbit) (k:Key) (v:'V) (node:Node<'V>) : Node<'V> =
+    // add to right of least-key. 
+    let rec private addRKV (mb:Critbit) (k:Key) (v:'V) (node:Node<'V>) : Node<'V> =
         match node with
-        | INode (cb, l, kr, r) ->
-            if (cb < mcb) then // diff after node
-                assert(not (testCritbit cb k)) 
-                INode (cb, addRKV mcb k v l, kr, r) 
-            elif (cb > mcb) then // diff before node
-                assert(not (testCritbit mcb kr))
-                INode (mcb, node, k, Leaf v)
-            else // diff aligns with kr
-                assert(testCritbit cb k)
+        | INode (cb, l, kr, r) when (mb >= cb) ->
+            if (mb > cb) then 
+                INode (cb, addRKV mb k v l, kr, r)
+            else
                 match findCritbit (1+cb) k kr with
-                | Some ncb ->
-                    if testCritbit ncb k
-                        then INode (cb, l, kr, addRKV ncb k v r)
-                        else INode (cb, l, k, addLKV ncb kr v r)
-                | None -> INode (cb, l, kr, setLKV v r) // update at kr
-        | RNode (_, ref) -> addRKV mcb k v (LVRef.load ref)
-        | Leaf _ -> INode (mcb, node, k, Leaf v)
+                | Some mb' ->
+                    if testCritbit mb' k 
+                        then INode(cb, l, kr, addRKV mb' k v r)
+                        else INode(cb, l, k, addLKV mb' kr v r)
+                | None -> INode(cb, l, kr, setLKV v r)
+        | RNode (cb, _, ref) when (mb >= cb) ->
+            addRKV mb k v (LVRef.load' ref)
+        | _ -> INode (mb, node, k, Leaf v)
 
-    /// Add key-value to the tree, or update existing value.
-    ///
-    /// Note: All keys and values in the tree must be associated with
-    /// the same DB object. 
+    /// Create a tree that's almost the same but has the given
+    /// value associated with the specified key.
     let add (k:Key) (v:'V) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Root (tk, tn) ->
             match findCritbit 0 k tk with
-            | Some cb -> 
-                if testCritbit cb k
-                    then Root (tk, addRKV cb k v tn) // add to right of least-key
-                    else Root (k, addLKV cb tk v tn) // new least-key
+            | Some mb -> 
+                if testCritbit mb k
+                    then Root (tk, addRKV mb k v tn) // add to right of least-key
+                    else Root (k, addLKV mb tk v tn) // new least-key
             | None -> Root (tk, setLKV v tn) // update least-key
         | Empty -> singleton k v
 
@@ -296,98 +321,80 @@ module CBTree =
         match node with
         | INode (cb, l, kr, r) ->
             match removeLKV l with
-            | Empty -> Root(kr, r)
             | Root(kl', l') -> Root(kl', INode(cb, l', kr, r))
-        | RNode (_, ref) -> removeLKV (LVRef.load ref)
+            | Empty -> Root(kr, r)
+        | RNode (_, _, ref) -> removeLKV (LVRef.load' ref)
         | Leaf _  -> Empty // key removed
 
-    // remove a key strictly greater than the least-key if present. 
-    //  Uses critbit relative to least-key for efficient deletion.
-    let rec private removeRKV (mcb:Critbit) (k:Key) (node:Node<'V>) : Node<'V> =
-        match node with
-        | INode (cb, l, kr, r) ->
-            if (cb < mcb) then
-                assert(not (testCritbit cb k))
-                INode(cb, removeRKV mcb k l, kr, r)
-            elif (cb > mcb) then node // key not present at expected depth
-            else 
-                assert(testCritbit cb k)
-                match findCritbit (1+cb) k kr with
-                | Some ncb -> 
-                    if not (testCritbit ncb k) then node else
-                    INode (cb, l, kr, removeRKV ncb k r)
-                | None -> // match kr, so remove it.
-                    match removeLKV r with
-                    | Empty -> l 
-                    | Root(kr',r') -> INode (cb, l, kr', r')
-        | RNode (_, ref) -> removeRKV mcb k (LVRef.load ref)
-        | Leaf _ -> node // key not present
-
-
-    /// Remove key from tree if present. 
-    let remove (k:Key) (t:Tree<'V>) : Tree<'V> =
-        match t with
-        | Root (kl, node) -> 
-            match findCritbit 0 k kl with
-            | Some cb -> 
-                if not (testCritbit cb k) then t else // less than kl
-                Root (kl, removeRKV cb k node) // greater than kl
-            | None -> removeLKV node // equal to kl, remove least key
-        | Empty -> Empty
-
-    // TODO: consider performing lookup before remove, at least when we
-    // reach an RNode. This could improve performance a bit when the
-    // element is not present in the tree.
-
-    // recursive search for a key
-    let rec private tryFindN (k:Key) (kl:Key) (node:Node<'V>) : 'V option =
+    // remove a key from a node.
+    let rec private removeN (mb:Critbit) (k:Key) (kl:Key) (node:Node<'V>) : Tree<'V> =
         match node with
         | INode (cb, l, kr, r) ->
             if testCritbit cb k
-                then tryFindN k kr r
-                else tryFindN k kl l
-        | RNode (_, ref) ->
-            if (k < kl) then None else
-            tryFindN k kl (LVRef.load ref)
-        | Leaf v -> if (k = kl) then Some v else None 
+               then match removeN mb k kr r with
+                    | Root(kr',r') -> Root(kl, INode(cb, l, kr', r'))
+                    | Empty -> Root(kl,l)
+               else match removeN mb k kl l with
+                    | Root(kl',l') -> Root(kl', INode(cb, l', kr, r))
+                    | Empty -> Root(kr,r)
+        | RNode (cb, _, ref) ->
+            match findCritbit mb k kl with
+            | None -> removeLKV (LVRef.load' ref)
+            | Some mb' ->
+                if (mb' < cb) then Root(kl,node) else
+                removeN mb' k kl (LVRef.load' ref)
+        | Leaf _ ->
+            let keysMatch = Option.isNone (findCritbit mb k kl)
+            if keysMatch then Empty else Root(kl,node)
 
-    /// Lookup value (if any) associated with a key.
-    let tryFind (k:Key) (t:Tree<'V>) : 'V option =
+    /// Remove key from tree. 
+    ///
+    /// Note: this assumes the key is in the tree with respect to loading
+    /// and rewriting nodes. If remove frequently fails to hit a target in
+    /// some context, you may wish to add an extra containsKey check.
+    let remove (k:Key) (t:Tree<'V>) : Tree<'V> =
         match t with
-        | Root (kl,node) -> tryFindN k kl node
-        | Empty -> None
+        | Root (kl, node) -> removeN 0 k kl node
+        | Empty -> Empty
 
-    /// Find value associated with a key 
-    ///   or raise System.Collections.Generic.KeyNotFoundException
-    let find (k:Key) (t:Tree<'V>) : 'V =
-        match tryFind k t with
-        | Some v -> v
-        | None -> raise (System.Collections.Generic.KeyNotFoundException())
+    let rec private touchLKV (node:Node<'V>) : Node<'V> =
+        match node with
+        | INode (cb,l,kr,r) -> INode (cb,touchLKV l,kr,r)
+        | RNode (_, _, ref) -> touchLKV (LVRef.load' ref)
+        | Leaf _ -> node
 
-    let rec private touchN (k:Key) (kl:Key) (node:Node<'V>) : Node<'V> =
+    let rec private touchN (mb:Critbit) (k:Key) (kl:Key) (node:Node<'V>) : Node<'V> =
         match node with
         | INode (cb,l,kr,r) ->
             if testCritbit cb k
-                then INode (cb,l,kr,touchN k kr r)
-                else INode (cb,touchN k kl l, kr, r)
-        | RNode (_,ref) -> 
-            if(k < kl) then node else
-            touchN k kl (LVRef.load ref)
+                then INode (cb,l,kr,touchN mb k kr r)
+                else INode (cb,touchN mb k kl l, kr, r)
+        | RNode (cb,_,ref) -> 
+            match findCritbit mb k kl with
+            | Some mb' -> 
+                if mb' < cb then node else
+                touchN mb' k kl (LVRef.load' ref)
+            | None -> touchLKV (LVRef.load' ref)
         | Leaf _ -> node
 
-    /// Load a tree along path of a key.
+    /// Load tree in path of specified key.
+    ///
+    /// This doesn't use the LVRef cache. It expands nodes within the
+    /// tree, which lasts until the tree is compacted or GC'd. It may
+    /// be useful to touch keys that you plan to manipulate frequently,
+    /// but it might be wiser to simply model an explicit working set.
     let touch (k:Key) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Empty -> Empty
-        | Root(kl,n) -> Root(kl, touchN k kl n)
+        | Root(kl,n) -> Root(kl, touchN 0 k kl n)
 
     let rec private expandN (node:Node<'V>) : Node<'V> =
         match node with
         | INode (cb,l,kr,r) -> INode (cb,expandN l, kr, expandN r)
-        | RNode (_,ref) -> LVRef.load ref
+        | RNode (_,_,ref) -> expandN (LVRef.load' ref)
         | Leaf _ -> node
 
-    /// Fully load tree structure into memory.
+    /// Fully load tree structure into memory. (Touch everything.)
     let expand (t:Tree<'V>) : Tree<'V> =
         match t with
         | Empty -> Empty
@@ -398,72 +405,46 @@ module CBTree =
         type Stack<'V> = (Key * Node<'V>) list
         type Elem<'V> = (Key * 'V)
         type State<'V> = (Elem<'V> * Stack<'V>)
+        type StepFn<'V> = Stack<'V> -> Key -> Node<'V> -> State<'V>
         
-        let rec enterL (s:Stack<'V>) (k:Key) (n:Node<'V>) : State<'V> =
+        let rec stepL (s:Stack<'V>) (k:Key) (n:Node<'V>) : State<'V> =
             match n with
-            | INode (_, l, kr, r) -> enterL ((kr,r)::s) k l
-            | RNode (_, ref) -> enterL s k (LVRef.load ref)
+            | INode (_, l, kr, r) -> stepL ((kr,r)::s) k l
+            | RNode (_, _, ref) -> stepL s k (LVRef.load ref)
             | Leaf v -> ((k,v),s)
             
-        let rec enterR (s:Stack<'V>) (k:Key) (n:Node<'V>) : State<'V> =
+        let rec stepR (s:Stack<'V>) (k:Key) (n:Node<'V>) : State<'V> =
             match n with
-            | INode (_, l, kr, r) -> enterR ((k,l)::s) kr r
-            | RNode (_, ref) -> enterR s k (LVRef.load ref)
+            | INode (_, l, kr, r) -> stepR ((k,l)::s) kr r
+            | RNode (_, _, ref) -> stepR s k (LVRef.load ref)
             | Leaf v -> ((k,v),s)
 
-        type EnumeratorL<'V> = // enumerates left to right
-            val mutable private st : State<'V>
-            member e.Elem with get() = fst e.st
-            member e.Stack with get() = snd e.st
-            new (st0:State<'V>) = { st = st0 }
+        type Enumerator<'V> = // enumerates left to right
+            val step : StepFn<'V>
+            val mutable private state : State<'V>
+            new (step,k,n) = 
+                let state0 = (Unchecked.defaultof<_>,(k,n)::[])
+                { step = step; state = state0 }
+            member e.Elem with get() = fst e.state
+            member e.Stack with get() = snd e.state
             interface System.Collections.Generic.IEnumerator<Elem<'V>> with
                 member e.Current with get() = e.Elem
             interface System.Collections.IEnumerator with
                 member e.Current with get() = upcast e.Elem
                 member e.MoveNext() =
                     match e.Stack with
-                    | ((kr,r)::sr) ->
-                        e.st <- enterL sr kr r
-                        true
+                    | ((k,n)::s) -> e.state <- e.step s k n; true
                     | _ -> false
                 member e.Reset() = raise (System.NotSupportedException())
             interface System.IDisposable with
                 member e.Dispose() = ()
 
-        type EnumerableL<'V> =
+        type Enumerable<'V> =
+            val private s : StepFn<'V>
             val private k : Key
             val private n : Node<'V>
-            new(k:Key, n:Node<'V>) = { k = k; n = n }
-            member e.GetEnum() = new EnumeratorL<'V>(enterL List.empty e.k e.n)
-            interface System.Collections.Generic.IEnumerable<Elem<'V>> with
-                member e.GetEnumerator() = upcast e.GetEnum()
-            interface System.Collections.IEnumerable with
-                member e.GetEnumerator() = upcast e.GetEnum()
-
-        type EnumeratorR<'V> = // enumerates right to left
-            val mutable private st : State<'V>
-            member e.Elem with get() = fst e.st
-            member e.Stack with get() = snd e.st
-            new (st0:State<'V>) = { st = st0 }
-            interface System.Collections.Generic.IEnumerator<Elem<'V>> with
-                member e.Current with get() = e.Elem
-            interface System.Collections.IEnumerator with
-                member e.Current with get() = upcast e.Elem
-                member e.MoveNext() =
-                    match e.Stack with
-                    | ((kl,l)::sl) ->
-                        e.st <- enterR sl kl l
-                        true
-                    | _ -> false
-                member e.Reset() = raise (System.NotSupportedException())
-            interface System.IDisposable with
-                member e.Dispose() = ()
-
-        type EnumerableR<'V> =
-            val private k : Key
-            val private n : Node<'V>
-            new(k:Key, n:Node<'V>) = { k = k; n = n }
-            member e.GetEnum() = new EnumeratorR<'V>(enterR List.empty e.k e.n)
+            new(s,k,n) = { s = s; k = k; n = n }
+            member e.GetEnum() = new Enumerator<'V>(e.s, e.k, e.n)
             interface System.Collections.Generic.IEnumerable<Elem<'V>> with
                 member e.GetEnumerator() = upcast e.GetEnum()
             interface System.Collections.IEnumerable with
@@ -473,13 +454,13 @@ module CBTree =
     let toSeq (t : Tree<'V>) : seq<(Key * 'V)> =
         match t with
         | Empty -> Seq.empty
-        | Root(k,n) -> upcast EnumNode.EnumerableL<'V>(k,n)
+        | Root(k,n) -> upcast EnumNode.Enumerable<'V>(EnumNode.stepL,k,n)
 
     /// reverse-ordered sequence, greatest key to least key
     let toSeqR (t : Tree<'V>) : seq<(Key * 'V)> =
         match t with
         | Empty -> Seq.empty
-        | Root(k,n) -> upcast EnumNode.EnumerableR<'V>(k,n)
+        | Root(k,n) -> upcast EnumNode.Enumerable<'V>(EnumNode.stepR,k,n)
 
     let inline fold (fn : 'St -> Key -> 'V -> 'St) (s0 : 'St) (t : Tree<'V>) : 'St =
         Seq.fold (fun s (k,v) -> fn s k v) s0 (toSeq t)
@@ -487,79 +468,70 @@ module CBTree =
     let inline foldBack (fn : Key -> 'V -> 'St -> 'St) (t : Tree<'V>) (s0 : 'St) : 'St =
         Seq.fold (fun s (k,v) -> fn k v s) s0 (toSeqR t)
 
+    let inline iter (fn: Key -> 'V -> unit) (t:Tree<'V>) : unit =
+        Seq.iter (fun (k,v) -> fn k v) (toSeq t)
+
     let inline toArray (t:Tree<'V>) : (Key * 'V) array = Array.ofSeq (toSeq t)
     let inline ofArray (a: (Key * 'V) array) : Tree<'V> =
         Array.fold (fun t (k,v) -> add k v t) empty a
 
-    // union assuming in-order elements, preserving critbit 
-    let private unionF (cb : int) (a:Tree<'V>) (b:Tree<'V>) : Tree<'V> = 
-        match a with
-        | Empty -> b
-        | Root(ak,an) -> 
-            match b with
-            | Empty -> a 
-            | Root(bk, bn) -> Root(ak, INode (cb, an, bk, bn))
-
-    // select prefix up to critbit assuming successful match on least-key
-    let rec private selectPrefixCB (mcb:Critbit) (node:Node<'V>) : Node<'V> =
+    // select prefix when we have already matched the least-key. 
+    let rec selectPrefixL (pb:Critbit) (node:Node<'V>) : Node<'V> =
         match node with
-        | INode(cb, l, kr, r) -> if(cb >= mcb) then node else selectPrefixCB mcb l
-        | RNode (_, ref) -> selectPrefixCB mcb (LVRef.load ref)
-        | Leaf _ -> node
+        | INode(cb, l, _, _) when (cb < pb) -> selectPrefixL pb l
+        | RNode(cb, _, ref) when (cb < pb) -> selectPrefixL pb (LVRef.load' ref)
+        | _ -> node
 
     // find critbit tweaked to return None for any match with full prefix
     let inline private findPrefixCritbit (cb:Critbit) (p:ByteString) (k:Key) =
-        findCritbit cb p (BS.take p.Length k)
+        findCritbit cb p (BS.take p.Length k)    
 
-    // select prefix assuming failed match on least-key
-    let rec private selectPrefixR (mcb:Critbit) (p:ByteString) (node:Node<'V>) : Tree<'V> =
+    // here 'mb' is count of bits matched against kl
+    let rec selectPrefixN (mb:Critbit) (p:ByteString) (kl:Key) (node:Node<'V>) : Tree<'V> =
+        let pb = 9 * p.Length
         match node with
-        | INode(cb, l, kr, r) ->
-            if(mcb > cb) then selectPrefixR mcb p l
-            elif(mcb < cb) then Empty
-            else
-                assert(testCritbit cb p)
-                match findPrefixCritbit (1+cb) p kr with
-                | None -> Root(kr, selectPrefixCB (9 * p.Length) r)
-                | Some ncb ->
-                    if not (testCritbit ncb p) then Empty else
-                    selectPrefixR ncb p r
-        | RNode (_, ref) -> selectPrefixR mcb p (LVRef.load ref)
-        | Leaf _ -> Empty
+        | INode(cb, l, kr, r) when (cb < pb) ->
+            if testCritbit cb p
+                then selectPrefixN mb p kr r
+                else selectPrefixN mb p kl l
+        | RNode(cb, _, ref) when (cb < pb) ->
+            match findPrefixCritbit mb p kl with
+            | None -> Root(kl, selectPrefixL pb (LVRef.load' ref))
+            | Some mb' -> // test if prefix differs before opening RNode
+                if mb' < cb then Empty else 
+                selectPrefixN mb' p kl (LVRef.load' ref)
+        | _ ->
+            let prefixMatch = Option.isNone (findPrefixCritbit mb p kl)
+            if prefixMatch then Root(kl,node) else Empty
 
     /// Filter a tree to just keys matching a specific prefix.
     let selectPrefix (p:ByteString) (t:Tree<'V>) : Tree<'V> =
         match t with
+        | Root(kl,l) -> selectPrefixN 0 p kl l
         | Empty -> Empty
-        | Root(kl,l) ->
-            match findPrefixCritbit 0 p kl with
-            | None -> Root(kl, selectPrefixCB (9 * p.Length) l)
-            | Some ncb ->
-                if not (testCritbit ncb p) then Empty else
-                selectPrefixR ncb p l
 
-    // partition node assuming k > least-key at mcb.
-    let rec private partitionN (mcb:Critbit) (k:Key) (node:Node<'V>) : struct(Node<'V> * Tree<'V>) =
+    // partition node assuming k > least-key at mb.
+    let rec private partitionN (mb:Critbit) (k:Key) (node:Node<'V>) : struct(Node<'V> * Tree<'V>) =
         match node with
-        | INode(cb, l, kr, r) ->
-            if(mcb > cb) then // split left node after cb
-                let struct(ll, lr) = partitionN mcb k l
-                let rr = unionF cb lr (Root(kr,r))
+        | INode(cb, l, kr, r) when (mb >= cb) ->
+            if(mb > cb) then // split left node after cb
+                let struct(ll, lr) = partitionN mb k l
+                let rr = 
+                    match lr with
+                    | Empty -> Root(kr,r)
+                    | Root(kl',l') -> Root(kl', INode(cb, l', kr, r))
                 struct(ll,rr)
-            elif (mcb < cb) then // full node is in left
-                struct(node, Empty)
-            else // divide the node
+            else // divide right node
                 assert(testCritbit cb k)
                 match findCritbit (1+cb) k kr with
-                | None -> struct(l, Root(kr,r)) //
-                | Some ncb ->
-                    if not (testCritbit ncb k) then struct(l, Root(kr,r)) else
-                    let struct(rl,rr) = partitionN ncb k r
+                | Some mb' when testCritbit mb' k ->
+                    let struct(rl,rr) = partitionN mb' k r
                     let ll = INode(cb, l, kr, rl)
                     struct(ll,rr)
-        | RNode (_, ref) -> partitionN mcb k (LVRef.load ref)
-        | Leaf _ -> struct(node, Empty)
-            
+                | _ -> struct(l, Root(kr,r)) 
+        | RNode (cb, _, ref) when (mb >= cb) -> 
+            partitionN mb k (LVRef.load' ref)
+        | _ -> struct(node, Empty) // all keys are less than k
 
     /// Partition a tree such that all keys strictly less than the
     /// given key are in the left tree, and all remaining keys are
@@ -569,12 +541,10 @@ module CBTree =
         | Empty -> (Empty, Empty)
         | Root(kl, node) ->
             match findCritbit 0 k kl with
-            | None -> (Empty, t)
-            | Some cb ->
-                // if k is less than kl, entire tree in left
-                if not (testCritbit cb k) then (Empty, t) else
-                let struct(l, r) = partitionN cb k node
+            | Some mb when testCritbit mb k -> // kl < k
+                let struct(l, r) = partitionN mb k node
                 (Root(kl,l), r)
+            | _ -> (Empty, t) // kl >= k
 
     /// Value differences relative to a pair of trees
     type VDiff<'V> =
@@ -598,7 +568,7 @@ module CBTree =
         let rec stepV (s:Stack<'V>) (n:Node<'V>) : struct(Stack<'V> * 'V) =
             match n with
             | INode (_, l, kr, r) -> stepV ((kr,r)::s) l
-            | RNode (_, ref) -> stepV s (LVRef.load ref)
+            | RNode (_, _, ref) -> stepV s (LVRef.load ref)
             | Leaf v -> struct(s,v)
 
         // utility class, mostly for the equality constraint
@@ -642,10 +612,14 @@ module CBTree =
                 | (_, INode (_,nr',kr,r)) -> 
                     let sr' = ((kr,r)::sr)
                     x.StepDiffN k nl sl nr' sr'
-                | (RNode (szl,refl), RNode (szr,refr)) ->
-                    if ((szl = szr) && (refl.ID = refr.ID)) then
-                        x.StepDiff sl sr // skip equivalent subtrees
-                    elif (szl > szr) then
+                | (RNode (cbl,szl,refl), RNode (cbr,szr,refr)) ->
+                    // While comparing critbit and size isn't strictly needed,
+                    // it's preferable to short-circuit BEFORE comparing ID.
+                    // Use of ID with LVRef forces stowage of the tree data.
+                    let eqNodes = (cbl = cbr) && (szl = szr) && (refl.ID = refr.ID)
+                    if eqNodes then // skip equivalent subtrees
+                        x.StepDiff sl sr 
+                    elif (cbl < cbr) then // open node closest to root
                         let nl' = LVRef.load refl
                         x.StepDiffN k nl' sl nr sr
                     else

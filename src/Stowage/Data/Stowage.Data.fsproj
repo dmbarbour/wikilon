@@ -12,7 +12,7 @@
     <Compile Include="Measured.fs" />
     <Compile Include="Compacting.fs" />
     <Compile Include="CritbitTree.fs" />
-    <Compile Include="LSMTree.fs" />
+    <!-- <Compile Include="LSMTree.fs" /> -->
     <Compile Include="Monoid.fs" />
     <Compile Include="FingerTree.fs" />
     <Compile Include="Seq.fs" />
