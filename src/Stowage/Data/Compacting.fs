@@ -8,6 +8,16 @@ open Data.ByteString
 type Compacting<'V, 'M when 'V :> IMeasured<'M>> =
     | Local of 'V
     | Remote of 'M * LVRef<'V>
+    interface IMeasured<'M> with
+        member this.Measure =
+            match this with
+            | Local v -> (v :> IMeasured<'M>).Measure
+            | Remote (m,_) -> m
+
+// I was originally trying to use this for trees, etc.
+// sadly, it's a bit difficult to use this for recursive types
+// when it comes time to construct a codec. But it's still
+// reasonable for some flat types.
 
 module Compacting =
     let cLocal = byte 'L'

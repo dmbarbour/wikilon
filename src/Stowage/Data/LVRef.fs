@@ -38,6 +38,9 @@ module LVRef =
     /// to disk. If we cache loads, we simplify logic for lookup-modify
     /// operations. It doesn't take much latency for significant benefits.
     ///
+    /// As a minor added benefit, latency for stowage simplifies parallel
+    /// evaluation of the serialization and compaction work. 
+    ///
     /// Note: use of the VRef or ID properties will force initial stowage
     /// of the Ref, but won't hinder further caching. Comparisons and 
     /// serializations tend to use the ID.

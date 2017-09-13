@@ -206,7 +206,37 @@ module CBTree =
         | Root _ -> false
     let inline singleton (k : Key) (v : 'V) : Tree<'V> = Root (k, Leaf v)
 
-    // here 'mb' is the first potential unmatched critbit;
+    // obtain value associated with least-key
+    let rec private getLKV (node:Node<'V>) : 'V =
+        match node with
+        | INode (_, l, _, _) -> getLKV l
+        | RNode (_, _, ref) -> getLKV (LVRef.load ref)
+        | Leaf v -> v
+
+    // here 'mb' is the first potential unmatched critbit
+    let rec private tryFindN (mb:Critbit) (k:Key) (kl:Key) (node:Node<'V>) : 'V option =
+        match node with
+        | INode (cb, l, kr, r) ->
+            if testCritbit cb k
+               then tryFindN mb k kr r
+               else tryFindN mb k kl l
+        | RNode (cb, _, ref) ->
+            match findCritbit mb k kl with
+            | None -> Some (getLKV (LVRef.load ref))
+            | Some mb' ->
+                let stop = (mb' < cb) || (testCritbit mb' kl)
+                if stop then None else
+                tryFindN mb' k kl (LVRef.load ref)
+        | Leaf v ->
+            let keysMatch = Option.isNone (findCritbit mb k kl)
+            if keysMatch then Some v else None
+
+    /// Lookup value (if any) associated with a key.
+    let tryFind (k:Key) (t:Tree<'V>) : 'V option =
+        match t with
+        | Root (kl,node) -> tryFindN 0 k kl node
+        | Empty -> None
+
     // it is only when comparing partial keys at Leaf or RNode
     let rec private containsKeyN (mb:Critbit) (k:Key) (kl:Key) (node:Node<_>) : bool =
         match node with
@@ -218,7 +248,8 @@ module CBTree =
             match findCritbit mb k kl with
             | None -> true // least-key matches, no lookup needed
             | Some mb' ->
-                if (mb' < cb) then false else
+                let stop = (mb' < cb) || (testCritbit mb' kl)
+                if stop then false else
                 containsKeyN mb' k kl (LVRef.load ref)
         | Leaf _ -> Option.isNone (findCritbit mb k kl)
 
@@ -228,35 +259,6 @@ module CBTree =
         match t with
         | Root (kl,n) -> containsKeyN 0 k kl n
         | Empty -> false
-
-    // obtain value associated with least-key
-    let rec private getLKV (node:Node<'V>) : 'V =
-        match node with
-        | INode (_, l, _, _) -> getLKV l
-        | RNode (_, _, ref) -> getLKV (LVRef.load ref)
-        | Leaf v -> v
-
-    let rec private tryFindN (mb:Critbit) (k:Key) (kl:Key) (node:Node<'V>) : 'V option =
-        match node with
-        | INode (cb, l, kr, r) ->
-            if testCritbit cb k
-               then tryFindN mb k kr r
-               else tryFindN mb k kl l
-        | RNode (cb, _, ref) ->
-            match findCritbit mb k kl with
-            | None -> Some (getLKV (LVRef.load ref))
-            | Some mb' ->
-                if (mb' < cb) then None else
-                tryFindN mb' k kl (LVRef.load ref)
-        | Leaf v ->
-            let keysMatch = Option.isNone (findCritbit mb k kl)
-            if keysMatch then Some v else None
-
-    /// Lookup value (if any) associated with a key.
-    let tryFind (k:Key) (t:Tree<'V>) : 'V option =
-        match t with
-        | Root (kl,node) -> tryFindN 0 k kl node
-        | Empty -> None
 
 
     /// Find value associated with a key 
@@ -341,7 +343,8 @@ module CBTree =
             match findCritbit mb k kl with
             | None -> removeLKV (LVRef.load' ref)
             | Some mb' ->
-                if (mb' < cb) then Root(kl,node) else
+                let stop = (mb' < cb) || (testCritbit mb' kl)
+                if stop then Root(kl,node) else
                 removeN mb' k kl (LVRef.load' ref)
         | Leaf _ ->
             let keysMatch = Option.isNone (findCritbit mb k kl)
@@ -372,7 +375,8 @@ module CBTree =
         | RNode (cb,_,ref) -> 
             match findCritbit mb k kl with
             | Some mb' -> 
-                if mb' < cb then node else
+                let stop = (mb' < cb) || (testCritbit mb' kl)
+                if stop then node else
                 touchN mb' k kl (LVRef.load' ref)
             | None -> touchLKV (LVRef.load' ref)
         | Leaf _ -> node
@@ -498,7 +502,8 @@ module CBTree =
             match findPrefixCritbit mb p kl with
             | None -> Root(kl, selectPrefixL pb (LVRef.load' ref))
             | Some mb' -> // test if prefix differs before opening RNode
-                if mb' < cb then Empty else 
+                let stop = (mb' < cb) || (testCritbit mb' kl)
+                if stop then Empty else 
                 selectPrefixN mb' p kl (LVRef.load' ref)
         | _ ->
             let prefixMatch = Option.isNone (findPrefixCritbit mb p kl)

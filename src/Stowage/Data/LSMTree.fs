@@ -1,44 +1,38 @@
 namespace Stowage
 open Data.ByteString
 
-/// A Log Structured Merge (LSM) Tree modeled above Stowage
+/// A Log Structured Merge (LSM) Tree above Stowage
 ///
-/// An LSM-tree is essentially a key-value tree with a built-in buffer
-/// model. It is optimized for write-heavy processes. Recent updates
-/// are written near to the root of the tree. Some keys may be marked
-/// for deletion.
+/// The LSM-tree is essentially a key-value tree with buffered update.
+/// Recent updates are aggregated in memory and applied together. This
+/// is highly suitable for write-heavy processes or on-disk storage.
+/// Stowage is a form of on-disk storage and benefits from buffering.
 ///
-/// LSM-trees are especially suitable for on-disk storage because the 
-/// buffering reduces frequency and increases batch-size for on-disk
-/// updates, and potentially shares old structure for longer. Although
-/// designed for filesystems, this also works very nicely with Stowage.
+/// The LSM-tree has some disadvantages, e.g. computing tree size is
+/// non-trivial, and we potentially preserve multiple versions of a
+/// value for a key.
 ///
-/// There are costs to this design in the form of larger lookup times
-/// and greater overhead to store older versions for a key.
+/// To simplify the logic, this LSM-tree variant buffers only `add`
+/// updates. Key removal is not buffered. Clients can work around
+/// this a bit by use of logical deletion (adding an Empty or None).
+/// But even so, key removal shouldn't be much worse than it would
+/// be for Stowage.CBTree.
 module LSMTree =
+
     type Key = ByteString
-    type Critbit = CBTree.Critbit
-    let inline testCritbit cb k = CBTree.testCritbit cb k
-    let inline findCritbit cbMin a b = CBTree.findCritbit cbMin a b
-    type TreeSize = uint64
+    type Critbit = int
+    let inline findCritbit cbMin a b = Data.ByteString.Tree.findCritbit cbMin a b
+    let inline testCritbit cb k = Data.ByteString.Tree.testCritbit cb k
 
-    /// An update buffer is currently encoded as a critbit tree, with
-    /// value None for deletion and Some for insertion. However, this
-    /// CBTree is fully in memory, and will be serialized as an array.
-    type Updates<'V> = CBTree<'V option>
-
-    /// I track whether we have dropped the least-key for an RNode.
-    /// Updates on an RNode should all be to the right of this least
-    /// key, such that we only update keys represented within the
-    /// node. A least key update is handled via new internal node.
-    type DropKL = bool
-    let inline private addUpd k vOpt u = CBTree.add k vOpt u
+    // Buffer of updates (adds only!), represented in-memory.    
+    // On disk we'll use a key-value array.
+    type Updates<'V> = Data.ByteString.Tree<'V>
 
     type Node<'V> =
         | Leaf of 'V
-        | INode of Critbit * Node<'V> * Key * Node<'V> 
-        | RNode of Critbit * Updates<'V> * DropKL * LVRef<Node<'V>>
-
+        | INode of Critbit * Node<'V> * Key * Node<'V>              // Inner Tree Node
+        | RNode of Critbit * LVRef<Node<'V>>                        // Remote INode
+        | UNode of Critbit * Updates<'V> * Key * LVRef<Node<'V>>    // RNode with Update
     type Tree<'V> =
         | Empty
         | Root of Key * Node<'V>
@@ -46,69 +40,192 @@ module LSMTree =
     let empty : Tree<_> = Empty
     let inline singleton (k:Key) (v:'V) : Tree<'V> = Root(k, Leaf v)
 
-    // without a Key in our root, our Add function may need to 
+    let inline private updTryFind k upd = 
+        Data.ByteString.Tree.tryFind k upd
 
-    let add (k:Key) (v:'V) (t:Tree<'V>) : Tree<'V> =
-        match t with
-        | Empty -> singleton k v
-        | Root n -> Root (addN k v n)
-
-    // update an existing least-key value
-    let rec private setLKV (kl:Key) (v:'V) (node:Node<'V>) : Node<'V> =
+    let rec private getLKV (k:Key) (node:Node<'V>) : 'V =
         match node with
-        | INode (cb, l, kr, r) -> 
-            let l' = setLKV kl v l
-            INode (cb, l', kr, r)
-        | RNode (upd, ref) ->
-            let upd' = 
-                match upd with
-                | None -> Some (CBTree.singleton kl (Some v), kl)
-                | Some (t,oldLK) -> Some (CBTree.add kl (Some v) t, oldLK)
-            RNode (upd',ref)
-        | Leaf _ -> Leaf v
-    
-    let rec private addLKV (ncb:Critbit) (kl0:Key) (k:Key) (v:'V) (node:Node<'V>) : Node<'V> =
-        match node with
-        | INode (cb, l, kr, r) when (cb < ncb) ->
-            assert(not (testCritbit cb kl0))
-            let l' = addLKV ncb kl0 k v l
-            INode (cb, l', kr, r) 
-        | RNode (upd, ref) -> 
-            let upd' =
-                match upd with
-                | None -> Some (CBTree.singleton k (Some v), kl0)
-                | Some(t,oldLK) -> Some (CBTree.add k (Some v) t, oldLK)
-            RNode (upd', ref) 
-        | _ ->
-            assert(testCritbit ncb kl0)
-            INode (ncb, Leaf v, kl, node)
+        | INode (_,l,_,_) -> getLKV k l
+        | Leaf v -> v
+        | RNode (_,ref) -> getLKV k (LVRef.load ref)
+        | UNode (_,upd,_,ref) ->
+            match updTryFind k upd with
+            | None -> getLKV k (LVRef.load ref)
+            | Some v -> v
 
-    // add or update key-value element somewhere to right of least-key
-    //  uses a critbit relative to least-key for efficient insertion
-    let rec private addRKV (mcb:Critbit) (kl:Key) (k:Key) (v:'V) (node:Node<'V>) : Node<'V> =
+    let rec private tryFindN (mb:Critbit) (k:Key) (kl:Key) (node:Node<'V>) : 'V option =
         match node with
         | INode (cb, l, kr, r) ->
-            if (cb < mcb) then // diff after node
-                assert(not (testCritbit cb k)) 
-                INode (cb, addRKV mcb kl k v l, kr, r) 
-            elif (cb > mcb) then // diff before node
-                assert(not (testCritbit mcb kr))
-                INode (mcb, node, k, Leaf v)
-            else // diff aligns with kr
-                assert(testCritbit cb k)
+            if testCritbit cb k 
+                then tryFindN mb k kr r
+                else tryFindN mb k kl l
+        | Leaf v ->
+            let keysMatch = Option.isNone (findCritbit mb k kl)
+            if keysMatch then Some v else None
+        | RNode (cb, ref) ->
+            match findCritbit mb k kl with
+            | None -> Some (getLKV kl (LVRef.load ref))
+            | Some mb' ->
+                let stop = (mb' < cb) || (testCritbit mb' kl)
+                if stop then None else
+                tryFindN mb' k kl (LVRef.load ref)
+        | UNode (cb, buff, kl0, ref) ->
+            let vInBuff = updTryFind k buff
+            if Option.isSome vInBuff then vInBuff else
+            match findCritbit mb k kl0 with
+            | None -> Some (getLKV kl0 (LVRef.load ref))
+            | Some mb' ->
+                let stop = (mb' < cb) || (testCritbit mb' kl0)
+                if stop then None else
+                tryFindN mb' k kl0 (LVRef.load ref)
+
+    let tryFind (k:Key) (t:Tree<'V>) : 'V option =
+        match t with
+        | Root (kl,n) -> tryFindN 0 k kl n
+        | Empty -> None
+
+    let find (k:Key) (t:Tree<'V>) : 'V =
+        match tryFind k t with
+        | Some v -> v
+        | None -> raise (System.Collections.Generic.KeyNotFoundException())
+        
+    let rec private containsKeyN mb k kl node =
+        match node with
+        | INode (cb, l, kr, r) ->
+            if testCritbit cb k 
+                then containsKeyN mb k kr r
+                else containsKeyN mb k kl l
+        | Leaf v -> Option.isNone (findCritbit mb k kl)
+        | RNode (cb, ref) ->
+            match findCritbit mb k kl with
+            | None -> true
+            | Some mb' ->
+                let stop = (mb' < cb) || (testCritbit mb' kl)
+                if stop then false else
+                containsKeyN mb' k kl (LVRef.load ref)
+        | UNode (cb, buff, kl0, ref) ->
+            let vInBuff = updTryFind k buff
+            if Option.isSome vInBuff then true else
+            match findCritbit mb k kl0 with
+            | None -> true
+            | Some mb' ->
+                let stop = (mb' < cb) || (testCritbit mb' kl0)
+                if stop then false else
+                containsKeyN mb' k kl0 (LVRef.load ref)
+
+    let containsKey (k:Key) (t:Tree<'V>) : bool =
+        match t with
+        | Root (kl,n) -> containsKeyN 0 k kl n
+        | Empty -> false
+
+
+
+(*
+
+
+
+    // obtain value associated with least-key
+    let rec private getLKV (k:Key) (node:Node<'V>) : 'V =
+        match node with
+        | INode (_, l, _, _) -> getLKV l
+        | RNode (_, upd, ref) -> 
+            match upd with
+            | Some (buff,_) ->
+                let valInBuff = Data.ByteString.tree
+
+getLKV (LVRef.load ref)
+        | Leaf v -> v
+
+    let rec private tryFindN (mb:Critbit) (k:Key) (kl:Key) (node:Node<'V>) : 'V option =
+        match node with
+        | INode (cb, l, kr, r) ->
+            if testCritbit cb k
+               then tryFindN mb k kr r
+               else tryFindN mb k kl l
+        | RNode (cb, _, ref) ->
+            match findCritbit mb k kl with
+            | None -> Some (getLKV (LVRef.load ref))
+            | Some mb' ->
+                if (mb' < cb) then None else
+                tryFindN mb' k kl (LVRef.load ref)
+        | Leaf v ->
+            let keysMatch = Option.isNone (findCritbit mb k kl)
+            if keysMatch then Some v else None
+
+    /// Lookup value (if any) associated with a key.
+    let tryFind (k:Key) (t:Tree<'V>) : 'V option =
+        match t with
+        | Root (kl,node) -> tryFindN 0 k kl node
+        | Empty -> None
+
+
+
+    // here 'mb' is the first potential unmatched critbit;
+    // it is only when comparing partial keys at Leaf or RNode
+    let rec private containsKeyN (mb:Critbit) (k:Key) (kl:Key) (node:Node<_>) : bool =
+        match node with
+        | INode (cb, l, kr, r) ->
+            if testCritbit cb k
+               then containsKeyN mb k kr r
+               else containsKeyN mb k kl l
+        | RNode (cb, _, ref) ->
+            match findCritbit mb k kl with
+            | None -> true // least-key matches, no lookup needed
+            | Some mb' ->
+                if (mb' < cb) then false else
+                containsKeyN mb' k kl (LVRef.load ref)
+        | Leaf _ -> Option.isNone (findCritbit mb k kl)
+
+    /// Test whether a value is contained within a tree.
+    /// This aims to avoid opening RNodes where feasible.
+    let containsKey (k:Key) (t:Tree<_>) : bool = 
+        match t with
+        | Root (kl,n) -> containsKeyN 0 k kl n
+        | Empty -> false
+
+
+    // update existing least-key value
+    let rec private setLKV (k:Key) (v:'V) (node:Node<'V>) : Node<'V> =
+        match node with
+        | INode (cb, l, kr, r) -> 
+            let l' = setLKV k v l
+            INode (cb, l', kr, r)
+        | RNode (cb, upd, ref) -> 
+            let upd' = updAdd k k v upd
+            RNode (cb, upd', ref)
+        | Leaf _ -> Leaf v
+    
+    let rec private addLKV (mb:Critbit) (kl0:Key) (k:Key) (v:'V) (node:Node<'V>) : Node<'V> =
+        match node with
+        | INode (cb, l, kr, r) when (mb >= cb) ->
+            assert(mb > cb) // otherwise not a new least-key!
+            let l' = addLKV mb kl0 k v l
+            INode (cb, l', kr, r) 
+        | RNode (cb, upd, ref) when (mb >= cb) -> 
+            assert(mb > cb) // otheriwse not a new least-key
+            let upd' = updAdd kl0 k v upd
+            RNode (cb, upd', ref)
+        | _ ->
+            assert(testCritbit mb kl0)
+            INode (mb, Leaf v, kl0, node)
+
+    let rec private addRKV (mb:Critbit) (kl:Key) (k:Key) (v:'V) (node:Node<'V>) : Node<'V> =
+        match node with
+        | INode (cb, l, kr, r) when (mb >= cb) ->
+            if (mb > cb) then
+                let l' = addRKV mb kl k v l
+                INode (cb, l', kr, r)
+            else
                 match findCritbit (1+cb) k kr with
-                | Some ncb ->
-                    if testCritbit ncb k
-                        then INode (cb, l, kr, addRKV ncb kr k v r)
-                        else INode (cb, l, k, addLKV ncb kr v r)
-                | None -> INode (cb, l, kr, setLKV kr v r) // update at kr
-        | RNode (upd, ref) -> 
-            let upd' = 
-                match upd with
-                | None -> Some (CBTree.singleton k (Some v), kl)
-                | Some (t,oldLK) -> Some (CBTree.add k (Some v) t, oldLK)
-            RNode (upd', ref)
-        | Leaf _ -> INode (mcb, node, k, Leaf v)
+                | Some mb' -> 
+                    if testCritbit mb' k 
+                        then INode (cb, l, kr, addRKV mb' kr k v r)
+                        else INode (cb, l, k,  addLKV mb' kr k v r)
+                | None -> INode (cb, l, kr, setLKV kr v node)
+        | RNode (cb, upd, ref) when (mb >= cb) ->
+            let upd' = updAdd kl k v upd
+            RNode (cb, upd', ref)
+        | _ -> INode (mb, node, k, Leaf v)
 
     let add (k:Key) (v:'V) (t:Tree<'V>) =
         match t with
@@ -117,7 +234,7 @@ module LSMTree =
             | Some cb ->
                 if testCritbit cb k
                     then Root(tk, addRKV cb tk k v n)
-                    else Root(k, addLKV cb tk k v n)
+                    else Root(k,  addLKV cb tk k v n)
             | None -> Root (tk, setLKV tk v n)
         | Empty -> singleton k v
 
@@ -143,9 +260,9 @@ module LSMTree =
             else 
                 assert(testCritbit cb k)
                 match findCritbit (1+cb) k kr with
-                | Some ncb -> 
-                    if not (testCritbit ncb k) then node else
-                    INode (cb, l, kr, removeRKV ncb k r)
+                | Some mb -> 
+                    if not (testCritbit mb k) then node else
+                    INode (cb, l, kr, removeRKV mb k r)
                 | None -> // match kr, so remove it.
                     match removeLKV r with
                     | Empty -> l 
@@ -271,3 +388,5 @@ module LSMTree =
                         struct(RNode(None,ref), 2+EncLVRef.size) // R={hash}
             }
                  
+
+*)
