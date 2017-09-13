@@ -21,18 +21,18 @@ module LSMTree =
 
     type Key = ByteString
     type Critbit = int
-    let inline findCritbit cbMin a b = Data.ByteString.Tree.findCritbit cbMin a b
-    let inline testCritbit cb k = Data.ByteString.Tree.testCritbit cb k
+    let inline findCritbit cbMin a b = BTree.findCritbit cbMin a b
+    let inline testCritbit cb k = BTree.testCritbit cb k
 
     // Buffer of updates (adds only!), represented in-memory.    
     // On disk we'll use a key-value array.
-    type Updates<'V> = Data.ByteString.Tree<'V>
+    type Updates<'V> = BTree<'V>
 
     type Node<'V> =
         | Leaf of 'V
         | INode of Critbit * Node<'V> * Key * Node<'V>              // Inner Tree Node
         | RNode of Critbit * LVRef<Node<'V>>                        // Remote INode
-        | UNode of Critbit * Updates<'V> * Key * LVRef<Node<'V>>    // RNode with Update
+        | UNode of Key * Updates<'V> * Critbit * LVRef<Node<'V>>    // RNode + Updates
     type Tree<'V> =
         | Empty
         | Root of Key * Node<'V>
@@ -40,8 +40,7 @@ module LSMTree =
     let empty : Tree<_> = Empty
     let inline singleton (k:Key) (v:'V) : Tree<'V> = Root(k, Leaf v)
 
-    let inline private updTryFind k upd = 
-        Data.ByteString.Tree.tryFind k upd
+    let inline private updTryFind k upd = BTree.tryFind k upd
 
     let rec private getLKV (k:Key) (node:Node<'V>) : 'V =
         match node with
@@ -66,10 +65,11 @@ module LSMTree =
             match findCritbit mb k kl with
             | None -> Some (getLKV kl (LVRef.load ref))
             | Some mb' ->
+                // stop if diff in prefix or if smaller than least-key
                 let stop = (mb' < cb) || (testCritbit mb' kl)
                 if stop then None else
                 tryFindN mb' k kl (LVRef.load ref)
-        | UNode (cb, buff, kl0, ref) ->
+        | UNode (kl0, buff, cb, ref) ->
             let vInBuff = updTryFind k buff
             if Option.isSome vInBuff then vInBuff else
             match findCritbit mb k kl0 with
@@ -79,11 +79,14 @@ module LSMTree =
                 if stop then None else
                 tryFindN mb' k kl0 (LVRef.load ref)
 
+    /// Find some value associated with a key, or return none.
     let tryFind (k:Key) (t:Tree<'V>) : 'V option =
         match t with
         | Root (kl,n) -> tryFindN 0 k kl n
         | Empty -> None
 
+    /// Find value associated with key 
+    ///   or raise `System.Collections.Generic.KeyNotFoundException()`.
     let find (k:Key) (t:Tree<'V>) : 'V =
         match tryFind k t with
         | Some v -> v
@@ -98,12 +101,12 @@ module LSMTree =
         | Leaf v -> Option.isNone (findCritbit mb k kl)
         | RNode (cb, ref) ->
             match findCritbit mb k kl with
-            | None -> true
+            | None -> true 
             | Some mb' ->
                 let stop = (mb' < cb) || (testCritbit mb' kl)
                 if stop then false else
                 containsKeyN mb' k kl (LVRef.load ref)
-        | UNode (cb, buff, kl0, ref) ->
+        | UNode (kl0, buff, cb, ref) ->
             let vInBuff = updTryFind k buff
             if Option.isSome vInBuff then true else
             match findCritbit mb k kl0 with
@@ -113,75 +116,22 @@ module LSMTree =
                 if stop then false else
                 containsKeyN mb' k kl0 (LVRef.load ref)
 
+    /// Test whether a tree contains a specific key.
     let containsKey (k:Key) (t:Tree<'V>) : bool =
         match t with
         | Root (kl,n) -> containsKeyN 0 k kl n
         | Empty -> false
 
-
-
 (*
-
-
-
-    // obtain value associated with least-key
-    let rec private getLKV (k:Key) (node:Node<'V>) : 'V =
+    // update existing least-key's value
+    let rec private setLKV (kl:Key) (v:'V) (node:Node<'V>) : Node<'V> =
         match node with
-        | INode (_, l, _, _) -> getLKV l
-        | RNode (_, upd, ref) -> 
-            match upd with
-            | Some (buff,_) ->
-                let valInBuff = Data.ByteString.tree
+        | INode (cb, l, kr, r) -> INode (cb, setLKV kl v l, kr, r)
+        | Leaf _ -> Leaf v
+        | RNode (cb, ref) -> 
+            let buff = Data.ByteString.Tree.singleton 
+UNode (kl, 
 
-getLKV (LVRef.load ref)
-        | Leaf v -> v
-
-    let rec private tryFindN (mb:Critbit) (k:Key) (kl:Key) (node:Node<'V>) : 'V option =
-        match node with
-        | INode (cb, l, kr, r) ->
-            if testCritbit cb k
-               then tryFindN mb k kr r
-               else tryFindN mb k kl l
-        | RNode (cb, _, ref) ->
-            match findCritbit mb k kl with
-            | None -> Some (getLKV (LVRef.load ref))
-            | Some mb' ->
-                if (mb' < cb) then None else
-                tryFindN mb' k kl (LVRef.load ref)
-        | Leaf v ->
-            let keysMatch = Option.isNone (findCritbit mb k kl)
-            if keysMatch then Some v else None
-
-    /// Lookup value (if any) associated with a key.
-    let tryFind (k:Key) (t:Tree<'V>) : 'V option =
-        match t with
-        | Root (kl,node) -> tryFindN 0 k kl node
-        | Empty -> None
-
-
-
-    // here 'mb' is the first potential unmatched critbit;
-    // it is only when comparing partial keys at Leaf or RNode
-    let rec private containsKeyN (mb:Critbit) (k:Key) (kl:Key) (node:Node<_>) : bool =
-        match node with
-        | INode (cb, l, kr, r) ->
-            if testCritbit cb k
-               then containsKeyN mb k kr r
-               else containsKeyN mb k kl l
-        | RNode (cb, _, ref) ->
-            match findCritbit mb k kl with
-            | None -> true // least-key matches, no lookup needed
-            | Some mb' ->
-                if (mb' < cb) then false else
-                containsKeyN mb' k kl (LVRef.load ref)
-        | Leaf _ -> Option.isNone (findCritbit mb k kl)
-
-    /// Test whether a value is contained within a tree.
-    /// This aims to avoid opening RNodes where feasible.
-    let containsKey (k:Key) (t:Tree<_>) : bool = 
-        match t with
-        | Root (kl,n) -> containsKeyN 0 k kl n
-        | Empty -> false
 
 
     // update existing least-key value
@@ -326,7 +276,7 @@ getLKV (LVRef.load ref)
 
         // heuristic size threshold for compaction of a node.
         // in this case, I'm favoring relatively large nodes.
-        let compactThreshold : int = 30000
+        let compactThreshold : int = 14000
 
         let inline buffToArray buff = Array.ofSeq (CBTree.toSeq buff)
         let inline arrayToBuff arr = 

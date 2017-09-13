@@ -67,4 +67,18 @@ module Codec =
     let inline load (c:Codec<'T>) (db:DB) (h:RscHash) : 'T =
         readBytes c db (loadRscDB db h)
 
+    /// Encode 'Val via 'Rep. 
+    ///
+    /// Very convenient for codec combinators.
+    ///
+    /// It should be the case that get and set compose to identity.
+    let lens (cRep : Codec<'Rep>) (get : 'Rep -> 'Val) (set : 'Val -> 'Rep) =
+        { new Codec<'Val> with
+            member __.Write v dst = cRep.Write (set v) dst
+            member __.Read db src = get (cRep.Read db src)
+            member __.Compact db v = 
+                let struct(rep, szRep) = cRep.Compact db (set v)
+                struct(get rep, szRep)
+        } 
+
 

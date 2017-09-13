@@ -38,9 +38,6 @@ module LVRef =
     /// to disk. If we cache loads, we simplify logic for lookup-modify
     /// operations. It doesn't take much latency for significant benefits.
     ///
-    /// As a minor added benefit, latency for stowage simplifies parallel
-    /// evaluation of the serialization and compaction work. 
-    ///
     /// Note: use of the VRef or ID properties will force initial stowage
     /// of the Ref, but won't hinder further caching. Comparisons and 
     /// serializations tend to use the ID.
@@ -133,7 +130,7 @@ module LVRef =
                 { Frame = new Frame(); Period = p  } 
                 then agent.Begin()
 
-        let agent = new Agent(60)
+        let agent = new Agent(100)
 
         let inline delay (action:unit -> unit) : unit =
             agent.Add (action)
@@ -177,7 +174,7 @@ module LVRef =
         refCacheDelay force ref
         ref
 
-    let private cacheLoad (ref:Ref<'V>) : 'V =
+    let private cachedLoad (ref:Ref<'V>) : 'V =
         lock ref (fun () ->
             match ref.S with
             | Stowed vref ->
@@ -195,10 +192,13 @@ module LVRef =
         ref.T <- (1 + ref.T)
 
     /// Load a value, caching it briefly for further lookups.
+    ///
+    /// If the value was already cached, this extends the lifespan
+    /// of the cached value by another latency cycle.
     let load (ref:Ref<'V>) : 'V =
         touch ref
         match ref.S with
-        | Stowed _ -> cacheLoad ref
+        | Stowed _ -> cachedLoad ref
         | Cached (_,v) -> v
         | Stowing (_,_,v) -> v
 
@@ -211,7 +211,6 @@ module LVRef =
         | Stowed vref -> VRef.load vref
         | Cached (_,v) -> v
         | Stowing (_,_,v) -> v
-
 
 type LVRef<'V> = LVRef.Ref<'V>
 

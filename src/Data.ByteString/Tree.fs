@@ -3,11 +3,11 @@ namespace Data.ByteString
 /// This is a lookup simple tree specialized for ByteString keys. 
 /// It is based on the Critbit tree.
 ///
-/// This is intended as an alternative to Map for ByteString. The
-/// disadvantage of Map is that it must compare from the start of
-/// a key in each comparison, resulting in redundant effort when
-/// large prefixes are shared between keys. A critbit tree avoids
-/// extra comparisons.
+/// This is intended as an alternative to Map for ByteString keys.
+/// Maps aren't optimal for large keys with shared prefixes since
+/// they must compare those prefixes redundantly. A critbit tree
+/// avoids this, and only looks at the necessary points in a key
+/// to distinguish them plus a final full-key comparison.
 module BTree =
 
     /// Keys in the Tree are short, simple ByteStrings.

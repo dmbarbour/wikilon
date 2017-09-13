@@ -197,36 +197,115 @@ module EncLVRef =
             member __.Compact _ ref = struct(ref, size)
         }
 
-module EncOption =
-    let cNil : byte  = 128uy // EncVarNat 0
-    let cSome : byte = 129uy // EncVarNat 1
-
-    let write (cV:Codec<'V>) (vOpt : 'V option) (dst:ByteDst) : unit =
-        match vOpt with
-        | None -> EncByte.write cNil dst
-        | Some v ->
-            EncByte.write cSome dst
-            cV.Write v dst
-
-    let read (cV:Codec<'V>) (db:DB) (src:ByteSrc) : 'V option =
-        let b0 = EncByte.read src
-        if(cNil = b0) then None 
-        elif(cSome <> b0) then raise ByteStream.ReadError 
-        else Some (cV.Read db src)
-
-    let compact (cV:Codec<'V>) (db:DB) (vOpt:'V option) : struct('V option * int) =
-        match vOpt with
-        | None -> struct(None, 1)
-        | Some v ->
-            let struct(v',szV) = cV.Compact db v
-            struct(Some v', 1+szV)
-
-    let codec (cV:Codec<'V>) =
-        { new Codec<'V option> with
-            member __.Write vOpt dst = write cV vOpt dst
-            member __.Read db src = read cV db src
-            member __.Compact db vOpt = compact cV db vOpt
+module EncPair =
+    /// Codec combinator for structural pair.
+    let codec' (cA : Codec<'A>) (cB : Codec<'B>) =
+        { new Codec<struct('A * 'B)> with
+            member __.Write (struct(a,b)) dst =
+                cA.Write a dst
+                cB.Write b dst
+            member __.Read db src =
+                let a = cA.Read db src
+                let b = cB.Read db src
+                struct(a,b)
+            member __.Compact db (struct(a,b)) =
+                let struct(a',szA) = cA.Compact db a
+                let struct(b',szB) = cB.Compact db b
+                struct(struct(a',b'),(szA + szB))
         }
+
+    /// Codec combinator for a pair.
+    let codec (cA : Codec<'A>) (cB : Codec<'B>) =
+        let get (struct(a,b)) = (a,b)
+        let set ((a,b)) = struct(a,b)
+        Codec.lens (codec' cA cB) get set
+
+module EncTriple =
+
+    /// Codec combinator for structural triple.
+    let codec' (cA : Codec<'A>) (cB : Codec<'B>) (cC : Codec<'C>) =
+        { new Codec<struct('A * 'B * 'C)> with
+            member __.Write (struct(a,b,c)) dst =
+                cA.Write a dst
+                cB.Write b dst
+                cC.Write c dst
+            member __.Read db src =
+                let a = cA.Read db src
+                let b = cB.Read db src
+                let c = cC.Read db src
+                struct(a,b,c)
+            member __.Compact db (struct(a,b,c)) =
+                let struct(a',szA) = cA.Compact db a
+                let struct(b',szB) = cB.Compact db b
+                let struct(c',szC) = cC.Compact db c
+                struct(struct(a',b',c'),(szA + szB + szC))
+        }
+
+    /// Codec combinator for a normal triple.
+    let codec (cA : Codec<'A>) (cB : Codec<'B>) (cC : Codec<'C>) =
+        let get (struct(a,b,c)) = (a,b,c)
+        let set ((a,b,c)) = struct(a,b,c)
+        Codec.lens (codec' cA cB cC) get set
+
+module EncQuad = 
+
+    /// Codec combinator for a structural 4-tuple.
+    let codec' (cA:Codec<'A>) (cB:Codec<'B>) (cC:Codec<'C>) (cD:Codec<'D>) =
+        { new Codec<struct('A * 'B * 'C * 'D)> with
+            member __.Write (struct(a,b,c,d)) dst =
+                cA.Write a dst
+                cB.Write b dst
+                cC.Write c dst
+                cD.Write d dst
+            member __.Read db src =
+                let a = cA.Read db src
+                let b = cB.Read db src
+                let c = cC.Read db src
+                let d = cD.Read db src
+                struct(a,b,c,d)
+            member __.Compact db (struct(a,b,c,d)) =
+                let struct(a',szA) = cA.Compact db a
+                let struct(b',szB) = cB.Compact db b
+                let struct(c',szC) = cC.Compact db c
+                let struct(d',szD) = cD.Compact db d
+                struct(struct(a',b',c',d'),(szA + szB + szC + szD))
+        }
+
+    /// Codec combinator for a 4-tuple.
+    let codec cA cB cC cD =
+        let get (struct(a,b,c,d)) = (a,b,c,d)
+        let set ((a,b,c,d)) = struct(a,b,c,d)
+        Codec.lens (codec' cA cB cC cD) get set
+
+
+module EncOpt =
+    /// Codec combinator for an Option type with choice of prefix.
+    let codecP (bNone:byte) (bSome:byte) (cV:Codec<'V>) =
+        assert(bSome <> bNone)
+        { new Codec<'V option> with
+            member __.Write vOpt dst =
+                match vOpt with
+                | Some v ->
+                    ByteStream.writeByte bSome dst
+                    cV.Write v dst
+                | None -> ByteStream.writeByte bNone dst
+            member __.Read db src =
+                let b0 = ByteStream.readByte src
+                if(b0 = bNone) then None else
+                if(b0 <> bSome) then raise ByteStream.ReadError else
+                Some (cV.Read db src)
+            member __.Compact db vOpt =
+                match vOpt with
+                | Some v ->
+                    let struct(v',szV) = cV.Compact db v
+                    struct(Some v', 1+szV)
+                | None -> struct(None,1)
+        }
+
+    /// Codec combinator for option type. 
+    ///  Default discriminators based on VarNat encoding of 0,1
+    let inline codec cV = codecP (128uy) (129uy) cV
+
 
 /// Arrays are encoded with size (as varnat) followed by every element
 /// in sequence without separators. It's assumed that the elements are
@@ -255,8 +334,15 @@ module EncArray =
     /// copying compact
     let inline compact cV db arr = compact' cV db (Array.copy arr)
 
-    // NOTE: the Compact operation in this case is an in-place update!
-    //   you may need to copy the array if that isn't your intention.
+    /// Codec with in-place compaction.
+    let codec' (cV:Codec<'V>) =
+        { new Codec<'V array> with
+            member __.Write arr dst = write cV arr dst
+            member __.Read db src = read cV db src
+            member __.Compact db arr = compact' cV db arr
+        }
+
+    /// Codec with copying compaction.
     let codec (cV:Codec<'V>) =
         { new Codec<'V array> with
             member __.Write arr dst = write cV arr dst
@@ -265,56 +351,27 @@ module EncArray =
         }
 
 
-/// Encode list via List.toArray. Consider `Codec.list` if you want
-/// list via option.
+/// Encode a list via array.
 module EncList =
-    let inline write (cV:Codec<'V>) (lst: 'V list) (dst:ByteDst) : unit =
-        EncArray.write cV (List.toArray lst) dst
-    let inline read (cV:Codec<'V>) (db:DB) (src:ByteSrc) : 'V list =
-        List.ofArray (EncArray.read cV db src)
-    let inline compact (cV:Codec<'V>) (db:DB) (lst : 'V list) =
-        let struct(arr,szA) = EncArray.compact' cV db (List.toArray lst)
-        struct(List.ofArray arr, szA)
     let codec (cV:Codec<'V>) =
-        { new Codec<'V list> with
-            member __.Write lst dst = write cV lst dst
-            member __.Read db src = read cV db src
-            member __.Compact db lst = compact cV db lst
-        }
+        Codec.lens (EncArray.codec' cV) (List.ofArray) (List.toArray)
 
-module EncPair =
-    let codec (cA:Codec<'A>) (cB:Codec<'B>) =
-        { new Codec<'A * 'B> with
-            member __.Write ((a,b)) dst =
-                cA.Write a dst
-                cB.Write b dst
-            member __.Read db src =
-                let a = cA.Read db src
-                let b = cB.Read db src
-                (a,b)
-            member __.Compact db ((a,b)) =
-                let struct(a',szA) = cA.Compact db a
-                let struct(b',szB) = cB.Compact db b
-                struct((a',b'),(szA + szB))
-        }
+/// Encode a sequence via array.
+module EncSeq =
+    let codec (cV:Codec<'V>) =
+        Codec.lens (EncArray.codec' cV) (Seq.ofArray) (Seq.toArray)
 
-module EncTriple =
-    let codec (cA:Codec<'A>) (cB:Codec<'B>) (cC:Codec<'C>) =
-        { new Codec<'A * 'B * 'C> with
-            member __.Write ((a,b,c)) dst =
-                cA.Write a dst
-                cB.Write b dst
-                cC.Write c dst
-            member __.Read db src =
-                let a = cA.Read db src
-                let b = cB.Read db src
-                let c = cC.Read db src
-                (a,b,c)
-            member __.Compact db ((a,b,c)) =
-                let struct(a',szA) = cA.Compact db a
-                let struct(b',szB) = cB.Compact db b
-                let struct(c',szC) = cC.Compact db c
-                struct((a',b',c'),(szA + szB + szC))
-        }
+/// Encode a map via array.
+module EncMap =
+    let codec (cK:Codec<'K>) (cV:Codec<'V>) =
+        let cKV = EncPair.codec cK cV
+        Codec.lens (EncArray.codec' cKV) (Map.ofArray) (Map.toArray)
+
+/// Encode a BTree via array.
+module EncBTree =
+    let codec (cV:Codec<'V>) =
+        let cKV = EncPair.codec (EncBytes.codec) cV
+        Codec.lens (EncArray.codec' cKV) (BTree.ofArray) (BTree.toArray)
+
 
 
