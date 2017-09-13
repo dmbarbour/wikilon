@@ -8,7 +8,7 @@ namespace Data.ByteString
 /// a key in each comparison, resulting in redundant effort when
 /// large prefixes are shared between keys. A critbit tree avoids
 /// extra comparisons.
-module Tree =
+module BTree =
 
     /// Keys in the Tree are short, simple ByteStrings.
     ///
@@ -338,5 +338,5 @@ module Tree =
         toSeq t |> Seq.filter (fun (k,v) -> fn k v) |> ofSeq
     
 
-type Tree<'V> = Tree.Tree<'V>
+type BTree<'V> = BTree.Tree<'V>
 
