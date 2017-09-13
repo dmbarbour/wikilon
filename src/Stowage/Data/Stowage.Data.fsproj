@@ -9,10 +9,10 @@
     <Compile Include="VRef.fs" />
     <Compile Include="LVRef.fs" />
     <Compile Include="CommonEncoders.fs" />
-    <Compile Include="Measured.fs" />
-    <Compile Include="Compacting.fs" />
+    <Compile Include="CVRef.fs" />
     <Compile Include="CritbitTree.fs" />
     <Compile Include="LSMTree.fs" />
+    <Compile Include="Measured.fs" />
     <Compile Include="Monoid.fs" />
     <Compile Include="FingerTree.fs" />
     <Compile Include="Seq.fs" />

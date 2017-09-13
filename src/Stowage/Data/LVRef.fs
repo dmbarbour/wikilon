@@ -88,71 +88,28 @@ module LVRef =
 
         internal new (s:State<'V>) = { S = s; T = 0 }
 
-    // Latency agent via singleton module.
-    module private Latency =
-        type Action = unit -> unit
-        type Frame = ResizeArray<Action>
- 
-        // the agent operates a simple loop but will run 
-        type Agent =
-            val private Period : int
-            val mutable private Frame : Frame
+    // latency provided through .Net Task subsystem.
+    let private delay (ms:int) (action:unit -> unit) : unit =
+        Task.Delay(ms).ContinueWith(fun _ -> action ()) |> ignore
 
-            member agent.Add (a:Action) : unit =
-                lock agent (fun () ->
-                    agent.Frame.Add(a)
-                    Monitor.PulseAll(agent))
-                
-            member private agent.GetTasks() : Frame =
-                lock agent (fun () ->
-                    if (0 = agent.Frame.Count)
-                        then Monitor.Wait(agent) |> ignore
-                    let oldF = agent.Frame
-                    agent.Frame <- new Frame()
-                    oldF)
+    let private viaWeakRef (action:'V -> unit) (wref:System.WeakReference) () : unit =
+        match wref.Target with
+        | null -> ()
+        | :? 'V as obj -> action obj
+        | _ -> failwith "incorrect weak-ref object type"
 
-            // run tasks via Task thread-pool; don't wait
-            static member private RunTasks (tasks:Frame) : unit =
-                tasks.ForEach (fun t ->
-                    Task.Run(t) |> ignore)
-
-            member private agent.Loop () : unit =
-                let tasks = agent.GetTasks()
-                Thread.Sleep(agent.Period)
-                Agent.RunTasks tasks
-                agent.Loop()
-
-            member private agent.Begin() : unit =
-                printfn "Latency agent initialized."
-                (new Thread(agent.Loop)).Start()
-                
-            new(p) as agent = 
-                { Frame = new Frame(); Period = p  } 
-                then agent.Begin()
-
-        let agent = new Agent(100)
-
-        let inline delay (action:unit -> unit) : unit =
-            agent.Add (action)
-
-        let rec private viaWeakRef (action:'V -> unit) (wref:System.WeakReference) () : unit =
-            match wref.Target with
-            | null -> ()
-            | :? 'V as obj -> action obj
-            | _ -> failwith "incorrect weak-ref object type"
-
-        let inline delayWeak (action:'V -> unit) (obj:'V) : unit =
-            let wref = System.WeakReference(obj :> System.Object)
-            delay (viaWeakRef action wref)
+    let inline private delayWeak (ms:int) (action:'V -> unit) (obj:'V) : unit =
+        let wref = System.WeakReference(obj :> System.Object)
+        delay ms (viaWeakRef action wref)
 
     // delay operation on reference, delay another step each time it is
     // touched concurrently (e.g. by `load`). 
-    let rec private refDelayOnTouch (action:Ref<'V> -> unit) (tc:int) (ref:Ref<'V>) : unit =
+    let rec private refDelayOnTouch ms (action:Ref<'V> -> unit) (tc:int) (ref:Ref<'V>) : unit =
         if (tc = ref.T) then action ref else
-        refCacheDelay action ref
-    and private refCacheDelay (action : Ref<'V> -> unit) (ref:Ref<'V>) : unit =
+        refCacheDelay ms action ref
+    and private refCacheDelay ms (action : Ref<'V> -> unit) (ref:Ref<'V>) : unit =
         let tc = ref.T
-        Latency.delayWeak (refDelayOnTouch action tc) ref
+        delayWeak ms (refDelayOnTouch ms action tc) ref
 
     /// Force immediate stowage (only if still stowing).
     let force (ref:Ref<'V>) : unit = 
@@ -168,10 +125,13 @@ module LVRef =
     let wrap (vref:VRef<'V>) : Ref<'V> =
         new Ref<'V>(Stowed vref)
 
-    /// Stow a value (with latency) to create a LVRef.
+    // latency for stowage and caching
+    let private latency = 200
+
+    /// Stow a value (after some latency) to create a LVRef.
     let stow (c:Codec<'V>) (db:DB) (v:'V) : Ref<'V> =
         let ref = new Ref<'V>(Stowing (c,db,v))
-        refCacheDelay force ref
+        refCacheDelay latency force ref
         ref
 
     let private cachedLoad (ref:Ref<'V>) : 'V =
@@ -180,7 +140,7 @@ module LVRef =
             | Stowed vref ->
                 let v = VRef.load vref
                 ref.S <- Cached (vref,v)
-                refCacheDelay clear ref
+                refCacheDelay latency clear ref
                 v 
             | Cached (_,v) -> v // cached concurrently
             | Stowing (_,_,v) -> assert(false); v // shouldn't happen
