@@ -42,6 +42,7 @@ module ByteStream =
     let writeBytes (bs:ByteString) (dst:Dst) : unit =
         requireSpace (bs.Length) dst
         Array.blit (bs.UnsafeArray) (bs.Offset) (dst.Data) (dst.Pos) (bs.Length)
+        dst.Pos <- (bs.Length + dst.Pos)
 
     let inline private captureBytes (p0:int) (dst:Dst) : ByteString =
         BS.unsafeCreate (dst.Data) p0 (dst.Pos - p0)
@@ -64,6 +65,10 @@ module ByteStream =
         (b,x)
 
     /// Capture writes to a new stream. 
+    ///
+    /// Use of a `write` operation is the only means to construct the
+    /// output stream, ensuring that all data is captured by at least
+    /// one observer.
     let write (writer:Dst -> unit) : ByteString = 
         capture writer (new Dst())
 

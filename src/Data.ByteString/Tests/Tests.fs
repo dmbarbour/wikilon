@@ -122,8 +122,97 @@ let ``pinned data access`` () =
         Assert.Equal(101uy, Marshal.ReadByte(p,1))
         Assert.Equal(115uy, Marshal.ReadByte(p,2)))
        
-        
+[<Fact>]
+let ``trivial byte writer`` () =
+    let x : ByteString = (BS.fromString "==test==").[2..5]
+    let x' = ByteStream.write(fun dst ->
+                ByteStream.writeByte x.[0] dst
+                ByteStream.writeBytes x.[1..] dst)
+    Assert.Equal<ByteString>(x,x')
 
+[<Fact>]
+let ``trivial byte reader`` () =
+    let x = (BS.fromString "==test==").[2..5]
+    let src = new ByteSrc(x)
+    let t = ByteStream.readByte src
+    let est = ByteStream.readBytes 3 src
+    Assert.True(ByteStream.eos src)
+    Assert.Equal<byte>(t, byte 't')
+    Assert.Equal<ByteString>(est, x.[1..])
 
+[<Fact>] 
+let ``test critbit basics`` () =
+    let x = BS.unsafeCreateA [| 0xFFuy; 0x00uy; 0xC1uy |]
+    Assert.True(Tree.testCritbit 0 x)
+    Assert.True(Tree.testCritbit 8 x)
+    Assert.True(Tree.testCritbit 9 x)
+    Assert.False(Tree.testCritbit 10 x)
+    Assert.False(Tree.testCritbit 17 x)
+    Assert.True(Tree.testCritbit 18 x)
+    Assert.True(Tree.testCritbit 19 x)
+    Assert.True(Tree.testCritbit 20 x)
+    Assert.False(Tree.testCritbit 21 x)
+    Assert.False(Tree.testCritbit 25 x)
+    Assert.True(Tree.testCritbit 26 x)
+    Assert.False(Tree.testCritbit 27 x)
+
+[<Fact>]
+let ``find critbit basics`` () =
+    let x = BS.unsafeCreateA [| 0xFFuy; 0x00uy; 0x00uy |]
+    let y = BS.unsafeCreateA [| 0xCCuy; 0x00uy |]
+    Assert.Equal(Some 3, Tree.findCritbit 0 x y)
+    Assert.Equal(Some 3, Tree.findCritbit 1 x y)
+    Assert.Equal(Some 3, Tree.findCritbit 2 x y)
+    Assert.Equal(Some 3, Tree.findCritbit 3 x y)
+    Assert.Equal(Some 4, Tree.findCritbit 4 x y)
+    Assert.Equal(Some 7, Tree.findCritbit 5 x y)
+    Assert.Equal(Some 7, Tree.findCritbit 7 x y)
+    Assert.Equal(Some 8, Tree.findCritbit 8 x y)
+    Assert.Equal(Some 18, Tree.findCritbit 9 x y)
+
+[<Fact>]
+let ``tree basics`` () =
+    let add s t = Tree.add (BS.fromString s) s t
+    let d1 : string list = ["bar"; "band"; "bald"; "bandit"; "bald eagle"; "bard"; "barrister"]
+    let t1 = List.fold (fun t s -> add s t) Tree.empty d1
+    Assert.True(Tree.validate t1)
+    Assert.Equal(d1.Length, Tree.size t1)
+
+    let has t s = Tree.containsKey (BS.fromString s) t
+    Assert.True(has t1 "band")
+    Assert.True(has t1 "bard")
+    Assert.True(has t1 "bald")
+    Assert.True(has t1 "bar")
+    Assert.False(has t1 "test")
+    Assert.False(has t1 "")
+    Assert.False(has t1 "apple")
+    Assert.False(has t1 "barrier")
+    Assert.False(has t1 "bardiche")
+
+    Assert.Equal(Some "bard", Tree.tryFind (BS.fromString "bard") t1)
+    Assert.Equal(Some "bar", Tree.tryFind (BS.fromString "bar") t1)
+    Assert.Equal(Some "bald", Tree.tryFind (BS.fromString "bald") t1)
+
+    let rem s t = Tree.remove (BS.fromString s) t
+    let t2 = t1 |> rem "apple" |> rem "bard" |> rem "band" |> rem "bald"
+    Assert.True(Tree.validate t2)
+    Assert.Equal(d1.Length, 3 + Tree.size t2)
+    Assert.False(has t2 "apple")
+    Assert.False(has t2 "bard")
+    Assert.False(has t2 "band")
+    Assert.True(has t2 "bald eagle")
+    Assert.True(has t2 "barrister")
+
+    Assert.Equal(t1,t1)
+    Assert.Equal(t1, Tree.selectPrefix (BS.fromString "ba") t1)
+    Assert.Equal(3, Tree.size (Tree.selectPrefix (BS.fromString "bar") t1))
+    Assert.Equal(2, Tree.size (Tree.selectPrefix (BS.fromString "ban") t1))
+
+    let p t s = Tree.partitionK (BS.fromString s) t
+    Assert.Equal(t1, snd (p t1 "bald")) // "bald" is least key
+    Assert.Equal(2, Tree.size (fst (p t1 "ban"))) // bald and bald eagle to left 
+    
+    let d1' = List.map snd (Tree.toList t1)
+    Assert.Equal<String list>(d1', List.sort d1)
 
 
