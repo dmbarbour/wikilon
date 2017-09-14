@@ -643,6 +643,9 @@ module CBTree =
                             cN.Compact db (RNode(cb,tsz,ref))
             }
 
+        // TODO: consider parallelizing INode compaction.
+
+
     /// Codec for the full critbit tree, given a value codec.
     let treeCodec (cV:Codec<'V>) : Codec<Tree<'V>> = 
         let cK = EncBytes.codec
