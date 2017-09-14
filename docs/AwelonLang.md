@@ -65,7 +65,7 @@ Words are evaluated in context of a *Dictionary*, where each word is defined by 
 
 Awelon has native support for natural numbers. Syntactically, numbers are represented by regex `0|[1-9][0-9]*` wherever a word may appear. 
 
-        0 = [zero]
+        0 = zero
         1 = [0 succ]
         2 = [1 succ]
         3 = [2 succ]
@@ -73,7 +73,7 @@ Awelon has native support for natural numbers. Syntactically, numbers are repres
         42 = [41 succ]
         (et cetera)
 
-Definitions for `zero` and `succ` are left to the dictionary. In practice, natural numbers must be defined based on available *Accelerators* so we can effeciently perform natural-number arithmetic rather than unary operations.
+Definitions for `zero` and `succ` are left to the dictionary. In practice, natural numbers must be defined around available *Accelerators*, such that we can add two numbers in constant or log-time rather than linear time.
 
 Awelon does not support any other number types natively, nor does it support alternative encodings 
 
@@ -81,7 +81,7 @@ Awelon does not support any other number types natively, nor does it support alt
 
 Awelon has support for embedding inline texts between double quotes such as `"Hello, world!"`. Semantically, a text represents a binary list.
 
-        ""      = [null]
+        ""      = null
         "hello" = [104 "ello" cons]
 
 Definitions for `null` and `cons` are left to the dictionary. Lists are likely to be accelerated. 
@@ -89,10 +89,10 @@ Definitions for `null` and `cons` are left to the dictionary. Lists are likely t
 Embedded text may contain any valid Awelon character (32-126) excepting the double quote `"` (34) which terminates the text. There are no escape characters. When developers eventually need text outside these limits, the primary options are:
 
 * interpret text, e.g. `"multiple\nlines" lit` to rewrite
-* structure, e.g. `["multiple" ["lines" [null] cons] cons] unlines`
+* structure, e.g. `["multiple" ["lines" null cons] cons] unlines`
 * use *Secure Hash Resources* to reference external binary
 
-Interpeted text is a convenient hack but doesn't scale, compose, or abstract nicely. Structure is easy to abstract, compose, evolve, and extend to mixed data, so is a pretty good idea. Use of *Secure Hash Resources* is the most convenient wherever you'd conventionally use an external text or binary file.
+Interpeted text is a convenient hack but doesn't scale, compose, or abstract nicely. Structure is easy to abstract, compose, and evolve to support mixed data, but needs *Editable Views* to provide a usable syntax. Use of *Secure Hash Resources* is the most convenient wherever you'd conventionally use an external text or binary file.
 
 Embedded texts are suitable for simple things like labels, test data, inline comments, and micro-DSLs such as regular expressions. They are not suitable for general use.
 
