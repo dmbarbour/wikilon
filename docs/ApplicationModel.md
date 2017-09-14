@@ -1,9 +1,9 @@
 
 # Application Model for Awelon Project
 
-Awelon project will focus on RESTful applications, with the primary resources being [Awelon](AwelonLang.md) dictionaries and objects modeled within them. Applications are modeled in terms of creating, reading, updating, and deleting definitions of words. Effects are carried out by a multi-agent system. Real-time behavior can be supported via publish-subscribe patterns. 
+In general, I hope for Awelon project to focus on RESTful systems. Applications are modeled in terms of creating, sharing, reading, updating, and deleting definitions of words or entire hierarchical dictionaries. Effects are carried out in context of a multi-agent system. Real-time behavior can be supported via publish-subscribe patterns. 
 
-This document will discuss useful patterns for modeling applications.
+This document is a brainstorm and exploration of potential patterns for modeling applications. [Awelon](AwelonLang.md) represents an alternative to the mainstream `void main()` programming model. We will need to explore ideas in practice to see what works.
 
 ## Command Pattern
 
@@ -11,12 +11,12 @@ Appending commands
 
 The command pattern might be represented as:
 
-        @foo.v0 initial state constructor
-        @foo.v1 foo.v0 command1
-        @foo.v2 foo.v1 command2
+        @foo_v0 initial state constructor
+        @foo_v1 foo0 command1
+        @foo_v2 foo1 command2
         ...
-        @foo.v99 foo.v98 command99
-        @foo foo.v99
+        @foo_v99 foo_v98 command99
+        @foo foo_v99
 
 Use of command pattern enables many small updates to construct and modify a large object. This particular design records every command as a distinct set of words, simplifying view of historical values and actions on the object, easy forking and undo, etc..
 
@@ -37,11 +37,13 @@ Unlike command pattern, futures and promises can be fully monotonic. This is a v
 
 ## Dictionary Objects
 
-At the Awelon layer, the only formal meaning of a word is its definition. However, humans and software agents may treat words as having meaning and structure. We may associate `foo` with `foo.doc`, `foo.talk`, `foo.type`, `foo.author`, and so on. Informally, `foo.doc` is a field in object `foo`. Numbered fields can represent informal sequences or collections - commands in the command pattern, lines in a REPL or notebook application, rows in a spreadsheet, etc.. Fields can serve as metadata 'tags' on an object, to support efficient search or extra rendering hints.
+The only formal meaning of a word is to lazily inline its definition.
 
-Tools to copy, drop, or rename `foo` should by default copy, drop, and rename the contained fields. When working with code, we might edit and view objects rather than individual definitions.
+However, humans and software agents may treat words as having meaning and structure. We may associate `foo` with `foo_doc`, `foo_talk`, `foo_type`, `foo_author`, and so on. Informally, `foo_doc` may be understood as a field within an informal, second-class dictionary object `foo`. Numbered fields can represent informal sequences or collections - commands in the command pattern, lines in a REPL or notebook application, rows in a spreadsheet, etc.. Fields can serve as metadata 'tags' on an object, to support efficient search or extra rendering hints.
 
-Depending on use case, developers may choose to represent ad-hoc hierarchical structures like `foo.bar.baz.qux`. But it is feasible to keep structures relatively flat by use of redirects - a word whose definition is simply another word - as references. It really depends on what the application should copy, drop, rename, view, and edit collectively.
+Code manipulation utilities can be designed to work with these informal objects. For example, if we copy `foo` to `bar`, we may simultaneously copy words prefixed `foo_*` into the appropriate `bar_*` and re-link internal structure as needed. When we rename `foo` to `blub`, we could be given a checkbox option to automatically rename `foo_*` to `blub_*`. 
+
+Dictionary objects should be relatively flat. While we can represent words like `foo_bar_baz_qux`, we would quickly hit the limitations of word size in Awelon. Also, in some contexts, it might be better to use *Hierarchical Dictionaries* as a basis for dictionary objects, e.g. `doc@foo` (word `doc` in dictionary `foo`) instead of `foo_doc`. 
 
 *Note:* It is also feasible to use mounted dictionaries to model dictionary objects, i.e. so we have `doc@foo` instead of `foo.doc`. This restricts connectivity because a mount cannot reference its parent. But that restriction isn't necessarily a bad one, and would be mitigated by use of localization. 
 
@@ -111,7 +113,7 @@ This would admit a corresponding set of rewrites:
 
 Hence, we can evaluate and optimize opaque words, link frozen words, and GC the hidden words. Each attribute gives our software agent a more opportunity to safely rewrite, manage, and optimize the dictionary in specific ways. We can assume secure-hash resources are frozen and hidden, but not opaque. Future values might be assumed opaque and frozen, but not always hidden.
 
-Representation of these attributes is ad-hoc, subject to de-facto standardization. We could add tag fields on a dictionary object. Or we might model general policies under `META.GC`... which might be sensitive to tag fields. Whatever.
+Representation of these attributes is ad-hoc, subject to de-facto standardization. We could add tag fields on a dictionary object. Or we might represent general policies under a word like `meta_gc`. There are a lot of options.
 
 ## Dictionary Passing or Synchronization
 
