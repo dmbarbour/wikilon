@@ -79,7 +79,7 @@ Awelon does not support any other number types natively, nor does it support alt
 
 ## Embedded Texts
 
-Awelon has support for embedding inline texts between double quotes such as `"hello, world"`. Semantically, a text represents a binary list.
+Awelon has support for embedding inline texts between double quotes such as `"Hello, world!"`. Semantically, a text represents a binary list.
 
         ""      = [null]
         "hello" = [104 "ello" cons]
@@ -92,7 +92,7 @@ Embedded text may contain any valid Awelon character (32-126) excepting the doub
 * structure, e.g. `["multiple" ["lines" [null] cons] cons] unlines`
 * use *Secure Hash Resources* to reference external binary
 
-Interpeted text is a convenient hack but doesn't scale, compose, or abstract nicely. Structured texts is a easy to abstract and compose and extend for mixed data. Use of *Secure Hash Resources* is the most convenient wherever you'd conventionally use an external binary or text file.
+Interpeted text is a convenient hack but doesn't scale, compose, or abstract nicely. Structure is easy to abstract, compose, evolve, and extend to mixed data, so is a pretty good idea. Use of *Secure Hash Resources* is the most convenient wherever you'd conventionally use an external text or binary file.
 
 Embedded texts are suitable for simple things like labels, test data, inline comments, and micro-DSLs such as regular expressions. They are not suitable for general use.
 
