@@ -57,7 +57,7 @@ Newlines and tabs are among the rejected characters. However, humans will freque
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Structurally, a word starts with a lower-case alpha and may contain underscores or digits. As a regular expression, this is: `[a-z][a-z0-9_]*`. Additionally, there is a size constraint: words must not surpass 31 characters in length.
+Words are the user-definable unit for Awelon code. Structurally, a word starts with a lower-case alpha and may contain underscores or digits. As a regular expression, this is: `[a-z][a-z0-9_]*`. Additionally, there is a size constraint: words must not surpass 32 characters (bytes) in length.
 
 Words are evaluated in context of a *Dictionary*, where each word is defined by an Awelon program. Definitions of words within a dictionary must form a directed acyclic graph. The semantics for words are extremely trivial: we lazily substitute the word by its definition.
 
@@ -81,14 +81,14 @@ Awelon does not support any other number types natively, nor does it support alt
 
 ## Embedded Texts
 
-Awelon has native support for embedding texts inline between double quotes such as `"Hello, world!"`. Semantically, a text represents a binary list.
+Awelon has native support for embedding texts inline between double quotes such as `"Hello, world!"`. Embedded texts are limited to ASCII, specially the subset valid in Awelon code (32-126) minus the double quote `"` (34). There are no escape characters. Semantically, a text represents a binary list.
 
         ""      = null
         "hello" = [104 "ello" cons]
 
-Definitions for `null` and `cons` are left to the dictionary.
+Definitions for `null` and `cons` are left to the dictionary. Acceleration of list structures is quite feasible, so this list may be efficiently represented in the runtime by use of a binary array.
 
-Embedded text may contain any valid Awelon character (32-126) excepting the double quote `"` (34) which terminates the text. There are no escape characters. When developers eventually need text outside these limits, the primary options are:
+Embedded texts are suitable only for simple things like labels, test data, comments, and micro-DSLs such as regular expressions. They are not very suitable for general use. To work around these limitations, the primary options are:
 
 * interpret, e.g. `"multiple\nlines" lit` to rewrite escapes
 * structure, e.g. `["multiple" ["lines" null cons] cons] unlines`
@@ -96,16 +96,14 @@ Embedded text may contain any valid Awelon character (32-126) excepting the doub
 
 Interpeted text is a convenient hack but doesn't scale, compose, or abstract nicely. Structure is easy to abstract, compose, and evolve to support mixed data, but needs *Editable Views* to provide a usable syntax. Use of *Secure Hash Resources* is the most convenient wherever you'd conventionally use an external text or binary file.
 
-Embedded texts are suitable for simple things like labels, test data, inline comments, and micro-DSLs such as regular expressions. They are not suitable for general use.
-
 ## Secure Hash Resources
 
-It is possible to identify binaries by *secure hash*. Doing so has many nice properties: immutable and acyclic by construction, cacheable, securable, provider-independent, self-verifying, and implicitly shared. They are also much smaller than many URLs or file paths. Awelon systems leverage secure hashes to reference binaries and code outside the dictionary:
+It is possible to identify binaries by their *secure hash*. Doing so has many nice properties: immutable and acyclic by construction, cacheable, securable, provider-independent, self-authenticating, implicitly shared, automatically named, uniformly sized, and smaller than many full URLs or file paths. Awelon systems leverage secure hashes to reference binaries and code outside the dictionary:
 
 * external binary data may be referenced via `%secureHash`
 * code and structured data is referenced via `$secureHash`
 
-Semantically, secure hash resources are treated as words. They may appear anywhwere a word may be used. Binaries use the same list encoding as embedded texts. The referenced definition is lazily inlined. Of course, secure hashe resources share a global namespace, independent of dictionary.
+Secure hash resources may appear anywhwere an Awelon word may appear, and is interpreted relative to the local dictionary. For example, binaries use the same encoding as embedded texts, and the meaning ultimately depends on the local definitions for `zero`, `succ`, `null`, and `cons`. 
 
 Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. Some example hashes, chained from the word `test`:
         
@@ -118,9 +116,9 @@ Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the h
 
 We can safely neglect the theoretical concern of secure hash collisions. Physical corruption of dictionaries is of greater concern in practice. If collision becomes a concern in the future, it is trivial to rewrite entire Awelon systems to use a more robust hash. I won't further belabor the issue.
 
-Awelon runtime systems must know where to seek secure hash resources, whether that be in a filesystem, database, web server, or content distribution network. Using *Stowage* annotations, Awelon runtime systems may also generate new secure hash resources during evaluation, treating this external space as a persistent virtual memory or binary data server.
+Awelon runtime systems must know where to seek secure hash resources, whether that be in a filesystem, database, web server, or content distribution network. Using *Stowage* annotations, Awelon runtime systems may also compute new secure hash resources during evaluation, treating this external space as a persistent virtual memory or a binary data server.
 
-Secure hash resources are frequently subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29). Conservative reference counting GC is simple and effective in context. 
+Secure hash resources are frequently subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29). Conservative reference counting GC is simple and effective.
 
 *Security Note:* Secure hash resources may embed sensitive information, yet are not subject to conventional access control. Awelon systems should treat a secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) - a bearer token that grants read authority. Relevantly, Awelon systems should resist timing attacks that might leak secure hashes.
 
@@ -167,6 +165,7 @@ Annotations help developers control, optimize, view, and debug computations. Unl
 * `(trace)` - record value to a debug output log
 * `(trash)` - erase data you won't observe, leave placeholder
 * `(error)` - mark a value as an error object
+* `(eq)` - assert structural equality of two values
 * `(eq_foo)` - reduce code to known name (quines, loops)
 
 Annotations must have no observable effect within a computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, support useful external observations like debug logs or breakpoint states or a change in how an evaluated result is represented or organized.
@@ -536,11 +535,11 @@ Although initial emphasis is textual views, it is feasible to model richly inter
 
 ### Named Local Variables
 
-An intriguing opportunity for editable views is support for local variables, like lambdas and let expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, such as working with fixpoints or algebraic math expressions. It also supports a more conventional programming style where desired. Consider a lambda syntax of form:
+An intriguing opportunity for editable views is support for local variables, like lambdas and let expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, such as working with fixpoints or algebraic math expressions. It also supports a more conventional programming style where desired. Consider a let or lambda syntax of form:
 
-        \ X Y Z -> CODE ==  ["X Y Z"(:λ)](a2)d CODE'
+        \ X Y Z -> CODE ==  "\X Y Z"(a2)d CODE'
 
-This plucks three items off the stack, giving them local names within `CODE`. On the right hand side, the lambda comment - `["X Y Z"(:λ)](a2)d` - enables us to later recover the variable names and lambda structure when we decompile for future edits. We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` using a simple algorithm:
+This plucks three items off the stack, giving them local names within `CODE`. On the right hand side, the special comment - `"\X Y Z"(a2)d` - enables the view to later recover the variable names for future edits. We can compute `CODE' = T(Z, T(Y, T(X, CODE)))` using a simple algorithm:
 
         T(X, E) | E does not contain X      => d E
         T(X, X)                             => 
