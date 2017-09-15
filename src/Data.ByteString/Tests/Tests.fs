@@ -178,6 +178,12 @@ let ``tree basics`` () =
     Assert.True(BTree.validate t1)
     Assert.Equal(d1.Length, BTree.size t1)
 
+    Assert.True(BTree.exists (fun k _ -> (byte 'r' = k.[2])) t1)
+    Assert.False(BTree.exists (fun k _ -> (byte 'z' = k.[1])) t1)
+    Assert.True(BTree.forall (fun k _ -> (byte 'b' = k.[0])) t1)
+
+    //BTree.iter (fun k v -> printfn "%s" v) t1
+
     let has t s = BTree.containsKey (BS.fromString s) t
     Assert.True(has t1 "band")
     Assert.True(has t1 "bard")
@@ -214,5 +220,7 @@ let ``tree basics`` () =
     
     let d1' = List.map snd (BTree.toList t1)
     Assert.Equal<String list>(d1', List.sort d1)
+
+
 
 

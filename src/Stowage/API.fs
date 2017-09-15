@@ -65,8 +65,8 @@ type TX =
     val mutable internal eph : I.EphRoots
     new (db : DB) =
         { db = db.Impl
-          rd = Map.empty
-          ws = Map.empty
+          rd = BTree.empty
+          ws = BTree.empty
           eph = Map.empty
         }
     member tx.DB with get () = DB (tx.db)
@@ -126,9 +126,10 @@ module API =
     /// Find first key (if any) for which associated value doesn't match.
     /// Note: This doesn't account for concurrent or asynchronous writes.
     let testReadAssumptions (db : DB) (reads : KVMap) : (Key option) =
-        if Map.isEmpty reads then None else
+        if BTree.isEmpty reads then None else
         I.withRTX db.Impl (fun rtx -> 
-            I.findInvalidRead db.Impl rtx Map.empty reads)
+            let kvOpt = I.findInvalidRead db.Impl rtx BTree.empty reads
+            Option.map fst kvOpt)
 
     /// verify that all read assumptions are currently valid
     let inline verifyReadAssumptions (db : DB) (reads : KVMap) : bool =
@@ -156,7 +157,7 @@ module API =
     let atomicUpdateDB_async (db : DB) (reads : KVMap) (writes : KVMap) : Task<bool> =
         // reads are validated by the writer, but sanitize writes immediately
         let validKV k v = isValidKey k && isValidVal v
-        let validWS = Map.forall validKV writes
+        let validWS = BTree.forall validKV writes
         if not validWS then invalidArg "writes" "invalid write" else
         let tcs = new TaskCompletionSource<bool>()
         I.dbCommit db.Impl (reads, writes, tcs)
@@ -172,24 +173,23 @@ module API =
     /// to client layers to provide some form of concurrency control. 
     /// These writes are thin wrappers around atomicUpdateDB. 
     let inline writeKeyDB_async (db : DB) (k : Key) (v : Val) : Task<bool> =
-        atomicUpdateDB_async db Map.empty (Map.add k v Map.empty)
+        atomicUpdateDB_async db BTree.empty (BTree.singleton k v)
 
     let inline writeKeyDB (db : DB) (k : Key) (v : Val) : unit =
-        let r = atomicUpdateDB db Map.empty (Map.add k v Map.empty)
+        let r = atomicUpdateDB db BTree.empty (BTree.singleton k v)
         assert(r)
 
     let inline writeKeysDB_async (db : DB) (writes : KVMap) : Task<bool> =
-        atomicUpdateDB_async db Map.empty writes
+        atomicUpdateDB_async db BTree.empty writes
 
     let inline writeKeysDB (db : DB) (writes : KVMap) : unit =
-        let r = atomicUpdateDB db Map.empty writes
+        let r = atomicUpdateDB db BTree.empty writes
         assert(r)
 
     /// Wait for all prior writes to complete.
     let inline syncDB (db : DB) : unit = 
-        let r = atomicUpdateDB db (Map.empty) (Map.empty)
+        let r = atomicUpdateDB db (BTree.empty) (BTree.empty)
         assert(r)
-        ()
 
     // lookup new resource in DB
     let inline private findNewRsc (db : DB) (h : RscHash) : Val option =
@@ -373,9 +373,9 @@ module API =
     /// are released excepting resources referenced from the read set.
     /// Use together with commit to model checkpointing transactions.
     let assumeWrites (tx:TX) : unit =
-        tx.rd <- Map.fold (fun m k v -> Map.add k v m) tx.rd tx.ws
-        tx.ws <- Map.empty
-        let eph' = Map.fold (fun e _ v -> valEphUpd e v) Map.empty tx.rd
+        tx.rd <- BTree.fold (fun m k v -> BTree.add k v m) tx.rd tx.ws
+        tx.ws <- BTree.empty
+        let eph' = BTree.fold (fun e _ v -> valEphUpd e v) Map.empty tx.rd
         I.dbAddEphRoots tx.db eph'
         I.dbRemEphRoots tx.db tx.eph
         tx.eph <- eph'
@@ -395,12 +395,12 @@ module API =
         result
 
     let private readKeyOld (tx:TX) (k:Key) : Val option =
-        let wv = Map.tryFind k tx.ws
+        let wv = BTree.tryFind k tx.ws
         if Option.isSome wv then wv else
-        Map.tryFind k tx.rd
+        BTree.tryFind k tx.rd
 
     let private txAddRead (tx:TX) (k:Key) (v:Val) : unit =
-        tx.rd <- Map.add k v tx.rd 
+        tx.rd <- BTree.add k v tx.rd 
         let eu = valEphRoots v
         I.dbAddEphRoots (tx.db) eu
         tx.eph <- I.ephAdd eu tx.eph
@@ -443,7 +443,7 @@ module API =
     /// Usually, assumptions should be provided before any reads.
     let assumeKey (tx:TX) (k:Key) (v:Val) : unit =
         if not (isValidKey k) then invalidArg "k" "invalid key" else
-        match Map.tryFind k tx.rd with
+        match BTree.tryFind k tx.rd with
           | None    -> txAddRead tx k v
           | Some v0 -> if (v0 <> v) then invalidOp "invalid assumption for key"
 
@@ -457,7 +457,7 @@ module API =
     let writeKey (tx : TX) (k : Key) (v : Val) : unit = 
         if not (isValidKey k) then invalidArg "k" "invalid key" else
         if not (isValidVal v) then invalidArg "v" "invalid value" else
-        tx.ws <- Map.add k v tx.ws
+        tx.ws <- BTree.add k v tx.ws
 
     /// load a secure hash resource into memory (see loadRscDB)
     let inline tryLoadRsc (tx:TX) (h:RscHash) : Val option = tryLoadRscDB (tx.DB) h

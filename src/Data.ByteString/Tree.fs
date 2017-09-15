@@ -326,17 +326,57 @@ module BTree =
 
     let toArray (t:Tree<'V>) : (Key * 'V) array = Array.ofSeq (toSeq t)
     let toList (t:Tree<'V>) : (Key * 'V) list = List.ofSeq (toSeq t)
-    
+
+    // I could use Seq for folds and iteration, but I'd prefer to
+    // keep these operations on the normal stack for performance.
+
     let fold (fn:'S -> Key -> 'V -> 'S) (s0:'S) (t:Tree<'V>) : 'S =
-        Seq.fold (fun s (k,v) -> fn s k v) s0 (toSeq t)
+        let rec loop st kl node =
+            match node with
+            | Leaf v -> fn st kl v
+            | Inner (_,l,kr,r) -> loop (loop st kl l) kr r
+        match t with
+        | Root(k,n) -> loop s0 k n
+        | Empty -> s0
+
     let foldBack (fn:Key -> 'V -> 'S -> 'S) (t:Tree<'V>) (s0:'S) : 'S =
-        Seq.fold (fun s (k,v) -> fn k v s) s0 (toSeqR t)
-    let iter (fn: Key -> 'V -> unit) (t:Tree<'V>) : unit =
-        Seq.iter (fun (k,v) -> fn k v) (toSeq t)
+        let rec loop kl node st =
+            match node with
+            | Leaf v -> fn kl v st
+            | Inner(_,l,kr,r) -> loop kl l (loop kr r st)
+        match t with
+        | Root(k,n) -> loop k n s0
+        | Empty -> s0
+
+    let iter (fn:Key -> 'V -> unit) (t:Tree<'V>) : unit =
+        let rec loop kl node =
+            match node with
+            | Leaf v -> fn kl v
+            | Inner(_,l,kr,r) -> loop kl l; loop kr r
+        match t with
+        | Root(k,n) -> loop k n
+        | Empty -> ()
+
+    let tryPick (fn:Key -> 'V -> 'U option) (t:Tree<'V>) : 'U option =
+        let rec loop kl node =
+            match node with
+            | Leaf v -> fn kl v
+            | Inner(_,l,kr,r) ->
+                let pickL = loop kl l
+                if Option.isSome pickL then pickL else
+                loop kr r
+        match t with
+        | Root(k,n) -> loop k n
+        | Empty -> None
+
+    let inline tryFindKey fn t = tryPick (fun k v -> if fn k v then Some k else None) t
+    let inline exists fn t = tryFindKey fn t |> Option.isSome
+    let inline forall fn t = not (exists (fun k v -> not (fn k v)) t)
 
     let filter (fn:Key -> 'V -> bool) (t:Tree<'V>) : Tree<'V> =
         toSeq t |> Seq.filter (fun (k,v) -> fn k v) |> ofSeq
-    
+
+    // TODO: view disassembly and improve performance!
 
 type BTree<'V> = BTree.Tree<'V>
 

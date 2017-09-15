@@ -112,8 +112,6 @@ module internal I =
                 | :? DB as y -> compare (x.db_env) (y.db_env)
                 | _ -> invalidArg "yobj" "cannot compare values of different types"
 
-                 
-
     // add commit request to the database
     let dbCommit (db : DB) (c : Commit) : unit =
         lock db (fun () ->
@@ -123,7 +121,7 @@ module internal I =
     // signal writer to perform a step (via dummy commit)
     let dbSignal (db : DB) : unit =
         let tcs = new TaskCompletionSource<bool>() // result ignored
-        dbCommit db (Map.empty, Map.empty, tcs)
+        dbCommit db (BTree.empty, BTree.empty, tcs)
 
     // add stowage request and ephemeral root to database, returns root ID
     let dbStow (db : DB) (h : RscHash) (v : Val) : EphID =
@@ -282,13 +280,13 @@ module internal I =
 
     // search for an invalid read assumption
     let findInvalidRead db rtx wb rd =
-        let validAssumption k v = 
+        let inline validAssumption k v = 
             if not (isValidKey k) then false else
-            match Map.tryFind k wb with
-            | Some vwb -> (v = vwb)
-            | None -> matchVal v (dbReadKeyZC db rtx k)
-        let invalidAssumption k v = not (validAssumption k v)
-        Map.tryFindKey invalidAssumption rd
+            match BTree.tryFind k wb with
+            | Some vwb -> (v = vwb) // compare with pending update
+            | None -> matchVal v (dbReadKeyZC db rtx k) // compare with DB
+        let invalidAssumption ((k,v)) = not (validAssumption k v)
+        Seq.tryFind invalidAssumption (BTree.toSeq rd)
 
     let inline dbHasRsc (db:DB) (rtx:MDB_txn) (k:StowKey) : bool =
         mdb_contains rtx (db.db_stow) (k.v)
@@ -307,9 +305,14 @@ module internal I =
     let valRCU (rc:RC) (u0:RCU) (v:Val) : RCU =
         scanHashDeps (fun u h -> updRCU rc u (rscStowKey h)) u0 v
     let kvmRCU (rc:RC) (m:KVMap) (u0:RCU) : RCU =
-        Map.fold (fun u _ v -> valRCU rc u v) u0 m
+        BTree.fold (fun u _ v -> valRCU rc u v) u0 m
     let rscRCU (m:Stowage) (u0:RCU) : RCU =
         Map.fold (fun u sk (struct(h,v)) -> updRCU 0L (valRCU 1L u v) sk) u0 m
+
+
+    let addToWriteBatch (ws:KVMap) (wb:KVMap) : KVMap =
+        if BTree.isEmpty wb then ws else
+        BTree.fold (fun wb' k v -> BTree.add k v wb') wb ws
 
     // Write Frame.
     //
@@ -359,13 +362,13 @@ module internal I =
         let tryCommit ((rd,ws,tcs) : Commit) wb =
             if Option.isSome (findInvalidRead db wtx wb rd)
                 then tcs.TrySetResult(false) |> ignore; wb 
-                else Map.fold (fun m k v -> Map.add k v m) wb ws
-        let writes = List.foldBack tryCommit commitList Map.empty 
-        let overwrites = Map.map (fun k _ -> dbReadKey db wtx k) writes
+                else addToWriteBatch ws wb
+        let writes = List.foldBack tryCommit commitList BTree.empty 
+        let overwrites = BTree.map (fun k _ -> dbReadKey db wtx k) writes
         let writeRsc = Map.filter (fun sk _ -> not (dbHasRsc db wtx sk)) stowedRsc 
 
         // Write keys and new resources.
-        Map.iter (dbWriteKey db wtx) writes
+        BTree.iter (dbWriteKey db wtx) writes
         Map.iter (fun _ struct(h,v) -> dbPutRsc db wtx h v) writeRsc
 
         // Root refcts modified based on recent writes
@@ -497,10 +500,10 @@ module internal I =
         lock db (fun () ->
             if(db.db_halt) then invalidOp "DB already closed" else
             db.db_halt <- true
-            db.db_commit <- (Map.empty,Map.empty,tcs)::(db.db_commit)
+            db.db_commit <- (BTree.empty,BTree.empty,tcs)::(db.db_commit)
             Monitor.PulseAll(db))
-        let ok = tcs.Task.Result  // wait for final write & sync
-        assert(ok)
+        tcs.Task.Wait()
+        assert(tcs.Task.Result)
         mdb_env_close (db.db_env) // gracefully close the DB
         db.db_flock.Dispose()     // release the file lock
 

@@ -17,7 +17,7 @@ type Key = ByteString
 type Val = ByteString
 
 /// A batch of key-values to be compared or written.
-type KVMap = Map<Key,Val>
+type KVMap = BTree<Val>
 
 /// A Resource is referenced by a secure hash (Stowage.Hash) of a Val.
 ///

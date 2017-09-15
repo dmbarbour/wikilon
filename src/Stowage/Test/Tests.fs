@@ -99,7 +99,7 @@ type DBTests =
         let kvm = 
             List.toSeq kvs
                 |> Seq.map (fun (a,b) -> (BS.fromString a, BS.fromString b))
-                |> Map.ofSeq
+                |> BTree.ofSeq
 
         writeKeyDB t.db (BS.fromString "zz") (BS.fromString "exists")
         Assert.True(hasKey "zz")
