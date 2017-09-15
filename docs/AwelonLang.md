@@ -59,7 +59,9 @@ Newlines and tabs are among the rejected characters. However, humans will freque
 
 Words are the user-definable unit for Awelon code. Structurally, a word starts with a lower-case alpha and may contain underscores or digits. As a regular expression, this is: `[a-z][a-z0-9_]*`. Additionally, there is a size constraint: words must not surpass 31 characters in length.
 
-Words are evaluated in context of a *Dictionary*, where each word is defined by an Awelon program. Definitions of words within a dictionary must form a directed acyclic graph. The semantics for words are extremely trivial: we lazily substitute the word by its definition. 
+Words are evaluated in context of a *Dictionary*, where each word is defined by an Awelon program. Definitions of words within a dictionary must form a directed acyclic graph. The semantics for words are extremely trivial: we lazily substitute the word by its definition.
+
+The four primitive words `a`, `b`, `c`, and `d` may not be defined. The words `zero`, `succ`, `null`, and `cons` must be defined for natural numbers and embedded texts to become usable.
 
 ## Natural Numbers
 
@@ -79,16 +81,16 @@ Awelon does not support any other number types natively, nor does it support alt
 
 ## Embedded Texts
 
-Awelon has support for embedding inline texts between double quotes such as `"Hello, world!"`. Semantically, a text represents a binary list.
+Awelon has native support for embedding texts inline between double quotes such as `"Hello, world!"`. Semantically, a text represents a binary list.
 
         ""      = null
         "hello" = [104 "ello" cons]
 
-Definitions for `null` and `cons` are left to the dictionary. Lists are likely to be accelerated. 
+Definitions for `null` and `cons` are left to the dictionary.
 
 Embedded text may contain any valid Awelon character (32-126) excepting the double quote `"` (34) which terminates the text. There are no escape characters. When developers eventually need text outside these limits, the primary options are:
 
-* interpret text, e.g. `"multiple\nlines" lit` to rewrite
+* interpret, e.g. `"multiple\nlines" lit` to rewrite escapes
 * structure, e.g. `["multiple" ["lines" null cons] cons] unlines`
 * use *Secure Hash Resources* to reference external binary
 
@@ -488,7 +490,9 @@ Related to static typing, non-terminating evaluation in Awelon is always an erro
 
 ## Editable Views
 
-Awelon language has an acceptably aesthetic plain text syntax. But, like Forth, Awelon does not scale nicely beyond twelve tokens per definition because humans easily lose track of context. This could be mitigated by live feedback on types and examples. But Awelon is designed to use another simple technique to support more conventional programming styles, DSLs, and program scale: Awelon shifts the rich syntax burden to [editable views](http://martinfowler.com/bliki/ProjectionalEditing.html). 
+Awelon is designed to use a simple technique to support richer programming styles, DSLs, and larger programs: Awelon shifts the rich syntax burden to [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html) in the form of *editable views*. 
+
+*Aside:* By *editable views* I mean to emphasize purely functional, bidirectional rewrites between serializable representations. Similar to functional lenses. Projectional editing encompasses editable views and a lot more.
 
 My initial emphasis is textual views, such that we can readily integrate favored editors and perhaps even leverage [Filesystem in Userspace (FUSE)](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) to operate on a dictionary through a conventional filesystem. Numbers are a useful example for textual editable views. A viable sketch:
 
@@ -500,24 +504,25 @@ My initial emphasis is textual views, such that we can readily integrate favored
         2.998e8     == [2998 5 decimal]
         -4/6        == [-4 #6 rational]
 
-Awelon's natural numbers would be given the `#` prefix in favor of a more aesthetic representation of signed numbers. From there, we build a tower of numbers. The basic approach of building views upon views is convenient because it makes views more extensible. For example, if we have no support for rational numbers, we'd still see `[-4 #6 rational]` which is still sensible to a human reader. Support for rational numbers or hexadecimal or similar can be added if missing.
+Awelon's natural numbers here are given the `#` prefix in favor of a more aesthetic representation for signed numbers. From there, we build a tower of numbers. The basic approach of building views upon views is convenient because it makes views more extensible. For example, if we have no support for rational numbers, we'd still see `[-4 #6 rational]` which is still sensible to a human reader. Support for rational numbers or hexadecimal or similar can be added if missing.
 
-Every editable view should have an unambiguous escape to raw Awelon code. While I use `(Awelon's 42)` above to make it obvious, I could just as easily use `#` as the primary escape, such that `#[raw awelon code here]` works without further interpretation. Whatever users find acceptable. The nature of editable views does make it easy to experiment for aesthetics. Use of escapes permits an editable view to support key-words, if desired.
+Similarly, we could develop a view for command sequences:
 
-Command lists are another valuable view feature:
+        {A,B,C} == [[A] [[B] [[C] null cons] cons] cons]
+        {A,B|C} == [[A] [[B] C cons] cons]
+            such that {A,B,C|null} == {A,B,C}
 
-        {foo, bar, baz} == [[foo] {bar, baz} :]
-        {baz}           == [[baz] ~ :]
+There is a lot of flexibility with simple recognizing and rewriting of texts. Importantly, because these editable views are separate from the language compilers and interpreters, it is easy to experiment, use multiple views, and tune the programming experience to the programmer or the problem.
 
-Command lists are useful for various purposes, supporting continuation-passing style or a concise embedding of interruptable code. While I use a normal nil/cons list structure here, a view could favor something more specialized like the Haskell `do` notation.
+Many editable views will have an escape for code that they isn't recognized. For example, the `#42` escape for natural numbers can be generalized as an escape for words `#foo` or blocks `#[raw awelon code]`. This ensures universal access to Awelon behavior and the dictionaries. Of course, some DSL-inspired views might cleverly restrict programs to a subset of Awelon.
 
-Ideally, all editable views should be computable, in the sense of having a normal form. That is, program evaluation should be able to generate the same structure we use to view and edit programs. When we add 3.141 and -0.007, we want to see 3.134 in the program output. That is, `[3134 -3 decimal]` (or whatever we use to represent decimal numbers) should be a viable result from a computation. 
+Ideally, most editable views should be computable, in the sense of having a normal form that can be the result of a normal evaluation process. Computable views enable the *evaluated result* of the program to have the *same view* as our programs. Or perhaps another, more suitable view. When we add 3.141 and -0.007, we want to see 3.134 in the program output. Hence, `[3134 -3 decimal]` should be a normal form, perhaps via arity annotations in `decimal`.
 
-Design of computable, editable views is very sensitive to arity annotations and accelerators. A consequence is that editable views should be *defined* within the same dictionary they're used to view by some simple convention. Perhaps a word defining a `[[view→code][code→view]]` pair where `code` and `view` are represented as text. Representing views within the dictionary is convenient for testing and caching of views, and for updating views based on application or edit session state (e.g. so we can separate namespace from code). 
+Design of computable views is very sensitive to arity annotations and accelerators. A consequence is that editable views should be *defined* within the same dictionary they're used to view by some simple convention. Perhaps a word defining a `[[view→code][code→view]]` pair where `code` and `view` are represented as text. Representing views within the dictionary is convenient for testing and caching of views, and for updating views based on application or edit session state (e.g. so we can separate namespace from code). 
 
 With computable views in mind, we might represent comments as:
 
-        /* comment */  ==  " comment "(a2)d
+        // comment  ==  "comment"(a2)d
 
 The arity annotation ensures the comment is not deleted until it might prevent progress from the left side, and hence we can always inject comments into values. A relevant point is that we aren't limited to one 'type' of comment, and comments of other types can easily inject flexible rendering hints into Awelon code. The discussion on *Named Local Variables* offers one very useful example, or a comment might include trace output for active debugging.
 
@@ -527,7 +532,9 @@ With editable views, individual definitions can scale many orders of magnitude. 
 
 Although initial emphasis is textual views, it is feasible to model richly interactive graphical views involving tables, graphs, canvases, checkboxes, sliders, drop-down menus, and so on. A sophisticated projectional editor could support frames or a zoomable interface where a word's definition may be logically inlined into the current view. 
 
-## Named Local Variables
+*Aside:* The vast majority of punctuation characters were reserved for use with editable views. It's a lot easier to develop sophisticated editable views when we don't need to worry about ambiguity with Awelon words. 
+
+### Named Local Variables
 
 An intriguing opportunity for editable views is support for local variables, like lambdas and let expressions. This would ameliorate use cases where point-free programming is pointlessly onerous, such as working with fixpoints or algebraic math expressions. It also supports a more conventional programming style where desired. Consider a lambda syntax of form:
 
@@ -548,11 +555,11 @@ This algorithm is adapted from the partial evaluation optimization leveraging fr
 
 Lambdas can be leveraged into let expressions (like `let var = expr in CODE` or `CODE where var = expr`) or the Haskell `do` notation. Local recursion is possible if a view automatically introduces a fixpoint. Further, with variables we can feasibly introduce infix expressions like `((X + Y) * X)`, though our view may need to embed assumptions about arity and preferred associativity of the chosen operators.
 
-## Qualified Namespaces
+### Qualified Namespaces
 
 Awelon's hierarchical dictionaries support a simple form of namespacing. But it falls to editable views to support local shorthand, e.g. some form of `using large_prefix as x` or `using package_of_nicknames`. If we assume editable views are maintained within the dictionary, it is feasible to use comments to help control the view, tweaking the language as needed. An intriguing possibility is to integrate a database of nicknames for secure hash resources into the view, where said database is represented within the dictionary.
 
-## Labeled Data - Records and Variants 
+### Labeled Data - Records and Variants 
 
 Labeled sum types (variants) allow conditional discrimination on a label. Labeled product types (records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data is self-documenting (label informs human) and extensible (add more labels).
 
@@ -563,15 +570,15 @@ A useful way to encode labeled sums is by deep primitive sum structures. That is
         [[[[[B] l] l] r] r]
 
         (Singleton Tries)
-        [[[A] ~ :] ~                     :]
-        [~         [~ [[[B] ~ :] ~ :] :] :]
+        [[[A] null cons] null cons]
+        [null [null [[[B] null cons] null cons] cons] cons]
 
         (Merged Trie)
-        [[[A] ~ :] [~ [[[B] ~ :] ~ :] :] :]
+        [[[A] null cons] [null [[[B] null cons] null cons] cons] cons]
 
 A useful label encoding is `(RL|RR)*LL`, where `RL` corresponds to constructor `[l] b [r] b`. The `(RL|RR)*` structure then represents a finite `(0|1)*` bitfield, within which we encode texts or numbers. The final `LL` terminates the label. This encoding has the nice properties of being a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list. 
 
-Unfortunately, the trie is awkward and inefficient to work with directly. A better alternative is instead to work with a trie *constructor* - a function that, given an initial record object, loads it with data. In Awelon text, this might look something like `[[A] "foo" cc [B] "bar" cc ...]`. Relevantly, the ordering of labels in this representation is not relevant, composition of record functions would essentially represent update of a record, and the encoding is not sparse. I'm assuming the type of `cc` is dependent on the text argument, but we could use an expanded label structure if necessary. An editable view could feasibly reduce either to a more aesthetic `[[A] :foo [B] :bar ...]`. 
+Unfortunately, the trie is awkward and inefficient to work with directly. A better alternative is instead to work with a trie *constructor* - a function that, given an initial record object, loads it with data. In Awelon text, this might look something like `[[A] "foo" tc [B] "bar" tc ...]`. Relevantly, the ordering of labels in this representation is not relevant, composition of record functions would essentially represent update of a record, and the encoding is not sparse. I'm assuming the type of trie-cons `tc` is dependent on the text argument. OTOH, we could use an expanded label structure if necessary. An editable view could feasibly reduce to a more aesthetic `[[A]:foo [B]:bar ...]` (ordered to taste). 
 
 Acceleration of records would logically construct a trie and extract an updated new record function with every operation but really just using an optimized representation like a hashmap under the hood. Acceleration of functions related to labeled variants could serve a similar role of improving performance and aesthetics.
 
@@ -616,17 +623,17 @@ Accelerated evaluation of the reactive process network can readily operate acros
 
 Awelon reserves the `@` character to support hierarchical structure. 
 
-Words of form `foo@dict` refer to the behavior of `foo` as defined within a subordinate dictionary `dict`. Similarly, `[42 foo]@d = [42@d foo@d]` and `"hello"@d = [104 "ello" :]@d`. Secure hashes resources may also be qualified, e.g. `$secureHash@d` meaning we interpret the entire resource with respect to dictionary `d`. Some annotations may be usefully qualified, e.g. `(eq_z)@d` would refer to d's definition of `z`. 
+Words of form `foo@dict` refers to the definition of `foo` in context of `@dict`. Similarly, `42@d` is `[41 succ]@d` is `[41@d succ@d]`, and `"hello"@d` is `[104 "ello" cons]@d`, and `$secureHash@d` will interpret the secure hash definition in context of `d`. Even some annotations may be usefully qualified, e.g. `(eq_z)@d` would reference the definition of `z@d`. These namespace qualifiers are second-class. No space is permitted between a word or block and the `@dict` qualifier. Logically, `foo@d` can be understood as just another word.
 
-These namespace qualifiers are second-class: no space is permitted between the word or block and the `@` character. The dictionary identifier `dict` has the syntactic limitations as a normal word. How a subordinate dictionary `dict` is defined is left to the dictionary representation, but ideally should enable efficient structure sharing with the parent and similar dictionaries.
+The dictionary name must also be a valid word, syntactically. How dictionary `@d` is defined is left to the dictionary representation, which Awelon language doesn't specify, but ideally should support lightweight dictionary structure sharing and efficient update.
 
-Importantly, hierarchical dictionaries only permit the parent to reference the child. There is no means for the child to reference the parent. This structural constraint that is valuable for many [application model](ApplicationModel.md) patterns that might involve messaging or publish-subscribe of full dictionaries, and it simplifies cycle detection. 
+Importantly, hierarchical dictionaries only permit the parent to reference child. There is no means for child to reference parent, no `..` path. Consequently, hierarchical dictionaries can be validated and evaluated and shared without context. This structural constraint is valuable for many [application model](ApplicationModel.md) patterns that involve messaging or publish-subscribe of full dictionaries, or use of dictionaries as documents or databases or other objects.
 
-By Law of Demeter, source code shouldn't use multiple qualifiers like `foo@xy@zzy`. But such constructs may appear during evaluation, and are read right to left (i.e. we look for meaning of `foo@xy` within `zzy`).
+By Law of Demeter, programmers should avoid multi-level qualifiers like `foo@xy@zzy`, and it would be sensible to raise a warning when observed. However, such constructs may appear in the course of evaluation, and are read right to left, i.e. we look for meaning of `foo@xy` within dictionary `@zzy`.
 
 ### Localization
 
-As a special optimization for hierarchical dictionaries, we may eliminate qualifiers that don't contribute to the program's behavior. For example, if natural numbers mean the same thing to the parent as they do to the child, then `42@child` can be rewritten to just `42`. 
+As a special optimization for hierarchical dictionaries, we may eliminate qualifiers that don't contribute to the program's behavior. For example, if natural numbers mean the same thing to the parent as they do to the child (based on underlying definitions of `zero` and `succ`), then `42@child` may be rewritten to just `42`.
 
 ## Staged and Generic Programming
 
