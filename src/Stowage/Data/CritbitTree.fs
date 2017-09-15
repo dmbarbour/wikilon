@@ -244,13 +244,16 @@ module CBTree =
 
     /// Remove key from tree. 
     ///
-    /// Note: this assumes the key is in the tree with respect to loading
-    /// and rewriting nodes. If remove frequently fails to hit a target in
-    /// some context, you may wish to add an extra containsKey check.
+    /// Note: this essentially touches the key (cf. 'touch' below).
+    /// If the key is probably not present, use checkedRemove instead.
     let remove (k:Key) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Root (kl, node) -> removeN 0 k kl node
         | Empty -> Empty
+
+    /// Remove key, filtered by containsKey.
+    let inline checkedRemove k t = if containsKey k t then remove k t else t
+
 
     let rec private touchLKV (node:Node<'V>) : Node<'V> =
         match node with
@@ -358,18 +361,29 @@ module CBTree =
         | Empty -> Seq.empty
         | Root(k,n) -> upcast EnumNode.Enumerable<'V>(EnumNode.stepR,k,n)
 
+
     let inline fold (fn : 'St -> Key -> 'V -> 'St) (s0 : 'St) (t : Tree<'V>) : 'St =
         Seq.fold (fun s (k,v) -> fn s k v) s0 (toSeq t)
-
     let inline foldBack (fn : Key -> 'V -> 'St -> 'St) (t : Tree<'V>) (s0 : 'St) : 'St =
         Seq.fold (fun s (k,v) -> fn k v s) s0 (toSeqR t)
-
     let inline iter (fn: Key -> 'V -> unit) (t:Tree<'V>) : unit =
         Seq.iter (fun (k,v) -> fn k v) (toSeq t)
+    let inline tryPick (fn:Key -> 'V -> 'U option) (t:Tree<'V>) : 'U option =
+        Seq.tryPick (fun (k,v) -> fn k v) (toSeq t)
+    let inline tryFindKey fn t = tryPick (fun k v -> if fn k v then Some k else None) t
+    let inline exists fn t = tryFindKey fn t |> Option.isSome
+    let inline forall fn t = not (exists (fun k v -> not (fn k v)) t)
 
     let inline toArray (t:Tree<'V>) : (Key * 'V) array = Array.ofSeq (toSeq t)
+    let inline toList (t:Tree<'V>) : (Key * 'V) list = List.ofSeq (toSeq t)
+
+    let ofSeq (s:seq<Key * 'V>) : Tree<'V> =
+        Seq.fold (fun t (k,v) -> add k v t) empty s
+    let ofList (lst:(Key * 'V) list) : Tree<'V> =
+        List.fold (fun t (k,v) -> add k v t) empty lst
     let inline ofArray (a: (Key * 'V) array) : Tree<'V> =
         Array.fold (fun t (k,v) -> add k v t) empty a
+
 
     // select prefix when we have already matched the least-key. 
     let rec selectPrefixL (pb:Critbit) (node:Node<'V>) : Node<'V> =
@@ -647,6 +661,7 @@ module CBTree =
 
 
     /// Codec for the full critbit tree, given a value codec.
+    /// The root of the tre is encoded inline.
     let treeCodec (cV:Codec<'V>) : Codec<Tree<'V>> = 
         let cK = EncBytes.codec
         let cN = EncNode.codec cV

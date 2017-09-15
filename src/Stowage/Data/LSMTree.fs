@@ -8,15 +8,11 @@ open Data.ByteString
 /// is highly suitable for write-heavy processes or on-disk storage.
 /// Stowage is a form of on-disk storage and benefits from buffering.
 ///
-/// The LSM-tree has some disadvantages, e.g. computing tree size is
-/// non-trivial, and we potentially preserve multiple versions of a
-/// value for a key.
-///
-/// To simplify the logic, this LSM-tree variant buffers only `add`
-/// updates. Key removal is not buffered. Clients can work around
-/// this a bit by use of logical deletion (adding an Empty or None)
-/// and an occasional batch cleanup. Even so, key removal isn't worse
-/// than for Stowage.CBTree.
+/// An LSM-tree has some disadvantages. Due to buffered removals, the
+/// tree size or isEmpty computations are non-trivial. The logic is more
+/// involved. And history-dependent structure can hinder sharing with
+/// trees that received the same data in a different order (although the
+/// sharing with the tree's own past is pretty good).
 module LSMTree =
 
     type Key = ByteString
@@ -24,39 +20,43 @@ module LSMTree =
     let inline findCritbit cbMin a b = BTree.findCritbit cbMin a b
     let inline testCritbit cb k = BTree.testCritbit cb k
 
-    // Buffer of updates (adds only!), represented in-memory.    
-    // On disk we'll use a key-value array.
-    type Updates<'V> = (BTree<'V> * Key) option
+    // Buffer of recent adds and removes, represented in-memory, plus
+    // the prior 'least key' for the node. 
+    type Updates<'V> = (BTree<'V option> * Key) option
 
     type Node<'V> =
         | Leaf of 'V
         | INode of Critbit * Node<'V> * Key * Node<'V>              // Inner Tree Node
         | RNode of Critbit * Updates<'V> * LVRef<Node<'V>>          // Remote Node with Update Buffer
 
+    // A Tree is either empty or has a key and a node.
+    //
+    // Note: the least-key might not actually be a member of the tree 
+    // due to how the LSM-tree buffers removals. Regardless, it is a
+    // valid sample key for computing critbits!
+    //
+    // Relatedly, it is possible to have an empty tree that is represented
+    // by a remote node with a ton of buffered deletions! So the 'isEmpty'
+    // function is not trivial.
     type Tree<'V> =
         | Empty
         | Root of Key * Node<'V>
 
     let empty : Tree<_> = Empty
-    let isEmpty (t:Tree<_>) : bool =
-        match t with 
-        | Empty -> true
-        | _ -> false
     let inline singleton (k:Key) (v:'V) : Tree<'V> = Root(k, Leaf v)
 
-    let private updTryFind k upd = 
-        match upd with
-        | None -> None
-        | Some(buff,_) -> BTree.tryFind k buff
-
-    let rec private getLKV (k:Key) (node:Node<'V>) : 'V =
+    // we've matched the least-key recorded at the parent, but it might
+    // be a pending removal, so we still need to return an optional value.
+    let rec private tryGetLKV (kl:Key) (node:Node<'V>) : 'V option =
         match node with
-        | INode (_,l,_,_) -> getLKV k l
-        | Leaf v -> v
-        | RNode (_,upd,ref) -> 
-            match updTryFind k upd with
-            | None -> getLKV k (LVRef.load ref)
-            | Some v -> v
+        | INode (_,l,_,_) -> tryGetLKV kl l
+        | Leaf v -> Some v
+        | RNode (_,None,ref) -> tryGetLKV kl (LVRef.load ref)
+        | RNode (_,Some(buff,kl0),ref) ->
+            // either in buffer or should be least-key in ref
+            match BTree.tryFind kl buff with
+            | Some vOpt -> vOpt // recently added or removed
+            | None -> assert(kl = kl0); tryGetLKV kl (LVRef.load ref)
 
     let rec private tryFindN (mb:Critbit) (k:Key) (kl:Key) (node:Node<'V>) : 'V option =
         match node with
@@ -69,23 +69,22 @@ module LSMTree =
             if keysMatch then Some v else None
         | RNode (cb, None, ref) ->
             match findCritbit mb k kl with
-            | None -> Some (getLKV kl (LVRef.load ref))
+            | None -> tryGetLKV kl (LVRef.load ref)
             | Some mb' ->
                 // stop if diff in prefix or if smaller than least-key
                 let stop = (mb' < cb) || (testCritbit mb' kl)
                 if stop then None else
                 tryFindN mb' k kl (LVRef.load ref)
         | RNode (cb, Some(buff,kl0), ref) ->
-            let vInBuff = BTree.tryFind k buff
-            if Option.isSome vInBuff then vInBuff else
-            match findCritbit mb k kl0 with
-            | None -> Some (getLKV kl0 (LVRef.load ref))
-            | Some mb' ->
-                let stop = (mb' < cb) || (testCritbit mb' kl0)
-                if stop then None else
-                tryFindN mb' k kl0 (LVRef.load ref)
+            match BTree.tryFind k buff with
+            | Some vOpt -> vOpt
+            | None -> tryFindN mb k kl0 (RNode(cb, None, ref))
 
     /// Find some value associated with a key, or return none.
+    ///
+    /// This will access values in recent update buffers before 
+    /// checking remote stowage references. The lookup cost is
+    /// hence pretty good for a recent working set.
     let tryFind (k:Key) (t:Tree<'V>) : 'V option =
         match t with
         | Root (kl,n) -> tryFindN 0 k kl n
@@ -97,41 +96,16 @@ module LSMTree =
         match tryFind k t with
         | Some v -> v
         | None -> raise (System.Collections.Generic.KeyNotFoundException())
-        
-    let rec private containsKeyN mb k kl node =
-        match node with
-        | INode (cb, l, kr, r) ->
-            if testCritbit cb k 
-                then containsKeyN mb k kr r
-                else containsKeyN mb k kl l
-        | Leaf v -> Option.isNone (findCritbit mb k kl)
-        | RNode (cb, None, ref) ->
-            match findCritbit mb k kl with
-            | None -> true 
-            | Some mb' ->
-                let stop = (mb' < cb) || (testCritbit mb' kl)
-                if stop then false else
-                containsKeyN mb' k kl (LVRef.load ref)
-        | RNode (cb, Some(buff,kl0), ref) ->
-            let vInBuff = BTree.tryFind k buff
-            if Option.isSome vInBuff then true else
-            match findCritbit mb k kl0 with
-            | None -> true
-            | Some mb' ->
-                let stop = (mb' < cb) || (testCritbit mb' kl0)
-                if stop then false else
-                containsKeyN mb' k kl0 (LVRef.load ref)
-
-    /// Test whether a tree contains a specific key.
-    let containsKey (k:Key) (t:Tree<'V>) : bool =
-        match t with
-        | Root (kl,n) -> containsKeyN 0 k kl n
-        | Empty -> false
+    
+    /// Check whether key is present in tree. 
+    let inline containsKey k t = Option.isSome (tryFind k t)
+        // cannot be short-circuited because the 'least key' in the
+        // parent node is not guaranteed to be present in the tree.
 
     let private updAdd (k:Key) (v:'V) (kl:Key) (upd:Updates<'V>) : Updates<'V> =
         match upd with
-        | None -> Some(BTree.singleton k v, kl)
-        | Some (buff, kl0) -> Some (BTree.add k v buff, kl0)
+        | None -> Some(BTree.singleton k (Some v), kl)
+        | Some (buff, kl0) -> Some (BTree.add k (Some v) buff, kl0)
 
     let rec private setLKV (kl:Key) (v:'V) (node:Node<'V>) : Node<'V> =
         match node with
@@ -146,16 +120,12 @@ module LSMTree =
     let rec private addLKV (mb:Critbit) (k:Key) (v:'V) (kl:Key) (node:Node<'V>) : Node<'V> =
         match node with
         | INode (cb, l, kr, r) when (mb >= cb) ->
-            assert(mb > cb)
             let l' = addLKV mb k v kl l
             INode (cb, l', kr, r)
         | RNode (cb, upd, ref) when (mb >= cb) ->
-            assert(mb > cb)
             let upd' = updAdd k v kl upd
             RNode (cb, upd', ref)
-        | _ -> 
-            assert(testCritbit mb kl)
-            INode(mb, Leaf v, kl, node)
+        | _ -> INode(mb, Leaf v, kl, node)
 
     // assume k > kl at mb
     let rec private addRKV (mb:Critbit) (k:Key) (v:'V) (kl:Key) (node:Node<'V>) : Node<'V> =
@@ -179,10 +149,10 @@ module LSMTree =
 
     /// Add a key-value association to a tree. 
     ///
-    /// The Tree is persistent, so this returns a new tree with the
-    /// specified modification. As a log-structured merge tree, add
-    /// is buffered. Use explicit compaction to propagate oversized
-    /// buffers into remote nodes.
+    /// Returns a new tree with the update applied. As an LSM-tree 
+    /// variant, add is buffered: we don't touch remote nodes. This
+    /// buffer is NOT automatically flushed. It must be flushed by
+    /// explicit compaction.
     let add (k:Key) (v:'V) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Root (kl, n) -> 
@@ -194,65 +164,163 @@ module LSMTree =
             | None -> Root (kl, setLKV kl v n)
         | Empty -> singleton k v
 
-    let private applyUpdates (upd:Updates<'V>) (n:Node<'V>) : Node<'V> =
-        match upd with
-        | None -> n
-        | Some (buff, kl0) ->
-            let t' = BTree.fold (fun t k v -> add k v t) (Root(kl0,n)) buff
-            match t' with
-            | Root(_, n) -> n
-            | Empty -> failwith "impossible state"
+    // min key assuming equality up to critbit
+    let private minKeyCB mb a b =
+        match findCritbit mb a b with
+        | Some mb' when (testCritbit mb' b) -> a
+        | _ -> b
 
-    // load ref and apply updates
-    let inline private loadR (upd:Updates<'V>) (ref:LVRef<Node<'V>>) : Node<'V> =
-        applyUpdates upd (LVRef.load' ref)
-
-    // remove least-key value for a node, return a tree.
-    let rec private removeLKV (node:Node<'V>) : Tree<'V> =
-        match node with
-        | INode (cb, l, kr, r) ->
-            match removeLKV l with
-            | Empty -> Root(kr, r)
-            | Root(kl', l') -> Root(kl', INode(cb, l', kr, r))
-        | Leaf _  -> Empty // key removed
-        | RNode (_, upd, ref) -> 
-            removeLKV (loadR upd ref)
+    // remove from update buffer, optimizing the case where it is
+    // locally obvious that the removed key is not in the remote node.
+    let inline private updRem (k:Key) (kl:Key) (cb:Critbit) (upd:Updates<'V>) : (Key * Updates<'V>) =
+        let (buff,kl0) =
+            match upd with
+            | None -> (BTree.empty, kl)
+            | Some (buff,kl0) -> (buff,kl0)
+        match findCritbit 0 k kl0 with
+        | Some mb when (mb < cb) -> (kl,upd) // current node not in k's path
+        | Some mb when (testCritbit mb kl0) -> // k is not in remote ref
+            let buff' = BTree.remove k buff // remove recent add, if any
+            match buff' with
+            | BTree.Empty -> (kl0, None) // update buffer cleared
+            | BTree.Root(klB, _) -> ((minKeyCB cb klB kl0), Some(buff',kl0))
+        | _ -> 
+            let buff' = BTree.add k None buff
+            (kl, Some(buff',kl0))
 
     // remove a key from a node.
-    let rec private removeN (mb:Critbit) (k:Key) (kl:Key) (node:Node<'V>) : Tree<'V> =
+    let rec private removeN (k:Key) (kl:Key) (node:Node<'V>) : Tree<'V> =
         match node with
         | INode (cb, l, kr, r) ->
-            if testCritbit cb k
-               then match removeN mb k kr r with
-                    | Root(kr',r') -> Root(kl, INode(cb, l, kr', r'))
-                    | Empty -> Root(kl,l)
-               else match removeN mb k kl l with
-                    | Root(kl',l') -> Root(kl', INode(cb, l', kr, r))
-                    | Empty -> Root(kr,r)
-        | Leaf _ ->
-            let keysMatch = Option.isNone (findCritbit mb k kl)
-            if keysMatch then Empty else Root(kl,node)
+            if testCritbit cb k then
+                match removeN k kr r with
+                | Root(kr',r') -> Root(kl, INode(cb, l, kr', r'))
+                | Empty -> Root(kl,l)
+            else 
+                match removeN k kl l with
+                | Root(kl',l') -> Root(kl', INode(cb, l', kr, r))
+                | Empty -> Root(kr,r)
+        | Leaf _ -> if (k = kl) then Empty else Root(kl,node)
         | RNode (cb, upd, ref) ->
-            match findCritbit mb k kl with
-            | None -> removeLKV (loadR upd ref)
-            | Some mb' ->
-                let stop = (mb' < cb) || (testCritbit mb' kl)
-                if stop then Root(kl,node) else
-                removeN mb' k kl (loadR upd ref)
+            // delay removal via buffer
+            let (kl',upd') = updRem k kl cb upd
+            Root(kl',RNode(cb,upd',ref))
 
     /// Remove key from tree, returning modified tree.
     ///
-    /// Note: Removal for LSM tree is not buffered. All versions for
-    /// a key are removed. Further, it assumes the key is present. 
-    /// A `containsKey` filter is wise for improbable keys.
+    /// Like add, this is a buffered operation and does not touch 
+    /// any remote nodes. Key removal from a remote node will be
+    /// delayed until future compaction when the buffer is oversized. 
     ///
-    /// If removal is a frequent operation, consider a value type
-    /// with logical deletion such that you may delete by 'adding'
-    /// a value. You could eventually filter the tree.
+    /// If there is a high probability that the key is not present,
+    /// and if keys are large enough for the extra buffer overhead to
+    /// be a concern, favor use of checkedRemove.
+    ///
+    /// Note: this is a 'blind' removal, although in the worst case
+    /// it adds the key to a buffer. If keys are large and the key
+    /// is probably not in the buffer, favor use of checkedRemove. 
     let remove (k:Key) (t:Tree<'V>) : Tree<'V> =
         match t with
-        | Root (kl, node) -> removeN 0 k kl node
+        | Root (kl, node) -> removeN k kl node
         | Empty -> Empty
+
+    /// Remove a key, filtered by containsKey.
+    let inline checkedRemove k t = if containsKey k t then remove k t else t
+
+
+    let private applyUpd t k vOpt =
+        match vOpt with
+        | None -> remove k t
+        | Some v -> add k v t
+
+    let private applyUpdates (upd:Updates<'V>) (kl:Key) (node:Node<'V>) : Tree<'V> =
+        match upd with
+        | None -> Root(kl,node) 
+        | Some(buff,kl0) -> BTree.fold applyUpd (Root(kl0,node)) buff
+
+    let inline private loadR' (upd:Updates<'V>) (kl:Key) (ref:LVRef<Node<'V>>) : Tree<'V> =
+        applyUpdates upd kl (LVRef.load' ref)
+
+    let inline private loadR (upd:Updates<'V>) (kl:Key) (ref:LVRef<Node<'V>>) : Tree<'V> =
+        applyUpdates upd kl (LVRef.load ref)
+
+    // Enumeration of Tree Elements
+    module private EnumTree =
+        type Stack<'V> = Tree<'V> list
+        type Elem<'V> = (Key * 'V) 
+        type State<'V> = (Elem<'V> option * Stack<'V>)
+        type StepFn<'V> = Stack<'V> -> State<'V>
+        
+        let rec stepL (s:Stack<'V>) : State<'V> =
+            match s with
+            | (t::s') ->
+                match t with
+                | Root(kl,node) -> stepLN s' kl node
+                | Empty -> stepL s'
+            | [] -> (None, [])
+        and stepLN s kl node =
+            match node with
+            | INode(_,l,kr,r) -> stepLN (Root(kr,r)::s) kl l
+            | Leaf v -> (Some(kl,v), s)
+            | RNode(_,upd,ref) -> stepL ((loadR upd kl ref)::s)
+
+        let rec stepR (s:Stack<'V>) : State<'V> =
+            match s with
+            | (t::s') ->
+                match t with
+                | Root(kl,node) -> stepRN s' kl node
+                | Empty -> stepR s'
+            | [] -> (None, [])
+        and stepRN s kl node =
+            match node with 
+            | INode(_,l,kr,r) -> stepRN (Root(kl,l)::s) kr r
+            | Leaf v -> (Some(kl,v),s)
+            | RNode(_,upd,ref) -> stepR ((loadR upd kl ref)::s)
+
+        type Enumerator<'V> = // enumerates left to right
+            val step : StepFn<'V>
+            val mutable private state : State<'V>
+            new (s,t) = { step = s; state = (None, t::[]) }
+            member e.Elem 
+                with get() = 
+                    match fst e.state with
+                    | Some v -> v
+                    | None -> invalidOp "no current element"
+            member e.Stack with get() = snd e.state
+            interface System.Collections.Generic.IEnumerator<Elem<'V>> with
+                member e.Current with get() = e.Elem
+            interface System.Collections.IEnumerator with
+                member e.Current with get() = upcast e.Elem
+                member e.MoveNext() =
+                    e.state <- e.step e.Stack
+                    Option.isSome (fst e.state)
+                member e.Reset() = raise (System.NotSupportedException())
+            interface System.IDisposable with
+                member e.Dispose() = ()
+
+        type Enumerable<'V> =
+            val private s : StepFn<'V>
+            val private t : Tree<'V>
+            new(s,t) = { s = s; t = t }
+            member e.GetEnum() = new Enumerator<'V>(e.s, e.t)
+            interface System.Collections.Generic.IEnumerable<Elem<'V>> with
+                member e.GetEnumerator() = upcast e.GetEnum()
+            interface System.Collections.IEnumerable with
+                member e.GetEnumerator() = upcast e.GetEnum()
+
+    let toSeq (t:Tree<'V>) : seq<(Key * 'V)> =
+        upcast EnumTree.Enumerable(EnumTree.stepL, t)
+
+    let toSeqR (t:Tree<'V>) : seq<(Key * 'V)> =
+        upcast EnumTree.Enumerable(EnumTree.stepR, t)
+
+    /// Check whether the tree is empty. O(N).
+    let isEmpty (t:Tree<_>) : bool = Seq.isEmpty (toSeq t)
+
+    /// Compute size of tree. O(N). 
+    let size (t:Tree<_>) : int = Seq.length (toSeq t)
+
+
 
 (*
 
