@@ -47,7 +47,7 @@ A simple translation from lambda calculus is also provided in discussion of *Nam
 
 1. Combinator rewriting is much simpler than variable substitution. There is no need for environment management, variable capture or lexical scope. There is no risk of representing free variables. 
 1. The stack-like environment enables uniform abstraction for multiple arguments or results without explicit tupling, and provides a foundation for *Static Typing* based on arity without need for atomic value types.
-1. The explicit copy and drop operations simplify substructural type analysis, reference counting GC, and potential acceleration via in-place update for indexed data structures.
+1. The explicit copy and drop operations simplify substructural type analysis, reference counting GC, and potential acceleration using in-place update for uniquely referenced, indexed data structures.
 
 ## Encoding
 
