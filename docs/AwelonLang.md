@@ -61,13 +61,13 @@ Words are the user-definable unit for Awelon code. Structurally, a word starts w
 
 Words are evaluated in context of a *Dictionary*, where each word is defined by an Awelon program. Definitions of words within a dictionary must form a directed acyclic graph. The semantics for words are extremely trivial: we lazily substitute the word by its definition.
 
-The four primitive words `a`, `b`, `c`, and `d` may not be defined. The words `zero`, `succ`, `null`, and `cons` must be defined for natural numbers and embedded texts to become usable.
+The four primitive words `a`, `b`, `c`, and `d` may not be defined. The four words `zero`, `succ`, `null`, and `cons` must be defined for natural numbers, embedded texts, and binary resources to become usable.
 
 ## Natural Numbers
 
 Awelon has native support for natural numbers. Syntactically, numbers are represented by regex `0|[1-9][0-9]*` wherever a word may appear. 
 
-        0 = zero
+        0 = [zero]
         1 = [0 succ]
         2 = [1 succ]
         3 = [2 succ]
@@ -75,23 +75,21 @@ Awelon has native support for natural numbers. Syntactically, numbers are repres
         42 = [41 succ]
         (et cetera)
 
-Definitions for `zero` and `succ` are left to the dictionary. In practice, natural numbers must be defined around available *Accelerators*, such that we can add two numbers in constant or log-time rather than linear time.
-
-Awelon does not support any other number types natively, nor does it support alternative encodings 
+Definitions for `zero` and `succ` are left to the dictionary. Wrapping everything in blocks provides a simple structural guarantee that numbers may be treated as values regardless of definition. In practice, natural numbers must be defined based on *Acceleration*. With accelerated arithmetic, for example, we could add two numbers in log-time rather than linear time. Awelon does not support any other number types natively, but *Editable Views* can be leveraged to support numerical towers at the syntactic layer.
 
 ## Embedded Texts
 
-Awelon has native support for embedding texts inline between double quotes such as `"Hello, world!"`. Embedded texts are limited to ASCII, specially the subset valid in Awelon code (32-126) minus the double quote `"` (34). There are no escape characters. Semantically, a text represents a binary list.
+Awelon has native support for embedding texts inline between double quotes such as `"Hello, world!"`. Embedded texts are limited to ASCII, specifically the subset valid in Awelon code (32-126) minus the double quote `"` (34). There are no escape characters. Semantically, a text represents a binary list.
 
-        ""      = null
+        ""      = [null]
         "hello" = [104 "ello" cons]
 
-Definitions for `null` and `cons` are left to the dictionary. Acceleration of list structures is quite feasible, so this list may be efficiently represented in the runtime by use of a binary array.
+Definitions for `null` and `cons` are left to the dictionary. Like natural numbers, we have a structural guarantee of value type, and definitions are likely to be determined by available runtime acceleration. In this case, acceleration could support lists via arrays.
 
 Embedded texts are suitable only for simple things like labels, test data, comments, and micro-DSLs such as regular expressions. They are not very suitable for general use. To work around these limitations, the primary options are:
 
 * interpret, e.g. `"multiple\nlines" lit` to rewrite escapes
-* structure, e.g. `["multiple" ["lines" null cons] cons] unlines`
+* structure, e.g. `["multiple" ["lines" [null] cons] cons] unlines`
 * use *Secure Hash Resources* to reference external binary
 
 Interpeted text is a convenient hack but doesn't scale, compose, or abstract nicely. Structure is easy to abstract, compose, and evolve to support mixed data, but needs *Editable Views* to provide a usable syntax. Use of *Secure Hash Resources* is the most convenient wherever you'd conventionally use an external text or binary file.
@@ -103,7 +101,7 @@ It is possible to identify binaries by their *secure hash*. Doing so has many ni
 * external binary data may be referenced via `%secureHash`
 * code and structured data is referenced via `$secureHash`
 
-Secure hash resources may appear anywhwere an Awelon word may appear, and is interpreted relative to the local dictionary. For example, binaries use the same encoding as embedded texts, and the meaning ultimately depends on the local definitions for `zero`, `succ`, `null`, and `cons`. 
+Secure hash resources may appear anywhwere an Awelon word may appear, and are interpreted relative to the local dictionary. For example, binaries use the same encoding as embedded texts, and their semantics ultimately depend on the local definitions for `zero`, `succ`, `null`, and `cons`. 
 
 Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the hash with 56 characters in a [base32](https://en.wikipedia.org/wiki/Base32) alphabet specialized to avoid conflicts with numbers or human meaningful words. Some example hashes, chained from the word `test`:
         
@@ -420,14 +418,9 @@ An `(error)` annotation marks a value erroneous and non-applicable. We cannot ob
 
 That is, we simply halt rewriting wherever we attempt to apply the error value. But an erroneous value can otherwise be bound, copied, dropped like normal. 
 
- would only become a problem if we attempt later to observe this divide-by-zero result. A runtime may also wrap recognized errors to highlight them in the output.
-
-        [A](nc)c        => [][[A](nc)c](error)a d
-        [[A][B][C]](t2) => [[A][B][C]](t2)(error)
-
 ## Garbage Data
 
-For potentially relevant `(nd)` data, we often have an option to drop data into a logical bit bucket then never look at it again. If we inform our runtime that we plan to never look at it again, we can also recover memory resources associated with that data. We can represent this pattern by use of a `(trash)` annotation:
+In some cases, it might be convenient to erase data that we know we shouldn't use in the future to recover memory resources, yet leave a placeholder and preserve other annotations (such as `(nd)` for relevant data). We could represent this pattern by use of a `(trash)` annotation:
 
         [A](trash)      => [](error)
         [A](nd)(trash)  => [](nd)(error)
@@ -452,26 +445,25 @@ Awelon can be evaluated without static typing. There is no type driven dispatch 
 
 We might represent our primitive types as:
 
-        a   : S B [S → S'] → S' B
-        b   : S B [E B → E'] → S [E → E']
-        c   : S A → S A A
-        d   : S A → S
+        a   : S [B] [S → S'] → S' [B]
+        b   : S [B] [E B → E'] → S [E → E']
+        c   : S [A] → S [A] [A]
+        d   : S [A] → S
         [F] : S → S [type(F)]
 
 The type sequence `S C B A` aligns with a program structure `S[C][B][A]`. Effectively, `S` is the remainder of our program 'stack' when we view the program as rewriting a stack-like structure. In context of Awelon, we know that value types `C B A` must be first class functions, which potentially encode data.
 
-Value sealers like `(seal_foo)` would require special types.
+Value sealers like `(seal_foo)` would require special non-block types.
 
         (seal_foo) : S -> S <foo>
         (open_foo) : S <foo> -> S
 
 Annotations can augment static type analysis in many ways, providing extra structure and assertions against which we can validate inference. Structural and substructural annotations would ideally be validated statically and have no dynamic behavior. A remaining concern is static typing of conditional behavior. We might represent various conditional data types:
 
-        (bool)      S [S   → S'] [S     → S']   → S'
-        (opt)       S [S   → S'] [S A   → S']   → S'
-        (sum)       S [S B → S'] [S A   → S']   → S'
-        (list)      S [S   → S'] [S A B → S']   → S'
-        (cond)      S [A   → S'] [B     → S']   → S'
+        (bool)      S [S     → S'] [S     → S'] → S'
+        (opt)       S [S     → S'] [S [A] → S'] → S'
+        (sum)       S [S [B] → S'] [S [A] → S'] → S'
+        (cond)      S [A     → S'] [B     → S'] → S'
 
 Knowing these types, we can also check for consistency between conditional branches. Unfortunately, inferring these types is difficult. Annotations can provide a much needed hint. I imagine programmers will want annotations for many common types - naturals, texts, binaries, lists, labels, records, and so on. Anything we accelerate or use frequently enough for a runtime to recognize.
 
@@ -507,9 +499,7 @@ Awelon's natural numbers here are given the `#` prefix in favor of a more aesthe
 
 Similarly, we could develop a view for command sequences:
 
-        {A,B,C} == [[A] [[B] [[C] null cons] cons] cons]
-        {A,B|C} == [[A] [[B] C cons] cons]
-            such that {A,B,C|null} == {A,B,C}
+        {A,B,C} == [[A] [[B] [[C] ~ cons] cons] cons]
 
 There is a lot of flexibility with simple recognizing and rewriting of texts. Importantly, because these editable views are separate from the language compilers and interpreters, it is easy to experiment, use multiple views, and tune the programming experience to the programmer or the problem.
 
@@ -562,18 +552,9 @@ Awelon's hierarchical dictionaries support a simple form of namespacing. But it 
 
 Labeled sum types (variants) allow conditional discrimination on a label. Labeled product types (records) allow us to access to heterogeneous data by a label. Primitive sum `(A + B)` and product `(A * B)` types are simple and sufficient for many use cases. But labeled data is self-documenting (label informs human) and extensible (add more labels).
 
-A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] l] r] l]` structure where the left-right-left path is extended to multiple bytes encoding a human-meaningful label. Unlike label-value pairs, deep sums do not require dependent types. A labeled product can similarly be modeled as a heterogeneous trie on the label. Consider:
+A useful way to encode labeled sums is by deep primitive sum structures. That is, we use a `[[[value] l] r] l]` structure where the left-right-left path is extended to multiple bytes encoding a human-meaningful label. Unlike label-value pairs, deep sums do not require dependent types. 
 
-        (Deep Sums)
-        [[[A] l] l]
-        [[[[[B] l] l] r] r]
-
-        (Singleton Tries)
-        [[[A] null cons] null cons]
-        [null [null [[[B] null cons] null cons] cons] cons]
-
-        (Merged Trie)
-        [[[A] null cons] [null [[[B] null cons] null cons] cons] cons]
+A labeled product can similarly be modeled as a bit-trie, modeled using pairs such that in `[[A] [B]]` the left-path is `[A]` and the right-path is `[B]`. We simply need to arrange our trie along the same left-right-left paths as our labels. Again, no dependent types are required. Empty paths could be filled with a unit value. A reflective variant could be based on use of sum types rather than pairs.
 
 A useful label encoding is `(RL|RR)*LL`, where `RL` corresponds to constructor `[l] b [r] b`. The `(RL|RR)*` structure then represents a finite `(0|1)*` bitfield, within which we encode texts or numbers. The final `LL` terminates the label. This encoding has the nice properties of being a self-synchronizing code. Naive construction of the trie supports enumeration of labels and merging. The unused `LR` slot can potentially be used in the record as a name shadowing list. 
 
