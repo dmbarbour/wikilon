@@ -75,6 +75,9 @@ module BTree =
         | Inner of Critbit * Node<'V> * Key * Node<'V>
 
     /// The Tree structure.
+    ///
+    /// The critbit tree is history-independent, so naive comparison 
+    /// implementations work well enough.
     type Tree<'V> =
         | Empty
         | Root of Key * Node<'V>

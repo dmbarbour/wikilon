@@ -386,7 +386,7 @@ module CBTree =
 
 
     // select prefix when we have already matched the least-key. 
-    let rec selectPrefixL (pb:Critbit) (node:Node<'V>) : Node<'V> =
+    let rec private selectPrefixL (pb:Critbit) (node:Node<'V>) : Node<'V> =
         match node with
         | INode(cb, l, _, _) when (cb < pb) -> selectPrefixL pb l
         | RNode(cb, _, ref) when (cb < pb) -> selectPrefixL pb (LVRef.load' ref)
@@ -397,7 +397,7 @@ module CBTree =
         findCritbit cb p (BS.take p.Length k)    
 
     // here 'mb' is count of bits matched against kl
-    let rec selectPrefixN (mb:Critbit) (p:ByteString) (kl:Key) (node:Node<'V>) : Tree<'V> =
+    let rec private selectPrefixN (mb:Critbit) (p:ByteString) (kl:Key) (node:Node<'V>) : Tree<'V> =
         let pb = 9 * p.Length
         match node with
         | INode(cb, l, kr, r) when (cb < pb) ->
@@ -447,7 +447,7 @@ module CBTree =
     /// Partition a tree such that all keys strictly less than the
     /// given key are in the left tree, and all remaining keys are
     /// in the right tree. This has a O(N) cost in key length.
-    let partition (k:Key) (t:Tree<'V>) : (Tree<'V> * Tree<'V>) =
+    let partitionK (k:Key) (t:Tree<'V>) : (Tree<'V> * Tree<'V>) =
         match t with
         | Empty -> (Empty, Empty)
         | Root(kl, node) ->
