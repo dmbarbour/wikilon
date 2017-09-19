@@ -345,7 +345,7 @@ module LSMTree =
             | None -> partitionM kl node
         | Empty -> struct(Empty,Empty)
 
-    // partition when k=kl (cannot assume kl is true least-key at RNode)
+    // partition when k=kl; cannot assume kl is true least-key at RNode
     and private partitionM kl node =
         match node with
         | INode(cb,l,kr,r) -> 
@@ -353,8 +353,9 @@ module LSMTree =
             let rr = joinCB cb lr (Root(kr,r))
             struct(ll,rr)
         | Leaf _ -> struct(Empty,Root(kl,node))
-        | RNode(_,upd,ref) ->
-            partitionT (9 * kl.Length) kl (loadR' upd kl ref)
+        | RNode(cb,upd,ref) ->
+            // new least-key after loading RNode
+            partitionT cb kl (loadR' upd kl ref)
 
     // partition when k <> kl at mb
     and private partitionN mb k kl node =
