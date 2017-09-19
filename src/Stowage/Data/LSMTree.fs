@@ -3,16 +3,22 @@ open Data.ByteString
 
 /// A Log Structured Merge (LSM) Tree above Stowage
 ///
-/// The LSM-tree is essentially a key-value tree with buffered update.
-/// Recent updates are aggregated in memory and applied together. This
-/// is highly suitable for write-heavy processes or on-disk storage.
-/// Stowage is a form of on-disk storage and benefits from buffering.
+/// The LSM-tree is essentially a key-value tree with buffered updates.
 ///
-/// An LSM-tree has some disadvantages. Due to buffered removals, the
-/// tree size or isEmpty computations are non-trivial. The logic is more
-/// involved. And history-dependent structure can hinder sharing with
-/// trees that received the same data in a different order (although the
-/// sharing with the tree's own past is pretty good).
+/// Recent updates are aggregated in a buffer close to the tree's root.
+/// This results in less frequent updates, fewer intermediate nodes, and
+/// a longer life cycle for deep tree structure. Buffering is efficient 
+/// for write-heavy processing, on-disk storage, and small working sets
+/// where operations concentrate on a few keys at a time.
+/// 
+/// This module provides the LSMTree as a first-class, immutable, persistent
+/// data structure. This makes it easy to keep histories or model forks and
+/// branches. Of course, performance does suffer compared to direct use of a
+/// LSM-tree database.
+///
+/// Update buffering does complicate some tasks. For example, computing a
+/// tree size or a current least-key is not a trivial operation because of
+/// pending removals. Structural diffs are feasible but more complicated.
 module LSMTree =
 
     type Key = ByteString
@@ -375,12 +381,124 @@ module LSMTree =
     /// in the right tree.
     let partitionK (k:Key) (t:Tree<'V>) : (Tree<'V> * Tree<'V>) =
         let struct(ll,rr) = partitionT 0 k t
-        (ll,rr) 
+        (ll,rr)
+
+    module private EnumNodeDiff =
+        type EQ<'V> = 'V -> 'V -> bool
+        type Stack<'V> = (Key * Node<'V>) list
+        type Elem<'V> = (Key * VDiff<'V>)
+        type State<'V> = (Elem<'V> option * (Stack<'V> * Stack<'V>))
+
+        let stackAdd s t =
+            match t with
+            | Empty -> s
+            | Root(kl,n) -> (kl,n)::s
+
+        let inline iniStack t = stackAdd List.empty t
+        let iniState (a:Tree<'V>) (b:Tree<'V>) : State<'V> = 
+            (None, (iniStack a, iniStack b))
+
+        // Step until we have a leftmost leaf value or the empty stack.
+        let rec stepV (s:Stack<'V>) : (Stack<'V> * Key * 'V) option =
+            match s with
+            | ((kl,node)::s') ->
+                match node with
+                | INode(cb,l,kr,r) -> stepV ((kl,l)::(kr,r)::s')
+                | Leaf v -> Some(s',kl,v)
+                | RNode(cb,upd,ref) -> stepV (stackAdd s' (loadR' upd kl ref))
+            | [] -> None
+
+        // Note: Ideally, I could diff just the update lists when I know
+        // our remote nodes are equal. But to keep it simple, I'm only 
+        // accepting two nodes as equal when the update buffers are equal.
+        // I assume comparison on values is efficient enough.
+        type Stepper<'V when 'V : equality>() =
+
+            // I cannot assume a `(key*node)` pair actually has any values,
+            // due to buffered deletions on an RNode. So for now I'll just
+            // push all the case logic into one big function.
+            member x.StepDiff sl sr =
+                match (sl,sr) with
+                | ((kl,Leaf vl)::sl', _) ->
+                    match stepV sr with
+                    | Some(sr',kr,vr) -> x.StepDiffK kl vl sl' kr vr sr'
+                    | None -> (Some(kl,InL vl),(sl',[]))
+                | (_, (kr,Leaf vr)::sr') ->
+                    match stepV sl with
+                    | Some(sl',kl,vl) -> x.StepDiffK kl vl sl' kr vr sr'
+                    | None -> (Some(kr,InR vr),([],sr'))
+                | ((kl,INode(cb,l,kr,r))::sl', _) ->
+                    x.StepDiff ((kl,l)::(kr,r)::sl') sr
+                | (_, (kl,INode(cb,l,kr,r))::sr') ->
+                    x.StepDiff sl ((kl,l)::(kr,r)::sr')
+                | ([],_) ->
+                    match stepV sr with
+                    | Some(sr',kr,vr) -> (Some(kr, InR vr),([],sr'))
+                    | None -> (None, ([],[]))
+                | (_,[]) ->
+                    match stepV sl with
+                    | Some(sl',kl,vl) -> (Some(kl, InL vl),(sl',[]))
+                    | None -> (None, ([],[]))
+                | ((kl,RNode(cbl,updl,refl))::sl', (kr,RNode(cbr,updr, refr))::sr') ->
+                    let eqR = (cbl = cbr) && (kl = kr) && (refl = refr) && (updl = updr) 
+                    if eqR then x.StepDiff sl' sr' else
+                    if (cbl < cbr) // prefer to load node closest to root
+                        then x.StepDiff (stackAdd sl' (loadR' updl kl refl)) sr
+                        else x.StepDiff sl (stackAdd sr' (loadR' updr kr refr))
+
+            member x.StepDiffK kl vl sl kr vr sr =
+                let cmp = compare kl kr
+                if (cmp < 0) then (Some(kl, InL vl), (sl, (kr, Leaf vr)::sr)) else
+                if (cmp > 0) then (Some(kr, InR vr), ((kl, Leaf vl)::sl, sr)) else
+                if (vl = vr) then x.StepDiff sl sr else
+                (Some(kl, InB (vl, vr)), (sl, sr))
+
+        type Enumerator<'V when 'V : equality>(s:State<'V>) =
+            inherit Stepper<'V>()
+            member val private ST = s with get, set
+            member e.Peek() : Elem<'V> =
+                match fst e.ST with
+                | Some elem -> elem
+                | None -> invalidOp "no element"
+            interface System.Collections.Generic.IEnumerator<Elem<'V>> with
+                member e.Current with get() = e.Peek()
+            interface System.Collections.IEnumerator with
+                member e.Current with get() = upcast e.Peek()
+                member e.MoveNext() =
+                    let (l,r) = snd e.ST
+                    e.ST <- e.StepDiff l r
+                    Option.isSome (fst e.ST)
+                member e.Reset() = raise (System.NotSupportedException())
+            interface System.IDisposable with
+                member e.Dispose() = ()
+            
+        type Enumerable<'V when 'V : equality> =
+            val private L : Tree<'V>
+            val private R : Tree<'V>
+            new(l,r) = { L = l; R = r }
+            member e.GetEnum() = new Enumerator<'V>(iniState (e.L) (e.R))
+            interface System.Collections.Generic.IEnumerable<Elem<'V>> with
+                member e.GetEnumerator() = upcast e.GetEnum()
+            interface System.Collections.IEnumerable with
+                member e.GetEnumerator() = upcast e.GetEnum()
 
 
-    // TODO: structural diff!
-    //  It is at least feasible to diff full LSM trees and compare
-    //  RNodes for equality where needed.
+    /// Efficient difference between trees.
+    /// 
+    /// This returns a sequence of keys in ascending order with a VDiff for
+    /// each key for which a difference between trees is observed. Attempts
+    /// to avoid loading compacted subtrees unnecessarily, so we can perform
+    /// an efficient structural diff on large compacted trees.
+    ///
+    /// Relevantly, this will not load a remote node when the same node is
+    /// used in both trees with the same meaning and same pending updates.
+    /// But in some cases, values may be compared more than once. 
+    let diff<'V when 'V : equality> (a:Tree<'V>) (b:Tree<'V>) : seq<(Key * VDiff<'V>)> =
+        upcast EnumNodeDiff.Enumerable<'V>(a,b)
+
+    /// Deep structural equality for Trees. (Tests for diff.)
+    let deepEq<'V when 'V : equality> (a:Tree<'V>) (b:Tree<'V>) : bool = 
+        Seq.isEmpty (diff a b)
 
     // Tree Codec
     module EncTree =

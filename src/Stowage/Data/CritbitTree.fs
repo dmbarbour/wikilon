@@ -11,13 +11,13 @@ open Data.ByteString
 /// class database values with a lot of nice properties: data persistence,
 /// structure sharing, lightweight serialization, efficient diffs, etc..
 /// The database may be larger than active memory. Keys and values may be
-/// further structured.
+/// further structured. Performance does take a hit compared to direct use
+/// of the underlying database, but first-class values are very convenient.
 ///
-/// For integration with Stowage, we use an explicit 'compact' step that
-/// shoves larger nodes into the stowage database. Thus we do have history
-/// dependent structure between compactions.
-///
-/// If compaction is not used, this can serve as a simple critbit tree.
+/// To integrate Stowage, an explicit "compact" or "stow" operation will
+/// rewrite parts of the tree into cached stowage references (cf. LVRef).
+/// Adds and removes will load updated nodes back into memory. If the tree
+/// is very write-heavy, consider use of LSMTree instead.
 module CBTree =
     
     /// Keys in our CBTree should be short, simple bytestrings.
@@ -457,13 +457,8 @@ module CBTree =
                 (Root(kl,l), r)
             | _ -> (Empty, t) // kl >= k
 
-    /// Value differences relative to a pair of trees
-    type VDiff<'V> =
-        | InL of 'V         // value in left
-        | InR of 'V         // value in right
-        | InB of 'V * 'V    // two values with equality failure
-
     module private EnumNodeDiff =
+        type EQ<'V> = 'V -> 'V -> bool
         type Stack<'V> = (Key * Node<'V>) list
         type Elem<'V> = (Key * VDiff<'V>)
         type State<'V> = (Elem<'V> option * (Stack<'V> * Stack<'V>))
@@ -484,7 +479,6 @@ module CBTree =
 
         // utility class, mostly for the equality constraint
         type Stepper<'V when 'V : equality>() =
-
             member x.StepDiff (l:Stack<'V>) (r:Stack<'V>) : State<'V> =
                 match (l, r) with
                 | ((kl,nl)::sl, (kr,nr)::sr) ->
@@ -557,7 +551,7 @@ module CBTree =
         type Enumerable<'V when 'V : equality> =
             val private L : Tree<'V>
             val private R : Tree<'V>
-            new(l:Tree<'V>,r:Tree<'V>) = { L = l; R = r }
+            new(l,r) = { L = l; R = r }
             member e.GetEnum() = new Enumerator<'V>(iniState (e.L) (e.R))
             interface System.Collections.Generic.IEnumerable<Elem<'V>> with
                 member e.GetEnumerator() = upcast e.GetEnum()
