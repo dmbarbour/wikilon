@@ -524,10 +524,8 @@ module CBTree =
                     let sr' = ((kr,r)::sr)
                     x.StepDiffN k nl sl nr' sr'
                 | (RNode (cbl,szl,refl), RNode (cbr,szr,refr)) ->
-                    // While comparing critbit and size isn't strictly needed,
-                    // it's preferable to short-circuit BEFORE comparing ID.
-                    // Use of ID with LVRef forces stowage of the tree data.
-                    let eqNodes = (cbl = cbr) && (szl = szr) && (refl.ID = refr.ID)
+                    // try to avoid comparing refl,refr due to latent stowage
+                    let eqNodes = (cbl = cbr) && (szl = szr) && (refl = refr)
                     if eqNodes then // skip equivalent subtrees
                         x.StepDiff sl sr 
                     elif (cbl < cbr) then // open node closest to root
@@ -592,11 +590,8 @@ module CBTree =
         let cINode : byte = byte 'N'
         let cRNode : byte = byte 'R'
 
-        // Heuristic size threshold for compaction of a node.
-        let compactThreshold : int = 14000
-
         // it's convenient to start with the Codec here.
-        let codec (cV:Codec<'V>) : Codec<Node<'V>> =
+        let codecT (thresh:int) (cV:Codec<'V>) : Codec<Node<'V>> =
             { new Codec<Node<'V>> with
                 member cN.Write node dst =
                     match node with
@@ -649,7 +644,7 @@ module CBTree =
                         let szN = 
                             1 + EncVarNat.size (uint64 cb)
                               + szL + EncBytes.size kr + szR
-                        if (szN < compactThreshold) then 
+                        if (szN < thresh) then 
                             struct(node',szN) 
                         else
                             let tsz = nodeElemCt node'
@@ -657,11 +652,14 @@ module CBTree =
                             cN.Compact db (RNode(cb,tsz,ref))
             }
 
+        // Heuristic size threshold for compaction of a node.
+        let defaultCompactThreshold : int = 14000
+        let inline codec cV = codecT defaultCompactThreshold cV
+
         // TODO: consider parallelizing INode compaction.
 
 
     /// Codec for the full critbit tree, given a value codec.
-    /// The root of the tre is encoded inline.
     let treeCodec (cV:Codec<'V>) : Codec<Tree<'V>> = 
         let cK = EncBytes.codec
         let cN = EncNode.codec cV
@@ -677,52 +675,51 @@ module CBTree =
         Codec.lens cRep get set
 
     /// Compact a tree in memory.
+    ///
+    /// Note: Even after compaction, a tree can be relatively large
+    /// in memory or when serialized. If you want to treat trees as
+    /// small values, use `stow` and the tree reference type instead!
     let compact (cV:Codec<'V>) (db:DB) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Root (k,n) -> Root(k, Codec.compact (EncNode.codec cV) db n)
         | Empty -> Empty
 
-    /// A small reference object for a potentially large tree.
+    /// A bounded-size reference for a potentially large tree.
     ///
-    /// This is convenient if you want strong guarantees about the
-    /// memory consumption modulo caching, or about node sizes when
-    /// working with larger collections of tree values.
-    type TreeRef<'V> = LVRef<(Key * Node<'V>)> option
+    /// This is convenient when you have large collections of trees, and
+    /// you wish to control the size of elements when serialized. This is
+    /// simply an alias for CVRef together with a few utility functions.
+    type Ref<'V> = CVRef<Tree<'V>>
 
-    /// Reduce tree to ref, with asynchronous stowage.
-    let stow' (cV:Codec<'V>) (db:DB) (t:Tree<'V>) : TreeRef<'V> =
-        match t with
-        | Empty -> None
-        | Root(k,n) -> 
-            let cKN = EncPair.codec (EncBytes.codec) (EncNode.codec cV)
-            let ref = LVRef.stow cKN db (k,n)
-            Some ref
+    /// A few hundred bytes is small enough for collections while large
+    /// enough to keep many smaller JSON-like data structures inline or
+    /// in memory.
+    let refThresh : int = 400
 
-    /// Compacts before stowing asynchronously.
-    let inline stow (cV:Codec<'V>) (db:DB) (t:Tree<'V>) : TreeRef<'V> =
-        stow' cV db (compact cV db t)
+    /// Codec for tree references (CVRef with refThresh)
+    let refCodec (cV:Codec<'V>) = CVRef.codec refThresh (treeCodec cV)
 
-    /// Load TreeRef (caching)
-    let load (ref:TreeRef<'V>) : Tree<'V> =
-        match ref with
-        | None -> Empty
-        | Some r -> Root (LVRef.load r)
+    /// Wraps tree without compaction as if it were a stowed ref. The
+    /// tree is not actually compacted or serialized. Useful when the
+    /// tree is owned by another collection and may be compacted later. 
+    let inline stow' (t:Tree<'V>) : Ref<'V> = CVRef.local t
 
-    /// Load TreeRef (non-caching)
-    let load' (ref:TreeRef<'V>) : Tree<'V> =
-        match ref with
-        | None -> Empty
-        | Some r -> Root (LVRef.load' r)
+    /// Compact tree into a bounded-size reference.
+    ///
+    /// There is a short window where GC may intercede and prevent
+    /// stowage unless the value is immediately serialized.
+    let stow (cV:Codec<'V>) (db:DB) (t:Tree<'V>) : Ref<'V> =
+        Codec.compact (refCodec cV) db (stow' t)
 
-    /// Codec for reading or writing TreeRefs.
-    let refCodec (cV:Codec<'V>) : Codec<TreeRef<'V>> =
-        let cK = EncBytes.codec
-        let cN = EncNode.codec cV
-        let cKN = EncPair.codec cK cN
-        EncOpt.codec (EncLVRef.codec cKN)
+    /// non-caching load
+    let inline load' (ref:Ref<'V>) : Tree<'V> = CVRef.load' ref
+
+    /// caching load.
+    let inline load  (ref:Ref<'V>) : Tree<'V> = CVRef.load ref
 
 
 type CBTree<'V> = CBTree.Tree<'V>
+type CBTreeRef<'V> = CBTree.Ref<'V>
         
 
 

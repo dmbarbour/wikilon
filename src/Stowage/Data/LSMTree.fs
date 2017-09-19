@@ -383,7 +383,7 @@ module LSMTree =
     //  RNodes for equality where needed.
 
     // Tree Codec
-    module Enc =
+    module EncTree =
         let cLeaf  : byte = byte 'L'    // L(value)
         let cINode : byte = byte 'N'    // N(cb)(node)(key)(node)
         let cRNode : byte = byte 'R'    // R(cb)(updates)(ref)
@@ -391,13 +391,15 @@ module LSMTree =
         let cEmpty : byte = 128uy       // 0 from EncVarNat
         let cRoot  : byte = 129uy       // 1 from EncVarNat
 
+        let inline updCodec cV = EncBTree.codec (EncOpt.codec cV)
+
         // Nodes can be read and written, but compaction is naive - it 
         // compacts only the values. Full compaction must be at the tree
         // layer (to properly update the sample keys). 
         //
         // RNode buffers are recorded as an array of (Key * Val opt) pairs.
         let nodeCodec (cV : Codec<'V>) =
-            let cBuff = EncBTree.codec (EncOpt.codec cV)
+            let cU = updCodec cV
             { new Codec<Node<'V>> with
                 member c.Write node dst =
                     match node with
@@ -413,7 +415,7 @@ module LSMTree =
                     | RNode(cb,upd,ref) ->
                         EncByte.write cRNode dst
                         EncVarNat.write (uint64 cb) dst
-                        cBuff.Write upd dst
+                        cU.Write upd dst
                         EncLVRef.write ref dst
                 member c.Read db src =
                     let b0 = EncByte.read src
@@ -429,7 +431,7 @@ module LSMTree =
                         raise ByteStream.ReadError
                     else
                         let cb = int (EncVarNat.read src)
-                        let upd = cBuff.Read db src
+                        let upd = cU.Read db src
                         let ref = EncLVRef.read c db src
                         RNode(cb,upd,ref)
                 member c.Compact db node =
@@ -445,17 +447,21 @@ module LSMTree =
                                     + szL + EncBytes.size kr + szR
                         struct(INode(cb,l',kr,r'),szN)
                     | RNode(cb,upd,ref) ->
-                        let struct(upd',szU) = cBuff.Compact db upd
+                        let struct(upd',szU) = cU.Compact db upd
                         let sz = 1 + EncVarNat.size (uint64 cb) 
                                    + szU + EncLVRef.size
                         struct(RNode(cb,upd',ref),sz)
             }
 
-        /// heuristic size for compaction of a node...
-        let compactThreshold : int = 14000
-
-        /// Construct a tree codec, with compaction, given a node codec.
-        let treeCodec (thresh:int) (cN:Codec<Node<'V>>) =
+        /// Construct a tree codec given a value codec.
+        /// In this case, we have two thresholds:
+        ///   - cThresh: approx size for INode compaction
+        ///   - fThresh: approx size for RNode buffer flush 
+        /// Sizes here are in bytes.
+        let treeCodec (cThresh:int) (fThresh:int) (cV:Codec<'V>) =
+            assert((cThresh >= 0) && (fThresh >= 0))
+            let cU = updCodec cV  // for compaction
+            let cN = nodeCodec cV // for read, write, stowage
             { new Codec<Tree<'V>> with
                 member c.Write t dst =
                     match t with
@@ -472,133 +478,105 @@ module LSMTree =
                     let node = cN.Read db src
                     Root(kl,node)
                 member c.Compact db t =
-                    raise (System.NotImplementedException())
-            }
-
-(*
                     match t with
-                    | Root(kl,INode(cb,l,kr,r)) ->
-
-                    | Root(kl,node) -> // Leaf or RNode
-                        let struct(node',szN) = cN.Compact db node
-                        let sz
+                    | Root(kl,node) ->
                         match node with
                         | Leaf v ->
-                            let struct(v',szV) = cV
-                        | INode(cb,l,
-                        let struct(tl',szL) = c.Compact db (Root(kl,l))
-                        let struct(tr',szR) = c.Compact db (Root(kr,r))
+                            let struct(v',szV) = cV.Compact db v
+                            let szT = 2 + EncBytes.size kl + szV
+                            struct(Root(kl,Leaf v'),szT)
+                        | INode(cb,l,kr,r) ->
+                            let struct(tl',szL) = c.Compact db (Root(kl,l))
+                            let struct(tr',szR) = c.Compact db (Root(kr,r))
+                            let szCB = EncVarNat.size (uint64 cb)
+                            match tl' with
+                            | Root(kl',l') ->
+                                match tr' with
+                                | Root(kr',r') ->
+                                    let szT = szL + szR + szCB
+                                    let node' = INode(cb, l', kr', r')
+                                    if ((szT - kl'.Length) < cThresh) then 
+                                        struct(Root(kl',node'),szT) 
+                                    else // perform stowage
+                                        let ref = LVRef.stow cN db node'
+                                        let rn = RNode(cb,BTree.Empty,ref)
+                                        c.Compact db (Root(kl',rn))
+                                | Empty -> struct(tl',szL)
+                            | Empty -> struct(tr',szR)
+                        | RNode(cb,BTree.Empty,ref) ->
+                            // cannot compact or flush
+                            let szR = 3 + EncBytes.size kl
+                                        + EncVarNat.size (uint64 cb)
+                                        + EncLVRef.size
+                            struct(t,szR) 
+                        | RNode(cb,upd,ref) ->
+                            // potentially flush updates
+                            let struct(upd',szUpd) = cU.Compact db upd
+                            if ((szUpd + EncLVRef.size) < fThresh) then
+                                let t' = Root(kl,RNode(cb,upd',ref))
+                                let szT = 2 + EncBytes.size kl
+                                            + EncVarNat.size (uint64 cb)
+                                            + szUpd
+                                            + EncLVRef.size
+                                struct(t',szT)
+                            else // flush updates, compact anew
+                                let t' = loadR' upd' kl ref
+                                c.Compact db t'
                     | Empty -> struct(Empty,1)
-*)
-
-
-
-(*
-
-    // encoding the update buffer
-    module EncBuff =
-                                     // in context:
-        let cNoUpdates = byte '='    // R={hash}
-        let cSomeUpdates = byte '+'  // R+(updates)(oldKey){hash}
-
-        let codec (cV:Codec<'V>) = 
-            let cKV = EncPair.codec (EncBytes.codec) (EncOption.codec cV)
-            { new Codec<Node<'V>> with
-                member __.Write buff dst =
-                    match buff with
-                    | None -> EncByte.write cNoUpdates dst
-                    | Some (t,oldLK) ->
-                        assert(not (CBTree.isEmpty t))
-                        EncByte.write cSomeUpdates dst
-                        EncArray.write cKV (CBTree.toArray t) dst
-                        EncBytes.write oldLK dst
-                member __.Read db src =
-                    let b0 = EncByte.read src
-                    if (cNoUpdates = b0) then None 
-                    elif (cSomeUpdates <> b0) then raise ByteStream.ReadError
-                    else 
-                        let t = CBTree.fromArray (EncArray.read cKV db src)
-                        let oldLK = EncBytes.read src
-                        Some (t, oldLK)
-                member __.Compact db buff =
-                    match buff with
-                    | None -> struct(buff,1)
-                    | Some (t,oldLK) ->
-                        let struct(a,szB) = EncArray.compact' cKV db (CBTree.toArray t)
-                        let t' = CBTree.fromArray a
-                        struct(Some(t',oldLK), szB + EncBytes.size oldLK)
             }
 
-    // Nodes are encoded almost directly, but require a special context
-    // of the prior least-key when propagating updates 
-    module EncNode =
-        let cLeaf  : byte = byte 'L'
-        let cINode : byte = byte 'N'
-        let cRNode : byte = byte 'R'
+        /// default heuristic thresholds
+        let compactThresh : int = 30000
+        let flushThresh : int = 7000
+        let codec (cV:Codec<'V>) = treeCodec compactThresh flushThresh cV
 
-        // heuristic size threshold for compaction of a node.
-        // in this case, I'm favoring relatively large nodes.
-        let compactThreshold : int = 14000
 
-        let inline buffToArray buff = Array.ofSeq (CBTree.toSeq buff)
-        let inline arrayToBuff arr = 
-            Array.fold (fun buff (k,v) -> CBTree.add k v buff) (CBTree.empty) arr
-        let kvCodec cV = EncPair.codec (EncBytes.codec) (EncOption.codec cV)
+    /// Codec for full LSM tree.
+    let treeCodec (cV:Codec<'V>) = EncTree.codec cV
 
-        let codec (cV:Codec<'V>) =
-            let cBuff = EncBuff.codec cV
-            { new Codec<Node<'V>> with
-                member cN.Write node dst =
-                    match node with
-                    | Leaf v ->
-                        EncByte.write cLeaf dst
-                        cV.Write v dst
-                    | RNode (buff, ref) ->
-                        EncByte.write cRNode dst
-                        cBuff.Write buff dst
-                        EncLVRef.write ref dst
-                    | INode (cb, l, kr, r) ->
-                        EncByte.write cINode dst
-                        EncVarNat.write (uint64 cb) dst
-                        cN.Write l dst
-                        EncBytes.write kr dst
-                        cN.Write r dst
-                member cN.Read db src =
-                    let b0 = EncByte.read src
-                    if(cLeaf = b0) then
-                        Leaf (cV.Read db src)
-                    elif(cRNode = b0) then
-                        let buff = cBuff.Read db src
-                        let ref = EncLVRef.read cN db src
-                        RNode (buff,ref)
-                    elif(cINode <> b0) then
-                        raise ByteStream.ReadError
-                    else
-                        let cb = int (EncVarNat.read src)
-                        let l = cN.Read db src
-                        let kr = EncBytes.read src
-                        let r = cN.Read db src
-                        INode (cb, l, kr, r)
-                member cN.Compact db node =
-                    match node with
-                    | Leaf v ->
-                        let struct(v',szV) = cV.Compact db v
-                        struct(Leaf v', 1 + szV)
-                    | RNode (buff, ref) ->
-                        let struct(buff', szBuff) = cBuff.Compact db buff
-                        if(szBuff < compactThreshold) 
-                            then struct(RNode(buff',ref), 1 + szBuff + EncLVRef.size)
-                            else cN.Compact db (applyUpdates buff (LVRef.load' ref))
-                    | INode (cb, l, kr, r) ->
-                        let struct(l',szL) = cN.Compact db l
-                        let struct(r',szR) = cN.Compact db r
-                        let node' = INode (cb, l', kr, r')
-                        let szN = 1 + EncVarNat.size (uint64 cb)
-                                    + szL + EncBytes.size kr + szR
-                        if(szN < compactThreshold) then struct(node',szN) else
-                        let ref = LVRef.stow cN db node'
-                        struct(RNode(None,ref), 2+EncLVRef.size) // R={hash}
-            }
-                 
+    /// Compact a tree in memory.
+    ///
+    /// Note: Even after compaction, a tree can be relatively large
+    /// in memory or when serialized. If you want to treat trees as
+    /// small values, use `stow` and the tree reference type instead!
+    let inline compact (cV:Codec<'V>) (db:DB) (t:Tree<'V>) =
+        Codec.compact (treeCodec cV) db t
 
-*)
+    /// A bounded-size reference for a potentially large tree.
+    ///
+    /// This is convenient when you have large collections of trees, and
+    /// you wish to control the size of elements when serialized. This is
+    /// simply an alias for CVRef together with a few utility functions.
+    type Ref<'V> = CVRef<Tree<'V>>
+
+    /// A few hundred bytes is small enough for collections while large
+    /// enough to keep many smaller JSON-like data structures inline or
+    /// in memory.
+    let refThresh : int = 400
+
+    /// Codec for tree references (CVRef with refThresh)
+    let refCodec (cV:Codec<'V>) = CVRef.codec refThresh (treeCodec cV)
+
+    /// Wraps tree without compaction as if it were a stowed ref. The
+    /// tree is not actually compacted or serialized. Useful when the
+    /// tree is owned by another collection and may be compacted later. 
+    let inline stow' (t:Tree<'V>) : Ref<'V> = CVRef.local t
+
+    /// Compact tree into a bounded-size reference.
+    ///
+    /// There is a short window where GC may intercede and prevent
+    /// stowage unless the value is immediately serialized.
+    let stow (cV:Codec<'V>) (db:DB) (t:Tree<'V>) : Ref<'V> =
+        Codec.compact (refCodec cV) db (stow' t)
+
+    /// non-caching load
+    let inline load' (ref:Ref<'V>) : Tree<'V> = CVRef.load' ref
+
+    /// caching load.
+    let inline load  (ref:Ref<'V>) : Tree<'V> = CVRef.load ref
+
+
+type LSMTree<'V> = LSMTree.Tree<'V>
+type LSMTreeRef<'V> = LSMTree.Ref<'V>
+
+

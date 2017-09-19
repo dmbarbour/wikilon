@@ -216,9 +216,19 @@ module EncPair =
 
     /// Codec combinator for a pair.
     let codec (cA : Codec<'A>) (cB : Codec<'B>) =
-        let get (struct(a,b)) = (a,b)
-        let set ((a,b)) = struct(a,b)
-        Codec.lens (codec' cA cB) get set
+        { new Codec<('A * 'B)> with
+            member __.Write ((a,b)) dst =
+                cA.Write a dst
+                cB.Write b dst
+            member __.Read db src =
+                let a = cA.Read db src
+                let b = cB.Read db src
+                (a,b)
+            member __.Compact db ((a,b)) =
+                let struct(a',szA) = cA.Compact db a
+                let struct(b',szB) = cB.Compact db b
+                struct((a',b'),(szA + szB))
+        }
 
 module EncTriple =
 
@@ -243,9 +253,22 @@ module EncTriple =
 
     /// Codec combinator for a normal triple.
     let codec (cA : Codec<'A>) (cB : Codec<'B>) (cC : Codec<'C>) =
-        let get (struct(a,b,c)) = (a,b,c)
-        let set ((a,b,c)) = struct(a,b,c)
-        Codec.lens (codec' cA cB cC) get set
+        { new Codec<('A * 'B * 'C)> with
+            member __.Write ((a,b,c)) dst =
+                cA.Write a dst
+                cB.Write b dst
+                cC.Write c dst
+            member __.Read db src =
+                let a = cA.Read db src
+                let b = cB.Read db src
+                let c = cC.Read db src
+                (a,b,c)
+            member __.Compact db ((a,b,c)) =
+                let struct(a',szA) = cA.Compact db a
+                let struct(b',szB) = cB.Compact db b
+                let struct(c',szC) = cC.Compact db c
+                struct((a',b',c'),(szA + szB + szC))
+        }
 
 module EncQuad = 
 

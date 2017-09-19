@@ -38,9 +38,10 @@ module LVRef =
     /// to disk. If we cache loads, we simplify logic for lookup-modify
     /// operations. It doesn't take much latency for significant benefits.
     ///
-    /// Note: use of the VRef or ID properties will force initial stowage
-    /// of the Ref, but won't hinder further caching. Comparisons and 
-    /// serializations tend to use the ID.
+    /// Note: use of the VRef or ID properties, including serialization,
+    /// will force initial stowage of the Ref but won't hinder further
+    /// caching. Comparisons will also tend to use ID, but will circumvent
+    /// where feasible by use of reference equality.
     type Ref<'V> =
         val mutable internal S : State<'V>
         val mutable internal T : int       // simple touch counter
@@ -77,11 +78,13 @@ module LVRef =
         override r.ToString() = r.ID.ToString()
         override r.GetHashCode() = r.ID.GetHashCode()
         override x.Equals yobj =
+            if System.Object.ReferenceEquals(x,yobj) then true else
             match yobj with
             | :? Ref<'V> as y -> (x.ID = y.ID)
             | _ -> false
         interface System.IComparable with
             member x.CompareTo yobj =
+                if System.Object.ReferenceEquals(x,yobj) then 0 else
                 match yobj with
                 | :? Ref<'V> as y -> compare (x.ID) (y.ID)
                 | _ -> invalidArg "yobj" "cannot compare values of different types"
