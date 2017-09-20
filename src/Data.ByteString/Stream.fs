@@ -79,7 +79,7 @@ module ByteStream =
     /// A ByteString Reader. 
     ///
     /// This is similar to System.IO.MemoryStream in read-only mode, albeit
-    /// without the ability to seek backwards and with some extra features
+    /// without the ability to seek backwards and with alternative features
     /// for lookahead parsing. The motivation is to make it easier to reason
     /// about program behavior, and convenient integration with ByteString.
     ///

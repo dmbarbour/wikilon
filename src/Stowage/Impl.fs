@@ -33,7 +33,9 @@ module internal I =
         assert(h.Length = rscHashLen)
         StowKey(BS.take stowKeyLen h)
 
-    // the db_stow table uses a half key
+    // Recent stowage table. Uses half the key to resist timing attacks.
+    // Just using Map since prefix sharing is improbable with hashes and
+    // won't affect performance much. 
     type Stowage = Map<StowKey, struct(RscHash * Val)>     // recent stowage requests
 
     type RC = int64                     // sufficient for RC
@@ -41,27 +43,10 @@ module internal I =
     let maxRC = 999_999_999_999_999_999L // what can we squeeze into 18 digits?
     type RCU = Map<StowKey, RC>         // pending refct updates
 
-    type EphID = uint64                 // hash of stowKey
-    type EphRoots = Map<EphID,RC>       // ephemeral root set
-    let inline skEphID(h:StowKey) : EphID = ByteString.Hash64(h.v)
+    type EphID = nativeint                 // hash of stowKey
+    let inline skEphID(h:StowKey) : EphID = nativeint (ByteString.Hash64(h.v))
     let inline rscEphID(h:RscHash) : EphID = skEphID (rscStowKey h)
 
-    // utilities to work with ephemeron tables
-    let ephInc (etb : EphRoots) (k : EphID) (rc : RC) : EphRoots =
-        assert (rc > 0L)
-        match Map.tryFind k etb with
-        | None -> Map.add k rc etb
-        | Some rc0 -> Map.add k (rc + rc0) etb
-
-    let ephDec (etb : EphRoots) (k : EphID) (rc : RC) : EphRoots =
-        assert (rc > 0L)
-        match Map.tryFind k etb with
-        | None -> failwith "negative refct"
-        | Some rc0 ->
-            assert (rc0 >= rc)
-            let rc' = rc0 - rc
-            if (0L = rc') then Map.remove k etb
-                          else Map.add k rc' etb 
 
     // Each commit consists of:
     //  a set of values read (or assumed) to validate
@@ -93,9 +78,9 @@ module internal I =
             db_rfct : MDB_dbi     // resources with refct > 0
             db_zero : MDB_dbi     // resources with zero refct
             db_flock : FileStream
+            db_ephtbl : EphTbl.Table    // ephemeral resource roots
 
             mutable db_rdlock : ReadLock        // current read-lock (updated per frame).
-            mutable db_ephtbl : EphRoots        // ephemeral resource roots
             mutable db_newrsc : Stowage         // recent stowage requests
             mutable db_commit : Commit list     // pending commit requests
             mutable db_halt   : bool            // halt the writer
@@ -112,6 +97,10 @@ module internal I =
                 | :? DB as y -> compare (x.db_env) (y.db_env)
                 | _ -> invalidArg "yobj" "cannot compare values of different types"
 
+    let inline dbEphInc (db : DB) (k : EphID) : unit = EphTbl.incref (db.db_ephtbl) k
+    let inline dbEphDec (db : DB) (k : EphID) : unit = EphTbl.decref (db.db_ephtbl) k
+    let inline dbHasEph (db : DB) (k : EphID) : bool = EphTbl.contains (db.db_ephtbl) k
+
     // add commit request to the database
     let dbCommit (db : DB) (c : Commit) : unit =
         lock db (fun () ->
@@ -125,24 +114,14 @@ module internal I =
 
     // add stowage request and ephemeral root to database, returns root ID
     let dbStow (db : DB) (h : RscHash) (v : Val) : EphID =
-        let k = rscEphID h
+        let sk = rscStowKey h
+        let ephID = skEphID sk
+        dbEphInc db ephID
         lock db (fun () ->
-            db.db_newrsc <- Map.add (rscStowKey h) (struct(h,v)) (db.db_newrsc)
-            db.db_ephtbl <- ephInc (db.db_ephtbl) k 1L
+            db.db_newrsc <- Map.add sk (struct(h,v)) (db.db_newrsc)
             Monitor.PulseAll(db))
-        k
+        ephID
 
-    // reference count management
-    let inline dbUpdEph (db : DB) (fn : EphRoots -> EphRoots) : unit =
-        lock db (fun () -> (db.db_ephtbl <- fn db.db_ephtbl))
-    let inline dbIncEph (db : DB) (rc : RC) (k : EphID) : unit = dbUpdEph db (fun eph -> ephInc eph k rc)
-    let inline dbDecEph (db : DB) (rc : RC) (k : EphID) : unit = dbUpdEph db (fun eph -> ephDec eph k rc)
-    let inline ephAdd (upd : EphRoots) (etb0 : EphRoots) : EphRoots = Map.fold ephInc etb0 upd
-    let inline ephRem (upd : EphRoots) (etb0 : EphRoots) : EphRoots = Map.fold ephDec etb0 upd
-    let dbAddEphRoots (db : DB) (upd : EphRoots) : unit =
-        if(not (Map.isEmpty upd)) then dbUpdEph db (ephAdd upd)
-    let dbRemEphRoots (db : DB) (upd : EphRoots) : unit =
-        if(not (Map.isEmpty upd)) then dbUpdEph db (ephRem upd)
 
     // Our reference count tables simply have data of type [1-9][0-9]*.
     // Reasonably, reference counts shouldn't be larger than 18 digits.
@@ -303,7 +282,7 @@ module internal I =
 
     // utilities
     let valRCU (rc:RC) (u0:RCU) (v:Val) : RCU =
-        scanHashDeps (fun u h -> updRCU rc u (rscStowKey h)) u0 v
+        foldHashDeps (fun u h -> updRCU rc u (rscStowKey h)) u0 v
     let kvmRCU (rc:RC) (m:KVMap) (u0:RCU) : RCU =
         BTree.fold (fun u _ v -> valRCU rc u v) u0 m
     let rscRCU (m:Stowage) (u0:RCU) : RCU =
@@ -349,10 +328,10 @@ module internal I =
 
     let rec dbWriterLoop (db:DB) : unit =
         // wait for writer tasks
-        let (stowedRsc,ephRoots,commitList,halt) = lock db (fun () ->
+        let (stowedRsc,commitList,halt) = lock db (fun () ->
             if not (dbHasWork db) 
                 then ignore(Monitor.Wait(db))
-            let r = (db.db_newrsc, db.db_ephtbl, db.db_commit, db.db_halt)
+            let r = (db.db_newrsc, db.db_commit, db.db_halt)
             db.db_commit <- List.empty
             r)
 
@@ -386,7 +365,7 @@ module internal I =
 
         // prevent GC for a subset of resources
         let blockGC sk = Map.containsKey sk rcRoots // resources touched this frame
-                      || Map.containsKey (skEphID sk) ephRoots // resources held ephemerally
+                      || (dbHasEph db (skEphID sk)) // ephemeral root
 
         let updRefct (struct(nGC, rcTbl, rcu)) sk n = 
             let rc0 = 
@@ -486,8 +465,8 @@ module internal I =
               db_rfct = dbRfct
               db_zero = dbZero
               db_flock = flock
+              db_ephtbl = new EphTbl.Table()
               db_rdlock = new ReadLock()
-              db_ephtbl = Map.empty
               db_newrsc = Map.empty
               db_commit = List.empty
               db_halt = false

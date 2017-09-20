@@ -16,8 +16,10 @@ open Data.ByteString
 ///
 /// To integrate Stowage, an explicit "compact" or "stow" operation will
 /// rewrite parts of the tree into cached stowage references (cf. LVRef).
-/// Adds and removes will load updated nodes back into memory. If the tree
-/// is very write-heavy, consider use of LSMTree instead.
+/// Adds and removes will load updated nodes back into memory as needed.
+/// This supports effective batch updates, but updates are always 'deep'.
+/// (For a write-heavy workload, consider use of LSMTree instead.)
+///
 module CBTree =
     
     /// Keys in our CBTree should be short, simple bytestrings.

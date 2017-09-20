@@ -28,13 +28,15 @@ type KVMap = BTree<Val>
 type RscHash = ByteString
 
 [<AutoOpen>]
-module TypeMeta = // types and utilities also used by implementation
-
+module Key =
     /// Keys are limited to 1..255 bytes. Otherwise, they're opaque.
     let minKeyLen : int = 1
     let maxKeyLen : int = 255
     let inline isValidKey (k : Key) : bool = 
         (maxKeyLen >= k.Length) && (k.Length >= minKeyLen)
+
+[<AutoOpen>]
+module Val = // types and utilities also used by implementation
 
     /// Values do have a maximum size, 1GB. In practice, values that are
     /// larger than a hundred kilobytes should be fragmented, with the 
@@ -44,24 +46,33 @@ module TypeMeta = // types and utilities also used by implementation
     let inline isValidVal (v : Val) : bool = 
         (maxValLen >= v.Length)
 
+[<AutoOpen>]
+module RscHash =
     /// Resource hashes 
     let rscHashLen = Stowage.Hash.validHashLen
-    let inline rscHashByte (b : byte) : bool = 
-        Stowage.Hash.validHashByte b
-   
-    /// Scan a value for secure hash resource dependencies.
+    let inline rscHashByte (b : byte) : bool = Stowage.Hash.validHashByte b
+    let inline hash (v:Val) : RscHash = Stowage.Hash.hash v
+  
+    /// Fold over hash dependencies represented within a value.
     ///
-    /// This conservatively finds substrings that exactly match the Hash
-    /// size and character set (cf. Stowage.Hash). Separate hashes using
-    /// spaces, braces, punctuation, parentheses, or other characters. Or
-    /// for 'weak' refs, break the hash with a slash or a dash, such that
-    /// scanHashDeps won't recognize it.
-    let scanHashDeps (fn : 's -> RscHash -> 's) : 's -> Val -> 's =
-        let rec loop s v = 
-            let hv' = BS.dropWhile (not << rscHashByte) v
-            if ((hv').Length < rscHashLen) then s else
-            let (h,v') = BS.span rscHashByte hv'
-            let s' = if (rscHashLen = h.Length) then (fn s h) else s
-            loop s' v'
-        loop
+    /// This finds substrings that look like hashes. They must have the
+    /// appropriate size and character set, and be separated by non-hash
+    /// characters. This function is the same used for conservative GC
+    /// by Stowage DB.
+    let rec foldHashDeps (fn : 's -> RscHash -> 's) (s:'s) (v:Val) : 's =
+        if (v.Length < rscHashLen) then s else
+        let hv' = BS.dropWhile (not << rscHashByte) v
+        let (h,v') = BS.span rscHashByte hv'
+        let s' = if (rscHashLen = h.Length) then (fn s h) else s
+        foldHashDeps fn s' v'
+
+    /// Iterate through hash-deps. Same as foldHashDeps, but requires
+    /// an imperative operation.
+    let rec iterHashDeps (fn : RscHash -> unit) (v:Val) : unit =
+        if (v.Length < rscHashLen) then () else
+        let hv' = BS.dropWhile (not << rscHashByte) v
+        let (h,v') = BS.span rscHashByte hv'
+        if (rscHashLen = h.Length)
+            then fn h
+        iterHashDeps fn v'
 
