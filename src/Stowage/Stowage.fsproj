@@ -9,7 +9,7 @@
     <Compile Include="Ephemeron.fs" />
     <Compile Include="Types.fs" />
     <Compile Include="Impl.fs" />
-    <Compile Include="API.fs" />
+    <Compile Include="DB.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="FSharp.Core" Version="4.1.*" />

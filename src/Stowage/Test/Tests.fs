@@ -5,6 +5,7 @@ module Stowage.Tests
 open System
 open System.IO
 open Xunit
+open Stowage
 open Stowage.Hash
 open Data.ByteString
 
@@ -24,93 +25,90 @@ let clearTestDir path =
 
 // a fixture is needed to load the database
 type TestDB =
-    val db : Stowage.DB
+    val db : DB
     new () =
         let path = "testDB"
         let maxSizeMB = 1000
         do clearTestDir path
-        { db = openDB path maxSizeMB }
+        { db = DB.load path maxSizeMB }
     interface System.IDisposable with
-        member this.Dispose() = closeDB this.db
+        member this.Dispose() = 
+            DB.close this.db
 
 // Stowage doesn't provide a clean way to wait for full GC, but
-// we can sync a few times.
-let gcDB (db:DB) : unit =
-    syncDB db; syncDB db; syncDB db
+// we can sync a few times to ensure the GC runs a few cycles.
+let gcDB (db:DB) : unit = 
+    DB.sync db; DB.sync db; DB.sync db
+
+let onPair fn ((a,b)) = (fn a, fn b)
+let bsPair p = onPair (BS.fromString) p
 
 type DBTests =
-    val db : Stowage.DB
+    val db : DB
     new (fixture : TestDB) = { db = fixture.db }
     interface IClassFixture<TestDB>
 
     [<Fact>]
     member t.``resource put and get`` () =
         let tests = List.map BS.fromString ["test"; ""; "foo"; "bar"; "baz"; "qux"]
-        let rscs = List.map (stowRscDB t.db) tests
+        let rscs = List.map (DB.stowRsc t.db) tests
         Assert.Equal<ByteString list>(rscs, List.map hash tests)
-        syncDB (t.db)
-        let loaded = List.map (loadRscDB t.db) rscs
+        gcDB (t.db)
+        let loaded = List.map (DB.loadRsc t.db) rscs
         Assert.Equal<ByteString list>(loaded, tests)
-        List.iter (decrefRscDB t.db) rscs
-        syncDB (t.db)
+        List.iter (DB.decrefRsc t.db) rscs
+        DB.sync (t.db)
 
     [<Fact>]
     member t.``basic resource GC`` () =
         let join a b = 
             let s = BS.concat [a; BS.singleton 32uy; b]
-            (s, stowRscDB t.db s)
+            (s, DB.stowRsc t.db s)
         let (a,ra) = join (BS.fromString "x") (BS.fromString "y")
         let (b,rb) = join ra (BS.fromString "z")
         let (c,rc) = join rb rb
-        decrefRscDB t.db rb
+        DB.decrefRsc t.db rb
         gcDB (t.db) // to force writes, GC
-        Assert.Equal<ByteString>(a, loadRscDB t.db ra)
-        Assert.Equal<ByteString>(b, loadRscDB t.db rb)
-        Assert.Equal<ByteString>(c, loadRscDB t.db rc)
-        decrefRscDB t.db rc
+        Assert.Equal<ByteString>(a, DB.loadRsc t.db ra)
+        Assert.Equal<ByteString>(b, DB.loadRsc t.db rb)
+        Assert.Equal<ByteString>(c, DB.loadRsc t.db rc)
+        DB.decrefRsc t.db rc
         gcDB (t.db) 
-        Assert.Equal<ByteString option>(Some a, tryLoadRscDB t.db ra)
-        Assert.Equal<ByteString option>(None, tryLoadRscDB t.db rb)
-        Assert.Equal<ByteString option>(None, tryLoadRscDB t.db rc)
-        decrefRscDB t.db ra
+        Assert.Equal<ByteString option>(Some a, DB.tryLoadRsc t.db ra)
+        Assert.Equal<ByteString option>(None, DB.tryLoadRsc t.db rb)
+        Assert.Equal<ByteString option>(None, DB.tryLoadRsc t.db rc)
+        DB.decrefRsc t.db ra
         gcDB (t.db)
-        Assert.Equal<ByteString option>(None, tryLoadRscDB t.db ra)
-        Assert.Equal<ByteString option>(None, tryLoadRscDB t.db rb)
-        Assert.Equal<ByteString option>(None, tryLoadRscDB t.db rc)
+        Assert.Equal<ByteString option>(None, DB.tryLoadRsc t.db ra)
+        Assert.Equal<ByteString option>(None, DB.tryLoadRsc t.db rb)
+        Assert.Equal<ByteString option>(None, DB.tryLoadRsc t.db rc)
 
     [<Fact>]
     member t.``read and write keys`` () = 
-        let kvs = [("a","a-val"); ("b","b-value"); ("c","cccc")]
-        using (newTX t.db) (fun tx ->
-            let wtx (a,b) = writeKey tx (BS.fromString a) (BS.fromString b)
-            List.iter (fun (a,b) -> writeKey tx (BS.fromString a) (BS.fromString b)) kvs
-            Assert.True(commit tx))
-        let rds1 = List.map (fst >> BS.fromString >> readKeyDB t.db) kvs
-        let readKeysL db l = List.ofArray (readKeysDB db (List.toArray l))
-        let rds2 = readKeysL (t.db) (List.map (fst >> BS.fromString) kvs)
+        let kvs = List.map bsPair [("a","a-val"); ("b","b-value"); ("c","cccc")]
+        DB.writeKeys (t.db) (BTree.ofList kvs)
+        let rds1 = List.map (fst >> DB.readKey t.db) kvs
+        let rds2 = List.ofArray (DB.readKeys (t.db) (List.toArray (List.map fst kvs)))
         Assert.Equal<ByteString list>(rds1, rds2)
-        Assert.Equal<ByteString list>(rds1, List.map (snd >> BS.fromString) kvs)
+        Assert.Equal<ByteString list>(rds1, List.map snd kvs)
 
     [<Fact>]
     member t.``key containment and discovery`` () =
-        let hasKey k = containsKeyDB (t.db) (BS.fromString k)
+        let hasKey k = DB.containsKey (t.db) (BS.fromString k)
         let hasKey' arr k = Array.contains (BS.fromString k) arr
-        let kvs = [("x", "x-val"); ("y", "y-value"); ("z", "zzzz"); ("zz", "")]
-        let kvm = 
-            List.toSeq kvs
-                |> Seq.map (fun (a,b) -> (BS.fromString a, BS.fromString b))
-                |> BTree.ofSeq
+        let kvs = List.map bsPair [("x", "x-val"); ("y", "y-value"); ("z", "zzzz"); ("zz", "")]
+        let kvm = BTree.ofList kvs
 
-        writeKeyDB t.db (BS.fromString "zz") (BS.fromString "exists")
+        DB.writeKey (t.db) (BS.fromString "zz") (BS.fromString "exists")
         Assert.True(hasKey "zz")
 
-        writeKeysDB t.db kvm
+        DB.writeKeys (t.db) kvm
         Assert.True(hasKey "x")
         Assert.True(hasKey "y")
         Assert.True(hasKey "z")
         Assert.False(hasKey "zz")
 
-        let allKeys = discoverKeysDB t.db None 1000000
+        let allKeys = DB.discoverKeys t.db None 1000000
         //printf "all keys = %A\n" (Array.map BS.toString allKeys)
         Assert.True(hasKey' allKeys "x")
         Assert.True(hasKey' allKeys "y")
@@ -125,26 +123,30 @@ type DBTests =
         let c_val = "ccccccc"
         let hasRsc s = 
             let b = BS.fromString s
-            let rsc = tryLoadRscDB t.db (hash b)
+            let rsc = DB.tryLoadRsc t.db (hash b)
             //printf "resource %s = %A\n" s (Option.map BS.toString rsc)
             match rsc with
             | None -> false
             | Some v -> Assert.Equal<ByteString>(v,b); true
 
-        using (newTX t.db) (fun tx -> 
-            let a_ref = stowRsc tx (BS.fromString a_val)
-            let b_ref = stowRsc tx (BS.fromString b_val)
-            let c_ref = stowRsc tx (BS.fromString c_val)
-            writeKey tx (BS.fromString "a") a_ref
-            writeKey tx (BS.fromString "b") b_ref
-            Assert.True(commit tx))
+        let a_ref = DB.stowRsc t.db (BS.fromString a_val)
+        let b_ref = DB.stowRsc t.db (BS.fromString b_val)
+        let c_ref = DB.stowRsc t.db (BS.fromString c_val)
+
+        DB.writeKeyAsync (t.db) (BS.fromString "a") a_ref
+        DB.writeKeyAsync (t.db) (BS.fromString "b") b_ref
+
+        // release local refs to resources
+        DB.decrefRsc t.db a_ref
+        DB.decrefRsc t.db b_ref
+        DB.decrefRsc t.db c_ref
 
         gcDB t.db
         Assert.True(hasRsc a_val)
         Assert.True(hasRsc b_val)
         Assert.False(hasRsc c_val)
 
-        writeKeyDB t.db (BS.fromString "a") BS.empty
+        DB.writeKey t.db (BS.fromString "a") BS.empty
         gcDB t.db
         Assert.False(hasRsc a_val)
         Assert.True(hasRsc b_val)
@@ -153,22 +155,14 @@ type DBTests =
 
     [<Fact>]
     member t.``simple transaction conflict`` () = 
-        let read tx k = BS.toString (readKey tx (BS.fromString k))
-        let write tx k v = writeKey tx (BS.fromString k) (BS.fromString v)
-        let assume tx k v = assumeKey tx (BS.fromString k) (BS.fromString v)
-        using (newTX t.db) (fun tx ->
-            write tx "a" "x"
-            write tx "b" "y"
-            write tx "c" "z"
-            Assert.True(commit tx))
-        using (newTX t.db) (fun tx ->
-            Assert.Equal(read tx "a", "x")
-            Assert.Equal(read tx "b", "y")
-            Assert.Equal(None, testReadAssumptions tx.DB tx.Reads)
-            assume tx "c" "zz"
-            Assert.Equal(read tx "c", "zz")
-            Assert.False(commit tx)
-            Assert.Equal(Some (BS.fromString "c"), testReadAssumptions tx.DB tx.Reads))
+        let a = BTree.ofList (List.map bsPair [("foo","baz")])
+        let b = BTree.ofList (List.map bsPair [("foo","bar")])
+        DB.writeKeys t.db a
+
+        Assert.False(DB.update t.db b a)
+        Assert.True(DB.update t.db a b)
+        Assert.False(DB.update t.db a b)
+        Assert.True(DB.update t.db b a)
 
 
 

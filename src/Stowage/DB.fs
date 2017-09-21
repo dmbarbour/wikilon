@@ -97,39 +97,49 @@ module DB =
     let inline verifyReadAssumptions (db : DB) (reads : KVMap) : bool =
         Option.isNone (testReadAssumptions db reads)
 
-    /// Atomic database compare and update (asynchronous)
+    /// Atomic database update (asynchronous)
     /// 
     /// This initiates a DB write task, providing read assumptions and
-    /// the set of updates to perform. Asynchronously, the writer will 
-    /// verify these assumptions and push the updates. The task completes
-    /// successfully only after synchronization to disk. 
+    /// the set of writes to perform. In the background, the writer will 
+    /// verify the read assumptions then push the updates. Updates at 
+    /// near the same time may be batched, amortizing synchronization
+    /// overheads. Updates are applied in the order received, so it is
+    /// feasible to batch several updates where prior writes become read
+    /// assumptions for further updates.
     ///
-    /// Updates at near the same time are batched, and if there are no
-    /// conflicts (no read assumption is violated) then the writes are
-    /// applied. It is feasible to amortize synchronization overheads 
-    /// across batched tasks to the extent conflicts are avoided. When
-    /// needed, use external concurrency control to prevent conflicts.
-    /// 
-    /// Updates are applied in order of arrival. Hence, it is feasible
-    /// to batch multiple updates from a single thread where each update
-    /// assumes success of the prior update.
-    let atomicUpdateAsync (db : DB) (reads : KVMap) (writes : KVMap) : Task<bool> =
+    /// A write only fails if a read assumption is violated. Hence, a
+    /// blind write will never fail. If the DB is closed, the write
+    /// will simply never complete.
+    let updateAsync (db : DB) (rs : KVMap) (ws : KVMap) : Task<bool> =
         // reads are validated by the writer, but sanitize writes immediately
         let validKV k v = isValidKey k && isValidVal v
-        let validWS = BTree.forall validKV writes
+        let validWS = BTree.forall validKV ws
         if not validWS then invalidArg "writes" "invalid write request" else
         let tcs = new TaskCompletionSource<bool>()
-        I.dbCommit db.Impl (reads, writes, tcs)
+        I.dbCommit db.Impl (rs, ws, tcs)
         tcs.Task
 
     /// Atomic compare and update (synchronous).
-    let inline atomicUpdate (db : DB) (reads : KVMap) (writes : KVMap) : bool =
-        (atomicUpdateAsync db reads writes).Result
+    let inline update (db : DB) (rs : KVMap) (ws : KVMap) : bool =
+        (updateAsync db rs ws).Result
 
-    /// Wait for recent writes to complete.
-    let inline sync (db : DB) : unit = 
-        let r = atomicUpdate db (BTree.empty) (BTree.empty)
+    /// Blind write a batch of keys (synchronous)
+    let inline writeKeys db ws =
+        let r = update db (BTree.empty) ws
         assert(r)
+
+    /// Blind write of key (synchronous)
+    let inline writeKey db k v = writeKeys db (BTree.singleton k v)
+
+    /// Asynchronous blind write of keys.
+    let inline writeKeysAsync db ws = 
+        updateAsync db (BTree.empty) ws |> ignore
+
+    /// Asynchronous blind write of single key
+    let inline writeKeyAsync db k v = writeKeysAsync db (BTree.singleton k v)
+
+    /// Wait for recent asynchronous writes to complete.
+    let inline sync (db : DB) : unit = writeKeys db (BTree.empty)
 
     // lookup new resource in DB
     let inline private findNewRsc (db : DB) (h : RscHash) : Val option =
@@ -175,10 +185,9 @@ module DB =
     /// to track recently stowed resources, or to ensure stable data
     /// when reading keys that might be concurrently updated, we must
     /// track ephemeral references from .Net memory. This is achieved
-    /// via explicit reference counting.
+    /// via explicit reference counting of hashes.
     ///
-    /// Note: decref is frequently performed from a .Net finalizer,
-    /// and the DB ensures decref during finalization is safe. 
+    /// Decref from finalizer is safe even if DB closed or finalized.
     let decrefRsc (db : DB) (h : RscHash) : unit =
         I.dbEphDec (db.Impl) (I.rscEphID h)
 

@@ -43,8 +43,8 @@ module internal I =
     let maxRC = 999_999_999_999_999_999L // what can we squeeze into 18 digits?
     type RCU = Map<StowKey, RC>         // pending refct updates
 
-    type EphID = nativeint                 // hash of stowKey
-    let inline skEphID(h:StowKey) : EphID = nativeint (ByteString.Hash64(h.v))
+    type EphID = uint64                 // hash of stowKey
+    let inline skEphID(h:StowKey) : EphID = ByteString.Hash64(h.v)
     let inline rscEphID(h:RscHash) : EphID = skEphID (rscStowKey h)
 
 
@@ -97,9 +97,15 @@ module internal I =
                 | :? DB as y -> compare (x.db_env) (y.db_env)
                 | _ -> invalidArg "yobj" "cannot compare values of different types"
 
-    let inline dbEphInc (db : DB) (k : EphID) : unit = EphTbl.incref (db.db_ephtbl) k
-    let inline dbEphDec (db : DB) (k : EphID) : unit = EphTbl.decref (db.db_ephtbl) k
-    let inline dbHasEph (db : DB) (k : EphID) : bool = EphTbl.contains (db.db_ephtbl) k
+    let inline dbEphInc (db : DB) (k : EphID) : unit = 
+        let tbl = db.db_ephtbl
+        lock (tbl) (fun () -> tbl.Incref k)
+    let inline dbEphDec (db : DB) (k : EphID) : unit =
+        let tbl = db.db_ephtbl
+        lock (tbl) (fun () -> tbl.Decref k)
+    let inline dbHasEph (db : DB) (k : EphID) : bool = 
+        let tbl = db.db_ephtbl
+        lock (tbl) (fun () -> tbl.Contains k)
 
     // add commit request to the database
     let dbCommit (db : DB) (c : Commit) : unit =
@@ -181,7 +187,7 @@ module internal I =
 
     // deletes resource, returns bytestring removed for refct GC
     let dbDelRsc (db:DB) (wtx:MDB_txn) (k:StowKey) : Val =
-        //printf "Deleting Resource %s...\n" (toString k.v)
+        //printf "Deleting Resource %s...\n" (BS.toString k.v)
         let vOpt = mdb_get wtx (db.db_stow) (k.v)
         mdb_del wtx (db.db_stow) (k.v) |> ignore
         mdb_del wtx (db.db_zero) (k.v) |> ignore
@@ -196,7 +202,7 @@ module internal I =
     let dbPutRsc (db:DB) (wtx:MDB_txn) (h:RscHash) (v:Val) : unit =
         if(h.Length <> rscHashLen) then invalidArg "h" "invalid resource ID" else
         if not (isValidVal v) then invalidArg "v" "invalid resource value" else
-        //printf "Writing Resource %s\n" (toString h)
+        //printf "Writing Resource %s (%s)\n" (BS.toString h) (BS.toString v)
         let hKey = BS.take stowKeyLen h
         let hRem = BS.drop stowKeyLen h
         let dst = mdb_reserve wtx (db.db_stow) hKey (hRem.Length + v.Length)
@@ -216,7 +222,7 @@ module internal I =
     let dbWriteKey (db:DB) (wtx:MDB_txn) (k:Key) (v:Val) : unit =
         if(not (isValidKey k)) then invalidArg "k" "invalid key" else
         if(not (isValidVal v)) then invalidArg "v" "invalid value" else
-        //printf "Writing Key %s\n" (toString k)
+        //printf "Writing Key %s (%s)\n" (BS.toString k) (BS.toString v)
         if(BS.isEmpty v) 
             // empty value corresponds to deletion
             then mdb_del wtx (db.db_data) k |> ignore
@@ -313,6 +319,7 @@ module internal I =
     //  - readers can atomically increment ephemeral roots without waiting
     //  - GC of balanced trees or deep lists should be about the same
     //  - limit GC effort per write frame, but keep up with busy writer
+    //  - resources referenced from asynchronous writes are protected
     //
     // The first point means we cannot GC any RscHash that a reader might
     // be concurrently reading via rooted keys. Conservatively, we can just
@@ -328,10 +335,10 @@ module internal I =
 
     let rec dbWriterLoop (db:DB) : unit =
         // wait for writer tasks
-        let (stowedRsc,commitList,halt) = lock db (fun () ->
+        let (stowedRsc,ephHold,commitList,halt) = lock db (fun () ->
             if not (dbHasWork db) 
                 then ignore(Monitor.Wait(db))
-            let r = (db.db_newrsc, db.db_commit, db.db_halt)
+            let r = (db.db_newrsc, db.db_ephtbl, db.db_commit, db.db_halt)
             db.db_commit <- List.empty
             r)
 
@@ -422,7 +429,7 @@ module internal I =
         lock db (fun () -> 
             db.db_newrsc <- Map.fold (fun m sk _ -> Map.remove sk m) 
                                 db.db_newrsc stowedRsc)
-        //printf "Written: %d keys, %d rscs (%d in queue, %d collected)\n" (Map.count writes) (Map.count writeRsc) (Map.count db.db_newrsc) nGC
+        //printf "Written: %d keys (%d commits in queue), %d rscs (%d in queue, %d collected)\n" (BTree.size writes) (List.length db.db_commit) (Map.count writeRsc) (Map.count db.db_newrsc) nGC
 
         // begin next write frame unless we're halted
         if (halt) then () else dbWriterLoop db
@@ -431,9 +438,9 @@ module internal I =
         dbSignal db // force initial write step
         dbWriterLoop db 
 
-    let lockFile (fn : string) : FileStream =
+    let lockFile (name : string) : FileStream =
         new FileStream(
-                fn, 
+                name, 
                 FileMode.OpenOrCreate, 
                 FileAccess.ReadWrite, 
                 FileShare.None,
@@ -443,7 +450,7 @@ module internal I =
     // assuming we're in the target directory, build the database
     let openDB (path : string) (maxSizeMB : int) : DB =
         Directory.CreateDirectory(path) |> ignore
-        let flock = lockFile (Path.Combine(path,".lock"))
+        let flock = lockFile (Path.Combine(path,"lock"))
         let env = mdb_env_create ()
         mdb_env_set_mapsize env maxSizeMB
         mdb_env_set_maxdbs env 4

@@ -1,6 +1,9 @@
 namespace Stowage
 open Data.ByteString
 
+/// Estimated Serialization Size (in bytes)
+type SizeEst = int
+
 /// Abstract encoder-decoder type for data in Stowage.
 ///
 /// This uses the stream-oriented read and write from Data.ByteString
@@ -23,7 +26,7 @@ open Data.ByteString
 type Codec<'T> =
     abstract member Write : 'T -> ByteDst -> unit
     abstract member Read  : DB -> ByteSrc -> 'T
-    abstract member Compact : DB -> 'T -> struct('T * int)
+    abstract member Compact : DB -> 'T -> struct('T * SizeEst)
 
 module Codec =
 
@@ -31,7 +34,7 @@ module Codec =
 
     let inline read (c:Codec<'T>) (db:DB) (src:ByteSrc) : 'T = c.Read db src
 
-    let inline compactSz (c:Codec<'T>) (db:DB) (v:'T) : struct('T * int) = c.Compact db v
+    let inline compactSz (c:Codec<'T>) (db:DB) (v:'T) : struct('T * SizeEst) = c.Compact db v
 
     let inline compact (c:Codec<'T>) (db:DB) (v:'T) : 'T =
         let struct(v',_) = compactSz c db v

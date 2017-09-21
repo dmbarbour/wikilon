@@ -12,48 +12,50 @@ open System.Runtime.InteropServices
 /// roots. The decref will usually be performed via .Net finalizers.
 [< SecuritySafeCriticalAttribute >]
 module internal EphTbl =
+    // The current implementation is a hierarchical hashtable with 
+    // 64-bit entries where keys use 58 bits and reference counts
+    // are 6 bits. 
+    //
+    // The 'hierarchical' aspect solves the problem of saturating
+    // a small 6-bit refct. If we surpass the max refct, we'll add
+    // the item to a child table representing a higher 'digit'. We
+    // can borrow from this digit upon decref. So a few layers of
+    // table essentially give us extra reference count bits.
+    //
+    // This design is thus best for cases where most items have small
+    // reference counts, which is a reasonable assumption for most
+    // use cases.
+    //
+    // Meanwhile, the 58-bit IDs provide reasonable resistance to
+    // hash collisions. We'll still likely have a few collisions in
+    // a billion references. But I think this is acceptable, it only
+    // hurts efficiency of Stowage GC a little bit.
 
-    [< Struct >]
-    type Elem =
-        val id : nativeint
-        val rc : nativeint
-        new(id,rc) = { id = id; rc = rc }
 
-    let elemSize = nativeint (2 * IntPtr.Size)
-    let idOff = IntPtr.Zero
-    let rcOff = nativeint IntPtr.Size
-    let inline elemOff (ix:nativeint) : nativeint = (elemSize * ix)
+    [<Struct>]
+    type Elem = 
+        val v : uint64
+        static member rcBits : int = 6
+        static member idBits : int = (64 - Elem.rcBits)
+        static member rcMask : uint64 = (1UL <<< Elem.rcBits) - 1UL
+        static member rcMax  : uint16 = uint16 Elem.rcMask
+        static member idMask : uint64 = (1UL <<< Elem.idBits) - 1UL
+        new(ev : uint64) = { v = ev }
+        new(id : uint64, rc : uint16) = 
+            assert(Elem.rcMask >= (uint64 rc))
+            Elem((id <<< Elem.rcBits) ||| (uint64 rc))
+        member inline e.rc with get() : uint16 = uint16 (e.v &&& Elem.rcMask)
+        member inline e.id with get() : uint64 = (e.v >>> Elem.rcBits)
+        static member size : int = 8
 
-    // would use Marshal.StructureToPtr<T> and converse, but F# is telling me
-    // that it isn't a function. Maybe my version of .Net core is off? Anyhow,
-    // instead using ReadIntPtr and WriteIntPtr for now.
+    let inline elemOff (ix:nativeint) : nativeint = ((nativeint Elem.size) * ix)
     let inline getElemAt (p:nativeint) (ix:nativeint) : Elem =
-        let src = p + elemOff ix
-        let id = Marshal.ReadIntPtr(src + idOff)
-        let rc = Marshal.ReadIntPtr(src + rcOff)
-        Elem(id,rc)
-    let inline setElemAt (p:nativeint) (ix:nativeint) (e:Elem) : unit =
-        let dst = p + elemOff ix
-        Marshal.WriteIntPtr(dst + idOff, e.id)
-        Marshal.WriteIntPtr(dst + rcOff, e.rc)
-    let inline clearElemAt p ix = setElemAt p ix (Elem(0n,0n))
-        
-    // Marshal.AllocHGlobal does not zero-fill memory, so I need to do
-    // it explicitly. Fortunately, I don't need great performance here.
-    // Allocation is rare, occuring only on init or resize. So I'll just
-    // do a simple WriteByte loop.
-    let zeroFill (p0:nativeint) (sz:nativeint) : unit =
-        let stop = (p0 + sz)
-        let rec loop p =
-            if (p = stop) then () else
-            Marshal.WriteByte(p,0uy)
-            loop (1n+p)
-        loop p0
-
-    let inline memAllocZF (sz:nativeint) : nativeint =
-        let p = Marshal.AllocHGlobal sz
-        zeroFill p sz
-        p
+        // wat? where is ReadUInt64?
+        let i64 = Marshal.ReadInt64(p + (elemOff ix))
+        Elem(uint64 i64)
+    let inline setElemAt (p:nativeint) (ix:nativeint) (e:Elem) =
+        Marshal.WriteInt64(p + (elemOff ix), int64 e.v)
+    let inline clearElemAt p ix = setElemAt p ix (Elem(0UL))
 
     // for whatever reason, there is no System.IntPtr.MaxValue.
     let maxNativeInt : nativeint =
@@ -61,28 +63,54 @@ module internal EphTbl =
         let bits = (System.IntPtr.Size * 8) - 1 // exclude sign bit
         nativeint ((1UL <<< bits) - 1UL)
 
+    let allocData (sz:nativeint) : nativeint =
+        assert(sz > 0n)
+        if (sz >= (maxNativeInt / (nativeint Elem.size)))
+            then raise (System.OutOfMemoryException())
+        let p = Marshal.AllocHGlobal (elemOff sz)
+        // initialize the memory
+        let rec loop ix = 
+            clearElemAt p ix
+            if(0n <> ix) then loop (ix - 1n)
+        loop (sz - 1n)
+        p
+
+    let inline freeData p = 
+        Marshal.FreeHGlobal(p)
+
+
     // Our table is represented in unmanaged memory in order to guarantee
     // it may scale proportional to address space. Geometric growth, powers
-    // of two sizes, never empty. At most 2/3 fill.
+    // of two sizes, never empty. At most 2/3 fill. The initial size is 
+    // a few kilobytes, enough to track a few hundred items.
     // 
-    // This table assumes single-threaded access. Locking must be provided
-    // by the caller! Also, the table is not reduced in size.
+    // This table assumes single-threaded access, and should be locked for
+    // use from any multi-threaded context.
+    [<AllowNullLiteral>]
     type Table =
         val mutable private Data : nativeint
         val mutable private Size : nativeint
         val mutable private Fill : nativeint
+        val mutable private Next : Table       // next RC digit or null
 
-        new() = 
-            let szIni = (1n <<< 12) 
-            { Data = memAllocZF (elemOff szIni)
+        // "digit" size is less than rcMax to provide a small buffer
+        // between incref and decref touching the `Next` table.
+        static member private Digit : uint16 = 
+            let buffer = 7us
+            assert(Elem.rcMax > (2us * buffer))
+            (Elem.rcMax - buffer)
+
+        private new(szIni:nativeint) =
+            { Data = allocData szIni
               Size = szIni
               Fill = 0n
+              Next = null
             }
+        new() = new Table(1n<<<10)
+
         override tbl.Finalize() = 
             tbl.Size <- 0n
-            tbl.Fill <- 0n
             Marshal.FreeHGlobal(tbl.Data)
-            tbl.Data <- 0n
 
         // test for finalization for safer shutdown
         member inline private tbl.Finalized() : bool = 
@@ -93,13 +121,20 @@ module internal EphTbl =
         // This assumes the tbl.Fill < tbl.Size and hence we have some
         // zero elements. If the identifier isn't part of our table, we
         // return the appropriate location (with refct 0)
-        member private tbl.Find (id:nativeint) : struct(nativeint * nativeint) =
+        member private tbl.Find (idFull:uint64) : struct(nativeint * uint16) =
+            let id = (idFull &&& Elem.idMask)
             let mask = (tbl.Size - 1n)
             let rec loop ix =
                 let e = getElemAt (tbl.Data) ix
-                if ((e.id = id) || (0n = e.rc)) then struct(ix,e.rc) else
+                if ((e.id = id) || (0us = e.rc)) then struct(ix,e.rc) else
                 loop ((1n + ix) &&& mask)
-            loop (id &&& mask)
+            loop ((nativeint id) &&& mask)
+
+        /// Test whether ID is present within table.
+        member tbl.Contains (id:uint64) : bool = 
+            if(tbl.Finalized()) then false else
+            let struct(_,rc) = tbl.Find id
+            (0us <> rc)
 
         // get the index, ignore the refct
         member inline private tbl.IndexOf id = 
@@ -109,12 +144,10 @@ module internal EphTbl =
         // grow table; geometric growth
         member private tbl.Grow () : unit =
             if (tbl.Finalized())
-                then invalidOp "cannot incref after finalization"
-            if (tbl.Size > (maxNativeInt / (elemSize * 2n)))
-                then raise (System.OutOfMemoryException()) // size will overflow
+                then invalidOp "incref after finalize"
             assert(tbl.Size > 0n)
             let new_size = (tbl.Size <<< 1)
-            let new_data = memAllocZF (elemOff new_size) 
+            let new_data = allocData new_size
             let old_data = tbl.Data
             let old_size = tbl.Size
             tbl.Data <- new_data
@@ -122,9 +155,9 @@ module internal EphTbl =
             let rec loop ix = 
                 if (ix = old_size) then () else
                 let e = getElemAt old_data ix
-                if (0n <> e.rc) 
+                if (0us <> e.rc) 
                     then setElemAt (tbl.Data) (tbl.IndexOf (e.id)) e
-                loop (1n+ix)
+                loop (ix + 1n)
             loop 0n
             Marshal.FreeHGlobal(old_data)
 
@@ -132,53 +165,47 @@ module internal EphTbl =
             let overfilled = (tbl.Fill * 3n) >= (tbl.Size * 2n)
             if overfilled then tbl.Grow()
 
-        member tbl.Incref (id:nativeint) : unit =
+        /// Add ID to the table, or incref existing ID
+        member tbl.Incref (id:uint64) : unit =
             tbl.Reserve()
             let struct(ix,rc) = tbl.Find id
-            if (0n = rc) 
-                then tbl.Fill <- (tbl.Fill + 1n)
-            setElemAt (tbl.Data) ix (Elem(id, rc + 1n))
+            if (0us = rc) then 
+                setElemAt (tbl.Data) ix (Elem(id, 1us))
+                tbl.Fill <- (tbl.Fill + 1n)
+            else if(Elem.rcMax = rc) then
+                if (null = tbl.Next) 
+                    then tbl.Next <- new Table(1n<<<7)
+                tbl.Next.Incref id
+                setElemAt (tbl.Data) ix (Elem(id,(Elem.rcMax - Table.Digit) + 1us))
+            else 
+                setElemAt (tbl.Data) ix (Elem(id, rc + 1us))
 
-        member tbl.Contains (id:nativeint) : bool = 
-            let struct(_,rc) = tbl.Find id
-            (0n <> rc)
-
-        member tbl.Decref (id:nativeint) : unit =
+        member tbl.Decref (id:uint64) : unit =
             if(tbl.Finalized()) then () else 
             let struct(ix,rc) = tbl.Find id
-            if (1n = rc) then tbl.DeleteIndex ix else
-            if (1n < rc) then setElemAt (tbl.Data) ix (Elem(id, rc - 1n)) else
-            invalidOp "refct already zero!"
-
+            if (1us = rc) then 
+                let delete = (null = tbl.Next) || not (tbl.Next.Contains id)
+                if delete then tbl.Delete ix else
+                // borrow Table.Digit from next table
+                tbl.Next.Decref id
+                setElemAt (tbl.Data) ix (Elem(id, Table.Digit))
+            else if(0us = rc) then invalidOp "refct already zero!"
+            else setElemAt (tbl.Data) ix (Elem(id, rc - 1us))
 
         // clear the specified index, then walk the hashtable to shift
-        // linear collision elements into their appropriate location.
-        // This avoids need for sentinel values, but will increase decref
-        // costs.
-        member private tbl.DeleteIndex (ixDel:nativeint) : unit =
+        // potential linear-collision items into appropriate locations
+        member private tbl.Delete (ixDel:nativeint) : unit =
             clearElemAt (tbl.Data) ixDel
             tbl.Fill <- (tbl.Fill - 1n)
             let mask = (tbl.Size - 1n)
             let rec loop ix =
                 let e = getElemAt (tbl.Data) ix
-                if (0n = e.rc) then () else
+                if (0us = e.rc) then () else
                 let ix' = tbl.IndexOf (e.id)
                 if (ix <> ix')
                     then clearElemAt (tbl.Data) ix
                          setElemAt (tbl.Data) ix' e
                 loop ((1n + ix) &&& mask)
             loop ((1n + ixDel) &&& mask)
-                
 
-    /// locked incref
-    let inline incref (tbl:Table) (id:nativeint) : unit = 
-        lock tbl (fun () -> tbl.Incref id)
-
-    /// locked decref
-    let inline decref (tbl:Table) (id:nativeint) : unit = 
-        lock tbl (fun () -> tbl.Decref id)
-
-    /// locked contains check
-    let inline contains (tbl:Table) (id:nativeint) : bool = 
-        lock tbl (fun () -> tbl.Contains id)
 

@@ -4,20 +4,31 @@ open Data.ByteString
 /// Compacting Value Reference
 ///
 /// The idea here is that we should be able to compact oversized data
-/// into a reference while recording smaller data inline or in memory.
-/// The CVRef type may either wrap a value or an LVRef.
+/// into a reference while representing smaller data inline or in memory.
+/// This is motivated because VRefs actually have a significant
+
+/// The CVRef type may contain Local value inline, or a remote ref. On
+/// compaction, we determine whether the local value must be rewritten
+/// to the remote reference based on thresholds and a size estimate.
 ///
-/// Unfortunately, this isn't entirely optimal for recursive structure,
-/// since we'll tend to construct redundant codec objects. But it may
-/// be convenient when we don't have recursive structure.
+/// CVRef wraps LVRef to provide caching and latent stowage.
 module CVRef =
 
     type Ref<'V> =
-        | Local of 'V
+        | Local of 'V * SizeEst
         | Remote of LVRef<'V>
 
-    let inline local v = Local v
+    /// Local value with a guaranteed compaction effort.
+    let inline local v = Local (v, System.Int32.MaxValue)
+
+    /// Local value with a size estimate. This size shouldn't
+    /// be too far off from the actual serialization size.
+    let inline localSz (v:'V) (sz:SizeEst) : Ref<'V> = Local (v,sz)
+
+    /// Remote value reference.
     let inline remote r = Remote r
+
+
 
     /// Forcibly clear cached value (if any).
     let inline clear (ref:Ref<'V>) : unit =
