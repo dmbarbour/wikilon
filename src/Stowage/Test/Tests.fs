@@ -165,4 +165,20 @@ type DBTests =
         Assert.True(DB.update t.db b a)
 
 
+    [<Fact>]
+    member t.``fast enough incref and decref`` () =
+        let sw = System.Diagnostics.Stopwatch()
+        let ref = DB.stowRsc (t.db) (BS.fromString "lalala")
+        sw.Start()
+        let reps = 100000
+        for i = 1 to reps do
+            DB.increfRsc (t.db) ref
+            DB.decrefRsc (t.db) ref
+        sw.Stop()
+        let totalUsec = sw.Elapsed.TotalMilliseconds * 1000.0
+        let usecPerRep = totalUsec / float reps
+        // printfn "usec per rep: %A" usecPerRep
+        Assert.True(usecPerRep < 5.0)
+
+
 

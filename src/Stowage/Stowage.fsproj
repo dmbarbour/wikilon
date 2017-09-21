@@ -6,7 +6,6 @@
     <Compile Include="Hash.fs" />
     <Compile Include="LMDB.fs" />
     <Compile Include="Memory.fs" />
-    <Compile Include="Ephemeron.fs" />
     <Compile Include="Types.fs" />
     <Compile Include="Impl.fs" />
     <Compile Include="DB.fs" />

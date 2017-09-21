@@ -43,10 +43,15 @@ module internal I =
     let maxRC = 999_999_999_999_999_999L // what can we squeeze into 18 digits?
     type RCU = Map<StowKey, RC>         // pending refct updates
 
+    // TODO: Develop a better persistent EphTbl.
+    //  It either needs be persistent to guard asynchronous resources
+    //  or it needs to delay reducing refcts to zero until the writer
+    //  can explicitly mark a safe point. For now, the Map works but
+    //  it's a lot of overhead per resource hash!
     type EphID = uint64                 // hash of stowKey
+    type EphTbl = Map<EphID,nativeint>  // reference counts
     let inline skEphID(h:StowKey) : EphID = ByteString.Hash64(h.v)
     let inline rscEphID(h:RscHash) : EphID = skEphID (rscStowKey h)
-
 
     // Each commit consists of:
     //  a set of values read (or assumed) to validate
@@ -78,9 +83,9 @@ module internal I =
             db_rfct : MDB_dbi     // resources with refct > 0
             db_zero : MDB_dbi     // resources with zero refct
             db_flock : FileStream
-            db_ephtbl : EphTbl.Table    // ephemeral resource roots
 
             mutable db_rdlock : ReadLock        // current read-lock (updated per frame).
+            mutable db_ephtbl : EphTbl          // ephemeral resource roots
             mutable db_newrsc : Stowage         // recent stowage requests
             mutable db_commit : Commit list     // pending commit requests
             mutable db_halt   : bool            // halt the writer
@@ -97,15 +102,21 @@ module internal I =
                 | :? DB as y -> compare (x.db_env) (y.db_env)
                 | _ -> invalidArg "yobj" "cannot compare values of different types"
 
-    let inline dbEphInc (db : DB) (k : EphID) : unit = 
-        let tbl = db.db_ephtbl
-        lock (tbl) (fun () -> tbl.Incref k)
-    let inline dbEphDec (db : DB) (k : EphID) : unit =
-        let tbl = db.db_ephtbl
-        lock (tbl) (fun () -> tbl.Decref k)
-    let inline dbHasEph (db : DB) (k : EphID) : bool = 
-        let tbl = db.db_ephtbl
-        lock (tbl) (fun () -> tbl.Contains k)
+    let inline private ephInc k tbl =
+        match Map.tryFind k tbl with
+        | None -> Map.add k 1n tbl
+        | Some rc -> Map.add k (rc+1n) tbl
+    let dbEphInc (db : DB) (k : EphID) : unit =
+        lock db (fun () -> db.db_ephtbl <- ephInc k db.db_ephtbl)
+
+    let inline private ephDec k tbl =
+        match Map.tryFind k tbl with
+        | None -> invalidOp "refct already zero"
+        | Some rc -> 
+            if (1n = rc) then Map.remove k tbl 
+                         else Map.add k (rc - 1n) tbl 
+    let dbEphDec (db : DB) (k : EphID) : unit =
+        lock db (fun () -> db.db_ephtbl <- ephDec k db.db_ephtbl)
 
     // add commit request to the database
     let dbCommit (db : DB) (c : Commit) : unit =
@@ -332,6 +343,11 @@ module internal I =
     // Incremental GC involves limited write effort per frame, but a constant
     // amount of effort may prove unable to keep up with a very busy writer. 
     // So our GC effort must also be proportional (roughly) to write effort.
+    //
+    // To protect resources held at asynchronous writes, I currently use an
+    // atomic operation to acquire a persistent `ephHold` table. This table
+    // represents resources held before the write starts, including anything
+    // that is decref'd asynchronously. 
 
     let rec dbWriterLoop (db:DB) : unit =
         // wait for writer tasks
@@ -372,7 +388,7 @@ module internal I =
 
         // prevent GC for a subset of resources
         let blockGC sk = Map.containsKey sk rcRoots // resources touched this frame
-                      || (dbHasEph db (skEphID sk)) // ephemeral root
+                      || (Map.containsKey (skEphID sk) ephHold) // ephemeral root
 
         let updRefct (struct(nGC, rcTbl, rcu)) sk n = 
             let rc0 = 
@@ -472,7 +488,7 @@ module internal I =
               db_rfct = dbRfct
               db_zero = dbZero
               db_flock = flock
-              db_ephtbl = new EphTbl.Table()
+              db_ephtbl = Map.empty
               db_rdlock = new ReadLock()
               db_newrsc = Map.empty
               db_commit = List.empty
