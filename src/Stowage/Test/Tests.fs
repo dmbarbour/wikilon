@@ -3,6 +3,7 @@ module Stowage.Tests
 #nowarn "988"
 
 open System
+open System.Threading
 open System.IO
 open Xunit
 open Stowage
@@ -38,7 +39,8 @@ type TestDB =
 // Stowage doesn't provide a clean way to wait for full GC, but
 // we can sync a few times to ensure the GC runs a few cycles.
 let sync db = DB.sync db
-let gcDB (db:DB) : unit = sync db; sync db; sync db
+let gcDB (db:DB) : unit = 
+    sync db; sync db; sync db
 
 let onPair fn ((a,b)) = (fn a, fn b)
 let bsPair p = onPair (BS.fromString) p
@@ -163,6 +165,14 @@ type DBTests =
         Assert.False(DB.update t.db a b)
         Assert.True(DB.update t.db b a)
 
+    [<Fact>]
+    member t.``cannot decref below zero!``() =
+        let rsc = BS.fromString "testing: cannot decref below zero!"
+        let ref = DB.stowRsc t.db rsc
+        DB.sync t.db
+        DB.decrefRsc t.db ref
+        Assert.Throws<InvalidOperationException>(fun () -> 
+            DB.decrefRsc t.db ref)
 
     [<Fact>]
     member t.``fast enough for practical work`` () =
@@ -170,17 +180,20 @@ type DBTests =
 
         let sw = System.Diagnostics.Stopwatch()
         sw.Restart()
-        let strCount = 10000
         let refs = 
-            [| for i = 1 to strCount do 
+            [| for i = 1 to 10000 do 
                 let rsc = DB.stowRsc (t.db) (BS.fromString (string i)) 
                 yield rsc
             |]
         DB.sync (t.db) // ensure all data is on disk
         sw.Stop()
-        let usecPerStow = (sw.Elapsed.TotalMilliseconds * 1000.0) / (float strCount)
+        let usecPerStow = (sw.Elapsed.TotalMilliseconds * 1000.0) 
+                            / (float refs.Length)
         printfn "usec per stowed element: %A" usecPerStow
 
+        /// in environment with a bunch of refs, focus incref/decref on
+        /// a few specific references. These should be randomly named due
+        /// to the secure hashes. 
         let reps = 1000
         let focus = refs.[300..399]
         sw.Restart()
@@ -193,8 +206,15 @@ type DBTests =
                             / (float (reps * focus.Length))
         printfn "usec per incref + decref rep: %A" usecPerRep
 
+        // cleanup, or this might interfere with GC roots test
+        Array.iter (DB.decrefRsc t.db) refs
+        for i = 0 to 10 do DB.sync t.db // assumes ~1k elements GC'd per step
+
+
+
         Assert.True(usecPerStow < 120.0)
         Assert.True(usecPerRep < 5.0)
+
 
 
 

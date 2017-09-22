@@ -388,8 +388,8 @@ module internal I =
 
         // GC effort must be roughly proportional to write effort
         // otherwise GC might fall behind when writer is very busy
-        let gcLo = 100 + (2 * (Map.count rcRoots)) 
-        let gcHi = 500 + (5 * gcLo)
+        let gcLo = 10 * (100 + (Map.count rcRoots)) 
+        let gcHi = 4 * gcLo
 
         // prevent GC for a subset of resources
         let blockGC sk = Map.containsKey sk rcRoots // resources touched this frame
@@ -428,6 +428,8 @@ module internal I =
         // if GC is successful, continue GC in next write frame
         if(nGC > 0)
             then dbSignal db 
+                 // printfn "%d resources deleted" nGC
+                 
 
         // finalize write frame        
         mdb_txn_commit wtx // overwrite old frame with new frame
