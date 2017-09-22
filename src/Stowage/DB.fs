@@ -32,6 +32,7 @@ open System.Runtime.InteropServices
 /// "transaction" model is a variation of compare-and-swap: we test
 /// whether a given subset of keys has the values we expect, and if
 /// so, we perform the requested update.
+///
 [< Struct >]
 type DB =
     val internal Impl : I.DB
@@ -46,7 +47,7 @@ module DB =
     /// Open or Create database in current directory.
     ///
     /// Note: Stowage DB assumes exclusive control by single process.
-    /// A simple .lock file is used to help resist accidents. Client
+    /// A simple lock file is used to resist accidents. The client
     /// should avoid using Stowage with networked filesystems.
     let load (path : string) (maxSizeMB : int) : DB = 
         DB (I.openDB path maxSizeMB)
@@ -55,8 +56,9 @@ module DB =
     ///
     /// The normal use case for Stowage DB is to run until crash. But
     /// graceful shutdown is an option. The caller must ensure there
-    /// are no concurrent operations involving the DB. This will wait
-    /// for a final write and sync then properly shutdown.
+    /// are no concurrent operations involving the DB, excepting the
+    /// possibility of `decrefRsc` calls. This will wait for a final
+    /// write and sync then properly shutdown.
     let close (db : DB) : unit = I.closeDB db.Impl
 
     /// Read value associated with a key in the DB.
@@ -70,13 +72,10 @@ module DB =
 
     /// Atomic read of multiple keys from DB. 
     ///
-    /// This read guarantees snapshot consistency, but this doesn't 
-    /// guarantee the most up-to-date values. The values will probably
-    /// be up-to-date if nobody has recently written them, or if the
-    /// writer was synchronous and in the same thread.
-    ///
-    /// In this case we accept an array of keys, and the result is a
-    /// fresh array mapping the values read.
+    /// This guarantees snapshot consistency, but it doesn't promise
+    /// the values are the most up-to-date in context of asynchronous
+    /// writes. Values are returned in new array corresponding to the
+    /// index for the keys read.
     let readKeys (db : DB) (ks : Key[]) : Val[] =
         I.withRTX db.Impl (fun rtx -> 
             Array.map (I.dbReadKey db.Impl rtx) ks)
@@ -97,38 +96,64 @@ module DB =
     let inline verifyReadAssumptions (db : DB) (reads : KVMap) : bool =
         Option.isNone (testReadAssumptions db reads)
 
-    /// Atomic database update
-    /// 
-    /// This writes a set of key-value pairs to the database contingent
-    /// upon the database state matching a given set of read assumptions.
-    /// This provides a simple basis for transactional updates, similar
-    /// in structure to compare-and-swap.
-    ///
-    /// The update will return successfully only after the writes are
-    /// committed and synchronized to disk. However, independent writes
-    /// will tend to be batched together, amortizing the synchronization
-    /// overheads. Writes are independent if they don't violate each
-    /// other's read assumptions. 
-    let update (db : DB) (rs : KVMap) (ws : KVMap) : bool =
-        // reads are validated by the writer, but sanitize writes immediately
+    let inline private verifyKVElems (ws:KVMap) : bool = 
         let validKV k v = isValidKey k && isValidVal v
-        let validWS = BTree.forall validKV ws
-        if not validWS then invalidArg "writes" "invalid write request" else
+        BTree.forall validKV ws
+
+    /// Atomic database update
+    ///
+    /// This creates an asynchronous task to write a set of key-value
+    /// pairs (ws) contingent upon a set of read assumptions (rs). The
+    /// writer atomically verifies read assumptions before performing
+    /// any writes. This provides a simple foundation for optimistic
+    /// transactional updates, lock-free compare-and-swap, etc.. The
+    /// update returns successfully after writes are flushed to disk.
+    ///
+    /// This isn't spectacularly efficient, of course. But the idea is
+    /// to keep values at keys relatively small by pushing most of the
+    /// data into persistent data structures at the resource layer. If
+    /// this assumption holds, then compare-and-swap is not expensive.
+    /// Also, for keys under heavy contention, external synchronization 
+    /// should be modeled.
+    ///
+    /// Updates for independent subsets of keys (where read assumptions
+    /// aren't violated) will not conflict and may be batched together
+    /// to help amortize disk synchronization overheads. Also, updates
+    /// are always applied in the order received, and within each batch 
+    /// only the final value for a key is written. So it is feasible to
+    /// model asynchronous checkpointing transactions that take prior
+    /// writes as future read assumptions.
+    let updateAsync (db : DB) (rs : KVMap) (ws : KVMap) : Task<bool> =
+        if not (verifyKVElems ws)
+            then invalidArg "ws" "invalid write request"
         let tcs = new TaskCompletionSource<bool>()
         I.dbCommit db.Impl (rs, ws, tcs)
-        tcs.Task.Result
+        tcs.Task
 
-    /// Blind write a batch of keys (synchronous)
+    /// Blind asynchronous write of multiple keys. Since this doesn't
+    /// have any read conflicts, it should always succeed.
+    let inline writeKeysAsync db ws = updateAsync db (BTree.empty) ws |> ignore
+
+    /// Blind asynchronous write of a single key.
+    let inline writeKeyAsync db k v = writeKeysAsync db (BTree.singleton k v)
+
+    /// Synchronous update. Simply a synchronous update that immediately waits.
+    let inline update db rs ws = (updateAsync db rs ws).Result
+
+    /// Synchronously write a batch of keys
     let inline writeKeys db ws =
         let r = update db (BTree.empty) ws
         assert(r)
 
-    /// Blind write of key (synchronous)
+    /// Synchronous write of single key
     let inline writeKey db k v = writeKeys db (BTree.singleton k v)
+
+    /// Wait for all pending asynchronous writes and updates to complete.
+    let sync db = writeKeys db (BTree.empty)
 
     // lookup new resource in DB
     let inline private findNewRsc (db : DB) (h : RscHash) : Val option =
-        match Map.tryFind (I.rscStowKey h) (db.Impl.db_newrsc) with
+        match Map.tryFind (I.rscStowKey h) (db.Impl.newrsc) with
         | Some(struct(_,v)) -> Some v
         | None -> None
 
@@ -156,13 +181,11 @@ module DB =
     /// needed to later load the resource. The new RscHash is implicitly 
     /// incref'd (see increfRsc, decrefRsc). 
     ///
-    /// Normally, you'll want to use this *indirectly* via VRef or LVRef
-    /// from the Stowage.Data packages.
+    /// In many cases, you'll want to use stowRsc indirectly via the
+    /// Stowage.Data package's smart references (e.g. LVRef.stow).
     let stowRsc (db : DB) (v : Val) : RscHash =
         if not (isValidVal v) then invalidArg "v" "value too large" else
-        let h = Hash.hash v
-        ignore <| I.dbStow (db.Impl) h v
-        h
+        I.dbStow (db.Impl) v
     
     /// Ephemeral Roots via Reference Counting
     ///
@@ -174,15 +197,16 @@ module DB =
     ///
     /// Decref from finalizer is safe even if DB closed or finalized.
     let decrefRsc (db : DB) (h : RscHash) : unit =
-        I.dbEphDec (db.Impl) (I.rscEphID h)
+        db.Impl.ephtbl.Decref (I.rscEphID h)
 
     let increfRsc (db : DB) (h : RscHash) : unit =
-        I.dbEphInc (db.Impl) (I.rscEphID h)
+        db.Impl.ephtbl.Incref (I.rscEphID h)
 
     /// Ephemeral Roots for full Values
     /// 
     /// This essentially performs increfRsc or decrefRsc for every
     /// resource hash found in a value (as recognized by Stowage GC).
+    /// The primary use case is to call decrefValDeps after readKeyDeep
     let decrefValDeps (db : DB) (v : Val) : unit =
         iterHashDeps (fun h -> decrefRsc db h) v
 
@@ -191,19 +215,16 @@ module DB =
 
     /// Atomic Read and Incref.
     ///
-    /// This composes readKey and increfValDeps as one atomic operation.
-    /// Mostly, Discovered secure hash resources will be rooted in memory
-    /// until the corresponding decrefValDeps operation.
-    ///
-    /// This simplifies reasoning about GC in contexts where the value
-    /// might be written concurrently, especially read-only operations.
+    /// This composes readKey and increfValDeps as one atomic operation
+    /// to simplify reasoning about concurrent GC. The client should use
+    /// decrefValDeps when finished with the value.
     let readKeyDeep (db : DB) (k : Key) : Val =
         I.withRTX db.Impl (fun rtx -> 
             let v = I.dbReadKey db.Impl rtx k
             increfValDeps db v
             v)
 
-    /// Read multiple keys in one snapshot; simultaneous increfValDeps
+    /// Snapshot consistency of readKeys + atomic incref of readKeyDeep
     let readKeysDeep (db : DB) (ks : Key[]) : Val[] =
         I.withRTX db.Impl (fun rtx -> 
             let vs = Array.map (I.dbReadKey db.Impl rtx) ks
@@ -223,7 +244,7 @@ module DB =
             | Some k -> (k, isValidKey k)
         if not validKey then invalidArg "kPrev" "invalid key" else
         I.withRTX db.Impl (fun rtx -> 
-            Stowage.LMDB.mdb_slice_keys rtx (db.Impl.db_data) kMin nMax)
+            Stowage.LMDB.mdb_slice_keys rtx (db.Impl.data) kMin nMax)
 
     /// Check whether the value associated with a key is non-empty.
     let containsKey (db : DB) (k : Key) : bool =

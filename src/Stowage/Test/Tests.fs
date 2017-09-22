@@ -37,7 +37,7 @@ type TestDB =
 
 // Stowage doesn't provide a clean way to wait for full GC, but
 // we can sync a few times to ensure the GC runs a few cycles.
-let sync db = DB.writeKeys db (BTree.empty)
+let sync db = DB.sync db
 let gcDB (db:DB) : unit = sync db; sync db; sync db
 
 let onPair fn ((a,b)) = (fn a, fn b)
@@ -132,8 +132,8 @@ type DBTests =
         let b_ref = DB.stowRsc t.db (BS.fromString b_val)
         let c_ref = DB.stowRsc t.db (BS.fromString c_val)
 
-        DB.writeKey (t.db) (BS.fromString "a") a_ref
-        DB.writeKey (t.db) (BS.fromString "b") b_ref
+        DB.writeKeyAsync (t.db) (BS.fromString "a") a_ref
+        DB.writeKeyAsync (t.db) (BS.fromString "b") b_ref
 
         // release local refs to resources
         DB.decrefRsc t.db a_ref
@@ -165,18 +165,35 @@ type DBTests =
 
 
     [<Fact>]
-    member t.``fast enough incref and decref`` () =
+    member t.``fast enough for practical work`` () =
+        DB.sync (t.db) // avoid pending data
+
         let sw = System.Diagnostics.Stopwatch()
-        let ref = DB.stowRsc (t.db) (BS.fromString "lalala")
-        sw.Start()
-        let reps = 100000
-        for i = 1 to reps do
-            DB.increfRsc (t.db) ref
-            DB.decrefRsc (t.db) ref
+        sw.Restart()
+        let strCount = 10000
+        let refs = 
+            [| for i = 1 to strCount do 
+                let rsc = DB.stowRsc (t.db) (BS.fromString (string i)) 
+                yield rsc
+            |]
+        DB.sync (t.db) // ensure all data is on disk
         sw.Stop()
-        let totalUsec = sw.Elapsed.TotalMilliseconds * 1000.0
-        let usecPerRep = totalUsec / float reps
-        // printfn "usec per rep: %A" usecPerRep
+        let usecPerStow = (sw.Elapsed.TotalMilliseconds * 1000.0) / (float strCount)
+        printfn "usec per stowed element: %A" usecPerStow
+
+        let reps = 1000
+        let focus = refs.[300..399]
+        sw.Restart()
+        for i = 1 to reps do
+            Array.iter (DB.increfRsc t.db) focus
+        for i = 1 to reps do
+            Array.iter (DB.decrefRsc t.db) focus
+        sw.Stop()
+        let usecPerRep = (sw.Elapsed.TotalMilliseconds * 1000.0) 
+                            / (float (reps * focus.Length))
+        printfn "usec per incref + decref rep: %A" usecPerRep
+
+        Assert.True(usecPerStow < 120.0)
         Assert.True(usecPerRep < 5.0)
 
 

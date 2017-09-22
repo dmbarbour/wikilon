@@ -4,7 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="LMDB.fs" />
-    <Compile Include="EphTable.fs" />
+    <Compile Include="RCTable.fs" />
     <Compile Include="Memory.fs" />
     <Compile Include="Hash.fs" />
     <Compile Include="Types.fs" />

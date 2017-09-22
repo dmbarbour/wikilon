@@ -5,14 +5,14 @@ open System
 open System.Security
 open System.Runtime.InteropServices
 
-/// Ephemeron Tracking for Stowage
+/// Reference Tracking
 ///
 /// The stowage system tracks secure hash references from .Net memory
 /// using a table with reference counts. Resources referenced by this
 /// table should not be GC'd from stowage even if they lack persistent
 /// roots. The decref will usually be performed via .Net finalizers.
 [< SecuritySafeCriticalAttribute >]
-module internal EphTbl =
+module internal RCTable =
     // The current implementation is a hierarchical hashtable with 
     // 64-bit entries where keys use 58 bits and reference counts
     // are 6 bits. 
@@ -30,7 +30,7 @@ module internal EphTbl =
     // Meanwhile, the 58-bit IDs provide reasonable resistance to
     // hash collisions. We'll still likely have a few collisions in
     // a billion references. But I think this is acceptable, it only
-    // hurts efficiency of Stowage GC a little bit.
+    // hurts precision of Stowage GC a little bit.
 
 
     [<Struct>]
@@ -58,27 +58,16 @@ module internal EphTbl =
         Marshal.WriteInt64(p + (elemOff ix), int64 e.v)
     let inline clearElemAt p ix = setElemAt p ix (Elem(0UL))
 
-    // for whatever reason, there is no System.IntPtr.MaxValue.
-    let maxNativeInt : nativeint =
-        if (System.IntPtr.Size >= 8) then nativeint (System.Int64.MaxValue) else
-        let bits = (System.IntPtr.Size * 8) - 1 // exclude sign bit
-        nativeint ((1UL <<< bits) - 1UL)
-
-    let allocData (sz:nativeint) : nativeint =
-        assert(sz > 0n)
-        if (sz >= (maxNativeInt / (nativeint Elem.size)))
-            then raise (System.OutOfMemoryException())
-        let p = Marshal.AllocHGlobal (elemOff sz)
+    let allocData (sz:int) : nativeint =
+        assert(sz >= 4)
+        let ct = (1n <<< sz)
+        let p = Marshal.AllocHGlobal (elemOff ct)
         // initialize the memory
         let rec loop ix = 
             clearElemAt p ix
             if(0n <> ix) then loop (ix - 1n)
-        loop (sz - 1n)
+        loop (ct - 1n)
         p
-
-    let inline freeData p = 
-        Marshal.FreeHGlobal(p)
-
 
     // Our table is represented in unmanaged memory in order to guarantee
     // it may scale proportional to address space. Geometric growth, powers
@@ -90,7 +79,7 @@ module internal EphTbl =
     [<AllowNullLiteral>]
     type Table =
         val mutable private Data : nativeint
-        val mutable private Size : nativeint
+        val mutable private Size : int
         val mutable private Fill : nativeint
         val mutable private Next : Table       // next RC digit or null
 
@@ -101,21 +90,21 @@ module internal EphTbl =
             assert(Elem.rcMax > (2us * buffer))
             (Elem.rcMax - buffer)
 
-        private new(szIni:nativeint) =
-            { Data = allocData szIni
-              Size = szIni
+        private new(sz:int) =
+            { Data = allocData sz
+              Size = sz
               Fill = 0n
               Next = null
             }
-        new() = new Table(1n<<<10)
+        new() = new Table(10)
 
         override tbl.Finalize() = 
-            tbl.Size <- 0n
             Marshal.FreeHGlobal(tbl.Data)
+            tbl.Data <- 0n
 
         // test for finalization for safer shutdown
         member inline private tbl.Finalized() : bool = 
-            (0n = tbl.Size)
+            (0n = tbl.Data)
 
         // find returns struct(index * refct).
         //
@@ -124,7 +113,7 @@ module internal EphTbl =
         // return the appropriate location (with refct 0)
         member private tbl.Find (idFull:uint64) : struct(nativeint * uint16) =
             let id = (idFull &&& Elem.idMask)
-            let mask = (tbl.Size - 1n)
+            let mask = ((1n <<< tbl.Size) - 1n)
             let rec loop ix =
                 let e = getElemAt (tbl.Data) ix
                 if ((e.id = id) || (0us = e.rc)) then struct(ix,e.rc) else
@@ -141,29 +130,32 @@ module internal EphTbl =
         member inline private tbl.IndexOf id = 
             let struct(ix,_) = tbl.Find id
             ix
+
+        static member private MaxSize : int = 
+            (8 * (System.IntPtr.Size - 1))
                 
         // grow table; geometric growth
         member private tbl.Grow () : unit =
             if (tbl.Finalized())
                 then invalidOp "incref after finalize"
-            assert(tbl.Size > 0n)
-            let new_size = (tbl.Size <<< 1)
-            let new_data = allocData new_size
-            let old_data = tbl.Data
             let old_size = tbl.Size
+            let old_data = tbl.Data
+            if (old_size >= Table.MaxSize)
+                then raise (System.OutOfMemoryException())
+            let new_size = (old_size + 1)
+            let new_data = allocData new_size
             tbl.Data <- new_data
             tbl.Size <- new_size
             let rec loop ix = 
-                if (ix = old_size) then () else
                 let e = getElemAt old_data ix
                 if (0us <> e.rc) 
                     then setElemAt (tbl.Data) (tbl.IndexOf (e.id)) e
-                loop (ix + 1n)
-            loop 0n
+                if (0n = ix) then () else loop (ix - 1n)
+            loop ((1n <<< old_size) - 1n)
             Marshal.FreeHGlobal(old_data)
 
         member inline private tbl.Reserve() : unit =
-            let overfilled = (tbl.Fill * 3n) >= (tbl.Size * 2n)
+            let overfilled = ((tbl.Fill * 3n) >>> (1 + tbl.Size)) <> 0n
             if overfilled then tbl.Grow()
 
         /// Add ID to the table, or incref existing ID
@@ -175,7 +167,7 @@ module internal EphTbl =
                 tbl.Fill <- (tbl.Fill + 1n)
             else if(Elem.rcMax = rc) then
                 if (null = tbl.Next) 
-                    then tbl.Next <- new Table(1n<<<7)
+                    then tbl.Next <- new Table(7)
                 tbl.Next.Incref id
                 setElemAt (tbl.Data) ix (Elem(id,(Elem.rcMax - Table.Digit) + 1us))
             else 
@@ -198,7 +190,7 @@ module internal EphTbl =
         member private tbl.Delete (ixDel:nativeint) : unit =
             clearElemAt (tbl.Data) ixDel
             tbl.Fill <- (tbl.Fill - 1n)
-            let mask = (tbl.Size - 1n)
+            let mask = ((1n <<< tbl.Size) - 1n)
             let rec loop ix =
                 let e = getElemAt (tbl.Data) ix
                 if (0us = e.rc) then () else
@@ -208,3 +200,5 @@ module internal EphTbl =
                          setElemAt (tbl.Data) ix' e
                 loop ((1n + ix) &&& mask)
             loop ((1n + ixDel) &&& mask)
+
+
