@@ -37,8 +37,8 @@ type TestDB =
 
 // Stowage doesn't provide a clean way to wait for full GC, but
 // we can sync a few times to ensure the GC runs a few cycles.
-let gcDB (db:DB) : unit = 
-    DB.sync db; DB.sync db; DB.sync db
+let sync db = DB.writeKeys db (BTree.empty)
+let gcDB (db:DB) : unit = sync db; sync db; sync db
 
 let onPair fn ((a,b)) = (fn a, fn b)
 let bsPair p = onPair (BS.fromString) p
@@ -57,7 +57,6 @@ type DBTests =
         let loaded = List.map (DB.loadRsc t.db) rscs
         Assert.Equal<ByteString list>(loaded, tests)
         List.iter (DB.decrefRsc t.db) rscs
-        DB.sync (t.db)
 
     [<Fact>]
     member t.``basic resource GC`` () =
@@ -133,8 +132,8 @@ type DBTests =
         let b_ref = DB.stowRsc t.db (BS.fromString b_val)
         let c_ref = DB.stowRsc t.db (BS.fromString c_val)
 
-        DB.writeKeyAsync (t.db) (BS.fromString "a") a_ref
-        DB.writeKeyAsync (t.db) (BS.fromString "b") b_ref
+        DB.writeKey (t.db) (BS.fromString "a") a_ref
+        DB.writeKey (t.db) (BS.fromString "b") b_ref
 
         // release local refs to resources
         DB.decrefRsc t.db a_ref

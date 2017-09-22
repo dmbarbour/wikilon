@@ -97,31 +97,26 @@ module DB =
     let inline verifyReadAssumptions (db : DB) (reads : KVMap) : bool =
         Option.isNone (testReadAssumptions db reads)
 
-    /// Atomic database update (asynchronous)
+    /// Atomic database update
     /// 
-    /// This initiates a DB write task, providing read assumptions and
-    /// the set of writes to perform. In the background, the writer will 
-    /// verify the read assumptions then push the updates. Updates at 
-    /// near the same time may be batched, amortizing synchronization
-    /// overheads. Updates are applied in the order received, so it is
-    /// feasible to batch several updates where prior writes become read
-    /// assumptions for further updates.
+    /// This writes a set of key-value pairs to the database contingent
+    /// upon the database state matching a given set of read assumptions.
+    /// This provides a simple basis for transactional updates, similar
+    /// in structure to compare-and-swap.
     ///
-    /// A write only fails if a read assumption is violated. Hence, a
-    /// blind write will never fail. If the DB is closed, the write
-    /// will simply never complete.
-    let updateAsync (db : DB) (rs : KVMap) (ws : KVMap) : Task<bool> =
+    /// The update will return successfully only after the writes are
+    /// committed and synchronized to disk. However, independent writes
+    /// will tend to be batched together, amortizing the synchronization
+    /// overheads. Writes are independent if they don't violate each
+    /// other's read assumptions. 
+    let update (db : DB) (rs : KVMap) (ws : KVMap) : bool =
         // reads are validated by the writer, but sanitize writes immediately
         let validKV k v = isValidKey k && isValidVal v
         let validWS = BTree.forall validKV ws
         if not validWS then invalidArg "writes" "invalid write request" else
         let tcs = new TaskCompletionSource<bool>()
         I.dbCommit db.Impl (rs, ws, tcs)
-        tcs.Task
-
-    /// Atomic compare and update (synchronous).
-    let inline update (db : DB) (rs : KVMap) (ws : KVMap) : bool =
-        (updateAsync db rs ws).Result
+        tcs.Task.Result
 
     /// Blind write a batch of keys (synchronous)
     let inline writeKeys db ws =
@@ -130,16 +125,6 @@ module DB =
 
     /// Blind write of key (synchronous)
     let inline writeKey db k v = writeKeys db (BTree.singleton k v)
-
-    /// Asynchronous blind write of keys.
-    let inline writeKeysAsync db ws = 
-        updateAsync db (BTree.empty) ws |> ignore
-
-    /// Asynchronous blind write of single key
-    let inline writeKeyAsync db k v = writeKeysAsync db (BTree.singleton k v)
-
-    /// Wait for recent asynchronous writes to complete.
-    let inline sync (db : DB) : unit = writeKeys db (BTree.empty)
 
     // lookup new resource in DB
     let inline private findNewRsc (db : DB) (h : RscHash) : Val option =
