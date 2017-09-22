@@ -6,32 +6,28 @@ open System.Security
 open Data.ByteString
 open System.Runtime.InteropServices
 
-/// Stowage Database (abstract)
+/// Stowage Database
 ///
 /// Stowage is a key-value database that features garbage collected
 /// references between binaries, represented by secure hashes (see
-/// Stowage.Hash). Secure hashes may be treated as secure capabilities
+/// Stowage.Hash). Secure hashes are treated as secure capabilities
 /// to read the data.
 ///
-/// The motivation is to support developers in modeling very large,
-/// first-class values that can readily be cached and shared in a
-/// distributed system. The stowage layer can structured data that
-/// is larger than memory, and can also serve as a virtual memory
-/// model for purely functional computations.
+/// Secure hashes can reference persistent data structures that are
+/// larger than memory, and even model full databases as first-class
+/// values (e.g. by modeling a critbit tree or LSM-tree value, see
+/// package Stowage.Data). Structure sharing is implicit. And this 
+/// may double as a purely functional variant on virtual memory.
 ///
-/// GC of stowage resources integrates with .Net GC via explcit 
-/// reference counting and careful use of .Net Finalizers. There
-/// are some examples of this in the Stowage.Data package, which
-/// provides smart pointers to Stowage (e.g. VRef, LVRef, CVRef).
-/// Additionally, values at the key-value layer act as persistent
-/// roots.
+/// The key-value layer serves as a durable root set for GC. Values
+/// accessed by key can survive process crash or power failure, and
+/// resources referenced from those values are also preserved. For 
+/// ephemeral roots, in-memory reference counting is supported.
 ///
-/// As a key-value database, Stowage is very simple and not heavily
-/// optimized. The expectation is that root values should be small,
-/// leveraging secure hashes to reference bulky data as needed. The
-/// "transaction" model is a variation of compare-and-swap: we test
-/// whether a given subset of keys has the values we expect, and if
-/// so, we perform the requested update.
+/// The expectation is that keys have small values, no more than a
+/// few hundred bytes, but those values will use secure hashes to
+/// reference large data structures. This makes it easy to share 
+/// structures on disk. 
 ///
 [< Struct >]
 type DB =

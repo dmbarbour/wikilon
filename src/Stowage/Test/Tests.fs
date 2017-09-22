@@ -170,7 +170,10 @@ type DBTests =
         let rsc = BS.fromString "testing: cannot decref below zero!"
         let ref = DB.stowRsc t.db rsc
         DB.sync t.db
-        DB.decrefRsc t.db ref
+        for i = 1 to 10000 do
+            DB.increfRsc t.db ref
+        for i = 0 to 10000 do // one extra decref due to implicit from stowRsc
+            DB.decrefRsc t.db ref
         Assert.Throws<InvalidOperationException>(fun () -> 
             DB.decrefRsc t.db ref)
 
@@ -207,10 +210,9 @@ type DBTests =
         printfn "usec per incref + decref rep: %A" usecPerRep
 
         // cleanup, or this might interfere with GC roots test
+        //  this interference happens due to concurrent GC.
         Array.iter (DB.decrefRsc t.db) refs
         for i = 0 to 10 do DB.sync t.db // assumes ~1k elements GC'd per step
-
-
 
         Assert.True(usecPerStow < 120.0)
         Assert.True(usecPerRep < 5.0)
