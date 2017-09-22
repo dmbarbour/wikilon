@@ -62,13 +62,13 @@ module Codec =
     /// Note: You'll have a reference to the resulting RscHash, so
     /// you'll need to use decrefRscDB later, or wrap into VRef.
     let inline stow (c:Codec<'T>) (db:DB) (v:'T) : RscHash =
-        let result = stowRscDB db (writeBytes c v)
+        let result = DB.stowRsc db (writeBytes c v)
         System.GC.KeepAlive v // prevent GC of value during write
         result
 
     /// Load a stowed value from RscHash.
     let inline load (c:Codec<'T>) (db:DB) (h:RscHash) : 'T =
-        readBytes c db (loadRscDB db h)
+        readBytes c db (DB.loadRsc db h)
 
     /// Encode 'Val via 'Rep. 
     ///

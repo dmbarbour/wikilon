@@ -15,7 +15,7 @@ type VRef<'V> =
     member x.ID with get() : RscHash = BS.unsafeCreateA (x.Hash)
 
     // Object overrides
-    override v.Finalize() = decrefRscDB (v.DB) (v.ID)
+    override v.Finalize() = DB.decrefRsc (v.DB) (v.ID)
     override v.ToString() = v.ID.ToString()
     override v.GetHashCode() = v.ID.GetHashCode()
     override x.Equals yobj =
@@ -51,7 +51,7 @@ module VRef =
     /// This will incref the RscHash at the DB to prevent GC of the
     /// stowed data while the VRef is held in .Net runtime memory.
     let inline wrap (c:Codec<'V>) (db:DB) (h:RscHash) : VRef<'V> =
-        increfRscDB db h
+        DB.increfRsc db h
         wrap' c db h
 
     /// Create VRef by Stowing a value.
