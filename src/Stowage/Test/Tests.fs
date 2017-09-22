@@ -214,9 +214,8 @@ type DBTests =
         Array.iter (DB.decrefRsc t.db) refs
         for i = 0 to 10 do DB.sync t.db // assumes ~1k elements GC'd per step
 
-        Assert.True(usecPerStow < 120.0)
-        Assert.True(usecPerRep < 5.0)
-
-
+        // guard against performance regressions!
+        Assert.True(usecPerStow < 120.0) // ~30 on my machine
+        Assert.True(usecPerRep < 5.0)    // ~1.2 on my machine
 
 
