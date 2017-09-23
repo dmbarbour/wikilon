@@ -53,26 +53,4 @@ module RscHash =
     let inline rscHashByte (b : byte) : bool = Stowage.Hash.validHashByte b
     let inline hash (v:Val) : RscHash = Stowage.Hash.hash v
   
-    /// Fold over hash dependencies represented within a value.
-    ///
-    /// This finds substrings that look like hashes. They must have the
-    /// appropriate size and character set, and be separated by non-hash
-    /// characters. This function is the same used for conservative GC
-    /// by Stowage DB.
-    let rec foldHashDeps (fn : 's -> RscHash -> 's) (s:'s) (v:Val) : 's =
-        if (v.Length < rscHashLen) then s else
-        let hv' = BS.dropWhile (not << rscHashByte) v
-        let (h,v') = BS.span rscHashByte hv'
-        let s' = if (rscHashLen = h.Length) then (fn s h) else s
-        foldHashDeps fn s' v'
-
-    /// Iterate through hash-deps. Same as foldHashDeps, but requires
-    /// an imperative operation.
-    let rec iterHashDeps (fn : RscHash -> unit) (v:Val) : unit =
-        if (v.Length < rscHashLen) then () else
-        let hv' = BS.dropWhile (not << rscHashByte) v
-        let (h,v') = BS.span rscHashByte hv'
-        if (rscHashLen = h.Length)
-            then fn h
-        iterHashDeps fn v'
 

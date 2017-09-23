@@ -117,6 +117,7 @@ module internal I =
 
             mutable rdlock : ReadLock        // current read-lock (updated per frame).
             mutable newrsc : Stowage         // recent stowage requests
+            mutable buffer : int             // buffered data storage
             mutable commit : Commit list     // pending commit requests
             mutable halt   : bool            // halt the writer
         }
@@ -143,6 +144,14 @@ module internal I =
         let tcs = new TaskCompletionSource<bool>() // result ignored
         dbCommit db (BTree.empty, BTree.empty, tcs)
 
+    // don't bother stowing before we have a few pending megabytes
+    // (modulo a commit or sync request, of course)
+    let dbStowBuffer = 4 * 1000 * 1000
+
+    // TODO: with buffered stowage, I should probably try to GC recent
+    // stowage where feasible, by tracking reference counts and so on.
+    // I might need to use two "frames" for recent stowage.
+
     // add stowage request and ephemeral root to database, returns root ID
     let dbStow (db : DB) (v : Val) : RscHash =
         let h = RscHash.hash v
@@ -150,7 +159,9 @@ module internal I =
         db.ephtbl.Incref (skEphID sk)
         lock db (fun () ->
             db.newrsc <- Map.add sk (struct(h,v)) (db.newrsc)
-            Monitor.PulseAll(db))
+            db.buffer <- db.buffer - (h.Length + v.Length)
+            if (db.buffer < 0)
+                then Monitor.PulseAll(db))
         h
 
 
@@ -468,6 +479,7 @@ module internal I =
             // (new resources could be safely read after commit)
             let state = (db.commit, db.newrsc, db.halt)
             db.commit <- List.empty
+            db.buffer <- dbStowBuffer
             state)
         try dbWriteFrame db commit stow
         finally db.ephtbl.PassDecrefs()

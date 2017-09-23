@@ -98,7 +98,7 @@ module EncByte =
 /// (size) uses EncVarNat - i.e. (0..127)*(128..255)
 /// (data) is encoded raw
 /// (sep) is simply an SP (32), but is conditional:
-///   (sep) is added iff data terminates in rscHashByte.
+///   (sep) is added iff data terminates in RscHash.isHashByte.
 ///
 /// This construction ensures easy recognition of secure hash resource
 /// references represented within the bytestring. 
@@ -106,7 +106,7 @@ module EncBytes =
 
     let sep : byte = 32uy
     let sepReq (b:ByteString) : bool =
-        (b.Length > 0) && (rscHashByte (b.[b.Length - 1]))
+        (b.Length > 0) && (RscHash.isHashByte (b.[b.Length - 1]))
 
     let size (b:ByteString) : int =
         EncVarNat.size (uint64 b.Length) 
@@ -133,12 +133,12 @@ module EncBytes =
 
 /// VRef hashes are simply serialized as `{hash}`
 module EncRscHash =
-    let size : int = 2 + rscHashLen
+    let size : int = 2 + RscHash.size
     let sepL : byte = byte '{'
     let sepR : byte = byte '}'
     
     let write (h:RscHash) (dst:ByteDst) =
-        assert(rscHashLen = h.Length)
+        assert(RscHash.size = h.Length)
         ByteStream.writeByte sepL dst
         ByteStream.writeBytes h dst
         ByteStream.writeByte sepR dst
@@ -146,7 +146,7 @@ module EncRscHash =
     let read (src:ByteSrc) : RscHash =
         let l = ByteStream.readByte src
         if (sepL <> l) then raise ByteStream.ReadError
-        let h = ByteStream.readBytes rscHashLen src
+        let h = ByteStream.readBytes RscHash.size src
         let r = ByteStream.readByte src
         if (sepR <> r) then raise ByteStream.ReadError
         h
@@ -162,7 +162,7 @@ module EncVRef =
     let size : int = EncRscHash.size
     let inline write (ref:VRef<_>) (dst:ByteDst) : unit = 
         EncRscHash.write (ref.ID) dst
-    let inline read (c:Codec<'V>) (db:DB) (src:ByteSrc) : VRef<'V> =
+    let inline read (c:Codec<'V>) (db:Stowage) (src:ByteSrc) : VRef<'V> =
         VRef.wrap c db (EncRscHash.read src)
     let codec (c:Codec<'V>) =
         { new Codec<VRef<'V>> with
@@ -173,7 +173,7 @@ module EncVRef =
 
 module EncBRef =
     let size : int = EncVRef.size
-    let read (db:DB) (src:ByteSrc) : BRef = 
+    let read (db:Stowage) (src:ByteSrc) : BRef = 
         EncVRef.read (BRef.c) db src
     let write (ref:BRef) (dst:ByteDst) : unit = 
         EncVRef.write (ref) dst
@@ -188,7 +188,7 @@ module EncLVRef =
     let size : int = EncVRef.size
     let inline write (ref:LVRef<_>) (dst:ByteDst) : unit =
         EncVRef.write (ref.VRef) dst
-    let inline read (c:Codec<'V>) (db:DB) (src:ByteSrc) : LVRef<'V> =
+    let inline read (c:Codec<'V>) (db:Stowage) (src:ByteSrc) : LVRef<'V> =
         LVRef.wrap (EncVRef.read c db src)
     let codec (c:Codec<'V>) =
         { new Codec<LVRef<'V>> with
@@ -338,7 +338,7 @@ module EncArray =
         EncVarNat.write (uint64 a.Length) dst
         Array.iter (fun e -> Codec.write cV e dst) a
 
-    let read (cV:Codec<'V>) (db:DB) (src:ByteSrc) : 'V array =
+    let read (cV:Codec<'V>) (db:Stowage) (src:ByteSrc) : 'V array =
         let len = int (EncVarNat.read src)
         let arr = Array.zeroCreate len
         for ix = 0 to arr.Length - 1 do
@@ -346,7 +346,7 @@ module EncArray =
         arr
 
     /// compact in-place
-    let compact' (cV:Codec<'V>) (db:DB) (arr:'V array) =
+    let compact' (cV:Codec<'V>) (db:Stowage) (arr:'V array) =
         let mutable szA = EncVarNat.size (uint64 arr.Length)
         for ix = 0 to (arr.Length - 1) do
             let struct(v',szV) = cV.Compact db (arr.[ix])

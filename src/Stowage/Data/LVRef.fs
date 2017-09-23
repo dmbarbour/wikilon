@@ -29,7 +29,7 @@ module LVRef =
     type State<'V> =
         | Stowed of VRef<'V>
         | Cached of VRef<'V> * 'V
-        | Stowing of Codec<'V> * DB * 'V
+        | Stowing of Codec<'V> * Stowage * 'V
  
     /// Latent Value References
     /// 
@@ -40,8 +40,8 @@ module LVRef =
     ///
     /// Note: use of the VRef or ID properties, including serialization,
     /// will force initial stowage of the Ref but won't hinder further
-    /// caching. Comparisons will also tend to use ID, but will circumvent
-    /// where feasible by use of reference equality.
+    /// caching. Comparison or hash will also force the ID unless it is
+    /// obviously equal (by reference equality).
     type Ref<'V> =
         val mutable internal S : State<'V>
         val mutable internal T : int       // simple touch counter
@@ -52,7 +52,7 @@ module LVRef =
                 | Cached (vref,_) -> vref.Codec
                 | Stowing (c,_,_) -> c
         member r.DB 
-            with get() : DB =
+            with get() : Stowage =
                 match r.S with
                 | Stowed (vref) -> vref.DB
                 | Cached (vref,_) -> vref.DB
@@ -65,7 +65,7 @@ module LVRef =
                 | Cached (vref,_) -> vref
                 | Stowing _ -> r.Force()
 
-        member private r.Force() : VRef<'V> =
+        member internal r.Force() : VRef<'V> =
             lock r (fun () -> 
                 match r.S with
                 | Stowing (c,db,v) ->
@@ -78,6 +78,9 @@ module LVRef =
         override r.ToString() = r.ID.ToString()
         override r.GetHashCode() = r.ID.GetHashCode()
         override x.Equals yobj =
+            // reference equality is mostly to help delay stowage
+            // when performing deep structural diffs, where chance
+            // of a self-comparison is reasonably good.
             if System.Object.ReferenceEquals(x,yobj) then true else
             match yobj with
             | :? Ref<'V> as y -> (x.ID = y.ID)
@@ -116,7 +119,7 @@ module LVRef =
 
     /// Force immediate stowage (only if still stowing).
     let force (ref:Ref<'V>) : unit = 
-        ref.ID |> ignore
+        ref.Force() |> ignore
 
     /// Forcibly clear cached value (if any).
     let clear (ref:Ref<'V>) : unit =
@@ -132,7 +135,7 @@ module LVRef =
     let private latency = 200
 
     /// Stow a value (after some latency) to create a LVRef.
-    let stow (c:Codec<'V>) (db:DB) (v:'V) : Ref<'V> =
+    let stow (c:Codec<'V>) (db:Stowage) (v:'V) : Ref<'V> =
         let ref = new Ref<'V>(Stowing (c,db,v))
         refCacheDelay latency force ref
         ref

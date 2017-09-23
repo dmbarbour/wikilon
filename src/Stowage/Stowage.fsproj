@@ -18,6 +18,7 @@
     <PackageReference Include="System.ValueTuple" Version="4.3.1" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include-"Data\Stowage.Data.fsproj" />
     <ProjectReference Include="..\Data.ByteString\Data.ByteString.fsproj" />
   </ItemGroup>
 </Project>

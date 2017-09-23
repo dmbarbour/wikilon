@@ -1,22 +1,16 @@
-
-(* Stowage simply uses a 280-bit Blake2b hash function, but encodes
- * this result in 56 characters of an unusual base32 alphabet:
- *
- *     bcdfghjklmnpqrstBCDFGHJKLMNPQRST 
- *
- * That is, we simply use the first sixteen consonants of the alphabet,
- * in lower then upper case. This resists accidental construction of 
- * anything otherwise meaningful to humans or machines.
- *
- * These hashes are used as references between immutable binary data,
- * enabling flexible representations. We use conservative GC, so hashes
- * must be separated by non-hash characters. 
- *)
 namespace Stowage
 open Data.ByteString
 open Konscious.Security.Cryptography
 
-module Hash =
+/// A RscHash is simply a 56-character bytestring encoded using
+/// an unusual base32 alphabet: bcdfghjklmnpqrstBCDFGHJKLMNPQRST.
+///
+/// This string is computed from the Blake2B 280-bit secure hash
+/// of a binary, and is used as a name or capability to read a
+/// binary resource. 
+type RscHash = ByteString
+
+module RscHash =
     /// the base32 alphabet used for Stowage hash references.
     let alphabet = "bcdfghjklmnpqrstBCDFGHJKLMNPQRST"
 
@@ -28,10 +22,10 @@ module Hash =
         (hashBitLen / n)
 
     /// number of base32 ASCII characters in hash 
-    let validHashLen : int = hdiv 5 
+    let size : int = hdiv 5 
 
     /// expected length of hash in bytes
-    let hashByteLen : int = hdiv 8
+    let private hashByteLen : int = hdiv 8
 
     // alphabet encoded as bytes array
     let private alphabyte : byte[] = 
@@ -45,7 +39,7 @@ module Hash =
         Array.init 256 memb 
 
     // test whether an element is valid within a UTF8 or ASCII hash.
-    let validHashByte (b : byte) : bool = alphabool.[int b] 
+    let isHashByte (b : byte) : bool = alphabool.[int b] 
 
     // encode forty bits from src to dst.
     let inline private b32e40 (dst : byte[]) (src : byte[]) off =
@@ -75,8 +69,8 @@ module Hash =
 
     // perform a base32 encoding of the Blake2 hash.
     let private b32enc (src : byte[]) : byte[] =
-        assert ((35 = src.Length) && (56 = validHashLen))
-        let dst = Array.zeroCreate validHashLen
+        assert ((35 = src.Length) && (56 = size))
+        let dst = Array.zeroCreate size
         do b32e40 dst src 6
         do b32e40 dst src 5
         do b32e40 dst src 4
@@ -102,5 +96,28 @@ module Hash =
         use alg = new HMACBlake2B(hashBitLen)
         b32enc (alg.ComputeHash(src))
 
+
+    /// Fold over RscHash dependencies represented within a value.
+    ///
+    /// This finds substrings that look like hashes. They must have the
+    /// appropriate size and character set, and be separated by non-hash
+    /// characters. This function should be the same used for conservative
+    /// GC in Stowage databases.
+    let rec foldHashDeps (fn : 's -> RscHash -> 's) (s:'s) (v:ByteString) : 's =
+        if (v.Length < size) then s else
+        let hv' = BS.dropWhile (not << isHashByte) v
+        let (h,v') = BS.span isHashByte hv'
+        let s' = if (size = h.Length) then (fn s h) else s
+        foldHashDeps fn s' v'
+
+    /// Iterate through RscHash dependencies in a value.
+    /// Recognizes same RscHash substrings as foldHashDeps.
+    let rec iterHashDeps (fn : RscHash -> unit) (v:ByteString) : unit =
+        if (v.Length < size) then () else
+        let hv' = BS.dropWhile (not << isHashByte) v
+        let (h,v') = BS.span isHashByte hv'
+        if (size = h.Length)
+            then fn h
+        iterHashDeps fn v'
 
 

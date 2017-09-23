@@ -5,14 +5,17 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="RscHash.fs" />
+    <Compile Include="Stowage.fs" />
     <Compile Include="Codec.fs" />
     <Compile Include="VRef.fs" />
     <Compile Include="LVRef.fs" />
     <Compile Include="CommonEncoders.fs" />
     <Compile Include="CVRef.fs" />
     <Compile Include="VDiff.fs" />
-    <Compile Include="CritbitTree.fs" />
-    <Compile Include="LSMTree.fs" />
+    <Compile Include="Trie.fs" />
+    <Compile Include="LSMTrie.fs" />
+
     <Compile Include="Measured.fs" />
     <Compile Include="Monoid.fs" />
     <Compile Include="FingerTree.fs" />
@@ -23,10 +26,10 @@
     <PackageReference Include="FSharp.Core" Version="4.1.*" />
     <PackageReference Include="FSharp.NET.Sdk" Version="1.0.*" PrivateAssets="All" />
     <PackageReference Include="System.ValueTuple" Version="4.3.1" />
+    <PackageReference Include="Konscious.Security.Cryptography.Blake2" Version="1.0.5" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Stowage.fsproj" />
     <ProjectReference Include="..\..\Data.ByteString\Data.ByteString.fsproj" />
   </ItemGroup>
 

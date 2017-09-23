@@ -5,8 +5,8 @@ This module aims to provide useful data structures above Stowage.
 Initial goals include:
 
 * `VRef` and `LVRef` - smart pointers for Stowage data
-* `CBTree` - critbit based key-value lookup tree 
-* `LSMTree` - LSM-trees for write-heavy updates
+* `Trie` - bit-level patricia trie 
+* `LSMTrie` - trie enhanced with update buffers
 * finger-tree sequences for vectors or dequeues
 * generic finger-trees (user-provided monoid)
 
