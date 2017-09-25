@@ -34,6 +34,18 @@ module ByteStream =
         let avail = dst.Data.Length - dst.Pos
         if (amt > avail) then grow (amt - avail) dst
 
+    /// Reserve space for writing. 
+    ///
+    /// If this is the first operation on the stream, it performs an
+    /// initial allocation of the exact size requested. Otherwise, it
+    /// ensures there is space to write the amount requested without
+    /// further reallocation.
+    let reserve (amt:int) (dst:Dst) : unit =
+        assert(amt > 0)
+        if (Array.isEmpty dst.Data) 
+            then dst.Data <- Array.zeroCreate amt
+            else requireSpace amt dst
+
     let writeByte (b:byte) (dst:Dst) : unit = 
         requireSpace 1 dst
         dst.Data.[dst.Pos] <- b
@@ -68,7 +80,8 @@ module ByteStream =
     ///
     /// Use of a `write` operation is the only means to construct the
     /// output stream, ensuring that all data is captured by at least
-    /// one observer.
+    /// one observer. You can use `reserve` immediately to provide an
+    /// initial capacity.
     let write (writer:Dst -> unit) : ByteString = 
         capture writer (new Dst())
 

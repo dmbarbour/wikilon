@@ -16,31 +16,55 @@ open Data.ByteString
 /// This supports effective batch updates, but updates are always 'deep'.
 /// For a write-heavy workload, consider use of LSMTrie instead.
 ///
-
-// TODO: rewrite CBTree into a path-sharing Trie
-module CBTree =
+module Trie =
     
-    /// Keys in our CBTree should be short, simple bytestrings.
-    /// Keep keys under a few kilobytes for performance.
+    /// Keys in our Trie should be short, simple bytestrings.
+    /// Even with prefix sharing, at most a few kilobytes is
+    /// permissable. 
     type Key = ByteString
-    
-    /// A Critbit indicates a bit-level offset into a key.
-    type Critbit = BTree.Critbit
-    let inline testCritbit cb k = BTree.testCritbit cb k
-    let inline findCritbit cbMin a b = BTree.findCritbit cbMin a b
 
-    /// Tree size is simply a count of keys or values.
-    ///
-    /// The CBTree keeps a little metadata when compacting nodes
-    /// such that it's easy to determine size of a tree without
-    /// peeking into the database. This metadata is also necessary
-    /// for efficient tree diffs.
-    type TreeSize = uint64
+    // How shall we model a trie?
+    //  The option I'm considering is that:
+    //    a trie is empty or has a node; nodes are non-empty
+    //    a node is either a leaf or a partial key followed by a split
+    //    a split could be modeled as an:
+    //     optional value directly at the division
+    //     a map of bytes to nodes (max fanout 256!)
+    //
+    //  The trick is how shall we efficiently model the 
+    //  "set of byte to node mappings"? A viable option is
+    //  to simply use a byte-level trie, keys are one byte.
+    //  This could be generalized to an int-level trie - an IntMap.
+    // 
+    //  So what I need to do first is model the IntMap in a manner
+    //  suitable for Stowage. I could potentially generalize this
+    //  across integer types, but that might not be worthwhile - use
+    //  of a 64-bit integer (e.g. uint64) would also do the job.
+    //
+    //  The exact match could be modeled as a special element of the
+    //  IntMap, e.g. using key = 256 within the intmap. Or key 0, 
+    //  with me adding one to the byte offsets (so byte 255 uses key 256).
+    //  The latter makes a lot of sense to preserve lexicographic order.
+    //  
+    //  Anyhow, use of an IntMap would keep things relatively simple.
+    //  All the compaction would happen at the IntMap layer.
 
-    /// CBTree nodes are based on a modified critbit tree. The least
-    /// key for any node is kept in the parent (to simplify inserts).
-    /// Remote nodes
+    // something like this:
+    // type Tree<'V> =
+    //   val internal prefix : byte[] 
+    //   val internal leaf   : 'V option
+    //   val internal children : IntMap<Tree<'V>>
+    // possibly as a Struct.
+        
+
+
+(*
+    /// Only nodes splitting two trees can have 
     type Node<'V> =
+        | Leaf of 'V                // leaf value within the tree
+        | Line of Key * Node<'V>    // sequence of exactly matched bytes
+        | SNode of Node<'V> * Node<'V>
+        | INode of byte
         | Leaf of 'V                            // leaf value inline
         | INode of Critbit * Node<'V> * Key * Node<'V>  // inner node
         | RNode of Critbit * TreeSize * LVRef<Node<'V>> // ref to INode
@@ -712,9 +736,8 @@ module CBTree =
     let inline load  (ref:Ref<'V>) : Tree<'V> = CVRef.load ref
 
 
-type CBTree<'V> = CBTree.Tree<'V>
-type CBTreeRef<'V> = CBTree.Ref<'V>
-        
+type Trie<'V> = Trie.Tree<'V>
+*)        
 
 
 

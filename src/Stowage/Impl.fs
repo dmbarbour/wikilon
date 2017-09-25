@@ -9,7 +9,6 @@ open System.Security
 open System.Runtime.InteropServices
 open Data.ByteString
 
-open Stowage.Hash
 open Stowage.Memory
 open Stowage.LMDB
 
@@ -18,25 +17,31 @@ open Stowage.LMDB
 [< SecuritySafeCriticalAttribute >]
 module internal I =
 
-    // The underlying database tables uses only half RscHash for lookup
-    // or reference count management. The latter half is verified in 
-    // constant time to resist leaking of hashes via timing attacks.
-    let stowKeyLen = rscHashLen / 2
+    // Use only half of RscHash for comparison-based lookups. We'll
+    // verify the latter half in constant time to resist timing 
+    // attacks. 
+    let stowKeyLen = RscHash.size / 2
 
     [< Struct >]
-    type StowKey =
-        // a simple wrapper type to resist accidents
+    type StowKey = // a simple wrapper type to resist accidents
         val v : ByteString
-        new( s : ByteString ) = assert(s.Length = stowKeyLen); { v = s }
+        new( s : ByteString ) = 
+            assert(s.Length = stowKeyLen); 
+            { v = s }
 
     let inline rscStowKey (h:RscHash) : StowKey =
-        assert(h.Length = rscHashLen)
+        assert(h.Length = RscHash.size)
         StowKey(BS.take stowKeyLen h)
 
     // Recent stowage table. Uses half the key to resist timing attacks.
     // Just using Map since prefix sharing is improbable with hashes and
-    // won't affect performance much. 
-    type Stowage = Map<StowKey, struct(RscHash * Val)>     // recent stowage requests
+    // shouldn't affect performance much. 
+    type Stowage = Map<StowKey, struct(RscHash * Val)>  // recent stowage requests
+
+    let findInStowage (h:RscHash) (m:Stowage) : Val option =
+        match Map.tryFind (rscStowKey h) m with
+        | Some(struct(h',v)) when (ByteString.CTEq h h') -> Some v
+        | _ -> None
 
     type RC = int64                     // sufficient for RC
     let maxRCLen = 18                   // length in bytes
@@ -104,7 +109,7 @@ module internal I =
             while(0L <> this.rc) do 
                 ignore(Monitor.Wait(this)))
 
-    [<CustomEquality; CustomComparison>]
+    [<NoComparison; ReferenceEquality>]
     type DB =
         { 
             env  : MDB_env     
@@ -115,23 +120,50 @@ module internal I =
             flock : FileStream
             ephtbl : EphTable  // ephemeral resource roots
 
+            // Recent stowage.
+            mutable writing    : Stowage // resources for current write batch
+            mutable stowing    : Stowage // newly stowed resources
+            mutable buffer     : int     // approx resource data written
+            mutable threshold  : int     // tunable signal threshold 
+
+            // Key-value Updates
             mutable rdlock : ReadLock        // current read-lock (updated per frame).
-            mutable newrsc : Stowage         // recent stowage requests
-            mutable buffer : int             // buffered data storage
             mutable commit : Commit list     // pending commit requests
+
+            // For Graceful Shutdown
             mutable halt   : bool            // halt the writer
         }
-        // reference comparison and equality on the stable MDB_env pointer.
-        override x.Equals(yobj) =
-            match yobj with
-            | :? DB as y -> x.env = y.env
-            | _ -> false
-        override db.GetHashCode() = (int)(db.env >>> 4)
-        interface System.IComparable with
-            member x.CompareTo yobj =
-                match yobj with
-                | :? DB as y -> compare (x.env) (y.env)
-                | _ -> invalidArg "yobj" "cannot compare values of different types"
+
+    let dbRecentStowage (db:DB) (h:RscHash) : Val option =
+        // I could probably use volatile reads to avoid locking here, but
+        // it won't affect performance much. For simplicity, using locks.
+        let (stowing,writing) = lock db (fun () -> (db.stowing, db.writing))
+        let rsc = findInStowage h stowing
+        if Option.isSome rsc then rsc else
+        findInStowage h writing
+
+    
+    // to resist overflows, using a small fraction of data as threshold
+    // size. Also adding some overhead bytes per element.
+    let dbThreshSize (sz:int) : int = 2 + (sz >>> 6)
+
+    // default stowage threshold is a few megabytes.
+    let dbThreshDefault = dbThreshSize (4 * 1000 * 1000)
+
+    // add pending stowage to database. Doesn't signal DB to perform
+    // write unless a threshold is reached.
+    let dbStow (db : DB) (v : Val) : RscHash =
+        if not (isValidVal v) 
+            then invalidArg "v" "value too large"
+        let h = RscHash.hash v
+        let sk = rscStowKey h
+        db.ephtbl.Incref (skEphID sk)
+        lock db (fun () ->
+            db.stowing <- Map.add sk (struct(h,v)) (db.stowing)
+            db.buffer <- (db.buffer + (dbThreshSize v.Length))
+            if (db.buffer > db.threshold) 
+                then Monitor.PulseAll(db))
+        h
 
     // add commit request to the database
     let dbCommit (db : DB) (c : Commit) : unit =
@@ -143,27 +175,6 @@ module internal I =
     let dbSignal (db : DB) : unit =
         let tcs = new TaskCompletionSource<bool>() // result ignored
         dbCommit db (BTree.empty, BTree.empty, tcs)
-
-    // don't bother stowing before we have a few pending megabytes
-    // (modulo a commit or sync request, of course)
-    let dbStowBuffer = 4 * 1000 * 1000
-
-    // TODO: with buffered stowage, I should probably try to GC recent
-    // stowage where feasible, by tracking reference counts and so on.
-    // I might need to use two "frames" for recent stowage.
-
-    // add stowage request and ephemeral root to database, returns root ID
-    let dbStow (db : DB) (v : Val) : RscHash =
-        let h = RscHash.hash v
-        let sk = rscStowKey h
-        db.ephtbl.Incref (skEphID sk)
-        lock db (fun () ->
-            db.newrsc <- Map.add sk (struct(h,v)) (db.newrsc)
-            db.buffer <- db.buffer - (h.Length + v.Length)
-            if (db.buffer < 0)
-                then Monitor.PulseAll(db))
-        h
-
 
     // Our reference count tables simply have data of type [1-9][0-9]*.
     // Reasonably, reference counts shouldn't be larger than 18 digits.
@@ -201,14 +212,14 @@ module internal I =
                  mdb_put wtx (db.rfct) (k.v) (refctBytes rc)
 
     let dbGetRscZC (db:DB) (rtx:MDB_txn) (h:RscHash) : MDB_val option =
-        if(h.Length <> rscHashLen) then invalidArg "h" "bad resource ID" else
+        if(h.Length <> RscHash.size) then invalidArg "h" "bad resource ID" else
         let hKey = BS.take stowKeyLen h
         let hRem = BS.drop stowKeyLen h
         let vOpt = mdb_getZC rtx (db.stow) hKey 
         match vOpt with
         | None -> None
         | Some v ->
-            let rlen = rscHashLen - stowKeyLen
+            let rlen = RscHash.size - stowKeyLen
             assert((unativeint (rlen + maxValLen) >= v.size) && 
                    (v.size >= unativeint rlen)                 )
             let matchRem = BS.withPinnedBytes hRem (fun ra -> 
@@ -231,12 +242,12 @@ module internal I =
         match vOpt with
         | None -> BS.empty
         | Some v -> 
-            let rlen = rscHashLen - stowKeyLen
+            let rlen = RscHash.size - stowKeyLen
             assert(v.Length >= rlen)
             BS.drop rlen v
 
     let dbPutRsc (db:DB) (wtx:MDB_txn) (h:RscHash) (v:Val) : unit =
-        if(h.Length <> rscHashLen) then invalidArg "h" "invalid resource ID" else
+        if(h.Length <> RscHash.size) then invalidArg "h" "invalid resource ID" else
         if not (isValidVal v) then invalidArg "v" "invalid resource value" else
         //printf "Writing Resource %s (%s)\n" (BS.toString h) (BS.toString v)
         let hKey = BS.take stowKeyLen h
@@ -312,10 +323,6 @@ module internal I =
     let inline dbHasRsc (db:DB) (rtx:MDB_txn) (k:StowKey) : bool =
         mdb_contains rtx (db.stow) (k.v)
 
-    let dbHasWork (db:DB) : bool =
-        (not (List.isEmpty db.commit) ||
-         not (Map.isEmpty db.newrsc))
-
     // Reference Counts Management
     let updRCU (rc:RC) (u:RCU) (k:StowKey) : RCU =
         match Map.tryFind k u with
@@ -324,7 +331,7 @@ module internal I =
 
     // utilities
     let valRCU (rc:RC) (u0:RCU) (v:Val) : RCU =
-        foldHashDeps (fun u h -> updRCU rc u (rscStowKey h)) u0 v
+        RscHash.foldHashDeps (fun u h -> updRCU rc u (rscStowKey h)) u0 v
     let kvmRCU (rc:RC) (m:KVMap) (u0:RCU) : RCU =
         BTree.fold (fun u _ v -> valRCU rc u v) u0 m
     let rscRCU (m:Stowage) (u0:RCU) : RCU =
@@ -361,6 +368,7 @@ module internal I =
     //  - readers can atomically increment ephemeral roots without waiting
     //  - GC of balanced trees or deep lists should be about the same
     //  - limit GC effort per write frame, but keep up with busy writer
+    //  - resources referenced from asynchronous writes are protected
     //
     // The first point means we cannot GC any RscHash that a reader might
     // be concurrently reading via rooted keys. Conservatively, we can just
@@ -373,6 +381,14 @@ module internal I =
     // Incremental GC involves limited write effort per frame, but a constant
     // amount of effort may prove unable to keep up with a very busy writer. 
     // So our GC effort must also be proportional (roughly) to write effort.
+    //
+    // To protect asynchronous writes, I currently freeze decrefs within each
+    // write frame (by shunting them instead to a list). 
+    //
+    // TODO: enable GC of newly stowed resources, such that they're never
+    // written to the database layer. This would improve performance in some
+    // cases where a lot of intermediate data is constructed, especially when
+    // the stowage buffer is large and writes are infrequent.
     let dbWriteFrame db commitList stowedRsc =
         let wtx = mdb_readwrite_txn_begin (db.env) 
 
@@ -416,7 +432,7 @@ module internal I =
             let doGC = (0L = rc') && (nGC < gcHi) && not (blockGC sk)
             if not doGC then struct(nGC, (Map.add sk rc' rcTbl), rcu) else
             let vDel = dbDelRsc db wtx sk // we GC as we go
-            let nGC' = nGC + 1 + (vDel.Length / 4096)
+            let nGC' = nGC + 1 + (vDel.Length >>> 10)
             let rcu' = valRCU (-1L) rcu vDel
             struct(nGC', (Map.remove sk rcTbl), rcu') 
 
@@ -436,8 +452,10 @@ module internal I =
         let (nGC,rcTbl) = gcLoop 0 rcRoots gcCand
         Map.iter (dbSetRefct db wtx) rcTbl  // write final refcts
 
-        // if GC is successful, continue GC in next write frame
-        if(nGC > 0)
+        // if GC is making good progress, continue GC in next frame.
+        // (but don't bother if it's just a few items GC'd)
+        let gcContinueThresh = 100
+        if(nGC >= gcContinueThresh)
             then dbSignal db 
                  // printfn "%d resources deleted" nGC
                  
@@ -456,15 +474,11 @@ module internal I =
         // all concurrent readers are operating on the current frame.
         oldReaders.Wait()
 
-        // clear the new resources table of all resources we know to be
-        // available for new readers in the database layer.
-        lock db (fun () ->
-            let clear m sk _ = Map.remove sk m
-            db.newrsc <- Map.fold clear (db.newrsc) stowedRsc)
 
        
-
-
+    let inline dbHasWork (db:DB) : bool =
+        (not (List.isEmpty db.commit))
+            || (db.buffer > db.threshold)
 
     let inline dbAwaitWork (db:DB) : unit =
         lock db (fun () ->
@@ -473,16 +487,19 @@ module internal I =
 
     let rec dbWriterLoop (db:DB) : unit =
         dbAwaitWork db
-        db.ephtbl.DelayDecrefs() 
+        db.ephtbl.DelayDecrefs() // protect asynch writes
         let (commit,stow,halt) = lock db (fun () ->
-            // commit and halt MUST be read together for closeDB
-            // (new resources could be safely read after commit)
-            let state = (db.commit, db.newrsc, db.halt)
+            // commit and halt MUST be read together for closeDB.
+            let state = (db.commit, db.stowing, db.halt)
             db.commit <- List.empty
-            db.buffer <- dbStowBuffer
+            db.writing <- db.stowing
+            db.stowing <- Map.empty
+            db.buffer <- 0
             state)
         try dbWriteFrame db commit stow
-        finally db.ephtbl.PassDecrefs()
+        finally 
+            db.ephtbl.PassDecrefs() 
+            db.writing <- Map.empty
         if halt then () else dbWriterLoop db
 
     let dbThread (db:DB) () : unit = 
@@ -525,7 +542,10 @@ module internal I =
               flock = flock
               ephtbl = new EphTable()
               rdlock = new ReadLock()
-              newrsc = Map.empty
+              writing = Map.empty
+              stowing = Map.empty
+              buffer = 0
+              threshold = dbThreshDefault
               commit = List.empty
               halt = false
             }

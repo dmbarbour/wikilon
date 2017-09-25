@@ -1,52 +1,66 @@
 namespace Stowage
 open Data.ByteString
 
-/// Abstract Storage for Binaries referenced by RscHash.
+/// Abstract Remote Storage for Binaries referenced by RscHash.
 ///
-/// Stowage is often one aspect of a larger key-value database, where
-/// values provide a durable root set for binary references. But for 
-/// immutable data structures, this is the only relevant interface.
+/// Use of secure hashes is a convenient way to reference binary data.
+/// They are immutable and acyclic by construction, cacheable, secure,
+/// provider-independent, self-authenticating, implicitly shared, 
+/// automatically named, decentralized, uniformly sized, and smaller
+/// than many full URLs or file paths.
 ///
-/// Stowage serves as a purely functional variant of virtual memory,
-/// since we can assume the large binaries are offloaded to a high
-/// latency storage layer. However, stowage may be relatively lazy
-/// about this, buffering some data in memory.
+/// The idea for Stowage is to build data structures above binaries,
+/// in order to represent larger-than-memory data and distributed,
+/// purely functional computations. Our stowage layer doubles as a
+/// purely functional variant of "virtual memory", since we can move
+/// data we won't soon need into higher-latency storage - an external
+/// database or filesystem or network.
+///
+/// Stowage resources may ultimately be GC'd like normal values, and
+/// we can easily use conservative GC for references between binaries. 
+/// Stowage is usually one aspect of a durable database that determines
+/// a durable "root set" for GC. Unlike most databases, Stowage makes
+/// it feasible to model entire databases as first-class values within
+/// another database - convenient for modeling versioned systems.
+///
 type Stowage =
 
     /// The Stow operation should add a value to the Stowage database
     /// and return its RscHash, such that a subsequent Load can access
     /// the data. Additionally, it must atomically Incref the RscHash
     /// to prevent concurrent GC.
-    abstract member Stow   : ByteString -> RscHash
+    ///
+    /// Stowage systems should support values of up to 64MB. Most items
+    /// should be much smaller, at most a few hundred kilobytes. If the
+    /// item is too large, an appropriate exception should be raised.
+    /// 
+    /// NOTE: resources containing sensitive data should include a salt,
+    /// e.g. an 80-bit random string for entropy. Otherwise, an attacker 
+    /// can construct millions of likely hashes and test whether each is 
+    /// present within the system.
+    abstract member Stow : ByteString -> RscHash
 
     /// The Load operation should access data from Stowage. If this
     /// data cannot be located, a MissingRsc exception must be raised.
-    abstract member Load   : RscHash -> ByteString
+    ///
+    /// There is no access control for Stowage, but the RscHash serves
+    /// as a secure bearer token and read capability. Consequently, it 
+    /// is important that implementations don't expose the full RscHash
+    /// through timing attacks. (Exposing the first half is acceptable.)
+    abstract member Load : RscHash -> ByteString
 
     /// RscHash references to binaries can be understood as a form of
-    /// 'unmanaged' resources from perspective of the .Net runtime. We
-    /// use explicit reference counting to ensure a bytestring remains
-    /// available for future Load operations.
-    ///
-    /// Of course, this only accounts for direct in-memory references.
-    /// If a ByteString contains a RscHash (see RscHash.foldHashDeps),
-    /// then a reference to that bytestring should implicitly hold onto
-    /// its transitive referenced dependencies.
-    ///
-    /// Conveniently, secure hashes make cyclic dependencies infeasible
-    /// to represent, so reference counting works well at every layer. 
-    ///
-    /// Decref is frequently called by .Net finalizers, and so should
-    /// be safe even if the Stowage implementation has been finalized.
+    /// unmanaged resource from perspective of our .Net runtime. But
+    /// a simple reference counting interface can guard hashes in .Net
+    /// memory from a premature GC. Upon stowage, Incref is implicit.
+    /// Usually, decref will be performed by .Net finalizer (see VRef).
     abstract member Decref : RscHash -> unit
     abstract member Incref : RscHash -> unit
 
 /// Exception on Load failure.
 exception MissingRsc of Stowage * RscHash 
 
-
 // TODO: Develop a useful set of Stowage combinators. (Low Priority.)
-//  layered, cached, mirrored, multi-homed, distributed hashtables...
-//  I'll need to think about how keys might be multi-homed, of course.
+//  layered, cached, mirrored, distributed hashtables...
 
 

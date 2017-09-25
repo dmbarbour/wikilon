@@ -6,7 +6,6 @@
     <Compile Include="LMDB.fs" />
     <Compile Include="RCTable.fs" />
     <Compile Include="Memory.fs" />
-    <Compile Include="Hash.fs" />
     <Compile Include="Types.fs" />
     <Compile Include="Impl.fs" />
     <Compile Include="DB.fs" />
@@ -14,11 +13,10 @@
   <ItemGroup>
     <PackageReference Include="FSharp.Core" Version="4.1.*" />
     <PackageReference Include="FSharp.NET.Sdk" Version="1.0.*" PrivateAssets="All" />
-    <PackageReference Include="Konscious.Security.Cryptography.Blake2" Version="1.0.5" />
     <PackageReference Include="System.ValueTuple" Version="4.3.1" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include-"Data\Stowage.Data.fsproj" />
+    <ProjectReference Include="Data\Stowage.Data.fsproj" />
     <ProjectReference Include="..\Data.ByteString\Data.ByteString.fsproj" />
   </ItemGroup>
 </Project>

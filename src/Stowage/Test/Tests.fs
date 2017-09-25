@@ -7,15 +7,14 @@ open System.Threading
 open System.IO
 open Xunit
 open Stowage
-open Stowage.Hash
 open Data.ByteString
 
 [<Fact>]
 let ``hash test`` () =
     let h0 = BS.fromString "test"
-    let h1 = hash h0
-    let h2 = hash h1
-    let h3 = hash h2
+    let h1 = RscHash.hash h0
+    let h2 = RscHash.hash h1
+    let h3 = RscHash.hash h2
     Assert.Equal<string>(BS.toString h1, "HSjFNGRnqHpFFbPhlThmqCbqkmDSHCBlJNnmDPnDtnCpKHqtNgqhRMJG")
     Assert.Equal<string>(BS.toString h2, "BRqMkFknGGncjKTdrTGMjFFHlGlFmmGGNmcFGPSmGbstsLtpdJnhLNKS")
     Assert.Equal<string>(BS.toString h3, "NLsTsGdQrtFLfDtHJcmqDSmMsDRjnMpCFlkqGfLdgSRhFtTsGqhJrfNN")
@@ -54,7 +53,7 @@ type DBTests =
     member t.``resource put and get`` () =
         let tests = List.map BS.fromString ["test"; ""; "foo"; "bar"; "baz"; "qux"]
         let rscs = List.map (DB.stowRsc t.db) tests
-        Assert.Equal<ByteString list>(rscs, List.map hash tests)
+        Assert.Equal<ByteString list>(rscs, List.map (RscHash.hash) tests)
         gcDB (t.db)
         let loaded = List.map (DB.loadRsc t.db) rscs
         Assert.Equal<ByteString list>(loaded, tests)
@@ -124,7 +123,7 @@ type DBTests =
         let c_val = "ccccccc"
         let hasRsc s = 
             let b = BS.fromString s
-            let rsc = DB.tryLoadRsc t.db (hash b)
+            let rsc = DB.tryLoadRsc t.db (RscHash.hash b)
             //printf "resource %s = %A\n" s (Option.map BS.toString rsc)
             match rsc with
             | None -> false
@@ -181,18 +180,39 @@ type DBTests =
     member t.``fast enough for practical work`` () =
         DB.sync (t.db) // avoid pending data
 
+        // don't want to pay for resource construction, and DO want to
+        // test resources of moderate to large sizes, so just slicing
+        // from rscBytes for between 200 and 1000 bytes. 
+        let rscBytes = // pseudo-random bytes
+            let src = new System.Random(11)
+            let rb (_ : int) = byte (src.Next(256))
+            BS.unsafeCreateA (Array.init 10000 rb)
+        let rsc i = // slices of rscBytes
+            let sz = 200 + (i % 800)
+            BS.take sz (BS.drop i rscBytes)
+        let maxRscLen = 1000
+
         let sw = System.Diagnostics.Stopwatch()
         sw.Restart()
         let refs = 
-            [| for i = 1 to 10000 do 
-                let rsc = DB.stowRsc (t.db) (BS.fromString (string i)) 
-                yield rsc
+            [| for i = 0 to (rscBytes.Length - maxRscLen) do 
+                yield (DB.stowRsc (t.db) (rsc i))
             |]
         DB.sync (t.db) // ensure all data is on disk
         sw.Stop()
         let usecPerStow = (sw.Elapsed.TotalMilliseconds * 1000.0) 
                             / (float refs.Length)
         printfn "usec per stowed element: %A" usecPerStow
+
+        /// Lookup performance.
+        sw.Restart()
+        for i = 0 to (refs.Length - 1) do
+            Assert.Equal<ByteString>(rsc i, DB.loadRsc t.db (refs.[i]))
+        sw.Stop()
+        let usecPerLookup = (sw.Elapsed.TotalMilliseconds * 1000.0)
+                                / (float refs.Length)
+        printfn "usec per resource lookup: %A" usecPerLookup
+
 
         /// in environment with a bunch of refs, focus incref/decref on
         /// a few specific references. These should be randomly named due
@@ -215,7 +235,8 @@ type DBTests =
         for i = 0 to 10 do DB.sync t.db // assumes ~1k elements GC'd per step
 
         // guard against performance regressions!
-        Assert.True(usecPerStow < 120.0) // ~30 on my machine
+        Assert.True(usecPerStow < 200.0) // ~65 on my machine
+        Assert.True(usecPerLookup < 50.0) // ~14 on my machine
         Assert.True(usecPerRep < 5.0)    // ~1.2 on my machine
 
 
