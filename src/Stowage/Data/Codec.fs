@@ -21,8 +21,7 @@ type SizeEst = int
 /// be loaded, cached, and efficiently serialized via secure hashes.
 /// For heuristic compaction, a size estimate is also returned.
 ///
-/// Compaction should be idempotent in most cases, but this is not
-/// enforced.
+/// Compaction should ideally be idempotent, but this isn't enforced.
 type Codec<'T> =
     abstract member Write : 'T -> ByteDst -> unit
     abstract member Read : Stowage -> ByteSrc -> 'T

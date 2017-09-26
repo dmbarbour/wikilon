@@ -12,10 +12,11 @@
     <Compile Include="LVRef.fs" />
     <Compile Include="CommonEncoders.fs" />
     <Compile Include="CVRef.fs" />
-
     <Compile Include="VDiff.fs" />
+
+    <Compile Include="IntMap.fs" />
     <Compile Include="Trie.fs" />
-    <Compile Include="LSMTrie.fs" />
+    <Compile Include="LSMTree.fs" />
 
     <Compile Include="Measured.fs" />
     <Compile Include="Monoid.fs" />

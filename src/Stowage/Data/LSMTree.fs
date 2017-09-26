@@ -658,7 +658,7 @@ module LSMTree =
     /// Note: Even after compaction, a tree can be relatively large
     /// in memory or when serialized. If you want to treat trees as
     /// small values, use `stow` and the tree reference type instead!
-    let inline compact (cV:Codec<'V>) (db:DB) (t:Tree<'V>) =
+    let inline compact (cV:Codec<'V>) (db:Stowage) (t:Tree<'V>) =
         Codec.compact (treeCodec cV) db t
 
     /// A bounded-size reference for a potentially large tree.
@@ -685,7 +685,7 @@ module LSMTree =
     ///
     /// There is a short window where GC may intercede and prevent
     /// stowage unless the value is immediately serialized.
-    let stow (cV:Codec<'V>) (db:DB) (t:Tree<'V>) : Ref<'V> =
+    let stow (cV:Codec<'V>) (db:Stowage) (t:Tree<'V>) : Ref<'V> =
         Codec.compact (refCodec cV) db (stow' t)
 
     /// non-caching load
