@@ -1,17 +1,21 @@
 namespace Stowage
 open Data.ByteString
 
-/// The IntMap is a trie-like structure for integer updates. All
-/// operations are O(W) for the width of the contained integers,
-/// and average to less than O(lg(N)) in most cases. This IntMap
-/// uses 64-bit integers (uint64). 
+/// The IntMap is a map specialized for integral keys. This is useful
+/// for modeling persistent arrays, sparse arrays, hash maps. A radix
+/// tree is used under the hood, hence tree height is never greater 
+/// than integer width (64 bits) and may be less.
 ///
-/// A map indexed by integers is essentially a sparse array. This
-/// could be used as a basis for hashmaps and other structures.
+/// As a Stowage data structure, the main feature here is integration
+/// with Stowage databases. The IntMap supports stowage at any inner
+/// node of the tree, guided by serialization size thresholds. Remote
+/// nodes use LVRef to cache the load and parse for multiple lookups.
+/// For a sufficiently large IntMap, it's possible that only several
+/// volumes (subtrees) are fully loaded into memory.
 ///
-/// As a Stowage data structure, volumes of the tree may be remote
-/// at any given moment. Explicit compaction or stowage is needed
-/// to move data into the Stowage database.
+/// Use of stowage is not automatic. Explicit compaction is required.
+/// Hence, updates may be 'buffered' in memory between compactions. Or
+/// we could use this IntMap as an in-memory data structure.
 module IntMap =
 
     type Key = uint64   
@@ -26,12 +30,19 @@ module IntMap =
             let mutable r = 0uy
             if(0UL <> (0xFFFFFFFF00000000UL &&& x)) then r <- (32uy + r); x <- (x >>> 32)
             if(0UL <> (0x00000000FFFF0000UL &&& x)) then r <- (16uy + r); x <- (x >>> 16)
-            if(0UL <> (0x000000000000FF00UL &&& x)) then r <- (8uy + r); x <- (x >>> 8)
-            if(0UL <> (0x00000000000000F0UL &&& x)) then r <- (4uy + r); x <- (x >>> 4)
-            if(0UL <> (0x000000000000000CUL &&& x)) then r <- (2uy + r); x <- (x >>> 2)
+            if(0UL <> (0x000000000000FF00UL &&& x)) then r <- ( 8uy + r); x <- (x >>>  8)
+            if(0UL <> (0x00000000000000F0UL &&& x)) then r <- ( 4uy + r); x <- (x >>>  4)
+            if(0UL <> (0x000000000000000CUL &&& x)) then r <- ( 2uy + r); x <- (x >>>  2)
             if(0UL <> (0x0000000000000002UL &&& x)) then (1uy + r) else r
 
     // internal node structure
+    //
+    // - for inner nodes, the 'key' is a shared key-prefix
+    //   above the critbit, right-shifted to hide critbit
+    //   and key suffix.
+    // - for leaf nodes, the 'key' is the final suffix, and
+    //   does not include the size
+    // - A node is never empty.
     type Node<'V> =
         | Leaf of Key * 'V
         | Inner of Size * Key * Critbit * NodePair<'V>
@@ -39,7 +50,6 @@ module IntMap =
         | Local of Node<'V> * Node<'V> * SizeEst
         | Remote of LVRef<Node<'V> * Node<'V>>
 
-    type Tree<'V> = Node<'V> option
 
     module Node =
 
@@ -61,20 +71,16 @@ module IntMap =
             | Remote ref -> LVRef.load' ref
 
 
-        // add given key-prefix to key in node (via bitwise OR) 
+        // merge a key-prefix with key in node (via bitwise OR) 
         let mergeKP kp node =
             match node with
             | Leaf (k,v) -> Leaf ((kp ||| k), v)
-            | Inner (ct,p,b,np) -> Inner (ct,(kp|||p),b,np)
+            | Inner (ct,p,b,np) -> Inner (ct,(kp ||| p),b,np)
 
-        let inline mergeL p b l = 
-            let pb = p <<< int b
-            let kp = pb <<< 1
-            mergeKP kp l
-        let inline mergeR p b r = 
-            let pb = p <<< int b
-            let kp = (pb <<< 1) ||| 1UL
-            mergeKP kp r
+        let inline keyPrefixL p b = ((p <<< 1) <<< int b)  
+        let inline keyPrefixR p b = (keyPrefixL p b) ||| (1UL <<< int b)
+        let inline mergeL p b l = mergeKP (keyPrefixL p b) l
+        let inline mergeR p b r = mergeKP (keyPrefixR p b) r 
 
         // split a node, assuming amt is both greater than one
         // and less than the node's size. This divides the node
@@ -97,11 +103,10 @@ module IntMap =
 
         // prefix and suffix exclude the critbit
         let inline prefix (k:Key) (b:Critbit) : Key = ((k >>> int b) >>> 1)
-        let inline suffixMask (b : Critbit) : Key =
-            (System.UInt64.MaxValue >>> 1) >>> int (63uy - b)
-        let inline suffix (k:Key) (b:Critbit) : Key = (k &&& suffixMask b)
         let inline testCritbit (k:Key) (b:Critbit) : bool =
             (0UL <> (1UL &&& (k >>> int b)))
+        let inline suffixMask (b : Critbit) : Key = ((1UL <<< int b) - 1UL)
+        let inline suffix (k:Key) (b:Critbit) : Key = (k &&& suffixMask b)
 
         let rec tryFind kf node =
             match node with
@@ -113,7 +118,8 @@ module IntMap =
                 if inR then tryFind kf' r else tryFind kf' l
             | Leaf (k,v) -> if (kf = k) then Some v else None
 
-        let inline containsKey kf node = Option.isSome (tryFind kf node)
+        let inline containsKey kf node = 
+            Option.isSome (tryFind kf node)
 
         // pull key into local memory
         let rec touch kf node =
@@ -141,20 +147,19 @@ module IntMap =
             match node with
             | Inner (ct, p, b, np) ->
                 let kp = prefix k b
-                if (p = kp) then
-                    let (l,r) = load' np
+                if (p = kp) then // add with shared prefix
+                    let inR = testCritbit k b
                     let k' = suffix k b
-                    let (l',r') = 
-                        if testCritbit k b
-                            then (l, add k' v r)
-                            else (add k' v l, r)
+                    let (l,r) = load' np
+                    let (l',r') = if inR then (l, add k' v r) else (add k' v l, r)
                     let ct' = size l' + size r'
                     Inner (ct', p, b, local l' r')
                 else // insert just above current node
                     let b' = 1uy + b + Critbit.highBitIndex (p ^^^ kp)
+                    assert(63uy >= b')
+                    let inR = testCritbit k b'
                     let node' = Inner(ct, suffix p b', b, np)
                     let leaf = Leaf(suffix k b', v)
-                    let inR = testCritbit k b'
                     let np' = if inR then local node' leaf else local leaf node'
                     Inner (1UL + ct, prefix k b', b', np')
             | Leaf (kl,vl) ->
@@ -212,6 +217,112 @@ module IntMap =
                     then (None, Some node) 
                     else (Some node, None)
 
+        // map function for nodes with potential compaction
+        //  here 'c' should be a compaction function or `id`. It's simply
+        //  applied for every new node. And 'fn' is applied to every value.
+        let rec map (c:Node<'B> -> Node<'B>) (fn:Key -> 'A -> 'B) (kp:Key) (node:Node<'A>) : Node<'B> =
+            match node with
+            | Leaf (k,v) -> 
+                let v' = fn (kp ||| k) v
+                c (Leaf (k,v'))
+            | Inner (ct, p, b, np) ->
+                let kl = keyPrefixL (kp ||| p) b
+                let kr = (kl ||| (1UL <<< int b))
+                let (l,r) = load' np
+                let l' = map c fn kl l
+                let r' = map c fn kr r
+                c (Inner (ct, p, b, local l' r'))
+
+        let rec iter fn kp node =
+            match node with
+            | Leaf (k,v) -> fn (kp ||| k) v
+            | Inner (_, p, b, np) ->
+                let kl = keyPrefixL (kp ||| p) b
+                let kr = (kl ||| (1UL <<< int b))
+                let (l,r) = load' np
+                iter fn kl l
+                iter fn kr r
+
+        let rec fold fn s kp node =
+            match node with
+            | Leaf (k,v) -> fn s (kp ||| k) v
+            | Inner (_, p, b, np) ->
+                let kl = keyPrefixL (kp ||| p) b
+                let kr = (kl ||| (1UL <<< int b))
+                let (l,r) = load' np
+                fold fn (fold fn s kl l) kr r
+
+        let rec foldBack fn kp node s =
+            match node with
+            | Leaf (k,v) -> fn (kp ||| k) v s
+            | Inner (_, p, b, np) ->
+                let kl = keyPrefixL (kp ||| p) b
+                let kr = (kl ||| (1UL <<< int b))
+                let (l,r) = load' np
+                foldBack fn kl l (foldBack fn kr r s)
+
+        let rec tryPick fn kp node =
+            match node with
+            | Leaf (k,v) -> fn (kp ||| k) v
+            | Inner (_, p, b, np) ->
+                let (l,r) = load' np
+                let kl = keyPrefixL (kp ||| p) b
+                let pickL = tryPick fn kl l
+                if Option.isSome pickL then pickL else
+                let kr = (kl ||| (1UL <<< int b))
+                tryPick fn kr r
+
+        let rec toSeq kp node =
+            seq {
+                match node with
+                | Leaf (k,v) -> yield ((kp ||| k), v)
+                | Inner (_, p, b, np) ->
+                    let kl = keyPrefixL (kp ||| p) b
+                    let kr = (kl ||| (1UL <<< int b))
+                    let (l,r) = load' np
+                    yield! toSeq kl l
+                    yield! toSeq kr r
+            }
+
+        let rec toSeqR kp node = 
+            seq {
+                match node with
+                | Leaf (k,v) -> yield ((kp ||| k), v)
+                | Inner (_, p, b, np) ->
+                    let kl = keyPrefixL (kp ||| p) b
+                    let kr = (kl ||| (1UL <<< int b))
+                    let (l,r) = load' np
+                    yield! toSeqR kr r
+                    yield! toSeqR kl l
+            }
+
+        // monotonic key suffixes
+        let private validKeySuffix b node =
+            let limit = (1UL <<< int b) 
+            match node with
+            | Leaf (k,_) -> (limit > k)
+            | Inner (_,pn,bn,_) -> ((prefix limit bn) > pn)
+
+        let rec validate node =
+            match node with
+            | Leaf _ -> true
+            | Inner (ct, p, b, np) ->
+                let (l,r) = load' np
+                (ct = (size l + size r))
+                    && (63uy >= (1uy + b + Critbit.highBitIndex p))
+                    && (validKeySuffix b l)
+                    && (validKeySuffix b r)
+                    && (validate l)
+                    && (validate r)
+
+    /// An IntMap tree is empty or has a node with keys and data.
+    type Tree<'V> = Node<'V> option
+
+    /// Deeply validate invariant structure of the tree.
+    let validate t =
+        match t with
+        | Some n -> Node.validate n 
+        | None -> true
 
     let empty : Tree<_> = None
     let isEmpty (t:Tree<_>) = Option.isNone t
@@ -239,7 +350,7 @@ module IntMap =
         | None -> raise (System.Collections.Generic.KeyNotFoundException())
 
     /// Return tree with data at the given key loaded, or enough data
-    /// to test for presence of the key without Stowage loads.
+    /// to verify presence of the key without Stowage loads.
     let touch (k:Key) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Some n -> Some (Node.touch k n)
@@ -260,15 +371,16 @@ module IntMap =
 
     /// Remove a key and its associated value from the tree. Returns
     /// a new tree with the modification applied. Note: this will 
-    /// touch the tree along the removed key. Use checkedRemove if
-    /// you want to preserve Stowage references when the key isn't
-    /// present.
+    /// `touch` the tree along the removed key. Use checkedRemove to
+    /// preserve Stowage references when key isn't present in tree.
     let remove (k:Key) (t:Tree<'V>) : Tree<'V> =
         match t with
         | Some n -> Node.remove k n
         | None -> None
 
-    /// Remove that doesn't touch tree when key is not present.
+    /// Remove that doesn't `touch` tree when key is not present. This
+    /// does require an extra lookup step, but it can save redundant
+    /// compaction efforts. 
     let inline checkedRemove k t = 
         if containsKey k t then remove k t else t
         
@@ -295,22 +407,182 @@ module IntMap =
 
     /// Select a range of keys.
     let slice (kMin:Key option) (kMax:Key option) (t0:Tree<'V>) : Tree<'V> =
-        let lb k t = 
-            match k with
-            | Some ix when (ix <> 0UL) -> snd (splitAtKey ix t)
+        let inline sliceLB kOpt t = 
+            match kOpt with
+            | Some k when (0UL <> k) -> snd (splitAtKey k t)
             | _ -> t
-        let ub k t =
-            match k with
-            | Some ix when (ix <> System.UInt64.MaxValue) -> fst (splitAtKey (1UL + ix) t)
+        let inline sliceUB kOpt t = 
+            match kOpt with
+            | Some k when (System.UInt64.MaxValue <> k) -> 
+                fst (splitAtKey (k + 1UL) t)
             | _ -> t
-        lb kMin (ub kMax t0)
+        t0 |> sliceLB kMin |> sliceUB kMax 
+
+    /// Map a function to every value in a tree.
+    ///
+    /// Note: this will result in a fully expanded tree in memory.
+    /// If the structure is very large, try compactingMap.
+    let map fn t =
+        match t with
+        | Some n -> Some (Node.map id fn 0UL n)
+        | None -> None 
+
+    /// Iterate over every element in the map (in key order).
+    let iter fn t =
+        match t with
+        | Some n -> Node.iter fn 0UL n
+        | None -> ()
+
+    /// Fold over every element in the map (in key order).
+    let fold fn s t =
+        match t with
+        | Some n -> Node.fold fn s 0UL n
+        | None -> s
+
+    /// Fold over every element in the map (reverse key order).
+    let foldBack fn t s =
+        match t with
+        | Some n -> Node.foldBack fn 0UL n s 
+        | None -> s
+
+    /// Short-circuiting search for an element.
+    let tryPick (fn : Key -> 'V -> 'U option) (t:Tree<'V>) : 'U option =
+        match t with
+        | Some n -> Node.tryPick fn 0UL n
+        | None -> None
+
+    let inline tryFindKey pred t = tryPick (fun k v -> if pred k v then Some k else None) t
+    let inline exists pred t = tryFindKey pred t |> Option.isSome
+    let inline forall pred t = not (exists (fun k v -> not (pred k v)) t)
+    
+    /// Sequence of key-value pairs (ordered by key)
+    let toSeq (t:Tree<'V>) : seq<(Key * 'V)> =
+        match t with
+        | Some n -> Node.toSeq 0UL n
+        | None -> Seq.empty
+
+    /// Sequence of key-value pairs (reverse-ordered by key)
+    let toSeqR (t:Tree<'V>) : seq<(Key * 'V)> =
+        match t with
+        | Some n -> Node.toSeqR 0UL n
+        | None -> Seq.empty
+
+    // frequent conversions
+
+    let inline toArray (t:Tree<'V>) : (Key * 'V) array = Array.ofSeq (toSeq t)
+    let inline toList (t:Tree<'V>) : (Key * 'V) list = List.ofSeq (toSeq t)
+    let ofSeq (s:seq<Key * 'V>) : Tree<'V> =
+        Seq.fold (fun t (k,v) -> add k v t) empty s
+    let ofList (lst:(Key * 'V) list) : Tree<'V> =
+        List.fold (fun t (k,v) -> add k v t) empty lst
+    let ofArray (a: (Key * 'V) array) : Tree<'V> =
+        Array.fold (fun t (k,v) -> add k v t) empty a
 
 
-    // TODO:
-    //  enumeration, iteration, fold, map, tryPick, forall, exists, etc.
-    //  efficient structural diffs
-    //  conversion to/from lists, arrays, sequences
-    //  compact, compacting map, Ref type, stow, load, 
+    module EnumDiff =
+        type Stack<'V> = Node<'V> list // key fully merged in node
+        type Elem<'V> = (Key * VDiff<'V>)
+        type State<'V> = (Elem<'V> option * (Stack<'V> * Stack<'V>))
+
+        let iniStack t = Option.toList t
+        let iniState (a:Tree<'V>) (b:Tree<'V>) : State<'V> = 
+            (None, (iniStack a, iniStack b))
+
+        // load + keys merged
+        let split p b np = 
+            let (l,r) = Node.load' np
+            let l' = Node.mergeL p b l
+            let r' = Node.mergeR p b r
+            struct(l',r')
+
+        // step to next leaf value (if any)
+        let rec stepV n s =
+            match n with
+            | Leaf (k,v) -> struct(k,v,s)
+            | Inner (_,p,b,np) ->
+                let struct(l,r) = split p b np
+                stepV l (r::s)
+
+        let refEQ npa npb = // shallow reference equivalence
+            if (System.Object.ReferenceEquals(npa,npb)) then true else
+            match (npa,npb) with
+            | (Remote ra, Remote rb) -> (ra = rb) // stowage equivalence
+            | _ -> false
+
+        let rec stepDiff sa sb =
+            match sa with
+            | [] -> 
+                match sb with
+                | (nb::moreb) ->
+                    let struct(kb,vb,sb') = stepV nb moreb
+                    (Some(kb, InR vb), ([], sb'))
+                | [] -> (None, ([],[]))
+            | (Leaf(ka,va)::sa') -> 
+                match sb with
+                | (nb::moreb) ->
+                    let struct(kb,vb,sb') = stepV nb moreb
+                    stepDiffK ka va sa' kb vb sb'
+                | [] -> (Some(ka, InL va), (sa', []))
+            | (Inner(cta,pa,ba,npa)::sa') ->
+                match sb with
+                | (Inner(ctb,pb,bb,npb)::sb') when (bb >= ba) ->
+                    let obviousEq = (ba = bb) && (pa = pb)
+                                 && (cta = ctb) && (refEQ npa npb)
+                    if obviousEq then stepDiff sa' sb' else
+                    let struct(lb,rb) = split pb bb npb
+                    stepDiff sa (lb::rb::sb')
+                | _ ->
+                    let struct(la,ra) = split pa ba npa
+                    stepDiff (la::ra::sa') sb
+        and stepDiffK ka va sa kb vb sb =
+            if (ka < kb) then
+                (Some (ka, InL va), (sa, Leaf(kb,vb)::sb))
+            else if (kb < ka) then
+                (Some (kb, InR vb), (Leaf(ka,va)::sa, sb))
+            else if (va <> vb) then
+                (Some (ka, InB(va,vb)), (sa, sb))
+            else stepDiff sa sb
+
+        type Enumerator<'V when 'V : equality>(s:State<'V>) =
+            member val private ST = s with get, set
+            member e.Peek() : Elem<'V> =
+                match fst e.ST with
+                | Some elem -> elem
+                | None -> invalidOp "no element"
+            interface System.Collections.Generic.IEnumerator<Elem<'V>> with
+                member e.Current with get() = e.Peek()
+            interface System.Collections.IEnumerator with
+                member e.Current with get() = upcast e.Peek()
+                member e.MoveNext() =
+                    let (l,r) = snd e.ST
+                    e.ST <- stepDiff l r
+                    Option.isSome (fst e.ST)
+                member e.Reset() = raise (System.NotSupportedException())
+            interface System.IDisposable with
+                member e.Dispose() = ()
+            
+        type Enumerable<'V when 'V : equality> =
+            val private L : Tree<'V>
+            val private R : Tree<'V>
+            new(l,r) = { L = l; R = r }
+            member e.GetEnum() = new Enumerator<'V>(iniState (e.L) (e.R))
+            interface System.Collections.Generic.IEnumerable<Elem<'V>> with
+                member e.GetEnumerator() = upcast e.GetEnum()
+            interface System.Collections.IEnumerable with
+                member e.GetEnumerator() = upcast e.GetEnum()
+
+    /// Structural Difference of IntMap Trees
+    ///
+    /// This function leverages reference equality for both Stowage secure
+    /// hashes and .Net object references to filter subtrees at splits if
+    /// feasible. This assumes equal binaries correspond to equal values.
+    let diff<'V when 'V : equality> (a:Tree<'V>) (b:Tree<'V>) : seq<Key * VDiff<'V>> =
+        upcast (EnumDiff.Enumerable(a,b))
+
+    /// Deep structural equality for Trees. (Tests for diff.)
+    let deepEq<'V when 'V : equality> (a:Tree<'V>) (b:Tree<'V>) : bool = 
+        Seq.isEmpty (diff a b)
+
    
     module EncNode =
         let cLeaf = byte 'L'
@@ -421,6 +693,10 @@ module IntMap =
                 member __.Read db src = read cV cNP db src
                 member __.Compact db node = compact thresh cV cNP db node
             }
+
+
+    // TODO:
+    //  compact, compacting map, Ref type, stow, load, 
 
 
 type IntMap<'V> = IntMap.Tree<'V>

@@ -132,7 +132,7 @@ module LVRef =
         new Ref<'V>(Stowed vref)
 
     // latency for stowage and caching
-    let private latency = 200
+    let private latency = 300
 
     /// Stow a value (after some latency) to create a LVRef.
     let stow (c:Codec<'V>) (db:Stowage) (v:'V) : Ref<'V> =
@@ -167,6 +167,9 @@ module LVRef =
         | Stowed _ -> cachedLoad ref
         | Cached (_,v) -> v
         | Stowing (_,_,v) -> v
+
+    // NOTE: I might want to control the total amount of cached data,
+    // as opposed to using a simple delay.
 
     /// Load a value without caching it, e.g. for immediate update.
     ///

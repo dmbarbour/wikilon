@@ -11,7 +11,7 @@ Initial goals include:
 * finger-tree sequences for vectors or dequeues
 * generic finger-trees (user-provided monoid)
 
-Mapping a function across larger-than-memory structures seems problematic, but I could try to model 'compacting map' operations that also receive the codec for the new value type.
+I should probably have for each collection type, a "compacting map" and "compacting filter" operation. But it isn't too critical. 
 
 I'm somewhat interested in the SeqHash structure, which is a bit like a history-independent finger-tree sequence. But it seems more complicated than I'm willing to deal with at this time.
 
