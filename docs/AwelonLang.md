@@ -5,25 +5,23 @@ Awelon is a purely functional language based on concatenative combinators.
 
 ## Why Another Language?
 
-Modern programming languages can produce useful artifacts - applications, games, and so on. But they do not permit flexible composition and decomposition of these artifacts. There are a lot of complicating factors - hidden runtime structure, entanglement of effects and environment, separation of programmer and user interfaces, scalability to benefit from network effects, even how software is shared in a community.
+Modern programming languages can produce useful artifacts - applications, games, and so on. But they do not support flexible composition and decomposition of these artifacts. There are a lot of complicating factors: hidden runtime structure, entanglement of effects and environment, separation of programmer and user interfaces, even how software is packaged and shared in a community.
 
-Awelon language aims to address those complications. Important design points:
+Awelon language aims to be simple and scalable, addressing these complications. It explores a new way of developing and sharing code and computational artifacts. Some design points:
 
-* Awelon evaluates by local confluent rewriting, much like expression `(6 * 7)` evaluates to `42` in arithmetic. Every evaluation step has representation within Awelon language and may thus be serialized or rendered. Rewrite based evaluation simplifies debugging, distribution, integration of the program with HCI, and further use of program results.
+* Awelon evaluates by local confluent rewriting, much like expression `(6 * 7)` evaluates to `42` in arithmetic. Every evaluation step has representation within Awelon language and may thus be serialized or rendered - i.e. it's easy to "show the work". Rewrite based evaluation simplifies debugging, distribution, integration of the program with HCI, and further use of program results.
 
-* Awelon specifies 'lazy linking' of words by the evaluator. That is, a word is not rewritten to its definition unless doing so would result in further rewrites. This allows for a more compact representation of results and ensures human-meaningful link structure and symbols are preserved by the evaluator.
+* Awelon has a simple, Forth-like syntax. This lowers barriers for [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). Editable views can support domain-specific notations or allow interactive editing of Awelon via forms or graphs. 
 
-* Awelon has a simple, Forth-like syntax. This lowers barriers for [projectional editing](http://martinfowler.com/bliki/ProjectionalEditing.html). Editable views can support domain-specific notations or allow interactive editing of Awelon via forms or graphs. This feature combines nicely with rewriting and lazy linking, enabling the same views to apply to results. 
+* Awelon specifies 'lazy linking' of words by the evaluator. That is, a word is not rewritten to its definition unless doing so would result in further rewrites. This allows for results to contain human-meaningful references and code fragments. Importantly, editable views can be applied to results, which helps unify programmer and user interfaces.
 
-* Awelon has a simple, pure, and portable semantics. Programs are concatenative, which simplifies composition and decomposition. Scope is easy to control, which simplifies sharing of code and integration of untrusted code. Performance is achieved via annotations and acceleration of useful models, as opposed to ad-hoc language extension with primitive types or FFI.
+* Awelon has a simple, pure, deterministic, portable semantics. It is easy to share code with others. Programs are concatenative, which simplifies composition and decomposition of code fragments. Definitions are acyclic, so it's easy to extract only necessary fragments of a dictionary.
 
-* Awelon is structured in terms of hierarchical, self-contained dictionaries instead of packages and libraries. The self-contained dictionary ensures control and versioning of deep dependencies, while hierarchy enables robust integration and maintenance of independently developed resources. This structure encourages community curation instead of individual ownership.
+* Awelon uses *Acceleration* as the performance alternative to built-in functions or FFI. This enables an interesting path of language growth that doesn't complicate semantics or security. Minimally, runtimes should accelerate natural numbers and arithmetic. But acceleration can potentially leverage GPGPUs (by accelerating linear algebra) or cloud computing (by accelerating Kahn process networks).
 
-* Awelon scales easily, leveraging uniform serializability with other features. Lazy linking enables larger than memory structures. This extends dynamically with stowage annotations to move large objects to disk and reference them by secure hash word. Pure evaluation allows memoization for spreadsheet-like incremental computations, and this extends readily to stowed objects. Acceleration of Kahn process networks would extend Awelon to long-running distributed systems computations.
+Awelon experiments with alternative [application models](ApplicationModel.md). The most promising models are RESTful - documents, publish subscribe, tuple spaces, etc. - integrating application state with the codebase instead of an external filesystem or database. The codebase then becomes a 'smart' filesystem or database, with more deeply integrated linking and computational structure similar to a spreadsheet. The codebase is maintained by a community of human and software agents, exactly as we'd maintain a database or filesystem.
 
-Awelon experiments with alternative [application models](ApplicationModel.md). The most promising models are RESTful - documents, publish subscribe, tuple spaces, etc. - but where application state is integrated with the codebase instead of an external filesystem or database. The codebase then becomes a 'smart' filesystem or database, with more deeply integrated linking and computational structure similar to a spreadsheet. The codebase is maintained by a community of human and software agents, exactly as we'd maintain a database or filesystem.
-
-Awelon diverges significantly from conventional systems and programming language design. This isn't just a new language, it's a new way of thinking about programming that integrates ideas from spreadsheets, functional programming, and RESTful web services. Awelon does not *directly* interact with existing systems - there is no FFI, for example. But indirect integration is feasible through bots and web services and cross compilation for some application models.
+Integration of Awelon systems with external systems will initially rely on web services or publish-subscribe systems. 
 
 ## Primitives
 
@@ -34,7 +32,9 @@ There are four primitive combinators:
                [A]c == [A][A]       (copy)
                [A]d ==              (drop)
 
-The square brackets `[]` enclose a 'block' of Awelon code, and represent a first-class function. This, together with various Church or Moegensen-Scott encodings, is the entire basis for representing data and computations in Awelon. All Awelon computations are pure. However, to achieve performance, we additionally leverage *Acceleration* as Awelon's alternative to built-in functions or performance-motivated FFI. Acceleration is discussed below.
+Square brackets `[]` enclose Awelon code and represent first-class functions. This, together with various Church or Moegensen-Scott encodings, is the basis for representing data and computations in Awelon. Awelon computations are semantically pure, and their entire formal behavior can be understood in terms of these few primitives.
+
+However, to achieve performance, we additionally leverage *Acceleration*. This is Awelon's alternative to built-in functions and data-types. or performance-motivated FFI. Acceleration is discussed below. We can also leverage *Annotations*, to improve performance and 
 
 This set of combinators is Turing complete, able to represent all deterministically computable functions. As a lightweight proof, I'll define the Curry-Schönfinkel SKI [combinators](https://en.wikipedia.org/wiki/Combinatory_logic).
 
@@ -57,7 +57,7 @@ Newlines and tabs are among the rejected characters. However, humans will freque
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Structurally, a word starts with a lower-case alpha and may contain underscores or digits. As a regular expression, this is: `[a-z][a-z0-9_]*`. Additionally, there is a size constraint: words must not surpass 32 characters (bytes) in length.
+Words are the user-definable unit for Awelon code. Structurally, a word starts with a lower case alpha and may otherwise contain lower case alphas, digits, and the underscore. As a regular expression, this is: `[a-z][a-z_0-9]*`. There is also a size limit: words should not surpass 32 characters in length.
 
 Words are evaluated in context of a *Dictionary*, where each word is defined by an Awelon program. Definitions of words within a dictionary must form a directed acyclic graph. The semantics for words are extremely trivial: we lazily substitute the word by its definition.
 
@@ -112,11 +112,11 @@ Awelon uses the 280-bit [BLAKE2b](https://blake2.net/) algorithm, encoding the h
         Base32 Alphabet: bcdfghjklmnpqrstBCDFGHJKLMNPQRST
             encoding 0..31 respectively
 
-We can safely neglect the theoretical concern of secure hash collisions. Physical corruption of dictionaries is of greater concern in practice. If collision becomes a concern in the future, it is trivial to rewrite entire Awelon systems to use a more robust hash. I won't further belabor the issue.
+We can safely neglect the theoretical concern of secure hash collisions. Physical corruption of dictionaries is of greater concern in practice. If collision becomes a concern in the future, it is possible to transitively rewrite entire Awelon systems to use a more robust hash. I won't further belabor the issue.
 
 Awelon runtime systems must know where to seek secure hash resources, whether that be in a filesystem, database, web server, or content distribution network. Using *Stowage* annotations, Awelon runtime systems may also compute new secure hash resources during evaluation, treating this external space as a persistent virtual memory or a binary data server.
 
-Secure hash resources are frequently subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29). Conservative reference counting GC is simple and effective.
+Secure hash resources are frequently subject to [garbage collection (GC)](https://en.wikipedia.org/wiki/Garbage_collection_%28computer_science%29). Conservative reference counting GC is simple and effective, due to the acyclic and high-latency nature of secure hash references. 
 
 *Security Note:* Secure hash resources may embed sensitive information, yet are not subject to conventional access control. Awelon systems should treat a secure hash as an [object capability](https://en.wikipedia.org/wiki/Object-capability_model) - a bearer token that grants read authority. Relevantly, Awelon systems should resist timing attacks that might leak secure hashes.
 
@@ -141,16 +141,19 @@ A runtime will recognize and accelerate common functions. The accelerated implem
 
 The runtime will look at the given definitions. Upon recognizing `[] b a`, the runtime may link `w` to an acclerated swap implementation. Whenever `i` appears at the end of a subprogram, we might leverage the tail-call optimization.
 
-In general, recognition of accelerators may be fragile. It may be that `i = [] w a d` is recognized where the logically equivalent `i = [[]] a a d` is not recognized. Even changing function names could break accelerators. This is ultimately up to the runtime. Due to this fragility, a runtime should carefully document recognized accelerators, and provide some means to warn developers in case of bad assumptions. A useful convention is to define a prelude dictionary including the recognized accelerators, and to flag assumed accelerators by defining `foo.accel` if we expect `foo` to be accelerated.
+In general, recognition of accelerators may be fragile. It may be that `i = [] w a d` is recognized where the logically equivalent `i = [[]] a a d` is not recognized. Even changing function names could break accelerators. This is ultimately up to the runtime. Due to this fragility, a runtime should carefully document recognized accelerators, and provide some means to warn developers in case of bad assumptions. A useful convention is to support an `(accel)` annotation that asserts a block of code should be specially recognized and accelerated.
 
-Critically, acceleration of functions extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 S]`. But under the hood they could be represented by simple machine words, and arithmetic on natural numbers could be reduced to a machine operation. We can accelerate lists to use array representations and in-place indexed updates for unique references. We can feasibly accelerate linear algebra to leverage a GPGPU, or accelerate Kahn process networks to leverage distributed CPUs and memory.
+Critically, acceleration of functions extends to data representation. Natural numbers, for example, have a unary structure `42 = [41 succ]`. But under the hood they could (and should!) be compactly represented by machine words, with arithmetic on natural numbers reduced to a machine operation. We can accelerate lists to use array representations and in-place indexed updates for unique references. We can feasibly accelerate linear algebra to leverage a GPGPU, or accelerate Kahn process networks to leverage distributed CPUs and memory.
+
+Accelerators are not trivial. Every accelerator represents a significant investment of time, and a complication for the runtime implementations. Hence, it's best if we seek small subset of accelerators that is both simple and good for a wide variety of use cases.
 
 ## Annotations
 
 Annotations help developers control, optimize, view, and debug computations. Unlike words, which are mostly user-defined, annotations are given meaning by the runtime or compiler. Annotations are represented as parenthetical words like `(par)` or `(a3)`. Potential useful annotations:
 
 * `(a2)..(a9)` - arity annotations to defer computations
-* `(t0)..(t9)` - tuple assertions for output scope control
+* `(t1)..(t9)` - tuple assertions for output scope control
+* `(unit)` - assert empty block
 * `(nc) (nd)` - support substructural type safety
 * `(seal_foo) (open_foo)` - lightweight type tag and assertions
 * `(par)` - request parallel evaluation of computation
@@ -163,12 +166,13 @@ Annotations help developers control, optimize, view, and debug computations. Unl
 * `(trace)` - record value to a debug output log
 * `(trash)` - erase data you won't observe, leave placeholder
 * `(error)` - mark a value as an error object
+* `(accel)` - assert block of code should have runtime acceleration
 * `(eq)` - assert structural equality of two values
-* `(eq_foo)` - reduce code to known name (quines, loops)
+* `(eq_foo)` - assert equal to def, reduce code to known name (quines)
 
-Annotations must have no observable effect within a computation. Nonetheless, annotations may cause an incorrect computation to fail fast, defer unnecessary computation, simplify static detection of errors, support useful external observations like debug logs or breakpoint states or a change in how an evaluated result is represented or organized.
+Annotations must have no observable effect within a computation. However, annotations should have externally observable consequences, e.g. optimize might perform rewrites we can see when viewing the evaluation, trace generates a debug log, jit and par make programs evaluate faster. Stowage and memoization can interact with disk or networks. Further, annotations may cause computations to halt early, as with arity annotations, failed assertions, applied error values, and sealers. 
 
-Annotations may be introduced and documented on a runtime basis. In case of porting code, runtimes that do not recognize an annotation may ignore it. Long term, we should reach some de-facto standardization on useful annotations.
+Annotations are defined by the runtime. In case of porting code, runtimes that do not recognize an annotation may ignore it. In the long run, we should have de-facto standard annotations that are widely supported, while experimental or runtime-specific annotations should be indicated with appropriate prefix.
 
 ## Stowage
 
@@ -218,14 +222,13 @@ Value words are convenient for preserving human-meaningful structure and support
 
 The *arity annotations* `(a2)` to `(a9)` have simple rewrite rules:
 
-                             [B][A](a2) == [B][A]
-                          [C][B][A](a3) == [C][B][A]
-                                        ..
-        [I][H][G][F][E][D][C][B][A](a9) == [I][H][G][F][E][D][C][B][A]
+        [B][A](a2) == [B][A]
+        [C][B][A](a3) == [C][B][A]
+        ...
 
 To clarify, it is the *annotation* that has the given arity. Arity annotations specify nothing of their context.
 
-Arity annotations serve a critical role in controlling computation. For example, the program `[[A](a2)F]` has the same type and semantics as `[[A]F]`, but the former prevents partial evaluation of `F` from observing `[A]`. Arity annotations can be used to guard against useless partial evaluations and control linking. For example, if we define swap as `w = (a2) [] b a` then we can avoid observing the useless intermediate structure `[A] w => [[A]] a`. An evaluator must wait for two arguments to `w` before linking.
+Arity annotations serve a valuable role in controlling computation. For example, the program `[[A](a2)F]` has the same type and semantics as `[[A]F]`, but the former prevents evaluation of `F` from immediately observing `[A]`. Arity annotations can be used to guard against useless partial evaluations and control linking. For example, if we define swap as `w = (a2) [] b a` then we can avoid observing the useless intermediate structure `[A] w => [[A]] a`. An evaluator must wait for two arguments to `w` before linking.
 
 Arity annotations serve a very useful role in modeling [thunks](https://en.wikipedia.org/wiki/Thunk) and [coinductive data](https://en.wikipedia.org/wiki/Coinduction). It is sometimes useful to model 'infinite' data structures to be computed as we observe them - procedurally generated streams or scene graphs.
 
@@ -260,19 +263,15 @@ To effectively support incremental computing, memoization must be used with cach
 
 ## Static Linking
 
-It is possible to perform static analysis on a word's evaluated definition, arities and types, etc. to determine context-free link structure. The most trivial example of this is redirects. Consider:
+Consider a redirect, `foo = bar`. When we link `foo`, we'll always link `bar`. This is due to the lazy evaluation rule: we won't link `foo` unless doing so also results in rewrites other than a trivial inlining of foo's definition. Hence, we could skip the intermediate rewrite to word `bar` and simply rewrite to bar's definition. Transitively, we can say foo's static link definition is bar's static link definition.
 
-        @foo bar
+This isn't limited to redirects. Similar analysis can be performed in context of arity annotations and type analysis. It is feasible to optimize static link definitions far beyond simple evaluation. 
 
-Here, word `foo` will not evaluate any further because there is no cause to link `bar`. However, when we do eventually link `foo`, we'll immediately be asked to link `bar`. We can determine this by static analysis. For performance reasons, we may wish to skip the intermediate step rewriting `foo` to `bar` and jump straight to linking the definition of `bar`. 
-
-However, static linking is not constrained to trivial redirects. Statically computing link structure can further inline definitions, flatten redirect chains. Computing a static-link object provides an excellent opportunity to perform transparent optimizations.
-
-A runtime might provide `(link)` to evaluate further to a static link object.
+A `[code](link)` annotation could make static link optimizations explicit.
 
 ## Optimization
 
-There are many semantically valid rewrites that Awelon's basic evaluator does not perform. For example:
+There are many semantically valid rewrites that Awelon's naive evaluator does not perform. For example:
 
         [A] a [B] a => [A B] a      apply composes
         [A] a d     => d A          tail call optimization
@@ -286,15 +285,15 @@ There are many semantically valid rewrites that Awelon's basic evaluator does no
         c w         => c            copies are equivalent
         [E] w d     => d [E]        why swap first?
 
-A runtime has discretion to perform optimizations that are not visible in the evaluated result, based on escape analysis. The static link object is a good target for such efforts. Any visible optimizations or simplifications should be explicitly controlled by annotations or evaluator options.
+A runtime has discretion to perform optimizations that are invisible in the evaluated result, e.g. for *Static Linking*. Visible optimizations are permitted only when guided by annotation. 
 
-Pattern-matching rewrite optimizations tend in general to be fragile, affected by abstraction and order of evaluation. There are more robust optimization techniques with good results. For example, partial evaluation in Awelon is usually limited by inability to represent partial values. Evaluating with 'free variables' in the form of undefined words can help:
+Pattern-matching rewrite optimizations tend in general to be fragile, affected by abstraction and order of evaluation. However, there are many robust optimization techniques with good results. For example, partial evaluation can be modeled by propagating variables through an evaluation then extracting the variables:
 
-* assume `A B C` words unused and undefined 
+* variables `A B C` as undefined subprograms
 * evaluate `[C][B][A]function` to completion
 * rewrite to extract `A B C` free variables
 
-The evaluator does not rewrite the `A` annotation. But its presence can push partial information through the program like `[4 A 1]` where `A` might later be `3 2` but we don't know. Argument extraction logic is a simple, reflective rewrite:
+A simple extraction algorithm:
 
         T(X,E) - extract X from E such that:
             T(X,E) does not contain X
@@ -309,92 +308,49 @@ The evaluator does not rewrite the `A` annotation. But its presence can push par
             | only G contains X             => [F] a T(X,G)
             | otherwise                     => c [T(X,F)] a T(X,G)
 
-So this optimization looks like: `T(A, T(B, T(C, Eval([C][B][A]function))))`. But before we extract the variables, we might perform other optimizations. We can search for common subexpressions, variables included, and extract those first. We can heuristically search equivalencies like `T(A, T(B, E)) == w T(B, T(A, E))`, or we might attempt a topological sort on subexpressions to minimize and simplify data shuffling within the program. 
 
-Static type information may also support optimizations. For example, if we know our argument is a pair, we might further propagate the elements as independent variables:
+This would, for example, tear through arity annotations and deeply eliminate unnecessary data plumbing, carrying partial data along for the ride. Of course, there might also be some advantage to rearranging data on the stack to minimize later data plumbing.
 
-        type (A * B) = ∀S. S → S A B
-        for E : S (A * B) → S'
-            E => i T(B, T(A, EVAL([[A][B]] E)))
-
-For sum types, the analog is to precompute programs for different arguments:
-
-        a generic binary 'if'
-        if : S (S → (A | B)) (A → S') (B → S') → S'
-        if = (a3) [] b b a (cond) i
-
-        type Bool = ∀S,S'. S (S → S') (S → S') → S'
-        for E : S Bool → S', where E observes argument
-            E => [false E] [true E] if
-
-        type (A + B) = ∀S,S'. S (S A → S') (S B → S') → S'
-        for E : S (A + B) → S', where E observes argument
-            E => [[inL] b E] [[inR] b E] if
-
-In this case, we must weigh program expansion versus gains from static partial evaluations. Achieving a good result here may require a heuristic search - e.g. when `E == F G` we might be better off just expanding `F`, and when we have multiple boolean values we might need to expand several to see benefits. 
-
-For sums, we must weigh program expansion versus the gains from static partial evaluation. But for at least some cases, the idea could work very well.
-
-There are likely many more optimizations that can be performed directly at the Awelon layer. For example, we could try to move `(eval)` up front if we know it will happen regardless. The simple semantics of purely functional combinators, and the ability to inject or extract 'variables' as needed, make this safe and easy.
-
-## Fast Interpretation
-
-Naive interpretation of Awelon can be reasonably efficient, but involves a lot of pointer-chasing. We can do very well with a few minor tweaks on the representation. Consider Awelon extended with the following features:
-
-* program pointers
-* auxiliary stack 
-
-A program will be represented by an array of words and values, terminated by a special `\return` word. The `\return` word will pop a program pointer from the auxiliary and jump to it. To 'call' a word, we will generally push a 'next' program pointer onto our return stack, then jump. We can also perform tail-call optimizations (e.g. for `... a d]` or `... i]`) such that we avoid returning to a finished subprogram.
-
-The auxiliary stack can also optimize some data hiding:
-
-        [A]a    =>  \push A \pop
-        [A]b a  =>  \push2nd A \pop
-        ...
-
-This allows us to avoid some indirection, construction, and return actions. This particular transform doesn't help for every use case. But we can optimize temporary data hiding for known common cases, such as working with `T(A, T(B, ..E))` up to a limited arity.
-
-A valuable feature is that we can trivially 'decompile' these call-return and push-pop patterns. We start with a logical copy of the auxiliary stack. On `\return`, we pop a return address and continue serializing from the new location. For `\push` we write `[` and add a special `]a` term to the auxiliary stack. For `\pop`, we pop a term from the auxiliary then serialize it. And so on. This interpreted representation can be used as our primary representation under the hood without any decompilation overhead to recover the computed program.
-
-This slightly modified Awelon is a good fit for a threaded interpreter. But we can also compile Awelon to make it faster, and either interpret the partially compiled code
+Another useful technique is, for known conditional types, we can partially evaluate results under both conditions, weighing exponential expansion of code versus potential benefits of specialized code. Anyhow, there are a lot of possible optimizations that can be represented by simple rewriting of Awelon code.
 
 ## Compilation
 
-Awelon can be compiled to more effectively use stock hardware.
+Direct interpretation of Awelon code can be reasonably efficient, using threaded interpreters. 
 
-The most important step is register allocation, mapping active values from a program into memory or CPU registers. This enables us to eliminate intermediate data shuffling and volatile binding, especially within a program loop. Compilation can leverage acceleration, for example by specializing floating point arithmetic, translating common `if` conditional behavior into local branching, and reducing tail-call fixpoint functions to a local jump. A small bank for floating point registers could reduce need for boxing/unboxing and further improve loop performance when accumulating a small set of results.
+But to make it faster we can potentially rewrite code to an intermediate language that uses an auxiliary data/return stack, call-return operations, labels and jumps for tail-call optimized loops and so on. Even better, we can feasibly target a simple "register machine" model to eliminate data plumbing from the stack and avoid bindings on the heap if they're used statically, instead tracking a compile-time stack of logical register-objects.
 
-Compilation can also extract a function for efficient use in another language, such as JavaScript to target the browser. Registers would in this case might translate to variables or fields in an object, or a mutable array.
+Of course, when compiling a register machine, you might need to keep an extra code map back from the program pointer to the logical register objects so we can serialize code. But that isn't a new idea.
 
-Awelon's program rewriting semantics generally means we should be able to decompile back to the Awelon program after evaluation. This ability for programs to self-decompile is convenient for persistence, checkpointing, distribution, sharing, and debugging code. An Awelon compiler can feasibly preserve metadata such as an associative index from program counters to source and a register-to-stack map to eliminate CPU overheads during evaluation.
+## Parallelism
 
-## Parallel Evaluation
+A simple form of fork-join parallelism can be expressed as `[computation](par)`. The block could be moved around while computing in parallel, but upon observation (via apply) we'll need to wait on the result. This covers a lot of use cases, and it's also relatively easy to implement.
 
-The simplest parallelism that clients might request is parallel evaluation of a block via `[computation](par)`. The block can be moved around while computing, and we can potentially accelerate composition involving parallel computations to form a linear pipeline. 
+For more sophisticated forms of parallelism, we'll need *Acceleration*.
 
-Unfortunately, `(par)` has severe limitations on expressiveness. It is at once too expressive to leverage low-level parallelism (vector processing, SIMD, SSE, GPGPU) and insufficiently expressive for flexible communication channels between parallel components.
+For example, to leverage SIMD, SSE, or GPGPU we'll probably need to accelerate a [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra), or alternatively accelerate evaluation for a DSL that represents a safe subset of OpenCL. 
 
-For low level parallelism, we could accelerate [linear algebra](https://en.wikipedia.org/wiki/Linear_algebra). Alternatively, we could accelerate evaluation for a safe subset of OpenCL or similar, above which we might later accelerate linear algebra. Either approach can help Awelon in the domains of machine learning, physics simulations, graphics and audio, and other high performance number crunching computations.
+Similarly, to leverage cloud or mesh network computing with decentralized communications, we could accelerate evaluation for [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks). A weakness of conventional KPNs is that they cannot merge asynchronous data from multiple channels. But it is possible to model temporal, reactive KPNs where 'time' or clock 'tick' messages are implicitly added to every channel. These could then be compiled into conventional KPNs.
 
-For high level parallelism, I propose we accelerate [Kahn process networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks), or specifically a variant with lightweight temporal extensions (see *Reactive Kahn Process Networks*, below) so we can model asynchronous message streams. Essentially, we would describe a process network as a first-class value, and accelerate an 'evaluation' function (of type `KPN → KPN`) such that it distributes the process network across physically distributed memory and CPUs to perform the computation. The *monotonic* nature of KPNs allows distributed computation to continue in the background even as we inject and extract messages. KPNs can also be used to model effects, binding some IO ports to the real world.
+Accelerators aren't trivial, but a couple accelerators could cover the vast majority of parallel evaluation for a wide variety of problems and domains. 
+
+*Aside:* KPNs are also an interesting alternative to monadic effects for modeling purely functional applications.
 
 ## Structural Scope
 
-Blocks naturally delimit the input scope for a computation. For example, we know that in `[B][[A]foo]`, `foo` can access `[A]` but not `[B]`. And we can trivially leverage this with the bind operation `b`. But Awelon also supports multiple outputs, and so scoping output is a relevant concern. To address this, Awelon introduces *tuple assertions* to annotate output scope:
+Blocks naturally delimit the input scope for a computation. For example, we know that in `[B][[A]foo]`, `foo` can access `[A]` but not `[B]`. And we can trivially leverage this with the bind operation `b`. But Awelon also supports multiple outputs, and so scoping output is a relevant concern. To address this, one feasible option is to introduce *tuple assertions* to annotate output arity.
 
-                                   [](t0) == []
-                                [[A]](t1) == [[A]]
-                             [[B][A]](t2) == [[B][A]]
-                                         ..
-        [[I][H][G][F][E][D][C][B][A]](t9) == [[I][H][G][F][E][D][C][B][A]]
+        [](t0) == []
+        [[A]](t1) == [[A]]
+        [[B][A]](t2) == [[B][A]]
+        ...
 
-Tuple assertions can be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection may be necessary, and we'll fail fast if the tuple assertion is bad. Similar to arity annotations, tuples larger than `(t5)` should be rare in practice.
+Tuple assertions could be deleted early if they are validated statically. Otherwise, some lightweight dynamic reflection could be used. Similar to arity annotations, tuples larger than `(t5)` should be rare in practice.
 
 In addition to controlling output counts, programmers may wish to fail fast based on declared structure. To support this, Awelon supports a structure annotation `(seal_key)` and paired structure assertion `(open_key)` with the following rewrite semantics:
 
         (seal_foo) (open_foo) ==
 
-Otherwise, they won't rewrite at all, and prevent further computation. This could be combined with a simple codebase constraint, that `(seal_foo)` annotation may be directly used only from words with a matching prefix `foo`. This would offer a simple basis for ADTs, and aid in early detection of errors. 
+Otherwise, they won't rewrite at all, and prevent further computation. This could be combined with a simple codebase analysis constraint, that these annotations only be used directly from words with a matching prefix `foo`, to provide a simple basis for modular abstract data types.
 
 ## Substructural Scope
 
@@ -412,11 +368,11 @@ Substructural attributes do not prevent application of a value with `a`. Copy an
 
 ## Error Annotations
 
-An `(error)` annotation marks a value erroneous and non-applicable. We cannot observe an error value with operator `a`. 
+An `(error)` annotation marks a value erroneous and non-applicable. We cannot observe an error value with operator `a`. Attempting to observe the error value would prevent further rewrites.
 
         [B][E](error)a == [][E](error)a d [B]
 
-That is, we simply halt rewriting wherever we attempt to apply the error value. But an erroneous value can otherwise be bound, copied, dropped like normal. 
+An erroneous value can still be bound, copied, dropped like normal. It only causes problems when we try to observe it. 
 
 ## Garbage Data
 
@@ -497,13 +453,9 @@ My initial emphasis is textual views, such that we can readily integrate favored
 
 Awelon's natural numbers here are given the `#` prefix in favor of a more aesthetic representation for signed numbers. From there, we build a tower of numbers. The basic approach of building views upon views is convenient because it makes views more extensible. For example, if we have no support for rational numbers, we'd still see `[-4 #6 rational]` which is still sensible to a human reader. Support for rational numbers or hexadecimal or similar can be added if missing.
 
-Similarly, we could develop a view for command sequences:
+Beyond numbers, we can develop editable views that are convenient for continuation-passing style, generators, or monadic computation. Editable views can feasibly support records and labeled data. Support for tables and graphs are feasible. Conveniently, it isn't difficult to experiment with editable views, tuning them to a user or project or developing them over time, because the views aren't the primary representation for Awelon code.
 
-        {A,B,C} == [[A] [[B] [[C] ~ cons] cons] cons]
-
-There is a lot of flexibility with simple recognizing and rewriting of texts. Importantly, because these editable views are separate from the language compilers and interpreters, it is easy to experiment, use multiple views, and tune the programming experience to the programmer or the problem.
-
-Many editable views will have an escape for code that they isn't recognized. For example, the `#42` escape for natural numbers can be generalized as an escape for words `#foo` or blocks `#[raw awelon code]`. This ensures universal access to Awelon behavior and the dictionaries. Of course, some DSL-inspired views might cleverly restrict programs to a subset of Awelon.
+Most editable views should have an escape for code that they isn't recognized. For example, the `#42` escape for natural numbers might be generalized as an escape for words `#foo` or even full blocks `#[raw awelon code]`. This ensures universal access to Awelon behavior and the dictionaries. Of course, some DSL-inspired views might cleverly constrain subprograms to a subset of Awelon to better support acceleration.
 
 Ideally, most editable views should be computable, in the sense of having a normal form that can be the result of a normal evaluation process. Computable views enable the *evaluated result* of the program to have the *same view* as our programs. Or perhaps another, more suitable view. When we add 3.141 and -0.007, we want to see 3.134 in the program output. Hence, `[3134 -3 decimal]` should be a normal form, perhaps via arity annotations in `decimal`.
 
@@ -575,29 +527,6 @@ Arrays and records are the most useful targets for this treatment.
 We can represent a list as an array (guided by `(array)` annotations). We can accelerate functions to access and update lists at indexed offsets. When the update function is applied to a unique array, it can update it in place. If applied to a shared array, it must copy the array first to get a unique array, but then all subsequent updates are in-place until the array is shared by logical copying via operator `c`. Records would receive similar treatment, albeit using a hashmap in place of the array.
 
 *Note:* The `(nc)` annotation restricts copying of the marked value. Use of this can help enforce preservation of uniqueness, or at least help fail-fast debug cases where we want to restrict copying.
-
-## Reactive Kahn Process Networks
-
-A weakness of conventional [Kahn Process Networks (KPNs)](https://en.wikipedia.org/wiki/Kahn_process_networks) is that they cannot merge asynchronous data from multiple channels. There is no record for when messages on one channel arrive relative to messages on other channels. This weakness makes it difficult to efficiently integrate KPNs with real-world events, or to model a shared message bus or database. Fortunately, this weakness can be solved by adding a temporal dimension to KPNs, while preserving other nice features (determinism, monotonicity). Here's how:
-
-* Every process has an implicit time value. 
-* Outgoing message is stamped with the process time.
-* Incoming messages are bounded by process time.
-* Wires have logical latency, e.g. add 10 to time.
-* Reading returns Nothing if no messages at time.
-* Process can explicitly wait on a set of ports.
-* Waiting advances time to next message in set.
-* We explicitly advance time for open input ports.
-
-Reactive process networks could be modeled explicitly in KPNs by simply adding 'time advances by X units' messages to every port, and being careful to explicitly propagate this information to every output port. But it's more convenient to treat this as an alternative effects model at the process model, dividing 'wait' from 'read' within a process. Of course, reads will still implicitly wait until either a message arrives or time explicitly advances on the input port beyond the reader's current time. 
-
-Reactive process networks permit interesting expressions. We can interpret input ports as stateful memory, maintaining a value of type `S` and receiving messages of type `S→S`. We can model clock-like behaviors that periodically send messages via cyclic wiring with latency. Ultimately, a reactive network's advance of time is driven externally by advancing time on open input ports and internally via clock-like behavior. Conventional KPN behavior is preserved if we never advance time and use zero latency wiring. 
-
-This simple temporal extension completes the KPN model for systems programming. 
-
-Accelerated evaluation of the reactive process network can readily operate across distributed memory and CPUs. If compiled as an effects model we can also attach open input-output ports to real-world IO sources (keyboard, mouse, cameras, video, sound, etc.) without a central IO bottleneck. My intention is for Awelon systems to leverage reactive process networks as a scalable, composable alternative to monadic effects, in addition to a convenient model for network scale parallel stream processing.
-
-*Note:* The model of time, and the current time, is not explicitly visible within the processes. We can use natural numbers to represent time. We can easily normalize times by subtracting the minimum time stamp from all time stamps. We can freely assign times an external meaning, e.g. logical 'microseconds' or 'nanoseconds' or similar.
 
 ## Hierarchical Dictionaries and Namespaces
 
