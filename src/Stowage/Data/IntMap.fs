@@ -36,12 +36,10 @@ module IntMap =
             if(0UL <> (0x0000000000000002UL &&& x)) then (1uy + r) else r
 
     // internal node structure
-    //
-    // - for inner nodes, the 'key' is a shared key-prefix
-    //   above the critbit, right-shifted to hide critbit
-    //   and key suffix.
-    // - for leaf nodes, the 'key' is the final suffix, and
-    //   does not include the size
+    // - for inner nodes, the 'key' is a shared segment of
+    //   the key: the prefix to the critbit, but the suffix
+    //   to any nodes higher in the tree, right shifted.
+    // - for leaf nodes, the 'key' is the final suffix
     // - A node is never empty.
     type Node<'V> =
         | Leaf of Key * 'V
