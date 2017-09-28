@@ -16,7 +16,7 @@
 
     <Compile Include="IntMap.fs" />
     <Compile Include="Trie.fs" />
-    <Compile Include="LSMTree.fs" />
+    <Compile Include="LSMTrie.fs" />
 
     <Compile Include="Measured.fs" />
     <Compile Include="Monoid.fs" />

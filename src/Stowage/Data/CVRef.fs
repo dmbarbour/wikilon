@@ -23,8 +23,7 @@ module CVRef =
     /// Local compact value with serialization size estimate, generally
     /// from recently reading or compacting the value. The estimate 
     /// should be close enough to actual size for heuristics to work.
-    /// Values with sizes estimated smaller than the threshold won't
-    /// be compacted.
+    /// If the size isn't obvious, just use `local` instead.
     let inline localSized v sz = Local (v,sz)
 
     /// Remote value reference.
@@ -47,6 +46,12 @@ module CVRef =
         match ref with
         | Local _ -> ()
         | Remote r -> LVRef.clear r
+
+    /// Force initial stowage.
+    let inline force (ref:Ref<'V>) : unit =
+        match ref with
+        | Local _ -> ()
+        | Remote r -> LVRef.force r
 
     /// Primary codec for CVRef. 
     ///
