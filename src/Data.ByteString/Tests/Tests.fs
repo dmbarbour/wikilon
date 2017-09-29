@@ -133,10 +133,10 @@ let ``trivial byte writer`` () =
 [<Fact>]
 let ``trivial byte reader`` () =
     let x = (BS.fromString "==test==").[2..5]
-    let src = new ByteSrc(x)
-    let t = ByteStream.readByte src
-    let est = ByteStream.readBytes 3 src
-    Assert.True(ByteStream.eos src)
+    let (t,est) = ByteStream.read x (fun src ->
+        let t = ByteStream.readByte src
+        let est = ByteStream.readBytes 3 src
+        (t,est))
     Assert.Equal<byte>(t, byte 't')
     Assert.Equal<ByteString>(est, x.[1..])
 

@@ -64,13 +64,13 @@ module ByteStream =
     /// This allows a client to observe whatever they have written
     /// without extra intermediate buffers or arrays. However, the
     /// initial Dst must be sourced at a `write` operation.
-    let capture (writer:Dst -> unit) (dst:Dst) : ByteString =
+    let capture (dst:Dst) (writer:Dst -> unit) : ByteString =
         let p0 = dst.Pos
         writer dst
         captureBytes p0 dst
 
     /// Capture with an extra result.
-    let capture' (writer:Dst -> 'X) (dst:Dst) : (ByteString * 'X) =
+    let capture' (dst:Dst) (writer:Dst -> 'X) : (ByteString * 'X) =
         let p0 = dst.Pos
         let x = writer dst
         let b = captureBytes p0 dst
@@ -83,11 +83,11 @@ module ByteStream =
     /// one observer. You can use `reserve` immediately to provide an
     /// initial capacity.
     let write (writer:Dst -> unit) : ByteString = 
-        capture writer (new Dst())
+        capture (new Dst()) writer 
 
     /// Write with an extra result.
     let write' (writer: Dst -> 'X) : (ByteString * 'X) = 
-        capture' writer (new Dst()) 
+        capture' (new Dst()) writer  
 
     /// A ByteString Reader. 
     ///
@@ -101,7 +101,7 @@ module ByteStream =
         val internal Data : byte[]       // const
         val internal Limit : int         // max Pos
         val mutable internal Pos : int
-        new(s:ByteString) =
+        internal new(s:ByteString) =
             { Data = s.UnsafeArray 
               Limit = (s.Offset + s.Length) 
               Pos = s.Offset 
@@ -152,7 +152,7 @@ module ByteStream =
         result
 
     /// Ignore several bytes.
-    let inline skip (len:int) (src:Src) : unit = ignore (readBytes len src)
+    let skip (len:int) (src:Src) : unit = ignore (readBytes len src)
 
     /// Attempt to read a byte-stream, but backtrack on ReadError
     let tryRead (reader:Src -> 'X) (src:Src) : 'X option =
@@ -170,11 +170,12 @@ module ByteStream =
         with
         | ReadError -> src.Pos <- p0; None
 
-    /// Read a full ByteString.
+    /// Read a ByteString.
     ///
-    /// This will raise a ReadError if we're NOT at the end-of-stream
-    /// after performing a read.
-    let inline read (reader:Src -> 'X) (b:ByteString) : 'X =
+    /// Note: This will raise a ReadError if we're NOT at the end-of-stream
+    /// after performing a read. You might need to add a final readRem if 
+    /// you aren't at the end of stream.
+    let read (b:ByteString) (reader:Src -> 'X) : 'X =
         let src = new Src(b)
         let x = reader src
         if not (eos src) then raise ReadError
