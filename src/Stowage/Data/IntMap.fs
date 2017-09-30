@@ -7,12 +7,10 @@ open Data.ByteString
 /// than integer width (64 bits) and may be less.
 ///
 /// As a Stowage data structure, the main feature here is integration
-/// with Stowage databases. The IntMap supports stowage at any inner
-/// node of the tree, guided by serialization size thresholds. Remote
-/// nodes use LVRef to cache the load and parse for multiple lookups.
-/// For a sufficiently large IntMap, it's possible that only several
-/// volumes (subtrees) are fully loaded into memory. And updates to a
-/// durable IntMap can be efficient, sharing many on-disk references. 
+/// with Stowage databases. This IntMap supports stowage at any inner
+/// node of the tree - i.e. at any bit where a decision is made. But
+/// a CVRef size threshold ensures we don't write small nodes; if the
+/// values are small, we could have hundreds per write to Stowage.
 ///
 /// Use of stowage is not automatic. Explicit compaction is required.
 /// Hence, updates are 'buffered' in memory between compactions. If
@@ -43,31 +41,19 @@ module IntMap =
     /// for the leaf, a right-shifted slice for inner nodes.
     type Node<'V> =
         | Leaf of Key * 'V
-        | Inner of Size * Key * Critbit * NodePair<'V>
-    and NodePair<'V> = // either local or remote pair
-        | Local of Node<'V> * Node<'V> * SizeEst
-        | Remote of LVRef<Node<'V> * Node<'V>>
+        | Inner of Size * Key * Critbit * CVRef<struct(Node<'V> * Node<'V>)>
 
 
     module Node =
 
-        let local l r = Local (l,r,System.Int32.MaxValue)
+        let inline local l r = CVRef.local (struct(l,r))
+        let inline load np = CVRef.load np
+        let inline load' np = CVRef.load' np
 
         let inline size node = 
             match node with
             | Leaf _ -> 1UL
             | Inner (ct,_,_,_) -> ct
-
-        let inline load np = 
-            match np with
-            | Local (l,r,_) -> (l,r)
-            | Remote ref -> LVRef.load ref
-
-        let inline load' np = 
-            match np with
-            | Local (l,r,_) -> (l,r)
-            | Remote ref -> LVRef.load' ref
-
 
         // merge a key-prefix with key in node (via bitwise OR) 
         let mergeKP kp node =
@@ -87,7 +73,7 @@ module IntMap =
         let rec splitSize amt node =
             match node with
             | Inner (ct, p, b, np) when (ct > amt) ->
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 let ctL = size l
                 if (amt > ctL) then
                     let struct(rl,rr) = splitSize (amt - ctL) r
@@ -113,7 +99,7 @@ module IntMap =
                 if (p <> prefix kf b) then None else
                 let inR = testCritbit kf b
                 let kf' = suffix kf b
-                let (l,r) = load np
+                let struct(l,r) = load np
                 if inR then tryFind kf' r else tryFind kf' l
             | Leaf (k,v) -> if (kf = k) then Some v else None
 
@@ -126,12 +112,12 @@ module IntMap =
             | Inner (_, p, b, np) ->
                 if (p <> prefix kf b) then false else
                 match np with
-                | Local (l,r,_) -> 
+                | CVRef.Local (struct(l,r),_) ->
                     let inR = testCritbit kf b
                     let kf' = suffix kf b
                     if inR then isKeyRemote kf' r 
                            else isKeyRemote kf' l
-                | Remote _ -> true
+                | CVRef.Remote _ -> true
             | Leaf _ -> false
 
         // pull key into local memory
@@ -141,7 +127,7 @@ module IntMap =
                 if (p <> prefix kf b) then node else
                 let inR = testCritbit kf b
                 let kf' = suffix kf b
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 if inR 
                     then Inner (ct, p, b, local l (touch kf' r))
                     else Inner (ct, p, b, local (touch kf' l) r)
@@ -151,7 +137,7 @@ module IntMap =
         let rec expand node =
             match node with
             | Inner (ct, p, b, np) ->
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 Inner(ct, p, b, local (expand l) (expand r))
             | Leaf _ -> node
 
@@ -163,7 +149,7 @@ module IntMap =
                 if (p = kp) then // add with shared prefix
                     let inR = testCritbit k b
                     let k' = suffix k b
-                    let (l,r) = load' np
+                    let struct(l,r) = load' np
                     let (l',r') = if inR then (l, add k' v r) else (add k' v l, r)
                     let ct' = size l' + size r'
                     Inner (ct', p, b, local l' r')
@@ -190,7 +176,7 @@ module IntMap =
                 if (p <> prefix k b) then Some node else
                 let inR = testCritbit k b
                 let k' = suffix k b
-                let (l,r) = load np
+                let struct(l,r) = load np
                 if inR then 
                     match remove k' r with
                     | Some r' -> Some (Inner (ct, p, b, local l r'))
@@ -210,7 +196,7 @@ module IntMap =
                 if (kp > p) then (None, Some node) else
                 let k' = suffix k b
                 let inR = testCritbit k b
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 if inR then
                     let (rl,rr) = splitAtKey k' r
                     let l' = 
@@ -245,7 +231,7 @@ module IntMap =
                 c (Leaf (k,v'))
             | Inner (ct, p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 let l' = map c fn kl l
                 let r' = map c fn kr r
                 c (Inner (ct, p, b, local l' r'))
@@ -259,7 +245,7 @@ module IntMap =
                 | None -> None
             | Inner (ct, p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 let lFM = filterMap c fn kl l
                 let rFM = filterMap c fn kr r
                 match (lFM,rFM) with
@@ -279,7 +265,7 @@ module IntMap =
             | Leaf (k,v) -> fn (kp ||| k) v
             | Inner (_, p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 iter fn kl l
                 iter fn kr r
 
@@ -288,7 +274,7 @@ module IntMap =
             | Leaf (k,v) -> fn s (kp ||| k) v
             | Inner (_, p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 fold fn (fold fn s kl l) kr r
 
         let rec foldBack fn kp node s =
@@ -296,7 +282,7 @@ module IntMap =
             | Leaf (k,v) -> fn (kp ||| k) v s
             | Inner (_, p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 foldBack fn kl l (foldBack fn kr r s)
 
         let rec tryPick fn kp node =
@@ -304,7 +290,7 @@ module IntMap =
             | Leaf (k,v) -> fn (kp ||| k) v
             | Inner (_, p, b, np) ->
                 let struct(kl,kr) = keyPrefixes kp p b
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 let pickL = tryPick fn kl l
                 if Option.isSome pickL then pickL else
                 tryPick fn kr r
@@ -315,7 +301,7 @@ module IntMap =
                 | Leaf (k,v) -> yield ((kp ||| k), v)
                 | Inner (_, p, b, np) ->
                     let struct(kl,kr) = keyPrefixes kp p b
-                    let (l,r) = load' np
+                    let struct(l,r) = load' np
                     yield! toSeq kl l
                     yield! toSeq kr r
             }
@@ -326,7 +312,7 @@ module IntMap =
                 | Leaf (k,v) -> yield ((kp ||| k), v)
                 | Inner (_, p, b, np) ->
                     let struct(kl,kr) = keyPrefixes kp p b
-                    let (l,r) = load' np
+                    let struct(l,r) = load' np
                     yield! toSeqR kr r
                     yield! toSeqR kl l
             }
@@ -342,7 +328,7 @@ module IntMap =
             match node with
             | Leaf _ -> true
             | Inner (ct, p, b, np) ->
-                let (l,r) = load' np
+                let struct(l,r) = load' np
                 (63uy >= (1uy + b + Critbit.highBitIndex p))
                     && (ct = (size l + size r))
                     && (validKeySuffix b l) && (validate l)
@@ -536,7 +522,7 @@ module IntMap =
 
         // load + keys merged
         let split p b np = 
-            let (l,r) = Node.load' np
+            let struct(l,r) = Node.load' np
             let l' = Node.mergeL p b l
             let r' = Node.mergeR p b r
             struct(l',r')
@@ -552,7 +538,7 @@ module IntMap =
         let refEQ npa npb = // shallow reference equivalence
             if (System.Object.ReferenceEquals(npa,npb)) then true else
             match (npa,npb) with
-            | (Remote ra, Remote rb) -> (ra = rb) // stowage equivalence
+            | (CVRef.Remote ra, CVRef.Remote rb) -> (ra = rb) // stowage equivalence
             | _ -> false
 
         let rec stepDiff sa sb =
@@ -635,26 +621,6 @@ module IntMap =
     module EncNode =
         let cLeaf = byte 'L'
         let cInner = byte 'N'
-        let cLocal = byte 'P'
-        let cRemote = byte 'R'
-
-        let szRemote = 1 + EncLVRef.size
-
-        // The encoder is a bit awkward to write since I want to
-        // avoid constructing codec objects after initial setup.
-        //
-        // Also, element count is serialized only at Remote nodes,
-        // and recomputed upon read. 
-
-        let writeNodePair cNP ct np dst =
-            match np with
-            | Local (l,r,_) ->
-                EncByte.write cLocal dst
-                Codec.write cNP (l,r) dst
-            | Remote ref ->
-                EncByte.write cRemote dst
-                EncVarNat.write ct dst
-                EncLVRef.write ref dst
 
         let write cV cNP node dst =
             match node with
@@ -666,22 +632,9 @@ module IntMap =
                 EncByte.write cInner dst
                 EncVarNat.write p dst
                 EncByte.write b dst
-                writeNodePair cNP ct np dst
-
-        let readNodePair cNP db src =
-            let b0 = EncByte.read src
-            if (cLocal = b0) then
-                let s0 = ByteStream.bytesRem src
-                let (l,r) = Codec.read cNP db src
-                let sf = ByteStream.bytesRem src 
-                let ct = Node.size l + Node.size r
-                struct(Local (l,r,(s0 - sf)), ct)
-            else if (cRemote <> b0) then
-                raise (ByteStream.ReadError)
-            else
-                let ct = EncVarNat.read src
-                let ref = EncLVRef.read cNP db src
-                struct(Remote ref, ct)
+                CVRef.Enc.write cNP np dst
+                if (CVRef.isRemote np) 
+                    then EncVarNat.write ct dst
 
         let read cV cNP db src =
             let b0 = EncByte.read src
@@ -694,18 +647,14 @@ module IntMap =
             else 
                 let p = EncVarNat.read src
                 let b = EncByte.read src
-                let struct(np,ct) = readNodePair cNP db src
+                let np = CVRef.Enc.read cNP db src
+                let ct = // compute if local, read otherwise
+                    match np with
+                    | CVRef.Local (struct(l,r),_) ->
+                        Node.size l + Node.size r
+                    | CVRef.Remote _ ->
+                        EncVarNat.read src
                 Inner (ct,p,b,np)
-
-        let compactNodePair thresh cV cNP db np =
-            match np with
-            | Local(l,r,szEst) ->
-                if (szEst < thresh) then struct(np, 1 + szEst) else
-                let struct((l',r'),szLR) = Codec.compactSz cNP db (l,r)
-                if (szLR < thresh) then struct(Local(l',r',szLR), 1 + szLR) else
-                let ref = LVRef.stow cNP db (l',r')
-                struct(Remote ref, szRemote)
-            | Remote _ -> struct(np, szRemote)
 
         let compact thresh cV cNP db node =
             match node with
@@ -713,25 +662,25 @@ module IntMap =
                 let struct(v',szV) = Codec.compactSz cV db v
                 struct(Leaf(k,v'), 1 + EncVarNat.size k + szV)
             | Inner (ct,p,b,np) ->
-                let struct(np',szNP) = compactNodePair thresh cV cNP db np
+                let struct(np',szNP) = CVRef.Enc.compact' thresh cNP db np
                 let szCPB = EncVarNat.size ct + EncVarNat.size p + 1
                 struct(Inner(ct,p,b,np'), 1 + szCPB + szNP)
 
         // codec for pair of nodes is primary recursion point,
         // given we only compact at split points (pair of nodes).
         let codecNP (thresh:int) (cV:Codec<'V>) = 
-            { new Codec<Node<'V> * Node<'V>> with
-                member cNP.Write ((l,r)) dst = 
+            { new Codec<struct(Node<'V> * Node<'V>)> with
+                member cNP.Write (struct(l,r)) dst = 
                     write cV cNP l dst
                     write cV cNP r dst
                 member cNP.Read db src =
                     let l = read cV cNP db src
                     let r = read cV cNP db src
-                    (l,r)
-                member cNP.Compact db ((l,r)) =
+                    struct(l,r)
+                member cNP.Compact db (struct(l,r)) =
                     let struct(l',szL) = compact thresh cV cNP db l
                     let struct(r',szR) = compact thresh cV cNP db r
-                    struct((l',r'), szL + szR)
+                    struct(struct(l',r'), szL + szR)
             }
 
         let codec (thresh:int) (cV:Codec<'V>) = 
@@ -750,19 +699,19 @@ module IntMap =
 
     /// Codec for the full IntMap tree, given a value codec.
     ///
-    /// Note: Trees are large, having high compaction thresholds. if
-    /// you want small tree roots (e.g. if IntMap is value in another
-    /// collection), use the Ref type instead.
+    /// Note: Trees are large, having high compaction thresholds. So if
+    /// a tree is to be a value in a larger collection, consider wrapping
+    /// the tree in a CVRef with a smaller threshold (like 400-800 bytes).
     let treeCodec (cV:Codec<'V>) : Codec<Tree<'V>> =
         EncOpt.codec (nodeCodec cV)
 
     /// Compact a tree in memory.
     ///
     /// This serializes large subtrees into the Stowage database, thus
-    /// removing them from runtime memory. The data will be loaded as
-    /// needed for further lookups and manipulations of the tree. There
-    /// is some latency added for GC to intercede if it turns out this
-    /// value was intermediate.
+    /// removing them from runtime memory. Compaction is eager in this
+    /// case - we immediately serialize. But we still support cached 
+    /// loads when it's time to read parts of the tree, and the client
+    /// can buffer multiple tree updates between compactions.
     ///
     /// Note: If you plan to compact frequently, you should ensure your
     /// value type is either cheap to compact or caches compactions. An
@@ -772,25 +721,13 @@ module IntMap =
         | Some n -> Some (Codec.compact (nodeCodec cV) db n)
         | None -> None
 
-    let private compactor (cV:Codec<'V>) (db:Stowage) : Node<'V> -> Node<'V> =
-        let cN = nodeCodec cV
-        let inline force node =
-            match node with
-            | Inner(_,_,_,Remote ref) -> LVRef.force ref
-            | _ -> ()
-        let compactAndForce node =
-            match node with
-            | Inner _ -> 
-                let node' = Codec.compact cN db node
-                force node'
-                node'
-            | Leaf _ -> node
-        compactAndForce
+    let inline private compactor (cV:Codec<'V>) (db:Stowage) : Node<'V> -> Node<'V> =
+        Codec.compact (nodeCodec cV) db
 
     /// Map a function, simultaneously compacting.
     ///
     /// This is intended for use with larger-than-memory maps, and 
-    /// will systematically compact inner nodes.
+    /// will systematically compact inner nodes as they are constructed.
     let compactingMap (cU:Codec<'U>) (db:Stowage) (fn :Key -> 'V -> 'U) (t:Tree<'V>) : Tree<'U> =
         match t with
         | Some node -> Some (Node.map (compactor cU db) fn 0UL node)
@@ -814,43 +751,5 @@ module IntMap =
         | Some n -> Node.isKeyRemote k n
         | None -> false
 
-    /// A bounded-size reference for large maps.
-    ///
-    /// This is convenient when you have large collections of trees, or
-    /// will reference a map from many places and wish to avoid redundant
-    /// serialization. This is simply an alias for CVRef together with a 
-    /// few utility functions.
-    type Ref<'V> = CVRef<Tree<'V>>
-
-    /// A few hundred bytes is small enough for collections while large
-    /// enough to keep smaller collections inline or in memory, and to
-    /// help pay for the stowage reference overheads.
-    let refThresh : int = 600
-
-    /// Codec for tree references (CVRef with refThresh)
-    let refCodec (cV:Codec<'V>) = CVRef.codec refThresh (treeCodec cV)
-
-    /// Wrap any tree as if it were a stowed ref. This is convenient
-    /// when the IntMap is a value in a larger collection and may be
-    /// later compacted via refCodec. 
-    let inline stow' (t:Tree<'V>) : Ref<'V> = CVRef.local t
-
-    /// Rewrite a tree into a bounded-size reference.
-    ///
-    /// There is some latency between the request and serialization
-    /// to the database, and GC may intercede.
-    let stow (cV:Codec<'V>) (db:Stowage) (t:Tree<'V>) : Ref<'V> =
-        Codec.compact (refCodec cV) db (stow' t)
-
-    /// Non-caching load. Will use cache opportunistically, but 
-    /// does not keep values in memory.
-    let inline load' (ref:Ref<'V>) : Tree<'V> = CVRef.load' ref
-
-    /// Caching load. This will tend to keep the value in memory
-    /// for a little while so further loads are more efficient.
-    let inline load  (ref:Ref<'V>) : Tree<'V> = CVRef.load ref
-
-
 type IntMap<'V> = IntMap.Tree<'V>
-type IntMapRef<'V> = IntMap.Ref<'V>
 

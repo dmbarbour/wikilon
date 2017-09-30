@@ -44,15 +44,11 @@ module Codec =
 
     /// Read full bytestring as value, or raise ByteStream.ReadError
     let inline readBytes (c:Codec<'T>) (db:Stowage) (b:ByteString) : 'T =
-        ByteStream.read (read c db) b
+        ByteStream.read b (read c db) 
 
     /// Read full bytestring as value, or return None.
-    let tryReadBytes (c:Codec<'T>) (db:Stowage) (b:ByteString) : 'T option =
-        let src = new ByteSrc(b)
-        try let result = read c db src
-            if(ByteStream.eos src) 
-                then Some result 
-                else None
+    let inline tryReadBytes (c:Codec<'T>) (db:Stowage) (b:ByteString) : 'T option =
+        try readBytes c db b |> Some
         with 
         | ByteStream.ReadError -> None
 

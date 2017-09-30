@@ -37,6 +37,23 @@ type VRef<'V> =
           Hash = hash
         } 
 
+module EncRscHash =
+    let cPrefix = byte '{'
+    let cSuffix = byte '}'
+    let size = 2 + RscHash.size
+    let write (h:RscHash) (dst:ByteDst) =
+        assert(h.Length = RscHash.size)
+        ByteStream.writeByte cPrefix dst
+        ByteStream.writeBytes h dst
+        ByteStream.writeByte cSuffix dst
+    let read (src:ByteSrc) : RscHash =
+        let bPrefix = ByteStream.readByte src
+        if (bPrefix <> cPrefix) then raise ByteStream.ReadError
+        let h = ByteStream.readBytes (RscHash.size) src
+        let bSuffix = ByteStream.readByte src
+        if (bSuffix <> cSuffix) then raise ByteStream.ReadError
+        h
+
 module VRef =
 
     /// Create VRef by packaging Codec, Stowage DB, and RscHash.
@@ -64,27 +81,16 @@ module VRef =
         System.GC.KeepAlive ref
         result
 
-/// BRef (binary reference) indicates the trivial VRef<ByteString>.
-///
-/// Most VRefs have codecs that parse a stowed binary into structured
-/// data (which may recursively contain more VRefs). But the simple
-/// binary reference simply loads a resource unprocessed.
-type BRef = VRef<ByteString>
-
-module BRef =
-    /// This BRef codec will blindly read the entire stream, so it
-    /// is unsuitable for use with codec combinators. Indeed, there
-    /// isn't much use for it outside of BRefs.
-    let c : Codec<ByteString> =
-        { new Codec<ByteString> with
-            member __.Write b dst = ByteStream.writeBytes b dst
-            member __.Read db src = ByteStream.readRem src
-            member __.Compact db b = struct(b,b.Length)
-        }
-
-    let wrap' (db:Stowage) (h:RscHash)    : BRef = VRef.wrap' c db h
-    let wrap  (db:Stowage) (h:RscHash)    : BRef = VRef.wrap  c db h
-    let stow  (db:Stowage) (v:ByteString) : BRef = VRef.stow  c db v
-    let load  (ref:BRef) : ByteString = VRef.load ref
-
+    module Enc = 
+        let size = EncRscHash.size
+        let inline write (ref:VRef<_>) (dst:ByteDst) : unit = 
+            EncRscHash.write (ref.ID) dst
+        let inline read (c:Codec<'V>) (db:Stowage) (src:ByteSrc) : VRef<'V> =
+            wrap c db (EncRscHash.read src)
+        let codec (c:Codec<'V>) =
+            { new Codec<VRef<'V>> with
+                member __.Write ref dst = write ref dst
+                member __.Read db src = read c db src
+                member __.Compact _ ref = struct(ref, EncRscHash.size)
+            }
 

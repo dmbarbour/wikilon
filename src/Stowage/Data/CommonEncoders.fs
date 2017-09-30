@@ -131,71 +131,6 @@ module EncBytes =
             member __.Compact db b = struct(b,size b)
         }
 
-/// VRef hashes are simply serialized as `{hash}`
-module EncRscHash =
-    let size : int = 2 + RscHash.size
-    let sepL : byte = byte '{'
-    let sepR : byte = byte '}'
-    
-    let write (h:RscHash) (dst:ByteDst) =
-        assert(RscHash.size = h.Length)
-        ByteStream.writeByte sepL dst
-        ByteStream.writeBytes h dst
-        ByteStream.writeByte sepR dst
-
-    let read (src:ByteSrc) : RscHash =
-        let l = ByteStream.readByte src
-        if (sepL <> l) then raise ByteStream.ReadError
-        let h = ByteStream.readBytes RscHash.size src
-        let r = ByteStream.readByte src
-        if (sepR <> r) then raise ByteStream.ReadError
-        h
-
-    let codec =
-        { new Codec<RscHash> with
-            member __.Write h dst = write h dst
-            member __.Read db src = read src
-            member __.Compact db h = struct(h, size)
-        }
-
-module EncVRef =
-    let size : int = EncRscHash.size
-    let inline write (ref:VRef<_>) (dst:ByteDst) : unit = 
-        EncRscHash.write (ref.ID) dst
-    let inline read (c:Codec<'V>) (db:Stowage) (src:ByteSrc) : VRef<'V> =
-        VRef.wrap c db (EncRscHash.read src)
-    let codec (c:Codec<'V>) =
-        { new Codec<VRef<'V>> with
-            member __.Write ref dst = write ref dst
-            member __.Read db src = read c db src
-            member __.Compact _ ref = struct(ref, size)
-        }
-
-module EncBRef =
-    let size : int = EncVRef.size
-    let read (db:Stowage) (src:ByteSrc) : BRef = 
-        EncVRef.read (BRef.c) db src
-    let write (ref:BRef) (dst:ByteDst) : unit = 
-        EncVRef.write (ref) dst
-    let codec : Codec<BRef> = 
-        { new Codec<BRef> with
-            member __.Write ref dst = write ref dst
-            member __.Read db src = read db src
-            member __.Compact _ ref = struct(ref, size)
-        }
-
-module EncLVRef =
-    let size : int = EncVRef.size
-    let inline write (ref:LVRef<_>) (dst:ByteDst) : unit =
-        EncVRef.write (ref.VRef) dst
-    let inline read (c:Codec<'V>) (db:Stowage) (src:ByteSrc) : LVRef<'V> =
-        LVRef.wrap (EncVRef.read c db src)
-    let codec (c:Codec<'V>) =
-        { new Codec<LVRef<'V>> with
-            member __.Write ref dst = write ref dst
-            member __.Read db src = read c db src
-            member __.Compact _ ref = struct(ref, size)
-        }
 
 module EncPair =
     /// Codec combinator for structural pair.
@@ -325,8 +260,9 @@ module EncOpt =
                 | None -> struct(None,1)
         }
 
-    /// Codec combinator for option type. 
-    ///  Default discriminators based on VarNat encoding of 0,1
+    /// Codec combinator for option type. This one is designed so
+    /// we can transparently upgrade from option to a list or array
+    /// (sized by VarNat).
     let inline codec cV = codecP (128uy) (129uy) cV
 
 
