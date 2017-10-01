@@ -63,8 +63,8 @@ module Trie =
         if not (matchPrefix (t.prefix) k) then None else
         let k' = BS.drop (t.prefix.Length) k
         if (BS.isEmpty k') then (t.value) else
-        let child = uint64 (BS.unsafeHead k')
-        match IntMap.tryFind child (t.children) with
+        let ixChild = uint64 (BS.unsafeHead k')
+        match IntMap.tryFind ixChild (t.children) with
         | Some t' -> tryFind (BS.unsafeTail k') t'
         | None -> None 
 
@@ -77,8 +77,13 @@ module Trie =
         | Some v -> v
         | None -> raise (System.Collections.Generic.KeyNotFoundException())
 
+(*
+    let private diffByte (a:Key) (b:Key) : int option = 
+        let ixMax = min (a.Length) (b.Length)
+        let rec loop ix =
+
     //let rec add (k:Key) (v:'V) (t:Tree<'V>) : Tree<'V> =
-        
+*)      
 
 
 

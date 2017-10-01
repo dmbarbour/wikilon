@@ -37,23 +37,6 @@ type VRef<'V> =
           Hash = hash
         } 
 
-module EncRscHash =
-    let cPrefix = byte '{'
-    let cSuffix = byte '}'
-    let size = 2 + RscHash.size
-    let write (h:RscHash) (dst:ByteDst) =
-        assert(h.Length = RscHash.size)
-        ByteStream.writeByte cPrefix dst
-        ByteStream.writeBytes h dst
-        ByteStream.writeByte cSuffix dst
-    let read (src:ByteSrc) : RscHash =
-        let bPrefix = ByteStream.readByte src
-        if (bPrefix <> cPrefix) then raise ByteStream.ReadError
-        let h = ByteStream.readBytes (RscHash.size) src
-        let bSuffix = ByteStream.readByte src
-        if (bSuffix <> cSuffix) then raise ByteStream.ReadError
-        h
-
 module VRef =
 
     /// Create VRef by packaging Codec, Stowage DB, and RscHash.
@@ -81,16 +64,35 @@ module VRef =
         System.GC.KeepAlive ref
         result
 
-    module Enc = 
-        let size = EncRscHash.size
-        let inline write (ref:VRef<_>) (dst:ByteDst) : unit = 
-            EncRscHash.write (ref.ID) dst
-        let inline read (c:Codec<'V>) (db:Stowage) (src:ByteSrc) : VRef<'V> =
-            wrap c db (EncRscHash.read src)
-        let codec (c:Codec<'V>) =
-            { new Codec<VRef<'V>> with
-                member __.Write ref dst = write ref dst
-                member __.Read db src = read c db src
-                member __.Compact _ ref = struct(ref, EncRscHash.size)
-            }
+module EncRscHash =
+    let cPrefix = byte '{'
+    let cSuffix = byte '}'
+    let size = 2 + RscHash.size
+    let write (h:RscHash) (dst:ByteDst) =
+        assert(h.Length = RscHash.size)
+        ByteStream.writeByte cPrefix dst
+        ByteStream.writeBytes h dst
+        ByteStream.writeByte cSuffix dst
+    let read (src:ByteSrc) : RscHash =
+        let bPrefix = ByteStream.readByte src
+        if (bPrefix <> cPrefix) then raise ByteStream.ReadError
+        let h = ByteStream.readBytes (RscHash.size) src
+        let bSuffix = ByteStream.readByte src
+        if (bSuffix <> cSuffix) then raise ByteStream.ReadError
+        h
+
+
+module EncVRef = 
+    let size = EncRscHash.size
+    let inline write (ref:VRef<_>) (dst:ByteDst) : unit = 
+        EncRscHash.write (ref.ID) dst
+    let inline read (cV:Codec<'V>) (db:Stowage) (src:ByteSrc) : VRef<'V> =
+        let h = EncRscHash.read src
+        VRef.wrap cV db h
+    let codec (c:Codec<'V>) =
+        { new Codec<VRef<'V>> with
+            member __.Write ref dst = write ref dst
+            member __.Read db src = read c db src
+            member __.Compact _ ref = struct(ref, EncRscHash.size)
+        }
 

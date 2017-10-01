@@ -2,12 +2,8 @@ namespace Stowage
 open Data.ByteString
 
 /// A VarNat is an efficient encoding for a natural number in 
-/// base128, such that we can easily distinguish the end of 
-/// the number. 
-///
-/// The encoding uses (0..127)*(128..255). This ensures there
-/// is no interference between the final byte of the VarNat and
-/// any RscHash dependencies.
+/// base128, high bit from each byte to indicate whether the
+/// byte is the final one.
 module EncVarNat =
 
     let rec private sizeLoop ct n = 
@@ -93,42 +89,48 @@ module EncByte =
         }
 
 /// ByteString encoding:
-///  (size)(data)(sep)
+///  (size)(data)
 ///
-/// (size) uses EncVarNat - i.e. (0..127)*(128..255)
+/// (size) uses EncVarNat
 /// (data) is encoded raw
-/// (sep) is simply an SP (32), but is conditional:
-///   (sep) is added iff data terminates in RscHash.isHashByte.
 ///
-/// This construction ensures easy recognition of secure hash resource
-/// references represented within the bytestring. 
+/// This is intended for encoding bytestrings mixed with other data.
+/// It's assumed that, if the data contains any RscHash references,
+/// those references should be protected from adjacency issues (e.g.
+/// like how EncRscHash uses `{hash}`. 
 module EncBytes =
-
-    let sep : byte = 32uy
-    let sepReq (b:ByteString) : bool =
-        (b.Length > 0) && (RscHash.isHashByte (b.[b.Length - 1]))
-
     let size (b:ByteString) : int =
-        EncVarNat.size (uint64 b.Length) 
-            + b.Length 
-            + (if (sepReq b) then 1 else 0)
+        EncVarNat.size (uint64 b.Length) + b.Length 
 
     let write (b:ByteString) (dst:ByteDst) : unit =
         EncVarNat.write (uint64 b.Length) dst
         ByteStream.writeBytes b dst
-        if (sepReq b) then EncByte.write sep dst
 
     let read (src:ByteSrc) : ByteString =
         let len = EncVarNat.read src
-        let b = ByteStream.readBytes (int len) src
-        if (sepReq b) then EncByte.expect sep src
-        b
+        ByteStream.readBytes (int len) src
 
     let codec =
         { new Codec<ByteString> with
             member __.Write b dst = write b dst
             member __.Read db src = read src
             member __.Compact db b = struct(b,size b)
+        }
+
+/// Raw ByteString Encoder. 
+///
+/// This codec is suitable for a *Ref<ByteString>, such that the binary
+/// is not mixed with any other data. On read, it trivially consumes all 
+/// the data from the input stream.
+module EncBytesRaw =
+    let inline size (b:ByteString) : int = b.Length
+    let inline write b dst = ByteStream.writeBytes b dst
+    let inline read src = ByteStream.readRem src
+    let codec = 
+        { new Codec<ByteString> with
+            member __.Write b dst = write b dst
+            member __.Read db src = read src
+            member __.Compact db b = struct(b, size b)
         }
 
 

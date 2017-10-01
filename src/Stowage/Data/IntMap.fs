@@ -112,12 +112,12 @@ module IntMap =
             | Inner (_, p, b, np) ->
                 if (p <> prefix kf b) then false else
                 match np with
-                | CVRef.Local (struct(l,r),_) ->
+                | Local (struct(l,r),_) ->
                     let inR = testCritbit kf b
                     let kf' = suffix kf b
                     if inR then isKeyRemote kf' r 
                            else isKeyRemote kf' l
-                | CVRef.Remote _ -> true
+                | Remote _ -> true
             | Leaf _ -> false
 
         // pull key into local memory
@@ -538,7 +538,7 @@ module IntMap =
         let refEQ npa npb = // shallow reference equivalence
             if (System.Object.ReferenceEquals(npa,npb)) then true else
             match (npa,npb) with
-            | (CVRef.Remote ra, CVRef.Remote rb) -> (ra = rb) // stowage equivalence
+            | (Remote ra, Remote rb) -> (ra = rb) // stowage equivalence
             | _ -> false
 
         let rec stepDiff sa sb =
@@ -632,7 +632,7 @@ module IntMap =
                 EncByte.write cInner dst
                 EncVarNat.write p dst
                 EncByte.write b dst
-                CVRef.Enc.write cNP np dst
+                EncCVRef.write cNP np dst
                 if (CVRef.isRemote np) 
                     then EncVarNat.write ct dst
 
@@ -647,12 +647,12 @@ module IntMap =
             else 
                 let p = EncVarNat.read src
                 let b = EncByte.read src
-                let np = CVRef.Enc.read cNP db src
+                let np = EncCVRef.read cNP db src
                 let ct = // compute if local, read otherwise
                     match np with
-                    | CVRef.Local (struct(l,r),_) ->
+                    | Local (struct(l,r),_) ->
                         Node.size l + Node.size r
-                    | CVRef.Remote _ ->
+                    | Remote _ ->
                         EncVarNat.read src
                 Inner (ct,p,b,np)
 
@@ -662,7 +662,7 @@ module IntMap =
                 let struct(v',szV) = Codec.compactSz cV db v
                 struct(Leaf(k,v'), 1 + EncVarNat.size k + szV)
             | Inner (ct,p,b,np) ->
-                let struct(np',szNP) = CVRef.Enc.compact' thresh cNP db np
+                let struct(np',szNP) = EncCVRef.compact thresh cNP db np
                 let szCPB = EncVarNat.size ct + EncVarNat.size p + 1
                 struct(Inner(ct,p,b,np'), 1 + szCPB + szNP)
 
