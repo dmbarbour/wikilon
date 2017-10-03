@@ -235,7 +235,7 @@ module EncQuad =
     let codec cA cB cC cD =
         let get (struct(a,b,c,d)) = (a,b,c,d)
         let set ((a,b,c,d)) = struct(a,b,c,d)
-        Codec.lens (codec' cA cB cC cD) get set
+        Codec.view (codec' cA cB cC cD) get set
 
 
 module EncOpt =
@@ -315,24 +315,24 @@ module EncArray =
 /// Encode a list via array.
 module EncList =
     let codec (cV:Codec<'V>) =
-        Codec.lens (EncArray.codec' cV) (List.ofArray) (List.toArray)
+        Codec.view (EncArray.codec' cV) (List.ofArray) (List.toArray)
 
 /// Encode a sequence via array.
 module EncSeq =
     let codec (cV:Codec<'V>) =
-        Codec.lens (EncArray.codec' cV) (Seq.ofArray) (Seq.toArray)
+        Codec.view (EncArray.codec' cV) (Seq.ofArray) (Seq.toArray)
 
 /// Encode a map via array.
 module EncMap =
     let codec (cK:Codec<'K>) (cV:Codec<'V>) =
         let cKV = EncPair.codec cK cV
-        Codec.lens (EncArray.codec' cKV) (Map.ofArray) (Map.toArray)
+        Codec.view (EncArray.codec' cKV) (Map.ofArray) (Map.toArray)
 
 /// Encode a BTree via array.
 module EncBTree =
     let codec (cV:Codec<'V>) =
         let cKV = EncPair.codec (EncBytes.codec) cV
-        Codec.lens (EncArray.codec' cKV) (BTree.ofArray) (BTree.toArray)
+        Codec.view (EncArray.codec' cKV) (BTree.ofArray) (BTree.toArray)
 
 
 

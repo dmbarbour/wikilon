@@ -1,7 +1,10 @@
 namespace Stowage
 open Data.ByteString
 
-/// Estimated Serialization Size (in bytes)
+/// Estimated Serialization Size (in bytes).
+///
+/// Stowage is limited to objects of about 64MB or less, so a plain
+/// old 31-bit integer is plenty sufficient for size estimates.
 type SizeEst = int
 
 /// Abstract encoder-decoder type for data in Stowage.
@@ -71,7 +74,7 @@ module Codec =
     /// This is very useful for building codec combinators. It should be
     /// the case that get and set compose to identity, and the translation
     /// should ideally be inexpensive in each direction.
-    let lens (cRep : Codec<'Rep>) (get : 'Rep -> 'Val) (set : 'Val -> 'Rep) =
+    let view (cRep : Codec<'Rep>) (get : 'Rep -> 'Val) (set : 'Val -> 'Rep) =
         { new Codec<'Val> with
             member __.Write v dst = cRep.Write (set v) dst
             member __.Read db src = get (cRep.Read db src)

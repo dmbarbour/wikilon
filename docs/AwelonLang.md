@@ -57,7 +57,7 @@ Newlines and tabs are among the rejected characters. However, humans will freque
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Structurally, a word starts with a lower case alpha and may otherwise contain lower case alphas, digits, and the underscore. As a regular expression, this is: `[a-z][a-z_0-9]*`. There is also a size limit: words should not surpass 32 characters in length.
+Words are the user-definable unit for Awelon code. Structurally, a word starts with a lower case alpha and may otherwise contain lower case alphas, digits, and the underscore. As a regular expression, this is: `[a-z][a-z_0-9]*`. There is also a size limit: words must not surpass 64 characters in length. Most words should be much smaller. But in context of editable views, words might have internal structure.
 
 Words are evaluated in context of a *Dictionary*, where each word is defined by an Awelon program. Definitions of words within a dictionary must form a directed acyclic graph. The semantics for words are extremely trivial: we lazily substitute the word by its definition.
 
@@ -253,13 +253,15 @@ The arity annotation `(a3)` defers further expansion of the `[[F]z]` result. The
 
 ## Memoization
 
-The primary basis for incremental computing in Awelon is [memoization](https://en.wikipedia.org/wiki/Memoization). Evaluation of dictionary definitions will tend to be implicitly memoized. But programmers may also request memoized evaluation explicitly:
+The primary basis for incremental computing in Awelon is [memoization](https://en.wikipedia.org/wiki/Memoization). 
+
+The essential idea is to record a computation and its result, and then to lookup the result rather than recompute it. In context of Awelon systems, word definitions and `$secureHash` references are natural targets for memoization because the computation has already been recorded and the overhead for lookup of the result is much smaller. But we can support flexible and precise access to runtime memoization through annotations:
 
         [computation](memo)
 
-Memoization is conceptually performed by by seeking the computation in a runtime lookup table. This lookup must account for words having different meanings in context of different dictionaries. If the computation is found in the table, the runtime will simply replace the computation with the evaluated result. If the computation is not found, we evaluate then heuristically store the computation into the table based on observed and estimated future time and space tradeoffs.
+The main challenge for effective memoization is precise lookup. Irrelevant differences between similar dictionaries should not interfere with this lookup. Hence, our lookup might compare not just a representation of the computation, but also a reasonably precise representation for arities and definitions of its dependencies, e.g. via transitive memoization. (The acyclic structure of valid Awelon code helps here.) However, even imprecise implementations for memoization can be effective and useful in practice.
 
-To effectively support incremental computing, memoization must be used with cache-friendly patterns, persistent data structures, and large-value stowage. So some careful design is required to leverage this feature.
+To support incremental computing, memoization must be combined with cache-friendly computing patterns. Persistent data structures with stowage are especially useful. For example, if we memoize a computed monoidal value for each node in a persistent tree, computing a slightly different tree could easily reuse most of the memoization effort.
 
 ## Static Linking
 

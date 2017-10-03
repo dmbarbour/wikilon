@@ -6,12 +6,12 @@ open Data.ByteString
 /// The overhead for secure hash resources is relatively high, so we don't
 /// want to use them for small values. Instead, keep small values inline.
 /// CVRef models this common use case. It is either a value in local memory
-/// or a cacheable BVRef. Upon compaction, we heuristically move large data
-/// into BVRefs while. Repeated compactions are short-circuited by keeping
+/// or a cacheable LVRef. Upon compaction, we heuristically move large data
+/// into LVRefs while. Repeated compactions are short-circuited by keeping
 /// some size metadata.
 type CVRef<'V> =
     | Local of 'V * SizeEst
-    | Remote of BVRef<'V>
+    | Remote of LVRef<'V>
 
 /// Serialization for CVRef
 module EncCVRef =
@@ -43,7 +43,7 @@ module EncCVRef =
             let h = ByteStream.readBytes (RscHash.size) src
             let bf = ByteStream.readByte src
             if (bf <> EncRscHash.cSuffix) then raise ByteStream.ReadError
-            Remote (BVRef.wrap (VRef.wrap cV db h))
+            Remote (LVRef.wrap (VRef.wrap cV db h))
 
     let compact (thresh:int) (cV:Codec<'V>) (db:Stowage) (ref:CVRef<'V>) : struct(CVRef<'V> * int) =
         match ref with
@@ -51,7 +51,7 @@ module EncCVRef =
             if (szEst < thresh) then struct(ref, 1 + szEst) else
             let struct(v',szV) = Codec.compactSz cV db v
             if (szV < thresh) then struct(Local(v',szV), 1 + szV) else
-            struct(Remote (BVRef.stow cV db v' szV), EncRscHash.size)
+            struct(Remote (LVRef.stow cV db v' szV), EncRscHash.size)
         | Remote _ -> struct(ref, EncRscHash.size)
 
     let codec (thresh:int) (cV:Codec<'V>) =
@@ -80,19 +80,19 @@ module CVRef =
     let load (ref:CVRef<'V>) : 'V =
         match ref with
         | Local (v,_) -> v
-        | Remote r -> BVRef.load r
+        | Remote r -> LVRef.load r
 
     /// Non-caching access to value.
     let load' (ref:CVRef<'V>) : 'V = 
         match ref with
         | Local (v,_) -> v
-        | Remote r -> BVRef.load' r
+        | Remote r -> LVRef.load' r
 
     /// Forcibly clear cached value (if any).
     let clear (ref:CVRef<'V>) : unit =
         match ref with
         | Local _ -> ()
-        | Remote r -> BVRef.clear r
+        | Remote r -> LVRef.clear r
 
     let inline stow (thresh:int) (cV:Codec<'V>) (db:Stowage) (v:'V) : CVRef<'V> =
         let struct(ref,_) = EncCVRef.compact thresh cV db (local v)
