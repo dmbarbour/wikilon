@@ -21,6 +21,8 @@
     <Compile Include="Monoid.fs" />
     <Compile Include="FingerTree.fs" />
     <Compile Include="Seq.fs" />
+
+    <Compile Include="TX.fs" />
   </ItemGroup>
 
   <ItemGroup>

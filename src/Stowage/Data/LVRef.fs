@@ -56,7 +56,10 @@ module LVRef =
 
     /// Wrap an existing VRef.
     let wrap (vref:VRef<'V>) : LVRef<'V> = 
-        new LVRef<'V>(lazy vref, None)
+        let lvref = lazy vref
+        lvref.Force() |> ignore<VRef<'V>>
+        new LVRef<'V>(lvref, None)
+        
 
     /// Non-buffered, immediate stowage.
     let inline stow' (cV:Codec<'V>) (db:Stowage) (v:'V) : LVRef<'V> = 
@@ -213,44 +216,57 @@ module LVRef =
                 if(cacheOverflow c)
                     then Monitor.PulseAll(c))
 
-        let sharedCache : Cache =
-            let c = new Cache() 
+        let init () : Cache = 
+            let c = new Cache()
             (new Thread(fun () -> cacheManagerLoop c)).Start()
             c
 
-    /// Configure the LVRef shared cache size in approximate bytes.
-    /// The default is about eighty megabytes, but this can be set
-    /// much larger in a system with a lot of RAM, or smaller for 
-    /// an application with a small working set.
-    ///
-    /// The cache should be large compared to the cached items and the
-    /// normal working set. If this is not the case, cache will thrash
-    /// and performance will swiftly degrade. 
-    let setCacheSize (sz:uint64) : unit =
-        C.setCacheSize (C.sharedCache) sz
+    let private sharedCache = lazy (C.init ())
 
-    /// Add an object to the shared cache, such that it may be cleared
-    /// after the cache has too much data. The size estimate is used to
-    /// signal the cache to clear data relative to cache size. Items are
-    /// not immediately cleared - heuristics target older objects that
-    /// were not recently used. 
+    /// Configure the LVRef shared cache size in approximate bytes.
+    /// The default cache size is about eighty megabytes, although
+    /// this isn't precise: the cache treats tiny resources as 200
+    /// bytes, and resource size estimates aren't exact.
     ///
-    /// The `touch` parameter affects the recorded `Usage` so we treat
-    /// the object as recently used. This must be used sparingly: it is
-    /// useful only if enough other items may be immediately cleared.
+    /// When cache overflows, a background thread will Clear items,
+    /// targeting older objects that have not been recently used. A
+    /// little randomness is added to mitigate aliasing issues. But
+    /// the background works until there is no more overflow. 
     ///
-    /// Cache leverages weak refs to avoid interference with .Net GC.
-    /// There is no guarantee the `Clear` method will ever be called.
+    /// The cache size should be large compared to the normal working
+    /// set. Otherwise, the cache thrashes and performance degrades.
+    /// It also shouldn't be set larger than RAM. Cached LVRefs serve
+    /// as a purely functional variant of virtual memory.
+    let setCacheSize (sz:uint64) : unit =
+        C.setCacheSize (sharedCache.Value) sz
+
+    /// Manage a cached resource, overflow driven (cf setCacheSize).
+    ///     
+    /// The cache leverages weak references to avoid interfering with
+    /// .Net GC of cached items. We don't guarantee the `Clear` method
+    /// will ever be called.
+    ///
+    /// The `touch` option logically marks a resource as recently used.
+    /// This causes the data to live one step longer than unmarked items
+    /// created around the same time. But it should be used sparingly.
+    ///
+    /// This is the same method used to cache LVRefs upon stow and load.
+    /// It is exposed since it might prove useful in many other cases.
     let cache (o:Cached) (szEst:SizeEst) (touch:bool) =
         let tc = o.Usage + (if touch then System.Int32.MaxValue else 0)
-        let sz = 120u + uint32 (min 80 szEst)
+        let sz = 120u + uint32 (max 80 szEst)
         let wref = System.WeakReference(o :> System.Object)
-        C.cacheAdd (C.sharedCache) (C.Obj(tc,sz,wref)) 
+        C.cacheAdd (sharedCache.Value) (C.Obj(tc,sz,wref)) 
 
-    /// Stow a value eventually. Meanwhile, data is cached in memory,
-    /// and GC of the LVRef at the .Net layer may prevent the data from
-    /// ever being stowed. This can help avoid serializing intermediate
-    /// states when constructing persistent data structures.
+    /// Stow a value, eventually. 
+    ///
+    /// Meanwhile, the data is a cached resource. And if the LVRef is
+    /// garbage collected before stowage, we can avoid serializing the
+    /// data structure entirely. This is a feature: it reduces risk of
+    /// writing intermediate states for persistent data structures.
+    ///
+    /// Any request for the VRef or ID (for serialization, comparison,
+    /// or hash) will prematurely force stowage. So try to avoid that.
     let stow (c:Codec<'V>) (db:Stowage) (v:'V) (sz:SizeEst) : LVRef<'V> =
         let ref = new LVRef<'V>(lazy (VRef.stow c db v), Some v)
         cache (ref :> Cached) sz true

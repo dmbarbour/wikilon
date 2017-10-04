@@ -62,6 +62,8 @@ type ByteString =
         match yobj with
             | :? ByteString as y -> ByteString.Eq x y
             | _ -> false
+    interface System.IEquatable<ByteString> with
+        member x.Equals y = ByteString.Eq x y
 
     /// a constant-time equality comparison on data to control
     /// time-leaks of data. 
@@ -89,6 +91,8 @@ type ByteString =
             match yobj with
                 | :? ByteString as y -> ByteString.Compare x y
                 | _ -> invalidArg "yobj" "cannot compare values of different types"
+    interface System.IComparable<ByteString> with
+        member x.CompareTo y = ByteString.Compare x y
 
     member x.GetEnumerator() : System.Collections.Generic.IEnumerator<byte> =
         if (0 = x.Length) then Seq.empty.GetEnumerator() else
