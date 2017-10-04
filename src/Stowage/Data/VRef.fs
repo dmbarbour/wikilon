@@ -89,10 +89,10 @@ module EncVRef =
     let inline read (cV:Codec<'V>) (db:Stowage) (src:ByteSrc) : VRef<'V> =
         let h = EncRscHash.read src
         VRef.wrap cV db h
-    let codec (c:Codec<'V>) =
+    let codec (cV:Codec<'V>) =
         { new Codec<VRef<'V>> with
             member __.Write ref dst = write ref dst
-            member __.Read db src = read c db src
-            member __.Compact _ ref = struct(ref, EncRscHash.size)
+            member __.Read db src = read cV db src
+            member __.Compact _ ref = struct(ref, size)
         }
 

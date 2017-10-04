@@ -1,11 +1,12 @@
 namespace Stowage
 open System.Threading
+open Data.ByteString
 
 /// Abstract cached resource. 
 ///
 /// A cached resource provides both an interface to clear the cache
-/// and a 'usage' heuristic, usually a simple touch count, to delay
-/// release of a recently used resource.
+/// and a 'usage' heuristic - usually a touch count or time stamp -
+/// to delay release of a recently used resource.
 type Cached =
     abstract member Usage : int
     abstract member Clear : unit -> unit
@@ -64,7 +65,9 @@ module LVRef =
     /// Non-caching Load. 
     ///
     /// Will use cache opportunistically, but does not cause data
-    /// to be buffered if it isn't already available in memory.
+    /// to be buffered if it isn't already available in memory. This
+    /// method can be useful if you know you're about to produce an 
+    /// updated value and won't be holding onto the Ref.
     let load' (ref:LVRef<'V>) : 'V =
         match ref.cache with
         | None -> VRef.load (ref.VRef)
@@ -84,23 +87,31 @@ module LVRef =
         type CacheFrame =
             val mutable elems : Obj[]   // resizable
             val mutable count : int
-            new() = { elems = Array.empty; count = 0 }
+            new() = 
+                { elems = Array.empty 
+                  count = 0 
+                }
+
+        let cfResize (f:CacheFrame) (sz:int) : unit =
+            assert(sz >= f.count)
+            if (sz = f.elems.Length) then () else
+            let new_array = Array.zeroCreate sz
+            Array.blit (f.elems) 0 (new_array) 0 (f.count)
+            f.elems <- new_array
 
         let cfGrow (f:CacheFrame) : unit =
-            let new_size = max 16 (2 * (f.elems.Length))
-            let new_array = Array.zeroCreate new_size
-            Array.blit (f.elems) 0 (new_array) 0 (f.count)
-            f.elems <- new_array
+            let len' = max 16 (f.elems.Length <<< 1)
+            cfResize f len'
 
-        let cfTrim (f:CacheFrame) : unit =
-            let tgt_len = min 16 (f.elems.Length >>> 2)
-            if (f.count >= tgt_len) then () else
-            let new_array = Array.zeroCreate tgt_len
-            Array.blit (f.elems) 0 (new_array) 0 (f.count)
-            f.elems <- new_array
+        let cfTrimExcess (f:CacheFrame) : unit =
+            // reduce size only if we have a lot of excess
+            let threshold = ((f.elems.Length >>> 3) > (f.count))
+            if not threshold then () else
+            let len' = max 16 (f.elems.Length >>> 1)
+            cfResize f len'
 
         let cfAdd (f:CacheFrame) (o:Obj) : unit = 
-            if(f.tail = f.elems.Length) 
+            if(f.count = f.elems.Length) 
                 then cfGrow f
             f.elems.[f.count] <- o
             f.count <- (1 + f.count)
@@ -109,16 +120,15 @@ module LVRef =
         let cfRemoveAt (f:CacheFrame) (ix:int) : unit =
             assert(ix < f.count)
             f.count <- (f.count - 1)
-            f.elems.[ix] = f.elems.[f.count]
+            f.elems.[ix] <- f.elems.[f.count]
 
         // scrubFrame will erase a percentage `p` of elements that
-        // haven't been touched (according to Usage) since the prior
-        // scrub. This provides a simple basis for exponential decay.
-        // Also, anything GC'd according to WeakRef is always scrubbed. 
-        // The return value is the number of bytes scrubbed.
+        // haven't been touched (according to Usage) since a prior
+        // scrubbing. 
         let scrubFrame (rnd:System.Random) (p:int) (cf:CacheFrame) : uint64 =
+            assert(p > 0)
             let rec loop amt ix = 
-                if (ix >= cf.count) then amt else
+                if (ix = cf.count) then amt else
                 let o = cf.elems.[ix]
                 match o.ref.Target with
                 | null ->
@@ -132,47 +142,51 @@ module LVRef =
                         c.Clear()
                         loop (amt + uint64 o.sz) ix
                     else // keep, but track new touch count
-                        cf.elems.[ix] = Obj(tc,o.sz,o.ref)
+                        cf.elems.[ix] <- Obj(tc,o.sz,o.ref)
                         loop amt (ix + 1)
-                | _ -> failwith "scrub non-Cached object"
+                | _ -> failwith "invalid state: non-Cached object in cache"
             let result = loop 0UL 0
-            cfTrim cf
+            cfTrimExcess cf
             result
 
-        let defaultCacheMax : uint64 = 
-            // eighty megabytes is a reasonable default
-            uint64 (80 * 1000 * 1000)
-
         // If we have 12 frames and scrub 60% per frame, then we'll
-        // erase about 5% of cached per frame. At least, after the
-        // cache is fully 'warmed up'. 
-        //
-        // During warmup, we can effectively treat the Cache as having
-        // one frame, then two, then three, etc. up to the maximum.
+        // erase about 5% of total cache per frame after warmup.
         let frameCount = 12
         let percentScrub = 60
+
+        // Our maximum cache size determines how much (approximately)
+        // we'll keep in memory at any given moment. This is runtime
+        // configurable, but we'll default to about eighty megabytes.
+        let cacheSizeDefault = uint64 (80 * 1000 * 1000)
 
         // This cache uses a flexible, heuristic combination of two
         // policies: least recently used and random replacement. We
         // scrub random, untouched elements from the oldest frames.
+        //
+        // Random replacement can mitigate aliasing concerns when the
+        // cache is a little too small for some use case. It means the
+        // old cache has a chance for survival at the cost of newer
+        // values.
         type Cache = 
             val mutable szMax   : uint64  // configured maximum size
             val mutable szCur   : uint64  // computed size of data
             val mutable ixHd    : int          // index of 'head' frame
             val frames          : CacheFrame[] // rotating array of frames
-            val rnd             : System.Random
+            val rndSrc          : System.Random
             new() =
-                { szMax = defaultCacheMax
-                  szTotal = 0un
-                  frames = Array.init frameCount (fun i -> new ResizeArray<Obj>()) 
-                  rnd = new System.Random(0)
+                assert(frameCount > 1)
+                { szMax  = cacheSizeDefault
+                  szCur  = 0UL
+                  ixHd   = 0
+                  frames = Array.init frameCount (fun i -> new CacheFrame()) 
+                  rndSrc = new System.Random(0)
                 }
 
         let cacheOverflow (c:Cache) : bool = (c.szCur > c.szMax)
 
         let cacheAdd (c:Cache) (o:Obj) : unit =
             lock c (fun () ->
-                cfAdd (c.frames.[ixHd]) o
+                cfAdd (c.frames.[c.ixHd]) o
                 c.szCur <- (c.szCur + uint64 o.sz)
                 if (cacheOverflow c) 
                     then Monitor.PulseAll(c))
@@ -185,9 +199,9 @@ module LVRef =
                 if not (cacheOverflow c) 
                     then Monitor.Wait(c) |> ignore<bool>
                 c.ixHd <- cacheNextHd c)
-            // concurrently scrub the next frame we'll write.
+            // scrub next write-frame in background
             let cfScrub = c.frames.[cacheNextHd c]
-            let amtScrubbed = scrubFrame (c.rnd) percentScrub cfScrub
+            let amtScrubbed = scrubFrame (c.rndSrc) percentScrub cfScrub
             lock c (fun () ->
                 assert(c.szCur >= amtScrubbed)
                 c.szCur <- (c.szCur - amtScrubbed))
@@ -196,34 +210,50 @@ module LVRef =
         let setCacheSize (c:Cache) (sz:uint64) : unit =
             lock c (fun () ->
                 c.szMax <- sz
-                if(cacheOverlow c)
+                if(cacheOverflow c)
                     then Monitor.PulseAll(c))
 
         let sharedCache : Cache =
-            let c = new Cache(12) 
+            let c = new Cache() 
             (new Thread(fun () -> cacheManagerLoop c)).Start()
             c
 
-    /// Configure the LVRef shared cache size. 
+    /// Configure the LVRef shared cache size in approximate bytes.
+    /// The default is about eighty megabytes, but this can be set
+    /// much larger in a system with a lot of RAM, or smaller for 
+    /// an application with a small working set.
+    ///
+    /// The cache should be large compared to the cached items and the
+    /// normal working set. If this is not the case, cache will thrash
+    /// and performance will swiftly degrade. 
     let setCacheSize (sz:uint64) : unit =
         C.setCacheSize (C.sharedCache) sz
 
-    /// Add an object to the shared cache, with option for to live for
-    /// one extra cycle. Some overhead is added to the size estimate.
-    /// We use weak refs, so the object may be GC'd by the .Net runtime. 
-    let cacheAdd<'V when 'V :> Cached> (v:'V) (szEst:SizeEst) (extraLife:bool) =
-        assert(szEst >= 0)
-        let tc = (v :> Cached).Usage + (if extraLife then (-1) else 0)
-        let sz = 200u + uint32 szEst // assuming non-trivial overhead 
+    /// Add an object to the shared cache, such that it may be cleared
+    /// after the cache has too much data. The size estimate is used to
+    /// signal the cache to clear data relative to cache size. Items are
+    /// not immediately cleared - heuristics target older objects that
+    /// were not recently used. 
+    ///
+    /// The `touch` parameter affects the recorded `Usage` so we treat
+    /// the object as recently used. This must be used sparingly: it is
+    /// useful only if enough other items may be immediately cleared.
+    ///
+    /// Cache leverages weak refs to avoid interference with .Net GC.
+    /// There is no guarantee the `Clear` method will ever be called.
+    let cache (o:Cached) (szEst:SizeEst) (touch:bool) =
+        let tc = o.Usage + (if touch then System.Int32.MaxValue else 0)
+        let sz = 120u + uint32 (min 80 szEst)
         let wref = System.WeakReference(o :> System.Object)
         C.cacheAdd (C.sharedCache) (C.Obj(tc,sz,wref)) 
 
     /// Stow a value eventually. Meanwhile, data is cached in memory,
-    /// and concurrent GC of the LVRef at the .Net layer could prevent
-    /// the data from ever being stowed.
+    /// and GC of the LVRef at the .Net layer may prevent the data from
+    /// ever being stowed. This can help avoid serializing intermediate
+    /// states when constructing persistent data structures.
     let stow (c:Codec<'V>) (db:Stowage) (v:'V) (sz:SizeEst) : LVRef<'V> =
         let ref = new LVRef<'V>(lazy (VRef.stow c db v), Some v)
-        cacheAdd ref sz true
+        cache (ref :> Cached) sz true
         ref
 
     let private loadAndCache (ref:LVRef<'V>) : 'V =
@@ -232,27 +262,41 @@ module LVRef =
             match ref.cache with
             | None ->
                 let bytes = vref.DB.Load (vref.ID)
-                let value = Codec.readBytes (vref.Codec) (vref.DB) bytes
-                ref.cache <- Some value
-                cacheAdd ref (bytes.Length) false
-                value
+                let v = Codec.readBytes (vref.Codec) (vref.DB) bytes
+                ref.cache <- Some v
+                cache (ref :> Cached) (bytes.Length) false
+                v
             | Some v -> v
         )
 
     let inline private touch (ref:LVRef<_>) : unit =
         // race conditions are possible for updating touch counter, but
-        // are irrelevant due to the already heuristic nature of caching.
+        // are irrelevant due to the heuristic nature of caching.
         ref.tc <- (1 + ref.tc)
 
     /// Load a value, caching it briefly for future lookups.
     ///
-    /// If the value is already cached, this will extend the lifespan
-    /// of the cache. Otherwise, it will load the value into memory.
+    /// If the value was already cached, or has never been fully stowed,
+    /// this will reuse the cached value and extend the lifespan of the
+    /// cache. Otherwise it will load, parse, and cache the value.
     let load (ref:LVRef<'V>) : 'V =
         touch ref
         match ref.cache with
         | Some v -> v
         | None -> loadAndCache ref
 
+
+module EncLVRef =
+    let size = EncVRef.size
+    let inline write (ref:LVRef<_>) (dst:ByteDst) : unit = 
+        EncVRef.write (ref.VRef) dst
+    let inline read (cV:Codec<'V>) (db:Stowage) (src:ByteSrc) : LVRef<'V> =
+        LVRef.wrap (EncVRef.read cV db src)
+    let codec (cV:Codec<'V>) =
+        { new Codec<LVRef<'V>> with
+            member __.Write ref dst = write ref dst
+            member __.Read db src = read cV db src
+            member __.Compact _ ref = struct(ref, size)
+        }
 
 

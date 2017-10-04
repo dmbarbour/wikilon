@@ -64,13 +64,17 @@ module EncCVRef =
 
 module CVRef =
 
-    /// Local in-memory value. The first compaction will determine
-    /// the appropriate size estimate.
+    /// Local in-memory value. 
+    ///
+    /// The first compaction will determine whether this remains local
+    /// or is stowed remotely. Subsequent compactions of the same size
+    /// will be short-circuited.
     let inline local v = Local (v, System.Int32.MaxValue)
 
     /// Remote value reference.
     let inline remote r = Remote r
 
+    /// Test whether value is a Stowage reference.
     let isRemote ref =
         match ref with
         | Local _ -> false
@@ -88,12 +92,12 @@ module CVRef =
         | Local (v,_) -> v
         | Remote r -> LVRef.load' r
 
-    /// Forcibly clear cached value (if any).
-    let clear (ref:CVRef<'V>) : unit =
-        match ref with
-        | Local _ -> ()
-        | Remote r -> LVRef.clear r
-
+    /// Construct a compacted value directly. 
+    ///
+    /// This will immediately compact the value in memory, then decide
+    /// whether to keep it local or stow it to the database based on
+    /// the estimated size. Even if stowed, the value remains in cache
+    /// at least briefly.
     let inline stow (thresh:int) (cV:Codec<'V>) (db:Stowage) (v:'V) : CVRef<'V> =
         let struct(ref,_) = EncCVRef.compact thresh cV db (local v)
         ref
