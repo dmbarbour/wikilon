@@ -47,9 +47,8 @@ type TX =
     /// If the TVar was read or written before within this TX, this
     /// should return the appropriate, stable value. Otherwise, we'll
     /// form a read dependency on the TVar and return a recent value.
-    ///
-    /// Ideally, a TX should exhibit snapshot isolation across reads,
-    /// but that isn't strictly required.
+    /// Ideally, a transaction should exhibit snapshot isolation for
+    /// multiple reads, but that isn't strictly required.
     abstract member Read : TVar<'V> -> 'V
 
 /// Abstract transactional key-value Stowage Database.
@@ -65,10 +64,8 @@ type DB =
     /// Transactional updates. All reads and writes on the provided
     /// TX will be committed atomically upon returning. Commit may
     /// fail, so we return an extra pass/fail boolean. Early abort
-    /// can be modeled by raising an exception.
-    ///
-    /// Transactions may be atomic, consistent, and isolated. To
-    /// achieve durability, you'll need to follow with Flush.
+    /// can be modeled by raising an exception. Transactions are not
+    /// implicitly durable (see Flush). 
     abstract member Transact : (TX -> 'X) -> struct('X * bool)
 
     /// Flush buffered writes to durable storage.

@@ -83,4 +83,8 @@ module Codec =
                 struct(get rep, szRep)
         } 
 
+    /// Boxed Codec, to unify various codec types.
+    let inline boxed (cV : Codec<'V>) : Codec<System.Object> =
+        view cV (box<'V>) (unbox<'V>)
+
 
