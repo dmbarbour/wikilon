@@ -1,78 +1,86 @@
 namespace Stowage
-open System.Threading.Tasks
 
 /// Abstract transactional variables.
 ///
 /// A TVar is obtained by allocation or registration in a TX. Reads
 /// and writes on the TVar always operate through the TX. A new TVar
-/// may only be safely used where writes would be visible.
+/// may only be safely used where writes to it would be visible.
 type TVar<'V> = interface end
 
 /// Abstract transaction.
-///
-/// TX is an API for manipulating an abstract transaction on a database.
-/// In this case, our database is relatively simple: we may construct 
-/// a few TVars then read and write those TVars as needed. 
 type TX =
     /// Access to associated Stowage Database.
+    ///
+    /// The values at registered TVars essentially serve as a durable
+    /// root set for binary resources in Stowage. But most data should
+    /// still be held within the Stowage layer. Ideally, values at a
+    /// TVar should be small or bounded size (such as a CVRef), and a
+    /// transaction shouldn't need to read or write very many keys.  
     abstract member Stowage : Stowage
 
     /// Register a durable variable with codec and key.
     ///
-    /// Keys are represented as arbitrary strings, and the values are
-    /// always optional with `None` representing deletion of the key. 
-    /// Problematic keys may be rewritten to use a secure hash.
+    /// Keys are represented as arbitrary strings, and values use the
+    /// option type with `None` representing deletion or absence of a
+    /// key. The string itself may be mangled and escaped in various
+    /// ways for the backend, so long as uniqueness is preserved.
     /// 
-    /// If a Key is registered more than once, an equivalent Codec must
-    /// be used in each case. In return, it is possible to cache this
-    /// operation such that we receive the same TVar each time and avoid
-    /// redundant parse operations.
+    /// If a Key is registered more than once, equivalent Codecs must
+    /// be used every time. In general, the DB may cache the TVar for
+    /// a given key. However, for frequently used TVars, it's wise to 
+    /// register up front then hold the TVar for many transactions. 
     abstract member Register : Codec<'V> -> string -> TVar<'V option>
     
     /// Create a new ephemeral variable.
     ///
-    /// Ephemeral variables will not survive process shutdown, but may
-    /// be convient for intermediate computations or to unify interfaces.
+    /// Ephemeral variables do not survive process crash or shutdown.
+    /// But they may be transparently used the same way as durable 
+    /// key-value TVars. This is useful for intermediate computations
+    /// or to unify various interfaces.
     abstract member Allocate : 'V -> TVar<'V>
 
-    /// Write a TVar. 
-    ///
-    /// Until commit, the value written may only be read within this
-    /// transaction or a child transaction created afterwards. Writes
-    /// are essentially "committed" into the local TX. 
+    /// Write a TVar.
     abstract member Write : TVar<'V> -> 'V -> unit
 
     /// Read a TVar.
     ///
     /// If the TVar was read or written before within this TX, this
-    /// should return an appropriate, stable value. Otherwise, we'll
+    /// should return the appropriate, stable value. Otherwise, we'll
     /// form a read dependency on the TVar and return a recent value.
-    /// Ideally, a TX should exhibit snapshot isolation across reads.
+    ///
+    /// Ideally, a TX should exhibit snapshot isolation across reads,
+    /// but that isn't strictly required.
     abstract member Read : TVar<'V> -> 'V
 
-/// An abstract transactional key-value Database!
+/// Abstract transactional key-value Stowage Database.
 type DB =
-    /// Access to Stowage database features.
+    /// Access to Stowage resources. 
     abstract member Stowage : Stowage
 
-    /// API for singular reads and writes. Each operation can be
-    /// understood as a trivial one-off transaction. But we can
-    /// frequently optimize this a great deal!
+    /// API for singular reads and writes. Each operation is a trivial
+    /// one-off transaction. Singular reads and writes do not conflict
+    /// with any transaction, and so must always succeed.
     abstract member Singular : TX
 
-    /// Transactional update. The provided transaction will try to
-    /// commit upon returning. This does not implicitly retry, so
-    /// we'll just return success or failure. To Abort, you will 
-    /// need to raise an exception.
+    /// Transactional updates. All reads and writes on the provided
+    /// TX will be committed atomically upon returning. Commit may
+    /// fail, so we return an extra pass/fail boolean. Early abort
+    /// can be modeled by raising an exception.
+    ///
+    /// Transactions may be atomic, consistent, and isolated. To
+    /// achieve durability, you'll need to follow with Flush.
     abstract member Transact : (TX -> 'X) -> struct('X * bool)
 
-    /// Synchronize Writes to Durable Backing Store.
+    /// Flush buffered writes to durable storage.
     ///
-    /// DB writes are not implicitly flushed to disk. Instead, writes
-    /// may be buffered for performance. To guarantee durability, you
-    /// may explicitly sync. Should return immediately if no writes
-    /// are buffered (or if there is no durable backing store).
-    abstract member Sync : unit -> unit
-
+    /// Writes to a DB may be buffered in memory until explicit flush.
+    /// For durable transactions, flush after a successful transaction
+    /// and before reporting success to a client. Consider creating a
+    /// periodic event to flush the DB every several seconds.
+    /// 
+    /// Delaying serialization can improve performance, especially when
+    /// we have many writes to a TVar within a short period of time. So
+    /// try to avoid Flush where it isn't required by the problem.
+    abstract member Flush : unit -> unit
 
 

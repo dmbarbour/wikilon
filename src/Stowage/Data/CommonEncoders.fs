@@ -119,7 +119,7 @@ module EncBytes =
 
 /// Raw ByteString Encoder. 
 ///
-/// This codec is suitable for a *Ref<ByteString>, such that the binary
+/// This codec is suitable for a *VRef<ByteString>, such that the binary
 /// is not mixed with any other data. On read, it trivially consumes all 
 /// the data from the input stream.
 module EncBytesRaw =
@@ -333,6 +333,5 @@ module EncBTree =
     let codec (cV:Codec<'V>) =
         let cKV = EncPair.codec (EncBytes.codec) cV
         Codec.view (EncArray.codec' cKV) (BTree.ofArray) (BTree.toArray)
-
 
 
