@@ -16,6 +16,24 @@ open Stowage.LMDB
 
 [< SecuritySafeCriticalAttribute >]
 module internal I =
+    // This is the concrete binary-level implementation of Stowage DB.
+    // The DB module wraps this binary-layer implementation with the
+    // TVars and Codecs.
+
+    type Key = ByteString
+    type Val = ByteString
+    type KVMap = BTree<ByteString>
+    let minKeyLen : int = 1
+    let maxKeyLen : int = 240
+    let inline isValidKey (k : Key) : bool = 
+        (maxKeyLen >= k.Length) && (k.Length >= minKeyLen)
+
+
+    /// Values are limited to 64MB. And should usually be much smaller.
+    let maxValLen = 64 * 1024 * 1024
+    let inline isValidVal (v : ByteString) : bool = 
+        (maxValLen >= v.Length)
+
 
     // Use only half of RscHash for comparison-based lookups. We'll
     // verify the latter half in constant time to resist timing 
@@ -97,17 +115,17 @@ module internal I =
     // Readlock state is essentially a reader-count with an event
     // for when we reach zero readers.
     type ReadLock = 
-        val mutable private rc : RC
-        new () = { rc = 0L }
+        val mutable private rc : unativeint
+        new () = { rc = 0un }
         member this.Acquire () = lock this (fun () -> 
-            this.rc <- this.rc + 1L)
+            this.rc <- this.rc + 1un)
         member this.Release () = lock this (fun () ->
-            assert (this.rc > 0L)
-            this.rc <- this.rc - 1L
-            if(0L = this.rc) then Monitor.PulseAll(this))
+            assert (this.rc > 0un)
+            this.rc <- this.rc - 1un
+            if(0un = this.rc) then Monitor.PulseAll(this))
         member this.Wait () = lock this (fun () -> 
-            while(0L <> this.rc) do 
-                ignore(Monitor.Wait(this)))
+            while(0un <> this.rc) do 
+                ignore<bool>(Monitor.Wait(this)))
 
     [<NoComparison; ReferenceEquality>]
     type DB =

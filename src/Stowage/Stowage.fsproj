@@ -6,7 +6,6 @@
     <Compile Include="LMDB.fs" />
     <Compile Include="RCTable.fs" />
     <Compile Include="Memory.fs" />
-    <Compile Include="Types.fs" />
     <Compile Include="Impl.fs" />
     <Compile Include="DB.fs" />
   </ItemGroup>
