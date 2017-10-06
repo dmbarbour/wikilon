@@ -57,7 +57,7 @@ Newlines and tabs are among the rejected characters. However, humans will freque
 
 ## Words
 
-Words are the user-definable unit for Awelon code. Structurally, a word starts with a lower case alpha and may otherwise contain lower case alphas, digits, and the underscore. As a regular expression, this is: `[a-z][a-z_0-9]*`. There is also a size limit: words must not surpass 64 characters in length. Most words should be much smaller. But in context of editable views, words might have internal structure.
+Words are the user-definable unit for Awelon code. Structurally, a word starts with a lower case alpha and may otherwise contain lower case alphas, digits, and the underscore. As a regular expression, this is: `[a-z][a-z_0-9]*`. There is also a size limit: words must not surpass 48 characters in length. Most words should be much smaller. But in context of editable views, words might have internal structure.
 
 Words are evaluated in context of a *Dictionary*, where each word is defined by an Awelon program. Definitions of words within a dictionary must form a directed acyclic graph. The semantics for words are extremely trivial: we lazily substitute the word by its definition.
 

@@ -3,6 +3,7 @@
     <TargetFramework>netstandard1.6</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="KVStore.fs" />
     <Compile Include="LMDB.fs" />
     <Compile Include="RCTable.fs" />
     <Compile Include="Memory.fs" />

@@ -16,13 +16,12 @@ open Stowage.LMDB
 
 [< SecuritySafeCriticalAttribute >]
 module internal I =
-    // This is the concrete binary-level implementation of Stowage DB.
-    // The DB module wraps this binary-layer implementation with the
-    // TVars and Codecs.
 
-    type Key = ByteString
-    type Val = ByteString
-    type KVMap = BTree<ByteString>
+
+
+    // Binary key-value Database above LMDB
+
+    type KVMap = BTree<Val>
     let minKeyLen : int = 1
     let maxKeyLen : int = 240
     let inline isValidKey (k : Key) : bool = 

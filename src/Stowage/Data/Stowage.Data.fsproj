@@ -8,8 +8,6 @@
     <Compile Include="RscHash.fs" />
     <Compile Include="Stowage.fs" />
     <Compile Include="Codec.fs" />
-    <Compile Include="TX.fs" />
-    <Compile Include="DB.fs" />
 
     <Compile Include="VRef.fs" />
     <Compile Include="LVRef.fs" />
@@ -25,6 +23,7 @@
     <Compile Include="FingerTree.fs" />
     <Compile Include="Seq.fs" />
 
+    <Compile Include="DB.fs" />
   </ItemGroup>
 
   <ItemGroup>

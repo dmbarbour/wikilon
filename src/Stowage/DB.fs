@@ -8,6 +8,10 @@ open Data.ByteString
 /// suitable for most applications.
 module DB =
 
+    // Note: I could potentially generalize this implementation to any
+    // key-value database assuming exclusive control. Not sure it is a
+    // worthwhile generalization, however.
+
     /// Obtain LMDB-layer key for any given TVar key. Normally, this
     /// just uses the utf-8 representation for a string. Problematic
     /// keys are rewritten to "#SecureHash". Modulo use of tools like
