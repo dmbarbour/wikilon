@@ -18,7 +18,8 @@ open Stowage.LMDB
 module internal I =
 
 
-
+    type Key = ByteString
+    type Val = ByteString
     // Binary key-value Database above LMDB
 
     type KVMap = BTree<Val>

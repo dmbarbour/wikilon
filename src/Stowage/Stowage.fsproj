@@ -3,12 +3,11 @@
     <TargetFramework>netstandard1.6</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="KVStore.fs" />
     <Compile Include="LMDB.fs" />
     <Compile Include="RCTable.fs" />
     <Compile Include="Memory.fs" />
     <Compile Include="Impl.fs" />
-    <Compile Include="DB.fs" />
+    <Compile Include="MDB.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="FSharp.Core" Version="4.1.*" />
