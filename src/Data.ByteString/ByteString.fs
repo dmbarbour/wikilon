@@ -222,7 +222,7 @@ module BS =
         if isEmpty x then None else Some (unsafeHead x, unsafeTail x)
 
     /// Split bytestring with longest sequence matched by provided function.
-    let inline span (f : byte -> bool) (x : ByteString) : (ByteString * ByteString) =
+    let inline span (f : byte -> bool) (x : ByteString) : struct(ByteString * ByteString) =
         let limit = (x.Offset + x.Length)
         let rec step ix =
             if ((ix = limit) || not (f (x.UnsafeArray.[ix]))) 
@@ -231,12 +231,21 @@ module BS =
         let stop = step x.Offset
         let l = unsafeCreate (x.UnsafeArray) (x.Offset) (stop - x.Offset)
         let r = unsafeCreate (x.UnsafeArray) (stop) (x.Length - l.Length)
-        (l,r)
-    let inline takeWhile f x = fst (span f x)
-    let inline dropWhile f x = snd (span f x) 
+        struct(l,r)
+    let inline takeWhile f x = 
+        let struct(l,_) = span f x
+        l
+    let inline dropWhile f x = 
+        let struct(_,r) = span f x 
+        r
+
+    /// Predicate Testing
+    let inline forall pred x = isEmpty (dropWhile pred x)
+    let inline exists pred x = not (forall (not << pred) x)
+    
 
     /// As 'span', but working right to left
-    let inline spanEnd (f : byte -> bool) (x : ByteString) : (ByteString * ByteString) =
+    let inline spanEnd (f : byte -> bool) (x : ByteString) : struct(ByteString * ByteString) =
         let rec step ix =
             let ix' = ix - 1 
             if ((ix = x.Offset) || not (f (x.UnsafeArray.[ix'])))
@@ -245,9 +254,13 @@ module BS =
         let stop = step (x.Offset + x.Length)
         let l = unsafeCreate (x.UnsafeArray) (x.Offset) (stop - x.Offset)
         let r = unsafeCreate (x.UnsafeArray) (stop) (x.Length - l.Length)
-        (l,r)
-    let inline takeWhileEnd f x = snd (spanEnd f x)
-    let inline dropWhileEnd f x = fst (spanEnd f x)
+        struct(l,r)
+    let inline takeWhileEnd f x = 
+        let struct(_,r) = spanEnd f x
+        r
+    let inline dropWhileEnd f x = 
+        let struct(l,_) = spanEnd f x
+        l
         
     /// conversions for other string encodings
     let inline encodeString (s : string) (e : System.Text.Encoding) = 
