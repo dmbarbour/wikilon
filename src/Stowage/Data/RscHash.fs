@@ -106,7 +106,7 @@ module RscHash =
     let rec foldHashDeps (fn : 's -> RscHash -> 's) (s:'s) (v:ByteString) : 's =
         if (v.Length < size) then s else
         let hv' = BS.dropWhile (not << isHashByte) v
-        let (h,v') = BS.span isHashByte hv'
+        let struct(h,v') = BS.span isHashByte hv'
         let s' = if (size = h.Length) then (fn s h) else s
         foldHashDeps fn s' v'
 
@@ -115,7 +115,7 @@ module RscHash =
     let rec iterHashDeps (fn : RscHash -> unit) (v:ByteString) : unit =
         if (v.Length < size) then () else
         let hv' = BS.dropWhile (not << isHashByte) v
-        let (h,v') = BS.span isHashByte hv'
+        let struct(h,v') = BS.span isHashByte hv'
         if (size = h.Length)
             then fn h
         iterHashDeps fn v'

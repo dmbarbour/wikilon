@@ -22,17 +22,7 @@ module internal I =
     type Val = ByteString
     // Binary key-value Database above LMDB
 
-    type KVMap = BTree<Val>
-    let minKeyLen : int = 1
-    let maxKeyLen : int = 240
-    let inline isValidKey (k : Key) : bool = 
-        (maxKeyLen >= k.Length) && (k.Length >= minKeyLen)
-
-
     /// Values are limited to 64MB. And should usually be much smaller.
-    let maxValLen = 64 * 1024 * 1024
-    let inline isValidVal (v : ByteString) : bool = 
-        (maxValLen >= v.Length)
 
 
     // Use only half of RscHash for comparison-based lookups. We'll

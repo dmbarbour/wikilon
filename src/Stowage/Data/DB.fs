@@ -31,6 +31,9 @@ type DB =
     /// For durable TVars, values are always optional. The value None
     /// represents deletion or non-existence of the key, and is simply
     /// treated as a valid variable state.
+    ///
+    /// Note: Clients should not assume implicit compaction. If the
+    /// compaction is essential, write compacted values explicitly.
     abstract member Register : ByteString -> Codec<'V> -> TVar<'V option>
 
     /// Allocate an ephemeral TVar.
@@ -68,8 +71,9 @@ type DB =
     /// This creates a transactional model of the DB interface, such
     /// that read dependencies are tracked and writes are aggregated.
     /// Ideally has snapshot isolation, so read-only transactions do
-    /// not fail. Commit is implicit on returning, and may fail. The
-    /// extra boolean result reports commit success.
+    /// not fail. Commit is implicit on returning and may fail. The
+    /// extra boolean result reports commit success. Any exception 
+    /// will cleanly abort the transaction.
     /// 
     /// For high-contention variables, clients should use external
     /// synchronization to improve chances of transaction success.
@@ -82,16 +86,14 @@ module DB =
     type Val = ByteString option
     type KVMap = BTree<Val>
 
-    /// Storage models exclusive access to a binary key-value database.
-    /// By "exclusive", I mean that we can assume prior reads remain 
-    /// valid until we explicitly overwrite them. 
+    /// Storage represents access to a simple binary key-value database
+    /// that supports atomic batched updates to several keys and does its
+    /// own GC for Stowage resources. The database may have constraints 
+    /// on keys, so the Mangle operation can escape or rewrite keys as 
+    /// needed (e.g. taking a secure hash for oversized keys).
     ///
-    /// Storage is weakly transactional: writes are performed in batches
-    /// to model atomic updates, and `Flush` must ensure pending writes
-    /// have reached the backing store.
-    ///
-    /// Our backend may provide a mangling function, such that every
-    /// key may be rewritten exactly once (upon registration).
+    /// Relevantly, this is a bare minimum database API sufficient to
+    /// implement an efficient DB if assuming exclusive write access.
     type Storage =
         inherit Stowage
         abstract member Mangle     : ByteString -> Key
@@ -120,19 +122,20 @@ module DB =
 
         // a DBVar is potentially durable. If durable, we'll have
         // a Key for Storage, and a function to serialize our data.
-        //
-        // Note that we never *read* a value after registration, so
-        // we dont' need a full codec.
         type Durability =
             | Durable of Key * (Data -> Val)
             | Ephemeral
 
+        let serializeRoot (cV:Codec<'V>) (vOpt : 'V option) : Val =
+            match vOpt with
+            | Some v -> Some (Codec.writeBytes cV v)
+            | None -> None
+
+        let serializeRootData (cV:Codec<'V>) (d:Data) : Val =
+            serializeRoot cV (unbox<'V option>(d))
+
         let rootDur (k:Key) (cV:Codec<'V>) : Durability = 
-            let s d = 
-                match unbox<'V option>(d) with
-                | None -> None
-                | Some v -> Some (Codec.writeBytes cV v)
-            Durable(k,s)
+            Durable(k, serializeRootData cV)
 
         type DBVar = 
             val UID : UID
